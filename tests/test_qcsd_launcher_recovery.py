@@ -5,6 +5,7 @@ import hashlib
 import os
 import re
 import secrets
+import signal
 import stat
 import subprocess
 import sys
@@ -32,6 +33,7 @@ def _install_stateful_docker(
         f"""#!/usr/bin/python3
 import json
 import os
+import signal
 import sys
 from pathlib import Path
 
@@ -46,6 +48,17 @@ if not command_arguments:
     raise SystemExit(2)
 command = command_arguments[0]
 tail = command_arguments[1:]
+
+drift_counter = os.environ.get("QCSD_TEST_FINAL_DAEMON_DRIFT_COUNTER", "")
+if command == "info" and drift_counter:
+    counter_path = Path(drift_counter)
+    if counter_path.exists():
+        count = int(counter_path.read_text(encoding="ascii")) + 1
+        counter_path.write_text(str(count), encoding="ascii")
+        if count >= 2:
+            os.environ["QCSD_TEST_DOCKER_SERVER_ID"] = (
+                "87654321-4321-4321-4321-cba987654321"
+            )
 
 def load_state():
     return json.loads(state_path.read_text(encoding="utf-8"))
@@ -68,6 +81,15 @@ def log(value):
 state = load_state()
 containers = state["containers"]
 networks = state["networks"]
+
+def maybe_freeze_absent_snapshot(kind, token):
+    if os.environ.get("QCSD_TEST_FREEZE_ABSENCE_KIND") != kind:
+        return
+    if os.environ.get("QCSD_TEST_FREEZE_ABSENCE_TOKEN") != token:
+        return
+    marker = Path(os.environ["QCSD_TEST_FREEZE_ABSENCE_MARKER"])
+    marker.write_text(str(os.getpid()), encoding="ascii")
+    os.kill(os.getpid(), signal.SIGSTOP)
 
 def maybe_publish_deferred(kind, token):
     if os.environ.get("QCSD_TEST_DEFERRED_PUBLISH_KIND") != kind:
@@ -97,6 +119,7 @@ if command == "container" and tail and tail[0] == "ls":
     selected = []
     if filter_value.startswith("label=org.qcsd.supervisor.instance="):
         token = filter_value.rsplit("=", 1)[1]
+        maybe_freeze_absent_snapshot("run", token)
         maybe_publish_deferred("run", token)
         selected = [cid for cid, value in containers.items() if value["token"] == token]
     elif filter_value.startswith("id="):
@@ -131,6 +154,7 @@ if command == "network" and tail and tail[0] == "ls":
     selected = []
     if filter_value.startswith("label=org.qcsd.supervisor.instance="):
         token = filter_value.rsplit("=", 1)[1]
+        maybe_freeze_absent_snapshot("network", token)
         maybe_publish_deferred("network", token)
         selected = [network_id for network_id, value in networks.items() if value == token]
     elif filter_value.startswith("id="):
@@ -172,6 +196,42 @@ def launcher_boundary(
     tmp_path: Path,
 ) -> Iterator[tuple[Path, Path, Path, Path, dict[str, str], list[Path]]]:
     launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
+    supervisor = launcher.parent / "tools/docker_signal_supervisor.sh"
+    with supervisor.open("a", encoding="utf-8") as output:
+        output.write(
+            r'''
+
+# Test-only local-root equivalent of the production bounded namespace check.
+_qcsd_secure_lifecycle_base() {
+  local entry canonical metadata operation_count=0
+  _qcsd_lifecycle_base="${QCSD_TEST_LIFECYCLE_BASE:?}"
+  [[ "${_qcsd_lifecycle_base}" == /* && ! -L "${_qcsd_lifecycle_base}" &&
+      -d "${_qcsd_lifecycle_base}" ]] || return 1
+  canonical="$(readlink -f -- "${_qcsd_lifecycle_base}")" || return 1
+  [[ "${canonical}" == "${_qcsd_lifecycle_base}" ]] || return 1
+  metadata="$(stat -Lc '%u:%a:%F' -- "${_qcsd_lifecycle_base}")" || return 1
+  [[ "${metadata}" == "$(id -u):700:directory" ]] || return 1
+  for entry in "${_qcsd_lifecycle_base}"/*; do
+    [[ -e "${entry}" || -L "${entry}" ]] || continue
+    [[ "${entry##*/}" =~ ^(run|network|build|transaction)[.][0-9a-f]{32}$ &&
+        ! -L "${entry}" && -d "${entry}" ]] || return 1
+    (( operation_count += 1 ))
+    _qcsd_validate_lifecycle_root_contents "${entry}" || return 1
+  done
+  (( operation_count <= _QCSD_MAX_LIFECYCLE_OPERATIONS ))
+}
+'''
+        )
+    guardian = launcher.parent / "tools/docker_lifecycle_lock_guardian.py"
+    guardian_source = guardian.read_text(encoding="utf-8")
+    shared_socket = "qcsd-docker-lifecycle-guardian-{os.getuid()}"
+    isolated_socket = (
+        shared_socket + f"-{hashlib.sha256(str(tmp_path).encode()).hexdigest()[:16]}"
+    )
+    assert guardian_source.count(shared_socket) == 2
+    guardian.write_text(
+        guardian_source.replace(shared_socket, isolated_socket), encoding="utf-8"
+    )
     supervisor_tmp = tmp_path / "supervisor-tmp"
     supervisor_tmp.mkdir(mode=0o700)
     launcher_source = launcher.read_text(encoding="utf-8")
@@ -303,6 +363,100 @@ def _process_identity(pid: int) -> tuple[str, str, str, str]:
     stat_line = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
     fields = stat_line.rsplit(") ", 1)[1].split()
     return str(pid), fields[19], fields[3], fields[2]
+
+
+def _wait_for_process_state(pid: int, wanted: str) -> None:
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        try:
+            stat_line = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        except FileNotFoundError:
+            break
+        if stat_line.rsplit(") ", 1)[1].split()[0] == wanted:
+            return
+        time.sleep(0.01)
+    raise AssertionError(f"process {pid} did not reach state {wanted}")
+
+
+def _start_etf(
+    launcher: Path, environment: dict[str, str], tmp_path: Path
+) -> subprocess.Popen[str]:
+    return subprocess.Popen(
+        [str(launcher), "etf-probe", "--destination", str(tmp_path / "etf.json")],
+        cwd=tmp_path,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+
+
+def _wait_for_stopped_marker_process(
+    marker: Path,
+    owner: subprocess.Popen[str],
+    *,
+    executable: Path | None = None,
+) -> int:
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if marker.exists():
+            try:
+                pid = int(marker.read_text(encoding="ascii"))
+            except (OSError, ValueError):
+                pass
+            else:
+                _wait_for_process_state(pid, "T")
+                if executable is not None:
+                    observed = Path(f"/proc/{pid}/exe").resolve()
+                    assert observed == executable.resolve()
+                return pid
+        if owner.poll() is not None:
+            stdout, stderr = owner.communicate()
+            raise AssertionError(
+                "launcher exited before the boundary process stopped:\n"
+                f"stdout:\n{stdout}\nstderr:\n{stderr}"
+            )
+        time.sleep(0.01)
+    raise AssertionError(f"boundary process did not publish {marker}")
+
+
+def _kill_process_group(process: subprocess.Popen[str]) -> None:
+    if process.poll() is None:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    process.wait(timeout=5)
+
+
+def _install_stopped_settle_sleep(
+    environment: dict[str, str], tmp_path: Path
+) -> Path:
+    marker = tmp_path / "stopped-settle-sleep.pid"
+    wrapper = Path(environment["QCSD_TEST_BINARY_ROOT"]) / "sleep"
+    assert not wrapper.exists()
+    wrapper.write_text(
+        "#!/bin/sh\n"
+        'if [ "$#" -eq 1 ] && [ "$1" = 0.5 ] && '
+        '[ -n "${QCSD_TEST_SETTLE_SLEEP_MARKER:-}" ]; then\n'
+        "  /usr/bin/sleep \"$@\" &\n"
+        "  settle_pid=$!\n"
+        '  while [ "$(/usr/bin/readlink -f "/proc/$settle_pid/exe" 2>/dev/null)" '
+        '!= /usr/bin/sleep ]; do\n'
+        '    kill -0 "$settle_pid" 2>/dev/null || exit 1\n'
+        "  done\n"
+        '  kill -STOP "$settle_pid"\n'
+        '  printf \'%s\\n\' "$settle_pid" >"$QCSD_TEST_SETTLE_SLEEP_MARKER"\n'
+        '  wait "$settle_pid"\n'
+        "  exit $?\n"
+        "fi\n"
+        'exec /usr/bin/sleep "$@"\n',
+        encoding="ascii",
+    )
+    wrapper.chmod(0o755)
+    environment["QCSD_TEST_SETTLE_SLEEP_MARKER"] = str(marker)
+    return marker
 
 
 def _dead_identity(offset: int = 0) -> tuple[str, str, str, str]:
@@ -532,6 +686,19 @@ def _write_state(
     )
 
 
+def _publish_daemon_object(
+    state_path: Path, kind: str, token: str, object_id: str
+) -> None:
+    if kind == "run":
+        _write_state(
+            state_path,
+            containers={object_id: {"token": token, "running": True}},
+        )
+    else:
+        assert kind == "network"
+        _write_state(state_path, networks={object_id: token})
+
+
 def _new_lifecycle_root(
     roots: list[Path],
     environment: dict[str, str],
@@ -728,6 +895,160 @@ def _durable_network_handoff_fields(
     ]
 
 
+def _durable_network_request_fields(
+    launcher: Path,
+    root: Path,
+    token: str,
+    environment: dict[str, str],
+) -> list[tuple[str, str]]:
+    replacements = {
+        "lifecycle_state": "request-authorised",
+        "network_id": "unavailable",
+        "network_state": "launching",
+    }
+    return [
+        (key, replacements.get(key, value))
+        for key, value in _durable_network_handoff_fields(
+            launcher, root, token, environment, "f" * 64
+        )
+        if key not in {"ownership", "registration_name"}
+    ]
+
+
+def _authorised_unresolved_recovery_fields(
+    launcher: Path,
+    root: Path,
+    token: str,
+    environment: dict[str, str],
+    kind: str,
+) -> list[tuple[str, str]]:
+    if kind == "run":
+        fields = _durable_run_handoff_fields(
+            launcher, root, token, environment, "unavailable"
+        )
+        fields = _replace_field(fields, "lifecycle_state", "unresolved")
+        fields = _replace_field(fields, "target_state", "unknown")
+        fields = [
+            item
+            for item in fields
+            if item[0]
+            not in {
+                "ownership",
+                "registration_name",
+                "scope_final_state",
+                "scope_empty_proven",
+                "status_file_matches",
+                "docker_command_status",
+                "systemd_run_status",
+            }
+        ]
+        fields.extend(
+            [
+                ("scope_state", "absent"),
+                ("interruption_reason", "internal_abort"),
+                ("planned_target_signal", "TERM"),
+                ("target_signal_attempted", "0"),
+                ("target_signal_api_outcome", "not_attempted"),
+                ("phase", "interrupted-before-daemon-teardown"),
+            ]
+        )
+    else:
+        assert kind == "network"
+        fields = _durable_network_handoff_fields(
+            launcher, root, token, environment, "unavailable"
+        )
+        fields = _replace_field(fields, "lifecycle_state", "unresolved")
+        fields = _replace_field(fields, "network_state", "unknown")
+        fields = [
+            item for item in fields if item[0] not in {"ownership", "registration_name"}
+        ]
+    fields.append(("daemon_request_authorised", "1"))
+    return fields
+
+
+def _install_batch_settle_trace(launcher: Path) -> None:
+    helper = launcher.parent / "tools/docker_signal_supervisor.sh"
+    helper_source = helper.read_text(encoding="utf-8")
+    assert helper_source.count(
+        'sleep "${_QCSD_DOCKER_STALE_RUN_SETTLE_SECONDS:-5}"'
+    ) == 1
+    assert helper_source.count(
+        'sleep "${_QCSD_DOCKER_STALE_NETWORK_SETTLE_SECONDS:-5}"'
+    ) == 1
+    helper.write_text(
+        helper_source
+        + r'''
+
+# Test-only replacement: record each logical batch wait without wall-clock delay.
+_qcsd_lifecycle_settle_recovery_batch() {
+  local kind="${1:-}" pid state states="" separator=""
+  for pid in ${QCSD_TEST_CONTAINMENT_PIDS:-}; do
+    state=gone
+    if _qcsd_read_process_identity "${pid}"; then
+      state="${_qcsd_process_state}"
+    fi
+    states="${states}${separator}${state}"
+    separator=,
+  done
+  printf 'settle:%s:%s\n' "${kind}" "${states}" >> \
+    "${QCSD_TEST_DOCKER_OPERATION_LOG:?}"
+}
+''',
+        encoding="utf-8",
+    )
+
+
+def _install_final_recovery_boundary_drift(
+    launcher: Path,
+    environment: dict[str, str],
+    tmp_path: Path,
+    kind: str,
+) -> tuple[Path, Path]:
+    assert kind in {"run", "network"}
+    helper = launcher.parent / "tools/docker_signal_supervisor.sh"
+    drift = tmp_path / f"{kind}-final-boundary-drift"
+    observations = tmp_path / f"{kind}-final-boundary-observations"
+    if kind == "run":
+        override = r'''
+
+# Test-only model: an exact unit with the recorded name is recreated while the
+# shared daemon-settle sleep is stopped.
+eval "$(declare -f _qcsd_wait_user_scope_inactive | sed \
+  '1s/_qcsd_wait_user_scope_inactive/_qcsd_test_original_wait_user_scope_inactive/')"
+_qcsd_wait_user_scope_inactive() {
+  if [[ -e "${QCSD_TEST_FINAL_RECOVERY_BOUNDARY_DRIFT:?}" ]]; then
+    printf 'blocked:run:%s\n' "$1" >> \
+      "${QCSD_TEST_FINAL_RECOVERY_BOUNDARY_OBSERVATIONS:?}"
+    return 1
+  fi
+  _qcsd_test_original_wait_user_scope_inactive "$@"
+}
+'''
+    else:
+        override = r'''
+
+# Test-only model: the recorded network supervisor identity is no longer
+# provably stale when the shared daemon-settle sleep ends.
+eval "$(declare -f _qcsd_lifecycle_require_stale_supervisor | sed \
+  '1s/_qcsd_lifecycle_require_stale_supervisor/_qcsd_test_original_require_stale_supervisor/')"
+_qcsd_lifecycle_require_stale_supervisor() {
+  if [[ -e "${QCSD_TEST_FINAL_RECOVERY_BOUNDARY_DRIFT:?}" ]]; then
+    printf 'blocked:network\n' >> \
+      "${QCSD_TEST_FINAL_RECOVERY_BOUNDARY_OBSERVATIONS:?}"
+    return 1
+  fi
+  _qcsd_test_original_require_stale_supervisor "$@"
+}
+'''
+    with helper.open("a", encoding="utf-8") as output:
+        output.write(override)
+    environment.update(
+        QCSD_TEST_FINAL_RECOVERY_BOUNDARY_DRIFT=str(drift),
+        QCSD_TEST_FINAL_RECOVERY_BOUNDARY_OBSERVATIONS=str(observations),
+    )
+    return drift, observations
+
+
 def _invoke_etf(
     launcher: Path, environment: dict[str, str], tmp_path: Path
 ) -> subprocess.CompletedProcess[str]:
@@ -740,6 +1061,153 @@ def _invoke_etf(
         text=True,
         timeout=45,
     )
+
+
+def _install_final_reproof_drift(
+    launcher: Path,
+    environment: dict[str, str],
+    tmp_path: Path,
+    drift_kind: str,
+) -> None:
+    assert drift_kind in {"daemon", "boot"}
+    source = launcher.read_text(encoding="utf-8")
+    final_daemon_reproof = (
+        "  reconcile_stale_docker_supervisors || exit 1\n"
+        "  observed_server_id=\"$(_qcsd_docker_api info --format "
+        "'{{.ID}}' 2>/dev/null)\""
+    )
+    assert source.count(final_daemon_reproof) == 1
+    source = source.replace(
+        final_daemon_reproof,
+        "  reconcile_stale_docker_supervisors || exit 1\n"
+        '  case "${QCSD_TEST_FINAL_REPROOF_DRIFT:-}" in\n'
+        "    daemon)\n"
+        "      printf '0\\n' >"
+        '"${QCSD_TEST_FINAL_DAEMON_DRIFT_COUNTER:?}"\n'
+        "      ;;\n"
+        "    boot)\n"
+        "      printf '%s\\n' ffffffff-ffff-ffff-ffff-ffffffffffff "
+        '>"${QCSD_TEST_FINAL_BOOT_ID_FILE:?}"\n'
+        "      ;;\n"
+        "    *) exit 98 ;;\n"
+        "  esac\n"
+        "  observed_server_id=\"$(_qcsd_docker_api info --format "
+        "'{{.ID}}' 2>/dev/null)\"",
+    )
+    final_boot_reproof = """  IFS= read -r observed_boot_id </proc/sys/kernel/random/boot_id ||
+    observed_boot_id=""
+  if [[ "${observed_boot_id}" != "${pinned_boot_id}" ]]; then
+    echo "qcsd-lab host boot changed across lifecycle reconciliation" >&2"""
+    assert source.count(final_boot_reproof) == 1
+    source = source.replace(
+        final_boot_reproof,
+        "  IFS= read -r observed_boot_id "
+        '<"${QCSD_TEST_FINAL_BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}" ||\n'
+        '    observed_boot_id=""\n'
+        '  if [[ "${observed_boot_id}" != "${pinned_boot_id}" ]]; then\n'
+        '    echo "qcsd-lab host boot changed across lifecycle reconciliation" >&2',
+    )
+    launcher.write_text(source, encoding="utf-8")
+    boot_file = tmp_path / "final-reproof-boot-id"
+    boot_file.write_text(
+        Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii"),
+        encoding="ascii",
+    )
+    environment.update(
+        QCSD_TEST_FINAL_DAEMON_DRIFT_COUNTER=str(
+            tmp_path / "final-daemon-info-count"
+        ),
+        QCSD_TEST_FINAL_BOOT_ID_FILE=str(boot_file),
+        QCSD_TEST_FINAL_REPROOF_DRIFT=drift_kind,
+    )
+
+
+@pytest.mark.parametrize(
+    ("root_count", "reaches_record_validation"), ((7, True), (8, False))
+)
+def test_lifecycle_operation_bound_precedes_recovery_mutation(
+    launcher_boundary: tuple[Path, Path, Path, Path, dict[str, str], list[Path]],
+    tmp_path: Path,
+    root_count: int,
+    reaches_record_validation: bool,
+) -> None:
+    launcher, _builds, state, operations, environment, roots = launcher_boundary
+    kinds = ("run", "network", "build", "transaction")
+    created: list[Path] = []
+    for index in range(root_count):
+        root, _token = _new_lifecycle_root(
+            roots,
+            environment,
+            kinds[index % len(kinds)],
+            token=f"{index + 1:032x}",
+        )
+        created.append(root)
+    _write_record(created[0], "SUPERVISION", [("invalid", "record")])
+    state_before = state.read_bytes()
+    operations_before = operations.read_bytes()
+
+    result = subprocess.run(
+        [str(launcher), "lifecycle-recover"],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=45,
+    )
+
+    assert result.returncode != 0
+    if reaches_record_validation:
+        assert "Docker lifecycle admission found malformed state" in result.stderr
+    else:
+        assert "Docker lifecycle admission found malformed state" not in result.stderr
+    assert all(root.is_dir() and not root.is_symlink() for root in created)
+    assert state.read_bytes() == state_before
+    assert operations.read_bytes() == operations_before
+
+
+@pytest.mark.parametrize(
+    ("drift_kind", "expected_error"),
+    (
+        ("daemon", "qcsd-lab Docker daemon changed across lifecycle admission"),
+        ("boot", "qcsd-lab host boot changed across lifecycle reconciliation"),
+    ),
+)
+def test_final_lifecycle_reproof_rejects_daemon_or_boot_drift_without_mutation(
+    launcher_boundary: tuple[Path, Path, Path, Path, dict[str, str], list[Path]],
+    tmp_path: Path,
+    drift_kind: str,
+    expected_error: str,
+) -> None:
+    launcher, _builds, state, operations, environment, roots = launcher_boundary
+    _install_final_reproof_drift(launcher, environment, tmp_path, drift_kind)
+    assert roots == []
+    state_before = state.read_bytes()
+    operations_before = operations.read_bytes()
+
+    result = subprocess.run(
+        [str(launcher), "lifecycle-recover"],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=45,
+    )
+
+    assert result.returncode != 0
+    assert expected_error in result.stderr
+    assert "Docker lifecycle reconciliation completed" not in result.stderr
+    if drift_kind == "daemon":
+        counter = Path(environment["QCSD_TEST_FINAL_DAEMON_DRIFT_COUNTER"])
+        assert counter.read_text(encoding="ascii") == "2"
+    else:
+        boot = Path(environment["QCSD_TEST_FINAL_BOOT_ID_FILE"])
+        assert boot.read_text(encoding="ascii") == (
+            "ffffffff-ffff-ffff-ffff-ffffffffffff\n"
+        )
+    assert state.read_bytes() == state_before
+    assert operations.read_bytes() == operations_before
 
 
 def test_legacy_idless_run_is_quarantined_before_host_probe(
@@ -1394,89 +1862,127 @@ def test_durable_recovery_removes_attached_run_before_its_network(
     assert "prepare_supervised_request" in marker.read_text(encoding="utf-8")
 
 
+def test_multi_root_recovery_batches_settles_after_run_containment(
+    launcher_boundary: tuple[Path, Path, Path, Path, dict[str, str], list[Path]],
+    tmp_path: Path,
+) -> None:
+    launcher, _builds, state_path, operations, environment, roots = launcher_boundary
+    _install_batch_settle_trace(launcher)
+    children: list[subprocess.Popen[bytes]] = []
+    try:
+        for _index in range(2):
+            child = subprocess.Popen(["/usr/bin/sleep", "60"], start_new_session=True)
+            children.append(child)
+            os.kill(child.pid, signal.SIGSTOP)
+            _wait_for_process_state(child.pid, "T")
+
+        run_entries: list[tuple[Path, str, str]] = []
+        network_entries: list[tuple[Path, str, str]] = []
+        for index, child in enumerate(children):
+            run_root, run_token = _new_lifecycle_root(roots, environment, "run")
+            network_root, network_token = _new_lifecycle_root(
+                roots, environment, "network"
+            )
+            container_id = ("a" if index == 0 else "b") * 64
+            network_id = ("c" if index == 0 else "d") * 64
+            fields = _durable_run_request_fields(
+                launcher, run_root, run_token, environment
+            )
+            identity = _process_identity(child.pid)
+            for prefix in ("scope_launcher", "cli"):
+                for suffix, value in zip(
+                    ("pid", "start_time", "session", "process_group"),
+                    identity,
+                    strict=True,
+                ):
+                    fields = _replace_field(fields, f"{prefix}_{suffix}", value)
+            _write_record(run_root, "SUPERVISION", fields)
+            _write_record(
+                network_root,
+                "SUPERVISION",
+                _durable_network_request_fields(
+                    launcher, network_root, network_token, environment
+                ),
+            )
+            run_entries.append((run_root, run_token, container_id))
+            network_entries.append((network_root, network_token, network_id))
+
+        _write_state(
+            state_path,
+            containers={
+                container_id: {
+                    "token": token,
+                    "running": True,
+                    "networks": [network_entries[index][2]],
+                }
+                for index, (_root, token, container_id) in enumerate(run_entries)
+            },
+            networks={
+                network_id: token
+                for _root, token, network_id in network_entries
+            },
+        )
+        environment["QCSD_TEST_CONTAINMENT_PIDS"] = " ".join(
+            str(child.pid) for child in children
+        )
+
+        result = _invoke_etf(launcher, environment, tmp_path)
+
+        assert result.returncode == 1, result.stderr
+        assert all(not root.exists() for root, _token, _id in run_entries)
+        assert all(not root.exists() for root, _token, _id in network_entries)
+        events = operations.read_text(encoding="utf-8").splitlines()
+        run_settle = "settle:run:Z,Z"
+        network_settle = "settle:network:Z,Z"
+        assert events.count(run_settle) == 1
+        assert events.count(network_settle) == 1
+        container_removals = [
+            events.index(f"container-rm:{container_id}")
+            for _root, _token, container_id in run_entries
+        ]
+        network_removals = [
+            events.index(f"network-rm:{network_id}")
+            for _root, _token, network_id in network_entries
+        ]
+        assert events.index(run_settle) < min(container_removals)
+        assert max(container_removals) < events.index(network_settle)
+        assert events.index(network_settle) < min(network_removals)
+    finally:
+        for child in children:
+            if child.poll() is None:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            child.wait(timeout=5)
+
+
 @pytest.mark.parametrize("kind", ["run", "network"])
-@pytest.mark.parametrize(
-    "publication",
-    ["during-settle", "after-settle", "never"],
-)
-def test_authorised_recovery_waits_for_delayed_daemon_object(
+def test_authorised_recovery_observes_object_published_on_first_post_settle_list(
     launcher_boundary: tuple[Path, Path, Path, Path, dict[str, str], list[Path]],
     tmp_path: Path,
     kind: str,
-    publication: str,
 ) -> None:
     launcher, _builds, state_path, operations, environment, roots = launcher_boundary
     root, token = _new_lifecycle_root(roots, environment, kind)
     object_id = ("6" if kind == "run" else "7") * 64
-    if kind == "run":
-        fields = _durable_run_handoff_fields(
-            launcher, root, token, environment, "unavailable"
-        )
-        fields = _replace_field(fields, "lifecycle_state", "unresolved")
-        fields = _replace_field(fields, "target_state", "unknown")
-        fields = [
-            item
-            for item in fields
-            if item[0]
-            not in {
-                "ownership",
-                "registration_name",
-                "scope_final_state",
-                "scope_empty_proven",
-                "status_file_matches",
-                "docker_command_status",
-                "systemd_run_status",
-            }
-        ]
-        fields.extend(
-            [
-                ("scope_state", "absent"),
-                ("interruption_reason", "internal_abort"),
-                ("planned_target_signal", "TERM"),
-                ("target_signal_attempted", "0"),
-                ("target_signal_api_outcome", "not_attempted"),
-                ("phase", "interrupted-before-daemon-teardown"),
-            ]
-        )
-    else:
-        fields = _durable_network_handoff_fields(
-            launcher, root, token, environment, "unavailable"
-        )
-        fields = _replace_field(fields, "lifecycle_state", "unresolved")
-        fields = _replace_field(fields, "network_state", "unknown")
-        fields = [
-            item for item in fields if item[0] not in {"ownership", "registration_name"}
-        ]
-    fields.append(("daemon_request_authorised", "1"))
-    _write_record(root, "RECOVERY", fields)
-    environment["_QCSD_DOCKER_STALE_RUN_SETTLE_SECONDS"] = "0.5"
-    environment["_QCSD_DOCKER_STALE_NETWORK_SETTLE_SECONDS"] = "0.5"
-    if publication == "during-settle":
-        environment.update(
-            QCSD_TEST_DEFERRED_PUBLISH_KIND=kind,
-            QCSD_TEST_DEFERRED_PUBLISH_TOKEN=token,
-            QCSD_TEST_DEFERRED_PUBLISH_ID=object_id,
-            QCSD_TEST_DEFERRED_PUBLISH_AFTER_LISTS="1",
-        )
+    _write_record(
+        root,
+        "RECOVERY",
+        _authorised_unresolved_recovery_fields(
+            launcher, root, token, environment, kind
+        ),
+    )
+    environment.update(
+        QCSD_TEST_DEFERRED_PUBLISH_KIND=kind,
+        QCSD_TEST_DEFERRED_PUBLISH_TOKEN=token,
+        QCSD_TEST_DEFERRED_PUBLISH_ID=object_id,
+        QCSD_TEST_DEFERRED_PUBLISH_AFTER_LISTS="1",
+    )
+
     result = _invoke_etf(launcher, environment, tmp_path)
 
     assert result.returncode == 1, result.stderr
-    if publication == "after-settle":
-        if kind == "run":
-            _write_state(
-                state_path,
-                containers={object_id: {"token": token, "running": True}},
-            )
-        else:
-            _write_state(state_path, networks={object_id: token})
-    if publication != "during-settle":
-        assert root.exists(), result.stderr
-        assert "-rm:" not in operations.read_text(encoding="utf-8")
-        if publication == "after-settle":
-            state = json.loads(state_path.read_text(encoding="utf-8"))
-            collection = "containers" if kind == "run" else "networks"
-            assert object_id in state[collection]
-        return
     assert not root.exists(), result.stderr
     log = operations.read_text(encoding="utf-8")
     expected = f"container-rm:{object_id}" if kind == "run" else f"network-rm:{object_id}"
@@ -1485,6 +1991,277 @@ def test_authorised_recovery_waits_for_delayed_daemon_object(
         "containers": {},
         "networks": {},
     }
+    assert Path(environment["QCSD_TEST_PROBE_MARKER"]).exists()
+
+
+@pytest.mark.parametrize("kind", ["run", "network"])
+def test_authorised_recovery_observes_object_published_while_settle_sleep_stopped(
+    launcher_boundary: tuple[Path, Path, Path, Path, dict[str, str], list[Path]],
+    tmp_path: Path,
+    kind: str,
+) -> None:
+    launcher, _builds, state_path, operations, environment, roots = launcher_boundary
+    root, token = _new_lifecycle_root(roots, environment, kind)
+    object_id = ("4" if kind == "run" else "5") * 64
+    _write_record(
+        root,
+        "RECOVERY",
+        _authorised_unresolved_recovery_fields(
+            launcher, root, token, environment, kind
+        ),
+    )
+    sleep_marker = _install_stopped_settle_sleep(environment, tmp_path)
+    process = _start_etf(launcher, environment, tmp_path)
+    settle_pid: int | None = None
+    try:
+        settle_pid = _wait_for_stopped_marker_process(
+            sleep_marker, process, executable=Path("/usr/bin/sleep")
+        )
+        label_list = (
+            "container-ls:" if kind == "run" else "network-ls:"
+        ) + f"label=org.qcsd.supervisor.instance={token}"
+        assert label_list not in operations.read_text(encoding="utf-8").splitlines()
+        _publish_daemon_object(state_path, kind, token, object_id)
+        os.kill(settle_pid, signal.SIGCONT)
+        _stdout, stderr = process.communicate(timeout=15)
+    finally:
+        if settle_pid is not None:
+            try:
+                os.kill(settle_pid, signal.SIGCONT)
+            except ProcessLookupError:
+                pass
+        if process.poll() is None:
+            _kill_process_group(process)
+
+    assert process.returncode == 1, stderr
+    assert not root.exists(), stderr
+    events = operations.read_text(encoding="utf-8").splitlines()
+    expected = f"container-rm:{object_id}" if kind == "run" else f"network-rm:{object_id}"
+    assert label_list in events
+    assert events.count(expected) == 1
+    assert json.loads(state_path.read_text(encoding="utf-8")) == {
+        "containers": {},
+        "networks": {},
+    }
+
+
+@pytest.mark.parametrize("kind", ["run", "network"])
+def test_final_recovery_boundary_drift_during_shared_settle_blocks_mutation(
+    launcher_boundary: tuple[Path, Path, Path, Path, dict[str, str], list[Path]],
+    tmp_path: Path,
+    kind: str,
+) -> None:
+    launcher, _builds, state_path, operations, environment, roots = launcher_boundary
+    root, token = _new_lifecycle_root(roots, environment, kind)
+    object_id = ("2" if kind == "run" else "3") * 64
+    drift, observations = _install_final_recovery_boundary_drift(
+        launcher, environment, tmp_path, kind
+    )
+    _write_record(
+        root,
+        "RECOVERY",
+        _authorised_unresolved_recovery_fields(
+            launcher, root, token, environment, kind
+        ),
+    )
+    sleep_marker = _install_stopped_settle_sleep(environment, tmp_path)
+    process = _start_etf(launcher, environment, tmp_path)
+    settle_pid: int | None = None
+    try:
+        settle_pid = _wait_for_stopped_marker_process(
+            sleep_marker, process, executable=Path("/usr/bin/sleep")
+        )
+        _publish_daemon_object(state_path, kind, token, object_id)
+        drift.touch()
+        os.kill(settle_pid, signal.SIGCONT)
+        _stdout, stderr = process.communicate(timeout=15)
+    finally:
+        if settle_pid is not None:
+            try:
+                os.kill(settle_pid, signal.SIGCONT)
+            except ProcessLookupError:
+                pass
+        if process.poll() is None:
+            _kill_process_group(process)
+
+    assert process.returncode == 125, stderr
+    assert root.exists(), stderr
+    events = operations.read_text(encoding="utf-8").splitlines()
+    removal = (
+        f"container-rm:{object_id}"
+        if kind == "run"
+        else f"network-rm:{object_id}"
+    )
+    assert removal not in events
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    collection = "containers" if kind == "run" else "networks"
+    assert object_id in state[collection]
+    assert observations.read_text(encoding="utf-8").splitlines() == [
+        f"blocked:{kind}"
+        + (f":qcsd-docker-run-{token}.scope" if kind == "run" else "")
+    ]
+    assert not Path(environment["QCSD_TEST_PROBE_MARKER"]).exists()
+
+
+@pytest.mark.parametrize("kind", ["run", "network"])
+def test_receipt_inode_drift_during_settle_precedes_that_roots_docker_removal(
+    launcher_boundary: tuple[Path, Path, Path, Path, dict[str, str], list[Path]],
+    tmp_path: Path,
+    kind: str,
+) -> None:
+    launcher, _builds, state_path, operations, environment, roots = launcher_boundary
+    peer_root, peer_token = _new_lifecycle_root(
+        roots, environment, kind, token="1" * 32
+    )
+    target_root, target_token = _new_lifecycle_root(
+        roots, environment, kind, token="2" * 32
+    )
+    peer_id = ("a" if kind == "run" else "b") * 64
+    target_id = ("c" if kind == "run" else "d") * 64
+    for identity_offset, (root, token) in enumerate(
+        ((peer_root, peer_token), (target_root, target_token)), start=100
+    ):
+        fields = _authorised_unresolved_recovery_fields(
+            launcher, root, token, environment, kind
+        )
+        if kind == "run":
+            identity = _dead_identity(identity_offset)
+            for prefix in ("scope_launcher", "cli"):
+                for suffix, value in zip(
+                    ("pid", "start_time", "session", "process_group"),
+                    identity,
+                    strict=True,
+                ):
+                    fields = _replace_field(fields, f"{prefix}_{suffix}", value)
+        _write_record(
+            root,
+            "RECOVERY",
+            fields,
+        )
+    target_receipt = target_root / "RECOVERY"
+    original_inode = target_receipt.stat().st_ino
+    sleep_marker = _install_stopped_settle_sleep(environment, tmp_path)
+    process = _start_etf(launcher, environment, tmp_path)
+    settle_pid: int | None = None
+    try:
+        settle_pid = _wait_for_stopped_marker_process(
+            sleep_marker, process, executable=Path("/usr/bin/sleep")
+        )
+        if kind == "run":
+            _write_state(
+                state_path,
+                containers={
+                    peer_id: {"token": peer_token, "running": True},
+                    target_id: {"token": target_token, "running": True},
+                },
+            )
+        else:
+            _write_state(
+                state_path,
+                networks={peer_id: peer_token, target_id: target_token},
+            )
+        replacement = target_root / "RECOVERY.replacement"
+        replacement.write_bytes(target_receipt.read_bytes())
+        replacement.chmod(0o600)
+        assert replacement.stat().st_ino != original_inode
+        replacement.replace(target_receipt)
+        assert target_receipt.stat().st_ino != original_inode
+        os.kill(settle_pid, signal.SIGCONT)
+        _stdout, stderr = process.communicate(timeout=15)
+    finally:
+        if settle_pid is not None:
+            try:
+                os.kill(settle_pid, signal.SIGCONT)
+            except ProcessLookupError:
+                pass
+        if process.poll() is None:
+            _kill_process_group(process)
+
+    assert process.returncode == 125, stderr
+    assert not peer_root.exists(), stderr
+    assert target_root.exists(), stderr
+    events = operations.read_text(encoding="utf-8").splitlines()
+    peer_removal = f"container-rm:{peer_id}" if kind == "run" else f"network-rm:{peer_id}"
+    target_removal = (
+        f"container-rm:{target_id}" if kind == "run" else f"network-rm:{target_id}"
+    )
+    assert events.count(peer_removal) == 1
+    assert target_removal not in events
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    collection = "containers" if kind == "run" else "networks"
+    assert target_id in state[collection]
+
+
+@pytest.mark.parametrize("kind", ["run", "network"])
+def test_authorised_recovery_retains_receipt_when_object_remains_absent(
+    launcher_boundary: tuple[Path, Path, Path, Path, dict[str, str], list[Path]],
+    tmp_path: Path,
+    kind: str,
+) -> None:
+    launcher, _builds, _state, operations, environment, roots = launcher_boundary
+    root, token = _new_lifecycle_root(roots, environment, kind)
+    _write_record(
+        root,
+        "RECOVERY",
+        _authorised_unresolved_recovery_fields(
+            launcher, root, token, environment, kind
+        ),
+    )
+
+    result = _invoke_etf(launcher, environment, tmp_path)
+
+    assert result.returncode == 125, result.stderr
+    assert root.exists(), result.stderr
+    assert "-rm:" not in operations.read_text(encoding="utf-8")
+    assert not Path(environment["QCSD_TEST_PROBE_MARKER"]).exists()
+
+
+@pytest.mark.parametrize("kind", ["run", "network"])
+def test_authorised_recovery_retains_late_object_after_frozen_absence_snapshot(
+    launcher_boundary: tuple[Path, Path, Path, Path, dict[str, str], list[Path]],
+    tmp_path: Path,
+    kind: str,
+) -> None:
+    launcher, _builds, state_path, operations, environment, roots = launcher_boundary
+    root, token = _new_lifecycle_root(roots, environment, kind)
+    object_id = ("8" if kind == "run" else "9") * 64
+    _write_record(
+        root,
+        "RECOVERY",
+        _authorised_unresolved_recovery_fields(
+            launcher, root, token, environment, kind
+        ),
+    )
+    absence_marker = tmp_path / "frozen-absence.pid"
+    environment.update(
+        QCSD_TEST_FREEZE_ABSENCE_KIND=kind,
+        QCSD_TEST_FREEZE_ABSENCE_TOKEN=token,
+        QCSD_TEST_FREEZE_ABSENCE_MARKER=str(absence_marker),
+    )
+    process = _start_etf(launcher, environment, tmp_path)
+    docker_pid: int | None = None
+    try:
+        docker_pid = _wait_for_stopped_marker_process(absence_marker, process)
+        _publish_daemon_object(state_path, kind, token, object_id)
+        os.kill(docker_pid, signal.SIGCONT)
+        _stdout, stderr = process.communicate(timeout=15)
+    finally:
+        if docker_pid is not None:
+            try:
+                os.kill(docker_pid, signal.SIGCONT)
+            except ProcessLookupError:
+                pass
+        if process.poll() is None:
+            _kill_process_group(process)
+
+    assert process.returncode == 125, stderr
+    assert root.exists(), stderr
+    expected = f"container-rm:{object_id}" if kind == "run" else f"network-rm:{object_id}"
+    assert expected not in operations.read_text(encoding="utf-8").splitlines()
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    collection = "containers" if kind == "run" else "networks"
+    assert object_id in state[collection]
+    assert not Path(environment["QCSD_TEST_PROBE_MARKER"]).exists()
 
 
 def test_durable_source_mismatch_blocks_without_touching_exact_container(

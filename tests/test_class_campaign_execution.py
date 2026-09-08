@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import stat
@@ -2288,6 +2289,7 @@ def test_class_preclaim_uses_the_real_environment_receipt_build_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from tests.test_class_attestation import _study_environment
+    from tests.test_buflo_study import _write_schema5_build_pair
 
     campaign = replace(
         _campaign(tuple(_workload(index) for index in range(100))),
@@ -2296,10 +2298,26 @@ def test_class_preclaim_uses_the_real_environment_receipt_build_identity(
         class_study_cohort_sha256="a" * 64,
         class_study_cohort_assembly_sha256="b" * 64,
     )
-    environment = _study_environment(_COLLECTION_IMAGE)
+    receipt_path = tmp_path / "build-execution-v47.json"
+    receipt, completion_path, completion = _write_schema5_build_pair(
+        receipt_path,
+        cohort_version=47,
+    )
+    collection_image = receipt["images"]["collection"]["id"]
+    environment = _study_environment(collection_image)
+    environment["schema_version"] = 3
+    environment["build_inputs"] = dict(receipt["build_inputs"])
+    environment["build_execution"] = {
+        "sha256": hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
+        "receipt": receipt,
+        "completion_path": "/lab/artifacts/buflo-study/build-completion-v47.json",
+        "completion_sha256": hashlib.sha256(completion_path.read_bytes()).hexdigest(),
+        "completion_payload_sha256": completion["payload_sha256"],
+        "completion": completion,
+    }
     validated_environment = buflo_study.validate_study_environment_receipt(
         environment,
-        expected_image_digest=_COLLECTION_IMAGE,
+        expected_image_digest=collection_image,
     )
     environment_build = validated_environment["build_execution"]
     build_identity = {
@@ -2307,6 +2325,8 @@ def test_class_preclaim_uses_the_real_environment_receipt_build_identity(
         for key in (
             "cohort_version",
             "sha256",
+            "completion_path",
+            "completion_sha256",
             "collection_image",
             "started_at",
             "finished_at",

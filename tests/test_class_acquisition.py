@@ -84,7 +84,7 @@ from qcsd_lab.discovery_evidence import (
 )
 from qcsd_lab.prepare import PreparationError, PreparedWorkload, RecoverablePreparationError
 from qcsd_lab.util import load_json
-from tests.test_buflo_study import _build_execution_value
+from tests.test_buflo_study import _write_schema5_build_pair
 from tests.test_pinned_cdp import _observation as _pinned_cdp_observation
 
 _PRODUCTION_FOUNDATION_ATTESTATION_BINDING = acquisition_module._foundation_attestation_binding
@@ -297,7 +297,7 @@ def _real_prepare_runtime_foundation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[Path, Path, dict[str, object], dict[str, object]]:
-    """Create a real schema-3 foundation around deterministic gate fixtures.
+    """Create a real current foundation around deterministic gate fixtures.
 
     Expensive packet/result parsing and the browser launch are replaced by
     deterministic gate outputs, but the build, reference, pinned-CDP, code,
@@ -305,16 +305,10 @@ def _real_prepare_runtime_foundation(
     """
 
     cohort_version = 59
-    collection_image = "sha256:" + "a" * 64
-    build_value = _build_execution_value(
-        collection_image,
-        cohort_version=cohort_version,
-        schema_version=3,
-    )
     build_path = tmp_path / "build-execution-v59.json"
-    build_path.write_text(
-        json.dumps(build_value, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
+    build_value, _completion_path, _completion = _write_schema5_build_pair(
+        build_path,
+        cohort_version=cohort_version,
     )
     collection_source = dict(build_value["source"])
     prepare_source = {
@@ -344,13 +338,7 @@ def _real_prepare_runtime_foundation(
         expected_collection_image=str(collection_source["image_digest"]),
         expected_cohort_version=cohort_version,
     )
-    build_identity = {
-        "cohort_version": cohort_version,
-        "sha256": build["sha256"],
-        "collection_image": build["collection_image"],
-        "started_at": build["started_at"],
-        "finished_at": build["finished_at"],
-    }
+    build_identity = buflo_study._current_build_execution_identity(build)
     regression_roots = tuple(tmp_path / f"regression-{index}" for index in range(3))
     controlled_roots = tuple(tmp_path / f"controlled-{index}" for index in range(4))
     for root in (*regression_roots, *controlled_roots):
@@ -455,7 +443,16 @@ def _real_prepare_runtime_foundation(
     }
     reference_value = buflo_study._reference_execution_value(
         source=reference_source,
-        build_execution={"sha256": build["sha256"], "receipt": build_value},
+        build_execution={
+            "sha256": build["sha256"],
+            "receipt": build_value,
+            "completion_path": (
+                f"/lab/artifacts/buflo-study/build-completion-v{cohort_version}.json"
+            ),
+            "completion_sha256": build["completion_sha256"],
+            "completion_payload_sha256": build["completion_payload_sha256"],
+            "completion": _completion,
+        },
         isolation={
             "environment_marker": "QCSD_REFERENCE_ISOLATED=1",
             "docker_network_mode": "none",
@@ -522,6 +519,10 @@ def _real_prepare_runtime_foundation(
             "sha256": build["sha256"],
             "payload_sha256": build_value["payload_sha256"],
             "cohort_version": cohort_version,
+            "completion_path": (
+                f"/lab/artifacts/buflo-study/build-completion-v{cohort_version}.json"
+            ),
+            "completion_sha256": build["completion_sha256"],
             "collection_image_id": build_value["images"]["collection"]["id"],
             "prepare_image_id": build_value["images"]["prepare"]["id"],
             "reference_image_id": build_value["images"]["reference"]["id"],

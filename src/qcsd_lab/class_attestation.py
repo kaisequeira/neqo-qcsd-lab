@@ -89,14 +89,19 @@ from .class_study import (
     validate_hash_bound_receipt,
     write_create_only_json,
 )
+from .pinned_cdp import PROBE_SCHEMA_VERSION as PINNED_CDP_PROBE_SCHEMA_VERSION
 from .pinned_cdp import validate_pinned_cdp_receipt
 from .playwright_driver import EXPECTED_CHROMIUM_VERSION
 from .util import LAB_ROOT, load_json, require_disjoint_path, sha256_file, source_metadata
 from .verification import verify_result
 
 SCHEMA_VERSION = 1
-FOUNDATION_SCHEMA_VERSION = 3
-READINESS_SCHEMA_VERSION = 2
+FOUNDATION_SCHEMA_VERSION = 4
+HISTORICAL_FOUNDATION_SCHEMA_VERSION = 3
+READINESS_SCHEMA_VERSION = 3
+HISTORICAL_READINESS_SCHEMA_VERSION = 2
+QUALIFICATION_AUTHORITY_SCHEMA_VERSION = 2
+HISTORICAL_QUALIFICATION_AUTHORITY_SCHEMA_VERSION = 1
 FOUNDATION_RECEIPT_TYPE = "qcsd-class-study-foundation-attestation"
 READINESS_RECEIPT_TYPE = "qcsd-class-study-readiness-attestation"
 READINESS_IMPLEMENTATION_STATUS = "candidate-ready-for-pre-formal-snapshot"
@@ -214,11 +219,17 @@ def validate_class_foundation_attestation(
     *,
     deep_code_gate: bool = True,
     runtime_role: str = "collection",
+    allow_historical: bool = False,
 ) -> dict[str, Any]:
     """Reconstruct the seven prerequisite gates from immutable evidence."""
 
     receipt_path, value, payload = _load_bound_receipt(path, expected_type=FOUNDATION_RECEIPT_TYPE)
-    _validate_foundation_envelope(payload)
+    _validate_foundation_envelope(payload, allow_historical=allow_historical)
+    historical = (
+        allow_historical
+        and payload["attestation_schema_version"]
+        == HISTORICAL_FOUNDATION_SCHEMA_VERSION
+    )
     evidence = payload.get("evidence")
     if not isinstance(evidence, Mapping):
         raise TypeError("class foundation typed evidence is missing")
@@ -234,7 +245,8 @@ def validate_class_foundation_attestation(
             label="controlled qualification",
         ),
         pinned_cdp_receipt=_pinned_cdp_path_from_binding(
-            evidence.get("pinned_cdp_probe")
+            evidence.get("pinned_cdp_probe"),
+            allow_historical=historical,
         ),
         browser_egress_qualification_root=_browser_egress_root_from_binding(
             evidence.get("browser_egress_qualification")
@@ -245,6 +257,8 @@ def validate_class_foundation_attestation(
         deep_code_gate=deep_code_gate,
         evidence_source=payload.get("source"),
         pinned_runtime_role=runtime_role,
+        attestation_schema_version=payload["attestation_schema_version"],
+        allow_historical=historical,
     )
     if payload != expected:
         raise ValueError("class foundation attestation differs from reconstructed evidence")
@@ -254,6 +268,7 @@ def validate_class_foundation_attestation(
         build_execution_receipt=_path_from_binding(
             evidence.get("build_execution"), label="build execution"
         ),
+        allow_historical=historical,
     )
     return {
         "path": str(receipt_path),
@@ -268,6 +283,7 @@ def class_qualification_authority(
     *,
     deep_code_gate: bool = True,
     runtime_role: str = "collection",
+    allow_historical: bool = False,
 ) -> dict[str, Any]:
     """Derive the one build/source identity authorised for live qualification.
 
@@ -280,6 +296,12 @@ def class_qualification_authority(
         foundation_attestation,
         deep_code_gate=deep_code_gate,
         runtime_role=runtime_role,
+        allow_historical=allow_historical,
+    )
+    historical = (
+        allow_historical
+        and foundation.get("attestation_schema_version")
+        == HISTORICAL_FOUNDATION_SCHEMA_VERSION
     )
     evidence = foundation.get("evidence")
     if not isinstance(evidence, Mapping):  # pragma: no cover - foundation validation guards this
@@ -292,12 +314,17 @@ def class_qualification_authority(
         build_path,
         expected_collection_image=str(collection_source.get("image_digest")),
         expected_cohort_version=foundation.get("cohort_version"),
+        allow_historical=historical,
     )
     if build.get("source") != collection_source:
         raise ValueError("class qualification build differs from foundation source")
     prepare_image = build["images"]["prepare"]["id"]
     authority = {
-        "schema_version": 1,
+        "schema_version": (
+            HISTORICAL_QUALIFICATION_AUTHORITY_SCHEMA_VERSION
+            if historical
+            else QUALIFICATION_AUTHORITY_SCHEMA_VERSION
+        ),
         "artifact_type": QUALIFICATION_AUTHORITY_TYPE,
         "foundation_attestation": {
             "path": foundation["path"],
@@ -310,10 +337,14 @@ def class_qualification_authority(
         "prepare_source": {**dict(collection_source), "image_digest": prepare_image},
         "prepare_image_digest": prepare_image,
     }
-    return validate_class_qualification_authority(authority)
+    return validate_class_qualification_authority(
+        authority, allow_historical=allow_historical
+    )
 
 
-def validate_class_qualification_authority(value: object) -> dict[str, Any]:
+def validate_class_qualification_authority(
+    value: object, *, allow_historical: bool = False
+) -> dict[str, Any]:
     """Validate the portable authority embedded in qualification/fitting evidence."""
 
     keys = {
@@ -334,8 +365,31 @@ def validate_class_qualification_authority(value: object) -> dict[str, Any]:
     collection = value.get("collection_source")
     prepare = value.get("prepare_source")
     prepare_image = value.get("prepare_image_digest")
+    schema_version = value.get("schema_version")
+    current_identity_keys = {
+        "cohort_version",
+        "sha256",
+        "completion_path",
+        "completion_sha256",
+        "collection_image",
+        "started_at",
+        "finished_at",
+    }
+    historical_identity_keys = current_identity_keys - {
+        "completion_path",
+        "completion_sha256",
+    }
     if (
-        value.get("schema_version") != 1
+        type(schema_version) is not int
+        or schema_version
+        not in {
+            HISTORICAL_QUALIFICATION_AUTHORITY_SCHEMA_VERSION,
+            QUALIFICATION_AUTHORITY_SCHEMA_VERSION,
+        }
+        or (
+            schema_version == HISTORICAL_QUALIFICATION_AUTHORITY_SCHEMA_VERSION
+            and not allow_historical
+        )
         or value.get("artifact_type") != QUALIFICATION_AUTHORITY_TYPE
         or not isinstance(foundation, Mapping)
         or set(foundation) != {"path", "sha256", "payload_sha256"}
@@ -348,10 +402,25 @@ def validate_class_qualification_authority(value: object) -> dict[str, Any]:
         or _DIGEST.fullmatch(str(build.get("sha256"))) is None
         or not isinstance(identity, Mapping)
         or set(identity)
-        != {"cohort_version", "sha256", "collection_image", "started_at", "finished_at"}
+        != (
+            historical_identity_keys
+            if schema_version == HISTORICAL_QUALIFICATION_AUTHORITY_SCHEMA_VERSION
+            else current_identity_keys
+        )
         or type(identity.get("cohort_version")) is not int
         or identity["cohort_version"] < 1
         or identity.get("sha256") != build.get("sha256")
+        or (
+            schema_version == QUALIFICATION_AUTHORITY_SCHEMA_VERSION
+            and (
+                identity.get("completion_path")
+                != (
+                    "/lab/artifacts/buflo-study/"
+                    f"build-completion-v{identity['cohort_version']}.json"
+                )
+                or _DIGEST.fullmatch(str(identity.get("completion_sha256"))) is None
+            )
+        )
         or _IMAGE_DIGEST.fullmatch(str(identity.get("collection_image"))) is None
         or _IMAGE_DIGEST.fullmatch(str(prepare_image)) is None
     ):
@@ -388,6 +457,7 @@ def validate_class_readiness_attestation(
     path: Path,
     *,
     deep_code_gate: bool = True,
+    allow_historical: bool = False,
 ) -> dict[str, Any]:
     """Independently reconstruct one readiness receipt from its evidence."""
 
@@ -399,10 +469,12 @@ def validate_class_readiness_attestation(
             receipt_path,
             deep_code_gate=deep_code_gate,
         )
-    _validate_readiness_envelope(payload)
+    _validate_readiness_envelope(payload, allow_historical=allow_historical)
     expected = _readiness_value(
         **_readiness_kwargs(payload),
         deep_code_gate=deep_code_gate,
+        attestation_schema_version=payload["attestation_schema_version"],
+        allow_historical=allow_historical,
     )
     if payload != expected:
         raise ValueError("class-readiness attestation differs from reconstructed evidence")
@@ -668,11 +740,19 @@ def _foundation_value(
     deep_code_gate: bool,
     evidence_source: object,
     pinned_runtime_role: str,
+    attestation_schema_version: int = FOUNDATION_SCHEMA_VERSION,
+    allow_historical: bool = False,
 ) -> dict[str, Any]:
     if type(cohort_version) is not int or cohort_version < 1:
         raise ValueError("class foundation cohort version must be a positive integer")
     if type(deep_code_gate) is not bool:
         raise ValueError("class foundation deep-code flag must be a boolean")
+    historical = (
+        attestation_schema_version == HISTORICAL_FOUNDATION_SCHEMA_VERSION
+        and allow_historical
+    )
+    if attestation_schema_version != FOUNDATION_SCHEMA_VERSION and not historical:
+        raise ValueError("class foundation schema is not admitted")
     current_source = source_metadata() if evidence_source is None else evidence_source
     _validate_immutable_source(current_source, label="current class-study source")
     if not isinstance(current_source, Mapping):
@@ -682,23 +762,28 @@ def _foundation_value(
         build_execution_receipt,
         expected_collection_image=current_source["image_digest"],
         expected_cohort_version=cohort_version,
+        allow_historical=historical,
     )
     if build["source"] != current_source:
         raise ValueError("class foundation build differs from current source")
-    build_identity = _build_identity(build)
+    build_identity = _build_identity(build, include_completion=not historical)
     browser_egress = _validate_browser_egress_qualification(
         browser_egress_qualification_root,
         cohort_version=cohort_version,
         build=build,
+        allow_historical=historical,
     )
     pinned_cdp = validate_pinned_cdp_receipt(
         pinned_cdp_receipt,
         build_execution_receipt=build_execution_receipt,
         expected_cohort_version=cohort_version,
         runtime_role=pinned_runtime_role,
+        allow_historical=historical,
     )
     reference = validate_reference_gate_receipt(
-        reference_receipt, expected_cohort_version=cohort_version
+        reference_receipt,
+        expected_cohort_version=cohort_version,
+        allow_historical=historical,
     )
     regression = validate_regression_results(
         regression_result_roots,
@@ -712,12 +797,14 @@ def _foundation_value(
         expected_cohort_version=cohort_version,
         deep=deep_code_gate,
         _expected_collection_source=current_source,
+        allow_historical=historical,
     )
     controlled = validate_qualification_receipt(
         controlled_qualification_receipt,
         controlled_result_roots=controlled_result_roots,
         expected_cohort_version=cohort_version,
         _expected_collection_source=current_source,
+        allow_historical=historical,
     )
     controlled_results = controlled.get("controlled_results")
     build_binding = {"path": build["path"], "sha256": build["sha256"]}
@@ -730,12 +817,14 @@ def _foundation_value(
         or controlled.get("build_execution") != build_binding
         or not isinstance(controlled_results, Mapping)
         or controlled_results.get("samples") != CONTROLLED_SAMPLE_COUNT
-        or _one_build_execution_identity(
-            [record["environment"] for record in regression["results"]]
+        or _one_class_build_execution_identity(
+            [record["environment"] for record in regression["results"]],
+            include_completion=not historical,
         )
         != build_identity
-        or _one_build_execution_identity(
-            [record["environment"] for record in controlled_results["results"]]
+        or _one_class_build_execution_identity(
+            [record["environment"] for record in controlled_results["results"]],
+            include_completion=not historical,
         )
         != build_identity
     ):
@@ -789,7 +878,10 @@ def _foundation_value(
         "controlled_results": [_result_binding(path) for path in controlled_result_roots],
     }
     gate_evidence = {
-        "current-clean-source-and-no-cache-build": [build["sha256"]],
+        "current-clean-source-and-no-cache-build": [
+            build["sha256"],
+            *([] if historical else [build["completion_sha256"]]),
+        ],
         "independent-reference-conformance": [reference["sha256"]],
         "complete-code-gate": [code["sha256"]],
         "nine-mode-regression-18-of-18": [
@@ -804,6 +896,11 @@ def _foundation_value(
             pinned_cdp["payload_sha256"],
             pinned_cdp["build_execution"]["sha256"],
             pinned_cdp["build_execution"]["payload_sha256"],
+            *(
+                []
+                if historical
+                else [pinned_cdp["build_execution_identity"]["completion_sha256"]]
+            ),
             pinned_cdp["probe_contract_sha256"],
         ],
         _BROWSER_EGRESS_GATE: [
@@ -813,7 +910,7 @@ def _foundation_value(
         ],
     }
     return {
-        "attestation_schema_version": FOUNDATION_SCHEMA_VERSION,
+        "attestation_schema_version": attestation_schema_version,
         "artifact_type": FOUNDATION_RECEIPT_TYPE,
         "study_id": STUDY_ID,
         "cohort_version": cohort_version,
@@ -926,20 +1023,30 @@ def _readiness_value(
     qualification_prefix_root: Path,
     certification_result_root: Path,
     deep_code_gate: bool,
+    attestation_schema_version: int = READINESS_SCHEMA_VERSION,
+    allow_historical: bool = False,
 ) -> dict[str, Any]:
     if type(cohort_version) is not int or cohort_version < 1:
         raise ValueError("class readiness cohort version must be a positive integer")
     if type(deep_code_gate) is not bool:
         raise ValueError("class readiness deep-code flag must be a boolean")
+    historical = (
+        attestation_schema_version == HISTORICAL_READINESS_SCHEMA_VERSION
+        and allow_historical
+    )
+    if attestation_schema_version != READINESS_SCHEMA_VERSION and not historical:
+        raise ValueError("class readiness schema is not admitted")
 
     foundation = validate_class_foundation_attestation(
         foundation_attestation,
         deep_code_gate=deep_code_gate,
+        allow_historical=historical,
     )
     qualification_authority = class_qualification_authority(
         foundation_attestation,
         deep_code_gate=deep_code_gate,
         runtime_role="collection",
+        allow_historical=historical,
     )
     if foundation.get("cohort_version") != cohort_version:
         raise ValueError("class readiness and foundation cohort versions differ")
@@ -949,13 +1056,16 @@ def _readiness_value(
         build_execution_receipt,
         expected_collection_image=current_source["image_digest"],
         expected_cohort_version=cohort_version,
+        allow_historical=historical,
     )
     if build["source"] != current_source:
         raise ValueError("class readiness build differs from the current source")
-    build_identity = _build_identity(build)
+    build_identity = _build_identity(build, include_completion=not historical)
 
     reference = validate_reference_gate_receipt(
-        reference_receipt, expected_cohort_version=cohort_version
+        reference_receipt,
+        expected_cohort_version=cohort_version,
+        allow_historical=historical,
     )
     if reference.get("build_execution") != build_identity:
         raise ValueError("class readiness reference gate uses a different build")
@@ -967,11 +1077,13 @@ def _readiness_value(
         regression_result_roots=regression_result_roots,
         expected_cohort_version=cohort_version,
         deep=deep_code_gate,
+        allow_historical=historical,
     )
     controlled = validate_qualification_receipt(
         controlled_qualification_receipt,
         controlled_result_roots=controlled_result_roots,
         expected_cohort_version=cohort_version,
+        allow_historical=historical,
     )
     controlled_results = controlled.get("controlled_results")
     if (
@@ -989,10 +1101,14 @@ def _readiness_value(
     ):
         raise ValueError("class readiness prerequisite gates do not share one source/build")
     if (
-        _one_build_execution_identity([record["environment"] for record in regression["results"]])
+        _one_class_build_execution_identity(
+            [record["environment"] for record in regression["results"]],
+            include_completion=not historical,
+        )
         != build_identity
-        or _one_build_execution_identity(
-            [record["environment"] for record in controlled_results["results"]]
+        or _one_class_build_execution_identity(
+            [record["environment"] for record in controlled_results["results"]],
+            include_completion=not historical,
         )
         != build_identity
     ):
@@ -1001,13 +1117,15 @@ def _readiness_value(
     if not isinstance(foundation_evidence, Mapping):
         raise TypeError("class readiness foundation typed evidence is missing")
     pinned_cdp_path = _pinned_cdp_path_from_binding(
-        foundation_evidence.get("pinned_cdp_probe")
+        foundation_evidence.get("pinned_cdp_probe"),
+        allow_historical=historical,
     )
     pinned_cdp = validate_pinned_cdp_receipt(
         pinned_cdp_path,
         build_execution_receipt=build_execution_receipt,
         expected_cohort_version=cohort_version,
         runtime_role="collection",
+        allow_historical=historical,
     )
     browser_egress_root = _browser_egress_root_from_binding(
         foundation_evidence.get("browser_egress_qualification")
@@ -1016,6 +1134,7 @@ def _readiness_value(
         browser_egress_root,
         cohort_version=cohort_version,
         build=build,
+        allow_historical=historical,
     )
     browser_egress_binding = _browser_egress_binding(
         browser_egress, browser_egress_root
@@ -1261,7 +1380,12 @@ def _readiness_value(
         if verified.experiment.get("source") != current_source:
             raise ValueError("class readiness result uses a different immutable source")
         environments.append(_validate_result_environment(verified, current_source))
-    if _one_build_execution_identity(environments) != build_identity:
+    if (
+        _one_class_build_execution_identity(
+            environments, include_completion=not historical
+        )
+        != build_identity
+    ):
         raise ValueError("class readiness results do not share the no-cache build")
 
     fitting_source = fitting.provenance["source_result"].get("source_fingerprints")
@@ -1312,6 +1436,7 @@ def _readiness_value(
         "current-clean-source-and-no-cache-build": [
             foundation_binding["sha256"],
             build["sha256"],
+            *([] if historical else [build["completion_sha256"]]),
         ],
         "independent-reference-conformance": [
             foundation_binding["sha256"],
@@ -1356,7 +1481,7 @@ def _readiness_value(
         ],
     }
     return {
-        "attestation_schema_version": READINESS_SCHEMA_VERSION,
+        "attestation_schema_version": attestation_schema_version,
         "artifact_type": READINESS_RECEIPT_TYPE,
         "study_id": STUDY_ID,
         "cohort_version": cohort_version,
@@ -2779,9 +2904,17 @@ def _admission_from_readiness(readiness: Mapping[str, Any]) -> Any:
     )
 
 
-def _validate_readiness_envelope(payload: Mapping[str, Any]) -> None:
+def _validate_readiness_envelope(
+    payload: Mapping[str, Any], *, allow_historical: bool = False
+) -> None:
+    schema_version = payload.get("attestation_schema_version")
     if (
-        payload.get("attestation_schema_version") != READINESS_SCHEMA_VERSION
+        schema_version
+        not in {HISTORICAL_READINESS_SCHEMA_VERSION, READINESS_SCHEMA_VERSION}
+        or (
+            schema_version == HISTORICAL_READINESS_SCHEMA_VERSION
+            and not allow_historical
+        )
         or payload.get("artifact_type") != READINESS_RECEIPT_TYPE
         or payload.get("study_id") != STUDY_ID
         or payload.get("implementation_status") != READINESS_IMPLEMENTATION_STATUS
@@ -2795,9 +2928,17 @@ def _validate_readiness_envelope(payload: Mapping[str, Any]) -> None:
     _validate_hard_gates(payload.get("hard_gates"), _READINESS_GATES)
 
 
-def _validate_foundation_envelope(payload: Mapping[str, Any]) -> None:
+def _validate_foundation_envelope(
+    payload: Mapping[str, Any], *, allow_historical: bool = False
+) -> None:
+    schema_version = payload.get("attestation_schema_version")
     if (
-        payload.get("attestation_schema_version") != FOUNDATION_SCHEMA_VERSION
+        schema_version
+        not in {HISTORICAL_FOUNDATION_SCHEMA_VERSION, FOUNDATION_SCHEMA_VERSION}
+        or (
+            schema_version == HISTORICAL_FOUNDATION_SCHEMA_VERSION
+            and not allow_historical
+        )
         or payload.get("artifact_type") != FOUNDATION_RECEIPT_TYPE
         or payload.get("study_id") != STUDY_ID
         or payload.get("implementation_status") != "foundation-ready-for-class-acquisition"
@@ -2913,6 +3054,7 @@ def _validate_foundation_runtime(
     *,
     runtime_role: str,
     build_execution_receipt: Path,
+    allow_historical: bool = False,
 ) -> None:
     if runtime_role not in {"collection", "prepare"}:
         raise ValueError("class foundation runtime role is invalid")
@@ -2923,6 +3065,7 @@ def _validate_foundation_runtime(
         build_execution_receipt,
         expected_collection_image=str(bound_source.get("image_digest")),
         expected_cohort_version=payload.get("cohort_version"),
+        allow_historical=allow_historical,
     )
     runtime_source = source_metadata()
     expected = dict(bound_source)
@@ -3001,14 +3144,57 @@ def _require_current_acquisition_completion(value: object) -> dict[str, Any]:
     return dict(value)
 
 
-def _build_identity(build: Mapping[str, Any]) -> dict[str, Any]:
-    return {
-        "cohort_version": build["cohort_version"],
+def _build_identity(
+    build: Mapping[str, Any], *, include_completion: bool = True
+) -> dict[str, Any]:
+    cohort_version = build["cohort_version"]
+    identity = {
+        "cohort_version": cohort_version,
         "sha256": build["sha256"],
         "collection_image": build["collection_image"],
         "started_at": build["started_at"],
         "finished_at": build["finished_at"],
     }
+    if not include_completion:
+        return identity
+    completion_path = build.get("completion_path")
+    completion_sha256 = build.get("completion_sha256")
+    build_path = build.get("path")
+    if (
+        not isinstance(build_path, str)
+        or not isinstance(completion_path, str)
+        or not Path(completion_path).is_absolute()
+        or Path(completion_path).resolve()
+        != Path(build_path).resolve().with_name(
+            f"build-completion-v{cohort_version}.json"
+        )
+        or not isinstance(completion_sha256, str)
+        or _DIGEST.fullmatch(completion_sha256) is None
+    ):
+        raise ValueError("class attestation requires a completed schema-5 build identity")
+    return {
+        **identity,
+        "completion_path": (
+            f"/lab/artifacts/buflo-study/build-completion-v{cohort_version}.json"
+        ),
+        "completion_sha256": completion_sha256,
+    }
+
+
+def _one_class_build_execution_identity(
+    environments: Sequence[Mapping[str, Any]], *, include_completion: bool
+) -> dict[str, Any]:
+    if include_completion:
+        return _one_build_execution_identity(environments)
+    identities = []
+    for environment in environments:
+        build = environment.get("build_execution")
+        if not isinstance(build, Mapping):
+            raise ValueError("historical class evidence has no build identity")
+        identities.append(_build_identity(build, include_completion=False))
+    if not identities or any(identity != identities[0] for identity in identities[1:]):
+        raise ValueError("historical class evidence does not share one build identity")
+    return identities[0]
 
 
 def _require_formal_authority_bindings(
@@ -3146,23 +3332,34 @@ def _pinned_cdp_binding(receipt: Mapping[str, Any]) -> dict[str, Any]:
     build = receipt.get("build_execution")
     if not isinstance(build, Mapping):
         raise TypeError("pinned CDP probe has no build binding")
-    return {
+    projection = {
         "path": str(receipt["path"]),
         "sha256": str(receipt["sha256"]),
         "payload_sha256": str(receipt["payload_sha256"]),
         "build_execution": dict(build),
         "probe_contract_sha256": str(receipt["probe_contract_sha256"]),
     }
+    if receipt.get("probe_schema_version") == PINNED_CDP_PROBE_SCHEMA_VERSION:
+        identity = receipt.get("build_execution_identity")
+        if not isinstance(identity, Mapping):
+            raise TypeError("current pinned CDP probe has no build identity")
+        projection["build_execution_identity"] = dict(identity)
+    return projection
 
 
 def _validate_browser_egress_qualification(
-    root: Path, *, cohort_version: int, build: Mapping[str, Any]
+    root: Path,
+    *,
+    cohort_version: int,
+    build: Mapping[str, Any],
+    allow_historical: bool = False,
 ) -> dict[str, Any]:
     qualification_root = _regular_directory(root, "browser-egress qualification root")
     receipt = verify_browser_egress_qualification(
         qualification_root,
         lab_root=LAB_ROOT,
         expected_cohort_version=cohort_version,
+        allow_historical=allow_historical,
     )
     required = {
         "path",
@@ -3191,6 +3388,8 @@ def _validate_browser_egress_qualification(
         "prepare_image_id",
         "reference_image_id",
     }
+    if not allow_historical:
+        expected_build_fields.update({"completion_path", "completion_sha256"})
     images = build.get("images")
     if not isinstance(images, Mapping) or set(images) != {"collection", "prepare", "reference"}:
         raise ValueError("browser-egress qualification build image roles are incomplete")
@@ -3218,6 +3417,15 @@ def _validate_browser_egress_qualification(
         or qualification_build.get("sha256") != build.get("sha256")
         or qualification_build.get("payload_sha256") != build_payload_sha256
         or qualification_build.get("cohort_version") != cohort_version
+        or (
+            not allow_historical
+            and (
+                qualification_build.get("completion_path")
+                != f"/lab/artifacts/buflo-study/build-completion-v{cohort_version}.json"
+                or qualification_build.get("completion_sha256")
+                != build.get("completion_sha256")
+            )
+        )
         or qualification_build.get("collection_image_id") != images["collection"].get("id")
         or qualification_build.get("prepare_image_id") != images["prepare"].get("id")
         or qualification_build.get("reference_image_id") != images["reference"].get("id")
@@ -3380,22 +3588,30 @@ def _path_from_binding(value: object, *, label: str) -> Path:
     return path
 
 
-def _pinned_cdp_path_from_binding(value: object) -> Path:
+def _pinned_cdp_path_from_binding(
+    value: object, *, allow_historical: bool = False
+) -> Path:
+    expected_fields = {
+        "path",
+        "sha256",
+        "payload_sha256",
+        "build_execution",
+        "probe_contract_sha256",
+    }
+    if not allow_historical:
+        expected_fields.add("build_execution_identity")
     if (
         not isinstance(value, Mapping)
-        or set(value)
-        != {
-            "path",
-            "sha256",
-            "payload_sha256",
-            "build_execution",
-            "probe_contract_sha256",
-        }
+        or set(value) != expected_fields
         or not isinstance(value.get("path"), str)
         or _DIGEST.fullmatch(str(value.get("sha256"))) is None
         or _DIGEST.fullmatch(str(value.get("payload_sha256"))) is None
         or _DIGEST.fullmatch(str(value.get("probe_contract_sha256"))) is None
         or not isinstance(value.get("build_execution"), Mapping)
+        or (
+            not allow_historical
+            and not isinstance(value.get("build_execution_identity"), Mapping)
+        )
     ):
         raise ValueError("class attestation pinned CDP probe binding is invalid")
     path = _regular_file(Path(value["path"]), "pinned CDP probe")

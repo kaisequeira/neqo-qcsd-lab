@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import copy
 import fcntl
 import hashlib
@@ -189,6 +190,7 @@ def _write_build_execution(path: Path, payload: dict[str, Any]) -> None:
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     path.write_bytes(_canonical(value))
+    path.chmod(0o600)
 
 
 def _buildx_provenance() -> dict[str, Any]:
@@ -260,6 +262,409 @@ def _buildx_provenance() -> dict[str, Any]:
     }
 
 
+def _compact_digest(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("ascii")
+    ).hexdigest()
+
+
+def _git_object_oid(object_type: bytes, payload: bytes) -> str:
+    digest = hashlib.sha1()
+    digest.update(object_type + b" " + str(len(payload)).encode("ascii") + b"\0")
+    digest.update(payload)
+    return digest.hexdigest()
+
+
+def _git_tree_payload(entries: list[tuple[bytes, bytes, str]]) -> bytes:
+    ordered = sorted(
+        entries,
+        key=lambda entry: entry[1] + (b"/" if entry[0] == b"40000" else b""),
+    )
+    return b"".join(mode + b" " + name + b"\0" + bytes.fromhex(oid) for mode, name, oid in ordered)
+
+
+def _cohort_allocation(
+    *,
+    cohort_version: int,
+    neqo_commit: str,
+) -> dict[str, Any]:
+    ledger = {
+        "schema_version": 1,
+        "artifact_type": watch._COHORT_LEDGER_TYPE,
+        "policy": watch._COHORT_ALLOCATION_POLICY,
+        "consumed_versions": list(range(1, cohort_version)),
+    }
+    ledger_raw = json.dumps(ledger, sort_keys=True, separators=(",", ":")).encode("ascii")
+    ledger_blob_oid = _git_object_oid(b"blob", ledger_raw)
+    v1_tree = _git_tree_payload([(b"100644", b"consumed-cohorts.json", ledger_blob_oid)])
+    study_tree = _git_tree_payload([(b"40000", b"v1", _git_object_oid(b"tree", v1_tree))])
+    config_tree = _git_tree_payload(
+        [(b"40000", b"buflo-study", _git_object_oid(b"tree", study_tree))]
+    )
+    root_tree = _git_tree_payload(
+        [
+            (b"40000", b"config", _git_object_oid(b"tree", config_tree)),
+            (b"160000", b"neqo-qcsd", neqo_commit),
+        ]
+    )
+    commit_payload = (
+        f"tree {_git_object_oid(b'tree', root_tree)}\n"
+        "author QCSD Test <qcsd@example.invalid> 0 +0000\n"
+        "committer QCSD Test <qcsd@example.invalid> 0 +0000\n"
+        "\n"
+        "watcher cohort proof\n"
+    ).encode("ascii")
+    lab_commit = _git_object_oid(b"commit", commit_payload)
+    return {
+        "schema_version": 1,
+        "artifact_type": watch._COHORT_ALLOCATION_TYPE,
+        "policy": watch._COHORT_ALLOCATION_POLICY,
+        "ledger_path": watch._COHORT_LEDGER_PATH,
+        "ledger_sha256": hashlib.sha256(ledger_raw).hexdigest(),
+        "ledger_payload_base64": base64.b64encode(ledger_raw).decode("ascii"),
+        "git_object_format": "sha1",
+        "ledger_git_blob_oid": ledger_blob_oid,
+        "lab_commit": lab_commit,
+        "neqo_commit": neqo_commit,
+        "neqo_gitlink": neqo_commit,
+        "lab_commit_ledger_proof": {
+            "schema_version": 1,
+            "artifact_type": watch._COHORT_GIT_PROOF_TYPE,
+            "commit_payload_base64": base64.b64encode(commit_payload).decode("ascii"),
+            "tree_payloads_base64": [
+                base64.b64encode(payload).decode("ascii")
+                for payload in (root_tree, config_tree, study_tree, v1_tree)
+            ],
+        },
+        "last_consumed_version": cohort_version - 1,
+        "allocated_version": cohort_version,
+    }
+
+
+def _cohort_file_stat(*, inode: int, mode: int, size: int) -> dict[str, int]:
+    return {
+        "dev": 1,
+        "inode": inode,
+        "uid": 1000,
+        "gid": 1000,
+        "mode": mode,
+        "nlink": 1,
+        "size": size,
+        "mtime_ns": 1_000_000_000 + inode,
+        "ctime_ns": 2_000_000_000 + inode,
+    }
+
+
+def _cohort_authority(allocation: dict[str, Any]) -> dict[str, Any]:
+    ledger_size = len(base64.b64decode(allocation["ledger_payload_base64"]))
+    directories = {
+        name: {
+            **_cohort_file_stat(inode=100 + index, mode=0o755, size=4096),
+            "nlink": 2,
+        }
+        for index, name in enumerate(("repository-root", "config", "buflo-study", "v1", "git"))
+    }
+    return {
+        "schema_version": 1,
+        "artifact_type": watch._COHORT_AUTHORITY_TYPE,
+        "git": {
+            "object_format": "sha1",
+            "lab_head": allocation["lab_commit"],
+            "head_blob_oid": allocation["ledger_git_blob_oid"],
+            "index_blob_oid": allocation["ledger_git_blob_oid"],
+            "worktree_blob_oid": allocation["ledger_git_blob_oid"],
+            "neqo_head": allocation["neqo_commit"],
+            "head_gitlink": allocation["neqo_gitlink"],
+            "index_gitlink": allocation["neqo_gitlink"],
+        },
+        "filesystem": {
+            "directories": directories,
+            "ledger": _cohort_file_stat(inode=200, mode=0o644, size=ledger_size),
+            "git_index": _cohort_file_stat(inode=201, mode=0o644, size=4096),
+        },
+        "receipt": copy.deepcopy(allocation),
+    }
+
+
+def _cohort_evidence(
+    allocation: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+    version = allocation["allocated_version"]
+    authority = _cohort_authority(allocation)
+    authority_sha256 = _compact_digest(authority)
+    claim_payload = {
+        "policy": watch._COHORT_ALLOCATION_POLICY,
+        "registry_path": watch._COHORT_CLAIM_REGISTRY_PATH,
+        "cohort_version": version,
+        "authority": authority,
+        "authority_sha256": authority_sha256,
+        "source": {
+            "lab_commit": allocation["lab_commit"],
+            "neqo_commit": allocation["neqo_commit"],
+            "neqo_gitlink": allocation["neqo_gitlink"],
+        },
+        "ledger": {
+            "path": allocation["ledger_path"],
+            "sha256": allocation["ledger_sha256"],
+            "git_object_format": allocation["git_object_format"],
+            "git_blob_oid": allocation["ledger_git_blob_oid"],
+            "payload_base64": allocation["ledger_payload_base64"],
+            "last_consumed_version": allocation["last_consumed_version"],
+        },
+        "predecessor": {
+            "kind": "genesis-ledger",
+            "cohort_version": allocation["last_consumed_version"],
+            "sha256": allocation["ledger_sha256"],
+        },
+    }
+    claim = {
+        "schema_version": 1,
+        "artifact_type": watch._COHORT_CLAIM_TYPE,
+        "payload": claim_payload,
+        "payload_sha256": _compact_digest(claim_payload),
+    }
+    claim_raw = (
+        json.dumps(claim, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n"
+    ).encode("ascii")
+    claim_sha256 = hashlib.sha256(claim_raw).hexdigest()
+    encoded_claim = base64.b64encode(claim_raw).decode("ascii")
+    snapshot = {
+        "schema_version": 1,
+        "artifact_type": watch._COHORT_CLAIM_SNAPSHOT_TYPE,
+        "policy": watch._COHORT_ALLOCATION_POLICY,
+        "cohort_version": version,
+        "registry": {
+            "path": watch._COHORT_CLAIM_REGISTRY_PATH,
+            "stat": {
+                "dev": 1,
+                "inode": 300,
+                "uid": 1000,
+                "gid": 1000,
+                "mode": 0o700,
+                "nlink": 2,
+            },
+        },
+        "claim": {
+            "path": f"{watch._COHORT_CLAIM_REGISTRY_PATH}/claim-v{version}.json",
+            "sha256": claim_sha256,
+            "payload_base64": encoded_claim,
+            "stat": _cohort_file_stat(inode=301, mode=0o600, size=len(claim_raw)),
+        },
+        "registry_head_at_publication": {
+            "cohort_version": version,
+            "sha256": claim_sha256,
+        },
+    }
+    snapshot["payload_sha256"] = _compact_digest(snapshot)
+    chain = {
+        "schema_version": 1,
+        "artifact_type": watch._COHORT_CLAIM_CHAIN_TYPE,
+        "policy": watch._COHORT_ALLOCATION_POLICY,
+        "genesis": {
+            "ledger_path": allocation["ledger_path"],
+            "ledger_sha256": allocation["ledger_sha256"],
+            "last_consumed_version": allocation["last_consumed_version"],
+        },
+        "claims": [
+            {
+                "cohort_version": version,
+                "sha256": claim_sha256,
+                "payload_base64": encoded_claim,
+            }
+        ],
+        "head": {"cohort_version": version, "sha256": claim_sha256},
+    }
+    chain["payload_sha256"] = _compact_digest(chain)
+    reproof_times = (
+        "2026-08-28T00:00:00.100000+00:00",
+        "2026-08-28T00:00:00.200000+00:00",
+        "2026-08-28T00:00:00.300000+00:00",
+        "2026-08-28T00:00:00.400000+00:00",
+        "2026-08-28T00:00:00.500000+00:00",
+        "2026-08-28T00:00:02+00:00",
+        "2026-08-28T00:16:00+00:00",
+        "2026-08-28T00:31:00+00:00",
+        "2026-08-28T00:59:59.500000+00:00",
+    )
+    snapshot_sha256 = _compact_digest(snapshot)
+    reproofs = [
+        {
+            "boundary": boundary,
+            "observed_at": observed_at,
+            "authority_sha256": authority_sha256,
+            "claim_snapshot_sha256": snapshot_sha256,
+            "claim_file_sha256": claim_sha256,
+        }
+        for boundary, observed_at in zip(
+            watch._COHORT_REPROOF_BOUNDARIES,
+            reproof_times,
+            strict=True,
+        )
+    ]
+    return snapshot, chain, reproofs
+
+
+def _write_build_completion(
+    path: Path,
+    *,
+    build_path: Path,
+    build: dict[str, Any],
+) -> None:
+    build_raw = build_path.read_bytes()
+    metadata = build_path.stat(follow_symlinks=False)
+    allocation = build["cohort_allocation"]
+    claim = build["cohort_claim"]
+    chain = build["cohort_claim_chain"]
+    claim_raw = base64.b64decode(claim["claim"]["payload_base64"], validate=True)
+    claim_value = json.loads(claim_raw)
+    authority_sha256 = _compact_digest(claim_value["payload"]["authority"])
+    chain_raw = json.dumps(chain, sort_keys=True, separators=(",", ":"), allow_nan=False).encode(
+        "ascii"
+    )
+    build_root = Path(build["commands"][0]["argv"][-1])
+    lease_nonce = "d" * 64
+    lifecycle_base = build_root / ".qcsd-test-lifecycle"
+    lifecycle_lock_path = Path(f"{lifecycle_base}.lock")
+    transaction_root = lifecycle_base / f"transaction.{lease_nonce[:32]}"
+    cohort_registry = build_root / "artifacts/buflo-study/cohort-claims-v1"
+    transaction_fields = {
+        "object": "docker-build-transaction",
+        "lifecycle_schema": "1",
+        "lifecycle_state": "request-authorised",
+        "lifecycle_root": str(transaction_root),
+        "lifecycle_token": lease_nonce[:32],
+        "supervisor_source_path": str(build_root / "tools/docker_signal_supervisor.sh"),
+        "supervisor_source_sha256": "e" * 64,
+        "supervisor_source_device": "10",
+        "supervisor_source_inode": "401",
+        "docker_context": build["docker"]["context"],
+        "docker_host": build["docker"]["endpoint"],
+        "docker_server_id": build["docker"]["server_id"],
+        "docker_request_revalidation": "in-scope-immediately-before-mutation",
+        "docker_daemon_id": build["docker"]["server_id"],
+        "host_boot_id": "00000000-0000-0000-0000-000000000001",
+        "working_directory": str(build_root),
+        "cohort_version": str(build["cohort_version"]),
+        "receipt_path": str(build_path),
+        "transaction_state": "uncommitted-static-tag-mutation",
+    }
+    transaction_raw = "".join(
+        f"{field}={transaction_fields[field]}\n" for field in watch._BUILD_TRANSACTION_RECORD_FIELDS
+    ).encode("ascii")
+    transaction = {
+        "schema_version": 1,
+        "artifact_type": watch._BUILD_TRANSACTION_RETIREMENT_TYPE,
+        "root": {
+            "path": str(transaction_root),
+            "stat": {
+                "dev": 10,
+                "inode": 402,
+                "uid": 1000,
+                "gid": 1000,
+                "mode": 0o700,
+                "nlink": 2,
+            },
+        },
+        "record": {
+            "path": str(transaction_root / "SUPERVISION"),
+            "sha256": hashlib.sha256(transaction_raw).hexdigest(),
+            "payload_base64": base64.b64encode(transaction_raw).decode("ascii"),
+            "stat": _cohort_file_stat(
+                inode=403,
+                mode=0o600,
+                size=len(transaction_raw),
+            ),
+        },
+        "guardian": {
+            "pid": 410,
+            "start_time": 411,
+            "qcsd_pid": 412,
+            "qcsd_start_time": 413,
+        },
+        "lifecycle_lock": {
+            "path": str(lifecycle_lock_path),
+            "device": 10,
+            "inode": 414,
+            "parent_device": 10,
+            "parent_inode": 415,
+            "lease_nonce": lease_nonce,
+        },
+        "cohort_lock": {
+            "path": str(cohort_registry / ".allocation.lock"),
+            "device": 10,
+            "inode": 416,
+            "parent_device": 10,
+            "parent_inode": 417,
+            "guardian_fd": 7,
+        },
+        "operation_lock": {
+            "path": str(cohort_registry / ".allocation-operation.lock"),
+            "device": 10,
+            "inode": 418,
+            "parent_device": 10,
+            "parent_inode": 417,
+        },
+    }
+    payload = {
+        "schema_version": 1,
+        "artifact_type": watch.BUILD_COMPLETION_TYPE,
+        "cohort_version": build["cohort_version"],
+        "completed_at": "2026-08-28T01:00:00.200000+00:00",
+        "receipt": {
+            "path": f"artifacts/buflo-study/{build_path.name}",
+            "schema_version": 5,
+            "cohort_version": build["cohort_version"],
+            "payload_sha256": build["payload_sha256"],
+            "sha256": hashlib.sha256(build_raw).hexdigest(),
+            "stat": {
+                "dev": metadata.st_dev,
+                "inode": metadata.st_ino,
+                "uid": metadata.st_uid,
+                "gid": metadata.st_gid,
+                "mode": stat.S_IMODE(metadata.st_mode),
+                "nlink": metadata.st_nlink,
+                "size": metadata.st_size,
+                "mtime_ns": metadata.st_mtime_ns,
+                "ctime_ns": metadata.st_ctime_ns,
+            },
+        },
+        "source": {
+            "lab_commit": build["source"]["lab_commit"],
+            "neqo_commit": build["source"]["neqo_commit"],
+            "neqo_gitlink": allocation["neqo_gitlink"],
+        },
+        "cohort_authority": {
+            "allocation_sha256": _compact_digest(allocation),
+            "claim_snapshot_sha256": _compact_digest(claim),
+            "claim_file_sha256": hashlib.sha256(claim_raw).hexdigest(),
+            "claim_chain_sha256": hashlib.sha256(chain_raw).hexdigest(),
+            "claim_chain_payload_sha256": chain["payload_sha256"],
+        },
+        "transaction": transaction,
+        "final_reproof": {
+            "boundary": watch._BUILD_COMPLETION_REPROOF_BOUNDARY,
+            "observed_at": "2026-08-28T01:00:00.100000+00:00",
+            "authority_sha256": authority_sha256,
+            "claim_snapshot_sha256": _compact_digest(claim),
+            "claim_file_sha256": hashlib.sha256(claim_raw).hexdigest(),
+            "claim_chain_sha256": hashlib.sha256(chain_raw).hexdigest(),
+        },
+    }
+    payload["payload_sha256"] = _compact_digest(payload)
+    path.write_bytes(
+        (json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n").encode(
+            "ascii"
+        )
+    )
+    path.chmod(0o600)
+
+
 def _batch(prefix: str, body: dict[str, Any]) -> dict[str, Any]:
     value = copy.deepcopy(body)
     value["batch_id"] = f"{prefix}-{hashlib.sha256(_canonical(body)).hexdigest()}"
@@ -284,6 +689,7 @@ class Fixture:
     foundation_path: Path
     pinned_cdp_path: Path
     build_execution_path: Path
+    build_completion_path: Path
     browser_egress_root: Path
     browser_egress_final_path: Path
 
@@ -348,9 +754,11 @@ def acquisition(tmp_path: Path) -> Fixture:
 
     image = "sha256:" + "a" * 64
     collection_image = "sha256:" + "e" * 64
+    cohort_allocation = _cohort_allocation(cohort_version=23, neqo_commit="c" * 40)
+    cohort_claim, cohort_chain, cohort_reproofs = _cohort_evidence(cohort_allocation)
     collection_source = {
         "image_digest": collection_image,
-        "lab_commit": "b" * 40,
+        "lab_commit": cohort_allocation["lab_commit"],
         "lab_dirty": False,
         "lab_patch_sha256": watch.EMPTY_SHA256,
         "neqo_commit": "c" * 40,
@@ -419,7 +827,7 @@ def acquisition(tmp_path: Path) -> Fixture:
     _write_build_execution(
         build_execution_path,
         {
-            "schema_version": 4,
+            "schema_version": 5,
             "artifact_type": watch.BUILD_EXECUTION_TYPE,
             "cohort_version": 23,
             "started_at": "2026-08-28T00:00:00+00:00",
@@ -485,10 +893,21 @@ def acquisition(tmp_path: Path) -> Fixture:
                 },
             },
             "buildx": _buildx_provenance(),
+            "cohort_allocation": cohort_allocation,
+            "cohort_claim": cohort_claim,
+            "cohort_claim_chain": cohort_chain,
+            "cohort_authority_reproofs": cohort_reproofs,
         },
     )
     build = json.loads(build_execution_path.read_text(encoding="utf-8"))
+    build_completion_path = build_execution_path.with_name("build-completion-v23.json")
+    _write_build_completion(
+        build_completion_path,
+        build_path=build_execution_path,
+        build=build,
+    )
     build_sha256 = hashlib.sha256(build_execution_path.read_bytes()).hexdigest()
+    build_completion_sha256 = hashlib.sha256(build_completion_path.read_bytes()).hexdigest()
     build_binding = {
         "path": "/lab/artifacts/buflo-study/build-execution-v23.json",
         "sha256": build_sha256,
@@ -497,6 +916,8 @@ def acquisition(tmp_path: Path) -> Fixture:
     build_identity = {
         "cohort_version": 23,
         "sha256": build_sha256,
+        "completion_path": "/lab/artifacts/buflo-study/build-completion-v23.json",
+        "completion_sha256": build_completion_sha256,
         "collection_image": collection_image,
         "started_at": build["started_at"],
         "finished_at": build["finished_at"],
@@ -589,6 +1010,7 @@ def acquisition(tmp_path: Path) -> Fixture:
         "sha256": pinned_sha256,
         "payload_sha256": pinned["payload_sha256"],
         "build_execution": build_binding,
+        "build_execution_identity": copy.deepcopy(build_identity),
         "probe_contract_sha256": contract_sha256,
     }
     browser_egress_root = paths.lab_root / "artifacts/buflo-study/browser-egress-qualification-v23"
@@ -648,10 +1070,13 @@ def acquisition(tmp_path: Path) -> Fixture:
         "recorded_at": browser_egress_final_payload["recorded_at"],
         "prepare_image_id": image,
         "build_execution": {
-            "path": build_binding["path"],
+            "path": "artifacts/buflo-study/build-execution-v23.json",
             "sha256": build_binding["sha256"],
+            "size_bytes": build_execution_path.stat().st_size,
             "payload_sha256": build_binding["payload_sha256"],
             "cohort_version": 23,
+            "completion_path": build_identity["completion_path"],
+            "completion_sha256": build_identity["completion_sha256"],
             "collection_image_id": collection_image,
             "prepare_image_id": image,
             "reference_image_id": reference_image,
@@ -670,6 +1095,7 @@ def acquisition(tmp_path: Path) -> Fixture:
                     pinned_sha256,
                     pinned["payload_sha256"],
                     build_sha256,
+                    build_completion_sha256,
                     build["payload_sha256"],
                     contract_sha256,
                 }
@@ -788,6 +1214,7 @@ def acquisition(tmp_path: Path) -> Fixture:
         foundation_path,
         pinned_cdp_path,
         build_execution_path,
+        build_completion_path,
         browser_egress_root,
         browser_egress_final_path,
     )
@@ -962,7 +1389,7 @@ class FakeRunner:
             response = response(tuple(command), cwd, dict(env))
         if (
             isinstance(response, subprocess.CompletedProcess)
-            and command[3] == "acquisition-status"
+            and command[2] == "acquisition-status"
             and response.returncode == 0
         ):
             try:
@@ -982,7 +1409,7 @@ class FakeRunner:
 
     @staticmethod
     def _paths(command: tuple[str, ...] | list[str]) -> watch.WatchPaths:
-        launcher = Path(command[1] if command[0] == "/usr/bin/bash" else command[0])
+        launcher = Path(command[0])
         return watch.WatchPaths.from_lab_root(launcher.parent)
 
 
@@ -1018,7 +1445,6 @@ def test_due_work_uses_exact_command_environment_and_paths(acquisition: Fixture)
     assert watch.ACQUISITION_ACTION_CLEANUP_SECONDS == 120
     assert watch.RUN_RUNTIME_SECONDS == 1_920
     expected_run_command = (
-        "/usr/bin/bash",
         str(acquisition.paths.launcher),
         "class-study",
         "acquisition-run",
@@ -1037,11 +1463,25 @@ def test_due_work_uses_exact_command_environment_and_paths(acquisition: Fixture)
     )
     assert watch._run_command(acquisition.paths) == expected_run_command
     assert watch._run_command(acquisition.paths).count("acquisition-run") == 1
+    assert watch._admission_command(acquisition.paths) == (
+        str(acquisition.paths.launcher),
+        "class-study",
+        "acquisition-admission",
+    )
+    assert watch._status_command(acquisition.paths) == (
+        str(acquisition.paths.launcher),
+        "class-study",
+        "acquisition-status",
+        "--candidate-catalogue",
+        str(acquisition.paths.candidate_catalogue),
+        "--acquisition-root",
+        str(acquisition.paths.acquisition_root),
+    )
     due = _details(probing=1, due=1, blocked=True)
     complete = _details(terminal=watch.CANDIDATE_COUNT)
 
     def run_response(command, _cwd, _env):
-        assert command[3] == "acquisition-run"
+        assert command[2] == "acquisition-run"
         acquisition.advance_checkpoint()
         return _completed(_result("acquisition-run", complete))
 
@@ -1093,7 +1533,6 @@ def test_browser_egress_verify_command_has_one_exact_supervised_scope(
     binding = watch._validate_immutable_binding(acquisition.paths)
     command = watch._browser_egress_verify_command(acquisition.paths, binding)
     assert command == (
-        "/usr/bin/bash",
         str(acquisition.paths.launcher),
         "test",
         "browser-egress",
@@ -1108,10 +1547,10 @@ def test_browser_egress_verify_command_has_one_exact_supervised_scope(
     assert watch._scope_command_runtime(command) == 600
 
     for index, replacement in (
-        (4, "run"),
-        (6, "023"),
-        (8, str(acquisition.build_execution_path.with_name("other.json"))),
-        (10, str(acquisition.browser_egress_root.with_name("other"))),
+        (3, "run"),
+        (5, "023"),
+        (7, str(acquisition.build_execution_path.with_name("other.json"))),
+        (9, str(acquisition.browser_egress_root.with_name("other"))),
     ):
         forged = list(command)
         forged[index] = replacement
@@ -1409,7 +1848,7 @@ def test_waits_to_target_with_five_second_heartbeats_and_no_busy_spin(
 
     assert clock.sleeps == [5.0, 5.0, 2.0]
     assert clock.value == target
-    assert [call[0][3] for call in runner.calls[2:]] == [
+    assert [call[0][2] for call in runner.calls[2:]] == [
         "acquisition-status",
         "acquisition-run",
         "acquisition-status",
@@ -1459,7 +1898,7 @@ def test_wait_revalidates_host_source_without_polling_status_containers(
     )
 
     assert validations == [0.0] * 6 + [60.0] + [65.0] * 5
-    assert [call[0][3] for call in runner.calls[2:]] == [
+    assert [call[0][2] for call in runner.calls[2:]] == [
         "acquisition-status",
         "acquisition-run",
         "acquisition-status",
@@ -1533,7 +1972,7 @@ def test_clock_jump_delegates_missed_terminalisation_to_existing_runner(
     )
 
     assert clock.sleeps == [5.0]
-    assert sum(call[0][3] == "acquisition-run" for call in runner.calls[1:]) == 1
+    assert sum(call[0][2] == "acquisition-run" for call in runner.calls[1:]) == 1
 
 
 def test_lock_contention_fails_before_calling_coordinator(acquisition: Fixture) -> None:
@@ -1935,6 +2374,9 @@ def _replace_pinned_and_rebind_foundation(acquisition: Fixture, payload: dict[st
     binding["sha256"] = hashlib.sha256(acquisition.pinned_cdp_path.read_bytes()).hexdigest()
     binding["payload_sha256"] = pinned["payload_sha256"]
     binding["build_execution"] = copy.deepcopy(payload["build_execution"])
+    binding["build_execution_identity"] = copy.deepcopy(
+        payload["build_execution_identity"]
+    )
     binding["probe_contract_sha256"] = payload["probe_contract_sha256"]
     foundation_payload["hard_gates"][-2]["evidence_sha256s"] = sorted(
         {
@@ -1942,6 +2384,7 @@ def _replace_pinned_and_rebind_foundation(acquisition: Fixture, payload: dict[st
             binding["payload_sha256"],
             binding["build_execution"]["sha256"],
             binding["build_execution"]["payload_sha256"],
+            foundation_payload["build_execution_identity"]["completion_sha256"],
             binding["probe_contract_sha256"],
         }
     )
@@ -1953,6 +2396,18 @@ def _replace_build_and_rebind_foundation(acquisition: Fixture, payload: dict[str
 
     _write_build_execution(acquisition.build_execution_path, payload)
     build = json.loads(acquisition.build_execution_path.read_text(encoding="utf-8"))
+    if build["schema_version"] == 5:
+        _write_build_completion(
+            acquisition.build_completion_path,
+            build_path=acquisition.build_execution_path,
+            build=build,
+        )
+        completion_sha256 = hashlib.sha256(
+            acquisition.build_completion_path.read_bytes()
+        ).hexdigest()
+    else:
+        acquisition.build_completion_path.unlink(missing_ok=True)
+        completion_sha256 = None
     build_sha256 = hashlib.sha256(acquisition.build_execution_path.read_bytes()).hexdigest()
     build_binding = {
         "path": "/lab/artifacts/buflo-study/build-execution-v23.json",
@@ -1964,6 +2419,8 @@ def _replace_build_and_rebind_foundation(acquisition: Fixture, payload: dict[str
     pinned_payload = copy.deepcopy(pinned["payload"])
     pinned_payload["build_execution"] = copy.deepcopy(build_binding)
     pinned_payload["build_execution_identity"]["sha256"] = build_sha256
+    if completion_sha256 is not None:
+        pinned_payload["build_execution_identity"]["completion_sha256"] = completion_sha256
     _write_receipt(acquisition.pinned_cdp_path, watch.PINNED_CDP_TYPE, pinned_payload)
     pinned = json.loads(acquisition.pinned_cdp_path.read_text(encoding="utf-8"))
     pinned_sha256 = hashlib.sha256(acquisition.pinned_cdp_path.read_bytes()).hexdigest()
@@ -1971,16 +2428,34 @@ def _replace_build_and_rebind_foundation(acquisition: Fixture, payload: dict[str
     foundation = json.loads(acquisition.foundation_path.read_text(encoding="utf-8"))
     foundation_payload = copy.deepcopy(foundation["payload"])
     foundation_payload["build_execution_identity"]["sha256"] = build_sha256
+    if completion_sha256 is not None:
+        foundation_payload["build_execution_identity"]["completion_sha256"] = completion_sha256
     foundation_payload["evidence"]["build_execution"]["sha256"] = build_sha256
+    browser_build = foundation_payload["evidence"]["browser_egress_qualification"][
+        "build_execution"
+    ]
+    browser_build["sha256"] = build_sha256
+    browser_build["size_bytes"] = acquisition.build_execution_path.stat().st_size
+    browser_build["payload_sha256"] = build["payload_sha256"]
+    if completion_sha256 is not None:
+        browser_build["completion_sha256"] = completion_sha256
     pinned_binding = foundation_payload["evidence"]["pinned_cdp_probe"]
     pinned_binding["sha256"] = pinned_sha256
     pinned_binding["payload_sha256"] = pinned["payload_sha256"]
     pinned_binding["build_execution"] = copy.deepcopy(build_binding)
+    pinned_binding["build_execution_identity"] = copy.deepcopy(
+        pinned_payload["build_execution_identity"]
+    )
     foundation_payload["hard_gates"][-2]["evidence_sha256s"] = sorted(
         {
             pinned_sha256,
             pinned["payload_sha256"],
             build_sha256,
+            (
+                completion_sha256
+                if completion_sha256 is not None
+                else foundation_payload["build_execution_identity"]["completion_sha256"]
+            ),
             build["payload_sha256"],
             pinned_binding["probe_contract_sha256"],
         }
@@ -1988,16 +2463,328 @@ def _replace_build_and_rebind_foundation(acquisition: Fixture, payload: dict[str
     _replace_foundation_and_rebind_provenance(acquisition, foundation_payload)
 
 
-def test_current_foundation_watcher_accepts_exact_schema4_buildx_receipt(
+def _reseal_build_completion(
+    acquisition: Fixture,
+    mutate: Any,
+) -> None:
+    completion = json.loads(acquisition.build_completion_path.read_text(encoding="utf-8"))
+    completion.pop("payload_sha256")
+    mutate(completion)
+    completion["payload_sha256"] = _compact_digest(completion)
+    acquisition.build_completion_path.write_bytes(
+        (
+            json.dumps(
+                completion,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+            + "\n"
+        ).encode("ascii")
+    )
+    acquisition.build_completion_path.chmod(0o600)
+
+
+def _replace_completion_transaction_field(
+    completion: dict[str, Any],
+    field: str,
+    replacement: str,
+) -> None:
+    record = completion["transaction"]["record"]
+    raw = base64.b64decode(record["payload_base64"], validate=True)
+    values = dict(line.split("=", 1) for line in raw.decode("ascii").splitlines())
+    values[field] = replacement
+    replaced = "".join(
+        f"{name}={values[name]}\n" for name in watch._BUILD_TRANSACTION_RECORD_FIELDS
+    ).encode("ascii")
+    record["payload_base64"] = base64.b64encode(replaced).decode("ascii")
+    record["sha256"] = hashlib.sha256(replaced).hexdigest()
+    record["stat"]["size"] = len(replaced)
+
+
+def test_current_foundation_watcher_accepts_exact_schema5_build_and_completion(
     acquisition: Fixture,
 ) -> None:
     snapshot = watch._load_build_execution(
         acquisition.build_execution_path,
         paths=acquisition.paths,
+        require_current=True,
     )
 
-    assert snapshot.value["schema_version"] == 4
+    assert snapshot.value["schema_version"] == 5
     assert snapshot.value["buildx"]["passed"] is True
+    assert (
+        snapshot.completion_sha256
+        == hashlib.sha256(acquisition.build_completion_path.read_bytes()).hexdigest()
+    )
+
+
+def test_schema4_build_remains_historically_parseable_but_cannot_found_current_admission(
+    acquisition: Fixture,
+) -> None:
+    build = json.loads(acquisition.build_execution_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(build)
+    payload.pop("payload_sha256")
+    payload["schema_version"] = 4
+    for field in (
+        "cohort_allocation",
+        "cohort_claim",
+        "cohort_claim_chain",
+        "cohort_authority_reproofs",
+    ):
+        payload.pop(field)
+    _replace_build_and_rebind_foundation(acquisition, payload)
+
+    historical = watch._load_build_execution(
+        acquisition.build_execution_path,
+        paths=acquisition.paths,
+    )
+    assert historical.value["schema_version"] == 4
+    assert historical.completion_sha256 is None
+
+    with pytest.raises(watch.WatchError, match="historical.*schema 5"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+def test_schema5_build_is_parseable_but_not_current_without_completion(
+    acquisition: Fixture,
+) -> None:
+    acquisition.build_completion_path.unlink()
+
+    provisional = watch._load_build_execution(
+        acquisition.build_execution_path,
+        paths=acquisition.paths,
+    )
+    assert provisional.value["schema_version"] == 5
+    assert provisional.completion_sha256 is None
+
+    with pytest.raises(watch.WatchError, match="build completion"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+def test_watcher_independently_rejects_resealed_schema5_allocation_tampering(
+    acquisition: Fixture,
+) -> None:
+    build = json.loads(acquisition.build_execution_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(build)
+    payload.pop("payload_sha256")
+    payload["cohort_allocation"]["ledger_sha256"] = "1" * 64
+    _replace_build_and_rebind_foundation(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match="cohort ledger SHA-256"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+def test_watcher_independently_rejects_resealed_non_dense_claim_chain(
+    acquisition: Fixture,
+) -> None:
+    build = json.loads(acquisition.build_execution_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(build)
+    payload.pop("payload_sha256")
+    chain = payload["cohort_claim_chain"]
+    chain["claims"] = []
+    chain.pop("payload_sha256")
+    chain["payload_sha256"] = _compact_digest(chain)
+    _replace_build_and_rebind_foundation(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match="claim-chain inventory"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+def test_watcher_independently_rejects_resealed_free_form_chain_predecessor(
+    acquisition: Fixture,
+) -> None:
+    build = json.loads(acquisition.build_execution_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(build)
+    payload.pop("payload_sha256")
+    chain = payload["cohort_claim_chain"]
+    entry = chain["claims"][0]
+    claim = json.loads(base64.b64decode(entry["payload_base64"], validate=True))
+    claim["payload"]["predecessor"]["sha256"] = "1" * 64
+    claim["payload_sha256"] = _compact_digest(claim["payload"])
+    claim_raw = (
+        json.dumps(claim, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n"
+    ).encode("ascii")
+    entry["sha256"] = hashlib.sha256(claim_raw).hexdigest()
+    entry["payload_base64"] = base64.b64encode(claim_raw).decode("ascii")
+    chain["head"]["sha256"] = entry["sha256"]
+    chain.pop("payload_sha256")
+    chain["payload_sha256"] = _compact_digest(chain)
+    _replace_build_and_rebind_foundation(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match="claim predecessor"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+def test_watcher_independently_rejects_crossed_schema5_build_timeline(
+    acquisition: Fixture,
+) -> None:
+    build = json.loads(acquisition.build_execution_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(build)
+    payload.pop("payload_sha256")
+    payload["cohort_authority_reproofs"][6]["observed_at"] = "2026-08-28T00:14:00+00:00"
+    _replace_build_and_rebind_foundation(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match="cohort stage timeline"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        (
+            lambda completion: completion["receipt"]["stat"].__setitem__(
+                "inode", completion["receipt"]["stat"]["inode"] + 1
+            ),
+            "completion receipt binding",
+        ),
+        (
+            lambda completion: completion["cohort_authority"].__setitem__(
+                "claim_chain_sha256", "1" * 64
+            ),
+            "completion cohort authority",
+        ),
+        (
+            lambda completion: completion["transaction"]["guardian"].__setitem__(
+                "qcsd_pid", completion["transaction"]["guardian"]["pid"]
+            ),
+            "completion transaction authority",
+        ),
+        (
+            lambda completion: completion["transaction"]["operation_lock"].__setitem__(
+                "inode", completion["transaction"]["cohort_lock"]["inode"]
+            ),
+            "completion transaction lock relationship",
+        ),
+        (
+            lambda completion: completion["transaction"]["root"].__setitem__(
+                "path", "/tmp/transaction.00000000000000000000000000000000"
+            ),
+            "completion transaction path binding",
+        ),
+        (
+            lambda completion: _replace_completion_transaction_field(
+                completion,
+                "working_directory",
+                "/tmp/replayed-build-root",
+            ),
+            "completion transaction record authority",
+        ),
+        (
+            lambda completion: completion["final_reproof"].__setitem__(
+                "claim_file_sha256", "1" * 64
+            ),
+            "completion final reproof",
+        ),
+        (
+            lambda completion: completion.__setitem__("completed_at", "2026-08-28T01:00:03+00:00"),
+            "completion timing",
+        ),
+    ),
+)
+def test_watcher_rejects_resealed_build_completion_tampering(
+    acquisition: Fixture,
+    mutation: Any,
+    message: str,
+) -> None:
+    _reseal_build_completion(acquisition, mutation)
+
+    with pytest.raises(watch.WatchError, match=message):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+def test_foundation_identity_must_bind_the_canonical_completion_path(
+    acquisition: Fixture,
+) -> None:
+    foundation = json.loads(acquisition.foundation_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(foundation["payload"])
+    payload["build_execution_identity"]["completion_path"] = (
+        "/lab/artifacts/buflo-study/build-completion-v24.json"
+    )
+    _replace_foundation_and_rebind_provenance(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match="build identity"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+def test_current_watcher_rejects_historical_class_foundation_schema(
+    acquisition: Fixture,
+) -> None:
+    foundation = json.loads(acquisition.foundation_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(foundation["payload"])
+    payload["attestation_schema_version"] = watch.HISTORICAL_FOUNDATION_SCHEMA_VERSION
+    _replace_foundation_and_rebind_provenance(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match="authority envelope"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+def test_later_source_reproof_rejects_a_validly_resealed_completion_replacement(
+    acquisition: Fixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binding = watch._validate_immutable_binding(acquisition.paths)
+    original_authority = watch._source_binding_sha256(binding)
+    _reseal_build_completion(
+        acquisition,
+        lambda completion: completion.__setitem__(
+            "completed_at", "2026-08-28T01:00:00.300000+00:00"
+        ),
+    )
+    replacement_sha256 = hashlib.sha256(acquisition.build_completion_path.read_bytes()).hexdigest()
+    assert replacement_sha256 != binding.build_completion_sha256
+    monkeypatch.setattr(
+        watch,
+        "_host_source_snapshot",
+        lambda _paths: (
+            binding.source["lab_commit"],
+            binding.source["neqo_commit"],
+            binding.source["neqo_pinned_commit"],
+            "",
+            "",
+        ),
+    )
+
+    with pytest.raises(watch.WatchError, match="completion changed after admission"):
+        _REAL_VALIDATE_HOST_SOURCE(acquisition.paths, binding)
+    assert watch._source_binding_sha256(binding) == original_authority
+
+
+def test_source_binding_preimage_versions_the_build_completion_identity(
+    acquisition: Fixture,
+) -> None:
+    binding = watch._validate_immutable_binding(acquisition.paths)
+    preimage = {
+        "browser_egress_qualification": dict(binding.browser_egress_qualification),
+        "browser_egress_tree_sha256": binding.browser_egress_tree_sha256,
+        "candidate_catalogue_sha256": binding.catalogue_sha256,
+        "build_completion_path": binding.build_completion_path,
+        "build_completion_sha256": binding.build_completion_sha256,
+        "build_execution_sha256": binding.build_execution_sha256,
+        "cohort_version": binding.cohort_version,
+        "foundation_sha256": binding.foundation_sha256,
+        "pinned_cdp_contract_sha256": binding.pinned_cdp_contract_sha256,
+        "pinned_cdp_payload_sha256": binding.pinned_cdp_payload_sha256,
+        "pinned_cdp_sha256": binding.pinned_cdp_sha256,
+        "prepare_image": binding.prepare_image,
+        "provenance_sha256": binding.provenance_sha256,
+        "source": dict(binding.source),
+        "source_binding_preimage_schema_version": (
+            watch.SOURCE_BINDING_PREIMAGE_SCHEMA_VERSION
+        ),
+    }
+    assert watch.SOURCE_BINDING_PREIMAGE_SCHEMA_VERSION == 2
+    assert watch._source_binding_sha256(binding) == watch._sha256_bytes(
+        watch._canonical_json_bytes(preimage)
+    )
+
+    legacy_preimage = dict(preimage)
+    del legacy_preimage["source_binding_preimage_schema_version"]
+    del legacy_preimage["build_completion_path"]
+    del legacy_preimage["build_completion_sha256"]
+    assert watch._source_binding_sha256(binding) != watch._sha256_bytes(
+        watch._canonical_json_bytes(legacy_preimage)
+    )
 
 
 def test_current_foundation_watcher_bounds_the_build_receipt_before_parsing(
@@ -2146,6 +2933,18 @@ def test_watcher_rejects_browser_egress_contract_byte_tamper(
         (("passed_vector_count",), 97, "source/build/result"),
         (("expanded_vectors_sha256",), "e" * 64, "source/build/result"),
         (("build_execution", "prepare_image_id"), "sha256:" + "7" * 64, "source/build/result"),
+        (
+            ("build_execution", "path"),
+            "/lab/artifacts/buflo-study/build-execution-v23.json",
+            "source/build/result",
+        ),
+        (("build_execution", "size_bytes"), 1, "source/build/result"),
+        (
+            ("build_execution", "completion_path"),
+            "/lab/artifacts/buflo-study/build-completion-v24.json",
+            "source/build/result",
+        ),
+        (("build_execution", "completion_sha256"), "f" * 64, "source/build/result"),
     ),
 )
 def test_watcher_rejects_resealed_browser_egress_binding_tamper(
@@ -2163,6 +2962,22 @@ def test_watcher_rejects_resealed_browser_egress_binding_tamper(
     _replace_foundation_and_rebind_provenance(acquisition, payload)
 
     with pytest.raises(watch.WatchError, match=message):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+def test_current_watcher_rejects_historical_browser_egress_build_projection(
+    acquisition: Fixture,
+) -> None:
+    foundation = json.loads(acquisition.foundation_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(foundation["payload"])
+    browser_build = payload["evidence"]["browser_egress_qualification"][
+        "build_execution"
+    ]
+    browser_build.pop("completion_path")
+    browser_build.pop("completion_sha256")
+    _replace_foundation_and_rebind_provenance(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match="source/build/result"):
         watch._validate_immutable_binding(acquisition.paths)
 
 
@@ -2286,6 +3101,12 @@ def test_watcher_pinned_cdp_contract_matches_runtime_contract() -> None:
         cdp_targets.EGRESS_PREARM_SUMMARY_SCHEMA_VERSION
     )
     assert watch._PINNED_CDP_SCHEMA_VERSION == pinned_cdp.PROBE_SCHEMA_VERSION
+    assert watch._HISTORICAL_PINNED_CDP_SCHEMA_VERSION == (
+        pinned_cdp.HISTORICAL_PROBE_SCHEMA_VERSION
+    )
+    assert watch._PINNED_CDP_CONTRACT_SCHEMA_VERSION == pinned_cdp.PROBE_CONTRACT[
+        "schema_version"
+    ]
     assert watch._PINNED_CDP_TARGET_ACTIVITY_SCHEMA_VERSION == (
         pinned_cdp.TARGET_ACTIVITY_SCHEMA_VERSION
     )
@@ -2341,6 +3162,11 @@ def test_watcher_pinned_cdp_contract_matches_runtime_contract() -> None:
         vector.vector_id for vector in browser_egress_fixture.expected_vectors()
     ]
     assert watch.FOUNDATION_SCHEMA_VERSION == class_attestation.FOUNDATION_SCHEMA_VERSION
+    assert watch.HISTORICAL_FOUNDATION_SCHEMA_VERSION == (
+        class_attestation.HISTORICAL_FOUNDATION_SCHEMA_VERSION
+    )
+    assert browser_egress_qualification.FOUNDATION_SCHEMA_VERSION == 3
+    assert browser_egress_qualification.HISTORICAL_FOUNDATION_SCHEMA_VERSION == 2
     assert watch._FOUNDATION_GATES == class_attestation._FOUNDATION_GATES
     assert study["authority_gates"]["foundation"]["reconstructed_gates"] == list(
         watch._FOUNDATION_GATES
@@ -2677,6 +3503,32 @@ def test_watcher_rejects_resealed_legacy_pinned_cdp_schema(
         watch._validate_immutable_binding(acquisition.paths)
 
 
+def test_current_watcher_rejects_historical_pinned_cdp_schema(
+    acquisition: Fixture,
+) -> None:
+    pinned = json.loads(acquisition.pinned_cdp_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(pinned["payload"])
+    payload["probe_schema_version"] = watch._HISTORICAL_PINNED_CDP_SCHEMA_VERSION
+    _replace_pinned_and_rebind_foundation(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match="source/build/contract"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+def test_watcher_rejects_resealed_foundation_pinned_completion_projection_tamper(
+    acquisition: Fixture,
+) -> None:
+    foundation = json.loads(acquisition.foundation_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(foundation["payload"])
+    payload["evidence"]["pinned_cdp_probe"]["build_execution_identity"][
+        "completion_sha256"
+    ] = "f" * 64
+    _replace_foundation_and_rebind_provenance(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match="source/build/contract"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
 @pytest.mark.parametrize("schema_alias", (True, 7.0, "7"))
 def test_watcher_rejects_non_integer_current_pinned_cdp_schema(
     acquisition: Fixture,
@@ -2763,7 +3615,7 @@ def test_launch_drift_to_a_blocked_boundary_restatuses_without_fabrication(
     )
 
     assert clock.value == target
-    assert [call[0][3] for call in runner.calls[2:]] == [
+    assert [call[0][2] for call in runner.calls[2:]] == [
         "acquisition-status",
         "acquisition-run",
         "acquisition-status",
@@ -2794,7 +3646,7 @@ def test_expired_next_due_runs_immediately_without_redundant_status(
 
     watch.watch_acquisition(paths=acquisition.paths, runner=runner, clock=lambda: now)
 
-    assert [call[0][3] for call in runner.calls[2:]] == [
+    assert [call[0][2] for call in runner.calls[2:]] == [
         "acquisition-status",
         "acquisition-run",
         "acquisition-status",
@@ -2894,7 +3746,7 @@ def test_admission_precedes_first_checkpoint_read_and_source_precedes_admission(
         if watch._is_canonical_browser_egress_verify_command(command):
             events.append("browser-egress-verify")
             return _completed_canonical(_browser_egress_result(acquisition.paths))
-        action = command[3]
+        action = command[2]
         events.append(action)
         if action == "acquisition-admission":
             return _completed(_admission())
@@ -3177,6 +4029,107 @@ def test_stable_receipt_read_detects_parent_directory_replacement(
             root=acquisition.paths.lab_root,
             label="receipt",
         )
+
+
+def test_stable_receipt_read_allows_benign_parent_child_churn(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "lab"
+    parent = root / "evidence"
+    parent.mkdir(parents=True)
+    receipt = parent / "receipt.json"
+    raw = b"{}"
+    receipt.write_bytes(raw)
+    real_stat = os.stat
+    churned = False
+
+    def stat_after_churn(path: Any, *args: Any, **kwargs: Any) -> os.stat_result:
+        nonlocal churned
+        if not churned and path == parent.name and kwargs.get("dir_fd") is not None:
+            churned = True
+            transient = parent / "unrelated-child"
+            transient.mkdir()
+            transient.rmdir()
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(watch.os, "stat", stat_after_churn)
+
+    observed, _sha256 = watch._read_stable_file(
+        receipt,
+        root=root,
+        label="receipt",
+    )
+
+    assert churned
+    assert observed == raw
+
+
+def test_stable_receipt_read_rejects_parent_mode_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "lab"
+    parent = root / "evidence"
+    parent.mkdir(parents=True)
+    parent.chmod(0o755)
+    receipt = parent / "receipt.json"
+    receipt.write_bytes(b"{}")
+    real_stat = os.stat
+    drifted = False
+
+    def stat_after_mode_drift(path: Any, *args: Any, **kwargs: Any) -> os.stat_result:
+        nonlocal drifted
+        if not drifted and path == parent.name and kwargs.get("dir_fd") is not None:
+            drifted = True
+            os.chmod(parent, 0o700)
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(watch.os, "stat", stat_after_mode_drift)
+
+    with pytest.raises(watch.WatchError, match="changed while it was read"):
+        watch._read_stable_file(
+            receipt,
+            root=root,
+            label="receipt",
+        )
+    assert drifted
+
+
+def test_stable_receipt_read_rejects_same_mode_parent_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "lab"
+    parent = root / "evidence"
+    parent.mkdir(parents=True)
+    parent.chmod(0o755)
+    receipt = parent / "receipt.json"
+    raw = b"{}"
+    receipt.write_bytes(raw)
+    detached = root / "detached-evidence"
+    real_stat = os.stat
+    replaced = False
+
+    def stat_after_replacement(path: Any, *args: Any, **kwargs: Any) -> os.stat_result:
+        nonlocal replaced
+        if not replaced and path == parent.name and kwargs.get("dir_fd") is not None:
+            replaced = True
+            parent.rename(detached)
+            parent.mkdir(mode=0o755)
+            parent.chmod(0o755)
+            (parent / receipt.name).write_bytes(raw)
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(watch.os, "stat", stat_after_replacement)
+
+    with pytest.raises(watch.WatchError, match="changed while it was read"):
+        watch._read_stable_file(
+            receipt,
+            root=root,
+            label="receipt",
+        )
+    assert replaced
 
 
 def test_stable_receipt_read_opens_the_final_component_nonblocking(
@@ -4402,7 +5355,6 @@ def test_qcsd_admission_rejects_extra_arguments_before_docker() -> None:
     root = Path(__file__).parents[1]
     completed = subprocess.run(
         (
-            "/usr/bin/bash",
             str(root / "qcsd-lab"),
             "class-study",
             "acquisition-admission",
@@ -4449,7 +5401,6 @@ def test_qcsd_admission_requires_complete_scope_authority_before_docker(
 
     completed = subprocess.run(
         (
-            "/usr/bin/bash",
             str(root / "qcsd-lab"),
             "class-study",
             "acquisition-admission",
@@ -4497,7 +5448,6 @@ def test_qcsd_rejects_cross_action_scope_digest_before_recovery_or_docker(
 
     completed = subprocess.run(
         (
-            "/usr/bin/bash",
             str(root / "qcsd-lab"),
             "class-study",
             "acquisition-admission",
@@ -4547,7 +5497,6 @@ def test_direct_qcsd_acquisition_action_has_no_watcher_authority_before_docker(
 
     completed = subprocess.run(
         (
-            "/usr/bin/bash",
             str(root / "qcsd-lab"),
             "class-study",
             action,
@@ -4585,7 +5534,6 @@ def test_direct_qcsd_rejects_unbounded_acquisition_batch_before_authority_or_doc
 
     completed = subprocess.run(
         (
-            "/usr/bin/bash",
             str(root / "qcsd-lab"),
             "class-study",
             "acquisition-run",
@@ -4761,6 +5709,8 @@ def test_internal_scope_accepts_each_current_canonical_action_binding(
         pinned_cdp_payload_sha256="8" * 64,
         pinned_cdp_contract_sha256="9" * 64,
         build_execution_sha256="a" * 64,
+        build_completion_path="/lab/artifacts/buflo-study/build-completion-v23.json",
+        build_completion_sha256="c" * 64,
         browser_egress_qualification={
             "root": "/lab/artifacts/buflo-study/browser-egress-qualification-v23",
             "build_execution": {"path": "/lab/artifacts/buflo-study/build-execution-v23.json"},
@@ -4808,7 +5758,9 @@ def test_internal_scope_accepts_each_current_canonical_action_binding(
     assert json.loads(capsys.readouterr().out) == {"recovered_scope_roots": 0}
 
 
-def test_recorded_watch_lock_holder_must_be_exact_supervisor(tmp_path: Path) -> None:
+def test_recorded_watch_lock_holder_must_be_exact_supervisor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     state_root, descriptor = _scope_test_state(tmp_path)
     root, supervision, birth_fd = watch._create_scope_root(
         state_root=state_root,
@@ -4818,7 +5770,37 @@ def test_recorded_watch_lock_holder_must_be_exact_supervisor(tmp_path: Path) -> 
         source_binding_sha256="a" * 64,
     )
     other = subprocess.Popen(("/usr/bin/sleep", "10"))
+    duplicate = os.dup(descriptor)
+    independent = os.open(state_root / "WATCH.lock", os.O_RDWR | os.O_CLOEXEC)
     try:
+        original_read_text = Path.read_text
+
+        def reject_global_lock_table(path: Path, *args: Any, **kwargs: Any) -> str:
+            if path == Path("/proc/locks"):
+                raise AssertionError("global lock-table proof is race-prone")
+            return original_read_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", reject_global_lock_table)
+        watch._assert_recorded_watch_lock_holder(state_root, supervision)
+
+        def corrupt_fdinfo_ordinal(path: Path, *args: Any, **kwargs: Any) -> str:
+            value = reject_global_lock_table(path, *args, **kwargs)
+            if path == Path(f"/proc/{os.getpid()}/fdinfo/{descriptor}"):
+                return re.sub(
+                    r"^(lock:\s+)[1-9][0-9]*:",
+                    r"\g<1>0:",
+                    value,
+                    count=1,
+                    flags=re.MULTILINE,
+                )
+            return value
+
+        monkeypatch.setattr(Path, "read_text", corrupt_fdinfo_ordinal)
+        with pytest.raises(
+            watch.WatchError,
+            match="lock descriptor is invalid",
+        ):
+            watch._assert_recorded_watch_lock_holder(state_root, supervision)
         identity = watch._process_identity(other.pid)
         assert identity is not None
         forged = dict(supervision)
@@ -4831,6 +5813,8 @@ def test_recorded_watch_lock_holder_must_be_exact_supervisor(tmp_path: Path) -> 
         with pytest.raises(watch.WatchError, match="does not hold the exact watch lock"):
             watch._assert_recorded_watch_lock_holder(state_root, forged)
     finally:
+        os.close(independent)
+        os.close(duplicate)
         other.terminate()
         other.wait(timeout=5)
         os.close(birth_fd)

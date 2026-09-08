@@ -36,7 +36,7 @@ def _class_qualification_authority(
         "image_digest": "sha256:" + "1" * 64,
     }
     authority: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "artifact_type": "qcsd-class-study-qualification-authority",
         "foundation_attestation": {
             "path": foundation_path,
@@ -50,6 +50,8 @@ def _class_qualification_authority(
         "build_execution_identity": {
             "cohort_version": 23,
             "sha256": "7" * 64,
+            "completion_path": "/lab/artifacts/buflo-study/build-completion-v23.json",
+            "completion_sha256": "8" * 64,
             "collection_image": collection_source["image_digest"],
             "started_at": "2026-08-28T00:00:00+00:00",
             "finished_at": "2026-08-28T01:00:00+00:00",

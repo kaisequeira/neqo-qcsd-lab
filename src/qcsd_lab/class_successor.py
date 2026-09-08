@@ -65,6 +65,8 @@ from .util import LAB_ROOT, load_json, require_disjoint_path, sha256_file
 from .verification import VerifiedResult, verify_result
 
 SCHEMA_VERSION = 2
+DECISION_SCHEMA_VERSION = 3
+READINESS_SCHEMA_VERSION = 3
 POLICY_RECEIPT_TYPE = "qcsd-class-study-successor-policy"
 DECISION_RECEIPT_TYPE = "qcsd-class-study-successor-decision"
 RESTART_RECEIPT_TYPE = "qcsd-class-study-successor-restart"
@@ -667,7 +669,7 @@ def _successor_readiness_value(
         ],
     }
     return {
-        "attestation_schema_version": SCHEMA_VERSION,
+        "attestation_schema_version": READINESS_SCHEMA_VERSION,
         "artifact_type": READINESS_RECEIPT_TYPE,
         "study_id": study_id,
         "cohort_version": foundation["cohort_version"],
@@ -1887,7 +1889,7 @@ def _decision_payload(
         "predecessor_successor_restart": predecessor_restart_binding,
     }
     return {
-        "decision_schema_version": SCHEMA_VERSION,
+        "decision_schema_version": DECISION_SCHEMA_VERSION,
         "predecessor_study_id": lineage.study_id,
         "successor": {
             "study_id": successor_study_id,

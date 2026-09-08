@@ -106,7 +106,8 @@ from .util import SOURCE_METADATA_KEYS, load_json, sha256_file
 
 MANIFEST_SCHEMA_VERSION = 1
 ARGV_SCHEMA_VERSION = 1
-FOUNDATION_SCHEMA_VERSION = 2
+FOUNDATION_SCHEMA_VERSION = 3
+HISTORICAL_FOUNDATION_SCHEMA_VERSION = 2
 ATTEMPT_INTENT_SCHEMA_VERSION = 1
 RESULT_SCHEMA_VERSION = 1
 CHECKPOINT_SCHEMA_VERSION = 1
@@ -622,6 +623,35 @@ def _sha256(value: object, *, label: str) -> str:
     return value
 
 
+def _canonical_build_completion_path(cohort_version: int) -> str:
+    return f"/lab/artifacts/buflo-study/build-completion-v{cohort_version}.json"
+
+
+def _current_build_completion_identity(
+    build: Mapping[str, Any],
+    *,
+    lab_root: Path,
+    cohort_version: int,
+) -> tuple[str, str]:
+    """Require and normalize the paired completion identity for current evidence."""
+
+    completion_path = build.get("completion_path")
+    expected = (
+        Path(lab_root).resolve()
+        / f"artifacts/buflo-study/build-completion-v{cohort_version}.json"
+    )
+    if (
+        not isinstance(completion_path, str)
+        or not Path(completion_path).is_absolute()
+        or Path(completion_path).resolve() != expected
+    ):
+        raise ValueError("browser-egress build completion path differs from its cohort")
+    return (
+        _canonical_build_completion_path(cohort_version),
+        _sha256(build.get("completion_sha256"), label="build completion SHA-256"),
+    )
+
+
 def _image_id(value: object, *, label: str) -> str:
     if not isinstance(value, str) or _IMAGE.fullmatch(value) is None:
         raise ValueError(f"{label} must be an immutable Docker image ID")
@@ -1022,6 +1052,11 @@ def build_foundation_payload(
         raise ValueError(
             "browser-egress live Docker daemon differs from the no-cache build daemon"
         )
+    completion_path, completion_sha256 = _current_build_completion_identity(
+        build_execution,
+        lab_root=root,
+        cohort_version=cohort_version,
+    )
     payload = {
         "schema_version": FOUNDATION_SCHEMA_VERSION,
         "qualification_id": QUALIFICATION_ID,
@@ -1031,6 +1066,8 @@ def build_foundation_payload(
             **_file_binding(root, build_relative),
             "payload_sha256": build_payload_sha256,
             "cohort_version": cohort_version,
+            "completion_path": completion_path,
+            "completion_sha256": completion_sha256,
             "collection_image_id": images["collection"]["id"],
             "prepare_image_id": prepare_id,
             "reference_image_id": images["reference"]["id"],
@@ -1054,7 +1091,9 @@ def build_foundation_payload(
     return validate_foundation_payload(payload)
 
 
-def validate_foundation_payload(value: object) -> dict[str, Any]:
+def validate_foundation_payload(
+    value: object, *, allow_historical: bool = False
+) -> dict[str, Any]:
     fields = {
         "schema_version",
         "qualification_id",
@@ -1075,15 +1114,21 @@ def validate_foundation_payload(value: object) -> dict[str, Any]:
     cohort_version = _integer(
         value["cohort_version"], label="browser-egress cohort version", minimum=1
     )
+    schema_version = value["schema_version"]
     if (
-        type(value["schema_version"]) is not int
-        or value["schema_version"] != FOUNDATION_SCHEMA_VERSION
+        type(schema_version) is not int
+        or schema_version
+        not in {HISTORICAL_FOUNDATION_SCHEMA_VERSION, FOUNDATION_SCHEMA_VERSION}
+        or (
+            schema_version == HISTORICAL_FOUNDATION_SCHEMA_VERSION
+            and not allow_historical
+        )
         or value["qualification_id"] != QUALIFICATION_ID
         or value["study_id"] != STUDY_ID
     ):
         raise ValueError("browser-egress foundation identity is invalid")
     build = value["build_execution"]
-    if not isinstance(build, Mapping) or set(build) != {
+    build_fields = {
         "path",
         "sha256",
         "size_bytes",
@@ -1092,7 +1137,10 @@ def validate_foundation_payload(value: object) -> dict[str, Any]:
         "collection_image_id",
         "prepare_image_id",
         "reference_image_id",
-    }:
+    }
+    if schema_version == FOUNDATION_SCHEMA_VERSION:
+        build_fields.update({"completion_path", "completion_sha256"})
+    if not isinstance(build, Mapping) or set(build) != build_fields:
         raise ValueError("browser-egress build binding fields are invalid")
     validate_file_binding(
         {key: build[key] for key in ("path", "sha256", "size_bytes")},
@@ -1101,6 +1149,10 @@ def validate_foundation_payload(value: object) -> dict[str, Any]:
     _sha256(build["payload_sha256"], label="build execution payload SHA-256")
     if build["cohort_version"] != cohort_version:
         raise ValueError("browser-egress build cohort version is invalid")
+    if schema_version == FOUNDATION_SCHEMA_VERSION:
+        _sha256(build["completion_sha256"], label="build completion SHA-256")
+        if build["completion_path"] != _canonical_build_completion_path(cohort_version):
+            raise ValueError("browser-egress build completion path is invalid")
     for key in ("collection_image_id", "prepare_image_id", "reference_image_id"):
         _image_id(build[key], label=key)
     if len({build[key] for key in ("collection_image_id", "prepare_image_id", "reference_image_id")}) != 3:
@@ -1159,6 +1211,7 @@ def deep_validate_foundation(
     lab_root: Path,
     build_validator: Callable[..., Mapping[str, Any]] | None = None,
     mode: FoundationVerificationMode = FoundationVerificationMode.PORTABLE_REPLAY,
+    allow_historical: bool = False,
 ) -> dict[str, Any]:
     """Re-hash immutable inputs, optionally admitting live prepare execution.
 
@@ -1171,7 +1224,8 @@ def deep_validate_foundation(
     if not isinstance(mode, FoundationVerificationMode):
         raise ValueError("browser-egress foundation verification mode is invalid")
 
-    payload = validate_foundation_payload(value)
+    payload = validate_foundation_payload(value, allow_historical=allow_historical)
+    historical = payload["schema_version"] == HISTORICAL_FOUNDATION_SCHEMA_VERSION
     root = _safe_directory(lab_root, label="Lab root")
     contracts = payload["contracts"]
     validate_file_binding(
@@ -1220,11 +1274,29 @@ def deep_validate_foundation(
 
         build_validator = validate_build_execution_receipt
     validated_build = build_validator(
-        root / build["path"], expected_cohort_version=payload["cohort_version"]
+        root / build["path"],
+        expected_cohort_version=payload["cohort_version"],
+        allow_historical=historical,
+    )
+    expected_completion = (
+        None
+        if historical
+        else _current_build_completion_identity(
+            validated_build,
+            lab_root=root,
+            cohort_version=payload["cohort_version"],
+        )
     )
     if (
         validated_build.get("sha256") != build["sha256"]
         or validated_build.get("cohort_version") != payload["cohort_version"]
+        or (
+            expected_completion is not None
+            and (
+                build["completion_path"] != expected_completion[0]
+                or build["completion_sha256"] != expected_completion[1]
+            )
+        )
         or validated_build.get("images", {}).get("collection", {}).get("id")
         != build["collection_image_id"]
         or validated_build.get("images", {}).get("prepare", {}).get("id")
@@ -2475,7 +2547,10 @@ def create_qualification(
 
 
 def _load_foundation(
-    root: Path, *, recovery_link: Path | None = None
+    root: Path,
+    *,
+    recovery_link: Path | None = None,
+    allow_historical: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     foundation_path = root / FOUNDATION_FILENAME
     if recovery_link != foundation_path:
@@ -2493,7 +2568,9 @@ def _load_foundation(
     )
     envelope = load_json(foundation_path)
     payload = validate_hash_bound_receipt(envelope, expected_type=FOUNDATION_RECEIPT_TYPE)
-    validated = validate_foundation_payload(payload)
+    validated = validate_foundation_payload(
+        payload, allow_historical=allow_historical
+    )
     binding = {
         "path": FOUNDATION_FILENAME,
         "sha256": sha256_file(foundation_path),
@@ -3488,6 +3565,7 @@ def reconcile_qualification_filesystem(
     *,
     tshark: Path = Path("/usr/bin/tshark"),
     dumpcap: Path = Path("/usr/bin/dumpcap"),
+    allow_historical: bool = False,
 ) -> dict[str, Any]:
     """Exactly reconcile one proven crash residue; reject every ambiguity."""
 
@@ -3548,7 +3626,10 @@ def reconcile_qualification_filesystem(
         )
     )
     validate_open_evidence_inventory(
-        evidence_root, allow_final=True, allowed_residue=allowed_residue
+        evidence_root,
+        allow_final=True,
+        allowed_residue=allowed_residue,
+        allow_historical=allow_historical,
     )
     if checkpoint_residues:
         _reconcile_checkpoint_residue(
@@ -3581,7 +3662,11 @@ def reconcile_qualification_filesystem(
         )
         _publish_or_clean_create_only_residue(temporary, target=target)
     if residues or checkpoint_residues or recovery_residues:
-        validate_open_evidence_inventory(evidence_root, allow_final=True)
+        validate_open_evidence_inventory(
+            evidence_root,
+            allow_final=True,
+            allow_historical=allow_historical,
+        )
     return {
         "schema_version": 1,
         "qualification_id": QUALIFICATION_ID,
@@ -3594,6 +3679,7 @@ def validate_open_evidence_inventory(
     *,
     allow_final: bool,
     allowed_residue: Path | None = None,
+    allow_historical: bool = False,
 ) -> None:
     """Validate the exact mutable-ledger inventory at an operation boundary."""
 
@@ -3621,7 +3707,9 @@ def validate_open_evidence_inventory(
                 raise ValueError("browser-egress residue hard-link peer is ambiguous")
             recovery_link = linked[0]
     foundation, binding = _load_foundation(
-        evidence_root, recovery_link=recovery_link
+        evidence_root,
+        recovery_link=recovery_link,
+        allow_historical=allow_historical,
     )
     rebuilt = _replay_checkpoint(
         evidence_root,
@@ -3983,11 +4071,14 @@ def _load_checkpoint_without_reconciliation(
     deep: bool = False,
     tshark: Path = Path("/usr/bin/tshark"),
     dumpcap: Path = Path("/usr/bin/dumpcap"),
+    allow_historical: bool = False,
 ) -> dict[str, Any]:
     evidence_root = _safe_directory(
         root, label="browser-egress qualification root", private=True
     )
-    foundation, binding = _load_foundation(evidence_root)
+    foundation, binding = _load_foundation(
+        evidence_root, allow_historical=allow_historical
+    )
     rebuilt = _replay_checkpoint(
         evidence_root,
         foundation=foundation,
@@ -4024,11 +4115,14 @@ def _build_final_payload_without_reconciliation(
     recorded_at: str,
     tshark: Path = Path("/usr/bin/tshark"),
     dumpcap: Path = Path("/usr/bin/dumpcap"),
+    allow_historical: bool = False,
 ) -> dict[str, Any]:
     evidence_root = _safe_directory(
         root, label="browser-egress qualification root", private=True
     )
-    foundation, foundation_binding = _load_foundation(evidence_root)
+    foundation, foundation_binding = _load_foundation(
+        evidence_root, allow_historical=allow_historical
+    )
     stored, checkpoint = _checkpoint_pair(
         evidence_root,
         foundation=foundation,
@@ -4260,13 +4354,19 @@ def create_final_receipt(
     return published
 
 
-def validate_closed_evidence_inventory(root: Path) -> None:
+def validate_closed_evidence_inventory(
+    root: Path, *, allow_historical: bool = False
+) -> None:
     """Reject every unbound/missing file, directory, hard link, or symlink."""
 
     evidence_root = _safe_directory(
         root, label="browser-egress qualification root", private=True
     )
-    validate_open_evidence_inventory(evidence_root, allow_final=True)
+    validate_open_evidence_inventory(
+        evidence_root,
+        allow_final=True,
+        allow_historical=allow_historical,
+    )
     expected_files = {
         FOUNDATION_FILENAME,
         CHECKPOINT_FILENAME,
@@ -4277,7 +4377,9 @@ def validate_closed_evidence_inventory(root: Path) -> None:
         label="browser-egress attempts",
         private=True,
     )
-    foundation, _binding = _load_foundation(evidence_root)
+    foundation, _binding = _load_foundation(
+        evidence_root, allow_historical=allow_historical
+    )
     intent_records = _load_attempt_intents(evidence_root, foundation=foundation)
     expected_files.update(record["binding"]["path"] for record in intent_records)
     for path in sorted(attempts.iterdir(), key=lambda item: item.name):
@@ -4338,26 +4440,39 @@ def verify_qualification(
     expected_cohort_version: int | None = None,
     build_validator: Callable[..., Mapping[str, Any]] | None = None,
     verification_mode: FoundationVerificationMode = FoundationVerificationMode.PORTABLE_REPLAY,
+    allow_historical: bool = False,
     tshark: Path = Path("/usr/bin/tshark"),
     dumpcap: Path = Path("/usr/bin/dumpcap"),
 ) -> dict[str, Any]:
     """Deep-verify foundation, PCAPs, sink reconciliation, chain, and final seal."""
 
-    reconcile_qualification_filesystem(root, tshark=tshark, dumpcap=dumpcap)
+    reconcile_qualification_filesystem(
+        root,
+        tshark=tshark,
+        dumpcap=dumpcap,
+        allow_historical=allow_historical,
+    )
     evidence_root = _safe_directory(
         root, label="browser-egress qualification root", private=True
     )
-    foundation, _binding = _load_foundation(evidence_root)
+    foundation, _binding = _load_foundation(
+        evidence_root, allow_historical=allow_historical
+    )
     deep_validate_foundation(
         foundation,
         lab_root=lab_root,
         build_validator=build_validator,
         mode=verification_mode,
+        allow_historical=allow_historical,
     )
     if expected_cohort_version is not None and foundation["cohort_version"] != expected_cohort_version:
         raise ValueError("browser-egress qualification cohort version differs from expectation")
     _load_checkpoint_without_reconciliation(
-        evidence_root, deep=True, tshark=tshark, dumpcap=dumpcap
+        evidence_root,
+        deep=True,
+        tshark=tshark,
+        dumpcap=dumpcap,
+        allow_historical=allow_historical,
     )
     final_path = safe_relative_artifact(evidence_root, FINAL_FILENAME, label="final receipt")
     _private_regular_file(final_path, label="browser-egress final receipt")
@@ -4368,9 +4483,12 @@ def verify_qualification(
         recorded_at=payload["recorded_at"],
         tshark=tshark,
         dumpcap=dumpcap,
+        allow_historical=allow_historical,
     )
     validated = validate_final_payload(payload, expected=expected)
-    validate_closed_evidence_inventory(evidence_root)
+    validate_closed_evidence_inventory(
+        evidence_root, allow_historical=allow_historical
+    )
     return {
         "path": str(final_path),
         "sha256": sha256_file(final_path),
@@ -4381,15 +4499,7 @@ def verify_qualification(
         "qualification_finished_at": validated["qualification_finished_at"],
         "recorded_at": validated["recorded_at"],
         "prepare_image_id": foundation["prepare_image"]["id"],
-        "build_execution": {
-            "path": foundation["build_execution"]["path"],
-            "sha256": foundation["build_execution"]["sha256"],
-            "payload_sha256": foundation["build_execution"]["payload_sha256"],
-            "cohort_version": foundation["build_execution"]["cohort_version"],
-            "collection_image_id": foundation["build_execution"]["collection_image_id"],
-            "prepare_image_id": foundation["build_execution"]["prepare_image_id"],
-            "reference_image_id": foundation["build_execution"]["reference_image_id"],
-        },
+        "build_execution": dict(foundation["build_execution"]),
         "expanded_vectors_sha256": expanded_vectors_sha256(),
         "passed_vector_count": VECTOR_COUNT,
         "passed": True,

@@ -207,7 +207,7 @@ def _qualification_authority() -> dict[str, Any]:
     collection = _source()
     prepare_image = "sha256:" + "4" * 64
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "artifact_type": "qcsd-class-study-qualification-authority",
         "foundation_attestation": {
             "path": "/evidence/foundation.json",
@@ -221,6 +221,8 @@ def _qualification_authority() -> dict[str, Any]:
         "build_execution_identity": {
             "cohort_version": 23,
             "sha256": "7" * 64,
+            "completion_path": "/lab/artifacts/buflo-study/build-completion-v23.json",
+            "completion_sha256": "8" * 64,
             "collection_image": collection["image_digest"],
             "started_at": "2026-08-28T00:00:00+00:00",
             "finished_at": "2026-08-28T01:00:00+00:00",

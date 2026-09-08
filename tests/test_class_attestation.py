@@ -22,6 +22,15 @@ def _digest(character: str = "a") -> str:
     return character * 64
 
 
+def _completion_identity(cohort_version: int = 23) -> dict[str, str]:
+    return {
+        "completion_path": (
+            f"/lab/artifacts/buflo-study/build-completion-v{cohort_version}.json"
+        ),
+        "completion_sha256": _digest("6"),
+    }
+
+
 def _runtime_inputs(
     modes: tuple[str, ...], parameters: dict[str, str]
 ) -> dict[str, dict[str, Any]]:
@@ -96,6 +105,7 @@ def _browser_egress_result(root: Path, build: dict[str, Any]) -> dict[str, Any]:
             "sha256": build["sha256"],
             "payload_sha256": build["payload_sha256"],
             "cohort_version": 23,
+            **_completion_identity(),
             "collection_image_id": images["collection"]["id"],
             "prepare_image_id": images["prepare"]["id"],
             "reference_image_id": images["reference"]["id"],
@@ -119,6 +129,7 @@ def test_qualification_authority_derives_prepare_identity_from_exact_foundation_
     identity = {
         "cohort_version": 23,
         "sha256": build_sha,
+        **_completion_identity(),
         "collection_image": collection["image_digest"],
         "started_at": "2026-08-28T00:00:00+00:00",
         "finished_at": "2026-08-28T01:00:00+00:00",
@@ -146,22 +157,46 @@ def test_qualification_authority_derives_prepare_identity_from_exact_foundation_
     build = {
         **identity,
         "path": str(build_path.resolve()),
+        "completion_path": str(
+            build_path.with_name("build-completion-v23.json").resolve()
+        ),
         "source": collection,
         "images": {"prepare": {"id": prepare_image}},
     }
+    build_observed: dict[str, Any] = {}
+
+    def validate_build(_path: Path, **kwargs: Any) -> dict[str, Any]:
+        build_observed.update(kwargs)
+        return build
+
     monkeypatch.setattr(attestation, "validate_class_foundation_attestation", validate_foundation)
-    monkeypatch.setattr(attestation, "validate_build_execution_receipt", lambda *_a, **_k: build)
+    monkeypatch.setattr(attestation, "validate_build_execution_receipt", validate_build)
 
     authority = attestation.class_qualification_authority(foundation_path, runtime_role="prepare")
 
     assert observed["runtime_role"] == "prepare"
+    assert build_observed["allow_historical"] is False
     assert authority["foundation_attestation"]["sha256"] == foundation["sha256"]
+    assert authority["schema_version"] == attestation.QUALIFICATION_AUTHORITY_SCHEMA_VERSION
     assert authority["build_execution"] == {
         "path": str(build_path.resolve()),
         "sha256": build_sha,
     }
     assert authority["prepare_image_digest"] == prepare_image
     assert authority["prepare_source"] == {**collection, "image_digest": prepare_image}
+    for mutation in (
+        {"completion_path": "/other/build-completion-v23.json"},
+        {"completion_sha256": "not-a-digest"},
+    ):
+        forged = {
+            **authority,
+            "build_execution_identity": {
+                **authority["build_execution_identity"],
+                **mutation,
+            },
+        }
+        with pytest.raises(ValueError, match="authority binding"):
+            attestation.validate_class_qualification_authority(forged)
 
     monkeypatch.setattr(
         attestation,
@@ -170,6 +205,284 @@ def test_qualification_authority_derives_prepare_identity_from_exact_foundation_
     )
     with pytest.raises(ValueError, match="differs from foundation source"):
         attestation.class_qualification_authority(foundation_path, runtime_role="prepare")
+
+
+def test_current_build_identity_requires_and_canonicalizes_completion() -> None:
+    build = {
+        "cohort_version": 23,
+        "path": "/host/artifacts/buflo-study/build-execution-v23.json",
+        "sha256": _digest("1"),
+        "completion_path": "/host/artifacts/buflo-study/build-completion-v23.json",
+        "completion_sha256": _digest("6"),
+        "collection_image": f"sha256:{_digest('2')}",
+        "started_at": "2026-08-28T00:00:00+00:00",
+        "finished_at": "2026-08-28T01:00:00+00:00",
+    }
+    identity = attestation._build_identity(build)
+    assert identity["completion_path"] == (
+        "/lab/artifacts/buflo-study/build-completion-v23.json"
+    )
+    for field in ("completion_path", "completion_sha256"):
+        incomplete = dict(build)
+        incomplete.pop(field)
+        with pytest.raises(ValueError, match="completed schema-5"):
+            attestation._build_identity(incomplete)
+    wrong_location = {
+        **build,
+        "completion_path": "/other/build-completion-v23.json",
+    }
+    with pytest.raises(ValueError, match="completed schema-5"):
+        attestation._build_identity(wrong_location)
+
+
+def test_prior_class_schemas_are_explicit_historical_only_round_trips() -> None:
+    source = _source()
+    historical_identity = {
+        "cohort_version": 23,
+        "sha256": _digest("1"),
+        "collection_image": source["image_digest"],
+        "started_at": "2026-08-28T00:00:00+00:00",
+        "finished_at": "2026-08-28T01:00:00+00:00",
+    }
+    assert attestation._build_identity(
+        {
+            **historical_identity,
+            "path": "/evidence/build.json",
+        },
+        include_completion=False,
+    ) == historical_identity
+    authority = {
+        "schema_version": attestation.HISTORICAL_QUALIFICATION_AUTHORITY_SCHEMA_VERSION,
+        "artifact_type": attestation.QUALIFICATION_AUTHORITY_TYPE,
+        "foundation_attestation": {
+            "path": "/evidence/foundation.json",
+            "sha256": _digest("2"),
+            "payload_sha256": _digest("3"),
+        },
+        "build_execution": {
+            "path": "/evidence/build.json",
+            "sha256": historical_identity["sha256"],
+        },
+        "build_execution_identity": historical_identity,
+        "collection_source": source,
+        "prepare_source": {
+            **source,
+            "image_digest": f"sha256:{_digest('8')}",
+        },
+        "prepare_image_digest": f"sha256:{_digest('8')}",
+    }
+    with pytest.raises(ValueError, match="authority binding"):
+        attestation.validate_class_qualification_authority(authority)
+    assert attestation.validate_class_qualification_authority(
+        authority, allow_historical=True
+    ) == json.loads(canonical_json_bytes(authority))
+
+    foundation = {
+        "attestation_schema_version": attestation.HISTORICAL_FOUNDATION_SCHEMA_VERSION,
+        "artifact_type": attestation.FOUNDATION_RECEIPT_TYPE,
+        "study_id": attestation.STUDY_ID,
+        "recorded_at": "2026-08-28T02:00:00+00:00",
+        "implementation_status": "foundation-ready-for-class-acquisition",
+        "promotion_authority": False,
+        "implementation_scope": attestation.IMPLEMENTATION_SCOPE,
+        "paper_equivalent": False,
+        "no_waivers": True,
+        "all_foundation_gates_passed": True,
+        "hard_gates": attestation._hard_gate_records(
+            attestation._FOUNDATION_GATES,
+            {gate: [_digest("4")] for gate in attestation._FOUNDATION_GATES},
+        ),
+    }
+    with pytest.raises(ValueError, match="promotion envelope"):
+        attestation._validate_foundation_envelope(foundation)
+    attestation._validate_foundation_envelope(
+        json.loads(canonical_json_bytes(foundation)), allow_historical=True
+    )
+
+    readiness = {
+        "attestation_schema_version": attestation.HISTORICAL_READINESS_SCHEMA_VERSION,
+        "artifact_type": attestation.READINESS_RECEIPT_TYPE,
+        "study_id": attestation.STUDY_ID,
+        "implementation_status": attestation.READINESS_IMPLEMENTATION_STATUS,
+        "promotion_authority": False,
+        "implementation_scope": attestation.IMPLEMENTATION_SCOPE,
+        "paper_equivalent": False,
+        "no_waivers": True,
+        "all_readiness_gates_passed": True,
+        "hard_gates": attestation._hard_gate_records(
+            attestation._READINESS_GATES,
+            {gate: [_digest("5")] for gate in attestation._READINESS_GATES},
+        ),
+    }
+    with pytest.raises(ValueError, match="promotion envelope"):
+        attestation._validate_readiness_envelope(readiness)
+    attestation._validate_readiness_envelope(
+        json.loads(canonical_json_bytes(readiness)), allow_historical=True
+    )
+
+
+@pytest.mark.parametrize("entrypoint", ("foundation", "readiness"))
+@pytest.mark.parametrize("stop_at", ("reference", "code", "qualification"))
+def test_nested_gate_admission_mode_tracks_class_schema(
+    entrypoint: str,
+    stop_at: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = _source()
+    build_path = tmp_path / "build-execution-v23.json"
+    build = {
+        "cohort_version": 23,
+        "path": str(build_path.resolve()),
+        "sha256": _digest("1"),
+        "completion_path": str(
+            build_path.with_name("build-completion-v23.json").resolve()
+        ),
+        "completion_sha256": _digest("6"),
+        "collection_image": source["image_digest"],
+        "started_at": "2026-08-28T00:00:00+00:00",
+        "finished_at": "2026-08-28T01:00:00+00:00",
+        "source": source,
+    }
+    state = {"historical": False}
+    observed: list[tuple[str, bool | None]] = []
+
+    class StopAtGate(Exception):
+        pass
+
+    def gate_validator(name: str, result):
+        def validate(*_args: Any, **kwargs: Any) -> dict[str, Any]:
+            observed.append((name, kwargs.get("allow_historical")))
+            if name == stop_at:
+                raise StopAtGate
+            return result()
+
+        return validate
+
+    def identity() -> dict[str, Any]:
+        return attestation._build_identity(
+            build, include_completion=not state["historical"]
+        )
+
+    monkeypatch.setattr(
+        attestation, "validate_build_execution_receipt", lambda *_a, **_k: build
+    )
+    monkeypatch.setattr(
+        attestation,
+        "validate_reference_gate_receipt",
+        gate_validator(
+            "reference",
+            lambda: {
+                "build_execution": identity(),
+                "profiles_checked": 8,
+                "sha256": _digest("2"),
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        attestation,
+        "validate_regression_results",
+        lambda *_a, **_k: {"samples": attestation.REGRESSION_SAMPLE_COUNT},
+    )
+    monkeypatch.setattr(
+        attestation,
+        "validate_code_gate_receipt",
+        gate_validator("code", lambda: {}),
+    )
+    monkeypatch.setattr(
+        attestation,
+        "validate_qualification_receipt",
+        gate_validator("qualification", lambda: {}),
+    )
+
+    if entrypoint == "foundation":
+        monkeypatch.setattr(
+            attestation, "_validate_browser_egress_qualification", lambda *_a, **_k: {}
+        )
+        monkeypatch.setattr(
+            attestation, "validate_pinned_cdp_receipt", lambda *_a, **_k: {}
+        )
+
+        def invoke(*, historical: bool) -> None:
+            attestation._foundation_value(
+                cohort_version=23,
+                build_execution_receipt=build_path,
+                reference_receipt=tmp_path / "reference.json",
+                code_gate_receipt=tmp_path / "code.json",
+                controlled_qualification_receipt=tmp_path / "qualification.json",
+                pinned_cdp_receipt=tmp_path / "pinned.json",
+                browser_egress_qualification_root=tmp_path / "browser-egress",
+                regression_result_roots=(),
+                controlled_result_roots=(),
+                recorded_at="2026-08-28T02:00:00+00:00",
+                deep_code_gate=False,
+                evidence_source=source,
+                pinned_runtime_role="collection",
+                attestation_schema_version=(
+                    attestation.HISTORICAL_FOUNDATION_SCHEMA_VERSION
+                    if historical
+                    else attestation.FOUNDATION_SCHEMA_VERSION
+                ),
+                allow_historical=historical,
+            )
+
+    else:
+        monkeypatch.setattr(attestation, "source_metadata", lambda: source)
+        monkeypatch.setattr(
+            attestation,
+            "validate_class_foundation_attestation",
+            lambda *_a, **_k: {"cohort_version": 23},
+        )
+        monkeypatch.setattr(
+            attestation, "class_qualification_authority", lambda *_a, **_k: {}
+        )
+
+        def invoke(*, historical: bool) -> None:
+            ordinary = tmp_path / "unused"
+            attestation._readiness_value(
+                foundation_attestation=ordinary,
+                cohort_version=23,
+                build_execution_receipt=build_path,
+                reference_receipt=ordinary,
+                code_gate_receipt=ordinary,
+                controlled_qualification_receipt=ordinary,
+                regression_result_roots=(),
+                controlled_result_roots=(),
+                candidate_catalogue=ordinary,
+                stability_root=ordinary,
+                workload_root=ordinary,
+                acquisition_completion=ordinary,
+                pilot_cohort_receipt=ordinary,
+                pilot_cohort_assembly=ordinary,
+                pilot_fitting_result_root=ordinary,
+                pilot_numeric_bundle_root=ordinary,
+                pilot_compatibility_result_root=ordinary,
+                final_selection_receipt=ordinary,
+                final_cohort_receipt=ordinary,
+                final_cohort_assembly=ordinary,
+                authoritative_fitting_result_root=ordinary,
+                authoritative_fitting_bundle_root=ordinary,
+                qualification_workload_root=ordinary,
+                qualification_sidecar_root=ordinary,
+                qualification_prefix_root=ordinary,
+                certification_result_root=ordinary,
+                deep_code_gate=False,
+                attestation_schema_version=(
+                    attestation.HISTORICAL_READINESS_SCHEMA_VERSION
+                    if historical
+                    else attestation.READINESS_SCHEMA_VERSION
+                ),
+                allow_historical=historical,
+            )
+
+    expected_names = ("reference", "code", "qualification")
+    expected_names = expected_names[: expected_names.index(stop_at) + 1]
+    for historical in (False, True):
+        state["historical"] = historical
+        observed.clear()
+        with pytest.raises(StopAtGate):
+            invoke(historical=historical)
+        assert observed == [(name, historical) for name in expected_names]
 
 
 def _study_environment(image_id: str) -> dict[str, Any]:
@@ -459,6 +772,8 @@ def test_readiness_current_acquisition_schema_gate_rejects_bool_alias(field: str
 def test_class_result_materializes_and_revalidates_real_study_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from tests.test_buflo_study import _write_schema5_build_pair
+
     root = tmp_path / "class-result"
     inputs = root / "inputs"
     inputs.mkdir(parents=True)
@@ -480,8 +795,23 @@ def test_class_result_materializes_and_revalidates_real_study_environment(
         class_study_cohort_sha256=_digest("a"),
         class_study_cohort_assembly_sha256=_digest("b"),
     )
-    image_id = f"sha256:{_digest('a')}"
+    receipt_path = tmp_path / "build-execution-v47.json"
+    receipt, completion_path, completion = _write_schema5_build_pair(
+        receipt_path,
+        cohort_version=47,
+    )
+    image_id = receipt["images"]["collection"]["id"]
     environment = _study_environment(image_id)
+    environment["schema_version"] = 3
+    environment["build_inputs"] = dict(receipt["build_inputs"])
+    environment["build_execution"] = {
+        "sha256": hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
+        "receipt": receipt,
+        "completion_path": "/lab/artifacts/buflo-study/build-completion-v47.json",
+        "completion_sha256": hashlib.sha256(completion_path.read_bytes()).hexdigest(),
+        "completion_payload_sha256": completion["payload_sha256"],
+        "completion": completion,
+    }
     monkeypatch.setenv(
         "QCSD_STUDY_ENVIRONMENT_B64",
         base64.b64encode(json.dumps(environment).encode()).decode(),
@@ -605,6 +935,7 @@ def test_foundation_binds_pinned_cdp_and_seventh_browser_egress_gate(
     build_identity = {
         "cohort_version": 23,
         "sha256": build_sha256,
+        **_completion_identity(),
         "collection_image": source["image_digest"],
         "started_at": "2026-08-28T00:00:00+00:00",
         "finished_at": "2026-08-28T01:00:00+00:00",
@@ -612,6 +943,9 @@ def test_foundation_binds_pinned_cdp_and_seventh_browser_egress_gate(
     build = {
         **build_identity,
         "path": str(files["build"].resolve()),
+        "completion_path": str(
+            files["build"].with_name("build-completion-v23.json").resolve()
+        ),
         "payload_sha256": _digest("5"),
         "source": source,
         "images": {
@@ -623,6 +957,7 @@ def test_foundation_binds_pinned_cdp_and_seventh_browser_egress_gate(
     build_binding = {"path": build["path"], "sha256": build_sha256}
     environment = {"build_execution": build_identity}
     pinned = {
+        "probe_schema_version": attestation.PINNED_CDP_PROBE_SCHEMA_VERSION,
         "path": str(files["pinned"].resolve()),
         "sha256": sha256_file(files["pinned"]),
         "payload_sha256": _digest("6"),
@@ -632,6 +967,7 @@ def test_foundation_binds_pinned_cdp_and_seventh_browser_egress_gate(
             "sha256": build_sha256,
             "payload_sha256": _digest("7"),
         },
+        "build_execution_identity": build_identity,
         "probe_contract_sha256": _digest("8"),
     }
     observed: dict[str, Any] = {}
@@ -717,6 +1053,9 @@ def test_foundation_binds_pinned_cdp_and_seventh_browser_egress_gate(
     value = attestation._foundation_value(**kwargs)
 
     assert value["attestation_schema_version"] == attestation.FOUNDATION_SCHEMA_VERSION
+    assert value["evidence"]["pinned_cdp_probe"]["build_execution_identity"] == (
+        build_identity
+    )
     assert [gate["gate"] for gate in value["hard_gates"]] == list(
         attestation._FOUNDATION_GATES
     )
@@ -738,6 +1077,7 @@ def test_foundation_binds_pinned_cdp_and_seventh_browser_egress_gate(
         "build_execution_receipt": files["build"],
         "expected_cohort_version": 23,
         "runtime_role": "collection",
+        "allow_historical": False,
     }
     assert files["pinned"] in attestation._protected_foundation_inputs(kwargs)
     assert browser_egress_root in attestation._protected_foundation_inputs(kwargs)
@@ -745,6 +1085,7 @@ def test_foundation_binds_pinned_cdp_and_seventh_browser_egress_gate(
         "root": browser_egress_root,
         "lab_root": attestation.LAB_ROOT,
         "expected_cohort_version": 23,
+        "allow_historical": False,
     }
 
     pinned["recorded_at"] = "2026-08-28T04:00:00+00:00"
@@ -779,6 +1120,7 @@ def test_browser_egress_gate_rejects_incomplete_or_different_build(
         "path": str(build_path.absolute()),
         "sha256": sha256_file(build_path),
         "payload_sha256": _digest("1"),
+        "completion_sha256": _completion_identity()["completion_sha256"],
         "images": {
             "collection": {"id": f"sha256:{_digest('2')}"},
             "prepare": {"id": f"sha256:{_digest('3')}"},
@@ -1245,6 +1587,7 @@ def test_successor_full_final_lineage_reconstructs_positive_promotion(
     build_identity = {
         "cohort_version": 23,
         "sha256": _digest("5"),
+        **_completion_identity(),
         "collection_image": source["image_digest"],
         "started_at": "2026-08-29T00:00:00+10:00",
         "finished_at": "2026-08-29T01:00:00+10:00",
@@ -1915,6 +2258,7 @@ def test_readiness_derivation_rechecks_every_prerequisite_and_fitted_parameters(
     build_identity = {
         "cohort_version": 23,
         "sha256": _digest("1"),
+        **_completion_identity(),
         "collection_image": source["image_digest"],
         "started_at": "2026-08-28T00:00:00+00:00",
         "finished_at": "2026-08-28T01:00:00+00:00",
@@ -1922,6 +2266,9 @@ def test_readiness_derivation_rechecks_every_prerequisite_and_fitted_parameters(
     build = {
         **build_identity,
         "path": str(build_file.resolve()),
+        "completion_path": str(
+            build_file.with_name("build-completion-v23.json").resolve()
+        ),
         "payload_sha256": _digest("0"),
         "source": source,
         "images": {
@@ -1972,6 +2319,7 @@ def test_readiness_derivation_rechecks_every_prerequisite_and_fitted_parameters(
         attestation, "_one_build_execution_identity", lambda _values: build_identity
     )
     pinned_cdp = {
+        "probe_schema_version": attestation.PINNED_CDP_PROBE_SCHEMA_VERSION,
         "path": str(ordinary_file.resolve()),
         "sha256": sha256_file(ordinary_file),
         "payload_sha256": _digest("7"),
@@ -1981,6 +2329,7 @@ def test_readiness_derivation_rechecks_every_prerequisite_and_fitted_parameters(
             "sha256": build_identity["sha256"],
             "payload_sha256": _digest("8"),
         },
+        "build_execution_identity": build_identity,
         "probe_contract_sha256": _digest("9"),
     }
     monkeypatch.setattr(
@@ -2026,7 +2375,7 @@ def test_readiness_derivation_rechecks_every_prerequisite_and_fitted_parameters(
         lambda *_a, **_k: foundation,
     )
     qualification_authority = {
-        "schema_version": 1,
+        "schema_version": attestation.QUALIFICATION_AUTHORITY_SCHEMA_VERSION,
         "artifact_type": attestation.QUALIFICATION_AUTHORITY_TYPE,
         "foundation_attestation": {
             **foundation_binding,

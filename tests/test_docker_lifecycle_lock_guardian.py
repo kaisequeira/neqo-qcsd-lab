@@ -15,8 +15,9 @@ import stat
 import subprocess
 import sys
 import textwrap
+import threading
 import time
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -33,9 +34,15 @@ V57_CHECKOUT_COMMIT = "b7811dab7124ffdde113fae111ef8bab4810ebba"
 FAKE_QCSD = r'''#!/bin/bash
 set -euo pipefail
 
-state=$2
+action=$1
+if [[ "$action" == build ]]; then
+  state=${QCSD_GUARDIAN_TEST_STATE:?}
+else
+  state=$2
+fi
 mkdir -p "$state"
 printf '%s\n' "$$" >"$state/inner-pid"
+printf '%s\n' "$-" >"$state/inner-shell-flags"
 
 lock_matches() {
   /usr/bin/python3 - "$1" <<'PY'
@@ -60,6 +67,29 @@ destination.write_text(",".join(matches), encoding="ascii")
 PY
 }
 
+cohort_lock_matches() {
+  /usr/bin/python3 - "$1" <<'PY'
+import os
+from pathlib import Path
+import sys
+
+destination = Path(sys.argv[1])
+wanted = (
+    int(os.environ["QCSD_DOCKER_LOCK_GUARDIAN_COHORT_LOCK_DEVICE"]),
+    int(os.environ["QCSD_DOCKER_LOCK_GUARDIAN_COHORT_LOCK_INODE"]),
+)
+matches = []
+for candidate in Path("/proc/self/fd").iterdir():
+    try:
+        value = candidate.stat()
+    except OSError:
+        continue
+    if (value.st_dev, value.st_ino) == wanted:
+        matches.append(candidate.name)
+destination.write_text(",".join(matches), encoding="ascii")
+PY
+}
+
 ready() {
   local ready_fd=$QCSD_DOCKER_LOCK_GUARDIAN_READY_FD
   local go_fd=$QCSD_DOCKER_LOCK_GUARDIAN_GO_FD
@@ -67,12 +97,38 @@ ready() {
   printf '%s\n' "$QCSD_DOCKER_LOCK_GUARDIAN_NONCE" >&"$ready_fd"
   eval "exec ${ready_fd}>&-"
   IFS= read -r admitted <&"$go_fd"
-  eval "exec ${go_fd}<&-"
   [[ "$admitted" == "$QCSD_DOCKER_LOCK_GUARDIAN_GO_NONCE" ]] || exit 125
+  extra=''
+  if IFS= read -r extra <&"$go_fd" || [[ -n "$extra" ]]; then exit 125; fi
+  eval "exec ${go_fd}<&-"
+  if [[ "$action" != real-helper-recover-* &&
+        "$action" != real-helper-h3-api-run &&
+        "$action" != recovery-wait &&
+        "$action" != recovery-api-current &&
+        "$action" != recovery-frame-* &&
+        "$action" != close-final-go &&
+        "$action" != exit-before-final &&
+        "$action" != final-ready-ignore-signal ]]; then
+    recovery_complete
+  fi
+}
+
+recovery_complete() {
+  local recovery_fd=$QCSD_DOCKER_LOCK_GUARDIAN_RECOVERY_READY_FD
+  local final_go_fd=$QCSD_DOCKER_LOCK_GUARDIAN_FINAL_GO_FD
+  local admitted
+  printf '%s\n' "$QCSD_DOCKER_LOCK_GUARDIAN_RECOVERY_NONCE" >&"$recovery_fd"
+  eval "exec ${recovery_fd}>&-"
+  IFS= read -r admitted <&"$final_go_fd"
+  [[ "$admitted" == "$QCSD_DOCKER_LOCK_GUARDIAN_FINAL_GO_NONCE" ]] || exit 125
+  extra=''
+  if IFS= read -r extra <&"$final_go_fd" || [[ -n "$extra" ]]; then exit 125; fi
+  eval "exec ${final_go_fd}<&-"
 }
 
 load_real_helper_with_guardian_proof() {
   _QCSD_LIFECYCLE_BOOT_ID=$QCSD_DOCKER_LOCK_GUARDIAN_BOOT_ID
+  _QCSD_LIFECYCLE_GUARD_START=$QCSD_DOCKER_LOCK_GUARDIAN_START_TIME
   _QCSD_LIFECYCLE_GUARD_SOURCE_PATH=$QCSD_DOCKER_LOCK_GUARDIAN_SOURCE_PATH
   _QCSD_LIFECYCLE_GUARD_SOURCE_DEVICE=$QCSD_DOCKER_LOCK_GUARDIAN_SOURCE_DEVICE
   _QCSD_LIFECYCLE_GUARD_SOURCE_INODE=$QCSD_DOCKER_LOCK_GUARDIAN_SOURCE_INODE
@@ -111,7 +167,64 @@ load_real_helper_with_guardian_proof() {
 }
 
 case "$1" in
+  build)
+    printf '%s\n' \
+      "$QCSD_DOCKER_LOCK_GUARDIAN_COHORT_LOCK_REQUIRED" \
+      "$QCSD_DOCKER_LOCK_GUARDIAN_COHORT_VERSION" \
+      "$QCSD_DOCKER_LOCK_GUARDIAN_COHORT_LOCK_FD" \
+      "$QCSD_DOCKER_LOCK_GUARDIAN_COHORT_LOCK_PATH" \
+      "$QCSD_DOCKER_LOCK_GUARDIAN_COHORT_LOCK_DEVICE" \
+      "$QCSD_DOCKER_LOCK_GUARDIAN_COHORT_LOCK_INODE" \
+      "$QCSD_DOCKER_LOCK_GUARDIAN_COHORT_LOCK_PARENT_DEVICE" \
+      "$QCSD_DOCKER_LOCK_GUARDIAN_COHORT_LOCK_PARENT_INODE" \
+      >"$state/cohort-handshake"
+    cohort_lock_matches "$state/cohort-inner-fds"
+    ready
+    cohort_lock_matches "$state/cohort-grandchild-fds"
+    if [[ -e "$state/spawn-operation-orphan" ]]; then
+      /usr/bin/python3 - \
+        "${QCSD_DOCKER_LOCK_GUARDIAN_COHORT_LOCK_PATH%/*}/.allocation-operation.lock" \
+        "$state/operation-orphan-ready" \
+        "$state/release-operation-orphan" \
+        "$state/operation-orphan-pid" <<'PY' &
+import fcntl
+import os
+from pathlib import Path
+import sys
+import time
+
+lock = Path(sys.argv[1])
+ready = Path(sys.argv[2])
+release = Path(sys.argv[3])
+pid_path = Path(sys.argv[4])
+descriptor = os.open(lock, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC)
+fcntl.flock(descriptor, fcntl.LOCK_EX)
+pid_path.write_text(str(os.getpid()), encoding="ascii")
+ready.touch()
+while not release.exists():
+    time.sleep(0.01)
+fcntl.flock(descriptor, fcntl.LOCK_UN)
+os.close(descriptor)
+PY
+    fi
+    printf 'ready\n' >"$state/cohort-ready"
+    while [[ ! -e "$state/release" ]]; do sleep 0.02; done
+    :
+    ;;
   success)
+    printf '%s\n' \
+      "$QCSD_DOCKER_LOCK_GUARDIAN_COHORT_LOCK_REQUIRED" \
+      "$QCSD_DOCKER_LOCK_GUARDIAN_COHORT_VERSION" \
+      "$QCSD_DOCKER_LOCK_GUARDIAN_COHORT_LOCK_FD" \
+      "$QCSD_DOCKER_LOCK_GUARDIAN_COHORT_LOCK_PATH" \
+      "$QCSD_DOCKER_LOCK_GUARDIAN_COHORT_LOCK_DEVICE" \
+      "$QCSD_DOCKER_LOCK_GUARDIAN_COHORT_LOCK_INODE" \
+      "$QCSD_DOCKER_LOCK_GUARDIAN_COHORT_LOCK_PARENT_DEVICE" \
+      "$QCSD_DOCKER_LOCK_GUARDIAN_COHORT_LOCK_PARENT_INODE" \
+      >"$state/cohort-handshake"
+    [[ "${QCSD_DOCKER_LOCK_GUARDIAN_DOCKER_CONFIG_PATH%/*}" == \
+        "${QCSD_DOCKER_LOCK_GUARDIAN_LOCK_PATH%/*}" &&
+        ! -L "$QCSD_DOCKER_LOCK_GUARDIAN_DOCKER_CONFIG_PATH" ]]
     printf '%s\n' "$PATH" >"$state/inner-path"
     env | grep '^_QCSD_' >"$state/internal-environment" || true
     env | grep '^PYTHON' >"$state/python-environment" || true
@@ -123,6 +236,8 @@ case "$1" in
     stat -Lc '%d:%i:%u:%a:%h:%F' \
       "$QCSD_DOCKER_LOCK_GUARDIAN_DOCKER_CONFIG_PATH" \
       >"$state/docker-config-identity"
+    printf '%s\n' "$QCSD_DOCKER_LOCK_GUARDIAN_DOCKER_CONFIG_PATH" \
+      >"$state/docker-config-path"
     find "$QCSD_DOCKER_LOCK_GUARDIAN_DOCKER_CONFIG_PATH" \
       -mindepth 1 -maxdepth 1 -print >"$state/docker-config-children"
     printf '%s:%s\n' \
@@ -181,14 +296,36 @@ PY
       >"$state/docker-client-plugins.json"
     docker buildx version >"$state/docker-buildx-version"
     docker buildx imagetools inspect "$frontend" >"$state/buildx-metadata"
+    [[ "${DOCKER_CONFIG%/*}" == \
+        "${QCSD_DOCKER_LOCK_GUARDIAN_LOCK_PATH%/*}" && ! -L "$DOCKER_CONFIG" ]]
     stat -Lc '%d:%i:%u:%a:%h:%F' "$DOCKER_CONFIG" \
       >"$state/buildx-docker-config-identity"
+    printf '%s\n' "$DOCKER_CONFIG" >"$state/buildx-docker-config-path"
     find "$DOCKER_CONFIG" -mindepth 1 -maxdepth 1 -print \
       >"$state/buildx-docker-config-children"
     stat -Lc '%u:%a:%h:%F' "$BUILDX_CONFIG" \
       >"$state/buildx-config-identity"
     find "$BUILDX_CONFIG" -mindepth 1 -maxdepth 1 -print \
       >"$state/buildx-config-children"
+    ;;
+  docker-buildx-pinned-frontend-probe)
+    export DOCKER_CONFIG=$QCSD_DOCKER_LOCK_GUARDIAN_DOCKER_CONFIG_PATH
+    export BUILDX_CONFIG=$QCSD_DOCKER_LOCK_GUARDIAN_BUILDX_CONFIG_PATH
+    ready
+    context=$state/pinned-frontend-context
+    mkdir -m 700 "$context"
+    printf '%s\n%s\n' \
+      '# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e' \
+      'FROM scratch' >"$context/Dockerfile"
+    docker --context default build --pull --no-cache --check "$context" \
+      >"$state/pinned-frontend-build" 2>&1
+    [[ "${DOCKER_CONFIG%/*}" == \
+        "${QCSD_DOCKER_LOCK_GUARDIAN_LOCK_PATH%/*}" && ! -L "$DOCKER_CONFIG" ]]
+    stat -Lc '%d:%i:%u:%a:%h:%F' "$DOCKER_CONFIG" \
+      >"$state/frontend-docker-config-identity"
+    printf '%s\n' "$DOCKER_CONFIG" >"$state/frontend-docker-config-path"
+    find "$DOCKER_CONFIG" -mindepth 1 -maxdepth 1 -print \
+      >"$state/frontend-docker-config-children"
     ;;
   systemd-probe)
     ready
@@ -198,6 +335,80 @@ PY
     ready
     printf 'ready\n' >"$state/ready"
     while [[ ! -e "$state/release" ]]; do sleep 0.02; done
+    ;;
+  recovery-wait)
+    ready
+    printf 'recovery\n' >"$state/recovery-phase"
+    while [[ ! -e "$state/release-recovery" ]]; do sleep 0.02; done
+    recovery_complete
+    printf 'mutated\n' >"$state/post-final-mutation"
+    ;;
+  initial-frame-*)
+    ready_fd=$QCSD_DOCKER_LOCK_GUARDIAN_READY_FD
+    case "$1" in
+      initial-frame-wrong) printf '%064d\n' 0 >&"$ready_fd" ;;
+      initial-frame-short) printf '%s\n' "${QCSD_DOCKER_LOCK_GUARDIAN_NONCE%?}" >&"$ready_fd" ;;
+      initial-frame-long) printf '%sa\n' "$QCSD_DOCKER_LOCK_GUARDIAN_NONCE" >&"$ready_fd" ;;
+      initial-frame-unterminated) printf '%s' "$QCSD_DOCKER_LOCK_GUARDIAN_NONCE" >&"$ready_fd" ;;
+      initial-frame-extra) printf '%s\nextra\n' "$QCSD_DOCKER_LOCK_GUARDIAN_NONCE" >&"$ready_fd" ;;
+      *) exit 97 ;;
+    esac
+    eval "exec ${ready_fd}>&-"
+    sleep 1
+    ;;
+  recovery-frame-*)
+    ready
+    recovery_fd=$QCSD_DOCKER_LOCK_GUARDIAN_RECOVERY_READY_FD
+    case "$1" in
+      recovery-frame-wrong) printf '%064d\n' 0 >&"$recovery_fd" ;;
+      recovery-frame-short) printf '%s\n' "${QCSD_DOCKER_LOCK_GUARDIAN_RECOVERY_NONCE%?}" >&"$recovery_fd" ;;
+      recovery-frame-long) printf '%sa\n' "$QCSD_DOCKER_LOCK_GUARDIAN_RECOVERY_NONCE" >&"$recovery_fd" ;;
+      recovery-frame-unterminated) printf '%s' "$QCSD_DOCKER_LOCK_GUARDIAN_RECOVERY_NONCE" >&"$recovery_fd" ;;
+      recovery-frame-extra) printf '%s\nextra\n' "$QCSD_DOCKER_LOCK_GUARDIAN_RECOVERY_NONCE" >&"$recovery_fd" ;;
+      *) exit 97 ;;
+    esac
+    eval "exec ${recovery_fd}>&-"
+    sleep 1
+    ;;
+  recovery-api-current)
+    ready
+    printf '%s:%s\n' \
+      "$QCSD_DOCKER_LOCK_GUARDIAN_DOCKER_CONFIG_DEVICE" \
+      "$QCSD_DOCKER_LOCK_GUARDIAN_DOCKER_CONFIG_INODE" \
+      >"$state/docker-config-expected"
+    load_real_helper_with_guardian_proof
+    _qcsd_lifecycle_base="$state/recovery-api-base"
+    mkdir -m 700 "$_qcsd_lifecycle_base"
+    export DOCKER_CONFIG=$QCSD_DOCKER_LOCK_GUARDIAN_DOCKER_CONFIG_PATH
+    export BUILDX_CONFIG=$QCSD_DOCKER_LOCK_GUARDIAN_BUILDX_CONFIG_PATH
+    _qcsd_supervisor_token() { printf '%032x\n' "$BASHPID"; }
+    _qcsd_docker_api_service_with_timeout 5 /bin/sh -c '
+      stat -Lc "%d:%i" "$DOCKER_CONFIG" \
+        >"$1/recovery-api-docker-identity"
+    ' qcsd-recovery-api "$state"
+    recovery_complete
+    printf 'complete\n' >"$state/recovery-api-complete"
+    ;;
+  close-initial-go)
+    ready_fd=$QCSD_DOCKER_LOCK_GUARDIAN_READY_FD
+    go_fd=$QCSD_DOCKER_LOCK_GUARDIAN_GO_FD
+    eval "exec ${go_fd}<&-"
+    printf '%s\n' "$QCSD_DOCKER_LOCK_GUARDIAN_NONCE" >&"$ready_fd"
+    eval "exec ${ready_fd}>&-"
+    sleep 1
+    ;;
+  close-final-go)
+    ready
+    recovery_fd=$QCSD_DOCKER_LOCK_GUARDIAN_RECOVERY_READY_FD
+    final_go_fd=$QCSD_DOCKER_LOCK_GUARDIAN_FINAL_GO_FD
+    eval "exec ${final_go_fd}<&-"
+    printf '%s\n' "$QCSD_DOCKER_LOCK_GUARDIAN_RECOVERY_NONCE" >&"$recovery_fd"
+    eval "exec ${recovery_fd}>&-"
+    sleep 1
+    ;;
+  exit-before-final)
+    ready
+    exit 0
     ;;
   exit-at-cmdline-read)
     ready
@@ -221,6 +432,68 @@ PY
     sleep 0.3
     ready
     printf 'mutated\n' >"$state/mutation-after-go"
+    while :; do sleep 0.02; done
+    ;;
+  pre-ready-ignore-signal)
+    trap '' TERM
+    printf 'pre-ready\n' >"$state/pre-ready"
+    sleep 0.3
+    ready_fd=$QCSD_DOCKER_LOCK_GUARDIAN_READY_FD
+    go_fd=$QCSD_DOCKER_LOCK_GUARDIAN_GO_FD
+    printf '%s\n' "$QCSD_DOCKER_LOCK_GUARDIAN_NONCE" >&"$ready_fd"
+    eval "exec ${ready_fd}>&-"
+    admitted=''
+    if IFS= read -r admitted <&"$go_fd"; then
+      printf '%s\n' "$admitted" >"$state/initial-decision-observed"
+    else
+      printf 'eof\n' >"$state/initial-decision-observed"
+    fi
+    printf 'mutated\n' >"$state/mutation-after-go"
+    while :; do sleep 0.02; done
+    ;;
+  final-ready-ignore-signal)
+    trap '' TERM
+    ready
+    printf 'pre-final\n' >"$state/pre-final"
+    sleep 0.3
+    recovery_fd=$QCSD_DOCKER_LOCK_GUARDIAN_RECOVERY_READY_FD
+    final_go_fd=$QCSD_DOCKER_LOCK_GUARDIAN_FINAL_GO_FD
+    printf '%s\n' "$QCSD_DOCKER_LOCK_GUARDIAN_RECOVERY_NONCE" \
+      >&"$recovery_fd"
+    eval "exec ${recovery_fd}>&-"
+    admitted=''
+    if IFS= read -r admitted <&"$final_go_fd"; then
+      printf '%s\n' "$admitted" >"$state/final-decision-observed"
+    else
+      printf 'eof\n' >"$state/final-decision-observed"
+    fi
+    printf 'mutated\n' >"$state/mutation-after-final-go"
+    while :; do sleep 0.02; done
+    ;;
+  post-final-ignore-signal)
+    trap '' TERM
+    ready
+    printf 'post-final\n' >"$state/post-final"
+    while :; do sleep 0.02; done
+    ;;
+  post-final-signal-cleanup-lease)
+    ready
+    load_real_helper_with_guardian_proof
+    _qcsd_lifecycle_base="$state/post-final-cleanup-base"
+    mkdir -m 700 "$_qcsd_lifecycle_base"
+    export DOCKER_CONFIG=$QCSD_DOCKER_LOCK_GUARDIAN_DOCKER_CONFIG_PATH
+    export BUILDX_CONFIG=$QCSD_DOCKER_LOCK_GUARDIAN_BUILDX_CONFIG_PATH
+    _qcsd_supervisor_token() { printf '%032x\n' "$BASHPID"; }
+    cleanup_after_signal() {
+      trap - TERM
+      _qcsd_docker_api_service_with_timeout 5 /bin/sh -c '
+        printf "served\n" >"$1/post-final-cleanup-lease-served"
+      ' qcsd-post-final-cleanup "$state"
+      printf 'complete\n' >"$state/post-final-cleanup-complete"
+      exit 143
+    }
+    trap cleanup_after_signal TERM
+    printf 'post-final\n' >"$state/post-final"
     while :; do sleep 0.02; done
     ;;
   never-ready)
@@ -616,6 +889,7 @@ PY
       exit 92
     fi
     [[ ! -e "$_qcsd_lifecycle_base/$kind.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ]]
+    recovery_complete
     printf 'recovered\n' >"$state/real-helper-recovered"
     ;;
   real-helper-h3-api-run)
@@ -779,6 +1053,25 @@ def _wait_gone(pid: int, timeout: float = 5) -> None:
     raise AssertionError(f"process {pid} remains {_process_state(pid)}")
 
 
+def _isolated_guardian_socket_suffix(lock_parent: Path) -> str:
+    return hashlib.sha256(os.fsencode(lock_parent)).hexdigest()[:16]
+
+
+def _isolated_guardian_socket_template(lock_parent: Path) -> str:
+    suffix = _isolated_guardian_socket_suffix(lock_parent)
+    return f"qcsd-docker-lifecycle-guardian-{{os.getuid()}}-{suffix}"
+
+
+def _isolated_guardian_socket_proc_name(lock_parent: Path) -> str:
+    suffix = _isolated_guardian_socket_suffix(lock_parent)
+    return f"@qcsd-docker-lifecycle-guardian-{os.getuid()}-{suffix}"
+
+
+def _isolated_guardian_socket_endpoint(lock_parent: Path) -> str:
+    suffix = _isolated_guardian_socket_suffix(lock_parent)
+    return f"\0qcsd-docker-lifecycle-guardian-{os.getuid()}-{suffix}"
+
+
 @pytest.fixture
 def guardian_bundle(tmp_path: Path):
     project = tmp_path / "project"
@@ -789,6 +1082,13 @@ def guardian_bundle(tmp_path: Path):
     helper = tools / "docker_signal_supervisor.sh"
     qcsd = project / "qcsd-lab"
     shutil.copyfile(GUARDIAN, guardian)
+    source = guardian.read_text(encoding="utf-8")
+    shared_socket = "qcsd-docker-lifecycle-guardian-{os.getuid()}"
+    isolated_socket = _isolated_guardian_socket_template(tmp_path / "locks")
+    assert source.count(shared_socket) == 2
+    guardian.write_text(
+        source.replace(shared_socket, isolated_socket), encoding="utf-8"
+    )
     guardian.chmod(0o600)
     shutil.copyfile(NATIVE, native)
     native.chmod(0o600)
@@ -805,7 +1105,7 @@ def guardian_bundle(tmp_path: Path):
     fake_docker = fake_bin / "docker"
     fake_docker.write_text(FAKE_DOCKER, encoding="utf-8")
     fake_docker.chmod(0o755)
-    socket_name = f"@qcsd-docker-lifecycle-guardian-{os.getuid()}"
+    socket_name = _isolated_guardian_socket_proc_name(lock_parent)
 
     def socket_count() -> int:
         return sum(
@@ -855,6 +1155,15 @@ def guardian_bundle(tmp_path: Path):
     assert socket_count() == socket_baseline
 
 
+@pytest.fixture
+def isolated_guardian_bundle(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> tuple[Path, Path, Path, Path]:
+    """Compatibility name: every copied guardian is already per-test isolated."""
+
+    return guardian_bundle
+
+
 def _guardian_command(
     bundle: tuple[Path, Path, Path, Path],
     mode: str,
@@ -865,6 +1174,16 @@ def _guardian_command(
     signal_during_cleanup: bool = False,
     exit_at_cmdline_read: bool = False,
     reap_during_buildx_census: bool = False,
+    fail_buildx_cleanup: bool = False,
+    prepare_failure: str | None = None,
+    fail_listener_close: bool = False,
+    recovery_timeout: float | None = None,
+    recovery_idle_timeout: float | None = None,
+    failure_cleanup_timeout: float | None = None,
+    cleanup_failure: str | None = None,
+    read_failure: str | None = None,
+    pause_residue_drain: bool = False,
+    inner_arguments: tuple[str, ...] | None = None,
 ) -> list[str]:
     guardian, qcsd, lock_parent, state = bundle
     harness = textwrap.dedent(
@@ -882,6 +1201,12 @@ def _guardian_command(
         spec.loader.exec_module(module)
         if sys.argv[6] != "default":
             module.READY_TIMEOUT_SECONDS = float(sys.argv[6])
+        if sys.argv[15] != "default":
+            module.RECOVERY_TIMEOUT_SECONDS = float(sys.argv[15])
+        if sys.argv[19] != "default":
+            module.RECOVERY_IDLE_TIMEOUT_SECONDS = float(sys.argv[19])
+        if sys.argv[20] != "default":
+            module.FAILURE_CLEANUP_SECONDS = float(sys.argv[20])
         if sys.argv[7] == "fail-wait":
             def fail_wait(*_args, **_kwargs):
                 import time
@@ -908,16 +1233,15 @@ def _guardian_command(
                 return real_fork()
             module.os.fork = replace_then_fork
         if sys.argv[9] == "signal-cleanup":
-            real_sigmask = module.signal.pthread_sigmask
-            block_calls = [0]
-            def block_then_signal(how, mask):
-                result = real_sigmask(how, mask)
-                if how == module.signal.SIG_BLOCK:
-                    block_calls[0] += 1
-                    if block_calls[0] == 4:
-                        module.os.kill(module.os.getpid(), module.signal.SIGTERM)
+            signal_cleanup_delegate = module._cleanup_private_config
+            cleanup_signalled = [False]
+            def cleanup_then_signal(*args, **kwargs):
+                result = signal_cleanup_delegate(*args, **kwargs)
+                if not cleanup_signalled[0]:
+                    cleanup_signalled[0] = True
+                    module.os.kill(module.os.getpid(), module.signal.SIGTERM)
                 return result
-            module.signal.pthread_sigmask = block_then_signal
+            module._cleanup_private_config = cleanup_then_signal
         if sys.argv[10] == "exit-at-cmdline-read":
             real_read_cmdline = module._read_cmdline
             injected = [False]
@@ -957,11 +1281,189 @@ def _guardian_command(
                     raise FileNotFoundError("injected procfs disappearance after reap")
                 return real_read_references(candidate, paths, path_bytes)
             module._read_buildx_process_references = fail_after_exact_reap
-        raise SystemExit(module.guard(
-            (sys.argv[2], sys.argv[3], sys.argv[4]),
-            source_path=source,
-            lock_parent=Path(sys.argv[5]),
-        ))
+        if sys.argv[12] == "fail-buildx-cleanup":
+            def fail_buildx_cleanup(*_args, **_kwargs):
+                raise module.GuardianError("injected Buildx cleanup failure")
+            module._cleanup_buildx_ledgers = fail_buildx_cleanup
+        if sys.argv[13] == "pre-open":
+            real_open = module.os.open
+            def fail_construction_open(path, *args, **kwargs):
+                if isinstance(path, str) and ".construct.v2." in path:
+                    raise OSError(module.errno.EIO, "injected construction open failure")
+                return real_open(path, *args, **kwargs)
+            module.os.open = fail_construction_open
+        elif sys.argv[13] == "rename":
+            rename_delegate = module._rename_noreplace
+            def fail_publication_rename(parent_fd, source_name, destination_name, **kwargs):
+                if ".construct.v2." in str(source_name):
+                    raise OSError(module.errno.EIO, "injected publication rename failure")
+                return rename_delegate(parent_fd, source_name, destination_name, **kwargs)
+            module._rename_noreplace = fail_publication_rename
+        elif sys.argv[13] == "post-rename-fsync":
+            rename_delegate = module._rename_noreplace
+            real_fsync = module.os.fsync
+            fail_next_fsync = [False]
+            def arm_publication_fsync(parent_fd, source_name, destination_name, **kwargs):
+                if ".construct.v2." in str(source_name):
+                    fail_next_fsync[0] = True
+                return rename_delegate(parent_fd, source_name, destination_name, **kwargs)
+            def fail_publication_fsync(descriptor):
+                if fail_next_fsync[0]:
+                    fail_next_fsync[0] = False
+                    raise OSError(module.errno.EIO, "injected publication fsync failure")
+                return real_fsync(descriptor)
+            module._rename_noreplace = arm_publication_fsync
+            module.os.fsync = fail_publication_fsync
+        if sys.argv[14] == "fail-listener-close":
+            real_abstract_lease_socket = module._abstract_lease_socket
+            class FailingCloseListener:
+                def __init__(self, listener):
+                    self.listener = listener
+                def __getattr__(self, name):
+                    return getattr(self.listener, name)
+                def close(self):
+                    self.listener.close()
+                    raise OSError(module.errno.EIO, "injected listener close failure")
+            def failing_close_listener(*args, **kwargs):
+                listener, name = real_abstract_lease_socket(*args, **kwargs)
+                return FailingCloseListener(listener), name
+            module._abstract_lease_socket = failing_close_listener
+        if sys.argv[16] == "current-rmdir":
+            real_rmdir = module.os.rmdir
+            def fail_docker_config_rmdir(path, *args, **kwargs):
+                if str(path).startswith(f".qcsd-docker-config-{module.os.getuid()}."):
+                    raise OSError(module.errno.EIO, "injected Docker config rmdir failure")
+                return real_rmdir(path, *args, **kwargs)
+            module.os.rmdir = fail_docker_config_rmdir
+        elif sys.argv[16] == "current-fsync-recreate":
+            real_rmdir = module.os.rmdir
+            real_fsync = module.os.fsync
+            removed_name = [None]
+            def arm_docker_config_fsync(path, *args, **kwargs):
+                result = real_rmdir(path, *args, **kwargs)
+                if str(path).startswith(f".qcsd-docker-config-{module.os.getuid()}."):
+                    removed_name[0] = str(path)
+                return result
+            def fail_after_recreating_path(descriptor):
+                if removed_name[0] is not None:
+                    name = removed_name[0]
+                    removed_name[0] = None
+                    module.os.mkdir(name, 0o700, dir_fd=descriptor)
+                    raise OSError(module.errno.EIO, "injected parent fsync failure")
+                return real_fsync(descriptor)
+            module.os.rmdir = arm_docker_config_fsync
+            module.os.fsync = fail_after_recreating_path
+        elif sys.argv[16] == "current-close":
+            close_cleanup_delegate = module._cleanup_private_config
+            real_close = module.os.close
+            fail_descriptors = set()
+            def arm_docker_config_close(parent_fd, descriptor, expected, **kwargs):
+                result = close_cleanup_delegate(
+                    parent_fd, descriptor, expected, **kwargs
+                )
+                fail_descriptors.add(descriptor)
+                return result
+            def fail_docker_config_close(descriptor):
+                if descriptor in fail_descriptors:
+                    fail_descriptors.remove(descriptor)
+                    real_close(descriptor)
+                    raise OSError(module.errno.EIO, "injected config close failure")
+                return real_close(descriptor)
+            module._cleanup_private_config = arm_docker_config_close
+            module.os.close = fail_docker_config_close
+        elif sys.argv[16] == "second-residue":
+            residue_cleanup_delegate = module._cleanup_private_config
+            cleanup_count = [0]
+            blocked_identity = [None]
+            def fail_second_residue(parent_fd, descriptor, expected, **kwargs):
+                cleanup_count[0] += 1
+                identity = (expected.device, expected.inode)
+                if cleanup_count[0] == 2:
+                    blocked_identity[0] = identity
+                if identity == blocked_identity[0]:
+                    raise module.GuardianError("injected second residue cleanup failure")
+                return residue_cleanup_delegate(
+                    parent_fd, descriptor, expected, **kwargs
+                )
+            module._cleanup_private_config = fail_second_residue
+        elif sys.argv[16] == "pause-current":
+            retirement_delegate = module._retire_private_config_residue
+            paused = [False]
+            def pause_current_retirement(*args, **kwargs):
+                if not paused[0]:
+                    paused[0] = True
+                    state = Path(sys.argv[4])
+                    (state / "terminal-cleanup-entered").touch()
+                    deadline = module.time.monotonic() + 5
+                    while not (state / "release-terminal-cleanup").exists():
+                        if module.time.monotonic() >= deadline:
+                            raise AssertionError("test did not release terminal cleanup")
+                        module.time.sleep(0.005)
+                return retirement_delegate(*args, **kwargs)
+            module._retire_private_config_residue = pause_current_retirement
+        elif sys.argv[16] == "pause-cohort-drain":
+            drain_delegate = module._lock_cohort_operation_for_cleanup
+            def pause_after_cohort_drain(*args, **kwargs):
+                result = drain_delegate(*args, **kwargs)
+                state = Path(sys.argv[4])
+                (state / "cohort-terminal-drain-entered").touch()
+                deadline = module.time.monotonic() + 5
+                while not (state / "release-cohort-terminal-drain").exists():
+                    if module.time.monotonic() >= deadline:
+                        raise AssertionError("test did not release terminal cohort drain")
+                    module.time.sleep(0.005)
+                return result
+            module._lock_cohort_operation_for_cleanup = pause_after_cohort_drain
+        if sys.argv[17] in {"initial", "recovery"}:
+            wait_delegate = module._wait_for_child
+            def fail_channel_read(*args, **kwargs):
+                target = args[1] if sys.argv[17] == "initial" else args[5]
+                read_delegate = module.os.read
+                injected = [False]
+                def injected_read(descriptor, size):
+                    if descriptor == target and not injected[0]:
+                        injected[0] = True
+                        raise OSError(module.errno.EIO, "injected channel read failure")
+                    return read_delegate(descriptor, size)
+                module.os.read = injected_read
+                try:
+                    return wait_delegate(*args, **kwargs)
+                finally:
+                    module.os.read = read_delegate
+            module._wait_for_child = fail_channel_read
+        if sys.argv[18] == "pause-residue-drain":
+            census_delegate = module._process_references_docker_config
+            paused = [False]
+            def pause_first_residue_census(*args, **kwargs):
+                if not paused[0]:
+                    paused[0] = True
+                    state = Path(sys.argv[4])
+                    (state / "residue-drain-entered").touch()
+                    deadline = module.time.monotonic() + 5
+                    while not (state / "release-residue-drain").exists():
+                        if module.time.monotonic() >= deadline:
+                            raise AssertionError("test did not release residue drain")
+                        module.time.sleep(0.005)
+                return census_delegate(*args, **kwargs)
+            module._process_references_docker_config = pause_first_residue_census
+        try:
+            inner = (
+                (sys.argv[2], sys.argv[3], sys.argv[4])
+                if len(sys.argv) == 21
+                else (sys.argv[2], *sys.argv[21:])
+            )
+            result = module.guard(
+                inner,
+                source_path=source,
+                lock_parent=Path(sys.argv[5]),
+            )
+        except module.GuardianError as error:
+            print(
+                f"qcsd-lab Docker lifecycle guardian: {error}",
+                file=sys.stderr,
+            )
+            result = 125
+        raise SystemExit(result)
         """
     )
     return [
@@ -980,6 +1482,16 @@ def _guardian_command(
         "signal-cleanup" if signal_during_cleanup else "normal",
         "exit-at-cmdline-read" if exit_at_cmdline_read else "normal",
         "reap-during-buildx-census" if reap_during_buildx_census else "normal",
+        "fail-buildx-cleanup" if fail_buildx_cleanup else "normal",
+        "normal" if prepare_failure is None else prepare_failure,
+        "fail-listener-close" if fail_listener_close else "normal",
+        "default" if recovery_timeout is None else str(recovery_timeout),
+        "normal" if cleanup_failure is None else cleanup_failure,
+        "normal" if read_failure is None else read_failure,
+        "pause-residue-drain" if pause_residue_drain else "normal",
+        "default" if recovery_idle_timeout is None else str(recovery_idle_timeout),
+        "default" if failure_cleanup_timeout is None else str(failure_cleanup_timeout),
+        *(inner_arguments or ()),
     ]
 
 
@@ -1045,6 +1557,19 @@ def _lock_path(bundle: tuple[Path, Path, Path, Path]) -> Path:
     return bundle[2] / f"qcsd-docker-lifecycle-{os.getuid()}.lock"
 
 
+def _cohort_lock_path(bundle: tuple[Path, Path, Path, Path]) -> Path:
+    return (
+        bundle[1].parent
+        / "artifacts/buflo-study/cohort-claims-v1/.allocation.lock"
+    )
+
+
+def _cohort_operation_lock_path(
+    bundle: tuple[Path, Path, Path, Path],
+) -> Path:
+    return _cohort_lock_path(bundle).with_name(".allocation-operation.lock")
+
+
 def _load_guardian(path: Path) -> ModuleType:
     spec = importlib.util.spec_from_file_location("qcsd_guardian_direct_test", path)
     assert spec is not None and spec.loader is not None
@@ -1062,6 +1587,27 @@ def _load_native(path: Path) -> ModuleType:
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _load_allocator(path: Path) -> ModuleType:
+    name = f"qcsd_cohort_allocator_direct_test_{os.urandom(8).hex()}"
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_guardian_and_allocator_use_the_same_cohort_operation_lock() -> None:
+    guardian = _load_guardian(GUARDIAN)
+    allocator = _load_allocator(ROOT / "src/qcsd_lab/cohort_allocation.py")
+
+    assert (
+        guardian.COHORT_OPERATION_LOCK_NAME
+        == allocator.COHORT_OPERATION_LOCK_NAME
+        == ".allocation-operation.lock"
+    )
 
 
 def _buildx_census_ledger(module: ModuleType, lock_parent: Path, start_time: int):
@@ -1104,6 +1650,105 @@ def _can_lock(path: Path) -> bool:
         return True
 
 
+def _matching_process_fds(pid: int, value: os.stat_result) -> list[str]:
+    matches: list[str] = []
+    for candidate in Path(f"/proc/{pid}/fd").iterdir():
+        try:
+            observed = candidate.stat()
+        except OSError:
+            continue
+        if (observed.st_dev, observed.st_ino) == (value.st_dev, value.st_ino):
+            matches.append(candidate.name)
+    return sorted(matches, key=int)
+
+
+def _self_start_time() -> int:
+    fields = Path("/proc/self/stat").read_text(encoding="ascii").rsplit(") ", 1)[1]
+    return int(fields.split()[19])
+
+
+def _boot_token() -> str:
+    return Path("/proc/sys/kernel/random/boot_id").read_text(
+        encoding="ascii"
+    ).strip().replace("-", "")
+
+
+def _docker_config_name(
+    nonce: str,
+    *,
+    start: int | None = None,
+    boot_token: str | None = None,
+) -> str:
+    actual_start = _self_start_time() if start is None else start
+    actual_boot = _boot_token() if boot_token is None else boot_token
+    return (
+        f".qcsd-docker-config-{os.getuid()}.v2."
+        f"{actual_boot}.{actual_start}.{nonce}"
+    )
+
+
+def _docker_config_construction_name(
+    nonce: str,
+    *,
+    start: int | None = None,
+    boot_token: str | None = None,
+) -> str:
+    actual_start = _self_start_time() if start is None else start
+    actual_boot = _boot_token() if boot_token is None else boot_token
+    return (
+        f".qcsd-docker-config-{os.getuid()}.construct.v2."
+        f"{actual_boot}.{actual_start}.{nonce}"
+    )
+
+
+def _docker_config_quarantine_name(
+    nonce: str,
+    *,
+    start: int | None = None,
+    boot_token: str | None = None,
+) -> str:
+    actual_start = _self_start_time() if start is None else start
+    actual_boot = _boot_token() if boot_token is None else boot_token
+    return (
+        f".qcsd-docker-config-{os.getuid()}.retiring.v2."
+        f"{actual_boot}.{actual_start}.{nonce}"
+    )
+
+
+def _docker_config_namespace_snapshot(
+    lock_parent: Path,
+) -> dict[str, tuple[int, int, int, int, int, int]]:
+    prefix = f".qcsd-docker-config-{os.getuid()}."
+    snapshot: dict[str, tuple[int, int, int, int, int, int]] = {}
+    for path in lock_parent.iterdir():
+        if not path.name.startswith(prefix):
+            continue
+        value = path.stat(follow_symlinks=False)
+        snapshot[path.name] = (
+            value.st_dev,
+            value.st_ino,
+            value.st_uid,
+            stat.S_IFMT(value.st_mode),
+            stat.S_IMODE(value.st_mode),
+            value.st_nlink,
+        )
+    return snapshot
+
+
+def _assert_retired_linked_docker_path(
+    recorded: Path, lock_parent: Path
+) -> None:
+    path = Path(recorded.read_text(encoding="ascii").strip())
+    assert path.is_absolute()
+    assert path.parent == lock_parent
+    assert re.fullmatch(
+        rf"[.]qcsd-docker-config-{os.getuid()}[.]v2[.]"
+        rf"[0-9a-f]{{32}}[.][1-9][0-9]*[.][0-9a-f]{{64}}",
+        path.name,
+    )
+    assert not path.exists() and not path.is_symlink()
+
+
 def test_guardian_and_grandchild_never_inherit_the_lifecycle_lock(
     guardian_bundle: tuple[Path, Path, Path, Path],
 ) -> None:
@@ -1120,9 +1765,815 @@ def test_guardian_and_grandchild_never_inherit_the_lifecycle_lock(
         encoding="ascii"
     ).strip()
     device, inode = expected.split(":")
-    assert observed == f"{device}:{inode}:{os.getuid()}:500:0:directory"
+    assert observed == f"{device}:{inode}:{os.getuid()}:500:2:directory"
     assert (state / "docker-config-children").read_text(encoding="ascii") == ""
+    _assert_retired_linked_docker_path(
+        state / "docker-config-path", guardian_bundle[2]
+    )
     assert _can_lock(_lock_path(guardian_bundle))
+
+
+def test_non_build_guardian_exposes_no_cohort_lock_authority(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    result = _run_guardian(guardian_bundle, "success")
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert (guardian_bundle[3] / "cohort-handshake").read_text(
+        encoding="ascii"
+    ).splitlines() == ["0", *("unavailable" for _ in range(7))]
+    assert not _cohort_lock_path(guardian_bundle).parent.exists()
+
+
+@pytest.mark.parametrize(
+    "inner_arguments",
+    [
+        ("build", "--cohort-version", "34"),
+        ("build", "--cohort-version=34"),
+    ],
+)
+def test_build_guardian_exclusively_holds_uninherited_cohort_lock(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+    inner_arguments: tuple[str, ...],
+) -> None:
+    state = guardian_bundle[3]
+    environment = {
+        **os.environ,
+        "QCSD_GUARDIAN_TEST_STATE": str(state),
+    }
+    process = subprocess.Popen(
+        _guardian_command(
+            guardian_bundle,
+            "unused",
+            inner_arguments=inner_arguments,
+        ),
+        env=environment,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        _wait(state / "cohort-ready")
+        fields = (state / "cohort-handshake").read_text(
+            encoding="ascii"
+        ).splitlines()
+        assert len(fields) == 8
+        (
+            required,
+            cohort,
+            guardian_fd,
+            recorded_path,
+            device,
+            inode,
+            parent_device,
+            parent_inode,
+        ) = fields
+        assert (required, cohort) == ("1", "34")
+        lock_path = _cohort_lock_path(guardian_bundle)
+        assert recorded_path == str(lock_path)
+        lock_value = lock_path.stat(follow_symlinks=False)
+        parent_value = lock_path.parent.stat(follow_symlinks=False)
+        assert stat.S_ISREG(lock_value.st_mode)
+        assert stat.S_IMODE(lock_value.st_mode) == 0o600
+        assert lock_value.st_nlink == 1 and lock_value.st_size == 0
+        assert stat.S_ISDIR(parent_value.st_mode)
+        assert stat.S_IMODE(parent_value.st_mode) == 0o700
+        assert (device, inode) == (str(lock_value.st_dev), str(lock_value.st_ino))
+        assert (parent_device, parent_inode) == (
+            str(parent_value.st_dev),
+            str(parent_value.st_ino),
+        )
+        assert _matching_process_fds(process.pid, lock_value) == [guardian_fd]
+        inner_pid = int((state / "inner-pid").read_text(encoding="ascii"))
+        assert _matching_process_fds(inner_pid, lock_value) == []
+        assert (state / "cohort-inner-fds").read_text(encoding="ascii") == ""
+        assert (state / "cohort-grandchild-fds").read_text(encoding="ascii") == ""
+        assert not _can_lock(lock_path)
+        operation_path = _cohort_operation_lock_path(guardian_bundle)
+        operation_value = operation_path.stat(follow_symlinks=False)
+        assert stat.S_ISREG(operation_value.st_mode)
+        assert stat.S_IMODE(operation_value.st_mode) == 0o600
+        assert operation_value.st_nlink == 1 and operation_value.st_size == 0
+        assert (operation_value.st_dev, operation_value.st_ino) != (
+            lock_value.st_dev,
+            lock_value.st_ino,
+        )
+        assert len(_matching_process_fds(process.pid, operation_value)) == 1
+        assert _matching_process_fds(inner_pid, operation_value) == []
+        assert _can_lock(operation_path)
+
+        (state / "release").touch()
+        stdout, stderr = process.communicate(timeout=10)
+        assert process.returncode == 0, (stdout, stderr)
+        assert _can_lock(lock_path)
+        assert _can_lock(operation_path)
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+
+
+@pytest.mark.parametrize(
+    "inner_arguments",
+    [
+        ("build",),
+        ("build", "--cohort-version", "0"),
+        ("build", "--cohort-version", "01"),
+        ("build", "--cohort-version", "34", "extra"),
+        ("build", "--cohort-version=34", "extra"),
+        ("build", "--cohort-version", "34", "--cohort-version", "35"),
+    ],
+)
+def test_guardian_rejects_noncanonical_build_cohort_argv_before_child(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+    inner_arguments: tuple[str, ...],
+) -> None:
+    result = subprocess.run(
+        _guardian_command(
+            guardian_bundle,
+            "unused",
+            inner_arguments=inner_arguments,
+        ),
+        env={
+            **os.environ,
+            "QCSD_GUARDIAN_TEST_STATE": str(guardian_bundle[3]),
+        },
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 125, (result.stdout, result.stderr)
+    assert "does not select one exact cohort" in result.stderr
+    assert not (guardian_bundle[3] / "inner-pid").exists()
+    assert not _cohort_lock_path(guardian_bundle).parent.exists()
+
+
+def test_build_guardian_detects_cohort_lock_path_replacement_and_kills_inner(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    state = guardian_bundle[3]
+    process = subprocess.Popen(
+        _guardian_command(
+            guardian_bundle,
+            "unused",
+            inner_arguments=("build", "--cohort-version", "34"),
+        ),
+        env={**os.environ, "QCSD_GUARDIAN_TEST_STATE": str(state)},
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    replacement_fd = -1
+    try:
+        _wait(state / "cohort-ready")
+        inner_pid = int((state / "inner-pid").read_text(encoding="ascii"))
+        lock_path = _cohort_lock_path(guardian_bundle)
+        moved = lock_path.with_name(".allocation.lock.replaced")
+        lock_path.rename(moved)
+        replacement_fd = os.open(
+            lock_path,
+            os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+        )
+        os.close(replacement_fd)
+        replacement_fd = -1
+
+        stdout, stderr = process.communicate(timeout=10)
+        assert process.returncode == 125, (stdout, stderr)
+        assert "runtime integrity check failed" in stderr
+        assert "lock path changed" in stderr
+        _wait_gone(inner_pid)
+        assert _can_lock(moved)
+        assert _can_lock(lock_path)
+    finally:
+        if replacement_fd >= 0:
+            os.close(replacement_fd)
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+
+
+def test_build_guardian_detects_operation_lock_path_replacement_and_kills_inner(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    state = guardian_bundle[3]
+    process = subprocess.Popen(
+        _guardian_command(
+            guardian_bundle,
+            "unused",
+            inner_arguments=("build", "--cohort-version", "34"),
+        ),
+        env={**os.environ, "QCSD_GUARDIAN_TEST_STATE": str(state)},
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    replacement_fd = -1
+    try:
+        _wait(state / "cohort-ready")
+        inner_pid = int((state / "inner-pid").read_text(encoding="ascii"))
+        operation_path = _cohort_operation_lock_path(guardian_bundle)
+        moved = operation_path.with_name(".allocation-operation.lock.replaced")
+        operation_path.rename(moved)
+        replacement_fd = os.open(
+            operation_path,
+            os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+        )
+        os.close(replacement_fd)
+        replacement_fd = -1
+
+        stdout, stderr = process.communicate(timeout=10)
+        assert process.returncode == 125, (stdout, stderr)
+        assert "runtime integrity check failed" in stderr
+        assert "lock path changed" in stderr
+        _wait_gone(inner_pid)
+        assert _can_lock(moved)
+        assert _can_lock(operation_path)
+    finally:
+        if replacement_fd >= 0:
+            os.close(replacement_fd)
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+
+
+def test_guardian_sigkill_drops_cohort_lock_and_pdeathsig_kills_inner(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    state = guardian_bundle[3]
+    process = subprocess.Popen(
+        _guardian_command(
+            guardian_bundle,
+            "unused",
+            inner_arguments=("build", "--cohort-version=34"),
+        ),
+        env={**os.environ, "QCSD_GUARDIAN_TEST_STATE": str(state)},
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        _wait(state / "cohort-ready")
+        lock_path = _cohort_lock_path(guardian_bundle)
+        assert not _can_lock(lock_path)
+        inner_pid = int((state / "inner-pid").read_text(encoding="ascii"))
+
+        os.kill(process.pid, signal.SIGKILL)
+        process.wait(timeout=5)
+        assert process.returncode == -signal.SIGKILL
+        _wait_gone(inner_pid)
+        deadline = time.monotonic() + 2
+        while not _can_lock(lock_path) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert _can_lock(lock_path)
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+
+
+def test_build_guardian_retains_cohort_lock_through_terminal_cleanup(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    state = guardian_bundle[3]
+    process = subprocess.Popen(
+        _guardian_command(
+            guardian_bundle,
+            "unused",
+            cleanup_failure="pause-current",
+            inner_arguments=("build", "--cohort-version", "34"),
+        ),
+        env={**os.environ, "QCSD_GUARDIAN_TEST_STATE": str(state)},
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        _wait(state / "cohort-ready")
+        lock_path = _cohort_lock_path(guardian_bundle)
+        (state / "release").touch()
+        _wait(state / "terminal-cleanup-entered")
+
+        assert process.poll() is None
+        assert not _can_lock(lock_path)
+        inner_pid = int((state / "inner-pid").read_text(encoding="ascii"))
+        _wait_gone(inner_pid)
+
+        (state / "release-terminal-cleanup").touch()
+        stdout, stderr = process.communicate(timeout=10)
+        assert process.returncode == 0, (stdout, stderr)
+        assert _can_lock(lock_path)
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+
+
+def test_build_guardian_terminally_drains_b_before_releasing_a(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    state = guardian_bundle[3]
+    process = subprocess.Popen(
+        _guardian_command(
+            guardian_bundle,
+            "unused",
+            cleanup_failure="pause-cohort-drain",
+            inner_arguments=("build", "--cohort-version", "34"),
+        ),
+        env={**os.environ, "QCSD_GUARDIAN_TEST_STATE": str(state)},
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        _wait(state / "cohort-ready")
+        cohort_lock = _cohort_lock_path(guardian_bundle)
+        operation_lock = _cohort_operation_lock_path(guardian_bundle)
+        inner_pid = int((state / "inner-pid").read_text(encoding="ascii"))
+        (state / "release").touch()
+        _wait(state / "cohort-terminal-drain-entered")
+
+        assert process.poll() is None
+        _wait_gone(inner_pid)
+        assert not _can_lock(cohort_lock)
+        assert not _can_lock(operation_lock)
+
+        (state / "release-cohort-terminal-drain").touch()
+        stdout, stderr = process.communicate(timeout=10)
+        assert process.returncode == 0, (stdout, stderr)
+        assert _can_lock(cohort_lock)
+        assert _can_lock(operation_lock)
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+
+
+def test_inherited_acquisition_lock_cannot_alias_build_cohort_lock(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    lock_path = _cohort_lock_path(guardian_bundle)
+    lock_path.parent.mkdir(parents=True, mode=0o700)
+    lock_path.parent.chmod(0o700)
+    descriptor = os.open(
+        lock_path,
+        os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+        0o600,
+    )
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = subprocess.run(
+            _guardian_command(
+                guardian_bundle,
+                "unused",
+                inner_arguments=("build", "--cohort-version", "34"),
+            ),
+            env={
+                **os.environ,
+                "QCSD_CLASS_ACQUISITION_LOCK_FD": str(descriptor),
+                "QCSD_GUARDIAN_TEST_STATE": str(guardian_bundle[3]),
+            },
+            pass_fds=(descriptor,),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+
+        assert result.returncode == 125, (result.stdout, result.stderr)
+        assert "aliases the cohort-allocation lock" in result.stderr
+        assert not (guardian_bundle[3] / "inner-pid").exists()
+    finally:
+        os.close(descriptor)
+
+
+@pytest.mark.parametrize("kind", ["symlink", "fifo", "hardlink", "writable"])
+def test_build_guardian_rejects_unsafe_cohort_operation_lock(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+    kind: str,
+) -> None:
+    operation_path = _cohort_operation_lock_path(guardian_bundle)
+    operation_path.parent.mkdir(parents=True, mode=0o700)
+    operation_path.parent.chmod(0o700)
+    outside = guardian_bundle[3] / "outside-operation-lock"
+    outside.write_bytes(b"")
+    outside.chmod(0o600)
+    if kind == "symlink":
+        operation_path.symlink_to(outside)
+    elif kind == "fifo":
+        os.mkfifo(operation_path, 0o600)
+    elif kind == "hardlink":
+        os.link(outside, operation_path)
+    else:
+        operation_path.write_bytes(b"")
+        operation_path.chmod(0o620)
+
+    result = subprocess.run(
+        _guardian_command(
+            guardian_bundle,
+            "unused",
+            inner_arguments=("build", "--cohort-version", "34"),
+        ),
+        env={
+            **os.environ,
+            "QCSD_GUARDIAN_TEST_STATE": str(guardian_bundle[3]),
+        },
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 125, (result.stdout, result.stderr)
+    assert "operation lock" in result.stderr
+    assert not (guardian_bundle[3] / "inner-pid").exists()
+
+
+def test_inherited_acquisition_lock_cannot_alias_cohort_operation_lock(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    operation_path = _cohort_operation_lock_path(guardian_bundle)
+    operation_path.parent.mkdir(parents=True, mode=0o700)
+    operation_path.parent.chmod(0o700)
+    descriptor = os.open(
+        operation_path,
+        os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+        0o600,
+    )
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = subprocess.run(
+            _guardian_command(
+                guardian_bundle,
+                "unused",
+                inner_arguments=("build", "--cohort-version", "34"),
+            ),
+            env={
+                **os.environ,
+                "QCSD_CLASS_ACQUISITION_LOCK_FD": str(descriptor),
+                "QCSD_GUARDIAN_TEST_STATE": str(guardian_bundle[3]),
+            },
+            pass_fds=(descriptor,),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+
+        assert result.returncode == 125, (result.stdout, result.stderr)
+        assert "operation lock aliases another authority lock" in result.stderr
+        assert not (guardian_bundle[3] / "inner-pid").exists()
+    finally:
+        os.close(descriptor)
+
+
+def test_build_guardian_drains_operation_lock_after_lifecycle_and_cohort_locks(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    state = guardian_bundle[3]
+    operation_path = _cohort_operation_lock_path(guardian_bundle)
+    operation_path.parent.mkdir(parents=True, mode=0o700)
+    operation_path.parent.chmod(0o700)
+    operation_fd = os.open(
+        operation_path,
+        os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+        0o600,
+    )
+    process: subprocess.Popen[str] | None = None
+    try:
+        fcntl.flock(operation_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        process = subprocess.Popen(
+            _guardian_command(
+                guardian_bundle,
+                "unused",
+                inner_arguments=("build", "--cohort-version", "34"),
+            ),
+            env={**os.environ, "QCSD_GUARDIAN_TEST_STATE": str(state)},
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        lifecycle_lock = _lock_path(guardian_bundle)
+        cohort_lock = _cohort_lock_path(guardian_bundle)
+        deadline = time.monotonic() + 5
+        while (
+            (
+                not lifecycle_lock.exists()
+                or not cohort_lock.exists()
+                or _can_lock(lifecycle_lock)
+                or _can_lock(cohort_lock)
+            )
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.01)
+        assert lifecycle_lock.exists() and not _can_lock(lifecycle_lock)
+        assert cohort_lock.exists() and not _can_lock(cohort_lock)
+        assert not (state / "inner-pid").exists()
+
+        fcntl.flock(operation_fd, fcntl.LOCK_UN)
+        _wait(state / "cohort-ready")
+        inner_pid = int((state / "inner-pid").read_text(encoding="ascii"))
+        operation_value = operation_path.stat(follow_symlinks=False)
+        assert _matching_process_fds(inner_pid, operation_value) == []
+        assert _can_lock(operation_path)
+        (state / "release").touch()
+        stdout, stderr = process.communicate(timeout=10)
+        assert process.returncode == 0, (stdout, stderr)
+    finally:
+        if process is not None and process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+        os.close(operation_fd)
+
+
+def test_signal_while_guardian_waits_for_operation_drain_fails_closed(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    state = guardian_bundle[3]
+    operation_path = _cohort_operation_lock_path(guardian_bundle)
+    operation_path.parent.mkdir(parents=True, mode=0o700)
+    operation_path.parent.chmod(0o700)
+    operation_fd = os.open(
+        operation_path,
+        os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+        0o600,
+    )
+    process: subprocess.Popen[str] | None = None
+    try:
+        fcntl.flock(operation_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        process = subprocess.Popen(
+            _guardian_command(
+                guardian_bundle,
+                "unused",
+                inner_arguments=("build", "--cohort-version", "34"),
+            ),
+            env={**os.environ, "QCSD_GUARDIAN_TEST_STATE": str(state)},
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        cohort_lock = _cohort_lock_path(guardian_bundle)
+        deadline = time.monotonic() + 5
+        while (
+            (not cohort_lock.exists() or _can_lock(cohort_lock))
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.01)
+        assert not _can_lock(cohort_lock)
+        assert not (state / "inner-pid").exists()
+
+        os.kill(process.pid, signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=10)
+        assert process.returncode == 125, (stdout, stderr)
+        assert "signal received before cohort-allocation operation drain" in stderr
+        assert _can_lock(cohort_lock)
+        assert not _can_lock(operation_path)
+        assert not (state / "inner-pid").exists()
+    finally:
+        if process is not None and process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+        os.close(operation_fd)
+
+
+def test_successor_guardian_drains_allocator_orphan_after_guardian_sigkill(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    state = guardian_bundle[3]
+    (state / "spawn-operation-orphan").touch()
+    command = _guardian_command(
+        guardian_bundle,
+        "unused",
+        inner_arguments=("build", "--cohort-version", "34"),
+    )
+    environment = {**os.environ, "QCSD_GUARDIAN_TEST_STATE": str(state)}
+    first = subprocess.Popen(
+        command,
+        env=environment,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    successor: subprocess.Popen[str] | None = None
+    orphan_pid = -1
+    try:
+        _wait(state / "operation-orphan-ready")
+        _wait(state / "cohort-ready")
+        orphan_pid = int(
+            (state / "operation-orphan-pid").read_text(encoding="ascii")
+        )
+        first_inner = int((state / "inner-pid").read_text(encoding="ascii"))
+        assert not _can_lock(_cohort_operation_lock_path(guardian_bundle))
+
+        os.kill(first.pid, signal.SIGKILL)
+        first.wait(timeout=5)
+        assert first.returncode == -signal.SIGKILL
+        _wait_gone(first_inner)
+        assert Path(f"/proc/{orphan_pid}").exists()
+        assert not _can_lock(_cohort_operation_lock_path(guardian_bundle))
+
+        (state / "spawn-operation-orphan").unlink()
+        (state / "inner-pid").unlink()
+        (state / "cohort-ready").unlink()
+        successor = subprocess.Popen(
+            command,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        cohort_lock = _cohort_lock_path(guardian_bundle)
+        deadline = time.monotonic() + 5
+        while (
+            (not cohort_lock.exists() or _can_lock(cohort_lock))
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.01)
+        assert not _can_lock(cohort_lock)
+        time.sleep(0.1)
+        assert not (state / "inner-pid").exists()
+
+        (state / "release-operation-orphan").touch()
+        _wait_gone(orphan_pid)
+        _wait(state / "cohort-ready")
+        successor_inner = int(
+            (state / "inner-pid").read_text(encoding="ascii")
+        )
+        assert successor_inner != first_inner
+        (state / "release").touch()
+        stdout, stderr = successor.communicate(timeout=10)
+        assert successor.returncode == 0, (stdout, stderr)
+    finally:
+        if successor is not None and successor.poll() is None:
+            os.killpg(successor.pid, signal.SIGKILL)
+            successor.wait(timeout=5)
+        if first.poll() is None:
+            os.killpg(first.pid, signal.SIGKILL)
+            first.wait(timeout=5)
+        if orphan_pid > 1 and Path(f"/proc/{orphan_pid}").exists():
+            os.kill(orphan_pid, signal.SIGKILL)
+            _wait_gone(orphan_pid)
+
+
+def test_build_guardian_acquires_lifecycle_lock_before_cohort_lock(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    state = guardian_bundle[3]
+    cohort_lock = _cohort_lock_path(guardian_bundle)
+    cohort_lock.parent.mkdir(parents=True, mode=0o700)
+    cohort_lock.parent.chmod(0o700)
+    cohort_fd = os.open(
+        cohort_lock,
+        os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+        0o600,
+    )
+    process: subprocess.Popen[str] | None = None
+    try:
+        fcntl.flock(cohort_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        process = subprocess.Popen(
+            _guardian_command(
+                guardian_bundle,
+                "unused",
+                inner_arguments=("build", "--cohort-version", "34"),
+            ),
+            env={**os.environ, "QCSD_GUARDIAN_TEST_STATE": str(state)},
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        lifecycle_lock = _lock_path(guardian_bundle)
+        deadline = time.monotonic() + 5
+        while (
+            (not lifecycle_lock.exists() or _can_lock(lifecycle_lock))
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.01)
+        assert lifecycle_lock.exists() and not _can_lock(lifecycle_lock)
+        assert not (state / "inner-pid").exists()
+
+        fcntl.flock(cohort_fd, fcntl.LOCK_UN)
+        _wait(state / "cohort-ready")
+        (state / "release").touch()
+        stdout, stderr = process.communicate(timeout=10)
+        assert process.returncode == 0, (stdout, stderr)
+    finally:
+        if process is not None and process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+        os.close(cohort_fd)
+
+
+def test_guardian_normalizes_a_maximally_restrictive_inherited_umask(
+    isolated_guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    command = _guardian_command(isolated_guardian_bundle, "success")
+    command = [command[0], "-B", *command[1:]]
+    result = subprocess.run(
+        [
+            "/bin/bash",
+            "--noprofile",
+            "--norc",
+            "-c",
+            'umask 0777; exec "$@"',
+            "qcsd-guardian-umask-test",
+            *command,
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+        timeout=20,
+    )
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    lock_parent = isolated_guardian_bundle[2]
+    lock_value = _lock_path(isolated_guardian_bundle).stat(follow_symlinks=False)
+    assert stat.S_ISREG(lock_value.st_mode)
+    assert stat.S_IMODE(lock_value.st_mode) == 0o600
+    assert lock_value.st_nlink == 1
+    assert lock_value.st_size == 0
+    assert not tuple(
+        lock_parent.glob(f".qcsd-docker-config-{os.getuid()}.*")
+    )
+    assert not tuple(lock_parent.glob(".qcsd-buildx-*"))
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_guard_scopes_and_restores_its_private_umask(
+    isolated_guardian_bundle: tuple[Path, Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    raises: bool,
+) -> None:
+    module = _load_guardian(isolated_guardian_bundle[0])
+    internal_umasks: list[int] = []
+
+    def observe_private_umask(*_args: object, **_kwargs: object) -> int:
+        observed = os.umask(0o077)
+        os.umask(observed)
+        internal_umasks.append(observed)
+        if raises:
+            raise module.GuardianError("injected guarded failure")
+        return 23
+
+    monkeypatch.setattr(module, "_require_unprivileged_identity", lambda: None)
+    monkeypatch.setattr(module, "_guard_with_private_umask", observe_private_umask)
+    caller_umask = 0o027
+    original_umask = os.umask(caller_umask)
+    try:
+        if raises:
+            with pytest.raises(module.GuardianError, match="injected guarded failure"):
+                module.guard(
+                    ("unused",),
+                    lock_parent=isolated_guardian_bundle[2],
+                )
+        else:
+            assert (
+                module.guard(
+                    ("unused",),
+                    lock_parent=isolated_guardian_bundle[2],
+                )
+                == 23
+            )
+        restored = os.umask(caller_umask)
+        assert restored == caller_umask
+    finally:
+        os.umask(original_umask)
+
+    assert internal_umasks == [0o077]
 
 
 def test_exit_between_identity_and_cmdline_preserves_exact_child_status(
@@ -1218,12 +2669,668 @@ def test_live_cmdline_loss_remains_an_integrity_failure(
     assert observations == 3
 
 
+def test_child_binding_retries_the_exec_cmdline_transition(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_guardian(guardian_bundle[0])
+    pid = 43210
+    start_time = 9876
+    command = ("/bound/qcsd-lab", "success")
+    exact = ("/bin/bash", "--noprofile", "--norc", "-p", *command)
+    observations = 0
+
+    monkeypatch.setattr(
+        module,
+        "_process_record",
+        lambda observed_pid: ("R", 1, pid, pid, start_time),
+    )
+    monkeypatch.setattr(module, "_process_uid", lambda observed_pid: os.getuid())
+    monkeypatch.setattr(module, "_observe_child_exit", lambda child: False)
+    monkeypatch.setattr(module.time, "sleep", lambda seconds: None)
+
+    def transitioning_cmdline(observed_pid: int) -> tuple[str, ...]:
+        nonlocal observations
+        assert observed_pid == pid
+        observations += 1
+        if observations == 1:
+            raise module.GuardianError("injected empty exec cmdline")
+        if observations == 2:
+            return ("/usr/bin/python3", "guardian-parent")
+        return exact
+
+    monkeypatch.setattr(module, "_read_cmdline", transitioning_cmdline)
+
+    child = module._bind_child_identity(pid, command)
+
+    assert child == module.ChildIdentity(pid, start_time, pid, pid, command)
+    assert observations == 3
+
+
+def test_child_binding_waits_for_the_exact_post_exec_command(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    guardian = guardian_bundle[0]
+    source = guardian.read_text(encoding="utf-8")
+    transition = "        os.setsid()\n        child_pid = os.getpid()\n"
+    assert source.count(transition) == 1
+    guardian.write_text(
+        source.replace(
+            transition,
+            "        os.setsid()\n"
+            "        # Hold the exact post-setsid/pre-exec transition open.\n"
+            "        time.sleep(0.25)\n"
+            "        child_pid = os.getpid()\n",
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run_guardian(guardian_bundle, "success")
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert not tuple(
+        guardian_bundle[2].glob(
+            f".qcsd-docker-config-{os.getuid()}.*"
+        )
+    )
+
+
+@pytest.mark.parametrize("construction_mode", [0o700, 0o500])
 def test_guardian_recovers_only_exact_empty_docker_config_residue(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+    construction_mode: int,
+) -> None:
+    lock_parent = guardian_bundle[2]
+    residue = lock_parent / _docker_config_construction_name("a" * 64)
+    residue.mkdir(mode=construction_mode)
+
+    result = _run_guardian(guardian_bundle, "success")
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert not residue.exists()
+    assert not tuple(
+        lock_parent.glob(f".qcsd-docker-config-{os.getuid()}.*")
+    )
+
+
+def test_guardian_recovers_exact_quarantined_docker_config_residue(
+    isolated_guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    lock_parent = isolated_guardian_bundle[2]
+    residue = lock_parent / _docker_config_quarantine_name("6" * 64)
+    residue.mkdir(mode=0o500)
+
+    result = _run_guardian(isolated_guardian_bundle, "success")
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert not residue.exists()
+    assert not tuple(
+        lock_parent.glob(f".qcsd-docker-config-{os.getuid()}.*")
+    )
+
+
+def test_guardian_retains_recovered_quarantine_until_inode_user_exits(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    lock_parent = guardian_bundle[2]
+    residue = lock_parent / _docker_config_quarantine_name("7" * 64)
+    residue.mkdir(mode=0o500)
+    original = residue.stat(follow_symlinks=False)
+    holder = subprocess.Popen(
+        ["/bin/sleep", "30"],
+        cwd=residue,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    try:
+        blocked = _run_guardian(guardian_bundle, "success", timeout=20)
+
+        assert blocked.returncode != 0, (blocked.stdout, blocked.stderr)
+        assert "still has a live reference" in blocked.stderr
+        observed = residue.stat(follow_symlinks=False)
+        assert (observed.st_dev, observed.st_ino, observed.st_nlink) == (
+            original.st_dev,
+            original.st_ino,
+            2,
+        )
+        assert holder.poll() is None
+        assert not (guardian_bundle[3] / "grandchild-lock-fds").exists()
+
+        os.killpg(holder.pid, signal.SIGKILL)
+        holder.wait(timeout=5)
+
+        successor = _run_guardian(guardian_bundle, "success", timeout=20)
+        assert successor.returncode == 0, (successor.stdout, successor.stderr)
+        assert not residue.exists()
+        assert not tuple(
+            lock_parent.glob(f".qcsd-docker-config-{os.getuid()}.*")
+        )
+    finally:
+        if holder.poll() is None:
+            os.killpg(holder.pid, signal.SIGKILL)
+            holder.wait(timeout=5)
+        if residue.exists():
+            residue.chmod(0o700)
+            residue.rmdir()
+
+
+def test_quarantine_ignores_stale_published_docker_config_environment(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    lock_parent = guardian_bundle[2]
+    nonce = "8" * 64
+    residue = lock_parent / _docker_config_quarantine_name(nonce)
+    published = lock_parent / _docker_config_name(nonce)
+    residue.mkdir(mode=0o500)
+    environment = os.environ.copy()
+    environment["DOCKER_CONFIG"] = str(published)
+    holder = subprocess.Popen(
+        ["/bin/sleep", "30"],
+        env=environment,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    try:
+        result = _run_guardian(guardian_bundle, "success", timeout=20)
+
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        assert holder.poll() is None
+        assert not published.exists()
+        assert not residue.exists()
+        assert not tuple(
+            lock_parent.glob(f".qcsd-docker-config-{os.getuid()}.*")
+        )
+    finally:
+        if holder.poll() is None:
+            os.killpg(holder.pid, signal.SIGKILL)
+            holder.wait(timeout=5)
+        if residue.exists():
+            residue.chmod(0o700)
+            residue.rmdir()
+
+
+@pytest.mark.parametrize("case", ["malformed-name", "wrong-mode"])
+def test_guardian_fails_closed_on_unsafe_quarantined_docker_config_residue(
+    guardian_bundle: tuple[Path, Path, Path, Path], case: str
+) -> None:
+    lock_parent = guardian_bundle[2]
+    if case == "malformed-name":
+        residue = lock_parent / (
+            f".qcsd-docker-config-{os.getuid()}.retiring.v2."
+            f"{_boot_token()}.{_self_start_time()}.short"
+        )
+        mode = 0o700
+        expected_error = "config residue name is malformed"
+    else:
+        residue = lock_parent / _docker_config_quarantine_name("9" * 64)
+        mode = 0o755
+        expected_error = "config residue is not an exact empty directory"
+    residue.mkdir(mode=mode)
+    try:
+        result = _run_guardian(guardian_bundle, "success")
+
+        assert result.returncode != 0, (result.stdout, result.stderr)
+        assert expected_error in result.stderr
+        assert residue.is_dir()
+        assert not (guardian_bundle[3] / "inner-pid").exists()
+    finally:
+        residue.chmod(0o700)
+        residue.rmdir()
+
+
+def test_duplicate_published_and_quarantined_generation_is_rejected(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    lock_parent = guardian_bundle[2]
+    published = lock_parent / _docker_config_name("5" * 64)
+    retiring = lock_parent / _docker_config_quarantine_name("5" * 64)
+    published.mkdir(mode=0o500)
+    retiring.mkdir(mode=0o500)
+    try:
+        result = _run_guardian(guardian_bundle, "success")
+
+        assert result.returncode != 0, (result.stdout, result.stderr)
+        assert "config residue generation is duplicated" in result.stderr
+        assert published.is_dir()
+        assert retiring.is_dir()
+        assert not (guardian_bundle[3] / "inner-pid").exists()
+    finally:
+        published.chmod(0o700)
+        published.rmdir()
+        retiring.chmod(0o700)
+        retiring.rmdir()
+
+
+@pytest.mark.parametrize("removable_state", ["construction", "legacy"])
+@pytest.mark.parametrize("blocking_state", ["malformed", "duplicate", "over-cap"])
+def test_docker_config_scan_failure_does_not_mutate_an_earlier_safe_residue(
+    isolated_guardian_bundle: tuple[Path, Path, Path, Path],
+    removable_state: str,
+    blocking_state: str,
+) -> None:
+    lock_parent = isolated_guardian_bundle[2]
+    prefix = f".qcsd-docker-config-{os.getuid()}."
+    removable_name = (
+        _docker_config_construction_name("0" * 64)
+        if removable_state == "construction"
+        else prefix + "0" * 64
+    )
+    created = [lock_parent / removable_name]
+    created[0].mkdir(mode=0o700)
+
+    if blocking_state == "malformed":
+        created.append(lock_parent / f"{prefix}zz-malformed")
+        created[-1].mkdir(mode=0o700)
+        expected_error = "config residue name is malformed"
+    elif blocking_state == "duplicate":
+        nonce = "d" * 64
+        created.extend(
+            [
+                lock_parent / _docker_config_quarantine_name(nonce),
+                lock_parent / _docker_config_name(nonce),
+            ]
+        )
+        for path in created[-2:]:
+            path.mkdir(mode=0o500)
+        expected_error = "config residue generation is duplicated"
+    else:
+        created.extend(
+            lock_parent / _docker_config_name(f"{index:064x}")
+            for index in range(1, 9)
+        )
+        for path in created[-8:]:
+            path.mkdir(mode=0o500)
+        expected_error = "config residue count exceeds its recovery bound"
+
+    before = _docker_config_namespace_snapshot(lock_parent)
+    try:
+        result = _run_guardian(isolated_guardian_bundle, "success")
+
+        assert result.returncode != 0, (result.stdout, result.stderr)
+        assert expected_error in result.stderr
+        assert _docker_config_namespace_snapshot(lock_parent) == before
+        assert not (isolated_guardian_bundle[3] / "inner-pid").exists()
+        assert not tuple(lock_parent.glob(".qcsd-buildx-*"))
+    finally:
+        for path in reversed(created):
+            if path.exists():
+                path.chmod(0o700)
+                path.rmdir()
+
+
+@pytest.mark.parametrize("residue_count", [8, 9])
+def test_guardian_enforces_and_reserves_recoverable_docker_config_bound(
+    isolated_guardian_bundle: tuple[Path, Path, Path, Path], residue_count: int
+) -> None:
+    module = _load_guardian(isolated_guardian_bundle[0])
+    lock_parent = isolated_guardian_bundle[2]
+    paths = [
+        lock_parent / _docker_config_name(f"{index:064x}")
+        for index in range(1, residue_count + 1)
+    ]
+    for path in paths:
+        path.mkdir(mode=0o500)
+    parent_fd, _ = module._open_lock_parent(lock_parent)
+    config_fd = -1
+    identity = None
+    residues: list[object] = []
+    try:
+        if residue_count == 9:
+            with pytest.raises(
+                module.GuardianError,
+                match="config residue count exceeds its recovery bound",
+            ):
+                module._prepare_private_config(parent_fd, os.getpid())
+            assert all(path.is_dir() for path in paths)
+        else:
+            config_fd, identity, residues = module._prepare_private_config(
+                parent_fd, os.getpid()
+            )
+            assert len(residues) == residue_count - 1
+            assert not paths[0].exists()
+            assert {residue.config.path for residue in residues} == set(paths[1:])
+            namespace = {
+                path
+                for path in lock_parent.iterdir()
+                if path.name.startswith(
+                    f".qcsd-docker-config-{os.getuid()}."
+                )
+            }
+            assert identity is not None
+            assert namespace == {
+                identity.path,
+                *(residue.config.path for residue in residues),
+            }
+            assert len(namespace) == module.MAX_RECOVERABLE_CONFIG_RESIDUES
+            module._verify_private_config_residues(parent_fd, residues)
+    finally:
+        for residue in residues:
+            module._cleanup_private_config(
+                parent_fd,
+                residue.descriptor,
+                residue.config,
+            )
+            os.close(residue.descriptor)
+        if config_fd >= 0 and identity is not None:
+            module._cleanup_private_config(parent_fd, config_fd, identity)
+            os.close(config_fd)
+        for path in paths:
+            if path.exists():
+                path.chmod(0o700)
+                path.rmdir()
+        os.close(parent_fd)
+
+
+def test_successor_recovers_maximum_crash_residue_state(
+    isolated_guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    module = _load_guardian(isolated_guardian_bundle[0])
+    lock_parent = isolated_guardian_bundle[2]
+    paths = [
+        lock_parent / _docker_config_name(f"{index:064x}")
+        for index in range(1, module.MAX_RECOVERABLE_CONFIG_RESIDUES + 1)
+    ]
+    for path in paths:
+        path.mkdir(mode=0o500)
+
+    parent_fd = -1
+    crashed_descriptors: list[int] = []
+    try:
+        parent_fd, _ = module._open_lock_parent(lock_parent)
+        config_fd, current, residues = module._prepare_private_config(
+            parent_fd, os.getpid()
+        )
+        crashed_descriptors = [
+            config_fd,
+            *(residue.descriptor for residue in residues),
+        ]
+        crash_namespace = _docker_config_namespace_snapshot(lock_parent)
+        assert set(crash_namespace) == {
+            current.path.name,
+            *(residue.config.path.name for residue in residues),
+        }
+        assert len(crash_namespace) == module.MAX_RECOVERABLE_CONFIG_RESIDUES
+
+        for descriptor in crashed_descriptors:
+            os.close(descriptor)
+        crashed_descriptors.clear()
+        os.close(parent_fd)
+        parent_fd = -1
+
+        successor = _run_guardian(
+            isolated_guardian_bundle, "success", timeout=20
+        )
+
+        assert successor.returncode == 0, (successor.stdout, successor.stderr)
+        assert _docker_config_namespace_snapshot(lock_parent) == {}
+    finally:
+        for descriptor in crashed_descriptors:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        if parent_fd >= 0:
+            os.close(parent_fd)
+        for path in lock_parent.glob(
+            f".qcsd-docker-config-{os.getuid()}.*"
+        ):
+            path.chmod(0o700)
+            path.rmdir()
+
+
+def test_signal_during_full_capacity_prepublication_drain_aborts_recoverably(
+    isolated_guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    module = _load_guardian(isolated_guardian_bundle[0])
+    lock_parent = isolated_guardian_bundle[2]
+    state = isolated_guardian_bundle[3]
+    roots = [
+        lock_parent / _docker_config_name(f"{index:064x}")
+        for index in range(1, module.MAX_RECOVERABLE_CONFIG_RESIDUES + 1)
+    ]
+    for root in roots:
+        root.mkdir(mode=0o500)
+    before = _docker_config_namespace_snapshot(lock_parent)
+    assert len(before) == module.MAX_RECOVERABLE_CONFIG_RESIDUES
+
+    process = subprocess.Popen(
+        _guardian_command(
+            isolated_guardian_bundle,
+            "success",
+            pause_residue_drain=True,
+        ),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        _wait(state / "residue-drain-entered")
+        assert not (state / "inner-pid").exists()
+        started = time.monotonic()
+        os.kill(process.pid, signal.SIGTERM)
+        (state / "release-residue-drain").touch()
+        stdout, stderr = process.communicate(timeout=4)
+        elapsed = time.monotonic() - started
+
+        assert process.returncode != 0, (stdout, stderr)
+        assert "signal received during Docker config preparation" in stderr
+        assert elapsed < 4
+        assert not (state / "inner-pid").exists()
+        assert _docker_config_namespace_snapshot(lock_parent) == before
+        assert not tuple(lock_parent.glob(".qcsd-buildx-*"))
+        assert _can_lock(_lock_path(isolated_guardian_bundle))
+
+        successor = _run_guardian(
+            isolated_guardian_bundle,
+            "success",
+            timeout=20,
+        )
+        assert successor.returncode == 0, (successor.stdout, successor.stderr)
+        assert _docker_config_namespace_snapshot(lock_parent) == {}
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+        for root in lock_parent.glob(
+            f".qcsd-docker-config-{os.getuid()}.*"
+        ):
+            root.chmod(0o700)
+            root.rmdir()
+
+
+@pytest.mark.parametrize("failed_fsync", ["lock", "parent"])
+def test_lock_creation_fsync_failure_closes_new_descriptor(
+    isolated_guardian_bundle: tuple[Path, Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    failed_fsync: str,
+) -> None:
+    module = _load_guardian(isolated_guardian_bundle[0])
+    lock_parent = isolated_guardian_bundle[2]
+    parent_fd, _ = module._open_lock_parent(lock_parent)
+    created: list[int] = []
+    real_open = module.os.open
+    real_fsync = module.os.fsync
+
+    def record_created_lock(
+        path: object,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+        if flags & module.os.O_CREAT:
+            created.append(descriptor)
+        return descriptor
+
+    def fail_creation_barrier(descriptor: int) -> None:
+        target = created[0] if failed_fsync == "lock" and created else parent_fd
+        if descriptor == target:
+            raise OSError(errno.EIO, "injected lock creation fsync failure")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(module.os, "open", record_created_lock)
+    monkeypatch.setattr(module.os, "fsync", fail_creation_barrier)
+    try:
+        with pytest.raises(module.GuardianError, match="cannot create lifecycle lock"):
+            module._open_lock(parent_fd, lock_parent)
+
+        assert len(created) == 1
+        with pytest.raises(OSError) as closed:
+            os.fstat(created[0])
+        assert closed.value.errno == errno.EBADF
+    finally:
+        for descriptor in created:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        lock_path = lock_parent / f"qcsd-docker-lifecycle-{os.getuid()}.lock"
+        if lock_path.exists():
+            lock_path.unlink()
+        os.close(parent_fd)
+
+
+def test_buildx_root_fstat_failure_closes_new_descriptor(
+    isolated_guardian_bundle: tuple[Path, Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_guardian(isolated_guardian_bundle[0])
+    lock_parent = isolated_guardian_bundle[2]
+    root_name = f".qcsd-buildx-config-{os.getuid()}." + "a" * 64
+    root = lock_parent / root_name
+    root.mkdir(mode=0o700)
+    parent_fd, _ = module._open_lock_parent(lock_parent)
+    opened: list[int] = []
+    real_open = module.os.open
+    real_fstat = module.os.fstat
+
+    def record_buildx_open(
+        path: object,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+        if path == root_name:
+            opened.append(descriptor)
+        return descriptor
+
+    def fail_buildx_fstat(descriptor: int) -> os.stat_result:
+        if opened and descriptor == opened[0]:
+            raise OSError(errno.EIO, "injected Buildx root fstat failure")
+        return real_fstat(descriptor)
+
+    monkeypatch.setattr(module.os, "open", record_buildx_open)
+    monkeypatch.setattr(module.os, "fstat", fail_buildx_fstat)
+    try:
+        with pytest.raises(module.GuardianError, match="cannot bind Buildx config root"):
+            module._open_buildx_root(parent_fd, os.getpid(), root_name)
+
+        assert len(opened) == 1
+        with pytest.raises(OSError) as closed:
+            real_fstat(opened[0])
+        assert closed.value.errno == errno.EBADF
+    finally:
+        for descriptor in opened:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        os.close(parent_fd)
+        root.rmdir()
+
+
+@pytest.mark.parametrize("residue_state", ["published", "retiring"])
+def test_guardian_rejects_mode_0700_published_docker_config_residue(
+    isolated_guardian_bundle: tuple[Path, Path, Path, Path],
+    residue_state: str,
+) -> None:
+    lock_parent = isolated_guardian_bundle[2]
+    name_factory = (
+        _docker_config_name
+        if residue_state == "published"
+        else _docker_config_quarantine_name
+    )
+    residue = lock_parent / name_factory("7" * 64)
+    residue.mkdir(mode=0o700)
+    try:
+        result = _run_guardian(isolated_guardian_bundle, "success")
+
+        assert result.returncode != 0, (result.stdout, result.stderr)
+        assert "config residue is not an exact empty directory" in result.stderr
+        observed = residue.stat(follow_symlinks=False)
+        assert stat.S_IMODE(observed.st_mode) == 0o700
+        assert observed.st_nlink == 2
+        assert not (isolated_guardian_bundle[3] / "inner-pid").exists()
+    finally:
+        if residue.exists():
+            residue.rmdir()
+
+
+@pytest.mark.parametrize(
+    ("interruption", "expected_status"),
+    [("signal", 143), ("child-exit", 125)],
+)
+def test_final_admission_aborts_if_continuation_ends_during_residue_drain(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+    interruption: str,
+    expected_status: int,
+) -> None:
+    residue = guardian_bundle[2] / _docker_config_name("8" * 64)
+    residue.mkdir(mode=0o500)
+    process = subprocess.Popen(
+        _guardian_command(
+            guardian_bundle,
+            "success",
+            pause_residue_drain=True,
+        ),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        _wait(guardian_bundle[3] / "residue-drain-entered")
+        if interruption == "signal":
+            os.kill(process.pid, signal.SIGTERM)
+        else:
+            inner_pid = int(
+                (guardian_bundle[3] / "inner-pid")
+                .read_text(encoding="ascii")
+                .strip()
+            )
+            os.killpg(inner_pid, signal.SIGKILL)
+        (guardian_bundle[3] / "release-residue-drain").touch()
+        stdout, stderr = process.communicate(timeout=8)
+
+        assert process.returncode == expected_status, (stdout, stderr)
+        assert not (guardian_bundle[3] / "grandchild-lock-fds").exists()
+        assert not tuple(guardian_bundle[2].glob(".qcsd-buildx-*"))
+        assert not tuple(
+            guardian_bundle[2].glob(f".qcsd-docker-config-{os.getuid()}.*")
+        )
+        assert _can_lock(_lock_path(guardian_bundle))
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+
+
+def test_guardian_recovers_exact_legacy_construction_residue(
     guardian_bundle: tuple[Path, Path, Path, Path],
 ) -> None:
     lock_parent = guardian_bundle[2]
     residue = lock_parent / (
-        f".qcsd-docker-config-{os.getuid()}." + "a" * 64
+        f".qcsd-docker-config-{os.getuid()}." + "d" * 64
     )
     residue.mkdir(mode=0o700)
 
@@ -1236,17 +3343,1509 @@ def test_guardian_recovers_only_exact_empty_docker_config_residue(
     )
 
 
-def test_anonymous_docker_config_is_exact_read_only_empty_and_unwritable(
+def test_guardian_recovers_exact_transitional_construction_residue(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    lock_parent = guardian_bundle[2]
+    residue = lock_parent / (
+        f".qcsd-docker-config-{os.getuid()}.{_self_start_time()}."
+        + "e" * 64
+    )
+    residue.mkdir(mode=0o700)
+
+    result = _run_guardian(guardian_bundle, "success")
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert not residue.exists()
+    assert not tuple(
+        lock_parent.glob(f".qcsd-docker-config-{os.getuid()}.*")
+    )
+
+
+def test_guardian_defers_published_docker_config_residue_until_users_drain(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    residue = guardian_bundle[2] / _docker_config_name("c" * 64)
+    residue.mkdir(mode=0o500)
+    holder = subprocess.Popen(
+        ["/bin/sleep", "30"],
+        cwd=residue,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    try:
+        result = _run_guardian(guardian_bundle, "success")
+
+        assert result.returncode != 0, (result.stdout, result.stderr)
+        assert "still has a live reference" in result.stderr
+        assert residue.is_dir()
+        # The trusted inner process may enter the recovery-only phase, but it
+        # cannot cross final admission while an unrelated user retains the
+        # old published root.
+        assert (guardian_bundle[3] / "inner-pid").is_file()
+        assert not (guardian_bundle[3] / "grandchild-lock-fds").exists()
+    finally:
+        os.killpg(holder.pid, signal.SIGKILL)
+        holder.wait(timeout=5)
+
+    final = _run_guardian(guardian_bundle, "success")
+    assert final.returncode == 0, (final.stdout, final.stderr)
+    assert not residue.exists()
+
+
+def test_forged_future_docker_config_start_is_rejected_before_census(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    residue = guardian_bundle[2] / _docker_config_name(
+        "f" * 64, start=999999999999999999
+    )
+    residue.mkdir(mode=0o500)
+    holder = subprocess.Popen(
+        ["/bin/sleep", "30"],
+        cwd=residue,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        result = _run_guardian(guardian_bundle, "success")
+        assert result.returncode != 0, (result.stdout, result.stderr)
+        assert "newer than the current guardian" in result.stderr
+        assert residue.is_dir()
+        assert not (guardian_bundle[3] / "inner-pid").exists()
+    finally:
+        holder.kill()
+        holder.wait(timeout=5)
+        residue.chmod(0o700)
+        residue.rmdir()
+
+
+def test_prior_boot_docker_config_does_not_compare_start_ticks_across_boots(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    foreign_boot = "0" * 32 if _boot_token() != "0" * 32 else "1" * 32
+    residue = guardian_bundle[2] / _docker_config_name(
+        "9" * 64,
+        start=999999999999999999,
+        boot_token=foreign_boot,
+    )
+    residue.mkdir(mode=0o500)
+
+    result = _run_guardian(guardian_bundle, "success")
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert not residue.exists()
+    assert not tuple(
+        guardian_bundle[2].glob(f".qcsd-docker-config-{os.getuid()}.*")
+    ), result.stderr
+
+
+def test_docker_config_residue_census_threshold_is_boot_relative(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    module = _load_guardian(guardian_bundle[0])
+    lock_parent = guardian_bundle[2]
+    foreign_boot = "0" * 32 if _boot_token() != "0" * 32 else "1" * 32
+    same_boot_start = 1
+    foreign_start = 999999999999999999
+    same_boot = lock_parent / _docker_config_name(
+        "1" * 64, start=same_boot_start
+    )
+    foreign = lock_parent / _docker_config_name(
+        "2" * 64,
+        start=foreign_start,
+        boot_token=foreign_boot,
+    )
+    same_boot.mkdir(mode=0o500)
+    foreign.mkdir(mode=0o500)
+    parent_fd, _ = module._open_lock_parent(lock_parent)
+    config_fd = -1
+    identity = None
+    residues: list[object] = []
+    try:
+        config_fd, identity, residues = module._prepare_private_config(
+            parent_fd, os.getpid()
+        )
+        by_path = {residue.config.path: residue for residue in residues}
+        assert by_path[same_boot].guardian_start == same_boot_start
+        assert by_path[same_boot].census_start == same_boot_start
+        assert by_path[foreign].guardian_start == foreign_start
+        assert by_path[foreign].census_start == module._process_start_time(
+            os.getpid()
+        )
+    finally:
+        for residue in residues:
+            module._cleanup_private_config(
+                parent_fd,
+                residue.descriptor,
+                residue.config,
+            )
+            os.close(residue.descriptor)
+        if config_fd >= 0 and identity is not None:
+            module._cleanup_private_config(parent_fd, config_fd, identity)
+            os.close(config_fd)
+        os.close(parent_fd)
+
+
+def test_failed_post_publish_preparation_retires_only_new_config(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_guardian(guardian_bundle[0])
+    parent_fd, _ = module._open_lock_parent(guardian_bundle[2])
+    residue = guardian_bundle[2] / _docker_config_name("8" * 64)
+    residue.mkdir(mode=0o500)
+    try:
+        monkeypatch.setattr(
+            module,
+            "_verify_private_config_namespace",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                module.GuardianError("injected namespace failure")
+            ),
+        )
+        with pytest.raises(module.GuardianError, match="injected namespace failure"):
+            module._prepare_private_config(parent_fd, os.getpid())
+
+        assert residue.is_dir()
+        assert tuple(
+            guardian_bundle[2].glob(f".qcsd-docker-config-{os.getuid()}.*")
+        ) == (residue,)
+    finally:
+        residue.chmod(0o700)
+        residue.rmdir()
+        os.close(parent_fd)
+
+
+def test_failed_config_cleanup_rejects_mode_0700_published_root(
+    isolated_guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    module = _load_guardian(isolated_guardian_bundle[0])
+    lock_parent = isolated_guardian_bundle[2]
+    root = lock_parent / _docker_config_name("b" * 64)
+    root.mkdir(mode=0o700)
+    original = root.stat(follow_symlinks=False)
+    parent_fd, _ = module._open_lock_parent(lock_parent)
+    descriptor = os.open(
+        root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    )
+    identity = module.ConfigDirectoryIdentity(
+        path=root,
+        device=original.st_dev,
+        inode=original.st_ino,
+        owner=original.st_uid,
+        mode=stat.S_IMODE(original.st_mode),
+        links=original.st_nlink,
+    )
+    try:
+        with pytest.raises(
+            module.GuardianError,
+            match="failed Docker config construction identity is unsafe",
+        ):
+            module._cleanup_failed_private_config(parent_fd, descriptor, identity)
+
+        observed = root.stat(follow_symlinks=False)
+        assert (
+            observed.st_dev,
+            observed.st_ino,
+            stat.S_IMODE(observed.st_mode),
+            observed.st_nlink,
+        ) == (original.st_dev, original.st_ino, 0o700, 2)
+    finally:
+        os.close(descriptor)
+        os.close(parent_fd)
+        if root.exists():
+            root.rmdir()
+
+
+def test_docker_config_publication_never_replaces_existing_residue(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_guardian(guardian_bundle[0])
+    parent_fd, _ = module._open_lock_parent(guardian_bundle[2])
+    residue = guardian_bundle[2] / _docker_config_name("a" * 64)
+    residue.mkdir(mode=0o500)
+    original = residue.stat(follow_symlinks=False)
+    monkeypatch.setattr(module.os, "urandom", lambda size: b"\xaa" * size)
+    try:
+        with pytest.raises(module.GuardianError, match="promote Docker config root"):
+            module._prepare_private_config(parent_fd, os.getpid())
+
+        observed = residue.stat(follow_symlinks=False)
+        assert (observed.st_dev, observed.st_ino, observed.st_nlink) == (
+            original.st_dev,
+            original.st_ino,
+            2,
+        )
+        assert tuple(
+            guardian_bundle[2].glob(f".qcsd-docker-config-{os.getuid()}.*")
+        ) == (residue,)
+    finally:
+        residue.rmdir()
+        os.close(parent_fd)
+
+
+@pytest.mark.parametrize("reference_kind", ["environment", "descriptor"])
+def test_docker_config_census_detects_non_cwd_references(
+    guardian_bundle: tuple[Path, Path, Path, Path], reference_kind: str
+) -> None:
+    module = _load_guardian(guardian_bundle[0])
+    root = guardian_bundle[2] / "census-root"
+    root.mkdir(mode=0o500)
+    environment = os.environ.copy()
+    inherited = -1
+    pass_fds: tuple[int, ...] = ()
+    if reference_kind == "environment":
+        environment["DOCKER_CONFIG"] = str(root)
+    else:
+        inherited = os.open(
+            root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
+        )
+        pass_fds = (inherited,)
+    process = subprocess.Popen(
+        ["/bin/sleep", "30"],
+        env=environment,
+        pass_fds=pass_fds,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if inherited >= 0:
+        os.close(inherited)
+    try:
+        assert (
+            module._process_references_docker_config(
+                root, _self_start_time()
+            )
+            == process.pid
+        )
+    finally:
+        process.kill()
+        process.wait(timeout=5)
+
+
+def test_docker_config_reference_between_clear_passes_blocks_removal(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_guardian(guardian_bundle[0])
+    observations = iter((None,))
+    monkeypatch.setattr(module, "_verify_private_config", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        module,
+        "_process_references_docker_config",
+        lambda root, threshold, **kwargs: next(observations, 43210),
+    )
+    residue = module.DockerConfigResidue(
+        descriptor=99,
+        config=module.ConfigDirectoryIdentity(
+            path=guardian_bundle[2]
+            / _docker_config_name("e" * 64, start=1),
+            device=1,
+            inode=2,
+            owner=os.getuid(),
+            mode=0o500,
+            links=2,
+        ),
+        boot_token=_boot_token(),
+        guardian_start=1,
+        census_start=1,
+    )
+
+    with pytest.raises(module.GuardianError, match="live reference.*43210"):
+        module._wait_for_private_config_drain(
+            -1, residue, drain_seconds=0.1
+        )
+
+
+def test_quarantine_retains_and_later_retires_a_late_inode_reference(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_guardian(guardian_bundle[0])
+    root = guardian_bundle[2] / _docker_config_name("f" * 64)
+    root.mkdir(mode=0o500)
+    descriptor = os.open(
+        root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    )
+    parent_fd = os.open(
+        guardian_bundle[2],
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+    )
+    value = os.fstat(descriptor)
+    census_start = _self_start_time()
+    residue = module.DockerConfigResidue(
+        descriptor=descriptor,
+        config=module.ConfigDirectoryIdentity(
+            path=root,
+            device=value.st_dev,
+            inode=value.st_ino,
+            owner=os.getuid(),
+            mode=0o500,
+            links=2,
+        ),
+        boot_token=_boot_token(),
+        guardian_start=census_start,
+        census_start=census_start,
+    )
+    rename = module._rename_noreplace
+    holder: subprocess.Popen[bytes] | None = None
+
+    def acquire_immediately_before_quarantine(
+        *args: object, **kwargs: object
+    ) -> None:
+        nonlocal holder
+        if kwargs.get("context") == "Docker config retirement":
+            holder = subprocess.Popen(
+                ["/bin/sleep", "30"],
+                cwd=root,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        rename(*args, **kwargs)
+
+    monkeypatch.setattr(
+        module, "_rename_noreplace", acquire_immediately_before_quarantine
+    )
+    try:
+        with pytest.raises(
+            module.GuardianError,
+            match="still has a live reference",
+        ):
+            module._retire_private_config_residue(
+                parent_fd,
+                residue,
+                deadline=time.monotonic() + 2,
+            )
+        assert holder is not None
+        assert not root.exists()
+        retiring = guardian_bundle[2] / _docker_config_quarantine_name("f" * 64)
+        observed = retiring.stat(follow_symlinks=False)
+        assert (observed.st_dev, observed.st_ino, observed.st_nlink) == (
+            value.st_dev,
+            value.st_ino,
+            2,
+        )
+        assert residue.quarantined
+        assert residue.config.path == retiring
+        assert not residue.removed
+        assert (
+            os.stat(f"/proc/{holder.pid}/cwd").st_dev,
+            os.stat(f"/proc/{holder.pid}/cwd").st_ino,
+        ) == (value.st_dev, value.st_ino)
+        os.killpg(holder.pid, signal.SIGKILL)
+        holder.wait(timeout=5)
+        module._retire_private_config_residue(
+            parent_fd,
+            residue,
+            deadline=time.monotonic() + 2,
+        )
+        assert residue.removed
+        assert not retiring.exists()
+    finally:
+        if holder is not None and holder.poll() is None:
+            os.killpg(holder.pid, signal.SIGKILL)
+            holder.wait(timeout=5)
+        os.close(descriptor)
+        os.close(parent_fd)
+
+
+def test_quarantine_state_survives_parent_fsync_failure(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_guardian(guardian_bundle[0])
+    root = guardian_bundle[2] / _docker_config_name("d" * 64)
+    root.mkdir(mode=0o500)
+    descriptor = os.open(
+        root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    )
+    parent_fd = os.open(
+        guardian_bundle[2],
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+    )
+    value = os.fstat(descriptor)
+    census_start = _self_start_time()
+    residue = module.DockerConfigResidue(
+        descriptor=descriptor,
+        config=module.ConfigDirectoryIdentity(
+            path=root,
+            device=value.st_dev,
+            inode=value.st_ino,
+            owner=value.st_uid,
+            mode=stat.S_IMODE(value.st_mode),
+            links=value.st_nlink,
+        ),
+        boot_token=_boot_token(),
+        guardian_start=census_start,
+        census_start=census_start,
+    )
+    real_fsync = module.os.fsync
+    failed = False
+
+    def fail_first_quarantine_fsync(fd: int) -> None:
+        nonlocal failed
+        if fd == parent_fd and residue.quarantined and not failed:
+            failed = True
+            raise OSError(errno.EIO, "injected quarantine fsync failure")
+        real_fsync(fd)
+
+    monkeypatch.setattr(module.os, "fsync", fail_first_quarantine_fsync)
+    retiring = guardian_bundle[2] / _docker_config_quarantine_name("d" * 64)
+    try:
+        with pytest.raises(
+            module.GuardianError,
+            match="cannot persist quarantined Docker config root",
+        ):
+            module._quarantine_private_config_residue(parent_fd, residue)
+        assert failed
+        assert residue.quarantined
+        assert not residue.removed
+        assert residue.config.path == retiring
+        assert not root.exists()
+        assert retiring.is_dir()
+
+        module._retire_private_config_residue(
+            parent_fd, residue, deadline=time.monotonic() + 2
+        )
+        assert residue.removed
+        assert not retiring.exists()
+    finally:
+        os.close(descriptor)
+        os.close(parent_fd)
+
+
+def test_quarantine_rename_never_replaces_an_existing_destination(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    module = _load_guardian(guardian_bundle[0])
+    nonce = "b" * 64
+    root = guardian_bundle[2] / _docker_config_name(nonce)
+    retiring = guardian_bundle[2] / _docker_config_quarantine_name(nonce)
+    root.mkdir(mode=0o500)
+    retiring.mkdir(mode=0o500)
+    original = root.stat(follow_symlinks=False)
+    collision = retiring.stat(follow_symlinks=False)
+    descriptor = os.open(
+        root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    )
+    parent_fd = os.open(
+        guardian_bundle[2],
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+    )
+    census_start = _self_start_time()
+    residue = module.DockerConfigResidue(
+        descriptor=descriptor,
+        config=module.ConfigDirectoryIdentity(
+            path=root,
+            device=original.st_dev,
+            inode=original.st_ino,
+            owner=original.st_uid,
+            mode=stat.S_IMODE(original.st_mode),
+            links=original.st_nlink,
+        ),
+        boot_token=_boot_token(),
+        guardian_start=census_start,
+        census_start=census_start,
+    )
+    try:
+        with pytest.raises(
+            module.GuardianError, match="cannot promote Docker config retirement"
+        ):
+            module._quarantine_private_config_residue(parent_fd, residue)
+        assert not residue.quarantined
+        assert not residue.removed
+        assert residue.config.path == root
+        assert (root.stat().st_dev, root.stat().st_ino) == (
+            original.st_dev,
+            original.st_ino,
+        )
+        assert (retiring.stat().st_dev, retiring.stat().st_ino) == (
+            collision.st_dev,
+            collision.st_ino,
+        )
+    finally:
+        os.close(descriptor)
+        root.chmod(0o700)
+        root.rmdir()
+        retiring.chmod(0o700)
+        retiring.rmdir()
+        os.close(parent_fd)
+
+
+def test_removed_state_survives_parent_fsync_failure(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_guardian(guardian_bundle[0])
+    root = guardian_bundle[2] / _docker_config_name("e" * 64)
+    root.mkdir(mode=0o500)
+    descriptor = os.open(
+        root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    )
+    parent_fd = os.open(
+        guardian_bundle[2],
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+    )
+    value = os.fstat(descriptor)
+    census_start = _self_start_time()
+    residue = module.DockerConfigResidue(
+        descriptor=descriptor,
+        config=module.ConfigDirectoryIdentity(
+            path=root,
+            device=value.st_dev,
+            inode=value.st_ino,
+            owner=value.st_uid,
+            mode=stat.S_IMODE(value.st_mode),
+            links=value.st_nlink,
+        ),
+        boot_token=_boot_token(),
+        guardian_start=census_start,
+        census_start=census_start,
+    )
+    real_fsync = module.os.fsync
+    failed = False
+
+    def fail_first_removed_fsync(fd: int) -> None:
+        nonlocal failed
+        if fd == parent_fd and residue.removed and not failed:
+            failed = True
+            raise OSError(errno.EIO, "injected removal fsync failure")
+        real_fsync(fd)
+
+    monkeypatch.setattr(module.os, "fsync", fail_first_removed_fsync)
+    retiring = guardian_bundle[2] / _docker_config_quarantine_name("e" * 64)
+    try:
+        with pytest.raises(
+            module.GuardianError, match="cannot remove exact Docker config root"
+        ):
+            module._retire_private_config_residue(
+                parent_fd, residue, deadline=time.monotonic() + 2
+            )
+        assert failed
+        assert residue.quarantined
+        assert residue.removed
+        assert not root.exists()
+        assert not retiring.exists()
+
+        module._retire_private_config_residue(
+            parent_fd, residue, deadline=time.monotonic() + 2
+        )
+        assert residue.removed
+    finally:
+        os.close(descriptor)
+        os.close(parent_fd)
+
+
+def test_docker_config_drain_aborts_before_cleanup_on_signal(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_guardian(guardian_bundle[0])
+    root = guardian_bundle[2] / _docker_config_name("7" * 64)
+    root.mkdir(mode=0o500)
+    descriptor = os.open(
+        root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    )
+    parent_fd = os.open(
+        guardian_bundle[2],
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+    )
+    value = os.fstat(descriptor)
+    residue = module.DockerConfigResidue(
+        descriptor=descriptor,
+        config=module.ConfigDirectoryIdentity(
+            path=root,
+            device=value.st_dev,
+            inode=value.st_ino,
+            owner=value.st_uid,
+            mode=stat.S_IMODE(value.st_mode),
+            links=value.st_nlink,
+        ),
+        boot_token=_boot_token(),
+        guardian_start=_self_start_time(),
+        census_start=_self_start_time(),
+    )
+    latch = module._SignalLatch()
+    cleanup_calls: list[bool] = []
+
+    def census(*args: object, **kwargs: object) -> None:
+        latch.handler(signal.SIGTERM, None)
+        return None
+
+    def continuation() -> None:
+        if latch.first is not None:
+            raise module.GuardianError(
+                "signal received before final lifecycle admission"
+            )
+
+    monkeypatch.setattr(module, "_process_references_docker_config", census)
+    monkeypatch.setattr(
+        module,
+        "_cleanup_private_config",
+        lambda *args, **kwargs: cleanup_calls.append(True),
+    )
+    try:
+        with pytest.raises(module.GuardianError, match="signal received"):
+            module._retire_private_config_residue(
+                parent_fd,
+                residue,
+                deadline=time.monotonic() + 1,
+                continuation_check=continuation,
+            )
+        observed = root.stat(follow_symlinks=False)
+        assert (observed.st_dev, observed.st_ino, observed.st_nlink) == (
+            value.st_dev,
+            value.st_ino,
+            2,
+        )
+        assert cleanup_calls == []
+    finally:
+        os.close(parent_fd)
+        os.close(descriptor)
+        root.chmod(0o700)
+        root.rmdir()
+
+
+def test_docker_config_second_clear_pass_cannot_cross_deadline(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_guardian(guardian_bundle[0])
+    times = iter((0.0, 0.1, 0.2, 1.1))
+    observations: list[bool] = []
+    monkeypatch.setattr(module, "_verify_private_config", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module.time, "monotonic", lambda: next(times))
+    monkeypatch.setattr(module.time, "sleep", lambda value: None)
+    monkeypatch.setattr(
+        module,
+        "_process_references_docker_config",
+        lambda *args, **kwargs: observations.append(True),
+    )
+    residue = module.DockerConfigResidue(
+        descriptor=99,
+        config=module.ConfigDirectoryIdentity(
+            path=guardian_bundle[2] / _docker_config_name("6" * 64, start=1),
+            device=1,
+            inode=2,
+            owner=os.getuid(),
+            mode=0o500,
+            links=2,
+        ),
+        boot_token=_boot_token(),
+        guardian_start=1,
+        census_start=1,
+    )
+
+    with pytest.raises(module.GuardianError, match="stable clear censuses"):
+        module._wait_for_private_config_drain(-1, residue, deadline=1.0)
+    assert observations == [True, True]
+
+
+def test_new_reserved_docker_root_during_recovery_blocks_final_admission(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    process = subprocess.Popen(
+        _guardian_command(guardian_bundle, "recovery-wait"),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    injected = guardian_bundle[2] / _docker_config_name("1" * 64)
+    try:
+        _wait(guardian_bundle[3] / "recovery-phase")
+        injected.mkdir(mode=0o700)
+        (guardian_bundle[3] / "release-recovery").touch()
+        stdout, stderr = process.communicate(timeout=8)
+        assert process.returncode != 0, (stdout, stderr)
+        assert "reserved Docker config namespace changed" in stderr
+        assert not (guardian_bundle[3] / "post-final-mutation").exists()
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+        if injected.is_dir():
+            injected.rmdir()
+
+
+def test_published_residue_replacement_during_recovery_blocks_final_admission(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    residue = guardian_bundle[2] / _docker_config_name("5" * 64)
+    residue.mkdir(mode=0o500)
+    replacement = guardian_bundle[3] / "replacement-config"
+    replacement.mkdir(mode=0o700)
+    process = subprocess.Popen(
+        _guardian_command(guardian_bundle, "recovery-wait"),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        _wait(guardian_bundle[3] / "recovery-phase")
+        residue.chmod(0o700)
+        residue.rmdir()
+        residue.symlink_to(replacement, target_is_directory=True)
+        (guardian_bundle[3] / "release-recovery").touch()
+        stdout, stderr = process.communicate(timeout=8)
+
+        assert process.returncode == 125, (stdout, stderr)
+        assert "private config identity changed" in stderr
+        assert residue.is_symlink()
+        assert not (guardian_bundle[3] / "post-final-mutation").exists()
+        assert tuple(
+            guardian_bundle[2].glob(f".qcsd-docker-config-{os.getuid()}.*")
+        ) == (residue,)
+        assert _can_lock(_lock_path(guardian_bundle))
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+        residue.unlink(missing_ok=True)
+        replacement.rmdir()
+
+    successor = _run_guardian(guardian_bundle, "success")
+    assert successor.returncode == 0, (successor.stdout, successor.stderr)
+
+
+def test_published_residue_becoming_nonempty_during_recovery_is_retained(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    residue = guardian_bundle[2] / _docker_config_name("5" * 64)
+    residue.mkdir(mode=0o500)
+    original = residue.stat(follow_symlinks=False)
+    process = subprocess.Popen(
+        _guardian_command(guardian_bundle, "recovery-wait"),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    foreign = residue / "foreign"
+    try:
+        _wait(guardian_bundle[3] / "recovery-phase")
+        residue.chmod(0o700)
+        foreign.write_text("unexpected\n", encoding="ascii")
+        residue.chmod(0o500)
+        (guardian_bundle[3] / "release-recovery").touch()
+        stdout, stderr = process.communicate(timeout=8)
+
+        assert process.returncode == 125, (stdout, stderr)
+        assert "config root is not empty" in stderr
+        assert not (guardian_bundle[3] / "post-final-mutation").exists()
+        observed = residue.stat(follow_symlinks=False)
+        assert (observed.st_dev, observed.st_ino, observed.st_nlink) == (
+            original.st_dev,
+            original.st_ino,
+            2,
+        )
+        blocked = _run_guardian(guardian_bundle, "success")
+        assert blocked.returncode == 125, (blocked.stdout, blocked.stderr)
+        assert residue.is_dir()
+        assert not (guardian_bundle[3] / "grandchild-lock-fds").exists()
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+        residue.chmod(0o700)
+        if foreign.exists():
+            foreign.unlink()
+        residue.chmod(0o500)
+
+    successor = _run_guardian(guardian_bundle, "success")
+    assert successor.returncode == 0, (successor.stdout, successor.stderr)
+    assert not residue.exists()
+
+
+def test_reserved_root_added_after_final_admission_is_terminal_failure(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    process = subprocess.Popen(
+        _guardian_command(guardian_bundle, "wait"),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    injected = guardian_bundle[2] / _docker_config_name("4" * 64)
+    try:
+        _wait(guardian_bundle[3] / "ready")
+        injected.mkdir(mode=0o700)
+        (guardian_bundle[3] / "release").touch()
+        stdout, stderr = process.communicate(timeout=8)
+
+        assert process.returncode == 125, (stdout, stderr)
+        assert "reserved Docker config namespace changed" in stderr
+        assert injected.is_dir()
+        assert tuple(
+            guardian_bundle[2].glob(f".qcsd-docker-config-{os.getuid()}.*")
+        ) == (injected,)
+        assert _can_lock(_lock_path(guardian_bundle))
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+        if injected.is_dir():
+            injected.rmdir()
+
+    successor = _run_guardian(guardian_bundle, "success")
+    assert successor.returncode == 0, (successor.stdout, successor.stderr)
+
+
+@pytest.mark.parametrize("action", ["close-initial-go", "close-final-go"])
+def test_closed_admission_reader_fails_cleanly(
+    guardian_bundle: tuple[Path, Path, Path, Path], action: str
+) -> None:
+    result = _run_guardian(guardian_bundle, action)
+
+    assert result.returncode == 125, (result.stdout, result.stderr)
+    assert "Traceback" not in result.stderr
+    assert not tuple(
+        guardian_bundle[2].glob(f".qcsd-docker-config-{os.getuid()}.*")
+    )
+    assert not tuple(guardian_bundle[2].glob(".qcsd-buildx-*"))
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        "initial-frame-wrong",
+        "initial-frame-short",
+        "initial-frame-long",
+        "initial-frame-unterminated",
+        "initial-frame-extra",
+        "recovery-frame-wrong",
+        "recovery-frame-short",
+        "recovery-frame-long",
+        "recovery-frame-unterminated",
+        "recovery-frame-extra",
+    ],
+)
+def test_malformed_guardian_handshake_frame_fails_cleanly(
+    guardian_bundle: tuple[Path, Path, Path, Path], action: str
+) -> None:
+    result = _run_guardian(guardian_bundle, action)
+
+    assert result.returncode == 125, (result.stdout, result.stderr)
+    assert "Traceback" not in result.stderr
+    assert not tuple(
+        guardian_bundle[2].glob(f".qcsd-docker-config-{os.getuid()}.*")
+    )
+    assert not tuple(guardian_bundle[2].glob(".qcsd-buildx-*"))
+    assert _can_lock(_lock_path(guardian_bundle))
+
+
+@pytest.mark.parametrize(
+    ("channel", "diagnostic"),
+    [
+        ("initial", "cannot read the lifecycle readiness channel"),
+        ("recovery", "cannot read the lifecycle recovery channel"),
+    ],
+)
+def test_guardian_channel_read_oserror_fails_cleanly(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+    channel: str,
+    diagnostic: str,
+) -> None:
+    result = subprocess.run(
+        _guardian_command(
+            guardian_bundle,
+            "success",
+            read_failure=channel,
+        ),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 125, (result.stdout, result.stderr)
+    assert diagnostic in result.stderr
+    assert "Traceback" not in result.stderr
+    assert not tuple(guardian_bundle[2].glob(".qcsd-buildx-*"))
+    assert not tuple(
+        guardian_bundle[2].glob(f".qcsd-docker-config-{os.getuid()}.*")
+    )
+    assert _can_lock(_lock_path(guardian_bundle))
+
+
+def test_child_cannot_return_success_before_final_admission(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    result = _run_guardian(guardian_bundle, "exit-before-final")
+
+    assert result.returncode == 125, (result.stdout, result.stderr)
+    assert not tuple(
+        guardian_bundle[2].glob(f".qcsd-docker-config-{os.getuid()}.*")
+    )
+
+
+def test_recovery_timeout_denies_final_admission_and_cleans_current_state(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    started = time.monotonic()
+    result = subprocess.run(
+        _guardian_command(
+            guardian_bundle,
+            "recovery-wait",
+            recovery_timeout=0.1,
+        ),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+        timeout=5,
+    )
+    elapsed = time.monotonic() - started
+
+    assert result.returncode == 125, (result.stdout, result.stderr)
+    assert elapsed < 3
+    assert not (guardian_bundle[3] / "post-final-mutation").exists()
+    assert not tuple(guardian_bundle[2].glob(".qcsd-buildx-*"))
+    assert not tuple(
+        guardian_bundle[2].glob(f".qcsd-docker-config-{os.getuid()}.*")
+    )
+    assert _can_lock(_lock_path(guardian_bundle))
+
+
+def test_recovery_idle_timeout_denies_final_admission_and_cleans_current_state(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    started = time.monotonic()
+    result = subprocess.run(
+        _guardian_command(
+            guardian_bundle,
+            "recovery-wait",
+            recovery_timeout=5,
+            recovery_idle_timeout=0.1,
+        ),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+        timeout=5,
+    )
+    elapsed = time.monotonic() - started
+
+    assert result.returncode == 125, (result.stdout, result.stderr)
+    assert elapsed < 3
+    assert not (guardian_bundle[3] / "post-final-mutation").exists()
+    assert not tuple(guardian_bundle[2].glob(".qcsd-buildx-*"))
+    assert not tuple(
+        guardian_bundle[2].glob(f".qcsd-docker-config-{os.getuid()}.*")
+    )
+    assert _can_lock(_lock_path(guardian_bundle))
+
+
+class _DeadlineClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, duration: float) -> None:
+        self.now += duration
+        if self.now > 2.0:
+            raise AssertionError("guardian deadline model did not terminate")
+
+
+def _run_isolated_recovery_deadline_model(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    lease_events: list[tuple[float, str, float]],
+    recovery_at: float | None,
+    recovery_timeout: float,
+    recovery_idle_timeout: float,
+) -> tuple[
+    int,
+    list[tuple[str, bool, bool]],
+    list[tuple[float, float, str, float | None]],
+    float,
+]:
+    """Drive the recovery state machine without a process or public socket."""
+
+    module = _load_guardian(GUARDIAN)
+    clock = _DeadlineClock()
+    ready_fd = 101
+    recovery_fd = 102
+    ready_chunks = [b"a" * 64 + b"\n", b""]
+    recovery_stage = 0
+    pending_events = list(lease_events)
+    decisions: list[tuple[str, bool, bool]] = []
+    served: list[tuple[float, float, str, float | None]] = []
+    killed = False
+
+    def read_channel(descriptor: int, _size: int) -> bytes:
+        nonlocal recovery_stage
+        if descriptor == ready_fd:
+            return ready_chunks.pop(0)
+        assert descriptor == recovery_fd
+        if recovery_at is None or clock.now + 1e-9 < recovery_at:
+            raise BlockingIOError
+        if recovery_stage == 0:
+            recovery_stage = 1
+            return b"c" * 64 + b"\n"
+        recovery_stage = 2
+        return b""
+
+    def serve_lease(*_args: object, **kwargs: object) -> str:
+        if not pending_events or clock.now + 1e-9 < pending_events[0][0]:
+            return "none"
+        _scheduled, outcome, duration = pending_events.pop(0)
+        started = clock.now
+        clock.now += duration
+        served.append((started, clock.now, outcome, kwargs.get("deadline")))
+        return outcome
+
+    def publish_decision(
+        _descriptor: int,
+        nonce: str,
+        _latch: object,
+        _child: object,
+        forwarded: bool,
+        *,
+        ready: bool,
+        failed: bool,
+    ) -> tuple[bool, bool, bool, bool]:
+        decisions.append((nonce, ready, failed))
+        return ready and not failed, failed, forwarded, True
+
+    def kill_child(*_args: object, **_kwargs: object) -> None:
+        nonlocal killed
+        killed = True
+
+    monkeypatch.setattr(
+        module,
+        "os",
+        SimpleNamespace(
+            close=lambda _descriptor: None,
+            getpid=os.getpid,
+            read=read_channel,
+            set_blocking=lambda _descriptor, _blocking: None,
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "time",
+        SimpleNamespace(monotonic=clock.monotonic, sleep=clock.sleep),
+    )
+    monkeypatch.setattr(module, "RECOVERY_TIMEOUT_SECONDS", recovery_timeout)
+    monkeypatch.setattr(
+        module, "RECOVERY_IDLE_TIMEOUT_SECONDS", recovery_idle_timeout
+    )
+    monkeypatch.setattr(module, "INTEGRITY_CHECK_SECONDS", 10.0)
+    monkeypatch.setattr(module, "_serve_one_lease", serve_lease)
+    monkeypatch.setattr(module, "_publish_admission_decision", publish_decision)
+    monkeypatch.setattr(module, "_kill_child_group", kill_child)
+    monkeypatch.setattr(
+        module,
+        "_observe_child_exit",
+        lambda _child: killed or len(decisions) >= 2,
+    )
+    monkeypatch.setattr(module, "_reap_drained_child", lambda _child: 0)
+    monkeypatch.setattr(module, "_verify_inner_process", lambda _child: True)
+    for verifier in (
+        "_verify_buildx_config",
+        "_verify_lock_identity",
+        "_verify_private_config",
+        "_verify_private_config_namespace",
+        "_verify_private_config_residues",
+        "_verify_guardian_lock",
+        "_verify_runtime_environment",
+        "_verify_source_identity",
+    ):
+        monkeypatch.setattr(module, verifier, lambda *_args, **_kwargs: None)
+
+    result = module._wait_for_child(
+        child=module.ChildIdentity(424242, 1, 424242, 424242, ("qcsd",)),
+        ready_read=ready_fd,
+        nonce="a" * 64,
+        go_write=103,
+        go_nonce="b" * 64,
+        recovery_read=recovery_fd,
+        recovery_nonce="c" * 64,
+        final_go_write=104,
+        final_go_nonce="d" * 64,
+        lease_listener=object(),
+        lease_socket="@isolated-deadline-model",
+        lease_nonce="e" * 64,
+        latch=module._SignalLatch(),
+        parent_fd=-1,
+        lock_fd=-1,
+        lock_identity=None,
+        source_fd=-1,
+        source_identity=None,
+        qcsd_fd=-1,
+        qcsd_identity=None,
+        helper_fd=-1,
+        helper_identity=None,
+        native_fd=-1,
+        native_identity=None,
+        docker_config_fd=-1,
+        docker_config_identity=None,
+        docker_config_residues=[],
+        buildx_config_fd=-1,
+        buildx_config_identity=None,
+        runtime_identity=None,
+    )
+    return result, decisions, served, clock.now
+
+
+@pytest.mark.parametrize(
+    (
+        "case",
+        "lease_events",
+        "expected_status",
+        "expected_decisions",
+    ),
+    [
+        ("timely-admitted", [(0.05, "admitted", 0.0)], 0, 2),
+        ("timely-rejected", [(0.05, "rejected", 0.0)], 125, 1),
+        ("late-admitted", [(0.09, "admitted", 0.03)], 125, 1),
+    ],
+)
+def test_recovery_idle_refresh_requires_a_timely_admitted_lease(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    case: str,
+    lease_events: list[tuple[float, str, float]],
+    expected_status: int,
+    expected_decisions: int,
+) -> None:
+    result, decisions, served, _finished = _run_isolated_recovery_deadline_model(
+        monkeypatch,
+        lease_events=lease_events,
+        recovery_at=0.12,
+        recovery_timeout=0.5,
+        recovery_idle_timeout=0.1,
+    )
+    error = capsys.readouterr().err
+
+    assert result == expected_status
+    assert len(decisions) == expected_decisions
+    assert [event[2] for event in served] == [lease_events[0][1]]
+    service_deadline = served[0][3]
+    assert service_deadline is not None
+    if case == "timely-admitted":
+        assert error == ""
+        assert served[0][1] < service_deadline
+    else:
+        assert "lifecycle recovery made no bounded progress" in error
+    if case == "late-admitted":
+        assert served[0][0] < service_deadline <= served[0][1]
+
+
+def test_authenticated_progress_cannot_extend_absolute_recovery_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    result, decisions, served, finished = _run_isolated_recovery_deadline_model(
+        monkeypatch,
+        lease_events=[
+            (0.04, "admitted", 0.0),
+            (0.08, "admitted", 0.0),
+            (0.12, "admitted", 0.0),
+        ],
+        recovery_at=None,
+        recovery_timeout=0.15,
+        recovery_idle_timeout=0.05,
+    )
+    error = capsys.readouterr().err
+
+    assert result == 125
+    assert len(decisions) == 1
+    assert [event[2] for event in served] == ["admitted"] * 3
+    assert 0.15 <= finished < 0.20
+    assert "lifecycle recovery exceeded its deadline" in error
+
+
+def test_buildx_cleanup_failure_preserves_stale_and_current_docker_roots(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    lock_parent = guardian_bundle[2]
+    stale = lock_parent / _docker_config_name("4" * 64)
+    stale.mkdir(mode=0o500)
+    stale_value = stale.stat(follow_symlinks=False)
+
+    result = subprocess.run(
+        _guardian_command(
+            guardian_bundle,
+            "exit-before-final",
+            fail_buildx_cleanup=True,
+        ),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 125, (result.stdout, result.stderr)
+    assert "injected Buildx cleanup failure" in result.stderr
+    roots = tuple(
+        lock_parent.glob(f".qcsd-docker-config-{os.getuid()}.*")
+    )
+    assert len(roots) == 2
+    identities = {
+        (value.st_dev, value.st_ino, value.st_nlink)
+        for root in roots
+        for value in (root.stat(follow_symlinks=False),)
+    }
+    assert (stale_value.st_dev, stale_value.st_ino, 2) in identities
+    assert all(links == 2 for _, _, links in identities)
+
+    successor = _run_guardian(guardian_bundle, "success", timeout=20)
+    assert successor.returncode == 0, (successor.stdout, successor.stderr)
+    assert not tuple(
+        lock_parent.glob(f".qcsd-docker-config-{os.getuid()}.*")
+    )
+    assert not tuple(lock_parent.glob(".qcsd-buildx-*"))
+
+
+@pytest.mark.parametrize(
+    ("failure", "retained_construction"),
+    [
+        ("pre-open", True),
+        ("rename", False),
+        ("post-rename-fsync", False),
+    ],
+)
+def test_docker_config_preparation_oserror_is_typed_and_recoverable(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+    failure: str,
+    retained_construction: bool,
+) -> None:
+    result = subprocess.run(
+        _guardian_command(
+            guardian_bundle,
+            "success",
+            prepare_failure=failure,
+        ),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 125, (result.stdout, result.stderr)
+    assert "cannot prepare exact Docker config" in result.stderr
+    assert "Traceback" not in result.stderr
+    roots = tuple(
+        guardian_bundle[2].glob(f".qcsd-docker-config-{os.getuid()}.*")
+    )
+    assert bool(roots) is retained_construction
+    if retained_construction:
+        assert len(roots) == 1
+        assert ".construct.v2." in roots[0].name
+        assert stat.S_IMODE(roots[0].stat(follow_symlinks=False).st_mode) == 0o700
+
+    successor = _run_guardian(guardian_bundle, "success", timeout=20)
+    assert successor.returncode == 0, (successor.stdout, successor.stderr)
+    assert not tuple(
+        guardian_bundle[2].glob(f".qcsd-docker-config-{os.getuid()}.*")
+    )
+
+
+def test_listener_close_failure_is_typed_after_safe_cleanup(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    result = subprocess.run(
+        _guardian_command(
+            guardian_bundle,
+            "success",
+            fail_listener_close=True,
+        ),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 125, (result.stdout, result.stderr)
+    assert "cannot close lifecycle lease listener" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert not tuple(guardian_bundle[2].glob(".qcsd-buildx-*"))
+    assert not tuple(
+        guardian_bundle[2].glob(f".qcsd-docker-config-{os.getuid()}.*")
+    )
+    assert _can_lock(_lock_path(guardian_bundle))
+
+
+@pytest.mark.parametrize(
+    ("failure", "retained_path"),
+    [
+        ("current-rmdir", True),
+        ("current-fsync-recreate", True),
+        ("current-close", False),
+    ],
+)
+def test_current_docker_config_cleanup_fault_is_typed_and_recoverable(
+    isolated_guardian_bundle: tuple[Path, Path, Path, Path],
+    failure: str,
+    retained_path: bool,
+) -> None:
+    guardian_bundle = isolated_guardian_bundle
+    result = subprocess.run(
+        _guardian_command(
+            guardian_bundle,
+            "success",
+            cleanup_failure=failure,
+        ),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 125, (result.stdout, result.stderr)
+    assert "terminal cleanup incomplete" in result.stderr
+    assert "Traceback" not in result.stderr
+    roots = tuple(
+        guardian_bundle[2].glob(f".qcsd-docker-config-{os.getuid()}.*")
+    )
+    assert bool(roots) is retained_path
+    if failure == "current-rmdir":
+        assert stat.S_IMODE(roots[0].stat(follow_symlinks=False).st_mode) == 0o500
+    elif failure == "current-fsync-recreate":
+        expected = (guardian_bundle[3] / "docker-config-expected").read_text(
+            encoding="ascii"
+        ).strip()
+        observed = roots[0].stat(follow_symlinks=False)
+        assert f"{observed.st_dev}:{observed.st_ino}" != expected
+        assert stat.S_IMODE(observed.st_mode) == 0o700
+    assert _can_lock(_lock_path(guardian_bundle))
+
+    successor = _run_guardian(guardian_bundle, "success", timeout=20)
+    if failure == "current-fsync-recreate":
+        assert successor.returncode != 0, (
+            successor.stdout,
+            successor.stderr,
+        )
+        assert (
+            "config residue is not an exact empty directory"
+            in successor.stderr
+        )
+        assert roots[0].is_dir()
+        roots[0].rmdir()
+    else:
+        assert successor.returncode == 0, (
+            successor.stdout,
+            successor.stderr,
+        )
+    assert not tuple(
+        guardian_bundle[2].glob(f".qcsd-docker-config-{os.getuid()}.*")
+    )
+
+
+def test_multiple_residue_cleanup_failure_preserves_only_failed_identity(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    lock_parent = guardian_bundle[2]
+    first = lock_parent / _docker_config_name("1" * 64)
+    second = lock_parent / _docker_config_name("2" * 64)
+    first.mkdir(mode=0o500)
+    second.mkdir(mode=0o500)
+    second_value = second.stat(follow_symlinks=False)
+    second_retiring = lock_parent / _docker_config_quarantine_name("2" * 64)
+
+    result = subprocess.run(
+        _guardian_command(
+            guardian_bundle,
+            "success",
+            cleanup_failure="second-residue",
+        ),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 125, (result.stdout, result.stderr)
+    assert "injected second residue cleanup failure" in result.stderr
+    assert not first.exists()
+    assert not second.exists()
+    observed = second_retiring.stat(follow_symlinks=False)
+    assert (observed.st_dev, observed.st_ino, observed.st_nlink) == (
+        second_value.st_dev,
+        second_value.st_ino,
+        2,
+    )
+    roots = tuple(lock_parent.glob(f".qcsd-docker-config-{os.getuid()}.*"))
+    assert roots == (second_retiring,)
+    assert "Traceback" not in result.stderr
+
+    successor = _run_guardian(guardian_bundle, "success", timeout=20)
+    assert successor.returncode == 0, (successor.stdout, successor.stderr)
+    assert not tuple(
+        lock_parent.glob(f".qcsd-docker-config-{os.getuid()}.*")
+    )
+
+
+def test_cleanup_failure_takes_precedence_over_cleanup_signal(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    result = subprocess.run(
+        _guardian_command(
+            guardian_bundle,
+            "success",
+            signal_during_cleanup=True,
+            cleanup_failure="current-close",
+        ),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 125, (result.stdout, result.stderr)
+    assert "terminal cleanup incomplete" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert not tuple(guardian_bundle[2].glob(".qcsd-buildx-*"))
+    assert not tuple(
+        guardian_bundle[2].glob(f".qcsd-docker-config-{os.getuid()}.*")
+    ), result.stderr
+    assert _can_lock(_lock_path(guardian_bundle))
+
+
+def test_linked_docker_config_is_exact_read_only_empty_and_unwritable(
     guardian_bundle: tuple[Path, Path, Path, Path],
 ) -> None:
     module = _load_guardian(guardian_bundle[0])
     native = _load_native(guardian_bundle[0].parent / NATIVE.name)
     parent_fd, _ = module._open_lock_parent(guardian_bundle[2])
     config_fd = -1
+    identity = None
     try:
-        config_fd, identity = module._prepare_private_config(
+        config_fd, identity, residues = module._prepare_private_config(
             parent_fd, os.getpid()
         )
+        assert residues == []
         value = os.fstat(config_fd)
         assert (
             value.st_dev,
@@ -1259,14 +4858,25 @@ def test_anonymous_docker_config_is_exact_read_only_empty_and_unwritable(
             identity.inode,
             os.getuid(),
             module.DOCKER_CONFIG_MODE,
-            0,
+            2,
         )
-        assert identity.path == Path(f"/proc/{os.getpid()}/fd/{config_fd}")
+        assert identity.path.parent == guardian_bundle[2]
+        matched = re.fullmatch(
+            rf"[.]qcsd-docker-config-{os.getuid()}[.]v2[.]"
+            rf"([0-9a-f]{{32}})[.]([1-9][0-9]*)[.][0-9a-f]{{64}}",
+            identity.path.name,
+        )
+        assert matched is not None
+        assert matched.group(1) == _boot_token()
+        assert int(matched.group(2)) == _self_start_time()
+        assert identity.path.is_dir()
         assert os.listdir(config_fd) == []
         assert native._exact_configuration_descriptor(
             config_fd,
             expected_mode=native.DOCKER_CONFIG_MODE,
-            expected_links=0,
+            expected_links=2,
+            exact_links=True,
+            require_empty=True,
         )
 
         with pytest.raises(OSError) as failure:
@@ -1276,7 +4886,7 @@ def test_anonymous_docker_config_is_exact_read_only_empty_and_unwritable(
                 0o600,
                 dir_fd=config_fd,
             )
-        assert failure.value.errno in {errno.EACCES, errno.ENOENT, errno.EROFS}
+        assert failure.value.errno in {errno.EACCES, errno.EROFS}
         assert os.listdir(config_fd) == []
 
         os.fchmod(config_fd, 0o700)
@@ -1288,17 +4898,38 @@ def test_anonymous_docker_config_is_exact_read_only_empty_and_unwritable(
             mode=0o700,
             links=identity.links,
         )
-        with pytest.raises(module.GuardianError, match="not read-only"):
+        with pytest.raises(module.GuardianError, match="not linked"):
             module._verify_private_config(
-                config_fd, writable, require_empty=True
+                parent_fd, config_fd, writable, require_empty=True
             )
         assert not native._exact_configuration_descriptor(
             config_fd,
             expected_mode=native.DOCKER_CONFIG_MODE,
-            expected_links=0,
+            expected_links=2,
+            exact_links=True,
+            require_empty=True,
         )
+        child_fd = os.open(
+            "foreign",
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
+            0o600,
+            dir_fd=config_fd,
+        )
+        os.close(child_fd)
+        os.fchmod(config_fd, module.DOCKER_CONFIG_MODE)
+        assert not native._exact_configuration_descriptor(
+            config_fd,
+            expected_mode=native.DOCKER_CONFIG_MODE,
+            expected_links=2,
+            exact_links=True,
+            require_empty=True,
+        )
+        os.fchmod(config_fd, 0o700)
+        os.unlink("foreign", dir_fd=config_fd)
     finally:
-        if config_fd >= 0:
+        if config_fd >= 0 and identity is not None:
+            os.fchmod(config_fd, module.DOCKER_CONFIG_MODE)
+            module._cleanup_private_config(parent_fd, config_fd, identity)
             os.close(config_fd)
         os.close(parent_fd)
 
@@ -1345,15 +4976,38 @@ def test_guardian_rejects_dac_override_in_every_acquirable_capability_set(
         module._require_unprivileged_identity()
 
 
-@pytest.mark.parametrize("case", ["malformed-name", "nonempty"])
+@pytest.mark.parametrize(
+    "case",
+    [
+        "malformed-name",
+        "nonempty",
+        "construction-malformed",
+        "construction-nonempty",
+        "legacy-published",
+        "transitional-published",
+    ],
+)
 def test_guardian_fails_closed_on_unsafe_docker_config_residue(
     guardian_bundle: tuple[Path, Path, Path, Path], case: str
 ) -> None:
     lock_parent = guardian_bundle[2]
-    suffix = "not-a-token" if case == "malformed-name" else "b" * 64
+    if case == "malformed-name":
+        suffix = "not-a-token"
+    elif case == "construction-malformed":
+        suffix = f"construct.v2.{_boot_token()}.{_self_start_time()}.short"
+    elif case == "construction-nonempty":
+        suffix = _docker_config_construction_name("6" * 64).removeprefix(
+            f".qcsd-docker-config-{os.getuid()}."
+        )
+    elif case == "legacy-published":
+        suffix = "b" * 64
+    elif case == "transitional-published":
+        suffix = f"{_self_start_time()}.{'c' * 64}"
+    else:
+        suffix = f"{_self_start_time()}.{'b' * 64}"
     residue = lock_parent / f".qcsd-docker-config-{os.getuid()}.{suffix}"
-    residue.mkdir(mode=0o700)
-    if case == "nonempty":
+    residue.mkdir(mode=0o500 if case.endswith("published") else 0o700)
+    if case in {"nonempty", "construction-nonempty"}:
         (residue / "foreign").write_text("foreign\n", encoding="ascii")
 
     result = _run_guardian(guardian_bundle, "success")
@@ -1451,10 +5105,14 @@ def test_real_buildx_pinned_metadata_keeps_guardian_docker_config_empty(
     identity = (guardian_bundle[3] / "buildx-docker-config-identity").read_text(
         encoding="ascii"
     )
-    assert identity.strip().endswith(f":{os.getuid()}:500:0:directory")
+    assert identity.strip().endswith(f":{os.getuid()}:500:2:directory")
     assert (guardian_bundle[3] / "buildx-docker-config-children").read_text(
         encoding="ascii"
     ) == ""
+    _assert_retired_linked_docker_path(
+        guardian_bundle[3] / "buildx-docker-config-path",
+        guardian_bundle[2],
+    )
     buildx_identity = (guardian_bundle[3] / "buildx-config-identity").read_text(
         encoding="ascii"
     ).strip().split(":")
@@ -1464,6 +5122,35 @@ def test_real_buildx_pinned_metadata_keeps_guardian_docker_config_empty(
     assert (guardian_bundle[3] / "buildx-config-children").read_text(
         encoding="utf-8"
     ).strip()
+    assert not tuple(guardian_bundle[2].glob(".qcsd-buildx-*"))
+
+
+def test_real_pinned_frontend_build_uses_read_only_linked_docker_config(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    if os.environ.get("QCSD_RUN_PINNED_BUILDX_FRONTEND_PROBE") != "1":
+        pytest.skip("pinned Dockerfile frontend build probe is opt-in")
+
+    result = _run_guardian(
+        guardian_bundle, "docker-buildx-pinned-frontend-probe", timeout=120
+    )
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert (guardian_bundle[3] / "pinned-frontend-build").is_file()
+    identity = (
+        guardian_bundle[3] / "frontend-docker-config-identity"
+    ).read_text(encoding="ascii")
+    assert identity.strip().endswith(f":{os.getuid()}:500:2:directory")
+    assert (guardian_bundle[3] / "frontend-docker-config-children").read_text(
+        encoding="ascii"
+    ) == ""
+    _assert_retired_linked_docker_path(
+        guardian_bundle[3] / "frontend-docker-config-path",
+        guardian_bundle[2],
+    )
+    assert not tuple(
+        guardian_bundle[2].glob(f".qcsd-docker-config-{os.getuid()}.*")
+    )
     assert not tuple(guardian_bundle[2].glob(".qcsd-buildx-*"))
 
 
@@ -1569,7 +5256,90 @@ def test_real_qcsd_fd_entry_verifier_go_and_docker_admission(
     assert result.returncode in {1, 125}, (result.stdout, result.stderr)
     assert "etf-probe is disabled" not in result.stderr
     assert "lifecycle guardian authority is invalid" not in result.stderr
+    assert "final Docker lifecycle admission failed" not in result.stderr
     assert not tuple(lifecycle_parent.glob(".qcsd-buildx-*"))
+
+
+def test_real_qcsd_loader_completes_two_stage_recovery_without_docker(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    guardian, qcsd, lifecycle_parent, state = guardian_bundle
+    qcsd_source = (ROOT / "qcsd-lab").read_text(encoding="utf-8")
+    anchor = "\nreconcile_stale_docker_supervisors() {"
+    assert qcsd_source.count(anchor) == 1
+    test_dispatch = r'''
+if [[ "${1:-}" == "__test-two-stage-lifecycle" ]]; then
+  if [[ -z "${QCSD_DOCKER_LOCK_GUARDIAN_PID:-}" ]]; then
+    _qcsd_enter_lifecycle_guardian || exit 1
+  fi
+  _qcsd_validate_lifecycle_guardian || exit 91
+  [[ "${_QCSD_LIFECYCLE_RECOVERY_STATE}" == armed ]] || exit 92
+  state=$2
+  printf 'validated\n' >"$state/production-loader-validated"
+  lifecycle_parent=${_QCSD_LIFECYCLE_LOCK_PATH%/*}
+  current=${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH}
+  shopt -s nullglob
+  roots=("$lifecycle_parent"/.qcsd-docker-config-*)
+  shopt -u nullglob
+  stale=()
+  for root in "${roots[@]}"; do
+    [[ "$root" == "$current" ]] || stale+=("$root")
+  done
+  (( ${#stale[@]} == 1 )) || exit 93
+  printf '%s\n' "${stale[0]}" >"$state/production-loader-stale"
+  _qcsd_complete_lifecycle_recovery || exit 94
+  [[ "${_QCSD_LIFECYCLE_RECOVERY_STATE}" == complete ]] || exit 95
+  [[ ! -e "${stale[0]}" && ! -L "${stale[0]}" ]] || exit 96
+  [[ -d "$current" && ! -L "$current" ]] || exit 97
+  printf 'complete\n' >"$state/production-loader-complete"
+  exit 0
+fi
+'''
+    qcsd.write_text(
+        qcsd_source.replace(anchor, test_dispatch + anchor),
+        encoding="utf-8",
+    )
+    qcsd.chmod(0o755)
+    guardian_text = GUARDIAN.read_text(encoding="utf-8").replace(
+        'LOCK_PARENT = Path("/var/tmp")',
+        f"LOCK_PARENT = Path({str(lifecycle_parent)!r})",
+    )
+    guardian_text = guardian_text.replace(
+        "if parent == LOCK_PARENT and (", "if False and ("
+    ).replace("if parent != LOCK_PARENT and (", "if (")
+    guardian.write_text(guardian_text, encoding="utf-8")
+    guardian.chmod(0o644)
+    (guardian.parent / HELPER.name).chmod(0o644)
+    (guardian.parent / NATIVE.name).chmod(0o644)
+    residue = lifecycle_parent / _docker_config_name("3" * 64)
+    residue.mkdir(mode=0o500)
+
+    result = subprocess.run(
+        [str(qcsd), "__test-two-stage-lifecycle", str(state)],
+        cwd=qcsd.parent,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert (state / "production-loader-validated").read_text(
+        encoding="ascii"
+    ) == "validated\n"
+    assert (state / "production-loader-complete").read_text(
+        encoding="ascii"
+    ) == "complete\n"
+    assert (state / "production-loader-stale").read_text(
+        encoding="ascii"
+    ).strip() == str(residue)
+    assert not tuple(
+        lifecycle_parent.glob(f".qcsd-docker-config-{os.getuid()}.*")
+    )
+    assert not tuple(lifecycle_parent.glob(".qcsd-buildx-*"))
+    assert _can_lock(_lock_path(guardian_bundle))
 
 
 def test_qcsd_rejects_caller_selected_guardian_verifier(tmp_path: Path) -> None:
@@ -1612,7 +5382,7 @@ if pid == 0:
     })
     os.set_inheritable(qcsd_fd, True)
     os.set_inheritable(verifier_fd, True)
-    os.execv("/bin/bash", ["/bin/bash", "--noprofile", "--norc",
+    os.execv("/bin/bash", ["/bin/bash", "--noprofile", "--norc", "-p",
                               f"/proc/{os.getppid()}/fd/{qcsd_fd}",
                               "etf-probe", "disabled"])
 _, status = os.waitpid(pid, 0)
@@ -1930,6 +5700,176 @@ def test_buildx_user_census_reinspects_numeric_pid_after_terminal_binding(
         os.waitpid(child, 0)
 
 
+def test_replacement_pidfd_poll_failure_closes_new_binding(
+    isolated_guardian_bundle: tuple[Path, Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_guardian(isolated_guardian_bundle[0])
+    pidfd = os.pidfd_open(os.getpid())
+
+    monkeypatch.setattr(module, "_open_process_pidfd", lambda _pid: pidfd)
+
+    def fail_pidfd_poll(_pidfd: int, _timeout_ms: int = 0) -> bool:
+        raise module.GuardianError("injected replacement pidfd poll failure")
+
+    monkeypatch.setattr(module, "_pidfd_is_terminal", fail_pidfd_poll)
+    try:
+        with pytest.raises(
+            module.GuardianError,
+            match="injected replacement pidfd poll failure",
+        ):
+            module._replacement_pidfd_after_terminal(os.getpid())
+
+        with pytest.raises(OSError) as closed:
+            os.fstat(pidfd)
+        assert closed.value.errno == errno.EBADF
+    finally:
+        try:
+            os.close(pidfd)
+        except OSError:
+            pass
+
+
+def test_inner_guardian_proof_holds_pidfd_across_complete_remote_proof(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_guardian(guardian_bundle[0])
+    pidfd = os.open(os.devnull, os.O_RDONLY | os.O_CLOEXEC)
+    events: list[str] = []
+
+    def open_pidfd(pid: int, flags: int) -> int:
+        assert (pid, flags) == (4242, 0)
+        events.append("open")
+        return pidfd
+
+    def terminal(observed: int) -> bool:
+        assert observed == pidfd
+        events.append("poll")
+        return False
+
+    def identity(pid: int, start: int) -> None:
+        assert (pid, start) == (4242, 9191)
+        os.fstat(pidfd)
+        events.append("identity")
+
+    def proof() -> dict[str, object]:
+        os.fstat(pidfd)
+        events.append("proof")
+        return {"bound": True}
+
+    monkeypatch.setattr(module.os, "pidfd_open", open_pidfd)
+    monkeypatch.setattr(module, "_guardian_pidfd_is_terminal", terminal)
+    monkeypatch.setattr(module, "_verify_guardian_process_identity", identity)
+
+    assert module._run_guardian_bound_proof(4242, 9191, proof) == {
+        "bound": True
+    }
+    assert events == ["open", "poll", "identity", "proof", "identity", "poll"]
+    with pytest.raises(OSError) as closed:
+        os.fstat(pidfd)
+    assert closed.value.errno == errno.EBADF
+
+
+def test_inner_guardian_proof_rejects_identity_dead_before_remote_reads(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_guardian(guardian_bundle[0])
+    pidfd = os.open(os.devnull, os.O_RDONLY | os.O_CLOEXEC)
+    proof_called = False
+
+    monkeypatch.setattr(module.os, "pidfd_open", lambda _pid, _flags: pidfd)
+    monkeypatch.setattr(module, "_guardian_pidfd_is_terminal", lambda _fd: True)
+
+    def proof() -> dict[str, object]:
+        nonlocal proof_called
+        proof_called = True
+        return {}
+
+    with pytest.raises(
+        module.GuardianError, match="guardian process identity changed"
+    ):
+        module._run_guardian_bound_proof(4242, 9191, proof)
+    assert proof_called is False
+    with pytest.raises(OSError) as closed:
+        os.fstat(pidfd)
+    assert closed.value.errno == errno.EBADF
+
+
+def test_inner_guardian_proof_rejects_terminal_binding_after_pid_reuse_window(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_guardian(guardian_bundle[0])
+    pidfd = os.open(os.devnull, os.O_RDONLY | os.O_CLOEXEC)
+    terminal_samples = iter((False, True))
+    identity_samples = 0
+    proof_called = False
+
+    monkeypatch.setattr(module.os, "pidfd_open", lambda _pid, _flags: pidfd)
+    monkeypatch.setattr(
+        module,
+        "_guardian_pidfd_is_terminal",
+        lambda observed: next(terminal_samples) if observed == pidfd else False,
+    )
+
+    def identity(_pid: int, _start: int) -> None:
+        nonlocal identity_samples
+        identity_samples += 1
+
+    def proof() -> dict[str, object]:
+        nonlocal proof_called
+        proof_called = True
+        return {}
+
+    monkeypatch.setattr(module, "_verify_guardian_process_identity", identity)
+    with pytest.raises(
+        module.GuardianError, match="guardian process identity changed"
+    ):
+        module._run_guardian_bound_proof(4242, 9191, proof)
+    assert proof_called is True
+    assert identity_samples == 2
+    with pytest.raises(OSError) as closed:
+        os.fstat(pidfd)
+    assert closed.value.errno == errno.EBADF
+
+
+def test_inner_guardian_proof_rejects_identity_drift_while_pidfd_is_live(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_guardian(guardian_bundle[0])
+    pidfd = os.open(os.devnull, os.O_RDONLY | os.O_CLOEXEC)
+    identities = iter(
+        (
+            (1, 4242, 4242, 9191),
+            (1, 4242, 4242, 9192),
+        )
+    )
+    polls = 0
+
+    monkeypatch.setattr(module.os, "pidfd_open", lambda _pid, _flags: pidfd)
+
+    def live(_fd: int) -> bool:
+        nonlocal polls
+        polls += 1
+        return False
+
+    monkeypatch.setattr(module, "_guardian_pidfd_is_terminal", live)
+    monkeypatch.setattr(module, "_process_identity", lambda _pid: next(identities))
+    monkeypatch.setattr(module, "_process_uid", lambda _pid: os.getuid())
+
+    with pytest.raises(
+        module.GuardianError, match="guardian process identity changed"
+    ):
+        module._run_guardian_bound_proof(4242, 9191, lambda: {})
+    assert polls == 1
+    with pytest.raises(OSError) as closed:
+        os.fstat(pidfd)
+    assert closed.value.errno == errno.EBADF
+
+
 def test_buildx_user_census_pidfd_resource_failure_remains_fail_closed(
     guardian_bundle: tuple[Path, Path, Path, Path],
     monkeypatch: pytest.MonkeyPatch,
@@ -2037,7 +5977,7 @@ def test_corrupt_buildx_authority_is_quarantined_without_mutation(
         start_new_session=True,
     )
     state = guardian_bundle[3]
-    _wait(state / "ready")
+    _wait(state / "ready", timeout=10)
     child = int((state / "inner-pid").read_text(encoding="ascii"))
     inner_marker = (state / "inner-pid").read_bytes()
     os.kill(process.pid, signal.SIGKILL)
@@ -2210,6 +6150,63 @@ def test_only_validated_acquisition_lock_is_preserved_into_inner(
         os.close(descriptor)
 
 
+def test_inherited_acquisition_lock_accepts_external_flock_owner_zero(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guardian, _qcsd, _lock_parent, _state = guardian_bundle
+    module = _load_guardian(guardian)
+    acquisition = tmp_path / "acquisition.lock"
+    descriptor = os.open(
+        acquisition,
+        os.O_RDWR | os.O_CREAT | os.O_CLOEXEC,
+        0o600,
+    )
+    try:
+        acquired = subprocess.run(
+            ["/usr/bin/flock", "-n", str(descriptor)],
+            pass_fds=(descriptor,),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        assert acquired.returncode == 0, (acquired.stdout, acquired.stderr)
+        lock_rows = module._descriptor_lock_rows(os.getpid(), descriptor)
+        assert len(lock_rows) == 1
+        assert lock_rows[0][4] == "0"
+        expected = acquisition.stat(follow_symlinks=False)
+        with pytest.raises(
+            module.GuardianError,
+            match="explicit live owner is required",
+        ):
+            module._verify_descriptor_lock(
+                expected.st_dev,
+                expected.st_ino,
+                os.getpid(),
+                descriptor,
+                failure="explicit live owner is required",
+                owner=os.getpid(),
+            )
+
+        monkeypatch.setenv(
+            "QCSD_CLASS_ACQUISITION_LOCK_FD",
+            str(descriptor),
+        )
+        captured = module._capture_inherited_acquisition_lock()
+
+        assert captured is not None
+        assert captured.descriptor == descriptor
+        assert (captured.device, captured.inode) == (
+            expected.st_dev,
+            expected.st_ino,
+        )
+    finally:
+        os.close(descriptor)
+
+
 def test_guardian_sigkill_kills_inner_and_releases_unleased_lock(
     guardian_bundle: tuple[Path, Path, Path, Path],
 ) -> None:
@@ -2255,15 +6252,151 @@ def test_signal_before_ready_is_forwarded_once_after_handshake(
         start_new_session=True,
     )
     state = guardian_bundle[3]
-    _wait(state / "pre-ready")
-    os.kill(process.pid, signal.SIGTERM)
-    os.kill(process.pid, signal.SIGTERM)
-    stdout, stderr = process.communicate(timeout=8)
+    try:
+        _wait(state / "pre-ready")
+        os.kill(process.pid, signal.SIGTERM)
+        os.kill(process.pid, signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=8)
 
-    assert process.returncode == 143, (stdout, stderr)
-    assert (state / "signals").read_text(encoding="ascii").strip() == "1"
-    assert not (state / "mutation-after-go").exists()
-    assert _can_lock(_lock_path(guardian_bundle))
+        assert process.returncode == 143, (stdout, stderr)
+        assert (state / "signals").read_text(encoding="ascii").strip() == "1"
+        assert not (state / "mutation-after-go").exists()
+        assert _can_lock(_lock_path(guardian_bundle))
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+
+
+def test_signal_denial_retains_initial_channel_until_bounded_escalation(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    process = subprocess.Popen(
+        _guardian_command(
+            guardian_bundle,
+            "pre-ready-ignore-signal",
+            failure_cleanup_timeout=0.15,
+        ),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    state = guardian_bundle[3]
+    try:
+        _wait(state / "pre-ready")
+        os.kill(process.pid, signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=5)
+
+        assert process.returncode == 143, (stdout, stderr)
+        assert not (state / "initial-decision-observed").exists()
+        assert not (state / "mutation-after-go").exists()
+        inner = int((state / "inner-pid").read_text(encoding="ascii"))
+        _wait_gone(inner)
+        assert _can_lock(_lock_path(guardian_bundle))
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+
+
+def test_signal_denial_retains_final_channel_until_bounded_escalation(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    process = subprocess.Popen(
+        _guardian_command(
+            guardian_bundle,
+            "final-ready-ignore-signal",
+            failure_cleanup_timeout=0.15,
+        ),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    state = guardian_bundle[3]
+    try:
+        _wait(state / "pre-final")
+        os.kill(process.pid, signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=5)
+
+        assert process.returncode == 143, (stdout, stderr)
+        assert not (state / "final-decision-observed").exists()
+        assert not (state / "mutation-after-final-go").exists()
+        inner = int((state / "inner-pid").read_text(encoding="ascii"))
+        _wait_gone(inner)
+        assert _can_lock(_lock_path(guardian_bundle))
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+
+
+def test_ignored_signal_after_final_admission_has_bounded_escalation(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    process = subprocess.Popen(
+        _guardian_command(
+            guardian_bundle,
+            "post-final-ignore-signal",
+            failure_cleanup_timeout=0.15,
+        ),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    state = guardian_bundle[3]
+    try:
+        _wait(state / "post-final")
+        os.kill(process.pid, signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=5)
+
+        assert process.returncode == 137, (stdout, stderr)
+        inner = int((state / "inner-pid").read_text(encoding="ascii"))
+        _wait_gone(inner)
+        assert _can_lock(_lock_path(guardian_bundle))
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+
+
+def test_signal_after_final_admission_can_lease_cleanup_before_exit(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    process = subprocess.Popen(
+        _guardian_command(
+            guardian_bundle,
+            "post-final-signal-cleanup-lease",
+            failure_cleanup_timeout=3.0,
+        ),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    state = guardian_bundle[3]
+    try:
+        _wait(state / "post-final")
+        started = time.monotonic()
+        os.kill(process.pid, signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=8)
+        elapsed = time.monotonic() - started
+
+        assert process.returncode == 143, (stdout, stderr)
+        assert (state / "post-final-cleanup-lease-served").is_file()
+        assert (state / "post-final-cleanup-complete").is_file()
+        assert elapsed < 3.0
+        assert _can_lock(_lock_path(guardian_bundle))
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
 
 
 def test_pending_signal_at_admission_linearisation_cannot_publish_go(
@@ -2273,20 +6406,111 @@ def test_pending_signal_at_admission_linearisation_cannot_publish_go(
     module = _load_guardian(guardian_bundle[0])
     latch = module._SignalLatch()
     read_fd, write_fd = os.pipe2(os.O_CLOEXEC)
+    os.set_blocking(read_fd, False)
+    forwarded_signals: list[tuple[int, int]] = []
+
+    def capture_forwarded_signal(pid: int, requested: int) -> None:
+        with pytest.raises(BlockingIOError):
+            os.read(read_fd, 64)
+        forwarded_signals.append((pid, requested))
+
+    child = SimpleNamespace(pid=987_654_321)
     monkeypatch.setattr(module.signal, "sigpending", lambda: {signal.SIGTERM})
+    monkeypatch.setattr(module, "_kill_child_group", capture_forwarded_signal)
     try:
-        admitted, failed = module._publish_admission_decision(
-            write_fd,
-            "a" * 64,
-            latch,
-            ready=True,
-            failed=False,
+        admitted, failed, forwarded, resolved = (
+            module._publish_admission_decision(
+                write_fd,
+                "a" * 64,
+                latch,
+                child,
+                False,
+                ready=True,
+                failed=False,
+            )
+        )
+
+        assert not admitted
+        assert not failed
+        assert forwarded
+        assert not resolved
+        assert forwarded_signals == [(child.pid, signal.SIGTERM)]
+        with pytest.raises(BlockingIOError):
+            os.read(read_fd, 64)
+    finally:
+        if write_fd >= 0:
+            os.close(write_fd)
+        os.close(read_fd)
+
+
+def test_admission_rejection_does_not_forward_a_latched_signal_twice(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_guardian(guardian_bundle[0])
+    latch = module._SignalLatch()
+    latch.handler(signal.SIGTERM, None)
+    read_fd, write_fd = os.pipe2(os.O_CLOEXEC)
+    forwarded_signals: list[tuple[int, int]] = []
+    child = SimpleNamespace(pid=987_654_321)
+    monkeypatch.setattr(
+        module,
+        "_kill_child_group",
+        lambda pid, requested: forwarded_signals.append((pid, requested)),
+    )
+    try:
+        admitted, failed, forwarded, resolved = (
+            module._publish_admission_decision(
+                write_fd,
+                "a" * 64,
+                latch,
+                child,
+                True,
+                ready=True,
+                failed=False,
+            )
+        )
+
+        assert not admitted
+        assert not failed
+        assert forwarded
+        assert not resolved
+        assert forwarded_signals == []
+        os.set_blocking(read_fd, False)
+        with pytest.raises(BlockingIOError):
+            os.read(read_fd, 64)
+    finally:
+        if write_fd >= 0:
+            os.close(write_fd)
+        os.close(read_fd)
+
+
+def test_non_signal_admission_failure_publishes_abort_and_resolves_channel(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    module = _load_guardian(guardian_bundle[0])
+    latch = module._SignalLatch()
+    read_fd, write_fd = os.pipe2(os.O_CLOEXEC)
+    child = SimpleNamespace(pid=987_654_321)
+    try:
+        admitted, failed, forwarded, resolved = (
+            module._publish_admission_decision(
+                write_fd,
+                "a" * 64,
+                latch,
+                child,
+                False,
+                ready=True,
+                failed=True,
+            )
         )
         os.close(write_fd)
         write_fd = -1
 
         assert not admitted
-        assert not failed
+        assert failed
+        assert not forwarded
+        assert resolved
         assert os.read(read_fd, 64) == b"ABORT\n"
     finally:
         if write_fd >= 0:
@@ -2309,7 +6533,7 @@ def test_bad_client_flood_cannot_starve_signal_or_child_exit(
     state = guardian_bundle[3]
     try:
         _wait(state / "ready")
-        endpoint = f"\0qcsd-docker-lifecycle-guardian-{os.getuid()}"
+        endpoint = _isolated_guardian_socket_endpoint(guardian_bundle[2])
         for _ in range(8):
             client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             client.settimeout(1)
@@ -2442,6 +6666,85 @@ def test_malformed_lease_requests_are_rejected_before_identity_use(
 
     with pytest.raises(module.GuardianError):
         module._canonical_lease_request(mutation(valid).encode("ascii"))
+
+
+def test_lease_request_drip_cannot_renew_total_service_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_guardian(GUARDIAN)
+    monkeypatch.setattr(module, "LEASE_SERVICE_SECONDS", 0.08)
+    listener = socket.socket(
+        socket.AF_UNIX, socket.SOCK_STREAM | socket.SOCK_CLOEXEC
+    )
+    client = socket.socket(
+        socket.AF_UNIX, socket.SOCK_STREAM | socket.SOCK_CLOEXEC
+    )
+    endpoint = tmp_path / "isolated-lease.sock"
+    listener.bind(str(endpoint))
+    listener.listen(1)
+    listener.setblocking(False)
+    client.connect(str(endpoint))
+    stop = threading.Event()
+    started_drip = threading.Event()
+    sent: list[float] = []
+
+    def drip_request() -> None:
+        final = time.monotonic() + 1.0
+        try:
+            while not stop.is_set() and time.monotonic() < final:
+                client.sendall(b"{")
+                sent.append(time.monotonic())
+                started_drip.set()
+                time.sleep(0.01)
+        except OSError:
+            pass
+        finally:
+            try:
+                client.shutdown(socket.SHUT_WR)
+            except OSError:
+                pass
+
+    worker = threading.Thread(target=drip_request, daemon=True)
+    try:
+        worker.start()
+        assert started_drip.wait(timeout=1)
+        started = time.monotonic()
+        outcome = module._serve_one_lease(
+            listener,
+            lease_socket="@isolated-unused",
+            lease_nonce="a" * 64,
+            child=None,
+            parent_fd=-1,
+            lock_fd=-1,
+            lock_identity=None,
+            source_fd=-1,
+            source_identity=None,
+            qcsd_fd=-1,
+            qcsd_identity=None,
+            helper_fd=-1,
+            helper_identity=None,
+            native_fd=-1,
+            native_identity=None,
+            docker_config_fd=-1,
+            docker_config_identity=None,
+            docker_config_residues=(),
+            buildx_config_fd=-1,
+            buildx_config_identity=None,
+            runtime_identity=None,
+        )
+        elapsed = time.monotonic() - started
+        still_dripping = worker.is_alive()
+    finally:
+        stop.set()
+        worker.join(timeout=1)
+        client.close()
+        listener.close()
+
+    assert outcome == "rejected"
+    assert len(sent) >= 3
+    assert still_dripping
+    assert 0.04 <= elapsed < 0.30
 
 
 def test_guardian_sigkill_leaves_lock_with_only_the_active_native_lease(
@@ -2607,6 +6910,34 @@ def test_api_holder_runs_from_a_command_substitution_and_returns_output(
     assert (state / "api-output").read_text(
         encoding="ascii"
     ) == "captured-output\n"
+
+
+def test_recovery_api_receives_current_config_not_stale_residue(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    stale = guardian_bundle[2] / _docker_config_name("3" * 64)
+    stale.mkdir(mode=0o500)
+    stale_value = stale.stat(follow_symlinks=False)
+
+    result = _run_guardian(guardian_bundle, "recovery-api-current", timeout=20)
+    state = guardian_bundle[3]
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    expected = (state / "docker-config-expected").read_text(
+        encoding="ascii"
+    ).strip()
+    observed = (state / "recovery-api-docker-identity").read_text(
+        encoding="ascii"
+    ).strip()
+    assert observed == expected
+    assert observed != f"{stale_value.st_dev}:{stale_value.st_ino}"
+    assert (state / "recovery-api-complete").read_text(
+        encoding="ascii"
+    ) == "complete\n"
+    assert not stale.exists()
+    assert not tuple(
+        guardian_bundle[2].glob(f".qcsd-docker-config-{os.getuid()}.*")
+    )
 
 
 def test_real_api_holder_accepts_five_fast_daemon_identity_proofs(
@@ -3059,6 +7390,80 @@ def test_normal_pretransfer_manager_rejection_releases_safely(
         singleton.close()
 
 
+def test_transfer_wins_same_iteration_as_normal_launcher_exit(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    native = _load_native(guardian_bundle[0].parent / NATIVE.name)
+    unit = f"qcsd-docker-api-{'a' * 32}.service"
+    control_group = (
+        f"/user.slice/user-{os.getuid()}.slice/"
+        f"user@{os.getuid()}.service/app.slice/{unit}"
+    )
+    transfer_count = 0
+
+    class CompletedLauncher:
+        returncode = 0
+
+        @staticmethod
+        def poll() -> int:
+            return 0
+
+    def transfer(*_args: object, **_kwargs: object) -> str:
+        nonlocal transfer_count
+        transfer_count += 1
+        return control_group
+
+    monkeypatch.setattr(
+        native,
+        "_systemd_unit_snapshot",
+        lambda _unit: ("not-found", "inactive", "", 0),
+    )
+    monkeypatch.setattr(native, "_transfer_api_lease", transfer)
+    monkeypatch.setattr(
+        native.select,
+        "select",
+        lambda readable, _writable, _exceptional, _timeout: (readable, (), ()),
+    )
+    monkeypatch.setattr(native, "_cgroup_terminal", lambda _group: True)
+    monkeypatch.setattr(native.time, "sleep", lambda _duration: None)
+    monkeypatch.setattr(
+        native.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: CompletedLauncher(),
+    )
+    singleton, _ = native._api_listener()
+    lock_path = guardian_bundle[3] / "same-iteration-transfer-lock"
+    lock_path.touch(mode=0o600)
+    lock_fd = os.open(lock_path, os.O_RDONLY | os.O_CLOEXEC)
+    source_fd = os.open(guardian_bundle[0].parent / NATIVE.name, os.O_RDONLY)
+    docker_config_fd = os.open(guardian_bundle[3], os.O_RDONLY | os.O_DIRECTORY)
+    buildx_config_fd = os.dup(docker_config_fd)
+    try:
+        result = native._watch_api_service(
+            unit=unit,
+            duration=1,
+            command=("/bin/true",),
+            native_source_fd=source_fd,
+            native_source_hash=hashlib.sha256(
+                (guardian_bundle[0].parent / NATIVE.name).read_bytes()
+            ).hexdigest(),
+            lease_fd=lock_fd,
+            singleton_fd=singleton.fileno(),
+            docker_config_fd=docker_config_fd,
+            buildx_config_fd=buildx_config_fd,
+        )
+    finally:
+        os.close(source_fd)
+        os.close(lock_fd)
+        os.close(docker_config_fd)
+        os.close(buildx_config_fd)
+        singleton.close()
+
+    assert transfer_count == 1
+    assert result == 0
+
+
 @pytest.mark.parametrize("ambiguous_status", [124, 137])
 def test_pretransfer_timeout_or_signal_retains_authority(
     guardian_bundle: tuple[Path, Path, Path, Path],
@@ -3167,7 +7572,7 @@ def test_real_guardian_successor_resumes_h3_after_escaped_api(
     assert int((state / "h3-buildx-nlink").read_text(encoding="ascii")) > 2
     old_docker = Path((state / "h3-old-docker-config").read_text().strip())
     old_buildx = Path((state / "h3-old-buildx-config").read_text().strip())
-    assert not old_docker.exists()
+    assert old_docker.is_dir()
     assert not old_buildx.exists()
     buildx_authorities = tuple(
         guardian_bundle[2].glob(f".qcsd-buildx-authority-{os.getuid()}.*")
@@ -3212,7 +7617,13 @@ def test_real_guardian_successor_resumes_h3_after_escaped_api(
         assert not (state / "real-helper-recovered").exists()
 
         (state / "h3-api-release").touch()
-        _wait(state / "census-reap-inspection", timeout=10)
+        try:
+            _wait(state / "census-reap-inspection", timeout=10)
+        except AssertionError as error:
+            successor_stdout, successor_stderr = successor.communicate(timeout=5)
+            raise AssertionError(
+                (successor.returncode, successor_stdout, successor_stderr)
+            ) from error
         census_candidate.kill()
         assert census_candidate.wait(timeout=5) == -signal.SIGKILL
         (state / "census-reap-complete").touch()
@@ -3225,6 +7636,7 @@ def test_real_guardian_successor_resumes_h3_after_escaped_api(
         assert not tuple(root.parent.glob(".retired.*"))
         assert not linked_buildx.exists()
         assert not buildx_authorities[0].exists()
+        assert not old_docker.exists()
         assert _can_lock(_lock_path(guardian_bundle))
     finally:
         if census_candidate.poll() is None:
@@ -3461,6 +7873,102 @@ def test_lock_path_replacement_does_not_change_the_held_authority(
     os.close(parent_fd)
 
 
+def test_guardian_lock_proof_is_bound_to_the_exact_locked_descriptor(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    guardian, _qcsd, lock_parent, _state = guardian_bundle
+    module = _load_guardian(guardian)
+    parent_fd, _ = module._open_lock_parent(lock_parent)
+    lock_fd, identity = module._open_lock(parent_fd, lock_parent)
+    independent_fd = -1
+    duplicate_fd = -1
+    try:
+        module._acquire_lock(lock_fd, module._SignalLatch())
+        module._verify_guardian_lock(identity, os.getpid(), lock_fd)
+
+        duplicate_fd = os.dup(lock_fd)
+        module._verify_guardian_lock(identity, os.getpid(), duplicate_fd)
+
+        independent_fd = os.open(identity.path, os.O_RDWR | os.O_CLOEXEC)
+        with pytest.raises(
+            module.GuardianError,
+            match="guardian does not exclusively own the lifecycle flock",
+        ):
+            module._verify_guardian_lock(identity, os.getpid(), independent_fd)
+        with pytest.raises(
+            module.GuardianError,
+            match="guardian does not exclusively own the lifecycle flock",
+        ):
+            module._verify_descriptor_lock(
+                identity.device,
+                identity.inode,
+                os.getpid(),
+                lock_fd,
+                failure="guardian does not exclusively own the lifecycle flock",
+                owner=os.getpid() + 1,
+            )
+    finally:
+        if independent_fd >= 0:
+            os.close(independent_fd)
+        if duplicate_fd >= 0:
+            os.close(duplicate_fd)
+        os.close(lock_fd)
+        os.close(parent_fd)
+
+
+def test_guardian_lock_proof_survives_unrelated_flock_table_churn(
+    guardian_bundle: tuple[Path, Path, Path, Path], tmp_path: Path
+) -> None:
+    guardian, _qcsd, lock_parent, _state = guardian_bundle
+    module = _load_guardian(guardian)
+    parent_fd, _ = module._open_lock_parent(lock_parent)
+    lock_fd, identity = module._open_lock(parent_fd, lock_parent)
+    module._acquire_lock(lock_fd, module._SignalLatch())
+    churn_root = tmp_path / "unrelated-flocks"
+    churn_root.mkdir()
+    paths = tuple(churn_root / f"lock-{index:04d}" for index in range(512))
+    for path in paths:
+        path.touch(mode=0o600)
+    stop = threading.Event()
+    started = threading.Barrier(5)
+    failures: list[BaseException] = []
+
+    def churn(shard: int) -> None:
+        descriptors: list[int] = []
+        try:
+            selected = paths[shard::4]
+            started.wait(timeout=5)
+            while not stop.is_set():
+                for path in selected:
+                    descriptor = os.open(path, os.O_RDWR | os.O_CLOEXEC)
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    descriptors.append(descriptor)
+                while descriptors:
+                    os.close(descriptors.pop())
+        except BaseException as error:
+            failures.append(error)
+            stop.set()
+        finally:
+            while descriptors:
+                os.close(descriptors.pop())
+
+    workers = [threading.Thread(target=churn, args=(index,)) for index in range(4)]
+    for worker in workers:
+        worker.start()
+    try:
+        started.wait(timeout=5)
+        for _ in range(2_000):
+            module._verify_guardian_lock(identity, os.getpid(), lock_fd)
+    finally:
+        stop.set()
+        for worker in workers:
+            worker.join(timeout=5)
+        os.close(lock_fd)
+        os.close(parent_fd)
+    assert not failures
+    assert all(not worker.is_alive() for worker in workers)
+
+
 def test_handshake_fields_are_not_accepted_from_the_ambient_environment(
     guardian_bundle: tuple[Path, Path, Path, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3531,6 +8039,9 @@ def test_shell_startup_and_path_injection_are_removed_before_inner_exec(
 
     assert result.returncode == 0, (result.stdout, result.stderr)
     assert not marker.exists()
+    assert "p" in (guardian_bundle[3] / "inner-shell-flags").read_text(
+        encoding="ascii"
+    )
     assert (guardian_bundle[3] / "internal-environment").read_text(
         encoding="ascii"
     ) == ""

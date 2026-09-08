@@ -94,6 +94,53 @@ def _native_retirement_op(
     return subprocess.CompletedProcess(operation, returncode, stdout.getvalue(), stderr.getvalue())
 
 
+def _native_creation_hold(
+    base: Path, root_name: str
+) -> subprocess.CompletedProcess[str]:
+    """Run the native creation holder in an isolated process with a dead parent."""
+
+    source = r'''
+import importlib.util
+import os
+from pathlib import Path
+import sys
+
+native_source = Path(sys.argv[1])
+base = Path(sys.argv[2])
+root_name = sys.argv[3]
+spec = importlib.util.spec_from_file_location("qcsd_creation_bound_test", native_source)
+assert spec is not None and spec.loader is not None
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+base_value = base.stat(follow_symlinks=False)
+dead_pid = 999_900_000
+module.run_unleased_for_test(
+    (
+        "hold-creation",
+        str(base),
+        str(os.getuid()),
+        str(base_value.st_dev),
+        str(base_value.st_ino),
+        root_name,
+        str(dead_pid),
+        "1",
+        str(dead_pid),
+        str(dead_pid),
+    )
+)
+'''
+    return subprocess.run(
+        [sys.executable, "-I", "-c", source, str(NATIVE), str(base), root_name],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+        timeout=5,
+    )
+
+
 def _private_directory(path: Path) -> None:
     path.mkdir(mode=0o700)
     path.chmod(0o700)
@@ -102,6 +149,30 @@ def _private_directory(path: Path) -> None:
 def _private_file(path: Path, value: str) -> None:
     path.write_text(value, encoding="ascii")
     path.chmod(0o600)
+
+
+def _run_localised_secure_lifecycle_base(parent: Path) -> subprocess.CompletedProcess[str]:
+    environment = dict(os.environ)
+    environment.update(
+        QCSD_TEST_LIFECYCLE_PARENT=str(parent),
+        QCSD_TEST_SUPERVISOR_SOURCE=str(HELPER),
+    )
+    return _run_bash(
+        r'''
+        source "$QCSD_TEST_SUPERVISOR_SOURCE"
+        production_definition="$(declare -f _qcsd_secure_lifecycle_base)" || exit 90
+        [[ "$production_definition" == *'/var/tmp'* &&
+            "$production_definition" == *'"0:1777:directory"'* ]] || exit 91
+        localised_definition="${production_definition//\/var\/tmp/${QCSD_TEST_LIFECYCLE_PARENT}}"
+        localised_definition="${localised_definition//0:1777:directory/${EUID}:1777:directory}"
+        [[ "$localised_definition" != *'/var/tmp'* &&
+            "$localised_definition" == *"\"${EUID}:1777:directory\""* ]] || exit 92
+        eval "$localised_definition"
+        _QCSD_DOCKER_LIFECYCLE_PARENT="$QCSD_TEST_LIFECYCLE_PARENT"
+        _qcsd_secure_lifecycle_base
+        ''',
+        environment=environment,
+    )
 
 
 def _authority_arguments(authority: Path) -> tuple[object, ...]:
@@ -151,6 +222,81 @@ def _tree_snapshot(root: Path) -> tuple[tuple[object, ...], ...]:
     return tuple(snapshot)
 
 
+def test_native_hold_creation_counts_logical_operations_before_mkdir(
+    tmp_path: Path,
+) -> None:
+    base = tmp_path / "base"
+    _private_directory(base)
+    kinds = ("run", "network", "build", "transaction", "run", "network")
+    tokens = tuple(f"{index:032x}" for index in range(1, 9))
+    for kind, token in zip(kinds, tokens[:6], strict=True):
+        _private_directory(base / f"{kind}.{token}")
+
+    # These transition aliases are one logical operation, not two extra roots.
+    aliased_kind, aliased_token = kinds[0], tokens[0]
+    _private_directory(base / f".retired.{aliased_kind}.{aliased_token}")
+    _private_file(
+        base / f"retirement.{aliased_kind}.{aliased_token}",
+        "authorised retirement\n",
+    )
+
+    seventh = base / f"build.{tokens[6]}"
+    admitted = _native_creation_hold(base, seventh.name)
+
+    assert admitted.returncode == 1, admitted.stderr
+    assert "creation-holder lifecycle operation bound is exhausted" not in admitted.stderr
+    assert "creation-holder control was rejected" in admitted.stderr
+    assert seventh.is_dir() and not seventh.is_symlink()
+
+    eighth = base / f"transaction.{tokens[7]}"
+    rejected = _native_creation_hold(base, eighth.name)
+
+    assert rejected.returncode == 1
+    assert "creation-holder lifecycle operation bound is exhausted" in rejected.stderr
+    assert rejected.stdout == ""
+    assert not eighth.exists()
+
+
+def test_shell_lifecycle_base_bounds_unique_tokens_across_retirement_phases(
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "local-var-tmp"
+    parent.mkdir(mode=0o700)
+    parent.chmod(0o1777)
+    base = parent / f"qcsd-docker-lifecycle-{os.getuid()}"
+    _private_directory(base)
+    tokens = tuple(f"{index:032x}" for index in range(1, 9))
+
+    # One token may legitimately appear under every transition-phase name.
+    _private_directory(base / f"run.{tokens[0]}")
+    _private_directory(base / f".retired.run.{tokens[0]}")
+    _private_file(base / f"retirement.run.{tokens[0]}", "authority\n")
+    _private_file(base / f"retirement.run.{tokens[0]}.next", "staged\n")
+    _private_directory(base / f".retired.network.{tokens[1]}")
+    _private_file(base / f"retirement.build.{tokens[2]}", "authority\n")
+    _private_file(base / f"retirement.transaction.{tokens[3]}.next", "staged\n")
+    _private_directory(base / f"run.{tokens[4]}")
+    _private_file(base / f"retirement.network.{tokens[5]}.next", "staged\n")
+    _private_directory(base / f"build.{tokens[6]}")
+
+    seven = _run_localised_secure_lifecycle_base(parent)
+
+    assert seven.returncode == 0, seven.stderr
+
+    eighth = base / f"retirement.transaction.{tokens[7]}"
+    _private_file(eighth, "authority\n")
+    eight = _run_localised_secure_lifecycle_base(parent)
+
+    assert eight.returncode != 0
+    eighth.unlink()
+
+    cross_kind = base / f"retirement.network.{tokens[0]}.next"
+    _private_file(cross_kind, "staged\n")
+    changed_kind = _run_localised_secure_lifecycle_base(parent)
+
+    assert changed_kind.returncode != 0
+
+
 @pytest.fixture
 def retirement_environment(fake_environment: dict[str, str]):
     """Reuse the Docker model but remove only retirement state created here."""
@@ -166,10 +312,15 @@ from pathlib import Path
 import sys
 
 root = Path(sys.argv[1])
-docker = root / "docker-config"
+fields = Path("/proc/self/stat").read_text().rsplit(") ", 1)[1].split()
+boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+boot = boot_id.replace("-", "")
+docker = root / (
+    f".qcsd-docker-config-{os.getuid()}.v2.{boot}."
+    f"{int(fields[19])}.{'a' * 64}"
+)
 docker.mkdir(mode=0o500)
 docker_fd = os.open(docker, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
-docker.rmdir()
 buildx_parent = root / "buildx-parent"
 buildx_parent.mkdir(mode=0o700)
 buildx_name = f".qcsd-buildx-config-{os.getuid()}.{'a' * 64}"
@@ -181,16 +332,19 @@ buildx_parent_fd = os.open(
 docker_value = os.fstat(docker_fd)
 buildx_value = buildx.stat(follow_symlinks=False)
 record = {
+    "boot_id": boot_id,
+    "guardian_start": int(fields[19]),
     "buildx_device": buildx_value.st_dev,
     "buildx_inode": buildx_value.st_ino,
     "buildx_path": f"/proc/{os.getpid()}/fd/{buildx_parent_fd}/{buildx_name}",
     "docker_device": docker_value.st_dev,
     "docker_inode": docker_value.st_ino,
-    "docker_path": f"/proc/{os.getpid()}/fd/{docker_fd}",
+    "docker_path": str(docker),
 }
 (root / "proof.json").write_text(json.dumps(record), encoding="ascii")
 print("READY", flush=True)
 sys.stdin.buffer.read()
+docker.rmdir()
 '''
     holder = subprocess.Popen(
         [sys.executable, "-I", "-c", holder_source, str(proof_root)],
@@ -228,7 +382,7 @@ sys.stdin.buffer.read()
         encoding="ascii",
     )
     native_harness.chmod(0o600)
-    lock_path = fixture_root / "retirement-lifecycle.lock"
+    lock_path = proof_root / "retirement-lifecycle.lock"
     lock_path.touch(mode=0o600)
     lock_path.chmod(0o600)
     helper_wrapper = fixture_root / "retirement-helper-wrapper.sh"
@@ -236,6 +390,7 @@ sys.stdin.buffer.read()
         textwrap.dedent(
             r'''\
             source "$REAL_HELPER"
+            source "$QCSD_TEST_LIFECYCLE_SHIM"
 
             _qcsd_test_source_binding() {
               local role="$1" path="$2" device inode digest
@@ -282,6 +437,8 @@ sys.stdin.buffer.read()
             _QCSD_LIFECYCLE_BUILDX_CONFIG_PATH=$RETIREMENT_BUILDX_CONFIG_PATH
             _QCSD_LIFECYCLE_BUILDX_CONFIG_DEVICE=$RETIREMENT_BUILDX_CONFIG_DEVICE
             _QCSD_LIFECYCLE_BUILDX_CONFIG_INODE=$RETIREMENT_BUILDX_CONFIG_INODE
+            _QCSD_LIFECYCLE_BOOT_ID=$RETIREMENT_BOOT_ID
+            _QCSD_LIFECYCLE_GUARD_START=$RETIREMENT_GUARDIAN_START
 
             _qcsd_retirement_native_op() {
               /usr/bin/python3 -I "$RETIREMENT_NATIVE_HARNESS" "$@"
@@ -321,10 +478,12 @@ sys.stdin.buffer.read()
         RETIREMENT_BUILDX_CONFIG_DEVICE=str(proof["buildx_device"]),
         RETIREMENT_BUILDX_CONFIG_INODE=str(proof["buildx_inode"]),
         RETIREMENT_BUILDX_CONFIG_PATH=str(proof["buildx_path"]),
+        RETIREMENT_BOOT_ID=str(proof["boot_id"]),
         RETIREMENT_DOCKER_CONFIG_DEVICE=str(proof["docker_device"]),
         RETIREMENT_DOCKER_CONFIG_INODE=str(proof["docker_inode"]),
         RETIREMENT_DOCKER_CONFIG_PATH=str(proof["docker_path"]),
         RETIREMENT_GUARDIAN_SOURCE=str(GUARDIAN),
+        RETIREMENT_GUARDIAN_START=str(proof["guardian_start"]),
         RETIREMENT_CONFIG_HOLDER_PID=str(holder.pid),
         RETIREMENT_CONFIG_HOLDER_KILLED=str(fixture_root / "holder-killed"),
         RETIREMENT_LOCK_PATH=str(lock_path),
@@ -346,11 +505,11 @@ sys.stdin.buffer.read()
     roots_log = state / "supervisor-roots.log"
     if not roots_log.exists():
         return
+    lifecycle_base = Path(environment["QCSD_TEST_LIFECYCLE_BASE"])
     seen: set[Path] = set()
     for raw_root in roots_log.read_text(encoding="utf-8").splitlines():
         root = Path(raw_root)
-        if root.parent != Path(f"/var/tmp/qcsd-docker-lifecycle-{os.getuid()}"):
-            continue
+        assert root.parent == lifecycle_base, root
         if root in seen:
             continue
         seen.add(root)
@@ -708,6 +867,11 @@ docker rm --force "${QCSD_DOCKER_IDS_RETIREMENT[0]}" >/dev/null
     assert setup.returncode == 0, (setup.stdout, setup.stderr)
     state = Path(retirement_environment["FAKE_DOCKER_STATE"])
     root = Path((state / "retiring-root").read_text(encoding="ascii").strip())
+    assert root.parent == Path(retirement_environment["QCSD_TEST_LIFECYCLE_BASE"])
+    assert (
+        f"supervisor_source_path={HELPER.resolve()}\n"
+        in (root / "HANDOFF").read_text(encoding="ascii")
+    )
     before = _tree_snapshot(root.parent)
 
     result = _run_bash(
@@ -817,6 +981,7 @@ qcsd_retire_docker_handoff \
     assert waited_pid == old_holder
     assert os.waitstatus_to_exitcode(waited_status) == -signal.SIGKILL
     Path(environment["RETIREMENT_CONFIG_HOLDER_KILLED"]).touch()
+    Path(environment["RETIREMENT_DOCKER_CONFIG_PATH"]).rmdir()
     deadline = time.monotonic() + 3
     while Path(environment["RETIREMENT_DOCKER_CONFIG_PATH"]).exists():
         assert time.monotonic() < deadline
@@ -825,7 +990,14 @@ qcsd_retire_docker_handoff \
     successor_source = r'''
 import json, os, pathlib, sys
 base = pathlib.Path(sys.argv[1])
-docker = base / "docker"
+lock_parent = pathlib.Path(sys.argv[2])
+fields = pathlib.Path("/proc/self/stat").read_text().rsplit(") ", 1)[1].split()
+boot_id = pathlib.Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+boot = boot_id.replace("-", "")
+docker = lock_parent / (
+    f".qcsd-docker-config-{os.getuid()}.v2.{boot}."
+    f"{int(fields[19])}.{'b' * 64}"
+)
 buildx = base / "buildx"
 docker.mkdir(mode=0o500)
 buildx.mkdir(mode=0o700)
@@ -833,9 +1005,10 @@ buildx.mkdir(mode=0o700)
 docker_fd = os.open(docker, os.O_RDONLY | os.O_DIRECTORY)
 base_fd = os.open(base, os.O_RDONLY | os.O_DIRECTORY)
 buildx_fd = os.open(buildx, os.O_RDONLY | os.O_DIRECTORY)
-os.rmdir(docker)
 proof = {
-    "docker_path": f"/proc/{os.getpid()}/fd/{docker_fd}",
+    "boot_id": boot_id,
+    "guardian_start": int(fields[19]),
+    "docker_path": str(docker),
     "docker_device": os.fstat(docker_fd).st_dev,
     "docker_inode": os.fstat(docker_fd).st_ino,
     "buildx_path": f"/proc/{os.getpid()}/fd/{base_fd}/buildx",
@@ -844,11 +1017,19 @@ proof = {
 }
 print(json.dumps(proof), flush=True)
 sys.stdin.buffer.read()
+docker.rmdir()
 '''
     successor_root = tmp_path / "successor"
     successor_root.mkdir(mode=0o700)
     successor = subprocess.Popen(
-        [sys.executable, "-I", "-c", successor_source, str(successor_root)],
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            successor_source,
+            str(successor_root),
+            str(Path(environment["RETIREMENT_LOCK_PATH"]).parent),
+        ],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -861,6 +1042,8 @@ sys.stdin.buffer.read()
         "RETIREMENT_DOCKER_CONFIG_PATH": proof["docker_path"],
         "RETIREMENT_DOCKER_CONFIG_DEVICE": str(proof["docker_device"]),
         "RETIREMENT_DOCKER_CONFIG_INODE": str(proof["docker_inode"]),
+        "RETIREMENT_BOOT_ID": str(proof["boot_id"]),
+        "RETIREMENT_GUARDIAN_START": str(proof["guardian_start"]),
         "RETIREMENT_BUILDX_CONFIG_PATH": proof["buildx_path"],
         "RETIREMENT_BUILDX_CONFIG_DEVICE": str(proof["buildx_device"]),
         "RETIREMENT_BUILDX_CONFIG_INODE": str(proof["buildx_inode"]),

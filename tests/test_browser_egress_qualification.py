@@ -67,6 +67,7 @@ from qcsd_lab.browser_egress_qualification import (
     FINAL_RECEIPT_TYPE,
     FINAL_SCHEMA_VERSION,
     FoundationVerificationMode,
+    HISTORICAL_FOUNDATION_SCHEMA_VERSION,
     MANIFEST_RELATIVE_PATH,
     REQUIRED_SOURCE_BINDING_PATHS,
     FIXTURE_RUNTIME_CERTIFICATE,
@@ -191,6 +192,10 @@ def _lab(tmp_path: Path) -> tuple[Path, dict]:
         "path": str(build_path.resolve()),
         "sha256": "6" * 64,
         "cohort_version": 71,
+        "completion_path": str(
+            (build_path.parent / "build-completion-v71.json").resolve()
+        ),
+        "completion_sha256": "8" * 64,
         "images": {
             "collection": {"id": collection},
             "prepare": {"id": prepare},
@@ -211,16 +216,26 @@ def _lab(tmp_path: Path) -> tuple[Path, dict]:
 
 
 class _BuildValidator:
-    def __init__(self, foundation: dict) -> None:
+    def __init__(
+        self, foundation: dict, *, allow_historical: bool = False
+    ) -> None:
         self.foundation = foundation
+        self.allow_historical = allow_historical
 
-    def __call__(self, path: Path, *, expected_cohort_version: int) -> dict:
+    def __call__(
+        self,
+        path: Path,
+        *,
+        expected_cohort_version: int,
+        allow_historical: bool,
+    ) -> dict:
         build = self.foundation["build_execution"]
         assert path.resolve().as_posix().endswith(build["path"])
         assert expected_cohort_version == self.foundation["cohort_version"]
+        assert allow_historical is self.allow_historical
         source = dict(self.foundation["source"])
         source["image_digest"] = build["collection_image_id"]
-        return {
+        result = {
             "path": str(path.resolve()),
             "sha256": build["sha256"],
             "cohort_version": expected_cohort_version,
@@ -232,6 +247,17 @@ class _BuildValidator:
             "source": source,
             "passed": True,
         }
+        if not self.allow_historical:
+            result.update(
+                {
+                    "completion_path": str(
+                        path.parent
+                        / f"build-completion-v{expected_cohort_version}.json"
+                    ),
+                    "completion_sha256": build["completion_sha256"],
+                }
+            )
+        return result
 
 
 def _admit_create(
@@ -443,6 +469,35 @@ def test_foundation_rejects_bool_float_and_adversarial_reseal(tmp_path: Path) ->
     resealed = bind_receipt(forged, receipt_type="qcsd-browser-egress-qualification-foundation")
     with pytest.raises(ValueError, match="inconsistent|bind"):
         validate_foundation_payload(resealed["payload"])
+    missing_completion = copy.deepcopy(foundation)
+    missing_completion["build_execution"].pop("completion_path")
+    with pytest.raises(ValueError, match="build binding"):
+        validate_foundation_payload(missing_completion)
+    tampered_completion = copy.deepcopy(foundation)
+    tampered_completion["build_execution"]["completion_sha256"] = "f" * 64
+    with pytest.raises(ValueError, match="does not reproduce its binding"):
+        deep_validate_foundation(
+            tampered_completion,
+            lab_root=_root,
+            build_validator=_BuildValidator(foundation),
+            mode=FoundationVerificationMode.PORTABLE_REPLAY,
+        )
+    historical = copy.deepcopy(foundation)
+    historical["schema_version"] = HISTORICAL_FOUNDATION_SCHEMA_VERSION
+    historical["build_execution"].pop("completion_path")
+    historical["build_execution"].pop("completion_sha256")
+    with pytest.raises(ValueError, match="foundation identity"):
+        validate_foundation_payload(historical)
+    assert validate_foundation_payload(
+        historical, allow_historical=True
+    ) == json.loads(canonical_json_bytes(historical))
+    assert deep_validate_foundation(
+        historical,
+        lab_root=_root,
+        build_validator=_BuildValidator(historical, allow_historical=True),
+        mode=FoundationVerificationMode.PORTABLE_REPLAY,
+        allow_historical=True,
+    ) == json.loads(canonical_json_bytes(historical))
 
 
 def test_foundation_rejects_cross_daemon_and_resealed_daemon_claim(

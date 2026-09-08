@@ -38,7 +38,12 @@ from .build_storage import (
     BUILD_EXECUTION_ARTIFACT_TYPE as _BUILD_EXECUTION_ARTIFACT_TYPE,
     BUILD_IMAGE_TAGS,
     BUILD_WSL_HOST_MIN_AVAILABLE_BYTES as _BUILD_WSL_HOST_MIN_AVAILABLE_BYTES,
+    _canonical_finite_json_bytes,
+    build_completion_path,
+    load_stable_build_completion,
     load_stable_build_execution,
+    load_stable_build_execution_with_stat,
+    validate_build_completion_authority,
     validate_build_execution_envelope,
 )
 from .fidelity import (
@@ -7970,6 +7975,33 @@ def _file_binding(path: Path) -> dict[str, str]:
     return {"path": str(resolved), "sha256": sha256_file(resolved)}
 
 
+def _portable_lab_path(path: Path) -> str:
+    """Project one checkout path onto the canonical `/lab` evidence mount."""
+
+    resolved = Path(os.path.abspath(path)).resolve()
+    if not resolved.is_relative_to(LAB_ROOT):
+        raise ValueError("historical evidence path is outside the Lab checkout")
+    return str(Path("/lab") / resolved.relative_to(LAB_ROOT))
+
+
+def _resolve_portable_lab_path(value: Any, *, label: str) -> Path:
+    """Resolve a canonical `/lab` receipt path in the inspecting checkout."""
+
+    if not isinstance(value, str):
+        raise ValueError(f"{label} path is invalid")
+    portable = Path(value)
+    if (
+        not portable.is_absolute()
+        or portable.parts[:2] != ("/", "lab")
+        or ".." in portable.parts
+    ):
+        raise ValueError(f"{label} path is not a canonical /lab path")
+    resolved = (LAB_ROOT / Path(*portable.parts[2:])).resolve()
+    if not resolved.is_relative_to(LAB_ROOT):
+        raise ValueError(f"{label} path escapes the Lab checkout")
+    return resolved
+
+
 def _result_binding(path: Path) -> dict[str, str]:
     candidate = path.absolute()
     if candidate.is_symlink():
@@ -8004,6 +8036,33 @@ def _formal_campaign_bindings(
     ]
 
 
+def _current_build_execution_identity(build: Mapping[str, Any]) -> dict[str, Any]:
+    """Project one completed schema-5 receipt into its portable identity."""
+
+    version = _cohort_version(build.get("cohort_version"))
+    expected_completion = (
+        f"/lab/artifacts/buflo-study/build-completion-v{version}.json"
+    )
+    completion_path = build.get("completion_path")
+    if (
+        build.get("schema_version") != 5
+        or not isinstance(completion_path, str)
+        or Path(completion_path).name != f"build-completion-v{version}.json"
+        or not isinstance(build.get("completion_sha256"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", build["completion_sha256"]) is None
+    ):
+        raise ValueError("current build receipt has no completion identity")
+    return {
+        "cohort_version": version,
+        "sha256": build["sha256"],
+        "completion_path": expected_completion,
+        "completion_sha256": build["completion_sha256"],
+        "collection_image": build["collection_image"],
+        "started_at": build["started_at"],
+        "finished_at": build["finished_at"],
+    }
+
+
 def _historical_snapshot_value(
     *,
     phase: str,
@@ -8011,16 +8070,25 @@ def _historical_snapshot_value(
     pre_snapshot: Path | None = None,
     cohort_version: int = 1,
     create_resolved_campaigns: bool = False,
+    _schema_version: int = 2,
+    _expected_collection_source: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     version = _cohort_version(cohort_version)
+    if _schema_version not in {1, 2}:
+        raise ValueError("historical corpus snapshot schema is invalid")
+    historical_schema = _schema_version == 1
     if phase not in {"pre-formal", "post-formal"}:
         raise ValueError("historical snapshot phase must be pre-formal or post-formal")
-    source = source_metadata()
+    source = _expected_clean_collection_source(
+        _expected_collection_source,
+        label=f"historical {phase} snapshot",
+    )
     _validate_clean_source(source, label=f"historical {phase} snapshot")
     selected_build = validate_build_execution_receipt(
         build_execution_receipt_path(version),
         expected_collection_image=source["image_digest"],
         expected_cohort_version=version,
+        allow_historical=historical_schema,
     )
     selected_build_binding = {
         "path": selected_build["path"],
@@ -8038,6 +8106,7 @@ def _historical_snapshot_value(
             pre_snapshot,
             phase="pre-formal",
             expected_cohort_version=version,
+            allow_historical=historical_schema,
         )
         if pre["source"] != source or pre["build_execution_receipt"] != selected_build_binding:
             raise ValueError("pre/post historical snapshots do not share one source/image")
@@ -8051,8 +8120,8 @@ def _historical_snapshot_value(
         result_bindings = [_result_binding(receipt.root) for receipt in verified]
         pre_binding = _file_binding(pre_snapshot)
     guard = validate_historical_corpus_guard(deep=True)
-    return {
-        "schema_version": 1,
+    value = {
+        "schema_version": _schema_version,
         "artifact_type": HISTORICAL_SNAPSHOT_ARTIFACT_TYPE,
         "phase": phase,
         "cohort_version": version,
@@ -8069,6 +8138,9 @@ def _historical_snapshot_value(
         "pre_formal_snapshot": pre_binding,
         "formal_results": result_bindings,
     }
+    if not historical_schema:
+        value["build_execution"] = _current_build_execution_identity(selected_build)
+    return value
 
 
 def create_historical_guard_snapshot(
@@ -8106,6 +8178,7 @@ def validate_historical_guard_snapshot(
     formal_result_roots: Sequence[Path] = (),
     pre_snapshot: Path | None = None,
     expected_cohort_version: int | None = None,
+    allow_historical: bool = False,
 ) -> dict[str, Any]:
     """Re-run the historical guard and require an exact derived snapshot."""
 
@@ -8113,6 +8186,11 @@ def validate_historical_guard_snapshot(
     value = load_json(Path(binding["path"]))
     if not isinstance(value, dict):
         raise ValueError("historical corpus snapshot is not an object")
+    schema_version = value.get("schema_version")
+    if schema_version not in {1, 2}:
+        raise ValueError("historical corpus snapshot schema is invalid")
+    if schema_version != 2 and not allow_historical:
+        raise ValueError("current historical-snapshot admission requires schema 2")
     stored_version = _cohort_version(value.get("cohort_version"))
     if expected_cohort_version is not None and stored_version != _cohort_version(
         expected_cohort_version
@@ -8136,6 +8214,10 @@ def validate_historical_guard_snapshot(
         pre_snapshot=pre_snapshot,
         cohort_version=stored_version,
         create_resolved_campaigns=False,
+        _schema_version=schema_version,
+        _expected_collection_source=(
+            value.get("source") if schema_version == 1 and allow_historical else None
+        ),
     )
     if value != expected:
         raise ValueError("historical corpus snapshot differs from independently derived evidence")
@@ -8149,8 +8231,13 @@ def _formal_cohort_value(
     historical_pre_snapshot: Path,
     cohort_version: int = 1,
     create_resolved_campaigns: bool = False,
+    _schema_version: int = 3,
+    _expected_collection_source: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     version = _cohort_version(cohort_version)
+    if _schema_version not in {1, 2, 3}:
+        raise ValueError("formal cohort manifest schema is invalid")
+    historical_schema = _schema_version != 3
     if re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*-v[1-9][0-9]*", cohort_id) is None:
         raise ValueError("formal cohort ID must be a versioned lowercase hyphenated slug")
     if not cohort_id.endswith(f"-v{version}"):
@@ -8161,12 +8248,16 @@ def _formal_cohort_value(
     results_root = root_value.resolve()
     if not results_root.is_dir():
         raise ValueError("formal cohort result root must already exist")
-    source = source_metadata()
+    source = _expected_clean_collection_source(
+        _expected_collection_source,
+        label="formal cohort manifest",
+    )
     _validate_clean_source(source, label="formal cohort manifest")
     selected_build = validate_build_execution_receipt(
         build_execution_receipt_path(version),
         expected_collection_image=source["image_digest"],
         expected_cohort_version=version,
+        allow_historical=historical_schema,
     )
     selected_build_binding = {
         "path": selected_build["path"],
@@ -8176,6 +8267,7 @@ def _formal_cohort_value(
         historical_pre_snapshot,
         phase="pre-formal",
         expected_cohort_version=version,
+        allow_historical=historical_schema,
     )
     if (
         historical["source"] != source
@@ -8218,7 +8310,7 @@ def _formal_cohort_value(
         "src/qcsd_lab/orchestrator.py",
     )
     value = {
-        "schema_version": (2 if version >= FORMAL_FAIL_CLOSED_COHORT_VERSION else 1),
+        "schema_version": _schema_version,
         "artifact_type": COHORT_MANIFEST_ARTIFACT_TYPE,
         "cohort_id": cohort_id,
         "cohort_version": version,
@@ -8241,6 +8333,8 @@ def _formal_cohort_value(
     formal_evaluation = formal_evaluation_contract_for_cohort(version)
     if formal_evaluation is not None:
         value["formal_evaluation"] = formal_evaluation
+    if not historical_schema:
+        value["build_execution"] = _current_build_execution_identity(selected_build)
     return value
 
 
@@ -8279,11 +8373,17 @@ def validate_formal_cohort_manifest(
     *,
     allow_existing_results: bool = True,
     expected_cohort_version: int | None = None,
+    allow_historical: bool = False,
 ) -> dict[str, Any]:
     binding = _file_binding(path)
     value = load_json(Path(binding["path"]))
     if not isinstance(value, Mapping):
         raise ValueError("formal cohort manifest is not an object")
+    schema_version = value.get("schema_version")
+    if schema_version not in {1, 2, 3}:
+        raise ValueError("formal cohort manifest schema is invalid")
+    if schema_version != 3 and not allow_historical:
+        raise ValueError("current formal-cohort admission requires schema 3")
     stored_version = _cohort_version(value.get("cohort_version"))
     if expected_cohort_version is not None and stored_version != _cohort_version(
         expected_cohort_version
@@ -8297,6 +8397,10 @@ def validate_formal_cohort_manifest(
         results_root=Path(str(value.get("results_root"))),
         historical_pre_snapshot=Path(pre["path"]),
         cohort_version=stored_version,
+        _schema_version=schema_version,
+        _expected_collection_source=(
+            value.get("source") if schema_version in {1, 2} and allow_historical else None
+        ),
     )
     if value != expected:
         raise ValueError("formal cohort manifest differs from prospectively derived inputs")
@@ -8365,17 +8469,23 @@ def _capture_admission_value(
     formal_capacity_record: Mapping[str, Any] | None = None,
     cohort_version: int = 1,
     create_resolved_campaigns: bool = False,
+    _schema_version: int = 4,
 ) -> dict[str, Any]:
     version = _cohort_version(cohort_version)
+    if _schema_version not in {1, 2, 3, 4}:
+        raise ValueError("capture admission schema is invalid")
+    historical_schema = _schema_version != 4
     if stage not in STAGED_CAPTURE_PREREQUISITES:
         raise ValueError("capture admission stage must be smoke, rehearsal, or formal")
     reference = validate_reference_gate_receipt(
         reference_receipt,
         expected_cohort_version=version,
+        allow_historical=historical_schema,
     )
     qualification = validate_qualification_receipt(
         qualification_receipt,
         expected_cohort_version=version,
+        allow_historical=historical_schema,
     )
     staged = validate_staged_capture_prerequisites(
         stage,
@@ -8389,6 +8499,7 @@ def _capture_admission_value(
         build_execution_receipt_path(version),
         expected_collection_image=source["image_digest"],
         expected_cohort_version=version,
+        allow_historical=historical_schema,
     )
     selected_build_binding = {
         "path": selected_build["path"],
@@ -8403,7 +8514,7 @@ def _capture_admission_value(
     if version >= 9:
         expected_scheduler = _capture_scheduler_environment_contract()
         if any(
-            environment.get("schema_version") != 2
+            environment.get("schema_version") != (2 if historical_schema else 3)
             or environment.get("capture_scheduler") != expected_scheduler
             or environment.get("docker", {}).get("ncpu") != 12
             for environment in build_environments
@@ -8413,14 +8524,20 @@ def _capture_admission_value(
             "docker_ncpu": 12,
             **expected_scheduler,
         }
-    build_execution = _one_build_execution_identity(build_environments)
-    expected_build_execution = {
-        "cohort_version": version,
-        "sha256": selected_build["sha256"],
-        "collection_image": selected_build["collection_image"],
-        "started_at": selected_build["started_at"],
-        "finished_at": selected_build["finished_at"],
-    }
+    build_execution = _one_build_execution_identity(
+        build_environments, allow_historical=historical_schema
+    )
+    expected_build_execution = (
+        {
+            "cohort_version": version,
+            "sha256": selected_build["sha256"],
+            "collection_image": selected_build["collection_image"],
+            "started_at": selected_build["started_at"],
+            "finished_at": selected_build["finished_at"],
+        }
+        if historical_schema
+        else _current_build_execution_identity(selected_build)
+    )
     if (
         build_execution != expected_build_execution
         or reference.get("build_execution") != expected_build_execution
@@ -8454,6 +8571,7 @@ def _capture_admission_value(
                 regression_result_roots=regression_roots,
                 expected_cohort_version=version,
                 deep=False,
+                allow_historical=historical_schema,
             )
             if (
                 code_gate["source"] != source
@@ -8465,10 +8583,12 @@ def _capture_admission_value(
             historical_pre_snapshot,
             phase="pre-formal",
             expected_cohort_version=version,
+            allow_historical=historical_schema,
         )
         cohort = validate_formal_cohort_manifest(
             formal_cohort_manifest,
             expected_cohort_version=version,
+            allow_historical=historical_schema,
         )
         if (
             cohort["cohort_version"] != version
@@ -8531,10 +8651,11 @@ def _capture_admission_value(
         for row in allowed
     ):
         raise ValueError("capture admission selected result root escapes its bound results root")
+    legacy_schema = 3 if code_gate is not None else (2 if capture_scheduler is not None else 1)
+    if historical_schema and _schema_version != legacy_schema:
+        raise ValueError("historical capture admission schema/features differ")
     value = {
-        "schema_version": (
-            3 if code_gate is not None else (2 if capture_scheduler is not None else 1)
-        ),
+        "schema_version": _schema_version,
         "artifact_type": CAPTURE_ADMISSION_ARTIFACT_TYPE,
         "stage": stage,
         "cohort_version": version,
@@ -8614,6 +8735,7 @@ def validate_capture_admission(
     *,
     allow_existing_results: bool = True,
     expected_cohort_version: int | None = None,
+    allow_historical: bool = False,
 ) -> dict[str, Any]:
     binding = _file_binding(path)
     value = load_json(Path(binding["path"]))
@@ -8624,6 +8746,11 @@ def validate_capture_admission(
         expected_cohort_version
     ):
         raise ValueError("capture admission cohort version does not match the request")
+    schema_version = value.get("schema_version")
+    if schema_version not in {1, 2, 3, 4}:
+        raise ValueError("capture admission schema is invalid")
+    if schema_version != 4 and not allow_historical:
+        raise ValueError("current capture admission requires schema 4")
     reference = value.get("reference_gate")
     qualification = value.get("qualification")
     staged = value.get("staged_prerequisites")
@@ -8670,6 +8797,7 @@ def validate_capture_admission(
         ),
         cohort_version=stored_version,
         create_resolved_campaigns=False,
+        _schema_version=schema_version,
     )
     if value != expected:
         raise ValueError("capture admission differs from independently derived evidence")
@@ -8738,11 +8866,14 @@ def admitted_result_root(
 
 def _qualification_build_binding(
     cohort_version: int = 1,
+    *,
+    allow_historical: bool = False,
 ) -> tuple[dict[str, Any], str]:
     version = _cohort_version(cohort_version)
     receipt = validate_build_execution_receipt(
         build_execution_receipt_path(version),
         expected_cohort_version=version,
+        allow_historical=allow_historical,
     )
     binding = {"path": receipt["path"], "sha256": receipt["sha256"]}
     build = receipt
@@ -8755,6 +8886,7 @@ def qualification_status(
     *,
     require_controlled: bool = True,
     cohort_version: int = 1,
+    allow_historical: bool = False,
 ) -> tuple[bool, str]:
     version = _cohort_version(cohort_version)
     root = QUALIFICATION_SET_ROOT / qualification_set_for_cohort(version)
@@ -8772,7 +8904,9 @@ def qualification_status(
     )
 
     try:
-        _build_binding, prepare_image_id = _qualification_build_binding(version)
+        _build_binding, prepare_image_id = _qualification_build_binding(
+            version, allow_historical=allow_historical
+        )
     except (OSError, ValueError) as error:
         return False, f"sustained chaff qualification has no valid build execution: {error}"
     for workload in WORKLOADS:
@@ -8809,11 +8943,16 @@ def _qualification_receipt_value(
     explanation_receipt: Path | None = None,
     cohort_version: int = 1,
     _expected_collection_source: Mapping[str, Any] | None = None,
+    _schema_version: int = 2,
 ) -> dict[str, Any]:
     version = _cohort_version(cohort_version)
+    if _schema_version not in {1, 2}:
+        raise ValueError("qualification receipt schema is invalid")
+    historical = _schema_version == 1
     ready, status = qualification_status(
         require_controlled=False,
         cohort_version=version,
+        allow_historical=historical,
     )
     if not ready:
         raise ValueError(status)
@@ -8828,28 +8967,36 @@ def _qualification_receipt_value(
         or controlled.get("ctsp_cpsp_ordering", {}).get("passed") is not True
     ):
         raise ValueError("qualification receipt requires every controlled hard gate")
-    build_binding, prepare_image_id = _qualification_build_binding(version)
-    build = _validate_build_execution_value(
-        load_json(Path(build_binding["path"])),
-        expected_collection_image=controlled["source"]["image_digest"],
-        expected_cohort_version=version,
+    build_binding, prepare_image_id = _qualification_build_binding(
+        version, allow_historical=historical
     )
     controlled_build = _one_build_execution_identity(
-        [record["environment"] for record in controlled["results"]]
+        [record["environment"] for record in controlled["results"]],
+        allow_historical=historical,
     )
-    expected_build_identity = {
-        "cohort_version": version,
-        "sha256": build_binding["sha256"],
-        "collection_image": build["collection_image"],
-        "started_at": build["started_at"],
-        "finished_at": build["finished_at"],
-    }
+    selected_build = validate_build_execution_receipt(
+        Path(build_binding["path"]),
+        expected_collection_image=controlled["source"]["image_digest"],
+        expected_cohort_version=version,
+        allow_historical=historical,
+    )
+    expected_build_identity = (
+        {
+            "cohort_version": version,
+            "sha256": selected_build["sha256"],
+            "collection_image": selected_build["collection_image"],
+            "started_at": selected_build["started_at"],
+            "finished_at": selected_build["finished_at"],
+        }
+        if historical
+        else _current_build_execution_identity(selected_build)
+    )
     if controlled_build != expected_build_identity:
         raise ValueError("controlled qualification did not use the exact no-cache build execution")
     set_root = QUALIFICATION_SET_ROOT / qualification_set_for_cohort(version)
     sidecars = [_file_binding(set_root / f"{workload}.json") for workload in WORKLOADS]
     return {
-        "schema_version": 1,
+        "schema_version": _schema_version,
         "artifact_type": QUALIFICATION_RECEIPT_ARTIFACT_TYPE,
         "cohort_version": version,
         "study_plan": _file_binding(STUDY_PLAN),
@@ -8899,11 +9046,21 @@ def validate_qualification_receipt(
     explanation_receipt: Path | None = None,
     expected_cohort_version: int | None = None,
     _expected_collection_source: Mapping[str, Any] | None = None,
+    allow_historical: bool = False,
 ) -> dict[str, Any]:
     binding = _file_binding(path)
     value = load_json(Path(binding["path"]))
     if not isinstance(value, Mapping):
         raise ValueError("qualification receipt is not an object")
+    schema_version = value.get("schema_version")
+    if schema_version not in {1, 2}:
+        raise ValueError("qualification receipt schema is invalid")
+    if schema_version != 2 and not allow_historical:
+        raise ValueError("current qualification admission requires schema 2")
+    if schema_version == 1 and allow_historical and _expected_collection_source is None:
+        stored_source = value.get("source")
+        _validate_clean_source(stored_source, label="historical qualification receipt")
+        _expected_collection_source = dict(stored_source)
     stored_version = _cohort_version(value.get("cohort_version"))
     if expected_cohort_version is not None and stored_version != _cohort_version(
         expected_cohort_version
@@ -8931,6 +9088,7 @@ def validate_qualification_receipt(
         explanation_receipt=explanation_receipt,
         cohort_version=stored_version,
         _expected_collection_source=_expected_collection_source,
+        _schema_version=schema_version,
     )
     if value != expected:
         raise ValueError("qualification receipt differs from independently derived evidence")
@@ -9185,6 +9343,155 @@ def _run_lab_code_gate_commands() -> list[dict[str, Any]]:
     return records
 
 
+def _validate_historical_rust_code_gate_summary(
+    value: Any, *, source: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Validate the immutable outer binding without requiring its old image."""
+
+    expected_commands = [
+        {"gate": gate, "argv": list(argv)} for gate, argv in _RUST_CODE_GATE_COMMANDS
+    ]
+    if (
+        not isinstance(value, Mapping)
+        or set(value)
+        != {"root", "receipt_sha256", "self_hash", "source", "commands", "passed"}
+        or value.get("root") != "/usr/share/qcsd-lab/rust-code-gate"
+        or not isinstance(value.get("receipt_sha256"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", value["receipt_sha256"]) is None
+        or not isinstance(value.get("self_hash"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", value["self_hash"]) is None
+        or value.get("source") != source
+        or value.get("commands") != expected_commands
+        or value.get("passed") is not True
+    ):
+        raise ValueError("historical Rust code-gate summary is invalid")
+    return dict(value)
+
+
+def _validate_historical_result_projection(
+    value: Any, *, source: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Rebuild a sealed historical result summary without current semantics.
+
+    Current sample-schema rules cannot be retroactively applied to old sealed
+    runs.  This branch still checks the closed inventory and every listed byte,
+    then derives the exact outer projection from those immutable files.
+    """
+
+    expected_keys = {
+        "root",
+        "name",
+        "evidence_sha256",
+        "samples",
+        "campaign_sha256",
+        "authoritative_bytes",
+        "environment",
+    }
+    if not isinstance(value, Mapping) or set(value) != expected_keys:
+        raise ValueError("historical regression result binding is invalid")
+    root = _resolve_portable_lab_path(value.get("root"), label="historical regression result")
+    from .verification import authoritative_files
+
+    evidence = root / "evidence.sha256"
+    if evidence.is_symlink() or not evidence.is_file():
+        raise ValueError("historical regression result is not sealed")
+    raw = evidence.read_bytes()
+    try:
+        text = raw.decode("ascii")
+    except UnicodeError as error:
+        raise ValueError("historical regression checksum inventory is invalid") from error
+    if not text.endswith("\n") or "\r" in text or "\0" in text:
+        raise ValueError("historical regression checksum inventory is invalid")
+    checksums: dict[str, str] = {}
+    for line in text[:-1].split("\n"):
+        digest, separator, relative = line.partition("  ")
+        candidate = Path(relative)
+        if (
+            separator != "  "
+            or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+            or not relative
+            or relative in checksums
+            or candidate.is_absolute()
+            or ".." in candidate.parts
+            or candidate.as_posix() != relative
+        ):
+            raise ValueError("historical regression checksum inventory is invalid")
+        checksums[relative] = digest
+    files = authoritative_files(root)
+    if set(files) != set(checksums) or any(
+        sha256_file(files[relative]) != digest for relative, digest in checksums.items()
+    ):
+        raise ValueError("historical regression authoritative bytes changed")
+    experiment = load_json(root / "experiment.json")
+    if (
+        not isinstance(experiment, Mapping)
+        or experiment.get("status") != "complete"
+        or experiment.get("source") != source
+        or not isinstance(experiment.get("samples"), list)
+    ):
+        raise ValueError("historical regression experiment identity is invalid")
+    accepted = [sample for sample in experiment["samples"] if sample.get("state") == "accepted"]
+    configuration = experiment.get("configuration")
+    if not isinstance(configuration, Mapping):
+        raise ValueError("historical regression configuration is invalid")
+    environment = validate_study_environment_receipt(
+        load_json(root / "inputs/study-environment.json"),
+        expected_image_digest=source["image_digest"],
+        allow_historical=True,
+    )
+    projected = {
+        "root": _portable_lab_path(root),
+        "name": experiment.get("name"),
+        "evidence_sha256": hashlib.sha256(raw).hexdigest(),
+        "samples": len(accepted),
+        "campaign_sha256": configuration.get("campaign_sha256"),
+        "authoritative_bytes": len(raw)
+        + sum(files[relative].stat().st_size for relative in checksums),
+        "environment": environment,
+    }
+    if projected != value:
+        raise ValueError("historical regression result projection is invalid")
+    return projected
+
+
+def _validate_historical_regression_summary(
+    value: Any, *, source: Mapping[str, Any]
+) -> dict[str, Any]:
+    required = {
+        "schema_version",
+        "samples",
+        "authoritative_bytes",
+        "source",
+        "results",
+        "established_seven_baseline",
+    }
+    baseline = validate_established_seven_baseline()
+    baseline["path"] = _portable_lab_path(Path(baseline["path"]))
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != required
+        or value.get("schema_version") != 1
+        or value.get("samples") != 18
+        or value.get("source") != source
+        or value.get("established_seven_baseline") != baseline
+        or not isinstance(value.get("results"), list)
+        or len(value["results"]) != 3
+    ):
+        raise ValueError("historical regression summary is invalid")
+    results = [
+        _validate_historical_result_projection(record, source=source)
+        for record in value["results"]
+    ]
+    if (
+        sum(record["samples"] for record in results) != 18
+        or sum(record["authoritative_bytes"] for record in results)
+        != value["authoritative_bytes"]
+        or len({record["name"] for record in results}) != 3
+    ):
+        raise ValueError("historical regression summary totals are invalid")
+    return dict(value)
+
+
 def create_code_gate_receipt(
     destination: Path,
     *,
@@ -9207,13 +9514,7 @@ def create_code_gate_receipt(
         expected_cohort_version=version,
     )
     build_binding = {"path": selected_build["path"], "sha256": selected_build["sha256"]}
-    expected_build_identity = {
-        "cohort_version": version,
-        "sha256": selected_build["sha256"],
-        "collection_image": selected_build["collection_image"],
-        "started_at": selected_build["started_at"],
-        "finished_at": selected_build["finished_at"],
-    }
+    expected_build_identity = _current_build_execution_identity(selected_build)
     if (
         _one_build_execution_identity([record["environment"] for record in regression["results"]])
         != expected_build_identity
@@ -9221,7 +9522,7 @@ def create_code_gate_receipt(
         raise ValueError("code-gate regression did not use the selected cohort build")
     commands = _run_lab_code_gate_commands()
     value = {
-        "schema_version": 1,
+        "schema_version": 2,
         "artifact_type": CODE_GATE_ARTIFACT_TYPE,
         "cohort_version": version,
         "study_plan": _file_binding(STUDY_PLAN),
@@ -9250,13 +9551,24 @@ def validate_code_gate_receipt(
     expected_cohort_version: int | None = None,
     deep: bool = True,
     _expected_collection_source: Mapping[str, Any] | None = None,
+    allow_historical: bool = False,
 ) -> dict[str, Any]:
     binding = _file_binding(path)
     value = load_json(Path(binding["path"]))
-    collection_source = _expected_clean_collection_source(
-        _expected_collection_source,
-        label="study code-gate collection image",
-    )
+    historical = isinstance(value, Mapping) and value.get("schema_version") == 1
+    if historical and not allow_historical:
+        raise ValueError("current code-gate admission requires schema 2")
+    if historical and allow_historical and _expected_collection_source is None:
+        collection_source = dict(value.get("source", {}))
+        _validate_clean_source(
+            collection_source,
+            label="historical study code-gate collection image",
+        )
+    else:
+        collection_source = _expected_clean_collection_source(
+            _expected_collection_source,
+            label="study code-gate collection image",
+        )
     required = {
         "schema_version",
         "artifact_type",
@@ -9270,16 +9582,30 @@ def validate_code_gate_receipt(
         "established_seven_baseline",
         "passed",
     }
+    study_plan = value.get("study_plan") if isinstance(value, Mapping) else None
+    historical_study_plan = (
+        isinstance(study_plan, Mapping)
+        and set(study_plan) == {"path", "sha256"}
+        and study_plan.get("path") == "/lab/config/buflo-study/v1/study.json"
+        and isinstance(study_plan.get("sha256"), str)
+        and re.fullmatch(r"[0-9a-f]{64}", study_plan["sha256"]) is not None
+    )
     if (
         not isinstance(value, Mapping)
         or set(value) != required
-        or value.get("schema_version") != 1
+        or value.get("schema_version") not in {1, 2}
         or value.get("artifact_type") != CODE_GATE_ARTIFACT_TYPE
-        or value.get("study_plan") != _file_binding(STUDY_PLAN)
+        or (
+            value.get("study_plan") != _file_binding(STUDY_PLAN)
+            and not (historical and allow_historical and historical_study_plan)
+        )
         or value.get("source") != collection_source
         or value.get("passed") is not True
     ):
         raise ValueError("study code-gate receipt identity or source is invalid")
+    historical = value["schema_version"] == 1
+    if historical and not allow_historical:
+        raise ValueError("current code-gate admission requires schema 2")
     stored_version = _cohort_version(value["cohort_version"])
     if expected_cohort_version is not None and stored_version != _cohort_version(
         expected_cohort_version
@@ -9289,18 +9615,33 @@ def validate_code_gate_receipt(
         build_execution_receipt_path(stored_version),
         expected_collection_image=value["source"]["image_digest"],
         expected_cohort_version=stored_version,
+        allow_historical=historical,
     )
     selected_build_binding = {
         "path": selected_build["path"],
         "sha256": selected_build["sha256"],
     }
-    if value["build_execution_receipt"] != selected_build_binding:
+    expected_recorded_build_binding = (
+        {
+            "path": _portable_lab_path(Path(selected_build["path"])),
+            "sha256": selected_build["sha256"],
+        }
+        if historical
+        else selected_build_binding
+    )
+    if value["build_execution_receipt"] != expected_recorded_build_binding:
         raise ValueError("study code gate does not bind the selected cohort build")
     if selected_build["source"] != collection_source:
         raise ValueError("study code gate differs from the selected cohort build source")
     _validate_clean_source(value["source"], label="study code gate")
-    rust = validate_rust_code_gate(
-        _expected_collection_source=collection_source,
+    rust = (
+        _validate_historical_rust_code_gate_summary(
+            value.get("rust_code_gate"), source=collection_source
+        )
+        if historical
+        else validate_rust_code_gate(
+            _expected_collection_source=collection_source,
+        )
     )
     if value.get("rust_code_gate") != rust:
         raise ValueError("study code gate does not bind the current Rust build gate")
@@ -9309,7 +9650,14 @@ def validate_code_gate_receipt(
         raise ValueError("study code-gate Lab command inventory is invalid")
     for record, (gate, template) in zip(commands, _LAB_CODE_GATE_COMMANDS, strict=True):
         expected_argv = [
-            os.fspath(Path(os.sys.executable)) if item == "python" else item for item in template
+            (
+                "/opt/qcsd-venv/bin/python"
+                if historical
+                else os.fspath(Path(os.sys.executable))
+            )
+            if item == "python"
+            else item
+            for item in template
         ]
         output = record.get("stdout") if isinstance(record, Mapping) else None
         if (
@@ -9326,7 +9674,7 @@ def validate_code_gate_receipt(
             }
             or record.get("gate") != gate
             or record.get("argv") != expected_argv
-            or record.get("cwd") != str(LAB_ROOT)
+            or record.get("cwd") != ("/lab" if historical else str(LAB_ROOT))
             or record.get("exit_code") != 0
             or not isinstance(output, str)
             or record.get("stdout_bytes") != len(output.encode("utf-8"))
@@ -9334,32 +9682,53 @@ def validate_code_gate_receipt(
         ):
             raise ValueError(f"study code-gate command receipt is invalid: {gate}")
     regression = value.get("live_regression")
-    if not regression_result_roots:
+    if historical:
+        expected_regression = _validate_historical_regression_summary(
+            regression, source=collection_source
+        )
+    elif not regression_result_roots:
         results = regression.get("results") if isinstance(regression, Mapping) else None
         if not isinstance(results, list):
             raise ValueError("study code-gate regression binding is invalid")
-        regression_result_roots = tuple(Path(item["root"]) for item in results)
-    expected_regression = validate_regression_results(
-        regression_result_roots,
-        _expected_collection_source=collection_source,
-    )
+        regression_result_roots = tuple(
+            (
+                _resolve_portable_lab_path(item["root"], label="historical regression result")
+                if historical
+                else Path(item["root"])
+            )
+            for item in results
+            if isinstance(item, Mapping) and isinstance(item.get("root"), str)
+        )
+    if not historical:
+        expected_regression = validate_regression_results(
+            regression_result_roots,
+            _expected_collection_source=collection_source,
+        )
     if regression != expected_regression or expected_regression["source"] != value["source"]:
         raise ValueError("study code-gate regression18 evidence is invalid")
-    expected_build_identity = {
-        "cohort_version": stored_version,
-        "sha256": selected_build["sha256"],
-        "collection_image": selected_build["collection_image"],
-        "started_at": selected_build["started_at"],
-        "finished_at": selected_build["finished_at"],
-    }
+    expected_build_identity = (
+        {
+            "cohort_version": stored_version,
+            "sha256": selected_build["sha256"],
+            "collection_image": selected_build["collection_image"],
+            "started_at": selected_build["started_at"],
+            "finished_at": selected_build["finished_at"],
+        }
+        if historical
+        else _current_build_execution_identity(selected_build)
+    )
     if (
         _one_build_execution_identity(
-            [record["environment"] for record in expected_regression["results"]]
+            [record["environment"] for record in expected_regression["results"]],
+            allow_historical=historical,
         )
         != expected_build_identity
     ):
         raise ValueError("study code-gate regression build differs from the selected cohort")
-    if value.get("established_seven_baseline") != validate_established_seven_baseline():
+    expected_baseline = validate_established_seven_baseline()
+    if historical:
+        expected_baseline["path"] = _portable_lab_path(Path(expected_baseline["path"]))
+    if value.get("established_seven_baseline") != expected_baseline:
         raise ValueError("study code gate does not bind the pre-change seven-mode oracle")
     if deep:
         rerun = _run_lab_code_gate_commands()
@@ -10019,8 +10388,9 @@ def _reference_execution_value(
 ) -> dict[str, Any]:
     canonical = _validate_canonical_reference_receipt(CONFORMANCE_RECEIPT)
     log = _reference_execution_log()
+    current_build = "completion" in build_execution
     value: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2 if current_build else 1,
         "artifact_type": REFERENCE_EXECUTION_ARTIFACT_TYPE,
         "execution_id": execution_id,
         "started_at": started_at,
@@ -10045,7 +10415,10 @@ def _reference_execution_value(
 
 
 def validate_reference_gate_receipt(
-    path: Path, *, expected_cohort_version: int | None = None
+    path: Path,
+    *,
+    expected_cohort_version: int | None = None,
+    allow_historical: bool = False,
 ) -> dict[str, Any]:
     """Validate a fresh outer execution receipt, never the static oracle itself."""
 
@@ -10070,12 +10443,16 @@ def validate_reference_gate_receipt(
     if (
         not isinstance(value, Mapping)
         or set(value) != expected_keys
-        or value.get("schema_version") != 1
+        or value.get("schema_version") not in {1, 2}
         or value.get("artifact_type") != REFERENCE_EXECUTION_ARTIFACT_TYPE
         or not isinstance(value.get("execution_id"), str)
         or re.fullmatch(r"[0-9a-f]{32}", value["execution_id"]) is None
     ):
         raise ValueError("reference execution receipt identity is invalid")
+    if value["schema_version"] != 2 and not allow_historical:
+        raise ValueError(
+            "current reference admission requires schema 2 and build completion"
+        )
     payload = dict(value)
     payload_sha256 = payload.pop("payload_sha256")
     if payload_sha256 != _canonical_digest(payload):
@@ -10104,7 +10481,16 @@ def validate_reference_gate_receipt(
     if image["id"] != image["source"]["image_digest"]:
         raise ValueError("reference execution image ID differs from source metadata")
     build_binding = value["build_execution"]
-    if not isinstance(build_binding, Mapping) or set(build_binding) != {"sha256", "receipt"}:
+    historical_build_keys = {"sha256", "receipt"}
+    current_build_keys = historical_build_keys | {
+        "completion_path",
+        "completion_sha256",
+        "completion_payload_sha256",
+        "completion",
+    }
+    if not isinstance(build_binding, Mapping) or set(build_binding) != (
+        current_build_keys if value["schema_version"] == 2 else historical_build_keys
+    ):
         raise ValueError("reference execution build binding is invalid")
     build_receipt = build_binding["receipt"]
     encoded_build = (json.dumps(build_receipt, indent=2, sort_keys=True) + "\n").encode()
@@ -10113,7 +10499,44 @@ def validate_reference_gate_receipt(
     build = _validate_build_execution_value(
         build_receipt,
         expected_cohort_version=expected_cohort_version,
+        allow_historical=value["schema_version"] == 1 and allow_historical,
     )
+    completed_build: dict[str, Any] | None = None
+    if value["schema_version"] == 2:
+        version = build["cohort_version"]
+        expected_completion_path = (
+            f"/lab/artifacts/buflo-study/build-completion-v{version}.json"
+        )
+        completion_value = build_binding["completion"]
+        completion_raw = _canonical_finite_json_bytes(
+            completion_value, label="reference build completion", newline=True
+        )
+        completion_receipt = completion_value.get("receipt") if isinstance(
+            completion_value, Mapping
+        ) else None
+        if (
+            build.get("schema_version") != 5
+            or build_binding.get("completion_path") != expected_completion_path
+            or build_binding.get("completion_sha256")
+            != hashlib.sha256(completion_raw).hexdigest()
+            or not isinstance(completion_receipt, Mapping)
+        ):
+            raise ValueError("reference execution build completion binding is invalid")
+        completed_build = validate_build_completion_authority(
+            completion_value,
+            completion_path=Path(expected_completion_path),
+            receipt_path=Path(
+                f"/lab/artifacts/buflo-study/build-execution-v{version}.json"
+            ),
+            receipt_raw=encoded_build,
+            receipt_value=build_receipt,
+            receipt_stat=completion_receipt.get("stat"),
+            expected_cohort_version=version,
+        )
+        if completed_build["payload_sha256"] != build_binding.get(
+            "completion_payload_sha256"
+        ):
+            raise ValueError("reference execution build completion payload is invalid")
     if build["images"]["reference"]["id"] != image["id"]:
         raise ValueError("reference execution image differs from its no-cache build")
     build_source = dict(build["source"])
@@ -10165,7 +10588,21 @@ def validate_reference_gate_receipt(
         "bandwidth_ratio": canonical["bandwidth_ratio"],
         "external_sources": canonical["external_sources"],
         "isolation": dict(value["isolation"]),
-    }
+    } | (
+        {
+            "build_execution": {
+                "cohort_version": build["cohort_version"],
+                "sha256": build_binding["sha256"],
+                "completion_path": build_binding["completion_path"],
+                "completion_sha256": build_binding["completion_sha256"],
+                "collection_image": build["collection_image"],
+                "started_at": build["started_at"],
+                "finished_at": build["finished_at"],
+            }
+        }
+        if completed_build is not None
+        else {}
+    )
 
 
 def _validate_build_execution_value(
@@ -10173,12 +10610,21 @@ def _validate_build_execution_value(
     *,
     expected_collection_image: str | None = None,
     expected_cohort_version: int | None = None,
+    allow_historical: bool = False,
 ) -> dict[str, Any]:
     envelope = validate_build_execution_envelope(
         value,
         expected_cohort_version=expected_cohort_version,
-        expected_probe_sha256=sha256_file(LAB_ROOT / "tools/windows_docker_storage_probe.ps1"),
-        checkout_root=LAB_ROOT,
+        expected_probe_sha256=(
+            None
+            if allow_historical
+            else sha256_file(LAB_ROOT / "tools/windows_docker_storage_probe.ps1")
+        ),
+        # A historical receipt proves the immutable bytes and source identity
+        # recorded at execution time.  It must not be rebound to a later
+        # checkout's Dockerfile/lockfiles merely because it is inspected from
+        # that checkout.  Current admission remains ambient-bound below.
+        checkout_root=None if allow_historical else LAB_ROOT,
     )
     cohort_version = _cohort_version(value["cohort_version"])
     if expected_cohort_version is not None and cohort_version != _cohort_version(
@@ -10208,7 +10654,7 @@ def _validate_build_execution_value(
         raise ValueError("study no-cache build duration is invalid")
     docker = value["docker"]
     expected_docker_keys = {"client_version", "server_version"}
-    if value["schema_version"] in {2, 3, 4}:
+    if value["schema_version"] in {2, 3, 4, 5}:
         expected_docker_keys |= {
             "context",
             "endpoint",
@@ -10242,9 +10688,9 @@ def _validate_build_execution_value(
             )
         ):
             raise ValueError(f"study no-cache build {target} image binding is invalid")
-        if value["schema_version"] in {2, 3, 4} and record["tag"] != BUILD_IMAGE_TAGS[target]:
+        if value["schema_version"] in {2, 3, 4, 5} and record["tag"] != BUILD_IMAGE_TAGS[target]:
             raise ValueError(f"study no-cache build {target} image role tag is invalid")
-    if value["schema_version"] in {2, 3, 4} and len(
+    if value["schema_version"] in {2, 3, 4, 5} and len(
         {record["id"] for record in images.values()}
     ) != len(images):
         raise ValueError("study no-cache build image roles do not have distinct immutable IDs")
@@ -10260,14 +10706,14 @@ def _validate_build_execution_value(
         expected_prefix = ["docker"]
         if value["schema_version"] == 2:
             expected_prefix.extend(["--context", docker["context"]])
-        elif value["schema_version"] in {3, 4}:
+        elif value["schema_version"] in {3, 4, 5}:
             expected_prefix.extend(["--host", docker["endpoint"]])
         expected_prefix.extend(["build", "--pull", "--no-cache"])
         argv = command.get("argv") if isinstance(command, Mapping) else None
         iidfile_value: str | None = None
         iidfile: Path | None = None
         if (
-            value["schema_version"] in {2, 3, 4}
+            value["schema_version"] in {2, 3, 4, 5}
             and isinstance(argv, list)
             and len(argv) >= len(expected_prefix) + 2
             and argv[len(expected_prefix)] == "--iidfile"
@@ -10305,7 +10751,7 @@ def _validate_build_execution_value(
             or dockerfile.name != "Dockerfile"
             or dockerfile.parent != build_root
             or (
-                value["schema_version"] in {2, 3, 4}
+                value["schema_version"] in {2, 3, 4, 5}
                 and (
                     iidfile is None
                     or not iidfile.is_absolute()
@@ -10338,7 +10784,7 @@ def _validate_build_execution_value(
     if source["image_digest"] != collection_id:
         raise ValueError("study no-cache build source does not bind the collection image")
     build = value["build_inputs"]
-    if (
+    if not allow_historical and (
         not isinstance(build, Mapping)
         or build.get("schema_version") != 1
         or build.get("artifact_type") != "qcsd-study-build-inputs"
@@ -10348,7 +10794,9 @@ def _validate_build_execution_value(
         or build.get("cargo_lock_sha256") != sha256_file(LAB_ROOT / "neqo-qcsd/Cargo.lock")
     ):
         raise ValueError("study no-cache build inputs are invalid")
-    if value["dockerfile_sha256"] != sha256_file(LAB_ROOT / "Dockerfile"):
+    if not allow_historical and value["dockerfile_sha256"] != sha256_file(
+        LAB_ROOT / "Dockerfile"
+    ):
         raise ValueError("study no-cache build Dockerfile binding is stale")
     validated = {
         "cohort_version": cohort_version,
@@ -10359,9 +10807,16 @@ def _validate_build_execution_value(
         "finished_at": value["finished_at"],
         "passed": True,
     }
-    if value["schema_version"] == 4:
-        validated["schema_version"] = 4
+    if value["schema_version"] in {4, 5}:
+        validated["schema_version"] = value["schema_version"]
         validated["buildx"] = envelope["buildx"]
+    if value["schema_version"] == 5:
+        validated["cohort_allocation"] = envelope["cohort_allocation"]
+        validated["cohort_claim"] = envelope["cohort_claim"]
+        validated["cohort_claim_chain"] = envelope["cohort_claim_chain"]
+        validated["cohort_authority_reproofs"] = envelope[
+            "cohort_authority_reproofs"
+        ]
     return validated
 
 
@@ -10370,8 +10825,16 @@ def validate_build_execution_receipt(
     *,
     expected_collection_image: str | None = None,
     expected_cohort_version: int | None = None,
+    allow_historical: bool = False,
 ) -> dict[str, Any]:
     resolved, raw, value = load_stable_build_execution(path)
+    if (
+        not isinstance(value, Mapping)
+        or value.get("schema_version") not in {1, 2, 3, 4, 5}
+    ):
+        raise ValueError("study no-cache build execution schema is invalid")
+    if value["schema_version"] != 5 and not allow_historical:
+        raise ValueError("current study build admission requires schema 5 and its completion")
     binding = {
         "path": str(resolved),
         "sha256": hashlib.sha256(raw).hexdigest(),
@@ -10380,10 +10843,76 @@ def validate_build_execution_receipt(
         value,
         expected_collection_image=expected_collection_image,
         expected_cohort_version=expected_cohort_version,
+        allow_historical=allow_historical,
     )
     expected_path = build_execution_receipt_path(validated["cohort_version"]).resolve()
     if Path(binding["path"]) != expected_path:
         raise ValueError("study no-cache build receipt path does not match its cohort version")
+    if validated.get("schema_version") == 5:
+        rebound_path, rebound_raw, rebound_value, rebound_stat = (
+            load_stable_build_execution_with_stat(path)
+        )
+        if rebound_path != resolved or rebound_raw != raw or rebound_value != value:
+            raise ValueError("study build receipt changed before completion validation")
+        completion_expected = build_completion_path(
+            rebound_path, validated["cohort_version"]
+        )
+        completion_path, completion_raw, completion_value = load_stable_build_completion(
+            completion_expected
+        )
+        completion = validate_build_completion_authority(
+            completion_value,
+            completion_path=completion_path,
+            receipt_path=rebound_path,
+            receipt_raw=rebound_raw,
+            receipt_value=rebound_value,
+            receipt_stat=rebound_stat,
+            expected_cohort_version=validated["cohort_version"],
+        )
+        final_path, final_raw, final_value, final_stat = (
+            load_stable_build_execution_with_stat(path)
+        )
+        final_completion_path, final_completion_raw, final_completion_value = (
+            load_stable_build_completion(completion_expected)
+        )
+        rebound_identity = (
+            rebound_stat.st_dev,
+            rebound_stat.st_ino,
+            rebound_stat.st_uid,
+            rebound_stat.st_gid,
+            rebound_stat.st_mode,
+            rebound_stat.st_nlink,
+            rebound_stat.st_size,
+            rebound_stat.st_mtime_ns,
+            rebound_stat.st_ctime_ns,
+        )
+        final_identity = (
+            final_stat.st_dev,
+            final_stat.st_ino,
+            final_stat.st_uid,
+            final_stat.st_gid,
+            final_stat.st_mode,
+            final_stat.st_nlink,
+            final_stat.st_size,
+            final_stat.st_mtime_ns,
+            final_stat.st_ctime_ns,
+        )
+        if (
+            final_path != rebound_path
+            or final_raw != rebound_raw
+            or final_value != rebound_value
+            or final_identity != rebound_identity
+            or final_completion_path != completion_path
+            or final_completion_raw != completion_raw
+            or final_completion_value != completion_value
+        ):
+            raise ValueError("study build receipt or completion changed during validation")
+        validated["build_completion"] = completion
+        validated["completion_path"] = str(completion_path)
+        validated["completion_sha256"] = hashlib.sha256(completion_raw).hexdigest()
+        validated["completion_payload_sha256"] = completion["payload_sha256"]
+    elif not allow_historical:
+        raise ValueError("current study build admission requires schema 5 and its completion")
     return {"path": binding["path"], "sha256": binding["sha256"], **validated}
 
 
@@ -10431,7 +10960,10 @@ def _buflo_etf_capture_scheduler_environment_contract() -> dict[str, Any]:
 
 
 def validate_study_environment_receipt(
-    value: Any, *, expected_image_digest: str | None = None
+    value: Any,
+    *,
+    expected_image_digest: str | None = None,
+    allow_historical: bool = False,
 ) -> dict[str, Any]:
     """Validate the minimized, non-sensitive Docker/build environment receipt."""
 
@@ -10444,9 +10976,15 @@ def validate_study_environment_receipt(
         "build_execution",
         "clock_status",
     }
-    if not isinstance(value, Mapping) or value.get("schema_version") not in {1, 2}:
+    if not isinstance(value, Mapping) or value.get("schema_version") not in {1, 2, 3}:
         raise ValueError("study environment receipt schema is invalid")
-    expected_keys = base_keys | ({"capture_scheduler"} if value["schema_version"] == 2 else set())
+    if value["schema_version"] != 3 and not allow_historical:
+        raise ValueError(
+            "current study environment admission requires schema 3 and build completion"
+        )
+    expected_keys = base_keys | (
+        {"capture_scheduler"} if value["schema_version"] in {2, 3} else set()
+    )
     if set(value) != expected_keys:
         raise ValueError("study environment receipt schema is invalid")
     if value["artifact_type"] != "qcsd-buflo-study-environment":
@@ -10474,7 +11012,7 @@ def validate_study_environment_receipt(
     for key in ("ncpu", "mem_total_bytes"):
         if not isinstance(docker[key], int) or isinstance(docker[key], bool) or docker[key] <= 0:
             raise ValueError(f"study Docker capacity field is invalid: {key}")
-    if value["schema_version"] == 2 and docker["ncpu"] != 12:
+    if value["schema_version"] in {2, 3} and docker["ncpu"] != 12:
         raise ValueError("study capture scheduler requires the exact 12-CPU topology")
 
     image = value["collection_image"]
@@ -10498,7 +11036,16 @@ def validate_study_environment_receipt(
         raise ValueError("study collection image binding is invalid")
 
     execution = value["build_execution"]
-    if not isinstance(execution, Mapping) or set(execution) != {"sha256", "receipt"}:
+    historical_execution_keys = {"sha256", "receipt"}
+    current_execution_keys = historical_execution_keys | {
+        "completion_path",
+        "completion_sha256",
+        "completion_payload_sha256",
+        "completion",
+    }
+    if not isinstance(execution, Mapping) or set(execution) != (
+        current_execution_keys if value["schema_version"] == 3 else historical_execution_keys
+    ):
         raise ValueError("study no-cache build execution binding is invalid")
     embedded = execution["receipt"]
     encoded_execution = (json.dumps(embedded, indent=2, sort_keys=True) + "\n").encode("utf-8")
@@ -10510,7 +11057,49 @@ def validate_study_environment_receipt(
     build_execution = _validate_build_execution_value(
         embedded,
         expected_collection_image=image_id,
+        allow_historical=value["schema_version"] in {1, 2} and allow_historical,
     )
+    build_completion: dict[str, Any] | None = None
+    if value["schema_version"] == 3:
+        version = build_execution["cohort_version"]
+        expected_completion_path = (
+            f"/lab/artifacts/buflo-study/build-completion-v{version}.json"
+        )
+        expected_receipt_path = Path(
+            f"/lab/artifacts/buflo-study/build-execution-v{version}.json"
+        )
+        completion_value = execution["completion"]
+        completion_raw = _canonical_finite_json_bytes(
+            completion_value, label="study build completion", newline=True
+        )
+        if (
+            build_execution.get("schema_version") != 5
+            or execution.get("completion_path") != expected_completion_path
+            or not isinstance(execution.get("completion_sha256"), str)
+            or execution["completion_sha256"]
+            != hashlib.sha256(completion_raw).hexdigest()
+            or not isinstance(execution.get("completion_payload_sha256"), str)
+        ):
+            raise ValueError("study build completion binding is invalid")
+        completion_binding = completion_value.get("receipt") if isinstance(
+            completion_value, Mapping
+        ) else None
+        if not isinstance(completion_binding, Mapping):
+            raise ValueError("study build completion receipt binding is invalid")
+        build_completion = validate_build_completion_authority(
+            completion_value,
+            completion_path=Path(expected_completion_path),
+            receipt_path=expected_receipt_path,
+            receipt_raw=encoded_execution,
+            receipt_value=embedded,
+            receipt_stat=completion_binding.get("stat"),
+            expected_cohort_version=version,
+        )
+        if (
+            build_completion["payload_sha256"]
+            != execution["completion_payload_sha256"]
+        ):
+            raise ValueError("study build completion payload binding is invalid")
 
     build = value["build_inputs"]
     if not isinstance(build, Mapping) or set(build) != {
@@ -10522,13 +11111,21 @@ def validate_study_environment_receipt(
         "cargo_lock_sha256",
     }:
         raise ValueError("study build input receipt schema is invalid")
+    historical_environment = value["schema_version"] in {1, 2} and allow_historical
     if (
         build["schema_version"] != 1
         or build["artifact_type"] != "qcsd-study-build-inputs"
-        or build["rust_base_image"] != RUST_BASE_IMAGE
-        or build["debian_base_image"] != DEBIAN_BASE_IMAGE
-        or build["uv_lock_sha256"] != sha256_file(LAB_ROOT / "uv.lock")
-        or build["cargo_lock_sha256"] != sha256_file(LAB_ROOT / "neqo-qcsd/Cargo.lock")
+        or build != embedded.get("build_inputs")
+        or (
+            not historical_environment
+            and (
+                build["rust_base_image"] != RUST_BASE_IMAGE
+                or build["debian_base_image"] != DEBIAN_BASE_IMAGE
+                or build["uv_lock_sha256"] != sha256_file(LAB_ROOT / "uv.lock")
+                or build["cargo_lock_sha256"]
+                != sha256_file(LAB_ROOT / "neqo-qcsd/Cargo.lock")
+            )
+        )
     ):
         raise ValueError("study base image or lockfile binding is invalid")
     clock = value["clock_status"]
@@ -10581,7 +11178,7 @@ def validate_study_environment_receipt(
     capture_scheduler = value.get("capture_scheduler")
     historical_capture_scheduler = _capture_scheduler_environment_contract()
     kernel_timed_capture_scheduler = _buflo_etf_capture_scheduler_environment_contract()
-    if value["schema_version"] == 2 and capture_scheduler not in (
+    if value["schema_version"] in {2, 3} and capture_scheduler not in (
         historical_capture_scheduler,
         kernel_timed_capture_scheduler,
     ):
@@ -10601,38 +11198,81 @@ def validate_study_environment_receipt(
             "container": dict(clock["container"]),
         },
     }
-    if value["schema_version"] == 2:
+    if value["schema_version"] == 3:
+        assert build_completion is not None
+        validated["build_execution"].update(
+            {
+                "completion_path": execution["completion_path"],
+                "completion_sha256": execution["completion_sha256"],
+                "completion_payload_sha256": execution[
+                    "completion_payload_sha256"
+                ],
+                "build_completion": build_completion,
+            }
+        )
+    if value["schema_version"] in {2, 3}:
         validated["capture_scheduler"] = dict(capture_scheduler)
     return validated
 
 
 def _one_build_execution_identity(
     environments: Sequence[Mapping[str, Any]],
+    *,
+    allow_historical: bool = False,
 ) -> dict[str, Any]:
-    """Require every evidence cohort to originate in one no-cache build."""
+    """Require every evidence cohort to originate in one no-cache build.
+
+    Current operational evidence is completion-bound by default.  The
+    historical branch is explicit so immutable schema-1/2 environments remain
+    inspectable without making a downgrade admissible to a new campaign.
+    """
 
     identities = []
     for environment in environments:
         build = environment.get("build_execution")
+        legacy_identity = (
+            isinstance(build, Mapping)
+            and type(build.get("cohort_version")) is int
+            and build["cohort_version"] >= 1
+            and isinstance(build.get("sha256"), str)
+            and isinstance(build.get("collection_image"), str)
+            and isinstance(build.get("started_at"), str)
+            and isinstance(build.get("finished_at"), str)
+        )
         if (
             not isinstance(build, Mapping)
-            or type(build.get("cohort_version")) is not int
-            or build["cohort_version"] < 1
-            or not isinstance(build.get("sha256"), str)
-            or not isinstance(build.get("collection_image"), str)
-            or not isinstance(build.get("started_at"), str)
-            or not isinstance(build.get("finished_at"), str)
+            or not legacy_identity
+            or not isinstance(build.get("completion_path"), str)
+            or not re.fullmatch(
+                r"/lab/artifacts/buflo-study/build-completion-v[1-9][0-9]*[.]json",
+                build["completion_path"],
+            )
+            or not isinstance(build.get("completion_sha256"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", build["completion_sha256"]) is None
         ):
-            raise ValueError("study evidence has no typed no-cache build identity")
-        identities.append(
-            {
-                "cohort_version": build["cohort_version"],
-                "sha256": build["sha256"],
-                "collection_image": build["collection_image"],
-                "started_at": build["started_at"],
-                "finished_at": build["finished_at"],
-            }
-        )
+            if not allow_historical or not legacy_identity:
+                raise ValueError("study evidence has no typed no-cache build identity")
+            identities.append(
+                {
+                    "cohort_version": build["cohort_version"],
+                    "sha256": build["sha256"],
+                    "collection_image": build["collection_image"],
+                    "started_at": build["started_at"],
+                    "finished_at": build["finished_at"],
+                }
+            )
+        else:
+            identities.append(
+                {
+                    "cohort_version": build["cohort_version"],
+                    "sha256": build["sha256"],
+                    "completion_path": build["completion_path"],
+                    "completion_sha256": build["completion_sha256"],
+                    "collection_image": build["collection_image"],
+                    "started_at": build["started_at"],
+                    "finished_at": build["finished_at"],
+                }
+            )
     if not identities or any(identity != identities[0] for identity in identities[1:]):
         raise ValueError("study evidence was not produced by one exact no-cache build")
     return identities[0]
@@ -12265,7 +12905,19 @@ def run_study_action(
             elapsed = time.monotonic() - started_monotonic
             receipt_value = _reference_execution_value(
                 source=reference_source,
-                build_execution={"sha256": build_binding["sha256"], "receipt": build_value},
+                build_execution={
+                    "sha256": build_binding["sha256"],
+                    "receipt": build_value,
+                    "completion_path": (
+                        f"/lab/artifacts/buflo-study/"
+                        f"build-completion-v{version}.json"
+                    ),
+                    "completion_sha256": build_receipt["completion_sha256"],
+                    "completion_payload_sha256": build_receipt[
+                        "completion_payload_sha256"
+                    ],
+                    "completion": build_receipt["build_completion"],
+                },
                 isolation=isolation,
                 execution_id=secrets.token_hex(16),
                 started_at=started_wall.isoformat(),
@@ -13508,13 +14160,7 @@ def _validation_attestation_value(
         expected_collection_image=source["image_digest"],
         expected_cohort_version=cohort_version,
     )
-    expected_build_execution = {
-        "cohort_version": cohort_version,
-        "sha256": build_receipt["sha256"],
-        "collection_image": build_receipt["collection_image"],
-        "started_at": build_receipt["started_at"],
-        "finished_at": build_receipt["finished_at"],
-    }
+    expected_build_execution = _current_build_execution_identity(build_receipt)
     if (
         build_execution != expected_build_execution
         or reference.get("build_execution") != build_execution

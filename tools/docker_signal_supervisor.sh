@@ -39,6 +39,7 @@ _QCSD_DOCKER_SCOPE_SETTLE_POLLS=20
 _QCSD_DOCKER_SCOPE_SETTLE_DELAY_SECONDS=0.05
 _QCSD_DOCKER_LIFECYCLE_SCHEMA=1
 _QCSD_DOCKER_LIFECYCLE_PARENT=/var/tmp
+_QCSD_MAX_LIFECYCLE_OPERATIONS=7
 # One historical source transition is admissible solely to retire terminal
 # v57 HANDOFF ledgers that were written by the immediately preceding committed
 # helper.  These pins identify the predecessor bytes, the commit that first
@@ -70,6 +71,23 @@ _qcsd_restore_signal_trap() {
     eval "${saved}"
   else
     trap - "${signal}"
+  fi
+}
+
+# Keep the asynchronously parsed trap action deliberately trivial. Bash 5.2
+# can corrupt its recursive command-substitution parser when it dispatches any
+# catchable trap while one simple command has multiple `$(...)` expansions
+# (reported as an unterminated `)' in the trap).  The production supervisor
+# therefore has a second invariant: while these traps are live, obtain each
+# external value in its own assignment before combining or comparing values.
+# The function body was parsed when this helper was sourced, and Bash's dynamic
+# scoping lets it update the supervisor's local latch variables.
+_qcsd_latch_requested_signal() {
+  local signal_name="$1"
+  local signal_status="$2"
+  if [[ "${requested_status}" == "0" ]]; then
+    requested_signal="${signal_name}"
+    requested_status="${signal_status}"
   fi
 }
 
@@ -140,9 +158,10 @@ _qcsd_validate_lifecycle_root_contents() {
 
 _qcsd_secure_lifecycle_base() {
   local uid parent_metadata base_metadata entry entry_metadata canonical
-  local expected_kind expected_mode
+  local expected_kind expected_mode entry_name operation_kind operation_token
   local nullglob_was_set=0 dotglob_was_set=0
   local -a entries=()
+  local -A operation_kinds=()
   uid="${EUID}"
   [[ "${uid}" =~ ^(0|[1-9][0-9]*)$ ]] || return 1
 
@@ -184,18 +203,28 @@ _qcsd_secure_lifecycle_base() {
   (( nullglob_was_set != 0 )) || shopt -u nullglob
   (( dotglob_was_set != 0 )) || shopt -u dotglob
   for entry in "${entries[@]}"; do
-    if [[ "${entry##*/}" =~ ^(run|network|build|transaction)[.][0-9a-f]{32}$ ||
-          "${entry##*/}" =~ ^[.]retired[.](run|network|build|transaction)[.][0-9a-f]{32}$ ]]; then
+    entry_name="${entry##*/}"
+    if [[ "${entry_name}" =~ ^(run|network|build|transaction)[.]([0-9a-f]{32})$ ]]; then
+      operation_kind="${BASH_REMATCH[1]}"; operation_token="${BASH_REMATCH[2]}"
       [[ ! -L "${entry}" && -d "${entry}" ]] || return 1
       expected_kind=directory
       expected_mode=700
-    elif [[ "${entry##*/}" =~ ^retirement[.](run|network|build|transaction)[.][0-9a-f]{32}([.]next)?$ ]]; then
+    elif [[ "${entry_name}" =~ ^[.]retired[.](run|network|build|transaction)[.]([0-9a-f]{32})$ ]]; then
+      operation_kind="${BASH_REMATCH[1]}"; operation_token="${BASH_REMATCH[2]}"
+      [[ ! -L "${entry}" && -d "${entry}" ]] || return 1
+      expected_kind=directory
+      expected_mode=700
+    elif [[ "${entry_name}" =~ ^retirement[.](run|network|build|transaction)[.]([0-9a-f]{32})([.]next)?$ ]]; then
+      operation_kind="${BASH_REMATCH[1]}"; operation_token="${BASH_REMATCH[2]}"
       [[ ! -L "${entry}" && -f "${entry}" ]] || return 1
       expected_kind="regular file"
       expected_mode=600
     else
       return 1
     fi
+    [[ -z "${operation_kinds[${operation_token}]+x}" ||
+        "${operation_kinds[${operation_token}]}" == "${operation_kind}" ]] || return 1
+    operation_kinds["${operation_token}"]="${operation_kind}"
     canonical="$(readlink -f -- "${entry}" 2>/dev/null)" || return 1
     [[ "${canonical}" == "${entry}" ]] || return 1
     entry_metadata="$(stat -Lc '%u:%a:%F' -- "${entry}" 2>/dev/null)" || return 1
@@ -208,6 +237,7 @@ _qcsd_secure_lifecycle_base() {
     [[ "${expected_kind}" != directory ]] ||
       _qcsd_validate_lifecycle_root_contents "${entry}" || return 1
   done
+  (( ${#operation_kinds[@]} <= _QCSD_MAX_LIFECYCLE_OPERATIONS )) || return 1
 }
 
 _qcsd_lifecycle_lock_path() {
@@ -1060,6 +1090,16 @@ _qcsd_build_after_scope_signal_check_hook() {
   :
 }
 
+_qcsd_build_wait_ready_hook() {
+  # Test-only observation point after bound publication is fully durable.
+  :
+}
+
+_qcsd_run_wait_ready_hook() {
+  # Test-only observation point after run publication is fully durable.
+  :
+}
+
 _qcsd_handoff_retire_after_absence_hook() {
   # Test-only boundary hook; production performs no work.
   :
@@ -1608,10 +1648,10 @@ qcsd_create_docker_network() {
   saved_int="$(trap -p INT || true)"
   saved_quit="$(trap -p QUIT || true)"
   saved_term="$(trap -p TERM || true)"
-  trap 'if (( requested_status == 0 )); then requested_signal=HUP; requested_status=129; fi' HUP
-  trap 'if (( requested_status == 0 )); then requested_signal=INT; requested_status=130; fi' INT
-  trap 'if (( requested_status == 0 )); then requested_signal=QUIT; requested_status=131; fi' QUIT
-  trap 'if (( requested_status == 0 )); then requested_signal=TERM; requested_status=143; fi' TERM
+  trap '_qcsd_latch_requested_signal HUP 129' HUP
+  trap '_qcsd_latch_requested_signal INT 130' INT
+  trap '_qcsd_latch_requested_signal QUIT 131' QUIT
+  trap '_qcsd_latch_requested_signal TERM 143' TERM
   local supervisor_pid supervisor_start_time supervisor_session
   local supervisor_process_group
   if ! _qcsd_bind_current_supervisor_identity; then
@@ -2040,10 +2080,10 @@ _qcsd_run_docker_supervised() {
   saved_int="$(trap -p INT || true)"
   saved_quit="$(trap -p QUIT || true)"
   saved_term="$(trap -p TERM || true)"
-  trap 'if (( requested_status == 0 )); then requested_signal=HUP; requested_status=129; fi' HUP
-  trap 'if (( requested_status == 0 )); then requested_signal=INT; requested_status=130; fi' INT
-  trap 'if (( requested_status == 0 )); then requested_signal=QUIT; requested_status=131; fi' QUIT
-  trap 'if (( requested_status == 0 )); then requested_signal=TERM; requested_status=143; fi' TERM
+  trap '_qcsd_latch_requested_signal HUP 129' HUP
+  trap '_qcsd_latch_requested_signal INT 130' INT
+  trap '_qcsd_latch_requested_signal QUIT 131' QUIT
+  trap '_qcsd_latch_requested_signal TERM 143' TERM
   local supervisor_pid supervisor_start_time supervisor_session
   local supervisor_process_group
   if ! _qcsd_bind_current_supervisor_identity; then
@@ -2591,6 +2631,9 @@ exec "$@"
       supervisor_failure=1
       internal_abort=1
     fi
+  fi
+  if (( internal_abort == 0 )); then
+    _qcsd_run_wait_ready_hook
   fi
   # Poll the bound Linux process identity directly. `read -t` is a Bash
   # builtin on a private, never-readable FIFO: it creates no timer process and
@@ -3435,10 +3478,10 @@ qcsd_run_docker_build() {
   saved_int="$(trap -p INT || true)"
   saved_quit="$(trap -p QUIT || true)"
   saved_term="$(trap -p TERM || true)"
-  trap 'if (( requested_status == 0 )); then requested_signal=HUP; requested_status=129; fi' HUP
-  trap 'if (( requested_status == 0 )); then requested_signal=INT; requested_status=130; fi' INT
-  trap 'if (( requested_status == 0 )); then requested_signal=QUIT; requested_status=131; fi' QUIT
-  trap 'if (( requested_status == 0 )); then requested_signal=TERM; requested_status=143; fi' TERM
+  trap '_qcsd_latch_requested_signal HUP 129' HUP
+  trap '_qcsd_latch_requested_signal INT 130' INT
+  trap '_qcsd_latch_requested_signal QUIT 131' QUIT
+  trap '_qcsd_latch_requested_signal TERM 143' TERM
   if [[ -z "${token}" ]] ||
      ! _qcsd_create_lifecycle_root build "${token}"; then
     echo "cannot establish a private Docker build supervisor identity" >&2
@@ -3814,6 +3857,10 @@ exec "$@"
       supervisor_failure=1
       internal_abort=1
     fi
+  fi
+
+  if (( internal_abort == 0 )); then
+    _qcsd_build_wait_ready_hook
   fi
 
   while (( requested_status == 0 && internal_abort == 0 )) &&
@@ -5611,6 +5658,8 @@ _qcsd_retirement_prepare_authority() {
   local base_identity guardian_path guardian_meta guardian_sha qcsd_path qcsd_meta qcsd_sha
   local helper_path helper_meta helper_sha native_path native_meta native_sha
   local lock_path lock_parent_identity
+  local docker_config_name docker_config_boot docker_config_metadata
+  local docker_config_first_entry
   local source_name source_path_name source_path
   local guardian_dev guardian_ino qcsd_dev qcsd_ino helper_dev helper_ino
   local native_dev native_ino ignored
@@ -5629,12 +5678,19 @@ _qcsd_retirement_prepare_authority() {
   lock_parent_identity="$(stat -Lc '%d:%i' -- "${lock_path%/*}")" || return 1
   [[ "${lock_parent_identity}" == "${_QCSD_LIFECYCLE_LOCK_PARENT_DEVICE}:${_QCSD_LIFECYCLE_LOCK_PARENT_INODE}" &&
       "$(stat -Lc '%d:%i' -- "${lock_path}")" == "${_QCSD_LIFECYCLE_LOCK_DEVICE}:${_QCSD_LIFECYCLE_LOCK_INODE}" ]] || return 1
+  docker_config_name="${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH##*/}"
+  docker_config_boot="${_QCSD_LIFECYCLE_BOOT_ID//-/}"
+  [[ "${docker_config_name}" =~ ^[.]qcsd-docker-config-${EUID}[.]v2[.]([0-9a-f]{32})[.]([1-9][0-9]*)[.][0-9a-f]{64}$ ]] || return 1
+  [[ "${BASH_REMATCH[1]}" == "${docker_config_boot}" &&
+      "${BASH_REMATCH[2]}" == "${_QCSD_LIFECYCLE_GUARD_START}" ]] || return 1
   [[ "${_QCSD_LIFECYCLE_LOCK_DEVICE:-}" =~ ^[0-9]+$ &&
       "${_QCSD_LIFECYCLE_LOCK_INODE:-}" =~ ^[0-9]+$ &&
       "${_QCSD_LIFECYCLE_HELPER_SHA256:-}" =~ ^[0-9a-f]{64}$ &&
-      "${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH:-}" == /proc/*/fd/* &&
+      "${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH%/*}" == "${lock_path%/*}" &&
       "${_QCSD_LIFECYCLE_DOCKER_CONFIG_DEVICE:-}" =~ ^[0-9]+$ &&
       "${_QCSD_LIFECYCLE_DOCKER_CONFIG_INODE:-}" =~ ^[0-9]+$ &&
+      -d "${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH}" &&
+      ! -L "${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH}" &&
       "${_QCSD_EXECUTED_HELPER_SOURCE_SHA256:-}" == "${_QCSD_LIFECYCLE_HELPER_SHA256}" &&
       "${_QCSD_DOCKER_PINNED_CONTEXT:-}" =~ ^[A-Za-z0-9_.-]+$ &&
       "${_QCSD_DOCKER_PINNED_CONTEXT}" != unavailable &&
@@ -5642,6 +5698,14 @@ _qcsd_retirement_prepare_authority() {
       "${_QCSD_DOCKER_PINNED_SERVER_ID:-}" =~ ^[A-Za-z0-9_.:-]+$ &&
       "${_QCSD_DOCKER_PINNED_SERVER_ID}" != unavailable &&
       "${_QCSD_DOCKER_PINNED_BOOT_ID:-}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || return 1
+  docker_config_metadata="$(stat -Lc '%d:%i:%u:%a:%h:%F' -- \
+    "${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH}")" || return 1
+  docker_config_first_entry="$(find -H \
+    "${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH}" \
+    -mindepth 1 -maxdepth 1 -print -quit)" || true
+  [[ "${docker_config_metadata}" == \
+        "${_QCSD_LIFECYCLE_DOCKER_CONFIG_DEVICE}:${_QCSD_LIFECYCLE_DOCKER_CONFIG_INODE}:${EUID}:500:2:directory" &&
+      -z "${docker_config_first_entry}" ]] || return 1
   for source_name in guardian qcsd helper native; do
     source_path_name="${source_name}_path"; source_path="${!source_path_name}"
     [[ "${source_path}" == /* && -f "${source_path}" && ! -L "${source_path}" ]] || return 1
@@ -5749,8 +5813,13 @@ _qcsd_retirement_prepare_authority() {
       printf 'child\t%s\t%s\t%s\n' "${name}" "${metadata}" "${digest}"
     done
   }
-  [[ "$(stat -Lc '%d:%i:%u:%a:%h:%F' -- "${root}")" == "${root_meta}" &&
-      "$(_qcsd_lifecycle_root_manifest_sha256 "${root}")" == "${root_manifest}" ]]
+  local observed_root_metadata observed_root_manifest
+  observed_root_metadata="$(stat -Lc '%d:%i:%u:%a:%h:%F' -- "${root}")" ||
+    return 1
+  observed_root_manifest="$(_qcsd_lifecycle_root_manifest_sha256 "${root}")" ||
+    return 1
+  [[ "${observed_root_metadata}" == "${root_meta}" &&
+      "${observed_root_manifest}" == "${root_manifest}" ]]
 }
 
 _qcsd_retirement_parse_authority() {
@@ -5962,13 +6031,22 @@ _qcsd_validate_retirement_phase() {
 
 _qcsd_retirement_terminal_reproof() {
   local values_name="$1" presence receipt_meta source_name path_key identity_key hash_key
+  local lifecycle_base_metadata lock_metadata lock_parent_metadata
+  local docker_config_metadata docker_config_first_entry
+  local buildx_config_metadata buildx_config_links source_metadata source_digest
   local -n values_ref="${values_name}"
-  [[ "$(stat -Lc '%d:%i:%u:%a:%F' -- "${_qcsd_lifecycle_base}")" == \
+  lifecycle_base_metadata="$(stat -Lc '%d:%i:%u:%a:%F' -- \
+    "${_qcsd_lifecycle_base}")" || return 1
+  [[ "${lifecycle_base_metadata}" == \
       "${values_ref[base_identity]}" ]] || return 1
-  [[ -f "${values_ref[lock_path]}" && ! -L "${values_ref[lock_path]}" &&
-      "$(stat -Lc '%d:%i' -- "${values_ref[lock_path]}")" == \
+  [[ -f "${values_ref[lock_path]}" && ! -L "${values_ref[lock_path]}" ]] ||
+    return 1
+  lock_metadata="$(stat -Lc '%d:%i' -- "${values_ref[lock_path]}")" || return 1
+  lock_parent_metadata="$(stat -Lc '%d:%i' -- \
+    "${values_ref[lock_path]%/*}")" || return 1
+  [[ "${lock_metadata}" == \
         "${values_ref[lock_device]}:${values_ref[lock_inode]}" &&
-      "$(stat -Lc '%d:%i' -- "${values_ref[lock_path]%/*}")" == \
+      "${lock_parent_metadata}" == \
         "${values_ref[lock_parent_identity]}" &&
       "${values_ref[lock_path]}" == "${_QCSD_LIFECYCLE_LOCK_PATH:-}" &&
       "${values_ref[lock_parent_identity]}" == \
@@ -5978,26 +6056,41 @@ _qcsd_retirement_terminal_reproof() {
   [[ "${values_ref[docker_config_path]}:${values_ref[docker_config_device]}:${values_ref[docker_config_inode]}" == \
       current-guardian:current-guardian:current-guardian &&
       -d "${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH:-}" &&
-      "$(stat -Lc '%d:%i:%u:%a:%h:%F' -- "${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH}")" == \
-        "${_QCSD_LIFECYCLE_DOCKER_CONFIG_DEVICE}:${_QCSD_LIFECYCLE_DOCKER_CONFIG_INODE}:${EUID}:500:0:directory" &&
-      -z "$(find -H "${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH}" -mindepth 1 -maxdepth 1 -print -quit)" ]] || return 1
+      ! -L "${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH:-}" ]] || return 1
+  docker_config_metadata="$(stat -Lc '%d:%i:%u:%a:%h:%F' -- \
+    "${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH}")" || return 1
+  docker_config_first_entry="$(find -H \
+    "${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH}" \
+    -mindepth 1 -maxdepth 1 -print -quit)" || true
+  [[ "${docker_config_metadata}" == \
+        "${_QCSD_LIFECYCLE_DOCKER_CONFIG_DEVICE}:${_QCSD_LIFECYCLE_DOCKER_CONFIG_INODE}:${EUID}:500:2:directory" &&
+      -z "${docker_config_first_entry}" ]] || return 1
   [[ "${values_ref[buildx_config_path]}:${values_ref[buildx_config_device]}:${values_ref[buildx_config_inode]}" == \
       current-guardian:current-guardian:current-guardian &&
       -d "${_QCSD_LIFECYCLE_BUILDX_CONFIG_PATH:-}" &&
-      ! -L "${_QCSD_LIFECYCLE_BUILDX_CONFIG_PATH}" &&
-      "$(stat -Lc '%d:%i:%u:%a:%h:%F' -- "${_QCSD_LIFECYCLE_BUILDX_CONFIG_PATH}")" == \
+      ! -L "${_QCSD_LIFECYCLE_BUILDX_CONFIG_PATH}" ]] || return 1
+  buildx_config_metadata="$(stat -Lc '%d:%i:%u:%a:%h:%F' -- \
+    "${_QCSD_LIFECYCLE_BUILDX_CONFIG_PATH}")" || return 1
+  buildx_config_links="$(stat -Lc %h -- \
+    "${_QCSD_LIFECYCLE_BUILDX_CONFIG_PATH}")" || return 1
+  [[ "${buildx_config_metadata}" == \
         "${_QCSD_LIFECYCLE_BUILDX_CONFIG_DEVICE}:${_QCSD_LIFECYCLE_BUILDX_CONFIG_INODE}:${EUID}:700:"*":directory" &&
-      "$(stat -Lc %h -- "${_QCSD_LIFECYCLE_BUILDX_CONFIG_PATH}")" =~ ^([2-9]|[1-9][0-9]+)$ ]] || return 1
+      "${buildx_config_links}" =~ ^([2-9]|[1-9][0-9]+)$ ]] || return 1
   for source_name in guardian qcsd helper native; do
     path_key="${source_name}_source_path"
     identity_key="${source_name}_source_identity"
     [[ "${source_name}" != helper ]] || hash_key=helper_source_sha256_full
     [[ "${source_name}" == helper ]] || hash_key="${source_name}_source_sha256"
     [[ "${values_ref[${path_key}]}" == unavailable ]] && continue
-    [[ -f "${values_ref[${path_key}]}" && ! -L "${values_ref[${path_key}]}" &&
-        "$(stat -Lc '%d:%i:%u:%a:%h:%s:%F' -- "${values_ref[${path_key}]}")" == \
+    [[ -f "${values_ref[${path_key}]}" &&
+        ! -L "${values_ref[${path_key}]}" ]] || return 1
+    source_metadata="$(stat -Lc '%d:%i:%u:%a:%h:%s:%F' -- \
+      "${values_ref[${path_key}]}")" || return 1
+    source_digest="$(sha256sum -- "${values_ref[${path_key}]}" | \
+      awk '{print $1}')" || return 1
+    [[ "${source_metadata}" == \
           "${values_ref[${identity_key}]}" &&
-        "$(sha256sum -- "${values_ref[${path_key}]}" | awk '{print $1}')" == \
+        "${source_digest}" == \
           "${values_ref[${hash_key}]}" ]] || return 1
   done
   if [[ "${values_ref[helper_source_sha256]}" != unavailable ]]; then
@@ -6055,6 +6148,7 @@ _qcsd_retirement_terminal_reproof() {
 _qcsd_resume_retirement() {
   local authority="$1" active retired root_dev root_ino root_identity line
   local child name expected_name metadata digest current count=0 found
+  local authority_parent_metadata
   local -a retired_children=()
   local nullglob_was_set=0 dotglob_was_set=0
   _qcsd_validate_retirement_phase "${authority}" || return 1
@@ -6140,8 +6234,10 @@ _qcsd_resume_retirement() {
   _qcsd_retirement_terminal_reproof _QCSD_RETIRE_VALUES || return 1
   _qcsd_retirement_authority_binding "${authority}" || return 1
   _qcsd_retirement_boundary_hook H12 "${authority}"
+  authority_parent_metadata="$(stat -Lc '%d:%i' -- "${authority%/*}")" ||
+    return 1
   _qcsd_retirement_native_op unlink-authority "${authority%/*}" "${EUID}" \
-    "$(stat -Lc %d -- "${authority%/*}")" "$(stat -Lc %i -- "${authority%/*}")" \
+    "${authority_parent_metadata%%:*}" "${authority_parent_metadata##*:}" \
     "${authority##*/}" "${_QCSD_RETIRE_AUTH_DEV}" "${_QCSD_RETIRE_AUTH_INO}" \
     "${_QCSD_RETIRE_AUTH_SIZE}" "${_QCSD_RETIRE_AUTH_SHA}" || return 1
   _qcsd_retirement_boundary_hook H13 "${authority}"
@@ -6236,16 +6332,49 @@ _qcsd_lifecycle_revalidate_snapshot() {
   [[ "${observed_manifest}" == "${expected_manifest}" ]]
 }
 
+_qcsd_lifecycle_settle_recovery_batch() {
+  case "${1:-}" in
+    run) sleep "${_QCSD_DOCKER_STALE_RUN_SETTLE_SECONDS:-5}" ;;
+    network) sleep "${_QCSD_DOCKER_STALE_NETWORK_SETTLE_SECONDS:-5}" ;;
+    *) return 1 ;;
+  esac
+}
+
+_qcsd_lifecycle_reprove_recovery_boundary() {
+  local root_kind="$1" values_name="$2" current_boot="$3"
+  local -n values_ref="${values_name}"
+  local pid
+  _qcsd_lifecycle_require_stale_supervisor "${values_name}" "${current_boot}" ||
+    return 1
+  case "${root_kind}" in
+    run)
+      pid="${values_ref[scope_launcher_pid]}"
+      if [[ "${pid}" != unavailable ]]; then
+        _qcsd_bound_process_is_gone "${pid}" \
+          "${values_ref[scope_launcher_start_time]}" \
+          "${values_ref[scope_launcher_session]}" \
+          "${values_ref[scope_launcher_process_group]}" || return 1
+      fi
+      _qcsd_wait_user_scope_inactive "${values_ref[scope_unit]}"
+      ;;
+    network) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 _qcsd_lifecycle_recover_container() {
   local root="$1"
   local values_name="$2"
+  local batch_settled="${3:-0}"
   local -n values_ref="${values_name}"
   local token="${values_ref[lifecycle_token]}" recorded_id="${values_ref[container_id]}"
   local cidfile_id="" resolved_id="" resolved_state presence snapshot
   local _qcsd_target_docker_context="${values_ref[docker_context]}"
-  if [[ "${values_ref[lifecycle_state]}" == "request-authorised" ||
-        "${values_ref[daemon_request_authorised]:-0}" == "1" ]]; then
-    sleep "${_QCSD_DOCKER_STALE_RUN_SETTLE_SECONDS:-5}"
+  [[ "${batch_settled}" =~ ^[01]$ ]] || return 1
+  if [[ "${batch_settled}" == 0 &&
+        ( "${values_ref[lifecycle_state]}" == request-authorised ||
+          "${values_ref[daemon_request_authorised]:-0}" == 1 ) ]]; then
+    _qcsd_lifecycle_settle_recovery_batch run || return 1
   fi
   if [[ -e "${root}/container.cid" || -L "${root}/container.cid" ]]; then
     cidfile_id="$(_qcsd_private_cid "${root}/container.cid")" || return 1
@@ -6291,13 +6420,16 @@ _qcsd_lifecycle_recover_container() {
 
 _qcsd_lifecycle_recover_network() {
   local values_name="$1"
+  local batch_settled="${2:-0}"
   local -n values_ref="${values_name}"
   local token="${values_ref[lifecycle_token]}" recorded_id="${values_ref[network_id]}"
   local resolved_id resolved_state presence snapshot
   local _qcsd_target_docker_context="${values_ref[docker_context]}"
-  if [[ "${values_ref[lifecycle_state]}" == "request-authorised" ||
-        "${values_ref[daemon_request_authorised]:-0}" == "1" ]]; then
-    sleep "${_QCSD_DOCKER_STALE_NETWORK_SETTLE_SECONDS:-5}"
+  [[ "${batch_settled}" =~ ^[01]$ ]] || return 1
+  if [[ "${batch_settled}" == 0 &&
+        ( "${values_ref[lifecycle_state]}" == request-authorised ||
+          "${values_ref[daemon_request_authorised]:-0}" == 1 ) ]]; then
+    _qcsd_lifecycle_settle_recovery_batch network || return 1
   fi
   _qcsd_resolve_docker_network "${token}" ""
   resolved_state="${_qcsd_resolved_network_state}"
@@ -6337,9 +6469,12 @@ qcsd_reconcile_docker_lifecycle() {
   local requested_action="${1:-recover}"
   local current_boot root root_kind recovery_kind index blocked_root=""
   local selected_record_snapshot selected_sha_snapshot manifest_snapshot
+  local preauth_stop=0 run_settle_required=0 network_settle_required=0
   local nullglob_was_set=0 dotglob_was_set=0
   local -a roots=() kinds=() authorities=() staged_authorities=()
   local -a active_candidates=() retired_candidates=()
+  local -a recovery_record_snapshots=() recovery_sha_snapshots=()
+  local -a recovery_manifest_snapshots=() run_contained=() network_preflighted=()
   local -A seen_tokens=() seen_labels=() seen_ids=() seen_scopes=() seen_launchers=()
   local -A retiring_active=() retiring_retired=()
   local launcher_key object_key
@@ -6571,22 +6706,109 @@ qcsd_reconcile_docker_lifecycle() {
   for root in "${authorities[@]}"; do
     _qcsd_resume_retirement "${root}" || return 1
   done
+  # A daemon request can outlive the launcher that issued it.  Contain every
+  # ordinary published run first, pin its exact receipt/root snapshot through
+  # containment, and only then start one shared delayed-create settle window.
+  # Unpublished roots have no authorised request, while the allowlisted v57
+  # successor path is deliberately ledger-only and never controls a scope.
+  for (( index = 0; index < ${#roots[@]}; index++ )); do
+    [[ "${kinds[index]}" == run ]] || continue
+    root="${roots[index]}"
+    _qcsd_lifecycle_validate_root "${root}" run || return 1
+    (( _QCSD_LIFECYCLE_SELECTED_UNPUBLISHED == 0 )) || continue
+    if _qcsd_lifecycle_is_v57_source_successor run \
+        "${_QCSD_LIFECYCLE_SELECTED_RECORD##*/}" \
+        _QCSD_LIFECYCLE_SELECTED_VALUES; then
+      continue
+    fi
+    selected_record_snapshot="${_QCSD_LIFECYCLE_SELECTED_RECORD}"
+    selected_sha_snapshot="$(sha256sum -- "${selected_record_snapshot}" | awk '{print $1}')" ||
+      return 1
+    manifest_snapshot="$(_qcsd_lifecycle_root_manifest_sha256 "${root}")" || return 1
+    preauth_stop=0
+    if [[ "${_QCSD_LIFECYCLE_SELECTED_VALUES[lifecycle_state]}" == declared ||
+          ( "${_QCSD_LIFECYCLE_SELECTED_VALUES[lifecycle_state]}" == unresolved &&
+            "${_QCSD_LIFECYCLE_SELECTED_VALUES[daemon_request_authorised]:-1}" == 0 ) ]]; then
+      preauth_stop=1
+    fi
+    _qcsd_lifecycle_stop_stale_scope \
+      _QCSD_LIFECYCLE_SELECTED_VALUES "${current_boot}" "${preauth_stop}" || return 1
+    (( _QCSD_PREAUTH_CONTRADICTION_AT_CONTAINMENT == 0 )) || return 1
+    _qcsd_lifecycle_revalidate_snapshot "${root}" run \
+      "${selected_record_snapshot}" "${selected_sha_snapshot}" \
+      "${manifest_snapshot}" || return 1
+    run_contained[index]=1
+    recovery_record_snapshots[index]="${selected_record_snapshot}"
+    recovery_sha_snapshots[index]="${selected_sha_snapshot}"
+    recovery_manifest_snapshots[index]="${manifest_snapshot}"
+    if [[ "${_QCSD_LIFECYCLE_SELECTED_VALUES[lifecycle_state]}" == request-authorised ||
+          "${_QCSD_LIFECYCLE_SELECTED_VALUES[daemon_request_authorised]:-0}" == 1 ]]; then
+      run_settle_required=1
+    fi
+  done
+  if (( run_settle_required != 0 )); then
+    _qcsd_lifecycle_settle_recovery_batch run || return 1
+  fi
   # Container scopes own the network attachments.  Validation above is a
   # complete fail-closed pass; mutation below is deliberately dependency
   # ordered so network removal cannot precede recovery of an attached run.
   for recovery_kind in run build transaction network; do
+    if [[ "${recovery_kind}" == network ]]; then
+      network_settle_required=0
+      # Pin every ordinary published network before the shared wait, then
+      # revalidate the same snapshot immediately before its Docker mutation.
+      for (( index = 0; index < ${#roots[@]}; index++ )); do
+        [[ "${kinds[index]}" == network ]] || continue
+        root="${roots[index]}"
+        _qcsd_lifecycle_validate_root "${root}" network || return 1
+        (( _QCSD_LIFECYCLE_SELECTED_UNPUBLISHED == 0 )) || continue
+        if _qcsd_lifecycle_is_v57_source_successor network \
+            "${_QCSD_LIFECYCLE_SELECTED_RECORD##*/}" \
+            _QCSD_LIFECYCLE_SELECTED_VALUES; then
+          continue
+        fi
+        selected_record_snapshot="${_QCSD_LIFECYCLE_SELECTED_RECORD}"
+        selected_sha_snapshot="$(sha256sum -- "${selected_record_snapshot}" | awk '{print $1}')" ||
+          return 1
+        manifest_snapshot="$(_qcsd_lifecycle_root_manifest_sha256 "${root}")" || return 1
+        _qcsd_lifecycle_revalidate_snapshot "${root}" network \
+          "${selected_record_snapshot}" "${selected_sha_snapshot}" \
+          "${manifest_snapshot}" || return 1
+        network_preflighted[index]=1
+        recovery_record_snapshots[index]="${selected_record_snapshot}"
+        recovery_sha_snapshots[index]="${selected_sha_snapshot}"
+        recovery_manifest_snapshots[index]="${manifest_snapshot}"
+        if [[ "${_QCSD_LIFECYCLE_SELECTED_VALUES[lifecycle_state]}" == request-authorised ||
+              "${_QCSD_LIFECYCLE_SELECTED_VALUES[daemon_request_authorised]:-0}" == 1 ]]; then
+          network_settle_required=1
+        fi
+      done
+      if (( network_settle_required != 0 )); then
+        _qcsd_lifecycle_settle_recovery_batch network || return 1
+      fi
+    fi
     for (( index = 0; index < ${#roots[@]}; index++ )); do
       root="${roots[index]}"
       root_kind="${kinds[index]}"
       [[ "${root_kind}" == "${recovery_kind}" ]] || continue
-      _qcsd_lifecycle_validate_root "${root}" "${root_kind}" || return 1
-      selected_record_snapshot=""
-      selected_sha_snapshot=""
-      manifest_snapshot="$(_qcsd_lifecycle_root_manifest_sha256 "${root}")" || return 1
-      if (( _QCSD_LIFECYCLE_SELECTED_UNPUBLISHED == 0 )); then
-        selected_record_snapshot="${_QCSD_LIFECYCLE_SELECTED_RECORD}"
-        selected_sha_snapshot="$(sha256sum -- "${selected_record_snapshot}" | awk '{print $1}')" ||
-          return 1
+      if [[ ( "${root_kind}" == run && "${run_contained[$index]:-0}" == 1 ) ||
+            ( "${root_kind}" == network && "${network_preflighted[$index]:-0}" == 1 ) ]]; then
+        selected_record_snapshot="${recovery_record_snapshots[index]}"
+        selected_sha_snapshot="${recovery_sha_snapshots[index]}"
+        manifest_snapshot="${recovery_manifest_snapshots[index]}"
+        _qcsd_lifecycle_revalidate_snapshot "${root}" "${root_kind}" \
+          "${selected_record_snapshot}" "${selected_sha_snapshot}" \
+          "${manifest_snapshot}" || return 1
+      else
+        _qcsd_lifecycle_validate_root "${root}" "${root_kind}" || return 1
+        selected_record_snapshot=""
+        selected_sha_snapshot=""
+        manifest_snapshot="$(_qcsd_lifecycle_root_manifest_sha256 "${root}")" || return 1
+        if (( _QCSD_LIFECYCLE_SELECTED_UNPUBLISHED == 0 )); then
+          selected_record_snapshot="${_QCSD_LIFECYCLE_SELECTED_RECORD}"
+          selected_sha_snapshot="$(sha256sum -- "${selected_record_snapshot}" | awk '{print $1}')" ||
+            return 1
+        fi
       fi
       if (( _QCSD_LIFECYCLE_SELECTED_UNPUBLISHED != 0 )); then
         _qcsd_lifecycle_remove_unchanged_root \
@@ -6606,20 +6828,11 @@ qcsd_reconcile_docker_lifecycle() {
               "${selected_record_snapshot}" "${selected_sha_snapshot}" \
               "${manifest_snapshot}" || return 1
           else
-            local preauth_stop=0
-            if [[ "${_QCSD_LIFECYCLE_SELECTED_VALUES[lifecycle_state]}" == declared ||
-                  ( "${_QCSD_LIFECYCLE_SELECTED_VALUES[lifecycle_state]}" == unresolved &&
-                    "${_QCSD_LIFECYCLE_SELECTED_VALUES[daemon_request_authorised]:-1}" == 0 ) ]]; then
-              preauth_stop=1
-            fi
-            _qcsd_lifecycle_stop_stale_scope \
-              _QCSD_LIFECYCLE_SELECTED_VALUES "${current_boot}" "${preauth_stop}" || return 1
-            (( _QCSD_PREAUTH_CONTRADICTION_AT_CONTAINMENT == 0 )) || return 1
-            _qcsd_lifecycle_revalidate_snapshot "${root}" "${root_kind}" \
-              "${selected_record_snapshot}" "${selected_sha_snapshot}" \
-              "${manifest_snapshot}" || return 1
+            (( ${run_contained[$index]:-0} == 1 )) || return 1
+            _qcsd_lifecycle_reprove_recovery_boundary run \
+              _QCSD_LIFECYCLE_SELECTED_VALUES "${current_boot}" || return 1
             _qcsd_lifecycle_recover_container \
-              "${root}" _QCSD_LIFECYCLE_SELECTED_VALUES || return 1
+              "${root}" _QCSD_LIFECYCLE_SELECTED_VALUES 1 || return 1
           fi
           ;;
         network)
@@ -6629,8 +6842,11 @@ qcsd_reconcile_docker_lifecycle() {
           if ! _qcsd_lifecycle_is_v57_source_successor "${root_kind}" \
               "${_QCSD_LIFECYCLE_SELECTED_RECORD##*/}" \
               _QCSD_LIFECYCLE_SELECTED_VALUES; then
+            (( ${network_preflighted[$index]:-0} == 1 )) || return 1
+            _qcsd_lifecycle_reprove_recovery_boundary network \
+              _QCSD_LIFECYCLE_SELECTED_VALUES "${current_boot}" || return 1
             _qcsd_lifecycle_recover_network \
-              _QCSD_LIFECYCLE_SELECTED_VALUES || return 1
+              _QCSD_LIFECYCLE_SELECTED_VALUES 1 || return 1
           fi
           ;;
         build)

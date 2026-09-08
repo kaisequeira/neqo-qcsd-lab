@@ -363,7 +363,7 @@ def _pilot_selection_lineage() -> tuple[dict[str, object], dict[str, object]]:
     }
     prepare_image = "sha256:" + "8" * 64
     authority = {
-        "schema_version": 1,
+        "schema_version": 2,
         "artifact_type": "qcsd-class-study-qualification-authority",
         "foundation_attestation": {
             "path": "/evidence/foundation.json",
@@ -374,6 +374,8 @@ def _pilot_selection_lineage() -> tuple[dict[str, object], dict[str, object]]:
         "build_execution_identity": {
             "cohort_version": 23,
             "sha256": "1" * 64,
+            "completion_path": "/lab/artifacts/buflo-study/build-completion-v23.json",
+            "completion_sha256": "2" * 64,
             "collection_image": collection_source["image_digest"],
             "started_at": "2026-08-28T00:00:00+00:00",
             "finished_at": "2026-08-28T01:00:00+00:00",

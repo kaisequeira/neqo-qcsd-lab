@@ -106,6 +106,26 @@ SIGNAL_COORDINATED_ROLE_TIMEOUT_EXIT_CODE = 124
 DOCKER_SUPERVISOR_LABEL = "org.qcsd.supervisor.instance"
 
 
+def _require_same_current_build(
+    binding: Mapping[str, Any],
+    expected: Mapping[str, Any],
+    *,
+    cohort_version: int,
+    operation: str,
+) -> None:
+    """Require one receipt and its paired completion across an action boundary."""
+
+    if (
+        Path(str(binding.get("path"))).resolve()
+        != Path(str(expected.get("path"))).resolve()
+        or binding.get("sha256") != expected.get("sha256")
+        or binding.get("completion_path")
+        != f"/lab/artifacts/buflo-study/build-completion-v{cohort_version}.json"
+        or binding.get("completion_sha256") != expected.get("completion_sha256")
+    ):
+        raise ValueError(f"browser-egress {operation} uses a different build execution")
+
+
 def _validated_supervised_labels(
     value: object, *, expected: Mapping[str, str], label: str
 ) -> dict[str, str]:
@@ -801,7 +821,9 @@ def _observer(args: argparse.Namespace) -> None:
 
 def _foundation(args: argparse.Namespace) -> None:
     build = validate_build_execution_receipt(
-        args.build_execution_receipt, expected_cohort_version=args.cohort_version
+        args.build_execution_receipt,
+        expected_cohort_version=args.cohort_version,
+        allow_historical=False,
     )
     repo_digests = json.loads(args.prepare_repo_digests_json)
     if not isinstance(repo_digests, list):
@@ -834,14 +856,17 @@ def _admit_resume(args: argparse.Namespace) -> None:
     expected_build = validate_build_execution_receipt(
         args.build_execution_receipt,
         expected_cohort_version=args.cohort_version,
+        allow_historical=False,
     )
     build_binding = validated_foundation["build_execution"]
-    if (
-        validated_foundation["cohort_version"] != args.cohort_version
-        or Path(build_binding["path"]).resolve() != Path(expected_build["path"]).resolve()
-        or build_binding["sha256"] != expected_build["sha256"]
-    ):
+    if validated_foundation["cohort_version"] != args.cohort_version:
         raise ValueError("browser-egress resume uses a different build execution")
+    _require_same_current_build(
+        build_binding,
+        expected_build,
+        cohort_version=args.cohort_version,
+        operation="resume",
+    )
     plan = resume_admission_plan(args.result_root)
     if plan["checkpoint_status"] not in {"running", "complete"}:
         raise ValueError("browser-egress qualification is not resumable")
@@ -865,14 +890,17 @@ def _reconcile_filesystem(args: argparse.Namespace) -> None:
     expected_build = validate_build_execution_receipt(
         args.build_execution_receipt,
         expected_cohort_version=args.cohort_version,
+        allow_historical=False,
     )
     build_binding = validated_foundation["build_execution"]
-    if (
-        validated_foundation["cohort_version"] != args.cohort_version
-        or Path(build_binding["path"]).resolve() != Path(expected_build["path"]).resolve()
-        or build_binding["sha256"] != expected_build["sha256"]
-    ):
+    if validated_foundation["cohort_version"] != args.cohort_version:
         raise ValueError("browser-egress reconciliation uses a different build execution")
+    _require_same_current_build(
+        build_binding,
+        expected_build,
+        cohort_version=args.cohort_version,
+        operation="reconciliation",
+    )
     _emit(reconcile_qualification_filesystem(args.result_root))
 
 
@@ -893,14 +921,17 @@ def _recover_resume(args: argparse.Namespace) -> None:
     expected_build = validate_build_execution_receipt(
         args.build_execution_receipt,
         expected_cohort_version=args.cohort_version,
+        allow_historical=False,
     )
     build_binding = validated_foundation["build_execution"]
-    if (
-        validated_foundation["cohort_version"] != args.cohort_version
-        or Path(build_binding["path"]).resolve() != Path(expected_build["path"]).resolve()
-        or build_binding["sha256"] != expected_build["sha256"]
-    ):
+    if validated_foundation["cohort_version"] != args.cohort_version:
         raise ValueError("browser-egress recovery uses a different build execution")
+    _require_same_current_build(
+        build_binding,
+        expected_build,
+        cohort_version=args.cohort_version,
+        operation="recovery",
+    )
     checkpoint = recover_interrupted_attempt(args.result_root, finished_at=_timestamp())
     if checkpoint["status"] not in {"running", "complete"}:
         raise ValueError("browser-egress recovered qualification is terminally failed")
@@ -1342,7 +1373,9 @@ def _verify(args: argparse.Namespace) -> None:
         _live_docker_argument(args), expected=foundation["docker_daemon"]
     )
     expected_build = validate_build_execution_receipt(
-        args.build_execution_receipt, expected_cohort_version=args.cohort_version
+        args.build_execution_receipt,
+        expected_cohort_version=args.cohort_version,
+        allow_historical=False,
     )
     verified = verify_qualification(
         args.result_root,
@@ -1351,11 +1384,12 @@ def _verify(args: argparse.Namespace) -> None:
         verification_mode=FoundationVerificationMode.EXECUTION,
     )
     binding = verified["build_execution"]
-    if (
-        Path(binding["path"]).resolve() != Path(expected_build["path"]).resolve()
-        or binding["sha256"] != expected_build["sha256"]
-    ):
-        raise ValueError("browser-egress result uses a different build execution")
+    _require_same_current_build(
+        binding,
+        expected_build,
+        cohort_version=args.cohort_version,
+        operation="result",
+    )
     _emit(verified)
 
 

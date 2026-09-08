@@ -88,7 +88,8 @@ _PINNED_CDP_RESOLVER_PROJECTION = validate_fail_closed_host_resolver_argument(
 )
 
 RECEIPT_TYPE = "qcsd-class-study-pinned-cdp-probe"
-PROBE_SCHEMA_VERSION = 8
+PROBE_SCHEMA_VERSION = 9
+HISTORICAL_PROBE_SCHEMA_VERSION = 8
 EXPECTED_PLAYWRIGHT_VERSION = PLAYWRIGHT_VERSION
 EXPECTED_CHROMIUM_EXECUTABLE = str(DEFAULT_CONFIGURED_EXECUTABLE)
 PROBE_OBSERVATION_TIMEOUT_MS = 10_000
@@ -387,6 +388,7 @@ def run_pinned_cdp_probe(*, expected_uid: int, expected_gid: int) -> dict[str, A
                 page.set_default_timeout(PROBE_OBSERVATION_TIMEOUT_MS)
                 page.set_default_navigation_timeout(PROBE_OBSERVATION_TIMEOUT_MS)
                 session = context.new_cdp_session(page)
+                browser_session = browser.new_browser_cdp_session()
                 ledger = _RequestObservationLedger(
                     eligible=lambda method, url: method == "GET" and url.startswith("http://")
                 )
@@ -803,6 +805,7 @@ def create_pinned_cdp_receipt(
     build = validate_build_execution_receipt(
         build_execution_receipt,
         expected_cohort_version=cohort_version,
+        allow_historical=False,
     )
     prepare_source = {**build["source"], "image_digest": build["images"]["prepare"]["id"]}
     if source_metadata() != prepare_source:
@@ -822,13 +825,7 @@ def create_pinned_cdp_receipt(
             "sha256": build["sha256"],
             "payload_sha256": build_value["payload_sha256"],
         },
-        "build_execution_identity": {
-            "cohort_version": build["cohort_version"],
-            "sha256": build["sha256"],
-            "collection_image": build["collection_image"],
-            "started_at": build["started_at"],
-            "finished_at": build["finished_at"],
-        },
+        "build_execution_identity": _current_build_identity(build),
         "collection_source": build["source"],
         "prepare_source": prepare_source,
         "prepare_image_digest": build["images"]["prepare"]["id"],
@@ -841,6 +838,7 @@ def create_pinned_cdp_receipt(
         build_execution_receipt=build_execution_receipt,
         expected_cohort_version=cohort_version,
         runtime_role="prepare",
+        allow_historical=False,
     )
     output = write_create_only_json(destination, bind_receipt(payload, receipt_type=RECEIPT_TYPE))
     validate_pinned_cdp_receipt(
@@ -858,6 +856,7 @@ def validate_pinned_cdp_receipt(
     build_execution_receipt: Path | None = None,
     expected_cohort_version: int | None = None,
     runtime_role: str | None = None,
+    allow_historical: bool = False,
 ) -> dict[str, Any]:
     """Reconstruct and validate one pinned-CDP receipt."""
 
@@ -877,6 +876,7 @@ def validate_pinned_cdp_receipt(
         build_execution_receipt=build_execution_receipt,
         expected_cohort_version=expected_cohort_version,
         runtime_role=runtime_role,
+        allow_historical=allow_historical,
     )
     return {
         "path": str(receipt_path),
@@ -892,6 +892,7 @@ def _validate_payload(
     build_execution_receipt: Path | None,
     expected_cohort_version: int | None,
     runtime_role: str | None,
+    allow_historical: bool,
 ) -> dict[str, Any]:
     if expected_cohort_version is not None and (
         type(expected_cohort_version) is not int or expected_cohort_version < 1
@@ -916,9 +917,15 @@ def _validate_payload(
     if set(payload) != expected_keys:
         raise ValueError("pinned CDP probe payload fields differ from the contract")
     cohort_version = payload.get("cohort_version")
+    probe_schema_version = payload.get("probe_schema_version")
     if (
-        type(payload.get("probe_schema_version")) is not int
-        or payload.get("probe_schema_version") != PROBE_SCHEMA_VERSION
+        type(probe_schema_version) is not int
+        or probe_schema_version
+        not in {HISTORICAL_PROBE_SCHEMA_VERSION, PROBE_SCHEMA_VERSION}
+        or (
+            probe_schema_version == HISTORICAL_PROBE_SCHEMA_VERSION
+            and not allow_historical
+        )
         or payload.get("artifact_type") != RECEIPT_TYPE
         or payload.get("study_id") != STUDY_ID
         or type(cohort_version) is not int
@@ -946,6 +953,10 @@ def _validate_payload(
     build = validate_build_execution_receipt(
         build_path,
         expected_cohort_version=cohort_version,
+        allow_historical=(
+            allow_historical
+            and probe_schema_version == HISTORICAL_PROBE_SCHEMA_VERSION
+        ),
     )
     build_value = load_json(Path(build["path"]))
     expected_binding = {
@@ -953,13 +964,11 @@ def _validate_payload(
         "sha256": build["sha256"],
         "payload_sha256": build_value["payload_sha256"],
     }
-    identity = {
-        "cohort_version": build["cohort_version"],
-        "sha256": build["sha256"],
-        "collection_image": build["collection_image"],
-        "started_at": build["started_at"],
-        "finished_at": build["finished_at"],
-    }
+    identity = (
+        _legacy_build_identity(build)
+        if probe_schema_version == HISTORICAL_PROBE_SCHEMA_VERSION
+        else _current_build_identity(build)
+    )
     prepare_image = build["images"]["prepare"]["id"]
     collection_source = build["source"]
     prepare_source = {**collection_source, "image_digest": prepare_image}
@@ -1268,6 +1277,56 @@ def _canonical_build_receipt_path(cohort_version: int) -> str:
     """Return the container-neutral evidence namespace stored in receipts."""
 
     return f"/lab/artifacts/buflo-study/build-execution-v{cohort_version}.json"
+
+
+def _canonical_build_completion_path(cohort_version: int) -> str:
+    """Return the canonical persisted identity of a completed current build."""
+
+    return f"/lab/artifacts/buflo-study/build-completion-v{cohort_version}.json"
+
+
+def _legacy_build_identity(build: Mapping[str, Any]) -> dict[str, Any]:
+    """Reproduce schema-8 identity only for explicit historical verification."""
+
+    return {
+        "cohort_version": build["cohort_version"],
+        "sha256": build["sha256"],
+        "collection_image": build["collection_image"],
+        "started_at": build["started_at"],
+        "finished_at": build["finished_at"],
+    }
+
+
+def _current_build_identity(build: Mapping[str, Any]) -> dict[str, Any]:
+    """Project the complete current build identity without losing completion."""
+
+    cohort_version = build.get("cohort_version")
+    completion_sha256 = build.get("completion_sha256")
+    completion_path = build.get("completion_path")
+    build_path = build.get("path")
+    if (
+        type(cohort_version) is not int
+        or cohort_version < 1
+        or not isinstance(build_path, str)
+        or not isinstance(completion_path, str)
+        or not Path(completion_path).is_absolute()
+        or Path(completion_path).resolve()
+        != Path(build_path).resolve().with_name(
+            f"build-completion-v{cohort_version}.json"
+        )
+        or not isinstance(completion_sha256, str)
+        or _DIGEST.fullmatch(completion_sha256) is None
+    ):
+        raise ValueError("pinned CDP requires a completed schema-5 build identity")
+    return {
+        "cohort_version": cohort_version,
+        "sha256": build["sha256"],
+        "completion_path": _canonical_build_completion_path(cohort_version),
+        "completion_sha256": completion_sha256,
+        "collection_image": build["collection_image"],
+        "started_at": build["started_at"],
+        "finished_at": build["finished_at"],
+    }
 
 
 def _timestamp(value: object, *, label: str) -> datetime:

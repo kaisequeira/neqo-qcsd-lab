@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-import copy
 import ast
+import base64
+import copy
+import hashlib
 import json
 import os
 import re
 import runpy
+import shlex
 import shutil
 import subprocess
 import sys
@@ -127,9 +130,7 @@ def test_prepare_complete_coverage_is_explicit_and_opt_in():
 def test_buflo_cohort_version_is_positive_unique_and_defaults_to_one():
     assert cli.parser().parse_args(["buflo-study", "reference"]).cohort_version == 1
     assert (
-        cli.parser().parse_args(
-            ["buflo-study", "reference", "--cohort-version=2"]
-        ).cohort_version
+        cli.parser().parse_args(["buflo-study", "reference", "--cohort-version=2"]).cohort_version
         == 2
     )
     for arguments in (
@@ -224,8 +225,7 @@ def test_class_status_cli_preserves_pilot_and_authoritative_fitting_artifacts(
         "numeric": tuple(tmp_path / f"numeric-{stage}" for stage in ("pilot", "authoritative")),
         "prefix": tuple(tmp_path / f"prefix-{stage}" for stage in ("pilot", "authoritative")),
         "qualification": tuple(
-            tmp_path / f"qualification-{stage}.json"
-            for stage in ("pilot", "authoritative")
+            tmp_path / f"qualification-{stage}.json" for stage in ("pilot", "authoritative")
         ),
         "final": tuple(tmp_path / f"final-{stage}" for stage in ("pilot", "authoritative")),
     }
@@ -245,15 +245,11 @@ def test_class_status_cli_preserves_pilot_and_authoritative_fitting_artifacts(
     assert observed["numeric_bundle_roots"] == tuple(
         path.absolute() for path in artifacts["numeric"]
     )
-    assert observed["prefix_spec_roots"] == tuple(
-        path.absolute() for path in artifacts["prefix"]
-    )
+    assert observed["prefix_spec_roots"] == tuple(path.absolute() for path in artifacts["prefix"])
     assert observed["qualification_manifests"] == tuple(
         path.absolute() for path in artifacts["qualification"]
     )
-    assert observed["final_bundle_roots"] == tuple(
-        path.absolute() for path in artifacts["final"]
-    )
+    assert observed["final_bundle_roots"] == tuple(path.absolute() for path in artifacts["final"])
     assert observed["numeric_bundle_root"] is None
     assert observed["prefix_spec_root"] is None
     assert observed["qualification_manifest"] is None
@@ -327,7 +323,7 @@ def test_launcher_routes_only_consolidated_public_commands():
         in launcher
     )
     assert (
-        'run|resume|verify|analyze|fit|buflo-study|class-study|test) '
+        "run|resume|verify|analyze|fit|buflo-study|class-study|test) "
         'image="${COLLECTION_IMAGE}"' in launcher
     )
     assert launcher.count("start_capture_acceptance_server") == 3
@@ -339,7 +335,9 @@ def test_launcher_routes_only_consolidated_public_commands():
     acquisition_watch = launcher.split(
         'if [[ "${1:-}" == "class-study" && "${2:-}" == "acquisition-watch" ]]', 1
     )[1].split("\nfi", 1)[0]
-    assert 'exec /usr/bin/python3 -I "${ROOT}/tools/class_acquisition_watch.py"' in acquisition_watch
+    assert (
+        'exec /usr/bin/python3 -I "${ROOT}/tools/class_acquisition_watch.py"' in acquisition_watch
+    )
     assert ".venv/bin/python" not in acquisition_watch
     assert 'git -C "${ROOT}" rev-parse HEAD:neqo-qcsd' in launcher
     assert 'git -C "${ROOT}" ls-files --stage -- neqo-qcsd' in launcher
@@ -349,26 +347,2105 @@ def test_launcher_routes_only_consolidated_public_commands():
         'if [[ "${1:-}" == "test" && "${2:-}" == "pinned-cdp" ]]; then', 1
     )[-1].split("\nfi", 1)[0]
     assert 'image="${PREPARE_IMAGE}"' not in pinned_cdp
-    assert 'QCSD_PINNED_CDP_EXPECTED_UID=${qcsd_invoking_uid}' in pinned_cdp
-    assert 'QCSD_PINNED_CDP_EXPECTED_GID=${qcsd_invoking_gid}' in pinned_cdp
-    assert '--entrypoint /usr/bin/tini' in pinned_cdp
-    assert '/opt/qcsd-venv/bin/python3 -m qcsd_lab.pinned_cdp' in pinned_cdp
-    assert '/usr/bin/timeout --signal=TERM --kill-after=10s 120s' in pinned_cdp
+    assert "QCSD_PINNED_CDP_EXPECTED_UID=${qcsd_invoking_uid}" in pinned_cdp
+    assert "QCSD_PINNED_CDP_EXPECTED_GID=${qcsd_invoking_gid}" in pinned_cdp
+    assert "--entrypoint /usr/bin/tini" in pinned_cdp
+    assert "/opt/qcsd-venv/bin/python3 -m qcsd_lab.pinned_cdp" in pinned_cdp
+    assert "/usr/bin/timeout --signal=TERM --kill-after=10s 120s" in pinned_cdp
     assert '--build-execution-receipt "${pinned_cdp_build_container}"' in pinned_cdp
     assert '--destination "${pinned_cdp_destination_container}"' in pinned_cdp
     assert "pytest" not in pinned_cdp
     assert 'qcsd_run_attached_docker "${container[@]}"' in pinned_cdp
 
 
-def test_launcher_rejects_root_split_ids_and_dac_override_before_helper_load() -> None:
-    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(
-        encoding="utf-8"
+def _current_pilot_resume_fixture(
+    root: Path,
+    admitted: object,
+    build: Path,
+    foundation: Path,
+    *,
+    run_id: str,
+) -> Path:
+    from qcsd_lab.class_study import bind_receipt, canonical_json_bytes
+
+    def publish(path: Path, receipt_type: str, payload: dict[str, object]) -> Path:
+        path.write_bytes(canonical_json_bytes(bind_receipt(payload, receipt_type=receipt_type)))
+        return path
+
+    campaign_name = "classifier-multiorigin100-v1-pilot-fitting-1200"
+    result = root / "results" / campaign_name / run_id
+    inputs = result / "inputs"
+    inputs.mkdir(parents=True)
+    workload_ids = [f"class-{index:03d}" for index in range(120)]
+    workloads = inputs / "workloads"
+    workloads.mkdir()
+    for workload_id in workload_ids:
+        (workloads / f"{workload_id}.json").write_bytes(canonical_json_bytes({}))
+    (inputs / "defense-parameters").mkdir()
+    environment = inputs / "study-environment.json"
+    environment.write_bytes(
+        canonical_json_bytes(
+            {
+                "schema_version": 3,
+                "artifact_type": "qcsd-buflo-study-environment",
+                "docker": {
+                    "client_version": "fixture",
+                    "server_version": "fixture",
+                    "server_os": "linux",
+                    "server_arch": "amd64",
+                    "ncpu": 12,
+                    "mem_total_bytes": 1,
+                    "storage_driver": "fixture",
+                },
+                "collection_image": {"id": admitted.collection_image, "repo_digests": []},
+                "build_inputs": {
+                    "schema_version": 1,
+                    "artifact_type": "qcsd-study-build-inputs",
+                    "rust_base_image": "fixture",
+                    "debian_base_image": "fixture",
+                    "uv_lock_sha256": "0" * 64,
+                    "cargo_lock_sha256": "0" * 64,
+                },
+                "build_execution": {
+                    "receipt": json.loads(build.read_bytes()),
+                    "sha256": admitted.receipt_sha256,
+                    "completion_path": admitted.identity["completion_path"],
+                    "completion_sha256": admitted.completion_sha256,
+                    "completion_payload_sha256": admitted.completion_payload_sha256,
+                    "completion": json.loads(admitted.completion_path.read_bytes()),
+                },
+                "clock_status": {
+                    "relationship": "container-shares-host-kernel-realtime-clock",
+                    "host": {},
+                    "container": {},
+                },
+                "capture_scheduler": {},
+            }
+        )
     )
+    (inputs / "source.json").write_bytes(canonical_json_bytes(admitted.source))
+    (inputs / "class-study-foundation.json").write_bytes(foundation.read_bytes())
+    cohort = publish(
+        inputs / "class-study-cohort.json",
+        "qcsd-class-study-cohort",
+        {
+            "artifact_type": "qcsd-class-study-cohort",
+            "study_id": "classifier-multiorigin100-v1",
+            "inventories": {"pilot": workload_ids, "final": workload_ids[:100]},
+        },
+    )
+    cohort_envelope = json.loads(cohort.read_bytes())
+    assembly = publish(
+        inputs / "class-study-cohort-assembly.json",
+        "qcsd-class-study-cohort-assembly",
+        {
+            "study_id": "classifier-multiorigin100-v1",
+            "assembly_schema_version": 3,
+            "eligibility_policy": {},
+            "candidate_catalogue": {},
+            "acquisition_completion": {"fixture_build": admitted.receipt_sha256},
+            "final_selection": None,
+            "stability_root": "stability",
+            "workload_root": "workloads",
+            "candidates": [],
+            "eligible_count": 0,
+            "selected_evidence_count": 0,
+            "cohort": {
+                "receipt_type": cohort_envelope["receipt_type"],
+                "payload_sha256": cohort_envelope["payload_sha256"],
+                "canonical_file_sha256": sha256_file(cohort),
+            },
+        },
+    )
+    campaign = inputs / "campaign.yml"
+    campaign.write_text(
+        "schema: 2\n"
+        f"name: {campaign_name}\n"
+        "evidence_role: pilot-fitting\n"
+        "class_study_cohort: class-study-cohort.json\n"
+        "class_study_cohort_assembly: class-study-cohort-assembly.json\n"
+        "workloads:\n" + "".join(f"  {workload_id}: 2\n" for workload_id in workload_ids),
+        encoding="utf-8",
+    )
+    cohort_sha256 = sha256_file(cohort)
+    assembly_sha256 = sha256_file(assembly)
+    launch_identity = {
+        "study_id": "classifier-multiorigin100-v1",
+        "campaign_name": campaign_name,
+        "evidence_role": "pilot-fitting",
+        "class_study_cohort_sha256": cohort_sha256,
+        "class_study_cohort_assembly_sha256": assembly_sha256,
+        "uniqueness_policy": "canonical-role-block-and-cohort-assembly-v1",
+    }
+    launch_key = hashlib.sha256(
+        json.dumps(launch_identity, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    launch_payload = {
+        "study_id": "classifier-multiorigin100-v1",
+        "launch_key": launch_key,
+        "campaign_name": campaign_name,
+        "campaign_sha256": sha256_file(campaign),
+        "evidence_role": "pilot-fitting",
+        "class_study_cohort_sha256": cohort_sha256,
+        "class_study_cohort_assembly_sha256": assembly_sha256,
+        "result_root": f"/lab/results/{campaign_name}/{run_id}",
+        "created_at": "2026-09-07T00:00:00+00:00",
+        "source": admitted.source,
+        "policy": "one-result-root-per-campaign-and-cohort-assembly",
+    }
+    launch = {
+        "schema_version": 1,
+        "artifact_type": "qcsd-class-study-first-launch-claim",
+        "payload_sha256": hashlib.sha256(
+            json.dumps(launch_payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+        "payload": launch_payload,
+    }
+    launch_path = inputs / "class-study-launch.json"
+    launch_path.write_bytes(canonical_json_bytes(launch))
+    registry = root / "results/.classifier-multiorigin100-v1-launches"
+    registry.mkdir(exist_ok=True)
+    (registry / f"{launch_key}.json").write_bytes(launch_path.read_bytes())
+    (result / "experiment.json").write_bytes(
+        canonical_json_bytes(
+            {
+                "name": campaign_name,
+                "purpose": "fitting",
+                "status": "incomplete",
+                "source": admitted.source,
+                "configuration": {
+                    "evidence_role": "pilot-fitting",
+                    "profile": "research-1200",
+                    "request_policies": ["as-defined", "half-duplex"],
+                    "limits": {
+                        "timeout_seconds": 120,
+                        "max_response_bytes": 1_048_576,
+                        "capture_seconds": 180,
+                        "capture_megabytes": 64,
+                        "max_attempts": 3,
+                        "per_origin_cooldown_seconds": 30,
+                        "settle_seconds": 1,
+                    },
+                    "sample_order": {
+                        "scheme": "origin-aware-windowed",
+                        "window_size": 16,
+                    },
+                    "public_origin_policy": {
+                        "environment": "QCSD_PUBLIC_ORIGIN_ONLY",
+                        "required_value": "1",
+                        "resolution": "resolve-once-reject-any-non-public-connect-exact-address",
+                    },
+                    "defenses": [{"name": "undefended", "kind": "none", "baseline": True}],
+                    "workloads": [
+                        {
+                            "id": workload_id,
+                            "visits": 2,
+                            "manifest": f"inputs/workloads/{workload_id}.json",
+                            "sha256": sha256_file(workloads / f"{workload_id}.json"),
+                            "resource_count": 0,
+                            "origin_count": 1,
+                        }
+                        for workload_id in workload_ids
+                    ],
+                    "class_study_id": "classifier-multiorigin100-v1",
+                    "study_environment_sha256": sha256_file(environment),
+                    "campaign_sha256": sha256_file(campaign),
+                    "class_study_foundation_sha256": sha256_file(
+                        inputs / "class-study-foundation.json"
+                    ),
+                    "class_study_cohort_sha256": cohort_sha256,
+                    "class_study_cohort_assembly_sha256": assembly_sha256,
+                    "class_study_launch_sha256": sha256_file(launch_path),
+                },
+            }
+        )
+    )
+    return result
+
+
+def _class_build_admission_fixture(tmp_path: Path):
+    from qcsd_lab.class_build_admission import BuildAdmission
+    from qcsd_lab.class_study import bind_receipt, canonical_json_bytes, canonical_json_sha256
+
+    root = tmp_path / "lab"
+    build = root / "artifacts/buflo-study/build-execution-v62.json"
+    completion = root / "artifacts/buflo-study/build-completion-v62.json"
+    build.parent.mkdir(parents=True)
+    build.write_bytes(canonical_json_bytes({"cohort_version": 62}))
+    completion.write_bytes(canonical_json_bytes({"schema_version": 1, "payload_sha256": "f" * 64}))
+    source = {
+        "image_digest": "sha256:" + "1" * 64,
+        "lab_commit": "a" * 40,
+        "lab_dirty": False,
+        "lab_patch_sha256": hashlib.sha256(b"").hexdigest(),
+        "neqo_commit": "b" * 40,
+        "neqo_pinned_commit": "b" * 40,
+        "neqo_dirty": False,
+        "neqo_patch_sha256": hashlib.sha256(b"").hexdigest(),
+    }
+    identity = {
+        "cohort_version": 62,
+        "sha256": sha256_file(build),
+        "completion_path": "/lab/artifacts/buflo-study/build-completion-v62.json",
+        "completion_sha256": sha256_file(completion),
+        "collection_image": source["image_digest"],
+        "started_at": "2026-09-07T00:00:00+00:00",
+        "finished_at": "2026-09-07T00:01:00+00:00",
+    }
+    admitted = BuildAdmission(
+        receipt_path=build,
+        receipt_sha256=sha256_file(build),
+        cohort_version=62,
+        collection_image=source["image_digest"],
+        prepare_image="sha256:" + "2" * 64,
+        reference_image="sha256:" + "3" * 64,
+        completion_path=completion,
+        completion_sha256=sha256_file(completion),
+        completion_payload_sha256="f" * 64,
+        source=source,
+        identity=identity,
+    )
+
+    def publish(path: Path, receipt_type: str, payload: dict[str, object]) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(canonical_json_bytes(bind_receipt(payload, receipt_type=receipt_type)))
+        return path
+
+    def binding(path: Path) -> dict[str, str]:
+        return {"path": str(path), "sha256": sha256_file(path)}
+
+    foundation = publish(
+        root / "artifacts/classifier-multiorigin100-v1/class-study-foundation-v62.json",
+        "qcsd-class-study-foundation-attestation",
+        {
+            "attestation_schema_version": 4,
+            "artifact_type": "qcsd-class-study-foundation-attestation",
+            "cohort_version": 62,
+            "source": source,
+            "build_execution_identity": identity,
+            "evidence": {"build_execution": binding(build)},
+        },
+    )
+    readiness = publish(
+        root / "artifacts/classifier-multiorigin100-v1/readiness.json",
+        "qcsd-class-study-readiness-attestation",
+        {
+            "attestation_schema_version": 3,
+            "artifact_type": "qcsd-class-study-readiness-attestation",
+            "study_id": "classifier-multiorigin100-v1",
+            "cohort_version": 62,
+            "source": source,
+            "build_execution_identity": identity,
+            "evidence": {
+                "foundation": binding(foundation),
+                "build_execution": binding(build),
+            },
+        },
+    )
+    historical = publish(
+        root / "artifacts/classifier-multiorigin100-v1/historical-post.json",
+        "qcsd-class-study-historical-snapshot",
+        {
+            "snapshot_schema_version": 1,
+            "artifact_type": "qcsd-class-study-historical-snapshot",
+            "source": source,
+            "readiness": binding(readiness),
+        },
+    )
+    handoff = root / "handoffs/classifier-multiorigin100-v1"
+    handoff_snapshot = handoff / "inputs/class-study-historical-post-snapshot.json"
+    handoff_snapshot.parent.mkdir(parents=True)
+    handoff_snapshot.write_bytes(historical.read_bytes())
+    (handoff / "SHA256SUMS").write_text("fixture\n", encoding="ascii")
+
+    acquisition = root / "artifacts/classifier-multiorigin100-v1-acquisition"
+    acquisition_provenance = publish(
+        acquisition / "provenance.json",
+        "qcsd-class-study-acquisition-provenance",
+        {
+            "acquisition_schema_version": 5,
+            "foundation_attestation": binding(foundation),
+            "image_digest": admitted.prepare_image,
+            "source": {**source, "image_digest": admitted.prepare_image},
+        },
+    )
+    acquisition_completion = publish(
+        acquisition / "completion.json",
+        "qcsd-class-study-acquisition-completion",
+        {
+            "acquisition_schema_version": 5,
+            "completion_schema_version": 2,
+            "provenance_sha256": sha256_file(acquisition_provenance),
+        },
+    )
+    reference = root / "artifacts/classifier-multiorigin100-v1/reference.json"
+    reference.write_bytes(
+        canonical_json_bytes(
+            {
+                "schema_version": 2,
+                "artifact_type": "qcsd-buflo-csbuflo-reference-execution",
+                "build_execution": {
+                    "receipt": json.loads(build.read_bytes()),
+                    "sha256": admitted.receipt_sha256,
+                    "completion_path": identity["completion_path"],
+                    "completion_sha256": admitted.completion_sha256,
+                    "completion_payload_sha256": admitted.completion_payload_sha256,
+                    "completion": json.loads(completion.read_bytes()),
+                },
+                "reference_image": {"id": admitted.reference_image},
+            }
+        )
+    )
+    decision = publish(
+        root / "artifacts/classifier-multiorigin100-v1/decision.json",
+        "qcsd-class-study-successor-decision",
+        {
+            "decision_schema_version": 3,
+            "evidence": {"predecessor_foundation": binding(foundation)},
+        },
+    )
+    decision_binding = binding(decision)
+    decision_binding["payload_sha256"] = json.loads(decision.read_bytes())["payload_sha256"]
+    successor_identity_sha256 = "0123456789ab" + "c" * 52
+    successor_study_id = f"classifier-multiorigin100-v2-g01-{successor_identity_sha256[:12]}"
+    successor_plan = root / f"artifacts/{successor_study_id}/plan"
+    successor_campaigns = successor_plan / "campaigns"
+    successor_campaigns.mkdir(parents=True)
+    successor_files: dict[str, Path] = {}
+    for successor_name in (
+        "successor-cohort.json",
+        "successor-compatible-cohort.json",
+        "successor-compatible-cohort-assembly.json",
+        "successor-final-selection.json",
+        "final-qualification-plan.json",
+    ):
+        successor_path = successor_plan / successor_name
+        successor_path.write_bytes(canonical_json_bytes({}))
+        successor_files[successor_name] = successor_path
+    successor_roles = {
+        f"{successor_study_id}-authoritative-fitting-2000-1200.yml": ("authoritative-fitting"),
+        f"{successor_study_id}-certification-900-1200.yml": "certification",
+    }
+    for successor_block in range(1, 11):
+        successor_roles[f"{successor_study_id}-canary-{successor_block:02d}-1200.yml"] = "canary"
+        successor_roles[f"{successor_study_id}-formal-{successor_block:02d}-1200.yml"] = "formal"
+    for successor_name, successor_role in successor_roles.items():
+        successor_path = successor_campaigns / successor_name
+        successor_path.write_text(
+            "schema: 2\n"
+            f"evidence_role: {successor_role}\n"
+            "class_study_successor: ../successor-restart.json\n"
+            "class_study_cohort_assembly: "
+            "../successor-compatible-cohort-assembly.json\n",
+            encoding="utf-8",
+        )
+        successor_files[f"campaigns/{successor_name}"] = successor_path
+    restart = publish(
+        successor_plan / "successor-restart.json",
+        "qcsd-class-study-successor-restart",
+        {
+            "restart_schema_version": 2,
+            "artifact_type": "qcsd-class-study-successor-restart",
+            "study_id": successor_study_id,
+            "predecessor_study_id": "classifier-multiorigin100-v1",
+            "replacement_generation": 1,
+            "cumulative_failed_class_ids": [],
+            "successor_identity_sha256": successor_identity_sha256,
+            "successor_decision": decision_binding,
+            "predecessor_foundation_sha256": sha256_file(foundation),
+            "source_sha256": canonical_json_sha256(source),
+            "build_execution_identity_sha256": canonical_json_sha256(identity),
+            "selection_sha256": "0" * 64,
+            "namespace": {
+                "restart_root_name": successor_study_id,
+                "launch_namespace": f".{successor_study_id}-launches",
+                "results_root": "results",
+                "authoritative_numeric_root": (
+                    "artifacts/classifier-multiorigin100-v1-authoritative-fitting-numeric"
+                ),
+                "authoritative_prefix_root": (
+                    "artifacts/classifier-multiorigin100-v1-authoritative-fitting-prefix-specs"
+                ),
+                "authoritative_final_root": (
+                    "artifacts/classifier-multiorigin100-v1-authoritative-fitting"
+                ),
+                "final_qualification_root": (f"qualification/{successor_study_id}-final-full"),
+            },
+            "immutable_plan_artifacts": {
+                name: {"path": name, "sha256": sha256_file(path)}
+                for name, path in successor_files.items()
+            },
+            "required_restart_gates": [],
+            "downstream_restart": {},
+            "readiness": {},
+            "predecessor_downstream_artifact_reuse_permitted": False,
+        },
+    )
+    evaluation = publish(
+        root / "artifacts/classifier-multiorigin100-v1/evaluation.json",
+        "qcsd-class-study-evaluation",
+        {
+            "schema_version": 2,
+            "artifact_type": "qcsd-class-study-evaluation",
+            "handoff": {"root": str(handoff)},
+        },
+    )
+    comparison = publish(
+        root / "artifacts/classifier-multiorigin100-v1/comparison.json",
+        "qcsd-class-study-comparison-review",
+        {
+            "artifact_type": "qcsd-class-study-comparison-review",
+            "handoff": {"root": str(handoff)},
+            "evaluation": binding(evaluation),
+        },
+    )
+    validation = publish(
+        root / "artifacts/classifier-multiorigin100-v1/validation.json",
+        "qcsd-class-study-validation-attestation",
+        {
+            "attestation_schema_version": 1,
+            "artifact_type": "qcsd-class-study-validation-attestation",
+            "source": source,
+            "evidence": {
+                "readiness": binding(readiness),
+                "evaluation": binding(evaluation),
+            },
+        },
+    )
+    policy = publish(
+        root / "artifacts/classifier-multiorigin100-v1/policy.json",
+        "qcsd-class-study-successor-policy",
+        {"policy_schema_version": 1},
+    )
+    resume_campaign_name = "classifier-multiorigin100-v1-pilot-fitting-1200"
+    resume = root / "results" / resume_campaign_name / "20260907T000000.000000Z"
+    resume_inputs = resume / "inputs"
+    environment = resume_inputs / "study-environment.json"
+    resume_inputs.mkdir(parents=True)
+    resume_workload_ids = [f"class-{index:03d}" for index in range(120)]
+    environment.write_bytes(
+        canonical_json_bytes(
+            {
+                "schema_version": 3,
+                "artifact_type": "qcsd-buflo-study-environment",
+                "docker": {
+                    "client_version": "fixture",
+                    "server_version": "fixture",
+                    "server_os": "linux",
+                    "server_arch": "amd64",
+                    "ncpu": 12,
+                    "mem_total_bytes": 1,
+                    "storage_driver": "fixture",
+                },
+                "collection_image": {"id": admitted.collection_image, "repo_digests": []},
+                "build_inputs": {
+                    "schema_version": 1,
+                    "artifact_type": "qcsd-study-build-inputs",
+                    "rust_base_image": "fixture",
+                    "debian_base_image": "fixture",
+                    "uv_lock_sha256": "0" * 64,
+                    "cargo_lock_sha256": "0" * 64,
+                },
+                "build_execution": {
+                    "receipt": json.loads(build.read_bytes()),
+                    "sha256": admitted.receipt_sha256,
+                    "completion_path": identity["completion_path"],
+                    "completion_sha256": admitted.completion_sha256,
+                    "completion_payload_sha256": admitted.completion_payload_sha256,
+                    "completion": json.loads(completion.read_bytes()),
+                },
+                "clock_status": {
+                    "relationship": "container-shares-host-kernel-realtime-clock",
+                    "host": {},
+                    "container": {},
+                },
+                "capture_scheduler": {},
+            }
+        )
+    )
+    (resume_inputs / "source.json").write_bytes(canonical_json_bytes(source))
+    (resume_inputs / "class-study-foundation.json").write_bytes(foundation.read_bytes())
+    resume_cohort = publish(
+        resume_inputs / "class-study-cohort.json",
+        "qcsd-class-study-cohort",
+        {
+            "artifact_type": "qcsd-class-study-cohort",
+            "study_id": "classifier-multiorigin100-v1",
+            "inventories": {
+                "pilot": resume_workload_ids,
+                "final": resume_workload_ids[:100],
+            },
+        },
+    )
+    resume_cohort_envelope = json.loads(resume_cohort.read_bytes())
+    resume_assembly = publish(
+        resume_inputs / "class-study-cohort-assembly.json",
+        "qcsd-class-study-cohort-assembly",
+        {
+            "study_id": "classifier-multiorigin100-v1",
+            "assembly_schema_version": 3,
+            "eligibility_policy": {},
+            "candidate_catalogue": {},
+            "acquisition_completion": {"fixture_build": admitted.receipt_sha256},
+            "final_selection": None,
+            "stability_root": "stability",
+            "workload_root": "workloads",
+            "candidates": [],
+            "eligible_count": 0,
+            "selected_evidence_count": 0,
+            "cohort": {
+                "receipt_type": resume_cohort_envelope["receipt_type"],
+                "payload_sha256": resume_cohort_envelope["payload_sha256"],
+                "canonical_file_sha256": sha256_file(resume_cohort),
+            },
+        },
+    )
+    frozen_campaign = resume_inputs / "campaign.yml"
+    resume_workloads = resume_inputs / "workloads"
+    resume_workloads.mkdir()
+    for workload_id in resume_workload_ids:
+        (resume_workloads / f"{workload_id}.json").write_bytes(canonical_json_bytes({}))
+    (resume_inputs / "defense-parameters").mkdir()
+    frozen_campaign.write_text(
+        "schema: 2\n"
+        f"name: {resume_campaign_name}\n"
+        "evidence_role: pilot-fitting\n"
+        "class_study_cohort: class-study-cohort.json\n"
+        "class_study_cohort_assembly: class-study-cohort-assembly.json\n"
+        "workloads:\n" + "".join(f"  {workload_id}: 2\n" for workload_id in resume_workload_ids),
+        encoding="utf-8",
+    )
+    resume_cohort_sha256 = sha256_file(resume_cohort)
+    resume_assembly_sha256 = sha256_file(resume_assembly)
+    resume_launch_identity = {
+        "study_id": "classifier-multiorigin100-v1",
+        "campaign_name": resume_campaign_name,
+        "evidence_role": "pilot-fitting",
+        "class_study_cohort_sha256": resume_cohort_sha256,
+        "class_study_cohort_assembly_sha256": resume_assembly_sha256,
+        "uniqueness_policy": "canonical-role-block-and-cohort-assembly-v1",
+    }
+    resume_launch_key = hashlib.sha256(
+        json.dumps(resume_launch_identity, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    resume_launch_payload = {
+        "study_id": "classifier-multiorigin100-v1",
+        "launch_key": resume_launch_key,
+        "campaign_name": resume_campaign_name,
+        "campaign_sha256": sha256_file(frozen_campaign),
+        "evidence_role": "pilot-fitting",
+        "class_study_cohort_sha256": resume_cohort_sha256,
+        "class_study_cohort_assembly_sha256": resume_assembly_sha256,
+        "result_root": (f"/lab/results/{resume_campaign_name}/{resume.name}"),
+        "created_at": "2026-09-07T00:00:00+00:00",
+        "source": source,
+        "policy": "one-result-root-per-campaign-and-cohort-assembly",
+    }
+    resume_launch = {
+        "schema_version": 1,
+        "artifact_type": "qcsd-class-study-first-launch-claim",
+        "payload_sha256": hashlib.sha256(
+            json.dumps(resume_launch_payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+        "payload": resume_launch_payload,
+    }
+    resume_launch_path = resume_inputs / "class-study-launch.json"
+    resume_launch_path.write_bytes(canonical_json_bytes(resume_launch))
+    resume_registry = root / "results/.classifier-multiorigin100-v1-launches"
+    resume_registry.mkdir()
+    (resume_registry / f"{resume_launch_key}.json").write_bytes(resume_launch_path.read_bytes())
+    (resume / "experiment.json").write_bytes(
+        canonical_json_bytes(
+            {
+                "name": resume_campaign_name,
+                "purpose": "fitting",
+                "status": "incomplete",
+                "source": source,
+                "configuration": {
+                    "evidence_role": "pilot-fitting",
+                    "profile": "research-1200",
+                    "request_policies": ["as-defined", "half-duplex"],
+                    "limits": {
+                        "timeout_seconds": 120,
+                        "max_response_bytes": 1_048_576,
+                        "capture_seconds": 180,
+                        "capture_megabytes": 64,
+                        "max_attempts": 3,
+                        "per_origin_cooldown_seconds": 30,
+                        "settle_seconds": 1,
+                    },
+                    "sample_order": {
+                        "scheme": "origin-aware-windowed",
+                        "window_size": 16,
+                    },
+                    "public_origin_policy": {
+                        "environment": "QCSD_PUBLIC_ORIGIN_ONLY",
+                        "required_value": "1",
+                        "resolution": "resolve-once-reject-any-non-public-connect-exact-address",
+                    },
+                    "defenses": [{"name": "undefended", "kind": "none", "baseline": True}],
+                    "workloads": [
+                        {
+                            "id": workload_id,
+                            "visits": 2,
+                            "manifest": f"inputs/workloads/{workload_id}.json",
+                            "sha256": sha256_file(resume_workloads / f"{workload_id}.json"),
+                            "resource_count": 0,
+                            "origin_count": 1,
+                        }
+                        for workload_id in resume_workload_ids
+                    ],
+                    "class_study_id": "classifier-multiorigin100-v1",
+                    "study_environment_sha256": sha256_file(environment),
+                    "campaign_sha256": sha256_file(frozen_campaign),
+                    "class_study_foundation_sha256": sha256_file(
+                        resume_inputs / "class-study-foundation.json"
+                    ),
+                    "class_study_cohort_sha256": resume_cohort_sha256,
+                    "class_study_cohort_assembly_sha256": resume_assembly_sha256,
+                    "class_study_launch_sha256": sha256_file(resume_launch_path),
+                },
+            }
+        )
+    )
+    campaign = root / "config/classifier-multiorigin100-v1/campaigns/pilot.yaml"
+    campaign.parent.mkdir(parents=True)
+    campaign.write_text("schema_version: 2\nevidence_role: pilot-fitting\n", encoding="utf-8")
+
+    def load(path: Path, *, expected_cohort: int | None = None):
+        assert path == build
+        if expected_cohort is not None:
+            assert expected_cohort == 62
+        return admitted
+
+    return SimpleNamespace(
+        root=root,
+        admitted=admitted,
+        load=load,
+        build=build,
+        foundation=foundation,
+        readiness=readiness,
+        historical=historical,
+        handoff=handoff,
+        acquisition=acquisition,
+        acquisition_completion=acquisition_completion,
+        reference=reference,
+        decision=decision,
+        restart=restart,
+        comparison=comparison,
+        validation=validation,
+        policy=policy,
+        evaluation=evaluation,
+        resume=resume,
+        campaign=campaign,
+    )
+
+
+def _second_class_build_admission_fixture(fixture):
+    from qcsd_lab.class_build_admission import BuildAdmission
+    from qcsd_lab.class_study import bind_receipt, canonical_json_bytes
+
+    root = fixture.root
+    build = root / "artifacts/buflo-study/build-execution-v63.json"
+    completion = root / "artifacts/buflo-study/build-completion-v63.json"
+    build.write_bytes(canonical_json_bytes({"cohort_version": 63}))
+    completion.write_bytes(canonical_json_bytes({"schema_version": 1, "payload_sha256": "e" * 64}))
+    source = {**dict(fixture.admitted.source), "image_digest": "sha256:" + "4" * 64}
+    identity = {
+        "cohort_version": 63,
+        "sha256": sha256_file(build),
+        "completion_path": "/lab/artifacts/buflo-study/build-completion-v63.json",
+        "completion_sha256": sha256_file(completion),
+        "collection_image": source["image_digest"],
+        "started_at": "2026-09-07T00:02:00+00:00",
+        "finished_at": "2026-09-07T00:03:00+00:00",
+    }
+    admitted = BuildAdmission(
+        receipt_path=build,
+        receipt_sha256=sha256_file(build),
+        cohort_version=63,
+        collection_image=source["image_digest"],
+        prepare_image="sha256:" + "5" * 64,
+        reference_image="sha256:" + "6" * 64,
+        completion_path=completion,
+        completion_sha256=sha256_file(completion),
+        completion_payload_sha256="e" * 64,
+        source=source,
+        identity=identity,
+    )
+
+    def publish(path: Path, receipt_type: str, payload: dict[str, object]) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(canonical_json_bytes(bind_receipt(payload, receipt_type=receipt_type)))
+        return path
+
+    def binding(path: Path) -> dict[str, str]:
+        return {"path": str(path), "sha256": sha256_file(path)}
+
+    base = root / "artifacts/classifier-multiorigin100-v1-conflict"
+    foundation = publish(
+        base / "foundation.json",
+        "qcsd-class-study-foundation-attestation",
+        {
+            "attestation_schema_version": 4,
+            "artifact_type": "qcsd-class-study-foundation-attestation",
+            "cohort_version": 63,
+            "source": source,
+            "build_execution_identity": identity,
+            "evidence": {"build_execution": binding(build)},
+        },
+    )
+    readiness = publish(
+        base / "readiness.json",
+        "qcsd-class-study-readiness-attestation",
+        {
+            "attestation_schema_version": 3,
+            "artifact_type": "qcsd-class-study-readiness-attestation",
+            "study_id": "classifier-multiorigin100-v1",
+            "cohort_version": 63,
+            "source": source,
+            "build_execution_identity": identity,
+            "evidence": {
+                "foundation": binding(foundation),
+                "build_execution": binding(build),
+            },
+        },
+    )
+    historical = publish(
+        base / "historical-pre.json",
+        "qcsd-class-study-historical-snapshot",
+        {
+            "snapshot_schema_version": 1,
+            "artifact_type": "qcsd-class-study-historical-snapshot",
+            "source": source,
+            "readiness": binding(readiness),
+        },
+    )
+    handoff = root / "handoffs/classifier-multiorigin100-v1-conflict"
+    handoff_snapshot = handoff / "inputs/class-study-historical-post-snapshot.json"
+    handoff_snapshot.parent.mkdir(parents=True)
+    handoff_snapshot.write_bytes(historical.read_bytes())
+    evaluation = publish(
+        base / "evaluation.json",
+        "qcsd-class-study-evaluation",
+        {
+            "schema_version": 2,
+            "artifact_type": "qcsd-class-study-evaluation",
+            "handoff": {"root": str(handoff)},
+        },
+    )
+    acquisition = base / "acquisition"
+    provenance = publish(
+        acquisition / "provenance.json",
+        "qcsd-class-study-acquisition-provenance",
+        {
+            "acquisition_schema_version": 5,
+            "foundation_attestation": binding(foundation),
+            "image_digest": admitted.prepare_image,
+            "source": {**source, "image_digest": admitted.prepare_image},
+        },
+    )
+    acquisition_completion = publish(
+        acquisition / "completion.json",
+        "qcsd-class-study-acquisition-completion",
+        {
+            "acquisition_schema_version": 5,
+            "completion_schema_version": 2,
+            "provenance_sha256": sha256_file(provenance),
+        },
+    )
+    qualification_authority = {
+        "schema_version": 2,
+        "artifact_type": "qcsd-class-study-qualification-authority",
+        "foundation_attestation": {
+            **binding(foundation),
+            "payload_sha256": json.loads(foundation.read_bytes())["payload_sha256"],
+        },
+        "build_execution": binding(build),
+        "build_execution_identity": identity,
+        "collection_source": source,
+        "prepare_source": {**source, "image_digest": admitted.prepare_image},
+        "prepare_image_digest": admitted.prepare_image,
+    }
+    final_selection = publish(
+        base / "final-selection.json",
+        "qcsd-class-study-final-selection-input",
+        {
+            "selection_schema_version": 2,
+            "qualification_authority": qualification_authority,
+        },
+    )
+    final_cohort_assembly = publish(
+        base / "final-cohort-assembly.json",
+        "qcsd-class-study-cohort-assembly",
+        {
+            "assembly_schema_version": 3,
+            "qualification_authority": qualification_authority,
+        },
+    )
+    result = _current_pilot_resume_fixture(
+        root,
+        admitted,
+        build,
+        foundation,
+        run_id="20260907T000200.000000Z",
+    )
+    campaign = root / "config/classifier-multiorigin100-v1/campaigns/formal-conflict.yaml"
+    campaign.write_text("schema_version: 2\nevidence_role: formal\n", encoding="utf-8")
+
+    def load(path: Path, *, expected_cohort: int | None = None):
+        if path == fixture.build:
+            return fixture.load(path, expected_cohort=expected_cohort)
+        assert path == build
+        if expected_cohort is not None:
+            assert expected_cohort == 63
+        return admitted
+
+    return SimpleNamespace(
+        admitted=admitted,
+        load=load,
+        build=build,
+        foundation=foundation,
+        readiness=readiness,
+        historical=historical,
+        handoff=handoff,
+        evaluation=evaluation,
+        acquisition=acquisition,
+        acquisition_completion=acquisition_completion,
+        qualification_authority=qualification_authority,
+        final_selection=final_selection,
+        final_cohort_assembly=final_cohort_assembly,
+        result=result,
+        campaign=campaign,
+    )
+
+
+def test_class_build_admission_loads_exact_build_storage_module() -> None:
+    from qcsd_lab.class_build_admission import _load_build_storage
+
+    root = Path(__file__).parents[1].resolve()
+    module = _load_build_storage(root)
+
+    assert Path(module.__file__).resolve() == root / "src/qcsd_lab/build_storage.py"
+    assert module.BUILD_COMPLETION_SCHEMA_VERSION == 1
+    assert callable(module.load_validated_build_execution)
+
+
+def test_class_build_admission_rejects_schema_five_without_completion(
+    tmp_path: Path,
+) -> None:
+    from qcsd_lab.class_build_admission import _current_build
+
+    root = tmp_path / "lab"
+    receipt = root / "artifacts/buflo-study/build-execution-v1.json"
+    probe = root / "tools/windows_docker_storage_probe.ps1"
+    receipt.parent.mkdir(parents=True)
+    probe.parent.mkdir(parents=True)
+    receipt.write_text("{}\n", encoding="ascii")
+    probe.write_text("fixture\n", encoding="ascii")
+
+    class PrecompletionStorage:
+        @staticmethod
+        def load_validated_build_execution(*_args, **_kwargs):
+            return receipt, b"{}\n", {}, {"schema_version": 5}, None
+
+    with pytest.raises(ValueError, match="schema 5 and completion schema 1"):
+        _current_build(root, receipt, storage=PrecompletionStorage())
+
+
+def test_class_build_admission_projects_timestamps_from_the_validated_receipt(
+    tmp_path: Path,
+) -> None:
+    from qcsd_lab.class_build_admission import _current_build
+
+    root = tmp_path / "lab"
+    receipt = root / "artifacts/buflo-study/build-execution-v7.json"
+    completion_path = receipt.with_name("build-completion-v7.json")
+    probe = root / "tools/windows_docker_storage_probe.ps1"
+    receipt.parent.mkdir(parents=True)
+    probe.parent.mkdir(parents=True)
+    receipt.write_text("fixture\n", encoding="ascii")
+    completion_path.write_text("fixture\n", encoding="ascii")
+    probe.write_text("fixture\n", encoding="ascii")
+
+    started_at = "2026-09-08T00:00:00+00:00"
+    finished_at = "2026-09-08T00:01:00+00:00"
+    value = {"started_at": started_at, "finished_at": finished_at}
+    raw = (
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+        + b"\n"
+    )
+    images = {
+        "collection": "sha256:" + "1" * 64,
+        "prepare": "sha256:" + "2" * 64,
+        "reference": "sha256:" + "3" * 64,
+    }
+    validated = {
+        "schema_version": 5,
+        "cohort_version": 7,
+        "image_ids": images,
+        "source": {"lab_commit": "a" * 40},
+    }
+    completion = {"schema_version": 1, "payload_sha256": "4" * 64}
+    completion_raw = (
+        json.dumps(completion, sort_keys=True, separators=(",", ":")).encode()
+        + b"\n"
+    )
+
+    class CurrentStorage:
+        @staticmethod
+        def load_validated_build_execution(*_args, **_kwargs):
+            # The validation projection intentionally omits receipt timestamps.
+            return receipt, raw, value, validated, completion
+
+        @staticmethod
+        def build_completion_path(resolved: Path, cohort: int) -> Path:
+            assert resolved == receipt
+            assert cohort == 7
+            return completion_path
+
+        @staticmethod
+        def load_stable_build_completion(path: Path):
+            assert path == completion_path
+            return completion_path, completion_raw, completion
+
+    admitted = _current_build(root, receipt, storage=CurrentStorage())
+
+    assert admitted.receipt_sha256 == hashlib.sha256(raw).hexdigest()
+    assert admitted.completion_sha256 == hashlib.sha256(completion_raw).hexdigest()
+    assert admitted.identity == {
+        "cohort_version": 7,
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "completion_path": "/lab/artifacts/buflo-study/build-completion-v7.json",
+        "completion_sha256": hashlib.sha256(completion_raw).hexdigest(),
+        "collection_image": images["collection"],
+        "started_at": started_at,
+        "finished_at": finished_at,
+    }
+
+
+def test_class_build_admission_accepts_real_canonical_receipt_envelopes(
+    tmp_path: Path,
+) -> None:
+    from qcsd_lab.class_build_admission import resolve_action_admission
+
+    fixture = _class_build_admission_fixture(tmp_path)
+    observed = resolve_action_admission(
+        fixture.root,
+        action="qualify-prefix",
+        options={"foundation": str(fixture.foundation)},
+        build_loader=fixture.load,
+    )
+
+    assert observed == fixture.admitted
+
+
+def test_class_build_admission_rejects_malformed_frozen_image_object(
+    tmp_path: Path,
+) -> None:
+    from qcsd_lab.class_build_admission import resolve_action_admission
+    from qcsd_lab.class_study import canonical_json_bytes
+
+    fixture = _class_build_admission_fixture(tmp_path)
+    environment_path = fixture.resume / "inputs/study-environment.json"
+    environment = json.loads(environment_path.read_bytes())
+    environment["collection_image"] = []
+    environment_path.write_bytes(canonical_json_bytes(environment))
+
+    with pytest.raises(ValueError, match="frozen environment has no current completed build"):
+        resolve_action_admission(
+            fixture.root,
+            action="resume",
+            execute=True,
+            options={
+                "foundation": str(fixture.foundation),
+                "capture_result": str(fixture.resume),
+            },
+            build_loader=fixture.load,
+        )
+
+
+@pytest.mark.parametrize(
+    ("action", "stage"),
+    (
+        ("stability", ""),
+        ("successor-policy", ""),
+        ("status", ""),
+    ),
+)
+def test_class_build_admission_preserves_v1_no_build_actions(
+    tmp_path: Path, action: str, stage: str
+) -> None:
+    from qcsd_lab.class_build_admission import resolve_action_admission
+
+    assert resolve_action_admission(tmp_path, action=action, stage=stage, options={}) is None
+
+
+@pytest.mark.parametrize(
+    ("action", "stage", "execute"),
+    (
+        ("foundation", "", False),
+        ("readiness", "", False),
+        ("successor-decision", "", False),
+        ("successor-restart", "", False),
+        ("successor-verify", "", False),
+        ("acquisition-init", "", False),
+        ("acquisition-run", "", False),
+        ("acquisition-status", "", False),
+        ("acquisition-complete", "", False),
+        ("cohort", "pilot", False),
+        ("cohort", "authoritative", False),
+        ("campaigns", "pilot", False),
+        ("campaigns", "authoritative", False),
+        ("fit-numeric", "pilot", False),
+        ("prefix-specs", "pilot", False),
+        ("qualify-prefix", "pilot", False),
+        ("finalize-fitting", "pilot", False),
+        ("capture", "", False),
+        ("capture", "", True),
+        ("resume", "", False),
+        ("resume", "", True),
+        ("historical-snapshot", "", False),
+        ("export", "", False),
+        ("evaluate", "", False),
+        ("comparison-review", "", False),
+        ("attest", "", False),
+        ("verify", "", False),
+    ),
+)
+def test_class_build_admission_required_actions_fail_without_anchor(
+    tmp_path: Path, action: str, stage: str, execute: bool
+) -> None:
+    from qcsd_lab.class_build_admission import resolve_action_admission
+
+    with pytest.raises(ValueError):
+        resolve_action_admission(
+            tmp_path,
+            action=action,
+            stage=stage,
+            execute=execute,
+            options={},
+        )
+
+
+@pytest.mark.parametrize(
+    ("action", "stage", "missing_option"),
+    (
+        ("cohort", "pilot", "--acquisition-completion"),
+        ("campaigns", "pilot", "--acquisition-completion"),
+        ("fit-numeric", "pilot", "--capture-result"),
+        ("prefix-specs", "pilot", "--capture-result"),
+    ),
+)
+def test_class_build_admission_rejects_missing_build_carrier_before_docker(
+    tmp_path: Path, action: str, stage: str, missing_option: str
+) -> None:
+    from qcsd_lab.class_build_admission import resolve_action_admission
+
+    with pytest.raises(ValueError, match=rf"{re.escape(missing_option)} before Docker"):
+        resolve_action_admission(
+            tmp_path,
+            action=action,
+            stage=stage,
+            options={},
+        )
+
+
+def test_class_build_admission_resolves_all_transitive_authority_routes(
+    tmp_path: Path,
+) -> None:
+    from qcsd_lab.class_build_admission import resolve_action_admission
+
+    fixture = _class_build_admission_fixture(tmp_path)
+    cases = (
+        ("foundation", "", False, {"build": str(fixture.build)}, 62),
+        (
+            "readiness",
+            "",
+            False,
+            {"build": str(fixture.build), "foundation": str(fixture.foundation)},
+            62,
+        ),
+        ("acquisition-init", "", False, {"foundation": str(fixture.foundation)}, None),
+        ("acquisition-run", "", False, {"acquisition_root": str(fixture.acquisition)}, None),
+        ("acquisition-status", "", False, {"acquisition_root": str(fixture.acquisition)}, None),
+        ("acquisition-complete", "", False, {"acquisition_root": str(fixture.acquisition)}, None),
+        (
+            "cohort",
+            "pilot",
+            False,
+            {"acquisition_completion": str(fixture.acquisition_completion)},
+            None,
+        ),
+        (
+            "cohort",
+            "authoritative",
+            False,
+            {
+                "foundation": str(fixture.foundation),
+                "acquisition_completion": str(fixture.acquisition_completion),
+            },
+            None,
+        ),
+        (
+            "campaigns",
+            "pilot",
+            False,
+            {"acquisition_completion": str(fixture.acquisition_completion)},
+            None,
+        ),
+        (
+            "campaigns",
+            "authoritative",
+            False,
+            {
+                "foundation": str(fixture.foundation),
+                "acquisition_completion": str(fixture.acquisition_completion),
+            },
+            None,
+        ),
+        (
+            "fit-numeric",
+            "pilot",
+            False,
+            {"capture_result": str(fixture.resume)},
+            None,
+        ),
+        (
+            "prefix-specs",
+            "pilot",
+            False,
+            {"capture_result": str(fixture.resume)},
+            None,
+        ),
+        ("finalize-fitting", "pilot", False, {"foundation": str(fixture.foundation)}, None),
+        (
+            "capture",
+            "",
+            False,
+            {"foundation": str(fixture.foundation), "campaign": str(fixture.campaign)},
+            None,
+        ),
+        (
+            "capture",
+            "",
+            True,
+            {
+                "foundation": str(fixture.foundation),
+                "build": str(fixture.build),
+                "campaign": str(fixture.campaign),
+            },
+            None,
+        ),
+        (
+            "resume",
+            "",
+            False,
+            {
+                "foundation": str(fixture.foundation),
+                "capture_result": str(fixture.resume),
+            },
+            None,
+        ),
+        (
+            "resume",
+            "",
+            True,
+            {
+                "foundation": str(fixture.foundation),
+                "capture_result": str(fixture.resume),
+            },
+            None,
+        ),
+        ("historical-snapshot", "", False, {"readiness": str(fixture.readiness)}, None),
+        ("export", "", False, {"historical_post": str(fixture.historical)}, None),
+        ("evaluate", "", False, {"handoff": str(fixture.handoff)}, None),
+        (
+            "comparison-review",
+            "",
+            False,
+            {
+                "handoff": str(fixture.handoff),
+                "evaluation": str(fixture.evaluation),
+            },
+            None,
+        ),
+        (
+            "attest",
+            "",
+            False,
+            {
+                "readiness": str(fixture.readiness),
+                "evaluation": str(fixture.evaluation),
+            },
+            None,
+        ),
+        ("successor-decision", "", False, {"foundation": str(fixture.foundation)}, None),
+        ("successor-restart", "", False, {"successor_decision": str(fixture.decision)}, None),
+        ("successor-verify", "", False, {"target": str(fixture.restart)}, None),
+        (
+            "fit-numeric",
+            "authoritative",
+            False,
+            {
+                "successor_restart": str(fixture.restart),
+                "capture_result": str(fixture.resume),
+            },
+            None,
+        ),
+        (
+            "prefix-specs",
+            "authoritative",
+            False,
+            {
+                "successor_restart": str(fixture.restart),
+                "capture_result": str(fixture.resume),
+            },
+            None,
+        ),
+        ("status", "", False, {"comparison": str(fixture.comparison)}, None),
+        ("status", "", False, {"validation": str(fixture.validation)}, None),
+        ("verify", "", False, {"target": str(fixture.validation)}, None),
+        (
+            "verify",
+            "",
+            False,
+            {"target": str(fixture.evaluation), "handoff": str(fixture.handoff)},
+            None,
+        ),
+    )
+    for action, stage, execute, options, cohort in cases:
+        assert (
+            resolve_action_admission(
+                fixture.root,
+                action=action,
+                stage=stage,
+                execute=execute,
+                cohort_version=cohort,
+                options=options,
+                build_loader=fixture.load,
+            )
+            == fixture.admitted
+        ), action
+    assert (
+        resolve_action_admission(
+            fixture.root,
+            action="successor-verify",
+            options={"target": str(fixture.policy)},
+            build_loader=fixture.load,
+        )
+        is None
+    )
+
+
+def test_class_build_admission_reference_uses_raw_schema_five_receipt_cohort(
+    tmp_path: Path,
+) -> None:
+    from qcsd_lab.class_build_admission import resolve_action_admission
+
+    fixture = _class_build_admission_fixture(tmp_path)
+
+    assert (
+        resolve_action_admission(
+            fixture.root,
+            action="foundation",
+            cohort_version=62,
+            options={"build": str(fixture.build), "reference": str(fixture.reference)},
+            build_loader=fixture.load,
+        )
+        == fixture.admitted
+    )
+
+
+@pytest.mark.parametrize(
+    ("action", "options"),
+    (
+        (
+            "attest",
+            lambda first, second: {
+                "readiness": str(first.readiness),
+                "historical_pre": str(second.historical),
+                "evaluation": str(first.evaluation),
+            },
+        ),
+        (
+            "capture",
+            lambda first, second: {
+                "foundation": str(first.foundation),
+                "readiness": str(second.readiness),
+                "historical_pre": str(second.historical),
+                "campaign": str(second.campaign),
+            },
+        ),
+        (
+            "resume",
+            lambda first, second: {
+                "foundation": str(first.foundation),
+                "readiness": str(second.readiness),
+                "historical_pre": str(second.historical),
+                "capture_result": str(second.result),
+            },
+        ),
+        (
+            "historical-snapshot",
+            lambda first, second: {
+                "readiness": str(first.readiness),
+                "historical_pre": str(second.historical),
+                "formal_results": [str(second.result)],
+            },
+        ),
+        (
+            "status",
+            lambda first, second: {
+                "foundation": str(first.foundation),
+                "acquisition_root": str(second.acquisition),
+                "acquisition_completion": str(second.acquisition_completion),
+            },
+        ),
+        (
+            "foundation",
+            lambda first, second: {
+                "build": str(first.build),
+                "regression_results": [str(second.result)],
+            },
+        ),
+    ),
+)
+def test_class_build_admission_rejects_conflicting_current_authority_chains(
+    tmp_path: Path,
+    action: str,
+    options,
+) -> None:
+    from qcsd_lab.class_build_admission import resolve_action_admission
+
+    first = _class_build_admission_fixture(tmp_path)
+    second = _second_class_build_admission_fixture(first)
+
+    with pytest.raises(
+        ValueError,
+        match="resolve to different completed builds|differs from external resume authority",
+    ):
+        resolve_action_admission(
+            first.root,
+            action=action,
+            stage="authoritative" if action == "foundation" else "",
+            options=options(first, second),
+            build_loader=second.load,
+        )
+
+
+def test_class_build_admission_completion_binds_exact_sibling_provenance(
+    tmp_path: Path,
+) -> None:
+    from qcsd_lab.class_build_admission import resolve_action_admission
+    from qcsd_lab.class_study import bind_receipt, canonical_json_bytes
+
+    fixture = _class_build_admission_fixture(tmp_path)
+    completion = json.loads(fixture.acquisition_completion.read_bytes())["payload"]
+    completion["provenance_sha256"] = "0" * 64
+    fixture.acquisition_completion.write_bytes(
+        canonical_json_bytes(
+            bind_receipt(
+                completion,
+                receipt_type="qcsd-class-study-acquisition-completion",
+            )
+        )
+    )
+
+    with pytest.raises(ValueError, match="binds another provenance"):
+        resolve_action_admission(
+            fixture.root,
+            action="cohort",
+            stage="pilot",
+            options={"acquisition_completion": str(fixture.acquisition_completion)},
+            build_loader=fixture.load,
+        )
+
+
+@pytest.mark.parametrize("kind", ("comparison", "validation"))
+def test_class_build_admission_rejects_conflicting_mandatory_evaluation(
+    tmp_path: Path,
+    kind: str,
+) -> None:
+    from qcsd_lab.class_build_admission import resolve_action_admission
+    from qcsd_lab.class_study import bind_receipt, canonical_json_bytes
+
+    first = _class_build_admission_fixture(tmp_path)
+    second = _second_class_build_admission_fixture(first)
+    source = first.comparison if kind == "comparison" else first.validation
+    value = json.loads(source.read_bytes())
+    payload = value["payload"]
+    evaluation_binding = {
+        "path": str(second.evaluation),
+        "sha256": sha256_file(second.evaluation),
+    }
+    if kind == "comparison":
+        payload["evaluation"] = evaluation_binding
+    else:
+        payload["evidence"]["evaluation"] = evaluation_binding
+    target = source.with_name(f"conflicting-{kind}.json")
+    target.write_bytes(
+        canonical_json_bytes(bind_receipt(payload, receipt_type=value["receipt_type"]))
+    )
+
+    with pytest.raises(ValueError, match="resolve to different completed builds"):
+        resolve_action_admission(
+            first.root,
+            action="status",
+            options={kind: str(target)},
+            build_loader=second.load,
+        )
+
+
+@pytest.mark.parametrize(
+    ("action", "options"),
+    (
+        (
+            "comparison-review",
+            lambda first, second: {
+                "handoff": str(first.handoff),
+                "evaluation": str(second.evaluation),
+            },
+        ),
+        (
+            "attest",
+            lambda first, second: {
+                "readiness": str(first.readiness),
+                "evaluation": str(second.evaluation),
+            },
+        ),
+        (
+            "status",
+            lambda first, second: {
+                "foundation": str(first.foundation),
+                "evaluation": str(second.evaluation),
+            },
+        ),
+    ),
+)
+def test_class_build_admission_rejects_conflicting_direct_evaluation(
+    tmp_path: Path,
+    action: str,
+    options,
+) -> None:
+    from qcsd_lab.class_build_admission import resolve_action_admission
+
+    first = _class_build_admission_fixture(tmp_path)
+    second = _second_class_build_admission_fixture(first)
+
+    with pytest.raises(ValueError, match="resolve to different completed builds"):
+        resolve_action_admission(
+            first.root,
+            action=action,
+            stage="pilot" if action == "verify" else "",
+            options=options(first, second),
+            build_loader=second.load,
+        )
+
+
+@pytest.mark.parametrize(
+    ("action", "stage", "base_options"),
+    (
+        ("evaluate", "", lambda first: {"handoff": str(first.handoff)}),
+        ("verify", "pilot", lambda first: {"target": str(first.foundation)}),
+    ),
+)
+def test_class_actions_ignore_unconsumed_evaluation_and_final_inputs(
+    tmp_path: Path,
+    action: str,
+    stage: str,
+    base_options,
+) -> None:
+    from qcsd_lab.class_build_admission import resolve_action_admission
+
+    first = _class_build_admission_fixture(tmp_path)
+    second = _second_class_build_admission_fixture(first)
+    options = {
+        **base_options(first),
+        "evaluation": str(second.evaluation),
+        "final_selection": str(second.final_selection),
+        "final_cohort_assembly": str(second.final_cohort_assembly),
+    }
+
+    assert (
+        resolve_action_admission(
+            first.root,
+            action=action,
+            stage=stage,
+            options=options,
+            build_loader=second.load,
+        )
+        == first.admitted
+    )
+
+
+def test_class_status_allows_explicit_historical_evaluation(tmp_path: Path) -> None:
+    from qcsd_lab.class_build_admission import resolve_action_admission
+    from qcsd_lab.class_study import bind_receipt, canonical_json_bytes
+
+    fixture = _class_build_admission_fixture(tmp_path)
+    value = json.loads(fixture.evaluation.read_bytes())
+    payload = value["payload"]
+    payload["schema_version"] = 1
+    historical = fixture.evaluation.with_name("historical-evaluation.json")
+    historical.write_bytes(
+        canonical_json_bytes(bind_receipt(payload, receipt_type=value["receipt_type"]))
+    )
+
+    assert (
+        resolve_action_admission(
+            fixture.root,
+            action="status",
+            options={"evaluation": str(historical)},
+            build_loader=fixture.load,
+        )
+        is None
+    )
+
+
+def test_class_build_admission_rejects_successor_identity_projection_changes(
+    tmp_path: Path,
+) -> None:
+    from qcsd_lab.class_build_admission import resolve_action_admission
+    from qcsd_lab.class_study import bind_receipt, canonical_json_bytes
+
+    fixture = _class_build_admission_fixture(tmp_path)
+    decision_value = json.loads(fixture.decision.read_bytes())
+    decision = decision_value["payload"]
+    decision["predecessor"] = {
+        "source": fixture.admitted.source,
+        "source_sha256": "0" * 64,
+        "build_execution_identity": fixture.admitted.identity,
+        "build_execution_identity_sha256": "0" * 64,
+    }
+    changed = fixture.decision.with_name("changed-decision.json")
+    changed.write_bytes(
+        canonical_json_bytes(bind_receipt(decision, receipt_type=decision_value["receipt_type"]))
+    )
+
+    with pytest.raises(ValueError, match="predecessor identity differs"):
+        resolve_action_admission(
+            fixture.root,
+            action="successor-restart",
+            options={"successor_decision": str(changed)},
+            build_loader=fixture.load,
+        )
+
+    restart_value = json.loads(fixture.restart.read_bytes())
+    restart = restart_value["payload"]
+    restart["source_sha256"] = "0" * 64
+    fixture.restart.write_bytes(
+        canonical_json_bytes(bind_receipt(restart, receipt_type=restart_value["receipt_type"]))
+    )
+    with pytest.raises(ValueError, match="differs from its decision"):
+        resolve_action_admission(
+            fixture.root,
+            action="successor-verify",
+            options={"target": str(fixture.restart)},
+            build_loader=fixture.load,
+        )
+
+
+def test_class_status_rejects_current_readiness_with_historical_nested_foundation(
+    tmp_path: Path,
+) -> None:
+    from qcsd_lab.class_build_admission import resolve_action_admission
+    from qcsd_lab.class_study import bind_receipt, canonical_json_bytes
+
+    fixture = _class_build_admission_fixture(tmp_path)
+    foundation_value = json.loads(fixture.foundation.read_bytes())
+    foundation_payload = foundation_value["payload"]
+    foundation_payload["attestation_schema_version"] = 3
+    historical_foundation = fixture.foundation.with_name("historical-foundation-status.json")
+    historical_foundation.write_bytes(
+        canonical_json_bytes(
+            bind_receipt(
+                foundation_payload,
+                receipt_type=foundation_value["receipt_type"],
+            )
+        )
+    )
+    readiness_value = json.loads(fixture.readiness.read_bytes())
+    readiness_payload = readiness_value["payload"]
+    readiness_payload["evidence"]["foundation"] = {
+        "path": str(historical_foundation),
+        "sha256": sha256_file(historical_foundation),
+    }
+    current_outer = fixture.readiness.with_name("current-outer-historical-nested.json")
+    current_outer.write_bytes(
+        canonical_json_bytes(
+            bind_receipt(readiness_payload, receipt_type=readiness_value["receipt_type"])
+        )
+    )
+
+    with pytest.raises(ValueError, match="historical"):
+        resolve_action_admission(
+            fixture.root,
+            action="status",
+            options={"readiness": str(current_outer)},
+            build_loader=fixture.load,
+        )
+
+
+def test_class_validation_requires_mandatory_evaluation(tmp_path: Path) -> None:
+    from qcsd_lab.class_build_admission import resolve_action_admission
+    from qcsd_lab.class_study import bind_receipt, canonical_json_bytes
+
+    fixture = _class_build_admission_fixture(tmp_path)
+    value = json.loads(fixture.validation.read_bytes())
+    payload = value["payload"]
+    del payload["evidence"]["evaluation"]
+    changed = fixture.validation.with_name("validation-without-evaluation.json")
+    changed.write_bytes(
+        canonical_json_bytes(bind_receipt(payload, receipt_type=value["receipt_type"]))
+    )
+
+    with pytest.raises(ValueError, match="mandatory evaluation"):
+        resolve_action_admission(
+            fixture.root,
+            action="status",
+            options={"validation": str(changed)},
+            build_loader=fixture.load,
+        )
+
+
+def test_class_validation_cannot_remove_successor_restart_from_both_wrappers(
+    tmp_path: Path,
+) -> None:
+    from qcsd_lab.class_build_admission import resolve_action_admission
+    from qcsd_lab.class_study import bind_receipt, canonical_json_bytes
+
+    fixture = _class_build_admission_fixture(tmp_path)
+    readiness_value = json.loads(fixture.readiness.read_bytes())
+    readiness_payload = readiness_value["payload"]
+    readiness_payload["study_id"] = "classifier-multiorigin100-v2-g01-0123456789ab"
+    successor_readiness = fixture.readiness.with_name("successor-without-restart.json")
+    successor_readiness.write_bytes(
+        canonical_json_bytes(
+            bind_receipt(readiness_payload, receipt_type=readiness_value["receipt_type"])
+        )
+    )
+    validation_value = json.loads(fixture.validation.read_bytes())
+    validation_payload = validation_value["payload"]
+    validation_payload["evidence"]["readiness"] = {
+        "path": str(successor_readiness),
+        "sha256": sha256_file(successor_readiness),
+    }
+    changed = fixture.validation.with_name("successor-validation-without-restart.json")
+    changed.write_bytes(
+        canonical_json_bytes(
+            bind_receipt(validation_payload, receipt_type=validation_value["receipt_type"])
+        )
+    )
+
+    with pytest.raises(ValueError, match="successor authority is incomplete"):
+        resolve_action_admission(
+            fixture.root,
+            action="status",
+            options={"validation": str(changed)},
+            build_loader=fixture.load,
+        )
+
+
+def test_class_campaign_admission_follows_successor_restart_authority(
+    tmp_path: Path,
+) -> None:
+    from qcsd_lab.class_build_admission import resolve_action_admission
+
+    first = _class_build_admission_fixture(tmp_path)
+    second = _second_class_build_admission_fixture(first)
+    campaign = first.campaign.with_name("successor-authority.yaml")
+    restart = "/lab/" + str(first.restart.relative_to(first.root))
+    campaign.write_text(
+        f"schema: 2\nevidence_role: pilot-fitting\nclass_study_successor: {restart}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="resolve to different completed builds"):
+        resolve_action_admission(
+            first.root,
+            action="capture",
+            options={
+                "foundation": str(second.foundation),
+                "campaign": str(campaign),
+            },
+            build_loader=second.load,
+        )
+
+
+def test_class_campaign_admission_follows_flow_style_parameter_authority(
+    tmp_path: Path,
+) -> None:
+    from qcsd_lab.class_build_admission import resolve_action_admission
+    from qcsd_lab.class_study import canonical_json_bytes
+
+    first = _class_build_admission_fixture(tmp_path)
+    second = _second_class_build_admission_fixture(first)
+    bundle = first.root / "artifacts/conflicting-fitted-bundle"
+    bundle.mkdir()
+    authority = {
+        "schema_version": 2,
+        "artifact_type": "qcsd-class-study-qualification-authority",
+        "foundation_attestation": {
+            "path": str(second.foundation),
+            "sha256": sha256_file(second.foundation),
+            "payload_sha256": json.loads(second.foundation.read_bytes())["payload_sha256"],
+        },
+        "build_execution": {
+            "path": str(second.build),
+            "sha256": sha256_file(second.build),
+        },
+        "build_execution_identity": second.admitted.identity,
+        "collection_source": second.admitted.source,
+        "prepare_source": {
+            **dict(second.admitted.source),
+            "image_digest": second.admitted.prepare_image,
+        },
+        "prepare_image_digest": second.admitted.prepare_image,
+    }
+    (bundle / "provenance.json").write_bytes(
+        canonical_json_bytes({"qualification_authority": authority})
+    )
+    parameter = "/lab/" + str(bundle.relative_to(first.root) / "traffic-morphing.json")
+    campaign = first.campaign.with_name("flow-parameter-authority.yaml")
+    campaign.write_text(
+        "schema: 2\nevidence_role: pilot-fitting\n"
+        f"defenses: [{{name: traffic-morphing, parameters: {parameter}}}]\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="resolve to different completed builds"):
+        resolve_action_admission(
+            first.root,
+            action="capture",
+            options={
+                "foundation": str(first.foundation),
+                "campaign": str(campaign),
+            },
+            build_loader=second.load,
+        )
+
+
+@pytest.mark.parametrize(
+    ("action", "stage", "base_options"),
+    (
+        (
+            "campaigns",
+            "pilot",
+            lambda first: {"acquisition_completion": str(first.acquisition_completion)},
+        ),
+        ("fit-numeric", "authoritative", lambda first: {"capture_result": str(first.resume)}),
+        ("prefix-specs", "authoritative", lambda first: {"capture_result": str(first.resume)}),
+        (
+            "qualify-prefix",
+            "authoritative",
+            lambda first: {
+                "foundation": str(first.foundation),
+                "capture_result": str(first.resume),
+            },
+        ),
+        (
+            "finalize-fitting",
+            "authoritative",
+            lambda first: {"foundation": str(first.foundation), "results": [str(first.resume)]},
+        ),
+        (
+            "capture",
+            "",
+            lambda first: {
+                "foundation": str(first.foundation),
+                "campaign": str(first.campaign),
+            },
+        ),
+        (
+            "resume",
+            "",
+            lambda first: {
+                "foundation": str(first.foundation),
+                "capture_result": str(first.resume),
+            },
+        ),
+        ("export", "", lambda first: {"historical_post": str(first.historical)}),
+        ("status", "", lambda first: {"foundation": str(first.foundation)}),
+    ),
+)
+def test_class_actions_reject_conflicting_final_admission_carriers(
+    tmp_path: Path,
+    action: str,
+    stage: str,
+    base_options,
+) -> None:
+    from qcsd_lab.class_build_admission import resolve_action_admission
+
+    first = _class_build_admission_fixture(tmp_path)
+    second = _second_class_build_admission_fixture(first)
+    options = {
+        **base_options(first),
+        "final_selection": str(second.final_selection),
+        "final_cohort_assembly": str(second.final_cohort_assembly),
+    }
+
+    with pytest.raises(ValueError, match="resolve to different completed builds"):
+        resolve_action_admission(
+            first.root,
+            action=action,
+            stage=stage,
+            options=options,
+            build_loader=second.load,
+        )
+
+
+def test_class_campaign_scalar_parser_supports_safe_dump_block_and_flow_forms() -> None:
+    from qcsd_lab.class_build_admission import _campaign_carrier_scalars
+
+    values = _campaign_carrier_scalars(
+        "'evidence_role': \"pilot-fitting\" # inline comment\n"
+        "defenses:\n"
+        "- name: traffic-morphing\n"
+        "  parameters: '/lab/artifacts/final/traffic-morphing.json'\n"
+        '- {name: wtf-pad, "parameters": /lab/artifacts/final/wtf-pad.json}\n'
+        "description: 'parameters: /lab/ignored/walkie-talkie.json'\n"
+        "# class_study_successor: /lab/ignored.json\n"
+        "chaff_qualification_set: final-full\n"
+    )
+
+    assert values["evidence_role"] == ["pilot-fitting"]
+    assert values["parameters"] == [
+        "/lab/artifacts/final/traffic-morphing.json",
+        "/lab/artifacts/final/wtf-pad.json",
+    ]
+    assert values["chaff_qualification_set"] == ["final-full"]
+    assert values["class_study_successor"] == []
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    (
+        "evidence_role: formal\n",
+        "parameters:\n",
+        "parameters: [value]\n",
+        "parameters: null\n",
+        "description: &anchor value\n",
+        "description: *anchor\n",
+        "<<: *anchor\n",
+        "description: !tag value\n",
+        "description: |\n  folded\n",
+        "---\n",
+        "%YAML 1.2\n",
+        "? [complex, key]\n",
+        "description:\tvalue\n",
+    ),
+)
+def test_class_campaign_scalar_parser_rejects_ambiguous_yaml(fragment: str) -> None:
+    from qcsd_lab.class_build_admission import _campaign_carrier_scalars
+
+    with pytest.raises(ValueError):
+        _campaign_carrier_scalars("evidence_role: pilot-fitting\n" + fragment)
+
+
+@pytest.mark.parametrize(
+    "document",
+    (
+        "{schema: 2, evidence_role: pilot-fitting, ? class_study_cohort_assembly : ../B/a.json}\n",
+        "evidence_role: pilot-fitting\n"
+        "defenses: [{? parameters : /lab/B/traffic-morphing.json, name: x}]\n",
+        "evidence_role: pilot-fitting\ndefenses: [parameters: ../B/value.json]\n",
+        "evidence_role: pilot-fitting\nparameters: unsafe#fragment\n",
+        "evidence_role: pilot-fitting\nparameters: first\n  second\n",
+    ),
+)
+def test_class_campaign_scalar_parser_rejects_flow_bypasses(document: str) -> None:
+    from qcsd_lab.class_build_admission import _campaign_carrier_scalars
+
+    with pytest.raises(ValueError):
+        _campaign_carrier_scalars(document)
+
+
+@pytest.mark.parametrize(
+    ("action", "stage", "base_options"),
+    (
+        (
+            "campaigns",
+            "pilot",
+            lambda first: {"acquisition_completion": str(first.acquisition_completion)},
+        ),
+        ("fit-numeric", "authoritative", lambda first: {"capture_result": str(first.resume)}),
+        ("prefix-specs", "authoritative", lambda first: {"capture_result": str(first.resume)}),
+        (
+            "qualify-prefix",
+            "authoritative",
+            lambda first: {
+                "foundation": str(first.foundation),
+                "capture_result": str(first.resume),
+            },
+        ),
+        (
+            "finalize-fitting",
+            "authoritative",
+            lambda first: {"foundation": str(first.foundation)},
+        ),
+        (
+            "capture",
+            "",
+            lambda first: {
+                "foundation": str(first.foundation),
+                "campaign": str(first.campaign),
+            },
+        ),
+        (
+            "resume",
+            "",
+            lambda first: {
+                "foundation": str(first.foundation),
+                "capture_result": str(first.resume),
+            },
+        ),
+        ("export", "", lambda first: {"historical_post": str(first.historical)}),
+        ("status", "", lambda first: {"foundation": str(first.foundation)}),
+    ),
+)
+def test_class_build_admission_rejects_conflicting_final_admission_carriers(
+    tmp_path: Path,
+    action: str,
+    stage: str,
+    base_options,
+) -> None:
+    from qcsd_lab.class_build_admission import resolve_action_admission
+
+    first = _class_build_admission_fixture(tmp_path)
+    second = _second_class_build_admission_fixture(first)
+    options = {
+        **base_options(first),
+        "final_selection": str(second.final_selection),
+        "final_cohort_assembly": str(second.final_cohort_assembly),
+    }
+
+    with pytest.raises(ValueError, match="resolve to different completed builds"):
+        resolve_action_admission(
+            first.root,
+            action=action,
+            stage=stage,
+            options=options,
+            build_loader=second.load,
+        )
+
+
+def test_class_build_admission_rejects_historical_foundation_before_build_load(
+    tmp_path: Path,
+) -> None:
+    from qcsd_lab.class_build_admission import resolve_action_admission
+    from qcsd_lab.class_study import bind_receipt, canonical_json_bytes
+
+    fixture = _class_build_admission_fixture(tmp_path)
+    value = json.loads(fixture.foundation.read_bytes())
+    payload = value["payload"]
+    payload["attestation_schema_version"] = 3
+    historical = fixture.foundation.with_name("historical-foundation.json")
+    historical.write_bytes(
+        canonical_json_bytes(
+            bind_receipt(payload, receipt_type="qcsd-class-study-foundation-attestation")
+        )
+    )
+    called = False
+
+    def load(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return fixture.admitted
+
+    with pytest.raises(ValueError, match="not current build authority"):
+        resolve_action_admission(
+            fixture.root,
+            action="qualify-prefix",
+            options={"foundation": str(historical)},
+            build_loader=load,
+        )
+    assert called is False
+
+
+def test_class_build_admission_precedes_first_class_docker_mutation() -> None:
+    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
+    invocation = launcher.index(
+        '/src/qcsd_lab/class_build_admission.py"',
+        launcher.index('class_resume_environment=""'),
+    )
+    admission = launcher.rindex("class_build_admission_args=(", 0, invocation)
+    class_docker = launcher.index("\n  require_docker\n", admission)
+
+    assert admission < class_docker
+    assert "reconcile_stale_docker_supervisors" not in launcher[admission:class_docker]
+    assert "_qcsd_docker_api" not in launcher[admission:class_docker]
+    expected_options = {
+        "build:--build-execution-receipt",
+        "foundation:--foundation-attestation",
+        "readiness:--readiness-attestation",
+        "historical-pre:--historical-pre-snapshot",
+        "historical-post:--historical-post-snapshot",
+        "handoff:--handoff",
+        "evaluation:--evaluation-receipt",
+        "comparison:--comparison-review",
+        "validation:--validation-attestation",
+        "acquisition-root:--acquisition-root",
+        "capture-result:--capture-result",
+        "successor-decision:--successor-decision",
+        "successor-restart:--successor-restart",
+        "target:--target",
+        "final-selection:--final-selection",
+        "pinned-cdp:--pinned-cdp-receipt",
+        "browser-egress:--browser-egress-qualification-root",
+        "reference:--reference-receipt",
+        "code-gate:--code-gate-receipt",
+        "controlled-qualification:--controlled-qualification-receipt",
+        "pilot-fitting-result:--pilot-fitting-result",
+        "pilot-compatibility-result:--pilot-compatibility-result",
+        "authoritative-fitting-result:--authoritative-fitting-result",
+        "certification-result:--certification-result",
+        "acquisition-completion:--acquisition-completion",
+        "qualification-checkpoint:--qualification-checkpoint",
+        "qualification-sidecar-root:--qualification-sidecar-root",
+        "qualification-publication-root:--qualification-publication-root",
+        "final-cohort-assembly:--final-cohort-assembly",
+        "pilot-cohort-assembly:--pilot-cohort-assembly",
+        "campaign-root:--campaign-root",
+        "campaign:--campaign",
+    }
+    option_block = (
+        launcher[admission:class_docker]
+        .split("for class_build_admission_option in", maxsplit=1)[1]
+        .split("; do", maxsplit=1)[0]
+    )
+    observed_options = re.findall(r"[a-z][a-z-]*:--[a-z][a-z-]*", option_block)
+    assert set(observed_options) == expected_options
+    assert len(observed_options) == len(expected_options)
+
+    expected_repeatables = {
+        "result:class_result_hosts",
+        "regression-result:class_regression_result_hosts",
+        "controlled-result:class_controlled_result_hosts",
+        "canary-result:class_canary_result_hosts",
+        "formal-result:class_formal_result_hosts",
+        "numeric-bundle:class_numeric_bundle_hosts",
+        "prefix-spec-root:class_prefix_spec_root_hosts",
+        "qualification-manifest:class_qualification_manifest_hosts",
+        "final-bundle:class_final_bundle_hosts",
+    }
+    repeatable_block = (
+        launcher[admission:class_docker]
+        .split("for class_build_admission_repeatable in", maxsplit=1)[1]
+        .split("; do", maxsplit=1)[0]
+    )
+    observed_repeatables = re.findall(r"[a-z][a-z-]*:class_[a-z_]+_hosts", repeatable_block)
+    assert set(observed_repeatables) == expected_repeatables
+    assert len(observed_repeatables) == len(expected_repeatables)
+
+
+def test_launcher_rejects_root_split_ids_and_dac_override_before_helper_load() -> None:
+    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
     admission = launcher.split("qcsd_status_uid=()", maxsplit=1)[1].split(
         "readonly qcsd_invoking_uid qcsd_invoking_gid", maxsplit=1
     )[0]
 
-    assert 'done </proc/self/status' in admission
+    assert "done </proc/self/status" in admission
     assert "${#qcsd_status_uid[@]} != 4" in admission
     assert "${#qcsd_status_gid[@]} != 4" in admission
     assert '"${qcsd_invoking_uid}" == 0' in admission
@@ -377,17 +2454,13 @@ def test_launcher_rejects_root_split_ids_and_dac_override_before_helper_load() -
         assert capability in admission
     assert "[2367aAbBeEfF]$" in admission
     assert "without CAP_DAC_OVERRIDE" in admission
-    assert launcher.index("qcsd_status_uid=()") < launcher.index(
-        'source "${DOCKER_SUPERVISOR}"'
-    )
+    assert launcher.index("qcsd_status_uid=()") < launcher.index('source "${DOCKER_SUPERVISOR}"')
 
 
 def test_lifecycle_recover_is_host_only_guarded_reconciliation() -> None:
     launcher_path = Path(__file__).parents[1] / "qcsd-lab"
     launcher = launcher_path.read_text(encoding="utf-8")
-    branch = launcher.split(
-        'elif [[ "${1:-}" == "lifecycle-recover" ]]; then', 1
-    )[1].split(
+    branch = launcher.split('elif [[ "${1:-}" == "lifecycle-recover" ]]; then', 1)[1].split(
         'elif [[ "${1:-}" != "class-study"', 1
     )[0]
     assert branch.count("require_docker") == 1
@@ -415,7 +2488,7 @@ def test_launcher_selects_prepare_image_only_for_pinned_cdp_test() -> None:
     launcher_path = Path(__file__).parents[1] / "qcsd-lab"
     launcher = launcher_path.read_text(encoding="utf-8")
     selection = launcher.split('case "${1:-}" in', 1)[1].split(
-        'if ! _qcsd_docker_api image inspect', 1
+        "if ! _qcsd_docker_api image inspect", 1
     )[0]
     assert 'test) image="${COLLECTION_IMAGE}"' in selection
     assert '"${2:-}" == "pinned-cdp"' in selection
@@ -453,7 +2526,7 @@ def test_browser_egress_launcher_contract_is_canonical_and_prepare_bound() -> No
     launcher = launcher_path.read_text(encoding="utf-8")
 
     assert '"${2:-}" == "browser-egress"' in launcher
-    assert 'create|resume|verify)' in launcher
+    assert "create|resume|verify)" in launcher
     assert (
         'browser_egress_result_relative="artifacts/buflo-study/'
         'browser-egress-qualification-v${browser_egress_cohort_version}"'
@@ -463,14 +2536,14 @@ def test_browser_egress_launcher_contract_is_canonical_and_prepare_bound() -> No
         'build-execution-v${browser_egress_cohort_version}.json"'
     ) in launcher
     assert 'PREPARE_IMAGE="${browser_egress_prepare_image}"' in launcher
-    assert 'verify_qualification_checkout "test browser-egress ${browser_egress_action}"' in launcher
+    assert (
+        'verify_qualification_checkout "test browser-egress ${browser_egress_action}"' in launcher
+    )
     assert "test browser-egress create requires an absent create-only result root" in launcher
     assert "test browser-egress resume rejects a finalized qualification" not in launcher
     assert "test browser-egress verify requires final.json" not in launcher
     assert "browser_egress_reconcile_filesystem" in launcher
-    assert (
-        'admit-resume --cohort-version "${browser_egress_cohort_version}"' in launcher
-    )
+    assert 'admit-resume --cohort-version "${browser_egress_cohort_version}"' in launcher
     # Python's bool is an int subclass, and integer 0/1 compare equal to
     # False/True. Both shell-side publication boundaries must nevertheless
     # require the producer's exact JSON Boolean and integer schema types.
@@ -504,11 +2577,11 @@ def test_browser_egress_launcher_contract_is_canonical_and_prepare_bound() -> No
     ("marker", "end_marker"),
     [
         (
-            'browser_egress_prevalidate_fields_output="$(python3 -I -c \'\n',
+            "browser_egress_prevalidate_fields_output=\"$(python3 -I -c '\n",
             '\n\' "${browser_egress_attempt_scratch}/prevalidate.json")"',
         ),
         (
-            'browser_egress_assemble_fields_output="$(python3 -I -c \'\n',
+            "browser_egress_assemble_fields_output=\"$(python3 -I -c '\n",
             '\n\' "${browser_egress_attempt_scratch}/assemble.json")"',
         ),
     ],
@@ -583,26 +2656,24 @@ def test_browser_egress_signal_coordinated_roles_are_direct_tini_children() -> N
     )[0]
     observer = launcher.split(
         'docker run --name "${browser_egress_name_prefix}-observer"', maxsplit=1
-    )[1].split(
-        'docker run --name "${browser_egress_name_prefix}-fixture"', maxsplit=1
-    )[0]
+    )[1].split('docker run --name "${browser_egress_name_prefix}-fixture"', maxsplit=1)[0]
 
     assert "/usr/bin/timeout" not in role_common
     assert '"${browser_egress_tool}"' in role_common
     assert "/usr/bin/timeout" not in observer
     assert '"${browser_egress_tool}" observer' in observer
     assert "_qcsd_docker_api wait" not in launcher
-    exit_wait = launcher.split(
-        "browser_egress_wait_exit_code() {", maxsplit=1
-    )[1].split("\n}", maxsplit=1)[0]
+    exit_wait = launcher.split("browser_egress_wait_exit_code() {", maxsplit=1)[1].split(
+        "\n}", maxsplit=1
+    )[0]
     assert "deadline=$((SECONDS + 120))" in exit_wait
     assert "_qcsd_docker_api container inspect --format" in exit_wait
     assert "exited|dead)" in exit_wait
     assert "exit code is invalid" in exit_wait
 
-    tool = (
-        Path(__file__).parents[1] / "tools/browser_egress_qualification.py"
-    ).read_text(encoding="utf-8")
+    tool = (Path(__file__).parents[1] / "tools/browser_egress_qualification.py").read_text(
+        encoding="utf-8"
+    )
     assert "SIGNAL_COORDINATED_ROLE_DEADLINE_SECONDS = 115.0" in tool
     assert "deadline = time.monotonic() + float(timeout_seconds)" in tool
     assert "os._exit(SIGNAL_COORDINATED_ROLE_TIMEOUT_EXIT_CODE)" in tool
@@ -654,9 +2725,7 @@ def test_real_docker_tini_direct_child_receives_all_browser_egress_phase_signals
     )
     if probe.returncode != 0:
         pytest.skip("Docker daemon is unavailable")
-    image = os.environ.get(
-        "QCSD_BROWSER_EGRESS_SIGNAL_TEST_IMAGE", "neqo-qcsd-lab-prepare:local"
-    )
+    image = os.environ.get("QCSD_BROWSER_EGRESS_SIGNAL_TEST_IMAGE", "neqo-qcsd-lab-prepare:local")
     image_probe = subprocess.run(
         [docker, "image", "inspect", image],
         stdin=subprocess.DEVNULL,
@@ -791,18 +2860,12 @@ def test_browser_egress_observer_protocol_copies_closed_pcap_before_exit() -> No
     )[0]
 
     grace = measured.index("qcsd-browser-egress-grace.ready")
-    fixture_stop = measured.index(
-        'for browser_egress_role_id in "${browser_egress_fixture_id}"'
-    )
+    fixture_stop = measured.index('for browser_egress_role_id in "${browser_egress_fixture_id}"')
     finish = measured.index('kill --signal HUP "${browser_egress_observer_id}"')
     receipt = measured.index("qcsd-browser-egress-receipt.ready")
-    copy = measured.index(
-        'cp "${browser_egress_observer_id}:/tmp/capture.pcapng"'
-    )
+    copy = measured.index('cp "${browser_egress_observer_id}:/tmp/capture.pcapng"')
     stop = measured.index('kill --signal TERM "${browser_egress_observer_id}"')
-    wait = measured.index(
-        'browser_egress_observer_exit="$(browser_egress_wait_exit_code'
-    )
+    wait = measured.index('browser_egress_observer_exit="$(browser_egress_wait_exit_code')
     assert grace < fixture_stop < finish < receipt < copy < stop < wait
 
 
@@ -810,9 +2873,9 @@ def test_browser_egress_staged_readiness_and_subject_ack_are_ordered(
     tmp_path: Path,
 ) -> None:
     launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
-    vector_loop = launcher.split(
-        'browser_egress_policy_volume_name=""', maxsplit=1
-    )[1].split("    browser_egress_finished_at=", maxsplit=1)[0]
+    vector_loop = launcher.split('browser_egress_policy_volume_name=""', maxsplit=1)[1].split(
+        "    browser_egress_finished_at=", maxsplit=1
+    )[0]
     cursor = 0
     for role, variable in (
         ("browser", "browser_egress_browser_id"),
@@ -822,9 +2885,7 @@ def test_browser_egress_staged_readiness_and_subject_ack_are_ordered(
         ("dns_sink", "browser_egress_dns_id"),
     ):
         launch = vector_loop.index(f"--label org.qcsd.role={role}", cursor)
-        ready = vector_loop.index(
-            f'browser_egress_wait_healthy "${{{variable}}}"', launch
-        )
+        ready = vector_loop.index(f'browser_egress_wait_healthy "${{{variable}}}"', launch)
         assert launch < ready
         cursor = ready
     observer_signal = vector_loop.index(
@@ -838,12 +2899,20 @@ def test_browser_egress_staged_readiness_and_subject_ack_are_ordered(
     )
     assert cursor < observer_signal < subject_ack < browser_signal
 
-    healthy = "browser_egress_wait_healthy() {" + launcher.split(
-        "browser_egress_wait_healthy() {", maxsplit=1
-    )[1].split("\n}\n\nbrowser_egress_cleanup_topology()", maxsplit=1)[0] + "\n}\n"
-    marker = "browser_egress_wait_container_marker() {" + launcher.split(
-        "browser_egress_wait_container_marker() {", maxsplit=1
-    )[1].split("\n}\n\nbrowser_egress_wait_exit_code()", maxsplit=1)[0] + "\n}\n"
+    healthy = (
+        "browser_egress_wait_healthy() {"
+        + launcher.split("browser_egress_wait_healthy() {", maxsplit=1)[1].split(
+            "\n}\n\nbrowser_egress_cleanup_topology()", maxsplit=1
+        )[0]
+        + "\n}\n"
+    )
+    marker = (
+        "browser_egress_wait_container_marker() {"
+        + launcher.split("browser_egress_wait_container_marker() {", maxsplit=1)[1].split(
+            "\n}\n\nbrowser_egress_wait_exit_code()", maxsplit=1
+        )[0]
+        + "\n}\n"
+    )
     log = tmp_path / "barriers.log"
     script = tmp_path / "barriers.sh"
     script.write_text(
@@ -852,22 +2921,22 @@ def test_browser_egress_staged_readiness_and_subject_ack_are_ordered(
         + marker
         + f"LOG={str(log)!r}\n"
         + "_qcsd_docker_api() {\n"
-        + "  if [[ \"$1 $2\" == \"container inspect\" ]]; then\n"
-        + "    if [[ \"$3\" == \"--format\" && \"$4\" == *Health* ]]; then\n"
+        + '  if [[ "$1 $2" == "container inspect" ]]; then\n'
+        + '    if [[ "$3" == "--format" && "$4" == *Health* ]]; then\n'
         + "      sleep 0.15; echo healthy\n"
         + "    else echo running; fi\n"
-        + "  elif [[ \"$1\" == exec ]]; then\n"
+        + '  elif [[ "$1" == exec ]]; then\n'
         + "    sleep 0.15; return 0\n"
         + "  else return 2; fi\n"
         + "}\n"
         + "for role in browser observer fixture forbidden dns; do\n"
-        + "  browser_egress_wait_healthy \"$role\"\n"
-        + "  echo \"ready-$role\" >>\"$LOG\"\n"
+        + '  browser_egress_wait_healthy "$role"\n'
+        + '  echo "ready-$role" >>"$LOG"\n'
         + "done\n"
-        + "echo observer-signal >>\"$LOG\"\n"
+        + 'echo observer-signal >>"$LOG"\n'
         + "browser_egress_wait_container_marker observer /tmp/marker subject\n"
-        + "echo subject-ack >>\"$LOG\"\n"
-        + "echo browser-signal >>\"$LOG\"\n",
+        + 'echo subject-ack >>"$LOG"\n'
+        + 'echo browser-signal >>"$LOG"\n',
         encoding="utf-8",
     )
     completed = subprocess.run(
@@ -888,13 +2957,10 @@ def test_browser_egress_staged_readiness_and_subject_ack_are_ordered(
 
 def test_browser_egress_policy_volume_and_fixture_tls_shell_contract_is_exact() -> None:
     launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
-    vector_loop = launcher.split(
-        'browser_egress_policy_volume_name=""', maxsplit=1
-    )[1].split("    browser_egress_finished_at=", maxsplit=1)[0]
-    mask = (
-        "--tmpfs /opt/qcsd-lab/config/class-study/v1:"
-        "ro,nosuid,nodev,noexec,mode=000"
-    )
+    vector_loop = launcher.split('browser_egress_policy_volume_name=""', maxsplit=1)[1].split(
+        "    browser_egress_finished_at=", maxsplit=1
+    )[0]
+    mask = "--tmpfs /opt/qcsd-lab/config/class-study/v1:ro,nosuid,nodev,noexec,mode=000"
 
     assert "_qcsd_docker_api volume create" in vector_loop
     assert vector_loop.index("QCSD_DOCKER_IDS_BROWSER_EGRESS_VOLUMES+=(") < (
@@ -903,20 +2969,19 @@ def test_browser_egress_policy_volume_and_fixture_tls_shell_contract_is_exact() 
     assert "--label org.qcsd.role=policy_volume" in vector_loop
     assert "--network none" in vector_loop
     assert "--label org.qcsd.role=policy_seed" in vector_loop
-    assert '--user 0:0' in vector_loop
+    assert "--user 0:0" in vector_loop
     assert "--cap-drop ALL --security-opt no-new-privileges:true --read-only" in vector_loop
     assert '--volume "${browser_egress_policy_volume_name}:/qcsd-policy:rw"' in vector_loop
     assert (
-        '--volume "${browser_egress_policy_volume_name}:'
-        '/etc/chromium/policies/managed:ro"'
+        '--volume "${browser_egress_policy_volume_name}:/etc/chromium/policies/managed:ro"'
     ) in vector_loop
     assert "install -o 0 -g 0 -m 0444" in vector_loop
-    assert "sync -f \"$target\"" in vector_loop
+    assert 'sync -f "$target"' in vector_loop
     assert vector_loop.count(mask) == 5
 
-    fixture_launch = vector_loop.split(
-        '--label org.qcsd.role=fixture', maxsplit=1
-    )[0].rsplit("qcsd_run_detached_docker", maxsplit=1)[1]
+    fixture_launch = vector_loop.split("--label org.qcsd.role=fixture", maxsplit=1)[0].rsplit(
+        "qcsd_run_detached_docker", maxsplit=1
+    )[1]
     assert mask not in fixture_launch
     for role in ("browser", "observer", "forbidden_sink", "dns_sink"):
         role_marker = f"--label org.qcsd.role={role}"
@@ -942,9 +3007,9 @@ def test_browser_egress_policy_volume_and_fixture_tls_shell_contract_is_exact() 
 def test_browser_egress_live_daemon_is_admitted_at_every_evidence_boundary() -> None:
     launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
 
-    projection = launcher.split(
-        "browser_egress_live_docker_binding() {", maxsplit=1
-    )[1].split("\n}", maxsplit=1)[0]
+    projection = launcher.split("browser_egress_live_docker_binding() {", maxsplit=1)[1].split(
+        "\n}", maxsplit=1
+    )[0]
     assert "_qcsd_docker_api version --format '{{json .}}'" in projection
     assert "_qcsd_docker_api info --format '{{json .}}'" in projection
     assert "live-docker-binding" in projection
@@ -952,22 +3017,21 @@ def test_browser_egress_live_daemon_is_admitted_at_every_evidence_boundary() -> 
     assert '"${_QCSD_DOCKER_PINNED_HOST}"' in projection
     assert '"${_QCSD_DOCKER_PINNED_SERVER_ID}"' in projection
 
-    assert launcher.count(
-        '--live-docker-json "${browser_egress_live_docker_json}"'
-    ) == 7
-    assert (
-        'browser_egress_live_docker_json="$(browser_egress_live_docker_binding)"'
-        in launcher
-    )
+    assert launcher.count('--live-docker-json "${browser_egress_live_docker_json}"') == 7
+    assert 'browser_egress_live_docker_json="$(browser_egress_live_docker_binding)"' in launcher
 
 
 def test_browser_egress_stale_topology_wrapper_retires_only_validated_ids(
     tmp_path: Path,
 ) -> None:
     launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
-    function = "browser_egress_retire_stale_topology() {" + launcher.split(
-        "browser_egress_retire_stale_topology() {", maxsplit=1
-    )[1].split("\n}\n\nbrowser_egress_record_failed_attempt()", maxsplit=1)[0] + "\n}\n"
+    function = (
+        "browser_egress_retire_stale_topology() {"
+        + launcher.split("browser_egress_retire_stale_topology() {", maxsplit=1)[1].split(
+            "\n}\n\nbrowser_egress_record_failed_attempt()", maxsplit=1
+        )[0]
+        + "\n}\n"
+    )
     observer = "1" * 64
     browser = "2" * 64
     network = "3" * 64
@@ -985,25 +3049,25 @@ def test_browser_egress_stale_topology_wrapper_retires_only_validated_ids(
         + f"OBSERVER={observer!r}\nBROWSER={browser!r}\nNETWORK={network!r}\n"
         + "qcsd_invoking_uid=1000\nqcsd_invoking_gid=1000\nimage_id=image\n"
         + "_qcsd_docker_api() {\n"
-        + "  if [[ \"$1 $2\" == \"ps --all\" ]]; then\n"
-        + "    [[ ! -e \"$STATE/$OBSERVER\" ]] || echo \"$OBSERVER\"\n"
-        + "    [[ ! -e \"$STATE/$BROWSER\" ]] || echo \"$BROWSER\"\n"
-        + "  elif [[ \"$1 $2\" == \"container inspect\" ]]; then echo '[]'\n"
-        + "  elif [[ \"$1 $2\" == \"container rm\" && \"$3\" == \"--force\" ]]; then\n"
-        + "    [[ \"$4\" == \"$OBSERVER\" || \"$4\" == \"$BROWSER\" ]]\n"
-        + "    echo \"container $4\" >>\"$LOG\"; rm \"$STATE/$4\"\n"
-        + "  elif [[ \"$1 $2\" == \"network ls\" ]]; then\n"
-        + "    [[ ! -e \"$STATE/$NETWORK\" ]] || echo \"$NETWORK\"\n"
-        + "  elif [[ \"$1 $2\" == \"network inspect\" ]]; then\n"
+        + '  if [[ "$1 $2" == "ps --all" ]]; then\n'
+        + '    [[ ! -e "$STATE/$OBSERVER" ]] || echo "$OBSERVER"\n'
+        + '    [[ ! -e "$STATE/$BROWSER" ]] || echo "$BROWSER"\n'
+        + '  elif [[ "$1 $2" == "container inspect" ]]; then echo \'[]\'\n'
+        + '  elif [[ "$1 $2" == "container rm" && "$3" == "--force" ]]; then\n'
+        + '    [[ "$4" == "$OBSERVER" || "$4" == "$BROWSER" ]]\n'
+        + '    echo "container $4" >>"$LOG"; rm "$STATE/$4"\n'
+        + '  elif [[ "$1 $2" == "network ls" ]]; then\n'
+        + '    [[ ! -e "$STATE/$NETWORK" ]] || echo "$NETWORK"\n'
+        + '  elif [[ "$1 $2" == "network inspect" ]]; then\n'
         + "    [[ -e \"$STATE/$NETWORK\" ]] || return 1; echo '[{}]'\n"
-        + "  elif [[ \"$1 $2\" == \"network rm\" ]]; then\n"
-        + "    [[ \"$3\" == \"$NETWORK\" ]]; echo \"network $3\" >>\"$LOG\"; rm \"$STATE/$3\"\n"
-        + "  elif [[ \"$1 $2\" == \"volume ls\" ]]; then :\n"
+        + '  elif [[ "$1 $2" == "network rm" ]]; then\n'
+        + '    [[ "$3" == "$NETWORK" ]]; echo "network $3" >>"$LOG"; rm "$STATE/$3"\n'
+        + '  elif [[ "$1 $2" == "volume ls" ]]; then :\n'
         + "  else return 2; fi\n"
         + "}\n"
         + "qcsd_capture_attached_docker_output() {\n"
         + "  local -n output=$1\n"
-        + "  output=\"{\\\"schema_version\\\":1,\\\"container_ids\\\":[\\\"$OBSERVER\\\",\\\"$BROWSER\\\"],\\\"network_id\\\":\\\"$NETWORK\\\",\\\"volume_name\\\":null}\"\n"
+        + '  output="{\\"schema_version\\":1,\\"container_ids\\":[\\"$OBSERVER\\",\\"$BROWSER\\"],\\"network_id\\":\\"$NETWORK\\",\\"volume_name\\":null}"\n'
         + "}\n"
         + "qcsd_run_attached_docker() { return 99; }\n"
         + "browser_egress_retire_stale_topology '{\"schema_version\":1}'\n",
@@ -1031,9 +3095,13 @@ def test_browser_egress_stale_topology_wrapper_retires_bound_policy_volume_last(
     tmp_path: Path,
 ) -> None:
     launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
-    function = "browser_egress_retire_stale_topology() {" + launcher.split(
-        "browser_egress_retire_stale_topology() {", maxsplit=1
-    )[1].split("\n}\n\nbrowser_egress_record_failed_attempt()", maxsplit=1)[0] + "\n}\n"
+    function = (
+        "browser_egress_retire_stale_topology() {"
+        + launcher.split("browser_egress_retire_stale_topology() {", maxsplit=1)[1].split(
+            "\n}\n\nbrowser_egress_record_failed_attempt()", maxsplit=1
+        )[0]
+        + "\n}\n"
+    )
     container = "1" * 64
     network = "2" * 64
     volume = f"qcsd-be-{'3' * 32}-policy0"
@@ -1050,26 +3118,26 @@ def test_browser_egress_stale_topology_wrapper_retires_bound_policy_volume_last(
         + f"CONTAINER={container!r}\nNETWORK={network!r}\nVOLUME={volume!r}\n"
         + "qcsd_invoking_uid=1000\nqcsd_invoking_gid=1000\nimage_id=image\n"
         + "_qcsd_docker_api() {\n"
-        + "  if [[ \"$1 $2\" == \"ps --all\" ]]; then\n"
-        + "    [[ ! -e \"$STATE/$CONTAINER\" ]] || echo \"$CONTAINER\"\n"
-        + "  elif [[ \"$1 $2\" == \"container inspect\" ]]; then echo '[]'\n"
-        + "  elif [[ \"$1 $2\" == \"container rm\" && \"$3\" == \"--force\" ]]; then\n"
-        + "    [[ \"$4\" == \"$CONTAINER\" ]]; echo \"container $4\" >>\"$LOG\"; rm \"$STATE/$4\"\n"
-        + "  elif [[ \"$1 $2\" == \"network ls\" ]]; then\n"
-        + "    [[ ! -e \"$STATE/$NETWORK\" ]] || echo \"$NETWORK\"\n"
-        + "  elif [[ \"$1 $2\" == \"network inspect\" ]]; then echo '[{}]'\n"
-        + "  elif [[ \"$1 $2\" == \"network rm\" ]]; then\n"
-        + "    echo \"network $3\" >>\"$LOG\"; rm \"$STATE/$3\"\n"
-        + "  elif [[ \"$1 $2\" == \"volume ls\" ]]; then\n"
-        + "    [[ ! -e \"$STATE/$VOLUME\" ]] || echo \"$VOLUME\"\n"
-        + "  elif [[ \"$1 $2\" == \"volume inspect\" ]]; then echo '[{}]'\n"
-        + "  elif [[ \"$1 $2\" == \"volume rm\" ]]; then\n"
-        + "    echo \"volume $3\" >>\"$LOG\"; rm \"$STATE/$3\"\n"
+        + '  if [[ "$1 $2" == "ps --all" ]]; then\n'
+        + '    [[ ! -e "$STATE/$CONTAINER" ]] || echo "$CONTAINER"\n'
+        + '  elif [[ "$1 $2" == "container inspect" ]]; then echo \'[]\'\n'
+        + '  elif [[ "$1 $2" == "container rm" && "$3" == "--force" ]]; then\n'
+        + '    [[ "$4" == "$CONTAINER" ]]; echo "container $4" >>"$LOG"; rm "$STATE/$4"\n'
+        + '  elif [[ "$1 $2" == "network ls" ]]; then\n'
+        + '    [[ ! -e "$STATE/$NETWORK" ]] || echo "$NETWORK"\n'
+        + '  elif [[ "$1 $2" == "network inspect" ]]; then echo \'[{}]\'\n'
+        + '  elif [[ "$1 $2" == "network rm" ]]; then\n'
+        + '    echo "network $3" >>"$LOG"; rm "$STATE/$3"\n'
+        + '  elif [[ "$1 $2" == "volume ls" ]]; then\n'
+        + '    [[ ! -e "$STATE/$VOLUME" ]] || echo "$VOLUME"\n'
+        + '  elif [[ "$1 $2" == "volume inspect" ]]; then echo \'[{}]\'\n'
+        + '  elif [[ "$1 $2" == "volume rm" ]]; then\n'
+        + '    echo "volume $3" >>"$LOG"; rm "$STATE/$3"\n'
         + "  else return 2; fi\n"
         + "}\n"
         + "qcsd_capture_attached_docker_output() {\n"
         + "  local -n output=$1\n"
-        + "  output=\"{\\\"schema_version\\\":1,\\\"container_ids\\\":[\\\"$CONTAINER\\\"],\\\"network_id\\\":\\\"$NETWORK\\\",\\\"volume_name\\\":\\\"$VOLUME\\\"}\"\n"
+        + '  output="{\\"schema_version\\":1,\\"container_ids\\":[\\"$CONTAINER\\"],\\"network_id\\":\\"$NETWORK\\",\\"volume_name\\":\\"$VOLUME\\"}"\n'
         + "}\n"
         + "browser_egress_retire_stale_topology '{\"schema_version\":1}'\n",
         encoding="utf-8",
@@ -1095,12 +3163,20 @@ def test_browser_egress_cleanup_returns_and_err_path_seals_after_cleanup(
     tmp_path: Path,
 ) -> None:
     launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
-    cleanup = "browser_egress_cleanup_topology() {" + launcher.split(
-        "browser_egress_cleanup_topology() {", maxsplit=1
-    )[1].split("\n}\n\nbrowser_egress_exit_cleanup()", maxsplit=1)[0] + "\n}\n"
-    record = "browser_egress_record_failed_attempt() {" + launcher.split(
-        "browser_egress_record_failed_attempt() {", maxsplit=1
-    )[1].split("\n}\n\nbrowser_egress_live_docker_json=", maxsplit=1)[0] + "\n}\n"
+    cleanup = (
+        "browser_egress_cleanup_topology() {"
+        + launcher.split("browser_egress_cleanup_topology() {", maxsplit=1)[1].split(
+            "\n}\n\nbrowser_egress_exit_cleanup()", maxsplit=1
+        )[0]
+        + "\n}\n"
+    )
+    record = (
+        "browser_egress_record_failed_attempt() {"
+        + launcher.split("browser_egress_record_failed_attempt() {", maxsplit=1)[1].split(
+            "\n}\n\nbrowser_egress_live_docker_json=", maxsplit=1
+        )[0]
+        + "\n}\n"
+    )
 
     normal = tmp_path / "normal-cleanup.sh"
     normal.write_text(
@@ -1164,10 +3240,10 @@ def test_browser_egress_cleanup_returns_and_err_path_seals_after_cleanup(
         + "QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS=(stale)\n"
         + "QCSD_DOCKER_IDS_BROWSER_EGRESS_NETWORKS=()\n"
         + "QCSD_DOCKER_IDS_BROWSER_EGRESS_VOLUMES=()\n"
-        + "_qcsd_docker_api() { echo cleanup >>\"$LOG\"; }\n"
+        + '_qcsd_docker_api() { echo cleanup >>"$LOG"; }\n'
         + "qcsd_retire_docker_handoff() { :; }\n"
         + "browser_egress_preserve_causal_evidence() { :; }\n"
-        + "qcsd_run_attached_docker() { echo record-failure >>\"$LOG\"; }\n"
+        + 'qcsd_run_attached_docker() { echo record-failure >>"$LOG"; }\n'
         + "trap browser_egress_record_failed_attempt ERR\n"
         + "false\n",
         encoding="utf-8",
@@ -1209,9 +3285,13 @@ def test_browser_egress_cleanup_retains_every_unproved_docker_identity(
     tmp_path: Path,
 ) -> None:
     launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
-    cleanup = "browser_egress_cleanup_topology() {" + launcher.split(
-        "browser_egress_cleanup_topology() {", maxsplit=1
-    )[1].split("\n}\n\nbrowser_egress_exit_cleanup()", maxsplit=1)[0] + "\n}\n"
+    cleanup = (
+        "browser_egress_cleanup_topology() {"
+        + launcher.split("browser_egress_cleanup_topology() {", maxsplit=1)[1].split(
+            "\n}\n\nbrowser_egress_exit_cleanup()", maxsplit=1
+        )[0]
+        + "\n}\n"
+    )
     script = tmp_path / "retained-cleanup.sh"
     script.write_text(
         "set -euo pipefail\n"
@@ -1220,10 +3300,10 @@ def test_browser_egress_cleanup_retains_every_unproved_docker_identity(
         + "QCSD_DOCKER_IDS_BROWSER_EGRESS_NETWORKS=(n1)\n"
         + "QCSD_DOCKER_IDS_BROWSER_EGRESS_VOLUMES=(v1)\n"
         + "_qcsd_docker_api() {\n"
-        + "  if [[ \"$1 $2\" == \"volume ls\" ]]; then echo v1; return 0; fi\n"
+        + '  if [[ "$1 $2" == "volume ls" ]]; then echo v1; return 0; fi\n'
         + "  return 1\n"
         + "}\n"
-        + "qcsd_retire_docker_handoff() { [[ \"$2\" == c2 ]]; }\n"
+        + 'qcsd_retire_docker_handoff() { [[ "$2" == c2 ]]; }\n'
         + "if browser_egress_cleanup_topology; then exit 90; fi\n"
         + "printf 'containers=%s\\n' \"${QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS[*]}\"\n"
         + "printf 'networks=%s\\n' \"${QCSD_DOCKER_IDS_BROWSER_EGRESS_NETWORKS[*]}\"\n"
@@ -1245,9 +3325,13 @@ def test_browser_egress_causal_promotion_is_idempotent_and_rejects_substitution(
     tmp_path: Path,
 ) -> None:
     launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
-    preserve = "browser_egress_preserve_causal_evidence() {" + launcher.split(
-        "browser_egress_preserve_causal_evidence() {", maxsplit=1
-    )[1].split("\n}\n\nbrowser_egress_record_failed_attempt()", maxsplit=1)[0] + "\n}\n"
+    preserve = (
+        "browser_egress_preserve_causal_evidence() {"
+        + launcher.split("browser_egress_preserve_causal_evidence() {", maxsplit=1)[1].split(
+            "\n}\n\nbrowser_egress_record_failed_attempt()", maxsplit=1
+        )[0]
+        + "\n}\n"
+    )
     vector_id = "constructor--page--websocket"
     source = tmp_path / "attempt-input"
     evidence = tmp_path / "attempt-evidence"
@@ -1309,14 +3393,10 @@ def test_browser_egress_resume_chronology_and_phase_mounts_are_fail_closed() -> 
     prefix = block.split("browser_egress_coordinator_suffix=(", maxsplit=1)[0]
     assert "browser_egress_result_host" not in prefix
     assert "browser_egress_coordinator_base" not in block
-    assert (
-        '--volume "${browser_egress_result_host}:${browser_egress_result_container}:ro"'
-        in block
-    )
+    assert '--volume "${browser_egress_result_host}:${browser_egress_result_container}:ro"' in block
     assert (
         '--volume "${browser_egress_result_host}/attempt-intents:'
-        '${browser_egress_result_container}/attempt-intents:rw"'
-        in block
+        '${browser_egress_result_container}/attempt-intents:rw"' in block
     )
     assert "browser_egress_prior_intent" in block
     assert "browser_egress_recovery_mounts" in block
@@ -1352,9 +3432,13 @@ def test_browser_egress_reconcile_mounts_are_phase_minimal(
     tmp_path: Path, residue_kind: str
 ) -> None:
     launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
-    function = "browser_egress_reconcile_filesystem() {" + launcher.split(
-        "browser_egress_reconcile_filesystem() {", maxsplit=1
-    )[1].split("\n}\n\nbrowser_egress_retire_stale_topology()", maxsplit=1)[0] + "\n}\n"
+    function = (
+        "browser_egress_reconcile_filesystem() {"
+        + launcher.split("browser_egress_reconcile_filesystem() {", maxsplit=1)[1].split(
+            "\n}\n\nbrowser_egress_retire_stale_topology()", maxsplit=1
+        )[0]
+        + "\n}\n"
+    )
     root = tmp_path / "qualification"
     for directory in (root, root / "attempts", root / "attempt-intents", root / "evidence"):
         directory.mkdir(mode=0o700)
@@ -1383,7 +3467,7 @@ def test_browser_egress_reconcile_mounts_are_phase_minimal(
         + "qcsd_invoking_uid=1000\nqcsd_invoking_gid=1000\n"
         + "image_id=sha256:test\nROOT=/lab\n"
         + f"LOG={str(log)!r}\n"
-        + "qcsd_run_attached_docker() { printf '%s\\n' \"$@\" >\"$LOG\"; }\n"
+        + 'qcsd_run_attached_docker() { printf \'%s\\n\' "$@" >"$LOG"; }\n'
         + "browser_egress_reconcile_filesystem\n"
     )
     completed = subprocess.run(
@@ -1399,19 +3483,12 @@ def test_browser_egress_reconcile_mounts_are_phase_minimal(
         assert f"{root / 'evidence'}:/lab/result/evidence:ro" in arguments
         assert f"{root / 'attempts'}:/lab/result/attempts:ro" in arguments
         if residue_kind == "intent":
-            assert (
-                f"{root / 'attempt-intents'}:/lab/result/attempt-intents:ro"
-                not in arguments
-            )
+            assert f"{root / 'attempt-intents'}:/lab/result/attempt-intents:ro" not in arguments
         else:
-            assert (
-                f"{root / 'attempt-intents'}:/lab/result/attempt-intents:ro"
-                in arguments
-            )
+            assert f"{root / 'attempt-intents'}:/lab/result/attempt-intents:ro" in arguments
             assert (
                 f"{recovery.parent}:"
-                "/lab/result/evidence/001--constructor--page--websocket/attempt-1:rw"
-                in arguments
+                "/lab/result/evidence/001--constructor--page--websocket/attempt-1:rw" in arguments
             )
         assert f"{root / 'foundation.json'}:/lab/result/foundation.json:ro" in arguments
         assert f"{root / 'experiment.json'}:/lab/result/experiment.json:ro" in arguments
@@ -1428,8 +3505,7 @@ def test_browser_egress_ledger_writes_protect_prior_evidence() -> None:
         '${browser_egress_result_container}/foundation.json:ro"'
     ) in launcher
     assert (
-        '"${browser_egress_result_host}/evidence:'
-        '${browser_egress_result_container}/evidence:ro"'
+        '"${browser_egress_result_host}/evidence:${browser_egress_result_container}/evidence:ro"'
     ) in launcher
     assert "browser_egress_finalize_mounts" in launcher
     assert "browser_egress_record_failed_attempt" in launcher
@@ -1442,9 +3518,9 @@ def test_browser_egress_ledger_writes_protect_prior_evidence() -> None:
 
 
 def test_browser_egress_tool_freezes_execution_verification_and_role_phases() -> None:
-    tool = (
-        Path(__file__).parents[1] / "tools/browser_egress_qualification.py"
-    ).read_text(encoding="utf-8")
+    tool = (Path(__file__).parents[1] / "tools/browser_egress_qualification.py").read_text(
+        encoding="utf-8"
+    )
 
     assert tool.count("FoundationVerificationMode.EXECUTION") >= 2
     assert "FoundationVerificationMode.PORTABLE_REPLAY" not in tool
@@ -1452,12 +3528,15 @@ def test_browser_egress_tool_freezes_execution_verification_and_role_phases() ->
     assert 'commands.add_parser("reconcile-filesystem")' in tool
     assert 'GRACE_READY_PATH.write_text("ready\\n"' in tool
     assert 'RECEIPT_READY_PATH.write_text("ready\\n"' in tool
-    observer = tool.split("def _observer(", maxsplit=1)[1].split(
-        "\ndef _foundation(", maxsplit=1
-    )[0]
-    assert observer.index("observer.mark_reporting_grace_finished()") < observer.index(
-        "_wait(finish_capture)"
-    ) < observer.index("observer.finish(") < observer.index("_wait(stopped)")
+    observer = tool.split("def _observer(", maxsplit=1)[1].split("\ndef _foundation(", maxsplit=1)[
+        0
+    ]
+    assert (
+        observer.index("observer.mark_reporting_grace_finished()")
+        < observer.index("_wait(finish_capture)")
+        < observer.index("observer.finish(")
+        < observer.index("_wait(stopped)")
+    )
     assert "BrowserFixtureServer(" in tool and "vector=vector" in tool
     assert "combine_sink_receipt(" in tool
     assert '"role": "fixture"' in tool
@@ -1486,12 +3565,10 @@ def test_browser_egress_tool_freezes_execution_verification_and_role_phases() ->
     assert "execute_live_browser_action(vector=vector, realm=realm)" in tool
     assert "['fixture_http']" not in tool
     assert 'page.goto(f"{primary}/", wait_until="load")' in tool
-    actor = tool.split("def _actor(", maxsplit=1)[1].split(
-        "\nclass _PlaywrightRealm", maxsplit=1
-    )[0]
-    assert actor.index("_launch_vector_browser(") < actor.index(
-        "browser.new_context("
-    )
+    actor = tool.split("def _actor(", maxsplit=1)[1].split("\nclass _PlaywrightRealm", maxsplit=1)[
+        0
+    ]
+    assert actor.index("_launch_vector_browser(") < actor.index("browser.new_context(")
     assert "browser_configuration_observation" in tool
     assert 'projection["observed_required_switches"].count(' in tool
     assert 'vector.surface == "reporting-nel-live"' in tool
@@ -1565,9 +3642,13 @@ def test_browser_egress_lost_append_and_status_output_cannot_contaminate_evidenc
     tmp_path: Path,
 ) -> None:
     launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
-    flow = "browser_egress_assemble_command_status=0" + launcher.split(
-        "browser_egress_assemble_command_status=0", maxsplit=1
-    )[1].split("    trap - ERR\n    rm -rf", maxsplit=1)[0] + "    trap - ERR\n"
+    flow = (
+        "browser_egress_assemble_command_status=0"
+        + launcher.split("browser_egress_assemble_command_status=0", maxsplit=1)[1].split(
+            "    trap - ERR\n    rm -rf", maxsplit=1
+        )[0]
+        + "    trap - ERR\n"
+    )
     scratch = tmp_path / "attempt"
     scratch.mkdir()
     (scratch / "next.json").write_text("{}\n", encoding="utf-8")
@@ -1578,7 +3659,7 @@ def test_browser_egress_lost_append_and_status_output_cannot_contaminate_evidenc
         "set -Eeuo pipefail\n"
         + f"ERR_MARKER={str(err_marker)!r}\nCAUSAL_STATE={str(causal_state)!r}\n"
         + "trap 'touch \"$ERR_MARKER\"' ERR\n"
-        + "trap 'printf \"%s\\n\" \"$browser_egress_causal_inputs_ready\" >\"$CAUSAL_STATE\"' EXIT\n"
+        + 'trap \'printf "%s\\n" "$browser_egress_causal_inputs_ready" >"$CAUSAL_STATE"\' EXIT\n'
         + "qcsd_invoking_uid=1000\nqcsd_invoking_gid=1000\n"
         + "image_id=image\nROOT=/lab\nbrowser_egress_tool=/tool\n"
         + "browser_egress_result_container=/lab/result\n"
@@ -1664,9 +3745,7 @@ def test_browser_egress_projection_accepts_only_real_docker_capability_shape(
     }
     roles = ("browser", "observer", "fixture", "forbidden_sink", "dns_sink")
     endpoint_ids = {
-        role: str(index + 5) * 64
-        for index, role in enumerate(roles)
-        if role != "observer"
+        role: str(index + 5) * 64 for index, role in enumerate(roles) if role != "observer"
     }
     containers = []
     for index, role in enumerate(roles, 1):
@@ -1697,9 +3776,7 @@ def test_browser_egress_projection_accepts_only_real_docker_capability_shape(
                     "CapDrop": ["ALL"],
                     "SecurityOpt": ["no-new-privileges:true"],
                     "NetworkMode": (
-                        "container:" + "1" * 64
-                        if role == "observer"
-                        else "qcsd-browser-egress-v1"
+                        "container:" + "1" * 64 if role == "observer" else "qcsd-browser-egress-v1"
                     ),
                     "Tmpfs": {
                         "/tmp": "rw,nosuid,nodev,mode=1777",
@@ -1714,9 +3791,7 @@ def test_browser_egress_projection_accepts_only_real_docker_capability_shape(
                         ),
                     },
                     "Dns": (
-                        ["172.30.98.53", "fd00:71:63:73:64:98:0:53"]
-                        if role == "browser"
-                        else None
+                        ["172.30.98.53", "fd00:71:63:73:64:98:0:53"] if role == "browser" else None
                     ),
                 },
                 "NetworkSettings": {"Networks": attachment},
@@ -1769,8 +3844,7 @@ def test_browser_egress_projection_accepts_only_real_docker_capability_shape(
                         "global_ordinal": 1,
                         "attempt_number": 1,
                         "evidence_directory": (
-                            "evidence/083--browser-service--browser--dns-prefetch/"
-                            "attempt-1"
+                            "evidence/083--browser-service--browser--dns-prefetch/attempt-1"
                         ),
                         "topology_token": "c" * 32,
                         "cohort_version": 71,
@@ -1837,7 +3911,10 @@ def test_browser_egress_projection_accepts_only_real_docker_capability_shape(
         stale(
             SimpleNamespace(
                 resume_plan_json=json.dumps(
-                    {**completed_plan, "cleanup": {**completed_plan["cleanup"], "outstanding": True}}
+                    {
+                        **completed_plan,
+                        "cleanup": {**completed_plan["cleanup"], "outstanding": True},
+                    }
                 ),
                 network_inspect_json=json.dumps([network]),
                 container_inspect_json=json.dumps(mixed_token),
@@ -1886,9 +3963,7 @@ def test_browser_egress_projection_accepts_only_real_docker_capability_shape(
             policy_file_inventory=None,
         )
 
-    npo0_vector = (
-        "browser-service-control--off-the-record--speculation-prefetch-enabled"
-    )
+    npo0_vector = "browser-service-control--off-the-record--speculation-prefetch-enabled"
     npo0_labels = {**labels, "org.qcsd.vector": npo0_vector}
     npo0_supervised_labels = {
         **npo0_labels,
@@ -2106,9 +4181,7 @@ def test_browser_egress_assemble_classifies_exact_failure_stage(
         globals_,
         "_object",
         lambda path, label: (
-            {"global_ordinal": 1, "attempt_number": 1}
-            if label == "next-vector plan"
-            else {}
+            {"global_ordinal": 1, "attempt_number": 1} if label == "next-vector plan" else {}
         ),
     )
     monkeypatch.setitem(globals_, "validate_hash_bound_receipt", lambda *args, **kwargs: {})
@@ -2116,36 +4189,40 @@ def test_browser_egress_assemble_classifies_exact_failure_stage(
     monkeypatch.setitem(
         globals_,
         "validate_runtime_binding",
-        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("runtime"))
-        if failure_stage == "runtime"
-        else {},
+        lambda *args, **kwargs: (
+            (_ for _ in ()).throw(ValueError("runtime")) if failure_stage == "runtime" else {}
+        ),
     )
     monkeypatch.setitem(
         globals_,
         "combine_sink_receipt",
-        lambda **kwargs: (_ for _ in ()).throw(ValueError("sink"))
-        if failure_stage == "sink"
-        else {"chronology": {
-            "forbidden_ready_ns": 1,
-            "dns_ready_ns": 2,
-            "forbidden_stopped_ns": 8,
-            "dns_stopped_ns": 8,
-        }},
+        lambda **kwargs: (
+            (_ for _ in ()).throw(ValueError("sink"))
+            if failure_stage == "sink"
+            else {
+                "chronology": {
+                    "forbidden_ready_ns": 1,
+                    "dns_ready_ns": 2,
+                    "forbidden_stopped_ns": 8,
+                    "dns_stopped_ns": 8,
+                }
+            }
+        ),
     )
     monkeypatch.setitem(globals_, "validate_sink_receipt", lambda *args, **kwargs: {})
     monkeypatch.setitem(
         globals_,
         "assemble_live_semantic_observation",
-        lambda **kwargs: (_ for _ in ()).throw(ValueError("semantic"))
-        if failure_stage == "semantic"
-        else {},
+        lambda **kwargs: (
+            (_ for _ in ()).throw(ValueError("semantic")) if failure_stage == "semantic" else {}
+        ),
     )
     monkeypatch.setitem(
         globals_,
         "validate_fixture_observation",
-        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("fixture"))
-        if failure_stage == "fixture"
-        else {},
+        lambda *args, **kwargs: (
+            (_ for _ in ()).throw(ValueError("fixture")) if failure_stage == "fixture" else {}
+        ),
     )
     if failure_stage == "capture":
         capture["role"] = "wrong"
@@ -2156,9 +4233,7 @@ def test_browser_egress_assemble_classifies_exact_failure_stage(
         return {}
 
     monkeypatch.setitem(globals_, "validate_capture_receipt", validate_capture)
-    monkeypatch.setitem(
-        globals_, "reconcile_sink_and_packet_evidence", lambda **kwargs: None
-    )
+    monkeypatch.setitem(globals_, "reconcile_sink_and_packet_evidence", lambda **kwargs: None)
     monkeypatch.setitem(
         globals_,
         "append_result",
@@ -2186,9 +4261,7 @@ def test_browser_egress_assemble_classifies_exact_failure_stage(
     if failure_stage == "validate-only":
         assert emitted == [{"schema_version": 1, "assembled": True}]
     else:
-        assert emitted == [
-            {"schema_version": 1, "assembled": False, "failure_code": expected_code}
-        ]
+        assert emitted == [{"schema_version": 1, "assembled": False, "failure_code": expected_code}]
 
 
 def test_launcher_raw_index_verifier_rejects_clean_filter_forgery(tmp_path: Path) -> None:
@@ -2196,7 +4269,9 @@ def test_launcher_raw_index_verifier_rejects_clean_filter_forgery(tmp_path: Path
     checkout.mkdir()
     subprocess.run(["git", "-C", checkout, "init", "-q"], check=True)
     subprocess.run(["git", "-C", checkout, "config", "user.name", "test"], check=True)
-    subprocess.run(["git", "-C", checkout, "config", "user.email", "test@example.invalid"], check=True)
+    subprocess.run(
+        ["git", "-C", checkout, "config", "user.email", "test@example.invalid"], check=True
+    )
     (checkout / "payload").write_bytes(b"clean")
     (checkout / ".gitattributes").write_text("payload filter=hide\n", encoding="ascii")
     subprocess.run(["git", "-C", checkout, "add", "."], check=True)
@@ -2216,10 +4291,8 @@ def test_launcher_raw_index_verifier_rejects_clean_filter_forgery(tmp_path: Path
     assert status.stdout == b"", "the fixture must reproduce Git clean-filter hiding"
 
     launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
-    functions = launcher.split("_qcsd_trusted_git() {", 1)[1].split(
-        'if [[ "${1:-}" == "-h"', 1
-    )[0]
-    command = "_qcsd_trusted_git() {" + functions + "\n_qcsd_verify_git_index_bytes \"$1\"\n"
+    functions = launcher.split("_qcsd_trusted_git() {", 1)[1].split('if [[ "${1:-}" == "-h"', 1)[0]
+    command = "_qcsd_trusted_git() {" + functions + '\n_qcsd_verify_git_index_bytes "$1"\n'
     result = subprocess.run(
         ["bash", "--noprofile", "--norc", "-c", command, "verify", str(checkout)],
         check=False,
@@ -2244,9 +4317,7 @@ def test_launcher_checkout_binding_rejects_local_worktree_redirect(tmp_path: Pat
         "_qcsd_verify_git_index_bytes() {", 1
     )[0]
     command = (
-        "_qcsd_trusted_git() {"
-        + functions
-        + '\n_qcsd_verify_git_checkout_binding "$1" "$1/.git"\n'
+        "_qcsd_trusted_git() {" + functions + '\n_qcsd_verify_git_checkout_binding "$1" "$1/.git"\n'
     )
     result = subprocess.run(
         ["bash", "--noprofile", "--norc", "-c", command, "verify", str(checkout)],
@@ -2275,9 +4346,7 @@ def test_launcher_checkout_binding_rejects_hidden_untracked_source(tmp_path: Pat
         "_qcsd_verify_git_index_bytes() {", 1
     )[0]
     command = (
-        "_qcsd_trusted_git() {"
-        + functions
-        + '\n_qcsd_verify_git_checkout_binding "$1" "$1/.git"\n'
+        "_qcsd_trusted_git() {" + functions + '\n_qcsd_verify_git_checkout_binding "$1" "$1/.git"\n'
     )
     result = subprocess.run(
         ["bash", "--noprofile", "--norc", "-c", command, "verify", str(checkout)],
@@ -2293,7 +4362,9 @@ def test_launcher_raw_index_verifier_rejects_intermediate_symlink(tmp_path: Path
     checkout.mkdir()
     subprocess.run(["git", "-C", checkout, "init", "-q"], check=True)
     subprocess.run(["git", "-C", checkout, "config", "user.name", "test"], check=True)
-    subprocess.run(["git", "-C", checkout, "config", "user.email", "test@example.invalid"], check=True)
+    subprocess.run(
+        ["git", "-C", checkout, "config", "user.email", "test@example.invalid"], check=True
+    )
     nested = checkout / "nested"
     nested.mkdir()
     (nested / "payload").write_bytes(b"clean")
@@ -2304,10 +4375,8 @@ def test_launcher_raw_index_verifier_rejects_intermediate_symlink(tmp_path: Path
     nested.symlink_to(moved, target_is_directory=True)
 
     launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
-    functions = launcher.split("_qcsd_trusted_git() {", 1)[1].split(
-        'if [[ "${1:-}" == "-h"', 1
-    )[0]
-    command = "_qcsd_trusted_git() {" + functions + "\n_qcsd_verify_git_index_bytes \"$1\"\n"
+    functions = launcher.split("_qcsd_trusted_git() {", 1)[1].split('if [[ "${1:-}" == "-h"', 1)[0]
+    command = "_qcsd_trusted_git() {" + functions + '\n_qcsd_verify_git_index_bytes "$1"\n'
     result = subprocess.run(
         ["bash", "--noprofile", "--norc", "-c", command, "verify", str(checkout)],
         check=False,
@@ -2322,15 +4391,21 @@ def test_launcher_trusted_git_ignores_replace_refs(tmp_path: Path) -> None:
     checkout.mkdir()
     subprocess.run(["git", "-C", checkout, "init", "-q"], check=True)
     subprocess.run(["git", "-C", checkout, "config", "user.name", "test"], check=True)
-    subprocess.run(["git", "-C", checkout, "config", "user.email", "test@example.invalid"], check=True)
+    subprocess.run(
+        ["git", "-C", checkout, "config", "user.email", "test@example.invalid"], check=True
+    )
     payload = checkout / "payload"
     payload.write_text("original\n")
     subprocess.run(["git", "-C", checkout, "add", "payload"], check=True)
     subprocess.run(["git", "-C", checkout, "commit", "-qm", "original"], check=True)
-    original = subprocess.check_output(["git", "-C", checkout, "rev-parse", "HEAD"], text=True).strip()
+    original = subprocess.check_output(
+        ["git", "-C", checkout, "rev-parse", "HEAD"], text=True
+    ).strip()
     payload.write_text("replacement\n")
     subprocess.run(["git", "-C", checkout, "commit", "-qam", "replacement"], check=True)
-    replacement = subprocess.check_output(["git", "-C", checkout, "rev-parse", "HEAD"], text=True).strip()
+    replacement = subprocess.check_output(
+        ["git", "-C", checkout, "rev-parse", "HEAD"], text=True
+    ).strip()
     subprocess.run(["git", "-C", checkout, "reset", "--soft", original], check=True)
     subprocess.run(["git", "-C", checkout, "replace", original, replacement], check=True)
     forged = subprocess.run(
@@ -2342,7 +4417,9 @@ def test_launcher_trusted_git_ignores_replace_refs(tmp_path: Path) -> None:
 
     launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
     trusted = launcher.split("_qcsd_trusted_git() {", 1)[1].split("\n}", 1)[0]
-    command = '_qcsd_trusted_git() {' + trusted + '\n}\n_qcsd_trusted_git -C "$1" status --porcelain\n'
+    command = (
+        "_qcsd_trusted_git() {" + trusted + '\n}\n_qcsd_trusted_git -C "$1" status --porcelain\n'
+    )
     result = subprocess.run(
         ["bash", "--noprofile", "--norc", "-c", command, "verify", str(checkout)],
         check=True,
@@ -2360,15 +4437,979 @@ def test_acquisition_actions_repeat_exact_scoped_validation_across_go() -> None:
     admission_branch = launcher.index(
         '"${class_study_action}" == "acquisition-admission" ]]; then', first_call
     )
-    guardian = launcher.index("require_docker", admission_branch)
+    guardian = launcher.index("\n  require_docker\n", admission_branch)
     assert first_call < guardian
     require_body = launcher.split("require_docker() {", 1)[1].split("\n}", 1)[0]
-    assert require_body.index("_qcsd_validate_lifecycle_guardian") < require_body.index(
+    assert require_body.index("_qcsd_require_lifecycle_guardian_entry") < require_body.index(
         scope_call
     )
     assert "--recover-stale-scopes-internal" in launcher[scope_setup:first_call]
     assert "_qcsd_docker_api" not in launcher[scope_setup:first_call]
     assert "qcsd_run_" not in launcher[scope_setup:first_call]
+
+
+def _launcher_shell_function(
+    launcher: str,
+    function: str,
+    *,
+    following_function: str | None = None,
+) -> str:
+    start = launcher.index(f"{function}() {{")
+    if following_function is None:
+        end = launcher.index("\n}", start) + 2
+    else:
+        end = (
+            launcher.index(
+                f"\n}}\n\n{following_function}() {{",
+                start,
+            )
+            + 2
+        )
+    return launcher[start:end] + "\n"
+
+
+def _cohort_ledger_path(root: Path) -> Path:
+    return root / "config" / "buflo-study" / "v1" / "consumed-cohorts.json"
+
+
+def _write_cohort_ledger_bytes(root: Path, payload: bytes) -> Path:
+    path = _cohort_ledger_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(payload)
+    path.chmod(0o600)
+    return path
+
+
+def _write_cohort_ledger(root: Path, payload: object) -> Path:
+    return _write_cohort_ledger_bytes(
+        root,
+        (json.dumps(payload, sort_keys=True) + "\n").encode(),
+    )
+
+
+def _valid_cohort_ledger() -> dict[str, object]:
+    return {
+        "artifact_type": "qcsd-buflo-study-consumed-cohorts",
+        "consumed_versions": list(range(1, 62)),
+        "policy": "dense-prefix-durable-publications-consume-v1",
+        "schema_version": 1,
+    }
+
+
+def _run_test_git(root: Path, *arguments: str) -> str:
+    result = subprocess.run(
+        [
+            "/usr/bin/git",
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "core.excludesFile=/dev/null",
+            "-C",
+            str(root),
+            *arguments,
+        ],
+        env={
+            **os.environ,
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_CONFIG_SYSTEM": "/dev/null",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_NO_REPLACE_OBJECTS": "1",
+        },
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def _commit_test_git(root: Path, message: str, *, allow_empty: bool = False) -> str:
+    arguments = [
+        "-c",
+        "user.name=QCSD test",
+        "-c",
+        "user.email=qcsd-test@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--quiet",
+        "--message",
+        message,
+    ]
+    if allow_empty:
+        arguments.append("--allow-empty")
+    _run_test_git(root, *arguments)
+    return _run_test_git(root, "rev-parse", "--verify", "HEAD^{commit}")
+
+
+def _cohort_git_repository(
+    tmp_path: Path,
+    *,
+    payload: object | None = None,
+    raw_payload: bytes | None = None,
+) -> tuple[Path, Path]:
+    assert (payload is None) != (raw_payload is None)
+    root = tmp_path / "lab"
+    root.mkdir(mode=0o700)
+    _run_test_git(root, "init", "--quiet", "--object-format=sha1")
+
+    neqo = root / "neqo-qcsd"
+    neqo.mkdir(mode=0o700)
+    _run_test_git(neqo, "init", "--quiet", "--object-format=sha1")
+    (neqo / "Cargo.lock").write_text("nested lock\n", encoding="utf-8")
+    _run_test_git(neqo, "add", "--", "Cargo.lock")
+    _commit_test_git(neqo, "nested source")
+
+    ledger = (
+        _write_cohort_ledger(root, payload)
+        if payload is not None
+        else _write_cohort_ledger_bytes(root, raw_payload or b"")
+    )
+    _run_test_git(root, "add", "--", "config/buflo-study/v1/consumed-cohorts.json")
+    _run_test_git(root, "add", "--", "neqo-qcsd")
+    _commit_test_git(root, "cohort authority")
+    return root, ledger
+
+
+def _run_cohort_ledger_validator(
+    root: Path,
+    requested: str,
+    *,
+    after_open_injection: str = "",
+) -> subprocess.CompletedProcess[str]:
+    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
+    trusted_git = _launcher_shell_function(launcher, "_qcsd_trusted_git")
+    validator = _launcher_shell_function(
+        launcher,
+        "_qcsd_validate_consumed_cohort_ledger",
+        following_function="_qcsd_reprove_build_cohort_authority",
+    )
+    if after_open_injection:
+        marker = '    index_entry = os.stat("index", dir_fd=git_fd, follow_symlinks=False)\n'
+        assert validator.count(marker) == 1
+        validator = validator.replace(
+            marker,
+            marker + "\n" + after_open_injection + "\n",
+        )
+    command = (
+        "set -euo pipefail\n"
+        + trusted_git
+        + validator
+        + 'ROOT="$1"\n_qcsd_validate_consumed_cohort_ledger "$2"\n'
+    )
+    return subprocess.run(
+        [
+            "/bin/bash",
+            "--noprofile",
+            "--norc",
+            "-c",
+            command,
+            "ledger",
+            str(root),
+            requested,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+
+
+def test_consumed_cohort_ledger_authenticates_any_fresh_claim_candidate(
+    tmp_path: Path,
+) -> None:
+    root, ledger = _cohort_git_repository(tmp_path, payload=_valid_cohort_ledger())
+
+    accepted = _run_cohort_ledger_validator(root, "62")
+    assert accepted.returncode == 0, accepted.stderr
+    authority = json.loads(accepted.stdout)
+    assert set(authority) == {
+        "schema_version",
+        "artifact_type",
+        "git",
+        "filesystem",
+        "receipt",
+    }
+    assert authority["schema_version"] == 1
+    assert authority["artifact_type"] == ("qcsd-buflo-study-cohort-allocation-authority")
+    git = authority["git"]
+    receipt = authority["receipt"]
+    assert git["object_format"] == "sha1"
+    assert git["lab_head"] == _run_test_git(root, "rev-parse", "HEAD")
+    assert git["neqo_head"] == _run_test_git(root / "neqo-qcsd", "rev-parse", "HEAD")
+    assert git["head_gitlink"] == git["neqo_head"] == git["index_gitlink"]
+    assert git["head_blob_oid"] == git["index_blob_oid"] == git["worktree_blob_oid"]
+    proof = receipt["lab_commit_ledger_proof"]
+    assert set(proof) == {
+        "schema_version",
+        "artifact_type",
+        "commit_payload_base64",
+        "tree_payloads_base64",
+    }
+    assert proof["schema_version"] == 1
+    assert proof["artifact_type"] == "qcsd-buflo-study-cohort-ledger-git-proof"
+    assert len(proof["tree_payloads_base64"]) == 4
+    receipt_without_proof = dict(receipt)
+    receipt_without_proof.pop("lab_commit_ledger_proof")
+    assert receipt_without_proof == {
+        "schema_version": 1,
+        "artifact_type": "qcsd-buflo-study-cohort-allocation",
+        "policy": "dense-prefix-durable-publications-consume-v1",
+        "ledger_path": "config/buflo-study/v1/consumed-cohorts.json",
+        "ledger_sha256": sha256_file(ledger),
+        "ledger_payload_base64": base64.b64encode(ledger.read_bytes()).decode(),
+        "git_object_format": "sha1",
+        "ledger_git_blob_oid": git["worktree_blob_oid"],
+        "lab_commit": git["lab_head"],
+        "neqo_commit": git["neqo_head"],
+        "neqo_gitlink": git["head_gitlink"],
+        "last_consumed_version": 61,
+        "allocated_version": 62,
+    }
+    assert set(authority["filesystem"]["directories"]) == {
+        "repository-root",
+        "config",
+        "buflo-study",
+        "v1",
+        "git",
+    }
+    assert set(authority["filesystem"]["ledger"]) == {
+        "dev",
+        "inode",
+        "uid",
+        "gid",
+        "mode",
+        "nlink",
+        "size",
+        "mtime_ns",
+        "ctime_ns",
+    }
+
+    later = _run_cohort_ledger_validator(root, "63")
+    assert later.returncode == 0, later.stderr
+    assert json.loads(later.stdout)["receipt"]["allocated_version"] == 63
+
+    for requested in ("1", "60", "61", "01", "0", "-1", "true"):
+        rejected = _run_cohort_ledger_validator(root, requested)
+        assert rejected.returncode != 0, requested
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda value: value.update(schema_version=True),
+        lambda value: value.update(schema_version=2),
+        lambda value: value.update(policy="unknown"),
+        lambda value: value.update(artifact_type="unknown"),
+        lambda value: value.update(extra="forbidden"),
+        lambda value: value.update(consumed_versions=[]),
+        lambda value: value.update(consumed_versions=[1, 2, 4]),
+        lambda value: value.update(consumed_versions=[1, 2, 2]),
+        lambda value: value.update(consumed_versions=[1, True, 3]),
+    ],
+    ids=(
+        "boolean-schema",
+        "future-schema",
+        "unknown-policy",
+        "unknown-artifact",
+        "unknown-key",
+        "empty-prefix",
+        "gap",
+        "duplicate-version",
+        "boolean-version",
+    ),
+)
+def test_consumed_cohort_ledger_rejects_malformed_contract(tmp_path: Path, mutate) -> None:
+    value = _valid_cohort_ledger()
+    mutate(value)
+    root, _ledger = _cohort_git_repository(tmp_path, payload=value)
+
+    result = _run_cohort_ledger_validator(root, "62")
+
+    assert result.returncode != 0
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_error"),
+    [
+        (
+            b'{"artifact_type":"a","artifact_type":"b",'
+            b'"consumed_versions":[1],"policy":"p","schema_version":1}\n',
+            "duplicate JSON key",
+        ),
+        (
+            b'{"artifact_type":"qcsd-buflo-study-consumed-cohorts",'
+            b'"consumed_versions":[1],"policy":"dense-prefix-durable-publications-consume-v1",'
+            b'"schema_version":NaN}\n',
+            "invalid JSON constant",
+        ),
+        (b" " * 16385, "too large"),
+    ],
+    ids=("duplicate-key", "nan", "oversize"),
+)
+def test_consumed_cohort_ledger_rejects_noncanonical_bytes(
+    tmp_path: Path, payload: bytes, expected_error: str
+) -> None:
+    root, _path = _cohort_git_repository(tmp_path, raw_payload=payload)
+
+    result = _run_cohort_ledger_validator(root, "2")
+
+    assert result.returncode != 0
+    assert expected_error in result.stderr
+
+
+@pytest.mark.parametrize(
+    "variant",
+    ["missing", "symlink", "directory", "fifo", "hardlink", "writable"],
+)
+def test_consumed_cohort_ledger_rejects_unsafe_filesystem_identity(
+    tmp_path: Path, variant: str
+) -> None:
+    root, path = _cohort_git_repository(tmp_path, payload=_valid_cohort_ledger())
+    if variant == "missing":
+        path.unlink()
+    elif variant == "symlink":
+        target = tmp_path / "outside-ledger.json"
+        target.write_text(json.dumps(_valid_cohort_ledger()), encoding="utf-8")
+        path.unlink()
+        path.symlink_to(target)
+    elif variant == "directory":
+        path.unlink()
+        path.mkdir()
+    elif variant == "fifo":
+        path.unlink()
+        os.mkfifo(path, mode=0o600)
+    else:
+        if variant == "hardlink":
+            os.link(path, root / "second-ledger-link")
+        else:
+            path.chmod(0o622)
+
+    result = _run_cohort_ledger_validator(root, "62")
+
+    assert result.returncode != 0
+
+
+def test_consumed_cohort_ledger_rejects_worktree_byte_drift(tmp_path: Path) -> None:
+    root, path = _cohort_git_repository(tmp_path, payload=_valid_cohort_ledger())
+    before = _run_cohort_ledger_validator(root, "62")
+    assert before.returncode == 0, before.stderr
+    path.write_text(
+        json.dumps(_valid_cohort_ledger(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o600)
+
+    after = _run_cohort_ledger_validator(root, "62")
+
+    assert after.returncode != 0
+    assert "worktree bytes differ from the checked-in Git blob" in after.stderr
+
+
+def test_consumed_cohort_ledger_rejects_index_drift(tmp_path: Path) -> None:
+    root, path = _cohort_git_repository(tmp_path, payload=_valid_cohort_ledger())
+    value = _valid_cohort_ledger()
+    value["consumed_versions"] = list(range(1, 63))
+    _write_cohort_ledger(root, value)
+    _run_test_git(root, "add", "--", str(path.relative_to(root)))
+
+    result = _run_cohort_ledger_validator(root, "62")
+
+    assert result.returncode != 0
+    assert "consumed-cohort Git blob identity is invalid" in result.stderr
+
+
+def test_consumed_cohort_authority_pins_clean_head_drift(tmp_path: Path) -> None:
+    root, _path = _cohort_git_repository(tmp_path, payload=_valid_cohort_ledger())
+    before = _run_cohort_ledger_validator(root, "62")
+    assert before.returncode == 0, before.stderr
+    _commit_test_git(root, "new clean head", allow_empty=True)
+
+    after = _run_cohort_ledger_validator(root, "62")
+
+    assert after.returncode == 0, after.stderr
+    before_authority = json.loads(before.stdout)
+    after_authority = json.loads(after.stdout)
+    assert before_authority != after_authority
+    assert before_authority["git"]["lab_head"] != after_authority["git"]["lab_head"]
+    assert (
+        before_authority["git"]["worktree_blob_oid"] == after_authority["git"]["worktree_blob_oid"]
+    )
+
+
+def test_consumed_cohort_ledger_rejects_nested_head_drift(tmp_path: Path) -> None:
+    root, _path = _cohort_git_repository(tmp_path, payload=_valid_cohort_ledger())
+    neqo = root / "neqo-qcsd"
+    (neqo / "Cargo.lock").write_text("changed nested lock\n", encoding="utf-8")
+    _run_test_git(neqo, "add", "--", "Cargo.lock")
+    _commit_test_git(neqo, "nested head drift")
+
+    result = _run_cohort_ledger_validator(root, "62")
+
+    assert result.returncode != 0
+    assert "consumed-cohort Git commit identity is invalid" in result.stderr
+
+
+def test_consumed_cohort_ledger_rejects_ancestor_symlink(tmp_path: Path) -> None:
+    root, _path = _cohort_git_repository(tmp_path, payload=_valid_cohort_ledger())
+    config = root / "config"
+    target = root / "config-target"
+    config.rename(target)
+    config.symlink_to(target.name, target_is_directory=True)
+
+    result = _run_cohort_ledger_validator(root, "62")
+
+    assert result.returncode != 0
+
+
+def test_consumed_cohort_ledger_allows_benign_directory_child_churn(
+    tmp_path: Path,
+) -> None:
+    root, _path = _cohort_git_repository(tmp_path, payload=_valid_cohort_ledger())
+
+    result = _run_cohort_ledger_validator(
+        root,
+        "62",
+        after_open_injection=(
+            '    os.mkdir(".qcsd-benign-churn", 0o700, dir_fd=root_fd)\n'
+            '    os.rmdir(".qcsd-benign-churn", dir_fd=root_fd)'
+        ),
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    "after_open_injection",
+    (
+        '    os.chmod("config", 0o777, dir_fd=root_fd)',
+        (
+            '    config_mode = stat.S_IMODE(os.stat("config", dir_fd=root_fd, '
+            'follow_symlinks=False).st_mode)\n'
+            '    os.rename("config", "config-moved", src_dir_fd=root_fd, '
+            'dst_dir_fd=root_fd)\n'
+            '    os.mkdir("config", config_mode, dir_fd=root_fd)'
+        ),
+    ),
+    ids=("mode-drift", "replacement"),
+)
+def test_consumed_cohort_ledger_rejects_unsafe_directory_identity_drift(
+    tmp_path: Path,
+    after_open_injection: str,
+) -> None:
+    root, _path = _cohort_git_repository(tmp_path, payload=_valid_cohort_ledger())
+
+    result = _run_cohort_ledger_validator(
+        root,
+        "62",
+        after_open_injection=after_open_injection,
+    )
+
+    assert result.returncode != 0
+    assert "consumed-cohort config identity changed while read" in result.stderr
+
+
+def test_consumed_cohort_authority_pins_same_content_inode_drift(
+    tmp_path: Path,
+) -> None:
+    root, path = _cohort_git_repository(tmp_path, payload=_valid_cohort_ledger())
+    before = _run_cohort_ledger_validator(root, "62")
+    assert before.returncode == 0, before.stderr
+    replacement = tmp_path / "replacement-ledger.json"
+    replacement.write_bytes(path.read_bytes())
+    replacement.chmod(0o600)
+    os.replace(replacement, path)
+
+    after = _run_cohort_ledger_validator(root, "62")
+
+    assert after.returncode == 0, after.stderr
+    before_authority = json.loads(before.stdout)
+    after_authority = json.loads(after.stdout)
+    assert before_authority != after_authority
+    assert (
+        before_authority["receipt"]["ledger_sha256"] == after_authority["receipt"]["ledger_sha256"]
+    )
+    assert (
+        before_authority["filesystem"]["ledger"]["inode"]
+        != after_authority["filesystem"]["ledger"]["inode"]
+    )
+
+
+def test_build_checks_exact_cohort_authority_before_every_mutation_boundary() -> None:
+    launcher_path = Path(__file__).parents[1] / "qcsd-lab"
+    launcher = launcher_path.read_text(encoding="utf-8")
+    build = launcher.split('if [[ "${1:-}" == "build" ]]; then', 1)[1].split(
+        'elif [[ "${1:-}" == "lifecycle-recover" ]]', 1
+    )[0]
+    guardian_entry = build.index("_qcsd_require_lifecycle_guardian_entry")
+    first = build.index("build_cohort_ledger_snapshot")
+    preclaim_reproof = build.index('_qcsd_reprove_build_cohort_authority "before-cohort-claim"')
+    claim_publish = build.index("_qcsd_invoke_cohort_allocator publish")
+    chain_capture = build.index("_qcsd_invoke_cohort_allocator chain")
+    first_reproof = build.index('"after-cohort-claim-before-docker-recovery"')
+    assert (
+        build.index("reject_docker_endpoint_overrides")
+        < guardian_entry
+        < build.index('mkdir -p -- "${build_receipt_parent}"')
+        < first
+        < preclaim_reproof
+        < claim_publish
+        < chain_capture
+        < first_reproof
+        < build.index("\n  require_docker\n")
+    )
+    assert (
+        '_qcsd_reprove_build_cohort_authority "after-evidence-build-lock"'
+        in build[build.index("acquire_evidence_build_lock") :]
+    )
+    recovery_body = launcher.split("reconcile_stale_docker_supervisors() {", 1)[1].split("\n}", 1)[
+        0
+    ]
+    recovery_reproof = recovery_body.index(
+        '_qcsd_reprove_build_cohort_authority "immediately-before-docker-recovery"'
+    )
+    first_recovery_read = recovery_body.index(
+        "# Validate the durable namespace before legacy recovery can mutate anything"
+    )
+    assert recovery_reproof < first_recovery_read
+    second_build = launcher.split('if [[ "${1:-}" == "build" ]]; then', 2)[2]
+    recheck = second_build.index(
+        '_qcsd_reprove_build_cohort_authority "immediately-before-build-transaction"'
+    )
+    transaction = second_build.index("begin_evidence_build_transaction")
+    assert recheck < transaction
+    assert (
+        '_qcsd_reprove_build_cohort_authority "immediately-after-build-transaction"'
+        in second_build[transaction:]
+    )
+    final_recorded_reproof = second_build.index(
+        '_qcsd_reprove_build_cohort_authority "after-reference-build-before-receipt"'
+    )
+    assert (
+        second_build.rfind("validate_local_docker_build_endpoint", 0, final_recorded_reproof)
+        < final_recorded_reproof
+        < second_build.index("build_cohort_reproofs_json", final_recorded_reproof)
+        < second_build.index("build_finished_unix_ns", final_recorded_reproof)
+    )
+    reproof = _launcher_shell_function(
+        launcher,
+        "_qcsd_reprove_build_cohort_authority",
+        following_function=None,
+    )
+    assert (
+        reproof.index("_qcsd_verify_clean_build_checkout")
+        < reproof.index("_qcsd_validate_consumed_cohort_ledger")
+        < reproof.index('"${recheck}" != "${build_cohort_ledger_snapshot:-}"')
+    )
+    allocator = _launcher_shell_function(
+        launcher,
+        "_qcsd_invoke_cohort_allocator",
+        following_function="_qcsd_open_cohort_chain_channel",
+    )
+    assert "< <(" in allocator
+    assert "exec /usr/bin/python3 -I" in allocator
+    assert "$(" not in allocator
+    assert " | " not in allocator
+    for option in (
+        "--held-lock-owner-pid",
+        "--held-lock-owner-start",
+        "--held-lock-guardian-pid",
+        "--held-lock-guardian-start",
+        "--held-lock-guardian-fd",
+        "--held-lock-path",
+        "--held-lock-device",
+        "--held-lock-inode",
+        "--held-lock-parent-device",
+        "--held-lock-parent-inode",
+        "--held-lock-cohort-version",
+    ):
+        assert option in allocator
+    chain_channel = _launcher_shell_function(
+        launcher,
+        "_qcsd_open_cohort_chain_channel",
+        following_function="_qcsd_verify_saved_build_cohort_claim",
+    )
+    assert "< <(" in chain_channel
+    assert "printf '%s\\n'" in chain_channel
+    assert "exec /usr/bin/printf" not in chain_channel
+    assert 'BUILD_COHORT_CLAIM_CHAIN="' not in launcher
+    assert 'BUILD_COHORT_CLAIM_CHAIN_FD="${build_cohort_chain_fd}"' in launcher
+    saved_claim = _launcher_shell_function(
+        launcher,
+        "_qcsd_verify_saved_build_cohort_claim",
+        following_function="_qcsd_verify_saved_build_cohort_authority",
+    )
+    assert "_qcsd_invoke_cohort_allocator verify" in saved_claim
+    assert "_qcsd_invoke_cohort_allocator chain" in saved_claim
+    assert '"${claim_recheck}" != "${build_cohort_claim_snapshot}"' in saved_claim
+    assert '"${chain_recheck}" != "${build_cohort_claim_chain}"' in saved_claim
+    saved_authority = _launcher_shell_function(
+        launcher,
+        "_qcsd_verify_saved_build_cohort_authority",
+        following_function="_qcsd_reprove_build_cohort_authority",
+    )
+    assert "_qcsd_verify_clean_build_checkout" in saved_authority
+    assert "_qcsd_validate_consumed_cohort_ledger" in saved_authority
+    assert '"${recheck}" != "${build_cohort_ledger_snapshot:-}"' in saved_authority
+    assert "_qcsd_verify_saved_build_cohort_claim" in saved_authority
+    receipt_tail = second_build[second_build.index("BUILD_RECEIPT_STAGE=") :]
+    pre_publication = receipt_tail.index("immediately-before-receipt-publication")
+    publication = receipt_tail.index("linkat(")
+    post_publication = receipt_tail.index("immediately-after-receipt-publication")
+    transaction_completion = receipt_tail.index("complete_evidence_build_transaction")
+    iid_cleanup = receipt_tail.index("complete_build_iid_cleanup_before_success")
+    post_transaction = receipt_tail.index("_qcsd_reprove_build_completion_authority")
+    completion_publication = receipt_tail.index("publish-completion")
+    final_exit = receipt_tail.index("exit 0", completion_publication)
+    assert (
+        pre_publication
+        < publication
+        < post_publication
+        < transaction_completion
+        < iid_cleanup
+        < post_transaction
+        < completion_publication
+        < final_exit
+    )
+    completion_command = receipt_tail[completion_publication:final_exit]
+    for option in (
+        "--receipt-binding-json",
+        "--transaction-binding-json",
+        "--held-lock-owner-pid",
+        "--held-lock-guardian-pid",
+        "--held-lock-guardian-fd",
+        "--lifecycle-lock-path",
+        "--lifecycle-lease-nonce",
+        "--retired-transaction-root",
+    ):
+        assert option in completion_command
+
+
+def test_cohort_chain_channel_carries_payload_larger_than_exec_arg_max(
+    tmp_path: Path,
+) -> None:
+    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
+    channel = _launcher_shell_function(
+        launcher,
+        "_qcsd_open_cohort_chain_channel",
+        following_function="_qcsd_verify_saved_build_cohort_claim",
+    )
+    payload = b"{" + b'"chain":"' + b"a" * (3 * 1024 * 1024) + b'"}'
+    payload_path = tmp_path / "large-chain.json"
+    payload_path.write_bytes(payload)
+    expected_sha256 = hashlib.sha256(payload + b"\n").hexdigest()
+    script = (
+        "set -euo pipefail\n"
+        + channel
+        + 'chain="$(<"$1")"\n'
+        + 'descriptor=""\nproducer=""\n'
+        + '_qcsd_open_cohort_chain_channel "$chain" descriptor producer\n'
+        + "reader_status=0\n"
+        + 'if BUILD_COHORT_CLAIM_CHAIN_FD="$descriptor" '
+        + "/usr/bin/python3 -I -c "
+        + shlex.quote(
+            "import hashlib,os,sys; "
+            "fd=int(os.environ['BUILD_COHORT_CLAIM_CHAIN_FD']); "
+            "raw=os.fdopen(os.dup(fd),'rb').read(); "
+            "raise SystemExit(0 if hashlib.sha256(raw).hexdigest()==sys.argv[1] "
+            "and raw.endswith(b'\\n') and raw.count(b'\\n')==1 else 1)"
+        )
+        + ' "$2"; then :; else reader_status=$?; fi\n'
+        + 'producer_status=0\nwait "$producer" || producer_status=$?\n'
+        + 'close_status=0\neval "exec ${descriptor}<&-" || close_status=$?\n'
+        + "(( reader_status == 0 && producer_status == 0 && close_status == 0 ))\n"
+    )
+
+    result = subprocess.run(
+        [
+            "/bin/bash",
+            "--noprofile",
+            "--norc",
+            "-c",
+            script,
+            "chain-channel",
+            str(payload_path),
+            expected_sha256,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+
+
+@pytest.mark.parametrize("version", ["60", "61"])
+def test_real_build_rejects_genesis_consumed_cohort_before_docker(
+    version: str,
+) -> None:
+    launcher = Path(__file__).parents[1] / "qcsd-lab"
+    environment = dict(os.environ)
+    for key in (
+        "DOCKER_HOST",
+        "DOCKER_CONTEXT",
+        "DOCKER_CONFIG",
+        "DOCKER_TLS_VERIFY",
+        "DOCKER_CERT_PATH",
+        "DOCKER_DEFAULT_PLATFORM",
+        "BUILDX_BUILDER",
+        "BUILDX_CONFIG",
+        "BUILDKIT_HOST",
+        "DOCKER_BUILDKIT",
+        "QCSD_LAB_COLLECTION_IMAGE",
+        "QCSD_LAB_PREPARE_IMAGE",
+        "QCSD_LAB_REFERENCE_IMAGE",
+    ):
+        environment.pop(key, None)
+
+    result = subprocess.run(
+        [str(launcher), "build", "--cohort-version", version],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    # The guardian maps any pre-final-admission child failure to its closed
+    # status 125; the diagnostic proves allocation failed before Docker.
+    assert result.returncode == 125
+    assert "build cohort allocation is not authorised" in result.stderr
+    assert "evidence build rejects Docker endpoint" not in result.stderr
+
+
+def test_real_build_rejects_omitted_cohort_before_docker() -> None:
+    launcher = Path(__file__).parents[1] / "qcsd-lab"
+    environment = {**os.environ, "DOCKER_HOST": "tcp://127.0.0.1:1"}
+
+    result = subprocess.run(
+        [str(launcher), "build"],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 2
+    assert "build requires exactly one explicit --cohort-version N" in result.stderr
+    assert "Docker endpoint overrides are not allowed" not in result.stderr
+
+
+def test_launcher_privileged_startup_ignores_hostile_bash_hooks_and_path(
+    tmp_path: Path,
+) -> None:
+    launcher = Path(__file__).parents[1] / "qcsd-lab"
+    marker = tmp_path / "bash-environment-ran"
+    path_marker = tmp_path / "hostile-path-ran"
+    bash_environment = tmp_path / "hostile-bash-environment"
+    bash_environment.write_text(
+        f"printf ran > {shlex.quote(str(marker))}\n"
+        "set -p\n"
+        "set -T\n"
+        "trap '_QCSD_LIFECYCLE_ENTRY_VALIDATED=1' DEBUG RETURN\n",
+        encoding="utf-8",
+    )
+    hostile_bin = tmp_path / "hostile-bin"
+    hostile_bin.mkdir()
+    hostile_commands = (
+        "awk",
+        "dirname",
+        "env",
+        "id",
+        "readlink",
+        "sha256sum",
+        "stat",
+    )
+    for command in hostile_commands:
+        system_command = shutil.which(command, path="/usr/bin:/bin")
+        assert system_command is not None
+        wrapper = hostile_bin / command
+        wrapper.write_text(
+            "#!/bin/sh\n"
+            f"printf ran > {shlex.quote(str(path_marker))}\n"
+            f'exec {shlex.quote(system_command)} "$@"\n',
+            encoding="utf-8",
+        )
+        wrapper.chmod(0o700)
+    environment = {
+        **os.environ,
+        "BASH_ENV": str(bash_environment),
+        "ENV": str(bash_environment),
+        "PATH": str(hostile_bin),
+        "_QCSD_LIFECYCLE_ENTRY_VALIDATED": "1",
+    }
+
+    direct = subprocess.run(
+        [str(launcher), "--help"],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert direct.returncode == 0
+    assert "Usage: qcsd-lab" in direct.stderr
+    assert not marker.exists()
+    assert not path_marker.exists()
+
+    explicit_unprivileged_bash = subprocess.run(
+        ["/bin/bash", str(launcher), "--help"],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert explicit_unprivileged_bash.returncode == 125
+    assert marker.read_text(encoding="utf-8") == "ran"
+    assert not path_marker.exists()
+    assert "must be executed directly by its privileged-mode Bash shebang" in (
+        explicit_unprivileged_bash.stderr
+    )
+    assert "Usage: qcsd-lab" not in explicit_unprivileged_bash.stderr
+
+
+@pytest.mark.parametrize(
+    ("payload", "accepted"),
+    [
+        (b"a" * 64 + b"\n", True),
+        (b"b" * 64 + b"\n", False),
+        (b"a" * 63 + b"\n", False),
+        (b"a" * 65 + b"\n", False),
+        (b"a" * 64, False),
+        (b"a" * 64 + b"\n\n", False),
+        (b"a" * 64 + b"\nextra\n", False),
+        (b"a" * 64 + b"\ntrailing", False),
+    ],
+    ids=(
+        "exact",
+        "wrong",
+        "short",
+        "long",
+        "unterminated",
+        "empty-extra-line",
+        "extra-line",
+        "unterminated-trailing-bytes",
+    ),
+)
+def test_lifecycle_frame_reader_accepts_only_exact_closed_frame(
+    payload: bytes, accepted: bool
+) -> None:
+    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
+    body = launcher.split("_qcsd_read_exact_lifecycle_frame() {", 1)[1].split("\n}", 1)[0]
+    command = (
+        "_qcsd_read_exact_lifecycle_frame() {"
+        + body
+        + '\n}\n_qcsd_read_exact_lifecycle_frame 0 "$1"\n'
+    )
+    result = subprocess.run(
+        ["/bin/bash", "--noprofile", "--norc", "-c", command, "frame", "a" * 64],
+        input=payload,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+    assert (result.returncode == 0) is accepted, result.stderr
+
+
+def _run_lifecycle_recovery_completion(
+    tmp_path: Path, final_payload: bytes
+) -> tuple[subprocess.CompletedProcess[bytes], bytes]:
+    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
+    recovery_nonce = "a" * 64
+    final_nonce = "b" * 64
+    recovery_path = tmp_path / "recovery-frame"
+    final_path = tmp_path / "final-frame"
+    final_path.write_bytes(final_payload)
+    command = (
+        _launcher_shell_function(launcher, "_qcsd_read_exact_lifecycle_frame")
+        + _launcher_shell_function(launcher, "_qcsd_complete_lifecycle_recovery")
+        + 'exec 8>"$1"\n'
+        + 'exec 9<"$2"\n'
+        + "_QCSD_LIFECYCLE_RECOVERY_READY_FD=8\n"
+        + "_QCSD_LIFECYCLE_FINAL_GO_FD=9\n"
+        + f"_QCSD_LIFECYCLE_RECOVERY_NONCE={recovery_nonce}\n"
+        + f"_QCSD_LIFECYCLE_FINAL_GO_NONCE={final_nonce}\n"
+        + "_QCSD_LIFECYCLE_RECOVERY_STATE=armed\n"
+        + "_qcsd_complete_lifecycle_recovery\n"
+        + 'first_status="$?"\n'
+        + 'first_state="${_QCSD_LIFECYCLE_RECOVERY_STATE}"\n'
+        # Make the recovery channel writable again so the retry assertion is
+        # testing the state latch rather than merely relying on a closed FD.
+        + 'exec 8>>"$1"\n'
+        + "_qcsd_complete_lifecycle_recovery\n"
+        + 'second_status="$?"\n'
+        + "printf '%s %s %s %s\\n' "
+        + '"${first_status}" "${first_state}" "${second_status}" '
+        + '"${_QCSD_LIFECYCLE_RECOVERY_STATE}"\n'
+    )
+    result = subprocess.run(
+        [
+            "/bin/bash",
+            "--noprofile",
+            "--norc",
+            "-c",
+            command,
+            "recovery",
+            str(recovery_path),
+            str(final_path),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    return result, recovery_path.read_bytes()
+
+
+def test_lifecycle_recovery_completion_succeeds_only_once(tmp_path: Path) -> None:
+    result, recovery_frames = _run_lifecycle_recovery_completion(tmp_path, b"b" * 64 + b"\n")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == b"0 complete 1 complete\n"
+    assert result.stderr == b""
+    assert recovery_frames == b"a" * 64 + b"\n"
+
+
+@pytest.mark.parametrize(
+    "final_payload",
+    [
+        b"c" * 64 + b"\n",
+        b"",
+        b"b" * 64 + b"\ntrailing",
+    ],
+    ids=("wrong", "eof", "trailing"),
+)
+def test_lifecycle_recovery_completion_failure_is_terminal(
+    tmp_path: Path, final_payload: bytes
+) -> None:
+    result, recovery_frames = _run_lifecycle_recovery_completion(tmp_path, final_payload)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == b"1 consuming 1 consuming\n"
+    assert result.stderr == b""
+    assert recovery_frames == b"a" * 64 + b"\n"
+
+
+def test_docker_recovery_precedes_reproof_and_final_admission() -> None:
+    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
+    body = launcher.split("require_docker() {", 1)[1].split("\n}", 1)[0]
+    guardian = body.index("_qcsd_require_lifecycle_guardian_entry")
+    recovery = body.index("reconcile_stale_docker_supervisors")
+    daemon_reproof = body.index('observed_server_id="$(_qcsd_docker_api info', recovery)
+    boot_reproof = body.index(
+        "IFS= read -r observed_boot_id </proc/sys/kernel/random/boot_id",
+        daemon_reproof,
+    )
+    final_admission = body.index("_qcsd_complete_lifecycle_recovery")
+
+    assert guardian < recovery < daemon_reproof < boot_reproof < final_admission
 
 
 def test_acquisition_scope_digest_binds_current_argv_before_recovery() -> None:
@@ -2380,10 +5421,8 @@ def test_acquisition_scope_digest_binds_current_argv_before_recovery() -> None:
     )
     recovery = launcher.index("class_watch_scope_recovery=(", comparison)
 
-    assert '["/usr/bin/bash", *sys.argv[1:]]' in launcher[digest:comparison]
-    assert '"${ROOT}/qcsd-lab" "${QCSD_ORIGINAL_ARGV[@]}"' in launcher[
-        digest:comparison
-    ]
+    assert "command = list(sys.argv[1:])" in launcher[digest:comparison]
+    assert '"${ROOT}/qcsd-lab" "${QCSD_ORIGINAL_ARGV[@]}"' in launcher[digest:comparison]
     assert '"${QCSD_CLASS_WATCH_ACTION_SHA256}"' in launcher[digest:comparison]
     assert comparison < recovery
 
@@ -2797,8 +5836,7 @@ def test_collection_image_builds_offline_validator_with_exact_neqo_commit():
     assert "--bin qcsd-validate-parameters" in dockerfile
     assert "target/release/qcsd-validate-parameters /out/bin/" in dockerfile
     assert (
-        "install -m 0755 /opt/qcsd-venv/bin/qcsd-lab-internal "
-        "/usr/local/bin/qcsd-lab-internal"
+        "install -m 0755 /opt/qcsd-venv/bin/qcsd-lab-internal /usr/local/bin/qcsd-lab-internal"
     ) in dockerfile
     assert "ln -s /opt/qcsd-venv/bin/qcsd-lab-internal" not in dockerfile
     # A persistent target cache can reuse a feature-specific dependency artifact

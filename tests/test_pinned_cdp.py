@@ -32,6 +32,7 @@ COLLECTION_IMAGE = "sha256:" + "1" * 64
 PREPARE_IMAGE = "sha256:" + "2" * 64
 BUILD_SHA256 = "3" * 64
 BUILD_PAYLOAD_SHA256 = "4" * 64
+BUILD_COMPLETION_SHA256 = "8" * 64
 LAB_COMMIT = "5" * 40
 NEQO_COMMIT = "6" * 40
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
@@ -208,6 +209,10 @@ def fake_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "path": str(path.resolve()),
         "sha256": BUILD_SHA256,
         "cohort_version": 59,
+        "completion_path": str(
+            (tmp_path / "build-completion-v59.json").resolve()
+        ),
+        "completion_sha256": BUILD_COMPLETION_SHA256,
         "collection_image": COLLECTION_IMAGE,
         "images": {
             "collection": {"id": COLLECTION_IMAGE},
@@ -220,9 +225,12 @@ def fake_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "passed": True,
     }
 
-    def validate(path_arg, *, expected_cohort_version=None, **_kwargs):
+    def validate(
+        path_arg, *, expected_cohort_version=None, allow_historical=None, **_kwargs
+    ):
         assert Path(path_arg).resolve() == path.resolve()
         assert expected_cohort_version in {None, 59}
+        assert allow_historical is False
         return copy.deepcopy(build)
 
     monkeypatch.setattr(pinned_cdp, "validate_build_execution_receipt", validate)
@@ -278,10 +286,68 @@ def test_receipt_is_create_only_and_binds_build_source_prepare_image_and_cohort(
         "sha256": BUILD_SHA256,
         "payload_sha256": BUILD_PAYLOAD_SHA256,
     }
+    assert validated["build_execution_identity"]["completion_path"] == (
+        "/lab/artifacts/buflo-study/build-completion-v59.json"
+    )
+    assert validated["build_execution_identity"]["completion_sha256"] == (
+        BUILD_COMPLETION_SHA256
+    )
     assert output.read_bytes() == canonical_json_bytes(json.loads(output.read_text()))
 
     with pytest.raises(FileExistsError, match="create-only"):
         _create(tmp_path, fake_build)
+
+
+def test_schema8_receipt_is_historical_only_and_round_trips(
+    tmp_path: Path,
+    fake_build: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = _create(tmp_path, fake_build)
+    envelope = json.loads(current.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(envelope["payload"])
+    payload["probe_schema_version"] = pinned_cdp.HISTORICAL_PROBE_SCHEMA_VERSION
+    payload["build_execution_identity"].pop("completion_path")
+    payload["build_execution_identity"].pop("completion_sha256")
+    historical = tmp_path / "pinned-cdp-schema8.json"
+    historical.write_bytes(
+        canonical_json_bytes(bind_receipt(payload, receipt_type=pinned_cdp.RECEIPT_TYPE))
+    )
+
+    with pytest.raises(ValueError, match="identity or result"):
+        pinned_cdp.validate_pinned_cdp_receipt(
+            historical,
+            build_execution_receipt=fake_build,
+            expected_cohort_version=59,
+        )
+
+    build = pinned_cdp.validate_build_execution_receipt(
+        fake_build,
+        expected_cohort_version=59,
+        allow_historical=False,
+    )
+
+    def validate_historical(*_args, **kwargs):
+        assert kwargs["allow_historical"] is True
+        return copy.deepcopy(build)
+
+    monkeypatch.setattr(
+        pinned_cdp, "validate_build_execution_receipt", validate_historical
+    )
+    validated = pinned_cdp.validate_pinned_cdp_receipt(
+        historical,
+        build_execution_receipt=fake_build,
+        expected_cohort_version=59,
+        allow_historical=True,
+    )
+    assert validated["probe_schema_version"] == 8
+    assert set(validated["build_execution_identity"]) == {
+        "cohort_version",
+        "sha256",
+        "collection_image",
+        "started_at",
+        "finished_at",
+    }
 
 
 @pytest.mark.parametrize(
@@ -294,6 +360,22 @@ def test_receipt_is_create_only_and_binds_build_source_prepare_image_and_cohort(
         ),
         (
             lambda payload: payload["build_execution"].update(sha256="a" * 64),
+            "source/build/prepare image",
+        ),
+        (
+            lambda payload: payload["build_execution_identity"].update(
+                completion_sha256="a" * 64
+            ),
+            "source/build/prepare image",
+        ),
+        (
+            lambda payload: payload["build_execution_identity"].pop("completion_path"),
+            "source/build/prepare image",
+        ),
+        (
+            lambda payload: payload["build_execution_identity"].update(
+                completion_path="/other/build-completion-v59.json"
+            ),
             "source/build/prepare image",
         ),
         (
@@ -603,7 +685,7 @@ def test_required_topology_wait_condition_is_event_driven() -> None:
         "dedicated_worker_fetch_paused_on_page": True,
         "shared_worker_fetch_paused_on_shared_worker": True,
     }
-    assert pinned_cdp.PROBE_SCHEMA_VERSION == 8
+    assert pinned_cdp.PROBE_SCHEMA_VERSION == 9
     assert pinned_cdp.PROBE_CONTRACT["schema_version"] == 8
     assert pinned_cdp.PROBE_CONTRACT["policy"] == (
         "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v8"
@@ -793,6 +875,145 @@ def test_probe_delegates_executable_selection_to_pinned_path_helper(
         pinned_cdp.run_pinned_cdp_probe(expected_uid=1000, expected_gid=1000)
 
 
+def test_probe_creates_browser_session_for_shared_worker_guard(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class GuardReached(RuntimeError):
+        pass
+
+    browser_session = object()
+    page_session = object()
+    guard_sessions: list[tuple[object, object]] = []
+    start_order: list[str] = []
+
+    class Page:
+        def set_default_timeout(self, _timeout: int) -> None:
+            return None
+
+        def set_default_navigation_timeout(self, _timeout: int) -> None:
+            return None
+
+    page = Page()
+
+    class Context:
+        service_workers: list[object] = []
+
+        def new_page(self) -> Page:
+            return page
+
+        def new_cdp_session(self, requested_page: Page) -> object:
+            assert requested_page is page
+            return page_session
+
+    class Browser:
+        version = "test-chromium"
+
+        def __init__(self) -> None:
+            self.browser_session_calls = 0
+            self.closed = False
+
+        def new_context(self, **options: object) -> Context:
+            assert options == {"service_workers": "block"}
+            return Context()
+
+        def new_browser_cdp_session(self) -> object:
+            self.browser_session_calls += 1
+            return browser_session
+
+        def close(self) -> None:
+            self.closed = True
+
+    browser = Browser()
+
+    class DriverSession:
+        def __enter__(self) -> object:
+            return object()
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    class EgressGuard:
+        def bind_root_page(self, requested_page: Page) -> None:
+            assert requested_page is page
+
+        def raise_if_failed(self) -> None:
+            return None
+
+        def record(self, **_kwargs: object) -> None:
+            return None
+
+    class Router:
+        def __init__(self, requested_session: object, **_kwargs: object) -> None:
+            assert requested_session is page_session
+
+        def start(self) -> None:
+            start_order.append("router")
+
+        def raise_if_failed(self) -> None:
+            return None
+
+    class BrowserGuard:
+        def __init__(self, requested_session: object, router: object) -> None:
+            guard_sessions.append((requested_session, router))
+
+        def start(self) -> None:
+            start_order.append("browser-guard")
+            raise GuardReached("browser guard received its browser-level session")
+
+    executable = tmp_path / "qcsd-chromium"
+    executable.write_bytes(b"fixture")
+    executable.chmod(0o755)
+    monkeypatch.setattr(pinned_cdp, "_observe_isolation", lambda **_kwargs: {})
+    monkeypatch.setattr(
+        pinned_cdp,
+        "validate_default_playwright_driver_once",
+        lambda: {"validated": True},
+    )
+    monkeypatch.setattr(
+        pinned_cdp.importlib.metadata,
+        "version",
+        lambda _package: pinned_cdp.EXPECTED_PLAYWRIGHT_VERSION,
+    )
+    monkeypatch.setattr(pinned_cdp, "EXPECTED_CHROMIUM_EXECUTABLE", str(executable))
+    monkeypatch.setattr(
+        pinned_cdp,
+        "pinned_chromium_executable_path",
+        lambda: str(executable),
+    )
+    monkeypatch.setattr(
+        pinned_cdp,
+        "playwright_driver_session",
+        lambda _factory, *, exclusive: DriverSession(),
+    )
+    monkeypatch.setattr(
+        pinned_cdp,
+        "launch_pinned_cdp_probe_browser",
+        lambda _playwright, **_kwargs: (browser, {}),
+    )
+    monkeypatch.setattr(pinned_cdp, "NonReplayableEgressGuard", EgressGuard)
+    monkeypatch.setattr(
+        pinned_cdp,
+        "install_context_egress_guards",
+        lambda _context, _guard: None,
+    )
+    monkeypatch.setattr(pinned_cdp, "RecursiveCdpTargetRouter", Router)
+    monkeypatch.setattr(pinned_cdp, "BrowserSharedWorkerGuard", BrowserGuard)
+
+    with pytest.raises(
+        GuardReached,
+        match="browser guard received its browser-level session",
+    ):
+        pinned_cdp.run_pinned_cdp_probe(expected_uid=1000, expected_gid=1000)
+
+    assert browser.browser_session_calls == 1
+    assert len(guard_sessions) == 1
+    assert guard_sessions[0][0] is browser_session
+    assert isinstance(guard_sessions[0][1], Router)
+    assert start_order == ["router", "browser-guard"]
+    assert browser.closed is True
+
+
 def test_main_fails_closed_without_wrapper_identity_environment(
     tmp_path: Path,
     fake_build: Path,
@@ -900,7 +1121,10 @@ def test_launcher_pinned_probe_is_receipt_bound_and_least_privilege() -> None:
     assert "/opt/qcsd-venv/bin/python3 -m qcsd_lab.pinned_cdp" in launcher
     assert 'verify_qualification_checkout "test pinned-cdp"' in launcher
     assert '--expected-cohort "${pinned_cdp_cohort_version}"' in launcher
-    assert "--build-execution-receipt|--pinned-cdp-receipt|--reference-receipt" in launcher
+    assert (
+        "--build-execution-receipt|--pinned-cdp-receipt|"
+        "--browser-egress-qualification-root|--reference-receipt"
+    ) in launcher
     assert (
         '"${pinned_cdp_destination_parent}:${pinned_cdp_destination_parent_container}:rw"'
     ) in launcher

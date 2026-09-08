@@ -528,7 +528,7 @@ def _qualification_authority(
     }
     prepare = "sha256:" + "4" * 64
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "artifact_type": "qcsd-class-study-qualification-authority",
         "foundation_attestation": {
             "path": foundation_path,
@@ -539,6 +539,8 @@ def _qualification_authority(
         "build_execution_identity": {
             "cohort_version": 23,
             "sha256": "7" * 64,
+            "completion_path": "/lab/artifacts/buflo-study/build-completion-v23.json",
+            "completion_sha256": "8" * 64,
             "collection_image": source["image_digest"],
             "started_at": "2026-08-28T00:00:00+00:00",
             "finished_at": "2026-08-28T01:00:00+00:00",
@@ -4555,7 +4557,7 @@ def test_launcher_rewrites_class_paths_and_never_mounts_workspace_rw():
         'study_capture_scheduler_contract="qcsd-client-rr1-cpu10-etf-helper-cpu11-v1"'
         in launcher
     )
-    assert "research capture requires the create-only no-cache build receipt" in launcher
+    assert "research capture requires the completed create-only no-cache build pair" in launcher
     assert '--volume "${ROOT}:/lab:rw"' not in launcher
     assert "rejects a blanket workspace read-write mount" in launcher
     assert ".class-study-acquisition.lock" in launcher
@@ -4563,7 +4565,7 @@ def test_launcher_rewrites_class_paths_and_never_mounts_workspace_rw():
     assert (
         "class-study qualify-prefix requires --foundation-attestation as a regular file" in launcher
     )
-    assert "class-study foundation build receipt digest changed" in launcher
+    assert "class-study foundation build receipt digest or completion changed" in launcher
     assert 'PREPARE_IMAGE="${class_qualification_fields[0]}"' in launcher
     assert (
         "class-study qualify-prefix rejects QCSD_LAB_PREPARE_IMAGE that differs from foundation"

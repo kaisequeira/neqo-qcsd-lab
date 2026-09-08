@@ -11,6 +11,8 @@ and otherwise sleeps only as far as the next five-second heartbeat.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import fcntl
 import hashlib
 import json
@@ -19,6 +21,7 @@ import os
 import posixpath
 import re
 import secrets
+import select
 import signal
 import stat
 import subprocess
@@ -35,10 +38,12 @@ from typing import Any, Protocol
 STUDY_ID = "classifier-multiorigin100-v1"
 CANDIDATE_COUNT = 600
 SCHEMA_VERSION = 1
+SOURCE_BINDING_PREIMAGE_SCHEMA_VERSION = 2
 ACQUISITION_SCHEMA_VERSION = 5
 HISTORICAL_ACQUISITION_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4})
 CHECKPOINT_SCHEMA_VERSION = 2
-FOUNDATION_SCHEMA_VERSION = 3
+FOUNDATION_SCHEMA_VERSION = 4
+HISTORICAL_FOUNDATION_SCHEMA_VERSION = 3
 CATALOGUE_TYPE = "qcsd-class-study-candidate-catalogue"
 PROVENANCE_TYPE = "qcsd-class-study-acquisition-provenance"
 CHECKPOINT_TYPE = "qcsd-class-study-acquisition-checkpoint"
@@ -46,6 +51,8 @@ FOUNDATION_TYPE = "qcsd-class-study-foundation-attestation"
 PINNED_CDP_TYPE = "qcsd-class-study-pinned-cdp-probe"
 BUILD_EXECUTION_TYPE = "qcsd-buflo-study-no-cache-build-execution"
 BUILD_EXECUTION_MAX_BYTES = 16 * 1024 * 1024
+BUILD_COMPLETION_TYPE = "qcsd-buflo-study-build-completion"
+BUILD_COMPLETION_MAX_BYTES = 64 * 1024
 BROWSER_EGRESS_FINAL_TYPE = "qcsd-browser-egress-qualification-final"
 BROWSER_EGRESS_QUALIFICATION_ID = "browser-egress-qualification-v1"
 BROWSER_EGRESS_VECTOR_COUNT = 110
@@ -254,6 +261,7 @@ SCOPE_ACTION_ENV = "QCSD_CLASS_WATCH_ACTION_SHA256"
 SCOPE_SOURCE_ENV = "QCSD_CLASS_WATCH_SOURCE_BINDING_SHA256"
 EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
+_COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
 _IMAGE_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _REPO_DIGEST_RE = re.compile(r"[^\s@]+@sha256:[0-9a-f]{64}\Z")
 _VOLUME_ID_RE = re.compile(
@@ -346,6 +354,253 @@ _BUILD_EXECUTION_KEYS = {
     "role_provenance",
     "buildx",
 }
+_BUILD_EXECUTION_SCHEMA5_KEYS = _BUILD_EXECUTION_KEYS | {
+    "cohort_allocation",
+    "cohort_claim",
+    "cohort_claim_chain",
+    "cohort_authority_reproofs",
+}
+_COHORT_ALLOCATION_KEYS = {
+    "schema_version",
+    "artifact_type",
+    "policy",
+    "ledger_path",
+    "ledger_sha256",
+    "ledger_payload_base64",
+    "git_object_format",
+    "ledger_git_blob_oid",
+    "lab_commit",
+    "neqo_commit",
+    "neqo_gitlink",
+    "lab_commit_ledger_proof",
+    "last_consumed_version",
+    "allocated_version",
+}
+_COHORT_ALLOCATION_TYPE = "qcsd-buflo-study-cohort-allocation"
+_COHORT_ALLOCATION_POLICY = "dense-prefix-durable-publications-consume-v1"
+_COHORT_LEDGER_PATH = "config/buflo-study/v1/consumed-cohorts.json"
+_COHORT_LEDGER_TYPE = "qcsd-buflo-study-consumed-cohorts"
+_COHORT_LEDGER_MAX_BYTES = 16 * 1024
+_COHORT_GIT_PROOF_KEYS = {
+    "schema_version",
+    "artifact_type",
+    "commit_payload_base64",
+    "tree_payloads_base64",
+}
+_COHORT_GIT_PROOF_TYPE = "qcsd-buflo-study-cohort-ledger-git-proof"
+_COHORT_GIT_PROOF_COMMIT_MAX_BYTES = 256 * 1024
+_COHORT_GIT_PROOF_TREE_MAX_BYTES = 1024 * 1024
+_COHORT_GIT_PROOF_TREE_COUNT = 4
+_COHORT_CLAIM_MAX_BYTES = 4 * 1024 * 1024
+_COHORT_CLAIM_REGISTRY_PATH = "artifacts/buflo-study/cohort-claims-v1"
+_COHORT_CLAIM_TYPE = "qcsd-buflo-study-cohort-claim"
+_COHORT_CLAIM_SNAPSHOT_TYPE = "qcsd-buflo-study-cohort-claim-publication"
+_COHORT_AUTHORITY_TYPE = "qcsd-buflo-study-cohort-allocation-authority"
+_COHORT_CLAIM_SNAPSHOT_KEYS = {
+    "schema_version",
+    "artifact_type",
+    "policy",
+    "cohort_version",
+    "registry",
+    "claim",
+    "registry_head_at_publication",
+    "payload_sha256",
+}
+_COHORT_CLAIM_KEYS = {"schema_version", "artifact_type", "payload", "payload_sha256"}
+_COHORT_CLAIM_PAYLOAD_KEYS = {
+    "policy",
+    "registry_path",
+    "cohort_version",
+    "authority",
+    "authority_sha256",
+    "source",
+    "ledger",
+    "predecessor",
+}
+_COHORT_AUTHORITY_KEYS = {"schema_version", "artifact_type", "git", "filesystem", "receipt"}
+_COHORT_AUTHORITY_GIT_KEYS = {
+    "object_format",
+    "lab_head",
+    "head_blob_oid",
+    "index_blob_oid",
+    "worktree_blob_oid",
+    "neqo_head",
+    "head_gitlink",
+    "index_gitlink",
+}
+_COHORT_AUTHORITY_FILESYSTEM_KEYS = {"directories", "ledger", "git_index"}
+_COHORT_AUTHORITY_DIRECTORY_NAMES = {
+    "repository-root",
+    "config",
+    "buflo-study",
+    "v1",
+    "git",
+}
+_COHORT_CLAIM_SOURCE_KEYS = {"lab_commit", "neqo_commit", "neqo_gitlink"}
+_COHORT_CLAIM_LEDGER_KEYS = {
+    "path",
+    "sha256",
+    "git_object_format",
+    "git_blob_oid",
+    "payload_base64",
+    "last_consumed_version",
+}
+_COHORT_CLAIM_PREDECESSOR_KEYS = {"kind", "cohort_version", "sha256"}
+_COHORT_CLAIM_CHAIN_TYPE = "qcsd-buflo-study-cohort-claim-chain"
+_COHORT_CLAIM_CHAIN_KEYS = {
+    "schema_version",
+    "artifact_type",
+    "policy",
+    "genesis",
+    "claims",
+    "head",
+    "payload_sha256",
+}
+_COHORT_CLAIM_CHAIN_GENESIS_KEYS = {
+    "ledger_path",
+    "ledger_sha256",
+    "last_consumed_version",
+}
+_COHORT_CLAIM_CHAIN_ENTRY_KEYS = {"cohort_version", "sha256", "payload_base64"}
+_COHORT_CLAIM_CHAIN_HEAD_KEYS = {"cohort_version", "sha256"}
+_COHORT_CLAIM_CHAIN_MAX_ENTRIES = 4096
+_COHORT_CLAIM_CHAIN_MAX_DECODED_BYTES = 8 * 1024 * 1024
+_COHORT_SNAPSHOT_REGISTRY_KEYS = {"path", "stat"}
+_COHORT_SNAPSHOT_CLAIM_KEYS = {"path", "sha256", "payload_base64", "stat"}
+_COHORT_FILE_STAT_KEYS = {
+    "dev",
+    "inode",
+    "uid",
+    "gid",
+    "mode",
+    "nlink",
+    "size",
+    "mtime_ns",
+    "ctime_ns",
+}
+_COHORT_DIRECTORY_STAT_KEYS = {"dev", "inode", "uid", "gid", "mode", "nlink"}
+_COHORT_REPROOF_KEYS = {
+    "boundary",
+    "observed_at",
+    "authority_sha256",
+    "claim_snapshot_sha256",
+    "claim_file_sha256",
+}
+_COHORT_REPROOF_BOUNDARIES = (
+    "after-cohort-claim-before-docker-recovery",
+    "immediately-before-docker-recovery",
+    "after-evidence-build-lock",
+    "immediately-before-build-transaction",
+    "immediately-after-build-transaction",
+    "immediately-before-collection-build",
+    "immediately-before-prepare-build",
+    "immediately-before-reference-build",
+    "after-reference-build-before-receipt",
+)
+_COHORT_FINAL_REPROOF_MAX_AGE_SECONDS = 2.0
+_BUILD_COMPLETION_KEYS = {
+    "schema_version",
+    "artifact_type",
+    "cohort_version",
+    "completed_at",
+    "receipt",
+    "source",
+    "cohort_authority",
+    "transaction",
+    "final_reproof",
+    "payload_sha256",
+}
+_BUILD_COMPLETION_RECEIPT_KEYS = {
+    "path",
+    "schema_version",
+    "cohort_version",
+    "payload_sha256",
+    "sha256",
+    "stat",
+}
+_BUILD_COMPLETION_SOURCE_KEYS = {"lab_commit", "neqo_commit", "neqo_gitlink"}
+_BUILD_COMPLETION_AUTHORITY_KEYS = {
+    "allocation_sha256",
+    "claim_snapshot_sha256",
+    "claim_file_sha256",
+    "claim_chain_sha256",
+    "claim_chain_payload_sha256",
+}
+_BUILD_COMPLETION_REPROOF_KEYS = {
+    "boundary",
+    "observed_at",
+    "authority_sha256",
+    "claim_snapshot_sha256",
+    "claim_file_sha256",
+    "claim_chain_sha256",
+}
+_BUILD_COMPLETION_REPROOF_BOUNDARY = (
+    "after-build-transaction-completion-before-completion-publication"
+)
+_BUILD_COMPLETION_MAX_DELAY_SECONDS = 2.0
+_BUILD_TRANSACTION_RETIREMENT_TYPE = "qcsd-buflo-study-build-transaction-retirement"
+_BUILD_COMPLETION_TRANSACTION_KEYS = {
+    "schema_version",
+    "artifact_type",
+    "root",
+    "record",
+    "guardian",
+    "lifecycle_lock",
+    "cohort_lock",
+    "operation_lock",
+}
+_BUILD_TRANSACTION_ROOT_KEYS = {"path", "stat"}
+_BUILD_TRANSACTION_RECORD_KEYS = {"path", "sha256", "payload_base64", "stat"}
+_BUILD_COMPLETION_GUARDIAN_KEYS = {
+    "pid",
+    "start_time",
+    "qcsd_pid",
+    "qcsd_start_time",
+}
+_BUILD_COMPLETION_LIFECYCLE_KEYS = {
+    "path",
+    "device",
+    "inode",
+    "parent_device",
+    "parent_inode",
+    "lease_nonce",
+}
+_BUILD_COMPLETION_COHORT_LOCK_KEYS = {
+    "path",
+    "device",
+    "inode",
+    "parent_device",
+    "parent_inode",
+    "guardian_fd",
+}
+_BUILD_COMPLETION_OPERATION_LOCK_KEYS = {
+    "path",
+    "device",
+    "inode",
+    "parent_device",
+    "parent_inode",
+}
+_BUILD_TRANSACTION_RECORD_FIELDS = (
+    "object",
+    "lifecycle_schema",
+    "lifecycle_state",
+    "lifecycle_root",
+    "lifecycle_token",
+    "supervisor_source_path",
+    "supervisor_source_sha256",
+    "supervisor_source_device",
+    "supervisor_source_inode",
+    "docker_context",
+    "docker_host",
+    "docker_server_id",
+    "docker_request_revalidation",
+    "docker_daemon_id",
+    "host_boot_id",
+    "working_directory",
+    "cohort_version",
+    "receipt_path",
+    "transaction_state",
+)
 _BUILDX_KEYS = {"schema_version", "policy", "identity", "observations", "passed"}
 _BUILDX_IDENTITY_KEYS = {
     "selection_source",
@@ -440,7 +695,9 @@ _CDP_TARGET_INSTRUMENTATION_POLICY = (
 _PLAYWRIGHT_VERSION = "1.57.0"
 _CHROMIUM_VERSION = "143.0.7499.4"
 _CHROMIUM_EXECUTABLE = "/usr/local/bin/qcsd-chromium"
-_PINNED_CDP_SCHEMA_VERSION = 8
+_PINNED_CDP_SCHEMA_VERSION = 9
+_HISTORICAL_PINNED_CDP_SCHEMA_VERSION = 8
+_PINNED_CDP_CONTRACT_SCHEMA_VERSION = 8
 _BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION = 1
 _EGRESS_PREARM_SUMMARY_SCHEMA_VERSION = 2
 _PINNED_CDP_TARGET_ACTIVITY_SCHEMA_VERSION = 1
@@ -610,7 +867,9 @@ _EXPECTED_BROWSER_TOOL_IDENTITY = {
     "playwright_driver": _EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
 }
 _PINNED_CDP_CONTRACT = {
-    "schema_version": _PINNED_CDP_SCHEMA_VERSION,
+    # Probe schema 9 adds the build-completion identity.  The independently
+    # versioned browser/probe behaviour contract itself remains v8.
+    "schema_version": _PINNED_CDP_CONTRACT_SCHEMA_VERSION,
     "policy": "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v8",
     "instrumentation_policy": _CDP_TARGET_INSTRUMENTATION_POLICY,
     "playwright_version": _PLAYWRIGHT_VERSION,
@@ -1071,6 +1330,8 @@ class AcquisitionBinding:
     pinned_cdp_payload_sha256: str
     pinned_cdp_contract_sha256: str
     build_execution_sha256: str
+    build_completion_path: str
+    build_completion_sha256: str
     browser_egress_qualification: Mapping[str, Any]
     browser_egress_tree_sha256: str
     candidate_ids: frozenset[str]
@@ -1082,6 +1343,14 @@ class AcquisitionBinding:
 class ReceiptSnapshot:
     value: Mapping[str, Any]
     sha256: str
+
+
+@dataclass(frozen=True)
+class BuildExecutionSnapshot:
+    value: Mapping[str, Any]
+    sha256: str
+    size_bytes: int
+    completion_sha256: str | None
 
 
 @dataclass(frozen=True)
@@ -1151,6 +1420,8 @@ def _source_binding_sha256(binding: AcquisitionBinding) -> str:
                 "browser_egress_qualification": dict(binding.browser_egress_qualification),
                 "browser_egress_tree_sha256": binding.browser_egress_tree_sha256,
                 "candidate_catalogue_sha256": binding.catalogue_sha256,
+                "build_completion_path": binding.build_completion_path,
+                "build_completion_sha256": binding.build_completion_sha256,
                 "build_execution_sha256": binding.build_execution_sha256,
                 "cohort_version": binding.cohort_version,
                 "foundation_sha256": binding.foundation_sha256,
@@ -1160,6 +1431,9 @@ def _source_binding_sha256(binding: AcquisitionBinding) -> str:
                 "prepare_image": binding.prepare_image,
                 "provenance_sha256": binding.provenance_sha256,
                 "source": dict(binding.source),
+                "source_binding_preimage_schema_version": (
+                    SOURCE_BINDING_PREIMAGE_SCHEMA_VERSION
+                ),
             }
         )
     )
@@ -1284,7 +1558,7 @@ def _read_stable_file(
         | getattr(os, "O_DIRECTORY", 0)
     )
 
-    def identity(value: os.stat_result) -> tuple[int, ...]:
+    def file_identity(value: os.stat_result) -> tuple[int, ...]:
         return (
             value.st_dev,
             value.st_ino,
@@ -1295,6 +1569,17 @@ def _read_stable_file(
             value.st_size,
             value.st_mtime_ns,
             value.st_ctime_ns,
+        )
+
+    def same_directory_entry(left: os.stat_result, right: os.stat_result) -> bool:
+        return (
+            stat.S_ISDIR(left.st_mode)
+            and stat.S_ISDIR(right.st_mode)
+            and left.st_dev == right.st_dev
+            and left.st_ino == right.st_ino
+            and left.st_uid == right.st_uid
+            and left.st_gid == right.st_gid
+            and stat.S_IMODE(left.st_mode) == stat.S_IMODE(right.st_mode)
         )
 
     directory_descriptors: list[int] = []
@@ -1345,14 +1630,14 @@ def _read_stable_file(
         )
         root_after = os.fstat(root_descriptor)
         root_path_after = os.stat(root, follow_symlinks=False)
-        directory_path_stable = identity(root_after) == identity(root_path_after) and all(
-            identity(os.fstat(child_descriptor))
-            == identity(
+        directory_path_stable = same_directory_entry(root_after, root_path_after) and all(
+            same_directory_entry(
+                os.fstat(child_descriptor),
                 os.stat(
                     component,
                     dir_fd=parent_descriptor,
                     follow_symlinks=False,
-                )
+                ),
             )
             for parent_descriptor, component, child_descriptor in directory_links
         )
@@ -1366,8 +1651,8 @@ def _read_stable_file(
 
     if (
         not directory_path_stable
-        or identity(before) != identity(after)
-        or identity(after) != identity(current)
+        or file_identity(before) != file_identity(after)
+        or file_identity(after) != file_identity(current)
     ):
         raise WatchError(f"{label} changed while it was read")
     raw = b"".join(chunks)
@@ -1946,12 +2231,710 @@ def _validate_buildx_provenance(
         raise WatchError("foundation no-cache build buildx observations fall outside the build")
 
 
-def _validate_build_execution_schema4(value: Any, *, paths: WatchPaths) -> None:
+def _canonical_compact_json_bytes(value: Any, *, newline: bool = False) -> bytes:
+    try:
+        raw = json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("ascii")
+    except (TypeError, ValueError, UnicodeError) as error:
+        raise WatchError("foundation no-cache build contains non-finite JSON") from error
+    return raw + (b"\n" if newline else b"")
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise WatchError("foundation no-cache build contains a duplicate JSON key")
+        value[key] = item
+    return value
+
+
+def _invalid_json_constant(value: str) -> Any:
+    raise WatchError(f"foundation no-cache build contains invalid JSON constant: {value}")
+
+
+def _decode_canonical_base64(value: Any, *, label: str, maximum_bytes: int) -> bytes:
+    if not isinstance(value, str):
+        raise WatchError(f"{label} encoding is invalid")
+    try:
+        encoded = value.encode("ascii")
+        raw = base64.b64decode(encoded, validate=True)
+    except (UnicodeEncodeError, binascii.Error, ValueError) as error:
+        raise WatchError(f"{label} encoding is invalid") from error
+    if not raw or len(raw) > maximum_bytes or base64.b64encode(raw) != encoded:
+        raise WatchError(f"{label} encoding is invalid")
+    return raw
+
+
+def _git_object_oid(object_type: bytes, payload: bytes) -> str:
+    digest = hashlib.sha1()
+    digest.update(object_type + b" " + str(len(payload)).encode("ascii") + b"\0")
+    digest.update(payload)
+    return digest.hexdigest()
+
+
+def _parse_git_tree(payload: bytes) -> dict[bytes, tuple[bytes, str]]:
+    entries: dict[bytes, tuple[bytes, str]] = {}
+    previous_sort_key: bytes | None = None
+    offset = 0
+    allowed_modes = {b"40000", b"100644", b"100755", b"120000", b"160000"}
+    while offset < len(payload):
+        space = payload.find(b" ", offset)
+        nul = payload.find(b"\0", space + 1) if space >= 0 else -1
+        oid_start = nul + 1
+        oid_end = oid_start + 20
+        if space <= offset or nul <= space + 1 or oid_end > len(payload):
+            raise WatchError("foundation no-cache build cohort Git tree is malformed")
+        mode = payload[offset:space]
+        name = payload[space + 1 : nul]
+        if (
+            mode not in allowed_modes
+            or name in {b"", b".", b".."}
+            or b"/" in name
+            or name in entries
+        ):
+            raise WatchError("foundation no-cache build cohort Git tree is malformed")
+        sort_key = name + (b"/" if mode == b"40000" else b"")
+        if previous_sort_key is not None and sort_key <= previous_sort_key:
+            raise WatchError("foundation no-cache build cohort Git tree is malformed")
+        previous_sort_key = sort_key
+        entries[name] = (mode, payload[oid_start:oid_end].hex())
+        offset = oid_end
+    if not entries:
+        raise WatchError("foundation no-cache build cohort Git tree is malformed")
+    return entries
+
+
+def _validate_cohort_git_proof(
+    value: Any,
+    *,
+    lab_commit: str,
+    ledger_blob_oid: str,
+    neqo_gitlink: str,
+) -> dict[str, Any]:
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != _COHORT_GIT_PROOF_KEYS
+        or type(value.get("schema_version")) is not int
+        or value.get("schema_version") != 1
+        or value.get("artifact_type") != _COHORT_GIT_PROOF_TYPE
+    ):
+        raise WatchError("foundation no-cache build cohort Git proof schema is invalid")
+    commit_payload = _decode_canonical_base64(
+        value["commit_payload_base64"],
+        label="foundation no-cache build cohort Git commit",
+        maximum_bytes=_COHORT_GIT_PROOF_COMMIT_MAX_BYTES,
+    )
+    encoded_trees = value["tree_payloads_base64"]
+    if not isinstance(encoded_trees, list) or len(encoded_trees) != _COHORT_GIT_PROOF_TREE_COUNT:
+        raise WatchError("foundation no-cache build cohort Git tree inventory is invalid")
+    tree_payloads = [
+        _decode_canonical_base64(
+            encoded,
+            label="foundation no-cache build cohort Git tree",
+            maximum_bytes=_COHORT_GIT_PROOF_TREE_MAX_BYTES,
+        )
+        for encoded in encoded_trees
+    ]
+    if _git_object_oid(b"commit", commit_payload) != lab_commit:
+        raise WatchError("foundation no-cache build cohort Git commit binding is invalid")
+    first_line, separator, _ = commit_payload.partition(b"\n")
+    root_match = re.fullmatch(rb"tree ([0-9a-f]{40})", first_line)
+    if not separator or root_match is None:
+        raise WatchError("foundation no-cache build cohort Git commit is malformed")
+    expected_tree_oid = root_match.group(1).decode("ascii")
+    components = tuple(component.encode("ascii") for component in _COHORT_LEDGER_PATH.split("/"))
+    for index, (component, tree_payload) in enumerate(zip(components, tree_payloads, strict=True)):
+        if _git_object_oid(b"tree", tree_payload) != expected_tree_oid:
+            raise WatchError("foundation no-cache build cohort Git tree binding is invalid")
+        entries = _parse_git_tree(tree_payload)
+        if index == 0 and entries.get(b"neqo-qcsd") != (b"160000", neqo_gitlink):
+            raise WatchError("foundation no-cache build cohort Git gitlink binding is invalid")
+        entry = entries.get(component)
+        expected_mode = b"100644" if index == len(components) - 1 else b"40000"
+        if entry is None or entry[0] != expected_mode:
+            raise WatchError("foundation no-cache build cohort Git path binding is invalid")
+        expected_tree_oid = entry[1]
+    if expected_tree_oid != ledger_blob_oid:
+        raise WatchError("foundation no-cache build cohort Git ledger binding is invalid")
+    return {
+        "schema_version": 1,
+        "artifact_type": _COHORT_GIT_PROOF_TYPE,
+        "commit_payload_base64": value["commit_payload_base64"],
+        "tree_payloads_base64": list(encoded_trees),
+    }
+
+
+def _validate_cohort_stat(
+    value: Any,
+    *,
+    keys: set[str],
+    label: str,
+    required_mode: int | None = None,
+    required_nlink: int | None = None,
+    required_size: int | None = None,
+) -> dict[str, int]:
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != keys
+        or any(type(value[key]) is not int for key in keys)
+        or value["dev"] <= 0
+        or value["inode"] <= 0
+        or value["uid"] < 0
+        or value["gid"] < 0
+        or not 0 <= value["mode"] <= 0o7777
+        or value["nlink"] < 1
+        or ("size" in keys and value["size"] < 0)
+        or ("mtime_ns" in keys and value["mtime_ns"] < 0)
+        or ("ctime_ns" in keys and value["ctime_ns"] < 0)
+        or (required_mode is not None and value["mode"] != required_mode)
+        or (required_nlink is not None and value["nlink"] != required_nlink)
+        or (required_size is not None and value.get("size") != required_size)
+    ):
+        raise WatchError(f"{label} stat binding is invalid")
+    return {key: value[key] for key in keys}
+
+
+def _validate_cohort_allocation(
+    value: Any,
+    *,
+    cohort_version: int,
+    source: Mapping[str, Any],
+) -> dict[str, Any]:
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != _COHORT_ALLOCATION_KEYS
+        or type(value.get("schema_version")) is not int
+        or value.get("schema_version") != 1
+        or value.get("artifact_type") != _COHORT_ALLOCATION_TYPE
+        or value.get("policy") != _COHORT_ALLOCATION_POLICY
+        or value.get("ledger_path") != _COHORT_LEDGER_PATH
+    ):
+        raise WatchError("foundation no-cache build cohort allocation schema is invalid")
+    ledger_raw = _decode_canonical_base64(
+        value["ledger_payload_base64"],
+        label="foundation no-cache build cohort ledger",
+        maximum_bytes=_COHORT_LEDGER_MAX_BYTES,
+    )
+    if (
+        not isinstance(value.get("ledger_sha256"), str)
+        or _SHA256_RE.fullmatch(value["ledger_sha256"]) is None
+        or _sha256_bytes(ledger_raw) != value["ledger_sha256"]
+    ):
+        raise WatchError("foundation no-cache build cohort ledger SHA-256 is invalid")
+    if value.get("git_object_format") != "sha1":
+        raise WatchError("foundation no-cache build cohort Git object format is invalid")
+    if (
+        not isinstance(value.get("ledger_git_blob_oid"), str)
+        or _COMMIT_RE.fullmatch(value["ledger_git_blob_oid"]) is None
+        or _git_object_oid(b"blob", ledger_raw) != value["ledger_git_blob_oid"]
+    ):
+        raise WatchError("foundation no-cache build cohort Git blob binding is invalid")
+    try:
+        ledger = json.loads(
+            ledger_raw.decode("utf-8"),
+            object_pairs_hook=_unique_json_object,
+            parse_constant=_invalid_json_constant,
+        )
+    except (UnicodeError, ValueError) as error:
+        raise WatchError("foundation no-cache build cohort ledger is invalid JSON") from error
+    if (
+        not isinstance(ledger, Mapping)
+        or set(ledger) != {"schema_version", "artifact_type", "policy", "consumed_versions"}
+        or type(ledger.get("schema_version")) is not int
+        or ledger.get("schema_version") != 1
+        or ledger.get("artifact_type") != _COHORT_LEDGER_TYPE
+        or ledger.get("policy") != _COHORT_ALLOCATION_POLICY
+    ):
+        raise WatchError("foundation no-cache build cohort ledger schema is invalid")
+    versions = ledger["consumed_versions"]
+    if (
+        not isinstance(versions, list)
+        or not versions
+        or any(type(version) is not int for version in versions)
+        or versions != list(range(1, len(versions) + 1))
+    ):
+        raise WatchError("foundation no-cache build cohort ledger is not a dense prefix")
+    if (
+        type(value.get("last_consumed_version")) is not int
+        or value["last_consumed_version"] != versions[-1]
+        or type(value.get("allocated_version")) is not int
+        or value["allocated_version"] <= value["last_consumed_version"]
+        or value["allocated_version"] != cohort_version
+    ):
+        raise WatchError("foundation no-cache build cohort allocation version binding is invalid")
+    commits = (value.get("lab_commit"), value.get("neqo_commit"), value.get("neqo_gitlink"))
+    if (
+        any(
+            not isinstance(commit, str) or _COMMIT_RE.fullmatch(commit) is None
+            for commit in commits
+        )
+        or value["lab_commit"] != source.get("lab_commit")
+        or value["neqo_commit"] != source.get("neqo_commit")
+        or value["neqo_gitlink"] != source.get("neqo_commit")
+    ):
+        raise WatchError("foundation no-cache build cohort allocation source binding is invalid")
+    proof = _validate_cohort_git_proof(
+        value["lab_commit_ledger_proof"],
+        lab_commit=value["lab_commit"],
+        ledger_blob_oid=value["ledger_git_blob_oid"],
+        neqo_gitlink=value["neqo_gitlink"],
+    )
+    projected = dict(value)
+    projected["lab_commit_ledger_proof"] = proof
+    return projected
+
+
+def _validate_embedded_cohort_authority(
+    value: Any,
+    *,
+    allocation: Mapping[str, Any],
+    ledger_size: int,
+) -> dict[str, Any]:
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != _COHORT_AUTHORITY_KEYS
+        or type(value.get("schema_version")) is not int
+        or value.get("schema_version") != 1
+        or value.get("artifact_type") != _COHORT_AUTHORITY_TYPE
+        or not isinstance(value.get("receipt"), Mapping)
+        or dict(value["receipt"]) != dict(allocation)
+    ):
+        raise WatchError("foundation no-cache build cohort claim authority is invalid")
+    expected_git = {
+        "object_format": allocation["git_object_format"],
+        "lab_head": allocation["lab_commit"],
+        "head_blob_oid": allocation["ledger_git_blob_oid"],
+        "index_blob_oid": allocation["ledger_git_blob_oid"],
+        "worktree_blob_oid": allocation["ledger_git_blob_oid"],
+        "neqo_head": allocation["neqo_commit"],
+        "head_gitlink": allocation["neqo_gitlink"],
+        "index_gitlink": allocation["neqo_gitlink"],
+    }
+    git = value.get("git")
+    if (
+        not isinstance(git, Mapping)
+        or set(git) != _COHORT_AUTHORITY_GIT_KEYS
+        or dict(git) != expected_git
+    ):
+        raise WatchError("foundation no-cache build cohort claim Git authority is invalid")
+    filesystem = value.get("filesystem")
+    if (
+        not isinstance(filesystem, Mapping)
+        or set(filesystem) != _COHORT_AUTHORITY_FILESYSTEM_KEYS
+        or not isinstance(filesystem.get("directories"), Mapping)
+        or set(filesystem["directories"]) != _COHORT_AUTHORITY_DIRECTORY_NAMES
+    ):
+        raise WatchError("foundation no-cache build cohort filesystem authority is invalid")
+    for identity in filesystem["directories"].values():
+        validated = _validate_cohort_stat(
+            identity,
+            keys=_COHORT_FILE_STAT_KEYS,
+            label="foundation no-cache build cohort authority directory",
+        )
+        if validated["mode"] & 0o022:
+            raise WatchError("foundation no-cache build cohort filesystem authority is invalid")
+    ledger_stat = _validate_cohort_stat(
+        filesystem.get("ledger"),
+        keys=_COHORT_FILE_STAT_KEYS,
+        label="foundation no-cache build cohort authority ledger",
+        required_nlink=1,
+        required_size=ledger_size,
+    )
+    index_stat = _validate_cohort_stat(
+        filesystem.get("git_index"),
+        keys=_COHORT_FILE_STAT_KEYS,
+        label="foundation no-cache build cohort authority Git index",
+        required_nlink=1,
+    )
+    if ledger_stat["mode"] & 0o133 or index_stat["mode"] & 0o022 or index_stat["size"] < 1:
+        raise WatchError("foundation no-cache build cohort filesystem authority is invalid")
+    return json.loads(_canonical_compact_json_bytes(value))
+
+
+def _validate_embedded_cohort_claim(
+    raw: bytes,
+    *,
+    expected_version: int,
+    genesis_allocation: Mapping[str, Any],
+    expected_predecessor: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any], str]:
+    try:
+        claim = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_unique_json_object,
+            parse_constant=_invalid_json_constant,
+        )
+    except (UnicodeError, ValueError) as error:
+        raise WatchError("foundation no-cache build cohort claim is invalid JSON") from error
+    if raw != _canonical_compact_json_bytes(claim, newline=True):
+        raise WatchError("foundation no-cache build cohort claim bytes are not canonical")
+    if (
+        not isinstance(claim, Mapping)
+        or set(claim) != _COHORT_CLAIM_KEYS
+        or type(claim.get("schema_version")) is not int
+        or claim.get("schema_version") != 1
+        or claim.get("artifact_type") != _COHORT_CLAIM_TYPE
+        or not isinstance(claim.get("payload"), Mapping)
+    ):
+        raise WatchError("foundation no-cache build cohort claim schema is invalid")
+    payload = claim["payload"]
+    if (
+        set(payload) != _COHORT_CLAIM_PAYLOAD_KEYS
+        or not isinstance(claim.get("payload_sha256"), str)
+        or _SHA256_RE.fullmatch(claim["payload_sha256"]) is None
+        or claim["payload_sha256"] != _sha256_bytes(_canonical_compact_json_bytes(payload))
+        or payload.get("policy") != _COHORT_ALLOCATION_POLICY
+        or payload.get("registry_path") != _COHORT_CLAIM_REGISTRY_PATH
+        or type(payload.get("cohort_version")) is not int
+        or payload.get("cohort_version") != expected_version
+    ):
+        raise WatchError("foundation no-cache build cohort claim payload is invalid")
+    source = payload.get("source")
+    authority = payload.get("authority")
+    allocation_value = authority.get("receipt") if isinstance(authority, Mapping) else None
+    if not isinstance(source, Mapping) or set(source) != _COHORT_CLAIM_SOURCE_KEYS:
+        raise WatchError("foundation no-cache build cohort claim source binding is invalid")
+    allocation = _validate_cohort_allocation(
+        allocation_value,
+        cohort_version=expected_version,
+        source=source,
+    )
+    genesis_fields = (
+        "policy",
+        "ledger_path",
+        "ledger_sha256",
+        "ledger_payload_base64",
+        "git_object_format",
+        "ledger_git_blob_oid",
+        "last_consumed_version",
+    )
+    if any(allocation[field] != genesis_allocation[field] for field in genesis_fields):
+        raise WatchError("foundation no-cache build cohort claim genesis binding is invalid")
+    ledger_raw = base64.b64decode(allocation["ledger_payload_base64"], validate=True)
+    validated_authority = _validate_embedded_cohort_authority(
+        authority,
+        allocation=allocation,
+        ledger_size=len(ledger_raw),
+    )
+    authority_sha256 = _sha256_bytes(_canonical_compact_json_bytes(validated_authority))
+    if payload.get("authority_sha256") != authority_sha256:
+        raise WatchError("foundation no-cache build cohort claim authority digest is invalid")
+    if dict(source) != {
+        "lab_commit": allocation["lab_commit"],
+        "neqo_commit": allocation["neqo_commit"],
+        "neqo_gitlink": allocation["neqo_gitlink"],
+    }:
+        raise WatchError("foundation no-cache build cohort claim source binding is invalid")
+    expected_ledger = {
+        "path": allocation["ledger_path"],
+        "sha256": allocation["ledger_sha256"],
+        "git_object_format": allocation["git_object_format"],
+        "git_blob_oid": allocation["ledger_git_blob_oid"],
+        "payload_base64": allocation["ledger_payload_base64"],
+        "last_consumed_version": allocation["last_consumed_version"],
+    }
+    if (
+        not isinstance(payload.get("ledger"), Mapping)
+        or set(payload["ledger"]) != _COHORT_CLAIM_LEDGER_KEYS
+        or dict(payload["ledger"]) != expected_ledger
+    ):
+        raise WatchError("foundation no-cache build cohort claim ledger binding is invalid")
+    predecessor = payload.get("predecessor")
+    if not isinstance(predecessor, Mapping) or set(predecessor) != _COHORT_CLAIM_PREDECESSOR_KEYS:
+        raise WatchError("foundation no-cache build cohort claim predecessor is invalid")
+    if expected_predecessor is not None:
+        if dict(predecessor) != dict(expected_predecessor):
+            raise WatchError("foundation no-cache build cohort claim predecessor is invalid")
+    else:
+        last_consumed = allocation["last_consumed_version"]
+        if expected_version == last_consumed + 1:
+            expected = {
+                "kind": "genesis-ledger",
+                "cohort_version": last_consumed,
+                "sha256": allocation["ledger_sha256"],
+            }
+            if dict(predecessor) != expected:
+                raise WatchError("foundation no-cache build cohort claim predecessor is invalid")
+        elif (
+            predecessor.get("kind") != "cohort-claim"
+            or type(predecessor.get("cohort_version")) is not int
+            or predecessor.get("cohort_version") != expected_version - 1
+            or not isinstance(predecessor.get("sha256"), str)
+            or _SHA256_RE.fullmatch(predecessor["sha256"]) is None
+        ):
+            raise WatchError("foundation no-cache build cohort claim predecessor is invalid")
+    return json.loads(_canonical_compact_json_bytes(claim)), allocation, authority_sha256
+
+
+def _validate_cohort_claim_snapshot(
+    value: Any,
+    *,
+    allocation: Mapping[str, Any],
+    cohort_version: int,
+) -> tuple[dict[str, Any], str, str, str]:
+    if not isinstance(value, Mapping) or set(value) != _COHORT_CLAIM_SNAPSHOT_KEYS:
+        raise WatchError("foundation no-cache build cohort claim snapshot schema is invalid")
+    digest_payload = dict(value)
+    claimed_digest = digest_payload.pop("payload_sha256")
+    if (
+        type(value.get("schema_version")) is not int
+        or value.get("schema_version") != 1
+        or value.get("artifact_type") != _COHORT_CLAIM_SNAPSHOT_TYPE
+        or value.get("policy") != _COHORT_ALLOCATION_POLICY
+        or type(value.get("cohort_version")) is not int
+        or value.get("cohort_version") != cohort_version
+        or not isinstance(claimed_digest, str)
+        or _SHA256_RE.fullmatch(claimed_digest) is None
+        or claimed_digest != _sha256_bytes(_canonical_compact_json_bytes(digest_payload))
+    ):
+        raise WatchError("foundation no-cache build cohort claim snapshot digest is invalid")
+    registry = value["registry"]
+    claim_binding = value["claim"]
+    head = value["registry_head_at_publication"]
+    expected_path = f"{_COHORT_CLAIM_REGISTRY_PATH}/claim-v{cohort_version}.json"
+    if (
+        not isinstance(registry, Mapping)
+        or set(registry) != _COHORT_SNAPSHOT_REGISTRY_KEYS
+        or registry.get("path") != _COHORT_CLAIM_REGISTRY_PATH
+        or not isinstance(claim_binding, Mapping)
+        or set(claim_binding) != _COHORT_SNAPSHOT_CLAIM_KEYS
+        or claim_binding.get("path") != expected_path
+        or not isinstance(head, Mapping)
+        or set(head) != _COHORT_CLAIM_CHAIN_HEAD_KEYS
+        or type(head.get("cohort_version")) is not int
+        or head.get("cohort_version") != cohort_version
+        or head.get("sha256") != claim_binding.get("sha256")
+    ):
+        raise WatchError("foundation no-cache build cohort claim snapshot binding is invalid")
+    _validate_cohort_stat(
+        registry.get("stat"),
+        keys=_COHORT_DIRECTORY_STAT_KEYS,
+        label="foundation no-cache build cohort claim registry",
+        required_mode=0o700,
+    )
+    claim_raw = _decode_canonical_base64(
+        claim_binding["payload_base64"],
+        label="foundation no-cache build cohort snapshot claim",
+        maximum_bytes=_COHORT_CLAIM_MAX_BYTES,
+    )
+    claim_file_sha256 = claim_binding["sha256"]
+    if (
+        not isinstance(claim_file_sha256, str)
+        or _SHA256_RE.fullmatch(claim_file_sha256) is None
+        or _sha256_bytes(claim_raw) != claim_file_sha256
+    ):
+        raise WatchError("foundation no-cache build cohort claim file SHA-256 is invalid")
+    _validate_cohort_stat(
+        claim_binding.get("stat"),
+        keys=_COHORT_FILE_STAT_KEYS,
+        label="foundation no-cache build cohort claim file",
+        required_mode=0o600,
+        required_nlink=1,
+        required_size=len(claim_raw),
+    )
+    _claim, embedded_allocation, authority_sha256 = _validate_embedded_cohort_claim(
+        claim_raw,
+        expected_version=cohort_version,
+        genesis_allocation=allocation,
+        expected_predecessor=None,
+    )
+    if dict(embedded_allocation) != dict(allocation):
+        raise WatchError("foundation no-cache build cohort snapshot allocation is invalid")
+    projected = json.loads(_canonical_compact_json_bytes(value))
+    snapshot_sha256 = _sha256_bytes(_canonical_compact_json_bytes(projected))
+    return projected, authority_sha256, snapshot_sha256, claim_file_sha256
+
+
+def _validate_cohort_claim_chain(
+    value: Any,
+    *,
+    allocation: Mapping[str, Any],
+    cohort_version: int,
+    current_snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or set(value) != _COHORT_CLAIM_CHAIN_KEYS:
+        raise WatchError("foundation no-cache build cohort claim-chain schema is invalid")
+    digest_payload = dict(value)
+    claimed_digest = digest_payload.pop("payload_sha256")
+    if (
+        type(value.get("schema_version")) is not int
+        or value.get("schema_version") != 1
+        or value.get("artifact_type") != _COHORT_CLAIM_CHAIN_TYPE
+        or value.get("policy") != _COHORT_ALLOCATION_POLICY
+        or not isinstance(claimed_digest, str)
+        or _SHA256_RE.fullmatch(claimed_digest) is None
+        or claimed_digest != _sha256_bytes(_canonical_compact_json_bytes(digest_payload))
+    ):
+        raise WatchError("foundation no-cache build cohort claim-chain digest is invalid")
+    expected_genesis = {
+        "ledger_path": allocation["ledger_path"],
+        "ledger_sha256": allocation["ledger_sha256"],
+        "last_consumed_version": allocation["last_consumed_version"],
+    }
+    genesis = value.get("genesis")
+    if (
+        not isinstance(genesis, Mapping)
+        or set(genesis) != _COHORT_CLAIM_CHAIN_GENESIS_KEYS
+        or dict(genesis) != expected_genesis
+    ):
+        raise WatchError("foundation no-cache build cohort claim-chain genesis is invalid")
+    claims = value.get("claims")
+    expected_count = cohort_version - allocation["last_consumed_version"]
+    if (
+        not isinstance(claims, list)
+        or not claims
+        or expected_count > _COHORT_CLAIM_CHAIN_MAX_ENTRIES
+        or len(claims) != expected_count
+    ):
+        raise WatchError("foundation no-cache build cohort claim-chain inventory is invalid")
+    predecessor = {
+        "kind": "genesis-ledger",
+        "cohort_version": allocation["last_consumed_version"],
+        "sha256": allocation["ledger_sha256"],
+    }
+    total_decoded = 0
+    projected_claims: list[dict[str, Any]] = []
+    versions = range(allocation["last_consumed_version"] + 1, cohort_version + 1)
+    for entry, expected_version in zip(claims, versions, strict=True):
+        if (
+            not isinstance(entry, Mapping)
+            or set(entry) != _COHORT_CLAIM_CHAIN_ENTRY_KEYS
+            or type(entry.get("cohort_version")) is not int
+            or entry.get("cohort_version") != expected_version
+            or not isinstance(entry.get("sha256"), str)
+            or _SHA256_RE.fullmatch(entry["sha256"]) is None
+        ):
+            raise WatchError("foundation no-cache build cohort claim-chain entry is invalid")
+        raw = _decode_canonical_base64(
+            entry["payload_base64"],
+            label="foundation no-cache build cohort claim-chain entry",
+            maximum_bytes=_COHORT_CLAIM_MAX_BYTES,
+        )
+        total_decoded += len(raw)
+        if (
+            total_decoded > _COHORT_CLAIM_CHAIN_MAX_DECODED_BYTES
+            or _sha256_bytes(raw) != entry["sha256"]
+        ):
+            raise WatchError("foundation no-cache build cohort claim-chain entry digest is invalid")
+        _claim, embedded_allocation, _authority = _validate_embedded_cohort_claim(
+            raw,
+            expected_version=expected_version,
+            genesis_allocation=allocation,
+            expected_predecessor=predecessor,
+        )
+        if expected_version == cohort_version and dict(embedded_allocation) != dict(allocation):
+            raise WatchError(
+                "foundation no-cache build cohort claim-chain tail allocation is invalid"
+            )
+        projected_claims.append(dict(entry))
+        predecessor = {
+            "kind": "cohort-claim",
+            "cohort_version": expected_version,
+            "sha256": entry["sha256"],
+        }
+    expected_head = {"cohort_version": cohort_version, "sha256": projected_claims[-1]["sha256"]}
+    head = value.get("head")
+    snapshot_claim = current_snapshot.get("claim")
+    if (
+        not isinstance(head, Mapping)
+        or set(head) != _COHORT_CLAIM_CHAIN_HEAD_KEYS
+        or dict(head) != expected_head
+        or not isinstance(snapshot_claim, Mapping)
+        or snapshot_claim.get("sha256") != expected_head["sha256"]
+        or snapshot_claim.get("payload_base64") != projected_claims[-1]["payload_base64"]
+    ):
+        raise WatchError("foundation no-cache build cohort claim-chain head binding is invalid")
+    return {
+        "schema_version": 1,
+        "artifact_type": _COHORT_CLAIM_CHAIN_TYPE,
+        "policy": _COHORT_ALLOCATION_POLICY,
+        "genesis": dict(genesis),
+        "claims": projected_claims,
+        "head": dict(head),
+        "payload_sha256": claimed_digest,
+    }
+
+
+def _validate_cohort_reproofs(
+    value: Any,
+    *,
+    started: datetime,
+    finished: datetime,
+    authority_sha256: str,
+    claim_snapshot_sha256: str,
+    claim_file_sha256: str,
+    buildx: Mapping[str, Any],
+    host_storage_preflight: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or len(value) != len(_COHORT_REPROOF_BOUNDARIES):
+        raise WatchError("foundation no-cache build cohort reproof inventory is invalid")
+    projected: list[dict[str, Any]] = []
+    times: list[datetime] = []
+    for row, boundary in zip(value, _COHORT_REPROOF_BOUNDARIES, strict=True):
+        if (
+            not isinstance(row, Mapping)
+            or set(row) != _COHORT_REPROOF_KEYS
+            or row.get("boundary") != boundary
+            or not isinstance(row.get("observed_at"), str)
+            or row.get("authority_sha256") != authority_sha256
+            or row.get("claim_snapshot_sha256") != claim_snapshot_sha256
+            or row.get("claim_file_sha256") != claim_file_sha256
+        ):
+            raise WatchError("foundation no-cache build cohort reproof is invalid")
+        observed = _evidence_timestamp(row["observed_at"], label="cohort-authority reproof")
+        if not started <= observed <= finished:
+            raise WatchError("foundation no-cache build cohort reproof timing is invalid")
+        times.append(observed)
+        projected.append(dict(row))
+    if any(left >= right for left, right in zip(times, times[1:])):
+        raise WatchError("foundation no-cache build cohort reproof timing is invalid")
+    buildx_times = [
+        _evidence_timestamp(row["observed_at"], label="buildx observation")
+        for row in buildx["observations"]
+    ]
+    if not (
+        times[4]
+        < buildx_times[0]
+        < times[5]
+        < buildx_times[1]
+        < times[6]
+        < buildx_times[2]
+        < times[7]
+        < buildx_times[3]
+        < times[8]
+    ):
+        raise WatchError("foundation no-cache build cohort stage timeline is invalid")
+    if host_storage_preflight["applicable"]:
+        storage_times = [
+            _evidence_timestamp(row["observed_at"], label="host-storage observation")
+            for row in host_storage_preflight["observations"]
+        ]
+        if not (
+            times[1] < storage_times[0] < times[2]
+            and buildx_times[1] < storage_times[1] < times[6]
+            and buildx_times[2] < storage_times[2] < times[7]
+            and buildx_times[3] < storage_times[3] < times[8]
+        ):
+            raise WatchError("foundation no-cache build cohort storage timeline is invalid")
+    if (finished - times[-1]).total_seconds() > _COHORT_FINAL_REPROOF_MAX_AGE_SECONDS:
+        raise WatchError("foundation no-cache build final cohort reproof is not immediate")
+    return projected
+
+
+def _validate_build_execution_schema4_or_5(value: Any, *, paths: WatchPaths) -> dict[str, Any]:
+    schema_version = value.get("schema_version") if isinstance(value, Mapping) else None
+    expected_keys = _BUILD_EXECUTION_SCHEMA5_KEYS if schema_version == 5 else _BUILD_EXECUTION_KEYS
     if (
         not isinstance(value, dict)
-        or set(value) != _BUILD_EXECUTION_KEYS
+        or set(value) != expected_keys
         or type(value.get("schema_version")) is not int
-        or value["schema_version"] != 4
+        or value["schema_version"] not in {4, 5}
         or value.get("artifact_type") != BUILD_EXECUTION_TYPE
         or type(value.get("cohort_version")) is not int
         or value["cohort_version"] <= 0
@@ -2172,34 +3155,549 @@ def _validate_build_execution_schema4(value: Any, *, paths: WatchPaths) -> None:
             )
             for observation in preflight["observations"]
         ]
-        if not (
-            observation_times[0]
-            <= started
-            < observation_times[1]
-            < observation_times[2]
-            < observation_times[3]
-            <= finished
-        ):
+        if schema_version == 5:
+            timing_is_valid = (
+                started
+                <= observation_times[0]
+                < observation_times[1]
+                < observation_times[2]
+                < observation_times[3]
+                <= finished
+            )
+        else:
+            timing_is_valid = (
+                observation_times[0]
+                <= started
+                < observation_times[1]
+                < observation_times[2]
+                < observation_times[3]
+                <= finished
+            )
+        if not timing_is_valid:
             raise WatchError("foundation no-cache build storage timing is invalid")
         if "docker desktop" not in docker["server_operating_system"].lower():
             raise WatchError("foundation no-cache WSL build did not use Docker Desktop")
 
+    validated: dict[str, Any] = {
+        "schema_version": schema_version,
+        "started_at": started,
+        "finished_at": finished,
+    }
+    if schema_version == 5:
+        allocation = _validate_cohort_allocation(
+            value["cohort_allocation"],
+            cohort_version=value["cohort_version"],
+            source=source,
+        )
+        claim, authority_sha256, claim_snapshot_sha256, claim_file_sha256 = (
+            _validate_cohort_claim_snapshot(
+                value["cohort_claim"],
+                allocation=allocation,
+                cohort_version=value["cohort_version"],
+            )
+        )
+        chain = _validate_cohort_claim_chain(
+            value["cohort_claim_chain"],
+            allocation=allocation,
+            cohort_version=value["cohort_version"],
+            current_snapshot=claim,
+        )
+        _validate_cohort_reproofs(
+            value["cohort_authority_reproofs"],
+            started=started,
+            finished=finished,
+            authority_sha256=authority_sha256,
+            claim_snapshot_sha256=claim_snapshot_sha256,
+            claim_file_sha256=claim_file_sha256,
+            buildx=value["buildx"],
+            host_storage_preflight=preflight,
+        )
+        validated.update(
+            {
+                "allocation_sha256": _sha256_bytes(_canonical_compact_json_bytes(allocation)),
+                "authority_sha256": authority_sha256,
+                "claim_snapshot_sha256": claim_snapshot_sha256,
+                "claim_file_sha256": claim_file_sha256,
+                "claim_chain_sha256": _sha256_bytes(_canonical_compact_json_bytes(chain)),
+                "claim_chain_payload_sha256": chain["payload_sha256"],
+            }
+        )
+    return validated
 
-def _load_build_execution(path: Path, *, paths: WatchPaths) -> ReceiptSnapshot:
+
+def _filesystem_stat_record(value: os.stat_result) -> dict[str, int]:
+    return {
+        "dev": value.st_dev,
+        "inode": value.st_ino,
+        "uid": value.st_uid,
+        "gid": value.st_gid,
+        "mode": stat.S_IMODE(value.st_mode),
+        "nlink": value.st_nlink,
+        "size": value.st_size,
+        "mtime_ns": value.st_mtime_ns,
+        "ctime_ns": value.st_ctime_ns,
+    }
+
+
+def _filesystem_stat_identity(value: os.stat_result) -> tuple[int, ...]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_uid,
+        value.st_gid,
+        value.st_mode,
+        value.st_nlink,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+
+
+def _load_build_completion(
+    path: Path,
+    *,
+    paths: WatchPaths,
+) -> tuple[Mapping[str, Any], bytes, str, tuple[int, ...]]:
     try:
+        before = os.stat(path, follow_symlinks=False)
+        raw, sha256 = _read_stable_file(
+            path,
+            root=paths.lab_root,
+            label="foundation no-cache build completion",
+            maximum_bytes=BUILD_COMPLETION_MAX_BYTES,
+        )
+        after = os.stat(path, follow_symlinks=False)
+        value = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_unique_json_object,
+            parse_constant=_invalid_json_constant,
+        )
+    except (UnicodeError, json.JSONDecodeError, OSError) as error:
+        raise WatchError("foundation no-cache build completion is not valid JSON") from error
+    if (
+        _filesystem_stat_identity(before) != _filesystem_stat_identity(after)
+        or not stat.S_ISREG(before.st_mode)
+        or before.st_nlink != 1
+        or stat.S_IMODE(before.st_mode) != 0o600
+    ):
+        raise WatchError("foundation no-cache build completion identity is invalid")
+    if not isinstance(value, Mapping) or raw != _canonical_compact_json_bytes(value, newline=True):
+        raise WatchError("foundation no-cache build completion is not canonical")
+    return value, raw, sha256, _filesystem_stat_identity(before)
+
+
+def _parse_build_transaction_record(raw: bytes) -> dict[str, str]:
+    try:
+        text = raw.decode("ascii")
+    except UnicodeError as error:
+        raise WatchError(
+            "foundation no-cache build completion transaction record is not ASCII"
+        ) from error
+    if not text.endswith("\n") or "\r" in text or "\0" in text:
+        raise WatchError(
+            "foundation no-cache build completion transaction record framing is invalid"
+        )
+    fields: dict[str, str] = {}
+    order: list[str] = []
+    for line in text[:-1].split("\n"):
+        if not line or "=" not in line:
+            raise WatchError(
+                "foundation no-cache build completion transaction record framing is invalid"
+            )
+        key, item = line.split("=", 1)
+        if key in fields:
+            raise WatchError(
+                "foundation no-cache build completion transaction record has duplicate fields"
+            )
+        fields[key] = item
+        order.append(key)
+    if tuple(order) != _BUILD_TRANSACTION_RECORD_FIELDS:
+        raise WatchError(
+            "foundation no-cache build completion transaction record inventory is invalid"
+        )
+    return fields
+
+
+def _validate_build_completion_transaction(
+    value: Any,
+    *,
+    receipt: Mapping[str, Any],
+    cohort_version: int,
+) -> None:
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != _BUILD_COMPLETION_TRANSACTION_KEYS
+        or type(value.get("schema_version")) is not int
+        or value.get("schema_version") != 1
+        or value.get("artifact_type") != _BUILD_TRANSACTION_RETIREMENT_TYPE
+    ):
+        raise WatchError("foundation no-cache build completion transaction is invalid")
+    root = value.get("root")
+    record = value.get("record")
+    guardian = value.get("guardian")
+    lifecycle = value.get("lifecycle_lock")
+    cohort_lock = value.get("cohort_lock")
+    operation_lock = value.get("operation_lock")
+    if (
+        not isinstance(root, Mapping)
+        or set(root) != _BUILD_TRANSACTION_ROOT_KEYS
+        or not isinstance(record, Mapping)
+        or set(record) != _BUILD_TRANSACTION_RECORD_KEYS
+        or not isinstance(guardian, Mapping)
+        or set(guardian) != _BUILD_COMPLETION_GUARDIAN_KEYS
+        or any(type(guardian[key]) is not int or guardian[key] <= 0 for key in guardian)
+        or guardian["pid"] == guardian["qcsd_pid"]
+        or not isinstance(lifecycle, Mapping)
+        or set(lifecycle) != _BUILD_COMPLETION_LIFECYCLE_KEYS
+        or not isinstance(cohort_lock, Mapping)
+        or set(cohort_lock) != _BUILD_COMPLETION_COHORT_LOCK_KEYS
+        or not isinstance(operation_lock, Mapping)
+        or set(operation_lock) != _BUILD_COMPLETION_OPERATION_LOCK_KEYS
+    ):
+        raise WatchError("foundation no-cache build completion transaction authority is invalid")
+    if (
+        any(
+            type(lifecycle.get(key)) is not int or lifecycle[key] <= 0
+            for key in ("device", "inode", "parent_device", "parent_inode")
+        )
+        or not isinstance(lifecycle.get("lease_nonce"), str)
+        or _SHA256_RE.fullmatch(lifecycle["lease_nonce"]) is None
+        or any(
+            type(cohort_lock.get(key)) is not int or cohort_lock[key] <= 0
+            for key in (
+                "device",
+                "inode",
+                "parent_device",
+                "parent_inode",
+                "guardian_fd",
+            )
+        )
+        or any(
+            type(operation_lock.get(key)) is not int or operation_lock[key] <= 0
+            for key in ("device", "inode", "parent_device", "parent_inode")
+        )
+    ):
+        raise WatchError(
+            "foundation no-cache build completion transaction lock identity is invalid"
+        )
+    lock_paths: list[Path] = []
+    for binding in (lifecycle, cohort_lock, operation_lock):
+        raw_path = binding.get("path")
+        if not isinstance(raw_path, str):
+            raise WatchError(
+                "foundation no-cache build completion transaction lock path is invalid"
+            )
+        candidate = Path(raw_path)
+        if not candidate.is_absolute() or Path(os.path.normpath(candidate)) != candidate:
+            raise WatchError(
+                "foundation no-cache build completion transaction lock path is invalid"
+            )
+        lock_paths.append(candidate)
+    lifecycle_path, cohort_path, operation_path = lock_paths
+    if (
+        not lifecycle_path.name.endswith(".lock")
+        or cohort_path.name != ".allocation.lock"
+        or operation_path.name != ".allocation-operation.lock"
+        or cohort_path.parent != operation_path.parent
+        or cohort_lock["parent_device"] != operation_lock["parent_device"]
+        or cohort_lock["parent_inode"] != operation_lock["parent_inode"]
+        or len(
+            {
+                (lifecycle["device"], lifecycle["inode"]),
+                (cohort_lock["device"], cohort_lock["inode"]),
+                (operation_lock["device"], operation_lock["inode"]),
+            }
+        )
+        != 3
+    ):
+        raise WatchError(
+            "foundation no-cache build completion transaction lock relationship is invalid"
+        )
+
+    commands = receipt.get("commands")
+    if (
+        not isinstance(commands, list)
+        or not commands
+        or not isinstance(commands[0], Mapping)
+        or not isinstance(commands[0].get("argv"), list)
+        or not commands[0]["argv"]
+    ):
+        raise WatchError(
+            "foundation no-cache build completion transaction receipt commands are invalid"
+        )
+    build_root = Path(str(commands[0]["argv"][-1]))
+    if not build_root.is_absolute() or Path(os.path.normpath(build_root)) != build_root:
+        raise WatchError(
+            "foundation no-cache build completion transaction checkout path is invalid"
+        )
+    transaction_base = Path(str(lifecycle_path)[: -len(".lock")])
+    transaction_root = Path(str(root.get("path", "")))
+    expected_receipt = build_root / f"artifacts/buflo-study/build-execution-v{cohort_version}.json"
+    if (
+        not transaction_root.is_absolute()
+        or Path(os.path.normpath(transaction_root)) != transaction_root
+        or transaction_root.name != f"transaction.{lifecycle['lease_nonce'][:32]}"
+        or transaction_root.parent != transaction_base
+        or record.get("path") != str(transaction_root / "SUPERVISION")
+    ):
+        raise WatchError("foundation no-cache build completion transaction path binding is invalid")
+    _validate_cohort_stat(
+        root["stat"],
+        keys=_COHORT_DIRECTORY_STAT_KEYS,
+        label="foundation no-cache build completion transaction root",
+        required_mode=0o700,
+    )
+    record_raw = _decode_canonical_base64(
+        record.get("payload_base64"),
+        label="foundation no-cache build completion transaction record",
+        maximum_bytes=64 * 1024,
+    )
+    if (
+        not isinstance(record.get("sha256"), str)
+        or _SHA256_RE.fullmatch(record["sha256"]) is None
+        or _sha256_bytes(record_raw) != record["sha256"]
+    ):
+        raise WatchError(
+            "foundation no-cache build completion transaction record binding is invalid"
+        )
+    _validate_cohort_stat(
+        record["stat"],
+        keys=_COHORT_FILE_STAT_KEYS,
+        label="foundation no-cache build completion transaction record",
+        required_mode=0o600,
+        required_nlink=1,
+        required_size=len(record_raw),
+    )
+    fields = _parse_build_transaction_record(record_raw)
+    if (
+        fields["object"] != "docker-build-transaction"
+        or fields["lifecycle_schema"] != "1"
+        or fields["lifecycle_state"] != "request-authorised"
+        or fields["lifecycle_root"] != str(transaction_root)
+        or fields["lifecycle_token"] != lifecycle["lease_nonce"][:32]
+        or not Path(fields["supervisor_source_path"]).is_absolute()
+        or _SHA256_RE.fullmatch(fields["supervisor_source_sha256"]) is None
+        or not fields["supervisor_source_device"].isdigit()
+        or int(fields["supervisor_source_device"]) <= 0
+        or not fields["supervisor_source_inode"].isdigit()
+        or int(fields["supervisor_source_inode"]) <= 0
+        or re.fullmatch(r"[A-Za-z0-9_.-]+", fields["docker_context"]) is None
+        or fields["docker_host"]
+        not in {
+            "unix:///var/run/docker.sock",
+            "npipe:////./pipe/dockerDesktopLinuxEngine",
+        }
+        or re.fullmatch(r"[A-Za-z0-9_.:-]+", fields["docker_server_id"]) is None
+        or fields["docker_server_id"] != fields["docker_daemon_id"]
+        or fields["docker_request_revalidation"] != "in-scope-immediately-before-mutation"
+        or re.fullmatch(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+            fields["host_boot_id"],
+        )
+        is None
+        or fields["working_directory"] != str(build_root)
+        or fields["cohort_version"] != str(cohort_version)
+        or fields["receipt_path"] != str(expected_receipt)
+        or fields["transaction_state"] != "uncommitted-static-tag-mutation"
+    ):
+        raise WatchError(
+            "foundation no-cache build completion transaction record authority is invalid"
+        )
+
+
+def _validate_build_completion(
+    value: Any,
+    *,
+    completion_path: Path,
+    receipt_path: Path,
+    receipt_raw: bytes,
+    receipt_stat: Mapping[str, int],
+    receipt: Mapping[str, Any],
+    build_validation: Mapping[str, Any],
+    paths: WatchPaths,
+) -> None:
+    cohort_version = receipt["cohort_version"]
+    expected_completion_path = (
+        paths.lab_root / f"artifacts/buflo-study/build-completion-v{cohort_version}.json"
+    )
+    expected_receipt_path = f"artifacts/buflo-study/build-execution-v{cohort_version}.json"
+    if (
+        completion_path != expected_completion_path
+        or receipt_path != paths.lab_root / expected_receipt_path
+    ):
+        raise WatchError("foundation no-cache build completion path is not canonical")
+    if not isinstance(value, Mapping) or set(value) != _BUILD_COMPLETION_KEYS:
+        raise WatchError("foundation no-cache build completion schema is invalid")
+    payload = dict(value)
+    claimed_payload_sha256 = payload.pop("payload_sha256")
+    if (
+        type(value.get("schema_version")) is not int
+        or value.get("schema_version") != 1
+        or value.get("artifact_type") != BUILD_COMPLETION_TYPE
+        or type(value.get("cohort_version")) is not int
+        or value.get("cohort_version") != cohort_version
+        or not isinstance(claimed_payload_sha256, str)
+        or _SHA256_RE.fullmatch(claimed_payload_sha256) is None
+        or claimed_payload_sha256 != _sha256_bytes(_canonical_compact_json_bytes(payload))
+    ):
+        raise WatchError("foundation no-cache build completion payload is invalid")
+
+    receipt_binding = value["receipt"]
+    if (
+        not isinstance(receipt_binding, Mapping)
+        or set(receipt_binding) != _BUILD_COMPLETION_RECEIPT_KEYS
+        or receipt_binding.get("path") != expected_receipt_path
+        or type(receipt_binding.get("schema_version")) is not int
+        or receipt_binding.get("schema_version") != 5
+        or type(receipt_binding.get("cohort_version")) is not int
+        or receipt_binding.get("cohort_version") != cohort_version
+        or receipt_binding.get("payload_sha256") != receipt.get("payload_sha256")
+        or receipt_binding.get("sha256") != _sha256_bytes(receipt_raw)
+        or not isinstance(receipt_binding.get("stat"), Mapping)
+        or dict(receipt_binding["stat"]) != dict(receipt_stat)
+    ):
+        raise WatchError("foundation no-cache build completion receipt binding is invalid")
+    _validate_cohort_stat(
+        receipt_binding["stat"],
+        keys=_COHORT_FILE_STAT_KEYS,
+        label="foundation no-cache build completion receipt",
+        required_mode=0o600,
+        required_nlink=1,
+        required_size=len(receipt_raw),
+    )
+
+    source = value["source"]
+    expected_source = {
+        "lab_commit": receipt["source"]["lab_commit"],
+        "neqo_commit": receipt["source"]["neqo_commit"],
+        "neqo_gitlink": receipt["cohort_allocation"]["neqo_gitlink"],
+    }
+    if (
+        not isinstance(source, Mapping)
+        or set(source) != _BUILD_COMPLETION_SOURCE_KEYS
+        or dict(source) != expected_source
+    ):
+        raise WatchError("foundation no-cache build completion source binding is invalid")
+
+    expected_authority = {key: build_validation[key] for key in _BUILD_COMPLETION_AUTHORITY_KEYS}
+    authority = value["cohort_authority"]
+    if (
+        not isinstance(authority, Mapping)
+        or set(authority) != _BUILD_COMPLETION_AUTHORITY_KEYS
+        or dict(authority) != expected_authority
+    ):
+        raise WatchError("foundation no-cache build completion cohort authority is invalid")
+
+    _validate_build_completion_transaction(
+        value["transaction"],
+        receipt=receipt,
+        cohort_version=cohort_version,
+    )
+
+    final_reproof = value["final_reproof"]
+    expected_reproof = {
+        "boundary": _BUILD_COMPLETION_REPROOF_BOUNDARY,
+        "authority_sha256": build_validation["authority_sha256"],
+        "claim_snapshot_sha256": build_validation["claim_snapshot_sha256"],
+        "claim_file_sha256": build_validation["claim_file_sha256"],
+        "claim_chain_sha256": build_validation["claim_chain_sha256"],
+    }
+    if (
+        not isinstance(final_reproof, Mapping)
+        or set(final_reproof) != _BUILD_COMPLETION_REPROOF_KEYS
+        or any(final_reproof.get(key) != expected for key, expected in expected_reproof.items())
+        or not isinstance(final_reproof.get("observed_at"), str)
+    ):
+        raise WatchError("foundation no-cache build completion final reproof is invalid")
+    reproof_time = _evidence_timestamp(
+        final_reproof["observed_at"],
+        label="foundation no-cache build completion final reproof",
+    )
+    completed_at = _evidence_timestamp(
+        value["completed_at"],
+        label="foundation no-cache build completion",
+    )
+    if (
+        reproof_time < build_validation["finished_at"]
+        or completed_at < reproof_time
+        or (completed_at - reproof_time).total_seconds() > _BUILD_COMPLETION_MAX_DELAY_SECONDS
+    ):
+        raise WatchError("foundation no-cache build completion timing is invalid")
+
+
+def _load_build_execution(
+    path: Path,
+    *,
+    paths: WatchPaths,
+    require_current: bool = False,
+) -> BuildExecutionSnapshot:
+    try:
+        before = os.stat(path, follow_symlinks=False)
         raw, sha256 = _read_stable_file(
             path,
             root=paths.lab_root,
             label="foundation no-cache build execution",
             maximum_bytes=BUILD_EXECUTION_MAX_BYTES,
         )
+        after = os.stat(path, follow_symlinks=False)
         value = json.loads(raw.decode("utf-8"))
-    except (UnicodeError, json.JSONDecodeError) as error:
+    except (UnicodeError, json.JSONDecodeError, OSError) as error:
         raise WatchError("foundation no-cache build execution is not valid JSON") from error
+    if (
+        _filesystem_stat_identity(before) != _filesystem_stat_identity(after)
+        or not stat.S_ISREG(before.st_mode)
+        or before.st_nlink != 1
+    ):
+        raise WatchError("foundation no-cache build execution identity is invalid")
     if not isinstance(value, dict) or raw != _canonical_json_bytes(value):
         raise WatchError("foundation no-cache build execution is not canonical")
-    _validate_build_execution_schema4(value, paths=paths)
-    return ReceiptSnapshot(value=value, sha256=sha256)
+    validation = _validate_build_execution_schema4_or_5(value, paths=paths)
+    completion_sha256: str | None = None
+    if require_current:
+        if value["schema_version"] != 5:
+            raise WatchError(
+                "foundation no-cache build execution is historical; "
+                "current admission requires schema 5"
+            )
+        if stat.S_IMODE(before.st_mode) != 0o600:
+            raise WatchError("foundation no-cache build execution mode is invalid")
+        completion_path = path.with_name(f"build-completion-v{value['cohort_version']}.json")
+        completion, completion_raw, completion_sha256, completion_identity = _load_build_completion(
+            completion_path,
+            paths=paths,
+        )
+        _validate_build_completion(
+            completion,
+            completion_path=completion_path,
+            receipt_path=path,
+            receipt_raw=raw,
+            receipt_stat=_filesystem_stat_record(before),
+            receipt=value,
+            build_validation=validation,
+            paths=paths,
+        )
+        current = os.stat(path, follow_symlinks=False)
+        if _filesystem_stat_identity(before) != _filesystem_stat_identity(current):
+            raise WatchError("foundation no-cache build execution changed during completion proof")
+        (
+            completion_after,
+            completion_raw_after,
+            completion_sha256_after,
+            completion_identity_after,
+        ) = _load_build_completion(completion_path, paths=paths)
+        if (
+            completion_after != completion
+            or completion_raw_after != completion_raw
+            or completion_sha256_after != completion_sha256
+            or completion_identity_after != completion_identity
+        ):
+            raise WatchError("foundation no-cache build completion changed during proof")
+    return BuildExecutionSnapshot(
+        value=value,
+        sha256=sha256,
+        size_bytes=len(raw),
+        completion_sha256=completion_sha256,
+    )
 
 
 def _validate_bootstrap_prearm_summary(value: Any, *, require_terminal: bool) -> None:
@@ -2713,6 +4211,8 @@ def _validate_browser_egress_qualification_binding(
     cohort: int,
     build: Mapping[str, Any],
     build_binding: Mapping[str, Any],
+    build_size_bytes: int,
+    build_completion_sha256: str,
     prepare_image: str,
     foundation_recorded: datetime,
 ) -> dict[str, Any]:
@@ -2756,8 +4256,11 @@ def _validate_browser_egress_qualification_binding(
     expected_build_fields = {
         "path",
         "sha256",
+        "size_bytes",
         "payload_sha256",
         "cohort_version",
+        "completion_path",
+        "completion_sha256",
         "collection_image_id",
         "prepare_image_id",
         "reference_image_id",
@@ -2770,10 +4273,17 @@ def _validate_browser_egress_qualification_binding(
     }:
         raise WatchError("browser-egress qualification build image roles are incomplete")
     expected_build = {
-        "path": build_binding["path"],
+        # The browser-egress foundation deliberately uses a Lab-root-relative
+        # file binding.  The class foundation's build binding is the canonical
+        # /lab path; accepting either spelling here would weaken the exact
+        # cross-artifact projection.
+        "path": f"artifacts/buflo-study/build-execution-v{cohort}.json",
         "sha256": build_binding["sha256"],
+        "size_bytes": build_size_bytes,
         "payload_sha256": build.get("payload_sha256"),
         "cohort_version": cohort,
+        "completion_path": f"/lab/artifacts/buflo-study/build-completion-v{cohort}.json",
+        "completion_sha256": build_completion_sha256,
         "collection_image_id": images["collection"].get("id"),
         "prepare_image_id": images["prepare"].get("id"),
         "reference_image_id": images["reference"].get("id"),
@@ -3093,7 +4603,11 @@ def _validate_foundation(
     build_path = _container_binding_path(
         build_binding["path"], paths=paths, label="foundation no-cache build execution"
     )
-    build_snapshot = _load_build_execution(build_path, paths=paths)
+    build_snapshot = _load_build_execution(
+        build_path,
+        paths=paths,
+        require_current=True,
+    )
     build = build_snapshot.value
     images = build.get("images")
     collection_role = images.get("collection") if isinstance(images, dict) else None
@@ -3108,9 +4622,14 @@ def _validate_foundation(
         or prepare_role.get("id") != prepare_image
     ):
         raise WatchError("acquisition foundation build/source/image binding differs")
+    build_completion_sha256 = build_snapshot.completion_sha256
+    if build_completion_sha256 is None:  # pragma: no cover - require_current guards this
+        raise WatchError("acquisition foundation has no completed no-cache build")
     expected_identity = {
         "cohort_version": cohort,
         "sha256": build_snapshot.sha256,
+        "completion_path": (f"/lab/artifacts/buflo-study/build-completion-v{cohort}.json"),
+        "completion_sha256": build_completion_sha256,
         "collection_image": collection_image,
         "started_at": build.get("started_at"),
         "finished_at": build.get("finished_at"),
@@ -3128,6 +4647,8 @@ def _validate_foundation(
             "path": build_binding["path"],
             "sha256": build_snapshot.sha256,
         },
+        build_size_bytes=build_snapshot.size_bytes,
+        build_completion_sha256=build_completion_sha256,
         prepare_image=prepare_image,
         foundation_recorded=foundation_recorded,
     )
@@ -3138,6 +4659,7 @@ def _validate_foundation(
         "sha256",
         "payload_sha256",
         "build_execution",
+        "build_execution_identity",
         "probe_contract_sha256",
     }:
         raise WatchError("acquisition foundation pinned CDP binding is missing")
@@ -3194,6 +4716,7 @@ def _validate_foundation(
         or pinned_build != expected_pinned_build
         or pinned_binding.get("build_execution") != expected_pinned_build
         or pinned.get("build_execution_identity") != expected_identity
+        or pinned_binding.get("build_execution_identity") != expected_identity
         or pinned.get("collection_source") != collection_source
         or pinned.get("prepare_source") != expected_prepare_source
         or dict(prepare_source) != expected_prepare_source
@@ -3267,6 +4790,7 @@ def _validate_foundation(
             pinned_snapshot.sha256,
             pinned_snapshot.value["payload_sha256"],
             build_snapshot.sha256,
+            build_completion_sha256,
             str(build.get("payload_sha256")),
             contract_sha256,
         }
@@ -3288,6 +4812,8 @@ def _validate_foundation(
         "pinned_cdp_payload_sha256": pinned_snapshot.value["payload_sha256"],
         "pinned_cdp_contract_sha256": contract_sha256,
         "build_execution_sha256": build_snapshot.sha256,
+        "build_completion_path": expected_identity["completion_path"],
+        "build_completion_sha256": build_completion_sha256,
         "cohort_version": cohort,
         "browser_egress_qualification": browser_egress,
     }
@@ -3436,6 +4962,8 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
         pinned_cdp_payload_sha256=foundation_authority["pinned_cdp_payload_sha256"],
         pinned_cdp_contract_sha256=foundation_authority["pinned_cdp_contract_sha256"],
         build_execution_sha256=foundation_authority["build_execution_sha256"],
+        build_completion_path=foundation_authority["build_completion_path"],
+        build_completion_sha256=foundation_authority["build_completion_sha256"],
         browser_egress_qualification=foundation_authority["browser_egress_qualification"],
         browser_egress_tree_sha256=_browser_egress_tree_sha256(
             foundation_authority["browser_egress_qualification"],
@@ -4049,11 +5577,33 @@ def _host_source_snapshot(paths: WatchPaths) -> tuple[str, str, str | None, str,
     return lab_head, neqo_head, gitlink, lab_status, neqo_status
 
 
+def _validate_bound_build_evidence(
+    paths: WatchPaths,
+    binding: AcquisitionBinding,
+) -> None:
+    cohort = binding.cohort_version
+    build_path = paths.lab_root / f"artifacts/buflo-study/build-execution-v{cohort}.json"
+    expected_completion_path = f"/lab/artifacts/buflo-study/build-completion-v{cohort}.json"
+    if binding.build_completion_path != expected_completion_path:
+        raise WatchError("bound build completion path is not canonical")
+    snapshot = _load_build_execution(
+        build_path,
+        paths=paths,
+        require_current=True,
+    )
+    if (
+        snapshot.sha256 != binding.build_execution_sha256
+        or snapshot.completion_sha256 != binding.build_completion_sha256
+    ):
+        raise WatchError("bound build receipt or completion changed after admission")
+
+
 def _validate_host_source(paths: WatchPaths, binding: AcquisitionBinding) -> None:
     """Fail closed if either host checkout drifts or races provenance checks."""
 
     source = binding.source
     first = _host_source_snapshot(paths)
+    _validate_bound_build_evidence(paths, binding)
     second = _host_source_snapshot(paths)
     if first != second:
         raise WatchError("host Lab/Neqo checkout changed while source was verified")
@@ -4072,7 +5622,6 @@ def _validate_host_source(paths: WatchPaths, binding: AcquisitionBinding) -> Non
 
 def _admission_command(paths: WatchPaths) -> tuple[str, ...]:
     return (
-        "/usr/bin/bash",
         str(paths.launcher),
         "class-study",
         "acquisition-admission",
@@ -4086,7 +5635,6 @@ def _browser_egress_verify_command(
     build_path = paths.lab_root / f"artifacts/buflo-study/build-execution-v{cohort}.json"
     result_root = paths.lab_root / f"artifacts/buflo-study/browser-egress-qualification-v{cohort}"
     return (
-        "/usr/bin/bash",
         str(paths.launcher),
         "test",
         "browser-egress",
@@ -4101,12 +5649,12 @@ def _browser_egress_verify_command(
 
 
 def _is_canonical_browser_egress_verify_command(command: Sequence[str]) -> bool:
-    if len(command) != 11 or tuple(command[:1]) != ("/usr/bin/bash",):
+    if len(command) != 10:
         return False
-    launcher = Path(command[1])
+    launcher = Path(command[0])
     if not launcher.is_absolute() or launcher.name != "qcsd-lab":
         return False
-    cohort_text = command[6]
+    cohort_text = command[5]
     try:
         cohort = int(cohort_text)
     except ValueError:
@@ -4115,7 +5663,6 @@ def _is_canonical_browser_egress_verify_command(command: Sequence[str]) -> bool:
         return False
     root = launcher.parent
     expected = (
-        "/usr/bin/bash",
         str(root / "qcsd-lab"),
         "test",
         "browser-egress",
@@ -5082,38 +6629,137 @@ def _assert_watch_lock_held(state_root: Path) -> tuple[int, int]:
         os.close(descriptor)
 
 
+def _assert_live_pidfd(pidfd: int) -> None:
+    poller = select.poll()
+    try:
+        poller.register(
+            pidfd,
+            select.POLLIN | select.POLLHUP | select.POLLERR | select.POLLNVAL,
+        )
+        events = poller.poll(0)
+    except OSError as error:
+        raise WatchError("cannot poll the recorded acquisition supervisor") from error
+    for observed_fd, flags in events:
+        if observed_fd != pidfd or flags & select.POLLNVAL:
+            raise WatchError("recorded acquisition supervisor pidfd became invalid")
+        if flags & select.POLLIN:
+            raise WatchError("recorded acquisition supervisor identity is not live")
+        if flags:
+            raise WatchError("recorded acquisition supervisor pidfd is indeterminate")
+
+
 def _assert_recorded_watch_lock_holder(state_root: Path, record: Mapping[str, Any]) -> None:
+    supervisor_pid = record["supervisor_pid"]
+    opener = getattr(os, "pidfd_open", None)
+    if opener is None:
+        raise WatchError("recorded acquisition supervisor proof requires pidfd support")
+    try:
+        pidfd = opener(supervisor_pid, 0)
+    except ProcessLookupError as error:
+        raise WatchError("recorded acquisition supervisor identity is not live") from error
+    except OSError as error:
+        raise WatchError("cannot bind the recorded acquisition supervisor") from error
+    try:
+        _assert_live_pidfd(pidfd)
+        _assert_recorded_watch_lock_holder_bound(state_root, record)
+        _assert_live_pidfd(pidfd)
+    finally:
+        os.close(pidfd)
+
+
+def _assert_recorded_watch_lock_holder_bound(state_root: Path, record: Mapping[str, Any]) -> None:
+    supervisor_pid = record["supervisor_pid"]
     expected = (
         record["supervisor_start_time"],
         record["supervisor_session"],
         record["supervisor_process_group"],
     )
-    if _process_identity(record["supervisor_pid"]) != expected:
+    if _process_identity(supervisor_pid) != expected:
         raise WatchError("recorded acquisition supervisor identity is not live")
     metadata = os.stat(state_root / "WATCH.lock", follow_symlinks=False)
-    if (metadata.st_dev, metadata.st_ino) != (record["lock_device"], record["lock_inode"]):
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+        or metadata.st_nlink != 1
+        or stat.S_IMODE(metadata.st_mode) != 0o600
+        or (metadata.st_dev, metadata.st_ino) != (record["lock_device"], record["lock_inode"])
+    ):
         raise WatchError("recorded acquisition supervisor lock identity changed")
-    needle = (os.major(metadata.st_dev), os.minor(metadata.st_dev), metadata.st_ino)
+    lock_key = f"{os.major(metadata.st_dev):02x}:{os.minor(metadata.st_dev):02x}:{metadata.st_ino}"
+    descriptor_root = Path(f"/proc/{supervisor_pid}/fd")
     try:
-        lines = Path("/proc/locks").read_text(encoding="ascii").splitlines()
+        descriptor_names = tuple(descriptor_root.iterdir())
     except (OSError, UnicodeError) as error:
         raise WatchError("cannot prove the recorded acquisition supervisor lock holder") from error
-    owners = []
-    for line in lines:
-        fields = line.split()
-        if len(fields) < 8 or fields[1:4] != ["FLOCK", "ADVISORY", "WRITE"]:
-            continue
+    if len(descriptor_names) > 4_096:
+        raise WatchError("recorded acquisition supervisor descriptor census is excessive")
+    holders: list[int] = []
+    for descriptor_path in descriptor_names:
+        if re.fullmatch(r"[0-9]+", descriptor_path.name) is None:
+            raise WatchError("recorded acquisition supervisor descriptor is malformed")
         try:
-            major, minor, inode = fields[5].split(":")
-            identity = (int(major, 16), int(minor, 16), int(inode))
-            owner = int(fields[4])
-        except (ValueError, IndexError):
+            descriptor_state = descriptor_path.stat()
+        except FileNotFoundError:
             continue
-        if identity == needle:
-            owners.append(owner)
-    if owners != [record["supervisor_pid"]]:
+        except OSError as error:
+            raise WatchError(
+                "cannot prove the recorded acquisition supervisor lock holder"
+            ) from error
+        if (descriptor_state.st_dev, descriptor_state.st_ino) != (
+            metadata.st_dev,
+            metadata.st_ino,
+        ):
+            continue
+        descriptor = int(descriptor_path.name)
+        try:
+            lines = (
+                Path(f"/proc/{supervisor_pid}/fdinfo/{descriptor}")
+                .read_text(encoding="ascii")
+                .splitlines()
+            )
+        except FileNotFoundError:
+            continue
+        except (OSError, UnicodeError) as error:
+            raise WatchError(
+                "cannot prove the recorded acquisition supervisor lock holder"
+            ) from error
+        rows = []
+        for line in lines:
+            key, separator, value = line.partition(":")
+            if key == "lock" and separator:
+                rows.append(value.split())
+        if not rows:
+            continue
+        if len(rows) != 1 or (
+            len(rows[0]) != 8
+            or re.fullmatch(r"[1-9][0-9]*:", rows[0][0]) is None
+            or rows[0][1:4] != ["FLOCK", "ADVISORY", "WRITE"]
+            or rows[0][4] != str(supervisor_pid)
+            or rows[0][5:] != [lock_key, "0", "EOF"]
+        ):
+            raise WatchError("recorded acquisition supervisor lock descriptor is invalid")
+        holders.append(descriptor)
+    if not holders:
         raise WatchError("recorded acquisition supervisor does not hold the exact watch lock")
-    if _process_identity(record["supervisor_pid"]) != expected:
+    try:
+        final_metadata = os.stat(state_root / "WATCH.lock", follow_symlinks=False)
+    except OSError as error:
+        raise WatchError("recorded acquisition supervisor lock identity changed") from error
+    if (
+        final_metadata.st_dev,
+        final_metadata.st_ino,
+        final_metadata.st_uid,
+        final_metadata.st_mode,
+        final_metadata.st_nlink,
+    ) != (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_uid,
+        metadata.st_mode,
+        metadata.st_nlink,
+    ):
+        raise WatchError("recorded acquisition supervisor lock identity changed")
+    if _process_identity(supervisor_pid) != expected:
         raise WatchError("recorded acquisition supervisor changed during lock proof")
 
 
@@ -6626,7 +8272,6 @@ def _run_browser_egress_verification(
 
 def _status_command(paths: WatchPaths) -> tuple[str, ...]:
     return (
-        "/usr/bin/bash",
         str(paths.launcher),
         "class-study",
         "acquisition-status",
@@ -6639,7 +8284,6 @@ def _status_command(paths: WatchPaths) -> tuple[str, ...]:
 
 def _run_command(paths: WatchPaths) -> tuple[str, ...]:
     return (
-        "/usr/bin/bash",
         str(paths.launcher),
         "class-study",
         "acquisition-run",

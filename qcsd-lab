@@ -1,5 +1,37 @@
-#!/usr/bin/env bash
+#!/bin/bash -p
+if [[ $- != *p* ]] || ! /usr/bin/python3 -I -c '
+import pathlib
+import sys
+
+pid, source, *arguments = sys.argv[1:]
+raw = pathlib.Path(f"/proc/{int(pid)}/cmdline").read_bytes()
+if not raw or not raw.endswith(b"\0") or b"\0\0" in raw:
+    raise SystemExit(1)
+argv = [item.decode("utf-8", errors="strict") for item in raw[:-1].split(b"\0")]
+prefixes = (
+    ["/bin/bash", "-p"],
+    ["/bin/bash", "--noprofile", "--norc", "-p"],
+)
+if not any(
+    argv[: len(prefix)] == prefix
+    and argv[len(prefix) :] == [source, *arguments]
+    for prefix in prefixes
+):
+    raise SystemExit(1)
+' "${BASHPID}" "${BASH_SOURCE[0]}" "$@"; then
+  echo "qcsd-lab must be executed directly by its privileged-mode Bash shebang" >&2
+  exit 125
+fi
+# Command discovery is part of the launcher trust boundary.  Privileged Bash
+# ignores startup hooks and imported functions, but deliberately preserves the
+# caller's PATH.  Replace it before ROOT derivation or any unqualified external
+# command can influence which repository/helper enters the guardian.
+readonly PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/mnt/c/Windows/System32/WindowsPowerShell/v1.0"
+export PATH
 set -euo pipefail
+# This latch is created only after the one-shot guardian handshake validates.
+# Discard any caller-supplied shell/environment value before guardian entry.
+unset _QCSD_LIFECYCLE_ENTRY_VALIDATED
 QCSD_ORIGINAL_ARGV=("$@")
 
 # A guarded inner invocation executes the exact qcsd bytes held open by the
@@ -250,7 +282,16 @@ os.close(root_fd)
 }
 
 _qcsd_verify_clean_build_checkout() {
-  local head_gitlink index_gitlink neqo_head
+  local expected_lab_head="${1:-}"
+  local expected_neqo_head="${2:-}"
+  local expected_gitlink="${3:-}"
+  local lab_head head_gitlink index_gitlink neqo_head
+  if [[ -n "${expected_lab_head}${expected_neqo_head}${expected_gitlink}" ]] &&
+     [[ ! "${expected_lab_head}" =~ ^[0-9a-f]{40,64}$ ||
+        ! "${expected_neqo_head}" =~ ^[0-9a-f]{40,64}$ ||
+        ! "${expected_gitlink}" =~ ^[0-9a-f]{40,64}$ ]]; then
+    return 1
+  fi
   _qcsd_verify_git_checkout_binding "${ROOT}" "${ROOT}/.git" &&
     _qcsd_verify_git_checkout_binding "${ROOT}/neqo-qcsd" \
       "${ROOT}/.git/modules/third_party/neqo-qcsd" &&
@@ -258,13 +299,18 @@ _qcsd_verify_clean_build_checkout() {
     _qcsd_verify_git_index_bytes "${ROOT}/neqo-qcsd" || return 1
   [[ -z "$(_qcsd_trusted_git -C "${ROOT}" status --porcelain --untracked-files=all)" &&
       -z "$(_qcsd_trusted_git -C "${ROOT}/neqo-qcsd" status --porcelain --untracked-files=all)" ]] || return 1
+  lab_head="$(_qcsd_trusted_git -C "${ROOT}" rev-parse --verify 'HEAD^{commit}')" || return 1
   head_gitlink="$(_qcsd_trusted_git -C "${ROOT}" rev-parse HEAD:neqo-qcsd)" || return 1
   index_gitlink="$(_qcsd_trusted_git -C "${ROOT}" ls-files --stage -- neqo-qcsd |
     awk '$1 == 160000 {print $2}')" || return 1
   neqo_head="$(_qcsd_trusted_git -C "${ROOT}/neqo-qcsd" rev-parse HEAD)" || return 1
-  [[ "${head_gitlink}" =~ ^[0-9a-f]{40,64}$ &&
+  [[ "${lab_head}" =~ ^[0-9a-f]{40,64}$ &&
+      "${head_gitlink}" =~ ^[0-9a-f]{40,64}$ &&
       "${head_gitlink}" == "${index_gitlink}" &&
-      "${head_gitlink}" == "${neqo_head}" ]]
+      "${head_gitlink}" == "${neqo_head}" &&
+      ( -z "${expected_lab_head}" || "${lab_head}" == "${expected_lab_head}" ) &&
+      ( -z "${expected_neqo_head}" || "${neqo_head}" == "${expected_neqo_head}" ) &&
+      ( -z "${expected_gitlink}" || "${head_gitlink}" == "${expected_gitlink}" ) ]]
 }
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
@@ -1658,8 +1704,19 @@ reconcile_legacy_stale_docker_supervisors() {
   done
 }
 
+_qcsd_read_exact_lifecycle_frame() {
+  local descriptor="$1" nonce="$2" observed extra=''
+  [[ "${descriptor}" =~ ^[0-9]+$ && "${nonce}" =~ ^[0-9a-f]{64}$ ]] || return 1
+  IFS= read -r observed <&"${descriptor}" || return 1
+  [[ "${observed}" == "${nonce}" ]] || return 1
+  if IFS= read -r extra <&"${descriptor}" || [[ -n "${extra}" ]]; then
+    return 1
+  fi
+}
+
 _qcsd_validate_lifecycle_guardian() {
-  local proof parsed ready_fd go_fd go_nonce observed extra key
+  local proof parsed ready_fd go_fd go_nonce key
+  local docker_config_name docker_config_boot
   local loaded_helper_device loaded_helper_tail loaded_helper_inode
   local expected_guardian expected_guardian_metadata expected_guardian_sha
   local ambient_guardian_fd_path ambient_guardian_metadata ambient_guardian_sha
@@ -1728,19 +1785,39 @@ import json,sys
 v=json.loads(sys.stdin.read())
 keys=("schema","boot_id","guardian_pid","guardian_source_device",
 "guardian_source_inode","guardian_source_path","guardian_source_sha256",
-"guardian_start_time","go_fd","go_nonce","helper_source_device",
+"guardian_start_time","go_fd","go_nonce","recovery_ready_fd",
+"recovery_nonce","final_go_fd","final_go_nonce","helper_source_device",
 "helper_source_inode","helper_source_path","helper_source_sha256","lease_nonce",
 "lease_socket","lock_device","lock_inode","lock_parent_device",
 "lock_parent_inode","lock_path","native_source_device","native_source_inode",
 "native_source_path","native_source_sha256","qcsd_pid","qcsd_source_device",
 "qcsd_source_fd","qcsd_source_inode","qcsd_source_path","qcsd_source_sha256",
 "qcsd_start_time","docker_config_device","docker_config_inode","docker_config_path",
-"buildx_config_device","buildx_config_inode","buildx_config_path")
+"buildx_config_device","buildx_config_inode","buildx_config_path",
+"cohort_lock_required","cohort_version","cohort_lock_fd","cohort_lock_path",
+"cohort_lock_device","cohort_lock_inode","cohort_lock_parent_device",
+"cohort_lock_parent_inode")
 if set(v)!=set(keys) or v["schema"]!=1: raise SystemExit(1)
-for k in keys: print(v[k])
+cohort_keys=keys[42:]
+if type(v["cohort_lock_required"]) is not bool: raise SystemExit(1)
+if v["cohort_lock_required"]:
+    if (
+        any(type(v[k]) is not int for k in (
+            "cohort_version","cohort_lock_fd","cohort_lock_device",
+            "cohort_lock_inode","cohort_lock_parent_device",
+            "cohort_lock_parent_inode",
+        ))
+        or type(v["cohort_lock_path"]) is not str
+    ):
+        raise SystemExit(1)
+elif any(v[k] != "unavailable" for k in cohort_keys[1:]):
+    raise SystemExit(1)
+for k in keys:
+    item=v[k]
+    print("1" if item is True else "0" if item is False else item)
 ' <<<"${proof}")" || return 1
   mapfile -t fields <<<"${parsed}"
-  (( ${#fields[@]} == 38 )) || return 1
+  (( ${#fields[@]} == 50 )) || return 1
   _QCSD_LIFECYCLE_BOOT_ID="${fields[1]}"
   _QCSD_LIFECYCLE_GUARD_PID="${fields[2]}"
   _QCSD_LIFECYCLE_GUARD_SOURCE_DEVICE="${fields[3]}"
@@ -1749,34 +1826,46 @@ for k in keys: print(v[k])
   _QCSD_LIFECYCLE_GUARD_SOURCE_SHA256="${fields[6]}"
   _QCSD_LIFECYCLE_GUARD_START="${fields[7]}"
   go_fd="${fields[8]}"; go_nonce="${fields[9]}"
-  _QCSD_LIFECYCLE_HELPER_SOURCE_DEVICE="${fields[10]}"
-  _QCSD_LIFECYCLE_HELPER_SOURCE_INODE="${fields[11]}"
-  _QCSD_LIFECYCLE_HELPER_SOURCE_PATH="${fields[12]}"
-  _QCSD_LIFECYCLE_HELPER_SHA256="${fields[13]}"
-  _QCSD_LIFECYCLE_LEASE_NONCE="${fields[14]}"
-  _QCSD_LIFECYCLE_LEASE_SOCKET="${fields[15]}"
-  _QCSD_LIFECYCLE_LOCK_DEVICE="${fields[16]}"
-  _QCSD_LIFECYCLE_LOCK_INODE="${fields[17]}"
-  _QCSD_LIFECYCLE_LOCK_PARENT_DEVICE="${fields[18]}"
-  _QCSD_LIFECYCLE_LOCK_PARENT_INODE="${fields[19]}"
-  _QCSD_LIFECYCLE_LOCK_PATH="${fields[20]}"
-  _QCSD_LIFECYCLE_NATIVE_SOURCE_DEVICE="${fields[21]}"
-  _QCSD_LIFECYCLE_NATIVE_SOURCE_INODE="${fields[22]}"
-  _QCSD_LIFECYCLE_NATIVE_PATH="${fields[23]}"
-  _QCSD_LIFECYCLE_NATIVE_SHA256="${fields[24]}"
-  _QCSD_LIFECYCLE_QCSD_PID="${fields[25]}"
-  _QCSD_LIFECYCLE_QCSD_SOURCE_DEVICE="${fields[26]}"
-  _QCSD_LIFECYCLE_QCSD_SOURCE_FD="${fields[27]}"
-  _QCSD_LIFECYCLE_QCSD_SOURCE_INODE="${fields[28]}"
-  _QCSD_LIFECYCLE_QCSD_SOURCE_PATH="${fields[29]}"
-  _QCSD_LIFECYCLE_QCSD_SOURCE_SHA256="${fields[30]}"
-  _QCSD_LIFECYCLE_QCSD_START="${fields[31]}"
-  _QCSD_LIFECYCLE_DOCKER_CONFIG_DEVICE="${fields[32]}"
-  _QCSD_LIFECYCLE_DOCKER_CONFIG_INODE="${fields[33]}"
-  _QCSD_LIFECYCLE_DOCKER_CONFIG_PATH="${fields[34]}"
-  _QCSD_LIFECYCLE_BUILDX_CONFIG_DEVICE="${fields[35]}"
-  _QCSD_LIFECYCLE_BUILDX_CONFIG_INODE="${fields[36]}"
-  _QCSD_LIFECYCLE_BUILDX_CONFIG_PATH="${fields[37]}"
+  _QCSD_LIFECYCLE_RECOVERY_READY_FD="${fields[10]}"
+  _QCSD_LIFECYCLE_RECOVERY_NONCE="${fields[11]}"
+  _QCSD_LIFECYCLE_FINAL_GO_FD="${fields[12]}"
+  _QCSD_LIFECYCLE_FINAL_GO_NONCE="${fields[13]}"
+  _QCSD_LIFECYCLE_HELPER_SOURCE_DEVICE="${fields[14]}"
+  _QCSD_LIFECYCLE_HELPER_SOURCE_INODE="${fields[15]}"
+  _QCSD_LIFECYCLE_HELPER_SOURCE_PATH="${fields[16]}"
+  _QCSD_LIFECYCLE_HELPER_SHA256="${fields[17]}"
+  _QCSD_LIFECYCLE_LEASE_NONCE="${fields[18]}"
+  _QCSD_LIFECYCLE_LEASE_SOCKET="${fields[19]}"
+  _QCSD_LIFECYCLE_LOCK_DEVICE="${fields[20]}"
+  _QCSD_LIFECYCLE_LOCK_INODE="${fields[21]}"
+  _QCSD_LIFECYCLE_LOCK_PARENT_DEVICE="${fields[22]}"
+  _QCSD_LIFECYCLE_LOCK_PARENT_INODE="${fields[23]}"
+  _QCSD_LIFECYCLE_LOCK_PATH="${fields[24]}"
+  _QCSD_LIFECYCLE_NATIVE_SOURCE_DEVICE="${fields[25]}"
+  _QCSD_LIFECYCLE_NATIVE_SOURCE_INODE="${fields[26]}"
+  _QCSD_LIFECYCLE_NATIVE_PATH="${fields[27]}"
+  _QCSD_LIFECYCLE_NATIVE_SHA256="${fields[28]}"
+  _QCSD_LIFECYCLE_QCSD_PID="${fields[29]}"
+  _QCSD_LIFECYCLE_QCSD_SOURCE_DEVICE="${fields[30]}"
+  _QCSD_LIFECYCLE_QCSD_SOURCE_FD="${fields[31]}"
+  _QCSD_LIFECYCLE_QCSD_SOURCE_INODE="${fields[32]}"
+  _QCSD_LIFECYCLE_QCSD_SOURCE_PATH="${fields[33]}"
+  _QCSD_LIFECYCLE_QCSD_SOURCE_SHA256="${fields[34]}"
+  _QCSD_LIFECYCLE_QCSD_START="${fields[35]}"
+  _QCSD_LIFECYCLE_DOCKER_CONFIG_DEVICE="${fields[36]}"
+  _QCSD_LIFECYCLE_DOCKER_CONFIG_INODE="${fields[37]}"
+  _QCSD_LIFECYCLE_DOCKER_CONFIG_PATH="${fields[38]}"
+  _QCSD_LIFECYCLE_BUILDX_CONFIG_DEVICE="${fields[39]}"
+  _QCSD_LIFECYCLE_BUILDX_CONFIG_INODE="${fields[40]}"
+  _QCSD_LIFECYCLE_BUILDX_CONFIG_PATH="${fields[41]}"
+  _QCSD_LIFECYCLE_COHORT_LOCK_REQUIRED="${fields[42]}"
+  _QCSD_LIFECYCLE_COHORT_VERSION="${fields[43]}"
+  _QCSD_LIFECYCLE_COHORT_LOCK_FD="${fields[44]}"
+  _QCSD_LIFECYCLE_COHORT_LOCK_PATH="${fields[45]}"
+  _QCSD_LIFECYCLE_COHORT_LOCK_DEVICE="${fields[46]}"
+  _QCSD_LIFECYCLE_COHORT_LOCK_INODE="${fields[47]}"
+  _QCSD_LIFECYCLE_COHORT_LOCK_PARENT_DEVICE="${fields[48]}"
+  _QCSD_LIFECYCLE_COHORT_LOCK_PARENT_INODE="${fields[49]}"
   [[ "${_QCSD_LIFECYCLE_GUARD_PID}" == "${PPID}" &&
       "${_QCSD_LIFECYCLE_GUARD_SOURCE_PATH}" == "${expected_guardian}" &&
       "${_QCSD_LIFECYCLE_GUARD_SOURCE_DEVICE}:${_QCSD_LIFECYCLE_GUARD_SOURCE_INODE}" == \
@@ -1797,18 +1886,48 @@ for k in keys: print(v[k])
   [[ "${_QCSD_LIFECYCLE_QCSD_SOURCE_PATH}" == "${ROOT}/qcsd-lab" &&
       "${BASH_SOURCE[0]}" == "/proc/${_QCSD_LIFECYCLE_GUARD_PID}/fd/${_QCSD_LIFECYCLE_QCSD_SOURCE_FD}" &&
       "$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null)" == "${_QCSD_LIFECYCLE_QCSD_SOURCE_PATH}" ]] || return 1
+  if [[ "${QCSD_LAUNCH_ACTION}" == build ]]; then
+    [[ "${_QCSD_LIFECYCLE_COHORT_LOCK_REQUIRED}" == 1 &&
+        "${_QCSD_LIFECYCLE_COHORT_VERSION}" == "${build_cohort_version:-}" &&
+        "${_QCSD_LIFECYCLE_COHORT_VERSION}" =~ ^[1-9][0-9]*$ &&
+        "${_QCSD_LIFECYCLE_COHORT_LOCK_FD}" =~ ^[1-9][0-9]*$ &&
+        "${_QCSD_LIFECYCLE_COHORT_LOCK_DEVICE}" =~ ^[1-9][0-9]*$ &&
+        "${_QCSD_LIFECYCLE_COHORT_LOCK_INODE}" =~ ^[1-9][0-9]*$ &&
+        "${_QCSD_LIFECYCLE_COHORT_LOCK_PARENT_DEVICE}" =~ ^[1-9][0-9]*$ &&
+        "${_QCSD_LIFECYCLE_COHORT_LOCK_PARENT_INODE}" =~ ^[1-9][0-9]*$ &&
+        "${_QCSD_LIFECYCLE_COHORT_LOCK_PATH}" == \
+          "${ROOT}/artifacts/buflo-study/cohort-claims-v1/.allocation.lock" ]] || return 1
+    (( _QCSD_LIFECYCLE_COHORT_LOCK_FD >= 3 )) || return 1
+  else
+    [[ "${_QCSD_LIFECYCLE_COHORT_LOCK_REQUIRED}" == 0 &&
+        "${_QCSD_LIFECYCLE_COHORT_VERSION}" == unavailable &&
+        "${_QCSD_LIFECYCLE_COHORT_LOCK_FD}" == unavailable &&
+        "${_QCSD_LIFECYCLE_COHORT_LOCK_PATH}" == unavailable &&
+        "${_QCSD_LIFECYCLE_COHORT_LOCK_DEVICE}" == unavailable &&
+        "${_QCSD_LIFECYCLE_COHORT_LOCK_INODE}" == unavailable &&
+        "${_QCSD_LIFECYCLE_COHORT_LOCK_PARENT_DEVICE}" == unavailable &&
+        "${_QCSD_LIFECYCLE_COHORT_LOCK_PARENT_INODE}" == unavailable ]] || return 1
+  fi
   while IFS='=' read -r key extra; do
     [[ "${key}" != QCSD_DOCKER_LOCK_GUARDIAN_* ]] || unset "${key}"
   done < <(env)
-  [[ "${go_fd}" =~ ^[0-9]+$ && "${go_nonce}" =~ ^[0-9a-f]{64}$ ]] || return 1
-  IFS= read -r observed <&"${go_fd}" || return 1
-  [[ "${observed}" == "${go_nonce}" ]] || return 1
-  if IFS= read -r extra <&"${go_fd}"; then return 1; fi
+  [[ "${go_fd}" =~ ^[0-9]+$ && "${go_nonce}" =~ ^[0-9a-f]{64}$ &&
+      "${_QCSD_LIFECYCLE_RECOVERY_READY_FD}" =~ ^[0-9]+$ &&
+      "${_QCSD_LIFECYCLE_RECOVERY_NONCE}" =~ ^[0-9a-f]{64}$ &&
+      "${_QCSD_LIFECYCLE_FINAL_GO_FD}" =~ ^[0-9]+$ &&
+      "${_QCSD_LIFECYCLE_FINAL_GO_NONCE}" =~ ^[0-9a-f]{64}$ ]] || return 1
+  _qcsd_read_exact_lifecycle_frame "${go_fd}" "${go_nonce}" || return 1
   eval "exec ${go_fd}<&-" || return 1
-  [[ "${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH}" == "/proc/${_QCSD_LIFECYCLE_GUARD_PID}/fd/"* &&
+  docker_config_name="${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH##*/}"
+  docker_config_boot="${_QCSD_LIFECYCLE_BOOT_ID//-/}"
+  [[ "${docker_config_name}" =~ ^[.]qcsd-docker-config-$(id -u)[.]v2[.]([0-9a-f]{32})[.]([1-9][0-9]*)[.][0-9a-f]{64}$ ]] || return 1
+  [[ "${BASH_REMATCH[1]}" == "${docker_config_boot}" &&
+      "${BASH_REMATCH[2]}" == "${_QCSD_LIFECYCLE_GUARD_START}" ]] || return 1
+  [[ "${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH%/*}" == "${_QCSD_LIFECYCLE_LOCK_PATH%/*}" &&
       -d "${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH}" &&
+      ! -L "${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH}" &&
       "$(stat -Lc '%d:%i:%u:%a:%h:%F' -- "${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH}")" == \
-        "${_QCSD_LIFECYCLE_DOCKER_CONFIG_DEVICE}:${_QCSD_LIFECYCLE_DOCKER_CONFIG_INODE}:$(id -u):500:0:directory" &&
+        "${_QCSD_LIFECYCLE_DOCKER_CONFIG_DEVICE}:${_QCSD_LIFECYCLE_DOCKER_CONFIG_INODE}:$(id -u):500:2:directory" &&
       -z "$(find -H "${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH}" -mindepth 1 -maxdepth 1 -print -quit)" ]] || return 1
   [[ "${_QCSD_LIFECYCLE_BUILDX_CONFIG_PATH}" =~ ^/proc/${_QCSD_LIFECYCLE_GUARD_PID}/fd/[0-9]+/[.]qcsd-buildx-config-$(id -u)[.][0-9a-f]{64}$ &&
       -d "${_QCSD_LIFECYCLE_BUILDX_CONFIG_PATH}" &&
@@ -1826,6 +1945,8 @@ for k in keys: print(v[k])
   readonly _QCSD_LIFECYCLE_HELPER_SHA256 _QCSD_LIFECYCLE_NATIVE_PATH
   readonly _QCSD_LIFECYCLE_NATIVE_SHA256 _QCSD_LIFECYCLE_LEASE_SOCKET
   readonly _QCSD_LIFECYCLE_LEASE_NONCE
+  readonly _QCSD_LIFECYCLE_RECOVERY_READY_FD _QCSD_LIFECYCLE_RECOVERY_NONCE
+  readonly _QCSD_LIFECYCLE_FINAL_GO_FD _QCSD_LIFECYCLE_FINAL_GO_NONCE
   readonly _QCSD_LIFECYCLE_BOOT_ID _QCSD_LIFECYCLE_GUARD_SOURCE_DEVICE
   readonly _QCSD_LIFECYCLE_GUARD_SOURCE_INODE _QCSD_LIFECYCLE_GUARD_SOURCE_PATH
   readonly _QCSD_LIFECYCLE_GUARD_SOURCE_SHA256 _QCSD_LIFECYCLE_HELPER_SOURCE_DEVICE
@@ -1839,7 +1960,31 @@ for k in keys: print(v[k])
   readonly _QCSD_LIFECYCLE_DOCKER_CONFIG_PATH
   readonly _QCSD_LIFECYCLE_BUILDX_CONFIG_DEVICE _QCSD_LIFECYCLE_BUILDX_CONFIG_INODE
   readonly _QCSD_LIFECYCLE_BUILDX_CONFIG_PATH
+  readonly _QCSD_LIFECYCLE_COHORT_LOCK_REQUIRED _QCSD_LIFECYCLE_COHORT_VERSION
+  readonly _QCSD_LIFECYCLE_COHORT_LOCK_FD _QCSD_LIFECYCLE_COHORT_LOCK_PATH
+  readonly _QCSD_LIFECYCLE_COHORT_LOCK_DEVICE _QCSD_LIFECYCLE_COHORT_LOCK_INODE
+  readonly _QCSD_LIFECYCLE_COHORT_LOCK_PARENT_DEVICE
+  readonly _QCSD_LIFECYCLE_COHORT_LOCK_PARENT_INODE
+  readonly _QCSD_LIFECYCLE_ENTRY_VALIDATED=1
+  _QCSD_LIFECYCLE_RECOVERY_STATE=armed
   _QCSD_LIFECYCLE_LOCK_MODE=exclusive
+}
+
+_qcsd_complete_lifecycle_recovery() {
+  local recovery_fd="${_QCSD_LIFECYCLE_RECOVERY_READY_FD:-}"
+  local final_go_fd="${_QCSD_LIFECYCLE_FINAL_GO_FD:-}"
+  [[ "${_QCSD_LIFECYCLE_RECOVERY_STATE:-}" == armed &&
+      "${recovery_fd}" =~ ^[0-9]+$ &&
+      "${final_go_fd}" =~ ^[0-9]+$ &&
+      "${_QCSD_LIFECYCLE_RECOVERY_NONCE:-}" =~ ^[0-9a-f]{64}$ &&
+      "${_QCSD_LIFECYCLE_FINAL_GO_NONCE:-}" =~ ^[0-9a-f]{64}$ ]] || return 1
+  _QCSD_LIFECYCLE_RECOVERY_STATE=consuming
+  printf '%s\n' "${_QCSD_LIFECYCLE_RECOVERY_NONCE}" >&"${recovery_fd}" || return 1
+  eval "exec ${recovery_fd}>&-" || return 1
+  _qcsd_read_exact_lifecycle_frame \
+    "${final_go_fd}" "${_QCSD_LIFECYCLE_FINAL_GO_NONCE}" || return 1
+  eval "exec ${final_go_fd}<&-" || return 1
+  _QCSD_LIFECYCLE_RECOVERY_STATE=complete
 }
 
 _qcsd_enter_lifecycle_guardian() {
@@ -1856,6 +2001,9 @@ _qcsd_enter_lifecycle_guardian() {
 }
 
 reconcile_stale_docker_supervisors() {
+  if [[ "${QCSD_LAUNCH_ACTION}" == "build" ]]; then
+    _qcsd_reprove_build_cohort_authority "immediately-before-docker-recovery" || exit 1
+  fi
   # Validate the durable namespace before legacy recovery can mutate anything;
   # both sets are then revalidated at their respective mutation boundaries.
   [[ "${_QCSD_LIFECYCLE_LOCK_MODE:-}" == "exclusive" ]] || return 1
@@ -1880,12 +2028,10 @@ reconcile_stale_docker_supervisors() {
   qcsd_reconcile_docker_lifecycle recover
 }
 
-require_docker() {
-  # These are helper-internal trust anchors, never caller inputs.  Clear any
-  # ambient values before the first discovery call so endpoint selection
-  # cannot accidentally inherit a forged prior binding.
-  unset _QCSD_DOCKER_PINNED_CONTEXT _QCSD_DOCKER_PINNED_HOST
-  unset _QCSD_DOCKER_PINNED_SERVER_ID _QCSD_DOCKER_PINNED_BOOT_ID
+_qcsd_require_lifecycle_guardian_entry() {
+  if [[ "${_QCSD_LIFECYCLE_ENTRY_VALIDATED:-}" == 1 ]]; then
+    return 0
+  fi
   local guardian_environment_present=0
   while IFS='=' read -r _qcsd_guard_key _qcsd_guard_value; do
     if [[ "${_qcsd_guard_key}" == QCSD_DOCKER_LOCK_GUARDIAN_* ]]; then
@@ -1898,8 +2044,17 @@ require_docker() {
   fi
   _qcsd_validate_lifecycle_guardian || {
     echo "qcsd-lab lifecycle guardian authority is invalid" >&2
-    exit 1
+    return 1
   }
+}
+
+require_docker() {
+  # These are helper-internal trust anchors, never caller inputs.  Clear any
+  # ambient values before the first discovery call so endpoint selection
+  # cannot accidentally inherit a forged prior binding.
+  unset _QCSD_DOCKER_PINNED_CONTEXT _QCSD_DOCKER_PINNED_HOST
+  unset _QCSD_DOCKER_PINNED_SERVER_ID _QCSD_DOCKER_PINNED_BOOT_ID
+  _qcsd_require_lifecycle_guardian_entry || exit 1
   _qcsd_secure_lifecycle_base || exit 1
   command -v docker >/dev/null 2>&1 || {
     echo "qcsd-lab requires Docker on the host" >&2
@@ -1985,6 +2140,10 @@ require_docker() {
     echo "qcsd-lab host boot changed across lifecycle reconciliation" >&2
     exit 1
   fi
+  _qcsd_complete_lifecycle_recovery || {
+    echo "qcsd-lab final Docker lifecycle admission failed" >&2
+    exit 1
+  }
   # Campaign execution is intentionally serial. Retain the exact exclusive
   # lifecycle lock for the full invocation so publication, handoff retirement,
   # and crash recovery share one globally quiescent ownership namespace.
@@ -2505,7 +2664,13 @@ begin_evidence_build_transaction() {
     echo "qcsd-lab cannot establish durable build-transaction evidence" >&2
     return 1
   fi
-  token="$(_qcsd_supervisor_token)" || return 1
+  # This transaction is the one exact provisional mutation owned by the
+  # current guardian lease.  Deriving its canonical name from the guardian's
+  # unguessable lease nonce lets the completion child independently prove that
+  # the retired path supplied by its qcsd parent belongs to this invocation;
+  # an arbitrary absent transaction.<nonce> pathname is not sufficient.
+  [[ "${_QCSD_LIFECYCLE_LEASE_NONCE:-}" =~ ^[0-9a-f]{64}$ ]] || return 1
+  token="${_QCSD_LIFECYCLE_LEASE_NONCE:0:32}"
   _qcsd_create_lifecycle_root transaction "${token}" || return 1
   build_transaction_root="${_qcsd_lifecycle_root}"
   IFS= read -r transaction_boot_id </proc/sys/kernel/random/boot_id || {
@@ -2553,7 +2718,8 @@ begin_evidence_build_transaction() {
 }
 
 complete_evidence_build_transaction() {
-  local record root_metadata record_metadata
+  local record root_metadata record_metadata receipt_binding_recheck
+  local transaction_binding
   record="${build_transaction_root:-}/SUPERVISION"
   if [[ "${_QCSD_LIFECYCLE_LOCK_MODE:-}" != "exclusive" ]] ||
      ! _qcsd_verify_pinned_docker_daemon ||
@@ -2567,7 +2733,14 @@ complete_evidence_build_transaction() {
         "${_QCSD_LIFECYCLE_SELECTED_VALUES[cohort_version]}" != \
           "${build_cohort_version}" ||
         "${_QCSD_LIFECYCLE_SELECTED_VALUES[receipt_path]}" != \
-          "${build_receipt}" ]]; then
+        "${build_receipt}" ]] ||
+     ! receipt_binding_recheck="$(
+       python3 -I "${ROOT}/src/qcsd_lab/build_storage.py" receipt-binding \
+         "${build_receipt}" --expected-cohort "${build_cohort_version}" \
+         --probe-path "${ROOT}/tools/windows_docker_storage_probe.ps1"
+     )" || [[ -z "${receipt_binding_recheck}" ||
+               "${receipt_binding_recheck}" == *$'\n'* ||
+               "${receipt_binding_recheck}" != "${build_receipt_binding:-}" ]]; then
     echo "qcsd-lab cannot validate the active build transaction at commit" >&2
     return 1
   fi
@@ -2576,15 +2749,27 @@ complete_evidence_build_transaction() {
   record_metadata="$(stat -Lc '%u:%a:%h:%F' -- "${record}" 2>/dev/null)" ||
     return 1
   if [[ "${root_metadata}" != "$(id -u):700:directory" ||
-        "${record_metadata}" != "$(id -u):600:1:regular file" ||
-        -L "${build_receipt}" || ! -f "${build_receipt}" ]]; then
+        "${record_metadata}" != "$(id -u):600:1:regular file" ]]; then
     echo "qcsd-lab cannot acknowledge an incomplete build transaction" >&2
     return 1
   fi
-  # The receipt writer has already fsynced both the validated receipt and its
-  # parent directory. Removing this taint is therefore the commit point: a
-  # signal before it leaves the transaction blocked; a signal after it cannot
-  # erase the immutable receipt that accounts for every static-tag mutation.
+  if ! transaction_binding="$(
+    python3 -I "${ROOT}/src/qcsd_lab/build_storage.py" transaction-binding \
+      "${record}" --expected-receipt "${build_receipt}" \
+      --expected-cohort "${build_cohort_version}" \
+      --expected-lease-nonce "${_QCSD_LIFECYCLE_LEASE_NONCE}" \
+      --probe-path "${ROOT}/tools/windows_docker_storage_probe.ps1"
+  )" || [[ -z "${transaction_binding}" || "${transaction_binding}" == *$'\n'* ]]; then
+    echo "qcsd-lab cannot bind the active build transaction before retirement" >&2
+    return 1
+  fi
+  # The receipt writer has already fsynced both the exact validated receipt
+  # inode and its parent.  The transaction may retire only while that complete
+  # byte/stat/schema/cohort binding remains unchanged.  Retirement is still
+  # provisional: the separately fsynced completion file is the authoritative
+  # build-success linearisation after scratch cleanup and final reproof.
+  build_retired_transaction_root="${build_transaction_root}"
+  build_transaction_retirement_binding="${transaction_binding}"
   _qcsd_lifecycle_remove_root "${build_transaction_root}" 0 transaction-committed || return 1
   _QCSD_DOCKER_BUILD_TRANSACTION_ROOT=""
   build_transaction_root=""
@@ -2813,19 +2998,597 @@ wsl_host_build_storage_probe() {
   echo "WSL Docker backing-storage check passed at ${boundary}: ${available_bytes} available bytes" >&2
 }
 
+# The checked-in dense prefix is the immutable genesis for BuFLO-study cohort
+# numbers.  Permanent create-only claims extend it at runtime, so a failed
+# pre-receipt launch consumes its number just as a completed receipt does.
+# Authenticate the descriptor-read bytes to the exact HEAD and stage-zero Git
+# blobs, and return the complete Git/filesystem authority used by that claim.
+_qcsd_validate_consumed_cohort_ledger() {
+  local requested_version="$1"
+  local ledger_relative="config/buflo-study/v1/consumed-cohorts.json"
+  local ledger="${ROOT}/${ledger_relative}"
+  local object_format lab_head head_record index_record neqo_head
+  local head_gitlink index_gitlink snapshot commit_payload_base64
+  local root_tree_payload_base64 config_tree_payload_base64
+  local study_tree_payload_base64 version_tree_payload_base64
+  local object_format_after lab_head_after head_record_after index_record_after
+  local neqo_head_after head_gitlink_after index_gitlink_after
+  [[ "${requested_version}" =~ ^[1-9][0-9]*$ ]] || return 1
+  object_format="$(_qcsd_trusted_git -C "${ROOT}" rev-parse --show-object-format)" || return 1
+  if [[ "${object_format}" != "sha1" ]]; then
+    echo "consumed-cohort allocation requires the workspace SHA-1 Git object format" >&2
+    return 1
+  fi
+  lab_head="$(_qcsd_trusted_git -C "${ROOT}" rev-parse --verify "HEAD^{commit}")" || return 1
+  head_record="$(_qcsd_trusted_git -C "${ROOT}" ls-tree "${lab_head}" -- "${ledger_relative}")" || return 1
+  index_record="$(_qcsd_trusted_git -C "${ROOT}" ls-files --stage -- "${ledger_relative}")" || return 1
+  neqo_head="$(_qcsd_trusted_git -C "${ROOT}/neqo-qcsd" rev-parse --verify "HEAD^{commit}")" || return 1
+  head_gitlink="$(_qcsd_trusted_git -C "${ROOT}" rev-parse "${lab_head}:neqo-qcsd")" || return 1
+  index_gitlink="$(_qcsd_trusted_git -C "${ROOT}" ls-files --stage -- neqo-qcsd)" || return 1
+  commit_payload_base64="$(_qcsd_trusted_git -C "${ROOT}" cat-file commit "${lab_head}" | /usr/bin/base64 --wrap=0)" || return 1
+  root_tree_payload_base64="$(_qcsd_trusted_git -C "${ROOT}" cat-file tree "${lab_head}^{tree}" | /usr/bin/base64 --wrap=0)" || return 1
+  config_tree_payload_base64="$(_qcsd_trusted_git -C "${ROOT}" cat-file tree "${lab_head}:config" | /usr/bin/base64 --wrap=0)" || return 1
+  study_tree_payload_base64="$(_qcsd_trusted_git -C "${ROOT}" cat-file tree "${lab_head}:config/buflo-study" | /usr/bin/base64 --wrap=0)" || return 1
+  version_tree_payload_base64="$(_qcsd_trusted_git -C "${ROOT}" cat-file tree "${lab_head}:config/buflo-study/v1" | /usr/bin/base64 --wrap=0)" || return 1
+  if [[ -z "${commit_payload_base64}" || -z "${root_tree_payload_base64}" ||
+        -z "${config_tree_payload_base64}" || -z "${study_tree_payload_base64}" ||
+        -z "${version_tree_payload_base64}" ]]; then
+    echo "consumed-cohort Git inclusion proof is incomplete" >&2
+    return 1
+  fi
+  if ! snapshot="$(/usr/bin/python3 -I -c '
+import base64
+import hashlib
+import json
+import os
+import re
+import stat
+import sys
+
+root = os.path.abspath(sys.argv[1])
+relative = sys.argv[2]
+requested_text = sys.argv[3]
+object_format = sys.argv[4]
+lab_head = sys.argv[5]
+head_record = sys.argv[6]
+index_record = sys.argv[7]
+neqo_head = sys.argv[8]
+head_gitlink = sys.argv[9]
+index_gitlink = sys.argv[10]
+path = os.path.join(root, relative)
+if (
+    root != sys.argv[1]
+    or os.path.realpath(root) != root
+    or relative != "config/buflo-study/v1/consumed-cohorts.json"
+    or re.fullmatch(r"[1-9][0-9]*", requested_text) is None
+    or object_format != "sha1"
+):
+    raise SystemExit("invalid consumed-cohort ledger request")
+
+oid_length = 40
+oid_pattern = rf"[0-9a-f]{{{oid_length}}}"
+if (
+    re.fullmatch(oid_pattern, lab_head) is None
+    or re.fullmatch(oid_pattern, neqo_head) is None
+    or re.fullmatch(oid_pattern, head_gitlink) is None
+    or head_gitlink != neqo_head
+):
+    raise SystemExit("consumed-cohort Git commit identity is invalid")
+head_match = re.fullmatch(
+    rf"100644 blob ({oid_pattern})\t{re.escape(relative)}", head_record
+)
+index_match = re.fullmatch(
+    rf"100644 ({oid_pattern}) 0\t{re.escape(relative)}", index_record
+)
+gitlink_match = re.fullmatch(
+    rf"160000 ({oid_pattern}) 0\tneqo\-qcsd", index_gitlink
+)
+if (
+    head_match is None
+    or index_match is None
+    or gitlink_match is None
+    or head_match.group(1) != index_match.group(1)
+    or gitlink_match.group(1) != head_gitlink
+):
+    raise SystemExit("consumed-cohort Git blob identity is invalid")
+head_blob = head_match.group(1)
+index_blob = index_match.group(1)
+
+directory_flags = (
+    os.O_RDONLY
+    | getattr(os, "O_CLOEXEC", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+    | getattr(os, "O_DIRECTORY", 0)
+)
+file_flags = (
+    os.O_RDONLY
+    | getattr(os, "O_CLOEXEC", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+    | getattr(os, "O_NONBLOCK", 0)
+)
+opened = []
+
+def identity(value):
+    return {
+        "dev": value.st_dev,
+        "inode": value.st_ino,
+        "uid": value.st_uid,
+        "gid": value.st_gid,
+        "mode": stat.S_IMODE(value.st_mode),
+        "nlink": value.st_nlink,
+        "size": value.st_size,
+        "mtime_ns": value.st_mtime_ns,
+        "ctime_ns": value.st_ctime_ns,
+    }
+
+def stable_directory_identity(value):
+    return {
+        "type": stat.S_IFMT(value.st_mode),
+        "dev": value.st_dev,
+        "inode": value.st_ino,
+        "uid": value.st_uid,
+        "gid": value.st_gid,
+        "mode": stat.S_IMODE(value.st_mode),
+    }
+
+def safe_directory(value):
+    return (
+        stat.S_ISDIR(value.st_mode)
+        and value.st_uid == os.getuid()
+        and stat.S_IMODE(value.st_mode) & 0o022 == 0
+    )
+
+def open_directory(label, name, parent_fd=None):
+    descriptor = (
+        os.open(name, directory_flags)
+        if parent_fd is None
+        else os.open(name, directory_flags, dir_fd=parent_fd)
+    )
+    value = os.fstat(descriptor)
+    entry = (
+        os.stat(name, follow_symlinks=False)
+        if parent_fd is None
+        else os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    )
+    if (
+        not safe_directory(value)
+        or stable_directory_identity(value) != stable_directory_identity(entry)
+    ):
+        os.close(descriptor)
+        raise SystemExit(f"consumed-cohort {label} directory identity is invalid")
+    opened.append((label, descriptor, value, parent_fd, name))
+    return descriptor
+
+try:
+    root_fd = open_directory("repository-root", root)
+    config_fd = open_directory("config", "config", root_fd)
+    study_fd = open_directory("buflo-study", "buflo-study", config_fd)
+    version_fd = open_directory("v1", "v1", study_fd)
+    git_fd = open_directory("git", ".git", root_fd)
+
+    descriptor = os.open("consumed-cohorts.json", file_flags, dir_fd=version_fd)
+    opened.append(("ledger", descriptor, os.fstat(descriptor), version_fd, "consumed-cohorts.json"))
+    before = opened[-1][2]
+    entry_before = os.stat(
+        "consumed-cohorts.json", dir_fd=version_fd, follow_symlinks=False
+    )
+    if before.st_size > 16384:
+        raise SystemExit("consumed-cohort ledger is too large")
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_uid != os.getuid()
+        or before.st_nlink != 1
+        or stat.S_IMODE(before.st_mode) & 0o022
+        or stat.S_IMODE(before.st_mode) & 0o111
+        or before.st_size < 1
+        or identity(before) != identity(entry_before)
+    ):
+        raise SystemExit("consumed-cohort ledger metadata is invalid")
+    chunks = []
+    observed = 0
+    while True:
+        block = os.read(descriptor, min(65536, 16385 - observed))
+        if not block:
+            break
+        chunks.append(block)
+        observed += len(block)
+        if observed > 16384:
+            raise SystemExit("consumed-cohort ledger is too large")
+    payload = b"".join(chunks)
+    after = os.fstat(descriptor)
+    path_value = os.stat(
+        "consumed-cohorts.json", dir_fd=version_fd, follow_symlinks=False
+    )
+    index_fd = os.open("index", file_flags, dir_fd=git_fd)
+    opened.append(("git-index", index_fd, os.fstat(index_fd), git_fd, "index"))
+    index_value = opened[-1][2]
+    index_entry = os.stat("index", dir_fd=git_fd, follow_symlinks=False)
+    if (
+        not stat.S_ISREG(index_value.st_mode)
+        or index_value.st_uid != os.getuid()
+        or index_value.st_nlink != 1
+        or stat.S_IMODE(index_value.st_mode) & 0o022
+        or identity(index_value) != identity(index_entry)
+    ):
+        raise SystemExit("consumed-cohort Git index identity is invalid")
+
+    for label, opened_fd, initial, parent_fd, name in opened:
+        current = os.fstat(opened_fd)
+        entry = (
+            os.stat(name, follow_symlinks=False)
+            if parent_fd is None
+            else os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        )
+        if stat.S_ISDIR(initial.st_mode):
+            changed = (
+                stable_directory_identity(initial) != stable_directory_identity(current)
+                or stable_directory_identity(current) != stable_directory_identity(entry)
+            )
+        else:
+            changed = identity(initial) != identity(current) or identity(current) != identity(entry)
+        if changed:
+            raise SystemExit(f"consumed-cohort {label} identity changed while read")
+finally:
+    for _label, opened_fd, _initial, _parent_fd, _name in reversed(opened):
+        os.close(opened_fd)
+
+if len(payload) != before.st_size or identity(before) != identity(after):
+    raise SystemExit("consumed-cohort ledger identity changed while read")
+
+git_digest = hashlib.new(object_format)
+git_digest.update(b"blob " + str(len(payload)).encode("ascii") + b"\0" + payload)
+worktree_blob = git_digest.hexdigest()
+if worktree_blob != head_blob or worktree_blob != index_blob:
+    raise SystemExit("consumed-cohort worktree bytes differ from the checked-in Git blob")
+
+def reject_constant(value):
+    raise ValueError(f"invalid JSON constant: {value}")
+
+def unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+try:
+    value = json.loads(
+        payload.decode("utf-8", errors="strict"),
+        object_pairs_hook=unique_object,
+        parse_constant=reject_constant,
+    )
+except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as error:
+    raise SystemExit(f"consumed-cohort ledger JSON is invalid: {error}") from error
+
+expected_keys = (
+    "artifact_type",
+    "consumed_versions",
+    "policy",
+    "schema_version",
+)
+if not isinstance(value, dict) or set(value) != set(expected_keys):
+    raise SystemExit("consumed-cohort ledger schema is invalid")
+if (
+    value["artifact_type"] != "qcsd-buflo-study-consumed-cohorts"
+    or value["policy"] != "dense-prefix-durable-publications-consume-v1"
+    or type(value["schema_version"]) is not int
+    or value["schema_version"] != 1
+):
+    raise SystemExit("consumed-cohort ledger contract is invalid")
+versions = value["consumed_versions"]
+if (
+    not isinstance(versions, list)
+    or not versions
+    or any(type(item) is not int for item in versions)
+    or versions != list(range(1, len(versions) + 1))
+):
+    raise SystemExit("consumed-cohort versions must be one strict dense prefix")
+requested = int(requested_text)
+next_version = versions[-1] + 1
+if requested < next_version:
+    raise SystemExit(
+        f"cohort v{requested} is consumed by the genesis ledger; "
+        f"minimum fresh cohort is v{next_version}"
+    )
+ledger_sha256 = hashlib.sha256(payload).hexdigest()
+receipt = {
+    "schema_version": 1,
+    "artifact_type": "qcsd-buflo-study-cohort-allocation",
+    "policy": "dense-prefix-durable-publications-consume-v1",
+    "ledger_path": relative,
+    "ledger_sha256": ledger_sha256,
+    "ledger_payload_base64": base64.b64encode(payload).decode("ascii"),
+    "git_object_format": object_format,
+    "ledger_git_blob_oid": worktree_blob,
+    "lab_commit_ledger_proof": {
+        "schema_version": 1,
+        "artifact_type": "qcsd-buflo-study-cohort-ledger-git-proof",
+        "commit_payload_base64": sys.argv[11],
+        "tree_payloads_base64": list(sys.argv[12:16]),
+    },
+    "lab_commit": lab_head,
+    "neqo_commit": neqo_head,
+    "neqo_gitlink": head_gitlink,
+    "last_consumed_version": versions[-1],
+    "allocated_version": requested,
+}
+authority = {
+    "schema_version": 1,
+    "artifact_type": "qcsd-buflo-study-cohort-allocation-authority",
+    "git": {
+        "object_format": object_format,
+        "lab_head": lab_head,
+        "head_blob_oid": head_blob,
+        "index_blob_oid": index_blob,
+        "worktree_blob_oid": worktree_blob,
+        "neqo_head": neqo_head,
+        "head_gitlink": head_gitlink,
+        "index_gitlink": gitlink_match.group(1),
+    },
+    "filesystem": {
+        "directories": {
+            label: identity(initial)
+            for label, _fd, initial, _parent, _name in opened
+            if label not in {"ledger", "git-index"}
+        },
+        "ledger": identity(before),
+        "git_index": identity(index_value),
+    },
+    "receipt": receipt,
+}
+print(json.dumps(authority, sort_keys=True, separators=(",", ":")))
+' "${ROOT}" "${ledger_relative}" "${requested_version}" "${object_format}" \
+    "${lab_head}" "${head_record}" "${index_record}" "${neqo_head}" \
+    "${head_gitlink}" "${index_gitlink}" "${commit_payload_base64}" \
+    "${root_tree_payload_base64}" "${config_tree_payload_base64}" \
+    "${study_tree_payload_base64}" "${version_tree_payload_base64}")" ||
+      [[ -z "${snapshot}" || "${snapshot}" == *$'\n'* ]]; then
+    return 1
+  fi
+
+  object_format_after="$(_qcsd_trusted_git -C "${ROOT}" rev-parse --show-object-format)" || return 1
+  lab_head_after="$(_qcsd_trusted_git -C "${ROOT}" rev-parse --verify "HEAD^{commit}")" || return 1
+  head_record_after="$(_qcsd_trusted_git -C "${ROOT}" ls-tree "${lab_head_after}" -- "${ledger_relative}")" || return 1
+  index_record_after="$(_qcsd_trusted_git -C "${ROOT}" ls-files --stage -- "${ledger_relative}")" || return 1
+  neqo_head_after="$(_qcsd_trusted_git -C "${ROOT}/neqo-qcsd" rev-parse --verify "HEAD^{commit}")" || return 1
+  head_gitlink_after="$(_qcsd_trusted_git -C "${ROOT}" rev-parse "${lab_head_after}:neqo-qcsd")" || return 1
+  index_gitlink_after="$(_qcsd_trusted_git -C "${ROOT}" ls-files --stage -- neqo-qcsd)" || return 1
+  if [[ "${object_format_after}" != "${object_format}" ||
+        "${lab_head_after}" != "${lab_head}" ||
+        "${head_record_after}" != "${head_record}" ||
+        "${index_record_after}" != "${index_record}" ||
+        "${neqo_head_after}" != "${neqo_head}" ||
+        "${head_gitlink_after}" != "${head_gitlink}" ||
+        "${index_gitlink_after}" != "${index_gitlink}" ]]; then
+    echo "consumed-cohort Git authority changed while it was validated" >&2
+    return 1
+  fi
+  printf '%s\n' "${snapshot}"
+}
+
+_qcsd_invoke_cohort_allocator() {
+  local action="${1:-}" input="${2:-}" output_name="${3:-}"
+  local output_fd allocator_pid allocator_output='' extra_output=''
+  local read_failed=0 wait_status=0 close_status=0
+  [[ "${action}" =~ ^(publish|verify|chain)$ &&
+      "${output_name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ &&
+      -n "${input}" && "${input}" != *$'\n'* &&
+      "${_QCSD_LIFECYCLE_COHORT_LOCK_REQUIRED:-}" == 1 ]] || return 1
+  exec {output_fd}< <(
+    exec /usr/bin/python3 -I "${ROOT}/src/qcsd_lab/cohort_allocation.py" \
+      "${action}" --root "${ROOT}" \
+      --held-lock-owner-pid "${_QCSD_LIFECYCLE_QCSD_PID}" \
+      --held-lock-owner-start "${_QCSD_LIFECYCLE_QCSD_START}" \
+      --held-lock-guardian-pid "${_QCSD_LIFECYCLE_GUARD_PID}" \
+      --held-lock-guardian-start "${_QCSD_LIFECYCLE_GUARD_START}" \
+      --held-lock-guardian-fd "${_QCSD_LIFECYCLE_COHORT_LOCK_FD}" \
+      --held-lock-path "${_QCSD_LIFECYCLE_COHORT_LOCK_PATH}" \
+      --held-lock-device "${_QCSD_LIFECYCLE_COHORT_LOCK_DEVICE}" \
+      --held-lock-inode "${_QCSD_LIFECYCLE_COHORT_LOCK_INODE}" \
+      --held-lock-parent-device \
+        "${_QCSD_LIFECYCLE_COHORT_LOCK_PARENT_DEVICE}" \
+      --held-lock-parent-inode \
+        "${_QCSD_LIFECYCLE_COHORT_LOCK_PARENT_INODE}" \
+      --held-lock-cohort-version "${_QCSD_LIFECYCLE_COHORT_VERSION}" \
+      <<<"${input}"
+  ) || return 1
+  allocator_pid=$!
+  if ! IFS= read -r allocator_output <&"${output_fd}"; then
+    read_failed=1
+  fi
+  if IFS= read -r extra_output <&"${output_fd}" || [[ -n "${extra_output}" ]]; then
+    read_failed=1
+  fi
+  wait "${allocator_pid}" || wait_status=$?
+  eval "exec ${output_fd}<&-" || close_status=$?
+  (( read_failed == 0 && wait_status == 0 && close_status == 0 )) || return 1
+  [[ -n "${allocator_output}" && "${allocator_output}" != *$'\n'* ]] || return 1
+  printf -v "${output_name}" '%s' "${allocator_output}"
+}
+
+_qcsd_open_cohort_chain_channel() {
+  local input="${1:-}" descriptor_name="${2:-}" producer_name="${3:-}"
+  local channel_fd producer_pid
+  [[ -n "${input}" && "${input}" != *$'\n'* &&
+      "${descriptor_name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ &&
+      "${producer_name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
+  exec {channel_fd}< <(
+    # Bash's builtin keeps the large chain out of every external exec argv.
+    printf '%s\n' "${input}"
+  ) || return 1
+  producer_pid=$!
+  if [[ ! "${channel_fd}" =~ ^[0-9]+$ ||
+        ! "${producer_pid}" =~ ^[1-9][0-9]*$ ]]; then
+    if [[ "${channel_fd}" =~ ^[0-9]+$ ]]; then
+      eval "exec ${channel_fd}<&-" || true
+    fi
+    if [[ "${producer_pid}" =~ ^[1-9][0-9]*$ ]]; then
+      wait "${producer_pid}" 2>/dev/null || true
+    fi
+    return 1
+  fi
+  printf -v "${descriptor_name}" '%s' "${channel_fd}"
+  printf -v "${producer_name}" '%s' "${producer_pid}"
+}
+
+_qcsd_verify_saved_build_cohort_claim() {
+  local boundary="${1:-}" claim_recheck chain_recheck
+  [[ -n "${boundary}" && -n "${build_cohort_claim_snapshot:-}" &&
+      -n "${build_cohort_claim_chain:-}" ]] || return 1
+  if ! _qcsd_invoke_cohort_allocator verify \
+      "${build_cohort_claim_snapshot}" claim_recheck ||
+     [[ "${claim_recheck}" != "${build_cohort_claim_snapshot}" ]]; then
+    echo "build durable cohort claim changed at ${boundary}" >&2
+    return 1
+  fi
+  if ! _qcsd_invoke_cohort_allocator chain \
+      "${build_cohort_claim_snapshot}" chain_recheck ||
+     [[ "${chain_recheck}" != "${build_cohort_claim_chain}" ]]; then
+    echo "build durable cohort claim chain changed at ${boundary}" >&2
+    return 1
+  fi
+}
+
+_qcsd_verify_saved_build_cohort_authority() {
+  local boundary="${1:-}" recheck
+  if [[ -z "${boundary}" ]] ||
+     ! _qcsd_verify_clean_build_checkout \
+       "${build_cohort_lab_head:-}" "${build_cohort_neqo_head:-}" \
+       "${build_cohort_gitlink:-}" ||
+     ! recheck="$(_qcsd_validate_consumed_cohort_ledger \
+         "${build_cohort_version:-}")" ||
+     [[ "${recheck}" != "${build_cohort_ledger_snapshot:-}" ]]; then
+    echo "build consumed-cohort/source authority changed at ${boundary}" >&2
+    return 1
+  fi
+  _qcsd_verify_saved_build_cohort_claim "${boundary}"
+}
+
+_qcsd_reprove_build_cohort_authority() {
+  local boundary="$1" recheck observation
+  if ! _qcsd_verify_clean_build_checkout \
+      "${build_cohort_lab_head:-}" "${build_cohort_neqo_head:-}" \
+      "${build_cohort_gitlink:-}" ||
+     ! recheck="$(_qcsd_validate_consumed_cohort_ledger \
+         "${build_cohort_version:-}")" ||
+     [[ "${recheck}" != "${build_cohort_ledger_snapshot:-}" ]]; then
+    echo "build consumed-cohort/source authority changed at ${boundary}" >&2
+    return 1
+  fi
+  if [[ -n "${build_cohort_claim_snapshot:-}" ]]; then
+    _qcsd_verify_saved_build_cohort_claim "${boundary}" || return 1
+    if ! observation="$(
+      QCSD_COHORT_REPROOF_BOUNDARY="${boundary}" \
+      QCSD_COHORT_REPROOF_AUTHORITY="${recheck}" \
+      QCSD_COHORT_REPROOF_CLAIM="${build_cohort_claim_snapshot}" \
+        /usr/bin/python3 -I - <<'PY'
+import datetime
+import hashlib
+import json
+import os
+import re
+
+boundary = os.environ["QCSD_COHORT_REPROOF_BOUNDARY"]
+authority_raw = os.environ["QCSD_COHORT_REPROOF_AUTHORITY"]
+claim_raw = os.environ["QCSD_COHORT_REPROOF_CLAIM"]
+authority = json.loads(authority_raw)
+claim = json.loads(claim_raw)
+claim_file_sha256 = claim.get("claim", {}).get("sha256")
+if (
+    not boundary
+    or not isinstance(authority, dict)
+    or not isinstance(claim, dict)
+    or not isinstance(claim_file_sha256, str)
+    or re.fullmatch(r"[0-9a-f]{64}", claim_file_sha256) is None
+):
+    raise SystemExit(1)
+value = {
+    "boundary": boundary,
+    "observed_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    "authority_sha256": hashlib.sha256(authority_raw.encode("ascii")).hexdigest(),
+    "claim_snapshot_sha256": hashlib.sha256(claim_raw.encode("ascii")).hexdigest(),
+    "claim_file_sha256": claim_file_sha256,
+}
+print(json.dumps(value, sort_keys=True, separators=(",", ":")))
+PY
+    )" || [[ -z "${observation}" || "${observation}" == *$'\n'* ]]; then
+      echo "build cannot record cohort-authority reproof at ${boundary}" >&2
+      return 1
+    fi
+    build_cohort_reproof_observations+=("${observation}")
+  fi
+}
+
+_qcsd_reprove_build_completion_authority() {
+  local boundary="after-build-transaction-completion-before-completion-publication"
+  local observation
+  _qcsd_verify_saved_build_cohort_authority "${boundary}" || return 1
+  if ! observation="$(
+    QCSD_COHORT_REPROOF_BOUNDARY="${boundary}" \
+    QCSD_COHORT_REPROOF_AUTHORITY="${build_cohort_ledger_snapshot}" \
+    QCSD_COHORT_REPROOF_CLAIM="${build_cohort_claim_snapshot}" \
+    QCSD_COHORT_REPROOF_CHAIN_SHA256="${build_cohort_claim_chain_sha256}" \
+      /usr/bin/python3 -I - <<'PY'
+import datetime
+import hashlib
+import json
+import os
+import re
+
+boundary = os.environ["QCSD_COHORT_REPROOF_BOUNDARY"]
+authority_raw = os.environ["QCSD_COHORT_REPROOF_AUTHORITY"]
+claim_raw = os.environ["QCSD_COHORT_REPROOF_CLAIM"]
+chain_sha256 = os.environ["QCSD_COHORT_REPROOF_CHAIN_SHA256"]
+authority = json.loads(authority_raw)
+claim = json.loads(claim_raw)
+claim_file_sha256 = claim.get("claim", {}).get("sha256")
+if (
+    not boundary
+    or not isinstance(authority, dict)
+    or not isinstance(claim, dict)
+    or not isinstance(claim_file_sha256, str)
+    or re.fullmatch(r"[0-9a-f]{64}", claim_file_sha256) is None
+    or re.fullmatch(r"[0-9a-f]{64}", chain_sha256) is None
+):
+    raise SystemExit(1)
+value = {
+    "boundary": boundary,
+    "observed_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    "authority_sha256": hashlib.sha256(authority_raw.encode("ascii")).hexdigest(),
+    "claim_snapshot_sha256": hashlib.sha256(claim_raw.encode("ascii")).hexdigest(),
+    "claim_file_sha256": claim_file_sha256,
+    "claim_chain_sha256": chain_sha256,
+}
+print(json.dumps(value, sort_keys=True, separators=(",", ":")))
+PY
+  )" || [[ -z "${observation}" || "${observation}" == *$'\n'* ]]; then
+    echo "build cannot record its final completion-authority reproof" >&2
+    return 1
+  fi
+  build_completion_final_reproof="${observation}"
+}
+
 # Parse a build request and enforce its create-only destination before any
 # host-capacity or Docker probe.  A responsive daemon and large WSL ext4 free
 # count do not prove that the Windows volume backing Docker's VHDX can safely
 # export a new image.
 if [[ "${1:-}" == "build" ]]; then
   build_transaction_root=""
-  build_cohort_version=1
+  build_retired_transaction_root=""
+  build_receipt_binding=""
+  build_transaction_retirement_binding=""
+  build_completion_final_reproof=""
+  build_cohort_claim_snapshot=""
+  build_cohort_claim_chain=""
+  build_cohort_claim_chain_sha256=""
+  build_cohort_reproof_observations=()
   if (( $# == 3 )) && [[ "${2:-}" == "--cohort-version" ]]; then
     build_cohort_version="${3}"
   elif (( $# == 2 )) && [[ "${2:-}" == --cohort-version=* ]]; then
     build_cohort_version="${2#--cohort-version=}"
-  elif (( $# != 1 )); then
-    echo "build accepts only one optional --cohort-version N" >&2
+  else
+    echo "build requires exactly one explicit --cohort-version N" >&2
     exit 2
   fi
   if [[ ! "${build_cohort_version}" =~ ^[1-9][0-9]*$ ]]; then
@@ -2833,17 +3596,100 @@ if [[ "${1:-}" == "build" ]]; then
     exit 2
   fi
   reject_evidence_build_image_overrides
+  reject_docker_endpoint_overrides
+  # Enter the guardian exactly once before publishing the permanent cohort
+  # claim.  The guardian acquisition itself does not touch Docker; the later
+  # require_docker call performs recovery only after the claim is durable.
+  _qcsd_require_lifecycle_guardian_entry || exit 1
   build_receipt="${ROOT}/artifacts/buflo-study/build-execution-v${build_cohort_version}.json"
+  build_completion="${ROOT}/artifacts/buflo-study/build-completion-v${build_cohort_version}.json"
   build_receipt_parent="$(dirname "${build_receipt}")"
-  if [[ -L "${build_receipt_parent}" || -L "${build_receipt}" ]]; then
+  if [[ -L "${ROOT}/artifacts" || -L "${build_receipt_parent}" ||
+        -L "${build_receipt}" || -L "${build_completion}" ]]; then
     echo "build receipt parent/destination cannot be a symlink" >&2
     exit 1
   fi
-  reject_docker_endpoint_overrides
-  require_docker
-  mkdir -p "${build_receipt_parent}"
-  build_receipt_parent="$(realpath "${build_receipt_parent}")"
+  mkdir -p -- "${build_receipt_parent}"
+  build_receipt_parent="$(realpath -- "${build_receipt_parent}")" || exit 1
   build_receipt="${build_receipt_parent}/$(basename "${build_receipt}")"
+  build_receipt_stage="${build_receipt}.staged-${_QCSD_LIFECYCLE_LEASE_NONCE}"
+  build_receipt_parent_owner="$(stat -Lc '%u' -- "${build_receipt_parent}" 2>/dev/null)" || exit 1
+  build_receipt_parent_mode="$(stat -Lc '%a' -- "${build_receipt_parent}" 2>/dev/null)" || exit 1
+  if [[ "${build_receipt_parent}" != "${ROOT}/artifacts/buflo-study" ||
+        "${build_receipt_parent_owner}" != "$(id -u)" ||
+        ! "${build_receipt_parent_mode}" =~ ^[0-7]{3,4}$ ||
+        $(( 8#${build_receipt_parent_mode} & 0022 )) -ne 0 ||
+        ! -d "${build_receipt_parent}" || -e "${build_receipt}" ||
+        -e "${build_completion}" || -L "${build_completion}" ||
+        -L "${build_receipt}" || -e "${build_receipt_stage}" ||
+        -L "${build_receipt_stage}" ]]; then
+    echo "build requires one safe absent create-only receipt destination" >&2
+    exit 1
+  fi
+  if ! build_cohort_ledger_snapshot="$(
+    _qcsd_validate_consumed_cohort_ledger "${build_cohort_version}"
+  )" || [[ -z "${build_cohort_ledger_snapshot}" ||
+            "${build_cohort_ledger_snapshot}" == *$'\n'* ]]; then
+    echo "build cohort allocation is not authorised by the consumed-cohort ledger" >&2
+    exit 1
+  fi
+  build_cohort_authority_fields="$(/usr/bin/python3 -I -c '
+import json, re, sys
+value=json.loads(sys.stdin.read())
+if set(value)!={"schema_version","artifact_type","git","filesystem","receipt"}:
+    raise SystemExit(1)
+git=value["git"]
+receipt=value["receipt"]
+if (
+    value["schema_version"] != 1
+    or value["artifact_type"] != "qcsd-buflo-study-cohort-allocation-authority"
+    or not isinstance(git, dict)
+    or not isinstance(receipt, dict)
+):
+    raise SystemExit(1)
+fields=(git.get("lab_head"),git.get("neqo_head"),git.get("head_gitlink"))
+if any(not isinstance(item,str) or re.fullmatch(r"[0-9a-f]{40,64}",item) is None for item in fields):
+    raise SystemExit(1)
+if fields[1] != fields[2] or receipt.get("lab_commit") != fields[0]:
+    raise SystemExit(1)
+print("\n".join(fields))
+' <<<"${build_cohort_ledger_snapshot}")" || {
+    echo "build consumed-cohort authority record is malformed" >&2
+    exit 1
+  }
+  mapfile -t build_cohort_authority_values <<<"${build_cohort_authority_fields}"
+  if (( ${#build_cohort_authority_values[@]} != 3 )); then
+    echo "build consumed-cohort authority record is incomplete" >&2
+    exit 1
+  fi
+  build_cohort_lab_head="${build_cohort_authority_values[0]}"
+  build_cohort_neqo_head="${build_cohort_authority_values[1]}"
+  build_cohort_gitlink="${build_cohort_authority_values[2]}"
+  unset build_cohort_authority_fields build_cohort_authority_values
+  _qcsd_reprove_build_cohort_authority "before-cohort-claim" || exit 1
+  build_started_unix_ns="$(/usr/bin/date +%s%N)"
+  if [[ ! "${build_started_unix_ns}" =~ ^[1-9][0-9]*$ ]] ||
+     ! _qcsd_invoke_cohort_allocator publish \
+       "${build_cohort_ledger_snapshot}" build_cohort_claim_snapshot; then
+    echo "build could not publish its permanent cohort-allocation claim" >&2
+    exit 1
+  fi
+  if ! _qcsd_invoke_cohort_allocator chain \
+      "${build_cohort_claim_snapshot}" build_cohort_claim_chain; then
+    echo "build could not close its permanent cohort-allocation claim chain" >&2
+    exit 1
+  fi
+  build_cohort_claim_chain_sha256="$(
+    printf '%s' "${build_cohort_claim_chain}" | /usr/bin/sha256sum
+  )" || exit 1
+  build_cohort_claim_chain_sha256="${build_cohort_claim_chain_sha256%% *}"
+  if [[ ! "${build_cohort_claim_chain_sha256}" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "build could not hash its permanent cohort-allocation claim chain" >&2
+    exit 1
+  fi
+  _qcsd_reprove_build_cohort_authority \
+    "after-cohort-claim-before-docker-recovery" || exit 1
+  require_docker
   build_receipt_parent_identity="$(stat -Lc '%d:%i:%u:%a:%F' -- \
     "${build_receipt_parent}")" || exit 1
   if [[ -e "${build_receipt}" ]]; then
@@ -2866,10 +3712,7 @@ if [[ "${1:-}" == "build" ]]; then
   # Docker build so invocation from another caller directory cannot bypass the
   # next-build interlock.
   cd "${ROOT}"
-  _qcsd_verify_clean_build_checkout || {
-    echo "build requires an exact clean raw-byte Lab/Neqo checkout" >&2
-    exit 1
-  }
+  _qcsd_reprove_build_cohort_authority "after-evidence-build-lock" || exit 1
   reject_unresolved_evidence_build
   _QCSD_DOCKER_BUILD_DAEMON_ID="${build_docker_server_id}"
   _QCSD_DOCKER_BUILD_LOCK_FD="${build_host_lock_fd}"
@@ -2881,7 +3724,10 @@ elif [[ "${1:-}" == "lifecycle-recover" ]]; then
   echo "qcsd-lab Docker lifecycle reconciliation completed" >&2
   exit 0
 elif [[ "${1:-}" != "class-study" && "${1:-}" != "etf-probe" ]]; then
-  require_docker
+  # Defer Docker/lifecycle recovery until any current build receipt and its
+  # authoritative completion companion have been validated below.  Argument
+  # parsing and local evidence validation before that boundary are read-only.
+  qcsd_deferred_generic_docker=1
   require_submodule
 fi
 
@@ -3273,7 +4119,6 @@ _wait_for_file(Path(sys.argv[1]), timeout_seconds=5.0)
 fi
 
 if [[ "${1:-}" == "build" ]]; then
-  build_started_unix_ns="$(date +%s%N)"
   build_iid_dir="$(
     mktemp -d "${build_receipt_parent}/.build-iids-v${build_cohort_version}.XXXXXX"
   )"
@@ -3297,30 +4142,40 @@ if [[ "${1:-}" == "build" ]]; then
     # Test-only boundary override. Production intentionally does no work here.
     :
   }
+  _qcsd_remove_build_iid_scratch() {
+    local cleanup_failed=0
+    if ! rm -f -- \
+        "${collection_iid_path}" "${prepare_iid_path}" "${reference_iid_path}"; then
+      cleanup_failed=1
+    fi
+    if [[ -n "${buildx_plugins_json_path:-}" ]] &&
+       ! rm -f -- "${buildx_plugins_json_path}"; then
+      cleanup_failed=1
+    fi
+    if [[ -n "${buildx_version_output_path:-}" ]] &&
+       ! rm -f -- "${buildx_version_output_path}"; then
+      cleanup_failed=1
+    fi
+    if [[ -e "${build_iid_dir}" || -L "${build_iid_dir}" ]] &&
+       ! rmdir -- "${build_iid_dir}" 2>/dev/null; then
+      cleanup_failed=1
+    fi
+    (( cleanup_failed == 0 ))
+  }
   cleanup_build_iids() {
     # One arithmetic builtin publishes every handler-visible field before Bash
     # can dispatch a pending terminal trap at the next command boundary.
     (( build_iid_cleanup_entry_status = $1,
        build_iid_cleanup_signal_status = _QCSD_LIFETIME_SIGNAL_STATUS,
-       build_iid_cleanup_complete = 0,
        build_iid_cleanup_failure_status = 0,
        build_iid_cleanup_active = 1,
        _QCSD_LIFETIME_CLEANUP_ACTIVE = 1 ))
     trap - EXIT
-    if ! rm -f -- \
-        "${collection_iid_path}" "${prepare_iid_path}" "${reference_iid_path}"; then
-      build_iid_cleanup_failure_status=1
-    fi
-    if [[ -n "${buildx_plugins_json_path:-}" ]] &&
-       ! rm -f -- "${buildx_plugins_json_path}"; then
-      build_iid_cleanup_failure_status=1
-    fi
-    if [[ -n "${buildx_version_output_path:-}" ]] &&
-       ! rm -f -- "${buildx_version_output_path}"; then
-      build_iid_cleanup_failure_status=1
-    fi
-    if ! rmdir -- "${build_iid_dir}" 2>/dev/null; then
-      build_iid_cleanup_failure_status=1
+    if (( build_iid_cleanup_complete == 0 )); then
+      if ! _qcsd_remove_build_iid_scratch; then
+        build_iid_cleanup_failure_status=1
+      fi
+      build_iid_cleanup_complete=1
     fi
     # A terminal signal cannot interrupt deletion or disappear in the final
     # check-to-exit window.  Any uncommitted build-transaction record is outside
@@ -3335,6 +4190,27 @@ if [[ "${1:-}" == "build" ]]; then
     else
       exit "${build_iid_cleanup_failure_status}"
     fi
+  }
+  complete_build_iid_cleanup_before_success() {
+    # Completion cannot authorise a build whose private IID/Buildx scratch
+    # later makes the EXIT trap downgrade success.  Latch signals while the
+    # same idempotent cleanup runs, then disarm EXIT only after it succeeds.
+    (( build_iid_cleanup_active = 1,
+       _QCSD_LIFETIME_CLEANUP_ACTIVE = 1,
+       build_iid_cleanup_failure_status = 0 ))
+    if ! _qcsd_remove_build_iid_scratch; then
+      build_iid_cleanup_failure_status=1
+      (( build_iid_cleanup_active = 0, _QCSD_LIFETIME_CLEANUP_ACTIVE = 0 ))
+      return 1
+    fi
+    build_iid_cleanup_complete=1
+    _qcsd_build_iid_cleanup_terminal_hook
+    trap - EXIT
+    (( build_iid_cleanup_active = 0, _QCSD_LIFETIME_CLEANUP_ACTIVE = 0 ))
+    if (( _QCSD_LIFETIME_SIGNAL_STATUS != 0 )); then
+      return "${_QCSD_LIFETIME_SIGNAL_STATUS}"
+    fi
+    return 0
   }
   trap 'cleanup_build_iids "$?"' EXIT
   buildx_plugins_json_path="$(
@@ -3410,9 +4286,11 @@ print(value["identity_sha256"])
     buildx_identity_sha256="${observation_sha256}"
     buildx_observations+=("${observation}")
   }
+  _qcsd_reprove_build_cohort_authority "immediately-before-build-transaction" || exit 1
   begin_evidence_build_transaction
-  _qcsd_verify_clean_build_checkout || exit 1
+  _qcsd_reprove_build_cohort_authority "immediately-after-build-transaction" || exit 1
   capture_buildx_observation "before-collection"
+  _qcsd_reprove_build_cohort_authority "immediately-before-collection-build" || exit 1
   qcsd_run_docker_build docker --context "${build_docker_context}" build --pull --no-cache \
     --iidfile "${collection_iid_path}" \
     --target collection \
@@ -3422,7 +4300,7 @@ print(value["identity_sha256"])
   capture_buildx_observation "after-collection"
   wsl_host_build_storage_probe "before-prepare"
   validate_local_docker_build_endpoint
-  _qcsd_verify_clean_build_checkout || exit 1
+  _qcsd_reprove_build_cohort_authority "immediately-before-prepare-build" || exit 1
   qcsd_run_docker_build docker --context "${build_docker_context}" build --pull --no-cache \
     --iidfile "${prepare_iid_path}" \
     --target prepare \
@@ -3432,7 +4310,7 @@ print(value["identity_sha256"])
   capture_buildx_observation "after-prepare"
   wsl_host_build_storage_probe "before-reference"
   validate_local_docker_build_endpoint
-  _qcsd_verify_clean_build_checkout || exit 1
+  _qcsd_reprove_build_cohort_authority "immediately-before-reference-build" || exit 1
   qcsd_run_docker_build docker --context "${build_docker_context}" build --pull --no-cache \
     --iidfile "${reference_iid_path}" \
     --target reference \
@@ -3535,8 +4413,43 @@ print(json.dumps([json.loads(line) for line in sys.stdin if line.strip()], separ
   reference_repo_digests="$(_qcsd_docker_api --context "${build_docker_context}" image inspect --format '{{json .RepoDigests}}' "${reference_id}")"
   build_docker_version="$(_qcsd_docker_api --context "${build_docker_context}" version --format '{{json .}}')"
   validate_local_docker_build_endpoint
-  build_finished_unix_ns="$(date +%s%N)"
-  COLLECTION_ID="${collection_id}" \
+  _qcsd_reprove_build_cohort_authority "after-reference-build-before-receipt" || exit 1
+  build_cohort_reproofs_json="$(
+    printf '%s\n' "${build_cohort_reproof_observations[@]}" | \
+      /usr/bin/python3 -I -c '
+import json
+import sys
+
+boundaries = (
+    "after-cohort-claim-before-docker-recovery",
+    "immediately-before-docker-recovery",
+    "after-evidence-build-lock",
+    "immediately-before-build-transaction",
+    "immediately-after-build-transaction",
+    "immediately-before-collection-build",
+    "immediately-before-prepare-build",
+    "immediately-before-reference-build",
+    "after-reference-build-before-receipt",
+)
+rows = [json.loads(line) for line in sys.stdin if line.strip()]
+if [row.get("boundary") for row in rows if isinstance(row, dict)] != list(boundaries):
+    raise SystemExit("cohort-authority reproof inventory is incomplete")
+print(json.dumps(rows, sort_keys=True, separators=(",", ":")))
+'
+  )" || {
+    echo "build cannot finalise its cohort-authority reproof inventory" >&2
+    exit 1
+  }
+  build_finished_unix_ns="$(/usr/bin/date +%s%N)"
+  build_cohort_chain_fd=""
+  build_cohort_chain_producer_pid=""
+  if ! _qcsd_open_cohort_chain_channel "${build_cohort_claim_chain}" \
+      build_cohort_chain_fd build_cohort_chain_producer_pid; then
+    echo "build cannot open its bounded cohort-claim-chain channel" >&2
+    exit 1
+  fi
+  build_receipt_writer_status=0
+  if COLLECTION_ID="${collection_id}" \
   COLLECTION_REPO_DIGESTS="${collection_repo_digests}" \
   PREPARE_ID="${prepare_id}" \
   PREPARE_REPO_DIGESTS="${prepare_repo_digests}" \
@@ -3562,7 +4475,14 @@ print(json.dumps([json.loads(line) for line in sys.stdin if line.strip()], separ
   PREPARE_IID_PATH="${prepare_iid_path}" \
   REFERENCE_IID_PATH="${reference_iid_path}" \
   BUILD_RECEIPT="${build_receipt}" \
+  BUILD_RECEIPT_STAGE="${build_receipt_stage}" \
+  BUILD_RECEIPT_STAGE_TOKEN="${_QCSD_LIFECYCLE_LEASE_NONCE}" \
+  BUILD_RECEIPT_PARENT_IDENTITY="${build_receipt_parent_identity}" \
   BUILD_COHORT_VERSION="${build_cohort_version}" \
+  BUILD_COHORT_ALLOCATION_AUTHORITY="${build_cohort_ledger_snapshot}" \
+  BUILD_COHORT_CLAIM="${build_cohort_claim_snapshot}" \
+  BUILD_COHORT_CLAIM_CHAIN_FD="${build_cohort_chain_fd}" \
+  BUILD_COHORT_REPROOFS="${build_cohort_reproofs_json}" \
   BUILD_ROOT="${ROOT}" \
   BUILD_HOST_STORAGE_APPLICABLE="${build_host_storage_applicable}" \
   BUILD_HOST_STORAGE_PLATFORM="${build_host_storage_platform}" \
@@ -3578,15 +4498,19 @@ print(json.dumps([json.loads(line) for line in sys.stdin if line.strip()], separ
   PREPARE_TAG="${PREPARE_IMAGE}" \
   REFERENCE_TAG="${REFERENCE_IMAGE}" \
   python3 -I - <<'PY'
+import base64
 import datetime
 import hashlib
 import importlib.util
 import json
 import os
+import stat
 from pathlib import Path
 
 root = Path(os.environ["BUILD_ROOT"]).resolve()
 destination = Path(os.environ["BUILD_RECEIPT"])
+staging = Path(os.environ["BUILD_RECEIPT_STAGE"])
+expected_parent_identity = os.environ["BUILD_RECEIPT_PARENT_IDENTITY"]
 started_ns = int(os.environ["BUILD_STARTED_UNIX_NS"])
 finished_ns = int(os.environ["BUILD_FINISHED_UNIX_NS"])
 version = json.loads(os.environ["BUILD_DOCKER_VERSION"])
@@ -3673,9 +4597,101 @@ host_storage = {
     "passed": True,
 }
 buildx = json.loads(os.environ["BUILD_BUILDX_PROVENANCE"])
+cohort_authority_raw = os.environ["BUILD_COHORT_ALLOCATION_AUTHORITY"]
+cohort_claim_raw = os.environ["BUILD_COHORT_CLAIM"]
+try:
+    cohort_claim_chain_fd = int(os.environ["BUILD_COHORT_CLAIM_CHAIN_FD"])
+except (KeyError, ValueError) as error:
+    raise SystemExit("build cohort-claim-chain descriptor is invalid") from error
+if cohort_claim_chain_fd < 3:
+    raise SystemExit("build cohort-claim-chain descriptor is invalid")
+with os.fdopen(os.dup(cohort_claim_chain_fd), "rb") as chain_input:
+    cohort_claim_chain_frame = chain_input.read(16 * 1024 * 1024 + 1)
+if (
+    not cohort_claim_chain_frame
+    or len(cohort_claim_chain_frame) > 16 * 1024 * 1024
+    or not cohort_claim_chain_frame.endswith(b"\n")
+    or cohort_claim_chain_frame.count(b"\n") != 1
+):
+    raise SystemExit("build cohort-claim-chain frame is invalid")
+try:
+    cohort_claim_chain_raw = cohort_claim_chain_frame[:-1].decode("ascii")
+except UnicodeError as error:
+    raise SystemExit("build cohort-claim-chain frame is not ASCII") from error
+cohort_allocation_authority = json.loads(cohort_authority_raw)
+cohort_claim = json.loads(cohort_claim_raw)
+try:
+    cohort_claim_chain = json.loads(cohort_claim_chain_raw)
+    canonical_claim_chain = json.dumps(
+        cohort_claim_chain,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+except (TypeError, ValueError, json.JSONDecodeError) as error:
+    raise SystemExit("build cohort-claim chain is invalid JSON") from error
+if cohort_claim_chain_raw != canonical_claim_chain:
+    raise SystemExit("build cohort-claim-chain frame is not canonical")
+cohort_reproofs = json.loads(os.environ["BUILD_COHORT_REPROOFS"])
+if (
+    not isinstance(cohort_allocation_authority, dict)
+    or set(cohort_allocation_authority)
+    != {"schema_version", "artifact_type", "git", "filesystem", "receipt"}
+    or cohort_allocation_authority.get("schema_version") != 1
+    or cohort_allocation_authority.get("artifact_type")
+    != "qcsd-buflo-study-cohort-allocation-authority"
+    or not isinstance(cohort_allocation_authority.get("receipt"), dict)
+):
+    raise SystemExit("build cohort-allocation authority is invalid")
+claim_binding = cohort_claim.get("claim") if isinstance(cohort_claim, dict) else None
+if (
+    not isinstance(claim_binding, dict)
+    or cohort_claim.get("cohort_version") != int(os.environ["BUILD_COHORT_VERSION"])
+    or not isinstance(claim_binding.get("payload_base64"), str)
+    or not isinstance(claim_binding.get("sha256"), str)
+):
+    raise SystemExit("build cohort-claim publication is invalid")
+claim_chain_head = (
+    cohort_claim_chain.get("head") if isinstance(cohort_claim_chain, dict) else None
+)
+if (
+    not isinstance(claim_chain_head, dict)
+    or claim_chain_head.get("cohort_version")
+    != int(os.environ["BUILD_COHORT_VERSION"])
+    or claim_chain_head.get("sha256") != claim_binding.get("sha256")
+):
+    raise SystemExit("build cohort-claim chain is invalid")
+try:
+    published_claim_bytes = base64.b64decode(
+        claim_binding["payload_base64"].encode("ascii"), validate=True
+    )
+    published_claim = json.loads(published_claim_bytes)
+except (ValueError, UnicodeError, json.JSONDecodeError) as error:
+    raise SystemExit("build cohort-claim payload is invalid") from error
+if (
+    hashlib.sha256(published_claim_bytes).hexdigest() != claim_binding["sha256"]
+    or published_claim.get("payload", {}).get("authority")
+    != cohort_allocation_authority
+):
+    raise SystemExit("build cohort claim does not bind its allocation authority")
+authority_sha256 = hashlib.sha256(cohort_authority_raw.encode("ascii")).hexdigest()
+claim_snapshot_sha256 = hashlib.sha256(cohort_claim_raw.encode("ascii")).hexdigest()
+if (
+    not isinstance(cohort_reproofs, list)
+    or not cohort_reproofs
+    or any(
+        not isinstance(row, dict)
+        or row.get("authority_sha256") != authority_sha256
+        or row.get("claim_snapshot_sha256") != claim_snapshot_sha256
+        or row.get("claim_file_sha256") != claim_binding["sha256"]
+        for row in cohort_reproofs
+    )
+):
+    raise SystemExit("build cohort-authority reproof inventory is invalid")
 
 value = {
-    "schema_version": 4,
+    "schema_version": 5,
     "artifact_type": "qcsd-buflo-study-no-cache-build-execution",
     "cohort_version": int(os.environ["BUILD_COHORT_VERSION"]),
     "started_at": stamp(started_ns),
@@ -3709,6 +4725,10 @@ value = {
     },
     "host_storage_preflight": host_storage,
     "buildx": buildx,
+    "cohort_allocation": cohort_allocation_authority["receipt"],
+    "cohort_claim": cohort_claim,
+    "cohort_claim_chain": cohort_claim_chain,
+    "cohort_authority_reproofs": cohort_reproofs,
 }
 payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
 value["payload_sha256"] = hashlib.sha256(payload).hexdigest()
@@ -3729,18 +4749,283 @@ validator.validate_build_execution_envelope(
     expected_build_root=root,
 )
 encoded = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
-with destination.open("xb") as output:
-    output.write(encoded)
-    output.flush()
-    os.fsync(output.fileno())
-directory = os.open(destination.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+if len(encoded) > validator.BUILD_EXECUTION_MAX_BYTES:
+    raise SystemExit("build receipt exceeds the stable-reader size limit")
+if (
+    destination.parent != staging.parent
+    or staging.name
+    != destination.name + ".staged-" + os.environ["BUILD_RECEIPT_STAGE_TOKEN"]
+):
+    raise SystemExit("build receipt staging path is invalid")
+directory = os.open(
+    destination.parent,
+    os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+)
 try:
+    parent_status = os.fstat(directory)
+    parent_identity = (
+        f"{parent_status.st_dev}:{parent_status.st_ino}:{parent_status.st_uid}:"
+        f"{stat.S_IMODE(parent_status.st_mode):o}:directory"
+    )
+    if parent_identity != expected_parent_identity:
+        raise SystemExit("build receipt parent changed before staging")
+    try:
+        os.stat(destination.name, dir_fd=directory, follow_symlinks=False)
+    except FileNotFoundError:
+        pass
+    else:
+        raise SystemExit("build receipt destination exists before staging")
+    descriptor = os.open(
+        staging.name,
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+        dir_fd=directory,
+    )
+    try:
+        os.fchmod(descriptor, 0o600)
+        view = memoryview(encoded)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise OSError("short build-receipt staging write")
+            view = view[written:]
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
     os.fsync(directory)
 finally:
     os.close(directory)
 PY
+  then
+    build_receipt_writer_status=0
+  else
+    build_receipt_writer_status=$?
+  fi
+  build_cohort_chain_producer_status=0
+  wait "${build_cohort_chain_producer_pid}" ||
+    build_cohort_chain_producer_status=$?
+  build_cohort_chain_close_status=0
+  eval "exec ${build_cohort_chain_fd}<&-" ||
+    build_cohort_chain_close_status=$?
+  if (( build_receipt_writer_status != 0 ||
+        build_cohort_chain_producer_status != 0 ||
+        build_cohort_chain_close_status != 0 )); then
+    echo "build could not stage its validated cohort-bound receipt" >&2
+    exit 1
+  fi
+  _qcsd_verify_saved_build_cohort_authority \
+    "immediately-before-receipt-publication" || exit 1
+  # Commit the already validated staging inode without an overwrite-capable
+  # rename; the helper revalidates the bytes and links its open descriptor.
+  BUILD_RECEIPT="${build_receipt}" \
+  BUILD_RECEIPT_STAGE="${build_receipt_stage}" \
+  BUILD_RECEIPT_STAGE_TOKEN="${_QCSD_LIFECYCLE_LEASE_NONCE}" \
+  BUILD_RECEIPT_PARENT_IDENTITY="${build_receipt_parent_identity}" \
+  BUILD_COHORT_VERSION="${build_cohort_version}" \
+  BUILD_ROOT="${ROOT}" \
+  /usr/bin/python3 -I - <<'PY'
+import ctypes
+import errno
+import hashlib
+import importlib.util
+import json
+import os
+import stat
+from pathlib import Path
+
+root = Path(os.environ["BUILD_ROOT"]).resolve()
+destination = Path(os.environ["BUILD_RECEIPT"])
+staging = Path(os.environ["BUILD_RECEIPT_STAGE"])
+expected_parent_identity = os.environ["BUILD_RECEIPT_PARENT_IDENTITY"]
+if destination.parent != staging.parent or staging.name != (
+    destination.name + ".staged-" + os.environ["BUILD_RECEIPT_STAGE_TOKEN"]
+):
+    raise SystemExit("build receipt staging path is invalid at publication")
+parent = os.open(
+    destination.parent,
+    os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+)
+stage = -1
+published = -1
+try:
+    parent_status = os.fstat(parent)
+    parent_identity = (
+        f"{parent_status.st_dev}:{parent_status.st_ino}:{parent_status.st_uid}:"
+        f"{stat.S_IMODE(parent_status.st_mode):o}:directory"
+    )
+    if parent_identity != expected_parent_identity:
+        raise SystemExit("build receipt parent changed before publication")
+    stage = os.open(
+        staging.name,
+        os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+        dir_fd=parent,
+    )
+    stage_status = os.fstat(stage)
+    if (
+        not stat.S_ISREG(stage_status.st_mode)
+        or stage_status.st_uid != os.geteuid()
+        or stage_status.st_gid != os.getegid()
+        or stat.S_IMODE(stage_status.st_mode) != 0o600
+        or stage_status.st_nlink != 1
+    ):
+        raise SystemExit("build receipt staging inode is unsafe")
+    with os.fdopen(os.dup(stage), "rb") as source:
+        encoded = source.read(16 * 1024 * 1024 + 1)
+    if len(encoded) > 16 * 1024 * 1024:
+        raise SystemExit("staged build receipt exceeds the stable-reader size limit")
+    try:
+        value = json.loads(encoded)
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise SystemExit("staged build receipt is invalid JSON") from error
+    if encoded != (json.dumps(value, indent=2, sort_keys=True) + "\n").encode():
+        raise SystemExit("staged build receipt bytes are not canonical")
+    validator_path = root / "src/qcsd_lab/build_storage.py"
+    spec = importlib.util.spec_from_file_location("_qcsd_build_storage", validator_path)
+    if spec is None or spec.loader is None:
+        raise SystemExit("cannot load the exact build evidence validator")
+    validator = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(validator)
+    validator.validate_build_execution_envelope(
+        value,
+        expected_cohort_version=int(os.environ["BUILD_COHORT_VERSION"]),
+        expected_probe_sha256=hashlib.sha256(
+            (root / "tools/windows_docker_storage_probe.ps1").read_bytes()
+        ).hexdigest(),
+        checkout_root=root,
+        expected_build_root=root,
+    )
+    try:
+        os.stat(destination.name, dir_fd=parent, follow_symlinks=False)
+    except FileNotFoundError:
+        pass
+    else:
+        raise SystemExit("build receipt destination raced before publication")
+    libc = ctypes.CDLL(None, use_errno=True)
+    linkat = libc.linkat
+    linkat.argtypes = (
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+    )
+    linkat.restype = ctypes.c_int
+    source_path = f"/proc/self/fd/{stage}".encode("ascii")
+    result = linkat(
+        -100,
+        source_path,
+        parent,
+        os.fsencode(destination.name),
+        0x400,
+    )
+    if result != 0:
+        error_number = ctypes.get_errno()
+        if error_number == errno.EEXIST:
+            raise SystemExit("build receipt destination raced during publication")
+        raise OSError(error_number, os.strerror(error_number), destination)
+    published = os.open(
+        destination.name,
+        os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+        dir_fd=parent,
+    )
+    published_status = os.fstat(published)
+    linked_stage_status = os.fstat(stage)
+    if (
+        (published_status.st_dev, published_status.st_ino)
+        != (stage_status.st_dev, stage_status.st_ino)
+        or (linked_stage_status.st_dev, linked_stage_status.st_ino)
+        != (stage_status.st_dev, stage_status.st_ino)
+        or not stat.S_ISREG(published_status.st_mode)
+        or stat.S_IMODE(published_status.st_mode) != 0o600
+        or published_status.st_nlink != 2
+        or linked_stage_status.st_nlink != 2
+    ):
+        raise SystemExit("published build receipt differs from its staged inode")
+    os.lseek(published, 0, os.SEEK_SET)
+    with os.fdopen(os.dup(published), "rb") as source:
+        if source.read() != encoded:
+            raise SystemExit("published build receipt bytes changed during publication")
+    os.fsync(published)
+    os.fsync(parent)
+    current_stage = os.stat(staging.name, dir_fd=parent, follow_symlinks=False)
+    if (current_stage.st_dev, current_stage.st_ino) != (
+        stage_status.st_dev,
+        stage_status.st_ino,
+    ):
+        raise SystemExit("build receipt staging pathname changed during publication")
+    os.unlink(staging.name, dir_fd=parent)
+    os.fsync(parent)
+    final_status = os.fstat(published)
+    destination_status = os.stat(
+        destination.name, dir_fd=parent, follow_symlinks=False
+    )
+    if (
+        (final_status.st_dev, final_status.st_ino)
+        != (stage_status.st_dev, stage_status.st_ino)
+        or (destination_status.st_dev, destination_status.st_ino)
+        != (stage_status.st_dev, stage_status.st_ino)
+        or final_status.st_nlink != 1
+        or destination_status.st_nlink != 1
+    ):
+        raise SystemExit("published build receipt link identity is invalid")
+finally:
+    if published >= 0:
+        os.close(published)
+    if stage >= 0:
+        os.close(stage)
+    os.close(parent)
+PY
+  _qcsd_verify_saved_build_cohort_authority \
+    "immediately-after-receipt-publication" || exit 1
+  if ! build_receipt_binding="$(
+    python3 -I "${ROOT}/src/qcsd_lab/build_storage.py" receipt-binding \
+      "${build_receipt}" --expected-cohort "${build_cohort_version}" \
+      --probe-path "${ROOT}/tools/windows_docker_storage_probe.ps1"
+  )" || [[ -z "${build_receipt_binding}" ||
+            "${build_receipt_binding}" == *$'\n'* ]]; then
+    echo "build cannot bind its published receipt before transaction completion" >&2
+    exit 1
+  fi
   complete_evidence_build_transaction
-  echo "Created no-cache build receipt: ${build_receipt}"
+  build_cleanup_status=0
+  complete_build_iid_cleanup_before_success || build_cleanup_status=$?
+  if (( build_cleanup_status != 0 )); then
+    exit "${build_cleanup_status}"
+  fi
+  _qcsd_reprove_build_completion_authority || exit 1
+  python3 -I "${ROOT}/src/qcsd_lab/build_storage.py" publish-completion \
+    "${build_receipt}" --completion-path "${build_completion}" \
+    --expected-cohort "${build_cohort_version}" \
+    --probe-path "${ROOT}/tools/windows_docker_storage_probe.ps1" \
+    --receipt-binding-json "${build_receipt_binding}" \
+    --transaction-binding-json "${build_transaction_retirement_binding}" \
+    --held-lock-owner-pid "${_QCSD_LIFECYCLE_QCSD_PID}" \
+    --held-lock-owner-start "${_QCSD_LIFECYCLE_QCSD_START}" \
+    --held-lock-guardian-pid "${_QCSD_LIFECYCLE_GUARD_PID}" \
+    --held-lock-guardian-start "${_QCSD_LIFECYCLE_GUARD_START}" \
+    --held-lock-guardian-fd "${_QCSD_LIFECYCLE_COHORT_LOCK_FD}" \
+    --held-lock-path "${_QCSD_LIFECYCLE_COHORT_LOCK_PATH}" \
+    --held-lock-device "${_QCSD_LIFECYCLE_COHORT_LOCK_DEVICE}" \
+    --held-lock-inode "${_QCSD_LIFECYCLE_COHORT_LOCK_INODE}" \
+    --held-lock-parent-device \
+      "${_QCSD_LIFECYCLE_COHORT_LOCK_PARENT_DEVICE}" \
+    --held-lock-parent-inode \
+      "${_QCSD_LIFECYCLE_COHORT_LOCK_PARENT_INODE}" \
+    --held-lock-cohort-version "${_QCSD_LIFECYCLE_COHORT_VERSION}" \
+    --lifecycle-lock-path "${_QCSD_LIFECYCLE_LOCK_PATH}" \
+    --lifecycle-lock-device "${_QCSD_LIFECYCLE_LOCK_DEVICE}" \
+    --lifecycle-lock-inode "${_QCSD_LIFECYCLE_LOCK_INODE}" \
+    --lifecycle-lock-parent-device "${_QCSD_LIFECYCLE_LOCK_PARENT_DEVICE}" \
+    --lifecycle-lock-parent-inode "${_QCSD_LIFECYCLE_LOCK_PARENT_INODE}" \
+    --lifecycle-lease-nonce "${_QCSD_LIFECYCLE_LEASE_NONCE}" \
+    --retired-transaction-root "${build_retired_transaction_root}"
+  # The fsynced create-only completion is the authoritative success point.
+  # There is no durable proof of a later shell exit; `exit` is deliberately the
+  # only operation after publication, and discovery trusts the validated pair.
   exit 0
 fi
 
@@ -3752,6 +5037,8 @@ study_capture_admission_host=""
 study_capture_admission_container=""
 study_admission_build_path=""
 study_admission_build_sha256=""
+study_admission_completion_path=""
+study_admission_completion_sha256=""
 study_admission_collection_image=""
 study_resume_public=0
 study_resume_root=""
@@ -3807,30 +5094,42 @@ version = value.get("cohort_version")
 binding = value.get("build_execution_receipt")
 identity = value.get("build_execution")
 if (
-    type(version) is not int or version < 1
+    value.get("schema_version") != 4
+    or type(version) is not int or version < 1
     or not isinstance(binding, dict) or set(binding) != {"path", "sha256"}
     or binding.get("path") != f"/lab/artifacts/buflo-study/build-execution-v{version}.json"
     or re.fullmatch(r"[0-9a-f]{64}", str(binding.get("sha256"))) is None
     or not isinstance(identity, dict)
+    or set(identity) != {
+        "cohort_version", "sha256", "completion_path", "completion_sha256",
+        "collection_image", "started_at", "finished_at",
+    }
     or identity.get("cohort_version") != version
     or identity.get("sha256") != binding.get("sha256")
+    or identity.get("completion_path")
+       != f"/lab/artifacts/buflo-study/build-completion-v{version}.json"
+    or re.fullmatch(r"[0-9a-f]{64}", str(identity.get("completion_sha256"))) is None
     or re.fullmatch(r"sha256:[0-9a-f]{64}", str(identity.get("collection_image"))) is None
 ):
     raise SystemExit("capture admission has no valid versioned build binding")
 print(version)
 print(binding["path"])
 print(binding["sha256"])
+print(identity["completion_path"])
+print(identity["completion_sha256"])
 print(identity["collection_image"])
 ' "${admission}"
   )
-  if (( ${#fields[@]} != 4 )); then
+  if (( ${#fields[@]} != 6 )); then
     echo "capture admission has no valid versioned build binding" >&2
     exit 1
   fi
   study_cohort_version="${fields[0]}"
   study_admission_build_path="${fields[1]}"
   study_admission_build_sha256="${fields[2]}"
-  study_admission_collection_image="${fields[3]}"
+  study_admission_completion_path="${fields[3]}"
+  study_admission_completion_sha256="${fields[4]}"
+  study_admission_collection_image="${fields[5]}"
 }
 
 if [[ "${1:-}" == "run" &&
@@ -3876,6 +5175,9 @@ fi
 
 study_build_execution_path=""
 study_build_execution_sha256=""
+study_build_completion_path=""
+study_build_completion_sha256=""
+study_build_completion_payload_sha256=""
 if [[ -n "${study_cohort_version}" ]]; then
   study_build_execution_path="${ROOT}/artifacts/buflo-study/build-execution-v${study_cohort_version}.json"
   if [[ -L "${study_build_execution_path}" || ! -f "${study_build_execution_path}" ]]; then
@@ -3887,7 +5189,7 @@ if [[ -n "${study_cohort_version}" ]]; then
       "${study_build_execution_path}" --expected-cohort "${study_cohort_version}" \
       --probe-path "${ROOT}/tools/windows_docker_storage_probe.ps1"
   )
-  if (( ${#study_build_fields[@]} != 4 )); then
+  if (( ${#study_build_fields[@]} != 7 )); then
     echo "selected build receipt is invalid" >&2
     exit 1
   fi
@@ -3895,9 +5197,23 @@ if [[ -n "${study_cohort_version}" ]]; then
   COLLECTION_IMAGE="${study_build_fields[1]}"
   PREPARE_IMAGE="${study_build_fields[2]}"
   REFERENCE_IMAGE="${study_build_fields[3]}"
+  if [[ "${study_build_fields[4]}" != \
+          "artifacts/buflo-study/build-completion-v${study_cohort_version}.json" ||
+        ! "${study_build_fields[5]}" =~ ^[0-9a-f]{64}$ ||
+        ! "${study_build_fields[6]}" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "selected build completion binding is invalid" >&2
+    exit 1
+  fi
+  study_build_completion_path="${ROOT}/${study_build_fields[4]}"
+  study_build_completion_sha256="${study_build_fields[5]}"
+  study_build_completion_payload_sha256="${study_build_fields[6]}"
   if [[ -n "${study_admission_build_path}" ]] &&
      { [[ "${study_admission_build_path}" != "/lab/artifacts/buflo-study/build-execution-v${study_cohort_version}.json" ]] ||
        [[ "${study_admission_build_sha256}" != "${study_build_execution_sha256}" ]] ||
+       [[ "${study_admission_completion_path}" != \
+          "/lab/${study_build_completion_path#${ROOT}/}" ]] ||
+       [[ "${study_admission_completion_sha256}" != \
+          "${study_build_completion_sha256}" ]] ||
        [[ "${study_admission_collection_image}" != "${COLLECTION_IMAGE}" ]]; }; then
     echo "capture admission and selected cohort build receipt differ" >&2
     exit 1
@@ -3910,6 +5226,7 @@ fi
 # selected by action below; the workspace itself is never mounted read-write.
 class_study_action=""
 class_study_stage=""
+class_study_cohort_version=""
 class_study_execute=0
 class_study_live=0
 class_acquisition_max_candidates=""
@@ -3921,6 +5238,10 @@ class_regression_result_hosts=()
 class_controlled_result_hosts=()
 class_canary_result_hosts=()
 class_formal_result_hosts=()
+class_numeric_bundle_hosts=()
+class_prefix_spec_root_hosts=()
+class_qualification_manifest_hosts=()
+class_final_bundle_hosts=()
 class_guarded_rw_dirs=()
 class_direct_rw_dirs=()
 class_rw_files=()
@@ -4203,6 +5524,16 @@ print(GLOBAL_LIVE_PAGE_CAP)
             exit 2
           fi
           class_study_stage="${class_value}"
+        elif [[ "${class_flag}" == "--cohort-version" ]]; then
+          if [[ -n "${class_study_cohort_version}" ]]; then
+            echo "class-study accepts --cohort-version at most once" >&2
+            exit 2
+          fi
+          if [[ ! "${class_value}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "class-study --cohort-version must be a positive integer" >&2
+            exit 2
+          fi
+          class_study_cohort_version="${class_value}"
         elif [[ "${class_flag}" == "--qualification-workload" ]]; then
           class_study_live=1
         elif [[ "${class_flag}" == "--acquisition-max-candidates" ]]; then
@@ -4213,7 +5544,7 @@ print(GLOBAL_LIVE_PAGE_CAP)
         class_index=$((class_index + 1))
         continue
         ;;
-      --candidate-catalogue|--acquisition-root|--stability-root|--stability-input|--workload-root|--acquisition-completion|--pilot-cohort|--pilot-cohort-assembly|--final-cohort|--final-cohort-assembly|--cohort|--cohort-assembly|--final-selection|--campaign-root|--campaign|--results-root|--capture-result|--result|--regression-result|--controlled-result|--canary-result|--formal-result|--artifacts-root|--numeric-bundle|--prefix-spec-root|--qualification-checkpoint|--qualification-sidecar-root|--qualification-publication-root|--qualification-manifest|--final-bundle|--handoff|--evaluation-receipt|--build-execution-receipt|--pinned-cdp-receipt|--reference-receipt|--code-gate-receipt|--controlled-qualification-receipt|--pilot-fitting-result|--pilot-compatibility-result|--authoritative-fitting-result|--certification-result|--foundation-attestation|--readiness-attestation|--historical-pre-snapshot|--historical-post-snapshot|--comparison-review|--comparison-review-input|--validation-attestation|--successor-policy|--successor-decision|--successor-restart|--destination|--target|--dlsvm-cache-directory)
+      --candidate-catalogue|--acquisition-root|--stability-root|--stability-input|--workload-root|--acquisition-completion|--pilot-cohort|--pilot-cohort-assembly|--final-cohort|--final-cohort-assembly|--cohort|--cohort-assembly|--final-selection|--campaign-root|--campaign|--results-root|--capture-result|--result|--regression-result|--controlled-result|--canary-result|--formal-result|--artifacts-root|--numeric-bundle|--prefix-spec-root|--qualification-checkpoint|--qualification-sidecar-root|--qualification-publication-root|--qualification-manifest|--final-bundle|--handoff|--evaluation-receipt|--build-execution-receipt|--pinned-cdp-receipt|--browser-egress-qualification-root|--reference-receipt|--code-gate-receipt|--controlled-qualification-receipt|--pilot-fitting-result|--pilot-compatibility-result|--authoritative-fitting-result|--certification-result|--foundation-attestation|--readiness-attestation|--historical-pre-snapshot|--historical-post-snapshot|--comparison-review|--comparison-review-input|--validation-attestation|--successor-policy|--successor-decision|--successor-restart|--destination|--target|--dlsvm-cache-directory)
         if (( ! class_inline )); then
           class_next=$((class_index + 1))
           if (( class_next > $# )); then
@@ -4225,6 +5556,12 @@ print(GLOBAL_LIVE_PAGE_CAP)
         fi
         class_host="$(class_host_path "${class_value}")" || exit 2
         class_inside="$(class_container_path "${class_host}")"
+        case "${class_flag}" in
+          --numeric-bundle) class_numeric_bundle_hosts+=("${class_host}") ;;
+          --prefix-spec-root) class_prefix_spec_root_hosts+=("${class_host}") ;;
+          --qualification-manifest) class_qualification_manifest_hosts+=("${class_host}") ;;
+          --final-bundle) class_final_bundle_hosts+=("${class_host}") ;;
+        esac
         if [[ "${class_flag}" == "--result" ]]; then
           class_result_hosts+=("${class_host}")
         elif [[ "${class_flag}" == "--regression-result" ]]; then
@@ -4239,7 +5576,16 @@ print(GLOBAL_LIVE_PAGE_CAP)
           class_repeatable_status_path=0
           if [[ "${class_study_action}" == "status" ]]; then
             case "${class_flag}" in
-              --numeric-bundle|--prefix-spec-root|--qualification-manifest|--final-bundle)
+              --numeric-bundle)
+                class_repeatable_status_path=1
+                ;;
+              --prefix-spec-root)
+                class_repeatable_status_path=1
+                ;;
+              --qualification-manifest)
+                class_repeatable_status_path=1
+                ;;
+              --final-bundle)
                 class_repeatable_status_path=1
                 ;;
             esac
@@ -4366,7 +5712,7 @@ import hashlib
 import json
 import sys
 
-command = ["/usr/bin/bash", *sys.argv[1:]]
+command = list(sys.argv[1:])
 payload = (json.dumps(command, indent=2, sort_keys=True, allow_nan=False) + "\n").encode()
 print(hashlib.sha256(payload).hexdigest())
 PY
@@ -4740,20 +6086,6 @@ if [[ "${1:-}" == "class-study" &&
   exit 0
 fi
 
-if [[ "${1:-}" == "class-study" ]]; then
-  require_docker
-  if [[ "${class_study_action}" == "acquisition-run" ||
-        "${class_study_action}" == "acquisition-status" ]]; then
-    # The guarded inner repeated the exact watcher-scope validation immediately
-    # before Docker recovery.  Do not retain its one-action capability beyond
-    # that admission boundary.
-    unset QCSD_CLASS_WATCH_STATE_ROOT QCSD_CLASS_WATCH_SCOPE_ROOT
-    unset QCSD_CLASS_WATCH_REQUEST_AUTHORITY QCSD_CLASS_WATCH_ACTION_SHA256
-    unset QCSD_CLASS_WATCH_SOURCE_BINDING_SHA256
-  fi
-  require_submodule
-fi
-
 if [[ "${1:-}" == "test" && "${2:-}" == "pinned-cdp" ]]; then
   mapfile -t pinned_cdp_build_fields < <(
     python3 -I "${ROOT}/src/qcsd_lab/build_storage.py" receipt \
@@ -4761,7 +6093,7 @@ if [[ "${1:-}" == "test" && "${2:-}" == "pinned-cdp" ]]; then
       --expected-cohort "${pinned_cdp_cohort_version}" \
       --probe-path "${ROOT}/tools/windows_docker_storage_probe.ps1"
   )
-  if (( ${#pinned_cdp_build_fields[@]} != 4 )); then
+  if (( ${#pinned_cdp_build_fields[@]} != 7 )); then
     echo "test pinned-cdp no-cache build receipt is invalid" >&2
     exit 1
   fi
@@ -4781,7 +6113,7 @@ if [[ "${1:-}" == "test" && "${2:-}" == "browser-egress" ]]; then
       --expected-cohort "${browser_egress_cohort_version}" \
       --probe-path "${ROOT}/tools/windows_docker_storage_probe.ps1"
   )
-  if (( ${#browser_egress_build_fields[@]} != 4 )); then
+  if (( ${#browser_egress_build_fields[@]} != 7 )); then
     echo "test browser-egress no-cache build receipt is invalid" >&2
     exit 1
   fi
@@ -4856,26 +6188,43 @@ if (
 ):
     raise SystemExit("class-study foundation build binding is invalid")
 build_path = under_root(binding.get("path"))
-build_raw = build_path.read_bytes()
-if hashlib.sha256(build_raw).hexdigest() != binding["sha256"]:
-    raise SystemExit("class-study foundation build receipt digest changed")
-build = json.loads(build_raw)
-validated_build = validator.validate_build_execution_envelope(
-    build,
+build_path, build_raw, build, validated_build, build_completion = (
+    validator.load_validated_build_execution(
+    build_path,
     expected_probe_sha256=hashlib.sha256(
         (root / "tools/windows_docker_storage_probe.ps1").read_bytes()
     ).hexdigest(),
     checkout_root=root,
     expected_build_root=root,
+    require_current=True,
+    )
 )
+if (
+    validated_build.get("schema_version") != 5
+    or build_completion is None
+    or hashlib.sha256(build_raw).hexdigest() != binding["sha256"]
+):
+    raise SystemExit("class-study foundation build receipt digest or completion changed")
 source = validated_build["source"]
 prepare_id = validated_build["image_ids"]["prepare"]
+completion_path = validator.build_completion_path(build_path, validated_build["cohort_version"])
+_completion_path, completion_raw, _completion_value = validator.load_stable_build_completion(
+    completion_path
+)
 foundation_source = payload.get("source")
 identity = payload.get("build_execution_identity")
 if (
     source != foundation_source
     or not isinstance(identity, dict)
+    or set(identity) != {
+        "cohort_version", "sha256", "completion_path", "completion_sha256",
+        "collection_image", "started_at", "finished_at",
+    }
     or identity.get("sha256") != binding["sha256"]
+    or identity.get("completion_path")
+       != f"/lab/artifacts/buflo-study/build-completion-v{validated_build['cohort_version']}.json"
+    or identity.get("completion_sha256")
+       != hashlib.sha256(completion_raw).hexdigest()
     or identity.get("collection_image") != source.get("image_digest")
 ):
     raise SystemExit("class-study foundation prepare build identity is invalid")
@@ -4905,7 +6254,7 @@ elif [[ "${1:-}" == "class-study" && "${class_study_execute}" == "1" &&
       "${study_build_execution_path}" \
       --probe-path "${ROOT}/tools/windows_docker_storage_probe.ps1"
   )
-  if (( ${#class_build_fields[@]} != 4 )); then
+  if (( ${#class_build_fields[@]} != 7 )); then
     echo "class-study build execution receipt is invalid" >&2
     exit 1
   fi
@@ -4913,6 +6262,16 @@ elif [[ "${1:-}" == "class-study" && "${class_study_execute}" == "1" &&
   COLLECTION_IMAGE="${class_build_fields[1]}"
   PREPARE_IMAGE="${class_build_fields[2]}"
   REFERENCE_IMAGE="${class_build_fields[3]}"
+  if [[ ! "${class_build_fields[4]}" =~ \
+          ^artifacts/buflo-study/build-completion-v[1-9][0-9]*\.json$ ||
+        ! "${class_build_fields[5]}" =~ ^[0-9a-f]{64}$ ||
+        ! "${class_build_fields[6]}" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "class-study build completion binding is invalid" >&2
+    exit 1
+  fi
+  study_build_completion_path="${ROOT}/${class_build_fields[4]}"
+  study_build_completion_sha256="${class_build_fields[5]}"
+  study_build_completion_payload_sha256="${class_build_fields[6]}"
 elif [[ "${1:-}" == "class-study" && "${class_study_execute}" == "1" &&
         "${class_study_action}" == "resume" ]]; then
   class_resume_environment="${class_path_hosts[--capture-result]}/inputs/study-environment.json"
@@ -4920,16 +6279,227 @@ elif [[ "${1:-}" == "class-study" && "${class_study_execute}" == "1" &&
     echo "class-study resume requires its frozen Docker environment receipt" >&2
     exit 1
   fi
-  COLLECTION_IMAGE="$(
-    python3 -I -c '
-import json, re, sys
-value = json.load(open(sys.argv[1], encoding="utf-8"))
-image = value.get("collection_image", {}).get("id")
-if re.fullmatch(r"sha256:[0-9a-f]{64}", str(image)) is None:
-    raise SystemExit("class-study frozen environment image binding is invalid")
+  mapfile -t class_resume_build_fields < <(
+    python3 -I - "${ROOT}" "${class_resume_environment}" <<'PY'
+import hashlib
+import importlib.util
+import json
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+environment = json.loads(Path(sys.argv[2]).read_bytes())
+execution = environment.get("build_execution")
+image = environment.get("collection_image", {}).get("id")
+if (
+    environment.get("schema_version") != 3
+    or not isinstance(execution, dict)
+    or re.fullmatch(r"sha256:[0-9a-f]{64}", str(image)) is None
+):
+    raise SystemExit("class-study frozen environment build completion is invalid")
+receipt = execution.get("receipt")
+version = receipt.get("cohort_version") if isinstance(receipt, dict) else None
+if type(version) is not int or version < 1:
+    raise SystemExit("class-study frozen environment build cohort is invalid")
+validator_path = root / "src/qcsd_lab/build_storage.py"
+spec = importlib.util.spec_from_file_location("_qcsd_build_storage", validator_path)
+if spec is None or spec.loader is None:
+    raise SystemExit("cannot load the exact build evidence validator")
+validator = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(validator)
+receipt_path = root / f"artifacts/buflo-study/build-execution-v{version}.json"
+resolved, raw, value, validated, completion = validator.load_validated_build_execution(
+    receipt_path,
+    expected_cohort_version=version,
+    expected_probe_sha256=hashlib.sha256(
+        (root / "tools/windows_docker_storage_probe.ps1").read_bytes()
+    ).hexdigest(),
+    checkout_root=root,
+    expected_build_root=root,
+    require_current=True,
+)
+completion_path = validator.build_completion_path(resolved, version)
+_path, completion_raw, completion_value = validator.load_stable_build_completion(
+    completion_path
+)
+if (
+    validated.get("schema_version") != 5
+    or completion is None
+    or value != receipt
+    or hashlib.sha256(raw).hexdigest() != execution.get("sha256")
+    or execution.get("completion_path")
+       != f"/lab/artifacts/buflo-study/build-completion-v{version}.json"
+    or hashlib.sha256(completion_raw).hexdigest()
+       != execution.get("completion_sha256")
+    or completion_value != execution.get("completion")
+    or completion.get("payload_sha256")
+       != execution.get("completion_payload_sha256")
+    or validated.get("image_ids", {}).get("collection") != image
+):
+    raise SystemExit("class-study frozen environment build pair changed")
 print(image)
-' "${class_resume_environment}"
-  )"
+print(resolved)
+print(hashlib.sha256(raw).hexdigest())
+print(completion_path)
+print(hashlib.sha256(completion_raw).hexdigest())
+print(completion["payload_sha256"])
+PY
+  )
+  if (( ${#class_resume_build_fields[@]} != 6 )); then
+    echo "class-study resume requires a valid completed build before Docker" >&2
+    exit 1
+  fi
+  COLLECTION_IMAGE="${class_resume_build_fields[0]}"
+  study_build_execution_path="${class_resume_build_fields[1]}"
+  study_build_execution_sha256="${class_resume_build_fields[2]}"
+  study_build_completion_path="${class_resume_build_fields[3]}"
+  study_build_completion_sha256="${class_resume_build_fields[4]}"
+  study_build_completion_payload_sha256="${class_resume_build_fields[5]}"
+fi
+
+if [[ "${1:-}" == "class-study" ]]; then
+  # Resolve every direct or transitive current-build authority before Docker
+  # stale-state recovery can mutate anything.  The host resolver checks only
+  # immutable path/hash/build linkage; the in-image coordinator still performs
+  # the complete scientific reconstruction.
+  class_build_admission_args=(
+    --lab-root "${ROOT}"
+    --action "${class_study_action}"
+  )
+  if [[ -n "${class_study_stage}" ]]; then
+    class_build_admission_args+=(--stage "${class_study_stage}")
+  fi
+  if [[ -n "${class_study_cohort_version}" ]]; then
+    class_build_admission_args+=(--cohort-version "${class_study_cohort_version}")
+  fi
+  if (( class_study_execute )); then
+    class_build_admission_args+=(--execute)
+  fi
+  for class_build_admission_option in \
+    build:--build-execution-receipt \
+    foundation:--foundation-attestation \
+    readiness:--readiness-attestation \
+    historical-pre:--historical-pre-snapshot \
+    historical-post:--historical-post-snapshot \
+    handoff:--handoff \
+    evaluation:--evaluation-receipt \
+    comparison:--comparison-review \
+    validation:--validation-attestation \
+    acquisition-root:--acquisition-root \
+    capture-result:--capture-result \
+    successor-decision:--successor-decision \
+    successor-restart:--successor-restart \
+    target:--target \
+    final-selection:--final-selection \
+    pinned-cdp:--pinned-cdp-receipt \
+    browser-egress:--browser-egress-qualification-root \
+    reference:--reference-receipt \
+    code-gate:--code-gate-receipt \
+    controlled-qualification:--controlled-qualification-receipt \
+    pilot-fitting-result:--pilot-fitting-result \
+    pilot-compatibility-result:--pilot-compatibility-result \
+    authoritative-fitting-result:--authoritative-fitting-result \
+    certification-result:--certification-result \
+    acquisition-completion:--acquisition-completion \
+    qualification-checkpoint:--qualification-checkpoint \
+    qualification-sidecar-root:--qualification-sidecar-root \
+    qualification-publication-root:--qualification-publication-root \
+    final-cohort-assembly:--final-cohort-assembly \
+    pilot-cohort-assembly:--pilot-cohort-assembly \
+    campaign-root:--campaign-root \
+    campaign:--campaign; do
+    class_build_admission_name="${class_build_admission_option%%:*}"
+    class_build_admission_flag="${class_build_admission_option#*:}"
+    class_build_admission_value="${class_path_hosts[${class_build_admission_flag}]:-}"
+    if [[ -n "${class_build_admission_value}" ]]; then
+      class_build_admission_args+=(
+        "--${class_build_admission_name}" "${class_build_admission_value}"
+      )
+    fi
+  done
+  for class_build_admission_repeatable in \
+    result:class_result_hosts \
+    regression-result:class_regression_result_hosts \
+    controlled-result:class_controlled_result_hosts \
+    canary-result:class_canary_result_hosts \
+    formal-result:class_formal_result_hosts \
+    numeric-bundle:class_numeric_bundle_hosts \
+    prefix-spec-root:class_prefix_spec_root_hosts \
+    qualification-manifest:class_qualification_manifest_hosts \
+    final-bundle:class_final_bundle_hosts; do
+    class_build_admission_name="${class_build_admission_repeatable%%:*}"
+    class_build_admission_array="${class_build_admission_repeatable#*:}"
+    declare -n class_build_admission_values="${class_build_admission_array}"
+    for class_build_admission_value in "${class_build_admission_values[@]:-}"; do
+      [[ -n "${class_build_admission_value}" ]] || continue
+      class_build_admission_args+=(
+        "--${class_build_admission_name}" "${class_build_admission_value}"
+      )
+    done
+    unset -n class_build_admission_values
+  done
+  mapfile -t class_build_admission_fields < <(
+    /usr/bin/python3 -I "${ROOT}/src/qcsd_lab/class_build_admission.py" \
+      "${class_build_admission_args[@]}"
+  )
+  if (( ${#class_build_admission_fields[@]} == 1 )) &&
+     [[ "${class_build_admission_fields[0]}" == "not-required" ]]; then
+    :
+  elif (( ${#class_build_admission_fields[@]} == 10 )) &&
+       [[ "${class_build_admission_fields[0]}" == "required" &&
+          "${class_build_admission_fields[3]}" =~ ^[1-9][0-9]*$ &&
+          "${class_build_admission_fields[1]}" == "${ROOT}/artifacts/buflo-study/build-execution-v${class_build_admission_fields[3]}.json" &&
+          "${class_build_admission_fields[2]}" =~ ^[0-9a-f]{64}$ &&
+          "${class_build_admission_fields[4]}" =~ ^sha256:[0-9a-f]{64}$ &&
+          "${class_build_admission_fields[5]}" =~ ^sha256:[0-9a-f]{64}$ &&
+          "${class_build_admission_fields[6]}" =~ ^sha256:[0-9a-f]{64}$ &&
+          "${class_build_admission_fields[7]}" == "${ROOT}/artifacts/buflo-study/build-completion-v${class_build_admission_fields[3]}.json" &&
+          "${class_build_admission_fields[8]}" =~ ^[0-9a-f]{64}$ &&
+          "${class_build_admission_fields[9]}" =~ ^[0-9a-f]{64}$ ]]; then
+    if [[ -n "${study_build_execution_path}" &&
+          "${study_build_execution_path}" != "${class_build_admission_fields[1]}" ]] ||
+       [[ -n "${study_build_execution_sha256}" &&
+          "${study_build_execution_sha256}" != "${class_build_admission_fields[2]}" ]] ||
+       [[ -n "${study_build_completion_path}" &&
+          "${study_build_completion_path}" != "${class_build_admission_fields[7]}" ]] ||
+       [[ -n "${study_build_completion_sha256}" &&
+          "${study_build_completion_sha256}" != "${class_build_admission_fields[8]}" ]] ||
+       [[ -n "${study_build_completion_payload_sha256}" &&
+          "${study_build_completion_payload_sha256}" != "${class_build_admission_fields[9]}" ]]; then
+      echo "class-study host build admissions resolve to different build evidence" >&2
+      exit 1
+    fi
+    study_build_execution_path="${class_build_admission_fields[1]}"
+    study_build_execution_sha256="${class_build_admission_fields[2]}"
+    study_build_completion_path="${class_build_admission_fields[7]}"
+    study_build_completion_sha256="${class_build_admission_fields[8]}"
+    study_build_completion_payload_sha256="${class_build_admission_fields[9]}"
+    COLLECTION_IMAGE="${class_build_admission_fields[4]}"
+    PREPARE_IMAGE="${class_build_admission_fields[5]}"
+    REFERENCE_IMAGE="${class_build_admission_fields[6]}"
+  else
+    echo "class-study build authority was not admitted before Docker" >&2
+    exit 1
+  fi
+  require_docker
+  if [[ "${class_study_action}" == "acquisition-run" ||
+        "${class_study_action}" == "acquisition-status" ]]; then
+    # The guarded inner repeated the exact watcher-scope validation immediately
+    # before Docker recovery.  Do not retain its one-action capability beyond
+    # that admission boundary.
+    unset QCSD_CLASS_WATCH_STATE_ROOT QCSD_CLASS_WATCH_SCOPE_ROOT
+    unset QCSD_CLASS_WATCH_REQUEST_AUTHORITY QCSD_CLASS_WATCH_ACTION_SHA256
+    unset QCSD_CLASS_WATCH_SOURCE_BINDING_SHA256
+  fi
+  require_submodule
+fi
+
+if [[ "${qcsd_deferred_generic_docker:-0}" == "1" ]]; then
+  # All selected current build consumers (ordinary study run/resume, BuFLO
+  # study actions, and pinned/browser tests) have reached their paired
+  # receipt/completion gate before this first Docker recovery or mutation.
+  require_docker
 fi
 
 case "${1:-}" in
@@ -5227,11 +6797,35 @@ if [[ ( "${1:-}" == "run" &&
       ( "${1:-}" == "buflo-study" && "${2:-}" == "capture" ) ||
       ( "${1:-}" == "class-study" && "${class_study_execute}" == "1" &&
         "${class_study_action}" == "capture" ) ]]; then
-  if [[ -L "${study_build_execution_path}" || ! -f "${study_build_execution_path}" ]]; then
-    echo "research capture requires the create-only no-cache build receipt" >&2
+  if [[ -L "${study_build_execution_path}" || ! -f "${study_build_execution_path}" ||
+        -z "${study_build_completion_path}" ||
+        -L "${study_build_completion_path}" || ! -f "${study_build_completion_path}" ]]; then
+    echo "research capture requires the completed create-only no-cache build pair" >&2
+    exit 1
+  fi
+  mapfile -t study_build_reproof_fields < <(
+    python3 -I "${ROOT}/src/qcsd_lab/build_storage.py" receipt \
+      "${study_build_execution_path}" \
+      --probe-path "${ROOT}/tools/windows_docker_storage_probe.ps1"
+  )
+  if (( ${#study_build_reproof_fields[@]} != 7 )) ||
+     [[ "${study_build_reproof_fields[0]}" != "${study_build_execution_sha256}" ||
+        "${ROOT}/${study_build_reproof_fields[4]}" != "${study_build_completion_path}" ||
+        "${study_build_reproof_fields[5]}" != "${study_build_completion_sha256}" ||
+        "${study_build_reproof_fields[6]}" != \
+          "${study_build_completion_payload_sha256}" ]]; then
+    echo "research capture build receipt/completion pair changed before environment capture" >&2
     exit 1
   fi
   study_build_execution="$(/bin/cat "${study_build_execution_path}")"
+  study_build_completion="$(/bin/cat "${study_build_completion_path}")"
+  if [[ "$(sha256sum -- "${study_build_execution_path}" | awk '{print $1}')" != \
+          "${study_build_execution_sha256}" ||
+        "$(sha256sum -- "${study_build_completion_path}" | awk '{print $1}')" != \
+          "${study_build_completion_sha256}" ]]; then
+    echo "research capture build pair changed while the environment was recorded" >&2
+    exit 1
+  fi
   study_docker_version="$(_qcsd_docker_api version --format '{{json .}}')"
   study_docker_info="$(_qcsd_docker_api info --format '{{json .}}')"
   QCSD_DOCKER_OUTPUT_STUDY_BUILD_INPUTS=""
@@ -5262,6 +6856,10 @@ print(json.dumps({
     QCSD_STUDY_BUILD_INPUTS="${QCSD_DOCKER_OUTPUT_STUDY_BUILD_INPUTS}" \
     QCSD_STUDY_BUILD_EXECUTION="${study_build_execution}" \
     QCSD_STUDY_BUILD_EXECUTION_SHA256="${study_build_execution_sha256}" \
+    QCSD_STUDY_BUILD_COMPLETION="${study_build_completion}" \
+    QCSD_STUDY_BUILD_COMPLETION_PATH="/lab/${study_build_completion_path#${ROOT}/}" \
+    QCSD_STUDY_BUILD_COMPLETION_SHA256="${study_build_completion_sha256}" \
+    QCSD_STUDY_BUILD_COMPLETION_PAYLOAD_SHA256="${study_build_completion_payload_sha256}" \
     QCSD_STUDY_CONTAINER_CLOCK="${QCSD_DOCKER_OUTPUT_STUDY_CONTAINER_CLOCK}" \
     QCSD_STUDY_REPO_DIGESTS="${study_repo_digests}" \
     QCSD_STUDY_IMAGE_ID="${image_id}" \
@@ -5321,7 +6919,7 @@ if kernel_timed_scheduler:
         "timed_egress_helper_priority": 1,
     })
 value = {
-    "schema_version": 2,
+    "schema_version": 3,
     "artifact_type": "qcsd-buflo-study-environment",
     "docker": {
         "client_version": version["Client"]["Version"],
@@ -5340,6 +6938,12 @@ value = {
     "build_execution": {
         "sha256": os.environ["QCSD_STUDY_BUILD_EXECUTION_SHA256"],
         "receipt": json.loads(os.environ["QCSD_STUDY_BUILD_EXECUTION"]),
+        "completion_path": os.environ["QCSD_STUDY_BUILD_COMPLETION_PATH"],
+        "completion_sha256": os.environ["QCSD_STUDY_BUILD_COMPLETION_SHA256"],
+        "completion_payload_sha256": os.environ[
+            "QCSD_STUDY_BUILD_COMPLETION_PAYLOAD_SHA256"
+        ],
+        "completion": json.loads(os.environ["QCSD_STUDY_BUILD_COMPLETION"]),
     },
     "clock_status": {
         "relationship": "container-shares-host-kernel-realtime-clock",

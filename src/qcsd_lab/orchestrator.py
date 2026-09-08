@@ -5726,7 +5726,11 @@ def validate_frozen_experiment_contract(
         raise ValueError("experiment name does not match frozen campaign")
     if experiment["purpose"] != campaign.purpose:
         raise ValueError("experiment purpose does not match frozen campaign")
-    expected_configuration = _frozen_configuration(root, campaign)
+    expected_configuration = _frozen_configuration(
+        root,
+        campaign,
+        allow_historical_research_bundle=allow_historical_research_bundle,
+    )
     if experiment["configuration"] != expected_configuration:
         raise ValueError("experiment configuration does not match frozen campaign inputs")
     # The seed is intentionally stored only once, in campaign.yml.  Replanning
@@ -5762,7 +5766,12 @@ def _campaign_from_frozen_inputs(
     )
 
 
-def _frozen_configuration(root: Path, campaign: Campaign) -> dict[str, Any]:
+def _frozen_configuration(
+    root: Path,
+    campaign: Campaign,
+    *,
+    allow_historical_research_bundle: bool = False,
+) -> dict[str, Any]:
     """Derive the experiment configuration without consulting experiment.json."""
 
     root = root.resolve()
@@ -5860,6 +5869,7 @@ def _frozen_configuration(root: Path, campaign: Campaign) -> dict[str, Any]:
         validated_environment = validate_study_environment_receipt(
             load_json(study_environment),
             expected_image_digest=load_json(root / "inputs/source.json")["image_digest"],
+            allow_historical=allow_historical_research_bundle,
         )
         if _is_class_study_campaign(campaign):
             from .class_attestation import validate_class_foundation_attestation

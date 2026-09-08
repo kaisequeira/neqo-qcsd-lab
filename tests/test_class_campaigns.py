@@ -607,6 +607,8 @@ def test_frozen_authority_relocation_requires_canonical_transitive_evidence(
     build_identity = {
         "cohort_version": 59,
         "sha256": build_sha256,
+        "completion_path": "/lab/artifacts/buflo-study/build-completion-v59.json",
+        "completion_sha256": "8" * 64,
         "collection_image": collection_source["image_digest"],
         "started_at": "2026-09-06T00:00:00+00:00",
         "finished_at": "2026-09-06T00:01:00+00:00",
@@ -652,7 +654,7 @@ def test_frozen_authority_relocation_requires_canonical_transitive_evidence(
     foundation = inputs / "class-study-foundation.json"
     foundation.write_bytes(canonical_json_bytes(foundation_value))
     authority = {
-        "schema_version": 1,
+        "schema_version": class_attestation.QUALIFICATION_AUTHORITY_SCHEMA_VERSION,
         "artifact_type": class_attestation.QUALIFICATION_AUTHORITY_TYPE,
         "foundation_attestation": {
             "path": str(foundation.resolve()),

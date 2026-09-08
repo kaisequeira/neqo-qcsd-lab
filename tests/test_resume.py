@@ -129,7 +129,7 @@ def _allow_synthetic_study_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         buflo_study,
         "validate_study_environment_receipt",
-        lambda _value, *, expected_image_digest=None: {"passed": True},
+        lambda _value, *, expected_image_digest=None, allow_historical=False: {"passed": True},
     )
     monkeypatch.setattr(
         orchestrator,

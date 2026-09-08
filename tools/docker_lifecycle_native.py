@@ -31,6 +31,7 @@ HEX_64 = re.compile(r"[0-9a-f]{64}")
 DECIMAL = re.compile(r"(?:0|[1-9][0-9]*)")
 SAFE_NAME = re.compile(r"[A-Za-z0-9_.-]+")
 MAX_AUTHORITY_BYTES = 65536
+MAX_LIFECYCLE_OPERATIONS = 7
 PR_SET_PDEATHSIG = 1
 CREATION_READY = b"QCSD-CREATION-HOLD-READY-V1\n"
 CREATION_COMMIT = b"QCSD-CREATION-HOLD-COMMIT-V1\n"
@@ -394,6 +395,44 @@ def _hold_creation(
         or qcsd_group != qcsd_pid
     ):
         _die("creation-holder qcsd identity is invalid")
+    operation_match = re.fullmatch(
+        r"(run|network|build|transaction)[.]([0-9a-f]{32})", root_name
+    )
+    assert operation_match is not None
+    _, requested_token = operation_match.groups()
+    try:
+        entries = tuple(os.listdir(base_fd))
+    except OSError as error:
+        raise RuntimeError("cannot census lifecycle operations") from error
+    operation_kinds: dict[str, str] = {}
+    patterns = (
+        re.compile(r"(run|network|build|transaction)[.]([0-9a-f]{32})"),
+        re.compile(
+            r"[.]retired[.](run|network|build|transaction)[.]([0-9a-f]{32})"
+        ),
+        re.compile(
+            r"retirement[.](run|network|build|transaction)[.]"
+            r"([0-9a-f]{32})(?:[.]next)?"
+        ),
+    )
+    for entry in entries:
+        matched = None
+        for pattern in patterns:
+            matched = pattern.fullmatch(entry)
+            if matched is not None:
+                break
+        if matched is None:
+            _die("creation-holder lifecycle namespace is malformed")
+        kind, token = matched.group(1), matched.group(2)
+        previous = operation_kinds.get(token)
+        if previous is not None and previous != kind:
+            _die("creation-holder lifecycle token changes kind")
+        operation_kinds[token] = kind
+    if (
+        requested_token in operation_kinds
+        or len(operation_kinds) >= MAX_LIFECYCLE_OPERATIONS
+    ):
+        _die("creation-holder lifecycle operation bound is exhausted")
     try:
         os.mkdir(root_name, 0o700, dir_fd=base_fd)
         os.fsync(base_fd)
@@ -666,14 +705,16 @@ def _api_service_wrapper(arguments: Sequence[str]) -> int:
         docker_config_fd, buildx_config_fd = descriptors[2:]
         if len({(os.fstat(fd).st_dev, os.fstat(fd).st_ino) for fd in descriptors}) != 4:
             raise RuntimeError("API-service lease descriptors alias")
-        for descriptor, expected_mode, expected_links in (
-            (docker_config_fd, DOCKER_CONFIG_MODE, 0),
-            (buildx_config_fd, BUILDX_CONFIG_MODE, 2),
+        for descriptor, expected_mode, expected_links, exact_links, require_empty in (
+            (docker_config_fd, DOCKER_CONFIG_MODE, 2, True, True),
+            (buildx_config_fd, BUILDX_CONFIG_MODE, 2, False, False),
         ):
             if not _exact_configuration_descriptor(
                 descriptor,
                 expected_mode=expected_mode,
                 expected_links=expected_links,
+                exact_links=exact_links,
+                require_empty=require_empty,
             ):
                 raise RuntimeError("API-service configuration lease changed")
         connection.sendall(API_LEASE_ACK)
@@ -703,14 +744,19 @@ def _api_service_wrapper(arguments: Sequence[str]) -> int:
 
 
 def _exact_configuration_descriptor(
-    descriptor: int, *, expected_mode: int, expected_links: int
+    descriptor: int,
+    *,
+    expected_mode: int,
+    expected_links: int,
+    exact_links: bool,
+    require_empty: bool,
 ) -> bool:
     """Validate one Docker/Buildx config descriptor without path fallback."""
 
     value = os.fstat(descriptor)
     links_match = (
         value.st_nlink == expected_links
-        if expected_links == 0
+        if exact_links
         else value.st_nlink >= expected_links
     )
     return (
@@ -719,7 +765,7 @@ def _exact_configuration_descriptor(
         and stat.S_IMODE(value.st_mode) == expected_mode
         and links_match
         and not os.get_inheritable(descriptor)
-        and (expected_links != 0 or not os.listdir(descriptor))
+        and (not require_empty or not os.listdir(descriptor))
     )
 
 
@@ -1065,8 +1111,12 @@ def _watch_api_service(
                     _forever()
                 control_group = snapshot[2]
             returncode = launcher.poll()
+            # A short service can finish after its authenticated transfer but
+            # before this same scheduler turn reaches poll().  Once authority
+            # moved, completion belongs to the post-transfer path below.
             if (
-                returncode is not None
+                not transferred
+                and returncode is not None
                 and 0 <= returncode < 128
                 and returncode != 124
             ):
@@ -1391,9 +1441,9 @@ def _acquire_lease(
         os.close(descriptor)
         raise
     singleton.detach()
-    for config_descriptor, expected_mode, expected_links in (
-        (docker_config_descriptor, DOCKER_CONFIG_MODE, 0),
-        (buildx_config_descriptor, BUILDX_CONFIG_MODE, 2),
+    for config_descriptor, expected_mode, expected_links, exact_links, require_empty in (
+        (docker_config_descriptor, DOCKER_CONFIG_MODE, 2, True, True),
+        (buildx_config_descriptor, BUILDX_CONFIG_MODE, 2, False, False),
     ):
         if config_descriptor < 0:
             continue
@@ -1401,6 +1451,8 @@ def _acquire_lease(
             config_descriptor,
             expected_mode=expected_mode,
             expected_links=expected_links,
+            exact_links=exact_links,
+            require_empty=require_empty,
         ):
             for received in descriptors:
                 os.close(received)

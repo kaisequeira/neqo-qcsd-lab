@@ -20,6 +20,68 @@ CONTAINER_ID = "a" * 64
 NETWORK_ID = "b" * 64
 
 
+LIFECYCLE_ISOLATION_SHIM = r'''\
+# Helper-level tests must never share the production durability namespace.
+# Preserve its root/type/mode contract, but bind discovery and mutation to one
+# fixture-owned directory.
+_qcsd_secure_lifecycle_base() {
+  local uid entry entry_name operation_kind operation_token expected_kind
+  local expected_mode metadata canonical nullglob_was_set=0 dotglob_was_set=0
+  local -a entries=()
+  local -A operation_kinds=()
+  uid="${EUID}"
+  [[ "${uid}" =~ ^(0|[1-9][0-9]*)$ ]] || return 1
+  _qcsd_lifecycle_base="${QCSD_TEST_LIFECYCLE_BASE:?}"
+  [[ "${_qcsd_lifecycle_base}" == /* && ! -L "${_qcsd_lifecycle_base}" &&
+      -d "${_qcsd_lifecycle_base}" ]] || return 1
+  canonical="$(readlink -f -- "${_qcsd_lifecycle_base}" 2>/dev/null)" || return 1
+  [[ "${canonical}" == "${_qcsd_lifecycle_base}" ]] || return 1
+  metadata="$(stat -Lc '%u:%a:%F' -- "${_qcsd_lifecycle_base}" 2>/dev/null)" ||
+    return 1
+  [[ "${metadata}" == "${uid}:700:directory" ]] || return 1
+
+  shopt -q nullglob && nullglob_was_set=1
+  shopt -q dotglob && dotglob_was_set=1
+  shopt -s nullglob dotglob
+  entries=("${_qcsd_lifecycle_base}"/*)
+  (( nullglob_was_set != 0 )) || shopt -u nullglob
+  (( dotglob_was_set != 0 )) || shopt -u dotglob
+  for entry in "${entries[@]}"; do
+    entry_name="${entry##*/}"
+    if [[ "${entry_name}" =~ ^(run|network|build|transaction)[.]([0-9a-f]{32})$ ]]; then
+      operation_kind="${BASH_REMATCH[1]}"; operation_token="${BASH_REMATCH[2]}"
+      expected_kind=directory; expected_mode=700
+    elif [[ "${entry_name}" =~ ^[.]retired[.](run|network|build|transaction)[.]([0-9a-f]{32})$ ]]; then
+      operation_kind="${BASH_REMATCH[1]}"; operation_token="${BASH_REMATCH[2]}"
+      expected_kind=directory; expected_mode=700
+    elif [[ "${entry_name}" =~ ^retirement[.](run|network|build|transaction)[.]([0-9a-f]{32})([.]next)?$ ]]; then
+      operation_kind="${BASH_REMATCH[1]}"; operation_token="${BASH_REMATCH[2]}"
+      expected_kind="regular file"; expected_mode=600
+    else
+      return 1
+    fi
+    [[ -z "${operation_kinds[${operation_token}]+x}" ||
+        "${operation_kinds[${operation_token}]}" == "${operation_kind}" ]] || return 1
+    operation_kinds["${operation_token}"]="${operation_kind}"
+    canonical="$(readlink -f -- "${entry}" 2>/dev/null)" || return 1
+    [[ "${canonical}" == "${entry}" ]] || return 1
+    metadata="$(stat -Lc '%u:%a:%F' -- "${entry}" 2>/dev/null)" || return 1
+    if [[ "${expected_kind}" == directory ]]; then
+      [[ "${metadata}" == "${uid}:${expected_mode}:directory" ]] || return 1
+      _qcsd_validate_lifecycle_root_contents "${entry}" || return 1
+    else
+      [[ "${metadata}" == "${uid}:${expected_mode}:regular file" ||
+          "${metadata}" == "${uid}:${expected_mode}:regular empty file" ]] || return 1
+    fi
+  done
+  (( ${#operation_kinds[@]} <= _QCSD_MAX_LIFECYCLE_OPERATIONS ))
+}
+_qcsd_lifecycle_lock_path() {
+  printf '%s.lock\n' "${QCSD_TEST_LIFECYCLE_BASE:?}"
+}
+'''
+
+
 FAKE_DOCKER = r'''#!/usr/bin/env python3
 import os
 from pathlib import Path
@@ -124,10 +186,11 @@ state = Path(sys.argv[1])
 kind = sys.argv[2]
 for requested in (signal.SIGHUP, signal.SIGINT, signal.SIGQUIT, signal.SIGTERM):
     signal.signal(requested, signal.SIG_IGN)
-(state / f"{kind}-escaped-ready").write_text(str(os.getpid()), encoding="ascii")
+(state / f"{kind}-escaped-pid").write_text(str(os.getpid()), encoding="ascii")
 (state / f"{kind}-escaped-cgroup").write_text(
     Path("/proc/self/cgroup").read_text(encoding="ascii"), encoding="ascii"
 )
+(state / f"{kind}-escaped-ready").write_text(str(os.getpid()), encoding="ascii")
 while True:
     time.sleep(0.02)
 """
@@ -137,7 +200,6 @@ while True:
         close_fds=False,
         stdin=subprocess.DEVNULL,
     )
-    write(root / f"{kind}-escaped-pid", str(descendant.pid))
     deadline = time.monotonic() + 2
     while not (root / f"{kind}-escaped-ready").exists():
         if time.monotonic() >= deadline:
@@ -238,6 +300,7 @@ import time
 state = Path(sys.argv[1])
 for requested in (signal.SIGHUP, signal.SIGINT, signal.SIGQUIT, signal.SIGTERM):
     signal.signal(requested, signal.SIG_IGN)
+(state / "build-descendant-pid").write_text(str(os.getpid()), encoding="ascii")
 (state / "build-descendant-ready").write_text(str(os.getpid()), encoding="ascii")
 while True:
     time.sleep(0.02)
@@ -249,7 +312,6 @@ while True:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        write(root / "build-descendant-pid", str(descendant.pid))
         deadline = time.monotonic() + 2
         while not (root / "build-descendant-ready").exists():
             if time.monotonic() >= deadline:
@@ -268,6 +330,9 @@ import time
 state = Path(sys.argv[1])
 for requested in (signal.SIGHUP, signal.SIGINT, signal.SIGQUIT, signal.SIGTERM):
     signal.signal(requested, signal.SIG_IGN)
+(state / "build-escaped-descendant-pid").write_text(
+    str(os.getpid()), encoding="ascii"
+)
 (state / "build-escaped-descendant-ready").write_text(
     str(os.getpid()), encoding="ascii"
 )
@@ -282,7 +347,6 @@ while True:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        write(root / "build-escaped-descendant-pid", str(descendant.pid))
         deadline = time.monotonic() + 2
         while not (root / "build-escaped-descendant-ready").exists():
             if time.monotonic() >= deadline:
@@ -344,17 +408,21 @@ if args[0] == "run":
             time.sleep(0.05)
     cidfile.write_text(cid + "\n", encoding="ascii")
     cidfile.chmod(0o600)
-    if behavior == "mislabelled-cid":
-        create_container(cid, "foreign-token")
-    else:
-        create_container(cid, token)
     if behavior == "ambiguous-label":
+        write(root / "container", cid)
+        write(root / "container-token", token)
+        write(root / "running", "true")
         write(root / "foreign-container", "c" * 64)
         write(root / "foreign-container-token", token)
         write(root / "foreign-running", "true")
         cidfile.unlink()
+        write(root / "run-ready", str(os.getpid()))
         while True:
             time.sleep(0.05)
+    if behavior == "mislabelled-cid":
+        create_container(cid, "foreign-token")
+    else:
+        create_container(cid, token)
     if behavior == "natural0":
         remove_container()
         raise SystemExit(0)
@@ -633,6 +701,15 @@ exit "$status"
 '''
 
 
+SIGNAL_CLEAN_BASH = (
+    "/usr/bin/env",
+    "--default-signal=HUP,INT,QUIT,TERM",
+    "--",
+    "/bin/bash",
+    "-c",
+)
+
+
 @pytest.fixture
 def fake_environment(tmp_path: Path):
     binary_root = tmp_path / "bin"
@@ -642,6 +719,13 @@ def fake_environment(tmp_path: Path):
     docker.chmod(0o755)
     state = tmp_path / "state"
     state.mkdir()
+    lifecycle_base = tmp_path / "isolated-lifecycle"
+    lifecycle_base.mkdir(mode=0o700)
+    lifecycle_isolation_shim = tmp_path / "lifecycle-isolation-shim.sh"
+    lifecycle_isolation_shim.write_text(
+        textwrap.dedent(LIFECYCLE_ISOLATION_SHIM), encoding="ascii"
+    )
+    lifecycle_isolation_shim.chmod(0o600)
     mktemp = binary_root / "mktemp"
     mktemp.write_text(
         textwrap.dedent(
@@ -666,6 +750,7 @@ printf '%s\n' "${created}"
         textwrap.dedent(
             r'''\
 source "$PRODUCTION_HELPER"
+source "$QCSD_TEST_LIFECYCLE_SHIM"
 _qcsd_lifecycle_root_created_hook() {
   printf '%s\n' "$1" >>"$FAKE_DOCKER_STATE/supervisor-roots.log"
 }
@@ -727,19 +812,45 @@ _qcsd_lifecycle_remove_root() {
 # remains observable through the fixture environment. Production's leased
 # native service controller is exercised by the guardian integration suite.
 _qcsd_docker_api_service_with_timeout() {
-  local duration="${1:?}" unit variable
+  local duration="${1:?}" duration_whole outer_duration unit variable
   local -a environment_arguments=()
   shift
+  if [[ "${duration}" =~ ^([0-9]+)([.][0-9]+)?$ ]]; then
+    duration_whole="${BASH_REMATCH[1]}"
+    outer_duration=$((10#${duration_whole} + 3))
+    [[ -z "${BASH_REMATCH[2]}" ]] || outer_duration=$((outer_duration + 1))
+  else
+    return 125
+  fi
   unit="qcsd-docker-api-$(printf '%032x' "$RANDOM$RANDOM").service"
   while IFS= read -r variable; do
     environment_arguments+=("--setenv=${variable}=${!variable}")
   done < <(compgen -e)
-  /usr/bin/systemd-run --user --wait --pipe --collect --quiet --same-dir \
-    --expand-environment=no --service-type=exec --unit="${unit}" \
-    --property=ExitType=cgroup --property=KillMode=control-group \
-    --property=KillSignal=SIGKILL --property=TimeoutStopSec=1s \
-    --property="RuntimeMaxSec=${duration}s" \
-    "${environment_arguments[@]}" -- "$@"
+  setsid timeout --signal=KILL --kill-after=1 "${outer_duration}s" \
+    /usr/bin/systemd-run --user --wait --pipe --collect --quiet --same-dir \
+      --expand-environment=no --service-type=exec --unit="${unit}" \
+      --property=ExitType=cgroup --property=KillMode=control-group \
+      --property=KillSignal=SIGKILL --property=TimeoutStopSec=1s \
+      --property="RuntimeMaxSec=${duration}s" \
+      "${environment_arguments[@]}" -- "$@"
+}
+_qcsd_build_wait_ready_hook() {
+  if [[ "${FAKE_BUILD_SUPERVISOR_SIGNAL_GATE:-}" == 1 ]]; then
+    printf 'ready\n' >"$FAKE_DOCKER_STATE/build-supervisor-signal-ready"
+    while (( requested_status == 0 )); do
+      IFS= read -r -t 0.05 -u "${wait_fd}" _qcsd_test_wait_byte || true
+    done
+    printf 'latched\n' >"$FAKE_DOCKER_STATE/build-supervisor-signal-latched"
+  fi
+}
+_qcsd_run_wait_ready_hook() {
+  if [[ "${FAKE_RUN_SUPERVISOR_SIGNAL_GATE:-}" == 1 ]]; then
+    printf 'ready\n' >"$FAKE_DOCKER_STATE/run-supervisor-signal-ready"
+    while (( requested_status == 0 )); do
+      IFS= read -r -t 0.05 -u "${wait_fd}" _qcsd_test_wait_byte || true
+    done
+    printf 'latched\n' >"$FAKE_DOCKER_STATE/run-supervisor-signal-latched"
+  fi
 }
 '''
         ),
@@ -763,19 +874,23 @@ _qcsd_docker_api_service_with_timeout() {
             Path("/proc/sys/kernel/random/boot_id").read_text().strip()
         ),
         _QCSD_DOCKER_BUILD_DAEMON_ID="daemon-test-id",
+        QCSD_TEST_LIFECYCLE_BASE=str(lifecycle_base),
+        QCSD_TEST_LIFECYCLE_SHIM=str(lifecycle_isolation_shim),
     )
     yield environment
 
     recorded_roots: set[Path] = set()
+    permitted_lifecycle_bases = {lifecycle_base}
     roots_log = state / "supervisor-roots.log"
     if roots_log.exists():
         for raw_path in roots_log.read_text(encoding="utf-8").splitlines():
+            root = Path(raw_path)
+            assert root.is_absolute(), raw_path
+            assert root.parent in permitted_lifecycle_bases, raw_path
             assert re.fullmatch(
-                rf"/var/tmp/qcsd-docker-lifecycle-{os.getuid()}/"
-                r"(?:run|network|build)\.[0-9a-f]{32}",
-                raw_path,
+                r"(?:run|network|build)\.[0-9a-f]{32}", root.name
             ), raw_path
-            recorded_roots.add(Path(raw_path))
+            recorded_roots.add(root)
 
     unit_pattern = re.compile(
         r"qcsd-docker-(?:api-[0-9a-f]{32}\.service|"
@@ -838,6 +953,15 @@ _qcsd_docker_api_service_with_timeout() {
         )
         _assert_user_scope_inactive(unit)
 
+    launcher_cleanup_errors: list[str] = []
+    for root in sorted(recorded_roots):
+        if not root.exists():
+            continue
+        try:
+            _terminate_authenticated_stopped_launcher(root)
+        except AssertionError as error:
+            launcher_cleanup_errors.append(f"{root}: {error}")
+
     for pid_name in (
         "cli-pid",
         "build-cli-pid",
@@ -873,6 +997,11 @@ _qcsd_docker_api_service_with_timeout() {
                     pass
                 _wait_not_live(pid)
 
+    # A malformed or identity-mismatched birth record must retain its durable
+    # evidence.  In particular, never turn a teardown parsing failure into
+    # permission to recursively delete the only record binding a stopped PID.
+    assert not launcher_cleanup_errors, "; ".join(launcher_cleanup_errors)
+
     for root in recorded_roots:
         if root.exists():
             assert not root.is_symlink()
@@ -881,6 +1010,14 @@ _qcsd_docker_api_service_with_timeout() {
             assert root_stat.st_mode & 0o777 == 0o700
             shutil.rmtree(root)
         assert not root.exists()
+
+
+@pytest.fixture
+def isolated_recovery_environment(
+    fake_environment: dict[str, str],
+) -> dict[str, str]:
+    """Name the already-private environment used by crash/recovery tests."""
+    return fake_environment
 
 
 def _wait(path: Path, *, timeout: float = 5) -> None:
@@ -922,6 +1059,140 @@ def _process_state(pid: int) -> str | None:
     return stat_line.rsplit(") ", 1)[1].split(maxsplit=1)[0]
 
 
+def _process_identity(pid: int) -> tuple[str, int, int, int] | None:
+    try:
+        stat_line = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
+    except FileNotFoundError:
+        return None
+    fields = stat_line.rsplit(") ", 1)[1].split()
+    assert len(fields) >= 20, stat_line
+    state = fields[0]
+    process_group = int(fields[2])
+    session = int(fields[3])
+    start_time = int(fields[19])
+    return state, start_time, session, process_group
+
+
+def _private_launcher_birth(root: Path) -> tuple[int, int, int, int] | None:
+    birth = root / "launcher.birth"
+    if not birth.exists() and not birth.is_symlink():
+        return None
+    assert not birth.is_symlink(), birth
+    assert birth.is_file(), birth
+    metadata = birth.stat()
+    assert metadata.st_uid == os.getuid(), birth
+    assert metadata.st_mode & 0o777 == 0o600, birth
+    assert metadata.st_nlink == 1, birth
+    assert 0 < metadata.st_size <= 2048, birth
+    try:
+        contents = birth.read_text(encoding="ascii")
+    except (OSError, UnicodeError) as error:
+        raise AssertionError(f"cannot read private launcher birth {birth}: {error}") from error
+    assert contents.endswith("\n") and "\r" not in contents, birth
+    assert all(character == "\n" or " " <= character <= "~" for character in contents), birth
+    lines = contents.splitlines()
+    root_match = re.fullmatch(r"(run|build)\.([0-9a-f]{32})", root.name)
+    assert root_match is not None, root
+    kind, token = root_match.groups()
+    assert lines[:4] == [
+        "birth_schema=1",
+        f"launcher_kind={kind}",
+        f"lifecycle_root={root}",
+        f"lifecycle_token={token}",
+    ], birth
+    assert len(lines) == 8, birth
+    expected_keys = (
+        "launcher_pid",
+        "launcher_start_time",
+        "launcher_session",
+        "launcher_process_group",
+    )
+    values: list[int] = []
+    for line, key in zip(lines[4:], expected_keys, strict=True):
+        prefix = f"{key}="
+        assert line.startswith(prefix), birth
+        value = line.removeprefix(prefix)
+        assert re.fullmatch(r"[1-9][0-9]*", value), birth
+        values.append(int(value))
+    pid, start_time, session, process_group = values
+    assert session == pid and process_group == pid, birth
+    return pid, start_time, session, process_group
+
+
+def _terminate_authenticated_stopped_launcher(root: Path) -> None:
+    """Kill only the exact pre-exec launcher authenticated by its birth record."""
+    assert root.is_absolute(), root
+    assert root.exists() and root.is_dir() and not root.is_symlink(), root
+    root_metadata = root.stat()
+    assert root_metadata.st_uid == os.getuid(), root
+    assert root_metadata.st_mode & 0o777 == 0o700, root
+    expected = _private_launcher_birth(root)
+    if expected is None:
+        return
+    pid, start_time, session, process_group = expected
+    try:
+        pidfd = os.pidfd_open(pid)
+    except ProcessLookupError:
+        return
+    try:
+        observed = _process_identity(pid)
+        if observed is None:
+            return
+        state, observed_start, observed_session, observed_group = observed
+        assert observed_start == start_time, (
+            f"launcher PID {pid} birth changed: {observed_start} != {start_time}"
+        )
+        assert observed_session == session and observed_group == process_group, (
+            f"launcher PID {pid} session/group changed: "
+            f"{observed_session}/{observed_group} != {session}/{process_group}"
+        )
+        if state == "Z":
+            return
+        assert state == "T", f"launcher PID {pid} is not stopped: state={state}"
+        try:
+            argv = Path(f"/proc/{pid}/cmdline").read_bytes().rstrip(b"\0").split(b"\0")
+        except FileNotFoundError:
+            return
+        kind, token = root.name.split(".", 1)
+        required_argv = {
+            os.fsencode(f"qcsd-docker-{kind}-scope-launcher"),
+            os.fsencode(root),
+            os.fsencode(root / "launcher.birth"),
+            token.encode("ascii"),
+            kind.encode("ascii"),
+        }
+        assert required_argv.issubset(argv), (
+            f"launcher PID {pid} command does not bind {root}: {argv!r}"
+        )
+        # Reprove the tuple and stopped state immediately before signalling.
+        assert _process_identity(pid) == (
+            "T",
+            start_time,
+            session,
+            process_group,
+        ), f"launcher PID {pid} changed before teardown signal"
+        try:
+            signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+        except ProcessLookupError:
+            return
+    finally:
+        os.close(pidfd)
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        observed = _process_identity(pid)
+        if observed is None or observed[0] == "Z" or observed[1] != start_time:
+            try:
+                os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                pass
+            return
+        time.sleep(0.01)
+    raise AssertionError(
+        f"authenticated launcher PID {pid} remains live: {_process_identity(pid)}"
+    )
+
+
 def _wait_not_live(pid: int, *, timeout: float = 5) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -931,12 +1202,24 @@ def _wait_not_live(pid: int, *, timeout: float = 5) -> None:
     raise AssertionError(f"process {pid} remains live with state {_process_state(pid)}")
 
 
+def _fixture_helper_shims(fake_environment: dict[str, str]) -> str:
+    wrapper = Path(fake_environment["REAL_HELPER"]).read_text(encoding="utf-8")
+    prefix = '\\\nsource "$PRODUCTION_HELPER"\n'
+    assert wrapper.startswith(prefix)
+    return wrapper.removeprefix(prefix)
+
+
 @pytest.mark.parametrize("kind", ["run", "build"])
 @pytest.mark.parametrize("boundary", ["forked", "birth_bound"])
 def test_sigkill_at_launcher_birth_boundaries_is_restart_recoverable(
-    fake_environment: dict[str, str], kind: str, boundary: str
+    isolated_recovery_environment: dict[str, str],
+    request: pytest.FixtureRequest,
+    kind: str,
+    boundary: str,
 ) -> None:
+    fake_environment = isolated_recovery_environment
     state = Path(fake_environment["FAKE_DOCKER_STATE"])
+    lifecycle_base = Path(fake_environment["QCSD_TEST_LIFECYCLE_BASE"])
     crash_wrapper = state.parent / f"crash-{kind}-{boundary}.sh"
     crash_wrapper.write_text(
         textwrap.dedent(
@@ -961,8 +1244,15 @@ _qcsd_launcher_{boundary}_hook() {{
     assert process.wait(timeout=10) == -signal.SIGKILL
     _wait(state / "crash-child")
     child_pid = int((state / "crash-child").read_text().split()[0])
-    root = _created_lifecycle_roots(state, kind)[-1]
+    root = _created_lifecycle_roots(
+        state, kind, lifecycle_base=lifecycle_base
+    )[-1]
     _wait(root / "launcher.birth")
+    request.addfinalizer(
+        lambda: _terminate_authenticated_stopped_launcher(root)
+        if root.exists()
+        else None
+    )
 
     # Model the exact parent-poll-timeout suffix: the final pre-authorisation
     # recovery receipt has an unavailable tuple, while the child completes its
@@ -996,7 +1286,7 @@ printf '%s\n' "${delayed[scope_launcher_pid]}"
         ],
         env={
             **fake_environment,
-            "REAL_HELPER": str(HELPER),
+            "REAL_HELPER": fake_environment["REAL_HELPER"],
             "LIFECYCLE_ROOT": str(root),
             "TOKEN": root.name.split(".", 1)[1],
             "KIND": kind,
@@ -1028,8 +1318,10 @@ printf '%s\n' "${delayed[scope_launcher_pid]}"
 
 @pytest.mark.parametrize("kind", ["run", "build"])
 def test_child_exit_before_birth_produces_recoverable_unbound_identity(
-    fake_environment: dict[str, str], tmp_path: Path, kind: str
+    isolated_recovery_environment: dict[str, str], tmp_path: Path, kind: str
 ) -> None:
+    fake_environment = isolated_recovery_environment
+    lifecycle_base = Path(fake_environment["QCSD_TEST_LIFECYCLE_BASE"])
     wrapper = tmp_path / f"child-exit-before-birth-{kind}.sh"
     wrapper.write_text(
         textwrap.dedent(
@@ -1057,7 +1349,11 @@ _qcsd_launcher_forked_hook() {
     calls = calls_path.read_text(encoding="utf-8") if calls_path.exists() else ""
     assert " RUN " not in f" {calls} "
     assert " BUILD " not in f" {calls} "
-    for root in _created_lifecycle_roots(Path(environment["FAKE_DOCKER_STATE"]), kind):
+    for root in _created_lifecycle_roots(
+        Path(environment["FAKE_DOCKER_STATE"]),
+        kind,
+        lifecycle_base=lifecycle_base,
+    ):
         if root.exists():
             recovery = subprocess.run(
                 [
@@ -1086,8 +1382,13 @@ _qcsd_launcher_forked_hook() {
 
 @pytest.mark.parametrize("kind", ["run", "build"])
 def test_late_birth_after_parent_poll_timeout_validates_full_recovery_record(
-    fake_environment: dict[str, str], tmp_path: Path, kind: str
+    isolated_recovery_environment: dict[str, str],
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+    kind: str,
 ) -> None:
+    fake_environment = isolated_recovery_environment
+    lifecycle_base = Path(fake_environment["QCSD_TEST_LIFECYCLE_BASE"])
     wrapper = tmp_path / f"late-birth-full-recovery-{kind}.sh"
     wrapper.write_text(
         textwrap.dedent(
@@ -1123,9 +1424,16 @@ _qcsd_publish_supervision_file() {
     process = _start_attached(environment) if kind == "run" else _start_build(environment)
     assert process.wait(timeout=15) == -signal.SIGKILL
     state = Path(environment["FAKE_DOCKER_STATE"])
-    root = _created_lifecycle_roots(state, kind)[-1]
+    root = _created_lifecycle_roots(
+        state, kind, lifecycle_base=lifecycle_base
+    )[-1]
     _wait(root / "RECOVERY")
     _wait(root / "launcher.birth")
+    request.addfinalizer(
+        lambda: _terminate_authenticated_stopped_launcher(root)
+        if root.exists()
+        else None
+    )
     birth = (root / "launcher.birth").read_text(encoding="ascii")
     child_pid = int(re.search(r"^launcher_pid=([1-9][0-9]*)$", birth, re.MULTILINE).group(1))
     recovery = subprocess.run(
@@ -1152,6 +1460,85 @@ _qcsd_publish_supervision_file() {
         assert root.exists()
         shutil.rmtree(root)
     process.communicate(timeout=2)
+
+
+def test_failed_recovery_teardown_reaps_authenticated_stopped_launcher(
+    isolated_recovery_environment: dict[str, str], tmp_path: Path
+) -> None:
+    environment = isolated_recovery_environment
+    state = Path(environment["FAKE_DOCKER_STATE"])
+    lifecycle_base = Path(environment["QCSD_TEST_LIFECYCLE_BASE"])
+    wrapper = tmp_path / "failed-recovery-launcher.sh"
+    wrapper.write_text(
+        textwrap.dedent(
+            r'''\
+source "$REAL_HELPER"
+_qcsd_lifecycle_root_created_hook() {
+  printf '%s\n' "$1" >>"$FAKE_DOCKER_STATE/supervisor-roots.log"
+}
+_qcsd_launcher_birth_bound_hook() {
+  kill -KILL "$BASHPID"
+}
+'''
+        ),
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o600)
+    environment = {**environment, "HELPER": str(wrapper)}
+    Path(environment["LOCK_PATH"]).touch(mode=0o600)
+    Path(environment["LOCK_PATH"]).chmod(0o600)
+    process = _start_attached(environment)
+    root: Path | None = None
+    blocker: Path | None = None
+    child_pid: int | None = None
+    try:
+        assert process.wait(timeout=10) == -signal.SIGKILL
+        root = _created_lifecycle_roots(
+            state, "run", lifecycle_base=lifecycle_base
+        )[-1]
+        _wait(root / "launcher.birth")
+        birth_identity = _private_launcher_birth(root)
+        assert birth_identity is not None
+        child_pid = birth_identity[0]
+        assert _process_state(child_pid) == "T"
+
+        blocker_token = hashlib.sha256(os.fsencode(tmp_path)).hexdigest()[:32]
+        blocker = lifecycle_base / f"build.{blocker_token}"
+        blocker.mkdir(mode=0o700)
+        blocker.chmod(0o700)
+        malformed = blocker / "RECOVERY"
+        malformed.write_text("not-a-lifecycle-record\n", encoding="ascii")
+        malformed.chmod(0o600)
+        recovery = subprocess.run(
+            [
+                "bash",
+                "-c",
+                'set -euo pipefail; source "$REAL_HELPER"; '
+                "qcsd_reconcile_docker_lifecycle",
+            ],
+            env=environment,
+            text=True,
+            capture_output=True,
+            timeout=15,
+        )
+        assert recovery.returncode != 0, recovery.stderr
+        assert "malformed state" in recovery.stderr
+        assert _process_state(child_pid) == "T"
+
+        _terminate_authenticated_stopped_launcher(root)
+        _wait_not_live(child_pid)
+        assert root.exists()
+        shutil.rmtree(root)
+        assert not root.exists()
+    finally:
+        if root is not None and root.exists():
+            _terminate_authenticated_stopped_launcher(root)
+            shutil.rmtree(root)
+        if blocker is not None and blocker.exists():
+            shutil.rmtree(blocker)
+        if child_pid is not None:
+            _wait_not_live(child_pid)
+        process.communicate(timeout=2)
 
 
 def _process_fd_targets(pid: int) -> set[Path]:
@@ -1246,7 +1633,7 @@ def _assert_scoped_build_receipt(
 
 def _start_attached(environment: dict[str, str]) -> subprocess.Popen[str]:
     return subprocess.Popen(
-        ["bash", "-c", textwrap.dedent(ATTACHED_HARNESS)],
+        [*SIGNAL_CLEAN_BASH, textwrap.dedent(ATTACHED_HARNESS)],
         env=environment,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -1257,7 +1644,7 @@ def _start_attached(environment: dict[str, str]) -> subprocess.Popen[str]:
 
 def _start_build(environment: dict[str, str]) -> subprocess.Popen[str]:
     return subprocess.Popen(
-        ["bash", "-c", textwrap.dedent(BUILD_HARNESS)],
+        [*SIGNAL_CLEAN_BASH, textwrap.dedent(BUILD_HARNESS)],
         cwd=ROOT,
         env=environment,
         stdout=subprocess.PIPE,
@@ -1272,40 +1659,67 @@ def _communicate(
 ) -> tuple[str, str]:
     try:
         return process.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as initial_timeout:
         os.killpg(process.pid, signal.SIGKILL)
-        process.communicate(timeout=2)
-        raise
+        try:
+            process.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            # The launcher deliberately owns a separate session/systemd scope
+            # and can retain the capture pipes until fixture teardown kills
+            # that exact scope. Preserve the original harness timeout rather
+            # than replacing it with this secondary pipe-drain timeout.
+            if process.stdout is not None:
+                process.stdout.close()
+            if process.stderr is not None:
+                process.stderr.close()
+        raise initial_timeout
 
 
 def _recovery_path(stderr: str) -> Path:
     match = re.search(
-        rf"preserving (/var/tmp/qcsd-docker-lifecycle-{os.getuid()}/"
-        r"run\.[0-9a-f]{32})",
+        r"preserving (/[^\r\n ]+/run\.[0-9a-f]{32})",
         stderr,
     )
     assert match, stderr
-    return Path(match.group(1))
+    root = Path(match.group(1))
+    _assert_private_lifecycle_root_path(root, "run")
+    return root
 
 
 def _network_recovery_path(stderr: str) -> Path:
     match = re.search(
-        rf"preserving (/var/tmp/qcsd-docker-lifecycle-{os.getuid()}/"
-        r"network\.[0-9a-f]{32})",
+        r"preserving (/[^\r\n ]+/network\.[0-9a-f]{32})",
         stderr,
     )
     assert match, stderr
-    return Path(match.group(1))
+    root = Path(match.group(1))
+    _assert_private_lifecycle_root_path(root, "network")
+    return root
 
 
 def _build_recovery_path(stderr: str) -> Path:
     match = re.search(
-        rf"preserving (/var/tmp/qcsd-docker-lifecycle-{os.getuid()}/"
-        r"build\.[0-9a-f]{32})",
+        r"preserving (/[^\r\n ]+/build\.[0-9a-f]{32})",
         stderr,
     )
     assert match, stderr
-    return Path(match.group(1))
+    root = Path(match.group(1))
+    _assert_private_lifecycle_root_path(root, "build")
+    return root
+
+
+def _assert_private_lifecycle_root_path(root: Path, kind: str) -> None:
+    production_base = Path(f"/var/tmp/qcsd-docker-lifecycle-{os.getuid()}")
+    assert root.is_absolute(), root
+    assert root.parent != production_base, root
+    assert root.parent.name == "isolated-lifecycle", root
+    assert re.fullmatch(rf"{re.escape(kind)}\.[0-9a-f]{{32}}", root.name), root
+    parent = root.parent
+    assert not parent.is_symlink(), parent
+    assert parent.resolve(strict=True) == parent, parent
+    metadata = parent.stat()
+    assert metadata.st_uid == os.getuid(), parent
+    assert metadata.st_mode & 0o777 == 0o700, parent
 
 
 def _assert_recovery_security(root: Path) -> None:
@@ -1321,11 +1735,15 @@ def _assert_recovery_security(root: Path) -> None:
     assert receipt_stat.st_nlink == 1
 
 
-def _created_lifecycle_roots(state: Path, kind: str) -> list[Path]:
+def _created_lifecycle_roots(
+    state: Path, kind: str, *, lifecycle_base: Path | None = None
+) -> list[Path]:
     roots_log = state / "supervisor-roots.log"
     assert roots_log.is_file()
+    if lifecycle_base is None:
+        lifecycle_base = state.parent / "isolated-lifecycle"
     pattern = re.compile(
-        rf"/var/tmp/qcsd-docker-lifecycle-{os.getuid()}/"
+        rf"{re.escape(os.fspath(lifecycle_base))}/"
         rf"{re.escape(kind)}\.[0-9a-f]{{32}}"
     )
     roots = [
@@ -1338,7 +1756,7 @@ def _created_lifecycle_roots(state: Path, kind: str) -> list[Path]:
 
 
 def _wait_for_build_supervision_bound(state: Path) -> Path:
-    """Wait until the supervisor, not merely the fake CLI, is signal-ready."""
+    """Wait until the supervisor's durable bound record is externally visible."""
     roots = _created_lifecycle_roots(state, "build")
     assert len(roots) == 1
     root = roots[0]
@@ -1346,9 +1764,39 @@ def _wait_for_build_supervision_bound(state: Path) -> Path:
     return root
 
 
+def _wait_for_build_signal_ready(state: Path) -> Path:
+    """Wait until bound publication has returned and the host trap can run."""
+
+    root = _wait_for_build_supervision_bound(state)
+    _wait(state / "build-supervisor-signal-ready")
+    return root
+
+
+def _wait_for_run_supervision_authorised(state: Path) -> Path:
+    """Wait until the run supervisor has durably entered its bounded wait."""
+
+    roots = _created_lifecycle_roots(state, "run")
+    assert len(roots) == 1
+    root = roots[0]
+    _wait_for_text(
+        root / "SUPERVISION",
+        "status_file_state=awaiting-command-status\n",
+        timeout=10,
+    )
+    return root
+
+
+def _wait_for_run_signal_ready(state: Path) -> Path:
+    """Wait until run publication has returned and the host trap can run."""
+
+    root = _wait_for_run_supervision_authorised(state)
+    _wait(state / "run-supervisor-signal-ready")
+    return root
+
+
 def _assert_lifecycle_receipt_identity(root: Path, receipt: str, state: str) -> None:
     source = HELPER.resolve()
-    assert root.parent == Path(f"/var/tmp/qcsd-docker-lifecycle-{os.getuid()}")
+    _assert_private_lifecycle_root_path(root, root.name.split(".", 1)[0])
     assert re.fullmatch(r"(?:run|network|build)\.[0-9a-f]{32}", root.name)
     assert not root.is_symlink()
     metadata = root.stat()
@@ -1365,6 +1813,50 @@ def _assert_lifecycle_receipt_identity(root: Path, receipt: str, state: str) -> 
     )
     assert re.search(r"^supervisor_source_device=[1-9][0-9]*$", receipt, re.MULTILINE)
     assert re.search(r"^supervisor_source_inode=[1-9][0-9]*$", receipt, re.MULTILINE)
+
+
+def test_fake_environment_binds_lifecycle_namespace_and_lock_to_private_paths(
+    fake_environment: dict[str, str], tmp_path: Path
+) -> None:
+    expected_base = tmp_path / "isolated-lifecycle"
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            r'''\
+set -euo pipefail
+source "$HELPER"
+_qcsd_secure_lifecycle_base
+printf 'base=%s\nlock=%s\n' \
+  "$_qcsd_lifecycle_base" "$(_qcsd_lifecycle_lock_path)"
+''',
+        ],
+        env=fake_environment,
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert result.stdout == f"base={expected_base}\nlock={expected_base}.lock\n"
+    assert "/var/tmp/qcsd-docker-lifecycle-" not in result.stdout
+
+
+def test_production_lifecycle_lock_path_identity_is_unchanged() -> None:
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'set -euo pipefail; source "$HELPER"; _qcsd_lifecycle_lock_path',
+        ],
+        env={**os.environ, "HELPER": str(HELPER)},
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert result.stdout == f"/var/tmp/qcsd-docker-lifecycle-{os.getuid()}.lock\n"
 
 
 @pytest.mark.parametrize("status", [0, 37, 127])
@@ -1483,15 +1975,25 @@ def test_build_signal_maps_host_status_and_preserves_cooperative_taint(
     fake_environment.update(
         FAKE_BUILD_BEHAVIOR="cooperative",
         FAKE_BUILD_SIGNAL_GATE="1",
+        FAKE_BUILD_SUPERVISOR_SIGNAL_GATE="1",
     )
-    process = _start_build(fake_environment)
+    # The production guardian resets and unblocks every forwarded signal
+    # before exec. Start from an ignored disposition so this harness cannot
+    # silently depend on the pytest launcher's signal state.
+    previous_handler = signal.getsignal(requested)
+    signal.signal(requested, signal.SIG_IGN)
+    try:
+        process = _start_build(fake_environment)
+    finally:
+        signal.signal(requested, previous_handler)
     state = Path(fake_environment["FAKE_DOCKER_STATE"])
     lock = Path(fake_environment["LOCK_PATH"])
     _wait(state / "build-ready")
-    _wait_for_build_supervision_bound(state)
+    _wait_for_build_signal_ready(state)
     assert not _lock_available(lock)
 
     os.kill(process.pid, requested)
+    _wait(state / "build-supervisor-signal-latched")
     _wait(state / "build-int-blocked")
     lock_held_during_cancellation = not _lock_available(lock)
     (state / "build-int-release").write_text("release\n", encoding="ascii")
@@ -2004,7 +2506,7 @@ if [[ "$WANT_ERREXIT" == 1 ]]; then [[ "$-" == *e* ]]; else [[ "$-" != *e* ]]; f
 exit "$status"
 '''
     result = subprocess.run(
-        ["bash", "-c", textwrap.dedent(script)],
+        [*SIGNAL_CLEAN_BASH, textwrap.dedent(script)],
         cwd=ROOT,
         env={
             **fake_environment,
@@ -2030,14 +2532,24 @@ def test_direct_signal_is_forwarded_and_host_lock_lives_through_cleanup(
     requested: signal.Signals,
     expected: int,
 ) -> None:
-    fake_environment["FAKE_KILL_DELAY"] = "0.3"
-    process = _start_attached(fake_environment)
+    fake_environment.update(
+        FAKE_KILL_DELAY="0.3",
+        FAKE_RUN_SUPERVISOR_SIGNAL_GATE="1",
+    )
+    previous_handler = signal.getsignal(requested)
+    signal.signal(requested, signal.SIG_IGN)
+    try:
+        process = _start_attached(fake_environment)
+    finally:
+        signal.signal(requested, previous_handler)
     state = Path(fake_environment["FAKE_DOCKER_STATE"])
     lock = Path(fake_environment["LOCK_PATH"])
     _wait(state / "run-ready")
+    _wait_for_run_signal_ready(state)
     assert not _lock_available(lock)
 
     os.kill(process.pid, requested)
+    _wait(state / "run-supervisor-signal-latched")
     time.sleep(0.05)
     assert not _lock_available(lock)
     stdout, stderr = _communicate(process, timeout=10)
@@ -2064,9 +2576,7 @@ def test_loaded_helper_rejects_mid_process_source_replacement_before_api(
     fake_environment: dict[str, str], tmp_path: Path
 ) -> None:
     copied = tmp_path / "replaceable-helper.sh"
-    fixture_shims = Path(fake_environment["REAL_HELPER"]).read_text(
-        encoding="utf-8"
-    ).replace('source "$PRODUCTION_HELPER"\n', "", 1)
+    fixture_shims = _fixture_helper_shims(fake_environment)
     copied.write_bytes(
         HELPER.read_bytes()
         + fixture_shims.encode()
@@ -2107,9 +2617,7 @@ def test_source_replacement_at_bound_birth_prevents_launcher_release(
     fake_environment: dict[str, str], tmp_path: Path, kind: str
 ) -> None:
     copied = tmp_path / f"replaceable-{kind}-helper.sh"
-    fixture_shims = Path(fake_environment["REAL_HELPER"]).read_text(
-        encoding="utf-8"
-    ).split("\n", 1)[1]
+    fixture_shims = _fixture_helper_shims(fake_environment)
     copied.write_bytes(
         HELPER.read_bytes()
         + fixture_shims.encode()
@@ -2160,7 +2668,8 @@ def test_source_replacement_after_authorisation_prevents_sigcont(
     fake_environment: dict[str, str], tmp_path: Path, kind: str
 ) -> None:
     copied = tmp_path / f"release-{kind}-helper.sh"
-    copied.write_bytes(HELPER.read_bytes())
+    fixture_shims = _fixture_helper_shims(fake_environment)
+    copied.write_bytes(HELPER.read_bytes() + fixture_shims.encode())
     copied.chmod(0o600)
     wrapper = tmp_path / f"release-{kind}-wrapper.sh"
     wrapper.write_text(
@@ -2235,8 +2744,7 @@ _qcsd_lifecycle_root_created_hook() {{
     else:
         process = subprocess.Popen(
             [
-                "bash",
-                "-c",
+                *SIGNAL_CLEAN_BASH,
                 'set -euo pipefail; source "$HELPER"; QCSD_DOCKER_IDS_TEST=(); '
                 "qcsd_create_docker_network QCSD_DOCKER_IDS_TEST docker network create test-network",
             ],
@@ -2474,7 +2982,7 @@ def test_late_signal_latch_remains_a_valid_recovery_suffix(
             env={
                 **fake_environment,
                 "LIFECYCLE_ROOT": str(recovery),
-                "REAL_HELPER": str(HELPER),
+                "REAL_HELPER": fake_environment["REAL_HELPER"],
             },
             text=True,
             capture_output=True,
@@ -2507,7 +3015,11 @@ set +u
 '''
     result = subprocess.run(
         ["bash", "-c", script],
-        env={**fake_environment, "RECORD_KIND": kind, "REAL_HELPER": str(HELPER)},
+        env={
+            **fake_environment,
+            "RECORD_KIND": kind,
+            "REAL_HELPER": fake_environment["REAL_HELPER"],
+        },
         text=True,
         capture_output=True,
         timeout=10,
@@ -2538,7 +3050,7 @@ def test_observed_scope_binding_partition(
         ],
         env={
             **fake_environment,
-            "REAL_HELPER": str(HELPER),
+            "REAL_HELPER": fake_environment["REAL_HELPER"],
             "STATE": state,
             "CG": control_group,
         },
@@ -2584,7 +3096,7 @@ fi
         ["bash", "-c", script],
         env={
             **fake_environment,
-            "REAL_HELPER": str(HELPER),
+            "REAL_HELPER": fake_environment["REAL_HELPER"],
             "EXACT_LEADER": "1" if exact_leader else "0",
             "REQUIRED_STATE": required_state,
             "OBSERVED_STATE": observed_state,
@@ -2628,7 +3140,11 @@ test -s "$FAKE_DOCKER_STATE/scope-kills"
     boot = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
     result = subprocess.run(
         ["bash", "-c", textwrap.dedent(script)],
-        env={**fake_environment, "REAL_HELPER": str(HELPER), "BOOT": boot},
+        env={
+            **fake_environment,
+            "REAL_HELPER": fake_environment["REAL_HELPER"],
+            "BOOT": boot,
+        },
         text=True,
         capture_output=True,
         timeout=10,
@@ -2660,7 +3176,7 @@ fi
         ["bash", "-c", script],
         env={
             **fake_environment,
-            "REAL_HELPER": str(HELPER),
+            "REAL_HELPER": fake_environment["REAL_HELPER"],
             "ACCEPTED": "1" if accepted else "0",
         },
         text=True,
@@ -2693,7 +3209,7 @@ for result in $SEQUENCE; do _qcsd_record_cli_force_result "$result"; done
         ["bash", "-c", script],
         env={
             **fake_environment,
-            "REAL_HELPER": str(HELPER),
+            "REAL_HELPER": fake_environment["REAL_HELPER"],
             "SEQUENCE": sequence,
             "EXPECTED": f"{forced}:{outcome}",
         },
@@ -2725,7 +3241,10 @@ _qcsd_force_remove_target aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 '''
     result = subprocess.run(
         ["bash", "-c", script],
-        env={**fake_environment, "REAL_HELPER": str(HELPER)},
+        env={
+            **fake_environment,
+            "REAL_HELPER": fake_environment["REAL_HELPER"],
+        },
         text=True,
         capture_output=True,
         timeout=10,
@@ -2752,6 +3271,125 @@ def test_first_dispatched_signal_is_latched_when_a_second_signal_arrives(
     calls = (state / "calls.log").read_text(encoding="utf-8")
     assert f"KILL INT {CONTAINER_ID}" in calls
     assert "KILL TERM" not in calls
+
+
+def test_signal_latch_is_safe_at_a_command_substitution_boundary(
+    fake_environment: dict[str, str],
+) -> None:
+    """Force TERM into Bash 5.2's recursive-substitution dispatch window."""
+    ready = Path(fake_environment["FAKE_DOCKER_STATE"]) / "substitution-ready"
+    release = Path(fake_environment["FAKE_DOCKER_STATE"]) / "substitution-release"
+    script = r'''
+set -euo pipefail
+source "$REAL_HELPER"
+exercise_latch() {
+  local requested_signal="" requested_status=0 first second
+  local saved_term
+  saved_term="$(trap -p TERM || true)"
+  trap '_qcsd_latch_requested_signal TERM 143' TERM
+  first="$(
+    : >"$SUBSTITUTION_READY"
+    while [[ ! -e "$SUBSTITUTION_RELEASE" ]]; do
+      sleep 0.01
+    done
+    printf first
+  )"
+  # Bash 5.2 corrupts the trap parser if these two substitutions are arguments
+  # of one simple command.  Separate assignments are the production invariant.
+  second="$(printf second)"
+  _qcsd_restore_signal_trap "$saved_term" TERM
+  printf '%s:%s:%s:%s\n' "$requested_signal" "$requested_status" "$first" "$second"
+}
+exercise_latch
+'''
+    previous_handler = signal.getsignal(signal.SIGTERM)
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    try:
+        process = subprocess.Popen(
+            [*SIGNAL_CLEAN_BASH, textwrap.dedent(script)],
+            env={
+                **fake_environment,
+                "SUBSTITUTION_READY": str(ready),
+                "SUBSTITUTION_RELEASE": str(release),
+            },
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+    finally:
+        signal.signal(signal.SIGTERM, previous_handler)
+    _wait(ready)
+    os.kill(process.pid, signal.SIGTERM)
+    # Keep the signal pending until the first substitution completes so trap
+    # dispatch occurs at the parser boundary rather than during its child.
+    time.sleep(0.05)
+    release.touch()
+    stdout, stderr = _communicate(process, timeout=5)
+    assert process.returncode == 0, (stdout, stderr)
+    assert stdout == "TERM:143:first:second\n"
+    assert "unexpected EOF" not in stderr
+
+
+def _multiple_command_substitution_blocks(source_text: str) -> list[tuple[int, str]]:
+    """Find supported simple-command blocks containing multiple ``$(...)``."""
+    source = source_text.splitlines()
+    blocks: list[tuple[int, str]] = []
+    current: list[str] = []
+    start = 0
+    conditional_depth = 0
+    array_assignment_open = False
+    for line_number, line in enumerate(source, start=1):
+        if not current:
+            start = line_number
+        current.append(line)
+        conditional_depth += line.count("[[") - line.count("]]")
+        if not array_assignment_open and re.search(
+            r"(?:^|[;&|\s])[A-Za-z_][A-Za-z0-9_]*(?:\[[^]\n]+\])?"
+            r"\+?=\(\s*(?:#.*)?$",
+            line,
+        ):
+            array_assignment_open = True
+        elif array_assignment_open and re.fullmatch(
+            r"\s*\)\s*(?:[;&|].*)?", line
+        ):
+            array_assignment_open = False
+        if (
+            line.rstrip().endswith("\\")
+            or conditional_depth > 0
+            or array_assignment_open
+        ):
+            continue
+        block = "\n".join(current)
+        if len(re.findall(r"\$\((?!\()", block)) > 1:
+            blocks.append((start, block))
+        current = []
+    if current:
+        block = "\n".join(current)
+        if len(re.findall(r"\$\((?!\()", block)) > 1:
+            blocks.append((start, block))
+    return blocks
+
+
+def test_command_substitution_census_catches_multiline_array_assignment() -> None:
+    adversarial = '''\
+pair=(
+  "$(first)"
+  "$(second)"
+)
+'''
+    assert _multiple_command_substitution_blocks(adversarial) == [
+        (1, adversarial.rstrip())
+    ]
+
+
+def test_catchable_trap_source_never_combines_command_substitutions() -> None:
+    """Guard the Bash 5.2 workaround in the helper's supported source style."""
+    blocks = _multiple_command_substitution_blocks(HELPER.read_text(encoding="utf-8"))
+    message = "multiple command substitutions in one simple command: " + "; ".join(
+        f"line {line_number}: {block}" for line_number, block in blocks
+    )
+    assert not blocks, message
 
 
 def test_no_cidfile_cli_race_is_bounded_and_preserves_recovery_identity(
@@ -2819,10 +3457,15 @@ def test_private_label_resolution_never_targets_foreign_container(
     (state / "foreign-container").write_text(foreign_id, encoding="ascii")
     (state / "foreign-container-token").write_text("foreign", encoding="ascii")
     (state / "foreign-running").write_text("true", encoding="ascii")
-    fake_environment["FAKE_DOCKER_BEHAVIOR"] = "no-cid"
+    fake_environment.update(
+        FAKE_DOCKER_BEHAVIOR="no-cid",
+        FAKE_RUN_SUPERVISOR_SIGNAL_GATE="1",
+    )
     process = _start_attached(fake_environment)
     _wait(state / "run-ready")
+    _wait_for_run_signal_ready(state)
     os.kill(process.pid, signal.SIGTERM)
+    _wait(state / "run-supervisor-signal-latched")
     stdout, stderr = _communicate(process, timeout=10)
     assert process.returncode == 143, (stdout, stderr)
     recovery = _recovery_path(stderr)
@@ -2877,14 +3520,19 @@ def test_process_group_signal_latched_before_wait_cannot_block_on_cli(
         FAKE_DOCKER_BEHAVIOR="no-cid",
         FAKE_PREWAIT_DELAY="1",
     )
-    process = subprocess.Popen(
-        ["bash", "-c", textwrap.dedent(ATTACHED_HARNESS)],
-        env=fake_environment,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        start_new_session=True,
-    )
+    previous_handler = signal.getsignal(requested)
+    signal.signal(requested, signal.SIG_IGN)
+    try:
+        process = subprocess.Popen(
+            [*SIGNAL_CLEAN_BASH, textwrap.dedent(ATTACHED_HARNESS)],
+            env=fake_environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+    finally:
+        signal.signal(requested, previous_handler)
     state = Path(fake_environment["FAKE_DOCKER_STATE"])
     _wait(state / "prewait-entered")
     os.killpg(process.pid, requested)
@@ -2892,9 +3540,9 @@ def test_process_group_signal_latched_before_wait_cannot_block_on_cli(
     assert process.returncode == expected, (stdout, stderr)
     recovery = _recovery_path(stderr)
     try:
-            receipt = (recovery / "RECOVERY").read_text()
-            assert "forced_without_bound_target=0" in receipt
-            assert "interrupted_without_bound_target=1" in receipt
+        receipt = (recovery / "RECOVERY").read_text()
+        assert "forced_without_bound_target=0" in receipt
+        assert "interrupted_without_bound_target=1" in receipt
     finally:
         shutil.rmtree(recovery)
 
@@ -2910,10 +3558,13 @@ def test_process_group_signal_after_cid_targets_only_the_container(
     requested: signal.Signals,
     expected: int,
 ) -> None:
+    fake_environment["FAKE_RUN_SUPERVISOR_SIGNAL_GATE"] = "1"
     process = _start_attached(fake_environment)
     state = Path(fake_environment["FAKE_DOCKER_STATE"])
     _wait(state / "run-ready")
+    _wait_for_run_signal_ready(state)
     os.killpg(process.pid, requested)
+    _wait(state / "run-supervisor-signal-latched")
     stdout, stderr = _communicate(process, timeout=10)
     assert process.returncode == expected, (stdout, stderr)
     calls = (state / "calls.log").read_text(encoding="utf-8")
@@ -3685,14 +4336,19 @@ set -e
 printf 'DETACHED_SIGNAL_STATUS %s COUNT %s\n' "$status" "${#QCSD_DOCKER_IDS_TEST[@]}" >>"$FAKE_DOCKER_STATE/calls.log"
 exit "$status"
 '''
-    process = subprocess.Popen(
-        ["bash", "-c", textwrap.dedent(script)],
-        env=fake_environment,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        start_new_session=True,
-    )
+    previous_handler = signal.getsignal(requested)
+    signal.signal(requested, signal.SIG_IGN)
+    try:
+        process = subprocess.Popen(
+            [*SIGNAL_CLEAN_BASH, textwrap.dedent(script)],
+            env=fake_environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+    finally:
+        signal.signal(requested, previous_handler)
     state = Path(fake_environment["FAKE_DOCKER_STATE"])
     _wait(state / "run-ready")
     os.kill(process.pid, requested)
@@ -3862,7 +4518,7 @@ printf 'TAIL_STATUS %s COUNT %s\n' "$status" "${#QCSD_DOCKER_IDS_TEST[@]}" >>"$F
 exit "$status"
 '''
     result = subprocess.run(
-        ["bash", "-c", textwrap.dedent(script)],
+        [*SIGNAL_CLEAN_BASH, textwrap.dedent(script)],
         env=fake_environment,
         text=True,
         capture_output=True,
@@ -3897,7 +4553,7 @@ printf 'UNRESOLVED_TAIL_STATUS %s COUNT %s ID %s\n' \
 exit "$status"
 '''
     result = subprocess.run(
-        ["bash", "-c", textwrap.dedent(script)],
+        [*SIGNAL_CLEAN_BASH, textwrap.dedent(script)],
         env=fake_environment,
         text=True,
         capture_output=True,
@@ -3939,13 +4595,19 @@ set -e
 printf 'NETWORK_STATUS %s COUNT %s\n' "$status" "${#QCSD_DOCKER_IDS_TEST[@]}" >>"$FAKE_DOCKER_STATE/calls.log"
 exit "$status"
 '''
-    process = subprocess.Popen(
-        ["bash", "-c", textwrap.dedent(script)],
-        env=fake_environment,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    previous_handler = signal.getsignal(requested)
+    signal.signal(requested, signal.SIG_IGN)
+    try:
+        process = subprocess.Popen(
+            [*SIGNAL_CLEAN_BASH, textwrap.dedent(script)],
+            env=fake_environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+    finally:
+        signal.signal(requested, previous_handler)
     state = Path(fake_environment["FAKE_DOCKER_STATE"])
     _wait(state / "calls.log")
     _wait_for_text(state / "calls.log", "NETWORK_CREATE_BEGIN")
@@ -3974,7 +4636,7 @@ printf 'NETWORK_TAIL_STATUS %s COUNT %s\n' "$status" "${#QCSD_DOCKER_IDS_TEST[@]
 exit "$status"
 '''
     result = subprocess.run(
-        ["bash", "-c", textwrap.dedent(script)],
+        [*SIGNAL_CLEAN_BASH, textwrap.dedent(script)],
         env=fake_environment,
         text=True,
         capture_output=True,
@@ -4006,7 +4668,7 @@ printf 'NETWORK_UNRESOLVED_STATUS %s COUNT %s ID %s\n' \
 exit "$status"
 '''
     result = subprocess.run(
-        ["bash", "-c", textwrap.dedent(script)],
+        [*SIGNAL_CLEAN_BASH, textwrap.dedent(script)],
         env=fake_environment,
         text=True,
         capture_output=True,
@@ -4333,7 +4995,7 @@ if [[ "$WANT_ERREXIT" == 1 ]]; then [[ "$-" == *e* ]]; else [[ "$-" != *e* ]]; f
 exit "$status"
 '''
     result = subprocess.run(
-        ["bash", "-c", textwrap.dedent(script)],
+        [*SIGNAL_CLEAN_BASH, textwrap.dedent(script)],
         env={**fake_environment, "WANT_ERREXIT": "1" if errexit else "0"},
         text=True,
         capture_output=True,
@@ -4373,7 +5035,7 @@ set -e
 exit "$status"
 '''
     result = subprocess.run(
-        ["bash", "-c", textwrap.dedent(script)],
+        [*SIGNAL_CLEAN_BASH, textwrap.dedent(script)],
         env=fake_environment,
         text=True,
         capture_output=True,
@@ -4965,11 +5627,12 @@ kill -KILL "$BASHPID"
     assert (state / "container").is_file()
 
 
-def test_lifecycle_base_rejects_every_unrecognised_entry_fail_closed(
+def test_isolated_lifecycle_base_rejects_every_unrecognised_entry_fail_closed(
     fake_environment: dict[str, str], tmp_path: Path
 ) -> None:
-    base = Path(f"/var/tmp/qcsd-docker-lifecycle-{os.getuid()}")
-    base.mkdir(mode=0o700, exist_ok=True)
+    base = Path(fake_environment["QCSD_TEST_LIFECYCLE_BASE"])
+    assert base == tmp_path / "isolated-lifecycle"
+    assert base != Path(f"/var/tmp/qcsd-docker-lifecycle-{os.getuid()}")
     token = hashlib.sha256(os.fsencode(tmp_path)).hexdigest()[:32]
     unexpected = base / f"unexpected.{token}"
     unexpected.write_text("not lifecycle state\n", encoding="utf-8")
@@ -5501,7 +6164,7 @@ set -e
 exit "$status"
 '''
     result = subprocess.run(
-        ["bash", "-c", textwrap.dedent(script)],
+        [*SIGNAL_CLEAN_BASH, textwrap.dedent(script)],
         cwd=ROOT,
         env=fake_environment,
         text=True,
@@ -5588,14 +6251,19 @@ status=$?
 set -e
 exit "$status"
 '''
-    process = subprocess.Popen(
-        ["bash", "-c", textwrap.dedent(script)],
-        env=fake_environment,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        start_new_session=True,
-    )
+    previous_handler = signal.getsignal(signal.SIGTERM)
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    try:
+        process = subprocess.Popen(
+            [*SIGNAL_CLEAN_BASH, textwrap.dedent(script)],
+            env=fake_environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+    finally:
+        signal.signal(signal.SIGTERM, previous_handler)
     state = Path(fake_environment["FAKE_DOCKER_STATE"])
     _wait(Path(fake_environment["HARNESS_READY"]))
     _wait(state / "run-ready")

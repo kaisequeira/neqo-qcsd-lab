@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -293,6 +294,248 @@ def _buildx_provenance() -> dict[str, object]:
     }
 
 
+def _schema5_git_object_oid(kind: bytes, payload: bytes) -> str:
+    return hashlib.sha1(  # noqa: S324 - reproduces the repository object format.
+        kind + b" " + str(len(payload)).encode("ascii") + b"\0" + payload
+    ).hexdigest()
+
+
+def _schema5_git_tree(entries: list[tuple[bytes, bytes, str]]) -> tuple[bytes, str]:
+    payload = b"".join(
+        mode + b" " + name + b"\0" + bytes.fromhex(oid)
+        for mode, name, oid in sorted(entries, key=lambda item: item[1])
+    )
+    return payload, _schema5_git_object_oid(b"tree", payload)
+
+
+def _schema5_cohort_evidence(
+    *, cohort_version: int, ledger_payload: bytes, neqo_commit: str
+) -> tuple[
+    dict[str, object],
+    dict[str, object],
+    dict[str, object],
+    list[dict[str, object]],
+]:
+    ledger_blob = _schema5_git_object_oid(b"blob", ledger_payload)
+    v1_tree, v1_oid = _schema5_git_tree(
+        [(b"100644", b"consumed-cohorts.json", ledger_blob)]
+    )
+    study_tree, study_oid = _schema5_git_tree([(b"40000", b"v1", v1_oid)])
+    config_tree, config_oid = _schema5_git_tree(
+        [(b"40000", b"buflo-study", study_oid)]
+    )
+    root_tree, root_oid = _schema5_git_tree(
+        [
+            (b"40000", b"config", config_oid),
+            (b"160000", b"neqo-qcsd", neqo_commit),
+        ]
+    )
+    commit_payload = (
+        f"tree {root_oid}\n"
+        "author QCSD test <qcsd-test@example.invalid> 0 +0000\n"
+        "committer QCSD test <qcsd-test@example.invalid> 0 +0000\n"
+        "\nschema-5 fixture\n"
+    ).encode("ascii")
+    lab_commit = _schema5_git_object_oid(b"commit", commit_payload)
+    allocation: dict[str, object] = {
+        "schema_version": 1,
+        "artifact_type": "qcsd-buflo-study-cohort-allocation",
+        "policy": "dense-prefix-durable-publications-consume-v1",
+        "ledger_path": "config/buflo-study/v1/consumed-cohorts.json",
+        "ledger_sha256": hashlib.sha256(ledger_payload).hexdigest(),
+        "ledger_payload_base64": base64.b64encode(ledger_payload).decode("ascii"),
+        "git_object_format": "sha1",
+        "ledger_git_blob_oid": ledger_blob,
+        "lab_commit": lab_commit,
+        "neqo_commit": neqo_commit,
+        "neqo_gitlink": neqo_commit,
+        "lab_commit_ledger_proof": {
+            "schema_version": 1,
+            "artifact_type": "qcsd-buflo-study-cohort-ledger-git-proof",
+            "commit_payload_base64": base64.b64encode(commit_payload).decode("ascii"),
+            "tree_payloads_base64": [
+                base64.b64encode(item).decode("ascii")
+                for item in (root_tree, config_tree, study_tree, v1_tree)
+            ],
+        },
+        "last_consumed_version": cohort_version - 1,
+        "allocated_version": cohort_version,
+    }
+
+    def file_identity(
+        *, inode: int, mode: int, size: int, nlink: int = 1
+    ) -> dict[str, int]:
+        return {
+            "dev": 1,
+            "inode": inode,
+            "uid": os.getuid(),
+            "gid": os.getgid(),
+            "mode": mode,
+            "nlink": nlink,
+            "size": size,
+            "mtime_ns": 1_000_000_000 + inode,
+            "ctime_ns": 2_000_000_000 + inode,
+        }
+
+    authority: dict[str, object] = {
+        "schema_version": 1,
+        "artifact_type": "qcsd-buflo-study-cohort-allocation-authority",
+        "git": {
+            "object_format": "sha1",
+            "lab_head": lab_commit,
+            "head_blob_oid": ledger_blob,
+            "index_blob_oid": ledger_blob,
+            "worktree_blob_oid": ledger_blob,
+            "neqo_head": neqo_commit,
+            "head_gitlink": neqo_commit,
+            "index_gitlink": neqo_commit,
+        },
+        "filesystem": {
+            "directories": {
+                name: file_identity(
+                    inode=100 + index,
+                    mode=0o755,
+                    size=4096,
+                    nlink=2,
+                )
+                for index, name in enumerate(
+                    ("repository-root", "config", "buflo-study", "v1", "git")
+                )
+            },
+            "ledger": file_identity(
+                inode=200,
+                mode=0o644,
+                size=len(ledger_payload),
+            ),
+            "git_index": file_identity(inode=201, mode=0o644, size=4096),
+        },
+        "receipt": json.loads(json.dumps(allocation)),
+    }
+    authority_sha256 = buflo_study._canonical_digest(authority)
+    claim_payload = {
+        "policy": "dense-prefix-durable-publications-consume-v1",
+        "registry_path": "artifacts/buflo-study/cohort-claims-v1",
+        "cohort_version": cohort_version,
+        "authority": authority,
+        "authority_sha256": authority_sha256,
+        "source": {
+            "lab_commit": lab_commit,
+            "neqo_commit": neqo_commit,
+            "neqo_gitlink": neqo_commit,
+        },
+        "ledger": {
+            "path": allocation["ledger_path"],
+            "sha256": allocation["ledger_sha256"],
+            "git_object_format": "sha1",
+            "git_blob_oid": ledger_blob,
+            "payload_base64": allocation["ledger_payload_base64"],
+            "last_consumed_version": cohort_version - 1,
+        },
+        "predecessor": {
+            "kind": "genesis-ledger",
+            "cohort_version": cohort_version - 1,
+            "sha256": allocation["ledger_sha256"],
+        },
+    }
+    claim = {
+        "schema_version": 1,
+        "artifact_type": "qcsd-buflo-study-cohort-claim",
+        "payload": claim_payload,
+        "payload_sha256": buflo_study._canonical_digest(claim_payload),
+    }
+    claim_raw = (
+        json.dumps(claim, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n"
+    ).encode("ascii")
+    claim_sha256 = hashlib.sha256(claim_raw).hexdigest()
+    snapshot: dict[str, object] = {
+        "schema_version": 1,
+        "artifact_type": "qcsd-buflo-study-cohort-claim-publication",
+        "policy": "dense-prefix-durable-publications-consume-v1",
+        "cohort_version": cohort_version,
+        "registry": {
+            "path": "artifacts/buflo-study/cohort-claims-v1",
+            "stat": {
+                "dev": 1,
+                "inode": 300,
+                "uid": os.getuid(),
+                "gid": os.getgid(),
+                "mode": 0o700,
+                "nlink": 2,
+            },
+        },
+        "claim": {
+            "path": (
+                "artifacts/buflo-study/cohort-claims-v1/"
+                f"claim-v{cohort_version}.json"
+            ),
+            "sha256": claim_sha256,
+            "payload_base64": base64.b64encode(claim_raw).decode("ascii"),
+            "stat": file_identity(inode=301, mode=0o600, size=len(claim_raw)),
+        },
+        "registry_head_at_publication": {
+            "cohort_version": cohort_version,
+            "sha256": claim_sha256,
+        },
+    }
+    snapshot["payload_sha256"] = buflo_study._canonical_digest(snapshot)
+    snapshot_sha256 = buflo_study._canonical_digest(snapshot)
+    claim_chain: dict[str, object] = {
+        "schema_version": 1,
+        "artifact_type": "qcsd-buflo-study-cohort-claim-chain",
+        "policy": "dense-prefix-durable-publications-consume-v1",
+        "genesis": {
+            "ledger_path": allocation["ledger_path"],
+            "ledger_sha256": allocation["ledger_sha256"],
+            "last_consumed_version": cohort_version - 1,
+        },
+        "claims": [
+            {
+                "cohort_version": cohort_version,
+                "sha256": claim_sha256,
+                "payload_base64": base64.b64encode(claim_raw).decode("ascii"),
+            }
+        ],
+        "head": {
+            "cohort_version": cohort_version,
+            "sha256": claim_sha256,
+        },
+    }
+    claim_chain["payload_sha256"] = buflo_study._canonical_digest(claim_chain)
+    boundaries = (
+        "after-cohort-claim-before-docker-recovery",
+        "immediately-before-docker-recovery",
+        "after-evidence-build-lock",
+        "immediately-before-build-transaction",
+        "immediately-after-build-transaction",
+        "immediately-before-collection-build",
+        "immediately-before-prepare-build",
+        "immediately-before-reference-build",
+        "after-reference-build-before-receipt",
+    )
+    observed_times = (
+        "2026-08-27T00:00:00.010000+00:00",
+        "2026-08-27T00:00:00.020000+00:00",
+        "2026-08-27T00:00:00.060000+00:00",
+        "2026-08-27T00:00:00.070000+00:00",
+        "2026-08-27T00:00:00.080000+00:00",
+        "2026-08-27T00:00:00.150000+00:00",
+        "2026-08-27T00:00:00.400000+00:00",
+        "2026-08-27T00:00:00.700000+00:00",
+        "2026-08-27T00:00:00.950000+00:00",
+    )
+    reproofs = [
+        {
+            "boundary": boundary,
+            "observed_at": observed_at,
+            "authority_sha256": authority_sha256,
+            "claim_snapshot_sha256": snapshot_sha256,
+            "claim_file_sha256": claim_sha256,
+        }
+        for boundary, observed_at in zip(boundaries, observed_times, strict=True)
+    ]
+    return allocation, snapshot, claim_chain, reproofs
+
+
 def _build_execution_value(
     image_id: str = "sha256:" + "a" * 64,
     *,
@@ -313,7 +556,7 @@ def _build_execution_value(
         target: {
             "tag": (
                 build_storage.BUILD_IMAGE_TAGS[target]
-                if schema_version in {2, 3, 4}
+                if schema_version in {2, 3, 4, 5}
                 else f"neqo-qcsd-lab-{target}:test"
             ),
             "id": image_id if target == "collection" else "sha256:" + digest * 64,
@@ -330,7 +573,7 @@ def _build_execution_value(
                     ["--context", "default"]
                     if schema_version == 2
                     else ["--host", "unix:///var/run/docker.sock"]
-                    if schema_version in {3, 4}
+                    if schema_version in {3, 4, 5}
                     else []
                 ),
                 "build",
@@ -345,7 +588,7 @@ def _build_execution_value(
                             / f"{target}.iid"
                         ),
                     ]
-                    if schema_version in {2, 3, 4}
+                    if schema_version in {2, 3, 4, 5}
                     else []
                 ),
                 "--target",
@@ -387,7 +630,7 @@ def _build_execution_value(
             "scope": "Docker-layer-cache-disabled;declared-BuildKit-dependency-cache-mounts-only",
         },
     }
-    if schema_version in {2, 3, 4}:
+    if schema_version in {2, 3, 4, 5}:
         value["docker"] = {
             **value["docker"],
             "context": "default",
@@ -399,10 +642,30 @@ def _build_execution_value(
             "server_id": "12345678-1234-1234-1234-123456789abc",
         }
         boundaries = (
-            ("before-collection", "2026-08-26T23:59:59+00:00"),
-            ("before-prepare", "2026-08-27T00:00:00.200000+00:00"),
-            ("before-reference", "2026-08-27T00:00:00.400000+00:00"),
-            ("after-reference", "2026-08-27T00:00:00.800000+00:00"),
+            (
+                "before-collection",
+                "2026-08-27T00:00:00.050000+00:00"
+                if schema_version == 5
+                else "2026-08-26T23:59:59+00:00",
+            ),
+            (
+                "before-prepare",
+                "2026-08-27T00:00:00.350000+00:00"
+                if schema_version == 5
+                else "2026-08-27T00:00:00.200000+00:00",
+            ),
+            (
+                "before-reference",
+                "2026-08-27T00:00:00.650000+00:00"
+                if schema_version == 5
+                else "2026-08-27T00:00:00.400000+00:00",
+            ),
+            (
+                "after-reference",
+                "2026-08-27T00:00:00.925000+00:00"
+                if schema_version == 5
+                else "2026-08-27T00:00:00.800000+00:00",
+            ),
         )
         probe_sha256 = buflo_study.sha256_file(LAB_ROOT / "tools/windows_docker_storage_probe.ps1")
         observations = [
@@ -458,13 +721,187 @@ def _build_execution_value(
                 "reference": None,
             },
         }
-    if schema_version == 4:
+    if schema_version in {4, 5}:
         value["buildx"] = _buildx_provenance()
+    if schema_version == 5:
+        if cohort_version <= 1:
+            raise ValueError("schema-5 build fixtures require a predecessor cohort")
+        ledger = {
+            "artifact_type": "qcsd-buflo-study-consumed-cohorts",
+            "consumed_versions": list(range(1, cohort_version)),
+            "policy": "dense-prefix-durable-publications-consume-v1",
+            "schema_version": 1,
+        }
+        ledger_payload = (json.dumps(ledger, sort_keys=True) + "\n").encode()
+        allocation, claim, claim_chain, reproofs = _schema5_cohort_evidence(
+            cohort_version=cohort_version,
+            ledger_payload=ledger_payload,
+            neqo_commit=str(source["neqo_commit"]),
+        )
+        source["lab_commit"] = allocation["lab_commit"]
+        value["source"] = source
+        role_sources = value["role_provenance"]["sources"]
+        for role_source in role_sources.values():
+            role_source["lab_commit"] = allocation["lab_commit"]
+        value["cohort_allocation"] = allocation
+        value["cohort_claim"] = claim
+        value["cohort_claim_chain"] = claim_chain
+        value["cohort_authority_reproofs"] = reproofs
     value["payload_sha256"] = buflo_study._canonical_digest(value)
     return value
 
 
-def _install_fake_wsl_storage_probe(root: Path, binary_root: Path) -> tuple[Path, Path]:
+def _write_schema5_build_pair(
+    path: Path,
+    *,
+    cohort_version: int,
+) -> tuple[dict[str, object], Path, dict[str, object]]:
+    value = _build_execution_value(cohort_version=cohort_version, schema_version=5)
+    raw = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    path.write_bytes(raw)
+    path.chmod(0o600)
+    binding = build_storage.build_execution_receipt_binding(
+        receipt_path=path,
+        receipt_raw=raw,
+        receipt_value=value,
+        receipt_stat=path.stat(),
+        cohort_version=cohort_version,
+    )
+    authority = build_storage._completion_authority_bindings(value)
+    lease = "9" * 64
+    transaction_root = Path(
+        f"/tmp/qcsd-docker-lifecycle-1000/transaction.{lease[:32]}"
+    )
+    transaction_fields = {
+        "object": "docker-build-transaction",
+        "lifecycle_schema": "1",
+        "lifecycle_state": "request-authorised",
+        "lifecycle_root": str(transaction_root),
+        "lifecycle_token": lease[:32],
+        "supervisor_source_path": str(LAB_ROOT / "tools/docker_signal_supervisor.sh"),
+        "supervisor_source_sha256": "8" * 64,
+        "supervisor_source_device": "1",
+        "supervisor_source_inode": "2",
+        "docker_context": "default",
+        "docker_host": "unix:///var/run/docker.sock",
+        "docker_server_id": "12345678-1234-1234-1234-123456789abc",
+        "docker_request_revalidation": "in-scope-immediately-before-mutation",
+        "docker_daemon_id": "12345678-1234-1234-1234-123456789abc",
+        "host_boot_id": "12345678-1234-1234-1234-123456789abc",
+        "working_directory": str(LAB_ROOT),
+        "cohort_version": str(cohort_version),
+        "receipt_path": str(
+            LAB_ROOT
+            / f"artifacts/buflo-study/build-execution-v{cohort_version}.json"
+        ),
+        "transaction_state": "uncommitted-static-tag-mutation",
+    }
+    transaction_raw = "".join(
+        f"{key}={transaction_fields[key]}\n"
+        for key in build_storage._BUILD_TRANSACTION_RECORD_FIELDS
+    ).encode("ascii")
+    cohort_parent = LAB_ROOT / "artifacts/buflo-study/cohort-claims-v1"
+    transaction = {
+        "schema_version": 1,
+        "artifact_type": build_storage._BUILD_TRANSACTION_RETIREMENT_ARTIFACT_TYPE,
+        "root": {
+            "path": str(transaction_root),
+            "stat": {
+                "dev": 1,
+                "inode": 20,
+                "uid": os.geteuid(),
+                "gid": os.getegid(),
+                "mode": 0o700,
+                "nlink": 2,
+            },
+        },
+        "record": {
+            "path": str(transaction_root / "SUPERVISION"),
+            "sha256": hashlib.sha256(transaction_raw).hexdigest(),
+            "payload_base64": base64.b64encode(transaction_raw).decode("ascii"),
+            "stat": {
+                "dev": 1,
+                "inode": 21,
+                "uid": os.geteuid(),
+                "gid": os.getegid(),
+                "mode": 0o600,
+                "nlink": 1,
+                "size": len(transaction_raw),
+                "mtime_ns": 1,
+                "ctime_ns": 2,
+            },
+        },
+        "guardian": {
+            "pid": 100,
+            "start_time": 1000,
+            "qcsd_pid": 101,
+            "qcsd_start_time": 1001,
+        },
+        "lifecycle_lock": {
+            "path": "/tmp/qcsd-docker-lifecycle-1000.lock",
+            "device": 1,
+            "inode": 10,
+            "parent_device": 1,
+            "parent_inode": 1,
+            "lease_nonce": lease,
+        },
+        "cohort_lock": {
+            "path": str(cohort_parent / ".allocation.lock"),
+            "device": 1,
+            "inode": 30,
+            "parent_device": 1,
+            "parent_inode": 31,
+            "guardian_fd": 9,
+        },
+        "operation_lock": {
+            "path": str(cohort_parent / ".allocation-operation.lock"),
+            "device": 1,
+            "inode": 32,
+            "parent_device": 1,
+            "parent_inode": 31,
+        },
+    }
+    completion: dict[str, object] = {
+        "schema_version": 1,
+        "artifact_type": build_storage.BUILD_COMPLETION_ARTIFACT_TYPE,
+        "cohort_version": cohort_version,
+        "completed_at": "2026-08-27T00:00:01.200000+00:00",
+        "receipt": binding,
+        "source": {
+            "lab_commit": value["source"]["lab_commit"],
+            "neqo_commit": value["source"]["neqo_commit"],
+            "neqo_gitlink": value["cohort_allocation"]["neqo_gitlink"],
+        },
+        "cohort_authority": authority,
+        "transaction": transaction,
+        "final_reproof": {
+            "boundary": build_storage.BUILD_COMPLETION_FINAL_REPROOF_BOUNDARY,
+            "observed_at": "2026-08-27T00:00:01.100000+00:00",
+            "authority_sha256": value["cohort_authority_reproofs"][-1][
+                "authority_sha256"
+            ],
+            "claim_snapshot_sha256": authority["claim_snapshot_sha256"],
+            "claim_file_sha256": authority["claim_file_sha256"],
+            "claim_chain_sha256": authority["claim_chain_sha256"],
+        },
+    }
+    completion["payload_sha256"] = buflo_study._canonical_digest(completion)
+    completion_path = path.with_name(f"build-completion-v{cohort_version}.json")
+    completion_path.write_bytes(
+        build_storage._canonical_finite_json_bytes(
+            completion, label="test build completion", newline=True
+        )
+    )
+    completion_path.chmod(0o600)
+    return value, completion_path, completion
+
+
+def _install_fake_wsl_storage_probe(
+    root: Path,
+    binary_root: Path,
+    *,
+    synthetic_source_authority: bool,
+) -> tuple[Path, Path]:
     tools = root / "tools"
     tools.mkdir(exist_ok=True)
     (tools / "windows_docker_storage_probe.ps1").write_bytes(
@@ -493,9 +930,27 @@ def _install_fake_wsl_storage_probe(root: Path, binary_root: Path) -> tuple[Path
         + f"_BUILDX_REQUIRED_UID = {os.getuid()}\n"
         + f"_BUILDX_REQUIRED_GID = {os.getgid()}\n",
     )
+    if synthetic_source_authority:
+        # Copied-launcher boundary fixtures deliberately use a synthetic
+        # cohort authority and no Git repository.  Override only the copied
+        # validator's live source probe; production-allocator fixtures retain
+        # the real clean checkout/ledger reproof.
+        publication_marker = "def publish_build_completion(\n"
+        assert build_storage_source.count(publication_marker) == 1
+        build_storage_source = build_storage_source.replace(
+            publication_marker,
+            "# Test-only copied-validator source authority.\n"
+            "def _verify_live_completion_source(checkout_root, receipt_value):\n"
+            "    return None\n\n\n"
+            + publication_marker,
+            1,
+        )
     (package / "build_storage.py").write_text(
         build_storage_source,
         encoding="utf-8",
+    )
+    (package / "cohort_allocation.py").write_bytes(
+        (LAB_ROOT / "src/qcsd_lab/cohort_allocation.py").read_bytes()
     )
     uname = binary_root / "uname"
     uname.write_text(
@@ -583,6 +1038,7 @@ def _install_fake_boundary_docker(
     docker = binary_root / "docker"
     inventory_marker = build_marker.with_name(f"{build_marker.name}-inventory")
     buildx_mutation_marker = build_marker.with_name(f"{build_marker.name}-buildx-mutated")
+    cohort_lab_commit_marker = build_marker.with_name("cohort-lab-commit")
     buildx_version = "v0.29.1-test.1"
     buildx_commit = "28f6246ff24e2c05095e8741e48c48dcb2d3b4bc"
     buildx_metadata = json.dumps(
@@ -764,7 +1220,14 @@ case "$command" in
            case "$*" in *"${{QCSD_TEST_SOURCE_CHANGE_IMAGE_ID}}"*) true ;; *) false ;; esac; then
           printf '%s\\n' '{{"lab_commit":"ffffffffffffffffffffffffffffffffffffffff","lab_dirty":false,"lab_patch_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","neqo_commit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","neqo_pinned_commit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","neqo_dirty":false,"neqo_patch_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}'
         else
-          printf '%s\\n' '{{"lab_commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","lab_dirty":false,"lab_patch_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","neqo_commit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","neqo_pinned_commit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","neqo_dirty":false,"neqo_patch_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}'
+          test_lab_commit="${{QCSD_TEST_LAB_COMMIT:-}}"
+          if [ -z "$test_lab_commit" ] && [ -f {str(cohort_lab_commit_marker)!r} ]; then
+            IFS= read -r test_lab_commit < {str(cohort_lab_commit_marker)!r}
+          fi
+          printf '{{"lab_commit":"%s","lab_dirty":false,"lab_patch_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","neqo_commit":"%s","neqo_pinned_commit":"%s","neqo_dirty":false,"neqo_patch_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}\\n' \\
+            "${{test_lab_commit:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}}" \\
+            "${{QCSD_TEST_NEQO_COMMIT:-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}}" \\
+            "${{QCSD_TEST_NEQO_COMMIT:-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}}"
         fi
         ;;
       */study-build-inputs.json)
@@ -794,16 +1257,147 @@ esac
 
 def _launcher_boundary_fixture(
     tmp_path: Path,
+    *,
+    production_allocator: bool = False,
+    production_cohort_version: int = 62,
+    committed_launcher_hooks: tuple[tuple[str, str], ...] = (),
 ) -> tuple[Path, Path, dict[str, str]]:
     launcher = tmp_path / "qcsd-lab"
-    launcher_source = (LAB_ROOT / "qcsd-lab").read_text(encoding="utf-8")
-    verifier_start = launcher_source.index("_qcsd_verify_clean_build_checkout() {")
-    verifier_end = launcher_source.index("\n}\n\nif [[", verifier_start) + 2
-    launcher_source = (
-        launcher_source[:verifier_start]
-        + "_qcsd_verify_clean_build_checkout() {\n  return 0\n}"
-        + launcher_source[verifier_end:]
+    original_launcher_source = (LAB_ROOT / "qcsd-lab").read_text(encoding="utf-8")
+    launcher_source = original_launcher_source
+    trusted_path = (
+        "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:"
+        "/mnt/c/Windows/System32/WindowsPowerShell/v1.0"
     )
+    trusted_path_assignment = f'readonly PATH="{trusted_path}"'
+    assert launcher_source.count(trusted_path_assignment) == 1
+    launcher_source = launcher_source.replace(
+        trusted_path_assignment,
+        f"readonly PATH={shlex.quote(str(tmp_path / 'bin') + ':' + trusted_path)}",
+        1,
+    )
+    if not production_allocator:
+        verifier_start = launcher_source.index(
+            "_qcsd_verify_clean_build_checkout() {"
+        )
+        verifier_end = launcher_source.index("\n}\n\nif [[", verifier_start) + 2
+        launcher_source = (
+            launcher_source[:verifier_start]
+            + "_qcsd_verify_clean_build_checkout() {\n  return 0\n}"
+            + launcher_source[verifier_end:]
+        )
+    cohort_marker = "# Parse a build request and enforce its create-only destination"
+    assert launcher_source.count(cohort_marker) == 1
+    launcher_source = launcher_source.replace(
+        cohort_marker,
+        "# Test-only cohort allocator: these copied-launcher tests exercise "
+        "other build boundaries.\n"
+        "_qcsd_validate_consumed_cohort_ledger() {\n"
+        "  [[ \"$1\" =~ ^[1-9][0-9]*$ ]] && (( $1 >= 2 )) || return 1\n"
+        "  python3 -I - \"$1\" \"${ROOT}/test-markers/cohort-lab-commit\" <<'PY'\n"
+        "import base64, hashlib, json, os, sys\n"
+        "from pathlib import Path\n"
+        "version = int(sys.argv[1])\n"
+        "ledger = {\n"
+        "    'artifact_type': 'qcsd-buflo-study-consumed-cohorts',\n"
+        "    'consumed_versions': list(range(1, version)),\n"
+        "    'policy': 'dense-prefix-durable-publications-consume-v1',\n"
+        "    'schema_version': 1,\n"
+        "}\n"
+        "payload = (json.dumps(ledger, sort_keys=True) + '\\n').encode()\n"
+        "def git_object(kind, payload):\n"
+        "    return hashlib.sha1(kind + b' ' + str(len(payload)).encode() + b'\\0' + payload).hexdigest()\n"
+        "def tree(entries):\n"
+        "    raw = b''.join(\n"
+        "        mode + b' ' + name + b'\\0' + bytes.fromhex(oid)\n"
+        "        for mode, name, oid in sorted(entries, key=lambda item: item[1])\n"
+        "    )\n"
+        "    return raw, git_object(b'tree', raw)\n"
+        "blob = git_object(b'blob', payload)\n"
+        "v1_tree, v1_oid = tree([(b'100644', b'consumed-cohorts.json', blob)])\n"
+        "study_tree, study_oid = tree([(b'40000', b'v1', v1_oid)])\n"
+        "config_tree, config_oid = tree([(b'40000', b'buflo-study', study_oid)])\n"
+        "root_tree, root_oid = tree([\n"
+        "    (b'40000', b'config', config_oid),\n"
+        "    (b'160000', b'neqo-qcsd', 'b' * 40),\n"
+        "])\n"
+        "commit_payload = (\n"
+        "    f'tree {root_oid}\\n'\n"
+        "    'author QCSD test <qcsd-test@example.invalid> 0 +0000\\n'\n"
+        "    'committer QCSD test <qcsd-test@example.invalid> 0 +0000\\n'\n"
+        "    '\\nsynthetic cohort authority\\n'\n"
+        ").encode()\n"
+        "lab_commit = git_object(b'commit', commit_payload)\n"
+        "Path(sys.argv[2]).write_text(lab_commit + '\\n', encoding='ascii')\n"
+        "identity = {\n"
+        "    'dev': 1, 'inode': 1, 'uid': os.geteuid(), 'gid': os.getegid(),\n"
+        "    'mode': 0o644, 'nlink': 1, 'size': len(payload),\n"
+        "    'mtime_ns': 1, 'ctime_ns': 1,\n"
+        "}\n"
+        "directory_identity = {**identity, 'mode': 0o755, 'size': 1}\n"
+        "receipt = {\n"
+        "    'schema_version': 1,\n"
+        "    'artifact_type': 'qcsd-buflo-study-cohort-allocation',\n"
+        "    'policy': 'dense-prefix-durable-publications-consume-v1',\n"
+        "    'ledger_path': 'config/buflo-study/v1/consumed-cohorts.json',\n"
+        "    'ledger_sha256': hashlib.sha256(payload).hexdigest(),\n"
+        "    'ledger_payload_base64': base64.b64encode(payload).decode(),\n"
+        "    'git_object_format': 'sha1',\n"
+        "    'ledger_git_blob_oid': blob,\n"
+        "    'lab_commit_ledger_proof': {\n"
+        "        'schema_version': 1,\n"
+        "        'artifact_type': 'qcsd-buflo-study-cohort-ledger-git-proof',\n"
+        "        'commit_payload_base64': base64.b64encode(commit_payload).decode(),\n"
+        "        'tree_payloads_base64': [\n"
+        "            base64.b64encode(item).decode()\n"
+        "            for item in (root_tree, config_tree, study_tree, v1_tree)\n"
+        "        ],\n"
+        "    },\n"
+        "    'lab_commit': lab_commit,\n"
+        "    'neqo_commit': 'b' * 40,\n"
+        "    'neqo_gitlink': 'b' * 40,\n"
+        "    'last_consumed_version': version - 1,\n"
+        "    'allocated_version': version,\n"
+        "}\n"
+        "authority = {\n"
+        "    'schema_version': 1,\n"
+        "    'artifact_type': 'qcsd-buflo-study-cohort-allocation-authority',\n"
+        "    'git': {\n"
+        "        'object_format': 'sha1', 'lab_head': lab_commit,\n"
+        "        'head_blob_oid': blob, 'index_blob_oid': blob,\n"
+        "        'worktree_blob_oid': blob, 'neqo_head': 'b' * 40,\n"
+        "        'head_gitlink': 'b' * 40, 'index_gitlink': 'b' * 40,\n"
+        "    },\n"
+        "    'filesystem': {\n"
+        "        'directories': {\n"
+        "            name: dict(directory_identity)\n"
+        "            for name in ('repository-root', 'config', 'buflo-study', 'v1', 'git')\n"
+        "        },\n"
+        "        'ledger': dict(identity),\n"
+        "        'git_index': dict(identity),\n"
+        "    },\n"
+        "    'receipt': receipt,\n"
+        "}\n"
+        "print(json.dumps(authority, sort_keys=True, separators=(',', ':')))\n"
+        "PY\n"
+        "}\n\n"
+        + cohort_marker,
+        1,
+    )
+    if production_allocator:
+        copied_start = launcher_source.index("# Test-only cohort allocator:")
+        copied_end = launcher_source.index(cohort_marker, copied_start)
+        launcher_source = (
+            launcher_source[:copied_start]
+            + launcher_source[copied_end:]
+        )
+    for marker, command in committed_launcher_hooks:
+        assert launcher_source.count(marker) == 1
+        launcher_source = launcher_source.replace(
+            marker,
+            command + "\n" + marker,
+            1,
+        )
     launcher.write_text(launcher_source, encoding="utf-8")
     launcher.chmod(0o755)
     (tmp_path / "tools").mkdir()
@@ -840,8 +1434,14 @@ def _launcher_boundary_fixture(
     (tmp_path / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
     binary_root = tmp_path / "bin"
     binary_root.mkdir()
-    buildx_plugin, buildx_target = _install_fake_wsl_storage_probe(tmp_path, binary_root)
-    build_marker = tmp_path / "docker-builds"
+    buildx_plugin, buildx_target = _install_fake_wsl_storage_probe(
+        tmp_path,
+        binary_root,
+        synthetic_source_authority=not production_allocator,
+    )
+    marker_root = tmp_path / "test-markers"
+    marker_root.mkdir()
+    build_marker = marker_root / "docker-builds"
     _install_fake_boundary_docker(
         binary_root,
         build_marker,
@@ -854,18 +1454,172 @@ def _launcher_boundary_fixture(
     environment["QCSD_TEST_DOCKER_SERVER_ID"] = (
         f"{identity[:8]}-{identity[8:12]}-{identity[12:16]}-{identity[16:20]}-{identity[20:]}"
     )
-    lifecycle_base = tmp_path / "docker-lifecycle"
-    lifecycle_base.mkdir(mode=0o700)
     guardian_lock_parent = tmp_path / "guardian-locks"
     guardian_lock_parent.mkdir(mode=0o700)
+    # Mirror the production invariant that the lifecycle namespace is the
+    # canonical lock pathname without its ``.lock`` suffix.  Completion
+    # publication proves this exact relationship rather than accepting an
+    # unrelated test-only transaction directory.
+    lifecycle_base = guardian_lock_parent / f"qcsd-docker-lifecycle-{os.geteuid()}"
+    lifecycle_base.mkdir(mode=0o700)
     environment["QCSD_TEST_LIFECYCLE_BASE"] = str(lifecycle_base.resolve())
     environment["QCSD_TEST_GUARDIAN_LOCK_PARENT"] = str(guardian_lock_parent.resolve())
     environment["QCSD_TEST_BINARY_ROOT"] = str(binary_root.resolve())
+    if production_allocator:
+        assert production_cohort_version >= 2
+        (tmp_path / "artifacts/buflo-study").mkdir(parents=True)
+        (tmp_path / "results").mkdir()
+        (tmp_path / "config/workloads").mkdir(parents=True)
+
+        def run_git(repository: Path, *arguments: str) -> str:
+            completed = subprocess.run(
+                ["/usr/bin/git", "-C", str(repository), *arguments],
+                env={
+                    **os.environ,
+                    "GIT_CONFIG_GLOBAL": "/dev/null",
+                    "GIT_CONFIG_SYSTEM": "/dev/null",
+                    "GIT_OPTIONAL_LOCKS": "0",
+                    "GIT_NO_REPLACE_OBJECTS": "1",
+                },
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            return completed.stdout.strip()
+
+        nested = tmp_path / "neqo-qcsd"
+        run_git(nested, "init", "--quiet", "--object-format=sha1")
+        run_git(nested, "add", "--", "Cargo.lock")
+        run_git(
+            nested,
+            "-c",
+            "user.name=QCSD test",
+            "-c",
+            "user.email=qcsd-test@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--quiet",
+            "--message",
+            "nested source",
+        )
+        neqo_commit = run_git(nested, "rev-parse", "--verify", "HEAD^{commit}")
+
+        ledger_path = tmp_path / "config/buflo-study/v1/consumed-cohorts.json"
+        ledger_path.parent.mkdir(parents=True)
+        ledger_path.write_text(
+            json.dumps(
+                {
+                    "artifact_type": "qcsd-buflo-study-consumed-cohorts",
+                    "consumed_versions": list(range(1, production_cohort_version)),
+                    "policy": "dense-prefix-durable-publications-consume-v1",
+                    "schema_version": 1,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        ledger_path.chmod(0o644)
+        run_git(tmp_path, "init", "--quiet", "--object-format=sha1")
+        (tmp_path / ".gitmodules").write_text(
+            '[submodule "third_party/neqo-qcsd"]\n'
+            "\tpath = neqo-qcsd\n"
+            "\turl = ../neqo-qcsd\n",
+            encoding="utf-8",
+        )
+        (tmp_path / ".gitignore").write_text(
+            "/artifacts/\n"
+            "/bin/\n"
+            "/docker-lifecycle/\n"
+            "/guardian-locks/\n"
+            "/powershell-boundaries\n"
+            "/results/\n"
+            "/test-docker-desktop-cli-tools/\n"
+            "/test-markers/\n"
+            "/test-system-docker-cli-plugins/\n"
+            "__pycache__/\n"
+            "*.py[cod]\n",
+            encoding="utf-8",
+        )
+        run_git(
+            tmp_path,
+            "config",
+            "submodule.third_party/neqo-qcsd.url",
+            "../neqo-qcsd",
+        )
+        run_git(
+            tmp_path,
+            "add",
+            "--",
+            ".gitignore",
+            ".gitmodules",
+            "Dockerfile",
+            "config/buflo-study/v1/consumed-cohorts.json",
+            "neqo-qcsd",
+            "qcsd-lab",
+            "src",
+            "tools",
+            "uv.lock",
+        )
+        run_git(tmp_path, "submodule", "absorbgitdirs", "--", "neqo-qcsd")
+        run_git(
+            tmp_path,
+            "-c",
+            "user.name=QCSD test",
+            "-c",
+            "user.email=qcsd-test@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--quiet",
+            "--message",
+            "cohort authority",
+        )
+        lab_commit = run_git(tmp_path, "rev-parse", "--verify", "HEAD^{commit}")
+        environment["QCSD_TEST_LAB_COMMIT"] = lab_commit
+        environment["QCSD_TEST_NEQO_COMMIT"] = neqo_commit
     return launcher, build_marker, environment
 
 
 def _marked_build_count(path: Path) -> int:
     return len(path.read_text(encoding="utf-8").splitlines()) if path.exists() else 0
+
+
+def _insert_copied_launcher_hook(launcher: Path, marker: str, command: str) -> None:
+    source = launcher.read_text(encoding="utf-8")
+    assert source.count(marker) == 1
+    launcher.write_text(source.replace(marker, command + "\n" + marker, 1), encoding="utf-8")
+
+
+def _empty_git_commit_command(repository: Path, message: str) -> str:
+    return (
+        "GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null "
+        "GIT_OPTIONAL_LOCKS=0 GIT_NO_REPLACE_OBJECTS=1 "
+        + shlex.join(
+            [
+                "/usr/bin/git",
+                "-C",
+                str(repository),
+                "-c",
+                "core.fsmonitor=false",
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "user.name=QCSD test",
+                "-c",
+                "user.email=qcsd-test@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--quiet",
+                "--allow-empty",
+                "--message",
+                message,
+            ]
+        )
+    )
 
 
 def _build_cli_taint(*, working_directory: Path, daemon_id: str) -> str:
@@ -6555,6 +7309,13 @@ def test_pre_formal_snapshot_binds_selected_cohort_campaigns(
         lambda *args, **kwargs: {
             "path": str(tmp_path / "build-execution-v2.json"),
             "sha256": "a" * 64,
+            "schema_version": 5,
+            "cohort_version": 2,
+            "completion_path": str(tmp_path / "build-completion-v2.json"),
+            "completion_sha256": "b" * 64,
+            "collection_image": "sha256:" + "c" * 64,
+            "started_at": "2026-09-01T00:00:00+00:00",
+            "finished_at": "2026-09-01T00:01:00+00:00",
         },
     )
 
@@ -6565,6 +7326,8 @@ def test_pre_formal_snapshot_binds_selected_cohort_campaigns(
     )
 
     assert snapshot["cohort_version"] == 2
+    assert snapshot["schema_version"] == 2
+    assert snapshot["build_execution"]["completion_sha256"] == "b" * 64
     assert snapshot["qualification_set"] == "buflo-study-public5-v2"
     assert len(snapshot["formal_campaigns"]) == 10
     assert all(
@@ -6618,7 +7381,9 @@ def test_executed_reference_receipt_semantically_binds_all_oracles_and_sources(
     tmp_path: Path,
 ) -> None:
     execution = _reference_execution_fixture(tmp_path)
-    receipt = validate_reference_gate_receipt(execution)
+    with pytest.raises(ValueError, match="schema 2 and build completion"):
+        validate_reference_gate_receipt(execution)
+    receipt = validate_reference_gate_receipt(execution, allow_historical=True)
 
     assert receipt["profiles_checked"] == 8
     assert receipt["archive"] == {
@@ -6639,10 +7404,122 @@ def test_reference_gate_accepts_a_fully_validated_schema_two_build(
 ) -> None:
     execution = _reference_execution_fixture(tmp_path, build_schema_version=2)
 
-    receipt = validate_reference_gate_receipt(execution)
+    receipt = validate_reference_gate_receipt(execution, allow_historical=True)
 
     assert receipt["build_execution"]["cohort_version"] == 1
     assert receipt["profiles_checked"] == 8
+
+
+def test_checked_in_v20_reference_and_code_gate_remain_historically_verifiable() -> None:
+    reference = LAB_ROOT / "artifacts/buflo-study/reference-execution-v20.json"
+    code_gate = LAB_ROOT / "artifacts/buflo-study/code-gate-v20.json"
+
+    with pytest.raises(ValueError, match="current reference admission requires schema 2"):
+        validate_reference_gate_receipt(reference)
+    with pytest.raises(ValueError, match="current code-gate admission requires schema 2"):
+        buflo_study.validate_code_gate_receipt(code_gate, deep=False)
+
+    historical_reference = validate_reference_gate_receipt(
+        reference, allow_historical=True
+    )
+    historical_code_gate = buflo_study.validate_code_gate_receipt(
+        code_gate,
+        allow_historical=True,
+        deep=False,
+    )
+
+    assert historical_reference["build_execution"]["cohort_version"] == 20
+    assert historical_code_gate["cohort_version"] == 20
+    assert historical_code_gate["live_regression"]["samples"] == 18
+
+
+def test_bumped_outer_receipts_require_explicit_historical_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = {
+        "image_digest": "sha256:" + "a" * 64,
+        "lab_commit": "b" * 40,
+        "lab_dirty": False,
+        "lab_patch_sha256": buflo_study.EMPTY_SHA256,
+        "neqo_commit": "c" * 40,
+        "neqo_pinned_commit": "c" * 40,
+        "neqo_dirty": False,
+        "neqo_patch_sha256": buflo_study.EMPTY_SHA256,
+    }
+    fixtures = {
+        "qualification": (
+            buflo_study.validate_qualification_receipt,
+            buflo_study._qualification_receipt_value,
+            {
+                "schema_version": 1,
+                "cohort_version": 20,
+                "source": source,
+                "controlled_results": {"results": []},
+            },
+            "current qualification admission requires schema 2",
+            {},
+        ),
+        "snapshot": (
+            buflo_study.validate_historical_guard_snapshot,
+            buflo_study._historical_snapshot_value,
+            {
+                "schema_version": 1,
+                "cohort_version": 20,
+                "source": source,
+                "formal_results": [],
+            },
+            "current historical-snapshot admission requires schema 2",
+            {"phase": "pre-formal"},
+        ),
+        "cohort": (
+            buflo_study.validate_formal_cohort_manifest,
+            buflo_study._formal_cohort_value,
+            {
+                "schema_version": 2,
+                "cohort_version": 20,
+                "cohort_id": "buflo-study-formal-v20",
+                "source": source,
+                "results_root": str(tmp_path / "results"),
+                "historical_pre_formal_snapshot": {"path": str(tmp_path / "pre.json")},
+                "formal_campaigns": [],
+            },
+            "current formal-cohort admission requires schema 3",
+            {},
+        ),
+        "admission": (
+            buflo_study.validate_capture_admission,
+            buflo_study._capture_admission_value,
+            {
+                "schema_version": 3,
+                "cohort_version": 20,
+                "stage": "formal",
+                "reference_gate": {"path": str(tmp_path / "reference.json")},
+                "qualification": {"path": str(tmp_path / "qualification.json")},
+                "staged_prerequisites": {"regression": {"results": []}, "public": {}},
+                "results_root": str(tmp_path / "results"),
+                "historical_pre_formal_snapshot": None,
+                "formal_cohort": None,
+                "code_gate": None,
+                "formal_capacity": None,
+                "allowed_campaigns": [],
+            },
+            "current capture admission requires schema 4",
+            {},
+        ),
+    }
+    for name, (validator, derivation, value, message, kwargs) in fixtures.items():
+        path = tmp_path / f"{name}.json"
+        path.write_text(json.dumps(value), encoding="utf-8")
+        with pytest.raises(ValueError, match=message):
+            validator(path, **kwargs)
+        monkeypatch.setattr(
+            buflo_study,
+            derivation.__name__,
+            lambda *_args, **_kwargs: value,
+        )
+        assert validator(path, allow_historical=True, **kwargs)["schema_version"] == value[
+            "schema_version"
+        ]
 
 
 def test_executed_reference_receipt_rejects_self_declared_source_substitution(
@@ -6769,7 +7646,7 @@ def test_reference_execution_receipt_rejects_tamper(tmp_path: Path) -> None:
     value["payload_sha256"] = buflo_study._canonical_digest(payload)
     execution.write_text(json.dumps(value), encoding="utf-8")
     with pytest.raises(ValueError, match="isolation evidence"):
-        validate_reference_gate_receipt(execution)
+        validate_reference_gate_receipt(execution, allow_historical=True)
 
 
 def test_staged_capture_rejects_missing_exact_prior_cohorts() -> None:
@@ -6876,6 +7753,10 @@ def test_v15_formal_capture_admission_requires_code_gate_before_freeze_replay(
     build = {
         "path": "build.json",
         "sha256": "b" * 64,
+        "schema_version": 5,
+        "cohort_version": 15,
+        "completion_path": "/tmp/build-completion-v15.json",
+        "completion_sha256": "c" * 64,
         "collection_image": source["image_digest"],
         "started_at": "2026-08-27T00:00:00+00:00",
         "finished_at": "2026-08-27T00:01:00+00:00",
@@ -6883,13 +7764,15 @@ def test_v15_formal_capture_admission_requires_code_gate_before_freeze_replay(
     identity = {
         "cohort_version": 15,
         "sha256": build["sha256"],
+        "completion_path": "/lab/artifacts/buflo-study/build-completion-v15.json",
+        "completion_sha256": build["completion_sha256"],
         "collection_image": build["collection_image"],
         "started_at": build["started_at"],
         "finished_at": build["finished_at"],
     }
     scheduler = buflo_study._capture_scheduler_environment_contract()
     environment = {
-        "schema_version": 2,
+        "schema_version": 3,
         "capture_scheduler": scheduler,
         "docker": {"ncpu": 12},
     }
@@ -6923,7 +7806,11 @@ def test_v15_formal_capture_admission_requires_code_gate_before_freeze_replay(
     monkeypatch.setattr(
         buflo_study, "validate_build_execution_receipt", lambda *_args, **_kwargs: build
     )
-    monkeypatch.setattr(buflo_study, "_one_build_execution_identity", lambda _values: identity)
+    monkeypatch.setattr(
+        buflo_study,
+        "_one_build_execution_identity",
+        lambda _values, **_kwargs: identity,
+    )
     results_root = tmp_path / "results"
     results_root.mkdir()
 
@@ -6988,7 +7875,7 @@ def test_v15_formal_capture_admission_requires_code_gate_before_freeze_replay(
         formal_window_hours=12.5,
         cohort_version=15,
     )
-    assert admitted["schema_version"] == 3
+    assert admitted["schema_version"] == 4
     assert admitted["code_gate"] == code_gate
 
 
@@ -7036,7 +7923,7 @@ def test_qualification_rejects_sidecar_from_non_prepare_image(
     monkeypatch.setattr(
         buflo_study,
         "_qualification_build_binding",
-        lambda *_args: (
+        lambda *_args, **_kwargs: (
             {"path": "build.json", "sha256": "f" * 64},
             "sha256:" + "d" * 64,
         ),
@@ -7074,7 +7961,8 @@ def test_launcher_requires_clean_capture_image_and_no_cache_build() -> None:
     assert "WSL_HOST_BUILD_MIN_AVAILABLE_BYTES=68719476736" in launcher
     assert launcher.count('wsl_host_build_storage_probe "') == 4
     assert "windows_docker_storage_probe.ps1" in launcher
-    assert '"schema_version": 4' in launcher
+    assert '"schema_version": 5' in launcher
+    assert '"cohort_allocation": cohort_allocation_authority["receipt"]' in launcher
     assert '"host_storage_preflight": host_storage' in launcher
     assert '"buildx": buildx' in launcher
     assert launcher.count('capture_buildx_observation "') == 4
@@ -7087,7 +7975,22 @@ def test_launcher_requires_clean_capture_image_and_no_cache_build() -> None:
     ):
         assert f'capture_buildx_observation "{boundary}"' in launcher
     build_receipt_invocation = '"${ROOT}/src/qcsd_lab/build_storage.py" receipt'
-    assert launcher.count(build_receipt_invocation) == 4
+    assert len(
+        re.findall(re.escape(build_receipt_invocation) + r"\s+\\$", launcher, re.MULTILINE)
+    ) == 5
+    selected_pair = launcher.index(
+        'study_build_completion_payload_sha256="${study_build_fields[6]}"'
+    )
+    first_generic_docker = launcher.index(
+        'if [[ "${qcsd_deferred_generic_docker:-0}" == "1" ]]'
+    )
+    assert selected_pair < first_generic_docker
+    generic_branch = launcher.split(
+        'elif [[ "${1:-}" != "class-study" && "${1:-}" != "etf-probe" ]]; then',
+        1,
+    )[1].split("\nfi", 1)[0]
+    assert "qcsd_deferred_generic_docker=1" in generic_branch
+    assert "require_docker" not in generic_branch
     for admitted_fields in (
         "study_build_fields",
         "pinned_cdp_build_fields",
@@ -7693,25 +8596,31 @@ def test_versioned_build_receipts_coexist_and_reject_path_or_request_mismatch(
     v1_sha256 = buflo_study.sha256_file(paths[1])
 
     assert (
-        buflo_study.validate_build_execution_receipt(paths[1], expected_cohort_version=1)[
+        buflo_study.validate_build_execution_receipt(
+            paths[1], expected_cohort_version=1, allow_historical=True
+        )[
             "cohort_version"
         ]
         == 1
     )
     assert (
-        buflo_study.validate_build_execution_receipt(paths[2], expected_cohort_version=2)[
+        buflo_study.validate_build_execution_receipt(
+            paths[2], expected_cohort_version=2, allow_historical=True
+        )[
             "cohort_version"
         ]
         == 2
     )
     assert buflo_study.sha256_file(paths[1]) == v1_sha256
     with pytest.raises(ValueError, match="cohort version differs from the request"):
-        buflo_study.validate_build_execution_receipt(paths[1], expected_cohort_version=2)
+        buflo_study.validate_build_execution_receipt(
+            paths[1], expected_cohort_version=2, allow_historical=True
+        )
 
     copied = tmp_path / "copied-v1-as-v2.json"
     copied.write_bytes(paths[1].read_bytes())
     with pytest.raises(ValueError, match="path does not match its cohort version"):
-        buflo_study.validate_build_execution_receipt(copied)
+        buflo_study.validate_build_execution_receipt(copied, allow_historical=True)
 
 
 def test_schema_three_build_receipt_validates_through_study_reader(
@@ -7730,6 +8639,7 @@ def test_schema_three_build_receipt_validates_through_study_reader(
         path,
         expected_collection_image="sha256:" + "a" * 64,
         expected_cohort_version=47,
+        allow_historical=True,
     )
 
     assert validated["cohort_version"] == 47
@@ -7753,10 +8663,95 @@ def test_schema_four_buildx_receipt_validates_through_historical_study_reader(
         path,
         expected_collection_image="sha256:" + "a" * 64,
         expected_cohort_version=47,
+        allow_historical=True,
     )
 
     assert validated["schema_version"] == 4
     assert validated["buildx"] == value["buildx"]
+
+
+def test_schema_five_allocation_receipt_validates_through_study_reader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "build-execution-v47.json"
+    monkeypatch.setattr(
+        buflo_study,
+        "build_execution_receipt_path",
+        lambda cohort_version=1: path,
+    )
+    value, completion_path, completion = _write_schema5_build_pair(
+        path, cohort_version=47
+    )
+
+    validated = buflo_study.validate_build_execution_receipt(
+        path,
+        expected_collection_image="sha256:" + "a" * 64,
+        expected_cohort_version=47,
+    )
+
+    assert validated["schema_version"] == 5
+    assert validated["buildx"] == value["buildx"]
+    assert validated["cohort_allocation"] == value["cohort_allocation"]
+    assert validated["cohort_claim"] == value["cohort_claim"]
+    assert validated["cohort_claim_chain"] == value["cohort_claim_chain"]
+    assert validated["cohort_authority_reproofs"] == value[
+        "cohort_authority_reproofs"
+    ]
+    assert validated["completion_path"] == str(completion_path.resolve())
+    assert validated["completion_sha256"] == hashlib.sha256(
+        completion_path.read_bytes()
+    ).hexdigest()
+    assert validated["build_completion"] == completion
+
+
+def test_current_study_reader_rejects_missing_or_tampered_completion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "build-execution-v47.json"
+    monkeypatch.setattr(
+        buflo_study,
+        "build_execution_receipt_path",
+        lambda cohort_version=1: path,
+    )
+    _value, completion_path, _completion = _write_schema5_build_pair(
+        path, cohort_version=47
+    )
+    completion_raw = completion_path.read_bytes()
+    completion_path.unlink()
+    with pytest.raises(ValueError, match="build completion path cannot be resolved"):
+        buflo_study.validate_build_execution_receipt(path, expected_cohort_version=47)
+
+    completion_path.write_bytes(completion_raw + b" ")
+    completion_path.chmod(0o600)
+    with pytest.raises(ValueError, match="canonical"):
+        buflo_study.validate_build_execution_receipt(path, expected_cohort_version=47)
+
+
+@pytest.mark.parametrize("schema_version", (1, 2, 3, 4))
+def test_current_study_reader_rejects_historical_schema_downgrade(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    schema_version: int,
+) -> None:
+    path = tmp_path / "build-execution-v47.json"
+    monkeypatch.setattr(
+        buflo_study,
+        "build_execution_receipt_path",
+        lambda cohort_version=1: path,
+    )
+    value = _build_execution_value(cohort_version=47, schema_version=schema_version)
+    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="current study build admission requires schema 5"):
+        buflo_study.validate_build_execution_receipt(path, expected_cohort_version=47)
+    assert (
+        buflo_study.validate_build_execution_receipt(
+            path,
+            expected_cohort_version=47,
+            allow_historical=True,
+        )["cohort_version"]
+        == 47
+    )
 
 
 def test_study_reader_hashes_the_same_stable_receipt_bytes_it_validates(
@@ -7780,6 +8775,7 @@ def test_study_reader_hashes_the_same_stable_receipt_bytes_it_validates(
         path,
         expected_collection_image="sha256:" + "a" * 64,
         expected_cohort_version=47,
+        allow_historical=True,
     )
 
     assert validated["path"] == str(path.resolve())
@@ -7801,6 +8797,7 @@ def test_study_reader_rejects_duplicate_keys_before_receipt_validation(
         buflo_study.validate_build_execution_receipt(
             path,
             expected_cohort_version=47,
+            allow_historical=True,
         )
 
 
@@ -7839,6 +8836,7 @@ def test_schema_three_study_reader_rejects_context_argv_even_when_rehashed(
         buflo_study.validate_build_execution_receipt(
             path,
             expected_cohort_version=47,
+            allow_historical=True,
         )
 
 
@@ -7902,7 +8900,7 @@ def test_launcher_selects_exact_versioned_build_images_and_frozen_resume_admissi
     )
 
 
-def test_build_emits_schema4_with_four_stable_buildx_observations(
+def test_build_emits_schema5_with_stable_buildx_and_cohort_allocation(
     tmp_path: Path,
 ) -> None:
     launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
@@ -7918,10 +8916,12 @@ def test_build_emits_schema4_with_four_stable_buildx_observations(
 
     assert result.returncode == 0, result.stderr
     assert _marked_build_count(build_marker) == 3
-    receipt = json.loads(
-        (tmp_path / "artifacts/buflo-study/build-execution-v90.json").read_text(encoding="utf-8")
-    )
-    assert receipt["schema_version"] == 4
+    receipt_path = tmp_path / "artifacts/buflo-study/build-execution-v90.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt_status = receipt_path.stat()
+    assert stat.S_IMODE(receipt_status.st_mode) == 0o600
+    assert receipt_status.st_nlink == 1
+    assert receipt["schema_version"] == 5
     buildx = receipt["buildx"]
     assert buildx["schema_version"] == 1
     assert buildx["policy"] == "docker-selected-buildx-binary-stability-v1"
@@ -7938,7 +8938,575 @@ def test_build_emits_schema4_with_four_stable_buildx_observations(
     assert identity["plugin"]["path"] == identity["reported_plugin_path"]
     resolved = Path(identity["resolved"]["path"])
     assert identity["resolved"]["sha256"] == hashlib.sha256(resolved.read_bytes()).hexdigest()
+    allocation = receipt["cohort_allocation"]
+    assert allocation["allocated_version"] == 90
+    assert allocation["last_consumed_version"] == 89
+    assert allocation["lab_commit"] == (
+        tmp_path / "test-markers/cohort-lab-commit"
+    ).read_text(encoding="ascii").strip()
+    assert allocation["neqo_commit"] == "b" * 40
+    assert allocation["neqo_gitlink"] == "b" * 40
+    claim = receipt["cohort_claim"]
+    assert claim["cohort_version"] == 90
+    assert claim["claim"]["path"].endswith("/claim-v90.json")
+    assert (tmp_path / claim["claim"]["path"]).is_file()
+    claim_chain = receipt["cohort_claim_chain"]
+    assert claim_chain["genesis"] == {
+        "ledger_path": allocation["ledger_path"],
+        "ledger_sha256": allocation["ledger_sha256"],
+        "last_consumed_version": 89,
+    }
+    assert [item["cohort_version"] for item in claim_chain["claims"]] == [90]
+    assert claim_chain["claims"][-1]["sha256"] == claim["claim"]["sha256"]
+    assert claim_chain["head"] == {
+        "cohort_version": 90,
+        "sha256": claim["claim"]["sha256"],
+    }
+    assert [row["boundary"] for row in receipt["cohort_authority_reproofs"]] == [
+        "after-cohort-claim-before-docker-recovery",
+        "immediately-before-docker-recovery",
+        "after-evidence-build-lock",
+        "immediately-before-build-transaction",
+        "immediately-after-build-transaction",
+        "immediately-before-collection-build",
+        "immediately-before-prepare-build",
+        "immediately-before-reference-build",
+        "after-reference-build-before-receipt",
+    ]
     assert not tuple((tmp_path / "artifacts/buflo-study").glob(".build-iids-v90.*"))
+    assert not tuple(
+        (tmp_path / "artifacts/buflo-study").glob(
+            "build-execution-v90.json.staged-*"
+        )
+    )
+    completion_path = tmp_path / "artifacts/buflo-study/build-completion-v90.json"
+    assert completion_path.is_file() and not completion_path.is_symlink()
+    assert stat.S_IMODE(completion_path.stat().st_mode) == 0o600
+    assert completion_path.stat().st_nlink == 1
+    admitted = subprocess.run(
+        [
+            "/usr/bin/python3",
+            "-I",
+            str(tmp_path / "src/qcsd_lab/build_storage.py"),
+            "receipt",
+            str(receipt_path),
+            "--expected-cohort",
+            "90",
+            "--probe-path",
+            str(tmp_path / "tools/windows_docker_storage_probe.ps1"),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert admitted.returncode == 0, admitted.stderr
+    assert len(admitted.stdout.splitlines()) == 7
+
+
+def test_build_rejects_same_uid_staging_path_replacement_before_publication(
+    tmp_path: Path,
+) -> None:
+    boundary = (
+        '  _qcsd_verify_saved_build_cohort_authority \\\n'
+        '    "immediately-before-receipt-publication" || exit 1'
+    )
+    launcher, build_marker, environment = _launcher_boundary_fixture(
+        tmp_path,
+        committed_launcher_hooks=(
+            (
+                boundary,
+                '  /usr/bin/unlink -- "${build_receipt_stage}"\n'
+                "  /usr/bin/printf '%s\\n' '{\"attacker\":true}' >"
+                '"${build_receipt_stage}"',
+            ),
+        ),
+    )
+
+    result = subprocess.run(
+        [str(launcher), "build", "--cohort-version", "91"],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    receipt = tmp_path / "artifacts/buflo-study/build-execution-v91.json"
+    stages = tuple(receipt.parent.glob(receipt.name + ".staged-*"))
+    assert result.returncode != 0
+    assert "staged build receipt bytes are not canonical" in result.stderr
+    assert _marked_build_count(build_marker) == 3
+    assert not receipt.exists()
+    assert len(stages) == 1
+    assert stages[0].read_bytes() == b'{"attacker":true}\n'
+
+
+def test_build_publication_race_never_overwrites_existing_receipt(
+    tmp_path: Path,
+) -> None:
+    publication_marker = (
+        "  # Commit the already validated staging inode without an overwrite-capable\n"
+        "  # rename; the helper revalidates the bytes and links its open descriptor."
+    )
+    launcher, build_marker, environment = _launcher_boundary_fixture(
+        tmp_path,
+        committed_launcher_hooks=(
+            (
+                publication_marker,
+                '  /usr/bin/cp -- "${build_receipt_stage}" "${build_receipt}"',
+            ),
+        ),
+    )
+
+    result = subprocess.run(
+        [str(launcher), "build", "--cohort-version", "92"],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    receipt = tmp_path / "artifacts/buflo-study/build-execution-v92.json"
+    stages = tuple(receipt.parent.glob(receipt.name + ".staged-*"))
+    assert result.returncode != 0
+    assert "destination raced before publication" in result.stderr
+    assert _marked_build_count(build_marker) == 3
+    assert receipt.is_file()
+    assert len(stages) == 1
+    assert receipt.read_bytes() == stages[0].read_bytes()
+    value = json.loads(receipt.read_bytes())
+    payload = dict(value)
+    claimed_digest = payload.pop("payload_sha256")
+    assert claimed_digest == buflo_study._canonical_digest(payload)
+    assert value["schema_version"] == 5
+    assert value["cohort_version"] == 92
+    completion = tmp_path / "artifacts/buflo-study/build-completion-v92.json"
+    assert not completion.exists()
+    rejected = subprocess.run(
+        [
+            "/usr/bin/python3",
+            "-I",
+            str(tmp_path / "src/qcsd_lab/build_storage.py"),
+            "receipt",
+            str(receipt),
+            "--expected-cohort",
+            "92",
+            "--probe-path",
+            str(tmp_path / "tools/windows_docker_storage_probe.ps1"),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert rejected.returncode != 0
+    assert "completion" in rejected.stderr
+
+
+def test_build_rechecks_full_source_authority_after_receipt_staging(
+    tmp_path: Path,
+) -> None:
+    boundary = (
+        '  _qcsd_verify_saved_build_cohort_authority \\\n'
+        '    "immediately-before-receipt-publication" || exit 1'
+    )
+    launcher, build_marker, environment = _launcher_boundary_fixture(
+        tmp_path,
+        production_allocator=True,
+        production_cohort_version=62,
+        committed_launcher_hooks=(
+            (
+                boundary,
+                "  /usr/bin/printf '%s\\n' '# late source drift' "
+                '>>"${ROOT}/Dockerfile"',
+            ),
+        ),
+    )
+
+    result = subprocess.run(
+        [str(launcher), "build", "--cohort-version", "62"],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    receipt = tmp_path / "artifacts/buflo-study/build-execution-v62.json"
+    assert result.returncode != 0
+    assert "immediately-before-receipt-publication" in result.stderr
+    assert "consumed-cohort/source authority changed" in result.stderr
+    assert _marked_build_count(build_marker) == 3
+    assert not receipt.exists()
+    assert len(tuple(receipt.parent.glob(receipt.name + ".staged-*"))) == 1
+    assert (
+        tmp_path / "artifacts/buflo-study/cohort-claims-v1/claim-v62.json"
+    ).is_file()
+
+
+def test_build_executes_production_allocator_across_guardian_and_transaction(
+    tmp_path: Path,
+) -> None:
+    launcher, build_marker, environment = _launcher_boundary_fixture(
+        tmp_path,
+        production_allocator=True,
+        production_cohort_version=62,
+    )
+    copied_source = launcher.read_text(encoding="utf-8")
+    production_source = (LAB_ROOT / "qcsd-lab").read_text(encoding="utf-8")
+    copied_start = copied_source.index("_qcsd_verify_clean_build_checkout() {")
+    copied_end = copied_source.index("\n}\n\nif [[", copied_start) + 2
+    production_start = production_source.index(
+        "_qcsd_verify_clean_build_checkout() {"
+    )
+    production_end = production_source.index("\n}\n\nif [[", production_start) + 2
+    assert copied_source[copied_start:copied_end] == production_source[
+        production_start:production_end
+    ]
+
+    result = subprocess.run(
+        [str(launcher), "build", "--cohort-version", "62"],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert _marked_build_count(build_marker) == 3
+    receipt = json.loads(
+        (tmp_path / "artifacts/buflo-study/build-execution-v62.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    allocation = receipt["cohort_allocation"]
+    assert receipt["schema_version"] == 5
+    assert allocation["allocated_version"] == 62
+    assert allocation["last_consumed_version"] == 61
+    assert allocation["lab_commit"] == environment["QCSD_TEST_LAB_COMMIT"]
+    assert allocation["neqo_commit"] == environment["QCSD_TEST_NEQO_COMMIT"]
+    assert allocation["neqo_gitlink"] == environment["QCSD_TEST_NEQO_COMMIT"]
+
+
+def test_failed_build_permanently_consumes_cohort_and_next_version_progresses(
+    tmp_path: Path,
+) -> None:
+    launcher, build_marker, environment = _launcher_boundary_fixture(
+        tmp_path,
+        production_allocator=True,
+        production_cohort_version=62,
+    )
+    failed_environment = {
+        **environment,
+        "QCSD_TEST_WSL_LOW_BOUNDARY": "before-collection",
+    }
+
+    failed = subprocess.run(
+        [str(launcher), "build", "--cohort-version", "62"],
+        cwd=tmp_path,
+        env=failed_environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    claim_path = tmp_path / "artifacts/buflo-study/cohort-claims-v1/claim-v62.json"
+    assert failed.returncode == 1, failed.stderr
+    assert "requires at least" in failed.stderr
+    assert "at before-collection" in failed.stderr
+    assert claim_path.is_file()
+    claim_bytes = claim_path.read_bytes()
+    assert _marked_build_count(build_marker) == 0
+    assert not (tmp_path / "artifacts/buflo-study/build-execution-v62.json").exists()
+
+    duplicate = subprocess.run(
+        [str(launcher), "build", "--cohort-version", "62"],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert duplicate.returncode == 125
+    assert "exact next cohort is v63" in duplicate.stderr
+    assert claim_path.read_bytes() == claim_bytes
+    assert _marked_build_count(build_marker) == 0
+
+    successor = subprocess.run(
+        [str(launcher), "build", "--cohort-version", "63"],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert successor.returncode == 0, successor.stderr
+    assert claim_path.read_bytes() == claim_bytes
+    assert (
+        tmp_path / "artifacts/buflo-study/cohort-claims-v1/claim-v63.json"
+    ).is_file()
+    assert _marked_build_count(build_marker) == 3
+    receipt = json.loads(
+        (tmp_path / "artifacts/buflo-study/build-execution-v63.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert receipt["cohort_allocation"]["last_consumed_version"] == 61
+    assert receipt["cohort_allocation"]["allocated_version"] == 63
+    embedded = json.loads(
+        base64.b64decode(receipt["cohort_claim"]["claim"]["payload_base64"], validate=True)
+    )
+    assert embedded["payload"]["predecessor"] == {
+        "kind": "cohort-claim",
+        "cohort_version": 62,
+        "sha256": hashlib.sha256(claim_bytes).hexdigest(),
+    }
+    claim_chain = receipt["cohort_claim_chain"]
+    assert [item["cohort_version"] for item in claim_chain["claims"]] == [62, 63]
+    assert claim_chain["claims"][0]["sha256"] == hashlib.sha256(claim_bytes).hexdigest()
+    assert claim_chain["head"] == {
+        "cohort_version": 63,
+        "sha256": receipt["cohort_claim"]["claim"]["sha256"],
+    }
+
+
+def test_production_clean_verifier_rejects_clean_lab_head_advance(
+    tmp_path: Path,
+) -> None:
+    boundary = (
+        '    _qcsd_reprove_build_cohort_authority '
+        '"immediately-before-docker-recovery" || exit 1'
+    )
+    launcher, build_marker, environment = _launcher_boundary_fixture(
+        tmp_path,
+        production_allocator=True,
+        production_cohort_version=62,
+        committed_launcher_hooks=(
+            (boundary, _empty_git_commit_command(tmp_path, "advanced lab head")),
+        ),
+    )
+
+    result = subprocess.run(
+        [str(launcher), "build", "--cohort-version", "62"],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode != 0
+    assert "immediately-before-docker-recovery" in result.stderr
+    assert _marked_build_count(build_marker) == 0
+    assert not (tmp_path / "artifacts/buflo-study/build-execution-v62.json").exists()
+    assert (
+        subprocess.run(
+            ["/usr/bin/git", "-C", str(tmp_path), "status", "--porcelain"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        == ""
+    )
+    assert (
+        subprocess.run(
+            ["/usr/bin/git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        != environment["QCSD_TEST_LAB_COMMIT"]
+    )
+
+
+def test_production_clean_verifier_rejects_nested_head_gitlink_drift(
+    tmp_path: Path,
+) -> None:
+    boundary = (
+        '    _qcsd_reprove_build_cohort_authority '
+        '"immediately-before-docker-recovery" || exit 1'
+    )
+    nested = tmp_path / "neqo-qcsd"
+    launcher, build_marker, environment = _launcher_boundary_fixture(
+        tmp_path,
+        production_allocator=True,
+        production_cohort_version=62,
+        committed_launcher_hooks=(
+            (boundary, _empty_git_commit_command(nested, "advanced nested head")),
+        ),
+    )
+
+    result = subprocess.run(
+        [str(launcher), "build", "--cohort-version", "62"],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode != 0
+    assert "immediately-before-docker-recovery" in result.stderr
+    assert _marked_build_count(build_marker) == 0
+    assert not (tmp_path / "artifacts/buflo-study/build-execution-v62.json").exists()
+    assert (
+        subprocess.run(
+            ["/usr/bin/git", "-C", str(nested), "status", "--porcelain"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        == ""
+    )
+    assert (
+        subprocess.run(
+            ["/usr/bin/git", "-C", str(nested), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        != environment["QCSD_TEST_NEQO_COMMIT"]
+    )
+
+
+def test_production_allocator_drift_after_guardian_prevents_docker_recovery(
+    tmp_path: Path,
+) -> None:
+    ledger = tmp_path / "config/buflo-study/v1/consumed-cohorts.json"
+    mutation = (
+        "/usr/bin/python3 -I -c "
+        + shlex.quote(
+            "from pathlib import Path; import sys; "
+            "p=Path(sys.argv[1]); p.write_bytes(p.read_bytes()+b' ')"
+        )
+        + " "
+        + shlex.quote(str(ledger))
+    )
+    boundary = (
+        '    _qcsd_reprove_build_cohort_authority '
+        '"immediately-before-docker-recovery" || exit 1'
+    )
+    launcher, build_marker, environment = _launcher_boundary_fixture(
+        tmp_path,
+        production_allocator=True,
+        production_cohort_version=62,
+        committed_launcher_hooks=((boundary, mutation),),
+    )
+
+    result = subprocess.run(
+        [str(launcher), "build", "--cohort-version", "62"],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode != 0
+    assert "immediately-before-docker-recovery" in result.stderr
+    assert _marked_build_count(build_marker) == 0
+    assert not (tmp_path / "artifacts/buflo-study/build-execution-v62.json").exists()
+    lifecycle = Path(environment["QCSD_TEST_LIFECYCLE_BASE"])
+    assert not tuple(lifecycle.glob("transaction.*"))
+
+
+def test_production_allocator_inode_drift_before_transaction_fails_closed(
+    tmp_path: Path,
+) -> None:
+    ledger = tmp_path / "config/buflo-study/v1/consumed-cohorts.json"
+    replacement = tmp_path / "test-markers/replacement-ledger.json"
+    mutation = (
+        "/usr/bin/python3 -I -c "
+        + shlex.quote("import os,sys; os.replace(sys.argv[1],sys.argv[2])")
+        + " "
+        + shlex.quote(str(replacement))
+        + " "
+        + shlex.quote(str(ledger))
+    )
+    boundary = (
+        '  _qcsd_reprove_build_cohort_authority '
+        '"immediately-before-build-transaction" || exit 1'
+    )
+    launcher, build_marker, environment = _launcher_boundary_fixture(
+        tmp_path,
+        production_allocator=True,
+        production_cohort_version=62,
+        committed_launcher_hooks=((boundary, mutation),),
+    )
+    replacement.write_bytes(ledger.read_bytes())
+    replacement.chmod(0o644)
+
+    result = subprocess.run(
+        [str(launcher), "build", "--cohort-version", "62"],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 1
+    assert "immediately-before-build-transaction" in result.stderr
+    assert _marked_build_count(build_marker) == 0
+    assert not (tmp_path / "artifacts/buflo-study/build-execution-v62.json").exists()
+    lifecycle = Path(environment["QCSD_TEST_LIFECYCLE_BASE"])
+    assert not tuple(lifecycle.glob("transaction.*"))
+
+
+def test_production_allocator_drift_after_build_lock_fails_closed(
+    tmp_path: Path,
+) -> None:
+    ledger = tmp_path / "config/buflo-study/v1/consumed-cohorts.json"
+    mutation = (
+        "/usr/bin/python3 -I -c "
+        + shlex.quote(
+            "from pathlib import Path; import sys; "
+            "p=Path(sys.argv[1]); p.write_bytes(p.read_bytes()+b' ')"
+        )
+        + " "
+        + shlex.quote(str(ledger))
+    )
+    boundary = (
+        '  _qcsd_reprove_build_cohort_authority '
+        '"after-evidence-build-lock" || exit 1'
+    )
+    launcher, build_marker, environment = _launcher_boundary_fixture(
+        tmp_path,
+        production_allocator=True,
+        production_cohort_version=62,
+        committed_launcher_hooks=((boundary, mutation),),
+    )
+
+    result = subprocess.run(
+        [str(launcher), "build", "--cohort-version", "62"],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode != 0
+    assert "after-evidence-build-lock" in result.stderr
+    assert _marked_build_count(build_marker) == 0
+    assert not (tmp_path / "artifacts/buflo-study/build-execution-v62.json").exists()
+    lifecycle = Path(environment["QCSD_TEST_LIFECYCLE_BASE"])
+    assert not tuple(lifecycle.glob("transaction.*"))
 
 
 @pytest.mark.parametrize(
@@ -8974,16 +10542,23 @@ cleanup_build_iids 37
     assert transaction_record.exists()
 
 
-def test_launcher_build_v4_is_create_only_and_preserves_v1(tmp_path: Path) -> None:
+def test_launcher_build_v5_is_create_only_and_preserves_prior_cohort(
+    tmp_path: Path,
+) -> None:
     launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
     environment["QCSD_TEST_DOCKER_SERVER_ID"] = "12345678-1234-1234-1234-123456789abc"
     environment["QCSD_TEST_WSL_AVAILABLE_BYTES"] = str(64 * 1024**3)
     environment["QCSD_TEST_WSL_DATA_PATH"] = r"D:\DockerData\disk\docker_data.vhdx"
     powershell_marker = tmp_path / "powershell-boundaries"
     environment["QCSD_TEST_POWERSHELL_MARKER"] = str(powershell_marker)
+    receipt_parent = tmp_path / "artifacts/buflo-study"
+    receipt_parent.mkdir(parents=True)
+    prior = receipt_parent / "build-execution-v61.json"
+    prior.write_bytes(b"immutable historical receipt\n")
+    prior_sha256 = hashlib.sha256(prior.read_bytes()).hexdigest()
 
     first = subprocess.run(
-        [str(launcher), "build"],
+        [str(launcher), "build", "--cohort-version", "62"],
         cwd=tmp_path,
         env=environment,
         check=False,
@@ -8991,35 +10566,28 @@ def test_launcher_build_v4_is_create_only_and_preserves_v1(tmp_path: Path) -> No
         text=True,
     )
     assert first.returncode == 0, first.stderr
-    v1 = tmp_path / "artifacts/buflo-study/build-execution-v1.json"
-    v1_sha256 = hashlib.sha256(v1.read_bytes()).hexdigest()
-    second = subprocess.run(
-        [str(launcher), "build", "--cohort-version", "2"],
-        cwd=tmp_path,
-        env=environment,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert second.returncode == 0, second.stderr
-    v2 = tmp_path / "artifacts/buflo-study/build-execution-v2.json"
-    assert json.loads(v1.read_text(encoding="utf-8"))["cohort_version"] == 1
-    v2_value = json.loads(v2.read_text(encoding="utf-8"))
-    assert v2_value["cohort_version"] == 2
-    assert v2_value["schema_version"] == 4
-    assert [observation["boundary"] for observation in v2_value["buildx"]["observations"]] == [
+    current = receipt_parent / "build-execution-v62.json"
+    current_value = json.loads(current.read_text(encoding="utf-8"))
+    assert current_value["cohort_version"] == 62
+    assert current_value["schema_version"] == 5
+    assert current_value["cohort_allocation"]["allocated_version"] == 62
+    assert current_value["cohort_allocation"]["last_consumed_version"] == 61
+    assert [
+        observation["boundary"]
+        for observation in current_value["buildx"]["observations"]
+    ] == [
         "before-collection",
         "after-collection",
         "after-prepare",
         "after-reference",
     ]
-    assert v2_value["buildx"]["passed"] is True
-    assert v2_value["docker"]["context"] == "default"
+    assert current_value["buildx"]["passed"] is True
+    assert current_value["docker"]["context"] == "default"
     assert all(
         command["argv"][:3] == ["docker", "--host", "unix:///var/run/docker.sock"]
-        for command in v2_value["commands"]
+        for command in current_value["commands"]
     )
-    preflight = v2_value["host_storage_preflight"]
+    preflight = current_value["host_storage_preflight"]
     assert preflight["required_available_bytes"] == 64 * 1024**3
     assert [item["boundary"] for item in preflight["observations"]] == [
         "before-collection",
@@ -9031,22 +10599,22 @@ def test_launcher_build_v4_is_create_only_and_preserves_v1(tmp_path: Path) -> No
         r"D:\DockerData\disk\docker_data.vhdx"
     }
     assert {item["drive_letter"] for item in preflight["observations"]} == {"D"}
-    assert len(powershell_marker.read_text(encoding="utf-8").splitlines()) == 8
-    assert _marked_build_count(build_marker) == 6
-    assert hashlib.sha256(v1.read_bytes()).hexdigest() == v1_sha256
+    assert len(powershell_marker.read_text(encoding="utf-8").splitlines()) == 4
+    assert _marked_build_count(build_marker) == 3
+    assert hashlib.sha256(prior.read_bytes()).hexdigest() == prior_sha256
 
     duplicate = subprocess.run(
-        [str(launcher), "build", "--cohort-version=2"],
+        [str(launcher), "build", "--cohort-version=62"],
         cwd=tmp_path,
         env=environment,
         check=False,
         capture_output=True,
         text=True,
     )
-    assert duplicate.returncode == 1
+    assert duplicate.returncode == 125
     assert "absent create-only receipt" in duplicate.stderr
-    assert len(powershell_marker.read_text(encoding="utf-8").splitlines()) == 8
-    assert _marked_build_count(build_marker) == 6
+    assert len(powershell_marker.read_text(encoding="utf-8").splitlines()) == 4
+    assert _marked_build_count(build_marker) == 3
 
 
 def test_build_execution_receipt_rejects_semantically_rehashed_cache_enabled_command() -> None:
@@ -9208,8 +10776,7 @@ exit 0
 
     completed = subprocess.run(
         [
-            "/bin/bash",
-            str(LAB_ROOT / "qcsd-lab"),
+                str(LAB_ROOT / "qcsd-lab"),
             "buflo-study",
             "qualify",
             "--controlled-result",
@@ -9287,18 +10854,35 @@ def test_study_environment_receipt_binds_minimized_docker_bases_and_locks() -> N
         },
     }
 
-    assert (
-        validate_study_environment_receipt(value, expected_image_digest="sha256:" + "a" * 64)[
-            "image_id"
-        ]
-        == "sha256:" + "a" * 64
+    with pytest.raises(ValueError, match="schema 3 and build completion"):
+        validate_study_environment_receipt(
+            value, expected_image_digest="sha256:" + "a" * 64
+        )
+    historical_environment = validate_study_environment_receipt(
+        value,
+        expected_image_digest="sha256:" + "a" * 64,
+        allow_historical=True,
     )
+    assert historical_environment["image_id"] == "sha256:" + "a" * 64
+    assert buflo_study._one_build_execution_identity(
+        [historical_environment], allow_historical=True
+    ) == {
+        "cohort_version": build_execution["cohort_version"],
+        "sha256": value["build_execution"]["sha256"],
+        "collection_image": "sha256:" + "a" * 64,
+        "started_at": build_execution["started_at"],
+        "finished_at": build_execution["finished_at"],
+    }
+    with pytest.raises(ValueError, match="no typed no-cache build identity"):
+        buflo_study._one_build_execution_identity([historical_environment])
     scheduled = json.loads(json.dumps(value))
     scheduled["schema_version"] = 2
     scheduled["docker"]["ncpu"] = 12
     scheduled["capture_scheduler"] = buflo_study._capture_scheduler_environment_contract()
     validated = validate_study_environment_receipt(
-        scheduled, expected_image_digest="sha256:" + "a" * 64
+        scheduled,
+        expected_image_digest="sha256:" + "a" * 64,
+        allow_historical=True,
     )
     assert validated["capture_scheduler"]["client_affinity_cpus"] == [10]
     kernel_timed = json.loads(json.dumps(scheduled))
@@ -9306,22 +10890,110 @@ def test_study_environment_receipt_binds_minimized_docker_bases_and_locks() -> N
         buflo_study._buflo_etf_capture_scheduler_environment_contract()
     )
     kernel_validated = validate_study_environment_receipt(
-        kernel_timed, expected_image_digest="sha256:" + "a" * 64
+        kernel_timed,
+        expected_image_digest="sha256:" + "a" * 64,
+        allow_historical=True,
     )
     assert kernel_validated["capture_scheduler"]["timed_egress_helper_affinity_cpus"] == [11]
     assert kernel_validated["capture_scheduler"]["timed_egress_helper_policy"] == "SCHED_RR"
     wrong_topology = json.loads(json.dumps(scheduled))
     wrong_topology["docker"]["ncpu"] = 16
     with pytest.raises(ValueError, match="exact 12-CPU topology"):
-        validate_study_environment_receipt(wrong_topology)
+        validate_study_environment_receipt(wrong_topology, allow_historical=True)
     wrong_partition = json.loads(json.dumps(scheduled))
     wrong_partition["capture_scheduler"]["client_affinity_cpus"] = [9]
     with pytest.raises(ValueError, match="scheduler environment"):
-        validate_study_environment_receipt(wrong_partition)
+        validate_study_environment_receipt(wrong_partition, allow_historical=True)
     changed = json.loads(json.dumps(value))
     changed["build_inputs"]["uv_lock_sha256"] = "0" * 64
     with pytest.raises(ValueError, match="base image or lockfile"):
-        validate_study_environment_receipt(changed)
+        validate_study_environment_receipt(changed, allow_historical=True)
+
+
+def test_current_study_environment_binds_completion_and_projects_full_identity(
+    tmp_path: Path,
+) -> None:
+    receipt_path = tmp_path / "build-execution-v47.json"
+    receipt, completion_path, completion = _write_schema5_build_pair(
+        receipt_path, cohort_version=47
+    )
+    value = {
+        "schema_version": 3,
+        "artifact_type": "qcsd-buflo-study-environment",
+        "docker": {
+            "client_version": "29.0.1",
+            "server_version": "29.0.1",
+            "server_os": "linux",
+            "server_arch": "x86_64",
+            "ncpu": 12,
+            "mem_total_bytes": 16_000_000_000,
+            "storage_driver": "overlayfs",
+        },
+        "collection_image": {"id": "sha256:" + "a" * 64, "repo_digests": []},
+        "build_inputs": dict(receipt["build_inputs"]),
+        "build_execution": {
+            "sha256": hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
+            "receipt": receipt,
+            "completion_path": "/lab/artifacts/buflo-study/build-completion-v47.json",
+            "completion_sha256": hashlib.sha256(completion_path.read_bytes()).hexdigest(),
+            "completion_payload_sha256": completion["payload_sha256"],
+            "completion": completion,
+        },
+        "clock_status": {
+            "relationship": "container-shares-host-kernel-realtime-clock",
+            "host": {
+                "source": "test-host-clock",
+                "synchronized": True,
+                "status_evidence": "NTPSynchronized=yes",
+                "unavailable_reason": None,
+                "realtime_unix_ns": 1_000_000_000_000,
+                "monotonic_ns": 10_000,
+            },
+            "container": {
+                "source": "test-container-clock",
+                "synchronized": None,
+                "status_evidence": None,
+                "unavailable_reason": "shares host clock",
+                "realtime_unix_ns": 1_000_000_000_001,
+                "monotonic_ns": 20_000,
+            },
+        },
+        "capture_scheduler": buflo_study._buflo_etf_capture_scheduler_environment_contract(),
+    }
+
+    validated = validate_study_environment_receipt(
+        value, expected_image_digest="sha256:" + "a" * 64
+    )
+    identity = buflo_study._one_build_execution_identity([validated])
+
+    assert identity == {
+        "cohort_version": 47,
+        "sha256": value["build_execution"]["sha256"],
+        "completion_path": "/lab/artifacts/buflo-study/build-completion-v47.json",
+        "completion_sha256": value["build_execution"]["completion_sha256"],
+        "collection_image": "sha256:" + "a" * 64,
+        "started_at": receipt["started_at"],
+        "finished_at": receipt["finished_at"],
+    }
+
+
+def test_current_build_identity_rejects_historical_environment() -> None:
+    build = {
+        "cohort_version": 1,
+        "sha256": "a" * 64,
+        "collection_image": "sha256:" + "b" * 64,
+        "started_at": "2026-09-01T00:00:00+00:00",
+        "finished_at": "2026-09-01T00:00:01+00:00",
+    }
+
+    with pytest.raises(ValueError, match="no typed no-cache build identity"):
+        buflo_study._one_build_execution_identity([{"build_execution": build}])
+
+    # Immutable pre-completion environments remain inspectable only when the
+    # caller explicitly selects the historical verification policy.
+    assert buflo_study._one_build_execution_identity(
+        [{"build_execution": build}], allow_historical=True
+    ) == build
 
 
 def test_public_study_network_receipt_proves_bridge_has_no_netem(

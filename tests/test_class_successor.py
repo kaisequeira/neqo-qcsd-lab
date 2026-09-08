@@ -391,6 +391,10 @@ def test_successor_policy_is_create_only_hash_bound_and_explicit(tmp_path: Path)
     path = successor.create_successor_policy(tmp_path / "policy.json")
     payload = successor.validate_successor_policy(path)
 
+    assert successor.SCHEMA_VERSION == 2
+    assert successor.DECISION_SCHEMA_VERSION == 3
+    assert successor.READINESS_SCHEMA_VERSION == 3
+    assert payload["policy_schema_version"] == successor.SCHEMA_VERSION
     assert payload["predecessor_mutation_permitted"] is False
     assert payload["root_study_id"] == STUDY_ID
     assert payload["successor_identity"]["study_id"].startswith(
@@ -470,7 +474,7 @@ def test_successor_readiness_public_create_and_validate_reconstruct(
         }
 
     payload = {
-        "attestation_schema_version": 1,
+        "attestation_schema_version": successor.READINESS_SCHEMA_VERSION,
         "artifact_type": successor.READINESS_RECEIPT_TYPE,
         "study_id": study_id,
         "evidence": {
@@ -524,6 +528,7 @@ def test_successor_readiness_public_create_and_validate_reconstruct(
     )
     verified = successor.validate_successor_readiness(created)
 
+    assert verified["attestation_schema_version"] == successor.READINESS_SCHEMA_VERSION
     assert verified["study_id"] == study_id
     assert verified["summary"]["authoritative_fitting_samples"] == 2_000
     assert calls == [True, False, True]
@@ -590,7 +595,7 @@ def _pilot_lineage_evidence() -> tuple[dict[str, Any], dict[str, Any]]:
     collection_source = source_result["source_fingerprints"]
     prepare_image = "sha256:" + "1" * 64
     qualification_authority = {
-        "schema_version": 1,
+        "schema_version": 2,
         "artifact_type": "qcsd-class-study-qualification-authority",
         "foundation_attestation": {
             "path": "/evidence/foundation.json",
@@ -601,6 +606,8 @@ def _pilot_lineage_evidence() -> tuple[dict[str, Any], dict[str, Any]]:
         "build_execution_identity": {
             "cohort_version": 23,
             "sha256": "4" * 64,
+            "completion_path": "/lab/artifacts/buflo-study/build-completion-v23.json",
+            "completion_sha256": "5" * 64,
             "collection_image": collection_source["image_digest"],
             "started_at": "2026-08-28T00:00:00+00:00",
             "finished_at": "2026-08-28T01:00:00+00:00",
@@ -967,6 +974,7 @@ def test_decision_binds_exact_failure_and_preserves_v1_inputs(
     successor.create_successor_decision(destination, **inputs)
     payload = successor.validate_successor_decision(destination)
 
+    assert payload["decision_schema_version"] == successor.DECISION_SCHEMA_VERSION
     assert payload["predecessor_study_id"] == STUDY_ID
     assert payload["successor"]["study_id"].startswith(f"{successor.SUCCESSOR_STUDY_PREFIX}-g01-")
     assert payload["successor"]["study_id"] != STUDY_ID
@@ -1841,6 +1849,7 @@ def test_successor_restart_is_distinct_complete_and_not_readiness_authority(
     )
     payload = successor.validate_successor_restart(restart_path)
 
+    assert payload["restart_schema_version"] == successor.SCHEMA_VERSION
     assert payload["study_id"] == study_id
     assert payload["predecessor_study_id"] == STUDY_ID
     assert payload["namespace"]["launch_namespace"] == f".{study_id}-launches"
@@ -1872,6 +1881,15 @@ def test_successor_restart_is_distinct_complete_and_not_readiness_authority(
         qualification_value,
         expected_type=successor.QUALIFICATION_PLAN_RECEIPT_TYPE,
     )
+    cohort_value = json.loads(
+        (plan_root / "successor-cohort.json").read_text(encoding="utf-8")
+    )
+    cohort = validate_hash_bound_receipt(
+        cohort_value,
+        expected_type=successor.SUCCESSOR_COHORT_RECEIPT_TYPE,
+    )
+    assert cohort["successor_cohort_schema_version"] == successor.SCHEMA_VERSION
+    assert qualification["qualification_plan_schema_version"] == successor.SCHEMA_VERSION
     assert qualification["total_executions"] == 600
     assert qualification["per_workload"] == {
         "response_identity_runs": 3,
