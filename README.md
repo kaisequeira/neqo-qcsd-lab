@@ -1,6 +1,6 @@
 # QCSD lab
 
-Documentation audit: 2026-09-07, Australia/Sydney (AEST, UTC+10)
+Documentation audit: 2026-09-08, Australia/Sydney (AEST, UTC+10)
 
 This repository is the experiment orchestrator for the QCSD Neqo fork. It has
 one workflow: freeze a workload, expand a campaign into sequential samples,
@@ -73,14 +73,47 @@ current source. V60 attempted its build from exact clean Lab
 `a20382c658857ca0362fcf877559c8e3320ac376` and the same Rust/gitlink, but
 failed before any Docker layer, image IID, or receipt while resolving the
 pinned Dockerfile frontend. V60 is consumed and non-evidentiary. Committed Lab
-foundation checkpoint `e719219b42826126fdc7771c2dec0463d425a83d` repairs that
-Docker-configuration boundary. Its clean successor
+foundation checkpoint `e719219b42826126fdc7771c2dec0463d425a83d` historically
+repaired that Docker-configuration boundary. Its clean successor
 `69a14ebe48f78d08a8b36d3e573955ec64f00ff9` commits the schema-4 Buildx receipt
-integration against the unchanged Rust/gitlink. Neither commit is an executed
-cohort receipt. The current clean checkout adds only README status updates on
-top of the 69a14eb implementation and is eligible to become v61's exact source
-identity; only v61's create-only build receipt may establish that binding. The
-next eligible fresh source lineage remains v61.
+integration against the unchanged Rust/gitlink. Clean documentation head
+`9d53e08f95c5130c60aadbef8a99273a44d117b5` then exercised that exact
+implementation as v61. Buildx record `ubc8xesmc26eep5nywsgg9hiq` failed after
+approximately one second during its two-step, zero-cache pinned-Dockerfile-
+frontend resolution with
+`open /proc/1182923/fd/9/.token_seed.lock: no such file or directory`, before
+any Docker layer. No v61 image, IID, schema-4 build receipt, reference receipt,
+or later gate exists; static v59 image tags remain exact. V61 is consumed and
+non-evidentiary. On 7 September its exact failed build and transaction records
+were moved intact to the recoverable audit directory
+`/var/tmp/qcsd-v61-retired-audit-1000.v970xxes`; the active lifecycle namespace
+is now empty. The archived `RECOVERY` record still truthfully describes the
+failed process state as unresolved, so this operational retirement is not
+scientific evidence and advances no gate.
+
+The clean post-v61 Lab implementation checkpoint is
+`c55b08aa06fbb4ac16e3655d6d3911109d853730`, with unchanged clean Rust/gitlink
+`ce0d7a21756ce795d6f50d750a1c25e0fa006327`. It combines the linked-config
+repair with build-execution schema 5, the separate build-completion schema-1
+success boundary, dense cohort-allocation authority, host-side build-carrier
+admission, completion-bound downstream schemas, the pinned-CDP browser-session
+repair, post-`setsid()` exact-command binding, lifecycle signal/admission
+linearisation, and exact post-transfer API-service exit classification. The
+config remains mode
+`0500`, link-count two, and stable beside the lifecycle lock only for its
+individual active build lease; it is not a persistent linked host config
+between leases. Its name binds the invoking UID, guardian start time and nonce,
+and cleanup conservatively censuses separately retained crash residues. The
+exact committed source passed
+`4424 passed, 16 skipped, 26 warnings in 4975.41s (1:22:55)`. These are
+engineering checks, not campaign
+evidence. No v62 build/completion pair or downstream current receipt exists,
+and every scientific numerator remains zero. The checked-in consumed ledger
+contains the dense prefix v1–v61 and has SHA-256
+`32c44e09f536d4cf4e3d8586fc1a5ed2d5cc7cb8fe11e92c60378042488690ad`;
+v62 is the exact next allocator-authorised version but is absent, unclaimed,
+and unlaunched.
+
 Summary schema 4 binds the typed schedule-stop policy, stop timestamp,
 sub-cell capacity, direction counts at stop, and exact post-stop advertised
 credit drain; historical summary schemas 2 and 3 remain readable but cannot
@@ -683,12 +716,21 @@ opt-in tests skipped, and 23 dependency/platform warnings were reported in
 receipts bind its parent Lab `c7e8355a…`, not this implementation checkpoint.
 Later Lab `a20382c…` added the browser-egress and extended-foundation source;
 v60's failed build exposed its Docker-configuration lifetime defect. Committed
-Lab `e719219b42826126fdc7771c2dec0463d425a83d` repairs that foundation boundary
-against the same Rust/gitlink. Clean successor Lab
+Lab `e719219b42826126fdc7771c2dec0463d425a83d` historically repaired that
+foundation boundary against the same Rust/gitlink. Clean successor Lab
 `69a14ebe48f78d08a8b36d3e573955ec64f00ff9` commits the schema-4 receipt
-integration, but has not been executed as a cohort. No current-source build,
-pinned-CDP, timing, regression, code-gate, controlled, or foundation receipt
-exists.
+integration. V61 exercised that implementation through clean documentation
+head `9d53e08f…`, but failed during pinned-frontend resolution before a layer,
+image, IID, or receipt and is consumed. Clean Lab
+`c55b08aa06fbb4ac16e3655d6d3911109d853730`
+commits the post-v61 linked-config fix, schema-5 build/schema-1 completion,
+dense allocation, host admission, downstream-authority rollout, pinned-CDP
+session repair, post-`setsid()` exact-command binding, and lifecycle
+signal-linearisation repair against the unchanged Rust/gitlink. The ledger
+consumes v1–v61; v62 is its exact next
+successor but is absent, unclaimed, and unlaunched. No current-source
+build/completion pair, pinned-CDP, timing, regression, code-gate, controlled,
+or foundation receipt exists, and every scientific counter remains zero.
 
 The retained post-v55 Lab engineering lineage also hardens durable Docker HANDOFF
 retirement. It permits at most one additional read-only absence observation,
@@ -826,10 +868,11 @@ all corresponding Docker objects absent. It issued no Docker-object removal
 and left unrelated Docker inventory unchanged. This is operational recovery,
 not scientific evidence.
 
-For current source, fresh v61 build, pinned-CDP, browser-egress, reference,
-regression-bound code-gate, and foundation receipts are absent; timing stress
-is 0/12, regression is 0/18, and controlled qualification is 0/160. Real
-acquisition observations remain zero.
+For current authority, a build-execution/completion pair and its pinned-CDP,
+browser-egress, reference, regression-bound code-gate, and foundation receipts
+are absent;
+timing stress is 0/12, regression is 0/18, and controlled qualification is
+0/160. Real acquisition observations remain zero.
 Pilot fitting, qualification, and compatibility are 0/480, 0/720, and 0/1,080;
 authoritative fitting and final qualification are 0/2,000 and 0/600;
 certification and canaries are 0/900 and 0/1,000; formal capture is 0/16,000.
@@ -852,15 +895,29 @@ exact clean Lab `a20382c…` / Rust `ce0d7a21…`, but failed during pinned-fron
 resolution before any Docker layer, image IID, or build receipt. Its static v59
 tags stayed exact, its hash-audited runtime ledgers were retired, and
 `lifecycle-recover` is clean. V60 is consumed and advances no numerator.
-Committed Lab `e719219…` repairs the failed configuration-isolation boundary;
-clean successor Lab `69a14ebe…` commits the schema-4 Buildx receipt integration.
-That source remains unexecuted. The next fresh cohort is v61. It must pass the
-pull/no-cache build, pinned-CDP gate, 110/110 browser-egress gate, isolated
-reference, 12/12 timing stress, 18/18 regression, regression-bound code gate,
-and 160/160 controlled qualification
-before expanded-class acquisition can begin. V55–v60 cannot be retried. The
-complete current status and earlier cohort chronology are retained in the
-authoritative workspace
+Committed Lab `e719219…` historically repaired the v60 configuration-isolation
+boundary; clean successor Lab `69a14ebe…` commits the schema-4 Buildx receipt
+integration.
+V61 exercised that implementation through clean documentation head
+`9d53e08f…`. Buildx record `ubc8xesmc26eep5nywsgg9hiq` failed after
+approximately one second with
+`open /proc/1182923/fd/9/.token_seed.lock: no such file or directory`, before
+any layer, image, IID, or receipt. V61 is consumed and non-evidentiary; its
+failed records are retained in the recoverable v61 audit directory while the
+active lifecycle namespace is empty. Their unresolved process-state label is
+not scientific evidence. Clean Lab
+`c55b08aa06fbb4ac16e3655d6d3911109d853730` commits the
+linked-config and completion-authority rollout plus the pinned-CDP session and
+lifecycle signal-linearisation repairs and post-`setsid()` exact-command
+binding. The consumed ledger is dense through v61; v62 is the exact next
+allocator-authorised cohort but remains
+absent, unclaimed, and unlaunched. It must pass the pull/no-cache
+schema-5 build and schema-1 completion publication,
+pinned-CDP gate, 110/110 browser-egress gate, isolated reference, 12/12 timing
+stress, 18/18 regression, regression-bound code gate, and 160/160 controlled
+qualification before expanded-class acquisition can begin. V55–v61 cannot be
+retried. The complete current status and earlier cohort chronology are
+retained in the authoritative workspace
 [`PROJECT.md`](../PROJECT.md).
 
 The current Lab boundary additionally classifies typed client defence/QCSD
@@ -968,7 +1025,26 @@ requests remain one-shot. The native service boundary proves the failed first
 service and its cgroup terminal before the second observation may begin.
 Run/build children remain stopped behind durable birth and supervision
 handshakes; source, latched signal, PID, start time, session, and process group
-are revalidated immediately before release. At the next launch every lifecycle
+are revalidated immediately before release. The lifecycle guardian separately
+waits after `setsid()` until the exact pinned
+`/bin/bash --noprofile --norc -p ...` command is visible before periodic
+runtime verification begins. A transient empty `/proc/<pid>/cmdline` during
+`execve()` is pre-admission construction; after exact binding, command loss or
+drift remains fatal. The delayed-`execve()` regression exercises this boundary.
+Initial and final admission are linearised inside blocked-signal critical
+sections. If a terminal signal is
+already pending for the verified ready child, the guardian forwards it once
+to that exact process group, publishes neither `GO` nor `ABORT`, retains the
+decision channel and lifecycle authority, and serves no new lifecycle lease
+while that admission channel remains unresolved. After resolved admission, a
+later signal may still use authenticated bounded cleanup leases so ordinary
+Docker teardown can finish; an unresponsive child is escalated to exact-group
+`SIGKILL` at the deadline. Non-signal admission failures still publish
+`ABORT`. An authenticated API-service lease transfer is definitive before the
+watcher classifies a launcher exit: if a short cleanup service transfers and
+finishes in the same scheduler turn, it follows the post-transfer terminal
+proof and returns its real status instead of a false pre-transfer `125`. At the
+next launch every lifecycle
 root is validated before any Docker mutation, with run/build launcher recovery
 preceding connected-network recovery and unresolved build taint preserved. An
 authorised create whose object ID remains unavailable does not expire after a
@@ -985,20 +1061,28 @@ request-authority digest, action digest, and source-binding digest; all five
 are rechecked after the exclusive lifecycle lock and immediately before
 stale Docker-state mutation. The separate acquisition-watcher authority may
 contain only its own stale watcher scopes before this Docker admission point;
-it cannot inspect or mutate Docker state.
+it cannot inspect or mutate Docker state. The source-binding digest uses an
+explicit preimage-contract schema 2 and includes the canonical build-completion
+path and SHA-256 in addition to the build execution, foundation,
+browser-egress, pinned-CDP, catalogue, provenance, source and preparation-image
+identities. The reference-execution receipt is bound transitively through
+`foundation_sha256`; it is not a separate field in the watcher's source-binding
+preimage.
 
 The host launcher is supported only when all four kernel-reported UID fields
 are the same nonzero value, all four GID fields are the same nonzero value, and
 `CAP_DAC_OVERRIDE` is absent from its inheritable, permitted, effective, and
 ambient capability sets. The launcher and guardian both enforce this before
-Docker admission. The guardian exposes an empty anonymous mode-`0500`
-`DOCKER_CONFIG`; its separate crash-recoverable `BUILDX_CONFIG` remains linked
-and mode `0700`. This boundary is designed to make optional token-seed writes
-from trusted BuildKit/buildx public, pinned, credentialless pulls fail into the
-upstream in-memory fallback. It is not an immutability claim against a hostile
-same-UID process.
+Docker admission. In historical Lab `e719219…` / `69a14ebe…`, the guardian
+exposed an empty anonymous mode-`0500` `DOCKER_CONFIG`; its separate
+crash-recoverable `BUILDX_CONFIG` remained linked and mode `0700`. That boundary
+was designed to make optional token-seed writes from trusted BuildKit/buildx
+public, pinned, credentialless pulls fail into the upstream in-memory fallback.
+It was not an immutability claim against a hostile same-UID process. V61 showed
+that the anonymous pathname did not remain usable for deferred pinned-frontend
+resolution.
 
-That configuration-isolation repair is committed at Lab
+That historical configuration-isolation repair is committed at Lab
 `e719219b42826126fdc7771c2dec0463d425a83d`, with unchanged clean Rust/gitlink
 `ce0d7a21756ce795d6f50d750a1c25e0fa006327`. Its exact affected suite passed
 476 tests with eight explicit skips. The separate opt-in live metadata probe
@@ -1008,15 +1092,31 @@ passed 1/1 and observed Docker's `buildx` client plugin at
 and resolved-target SHA-256
 `ceabe0401307ae5db2fe2ec9eff90959db0638a0dbcce52320bde2be20104347`.
 These are engineering and host-diagnostic results only; they are not a build
-receipt or candidate evidence.
+receipt or candidate evidence and do not qualify the current post-v61 source.
+
+Clean Lab `c55b08aa06fbb4ac16e3655d6d3911109d853730` combines the linked-config repair with
+build-completion, downstream-authority, pinned-CDP browser-session, and
+lifecycle signal-linearisation, post-`setsid()` exact-command binding, and
+API-service transfer/exit-ordering changes.
+During an individual active
+build lease it keeps the empty mode-`0500`, link-count-two Docker config at a
+stable non-symlink pathname beside the lifecycle lock; no live linked config is
+retained between build leases. Its basename binds the UID, guardian process
+start time and nonce. It also adds exact-path removal only after users drain
+and a conservative process-reference census for separately retained published
+crash residue. The checked-in consumed ledger contains the dense prefix v1–v61,
+so v62 is the exact next allocator-authorised value. V62 is absent and
+unclaimed: no current
+build/completion pair, downstream receipt, or scientific authority exists.
 
 The build-execution schema-4 integration is committed at clean Lab
-`69a14ebe48f78d08a8b36d3e573955ec64f00ff9`; it has not emitted an evidentiary
-receipt. A fresh build from an eligible clean checkout emits schema 4 with
-schema 3's four nested schema-1 storage observations,
+`69a14ebe48f78d08a8b36d3e573955ec64f00ff9`. V61 exercised it but failed before
+it could emit an evidentiary receipt. A fresh build from committed Lab
+`c55b08aa06fbb4ac16e3655d6d3911109d853730` emits schema 5 with schema 4's four nested schema-1
+storage observations,
 exact IID-bearing command vectors, three distinct role IDs, fixed role tags,
-and independently re-verifiable per-role provenance. It additionally binds a
-nested schema-1 `buildx` provenance envelope. Its four exact observation
+independently re-verifiable per-role provenance, and the nested schema-1
+`buildx` provenance envelope. Its four exact observation
 boundaries are `before-collection`, `after-collection`, `after-prepare`, and
 `after-reference`, distinct from the storage-probe boundaries documented
 above. Each observation repeats one canonical identity SHA-256 derived from
@@ -1025,31 +1125,72 @@ root-owned executable identities, the resolved executable SHA-256, and the
 exact one-line `docker buildx version`, semantic version, and commit. The four
 timestamps must be strictly increasing within the enclosing build interval;
 any identity drift stops the sequence before the next image build and prevents
-a receipt.
+a receipt. Schema 5 further binds the allocator's schema-1 cohort record, a
+create-only claim and dense claim chain, and authority reproofs at the declared
+boundaries. Receipt absence never makes a version in the consumed ledger
+reusable.
 
-The same implementation bytes subsequently passed the exact
+Pre-v61, the then-clean schema-4 implementation passed the exact
 `uv run pytest -q tests/test_browser_egress_qualification.py` run at 201/201 in
 2,619.33 seconds and an isolated
 `uv run pytest -q tests/test_buflo_study.py` run at 275/275 in 219.00 seconds.
 These are engineering-only, non-evidentiary test results: they create no build,
-browser-egress, candidate, or scientific receipt and advance no cohort
-numerator.
+browser-egress, candidate, or scientific receipt, do not test the current
+post-v61 implementation or its schema-5/schema-1 build-success path, and
+advance no cohort numerator.
 
-The complete schema-4 envelope is revalidated against the clean source, Docker
+The complete schema-5 envelope is revalidated against the clean source, Docker
 identity, no-cache commands, Dockerfile, lockfiles, checkout root, probe hash,
-and Buildx identity before its create-only write. Schemas 3 and 4 record every
-build as an explicit `docker --host <pinned-local-endpoint>` command; schema 2
-used the pinned Docker context. General build and campaign readers accept
-build-execution schemas 1–4, with schemas 1–3 retained only for immutable
-historical cohorts; current class-acquisition admission requires build-execution
-receipt schema 4.
-Receipt loading rejects a final symlink, a file larger than 16 MiB, non-UTF-8
-or duplicate-key JSON, and hashes the same stable bytes that it validates.
-Missing, ambiguous, malformed, unhealthy,
-low-capacity, changing, remote, aliased, concurrent, shadowed, or semantically
-invalid evidence prevents a receipt. V34's schema-2 and all historical
-schema-3 receipts remain immutable and readable only for their exact source
-cohorts.
+Buildx identity and cohort claim before its create-only write. That execution
+receipt alone is deliberately not success. The launcher must publish its
+canonical create-only `build-completion-vN.json` sibling at schema 1 only after
+exact receipt bytes/stat, source and gitlink, allocation/claim/chain, the
+retired per-lease build transaction, lifecycle/cohort/operation locks, and a
+final clean-source and claim reproof agree. Current admission requires both
+files. Build-execution schemas 1–4 remain available only through explicit
+historical opt-in.
+
+The cohort allocator, launcher's checked-ledger reader, generic build receipt
+reader, and acquisition watcher distinguish stable directory security identity
+(type, device/inode, owner/group, and permission mode) from volatile child
+metadata only for ancestor and preclaim walks. Benign unrelated directory-child
+churn is tolerated at those walks; it cannot relax the final durable registry,
+cohort-claim, or private build-transaction identities, which remain strict.
+Mode drift and same-mode pathname replacement also fail, as do changes to exact
+regular-file, lock, claim, temporary-file, transaction-root, and registry
+identities. The allocator, build reader, and acquisition watcher each completed
+a 20,000-iteration ancestor/preclaim churn stress with zero failures after this
+repair; deterministic launcher tests cover the same scoped churn and strict
+replacement boundaries.
+
+The publisher requires the full receipt stat identity. Later admission through
+a Docker bind mount may vary only device, inode, UID, GID, mtime and ctime; it
+still requires the canonical relative path, exact bytes, payload and file
+hashes, schema/cohort, mode `0600`, link count one and exact size. The completion
+projects publication-time stat rather than mount-local metadata. Receipt
+loading rejects symlinks, non-regular or multiply linked files, overlong input,
+unstable reads, duplicate-key or non-finite JSON, and hashes the same stable
+bytes it validates. These controls assume the same-UID owner of the evidence
+tree is trusted: workflow “immutability” is not protection against a malicious
+later process running as that owner, so adversarial archival integrity requires
+an independently protected copy or seal.
+
+The completion identity is carried by current reference-execution schema 2,
+code-gate schema 2, study-environment schema 3, pinned-CDP receipt schema 9,
+browser-egress foundation schema 3, class-foundation schema 4,
+qualification-authority schema 2, controlled-qualification receipt schema 2,
+class-readiness schema 3, historical-corpus snapshot schema 2, formal-cohort
+manifest schema 3, capture-admission schema 4, and successor
+decision/readiness schema 3. The nested pinned-CDP probe contract remains schema
+8; successor policy/restart/cohort/plan remain schema 2. Acquisition provenance
+remains schema 5 with checkpoint 2, active-batch 1, terminal 3 and completion 2.
+Readers used by current admission, mutation, or publication paths reject the
+immediately preceding schema. Where explicitly supported, separate historical
+inspection callers opt in without gaining current mutation or publication
+authority. Schemas 3–5 record builds through
+`docker --host <pinned-local-endpoint>`; schema 2 used the pinned context. No
+schema-5 execution/completion pair or downstream current receipt has been
+emitted.
 
 Earlier on 1 September 2026, a read-only probe found only about 2.19 GB
 available on the backing C: volume and Docker again exposed data-device I/O
@@ -1212,7 +1353,8 @@ stream.
 
 The create-only `./qcsd-lab test pinned-cdp` command exercises the real pinned
 Playwright 1.57.0/Chromium 143.0.7499.4 topology in the exact preparation image
-named by a versioned no-cache build receipt. Probe schema 8 binds the exact
+named by a versioned no-cache build receipt and its completion. Current receipt
+schema 9 embeds the unchanged probe-contract schema 8 and binds the exact
 driver receipt and browser identity, public-CDP v10 policy, successful HTTP
 response inventory, shared-worker prearm terminal summary, and sanitised
 target-lifecycle generation/count evidence. It runs as the host UID:GID with all
@@ -1222,14 +1364,23 @@ duplicate-URL, redirect, and complete shutdown behaviour. Success publishes a
 canonical hash-bound receipt containing only minimised topology counts and
 booleans. The receipt binds its cohort, build receipt and payload hashes,
 collection source, exact preparation image/source, observed isolation, and
-probe contract. It also proves real/effective/saved/filesystem UID/GID identity,
+probe contract. The current driver creates both a page-owned CDP session for
+page/iframe interception and a distinct browser-owned session for
+`BrowserSharedWorkerGuard`; guard/router startup precedes browser activity,
+and both sessions are closed during cleanup. Mock regressions bind that
+ownership and routing, but only this live pinned probe can produce the receipt.
+It also proves real/effective/saved/filesystem UID/GID identity,
 zero permitted/effective/inheritable/ambient capabilities, no-new-privileges,
 and a loopback-only interface inventory. Mocked tests and the deliberately
 non-evidentiary development-image diagnostics cannot substitute for that
 receipt. The receipt producer and current browser contract postdate v59, so no
 older cohort can acquire this evidence retroactively; v60 failed before it
-produced a preparation image or build receipt. The next attempt therefore
-requires fresh unused cohort v61 and a fresh no-cache build. Pass the canonical
+produced a preparation image or build receipt, and v61 repeated the
+pinned-frontend path-lifetime failure before any layer, image, IID, or receipt.
+The next attempt therefore uses clean Lab
+`c55b08aa06fbb4ac16e3655d6d3911109d853730` under
+allocator-authorised cohort v62, which is currently absent and unclaimed, plus
+a fresh no-cache build/completion pair. Pass the canonical
 receipt to the foundation command as `--pinned-cdp-receipt "$PINNED_CDP"`. It is the sixth
 explicit foundation hard gate: the foundation binds the receipt and payload
 hashes, its exact build binding, and the fixed probe-contract hash, and requires
@@ -1436,6 +1587,28 @@ hash-bound frozen `inputs/` tree and do not reinterpret it as a live workspace
 root. Exact directories and prospective command fragments are listed in the
 [canonical-layout section](../CLASS-STUDY.md#26-canonical-fresh-workspace-layout).
 
+Every container-launching `class-study` coordinator action invokes the exact
+checkout's `qcsd_lab.class_build_admission` module under `/usr/bin/python3 -I`
+before `require_docker` or stale Docker-state recovery. For actions carrying
+current build authority, the general host gate follows every direct and
+transitive authority consumed by the requested action and requires them all to
+resolve to one canonical build-execution schema-5/build-completion schema-1
+pair, one clean source identity, and the same collection, preparation, and
+reference image IDs. Conflicting, rebound, historical, cross-build, or
+malformed authority carriers fail before Docker access. The host
+`acquisition-watch` entry is separate: its private acquisition admission is
+source- and build-completion-bound before it delegates a bounded coordinator
+action; it is not itself described as a general build-authority carrier.
+Frozen resume authority is reconstructed from the role-specific result inputs;
+successor actions are restricted to their immutable restart plan. These gates
+close build and image selection only: the in-image coordinator still performs
+the complete scientific validation.
+
+Base, non-successor cohort and campaign actions additionally require the
+current acquisition-completion carrier. `fit-numeric` and `prefix-specs`
+require the exact frozen `--capture-result`. These requirements are resolved on
+the host before Docker access or stale-state mutation.
+
 After `acquisition-init` has created the canonical provenance and
 `checkpoint.json`, supervise the long 30-second/24-hour/72-hour acquisition
 from the host with:
@@ -1553,19 +1726,25 @@ The versioned coordinator exposes nine fail-closed actions: `reference`,
 retained focused-study workflow. It assumes the fixed create-only destinations do not yet
 exist and that `REFERENCE_ROOT` names the absolute directory containing the
 pinned external paper, author-source, and archive inputs. Set `COHORT_VERSION`
-in the calling environment to an unused positive integer; the sequence rejects
-a missing, non-canonical, or already-used value before it creates anything.
+in the calling environment to the allocator-authorised positive integer. The
+shell prologue rejects malformed or already-published destinations;
+`./qcsd-lab build` additionally requires the checked-in consumed ledger to be a
+dense prefix and the requested version to be its exact successor before it
+publishes the claim. Receipt absence does not make a pre-receipt failure
+reusable: the ledger consumes v61. V62 is the exact next permitted value, but
+it remains absent and unclaimed.
 
 ```bash
 set -euo pipefail
 REFERENCE_ROOT=/absolute/pinned-reference-inputs
-: "${COHORT_VERSION:?export COHORT_VERSION as an unused positive integer}"
+: "${COHORT_VERSION:?export COHORT_VERSION as the allocator-authorised positive integer}"
 [[ "$COHORT_VERSION" =~ ^[1-9][0-9]*$ ]] || {
   echo "COHORT_VERSION must be a canonical positive integer" >&2
   exit 2
 }
-[[ ! -e "artifacts/buflo-study/build-execution-v${COHORT_VERSION}.json" ]] || {
-  echo "COHORT_VERSION already has a create-only build receipt" >&2
+[[ ! -e "artifacts/buflo-study/build-execution-v${COHORT_VERSION}.json" &&
+   ! -e "artifacts/buflo-study/build-completion-v${COHORT_VERSION}.json" ]] || {
+  echo "COHORT_VERSION already has a create-only build evidence destination" >&2
   exit 2
 }
 REFERENCE="artifacts/buflo-study/reference-execution-v${COHORT_VERSION}.json"
@@ -1577,8 +1756,9 @@ CODE_GATE="artifacts/buflo-study/code-gate-v${COHORT_VERSION}.json"
 # On WSL, first require 64 GiB on the actual Docker data-VHDX backing volume.
 # Serially builds the three fixed roles with --pull --no-cache and --iidfile,
 # repeats the backing-volume, daemon, and Docker-selected Buildx identity
-# checks at their exact boundaries, and creates the immutable schema-4 build
-# receipt only if all observations remain stable.
+# checks at their exact boundaries, creates the schema-5 build receipt, and
+# publishes its schema-1 completion sibling only if all authorities remain
+# stable through final clean-source and claim reproof.
 ./qcsd-lab build --cohort-version "$COHORT_VERSION"
 ./qcsd-lab buflo-study reference \
   --reference-root "$REFERENCE_ROOT" --destination "$REFERENCE" \
@@ -1721,18 +1901,20 @@ done
   --attestation "$ATTESTATION"
 ```
 
-Omitting `--cohort-version` preserves the cohort-version-1 command contract;
-new successful builds from the committed implementation emit build-execution
-schema 4. A code,
+The build command requires one explicit `--cohort-version`; subsequent
+`buflo-study` actions retain their historical default only for compatibility.
+New successful builds from the committed implementation emit
+build-execution schema 5 plus build-completion schema 1. A code,
 parameter, workload, chaff, or acceptance-rule change after rehearsal instead
 starts a new positive version: first run
 `./qcsd-lab build --cohort-version N`, then pass the same option to every
 `buflo-study` action. Each build creates, and never replaces,
-`artifacts/buflo-study/build-execution-vN.json`. Qualification sets, rendered
+`artifacts/buflo-study/build-execution-vN.json` and its canonical
+`build-completion-vN.json` sibling. Qualification sets, rendered
 campaign inputs, reference execution, freeze/admission receipts, captures, and
-final verification are all checked against that exact receipt and its
-collection, prepare, and reference image IDs. A direct public `run` derives N
-from its capture admission; `resume` derives it only from the frozen
+final verification are all checked against that exact receipt/completion pair
+and its collection, prepare, and reference image IDs. A direct public `run`
+derives N from its capture admission; `resume` derives it only from the frozen
 `inputs/capture-admission.json`, so neither command can be redirected to a
 different cohort. Keep all earlier versioned evidence.
 
@@ -1776,20 +1958,22 @@ current-source focused handoff exists.
 ### `build`
 
 ```shell
-: "${COHORT_VERSION:?export an unused positive cohort version}"
+: "${COHORT_VERSION:?export the allocator-authorised positive cohort version}"
 ./qcsd-lab build --cohort-version "$COHORT_VERSION"
 ```
 
 Builds the collection, workload-preparation, and isolated reference images
-from the current Lab checkout and Neqo submodule. The version must be a
-previously unused positive integer and its create-only build receipt must not
-exist. The launcher requires exact clean raw-byte Lab and Neqo checkouts before
-the first Docker build; there is no development-mode or dirty-source override.
-The clean source identities, lockfiles, image IDs, image digests, and four-point
-Docker-selected Buildx binary identity are bound into the versioned schema-4
-build receipt. Current class-acquisition admission rejects historical build
-receipt schemas even though the generic readers retain them for immutable
-historical cohorts.
+from the current Lab checkout and Neqo submodule. The requested positive
+version must be the exact successor of the checked-in dense consumed-cohort
+ledger, and both create-only build destinations must be absent. The launcher
+requires exact clean raw-byte Lab and Neqo checkouts before the first Docker
+build; there is no development-mode or dirty-source override. The clean source
+identities, lockfiles, image IDs/digests, four-point Docker-selected Buildx
+identity, and cohort claim authority are bound into the schema-5 build receipt.
+The build becomes successful only when its schema-1 completion sibling is
+published after the final authority reproof. Current admission rejects a
+missing completion or historical build schema; generic historical reading
+requires explicit opt-in.
 
 ### `prepare`
 
@@ -2565,7 +2749,7 @@ the public Internet or start a research campaign.
 ### `test pinned-cdp`
 
 ```shell
-: "${COHORT_VERSION:?export an unused positive cohort version}"
+: "${COHORT_VERSION:?export the cohort version bound by a completed build}"
 BUILD="artifacts/buflo-study/build-execution-v${COHORT_VERSION}.json"
 PINNED_CDP="artifacts/buflo-study/pinned-cdp-execution-v${COHORT_VERSION}.json"
 ./qcsd-lab test pinned-cdp \
@@ -2575,7 +2759,7 @@ PINNED_CDP="artifacts/buflo-study/pinned-cdp-execution-v${COHORT_VERSION}.json"
 ```
 
 Runs only the real-browser recursive-target probe in the preparation image
-bound by the exact cohort build receipt. That image checksum-downloads only
+bound by the exact cohort build/completion pair. That image checksum-downloads only
 the pinned arm64 Chromium revision-1200 archive, safely extracts its fixed
 466-file distribution, and revalidates the archive, executable, browser
 manifest, complete Chromium distribution, complete Playwright package before
@@ -2601,7 +2785,7 @@ scientific sample.
 ### `test browser-egress`
 
 ```shell
-: "${COHORT_VERSION:?export an unused positive cohort version}"
+: "${COHORT_VERSION:?export the cohort version bound by a completed build}"
 BUILD="artifacts/buflo-study/build-execution-v${COHORT_VERSION}.json"
 BROWSER_EGRESS="artifacts/buflo-study/browser-egress-qualification-v${COHORT_VERSION}"
 
