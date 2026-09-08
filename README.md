@@ -135,8 +135,29 @@ A later exact backing-volume probe at `2026-09-08T11:43:52Z` passed with one
 `Healthy`/`OK` NTFS volume and 323,819,671,552 available bytes. Docker was
 healthy with zero running and 11 stopped containers. That operational recovery
 cannot retroactively complete v62 or make its provisional image evidentiary.
-V63 is the exact next allocator-authorised cohort and is absent and unclaimed.
-Every scientific numerator remains zero.
+V63 subsequently claimed exact clean Lab
+`d2ff0f6bc439675ab016c94770015456890020ae` and unchanged Rust/gitlink
+`ce0d7a21756ce795d6f50d750a1c25e0fa006327`. Its byte-identical durable claim
+records have SHA-256
+`b4132a9cd750d3436794b1a345394aab3ffd4c39b3a882061115340bac760d34`.
+The pull/no-cache collection build completed all 61 stages as Buildx record
+`1pmsiyt5ei9ecu40m3m7vd2n5` and exported provisional image
+`sha256:67f901a46fea3528a5aef5b6581e4161fd8d42fa697b26ee44a5df493d024c83`.
+Buildx completed at `2026-09-08T22:08:33.147923+10:00`; the mandatory
+`before-prepare` PowerShell probe then failed by approximately 22:08:39 with
+WSL `UtilAcceptVsock:271: accept4 failed 110`, against a contemporaneous
+order-7 `vmbus_alloc_ring`/`hvs_probe` allocation failure first explicitly
+logged at approximately 22:08:21.9. No preparation or reference
+image, build-execution/completion receipt, or later gate exists. The abandoned
+transaction is archived intact at
+`/var/tmp/qcsd-v63-retired-audit-1000.walSThtT`; its `SUPERVISION` record has
+SHA-256
+`86bab71f40ec6739b4d84392f2bd0091579113f13016ad6a665fb0efea24c54a`.
+`lifecycle-recover` passes and the active lifecycle namespace is empty. V63 is
+consumed and non-evidentiary. V64 is the exact next allocator-authorised
+cohort, but it must not be claimed until Docker Desktop and WSL have been
+cleanly restarted and repeated exact interop/backing-volume checks pass. Every
+scientific numerator remains zero.
 
 Summary schema 4 binds the typed schedule-stop policy, stop timestamp,
 sub-cell capacity, direction counts at stop, and exact post-stop advertised
@@ -754,10 +775,13 @@ signal-linearisation repair against the unchanged Rust/gitlink. The ledger
 remains checked in through v61. V62 consumed its durable claim and completed
 only the unreceipted collection role before the mandatory `before-prepare`
 backing-volume probe failed closed; its intact failed transaction is archived
-and the active lifecycle namespace is empty. V63 is the exact next successor
-and is absent and unclaimed. No current-source
-build/completion pair, pinned-CDP, timing, regression, code-gate, controlled,
-or foundation receipt exists, and every scientific counter remains zero.
+and the active lifecycle namespace is empty. V63 repeated that host-boundary
+failure after its own collection role completed, and is likewise durably
+consumed without a build/completion receipt. V64 is the exact next successor,
+but requires a clean Docker Desktop/WSL restart before allocation. No
+current-source build/completion pair, pinned-CDP, timing, regression, code-gate,
+controlled, or foundation receipt exists, and every scientific counter remains
+zero.
 
 The retained post-v55 Lab engineering lineage also hardens durable Docker HANDOFF
 retirement. It permits at most one additional read-only absence observation,
@@ -940,12 +964,14 @@ binding. The checked-in genesis consumed ledger remains dense through v61.
 V62 is separately consumed by its durable claim: its collection role built,
 but the mandatory `before-prepare` WSL backing-volume probe failed before any
 preparation/reference image or build/completion receipt. Its archived
-transaction does not advance a gate. V63 is the exact next allocator-authorised
-cohort and remains absent and unclaimed. It must pass the pull/no-cache
+transaction does not advance a gate. V63 repeated that collection-only,
+pre-prepare failure and is also durably consumed without a receipt. V64 is the
+exact next allocator-authorised cohort; after the required clean Docker
+Desktop/WSL restart, it must pass the pull/no-cache
 schema-5 build and schema-1 completion publication,
 pinned-CDP gate, 110/110 browser-egress gate, isolated reference, 12/12 timing
 stress, 18/18 regression, regression-bound code gate, and 160/160 controlled
-qualification before expanded-class acquisition can begin. V55–v62 cannot be
+qualification before expanded-class acquisition can begin. V55–v63 cannot be
 retried. The complete current status and earlier cohort chronology are
 retained in the authoritative workspace
 [`PROJECT.md`](../PROJECT.md).
@@ -1140,9 +1166,10 @@ version even though its build stopped after exporting only an unreceipted
 provisional collection image. Its mandatory `before-prepare` storage probe
 failed before a preparation/reference image or build/completion receipt, and
 the failed transaction is archived outside the now-empty active lifecycle
-namespace. V63 is therefore the exact next allocator-authorised value and is
-absent and unclaimed; no current build/completion pair, downstream receipt, or
-scientific authority exists.
+namespace. V63 then repeated the same collection-only, pre-prepare failure and
+is permanently consumed by its durable claim pair. V64 is therefore the exact
+next allocator-authorised value and remains absent and unclaimed; no current
+build/completion pair, downstream receipt, or scientific authority exists.
 
 The build-execution schema-4 integration is committed at clean Lab
 `69a14ebe48f78d08a8b36d3e573955ec64f00ff9`. V61 exercised it but failed before
@@ -1412,10 +1439,11 @@ receipt. The receipt producer and current browser contract postdate v59, so no
 older cohort can acquire this evidence retroactively; v60 failed before it
 produced a preparation image or build receipt, v61 repeated the
 pinned-frontend path-lifetime failure before any layer, image, IID, or receipt,
-and v62 stopped after its collection role when the mandatory `before-prepare`
-storage probe failed. The next attempt therefore requires the then-current
-exact clean Lab head under allocator-authorised cohort v63, which is absent and
-unclaimed, plus a fresh no-cache build/completion pair. Pass the canonical
+and v62 and v63 each stopped after their collection role when the mandatory
+`before-prepare` storage probe failed through WSL interop. The next attempt
+therefore requires a clean Docker Desktop/WSL restart followed by the
+then-current exact clean Lab head under allocator-authorised cohort v64, plus a
+fresh no-cache build/completion pair. Pass the canonical
 receipt to the foundation command as `--pinned-cdp-receipt "$PINNED_CDP"`. It is the sixth
 explicit foundation hard gate: the foundation binds the receipt and payload
 hashes, its exact build binding, and the fixed probe-contract hash, and requires
@@ -1768,7 +1796,10 @@ dense prefix and the requested version to be its exact successor before it
 publishes the claim. Receipt absence does not make a pre-receipt failure
 reusable. The checked-in genesis ledger remains dense through v61, while the
 durable v62 claim/consumed-claim pair consumes v62 after its partial failed
-build. V63 is the exact next permitted value and remains absent and unclaimed.
+build. V63's second durable claim/consumed-claim pair likewise consumes v63
+after its collection-only failure. V64 is the exact next permitted value and
+must remain unclaimed until the required Docker Desktop/WSL restart and
+repeated exact host-health checks pass.
 
 ```bash
 set -euo pipefail
