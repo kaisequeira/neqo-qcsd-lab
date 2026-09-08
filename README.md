@@ -197,8 +197,28 @@ audit's `git status` had refreshed Git metadata sealed at allocation. No
 schema-5 build-execution or schema-1 completion receipt was published, and the
 unreceipted collection image cannot be used. V65 is consumed and
 non-evidentiary; it produced no pinned-CDP receipt or capture and advances no
-downstream counter. V66 is the exact next allocator-authorised cohort and must
-obtain a fresh build/completion pair.
+downstream counter.
+
+V66 then launched from Lab
+`d73ee3f67d9c001e5d4abcad64d6f9497ee73ef9` and unchanged Rust/gitlink
+`ce0d7a21756ce795d6f50d750a1c25e0fa006327`. It durably published a
+byte-identical 7,859-byte claim and consumed-claim pair with SHA-256
+`b342cde610ae802c1e12c3ea4b8a4d85daf0dd66e7785c0c2de12b7327d795b4`,
+then lifecycle admission failed closed on v65's intact uncommitted static-tag
+transaction before any v66 Docker build began. No v66 build-execution,
+build-completion, pinned-CDP, or downstream receipt exists.
+
+An exact audit retained the same host boot and Docker daemon identities and
+found zero running containers, QCSD Docker objects, build processes, or build
+scopes; both v65 build receipts remained absent. The v65 transaction record,
+with SHA-256
+`36f1bfac0e328197e799bcb4bb756e0733a6b723f1123944ea80083d656729b8`,
+was preserved at
+`/var/tmp/qcsd-v65-retired-audit-1000.mGz0IvTU`. The active lifecycle
+namespace is empty and `lifecycle-recover` passes. This is operational
+retirement, not scientific evidence. V66 is consumed and non-evidentiary; v67
+is the exact next allocator-authorised cohort and must obtain a fresh
+build/completion pair.
 
 Summary schema 4 binds the typed schedule-stop policy, stop timestamp,
 sub-cell capacity, direction counts at stop, and exact post-stop advertised
@@ -828,9 +848,13 @@ image-backed evidence. V65 exported its collection image after the embedded
 Rust gate passed, then failed the immediately-before-prepare-build source
 reproof when a concurrent documentation-audit `git status` refreshed sealed
 Git metadata. It has no build/completion receipt and its collection image is
-inadmissible. V66 is the exact next successor. No pinned-CDP, timing,
-regression, code-gate, controlled, or foundation receipt exists, and every
-downstream scientific counter remains zero.
+inadmissible. V66 durably published its claim pair, then failed lifecycle
+admission on v65's still-intact uncommitted static-tag transaction before any
+v66 Docker build. The exact v65 retirement audit is preserved and the active
+lifecycle namespace is now empty. V66 is consumed and non-evidentiary; v67 is
+the exact next successor. No pinned-CDP, timing, regression, code-gate,
+controlled, or foundation receipt exists, and every downstream scientific
+counter remains zero.
 
 The retained post-v55 Lab engineering lineage also hardens durable Docker HANDOFF
 retirement. It permits at most one additional read-only absence observation,
@@ -1026,13 +1050,18 @@ next consumed cohort: it exported the collection image after the embedded Rust
 tests and strict Clippy passed, but a concurrent documentation audit refreshed
 sealed Git metadata by running `git status` and made the
 immediately-before-prepare-build source reproof fail closed. It published no
-build/completion receipt; its unreceipted image cannot be reused. V66 is the
-exact next allocator-authorised cohort. It must pass a fresh build/completion
-pair, pinned-CDP gate, 110/110 browser-egress gate, isolated reference, 12/12
-timing stress, 18/18 regression, regression-bound code gate, and 160/160
-controlled qualification before expanded-class acquisition can begin.
-V55–v65 cannot be retried. The complete current status and earlier cohort
-chronology are retained in the authoritative workspace
+build/completion receipt; its unreceipted image cannot be reused. V66 published
+its durable claim pair from Lab `d73ee3f…`, then stopped before any Docker build
+when lifecycle admission found v65's intact uncommitted static-tag transaction.
+After an exact no-owner/no-object audit, that v65 transaction was preserved in
+the retired audit directory and the active namespace now passes recovery. V66
+has no build/completion receipt and cannot be retried. V67 is the exact next
+allocator-authorised cohort. It must pass a fresh build/completion pair,
+pinned-CDP gate, 110/110 browser-egress gate, isolated reference, 12/12 timing
+stress, 18/18 regression, regression-bound code gate, and 160/160 controlled
+qualification before expanded-class acquisition can begin. V55–v66 cannot be
+retried. The complete current status and earlier cohort chronology are retained
+in the authoritative workspace
 [`PROJECT.md`](../PROJECT.md).
 
 The current Lab boundary additionally classifies typed client defence/QCSD
@@ -1235,7 +1264,10 @@ receipt because the image's policy ancestors were not searchable. Current Lab
 `9a6a45c…` and exported a collection image after the embedded Rust gate passed,
 then failed the immediately-before-prepare-build reproof after a concurrent
 documentation audit refreshed its sealed Git metadata with `git status`. It is
-consumed, has no build/completion receipt, and its image cannot be used. V66 is
+consumed, has no build/completion receipt, and its image cannot be used. V66
+then published its durable claim pair but failed lifecycle admission on that
+intact v65 transaction before any Docker build. Its exact audit and retirement
+left the active namespace empty and recoverable, but cannot advance v66. V67 is
 the exact next allocator-authorised value; no current-head build/completion
 pair or downstream scientific authority exists.
 
@@ -1519,8 +1551,11 @@ collection image after the embedded Rust gate passed, but the transaction
 failed before the preparation build after a concurrent documentation audit
 refreshed sealed Git metadata with `git status`. It published no
 build/completion or pinned-CDP receipt, and that image cannot be used. The next
-attempt therefore requires a fresh v66 no-cache build/completion pair. Pass the canonical
-receipt to the foundation command as `--pinned-cdp-receipt "$PINNED_CDP"`. It is the sixth
+cohort, v66, stopped even earlier: lifecycle admission found the intact v65
+static-tag transaction before any Docker build. Its exact retirement audit does
+not make either cohort reusable. The next attempt therefore requires a fresh
+v67 no-cache build/completion pair. Pass the canonical receipt to the foundation
+command as `--pinned-cdp-receipt "$PINNED_CDP"`. It is the sixth
 explicit foundation hard gate: the foundation binds the receipt and payload
 hashes, its exact build binding, and the fixed probe-contract hash, and requires
 `build finish <= probe recorded_at <= foundation recorded_at`. Acquisition
@@ -1877,9 +1912,12 @@ after its collection-only failure. V64's byte-identical durable pair consumes
 v64; its build/completion pair passed, but its pre-receipt pinned-CDP failure
 prevents reuse. V65's byte-identical durable pair also consumes v65: only its
 collection image was exported before the immediately-before-prepare-build Git
-metadata reproof failed, so no receipt or image is reusable. V66 is the exact
-next permitted value and must be built from the current exact clean source
-before any downstream gate runs.
+metadata reproof failed, so no receipt or image is reusable. V66's
+byte-identical durable pair consumes v66: lifecycle admission found the intact
+v65 static-tag transaction before any Docker build. The audited transaction is
+now preserved outside the empty active namespace, but v66 remains
+non-evidentiary. V67 is the exact next permitted value and must be built from
+the current exact clean source before any downstream gate runs.
 
 ```bash
 set -euo pipefail
