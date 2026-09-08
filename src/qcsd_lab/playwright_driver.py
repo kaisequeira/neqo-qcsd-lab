@@ -405,6 +405,8 @@ def _safe_directory(
         raise ValueError(f"{label} is not owned by uid {expected_owner_uid}: {candidate}")
     if metadata.st_mode & 0o022:
         raise ValueError(f"{label} is group/world-writable: {candidate}")
+    if not metadata.st_mode & 0o111:
+        raise ValueError(f"{label} is not searchable: {candidate}")
     return metadata
 
 

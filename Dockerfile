@@ -719,6 +719,12 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/qcsd-playwright \
 COPY --from=chromium-browser /out/opt/qcsd-playwright/ /opt/qcsd-playwright/
 COPY --chmod=0555 tools/qcsd_chromium_child_wrapper.sh \
     /usr/local/libexec/qcsd-chromium-child
+RUN install -d -o 0 -g 0 -m 0555 \
+      /etc/chromium \
+      /etc/chromium/policies \
+      /etc/chromium/policies/managed \
+      /etc/chromium/policies/recommended \
+      /usr/share/qcsd-lab/browser-egress-controls
 COPY --chmod=0444 config/class-study/v1/chromium-managed-policy-v1.json \
     /etc/chromium/policies/managed/qcsd-network-prediction.json
 COPY --chmod=0444 \
@@ -730,7 +736,6 @@ COPY --chown=0:0 --chmod=0444 \
 COPY --chown=0:0 --chmod=0400 \
     config/class-study/v1/browser-egress-fixture-key-v1.pem \
     /opt/qcsd-lab/config/class-study/v1/browser-egress-fixture-key-v1.pem
-RUN install -d -m 0555 /etc/chromium/policies/recommended
 RUN apt-get update && apt-get install -y --no-install-recommends openssl && \
     rm -rf /var/lib/apt/lists/*
 RUN uv lock --check && \

@@ -793,6 +793,21 @@ def test_default_cache_ancestor_check_rejects_writable_intermediate(
         writable.chmod(0o755)
 
 
+def test_safe_directory_rejects_directory_without_search_bits(tmp_path: Path) -> None:
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+    blocked.chmod(0o444)
+    try:
+        with pytest.raises(ValueError, match="not searchable"):
+            playwright_driver._safe_directory(
+                blocked,
+                label="blocked directory",
+                expected_owner_uid=os.geteuid(),
+            )
+    finally:
+        blocked.chmod(0o755)
+
+
 def test_patch_is_exact_create_only_and_receipt_is_canonical(
     driver_fixture: DriverFixture,
 ) -> None:

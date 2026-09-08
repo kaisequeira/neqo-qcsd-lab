@@ -85,6 +85,19 @@ def test_prepare_and_collection_images_have_required_acquisition_and_evaluation_
     assert "COPY --from=chromium-browser" in prepare
     assert "chromium-1200/chrome-linux/chrome" in prepare
     assert "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/local/bin/qcsd-chromium" in prepare
+    policy_directories = prepare.index("RUN install -d -o 0 -g 0 -m 0555")
+    managed_policy = prepare.index(
+        "COPY --chmod=0444 config/class-study/v1/chromium-managed-policy-v1.json"
+    )
+    assert policy_directories < managed_policy
+    for directory in (
+        "/etc/chromium",
+        "/etc/chromium/policies",
+        "/etc/chromium/policies/managed",
+        "/etc/chromium/policies/recommended",
+        "/usr/share/qcsd-lab/browser-egress-controls",
+    ):
+        assert directory in prepare[policy_directories:managed_policy]
     patch = prepare.index("python3 -m qcsd_lab.playwright_driver patch")
     verify = prepare.index("python3 -m qcsd_lab.playwright_driver verify")
     runtime_verify = prepare.index("python3 -m qcsd_lab.runtime_provenance verify")
