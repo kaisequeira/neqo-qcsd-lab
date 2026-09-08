@@ -183,8 +183,22 @@ directory as root-owned mode `0555` before the copies and makes the runtime
 validator reject any directory with no search bit. The 66/66 targeted tests
 pass. This is source-only engineering evidence: it postdates v64 and cannot
 repair that cohort. V64 has no pinned-CDP or later receipt; every downstream
-scientific counter remains zero. V65 is the exact next allocator-authorised
-cohort and must obtain a fresh build/completion pair.
+scientific counter remains zero.
+
+V65 then claimed exact clean Lab
+`9a6a45c9d3adfa1b5d5dacd6c51b08440c07bde6` and unchanged Rust/gitlink
+`ce0d7a21756ce795d6f50d750a1c25e0fa006327`. Its byte-identical claim and
+consumed-claim records have SHA-256
+`677be940a0b5af13ede0f13cd83267b9202d115924c298f23e4b3dcecb9b2ad2`.
+The collection image was exported after its embedded Rust tests and strict
+Clippy passed. The transaction then failed closed at the
+`immediately-before-prepare-build` source reproof: a concurrent documentation
+audit's `git status` had refreshed Git metadata sealed at allocation. No
+schema-5 build-execution or schema-1 completion receipt was published, and the
+unreceipted collection image cannot be used. V65 is consumed and
+non-evidentiary; it produced no pinned-CDP receipt or capture and advances no
+downstream counter. V66 is the exact next allocator-authorised cohort and must
+obtain a fresh build/completion pair.
 
 Summary schema 4 binds the typed schedule-stop policy, stop timestamp,
 sub-cell capacity, direction counts at stop, and exact post-stop advertised
@@ -810,7 +824,11 @@ Rust/gitlink `ce0d7a21…`. Its pinned-CDP launch then failed before receipt
 publication because the image's automatically created mode-`0444` policy
 ancestors were not searchable. Current Lab `18d4ab3…` repairs that source
 boundary and passes 66/66 targeted tests, but the fix postdates v64 and is not
-image-backed evidence. V65 is the exact next successor. No pinned-CDP, timing,
+image-backed evidence. V65 exported its collection image after the embedded
+Rust gate passed, then failed the immediately-before-prepare-build source
+reproof when a concurrent documentation-audit `git status` refreshed sealed
+Git metadata. It has no build/completion receipt and its collection image is
+inadmissible. V66 is the exact next successor. No pinned-CDP, timing,
 regression, code-gate, controlled, or foundation receipt exists, and every
 downstream scientific counter remains zero.
 
@@ -1004,13 +1022,17 @@ its pull/no-cache schema-5 build and schema-1 completion publication, then
 failed the pinned-CDP gate before receipt because the correct policy file sat
 beneath mode-`0444`, non-searchable directories automatically created by
 `COPY --chmod=0444`. It is consumed and cannot be repaired in place. V65 is the
-exact next allocator-authorised cohort; from the `18d4ab3…` implementation it
-must pass a new build/completion pair, pinned-CDP gate, 110/110 browser-egress
-gate, isolated reference, 12/12 timing stress, 18/18 regression,
-regression-bound code gate, and 160/160 controlled qualification before
-expanded-class acquisition can begin. V55–v64 cannot be retried. The complete
-current status and earlier cohort chronology are retained in the authoritative
-workspace
+next consumed cohort: it exported the collection image after the embedded Rust
+tests and strict Clippy passed, but a concurrent documentation audit refreshed
+sealed Git metadata by running `git status` and made the
+immediately-before-prepare-build source reproof fail closed. It published no
+build/completion receipt; its unreceipted image cannot be reused. V66 is the
+exact next allocator-authorised cohort. It must pass a fresh build/completion
+pair, pinned-CDP gate, 110/110 browser-egress gate, isolated reference, 12/12
+timing stress, 18/18 regression, regression-bound code gate, and 160/160
+controlled qualification before expanded-class acquisition can begin.
+V55–v65 cannot be retried. The complete current status and earlier cohort
+chronology are retained in the authoritative workspace
 [`PROJECT.md`](../PROJECT.md).
 
 The current Lab boundary additionally classifies typed client defence/QCSD
@@ -1209,9 +1231,13 @@ by its byte-identical claim pair. Unlike v62 and v63, it published a clean
 schema-5 build/schema-1 completion pair for Lab `81dd702a…` and Rust/gitlink
 `ce0d7a21…`; unlike a qualified cohort, it then failed pinned-CDP before a
 receipt because the image's policy ancestors were not searchable. Current Lab
-`18d4ab3…` contains the source fix only. V65 is the exact next
-allocator-authorised value; no current-head build/completion pair or downstream
-scientific authority exists.
+`18d4ab3…` contains the source fix only. V65 claimed its documentation successor
+`9a6a45c…` and exported a collection image after the embedded Rust gate passed,
+then failed the immediately-before-prepare-build reproof after a concurrent
+documentation audit refreshed its sealed Git metadata with `git status`. It is
+consumed, has no build/completion receipt, and its image cannot be used. V66 is
+the exact next allocator-authorised value; no current-head build/completion
+pair or downstream scientific authority exists.
 
 The build-execution schema-4 integration is committed at clean Lab
 `69a14ebe48f78d08a8b36d3e573955ec64f00ff9`. V61 exercised it but failed before
@@ -1488,9 +1514,12 @@ preparation image and correct managed-policy input, but failed before receipt:
 `COPY --chmod=0444` had auto-created the missing policy parent directories as
 mode `0444`, so they could not be searched. Current Lab `18d4ab3…` explicitly
 creates those roots as mode `0555` and rejects any unsearchable directory; its
-66/66 targeted tests are source-only evidence. The next attempt therefore
-requires a fresh v65 no-cache build/completion pair from that exact clean head.
-Pass the canonical
+66/66 targeted tests are source-only evidence. V65 subsequently exported its
+collection image after the embedded Rust gate passed, but the transaction
+failed before the preparation build after a concurrent documentation audit
+refreshed sealed Git metadata with `git status`. It published no
+build/completion or pinned-CDP receipt, and that image cannot be used. The next
+attempt therefore requires a fresh v66 no-cache build/completion pair. Pass the canonical
 receipt to the foundation command as `--pinned-cdp-receipt "$PINNED_CDP"`. It is the sixth
 explicit foundation hard gate: the foundation binds the receipt and payload
 hashes, its exact build binding, and the fixed probe-contract hash, and requires
@@ -1846,8 +1875,11 @@ durable v62 claim/consumed-claim pair consumes v62 after its partial failed
 build. V63's second durable claim/consumed-claim pair likewise consumes v63
 after its collection-only failure. V64's byte-identical durable pair consumes
 v64; its build/completion pair passed, but its pre-receipt pinned-CDP failure
-prevents reuse. V65 is the exact next permitted value and must be built from
-the current exact clean source before any downstream gate runs.
+prevents reuse. V65's byte-identical durable pair also consumes v65: only its
+collection image was exported before the immediately-before-prepare-build Git
+metadata reproof failed, so no receipt or image is reusable. V66 is the exact
+next permitted value and must be built from the current exact clean source
+before any downstream gate runs.
 
 ```bash
 set -euo pipefail
