@@ -242,9 +242,10 @@ and separately an unconsumed dedicated-worker response. These diagnostics are
 non-evidentiary. Clean Lab implementation checkpoint
 `01547462b212ac946aa4a47936e0fd99e2b09c78` adds the paused-OOPIF two-stage
 exact-location `Debugger` barrier and exact worker response-consumption
-completion tokens. It has no successful source-bound live receipt and must be
-rebuilt from fresh cohort v68. V67 authorises no downstream capture and every
-extended-campaign scientific numerator remains zero. The positive worker/OOPIF
+completion tokens. At this historical checkpoint it had no source-bound live
+receipt; v68's successful build and probe are recorded below. V67 authorises no
+downstream capture and every extended-campaign scientific numerator remains
+zero. The positive worker/OOPIF
 prototype and forbidden-worker negative control pass only as non-evidentiary
 live diagnostics; no driver-schema-7 receipt exists. Later complete-probe
 diagnostics exposed intermittent
@@ -262,6 +263,35 @@ are covered by the final test results, but the earlier live batch is not
 presented as committed-source evidence. These remain source-only engineering
 checks and non-evidentiary live diagnostics, not an overall gate or receipt
 pass.
+
+V68 subsequently bound exact clean Lab
+`a0ed21ebe264dd7d4b8ea838ef456071df75564a` and unchanged Rust/gitlink
+`ce0d7a21756ce795d6f50d750a1c25e0fa006327`. Its pull/no-cache three-image
+build and canonical completion passed; their whole-file SHA-256 values are
+`aad756c83f185b54cf915132eb2540268d0717c498a1485cab214345a1bc8c3e`
+and `107d95ffb99cf1508c6a92222163c95a38ee547c1d3aa410a0bcd9c054e8fc24`.
+The collection, preparation, and isolated-reference image identities are
+`sha256:0c8f191176bbecacfbf4fd9acb8aa68606195bc60a43118fdb6824c3ab1c6a11`,
+`sha256:ad5ab8c18353d175fb39bb7f8cc7c9d67bb1fc971ba4b04a358cca196b99d8a6`,
+and
+`sha256:2587463c78b0417f51ae169b2f16999914a46ceafb58e55c87fb54245cf46347`.
+Its source-bound pinned-CDP gate also passed, with whole-file SHA-256
+`f7dfe27585aa169865d3cf4279b784d15d05c1ba776ab8494d379398ba314568`
+and probe-contract SHA-256
+`3fa23e65a63a3b5646155538859afa382b48d790ec5ae2f6bc3cdcddbd712059`.
+
+The immediately following browser-egress `create` attempt stopped before a
+result root, Docker topology, or vector was created. Its live-Docker projection
+had been invoked through Bash command substitution, changing `BASHPID` and
+correctly failing the lifecycle guardian's exact supervisor-identity check.
+Lab `9c85da3abac680cc787dd65c38ebd72ead026e7d` keeps that projection in the
+supervisor process and assigns its captured scalar through the existing
+by-name output channel. The affected launcher/supervisor suite passed 450 tests
+with seven intentional skips; shell syntax, Ruff 0.12, and diff checks passed.
+Because source changed, v68 cannot authorise the repair. V69 is the exact next
+fresh cohort and must use browser-egress `create`, not `resume`. Browser-egress
+remains 0/110 and every scientific and expanded-campaign numerator remains
+zero.
 
 Summary schema 4 binds the typed schedule-stop policy, stop timestamp,
 sub-cell capacity, direction counts at stop, and exact post-stop advertised
@@ -896,11 +926,13 @@ admission on v65's still-intact uncommitted static-tag transaction before any
 v66 Docker build. The exact v65 retirement audit is preserved and the active
 lifecycle namespace is now empty. V66 is consumed and non-evidentiary. V67
 subsequently passed its exact clean build/completion pair, then failed
-pinned-CDP before receipt on the paused-OOPIF default-context deadlock.
-Post-v67 source repairs the barrier and worker completion contract, so fresh
-v68 must rebuild. No authorising pinned-CDP, timing, regression, code-gate,
-controlled, or foundation receipt exists, and every downstream scientific
-counter remains zero.
+pinned-CDP before receipt on the paused-OOPIF default-context deadlock. V68
+rebuilt the post-v67 barrier and worker-completion source and passed both its
+build and source-bound pinned-CDP gates, then browser-egress failed before
+lifecycle-root or vector publication on the supervisor-subshell defect.
+Implementation checkpoint `9c85da3…` repairs that Lab-only defect, so v69 must
+bind it before timing, regression, code, controlled or foundation evidence can
+authorise current source. Every downstream scientific counter remains zero.
 
 The retained post-v55 Lab engineering lineage also hardens durable Docker HANDOFF
 retirement. It permits at most one additional read-only absence observation,
@@ -1042,10 +1074,11 @@ V64 has an immutable clean build-execution/completion pair for Lab
 `81dd702a…` and Rust/gitlink `ce0d7a21…`, but its pinned-CDP probe failed before
 receipt publication. V67 bound the `18d4ab3…` policy-directory repair in a
 fresh three-image build, then its pinned-CDP probe failed before receipt on the
-paused-OOPIF default-context deadlock. The changed post-v67 CDP/worker source
-has no fresh image-backed build authority. Pinned-CDP, browser-egress,
-reference, regression-bound code-gate, and foundation receipts for that source
-are absent. Browser-egress is
+paused-OOPIF default-context deadlock. V68 bound clean Lab `a0ed21e…` and
+unchanged Rust `ce0d7a21…`, passed its fresh three-image build and pinned-CDP
+probe, then failed browser-egress before publication. Those receipts cannot
+authorise current implementation checkpoint `9c85da3…`; v69 must rebuild and
+repeat the live boundary. Browser-egress is
 0/110, timing stress is 0/12, regression is 0/18, and controlled qualification
 is 0/160. Real acquisition observations remain zero.
 Pilot fitting, qualification, and compatibility are 0/480, 0/720, and 0/1,080;
@@ -1104,14 +1137,15 @@ when lifecycle admission found v65's intact uncommitted static-tag transaction.
 After an exact no-owner/no-object audit, that v65 transaction was preserved in
 the retired audit directory and the active namespace now passes recovery. V66
 has no build/completion receipt and cannot be retried. V67 then passed its
-fresh build/completion pair but failed pinned-CDP before receipt. The changed
-post-v67 source makes v68 the exact next allocator-authorised cohort. It must
-pass a fresh build/completion pair,
-pinned-CDP gate, 110/110 browser-egress gate, isolated reference, 12/12 timing
-stress, 18/18 regression, regression-bound code gate, and 160/160 controlled
-qualification before expanded-class acquisition can begin. V55–v66 cannot be
-retried. The complete current status and earlier cohort chronology are retained
-in the authoritative workspace
+fresh build/completion pair but failed pinned-CDP before receipt. V68 rebuilt
+the changed post-v67 source and passed pinned-CDP, then failed browser-egress
+before publication. The `9c85da3…` supervisor-process repair makes v69 the
+exact next allocator-authorised cohort. It must pass a fresh build/completion
+pair, pinned-CDP gate, 110/110 browser-egress gate, isolated reference, 12/12
+timing stress, 18/18 regression, regression-bound code gate, and 160/160
+controlled qualification before expanded-class acquisition can begin. V55–v68
+cannot be retried. The complete current status and earlier cohort chronology
+are retained in the authoritative workspace
 [`PROJECT.md`](../PROJECT.md).
 
 The current Lab boundary additionally classifies typed client defence/QCSD
@@ -1319,9 +1353,10 @@ then published its durable claim pair but failed lifecycle admission on that
 intact v65 transaction before any Docker build. Its exact audit and retirement
 left the active namespace empty and recoverable, but cannot advance v66. V67
 later passed its build/completion pair for clean Lab `93f7cfc0…` / Rust
-`ce0d7a21…` and failed pinned-CDP before receipt. That pair remains valid build
-evidence, but the post-v67 CDP/worker repair requires fresh v68 and no
-downstream scientific authority exists.
+`ce0d7a21…` and failed pinned-CDP before receipt. V68 then passed build and
+pinned-CDP for the post-v67 CDP/worker source, but failed browser-egress before
+publication. The current `9c85da3…` repair requires fresh v69 and no downstream
+scientific authority exists.
 
 The build-execution schema-4 integration is committed at clean Lab
 `69a14ebe48f78d08a8b36d3e573955ec64f00ff9`. V61 exercised it but failed before
@@ -1414,9 +1449,10 @@ immediately preceding schema. Where explicitly supported, separate historical
 inspection callers opt in without gaining current mutation or publication
 authority. Schemas 3–5 record builds through
 `docker --host <pinned-local-endpoint>`; schema 2 used the pinned context. No
-downstream current receipt has been emitted. V67's valid schema-5/schema-1
-build pair binds exact clean source `93f7cfc0…`; post-v67 changed source has no
-pair and must start again at v68.
+downstream current receipt has been emitted. V68's valid schema-5/schema-1
+build pair and pinned-CDP receipt bind exact clean source `a0ed21e…`; the
+subsequent `9c85da3…` supervisor-process repair has no pair and must start again
+at v69.
 
 Earlier on 1 September 2026, a read-only probe found only about 2.19 GB
 available on the backing C: volume and Docker again exposed data-device I/O
@@ -1525,8 +1561,9 @@ Playwright request interception marker-gated and
 `Document`-only under the exclusive QCSD owner; raw QCSD CDP remains the sole
 subresource admission owner. With the marker absent, native wildcard
 interception remains unchanged; with it active, non-null HTTP credentials are
-rejected before Playwright mutates network-manager state. Schema 7 is
-implemented but remains unbuilt and unexecuted in a fresh image. The pinned
+rejected before Playwright mutates network-manager state. Schema 7 was built
+and exercised successfully by v68's pinned-CDP probe; the later Lab-only
+supervisor-process repair still requires a fresh v69 image. The pinned
 contract binds post-patch `crNetworkManager.js` SHA-256
 `c10daf1b5c5c6c64e1c545ff7d7bb16f9990aa71c4fe64e081c3a43157d4531a`,
 the 401-file/131,857,836-byte package tree at
@@ -1659,12 +1696,11 @@ static-tag transaction before any Docker build. Its exact retirement audit does
 not make either cohort reusable. V67 then passed the fresh no-cache
 build/completion pair for exact clean Lab `93f7cfc0…` / Rust `ce0d7a21…`, but
 its first pinned-CDP execution failed before receipt on the paused-OOPIF
-default-context deadlock. Same-image diagnostics also isolated the missing
-worker response consumption. Clean implementation checkpoint `01547462…09c78`
-implements both repairs; because that source differs from v67, the next attempt
-requires a fresh v68
-build/completion pair. Pass the canonical receipt to the foundation
-command as `--pinned-cdp-receipt "$PINNED_CDP"`. It is the sixth
+default-context deadlock. V68 built the repaired `01547462…09c78` source and
+passed pinned-CDP. Its following browser-egress launch exposed the supervisor
+subshell defect; current `9c85da3…` repairs it and requires a fresh v69
+build/completion pair plus a new pinned-CDP receipt. Pass that canonical receipt
+to the foundation command as `--pinned-cdp-receipt "$PINNED_CDP"`. It is the sixth
 explicit foundation hard gate: the foundation binds the receipt and payload
 hashes, its exact build binding, and the fixed probe-contract hash, and requires
 `build finish <= probe recorded_at <= foundation recorded_at`. Acquisition
@@ -2026,9 +2062,10 @@ byte-identical durable pair consumes v66: lifecycle admission found the intact
 v65 static-tag transaction before any Docker build. The audited transaction is
 now preserved outside the empty active namespace, but v66 remains
 non-evidentiary. V67 later passed its exact clean build/completion pair and
-failed pinned-CDP before receipt. Its post-v67 source repair changes the
-authority identity; v68 is the exact next permitted value and must be built
-from the resulting exact clean source before any downstream gate runs.
+failed pinned-CDP before receipt. V68 then built the post-v67 repair and passed
+pinned-CDP, but browser-egress failed before publication. Current checkpoint
+`9c85da3…` changes the authority identity; v69 is the exact next permitted value
+and must be built before any downstream gate runs.
 
 ```bash
 set -euo pipefail
