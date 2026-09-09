@@ -250,7 +250,7 @@
       "capture_filter": null,
       "interface": "any",
       "network_mode": "container:browser",
-      "pcap_extraction": "docker-cp-after-dumpcap-stop-before-observer-exit",
+      "pcap_extraction": "docker-exec-stream-after-dumpcap-stop-before-observer-exit",
       "pcap_storage": "container-tmpfs",
       "privileged": false,
       "separate_container": true,

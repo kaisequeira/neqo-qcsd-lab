@@ -333,7 +333,7 @@ EXECUTION_CONTRACT: dict[str, Any] = {
         "starts_before_browser": True,
         "stops_after_browser_exit_and_grace": True,
         "pcap_storage": "container-tmpfs",
-        "pcap_extraction": "docker-cp-after-dumpcap-stop-before-observer-exit",
+        "pcap_extraction": "docker-exec-stream-after-dumpcap-stop-before-observer-exit",
     },
     "sink": {
         "separate_container": True,

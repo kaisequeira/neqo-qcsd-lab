@@ -10,6 +10,7 @@ import re
 import runpy
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -2931,7 +2932,46 @@ def test_real_docker_tini_direct_child_receives_all_browser_egress_phase_signals
         )
 
 
-def test_browser_egress_observer_protocol_copies_closed_pcap_before_exit() -> None:
+def _browser_egress_extraction_shell_function() -> str:
+    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
+    return (
+        "browser_egress_extract_observer_pcap() {"
+        + launcher.split("browser_egress_extract_observer_pcap() {", maxsplit=1)[1].split(
+            "\n}\n\nbrowser_egress_wait_container_marker()", maxsplit=1
+        )[0]
+        + "\n}\n"
+    )
+
+
+def _browser_egress_extraction_receipt(
+    tmp_path: Path, payload: bytes
+) -> tuple[Path, str]:
+    evidence_relative = (
+        "evidence/001--constructor--page--websocket/attempt-1/capture.pcapng"
+    )
+    receipt = tmp_path / "capture.json"
+    receipt.write_text(
+        json.dumps(
+            {
+                "role": "observer",
+                "receipt": {
+                    "pcap": {
+                        "path": evidence_relative,
+                        "sha256": hashlib.sha256(payload).hexdigest(),
+                        "size_bytes": len(payload),
+                    }
+                },
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return receipt, evidence_relative
+
+
+def test_browser_egress_observer_protocol_extracts_closed_pcap_before_exit() -> None:
     launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
     measured = launcher.split(
         '_qcsd_docker_api kill --signal USR2 "${browser_egress_observer_id}"',
@@ -2945,10 +2985,322 @@ def test_browser_egress_observer_protocol_copies_closed_pcap_before_exit() -> No
     fixture_stop = measured.index('for browser_egress_role_id in "${browser_egress_fixture_id}"')
     finish = measured.index('kill --signal HUP "${browser_egress_observer_id}"')
     receipt = measured.index("qcsd-browser-egress-receipt.ready")
-    copy = measured.index('cp "${browser_egress_observer_id}:/tmp/capture.pcapng"')
+    extract = measured.index(
+        'browser_egress_extract_observer_pcap "${browser_egress_observer_id}"'
+    )
     stop = measured.index('kill --signal TERM "${browser_egress_observer_id}"')
     wait = measured.index('browser_egress_observer_exit="$(browser_egress_wait_exit_code')
-    assert grace < fixture_stop < finish < receipt < copy < stop < wait
+    assert grace < fixture_stop < finish < receipt < extract < stop < wait
+    assert '"${browser_egress_evidence_relative}" || false' in measured
+    assert 'cp "${browser_egress_observer_id}:/tmp/capture.pcapng"' not in measured
+
+
+def test_browser_egress_observer_pcap_extraction_streams_tmpfs_privately(
+    tmp_path: Path,
+) -> None:
+    extraction = _browser_egress_extraction_shell_function()
+    payload = bytes.fromhex("0a0d0d0a0000001c1a2b3c4d00000000ff")
+    receipt, evidence_relative = _browser_egress_extraction_receipt(tmp_path, payload)
+    destination = tmp_path / "capture.pcapng"
+    script = tmp_path / "extract.sh"
+    script.write_text(
+        "set -euo pipefail\n"
+        + extraction
+        + f"qcsd_invoking_uid={os.getuid()}\n"
+        + f"qcsd_invoking_gid={os.getgid()}\n"
+        + "_qcsd_docker_api() {\n"
+        + '  [[ "$1" == exec && "$2" == observer && "$3" == /bin/cat && '
+        + '"$4" == -- && "$5" == /tmp/capture.pcapng ]]\n'
+        + "  /usr/bin/python3 -I -c "
+        + f"'import sys;sys.stdout.buffer.write(bytes.fromhex(\"{payload.hex()}\"))'\n"
+        + "}\n"
+        + "browser_egress_extract_observer_pcap observer "
+        + f"{str(destination)!r} {str(receipt)!r} {evidence_relative!r}\n",
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        ["bash", str(script)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    assert completed.returncode == 0, (completed.stdout, completed.stderr)
+    assert completed.stdout == ""
+    assert completed.stderr == ""
+    assert destination.read_bytes() == payload
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o600
+    assert destination.stat().st_nlink == 1
+
+
+def test_real_docker_browser_egress_extractor_streams_tmpfs_bytes(
+    tmp_path: Path,
+) -> None:
+    docker = shutil.which("docker")
+    if docker is None:
+        pytest.skip("Docker CLI is unavailable")
+    probe = subprocess.run(
+        [docker, "info"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+        timeout=10,
+    )
+    if probe.returncode != 0:
+        pytest.skip("Docker daemon is unavailable")
+    image = os.environ.get(
+        "QCSD_BROWSER_EGRESS_SIGNAL_TEST_IMAGE", "neqo-qcsd-lab-prepare:local"
+    )
+    image_probe = subprocess.run(
+        [docker, "image", "inspect", image],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+        timeout=10,
+    )
+    if image_probe.returncode != 0:
+        pytest.skip(f"browser-egress extraction-test image is unavailable: {image}")
+
+    extraction = _browser_egress_extraction_shell_function()
+    payload = bytes.fromhex("0a0d0d0a0000001c1a2b3c4d00ff807f0000001c")
+    receipt, evidence_relative = _browser_egress_extraction_receipt(tmp_path, payload)
+    destination = tmp_path / "capture.pcapng"
+    name = f"qcsd-browser-egress-tmpfs-test-{os.getpid()}-{uuid.uuid4().hex}"
+    program = (
+        "from pathlib import Path\n"
+        "import time\n"
+        f"Path('/tmp/capture.pcapng').write_bytes(bytes.fromhex('{payload.hex()}'))\n"
+        "print('READY', flush=True)\n"
+        "time.sleep(30)\n"
+    )
+    try:
+        launched = subprocess.run(
+            [
+                docker,
+                "run",
+                "--detach",
+                "--name",
+                name,
+                "--network",
+                "none",
+                "--read-only",
+                "--tmpfs",
+                "/tmp:rw,nosuid,nodev,noexec,mode=1777",
+                "--cap-drop",
+                "ALL",
+                "--security-opt",
+                "no-new-privileges:true",
+                "--entrypoint",
+                "/usr/bin/python3",
+                image,
+                "-c",
+                program,
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+            timeout=15,
+        )
+        assert launched.returncode == 0, (launched.stdout, launched.stderr)
+        deadline = time.monotonic() + 10
+        logs = ""
+        while time.monotonic() < deadline:
+            logs = subprocess.run(
+                [docker, "logs", name], capture_output=True, text=True, check=False
+            ).stdout
+            if logs == "READY\n":
+                break
+            time.sleep(0.05)
+        assert logs == "READY\n"
+        filesystem = subprocess.run(
+            [docker, "exec", name, "/usr/bin/findmnt", "-n", "-o", "FSTYPE", "/tmp"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+        assert filesystem.returncode == 0, (filesystem.stdout, filesystem.stderr)
+        assert filesystem.stdout.strip() == "tmpfs"
+        script = tmp_path / "real-extract.sh"
+        script.write_text(
+            "set -euo pipefail\n"
+            + extraction
+            + f"qcsd_invoking_uid={os.getuid()}\n"
+            + f"qcsd_invoking_gid={os.getgid()}\n"
+            + f"_qcsd_docker_api() {{ {shlex.quote(docker)} \"$@\"; }}\n"
+            + "browser_egress_extract_observer_pcap "
+            + f"{shlex.quote(name)} {str(destination)!r} {str(receipt)!r} "
+            + f"{evidence_relative!r}\n",
+            encoding="utf-8",
+        )
+        extracted = subprocess.run(
+            ["bash", str(script)],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=20,
+        )
+        assert extracted.returncode == 0, (extracted.stdout, extracted.stderr)
+        assert destination.read_bytes() == payload
+        assert hashlib.sha256(destination.read_bytes()).hexdigest() == hashlib.sha256(
+            payload
+        ).hexdigest()
+        assert stat.S_IMODE(destination.stat().st_mode) == 0o600
+        state = subprocess.run(
+            [docker, "container", "inspect", "--format", "{{.State.Status}}", name],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+        assert state.returncode == 0 and state.stdout == "running\n"
+    finally:
+        subprocess.run(
+            [docker, "rm", "--force", name],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=10,
+        )
+
+
+@pytest.mark.parametrize(
+    "docker_body",
+    ("printf partial; return 23", "printf complete-capturf"),
+)
+def test_browser_egress_observer_pcap_extraction_rejects_invalid_stream(
+    tmp_path: Path,
+    docker_body: str,
+) -> None:
+    extraction = _browser_egress_extraction_shell_function()
+    expected = b"complete-capture"
+    receipt, evidence_relative = _browser_egress_extraction_receipt(tmp_path, expected)
+    destination = tmp_path / "capture.pcapng"
+    script = tmp_path / "extract-failure.sh"
+    script.write_text(
+        "set -euo pipefail\n"
+        + extraction
+        + f"qcsd_invoking_uid={os.getuid()}\n"
+        + f"qcsd_invoking_gid={os.getgid()}\n"
+        + f"_qcsd_docker_api() {{ {docker_body}; }}\n"
+        + "if browser_egress_extract_observer_pcap observer "
+        + f"{str(destination)!r} {str(receipt)!r} {evidence_relative!r}; "
+        + "then exit 99; fi\n",
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        ["bash", str(script)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    assert completed.returncode == 0, (completed.stdout, completed.stderr)
+    assert completed.stdout == ""
+    assert "PCAP stream extraction failed" in completed.stderr
+    assert not destination.exists()
+
+
+@pytest.mark.parametrize(
+    "unsafe_case",
+    ("receipt-symlink", "existing-destination", "wrong-parent-mode", "wrong-relative"),
+)
+def test_browser_egress_observer_pcap_extraction_rejects_unsafe_paths(
+    tmp_path: Path,
+    unsafe_case: str,
+) -> None:
+    extraction = _browser_egress_extraction_shell_function()
+    payload = b"complete-capture"
+    receipt, evidence_relative = _browser_egress_extraction_receipt(tmp_path, payload)
+    evidence_parent = tmp_path / "evidence-parent"
+    evidence_parent.mkdir(mode=0o700)
+    destination = evidence_parent / "capture.pcapng"
+    if unsafe_case == "receipt-symlink":
+        linked_receipt = tmp_path / "linked-capture.json"
+        linked_receipt.symlink_to(receipt)
+        receipt = linked_receipt
+    elif unsafe_case == "existing-destination":
+        destination.write_bytes(b"prior-evidence")
+        destination.chmod(0o600)
+    elif unsafe_case == "wrong-parent-mode":
+        evidence_parent.chmod(0o755)
+    else:
+        evidence_relative = "evidence/attempt-1/not-capture.pcapng"
+    script = tmp_path / f"extract-{unsafe_case}.sh"
+    script.write_text(
+        "set -euo pipefail\n"
+        + extraction
+        + f"qcsd_invoking_uid={os.getuid()}\n"
+        + f"qcsd_invoking_gid={os.getgid()}\n"
+        + f"_qcsd_docker_api() {{ printf %s {shlex.quote(payload.decode())}; }}\n"
+        + "if browser_egress_extract_observer_pcap observer "
+        + f"{str(destination)!r} {str(receipt)!r} {evidence_relative!r}; "
+        + "then exit 99; fi\n",
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        ["bash", str(script)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    assert completed.returncode == 0, (completed.stdout, completed.stderr)
+    assert completed.stdout == ""
+    assert "extraction" in completed.stderr
+    if unsafe_case == "existing-destination":
+        assert destination.read_bytes() == b"prior-evidence"
+    else:
+        assert not destination.exists()
+
+
+def test_browser_egress_extraction_failure_reaches_production_err_boundary_once(
+    tmp_path: Path,
+) -> None:
+    extraction = _browser_egress_extraction_shell_function()
+    expected = b"complete-capture"
+    receipt, evidence_relative = _browser_egress_extraction_receipt(tmp_path, expected)
+    destination = tmp_path / "capture.pcapng"
+    sealed = tmp_path / "sealed.log"
+    script = tmp_path / "extract-err-boundary.sh"
+    script.write_text(
+        "set -euo pipefail\n"
+        + extraction
+        + f"qcsd_invoking_uid={os.getuid()}\n"
+        + f"qcsd_invoking_gid={os.getgid()}\n"
+        + "browser_egress_failure_code=capture-process-failed\n"
+        + "browser_egress_failure_stage=capture-finalization\n"
+        + "nested_docker_failure() { printf partial; return 23; }\n"
+        + "_qcsd_docker_api() { nested_docker_failure; }\n"
+        + "seal_failure() {\n"
+        + "  status=$?\n"
+        + "  trap - ERR\n"
+        + "  printf '%s:%s:%s\\n' \"$browser_egress_failure_code\" "
+        + f"\"$browser_egress_failure_stage\" \"$status\" >>{str(sealed)!r}\n"
+        + '  exit "$status"\n'
+        + "}\n"
+        + "trap seal_failure ERR\n"
+        + "browser_egress_extract_observer_pcap observer "
+        + f"{str(destination)!r} {str(receipt)!r} {evidence_relative!r} || false\n",
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        ["bash", str(script)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    assert completed.returncode == 1, (completed.stdout, completed.stderr)
+    assert sealed.read_text(encoding="utf-8").splitlines() == [
+        "capture-process-failed:capture-finalization:1"
+    ]
+    assert not destination.exists()
 
 
 def test_browser_egress_staged_readiness_and_subject_ack_are_ordered(
@@ -3342,7 +3694,7 @@ def test_browser_egress_cleanup_returns_and_err_path_seals_after_cleanup(
     log = tmp_path / "failure-order.log"
     failed = tmp_path / "err-cleanup.sh"
     failed.write_text(
-        "set -Eeuo pipefail\n"
+        "set -euo pipefail\n"
         + cleanup
         + record
         + f"LOG={str(log)!r}\nROOT=/lab\nimage_id=image\n"
@@ -3645,7 +3997,11 @@ def test_browser_egress_ledger_writes_protect_prior_evidence() -> None:
     assert "trap browser_egress_record_failed_attempt ERR" in launcher
     assert "umask 077" in launcher
     assert 'mkdir --mode=0700 -- "${browser_egress_attempt_evidence_host}"' in launcher
-    assert 'chmod 0600 -- "${browser_egress_evidence_host}"' in launcher
+    assert "os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW" in launcher
+    assert "os.fchmod(output_descriptor, 0o600)" in launcher
+    assert "if written <= 0:" in launcher
+    assert "os.fsync(output_descriptor)" in launcher
+    assert "os.fsync(parent_descriptor)" in launcher
 
 
 def test_browser_egress_tool_freezes_execution_verification_and_role_phases() -> None:

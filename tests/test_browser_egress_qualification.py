@@ -2272,6 +2272,8 @@ def test_attempt_intent_is_durable_and_resume_seals_interruption(
     attempt.mkdir(mode=0o700)
     (attempt / "browser.log").write_text("partial role output\n", encoding="utf-8")
     (attempt / "browser.log").chmod(0o600)
+    (attempt / "capture.pcapng").write_bytes(b"partial interrupted capture")
+    (attempt / "capture.pcapng").chmod(0o600)
     checkpoint = recover_interrupted_attempt(result_root, finished_at=_wall_time(2))
     assert checkpoint["status"] == "running"
     assert checkpoint["attempts"][-1]["verdict"] == "operational-failure"
@@ -2279,6 +2281,7 @@ def test_attempt_intent_is_durable_and_resume_seals_interruption(
     assert result_path.is_file()
     result = json.loads(result_path.read_text(encoding="utf-8"))["payload"]
     assert result["failure_code"] == "interrupted"
+    assert (attempt / "capture.pcapng").read_bytes() == b"partial interrupted capture"
     assert (attempt / "resume-recovery.json").is_file()
 
 

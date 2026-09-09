@@ -9526,6 +9526,156 @@ if raw != canonical or not isinstance(value, dict) or value.get("role") != "obse
   return 1
 }
 
+browser_egress_extract_observer_pcap() {
+  local container_id="$1" destination="$2" capture_receipt="$3"
+  local evidence_relative="$4" parent
+  parent="$(dirname -- "${destination}")"
+  if [[ -z "${container_id}" || "${destination}" != /* ||
+        "${capture_receipt}" != /* || -L "${capture_receipt}" ||
+        ! -f "${capture_receipt}" || -z "${evidence_relative}" ||
+        -L "${parent}" || ! -d "${parent}" ||
+        -e "${destination}" || -L "${destination}" ]]; then
+    echo "browser-egress observer PCAP extraction destination is unsafe" >&2
+    return 1
+  fi
+  # Docker's archive endpoint does not expose files backed by a container
+  # tmpfs.  Keep the observer capture mount-free, but read the closed file
+  # through the running container's namespace.  The host consumer creates the
+  # intent-authorised evidence name with O_EXCL, validates the exact receipt
+  # size and digest while streaming, and fsyncs both file and parent.  A hard
+  # interruption can therefore leave only the already-recognised canonical
+  # capture.pcapng recovery artifact, never an unknown staging name.
+  if ! _qcsd_docker_api exec "${container_id}" \
+      /bin/cat -- /tmp/capture.pcapng | python3 -I -c '
+import hashlib
+import json
+import os
+from pathlib import Path, PurePosixPath
+import re
+import stat
+import sys
+
+destination = Path(sys.argv[1])
+receipt_path = Path(sys.argv[2])
+expected_relative = sys.argv[3]
+expected_uid = int(sys.argv[4])
+expected_gid = int(sys.argv[5])
+if (
+    not destination.is_absolute()
+    or destination.name != "capture.pcapng"
+    or PurePosixPath(expected_relative).name != destination.name
+):
+    raise SystemExit("browser-egress extraction path binding is invalid")
+receipt_before = receipt_path.lstat()
+receipt_descriptor = os.open(
+    receipt_path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+)
+try:
+    receipt_opened = os.fstat(receipt_descriptor)
+    if (
+        not stat.S_ISREG(receipt_opened.st_mode)
+        or (receipt_opened.st_dev, receipt_opened.st_ino)
+        != (receipt_before.st_dev, receipt_before.st_ino)
+        or receipt_opened.st_uid != expected_uid
+        or receipt_opened.st_nlink != 1
+    ):
+        raise SystemExit("browser-egress capture receipt inode is unsafe")
+    with os.fdopen(os.dup(receipt_descriptor), "rb") as source:
+        raw_receipt = source.read()
+finally:
+    os.close(receipt_descriptor)
+try:
+    role_receipt = json.loads(raw_receipt)
+except (UnicodeDecodeError, json.JSONDecodeError) as error:
+    raise SystemExit("browser-egress capture receipt is invalid") from error
+canonical = (
+    json.dumps(role_receipt, indent=2, sort_keys=True, allow_nan=False) + "\n"
+).encode()
+capture = role_receipt.get("receipt", {}).get("pcap", {})
+expected_sha256 = capture.get("sha256")
+expected_size = capture.get("size_bytes")
+if (
+    raw_receipt != canonical
+    or role_receipt.get("role") != "observer"
+    or capture.get("path") != expected_relative
+    or not isinstance(expected_sha256, str)
+    or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None
+    or type(expected_size) is not int
+    or expected_size <= 0
+):
+    raise SystemExit("browser-egress capture receipt binding is invalid")
+parent = destination.parent
+parent_descriptor = os.open(
+    parent, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_DIRECTORY
+)
+output_descriptor = -1
+created = False
+keep = False
+try:
+    parent_metadata = os.fstat(parent_descriptor)
+    if (
+        not stat.S_ISDIR(parent_metadata.st_mode)
+        or parent_metadata.st_uid != expected_uid
+        or parent_metadata.st_gid != expected_gid
+        or stat.S_IMODE(parent_metadata.st_mode) != 0o700
+    ):
+        raise SystemExit("browser-egress extraction parent is unsafe")
+    output_descriptor = os.open(
+        destination.name,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+        0o600,
+        dir_fd=parent_descriptor,
+    )
+    created = True
+    digest = hashlib.sha256()
+    observed_size = 0
+    while True:
+        block = sys.stdin.buffer.read(1024 * 1024)
+        if not block:
+            break
+        observed_size += len(block)
+        if observed_size > expected_size:
+            raise SystemExit("browser-egress PCAP stream exceeds its receipt")
+        digest.update(block)
+        view = memoryview(block)
+        while view:
+            written = os.write(output_descriptor, view)
+            if written <= 0:
+                raise OSError("browser-egress PCAP output made no progress")
+            view = view[written:]
+    if observed_size != expected_size or digest.hexdigest() != expected_sha256:
+        raise SystemExit("browser-egress PCAP stream differs from its receipt")
+    os.fchmod(output_descriptor, 0o600)
+    output_metadata = os.fstat(output_descriptor)
+    if (
+        not stat.S_ISREG(output_metadata.st_mode)
+        or output_metadata.st_uid != expected_uid
+        or output_metadata.st_gid != expected_gid
+        or stat.S_IMODE(output_metadata.st_mode) != 0o600
+        or output_metadata.st_nlink != 1
+        or output_metadata.st_size != expected_size
+    ):
+        raise SystemExit("browser-egress extracted PCAP inode is unsafe")
+    os.fsync(output_descriptor)
+    os.fsync(parent_descriptor)
+    keep = True
+finally:
+    if output_descriptor >= 0:
+        os.close(output_descriptor)
+    if created and not keep:
+        try:
+            os.unlink(destination.name, dir_fd=parent_descriptor)
+            os.fsync(parent_descriptor)
+        except FileNotFoundError:
+            pass
+    os.close(parent_descriptor)
+' "${destination}" "${capture_receipt}" "${evidence_relative}" \
+      "${qcsd_invoking_uid}" "${qcsd_invoking_gid}"; then
+    echo "browser-egress observer PCAP stream extraction failed" >&2
+    return 1
+  fi
+}
+
 browser_egress_wait_container_marker() {
   local container_id="$1" marker="$2" label="$3" deadline state
   deadline=$((SECONDS + 30))
@@ -9960,13 +10110,13 @@ browser_egress_record_failed_attempt() {
       rm -f -- "${browser_egress_attempt_evidence_host}/network-inspect.txt"
   fi
   if [[ -n "${browser_egress_observer_id:-}" &&
-        ! -e "${browser_egress_evidence_host}" ]]; then
-    _qcsd_docker_api cp "${browser_egress_observer_id}:/tmp/capture.pcapng" \
-      "${browser_egress_evidence_host}" >/dev/null 2>&1 || true
-    if [[ -f "${browser_egress_evidence_host}" &&
-          ! -L "${browser_egress_evidence_host}" ]]; then
-      chmod 0600 -- "${browser_egress_evidence_host}" || true
-    fi
+        ! -e "${browser_egress_evidence_host}" &&
+        -f "${browser_egress_attempt_scratch}/capture.json" &&
+        ! -L "${browser_egress_attempt_scratch}/capture.json" ]]; then
+    browser_egress_extract_observer_pcap "${browser_egress_observer_id}" \
+      "${browser_egress_evidence_host}" \
+      "${browser_egress_attempt_scratch}/capture.json" \
+      "${browser_egress_evidence_relative}" >/dev/null 2>&1 || true
   fi
   if ! browser_egress_cleanup_topology; then
     echo "browser-egress left its attempt outstanding after teardown failed" >&2
@@ -10417,7 +10567,7 @@ test "$(stat -c "%u:%g:%a:%h:%s:%F" -- "$target")" = "0:0:444:1:56:regular file"
 set -- $(sha256sum -- "$target")
 test "$1" = "4566be4f014df0cfd45cf8bdeb4333b341bf4c666139e364992306c12873df03"
 test "$(find /qcsd-policy -mindepth 1 -maxdepth 1 -type f -printf x)" = x
-'
+' || false
       browser_egress_browser_policy_mount=(
         --volume "${browser_egress_policy_volume_name}:/etc/chromium/policies/managed:ro"
       )
@@ -10429,7 +10579,8 @@ test "$(find /qcsd-policy -mindepth 1 -maxdepth 1 -type f -printf x)" = x
     qcsd_create_docker_network QCSD_DOCKER_IDS_BROWSER_EGRESS_NETWORKS \
       docker network create --driver bridge --internal --ipv6 \
       --subnet 172.30.98.0/24 --subnet fd00:71:63:73:64:98::/96 \
-      "${browser_egress_labels[@]}" "${browser_egress_network_name}" >/dev/null
+      "${browser_egress_labels[@]}" "${browser_egress_network_name}" \
+      >/dev/null || false
     browser_egress_network_id="${QCSD_DOCKER_IDS_BROWSER_EGRESS_NETWORKS[-1]}"
     browser_egress_failure_stage=container-start
     browser_egress_role_common=(
@@ -10454,7 +10605,8 @@ test "$(find /qcsd-policy -mindepth 1 -maxdepth 1 -type f -printf x)" = x
       "${browser_egress_labels[@]}" --label org.qcsd.role=browser \
       "${browser_egress_role_common[@]}" "${browser_egress_actor_command}" \
       --vector-id "${browser_egress_vector_id}" \
-      --role-deadline-seconds "${browser_egress_role_deadline_seconds}" >/dev/null
+      --role-deadline-seconds "${browser_egress_role_deadline_seconds}" \
+      >/dev/null || false
     browser_egress_browser_id="${QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS[-1]}"
     browser_egress_failure_code=browser-start-failed
     browser_egress_failure_stage=browser-readiness
@@ -10472,7 +10624,8 @@ test "$(find /qcsd-policy -mindepth 1 -maxdepth 1 -type f -printf x)" = x
       "${browser_egress_tool}" observer \
       --vector-id "${browser_egress_vector_id}" --pcap /tmp/capture.pcapng \
       --evidence-relative "${browser_egress_evidence_relative}" \
-      --role-deadline-seconds "${browser_egress_role_deadline_seconds}" >/dev/null
+      --role-deadline-seconds "${browser_egress_role_deadline_seconds}" \
+      >/dev/null || false
     browser_egress_observer_id="${QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS[-1]}"
     browser_egress_failure_code=observer-start-failed
     browser_egress_failure_stage=observer-readiness
@@ -10483,7 +10636,8 @@ test "$(find /qcsd-policy -mindepth 1 -maxdepth 1 -type f -printf x)" = x
       --ip6 fd00:71:63:73:64:98:0:11 --user 0:0 \
       "${browser_egress_labels[@]}" --label org.qcsd.role=fixture \
       "${browser_egress_role_common[@]}" fixture --vector-id "${browser_egress_vector_id}" \
-      --role-deadline-seconds "${browser_egress_role_deadline_seconds}" >/dev/null
+      --role-deadline-seconds "${browser_egress_role_deadline_seconds}" \
+      >/dev/null || false
     browser_egress_fixture_id="${QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS[-1]}"
     browser_egress_failure_code=docker-start-failed
     browser_egress_failure_stage=fixture-readiness
@@ -10495,7 +10649,8 @@ test "$(find /qcsd-policy -mindepth 1 -maxdepth 1 -type f -printf x)" = x
       --tmpfs /opt/qcsd-lab/config/class-study/v1:ro,nosuid,nodev,noexec,mode=000 \
       "${browser_egress_labels[@]}" --label org.qcsd.role=forbidden_sink \
       "${browser_egress_role_common[@]}" forbidden-sink --vector-id "${browser_egress_vector_id}" \
-      --role-deadline-seconds "${browser_egress_role_deadline_seconds}" >/dev/null
+      --role-deadline-seconds "${browser_egress_role_deadline_seconds}" \
+      >/dev/null || false
     browser_egress_forbidden_id="${QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS[-1]}"
     browser_egress_failure_code=docker-start-failed
     browser_egress_failure_stage=forbidden-sink-readiness
@@ -10507,61 +10662,77 @@ test "$(find /qcsd-policy -mindepth 1 -maxdepth 1 -type f -printf x)" = x
       --tmpfs /opt/qcsd-lab/config/class-study/v1:ro,nosuid,nodev,noexec,mode=000 \
       "${browser_egress_labels[@]}" --label org.qcsd.role=dns_sink \
       "${browser_egress_role_common[@]}" dns-sink --vector-id "${browser_egress_vector_id}" \
-      --role-deadline-seconds "${browser_egress_role_deadline_seconds}" >/dev/null
+      --role-deadline-seconds "${browser_egress_role_deadline_seconds}" \
+      >/dev/null || false
     browser_egress_dns_id="${QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS[-1]}"
     browser_egress_failure_code=docker-start-failed
     browser_egress_failure_stage=dns-sink-readiness
     browser_egress_wait_healthy "${browser_egress_dns_id}" || false
     browser_egress_failure_code=browser-start-failed
     browser_egress_failure_stage=observer-subject-start
-    _qcsd_docker_api kill --signal USR1 "${browser_egress_observer_id}" >/dev/null
+    _qcsd_docker_api kill --signal USR1 "${browser_egress_observer_id}" \
+      >/dev/null || false
     browser_egress_wait_container_marker "${browser_egress_observer_id}" \
       /tmp/qcsd-browser-egress-subject-started.ready observer-subject-start || false
     browser_egress_failure_stage=browser-action
-    _qcsd_docker_api kill --signal USR1 "${browser_egress_browser_id}" >/dev/null
+    _qcsd_docker_api kill --signal USR1 "${browser_egress_browser_id}" \
+      >/dev/null || false
     browser_egress_browser_exit="$(browser_egress_wait_exit_code \
       "${browser_egress_browser_id}" browser)"
     [[ "${browser_egress_browser_exit}" == 0 ]] || false
     browser_egress_failure_code=capture-process-failed
     browser_egress_failure_stage=reporting-grace
-    _qcsd_docker_api kill --signal USR2 "${browser_egress_observer_id}" >/dev/null
+    _qcsd_docker_api kill --signal USR2 "${browser_egress_observer_id}" \
+      >/dev/null || false
     browser_egress_wait_container_marker "${browser_egress_observer_id}" \
       /tmp/qcsd-browser-egress-grace.ready observer-grace || false
     browser_egress_failure_code=infrastructure-timeout
     browser_egress_failure_stage=sink-fixture-stop
     for browser_egress_role_id in "${browser_egress_fixture_id}" \
       "${browser_egress_forbidden_id}" "${browser_egress_dns_id}"; do
-      _qcsd_docker_api kill --signal TERM "${browser_egress_role_id}" >/dev/null
+      _qcsd_docker_api kill --signal TERM "${browser_egress_role_id}" \
+        >/dev/null || false
       [[ "$(browser_egress_wait_exit_code \
         "${browser_egress_role_id}" sink-or-fixture)" == 0 ]] || false
     done
     browser_egress_failure_code=capture-process-failed
     browser_egress_failure_stage=capture-finalization
-    _qcsd_docker_api kill --signal HUP "${browser_egress_observer_id}" >/dev/null
+    _qcsd_docker_api kill --signal HUP "${browser_egress_observer_id}" \
+      >/dev/null || false
     browser_egress_wait_container_marker "${browser_egress_observer_id}" \
       /tmp/qcsd-browser-egress-receipt.ready observer-receipt || false
     browser_egress_wait_observer_receipt "${browser_egress_observer_id}" \
       "${browser_egress_attempt_scratch}/capture.json" || false
-    _qcsd_docker_api cp "${browser_egress_observer_id}:/tmp/capture.pcapng" \
-      "${browser_egress_evidence_host}"
-    chmod 0600 -- "${browser_egress_evidence_host}"
-    _qcsd_docker_api kill --signal TERM "${browser_egress_observer_id}" >/dev/null
+    # Keep this explicit top-level failure boundary.  The launcher deliberately
+    # does not enable errtrace globally; a nested Docker helper failure would
+    # otherwise exit under errexit before the attempt-sealing ERR trap runs.
+    browser_egress_extract_observer_pcap "${browser_egress_observer_id}" \
+      "${browser_egress_evidence_host}" \
+      "${browser_egress_attempt_scratch}/capture.json" \
+      "${browser_egress_evidence_relative}" || false
+    _qcsd_docker_api kill --signal TERM "${browser_egress_observer_id}" \
+      >/dev/null || false
     browser_egress_observer_exit="$(browser_egress_wait_exit_code \
       "${browser_egress_observer_id}" observer)"
     [[ "${browser_egress_observer_exit}" == 0 ]] || false
-    _qcsd_docker_api logs "${browser_egress_browser_id}" >"${browser_egress_attempt_scratch}/actor.json"
-    _qcsd_docker_api logs "${browser_egress_fixture_id}" >"${browser_egress_attempt_scratch}/fixture.json"
-    _qcsd_docker_api logs "${browser_egress_forbidden_id}" >"${browser_egress_attempt_scratch}/forbidden.json"
-    _qcsd_docker_api logs "${browser_egress_dns_id}" >"${browser_egress_attempt_scratch}/dns.json"
+    _qcsd_docker_api logs "${browser_egress_browser_id}" \
+      >"${browser_egress_attempt_scratch}/actor.json" || false
+    _qcsd_docker_api logs "${browser_egress_fixture_id}" \
+      >"${browser_egress_attempt_scratch}/fixture.json" || false
+    _qcsd_docker_api logs "${browser_egress_forbidden_id}" \
+      >"${browser_egress_attempt_scratch}/forbidden.json" || false
+    _qcsd_docker_api logs "${browser_egress_dns_id}" \
+      >"${browser_egress_attempt_scratch}/dns.json" || false
     _qcsd_docker_api network inspect "${browser_egress_network_id}" \
-      >"${browser_egress_attempt_scratch}/network.json"
+      >"${browser_egress_attempt_scratch}/network.json" || false
     _qcsd_docker_api container inspect \
       "${browser_egress_browser_id}" "${browser_egress_observer_id}" \
       "${browser_egress_fixture_id}" "${browser_egress_forbidden_id}" \
-      "${browser_egress_dns_id}" >"${browser_egress_attempt_scratch}/containers.json"
+      "${browser_egress_dns_id}" \
+      >"${browser_egress_attempt_scratch}/containers.json" || false
     if [[ -n "${browser_egress_policy_volume_name}" ]]; then
       _qcsd_docker_api volume inspect "${browser_egress_policy_volume_name}" \
-        >"${browser_egress_attempt_scratch}/volume.json"
+        >"${browser_egress_attempt_scratch}/volume.json" || false
     else
       printf 'null\n' >"${browser_egress_attempt_scratch}/volume.json"
     fi
@@ -10584,7 +10755,7 @@ test "$(find /qcsd-policy -mindepth 1 -maxdepth 1 -type f -printf x)" = x
       --container-inspect-json /qcsd-input/containers.json \
       --volume-inspect-json /qcsd-input/volume.json \
       --fixture-json /qcsd-input/fixture.json \
-      --live-docker-json "${browser_egress_live_docker_json}"
+      --live-docker-json "${browser_egress_live_docker_json}" || false
     printf '%s\n' "${QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_RUNTIME}" >"${browser_egress_attempt_scratch}/runtime.json"
     browser_egress_finished_at="$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
     browser_egress_causal_inputs_ready=1

@@ -829,7 +829,7 @@ def _observer(args: argparse.Namespace) -> None:
     )
     RECEIPT_READY_PATH.write_text("ready\n", encoding="ascii")
     # The capture lives on a mount-free tmpfs.  Keep the container alive until
-    # the host has read the canonical receipt and copied the closed PCAP.
+    # the host has read the canonical receipt and streamed the closed PCAP.
     _wait(stopped)
 
 
