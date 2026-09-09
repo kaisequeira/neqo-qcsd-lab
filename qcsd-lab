@@ -10723,7 +10723,8 @@ test "$(find /qcsd-policy -mindepth 1 -maxdepth 1 -type f -printf x)" = x
       >"${browser_egress_attempt_scratch}/forbidden.json" || false
     _qcsd_docker_api logs "${browser_egress_dns_id}" \
       >"${browser_egress_attempt_scratch}/dns.json" || false
-    _qcsd_docker_api network inspect "${browser_egress_network_id}" \
+    _qcsd_docker_api network inspect --format '{{json .}}' \
+      "${browser_egress_network_id}" \
       >"${browser_egress_attempt_scratch}/network.json" || false
     _qcsd_docker_api container inspect \
       "${browser_egress_browser_id}" "${browser_egress_observer_id}" \

@@ -390,10 +390,50 @@ initialised `QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_RUNTIME` before assigning that
 caller binding. It records one sealed `semantic-failure`, no passed vector, and
 `next_vector_ordinal=1`; no final passing browser-egress receipt exists. This
 is an orchestration defect, not an accepted vector, scientific sample, or
-candidate validation. Current source initialises that caller binding and
-postdates v73's exact images, so v73 is historical and non-evidentiary for
-repaired source and must not be resumed. Fresh v74 must rebuild and rerun every
-source-bound gate, including pinned-CDP and browser-egress `create`.
+candidate validation. Lab `bee5b1a4bada4a461ac7f0a5c2d22c3f5aa14cdc`
+initialises that caller binding and postdates v73's exact images, so v73 is
+historical and non-evidentiary for repaired source and must not be resumed.
+
+V74 then completed the canonical fresh pull/no-cache three-image build for
+that exact clean Lab source and clean Rust/gitlink
+`46313bef90ad392b7ca293ab7cf28108d2f35c7f`. Its
+[build execution](artifacts/buflo-study/build-execution-v74.json) has
+whole-file/payload SHA-256
+`b04576c65a232db48ea99f76eca9a221888eef71ec8fbd88af222e733cd73e0d` /
+`ae4c83b91c2b31491bdd37aadccf68e567a9db1b7270f667f22b14c244f6f3f8`;
+its [completion](artifacts/buflo-study/build-completion-v74.json) has
+whole-file/payload SHA-256
+`d168b8c757698530dee06551e86be086ae5d172ed9fd8d74e74de80d09e7610a` /
+`84889e23b10fe564169b868fcb8436de62dc6592982dd7843f61019e21b8f4cd`.
+The collection, preparation, and isolated-reference image identities are
+`sha256:e608dd3eca64650e8ce78b0d4bddad80001d291a64ce0897703a8088065c5ef4`,
+`sha256:ed1934fcc80ffb6327c6cf890ff7bf3615e482134b8bf6f3b4677a4960cbe757`,
+and
+`sha256:4256e457a17823c48f956873d96701b604946e0a5fb8b35a761fb8264365ac3a`.
+Its [pinned-CDP receipt](artifacts/buflo-study/pinned-cdp-execution-v74.json)
+passed with whole-file/payload SHA-256
+`732db43e99dc7146185ae5217d1c13acecdd0d74b5f33e875f525fed7230a545` /
+`75eedfbf2cfe207ca5cb3421739c1b88ea1b3011830ae666e4e77de342b865c1`
+and probe-contract SHA-256
+`3fa23e65a63a3b5646155538859afa382b48d790ec5ae2f6bc3cdcddbd712059`.
+
+The
+[v74 checkpoint](artifacts/buflo-study/browser-egress-qualification-v74/experiment.json)
+is terminal `failed`. Attempt 1 for the first vector,
+`constructor--page--websocket`, ended `runtime-binding-failed` at
+`runtime-projection`: raw `docker network inspect` serialised the single
+network as a one-element top-level JSON array, while the strict projection
+consumer requires one JSON object. It records one sealed `semantic-failure`,
+no passed vector, and `next_vector_ordinal=1`; there is no passing final
+browser-egress receipt. This is orchestration-only failure evidence, not an
+accepted vector, scientific sample, or candidate validation. Current source
+makes only the producer emit one object with
+`network inspect --format '{{json .}}'` and adds regression coverage. The
+repair passed 202/202 browser-egress tests (including the complete synthetic
+110-vector chain) and the remaining Lab suite passed 4,290 tests with 17
+declared skips; shell syntax and diff checks also passed. V74 cannot authorise
+the changed source, so v75 is the next fresh cohort and must repeat the
+source-bound gates.
 Browser-egress remains 0/110,
 certification remains 0/900, formal capture remains 0/16,000, and every other
 scientific numerator remains zero.
@@ -1046,7 +1086,14 @@ then passed the corrected-source fresh no-cache build/completion and pinned-CDP
 gates, but browser-egress `create` failed at vector 1 during
 `capture-finalization`, before sealing an attempt. Its running checkpoint has
 no sealed attempt or attempt evidence; the implemented extraction/error-boundary
-repair moves fresh-source authority to v73.
+repair moved fresh-source authority to v73. V73 bound that repair, passed its
+build/completion and pinned-CDP gates, and sealed the first-vector capture
+before failing the caller runtime binding. V74 bound that next repair and
+passed the same source-bound gates, then terminally failed first-vector runtime
+projection because raw network inspect supplied a singleton JSON array rather
+than the required object. The producer-only formatted-inspect fix and tests are
+present and passed in current source, so fresh-source authority now requires
+v75.
 Every downstream scientific counter remains zero.
 
 The retained post-v55 Lab engineering lineage also hardens durable Docker HANDOFF
@@ -1207,8 +1254,13 @@ browser-egress vector 1 during `capture-finalization`. The implemented
 extraction/error-boundary repair postdates that image. V73 bound that repair,
 passed its fresh build and pinned-CDP gates, and sealed the vector-1 PCAP before
 the undeclared runtime-projection caller binding stopped the attempt with zero
-passed vectors. The current binding fix postdates v73, so v74 must rebuild and
-repeat the source-bound gates.
+passed vectors. V74 bound the caller fix in clean Lab `bee5b1a4…4cdc`, passed
+its fresh build/completion and pinned-CDP gates, then terminally failed the
+first browser vector at `runtime-projection` because raw Docker network inspect
+produced a singleton JSON array where the consumer requires an object. The
+producer-only formatted-inspect fix and regression coverage are present and
+passed in current source, so v75 must rebuild and repeat the source-bound
+gates.
 Browser-egress is 0/110,
 timing stress is 0/12, regression is 0/18, and controlled qualification is
 0/160. Real acquisition observations remain zero.
@@ -1280,14 +1332,18 @@ and passed its fresh build/completion pair and pinned-CDP gate. Its
 browser-egress vector-1 `create` failed during `capture-finalization`, before
 attempt sealing; the checkpoint remains `running` with `attempts=[]`, ordinal
 1, and no attempt evidence. The implemented extraction/error-boundary repair
-deliberately supersedes that source. V73 is the exact next allocator-authorised
-cohort. It must pass a fresh
+deliberately superseded that source. V73 bound the extraction repair and v74
+bound the later caller repair; each passed build/completion and pinned-CDP but
+terminally failed the first browser vector at its next orchestration boundary.
+The producer-only formatted-network-inspect repair present in current source
+supersedes v74.
+V75 is the exact next allocator-authorised cohort. It must pass a fresh
 build/completion pair, pinned-CDP gate, 110/110 browser-egress gate, isolated
 reference, 12/12 timing stress, 18/18 regression, regression-bound code gate,
 and 160/160 controlled qualification before expanded-class acquisition can
-begin. V55–v72 cannot authorise repaired-source evidence. The complete current
-status and earlier cohort chronology are retained in the authoritative
-workspace [`PROJECT.md`](../PROJECT.md).
+begin. V55–v74 cannot authorise the current repaired-source evidence. The
+complete current status and earlier cohort chronology are retained in the
+authoritative workspace [`PROJECT.md`](../PROJECT.md).
 
 The current Lab boundary additionally classifies typed client defence/QCSD
 runner errors as `StrictClientDefenseExecutionFailure`. That type and
@@ -1507,9 +1563,14 @@ pinned-CDP gates, but its browser-egress vector-1 run failed during
 could not extract the tmpfs capture. The receipt-verified `docker exec`
 streaming and error-boundary repair was bound by v73's passing build and
 pinned-CDP receipts. Its first vector sealed the PCAP, then failed at
-`runtime-projection` because the caller output scalar was undeclared. Current
-source fixes that remaining orchestration defect; fresh v74 build and
-source-bound gates are required. No downstream scientific authority exists.
+`runtime-projection` because the caller output scalar was undeclared. V74 bound
+that repair and passed its build/completion and pinned-CDP gates, but its first
+vector terminally failed the same stage because unformatted Docker network
+inspect produced a one-element JSON array rather than the required object.
+The producer-only `--format '{{json .}}'` correction and its regression tests
+are present and passed in current source; fresh v75 build and source-bound
+gates are required. No
+downstream scientific authority exists.
 
 The build-execution schema-4 integration is committed at clean Lab
 `69a14ebe48f78d08a8b36d3e573955ec64f00ff9`. V61 exercised it but failed before
@@ -1613,8 +1674,12 @@ attempt, attempt evidence, final receipt, or failure receipt after its
 pinned-CDP receipts bind clean Lab `2bab7a2c…` / the same Rust and prove the
 streaming repair, but its browser-egress root is terminally failed after the
 runtime-projection binding defect, with no passed vector or final receipt.
-Current source fixes that defect, but no build pair authorises the fix, so the
-sequence must start again at v74.
+V74's valid build/completion and pinned-CDP receipts bind clean Lab
+`bee5b1a4…4cdc` / the same Rust. Its browser-egress root is terminally failed
+at the first vector's runtime projection because a singleton JSON array was
+supplied to the object-only network projection. The producer-only formatted-
+inspect fix and tests are present and passed but have no authorising build
+pair, so the sequence must start again at v75.
 
 Earlier on 1 September 2026, a read-only probe found only about 2.19 GB
 available on the backing C: volume and Docker again exposed data-device I/O
@@ -1724,10 +1789,12 @@ Playwright request interception marker-gated and
 subresource admission owner. With the marker absent, native wildcard
 interception remains unchanged; with it active, non-null HTTP credentials are
 rejected before Playwright mutates network-manager state. Schema 7 was built
-and exercised successfully by the v68, v69, v72, and v73 pinned-CDP probes.
-V73 image-backed the PCAP extraction/error-boundary repair, but its first
-browser vector exposed the remaining caller binding defect. Current source
-fixes that orchestration boundary and requires a fresh v74 image. The pinned
+and exercised successfully by the v68, v69, v72, v73, and v74 pinned-CDP
+probes. V73 image-backed the PCAP extraction/error-boundary repair, but its
+first browser vector exposed the remaining caller binding defect. V74 bound
+that fix, then exposed the raw-network-inspect array/object mismatch. The
+producer-only formatted-inspect correction is present and passed in current
+source and requires a fresh v75 image. The pinned
 contract binds post-patch `crNetworkManager.js` SHA-256
 `c10daf1b5c5c6c64e1c545ff7d7bb16f9990aa71c4fe64e081c3a43157d4531a`,
 the 401-file/131,857,836-byte package tree at
@@ -1873,8 +1940,12 @@ failure or final receipt exists. The receipt-verified `docker exec` streaming
 and error-boundary repair was bound by v73's fresh build/completion pair and
 passing pinned-CDP receipt. Its first browser vector sealed the capture before
 the undeclared runtime-projection caller binding produced a terminal failed
-attempt. Current source fixes that binding and therefore requires a fresh v74
-build/completion pair plus a new pinned-CDP receipt. Pass that canonical receipt
+attempt. V74 bound that fix in a fresh build/completion pair and passing
+pinned-CDP receipt, then its first vector terminally failed runtime projection
+because raw Docker network inspect emitted a singleton array where one object
+is required. The producer-only formatted-inspect fix is present and passed in
+current source and therefore requires a fresh v75 build/completion pair plus a
+new pinned-CDP receipt. Pass that canonical receipt
 to the foundation command as `--pinned-cdp-receipt "$PINNED_CDP"`. It is the sixth
 explicit foundation hard gate: the foundation binds the receipt and payload
 hashes, its exact build binding, and the fixed probe-contract hash, and requires
@@ -2249,8 +2320,12 @@ gates, but browser-egress vector 1 failed during `capture-finalization`, before
 a sealed attempt. Its durable claim means the registry consumes v62–v72.
 V73 then passed its build/completion and pinned-CDP gates, sealed vector 1's
 PCAP, and terminally failed the runtime projection with no passed vector. Its
-durable claim extends the registry through v73. None of the v69, v72, or v73
-historical checkpoints authorises the current binding repair; v74 is the exact
+durable claim extends the registry through v73. V74 then passed the same
+source-bound gates for clean Lab `bee5b1a4…4cdc`, but terminally failed vector
+1 at runtime projection because raw network inspection emitted a singleton
+JSON array rather than the required object. Its durable claim extends the
+registry through v74. None of the v69, v72, v73, or v74 historical checkpoints
+authorises the current producer-only formatted-inspect repair; v75 is the exact
 next permitted value and must be built before any downstream gate runs.
 
 ```bash

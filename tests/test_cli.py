@@ -3014,6 +3014,17 @@ def test_browser_egress_runtime_projection_declares_stdout_destination() -> None
     assert initialise < capture
 
 
+def test_browser_egress_runtime_projection_serialises_one_network_object() -> None:
+    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
+    runtime_inputs = launcher.split(
+        '    _qcsd_docker_api logs "${browser_egress_dns_id}"', maxsplit=1
+    )[1].split("    _qcsd_docker_api container inspect", maxsplit=1)[0]
+
+    assert "network inspect --format '{{json .}}'" in runtime_inputs
+    assert '"${browser_egress_network_id}"' in runtime_inputs
+    assert '>"${browser_egress_attempt_scratch}/network.json"' in runtime_inputs
+
+
 def test_browser_egress_observer_pcap_extraction_streams_tmpfs_privately(
     tmp_path: Path,
 ) -> None:
