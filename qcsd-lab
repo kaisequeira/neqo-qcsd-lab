@@ -10880,10 +10880,16 @@ if value["assembled"] is False:
     if browser_egress_assemble_fields_output="$(python3 -I -c '
 import json, re, sys
 value=json.load(open(sys.argv[1], encoding="utf-8"))
-if set(value) not in ({"schema_version","assembled"},{"schema_version","assembled","failure_code"}) or type(value.get("schema_version")) is not int or value["schema_version"] != 1 or type(value.get("assembled")) is not bool:
+if not isinstance(value,dict) or type(value.get("schema_version")) is not int or value["schema_version"] != 1 or type(value.get("assembled")) is not bool:
     raise SystemExit("browser-egress assembly result is malformed")
-print("passed" if value["assembled"] else "failed")
-if value["assembled"] is False:
+if value["assembled"] is True:
+    if set(value) != {"schema_version","assembled","checkpoint"} or not isinstance(value.get("checkpoint"),dict):
+        raise SystemExit("browser-egress assembly result is malformed")
+    print("passed")
+else:
+    if set(value) != {"schema_version","assembled","failure_code"}:
+        raise SystemExit("browser-egress assembly result is malformed")
+    print("failed")
     code=value.get("failure_code")
     if not isinstance(code, str) or re.fullmatch(r"[a-z0-9][a-z0-9-]{0,127}", code) is None:
         raise SystemExit("browser-egress assembly failure code is malformed")

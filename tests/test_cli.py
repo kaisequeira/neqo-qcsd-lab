@@ -2568,40 +2568,37 @@ def test_browser_egress_launcher_contract_is_canonical_and_prepare_bound() -> No
     assert "requires exactly one action" in rejected.stderr
 
 
-@pytest.mark.parametrize(
-    ("marker", "end_marker"),
-    [
-        (
-            "browser_egress_prevalidate_fields_output=\"$(python3 -I -c '\n",
-            '\n\' "${browser_egress_attempt_scratch}/prevalidate.json")"',
-        ),
-        (
-            "browser_egress_assemble_fields_output=\"$(python3 -I -c '\n",
-            '\n\' "${browser_egress_attempt_scratch}/assemble.json")"',
-        ),
-    ],
-)
-def test_browser_egress_shell_publication_parsers_require_exact_json_types(
-    tmp_path: Path,
-    marker: str,
-    end_marker: str,
-) -> None:
+def _browser_egress_shell_parser(marker: str, end_marker: str) -> str:
     launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
-    code = launcher.split(marker, maxsplit=1)[1].split(end_marker, maxsplit=1)[0]
+    return launcher.split(marker, maxsplit=1)[1].split(end_marker, maxsplit=1)[0]
+
+
+def _run_browser_egress_shell_parser(
+    tmp_path: Path, code: str, value: dict
+) -> subprocess.CompletedProcess[str]:
     receipt = tmp_path / "receipt.json"
+    receipt.write_text(json.dumps(value), encoding="utf-8")
+    return subprocess.run(
+        [sys.executable, "-I", "-c", code, str(receipt)],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=5,
+    )
 
-    def parse(value: dict) -> subprocess.CompletedProcess[str]:
-        receipt.write_text(json.dumps(value), encoding="utf-8")
-        return subprocess.run(
-            [sys.executable, "-I", "-c", code, str(receipt)],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=5,
-        )
 
-    accepted = parse({"schema_version": 1, "assembled": True})
+def test_browser_egress_shell_prevalidation_parser_requires_exact_json_types(
+    tmp_path: Path,
+) -> None:
+    code = _browser_egress_shell_parser(
+        "browser_egress_prevalidate_fields_output=\"$(python3 -I -c '\n",
+        '\n\' "${browser_egress_attempt_scratch}/prevalidate.json")"',
+    )
+
+    accepted = _run_browser_egress_shell_parser(
+        tmp_path, code, {"schema_version": 1, "assembled": True}
+    )
     assert accepted.returncode == 0
     assert accepted.stdout == "passed\n"
     assert accepted.stderr == ""
@@ -2611,7 +2608,56 @@ def test_browser_egress_shell_publication_parsers_require_exact_json_types(
         {"schema_version": True, "assembled": True},
         {"schema_version": 1, "assembled": True, "unexpected": None},
     ):
-        rejected = parse(malformed)
+        rejected = _run_browser_egress_shell_parser(tmp_path, code, malformed)
+        assert rejected.returncode != 0
+        assert rejected.stdout == ""
+        assert "result is malformed" in rejected.stderr
+
+
+def test_browser_egress_shell_mutating_parser_requires_discriminated_ack(
+    tmp_path: Path,
+) -> None:
+    code = _browser_egress_shell_parser(
+        "browser_egress_assemble_fields_output=\"$(python3 -I -c '\n",
+        '\n\' "${browser_egress_attempt_scratch}/assemble.json")"',
+    )
+    accepted = _run_browser_egress_shell_parser(
+        tmp_path,
+        code,
+        {"schema_version": 1, "assembled": True, "checkpoint": {}},
+    )
+    assert accepted.returncode == 0
+    assert accepted.stdout == "passed\n"
+    assert accepted.stderr == ""
+
+    failed = _run_browser_egress_shell_parser(
+        tmp_path,
+        code,
+        {
+            "schema_version": 1,
+            "assembled": False,
+            "failure_code": "packet-policy-failed",
+        },
+    )
+    assert failed.returncode == 0
+    assert failed.stdout == "failed\npacket-policy-failed\n"
+    assert failed.stderr == ""
+
+    for malformed in (
+        {"schema_version": 1, "assembled": True},
+        {"schema_version": 1, "assembled": True, "checkpoint": None},
+        {"schema_version": 1, "assembled": True, "failure_code": "wrong-branch"},
+        {"schema_version": 1, "assembled": False, "checkpoint": {}},
+        {"schema_version": 1, "assembled": 1, "checkpoint": {}},
+        {"schema_version": True, "assembled": True, "checkpoint": {}},
+        {
+            "schema_version": 1,
+            "assembled": True,
+            "checkpoint": {},
+            "unexpected": None,
+        },
+    ):
+        rejected = _run_browser_egress_shell_parser(tmp_path, code, malformed)
         assert rejected.returncode != 0
         assert rejected.stdout == ""
         assert "result is malformed" in rejected.stderr
@@ -2943,12 +2989,8 @@ def _browser_egress_extraction_shell_function() -> str:
     )
 
 
-def _browser_egress_extraction_receipt(
-    tmp_path: Path, payload: bytes
-) -> tuple[Path, str]:
-    evidence_relative = (
-        "evidence/001--constructor--page--websocket/attempt-1/capture.pcapng"
-    )
+def _browser_egress_extraction_receipt(tmp_path: Path, payload: bytes) -> tuple[Path, str]:
+    evidence_relative = "evidence/001--constructor--page--websocket/attempt-1/capture.pcapng"
     receipt = tmp_path / "capture.json"
     receipt.write_text(
         json.dumps(
@@ -2985,9 +3027,7 @@ def test_browser_egress_observer_protocol_extracts_closed_pcap_before_exit() -> 
     fixture_stop = measured.index('for browser_egress_role_id in "${browser_egress_fixture_id}"')
     finish = measured.index('kill --signal HUP "${browser_egress_observer_id}"')
     receipt = measured.index("qcsd-browser-egress-receipt.ready")
-    extract = measured.index(
-        'browser_egress_extract_observer_pcap "${browser_egress_observer_id}"'
-    )
+    extract = measured.index('browser_egress_extract_observer_pcap "${browser_egress_observer_id}"')
     stop = measured.index('kill --signal TERM "${browser_egress_observer_id}"')
     wait = measured.index('browser_egress_observer_exit="$(browser_egress_wait_exit_code')
     assert grace < fixture_stop < finish < receipt < extract < stop < wait
@@ -3000,16 +3040,13 @@ def test_browser_egress_runtime_projection_declares_stdout_destination() -> None
     projection = launcher.split(
         "    browser_egress_failure_stage=runtime-projection\n", maxsplit=1
     )[1].split(
-        '    printf \'%s\\n\' "${QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_RUNTIME}"',
+        "    printf '%s\\n' \"${QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_RUNTIME}\"",
         maxsplit=1,
     )[0]
 
-    initialise = projection.index(
-        '    QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_RUNTIME=""\n'
-    )
+    initialise = projection.index('    QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_RUNTIME=""\n')
     capture = projection.index(
-        "    qcsd_capture_attached_docker_output "
-        "QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_RUNTIME"
+        "    qcsd_capture_attached_docker_output QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_RUNTIME"
     )
     assert initialise < capture
 
@@ -3019,12 +3056,8 @@ def test_browser_egress_runtime_projection_uses_live_and_terminal_snapshots() ->
     vector_loop = launcher.split('browser_egress_policy_volume_name=""', maxsplit=1)[1].split(
         "    browser_egress_finished_at=", maxsplit=1
     )[0]
-    final_readiness = vector_loop.index(
-        'browser_egress_wait_healthy "${browser_egress_dns_id}"'
-    )
-    network_snapshot = vector_loop.index(
-        "network inspect --format '{{json .}}'", final_readiness
-    )
+    final_readiness = vector_loop.index('browser_egress_wait_healthy "${browser_egress_dns_id}"')
+    network_snapshot = vector_loop.index("network inspect --format '{{json .}}'", final_readiness)
     topology_snapshot = vector_loop.index(
         '"${browser_egress_attempt_scratch}/topology-containers.json"',
         network_snapshot,
@@ -3042,12 +3075,11 @@ def test_browser_egress_runtime_projection_uses_live_and_terminal_snapshots() ->
 
     assert final_readiness < network_snapshot < topology_snapshot < first_action
     assert first_action < observer_exit < terminal_snapshot < runtime_projection
-    assert '"${browser_egress_network_id}"' in vector_loop[
-        network_snapshot:topology_snapshot
-    ]
-    assert '>"${browser_egress_attempt_scratch}/network.json"' in vector_loop[
-        network_snapshot:topology_snapshot
-    ]
+    assert '"${browser_egress_network_id}"' in vector_loop[network_snapshot:topology_snapshot]
+    assert (
+        '>"${browser_egress_attempt_scratch}/network.json"'
+        in vector_loop[network_snapshot:topology_snapshot]
+    )
     assert (
         "--topology-container-inspect-json /qcsd-input/topology-containers.json"
         in vector_loop[terminal_snapshot:]
@@ -3113,9 +3145,7 @@ def test_real_docker_browser_egress_extractor_streams_tmpfs_bytes(
     )
     if probe.returncode != 0:
         pytest.skip("Docker daemon is unavailable")
-    image = os.environ.get(
-        "QCSD_BROWSER_EGRESS_SIGNAL_TEST_IMAGE", "neqo-qcsd-lab-prepare:local"
-    )
+    image = os.environ.get("QCSD_BROWSER_EGRESS_SIGNAL_TEST_IMAGE", "neqo-qcsd-lab-prepare:local")
     image_probe = subprocess.run(
         [docker, "image", "inspect", image],
         stdin=subprocess.DEVNULL,
@@ -3195,7 +3225,7 @@ def test_real_docker_browser_egress_extractor_streams_tmpfs_bytes(
             + extraction
             + f"qcsd_invoking_uid={os.getuid()}\n"
             + f"qcsd_invoking_gid={os.getgid()}\n"
-            + f"_qcsd_docker_api() {{ {shlex.quote(docker)} \"$@\"; }}\n"
+            + f'_qcsd_docker_api() {{ {shlex.quote(docker)} "$@"; }}\n'
             + "browser_egress_extract_observer_pcap "
             + f"{shlex.quote(name)} {str(destination)!r} {str(receipt)!r} "
             + f"{evidence_relative!r}\n",
@@ -3210,9 +3240,10 @@ def test_real_docker_browser_egress_extractor_streams_tmpfs_bytes(
         )
         assert extracted.returncode == 0, (extracted.stdout, extracted.stderr)
         assert destination.read_bytes() == payload
-        assert hashlib.sha256(destination.read_bytes()).hexdigest() == hashlib.sha256(
-            payload
-        ).hexdigest()
+        assert (
+            hashlib.sha256(destination.read_bytes()).hexdigest()
+            == hashlib.sha256(payload).hexdigest()
+        )
         assert stat.S_IMODE(destination.stat().st_mode) == 0o600
         state = subprocess.run(
             [docker, "container", "inspect", "--format", "{{.State.Status}}", name],
@@ -3247,9 +3278,7 @@ def test_real_docker_network_container_inspection_has_two_phase_shape() -> None:
     )
     if probe.returncode != 0:
         pytest.skip("Docker daemon is unavailable")
-    image = os.environ.get(
-        "QCSD_BROWSER_EGRESS_SIGNAL_TEST_IMAGE", "neqo-qcsd-lab-prepare:local"
-    )
+    image = os.environ.get("QCSD_BROWSER_EGRESS_SIGNAL_TEST_IMAGE", "neqo-qcsd-lab-prepare:local")
     image_probe = subprocess.run(
         [docker, "image", "inspect", image],
         stdin=subprocess.DEVNULL,
@@ -3326,9 +3355,7 @@ def test_real_docker_network_container_inspection_has_two_phase_shape() -> None:
             assert logs == "READY\n"
 
         live_network = json.loads(
-            checked_docker(
-                "network", "inspect", "--format", "{{json .}}", network_name
-            ).stdout
+            checked_docker("network", "inspect", "--format", "{{json .}}", network_name).stdout
         )
         live_containers = json.loads(
             checked_docker("container", "inspect", owner_id, observer_id).stdout
@@ -3363,13 +3390,9 @@ def test_real_docker_network_container_inspection_has_two_phase_shape() -> None:
         assert owner_attachment["IPAddress"] != ""
         assert live_member["IPv4Address"].startswith(owner_attachment["IPAddress"] + "/")
 
-        checked_docker(
-            "container", "stop", "--time", "5", observer_id, owner_id, timeout=20
-        )
+        checked_docker("container", "stop", "--time", "5", observer_id, owner_id, timeout=20)
         terminal_network = json.loads(
-            checked_docker(
-                "network", "inspect", "--format", "{{json .}}", network_name
-            ).stdout
+            checked_docker("network", "inspect", "--format", "{{json .}}", network_name).stdout
         )
         terminal_containers = json.loads(
             checked_docker("container", "inspect", owner_id, observer_id).stdout
@@ -3519,7 +3542,7 @@ def test_browser_egress_extraction_failure_reaches_production_err_boundary_once(
         + "  status=$?\n"
         + "  trap - ERR\n"
         + "  printf '%s:%s:%s\\n' \"$browser_egress_failure_code\" "
-        + f"\"$browser_egress_failure_stage\" \"$status\" >>{str(sealed)!r}\n"
+        + f'"$browser_egress_failure_stage" "$status" >>{str(sealed)!r}\n'
         + '  exit "$status"\n'
         + "}\n"
         + "trap seal_failure ERR\n"
@@ -4415,6 +4438,57 @@ def test_browser_egress_lost_append_and_status_output_cannot_contaminate_evidenc
     assert "could not reconcile ambiguous result publication" in completed.stderr
 
 
+def test_browser_egress_success_ack_skips_ambiguous_reconciliation(
+    tmp_path: Path,
+) -> None:
+    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
+    flow = (
+        "browser_egress_assemble_command_status=0"
+        + launcher.split("browser_egress_assemble_command_status=0", maxsplit=1)[1].split(
+            "    trap - ERR\n    rm -rf", maxsplit=1
+        )[0]
+        + "    trap - ERR\n"
+    )
+    scratch = tmp_path / "attempt"
+    scratch.mkdir()
+    reconciliation_marker = tmp_path / "attempt-status-called"
+    script = tmp_path / "successful-output.sh"
+    script.write_text(
+        "set -Eeuo pipefail\n"
+        + f"RECONCILIATION_MARKER={str(reconciliation_marker)!r}\n"
+        + "qcsd_invoking_uid=1000\nqcsd_invoking_gid=1000\n"
+        + "image_id=image\nROOT=/lab\nbrowser_egress_tool=/tool\n"
+        + "browser_egress_result_container=/lab/result\n"
+        + f"browser_egress_attempt_scratch={str(scratch)!r}\n"
+        + "browser_egress_append_mounts=()\n"
+        + "browser_egress_vector_id=constructor--page--websocket\n"
+        + "browser_egress_started_at=2026-09-06T00:00:00Z\n"
+        + "browser_egress_finished_at=2026-09-06T00:00:01Z\n"
+        + "browser_egress_causal_inputs_ready=1\n"
+        + "browser_egress_failure_verdict=semantic-failure\n"
+        + "browser_egress_failure_code=semantic-observation-failed\n"
+        + "browser_egress_failure_stage=result-assembly\n"
+        + "qcsd_capture_attached_docker_output() {\n"
+        + "  local -n captured=$1; shift\n"
+        + "  if [[ \" $* \" == *' attempt-status '* ]]; then\n"
+        + '    touch "$RECONCILIATION_MARKER"\n'
+        + "    return 73\n"
+        + "  fi\n"
+        + '  captured=\'{"schema_version":1,"assembled":true,"checkpoint":{}}\'\n'
+        + "  return 0\n"
+        + "}\n"
+        + flow,
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        ["bash", str(script)], capture_output=True, text=True, check=False, timeout=10
+    )
+    assert completed.returncode == 0, (completed.stdout, completed.stderr)
+    assert completed.stdout == ""
+    assert completed.stderr == ""
+    assert not reconciliation_marker.exists()
+
+
 def test_browser_egress_projection_accepts_only_real_docker_capability_shape(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -5029,6 +5103,7 @@ def test_browser_egress_projection_accepts_only_real_docker_capability_shape(
 @pytest.mark.parametrize(
     ("failure_stage", "expected_code"),
     (
+        ("success", None),
         ("runtime", "runtime-binding-failed"),
         ("sink", "sink-reconciliation-failed"),
         ("fixture", "fixture-observation-failed"),
@@ -5041,7 +5116,7 @@ def test_browser_egress_projection_accepts_only_real_docker_capability_shape(
 def test_browser_egress_assemble_classifies_exact_failure_stage(
     monkeypatch: pytest.MonkeyPatch,
     failure_stage: str,
-    expected_code: str,
+    expected_code: str | None,
 ) -> None:
     namespace = runpy.run_path(
         str(Path(__file__).parents[1] / "tools/browser_egress_qualification.py"),
@@ -5171,13 +5246,19 @@ def test_browser_egress_assemble_classifies_exact_failure_stage(
 
     monkeypatch.setitem(globals_, "validate_capture_receipt", validate_capture)
     monkeypatch.setitem(globals_, "reconcile_sink_and_packet_evidence", lambda **kwargs: None)
-    monkeypatch.setitem(
-        globals_,
-        "append_result",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("validate-only assembly mutated the ledger")
-        ),
-    )
+    passed_receipt = {"receipt": "passed"}
+    monkeypatch.setitem(globals_, "build_passed_result_receipt", lambda **kwargs: passed_receipt)
+    appended: list[tuple[Path, dict]] = []
+
+    checkpoint = {"checkpoint": "publication-ack"}
+
+    def append_result(root: Path, receipt: dict) -> dict:
+        if failure_stage == "validate-only":
+            raise AssertionError("validate-only assembly mutated the ledger")
+        appended.append((root, receipt))
+        return checkpoint
+
+    monkeypatch.setitem(globals_, "append_result", append_result)
     emitted: list[dict] = []
     monkeypatch.setitem(globals_, "_emit", emitted.append)
     args = SimpleNamespace(
@@ -5195,10 +5276,15 @@ def test_browser_egress_assemble_classifies_exact_failure_stage(
         validate_only=failure_stage == "validate-only",
     )
     assemble(args)
-    if failure_stage == "validate-only":
+    if failure_stage == "success":
+        assert emitted == [{"schema_version": 1, "assembled": True, "checkpoint": checkpoint}]
+        assert appended == [(Path("/result"), passed_receipt)]
+    elif failure_stage == "validate-only":
         assert emitted == [{"schema_version": 1, "assembled": True}]
+        assert appended == []
     else:
         assert emitted == [{"schema_version": 1, "assembled": False, "failure_code": expected_code}]
+        assert appended == []
 
 
 def test_launcher_raw_index_verifier_rejects_clean_filter_forgery(tmp_path: Path) -> None:
