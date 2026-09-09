@@ -1271,10 +1271,7 @@ def test_class_build_admission_projects_timestamps_from_the_validated_receipt(
     started_at = "2026-09-08T00:00:00+00:00"
     finished_at = "2026-09-08T00:01:00+00:00"
     value = {"started_at": started_at, "finished_at": finished_at}
-    raw = (
-        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
-        + b"\n"
-    )
+    raw = json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n"
     images = {
         "collection": "sha256:" + "1" * 64,
         "prepare": "sha256:" + "2" * 64,
@@ -1287,10 +1284,7 @@ def test_class_build_admission_projects_timestamps_from_the_validated_receipt(
         "source": {"lab_commit": "a" * 40},
     }
     completion = {"schema_version": 1, "payload_sha256": "4" * 64}
-    completion_raw = (
-        json.dumps(completion, sort_keys=True, separators=(",", ":")).encode()
-        + b"\n"
-    )
+    completion_raw = json.dumps(completion, sort_keys=True, separators=(",", ":")).encode() + b"\n"
 
     class CurrentStorage:
         @staticmethod
@@ -2666,18 +2660,87 @@ def test_browser_egress_signal_coordinated_roles_are_direct_tini_children() -> N
     exit_wait = launcher.split("browser_egress_wait_exit_code() {", maxsplit=1)[1].split(
         "\n}", maxsplit=1
     )[0]
-    assert "deadline=$((SECONDS + 120))" in exit_wait
+    role_deadline = int(
+        re.search(
+            r"^readonly browser_egress_role_deadline_seconds=([0-9]+)$",
+            launcher,
+            re.MULTILINE,
+        ).group(1)
+    )
+    observation_grace = int(
+        re.search(
+            r"^readonly browser_egress_role_exit_observation_grace_seconds=([0-9]+)$",
+            launcher,
+            re.MULTILINE,
+        ).group(1)
+    )
+    assert role_deadline == 300
+    assert observation_grace == 15
+    assert role_deadline > 2 * 120
+    assert (
+        "browser_egress_role_exit_wait_seconds=$((\n"
+        "  browser_egress_role_deadline_seconds +\n"
+        "  browser_egress_role_exit_observation_grace_seconds\n"
+        "))" in launcher
+    )
+    assert "deadline=$((SECONDS + browser_egress_role_exit_wait_seconds))" in exit_wait
     assert "_qcsd_docker_api container inspect --format" in exit_wait
     assert "exited|dead)" in exit_wait
     assert "exit code is invalid" in exit_wait
+    assert launcher.count('--role-deadline-seconds "${browser_egress_role_deadline_seconds}"') == 5
 
     tool = (Path(__file__).parents[1] / "tools/browser_egress_qualification.py").read_text(
         encoding="utf-8"
     )
-    assert "SIGNAL_COORDINATED_ROLE_DEADLINE_SECONDS = 115.0" in tool
     assert "deadline = time.monotonic() + float(timeout_seconds)" in tool
     assert "os._exit(SIGNAL_COORDINATED_ROLE_TIMEOUT_EXIT_CODE)" in tool
-    assert "_run_signal_coordinated_role(args.function, args)" in tool
+    assert 'parser.add_argument("--role-deadline-seconds", type=int, required=True)' in tool
+    assert 'observer.add_argument("--role-deadline-seconds", type=int, required=True)' in tool
+    assert "timeout_seconds=args.role_deadline_seconds" in tool
+
+
+def test_browser_egress_same_build_comparison_anchors_relative_binding_to_lab_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tool_path = Path(__file__).parents[1] / "tools/browser_egress_qualification.py"
+    namespace = runpy.run_path(str(tool_path), run_name="qcsd_browser_egress_build_test")
+    require_same_build = namespace["_require_same_current_build"]
+    lab_root = namespace["LAB_ROOT"]
+    cohort = 47
+    receipt_relative = f"artifacts/buflo-study/build-execution-v{cohort}.json"
+    completion_relative = f"artifacts/buflo-study/build-completion-v{cohort}.json"
+    binding = {
+        "path": receipt_relative,
+        "sha256": "a" * 64,
+        "completion_path": f"/lab/{completion_relative}",
+        "completion_sha256": "b" * 64,
+    }
+    expected = {
+        "path": str((lab_root / receipt_relative).resolve()),
+        "sha256": "a" * 64,
+        "completion_path": str((lab_root / completion_relative).resolve()),
+        "completion_sha256": "b" * 64,
+    }
+
+    # The installed tool runs from /opt/qcsd-lab while evidence is mounted at
+    # /lab.  Matching must therefore be independent of the process CWD.
+    monkeypatch.chdir(tmp_path)
+    require_same_build(binding, expected, cohort_version=cohort, operation="resume")
+
+    for field, forged in (
+        ("path", f"/lab/{receipt_relative}"),
+        ("completion_path", "/lab/artifacts/buflo-study/build-completion-v48.json"),
+    ):
+        changed = dict(binding)
+        changed[field] = forged
+        with pytest.raises(ValueError, match="different build execution"):
+            require_same_build(
+                changed,
+                expected,
+                cohort_version=cohort,
+                operation="resume",
+            )
 
 
 def test_browser_egress_internal_role_watchdog_cancels_or_exits_124() -> None:
@@ -2687,6 +2750,25 @@ def test_browser_egress_internal_role_watchdog_cancels_or_exits_124() -> None:
     called: list[bool] = []
     run_role(lambda _args: called.append(True), SimpleNamespace(), timeout_seconds=1)
     assert called == [True]
+    for malformed in (0, -1, float("nan"), float("inf"), 10**20, 10**10_000):
+        with pytest.raises(ValueError, match="finite positive bound"):
+            run_role(lambda _args: None, SimpleNamespace(), timeout_seconds=malformed)
+    with pytest.raises(TypeError, match="must be numeric"):
+        run_role(lambda _args: None, SimpleNamespace(), timeout_seconds=True)
+
+    role_parser = namespace["parser"]()
+    parsed = role_parser.parse_args(
+        [
+            "actor",
+            "--vector-id",
+            "constructor--page--websocket",
+            "--role-deadline-seconds",
+            "300",
+        ]
+    )
+    assert parsed.role_deadline_seconds == 300
+    with pytest.raises(SystemExit):
+        role_parser.parse_args(["actor", "--vector-id", "constructor--page--websocket"])
 
     expired = subprocess.run(
         [
@@ -3047,14 +3129,14 @@ def test_browser_egress_live_daemon_projection_stays_in_supervisor_process(
         + "_QCSD_DOCKER_PINNED_CONTEXT=default\n"
         + "_QCSD_DOCKER_PINNED_HOST=unix:///var/run/docker.sock\n"
         + "_QCSD_DOCKER_PINNED_SERVER_ID=server\n"
-        + "_qcsd_docker_api() { printf '{\"probe\":\"%s\"}\\n' \"$1\"; }\n"
+        + '_qcsd_docker_api() { printf \'{"probe":"%s"}\\n\' "$1"; }\n'
         + "qcsd_capture_attached_docker_output() {\n"
         + "  local -n output=$1\n"
-        + "  [[ \"$BASHPID\" == \"$supervisor_pid\" ]] || return 91\n"
-        + "  output='{\"daemon\":\"bound\"}'\n"
+        + '  [[ "$BASHPID" == "$supervisor_pid" ]] || return 91\n'
+        + '  output=\'{"daemon":"bound"}\'\n'
         + "}\n"
         + "browser_egress_live_docker_binding\n"
-        + "[[ \"$browser_egress_live_docker_json\" == '{\"daemon\":\"bound\"}' ]]\n",
+        + '[[ "$browser_egress_live_docker_json" == \'{"daemon":"bound"}\' ]]\n',
         encoding="utf-8",
     )
     completed = subprocess.run(
@@ -4935,9 +5017,9 @@ def test_consumed_cohort_ledger_allows_benign_directory_child_churn(
         '    os.chmod("config", 0o777, dir_fd=root_fd)',
         (
             '    config_mode = stat.S_IMODE(os.stat("config", dir_fd=root_fd, '
-            'follow_symlinks=False).st_mode)\n'
+            "follow_symlinks=False).st_mode)\n"
             '    os.rename("config", "config-moved", src_dir_fd=root_fd, '
-            'dst_dir_fd=root_fd)\n'
+            "dst_dir_fd=root_fd)\n"
             '    os.mkdir("config", config_mode, dir_fd=root_fd)'
         ),
     ),

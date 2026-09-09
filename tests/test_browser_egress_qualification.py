@@ -32,6 +32,7 @@ from qcsd_lab.browser_egress_fixture import (
     SEMANTIC_OBSERVATION_SCHEMA_VERSION,
     assemble_live_semantic_observation,
     BrowserFixtureServer,
+    browser_action_expression,
     FIXTURE_CERTIFICATE,
     FIXTURE_PRIVATE_KEY,
     FIXTURE_RESPONSE_BUNDLE_SHA256,
@@ -127,6 +128,15 @@ from qcsd_lab.playwright_driver import (
 from qcsd_lab.util import sha256_file
 
 
+def test_websocket_action_requires_the_exact_policy_close() -> None:
+    expression = browser_action_expression()
+    assert "__QCSD_WEBSOCKET_POLICY_CLOSE_" not in expression
+    assert "event.code !== 1008" in expression
+    assert 'event.reason !== "QCSD non-replayable egress policy"' in expression
+    assert "event.wasClean !== true" in expression
+    assert "QCSD_WEBSOCKET_POLICY_CLOSE_TIMEOUT" in expression
+
+
 def _source(image: str) -> dict:
     return {
         "image_digest": image,
@@ -182,9 +192,7 @@ def _lab(tmp_path: Path) -> tuple[Path, dict]:
     argv.write_bytes(canonical_json_bytes(expected_argv_config()))
     build_path = root / "artifacts/buflo-study/build-execution-v71.json"
     build_path.parent.mkdir(parents=True)
-    build_path.write_bytes(
-        canonical_json_bytes({"payload_sha256": "a" * 64, "docker": _daemon()})
-    )
+    build_path.write_bytes(canonical_json_bytes({"payload_sha256": "a" * 64, "docker": _daemon()}))
     collection = "sha256:" + "3" * 64
     prepare = "sha256:" + "4" * 64
     reference = "sha256:" + "5" * 64
@@ -192,9 +200,7 @@ def _lab(tmp_path: Path) -> tuple[Path, dict]:
         "path": str(build_path.resolve()),
         "sha256": "6" * 64,
         "cohort_version": 71,
-        "completion_path": str(
-            (build_path.parent / "build-completion-v71.json").resolve()
-        ),
+        "completion_path": str((build_path.parent / "build-completion-v71.json").resolve()),
         "completion_sha256": "8" * 64,
         "images": {
             "collection": {"id": collection},
@@ -216,9 +222,7 @@ def _lab(tmp_path: Path) -> tuple[Path, dict]:
 
 
 class _BuildValidator:
-    def __init__(
-        self, foundation: dict, *, allow_historical: bool = False
-    ) -> None:
+    def __init__(self, foundation: dict, *, allow_historical: bool = False) -> None:
         self.foundation = foundation
         self.allow_historical = allow_historical
 
@@ -251,8 +255,7 @@ class _BuildValidator:
             result.update(
                 {
                     "completion_path": str(
-                        path.parent
-                        / f"build-completion-v{expected_cohort_version}.json"
+                        path.parent / f"build-completion-v{expected_cohort_version}.json"
                     ),
                     "completion_sha256": build["completion_sha256"],
                 }
@@ -416,12 +419,8 @@ def test_background_action_and_positive_control_have_honest_distinct_chronology(
     control_events = expected_semantic_chronology(vector_by_id("positive-control--fixture--tcp"))
     assert "control-emitter-started" in control_events
     assert "browser-started" in control_events
-    assert control_events.index("browser-started") < control_events.index(
-        "control-emitter-started"
-    )
-    assert control_events.index("control-emitter-exited") < control_events.index(
-        "browser-exited"
-    )
+    assert control_events.index("browser-started") < control_events.index("control-emitter-started")
+    assert control_events.index("control-emitter-exited") < control_events.index("browser-exited")
 
 
 @pytest.mark.parametrize(
@@ -488,9 +487,9 @@ def test_foundation_rejects_bool_float_and_adversarial_reseal(tmp_path: Path) ->
     historical["build_execution"].pop("completion_sha256")
     with pytest.raises(ValueError, match="foundation identity"):
         validate_foundation_payload(historical)
-    assert validate_foundation_payload(
-        historical, allow_historical=True
-    ) == json.loads(canonical_json_bytes(historical))
+    assert validate_foundation_payload(historical, allow_historical=True) == json.loads(
+        canonical_json_bytes(historical)
+    )
     assert deep_validate_foundation(
         historical,
         lab_root=_root,
@@ -508,9 +507,7 @@ def test_foundation_rejects_cross_daemon_and_resealed_daemon_claim(
 
     forged = copy.deepcopy(foundation)
     forged["docker_daemon"]["server_id"] = "different-daemon-id"
-    resealed = bind_receipt(
-        forged, receipt_type="qcsd-browser-egress-qualification-foundation"
-    )
+    resealed = bind_receipt(forged, receipt_type="qcsd-browser-egress-qualification-foundation")
     with pytest.raises(ValueError, match="build payload binding"):
         deep_validate_foundation(
             resealed["payload"],
@@ -520,13 +517,9 @@ def test_foundation_rejects_cross_daemon_and_resealed_daemon_claim(
 
     forged = copy.deepcopy(foundation)
     forged["docker_daemon"]["mem_total_bytes"] += 1
-    resealed = bind_receipt(
-        forged, receipt_type="qcsd-browser-egress-qualification-foundation"
-    )
+    resealed = bind_receipt(forged, receipt_type="qcsd-browser-egress-qualification-foundation")
     with pytest.raises(ValueError, match="live Docker daemon differs"):
-        require_live_docker_daemon(
-            _live_daemon(), expected=resealed["payload"]["docker_daemon"]
-        )
+        require_live_docker_daemon(_live_daemon(), expected=resealed["payload"]["docker_daemon"])
 
 
 def test_real_current_docker_daemon_binding_happy_path() -> None:
@@ -583,12 +576,8 @@ def test_invalid_append_is_validated_before_create_only_publication(
 ) -> None:
     lab_root, foundation = _lab(tmp_path)
     result_root = tmp_path / "qualification"
-    _admit_create(
-        monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation
-    )
-    out_of_order = _failure_payload(
-        foundation, vector_id="constructor--page--websocket", attempt=2
-    )
+    _admit_create(monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation)
+    out_of_order = _failure_payload(foundation, vector_id="constructor--page--websocket", attempt=2)
     receipt = bind_receipt(out_of_order, receipt_type=RESULT_RECEIPT_TYPE)
     with pytest.raises(ValueError, match="out of order"):
         append_result(result_root, receipt)
@@ -601,9 +590,7 @@ def test_vector_mutation_with_resealed_envelope_cannot_advance_checkpoint(
 ) -> None:
     lab_root, foundation = _lab(tmp_path)
     result_root = tmp_path / "qualification"
-    _admit_create(
-        monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation
-    )
+    _admit_create(monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation)
     forged = _failure_payload(
         foundation, vector_id="constructor--page--websocket-stream", attempt=1
     )
@@ -647,10 +634,7 @@ def _docker_projection(
         "forbidden_sink": ("172.30.98.20", "fd00:71:63:73:64:98:0:20"),
         "dns_sink": ("172.30.98.53", "fd00:71:63:73:64:98:0:53"),
     }
-    ids = {
-        role: hashlib.sha256(f"container:{seed}:{role}".encode()).hexdigest()
-        for role in roles
-    }
+    ids = {role: hashlib.sha256(f"container:{seed}:{role}".encode()).hexdigest() for role in roles}
     network_id = hashlib.sha256(f"network:{seed}".encode()).hexdigest()
     endpoint_ids = {
         role: hashlib.sha256(f"endpoint:{seed}:{role}".encode()).hexdigest()
@@ -705,17 +689,13 @@ def _docker_projection(
                 key=lambda item: item["destination"],
             ),
             "dns_servers": (
-                ["172.30.98.53", "fd00:71:63:73:64:98:0:53"]
-                if role == "browser"
-                else []
+                ["172.30.98.53", "fd00:71:63:73:64:98:0:53"] if role == "browser" else []
             ),
             "running": False,
             "exit_code": 0,
         }
     volume = None
-    volume_name = policy_volume_name(
-        vector_id=vector_id, attempt_topology=attempt_topology
-    )
+    volume_name = policy_volume_name(vector_id=vector_id, attempt_topology=attempt_topology)
     if volume_name is not None:
         containers["browser"]["mounts"] = [
             {
@@ -906,9 +886,7 @@ def _pcap_packets(vector_id: str) -> list[bytes]:
             for index, (browser, sink) in enumerate(((browser4, sink4), (browser6, sink6)))
         ]
     if vector.packet_policy == "approved-dns-prefetch-positive":
-        name = FIXTURE_TOPOLOGY["browser_service_controls"][
-            "dns_exception_hostname"
-        ]
+        name = FIXTURE_TOPOLOGY["browser_service_controls"]["dns_exception_hostname"]
         return [
             _udp_packet(
                 browser4,
@@ -918,9 +896,7 @@ def _pcap_packets(vector_id: str) -> list[bytes]:
                 payload=dns_query_message(name, identifier=0x5250 + index),
             )
             for index in range(
-                FIXTURE_TOPOLOGY["browser_service_controls"][
-                    "dns_positive_query_count"
-                ]
+                FIXTURE_TOPOLOGY["browser_service_controls"]["dns_positive_query_count"]
             )
         ]
     if vector.packet_policy == "approved-preconnect-positive":
@@ -962,13 +938,9 @@ def _pcap_packets(vector_id: str) -> list[bytes]:
             "tcp6-control.egress.invalid",
         ]
         packets = []
-        for index, (browser, sink) in enumerate(
-            ((browser4, dns4), (browser6, dns6))
-        ):
+        for index, (browser, sink) in enumerate(((browser4, dns4), (browser6, dns6))):
             udp_query = dns_query_message(names[index], identifier=0x5151 + index)
-            tcp_query = dns_query_message(
-                names[index + 2], identifier=0x5153 + index
-            )
+            tcp_query = dns_query_message(names[index + 2], identifier=0x5153 + index)
             packets.extend(
                 [
                     _udp_packet(
@@ -996,9 +968,7 @@ def _pcap_packets(vector_id: str) -> list[bytes]:
                 ]
             )
         return packets
-    raise AssertionError(
-        f"synthetic PCAP has no packet policy: {vector.packet_policy}"
-    )
+    raise AssertionError(f"synthetic PCAP has no packet policy: {vector.packet_policy}")
 
 
 def _write_pcap(path: Path, *, vector_id: str) -> int:
@@ -1016,9 +986,7 @@ def _write_pcap(path: Path, *, vector_id: str) -> int:
 
 
 @pytest.mark.parametrize("vector", expected_vectors(), ids=lambda item: item.vector_id)
-def test_every_vector_synthetic_pcap_matches_packet_and_sink_policy(
-    tmp_path: Path, vector
-) -> None:
+def test_every_vector_synthetic_pcap_matches_packet_and_sink_policy(tmp_path: Path, vector) -> None:
     path = tmp_path / f"{vector.ordinal:03d}.pcap"
     _write_pcap(path, vector_id=vector.vector_id)
     analysis, _decoder = analyse_pcap(path, vector=vector)
@@ -1066,9 +1034,7 @@ def _limit_qualification_to_first_vector(
 def _begin_intent(result_root: Path, *, vector_id: str, started_at: str) -> dict:
     checkpoint = load_checkpoint(result_root)
     vector = vector_by_id(vector_id)
-    prior = [
-        item for item in checkpoint["attempts"] if item["vector_id"] == vector_id
-    ]
+    prior = [item for item in checkpoint["attempts"] if item["vector_id"] == vector_id]
     plan = {
         "schema_version": 1,
         "complete": False,
@@ -1105,14 +1071,9 @@ def _effective_arguments(
         )
     return [
         str(DEFAULT_CONFIGURED_EXECUTABLE),
-        *(
-            switch
-            for switch in config["required_effective_switches"]
-            if switch not in explicit
-        ),
+        *(switch for switch in config["required_effective_switches"] if switch not in explicit),
         BROWSER_EGRESS_PLAYWRIGHT_FEATURE_ARGUMENT,
-        "--enable-features="
-        + ",".join(BROWSER_EGRESS_PLAYWRIGHT_ENABLED_FEATURES),
+        "--enable-features=" + ",".join(BROWSER_EGRESS_PLAYWRIGHT_ENABLED_FEATURES),
         *explicit,
     ]
 
@@ -1157,9 +1118,7 @@ def _runtime(
         if network_prediction_option == 0
         else argv_config["chromium_managed_policy"]
     )
-    source_bindings = {
-        item["path"]: item for item in foundation["source_files"]
-    }
+    source_bindings = {item["path"]: item for item in foundation["source_files"]}
     return {
         "prepare_image_id": foundation["prepare_image"]["id"],
         "docker_daemon": foundation["docker_daemon"],
@@ -1190,18 +1149,14 @@ def _runtime(
                 else "never-predict"
             ),
             "policy_directory_inventory": argv_config["policy_root_inventory"],
-            "qualification_only_policy_substitution": (
-                network_prediction_option == 0
-            ),
+            "qualification_only_policy_substitution": (network_prediction_option == 0),
         },
         "fixture_tls_runtime": {
             "schema_version": 1,
             "certificate": {
                 "path": FIXTURE_RUNTIME_CERTIFICATE,
                 "sha256": FIXTURE_CERTIFICATE["sha256"],
-                "size_bytes": source_bindings[FIXTURE_CERTIFICATE["path"]][
-                    "size_bytes"
-                ],
+                "size_bytes": source_bindings[FIXTURE_CERTIFICATE["path"]]["size_bytes"],
                 "uid": 0,
                 "gid": 0,
                 "mode": "0o444",
@@ -1210,9 +1165,7 @@ def _runtime(
             "private_key": {
                 "path": FIXTURE_RUNTIME_PRIVATE_KEY,
                 "sha256": FIXTURE_PRIVATE_KEY["sha256"],
-                "size_bytes": source_bindings[FIXTURE_PRIVATE_KEY["path"]][
-                    "size_bytes"
-                ],
+                "size_bytes": source_bindings[FIXTURE_PRIVATE_KEY["path"]]["size_bytes"],
                 "uid": 0,
                 "gid": 0,
                 "mode": "0o400",
@@ -1312,8 +1265,7 @@ def _measurement(vector_id: str) -> dict:
                 "resolved_type": "not-applicable",
                 "own_descriptor": "not-applicable",
                 "prearm_verified": False,
-                "control_observed": vector.semantic_kind
-                == "positive-control-observed",
+                "control_observed": vector.semantic_kind == "positive-control-observed",
             }
         )
     elif vector.semantic_kind == "positive-control-observed":
@@ -1352,9 +1304,7 @@ def _passed_receipt(
     events = expected_semantic_chronology(vector)
     times = {event: base + index for index, event in enumerate(events, 2)}
     if vector.surface == "reporting-nel-live":
-        times["reporting-live-dwell-finished"] = (
-            times["action-issued"] + 2_000_000_000
-        )
+        times["reporting-live-dwell-finished"] = times["action-issued"] + 2_000_000_000
         times["browser-exited"] = times["reporting-live-dwell-finished"] + 1
     if vector.family == "browser-service-control":
         terminal = vector.semantic_kind
@@ -1372,8 +1322,7 @@ def _passed_receipt(
         vector=vector, actor_result=actor, event_times=times
     )
     pcap_relative = (
-        f"evidence/{vector.ordinal:03d}--{vector.vector_id}/"
-        f"attempt-{attempt_number}/capture.pcapng"
+        f"evidence/{vector.ordinal:03d}--{vector.vector_id}/attempt-{attempt_number}/capture.pcapng"
     )
     pcap_path = result_root / pcap_relative
     packet_count = _write_pcap(pcap_path, vector_id=vector_id)
@@ -1436,9 +1385,7 @@ def _passed_receipt(
         "schema_version": 2,
         "vector_id": vector_id,
         "response_bundle_sha256": FIXTURE_RESPONSE_BUNDLE_SHA256,
-        "response_headers_sha256": canonical_json_sha256(
-            expected_fixture_response_headers(vector)
-        ),
+        "response_headers_sha256": canonical_json_sha256(expected_fixture_response_headers(vector)),
         "tls_certificate_sha256": "d" * 64,
         "origins": {
             "primary": "https://172.30.98.11:14443",
@@ -1497,9 +1444,7 @@ def test_docker_projection_binds_five_exact_distinct_roles_and_network() -> None
         "attempt_number": 1,
         "topology_token": "b" * 32,
     }
-    projection = _docker_projection(
-        vector_id, prepare, attempt_topology=attempt_topology
-    )
+    projection = _docker_projection(vector_id, prepare, attempt_topology=attempt_topology)
     validate_docker_inspect_projection(
         projection,
         vector_id=vector_id,
@@ -1557,9 +1502,7 @@ def test_docker_projection_binds_five_exact_distinct_roles_and_network() -> None
 
 def test_npo0_policy_volume_projection_is_exact_and_content_minimised() -> None:
     prepare = "sha256:" + "4" * 64
-    vector_id = (
-        "browser-service-control--off-the-record--speculation-prefetch-enabled"
-    )
+    vector_id = "browser-service-control--off-the-record--speculation-prefetch-enabled"
     attempt_topology = {
         "cohort_version": 71,
         "foundation_payload_sha256": "a" * 64,
@@ -1567,9 +1510,7 @@ def test_npo0_policy_volume_projection_is_exact_and_content_minimised() -> None:
         "attempt_number": 1,
         "topology_token": "b" * 32,
     }
-    projection = _docker_projection(
-        vector_id, prepare, attempt_topology=attempt_topology
-    )
+    projection = _docker_projection(vector_id, prepare, attempt_topology=attempt_topology)
     validated = validate_docker_inspect_projection(
         projection,
         vector_id=vector_id,
@@ -1678,9 +1619,7 @@ def test_proxy_configuration_claim_is_exact_and_hash_bound_to_runtime(
     with pytest.raises(ValueError, match="measured runtime"):
         validate_result_payload(forged, foundation=foundation)
     forged = copy.deepcopy(payload["semantic"])
-    forged["measurement"]["configuration_observation"][
-        "no_proxy_server_argument_count"
-    ] = 0
+    forged["measurement"]["configuration_observation"]["no_proxy_server_argument_count"] = 0
     with pytest.raises(ValueError, match="configuration observation"):
         validate_semantic_observation(
             forged, vector=vector_by_id("browser-service--browser--proxy")
@@ -1744,9 +1683,7 @@ def test_every_vector_effective_argv_matches_its_exact_launch_contract() -> None
             "projection_sha256": canonical_json_sha256(projection),
             "command_line_projection": projection,
         }
-        assert (
-            _validate_effective_argv(binding, vector_id=vector.vector_id) == binding
-        )
+        assert _validate_effective_argv(binding, vector_id=vector.vector_id) == binding
 
 
 def test_runtime_rejects_a_valid_but_different_resolver_allowlist(
@@ -1905,7 +1842,10 @@ def test_websocket_route_and_unavailable_constructor_are_honest_raw_outcomes() -
 
 
 def test_service_worker_actions_and_shared_worker_protocol_are_distinct() -> None:
-    vectors = [vector_by_id(f"service-worker--page--{surface}") for surface in ("registration", "import", "fetch")]
+    vectors = [
+        vector_by_id(f"service-worker--page--{surface}")
+        for surface in ("registration", "import", "fetch")
+    ]
     arguments = [expected_browser_action_arguments(vector) for vector in vectors]
     selected = [
         arguments[0]["serviceWorkerRegistrationUrl"],
@@ -1928,9 +1868,7 @@ def test_reporting_nel_live_dwell_and_close_flush_are_temporally_distinct() -> N
     live = vector_by_id("browser-service--browser--reporting-nel-live")
     live_events = expected_semantic_chronology(live)
     live_times = {event: index for index, event in enumerate(live_events, 1)}
-    live_times["reporting-live-dwell-finished"] = (
-        live_times["action-issued"] + 2_000_000_000
-    )
+    live_times["reporting-live-dwell-finished"] = live_times["action-issued"] + 2_000_000_000
     live_times["browser-exited"] = live_times["reporting-live-dwell-finished"] + 1
     live_times["reporting-grace-finished"] = live_times["browser-exited"] + 1
     live_times["observer-stopped"] = live_times["reporting-grace-finished"] + 1
@@ -1939,18 +1877,14 @@ def test_reporting_nel_live_dwell_and_close_flush_are_temporally_distinct() -> N
         "finished_ns": live_times["action-issued"],
         "measurement": _measurement(live.vector_id),
     }
-    assemble_live_semantic_observation(
-        vector=live, actor_result=actor, event_times=live_times
-    )
+    assemble_live_semantic_observation(vector=live, actor_result=actor, event_times=live_times)
     too_short = dict(live_times)
     too_short["reporting-live-dwell-finished"] = too_short["action-issued"] + 1
     too_short["browser-exited"] = too_short["reporting-live-dwell-finished"] + 1
     too_short["reporting-grace-finished"] = too_short["browser-exited"] + 1
     too_short["observer-stopped"] = too_short["reporting-grace-finished"] + 1
     with pytest.raises(ValueError, match="dwell"):
-        assemble_live_semantic_observation(
-            vector=live, actor_result=actor, event_times=too_short
-        )
+        assemble_live_semantic_observation(vector=live, actor_result=actor, event_times=too_short)
 
     close = vector_by_id("browser-service--browser--reporting-nel-close-flush")
     close_events = expected_semantic_chronology(close)
@@ -1997,9 +1931,7 @@ def test_negative_vectors_alternate_ipv4_ipv6_and_dns_actions_use_a_hostname() -
         "forbidden.browser-egress.invalid" not in origin
         for origin in contract["resolver_approved_origins"]
     )
-    assert "forbidden.browser-egress.invalid" not in contract[
-        "resolver_origin_ip_pins"
-    ]
+    assert "forbidden.browser-egress.invalid" not in contract["resolver_origin_ip_pins"]
     assert contract["dns_exception_hostname"] is None
 
 
@@ -2144,9 +2076,9 @@ def test_browser_qualification_module_scope_import_closure_is_source_bound() -> 
         visited.add(relative)
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=relative)
         if relative.startswith("src/qcsd_lab/"):
-            module = "qcsd_lab." + relative.removeprefix(
-                "src/qcsd_lab/"
-            ).removesuffix(".py").replace("/", ".")
+            module = "qcsd_lab." + relative.removeprefix("src/qcsd_lab/").removesuffix(
+                ".py"
+            ).replace("/", ".")
         else:
             module = None
         statements: list[ast.AST] = list(tree.body)
@@ -2166,16 +2098,11 @@ def test_browser_qualification_module_scope_import_closure_is_source_bound() -> 
                     if statement.module:
                         imported = [".".join(parent + [statement.module])]
                     else:
-                        imported = [
-                            ".".join(parent + [alias.name])
-                            for alias in statement.names
-                        ]
+                        imported = [".".join(parent + [alias.name]) for alias in statement.names]
                 elif statement.module is not None:
                     imported = [statement.module]
                     if statement.module == "qcsd_lab":
-                        imported.extend(
-                            f"qcsd_lab.{alias.name}" for alias in statement.names
-                        )
+                        imported.extend(f"qcsd_lab.{alias.name}" for alias in statement.names)
             elif isinstance(statement, ast.Import):
                 imported = [alias.name for alias in statement.names]
             else:
@@ -2184,9 +2111,10 @@ def test_browser_qualification_module_scope_import_closure_is_source_bound() -> 
                 if imported_module == "qcsd_lab":
                     candidate = root / "src/qcsd_lab/__init__.py"
                 elif imported_module.startswith("qcsd_lab."):
-                    candidate = root / "src/qcsd_lab" / (
-                        imported_module.removeprefix("qcsd_lab.").replace(".", "/")
-                        + ".py"
+                    candidate = (
+                        root
+                        / "src/qcsd_lab"
+                        / (imported_module.removeprefix("qcsd_lab.").replace(".", "/") + ".py")
                     )
                 else:
                     continue
@@ -2196,14 +2124,12 @@ def test_browser_qualification_module_scope_import_closure_is_source_bound() -> 
 
 
 def test_browser_qualification_runner_host_inputs_are_source_bound() -> None:
-    launcher = (Path(__file__).resolve().parents[1] / "qcsd-lab").read_text(
-        encoding="utf-8"
-    )
+    launcher = (Path(__file__).resolve().parents[1] / "qcsd-lab").read_text(encoding="utf-8")
     for relative in (
         "src/qcsd_lab/build_storage.py",
         "tools/windows_docker_storage_probe.ps1",
     ):
-        assert f'${{ROOT}}/{relative}' in launcher
+        assert f"${{ROOT}}/{relative}" in launcher
         assert relative in REQUIRED_SOURCE_BINDING_PATHS
 
 
@@ -2325,9 +2251,7 @@ def test_attempt_intent_is_durable_and_resume_seals_interruption(
 ) -> None:
     lab_root, foundation = _lab(tmp_path)
     result_root = tmp_path / "interrupted"
-    _admit_create(
-        monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation
-    )
+    _admit_create(monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation)
     binding = _begin_intent(
         result_root,
         vector_id="constructor--page--websocket",
@@ -2343,10 +2267,7 @@ def test_attempt_intent_is_durable_and_resume_seals_interruption(
             started_at=_wall_time(2),
         )
 
-    attempt = (
-        result_root
-        / "evidence/001--constructor--page--websocket/attempt-1"
-    )
+    attempt = result_root / "evidence/001--constructor--page--websocket/attempt-1"
     attempt.parent.mkdir(mode=0o700)
     attempt.mkdir(mode=0o700)
     (attempt / "browser.log").write_text("partial role output\n", encoding="utf-8")
@@ -2366,9 +2287,7 @@ def test_resume_rejects_tampered_intent_and_unknown_partial_artifact(
 ) -> None:
     lab_root, foundation = _lab(tmp_path)
     result_root = tmp_path / "tampered"
-    _admit_create(
-        monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation
-    )
+    _admit_create(monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation)
     binding = _begin_intent(
         result_root,
         vector_id="constructor--page--websocket",
@@ -2381,9 +2300,7 @@ def test_resume_rejects_tampered_intent_and_unknown_partial_artifact(
     assert list((result_root / "attempts").iterdir()) == []
 
     clean_root = tmp_path / "unknown-artifact"
-    _admit_create(
-        monkeypatch, result_root=clean_root, lab_root=lab_root, foundation=foundation
-    )
+    _admit_create(monkeypatch, result_root=clean_root, lab_root=lab_root, foundation=foundation)
     _begin_intent(
         clean_root,
         vector_id="constructor--page--websocket",
@@ -2404,9 +2321,7 @@ def test_resume_binds_exact_partially_promoted_causal_artifacts(
 ) -> None:
     lab_root, foundation = _lab(tmp_path)
     result_root = tmp_path / "causal-artifacts"
-    _admit_create(
-        monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation
-    )
+    _admit_create(monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation)
     vector_id = "constructor--page--websocket"
     _begin_intent(result_root, vector_id=vector_id, started_at=_wall_time(1))
     attempt = result_root / f"evidence/001--{vector_id}/attempt-1"
@@ -2420,23 +2335,16 @@ def test_resume_binds_exact_partially_promoted_causal_artifacts(
     for name in expected:
         path = attempt / name
         path.write_bytes(
-            canonical_json_bytes(
-                {"schema_version": 1, "vector_id": vector_id, "name": name}
-            )
+            canonical_json_bytes({"schema_version": 1, "vector_id": vector_id, "name": name})
         )
         path.chmod(0o600)
 
-    checkpoint = recover_interrupted_attempt(
-        result_root, finished_at=_wall_time(2)
-    )
+    checkpoint = recover_interrupted_attempt(result_root, finished_at=_wall_time(2))
     assert checkpoint["attempts"][-1]["verdict"] == "operational-failure"
-    result = json.loads(
-        (result_root / "attempts/result-0001.json").read_text(encoding="utf-8")
-    )["payload"]
-    bound = {
-        Path(item["path"]).name
-        for item in result["failure_evidence"]["artifacts"]
-    }
+    result = json.loads((result_root / "attempts/result-0001.json").read_text(encoding="utf-8"))[
+        "payload"
+    ]
+    bound = {Path(item["path"]).name for item in result["failure_evidence"]["artifacts"]}
     assert expected <= bound
     assert "resume-recovery.json" in bound
 
@@ -2448,9 +2356,7 @@ def test_resume_repairs_only_exact_one_result_checkpoint_publish_lag(
 
     lab_root, foundation = _lab(tmp_path)
     result_root = tmp_path / "publish-lag"
-    _admit_create(
-        monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation
-    )
+    _admit_create(monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation)
     _begin_intent(
         result_root,
         vector_id="constructor--page--websocket",
@@ -2479,9 +2385,9 @@ def test_resume_repairs_only_exact_one_result_checkpoint_publish_lag(
     monkeypatch.setattr(qualification, "atomic_json", original_atomic_json)
     checkpoint = recover_interrupted_attempt(result_root, finished_at=_wall_time(3))
     assert len(checkpoint["attempts"]) == 1
-    result = json.loads(
-        (result_root / "attempts/result-0001.json").read_text(encoding="utf-8")
-    )["payload"]
+    result = json.loads((result_root / "attempts/result-0001.json").read_text(encoding="utf-8"))[
+        "payload"
+    ]
     assert result["failure_code"] == "docker-start-failed"
 
     stored = json.loads((result_root / "experiment.json").read_text(encoding="utf-8"))
@@ -2496,9 +2402,7 @@ def test_retry_terminal_semantics_and_reused_docker_ids_fail_before_publication(
 ) -> None:
     lab_root, foundation = _lab(tmp_path)
     result_root = tmp_path / "retry"
-    _admit_create(
-        monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation
-    )
+    _admit_create(monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation)
     _begin_intent(
         result_root,
         vector_id="constructor--page--websocket",
@@ -2542,9 +2446,7 @@ def test_retry_terminal_semantics_and_reused_docker_ids_fail_before_publication(
     assert len(list((result_root / "attempts").iterdir())) == 2
 
     unique_root = tmp_path / "unique"
-    _admit_create(
-        monkeypatch, result_root=unique_root, lab_root=lab_root, foundation=foundation
-    )
+    _admit_create(monkeypatch, result_root=unique_root, lab_root=lab_root, foundation=foundation)
     first_pass, _ = _passed_receipt(
         unique_root,
         foundation,
@@ -2624,9 +2526,7 @@ def test_canonical_foundation_post_link_residue_is_exactly_cleaned(
 ) -> None:
     lab_root, foundation = _lab(tmp_path)
     result_root = tmp_path / "foundation-residue"
-    _admit_create(
-        monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation
-    )
+    _admit_create(monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation)
     target = result_root / "foundation.json"
     residue = result_root / ".foundation.json.deadbeef.qcsd-tmp"
     os.link(target, residue)
@@ -2672,9 +2572,7 @@ def test_attempt_intent_create_only_residue_is_exactly_recovered(
 ) -> None:
     lab_root, foundation = _lab(tmp_path)
     result_root = tmp_path / f"intent-{phase}"
-    _admit_create(
-        monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation
-    )
+    _admit_create(monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation)
     vector_id = "constructor--page--websocket"
     _fork_crash_at(
         f"create-only:intent-0001.json:{phase}",
@@ -2695,9 +2593,7 @@ def test_resume_recovery_diagnostic_residue_is_exactly_recovered(
 ) -> None:
     lab_root, foundation = _lab(tmp_path)
     result_root = tmp_path / f"resume-recovery-{phase}"
-    _admit_create(
-        monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation
-    )
+    _admit_create(monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation)
     _begin_intent(
         result_root,
         vector_id="constructor--page--websocket",
@@ -2705,16 +2601,12 @@ def test_resume_recovery_diagnostic_residue_is_exactly_recovered(
     )
     _fork_crash_at(
         f"create-only:resume-recovery.json:{phase}",
-        lambda: recover_interrupted_attempt(
-            result_root, finished_at=_wall_time(2)
-        ),
+        lambda: recover_interrupted_attempt(result_root, finished_at=_wall_time(2)),
     )
 
     outcome = reconcile_qualification_filesystem(result_root)
     assert outcome["reconciled"] is True
-    checkpoint = recover_interrupted_attempt(
-        result_root, finished_at=_wall_time(3)
-    )
+    checkpoint = recover_interrupted_attempt(result_root, finished_at=_wall_time(3))
     assert len(checkpoint["attempts"]) == 1
     assert checkpoint["attempts"][0]["finished_at"] == _wall_time(2)
     assert checkpoint["attempts"][0]["verdict"] == "operational-failure"
@@ -2732,9 +2624,7 @@ def test_resume_recovery_rejects_hostile_residue_without_deletion(
 ) -> None:
     lab_root, foundation = _lab(tmp_path)
     result_root = tmp_path / f"resume-recovery-hostile-{attack}"
-    _admit_create(
-        monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation
-    )
+    _admit_create(monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation)
     intent = _begin_intent(
         result_root,
         vector_id="constructor--page--websocket",
@@ -2783,9 +2673,7 @@ def test_reconciliation_is_itself_idempotent_after_recovered_link_crash(
 ) -> None:
     lab_root, foundation = _lab(tmp_path)
     result_root = tmp_path / "recursive-recovery"
-    _admit_create(
-        monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation
-    )
+    _admit_create(monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation)
     _fork_crash_at(
         "create-only:intent-0001.json:pre-link",
         lambda: _begin_intent(
@@ -2819,9 +2707,7 @@ def test_result_and_checkpoint_crash_residues_replay_exactly(
 ) -> None:
     lab_root, foundation = _lab(tmp_path)
     result_root = tmp_path / boundary.replace(":", "-")
-    _admit_create(
-        monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation
-    )
+    _admit_create(monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation)
     vector_id = "constructor--page--websocket"
     _begin_intent(result_root, vector_id=vector_id, started_at=_wall_time(1))
     receipt = build_failure_result_receipt(
@@ -2850,9 +2736,7 @@ def test_clean_result_publication_lag_is_repaired_without_a_duplicate_result(
 ) -> None:
     lab_root, foundation = _lab(tmp_path)
     result_root = tmp_path / "result-published-checkpoint-lag"
-    _admit_create(
-        monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation
-    )
+    _admit_create(monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation)
     vector_id = "constructor--page--websocket"
     _begin_intent(result_root, vector_id=vector_id, started_at=_wall_time(1))
     receipt = build_failure_result_receipt(
@@ -2874,9 +2758,7 @@ def test_clean_result_publication_lag_is_repaired_without_a_duplicate_result(
     assert len(list((result_root / "attempts").glob("result-*.json"))) == 1
     assert json.loads((result_root / "experiment.json").read_text())["attempts"] == []
 
-    checkpoint = recover_interrupted_attempt(
-        result_root, finished_at=_wall_time(3)
-    )
+    checkpoint = recover_interrupted_attempt(result_root, finished_at=_wall_time(3))
     assert len(checkpoint["attempts"]) == 1
     assert checkpoint["attempts"][0]["verdict"] == "operational-failure"
     assert len(list((result_root / "attempts").glob("result-*.json"))) == 1
@@ -2974,9 +2856,7 @@ def test_reconciliation_rejects_hostile_residues_without_deleting_them(
 ) -> None:
     lab_root, foundation = _lab(tmp_path)
     result_root = tmp_path / f"hostile-{attack}"
-    _admit_create(
-        monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation
-    )
+    _admit_create(monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation)
     _fork_crash_at(
         "create-only:intent-0001.json:pre-link",
         lambda: _begin_intent(
@@ -3016,9 +2896,7 @@ def test_open_inventory_rejects_rogue_entries_and_unsafe_directory_modes(
 ) -> None:
     lab_root, foundation = _lab(tmp_path)
     result_root = tmp_path / "open-hostile"
-    _admit_create(
-        monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation
-    )
+    _admit_create(monkeypatch, result_root=result_root, lab_root=lab_root, foundation=foundation)
     rogue = result_root / "evidence/rogue.bin"
     rogue.write_bytes(b"rogue")
     rogue.chmod(0o600)

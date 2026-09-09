@@ -25,6 +25,8 @@ from qcsd_lab.browser_egress import (
     BROWSER_EGRESS_SUBPROCESS_WRAPPER_ARGUMENT,
     NON_REPLAYABLE_EGRESS_POLICY,
     POPUP_NAVIGATION_API,
+    WEBSOCKET_POLICY_CLOSE_CODE,
+    WEBSOCKET_POLICY_CLOSE_REASON,
     NonReplayableEgressGuard,
     install_context_egress_guards,
     launch_production_browser,
@@ -60,8 +62,7 @@ def _production_effective_arguments() -> list[str]:
         BROWSER_EGRESS_SUBPROCESS_WRAPPER_ARGUMENT,
         "--disable-features=" + ",".join(BROWSER_EGRESS_PLAYWRIGHT_DISABLED_FEATURES),
         "--disable-features=" + ",".join(BROWSER_EGRESS_DISABLED_BASE_FEATURES),
-        "--disable-blink-features="
-        + ",".join(BROWSER_EGRESS_DISABLED_BLINK_FEATURES),
+        "--disable-blink-features=" + ",".join(BROWSER_EGRESS_DISABLED_BLINK_FEATURES),
         "--enable-features=" + ",".join(BROWSER_EGRESS_PLAYWRIGHT_ENABLED_FEATURES),
         build_fail_closed_host_resolver_argument(
             approved_origins=("https://example.test",),
@@ -114,6 +115,9 @@ class _FakeRoute:
     def __init__(self, request) -> None:
         self.request = request
         self.actions = []
+        self._impl_obj = SimpleNamespace(
+            _channel=SimpleNamespace(send_no_reply=self._send_no_reply)
+        )
 
     @property
     def url(self):
@@ -127,6 +131,9 @@ class _FakeRoute:
 
     def close(self, *, code, reason):
         self.actions.append(("close", code, reason))
+
+    def _send_no_reply(self, method, timeout_calculator, params):
+        self.actions.append(("send_no_reply", method, timeout_calculator, params))
 
 
 def _request(*, page, url="https://example.test/path", navigation=True):
@@ -166,9 +173,7 @@ def test_context_guards_are_registered_before_root_binding_and_route_only_popups
     validate_non_replayable_egress_failure_evidence(evidence)
     assert evidence["non_replayable_egress"]["attempts"][-1] == {
         "sequence": 0,
-        "monotonic_ms": evidence["non_replayable_egress"]["attempts"][0][
-            "monotonic_ms"
-        ],
+        "monotonic_ms": evidence["non_replayable_egress"]["attempts"][0]["monotonic_ms"],
         "api": POPUP_NAVIGATION_API,
         "mechanism": "playwright-popup-navigation-route",
         "source": None,
@@ -177,19 +182,26 @@ def test_context_guards_are_registered_before_root_binding_and_route_only_popups
 
 
 def test_websocket_and_service_worker_context_hooks_are_typed_and_minimised() -> None:
+    assert WEBSOCKET_POLICY_CLOSE_CODE == 1008
+    assert WEBSOCKET_POLICY_CLOSE_REASON == "QCSD non-replayable egress policy"
     context = _FakeContext()
     guard = NonReplayableEgressGuard()
     install_context_egress_guards(context, guard)
     guard.bind_root_page(object())
-    websocket = _FakeRoute(
-        _request(page=object(), url="wss://[2001:db8::1]:444/private?secret=1")
-    )
+    websocket = _FakeRoute(_request(page=object(), url="wss://[2001:db8::1]:444/private?secret=1"))
     context.handlers["websocket"](websocket)
-    context.handlers["serviceworker"](
-        SimpleNamespace(url="https://worker.test/sw.js?secret=1")
-    )
+    context.handlers["serviceworker"](SimpleNamespace(url="https://worker.test/sw.js?secret=1"))
     assert websocket.actions == [
-        ("close", 1008, "QCSD non-replayable egress policy")
+        (
+            "send_no_reply",
+            "closePage",
+            None,
+            {
+                "code": 1008,
+                "reason": "QCSD non-replayable egress policy",
+                "wasClean": True,
+            },
+        )
     ]
     evidence = _failure(guard)
     validate_non_replayable_egress_failure_evidence(evidence)
@@ -202,6 +214,21 @@ def test_websocket_and_service_worker_context_hooks_are_typed_and_minimised() ->
         "scheme": "https",
         "origin": "https://worker.test",
     }
+
+
+def test_websocket_context_hook_fails_closed_without_pinned_adapter() -> None:
+    context = _FakeContext()
+    guard = NonReplayableEgressGuard()
+    install_context_egress_guards(context, guard)
+    guard.bind_root_page(object())
+    route = SimpleNamespace(url="wss://example.test/private")
+
+    with pytest.raises(RuntimeError, match="close adapter is unavailable"):
+        context.handlers["websocket"](route)
+
+    evidence = _failure(guard)
+    validate_non_replayable_egress_failure_evidence(evidence)
+    assert evidence["non_replayable_egress"]["attempt_count"] == 1
 
 
 def test_late_attempt_turns_a_provisional_success_into_typed_failure() -> None:
@@ -244,9 +271,7 @@ def test_browser_popup_tab_non_network_url_remains_typed_and_minimised() -> None
         lambda receipt: receipt["attempts"][0].update(
             url={"scheme": "https", "origin": "https://example.test/private"}
         ),
-        lambda receipt: receipt["attempts"][0].update(
-            mechanism="playwright-websocket-route"
-        ),
+        lambda receipt: receipt["attempts"][0].update(mechanism="playwright-websocket-route"),
     ],
 )
 def test_failure_evidence_rejects_resealed_type_content_and_semantic_mutation(
@@ -519,7 +544,11 @@ def test_every_production_chromium_launch_uses_the_validated_central_boundary() 
     assert forbidden_calls == []
     assert qualification_helper_calls == []
     assert helper_calls == [
-        ("class_acquisition.py", "_catalogue_boundary_navigation_pass", "launch_production_browser"),
+        (
+            "class_acquisition.py",
+            "_catalogue_boundary_navigation_pass",
+            "launch_production_browser",
+        ),
         ("class_acquisition.py", "browser_document_content_type", "launch_production_browser"),
         ("discover.py", "discover_page", "launch_production_browser"),
         ("pinned_cdp.py", "run_pinned_cdp_probe", "launch_pinned_cdp_probe_browser"),
@@ -611,10 +640,7 @@ def test_all_control_profiles_validate_exact_argv_and_resolver_projection() -> N
             dns_exception_hostname=contract["dns_exception_hostname"],
         )
         assert projection["launch_profile"] == contract["launch_profile"]
-        assert (
-            projection["host_resolver_policy"]["mode"]
-            == contract["resolver_profile"]
-        )
+        assert projection["host_resolver_policy"]["mode"] == contract["resolver_profile"]
     assert seen_profiles == set(BROWSER_EGRESS_QUALIFICATION_CONTROL_PROFILES)
 
 
@@ -642,17 +668,14 @@ def test_twelve_browser_service_controls_form_six_exact_paired_treatments() -> N
             contract.pop("launch_profile")
             contract.pop("managed_policy")
         assert disabled_contract == enabled_contract
-        assert (
-            expected_fixture_response_headers(disabled)
-            == expected_fixture_response_headers(enabled)
+        assert expected_fixture_response_headers(disabled) == expected_fixture_response_headers(
+            enabled
         )
         disabled_policy = expected_browser_launch_contract(disabled)["managed_policy"]
         enabled_policy = expected_browser_launch_contract(enabled)["managed_policy"]
         assert disabled_policy["DnsOverHttpsMode"] == "off"
         assert enabled_policy["DnsOverHttpsMode"] == "off"
-        disabled_arguments = _qualification_control_effective_arguments(
-            disabled.vector_id
-        )
+        disabled_arguments = _qualification_control_effective_arguments(disabled.vector_id)
         enabled_arguments = _qualification_control_effective_arguments(enabled.vector_id)
         if mechanism in {"reporting", "network-error-logging"}:
             assert disabled_policy == enabled_policy
@@ -667,24 +690,23 @@ def test_twelve_browser_service_controls_form_six_exact_paired_treatments() -> N
             assert enabled_policy["NetworkPredictionOptions"] == 0
             assert disabled_arguments == enabled_arguments
         for vector in (disabled, enabled):
-            assert vector.as_dict()["minimum_live_dwell_ms"] == (
-                BROWSER_SERVICE_CONTROL_DWELL_MS
-            )
+            assert vector.as_dict()["minimum_live_dwell_ms"] == (BROWSER_SERVICE_CONTROL_DWELL_MS)
             assert vector.as_dict()["action_contract"]["minimum_live_dwell_ms"] == (
                 BROWSER_SERVICE_CONTROL_DWELL_MS
             )
 
 
 def test_browser_service_controls_enforce_the_frozen_pair_dwell() -> None:
-    vector = vector_by_id(
-        "browser-service-control--off-the-record--speculation-prefetch-disabled"
-    )
+    vector = vector_by_id("browser-service-control--off-the-record--speculation-prefetch-disabled")
     duration_ns = BROWSER_SERVICE_CONTROL_DWELL_MS * 1_000_000
-    assert browser_service_control_actor_result(
-        vector,
-        started_ns=10,
-        finished_ns=10 + duration_ns,
-    )["finished_ns"] == 10 + duration_ns
+    assert (
+        browser_service_control_actor_result(
+            vector,
+            started_ns=10,
+            finished_ns=10 + duration_ns,
+        )["finished_ns"]
+        == 10 + duration_ns
+    )
     with pytest.raises(ValueError, match="timing"):
         browser_service_control_actor_result(
             vector,

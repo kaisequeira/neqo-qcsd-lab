@@ -11,12 +11,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import signal
 import ssl
 import stat
-import subprocess
 import sys
 import threading
 import time
@@ -91,9 +91,7 @@ from qcsd_lab.util import LAB_ROOT, load_json, sha256_file, source_metadata
 
 
 READY_PATH = Path("/tmp/qcsd-browser-egress-role.ready")
-SUBJECT_STARTED_READY_PATH = Path(
-    "/tmp/qcsd-browser-egress-subject-started.ready"
-)
+SUBJECT_STARTED_READY_PATH = Path("/tmp/qcsd-browser-egress-subject-started.ready")
 GRACE_READY_PATH = Path("/tmp/qcsd-browser-egress-grace.ready")
 RECEIPT_READY_PATH = Path("/tmp/qcsd-browser-egress-receipt.ready")
 STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM)
@@ -101,7 +99,7 @@ ROLE_SCHEMA_VERSION = 1
 SIGNAL_COORDINATED_COMMANDS = frozenset(
     {"actor", "control", "fixture", "forbidden-sink", "dns-sink", "observer"}
 )
-SIGNAL_COORDINATED_ROLE_DEADLINE_SECONDS = 115.0
+MAX_SIGNAL_COORDINATED_ROLE_DEADLINE_SECONDS = 3_600
 SIGNAL_COORDINATED_ROLE_TIMEOUT_EXIT_CODE = 124
 DOCKER_SUPERVISOR_LABEL = "org.qcsd.supervisor.instance"
 
@@ -115,12 +113,17 @@ def _require_same_current_build(
 ) -> None:
     """Require one receipt and its paired completion across an action boundary."""
 
+    receipt_relative = f"artifacts/buflo-study/build-execution-v{cohort_version}.json"
+    completion_relative = f"artifacts/buflo-study/build-completion-v{cohort_version}.json"
     if (
-        Path(str(binding.get("path"))).resolve()
-        != Path(str(expected.get("path"))).resolve()
+        binding.get("path") != receipt_relative
+        or not isinstance(expected.get("path"), str)
+        or Path(expected["path"]).resolve() != (LAB_ROOT / receipt_relative).resolve()
         or binding.get("sha256") != expected.get("sha256")
         or binding.get("completion_path")
         != f"/lab/artifacts/buflo-study/build-completion-v{cohort_version}.json"
+        or not isinstance(expected.get("completion_path"), str)
+        or Path(expected["completion_path"]).resolve() != (LAB_ROOT / completion_relative).resolve()
         or binding.get("completion_sha256") != expected.get("completion_sha256")
     ):
         raise ValueError(f"browser-egress {operation} uses a different build execution")
@@ -132,8 +135,7 @@ def _validated_supervised_labels(
     """Validate and remove only the lifecycle supervisor's transient label."""
 
     if not isinstance(value, Mapping) or any(
-        not isinstance(key, str) or not isinstance(item, str)
-        for key, item in value.items()
+        not isinstance(key, str) or not isinstance(item, str) for key, item in value.items()
     ):
         raise ValueError(f"{label} labels are invalid")
     supervisor = value.get(DOCKER_SUPERVISOR_LABEL)
@@ -200,20 +202,29 @@ def _run_signal_coordinated_role(
     function: Any,
     args: argparse.Namespace,
     *,
-    timeout_seconds: float = SIGNAL_COORDINATED_ROLE_DEADLINE_SECONDS,
+    timeout_seconds: float,
 ) -> None:
     """Run a Docker role as tini's direct child under a monotonic hard guard.
 
     GNU ``timeout`` cannot sit between tini and these roles: it terminates on
     the USR1/USR2 phase signals instead of forwarding them to the Python
-    process.  A daemon watchdog keeps the former 120-second container bound
-    while leaving every coordinator signal addressed directly to this process.
+    process.  A daemon watchdog enforces the exact deadline supplied by the
+    shell coordinator while leaving every signal addressed directly to this
+    process.
     """
 
     if not isinstance(timeout_seconds, (int, float)) or isinstance(timeout_seconds, bool):
         raise TypeError("browser-egress role deadline must be numeric")
-    if timeout_seconds <= 0:
-        raise ValueError("browser-egress role deadline must be positive")
+    try:
+        finite_timeout = math.isfinite(float(timeout_seconds))
+    except OverflowError:
+        finite_timeout = False
+    if (
+        not finite_timeout
+        or timeout_seconds <= 0
+        or timeout_seconds > MAX_SIGNAL_COORDINATED_ROLE_DEADLINE_SECONDS
+    ):
+        raise ValueError("browser-egress role deadline is outside its finite positive bound")
     cancelled = threading.Event()
     deadline = time.monotonic() + float(timeout_seconds)
 
@@ -323,7 +334,9 @@ def _policy_volume_file_inventory() -> list[dict[str, Any]]:
     ]
 
 
-def _launch_vector_browser(playwright: Any, vector: Any) -> tuple[Any, dict[str, Any], dict[str, Any], dict[str, str], list[dict[str, Any]] | None]:
+def _launch_vector_browser(
+    playwright: Any, vector: Any
+) -> tuple[Any, dict[str, Any], dict[str, Any], dict[str, str], list[dict[str, Any]] | None]:
     """Launch through the sole qualification API and minimise argv immediately."""
 
     from qcsd_lab.browser_egress import launch_qualification_browser
@@ -333,9 +346,7 @@ def _launch_vector_browser(playwright: Any, vector: Any) -> tuple[Any, dict[str,
     browser, projection, driver = launch_qualification_browser(
         playwright,
         launch_profile=contract["launch_profile"],
-        expected_network_prediction_option=contract["managed_policy"][
-            "NetworkPredictionOptions"
-        ],
+        expected_network_prediction_option=contract["managed_policy"]["NetworkPredictionOptions"],
         approved_origins=contract["resolver_approved_origins"],
         origin_ip_pins=contract["resolver_origin_ip_pins"],
         approved_ip_exclusions=contract["resolver_approved_ip_exclusions"],
@@ -420,9 +431,7 @@ def _control(args: argparse.Namespace) -> None:
             driver_runtime,
             child_environment,
             policy_volume_file_inventory,
-        ) = _launch_vector_browser(
-            playwright, vector
-        )
+        ) = _launch_vector_browser(playwright, vector)
         browser_started_ns = time.monotonic_ns()
         try:
             control_emitter_started_ns = time.monotonic_ns()
@@ -557,9 +566,7 @@ def _actor(args: argparse.Namespace) -> None:
             driver_runtime,
             child_environment,
             policy_volume_file_inventory,
-        ) = _launch_vector_browser(
-            playwright, vector
-        )
+        ) = _launch_vector_browser(playwright, vector)
         browser_started_ns = time.monotonic_ns()
         browser_session = browser.new_browser_cdp_session()
         context = browser.new_context(ignore_https_errors=True, service_workers="block")
@@ -581,10 +588,7 @@ def _actor(args: argparse.Namespace) -> None:
             request_id = payload.get("requestId")
             if not isinstance(url, str) or not isinstance(request_id, str):
                 raise ValueError("browser-egress Fetch event is malformed")
-            if (
-                url.startswith(f"{primary}/")
-                or url.startswith(f"{cross}/")
-            ):
+            if url.startswith(f"{primary}/") or url.startswith(f"{cross}/"):
                 router.send(
                     source,
                     "Fetch.continueRequest",
@@ -628,7 +632,10 @@ def _actor(args: argparse.Namespace) -> None:
                     raise RuntimeError("browser-egress frame realm is unavailable")
             elif vector.context == "dedicated-worker":
                 with page.expect_worker() as worker_info:
-                    page.evaluate("url => { window.__qcsdWorker = new Worker(url); }", f"{primary}/dedicated-worker.js")
+                    page.evaluate(
+                        "url => { window.__qcsdWorker = new Worker(url); }",
+                        f"{primary}/dedicated-worker.js",
+                    )
                 evaluator = worker_info.value
             elif vector.context == "shared-worker":
                 page.evaluate(
@@ -739,8 +746,6 @@ class _PlaywrightRealm:
         return result
 
     def browser_configuration_observation(self, surface: str) -> Mapping[str, Any]:
-        from qcsd_lab.browser_egress import BROWSER_EGRESS_ANTAGONISTIC_CHROMIUM_SWITCHES
-
         projection = self.command_line_projection
         return {
             "surface": surface,
@@ -753,16 +758,17 @@ class _PlaywrightRealm:
             "no_proxy_server_argument_count": projection["observed_required_switches"].count(
                 "--no-proxy-server"
             ),
-            "antagonistic_proxy_switches_present": projection[
-                "observed_antagonistic_switches"
-            ],
+            "antagonistic_proxy_switches_present": projection["observed_antagonistic_switches"],
             "proxy_environment_keys_present": sorted(
                 set(self.child_environment).intersection(PROXY_ENVIRONMENT_KEYS)
             ),
         }
 
     def guard_counts(self) -> Mapping[str, int]:
-        return {"policy_event_count": self.guard.attempt_count, "fetch_denial_count": self.fetch_denials[0]}
+        return {
+            "policy_event_count": self.guard.attempt_count,
+            "fetch_denial_count": self.fetch_denials[0],
+        }
 
     def prearm_verified(self) -> bool:
         return self.prearmed
@@ -790,6 +796,7 @@ class _SharedWorkerEvaluator:
             self.message,
         )
 
+
 def _observer(args: argparse.Namespace) -> None:
     vector = vector_by_id(args.vector_id)
     subject_started = threading.Event()
@@ -812,7 +819,14 @@ def _observer(args: argparse.Namespace) -> None:
     GRACE_READY_PATH.write_text("ready\n", encoding="ascii")
     _wait(finish_capture)
     receipt = observer.finish(vector=vector, pcap_relative_path=args.evidence_relative)
-    _emit({"schema_version": ROLE_SCHEMA_VERSION, "role": "observer", "vector_id": vector.vector_id, "receipt": receipt})
+    _emit(
+        {
+            "schema_version": ROLE_SCHEMA_VERSION,
+            "role": "observer",
+            "vector_id": vector.vector_id,
+            "receipt": receipt,
+        }
+    )
     RECEIPT_READY_PATH.write_text("ready\n", encoding="ascii")
     # The capture lives on a mount-free tmpfs.  Keep the container alive until
     # the host has read the canonical receipt and copied the closed PCAP.
@@ -989,8 +1003,7 @@ def _record_failure(args: argparse.Namespace) -> None:
     if next_value.get("complete") is not False or next_value.get("vector") != vector.as_dict():
         raise ValueError("failure record differs from its next-vector plan")
     relative_directory = (
-        f"evidence/{vector.ordinal:03d}--{vector.vector_id}/"
-        f"attempt-{next_value['attempt_number']}"
+        f"evidence/{vector.ordinal:03d}--{vector.vector_id}/attempt-{next_value['attempt_number']}"
     )
     root = args.result_root.resolve(strict=True)
     attempt_directory = (root / relative_directory).resolve(strict=True)
@@ -1056,7 +1069,9 @@ def _assemble(args: argparse.Namespace) -> None:
     try:
         actor = _sole_stdout_object(args.actor_json, label="actor role")
     except (OSError, ValueError):
-        _emit({"schema_version": 1, "assembled": False, "failure_code": "semantic-observation-failed"})
+        _emit(
+            {"schema_version": 1, "assembled": False, "failure_code": "semantic-observation-failed"}
+        )
         return
     expected_actor_fields = {
         "schema_version",
@@ -1071,9 +1086,7 @@ def _assemble(args: argparse.Namespace) -> None:
         "browser_exited_ns",
     }
     if vector.family == "positive-control":
-        expected_actor_fields.update(
-            {"control_emitter_started_ns", "control_emitter_exited_ns"}
-        )
+        expected_actor_fields.update({"control_emitter_started_ns", "control_emitter_exited_ns"})
     elif vector.family != "browser-service-control":
         expected_actor_fields.add("prearm_verified_ns")
     if vector.surface == "reporting-nel-live":
@@ -1085,13 +1098,17 @@ def _assemble(args: argparse.Namespace) -> None:
         or actor.get("role") != expected_actor_role
         or actor.get("vector_id") != vector.vector_id
     ):
-        _emit({"schema_version": 1, "assembled": False, "failure_code": "semantic-observation-failed"})
+        _emit(
+            {"schema_version": 1, "assembled": False, "failure_code": "semantic-observation-failed"}
+        )
         return
     try:
         forbidden = _sole_stdout_object(args.forbidden_json, label="forbidden sink role")
         dns = _sole_stdout_object(args.dns_json, label="DNS sink role")
     except (OSError, ValueError):
-        _emit({"schema_version": 1, "assembled": False, "failure_code": "sink-reconciliation-failed"})
+        _emit(
+            {"schema_version": 1, "assembled": False, "failure_code": "sink-reconciliation-failed"}
+        )
         return
     if (
         set(forbidden)
@@ -1099,27 +1116,31 @@ def _assemble(args: argparse.Namespace) -> None:
         or forbidden.get("schema_version") != ROLE_SCHEMA_VERSION
         or forbidden.get("role") != "forbidden-sink"
         or forbidden.get("vector_id") != vector.vector_id
-        or set(dns)
-        != {"schema_version", "role", "vector_id", "ready_ns", "stopped_ns", "receipt"}
+        or set(dns) != {"schema_version", "role", "vector_id", "ready_ns", "stopped_ns", "receipt"}
         or dns.get("schema_version") != ROLE_SCHEMA_VERSION
         or dns.get("role") != "dns-sink"
         or dns.get("vector_id") != vector.vector_id
     ):
-        _emit({"schema_version": 1, "assembled": False, "failure_code": "sink-reconciliation-failed"})
+        _emit(
+            {"schema_version": 1, "assembled": False, "failure_code": "sink-reconciliation-failed"}
+        )
         return
     try:
         fixture_role = _sole_stdout_object(args.fixture_json, label="fixture role")
     except (OSError, ValueError):
-        _emit({"schema_version": 1, "assembled": False, "failure_code": "fixture-observation-failed"})
+        _emit(
+            {"schema_version": 1, "assembled": False, "failure_code": "fixture-observation-failed"}
+        )
         return
     if (
-        set(fixture_role)
-        != {"schema_version", "role", "vector_id", "tls_material", "receipt"}
+        set(fixture_role) != {"schema_version", "role", "vector_id", "tls_material", "receipt"}
         or fixture_role.get("schema_version") != ROLE_SCHEMA_VERSION
         or fixture_role.get("role") != "fixture"
         or fixture_role.get("vector_id") != vector.vector_id
     ):
-        _emit({"schema_version": 1, "assembled": False, "failure_code": "fixture-observation-failed"})
+        _emit(
+            {"schema_version": 1, "assembled": False, "failure_code": "fixture-observation-failed"}
+        )
         return
     try:
         capture = _sole_stdout_object(args.capture_json, label="observer role")
@@ -1164,7 +1185,9 @@ def _assemble(args: argparse.Namespace) -> None:
         )
         validate_sink_receipt(sink, vector=vector)
     except (KeyError, TypeError, ValueError):
-        _emit({"schema_version": 1, "assembled": False, "failure_code": "sink-reconciliation-failed"})
+        _emit(
+            {"schema_version": 1, "assembled": False, "failure_code": "sink-reconciliation-failed"}
+        )
         return
     try:
         actor_result = actor["actor_result"]
@@ -1191,21 +1214,23 @@ def _assemble(args: argparse.Namespace) -> None:
             times["prearm-verified"] = actor["prearm_verified_ns"]
             times["browser-exited"] = actor["browser_exited_ns"]
         if vector.surface == "reporting-nel-live":
-            times["reporting-live-dwell-finished"] = actor[
-                "reporting_live_dwell_finished_ns"
-            ]
+            times["reporting-live-dwell-finished"] = actor["reporting_live_dwell_finished_ns"]
         if set(times) != set(expected_semantic_chronology(vector)):
             raise ValueError("coordinator chronology is incomplete")
         semantic = assemble_live_semantic_observation(
             vector=vector, actor_result=actor_result, event_times=times
         )
     except (KeyError, TypeError, ValueError):
-        _emit({"schema_version": 1, "assembled": False, "failure_code": "semantic-observation-failed"})
+        _emit(
+            {"schema_version": 1, "assembled": False, "failure_code": "semantic-observation-failed"}
+        )
         return
     try:
         validate_fixture_observation(fixture_role["receipt"], vector=vector)
     except (KeyError, TypeError, ValueError):
-        _emit({"schema_version": 1, "assembled": False, "failure_code": "fixture-observation-failed"})
+        _emit(
+            {"schema_version": 1, "assembled": False, "failure_code": "fixture-observation-failed"}
+        )
         return
     process = capture_receipt.get("capture_process")
     if isinstance(process, Mapping) and (
@@ -1251,12 +1276,13 @@ def _assemble(args: argparse.Namespace) -> None:
         <= fixture_times["stopped_ns"]
         <= chronology["observer_stopped_ns"]
     ):
-        _emit({"schema_version": 1, "assembled": False, "failure_code": "fixture-observation-failed"})
+        _emit(
+            {"schema_version": 1, "assembled": False, "failure_code": "fixture-observation-failed"}
+        )
         return
     sink_times = sink["chronology"]
     if not (
-        max(sink_times["forbidden_ready_ns"], sink_times["dns_ready_ns"])
-        == times["sinks-ready"]
+        max(sink_times["forbidden_ready_ns"], sink_times["dns_ready_ns"]) == times["sinks-ready"]
         and chronology["reporting_grace_finished_ns"]
         <= sink_times["forbidden_stopped_ns"]
         <= chronology["observer_stopped_ns"]
@@ -1264,7 +1290,9 @@ def _assemble(args: argparse.Namespace) -> None:
         <= sink_times["dns_stopped_ns"]
         <= chronology["observer_stopped_ns"]
     ):
-        _emit({"schema_version": 1, "assembled": False, "failure_code": "sink-reconciliation-failed"})
+        _emit(
+            {"schema_version": 1, "assembled": False, "failure_code": "sink-reconciliation-failed"}
+        )
         return
     if getattr(args, "validate_only", False):
         _emit({"schema_version": 1, "assembled": True})
@@ -1323,10 +1351,10 @@ def _attempt_status(args: argparse.Namespace) -> None:
         raise ValueError("ambiguous browser-egress attempt is not at the ledger head")
     if len(attempts) == global_ordinal:
         entry = attempts[-1]
-        if any(
-            entry[key] != next_value[key]
-            for key in ("global_ordinal", "attempt_number")
-        ) or entry["vector_id"] != vector.vector_id:
+        if (
+            any(entry[key] != next_value[key] for key in ("global_ordinal", "attempt_number"))
+            or entry["vector_id"] != vector.vector_id
+        ):
             raise ValueError("published browser-egress attempt differs from its plan")
         _emit(
             {
@@ -1340,8 +1368,7 @@ def _attempt_status(args: argparse.Namespace) -> None:
     if (
         checkpoint["status"] != "running"
         or checkpoint["next_vector_ordinal"] != vector.ordinal
-        or checkpoint["chain_head_sha256"]
-        != next_value["previous_result_sha256"]
+        or checkpoint["chain_head_sha256"] != next_value["previous_result_sha256"]
     ):
         raise ValueError("unpublished browser-egress attempt differs from the ledger")
     prior = [item for item in attempts if item["vector_id"] == vector.vector_id]
@@ -1369,9 +1396,7 @@ def _verify(args: argparse.Namespace) -> None:
         foundation_envelope,
         expected_type="qcsd-browser-egress-qualification-foundation",
     )
-    require_live_docker_daemon(
-        _live_docker_argument(args), expected=foundation["docker_daemon"]
-    )
+    require_live_docker_daemon(_live_docker_argument(args), expected=foundation["docker_daemon"])
     expected_build = validate_build_execution_receipt(
         args.build_execution_receipt,
         expected_cohort_version=args.cohort_version,
@@ -1426,9 +1451,7 @@ def _project_runtime(args: argparse.Namespace) -> None:
         "browser_exited_ns",
     }
     if vector.family == "positive-control":
-        expected_actor_fields.update(
-            {"control_emitter_started_ns", "control_emitter_exited_ns"}
-        )
+        expected_actor_fields.update({"control_emitter_started_ns", "control_emitter_exited_ns"})
     elif vector.family != "browser-service-control":
         expected_actor_fields.add("prearm_verified_ns")
     if vector.surface == "reporting-nel-live":
@@ -1447,8 +1470,7 @@ def _project_runtime(args: argparse.Namespace) -> None:
     volume_raw = load_json(args.volume_inspect_json)
     if (
         not isinstance(fixture_role, Mapping)
-        or set(fixture_role)
-        != {"schema_version", "role", "vector_id", "tls_material", "receipt"}
+        or set(fixture_role) != {"schema_version", "role", "vector_id", "tls_material", "receipt"}
         or fixture_role.get("schema_version") != ROLE_SCHEMA_VERSION
         or fixture_role.get("role") != "fixture"
         or fixture_role.get("vector_id") != vector.vector_id
@@ -1553,16 +1575,20 @@ def _stale_topology_cleanup_plan(args: argparse.Namespace) -> None:
         raise ValueError("stale Docker container inspection is invalid")
     if network_value is None:
         network = None
-    elif isinstance(network_value, list) and len(network_value) == 1 and isinstance(
-        network_value[0], Mapping
+    elif (
+        isinstance(network_value, list)
+        and len(network_value) == 1
+        and isinstance(network_value[0], Mapping)
     ):
         network = network_value[0]
     else:
         raise ValueError("stale Docker network inspection is invalid")
     if volume_value is None:
         volume = None
-    elif isinstance(volume_value, list) and len(volume_value) == 1 and isinstance(
-        volume_value[0], Mapping
+    elif (
+        isinstance(volume_value, list)
+        and len(volume_value) == 1
+        and isinstance(volume_value[0], Mapping)
     ):
         volume = volume_value[0]
     else:
@@ -1606,21 +1632,17 @@ def _stale_topology_cleanup_plan(args: argparse.Namespace) -> None:
         or type(cleanup["cohort_version"]) is not int
         or cleanup["cohort_version"] < 1
         or not isinstance(cleanup["foundation_payload_sha256"], str)
-        or re.fullmatch(r"[0-9a-f]{64}", cleanup["foundation_payload_sha256"])
-        is None
+        or re.fullmatch(r"[0-9a-f]{64}", cleanup["foundation_payload_sha256"]) is None
     ):
         raise ValueError("browser-egress resume cleanup binding is invalid")
     vector = vector_by_id(vector_id)
     if cleanup["evidence_directory"] != (
-        f"evidence/{vector.ordinal:03d}--{vector_id}/"
-        f"attempt-{cleanup['attempt_number']}"
+        f"evidence/{vector.ordinal:03d}--{vector_id}/attempt-{cleanup['attempt_number']}"
     ):
         raise ValueError("browser-egress resume cleanup evidence path is invalid")
     if cleanup["outstanding"] is not True:
         if containers or network is not None or volume is not None:
-            raise ValueError(
-                "Docker topology exists without an outstanding attempt intent"
-            )
+            raise ValueError("Docker topology exists without an outstanding attempt intent")
         _emit(
             {
                 "schema_version": 1,
@@ -1651,9 +1673,7 @@ def _stale_topology_cleanup_plan(args: argparse.Namespace) -> None:
             "topology_token",
         )
     }
-    expected_volume_name = policy_volume_name(
-        vector_id=vector_id, attempt_topology=topology
-    )
+    expected_volume_name = policy_volume_name(vector_id=vector_id, attempt_topology=topology)
     expected_roles = {
         "browser",
         "observer",
@@ -1689,9 +1709,7 @@ def _stale_topology_cleanup_plan(args: argparse.Namespace) -> None:
     elif volume is not None:
         expected_volume_labels = {**expected_labels, "org.qcsd.role": POLICY_VOLUME_ROLE}
         volume_labels = volume.get("Labels")
-        expected_mountpoint = (
-            docker_root / "volumes" / expected_volume_name / "_data"
-        ).as_posix()
+        expected_mountpoint = (docker_root / "volumes" / expected_volume_name / "_data").as_posix()
         if (
             volume.get("Name") != expected_volume_name
             or volume.get("Driver") != "local"
@@ -1707,10 +1725,7 @@ def _stale_topology_cleanup_plan(args: argparse.Namespace) -> None:
         host = item.get("HostConfig")
         state = item.get("State")
         network_settings = item.get("NetworkSettings")
-        if not all(
-            isinstance(value, Mapping)
-            for value in (config, host, state, network_settings)
-        ):
+        if not all(isinstance(value, Mapping) for value in (config, host, state, network_settings)):
             raise ValueError("stale Docker container inspection is incomplete")
         labels = config.get("Labels")
         role = labels.get("org.qcsd.role") if isinstance(labels, Mapping) else None
@@ -1756,18 +1771,12 @@ def _stale_topology_cleanup_plan(args: argparse.Namespace) -> None:
             ]
         expected_tmpfs = {
             "/tmp": (
-                "rw,nosuid,nodev,noexec,mode=1777"
-                if role == "policy_seed"
-                else ROLE_TMPFS_OPTIONS
+                "rw,nosuid,nodev,noexec,mode=1777" if role == "policy_seed" else ROLE_TMPFS_OPTIONS
             )
         }
         if role != "fixture":
-            expected_tmpfs[FIXTURE_TLS_MASK_DIRECTORY] = (
-                FIXTURE_TLS_MASK_TMPFS_OPTIONS
-            )
-        expected_user = (
-            r"[1-9][0-9]*:[1-9][0-9]*" if role == "browser" else r"0:0"
-        )
+            expected_tmpfs[FIXTURE_TLS_MASK_DIRECTORY] = FIXTURE_TLS_MASK_TMPFS_OPTIONS
+        expected_user = r"[1-9][0-9]*:[1-9][0-9]*" if role == "browser" else r"0:0"
         if (
             not isinstance(container_id, str)
             or re.fullmatch(r"[0-9a-f]{64}", container_id) is None
@@ -1777,13 +1786,11 @@ def _stale_topology_cleanup_plan(args: argparse.Namespace) -> None:
             or projected_mounts != expected_mounts
             or state.get("Status")
             not in {"created", "running", "paused", "restarting", "exited", "dead"}
-            or re.fullmatch(expected_user, str(config.get("User") or "0:0"))
-            is None
+            or re.fullmatch(expected_user, str(config.get("User") or "0:0")) is None
             or host.get("Privileged") is not False
             or host.get("ReadonlyRootfs") is not True
             or (host.get("CapDrop") or []) != ["ALL"]
-            or (host.get("CapAdd") or [])
-            != (["CAP_NET_RAW"] if role == "observer" else [])
+            or (host.get("CapAdd") or []) != (["CAP_NET_RAW"] if role == "observer" else [])
             or (host.get("SecurityOpt") or []) != ["no-new-privileges:true"]
             or (host.get("Tmpfs") or {}) != expected_tmpfs
             or (host.get("Dns") or [])
@@ -1802,27 +1809,23 @@ def _stale_topology_cleanup_plan(args: argparse.Namespace) -> None:
             if networks != {} or host.get("NetworkMode") != "none":
                 raise ValueError("stale policy seeder is not network isolated")
         elif role == "observer":
-            if networks != {} or re.fullmatch(
-                r"container:[0-9a-f]{64}", str(host.get("NetworkMode"))
-            ) is None:
+            if (
+                networks != {}
+                or re.fullmatch(r"container:[0-9a-f]{64}", str(host.get("NetworkMode"))) is None
+            ):
                 raise ValueError("stale observer does not share a browser namespace")
         else:
-            if set(networks) != {"qcsd-browser-egress-v1"} or host.get(
-                "NetworkMode"
-            ) != "qcsd-browser-egress-v1":
+            if (
+                set(networks) != {"qcsd-browser-egress-v1"}
+                or host.get("NetworkMode") != "qcsd-browser-egress-v1"
+            ):
                 raise ValueError("stale Docker container has an unexpected attachment")
         by_role[role] = item
 
-    networked_containers = [
-        item
-        for role, item in by_role.items()
-        if role != "policy_seed"
-    ]
+    networked_containers = [item for role, item in by_role.items() if role != "policy_seed"]
     if networked_containers and network is None:
         raise ValueError("stale browser-egress containers have no canonical network")
-    if expected_volume_name is not None and volume is None and (
-        containers or network is not None
-    ):
+    if expected_volume_name is not None and volume is None and (containers or network is not None):
         raise ValueError("stale policy consumer has no bound policy volume")
     network_id: str | None = None
     if network is not None:
@@ -1845,16 +1848,12 @@ def _stale_topology_cleanup_plan(args: argparse.Namespace) -> None:
             or not isinstance(raw_members, Mapping)
         ):
             raise ValueError("stale canonical Docker network is not safely attributable")
-        direct_by_id = {
-            item["Id"]: role for role, item in by_role.items() if role in direct_roles
-        }
+        direct_by_id = {item["Id"]: role for role, item in by_role.items() if role in direct_roles}
         if set(raw_members) != set(direct_by_id):
             raise ValueError("stale Docker network membership is not exact")
         for container_id, member in raw_members.items():
             role = direct_by_id[container_id]
-            attachment = by_role[role]["NetworkSettings"]["Networks"][
-                "qcsd-browser-egress-v1"
-            ]
+            attachment = by_role[role]["NetworkSettings"]["Networks"]["qcsd-browser-egress-v1"]
             expected_ipv4, expected_ipv6 = addresses[role]
             if (
                 not isinstance(member, Mapping)
@@ -1870,9 +1869,11 @@ def _stale_topology_cleanup_plan(args: argparse.Namespace) -> None:
     observer = by_role.get("observer")
     if observer is not None and browser is None:
         raise ValueError("stale observer has no bound browser namespace owner")
-    if observer is not None and browser is not None and observer["HostConfig"].get(
-        "NetworkMode"
-    ) != f"container:{browser['Id']}":
+    if (
+        observer is not None
+        and browser is not None
+        and observer["HostConfig"].get("NetworkMode") != f"container:{browser['Id']}"
+    ):
         raise ValueError("stale observer namespace differs from the bound browser")
     _emit(
         {
@@ -1890,9 +1891,7 @@ def _stale_topology_cleanup_plan(args: argparse.Namespace) -> None:
                 if role in by_role
             ],
             "network_id": network_id,
-            "volume_name": (
-                expected_volume_name if volume is not None else None
-            ),
+            "volume_name": (expected_volume_name if volume is not None else None),
         }
     )
 
@@ -2027,12 +2026,9 @@ def _docker_projection(
     raw_members = network.get("Containers") or {}
     if not isinstance(raw_members, Mapping):
         raise ValueError("Docker network member inventory is invalid")
-    roles_by_container_id = {
-        role_values[role]["id"]: role for role in direct_roles
-    }
-    if (
-        len(roles_by_container_id) != len(direct_roles)
-        or set(raw_members) != set(roles_by_container_id)
+    roles_by_container_id = {role_values[role]["id"]: role for role in direct_roles}
+    if len(roles_by_container_id) != len(direct_roles) or set(raw_members) != set(
+        roles_by_container_id
     ):
         raise ValueError("Docker network member inventory is not the exact four roles")
     members = {}
@@ -2059,8 +2055,7 @@ def _docker_projection(
         "attachable": network.get("Attachable"),
         "enable_ipv6": network.get("EnableIPv6"),
         "ipam_config": [
-            {"subnet": item.get("Subnet")}
-            for item in network.get("IPAM", {}).get("Config", [])
+            {"subnet": item.get("Subnet")} for item in network.get("IPAM", {}).get("Config", [])
         ],
         "labels": projected_network_labels,
         "members": members,
@@ -2073,11 +2068,7 @@ def _docker_projection(
             raise ValueError("Docker inspection contains an unauthorised policy volume")
         volume_projection = None
     else:
-        if (
-            not isinstance(volume, list)
-            or len(volume) != 1
-            or not isinstance(volume[0], Mapping)
-        ):
+        if not isinstance(volume, list) or len(volume) != 1 or not isinstance(volume[0], Mapping):
             raise ValueError("Docker policy-volume inspection is invalid")
         raw_volume = volume[0]
         expected_mountpoint = (
@@ -2093,9 +2084,7 @@ def _docker_projection(
             "labels": raw_volume.get("Labels") or {},
             "options": raw_volume.get("Options") or {},
             "mountpoint_is_canonical": True,
-            "mountpoint_sha256": hashlib.sha256(
-                expected_mountpoint.encode("utf-8")
-            ).hexdigest(),
+            "mountpoint_sha256": hashlib.sha256(expected_mountpoint.encode("utf-8")).hexdigest(),
             "file_inventory": policy_file_inventory,
         }
     value = {
@@ -2118,6 +2107,7 @@ def _docker_projection(
 def _common_vector(subparsers: Any, name: str, function: Any) -> None:
     parser = subparsers.add_parser(name)
     parser.add_argument("--vector-id", required=True)
+    parser.add_argument("--role-deadline-seconds", type=int, required=True)
     parser.set_defaults(function=function)
 
 
@@ -2133,6 +2123,7 @@ def parser() -> argparse.ArgumentParser:
     observer.add_argument("--vector-id", required=True)
     observer.add_argument("--pcap", type=Path, required=True)
     observer.add_argument("--evidence-relative", required=True)
+    observer.add_argument("--role-deadline-seconds", type=int, required=True)
     observer.set_defaults(function=_observer)
     live_docker = commands.add_parser("live-docker-binding")
     live_docker.add_argument("--docker-version-json", required=True)
@@ -2244,7 +2235,11 @@ def parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> None:
     args = parser().parse_args(argv)
     if args.command in SIGNAL_COORDINATED_COMMANDS:
-        _run_signal_coordinated_role(args.function, args)
+        _run_signal_coordinated_role(
+            args.function,
+            args,
+            timeout_seconds=args.role_deadline_seconds,
+        )
     else:
         args.function(args)
 

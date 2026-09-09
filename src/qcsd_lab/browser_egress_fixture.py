@@ -29,6 +29,8 @@ from .browser_egress import (
     BROWSER_EGRESS_PRODUCTION_LAUNCH_PROFILE,
     BROWSER_EGRESS_REPORTING_DISABLED_CONTROL_PROFILE,
     BROWSER_EGRESS_REPORTING_ENABLED_CONTROL_PROFILE,
+    WEBSOCKET_POLICY_CLOSE_CODE,
+    WEBSOCKET_POLICY_CLOSE_REASON,
 )
 from .class_study import canonical_json_bytes, canonical_json_sha256
 
@@ -322,12 +324,12 @@ FIXTURE_TOPOLOGY: dict[str, Any] = {
         "approved_origins": [
             "https://fixture.test:14443",
             "https://fixture.test:14445",
-            "https://fixture.test:14446"
+            "https://fixture.test:14446",
         ],
         "origin_ip_pins": {
             "https://fixture.test:14443": "172.30.98.11",
             "https://fixture.test:14445": "172.30.98.11",
-            "https://fixture.test:14446": "172.30.98.11"
+            "https://fixture.test:14446": "172.30.98.11",
         },
         "dns_exception_hostname": "dns-control.browser-egress.test",
         "dns_positive_query_count": 3,
@@ -339,6 +341,7 @@ FIXTURE_TOPOLOGY: dict[str, Any] = {
         },
     },
 }
+
 
 def _browser_control_mechanism(surface: str) -> str:
     for suffix in ("-disabled", "-enabled"):
@@ -370,9 +373,7 @@ def _browser_control_page(surface: str) -> bytes:
             + "</script>"
         )
     elif mechanism == "dns-prefetch":
-        dns_name = FIXTURE_TOPOLOGY["browser_service_controls"][
-            "dns_exception_hostname"
-        ]
+        dns_name = FIXTURE_TOPOLOGY["browser_service_controls"]["dns_exception_hostname"]
         action = (
             '<meta http-equiv="x-dns-prefetch-control" content="on">'
             f'<link rel="dns-prefetch" href="//{dns_name}">'
@@ -406,15 +407,14 @@ def _browser_control_page(surface: str) -> bytes:
         action = (
             "<script>fetch("
             + json.dumps(
-                f"https://{fixture_host}:{ports['fixture_nel_error_https']}"
-                "/nel-network-error"
+                f"https://{fixture_host}:{ports['fixture_nel_error_https']}/nel-network-error"
             )
             + ").catch(()=>{});</script>"
         )
     else:  # pragma: no cover - frozen vector construction guards this.
         raise ValueError(f"unknown browser-service control surface: {surface}")
     return (
-        "<!doctype html><meta charset=utf-8><link rel=\"icon\" href=\"data:,\">"
+        '<!doctype html><meta charset=utf-8><link rel="icon" href="data:,">'
         f"<title>QCSD {mechanism}</title>{action}"
     ).encode()
 
@@ -566,9 +566,7 @@ def expected_browser_launch_contract(vector: BrowserEgressVector) -> dict[str, A
             "resolver_origin_ip_pins": dict(
                 FIXTURE_TOPOLOGY["browser_service_controls"]["origin_ip_pins"]
             ),
-            "resolver_approved_ip_exclusions": list(
-                FIXTURE_TOPOLOGY["fixture_addresses"]
-            ),
+            "resolver_approved_ip_exclusions": list(FIXTURE_TOPOLOGY["fixture_addresses"]),
             "dns_exception_hostname": None,
             "fixture_certificate": None,
             "control_document_path": None,
@@ -578,9 +576,7 @@ def expected_browser_launch_contract(vector: BrowserEgressVector) -> dict[str, A
 
     control = vector.family == "browser-service-control"
     enabled = control and vector.surface.endswith("-enabled")
-    reporting = control and vector.surface.startswith(
-        ("reporting-", "network-error-logging-")
-    )
+    reporting = control and vector.surface.startswith(("reporting-", "network-error-logging-"))
     if not control:
         profile = BROWSER_EGRESS_PRODUCTION_LAUNCH_PROFILE
         policy = CHROMIUM_NETWORK_PREDICTION_NEVER_POLICY
@@ -632,9 +628,9 @@ def expected_browser_launch_contract(vector: BrowserEgressVector) -> dict[str, A
         )
         certificate = FIXTURE_CERTIFICATE
         control_document_path = f"/control/{_browser_control_mechanism(vector.surface)}"
-        control_document_origin = FIXTURE_TOPOLOGY["browser_service_controls"][
-            "approved_origins"
-        ][0]
+        control_document_origin = FIXTURE_TOPOLOGY["browser_service_controls"]["approved_origins"][
+            0
+        ]
         control_document_body_sha256 = hashlib.sha256(
             _browser_control_page(vector.surface)
         ).hexdigest()
@@ -677,7 +673,8 @@ def expected_action_contract(vector: BrowserEgressVector) -> dict[str, Any] | No
     ):
         return None
     if not (
-        vector.family == "service-worker" and vector.surface in SERVICE_WORKER_SURFACES
+        vector.family == "service-worker"
+        and vector.surface in SERVICE_WORKER_SURFACES
         or vector.family == "browser-service"
         and vector.surface not in {"proxy", "pac", "idle-launch-close"}
         and vector.surface in BROWSER_SERVICE_SURFACES
@@ -1048,7 +1045,7 @@ def browser_action_expression() -> str:
     passing semantic claim from the manifest.
     """
 
-    return r"""
+    expression = r"""
 async ({family, surface, tcpUrl, tcpPort, udpHost, rtcHost, rtcPort, udpPort, forbiddenUrl, popupName,
         serviceWorkerRegistrationUrl, serviceWorkerImportUrl, serviceWorkerFetchUrl}) => {
   const apiNames = {
@@ -1089,7 +1086,25 @@ async ({family, surface, tcpUrl, tcpPort, udpHost, rtcHost, rtcPort, udpPort, fo
   }
   try {
     actionIssued = true;
-    if (surface === 'websocket') { new WebSocket(tcpUrl); await new Promise(resolve => setTimeout(resolve, 250)); }
+    if (surface === 'websocket') {
+      const socket = new WebSocket(tcpUrl);
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error('QCSD_WEBSOCKET_POLICY_CLOSE_TIMEOUT')),
+          1000,
+        );
+        socket.addEventListener('close', event => {
+          clearTimeout(timer);
+          if (event.code !== __QCSD_WEBSOCKET_POLICY_CLOSE_CODE__ ||
+              event.reason !== __QCSD_WEBSOCKET_POLICY_CLOSE_REASON__ ||
+              event.wasClean !== true) {
+            reject(new Error('QCSD_WEBSOCKET_POLICY_CLOSE_MISMATCH'));
+            return;
+          }
+          resolve();
+        }, {once: true});
+      });
+    }
     else if (surface === 'websocket-stream') new WebSocketStream(tcpUrl);
     else if (surface === 'webtransport') new WebTransport(forbiddenUrl);
     else if (surface.startsWith('rtc-')) {
@@ -1130,6 +1145,12 @@ async ({family, surface, tcpUrl, tcpPort, udpHost, rtcHost, rtcPort, udpPort, fo
           exception_name: exceptionName};
 }
 """.strip()
+    return expression.replace(
+        "__QCSD_WEBSOCKET_POLICY_CLOSE_CODE__", str(WEBSOCKET_POLICY_CLOSE_CODE)
+    ).replace(
+        "__QCSD_WEBSOCKET_POLICY_CLOSE_REASON__",
+        json.dumps(WEBSOCKET_POLICY_CLOSE_REASON),
+    )
 
 
 def browser_service_action_expression() -> str:
@@ -1230,9 +1251,7 @@ def expected_browser_action_arguments(vector: BrowserEgressVector) -> dict[str, 
         f"{quote(vector.vector_id)}"
     )
     return {
-        "tcpUrl": (
-            f"ws://{forbidden_url_host}:{ports['forbidden_tcp']}/{quote(vector.vector_id)}"
-        ),
+        "tcpUrl": (f"ws://{forbidden_url_host}:{ports['forbidden_tcp']}/{quote(vector.vector_id)}"),
         "tcpPort": ports["forbidden_tcp"],
         "udpHost": forbidden_host,
         "rtcHost": forbidden_url_host,
@@ -1243,9 +1262,7 @@ def expected_browser_action_arguments(vector: BrowserEgressVector) -> dict[str, 
         "forbiddenUrl": forbidden_url,
         "forbiddenHostnameUrl": forbidden_hostname_url,
         "popupName": "qcsd-egress-popup-v1",
-        "serviceWorkerRegistrationUrl": (
-            f"{fixture_origin}/service-worker-registration.js"
-        ),
+        "serviceWorkerRegistrationUrl": (f"{fixture_origin}/service-worker-registration.js"),
         "serviceWorkerImportUrl": (
             f"{fixture_origin}/service-worker-import.js?target={quote(forbidden_url, safe='')}"
         ),
@@ -1257,15 +1274,9 @@ def expected_browser_action_arguments(vector: BrowserEgressVector) -> dict[str, 
         # resolver rule.  The separately typed paired DNS controls use their
         # sole qualification-only hostname exception instead.
         "dnsPrefetchUrl": forbidden_hostname_url,
-        "approvedPreconnectUrl": (
-            f"https://fixture.test:{ports['fixture_preconnect_https']}/"
-        ),
-        "sameOriginSpeculationUrl": (
-            f"{fixture_origin}/speculation-prefetch-sentinel"
-        ),
-        "sameOriginPrerenderUrl": (
-            f"{fixture_origin}/speculation-prerender-sentinel"
-        ),
+        "approvedPreconnectUrl": (f"https://fixture.test:{ports['fixture_preconnect_https']}/"),
+        "sameOriginSpeculationUrl": (f"{fixture_origin}/speculation-prefetch-sentinel"),
+        "sameOriginPrerenderUrl": (f"{fixture_origin}/speculation-prerender-sentinel"),
     }
 
 
@@ -1324,13 +1335,19 @@ def execute_live_browser_action(
         raw = realm.evaluate(browser_action_expression(), argument)
     finished_ns = time.monotonic_ns()
     after = realm.guard_counts()
-    if not isinstance(raw, Mapping) or set(raw) != {
-        "resolved_type",
-        "own_descriptor",
-        "action_issued",
-        "action_succeeded",
-        "exception_name",
-    } or not isinstance(after, Mapping) or set(after) != set(before):
+    if (
+        not isinstance(raw, Mapping)
+        or set(raw)
+        != {
+            "resolved_type",
+            "own_descriptor",
+            "action_issued",
+            "action_succeeded",
+            "exception_name",
+        }
+        or not isinstance(after, Mapping)
+        or set(after) != set(before)
+    ):
         raise ValueError("live browser semantic actor returned malformed measurements")
     deltas = {key: after[key] - before[key] for key in before}
     if any(type(value) is not int or value < 0 for value in deltas.values()):
@@ -1349,9 +1366,7 @@ def execute_live_browser_action(
             "exception_name": raw["exception_name"],
             "control_observed": False,
             "configuration_observation": (
-                dict(configuration_observation)
-                if configuration_observation is not None
-                else None
+                dict(configuration_observation) if configuration_observation is not None else None
             ),
         },
     }
@@ -1422,9 +1437,7 @@ def _derived_semantic_claim(
             return "positive-control-observed", "not-applicable"
         raise ValueError("browser-egress positive control did not complete cleanly")
     if measurement["configuration_observation"] is not None:
-        _validate_configuration_observation(
-            measurement["configuration_observation"], vector=vector
-        )
+        _validate_configuration_observation(measurement["configuration_observation"], vector=vector)
         if (
             measurement["resolved_type"] == "not-applicable"
             and measurement["own_descriptor"] == "not-applicable"
@@ -1450,10 +1463,8 @@ def _derived_semantic_claim(
         raw_outcome = action_contract["raw_outcome"]
         if (
             all(measurement[key] == raw_outcome[key] for key in raw_outcome)
-            and measurement["policy_event_count"]
-            == guard_counts["policy_event_count"]
-            and measurement["fetch_denial_count"]
-            == guard_counts["fetch_denial_count"]
+            and measurement["policy_event_count"] == guard_counts["policy_event_count"]
+            and measurement["fetch_denial_count"] == guard_counts["fetch_denial_count"]
         ):
             return vector.semantic_kind, vector.descriptor_state
         raise ValueError(
@@ -1543,8 +1554,7 @@ def assemble_live_semantic_observation(
         "descriptor_state": descriptor,
         "action_invocations": (
             0
-            if kind
-            in {"idle-observation", "disabled-unavailable", "configuration-verified"}
+            if kind in {"idle-observation", "disabled-unavailable", "configuration-verified"}
             else 1
         ),
         "measurement": dict(measurement),
@@ -1589,12 +1599,8 @@ def expected_fixture_response_headers(vector: BrowserEgressVector) -> dict[str, 
     if not is_legacy_negative and not is_reporting_control:
         return {}
     fixture_host = FIXTURE_TOPOLOGY["fixture_addresses"][0]
-    endpoint_host = (
-        "fixture.test" if is_reporting_control else fixture_host
-    )
-    endpoint = (
-        f"https://{endpoint_host}:{FIXTURE_TOPOLOGY['ports']['fixture_https']}/report"
-    )
+    endpoint_host = "fixture.test" if is_reporting_control else fixture_host
+    endpoint = f"https://{endpoint_host}:{FIXTURE_TOPOLOGY['ports']['fixture_https']}/report"
     response_path = (
         "primary:/"
         if is_legacy_negative
@@ -1611,16 +1617,12 @@ def expected_fixture_response_headers(vector: BrowserEgressVector) -> dict[str, 
                     '"max_age":86400,"report_to":"qcsd","success_fraction":1.0}'
                 ),
                 "Report-To": (
-                    '{"endpoints":[{"url":"'
-                    + endpoint
-                    + '"}],"group":"qcsd","max_age":86400}'
+                    '{"endpoints":[{"url":"' + endpoint + '"}],"group":"qcsd","max_age":86400}'
                 ),
             }
         )
     if vector.surface.startswith("reporting-"):
-        headers["Content-Security-Policy-Report-Only"] = (
-            "img-src 'none'; report-to qcsd"
-        )
+        headers["Content-Security-Policy-Report-Only"] = "img-src 'none'; report-to qcsd"
     return {response_path: headers}
 
 
@@ -1728,9 +1730,7 @@ def expected_fixture_requests(vector: BrowserEgressVector) -> dict[str, int]:
     if vector.family == "positive-control":
         return {}
     if vector.family == "browser-service-control":
-        counts = {
-            f"primary:/control/{_browser_control_mechanism(vector.surface)}": 1
-        }
+        counts = {f"primary:/control/{_browser_control_mechanism(vector.surface)}": 1}
         if vector.surface == "speculation-prefetch-enabled":
             counts["primary:/speculation-prefetch-sentinel"] = 1
         elif vector.packet_policy == "approved-speculation-prerender-positive":
@@ -1741,12 +1741,15 @@ def expected_fixture_requests(vector: BrowserEgressVector) -> dict[str, int]:
             "approved-reporting-positive",
             "approved-network-error-logging-positive",
         }:
-            counts["primary:/report"] = FIXTURE_TOPOLOGY[
-                "browser_service_controls"
-            ]["report_positive_post_count"]
+            counts["primary:/report"] = FIXTURE_TOPOLOGY["browser_service_controls"][
+                "report_positive_post_count"
+            ]
         return dict(sorted(counts.items()))
     counts = {"primary:/": 1}
-    if vector.context == "same-origin-frame" or vector.surface == "window-open-existing-named-frame":
+    if (
+        vector.context == "same-origin-frame"
+        or vector.surface == "window-open-existing-named-frame"
+    ):
         counts["primary:/frame"] = 1
     elif vector.context == "cross-origin-frame":
         counts["cross:/frame"] = 1
@@ -1764,9 +1767,7 @@ def expected_fixture_requests(vector: BrowserEgressVector) -> dict[str, int]:
 def expected_fixture_connection_counts(vector: BrowserEgressVector) -> dict[str, int]:
     return {
         "preconnect": (
-            FIXTURE_TOPOLOGY["browser_service_controls"][
-                "preconnect_positive_accept_count"
-            ]
+            FIXTURE_TOPOLOGY["browser_service_controls"]["preconnect_positive_accept_count"]
             if vector.packet_policy == "approved-preconnect-positive"
             else 0
         )
@@ -1777,21 +1778,13 @@ def expected_fixture_report_type_counts(vector: BrowserEgressVector) -> dict[str
     if vector.packet_policy == "approved-reporting-positive":
         key = FIXTURE_TOPOLOGY["browser_service_controls"]["report_types"]["reporting"]
     elif vector.packet_policy == "approved-network-error-logging-positive":
-        key = FIXTURE_TOPOLOGY["browser_service_controls"]["report_types"][
-            "network-error-logging"
-        ]
+        key = FIXTURE_TOPOLOGY["browser_service_controls"]["report_types"]["network-error-logging"]
     else:
         return {}
-    return {
-        key: FIXTURE_TOPOLOGY["browser_service_controls"][
-            "report_positive_post_count"
-        ]
-    }
+    return {key: FIXTURE_TOPOLOGY["browser_service_controls"]["report_positive_post_count"]}
 
 
-def validate_fixture_observation(
-    value: object, *, vector: BrowserEgressVector
-) -> dict[str, Any]:
+def validate_fixture_observation(value: object, *, vector: BrowserEgressVector) -> dict[str, Any]:
     fields = {
         "schema_version",
         "vector_id",
@@ -1816,8 +1809,10 @@ def validate_fixture_observation(
     ):
         raise ValueError("browser-egress fixture observation identity is invalid")
     digest = value["tls_certificate_sha256"]
-    if not isinstance(digest, str) or len(digest) != 64 or any(
-        character not in "0123456789abcdef" for character in digest
+    if (
+        not isinstance(digest, str)
+        or len(digest) != 64
+        or any(character not in "0123456789abcdef" for character in digest)
     ):
         raise ValueError("browser-egress fixture TLS certificate binding is invalid")
     expected_origins = {
@@ -1953,9 +1948,7 @@ class BrowserFixtureServer:
                 ),
             },
             "request_counts": dict(sorted(counts.items())),
-            "connection_counts": {
-                "preconnect": self.servers["preconnect"].accepted_connections
-            },
+            "connection_counts": {"preconnect": self.servers["preconnect"].accepted_connections},
             "report_type_counts": dict(sorted(report_types.items())),
             "chronology": {
                 "started_ns": self.started_ns,
@@ -2241,8 +2234,8 @@ def dns_query_message(name: str, *, identifier: int) -> bytes:
         raise ValueError("DNS query identifier is invalid")
     labels = name.lower().rstrip(".").split(".")
     encoded = b"".join(bytes([len(label)]) + label.encode("ascii") for label in labels) + b"\0"
-    return struct.pack("!HHHHHH", identifier, 0x0100, 1, 0, 0, 0) + encoded + struct.pack(
-        "!HH", 1, 1
+    return (
+        struct.pack("!HHHHHH", identifier, 0x0100, 1, 0, 0, 0) + encoded + struct.pack("!HH", 1, 1)
     )
 
 
@@ -2391,9 +2384,7 @@ def browser_service_control_actor_result(
     }
 
 
-def validate_semantic_observation(
-    value: object, *, vector: BrowserEgressVector
-) -> dict[str, Any]:
+def validate_semantic_observation(value: object, *, vector: BrowserEgressVector) -> dict[str, Any]:
     """Validate exact in-browser/prearm evidence and its event chronology."""
 
     fields = {
@@ -2470,8 +2461,7 @@ def validate_semantic_observation(
     derived_kind, derived_descriptor = _derived_semantic_claim(measurement, vector=vector)
     expected_invocations = (
         0
-        if derived_kind
-        in {"idle-observation", "disabled-unavailable", "configuration-verified"}
+        if derived_kind in {"idle-observation", "disabled-unavailable", "configuration-verified"}
         else 1
     )
     if (
@@ -2521,8 +2511,7 @@ def validate_semantic_observation(
     ):
         raise ValueError("browser-egress control dwell is too short")
     if vector.surface == "reporting-nel-live" and (
-        event_times["reporting-live-dwell-finished"]
-        - event_times["action-issued"]
+        event_times["reporting-live-dwell-finished"] - event_times["action-issued"]
         < REPORTING_NEL_LIVE_DWELL_MS * 1_000_000
     ):
         raise ValueError("browser-egress live NEL dwell is too short")
@@ -2640,12 +2629,8 @@ def expected_sink_counters(vector: BrowserEgressVector) -> dict[str, Any]:
             },
         }
     elif vector.packet_policy == "approved-dns-prefetch-positive":
-        count = FIXTURE_TOPOLOGY["browser_service_controls"][
-            "dns_positive_query_count"
-        ]
-        name = FIXTURE_TOPOLOGY["browser_service_controls"][
-            "dns_exception_hostname"
-        ]
+        count = FIXTURE_TOPOLOGY["browser_service_controls"]["dns_positive_query_count"]
+        name = FIXTURE_TOPOLOGY["browser_service_controls"]["dns_exception_hostname"]
         expected["dns"] = {
             "udp_queries_received": count,
             "tcp_queries_received": 0,
@@ -2768,10 +2753,8 @@ def validate_sink_receipt(value: object, *, vector: BrowserEgressVector) -> dict
             ):
                 raise ValueError("browser-egress sink IP-family digest is invalid")
         if (
-            sum(families[family][count_key] for family in ("ipv4", "ipv6"))
-            != mapping[count_key]
-            or sum(families[family][byte_key] for family in ("ipv4", "ipv6"))
-            != mapping[byte_key]
+            sum(families[family][count_key] for family in ("ipv4", "ipv6")) != mapping[count_key]
+            or sum(families[family][byte_key] for family in ("ipv4", "ipv6")) != mapping[byte_key]
         ):
             raise ValueError("browser-egress sink IP-family totals do not reconcile")
     names = dns["query_names"]
@@ -2797,10 +2780,7 @@ def validate_sink_receipt(value: object, *, vector: BrowserEgressVector) -> dict
                 raise ValueError("browser-egress DNS IP-family counter is invalid")
         if (
             not isinstance(record["query_names"], list)
-            or any(
-                not isinstance(name, str) or not name
-                for name in record["query_names"]
-            )
+            or any(not isinstance(name, str) or not name for name in record["query_names"])
             or record["query_names"] != sorted(record["query_names"])
         ):
             raise ValueError("browser-egress DNS IP-family names are invalid")
@@ -2810,9 +2790,7 @@ def validate_sink_receipt(value: object, *, vector: BrowserEgressVector) -> dict
         or sum(dns_families[family]["tcp_queries_received"] for family in ("ipv4", "ipv6"))
         != dns["tcp_queries_received"]
         or sorted(
-            name
-            for family in ("ipv4", "ipv6")
-            for name in dns_families[family]["query_names"]
+            name for family in ("ipv4", "ipv6") for name in dns_families[family]["query_names"]
         )
         != names
     ):

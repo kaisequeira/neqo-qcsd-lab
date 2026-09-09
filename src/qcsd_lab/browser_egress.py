@@ -33,6 +33,8 @@ TARGET_EGRESS_SHIM_SCHEMA_VERSION = 1
 TARGET_EGRESS_BINDING = "__qcsd_report_non_replayable_egress_v1"
 POPUP_NAVIGATION_API = "PopupNavigation"
 POPUP_GUARD_MARKER = "__qcsd_popup_navigation_guard_v1__"
+WEBSOCKET_POLICY_CLOSE_CODE = 1008
+WEBSOCKET_POLICY_CLOSE_REASON = "QCSD non-replayable egress policy"
 
 # Playwright revision 1200 contributes the first ``--disable-features`` value.
 # The second value is an intentional strict superset which retains every
@@ -72,13 +74,11 @@ BROWSER_EGRESS_REPORTING_CONTROL_ENABLED_FEATURES = (
     "NetworkErrorLogging",
     "Reporting",
 )
-BROWSER_EGRESS_REPORTING_CONTROL_FEATURE_ARGUMENT = (
-    "--disable-features="
-    + ",".join(BROWSER_EGRESS_REPORTING_CONTROL_DISABLED_BASE_FEATURES)
+BROWSER_EGRESS_REPORTING_CONTROL_FEATURE_ARGUMENT = "--disable-features=" + ",".join(
+    BROWSER_EGRESS_REPORTING_CONTROL_DISABLED_BASE_FEATURES
 )
-BROWSER_EGRESS_REPORTING_CONTROL_ENABLE_ARGUMENT = (
-    "--enable-features="
-    + ",".join(BROWSER_EGRESS_REPORTING_CONTROL_ENABLED_FEATURES)
+BROWSER_EGRESS_REPORTING_CONTROL_ENABLE_ARGUMENT = "--enable-features=" + ",".join(
+    BROWSER_EGRESS_REPORTING_CONTROL_ENABLED_FEATURES
 )
 BROWSER_EGRESS_DISABLED_BLINK_FEATURES = (
     "Fledge",
@@ -86,8 +86,8 @@ BROWSER_EGRESS_DISABLED_BLINK_FEATURES = (
     "AttributionReporting",
     "SharedStorageAPI",
 )
-BROWSER_EGRESS_PLAYWRIGHT_FEATURE_ARGUMENT = (
-    "--disable-features=" + ",".join(BROWSER_EGRESS_PLAYWRIGHT_DISABLED_FEATURES)
+BROWSER_EGRESS_PLAYWRIGHT_FEATURE_ARGUMENT = "--disable-features=" + ",".join(
+    BROWSER_EGRESS_PLAYWRIGHT_DISABLED_FEATURES
 )
 BROWSER_EGRESS_REQUIRED_FEATURE_ARGUMENTS = (
     "--disable-features=" + ",".join(BROWSER_EGRESS_DISABLED_BASE_FEATURES),
@@ -179,12 +179,8 @@ BROWSER_EGRESS_NETWORK_PREDICTION_DISABLED_CONTROL_PROFILE = (
 BROWSER_EGRESS_NETWORK_PREDICTION_ENABLED_CONTROL_PROFILE = (
     "qualification-network-prediction-enabled-control"
 )
-BROWSER_EGRESS_REPORTING_DISABLED_CONTROL_PROFILE = (
-    "qualification-reporting-disabled-control"
-)
-BROWSER_EGRESS_REPORTING_ENABLED_CONTROL_PROFILE = (
-    "qualification-reporting-enabled-control"
-)
+BROWSER_EGRESS_REPORTING_DISABLED_CONTROL_PROFILE = "qualification-reporting-disabled-control"
+BROWSER_EGRESS_REPORTING_ENABLED_CONTROL_PROFILE = "qualification-reporting-enabled-control"
 # Backwards-internal alias retained while the qualification runner moves to the
 # explicit enabled/disabled profile names.  It is not part of the production
 # launch builder.
@@ -202,8 +198,7 @@ BROWSER_EGRESS_FIXTURE_CERTIFICATE_SPKI_SHA256_BASE64 = (
     "k3C2v8R8+ZvVlGwfaKCfUgaP5meJPA4oHibz7BFn2Zs="
 )
 BROWSER_EGRESS_FIXTURE_CERTIFICATE_ARGUMENT = (
-    "--ignore-certificate-errors-spki-list="
-    + BROWSER_EGRESS_FIXTURE_CERTIFICATE_SPKI_SHA256_BASE64
+    "--ignore-certificate-errors-spki-list=" + BROWSER_EGRESS_FIXTURE_CERTIFICATE_SPKI_SHA256_BASE64
 )
 BROWSER_EGRESS_SHORT_REPORTING_DELAY_ARGUMENT = "--short-reporting-delay"
 BROWSER_EGRESS_QUALIFICATION_ONLY_SWITCHES = (
@@ -240,6 +235,34 @@ _MECHANISMS = frozenset(
 )
 
 
+def _close_intercepted_websocket_without_sync_reentry(route: Any) -> None:
+    """Queue the pinned Playwright close without re-entering its sync bridge.
+
+    Playwright 1.57 implements ``WebSocketRoute.close()`` by evaluating its
+    injected dispatcher in the intercepted frame.  Calling that synchronous
+    method from the route callback deadlocks: the frame is still waiting for
+    the callback to return.  The pinned implementation's no-reply channel send
+    queues the identical ``closePage`` request and lets the callback return
+    before the driver evaluates it.  The complete Playwright tree is hashed by
+    the driver gate, so an incompatible private shape must fail closed here.
+    """
+
+    implementation = getattr(route, "_impl_obj", None)
+    channel = getattr(implementation, "_channel", None)
+    send_no_reply = getattr(channel, "send_no_reply", None)
+    if implementation is None or channel is None or not callable(send_no_reply):
+        raise RuntimeError("pinned Playwright WebSocket close adapter is unavailable")
+    send_no_reply(
+        "closePage",
+        None,
+        {
+            "code": WEBSOCKET_POLICY_CLOSE_CODE,
+            "reason": WEBSOCKET_POLICY_CLOSE_REASON,
+            "wasClean": True,
+        },
+    )
+
+
 def install_context_egress_guards(context: Any, guard: "NonReplayableEgressGuard") -> None:
     """Install context-wide constructor, navigation, WebSocket, and worker guards.
 
@@ -256,7 +279,7 @@ def install_context_egress_guards(context: Any, guard: "NonReplayableEgressGuard
             mechanism="playwright-websocket-route",
             url=route.url,
         )
-        route.close(code=1008, reason="QCSD non-replayable egress policy")
+        _close_intercepted_websocket_without_sync_reentry(route)
 
     def block_popup_navigation(route: Any) -> None:
         request = route.request
@@ -382,9 +405,7 @@ def build_fail_closed_host_resolver_argument(
     never silently fall back to ordinary DNS.
     """
 
-    if isinstance(approved_origins, (str, bytes)) or not isinstance(
-        approved_origins, Sequence
-    ):
+    if isinstance(approved_origins, (str, bytes)) or not isinstance(approved_origins, Sequence):
         raise ValueError("approved origins must be a sequence")
     origins = tuple(approved_origins)
     if len(set(origins)) != len(origins):
@@ -411,9 +432,7 @@ def build_fail_closed_host_resolver_argument(
     ):
         raise ValueError("approved IP exclusions must be a sequence")
     for raw_address in approved_ip_exclusions:
-        excluded.add(
-            _canonical_ip_rule_token(raw_address, label="approved IP exclusion")
-        )
+        excluded.add(_canonical_ip_rule_token(raw_address, label="approved IP exclusion"))
 
     if not mapped and not excluded:
         raise ValueError("fail-closed resolver requires at least one approved host or IP")
@@ -453,10 +472,7 @@ def validate_fail_closed_host_resolver_argument(value: object) -> dict[str, obje
             host = _validated_rule_host_token(parts[1], label="mapped host")
             destination_token = parts[2]
             if destination_token.startswith("[") or destination_token.endswith("]"):
-                if not (
-                    destination_token.startswith("[")
-                    and destination_token.endswith("]")
-                ):
+                if not (destination_token.startswith("[") and destination_token.endswith("]")):
                     raise ValueError("mapped destination has malformed IPv6 brackets")
                 destination = _canonical_ip_rule_token(
                     destination_token[1:-1], label="mapped destination"
@@ -479,9 +495,7 @@ def validate_fail_closed_host_resolver_argument(value: object) -> dict[str, obje
             if raw_host.startswith("[") or raw_host.endswith("]"):
                 if not (raw_host.startswith("[") and raw_host.endswith("]")):
                     raise ValueError("excluded host has malformed IPv6 brackets")
-                host = _canonical_ip_rule_token(
-                    raw_host[1:-1], label="excluded host"
-                )
+                host = _canonical_ip_rule_token(raw_host[1:-1], label="excluded host")
             else:
                 host = _canonical_ip_rule_token(raw_host, label="excluded host")
             if host != raw_host:
@@ -553,7 +567,7 @@ def _qualification_dns_control_resolver_argument(
     base = build_fail_closed_host_resolver_argument(
         approved_origins=approved_origins,
         origin_ip_pins=origin_ip_pins,
-        approved_ip_exclusions=approved_ip_exclusions
+        approved_ip_exclusions=approved_ip_exclusions,
     )
     rules = base.split("=", 1)[1].split(", ")
     rules.append(f"EXCLUDE {hostname}")
@@ -621,7 +635,7 @@ def browser_egress_qualification_control_chromium_args(
         else build_fail_closed_host_resolver_argument(
             approved_origins=approved_origins,
             origin_ip_pins=origin_ip_pins,
-            approved_ip_exclusions=approved_ip_exclusions
+            approved_ip_exclusions=approved_ip_exclusions,
         )
     )
     arguments = [
@@ -774,11 +788,15 @@ def launch_qualification_browser(
             approved_ip_exclusions=approved_ip_exclusions,
         )
     else:
-        if launch_profile in {
-            BROWSER_EGRESS_NETWORK_PREDICTION_DISABLED_CONTROL_PROFILE,
-            BROWSER_EGRESS_REPORTING_DISABLED_CONTROL_PROFILE,
-            BROWSER_EGRESS_REPORTING_ENABLED_CONTROL_PROFILE,
-        } and expected_network_prediction_option != 2:
+        if (
+            launch_profile
+            in {
+                BROWSER_EGRESS_NETWORK_PREDICTION_DISABLED_CONTROL_PROFILE,
+                BROWSER_EGRESS_REPORTING_DISABLED_CONTROL_PROFILE,
+                BROWSER_EGRESS_REPORTING_ENABLED_CONTROL_PROFILE,
+            }
+            and expected_network_prediction_option != 2
+        ):
             raise ValueError("disabled/reporting control requires policy 2")
         if (
             launch_profile == BROWSER_EGRESS_NETWORK_PREDICTION_ENABLED_CONTROL_PROFILE
@@ -890,9 +908,7 @@ def launch_pinned_cdp_probe_browser(
     )
 
 
-def _feature_token_arguments(
-    arguments: Sequence[str], switch: str
-) -> list[tuple[str, ...]]:
+def _feature_token_arguments(arguments: Sequence[str], switch: str) -> list[tuple[str, ...]]:
     prefix = f"{switch}="
     observed: list[tuple[str, ...]] = []
     for argument in arguments:
@@ -997,8 +1013,7 @@ def _validate_browser_egress_command_line(
     if observed != set(BROWSER_EGRESS_REQUIRED_CHROMIUM_SWITCHES):
         raise ValueError("browser egress command line omitted a required switch")
     if any(
-        arguments.count(required) != 1
-        for required in BROWSER_EGRESS_REQUIRED_CHROMIUM_SWITCHES
+        arguments.count(required) != 1 for required in BROWSER_EGRESS_REQUIRED_CHROMIUM_SWITCHES
     ):
         raise ValueError("browser egress command line duplicated a required switch")
     if any(
@@ -1019,24 +1034,14 @@ def _validate_browser_egress_command_line(
     if wrapper_arguments != [BROWSER_EGRESS_SUBPROCESS_WRAPPER_ARGUMENT]:
         raise ValueError("browser egress subprocess wrapper is absent or conflicting")
 
-    qualification_arguments = _expected_qualification_arguments_for_profile(
-        launch_profile
-    )
+    qualification_arguments = _expected_qualification_arguments_for_profile(launch_profile)
     for switch in BROWSER_EGRESS_QUALIFICATION_ONLY_SWITCHES:
-        candidates = [
-            argument
-            for argument in arguments
-            if argument.split("=", 1)[0] == switch
-        ]
+        candidates = [argument for argument in arguments if argument.split("=", 1)[0] == switch]
         expected_arguments = [
-            argument
-            for argument in qualification_arguments
-            if argument.split("=", 1)[0] == switch
+            argument for argument in qualification_arguments if argument.split("=", 1)[0] == switch
         ]
         if candidates != expected_arguments:
-            raise ValueError(
-                "browser egress qualification-only switch is absent or conflicting"
-            )
+            raise ValueError("browser egress qualification-only switch is absent or conflicting")
 
     base_arguments = _feature_token_arguments(arguments, "--disable-features")
     blink_arguments = _feature_token_arguments(arguments, "--disable-blink-features")
@@ -1052,20 +1057,14 @@ def _validate_browser_egress_command_line(
     ):
         raise ValueError("browser egress disabled-feature policy is incomplete or conflicting")
     enabled_arguments = _feature_token_arguments(arguments, "--enable-features")
-    expected_enabled_arguments = _expected_enabled_feature_arguments_for_profile(
-        launch_profile
-    )
+    expected_enabled_arguments = _expected_enabled_feature_arguments_for_profile(launch_profile)
     if tuple(enabled_arguments) != expected_enabled_arguments:
         raise ValueError("browser egress enabled-feature policy is incomplete or conflicting")
     enabled_tokens = {token for item in enabled_arguments for token in item}
     if enabled_tokens.intersection(required_base | required_blink):
         raise ValueError("browser egress command line re-enabled a disabled feature")
-    enabled_blink_arguments = _feature_token_arguments(
-        arguments, "--enable-blink-features"
-    )
-    enabled_blink_tokens = {
-        token for item in enabled_blink_arguments for token in item
-    }
+    enabled_blink_arguments = _feature_token_arguments(arguments, "--enable-blink-features")
+    enabled_blink_tokens = {token for item in enabled_blink_arguments for token in item}
     if enabled_blink_tokens.intersection(required_blink):
         raise ValueError("browser egress command line re-enabled a disabled Blink feature")
     if enabled_blink_arguments:
@@ -1083,21 +1082,15 @@ def _validate_browser_egress_command_line(
             or dns_exception_hostname is not None
         ):
             raise ValueError("production launch cannot select qualification resolver inputs")
-        host_resolver_policy = validate_fail_closed_host_resolver_argument(
-            resolver_arguments[0]
-        )
+        host_resolver_policy = validate_fail_closed_host_resolver_argument(resolver_arguments[0])
     else:
-        if (
-            approved_origins is None
-            or origin_ip_pins is None
-            or approved_ip_exclusions is None
-        ):
+        if approved_origins is None or origin_ip_pins is None or approved_ip_exclusions is None:
             raise ValueError("qualification launch requires exact resolver inputs")
         if dns_exception_hostname is None:
             expected_resolver = build_fail_closed_host_resolver_argument(
                 approved_origins=approved_origins,
                 origin_ip_pins=origin_ip_pins,
-                approved_ip_exclusions=approved_ip_exclusions
+                approved_ip_exclusions=approved_ip_exclusions,
             )
             if resolver_arguments[0] != expected_resolver:
                 raise ValueError(
@@ -1132,9 +1125,7 @@ def _validate_browser_egress_command_line(
         "required_enabled_feature_arguments": [
             list(tokens) for tokens in expected_enabled_arguments
         ],
-        "observed_enabled_feature_arguments": [
-            list(tokens) for tokens in enabled_arguments
-        ],
+        "observed_enabled_feature_arguments": [list(tokens) for tokens in enabled_arguments],
         "feature_switch_argument_counts": {
             "disable_features": len(base_arguments),
             "disable_blink_features": len(blink_arguments),
@@ -1249,8 +1240,7 @@ def validate_browser_egress_command_line_projection(
     profile = value["launch_profile"]
     required_base = sorted(_expected_base_features_for_profile(profile))
     required_enabled = [
-        list(tokens)
-        for tokens in _expected_enabled_feature_arguments_for_profile(profile)
+        list(tokens) for tokens in _expected_enabled_feature_arguments_for_profile(profile)
     ]
     expected = list(BROWSER_EGRESS_REQUIRED_CHROMIUM_SWITCHES)
     if (
@@ -1258,8 +1248,7 @@ def validate_browser_egress_command_line_projection(
         or value["schema_version"] != BROWSER_EGRESS_COMMAND_LINE_SCHEMA_VERSION
         or value["required_switches"] != expected
         or value["observed_required_switches"] != expected
-        or value["antagonistic_switches"]
-        != list(BROWSER_EGRESS_ANTAGONISTIC_CHROMIUM_SWITCHES)
+        or value["antagonistic_switches"] != list(BROWSER_EGRESS_ANTAGONISTIC_CHROMIUM_SWITCHES)
         or value["observed_antagonistic_switches"] != []
         or value["required_disabled_feature_tokens"] != required_base
         or value["observed_disabled_feature_tokens"] != required_base
@@ -1277,8 +1266,7 @@ def validate_browser_egress_command_line_projection(
             "enable_blink_features": 0,
         }
         or value["complete_feature_policy_is_last"] is not True
-        or value["subprocess_wrapper_argument"]
-        != BROWSER_EGRESS_SUBPROCESS_WRAPPER_ARGUMENT
+        or value["subprocess_wrapper_argument"] != BROWSER_EGRESS_SUBPROCESS_WRAPPER_ARGUMENT
         or value["required_switches_are_bare_and_unique"] is not True
         or value["host_resolver_switch_is_unique"] is not True
         or value["host_resolver_is_fail_closed"] is not True
@@ -1310,8 +1298,7 @@ def validate_browser_egress_command_line_projection(
         or type(policy["excluded_host_count"]) is not int
         or policy["mapped_host_count"] < 0
         or policy["excluded_host_count"] < 0
-        or policy["rule_count"]
-        != policy["mapped_host_count"] + policy["excluded_host_count"] + 1
+        or policy["rule_count"] != policy["mapped_host_count"] + policy["excluded_host_count"] + 1
         or policy["rule_count"] < 2
         or policy["catch_all_not_found"] is not True
         or not isinstance(digest, str)
@@ -1919,10 +1906,7 @@ def validate_non_replayable_egress_failure_evidence(value: object) -> dict[str, 
         not isinstance(by_api, Mapping)
         or not by_api
         or any(
-            not isinstance(api, str)
-            or not api
-            or type(count) is not int
-            or count < 1
+            not isinstance(api, str) or not api or type(count) is not int or count < 1
             for api, count in by_api.items()
         )
         or list(by_api) != sorted(by_api)
@@ -1994,16 +1978,13 @@ def validate_non_replayable_egress_failure_evidence(value: object) -> dict[str, 
             valid_semantics = (
                 api == "WebSocket"
                 and source is None
-                and projected_url_is_canonical(
-                    url, schemes=frozenset({"ws", "wss"}), required=True
-                )
+                and projected_url_is_canonical(url, schemes=frozenset({"ws", "wss"}), required=True)
             )
         elif mechanism == "paused-target-runtime-shim":
             reportable = (
                 set(target_egress_apis(source["target_type"]))
                 if isinstance(source, Mapping)
-                and source.get("target_type")
-                in {"page", "iframe", "worker", "shared_worker"}
+                and source.get("target_type") in {"page", "iframe", "worker", "shared_worker"}
                 else set()
             )
             valid_semantics = source is not None and api in reportable and url is None
@@ -2024,7 +2005,9 @@ def validate_non_replayable_egress_failure_evidence(value: object) -> dict[str, 
                     # non-network scheme.  Chromium may expose that scheme in
                     # attachedToTarget; retaining only its canonical scheme/
                     # origin projection keeps the typed failure verifiable.
-                    url, schemes=None, required=False
+                    url,
+                    schemes=None,
+                    required=False,
                 )
             )
         elif mechanism == "playwright-popup-navigation-route":

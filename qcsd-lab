@@ -9402,6 +9402,24 @@ iptables -t nat -C POSTROUTING -s "$2" -o eth1 -j MASQUERADE
   exit "${kernel_tx_public_status}"
 fi
 
+# The role starts its hard guard at process birth, before the shell completes
+# staged readiness and sends the first phase signal.  Pass this one named
+# budget into every role and derive the shell observation bound from it so the
+# two supervisors cannot drift independently.
+readonly browser_egress_role_deadline_seconds=300
+readonly browser_egress_role_exit_observation_grace_seconds=15
+readonly browser_egress_role_exit_wait_seconds=$((
+  browser_egress_role_deadline_seconds +
+  browser_egress_role_exit_observation_grace_seconds
+))
+if (( browser_egress_role_deadline_seconds <= 0 ||
+      browser_egress_role_exit_observation_grace_seconds <= 0 ||
+      browser_egress_role_exit_wait_seconds <=
+        browser_egress_role_deadline_seconds )); then
+  echo "browser-egress role supervision budgets are invalid" >&2
+  exit 1
+fi
+
 browser_egress_wait_healthy() {
   local container_id="$1" deadline state
   deadline=$((SECONDS + 20))
@@ -9529,7 +9547,7 @@ browser_egress_wait_container_marker() {
 
 browser_egress_wait_exit_code() {
   local container_id="$1" label="$2" deadline state exit_code
-  deadline=$((SECONDS + 120))
+  deadline=$((SECONDS + browser_egress_role_exit_wait_seconds))
   while (( SECONDS < deadline )); do
     if ! read -r state exit_code < <(_qcsd_docker_api container inspect --format \
       '{{.State.Status}} {{.State.ExitCode}}' "${container_id}" 2>/dev/null); then
@@ -10435,7 +10453,8 @@ test "$(find /qcsd-policy -mindepth 1 -maxdepth 1 -type f -printf x)" = x
       "${browser_egress_browser_policy_mount[@]}" \
       "${browser_egress_labels[@]}" --label org.qcsd.role=browser \
       "${browser_egress_role_common[@]}" "${browser_egress_actor_command}" \
-      --vector-id "${browser_egress_vector_id}" >/dev/null
+      --vector-id "${browser_egress_vector_id}" \
+      --role-deadline-seconds "${browser_egress_role_deadline_seconds}" >/dev/null
     browser_egress_browser_id="${QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS[-1]}"
     browser_egress_failure_code=browser-start-failed
     browser_egress_failure_stage=browser-readiness
@@ -10452,7 +10471,8 @@ test "$(find /qcsd-policy -mindepth 1 -maxdepth 1 -type f -printf x)" = x
       --entrypoint /usr/bin/tini "${image_id}" -- \
       "${browser_egress_tool}" observer \
       --vector-id "${browser_egress_vector_id}" --pcap /tmp/capture.pcapng \
-      --evidence-relative "${browser_egress_evidence_relative}" >/dev/null
+      --evidence-relative "${browser_egress_evidence_relative}" \
+      --role-deadline-seconds "${browser_egress_role_deadline_seconds}" >/dev/null
     browser_egress_observer_id="${QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS[-1]}"
     browser_egress_failure_code=observer-start-failed
     browser_egress_failure_stage=observer-readiness
@@ -10462,7 +10482,8 @@ test "$(find /qcsd-policy -mindepth 1 -maxdepth 1 -type f -printf x)" = x
       --network "${browser_egress_network_name}" --ip 172.30.98.11 \
       --ip6 fd00:71:63:73:64:98:0:11 --user 0:0 \
       "${browser_egress_labels[@]}" --label org.qcsd.role=fixture \
-      "${browser_egress_role_common[@]}" fixture --vector-id "${browser_egress_vector_id}" >/dev/null
+      "${browser_egress_role_common[@]}" fixture --vector-id "${browser_egress_vector_id}" \
+      --role-deadline-seconds "${browser_egress_role_deadline_seconds}" >/dev/null
     browser_egress_fixture_id="${QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS[-1]}"
     browser_egress_failure_code=docker-start-failed
     browser_egress_failure_stage=fixture-readiness
@@ -10473,7 +10494,8 @@ test "$(find /qcsd-policy -mindepth 1 -maxdepth 1 -type f -printf x)" = x
       --ip6 fd00:71:63:73:64:98:0:20 --user 0:0 \
       --tmpfs /opt/qcsd-lab/config/class-study/v1:ro,nosuid,nodev,noexec,mode=000 \
       "${browser_egress_labels[@]}" --label org.qcsd.role=forbidden_sink \
-      "${browser_egress_role_common[@]}" forbidden-sink --vector-id "${browser_egress_vector_id}" >/dev/null
+      "${browser_egress_role_common[@]}" forbidden-sink --vector-id "${browser_egress_vector_id}" \
+      --role-deadline-seconds "${browser_egress_role_deadline_seconds}" >/dev/null
     browser_egress_forbidden_id="${QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS[-1]}"
     browser_egress_failure_code=docker-start-failed
     browser_egress_failure_stage=forbidden-sink-readiness
@@ -10484,7 +10506,8 @@ test "$(find /qcsd-policy -mindepth 1 -maxdepth 1 -type f -printf x)" = x
       --ip6 fd00:71:63:73:64:98:0:53 --user 0:0 \
       --tmpfs /opt/qcsd-lab/config/class-study/v1:ro,nosuid,nodev,noexec,mode=000 \
       "${browser_egress_labels[@]}" --label org.qcsd.role=dns_sink \
-      "${browser_egress_role_common[@]}" dns-sink --vector-id "${browser_egress_vector_id}" >/dev/null
+      "${browser_egress_role_common[@]}" dns-sink --vector-id "${browser_egress_vector_id}" \
+      --role-deadline-seconds "${browser_egress_role_deadline_seconds}" >/dev/null
     browser_egress_dns_id="${QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS[-1]}"
     browser_egress_failure_code=docker-start-failed
     browser_egress_failure_stage=dns-sink-readiness
