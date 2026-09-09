@@ -478,7 +478,55 @@ real Docker 29 namespace/lifecycle test and the complete synthetic 110-vector
 closure, while the remaining Lab suite passed 4,049 tests with 17 declared
 skips. That is 4,493 passed, 17 skipped and no failures; Bash syntax, diff
 whitespace and fatal Ruff diagnostics also pass. The correction nevertheless
-has no fresh source-bound build receipt. Fresh v78 is therefore required.
+did not inherit v77 authority by itself.
+
+V78 then passed the canonical fresh pull/no-cache
+[build](artifacts/buflo-study/build-execution-v78.json) and
+[completion](artifacts/buflo-study/build-completion-v78.json) pair plus the
+[pinned-CDP gate](artifacts/buflo-study/pinned-cdp-execution-v78.json) for exact
+clean Lab `60909195e3138957b8fdd12d70dedbf4eeb03224` and unchanged clean
+Rust/gitlink `46313bef90ad392b7ca293ab7cf28108d2f35c7f`. Build whole-file/payload
+SHA-256 is
+`dc1384a35d6dcb22a947a4d5c31b784775b7744e6c9dc52d7dd24a2cca22e196` /
+`608aa2777ad87f179713c36677c4c403fde7bfd9f6b7ceeba2905938b3f2d7e2`;
+completion whole-file/payload is
+`1f8b50f09ab3be8321f0c563cb416723c62cd3be104ba81da12afa69fd46f3e6` /
+`e6547d696c588920a26c740c0aefe0e1b0c8b693009c03b9618311a8c19d2bbf`.
+The collection/preparation/reference image IDs are
+`sha256:329d38decd3012ed8e394dbb3f7c98b1e2d4f98f5e04ef1c6e3354892f13e1d1`,
+`sha256:7575f81098b60cf53f2c8cc1bbccf1b32056a4753ab52970c0b910cbf125f273`,
+and
+`sha256:6f79329e136066e2520c98fe3c76f78b5f4660c9432be01384ac1e13167c4ea1`;
+pinned-CDP whole-file/payload SHA-256 is
+`f386b38fd2fe0485084eb7a7cad1073b6768d44797a468a99bfc0ae2aa0804bd` /
+`ba3230de8c0b6a614a42dc09e17fa4d61f6d86568d69af98b88301791391807e`.
+
+The [v78 browser-egress checkpoint](artifacts/buflo-study/browser-egress-qualification-v78/experiment.json),
+whole-file SHA-256
+`c599cdf699d8bca7097340d6cc68528138b12a0f703bcdbcf76976fe7366acf4`,
+remains open `running` at vector 1, `constructor--page--websocket`, with one sealed
+`capture-process-failed` operational failure, no passed vector,
+`next_vector_ordinal=1`, and no final receipt. The sealed result's whole-file/
+payload SHA-256 is
+`c58a0cef6148361e42059c59518f35738d3b34c453c391c0af5361b68e8ee1e5` /
+`9734761fcd641e8810323af6ff114357aad8f7c36c9af0d48edd15942347e26f`.
+Browser prearming/action, the fixture request, schema-3 topology/teardown and
+capture all succeeded. `/usr/bin/dumpcap -q -i any -w <PCAP>` exited zero,
+captured 73 packets with no drops, and produced a 16,236-byte PCAP at SHA-256
+`1923464a739c9b86b4a2ea8ef12989dd5b7aff828d9e5784023329638fd0695a`.
+The producer had merged privilege-dependent stderr and stdout for both version
+queries. Deep verification first rejected the resulting `tshark` packet-decoder
+binding; the `dumpcap` capture-tool binding had the same latent defect. A
+successful capture was consequently misclassified. The sealed attempt/result
+is immutable, non-authorising Lab-orchestration failure evidence; the open v78
+checkpoint will not be reused. This is not a Docker, browser-preparation,
+workload, client, or defence failure.
+
+Lab implementation commit `6da10dcb52e5856ce580759453925d20550fd683`
+separates tool-version stdout and stderr and binds only stdout's first line. It
+has 470 targeted tests passing, including the separately run full-vector
+closure. It has no fresh image authority; v79 must bind the clean successor
+documentation head.
 Browser-egress remains 0/110, certification remains 0/900, formal capture
 remains 0/16,000, and every other scientific numerator remains zero.
 
@@ -1138,8 +1186,12 @@ projection because raw network inspect supplied a singleton JSON array rather
 than the required object. V75/v76 were consumed operationally; v77 bound and
 passed the formatted-inspect source's build and pinned-CDP gates, then exposed
 the post-stop topology-snapshot defect. The locally validated two-phase
-schema-3 correction remains unreceipted, so fresh-source authority now
-requires v78.
+schema-3 correction was bound by v78's passing build and pinned-CDP gates;
+v78 then stopped at browser vector 1 on merged privilege-dependent version
+output. Implementation commit `6da10dcb52e5856ce580759453925d20550fd683`
+contains the stdout/stderr separation and has 470 targeted tests
+passing, including the separately run full-vector closure, so fresh-source
+authority now requires v79.
 Every downstream scientific counter remains zero.
 
 The retained post-v55 Lab engineering lineage also hardens durable Docker HANDOFF
@@ -1306,8 +1358,12 @@ first browser vector at `runtime-projection` because raw Docker network inspect
 produced a singleton JSON array where the consumer requires an object. V77
 later bound the formatted-inspect repair and passed build/completion and
 pinned-CDP, then terminally failed the post-stop membership projection. The
-locally validated two-phase schema-3 correction remains unreceipted, so v78
-must rebuild and repeat the source-bound gates.
+two-phase schema-3 correction was bound by v78's passing build/completion and
+pinned-CDP gates, after which browser vector 1 stopped on merged privilege-
+dependent version output. Implementation commit
+`6da10dcb52e5856ce580759453925d20550fd683` contains the stream-separation fix
+and has 470 targeted tests passing, including the separately run full-vector
+closure; v79 must rebuild and repeat the source-bound gates.
 Browser-egress is 0/110,
 timing stress is 0/12, regression is 0/18, and controlled qualification is
 0/160. Real acquisition observations remain zero.
@@ -1384,13 +1440,18 @@ bound the later caller repair; each passed build/completion and pinned-CDP but
 terminally failed the first browser vector at its next orchestration boundary.
 The v77 build and pinned-CDP receipts bound the producer-only formatted-network-
 inspect repair; its browser attempt exposed the later post-stop projection
-defect. Current source supersedes v77 with a locally validated two-phase
-schema-3 correction that has no source-bound build receipt.
-V78 is the exact next allocator-authorised cohort. It must pass a fresh
+defect. V78 bound the locally validated two-phase schema-3 correction through
+build/completion and pinned-CDP, then stopped at browser vector 1 because
+merged privilege-dependent stderr/stdout produced a non-reproducible `tshark`
+packet-decoder binding; `dumpcap` had the same latent capture-tool defect.
+Action, capture and topology/teardown nevertheless succeeded. Implementation
+commit `6da10dcb52e5856ce580759453925d20550fd683` separates the streams and
+has 470 targeted tests passing, including the separately run full-vector
+closure. V79 is the exact next allocator-authorised cohort. It must pass a fresh
 build/completion pair, pinned-CDP gate, 110/110 browser-egress gate, isolated
 reference, 12/12 timing stress, 18/18 regression, regression-bound code gate,
 and 160/160 controlled qualification before expanded-class acquisition can
-begin. V55–v77 cannot authorise the changed-source evidence. The
+begin. V55–v78 cannot authorise the changed-source evidence. The
 complete current status and earlier cohort chronology are retained in the
 authoritative workspace [`PROJECT.md`](../PROJECT.md).
 
@@ -1618,9 +1679,12 @@ vector terminally failed the same stage because unformatted Docker network
 inspect produced a one-element JSON array rather than the required object.
 V77 bound the producer-only `--format '{{json .}}'` correction through a fresh
 build/completion pair and passing pinned-CDP gate, then exposed the distinct
-post-stop membership-snapshot defect. The locally validated two-phase schema-3
-correction remains unreceipted; fresh v78 build and source-bound gates are
-required. No
+post-stop membership-snapshot defect. V78 bound the locally validated two-
+phase schema-3 correction through build/completion and pinned-CDP, then stopped
+at browser vector 1 on merged privilege-dependent version output. The
+committed stdout/stderr separation has 470 targeted tests passing, including
+the separately run full-vector closure; fresh v79
+build and source-bound gates are required. No
 downstream scientific authority exists.
 
 The build-execution schema-4 integration is committed at clean Lab
@@ -1730,8 +1794,12 @@ V74's valid build/completion and pinned-CDP receipts bind clean Lab
 at the first vector's runtime projection because a singleton JSON array was
 supplied to the object-only network projection. The producer-only formatted-
 inspect fix was bound by v77's build pair, but its first vector exposed the
-post-stop topology-snapshot defect. The locally validated two-phase schema-3
-correction remains unreceipted, so the sequence must start again at v78.
+post-stop topology-snapshot defect. V78 bound the two-phase schema-3 correction
+through build/completion and pinned-CDP, then stopped at browser vector 1 when
+merged privilege-dependent output produced a non-reproducible `tshark`
+packet-decoder binding; `dumpcap` had the same latent capture-tool defect. The
+committed stream-separation fix has 470 targeted tests passing, including the
+separately run full-vector closure, so the sequence must start again at v79.
 
 Earlier on 1 September 2026, a read-only probe found only about 2.19 GB
 available on the backing C: volume and Docker again exposed data-device I/O
@@ -1847,7 +1915,9 @@ first browser vector exposed the remaining caller binding defect. V74 bound
 that fix, then exposed the raw-network-inspect array/object mismatch. The
 producer-only formatted-inspect correction was bound and passed by v77's image;
 its browser attempt exposed the later post-stop membership projection. The
-under-test two-phase schema-3 correction requires a fresh v78 image. The pinned
+two-phase schema-3 correction was then bound and passed by v78's image; its
+browser attempt exposed the merged privilege-dependent version-stream defect.
+The committed separation fix requires a fresh v79 image. The pinned
 contract binds post-patch `crNetworkManager.js` SHA-256
 `c10daf1b5c5c6c64e1c545ff7d7bb16f9990aa71c4fe64e081c3a43157d4531a`,
 the 401-file/131,857,836-byte package tree at
@@ -1997,9 +2067,11 @@ attempt. V74 bound that fix in a fresh build/completion pair and passing
 pinned-CDP receipt, then its first vector terminally failed runtime projection
 because raw Docker network inspect emitted a singleton array where one object
 is required. V77 bound and passed the producer-only formatted-inspect fix, then
-failed the later post-stop membership projection. The under-test two-phase
-schema-3 correction therefore requires a fresh v78 build/completion pair plus
-a new pinned-CDP receipt. Pass that canonical receipt
+failed the later post-stop membership projection. V78 bound and passed the
+two-phase schema-3 correction's build/completion and pinned-CDP gates, then
+stopped on merged privilege-dependent version output. The committed stream-
+separation fix therefore requires a fresh v79 build/completion pair plus a new
+pinned-CDP receipt. Pass that canonical receipt
 to the foundation command as `--pinned-cdp-receipt "$PINNED_CDP"`. It is the sixth
 explicit foundation hard gate: the foundation binds the receipt and payload
 hashes, its exact build binding, and the fixed probe-contract hash, and requires
@@ -2381,9 +2453,12 @@ JSON array rather than the required object. Its durable claim extends the
 registry through v74. V75 and v76 are consumed operational failures. V77
 extends the registry, passes build/completion and pinned-CDP for clean Lab
 `15e478dc7…`, and terminally fails browser vector 1 on post-stop topology
-projection. None authorises the locally validated two-phase schema-3
-correction; v78 is the exact next permitted value and must be built before any
-downstream gate runs.
+projection. V78 then extends the registry through passing build/completion and
+pinned-CDP for clean Lab `60909195…`, then stops at browser vector 1 on merged
+privilege-dependent version output despite successful capture and topology.
+Neither authorises the committed stdout/stderr separation; v79 is the exact
+next permitted value and must be built before any downstream gate
+runs.
 
 ```bash
 set -euo pipefail
