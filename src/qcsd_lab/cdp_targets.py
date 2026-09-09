@@ -31,7 +31,7 @@ from .browser_egress import (
 )
 
 CDP_TARGET_INSTRUMENTATION_POLICY = (
-    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v12"
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v13"
 )
 BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION = 1
 EGRESS_PREARM_SUMMARY_SCHEMA_VERSION = 2
@@ -97,12 +97,17 @@ _AUTO_ATTACH_COMMAND = (
 )
 _TARGET_BARRIER_COMMAND = ("Target.getTargetInfo", {})
 _PAGE_TARGET_TYPES = frozenset({"page", "iframe"})
+_WORKER_TARGET_TYPES = frozenset({"worker", "shared_worker"})
 _IFRAME_INSTRUMENTATION = "beforeScriptExecution"
 _IFRAME_INSTALLATION_KIND = "iframe-pre-author-installation"
 _IFRAME_SYNTHETIC_EXPRESSION = "true"
 _IFRAME_INSTRUMENTATION_COMMAND = (
     "Debugger.setInstrumentationBreakpoint",
     {"instrumentation": _IFRAME_INSTRUMENTATION},
+)
+_WORKER_INSTRUMENTATION_COMMAND = (
+    "Debugger.setInstrumentationBreakpoint",
+    {"instrumentation": "beforeScriptExecution"},
 )
 _IFRAME_CONTEXT_EVENTS = frozenset(
     {
@@ -123,6 +128,24 @@ def _egress_evaluate_command(target_type: str) -> tuple[str, dict[str, Any]]:
             "expression": target_egress_shim_source(target_type),
             "returnByValue": True,
             "awaitPromise": False,
+        },
+    )
+
+
+def _worker_egress_evaluate_command(
+    target_type: str,
+    call_frame_id: str,
+) -> tuple[str, dict[str, Any]]:
+    if target_type not in _WORKER_TARGET_TYPES:
+        raise ValueError("only worker targets accept first-script egress evaluation")
+    if not isinstance(call_frame_id, str) or not call_frame_id:
+        raise ValueError("worker first-script call-frame identity is malformed")
+    return (
+        "Debugger.evaluateOnCallFrame",
+        {
+            "callFrameId": call_frame_id,
+            "expression": target_egress_shim_source(target_type),
+            "returnByValue": True,
         },
     )
 
@@ -504,6 +527,17 @@ class _TargetState:
     iframe_installation_received: bool = False
     iframe_regular_remove_issued: bool = False
     iframe_regular_removed: bool = False
+    worker_instrumentation_breakpoint_id: str | None = None
+    worker_parsed_script_urls: dict[str, str] = field(default_factory=dict)
+    worker_bootstrap_script_id: str | None = None
+    worker_pause_call_frame_id: str | None = None
+    worker_initial_resume_acknowledged: bool = False
+    worker_pause_seen: bool = False
+    worker_debugger_paused: bool = False
+    worker_egress_evaluation_issued: bool = False
+    worker_egress_evaluation_acknowledged: bool = False
+    worker_instrumentation_removed: bool = False
+    worker_debugger_resume_acknowledged: bool = False
 
 
 @dataclass(frozen=True)
@@ -889,8 +923,8 @@ class RecursiveCdpTargetRouter:
         # Page/frame realms are protected first by the context init script so
         # sibling popups cannot execute before browser-target rejection.  The
         # CDP evaluation must therefore observe that exact idempotent receipt;
-        # workers have no context init script and must be first-installed while
-        # still paused for debugging.
+        # workers have no context init script and must be first-installed in
+        # their fully initialised first-script call frame while it is paused.
         if expected_already_installed is None:
             expected_already_installed = source.target_type in _PAGE_TARGET_TYPES
         if receipt["already_installed"] is not expected_already_installed:
@@ -1952,7 +1986,7 @@ class RecursiveCdpTargetRouter:
             "Runtime.runIfWaitingForDebugger",
             {},
             label=f"{state.target_type}:Runtime.runIfWaitingForDebugger",
-            on_success=lambda _result, child=source: self._resume_ack(child),
+            on_success=lambda result, child=source: self._resume_ack(child, result),
         )
 
     def _attached(self, parent_route: tuple[str, ...], event: Mapping[str, Any]) -> None:
@@ -2074,7 +2108,7 @@ class RecursiveCdpTargetRouter:
                 "Runtime.runIfWaitingForDebugger",
                 {},
                 label=f"{target_type}:shutdown-resume",
-                on_success=lambda _result, child=source: self._shutdown_resume_ack(child),
+                on_success=lambda result, child=source: self._shutdown_resume_ack(child, result),
             )
             return
         state = _TargetState(source, target_type, "configuring")
@@ -2152,16 +2186,26 @@ class RecursiveCdpTargetRouter:
             self._validate_page_init_result(result)
         elif method == "Debugger.setInstrumentationBreakpoint":
             breakpoint_id = result.get("breakpointId")
-            if (
-                state.target_type != "iframe"
-                or not isinstance(breakpoint_id, str)
-                or not breakpoint_id
-                or state.iframe_instrumentation_breakpoint_id is not None
-            ):
+            if not isinstance(breakpoint_id, str) or not breakpoint_id:
                 raise CdpTargetIntegrityError(
-                    "CDP iframe instrumentation breakpoint acknowledgement is invalid"
+                    "CDP pre-author instrumentation breakpoint acknowledgement is invalid"
                 )
-            state.iframe_instrumentation_breakpoint_id = breakpoint_id
+            if state.target_type == "iframe":
+                if state.iframe_instrumentation_breakpoint_id is not None:
+                    raise CdpTargetIntegrityError(
+                        "CDP iframe instrumentation breakpoint acknowledgement is invalid"
+                    )
+                state.iframe_instrumentation_breakpoint_id = breakpoint_id
+            elif state.target_type in _WORKER_TARGET_TYPES:
+                if state.worker_instrumentation_breakpoint_id is not None:
+                    raise CdpTargetIntegrityError(
+                        "CDP worker instrumentation breakpoint acknowledgement is invalid"
+                    )
+                state.worker_instrumentation_breakpoint_id = breakpoint_id
+            else:
+                raise CdpTargetIntegrityError(
+                    "CDP target cannot use a pre-author instrumentation breakpoint"
+                )
         elif method == "Runtime.evaluate:egress-shim":
             self._record_egress_evaluation(source, result)
         elif method == "Runtime.evaluate:popup-guard":
@@ -2202,6 +2246,46 @@ class RecursiveCdpTargetRouter:
                     source,
                     *_TARGET_BARRIER_COMMAND,
                     label="iframe:Target.getTargetInfo",
+                    on_success=lambda result, child=source: self._setup_ack(
+                        child, "Target.getTargetInfo", result
+                    ),
+                )
+                return
+            self._resume_instrumented_child(source)
+            return
+        if state.target_type in _WORKER_TARGET_TYPES:
+            if method not in {
+                "Debugger.setInstrumentationBreakpoint",
+                "Target.setAutoAttach",
+                "Target.getTargetInfo",
+            }:
+                state.setup_pending.add("Debugger.setInstrumentationBreakpoint")
+                self._queue_command(
+                    source,
+                    *_WORKER_INSTRUMENTATION_COMMAND,
+                    label=f"{state.target_type}:Debugger.setInstrumentationBreakpoint",
+                    on_success=lambda result, child=source: self._setup_ack(
+                        child, "Debugger.setInstrumentationBreakpoint", result
+                    ),
+                )
+                return
+            if method == "Debugger.setInstrumentationBreakpoint":
+                state.setup_pending.add("Target.setAutoAttach")
+                self._queue_command(
+                    source,
+                    *_AUTO_ATTACH_COMMAND,
+                    label=f"{state.target_type}:Target.setAutoAttach",
+                    on_success=lambda result, child=source: self._setup_ack(
+                        child, "Target.setAutoAttach", result
+                    ),
+                )
+                return
+            if method == "Target.setAutoAttach":
+                state.setup_pending.add("Target.getTargetInfo")
+                self._queue_command(
+                    source,
+                    *_TARGET_BARRIER_COMMAND,
+                    label=f"{state.target_type}:Target.getTargetInfo",
                     on_success=lambda result, child=source: self._setup_ack(
                         child, "Target.getTargetInfo", result
                     ),
@@ -2358,12 +2442,227 @@ class RecursiveCdpTargetRouter:
             "CDP iframe execution contexts were cleared before prearm completed"
         )
 
+    def _handle_worker_script_parsed(
+        self,
+        source: CdpTargetSource,
+        event: Mapping[str, Any],
+    ) -> None:
+        """Bind the worker's first runnable script to its registered bootstrap URL."""
+
+        if source.target_type not in _WORKER_TARGET_TYPES:
+            return
+        state = self._state(source.session_path)
+        if state.phase in {"ready", "closing", "detached", "destroyed"}:
+            # Once the exact bootstrap barrier has completed, later eval,
+            # import, or debugger bookkeeping scripts are unrelated to prearm.
+            # Do not retain their identities or reinterpret a repeated URL as
+            # a second bootstrap script.
+            return
+        bootstrap = self._worker_bootstraps.get(source)
+        script_id = event.get("scriptId")
+        url = event.get("url")
+        start_line = event.get("startLine")
+        start_column = event.get("startColumn")
+        if (
+            bootstrap is None
+            or not isinstance(script_id, str)
+            or not script_id
+            or not isinstance(url, str)
+            or type(start_line) is not int
+            or start_line < 0
+            or type(start_column) is not int
+            or start_column < 0
+            or script_id in state.worker_parsed_script_urls
+        ):
+            raise CdpTargetIntegrityError("CDP worker parsed-script identity is invalid or reused")
+        state.worker_parsed_script_urls[script_id] = url
+        if url != bootstrap.url:
+            return
+        if (
+            state.phase != "resuming"
+            or state.worker_bootstrap_script_id is not None
+            or start_line != 0
+            or start_column != 0
+        ):
+            raise CdpTargetIntegrityError(
+                "CDP worker bootstrap script was duplicated or parsed outside its exact origin"
+            )
+        state.worker_bootstrap_script_id = script_id
+
+    def _handle_worker_debugger_paused(
+        self,
+        source: CdpTargetSource,
+        event: Mapping[str, Any],
+    ) -> None:
+        """Install the worker egress shim in its fully initialised first-script realm."""
+
+        state = self._state(source.session_path)
+        bootstrap = self._worker_bootstraps.get(source)
+        instrumentation_id = state.worker_instrumentation_breakpoint_id
+        call_frames = event.get("callFrames")
+        hit_breakpoints = event.get("hitBreakpoints", [])
+        instrumentation_data = event.get("data")
+        if (
+            source.target_type not in _WORKER_TARGET_TYPES
+            or bootstrap is None
+            or state.phase != "resuming"
+            or not isinstance(instrumentation_id, str)
+            or not instrumentation_id
+            or not isinstance(state.worker_bootstrap_script_id, str)
+            or state.worker_pause_seen
+            or state.worker_debugger_paused
+            or state.worker_egress_evaluation_issued
+            or event.get("reason") != "instrumentation"
+            or not isinstance(call_frames, list)
+            or not call_frames
+            or not isinstance(hit_breakpoints, list)
+            or hit_breakpoints not in ([], [instrumentation_id])
+            or not isinstance(instrumentation_data, Mapping)
+            or set(instrumentation_data) != {"scriptId", "url"}
+            or instrumentation_data.get("scriptId") != state.worker_bootstrap_script_id
+            or instrumentation_data.get("url") != bootstrap.url
+        ):
+            raise CdpTargetIntegrityError("CDP worker first-script debugger pause is invalid")
+        first_frame = call_frames[0]
+        location = first_frame.get("location") if isinstance(first_frame, Mapping) else None
+        call_frame_id = first_frame.get("callFrameId") if isinstance(first_frame, Mapping) else None
+        frame_url = first_frame.get("url") if isinstance(first_frame, Mapping) else None
+        function_name = (
+            first_frame.get("functionName") if isinstance(first_frame, Mapping) else None
+        )
+        function_location = (
+            first_frame.get("functionLocation") if isinstance(first_frame, Mapping) else None
+        )
+        if (
+            not isinstance(call_frame_id, str)
+            or not call_frame_id
+            or not isinstance(frame_url, str)
+            or (frame_url and frame_url != bootstrap.url)
+            or not isinstance(function_name, str)
+            or not isinstance(location, Mapping)
+            or location.get("scriptId") != state.worker_bootstrap_script_id
+            or type(location.get("lineNumber")) is not int
+            or location.get("lineNumber") < 0
+            or type(location.get("columnNumber")) is not int
+            or location.get("columnNumber") < 0
+            or not isinstance(function_location, Mapping)
+            or function_location.get("scriptId") != state.worker_bootstrap_script_id
+            or type(function_location.get("lineNumber")) is not int
+            or function_location.get("lineNumber") != 0
+            or type(function_location.get("columnNumber")) is not int
+            or function_location.get("columnNumber") != 0
+        ):
+            raise CdpTargetIntegrityError(
+                "CDP worker first-script call-frame identity or location is invalid"
+            )
+        state.worker_pause_seen = True
+        state.worker_debugger_paused = True
+        state.worker_pause_call_frame_id = call_frame_id
+        state.worker_egress_evaluation_issued = True
+        self._queue_command(
+            source,
+            *_worker_egress_evaluate_command(source.target_type, call_frame_id),
+            label=f"{source.target_type}:Debugger.evaluateOnCallFrame:egress-shim",
+            on_success=lambda result, child=source: self._worker_egress_evaluation_ack(
+                child, result
+            ),
+        )
+
+    def _worker_egress_evaluation_ack(
+        self,
+        source: CdpTargetSource,
+        result: Mapping[str, Any],
+    ) -> None:
+        state = self._state(source.session_path)
+        breakpoint_id = state.worker_instrumentation_breakpoint_id
+        if (
+            source.target_type not in _WORKER_TARGET_TYPES
+            or state.phase != "resuming"
+            or not state.worker_pause_seen
+            or not state.worker_debugger_paused
+            or not state.worker_egress_evaluation_issued
+            or state.worker_egress_evaluation_acknowledged
+            or not isinstance(state.worker_pause_call_frame_id, str)
+            or not isinstance(breakpoint_id, str)
+            or not breakpoint_id
+        ):
+            raise CdpTargetIntegrityError(
+                "CDP worker first-script egress evaluation acknowledgement is invalid"
+            )
+        self._record_egress_evaluation(
+            source,
+            result,
+            expected_already_installed=False,
+        )
+        state.worker_egress_evaluation_acknowledged = True
+        self._queue_command(
+            source,
+            "Debugger.removeBreakpoint",
+            {"breakpointId": breakpoint_id},
+            label=f"{source.target_type}:Debugger.removeBreakpoint:instrumentation",
+            on_success=lambda response, child=source: self._worker_instrumentation_remove_ack(
+                child, response
+            ),
+        )
+
+    def _worker_instrumentation_remove_ack(
+        self,
+        source: CdpTargetSource,
+        result: Mapping[str, Any],
+    ) -> None:
+        state = self._state(source.session_path)
+        if (
+            source.target_type not in _WORKER_TARGET_TYPES
+            or state.phase != "resuming"
+            or not state.worker_debugger_paused
+            or not state.worker_egress_evaluation_acknowledged
+            or source not in self._egress_shim_receipts
+            or state.worker_instrumentation_removed
+            or result != {}
+        ):
+            raise CdpTargetIntegrityError(
+                "CDP worker instrumentation-breakpoint removal is invalid"
+            )
+        state.worker_instrumentation_removed = True
+        self._queue_command(
+            source,
+            "Debugger.resume",
+            {},
+            label=f"{source.target_type}:Debugger.resume:first-script-installation",
+            on_success=lambda response, child=source: self._worker_debugger_resume_ack(
+                child, response
+            ),
+        )
+
+    def _worker_debugger_resume_ack(
+        self,
+        source: CdpTargetSource,
+        result: Mapping[str, Any],
+    ) -> None:
+        state = self._state(source.session_path)
+        if (
+            source.target_type not in _WORKER_TARGET_TYPES
+            or state.phase != "resuming"
+            or not state.worker_debugger_paused
+            or not state.worker_instrumentation_removed
+            or state.worker_debugger_resume_acknowledged
+            or result != {}
+        ):
+            raise CdpTargetIntegrityError("CDP worker first-script debugger resume is invalid")
+        state.worker_debugger_paused = False
+        state.worker_debugger_resume_acknowledged = True
+        self._maybe_finish_worker_prearm(source)
+
     def _handle_debugger_paused(
         self,
         source: CdpTargetSource,
         event: Mapping[str, Any],
     ) -> None:
         """Turn the first iframe instrumentation pause into an exact conditional barrier."""
+
+        if source.target_type in _WORKER_TARGET_TYPES:
+            self._handle_worker_debugger_paused(source, event)
+            return
 
         state = self._state(source.session_path)
         instrumentation_id = state.iframe_instrumentation_breakpoint_id
@@ -2450,8 +2749,8 @@ class RecursiveCdpTargetRouter:
             "Debugger.removeBreakpoint",
             {"breakpointId": state.iframe_instrumentation_breakpoint_id},
             label="iframe:Debugger.removeBreakpoint:instrumentation",
-            on_success=lambda response, child=source: (
-                self._iframe_instrumentation_remove_ack(child, response)
+            on_success=lambda response, child=source: self._iframe_instrumentation_remove_ack(
+                child, response
             ),
         )
 
@@ -2602,9 +2901,37 @@ class RecursiveCdpTargetRouter:
         ):
             state.phase = "ready"
 
-    def _resume_ack(self, source: CdpTargetSource) -> None:
+    def _maybe_finish_worker_prearm(self, source: CdpTargetSource) -> None:
         state = self._state(source.session_path)
-        if state.phase != "resuming":
+        if source.target_type not in _WORKER_TARGET_TYPES or state.phase != "resuming":
+            return
+        if all(
+            (
+                isinstance(state.worker_instrumentation_breakpoint_id, str),
+                isinstance(state.worker_bootstrap_script_id, str),
+                isinstance(state.worker_pause_call_frame_id, str),
+                state.worker_initial_resume_acknowledged,
+                state.worker_pause_seen,
+                not state.worker_debugger_paused,
+                state.worker_egress_evaluation_issued,
+                state.worker_egress_evaluation_acknowledged,
+                state.worker_instrumentation_removed,
+                state.worker_debugger_resume_acknowledged,
+                source in self._egress_shim_receipts,
+            )
+        ):
+            # Parsed-script identities are needed only to bind the bootstrap
+            # pause.  Clearing them makes the completed worker state bounded.
+            state.worker_parsed_script_urls.clear()
+            state.phase = "ready"
+
+    def _resume_ack(
+        self,
+        source: CdpTargetSource,
+        result: Mapping[str, Any],
+    ) -> None:
+        state = self._state(source.session_path)
+        if state.phase != "resuming" or result != {}:
             raise CdpTargetIntegrityError("CDP child resume acknowledgement is out of sequence")
         if state.target_type == "iframe":
             if state.iframe_initial_resume_acknowledged:
@@ -2615,11 +2942,27 @@ class RecursiveCdpTargetRouter:
             self._maybe_trigger_iframe_synthetic(source)
             self._maybe_finish_iframe_prearm(source)
             return
+        if state.target_type in _WORKER_TARGET_TYPES:
+            if state.worker_initial_resume_acknowledged:
+                raise CdpTargetIntegrityError(
+                    "CDP worker initial resume acknowledgement was duplicated"
+                )
+            state.worker_initial_resume_acknowledged = True
+            self._maybe_finish_worker_prearm(source)
+            return
         state.phase = "ready"
 
-    def _shutdown_resume_ack(self, source: CdpTargetSource) -> None:
+    def _shutdown_resume_ack(
+        self,
+        source: CdpTargetSource,
+        result: Mapping[str, Any],
+    ) -> None:
         state = self._state(source.session_path)
-        if state.phase != "closing" or state.setup_pending != {"Runtime.runIfWaitingForDebugger"}:
+        if (
+            state.phase != "closing"
+            or state.setup_pending != {"Runtime.runIfWaitingForDebugger"}
+            or result != {}
+        ):
             raise CdpTargetIntegrityError("CDP shutdown resume acknowledgement is out of sequence")
         state.setup_pending.clear()
 
@@ -2741,8 +3084,12 @@ class RecursiveCdpTargetRouter:
                 raise CdpTargetIntegrityError(
                     f"nested CDP command {pending.label} failed ({detail})"
                 )
+            if "result" not in payload or not isinstance(payload["result"], Mapping):
+                raise CdpTargetIntegrityError(
+                    f"nested CDP command {pending.label} returned malformed data"
+                )
             if pending.policy_decision:
-                if "result" not in payload or type(payload["result"]) is not dict:
+                if type(payload["result"]) is not dict:
                     raise CdpTargetIntegrityError(
                         f"nested CDP policy command {pending.label} returned malformed data"
                     )
@@ -2751,11 +3098,7 @@ class RecursiveCdpTargetRouter:
                         f"nested CDP policy command {pending.label} did not return an exact "
                         "empty result"
                     )
-            result = payload.get("result", {})
-            if not isinstance(result, Mapping):
-                raise CdpTargetIntegrityError(
-                    f"nested CDP command {pending.label} returned malformed data"
-                )
+            result = payload["result"]
             if pending.on_success is not None:
                 pending.on_success(result)
             return
@@ -2773,6 +3116,8 @@ class RecursiveCdpTargetRouter:
             self._target_lifecycle_event(method, params)
         elif method in _IFRAME_CONTEXT_EVENTS:
             self._handle_iframe_context_event(source, method, params)
+        elif method == "Debugger.scriptParsed":
+            self._handle_worker_script_parsed(source, params)
         elif method == "Debugger.paused":
             self._handle_debugger_paused(source, params)
         elif method in _NON_REPLAYABLE_EGRESS_EVENTS:

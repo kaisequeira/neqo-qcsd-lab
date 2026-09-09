@@ -192,6 +192,9 @@ def _observation(uid: int = 1000, gid: int = 1000) -> dict[str, object]:
             "worker_response_consumption": copy.deepcopy(
                 pinned_cdp._EXPECTED_WORKER_RESPONSE_CONSUMPTION
             ),
+            "worker_webtransport_probe": copy.deepcopy(
+                pinned_cdp._EXPECTED_WORKER_WEBTRANSPORT_PROBE
+            ),
             "quiescent_target_activity": _target_activity(),
             "router_closed": True,
             "browser_guard_closed": True,
@@ -308,9 +311,13 @@ def test_schema8_receipt_is_historical_only_and_round_trips(
     payload["observation"]["playwright_driver"] = copy.deepcopy(
         pinned_cdp.LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_BINDING
     )
+    payload["observation"]["topology"]["browser_egress_command_line"][
+        "host_resolver_policy"
+    ] = copy.deepcopy(pinned_cdp._HISTORICAL_PINNED_CDP_RESOLVER_PROJECTION)
     payload["build_execution_identity"].pop("completion_path")
     payload["build_execution_identity"].pop("completion_sha256")
     payload["observation"]["topology"].pop("worker_response_consumption")
+    payload["observation"]["topology"].pop("worker_webtransport_probe")
     historical = tmp_path / "pinned-cdp-schema8.json"
     historical.write_bytes(
         canonical_json_bytes(bind_receipt(payload, receipt_type=pinned_cdp.RECEIPT_TYPE))
@@ -364,7 +371,11 @@ def test_schema9_receipt_is_historical_only_and_keeps_current_build_identity(
     payload["observation"]["playwright_driver"] = copy.deepcopy(
         pinned_cdp.LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_BINDING
     )
+    payload["observation"]["topology"]["browser_egress_command_line"][
+        "host_resolver_policy"
+    ] = copy.deepcopy(pinned_cdp._HISTORICAL_PINNED_CDP_RESOLVER_PROJECTION)
     payload["observation"]["topology"].pop("worker_response_consumption")
+    payload["observation"]["topology"].pop("worker_webtransport_probe")
     historical = tmp_path / "pinned-cdp-schema9.json"
     historical.write_bytes(
         canonical_json_bytes(bind_receipt(payload, receipt_type=pinned_cdp.RECEIPT_TYPE))
@@ -394,6 +405,68 @@ def test_schema9_receipt_is_historical_only_and_keeps_current_build_identity(
         "finished_at",
     }
     assert "worker_response_consumption" not in validated["observation"]["topology"]
+
+
+def test_schema11_receipt_is_historical_only_with_current_build_and_driver(
+    tmp_path: Path,
+    fake_build: Path,
+) -> None:
+    current = _create(tmp_path, fake_build)
+    envelope = json.loads(current.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(envelope["payload"])
+    payload["probe_schema_version"] = 11
+    payload["probe_contract"] = copy.deepcopy(pinned_cdp._HISTORICAL_PROBE_CONTRACT_V11)
+    payload["probe_contract_sha256"] = pinned_cdp._HISTORICAL_PROBE_CONTRACT_V11_SHA256
+    payload["observation"]["topology"]["browser_egress_command_line"][
+        "host_resolver_policy"
+    ] = copy.deepcopy(pinned_cdp._HISTORICAL_PINNED_CDP_RESOLVER_PROJECTION)
+    payload["observation"]["topology"].pop("worker_webtransport_probe")
+    historical = tmp_path / "pinned-cdp-schema11.json"
+    historical.write_bytes(
+        canonical_json_bytes(bind_receipt(payload, receipt_type=pinned_cdp.RECEIPT_TYPE))
+    )
+
+    with pytest.raises(ValueError, match="identity or result"):
+        pinned_cdp.validate_pinned_cdp_receipt(
+            historical,
+            build_execution_receipt=fake_build,
+            expected_cohort_version=59,
+        )
+
+    validated = pinned_cdp.validate_pinned_cdp_receipt(
+        historical,
+        build_execution_receipt=fake_build,
+        expected_cohort_version=59,
+        allow_historical=True,
+    )
+    assert validated["probe_schema_version"] == 11
+    assert validated["observation"]["playwright_driver"] == _driver_binding()
+    assert "completion_path" in validated["build_execution_identity"]
+    assert "worker_response_consumption" in validated["observation"]["topology"]
+    assert "worker_webtransport_probe" not in validated["observation"]["topology"]
+
+
+def test_current_receipt_rejects_frozen_historical_resolver_projection(
+    tmp_path: Path,
+    fake_build: Path,
+) -> None:
+    current = _create(tmp_path, fake_build)
+    envelope = json.loads(current.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(envelope["payload"])
+    payload["observation"]["topology"]["browser_egress_command_line"][
+        "host_resolver_policy"
+    ] = copy.deepcopy(pinned_cdp._HISTORICAL_PINNED_CDP_RESOLVER_PROJECTION)
+    altered = tmp_path / "pinned-cdp-current-with-historical-resolver.json"
+    altered.write_bytes(
+        canonical_json_bytes(bind_receipt(payload, receipt_type=pinned_cdp.RECEIPT_TYPE))
+    )
+
+    with pytest.raises(ValueError, match="host-resolver policy"):
+        pinned_cdp.validate_pinned_cdp_receipt(
+            altered,
+            build_execution_receipt=fake_build,
+            expected_cohort_version=59,
+        )
 
 
 @pytest.mark.parametrize(
@@ -618,6 +691,22 @@ def test_prepare_role_revalidates_playwright_driver_binding(
             "topology fields",
         ),
         (
+            lambda observation: observation["topology"].pop("worker_webtransport_probe"),
+            "topology fields",
+        ),
+        (
+            lambda observation: observation["topology"]["worker_webtransport_probe"][
+                "by_target_type"
+            ]["worker"]["measurement"].update(action_succeeded=True),
+            "WebTransport action or telemetry",
+        ),
+        (
+            lambda observation: observation["topology"]["worker_webtransport_probe"][
+                "by_target_type"
+            ]["shared_worker"]["guard_telemetry"].update(mechanism="cdp-network-tripwire"),
+            "WebTransport action or telemetry",
+        ),
+        (
             lambda observation: observation["topology"]["http_status_counts"]["/"].update(
                 {"200": 2}
             ),
@@ -726,6 +815,19 @@ def _required_target_activity() -> pinned_cdp._TargetActivityLedger:
     return activity
 
 
+def _completed_worker_webtransport_collector() -> pinned_cdp._WorkerWebTransportGuardCollector:
+    collector = pinned_cdp._WorkerWebTransportGuardCollector()
+    collector.arm()
+    for target_type in pinned_cdp._WORKER_WEBTRANSPORT_TARGET_TYPES:
+        assert collector.consume(
+            source=SimpleNamespace(target_type=target_type),
+            api="WebTransport",
+            mechanism="paused-target-runtime-shim",
+            url=None,
+        )
+    return collector
+
+
 def test_worker_fixtures_consume_exact_success_responses_and_emit_exact_sentinels() -> None:
     server = pinned_cdp._ProbeServer(("127.0.0.1", 0))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -773,6 +875,9 @@ def test_worker_fixtures_consume_exact_success_responses_and_emit_exact_sentinel
             assert script.count(invalid_sentinel) == 1
             assert script.count(error_sentinel) == 1
             assert script.count(emitter) == 2
+            assert script.count("new globalThis.WebTransport") == 1
+            assert "action_succeeded: actionSucceeded" in script
+            assert "measurement: qcsdWebTransportMeasurement" in script
             assert pinned_cdp._EXPECTED_WORKER_RESPONSE_CONSUMPTION[worker_type] == (
                 success_sentinel
             )
@@ -816,15 +921,18 @@ def test_required_topology_wait_condition_is_event_driven() -> None:
         "dedicated_worker_fetch_paused_on_page": True,
         "shared_worker_fetch_paused_on_shared_worker": True,
     }
-    assert pinned_cdp.PROBE_SCHEMA_VERSION == 11
-    assert pinned_cdp.HISTORICAL_PROBE_SCHEMA_VERSIONS == frozenset({8, 9})
-    assert pinned_cdp.PROBE_CONTRACT["schema_version"] == 10
+    assert pinned_cdp.PROBE_SCHEMA_VERSION == 12
+    assert pinned_cdp.HISTORICAL_PROBE_SCHEMA_VERSIONS == frozenset({8, 9, 11})
+    assert pinned_cdp.PROBE_CONTRACT["schema_version"] == 11
     assert pinned_cdp.PROBE_CONTRACT["policy"] == (
-        "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v10"
+        "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v11"
     )
     assert pinned_cdp.PROBE_CONTRACT["instrumentation_policy"] == (
-        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v12"
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v13"
     )
+    assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V11["schema_version"] == 10
+    assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V11["instrumentation_policy"].endswith("-v12")
+    assert pinned_cdp.PROBE_CONTRACT["worker_webtransport_probe_schema_version"] == 1
     assert pinned_cdp.PROBE_CONTRACT["chromium_version"] == "143.0.7499.4"
     assert pinned_cdp.PROBE_CONTRACT["chromium_executable"] == ("/usr/local/bin/qcsd-chromium")
     assert pinned_cdp.PROBE_CONTRACT["observation_timeout_ms"] == 10_000
@@ -842,6 +950,10 @@ def test_required_topology_wait_condition_is_event_driven() -> None:
     )
     assert (
         "shared-worker-guardian-real-detach-ordered-before-final-proof"
+        in pinned_cdp.PROBE_CONTRACT["required_observations"]
+    )
+    assert (
+        "dedicated-and-shared-worker-webtransport-blocked-after-prearm-with-exact-telemetry"
         in pinned_cdp.PROBE_CONTRACT["required_observations"]
     )
 
@@ -874,24 +986,31 @@ def test_target_only_activity_resets_probe_quiescence(
                     "target-info-changed",
                 )
 
-        def evaluate(self, _expression: str) -> dict[str, str | None]:
+        def evaluate(self, expression: str) -> dict[str, object | None]:
+            if expression == "() => window.qcsdWorkerWebTransportResults":
+                return {
+                    target_type: copy.deepcopy(pinned_cdp._EXPECTED_WORKER_WEBTRANSPORT_MEASUREMENT)
+                    for target_type in pinned_cdp._WORKER_WEBTRANSPORT_TARGET_TYPES
+                }
             if self.waits < 10:
                 return {"dedicated_worker": None, "shared_worker": None}
             return copy.deepcopy(pinned_cdp._EXPECTED_WORKER_RESPONSE_CONSUMPTION)
 
     monkeypatch.setattr(pinned_cdp.time, "monotonic", lambda: clock[0])
     page = Page()
-    generation, worker_responses = pinned_cdp._wait_for_required_observations(
+    generation, worker_responses, worker_probe = pinned_cdp._wait_for_required_observations(
         page,
         Router(),
         events,
         activity,
         _successful_egress_guard(),
+        _completed_worker_webtransport_collector(),
         deadline=2.0,
     )
 
     assert generation == 4
     assert worker_responses == pinned_cdp._EXPECTED_WORKER_RESPONSE_CONSUMPTION
+    assert worker_probe == pinned_cdp._EXPECTED_WORKER_WEBTRANSPORT_PROBE
     assert page.waits >= 20
     assert clock[0] >= 0.5
     assert activity.snapshot()["by_target_type"]["worker"] == {
@@ -960,6 +1079,7 @@ def test_convergence_requires_both_worker_sentinels_and_router_terminal_state(
             _required_topology_events(),
             _required_target_activity(),
             _successful_egress_guard(),
+            _completed_worker_webtransport_collector(),
             deadline=0.4,
         )
 
@@ -984,9 +1104,14 @@ def test_convergence_quiet_interval_starts_only_after_router_is_terminal(
             self.waits += 1
             clock[0] += milliseconds / 1_000
 
-        def evaluate(self, expression: str) -> dict[str, str]:
-            assert expression == "() => window.qcsdWorkerResponses"
+        def evaluate(self, expression: str) -> dict[str, object]:
             self.evaluation_waits.append(self.waits)
+            if expression == "() => window.qcsdWorkerWebTransportResults":
+                return {
+                    target_type: copy.deepcopy(pinned_cdp._EXPECTED_WORKER_WEBTRANSPORT_MEASUREMENT)
+                    for target_type in pinned_cdp._WORKER_WEBTRANSPORT_TARGET_TYPES
+                }
+            assert expression == "() => window.qcsdWorkerResponses"
             return copy.deepcopy(pinned_cdp._EXPECTED_WORKER_RESPONSE_CONSUMPTION)
 
     page = Page()
@@ -1006,17 +1131,19 @@ def test_convergence_quiet_interval_starts_only_after_router_is_terminal(
             return None
 
     monkeypatch.setattr(pinned_cdp.time, "monotonic", lambda: clock[0])
-    generation, worker_responses = pinned_cdp._wait_for_required_observations(
+    generation, worker_responses, worker_probe = pinned_cdp._wait_for_required_observations(
         page,
         Router(),
         _required_topology_events(),
         _required_target_activity(),
         _successful_egress_guard(),
+        _completed_worker_webtransport_collector(),
         deadline=1.0,
     )
 
     assert generation == 3
     assert worker_responses == pinned_cdp._EXPECTED_WORKER_RESPONSE_CONSUMPTION
+    assert worker_probe == pinned_cdp._EXPECTED_WORKER_WEBTRANSPORT_PROBE
     assert page.evaluation_waits[0] == 5
     assert page.waits >= 15
 
@@ -1059,6 +1186,61 @@ def test_worker_response_consumption_fails_closed_on_noncompletion_sentinel(
 
     with pytest.raises(RuntimeError, match="failed to consume its exact response"):
         pinned_cdp._worker_response_consumption(page)
+
+
+def test_worker_webtransport_collector_consumes_only_two_exact_armed_notifications() -> None:
+    collector = pinned_cdp._WorkerWebTransportGuardCollector()
+    worker = SimpleNamespace(target_type="worker")
+    shared = SimpleNamespace(target_type="shared_worker")
+    exact = {
+        "api": "WebTransport",
+        "mechanism": "paused-target-runtime-shim",
+        "url": None,
+    }
+
+    assert collector.consume(source=worker, **exact) is False
+    collector.arm()
+    assert collector.consume(source=SimpleNamespace(target_type="page"), **exact) is False
+    assert collector.consume(source=worker, **{**exact, "api": "WebSocket"}) is False
+    assert (
+        collector.consume(
+            source=worker,
+            **{**exact, "mechanism": "context-init-script-shim"},
+        )
+        is False
+    )
+    assert collector.consume(source=worker, **exact) is True
+    assert collector.consume(source=worker, **exact) is False
+    assert collector.consume(source=shared, **{**exact, "url": "https://redacted.test"}) is False
+    assert collector.consume(source=shared, **exact) is True
+
+    measurements = {
+        target_type: copy.deepcopy(pinned_cdp._EXPECTED_WORKER_WEBTRANSPORT_MEASUREMENT)
+        for target_type in pinned_cdp._WORKER_WEBTRANSPORT_TARGET_TYPES
+    }
+    assert collector.receipt_if_complete(measurements) == (
+        pinned_cdp._EXPECTED_WORKER_WEBTRANSPORT_PROBE
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        lambda value: value["worker"].update(action_succeeded=True),
+        lambda value: value["shared_worker"].update(exception_name="SyntaxError"),
+        lambda value: value["worker"].update(resolved_type="undefined"),
+    ),
+)
+def test_worker_webtransport_measurements_fail_closed_on_nonblocking_result(mutation) -> None:
+    value = {
+        target_type: copy.deepcopy(pinned_cdp._EXPECTED_WORKER_WEBTRANSPORT_MEASUREMENT)
+        for target_type in pinned_cdp._WORKER_WEBTRANSPORT_TARGET_TYPES
+    }
+    mutation(value)
+    page = SimpleNamespace(evaluate=lambda _expression: value)
+
+    with pytest.raises(RuntimeError, match="action was not blocked exactly"):
+        pinned_cdp._worker_webtransport_measurements(page)
 
 
 def test_http_status_aggregate_records_redirect_and_terminal_responses() -> None:

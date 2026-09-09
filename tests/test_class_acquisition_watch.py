@@ -986,6 +986,9 @@ def acquisition(tmp_path: Path) -> Fixture:
                 "worker_response_consumption": copy.deepcopy(
                     watch._PINNED_CDP_WORKER_RESPONSE_CONSUMPTION
                 ),
+                "worker_webtransport_probe": copy.deepcopy(
+                    watch._PINNED_CDP_WORKER_WEBTRANSPORT_PROBE
+                ),
                 "http_status_counts": copy.deepcopy(watch._PINNED_CDP_HTTP_STATUS_COUNTS),
                 "server_request_counts": copy.deepcopy(watch._PINNED_CDP_SERVER_REQUEST_COUNTS),
                 "bootstrap_prearm_summary": copy.deepcopy(
@@ -3112,11 +3115,18 @@ def test_watcher_pinned_cdp_contract_matches_runtime_contract() -> None:
     assert watch._PINNED_CDP_TARGET_ACTIVITY_TYPES == (pinned_cdp._TARGET_ACTIVITY_TYPES)
     assert watch._PINNED_CDP_CONTRACT == pinned_cdp.PROBE_CONTRACT
     assert watch._HISTORICAL_PINNED_CDP_CONTRACT == (pinned_cdp._HISTORICAL_PROBE_CONTRACT)
+    assert watch._HISTORICAL_PINNED_CDP_CONTRACT_V11 == (pinned_cdp._HISTORICAL_PROBE_CONTRACT_V11)
     assert watch._PINNED_CDP_EVENT_METHODS == pinned_cdp._EVENT_METHODS
     assert watch._PINNED_CDP_HTTP_STATUS_COUNTS == (pinned_cdp._EXPECTED_HTTP_STATUS_COUNTS)
     assert watch._PINNED_CDP_SERVER_REQUEST_COUNTS == (pinned_cdp._EXPECTED_SERVER_REQUEST_COUNTS)
     assert watch._PINNED_CDP_WORKER_RESPONSE_CONSUMPTION == (
         pinned_cdp._EXPECTED_WORKER_RESPONSE_CONSUMPTION
+    )
+    assert watch._PINNED_CDP_WORKER_WEBTRANSPORT_PROBE_SCHEMA_VERSION == (
+        pinned_cdp.WORKER_WEBTRANSPORT_PROBE_SCHEMA_VERSION
+    )
+    assert watch._PINNED_CDP_WORKER_WEBTRANSPORT_PROBE == (
+        pinned_cdp._EXPECTED_WORKER_WEBTRANSPORT_PROBE
     )
     assert watch._PINNED_CDP_BOOTSTRAP_PREARM_SUMMARY == (
         pinned_cdp._EXPECTED_PINNED_BOOTSTRAP_PREARM_SUMMARY
@@ -3275,6 +3285,28 @@ def test_watcher_rejects_resealed_pinned_cdp_topology_tamper(
             ("non_replayable_egress_summary", "protected_apis"),
             [],
             "non-replayable egress identity",
+        ),
+        (
+            (
+                "worker_webtransport_probe",
+                "by_target_type",
+                "worker",
+                "measurement",
+                "action_succeeded",
+            ),
+            True,
+            "WebTransport action or telemetry",
+        ),
+        (
+            (
+                "worker_webtransport_probe",
+                "by_target_type",
+                "shared_worker",
+                "guard_telemetry",
+                "notification_count",
+            ),
+            2,
+            "WebTransport action or telemetry",
         ),
         (
             ("browser_egress_command_line", "schema_version"),

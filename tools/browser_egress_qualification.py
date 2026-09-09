@@ -36,8 +36,11 @@ from qcsd_lab.browser_egress_fixture import (
     IndependentTcpSink,
     IndependentUdpSink,
     assemble_live_semantic_observation,
-    combine_sink_receipt,
     browser_service_control_actor_result,
+    combine_sink_receipt,
+    dedicated_worker_action_bridge_expression,
+    dedicated_worker_action_message,
+    dedicated_worker_ready_bridge_expression,
     execute_live_positive_control,
     expected_browser_launch_contract,
     expected_semantic_chronology,
@@ -52,21 +55,21 @@ from qcsd_lab.browser_egress_observer import (
     validate_capture_receipt,
 )
 from qcsd_lab.browser_egress_qualification import (
-    FINAL_FILENAME,
-    FoundationVerificationMode,
-    EFFECTIVE_ARGV_BINDING_SCHEMA_VERSION,
     DOCKER_INSPECT_PROJECTION_SCHEMA_VERSION,
-    FIXTURE_TLS_MASK_TMPFS_OPTIONS,
+    EFFECTIVE_ARGV_BINDING_SCHEMA_VERSION,
+    FINAL_FILENAME,
     FIXTURE_TLS_MASK_DIRECTORY,
-    POLICY_VOLUME_PROJECTION_SCHEMA_VERSION,
-    POLICY_VOLUME_ROLE,
+    FIXTURE_TLS_MASK_TMPFS_OPTIONS,
     POLICY_VOLUME_MANAGED_DIRECTORY,
     POLICY_VOLUME_POLICY_PATH,
+    POLICY_VOLUME_PROJECTION_SCHEMA_VERSION,
+    POLICY_VOLUME_ROLE,
     ROLE_TMPFS_OPTIONS,
     ZERO_DIGEST,
+    FoundationVerificationMode,
     append_result,
-    build_attempt_topology_binding,
     begin_attempt,
+    build_attempt_topology_binding,
     build_failure_result_receipt,
     build_foundation_payload,
     build_live_docker_daemon_binding,
@@ -75,20 +78,19 @@ from qcsd_lab.browser_egress_qualification import (
     create_qualification,
     deep_validate_foundation,
     load_checkpoint,
-    recover_interrupted_attempt,
+    policy_volume_name,
     reconcile_qualification_filesystem,
+    recover_interrupted_attempt,
     require_live_docker_daemon,
+    resume_admission_plan,
     validate_docker_daemon_binding,
     validate_docker_inspect_projection,
     validate_runtime_binding,
     verify_qualification,
-    resume_admission_plan,
-    policy_volume_name,
 )
 from qcsd_lab.buflo_study import validate_build_execution_receipt
 from qcsd_lab.class_study import canonical_json_bytes, validate_hash_bound_receipt
 from qcsd_lab.util import LAB_ROOT, load_json, sha256_file, source_metadata
-
 
 READY_PATH = Path("/tmp/qcsd-browser-egress-role.ready")
 SUBJECT_STARTED_READY_PATH = Path("/tmp/qcsd-browser-egress-subject-started.ready")
@@ -419,10 +421,11 @@ def _control(args: argparse.Namespace) -> None:
     signal.signal(signal.SIGUSR1, lambda _signum, _frame: start.set())
     _ready()
     _wait(start)
+    from playwright.sync_api import sync_playwright
+
     from qcsd_lab.playwright_driver import (
         playwright_driver_session,
     )
-    from playwright.sync_api import sync_playwright
 
     with playwright_driver_session(sync_playwright, exclusive=True) as playwright:
         (
@@ -459,8 +462,9 @@ def _control(args: argparse.Namespace) -> None:
 
 
 def _browser_service_control_actor(args: argparse.Namespace, vector: Any) -> None:
-    from qcsd_lab.playwright_driver import playwright_driver_session
     from playwright.sync_api import sync_playwright
+
+    from qcsd_lab.playwright_driver import playwright_driver_session
 
     contract = expected_browser_launch_contract(vector)
     target_url = contract["control_document_origin"] + contract["control_document_path"]
@@ -520,8 +524,95 @@ def _browser_service_control_actor(args: argparse.Namespace, vector: Any) -> Non
     )
 
 
+def _abort_actor_target_graph(
+    context: Any,
+    router: Any,
+    browser_guard: Any,
+    primary: Exception,
+) -> None:
+    """Dispose an incomplete actor target graph without masking its primary error."""
+
+    cleanup_errors: list[tuple[str, Exception]] = []
+    router_started = False
+    guard_started = False
+    context_disposed = False
+    guard_finished = False
+    try:
+        router.begin_abort()
+        router_started = True
+    except Exception as error:  # noqa: BLE001 - preserve the primary actor error
+        cleanup_errors.append(("router-begin-abort", error))
+    if router_started:
+        try:
+            browser_guard.begin_abort()
+            guard_started = True
+        except Exception as error:  # noqa: BLE001 - preserve the primary actor error
+            cleanup_errors.append(("guard-begin-abort", error))
+    try:
+        context.close()
+        context_disposed = True
+    except Exception as error:  # noqa: BLE001 - browser.close remains the outer fallback
+        cleanup_errors.append(("context-dispose", error))
+    if guard_started and context_disposed:
+        try:
+            browser_guard.finish_abort()
+            guard_finished = True
+        except Exception as error:  # noqa: BLE001 - preserve the primary actor error
+            cleanup_errors.append(("guard-finish-abort", error))
+    if router_started and guard_finished:
+        try:
+            router.finish_abort()
+        except Exception as error:  # noqa: BLE001 - preserve the primary actor error
+            cleanup_errors.append(("router-finish-abort", error))
+    for step, error in cleanup_errors:
+        primary.add_note(f"browser-egress actor cleanup {step} failed with {type(error).__name__}")
+
+
+def _finish_actor_target_graph_shutdown(
+    context: Any,
+    router: Any,
+    browser_guard: Any,
+) -> None:
+    """Finish an already-declared normal shutdown, preserving its first failure."""
+
+    cleanup_errors: list[tuple[str, Exception]] = []
+    guard_started = False
+    context_disposed = False
+    guard_finished = False
+    try:
+        browser_guard.begin_shutdown()
+        guard_started = True
+    except Exception as error:  # noqa: BLE001 - context disposal remains mandatory
+        cleanup_errors.append(("guard-begin-shutdown", error))
+    try:
+        context.close()
+        context_disposed = True
+    except Exception as error:  # noqa: BLE001 - browser.close remains the outer fallback
+        cleanup_errors.append(("context-dispose", error))
+    if guard_started and context_disposed:
+        try:
+            browser_guard.finish()
+            guard_finished = True
+        except Exception as error:  # noqa: BLE001 - preserve the first shutdown error
+            cleanup_errors.append(("guard-finish", error))
+    if guard_finished:
+        try:
+            router.finish()
+        except Exception as error:  # noqa: BLE001 - preserve the first shutdown error
+            cleanup_errors.append(("router-finish", error))
+    if cleanup_errors:
+        _step, primary = cleanup_errors[0]
+        for step, error in cleanup_errors[1:]:
+            primary.add_note(
+                f"browser-egress actor cleanup {step} failed with {type(error).__name__}"
+            )
+        raise primary
+
+
 def _actor(args: argparse.Namespace) -> None:
     """Launch a fresh pinned Chromium and exercise one genuine requested realm."""
+
+    from playwright.sync_api import sync_playwright
 
     from qcsd_lab.browser_egress import (
         NonReplayableEgressGuard,
@@ -532,7 +623,6 @@ def _actor(args: argparse.Namespace) -> None:
     from qcsd_lab.playwright_driver import (
         playwright_driver_session,
     )
-    from playwright.sync_api import sync_playwright
 
     vector = vector_by_id(args.vector_id)
     if vector.family == "positive-control":
@@ -568,50 +658,52 @@ def _actor(args: argparse.Namespace) -> None:
             policy_volume_file_inventory,
         ) = _launch_vector_browser(playwright, vector)
         browser_started_ns = time.monotonic_ns()
-        browser_session = browser.new_browser_cdp_session()
-        context = browser.new_context(ignore_https_errors=True, service_workers="block")
-        install_context_egress_guards(context, guard)
-        page = context.new_page()
-        guard.bind_root_page(page)
-        page.set_default_timeout(10_000)
-        page.set_default_navigation_timeout(10_000)
-        session = context.new_cdp_session(page)
-
+        context: Any | None = None
         router: RecursiveCdpTargetRouter | None = None
         browser_guard: BrowserSharedWorkerGuard | None = None
-
-        def on_event(source: Any, method: str, payload: Mapping[str, Any]) -> None:
-            if method != "Fetch.requestPaused":
-                return
-            request = payload.get("request")
-            url = request.get("url") if isinstance(request, Mapping) else None
-            request_id = payload.get("requestId")
-            if not isinstance(url, str) or not isinstance(request_id, str):
-                raise ValueError("browser-egress Fetch event is malformed")
-            if url.startswith(f"{primary}/") or url.startswith(f"{cross}/"):
-                router.send(
-                    source,
-                    "Fetch.continueRequest",
-                    {"requestId": request_id},
-                    label="browser-egress-fixture-allow",
-                )
-            else:
-                fetch_denials[0] += 1
-                router.send(
-                    source,
-                    "Fetch.failRequest",
-                    {"requestId": request_id, "errorReason": "BlockedByClient"},
-                    label="browser-egress-forbidden-deny",
-                )
-
-        router = RecursiveCdpTargetRouter(
-            session,
-            on_event=on_event,
-            on_non_replayable_egress=lambda source, api, mechanism, url: guard.record(
-                source=source, api=api, mechanism=mechanism, url=url
-            ),
-        )
+        actor_failure: Exception | None = None
+        normal_shutdown_started = False
         try:
+            browser_session = browser.new_browser_cdp_session()
+            context = browser.new_context(ignore_https_errors=True, service_workers="block")
+            install_context_egress_guards(context, guard)
+            page = context.new_page()
+            guard.bind_root_page(page)
+            page.set_default_timeout(10_000)
+            page.set_default_navigation_timeout(10_000)
+            session = context.new_cdp_session(page)
+
+            def on_event(source: Any, method: str, payload: Mapping[str, Any]) -> None:
+                if method != "Fetch.requestPaused":
+                    return
+                request = payload.get("request")
+                url = request.get("url") if isinstance(request, Mapping) else None
+                request_id = payload.get("requestId")
+                if not isinstance(url, str) or not isinstance(request_id, str):
+                    raise ValueError("browser-egress Fetch event is malformed")
+                if url.startswith(f"{primary}/") or url.startswith(f"{cross}/"):
+                    router.send(
+                        source,
+                        "Fetch.continueRequest",
+                        {"requestId": request_id},
+                        label="browser-egress-fixture-allow",
+                    )
+                else:
+                    fetch_denials[0] += 1
+                    router.send(
+                        source,
+                        "Fetch.failRequest",
+                        {"requestId": request_id, "errorReason": "BlockedByClient"},
+                        label="browser-egress-forbidden-deny",
+                    )
+
+            router = RecursiveCdpTargetRouter(
+                session,
+                on_event=on_event,
+                on_non_replayable_egress=lambda source, api, mechanism, url: guard.record(
+                    source=source, api=api, mechanism=mechanism, url=url
+                ),
+            )
             router.start()
             browser_guard = BrowserSharedWorkerGuard(browser_session, router)
             browser_guard.start()
@@ -631,12 +723,11 @@ def _actor(args: argparse.Namespace) -> None:
                 if evaluator is None:
                     raise RuntimeError("browser-egress frame realm is unavailable")
             elif vector.context == "dedicated-worker":
-                with page.expect_worker() as worker_info:
-                    page.evaluate(
-                        "url => { window.__qcsdWorker = new Worker(url); }",
-                        f"{primary}/dedicated-worker.js",
-                    )
-                evaluator = worker_info.value
+                page.evaluate(
+                    dedicated_worker_ready_bridge_expression(),
+                    f"{primary}/dedicated-worker.js",
+                )
+                evaluator = _DedicatedWorkerEvaluator(page, vector, dedicated_worker_action_message)
             elif vector.context == "shared-worker":
                 page.evaluate(
                     """url => new Promise((resolve, reject) => {
@@ -681,17 +772,49 @@ def _actor(args: argparse.Namespace) -> None:
                 reporting_live_dwell_finished_ns = time.monotonic_ns()
             router.raise_if_failed()
             router.begin_shutdown()
-            browser_guard.begin_shutdown()
-            context.close()
-            browser_guard.finish()
-            router.finish()
+            normal_shutdown_started = True
+            _finish_actor_target_graph_shutdown(context, router, browser_guard)
+        except Exception as error:
+            actor_failure = error
+            if (
+                not normal_shutdown_started
+                and context is not None
+                and router is not None
+                and browser_guard is not None
+            ):
+                _abort_actor_target_graph(context, router, browser_guard, error)
+            elif not normal_shutdown_started and context is not None:
+                try:
+                    context.close()
+                except Exception as cleanup_error:  # noqa: BLE001 - preserve actor error
+                    error.add_note(
+                        "browser-egress actor cleanup context-dispose failed with "
+                        f"{type(cleanup_error).__name__}"
+                    )
+            raise
         finally:
             try:
                 browser.close()
+            except Exception as close_error:
+                if actor_failure is None:
+                    raise
+                actor_failure.add_note(
+                    "browser-egress actor cleanup browser-close failed with "
+                    f"{type(close_error).__name__}"
+                )
             finally:
                 browser_exited_ns = time.monotonic_ns()
-                if router is not None:
-                    router.raise_if_failed()
+                if actor_failure is not None and router is not None:
+                    try:
+                        router.raise_if_failed()
+                    except Exception as router_error:  # noqa: BLE001 - preserve actor error
+                        if router_error is not actor_failure:
+                            actor_failure.add_note(
+                                "browser-egress actor cleanup router-post-close failed with "
+                                f"{type(router_error).__name__}"
+                            )
+        if router is not None:
+            router.raise_if_failed()
     if (
         effective_argv is None
         or driver_runtime is None
@@ -772,6 +895,20 @@ class _PlaywrightRealm:
 
     def prearm_verified(self) -> bool:
         return self.prearmed
+
+
+class _DedicatedWorkerEvaluator:
+    def __init__(self, page: Any, vector: Any, message_builder: Any) -> None:
+        self.page = page
+        self.message = message_builder(vector)
+
+    def evaluate(self, expression: str, argument: Mapping[str, Any]) -> Mapping[str, Any]:
+        if self.message["expression"] != expression or self.message["argument"] != dict(argument):
+            raise ValueError("dedicated-worker action differs from its frozen message")
+        return self.page.evaluate(
+            dedicated_worker_action_bridge_expression(),
+            self.message,
+        )
 
 
 class _SharedWorkerEvaluator:

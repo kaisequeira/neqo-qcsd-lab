@@ -1,6 +1,6 @@
 # QCSD lab
 
-Documentation audit: 2026-09-09, Australia/Sydney (AEST, UTC+10)
+Documentation audit: 2026-09-10, Australia/Sydney (AEST, UTC+10)
 
 This repository is the experiment orchestrator for the QCSD Neqo fork. It has
 one workflow: freeze a workload, expand a campaign into sequential samples,
@@ -563,10 +563,104 @@ vectors from entering that path. The focused contract suite passed 12/12, the
 complete CLI suite passed 244/244, and the non-heavy browser-qualification
 suite passed 201/201 with the separately proven full-vector closure explicitly
 deselected; Bash syntax and Ruff checks pass. This is source validation only.
-V80 must rebuild and repeat pinned-CDP before beginning a new 110-vector root.
-Current-head browser-egress therefore remains 0/110, certification remains
-0/900, formal capture remains 0/16,000, and every other scientific numerator
-remains zero.
+
+V80 subsequently bound that assembler correction through exact clean Lab
+`8ae6610bf4999af70d9327c874a3783ebabf9f7b` and unchanged clean Rust/gitlink
+`46313bef90ad392b7ca293ab7cf28108d2f35c7f`. Its canonical fresh
+[build](artifacts/buflo-study/build-execution-v80.json),
+[completion](artifacts/buflo-study/build-completion-v80.json), and
+[pinned-CDP](artifacts/buflo-study/pinned-cdp-execution-v80.json) gates all
+passed. Their whole-file/payload SHA-256 pairs are, respectively,
+`d0d3ea97f767d87c411b7be6c62126249495e09e467b0443f9e984989be69f74` /
+`04400a26a27542bf3528885337bc4b6a07b95799ec46f9eac99ee1fd51ed1337`,
+`e047fc64fbf74b7fc8e812f4f71759023955caafbe3055d8ad2c7d1037749fac` /
+`42a431d8f24d37f53e0bda006bd8e55e08cd1385fb4135ece1a72edeeccf5940`,
+and
+`54a943d355a45f52a5722a9cd2df2ed3adb123fc06bb1f900092bb35a9101bb3` /
+`91c47e103a7ce56140fd3d67a491a4235af0abc5ac6fd6eb45d0c603224420b3`.
+The collection, preparation, and reference image IDs are
+`sha256:d5bcd101cf500461b7d1eec8ff5007b33c8506df194b84b9733467998a3f1a96`,
+`sha256:4b96cb3a25acf1debffd45fd9fcb050c8453701d24f33191afb3ad97ac4ce033`,
+and
+`sha256:1850187e88a2e1207d058cdc2a7320a5bbea99a2aaf2f30d5b458a35fb84cf8b`.
+
+The [v80 browser-egress checkpoint](artifacts/buflo-study/browser-egress-qualification-v80/experiment.json),
+whole-file SHA-256
+`a7c0349dcfb66ea3859e9c87be9f3872abfd7f74d25ddc7ea0c6efbdbf6b5754`,
+remains open `running`, with `terminal_failure=null` and
+`next_vector_ordinal=31`. Its
+[foundation](artifacts/buflo-study/browser-egress-qualification-v80/foundation.json)
+has whole-file/payload SHA-256
+`d90932279abb06e3a92a6eade7fea42a327208092eb70cc211fd7ac4dfc92374` /
+`38b08a4d8c1be1b3148d98c79dd1732e22de15e0b3d6ac60826ae49c08ed54dd`.
+The first 30 vectors have sealed passing results and hash-matching PCAPs. Global
+attempt 31, vector `constructor--dedicated-worker--websocket`, attempt 1, has a
+sealed
+[operational-failure result](artifacts/buflo-study/browser-egress-qualification-v80/attempts/result-0031.json)
+with whole-file/payload SHA-256
+`9b86765306c3fe7390b343c91d11aa9de5b381bd293ea744425cabecbc470683` /
+`165c20c47d1125fa2d2166fbfafa2a5a37307e45bea32e72f467cce6dcd1ae12`,
+failure code `browser-start-failed`, and stage `browser-action`. That result is
+also the exact checkpoint chain head. Read-only verification found all 31
+intent/result payload hashes, bindings, and predecessor links consistent, and
+all 30 passed capture hashes and sizes exact. The failed attempt has no PCAP
+because the requested semantic action and capture were never reached; its
+[failure record](artifacts/buflo-study/browser-egress-qualification-v80/evidence/031--constructor--dedicated-worker--websocket/attempt-1/failure.json)
+has SHA-256
+`5eb5736c4c9ac3aac0f4594d2425ea84080c6bfef33e2ed0045b675c39a6f382`.
+Teardown completed before the failure result was published, and no temporary
+publication residue remains. There is no final browser-egress receipt.
+
+The primary v80 actor error was Playwright's ten-second timeout waiting for its
+dedicated-worker event. The old cleanup then closed the browser before declaring
+target-graph abort and surfaced a secondary `CdpTargetIntegrityError` for root
+target destruction. This is browser-control/harness failure evidence before the
+QCSD workload ran, not evidence of a QCSD data-plane or defence defect. The
+first post-v80 repair replaces `page.expect_worker()` with a fixture-owned
+worker-ready handshake and frozen page-mediated worker message bridge. It also
+orders exceptional target cleanup as router abort, browser-guard abort, context
+close, guard abort finish, router abort finish, and browser close, retaining any
+cleanup problem as a note on the primary error.
+
+A real-Chromium dedicated-worker integration then crossed that repaired boundary
+and exposed the deeper prearm defect. The old contextless worker
+`Runtime.evaluate` ran before Chromium had fully initialised the worker realm and
+returned a structurally valid but false receipt with `WebTransport` classified
+in `unavailable_apis`; accepting it could leave that live constructor unwrapped
+when author code began. The completed source repair now installs a
+`beforeScriptExecution` instrumentation breakpoint before either dedicated or
+shared worker first resumes, binds the exact bootstrap URL and origin to its
+first `Debugger.scriptParsed` event, admits one exact instrumentation pause and
+first-script call frame, evaluates the egress shim with
+`Debugger.evaluateOnCallFrame`, and removes the breakpoint and resumes only after
+every acknowledgement verifies. This is target-instrumentation policy v13.
+Final acknowledgement hardening bounds later worker scripts by ignoring
+post-ready `Debugger.scriptParsed` events without retaining their identities,
+requires exact integer `functionLocation.lineNumber` and `columnNumber` values
+at the bootstrap origin `0:0`, and accepts only exact empty-result maps from
+both initial and shutdown `Runtime.runIfWaitingForDebugger` acknowledgements.
+
+The prospective pinned gate consequently advances to outer receipt schema 12,
+nested probe-contract schema 11/policy v11, and instrumentation v13. It actively
+constructs `WebTransport` after prearm in both the dedicated and shared worker;
+each must resolve the constructor as a function with a data descriptor, issue
+the action, receive `TypeError`, and emit exactly one
+`paused-target-runtime-shim` `WebTransport` telemetry notification. Outer schema
+11, nested contract 10/policy v10, instrumentation v12, and every v80 receipt
+remain historical-only. An earlier broad checkpoint, before the final
+acknowledgement hardening, reported 4,559 passed, 18 skipped, and one
+deselected. The exhaustive closed-inventory case separately passed 1/1 in
+2486.48 seconds. Final focused verification passed CDP 173/173, pinned-CDP
+76/76, watcher 265/265, class-admission/CLI 394/394, and the non-exhaustive
+browser actor/qualification suite 219/219; the combined unprivileged real-
+Chromium suite passed 3/3. These are engineering results,
+not image-bound or receipted evidence. V80's 30/110 remains
+historical and its open checkpoint must not be resumed for current-source
+authority. Current-head browser-egress is 0/110, certification is 0/900, formal
+capture is 0/16,000, and every other scientific numerator is zero. Fresh v81
+is the exact next allocator-authorised cohort; it must repeat
+the build/completion and schema-12 pinned-CDP gates before creating a new
+110-vector root.
 
 Summary schema 4 binds the typed schedule-stop policy, stop timestamp,
 sub-cell capacity, direction counts at stop, and exact post-stop advertised
@@ -1228,9 +1322,16 @@ schema-3 correction was bound by v78's passing build and pinned-CDP gates;
 v78 then stopped at browser vector 1 on merged privilege-dependent version
 output. Implementation commit `6da10dcb52e5856ce580759453925d20550fd683`
 contains the stdout/stderr separation and has 470 targeted tests
-passing, including the separately run full-vector closure, so fresh-source
-authority now requires v79.
-Every downstream scientific counter remains zero.
+passing, including the separately run full-vector closure. V79 then passed its
+fresh build/completion and pinned-CDP gates and sealed four historical passing
+vectors before the host misclassified the assembler's successful response;
+v80 bound that parser correction, passed the same three source-bound gates, and
+sealed 30 historical passing vectors before its dedicated-worker event wait
+failed operationally at vector 31. The completed post-v80 bridge/lifecycle and
+first-script worker-prearm repair changes source again, advances the prospective
+pinned gate to outer schema 12/contract 11/instrumentation v13, and leaves v80's
+schema-11 evidence historical-only. Fresh-source authority now requires v81
+after commit/build. Every downstream scientific counter remains zero.
 
 The retained post-v55 Lab engineering lineage also hardens durable Docker HANDOFF
 retirement. It permits at most one additional read-only absence observation,
@@ -1401,8 +1502,14 @@ pinned-CDP gates, after which browser vector 1 stopped on merged privilege-
 dependent version output. Implementation commit
 `6da10dcb52e5856ce580759453925d20550fd683` contains the stream-separation fix
 and has 470 targeted tests passing, including the separately run full-vector
-closure; v79 must rebuild and repeat the source-bound gates.
-Browser-egress is 0/110,
+closure. V79 subsequently passed its build/completion and pinned-CDP gates but
+stopped after four historical passing browser vectors on the assembler-response
+parser defect. V80 bound that correction and passed those gates, but its 30
+passing vectors are historical after the completed post-v80 bridge/lifecycle
+and first-script worker-prearm repair. That repair advances the prospective
+pinned contract to outer schema 12/contract 11/instrumentation v13; fresh v81
+must follow commit, rebuild, and repeat the source-bound gates.
+Current-head browser-egress is 0/110,
 timing stress is 0/12, regression is 0/18, and controlled qualification is
 0/160. Real acquisition observations remain zero.
 Pilot fitting, qualification, and compatibility are 0/480, 0/720, and 0/1,080;
@@ -1485,11 +1592,18 @@ packet-decoder binding; `dumpcap` had the same latent capture-tool defect.
 Action, capture and topology/teardown nevertheless succeeded. Implementation
 commit `6da10dcb52e5856ce580759453925d20550fd683` separates the streams and
 has 470 targeted tests passing, including the separately run full-vector
-closure. V79 is the exact next allocator-authorised cohort. It must pass a fresh
+closure. V79 later passed the fresh build/completion and pinned-CDP gates and
+sealed four historical passing browser vectors before its assembler response
+was misclassified. V80 bound that correction, passed the same gates, and sealed
+30 historical passing vectors before the dedicated-worker event wait failed
+operationally at vector 31. The completed post-v80 bridge/lifecycle and exact
+first-script worker-prearm repair supersedes both source identities and makes
+outer schema 11/v80 historical-only. V81 is the exact next allocator-authorised
+cohort after commit. It must pass a fresh
 build/completion pair, pinned-CDP gate, 110/110 browser-egress gate, isolated
 reference, 12/12 timing stress, 18/18 regression, regression-bound code gate,
 and 160/160 controlled qualification before expanded-class acquisition can
-begin. V55–v78 cannot authorise the changed-source evidence. The
+begin. V55–v80 cannot authorise the changed-source evidence. The
 complete current status and earlier cohort chronology are retained in the
 authoritative workspace [`PROJECT.md`](../PROJECT.md).
 
@@ -1721,9 +1835,13 @@ post-stop membership-snapshot defect. V78 bound the locally validated two-
 phase schema-3 correction through build/completion and pinned-CDP, then stopped
 at browser vector 1 on merged privilege-dependent version output. The
 committed stdout/stderr separation has 470 targeted tests passing, including
-the separately run full-vector closure; fresh v79
-build and source-bound gates are required. No
-downstream scientific authority exists.
+the separately run full-vector closure. V79 and v80 subsequently passed fresh
+build/completion and pinned-CDP gates, but produced only four and 30 historical
+passing browser vectors, respectively, before their distinct operational
+failures. The completed post-v80 bridge/lifecycle and first-script
+`scriptParsed`/instrumentation/`evaluateOnCallFrame` repair requires commit and
+a fresh v81 build plus schema-12 pinned gate. No downstream scientific authority
+exists.
 
 The build-execution schema-4 integration is committed at clean Lab
 `69a14ebe48f78d08a8b36d3e573955ec64f00ff9`. V61 exercised it but failed before
@@ -1793,22 +1911,26 @@ an independently protected copy or seal.
 
 The completion identity is carried by current reference-execution schema 2,
 code-gate schema 2, study-environment schema 3, pinned-CDP outer receipt schema
-11,
+12,
 browser-egress foundation schema 3, class-foundation schema 4,
 qualification-authority schema 2, controlled-qualification receipt schema 2,
 class-readiness schema 3, historical-corpus snapshot schema 2, formal-cohort
 manifest schema 3, capture-admission schema 4, and successor
-decision/readiness schema 3. The nested pinned-CDP probe contract is schema 10
+decision/readiness schema 3. The nested pinned-CDP probe contract is schema 11
 with policy
-`pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v10`;
+`pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v11`;
 target instrumentation is policy
-`playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v12`,
+`playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v13`,
 and the egress-prearm summary remains schema 2. Historical outer receipt
 schemas 8/9 remain frozen to nested contract schema 8, target-instrumentation
-policy v10, and driver schema 6; they remain readable for their exact
-historical source but cannot authorise new capture. The unexecuted intermediary
-outer schema 10/nested schema 9 contract and target-instrumentation policy v11
-are not accepted by current admission. Successor
+policy v10, and driver schema 6. Historical outer schema 11, including v80, is
+frozen to nested contract 10/policy v10 and instrumentation v12. Schemas
+8/9/11 remain readable for their exact historical source and frozen
+`a.test`/`b.test` resolver projection, but cannot authorise new capture;
+class-build admission requires current outer schema 12 with its
+`localhost`/`b.test` projection. The unexecuted intermediary outer schema
+10/nested schema 9 contract and target-instrumentation policy v11 are rejected.
+Successor
 policy/restart/cohort/plan remain schema 2. Acquisition provenance
 remains schema 5 with checkpoint 2, active-batch 1, terminal 3 and completion 2.
 Readers used by current admission, mutation, or publication paths reject the
@@ -1837,7 +1959,12 @@ through build/completion and pinned-CDP, then stopped at browser vector 1 when
 merged privilege-dependent output produced a non-reproducible `tshark`
 packet-decoder binding; `dumpcap` had the same latent capture-tool defect. The
 committed stream-separation fix has 470 targeted tests passing, including the
-separately run full-vector closure, so the sequence must start again at v79.
+separately run full-vector closure. V79 bound it but stopped after four passing
+vectors on the assembler-response parser defect. V80 bound that parser repair
+and stopped after 30 passing vectors on the dedicated-worker event timeout. The
+completed worker bridge/lifecycle repair and deeper real-Chromium first-script
+prearm correction therefore move the sequence to fresh v81 after commit/build;
+v80 and outer schema 11 remain historical-only.
 
 Earlier on 1 September 2026, a read-only probe found only about 2.19 GB
 available on the backing C: volume and Docker again exposed data-device I/O
@@ -1955,7 +2082,10 @@ producer-only formatted-inspect correction was bound and passed by v77's image;
 its browser attempt exposed the later post-stop membership projection. The
 two-phase schema-3 correction was then bound and passed by v78's image; its
 browser attempt exposed the merged privilege-dependent version-stream defect.
-The committed separation fix requires a fresh v79 image. The pinned
+V79 and v80 subsequently built the separation and assembler-response fixes and
+passed their pinned-CDP gates, but neither completed browser-egress. The
+completed post-v80 worker bridge/lifecycle and first-script prearm correction
+requires a fresh v81 image after commit/build. The pinned
 contract binds post-patch `crNetworkManager.js` SHA-256
 `c10daf1b5c5c6c64e1c545ff7d7bb16f9990aa71c4fe64e081c3a43157d4531a`,
 the 401-file/131,857,836-byte package tree at
@@ -2040,22 +2170,29 @@ stream.
 
 The create-only `./qcsd-lab test pinned-cdp` command exercises the real pinned
 Playwright 1.57.0/Chromium 143.0.7499.4 topology in the exact preparation image
-named by a versioned no-cache build receipt and its completion. Current outer
-receipt schema 11 embeds probe-contract schema 10/policy v10 and binds the exact
-driver receipt and browser identity, target-instrumentation policy v12,
-successful HTTP
-response inventory, shared-worker prearm terminal summary, and sanitised
-target-lifecycle generation/count evidence. It runs as the host UID:GID with all
+named by a versioned no-cache build receipt and its completion. Current source
+produces outer receipt schema 12 with nested probe-contract schema 11/policy v11
+and binds the exact driver receipt and browser identity, target-instrumentation
+policy v13, successful HTTP response inventory, the active dedicated/shared-
+worker `WebTransport` TypeError plus exact guard-telemetry proof, shared-worker
+prearm terminal summary, and sanitised target-lifecycle generation/count
+evidence. It runs as the host UID:GID with all
 capabilities dropped and Docker networking disabled, while a local
 in-container server proves cross-site iframe, worker/shared-worker,
 duplicate-URL, redirect, and complete shutdown behaviour. Success publishes a
-canonical hash-bound receipt containing only minimised topology counts and
-booleans. The egress-prearm summary remains schema 2. Historical outer receipt
-schemas 8 and 9 remain frozen to nested contract schema 8,
-target-instrumentation policy v10, and driver schema 6; they remain readable
-for exact historical evidence but cannot authorise new capture. Outer schema
-10, nested contract schema 9, and instrumentation policy v11 were unexecuted
-intermediaries and cannot authorise current capture. The receipt binds its
+canonical hash-bound receipt containing only minimised topology counts,
+booleans, and the exact two-worker measurement/telemetry projection. The
+egress-prearm summary remains schema 2. Historical outer receipt schemas 8 and
+9 remain frozen to nested contract schema 8, target-instrumentation policy v10,
+and driver schema 6; outer schema 11 is frozen to nested contract 10/policy v10
+and instrumentation v12 and includes v80's passing prerequisite receipt. These
+remain readable for exact historical evidence but cannot authorise new capture.
+That historical read preserves schemas 8/9/11's frozen `a.test`/`b.test`
+resolver projection; current schema 12 instead pins `localhost`/`b.test` and
+rejects the historical projection. Class-build admission accepts only outer
+schema 12 as current authority and classifies 8/9/11 as historical authority.
+Outer schema 10, nested contract schema 9, and instrumentation policy v11 were
+unexecuted intermediaries and cannot authorise current capture. The receipt binds its
 cohort, build receipt and payload hashes,
 collection source, exact preparation image/source, observed isolation, and
 probe contract. The current driver creates both a page-owned CDP session for
@@ -2108,9 +2245,13 @@ is required. V77 bound and passed the producer-only formatted-inspect fix, then
 failed the later post-stop membership projection. V78 bound and passed the
 two-phase schema-3 correction's build/completion and pinned-CDP gates, then
 stopped on merged privilege-dependent version output. The committed stream-
-separation fix therefore requires a fresh v79 build/completion pair plus a new
-pinned-CDP receipt. Pass that canonical receipt
-to the foundation command as `--pinned-cdp-receipt "$PINNED_CDP"`. It is the sixth
+separation fix was subsequently bound by v79, and its assembler-response repair
+was bound by v80; both passed build/completion and pinned-CDP but neither
+completed browser-egress. The completed post-v80 worker bridge/lifecycle and
+first-script prearm correction therefore requires a commit, fresh v81
+build/completion pair, and new outer-schema-12 pinned-CDP receipt. Pass that
+canonical receipt to the foundation command as
+`--pinned-cdp-receipt "$PINNED_CDP"`. It is the sixth
 explicit foundation hard gate: the foundation binds the receipt and payload
 hashes, its exact build binding, and the fixed probe-contract hash, and requires
 `build finish <= probe recorded_at <= foundation recorded_at`. Acquisition
@@ -2494,9 +2635,16 @@ extends the registry, passes build/completion and pinned-CDP for clean Lab
 projection. V78 then extends the registry through passing build/completion and
 pinned-CDP for clean Lab `60909195…`, then stops at browser vector 1 on merged
 privilege-dependent version output despite successful capture and topology.
-Neither authorises the committed stdout/stderr separation; v79 is the exact
-next permitted value and must be built before any downstream gate
-runs.
+V79 extends the registry through passing build/completion and pinned-CDP for
+clean Lab `8223740…`, then leaves four historical passing browser vectors and
+an interrupted fifth attempt after the assembler-response parser defect. V80
+extends it again through passing build/completion and pinned-CDP for clean Lab
+`8ae6610…`; its open browser checkpoint contains 30 historical passing vectors
+and one operationally failed vector-31 attempt, but no final receipt. Neither
+open checkpoint can authorise the completed post-v80 bridge/lifecycle and
+first-script worker-prearm source; v80's outer-schema-11 probe is historical.
+V81 is the exact next permitted value and must be built before any
+downstream gate runs.
 
 ```bash
 set -euo pipefail
@@ -3537,13 +3685,24 @@ mount can create the one requested receipt but over-mounts every pre-existing
 sibling evidence object read-only. The loopback HTTP server exercises a
 cross-site iframe, dedicated and shared workers, duplicate URLs, a redirect,
 request-stage interception ownership, and deliberate context shutdown. The
-current outer receipt is schema 11 with nested probe-contract schema 10/policy
-v10 and target-instrumentation policy v12; its egress-prearm summary remains
-schema 2. The held OOPIF must pass the two-stage exact-location `Debugger`
-barrier before author code, while both workers must consume their response bodies
-and emit the exact typed completion token before their Network lifecycle closes.
-Historical outer schemas 8/9 remain readable for their driver-schema-6
-evidence but cannot authorise new capture. A
+current source produces outer receipt schema 12 with nested probe-contract
+schema 11/policy v11 and target-instrumentation policy v13; its egress-prearm
+summary remains schema 2. The held OOPIF must pass the two-stage exact-location
+`Debugger` barrier before author code. Each dedicated/shared worker must bind
+its exact first `Debugger.scriptParsed` bootstrap and instrumentation pause,
+install the egress shim with `Debugger.evaluateOnCallFrame`, consume its response
+body, emit the exact typed completion token, and prove an active `WebTransport`
+action was blocked with `TypeError` plus one exact telemetry notification before
+its Network lifecycle closes. Post-ready script events are ignored without
+retained identity growth; `functionLocation` line/column must be exact integers
+at `0:0`; initial and shutdown resume acknowledgements must each be the exact
+empty result. Historical outer schema 11, including v80, is
+frozen to nested contract 10/policy v10 and instrumentation v12; outer schemas
+8/9 remain readable for their driver-schema-6 evidence. Their frozen
+`a.test`/`b.test` resolver projection remains readable only under explicit
+historical verification; schema 12 uses `localhost`/`b.test`. Class-build
+admission requires current outer schema 12, so none can authorise new capture.
+A
 failure or interruption publishes no receipt. Before launch the wrapper also
 requires the exact clean Lab/Neqo checkout embedded in the preparation image,
 so dirty or alternate launcher/module bytes cannot claim the guarded execution

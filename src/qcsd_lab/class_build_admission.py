@@ -110,6 +110,8 @@ _ACQUISITION_SCHEMA = 5
 _EVALUATION_SCHEMA = 2
 _SUCCESSOR_DECISION_SCHEMA = 3
 _SUCCESSOR_RESTART_SCHEMA = 2
+_PINNED_CDP_SCHEMA = 12
+_HISTORICAL_PINNED_CDP_SCHEMAS = frozenset({8, 9, 11})
 _HANDOFF_HISTORICAL_POST = "inputs/class-study-historical-post-snapshot.json"
 _BASE_STUDY_ID = "classifier-multiorigin100-v1"
 _SUCCESSOR_STUDY_ID = re.compile(
@@ -977,12 +979,13 @@ class _Resolver:
             self.root, raw, label="pinned CDP receipt", expected_type=_PINNED_CDP
         )
         schema = payload.get("probe_schema_version")
-        if schema == 8:
+        if type(schema) is int and schema in _HISTORICAL_PINNED_CDP_SCHEMAS:
             raise _HistoricalAuthority("pinned CDP receipt is historical")
         binding = payload.get("build_execution")
         cohort = payload.get("cohort_version")
         if (
-            schema != 9
+            type(schema) is not int
+            or schema != _PINNED_CDP_SCHEMA
             or payload.get("artifact_type") != _PINNED_CDP
             or type(cohort) is not int
             or cohort < 1

@@ -9,21 +9,22 @@ import pytest
 from qcsd_lab.acquisition_errors import NonReplayableEgressPolicyError
 from qcsd_lab.browser_egress import (
     NON_REPLAYABLE_EGRESS_POLICY,
-    NonReplayableEgressGuard,
     POPUP_GUARD_MARKER,
     POPUP_NAVIGATION_API,
     TARGET_EGRESS_BINDING,
     TARGET_EGRESS_SHIM_SCHEMA_VERSION,
+    NonReplayableEgressGuard,
     target_egress_apis,
+    target_egress_shim_source,
 )
 from qcsd_lab.cdp_targets import (
+    _IFRAME_INSTALLATION_KIND,
     BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION,
-    BrowserSharedWorkerGuard,
     CDP_TARGET_INSTRUMENTATION_POLICY,
+    BrowserSharedWorkerGuard,
     CdpTargetIntegrityError,
     CdpTargetSource,
     RecursiveCdpTargetRouter,
-    _IFRAME_INSTALLATION_KIND,
     _sanitised_protocol_error,
     validate_bootstrap_prearm_summary,
 )
@@ -62,6 +63,11 @@ class _FakeNonFlatSession:
         self.iframe_contexts: dict[tuple[str, ...], tuple[int, str]] = {}
         self.iframe_pause_emitted: set[tuple[str, ...]] = set()
         self.iframe_installation_emitted: set[tuple[str, ...]] = set()
+        self.auto_worker_prearm = True
+        self.worker_pause_before_resume_ack = False
+        self.worker_instrumentation_armed: set[tuple[str, ...]] = set()
+        self.worker_script_parsed_emitted: set[tuple[str, ...]] = set()
+        self.worker_pause_emitted: set[tuple[str, ...]] = set()
 
     def on(self, event: str, handler: Any) -> None:
         self.handlers[event] = handler
@@ -187,11 +193,22 @@ class _FakeNonFlatSession:
             before_command(route, method)
         if method in self.reject_methods:
             raise RuntimeError(f"rejected test command: {method}")
+        is_worker = self.route_info[route]["type"] in {"worker", "shared_worker"}
+        if is_worker and method == "Debugger.setInstrumentationBreakpoint":
+            self.worker_instrumentation_armed.add(route)
         if method in self.hold_methods:
             self.held.append((route, command_id, method, self._result(route, method, params)))
             return
         result = self._result(route, method, params)
         is_iframe = self.route_info[route]["type"] == "iframe"
+        if (
+            self.auto_worker_prearm
+            and is_worker
+            and route in self.worker_instrumentation_armed
+            and method == "Runtime.runIfWaitingForDebugger"
+        ):
+            self._complete_worker_initial_run(route, command_id, result)
+            return
         if self.auto_iframe_prearm and is_iframe and method == "Runtime.runIfWaitingForDebugger":
             if self.iframe_context_before_resume_ack:
                 self.emit_iframe_default_context(route)
@@ -220,6 +237,20 @@ class _FakeNonFlatSession:
         if method == "Target.sendMessageToTarget":
             child_route = (*route, params["sessionId"])
             self._process(child_route, json.loads(params["message"]))
+
+    def _complete_worker_initial_run(
+        self,
+        route: tuple[str, ...],
+        command_id: int,
+        result: Mapping[str, Any],
+    ) -> None:
+        if route not in self.worker_script_parsed_emitted:
+            self.emit_worker_script_parsed(route)
+        if self.worker_pause_before_resume_ack:
+            self.emit_worker_instrumentation_pause(route)
+        self._deliver(route, {"id": command_id, "result": dict(result)})
+        if not self.worker_pause_before_resume_ack:
+            self.emit_worker_instrumentation_pause(route)
 
     def emit_iframe_default_context(
         self,
@@ -330,12 +361,91 @@ class _FakeNonFlatSession:
             },
         )
 
+    def emit_worker_script_parsed(
+        self,
+        route: tuple[str, ...],
+        *,
+        script_id: str | None = None,
+        url: str | None = None,
+        start_line: int = 0,
+        start_column: int = 0,
+    ) -> None:
+        self.worker_script_parsed_emitted.add(route)
+        self.emit(
+            route,
+            "Debugger.scriptParsed",
+            {
+                "scriptId": script_id or f"worker-script-{'-'.join(route)}",
+                "url": self.route_info[route].get("url", "") if url is None else url,
+                "startLine": start_line,
+                "startColumn": start_column,
+            },
+        )
+
+    def emit_worker_instrumentation_pause(
+        self,
+        route: tuple[str, ...],
+        *,
+        reason: str = "instrumentation",
+        call_frame_id: str | None = None,
+        script_id: str | None = None,
+        line_number: int = 0,
+        column_number: int = 0,
+        frame_url: str = "",
+        function_name: str = "",
+        hit_breakpoints: list[str] | None = None,
+        data_script_id: str | None = None,
+        data_url: str | None = None,
+        function_script_id: str | None = None,
+        function_line_number: int = 0,
+        function_column_number: int = 0,
+    ) -> None:
+        expected_script_id = script_id or f"worker-script-{'-'.join(route)}"
+        expected_url = str(self.route_info[route].get("url", ""))
+        self.worker_pause_emitted.add(route)
+        self.emit(
+            route,
+            "Debugger.paused",
+            {
+                "reason": reason,
+                "data": {
+                    "scriptId": data_script_id or expected_script_id,
+                    "url": expected_url if data_url is None else data_url,
+                },
+                "callFrames": [
+                    {
+                        "callFrameId": call_frame_id or f"worker-frame-{'-'.join(route)}",
+                        "functionName": function_name,
+                        "url": frame_url,
+                        "functionLocation": {
+                            "scriptId": function_script_id or expected_script_id,
+                            "lineNumber": function_line_number,
+                            "columnNumber": function_column_number,
+                        },
+                        "location": {
+                            "scriptId": expected_script_id,
+                            "lineNumber": line_number,
+                            "columnNumber": column_number,
+                        },
+                    }
+                ],
+                "hitBreakpoints": [] if hit_breakpoints is None else hit_breakpoints,
+            },
+        )
+
     def release_held(self, method: str) -> None:
         selected = next((item for item in self.held if item[2] == method), None)
         if selected is None:
             raise AssertionError(f"no held command for {method}")
         self.held.remove(selected)
         route, command_id, _method, result = selected
+        if (
+            self.auto_worker_prearm
+            and method == "Runtime.runIfWaitingForDebugger"
+            and route in self.worker_instrumentation_armed
+        ):
+            self._complete_worker_initial_run(route, command_id, result)
+            return
         self._deliver(route, {"id": command_id, "result": result})
 
     def release_held_error(self, method: str, error: object) -> None:
@@ -362,6 +472,21 @@ class _FakeNonFlatSession:
             return {
                 "breakpointId": f"conditional-{'-'.join(route)}",
                 "actualLocation": dict((params or {})["location"]),
+            }
+        if method == "Debugger.evaluateOnCallFrame":
+            target_type = str(self.route_info[route]["type"])
+            return {
+                "result": {
+                    "type": "object",
+                    "value": {
+                        "schema_version": TARGET_EGRESS_SHIM_SCHEMA_VERSION,
+                        "policy": NON_REPLAYABLE_EGRESS_POLICY,
+                        "protected_apis": [],
+                        "unavailable_apis": sorted(target_egress_apis(target_type)),
+                        "failed_apis": [],
+                        "already_installed": False,
+                    },
+                }
             }
         if method == "Runtime.evaluate":
             expression = str((params or {}).get("expression", ""))
@@ -719,6 +844,74 @@ def _attach_worker(
     return worker_route
 
 
+def _attach_worker_kind(
+    session: _FakeNonFlatSession,
+    router: RecursiveCdpTargetRouter,
+    *,
+    target_type: str,
+    stem: str,
+) -> tuple[tuple[str, ...], _FakeBrowserSession | None, str, str]:
+    target_id = f"{stem}-target"
+    target_url = f"https://worker.test/{stem}.js"
+    if target_type == "worker":
+        route = _attach_worker(
+            session,
+            (),
+            session_id=f"{stem}-session",
+            target_id=target_id,
+            target_url=target_url,
+        )
+        return route, None, target_id, target_url
+    if target_type != "shared_worker":
+        raise ValueError("test worker target type is invalid")
+    browser_session, _guard = _start_shared_worker_guard(session, router)
+    route = (f"{stem}-session",)
+    session.prepare_guarded_adoption(
+        target_id=target_id,
+        page_session_id=route[0],
+        target_url=target_url,
+    )
+    _begin_script_bootstrap(
+        session,
+        (),
+        target_id=target_id,
+        target_url=target_url,
+        frame_id="root-frame",
+    )
+    browser_session.attach(
+        guardian_session_id=f"{stem}-guardian",
+        target_id=target_id,
+        target_url=target_url,
+    )
+    _pause_script_bootstrap(
+        session,
+        (),
+        target_id=target_id,
+        target_url=target_url,
+        frame_id="root-frame",
+    )
+    return route, browser_session, target_id, target_url
+
+
+def _detach_worker_kind(
+    session: _FakeNonFlatSession,
+    router: RecursiveCdpTargetRouter,
+    *,
+    route: tuple[str, ...],
+    browser_session: _FakeBrowserSession | None,
+    target_id: str,
+    stem: str,
+) -> None:
+    session.emit(route, "Network.loadingFinished", {"requestId": target_id})
+    session.detach((), session_id=route[-1])
+    if browser_session is not None:
+        browser_session.detach(
+            guardian_session_id=f"{stem}-guardian",
+            target_id=target_id,
+        )
+    _clean_shutdown(router)
+
+
 def _start_shared_worker_guard(
     page_session: _FakeNonFlatSession,
     router: RecursiveCdpTargetRouter,
@@ -732,7 +925,7 @@ def test_policy_is_pinned_and_root_is_instrumented_before_navigation() -> None:
     router, _observed = _router(session)
 
     assert CDP_TARGET_INSTRUMENTATION_POLICY == (
-        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v12"
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v13"
     )
     assert [method for route, method, _params in session.commands if route == ()] == [
         "Target.getTargetInfo",
@@ -786,10 +979,13 @@ def test_oopif_and_worker_are_fully_configured_before_resume() -> None:
         "Network.setBypassServiceWorker",
         "Runtime.enable",
         "Runtime.addBinding",
-        "Runtime.evaluate",
+        "Debugger.setInstrumentationBreakpoint",
         "Target.setAutoAttach",
         "Target.getTargetInfo",
         "Runtime.runIfWaitingForDebugger",
+        "Debugger.evaluateOnCallFrame",
+        "Debugger.removeBreakpoint",
+        "Debugger.resume",
     ]
     assert [
         method for seen, method, _params in session.commands if seen == iframe
@@ -838,6 +1034,352 @@ def test_oopif_and_worker_are_fully_configured_before_resume() -> None:
     session.detach((), session_id="iframe-session")
     session.detach((), session_id="worker-session")
     _clean_shutdown(router)
+
+
+@pytest.mark.parametrize("target_type", ["worker", "shared_worker"])
+@pytest.mark.parametrize("pause_before_resume_ack", [True, False])
+def test_worker_first_script_prearm_handles_both_initial_resume_orders(
+    target_type: str,
+    pause_before_resume_ack: bool,
+) -> None:
+    session = _FakeNonFlatSession()
+    session.worker_pause_before_resume_ack = pause_before_resume_ack
+    router, _observed = _router(session)
+    stem = f"{target_type.replace('_', '-')}-{'pause-first' if pause_before_resume_ack else 'ack-first'}"
+    route, browser_session, target_id, _target_url = _attach_worker_kind(
+        session,
+        router,
+        target_type=target_type,
+        stem=stem,
+    )
+
+    router.raise_if_failed()
+    assert router.shutdown_ready is True
+    commands = [(method, params) for seen, method, params in session.commands if seen == route]
+    methods = [method for method, _params in commands]
+    assert "Runtime.evaluate" not in methods
+    assert methods.index("Debugger.setInstrumentationBreakpoint") < methods.index(
+        "Runtime.runIfWaitingForDebugger"
+    )
+    assert methods[-3:] == [
+        "Debugger.evaluateOnCallFrame",
+        "Debugger.removeBreakpoint",
+        "Debugger.resume",
+    ]
+    instrumentation = next(
+        params for method, params in commands if method == "Debugger.setInstrumentationBreakpoint"
+    )
+    assert instrumentation == {"instrumentation": "beforeScriptExecution"}
+    call_frame_evaluation = next(
+        params for method, params in commands if method == "Debugger.evaluateOnCallFrame"
+    )
+    assert call_frame_evaluation == {
+        "callFrameId": f"worker-frame-{route[0]}",
+        "expression": target_egress_shim_source(target_type),
+        "returnByValue": True,
+    }
+    assert next(params for method, params in commands if method == "Debugger.removeBreakpoint") == {
+        "breakpointId": f"instrumentation-{route[0]}"
+    }
+    prearm = router.egress_prearm_summary["by_target_type"][target_type]
+    assert prearm["target_count"] == 1
+    assert prearm["installed_count"] == 1
+    assert prearm["pending_count"] == 0
+
+    _detach_worker_kind(
+        session,
+        router,
+        route=route,
+        browser_session=browser_session,
+        target_id=target_id,
+        stem=stem,
+    )
+
+
+@pytest.mark.parametrize(
+    "held_method",
+    [
+        "Debugger.setInstrumentationBreakpoint",
+        "Runtime.runIfWaitingForDebugger",
+        "Debugger.evaluateOnCallFrame",
+        "Debugger.removeBreakpoint",
+        "Debugger.resume",
+    ],
+)
+def test_worker_first_script_prearm_waits_for_every_command_ack(held_method: str) -> None:
+    session = _FakeNonFlatSession(hold_methods={held_method})
+    router, _observed = _router(session)
+    stem = f"held-{held_method.rsplit('.', 1)[-1].lower()}"
+    route, browser_session, target_id, _target_url = _attach_worker_kind(
+        session,
+        router,
+        target_type="worker",
+        stem=stem,
+    )
+
+    router.raise_if_failed()
+    assert router.shutdown_ready is False
+    assert any(method == held_method for _route, _id, method, _result in session.held)
+    session.release_held(held_method)
+    router.raise_if_failed()
+    assert router.shutdown_ready is True
+
+    _detach_worker_kind(
+        session,
+        router,
+        route=route,
+        browser_session=browser_session,
+        target_id=target_id,
+        stem=stem,
+    )
+
+
+@pytest.mark.parametrize(
+    "pause_overrides",
+    [
+        {"reason": "other"},
+        {"script_id": "wrong-script"},
+        {"line_number": -1},
+        {"column_number": -1},
+        {"frame_url": "https://worker.test/wrong.js"},
+        {"hit_breakpoints": ["wrong-breakpoint"]},
+        {"data_script_id": "wrong-script"},
+        {"data_url": "https://worker.test/wrong.js"},
+        {"function_script_id": "wrong-script"},
+        {"function_line_number": 1},
+        {"function_line_number": False},
+        {"function_line_number": 0.0},
+        {"function_column_number": 1},
+        {"function_column_number": False},
+        {"function_column_number": 0.0},
+    ],
+)
+def test_worker_first_script_pause_identity_is_exact(
+    pause_overrides: dict[str, Any],
+) -> None:
+    session = _FakeNonFlatSession()
+    session.auto_worker_prearm = False
+    router, _observed = _router(session)
+    route = _attach_worker(
+        session,
+        (),
+        session_id="exact-pause-session",
+        target_id="exact-pause-target",
+    )
+    session.emit_worker_script_parsed(route)
+    session.emit_worker_instrumentation_pause(route, **pause_overrides)
+
+    with pytest.raises(CdpTargetIntegrityError, match="first-script.*pause|call-frame"):
+        router.raise_if_failed()
+
+
+def test_worker_first_executable_location_may_follow_script_origin() -> None:
+    session = _FakeNonFlatSession()
+    session.auto_worker_prearm = False
+    router, _observed = _router(session)
+    route = _attach_worker(
+        session,
+        (),
+        session_id="offset-pause-session",
+        target_id="offset-pause-target",
+    )
+    session.emit_worker_script_parsed(route)
+    session.emit_worker_instrumentation_pause(
+        route,
+        line_number=3,
+        column_number=36,
+    )
+
+    router.raise_if_failed()
+    assert router.shutdown_ready is True
+    session.detach((), session_id=route[-1])
+    _clean_shutdown(router)
+
+
+def test_worker_bootstrap_script_identity_cannot_be_duplicated_or_reused() -> None:
+    session = _FakeNonFlatSession()
+    session.auto_worker_prearm = False
+    router, _observed = _router(session)
+    route = _attach_worker(
+        session,
+        (),
+        session_id="duplicate-script-session",
+        target_id="duplicate-script-target",
+    )
+    target_url = str(session.route_info[route]["url"])
+    session.emit_worker_script_parsed(route)
+    session.emit_worker_script_parsed(
+        route,
+        script_id="second-bootstrap-script",
+        url=target_url,
+    )
+
+    with pytest.raises(CdpTargetIntegrityError, match="duplicated|reused"):
+        router.raise_if_failed()
+
+
+def test_post_ready_worker_scripts_are_ignored_and_not_retained() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    route = _attach_worker(
+        session,
+        (),
+        session_id="post-ready-script-session",
+        target_id="post-ready-script-target",
+    )
+    target_url = str(session.route_info[route]["url"])
+    state = router._states[route]
+    assert state.phase == "ready"
+    assert state.worker_parsed_script_urls == {}
+
+    for index in range(100):
+        session.emit_worker_script_parsed(
+            route,
+            script_id=f"post-ready-script-{index}",
+            url=target_url if index % 2 else "",
+        )
+
+    router.raise_if_failed()
+    assert state.phase == "ready"
+    assert state.worker_parsed_script_urls == {}
+    session.detach((), session_id=route[-1])
+    _clean_shutdown(router)
+
+
+def test_worker_initial_resume_ack_requires_an_exact_empty_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+    original_result = session._result
+
+    def nonempty_resume_result(
+        route: tuple[str, ...],
+        method: str,
+        params: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        result = original_result(route, method, params)
+        if method == "Runtime.runIfWaitingForDebugger":
+            return {"unexpected": True}
+        return result
+
+    monkeypatch.setattr(session, "_result", nonempty_resume_result)
+    router, _observed = _router(session)
+    _attach_worker(
+        session,
+        (),
+        session_id="nonempty-resume-session",
+        target_id="nonempty-resume-target",
+    )
+
+    with pytest.raises(CdpTargetIntegrityError, match="resume acknowledgement"):
+        router.raise_if_failed()
+
+
+def test_worker_initial_resume_ack_rejects_a_missing_result() -> None:
+    session = _FakeNonFlatSession(hold_methods={"Runtime.runIfWaitingForDebugger"})
+    router, _observed = _router(session)
+    _attach_worker(
+        session,
+        (),
+        session_id="missing-resume-result-session",
+        target_id="missing-resume-result-target",
+    )
+    selected = next(
+        item for item in session.held if item[2] == "Runtime.runIfWaitingForDebugger"
+    )
+    session.held.remove(selected)
+    route, command_id, _method, _result = selected
+    session._deliver(route, {"id": command_id})
+
+    with pytest.raises(CdpTargetIntegrityError, match="returned malformed data"):
+        router.raise_if_failed()
+
+
+def test_worker_duplicate_first_script_pause_fails_closed() -> None:
+    session = _FakeNonFlatSession()
+    session.auto_worker_prearm = False
+    router, _observed = _router(session)
+    route = _attach_worker(
+        session,
+        (),
+        session_id="duplicate-pause-session",
+        target_id="duplicate-pause-target",
+    )
+    session.emit_worker_script_parsed(route)
+    session.emit_worker_instrumentation_pause(route)
+    router.raise_if_failed()
+    session.emit_worker_instrumentation_pause(route)
+
+    with pytest.raises(CdpTargetIntegrityError, match="first-script debugger pause"):
+        router.raise_if_failed()
+
+
+def test_worker_detach_before_first_script_prearm_finishes_fails_closed() -> None:
+    session = _FakeNonFlatSession()
+    session.auto_worker_prearm = False
+    router, _observed = _router(session)
+    route = _attach_worker(
+        session,
+        (),
+        session_id="prearm-detach-session",
+        target_id="prearm-detach-target",
+    )
+    session.detach((), session_id=route[-1])
+
+    with pytest.raises(CdpTargetIntegrityError, match="work pending"):
+        router.raise_if_failed()
+
+
+@pytest.mark.parametrize(
+    "rejected_method",
+    [
+        "Debugger.setInstrumentationBreakpoint",
+        "Debugger.evaluateOnCallFrame",
+        "Debugger.removeBreakpoint",
+        "Debugger.resume",
+    ],
+)
+def test_worker_first_script_prearm_command_errors_fail_closed(rejected_method: str) -> None:
+    session = _FakeNonFlatSession(reject_methods={rejected_method})
+    router, _observed = _router(session)
+    _attach_worker(
+        session,
+        (),
+        session_id="rejected-command-session",
+        target_id="rejected-command-target",
+    )
+
+    with pytest.raises(CdpTargetIntegrityError, match="instrumentation failed|command"):
+        router.raise_if_failed()
+
+
+def test_worker_first_script_shim_must_be_a_fresh_installation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+    original_result = session._result
+
+    def reused_worker_shim(
+        route: tuple[str, ...],
+        method: str,
+        params: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        result = original_result(route, method, params)
+        if method == "Debugger.evaluateOnCallFrame":
+            result["result"]["value"]["already_installed"] = True
+        return result
+
+    monkeypatch.setattr(session, "_result", reused_worker_shim)
+    router, _observed = _router(session)
+    _attach_worker(
+        session,
+        (),
+        session_id="reused-shim-session",
+        target_id="reused-shim-target",
+    )
+
+    with pytest.raises(CdpTargetIntegrityError, match="installation order"):
+        router.raise_if_failed()
 
 
 @pytest.mark.parametrize(
@@ -1724,6 +2266,38 @@ def test_target_attachment_after_shutdown_boundary_is_positively_resumed() -> No
     ] == ["Runtime.runIfWaitingForDebugger"]
 
 
+def test_shutdown_resume_ack_requires_an_exact_empty_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+    original_result = session._result
+
+    def nonempty_shutdown_resume_result(
+        route: tuple[str, ...],
+        method: str,
+        params: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        result = original_result(route, method, params)
+        if method == "Runtime.runIfWaitingForDebugger":
+            return {"unexpected": True}
+        return result
+
+    monkeypatch.setattr(session, "_result", nonempty_shutdown_resume_result)
+    router, _observed = _router(session)
+    _begin_shutdown(router)
+    session.attach(
+        (),
+        session_id="late-nonempty-session",
+        target_id="late-nonempty-target",
+        target_type="worker",
+        parent_frame_id="root-frame",
+        target_url="https://worker.test/late-nonempty.js",
+    )
+
+    with pytest.raises(CdpTargetIntegrityError, match="shutdown resume acknowledgement"):
+        router.raise_if_failed()
+
+
 def test_late_shutdown_attachment_cannot_leave_resume_unresolved() -> None:
     session = _FakeNonFlatSession(hold_methods={"Runtime.runIfWaitingForDebugger"})
     router, _observed = _router(session)
@@ -2302,10 +2876,13 @@ def test_exact_guarded_shared_worker_is_adopted_once_and_fully_instrumented() ->
         "Runtime.enable",
         "Runtime.addBinding",
         "Fetch.enable",
-        "Runtime.evaluate",
+        "Debugger.setInstrumentationBreakpoint",
         "Target.setAutoAttach",
         "Target.getTargetInfo",
         "Runtime.runIfWaitingForDebugger",
+        "Debugger.evaluateOnCallFrame",
+        "Debugger.removeBreakpoint",
+        "Debugger.resume",
     ]
 
     for method, payload in (

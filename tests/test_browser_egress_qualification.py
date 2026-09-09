@@ -19,9 +19,9 @@ from pathlib import Path
 import pytest
 
 from qcsd_lab.browser_egress import (
-    BROWSER_EGRESS_PRODUCTION_LAUNCH_PROFILE,
     BROWSER_EGRESS_PLAYWRIGHT_ENABLED_FEATURES,
     BROWSER_EGRESS_PLAYWRIGHT_FEATURE_ARGUMENT,
+    BROWSER_EGRESS_PRODUCTION_LAUNCH_PROFILE,
     browser_egress_chromium_args,
     browser_egress_qualification_control_chromium_args,
     build_fail_closed_host_resolver_argument,
@@ -29,35 +29,43 @@ from qcsd_lab.browser_egress import (
     validate_browser_egress_qualification_command_line,
 )
 from qcsd_lab.browser_egress_fixture import (
-    SEMANTIC_OBSERVATION_SCHEMA_VERSION,
-    assemble_live_semantic_observation,
-    BrowserFixtureServer,
-    browser_action_expression,
+    _FIXTURE_RESPONSES,
     FIXTURE_CERTIFICATE,
     FIXTURE_PRIVATE_KEY,
     FIXTURE_RESPONSE_BUNDLE_SHA256,
     FIXTURE_TOPOLOGY,
+    QUALIFICATION_ID,
+    SEMANTIC_OBSERVATION_SCHEMA_VERSION,
+    BrowserFixtureServer,
+    IndependentDnsSink,
+    IndependentTcpSink,
+    IndependentUdpSink,
+    assemble_live_semantic_observation,
+    browser_action_expression,
+    dedicated_worker_action_message,
+    dns_query_message,
+    expanded_vectors_sha256,
     expected_browser_action_arguments,
     expected_browser_launch_contract,
     expected_fixture_connection_counts,
     expected_fixture_report_type_counts,
     expected_fixture_requests,
     expected_fixture_response_headers,
-    IndependentDnsSink,
-    IndependentTcpSink,
-    IndependentUdpSink,
-    QUALIFICATION_ID,
-    dns_query_message,
     expected_semantic_chronology,
     expected_sink_counters,
     expected_vectors,
-    expanded_vectors_sha256,
     inventory_json,
     shared_worker_action_message,
     validate_fixture_observation,
     validate_semantic_observation,
     validate_vector_inventory,
     vector_by_id,
+)
+from qcsd_lab.browser_egress_observer import (
+    _tool_version_stdout_first_line,
+    analyse_pcap,
+    reconcile_sink_and_packet_evidence,
+    validate_packet_analysis,
 )
 from qcsd_lab.browser_egress_qualification import (
     ARGV_RELATIVE_PATH,
@@ -67,30 +75,30 @@ from qcsd_lab.browser_egress_qualification import (
     EMPTY_SHA256,
     FINAL_RECEIPT_TYPE,
     FINAL_SCHEMA_VERSION,
-    FoundationVerificationMode,
-    HISTORICAL_FOUNDATION_SCHEMA_VERSION,
-    MANIFEST_RELATIVE_PATH,
-    REQUIRED_SOURCE_BINDING_PATHS,
     FIXTURE_RUNTIME_CERTIFICATE,
     FIXTURE_RUNTIME_PRIVATE_KEY,
     FIXTURE_TLS_MASK_DIRECTORY,
     FIXTURE_TLS_MASK_TMPFS_OPTIONS,
+    HISTORICAL_FOUNDATION_SCHEMA_VERSION,
+    MANIFEST_RELATIVE_PATH,
     POLICY_VOLUME_MANAGED_DIRECTORY,
     POLICY_VOLUME_POLICY_FILENAME,
     POLICY_VOLUME_POLICY_PATH,
     POLICY_VOLUME_PROJECTION_SCHEMA_VERSION,
-    ROLE_TMPFS_OPTIONS,
+    REQUIRED_SOURCE_BINDING_PATHS,
     RESULT_RECEIPT_TYPE,
+    ROLE_TMPFS_OPTIONS,
+    FoundationVerificationMode,
     _validate_effective_argv,
     append_result,
     begin_attempt,
     build_attempt_topology_binding,
     build_docker_daemon_projection,
+    build_failure_result_receipt,
+    build_final_payload,
     build_foundation_payload,
     build_live_docker_daemon_binding,
     build_passed_result_receipt,
-    build_failure_result_receipt,
-    build_final_payload,
     create_final_receipt,
     create_qualification,
     deep_validate_foundation,
@@ -98,25 +106,19 @@ from qcsd_lab.browser_egress_qualification import (
     expected_manifest_config,
     load_checkpoint,
     policy_volume_name,
-    require_live_docker_daemon,
-    recover_interrupted_attempt,
     reconcile_qualification_filesystem,
-    verify_qualification,
+    recover_interrupted_attempt,
+    require_live_docker_daemon,
     validate_argv_config,
-    validate_docker_inspect_projection,
-    validate_foundation_payload,
-    validate_final_payload,
     validate_closed_evidence_inventory,
+    validate_docker_inspect_projection,
+    validate_final_payload,
+    validate_foundation_payload,
     validate_manifest_config,
     validate_open_evidence_inventory,
-    validate_runtime_binding,
     validate_result_payload,
-)
-from qcsd_lab.browser_egress_observer import (
-    _tool_version_stdout_first_line,
-    analyse_pcap,
-    reconcile_sink_and_packet_evidence,
-    validate_packet_analysis,
+    validate_runtime_binding,
+    verify_qualification,
 )
 from qcsd_lab.class_study import bind_receipt, canonical_json_bytes, canonical_json_sha256
 from qcsd_lab.playwright_driver import (
@@ -1015,8 +1017,8 @@ def _fork_crash_at(boundary: str, action: Callable[[], object]) -> None:
 
     child = os.fork()
     if child == 0:  # pragma: no cover - assertions execute in the parent
-        qualification._DURABILITY_FAULT_INJECTOR = (
-            lambda observed: os._exit(86) if observed == boundary else None
+        qualification._DURABILITY_FAULT_INJECTOR = lambda observed: (
+            os._exit(86) if observed == boundary else None
         )
         try:
             action()
@@ -1334,9 +1336,7 @@ def _passed_receipt(
     pcap_path = result_root / pcap_relative
     packet_count = _write_pcap(pcap_path, vector_id=vector_id)
     analysis, decoder = analyse_pcap(pcap_path, vector=vector)
-    dumpcap_version = _tool_version_stdout_first_line(
-        Path("/usr/bin/dumpcap"), label="dumpcap"
-    )
+    dumpcap_version = _tool_version_stdout_first_line(Path("/usr/bin/dumpcap"), label="dumpcap")
     capture = {
         "schema_version": 2,
         "artifact_type": "qcsd-browser-egress-packet-capture",
@@ -1877,6 +1877,47 @@ def test_service_worker_actions_and_shared_worker_protocol_are_distinct() -> Non
     assert message["protocol"] == "qcsd-shared-worker-action-v1"
     assert message["argument"]["surface"] == "webtransport"
     assert "async ({family, surface" in message["expression"]
+
+
+def test_dedicated_worker_action_message_is_exact_and_context_typed() -> None:
+    dedicated = vector_by_id("constructor--dedicated-worker--websocket")
+    message = dedicated_worker_action_message(dedicated)
+    assert message == {
+        "protocol": "qcsd-dedicated-worker-action-v1",
+        "expression": browser_action_expression(),
+        "argument": {
+            **expected_browser_action_arguments(dedicated),
+            "family": dedicated.family,
+            "surface": dedicated.surface,
+        },
+    }
+
+    for wrong_context in (
+        vector_by_id("constructor--page--websocket"),
+        vector_by_id("constructor--shared-worker--websocket"),
+    ):
+        with pytest.raises(ValueError, match="requires a dedicated-worker vector"):
+            dedicated_worker_action_message(wrong_context)
+    with pytest.raises(ValueError, match="requires a shared-worker vector"):
+        shared_worker_action_message(dedicated)
+
+
+def test_dedicated_worker_fixture_installs_a_strict_ready_action_protocol() -> None:
+    content_type, body = _FIXTURE_RESPONSES["/dedicated-worker.js"]
+    script = body.decode("ascii")
+
+    assert content_type == "text/javascript; charset=utf-8"
+    assert "fields !== 'argument,expression,protocol'" in script
+    assert "data.protocol !== 'qcsd-dedicated-worker-action-v1'" in script
+    assert "typeof data.expression !== 'string'" in script
+    assert "typeof data.argument !== 'object'" in script
+    assert "const actor = (0, eval)(`(${data.expression})`);" in script
+    assert "const result = await actor(data.argument);" in script
+    result = "self.postMessage({protocol:data.protocol,result});"
+    ready = "self.postMessage({protocol:'qcsd-dedicated-worker-action-v1',ready:true});"
+    assert script.index("self.onmessage = async message => {") < script.index(ready)
+    assert script.index("const result = await actor(data.argument);") < script.index(result)
+    assert "token:event.data" not in script
 
 
 def test_reporting_nel_live_dwell_and_close_flush_are_temporally_distinct() -> None:

@@ -1652,6 +1652,108 @@ def test_class_build_admission_reference_uses_raw_schema_five_receipt_cohort(
     )
 
 
+def _class_build_pinned_cdp_receipt(fixture, *, schema: object) -> Path:
+    from qcsd_lab.class_study import bind_receipt, canonical_json_bytes
+
+    destination = fixture.root / f"artifacts/pinned-cdp-schema-{schema!s}.json"
+    payload = {
+        "probe_schema_version": schema,
+        "artifact_type": "qcsd-class-study-pinned-cdp-probe",
+        "cohort_version": fixture.admitted.cohort_version,
+        "build_execution": {
+            "path": str(fixture.build),
+            "sha256": sha256_file(fixture.build),
+        },
+        "build_execution_identity": fixture.admitted.identity,
+        "collection_source": fixture.admitted.source,
+        "prepare_image_digest": fixture.admitted.prepare_image,
+        "prepare_source": {
+            **dict(fixture.admitted.source),
+            "image_digest": fixture.admitted.prepare_image,
+        },
+    }
+    destination.write_bytes(
+        canonical_json_bytes(
+            bind_receipt(payload, receipt_type="qcsd-class-study-pinned-cdp-probe")
+        )
+    )
+    return destination
+
+
+def test_class_build_admission_accepts_current_pinned_cdp_schema(tmp_path: Path) -> None:
+    from qcsd_lab.class_build_admission import resolve_action_admission
+
+    fixture = _class_build_admission_fixture(tmp_path)
+    pinned = _class_build_pinned_cdp_receipt(fixture, schema=12)
+
+    assert (
+        resolve_action_admission(
+            fixture.root,
+            action="foundation",
+            cohort_version=62,
+            options={"build": str(fixture.build), "pinned_cdp": str(pinned)},
+            build_loader=fixture.load,
+        )
+        == fixture.admitted
+    )
+
+
+@pytest.mark.parametrize("schema", (12.0, "12", True))
+def test_class_build_admission_rejects_current_pinned_cdp_schema_aliases(
+    tmp_path: Path,
+    schema: object,
+) -> None:
+    from qcsd_lab.class_build_admission import resolve_action_admission
+
+    fixture = _class_build_admission_fixture(tmp_path)
+    pinned = _class_build_pinned_cdp_receipt(fixture, schema=schema)
+
+    with pytest.raises(ValueError, match="not current build authority"):
+        resolve_action_admission(
+            fixture.root,
+            action="foundation",
+            cohort_version=62,
+            options={"build": str(fixture.build), "pinned_cdp": str(pinned)},
+            build_loader=fixture.load,
+        )
+
+
+@pytest.mark.parametrize("schema", (8, 9, 11))
+def test_class_build_admission_classifies_old_pinned_cdp_schemas_as_historical(
+    tmp_path: Path,
+    schema: int,
+) -> None:
+    from qcsd_lab.class_build_admission import resolve_action_admission
+
+    fixture = _class_build_admission_fixture(tmp_path)
+    pinned = _class_build_pinned_cdp_receipt(fixture, schema=schema)
+
+    with pytest.raises(ValueError, match="pinned CDP receipt is historical"):
+        resolve_action_admission(
+            fixture.root,
+            action="foundation",
+            cohort_version=62,
+            options={"build": str(fixture.build), "pinned_cdp": str(pinned)},
+            build_loader=fixture.load,
+        )
+
+
+def test_class_build_admission_rejects_unknown_pinned_cdp_schema(tmp_path: Path) -> None:
+    from qcsd_lab.class_build_admission import resolve_action_admission
+
+    fixture = _class_build_admission_fixture(tmp_path)
+    pinned = _class_build_pinned_cdp_receipt(fixture, schema=10)
+
+    with pytest.raises(ValueError, match="not current build authority"):
+        resolve_action_admission(
+            fixture.root,
+            action="foundation",
+            cohort_version=62,
+            options={"build": str(fixture.build), "pinned_cdp": str(pinned)},
+            build_loader=fixture.load,
+        )
+
+
 @pytest.mark.parametrize(
     ("action", "options"),
     (

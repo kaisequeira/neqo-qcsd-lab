@@ -4,10 +4,30 @@ from __future__ import annotations
 
 import os
 import threading
+import time
+from collections.abc import Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 
 import pytest
 
+from qcsd_lab.browser_egress import (
+    NonReplayableEgressGuard,
+    install_context_egress_guards,
+    launch_pinned_cdp_probe_browser,
+)
+from qcsd_lab.browser_egress_fixture import (
+    _FixtureHttpServer,
+    browser_action_expression,
+    dedicated_worker_action_bridge_expression,
+    dedicated_worker_action_message,
+    dedicated_worker_ready_bridge_expression,
+    vector_by_id,
+)
+from qcsd_lab.cdp_targets import (
+    BrowserSharedWorkerGuard,
+    CdpTargetSource,
+    RecursiveCdpTargetRouter,
+)
 from qcsd_lab.playwright_driver import (
     EXPECTED_CHROMIUM_VERSION,
     OWNERSHIP_MARKER_NAME,
@@ -21,6 +41,28 @@ pytestmark = pytest.mark.skipif(
     os.environ.get("QCSD_RUN_PINNED_CDP_PROBE") != "1",
     reason="set QCSD_RUN_PINNED_CDP_PROBE=1 inside the prepare image",
 )
+
+
+@pytest.fixture
+def dedicated_worker_http_fixture() -> Iterator[tuple[str, _FixtureHttpServer]]:
+    """Serve the production dedicated-worker bytes from one loopback origin."""
+
+    vector = vector_by_id("constructor--dedicated-worker--webtransport")
+    server = _FixtureHttpServer(("127.0.0.1", 0), "primary", None, vector)
+    server.daemon_threads = True
+    thread = threading.Thread(
+        target=server.serve_forever,
+        name="qcsd-dedicated-worker-integration-fixture",
+        daemon=True,
+    )
+    thread.start()
+    try:
+        yield f"http://localhost:{server.server_port}", server
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
 
 
 def test_five_overlapping_mixed_ownership_browser_lifetimes() -> None:
@@ -133,6 +175,148 @@ def test_five_overlapping_mixed_ownership_browser_lifetimes() -> None:
         (3, False, "native", True, True),
         (4, False, "native", True, True),
     ]
+
+
+def test_exclusive_dedicated_worker_bridge_uses_recursive_cdp_ownership(
+    dedicated_worker_http_fixture: tuple[str, _FixtureHttpServer],
+) -> None:
+    """Run the exact worker bridge while Playwright remains excluded from its target."""
+
+    from playwright.sync_api import sync_playwright
+
+    validate_default_playwright_driver_once()
+    origin, fixture_server = dedicated_worker_http_fixture
+    root_url = f"{origin}/"
+    worker_url = f"{origin}/dedicated-worker.js"
+    allowed_urls = {root_url, worker_url}
+    fetch_urls: list[str] = []
+    denied_urls: list[str] = []
+    guard_events: list[tuple[str | None, str, str, object | None]] = []
+    attached_workers: list[object] = []
+    disconnected = threading.Event()
+
+    with playwright_driver_session(sync_playwright, exclusive=True) as playwright:
+        browser, _command_line = launch_pinned_cdp_probe_browser(
+            playwright,
+            approved_origins=(origin,),
+            origin_ip_pins={origin: "127.0.0.1"},
+        )
+        browser.on("disconnected", lambda: disconnected.set())
+        context = None
+        context_closed = False
+        try:
+            browser_session = browser.new_browser_cdp_session()
+            context = browser.new_context(service_workers="block")
+            egress_guard = NonReplayableEgressGuard()
+            install_context_egress_guards(context, egress_guard)
+            page = context.new_page()
+            egress_guard.bind_root_page(page)
+            page.set_default_timeout(15_000)
+            page.on("worker", lambda worker: attached_workers.append(worker))
+            session = context.new_cdp_session(page)
+
+            router: RecursiveCdpTargetRouter
+
+            def on_event(
+                source: CdpTargetSource,
+                method: str,
+                payload: Mapping[str, object],
+            ) -> None:
+                if method != "Fetch.requestPaused":
+                    return
+                request = payload.get("request")
+                url = request.get("url") if isinstance(request, Mapping) else None
+                request_id = payload.get("requestId")
+                if not isinstance(url, str) or not isinstance(request_id, str):
+                    raise TypeError("dedicated-worker integration Fetch event is malformed")
+                fetch_urls.append(url)
+                if url in allowed_urls:
+                    router.send(
+                        source,
+                        "Fetch.continueRequest",
+                        {"requestId": request_id},
+                        label="dedicated-worker-integration-allow",
+                    )
+                else:
+                    denied_urls.append(url)
+                    router.send(
+                        source,
+                        "Fetch.failRequest",
+                        {"requestId": request_id, "errorReason": "BlockedByClient"},
+                        label="dedicated-worker-integration-deny",
+                    )
+
+            def record_non_replayable_egress(
+                source: CdpTargetSource | None,
+                api: str,
+                mechanism: str,
+                url: object | None,
+            ) -> None:
+                guard_events.append(
+                    (source.target_type if source is not None else None, api, mechanism, url)
+                )
+                egress_guard.record(source=source, api=api, mechanism=mechanism, url=url)
+
+            router = RecursiveCdpTargetRouter(
+                session,
+                on_event=on_event,
+                on_non_replayable_egress=record_non_replayable_egress,
+            )
+            router.start()
+            browser_guard = BrowserSharedWorkerGuard(browser_session, router)
+            browser_guard.start()
+
+            page.goto(root_url, wait_until="load")
+            assert page.evaluate(dedicated_worker_ready_bridge_expression(), worker_url) is True
+
+            deadline = time.monotonic() + 10
+            while not router.shutdown_ready:
+                router.raise_if_failed()
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("dedicated-worker integration prearm did not converge")
+                page.wait_for_timeout(10)
+
+            vector = vector_by_id("constructor--dedicated-worker--webtransport")
+            message = dedicated_worker_action_message(vector)
+            raw = page.evaluate(dedicated_worker_action_bridge_expression(), message)
+            router.raise_if_failed()
+
+            assert message["expression"] == browser_action_expression()
+            assert raw == {
+                "resolved_type": "function",
+                "own_descriptor": "data",
+                "action_issued": True,
+                "action_succeeded": False,
+                "exception_name": "TypeError",
+            }
+            assert egress_guard.attempt_count == 1
+            assert guard_events == [("worker", "WebTransport", "paused-target-runtime-shim", None)]
+            assert attached_workers == []
+            assert denied_urls == []
+            assert worker_url in fetch_urls
+            with fixture_server.request_lock:
+                fixture_requests = dict(fixture_server.request_counts)
+            assert fixture_requests == {"/": 1, "/dedicated-worker.js": 1}
+            worker_prearm = router.egress_prearm_summary["by_target_type"]["worker"]
+            assert worker_prearm["target_count"] == 1
+            assert worker_prearm["installed_count"] == 1
+            assert worker_prearm["pending_count"] == 0
+            assert router.egress_prearm_summary["pending_total"] == 0
+            assert router.bootstrap_prearm_summary["pending_total"] == 0
+            assert router.shutdown_ready is True
+
+            router.begin_shutdown()
+            browser_guard.begin_shutdown()
+            context.close()
+            context_closed = True
+            browser_guard.finish()
+            router.finish()
+        finally:
+            if context is not None and not context_closed:
+                context.close()
+            browser.close()
+
+    assert disconnected.wait(timeout=10)
 
 
 def test_http_credentials_are_rejected_only_by_exclusive_driver() -> None:

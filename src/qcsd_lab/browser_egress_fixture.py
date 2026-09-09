@@ -431,7 +431,23 @@ _FIXTURE_RESPONSES: dict[str, tuple[str, bytes]] = {
     ),
     "/dedicated-worker.js": (
         "text/javascript; charset=utf-8",
-        b"self.onmessage = event => self.postMessage({ready:true, token:event.data});\n",
+        (
+            b"self.onmessage = async message => {\n"
+            b"  const data = message.data;\n"
+            b"  const fields = data && typeof data === 'object' && !Array.isArray(data)\n"
+            b"    ? Object.keys(data).sort().join(',') : '';\n"
+            b"  if (fields !== 'argument,expression,protocol' ||\n"
+            b"      data.protocol !== 'qcsd-dedicated-worker-action-v1' ||\n"
+            b"      typeof data.expression !== 'string' || !data.argument ||\n"
+            b"      typeof data.argument !== 'object' || Array.isArray(data.argument)) {\n"
+            b"    throw new TypeError('invalid QCSD dedicated-worker action');\n"
+            b"  }\n"
+            b"  const actor = (0, eval)(`(${data.expression})`);\n"
+            b"  const result = await actor(data.argument);\n"
+            b"  self.postMessage({protocol:data.protocol,result});\n"
+            b"};\n"
+            b"self.postMessage({protocol:'qcsd-dedicated-worker-action-v1',ready:true});\n"
+        ),
     ),
     "/shared-worker.js": (
         "text/javascript; charset=utf-8",
@@ -1278,6 +1294,76 @@ def expected_browser_action_arguments(vector: BrowserEgressVector) -> dict[str, 
         "sameOriginSpeculationUrl": (f"{fixture_origin}/speculation-prefetch-sentinel"),
         "sameOriginPrerenderUrl": (f"{fixture_origin}/speculation-prerender-sentinel"),
     }
+
+
+def dedicated_worker_action_message(vector: BrowserEgressVector) -> dict[str, Any]:
+    """Return the sole sanctioned message evaluated by the dedicated-worker fixture."""
+
+    if not isinstance(vector, BrowserEgressVector) or vector.context != "dedicated-worker":
+        raise ValueError("dedicated-worker action message requires a dedicated-worker vector")
+    return {
+        "protocol": "qcsd-dedicated-worker-action-v1",
+        "expression": browser_action_expression(),
+        "argument": {
+            **expected_browser_action_arguments(vector),
+            "family": vector.family,
+            "surface": vector.surface,
+        },
+    }
+
+
+def dedicated_worker_ready_bridge_expression() -> str:
+    """Return the exact page bridge that waits for the dedicated worker to run."""
+
+    return """
+url => new Promise((resolve, reject) => {
+  const worker = new Worker(url);
+  const timer = setTimeout(
+    () => reject(new Error('dedicated worker readiness timeout')),
+    5000,
+  );
+  worker.onmessage = event => {
+    if (event.data &&
+        event.data.protocol === 'qcsd-dedicated-worker-action-v1' &&
+        event.data.ready === true) {
+      clearTimeout(timer);
+      window.__qcsdDedicatedWorker = worker;
+      resolve(true);
+    }
+  };
+  worker.onerror = () => {
+    clearTimeout(timer);
+    reject(new Error('dedicated worker readiness error'));
+  };
+})
+""".strip()
+
+
+def dedicated_worker_action_bridge_expression() -> str:
+    """Return the exact page bridge for one frozen dedicated-worker action."""
+
+    return """
+message => new Promise((resolve, reject) => {
+  const worker = window.__qcsdDedicatedWorker;
+  const timer = setTimeout(
+    () => reject(new Error('dedicated worker action timeout')),
+    5000,
+  );
+  worker.onmessage = event => {
+    if (event.data &&
+        event.data.protocol === message.protocol &&
+        'result' in event.data) {
+      clearTimeout(timer);
+      resolve(event.data.result);
+    }
+  };
+  worker.onerror = () => {
+    clearTimeout(timer);
+    reject(new Error('dedicated worker action error'));
+  };
+  worker.postMessage(message);
+})
+""".strip()
 
 
 def shared_worker_action_message(vector: BrowserEgressVector) -> dict[str, Any]:

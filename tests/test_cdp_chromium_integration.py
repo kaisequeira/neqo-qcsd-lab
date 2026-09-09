@@ -6,6 +6,7 @@ import os
 
 import pytest
 
+from qcsd_lab.browser_egress import NonReplayableEgressGuard, install_context_egress_guards
 from qcsd_lab.cdp_targets import (
     BrowserSharedWorkerGuard,
     CdpTargetIntegrityError,
@@ -52,7 +53,7 @@ def test_pinned_chromium_recursive_topology_and_shutdown() -> None:
     assert topology["server_thread_stopped"] is True
 
 
-def test_public_cdp_rejects_window_open_sibling_page() -> None:
+def test_public_cdp_rejects_sibling_page() -> None:
     """Prove a real Chromium popup cannot remain outside the accepted graph."""
 
     from playwright.sync_api import sync_playwright
@@ -62,22 +63,35 @@ def test_public_cdp_rejects_window_open_sibling_page() -> None:
         browser = playwright.chromium.launch(
             headless=True,
             executable_path=pinned_chromium_executable_path(),
-            args=["--no-sandbox"],
+            args=["--no-sandbox", "--disable-crashpad-for-testing"],
             env=chromium_child_environment(),
         )
         context = browser.new_context(service_workers="block")
+        egress_guard = NonReplayableEgressGuard()
+        install_context_egress_guards(context, egress_guard)
         page = context.new_page()
+        egress_guard.bind_root_page(page)
         page_session = context.new_cdp_session(page)
         browser_session = browser.new_browser_cdp_session()
         router = RecursiveCdpTargetRouter(
             page_session,
             on_event=lambda *_args: None,
+            on_non_replayable_egress=lambda source, api, mechanism, url: (
+                egress_guard.record(source=source, api=api, mechanism=mechanism, url=url)
+            ),
         )
         router.start()
         guard = BrowserSharedWorkerGuard(browser_session, router)
         guard.start()
         try:
-            assert page.evaluate("() => Boolean(window.open('about:blank', '_blank'))") is True
+            browser_contexts = browser_session.send("Target.getBrowserContexts")
+            context_ids = browser_contexts.get("browserContextIds")
+            assert isinstance(context_ids, list) and len(context_ids) == 1
+            created = browser_session.send(
+                "Target.createTarget",
+                {"url": "about:blank", "browserContextId": context_ids[0]},
+            )
+            assert isinstance(created.get("targetId"), str)
             with pytest.raises(CdpTargetIntegrityError, match="sibling popup/page"):
                 for _ in range(50):
                     page.wait_for_timeout(20)

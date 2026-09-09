@@ -690,19 +690,20 @@ _BUILD_STORAGE_PREFLIGHT_KEYS = {
     "passed",
 }
 _CDP_TARGET_INSTRUMENTATION_POLICY = (
-    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v12"
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v13"
 )
 _PLAYWRIGHT_VERSION = "1.57.0"
 _CHROMIUM_VERSION = "143.0.7499.4"
 _CHROMIUM_EXECUTABLE = "/usr/local/bin/qcsd-chromium"
-_PINNED_CDP_SCHEMA_VERSION = 11
+_PINNED_CDP_SCHEMA_VERSION = 12
 _HISTORICAL_PINNED_CDP_SCHEMA_VERSION = 8
-_HISTORICAL_PINNED_CDP_SCHEMA_VERSIONS = frozenset({8, 9})
-_PINNED_CDP_CONTRACT_SCHEMA_VERSION = 10
+_HISTORICAL_PINNED_CDP_SCHEMA_VERSIONS = frozenset({8, 9, 11})
+_PINNED_CDP_CONTRACT_SCHEMA_VERSION = 11
 _HISTORICAL_PINNED_CDP_CONTRACT_SCHEMA_VERSION = 8
 _BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION = 1
 _EGRESS_PREARM_SUMMARY_SCHEMA_VERSION = 2
 _PINNED_CDP_TARGET_ACTIVITY_SCHEMA_VERSION = 1
+_PINNED_CDP_WORKER_WEBTRANSPORT_PROBE_SCHEMA_VERSION = 1
 _NON_REPLAYABLE_EGRESS_POLICY = "blocked-non-urlloader-egress-v1"
 _NON_REPLAYABLE_EGRESS_SCHEMA_VERSION = 2
 _BROWSER_EGRESS_COMMAND_LINE_SCHEMA_VERSION = 4
@@ -782,7 +783,7 @@ _PINNED_CDP_RESOLVER_PROJECTION = {
     "mapped_host_count": 2,
     "excluded_host_count": 0,
     "catch_all_not_found": True,
-    "canonical_rules_sha256": ("d4cb9b5a5ce3719322dedccb391ca058c130a47df7cf22fb1ec436993876e102"),
+    "canonical_rules_sha256": ("7fc67c9e271c3f1ed88a3a57b60dda5ab9d63a484a929cc010fb7ca635b98907"),
 }
 _PAGE_TARGET_EGRESS_APIS = (
     "WebSocketStream",
@@ -896,14 +897,16 @@ _EXPECTED_BROWSER_TOOL_IDENTITY = {
     "configured_executable_path": _CHROMIUM_EXECUTABLE,
     "playwright_driver": _EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
 }
-_PINNED_CDP_CONTRACT = {
+_HISTORICAL_PINNED_CDP_CONTRACT_V11 = {
     # Probe schema 11 binds both the paused-OOPIF pre-author instrumentation
     # semantics and Document-only Playwright routing under exclusive QCSD
     # ownership. The independently versioned browser/probe behaviour contract
     # advances with those semantic boundaries.
-    "schema_version": _PINNED_CDP_CONTRACT_SCHEMA_VERSION,
+    "schema_version": 10,
     "policy": "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v10",
-    "instrumentation_policy": _CDP_TARGET_INSTRUMENTATION_POLICY,
+    "instrumentation_policy": (
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v12"
+    ),
     "playwright_version": _PLAYWRIGHT_VERSION,
     "chromium_executable": _CHROMIUM_EXECUTABLE,
     "chromium_version": _CHROMIUM_VERSION,
@@ -938,6 +941,36 @@ _PINNED_CDP_CONTRACT = {
     ],
     "non_replayable_egress_policy": _NON_REPLAYABLE_EGRESS_POLICY,
     "packet_level_egress_completeness_claimed": False,
+}
+_PINNED_CDP_CONTRACT = {
+    **_HISTORICAL_PINNED_CDP_CONTRACT_V11,
+    "schema_version": _PINNED_CDP_CONTRACT_SCHEMA_VERSION,
+    "policy": "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v11",
+    "instrumentation_policy": _CDP_TARGET_INSTRUMENTATION_POLICY,
+    "required_observations": [
+        item
+        for item in _HISTORICAL_PINNED_CDP_CONTRACT_V11["required_observations"]
+        if item
+        not in {
+            "zero-service-worker-and-non-replayable-egress-attempts",
+            "paused-runnable-target-first-script-prearmed-before-execution",
+            "dedicated-and-shared-worker-response-bodies-consumed",
+            "document-only-playwright-route-with-recursive-cdp-subresource-ownership",
+            "shared-worker-guardian-real-detach-ordered-before-final-proof",
+        }
+    ]
+    + [
+        "zero-unsanctioned-service-worker-and-non-replayable-egress-attempts",
+        "paused-runnable-target-first-script-prearmed-before-execution",
+        "dedicated-and-shared-worker-response-bodies-consumed",
+        "document-only-playwright-route-with-recursive-cdp-subresource-ownership",
+        "shared-worker-guardian-real-detach-ordered-before-final-proof",
+        "potentially-trustworthy-loopback-worker-origin",
+        "dedicated-and-shared-worker-webtransport-blocked-after-prearm-with-exact-telemetry",
+    ],
+    "worker_webtransport_probe_schema_version": (
+        _PINNED_CDP_WORKER_WEBTRANSPORT_PROBE_SCHEMA_VERSION
+    ),
 }
 _HISTORICAL_PINNED_CDP_CONTRACT = {
     "schema_version": _HISTORICAL_PINNED_CDP_CONTRACT_SCHEMA_VERSION,
@@ -1010,6 +1043,28 @@ _PINNED_CDP_SERVER_REQUEST_COUNTS = {
 _PINNED_CDP_WORKER_RESPONSE_CONSUMPTION = {
     "dedicated_worker": "qcsd-dedicated-response-consumed",
     "shared_worker": "qcsd-shared-response-consumed",
+}
+_PINNED_CDP_WORKER_WEBTRANSPORT_MEASUREMENT = {
+    "resolved_type": "function",
+    "own_descriptor": "data",
+    "action_issued": True,
+    "action_succeeded": False,
+    "exception_name": "TypeError",
+}
+_PINNED_CDP_WORKER_WEBTRANSPORT_PROBE = {
+    "schema_version": _PINNED_CDP_WORKER_WEBTRANSPORT_PROBE_SCHEMA_VERSION,
+    "by_target_type": {
+        target_type: {
+            "measurement": dict(_PINNED_CDP_WORKER_WEBTRANSPORT_MEASUREMENT),
+            "guard_telemetry": {
+                "notification_count": 1,
+                "api": "WebTransport",
+                "mechanism": "paused-target-runtime-shim",
+                "url": None,
+            },
+        }
+        for target_type in ("shared_worker", "worker")
+    },
 }
 _PINNED_CDP_BOOTSTRAP_PREARM_SUMMARY = {
     "schema_version": _BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION,
@@ -4043,6 +4098,41 @@ def _validate_non_replayable_egress_summary(value: Any) -> None:
         raise WatchError("pinned CDP non-replayable egress identity is invalid")
 
 
+def _validate_worker_webtransport_probe(value: Any) -> None:
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != {"schema_version", "by_target_type"}
+        or type(value.get("schema_version")) is not int
+        or value.get("schema_version") != _PINNED_CDP_WORKER_WEBTRANSPORT_PROBE_SCHEMA_VERSION
+    ):
+        raise WatchError("pinned CDP worker WebTransport probe fields are invalid")
+    by_target_type = value.get("by_target_type")
+    if not isinstance(by_target_type, Mapping) or set(by_target_type) != {
+        "shared_worker",
+        "worker",
+    }:
+        raise WatchError("pinned CDP worker WebTransport target inventory is invalid")
+    for target_type in ("shared_worker", "worker"):
+        item = by_target_type.get(target_type)
+        if not isinstance(item, Mapping) or set(item) != {"measurement", "guard_telemetry"}:
+            raise WatchError("pinned CDP worker WebTransport target fields are invalid")
+        measurement = item.get("measurement")
+        guard = item.get("guard_telemetry")
+        if (
+            not isinstance(measurement, Mapping)
+            or type(measurement.get("action_issued")) is not bool
+            or type(measurement.get("action_succeeded")) is not bool
+            or dict(measurement) != _PINNED_CDP_WORKER_WEBTRANSPORT_MEASUREMENT
+            or not isinstance(guard, Mapping)
+            or type(guard.get("notification_count")) is not int
+            or dict(guard)
+            != _PINNED_CDP_WORKER_WEBTRANSPORT_PROBE["by_target_type"][target_type][
+                "guard_telemetry"
+            ]
+        ):
+            raise WatchError("pinned CDP worker WebTransport action or telemetry did not pass")
+
+
 def _validate_browser_egress_command_line(value: Any) -> None:
     fields = {
         "schema_version",
@@ -4209,6 +4299,7 @@ def _validate_pinned_cdp_observation(value: Any) -> None:
         "dedicated_worker_fetch_paused_on_page",
         "shared_worker_fetch_paused_on_shared_worker",
         "worker_response_consumption",
+        "worker_webtransport_probe",
         "http_status_counts",
         "server_request_counts",
         "bootstrap_prearm_summary",
@@ -4242,6 +4333,7 @@ def _validate_pinned_cdp_observation(value: Any) -> None:
     _validate_bootstrap_prearm_summary(prearm, require_terminal=True)
     egress_prearm = _validate_egress_prearm_summary(topology.get("egress_prearm_summary"))
     _validate_non_replayable_egress_summary(topology.get("non_replayable_egress_summary"))
+    _validate_worker_webtransport_probe(topology.get("worker_webtransport_probe"))
     _validate_browser_egress_command_line(topology.get("browser_egress_command_line"))
     _validate_pinned_target_activity(topology.get("quiescent_target_activity"))
     http_status_counts = topology.get("http_status_counts")

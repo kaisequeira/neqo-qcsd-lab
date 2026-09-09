@@ -27,7 +27,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from .buflo_study import validate_build_execution_receipt
 from .browser_egress import (
     NON_REPLAYABLE_EGRESS_POLICY,
     NonReplayableEgressGuard,
@@ -38,6 +37,7 @@ from .browser_egress import (
     validate_fail_closed_host_resolver_argument,
     validate_non_replayable_egress_success_summary,
 )
+from .buflo_study import validate_build_execution_receipt
 from .cdp_targets import (
     CDP_TARGET_INSTRUMENTATION_POLICY,
     BrowserSharedWorkerGuard,
@@ -77,9 +77,9 @@ from .playwright_driver import (
 )
 from .util import load_json, require_disjoint_path, sha256_file, source_metadata
 
-_PINNED_CDP_APPROVED_ORIGINS = ("http://a.test", "http://b.test")
+_PINNED_CDP_APPROVED_ORIGINS = ("http://localhost", "http://b.test")
 _PINNED_CDP_ORIGIN_IP_PINS = {
-    "http://a.test": "127.0.0.1",
+    "http://localhost": "127.0.0.1",
     "http://b.test": "127.0.0.1",
 }
 _PINNED_CDP_RESOLVER_PROJECTION = validate_fail_closed_host_resolver_argument(
@@ -88,16 +88,31 @@ _PINNED_CDP_RESOLVER_PROJECTION = validate_fail_closed_host_resolver_argument(
         origin_ip_pins=_PINNED_CDP_ORIGIN_IP_PINS,
     )
 )
+# Probe schemas 8, 9, and 11 used ``a.test`` and ``b.test`` as their two
+# loopback-pinned origins.  Keep the exact resulting projection immutable so a
+# later live-topology change cannot silently reinterpret historical evidence.
+_HISTORICAL_PINNED_CDP_RESOLVER_PROJECTION = {
+    "schema_version": 1,
+    "mode": "approved-map-or-exclude-then-not-found",
+    "rule_count": 3,
+    "mapped_host_count": 2,
+    "excluded_host_count": 0,
+    "catch_all_not_found": True,
+    "canonical_rules_sha256": (
+        "d4cb9b5a5ce3719322dedccb391ca058c130a47df7cf22fb1ec436993876e102"
+    ),
+}
 
 RECEIPT_TYPE = "qcsd-class-study-pinned-cdp-probe"
-PROBE_SCHEMA_VERSION = 11
+PROBE_SCHEMA_VERSION = 12
 HISTORICAL_PROBE_SCHEMA_VERSION = 8
-HISTORICAL_PROBE_SCHEMA_VERSIONS = frozenset({8, 9})
+HISTORICAL_PROBE_SCHEMA_VERSIONS = frozenset({8, 9, 11})
 EXPECTED_PLAYWRIGHT_VERSION = PLAYWRIGHT_VERSION
 EXPECTED_CHROMIUM_EXECUTABLE = str(DEFAULT_CONFIGURED_EXECUTABLE)
 PROBE_OBSERVATION_TIMEOUT_MS = 10_000
 PROBE_QUIET_INTERVAL_MS = 250
 TARGET_ACTIVITY_SCHEMA_VERSION = 1
+WORKER_WEBTRANSPORT_PROBE_SCHEMA_VERSION = 1
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _IMAGE_DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _COMMIT = re.compile(r"[0-9a-f]{40}\Z")
@@ -170,20 +185,48 @@ _HISTORICAL_PROBE_CONTRACT = _probe_contract(
 )
 _HISTORICAL_PROBE_CONTRACT_SHA256 = canonical_json_sha256(_HISTORICAL_PROBE_CONTRACT)
 
-PROBE_CONTRACT: dict[str, Any] = _probe_contract(
+_HISTORICAL_PROBE_CONTRACT_V11: dict[str, Any] = _probe_contract(
     schema_version=10,
     policy="pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v10",
-    instrumentation_policy=CDP_TARGET_INSTRUMENTATION_POLICY,
+    instrumentation_policy=(
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v12"
+    ),
     playwright_driver_ownership_policy=OWNERSHIP_POLICY_RECEIPT,
     playwright_driver_binding=EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
 )
-PROBE_CONTRACT["required_observations"].extend(
+_HISTORICAL_PROBE_CONTRACT_V11["required_observations"].extend(
     [
         "paused-runnable-target-first-script-prearmed-before-execution",
         "dedicated-and-shared-worker-response-bodies-consumed",
         "document-only-playwright-route-with-recursive-cdp-subresource-ownership",
         "shared-worker-guardian-real-detach-ordered-before-final-proof",
     ]
+)
+_HISTORICAL_PROBE_CONTRACT_V11_SHA256 = canonical_json_sha256(_HISTORICAL_PROBE_CONTRACT_V11)
+
+PROBE_CONTRACT: dict[str, Any] = _probe_contract(
+    schema_version=11,
+    policy="pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v11",
+    instrumentation_policy=CDP_TARGET_INSTRUMENTATION_POLICY,
+    playwright_driver_ownership_policy=OWNERSHIP_POLICY_RECEIPT,
+    playwright_driver_binding=EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
+)
+PROBE_CONTRACT["required_observations"].remove(
+    "zero-service-worker-and-non-replayable-egress-attempts"
+)
+PROBE_CONTRACT["required_observations"].extend(
+    [
+        "zero-unsanctioned-service-worker-and-non-replayable-egress-attempts",
+        "paused-runnable-target-first-script-prearmed-before-execution",
+        "dedicated-and-shared-worker-response-bodies-consumed",
+        "document-only-playwright-route-with-recursive-cdp-subresource-ownership",
+        "shared-worker-guardian-real-detach-ordered-before-final-proof",
+        "potentially-trustworthy-loopback-worker-origin",
+        "dedicated-and-shared-worker-webtransport-blocked-after-prearm-with-exact-telemetry",
+    ]
+)
+PROBE_CONTRACT["worker_webtransport_probe_schema_version"] = (
+    WORKER_WEBTRANSPORT_PROBE_SCHEMA_VERSION
 )
 PROBE_CONTRACT_SHA256 = canonical_json_sha256(PROBE_CONTRACT)
 
@@ -214,6 +257,59 @@ _EXPECTED_WORKER_RESPONSE_CONSUMPTION = {
     "dedicated_worker": "qcsd-dedicated-response-consumed",
     "shared_worker": "qcsd-shared-response-consumed",
 }
+_EXPECTED_WORKER_WEBTRANSPORT_MEASUREMENT = {
+    "resolved_type": "function",
+    "own_descriptor": "data",
+    "action_issued": True,
+    "action_succeeded": False,
+    "exception_name": "TypeError",
+}
+_WORKER_WEBTRANSPORT_TARGET_TYPES = ("shared_worker", "worker")
+_EXPECTED_WORKER_WEBTRANSPORT_PROBE = {
+    "schema_version": WORKER_WEBTRANSPORT_PROBE_SCHEMA_VERSION,
+    "by_target_type": {
+        target_type: {
+            "measurement": dict(_EXPECTED_WORKER_WEBTRANSPORT_MEASUREMENT),
+            "guard_telemetry": {
+                "notification_count": 1,
+                "api": "WebTransport",
+                "mechanism": "paused-target-runtime-shim",
+                "url": None,
+            },
+        }
+        for target_type in _WORKER_WEBTRANSPORT_TARGET_TYPES
+    },
+}
+_WORKER_WEBTRANSPORT_ACTION_EXPRESSION = r"""
+(() => {
+  const api = 'WebTransport';
+  let descriptor;
+  let owner = globalThis;
+  while (owner !== null && descriptor === undefined) {
+    descriptor = Object.getOwnPropertyDescriptor(owner, api);
+    owner = Object.getPrototypeOf(owner);
+  }
+  const resolvedType = typeof Reflect.get(globalThis, api);
+  const ownDescriptor = descriptor === undefined
+    ? 'absent'
+    : ('value' in descriptor ? 'data' : 'accessor');
+  let actionSucceeded = false;
+  let exceptionName = null;
+  try {
+    new globalThis.WebTransport('https://unapproved.invalid/qcsd-pinned-cdp-worker');
+    actionSucceeded = true;
+  } catch (error) {
+    exceptionName = error && typeof error.name === 'string' ? error.name : 'UnknownError';
+  }
+  return {
+    resolved_type: resolvedType,
+    own_descriptor: ownDescriptor,
+    action_issued: true,
+    action_succeeded: actionSucceeded,
+    exception_name: exceptionName,
+  };
+})()
+""".strip()
 _EXPECTED_PINNED_BOOTSTRAP_PREARM_SUMMARY = {
     "schema_version": 1,
     "held_total": 1,
@@ -330,6 +426,74 @@ class _TargetActivityLedger:
         return _validate_target_activity_summary(value)
 
 
+class _WorkerWebTransportGuardCollector:
+    """Consume only the two explicitly armed worker self-test notifications."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._armed = False
+        self._telemetry: dict[str, dict[str, Any]] = {}
+
+    def arm(self) -> None:
+        with self._lock:
+            if self._armed or self._telemetry:
+                raise RuntimeError("pinned CDP worker WebTransport self-test was armed twice")
+            self._armed = True
+
+    def consume(
+        self,
+        *,
+        source: object | None,
+        api: object,
+        mechanism: object,
+        url: object | None,
+    ) -> bool:
+        """Return true only for one exact, armed notification per worker type."""
+
+        target_type = getattr(source, "target_type", None)
+        with self._lock:
+            if (
+                not self._armed
+                or target_type not in _WORKER_WEBTRANSPORT_TARGET_TYPES
+                or target_type in self._telemetry
+                or api != "WebTransport"
+                or mechanism != "paused-target-runtime-shim"
+                or url is not None
+            ):
+                return False
+            self._telemetry[target_type] = {
+                "notification_count": 1,
+                "api": api,
+                "mechanism": mechanism,
+                "url": url,
+            }
+            return True
+
+    def receipt_if_complete(
+        self,
+        measurements: Mapping[str, object | None],
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            if (
+                not self._armed
+                or set(self._telemetry) != set(_WORKER_WEBTRANSPORT_TARGET_TYPES)
+                or set(measurements) != set(_WORKER_WEBTRANSPORT_TARGET_TYPES)
+                or any(measurements[target_type] is None for target_type in measurements)
+            ):
+                return None
+            value = {
+                "schema_version": WORKER_WEBTRANSPORT_PROBE_SCHEMA_VERSION,
+                "by_target_type": {
+                    target_type: {
+                        "measurement": measurements[target_type],
+                        "guard_telemetry": dict(self._telemetry[target_type]),
+                    }
+                    for target_type in _WORKER_WEBTRANSPORT_TARGET_TYPES
+                },
+            }
+        return _validate_worker_webtransport_probe(value)
+
+
 class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = urlsplit(self.path).path
@@ -344,13 +508,19 @@ class _Handler(BaseHTTPRequestHandler):
                 dedicated_worker: null,
                 shared_worker: null,
             };
+            window.qcsdWorkerWebTransportResults = {
+                worker: null,
+                shared_worker: null,
+            };
             window.qcsdDedicatedWorker = new Worker('/dedicated-worker.js');
             window.qcsdDedicatedWorker.onmessage = event => {
-                window.qcsdWorkerResponses.dedicated_worker = event.data;
+                window.qcsdWorkerResponses.dedicated_worker = event.data.response_consumption;
+                window.qcsdWorkerWebTransportResults.worker = event.data.measurement;
             };
             window.qcsdSharedWorker = new SharedWorker('/shared-worker.js');
             window.qcsdSharedWorker.port.onmessage = event => {
-                window.qcsdWorkerResponses.shared_worker = event.data;
+                window.qcsdWorkerResponses.shared_worker = event.data.response_consumption;
+                window.qcsdWorkerWebTransportResults.shared_worker = event.data.measurement;
             };
             window.qcsdSharedWorker.port.start();
             fetch('/duplicate'); fetch('/duplicate'); fetch('/redirect');
@@ -364,30 +534,46 @@ class _Handler(BaseHTTPRequestHandler):
         elif path == "/frame":
             body, kind = b"<script>fetch('/frame-data')</script>", "text/html"
         elif path == "/dedicated-worker.js":
-            body = b"""(async () => {
+            body = b"""const qcsdWebTransportMeasurement = __QCSD_WORKER_WEBTRANSPORT_ACTION__;
+            (async () => {
                 const response = await fetch('/dedicated-data');
                 const value = await response.text();
-                self.postMessage(
-                    response.status === 200 && value === 'ok'
+                self.postMessage({
+                    response_consumption: response.status === 200 && value === 'ok'
                         ? 'qcsd-dedicated-response-consumed'
-                        : 'qcsd-dedicated-response-invalid'
-                );
-            })().catch(() => self.postMessage('qcsd-dedicated-response-error'));"""
+                        : 'qcsd-dedicated-response-invalid',
+                    measurement: qcsdWebTransportMeasurement,
+                });
+            })().catch(() => self.postMessage({
+                response_consumption: 'qcsd-dedicated-response-error',
+                measurement: qcsdWebTransportMeasurement,
+            }));""".replace(
+                b"__QCSD_WORKER_WEBTRANSPORT_ACTION__",
+                _WORKER_WEBTRANSPORT_ACTION_EXPRESSION.encode(),
+            )
             kind = "text/javascript"
         elif path == "/shared-worker.js":
-            body = b"""self.onconnect = event => {
+            body = b"""const qcsdWebTransportMeasurement = __QCSD_WORKER_WEBTRANSPORT_ACTION__;
+            self.onconnect = event => {
                 const port = event.ports[0];
                 port.start();
                 (async () => {
                     const response = await fetch('/shared-data');
                     const value = await response.text();
-                    port.postMessage(
-                        response.status === 200 && value === 'ok'
+                    port.postMessage({
+                        response_consumption: response.status === 200 && value === 'ok'
                             ? 'qcsd-shared-response-consumed'
-                            : 'qcsd-shared-response-invalid'
-                    );
-                })().catch(() => port.postMessage('qcsd-shared-response-error'));
-            };"""
+                            : 'qcsd-shared-response-invalid',
+                        measurement: qcsdWebTransportMeasurement,
+                    });
+                })().catch(() => port.postMessage({
+                    response_consumption: 'qcsd-shared-response-error',
+                    measurement: qcsdWebTransportMeasurement,
+                }));
+            };""".replace(
+                b"__QCSD_WORKER_WEBTRANSPORT_ACTION__",
+                _WORKER_WEBTRANSPORT_ACTION_EXPRESSION.encode(),
+            )
             kind = "text/javascript"
         elif path in {
             "/dedicated-data",
@@ -440,6 +626,7 @@ def run_pinned_cdp_probe(*, expected_uid: int, expected_gid: int) -> dict[str, A
     browser_context_service_worker_count: int | None = None
     quiescent_target_activity: dict[str, Any] | None = None
     worker_response_consumption: dict[str, str | None] | None = None
+    worker_webtransport_probe: dict[str, Any] | None = None
     chromium_version = ""
     router_closed = False
     browser_guard_closed = False
@@ -448,6 +635,7 @@ def run_pinned_cdp_probe(*, expected_uid: int, expected_gid: int) -> dict[str, A
     browser_closed = False
     egress_guard: NonReplayableEgressGuard | None = None
     router: RecursiveCdpTargetRouter | None = None
+    worker_webtransport_collector = _WorkerWebTransportGuardCollector()
     try:
         with playwright_driver_session(sync_playwright, exclusive=True) as playwright:
             browser, browser_egress_command_line = launch_pinned_cdp_probe_browser(
@@ -522,27 +710,41 @@ def run_pinned_cdp_probe(*, expected_uid: int, expected_gid: int) -> dict[str, A
                             label="probe-policy",
                         )
 
+                def non_replayable_egress(
+                    source: object | None,
+                    api: object,
+                    mechanism: object,
+                    url: object | None,
+                ) -> None:
+                    if worker_webtransport_collector.consume(
+                        source=source,
+                        api=api,
+                        mechanism=mechanism,
+                        url=url,
+                    ):
+                        return
+                    egress_guard.record(
+                        source=source,
+                        api=api,
+                        mechanism=mechanism,
+                        url=url,
+                    )
+
                 router = RecursiveCdpTargetRouter(
                     session,
                     on_event=event,
                     on_target_activity=target_activity.record,
-                    on_non_replayable_egress=lambda source, api, mechanism, url: (
-                        egress_guard.record(
-                            source=source,
-                            api=api,
-                            mechanism=mechanism,
-                            url=url,
-                        )
-                    ),
+                    on_non_replayable_egress=non_replayable_egress,
                 )
                 router.start()
                 browser_guard = BrowserSharedWorkerGuard(browser_session, router)
                 browser_guard.start()
+                worker_webtransport_collector.arm()
                 load_seen = [False]
                 page.on("load", lambda: load_seen.__setitem__(0, True))
                 deadline = time.monotonic() + PROBE_OBSERVATION_TIMEOUT_MS / 1_000
                 page.goto(
-                    f"http://a.test:{server.server_port}/",
+                    f"http://localhost:{server.server_port}/",
                     wait_until="commit",
                     timeout=max(1, round((deadline - time.monotonic()) * 1_000)),
                 )
@@ -556,12 +758,14 @@ def run_pinned_cdp_probe(*, expected_uid: int, expected_gid: int) -> dict[str, A
                 (
                     convergence_generation,
                     worker_response_consumption,
+                    worker_webtransport_probe,
                 ) = _wait_for_required_observations(
                     page,
                     router,
                     observed_events,
                     target_activity,
                     egress_guard,
+                    worker_webtransport_collector,
                     deadline=deadline,
                 )
                 egress_guard.raise_if_failed()
@@ -616,6 +820,7 @@ def run_pinned_cdp_probe(*, expected_uid: int, expected_gid: int) -> dict[str, A
         "browser_egress_command_line": browser_egress_command_line,
         "browser_context_service_worker_count": browser_context_service_worker_count,
         "worker_response_consumption": worker_response_consumption,
+        "worker_webtransport_probe": worker_webtransport_probe,
         "quiescent_target_activity": quiescent_target_activity,
         "router_closed": router_closed,
         "browser_guard_closed": browser_guard_closed,
@@ -769,9 +974,10 @@ def _wait_for_required_observations(
     events: Sequence[tuple[str, str, str]],
     target_activity: _TargetActivityLedger,
     egress_guard: NonReplayableEgressGuard,
+    worker_webtransport_collector: _WorkerWebTransportGuardCollector,
     *,
     deadline: float,
-) -> tuple[int, dict[str, str | None]]:
+) -> tuple[int, dict[str, str | None], dict[str, Any]]:
     """Wait for required topology and a quiet, request-free convergence interval."""
 
     quiet_since: float | None = None
@@ -797,12 +1003,18 @@ def _wait_for_required_observations(
         ):
             worker_responses = _worker_response_consumption(page)
             if worker_responses == _EXPECTED_WORKER_RESPONSE_CONSUMPTION:
-                if quiet_since is None:
+                worker_measurements = _worker_webtransport_measurements(page)
+                worker_probe = worker_webtransport_collector.receipt_if_complete(
+                    worker_measurements
+                )
+                if worker_probe is None:
+                    quiet_since = None
+                elif quiet_since is None:
                     quiet_since = now
                 elif (now - quiet_since) * 1_000 >= PROBE_QUIET_INTERVAL_MS:
                     if now >= deadline:
                         break
-                    return target_generation, worker_responses
+                    return target_generation, worker_responses, worker_probe
             else:
                 quiet_since = None
         else:
@@ -825,6 +1037,58 @@ def _worker_response_consumption(page: Any) -> dict[str, str | None]:
             raise RuntimeError("pinned CDP worker failed to consume its exact response")
         result[worker_type] = observed
     return result
+
+
+def _worker_webtransport_measurements(page: Any) -> dict[str, object | None]:
+    """Read and validate both workers' raw WebTransport constructor outcomes."""
+
+    value = page.evaluate("() => window.qcsdWorkerWebTransportResults")
+    if not isinstance(value, Mapping) or set(value) != set(_WORKER_WEBTRANSPORT_TARGET_TYPES):
+        raise RuntimeError("pinned CDP worker WebTransport state is malformed")
+    result: dict[str, object | None] = {}
+    for target_type in _WORKER_WEBTRANSPORT_TARGET_TYPES:
+        observed = value.get(target_type)
+        if observed is not None and observed != _EXPECTED_WORKER_WEBTRANSPORT_MEASUREMENT:
+            raise RuntimeError("pinned CDP worker WebTransport action was not blocked exactly")
+        result[target_type] = observed
+    return result
+
+
+def _validate_worker_webtransport_probe(value: object) -> dict[str, Any]:
+    """Validate exact action and guard telemetry from both worker target types."""
+
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != {"schema_version", "by_target_type"}
+        or type(value.get("schema_version")) is not int
+        or value.get("schema_version") != WORKER_WEBTRANSPORT_PROBE_SCHEMA_VERSION
+    ):
+        raise ValueError("pinned CDP worker WebTransport probe fields are invalid")
+    by_target_type = value.get("by_target_type")
+    if not isinstance(by_target_type, Mapping) or set(by_target_type) != set(
+        _WORKER_WEBTRANSPORT_TARGET_TYPES
+    ):
+        raise ValueError("pinned CDP worker WebTransport target inventory is invalid")
+    for target_type in _WORKER_WEBTRANSPORT_TARGET_TYPES:
+        item = by_target_type.get(target_type)
+        if not isinstance(item, Mapping) or set(item) != {"measurement", "guard_telemetry"}:
+            raise ValueError("pinned CDP worker WebTransport target fields are invalid")
+        measurement = item.get("measurement")
+        guard = item.get("guard_telemetry")
+        if (
+            not isinstance(measurement, Mapping)
+            or set(measurement) != set(_EXPECTED_WORKER_WEBTRANSPORT_MEASUREMENT)
+            or type(measurement.get("action_issued")) is not bool
+            or type(measurement.get("action_succeeded")) is not bool
+            or dict(measurement) != _EXPECTED_WORKER_WEBTRANSPORT_MEASUREMENT
+            or not isinstance(guard, Mapping)
+            or set(guard) != {"notification_count", "api", "mechanism", "url"}
+            or type(guard.get("notification_count")) is not int
+            or dict(guard)
+            != _EXPECTED_WORKER_WEBTRANSPORT_PROBE["by_target_type"][target_type]["guard_telemetry"]
+        ):
+            raise ValueError("pinned CDP worker WebTransport action or telemetry did not pass")
+    return json.loads(canonical_json_bytes(value))
 
 
 def _validate_target_activity_summary(value: object) -> dict[str, Any]:
@@ -1068,10 +1332,15 @@ def _validate_payload(
         if probe_schema_version == HISTORICAL_PROBE_SCHEMA_VERSION
         else _current_build_identity(build)
     )
-    expected_contract = _HISTORICAL_PROBE_CONTRACT if historical_probe else PROBE_CONTRACT
-    expected_contract_sha256 = (
-        _HISTORICAL_PROBE_CONTRACT_SHA256 if historical_probe else PROBE_CONTRACT_SHA256
-    )
+    if probe_schema_version in {8, 9}:
+        expected_contract = _HISTORICAL_PROBE_CONTRACT
+        expected_contract_sha256 = _HISTORICAL_PROBE_CONTRACT_SHA256
+    elif probe_schema_version == 11:
+        expected_contract = _HISTORICAL_PROBE_CONTRACT_V11
+        expected_contract_sha256 = _HISTORICAL_PROBE_CONTRACT_V11_SHA256
+    else:
+        expected_contract = PROBE_CONTRACT
+        expected_contract_sha256 = PROBE_CONTRACT_SHA256
     prepare_image = build["images"]["prepare"]["id"]
     collection_source = build["source"]
     prepare_source = {**collection_source, "image_digest": prepare_image}
@@ -1091,10 +1360,16 @@ def _validate_payload(
         raise ValueError("pinned CDP probe predates its no-cache build")
     observation = _validate_observation(
         payload.get("observation"),
-        require_worker_response_consumption=not historical_probe,
+        require_worker_response_consumption=probe_schema_version not in {8, 9},
+        require_worker_webtransport_probe=probe_schema_version == PROBE_SCHEMA_VERSION,
+        expected_resolver_projection=(
+            _HISTORICAL_PINNED_CDP_RESOLVER_PROJECTION
+            if historical_probe
+            else _PINNED_CDP_RESOLVER_PROJECTION
+        ),
         expected_playwright_driver_binding=(
             LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_BINDING
-            if historical_probe
+            if probe_schema_version in {8, 9}
             else EXPECTED_PLAYWRIGHT_DRIVER_BINDING
         ),
     )
@@ -1115,7 +1390,9 @@ def _validate_observation(
     value: object,
     *,
     require_worker_response_consumption: bool = True,
+    require_worker_webtransport_probe: bool = True,
     expected_playwright_driver_binding: Mapping[str, Any] = (EXPECTED_PLAYWRIGHT_DRIVER_BINDING),
+    expected_resolver_projection: Mapping[str, Any] = (_PINNED_CDP_RESOLVER_PROJECTION),
 ) -> dict[str, Any]:
     if not isinstance(value, Mapping) or set(value) != {
         "playwright_version",
@@ -1167,6 +1444,8 @@ def _validate_observation(
     }
     if require_worker_response_consumption:
         expected_topology_fields.add("worker_response_consumption")
+    if require_worker_webtransport_probe:
+        expected_topology_fields.add("worker_webtransport_probe")
     if not isinstance(topology, Mapping) or set(topology) != expected_topology_fields:
         raise ValueError("pinned CDP probe topology fields are invalid")
     target_types = topology.get("observed_target_types")
@@ -1210,9 +1489,11 @@ def _validate_observation(
     browser_egress_projection = validate_browser_egress_command_line_projection(
         topology.get("browser_egress_command_line")
     )
-    if browser_egress_projection.get("host_resolver_policy") != _PINNED_CDP_RESOLVER_PROJECTION:
+    if browser_egress_projection.get("host_resolver_policy") != expected_resolver_projection:
         raise ValueError("pinned CDP probe host-resolver policy is invalid")
     target_activity = _validate_target_activity_summary(topology.get("quiescent_target_activity"))
+    if require_worker_webtransport_probe:
+        _validate_worker_webtransport_probe(topology.get("worker_webtransport_probe"))
     activity_by_type = target_activity["by_target_type"]
     http_status_counts = topology.get("http_status_counts")
     server_request_counts = topology.get("server_request_counts")
