@@ -57,6 +57,26 @@ TSHARK_FIELDS = (
 )
 
 
+def _tool_version_stdout_first_line(executable: Path, *, label: str) -> str:
+    """Return a version banner without privilege-dependent stderr diagnostics."""
+
+    try:
+        version = subprocess.run(
+            [str(executable), "--version"],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise ValueError(f"{label} version query timed out") from error
+    lines = version.stdout.splitlines()
+    if version.returncode != 0 or not lines or not lines[0].strip():
+        raise ValueError(f"{label} version query failed")
+    return lines[0]
+
+
 def _integer(value: object, *, label: str, minimum: int = 0) -> int:
     if type(value) is not int or value < minimum:
         raise ValueError(f"{label} must be an integer >= {minimum}")
@@ -648,15 +668,7 @@ def analyse_pcap(
     executable = Path(tshark)
     if executable.is_symlink() or not executable.is_file():
         raise ValueError("tshark executable is unavailable or a symlink")
-    version = subprocess.run(
-        [str(executable), "--version"],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-    if version.returncode != 0 or not version.stdout.strip():
-        raise ValueError("tshark version query failed")
+    version_first_line = _tool_version_stdout_first_line(executable, label="tshark")
     command = tshark_command(Path(pcap), tshark=executable)
     decoded = subprocess.run(
         command,
@@ -672,7 +684,7 @@ def analyse_pcap(
     tool = {
         "path": str(executable),
         "sha256": sha256_file(executable),
-        "version_first_line": version.stdout.splitlines()[0],
+        "version_first_line": version_first_line,
         "fields": list(TSHARK_FIELDS),
         "argv": [*command[:3], "<PCAP>", *command[4:]],
     }
@@ -850,18 +862,8 @@ def validate_capture_receipt(
             or sha256_file(capture_executable) != capture_tool["sha256"]
         ):
             raise ValueError("browser-egress capture-tool executable binding does not verify")
-        version = subprocess.run(
-            [str(capture_executable), "--version"],
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-        if (
-            version.returncode != 0
-            or not version.stdout
-            or version.stdout.splitlines()[0] != capture_tool["version_first_line"]
-        ):
+        version_first_line = _tool_version_stdout_first_line(capture_executable, label="dumpcap")
+        if version_first_line != capture_tool["version_first_line"]:
             raise ValueError("browser-egress capture-tool version binding does not verify")
     return json.loads(canonical_json_bytes(value))
 
@@ -928,15 +930,7 @@ class LivePacketObserver:
             raise ValueError("browser-egress observer is not a fresh capture")
         if self.dumpcap.is_symlink() or not self.dumpcap.is_file():
             raise ValueError("dumpcap executable is unavailable or a symlink")
-        version = subprocess.run(
-            [str(self.dumpcap), "--version"],
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-        if version.returncode != 0 or not version.stdout.strip():
-            raise ValueError("dumpcap version query failed")
+        version_first_line = _tool_version_stdout_first_line(self.dumpcap, label="dumpcap")
         argv = [str(self.dumpcap), "-q", "-i", "any", "-w", str(self.pcap_path)]
         self.process = subprocess.Popen(
             argv,
@@ -959,7 +953,7 @@ class LivePacketObserver:
         self.capture_tool = {
             "path": str(self.dumpcap),
             "sha256": sha256_file(self.dumpcap),
-            "version_first_line": version.stdout.splitlines()[0],
+            "version_first_line": version_first_line,
             "argv": [*argv[:-1], "<PCAP>"],
         }
 

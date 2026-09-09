@@ -12,6 +12,9 @@ from qcsd_lab.browser_egress_fixture import (
     vector_by_id,
 )
 from qcsd_lab.browser_egress_observer import (
+    _tool_version_stdout_first_line,
+    LivePacketObserver,
+    analyse_pcap,
     analyse_packet_records,
     parse_dumpcap_statistics,
     reconcile_sink_and_packet_evidence,
@@ -477,4 +480,153 @@ def test_dumpcap_statistics_requires_explicit_drop_counter() -> None:
         assert (
             parsed["packets_dropped_by_kernel"]
             or parsed["packets_dropped_by_interface"]
+        )
+
+
+def test_packet_decoder_version_binding_ignores_stderr_diagnostics(tmp_path: Path) -> None:
+    tshark = tmp_path / "tshark"
+    tshark.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = --version ]; then\n'
+        "  echo 'privilege-dependent diagnostic' >&2\n"
+        "  echo 'TShark deterministic-version'\n"
+        "fi\n",
+        encoding="utf-8",
+    )
+    tshark.chmod(0o700)
+    pcap = tmp_path / "capture.pcapng"
+    pcap.write_bytes(b"synthetic input ignored by the test decoder")
+
+    analysis, decoder = analyse_pcap(
+        pcap,
+        vector=vector_by_id("constructor--page--websocket"),
+        tshark=tshark,
+    )
+
+    assert analysis["unexpected_browser_egress_packets"] == 0
+    assert decoder["version_first_line"] == "TShark deterministic-version"
+
+
+def test_live_observer_version_binding_ignores_stderr_diagnostics(tmp_path: Path) -> None:
+    dumpcap = tmp_path / "dumpcap"
+    dumpcap.write_text(
+        "#!/usr/bin/env python3\n"
+        "import pathlib, signal, sys, time\n"
+        "if sys.argv[1] == '--version':\n"
+        "    print('privilege-dependent diagnostic', file=sys.stderr)\n"
+        "    print('Dumpcap deterministic-version')\n"
+        "    raise SystemExit(0)\n"
+        "pathlib.Path(sys.argv[5]).write_bytes(b'pcap')\n"
+        "signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))\n"
+        "while True:\n"
+        "    time.sleep(0.1)\n",
+        encoding="utf-8",
+    )
+    dumpcap.chmod(0o700)
+    observer = LivePacketObserver(pcap_path=tmp_path / "capture.pcapng", dumpcap=dumpcap)
+
+    try:
+        observer.start()
+        assert observer.capture_tool is not None
+        assert observer.capture_tool["version_first_line"] == "Dumpcap deterministic-version"
+    finally:
+        if observer.process is not None and observer.process.poll() is None:
+            observer.process.terminate()
+            observer.process.communicate(timeout=5)
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        "#!/bin/sh\necho 'diagnostic only' >&2\n",
+        "#!/bin/sh\necho 'Tool version'\necho 'diagnostic' >&2\nexit 7\n",
+        "#!/bin/sh\nprintf '\\nTool version\\n'\n",
+        "#!/bin/sh\nprintf '  \\nTool version\\n'\n",
+    ],
+)
+def test_tool_version_binding_rejects_empty_stdout_or_nonzero_exit(
+    tmp_path: Path, script: str
+) -> None:
+    executable = tmp_path / "tool"
+    executable.write_text(script, encoding="utf-8")
+    executable.chmod(0o700)
+
+    with pytest.raises(ValueError, match="version query failed"):
+        _tool_version_stdout_first_line(executable, label="test tool")
+
+
+def test_deep_capture_validation_ignores_version_stderr_diagnostics(
+    tmp_path: Path,
+) -> None:
+    tshark = tmp_path / "tshark"
+    tshark.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = --version ]; then\n'
+        "  echo 'root-only tshark warning' >&2\n"
+        "  echo 'TShark deterministic-version'\n"
+        "fi\n",
+        encoding="utf-8",
+    )
+    tshark.chmod(0o700)
+    dumpcap = tmp_path / "dumpcap"
+    dumpcap.write_text(
+        "#!/bin/sh\necho 'root-only dumpcap warning' >&2\necho 'Dumpcap deterministic-version'\n",
+        encoding="utf-8",
+    )
+    dumpcap.chmod(0o700)
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    pcap = evidence / "capture.pcapng"
+    pcap.write_bytes(b"synthetic input ignored by the test decoder")
+    vector = vector_by_id("constructor--page--websocket")
+    analysis, decoder = analyse_pcap(pcap, vector=vector, tshark=tshark)
+    receipt = _capture(vector.vector_id)
+    receipt["pcap"] = {
+        "path": "evidence/capture.pcapng",
+        "sha256": hashlib.sha256(pcap.read_bytes()).hexdigest(),
+        "size_bytes": pcap.stat().st_size,
+    }
+    receipt["analysis"] = analysis
+    receipt["packet_decoder"] = decoder
+    receipt["capture_tool"] = {
+        "path": str(dumpcap),
+        "sha256": hashlib.sha256(dumpcap.read_bytes()).hexdigest(),
+        "version_first_line": "Dumpcap deterministic-version",
+        "argv": [str(dumpcap), "-q", "-i", "any", "-w", "<PCAP>"],
+    }
+
+    assert (
+        validate_capture_receipt(
+            receipt,
+            vector=vector,
+            evidence_root=tmp_path,
+            deep=True,
+            tshark=tshark,
+            dumpcap=dumpcap,
+        )
+        == receipt
+    )
+
+    changed_version = copy.deepcopy(receipt)
+    changed_version["capture_tool"]["version_first_line"] = "Dumpcap changed-version"
+    with pytest.raises(ValueError, match="version binding"):
+        validate_capture_receipt(
+            changed_version,
+            vector=vector,
+            evidence_root=tmp_path,
+            deep=True,
+            tshark=tshark,
+            dumpcap=dumpcap,
+        )
+
+    changed_decoder = copy.deepcopy(receipt)
+    changed_decoder["packet_decoder"]["version_first_line"] = "TShark changed-version"
+    with pytest.raises(ValueError, match="packet decoder binding"):
+        validate_capture_receipt(
+            changed_decoder,
+            vector=vector,
+            evidence_root=tmp_path,
+            deep=True,
+            tshark=tshark,
+            dumpcap=dumpcap,
         )

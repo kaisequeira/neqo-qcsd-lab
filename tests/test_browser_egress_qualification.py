@@ -113,6 +113,7 @@ from qcsd_lab.browser_egress_qualification import (
     validate_result_payload,
 )
 from qcsd_lab.browser_egress_observer import (
+    _tool_version_stdout_first_line,
     analyse_pcap,
     reconcile_sink_and_packet_evidence,
     validate_packet_analysis,
@@ -1333,13 +1334,9 @@ def _passed_receipt(
     pcap_path = result_root / pcap_relative
     packet_count = _write_pcap(pcap_path, vector_id=vector_id)
     analysis, decoder = analyse_pcap(pcap_path, vector=vector)
-    dumpcap_version = subprocess.run(
-        ["/usr/bin/dumpcap", "--version"],
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    ).stdout.splitlines()[0]
+    dumpcap_version = _tool_version_stdout_first_line(
+        Path("/usr/bin/dumpcap"), label="dumpcap"
+    )
     capture = {
         "schema_version": 2,
         "artifact_type": "qcsd-browser-egress-packet-capture",
