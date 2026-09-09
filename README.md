@@ -525,10 +525,48 @@ workload, client, or defence failure.
 Lab implementation commit `6da10dcb52e5856ce580759453925d20550fd683`
 separates tool-version stdout and stderr and binds only stdout's first line. It
 has 470 targeted tests passing, including the separately run full-vector
-closure. It has no fresh image authority; v79 must bind the clean successor
-documentation head.
-Browser-egress remains 0/110, certification remains 0/900, formal capture
-remains 0/16,000, and every other scientific numerator remains zero.
+closure. V79 subsequently bound clean Lab
+`8223740fff4d8f928e912822935cad6d0b8e8426` and unchanged clean Rust/gitlink
+`46313bef90ad392b7ca293ab7cf28108d2f35c7f`. Its canonical fresh
+[build](artifacts/buflo-study/build-execution-v79.json),
+[completion](artifacts/buflo-study/build-completion-v79.json), and
+[pinned-CDP](artifacts/buflo-study/pinned-cdp-execution-v79.json) gates all
+passed. Their whole-file SHA-256 values are respectively
+`b7a01292c23c809ed1f07caddbdf7c5909182e8127a937f6b1975d6b40b5d3a4`,
+`b603e32176ca511b4495fe8f3404d33057baf7dbd477b04a74c61194cbb342b9`,
+and `544f9722526ce6c2c58b829a65176aea2dc58cfd4282957f99bfbcc13dc5dd60`.
+The collection, preparation, and reference image IDs are
+`sha256:3a7f072cbaa951e27d256446a83027a6f59c3c25df813f283b8ece168e781260`,
+`sha256:34880eb856c78a459356d877f44cf9aca20af69ffa1a7aa2458c6a515274d799`,
+and
+`sha256:b404f941716f45fb5ac7cff47819de7acad483447521b022604b3d5ea93c2ad9`.
+
+The [v79 browser-egress checkpoint](artifacts/buflo-study/browser-egress-qualification-v79/experiment.json),
+whole-file SHA-256
+`d5c156f6f69bde227f53b6b76f5679ec25315a7f6c5887dc0d5ae63f9ce8cef6`,
+is open `running` with four sealed, digest-valid, correctly chained passing
+vectors and no final receipt. Vector 5, `constructor--page--rtc-stun-tcp`, has
+a durable attempt intent and a 16,104-byte PCAP but no result: the operator
+interrupted it after mistaking a host-side “assembly result is malformed”
+message for a vector failure. The four messages followed successful result
+publication. Exact diagnosis found that the mutating assembler correctly
+returned `schema_version`, `assembled=true`, and its durable `checkpoint`,
+whereas the host parser admitted only the validate-only two-field response.
+Its ambiguity path re-read the ledger and recovered each result as
+`published-passed`, so the four receipts are valid historical evidence; they
+cannot authorise source changed after v79.
+
+Lab implementation `e57c6229a47524c0b23cb5047a75e9ff6fe2632e`
+now gives the mutating success and failure responses distinct exact schemas,
+retains the lost-output reconciliation path, and prevents ordinary passing
+vectors from entering that path. The focused contract suite passed 12/12, the
+complete CLI suite passed 244/244, and the non-heavy browser-qualification
+suite passed 201/201 with the separately proven full-vector closure explicitly
+deselected; Bash syntax and Ruff checks pass. This is source validation only.
+V80 must rebuild and repeat pinned-CDP before beginning a new 110-vector root.
+Current-head browser-egress therefore remains 0/110, certification remains
+0/900, formal capture remains 0/16,000, and every other scientific numerator
+remains zero.
 
 Summary schema 4 binds the typed schedule-stop policy, stop timestamp,
 sub-cell capacity, direction counts at stop, and exact post-stop advertised
