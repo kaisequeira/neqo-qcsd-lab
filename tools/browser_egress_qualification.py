@@ -1466,7 +1466,8 @@ def _project_runtime(args: argparse.Namespace) -> None:
     ):
         raise ValueError("browser-egress subject output differs from its vector")
     network_raw = _object(args.network_inspect_json, label="Docker network inspection")
-    containers_raw = load_json(args.container_inspect_json)
+    topology_containers_raw = load_json(args.topology_container_inspect_json)
+    terminal_containers_raw = load_json(args.terminal_container_inspect_json)
     volume_raw = load_json(args.volume_inspect_json)
     if (
         not isinstance(fixture_role, Mapping)
@@ -1478,7 +1479,8 @@ def _project_runtime(args: argparse.Namespace) -> None:
         raise ValueError("browser-egress fixture output differs from its vector")
     projection = _docker_projection(
         network_raw,
-        containers_raw,
+        topology_containers_raw,
+        terminal_containers_raw,
         volume_raw,
         vector_id=args.vector_id,
         prepare_image_id=foundation["prepare_image"]["id"],
@@ -1898,7 +1900,8 @@ def _stale_topology_cleanup_plan(args: argparse.Namespace) -> None:
 
 def _docker_projection(
     network: Mapping[str, Any],
-    containers: object,
+    topology_containers: object,
+    terminal_containers: object,
     volume: object,
     *,
     vector_id: str,
@@ -1909,9 +1912,8 @@ def _docker_projection(
     docker_root_dir: str,
     policy_file_inventory: object,
 ) -> dict[str, Any]:
-    if not isinstance(containers, list) or len(containers) != 5:
-        raise ValueError("Docker container inspection must contain five roles")
-    expected_roles = {"browser", "observer", "fixture", "forbidden_sink", "dns_sink"}
+    role_order = ("browser", "observer", "fixture", "forbidden_sink", "dns_sink")
+    expected_roles = set(role_order)
     direct_roles = expected_roles - {"observer"}
     role_suffixes = {
         "browser": "browser",
@@ -1931,19 +1933,85 @@ def _docker_projection(
         "org.qcsd.attempt-number": str(attempt_topology["attempt_number"]),
         "org.qcsd.topology-token": attempt_topology["topology_token"],
     }
+
+    immutable_fields = ("Id", "Name", "Image", "Config", "HostConfig", "Mounts")
+
+    def snapshot_by_role(value: object, *, label: str) -> dict[str, Mapping[str, Any]]:
+        if not isinstance(value, list) or len(value) != len(role_order):
+            raise ValueError(f"Docker {label} inspection must contain five roles")
+        result: dict[str, Mapping[str, Any]] = {}
+        for item in value:
+            if not isinstance(item, Mapping):
+                raise ValueError(f"Docker {label} inspection contains a non-object container")
+            required_fields = (*immutable_fields, "State", "NetworkSettings")
+            if any(field not in item for field in required_fields):
+                raise ValueError(f"Docker {label} inspection container fields are incomplete")
+            if any(
+                not isinstance(item[field], str) or not item[field]
+                for field in ("Id", "Name", "Image")
+            ):
+                raise ValueError(f"Docker {label} inspection container identity is invalid")
+            config = item["Config"]
+            if not isinstance(config, Mapping):
+                raise ValueError(f"Docker {label} inspection container config is invalid")
+            if not isinstance(item["HostConfig"], Mapping):
+                raise ValueError(f"Docker {label} inspection host config is invalid")
+            if not isinstance(item["Mounts"], list):
+                raise ValueError(f"Docker {label} inspection mounts are invalid")
+            if not isinstance(item["State"], Mapping):
+                raise ValueError(f"Docker {label} inspection container state is invalid")
+            network_settings = item["NetworkSettings"]
+            if not isinstance(network_settings, Mapping) or not isinstance(
+                network_settings.get("Networks"), Mapping
+            ):
+                raise ValueError(f"Docker {label} inspection network settings are invalid")
+            item_labels = config.get("Labels") or {}
+            if not isinstance(item_labels, Mapping):
+                raise ValueError(f"Docker {label} inspection container labels are invalid")
+            role = item_labels.get("org.qcsd.role")
+            if role not in expected_roles:
+                raise ValueError(
+                    f"Docker {label} inspection contains an unknown browser-egress role"
+                )
+            if role in result:
+                raise ValueError(
+                    f"Docker {label} inspection contains a duplicate browser-egress role"
+                )
+            result[role] = item
+        if set(result) != expected_roles:
+            raise ValueError(f"Docker {label} inspection omits a browser-egress role")
+        return result
+
+    topology_by_role = snapshot_by_role(topology_containers, label="live-topology")
+    terminal_by_role = snapshot_by_role(terminal_containers, label="terminal-state")
     role_values: dict[str, Any] = {}
-    for item in containers:
-        if not isinstance(item, Mapping):
-            raise ValueError("Docker inspection contains a non-object container")
-        config = item.get("Config", {})
-        host = item.get("HostConfig", {})
-        state = item.get("State", {})
+    for role in role_order:
+        item = topology_by_role[role]
+        terminal_item = terminal_by_role[role]
+        if any(item[field] != terminal_item[field] for field in immutable_fields):
+            raise ValueError(
+                f"Docker {role} immutable fields differ between topology and terminal snapshots"
+            )
+        topology_state = item["State"]
+        terminal_state = terminal_item["State"]
+        if (
+            not isinstance(topology_state, Mapping)
+            or topology_state.get("Running") is not True
+            or topology_state.get("Status") != "running"
+        ):
+            raise ValueError(f"Docker {role} live-topology state is invalid")
+        if (
+            not isinstance(terminal_state, Mapping)
+            or terminal_state.get("Running") is not False
+            or terminal_state.get("Status") != "exited"
+            or type(terminal_state.get("ExitCode")) is not int
+            or terminal_state.get("ExitCode") != 0
+        ):
+            raise ValueError(f"Docker {role} terminal state is invalid")
+        config = item["Config"]
+        host = item["HostConfig"]
+        state = terminal_state
         item_labels = config.get("Labels") or {}
-        role = item_labels.get("org.qcsd.role")
-        if role not in expected_roles:
-            raise ValueError("Docker inspection contains an unknown browser-egress role")
-        if role in role_values:
-            raise ValueError("Docker inspection contains a duplicate browser-egress role")
         projected_labels = _validated_supervised_labels(
             item_labels,
             expected={**labels, "org.qcsd.role": role},
@@ -1953,9 +2021,7 @@ def _docker_projection(
             f"/qcsd-be-{attempt_topology['topology_token']}-{role_suffixes[role]}"
         ):
             raise ValueError("Docker inspection contains an unbound topology name")
-        networks = item.get("NetworkSettings", {}).get("Networks") or {}
-        if not isinstance(networks, Mapping):
-            raise ValueError("Docker container network attachments are invalid")
+        networks = item["NetworkSettings"]["Networks"]
         network_attachments = sorted(
             (
                 {
@@ -2006,7 +2072,7 @@ def _docker_projection(
                         "destination": mount.get("Destination"),
                         "rw": mount.get("RW"),
                     }
-                    for mount in item.get("Mounts", [])
+                    for mount in item["Mounts"]
                 ),
                 key=lambda mount: str(mount["destination"]),
             ),
@@ -2089,6 +2155,12 @@ def _docker_projection(
         }
     value = {
         "schema_version": DOCKER_INSPECT_PROJECTION_SCHEMA_VERSION,
+        "snapshot_model": {
+            "schema_version": 1,
+            "topology_source": "pre-action-live",
+            "terminal_state_source": "post-exit",
+            "immutable_container_fields_cross_checked": True,
+        },
         "network": network_projection,
         "containers": role_values,
         "policy_volume": volume_projection,
@@ -2224,7 +2296,8 @@ def parser() -> argparse.ArgumentParser:
     project.add_argument("--started-at", required=True)
     project.add_argument("--actor-json", type=Path, required=True)
     project.add_argument("--network-inspect-json", type=Path, required=True)
-    project.add_argument("--container-inspect-json", type=Path, required=True)
+    project.add_argument("--topology-container-inspect-json", type=Path, required=True)
+    project.add_argument("--terminal-container-inspect-json", type=Path, required=True)
     project.add_argument("--volume-inspect-json", type=Path, required=True)
     project.add_argument("--fixture-json", type=Path, required=True)
     project.add_argument("--live-docker-json", required=True)

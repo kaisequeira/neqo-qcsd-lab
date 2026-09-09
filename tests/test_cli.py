@@ -3014,15 +3014,49 @@ def test_browser_egress_runtime_projection_declares_stdout_destination() -> None
     assert initialise < capture
 
 
-def test_browser_egress_runtime_projection_serialises_one_network_object() -> None:
+def test_browser_egress_runtime_projection_uses_live_and_terminal_snapshots() -> None:
     launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
-    runtime_inputs = launcher.split(
-        '    _qcsd_docker_api logs "${browser_egress_dns_id}"', maxsplit=1
-    )[1].split("    _qcsd_docker_api container inspect", maxsplit=1)[0]
+    vector_loop = launcher.split('browser_egress_policy_volume_name=""', maxsplit=1)[1].split(
+        "    browser_egress_finished_at=", maxsplit=1
+    )[0]
+    final_readiness = vector_loop.index(
+        'browser_egress_wait_healthy "${browser_egress_dns_id}"'
+    )
+    network_snapshot = vector_loop.index(
+        "network inspect --format '{{json .}}'", final_readiness
+    )
+    topology_snapshot = vector_loop.index(
+        '"${browser_egress_attempt_scratch}/topology-containers.json"',
+        network_snapshot,
+    )
+    first_action = vector_loop.index(
+        'kill --signal USR1 "${browser_egress_observer_id}"', topology_snapshot
+    )
+    observer_exit = vector_loop.index(
+        'browser_egress_observer_exit="$(browser_egress_wait_exit_code', first_action
+    )
+    terminal_snapshot = vector_loop.index(
+        '"${browser_egress_attempt_scratch}/terminal-containers.json"', observer_exit
+    )
+    runtime_projection = vector_loop.index("project-runtime", terminal_snapshot)
 
-    assert "network inspect --format '{{json .}}'" in runtime_inputs
-    assert '"${browser_egress_network_id}"' in runtime_inputs
-    assert '>"${browser_egress_attempt_scratch}/network.json"' in runtime_inputs
+    assert final_readiness < network_snapshot < topology_snapshot < first_action
+    assert first_action < observer_exit < terminal_snapshot < runtime_projection
+    assert '"${browser_egress_network_id}"' in vector_loop[
+        network_snapshot:topology_snapshot
+    ]
+    assert '>"${browser_egress_attempt_scratch}/network.json"' in vector_loop[
+        network_snapshot:topology_snapshot
+    ]
+    assert (
+        "--topology-container-inspect-json /qcsd-input/topology-containers.json"
+        in vector_loop[terminal_snapshot:]
+    )
+    assert (
+        "--terminal-container-inspect-json /qcsd-input/terminal-containers.json"
+        in vector_loop[terminal_snapshot:]
+    )
+    assert "--container-inspect-json /qcsd-input/containers.json" not in vector_loop
 
 
 def test_browser_egress_observer_pcap_extraction_streams_tmpfs_privately(
@@ -3197,6 +3231,180 @@ def test_real_docker_browser_egress_extractor_streams_tmpfs_bytes(
             check=False,
             timeout=10,
         )
+
+
+def test_real_docker_network_container_inspection_has_two_phase_shape() -> None:
+    docker = shutil.which("docker")
+    if docker is None:
+        pytest.skip("Docker CLI is unavailable")
+    probe = subprocess.run(
+        [docker, "info"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+        timeout=10,
+    )
+    if probe.returncode != 0:
+        pytest.skip("Docker daemon is unavailable")
+    image = os.environ.get(
+        "QCSD_BROWSER_EGRESS_SIGNAL_TEST_IMAGE", "neqo-qcsd-lab-prepare:local"
+    )
+    image_probe = subprocess.run(
+        [docker, "image", "inspect", image],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+        timeout=10,
+    )
+    if image_probe.returncode != 0:
+        pytest.skip(f"browser-egress topology-test image is unavailable: {image}")
+
+    token = uuid.uuid4().hex
+    network_name = f"qcsd-network-mode-test-{token}"
+    owner_name = f"qcsd-network-mode-owner-{token}"
+    observer_name = f"qcsd-network-mode-observer-{token}"
+    program = (
+        "import signal\n"
+        "def stop(*_args):\n"
+        "    raise SystemExit(0)\n"
+        "signal.signal(signal.SIGTERM, stop)\n"
+        "print('READY', flush=True)\n"
+        "signal.pause()\n"
+    )
+
+    def checked_docker(*arguments: str, timeout: int = 15) -> subprocess.CompletedProcess[str]:
+        completed = subprocess.run(
+            [docker, *arguments],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+            timeout=timeout,
+        )
+        assert completed.returncode == 0, (arguments, completed.stdout, completed.stderr)
+        return completed
+
+    try:
+        checked_docker("network", "create", "--internal", network_name)
+        owner_id = checked_docker(
+            "run",
+            "--detach",
+            "--name",
+            owner_name,
+            "--network",
+            network_name,
+            "--entrypoint",
+            "/usr/bin/python3",
+            image,
+            "-c",
+            program,
+        ).stdout.strip()
+        observer_id = checked_docker(
+            "run",
+            "--detach",
+            "--name",
+            observer_name,
+            "--network",
+            f"container:{owner_id}",
+            "--entrypoint",
+            "/usr/bin/python3",
+            image,
+            "-c",
+            program,
+        ).stdout.strip()
+        for container_name in (owner_name, observer_name):
+            deadline = time.monotonic() + 10
+            logs = ""
+            while time.monotonic() < deadline:
+                logs = checked_docker("container", "logs", container_name).stdout
+                if logs == "READY\n":
+                    break
+                time.sleep(0.05)
+            assert logs == "READY\n"
+
+        live_network = json.loads(
+            checked_docker(
+                "network", "inspect", "--format", "{{json .}}", network_name
+            ).stdout
+        )
+        live_containers = json.loads(
+            checked_docker("container", "inspect", owner_id, observer_id).stdout
+        )
+        assert isinstance(live_network, dict)
+        assert set(live_network["Containers"]) == {owner_id}
+        assert [container["State"]["Status"] for container in live_containers] == [
+            "running",
+            "running",
+        ]
+        assert [container["State"]["Running"] for container in live_containers] == [
+            True,
+            True,
+        ]
+        owner, observer = live_containers
+        assert owner["HostConfig"]["NetworkMode"] == network_name
+        assert observer["HostConfig"]["NetworkMode"] == f"container:{owner_id}"
+        assert set(owner["NetworkSettings"]["Networks"]) == {network_name}
+        assert observer["NetworkSettings"]["Networks"] == {}
+        owner_namespace = checked_docker(
+            "container", "exec", owner_id, "/usr/bin/readlink", "/proc/1/ns/net"
+        ).stdout.strip()
+        observer_namespace = checked_docker(
+            "container", "exec", observer_id, "/usr/bin/readlink", "/proc/1/ns/net"
+        ).stdout.strip()
+        assert owner_namespace.startswith("net:[") and owner_namespace.endswith("]")
+        assert observer_namespace == owner_namespace
+        owner_attachment = owner["NetworkSettings"]["Networks"][network_name]
+        live_member = live_network["Containers"][owner_id]
+        assert owner_attachment["NetworkID"] == live_network["Id"]
+        assert owner_attachment["EndpointID"] == live_member["EndpointID"] != ""
+        assert owner_attachment["IPAddress"] != ""
+        assert live_member["IPv4Address"].startswith(owner_attachment["IPAddress"] + "/")
+
+        checked_docker(
+            "container", "stop", "--time", "5", observer_id, owner_id, timeout=20
+        )
+        terminal_network = json.loads(
+            checked_docker(
+                "network", "inspect", "--format", "{{json .}}", network_name
+            ).stdout
+        )
+        terminal_containers = json.loads(
+            checked_docker("container", "inspect", owner_id, observer_id).stdout
+        )
+        assert terminal_network["Containers"] == {}
+        for live, terminal in zip(live_containers, terminal_containers, strict=True):
+            assert terminal["State"]["Running"] is False
+            assert terminal["State"]["Status"] == "exited"
+            assert terminal["State"]["ExitCode"] == 0
+            for field in ("Id", "Name", "Image", "Config", "HostConfig", "Mounts"):
+                assert live[field] == terminal[field]
+        terminal_owner, terminal_observer = terminal_containers
+        terminal_attachment = terminal_owner["NetworkSettings"]["Networks"][network_name]
+        assert terminal_attachment["NetworkID"] == live_network["Id"]
+        assert terminal_attachment["EndpointID"] == ""
+        assert terminal_attachment["IPAddress"] == ""
+        assert terminal_observer["NetworkSettings"]["Networks"] == {}
+    finally:
+        cleanup_commands = (
+            ([docker, "container", "rm", "--force", observer_name], 10),
+            ([docker, "container", "rm", "--force", owner_name], 10),
+            ([docker, "network", "rm", network_name], 10),
+        )
+        for command, timeout in cleanup_commands:
+            try:
+                subprocess.run(
+                    command,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                    timeout=timeout,
+                )
+            except subprocess.TimeoutExpired:
+                continue
 
 
 @pytest.mark.parametrize(
@@ -4264,7 +4472,7 @@ def test_browser_egress_projection_accepts_only_real_docker_capability_shape(
     endpoint_ids = {
         role: str(index + 5) * 64 for index, role in enumerate(roles) if role != "observer"
     }
-    containers = []
+    topology_containers = []
     for index, role in enumerate(roles, 1):
         attachment = {}
         if role != "observer":
@@ -4277,7 +4485,7 @@ def test_browser_egress_projection_accepts_only_real_docker_capability_shape(
                     "GlobalIPv6Address": ipv6,
                 }
             }
-        containers.append(
+        topology_containers.append(
             {
                 "Id": str(index) * 64,
                 "Name": f"/qcsd-be-{'c' * 32}-{ {'forbidden_sink': 'forbidden', 'dns_sink': 'dns'}.get(role, role) }",
@@ -4313,7 +4521,7 @@ def test_browser_egress_projection_accepts_only_real_docker_capability_shape(
                 },
                 "NetworkSettings": {"Networks": attachment},
                 "Mounts": [],
-                "State": {"Running": False, "ExitCode": 0, "Status": "exited"},
+                "State": {"Running": True, "ExitCode": 0, "Status": "running"},
             }
         )
     network["Containers"] = {
@@ -4322,13 +4530,26 @@ def test_browser_egress_projection_accepts_only_real_docker_capability_shape(
             "IPv4Address": f"{addresses[role][0]}/24",
             "IPv6Address": f"{addresses[role][1]}/96",
         }
-        for role, container in zip(roles, containers, strict=True)
+        for role, container in zip(roles, topology_containers, strict=True)
         if role != "observer"
     }
 
+    def terminal_snapshot(value: list[dict]) -> list[dict]:
+        terminal = copy.deepcopy(value)
+        for container in terminal:
+            container["State"] = {"Running": False, "ExitCode": 0, "Status": "exited"}
+            for attachment in container["NetworkSettings"]["Networks"].values():
+                attachment["EndpointID"] = ""
+                attachment["IPAddress"] = ""
+                attachment["GlobalIPv6Address"] = ""
+        return terminal
+
+    terminal_containers = terminal_snapshot(topology_containers)
+
     value = project(
         network,
-        containers,
+        topology_containers,
+        terminal_containers,
         None,
         vector_id=vector_id,
         prepare_image_id=image_id,
@@ -4345,6 +4566,199 @@ def test_browser_egress_projection_accepts_only_real_docker_capability_shape(
         "forbidden_sink",
         "dns_sink",
     }
+    assert value["snapshot_model"] == {
+        "schema_version": 1,
+        "topology_source": "pre-action-live",
+        "terminal_state_source": "post-exit",
+        "immutable_container_fields_cross_checked": True,
+    }
+    assert value["containers"]["browser"]["running"] is False
+    assert value["containers"]["browser"]["exit_code"] == 0
+    assert value["containers"]["browser"]["ipv4_address"] == "172.30.98.10"
+
+    immutable_mismatch = copy.deepcopy(terminal_containers)
+    immutable_mismatch[0]["Name"] += "-replaced"
+    with pytest.raises(ValueError, match="immutable fields differ"):
+        project(
+            network,
+            topology_containers,
+            immutable_mismatch,
+            None,
+            vector_id=vector_id,
+            prepare_image_id=image_id,
+            browser_uid=1000,
+            browser_gid=1000,
+            attempt_topology=attempt_topology,
+            docker_root_dir="/var/lib/docker",
+            policy_file_inventory=None,
+        )
+
+    for snapshot_name, field in (
+        ("live-topology", "Id"),
+        ("live-topology", "HostConfig"),
+        ("live-topology", "Mounts"),
+        ("live-topology", "NetworkSettings"),
+        ("terminal-state", "Image"),
+        ("terminal-state", "Config"),
+        ("terminal-state", "State"),
+        ("terminal-state", "NetworkSettings"),
+    ):
+        incomplete_topology = copy.deepcopy(topology_containers)
+        incomplete_terminal = copy.deepcopy(terminal_containers)
+        selected = incomplete_topology if snapshot_name == "live-topology" else incomplete_terminal
+        selected[1 if field == "NetworkSettings" else 0].pop(field)
+        with pytest.raises(ValueError, match=f"Docker {snapshot_name} inspection"):
+            project(
+                network,
+                incomplete_topology,
+                incomplete_terminal,
+                None,
+                vector_id=vector_id,
+                prepare_image_id=image_id,
+                browser_uid=1000,
+                browser_gid=1000,
+                attempt_topology=attempt_topology,
+                docker_root_dir="/var/lib/docker",
+                policy_file_inventory=None,
+            )
+
+    malformed_mounts = copy.deepcopy(topology_containers)
+    malformed_mounts[0]["Mounts"] = {}
+    with pytest.raises(ValueError, match="live-topology inspection mounts"):
+        project(
+            network,
+            malformed_mounts,
+            terminal_containers,
+            None,
+            vector_id=vector_id,
+            prepare_image_id=image_id,
+            browser_uid=1000,
+            browser_gid=1000,
+            attempt_topology=attempt_topology,
+            docker_root_dir="/var/lib/docker",
+            policy_file_inventory=None,
+        )
+
+    malformed_networks = copy.deepcopy(terminal_containers)
+    malformed_networks[1]["NetworkSettings"].pop("Networks")
+    with pytest.raises(ValueError, match="terminal-state inspection network settings"):
+        project(
+            network,
+            topology_containers,
+            malformed_networks,
+            None,
+            vector_id=vector_id,
+            prepare_image_id=image_id,
+            browser_uid=1000,
+            browser_gid=1000,
+            attempt_topology=attempt_topology,
+            docker_root_dir="/var/lib/docker",
+            policy_file_inventory=None,
+        )
+
+    duplicate_terminal_role = copy.deepcopy(terminal_containers)
+    duplicate_terminal_role[0]["Config"]["Labels"]["org.qcsd.role"] = "observer"
+    with pytest.raises(ValueError, match="duplicate browser-egress role"):
+        project(
+            network,
+            topology_containers,
+            duplicate_terminal_role,
+            None,
+            vector_id=vector_id,
+            prepare_image_id=image_id,
+            browser_uid=1000,
+            browser_gid=1000,
+            attempt_topology=attempt_topology,
+            docker_root_dir="/var/lib/docker",
+            policy_file_inventory=None,
+        )
+
+    terminal_running = copy.deepcopy(terminal_containers)
+    terminal_running[0]["State"] = {
+        "Running": True,
+        "ExitCode": 0,
+        "Status": "running",
+    }
+    with pytest.raises(ValueError, match="terminal state"):
+        project(
+            network,
+            topology_containers,
+            terminal_running,
+            None,
+            vector_id=vector_id,
+            prepare_image_id=image_id,
+            browser_uid=1000,
+            browser_gid=1000,
+            attempt_topology=attempt_topology,
+            docker_root_dir="/var/lib/docker",
+            policy_file_inventory=None,
+        )
+
+    terminal_failed = copy.deepcopy(terminal_containers)
+    terminal_failed[0]["State"]["ExitCode"] = 23
+    with pytest.raises(ValueError, match="terminal state"):
+        project(
+            network,
+            topology_containers,
+            terminal_failed,
+            None,
+            vector_id=vector_id,
+            prepare_image_id=image_id,
+            browser_uid=1000,
+            browser_gid=1000,
+            attempt_topology=attempt_topology,
+            docker_root_dir="/var/lib/docker",
+            policy_file_inventory=None,
+        )
+
+    terminal_boolean_exit = copy.deepcopy(terminal_containers)
+    terminal_boolean_exit[0]["State"]["ExitCode"] = False
+    with pytest.raises(ValueError, match="terminal state"):
+        project(
+            network,
+            topology_containers,
+            terminal_boolean_exit,
+            None,
+            vector_id=vector_id,
+            prepare_image_id=image_id,
+            browser_uid=1000,
+            browser_gid=1000,
+            attempt_topology=attempt_topology,
+            docker_root_dir="/var/lib/docker",
+            policy_file_inventory=None,
+        )
+
+    live_stopped = copy.deepcopy(topology_containers)
+    live_stopped[0]["State"] = {"Running": False, "ExitCode": 0, "Status": "exited"}
+    with pytest.raises(ValueError, match="live-topology state"):
+        project(
+            network,
+            live_stopped,
+            terminal_containers,
+            None,
+            vector_id=vector_id,
+            prepare_image_id=image_id,
+            browser_uid=1000,
+            browser_gid=1000,
+            attempt_topology=attempt_topology,
+            docker_root_dir="/var/lib/docker",
+            policy_file_inventory=None,
+        )
+
+    with pytest.raises(ValueError, match="terminal-state inspection must contain five roles"):
+        project(
+            network,
+            topology_containers,
+            terminal_containers[:-1],
+            None,
+            vector_id=vector_id,
+            prepare_image_id=image_id,
+            browser_uid=1000,
+            browser_gid=1000,
+            attempt_topology=attempt_topology,
+            docker_root_dir="/var/lib/docker",
+            policy_file_inventory=None,
+        )
 
     stale = namespace["_stale_topology_cleanup_plan"]
     stale(
@@ -4371,7 +4785,7 @@ def test_browser_egress_projection_accepts_only_real_docker_capability_shape(
                 }
             ),
             network_inspect_json=json.dumps([network]),
-            container_inspect_json=json.dumps(containers),
+            container_inspect_json=json.dumps(topology_containers),
             volume_inspect_json="null",
         )
     )
@@ -4417,12 +4831,12 @@ def test_browser_egress_projection_accepts_only_real_docker_capability_shape(
             SimpleNamespace(
                 resume_plan_json=json.dumps(completed_plan),
                 network_inspect_json=json.dumps([network]),
-                container_inspect_json=json.dumps(containers),
+                container_inspect_json=json.dumps(topology_containers),
                 volume_inspect_json="null",
             )
         )
 
-    mixed_token = copy.deepcopy(containers)
+    mixed_token = copy.deepcopy(topology_containers)
     mixed_token[0]["Config"]["Labels"]["org.qcsd.topology-token"] = "d" * 32
     with pytest.raises(ValueError, match="labels"):
         stale(
@@ -4439,7 +4853,7 @@ def test_browser_egress_projection_accepts_only_real_docker_capability_shape(
             )
         )
 
-    extra_attachment = copy.deepcopy(containers)
+    extra_attachment = copy.deepcopy(topology_containers)
     extra_attachment[0]["NetworkSettings"]["Networks"]["unrelated"] = {
         "NetworkID": "e" * 64,
         "EndpointID": "d" * 64,
@@ -4450,6 +4864,7 @@ def test_browser_egress_projection_accepts_only_real_docker_capability_shape(
         project(
             network,
             extra_attachment,
+            terminal_containers,
             None,
             vector_id=vector_id,
             prepare_image_id=image_id,
@@ -4469,7 +4884,8 @@ def test_browser_egress_projection_accepts_only_real_docker_capability_shape(
     with pytest.raises(ValueError, match="exact four roles"):
         project(
             extra_member,
-            containers,
+            topology_containers,
+            terminal_containers,
             None,
             vector_id=vector_id,
             prepare_image_id=image_id,
@@ -4488,15 +4904,15 @@ def test_browser_egress_projection_accepts_only_real_docker_capability_shape(
     }
     npo0_network = copy.deepcopy(network)
     npo0_network["Labels"] = npo0_supervised_labels
-    npo0_containers = copy.deepcopy(containers)
-    for container in npo0_containers:
+    npo0_topology_containers = copy.deepcopy(topology_containers)
+    for container in npo0_topology_containers:
         role = container["Config"]["Labels"]["org.qcsd.role"]
         container["Config"]["Labels"] = {
             **npo0_supervised_labels,
             "org.qcsd.role": role,
         }
     volume_name = f"qcsd-be-{'c' * 32}-policy0"
-    npo0_containers[0]["Mounts"] = [
+    npo0_topology_containers[0]["Mounts"] = [
         {
             "Type": "volume",
             "Name": volume_name,
@@ -4504,6 +4920,7 @@ def test_browser_egress_projection_accepts_only_real_docker_capability_shape(
             "RW": False,
         }
     ]
+    npo0_terminal_containers = terminal_snapshot(npo0_topology_containers)
     policy_inventory = [
         {
             "path": "/etc/chromium/policies/managed/qcsd-network-prediction.json",
@@ -4529,7 +4946,8 @@ def test_browser_egress_projection_accepts_only_real_docker_capability_shape(
     ]
     npo0_projection = project(
         npo0_network,
-        npo0_containers,
+        npo0_topology_containers,
+        npo0_terminal_containers,
         raw_volume,
         vector_id=npo0_vector,
         prepare_image_id=image_id,
@@ -4562,7 +4980,7 @@ def test_browser_egress_projection_accepts_only_real_docker_capability_shape(
         SimpleNamespace(
             resume_plan_json=json.dumps(npo0_resume),
             network_inspect_json=json.dumps([npo0_network]),
-            container_inspect_json=json.dumps(npo0_containers),
+            container_inspect_json=json.dumps(npo0_topology_containers),
             volume_inspect_json=json.dumps(raw_volume),
         )
     )
@@ -4576,7 +4994,7 @@ def test_browser_egress_projection_accepts_only_real_docker_capability_shape(
             SimpleNamespace(
                 resume_plan_json=json.dumps(npo0_resume),
                 network_inspect_json=json.dumps([npo0_network]),
-                container_inspect_json=json.dumps(npo0_containers),
+                container_inspect_json=json.dumps(npo0_topology_containers),
                 volume_inspect_json=json.dumps(hostile_volume),
             )
         )
@@ -4585,16 +5003,18 @@ def test_browser_egress_projection_accepts_only_real_docker_capability_shape(
             SimpleNamespace(
                 resume_plan_json=json.dumps(npo0_resume),
                 network_inspect_json=json.dumps([npo0_network]),
-                container_inspect_json=json.dumps(npo0_containers),
+                container_inspect_json=json.dumps(npo0_topology_containers),
                 volume_inspect_json="null",
             )
         )
 
-    containers[1]["HostConfig"]["CapAdd"] = ["NET_RAW"]
+    topology_containers[1]["HostConfig"]["CapAdd"] = ["NET_RAW"]
+    terminal_containers[1]["HostConfig"]["CapAdd"] = ["NET_RAW"]
     with pytest.raises(ValueError, match="raw Docker capabilities"):
         project(
             network,
-            containers,
+            topology_containers,
+            terminal_containers,
             None,
             vector_id=vector_id,
             prepare_image_id=image_id,

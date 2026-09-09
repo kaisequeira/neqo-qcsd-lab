@@ -731,6 +731,12 @@ def _docker_projection(
         }
     return {
         "schema_version": DOCKER_INSPECT_PROJECTION_SCHEMA_VERSION,
+        "snapshot_model": {
+            "schema_version": 1,
+            "topology_source": "pre-action-live",
+            "terminal_state_source": "post-exit",
+            "immutable_container_fields_cross_checked": True,
+        },
         "network": {
             "id": network_id,
             "name": "qcsd-browser-egress-v1",
@@ -1491,6 +1497,18 @@ def test_docker_projection_binds_five_exact_distinct_roles_and_network() -> None
     with pytest.raises(ValueError, match="membership differs"):
         validate_docker_inspect_projection(
             unbound_member,
+            vector_id=vector_id,
+            prepare_image_id=prepare,
+            browser_uid=1000,
+            browser_gid=1000,
+            attempt_topology=attempt_topology,
+            docker_root_dir="/var/lib/docker",
+        )
+    wrong_snapshot_model = copy.deepcopy(projection)
+    wrong_snapshot_model["snapshot_model"]["topology_source"] = "post-exit"
+    with pytest.raises(ValueError, match="snapshot model"):
+        validate_docker_inspect_projection(
+            wrong_snapshot_model,
             vector_id=vector_id,
             prepare_image_id=prepare,
             browser_uid=1000,

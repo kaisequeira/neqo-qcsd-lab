@@ -210,7 +210,7 @@ REQUIRED_SOURCE_BINDING_PATHS = (
 )
 
 EFFECTIVE_ARGV_BINDING_SCHEMA_VERSION = 2
-DOCKER_INSPECT_PROJECTION_SCHEMA_VERSION = 2
+DOCKER_INSPECT_PROJECTION_SCHEMA_VERSION = 3
 POLICY_VOLUME_PROJECTION_SCHEMA_VERSION = 1
 POLICY_VOLUME_ROLE = "policy_volume"
 POLICY_SEED_ROLE = "policy_seed"
@@ -1532,10 +1532,11 @@ def validate_docker_inspect_projection(
     attempt_topology: Mapping[str, Any],
     docker_root_dir: str,
 ) -> dict[str, Any]:
-    """Validate the content-minimised post-cleanup Docker/network inspection."""
+    """Validate the content-minimised two-phase Docker inspection."""
 
     if not isinstance(value, Mapping) or set(value) != {
         "schema_version",
+        "snapshot_model",
         "network",
         "containers",
         "policy_volume",
@@ -1543,6 +1544,13 @@ def validate_docker_inspect_projection(
         raise ValueError("browser-egress Docker inspection fields are invalid")
     if value["schema_version"] != DOCKER_INSPECT_PROJECTION_SCHEMA_VERSION:
         raise ValueError("browser-egress Docker inspection schema is invalid")
+    if value["snapshot_model"] != {
+        "schema_version": 1,
+        "topology_source": "pre-action-live",
+        "terminal_state_source": "post-exit",
+        "immutable_container_fields_cross_checked": True,
+    }:
+        raise ValueError("browser-egress Docker snapshot model is invalid")
     daemon_root = PurePosixPath(docker_root_dir)
     if not daemon_root.is_absolute() or daemon_root.as_posix() != docker_root_dir:
         raise ValueError("browser-egress Docker root directory is invalid")

@@ -10668,6 +10668,16 @@ test "$(find /qcsd-policy -mindepth 1 -maxdepth 1 -type f -printf x)" = x
     browser_egress_failure_code=docker-start-failed
     browser_egress_failure_stage=dns-sink-readiness
     browser_egress_wait_healthy "${browser_egress_dns_id}" || false
+    browser_egress_failure_code=runtime-binding-failed
+    browser_egress_failure_stage=live-topology-snapshot
+    _qcsd_docker_api network inspect --format '{{json .}}' \
+      "${browser_egress_network_id}" \
+      >"${browser_egress_attempt_scratch}/network.json"
+    _qcsd_docker_api container inspect \
+      "${browser_egress_browser_id}" "${browser_egress_observer_id}" \
+      "${browser_egress_fixture_id}" "${browser_egress_forbidden_id}" \
+      "${browser_egress_dns_id}" \
+      >"${browser_egress_attempt_scratch}/topology-containers.json"
     browser_egress_failure_code=browser-start-failed
     browser_egress_failure_stage=observer-subject-start
     _qcsd_docker_api kill --signal USR1 "${browser_egress_observer_id}" \
@@ -10723,14 +10733,13 @@ test "$(find /qcsd-policy -mindepth 1 -maxdepth 1 -type f -printf x)" = x
       >"${browser_egress_attempt_scratch}/forbidden.json" || false
     _qcsd_docker_api logs "${browser_egress_dns_id}" \
       >"${browser_egress_attempt_scratch}/dns.json" || false
-    _qcsd_docker_api network inspect --format '{{json .}}' \
-      "${browser_egress_network_id}" \
-      >"${browser_egress_attempt_scratch}/network.json" || false
+    browser_egress_failure_code=runtime-binding-failed
+    browser_egress_failure_stage=terminal-container-snapshot
     _qcsd_docker_api container inspect \
       "${browser_egress_browser_id}" "${browser_egress_observer_id}" \
       "${browser_egress_fixture_id}" "${browser_egress_forbidden_id}" \
       "${browser_egress_dns_id}" \
-      >"${browser_egress_attempt_scratch}/containers.json" || false
+      >"${browser_egress_attempt_scratch}/terminal-containers.json"
     if [[ -n "${browser_egress_policy_volume_name}" ]]; then
       _qcsd_docker_api volume inspect "${browser_egress_policy_volume_name}" \
         >"${browser_egress_attempt_scratch}/volume.json" || false
@@ -10754,7 +10763,8 @@ test "$(find /qcsd-policy -mindepth 1 -maxdepth 1 -type f -printf x)" = x
       --attempt-number "${browser_egress_attempt_number}" \
       --started-at "${browser_egress_started_at}" \
       --actor-json /qcsd-input/actor.json --network-inspect-json /qcsd-input/network.json \
-      --container-inspect-json /qcsd-input/containers.json \
+      --topology-container-inspect-json /qcsd-input/topology-containers.json \
+      --terminal-container-inspect-json /qcsd-input/terminal-containers.json \
       --volume-inspect-json /qcsd-input/volume.json \
       --fixture-json /qcsd-input/fixture.json \
       --live-docker-json "${browser_egress_live_docker_json}" || false
