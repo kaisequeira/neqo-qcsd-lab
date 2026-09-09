@@ -10739,6 +10739,7 @@ test "$(find /qcsd-policy -mindepth 1 -maxdepth 1 -type f -printf x)" = x
     browser_egress_failure_verdict=semantic-failure
     browser_egress_failure_code=runtime-binding-failed
     browser_egress_failure_stage=runtime-projection
+    QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_RUNTIME=""
     qcsd_capture_attached_docker_output QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_RUNTIME \
       docker run --network none --user "${qcsd_invoking_uid}:${qcsd_invoking_gid}" \
       --cap-drop ALL --security-opt no-new-privileges:true --read-only \

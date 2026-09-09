@@ -356,15 +356,46 @@ directory. No final or failure receipt exists, so browser-egress remains 0/110.
 The failure receipt is absent because an unguarded nested helper exited under
 `set -e` without `errtrace` before the attempt-sealing error trap ran.
 
-The implemented source repair replaces archive-copy extraction with
+Clean Lab `2bab7a2c0a0d06e82e0f55102a3c1b7e552ef86f` implemented the source
+repair that replaces archive-copy extraction with
 receipt-verified `docker exec` byte streaming and places the previously
 unguarded nested helpers in the active-attempt `ERR`-trap region at explicit
-conditional or `|| false` boundaries. It changes source and manifest identity,
+conditional or `|| false` boundaries. It changed source and manifest identity,
 so v72 cannot be resumed for current-source evidence. Its acquisition-watcher
-suite passes 262
-tests, but that is engineering-only evidence. Fresh v73 must rebuild and rerun
-every source-bound gate, including pinned-CDP and browser-egress `create`.
-Certification remains 0/900, formal capture remains 0/16,000, and every other
+suite passes 262 tests, but that is engineering-only evidence.
+
+V73 then completed the canonical fresh pull/no-cache three-image build for
+that exact clean Lab source and clean Rust/gitlink
+`46313bef90ad392b7ca293ab7cf28108d2f35c7f`. Its
+[build execution](artifacts/buflo-study/build-execution-v73.json) and
+[completion](artifacts/buflo-study/build-completion-v73.json) whole-file
+SHA-256 values are
+`6ea74774a810af3863803bc7dd4cbc2dccee2c666aac02d7c40daa51ebae2c79`
+and `61d04da97d85c1d22d26242f6c51ea542637c16afa28d41216fdff001ccf853b`.
+The collection, preparation, and isolated-reference image identities are
+`sha256:d39ef6517b1ec2e8d3ac5a0da6906db60340a0eeb01384b5e4f664783bd156c1`,
+`sha256:8b040ea09cc46d94a3a5eb680ca54ab0118cc77ddcce978697a82f0f4aec0532`,
+and
+`sha256:6ae63c6355614a783297a2df29e210a2607d6f7503fc0033ff92c32e3e513e6c`.
+Its [pinned-CDP receipt](artifacts/buflo-study/pinned-cdp-execution-v73.json)
+also passed, with whole-file SHA-256
+`1491dccf83d64e20649dd80acfcefd29a9683494605d6ca6c022a13ce44069b6`.
+
+Browser-egress vector 1 successfully streamed and sealed a 16,168-byte PCAP as
+failure evidence, but the
+[v73 checkpoint](artifacts/buflo-study/browser-egress-qualification-v73/experiment.json)
+is terminal `failed`. Attempt 1 for `constructor--page--websocket` ended
+`runtime-binding-failed` at `runtime-projection` because the launcher had not
+initialised `QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_RUNTIME` before assigning that
+caller binding. It records one sealed `semantic-failure`, no passed vector, and
+`next_vector_ordinal=1`; no final passing browser-egress receipt exists. This
+is an orchestration defect, not an accepted vector, scientific sample, or
+candidate validation. Current source initialises that caller binding and
+postdates v73's exact images, so v73 is historical and non-evidentiary for
+repaired source and must not be resumed. Fresh v74 must rebuild and rerun every
+source-bound gate, including pinned-CDP and browser-egress `create`.
+Browser-egress remains 0/110,
+certification remains 0/900, formal capture remains 0/16,000, and every other
 scientific numerator remains zero.
 
 Summary schema 4 binds the typed schedule-stop policy, stop timestamp,
@@ -1173,7 +1204,10 @@ resumed for current authority. V70 and v71 are consumed without build receipts;
 v72 subsequently passed its fresh no-cache build/completion and pinned-CDP
 gates for clean Lab `3b8c7889…` / Rust `46313bef…`, then failed before sealing
 browser-egress vector 1 during `capture-finalization`. The implemented
-extraction/error-boundary repair postdates that image, so v73 must rebuild and
+extraction/error-boundary repair postdates that image. V73 bound that repair,
+passed its fresh build and pinned-CDP gates, and sealed the vector-1 PCAP before
+the undeclared runtime-projection caller binding stopped the attempt with zero
+passed vectors. The current binding fix postdates v73, so v74 must rebuild and
 repeat the source-bound gates.
 Browser-egress is 0/110,
 timing stress is 0/12, regression is 0/18, and controlled qualification is
@@ -1471,9 +1505,11 @@ without build receipts. V72 then passed its exact clean build/completion and
 pinned-CDP gates, but its browser-egress vector-1 run failed during
 `capture-finalization`, before sealing, because `docker cp` under Docker 29.0.1
 could not extract the tmpfs capture. The receipt-verified `docker exec`
-streaming and error-boundary repair is implemented but postdates v72, so fresh
-v73 build and source-bound gates are required. No downstream scientific
-authority exists.
+streaming and error-boundary repair was bound by v73's passing build and
+pinned-CDP receipts. Its first vector sealed the PCAP, then failed at
+`runtime-projection` because the caller output scalar was undeclared. Current
+source fixes that remaining orchestration defect; fresh v74 build and
+source-bound gates are required. No downstream scientific authority exists.
 
 The build-execution schema-4 integration is committed at clean Lab
 `69a14ebe48f78d08a8b36d3e573955ec64f00ff9`. V61 exercised it but failed before
@@ -1573,9 +1609,12 @@ vector-1 attempt and no final receipt. V70 and v71 are consumed without build
 receipts. V72's valid build/completion and pinned-CDP receipts bind exact clean
 Lab `3b8c7889…` / Rust `46313bef…`, but its browser-egress root has no sealed
 attempt, attempt evidence, final receipt, or failure receipt after its
-`capture-finalization` extraction failure. The current source and manifest
-contain the repair, but no build pair authorises it, so the sequence must start
-again at v73.
+`capture-finalization` extraction failure. V73's valid build/completion and
+pinned-CDP receipts bind clean Lab `2bab7a2c…` / the same Rust and prove the
+streaming repair, but its browser-egress root is terminally failed after the
+runtime-projection binding defect, with no passed vector or final receipt.
+Current source fixes that defect, but no build pair authorises the fix, so the
+sequence must start again at v74.
 
 Earlier on 1 September 2026, a read-only probe found only about 2.19 GB
 available on the backing C: volume and Docker again exposed data-device I/O
@@ -1685,10 +1724,11 @@ Playwright request interception marker-gated and
 subresource admission owner. With the marker absent, native wildcard
 interception remains unchanged; with it active, non-null HTTP credentials are
 rejected before Playwright mutates network-manager state. Schema 7 was built
-and exercised successfully by the v68, v69, and v72 pinned-CDP probes. V72 also
-image-backed the later close/path/budget repair and Rust test-bound correction,
-but the implemented PCAP extraction/error-boundary repair requires a fresh v73
-image. The pinned contract binds post-patch `crNetworkManager.js` SHA-256
+and exercised successfully by the v68, v69, v72, and v73 pinned-CDP probes.
+V73 image-backed the PCAP extraction/error-boundary repair, but its first
+browser vector exposed the remaining caller binding defect. Current source
+fixes that orchestration boundary and requires a fresh v74 image. The pinned
+contract binds post-patch `crNetworkManager.js` SHA-256
 `c10daf1b5c5c6c64e1c545ff7d7bb16f9990aa71c4fe64e081c3a43157d4531a`,
 the 401-file/131,857,836-byte package tree at
 `fdd7094c7b4a9b9a045b1107f357ae9f9f534716f5766c29aa824c421dcca27d`,
@@ -1830,9 +1870,11 @@ v72's fresh build/completion pair and pinned-CDP receipt. Its browser-egress
 vector-1 run then failed during `capture-finalization`, before attempt sealing,
 because `docker cp` under Docker 29.0.1 could not see the tmpfs capture; no
 failure or final receipt exists. The receipt-verified `docker exec` streaming
-and error-boundary repair is implemented, changes source, and therefore
-requires a fresh v73 build/completion pair plus a new pinned-CDP receipt. Pass
-that canonical receipt
+and error-boundary repair was bound by v73's fresh build/completion pair and
+passing pinned-CDP receipt. Its first browser vector sealed the capture before
+the undeclared runtime-projection caller binding produced a terminal failed
+attempt. Current source fixes that binding and therefore requires a fresh v74
+build/completion pair plus a new pinned-CDP receipt. Pass that canonical receipt
 to the foundation command as `--pinned-cdp-receipt "$PINNED_CDP"`. It is the sixth
 explicit foundation hard gate: the foundation binds the receipt and payload
 hashes, its exact build binding, and the fixed probe-contract hash, and requires
@@ -2205,9 +2247,11 @@ its embedded Rust gate before receipt, and v71 was consumed at the retained
 lifecycle boundary. V72 then passed its clean build/completion and pinned-CDP
 gates, but browser-egress vector 1 failed during `capture-finalization`, before
 a sealed attempt. Its durable claim means the registry consumes v62–v72.
-Neither the v69 nor v72 historical checkpoint authorises the repaired source;
-v73 is the exact next permitted value and must be built before any downstream
-gate runs.
+V73 then passed its build/completion and pinned-CDP gates, sealed vector 1's
+PCAP, and terminally failed the runtime projection with no passed vector. Its
+durable claim extends the registry through v73. None of the v69, v72, or v73
+historical checkpoints authorises the current binding repair; v74 is the exact
+next permitted value and must be built before any downstream gate runs.
 
 ```bash
 set -euo pipefail

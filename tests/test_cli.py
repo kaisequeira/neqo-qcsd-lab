@@ -2995,6 +2995,25 @@ def test_browser_egress_observer_protocol_extracts_closed_pcap_before_exit() -> 
     assert 'cp "${browser_egress_observer_id}:/tmp/capture.pcapng"' not in measured
 
 
+def test_browser_egress_runtime_projection_declares_stdout_destination() -> None:
+    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
+    projection = launcher.split(
+        "    browser_egress_failure_stage=runtime-projection\n", maxsplit=1
+    )[1].split(
+        '    printf \'%s\\n\' "${QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_RUNTIME}"',
+        maxsplit=1,
+    )[0]
+
+    initialise = projection.index(
+        '    QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_RUNTIME=""\n'
+    )
+    capture = projection.index(
+        "    qcsd_capture_attached_docker_output "
+        "QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_RUNTIME"
+    )
+    assert initialise < capture
+
+
 def test_browser_egress_observer_pcap_extraction_streams_tmpfs_privately(
     tmp_path: Path,
 ) -> None:
