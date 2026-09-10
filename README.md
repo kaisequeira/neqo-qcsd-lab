@@ -37,6 +37,65 @@ class-study `validation-attestation.json` independently verifies every gate,
 the project status is **five validated defences plus two candidates / nine
 selectable modes**, including the `undefended` and `static` controls.
 
+The current implementation checkpoint is Lab
+`b466cd63e8f17835a75e10e97718cf4aae8b304e` with unchanged clean Rust/gitlink
+`46313bef90ad392b7ca293ab7cf28108d2f35c7f`. Cohort v82 predates the final
+observer correction and binds exact clean Lab
+`045fb99654ef77b93ba7ba3c64d57fcc07b904b9` plus that Rust/gitlink. Its fresh
+pull/no-cache three-image [build](artifacts/buflo-study/build-execution-v82.json)
+and [completion](artifacts/buflo-study/build-completion-v82.json) passed. The
+build's whole-file and payload SHA-256 values are
+`10420ba319848be9763a6f43a17f83015127efb177949a0d1cfb5fe2b0b9790c` /
+`062781095799f8093ffb5b337caf122a76cc3816a05600393d2d9f69fa4d9888`;
+the completion values are
+`c38ad75109a20c0b72c7fc6bd8cc31ee7448afc96727bb65e23c971c9c4d7865` /
+`d611810aaaa57f388b093793f69daab998ddb338b22d3ff4361177598a334db3`.
+The collection, preparation, and isolated-reference image IDs are,
+respectively,
+`sha256:78510f4b0996ba271ce461c12de3fc5d506b9c02ac52c62ec3786ed0468c5183`,
+`sha256:42cb4a543290e475cc3b096163964a7abb148dad01ec0c2b7e1e6f22470afcd3`,
+and
+`sha256:58c0802bce8547cc840664679b8f9ae99fea115799efbce890b7869323e40f19`.
+The source-bound
+[pinned-CDP gate](artifacts/buflo-study/pinned-cdp-execution-v82.json) also
+passed, with whole-file and payload SHA-256
+`d360cab813fbac412f5d518c2f93b63ef2d5c49e886f93c279e2fe6a12c919cd` /
+`0815cfc205cc8f33a17d42d2d29d909ae7336fc4cc767b33be2b6efc43ec4ac`.
+
+The [v82 browser-egress checkpoint](artifacts/buflo-study/browser-egress-qualification-v82/experiment.json)
+has whole-file SHA-256
+`241a5965d0706480b86caa819a133a13a855c7753d511c23d68108983af16aec`.
+It preserves a 68/110 exact passing prefix (vectors 1--68) and an
+operationally failed first attempt at vector 69,
+`urlloader--cross-origin-frame--legacy-csp-report`. That result's whole-file and
+payload SHA-256 values are
+`da5934bc053117d96a8a3090cb4d5e03348d579b0efc834b2734a11d86f2ea37` /
+`2bcf3f802a866ecabd05c213575ec686f770757c6381edf9c33347acae42eada`;
+the whole-file hash is also the checkpoint chain head, and
+`next_vector_ordinal=69`. The vector-69 action reached the expected Fetch
+denial and recorded no forbidden or DNS leakage, but capture finalisation
+raised `browser-egress packet records are not capture ordered`. The schema-3
+observer had incorrectly required libpcap timestamps to be nondecreasing as
+well as requiring increasing `frame.number`; timestamps can legitimately
+regress even though packet-file order remains authoritative. Analysis failed
+before a capture receipt was published, and the old one-phase path did not
+preserve that attempt's tmpfs PCAP. Consequently v82 has no final
+browser-egress receipt: 68 passing vectors are historical prefix evidence, not
+a completed gate, and the current scientific numerator remains **0/110**.
+
+Post-v82 Lab commit `b466cd63e8f17835a75e10e97718cf4aae8b304e`
+separates capture closing/extraction from packet decoding. It publishes a
+capture-closure schema-1 binding and streams the exact closed PCAP to the host
+before analysis, then retains capture-receipt schema 2 for successful attempts.
+Packet-analysis schema 4 defines file order by strictly increasing
+`frame.number`, preserves observed timestamps unchanged, and records timestamp-
+regression count and maximum backward delta as diagnostics. Historical
+packet-analysis schema 3 remains readable and replays its original strict
+timestamp contract. This source change makes v82 non-resumable for current
+authority. Fresh unused cohort v83 must rebuild all three images, pass
+pinned-CDP, and complete the full 110-vector gate before any later acquisition
+numerator can advance.
+
 The BuFLO adaptation drains every allocatable 1,200-byte reviewed-chaff cell
 after the inclusive ten-second minimum. It now separates schedule stop from
 final drain completion: required STREAM work, unconfirmed application sends,
@@ -671,11 +730,15 @@ window; those bounds do not claim every execution lasts 5.1 seconds. The frozen
 vector inventory and lookup are cached so manifest and closure verification do
 not repeatedly reconstruct all 110 vectors. Local verification includes the
 exhaustive 110-vector chain passing 1/1 in 789.31 seconds and all 6/6 pinned-M143
-ping/CSP document-context integrations passing. Current-source browser-egress
-nevertheless remains 0/110, certification is 0/900, formal capture is
-0/16,000, and every other scientific numerator is zero. V82 is the next fresh
-unused allocator-authorised cohort, and may begin only after the repaired
-source is cleanly committed and rebuilt.
+ping/CSP document-context integrations passing. V82 subsequently bound those
+corrections through a passing fresh build/completion pair and pinned-CDP gate,
+then preserved 68 passing browser vectors before vector 69 failed
+operationally during capture finalisation on the observer's invalid monotonic-
+timestamp assumption. It has no final receipt and cannot be resumed after the
+post-v82 observer correction. Current-source browser-egress therefore remains
+0/110, certification is 0/900, formal capture is 0/16,000, and every other
+scientific numerator is zero. V83 is the next fresh unused allocator-authorised
+cohort and requires a new clean build.
 
 Summary schema 4 binds the typed schedule-stop policy, stop timestamp,
 sub-cell capacity, direction counts at stop, and exact post-stop advertised
@@ -1347,9 +1410,13 @@ first-script worker-prearm repair changed source again and left v80's schema-11
 evidence historical-only. V81 bound that repair through a fresh no-cache build
 and passing pinned-CDP gate, but its immutable browser-egress run stopped after
 63 passing vectors when vector 64 exposed the hyperlink-audit semantic-oracle
-error with zero observed leakage. Post-v81 schema-4 corrections require a clean
-commit and fresh v82 build before current-source authority can advance. Every
-downstream scientific counter remains zero.
+error with zero observed leakage. V82 bound the corrected semantics through
+its passing build/completion and pinned-CDP gates, then stopped at capture
+finalisation after vectors 1--68 passed because packet-analysis schema 3
+mistook a legitimate libpcap timestamp regression for reordered capture. The
+post-v82 schema-4/two-phase-closure correction is committed as `b466cd63…304e`;
+fresh v83 must rebuild and rerun the complete gate. Every downstream scientific
+counter remains zero.
 
 The retained post-v55 Lab engineering lineage also hardens durable Docker HANDOFF
 retirement. It permits at most one additional read-only absence observation,
@@ -1529,8 +1596,12 @@ pinned contract to outer schema 12/contract 11/instrumentation v13. V81 bound
 that repair through its fresh no-cache build and passing pinned-CDP gate, then
 sealed 63 passing browser vectors before vector 64 exposed the now-corrected
 hyperlink-audit oracle mismatch with zero observed leakage. V81 cannot be
-resumed; post-v81 schema-4 semantics move fresh-source authority to v82 after a
-clean commit and rebuild.
+resumed. V82 then passed its fresh build/completion and pinned-CDP gates and
+preserved a 68-vector passing prefix before the vector-69 capture-finalisation
+failure exposed the obsolete timestamp-order rule. It has no final receipt and
+cannot authorise the current post-v82 source. Fresh-source authority now moves
+to v83 after a clean rebuild.
+
 Current-head browser-egress is 0/110,
 timing stress is 0/12, regression is 0/18, and controlled qualification is
 0/160. Real acquisition observations remain zero.
@@ -1623,12 +1694,15 @@ first-script worker-prearm repair supersedes both source identities and makes
 outer schema 11/v80 historical-only. V81 subsequently passed a fresh no-cache
 build/completion pair and the schema-12 pinned-CDP gate, then sealed browser
 vectors 1--63 as passing before vector 64 exposed the suppressed-ping oracle
-mismatch with zero leakage. Its immutable root must not be resumed. Only fresh
-unused v82, after a clean commit and rebuild, can attempt the required 110/110
+mismatch with zero leakage. Its immutable root must not be resumed. V82 bound
+the repaired semantic contract and passed build/completion and pinned-CDP, but
+its browser run ended after a 68-vector passing prefix on the vector-69
+timestamp-order capture-finalisation defect. The post-v82 capture-order and
+two-phase closure repair now requires fresh v83 to attempt the required 110/110
 browser-egress gate, isolated
 reference, 12/12 timing stress, 18/18 regression, regression-bound code gate,
 and 160/160 controlled qualification before expanded-class acquisition can
-begin. V55–v81 cannot authorise the changed-source evidence. The
+begin. V55–v82 cannot authorise the changed-source evidence. The
 complete current status and earlier cohort chronology are retained in the
 authoritative workspace [`PROJECT.md`](../PROJECT.md).
 
@@ -1868,9 +1942,11 @@ failures. The completed post-v80 bridge/lifecycle and first-script
 passing fresh no-cache build and schema-12 pinned gate. V81 then sealed 63
 passing browser vectors before vector 64 failed on the historical hyperlink-
 audit semantic-oracle mismatch, without observed leakage. Post-v81 schema-4
-ping/CSP corrections are locally verified but not yet image-bound; fresh unused
-v82 requires a clean commit and build before downstream scientific authority
-can exist.
+ping/CSP corrections were image-bound by v82, whose build/completion and
+pinned-CDP gates passed. Its browser run preserved 68 passing vectors and then
+failed operationally at vector 69 before a capture receipt. The current
+post-v82 observer correction is not image-bound; fresh unused v83 requires a
+clean build before downstream scientific authority can exist.
 
 The build-execution schema-4 integration is committed at clean Lab
 `69a14ebe48f78d08a8b36d3e573955ec64f00ff9`. V61 exercised it but failed before
@@ -1995,8 +2071,11 @@ completed worker bridge/lifecycle repair and deeper real-Chromium first-script
 prearm correction moved the sequence to v81, whose no-cache build and
 schema-12 pinned-CDP gate passed. Its immutable browser-egress run passed
 vectors 1--63 before the vector-64 suppressed-ping oracle failure, with zero
-observed leakage. Post-v81 schema-4 corrections now move the sequence to fresh
-unused v82 after a clean commit/build; v80, v81, and outer schema 11 remain
+observed leakage. V82 then bound the corrected semantic contract, passed its
+build/completion and pinned-CDP gates, and preserved 68 passing vectors before
+the vector-69 schema-3 timestamp-order failure. Current packet-analysis schema
+4 and capture-closure schema 1 postdate that image, so the sequence now moves
+to fresh unused v83 after a clean build; v80--v82 and outer schema 11 remain
 historical-only for current-source authority.
 
 Earlier on 1 September 2026, a read-only probe found only about 2.19 GB
@@ -2121,8 +2200,10 @@ completed post-v80 worker bridge/lifecycle and first-script prearm correction
 was bound by v81's passing fresh no-cache build and schema-12 pinned-CDP gate;
 its browser-egress run passed vectors 1--63 and then sealed the vector-64
 suppressed-ping oracle failure with zero observed leakage. The post-v81
-semantic correction is locally verified but requires a clean commit and fresh
-v82 image before reacquisition. The pinned
+semantic correction was bound by v82's passing build and pinned-CDP receipt;
+its browser run then passed vectors 1--68 before the vector-69 observer
+timestamp-order failure. Current source fixes that independent capture boundary
+and requires a fresh v83 image before reacquisition. The pinned
 contract binds post-patch `crNetworkManager.js` SHA-256
 `c10daf1b5c5c6c64e1c545ff7d7bb16f9990aa71c4fe64e081c3a43157d4531a`,
 the 401-file/131,857,836-byte package tree at
@@ -2300,9 +2381,12 @@ a fixed 5.1-second duration. Cached immutable vector inventory and indexing
 avoid reconstructing the 110-vector manifest throughout closure validation.
 Local verification passed the exhaustive 110-vector chain in 789.31 seconds
 and all 6/6 pinned-M143 integrations spanning ping and CSP across page,
-same-origin-frame, and cross-origin-frame contexts. These changes require a
-clean commit, fresh v82 build/completion pair, pinned-CDP receipt, and complete
-110-vector run; v81 remains immutable failure evidence and must not be resumed.
+same-origin-frame, and cross-origin-frame contexts. V82 bound these changes
+through a passing build/completion pair and pinned-CDP receipt. It then passed
+vectors 1--68 before its vector-69 observer rejected legitimate file-ordered
+packets whose capture timestamps regressed. V82 remains immutable incomplete
+evidence and must not be resumed after commit `b466cd63…304e`; fresh v83 must
+rebuild, pass pinned-CDP, and complete all 110 vectors.
 Pass the successor's canonical pinned-CDP receipt to the foundation command as
 `--pinned-cdp-receipt "$PINNED_CDP"`. It is the sixth
 explicit foundation hard gate: the foundation binds the receipt and payload
@@ -2323,6 +2407,19 @@ only the fail-closed production profile is admitted to public class acquisition.
 The final receipt must bind the exact vector order and digest, fixed Chromium,
 wrapper, managed policy, fixture certificate, resolver topology, effective
 command-line projection, packet captures, build receipt, and preparation image.
+The current observer uses a two-phase capture boundary. After the five-second
+reporting grace it stops `dumpcap`, publishes a capture-closure schema-1 object
+containing the exact PCAP hash, size, tool/process evidence, and chronology,
+then waits while the host streams and verifies those closed bytes. Only then
+may `tshark` decoding and policy analysis begin. A successful attempt still
+publishes capture-receipt schema 2; an analysis failure instead retains the
+closure and raw PCAP only as non-promoted failure evidence. Packet-analysis
+schema 4 treats strictly increasing `frame.number` as capture-file order,
+preserves timestamps without sorting or repair, and records any backwards
+timestamp steps diagnostically. Historical packet-analysis schema 3 remains
+deep-verifiable under its original monotonic-timestamp rule but cannot be used
+to claim current-source acquisition.
+
 The checked-in
 [`browser-egress-qualification-v1.json`](config/class-study/v1/browser-egress-qualification-v1.json)
 manifest has SHA-256
@@ -2346,7 +2443,8 @@ which remains ordinary HTTP/3 over QUIC. The gate proves the exact pinned switch
 policy, resolver and packet-observation contract rather than claiming that a
 Chromium HTTP/3 mechanism was exercised.
 Development probes advance no numerator, and no such current-source receipt
-exists yet.
+exists yet. V82's 68-vector prefix and vector-69 operational failure do not
+substitute for the required final receipt.
 
 The same complete graph is now independently rederived at every downstream
 evidence boundary. For each accepted fitting, pilot-compatibility,
@@ -2700,9 +2798,12 @@ V81 subsequently bound that source through a passing fresh no-cache
 build/completion pair and schema-12 pinned-CDP gate, then passed browser-egress
 vectors 1--63 before vector 64 sealed the suppressed-ping semantic-oracle
 failure with zero leakage. It is immutable and non-resumable. The corrected
-schema-4 ping/CSP semantics are locally verified; fresh unused v82 is the next
-permitted value, only after a clean commit and build, before any downstream
-gate runs.
+schema-4 ping/CSP semantics were bound by v82's passing build/completion and
+pinned-CDP gates; v82 then passed vectors 1--68 before vector 69 failed
+operationally during capture finalisation on the historical timestamp-order
+rule. The current two-phase capture closure and packet-analysis schema 4
+postdate that image. Fresh unused v83 is the next permitted value, only after a
+clean build, before any downstream gate runs.
 
 ```bash
 set -euo pipefail
@@ -3791,8 +3892,14 @@ BROWSER_EGRESS="artifacts/buflo-study/browser-egress-qualification-v${COHORT_VER
 `create` admits the create-only root and begins the ordered 110-vector live
 chain. If and only if it is interrupted after that root has been published,
 continue with the same arguments and replace `create` with `resume`; never
-delete the root or invoke `create` again. `verify` is read-only and succeeds
-only after the final receipt and closed raw/projected inventory deep-verify.
+delete the root or invoke `create` again. A source-changing repair also forbids
+resume: retain the old root as historical evidence and allocate a fresh cohort.
+For every attempt, the observer now publishes and the host verifies capture-
+closure schema 1 and extracts the closed raw PCAP before packet analysis. Only
+a successful analysis publishes capture-receipt schema 2; analysis failure
+preserves the closure and PCAP as failed-attempt evidence without promoting the
+vector. `verify` is read-only and succeeds only after the final receipt and
+closed raw/projected inventory deep-verify.
 The resulting root is passed to `class-study foundation` as
 `--browser-egress-qualification-root "$BROWSER_EGRESS"`.
 
