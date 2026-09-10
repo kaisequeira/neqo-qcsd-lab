@@ -3052,6 +3052,7 @@ _RECOVERABLE_ATTEMPT_ARTIFACTS = frozenset(
         "causal-fixture.json",
         "causal-forbidden.json",
         "causal-runtime.json",
+        "capture-closure.json",
         "capture.pcapng",
         "failure.json",
         "resume-recovery.json",

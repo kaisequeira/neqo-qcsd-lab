@@ -2976,14 +2976,14 @@ def test_real_docker_tini_direct_child_receives_all_browser_egress_phase_signals
         "    name=signal.Signals(number).name\n"
         "    seen.append(name)\n"
         "    print('SIGNAL '+name,flush=True)\n"
-        "for item in (signal.SIGUSR1,signal.SIGUSR2,signal.SIGHUP,signal.SIGTERM):\n"
+        "for item in (signal.SIGUSR1,signal.SIGUSR2,signal.SIGHUP,signal.SIGALRM,signal.SIGTERM):\n"
         "    signal.signal(item,receive)\n"
         "print('READY',flush=True)\n"
         "deadline=time.monotonic()+15\n"
-        "while len(seen)<4 and time.monotonic()<deadline:\n"
+        "while len(seen)<5 and time.monotonic()<deadline:\n"
         "    time.sleep(0.01)\n"
         "print(json.dumps({'signals':seen},sort_keys=True),flush=True)\n"
-        "raise SystemExit(0 if len(seen)==4 else 124)\n"
+        "raise SystemExit(0 if len(seen)==5 else 124)\n"
     )
     try:
         launched = subprocess.run(
@@ -3029,7 +3029,7 @@ def test_real_docker_tini_direct_child_receives_all_browser_egress_phase_signals
             time.sleep(0.05)
         assert "READY\n" in logs
 
-        for phase_signal in ("USR1", "USR2", "HUP", "TERM"):
+        for phase_signal in ("USR1", "USR2", "HUP", "ALRM", "TERM"):
             delivered = subprocess.run(
                 [docker, "kill", "--signal", phase_signal, name],
                 stdin=subprocess.DEVNULL,
@@ -3067,7 +3067,7 @@ def test_real_docker_tini_direct_child_receives_all_browser_egress_phase_signals
             [docker, "logs", name], capture_output=True, text=True, check=False
         ).stdout.splitlines()
         assert json.loads(final_logs[-1]) == {
-            "signals": ["SIGUSR1", "SIGUSR2", "SIGHUP", "SIGTERM"]
+            "signals": ["SIGUSR1", "SIGUSR2", "SIGHUP", "SIGALRM", "SIGTERM"]
         }
     finally:
         subprocess.run(
@@ -3086,6 +3086,17 @@ def _browser_egress_extraction_shell_function() -> str:
         "browser_egress_extract_observer_pcap() {"
         + launcher.split("browser_egress_extract_observer_pcap() {", maxsplit=1)[1].split(
             "\n}\n\nbrowser_egress_wait_container_marker()", maxsplit=1
+        )[0]
+        + "\n}\n"
+    )
+
+
+def _browser_egress_shell_function(name: str, next_name: str) -> str:
+    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
+    return (
+        f"{name}() {{"
+        + launcher.split(f"{name}() {{", maxsplit=1)[1].split(
+            f"\n}}\n\n{next_name}()", maxsplit=1
         )[0]
         + "\n}\n"
     )
@@ -3115,6 +3126,75 @@ def _browser_egress_extraction_receipt(tmp_path: Path, payload: bytes) -> tuple[
     return receipt, evidence_relative
 
 
+def _browser_egress_capture_closure(tmp_path: Path, payload: bytes) -> tuple[Path, str]:
+    evidence_relative = "evidence/001--constructor--page--websocket/attempt-1/capture.pcapng"
+    vector_id = "constructor--page--websocket"
+    closure = tmp_path / "capture-closure.json"
+    closure.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "role": "observer",
+                "vector_id": vector_id,
+                "capture_closure": {
+                    "schema_version": 1,
+                    "artifact_type": "qcsd-browser-egress-capture-closure",
+                    "vector_id": vector_id,
+                    "pcap": {
+                        "path": evidence_relative,
+                        "sha256": hashlib.sha256(payload).hexdigest(),
+                        "size_bytes": len(payload),
+                    },
+                    "observer": {
+                        "network_namespace": "browser",
+                        "interface": "any",
+                        "capture_filter": None,
+                        "privileged": False,
+                        "cap_drop": ["ALL"],
+                        "cap_add": ["CAP_NET_RAW"],
+                        "separate_container": True,
+                    },
+                    "capture_process_terminal": {
+                        "exit_code": 0,
+                        "stderr": (
+                            "Packets captured: 1\n"
+                            "Packets received/dropped on interface 'any': "
+                            "1/0 (pcap:0/dumpcap:0/flushed:0/ps_ifdrop:0) (100.0%)\n"
+                        ),
+                    },
+                    "capture_tool": {
+                        "path": "/usr/bin/dumpcap",
+                        "sha256": "a" * 64,
+                        "version_first_line": "Dumpcap 4.0",
+                        "argv": [
+                            "/usr/bin/dumpcap",
+                            "-q",
+                            "-i",
+                            "any",
+                            "-w",
+                            "<PCAP>",
+                        ],
+                    },
+                    "chronology": {
+                        "observer_started_ns": 1,
+                        "observer_ready_ns": 2,
+                        "subject_started_ns": 3,
+                        "subject_exited_ns": 4,
+                        "reporting_grace_finished_ns": 5_000_000_004,
+                        "observer_stopped_ns": 5_000_000_005,
+                    },
+                },
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    closure.chmod(0o600)
+    return closure, evidence_relative
+
+
 def test_browser_egress_observer_protocol_extracts_closed_pcap_before_exit() -> None:
     launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
     measured = launcher.split(
@@ -3128,13 +3208,156 @@ def test_browser_egress_observer_protocol_extracts_closed_pcap_before_exit() -> 
     grace = measured.index("qcsd-browser-egress-grace.ready")
     fixture_stop = measured.index('for browser_egress_role_id in "${browser_egress_fixture_id}"')
     finish = measured.index('kill --signal HUP "${browser_egress_observer_id}"')
-    receipt = measured.index("qcsd-browser-egress-receipt.ready")
+    closed = measured.index("qcsd-browser-egress-capture-closed.ready")
+    closure = measured.index("browser_egress_fetch_observer_capture_closure")
     extract = measured.index('browser_egress_extract_observer_pcap "${browser_egress_observer_id}"')
+    acknowledge = measured.index('kill --signal ALRM "${browser_egress_observer_id}"')
+    finalise = measured.index("browser_egress_wait_observer_finalisation")
+    receipt = measured.index("browser_egress_wait_observer_receipt")
     stop = measured.index('kill --signal TERM "${browser_egress_observer_id}"')
     wait = measured.index('browser_egress_observer_exit="$(browser_egress_wait_exit_code')
-    assert grace < fixture_stop < finish < receipt < extract < stop < wait
+    assert (
+        grace
+        < fixture_stop
+        < finish
+        < closed
+        < closure
+        < extract
+        < acknowledge
+        < finalise
+        < receipt
+        < stop
+        < wait
+    )
     assert '"${browser_egress_evidence_relative}" || false' in measured
     assert 'cp "${browser_egress_observer_id}:/tmp/capture.pcapng"' not in measured
+
+
+@pytest.mark.parametrize("analysis_fails", [False, True])
+def test_browser_egress_observer_two_phase_close_survives_analysis_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    analysis_fails: bool,
+) -> None:
+    tool_path = Path(__file__).parents[1] / "tools/browser_egress_qualification.py"
+    namespace = runpy.run_path(str(tool_path), run_name="qcsd_browser_egress_observer_test")
+    observer_function = namespace["_observer"]
+    role_globals = observer_function.__globals__
+    payload = b"closed capture bytes"
+    source_root = tmp_path / "closure-source"
+    source_root.mkdir(mode=0o700)
+    closure_path, _evidence_relative = _browser_egress_capture_closure(source_root, payload)
+    closure = json.loads(closure_path.read_text(encoding="utf-8"))["capture_closure"]
+    sequence: list[str] = []
+    emitted: list[dict] = []
+
+    class FakeObserver:
+        def __init__(self, *, pcap_path: Path) -> None:
+            assert pcap_path == tmp_path / "capture.pcapng"
+
+        def start(self) -> None:
+            sequence.append("start")
+
+        def mark_subject_started(self) -> None:
+            sequence.append("subject-started")
+
+        def mark_subject_exited(self) -> None:
+            sequence.append("subject-exited")
+
+        def mark_reporting_grace_finished(self) -> None:
+            sequence.append("grace-finished")
+
+        def close_capture(self, **_kwargs: object) -> dict:
+            sequence.append("close")
+            return closure
+
+        def finish_closed_capture(self, **_kwargs: object) -> dict:
+            sequence.append("analyse")
+            if analysis_fails:
+                raise ValueError("synthetic post-capture analysis failure")
+            return {"schema_version": 2, "pcap": closure["pcap"]}
+
+    closure_destination = tmp_path / "published-closure.json"
+    closed_marker = tmp_path / "capture-closed.ready"
+    failed_marker = tmp_path / "analysis-failed.ready"
+    receipt_marker = tmp_path / "receipt.ready"
+    monkeypatch.setitem(role_globals, "LivePacketObserver", FakeObserver)
+    monkeypatch.setitem(role_globals, "CAPTURE_CLOSURE_PATH", closure_destination)
+    monkeypatch.setitem(role_globals, "CAPTURE_CLOSED_READY_PATH", closed_marker)
+    monkeypatch.setitem(role_globals, "CAPTURE_ANALYSIS_FAILED_READY_PATH", failed_marker)
+    monkeypatch.setitem(role_globals, "RECEIPT_READY_PATH", receipt_marker)
+    monkeypatch.setitem(role_globals, "SUBJECT_STARTED_READY_PATH", tmp_path / "subject.ready")
+    monkeypatch.setitem(role_globals, "GRACE_READY_PATH", tmp_path / "grace.ready")
+    monkeypatch.setitem(role_globals, "_ready", lambda: sequence.append("ready"))
+    monkeypatch.setitem(role_globals, "_wait", lambda _event: sequence.append("wait"))
+    monkeypatch.setitem(role_globals, "_install_stop_event", lambda: object())
+    monkeypatch.setitem(role_globals, "_emit", lambda value: emitted.append(dict(value)))
+    monkeypatch.setattr(role_globals["time"], "sleep", lambda _seconds: None)
+    monkeypatch.setattr(role_globals["signal"], "signal", lambda *_args: None)
+    args = SimpleNamespace(
+        vector_id="constructor--page--websocket",
+        pcap=tmp_path / "capture.pcapng",
+        evidence_relative=closure["pcap"]["path"],
+    )
+
+    if analysis_fails:
+        with pytest.raises(SystemExit) as error:
+            observer_function(args)
+        assert error.value.code == 1
+        assert failed_marker.read_text(encoding="ascii") == "failed\n"
+        assert not receipt_marker.exists()
+        assert emitted == []
+        assert sequence[-2:] == ["analyse", "wait"]
+    else:
+        observer_function(args)
+        assert not failed_marker.exists()
+        assert receipt_marker.read_text(encoding="ascii") == "ready\n"
+        assert len(emitted) == 1 and emitted[0]["role"] == "observer"
+        assert sequence[-3:] == ["wait", "analyse", "wait"]
+    published = json.loads(closure_destination.read_text(encoding="utf-8"))
+    assert published["capture_closure"] == closure
+    assert closed_marker.read_text(encoding="ascii") == "ready\n"
+    assert sequence.index("close") < sequence.index("analyse")
+
+
+@pytest.mark.parametrize(
+    ("marker", "expected_status"),
+    [("receipt", 0), ("analysis-failed", 1)],
+)
+def test_browser_egress_observer_finalisation_distinguishes_analysis_failure(
+    tmp_path: Path,
+    marker: str,
+    expected_status: int,
+) -> None:
+    finalisation = _browser_egress_shell_function(
+        "browser_egress_wait_observer_finalisation",
+        "browser_egress_wait_exit_code",
+    )
+    script = tmp_path / f"finalisation-{marker}.sh"
+    script.write_text(
+        "set -euo pipefail\n"
+        + finalisation
+        + f"MARKER={marker!r}\n"
+        + "_qcsd_docker_api() {\n"
+        + '  if [[ "$1" == exec && "$5" == /tmp/qcsd-browser-egress-receipt.ready ]]; '
+        + 'then [[ "$MARKER" == receipt ]]; return; fi\n'
+        + '  if [[ "$1" == exec && "$5" == '
+        + '/tmp/qcsd-browser-egress-capture-analysis-failed.ready ]]; '
+        + 'then [[ "$MARKER" == analysis-failed ]]; return; fi\n'
+        + '  if [[ "$1 $2" == "container inspect" ]]; then echo running; return; fi\n'
+        + "  return 90\n"
+        + "}\n"
+        + "browser_egress_wait_observer_finalisation observer\n",
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        ["bash", str(script)], capture_output=True, text=True, check=False, timeout=10
+    )
+    assert completed.returncode == expected_status
+    if marker == "analysis-failed":
+        assert "rejected the closed capture during analysis" in completed.stderr
+    else:
+        assert completed.stderr == ""
 
 
 def test_browser_egress_runtime_projection_declares_stdout_destination() -> None:
@@ -3229,6 +3452,136 @@ def test_browser_egress_observer_pcap_extraction_streams_tmpfs_privately(
     assert destination.read_bytes() == payload
     assert stat.S_IMODE(destination.stat().st_mode) == 0o600
     assert destination.stat().st_nlink == 1
+
+
+def test_browser_egress_fetches_create_only_canonical_capture_closure(
+    tmp_path: Path,
+) -> None:
+    fetch = _browser_egress_shell_function(
+        "browser_egress_fetch_observer_capture_closure",
+        "browser_egress_extract_observer_pcap",
+    )
+    payload = b"closed capture bytes"
+    source_root = tmp_path / "source"
+    destination_root = tmp_path / "scratch"
+    source_root.mkdir(mode=0o700)
+    destination_root.mkdir(mode=0o700)
+    source, evidence_relative = _browser_egress_capture_closure(source_root, payload)
+    destination = destination_root / "capture-closure.json"
+    script = tmp_path / "fetch-closure.sh"
+    script.write_text(
+        "set -euo pipefail\n"
+        + fetch
+        + f"qcsd_invoking_uid={os.getuid()}\n"
+        + f"qcsd_invoking_gid={os.getgid()}\n"
+        + "_qcsd_docker_api() {\n"
+        + '  [[ "$1" == exec && "$2" == observer && "$3" == /bin/cat && '
+        + '"$4" == -- && "$5" == /tmp/qcsd-browser-egress-capture-closure.json ]]\n'
+        + f"  /bin/cat -- {str(source)!r}\n"
+        + "}\n"
+        + "browser_egress_fetch_observer_capture_closure observer "
+        + f"{str(destination)!r} {evidence_relative!r} "
+        + "constructor--page--websocket\n",
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        ["bash", str(script)], capture_output=True, text=True, check=False, timeout=10
+    )
+    assert completed.returncode == 0, (completed.stdout, completed.stderr)
+    assert completed.stdout == ""
+    assert completed.stderr == ""
+    assert destination.read_bytes() == source.read_bytes()
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o600
+    assert destination.stat().st_nlink == 1
+
+    repeated = subprocess.run(
+        ["bash", str(script)], capture_output=True, text=True, check=False, timeout=10
+    )
+    assert repeated.returncode != 0
+    assert "destination is unsafe" in repeated.stderr
+    assert destination.read_bytes() == source.read_bytes()
+
+
+def test_browser_egress_observer_pcap_extraction_accepts_capture_closure(
+    tmp_path: Path,
+) -> None:
+    extraction = _browser_egress_extraction_shell_function()
+    payload = b"closed capture bytes"
+    closure, evidence_relative = _browser_egress_capture_closure(tmp_path, payload)
+    evidence_parent = tmp_path / "attempt"
+    evidence_parent.mkdir(mode=0o700)
+    destination = evidence_parent / "capture.pcapng"
+    script = tmp_path / "extract-from-closure.sh"
+    script.write_text(
+        "set -euo pipefail\n"
+        + extraction
+        + f"qcsd_invoking_uid={os.getuid()}\n"
+        + f"qcsd_invoking_gid={os.getgid()}\n"
+        + "_qcsd_docker_api() {\n"
+        + '  [[ "$1" == exec && "$2" == observer && "$3" == /bin/cat && '
+        + '"$4" == -- && "$5" == /tmp/capture.pcapng ]]\n'
+        + "  printf %s 'closed capture bytes'\n"
+        + "}\n"
+        + "browser_egress_extract_observer_pcap observer "
+        + f"{str(destination)!r} {str(closure)!r} {evidence_relative!r}\n",
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        ["bash", str(script)], capture_output=True, text=True, check=False, timeout=10
+    )
+    assert completed.returncode == 0, (completed.stdout, completed.stderr)
+    assert destination.read_bytes() == payload
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o600
+
+
+def test_browser_egress_capture_closure_is_failure_only_and_idempotently_preserved(
+    tmp_path: Path,
+) -> None:
+    preserve = _browser_egress_shell_function(
+        "browser_egress_preserve_capture_closure",
+        "browser_egress_preserve_causal_evidence",
+    )
+    payload = b"closed capture bytes"
+    scratch = tmp_path / "scratch"
+    attempt = tmp_path / "attempt"
+    scratch.mkdir(mode=0o700)
+    attempt.mkdir(mode=0o700)
+    closure, evidence_relative = _browser_egress_capture_closure(scratch, payload)
+    capture = attempt / "capture.pcapng"
+    capture.write_bytes(payload)
+    capture.chmod(0o600)
+    destination = attempt / "capture-closure.json"
+    script = tmp_path / "preserve-closure.sh"
+    script.write_text(
+        "set -euo pipefail\n"
+        + preserve
+        + f"browser_egress_attempt_scratch={str(scratch)!r}\n"
+        + f"browser_egress_attempt_evidence_host={str(attempt)!r}\n"
+        + f"browser_egress_evidence_host={str(capture)!r}\n"
+        + f"browser_egress_evidence_relative={evidence_relative!r}\n"
+        + "browser_egress_vector_id=constructor--page--websocket\n"
+        + f"qcsd_invoking_uid={os.getuid()}\n"
+        + f"qcsd_invoking_gid={os.getgid()}\n"
+        + "browser_egress_preserve_capture_closure\n",
+        encoding="utf-8",
+    )
+    for _ in range(2):
+        completed = subprocess.run(
+            ["bash", str(script)], capture_output=True, text=True, check=False, timeout=10
+        )
+        assert completed.returncode == 0, (completed.stdout, completed.stderr)
+    assert destination.read_bytes() == closure.read_bytes()
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o600
+    assert destination.stat().st_nlink == 1
+
+    destination.write_bytes(b"conflicting evidence")
+    destination.chmod(0o600)
+    conflict = subprocess.run(
+        ["bash", str(script)], capture_output=True, text=True, check=False, timeout=10
+    )
+    assert conflict.returncode != 0
+    assert "conflicts" in conflict.stderr
+    assert destination.read_bytes() == b"conflicting evidence"
 
 
 def test_real_docker_browser_egress_extractor_streams_tmpfs_bytes(
@@ -4088,6 +4441,7 @@ def test_browser_egress_cleanup_returns_and_err_path_seals_after_cleanup(
         + "QCSD_DOCKER_IDS_BROWSER_EGRESS_VOLUMES=()\n"
         + '_qcsd_docker_api() { echo cleanup >>"$LOG"; }\n'
         + "qcsd_retire_docker_handoff() { :; }\n"
+        + "browser_egress_preserve_capture_closure() { :; }\n"
         + "browser_egress_preserve_causal_evidence() { :; }\n"
         + 'qcsd_run_attached_docker() { echo record-failure >>"$LOG"; }\n'
         + "trap browser_egress_record_failed_attempt ERR\n"
@@ -4355,6 +4709,8 @@ def test_browser_egress_ledger_writes_protect_prior_evidence() -> None:
     ) in launcher
     assert "browser_egress_finalize_mounts" in launcher
     assert "browser_egress_record_failed_attempt" in launcher
+    assert "browser_egress_preserve_capture_closure" in launcher
+    assert '"${browser_egress_attempt_evidence_host}/capture-closure.json"' in launcher
     assert '"${browser_egress_attempt_evidence_host}:' in launcher
     assert "record-failure" in launcher
     assert "trap browser_egress_record_failed_attempt ERR" in launcher
@@ -4377,6 +4733,9 @@ def test_browser_egress_tool_freezes_execution_verification_and_role_phases() ->
     assert 'commands.add_parser("record-failure")' in tool
     assert 'commands.add_parser("reconcile-filesystem")' in tool
     assert 'GRACE_READY_PATH.write_text("ready\\n"' in tool
+    assert "_publish_private_canonical_json(" in tool
+    assert 'CAPTURE_CLOSED_READY_PATH.write_text("ready\\n"' in tool
+    assert 'CAPTURE_ANALYSIS_FAILED_READY_PATH.write_text("failed\\n"' in tool
     assert 'RECEIPT_READY_PATH.write_text("ready\\n"' in tool
     observer = tool.split("def _observer(", maxsplit=1)[1].split("\ndef _foundation(", maxsplit=1)[
         0
@@ -4384,7 +4743,10 @@ def test_browser_egress_tool_freezes_execution_verification_and_role_phases() ->
     assert (
         observer.index("observer.mark_reporting_grace_finished()")
         < observer.index("_wait(finish_capture)")
-        < observer.index("observer.finish(")
+        < observer.index("observer.close_capture(")
+        < observer.index("_publish_private_canonical_json(")
+        < observer.index("_wait(capture_extracted)")
+        < observer.index("observer.finish_closed_capture(")
         < observer.index("_wait(stopped)")
     )
     assert "BrowserFixtureServer(" in tool and "vector=vector" in tool

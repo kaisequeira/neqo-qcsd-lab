@@ -9526,6 +9526,177 @@ if raw != canonical or not isinstance(value, dict) or value.get("role") != "obse
   return 1
 }
 
+browser_egress_fetch_observer_capture_closure() {
+  local container_id="$1" destination="$2" evidence_relative="$3" vector_id="$4"
+  local parent
+  parent="$(dirname -- "${destination}")"
+  if [[ -z "${container_id}" || "${destination}" != /* ||
+        -z "${evidence_relative}" || -z "${vector_id}" ||
+        -L "${parent}" || ! -d "${parent}" ||
+        -e "${destination}" || -L "${destination}" ]]; then
+    echo "browser-egress capture-closure destination is unsafe" >&2
+    return 1
+  fi
+  if ! _qcsd_docker_api exec "${container_id}" \
+      /bin/cat -- /tmp/qcsd-browser-egress-capture-closure.json | python3 -I -c '
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+
+destination = Path(sys.argv[1])
+expected_relative = sys.argv[2]
+expected_vector = sys.argv[3]
+expected_uid = int(sys.argv[4])
+expected_gid = int(sys.argv[5])
+raw = sys.stdin.buffer.read(2 * 1024 * 1024 + 1)
+if not raw or len(raw) > 2 * 1024 * 1024:
+    raise SystemExit("browser-egress capture closure has an invalid size")
+try:
+    role = json.loads(raw)
+except (UnicodeDecodeError, json.JSONDecodeError) as error:
+    raise SystemExit("browser-egress capture closure is invalid JSON") from error
+canonical = (json.dumps(role, indent=2, sort_keys=True, allow_nan=False) + "\n").encode()
+if (
+    raw != canonical
+    or not isinstance(role, dict)
+    or set(role) != {"schema_version", "role", "vector_id", "capture_closure"}
+    or role.get("schema_version") != 1
+    or role.get("role") != "observer"
+    or role.get("vector_id") != expected_vector
+):
+    raise SystemExit("browser-egress capture closure role binding is invalid")
+closure = role["capture_closure"]
+closure_fields = {
+    "schema_version", "artifact_type", "vector_id", "pcap", "observer",
+    "capture_process_terminal", "capture_tool", "chronology",
+}
+if (
+    not isinstance(closure, dict)
+    or set(closure) != closure_fields
+    or closure.get("schema_version") != 1
+    or closure.get("artifact_type") != "qcsd-browser-egress-capture-closure"
+    or closure.get("vector_id") != expected_vector
+):
+    raise SystemExit("browser-egress capture closure identity is invalid")
+capture = closure["pcap"]
+if (
+    not isinstance(capture, dict)
+    or set(capture) != {"path", "sha256", "size_bytes"}
+    or capture.get("path") != expected_relative
+    or not isinstance(capture.get("sha256"), str)
+    or re.fullmatch(r"[0-9a-f]{64}", capture["sha256"]) is None
+    or type(capture.get("size_bytes")) is not int
+    or capture["size_bytes"] <= 0
+):
+    raise SystemExit("browser-egress capture closure PCAP binding is invalid")
+if closure["observer"] != {
+    "network_namespace": "browser", "interface": "any", "capture_filter": None,
+    "privileged": False, "cap_drop": ["ALL"], "cap_add": ["CAP_NET_RAW"],
+    "separate_container": True,
+}:
+    raise SystemExit("browser-egress capture closure observer binding is invalid")
+process = closure["capture_process_terminal"]
+if (
+    not isinstance(process, dict)
+    or set(process) != {"exit_code", "stderr"}
+    or type(process.get("exit_code")) is not int
+    or not isinstance(process.get("stderr"), str)
+):
+    raise SystemExit("browser-egress capture closure terminal-process binding is invalid")
+tool = closure["capture_tool"]
+if (
+    not isinstance(tool, dict)
+    or set(tool) != {"path", "sha256", "version_first_line", "argv"}
+    or not isinstance(tool.get("path"), str)
+    or not isinstance(tool.get("sha256"), str)
+    or re.fullmatch(r"[0-9a-f]{64}", tool["sha256"]) is None
+    or not isinstance(tool.get("version_first_line"), str)
+    or not tool["version_first_line"]
+    or not isinstance(tool.get("argv"), list)
+    or any(not isinstance(item, str) or not item for item in tool["argv"])
+):
+    raise SystemExit("browser-egress capture closure tool binding is invalid")
+chronology = closure["chronology"]
+chronology_fields = {
+    "observer_started_ns", "observer_ready_ns", "subject_started_ns",
+    "subject_exited_ns", "reporting_grace_finished_ns", "observer_stopped_ns",
+}
+if (
+    not isinstance(chronology, dict)
+    or set(chronology) != chronology_fields
+    or any(type(value) is not int or value < 0 for value in chronology.values())
+    or not (
+        chronology["observer_started_ns"] <= chronology["observer_ready_ns"]
+        <= chronology["subject_started_ns"] <= chronology["subject_exited_ns"]
+        <= chronology["reporting_grace_finished_ns"] <= chronology["observer_stopped_ns"]
+    )
+    or chronology["reporting_grace_finished_ns"] - chronology["subject_exited_ns"]
+    < 5_000_000_000
+):
+    raise SystemExit("browser-egress capture closure chronology is invalid")
+parent = destination.parent
+parent_descriptor = os.open(
+    parent, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_DIRECTORY
+)
+output_descriptor = -1
+created = False
+keep = False
+try:
+    parent_metadata = os.fstat(parent_descriptor)
+    if (
+        not stat.S_ISDIR(parent_metadata.st_mode)
+        or parent_metadata.st_uid != expected_uid
+        or parent_metadata.st_gid != expected_gid
+        or stat.S_IMODE(parent_metadata.st_mode) != 0o700
+    ):
+        raise SystemExit("browser-egress capture closure parent is unsafe")
+    output_descriptor = os.open(
+        destination.name,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+        0o600,
+        dir_fd=parent_descriptor,
+    )
+    created = True
+    view = memoryview(raw)
+    while view:
+        written = os.write(output_descriptor, view)
+        if written <= 0:
+            raise OSError("browser-egress capture closure write made no progress")
+        view = view[written:]
+    os.fchmod(output_descriptor, 0o600)
+    metadata = os.fstat(output_descriptor)
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != expected_uid
+        or metadata.st_gid != expected_gid
+        or stat.S_IMODE(metadata.st_mode) != 0o600
+        or metadata.st_nlink != 1
+        or metadata.st_size != len(raw)
+    ):
+        raise SystemExit("browser-egress capture closure inode is unsafe")
+    os.fsync(output_descriptor)
+    os.fsync(parent_descriptor)
+    keep = True
+finally:
+    if output_descriptor >= 0:
+        os.close(output_descriptor)
+    if created and not keep:
+        try:
+            os.unlink(destination.name, dir_fd=parent_descriptor)
+            os.fsync(parent_descriptor)
+        except FileNotFoundError:
+            pass
+    os.close(parent_descriptor)
+' "${destination}" "${evidence_relative}" "${vector_id}" \
+      "${qcsd_invoking_uid}" "${qcsd_invoking_gid}"; then
+    echo "browser-egress capture-closure extraction failed" >&2
+    return 1
+  fi
+}
+
 browser_egress_extract_observer_pcap() {
   local container_id="$1" destination="$2" capture_receipt="$3"
   local evidence_relative="$4" parent
@@ -9591,7 +9762,20 @@ except (UnicodeDecodeError, json.JSONDecodeError) as error:
 canonical = (
     json.dumps(role_receipt, indent=2, sort_keys=True, allow_nan=False) + "\n"
 ).encode()
-capture = role_receipt.get("receipt", {}).get("pcap", {})
+closure = role_receipt.get("capture_closure")
+if closure is not None:
+    if (
+        set(role_receipt) != {"schema_version", "role", "vector_id", "capture_closure"}
+        or role_receipt.get("schema_version") != 1
+        or not isinstance(closure, dict)
+        or closure.get("schema_version") != 1
+        or closure.get("artifact_type") != "qcsd-browser-egress-capture-closure"
+        or closure.get("vector_id") != role_receipt.get("vector_id")
+    ):
+        raise SystemExit("browser-egress capture closure binding is invalid")
+    capture = closure.get("pcap", {})
+else:
+    capture = role_receipt.get("receipt", {}).get("pcap", {})
 expected_sha256 = capture.get("sha256")
 expected_size = capture.get("size_bytes")
 if (
@@ -9692,6 +9876,32 @@ browser_egress_wait_container_marker() {
     sleep 0.1
   done
   echo "browser-egress ${label} phase marker timed out" >&2
+  return 1
+}
+
+browser_egress_wait_observer_finalisation() {
+  local container_id="$1" deadline state
+  deadline=$((SECONDS + 30))
+  while (( SECONDS < deadline )); do
+    if _qcsd_docker_api exec "${container_id}" \
+        test -f /tmp/qcsd-browser-egress-receipt.ready >/dev/null 2>&1; then
+      return 0
+    fi
+    if _qcsd_docker_api exec "${container_id}" \
+        test -f /tmp/qcsd-browser-egress-capture-analysis-failed.ready \
+        >/dev/null 2>&1; then
+      echo "browser-egress observer rejected the closed capture during analysis" >&2
+      return 1
+    fi
+    state="$(_qcsd_docker_api container inspect --format '{{.State.Status}}' \
+      "${container_id}" 2>/dev/null)" || state="unavailable"
+    if [[ "${state}" != "running" ]]; then
+      echo "browser-egress observer exited before its finalisation marker" >&2
+      return 1
+    fi
+    sleep 0.1
+  done
+  echo "browser-egress observer finalisation phase marker timed out" >&2
   return 1
 }
 
@@ -9979,6 +10189,176 @@ print(*ids,sep="\n")
   fi
 }
 
+browser_egress_preserve_capture_closure() {
+  local source="${browser_egress_attempt_scratch}/capture-closure.json"
+  local destination="${browser_egress_attempt_evidence_host}/capture-closure.json"
+  if [[ ! -e "${source}" && ! -L "${source}" ]]; then
+    return 0
+  fi
+  if [[ -L "${source}" || ! -f "${source}" ||
+        -L "${browser_egress_evidence_host}" ||
+        ! -f "${browser_egress_evidence_host}" ]]; then
+    echo "browser-egress closed-capture failure evidence is incomplete" >&2
+    return 1
+  fi
+  python3 -I -c '
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+
+source = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+pcap = Path(sys.argv[3])
+expected_relative = sys.argv[4]
+expected_vector = sys.argv[5]
+expected_uid = int(sys.argv[6])
+expected_gid = int(sys.argv[7])
+
+def read_sole_file(path, *, label, maximum):
+    before = path.lstat()
+    descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    try:
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+            or opened.st_uid != expected_uid
+            or opened.st_gid != expected_gid
+            or stat.S_IMODE(opened.st_mode) != 0o600
+            or opened.st_nlink != 1
+            or opened.st_size <= 0
+            or opened.st_size > maximum
+        ):
+            raise SystemExit(f"browser-egress {label} inode is unsafe")
+        raw = b""
+        while chunk := os.read(descriptor, 1024 * 1024):
+            raw += chunk
+    finally:
+        os.close(descriptor)
+    return raw
+
+raw = read_sole_file(source, label="capture closure", maximum=2 * 1024 * 1024)
+try:
+    role = json.loads(raw)
+except (UnicodeDecodeError, json.JSONDecodeError) as error:
+    raise SystemExit("browser-egress capture closure is invalid JSON") from error
+canonical = (json.dumps(role, indent=2, sort_keys=True, allow_nan=False) + "\n").encode()
+closure = role.get("capture_closure") if isinstance(role, dict) else None
+capture = closure.get("pcap") if isinstance(closure, dict) else None
+if (
+    raw != canonical
+    or not isinstance(role, dict)
+    or set(role) != {"schema_version", "role", "vector_id", "capture_closure"}
+    or role.get("schema_version") != 1
+    or role.get("role") != "observer"
+    or role.get("vector_id") != expected_vector
+    or closure.get("schema_version") != 1
+    or closure.get("artifact_type") != "qcsd-browser-egress-capture-closure"
+    or closure.get("vector_id") != expected_vector
+    or not isinstance(capture, dict)
+    or set(capture) != {"path", "sha256", "size_bytes"}
+    or capture.get("path") != expected_relative
+    or not isinstance(capture.get("sha256"), str)
+    or re.fullmatch(r"[0-9a-f]{64}", capture["sha256"]) is None
+    or type(capture.get("size_bytes")) is not int
+    or capture["size_bytes"] <= 0
+):
+    raise SystemExit("browser-egress capture closure binding is invalid")
+pcap_before = pcap.lstat()
+pcap_descriptor = os.open(pcap, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+try:
+    pcap_opened = os.fstat(pcap_descriptor)
+    if (
+        not stat.S_ISREG(pcap_opened.st_mode)
+        or (pcap_opened.st_dev, pcap_opened.st_ino)
+        != (pcap_before.st_dev, pcap_before.st_ino)
+        or pcap_opened.st_uid != expected_uid
+        or pcap_opened.st_gid != expected_gid
+        or stat.S_IMODE(pcap_opened.st_mode) != 0o600
+        or pcap_opened.st_nlink != 1
+        or pcap_opened.st_size != capture["size_bytes"]
+    ):
+        raise SystemExit("browser-egress closed-capture inode is unsafe")
+    pcap_digest = hashlib.sha256()
+    while chunk := os.read(pcap_descriptor, 1024 * 1024):
+        pcap_digest.update(chunk)
+finally:
+    os.close(pcap_descriptor)
+if pcap_digest.hexdigest() != capture["sha256"]:
+    raise SystemExit("browser-egress closed capture differs from its closure")
+parent_descriptor = os.open(
+    destination.parent,
+    os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_DIRECTORY,
+)
+output_descriptor = -1
+created = False
+keep = False
+try:
+    parent = os.fstat(parent_descriptor)
+    if (
+        not stat.S_ISDIR(parent.st_mode)
+        or parent.st_uid != expected_uid
+        or parent.st_gid != expected_gid
+        or stat.S_IMODE(parent.st_mode) != 0o700
+    ):
+        raise SystemExit("browser-egress capture-closure evidence parent is unsafe")
+    try:
+        output_descriptor = os.open(
+            destination.name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600,
+            dir_fd=parent_descriptor,
+        )
+        created = True
+    except FileExistsError:
+        existing = read_sole_file(
+            destination,
+            label="capture-closure evidence",
+            maximum=2 * 1024 * 1024,
+        )
+        if existing != raw:
+            raise SystemExit("browser-egress capture-closure evidence conflicts")
+        keep = True
+    if created:
+        view = memoryview(raw)
+        while view:
+            written = os.write(output_descriptor, view)
+            if written <= 0:
+                raise OSError("browser-egress capture-closure evidence write made no progress")
+            view = view[written:]
+        os.fchmod(output_descriptor, 0o600)
+        metadata = os.fstat(output_descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != expected_uid
+            or metadata.st_gid != expected_gid
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or metadata.st_nlink != 1
+            or metadata.st_size != len(raw)
+        ):
+            raise SystemExit("browser-egress capture-closure evidence inode is unsafe")
+        os.fsync(output_descriptor)
+        os.fsync(parent_descriptor)
+        keep = True
+finally:
+    if output_descriptor >= 0:
+        os.close(output_descriptor)
+    if created and not keep:
+        try:
+            os.unlink(destination.name, dir_fd=parent_descriptor)
+            os.fsync(parent_descriptor)
+        except FileNotFoundError:
+            pass
+    os.close(parent_descriptor)
+' "${source}" "${destination}" "${browser_egress_evidence_host}" \
+    "${browser_egress_evidence_relative}" "${browser_egress_vector_id}" \
+    "${qcsd_invoking_uid}" "${qcsd_invoking_gid}"
+}
+
 browser_egress_preserve_causal_evidence() {
   [[ "${browser_egress_causal_inputs_ready:-0}" == 1 ]] || return 0
   python3 -I -c '
@@ -10073,6 +10453,19 @@ browser_egress_record_failed_attempt() {
   trap - ERR
   set +e
   failure_finished="$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+  if [[ -n "${browser_egress_observer_id:-}" &&
+        ! -e "${browser_egress_evidence_host}" &&
+        -f "${browser_egress_attempt_scratch}/capture-closure.json" &&
+        ! -L "${browser_egress_attempt_scratch}/capture-closure.json" ]]; then
+    browser_egress_extract_observer_pcap "${browser_egress_observer_id}" \
+      "${browser_egress_evidence_host}" \
+      "${browser_egress_attempt_scratch}/capture-closure.json" \
+      "${browser_egress_evidence_relative}" >/dev/null 2>&1 || true
+  fi
+  if ! browser_egress_preserve_capture_closure; then
+    echo "browser-egress could not preserve closed-capture failure evidence" >&2
+    exit "${original_status}"
+  fi
   if ! browser_egress_preserve_causal_evidence; then
     echo "browser-egress could not preserve its causal failure evidence" >&2
     exit "${original_status}"
@@ -10710,16 +11103,22 @@ test "$(find /qcsd-policy -mindepth 1 -maxdepth 1 -type f -printf x)" = x
     _qcsd_docker_api kill --signal HUP "${browser_egress_observer_id}" \
       >/dev/null || false
     browser_egress_wait_container_marker "${browser_egress_observer_id}" \
-      /tmp/qcsd-browser-egress-receipt.ready observer-receipt || false
-    browser_egress_wait_observer_receipt "${browser_egress_observer_id}" \
-      "${browser_egress_attempt_scratch}/capture.json" || false
-    # Keep this explicit top-level failure boundary.  The launcher deliberately
-    # does not enable errtrace globally; a nested Docker helper failure would
-    # otherwise exit under errexit before the attempt-sealing ERR trap runs.
+      /tmp/qcsd-browser-egress-capture-closed.ready observer-capture-closure || false
+    browser_egress_fetch_observer_capture_closure "${browser_egress_observer_id}" \
+      "${browser_egress_attempt_scratch}/capture-closure.json" \
+      "${browser_egress_evidence_relative}" "${browser_egress_vector_id}" || false
+    # Extract the exact closed bytes before allowing any decoder or packet
+    # policy work to begin.  The closure stays scratch-only for successful
+    # attempts and is bound solely as non-promoted failed-attempt evidence.
     browser_egress_extract_observer_pcap "${browser_egress_observer_id}" \
       "${browser_egress_evidence_host}" \
-      "${browser_egress_attempt_scratch}/capture.json" \
+      "${browser_egress_attempt_scratch}/capture-closure.json" \
       "${browser_egress_evidence_relative}" || false
+    _qcsd_docker_api kill --signal ALRM "${browser_egress_observer_id}" \
+      >/dev/null || false
+    browser_egress_wait_observer_finalisation "${browser_egress_observer_id}" || false
+    browser_egress_wait_observer_receipt "${browser_egress_observer_id}" \
+      "${browser_egress_attempt_scratch}/capture.json" || false
     _qcsd_docker_api kill --signal TERM "${browser_egress_observer_id}" \
       >/dev/null || false
     browser_egress_observer_exit="$(browser_egress_wait_exit_code \

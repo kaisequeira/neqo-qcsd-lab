@@ -20,6 +20,7 @@ import stat
 import sys
 import threading
 import time
+import traceback
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -96,6 +97,11 @@ from qcsd_lab.util import LAB_ROOT, load_json, sha256_file, source_metadata
 READY_PATH = Path("/tmp/qcsd-browser-egress-role.ready")
 SUBJECT_STARTED_READY_PATH = Path("/tmp/qcsd-browser-egress-subject-started.ready")
 GRACE_READY_PATH = Path("/tmp/qcsd-browser-egress-grace.ready")
+CAPTURE_CLOSURE_PATH = Path("/tmp/qcsd-browser-egress-capture-closure.json")
+CAPTURE_CLOSED_READY_PATH = Path("/tmp/qcsd-browser-egress-capture-closed.ready")
+CAPTURE_ANALYSIS_FAILED_READY_PATH = Path(
+    "/tmp/qcsd-browser-egress-capture-analysis-failed.ready"
+)
 RECEIPT_READY_PATH = Path("/tmp/qcsd-browser-egress-receipt.ready")
 STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM)
 ROLE_SCHEMA_VERSION = 1
@@ -157,6 +163,40 @@ def _validated_supervised_labels(
 def _emit(value: Mapping[str, Any]) -> None:
     sys.stdout.buffer.write(canonical_json_bytes(dict(value)))
     sys.stdout.buffer.flush()
+
+
+def _publish_private_canonical_json(path: Path, value: Mapping[str, Any]) -> None:
+    """Publish one create-only canonical role artifact before its phase marker."""
+
+    raw = canonical_json_bytes(dict(value))
+    descriptor = os.open(
+        path,
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | os.O_CLOEXEC
+        | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    try:
+        view = memoryview(raw)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise OSError("browser-egress canonical artifact write made no progress")
+            view = view[written:]
+        os.fchmod(descriptor, 0o600)
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    parent = os.open(
+        path.parent,
+        os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_DIRECTORY", 0),
+    )
+    try:
+        os.fsync(parent)
+    finally:
+        os.close(parent)
 
 
 def _timestamp() -> str:
@@ -971,10 +1011,12 @@ def _observer(args: argparse.Namespace) -> None:
     subject_started = threading.Event()
     subject_exited = threading.Event()
     finish_capture = threading.Event()
+    capture_extracted = threading.Event()
     stopped = _install_stop_event()
     signal.signal(signal.SIGUSR1, lambda _signum, _frame: subject_started.set())
     signal.signal(signal.SIGUSR2, lambda _signum, _frame: subject_exited.set())
     signal.signal(signal.SIGHUP, lambda _signum, _frame: finish_capture.set())
+    signal.signal(signal.SIGALRM, lambda _signum, _frame: capture_extracted.set())
     observer = LivePacketObserver(pcap_path=args.pcap)
     observer.start()
     _ready()
@@ -987,7 +1029,33 @@ def _observer(args: argparse.Namespace) -> None:
     observer.mark_reporting_grace_finished()
     GRACE_READY_PATH.write_text("ready\n", encoding="ascii")
     _wait(finish_capture)
-    receipt = observer.finish(vector=vector, pcap_relative_path=args.evidence_relative)
+    closure = observer.close_capture(
+        vector=vector,
+        pcap_relative_path=args.evidence_relative,
+    )
+    _publish_private_canonical_json(
+        CAPTURE_CLOSURE_PATH,
+        {
+            "schema_version": ROLE_SCHEMA_VERSION,
+            "role": "observer",
+            "vector_id": vector.vector_id,
+            "capture_closure": closure,
+        },
+    )
+    CAPTURE_CLOSED_READY_PATH.write_text("ready\n", encoding="ascii")
+    # Do not begin decoding until the host has streamed the closed tmpfs PCAP
+    # through the closure's exact hash/size binding.  This makes post-capture
+    # analysis failure recoverable without weakening the passing gate.
+    _wait(capture_extracted)
+    try:
+        receipt = observer.finish_closed_capture(vector=vector, closure=closure)
+    except Exception:  # noqa: BLE001 - every decoder failure must preserve the tmpfs evidence
+        traceback.print_exc(file=sys.stderr)
+        CAPTURE_ANALYSIS_FAILED_READY_PATH.write_text("failed\n", encoding="ascii")
+        # Keep the mount-free tmpfs alive until the coordinator has preserved
+        # the closure and raw PCAP as non-promoted failure evidence.
+        _wait(stopped)
+        raise SystemExit(1) from None
     _emit(
         {
             "schema_version": ROLE_SCHEMA_VERSION,

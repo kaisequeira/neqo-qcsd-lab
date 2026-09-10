@@ -2473,6 +2473,7 @@ def test_resume_binds_exact_partially_promoted_causal_artifacts(
         "causal-actor.json",
         "causal-capture.json",
         "causal-runtime.json",
+        "capture-closure.json",
     }
     for name in expected:
         path = attempt / name

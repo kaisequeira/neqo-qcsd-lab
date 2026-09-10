@@ -31,7 +31,11 @@ from .class_study import canonical_json_bytes
 from .util import sha256_file
 
 PACKET_RECORD_SCHEMA_VERSION = 1
-PACKET_ANALYSIS_SCHEMA_VERSION = 3
+PACKET_ANALYSIS_SCHEMA_VERSION = 4
+HISTORICAL_PACKET_ANALYSIS_SCHEMA_VERSIONS = frozenset({3})
+SUPPORTED_PACKET_ANALYSIS_SCHEMA_VERSIONS = (
+    HISTORICAL_PACKET_ANALYSIS_SCHEMA_VERSIONS | {PACKET_ANALYSIS_SCHEMA_VERSION}
+)
 CAPTURE_RECEIPT_SCHEMA_VERSION = 2
 CAPTURE_ARTIFACT_TYPE = "qcsd-browser-egress-packet-capture"
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
@@ -195,9 +199,16 @@ def validate_packet_record(value: object) -> dict[str, Any]:
     return json.loads(canonical_json_bytes(value))
 
 
-def _empty_analysis(vector_id: str) -> dict[str, Any]:
-    return {
-        "schema_version": PACKET_ANALYSIS_SCHEMA_VERSION,
+def _empty_analysis(
+    vector_id: str, *, schema_version: int = PACKET_ANALYSIS_SCHEMA_VERSION
+) -> dict[str, Any]:
+    if (
+        type(schema_version) is not int
+        or schema_version not in SUPPORTED_PACKET_ANALYSIS_SCHEMA_VERSIONS
+    ):
+        raise ValueError("browser-egress packet analysis schema is unsupported")
+    analysis = {
+        "schema_version": schema_version,
         "vector_id": vector_id,
         "decoded_transport_packets": 0,
         "ipv4_packets": 0,
@@ -241,16 +252,29 @@ def _empty_analysis(vector_id: str) -> dict[str, Any]:
         "approved_nel_error_initial_syn": 0,
         "unexpected_browser_egress_packets": 0,
     }
+    if schema_version == PACKET_ANALYSIS_SCHEMA_VERSION:
+        analysis.update(
+            {
+                "timestamp_regressions": 0,
+                "maximum_timestamp_regression_ns": 0,
+            }
+        )
+    return analysis
 
 
 def analyse_packet_records(
-    records: Sequence[Mapping[str, Any]], *, vector: BrowserEgressVector
+    records: Sequence[Mapping[str, Any]],
+    *,
+    vector: BrowserEgressVector,
+    analysis_schema_version: int = PACKET_ANALYSIS_SCHEMA_VERSION,
 ) -> dict[str, Any]:
-    """Reduce decoded IPv4/IPv6 TCP/UDP records to policy-relevant counts."""
+    """Reduce file-ordered IPv4/IPv6 TCP/UDP records to policy-relevant counts."""
 
     if not isinstance(records, Sequence) or isinstance(records, (str, bytes, bytearray)):
         raise ValueError("browser-egress packet records must be a sequence")
-    analysis = _empty_analysis(vector.vector_id)
+    analysis = _empty_analysis(
+        vector.vector_id, schema_version=analysis_schema_version
+    )
     browser = set(FIXTURE_TOPOLOGY["browser_addresses"])
     fixture = set(FIXTURE_TOPOLOGY["fixture_addresses"])
     forbidden = set(FIXTURE_TOPOLOGY["forbidden_sink_addresses"])
@@ -262,8 +286,25 @@ def analyse_packet_records(
         record = validate_packet_record(raw)
         frame = record["frame_number"]
         timestamp = record["timestamp_ns"]
-        if frame <= last_frame or timestamp < last_time:
-            raise ValueError("browser-egress packet records are not capture ordered")
+        # frame.number is the file/capture-order authority.  libpcap timestamps
+        # are metadata and may legitimately regress when packets are timestamped
+        # before different networking-stack paths enqueue them for capture.
+        if frame <= last_frame:
+            raise ValueError(
+                "browser-egress packet record frame numbers are not strictly increasing"
+            )
+        if last_time >= 0 and timestamp < last_time:
+            if analysis_schema_version in HISTORICAL_PACKET_ANALYSIS_SCHEMA_VERSIONS:
+                # Schema 3 made timestamp monotonicity part of its acceptance
+                # contract.  Retain that exact historical behaviour when old
+                # receipts are replayed; only schema 4 adopts frame-number
+                # ordering and records timestamp regressions diagnostically.
+                raise ValueError("browser-egress packet records are not capture ordered")
+            regression_ns = last_time - timestamp
+            analysis["timestamp_regressions"] += 1
+            analysis["maximum_timestamp_regression_ns"] = max(
+                analysis["maximum_timestamp_regression_ns"], regression_ns
+            )
         last_frame = frame
         last_time = timestamp
         analysis["decoded_transport_packets"] += 1
@@ -404,17 +445,25 @@ def analyse_packet_records(
     return analysis
 
 
-def expected_packet_analysis(vector: BrowserEgressVector) -> dict[str, Any]:
+def expected_packet_analysis(
+    vector: BrowserEgressVector,
+    *,
+    analysis_schema_version: int = PACKET_ANALYSIS_SCHEMA_VERSION,
+) -> dict[str, Any]:
     """Return policy counts; capture-wide packet/family totals remain observed."""
 
     expected = {
         key: value
-        for key, value in _empty_analysis(vector.vector_id).items()
+        for key, value in _empty_analysis(
+            vector.vector_id, schema_version=analysis_schema_version
+        ).items()
         if key
         not in {
             "decoded_transport_packets",
             "ipv4_packets",
             "ipv6_packets",
+            "timestamp_regressions",
+            "maximum_timestamp_regression_ns",
         }
     }
     payload_bytes = FIXTURE_TOPOLOGY["positive_control_payload"]["bytes"]
@@ -499,21 +548,37 @@ def expected_packet_analysis(vector: BrowserEgressVector) -> dict[str, Any]:
 
 
 def validate_packet_analysis(value: object, *, vector: BrowserEgressVector) -> dict[str, Any]:
-    expected_fields = set(_empty_analysis(vector.vector_id))
-    if not isinstance(value, Mapping) or set(value) != expected_fields:
+    if not isinstance(value, Mapping):
         raise ValueError("browser-egress packet analysis fields are invalid")
+    schema_version = value.get("schema_version")
     if (
-        type(value["schema_version"]) is not int
-        or value["schema_version"] != PACKET_ANALYSIS_SCHEMA_VERSION
-        or value["vector_id"] != vector.vector_id
+        type(schema_version) is not int
+        or schema_version not in SUPPORTED_PACKET_ANALYSIS_SCHEMA_VERSIONS
+        or value.get("vector_id") != vector.vector_id
     ):
         raise ValueError("browser-egress packet analysis identity is invalid")
+    expected_fields = set(
+        _empty_analysis(vector.vector_id, schema_version=schema_version)
+    )
+    if set(value) != expected_fields:
+        raise ValueError("browser-egress packet analysis fields are invalid")
     for key in expected_fields - {"vector_id", "dns_query_names"}:
         if key == "schema_version":
             continue
         _integer(value[key], label=f"packet analysis {key}")
     if value["decoded_transport_packets"] != value["ipv4_packets"] + value["ipv6_packets"]:
         raise ValueError("browser-egress packet family counts do not reconcile")
+    if schema_version == PACKET_ANALYSIS_SCHEMA_VERSION:
+        regressions = value["timestamp_regressions"]
+        maximum_regression = value["maximum_timestamp_regression_ns"]
+        possible_adjacent_pairs = max(0, value["decoded_transport_packets"] - 1)
+        if (
+            regressions > possible_adjacent_pairs
+            or (regressions == 0) != (maximum_regression == 0)
+        ):
+            raise ValueError(
+                "browser-egress packet timestamp-regression diagnostics are invalid"
+            )
     names = value["dns_query_names"]
     if (
         not isinstance(names, list)
@@ -521,7 +586,9 @@ def validate_packet_analysis(value: object, *, vector: BrowserEgressVector) -> d
         or names != sorted(names)
     ):
         raise ValueError("browser-egress packet DNS inventory is invalid")
-    expected = expected_packet_analysis(vector)
+    expected = expected_packet_analysis(
+        vector, analysis_schema_version=schema_version
+    )
     for key, wanted in expected.items():
         if value[key] != wanted:
             raise ValueError(f"browser-egress packet policy failed at {key}")
@@ -661,7 +728,11 @@ def _records_from_tshark_output(output: str) -> list[dict[str, Any]]:
 
 
 def analyse_pcap(
-    pcap: Path, *, vector: BrowserEgressVector, tshark: Path = Path("/usr/bin/tshark")
+    pcap: Path,
+    *,
+    vector: BrowserEgressVector,
+    tshark: Path = Path("/usr/bin/tshark"),
+    analysis_schema_version: int = PACKET_ANALYSIS_SCHEMA_VERSION,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Decode one PCAP/PCAPNG with pinned tshark and return analysis/tool binding."""
 
@@ -680,7 +751,11 @@ def analyse_pcap(
     if decoded.returncode != 0:
         raise ValueError(f"tshark failed to decode capture: {decoded.stderr.strip()}")
     records = _records_from_tshark_output(decoded.stdout)
-    analysis = analyse_packet_records(records, vector=vector)
+    analysis = analyse_packet_records(
+        records,
+        vector=vector,
+        analysis_schema_version=analysis_schema_version,
+    )
     tool = {
         "path": str(executable),
         "sha256": sha256_file(executable),
@@ -849,7 +924,12 @@ def validate_capture_receipt(
             "sha256"
         ]:
             raise ValueError("browser-egress PCAP binding does not verify")
-        recomputed, tool = analyse_pcap(capture_path, vector=vector, tshark=tshark)
+        recomputed, tool = analyse_pcap(
+            capture_path,
+            vector=vector,
+            tshark=tshark,
+            analysis_schema_version=analysis["schema_version"],
+        )
         if recomputed != analysis:
             raise ValueError("browser-egress PCAP analysis does not reproduce")
         if tool != decoder:
@@ -908,6 +988,10 @@ def parse_dumpcap_statistics(stderr: str, *, exit_code: int) -> dict[str, int]:
     }
 
 
+CAPTURE_CLOSURE_SCHEMA_VERSION = 1
+CAPTURE_CLOSURE_ARTIFACT_TYPE = "qcsd-browser-egress-capture-closure"
+
+
 class LivePacketObserver:
     """Concrete no-filter dumpcap role used by the later Docker coordinator."""
 
@@ -924,6 +1008,9 @@ class LivePacketObserver:
         self.process: subprocess.Popen[str] | None = None
         self.capture_tool: dict[str, Any] | None = None
         self.times: dict[str, int] = {}
+        self._closed_capture: dict[str, Any] | None = None
+        self._closed_stderr: str | None = None
+        self._analysis_started = False
 
     def start(self, *, ready_timeout_seconds: float = 10.0) -> None:
         if self.process is not None or self.pcap_path.exists() or self.pcap_path.is_symlink():
@@ -975,7 +1062,7 @@ class LivePacketObserver:
             raise ValueError("five-second reporting grace has not elapsed")
         self.times["reporting_grace_finished_ns"] = now
 
-    def finish(
+    def close_capture(
         self,
         *,
         vector: BrowserEgressVector,
@@ -983,14 +1070,22 @@ class LivePacketObserver:
     ) -> dict[str, Any]:
         if self.process is None or self.capture_tool is None:
             raise ValueError("browser-egress observer was not started")
+        if self._closed_capture is not None:
+            raise ValueError("browser-egress observer capture was already closed")
         if "reporting_grace_finished_ns" not in self.times:
             raise ValueError("browser-egress observer cannot stop before reporting grace")
         self.process.send_signal(signal.SIGINT)
         _stdout, stderr = self.process.communicate(timeout=15)
         self.times["observer_stopped_ns"] = time.monotonic_ns()
-        stats = parse_dumpcap_statistics(stderr, exit_code=self.process.returncode)
+        if not isinstance(stderr, str) or type(self.process.returncode) is not int:
+            raise ValueError("browser-egress observer terminal process evidence is invalid")
         capture_path = self.pcap_path.absolute()
-        if capture_path.is_symlink() or not capture_path.is_file() or capture_path.stat().st_nlink != 1:
+        if (
+            capture_path.is_symlink()
+            or not capture_path.is_file()
+            or capture_path.stat().st_nlink != 1
+            or capture_path.stat().st_size <= 0
+        ):
             raise ValueError("browser-egress observer PCAP is not a sole regular file")
         _ = PurePosixPath(pcap_relative_path)
         if (
@@ -1000,15 +1095,23 @@ class LivePacketObserver:
             or any(part in {"", ".", ".."} for part in _.parts)
         ):
             raise ValueError("browser-egress intended PCAP evidence path is invalid")
-        analysis, decoder = analyse_pcap(capture_path, vector=vector, tshark=self.tshark)
-        receipt = {
-            "schema_version": CAPTURE_RECEIPT_SCHEMA_VERSION,
-            "artifact_type": CAPTURE_ARTIFACT_TYPE,
+        capture_before = capture_path.stat()
+        pcap_sha256 = sha256_file(capture_path)
+        capture_after = capture_path.stat()
+        if (
+            (capture_before.st_dev, capture_before.st_ino, capture_before.st_size)
+            != (capture_after.st_dev, capture_after.st_ino, capture_after.st_size)
+            or capture_after.st_nlink != 1
+        ):
+            raise ValueError("browser-egress observer PCAP changed while it was closed")
+        closure = {
+            "schema_version": CAPTURE_CLOSURE_SCHEMA_VERSION,
+            "artifact_type": CAPTURE_CLOSURE_ARTIFACT_TYPE,
             "vector_id": vector.vector_id,
             "pcap": {
                 "path": pcap_relative_path,
-                "sha256": sha256_file(capture_path),
-                "size_bytes": capture_path.stat().st_size,
+                "sha256": pcap_sha256,
+                "size_bytes": capture_after.st_size,
             },
             "observer": {
                 "network_namespace": "browser",
@@ -1019,10 +1122,86 @@ class LivePacketObserver:
                 "cap_add": ["CAP_NET_RAW"],
                 "separate_container": True,
             },
-            "capture_process": stats,
+            # Retain the unparsed terminal stream so dumpcap-statistics parsing
+            # is itself post-extraction work.  Even malformed terminal output
+            # cannot strand the already closed raw PCAP on container tmpfs.
+            "capture_process_terminal": {
+                "exit_code": self.process.returncode,
+                "stderr": stderr,
+            },
             "capture_tool": self.capture_tool,
             "chronology": dict(self.times),
+        }
+        self._closed_capture = json.loads(canonical_json_bytes(closure))
+        self._closed_stderr = stderr
+        return json.loads(canonical_json_bytes(closure))
+
+    def finish_closed_capture(
+        self,
+        *,
+        vector: BrowserEgressVector,
+        closure: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        if self._closed_capture is None or self._closed_stderr is None:
+            raise ValueError("browser-egress observer capture is not closed")
+        if self._analysis_started:
+            raise ValueError("browser-egress closed capture analysis already started")
+        if dict(closure) != self._closed_capture:
+            raise ValueError("browser-egress capture closure differs from the closed observer")
+        if (
+            closure.get("schema_version") != CAPTURE_CLOSURE_SCHEMA_VERSION
+            or closure.get("artifact_type") != CAPTURE_CLOSURE_ARTIFACT_TYPE
+            or closure.get("vector_id") != vector.vector_id
+        ):
+            raise ValueError("browser-egress capture closure identity is invalid")
+        self._analysis_started = True
+        process_terminal = closure.get("capture_process_terminal")
+        if not isinstance(process_terminal, Mapping) or set(process_terminal) != {
+            "exit_code",
+            "stderr",
+        }:
+            raise ValueError("browser-egress capture closure process fields are invalid")
+        stats = parse_dumpcap_statistics(
+            self._closed_stderr,
+            exit_code=process_terminal["exit_code"],
+        )
+        capture_path = self.pcap_path.absolute()
+        pcap = closure.get("pcap")
+        if (
+            not isinstance(pcap, Mapping)
+            or set(pcap) != {"path", "sha256", "size_bytes"}
+            or capture_path.is_symlink()
+            or not capture_path.is_file()
+            or capture_path.stat().st_nlink != 1
+            or capture_path.stat().st_size != pcap["size_bytes"]
+            or sha256_file(capture_path) != pcap["sha256"]
+        ):
+            raise ValueError("browser-egress closed PCAP differs from its closure")
+        analysis, decoder = analyse_pcap(capture_path, vector=vector, tshark=self.tshark)
+        receipt = {
+            "schema_version": CAPTURE_RECEIPT_SCHEMA_VERSION,
+            "artifact_type": CAPTURE_ARTIFACT_TYPE,
+            "vector_id": vector.vector_id,
+            "pcap": dict(pcap),
+            "observer": closure["observer"],
+            "capture_process": stats,
+            "capture_tool": closure["capture_tool"],
+            "chronology": closure["chronology"],
             "packet_decoder": decoder,
             "analysis": analysis,
         }
         return validate_capture_receipt(receipt, vector=vector)
+
+    def finish(
+        self,
+        *,
+        vector: BrowserEgressVector,
+        pcap_relative_path: str,
+    ) -> dict[str, Any]:
+        """Compatibility wrapper for non-orchestrated observer callers."""
+
+        closure = self.close_capture(
+            vector=vector,
+            pcap_relative_path=pcap_relative_path,
+        )
+        return self.finish_closed_capture(vector=vector, closure=closure)

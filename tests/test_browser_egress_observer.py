@@ -2,20 +2,22 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import signal
 from pathlib import Path
 
 import pytest
 
+import qcsd_lab.browser_egress_observer as observer_module
 from qcsd_lab.browser_egress_fixture import (
     FIXTURE_TOPOLOGY,
     expected_sink_counters,
     vector_by_id,
 )
 from qcsd_lab.browser_egress_observer import (
-    _tool_version_stdout_first_line,
     LivePacketObserver,
-    analyse_pcap,
+    _tool_version_stdout_first_line,
     analyse_packet_records,
+    analyse_pcap,
     parse_dumpcap_statistics,
     reconcile_sink_and_packet_evidence,
     safe_relative_artifact,
@@ -285,6 +287,77 @@ def test_packet_record_rejects_bool_and_float_integer_aliases(field: str, value:
         validate_packet_record(packet)
 
 
+def test_packet_analysis_records_timestamp_regressions_in_frame_order() -> None:
+    vector = vector_by_id("constructor--page--websocket")
+    browser = FIXTURE_TOPOLOGY["browser_addresses"][0]
+    fixture = FIXTURE_TOPOLOGY["fixture_addresses"][0]
+    fixture_port = FIXTURE_TOPOLOGY["ports"]["fixture_https"]
+    records = [
+        _packet(1, src=browser, dst=fixture, dst_port=fixture_port),
+        _packet(2, src=fixture, dst=browser, src_port=fixture_port, dst_port=49152),
+        _packet(3, src=browser, dst=fixture, dst_port=fixture_port),
+        _packet(4, src=fixture, dst=browser, src_port=fixture_port, dst_port=49152),
+    ]
+    records[0]["timestamp_ns"] = 10_000
+    records[1]["timestamp_ns"] = 9_500
+    records[2]["timestamp_ns"] = 11_000
+    records[3]["timestamp_ns"] = 9_000
+    original = copy.deepcopy(records)
+
+    analysis = analyse_packet_records(records, vector=vector)
+
+    assert records == original
+    assert analysis["schema_version"] == 4
+    assert analysis["timestamp_regressions"] == 2
+    assert analysis["maximum_timestamp_regression_ns"] == 2_000
+    assert validate_packet_analysis(analysis, vector=vector) == analysis
+
+
+@pytest.mark.parametrize("frames", [(1, 1), (2, 1)])
+def test_packet_analysis_rejects_nonincreasing_frame_numbers(
+    frames: tuple[int, int],
+) -> None:
+    vector = vector_by_id("constructor--page--websocket")
+    browser = FIXTURE_TOPOLOGY["browser_addresses"][0]
+    fixture = FIXTURE_TOPOLOGY["fixture_addresses"][0]
+    records = [
+        _packet(frames[0], src=browser, dst=fixture),
+        _packet(frames[1], src=browser, dst=fixture),
+    ]
+    records[0]["timestamp_ns"] = 2_000
+    records[1]["timestamp_ns"] = 3_000
+
+    with pytest.raises(ValueError, match="frame numbers are not strictly increasing"):
+        analyse_packet_records(records, vector=vector)
+
+
+def test_historical_packet_analysis_schema_three_remains_valid() -> None:
+    vector = vector_by_id("constructor--page--websocket")
+    analysis = analyse_packet_records(
+        [], vector=vector, analysis_schema_version=3
+    )
+
+    assert analysis["schema_version"] == 3
+    assert "timestamp_regressions" not in analysis
+    assert "maximum_timestamp_regression_ns" not in analysis
+    assert validate_packet_analysis(analysis, vector=vector) == analysis
+
+
+def test_historical_packet_analysis_schema_three_retains_timestamp_order_rule() -> None:
+    vector = vector_by_id("constructor--page--websocket")
+    browser = FIXTURE_TOPOLOGY["browser_addresses"][0]
+    fixture = FIXTURE_TOPOLOGY["fixture_addresses"][0]
+    records = [
+        _packet(1, src=browser, dst=fixture),
+        _packet(2, src=fixture, dst=browser),
+    ]
+    records[0]["timestamp_ns"] = 2_000
+    records[1]["timestamp_ns"] = 1_000
+
+    with pytest.raises(ValueError, match="not capture ordered"):
+        analyse_packet_records(records, vector=vector, analysis_schema_version=3)
+
+
 def test_pcap_and_independent_sink_disagreement_is_fatal() -> None:
     vector = vector_by_id("positive-control--fixture--tcp")
     browser4, browser6 = FIXTURE_TOPOLOGY["browser_addresses"]
@@ -535,6 +608,137 @@ def test_live_observer_version_binding_ignores_stderr_diagnostics(tmp_path: Path
             observer.process.communicate(timeout=5)
 
 
+def _closed_live_observer(tmp_path: Path, *, terminal_stderr: str) -> LivePacketObserver:
+    capture = tmp_path / "capture.pcapng"
+    capture.write_bytes(b"closed-pcap")
+
+    class Process:
+        returncode = 0
+
+        def send_signal(self, item: signal.Signals) -> None:
+            assert item == signal.SIGINT
+
+        def communicate(self, *, timeout: int) -> tuple[None, str]:
+            assert timeout == 15
+            return None, terminal_stderr
+
+    observer = LivePacketObserver(pcap_path=capture)
+    observer.process = Process()  # type: ignore[assignment]
+    observer.capture_tool = {
+        "path": "/usr/bin/dumpcap",
+        "sha256": "a" * 64,
+        "version_first_line": "Dumpcap 4.0",
+        "argv": ["/usr/bin/dumpcap", "-q", "-i", "any", "-w", "<PCAP>"],
+    }
+    observer.times = {
+        "observer_started_ns": 1,
+        "observer_ready_ns": 2,
+        "subject_started_ns": 3,
+        "subject_exited_ns": 4,
+        "reporting_grace_finished_ns": 5_000_000_004,
+    }
+    return observer
+
+
+def test_live_observer_closes_and_binds_pcap_before_analysis(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    terminal_stderr = (
+        "Packets captured: 1\n"
+        "Packets received/dropped on interface 'any': "
+        "1/0 (pcap:0/dumpcap:0/flushed:0/ps_ifdrop:0) (100.0%)\n"
+    )
+    observer = _closed_live_observer(tmp_path, terminal_stderr=terminal_stderr)
+    vector = vector_by_id("constructor--page--websocket")
+    monkeypatch.setattr(observer_module.time, "monotonic_ns", lambda: 5_000_000_005)
+    decoder = {
+        "path": "/usr/bin/tshark",
+        "sha256": "b" * 64,
+        "version_first_line": "TShark 4.0",
+        "fields": list(observer_module.TSHARK_FIELDS),
+        "argv": ["/usr/bin/tshark"],
+    }
+    monkeypatch.setattr(
+        observer_module,
+        "analyse_pcap",
+        lambda *_args, **_kwargs: (analyse_packet_records([], vector=vector), decoder),
+    )
+
+    closure = observer.close_capture(
+        vector=vector,
+        pcap_relative_path="evidence/capture.pcapng",
+    )
+
+    assert closure["schema_version"] == 1
+    assert closure["artifact_type"] == "qcsd-browser-egress-capture-closure"
+    assert closure["capture_process_terminal"] == {
+        "exit_code": 0,
+        "stderr": terminal_stderr,
+    }
+    assert closure["pcap"] == {
+        "path": "evidence/capture.pcapng",
+        "sha256": hashlib.sha256(b"closed-pcap").hexdigest(),
+        "size_bytes": len(b"closed-pcap"),
+    }
+    receipt = observer.finish_closed_capture(vector=vector, closure=closure)
+    assert set(receipt) == {
+        "schema_version",
+        "artifact_type",
+        "vector_id",
+        "pcap",
+        "observer",
+        "capture_process",
+        "capture_tool",
+        "chronology",
+        "packet_decoder",
+        "analysis",
+    }
+    assert receipt["schema_version"] == 2
+    assert receipt["pcap"] == closure["pcap"]
+    with pytest.raises(ValueError, match="already closed"):
+        observer.close_capture(vector=vector, pcap_relative_path="evidence/capture.pcapng")
+    with pytest.raises(ValueError, match="already started"):
+        observer.finish_closed_capture(vector=vector, closure=closure)
+
+
+def test_live_observer_preserves_closure_when_terminal_statistics_are_invalid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observer = _closed_live_observer(tmp_path, terminal_stderr="invalid dumpcap output\n")
+    vector = vector_by_id("constructor--page--websocket")
+    monkeypatch.setattr(observer_module.time, "monotonic_ns", lambda: 5_000_000_005)
+
+    closure = observer.close_capture(
+        vector=vector,
+        pcap_relative_path="evidence/capture.pcapng",
+    )
+
+    assert closure["pcap"]["sha256"] == hashlib.sha256(b"closed-pcap").hexdigest()
+    with pytest.raises(ValueError, match="omitted"):
+        observer.finish_closed_capture(vector=vector, closure=closure)
+
+
+def test_live_observer_rejects_pcap_changed_after_closure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    terminal_stderr = (
+        "Packets captured: 1\n"
+        "Packets received/dropped on interface 'any': "
+        "1/0 (pcap:0/dumpcap:0/flushed:0/ps_ifdrop:0) (100.0%)\n"
+    )
+    observer = _closed_live_observer(tmp_path, terminal_stderr=terminal_stderr)
+    vector = vector_by_id("constructor--page--websocket")
+    monkeypatch.setattr(observer_module.time, "monotonic_ns", lambda: 5_000_000_005)
+    closure = observer.close_capture(
+        vector=vector,
+        pcap_relative_path="evidence/capture.pcapng",
+    )
+    observer.pcap_path.write_bytes(b"changed-pcap")
+
+    with pytest.raises(ValueError, match="differs from its closure"):
+        observer.finish_closed_capture(vector=vector, closure=closure)
+
+
 @pytest.mark.parametrize(
     "script",
     [
@@ -605,6 +809,26 @@ def test_deep_capture_validation_ignores_version_stderr_diagnostics(
             dumpcap=dumpcap,
         )
         == receipt
+    )
+
+    historical = copy.deepcopy(receipt)
+    historical["analysis"] = analyse_pcap(
+        pcap,
+        vector=vector,
+        tshark=tshark,
+        analysis_schema_version=3,
+    )[0]
+    assert historical["analysis"]["schema_version"] == 3
+    assert (
+        validate_capture_receipt(
+            historical,
+            vector=vector,
+            evidence_root=tmp_path,
+            deep=True,
+            tshark=tshark,
+            dumpcap=dumpcap,
+        )
+        == historical
     )
 
     changed_version = copy.deepcopy(receipt)
