@@ -13,10 +13,13 @@ These repository-local rules apply throughout `neqo-qcsd-lab/`.
 - Report accepted scientific counters only from final deep-verified receipts.
   Historical passing prefixes and non-evidentiary probes advance no numerator.
 - At this checkpoint, use **browser-egress 0/110, certification 0/900, formal
-  capture 0/16,000**. V82's 68-vector prefix is historical; fresh v83 is next.
-  Re-read [README.md](README.md), the latest immutable receipts, and live
-  checkpoint state before any later update rather than carrying these figures
-  forward from memory.
+  capture 0/16,000**. V83's 76-vector prefix and vector-77 operational failure
+  are historical; v84 remains unused pending validation and commit of the
+  client-side router-instrumentation-v14 and Playwright-policy-v8 corrections.
+  Re-read
+  [README.md](README.md), the latest immutable receipts, and live checkpoint
+  state before any later update rather than carrying these figures forward
+  from memory.
 
 ## Live source-bound operations
 

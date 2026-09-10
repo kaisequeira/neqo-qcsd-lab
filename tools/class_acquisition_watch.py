@@ -690,16 +690,17 @@ _BUILD_STORAGE_PREFLIGHT_KEYS = {
     "passed",
 }
 _CDP_TARGET_INSTRUMENTATION_POLICY = (
-    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v13"
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v14"
 )
 _PLAYWRIGHT_VERSION = "1.57.0"
 _CHROMIUM_VERSION = "143.0.7499.4"
 _CHROMIUM_EXECUTABLE = "/usr/local/bin/qcsd-chromium"
-_PINNED_CDP_SCHEMA_VERSION = 12
+_PINNED_CDP_SCHEMA_VERSION = 13
 _HISTORICAL_PINNED_CDP_SCHEMA_VERSION = 8
-_HISTORICAL_PINNED_CDP_SCHEMA_VERSIONS = frozenset({8, 9, 11})
-_PINNED_CDP_CONTRACT_SCHEMA_VERSION = 11
+_HISTORICAL_PINNED_CDP_SCHEMA_VERSIONS = frozenset({8, 9, 11, 12})
+_PINNED_CDP_CONTRACT_SCHEMA_VERSION = 12
 _HISTORICAL_PINNED_CDP_CONTRACT_SCHEMA_VERSION = 8
+_HISTORICAL_PINNED_CDP_CONTRACT_V12_SCHEMA_VERSION = 11
 _BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION = 1
 _EGRESS_PREARM_SUMMARY_SCHEMA_VERSION = 2
 _PINNED_CDP_TARGET_ACTIVITY_SCHEMA_VERSION = 1
@@ -860,16 +861,16 @@ _LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_BINDING = {
     "browsers_json_sha256": _PLAYWRIGHT_BROWSERS_JSON_SHA256,
     "chromium_executable_sha256": _CHROMIUM_EXECUTABLE_SHA256,
 }
-_PLAYWRIGHT_DRIVER_CONTENT_SHA256 = (
+_PREVIOUS_PLAYWRIGHT_DRIVER_CONTENT_SHA256 = (
     "4d8f576c788db015ecfd977fb3868a437c55ba45b39da7943990f3938ee7798f"
 )
-_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256 = (
+_PREVIOUS_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256 = (
     "91982e3a741cc7bc58c4b3abe85358cd63946ed6db11e15dd754b0e7cf51409f"
 )
-_PLAYWRIGHT_DRIVER_RECEIPT_SHA256 = (
+_PREVIOUS_PLAYWRIGHT_DRIVER_RECEIPT_SHA256 = (
     "709f81c4f07b3b06eb6bd4c29f4b6eb69a5e8157f8378638b75a453226ed0caa"
 )
-_PLAYWRIGHT_DRIVER_OWNERSHIP_POLICY = {
+_PREVIOUS_PLAYWRIGHT_DRIVER_OWNERSHIP_POLICY = {
     **_LEGACY_PLAYWRIGHT_DRIVER_OWNERSHIP_POLICY,
     "name": "qcsd-conditional-exclusive-recursive-cdp-target-ownership-v7",
     "exclusive_context_route": {
@@ -878,6 +879,44 @@ _PLAYWRIGHT_DRIVER_OWNERSHIP_POLICY = {
         "purpose": "pre-io-popup-and-document-navigation-policy",
         "subresource_admission_owner": "qcsd-recursive-cdp-fetch",
         "http_credentials": "rejected-before-network-manager-state-mutation",
+    },
+}
+_PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_BINDING = {
+    "receipt_sha256": _PREVIOUS_PLAYWRIGHT_DRIVER_RECEIPT_SHA256,
+    "payload_sha256": _PREVIOUS_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256,
+    "content_sha256": _PREVIOUS_PLAYWRIGHT_DRIVER_CONTENT_SHA256,
+    "policy": _PREVIOUS_PLAYWRIGHT_DRIVER_OWNERSHIP_POLICY,
+    "browsers_json_sha256": _PLAYWRIGHT_BROWSERS_JSON_SHA256,
+    "chromium_executable_sha256": _CHROMIUM_EXECUTABLE_SHA256,
+}
+_PLAYWRIGHT_DRIVER_CONTENT_SHA256 = (
+    "3f8b25f097d439ccbfa4404efc887357d441d437ccefaca5852a93e3dfe28186"
+)
+_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256 = (
+    "3e14582e31c0f2bf9fb7f5c6222643dd351403e44a02a8096dc8441f91e820e0"
+)
+_PLAYWRIGHT_DRIVER_RECEIPT_SHA256 = (
+    "a5aada06e4fd315d08b2235701480a13f0852188749e489d6bc9386b3a34632f"
+)
+_PLAYWRIGHT_DRIVER_OWNERSHIP_POLICY = {
+    **_PREVIOUS_PLAYWRIGHT_DRIVER_OWNERSHIP_POLICY,
+    "name": "qcsd-conditional-exclusive-recursive-cdp-target-ownership-v8",
+    "exclusive_context_route": {
+        "playwright_fetch_resource_types": ["Document"],
+        "request_stage": "Request",
+        "purpose": "pre-io-popup-and-document-navigation-policy",
+        "subresource_admission_owner": "qcsd-recursive-cdp-fetch",
+        "http_credentials": (
+            "rejected-at-awaited-pre-context-and-runtime-mutation-boundaries"
+        ),
+        "http_credentials_rejection": {
+            "client_certificate_proxy_override": "allowed-when-unauthenticated",
+            "context_reuse": "new-context-guarded-and-reset-cannot-introduce-credentials",
+            "ephemeral_context": "browser-new-context-before-validation-or-target-creation",
+            "persistent_context": "browser-type-launch-persistent-context-before-browser-launch",
+            "runtime_update": "browser-context-set-http-credentials-before-mutation",
+            "scope": "exclusive-chromium-only",
+        },
     },
 }
 _EXPECTED_PLAYWRIGHT_DRIVER_BINDING = {
@@ -910,8 +949,8 @@ _HISTORICAL_PINNED_CDP_CONTRACT_V11 = {
     "playwright_version": _PLAYWRIGHT_VERSION,
     "chromium_executable": _CHROMIUM_EXECUTABLE,
     "chromium_version": _CHROMIUM_VERSION,
-    "playwright_driver_ownership_policy": _PLAYWRIGHT_DRIVER_OWNERSHIP_POLICY,
-    "playwright_driver_binding": _EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
+    "playwright_driver_ownership_policy": _PREVIOUS_PLAYWRIGHT_DRIVER_OWNERSHIP_POLICY,
+    "playwright_driver_binding": _PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
     "playwright_browsers_json_sha256": _PLAYWRIGHT_BROWSERS_JSON_SHA256,
     "chromium_executable_sha256": _CHROMIUM_EXECUTABLE_SHA256,
     "network_scope": "docker-network-none-loopback-only",
@@ -942,11 +981,13 @@ _HISTORICAL_PINNED_CDP_CONTRACT_V11 = {
     "non_replayable_egress_policy": _NON_REPLAYABLE_EGRESS_POLICY,
     "packet_level_egress_completeness_claimed": False,
 }
-_PINNED_CDP_CONTRACT = {
+_HISTORICAL_PINNED_CDP_CONTRACT_V12 = {
     **_HISTORICAL_PINNED_CDP_CONTRACT_V11,
-    "schema_version": _PINNED_CDP_CONTRACT_SCHEMA_VERSION,
+    "schema_version": _HISTORICAL_PINNED_CDP_CONTRACT_V12_SCHEMA_VERSION,
     "policy": "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v11",
-    "instrumentation_policy": _CDP_TARGET_INSTRUMENTATION_POLICY,
+    "instrumentation_policy": (
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v13"
+    ),
     "required_observations": [
         item
         for item in _HISTORICAL_PINNED_CDP_CONTRACT_V11["required_observations"]
@@ -971,6 +1012,14 @@ _PINNED_CDP_CONTRACT = {
     "worker_webtransport_probe_schema_version": (
         _PINNED_CDP_WORKER_WEBTRANSPORT_PROBE_SCHEMA_VERSION
     ),
+}
+_PINNED_CDP_CONTRACT = {
+    **_HISTORICAL_PINNED_CDP_CONTRACT_V12,
+    "schema_version": _PINNED_CDP_CONTRACT_SCHEMA_VERSION,
+    "policy": "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v12",
+    "instrumentation_policy": _CDP_TARGET_INSTRUMENTATION_POLICY,
+    "playwright_driver_ownership_policy": _PLAYWRIGHT_DRIVER_OWNERSHIP_POLICY,
+    "playwright_driver_binding": _EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
 }
 _HISTORICAL_PINNED_CDP_CONTRACT = {
     "schema_version": _HISTORICAL_PINNED_CDP_CONTRACT_SCHEMA_VERSION,

@@ -67,6 +67,8 @@ from .playwright_driver import (
     LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
     LEGACY_OWNERSHIP_POLICY_RECEIPT,
     OWNERSHIP_POLICY_RECEIPT,
+    PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
+    PREVIOUS_OWNERSHIP_POLICY_RECEIPT,
     PLAYWRIGHT_VERSION,
     pinned_chromium_executable_path,
     playwright_driver_session,
@@ -104,9 +106,9 @@ _HISTORICAL_PINNED_CDP_RESOLVER_PROJECTION = {
 }
 
 RECEIPT_TYPE = "qcsd-class-study-pinned-cdp-probe"
-PROBE_SCHEMA_VERSION = 12
+PROBE_SCHEMA_VERSION = 13
 HISTORICAL_PROBE_SCHEMA_VERSION = 8
-HISTORICAL_PROBE_SCHEMA_VERSIONS = frozenset({8, 9, 11})
+HISTORICAL_PROBE_SCHEMA_VERSIONS = frozenset({8, 9, 11, 12})
 EXPECTED_PLAYWRIGHT_VERSION = PLAYWRIGHT_VERSION
 EXPECTED_CHROMIUM_EXECUTABLE = str(DEFAULT_CONFIGURED_EXECUTABLE)
 PROBE_OBSERVATION_TIMEOUT_MS = 10_000
@@ -191,8 +193,8 @@ _HISTORICAL_PROBE_CONTRACT_V11: dict[str, Any] = _probe_contract(
     instrumentation_policy=(
         "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v12"
     ),
-    playwright_driver_ownership_policy=OWNERSHIP_POLICY_RECEIPT,
-    playwright_driver_binding=EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
+    playwright_driver_ownership_policy=PREVIOUS_OWNERSHIP_POLICY_RECEIPT,
+    playwright_driver_binding=PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
 )
 _HISTORICAL_PROBE_CONTRACT_V11["required_observations"].extend(
     [
@@ -204,29 +206,68 @@ _HISTORICAL_PROBE_CONTRACT_V11["required_observations"].extend(
 )
 _HISTORICAL_PROBE_CONTRACT_V11_SHA256 = canonical_json_sha256(_HISTORICAL_PROBE_CONTRACT_V11)
 
-PROBE_CONTRACT: dict[str, Any] = _probe_contract(
+
+def _worker_webtransport_probe_contract(
+    *,
+    schema_version: int,
+    policy: str,
+    instrumentation_policy: str,
+    playwright_driver_ownership_policy: Mapping[str, Any],
+    playwright_driver_binding: Mapping[str, Any],
+) -> dict[str, Any]:
+    contract = _probe_contract(
+        schema_version=schema_version,
+        policy=policy,
+        instrumentation_policy=instrumentation_policy,
+        playwright_driver_ownership_policy=playwright_driver_ownership_policy,
+        playwright_driver_binding=playwright_driver_binding,
+    )
+    contract["required_observations"].remove(
+        "zero-service-worker-and-non-replayable-egress-attempts"
+    )
+    contract["required_observations"].extend(
+        [
+            "zero-unsanctioned-service-worker-and-non-replayable-egress-attempts",
+            "paused-runnable-target-first-script-prearmed-before-execution",
+            "dedicated-and-shared-worker-response-bodies-consumed",
+            "document-only-playwright-route-with-recursive-cdp-subresource-ownership",
+            "shared-worker-guardian-real-detach-ordered-before-final-proof",
+            "potentially-trustworthy-loopback-worker-origin",
+            "dedicated-and-shared-worker-webtransport-blocked-after-prearm-with-exact-telemetry",
+        ]
+    )
+    contract["worker_webtransport_probe_schema_version"] = (
+        WORKER_WEBTRANSPORT_PROBE_SCHEMA_VERSION
+    )
+    return contract
+
+
+# Probe schema 12 is immutable v83 evidence. It has the current resolver,
+# driver, build identity, and worker-WebTransport observation, but predates the
+# router's narrowly receipted Chromium error-document lifecycle exception.
+_HISTORICAL_PROBE_CONTRACT_V12 = _worker_webtransport_probe_contract(
     schema_version=11,
     policy="pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v11",
+    instrumentation_policy=(
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v13"
+    ),
+    playwright_driver_ownership_policy=PREVIOUS_OWNERSHIP_POLICY_RECEIPT,
+    playwright_driver_binding=PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
+)
+_HISTORICAL_PROBE_CONTRACT_V12_SHA256 = canonical_json_sha256(
+    _HISTORICAL_PROBE_CONTRACT_V12
+)
+
+# Outer schema 13 was advanced for the current error-document lifecycle work
+# but has never been executed.  It therefore intentionally binds that router
+# policy and the corrected v8 driver together; immutable v83 evidence remains
+# outer schema 12 and is dispatched above with the frozen v7 driver binding.
+PROBE_CONTRACT: dict[str, Any] = _worker_webtransport_probe_contract(
+    schema_version=12,
+    policy="pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v12",
     instrumentation_policy=CDP_TARGET_INSTRUMENTATION_POLICY,
     playwright_driver_ownership_policy=OWNERSHIP_POLICY_RECEIPT,
     playwright_driver_binding=EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
-)
-PROBE_CONTRACT["required_observations"].remove(
-    "zero-service-worker-and-non-replayable-egress-attempts"
-)
-PROBE_CONTRACT["required_observations"].extend(
-    [
-        "zero-unsanctioned-service-worker-and-non-replayable-egress-attempts",
-        "paused-runnable-target-first-script-prearmed-before-execution",
-        "dedicated-and-shared-worker-response-bodies-consumed",
-        "document-only-playwright-route-with-recursive-cdp-subresource-ownership",
-        "shared-worker-guardian-real-detach-ordered-before-final-proof",
-        "potentially-trustworthy-loopback-worker-origin",
-        "dedicated-and-shared-worker-webtransport-blocked-after-prearm-with-exact-telemetry",
-    ]
-)
-PROBE_CONTRACT["worker_webtransport_probe_schema_version"] = (
-    WORKER_WEBTRANSPORT_PROBE_SCHEMA_VERSION
 )
 PROBE_CONTRACT_SHA256 = canonical_json_sha256(PROBE_CONTRACT)
 
@@ -1338,6 +1379,9 @@ def _validate_payload(
     elif probe_schema_version == 11:
         expected_contract = _HISTORICAL_PROBE_CONTRACT_V11
         expected_contract_sha256 = _HISTORICAL_PROBE_CONTRACT_V11_SHA256
+    elif probe_schema_version == 12:
+        expected_contract = _HISTORICAL_PROBE_CONTRACT_V12
+        expected_contract_sha256 = _HISTORICAL_PROBE_CONTRACT_V12_SHA256
     else:
         expected_contract = PROBE_CONTRACT
         expected_contract_sha256 = PROBE_CONTRACT_SHA256
@@ -1361,16 +1405,20 @@ def _validate_payload(
     observation = _validate_observation(
         payload.get("observation"),
         require_worker_response_consumption=probe_schema_version not in {8, 9},
-        require_worker_webtransport_probe=probe_schema_version == PROBE_SCHEMA_VERSION,
+        require_worker_webtransport_probe=probe_schema_version in {12, PROBE_SCHEMA_VERSION},
         expected_resolver_projection=(
             _HISTORICAL_PINNED_CDP_RESOLVER_PROJECTION
-            if historical_probe
+            if probe_schema_version in {8, 9, 11}
             else _PINNED_CDP_RESOLVER_PROJECTION
         ),
         expected_playwright_driver_binding=(
             LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_BINDING
             if probe_schema_version in {8, 9}
-            else EXPECTED_PLAYWRIGHT_DRIVER_BINDING
+            else (
+                PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_BINDING
+                if probe_schema_version in {11, 12}
+                else EXPECTED_PLAYWRIGHT_DRIVER_BINDING
+            )
         ),
     )
     if runtime_role is not None:

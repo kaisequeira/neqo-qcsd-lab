@@ -48,9 +48,9 @@ EXPECTED_PLAYWRIGHT_PACKAGE_PRE_PATCH_TREE = {
     "total_bytes": 131_856_713,
 }
 EXPECTED_PLAYWRIGHT_PACKAGE_POST_PATCH_TREE = {
-    "sha256": "fdd7094c7b4a9b9a045b1107f357ae9f9f534716f5766c29aa824c421dcca27d",
+    "sha256": "e1f812bef884deb63c60b31de73c4b6dbaff50dd4df8eea195a20e10ccb30244",
     "file_count": 401,
-    "total_bytes": 131_857_836,
+    "total_bytes": 131_858_560,
 }
 CHROMIUM_DISTRIBUTION_TREE_DOMAIN = "qcsd-chromium-distribution-tree-v1"
 EXPECTED_CHROMIUM_DISTRIBUTION_TREE = {
@@ -59,21 +59,21 @@ EXPECTED_CHROMIUM_DISTRIBUTION_TREE = {
     "total_bytes": 616_583_533,
 }
 EXPECTED_PLAYWRIGHT_DRIVER_CONTENT_SHA256 = (
-    "4d8f576c788db015ecfd977fb3868a437c55ba45b39da7943990f3938ee7798f"
+    "3f8b25f097d439ccbfa4404efc887357d441d437ccefaca5852a93e3dfe28186"
 )
 EXPECTED_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256 = (
-    "91982e3a741cc7bc58c4b3abe85358cd63946ed6db11e15dd754b0e7cf51409f"
+    "3e14582e31c0f2bf9fb7f5c6222643dd351403e44a02a8096dc8441f91e820e0"
 )
 EXPECTED_PLAYWRIGHT_DRIVER_RECEIPT_SHA256 = (
-    "709f81c4f07b3b06eb6bd4c29f4b6eb69a5e8157f8378638b75a453226ed0caa"
+    "a5aada06e4fd315d08b2235701480a13f0852188749e489d6bc9386b3a34632f"
 )
 CHROMIUM_SHARED_WORKER_PAUSE_FIX_COMMIT = "0606a60db66fc14d6fd76c8d532392b26504b308"
 CHROMIUM_SHARED_WORKER_PAUSE_FIX_POSITION = 1_529_406
-RECEIPT_SCHEMA_VERSION = 7
+RECEIPT_SCHEMA_VERSION = 8
 RECEIPT_TYPE = "qcsd-playwright-cdp-ownership"
-RECEIPT_DOMAIN = "qcsd-playwright-cdp-ownership-v7"
-CONTENT_DOMAIN = "qcsd-playwright-cdp-driver-content-v7"
-OWNERSHIP_POLICY = "qcsd-conditional-exclusive-recursive-cdp-target-ownership-v7"
+RECEIPT_DOMAIN = "qcsd-playwright-cdp-ownership-v8"
+CONTENT_DOMAIN = "qcsd-playwright-cdp-driver-content-v8"
+OWNERSHIP_POLICY = "qcsd-conditional-exclusive-recursive-cdp-target-ownership-v8"
 OWNERSHIP_MARKER_NAME = "QCSD_EXCLUSIVE_CDP_TARGET_OWNERSHIP"
 OWNERSHIP_MARKER_VALUE = "1"
 # These are the ambient switches read by the pinned Python/Node driver which can
@@ -108,8 +108,10 @@ _CHROMIUM_CHILD_ENVIRONMENT_ITEMS = (
     ("TZ", "UTC"),
 )
 CHROMIUM_CHILD_ENVIRONMENT = dict(_CHROMIUM_CHILD_ENVIRONMENT_ITEMS)
-OWNERSHIP_POLICY_RECEIPT = {
-    "name": OWNERSHIP_POLICY,
+PREVIOUS_RECEIPT_SCHEMA_VERSION = 7
+PREVIOUS_OWNERSHIP_POLICY = "qcsd-conditional-exclusive-recursive-cdp-target-ownership-v7"
+PREVIOUS_OWNERSHIP_POLICY_RECEIPT = {
+    "name": PREVIOUS_OWNERSHIP_POLICY,
     "activation_environment_variable": OWNERSHIP_MARKER_NAME,
     "activation_value": OWNERSHIP_MARKER_VALUE,
     "inactive_semantics": "native-playwright-unfiltered-auto-attach",
@@ -134,6 +136,36 @@ OWNERSHIP_POLICY_RECEIPT = {
         "same_approved_origin_speculation_prefetch_required": True,
         "ordinary_playwright_launch": True,
     },
+}
+PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_CONTENT_SHA256 = (
+    "4d8f576c788db015ecfd977fb3868a437c55ba45b39da7943990f3938ee7798f"
+)
+PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256 = (
+    "91982e3a741cc7bc58c4b3abe85358cd63946ed6db11e15dd754b0e7cf51409f"
+)
+PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_RECEIPT_SHA256 = (
+    "709f81c4f07b3b06eb6bd4c29f4b6eb69a5e8157f8378638b75a453226ed0caa"
+)
+PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_BINDING = {
+    "receipt_sha256": PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_RECEIPT_SHA256,
+    "payload_sha256": PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256,
+    "content_sha256": PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_CONTENT_SHA256,
+    "policy": copy.deepcopy(PREVIOUS_OWNERSHIP_POLICY_RECEIPT),
+    "browsers_json_sha256": EXPECTED_BROWSERS_JSON_SHA256,
+    "chromium_executable_sha256": EXPECTED_CHROMIUM_SHA256,
+}
+OWNERSHIP_POLICY_RECEIPT = copy.deepcopy(PREVIOUS_OWNERSHIP_POLICY_RECEIPT)
+OWNERSHIP_POLICY_RECEIPT["name"] = OWNERSHIP_POLICY
+OWNERSHIP_POLICY_RECEIPT["exclusive_context_route"]["http_credentials"] = (
+    "rejected-at-awaited-pre-context-and-runtime-mutation-boundaries"
+)
+OWNERSHIP_POLICY_RECEIPT["exclusive_context_route"]["http_credentials_rejection"] = {
+    "client_certificate_proxy_override": "allowed-when-unauthenticated",
+    "context_reuse": "new-context-guarded-and-reset-cannot-introduce-credentials",
+    "ephemeral_context": "browser-new-context-before-validation-or-target-creation",
+    "persistent_context": "browser-type-launch-persistent-context-before-browser-launch",
+    "runtime_update": "browser-context-set-http-credentials-before-mutation",
+    "scope": "exclusive-chromium-only",
 }
 LEGACY_RECEIPT_SCHEMA_VERSION = 6
 LEGACY_OWNERSHIP_POLICY = "qcsd-conditional-exclusive-recursive-cdp-target-ownership-v6"
@@ -209,8 +241,17 @@ _DIGEST_LENGTH = 64
 _ATTACH_EXPRESSION = b"{ autoAttach: true, waitForDebuggerOnStart: true, flatten: true }"
 _REPLACEMENT_COUNT = 2
 _NETWORK_FETCH_PATTERN_EXPRESSION = b'patterns: [{ urlPattern: "*", requestStage: "Request" }]'
-_HTTP_CREDENTIALS_ASSIGNMENT = (
-    b"  async authenticate(credentials) {\n    this._credentials = credentials;"
+_BROWSER_NEW_CONTEXT = (
+    b"  async newContext(progress, options) {\n"
+    b"    (0, import_browserContext.validateBrowserContextOptions)(options, this.options);"
+)
+_BROWSER_TYPE_LAUNCH_PERSISTENT_CONTEXT = (
+    b"  async launchPersistentContext(progress, userDataDir, options) {\n"
+    b"    const launchOptions = this._validateLaunchOptions(options);"
+)
+_BROWSER_CONTEXT_SET_HTTP_CREDENTIALS = (
+    b"  setHTTPCredentials(httpCredentials) {\n"
+    b"    return this.doSetHTTPCredentials(httpCredentials);"
 )
 _OWNERSHIP_ENVIRONMENT_LOCK = threading.RLock()
 _VALIDATION_CACHE_LOCK = threading.Lock()
@@ -223,6 +264,7 @@ class _DriverFileSpec:
     pre_patch_sha256: str
     post_patch_sha256: str
     patches: tuple["_DriverPatchSpec", ...]
+    parent_levels_from_driver_root: int = 0
 
 
 @dataclass(frozen=True)
@@ -327,13 +369,40 @@ def _exclusive_fetch_pattern_replacement() -> bytes:
     ).encode()
 
 
-def _exclusive_http_credentials_replacement() -> bytes:
+def _exclusive_ephemeral_http_credentials_replacement() -> bytes:
     return (
-        "  async authenticate(credentials) {\n"
+        "  async newContext(progress, options) {\n"
         f"    if (process.env.{OWNERSHIP_MARKER_NAME} === "
-        f'"{OWNERSHIP_MARKER_VALUE}" && credentials !== null)\n'
-        '      throw new Error("QCSD exclusive CDP ownership forbids HTTP credentials");\n'
-        "    this._credentials = credentials;"
+        f'"{OWNERSHIP_MARKER_VALUE}" && this.options.name === "chromium" '
+        "&& (options.httpCredentials != null || options.proxy?.username != null "
+        "|| options.proxy?.password != null || this.options.proxy?.username != null "
+        "|| this.options.proxy?.password != null))\n"
+        '      throw new Error("QCSD exclusive CDP ownership forbids HTTP or proxy credentials");\n'
+        "    (0, import_browserContext.validateBrowserContextOptions)"
+        "(options, this.options);"
+    ).encode()
+
+
+def _exclusive_persistent_http_credentials_replacement() -> bytes:
+    return (
+        "  async launchPersistentContext(progress, userDataDir, options) {\n"
+        f"    if (process.env.{OWNERSHIP_MARKER_NAME} === "
+        f'"{OWNERSHIP_MARKER_VALUE}" && this._name === "chromium" '
+        "&& (options.httpCredentials != null || options.proxy?.username != null "
+        "|| options.proxy?.password != null))\n"
+        '      throw new Error("QCSD exclusive CDP ownership forbids HTTP or proxy credentials");\n'
+        "    const launchOptions = this._validateLaunchOptions(options);"
+    ).encode()
+
+
+def _exclusive_runtime_http_credentials_replacement() -> bytes:
+    return (
+        "  setHTTPCredentials(httpCredentials) {\n"
+        f"    if (process.env.{OWNERSHIP_MARKER_NAME} === "
+        f'"{OWNERSHIP_MARKER_VALUE}" && this._browser.options.name === "chromium" '
+        "&& httpCredentials != null)\n"
+        '      throw new Error("QCSD exclusive CDP ownership forbids HTTP or proxy credentials");\n'
+        "    return this.doSetHTTPCredentials(httpCredentials);"
     ).encode()
 
 
@@ -363,7 +432,7 @@ _FILE_SPECS = (
     _DriverFileSpec(
         filename="crNetworkManager.js",
         pre_patch_sha256=("55562bd3e4c190d3306c0ff1504655e7521889f25994bd6ac88d3f405693fadb"),
-        post_patch_sha256=("c10daf1b5c5c6c64e1c545ff7d7bb16f9990aa71c4fe64e081c3a43157d4531a"),
+        post_patch_sha256=("e47369a2262a86809373d8cecf543ccafc469a163d54caa94d3793ad7c747905"),
         patches=(
             _DriverPatchSpec(
                 kind="exclusive-document-route-fetch-pattern",
@@ -376,20 +445,93 @@ _FILE_SPECS = (
                     ("request_stage", "Request"),
                 ),
             ),
+        ),
+    ),
+    _DriverFileSpec(
+        filename="browser.js",
+        pre_patch_sha256=("4f461d840a29f0eac9fe2a0f10f7cf97c06b2d5ee37f17988540abbb85fae19d"),
+        post_patch_sha256=("fb84814c0bc8ebf3f058ae381b6a948c5dabceac238ced7191c209eae64a6b0c"),
+        patches=(
             _DriverPatchSpec(
-                kind="exclusive-http-credentials-rejection",
-                preimage=_HTTP_CREDENTIALS_ASSIGNMENT,
-                replacement=_exclusive_http_credentials_replacement(),
+                kind="exclusive-ephemeral-context-credentials-rejection",
+                preimage=_BROWSER_NEW_CONTEXT,
+                replacement=_exclusive_ephemeral_http_credentials_replacement(),
                 replacement_count=1,
                 receipt_parameters=(
-                    ("exclusive_http_credentials", "rejected"),
-                    ("rejection_timing", "before-network-manager-state-mutation"),
+                    ("browser", "chromium"),
+                    ("context_lifecycle", "ephemeral"),
+                    (
+                        "credential_sources",
+                        ("browser-proxy", "context-http", "context-proxy"),
+                    ),
+                    ("exclusive_credentials", "rejected"),
                     ("inactive_semantics", "native-playwright"),
+                    ("rejection_timing", "before-context-validation-or-target-creation"),
                 ),
             ),
         ),
+        parent_levels_from_driver_root=1,
+    ),
+    _DriverFileSpec(
+        filename="browserType.js",
+        pre_patch_sha256=("79a831a557bf2a96d2d5315e8a0acb1ae206dc3b59d7ff45157514adfc00329d"),
+        post_patch_sha256=("a3fc230bb2c7b3ef171bb162bcc91adaa7f9ce1829645b5247b1da075b9c5eae"),
+        patches=(
+            _DriverPatchSpec(
+                kind="exclusive-persistent-context-credentials-rejection",
+                preimage=_BROWSER_TYPE_LAUNCH_PERSISTENT_CONTEXT,
+                replacement=_exclusive_persistent_http_credentials_replacement(),
+                replacement_count=1,
+                receipt_parameters=(
+                    ("browser", "chromium"),
+                    ("context_lifecycle", "persistent"),
+                    ("credential_sources", ("context-http", "context-proxy")),
+                    ("exclusive_credentials", "rejected"),
+                    ("inactive_semantics", "native-playwright"),
+                    (
+                        "rejection_timing",
+                        "before-launch-option-validation-or-browser-launch",
+                    ),
+                ),
+            ),
+        ),
+        parent_levels_from_driver_root=1,
+    ),
+    _DriverFileSpec(
+        filename="browserContext.js",
+        pre_patch_sha256=("c8ee093844c67b2054366d76b5f46fd89feb3cc7ffa02ec148f9bdbee5a09491"),
+        post_patch_sha256=("b83ce9d61f4d8d6c5c9b7e44a2300b9a13fa80224d94d17a59bb88da1ff9d095"),
+        patches=(
+            _DriverPatchSpec(
+                kind="exclusive-runtime-http-credentials-rejection",
+                preimage=_BROWSER_CONTEXT_SET_HTTP_CREDENTIALS,
+                replacement=_exclusive_runtime_http_credentials_replacement(),
+                replacement_count=1,
+                receipt_parameters=(
+                    ("browser", "chromium"),
+                    ("credential_source", "runtime-http"),
+                    ("exclusive_credentials", "rejected"),
+                    ("null_semantics", "clear-native-playwright-credentials"),
+                    ("inactive_semantics", "native-playwright"),
+                    ("rejection_timing", "before-browser-context-state-mutation"),
+                ),
+            ),
+        ),
+        parent_levels_from_driver_root=1,
     ),
 )
+
+
+def _driver_file_path(root: Path, specification: _DriverFileSpec) -> Path:
+    """Resolve one pinned file without allowing a specification to escape server/."""
+
+    levels = specification.parent_levels_from_driver_root
+    if type(levels) is not int or levels not in {0, 1}:
+        raise ValueError("Playwright driver file parent level is invalid")
+    if not specification.filename or Path(specification.filename).name != specification.filename:
+        raise ValueError("Playwright driver filename is invalid")
+    directory = root if levels == 0 else root.parent
+    return directory / specification.filename
 
 
 def _patch_parameters(specification: _DriverPatchSpec) -> dict[str, str | list[str]]:
@@ -1069,7 +1211,7 @@ def expected_playwright_driver_receipt() -> dict[str, Any]:
     """Return the exact receipt expected at the immutable production paths."""
 
     paths = {
-        specification.filename: DEFAULT_DRIVER_ROOT / specification.filename
+        specification.filename: _driver_file_path(DEFAULT_DRIVER_ROOT, specification)
         for specification in _FILE_SPECS
     }
     files = {
@@ -1326,7 +1468,7 @@ def patch_playwright_driver(
     metadata: dict[str, os.stat_result] = {}
     paths: dict[str, Path] = {}
     for specification in _FILE_SPECS:
-        path = root / specification.filename
+        path = _driver_file_path(root, specification)
         source, source_metadata = _regular_file(
             path,
             label=f"Playwright {specification.filename}",
@@ -1553,7 +1695,7 @@ def validate_playwright_driver(
     for specification in _FILE_SPECS:
         filename = specification.filename
         record = records.get(filename)
-        expected_path = root / filename
+        expected_path = _driver_file_path(root, specification)
         recorded_patches = record.get("patches") if isinstance(record, Mapping) else None
         if (
             not isinstance(record, Mapping)
@@ -1793,7 +1935,7 @@ def validate_qualification_playwright_driver_once(
             raise ValueError("Playwright production receipt is invalid under control policy")
         for specification in _FILE_SPECS:
             content, _ = _regular_file(
-                root / specification.filename,
+                _driver_file_path(root, specification),
                 label=f"Playwright {specification.filename}",
                 expected_owner_uid=0,
             )

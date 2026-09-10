@@ -1684,7 +1684,7 @@ def test_class_build_admission_accepts_current_pinned_cdp_schema(tmp_path: Path)
     from qcsd_lab.class_build_admission import resolve_action_admission
 
     fixture = _class_build_admission_fixture(tmp_path)
-    pinned = _class_build_pinned_cdp_receipt(fixture, schema=12)
+    pinned = _class_build_pinned_cdp_receipt(fixture, schema=13)
 
     assert (
         resolve_action_admission(
@@ -1698,7 +1698,7 @@ def test_class_build_admission_accepts_current_pinned_cdp_schema(tmp_path: Path)
     )
 
 
-@pytest.mark.parametrize("schema", (12.0, "12", True))
+@pytest.mark.parametrize("schema", (13.0, "13", True))
 def test_class_build_admission_rejects_current_pinned_cdp_schema_aliases(
     tmp_path: Path,
     schema: object,
@@ -1718,7 +1718,7 @@ def test_class_build_admission_rejects_current_pinned_cdp_schema_aliases(
         )
 
 
-@pytest.mark.parametrize("schema", (8, 9, 11))
+@pytest.mark.parametrize("schema", (8, 9, 11, 12))
 def test_class_build_admission_classifies_old_pinned_cdp_schemas_as_historical(
     tmp_path: Path,
     schema: int,
@@ -4044,10 +4044,23 @@ def test_browser_egress_staged_readiness_and_subject_ack_are_ordered(
     subject_ack = vector_loop.index(
         "/tmp/qcsd-browser-egress-subject-started.ready", observer_signal
     )
-    browser_signal = vector_loop.index(
-        'kill --signal USR1 "${browser_egress_browser_id}"', subject_ack
+    action_failure = vector_loop.index(
+        "browser_egress_failure_code=browser-action-failed", subject_ack
     )
-    assert cursor < observer_signal < subject_ack < browser_signal
+    action_stage = vector_loop.index(
+        "browser_egress_failure_stage=browser-action", action_failure
+    )
+    browser_signal = vector_loop.index(
+        'kill --signal USR1 "${browser_egress_browser_id}"', action_stage
+    )
+    assert (
+        cursor
+        < observer_signal
+        < subject_ack
+        < action_failure
+        < action_stage
+        < browser_signal
+    )
 
     healthy = (
         "browser_egress_wait_healthy() {"

@@ -77,11 +77,13 @@ from qcsd_lab.browser_egress_qualification import (
     EMPTY_SHA256,
     FINAL_RECEIPT_TYPE,
     FINAL_SCHEMA_VERSION,
+    FOUNDATION_SCHEMA_VERSION,
     FIXTURE_RUNTIME_CERTIFICATE,
     FIXTURE_RUNTIME_PRIVATE_KEY,
     FIXTURE_TLS_MASK_DIRECTORY,
     FIXTURE_TLS_MASK_TMPFS_OPTIONS,
     HISTORICAL_FOUNDATION_SCHEMA_VERSION,
+    HISTORICAL_FOUNDATION_SCHEMA_VERSIONS,
     MANIFEST_RELATIVE_PATH,
     POLICY_VOLUME_MANAGED_DIRECTORY,
     POLICY_VOLUME_POLICY_FILENAME,
@@ -91,6 +93,7 @@ from qcsd_lab.browser_egress_qualification import (
     RESULT_RECEIPT_TYPE,
     ROLE_TMPFS_OPTIONS,
     FoundationVerificationMode,
+    _browser_binding,
     _validate_effective_argv,
     append_result,
     begin_attempt,
@@ -256,7 +259,7 @@ class _BuildValidator:
             "source": source,
             "passed": True,
         }
-        if not self.allow_historical:
+        if self.foundation["schema_version"] >= 3:
             result.update(
                 {
                     "completion_path": str(
@@ -489,22 +492,30 @@ def test_foundation_rejects_bool_float_and_adversarial_reseal(tmp_path: Path) ->
             build_validator=_BuildValidator(foundation),
             mode=FoundationVerificationMode.PORTABLE_REPLAY,
         )
-    historical = copy.deepcopy(foundation)
-    historical["schema_version"] = HISTORICAL_FOUNDATION_SCHEMA_VERSION
-    historical["build_execution"].pop("completion_path")
-    historical["build_execution"].pop("completion_sha256")
-    with pytest.raises(ValueError, match="foundation identity"):
-        validate_foundation_payload(historical)
-    assert validate_foundation_payload(historical, allow_historical=True) == json.loads(
-        canonical_json_bytes(historical)
-    )
-    assert deep_validate_foundation(
-        historical,
-        lab_root=_root,
-        build_validator=_BuildValidator(historical, allow_historical=True),
-        mode=FoundationVerificationMode.PORTABLE_REPLAY,
-        allow_historical=True,
-    ) == json.loads(canonical_json_bytes(historical))
+    assert FOUNDATION_SCHEMA_VERSION == 4
+    assert HISTORICAL_FOUNDATION_SCHEMA_VERSION == 2
+    assert HISTORICAL_FOUNDATION_SCHEMA_VERSIONS == frozenset({2, 3})
+    for historical_schema in sorted(HISTORICAL_FOUNDATION_SCHEMA_VERSIONS):
+        historical = copy.deepcopy(foundation)
+        historical["schema_version"] = historical_schema
+        historical["browser"] = _browser_binding(
+            foundation_schema_version=historical_schema
+        )
+        if historical_schema == 2:
+            historical["build_execution"].pop("completion_path")
+            historical["build_execution"].pop("completion_sha256")
+        with pytest.raises(ValueError, match="foundation identity"):
+            validate_foundation_payload(historical)
+        assert validate_foundation_payload(
+            historical, allow_historical=True
+        ) == json.loads(canonical_json_bytes(historical))
+        assert deep_validate_foundation(
+            historical,
+            lab_root=_root,
+            build_validator=_BuildValidator(historical, allow_historical=True),
+            mode=FoundationVerificationMode.PORTABLE_REPLAY,
+            allow_historical=True,
+        ) == json.loads(canonical_json_bytes(historical))
 
 
 def test_foundation_rejects_cross_daemon_and_resealed_daemon_claim(
@@ -2202,6 +2213,16 @@ def test_source_binding_closes_known_runner_and_core_dependencies() -> None:
     assert "tools/class_acquisition_watch.py" not in required
 
 
+def test_named_frame_actor_waits_for_load_instead_of_a_fixed_delay() -> None:
+    source = (
+        Path(__file__).resolve().parents[1] / "tools/browser_egress_qualification.py"
+    ).read_text(encoding="utf-8")
+    assert "frame.onload = () => resolve(true);" in source
+    assert "frame.onerror = () => reject(new Error('named frame failed to load'));" in source
+    assert 'f"{primary}/frame"' in source
+    assert "page.wait_for_timeout(100)" not in source
+
+
 def test_browser_qualification_module_scope_import_closure_is_source_bound() -> None:
     root = Path(__file__).resolve().parents[1]
     required = set(REQUIRED_SOURCE_BINDING_PATHS)
@@ -2538,6 +2559,28 @@ def test_resume_repairs_only_exact_one_result_checkpoint_publish_lag(
     (result_root / "experiment.json").write_bytes(canonical_json_bytes(stored))
     with pytest.raises(ValueError, match="checkpoint"):
         recover_interrupted_attempt(result_root, finished_at=_wall_time(4))
+
+
+def test_browser_action_failure_is_a_retryable_operational_failure(tmp_path: Path) -> None:
+    _lab_root, foundation = _lab(tmp_path)
+    receipt = build_failure_result_receipt(
+        foundation=foundation,
+        global_ordinal=1,
+        attempt_number=1,
+        previous_result_sha256="0" * 64,
+        vector_id="popup--page--window-open-existing-named-frame",
+        started_at=_wall_time(1),
+        finished_at=_wall_time(2),
+        verdict="operational-failure",
+        failure_code="browser-action-failed",
+        failure_artifacts=[],
+    )
+    assert receipt["payload"]["failure_code"] == "browser-action-failed"
+
+    forged = copy.deepcopy(receipt["payload"])
+    forged["verdict"] = "semantic-failure"
+    with pytest.raises(ValueError, match="operational failure was misclassified"):
+        validate_result_payload(forged, foundation=foundation)
 
 
 def test_retry_terminal_semantics_and_reused_docker_ids_fail_before_publication(

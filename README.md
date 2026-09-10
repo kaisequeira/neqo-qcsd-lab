@@ -1,6 +1,6 @@
 # QCSD Lab operator guide
 
-Documentation refresh: 10 September 2026, Australia/Sydney (AEST, UTC+10)
+Documentation refresh: 11 September 2026, Australia/Sydney (AEST, UTC+10)
 
 This repository orchestrates reproducible HTTP/3 traffic capture for the QCSD
 Neqo fork. It freezes workload graphs, runs visits under a selected client-side
@@ -22,16 +22,37 @@ selectable modes**. BuFLO and CS-BuFLO are candidate client-only QUIC
 adaptations, not bilateral or paper-equivalent implementations. Do not claim
 seven validated defences until the final validation attestation verifies.
 
-The runtime baseline immediately before this documentation rewrite was Lab
-`8e1a11d5071c58bfbd96633ee2e01629f19ec1c0`, retaining observer implementation
-`b466cd63e8f17835a75e10e97718cf4aae8b304e`, with Rust/gitlink
-`46313bef90ad392b7ca293ab7cf28108d2f35c7f`. Cohort v82 is immutable historical
-evidence: its build and pinned-CDP gates passed and its browser-egress run
-preserved a 68/110 passing prefix, but no final browser-egress receipt exists.
-Current scientific progress therefore remains browser-egress **0/110**,
-certification **0/900**, and formal capture **0/16,000**. Fresh unused cohort
-v83 is next, after this documentation is reviewed and committed so the checkout
-is clean.
+Cohort v83 binds exact clean Lab
+`ea4cf2b65b4a3fd650c0497beda600ea235db456` and Rust/gitlink
+`46313bef90ad392b7ca293ab7cf28108d2f35c7f`. Its fresh no-cache build/completion
+and pinned-CDP gates passed. The browser-egress run then preserved vectors
+1--76 as passing before vector 77,
+`popup--page--window-open-existing-named-frame`, ended `operational-failure` at
+`browser-action`. Diagnosis confirmed that pinned Chromium 143 emitted
+`Network.loadingFailed` for the blocked named-frame navigation and then
+`Network.loadingFinished` for the same request ID. Router instrumentation v13
+had already consumed the first terminal event and therefore failed closed on
+the second. V83 has no final browser-egress receipt and is immutable historical
+evidence only.
+
+The pending client-side correction comprises router instrumentation v14 and
+Playwright ownership policy v8. Router v14 reconciles only that confirmed
+Chromium error-document lifecycle while continuing to reject unrelated orphan
+or ambiguous events. A pinned live regression identified the error document's
+three fixed inline PNGs: they are `data:` resources tied to the denied loader
+and frame, although Chromium reports them through
+`Network.requestServedFromCache`. The correction admits only their exact
+ordered, hash-pinned local lifecycle; ordinary cache events remain hard
+failures. Policy v8 moves exclusive Chromium credential rejection from an
+asynchronous network-manager callback to pre-context, pre-persistent-launch,
+and runtime-mutation boundaries, including authenticated proxy inheritance.
+Its pinned-CDP evidence contract advances to outer schema 13 with nested
+contract 12; outer schema 12, nested contract 11, instrumentation v13, and
+driver policy v7 remain historical, including v83. Cohort v84 is unused and
+must start afresh only after both corrections are independently reviewed,
+validated, committed, and the checkout is clean. Current scientific progress
+therefore remains browser-egress **0/110**, certification **0/900**, and formal
+capture **0/16,000**.
 
 The nine modes, in stable order, are `undefended`, `static`, `front`, `tamaraw`,
 `traffic-morphing`, `wtf-pad`, `walkie-talkie`, `buflo`, and `cs-buflo`.
@@ -151,9 +172,10 @@ authority.
 
 At a high level, the sequence is:
 
-1. Build fresh v83 images, run pinned-CDP and all 110 browser-egress vectors,
-   then pass isolated reference, timing-stress, nine-mode regression, code, and
-   controlled qualification gates.
+1. After any pending source correction is validated and committed, allocate the
+   next unused cohort, build fresh images, run pinned-CDP and all 110
+   browser-egress vectors, then pass isolated reference, timing-stress,
+   nine-mode regression, code, and controlled qualification gates.
 2. Publish and verify the class-foundation attestation.
 3. Initialise, run/watch, verify, and complete public acquisition before
    freezing the final 100-class cohort. Multi-origin resources remain eligible

@@ -790,11 +790,18 @@ def _actor(args: argparse.Namespace) -> None:
                 )
                 evaluator = _SharedWorkerEvaluator(page, vector, shared_worker_action_message)
             elif vector.surface == "window-open-existing-named-frame":
-                page.evaluate(
-                    "name => { const frame=document.createElement('iframe'); frame.name=name; frame.src='/frame'; document.body.append(frame); }",
-                    "qcsd-egress-popup-v1",
-                )
-                page.wait_for_timeout(100)
+                if page.evaluate(
+                    """url => new Promise((resolve, reject) => {
+                      const frame = document.createElement('iframe');
+                      frame.name = 'qcsd-egress-popup-v1';
+                      frame.onload = () => resolve(true);
+                      frame.onerror = () => reject(new Error('named frame failed to load'));
+                      frame.src = url;
+                      document.body.append(frame);
+                    })""",
+                    f"{primary}/frame",
+                ) is not True:
+                    raise RuntimeError("browser-egress named frame did not load exactly once")
 
             deadline = time.monotonic() + 10
             while not router.shutdown_ready:

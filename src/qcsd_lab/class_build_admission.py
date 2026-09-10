@@ -110,8 +110,8 @@ _ACQUISITION_SCHEMA = 5
 _EVALUATION_SCHEMA = 2
 _SUCCESSOR_DECISION_SCHEMA = 3
 _SUCCESSOR_RESTART_SCHEMA = 2
-_PINNED_CDP_SCHEMA = 12
-_HISTORICAL_PINNED_CDP_SCHEMAS = frozenset({8, 9, 11})
+_PINNED_CDP_SCHEMA = 13
+_HISTORICAL_PINNED_CDP_SCHEMAS = frozenset({8, 9, 11, 12})
 _HANDOFF_HISTORICAL_POST = "inputs/class-study-historical-post-snapshot.json"
 _BASE_STUDY_ID = "classifier-multiorigin100-v1"
 _SUCCESSOR_STUDY_ID = re.compile(
@@ -1015,11 +1015,11 @@ class _Resolver:
             expected_type=_BROWSER_EGRESS,
         )
         schema = payload.get("schema_version")
-        if schema == 2:
+        if schema in {2, 3}:
             raise _HistoricalAuthority("browser-egress qualification is historical")
         binding = payload.get("build_execution")
         cohort = payload.get("cohort_version")
-        if schema != 3 or type(cohort) is not int or not isinstance(binding, Mapping):
+        if schema != 4 or type(cohort) is not int or not isinstance(binding, Mapping):
             raise ValueError("browser-egress qualification has no current build authority")
         _final_path, _final_value, final_payload = _envelope(
             self.root,

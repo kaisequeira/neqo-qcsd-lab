@@ -1224,6 +1224,43 @@ def test_hard_gate_inventory_is_ordered_typed_and_nonempty() -> None:
         attestation._validate_hard_gates(records, attestation._READINESS_GATES)
 
 
+@pytest.mark.parametrize(
+    ("schema", "retains_identity"),
+    ((8, False), (9, True), (11, True), (12, True), (13, True)),
+)
+def test_pinned_cdp_binding_preserves_schema_specific_identity_shape(
+    tmp_path: Path,
+    schema: int,
+    retains_identity: bool,
+) -> None:
+    receipt_path = tmp_path / f"pinned-cdp-schema{schema}.json"
+    receipt_path.write_text("historical pinned CDP\n", encoding="utf-8")
+    receipt = {
+        "path": str(receipt_path.resolve()),
+        "sha256": sha256_file(receipt_path),
+        "payload_sha256": _digest("1"),
+        "probe_contract_sha256": _digest("2"),
+        "probe_schema_version": schema,
+        "build_execution": {"path": "/lab/build.json", "sha256": _digest("3")},
+        "build_execution_identity": {"completion_sha256": _digest("4")},
+    }
+
+    binding = attestation._pinned_cdp_binding(receipt)
+    assert ("build_execution_identity" in binding) is retains_identity
+    if retains_identity:
+        assert binding["build_execution_identity"] == receipt[
+            "build_execution_identity"
+        ]
+        assert attestation._pinned_cdp_path_from_binding(binding) == receipt_path.resolve()
+    else:
+        with pytest.raises(ValueError, match="pinned CDP probe binding"):
+            attestation._pinned_cdp_path_from_binding(binding)
+    assert attestation._pinned_cdp_path_from_binding(
+        binding,
+        allow_historical=True,
+    ) == receipt_path.resolve()
+
+
 def test_stale_base_attestation_schemas_cannot_satisfy_current_admission() -> None:
     foundation = {
         "attestation_schema_version": 2,

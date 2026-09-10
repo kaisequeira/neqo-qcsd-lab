@@ -11077,6 +11077,7 @@ test "$(find /qcsd-policy -mindepth 1 -maxdepth 1 -type f -printf x)" = x
       >/dev/null || false
     browser_egress_wait_container_marker "${browser_egress_observer_id}" \
       /tmp/qcsd-browser-egress-subject-started.ready observer-subject-start || false
+    browser_egress_failure_code=browser-action-failed
     browser_egress_failure_stage=browser-action
     _qcsd_docker_api kill --signal USR1 "${browser_egress_browser_id}" \
       >/dev/null || false

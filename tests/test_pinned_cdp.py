@@ -407,7 +407,7 @@ def test_schema9_receipt_is_historical_only_and_keeps_current_build_identity(
     assert "worker_response_consumption" not in validated["observation"]["topology"]
 
 
-def test_schema11_receipt_is_historical_only_with_current_build_and_driver(
+def test_schema11_receipt_is_historical_only_with_v7_driver(
     tmp_path: Path,
     fake_build: Path,
 ) -> None:
@@ -417,6 +417,9 @@ def test_schema11_receipt_is_historical_only_with_current_build_and_driver(
     payload["probe_schema_version"] = 11
     payload["probe_contract"] = copy.deepcopy(pinned_cdp._HISTORICAL_PROBE_CONTRACT_V11)
     payload["probe_contract_sha256"] = pinned_cdp._HISTORICAL_PROBE_CONTRACT_V11_SHA256
+    payload["observation"]["playwright_driver"] = copy.deepcopy(
+        pinned_cdp.PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_BINDING
+    )
     payload["observation"]["topology"]["browser_egress_command_line"][
         "host_resolver_policy"
     ] = copy.deepcopy(pinned_cdp._HISTORICAL_PINNED_CDP_RESOLVER_PROJECTION)
@@ -440,10 +443,81 @@ def test_schema11_receipt_is_historical_only_with_current_build_and_driver(
         allow_historical=True,
     )
     assert validated["probe_schema_version"] == 11
-    assert validated["observation"]["playwright_driver"] == _driver_binding()
+    assert validated["observation"]["playwright_driver"] == (
+        pinned_cdp.PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_BINDING
+    )
     assert "completion_path" in validated["build_execution_identity"]
     assert "worker_response_consumption" in validated["observation"]["topology"]
     assert "worker_webtransport_probe" not in validated["observation"]["topology"]
+
+
+def test_schema12_receipt_is_historical_only_with_v7_driver(
+    tmp_path: Path,
+    fake_build: Path,
+) -> None:
+    current = _create(tmp_path, fake_build)
+    envelope = json.loads(current.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(envelope["payload"])
+    payload["probe_schema_version"] = 12
+    payload["probe_contract"] = copy.deepcopy(pinned_cdp._HISTORICAL_PROBE_CONTRACT_V12)
+    payload["probe_contract_sha256"] = pinned_cdp._HISTORICAL_PROBE_CONTRACT_V12_SHA256
+    payload["observation"]["playwright_driver"] = copy.deepcopy(
+        pinned_cdp.PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_BINDING
+    )
+    historical = tmp_path / "pinned-cdp-schema12.json"
+    historical.write_bytes(
+        canonical_json_bytes(bind_receipt(payload, receipt_type=pinned_cdp.RECEIPT_TYPE))
+    )
+
+    with pytest.raises(ValueError, match="identity or result"):
+        pinned_cdp.validate_pinned_cdp_receipt(
+            historical,
+            build_execution_receipt=fake_build,
+            expected_cohort_version=59,
+        )
+
+    validated = pinned_cdp.validate_pinned_cdp_receipt(
+        historical,
+        build_execution_receipt=fake_build,
+        expected_cohort_version=59,
+        allow_historical=True,
+    )
+    assert validated["probe_schema_version"] == 12
+    assert validated["observation"]["playwright_driver"] == (
+        pinned_cdp.PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_BINDING
+    )
+    assert validated["observation"]["topology"]["browser_egress_command_line"][
+        "host_resolver_policy"
+    ] == pinned_cdp._PINNED_CDP_RESOLVER_PROJECTION
+    assert "worker_webtransport_probe" in validated["observation"]["topology"]
+
+
+def test_schema12_receipt_still_requires_worker_webtransport_probe(
+    tmp_path: Path,
+    fake_build: Path,
+) -> None:
+    current = _create(tmp_path, fake_build)
+    envelope = json.loads(current.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(envelope["payload"])
+    payload["probe_schema_version"] = 12
+    payload["probe_contract"] = copy.deepcopy(pinned_cdp._HISTORICAL_PROBE_CONTRACT_V12)
+    payload["probe_contract_sha256"] = pinned_cdp._HISTORICAL_PROBE_CONTRACT_V12_SHA256
+    payload["observation"]["playwright_driver"] = copy.deepcopy(
+        pinned_cdp.PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_BINDING
+    )
+    payload["observation"]["topology"].pop("worker_webtransport_probe")
+    historical = tmp_path / "pinned-cdp-schema12-without-worker-probe.json"
+    historical.write_bytes(
+        canonical_json_bytes(bind_receipt(payload, receipt_type=pinned_cdp.RECEIPT_TYPE))
+    )
+
+    with pytest.raises(ValueError, match="topology fields"):
+        pinned_cdp.validate_pinned_cdp_receipt(
+            historical,
+            build_execution_receipt=fake_build,
+            expected_cohort_version=59,
+            allow_historical=True,
+        )
 
 
 def test_current_receipt_rejects_frozen_historical_resolver_projection(
@@ -921,17 +995,22 @@ def test_required_topology_wait_condition_is_event_driven() -> None:
         "dedicated_worker_fetch_paused_on_page": True,
         "shared_worker_fetch_paused_on_shared_worker": True,
     }
-    assert pinned_cdp.PROBE_SCHEMA_VERSION == 12
-    assert pinned_cdp.HISTORICAL_PROBE_SCHEMA_VERSIONS == frozenset({8, 9, 11})
-    assert pinned_cdp.PROBE_CONTRACT["schema_version"] == 11
+    assert pinned_cdp.PROBE_SCHEMA_VERSION == 13
+    assert pinned_cdp.HISTORICAL_PROBE_SCHEMA_VERSIONS == frozenset({8, 9, 11, 12})
+    assert pinned_cdp.PROBE_CONTRACT["schema_version"] == 12
     assert pinned_cdp.PROBE_CONTRACT["policy"] == (
-        "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v11"
+        "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v12"
     )
     assert pinned_cdp.PROBE_CONTRACT["instrumentation_policy"] == (
-        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v13"
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v14"
     )
     assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V11["schema_version"] == 10
     assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V11["instrumentation_policy"].endswith("-v12")
+    assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V12["schema_version"] == 11
+    assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V12["instrumentation_policy"].endswith("-v13")
+    assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V12_SHA256 == (
+        "0fc670bdaf43dd1bcb7745f9931f99f8910989291fe1dfb5d7856414161042e9"
+    )
     assert pinned_cdp.PROBE_CONTRACT["worker_webtransport_probe_schema_version"] == 1
     assert pinned_cdp.PROBE_CONTRACT["chromium_version"] == "143.0.7499.4"
     assert pinned_cdp.PROBE_CONTRACT["chromium_executable"] == ("/usr/local/bin/qcsd-chromium")
@@ -941,6 +1020,15 @@ def test_required_topology_wait_condition_is_event_driven() -> None:
     assert pinned_cdp.PROBE_CONTRACT["playwright_driver_binding"] == (
         pinned_cdp.EXPECTED_PLAYWRIGHT_DRIVER_BINDING
     )
+    assert pinned_cdp.PROBE_CONTRACT["playwright_driver_binding"] != (
+        pinned_cdp.PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_BINDING
+    )
+    assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V11[
+        "playwright_driver_binding"
+    ] == pinned_cdp.PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_BINDING
+    assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V12[
+        "playwright_driver_binding"
+    ] == pinned_cdp.PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_BINDING
     assert pinned_cdp._HISTORICAL_PROBE_CONTRACT["playwright_driver_binding"] == (
         pinned_cdp.LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_BINDING
     )

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Mapping
 from typing import Any
 
 import pytest
+import qcsd_lab.cdp_targets as cdp_targets_module
 
 from qcsd_lab.acquisition_errors import NonReplayableEgressPolicyError
 from qcsd_lab.browser_egress import (
@@ -760,6 +762,304 @@ def _complete_request(
     session.emit(route, "Network.loadingFinished", {"requestId": request_id})
 
 
+_BLOCKED_DOCUMENT_REQUEST_ID = "blocked-document"
+_BLOCKED_DOCUMENT_FETCH_ID = "interception-blocked-document"
+_BLOCKED_DOCUMENT_FRAME_ID = "named-child-frame"
+_BLOCKED_DOCUMENT_URL = "https://forbidden.test/named-frame"
+
+
+def _deny_blocked_by_client(
+    _source: CdpTargetSource,
+    event: Mapping[str, Any],
+) -> tuple[str, dict[str, str]]:
+    return (
+        "Fetch.failRequest",
+        {"requestId": event["requestId"], "errorReason": "BlockedByClient"},
+    )
+
+
+def _begin_blocked_document(
+    session: _FakeNonFlatSession,
+    *,
+    network_route: tuple[str, ...] = (),
+    fetch_route: tuple[str, ...] = (),
+    request_event: Mapping[str, Any] | None = None,
+    fetch_event: Mapping[str, Any] | None = None,
+) -> None:
+    session.emit(
+        network_route,
+        "Network.requestWillBeSent",
+        dict(
+            request_event
+            or {
+                "requestId": _BLOCKED_DOCUMENT_REQUEST_ID,
+                "loaderId": _BLOCKED_DOCUMENT_REQUEST_ID,
+                "frameId": _BLOCKED_DOCUMENT_FRAME_ID,
+                "type": "Document",
+                "request": {"method": "GET", "url": _BLOCKED_DOCUMENT_URL},
+            }
+        ),
+    )
+    session.emit(
+        fetch_route,
+        "Fetch.requestPaused",
+        dict(
+            fetch_event
+            or {
+                "requestId": _BLOCKED_DOCUMENT_FETCH_ID,
+                "networkId": _BLOCKED_DOCUMENT_REQUEST_ID,
+                "frameId": _BLOCKED_DOCUMENT_FRAME_ID,
+                "resourceType": "Document",
+                "request": {"method": "GET", "url": _BLOCKED_DOCUMENT_URL},
+            }
+        ),
+    )
+
+
+def _blocked_document_failure(**changes: Any) -> dict[str, Any]:
+    event: dict[str, Any] = {
+        "requestId": _BLOCKED_DOCUMENT_REQUEST_ID,
+        "timestamp": 41.25,
+        "type": "Document",
+        "errorText": "net::ERR_BLOCKED_BY_CLIENT",
+        "canceled": False,
+        "blockedReason": "inspector",
+    }
+    event.update(changes)
+    return event
+
+
+def _error_document_finish(**changes: Any) -> dict[str, Any]:
+    event: dict[str, Any] = {
+        "requestId": _BLOCKED_DOCUMENT_REQUEST_ID,
+        "timestamp": 41.26,
+        "encodedDataLength": 183_014,
+    }
+    event.update(changes)
+    return event
+
+
+def _without(event: Mapping[str, Any], field: str) -> dict[str, Any]:
+    return {key: value for key, value in event.items() if key != field}
+
+
+def _invalid_blocked_document_failures() -> list[tuple[str, dict[str, Any]]]:
+    exact = _blocked_document_failure()
+    return [
+        ("missing-timestamp", _without(exact, "timestamp")),
+        ("boolean-timestamp", _blocked_document_failure(timestamp=True)),
+        ("nan-timestamp", _blocked_document_failure(timestamp=float("nan"))),
+        ("infinite-timestamp", _blocked_document_failure(timestamp=float("inf"))),
+        ("wrong-type", _blocked_document_failure(type="Image")),
+        ("wrong-error", _blocked_document_failure(errorText="net::ERR_FAILED")),
+        ("truthy-canceled", _blocked_document_failure(canceled=True)),
+        ("numeric-canceled", _blocked_document_failure(canceled=0)),
+        ("wrong-blocked-reason", _blocked_document_failure(blockedReason="other")),
+        ("extra-field", _blocked_document_failure(extra=True)),
+    ]
+
+
+def _invalid_error_document_finishes() -> list[tuple[str, dict[str, Any]]]:
+    exact = _error_document_finish()
+    return [
+        ("missing-timestamp", _without(exact, "timestamp")),
+        ("equal-timestamp", _error_document_finish(timestamp=41.25)),
+        ("earlier-timestamp", _error_document_finish(timestamp=41.24)),
+        ("boolean-timestamp", _error_document_finish(timestamp=True)),
+        ("nan-timestamp", _error_document_finish(timestamp=float("nan"))),
+        ("infinite-timestamp", _error_document_finish(timestamp=float("inf"))),
+        ("zero-length", _error_document_finish(encodedDataLength=0)),
+        ("negative-length", _error_document_finish(encodedDataLength=-1)),
+        ("boolean-length", _error_document_finish(encodedDataLength=True)),
+        ("nan-length", _error_document_finish(encodedDataLength=float("nan"))),
+        ("infinite-length", _error_document_finish(encodedDataLength=float("inf"))),
+        ("extra-field", _error_document_finish(extra=True)),
+    ]
+
+
+_SYNTHETIC_ERROR_RESOURCE_URLS = (
+    "data:image/png;base64,qcsd-error-resource-zero",
+    "data:image/png;base64,qcsd-error-resource-one",
+    "data:image/png;base64,qcsd-error-resource-two",
+)
+_SYNTHETIC_ERROR_RESOURCE_COLUMNS = (624, 624, 625)
+_REMOVE_FIELD = object()
+
+
+@pytest.fixture
+def pinned_error_resource_urls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[str, str, str]:
+    """Pin compact test URLs without copying Chromium's multi-kilobyte data URLs."""
+
+    signatures = tuple(
+        (len(url), hashlib.sha256(url.encode()).hexdigest(), column)
+        for url, column in zip(
+            _SYNTHETIC_ERROR_RESOURCE_URLS,
+            _SYNTHETIC_ERROR_RESOURCE_COLUMNS,
+            strict=True,
+        )
+    )
+    monkeypatch.setattr(
+        cdp_targets_module,
+        "_ERROR_DOCUMENT_RESOURCE_SIGNATURES",
+        signatures,
+    )
+    return _SYNTHETIC_ERROR_RESOURCE_URLS
+
+
+def _arm_error_document_resources(
+    session: _FakeNonFlatSession,
+) -> None:
+    _begin_blocked_document(session)
+    session.emit((), "Network.loadingFailed", _blocked_document_failure())
+    session.emit((), "Network.loadingFinished", _error_document_finish())
+
+
+def _error_resource_request(
+    url: str,
+    index: int,
+    *,
+    request_id: str | None = None,
+    outer_changes: Mapping[str, Any] | None = None,
+    request_changes: Mapping[str, Any] | None = None,
+    initiator_changes: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    request: dict[str, Any] = {
+        "url": url,
+        "method": "GET",
+        "headers": {
+            "User-Agent": cdp_targets_module._PINNED_ERROR_DOCUMENT_USER_AGENT,
+            "Referer": "",
+        },
+        "mixedContentType": "none",
+        "initialPriority": "Low",
+        "referrerPolicy": "strict-origin-when-cross-origin",
+        "isSameSite": False,
+    }
+    request.update(request_changes or {})
+    initiator: dict[str, Any] = {
+        "type": "parser",
+        "url": cdp_targets_module._ERROR_DOCUMENT_URL,
+        "lineNumber": 1504,
+        "columnNumber": _SYNTHETIC_ERROR_RESOURCE_COLUMNS[index],
+    }
+    initiator.update(initiator_changes or {})
+    event: dict[str, Any] = {
+        "requestId": request_id or f"error-resource-{index}",
+        "loaderId": _BLOCKED_DOCUMENT_REQUEST_ID,
+        "documentURL": cdp_targets_module._ERROR_DOCUMENT_URL,
+        "request": request,
+        "timestamp": 42.0 + index,
+        "wallTime": 1_725_000_000.0 + index,
+        "initiator": initiator,
+        "redirectHasExtraInfo": False,
+        "type": "Image",
+        "frameId": _BLOCKED_DOCUMENT_FRAME_ID,
+        "hasUserGesture": False,
+    }
+    event.update(outer_changes or {})
+    return event
+
+
+def _error_resource_response(
+    url: str,
+    index: int,
+    *,
+    request_id: str | None = None,
+    outer_changes: Mapping[str, Any] | None = None,
+    response_changes: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    response: dict[str, Any] = {
+        "url": url,
+        "status": 200,
+        "statusText": "OK",
+        "headers": {"Content-Type": "image/png"},
+        "mimeType": "image/png",
+        "charset": "",
+        "connectionReused": False,
+        "connectionId": 0,
+        "fromDiskCache": False,
+        "fromServiceWorker": False,
+        "fromPrefetchCache": False,
+        "encodedDataLength": 0,
+        "protocol": "data",
+        "securityState": "unknown",
+        "isIpProtectionUsed": False,
+    }
+    response.update(response_changes or {})
+    event: dict[str, Any] = {
+        "requestId": request_id or f"error-resource-{index}",
+        "loaderId": _BLOCKED_DOCUMENT_REQUEST_ID,
+        "timestamp": 42.1 + index,
+        "type": "Image",
+        "response": response,
+        "hasExtraInfo": False,
+        "frameId": _BLOCKED_DOCUMENT_FRAME_ID,
+    }
+    event.update(outer_changes or {})
+    return event
+
+
+def _error_resource_terminal(
+    index: int,
+    *,
+    request_id: str | None = None,
+    **changes: Any,
+) -> dict[str, Any]:
+    event: dict[str, Any] = {
+        "requestId": request_id or f"error-resource-{index}",
+        "timestamp": 42.2 + index,
+        "encodedDataLength": 0,
+    }
+    event.update(changes)
+    return event
+
+
+def _emit_error_resource(
+    session: _FakeNonFlatSession,
+    url: str,
+    index: int,
+    *,
+    request_id: str | None = None,
+) -> None:
+    resource_id = request_id or f"error-resource-{index}"
+    session.emit(
+        (),
+        "Network.requestWillBeSent",
+        _error_resource_request(url, index, request_id=resource_id),
+    )
+    session.emit((), "Network.requestServedFromCache", {"requestId": resource_id})
+    session.emit(
+        (),
+        "Network.responseReceived",
+        _error_resource_response(url, index, request_id=resource_id),
+    )
+    session.emit(
+        (),
+        "Network.loadingFinished",
+        _error_resource_terminal(index, request_id=resource_id),
+    )
+
+
+def _mutate_error_resource_event(
+    event: Mapping[str, Any],
+    section: str,
+    field: str,
+    value: object,
+) -> dict[str, Any]:
+    mutated = dict(event)
+    target = mutated
+    if section != "outer":
+        target = dict(mutated[section])
+        mutated[section] = target
+    if value is _REMOVE_FIELD:
+        target.pop(field)
+    else:
+        target[field] = value
+    return mutated
+
+
 def _begin_script_bootstrap(
     session: _FakeNonFlatSession,
     route: tuple[str, ...],
@@ -925,7 +1225,7 @@ def test_policy_is_pinned_and_root_is_instrumented_before_navigation() -> None:
     router, _observed = _router(session)
 
     assert CDP_TARGET_INSTRUMENTATION_POLICY == (
-        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v13"
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v14"
     )
     assert [method for route, method, _params in session.commands if route == ()] == [
         "Target.getTargetInfo",
@@ -2050,6 +2350,968 @@ def test_reattached_target_receives_a_new_collision_safe_generation() -> None:
     assert [source.generation for source in sources] == [0, 1]
     assert sources[0].request_chain_key("request") != sources[1].request_chain_key("request")
     session.detach((), session_id="second-session")
+    _clean_shutdown(router)
+
+
+def test_exact_blocked_root_document_error_finish_is_consumed_once() -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session, fetch_policy=_deny_blocked_by_client)
+
+    _begin_blocked_document(session)
+    assert any(
+        route == ()
+        and method == "Fetch.failRequest"
+        and params
+        == {
+            "requestId": _BLOCKED_DOCUMENT_FETCH_ID,
+            "errorReason": "BlockedByClient",
+        }
+        for route, method, params in session.commands
+    )
+    session.emit((), "Network.loadingFailed", _blocked_document_failure())
+    assert router.active_request_identities == ()
+    session.emit((), "Network.loadingFinished", _error_document_finish())
+    router.raise_if_failed()
+
+    terminal_methods = [
+        method
+        for _source, method, event in observed
+        if event.get("requestId") == _BLOCKED_DOCUMENT_REQUEST_ID
+        and method in {"Network.loadingFailed", "Network.loadingFinished"}
+    ]
+    assert terminal_methods == ["Network.loadingFailed"]
+    _clean_shutdown(router)
+
+
+def test_error_document_finish_is_optional_at_context_disposal() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+
+    _begin_blocked_document(session)
+    session.emit((), "Network.loadingFailed", _blocked_document_failure())
+    router.raise_if_failed()
+    _clean_shutdown(router)
+
+
+@pytest.mark.parametrize(
+    "terminal",
+    [pytest.param(event, id=name) for name, event in _invalid_blocked_document_failures()],
+)
+def test_blocked_document_requires_exact_loading_failed_signature(
+    terminal: Mapping[str, Any],
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _begin_blocked_document(session)
+
+    session.emit((), "Network.loadingFailed", terminal)
+    with pytest.raises(CdpTargetIntegrityError, match="mismatched terminal"):
+        router.raise_if_failed()
+
+
+@pytest.mark.parametrize(
+    "terminal",
+    [pytest.param(event, id=name) for name, event in _invalid_error_document_finishes()],
+)
+def test_error_document_finish_requires_exact_later_positive_signature(
+    terminal: Mapping[str, Any],
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _begin_blocked_document(session)
+    session.emit((), "Network.loadingFailed", _blocked_document_failure())
+
+    session.emit((), "Network.loadingFinished", terminal)
+    with pytest.raises(CdpTargetIntegrityError, match="exact terminal signature"):
+        router.raise_if_failed()
+
+
+@pytest.mark.parametrize("policy_kind", ("continue", "wrong-failure"))
+def test_non_matching_document_policy_does_not_authorise_a_second_terminal(
+    policy_kind: str,
+) -> None:
+    def policy(
+        _source: CdpTargetSource,
+        event: Mapping[str, Any],
+    ) -> tuple[str, dict[str, str]]:
+        if policy_kind == "continue":
+            return "Fetch.continueRequest", {"requestId": event["requestId"]}
+        return (
+            "Fetch.failRequest",
+            {"requestId": event["requestId"], "errorReason": "Aborted"},
+        )
+
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=policy)
+    _begin_blocked_document(session)
+    session.emit((), "Network.loadingFailed", _blocked_document_failure())
+    router.raise_if_failed()
+
+    session.emit((), "Network.loadingFinished", _error_document_finish())
+    with pytest.raises(CdpTargetIntegrityError, match="no active request"):
+        router.raise_if_failed()
+
+
+def test_equal_fetch_and_network_ids_do_not_authorise_a_second_terminal() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _begin_blocked_document(
+        session,
+        fetch_event={
+            "requestId": _BLOCKED_DOCUMENT_REQUEST_ID,
+            "networkId": _BLOCKED_DOCUMENT_REQUEST_ID,
+            "frameId": _BLOCKED_DOCUMENT_FRAME_ID,
+            "resourceType": "Document",
+            "request": {"method": "GET", "url": _BLOCKED_DOCUMENT_URL},
+        },
+    )
+    session.emit((), "Network.loadingFailed", _blocked_document_failure())
+    router.raise_if_failed()
+
+    session.emit((), "Network.loadingFinished", _error_document_finish())
+    with pytest.raises(CdpTargetIntegrityError, match="no active request"):
+        router.raise_if_failed()
+
+
+def test_eligible_document_pause_requires_one_callback_policy_decision() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=lambda _source, _event: None)
+
+    _begin_blocked_document(session)
+    with pytest.raises(CdpTargetIntegrityError, match="callback returned without a decision"):
+        router.raise_if_failed()
+
+
+def test_blocked_document_rejects_loading_finished_before_loading_failed() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _begin_blocked_document(session)
+
+    session.emit((), "Network.loadingFinished", _error_document_finish())
+    with pytest.raises(CdpTargetIntegrityError, match="mismatched terminal"):
+        router.raise_if_failed()
+
+
+def test_consumed_error_document_finish_rejects_a_third_terminal() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _begin_blocked_document(session)
+    session.emit((), "Network.loadingFailed", _blocked_document_failure())
+    session.emit((), "Network.loadingFinished", _error_document_finish())
+    router.raise_if_failed()
+
+    session.emit((), "Network.loadingFinished", _error_document_finish(timestamp=41.27))
+    with pytest.raises(CdpTargetIntegrityError, match="repeated a terminal"):
+        router.raise_if_failed()
+
+
+@pytest.mark.parametrize("consume_finish", (False, True))
+def test_blocked_document_chain_cannot_be_reused_before_source_disposal(
+    consume_finish: bool,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _begin_blocked_document(session)
+    session.emit((), "Network.loadingFailed", _blocked_document_failure())
+    if consume_finish:
+        session.emit((), "Network.loadingFinished", _error_document_finish())
+    router.raise_if_failed()
+
+    session.emit(
+        (),
+        "Network.requestWillBeSent",
+        {
+            "requestId": _BLOCKED_DOCUMENT_REQUEST_ID,
+            "request": {"method": "GET", "url": "https://root.test/reuse"},
+        },
+    )
+    with pytest.raises(CdpTargetIntegrityError, match="reused a request chain"):
+        router.raise_if_failed()
+
+
+def test_identical_field_redirect_after_block_decision_is_rejected_before_terminal() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _begin_blocked_document(session)
+
+    session.emit(
+        (),
+        "Network.requestWillBeSent",
+        {
+            "requestId": _BLOCKED_DOCUMENT_REQUEST_ID,
+            "loaderId": _BLOCKED_DOCUMENT_REQUEST_ID,
+            "frameId": _BLOCKED_DOCUMENT_FRAME_ID,
+            "type": "Document",
+            "redirectResponse": {"status": 302},
+            "request": {"method": "GET", "url": _BLOCKED_DOCUMENT_URL},
+        },
+    )
+    with pytest.raises(CdpTargetIntegrityError, match="reused a request chain"):
+        router.raise_if_failed()
+
+
+def test_error_document_chain_is_independent_of_same_raw_id_on_child_source() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    iframe = session.attach(
+        (),
+        session_id="independent-iframe-session",
+        target_id="independent-iframe-target",
+        target_type="iframe",
+        parent_frame_id="root-frame",
+    )
+    _begin_blocked_document(session)
+    session.emit((), "Network.loadingFailed", _blocked_document_failure())
+
+    _complete_request(
+        session,
+        iframe,
+        _BLOCKED_DOCUMENT_REQUEST_ID,
+        "https://frame.test/independent",
+    )
+    session.emit((), "Network.loadingFinished", _error_document_finish())
+    router.raise_if_failed()
+    session.detach((), session_id=iframe[-1])
+    _clean_shutdown(router)
+
+
+def test_oopif_document_denial_does_not_receive_root_error_document_exception() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    iframe = session.attach(
+        (),
+        session_id="blocked-oopif-session",
+        target_id=_BLOCKED_DOCUMENT_FRAME_ID,
+        target_type="iframe",
+        parent_frame_id="root-frame",
+    )
+    _begin_blocked_document(session, fetch_route=iframe)
+    session.emit(iframe, "Network.loadingFailed", _blocked_document_failure())
+    router.raise_if_failed()
+
+    session.emit(iframe, "Network.loadingFinished", _error_document_finish())
+    with pytest.raises(CdpTargetIntegrityError, match="no active request"):
+        router.raise_if_failed()
+
+
+def test_document_denial_must_be_acknowledged_before_its_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+    original_result = session._result
+
+    def terminal_before_ack(
+        route: tuple[str, ...],
+        method: str,
+        params: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if route == () and method == "Fetch.failRequest":
+            session.emit((), "Network.loadingFailed", _blocked_document_failure())
+        return original_result(route, method, params)
+
+    monkeypatch.setattr(session, "_result", terminal_before_ack)
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _begin_blocked_document(session)
+
+    with pytest.raises(CdpTargetIntegrityError, match="before its denial acknowledgement"):
+        router.raise_if_failed()
+
+
+def test_document_denial_requires_an_exact_empty_policy_ack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+    original_result = session._result
+
+    def non_empty_ack(
+        route: tuple[str, ...],
+        method: str,
+        params: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if route == () and method == "Fetch.failRequest":
+            return {"unexpected": True}
+        return original_result(route, method, params)
+
+    monkeypatch.setattr(session, "_result", non_empty_ack)
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _begin_blocked_document(session)
+
+    with pytest.raises(CdpTargetIntegrityError, match="exact empty result"):
+        router.raise_if_failed()
+
+
+def test_duplicate_document_fetch_interception_is_rejected() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    _begin_blocked_document(session)
+    router.raise_if_failed()
+
+    session.emit(
+        (),
+        "Fetch.requestPaused",
+        {
+            "requestId": _BLOCKED_DOCUMENT_FETCH_ID,
+            "networkId": _BLOCKED_DOCUMENT_REQUEST_ID,
+            "frameId": _BLOCKED_DOCUMENT_FRAME_ID,
+            "resourceType": "Document",
+            "request": {"method": "GET", "url": _BLOCKED_DOCUMENT_URL},
+        },
+    )
+    with pytest.raises(CdpTargetIntegrityError, match="duplicated or reused"):
+        router.raise_if_failed()
+
+
+def test_document_fetch_with_ambiguous_raw_network_id_is_rejected() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    iframe = session.attach(
+        (),
+        session_id="colliding-document-session",
+        target_id="colliding-document-target",
+        target_type="iframe",
+        parent_frame_id="root-frame",
+    )
+    request_event = {
+        "requestId": _BLOCKED_DOCUMENT_REQUEST_ID,
+        "loaderId": _BLOCKED_DOCUMENT_REQUEST_ID,
+        "frameId": _BLOCKED_DOCUMENT_FRAME_ID,
+        "type": "Document",
+        "request": {"method": "GET", "url": _BLOCKED_DOCUMENT_URL},
+    }
+    session.emit((), "Network.requestWillBeSent", request_event)
+    session.emit(iframe, "Network.requestWillBeSent", request_event)
+    session.emit(
+        (),
+        "Fetch.requestPaused",
+        {
+            "requestId": _BLOCKED_DOCUMENT_FETCH_ID,
+            "networkId": _BLOCKED_DOCUMENT_REQUEST_ID,
+            "frameId": _BLOCKED_DOCUMENT_FRAME_ID,
+            "resourceType": "Document",
+            "request": {"method": "GET", "url": _BLOCKED_DOCUMENT_URL},
+        },
+    )
+    with pytest.raises(CdpTargetIntegrityError, match="no unique active"):
+        router.raise_if_failed()
+
+
+@pytest.mark.parametrize(
+    "mismatch",
+    ("loader", "resource-type", "method", "frame", "url"),
+)
+def test_document_fetch_partial_network_match_is_rejected(mismatch: str) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    request_event: dict[str, Any] = {
+        "requestId": _BLOCKED_DOCUMENT_REQUEST_ID,
+        "loaderId": _BLOCKED_DOCUMENT_REQUEST_ID,
+        "frameId": _BLOCKED_DOCUMENT_FRAME_ID,
+        "type": "Document",
+        "request": {"method": "GET", "url": _BLOCKED_DOCUMENT_URL},
+    }
+    fetch_event: dict[str, Any] = {
+        "requestId": _BLOCKED_DOCUMENT_FETCH_ID,
+        "networkId": _BLOCKED_DOCUMENT_REQUEST_ID,
+        "frameId": _BLOCKED_DOCUMENT_FRAME_ID,
+        "resourceType": "Document",
+        "request": {"method": "GET", "url": _BLOCKED_DOCUMENT_URL},
+    }
+    if mismatch == "loader":
+        request_event["loaderId"] = "different-loader"
+    elif mismatch == "resource-type":
+        request_event["type"] = "Image"
+    elif mismatch == "method":
+        request_event["request"] = {"method": "POST", "url": _BLOCKED_DOCUMENT_URL}
+    elif mismatch == "frame":
+        fetch_event["frameId"] = "different-frame"
+    elif mismatch == "url":
+        fetch_event["request"] = {
+            "method": "GET",
+            "url": "https://forbidden.test/different",
+        }
+
+    session.emit((), "Network.requestWillBeSent", request_event)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+    with pytest.raises(CdpTargetIntegrityError, match="does not exactly match"):
+        router.raise_if_failed()
+
+
+def test_oopif_redirect_after_root_block_decision_is_rejected() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    iframe = session.attach(
+        (),
+        session_id="redirected-block-session",
+        target_id=_BLOCKED_DOCUMENT_FRAME_ID,
+        target_type="iframe",
+        parent_frame_id="root-frame",
+    )
+    _begin_blocked_document(session)
+
+    session.emit(
+        iframe,
+        "Network.requestWillBeSent",
+        {
+            "requestId": _BLOCKED_DOCUMENT_REQUEST_ID,
+            "loaderId": _BLOCKED_DOCUMENT_REQUEST_ID,
+            "frameId": _BLOCKED_DOCUMENT_FRAME_ID,
+            "type": "Document",
+            "redirectResponse": {"status": 302},
+            "request": {"method": "GET", "url": "https://forbidden.test/redirect"},
+        },
+    )
+    with pytest.raises(CdpTargetIntegrityError, match="redirected a request chain"):
+        router.raise_if_failed()
+
+
+def test_retired_document_chain_rejects_nonterminal_network_events() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _begin_blocked_document(session)
+    session.emit((), "Network.loadingFailed", _blocked_document_failure())
+    session.emit((), "Network.loadingFinished", _error_document_finish())
+    router.raise_if_failed()
+
+    session.emit(
+        (),
+        "Network.responseReceived",
+        {"requestId": _BLOCKED_DOCUMENT_REQUEST_ID, "response": {}},
+    )
+    with pytest.raises(CdpTargetIntegrityError, match="retired Document chain"):
+        router.raise_if_failed()
+
+
+def test_exact_three_error_document_resources_are_suppressed_and_complete(
+    pinned_error_resource_urls: tuple[str, str, str],
+) -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _arm_error_document_resources(session)
+    observed_before_resources = tuple(observed)
+
+    for index, url in enumerate(pinned_error_resource_urls):
+        session.emit(
+            (),
+            "Network.requestWillBeSent",
+            _error_resource_request(url, index),
+        )
+        assert router.shutdown_ready is False
+        session.emit(
+            (),
+            "Network.requestServedFromCache",
+            {"requestId": f"error-resource-{index}"},
+        )
+        session.emit(
+            (),
+            "Network.responseReceived",
+            _error_resource_response(url, index),
+        )
+        session.emit(
+            (),
+            "Network.loadingFinished",
+            _error_resource_terminal(index),
+        )
+        router.raise_if_failed()
+
+    assert tuple(observed) == observed_before_resources
+    assert router.active_request_identities == ()
+    assert router.shutdown_ready is True
+    _clean_shutdown(router)
+
+
+def test_error_resource_exception_does_not_weaken_ordinary_cache_rejection() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    session.emit(
+        (),
+        "Network.requestWillBeSent",
+        {
+            "requestId": "ordinary-cache",
+            "request": {"method": "GET", "url": "https://root.test/cached"},
+        },
+    )
+    session.emit((), "Network.requestServedFromCache", {"requestId": "ordinary-cache"})
+
+    with pytest.raises(CdpTargetIntegrityError, match="disabled-cache policy"):
+        router.raise_if_failed()
+
+
+@pytest.mark.parametrize("owner_phase", ("absent", "before-error-finish"))
+def test_error_resource_request_requires_consumed_denied_document_owner(
+    pinned_error_resource_urls: tuple[str, str, str],
+    owner_phase: str,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    if owner_phase == "before-error-finish":
+        _begin_blocked_document(session)
+        session.emit((), "Network.loadingFailed", _blocked_document_failure())
+
+    session.emit(
+        (),
+        "Network.requestWillBeSent",
+        _error_resource_request(pinned_error_resource_urls[0], 0),
+    )
+    with pytest.raises(CdpTargetIntegrityError, match="no denied Document owner"):
+        router.raise_if_failed()
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "value"),
+    (
+        ("outer", "requestId", _REMOVE_FIELD),
+        ("outer", "requestId", ""),
+        ("outer", "requestId", _BLOCKED_DOCUMENT_REQUEST_ID),
+        ("outer", "loaderId", _REMOVE_FIELD),
+        ("outer", "loaderId", "wrong-loader"),
+        ("outer", "frameId", "wrong-frame"),
+        ("outer", "documentURL", "chrome-error://different/"),
+        ("outer", "type", "Fetch"),
+        ("outer", "redirectHasExtraInfo", True),
+        ("outer", "hasUserGesture", True),
+        ("outer", "timestamp", 41.26),
+        ("outer", "timestamp", True),
+        ("outer", "timestamp", float("nan")),
+        ("outer", "wallTime", 0),
+        ("outer", "wallTime", float("inf")),
+        ("outer", "unexpected", True),
+        ("request", "url", _REMOVE_FIELD),
+        ("request", "method", "POST"),
+        ("request", "headers", _REMOVE_FIELD),
+        ("request", "headers", {"Referer": ""}),
+        (
+            "request",
+            "headers",
+            {
+                "User-Agent": "different-agent",
+                "Referer": "",
+            },
+        ),
+        ("request", "mixedContentType", "blockable"),
+        ("request", "initialPriority", "High"),
+        ("request", "referrerPolicy", "no-referrer"),
+        ("request", "isSameSite", True),
+        ("request", "unexpected", True),
+        ("initiator", "type", "script"),
+        ("initiator", "url", _REMOVE_FIELD),
+        ("initiator", "url", "chrome-error://different/"),
+        ("initiator", "lineNumber", 1505),
+        ("initiator", "columnNumber", True),
+        ("initiator", "columnNumber", 999),
+        ("initiator", "unexpected", True),
+    ),
+)
+def test_error_resource_request_requires_exact_pinned_projection(
+    pinned_error_resource_urls: tuple[str, str, str],
+    section: str,
+    field: str,
+    value: object,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _arm_error_document_resources(session)
+    event = _mutate_error_resource_event(
+        _error_resource_request(pinned_error_resource_urls[0], 0),
+        section,
+        field,
+        value,
+    )
+
+    session.emit((), "Network.requestWillBeSent", event)
+    with pytest.raises(CdpTargetIntegrityError, match="Chromium error-document resource"):
+        router.raise_if_failed()
+
+
+@pytest.mark.parametrize("url_index", (1, 2))
+def test_error_resource_rejects_reordered_known_url_hashes(
+    pinned_error_resource_urls: tuple[str, str, str],
+    url_index: int,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _arm_error_document_resources(session)
+
+    session.emit(
+        (),
+        "Network.requestWillBeSent",
+        _error_resource_request(pinned_error_resource_urls[url_index], url_index),
+    )
+    with pytest.raises(CdpTargetIntegrityError, match="duplicated or reordered"):
+        router.raise_if_failed()
+
+
+@pytest.mark.parametrize(
+    "unknown_url",
+    (
+        "https://root.test/not-inline.png",
+        "data:image/png;base64,unknown-error-resource",
+        "data:image/jpeg;base64,qcsd-error-resource-zero",
+    ),
+)
+def test_error_resource_rejects_unpinned_url_hash_or_scheme(
+    pinned_error_resource_urls: tuple[str, str, str],
+    unknown_url: str,
+) -> None:
+    del pinned_error_resource_urls
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _arm_error_document_resources(session)
+
+    session.emit(
+        (),
+        "Network.requestWillBeSent",
+        _error_resource_request(unknown_url, 0),
+    )
+    with pytest.raises(CdpTargetIntegrityError, match="URL was not pinned"):
+        router.raise_if_failed()
+
+
+def test_error_resource_rejects_next_request_before_prior_terminal(
+    pinned_error_resource_urls: tuple[str, str, str],
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _arm_error_document_resources(session)
+    session.emit(
+        (),
+        "Network.requestWillBeSent",
+        _error_resource_request(pinned_error_resource_urls[0], 0),
+    )
+
+    session.emit(
+        (),
+        "Network.requestWillBeSent",
+        _error_resource_request(pinned_error_resource_urls[1], 1),
+    )
+    with pytest.raises(CdpTargetIntegrityError, match="duplicated or reordered"):
+        router.raise_if_failed()
+
+
+def test_error_resource_rejects_retired_request_id_reuse(
+    pinned_error_resource_urls: tuple[str, str, str],
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _arm_error_document_resources(session)
+    _emit_error_resource(session, pinned_error_resource_urls[0], 0, request_id="reused")
+    router.raise_if_failed()
+
+    session.emit(
+        (),
+        "Network.requestWillBeSent",
+        _error_resource_request(
+            pinned_error_resource_urls[1],
+            1,
+            request_id="reused",
+        ),
+    )
+    with pytest.raises(CdpTargetIntegrityError, match="identity was reused"):
+        router.raise_if_failed()
+
+
+@pytest.mark.parametrize(
+    "bad_order",
+    (
+        "response-before-cache",
+        "terminal-before-cache",
+        "duplicate-cache",
+        "terminal-before-response",
+        "cache-after-response",
+        "duplicate-response",
+    ),
+)
+def test_error_resource_rejects_cache_response_terminal_reordering(
+    pinned_error_resource_urls: tuple[str, str, str],
+    bad_order: str,
+) -> None:
+    url = pinned_error_resource_urls[0]
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _arm_error_document_resources(session)
+    session.emit((), "Network.requestWillBeSent", _error_resource_request(url, 0))
+    if bad_order == "response-before-cache":
+        method, event = "Network.responseReceived", _error_resource_response(url, 0)
+    elif bad_order == "terminal-before-cache":
+        method, event = "Network.loadingFinished", _error_resource_terminal(0)
+    else:
+        session.emit(
+            (),
+            "Network.requestServedFromCache",
+            {"requestId": "error-resource-0"},
+        )
+        if bad_order == "duplicate-cache":
+            method, event = (
+                "Network.requestServedFromCache",
+                {"requestId": "error-resource-0"},
+            )
+        elif bad_order == "terminal-before-response":
+            method, event = "Network.loadingFinished", _error_resource_terminal(0)
+        else:
+            session.emit((), "Network.responseReceived", _error_resource_response(url, 0))
+            if bad_order == "cache-after-response":
+                method, event = (
+                    "Network.requestServedFromCache",
+                    {"requestId": "error-resource-0"},
+                )
+            else:
+                method, event = "Network.responseReceived", _error_resource_response(url, 0)
+
+    session.emit((), method, event)
+    with pytest.raises(CdpTargetIntegrityError, match="invalid|out of order"):
+        router.raise_if_failed()
+
+
+@pytest.mark.parametrize(
+    "cache_event",
+    (
+        {},
+        {"requestId": "error-resource-0", "unexpected": True},
+    ),
+)
+def test_error_resource_cache_marker_requires_exact_field_set(
+    pinned_error_resource_urls: tuple[str, str, str],
+    cache_event: Mapping[str, Any],
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _arm_error_document_resources(session)
+    session.emit(
+        (),
+        "Network.requestWillBeSent",
+        _error_resource_request(pinned_error_resource_urls[0], 0),
+    )
+
+    session.emit((), "Network.requestServedFromCache", cache_event)
+    with pytest.raises(CdpTargetIntegrityError, match="cache|disabled-cache"):
+        router.raise_if_failed()
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "value"),
+    (
+        ("outer", "loaderId", _REMOVE_FIELD),
+        ("outer", "loaderId", "wrong-loader"),
+        ("outer", "frameId", "wrong-frame"),
+        ("outer", "type", "Fetch"),
+        ("outer", "hasExtraInfo", True),
+        ("outer", "response", _REMOVE_FIELD),
+        ("outer", "timestamp", 42.0),
+        ("outer", "timestamp", True),
+        ("outer", "timestamp", float("nan")),
+        ("outer", "unexpected", True),
+        ("response", "url", _REMOVE_FIELD),
+        ("response", "url", "data:image/png;base64,different"),
+        ("response", "status", True),
+        ("response", "status", 201),
+        ("response", "statusText", ""),
+        ("response", "headers", {}),
+        ("response", "mimeType", "image/jpeg"),
+        ("response", "charset", "utf-8"),
+        ("response", "connectionReused", True),
+        ("response", "connectionId", True),
+        ("response", "connectionId", 1),
+        ("response", "fromDiskCache", True),
+        ("response", "fromServiceWorker", True),
+        ("response", "fromPrefetchCache", True),
+        ("response", "encodedDataLength", 1),
+        ("response", "encodedDataLength", 0.0),
+        ("response", "protocol", "http/1.1"),
+        ("response", "securityState", "secure"),
+        ("response", "isIpProtectionUsed", True),
+        ("response", "unexpected", True),
+    ),
+)
+def test_error_resource_response_requires_exact_pinned_projection(
+    pinned_error_resource_urls: tuple[str, str, str],
+    section: str,
+    field: str,
+    value: object,
+) -> None:
+    url = pinned_error_resource_urls[0]
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _arm_error_document_resources(session)
+    session.emit((), "Network.requestWillBeSent", _error_resource_request(url, 0))
+    session.emit(
+        (),
+        "Network.requestServedFromCache",
+        {"requestId": "error-resource-0"},
+    )
+    response = _mutate_error_resource_event(
+        _error_resource_response(url, 0),
+        section,
+        field,
+        value,
+    )
+
+    session.emit((), "Network.responseReceived", response)
+    with pytest.raises(CdpTargetIntegrityError, match="response signature was invalid"):
+        router.raise_if_failed()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("timestamp", _REMOVE_FIELD),
+        ("timestamp", 42.1),
+        ("timestamp", True),
+        ("timestamp", float("nan")),
+        ("timestamp", float("inf")),
+        ("encodedDataLength", _REMOVE_FIELD),
+        ("encodedDataLength", 1),
+        ("encodedDataLength", -1),
+        ("encodedDataLength", True),
+        ("encodedDataLength", float("nan")),
+        ("unexpected", True),
+    ),
+)
+def test_error_resource_terminal_requires_exact_later_zero_length(
+    pinned_error_resource_urls: tuple[str, str, str],
+    field: str,
+    value: object,
+) -> None:
+    url = pinned_error_resource_urls[0]
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _arm_error_document_resources(session)
+    session.emit((), "Network.requestWillBeSent", _error_resource_request(url, 0))
+    session.emit(
+        (),
+        "Network.requestServedFromCache",
+        {"requestId": "error-resource-0"},
+    )
+    session.emit((), "Network.responseReceived", _error_resource_response(url, 0))
+    terminal = _error_resource_terminal(0)
+    if value is _REMOVE_FIELD:
+        terminal.pop(field)
+    else:
+        terminal[field] = value
+
+    session.emit((), "Network.loadingFinished", terminal)
+    with pytest.raises(CdpTargetIntegrityError, match="terminal was invalid"):
+        router.raise_if_failed()
+
+
+@pytest.mark.parametrize("terminal_kind", ("duplicate-terminal", "other-event", "fetch-pause"))
+def test_error_resource_rejects_events_outside_exact_internal_lifecycle(
+    pinned_error_resource_urls: tuple[str, str, str],
+    terminal_kind: str,
+) -> None:
+    url = pinned_error_resource_urls[0]
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _arm_error_document_resources(session)
+    if terminal_kind == "duplicate-terminal":
+        _emit_error_resource(session, url, 0)
+        method = "Network.loadingFinished"
+        event = _error_resource_terminal(0, timestamp=42.3)
+    else:
+        session.emit((), "Network.requestWillBeSent", _error_resource_request(url, 0))
+        if terminal_kind == "fetch-pause":
+            method = "Fetch.requestPaused"
+            event = {
+                "requestId": "fetch-error-resource",
+                "networkId": "error-resource-0",
+                "frameId": _BLOCKED_DOCUMENT_FRAME_ID,
+                "resourceType": "Image",
+                "request": {"method": "GET", "url": url},
+            }
+        else:
+            method = "Network.requestWillBeSentExtraInfo"
+            event = {
+                "requestId": "error-resource-0",
+                "headers": {},
+            }
+
+    session.emit((), method, event)
+    with pytest.raises(
+        CdpTargetIntegrityError,
+        match="inline resource|unexpected|identity was reused",
+    ):
+        router.raise_if_failed()
+
+
+def test_error_resource_rejects_cross_source_loader_and_request_identity(
+    pinned_error_resource_urls: tuple[str, str, str],
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    iframe = session.attach(
+        (),
+        session_id="error-resource-iframe-session",
+        target_id="error-resource-iframe",
+        target_type="iframe",
+        parent_frame_id="root-frame",
+    )
+    _arm_error_document_resources(session)
+
+    session.emit(
+        iframe,
+        "Network.requestWillBeSent",
+        _error_resource_request(pinned_error_resource_urls[0], 0),
+    )
+    with pytest.raises(CdpTargetIntegrityError, match="loader crossed target sources"):
+        router.raise_if_failed()
+
+
+def test_error_resource_rejects_cross_source_continuation_identity(
+    pinned_error_resource_urls: tuple[str, str, str],
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    iframe = session.attach(
+        (),
+        session_id="error-resource-continuation-session",
+        target_id="error-resource-continuation-frame",
+        target_type="iframe",
+        parent_frame_id="root-frame",
+    )
+    _arm_error_document_resources(session)
+    session.emit(
+        (),
+        "Network.requestWillBeSent",
+        _error_resource_request(pinned_error_resource_urls[0], 0),
+    )
+
+    session.emit(
+        iframe,
+        "Network.requestServedFromCache",
+        {"requestId": "error-resource-0"},
+    )
+    with pytest.raises(CdpTargetIntegrityError, match="crossed target sources"):
+        router.raise_if_failed()
+
+
+def test_started_error_resource_blocks_normal_shutdown_but_abort_cleans_it(
+    pinned_error_resource_urls: tuple[str, str, str],
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _arm_error_document_resources(session)
+    session.emit(
+        (),
+        "Network.requestWillBeSent",
+        _error_resource_request(pinned_error_resource_urls[0], 0),
+    )
+    router.raise_if_failed()
+
+    assert router.shutdown_ready is False
+    with pytest.raises(CdpTargetIntegrityError, match="pending"):
+        router.begin_shutdown()
+    _browser_session, guard = _guard_for(router)
+    router.begin_abort()
+    guard.begin_abort()
+    guard.finish_abort()
+    router.finish_abort()
+
+
+def test_zero_started_error_resource_owner_is_optional_at_context_disposal() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _arm_error_document_resources(session)
+    router.raise_if_failed()
+
+    assert router.shutdown_ready is True
     _clean_shutdown(router)
 
 

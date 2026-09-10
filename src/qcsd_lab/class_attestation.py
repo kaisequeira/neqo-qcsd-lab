@@ -3339,10 +3339,15 @@ def _pinned_cdp_binding(receipt: Mapping[str, Any]) -> dict[str, Any]:
         "build_execution": dict(build),
         "probe_contract_sha256": str(receipt["probe_contract_sha256"]),
     }
-    if receipt.get("probe_schema_version") == PINNED_CDP_PROBE_SCHEMA_VERSION:
+    if receipt.get("probe_schema_version") in {
+        9,
+        11,
+        12,
+        PINNED_CDP_PROBE_SCHEMA_VERSION,
+    }:
         identity = receipt.get("build_execution_identity")
         if not isinstance(identity, Mapping):
-            raise TypeError("current pinned CDP probe has no build identity")
+            raise TypeError("pinned CDP probe schema requires a build identity")
         projection["build_execution_identity"] = dict(identity)
     return projection
 
@@ -3598,18 +3603,19 @@ def _pinned_cdp_path_from_binding(
         "build_execution",
         "probe_contract_sha256",
     }
-    if not allow_historical:
-        expected_fields.add("build_execution_identity")
+    expected_field_sets = [expected_fields | {"build_execution_identity"}]
+    if allow_historical:
+        expected_field_sets.append(expected_fields)
     if (
         not isinstance(value, Mapping)
-        or set(value) != expected_fields
+        or set(value) not in expected_field_sets
         or not isinstance(value.get("path"), str)
         or _DIGEST.fullmatch(str(value.get("sha256"))) is None
         or _DIGEST.fullmatch(str(value.get("payload_sha256"))) is None
         or _DIGEST.fullmatch(str(value.get("probe_contract_sha256"))) is None
         or not isinstance(value.get("build_execution"), Mapping)
         or (
-            not allow_historical
+            "build_execution_identity" in value
             and not isinstance(value.get("build_execution_identity"), Mapping)
         )
     ):

@@ -3116,6 +3116,7 @@ def test_watcher_pinned_cdp_contract_matches_runtime_contract() -> None:
     assert watch._PINNED_CDP_CONTRACT == pinned_cdp.PROBE_CONTRACT
     assert watch._HISTORICAL_PINNED_CDP_CONTRACT == (pinned_cdp._HISTORICAL_PROBE_CONTRACT)
     assert watch._HISTORICAL_PINNED_CDP_CONTRACT_V11 == (pinned_cdp._HISTORICAL_PROBE_CONTRACT_V11)
+    assert watch._HISTORICAL_PINNED_CDP_CONTRACT_V12 == (pinned_cdp._HISTORICAL_PROBE_CONTRACT_V12)
     assert watch._PINNED_CDP_EVENT_METHODS == pinned_cdp._EVENT_METHODS
     assert watch._PINNED_CDP_HTTP_STATUS_COUNTS == (pinned_cdp._EXPECTED_HTTP_STATUS_COUNTS)
     assert watch._PINNED_CDP_SERVER_REQUEST_COUNTS == (pinned_cdp._EXPECTED_SERVER_REQUEST_COUNTS)
@@ -3134,6 +3135,12 @@ def test_watcher_pinned_cdp_contract_matches_runtime_contract() -> None:
     assert watch._PLAYWRIGHT_DRIVER_OWNERSHIP_POLICY == (playwright_driver.OWNERSHIP_POLICY_RECEIPT)
     assert watch._EXPECTED_PLAYWRIGHT_DRIVER_BINDING == (
         playwright_driver.EXPECTED_PLAYWRIGHT_DRIVER_BINDING
+    )
+    assert watch._PREVIOUS_PLAYWRIGHT_DRIVER_OWNERSHIP_POLICY == (
+        playwright_driver.PREVIOUS_OWNERSHIP_POLICY_RECEIPT
+    )
+    assert watch._PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_BINDING == (
+        playwright_driver.PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_BINDING
     )
     assert watch._LEGACY_PLAYWRIGHT_DRIVER_OWNERSHIP_POLICY == (
         playwright_driver.LEGACY_OWNERSHIP_POLICY_RECEIPT
@@ -3183,8 +3190,11 @@ def test_watcher_pinned_cdp_contract_matches_runtime_contract() -> None:
     assert watch.HISTORICAL_FOUNDATION_SCHEMA_VERSION == (
         class_attestation.HISTORICAL_FOUNDATION_SCHEMA_VERSION
     )
-    assert browser_egress_qualification.FOUNDATION_SCHEMA_VERSION == 3
+    assert browser_egress_qualification.FOUNDATION_SCHEMA_VERSION == 4
     assert browser_egress_qualification.HISTORICAL_FOUNDATION_SCHEMA_VERSION == 2
+    assert browser_egress_qualification.HISTORICAL_FOUNDATION_SCHEMA_VERSIONS == frozenset(
+        {2, 3}
+    )
     assert watch._FOUNDATION_GATES == class_attestation._FOUNDATION_GATES
     assert study["authority_gates"]["foundation"]["reconstructed_gates"] == list(
         watch._FOUNDATION_GATES

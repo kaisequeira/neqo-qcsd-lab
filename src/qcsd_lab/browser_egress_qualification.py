@@ -96,14 +96,21 @@ from .playwright_driver import (
     EXPECTED_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256,
     EXPECTED_PLAYWRIGHT_DRIVER_RECEIPT_SHA256,
     FORBIDDEN_DRIVER_ENVIRONMENT_VARIABLES,
+    LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_CONTENT_SHA256,
+    LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256,
+    LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_RECEIPT_SHA256,
     PLAYWRIGHT_VERSION,
+    PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_CONTENT_SHA256,
+    PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256,
+    PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_RECEIPT_SHA256,
 )
 from .util import SOURCE_METADATA_KEYS, load_json, sha256_file
 
 MANIFEST_SCHEMA_VERSION = 1
 ARGV_SCHEMA_VERSION = 1
-FOUNDATION_SCHEMA_VERSION = 3
+FOUNDATION_SCHEMA_VERSION = 4
 HISTORICAL_FOUNDATION_SCHEMA_VERSION = 2
+HISTORICAL_FOUNDATION_SCHEMA_VERSIONS = frozenset({2, 3})
 ATTEMPT_INTENT_SCHEMA_VERSION = 1
 RESULT_SCHEMA_VERSION = 1
 CHECKPOINT_SCHEMA_VERSION = 1
@@ -352,6 +359,7 @@ CONSUMER_CONTRACT: dict[str, Any] = {
 
 FAILURE_CODES = frozenset(
     {
+        "browser-action-failed",
         "browser-start-failed",
         "capture-dropped-packets",
         "capture-process-failed",
@@ -873,7 +881,23 @@ def validate_source_binding(value: object, *, prepare_image_id: str) -> dict[str
     return json.loads(canonical_json_bytes(value))
 
 
-def _browser_binding() -> dict[str, Any]:
+def _browser_binding(
+    *, foundation_schema_version: int = FOUNDATION_SCHEMA_VERSION
+) -> dict[str, Any]:
+    if foundation_schema_version == 2:
+        driver_receipt_sha256 = LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_RECEIPT_SHA256
+        driver_payload_sha256 = LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256
+        driver_content_sha256 = LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_CONTENT_SHA256
+    elif foundation_schema_version == 3:
+        driver_receipt_sha256 = PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_RECEIPT_SHA256
+        driver_payload_sha256 = PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256
+        driver_content_sha256 = PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_CONTENT_SHA256
+    elif foundation_schema_version == FOUNDATION_SCHEMA_VERSION:
+        driver_receipt_sha256 = EXPECTED_PLAYWRIGHT_DRIVER_RECEIPT_SHA256
+        driver_payload_sha256 = EXPECTED_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256
+        driver_content_sha256 = EXPECTED_PLAYWRIGHT_DRIVER_CONTENT_SHA256
+    else:
+        raise ValueError("browser-egress foundation browser binding schema is invalid")
     return {
         "playwright_version": PLAYWRIGHT_VERSION,
         "chromium_revision": EXPECTED_CHROMIUM_REVISION,
@@ -881,9 +905,9 @@ def _browser_binding() -> dict[str, Any]:
         "chromium_executable": str(DEFAULT_CONFIGURED_EXECUTABLE),
         "chromium_executable_sha256": EXPECTED_CHROMIUM_SHA256,
         "playwright_browsers_json_sha256": EXPECTED_BROWSERS_JSON_SHA256,
-        "playwright_driver_receipt_sha256": EXPECTED_PLAYWRIGHT_DRIVER_RECEIPT_SHA256,
-        "playwright_driver_payload_sha256": EXPECTED_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256,
-        "playwright_driver_content_sha256": EXPECTED_PLAYWRIGHT_DRIVER_CONTENT_SHA256,
+        "playwright_driver_receipt_sha256": driver_receipt_sha256,
+        "playwright_driver_payload_sha256": driver_payload_sha256,
+        "playwright_driver_content_sha256": driver_content_sha256,
     }
 
 
@@ -1083,8 +1107,9 @@ def validate_foundation_payload(value: object, *, allow_historical: bool = False
     schema_version = value["schema_version"]
     if (
         type(schema_version) is not int
-        or schema_version not in {HISTORICAL_FOUNDATION_SCHEMA_VERSION, FOUNDATION_SCHEMA_VERSION}
-        or (schema_version == HISTORICAL_FOUNDATION_SCHEMA_VERSION and not allow_historical)
+        or schema_version
+        not in {FOUNDATION_SCHEMA_VERSION, *HISTORICAL_FOUNDATION_SCHEMA_VERSIONS}
+        or (schema_version in HISTORICAL_FOUNDATION_SCHEMA_VERSIONS and not allow_historical)
         or value["qualification_id"] != QUALIFICATION_ID
         or value["study_id"] != STUDY_ID
     ):
@@ -1100,7 +1125,7 @@ def validate_foundation_payload(value: object, *, allow_historical: bool = False
         "prepare_image_id",
         "reference_image_id",
     }
-    if schema_version == FOUNDATION_SCHEMA_VERSION:
+    if schema_version >= 3:
         build_fields.update({"completion_path", "completion_sha256"})
     if not isinstance(build, Mapping) or set(build) != build_fields:
         raise ValueError("browser-egress build binding fields are invalid")
@@ -1111,7 +1136,7 @@ def validate_foundation_payload(value: object, *, allow_historical: bool = False
     _sha256(build["payload_sha256"], label="build execution payload SHA-256")
     if build["cohort_version"] != cohort_version:
         raise ValueError("browser-egress build cohort version is invalid")
-    if schema_version == FOUNDATION_SCHEMA_VERSION:
+    if schema_version >= 3:
         _sha256(build["completion_sha256"], label="build completion SHA-256")
         if build["completion_path"] != _canonical_build_completion_path(cohort_version):
             raise ValueError("browser-egress build completion path is invalid")
@@ -1144,7 +1169,7 @@ def validate_foundation_payload(value: object, *, allow_historical: bool = False
         raise ValueError("browser-egress prepare image repo digests are invalid")
     validate_source_binding(value["source"], prepare_image_id=image["id"])
     validate_docker_daemon_binding(value["docker_daemon"])
-    if value["browser"] != _browser_binding():
+    if value["browser"] != _browser_binding(foundation_schema_version=schema_version):
         raise ValueError("browser-egress pinned browser binding is invalid")
     contracts = value["contracts"]
     if not isinstance(contracts, Mapping) or set(contracts) != {
@@ -1203,7 +1228,7 @@ def deep_validate_foundation(
         raise ValueError("browser-egress foundation verification mode is invalid")
 
     payload = validate_foundation_payload(value, allow_historical=allow_historical)
-    historical = payload["schema_version"] == HISTORICAL_FOUNDATION_SCHEMA_VERSION
+    historical = payload["schema_version"] in HISTORICAL_FOUNDATION_SCHEMA_VERSIONS
     root = _safe_directory(lab_root, label="Lab root")
     contracts = payload["contracts"]
     validate_file_binding(
@@ -1258,7 +1283,7 @@ def deep_validate_foundation(
     )
     expected_completion = (
         None
-        if historical
+        if payload["schema_version"] == 2
         else _current_build_completion_identity(
             validated_build,
             lab_root=root,
@@ -2011,6 +2036,7 @@ def validate_result_payload(
         if failure_code not in FAILURE_CODES:
             raise ValueError("browser-egress result failure code is invalid")
         if verdict == "operational-failure" and failure_code not in {
+            "browser-action-failed",
             "browser-start-failed",
             "capture-process-failed",
             "docker-start-failed",
@@ -2020,6 +2046,7 @@ def validate_result_payload(
         }:
             raise ValueError("semantic failure was misclassified as operational")
         if verdict == "semantic-failure" and failure_code in {
+            "browser-action-failed",
             "browser-start-failed",
             "docker-start-failed",
             "infrastructure-timeout",
