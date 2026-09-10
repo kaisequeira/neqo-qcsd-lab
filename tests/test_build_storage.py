@@ -19,7 +19,7 @@ from qcsd_lab import build_storage, cohort_allocation
 GIB = 1024**3
 PROBE_SHA256 = "1" * 64
 VOLUME_ID = "\\\\?\\Volume{12345678-1234-1234-1234-123456789abc}\\"
-DATA_VHD_PATH = "C:\\Users\\kai\\AppData\\Local\\Docker\\wsl\\data\\ext4.vhdx"
+DATA_VHD_PATH = "C:\\Users\\qcsd-test-user\\AppData\\Local\\Docker\\wsl\\data\\ext4.vhdx"
 BOUNDARY_TIMES = (
     ("before-collection", "2026-09-01T00:00:00+00:00"),
     ("before-prepare", "2026-09-01T00:00:02+00:00"),
