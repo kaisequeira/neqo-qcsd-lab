@@ -19,7 +19,9 @@ import time
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from functools import cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import MappingProxyType
 from typing import Any, Protocol
 from urllib.parse import quote
 
@@ -35,9 +37,9 @@ from .browser_egress import (
 from .class_study import canonical_json_bytes, canonical_json_sha256
 
 QUALIFICATION_ID = "browser-egress-qualification-v1"
-VECTOR_SCHEMA_VERSION = 3
-SEMANTIC_OBSERVATION_SCHEMA_VERSION = 3
-ACTION_CONTRACT_SCHEMA_VERSION = 3
+VECTOR_SCHEMA_VERSION = 4
+SEMANTIC_OBSERVATION_SCHEMA_VERSION = 4
+ACTION_CONTRACT_SCHEMA_VERSION = 4
 SINK_RECEIPT_SCHEMA_VERSION = 1
 VECTOR_COUNT = 110
 BROWSER_LAUNCH_CONTRACT_SCHEMA_VERSION = 1
@@ -46,6 +48,8 @@ REPORTING_NEL_LIVE_DWELL_MS = 2_000
 REPORTING_NEL_CLOSE_AFTER_ACTION_MAX_MS = 2_000
 SPECULATION_PREFETCH_DWELL_MS = 5_000
 BROWSER_SERVICE_CONTROL_DWELL_MS = 5_000
+FETCH_DENIAL_WAIT_TIMEOUT_MS = 5_000
+FETCH_DENIAL_SETTLE_MS = 100
 POSITIVE_CONTROL_PAYLOAD = b"QCSD-BROWSER-EGRESS-CONTROL-V1!!"
 CHROMIUM_NETWORK_PREDICTION_NEVER_POLICY = {
     "DnsOverHttpsMode": "off",
@@ -250,6 +254,7 @@ SEMANTIC_MECHANISMS = frozenset(
         "browser-idle-observation",
         "fixture-positive-control",
         "effective-command-line-environment",
+        "pinned-hyperlink-auditing-disabled",
         "paired-network-prediction-suppression",
         "paired-network-prediction-eligibility",
         "paired-reporting-feature-suppression",
@@ -677,6 +682,11 @@ def expected_browser_launch_contract(vector: BrowserEgressVector) -> dict[str, A
 def expected_action_contract(vector: BrowserEgressVector) -> dict[str, Any] | None:
     """Return the exact raw outcome for a native browser action or kill switch."""
 
+    suppressed_url_loader = (
+        vector.family == "urlloader"
+        and vector.surface == "trusted-anchor-ping"
+        and vector.semantic_kind == "action-issued"
+    )
     disabled_browser_surface = (
         vector.family == "browser-service"
         and vector.surface in {"fedcm", "protected-audience", "attribution", "shared-storage"}
@@ -691,6 +701,7 @@ def expected_action_contract(vector: BrowserEgressVector) -> dict[str, Any] | No
     if not (
         vector.family == "service-worker"
         and vector.surface in SERVICE_WORKER_SURFACES
+        or suppressed_url_loader
         or vector.family == "browser-service"
         and vector.surface not in {"proxy", "pac", "idle-launch-close"}
         and vector.surface in BROWSER_SERVICE_SURFACES
@@ -715,6 +726,15 @@ def expected_action_contract(vector: BrowserEgressVector) -> dict[str, Any] | No
             "exception_name": None,
         }
         completion = "native-operation-resolved"
+    elif suppressed_url_loader:
+        raw_outcome = {
+            "resolved_type": "function",
+            "own_descriptor": "data",
+            "action_issued": True,
+            "action_succeeded": True,
+            "exception_name": None,
+        }
+        completion = "hyperlink-auditing-suppressed-after-activation"
     elif vector.family == "browser-service-control":
         raw_outcome = {
             "resolved_type": "not-applicable",
@@ -788,6 +808,7 @@ def _append(
     )
 
 
+@cache
 def expected_vectors() -> tuple[BrowserEgressVector, ...]:
     """Generate the exact 110-vector v1 inventory in its frozen order."""
 
@@ -818,18 +839,43 @@ def expected_vectors() -> tuple[BrowserEgressVector, ...]:
                 semantic_mechanism="recursive-cdp-fetch-denial",
                 descriptor_state="present-callable",
             )
-    for surface in ("beacon", "trusted-anchor-ping", "legacy-csp-report"):
-        for context in DOCUMENT_CONTEXTS:
-            _append(
-                rows,
-                vector_id=f"urlloader--{context}--{surface}",
-                family="urlloader",
-                context=context,
-                surface=surface,
-                semantic_kind="fetch-policy-denial",
-                semantic_mechanism="recursive-cdp-fetch-denial",
-                descriptor_state="present-callable",
-            )
+    for context in DOCUMENT_CONTEXTS:
+        _append(
+            rows,
+            vector_id=f"urlloader--{context}--beacon",
+            family="urlloader",
+            context=context,
+            surface="beacon",
+            semantic_kind="fetch-policy-denial",
+            semantic_mechanism="recursive-cdp-fetch-denial",
+            descriptor_state="present-callable",
+        )
+    # Chromium's required ``--no-pings`` switch suppresses hyperlink-audit
+    # dispatch before a request can reach CDP Fetch.  The exact native action,
+    # zero guard counts, effective argv, sinks, and packet capture jointly bind
+    # that fail-closed outcome.
+    for context in DOCUMENT_CONTEXTS:
+        _append(
+            rows,
+            vector_id=f"urlloader--{context}--trusted-anchor-ping",
+            family="urlloader",
+            context=context,
+            surface="trusted-anchor-ping",
+            semantic_kind="action-issued",
+            semantic_mechanism="pinned-hyperlink-auditing-disabled",
+            descriptor_state="present-callable",
+        )
+    for context in DOCUMENT_CONTEXTS:
+        _append(
+            rows,
+            vector_id=f"urlloader--{context}--legacy-csp-report",
+            family="urlloader",
+            context=context,
+            surface="legacy-csp-report",
+            semantic_kind="fetch-policy-denial",
+            semantic_mechanism="recursive-cdp-fetch-denial",
+            descriptor_state="present-callable",
+        )
 
     for surface in SERVICE_WORKER_SURFACES:
         _append(
@@ -924,8 +970,16 @@ def expected_vectors() -> tuple[BrowserEgressVector, ...]:
     return tuple(rows)
 
 
+@cache
+def _inventory_canonical_bytes() -> bytes:
+    """Serialise the immutable vector inventory once for validation hot paths."""
+
+    return canonical_json_bytes([vector.as_dict() for vector in expected_vectors()])
+
+
+@cache
 def expanded_vectors_sha256() -> str:
-    return canonical_json_sha256([vector.as_dict() for vector in expected_vectors()])
+    return hashlib.sha256(_inventory_canonical_bytes()).hexdigest()
 
 
 def validate_vector_inventory(value: object) -> tuple[BrowserEgressVector, ...]:
@@ -933,12 +987,12 @@ def validate_vector_inventory(value: object) -> tuple[BrowserEgressVector, ...]:
 
     if not isinstance(value, list):
         raise ValueError("browser-egress vector inventory must be a JSON array")
-    expected = [row.as_dict() for row in expected_vectors()]
-    if canonical_json_bytes(value) != canonical_json_bytes(expected):
+    expected_bytes = _inventory_canonical_bytes()
+    if canonical_json_bytes(value) != expected_bytes:
         raise ValueError("browser-egress vector inventory differs from frozen v1 order/content")
     # A JSON round trip rejects custom Mapping/List subclasses at the boundary.
     detached = json.loads(canonical_json_bytes(value))
-    if detached != expected:  # pragma: no cover - guarded above
+    if canonical_json_bytes(detached) != expected_bytes:  # pragma: no cover - guarded above
         raise ValueError("browser-egress vector inventory is not JSON stable")
     return expected_vectors()
 
@@ -946,10 +1000,17 @@ def validate_vector_inventory(value: object) -> tuple[BrowserEgressVector, ...]:
 def vector_by_id(vector_id: str) -> BrowserEgressVector:
     if not isinstance(vector_id, str):
         raise ValueError("browser-egress vector ID must be a string")
-    for vector in expected_vectors():
-        if vector.vector_id == vector_id:
-            return vector
-    raise ValueError(f"unknown browser-egress vector: {vector_id!r}")
+    try:
+        return _vector_index()[vector_id]
+    except KeyError as error:
+        raise ValueError(f"unknown browser-egress vector: {vector_id!r}") from error
+
+
+@cache
+def _vector_index() -> Mapping[str, BrowserEgressVector]:
+    """Index the frozen tuple once for hot-path receipt validation."""
+
+    return MappingProxyType({vector.vector_id: vector for vector in expected_vectors()})
 
 
 def expected_semantic_chronology(vector: BrowserEgressVector) -> tuple[str, ...]:
@@ -1019,6 +1080,12 @@ class LiveBrowserRealm(Protocol):
     def browser_configuration_observation(self, surface: str) -> Mapping[str, Any]: ...
 
     def guard_counts(self) -> Mapping[str, int]: ...
+
+    def fetch_denial_observations(self) -> Sequence[Mapping[str, str]]: ...
+
+    def complete_fetch_denial_observation_window(
+        self, expected_count: int, *, timeout_ms: int
+    ) -> None: ...
 
     def prearm_verified(self) -> bool: ...
 
@@ -1140,7 +1207,28 @@ async ({family, surface, tcpUrl, tcpPort, udpHost, rtcHost, rtcPort, udpPort, fo
     else if (surface === 'xhr') await new Promise((resolve, reject) => { const x = new XMLHttpRequest(); x.onload = resolve; x.onerror = reject; x.open('GET', forbiddenUrl); x.send(); });
     else if (surface === 'beacon') navigator.sendBeacon(forbiddenUrl, 'qcsd');
     else if (surface === 'trusted-anchor-ping') { const a = document.createElement('a'); a.href = 'about:blank'; a.ping = forbiddenUrl; document.body.append(a); a.click(); }
-    else if (surface === 'legacy-csp-report') { const meta = document.createElement('meta'); meta.httpEquiv = 'Content-Security-Policy'; meta.content = `default-src 'none'; report-uri ${forbiddenUrl}`; document.head.append(meta); const s = document.createElement('script'); s.src = forbiddenUrl; document.body.append(s); }
+    else if (surface === 'legacy-csp-report') {
+      await new Promise((resolve, reject) => {
+        const onViolation = event => {
+          clearTimeout(timer);
+          document.removeEventListener('securitypolicyviolation', onViolation);
+          if (event.disposition !== 'enforce' || event.blockedURI !== forbiddenUrl ||
+              !['script-src', 'script-src-elem'].includes(event.effectiveDirective)) {
+            reject(new Error('QCSD_CSP_VIOLATION_MISMATCH'));
+            return;
+          }
+          resolve();
+        };
+        const timer = setTimeout(() => {
+          document.removeEventListener('securitypolicyviolation', onViolation);
+          reject(new Error('QCSD_CSP_VIOLATION_TIMEOUT'));
+        }, 1000);
+        document.addEventListener('securitypolicyviolation', onViolation);
+        const script = document.createElement('script');
+        script.src = forbiddenUrl;
+        document.body.append(script);
+      });
+    }
     else if (family === 'service-worker' && surface === 'registration') await navigator.serviceWorker.register(serviceWorkerRegistrationUrl);
     else if (family === 'service-worker' && surface === 'import') await navigator.serviceWorker.register(serviceWorkerImportUrl);
     else if (family === 'service-worker' && surface === 'fetch') await navigator.serviceWorker.register(serviceWorkerFetchUrl);
@@ -1296,6 +1384,32 @@ def expected_browser_action_arguments(vector: BrowserEgressVector) -> dict[str, 
     }
 
 
+def expected_fetch_denial_observations(
+    vector: BrowserEgressVector,
+) -> list[dict[str, str]]:
+    """Return the exact action-bound CDP denial, if this vector requires one."""
+
+    if vector.semantic_kind != "fetch-policy-denial":
+        return []
+    methods = {
+        "fetch": "GET",
+        "xhr": "GET",
+        "beacon": "POST",
+        "legacy-csp-report": "POST",
+        "window-open-existing-named-frame": "GET",
+    }
+    try:
+        method = methods[vector.surface]
+    except KeyError as error:  # pragma: no cover - frozen inventory construction invariant
+        raise ValueError("fetch-policy vector has no exact HTTP method contract") from error
+    return [
+        {
+            "url": expected_browser_action_arguments(vector)["forbiddenUrl"],
+            "method": method,
+        }
+    ]
+
+
 def dedicated_worker_action_message(vector: BrowserEgressVector) -> dict[str, Any]:
     """Return the sole sanctioned message evaluated by the dedicated-worker fixture."""
 
@@ -1393,10 +1507,14 @@ def execute_live_browser_action(
     if vector.family == "positive-control":
         raise ValueError("positive controls must use the independent control emitter")
     before = realm.guard_counts()
+    before_denials = realm.fetch_denial_observations()
     if (
         not isinstance(before, Mapping)
         or set(before) != {"policy_event_count", "fetch_denial_count"}
         or any(type(before[key]) is not int or before[key] < 0 for key in before)
+        or not isinstance(before_denials, Sequence)
+        or isinstance(before_denials, (str, bytes, bytearray))
+        or len(before_denials) != before["fetch_denial_count"]
         or realm.prearm_verified() is not True
     ):
         raise ValueError("live browser realm is not exactly prearmed")
@@ -1419,8 +1537,14 @@ def execute_live_browser_action(
         raw = realm.evaluate(browser_service_action_expression(), argument)
     else:
         raw = realm.evaluate(browser_action_expression(), argument)
+    if vector.semantic_kind == "fetch-policy-denial":
+        realm.complete_fetch_denial_observation_window(
+            before["fetch_denial_count"] + 1,
+            timeout_ms=FETCH_DENIAL_WAIT_TIMEOUT_MS,
+        )
     finished_ns = time.monotonic_ns()
     after = realm.guard_counts()
+    after_denials = realm.fetch_denial_observations()
     if (
         not isinstance(raw, Mapping)
         or set(raw)
@@ -1433,6 +1557,10 @@ def execute_live_browser_action(
         }
         or not isinstance(after, Mapping)
         or set(after) != set(before)
+        or not isinstance(after_denials, Sequence)
+        or isinstance(after_denials, (str, bytes, bytearray))
+        or len(after_denials) != after["fetch_denial_count"]
+        or list(after_denials[: len(before_denials)]) != list(before_denials)
     ):
         raise ValueError("live browser semantic actor returned malformed measurements")
     deltas = {key: after[key] - before[key] for key in before}
@@ -1449,6 +1577,7 @@ def execute_live_browser_action(
             "action_succeeded": raw["action_succeeded"],
             "policy_event_count": deltas["policy_event_count"],
             "fetch_denial_count": deltas["fetch_denial_count"],
+            "fetch_denials": [dict(item) for item in after_denials[len(before_denials) :]],
             "exception_name": raw["exception_name"],
             "control_observed": False,
             "configuration_observation": (
@@ -1673,6 +1802,25 @@ def _empty_family_payloads(*, count_key: str, byte_key: str) -> dict[str, dict[s
 
 def expected_fixture_response_headers(vector: BrowserEgressVector) -> dict[str, dict[str, str]]:
     """Return vector-specific response policy headers served by the fixture."""
+
+    if vector.family == "urlloader" and vector.surface == "legacy-csp-report":
+        # CSP reporting directives are ignored in meta-delivered policies.  An
+        # enforced response-header policy makes the external script violation
+        # real while blocking the script locally; the one eligible network
+        # request is therefore the legacy report that CDP must deny.
+        response_path = {
+            "page": "primary:/",
+            "same-origin-frame": "primary:/frame",
+            "cross-origin-frame": "cross:/frame",
+        }.get(vector.context)
+        if response_path is None:  # pragma: no cover - frozen construction invariant.
+            raise ValueError("legacy CSP report vector requires a document context")
+        report_uri = expected_browser_action_arguments(vector)["forbiddenUrl"]
+        return {
+            response_path: {
+                "Content-Security-Policy": f"script-src 'none'; report-uri {report_uri}"
+            }
+        }
 
     is_legacy_negative = vector.surface in {
         "reporting-nel-live",
@@ -2423,6 +2571,7 @@ def execute_live_positive_control(
             "action_succeeded": True,
             "policy_event_count": 0,
             "fetch_denial_count": 0,
+            "fetch_denials": [],
             "exception_name": None,
             "control_observed": True,
             "configuration_observation": None,
@@ -2463,6 +2612,7 @@ def browser_service_control_actor_result(
             "action_succeeded": True,
             "policy_event_count": 0,
             "fetch_denial_count": 0,
+            "fetch_denials": [],
             "exception_name": None,
             "control_observed": observed,
             "configuration_observation": None,
@@ -2507,6 +2657,7 @@ def validate_semantic_observation(value: object, *, vector: BrowserEgressVector)
         "action_succeeded",
         "policy_event_count",
         "fetch_denial_count",
+        "fetch_denials",
         "exception_name",
         "control_observed",
         "configuration_observation",
@@ -2535,6 +2686,21 @@ def validate_semantic_observation(value: object, *, vector: BrowserEgressVector)
     for key in ("policy_event_count", "fetch_denial_count"):
         if type(measurement[key]) is not int or measurement[key] < 0:
             raise ValueError(f"browser-egress semantic measurement {key} is invalid")
+    denials = measurement["fetch_denials"]
+    if not isinstance(denials, list) or len(denials) != measurement["fetch_denial_count"]:
+        raise ValueError("browser-egress Fetch-denial observation inventory is invalid")
+    for denial in denials:
+        if (
+            not isinstance(denial, Mapping)
+            or set(denial) != {"url", "method"}
+            or not isinstance(denial["url"], str)
+            or not denial["url"]
+            or not isinstance(denial["method"], str)
+            or not denial["method"]
+        ):
+            raise ValueError("browser-egress Fetch-denial observation is invalid")
+    if denials != expected_fetch_denial_observations(vector):
+        raise ValueError("browser-egress Fetch denial differs from the frozen action request")
     exception = measurement["exception_name"]
     if exception is not None and (not isinstance(exception, str) or not exception):
         raise ValueError("browser-egress semantic exception name is invalid")
@@ -2932,7 +3098,7 @@ def validate_vector(value: object) -> BrowserEgressVector:
 def inventory_json() -> list[dict[str, Any]]:
     """Return a detached JSON-compatible copy of the frozen inventory."""
 
-    return json.loads(canonical_json_bytes([vector.as_dict() for vector in expected_vectors()]))
+    return json.loads(_inventory_canonical_bytes())
 
 
 def require_exact_string_sequence(value: object, *, expected: Sequence[str], label: str) -> None:

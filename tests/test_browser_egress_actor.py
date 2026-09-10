@@ -31,6 +31,99 @@ class _RecordingPage:
         return self.result
 
 
+class _HealthyRouter:
+    def __init__(self) -> None:
+        self.raise_calls = 0
+
+    def raise_if_failed(self) -> None:
+        self.raise_calls += 1
+
+
+def test_playwright_realm_waits_for_and_settles_one_exact_fetch_denial() -> None:
+    realm_type = _tool_namespace()["_PlaywrightRealm"]
+    denials: list[dict[str, str]] = []
+    waits: list[int] = []
+
+    class Page:
+        def wait_for_timeout(self, milliseconds: int) -> None:
+            waits.append(milliseconds)
+            if milliseconds == 10 and not denials:
+                denials.append({"url": "https://forbidden.invalid/report", "method": "POST"})
+
+    router = _HealthyRouter()
+    realm = realm_type(
+        evaluator=object(),
+        page=Page(),
+        guard=SimpleNamespace(attempt_count=0),
+        fetch_denials=denials,
+        router=router,
+        prearmed=True,
+        command_line_projection={},
+        child_environment={},
+    )
+    realm.complete_fetch_denial_observation_window(1, timeout_ms=1_000)
+    assert waits == [10, 100]
+    assert router.raise_calls == 2
+    snapshot = realm.fetch_denial_observations()
+    assert snapshot == denials
+    snapshot[0]["method"] = "PATCH"
+    assert denials[0]["method"] == "POST"
+
+
+def test_playwright_realm_preserves_a_duplicate_denial_for_semantic_rejection() -> None:
+    realm_type = _tool_namespace()["_PlaywrightRealm"]
+    denials = [{"url": "https://forbidden.invalid/report", "method": "POST"}]
+
+    class Page:
+        def wait_for_timeout(self, milliseconds: int) -> None:
+            if milliseconds == 100:
+                denials.append(dict(denials[0]))
+
+    realm = realm_type(
+        evaluator=object(),
+        page=Page(),
+        guard=SimpleNamespace(attempt_count=0),
+        fetch_denials=denials,
+        router=_HealthyRouter(),
+        prearmed=True,
+        command_line_projection={},
+        child_environment={},
+    )
+    realm.complete_fetch_denial_observation_window(1, timeout_ms=1_000)
+    assert len(denials) == 2
+
+
+def test_playwright_realm_missing_denial_completes_for_semantic_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    namespace = _tool_namespace()
+    realm_type = namespace["_PlaywrightRealm"]
+    denials: list[dict[str, str]] = []
+    waits: list[int] = []
+    moments = iter((10.0, 11.0))
+    monkeypatch.setattr(namespace["time"], "monotonic", lambda: next(moments, 11.0))
+
+    class Page:
+        def wait_for_timeout(self, milliseconds: int) -> None:
+            waits.append(milliseconds)
+
+    router = _HealthyRouter()
+    realm = realm_type(
+        evaluator=object(),
+        page=Page(),
+        guard=SimpleNamespace(attempt_count=0),
+        fetch_denials=denials,
+        router=router,
+        prearmed=True,
+        command_line_projection={},
+        child_environment={},
+    )
+    realm.complete_fetch_denial_observation_window(1, timeout_ms=1_000)
+    assert denials == []
+    assert waits == []
+    assert router.raise_calls == 2
+
+
 def test_dedicated_worker_evaluator_uses_the_frozen_page_message() -> None:
     namespace = _tool_namespace()
     evaluator_type = namespace["_DedicatedWorkerEvaluator"]

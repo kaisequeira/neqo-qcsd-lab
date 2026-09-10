@@ -640,7 +640,7 @@ requires exact integer `functionLocation.lineNumber` and `columnNumber` values
 at the bootstrap origin `0:0`, and accepts only exact empty-result maps from
 both initial and shutdown `Runtime.runIfWaitingForDebugger` acknowledgements.
 
-The prospective pinned gate consequently advances to outer receipt schema 12,
+The pinned gate consequently advanced to outer receipt schema 12,
 nested probe-contract schema 11/policy v11, and instrumentation v13. It actively
 constructs `WebTransport` after prearm in both the dedicated and shared worker;
 each must resolve the constructor as a function with a data descriptor, issue
@@ -654,13 +654,28 @@ deselected. The exhaustive closed-inventory case separately passed 1/1 in
 76/76, watcher 265/265, class-admission/CLI 394/394, and the non-exhaustive
 browser actor/qualification suite 219/219; the combined unprivileged real-
 Chromium suite passed 3/3. These are engineering results,
-not image-bound or receipted evidence. V80's 30/110 remains
-historical and its open checkpoint must not be resumed for current-source
-authority. Current-head browser-egress is 0/110, certification is 0/900, formal
-capture is 0/16,000, and every other scientific numerator is zero. Fresh v81
-is the exact next allocator-authorised cohort; it must repeat
-the build/completion and schema-12 pinned-CDP gates before creating a new
-110-vector root.
+not image-bound or receipted evidence. V80's 30/110 remains historical and its
+open checkpoint must not be resumed for current-source authority. V81 then
+bound the repaired worker-prearm contract through a fresh pull/no-cache
+build/completion pair and a passing schema-12 pinned-CDP receipt. Its
+browser-egress run sealed vectors 1--63 as passing, then terminally failed
+vector 64 because the semantic oracle expected a hyperlink-audit request even
+though the required `--no-pings` switch suppressed it; the capture recorded
+zero unexpected packets, forbidden-sink traffic, DNS traffic, and CDP denials.
+V81 is immutable failure evidence and cannot be resumed. Post-v81 source now
+models the successful activation as pinned hyperlink-auditing suppression and
+uses an enforced document-specific HTTP header for legacy CSP reporting. Its
+semantic/action-contract schema 4 binds the exact denied URL and HTTP method,
+waiting at most 5 seconds for the denial and then observing a 100 ms settling
+window; those bounds do not claim every execution lasts 5.1 seconds. The frozen
+vector inventory and lookup are cached so manifest and closure verification do
+not repeatedly reconstruct all 110 vectors. Local verification includes the
+exhaustive 110-vector chain passing 1/1 in 789.31 seconds and all 6/6 pinned-M143
+ping/CSP document-context integrations passing. Current-source browser-egress
+nevertheless remains 0/110, certification is 0/900, formal capture is
+0/16,000, and every other scientific numerator is zero. V82 is the next fresh
+unused allocator-authorised cohort, and may begin only after the repaired
+source is cleanly committed and rebuilt.
 
 Summary schema 4 binds the typed schedule-stop policy, stop timestamp,
 sub-cell capacity, direction counts at stop, and exact post-stop advertised
@@ -1328,10 +1343,13 @@ vectors before the host misclassified the assembler's successful response;
 v80 bound that parser correction, passed the same three source-bound gates, and
 sealed 30 historical passing vectors before its dedicated-worker event wait
 failed operationally at vector 31. The completed post-v80 bridge/lifecycle and
-first-script worker-prearm repair changes source again, advances the prospective
-pinned gate to outer schema 12/contract 11/instrumentation v13, and leaves v80's
-schema-11 evidence historical-only. Fresh-source authority now requires v81
-after commit/build. Every downstream scientific counter remains zero.
+first-script worker-prearm repair changed source again and left v80's schema-11
+evidence historical-only. V81 bound that repair through a fresh no-cache build
+and passing pinned-CDP gate, but its immutable browser-egress run stopped after
+63 passing vectors when vector 64 exposed the hyperlink-audit semantic-oracle
+error with zero observed leakage. Post-v81 schema-4 corrections require a clean
+commit and fresh v82 build before current-source authority can advance. Every
+downstream scientific counter remains zero.
 
 The retained post-v55 Lab engineering lineage also hardens durable Docker HANDOFF
 retirement. It permits at most one additional read-only absence observation,
@@ -1507,8 +1525,12 @@ stopped after four historical passing browser vectors on the assembler-response
 parser defect. V80 bound that correction and passed those gates, but its 30
 passing vectors are historical after the completed post-v80 bridge/lifecycle
 and first-script worker-prearm repair. That repair advances the prospective
-pinned contract to outer schema 12/contract 11/instrumentation v13; fresh v81
-must follow commit, rebuild, and repeat the source-bound gates.
+pinned contract to outer schema 12/contract 11/instrumentation v13. V81 bound
+that repair through its fresh no-cache build and passing pinned-CDP gate, then
+sealed 63 passing browser vectors before vector 64 exposed the now-corrected
+hyperlink-audit oracle mismatch with zero observed leakage. V81 cannot be
+resumed; post-v81 schema-4 semantics move fresh-source authority to v82 after a
+clean commit and rebuild.
 Current-head browser-egress is 0/110,
 timing stress is 0/12, regression is 0/18, and controlled qualification is
 0/160. Real acquisition observations remain zero.
@@ -1598,12 +1620,15 @@ was misclassified. V80 bound that correction, passed the same gates, and sealed
 30 historical passing vectors before the dedicated-worker event wait failed
 operationally at vector 31. The completed post-v80 bridge/lifecycle and exact
 first-script worker-prearm repair supersedes both source identities and makes
-outer schema 11/v80 historical-only. V81 is the exact next allocator-authorised
-cohort after commit. It must pass a fresh
-build/completion pair, pinned-CDP gate, 110/110 browser-egress gate, isolated
+outer schema 11/v80 historical-only. V81 subsequently passed a fresh no-cache
+build/completion pair and the schema-12 pinned-CDP gate, then sealed browser
+vectors 1--63 as passing before vector 64 exposed the suppressed-ping oracle
+mismatch with zero leakage. Its immutable root must not be resumed. Only fresh
+unused v82, after a clean commit and rebuild, can attempt the required 110/110
+browser-egress gate, isolated
 reference, 12/12 timing stress, 18/18 regression, regression-bound code gate,
 and 160/160 controlled qualification before expanded-class acquisition can
-begin. V55–v80 cannot authorise the changed-source evidence. The
+begin. V55–v81 cannot authorise the changed-source evidence. The
 complete current status and earlier cohort chronology are retained in the
 authoritative workspace [`PROJECT.md`](../PROJECT.md).
 
@@ -1839,9 +1864,13 @@ the separately run full-vector closure. V79 and v80 subsequently passed fresh
 build/completion and pinned-CDP gates, but produced only four and 30 historical
 passing browser vectors, respectively, before their distinct operational
 failures. The completed post-v80 bridge/lifecycle and first-script
-`scriptParsed`/instrumentation/`evaluateOnCallFrame` repair requires commit and
-a fresh v81 build plus schema-12 pinned gate. No downstream scientific authority
-exists.
+`scriptParsed`/instrumentation/`evaluateOnCallFrame` repair was bound by v81's
+passing fresh no-cache build and schema-12 pinned gate. V81 then sealed 63
+passing browser vectors before vector 64 failed on the historical hyperlink-
+audit semantic-oracle mismatch, without observed leakage. Post-v81 schema-4
+ping/CSP corrections are locally verified but not yet image-bound; fresh unused
+v82 requires a clean commit and build before downstream scientific authority
+can exist.
 
 The build-execution schema-4 integration is committed at clean Lab
 `69a14ebe48f78d08a8b36d3e573955ec64f00ff9`. V61 exercised it but failed before
@@ -1963,8 +1992,12 @@ separately run full-vector closure. V79 bound it but stopped after four passing
 vectors on the assembler-response parser defect. V80 bound that parser repair
 and stopped after 30 passing vectors on the dedicated-worker event timeout. The
 completed worker bridge/lifecycle repair and deeper real-Chromium first-script
-prearm correction therefore move the sequence to fresh v81 after commit/build;
-v80 and outer schema 11 remain historical-only.
+prearm correction moved the sequence to v81, whose no-cache build and
+schema-12 pinned-CDP gate passed. Its immutable browser-egress run passed
+vectors 1--63 before the vector-64 suppressed-ping oracle failure, with zero
+observed leakage. Post-v81 schema-4 corrections now move the sequence to fresh
+unused v82 after a clean commit/build; v80, v81, and outer schema 11 remain
+historical-only for current-source authority.
 
 Earlier on 1 September 2026, a read-only probe found only about 2.19 GB
 available on the backing C: volume and Docker again exposed data-device I/O
@@ -2085,7 +2118,11 @@ browser attempt exposed the merged privilege-dependent version-stream defect.
 V79 and v80 subsequently built the separation and assembler-response fixes and
 passed their pinned-CDP gates, but neither completed browser-egress. The
 completed post-v80 worker bridge/lifecycle and first-script prearm correction
-requires a fresh v81 image after commit/build. The pinned
+was bound by v81's passing fresh no-cache build and schema-12 pinned-CDP gate;
+its browser-egress run passed vectors 1--63 and then sealed the vector-64
+suppressed-ping oracle failure with zero observed leakage. The post-v81
+semantic correction is locally verified but requires a clean commit and fresh
+v82 image before reacquisition. The pinned
 contract binds post-patch `crNetworkManager.js` SHA-256
 `c10daf1b5c5c6c64e1c545ff7d7bb16f9990aa71c4fe64e081c3a43157d4531a`,
 the 401-file/131,857,836-byte package tree at
@@ -2248,9 +2285,25 @@ stopped on merged privilege-dependent version output. The committed stream-
 separation fix was subsequently bound by v79, and its assembler-response repair
 was bound by v80; both passed build/completion and pinned-CDP but neither
 completed browser-egress. The completed post-v80 worker bridge/lifecycle and
-first-script prearm correction therefore requires a commit, fresh v81
-build/completion pair, and new outer-schema-12 pinned-CDP receipt. Pass that
-canonical receipt to the foundation command as
+first-script prearm correction was bound by v81. Its fresh build/completion and
+outer-schema-12 pinned-CDP gates passed, and browser-egress vectors 1--63 then
+passed before vector 64 sealed a semantic failure. The failed hyperlink-audit
+vector observed a successful anchor activation and zero unexpected packets,
+forbidden-sink traffic, DNS traffic, or CDP denials: the oracle incorrectly
+expected a request despite the required `--no-pings` launch switch. The
+post-v81 source corrects that suppression contract and also replaces the
+adjacent legacy-CSP `<meta>` setup (where `report-uri` is ignored) with an
+enforced, document-specific HTTP response header. Semantic/action-contract
+schema 4 binds the exact denied URL and HTTP method, waits no more than 5
+seconds for that denial, and observes a 100 ms settling window without claiming
+a fixed 5.1-second duration. Cached immutable vector inventory and indexing
+avoid reconstructing the 110-vector manifest throughout closure validation.
+Local verification passed the exhaustive 110-vector chain in 789.31 seconds
+and all 6/6 pinned-M143 integrations spanning ping and CSP across page,
+same-origin-frame, and cross-origin-frame contexts. These changes require a
+clean commit, fresh v82 build/completion pair, pinned-CDP receipt, and complete
+110-vector run; v81 remains immutable failure evidence and must not be resumed.
+Pass the successor's canonical pinned-CDP receipt to the foundation command as
 `--pinned-cdp-receipt "$PINNED_CDP"`. It is the sixth
 explicit foundation hard gate: the foundation binds the receipt and payload
 hashes, its exact build binding, and the fixed probe-contract hash, and requires
@@ -2273,9 +2326,9 @@ command-line projection, packet captures, build receipt, and preparation image.
 The checked-in
 [`browser-egress-qualification-v1.json`](config/class-study/v1/browser-egress-qualification-v1.json)
 manifest has SHA-256
-`6c1064b7e61b53f85d0aae6dc621600759d035531143d22dea50411c49f0dcd4`;
+`95d206391d283acd34c3393506730f9779eb09b06c467f2004ef78d619d72114`;
 its expanded 110-vector digest is
-`9fecbeb7988fcb28d82803026ef9f3948d1494b14cc5a0930585e6e51e3a4179`.
+`d9038cf12d733f914ad8e71365d98b8ac9eeb98aa9f02aa4ad43b992d3bd21ba`.
 The checked-in
 [`browser-egress-chromium-argv-v1.json`](config/class-study/v1/browser-egress-chromium-argv-v1.json)
 command-line contract has SHA-256
@@ -2643,8 +2696,13 @@ extends it again through passing build/completion and pinned-CDP for clean Lab
 and one operationally failed vector-31 attempt, but no final receipt. Neither
 open checkpoint can authorise the completed post-v80 bridge/lifecycle and
 first-script worker-prearm source; v80's outer-schema-11 probe is historical.
-V81 is the exact next permitted value and must be built before any
-downstream gate runs.
+V81 subsequently bound that source through a passing fresh no-cache
+build/completion pair and schema-12 pinned-CDP gate, then passed browser-egress
+vectors 1--63 before vector 64 sealed the suppressed-ping semantic-oracle
+failure with zero leakage. It is immutable and non-resumable. The corrected
+schema-4 ping/CSP semantics are locally verified; fresh unused v82 is the next
+permitted value, only after a clean commit and build, before any downstream
+gate runs.
 
 ```bash
 set -euo pipefail

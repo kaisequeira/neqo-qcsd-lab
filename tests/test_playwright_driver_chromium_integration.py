@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import runpy
 import threading
 import time
 from collections.abc import Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 
@@ -21,6 +23,8 @@ from qcsd_lab.browser_egress_fixture import (
     dedicated_worker_action_bridge_expression,
     dedicated_worker_action_message,
     dedicated_worker_ready_bridge_expression,
+    execute_live_browser_action,
+    expected_fetch_denial_observations,
     vector_by_id,
 )
 from qcsd_lab.cdp_targets import (
@@ -317,6 +321,179 @@ def test_exclusive_dedicated_worker_bridge_uses_recursive_cdp_ownership(
             browser.close()
 
     assert disconnected.wait(timeout=10)
+
+
+@pytest.mark.parametrize("surface", ["trusted-anchor-ping", "legacy-csp-report"])
+@pytest.mark.parametrize("document_context", ["page", "same-origin-frame", "cross-origin-frame"])
+def test_url_loader_suppression_and_csp_report_in_each_document_context(
+    document_context: str, surface: str
+) -> None:
+    """Prove M143 suppresses audit pings and exposes only a blocked script's CSP report."""
+
+    from playwright.sync_api import sync_playwright
+
+    validate_default_playwright_driver_once()
+    vector = vector_by_id(f"urlloader--{document_context}--{surface}")
+    primary_server = _FixtureHttpServer(("127.0.0.1", 0), "primary", None, vector)
+    cross_server = _FixtureHttpServer(("127.0.0.1", 0), "cross", None, vector)
+    for server in (primary_server, cross_server):
+        server.daemon_threads = True
+    fixture_threads = [
+        threading.Thread(
+            target=server.serve_forever,
+            name=f"qcsd-csp-integration-{role}",
+            daemon=True,
+        )
+        for role, server in (("primary", primary_server), ("cross", cross_server))
+    ]
+    for thread in fixture_threads:
+        thread.start()
+    primary = f"http://localhost:{primary_server.server_port}"
+    cross = f"http://localhost:{cross_server.server_port}"
+    approved_origins = (primary, cross)
+    denied_requests: list[dict[str, str]] = []
+    browser = None
+    context = None
+    router = None
+    browser_guard = None
+    context_closed = False
+    try:
+        with playwright_driver_session(sync_playwright, exclusive=True) as playwright:
+            browser, _command_line = launch_pinned_cdp_probe_browser(
+                playwright,
+                approved_origins=approved_origins,
+                origin_ip_pins={origin: "127.0.0.1" for origin in approved_origins},
+            )
+            browser_session = browser.new_browser_cdp_session()
+            context = browser.new_context(service_workers="block")
+            egress_guard = NonReplayableEgressGuard()
+            install_context_egress_guards(context, egress_guard)
+            page = context.new_page()
+            egress_guard.bind_root_page(page)
+            session = context.new_cdp_session(page)
+
+            def on_event(
+                source: CdpTargetSource,
+                method: str,
+                payload: Mapping[str, object],
+            ) -> None:
+                if method != "Fetch.requestPaused":
+                    return
+                request = payload.get("request")
+                url = request.get("url") if isinstance(request, Mapping) else None
+                request_method = request.get("method") if isinstance(request, Mapping) else None
+                request_id = payload.get("requestId")
+                if not all(isinstance(item, str) for item in (url, request_method, request_id)):
+                    raise TypeError("CSP integration Fetch event is malformed")
+                assert isinstance(url, str)
+                assert isinstance(request_method, str)
+                assert isinstance(request_id, str)
+                if any(url.startswith(f"{origin}/") for origin in approved_origins):
+                    router.send(
+                        source,
+                        "Fetch.continueRequest",
+                        {"requestId": request_id},
+                        label="csp-integration-allow",
+                    )
+                    return
+                denied_requests.append({"url": url, "method": request_method})
+                router.send(
+                    source,
+                    "Fetch.failRequest",
+                    {"requestId": request_id, "errorReason": "BlockedByClient"},
+                    label="csp-integration-deny",
+                )
+
+            router = RecursiveCdpTargetRouter(
+                session,
+                on_event=on_event,
+                on_non_replayable_egress=lambda source, api, mechanism, url: egress_guard.record(
+                    source=source, api=api, mechanism=mechanism, url=url
+                ),
+            )
+            router.start()
+            browser_guard = BrowserSharedWorkerGuard(browser_session, router)
+            browser_guard.start()
+            page.goto(f"{primary}/", wait_until="load")
+            evaluator = page
+            if document_context != "page":
+                frame_origin = primary if document_context == "same-origin-frame" else cross
+                with page.expect_event("framenavigated"):
+                    handle = page.evaluate_handle(
+                        "url => { const frame=document.createElement('iframe'); frame.src=url; "
+                        "document.body.append(frame); return frame; }",
+                        f"{frame_origin}/frame",
+                    )
+                element = handle.as_element()
+                assert element is not None
+                evaluator = element.content_frame()
+                assert evaluator is not None
+
+            deadline = time.monotonic() + 10
+            while not router.shutdown_ready:
+                router.raise_if_failed()
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("CSP integration prearm did not converge")
+                page.wait_for_timeout(10)
+
+            realm_type = runpy.run_path(
+                str(Path(__file__).parents[1] / "tools/browser_egress_qualification.py"),
+                run_name="qcsd_browser_egress_chromium_integration",
+            )["_PlaywrightRealm"]
+            realm = realm_type(
+                evaluator=evaluator,
+                page=page,
+                guard=egress_guard,
+                fetch_denials=denied_requests,
+                router=router,
+                prearmed=True,
+                command_line_projection={},
+                child_environment={},
+            )
+            actor = execute_live_browser_action(vector=vector, realm=realm)
+            router.raise_if_failed()
+
+            assert {
+                key: actor["measurement"][key]
+                for key in (
+                    "resolved_type",
+                    "own_descriptor",
+                    "action_issued",
+                    "action_succeeded",
+                    "exception_name",
+                )
+            } == {
+                "resolved_type": "function",
+                "own_descriptor": "data",
+                "action_issued": True,
+                "action_succeeded": True,
+                "exception_name": None,
+            }
+            expected_denials = expected_fetch_denial_observations(vector)
+            assert denied_requests == expected_denials
+            assert actor["measurement"]["fetch_denials"] == expected_denials
+            assert actor["measurement"]["fetch_denial_count"] == len(expected_denials)
+            assert egress_guard.attempt_count == 0
+
+            router.begin_shutdown()
+            browser_guard.begin_shutdown()
+            context.close()
+            context_closed = True
+            browser_guard.finish()
+            router.finish()
+            browser.close()
+            browser = None
+    finally:
+        if context is not None and not context_closed:
+            context.close()
+        if browser is not None and browser.is_connected():
+            browser.close()
+        for server in (primary_server, cross_server):
+            server.shutdown()
+            server.server_close()
+        for thread in fixture_threads:
+            thread.join(timeout=5)
+            assert not thread.is_alive()
 
 
 def test_http_credentials_are_rejected_only_by_exclusive_driver() -> None:

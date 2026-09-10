@@ -27,6 +27,7 @@ from typing import Any
 
 from qcsd_lab.browser_egress_fixture import (
     BROWSER_SERVICE_CONTROL_DWELL_MS,
+    FETCH_DENIAL_SETTLE_MS,
     FIXTURE_CERTIFICATE,
     FIXTURE_PRIVATE_KEY,
     FIXTURE_TOPOLOGY,
@@ -635,7 +636,7 @@ def _actor(args: argparse.Namespace) -> None:
         _browser_service_control_actor(args, vector)
         return
     guard = NonReplayableEgressGuard()
-    fetch_denials = [0]
+    fetch_denials: list[dict[str, str]] = []
     effective_argv: dict[str, Any] | None = None
     driver_runtime: dict[str, Any] | None = None
     policy_volume_file_inventory: list[dict[str, Any]] | None = None
@@ -678,8 +679,13 @@ def _actor(args: argparse.Namespace) -> None:
                     return
                 request = payload.get("request")
                 url = request.get("url") if isinstance(request, Mapping) else None
+                request_method = request.get("method") if isinstance(request, Mapping) else None
                 request_id = payload.get("requestId")
-                if not isinstance(url, str) or not isinstance(request_id, str):
+                if (
+                    not isinstance(url, str)
+                    or not isinstance(request_method, str)
+                    or not isinstance(request_id, str)
+                ):
                     raise ValueError("browser-egress Fetch event is malformed")
                 if url.startswith(f"{primary}/") or url.startswith(f"{cross}/"):
                     router.send(
@@ -689,7 +695,7 @@ def _actor(args: argparse.Namespace) -> None:
                         label="browser-egress-fixture-allow",
                     )
                 else:
-                    fetch_denials[0] += 1
+                    fetch_denials.append({"url": url, "method": request_method})
                     router.send(
                         source,
                         "Fetch.failRequest",
@@ -762,6 +768,7 @@ def _actor(args: argparse.Namespace) -> None:
                 page=page,
                 guard=guard,
                 fetch_denials=fetch_denials,
+                router=router,
                 prearmed=True,
                 command_line_projection=effective_argv["command_line_projection"],
                 child_environment=child_environment,
@@ -850,7 +857,8 @@ class _PlaywrightRealm:
         evaluator: Any,
         page: Any,
         guard: Any,
-        fetch_denials: list[int],
+        fetch_denials: list[dict[str, str]],
+        router: Any,
         prearmed: bool,
         command_line_projection: Mapping[str, Any],
         child_environment: Mapping[str, str],
@@ -859,6 +867,7 @@ class _PlaywrightRealm:
         self.page = page
         self.guard = guard
         self.fetch_denials = fetch_denials
+        self.router = router
         self.prearmed = prearmed
         self.command_line_projection = dict(command_line_projection)
         self.child_environment = dict(child_environment)
@@ -890,8 +899,31 @@ class _PlaywrightRealm:
     def guard_counts(self) -> Mapping[str, int]:
         return {
             "policy_event_count": self.guard.attempt_count,
-            "fetch_denial_count": self.fetch_denials[0],
+            "fetch_denial_count": len(self.fetch_denials),
         }
+
+    def fetch_denial_observations(self) -> list[dict[str, str]]:
+        return [dict(observation) for observation in self.fetch_denials]
+
+    def complete_fetch_denial_observation_window(
+        self, expected_count: int, *, timeout_ms: int
+    ) -> None:
+        if (
+            type(expected_count) is not int
+            or expected_count < 0
+            or type(timeout_ms) is not int
+            or timeout_ms < 1
+        ):
+            raise ValueError("browser-egress Fetch-denial wait parameters are invalid")
+        deadline = time.monotonic() + timeout_ms / 1_000
+        while len(self.fetch_denials) < expected_count:
+            self.router.raise_if_failed()
+            if time.monotonic() >= deadline:
+                break
+            self.page.wait_for_timeout(10)
+        if len(self.fetch_denials) >= expected_count:
+            self.page.wait_for_timeout(FETCH_DENIAL_SETTLE_MS)
+        self.router.raise_if_failed()
 
     def prearm_verified(self) -> bool:
         return self.prearmed

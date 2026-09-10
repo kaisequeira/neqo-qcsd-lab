@@ -43,8 +43,12 @@ from qcsd_lab.browser_egress_fixture import (
     BROWSER_SERVICE_CONTROL_DWELL_MS,
     BROWSER_SERVICE_CONTROL_SPECS,
     assemble_live_semantic_observation,
+    browser_action_expression,
     browser_service_control_actor_result,
+    execute_live_browser_action,
+    expected_browser_action_arguments,
     expected_browser_launch_contract,
+    expected_fetch_denial_observations,
     expected_fixture_response_headers,
     expected_semantic_chronology,
     expected_vectors,
@@ -745,11 +749,139 @@ def test_browser_service_controls_enforce_the_frozen_pair_dwell() -> None:
 
 def test_vector_digest_and_order_bind_the_expanded_controls() -> None:
     vectors = expected_vectors()
+    assert expected_vectors() is vectors
+    detached = vectors[0].as_dict()
+    detached["surface"] = "forged"
+    assert vectors[0].surface == "websocket"
     assert [vector.ordinal for vector in vectors] == list(range(1, 111))
     assert [vector.vector_id for vector in vectors[95:107]] == [
         f"browser-service-control--{context}--{surface}"
         for context, surface, *_rest in BROWSER_SERVICE_CONTROL_SPECS
     ]
     assert expanded_vectors_sha256() == (
-        "9fecbeb7988fcb28d82803026ef9f3948d1494b14cc5a0930585e6e51e3a4179"
+        "d9038cf12d733f914ad8e71365d98b8ac9eeb98aa9f02aa4ad43b992d3bd21ba"
     )
+
+
+def test_hyperlink_auditing_vectors_bind_no_pings_to_exact_zero_event_outcome() -> None:
+    assert "--no-pings" in BROWSER_EGRESS_REQUIRED_CHROMIUM_SWITCHES
+    assert "--enable-pings" in BROWSER_EGRESS_ANTAGONISTIC_CHROMIUM_SWITCHES
+
+    for context in ("page", "same-origin-frame", "cross-origin-frame"):
+        vector = vector_by_id(f"urlloader--{context}--trusted-anchor-ping")
+        assert (vector.semantic_kind, vector.semantic_mechanism) == (
+            "action-issued",
+            "pinned-hyperlink-auditing-disabled",
+        )
+        assert vector.as_dict()["action_contract"] == {
+            "schema_version": 4,
+            "family": "urlloader",
+            "surface": "trusted-anchor-ping",
+            "completion": "hyperlink-auditing-suppressed-after-activation",
+            "minimum_live_dwell_ms": None,
+            "raw_outcome": {
+                "resolved_type": "function",
+                "own_descriptor": "data",
+                "action_issued": True,
+                "action_succeeded": True,
+                "exception_name": None,
+            },
+            "guard_counts": {"policy_event_count": 0, "fetch_denial_count": 0},
+        }
+        measurement = {
+            "resolved_type": "function",
+            "own_descriptor": "data",
+            "prearm_verified": True,
+            "action_issued": True,
+            "action_succeeded": True,
+            "policy_event_count": 0,
+            "fetch_denial_count": 0,
+            "fetch_denials": [],
+            "exception_name": None,
+            "control_observed": False,
+            "configuration_observation": None,
+        }
+        events = expected_semantic_chronology(vector)
+        actor = {"started_ns": 5, "finished_ns": 6, "measurement": measurement}
+        observation = assemble_live_semantic_observation(
+            vector=vector,
+            actor_result=actor,
+            event_times={event: index for index, event in enumerate(events, 1)},
+        )
+        assert observation["observed_kind"] == "action-issued"
+
+        forged = copy.deepcopy(observation)
+        forged["measurement"]["fetch_denial_count"] = 1
+        forged["measurement"]["fetch_denials"] = [
+            {"url": "https://forged.invalid/", "method": "POST"}
+        ]
+        with pytest.raises(ValueError, match="Fetch denial|per-surface contract"):
+            validate_semantic_observation(forged, vector=vector)
+
+
+def test_legacy_csp_report_vectors_use_selected_document_headers_and_local_violation() -> None:
+    expected_paths = {
+        "page": "primary:/",
+        "same-origin-frame": "primary:/frame",
+        "cross-origin-frame": "cross:/frame",
+    }
+    for context, response_path in expected_paths.items():
+        vector = vector_by_id(f"urlloader--{context}--legacy-csp-report")
+        report_uri = expected_browser_action_arguments(vector)["forbiddenUrl"]
+        assert expected_fixture_response_headers(vector) == {
+            response_path: {
+                "Content-Security-Policy": f"script-src 'none'; report-uri {report_uri}"
+            }
+        }
+
+    expression = browser_action_expression()
+    assert "meta.httpEquiv = 'Content-Security-Policy'" not in expression
+    assert "securitypolicyviolation" in expression
+    assert "event.disposition !== 'enforce'" in expression
+    assert "event.blockedURI !== forbiddenUrl" in expression
+    assert "QCSD_CSP_VIOLATION_TIMEOUT" in expression
+    assert "script.src = forbiddenUrl" in expression
+
+
+def test_live_action_waits_for_and_receipts_the_exact_fetch_denial() -> None:
+    vector = vector_by_id("urlloader--page--legacy-csp-report")
+    expected = expected_fetch_denial_observations(vector)
+
+    class Realm:
+        def __init__(self) -> None:
+            self.denials: list[dict[str, str]] = [
+                {"url": "https://prearm.invalid/background", "method": "GET"}
+            ]
+            self.waits: list[tuple[int, int]] = []
+
+        def guard_counts(self) -> dict[str, int]:
+            return {"policy_event_count": 0, "fetch_denial_count": len(self.denials)}
+
+        def fetch_denial_observations(self) -> list[dict[str, str]]:
+            return [dict(item) for item in self.denials]
+
+        def complete_fetch_denial_observation_window(
+            self, expected_count: int, *, timeout_ms: int
+        ) -> None:
+            self.waits.append((expected_count, timeout_ms))
+            self.denials.extend(expected)
+
+        def prearm_verified(self) -> bool:
+            return True
+
+        def evaluate(self, expression: str, argument: dict[str, object]) -> dict[str, object]:
+            assert expression == browser_action_expression()
+            assert argument["surface"] == "legacy-csp-report"
+            return {
+                "resolved_type": "function",
+                "own_descriptor": "data",
+                "action_issued": True,
+                "action_succeeded": True,
+                "exception_name": None,
+            }
+
+    realm = Realm()
+    actor = execute_live_browser_action(vector=vector, realm=realm)
+    assert realm.waits == [(2, 5_000)]
+    assert actor["measurement"]["fetch_denial_count"] == 1
+    assert actor["measurement"]["fetch_denials"] == expected

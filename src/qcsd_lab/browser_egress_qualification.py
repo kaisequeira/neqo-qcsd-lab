@@ -26,12 +26,8 @@ from .browser_egress import (
     BROWSER_EGRESS_ANTAGONISTIC_CHROMIUM_SWITCHES,
     BROWSER_EGRESS_COMMAND_LINE_SCHEMA_VERSION,
     BROWSER_EGRESS_EXPLICIT_CHROMIUM_ARGS,
-    BROWSER_EGRESS_NETWORK_PREDICTION_DISABLED_CONTROL_PROFILE,
-    BROWSER_EGRESS_NETWORK_PREDICTION_ENABLED_CONTROL_PROFILE,
     BROWSER_EGRESS_PRODUCTION_LAUNCH_PROFILE,
     BROWSER_EGRESS_QUALIFICATION_CONTROL_PROFILES,
-    BROWSER_EGRESS_REPORTING_DISABLED_CONTROL_PROFILE,
-    BROWSER_EGRESS_REPORTING_ENABLED_CONTROL_PROFILE,
     BROWSER_EGRESS_REQUIRED_CHROMIUM_SWITCHES,
     _validate_qualification_dns_control_resolver_argument,
     browser_egress_chromium_args,
@@ -217,9 +213,7 @@ POLICY_SEED_ROLE = "policy_seed"
 POLICY_VOLUME_SUFFIX = "policy0"
 POLICY_VOLUME_MANAGED_DIRECTORY = "/etc/chromium/policies/managed"
 POLICY_VOLUME_POLICY_FILENAME = "qcsd-network-prediction.json"
-POLICY_VOLUME_POLICY_PATH = (
-    f"{POLICY_VOLUME_MANAGED_DIRECTORY}/{POLICY_VOLUME_POLICY_FILENAME}"
-)
+POLICY_VOLUME_POLICY_PATH = f"{POLICY_VOLUME_MANAGED_DIRECTORY}/{POLICY_VOLUME_POLICY_FILENAME}"
 POLICY_VOLUME_SEED_SOURCE = (
     "/usr/share/qcsd-lab/browser-egress-controls/network-prediction-options-0.json"
 )
@@ -235,6 +229,7 @@ class FoundationVerificationMode(str, Enum):
 
     EXECUTION = "execution-in-prepare-image"
     PORTABLE_REPLAY = "portable-attestation-replay"
+
 
 EXECUTION_CONTRACT: dict[str, Any] = {
     "schema_version": 3,
@@ -272,9 +267,7 @@ EXECUTION_CONTRACT: dict[str, Any] = {
         "certificate_source_path": FIXTURE_CERTIFICATE["path"],
         "certificate_runtime_path": FIXTURE_RUNTIME_CERTIFICATE,
         "certificate_sha256": FIXTURE_CERTIFICATE["sha256"],
-        "certificate_spki_sha256_base64": FIXTURE_CERTIFICATE[
-            "spki_sha256_base64"
-        ],
+        "certificate_spki_sha256_base64": FIXTURE_CERTIFICATE["spki_sha256_base64"],
         "certificate_runtime_uid": 0,
         "certificate_runtime_gid": 0,
         "certificate_runtime_mode": "0o444",
@@ -298,8 +291,7 @@ EXECUTION_CONTRACT: dict[str, Any] = {
     },
     "network_prediction_enabled_control_policy": {
         "source_path": (
-            "config/class-study/v1/"
-            "chromium-network-prediction-positive-control-v1.json"
+            "config/class-study/v1/chromium-network-prediction-positive-control-v1.json"
         ),
         "seed_image_path": POLICY_VOLUME_SEED_SOURCE,
         "runtime_path": POLICY_VOLUME_POLICY_PATH,
@@ -342,9 +334,7 @@ EXECUTION_CONTRACT: dict[str, Any] = {
     },
     "reporting_close_grace_ms": CLOSE_GRACE_MS,
     "capture_exit_code": 0,
-    "capture_drop_counter_contract": (
-        "one-detailed-dumpcap-pcap-dumpcap-flushed-ps_ifdrop-record"
-    ),
+    "capture_drop_counter_contract": ("one-detailed-dumpcap-pcap-dumpcap-flushed-ps_ifdrop-record"),
     "capture_kernel_drops": 0,
     "capture_interface_drops": 0,
     "operational_retry_limit": MAX_OPERATIONAL_ATTEMPTS,
@@ -443,9 +433,7 @@ def expected_manifest_config() -> dict[str, Any]:
                 "fixture-and-packet-endpoint-evidence"
             ),
             "positive_controls": "exact-tcp-udp-and-deterministic-udp-plus-tcp-dns-evidence",
-            "capture": (
-                "exit-zero-and-explicit-zero-pcap-dumpcap-flushed-ps_ifdrop"
-            ),
+            "capture": ("exit-zero-and-explicit-zero-pcap-dumpcap-flushed-ps_ifdrop"),
             "all_vectors_required": True,
         },
     }
@@ -475,9 +463,7 @@ def expected_argv_config() -> dict[str, Any]:
     control_profiles = []
     for profile in BROWSER_EGRESS_QUALIFICATION_CONTROL_PROFILES:
         members = [
-            contract
-            for contract in control_contracts
-            if contract["launch_profile"] == profile
+            contract for contract in control_contracts if contract["launch_profile"] == profile
         ]
         if not members:
             raise ValueError("browser-egress qualification control profile is unused")
@@ -492,9 +478,7 @@ def expected_argv_config() -> dict[str, Any]:
                 "launch_profile": profile,
                 "managed_policy": next(iter(managed_policies.values())),
                 "context_kinds": sorted({contract["context_kind"] for contract in members}),
-                "resolver_profiles": sorted(
-                    {contract["resolver_profile"] for contract in members}
-                ),
+                "resolver_profiles": sorted({contract["resolver_profile"] for contract in members}),
                 "vector_ids": [contract["vector_id"] for contract in members],
             }
         )
@@ -527,8 +511,7 @@ def expected_argv_config() -> dict[str, Any]:
         },
         "chromium_network_prediction_control_policy": {
             "source_path": (
-                "config/class-study/v1/"
-                "chromium-network-prediction-positive-control-v1.json"
+                "config/class-study/v1/chromium-network-prediction-positive-control-v1.json"
             ),
             "seed_image_path": POLICY_VOLUME_SEED_SOURCE,
             "runtime_path": POLICY_VOLUME_POLICY_PATH,
@@ -545,9 +528,7 @@ def expected_argv_config() -> dict[str, Any]:
             "source_path": FIXTURE_CERTIFICATE["path"],
             "runtime_path": FIXTURE_RUNTIME_CERTIFICATE,
             "sha256": FIXTURE_CERTIFICATE["sha256"],
-            "spki_sha256_base64": FIXTURE_CERTIFICATE[
-                "spki_sha256_base64"
-            ],
+            "spki_sha256_base64": FIXTURE_CERTIFICATE["spki_sha256_base64"],
             "mode": "0o444",
         },
         "fixture_private_key": {
@@ -580,16 +561,12 @@ def expected_argv_config() -> dict[str, Any]:
             },
         ],
         "qualification_control_profiles": control_profiles,
-        "qualification_control_contracts_sha256": canonical_json_sha256(
-            control_contracts
-        ),
+        "qualification_control_contracts_sha256": canonical_json_sha256(control_contracts),
         "playwright_browsers_json_sha256": EXPECTED_BROWSERS_JSON_SHA256,
         "explicit_launch_arguments": list(BROWSER_EGRESS_EXPLICIT_CHROMIUM_ARGS),
         "qualification_launch_arguments": [qualification_launch[-1]],
         "required_effective_switches": list(BROWSER_EGRESS_REQUIRED_CHROMIUM_SWITCHES),
-        "antagonistic_effective_switches": list(
-            BROWSER_EGRESS_ANTAGONISTIC_CHROMIUM_SWITCHES
-        ),
+        "antagonistic_effective_switches": list(BROWSER_EGRESS_ANTAGONISTIC_CHROMIUM_SWITCHES),
         "command_line_projection_schema_version": BROWSER_EGRESS_COMMAND_LINE_SCHEMA_VERSION,
         "accepted_executable_argv0": [
             str(DEFAULT_CONFIGURED_EXECUTABLE),
@@ -597,9 +574,7 @@ def expected_argv_config() -> dict[str, Any]:
         ],
         "effective_argv_source": "Browser.getBrowserCommandLine",
         "child_environment": dict(CHROMIUM_CHILD_ENVIRONMENT),
-        "forbidden_driver_environment_variables": list(
-            FORBIDDEN_DRIVER_ENVIRONMENT_VARIABLES
-        ),
+        "forbidden_driver_environment_variables": list(FORBIDDEN_DRIVER_ENVIRONMENT_VARIABLES),
         "packet_level_admission_boundary": False,
     }
 
@@ -637,8 +612,7 @@ def _current_build_completion_identity(
 
     completion_path = build.get("completion_path")
     expected = (
-        Path(lab_root).resolve()
-        / f"artifacts/buflo-study/build-completion-v{cohort_version}.json"
+        Path(lab_root).resolve() / f"artifacts/buflo-study/build-completion-v{cohort_version}.json"
     )
     if (
         not isinstance(completion_path, str)
@@ -694,8 +668,7 @@ def _safe_directory(path: Path, *, label: str, private: bool = False) -> Path:
     if candidate.is_symlink() or not stat.S_ISDIR(metadata.st_mode):
         raise ValueError(f"{label} is not a regular directory")
     if private and (
-        metadata.st_uid != os.geteuid()
-        or stat.S_IMODE(metadata.st_mode) != PRIVATE_DIRECTORY_MODE
+        metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) != PRIVATE_DIRECTORY_MODE
     ):
         raise ValueError(f"{label} must be owned by the current user with mode 0700")
     return candidate
@@ -919,10 +892,7 @@ def validate_build_docker_daemon_binding(value: object) -> dict[str, str]:
 
     if not isinstance(value, Mapping) or set(value) != BUILD_DOCKER_DAEMON_FIELDS:
         raise ValueError("browser-egress Docker daemon binding fields are invalid")
-    if any(
-        not isinstance(value[key], str) or not value[key]
-        for key in BUILD_DOCKER_DAEMON_FIELDS
-    ):
+    if any(not isinstance(value[key], str) or not value[key] for key in BUILD_DOCKER_DAEMON_FIELDS):
         raise ValueError("browser-egress Docker daemon binding is invalid")
     return json.loads(canonical_json_bytes(value))
 
@@ -951,9 +921,7 @@ def build_docker_daemon_projection(value: object) -> dict[str, str]:
     return {key: live[key] for key in sorted(BUILD_DOCKER_DAEMON_FIELDS)}
 
 
-def require_live_docker_daemon(
-    value: object, *, expected: Mapping[str, Any]
-) -> dict[str, Any]:
+def require_live_docker_daemon(value: object, *, expected: Mapping[str, Any]) -> dict[str, Any]:
     """Fail closed unless a fresh live projection exactly matches a receipt."""
 
     live = validate_docker_daemon_binding(value)
@@ -1028,7 +996,11 @@ def build_foundation_payload(
     if build_execution.get("cohort_version") != cohort_version:
         raise ValueError("browser-egress cohort version differs from its build")
     images = build_execution.get("images")
-    if not isinstance(images, Mapping) or set(images) != {"collection", "prepare", "reference"}:
+    if not isinstance(images, Mapping) or set(images) != {
+        "collection",
+        "prepare",
+        "reference",
+    }:
         raise ValueError("browser-egress build image roles are incomplete")
     prepare_id = _image_id(images["prepare"].get("id"), label="prepare image")
     build_path = Path(str(build_execution.get("path", "")))
@@ -1044,14 +1016,10 @@ def build_foundation_payload(
     build_payload_sha256 = _sha256(
         build_file_value.get("payload_sha256"), label="build execution payload SHA-256"
     )
-    build_docker_daemon = validate_build_docker_daemon_binding(
-        build_file_value.get("docker")
-    )
+    build_docker_daemon = validate_build_docker_daemon_binding(build_file_value.get("docker"))
     docker_daemon = validate_docker_daemon_binding(live_docker_daemon)
     if build_docker_daemon_projection(docker_daemon) != build_docker_daemon:
-        raise ValueError(
-            "browser-egress live Docker daemon differs from the no-cache build daemon"
-        )
+        raise ValueError("browser-egress live Docker daemon differs from the no-cache build daemon")
     completion_path, completion_sha256 = _current_build_completion_identity(
         build_execution,
         lab_root=root,
@@ -1091,9 +1059,7 @@ def build_foundation_payload(
     return validate_foundation_payload(payload)
 
 
-def validate_foundation_payload(
-    value: object, *, allow_historical: bool = False
-) -> dict[str, Any]:
+def validate_foundation_payload(value: object, *, allow_historical: bool = False) -> dict[str, Any]:
     fields = {
         "schema_version",
         "qualification_id",
@@ -1117,12 +1083,8 @@ def validate_foundation_payload(
     schema_version = value["schema_version"]
     if (
         type(schema_version) is not int
-        or schema_version
-        not in {HISTORICAL_FOUNDATION_SCHEMA_VERSION, FOUNDATION_SCHEMA_VERSION}
-        or (
-            schema_version == HISTORICAL_FOUNDATION_SCHEMA_VERSION
-            and not allow_historical
-        )
+        or schema_version not in {HISTORICAL_FOUNDATION_SCHEMA_VERSION, FOUNDATION_SCHEMA_VERSION}
+        or (schema_version == HISTORICAL_FOUNDATION_SCHEMA_VERSION and not allow_historical)
         or value["qualification_id"] != QUALIFICATION_ID
         or value["study_id"] != STUDY_ID
     ):
@@ -1155,7 +1117,19 @@ def validate_foundation_payload(
             raise ValueError("browser-egress build completion path is invalid")
     for key in ("collection_image_id", "prepare_image_id", "reference_image_id"):
         _image_id(build[key], label=key)
-    if len({build[key] for key in ("collection_image_id", "prepare_image_id", "reference_image_id")}) != 3:
+    if (
+        len(
+            {
+                build[key]
+                for key in (
+                    "collection_image_id",
+                    "prepare_image_id",
+                    "reference_image_id",
+                )
+            }
+        )
+        != 3
+    ):
         raise ValueError("browser-egress build image roles are not distinct")
     image = value["prepare_image"]
     if not isinstance(image, Mapping) or set(image) != {"id", "repo_digests"}:
@@ -1194,11 +1168,15 @@ def validate_foundation_payload(
     ):
         raise ValueError("browser-egress generated contract digest is invalid")
     source_files = value["source_files"]
-    if not isinstance(source_files, list) or len(source_files) != len(REQUIRED_SOURCE_BINDING_PATHS):
+    if not isinstance(source_files, list) or len(source_files) != len(
+        REQUIRED_SOURCE_BINDING_PATHS
+    ):
         raise ValueError("browser-egress source file inventory is incomplete")
     for binding, expected_path in zip(source_files, REQUIRED_SOURCE_BINDING_PATHS, strict=True):
         validate_file_binding(binding, expected_path=expected_path, label="browser-egress source")
-    if canonical_json_bytes(value["execution_contract"]) != canonical_json_bytes(EXECUTION_CONTRACT):
+    if canonical_json_bytes(value["execution_contract"]) != canonical_json_bytes(
+        EXECUTION_CONTRACT
+    ):
         raise ValueError("browser-egress execution contract is invalid")
     if canonical_json_bytes(value["consumer_contract"]) != canonical_json_bytes(CONSUMER_CONTRACT):
         raise ValueError("browser-egress consumer contract is invalid")
@@ -1374,9 +1352,7 @@ def _expected_resolver_projection(contract: Mapping[str, Any]) -> dict[str, Any]
     )
 
 
-def _validate_effective_argv(
-    value: object, *, vector_id: str
-) -> dict[str, Any]:
+def _validate_effective_argv(value: object, *, vector_id: str) -> dict[str, Any]:
     if not isinstance(value, Mapping) or set(value) != {
         "schema_version",
         "projection_sha256",
@@ -1389,16 +1365,13 @@ def _validate_effective_argv(
         value["projection_sha256"],
         label="browser-egress effective argv projection",
     )
-    projection = validate_browser_egress_command_line_projection(
-        value["command_line_projection"]
-    )
+    projection = validate_browser_egress_command_line_projection(value["command_line_projection"])
     contract = expected_browser_launch_contract(vector_by_id(vector_id))
     if (
         value["command_line_projection"] != projection
         or digest != canonical_json_sha256(projection)
         or projection["launch_profile"] != contract["launch_profile"]
-        or projection["host_resolver_policy"]
-        != _expected_resolver_projection(contract)
+        or projection["host_resolver_policy"] != _expected_resolver_projection(contract)
     ):
         raise ValueError("browser-egress effective argv projection is invalid")
     return json.loads(canonical_json_bytes(value))
@@ -1436,21 +1409,14 @@ def _validate_driver_runtime(value: object, *, vector_id: str) -> dict[str, Any]
     if (
         value["schema_version"] != 1
         or value["artifact_type"] != "qcsd-playwright-qualification-runtime"
-        or value["production_receipt_sha256"]
-        != EXPECTED_PLAYWRIGHT_DRIVER_RECEIPT_SHA256
-        or value["production_receipt_payload_sha256"]
-        != EXPECTED_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256
+        or value["production_receipt_sha256"] != EXPECTED_PLAYWRIGHT_DRIVER_RECEIPT_SHA256
+        or value["production_receipt_payload_sha256"] != EXPECTED_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256
         or value["active_managed_policy"] != expected_active
         or value["dns_over_https_mode"] != CHROMIUM_DNS_OVER_HTTPS_MODE
         or value["network_prediction_options"] != option
         or value["semantics"]
-        != (
-            "predict-on-any-connection-qualification-control"
-            if option == 0
-            else "never-predict"
-        )
-        or value["policy_directory_inventory"]
-        != expected_argv_config()["policy_root_inventory"]
+        != ("predict-on-any-connection-qualification-control" if option == 0 else "never-predict")
+        or value["policy_directory_inventory"] != expected_argv_config()["policy_root_inventory"]
         or value["qualification_only_policy_substitution"] != (option == 0)
     ):
         raise ValueError("browser-egress driver runtime differs from its vector")
@@ -1479,15 +1445,18 @@ def _validate_policy_file_inventory(value: object) -> list[dict[str, Any]]:
 def _validate_fixture_tls_runtime(
     value: object, *, foundation: Mapping[str, Any]
 ) -> dict[str, Any]:
-    if not isinstance(value, Mapping) or set(value) != {
-        "schema_version",
-        "certificate",
-        "private_key",
-    } or value["schema_version"] != 1:
+    if (
+        not isinstance(value, Mapping)
+        or set(value)
+        != {
+            "schema_version",
+            "certificate",
+            "private_key",
+        }
+        or value["schema_version"] != 1
+    ):
         raise ValueError("browser-egress fixture TLS runtime fields are invalid")
-    source_bindings = {
-        binding["path"]: binding for binding in foundation["source_files"]
-    }
+    source_bindings = {binding["path"]: binding for binding in foundation["source_files"]}
     for field, source, runtime_path, mode in (
         (
             "certificate",
@@ -1506,8 +1475,7 @@ def _validate_fixture_tls_runtime(
         binding = source_bindings.get(source["path"])
         if (
             not isinstance(record, Mapping)
-            or set(record)
-            != {"path", "sha256", "size_bytes", "uid", "gid", "mode", "nlink"}
+            or set(record) != {"path", "sha256", "size_bytes", "uid", "gid", "mode", "nlink"}
             or binding is None
             or record["path"] != runtime_path
             or record["sha256"] != source["sha256"]
@@ -1581,8 +1549,7 @@ def validate_docker_inspect_projection(
             {"subnet": FIXTURE_TOPOLOGY["network"]["ipv4_subnet"]},
             {"subnet": FIXTURE_TOPOLOGY["network"]["ipv6_subnet"]},
         ]
-        or network["labels"]
-        != _topology_labels(vector_id=vector_id, topology=attempt_topology)
+        or network["labels"] != _topology_labels(vector_id=vector_id, topology=attempt_topology)
     ):
         raise ValueError("browser-egress isolated network inspection is invalid")
     containers = value["containers"]
@@ -1615,9 +1582,7 @@ def validate_docker_inspect_projection(
     ids: list[str] = []
     endpoint_ids: dict[str, str] = {}
     browser_record = containers.get("browser")
-    browser_id = (
-        browser_record.get("id") if isinstance(browser_record, Mapping) else None
-    )
+    browser_id = browser_record.get("id") if isinstance(browser_record, Mapping) else None
     for role in roles:
         record = containers[role]
         fields = {
@@ -1648,9 +1613,7 @@ def validate_docker_inspect_projection(
         ids.append(identifier)
         expected_user = f"{browser_uid}:{browser_gid}" if role == "browser" else "0:0"
         expected_mode = (
-            f"container:{browser_id}"
-            if role == "observer"
-            else FIXTURE_TOPOLOGY["network"]["name"]
+            f"container:{browser_id}" if role == "observer" else FIXTURE_TOPOLOGY["network"]["name"]
         )
         expected_mounts: list[dict[str, Any]] = []
         if role == "browser" and _policy_volume_required(vector_id):
@@ -1699,9 +1662,7 @@ def validate_docker_inspect_projection(
                 or not isinstance(attachments[0], Mapping)
                 or set(attachments[0]) != attachment_fields
             ):
-                raise ValueError(
-                    f"browser-egress {role} must have one exact network attachment"
-                )
+                raise ValueError(f"browser-egress {role} must have one exact network attachment")
             attachment = attachments[0]
             endpoint_id = attachment["endpoint_id"]
             if (
@@ -1725,17 +1686,14 @@ def validate_docker_inspect_projection(
             or record["cap_drop"] != ["ALL"]
             or record["security_options"] != ["no-new-privileges:true"]
             or record["network_mode"] != expected_mode
-            or (record["ipv4_address"], record["ipv6_address"])
-            != expected_addresses[role]
+            or (record["ipv4_address"], record["ipv6_address"]) != expected_addresses[role]
             or record["labels"]
             != _topology_labels(
                 vector_id=vector_id,
                 topology=attempt_topology,
                 include_role=role,
             )
-            or record["mounts"] != sorted(
-                expected_mounts, key=lambda mount: mount["destination"]
-            )
+            or record["mounts"] != sorted(expected_mounts, key=lambda mount: mount["destination"])
             or record["tmpfs"] != expected_tmpfs
             or record["dns_servers"]
             != (FIXTURE_TOPOLOGY["browser_dns_servers"] if role == "browser" else [])
@@ -1766,9 +1724,7 @@ def validate_docker_inspect_projection(
             or member["ipv4_address"] != f"{ipv4_address}/{ipv4_prefix}"
             or member["ipv6_address"] != f"{ipv6_address}/{ipv6_prefix}"
         ):
-            raise ValueError(
-                f"browser-egress {role} network membership differs from its endpoint"
-            )
+            raise ValueError(f"browser-egress {role} network membership differs from its endpoint")
     expected_volume_name = policy_volume_name(
         vector_id=vector_id, attempt_topology=attempt_topology
     )
@@ -1789,10 +1745,7 @@ def validate_docker_inspect_projection(
             "file_inventory",
         }
         expected_mountpoint = (
-            PurePosixPath(docker_root_dir)
-            / "volumes"
-            / expected_volume_name
-            / "_data"
+            PurePosixPath(docker_root_dir) / "volumes" / expected_volume_name / "_data"
         ).as_posix()
         if (
             not isinstance(volume, Mapping)
@@ -1898,7 +1851,10 @@ def _validate_failure_evidence(
 ) -> dict[str, Any]:
     if not isinstance(value, Mapping) or set(value) != {"diagnostic_code", "artifacts"}:
         raise ValueError("browser-egress failure evidence fields are invalid")
-    if not isinstance(value["diagnostic_code"], str) or _CODE.fullmatch(value["diagnostic_code"]) is None:
+    if (
+        not isinstance(value["diagnostic_code"], str)
+        or _CODE.fullmatch(value["diagnostic_code"]) is None
+    ):
         raise ValueError("browser-egress failure diagnostic code is invalid")
     artifacts = value["artifacts"]
     if not isinstance(artifacts, list):
@@ -1982,18 +1938,12 @@ def validate_result_payload(
         configuration = semantic["measurement"]["configuration_observation"]
         if vector.surface in {"proxy", "pac"}:
             proxy_environment = sorted(
-                key
-                for key in runtime["child_environment"]
-                if key in PROXY_ENVIRONMENT_KEYS
+                key for key in runtime["child_environment"] if key in PROXY_ENVIRONMENT_KEYS
             )
             if configuration != {
                 "surface": vector.surface,
-                "effective_argv_projection_sha256": runtime["effective_argv"][
-                    "projection_sha256"
-                ],
-                "child_environment_sha256": canonical_json_sha256(
-                    runtime["child_environment"]
-                ),
+                "effective_argv_projection_sha256": runtime["effective_argv"]["projection_sha256"],
+                "child_environment_sha256": canonical_json_sha256(runtime["child_environment"]),
                 "no_proxy_server_argument_count": 1,
                 "antagonistic_proxy_switches_present": [],
                 "proxy_environment_keys_present": proxy_environment,
@@ -2022,16 +1972,12 @@ def validate_result_payload(
         if capture["pcap"]["path"] != expected_pcap:
             raise ValueError("browser-egress PCAP path differs from the vector/attempt inventory")
         reconcile_sink_and_packet_evidence(vector=vector, analysis=capture["analysis"], sink=sink)
-        semantic_times = {
-            entry["event"]: entry["monotonic_ns"] for entry in semantic["chronology"]
-        }
+        semantic_times = {entry["event"]: entry["monotonic_ns"] for entry in semantic["chronology"]}
         capture_times = capture["chronology"]
         if (
             semantic_times["observer-ready"] != capture_times["observer_ready_ns"]
-            or capture_times["subject_started_ns"]
-            > semantic_times["browser-started"]
-            or semantic_times["browser-exited"]
-            > capture_times["subject_exited_ns"]
+            or capture_times["subject_started_ns"] > semantic_times["browser-started"]
+            or semantic_times["browser-exited"] > capture_times["subject_exited_ns"]
             or semantic_times["reporting-grace-finished"]
             != capture_times["reporting_grace_finished_ns"]
             or semantic_times["observer-stopped"] != capture_times["observer_stopped_ns"]
@@ -2044,9 +1990,7 @@ def validate_result_payload(
             and capture_times["reporting_grace_finished_ns"]
             <= fixture_times["stopped_ns"]
             <= capture_times["observer_stopped_ns"]
-            and max(
-                sink_times["forbidden_ready_ns"], sink_times["dns_ready_ns"]
-            )
+            and max(sink_times["forbidden_ready_ns"], sink_times["dns_ready_ns"])
             == semantic_times["sinks-ready"]
             and capture_times["reporting_grace_finished_ns"]
             <= sink_times["forbidden_stopped_ns"]
@@ -2099,7 +2043,9 @@ def validate_result_payload(
         # not promote partial observations into passing evidence.
         for key in ("runtime", "semantic", "fixture", "sink", "capture"):
             if value[key] is not None:
-                raise ValueError("failed browser-egress result contains unvalidated inline evidence")
+                raise ValueError(
+                    "failed browser-egress result contains unvalidated inline evidence"
+                )
     return json.loads(canonical_json_bytes(value))
 
 
@@ -2186,7 +2132,9 @@ def build_failure_result_receipt(
     return bind_receipt(validated, receipt_type=RESULT_RECEIPT_TYPE)
 
 
-def _initial_checkpoint(*, foundation_file_sha256: str, foundation_payload_sha256: str) -> dict[str, Any]:
+def _initial_checkpoint(
+    *, foundation_file_sha256: str, foundation_payload_sha256: str
+) -> dict[str, Any]:
     return {
         "schema_version": CHECKPOINT_SCHEMA_VERSION,
         "artifact_type": "qcsd-browser-egress-qualification-checkpoint",
@@ -2207,7 +2155,10 @@ def _initial_checkpoint(*, foundation_file_sha256: str, foundation_payload_sha25
 
 
 def _advance_checkpoint(
-    checkpoint: Mapping[str, Any], *, result: Mapping[str, Any], receipt_binding: Mapping[str, Any]
+    checkpoint: Mapping[str, Any],
+    *,
+    result: Mapping[str, Any],
+    receipt_binding: Mapping[str, Any],
 ) -> dict[str, Any]:
     if checkpoint["status"] != "running":
         raise ValueError("browser-egress checkpoint is already terminal")
@@ -2243,9 +2194,13 @@ def _advance_checkpoint(
     updated = json.loads(canonical_json_bytes(checkpoint))
     if updated["attempts"]:
         previous_finished = _timestamp(
-            updated["attempts"][-1]["finished_at"], label="previous browser-egress finish"
+            updated["attempts"][-1]["finished_at"],
+            label="previous browser-egress finish",
         )
-        if _timestamp(result["started_at"], label="browser-egress result start") < previous_finished:
+        if (
+            _timestamp(result["started_at"], label="browser-egress result start")
+            < previous_finished
+        ):
             raise ValueError("browser-egress attempts overlap or regress in wall-clock time")
     updated["attempts"].append(entry)
     updated["chain_head_sha256"] = receipt_binding["sha256"]
@@ -2348,21 +2303,28 @@ def validate_checkpoint(value: object, *, foundation_binding: Mapping[str, Any])
     if value["chain_head_sha256"] != expected_head:
         raise ValueError("browser-egress checkpoint chain head is invalid")
     if value["status"] == "complete":
-        if len(passed) != VECTOR_COUNT or value["next_vector_ordinal"] is not None or value[
-            "terminal_failure"
-        ] is not None:
+        if (
+            len(passed) != VECTOR_COUNT
+            or value["next_vector_ordinal"] is not None
+            or value["terminal_failure"] is not None
+        ):
             raise ValueError("completed browser-egress checkpoint is inconsistent")
     elif value["status"] == "running":
         if value["next_vector_ordinal"] != len(passed) + 1 or value["terminal_failure"] is not None:
             raise ValueError("running browser-egress checkpoint is inconsistent")
     else:
         terminal = value["terminal_failure"]
-        if not isinstance(terminal, Mapping) or set(terminal) != {
-            "vector_id",
-            "attempt_number",
-            "verdict",
-            "failure_code",
-        } or not value["attempts"]:
+        if (
+            not isinstance(terminal, Mapping)
+            or set(terminal)
+            != {
+                "vector_id",
+                "attempt_number",
+                "verdict",
+                "failure_code",
+            }
+            or not value["attempts"]
+        ):
             raise ValueError("failed browser-egress checkpoint has no terminal evidence")
         last = value["attempts"][-1]
         if (
@@ -2376,9 +2338,7 @@ def validate_checkpoint(value: object, *, foundation_binding: Mapping[str, Any])
 
 
 def _initialisation_staging_pattern(destination: Path) -> re.Pattern[str]:
-    return re.compile(
-        rf"[.]{re.escape(destination.name)}[.]([0-9a-f]{{8}})[.]qcsd-tmp\Z"
-    )
+    return re.compile(rf"[.]{re.escape(destination.name)}[.]([0-9a-f]{{8}})[.]qcsd-tmp\Z")
 
 
 def _remove_valid_initialisation_staging(
@@ -2399,12 +2359,8 @@ def _remove_valid_initialisation_staging(
         FOUNDATION_FILENAME: canonical_json_bytes(foundation),
         CHECKPOINT_FILENAME: canonical_json_bytes(checkpoint),
     }
-    create_temp = re.compile(
-        rf"[.]{re.escape(FOUNDATION_FILENAME)}[.]([0-9a-f]{{8}})[.]qcsd-tmp\Z"
-    )
-    atomic_temp = re.compile(
-        rf"[.]{re.escape(CHECKPOINT_FILENAME)}[.]qcsd-tmp-([0-9a-f]{{8}})\Z"
-    )
+    create_temp = re.compile(rf"[.]{re.escape(FOUNDATION_FILENAME)}[.]([0-9a-f]{{8}})[.]qcsd-tmp\Z")
+    atomic_temp = re.compile(rf"[.]{re.escape(CHECKPOINT_FILENAME)}[.]qcsd-tmp-([0-9a-f]{{8}})\Z")
     files: list[Path] = []
     inode_names: dict[tuple[int, int], list[str]] = {}
     for entry in sorted(staging.iterdir(), key=lambda item: item.name):
@@ -2469,9 +2425,7 @@ def _reconcile_initialisation_staging(
 
 def _new_initialisation_staging(destination: Path) -> Path:
     for _attempt in range(128):
-        staging = destination.parent / (
-            f".{destination.name}.{secrets.token_hex(4)}.qcsd-tmp"
-        )
+        staging = destination.parent / (f".{destination.name}.{secrets.token_hex(4)}.qcsd-tmp")
         try:
             staging.mkdir(mode=PRIVATE_DIRECTORY_MODE)
         except FileExistsError:
@@ -2510,18 +2464,13 @@ def create_qualification(
     destination = Path(os.path.abspath(root))
     parent = _safe_directory(destination.parent, label="browser-egress result parent")
     parent_metadata = parent.lstat()
-    if (
-        parent_metadata.st_uid != os.geteuid()
-        or stat.S_IMODE(parent_metadata.st_mode) & 0o022
-    ):
+    if parent_metadata.st_uid != os.geteuid() or stat.S_IMODE(parent_metadata.st_mode) & 0o022:
         raise ValueError(
             "browser-egress result parent must be current-user owned and not group/world writable"
         )
     if os.path.lexists(destination):
         raise FileExistsError(f"browser-egress qualification root already exists: {destination}")
-    _reconcile_initialisation_staging(
-        destination, foundation=foundation, checkpoint=checkpoint
-    )
+    _reconcile_initialisation_staging(destination, foundation=foundation, checkpoint=checkpoint)
     staging = _new_initialisation_staging(destination)
     published = False
     try:
@@ -2562,23 +2511,15 @@ def _load_foundation(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     foundation_path = root / FOUNDATION_FILENAME
     if recovery_link != foundation_path:
-        foundation_path = safe_relative_artifact(
-            root, FOUNDATION_FILENAME, label="foundation"
-        )
+        foundation_path = safe_relative_artifact(root, FOUNDATION_FILENAME, label="foundation")
     _private_regular_file(
         foundation_path,
         label="browser-egress foundation",
-        allowed_links=(
-            frozenset({1, 2})
-            if recovery_link == foundation_path
-            else frozenset({1})
-        ),
+        allowed_links=(frozenset({1, 2}) if recovery_link == foundation_path else frozenset({1})),
     )
     envelope = load_json(foundation_path)
     payload = validate_hash_bound_receipt(envelope, expected_type=FOUNDATION_RECEIPT_TYPE)
-    validated = validate_foundation_payload(
-        payload, allow_historical=allow_historical
-    )
+    validated = validate_foundation_payload(payload, allow_historical=allow_historical)
     binding = {
         "path": FOUNDATION_FILENAME,
         "sha256": sha256_file(foundation_path),
@@ -2716,8 +2657,7 @@ def validate_attempt_intent_payload(
     if (
         value["schema_version"] != ATTEMPT_INTENT_SCHEMA_VERSION
         or value["qualification_id"] != QUALIFICATION_ID
-        or value["foundation_payload_sha256"]
-        != canonical_json_sha256(validated_foundation)
+        or value["foundation_payload_sha256"] != canonical_json_sha256(validated_foundation)
         or attempt_number > MAX_OPERATIONAL_ATTEMPTS
     ):
         raise ValueError("browser-egress attempt-intent identity is invalid")
@@ -2728,8 +2668,7 @@ def validate_attempt_intent_payload(
     vector = validate_vector(value["vector"])
     _timestamp(value["started_at"], label="attempt-intent start")
     expected_directory = (
-        f"{EVIDENCE_DIRECTORY}/{vector.ordinal:03d}--{vector.vector_id}/"
-        f"attempt-{attempt_number}"
+        f"{EVIDENCE_DIRECTORY}/{vector.ordinal:03d}--{vector.vector_id}/attempt-{attempt_number}"
     )
     if value["evidence_directory"] != expected_directory:
         raise ValueError("browser-egress attempt-intent evidence directory is invalid")
@@ -2770,9 +2709,7 @@ def _load_attempt_intents(
         ),
         key=lambda path: path.name,
     )
-    expected_names = [
-        f"intent-{index:04d}.json" for index in range(1, len(entries) + 1)
-    ]
+    expected_names = [f"intent-{index:04d}.json" for index in range(1, len(entries) + 1)]
     if [path.name for path in entries] != expected_names:
         raise ValueError("browser-egress attempt-intent files are incomplete or noncanonical")
     records: list[dict[str, Any]] = []
@@ -2780,16 +2717,12 @@ def _load_attempt_intents(
         _private_regular_file(
             path,
             label="browser-egress attempt intent",
-            allowed_links=(
-                frozenset({1, 2}) if recovery_link == path else frozenset({1})
-            ),
+            allowed_links=(frozenset({1, 2}) if recovery_link == path else frozenset({1})),
         )
         envelope = load_json(path)
         if path.read_bytes() != canonical_json_bytes(envelope):
             raise ValueError("browser-egress attempt intent is not canonical JSON")
-        payload = validate_hash_bound_receipt(
-            envelope, expected_type=ATTEMPT_INTENT_RECEIPT_TYPE
-        )
+        payload = validate_hash_bound_receipt(envelope, expected_type=ATTEMPT_INTENT_RECEIPT_TYPE)
         validated = validate_attempt_intent_payload(payload, foundation=foundation)
         if validated["global_ordinal"] != index:
             raise ValueError("browser-egress attempt-intent sequence is invalid")
@@ -2813,9 +2746,7 @@ def _next_attempt_plan(checkpoint: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("browser-egress qualification is not resumable")
     ordinal = checkpoint["next_vector_ordinal"]
     vector = inventory_json()[ordinal - 1]
-    prior = [
-        item for item in checkpoint["attempts"] if item["vector_id"] == vector["vector_id"]
-    ]
+    prior = [item for item in checkpoint["attempts"] if item["vector_id"] == vector["vector_id"]]
     return {
         "schema_version": 1,
         "complete": False,
@@ -2830,6 +2761,7 @@ def _validate_attempt_intent_sequence(
     records: Sequence[Mapping[str, Any]], *, checkpoint: Mapping[str, Any]
 ) -> None:
     attempts = checkpoint["attempts"]
+    vectors = inventory_json()
     if len(records) not in {len(attempts), len(attempts) + 1}:
         raise ValueError("browser-egress attempt-intent/result cardinality is invalid")
     previous_sha256 = ZERO_DIGEST
@@ -2839,7 +2771,7 @@ def _validate_attempt_intent_sequence(
             intent["global_ordinal"] != entry["global_ordinal"]
             or intent["attempt_number"] != entry["attempt_number"]
             or intent["previous_result_sha256"] != previous_sha256
-            or intent["vector"] != inventory_json()[entry["vector_ordinal"] - 1]
+            or intent["vector"] != vectors[entry["vector_ordinal"] - 1]
             or intent["started_at"] != entry["started_at"]
         ):
             raise ValueError("browser-egress result differs from its attempt intent")
@@ -2885,9 +2817,7 @@ def begin_attempt(
     """Durably publish an intent before any live role or evidence path exists."""
 
     reconcile_qualification_filesystem(root)
-    evidence_root = _safe_directory(
-        root, label="browser-egress qualification root", private=True
-    )
+    evidence_root = _safe_directory(root, label="browser-egress qualification root", private=True)
     foundation, _foundation_binding = _load_foundation(evidence_root)
     checkpoint = _load_checkpoint_without_reconciliation(evidence_root)
     records = _load_attempt_intents(evidence_root, foundation=foundation)
@@ -2929,10 +2859,7 @@ def begin_attempt(
     ):
         raise ValueError("browser-egress attempt intent regresses ledger chronology")
     receipt = bind_receipt(payload, receipt_type=ATTEMPT_INTENT_RECEIPT_TYPE)
-    relative = (
-        f"{ATTEMPT_INTENT_DIRECTORY}/"
-        f"intent-{expected_plan['global_ordinal']:04d}.json"
-    )
+    relative = f"{ATTEMPT_INTENT_DIRECTORY}/intent-{expected_plan['global_ordinal']:04d}.json"
     path = write_create_only_json(evidence_root / relative, receipt)
     return {
         "path": relative,
@@ -2956,9 +2883,7 @@ def append_result(
     """Publish one result create-only and replace only the derived checkpoint."""
 
     reconcile_qualification_filesystem(root, tshark=tshark, dumpcap=dumpcap)
-    evidence_root = _safe_directory(
-        root, label="browser-egress qualification root", private=True
-    )
+    evidence_root = _safe_directory(root, label="browser-egress qualification root", private=True)
     foundation, foundation_binding = _load_foundation(evidence_root)
     checkpoint = _load_checkpoint_without_reconciliation(evidence_root)
     if checkpoint["status"] != "running":
@@ -2993,9 +2918,7 @@ def append_result(
         raise ValueError("browser-egress result global ordinal is invalid")
     if result["verdict"] == "passed":
         current_docker = result["runtime"]["docker_inspect"]
-        current_containers = {
-            record["id"] for record in current_docker["containers"].values()
-        }
+        current_containers = {record["id"] for record in current_docker["containers"].values()}
         current_network = current_docker["network"]["id"]
         for entry in checkpoint["attempts"]:
             if entry["verdict"] != "passed":
@@ -3009,9 +2932,7 @@ def append_result(
             )
             prior = validate_result_payload(prior_payload, foundation=foundation)
             prior_docker = prior["runtime"]["docker_inspect"]
-            prior_containers = {
-                record["id"] for record in prior_docker["containers"].values()
-            }
+            prior_containers = {record["id"] for record in prior_docker["containers"].values()}
             if (
                 current_containers.intersection(prior_containers)
                 or current_network == prior_docker["network"]["id"]
@@ -3048,9 +2969,7 @@ def _replay_checkpoint(
         foundation_file_sha256=foundation_binding["sha256"],
         foundation_payload_sha256=foundation_binding["payload_sha256"],
     )
-    intent_records = _load_attempt_intents(
-        root, foundation=foundation, recovery_link=recovery_link
-    )
+    intent_records = _load_attempt_intents(root, foundation=foundation, recovery_link=recovery_link)
     attempts_root = _safe_directory(
         root / ATTEMPT_DIRECTORY, label="browser-egress attempts", private=True
     )
@@ -3062,9 +2981,7 @@ def _replay_checkpoint(
         ),
         key=lambda path: path.name,
     )
-    expected_names = [
-        f"result-{index:04d}.json" for index in range(1, len(all_entries) + 1)
-    ]
+    expected_names = [f"result-{index:04d}.json" for index in range(1, len(all_entries) + 1)]
     if [path.name for path in all_entries] != expected_names:
         raise ValueError("browser-egress attempt files are incomplete or noncanonical")
     if maximum_results is not None:
@@ -3080,9 +2997,7 @@ def _replay_checkpoint(
         _private_regular_file(
             path,
             label="browser-egress attempt receipt",
-            allowed_links=(
-                frozenset({1, 2}) if recovery_link == path else frozenset({1})
-            ),
+            allowed_links=(frozenset({1, 2}) if recovery_link == path else frozenset({1})),
         )
         envelope = load_json(path)
         payload = validate_hash_bound_receipt(envelope, expected_type=RESULT_RECEIPT_TYPE)
@@ -3096,14 +3011,10 @@ def _replay_checkpoint(
         )
         if index > len(intent_records):
             raise ValueError("browser-egress result has no attempt intent")
-        _validate_result_against_attempt_intent(
-            result, intent_records[index - 1]["payload"]
-        )
+        _validate_result_against_attempt_intent(result, intent_records[index - 1]["payload"])
         if result["verdict"] == "passed":
             docker = result["runtime"]["docker_inspect"]
-            container_ids = {
-                record["id"] for record in docker["containers"].values()
-            }
+            container_ids = {record["id"] for record in docker["containers"].values()}
             network_id = docker["network"]["id"]
             if seen_container_ids.intersection(container_ids) or network_id in seen_network_ids:
                 raise ValueError("browser-egress vector reused a Docker container or network")
@@ -3160,12 +3071,8 @@ _CREATE_ONLY_RESIDUE = re.compile(
     r"[.](foundation[.]json|final[.]json|intent-[0-9]{4}[.]json|"
     r"result-[0-9]{4}[.]json)[.]([0-9a-f]{8})[.]qcsd-tmp\Z"
 )
-_CHECKPOINT_RESIDUE = re.compile(
-    r"[.]experiment[.]json[.]qcsd-tmp-([0-9a-f]{8})\Z"
-)
-_RECOVERY_DIAGNOSTIC_RESIDUE = re.compile(
-    r"[.]resume-recovery[.]json[.]([0-9a-f]{8})[.]qcsd-tmp\Z"
-)
+_CHECKPOINT_RESIDUE = re.compile(r"[.]experiment[.]json[.]qcsd-tmp-([0-9a-f]{8})\Z")
+_RECOVERY_DIAGNOSTIC_RESIDUE = re.compile(r"[.]resume-recovery[.]json[.]([0-9a-f]{8})[.]qcsd-tmp\Z")
 
 
 def _read_canonical_json_file(path: Path, *, label: str) -> Any:
@@ -3253,13 +3160,9 @@ def _validate_create_only_residue(
     else:
         raise ValueError("unrecognised browser-egress create-only residue")
     recovery_link = target if target.exists() else None
-    envelope = _read_canonical_json_file(
-        temporary, label="browser-egress create-only residue"
-    )
+    envelope = _read_canonical_json_file(temporary, label="browser-egress create-only residue")
     if logical_name == FOUNDATION_FILENAME:
-        payload = validate_hash_bound_receipt(
-            envelope, expected_type=FOUNDATION_RECEIPT_TYPE
-        )
+        payload = validate_hash_bound_receipt(envelope, expected_type=FOUNDATION_RECEIPT_TYPE)
         validate_foundation_payload(payload)
         if not target.exists():
             raise ValueError("canonical-root foundation residue cannot be pre-publication")
@@ -3288,13 +3191,9 @@ def _validate_create_only_residue(
     )
     if logical_name.startswith("intent-"):
         index = int(logical_name[7:11])
-        payload = validate_hash_bound_receipt(
-            envelope, expected_type=ATTEMPT_INTENT_RECEIPT_TYPE
-        )
+        payload = validate_hash_bound_receipt(envelope, expected_type=ATTEMPT_INTENT_RECEIPT_TYPE)
         intent = validate_attempt_intent_payload(payload, foundation=foundation)
-        records = _load_attempt_intents(
-            root, foundation=foundation, recovery_link=recovery_link
-        )
+        records = _load_attempt_intents(root, foundation=foundation, recovery_link=recovery_link)
         if target.exists():
             if target.read_bytes() != temporary.read_bytes():
                 raise ValueError("attempt-intent residue differs from its target")
@@ -3362,13 +3261,10 @@ def _validate_create_only_residue(
                     prior_payload = validate_hash_bound_receipt(
                         prior_envelope, expected_type=RESULT_RECEIPT_TYPE
                     )
-                    prior = validate_result_payload(
-                        prior_payload, foundation=foundation
-                    )
+                    prior = validate_result_payload(prior_payload, foundation=foundation)
                     prior_docker = prior["runtime"]["docker_inspect"]
                     prior_containers = {
-                        record["id"]
-                        for record in prior_docker["containers"].values()
+                        record["id"] for record in prior_docker["containers"].values()
                     }
                     if (
                         current_containers.intersection(prior_containers)
@@ -3394,9 +3290,7 @@ def _validate_create_only_residue(
     raise ValueError("unrecognised browser-egress create-only residue")
 
 
-def _publish_or_clean_create_only_residue(
-    temporary: Path, *, target: Path
-) -> None:
+def _publish_or_clean_create_only_residue(temporary: Path, *, target: Path) -> None:
     temporary_metadata = _private_regular_file(
         temporary,
         label="browser-egress create-only residue",
@@ -3408,11 +3302,10 @@ def _publish_or_clean_create_only_residue(
             label="browser-egress recovered target",
             allowed_links=frozenset({2}),
         )
-        if (
-            temporary_metadata.st_nlink != 2
-            or (temporary_metadata.st_dev, temporary_metadata.st_ino)
-            != (target_metadata.st_dev, target_metadata.st_ino)
-        ):
+        if temporary_metadata.st_nlink != 2 or (
+            temporary_metadata.st_dev,
+            temporary_metadata.st_ino,
+        ) != (target_metadata.st_dev, target_metadata.st_ino):
             raise ValueError("browser-egress residue is not the target's sole hard link")
     else:
         if temporary_metadata.st_nlink != 1:
@@ -3451,9 +3344,7 @@ def _reconcile_checkpoint_residue(
         dumpcap=dumpcap,
     )
     candidate = validate_checkpoint(
-        _read_canonical_json_file(
-            temporary, label="browser-egress checkpoint residue"
-        ),
+        _read_canonical_json_file(temporary, label="browser-egress checkpoint residue"),
         foundation_binding=binding,
     )
     if candidate != rebuilt:
@@ -3463,9 +3354,7 @@ def _reconcile_checkpoint_residue(
     _private_regular_file(root / CHECKPOINT_FILENAME, label="browser-egress checkpoint")
 
 
-def _repair_checkpoint_publish_lag(
-    root: Path, *, tshark: Path, dumpcap: Path
-) -> None:
+def _repair_checkpoint_publish_lag(root: Path, *, tshark: Path, dumpcap: Path) -> None:
     foundation, binding = _load_foundation(root)
     stored, rebuilt = _checkpoint_pair(
         root,
@@ -3488,9 +3377,7 @@ def _repair_checkpoint_publish_lag(
         atomic_json(root / CHECKPOINT_FILENAME, rebuilt)
 
 
-def _validate_recovery_diagnostic(
-    value: object, *, intent: Mapping[str, Any]
-) -> dict[str, Any]:
+def _validate_recovery_diagnostic(value: object, *, intent: Mapping[str, Any]) -> dict[str, Any]:
     if (
         not isinstance(value, Mapping)
         or set(value)
@@ -3507,9 +3394,7 @@ def _validate_recovery_diagnostic(
         or value["attempt_number"] != intent["attempt_number"]
         or value["failure_code"] != "interrupted"
         or value["stage"] != "resume-recovery"
-        or _timestamp(
-            value["finished_at"], label="browser-egress recovery finish"
-        )
+        or _timestamp(value["finished_at"], label="browser-egress recovery finish")
         < _timestamp(intent["started_at"], label="browser-egress interrupted attempt start")
     ):
         raise ValueError("browser-egress recovery diagnostic is invalid")
@@ -3544,9 +3429,7 @@ def _validate_recovery_diagnostic_residue(
     intents = _load_attempt_intents(root, foundation=foundation)
     _validate_attempt_intent_sequence(intents, checkpoint=rebuilt)
     if len(intents) != len(rebuilt["attempts"]) + 1:
-        raise ValueError(
-            "browser-egress recovery residue has no exact outstanding attempt"
-        )
+        raise ValueError("browser-egress recovery residue has no exact outstanding attempt")
     intent = intents[-1]["payload"]
     expected_parent = root / intent["evidence_directory"]
     if temporary.parent != expected_parent:
@@ -3557,9 +3440,7 @@ def _validate_recovery_diagnostic_residue(
         private=True,
     )
     _validate_recovery_diagnostic(
-        _read_canonical_json_file(
-            temporary, label="browser-egress recovery diagnostic residue"
-        ),
+        _read_canonical_json_file(temporary, label="browser-egress recovery diagnostic residue"),
         intent=intent,
     )
     target = expected_parent / "resume-recovery.json"
@@ -3577,9 +3458,7 @@ def reconcile_qualification_filesystem(
 ) -> dict[str, Any]:
     """Exactly reconcile one proven crash residue; reject every ambiguity."""
 
-    evidence_root = _safe_directory(
-        root, label="browser-egress qualification root", private=True
-    )
+    evidence_root = _safe_directory(root, label="browser-egress qualification root", private=True)
     for name in (ATTEMPT_DIRECTORY, ATTEMPT_INTENT_DIRECTORY, EVIDENCE_DIRECTORY):
         _safe_directory(
             evidence_root / name,
@@ -3618,20 +3497,14 @@ def reconcile_qualification_filesystem(
         if "qcsd-tmp" not in entry.name:
             continue
         if _RECOVERY_DIAGNOSTIC_RESIDUE.fullmatch(entry.name) is None:
-            raise ValueError(
-                "browser-egress evidence contains an unrecognised residue"
-            )
+            raise ValueError("browser-egress evidence contains an unrecognised residue")
         recovery_residues.append(entry)
     if len(residues) + len(checkpoint_residues) + len(recovery_residues) > 1:
         raise ValueError("multiple browser-egress ledger residues exist")
     allowed_residue = (
         checkpoint_residues[0]
         if checkpoint_residues
-        else (
-            residues[0][0]
-            if residues
-            else (recovery_residues[0] if recovery_residues else None)
-        )
+        else (residues[0][0] if residues else (recovery_residues[0] if recovery_residues else None))
     )
     validate_open_evidence_inventory(
         evidence_root,
@@ -3657,9 +3530,7 @@ def reconcile_qualification_filesystem(
         )
         _publish_or_clean_create_only_residue(temporary, target=target)
         if logical.startswith("result-"):
-            _repair_checkpoint_publish_lag(
-                evidence_root, tshark=tshark, dumpcap=dumpcap
-            )
+            _repair_checkpoint_publish_lag(evidence_root, tshark=tshark, dumpcap=dumpcap)
     elif recovery_residues:
         temporary = recovery_residues[0]
         target = _validate_recovery_diagnostic_residue(
@@ -3691,9 +3562,7 @@ def validate_open_evidence_inventory(
 ) -> None:
     """Validate the exact mutable-ledger inventory at an operation boundary."""
 
-    evidence_root = _safe_directory(
-        root, label="browser-egress qualification root", private=True
-    )
+    evidence_root = _safe_directory(root, label="browser-egress qualification root", private=True)
     recovery_link: Path | None = None
     if allowed_residue is not None and allowed_residue.exists():
         residue_metadata = _private_regular_file(
@@ -3751,9 +3620,7 @@ def validate_open_evidence_inventory(
         _private_regular_file(
             path,
             label="browser-egress result receipt",
-            allowed_links=(
-                frozenset({1, 2}) if recovery_link == path else frozenset({1})
-            ),
+            allowed_links=(frozenset({1, 2}) if recovery_link == path else frozenset({1})),
         )
         envelope = _read_canonical_json_file(path, label="browser-egress result receipt")
         payload = validate_hash_bound_receipt(envelope, expected_type=RESULT_RECEIPT_TYPE)
@@ -3802,7 +3669,9 @@ def validate_open_evidence_inventory(
         try:
             relative_residue = residue.relative_to(evidence_root).as_posix()
         except ValueError as error:
-            raise ValueError("browser-egress allowed residue is outside the evidence root") from error
+            raise ValueError(
+                "browser-egress allowed residue is outside the evidence root"
+            ) from error
         expected_files.add(relative_residue)
     for relative in tuple(expected_files):
         parent = PurePosixPath(relative).parent
@@ -3882,15 +3751,14 @@ def _validate_recovery_artifacts(path: Path, *, intent: Mapping[str, Any]) -> No
     for artifact in path.iterdir():
         if artifact.name not in _RECOVERABLE_ATTEMPT_ARTIFACTS:
             raise ValueError("interrupted browser-egress attempt contains an unknown artifact")
-        _private_regular_file(
-            artifact, label="interrupted browser-egress artifact"
-        )
+        _private_regular_file(artifact, label="interrupted browser-egress artifact")
     diagnostic = path / "failure.json"
     if diagnostic.exists():
         value = load_json(diagnostic)
         if (
             not isinstance(value, Mapping)
-            or set(value) != {
+            or set(value)
+            != {
                 "schema_version",
                 "vector_id",
                 "attempt_number",
@@ -3917,9 +3785,7 @@ def resume_admission_plan(
     """Reconcile an exact crash residue, then bind the sole stale topology."""
 
     reconcile_qualification_filesystem(root, tshark=tshark, dumpcap=dumpcap)
-    evidence_root = _safe_directory(
-        root, label="browser-egress qualification root", private=True
-    )
+    evidence_root = _safe_directory(root, label="browser-egress qualification root", private=True)
     foundation, binding = _load_foundation(evidence_root)
     rebuilt = _replay_checkpoint(
         evidence_root,
@@ -3929,9 +3795,7 @@ def resume_admission_plan(
         tshark=tshark,
         dumpcap=dumpcap,
     )
-    checkpoint_path = safe_relative_artifact(
-        evidence_root, CHECKPOINT_FILENAME, label="checkpoint"
-    )
+    checkpoint_path = safe_relative_artifact(evidence_root, CHECKPOINT_FILENAME, label="checkpoint")
     stored = validate_checkpoint(load_json(checkpoint_path), foundation_binding=binding)
     publish_lag = stored != rebuilt
     if publish_lag:
@@ -3952,9 +3816,7 @@ def resume_admission_plan(
     _validate_attempt_intent_sequence(records, checkpoint=rebuilt)
     final_path = evidence_root / FINAL_FILENAME
     if final_path.exists() or final_path.is_symlink():
-        _validate_existing_final_receipt(
-            evidence_root, tshark=tshark, dumpcap=dumpcap
-        )
+        _validate_existing_final_receipt(evidence_root, tshark=tshark, dumpcap=dumpcap)
     last_intent = records[-1]["payload"] if records else None
     return {
         "schema_version": 1,
@@ -3989,9 +3851,7 @@ def recover_interrupted_attempt(
     """Repair one exact publish lag or seal one durable outstanding intent."""
 
     reconcile_qualification_filesystem(root, tshark=tshark, dumpcap=dumpcap)
-    evidence_root = _safe_directory(
-        root, label="browser-egress qualification root", private=True
-    )
+    evidence_root = _safe_directory(root, label="browser-egress qualification root", private=True)
     foundation, binding = _load_foundation(evidence_root)
     rebuilt = _replay_checkpoint(
         evidence_root,
@@ -4001,9 +3861,7 @@ def recover_interrupted_attempt(
         tshark=tshark,
         dumpcap=dumpcap,
     )
-    checkpoint_path = safe_relative_artifact(
-        evidence_root, CHECKPOINT_FILENAME, label="checkpoint"
-    )
+    checkpoint_path = safe_relative_artifact(evidence_root, CHECKPOINT_FILENAME, label="checkpoint")
     stored = validate_checkpoint(load_json(checkpoint_path), foundation_binding=binding)
     if stored != rebuilt:
         if len(stored["attempts"]) + 1 != len(rebuilt["attempts"]):
@@ -4032,9 +3890,7 @@ def recover_interrupted_attempt(
     recovery_path = attempt_directory / "resume-recovery.json"
     if recovery_path.exists():
         recovery = _validate_recovery_diagnostic(
-            _read_canonical_json_file(
-                recovery_path, label="browser-egress recovery diagnostic"
-            ),
+            _read_canonical_json_file(recovery_path, label="browser-egress recovery diagnostic"),
             intent=intent,
         )
         recovery_finished_at = recovery["finished_at"]
@@ -4081,12 +3937,8 @@ def _load_checkpoint_without_reconciliation(
     dumpcap: Path = Path("/usr/bin/dumpcap"),
     allow_historical: bool = False,
 ) -> dict[str, Any]:
-    evidence_root = _safe_directory(
-        root, label="browser-egress qualification root", private=True
-    )
-    foundation, binding = _load_foundation(
-        evidence_root, allow_historical=allow_historical
-    )
+    evidence_root = _safe_directory(root, label="browser-egress qualification root", private=True)
+    foundation, binding = _load_foundation(evidence_root, allow_historical=allow_historical)
     rebuilt = _replay_checkpoint(
         evidence_root,
         foundation=foundation,
@@ -4112,9 +3964,7 @@ def load_checkpoint(
     """Rebuild the append-only ledger and compare the mutable resume checkpoint."""
 
     reconcile_qualification_filesystem(root, tshark=tshark, dumpcap=dumpcap)
-    return _load_checkpoint_without_reconciliation(
-        root, deep=deep, tshark=tshark, dumpcap=dumpcap
-    )
+    return _load_checkpoint_without_reconciliation(root, deep=deep, tshark=tshark, dumpcap=dumpcap)
 
 
 def _build_final_payload_without_reconciliation(
@@ -4125,9 +3975,7 @@ def _build_final_payload_without_reconciliation(
     dumpcap: Path = Path("/usr/bin/dumpcap"),
     allow_historical: bool = False,
 ) -> dict[str, Any]:
-    evidence_root = _safe_directory(
-        root, label="browser-egress qualification root", private=True
-    )
+    evidence_root = _safe_directory(root, label="browser-egress qualification root", private=True)
     foundation, foundation_binding = _load_foundation(
         evidence_root, allow_historical=allow_historical
     )
@@ -4197,12 +4045,8 @@ def build_final_payload(
     tshark: Path = Path("/usr/bin/tshark"),
     dumpcap: Path = Path("/usr/bin/dumpcap"),
 ) -> dict[str, Any]:
-    evidence_root = _safe_directory(
-        root, label="browser-egress qualification root", private=True
-    )
-    reconcile_qualification_filesystem(
-        evidence_root, tshark=tshark, dumpcap=dumpcap
-    )
+    evidence_root = _safe_directory(root, label="browser-egress qualification root", private=True)
+    reconcile_qualification_filesystem(evidence_root, tshark=tshark, dumpcap=dumpcap)
     return _build_final_payload_without_reconciliation(
         evidence_root,
         recorded_at=recorded_at,
@@ -4211,14 +4055,10 @@ def build_final_payload(
     )
 
 
-def _validate_existing_final_receipt(
-    root: Path, *, tshark: Path, dumpcap: Path
-) -> Path:
+def _validate_existing_final_receipt(root: Path, *, tshark: Path, dumpcap: Path) -> Path:
     final_path = root / FINAL_FILENAME
     _private_regular_file(final_path, label="browser-egress final receipt")
-    envelope = _read_canonical_json_file(
-        final_path, label="browser-egress final receipt"
-    )
+    envelope = _read_canonical_json_file(final_path, label="browser-egress final receipt")
     payload = validate_hash_bound_receipt(envelope, expected_type=FINAL_RECEIPT_TYPE)
     preliminary = validate_final_payload(payload)
     expected = _build_final_payload_without_reconciliation(
@@ -4274,33 +4114,46 @@ def validate_final_payload(
         raise ValueError("browser-egress final receipt is not a passing v1 qualification")
     for key in ("attempt_count", "passed_vector_count", "operational_failure_count"):
         _integer(value[key], label=f"browser-egress final {key}")
-    started = _timestamp(value["qualification_started_at"], label="browser-egress qualification start")
-    finished = _timestamp(value["qualification_finished_at"], label="browser-egress qualification finish")
+    started = _timestamp(
+        value["qualification_started_at"], label="browser-egress qualification start"
+    )
+    finished = _timestamp(
+        value["qualification_finished_at"], label="browser-egress qualification finish"
+    )
     recorded = _timestamp(value["recorded_at"], label="browser-egress final recorded_at")
     if not started <= finished <= recorded:
         raise ValueError("browser-egress final chronology is invalid")
     if value["attempt_count"] != value["passed_vector_count"] + value["operational_failure_count"]:
         raise ValueError("browser-egress final attempt counts do not reconcile")
     foundation = value["foundation"]
-    if not isinstance(foundation, Mapping) or set(foundation) != {
-        "path",
-        "sha256",
-        "payload_sha256",
-    } or foundation["path"] != FOUNDATION_FILENAME:
+    if (
+        not isinstance(foundation, Mapping)
+        or set(foundation)
+        != {
+            "path",
+            "sha256",
+            "payload_sha256",
+        }
+        or foundation["path"] != FOUNDATION_FILENAME
+    ):
         raise ValueError("browser-egress final foundation binding is invalid")
     _sha256(foundation["sha256"], label="final foundation file")
     _sha256(foundation["payload_sha256"], label="final foundation payload")
     checkpoint = value["checkpoint"]
-    if not isinstance(checkpoint, Mapping) or set(checkpoint) != {"path", "sha256"} or checkpoint[
-        "path"
-    ] != CHECKPOINT_FILENAME:
+    if (
+        not isinstance(checkpoint, Mapping)
+        or set(checkpoint) != {"path", "sha256"}
+        or checkpoint["path"] != CHECKPOINT_FILENAME
+    ):
         raise ValueError("browser-egress final checkpoint binding is invalid")
     _sha256(checkpoint["sha256"], label="final checkpoint")
     results = value["passed_results"]
     if not isinstance(results, list) or len(results) != VECTOR_COUNT:
         raise ValueError("browser-egress final passed-result inventory is incomplete")
     expected_ids = [row["vector_id"] for row in inventory_json()]
-    if [row.get("vector_id") if isinstance(row, Mapping) else None for row in results] != expected_ids:
+    if [
+        row.get("vector_id") if isinstance(row, Mapping) else None for row in results
+    ] != expected_ids:
         raise ValueError("browser-egress final result order differs from the manifest")
     for ordinal, row in enumerate(results, 1):
         if not isinstance(row, Mapping) or set(row) != {
@@ -4341,17 +4194,11 @@ def create_final_receipt(
 ) -> Path:
     """Publish once, or verify and return the exact already-published receipt."""
 
-    evidence_root = _safe_directory(
-        root, label="browser-egress qualification root", private=True
-    )
-    reconcile_qualification_filesystem(
-        evidence_root, tshark=tshark, dumpcap=dumpcap
-    )
+    evidence_root = _safe_directory(root, label="browser-egress qualification root", private=True)
+    reconcile_qualification_filesystem(evidence_root, tshark=tshark, dumpcap=dumpcap)
     final_path = evidence_root / FINAL_FILENAME
     if final_path.exists() or final_path.is_symlink():
-        return _validate_existing_final_receipt(
-            evidence_root, tshark=tshark, dumpcap=dumpcap
-        )
+        return _validate_existing_final_receipt(evidence_root, tshark=tshark, dumpcap=dumpcap)
     payload = _build_final_payload_without_reconciliation(
         evidence_root, recorded_at=recorded_at, tshark=tshark, dumpcap=dumpcap
     )
@@ -4362,14 +4209,10 @@ def create_final_receipt(
     return published
 
 
-def validate_closed_evidence_inventory(
-    root: Path, *, allow_historical: bool = False
-) -> None:
+def validate_closed_evidence_inventory(root: Path, *, allow_historical: bool = False) -> None:
     """Reject every unbound/missing file, directory, hard link, or symlink."""
 
-    evidence_root = _safe_directory(
-        root, label="browser-egress qualification root", private=True
-    )
+    evidence_root = _safe_directory(root, label="browser-egress qualification root", private=True)
     validate_open_evidence_inventory(
         evidence_root,
         allow_final=True,
@@ -4385,9 +4228,7 @@ def validate_closed_evidence_inventory(
         label="browser-egress attempts",
         private=True,
     )
-    foundation, _binding = _load_foundation(
-        evidence_root, allow_historical=allow_historical
-    )
+    foundation, _binding = _load_foundation(evidence_root, allow_historical=allow_historical)
     intent_records = _load_attempt_intents(evidence_root, foundation=foundation)
     expected_files.update(record["binding"]["path"] for record in intent_records)
     for path in sorted(attempts.iterdir(), key=lambda item: item.name):
@@ -4395,7 +4236,9 @@ def validate_closed_evidence_inventory(
         expected_files.add(relative)
         envelope = load_json(path)
         payload = validate_hash_bound_receipt(envelope, expected_type=RESULT_RECEIPT_TYPE)
-        result = validate_result_payload(payload, foundation=foundation, evidence_root=evidence_root)
+        result = validate_result_payload(
+            payload, foundation=foundation, evidence_root=evidence_root
+        )
         if result["verdict"] == "passed":
             expected_files.add(result["capture"]["pcap"]["path"])
         else:
@@ -4436,7 +4279,9 @@ def validate_closed_evidence_inventory(
         ):
             actual_files.add(relative)
         else:
-            raise ValueError(f"browser-egress sealed inventory contains an unsafe entry: {relative}")
+            raise ValueError(
+                f"browser-egress sealed inventory contains an unsafe entry: {relative}"
+            )
     if actual_files != expected_files or actual_directories != expected_directories:
         raise ValueError("browser-egress sealed evidence inventory is not closed")
 
@@ -4460,12 +4305,8 @@ def verify_qualification(
         dumpcap=dumpcap,
         allow_historical=allow_historical,
     )
-    evidence_root = _safe_directory(
-        root, label="browser-egress qualification root", private=True
-    )
-    foundation, _binding = _load_foundation(
-        evidence_root, allow_historical=allow_historical
-    )
+    evidence_root = _safe_directory(root, label="browser-egress qualification root", private=True)
+    foundation, _binding = _load_foundation(evidence_root, allow_historical=allow_historical)
     deep_validate_foundation(
         foundation,
         lab_root=lab_root,
@@ -4473,7 +4314,10 @@ def verify_qualification(
         mode=verification_mode,
         allow_historical=allow_historical,
     )
-    if expected_cohort_version is not None and foundation["cohort_version"] != expected_cohort_version:
+    if (
+        expected_cohort_version is not None
+        and foundation["cohort_version"] != expected_cohort_version
+    ):
         raise ValueError("browser-egress qualification cohort version differs from expectation")
     _load_checkpoint_without_reconciliation(
         evidence_root,
@@ -4494,9 +4338,7 @@ def verify_qualification(
         allow_historical=allow_historical,
     )
     validated = validate_final_payload(payload, expected=expected)
-    validate_closed_evidence_inventory(
-        evidence_root, allow_historical=allow_historical
-    )
+    validate_closed_evidence_inventory(evidence_root, allow_historical=allow_historical)
     return {
         "path": str(final_path),
         "sha256": sha256_file(final_path),

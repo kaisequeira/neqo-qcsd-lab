@@ -273,7 +273,7 @@
     },
     "topology": "fresh-prepare-image-isolated-internal-bridge-v3"
   },
-  "expanded_vectors_sha256": "9fecbeb7988fcb28d82803026ef9f3948d1494b14cc5a0930585e6e51e3a4179",
+  "expanded_vectors_sha256": "d9038cf12d733f914ad8e71365d98b8ac9eeb98aa9f02aa4ad43b992d3bd21ba",
   "fixture_topology": {
     "browser_addresses": [
       "172.30.98.10",

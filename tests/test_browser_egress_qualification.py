@@ -46,6 +46,7 @@ from qcsd_lab.browser_egress_fixture import (
     dns_query_message,
     expanded_vectors_sha256,
     expected_browser_action_arguments,
+    expected_fetch_denial_observations,
     expected_browser_launch_contract,
     expected_fixture_connection_counts,
     expected_fixture_report_type_counts,
@@ -58,6 +59,7 @@ from qcsd_lab.browser_egress_fixture import (
     shared_worker_action_message,
     validate_fixture_observation,
     validate_semantic_observation,
+    validate_vector,
     validate_vector_inventory,
     vector_by_id,
 )
@@ -319,7 +321,7 @@ def test_frozen_manifest_is_exact_110_and_rejects_mutation_order_and_omission() 
     assert len(vectors) == 110
     assert len({row["vector_id"] for row in vectors}) == 110
     assert expanded_vectors_sha256() == (
-        "9fecbeb7988fcb28d82803026ef9f3948d1494b14cc5a0930585e6e51e3a4179"
+        "d9038cf12d733f914ad8e71365d98b8ac9eeb98aa9f02aa4ad43b992d3bd21ba"
     )
     assert [vector.family for vector in expected_vectors()].count("constructor-transport") == 50
     validate_vector_inventory(vectors)
@@ -383,6 +385,7 @@ def test_disabled_unavailable_must_be_derived_from_live_raw_descriptor() -> None
         "action_succeeded": False,
         "policy_event_count": 0,
         "fetch_denial_count": 0,
+        "fetch_denials": [],
         "exception_name": None,
         "control_observed": False,
         "configuration_observation": None,
@@ -407,6 +410,7 @@ def test_background_action_and_positive_control_have_honest_distinct_chronology(
             "action_succeeded": True,
             "policy_event_count": 0,
             "fetch_denial_count": 0,
+            "fetch_denials": [],
             "exception_name": None,
             "control_observed": False,
             "configuration_observation": None,
@@ -448,6 +452,7 @@ def test_action_contract_rejects_generic_pre_network_exception(vector_id: str) -
         "action_succeeded": False,
         "policy_event_count": 0,
         "fetch_denial_count": 0,
+        "fetch_denials": [],
         "exception_name": "NotAllowedError",
         "control_observed": False,
         "configuration_observation": None,
@@ -1040,8 +1045,15 @@ def _limit_qualification_to_first_vector(
     monkeypatch.setattr(qualification, "inventory_json", lambda: copy.deepcopy(first))
 
 
-def _begin_intent(result_root: Path, *, vector_id: str, started_at: str) -> dict:
-    checkpoint = load_checkpoint(result_root)
+def _begin_intent(
+    result_root: Path,
+    *,
+    vector_id: str,
+    started_at: str,
+    checkpoint: dict | None = None,
+) -> dict:
+    if checkpoint is None:
+        checkpoint = load_checkpoint(result_root)
     vector = vector_by_id(vector_id)
     prior = [item for item in checkpoint["attempts"] if item["vector_id"] == vector_id]
     plan = {
@@ -1209,6 +1221,7 @@ def _measurement(vector_id: str) -> dict:
         "action_succeeded": True,
         "policy_event_count": 0,
         "fetch_denial_count": 0,
+        "fetch_denials": [],
         "exception_name": None,
         "control_observed": False,
         "configuration_observation": None,
@@ -1221,6 +1234,7 @@ def _measurement(vector_id: str) -> dict:
         base["policy_event_count"] = 1
     elif vector.semantic_kind == "fetch-policy-denial":
         base["fetch_denial_count"] = 1
+        base["fetch_denials"] = expected_fetch_denial_observations(vector)
     elif vector.semantic_kind == "disabled-unavailable":
         base.update(
             {
@@ -1289,6 +1303,71 @@ def _measurement(vector_id: str) -> dict:
     return base
 
 
+def test_fetch_denial_measurements_bind_exact_action_url_and_method() -> None:
+    expected_methods = {
+        "fetch": "GET",
+        "xhr": "GET",
+        "beacon": "POST",
+        "legacy-csp-report": "POST",
+        "window-open-existing-named-frame": "GET",
+    }
+    denial_vectors = [
+        vector for vector in expected_vectors() if vector.semantic_kind == "fetch-policy-denial"
+    ]
+    assert len(denial_vectors) == 17
+    for vector in denial_vectors:
+        expected = expected_fetch_denial_observations(vector)
+        assert expected == [
+            {
+                "url": expected_browser_action_arguments(vector)["forbiddenUrl"],
+                "method": expected_methods[vector.surface],
+            }
+        ]
+        observation = _semantic(vector.vector_id, _measurement(vector.vector_id))
+        assert validate_semantic_observation(observation, vector=vector) == observation
+        for key, replacement in (("url", "https://forged.invalid/"), ("method", "PATCH")):
+            forged = copy.deepcopy(observation)
+            forged["measurement"]["fetch_denials"][0][key] = replacement
+            with pytest.raises(ValueError, match="Fetch denial"):
+                validate_semantic_observation(forged, vector=vector)
+
+
+def test_v4_vector_action_and_semantic_denial_schemas_fail_closed() -> None:
+    vector = vector_by_id("urlloader--page--legacy-csp-report")
+    forged_vector = vector.as_dict()
+    forged_vector["schema_version"] = 3
+    with pytest.raises(ValueError, match="frozen"):
+        validate_vector(forged_vector)
+
+    forged_action = vector_by_id("urlloader--page--trusted-anchor-ping").as_dict()
+    forged_action["action_contract"]["schema_version"] = 3
+    with pytest.raises(ValueError, match="frozen"):
+        validate_vector(forged_action)
+
+    observation = _semantic(vector.vector_id, _measurement(vector.vector_id))
+    legacy = copy.deepcopy(observation)
+    legacy["schema_version"] = 3
+    with pytest.raises(ValueError, match="inconsistent"):
+        validate_semantic_observation(legacy, vector=vector)
+
+    missing = copy.deepcopy(observation)
+    missing["measurement"].pop("fetch_denials")
+    with pytest.raises(ValueError, match="measurement fields"):
+        validate_semantic_observation(missing, vector=vector)
+
+    mismatch = copy.deepcopy(observation)
+    mismatch["measurement"]["fetch_denials"].append(
+        dict(mismatch["measurement"]["fetch_denials"][0])
+    )
+    with pytest.raises(ValueError, match="inventory"):
+        validate_semantic_observation(mismatch, vector=vector)
+
+    duplicate = copy.deepcopy(mismatch)
+    duplicate["measurement"]["fetch_denial_count"] = 2
+    with pytest.raises(ValueError, match="frozen action request"):
+        validate_semantic_observation(duplicate, vector=vector)
+
+
 def _passed_receipt(
     result_root: Path,
     foundation: dict,
@@ -1298,16 +1377,18 @@ def _passed_receipt(
     attempt_number: int,
     previous_result_sha256: str,
     seed: int,
+    checkpoint: dict | None = None,
 ) -> tuple[dict, Path]:
     vector = vector_by_id(vector_id)
     if (result_root / "foundation.json").is_file():
-        checkpoint = load_checkpoint(result_root)
-        assert global_ordinal == len(checkpoint["attempts"]) + 1
-        assert previous_result_sha256 == checkpoint["chain_head_sha256"]
+        current = checkpoint if checkpoint is not None else load_checkpoint(result_root)
+        assert global_ordinal == len(current["attempts"]) + 1
+        assert previous_result_sha256 == current["chain_head_sha256"]
         _begin_intent(
             result_root,
             vector_id=vector_id,
             started_at=_wall_time(global_ordinal * 2),
+            checkpoint=current,
         )
     base = seed * 10_000_000_000
     events = expected_semantic_chronology(vector)
@@ -1816,6 +1897,7 @@ def test_websocket_route_and_unavailable_constructor_are_honest_raw_outcomes() -
             "action_succeeded": True,
             "policy_event_count": 1,
             "fetch_denial_count": 0,
+            "fetch_denials": [],
             "exception_name": None,
             "control_observed": False,
             "configuration_observation": None,
@@ -1841,6 +1923,7 @@ def test_websocket_route_and_unavailable_constructor_are_honest_raw_outcomes() -
             "action_succeeded": False,
             "policy_event_count": 0,
             "fetch_denial_count": 0,
+            "fetch_denials": [],
             "exception_name": None,
             "control_observed": False,
             "configuration_observation": None,
@@ -2984,6 +3067,7 @@ def test_full_vector_chain_final_and_portable_deep_verify_are_closed(
             attempt_number=1,
             previous_result_sha256=checkpoint["chain_head_sha256"],
             seed=global_ordinal,
+            checkpoint=checkpoint,
         )
         checkpoint = append_result(result_root, receipt)
     assert checkpoint["status"] == "complete"
