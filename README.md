@@ -22,35 +22,20 @@ selectable modes**. BuFLO and CS-BuFLO are candidate client-only QUIC
 adaptations, not bilateral or paper-equivalent implementations. Do not claim
 seven validated defences until the final validation attestation verifies.
 
-Cohort v83 binds exact clean Lab
-`ea4cf2b65b4a3fd650c0497beda600ea235db456` and Rust/gitlink
+Cohort v84 binds exact clean Lab
+`46eb8172a4fba42a07e7e4da3a40c444ee48259d` and Rust/gitlink
 `46313bef90ad392b7ca293ab7cf28108d2f35c7f`. Its fresh no-cache build/completion
-and pinned-CDP gates passed. The browser-egress run then preserved vectors
-1--76 as passing before vector 77,
-`popup--page--window-open-existing-named-frame`, ended `operational-failure` at
-`browser-action`. Diagnosis confirmed that pinned Chromium 143 emitted
-`Network.loadingFailed` for the blocked named-frame navigation and then
-`Network.loadingFinished` for the same request ID. Router instrumentation v13
-had already consumed the first terminal event and therefore failed closed on
-the second. V83 has no final browser-egress receipt and is immutable historical
-evidence only.
+and pinned-CDP gates passed with router instrumentation v14, Playwright policy
+v8, and the current outer/nested contracts 13/12. Before browser-egress
+creation, an unreceipted Docker Chromium integration run passed 11 cases and
+then exposed a test-harness mismatch: pinned Playwright Python 1.57 has no
+public `BrowserContext.set_http_credentials` method. The server-side v8 guard
+was already on the correct protocol mutation boundary; the corrected test
+reaches it through Playwright's pinned private protocol channel.
 
-The pending client-side correction comprises router instrumentation v14 and
-Playwright ownership policy v8. Router v14 reconciles only that confirmed
-Chromium error-document lifecycle while continuing to reject unrelated orphan
-or ambiguous events. A pinned live regression identified the error document's
-three fixed inline PNGs: they are `data:` resources tied to the denied loader
-and frame, although Chromium reports them through
-`Network.requestServedFromCache`. The correction admits only their exact
-ordered, hash-pinned local lifecycle; ordinary cache events remain hard
-failures. Policy v8 moves exclusive Chromium credential rejection from an
-asynchronous network-manager callback to pre-context, pre-persistent-launch,
-and runtime-mutation boundaries, including authenticated proxy inheritance.
-Its pinned-CDP evidence contract advances to outer schema 13 with nested
-contract 12; outer schema 12, nested contract 11, instrumentation v13, and
-driver policy v7 remain historical, including v83. Cohort v84 is unused and
-must start afresh only after both corrections are independently reviewed,
-validated, committed, and the checkout is clean. Current scientific progress
+No v84 browser-egress checkpoint, vector, or final receipt exists. Because the
+test correction changes tracked source, v84 is immutable historical evidence
+and a fresh v85 build must reproduce its gates. Current scientific progress
 therefore remains browser-egress **0/110**, certification **0/900**, and formal
 capture **0/16,000**.
 

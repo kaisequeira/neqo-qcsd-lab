@@ -9,6 +9,7 @@ import time
 from collections.abc import Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -58,6 +59,24 @@ _DIRECT_CHROMIUM_ARGS = (
     BROWSER_EGRESS_SUBPROCESS_WRAPPER_ARGUMENT,
     "--site-per-process",
 )
+
+
+def _set_http_credentials_via_protocol(
+    context: Any,
+    credentials: Mapping[str, str] | None,
+) -> None:
+    """Exercise the pinned driver mutation boundary absent from Python's API."""
+
+    parameters = (
+        {} if credentials is None else {"httpCredentials": dict(credentials)}
+    )
+    context._sync(
+        context._impl_obj._channel.send(
+            "setHTTPCredentials",
+            None,
+            parameters,
+        )
+    )
 
 
 @pytest.fixture
@@ -930,12 +949,12 @@ def test_http_credentials_are_rejected_only_by_exclusive_driver(tmp_path: Path) 
             assert browser.contexts == []
             context = browser.new_context(service_workers="block")
             try:
-                context.set_http_credentials(None)
+                _set_http_credentials_via_protocol(context, None)
                 with pytest.raises(
                     PlaywrightError,
                     match="QCSD exclusive CDP ownership forbids HTTP or proxy credentials",
                 ):
-                    context.set_http_credentials(credentials)
+                    _set_http_credentials_via_protocol(context, credentials)
                 page = context.new_page()
                 page.set_content("<title>exclusive-driver-survived</title>")
                 assert page.title() == "exclusive-driver-survived"
@@ -1024,8 +1043,8 @@ def test_http_credentials_are_rejected_only_by_exclusive_driver(tmp_path: Path) 
                 service_workers="block",
             )
             try:
-                context.set_http_credentials(credentials)
-                context.set_http_credentials(None)
+                _set_http_credentials_via_protocol(context, credentials)
+                _set_http_credentials_via_protocol(context, None)
                 page = context.new_page()
                 page.set_content("<title>native-credentials</title>")
                 assert page.title() == "native-credentials"
