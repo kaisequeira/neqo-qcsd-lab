@@ -1,6 +1,6 @@
 # QCSD Lab operator guide
 
-Documentation refresh: 11 September 2026, Australia/Sydney (AEST, UTC+10)
+Documentation refresh: 12 September 2026, Australia/Sydney (AEST, UTC+10)
 
 This repository orchestrates reproducible HTTP/3 traffic capture for the QCSD
 Neqo fork. It freezes workload graphs, runs visits under a selected client-side
@@ -22,22 +22,16 @@ selectable modes**. BuFLO and CS-BuFLO are candidate client-only QUIC
 adaptations, not bilateral or paper-equivalent implementations. Do not claim
 seven validated defences until the final validation attestation verifies.
 
-Cohort v84 binds exact clean Lab
-`46eb8172a4fba42a07e7e4da3a40c444ee48259d` and Rust/gitlink
-`46313bef90ad392b7ca293ab7cf28108d2f35c7f`. Its fresh no-cache build/completion
-and pinned-CDP gates passed with router instrumentation v14, Playwright policy
-v8, and the current outer/nested contracts 13/12. Before browser-egress
-creation, an unreceipted Docker Chromium integration run passed 11 cases and
-then exposed a test-harness mismatch: pinned Playwright Python 1.57 has no
-public `BrowserContext.set_http_credentials` method. The server-side v8 guard
-was already on the correct protocol mutation boundary; the corrected test
-reaches it through Playwright's pinned private protocol channel.
-
-No v84 browser-egress checkpoint, vector, or final receipt exists. Because the
-test correction changes tracked source, v84 is immutable historical evidence
-and a fresh v85 build must reproduce its gates. Current scientific progress
-therefore remains browser-egress **0/110**, certification **0/900**, and formal
-capture **0/16,000**.
+Cohort v85 binds clean Lab `083612c02c07cd633ecd76b5df6df691f9d7ecf8` and
+Rust/gitlink `46313bef90ad392b7ca293ab7cf28108d2f35c7f`. Its no-cache
+build/completion and pinned-CDP receipts verify; all 12 real-Chromium integration
+tests passed. Browser-egress preserved 23 passing vectors and an interrupted
+first attempt at vector 24. Resume was rejected on 12 September because Docker
+reported 16,508,788,736 bytes of RAM against the foundation's 16,508,784,640;
+the current contract requires exact capacity equality. No final browser-egress
+receipt exists. Retain v85 and use a fresh cohort (next planned: v86) for the
+current environment. Scientific progress remains browser-egress **0/110**,
+certification **0/900**, and formal capture **0/16,000**.
 
 The nine modes, in stable order, are `undefended`, `static`, `front`, `tamaraw`,
 `traffic-morphing`, `wtf-pad`, `walkie-talkie`, `buflo`, and `cs-buflo`.

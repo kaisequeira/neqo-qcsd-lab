@@ -13,10 +13,12 @@ These repository-local rules apply throughout `neqo-qcsd-lab/`.
 - Report accepted scientific counters only from final deep-verified receipts.
   Historical passing prefixes and non-evidentiary probes advance no numerator.
 - At this checkpoint, use **browser-egress 0/110, certification 0/900, formal
-  capture 0/16,000**. V84's build and pinned-CDP receipts passed, but a later
-  unreceipted Docker Chromium integration exposed a Python test-harness API
-  mismatch before browser-egress creation. V84 is historical; the test-only
-  correction requires a fresh v85 cohort. Re-read
+  capture 0/16,000**. V85's build/completion and pinned-CDP receipts verify,
+  and all 12 real-Chromium integration tests passed. Its browser-egress
+  checkpoint preserves 23 passing vectors and an interrupted vector 24.
+  Resume was rejected on 12 September 2026 because Docker's reported RAM
+  increased by 4,096 bytes; exact foundation capacity is required. V85 remains
+  historical and v86 is the next planned fresh cohort. Re-read
   [README.md](README.md), the latest immutable receipts, and live checkpoint
   state before any later update rather than carrying these figures forward
   from memory.
