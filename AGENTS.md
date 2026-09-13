@@ -13,12 +13,13 @@ These repository-local rules apply throughout `neqo-qcsd-lab/`.
 - Report accepted scientific counters only from final deep-verified receipts.
   Historical passing prefixes and non-evidentiary probes advance no numerator.
 - At this checkpoint, use **browser-egress 0/110, certification 0/900, formal
-  capture 0/16,000**. V85's build/completion and pinned-CDP receipts verify,
-  and all 12 real-Chromium integration tests passed. Its browser-egress
-  checkpoint preserves 23 passing vectors and an interrupted vector 24.
-  Resume was rejected on 12 September 2026 because Docker's reported RAM
-  increased by 4,096 bytes; exact foundation capacity is required. V85 remains
-  historical and v86 is the next planned fresh cohort. Re-read
+  capture 0/16,000**. V86's build/completion and pinned-CDP receipts verify.
+  Its checkpoint preserves 97 passing vectors and a vector-98 operational
+  failure caused by requesting a default-profile tab without an existing
+  window. The window-creation and cleanup fix passes 630 selected host tests
+  and 13 real-Chromium integration tests. These regression checks do not
+  authorise old-cohort resume or a qualification pass. Preserve v86; v87 is
+  the next planned fresh cohort at 13 September 2026. Re-read
   [README.md](README.md), the latest immutable receipts, and live checkpoint
   state before any later update rather than carrying these figures forward
   from memory.

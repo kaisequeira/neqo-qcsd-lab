@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import os
 import runpy
 import threading
@@ -98,6 +99,99 @@ def dedicated_worker_http_fixture() -> Iterator[tuple[str, _FixtureHttpServer]]:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_default_profile_control_opens_an_unattached_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise the production actor's first-window path in pinned Chromium.
+
+    Only fixture addressing changes to loopback. This is a target-lifecycle
+    regression, not the packet-observed DNS suppression qualification.
+    """
+
+    from playwright.sync_api import Error
+
+    vector = vector_by_id("browser-service-control--default-profile--dns-prefetch-disabled")
+    server = _FixtureHttpServer(("127.0.0.1", 0), "primary", None, vector)
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    origin = f"http://localhost:{server.server_port}"
+    actor = runpy.run_path(
+        str(Path(__file__).parents[1] / "tools/browser_egress_qualification.py"),
+        run_name="qcsd_browser_service_control_integration",
+    )["_browser_service_control_actor"]
+    actor_globals = actor.__globals__
+    original_contract = actor_globals["expected_browser_launch_contract"]
+    original_launch = actor_globals["_launch_vector_browser"]
+    observations: list[dict[str, Any]] = []
+    browsers: list[Any] = []
+    target_ids: list[str] = []
+
+    def loopback_contract(selected: Any) -> dict[str, Any]:
+        contract = original_contract(selected)
+        contract["control_document_origin"] = origin
+        contract["resolver_approved_origins"] = [origin]
+        contract["resolver_origin_ip_pins"] = {origin: "127.0.0.1"}
+        contract["resolver_approved_ip_exclusions"] = ["127.0.0.1"]
+        return contract
+
+    def observe_launch(playwright: Any, selected: Any) -> Any:
+        launched = original_launch(playwright, selected)
+        browser = launched[0]
+        browsers.append(browser)
+        original_session = browser.new_browser_cdp_session
+        session = original_session()
+        try:
+            assert session.send("Target.getTargets")["targetInfos"] == []
+            assert session.send("Target.getBrowserContexts")["browserContextIds"] == []
+            with pytest.raises(Error, match="no browser is open"):
+                session.send("Target.createTarget", {"url": "about:blank", "newWindow": False})
+        finally:
+            session.detach()
+
+        def observed_session() -> Any:
+            session = original_session()
+            original_send = session.send
+
+            def observed_send(method: str, params: Any = None) -> Any:
+                if method == "Target.createTarget":
+                    assert params == {"url": f"{origin}/control/dns-prefetch", "newWindow": True}
+                    result = original_send(method, params)
+                    target_ids.append(result["targetId"])
+                    return result
+                if method == "Target.closeTarget":
+                    info = original_send("Target.getTargetInfo", params)["targetInfo"]
+                    assert info["type"] == "page" and info["attached"] is False
+                    assert info["url"] == f"{origin}/control/dns-prefetch"
+                    assert original_send("Target.getBrowserContexts")["browserContextIds"] == []
+                    assert browser.contexts == []
+                    with server.request_lock:
+                        assert server.request_counts["/control/dns-prefetch"] == 1
+                return original_send(method, params)
+
+            monkeypatch.setattr(session, "send", observed_send)
+            return session
+
+        monkeypatch.setattr(browser, "new_browser_cdp_session", observed_session)
+        return launched
+
+    monkeypatch.setitem(actor_globals, "expected_browser_launch_contract", loopback_contract)
+    monkeypatch.setitem(actor_globals, "_launch_vector_browser", observe_launch)
+    monkeypatch.setitem(actor_globals, "_emit", observations.append)
+    try:
+        actor(argparse.Namespace(), vector)
+        assert len(target_ids) == 1
+        assert len(observations) == 1
+        assert observations[0]["vector_id"] == vector.vector_id
+        assert observations[0]["role"] == "actor"
+        assert len(browsers) == 1 and not browsers[0].is_connected()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
         assert not thread.is_alive()
 
 

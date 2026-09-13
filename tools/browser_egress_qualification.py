@@ -529,12 +529,16 @@ def _browser_service_control_actor(args: argparse.Namespace, vector: Any) -> Non
                 page.wait_for_timeout(BROWSER_SERVICE_CONTROL_DWELL_MS)
             elif contract["context_kind"] == "raw-default-profile-cdp-unattached-target":
                 session = browser.new_browser_cdp_session()
+                # A fresh non-persistent launch has no default-profile window.
+                # Keep this target in that profile and unattached; asking for a
+                # tab in an existing window fails before the control can load.
                 created = session.send(
-                    "Target.createTarget", {"url": target_url, "newWindow": False}
+                    "Target.createTarget", {"url": target_url, "newWindow": True}
                 )
-                target_id = created.get("targetId") if isinstance(created, Mapping) else None
-                if not isinstance(target_id, str) or not target_id:
+                created_target_id = created.get("targetId") if isinstance(created, Mapping) else None
+                if not isinstance(created_target_id, str) or not created_target_id:
                     raise ValueError("browser-service control target was not created")
+                target_id = created_target_id
                 time.sleep(BROWSER_SERVICE_CONTROL_DWELL_MS / 1_000)
             else:
                 raise ValueError("browser-service control context kind is invalid")
@@ -543,12 +547,14 @@ def _browser_service_control_actor(args: argparse.Namespace, vector: Any) -> Non
                 vector, started_ns=started_ns, finished_ns=finished_ns
             )
         finally:
-            if context is not None:
-                context.close()
-            if target_id is not None:
-                session.send("Target.closeTarget", {"targetId": target_id})
-            browser.close()
-            browser_exited_ns = time.monotonic_ns()
+            try:
+                if context is not None:
+                    context.close()
+                if target_id is not None:
+                    session.send("Target.closeTarget", {"targetId": target_id})
+            finally:
+                browser.close()
+                browser_exited_ns = time.monotonic_ns()
     _emit(
         {
             "schema_version": ROLE_SCHEMA_VERSION,

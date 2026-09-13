@@ -1,6 +1,6 @@
 # QCSD Lab operator guide
 
-Documentation refresh: 12 September 2026, Australia/Sydney (AEST, UTC+10)
+Documentation refresh: 13 September 2026, Australia/Sydney (AEST, UTC+10)
 
 This repository orchestrates reproducible HTTP/3 traffic capture for the QCSD
 Neqo fork. It freezes workload graphs, runs visits under a selected client-side
@@ -22,16 +22,17 @@ selectable modes**. BuFLO and CS-BuFLO are candidate client-only QUIC
 adaptations, not bilateral or paper-equivalent implementations. Do not claim
 seven validated defences until the final validation attestation verifies.
 
-Cohort v85 binds clean Lab `083612c02c07cd633ecd76b5df6df691f9d7ecf8` and
+Cohort v86 binds clean Lab `7ad66e1a512574d3e660ec9ce06e50db7d089c5b` and
 Rust/gitlink `46313bef90ad392b7ca293ab7cf28108d2f35c7f`. Its no-cache
-build/completion and pinned-CDP receipts verify; all 12 real-Chromium integration
-tests passed. Browser-egress preserved 23 passing vectors and an interrupted
-first attempt at vector 24. Resume was rejected on 12 September because Docker
-reported 16,508,788,736 bytes of RAM against the foundation's 16,508,784,640;
-the current contract requires exact capacity equality. No final browser-egress
-receipt exists. Retain v85 and use a fresh cohort (next planned: v86) for the
-current environment. Scientific progress remains browser-egress **0/110**,
-certification **0/900**, and formal capture **0/16,000**.
+build/completion and pinned-CDP receipts verify. Browser-egress preserves 97
+passing vector receipts and an operational failure at vector 98: the first
+default-profile control requested a tab without an existing window. No final
+browser-egress receipt exists. The client-side window-creation and cleanup fix
+passes 630 selected host tests and all 13 real-Chromium integration tests;
+these are regression checks, not replacement qualification evidence. Retain
+v86 and rebuild under a fresh cohort (next planned: v87) before downstream
+reproof. Scientific progress remains browser-egress **0/110**, certification
+**0/900**, and formal capture **0/16,000**.
 
 The nine modes, in stable order, are `undefended`, `static`, `front`, `tamaraw`,
 `traffic-morphing`, `wtf-pad`, `walkie-talkie`, `buflo`, and `cs-buflo`.
