@@ -3190,10 +3190,10 @@ def test_watcher_pinned_cdp_contract_matches_runtime_contract() -> None:
     assert watch.HISTORICAL_FOUNDATION_SCHEMA_VERSION == (
         class_attestation.HISTORICAL_FOUNDATION_SCHEMA_VERSION
     )
-    assert browser_egress_qualification.FOUNDATION_SCHEMA_VERSION == 4
+    assert browser_egress_qualification.FOUNDATION_SCHEMA_VERSION == 5
     assert browser_egress_qualification.HISTORICAL_FOUNDATION_SCHEMA_VERSION == 2
     assert browser_egress_qualification.HISTORICAL_FOUNDATION_SCHEMA_VERSIONS == frozenset(
-        {2, 3}
+        {2, 3, 4}
     )
     assert watch._FOUNDATION_GATES == class_attestation._FOUNDATION_GATES
     assert study["authority_gates"]["foundation"]["reconstructed_gates"] == list(

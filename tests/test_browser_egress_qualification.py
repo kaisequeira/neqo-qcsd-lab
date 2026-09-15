@@ -28,6 +28,8 @@ from qcsd_lab.browser_egress import (
     validate_browser_egress_command_line,
     validate_browser_egress_qualification_command_line,
 )
+from qcsd_lab.browser_egress_dns import dns_control_nxdomain_response
+from qcsd_lab.browser_egress_dns_evidence import dns_wire_record, empty_dns_control_evidence
 from qcsd_lab.browser_egress_fixture import (
     _FIXTURE_RESPONSES,
     FIXTURE_CERTIFICATE,
@@ -42,6 +44,7 @@ from qcsd_lab.browser_egress_fixture import (
     IndependentUdpSink,
     assemble_live_semantic_observation,
     browser_action_expression,
+    combine_sink_receipt,
     dedicated_worker_action_message,
     dns_query_message,
     expanded_vectors_sha256,
@@ -84,7 +87,10 @@ from qcsd_lab.browser_egress_qualification import (
     FIXTURE_TLS_MASK_TMPFS_OPTIONS,
     HISTORICAL_FOUNDATION_SCHEMA_VERSION,
     HISTORICAL_FOUNDATION_SCHEMA_VERSIONS,
+    HISTORICAL_MANIFEST_RELATIVE_PATH,
+    HISTORICAL_SOURCE_BINDING_PATHS,
     MANIFEST_RELATIVE_PATH,
+    PACKET_DNS_EVIDENCE_CONTRACT,
     POLICY_VOLUME_MANAGED_DIRECTORY,
     POLICY_VOLUME_POLICY_FILENAME,
     POLICY_VOLUME_POLICY_PATH,
@@ -115,6 +121,7 @@ from qcsd_lab.browser_egress_qualification import (
     recover_interrupted_attempt,
     require_live_docker_daemon,
     validate_argv_config,
+    validate_attempt_intent_payload,
     validate_closed_evidence_inventory,
     validate_docker_inspect_projection,
     validate_final_payload,
@@ -196,6 +203,9 @@ def _lab(tmp_path: Path) -> tuple[Path, dict]:
     manifest = root / MANIFEST_RELATIVE_PATH
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_bytes(canonical_json_bytes(expected_manifest_config()))
+    (root / HISTORICAL_MANIFEST_RELATIVE_PATH).write_bytes(
+        canonical_json_bytes(expected_manifest_config(schema_version=1))
+    )
     argv = root / ARGV_RELATIVE_PATH
     argv.write_bytes(canonical_json_bytes(expected_argv_config()))
     build_path = root / "artifacts/buflo-study/build-execution-v71.json"
@@ -227,6 +237,27 @@ def _lab(tmp_path: Path) -> tuple[Path, dict]:
         live_docker_daemon=_live_daemon(),
     )
     return root, foundation
+
+
+def _historical_foundation(root: Path, foundation: dict, schema_version: int) -> dict:
+    historical = copy.deepcopy(foundation)
+    historical["schema_version"] = schema_version
+    historical["browser"] = _browser_binding(foundation_schema_version=schema_version)
+    historical["contracts"].pop("packet_dns_evidence_contract_sha256")
+    manifest = root / HISTORICAL_MANIFEST_RELATIVE_PATH
+    historical["contracts"]["manifest"] = {
+        "path": HISTORICAL_MANIFEST_RELATIVE_PATH,
+        "sha256": sha256_file(manifest),
+        "size_bytes": manifest.stat().st_size,
+    }
+    historical["source_files"] = [
+        binding for binding in historical["source_files"]
+        if binding["path"] in HISTORICAL_SOURCE_BINDING_PATHS
+    ]
+    if schema_version == 2:
+        historical["build_execution"].pop("completion_path")
+        historical["build_execution"].pop("completion_sha256")
+    return historical
 
 
 class _BuildValidator:
@@ -345,6 +376,60 @@ def test_checked_in_configs_are_exact_and_bool_alias_is_rejected() -> None:
     forged["schema_version"] = True
     with pytest.raises(ValueError):
         validate_manifest_config(forged)
+
+
+def test_manifest_v2_binds_dns_policy_without_rewriting_historical_v1() -> None:
+    root = Path(__file__).resolve().parents[1]
+    historical_path = root / HISTORICAL_MANIFEST_RELATIVE_PATH
+    assert sha256_file(historical_path) == (
+        "95d206391d283acd34c3393506730f9779eb09b06c467f2004ef78d619d72114"
+    )
+    historical = json.loads(historical_path.read_text())
+    assert validate_manifest_config(historical, allow_historical=True) == historical
+    with pytest.raises(ValueError, match="cannot authorise fresh execution"):
+        validate_manifest_config(historical)
+    current = expected_manifest_config()
+    assert current["schema_version"] == 2
+    assert current["packet_dns_evidence_contract"] == PACKET_DNS_EVIDENCE_CONTRACT
+    assert "dns_positive_query_count" not in current["fixture_topology"]["browser_service_controls"]
+    assert historical["fixture_topology"]["browser_service_controls"]["dns_positive_query_count"] == 3
+    tampered = copy.deepcopy(current)
+    tampered["packet_dns_evidence_contract"]["packet_analysis_schema_version"] = 4
+    with pytest.raises(ValueError, match="frozen version"):
+        validate_manifest_config(tampered)
+
+
+@pytest.mark.parametrize("path", [
+    "src/qcsd_lab/browser_egress_dns.py",
+    "src/qcsd_lab/browser_egress_dns_evidence.py",
+    "src/qcsd_lab/browser_egress_dns_packets.py",
+])
+def test_fresh_foundation_requires_and_deep_hashes_every_new_dns_source(
+    tmp_path: Path, path: str
+) -> None:
+    root, foundation = _lab(tmp_path)
+    assert path in REQUIRED_SOURCE_BINDING_PATHS and path not in HISTORICAL_SOURCE_BINDING_PATHS
+    forged = copy.deepcopy(foundation)
+    forged["source_files"] = [binding for binding in forged["source_files"] if binding["path"] != path]
+    with pytest.raises(ValueError, match="inventory is incomplete"):
+        validate_foundation_payload(forged)
+    (root / path).write_text("changed DNS implementation\n")
+    with pytest.raises(ValueError, match="source.*(hash|verify)|binding|changed"):
+        deep_validate_foundation(foundation, lab_root=root, build_validator=_BuildValidator(foundation))
+
+
+@pytest.mark.parametrize("mutation", ["missing-policy", "wrong-policy", "old-manifest"])
+def test_fresh_foundation_refuses_policy_or_manifest_downgrade(tmp_path: Path, mutation: str) -> None:
+    _root, foundation = _lab(tmp_path)
+    forged = copy.deepcopy(foundation)
+    if mutation == "missing-policy":
+        forged["contracts"].pop("packet_dns_evidence_contract_sha256")
+    elif mutation == "wrong-policy":
+        forged["contracts"]["packet_dns_evidence_contract_sha256"] = "0" * 64
+    else:
+        forged["contracts"]["manifest"]["path"] = HISTORICAL_MANIFEST_RELATIVE_PATH
+    with pytest.raises(ValueError):
+        validate_foundation_payload(forged)
 
 
 def _semantic(vector_id: str, measurement: dict) -> dict:
@@ -492,23 +577,24 @@ def test_foundation_rejects_bool_float_and_adversarial_reseal(tmp_path: Path) ->
             build_validator=_BuildValidator(foundation),
             mode=FoundationVerificationMode.PORTABLE_REPLAY,
         )
-    assert FOUNDATION_SCHEMA_VERSION == 4
+    assert FOUNDATION_SCHEMA_VERSION == 5
     assert HISTORICAL_FOUNDATION_SCHEMA_VERSION == 2
-    assert HISTORICAL_FOUNDATION_SCHEMA_VERSIONS == frozenset({2, 3})
+    assert HISTORICAL_FOUNDATION_SCHEMA_VERSIONS == frozenset({2, 3, 4})
     for historical_schema in sorted(HISTORICAL_FOUNDATION_SCHEMA_VERSIONS):
-        historical = copy.deepcopy(foundation)
-        historical["schema_version"] = historical_schema
-        historical["browser"] = _browser_binding(
-            foundation_schema_version=historical_schema
-        )
-        if historical_schema == 2:
-            historical["build_execution"].pop("completion_path")
-            historical["build_execution"].pop("completion_sha256")
+        historical = _historical_foundation(_root, foundation, historical_schema)
         with pytest.raises(ValueError, match="foundation identity"):
             validate_foundation_payload(historical)
         assert validate_foundation_payload(
             historical, allow_historical=True
         ) == json.loads(canonical_json_bytes(historical))
+        with pytest.raises(ValueError, match="cannot authorise execution or resume"):
+            deep_validate_foundation(
+                historical,
+                lab_root=_root,
+                build_validator=_BuildValidator(historical, allow_historical=True),
+                mode=FoundationVerificationMode.EXECUTION,
+                allow_historical=True,
+            )
         assert deep_validate_foundation(
             historical,
             lab_root=_root,
@@ -842,6 +928,45 @@ def _udp_packet(src: str, dst: str, *, src_port: int, dst_port: int, payload: by
     )
 
 
+def _paired_dns_transactions() -> list[tuple[bytes, bytes, int, int]]:
+    hostname = FIXTURE_TOPOLOGY["browser_service_controls"]["dns_exception_hostname"]
+    transactions = []
+    for index, qtype in enumerate((1, 65)):
+        query = dns_query_message(hostname, identifier=0x5250 + index)[:-4] + struct.pack(
+            "!HH", qtype, 1
+        )
+        response = dns_control_nxdomain_response(query, hostname=hostname)
+        transactions.append((query, response, 48000 + index, 49152 + index))
+    return transactions
+
+
+def _synthetic_sink_counters(vector) -> dict:
+    if vector.packet_policy not in {"approved-dns-prefetch-zero", "approved-dns-prefetch-positive"}:
+        return expected_sink_counters(vector)
+    hostname = FIXTURE_TOPOLOGY["browser_service_controls"]["dns_exception_hostname"]
+    control = empty_dns_control_evidence(hostname)
+    transactions = _paired_dns_transactions() if vector.packet_policy.endswith("positive") else []
+    for query, response, _local_port, external_port in transactions:
+        address = (FIXTURE_TOPOLOGY["browser_addresses"][0], external_port)
+        control["queries"].append(dns_wire_record(query, address, transport="udp"))
+        control["responses"].append(dns_wire_record(response, address, transport="udp"))
+    names = [hostname] * len(transactions)
+    raw_dns = {
+        "udp_names": names,
+        "tcp_names": [],
+        "ip_versions": {
+            "ipv4": {"udp_names": names, "tcp_names": []},
+            "ipv6": {"udp_names": [], "tcp_names": []},
+        },
+        "control": control,
+    }
+    counters = expected_sink_counters(vector)
+    return combine_sink_receipt(
+        vector=vector, tcp=counters["tcp"], udp=counters["udp"], dns=raw_dns,
+        forbidden_ready_ns=1, dns_ready_ns=1, forbidden_stopped_ns=2, dns_stopped_ns=2,
+    )
+
+
 def _pcap_packets(vector_id: str) -> list[bytes]:
     vector = vector_by_id(vector_id)
     browser4, browser6 = ("172.30.98.10", "fd00:71:63:73:64:98:0:10")
@@ -911,19 +1036,17 @@ def _pcap_packets(vector_id: str) -> list[bytes]:
             for index, (browser, sink) in enumerate(((browser4, sink4), (browser6, sink6)))
         ]
     if vector.packet_policy == "approved-dns-prefetch-positive":
-        name = FIXTURE_TOPOLOGY["browser_service_controls"]["dns_exception_hostname"]
-        return [
-            _udp_packet(
-                browser4,
-                dns4,
-                src_port=49152 + index,
-                dst_port=53,
-                payload=dns_query_message(name, identifier=0x5250 + index),
-            )
-            for index in range(
-                FIXTURE_TOPOLOGY["browser_service_controls"]["dns_positive_query_count"]
-            )
-        ]
+        packets = []
+        for query, response, local_port, external_port in _paired_dns_transactions():
+            packets.extend([
+                _udp_packet("127.0.0.1", "127.0.0.11", src_port=local_port,
+                            dst_port=58173, payload=query),
+                _udp_packet(browser4, dns4, src_port=external_port, dst_port=53, payload=query),
+                _udp_packet(dns4, browser4, src_port=53, dst_port=external_port, payload=response),
+                _udp_packet("127.0.0.11", "127.0.0.1", src_port=53,
+                            dst_port=local_port, payload=response),
+            ])
+        return packets
     if vector.packet_policy == "approved-preconnect-positive":
         port = FIXTURE_TOPOLOGY["ports"]["fixture_preconnect_https"]
         return [
@@ -1019,7 +1142,7 @@ def test_every_vector_synthetic_pcap_matches_packet_and_sink_policy(tmp_path: Pa
     reconcile_sink_and_packet_evidence(
         vector=vector,
         analysis=analysis,
-        sink=expected_sink_counters(vector),
+        sink=_synthetic_sink_counters(vector),
     )
 
 
@@ -1498,7 +1621,7 @@ def _passed_receipt(
         },
     }
     validate_fixture_observation(fixture, vector=vector)
-    sink = expected_sink_counters(vector)
+    sink = _synthetic_sink_counters(vector)
     sink["chronology"] = {
         "forbidden_ready_ns": times["sinks-ready"] - 1,
         "dns_ready_ns": times["sinks-ready"],
@@ -1527,6 +1650,86 @@ def _passed_receipt(
         capture=capture,
     )
     return receipt, pcap_path
+
+
+@pytest.mark.parametrize("schema_version", [3, 4, 6, True, 5.0, "5"])
+def test_fresh_passed_result_refuses_legacy_or_invalid_packet_analysis_schema(
+    tmp_path: Path, schema_version: object
+) -> None:
+    _root, foundation = _lab(tmp_path)
+    receipt, _pcap = _passed_receipt(
+        tmp_path / "result", foundation, vector_id=expected_vectors()[0].vector_id,
+        global_ordinal=1, attempt_number=1, previous_result_sha256="0" * 64, seed=1,
+    )
+    forged = copy.deepcopy(receipt["payload"])
+    forged["capture"]["analysis"]["schema_version"] = schema_version
+    with pytest.raises(ValueError, match="analysis schema differs from its foundation"):
+        validate_result_payload(forged, foundation=foundation)
+
+
+@pytest.mark.parametrize("suffix", ["disabled", "enabled"])
+def test_fresh_paired_dns_pass_requires_schema_two_sink_without_downgrade(
+    tmp_path: Path, suffix: str
+) -> None:
+    _root, foundation = _lab(tmp_path)
+    vector = vector_by_id(f"browser-service-control--default-profile--dns-prefetch-{suffix}")
+    result_root = tmp_path / "result"
+    receipt, _pcap = _passed_receipt(
+        result_root, foundation, vector_id=vector.vector_id, global_ordinal=1,
+        attempt_number=1, previous_result_sha256="0" * 64, seed=1,
+    )
+    assert receipt["payload"]["capture"]["analysis"]["schema_version"] == 5
+    assert receipt["payload"]["sink"]["schema_version"] == 2
+    validate_result_payload(receipt["payload"], foundation=foundation,
+                            evidence_root=result_root, deep=True)
+    downgraded = copy.deepcopy(receipt["payload"])
+    downgraded["sink"] = expected_sink_counters(vector)
+    with pytest.raises(ValueError, match="sink schema differs from its foundation and vector"):
+        validate_result_payload(downgraded, foundation=foundation)
+
+
+def test_historical_foundation_four_pass_and_intent_replay_but_cannot_create(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, foundation = _lab(tmp_path)
+    historical = _historical_foundation(root, foundation, 4)
+    vector = expected_vectors()[0]
+    result_root = tmp_path / "result"
+    receipt, pcap = _passed_receipt(
+        result_root, foundation, vector_id=vector.vector_id, global_ordinal=1,
+        attempt_number=1, previous_result_sha256="0" * 64, seed=1,
+    )
+    payload = copy.deepcopy(receipt["payload"])
+    payload["foundation_payload_sha256"] = canonical_json_sha256(historical)
+    payload["runtime"] = _runtime(historical, vector_id=vector.vector_id, seed=1)
+    old_analysis, old_decoder = analyse_pcap(pcap, vector=vector, analysis_schema_version=4)
+    payload["capture"]["analysis"] = old_analysis
+    payload["capture"]["packet_decoder"] = old_decoder
+    assert validate_result_payload(
+        payload, foundation=historical, evidence_root=result_root, deep=True
+    ) == payload
+    topology = build_attempt_topology_binding(
+        foundation=historical, global_ordinal=1, attempt_number=1,
+        vector_id=vector.vector_id, started_at=payload["started_at"],
+    )
+    intent = {
+        "schema_version": 1, "qualification_id": QUALIFICATION_ID,
+        "foundation_payload_sha256": canonical_json_sha256(historical),
+        "global_ordinal": 1, "attempt_number": 1,
+        "previous_result_sha256": "0" * 64, "vector": vector.as_dict(),
+        "started_at": payload["started_at"],
+        "evidence_directory": f"evidence/001--{vector.vector_id}/attempt-1",
+        "topology_token": topology["topology_token"],
+    }
+    assert validate_attempt_intent_payload(intent, foundation=historical) == intent
+    with pytest.raises(ValueError, match="foundation identity"):
+        _admit_create(monkeypatch, result_root=tmp_path / "new", lab_root=root,
+                      foundation=historical)
+    assert not (tmp_path / "new").exists()
+    incompatible = copy.deepcopy(payload)
+    incompatible["capture"] = receipt["payload"]["capture"]
+    with pytest.raises(ValueError, match="analysis schema differs from its foundation"):
+        validate_result_payload(incompatible, foundation=historical)
 
 
 def test_docker_projection_binds_five_exact_distinct_roles_and_network() -> None:

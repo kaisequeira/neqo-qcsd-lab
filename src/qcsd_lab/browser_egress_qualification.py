@@ -35,6 +35,7 @@ from .browser_egress import (
     validate_browser_egress_command_line_projection,
     validate_fail_closed_host_resolver_argument,
 )
+from .browser_egress_dns_evidence import DNS_CONTROL_RESPONSE_POLICY
 from .browser_egress_fixture import (
     BROWSER_SERVICE_CONTROL_SPECS,
     BROWSER_SERVICE_SURFACES,
@@ -106,17 +107,18 @@ from .playwright_driver import (
 )
 from .util import SOURCE_METADATA_KEYS, load_json, sha256_file
 
-MANIFEST_SCHEMA_VERSION = 1
+MANIFEST_SCHEMA_VERSION = 2
 ARGV_SCHEMA_VERSION = 1
-FOUNDATION_SCHEMA_VERSION = 4
+FOUNDATION_SCHEMA_VERSION = 5
 HISTORICAL_FOUNDATION_SCHEMA_VERSION = 2
-HISTORICAL_FOUNDATION_SCHEMA_VERSIONS = frozenset({2, 3})
+HISTORICAL_FOUNDATION_SCHEMA_VERSIONS = frozenset({2, 3, 4})
 ATTEMPT_INTENT_SCHEMA_VERSION = 1
 RESULT_SCHEMA_VERSION = 1
 CHECKPOINT_SCHEMA_VERSION = 1
 FINAL_SCHEMA_VERSION = 1
 
-MANIFEST_RELATIVE_PATH = "config/class-study/v1/browser-egress-qualification-v1.json"
+HISTORICAL_MANIFEST_RELATIVE_PATH = "config/class-study/v1/browser-egress-qualification-v1.json"
+MANIFEST_RELATIVE_PATH = "config/class-study/v1/browser-egress-qualification-v2.json"
 ARGV_RELATIVE_PATH = "config/class-study/v1/browser-egress-chromium-argv-v1.json"
 FOUNDATION_FILENAME = "foundation.json"
 CHECKPOINT_FILENAME = "experiment.json"
@@ -168,7 +170,7 @@ LIVE_DOCKER_DAEMON_FIELDS = BUILD_DOCKER_DAEMON_FIELDS | {
     "docker_root_dir",
 }
 
-REQUIRED_SOURCE_BINDING_PATHS = (
+HISTORICAL_SOURCE_BINDING_PATHS = (
     "Dockerfile",
     "pyproject.toml",
     "uv.lock",
@@ -211,6 +213,37 @@ REQUIRED_SOURCE_BINDING_PATHS = (
     "tools/windows_docker_storage_probe.ps1",
     "qcsd-lab",
 )
+REQUIRED_SOURCE_BINDING_PATHS = HISTORICAL_SOURCE_BINDING_PATHS + (
+    "src/qcsd_lab/browser_egress_dns.py",
+    "src/qcsd_lab/browser_egress_dns_evidence.py",
+    "src/qcsd_lab/browser_egress_dns_packets.py",
+)
+
+# This policy is independently receipted, not inferred from whichever reader
+# happens to replay a result.  Historical foundations retain their old contract.
+PACKET_DNS_EVIDENCE_CONTRACT = {
+    "schema_version": 1,
+    "packet_analysis_schema_version": 5,
+    "packet_record_schema_version": 2,
+    "paired_dns_sink_schema_version": 2,
+    "other_sink_schema_version": 1,
+    "dns_control_response_policy": DNS_CONTROL_RESPONSE_POLICY,
+    "historical_schemas_authorise_fresh_execution": False,
+}
+
+
+def _foundation_manifest_path(schema_version: int) -> str:
+    return (
+        MANIFEST_RELATIVE_PATH if schema_version == FOUNDATION_SCHEMA_VERSION
+        else HISTORICAL_MANIFEST_RELATIVE_PATH
+    )
+
+
+def _foundation_source_paths(schema_version: int) -> tuple[str, ...]:
+    return (
+        REQUIRED_SOURCE_BINDING_PATHS if schema_version == FOUNDATION_SCHEMA_VERSION
+        else HISTORICAL_SOURCE_BINDING_PATHS
+    )
 
 EFFECTIVE_ARGV_BINDING_SCHEMA_VERSION = 2
 DOCKER_INSPECT_PROJECTION_SCHEMA_VERSION = 3
@@ -376,11 +409,13 @@ FAILURE_CODES = frozenset(
 )
 
 
-def expected_manifest_config() -> dict[str, Any]:
-    """Return the only accepted v1 matrix recipe and expanded inventory hash."""
+def expected_manifest_config(*, schema_version: int = MANIFEST_SCHEMA_VERSION) -> dict[str, Any]:
+    """Return the current recipe, or the unchanged historical v1 for replay."""
 
-    return {
-        "schema_version": MANIFEST_SCHEMA_VERSION,
+    if type(schema_version) is not int or schema_version not in {1, MANIFEST_SCHEMA_VERSION}:
+        raise ValueError("browser-egress qualification manifest schema is unsupported")
+    expected = {
+        "schema_version": schema_version,
         "artifact_type": "qcsd-browser-egress-qualification-manifest",
         "qualification_id": QUALIFICATION_ID,
         "study_id": STUDY_ID,
@@ -429,7 +464,7 @@ def expected_manifest_config() -> dict[str, Any]:
             "positive_control_surfaces": list(CONTROL_SURFACES),
         },
         "expanded_vectors_sha256": expanded_vectors_sha256(),
-        "fixture_topology": FIXTURE_TOPOLOGY,
+        "fixture_topology": json.loads(canonical_json_bytes(FIXTURE_TOPOLOGY)),
         "execution_contract": EXECUTION_CONTRACT,
         "acceptance": {
             "negative_vectors": (
@@ -445,12 +480,23 @@ def expected_manifest_config() -> dict[str, Any]:
             "all_vectors_required": True,
         },
     }
+    if schema_version == MANIFEST_SCHEMA_VERSION:
+        controls = expected["fixture_topology"]["browser_service_controls"]
+        controls.pop("dns_positive_query_count")
+        controls["dns_control_response_policy"] = DNS_CONTROL_RESPONSE_POLICY
+        expected["packet_dns_evidence_contract"] = PACKET_DNS_EVIDENCE_CONTRACT
+    return expected
 
 
-def validate_manifest_config(value: object) -> dict[str, Any]:
-    expected = expected_manifest_config()
+def validate_manifest_config(value: object, *, allow_historical: bool = False) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError("browser-egress qualification manifest is invalid")
+    schema_version = value.get("schema_version")
+    if schema_version == 1 and not allow_historical:
+        raise ValueError("historical browser-egress manifest cannot authorise fresh execution")
+    expected = expected_manifest_config(schema_version=schema_version)
     if canonical_json_bytes(value) != canonical_json_bytes(expected):
-        raise ValueError("browser-egress qualification manifest differs from frozen v1")
+        raise ValueError("browser-egress qualification manifest differs from its frozen version")
     return json.loads(canonical_json_bytes(value))
 
 
@@ -892,7 +938,7 @@ def _browser_binding(
         driver_receipt_sha256 = PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_RECEIPT_SHA256
         driver_payload_sha256 = PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256
         driver_content_sha256 = PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_CONTENT_SHA256
-    elif foundation_schema_version == FOUNDATION_SCHEMA_VERSION:
+    elif foundation_schema_version in {4, FOUNDATION_SCHEMA_VERSION}:
         driver_receipt_sha256 = EXPECTED_PLAYWRIGHT_DRIVER_RECEIPT_SHA256
         driver_payload_sha256 = EXPECTED_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256
         driver_content_sha256 = EXPECTED_PLAYWRIGHT_DRIVER_CONTENT_SHA256
@@ -1073,6 +1119,9 @@ def build_foundation_payload(
             "argv": _file_binding(root, ARGV_RELATIVE_PATH),
             "expanded_vectors_sha256": expanded_vectors_sha256(),
             "fixture_contract_sha256": fixture_contract_sha256(),
+            "packet_dns_evidence_contract_sha256": canonical_json_sha256(
+                PACKET_DNS_EVIDENCE_CONTRACT
+            ),
         },
         "source_files": [
             _file_binding(root, relative) for relative in REQUIRED_SOURCE_BINDING_PATHS
@@ -1172,16 +1221,23 @@ def validate_foundation_payload(value: object, *, allow_historical: bool = False
     if value["browser"] != _browser_binding(foundation_schema_version=schema_version):
         raise ValueError("browser-egress pinned browser binding is invalid")
     contracts = value["contracts"]
-    if not isinstance(contracts, Mapping) or set(contracts) != {
+    contract_fields = {
         "manifest",
         "argv",
         "expanded_vectors_sha256",
         "fixture_contract_sha256",
-    }:
+    }
+    if schema_version == FOUNDATION_SCHEMA_VERSION:
+        contract_fields.add("packet_dns_evidence_contract_sha256")
+    if not isinstance(contracts, Mapping) or set(contracts) != contract_fields:
         raise ValueError("browser-egress contract binding fields are invalid")
+    if schema_version == FOUNDATION_SCHEMA_VERSION and contracts[
+        "packet_dns_evidence_contract_sha256"
+    ] != canonical_json_sha256(PACKET_DNS_EVIDENCE_CONTRACT):
+        raise ValueError("browser-egress packet/DNS evidence contract digest is invalid")
     validate_file_binding(
         contracts["manifest"],
-        expected_path=MANIFEST_RELATIVE_PATH,
+        expected_path=_foundation_manifest_path(schema_version),
         label="browser-egress manifest",
     )
     validate_file_binding(
@@ -1193,11 +1249,10 @@ def validate_foundation_payload(value: object, *, allow_historical: bool = False
     ):
         raise ValueError("browser-egress generated contract digest is invalid")
     source_files = value["source_files"]
-    if not isinstance(source_files, list) or len(source_files) != len(
-        REQUIRED_SOURCE_BINDING_PATHS
-    ):
+    required_source_paths = _foundation_source_paths(schema_version)
+    if not isinstance(source_files, list) or len(source_files) != len(required_source_paths):
         raise ValueError("browser-egress source file inventory is incomplete")
-    for binding, expected_path in zip(source_files, REQUIRED_SOURCE_BINDING_PATHS, strict=True):
+    for binding, expected_path in zip(source_files, required_source_paths, strict=True):
         validate_file_binding(binding, expected_path=expected_path, label="browser-egress source")
     if canonical_json_bytes(value["execution_contract"]) != canonical_json_bytes(
         EXECUTION_CONTRACT
@@ -1229,11 +1284,14 @@ def deep_validate_foundation(
 
     payload = validate_foundation_payload(value, allow_historical=allow_historical)
     historical = payload["schema_version"] in HISTORICAL_FOUNDATION_SCHEMA_VERSIONS
+    if historical and mode is FoundationVerificationMode.EXECUTION:
+        raise ValueError("historical browser-egress foundation cannot authorise execution or resume")
     root = _safe_directory(lab_root, label="Lab root")
     contracts = payload["contracts"]
+    manifest_path = _foundation_manifest_path(payload["schema_version"])
     validate_file_binding(
         contracts["manifest"],
-        expected_path=MANIFEST_RELATIVE_PATH,
+        expected_path=manifest_path,
         root=root,
         deep=True,
         label="browser-egress manifest",
@@ -1245,10 +1303,10 @@ def deep_validate_foundation(
         deep=True,
         label="browser-egress argv",
     )
-    validate_manifest_config(load_json(root / MANIFEST_RELATIVE_PATH))
+    validate_manifest_config(load_json(root / manifest_path), allow_historical=historical)
     validate_argv_config(load_json(root / ARGV_RELATIVE_PATH))
     for binding, expected_path in zip(
-        payload["source_files"], REQUIRED_SOURCE_BINDING_PATHS, strict=True
+        payload["source_files"], _foundation_source_paths(payload["schema_version"]), strict=True
     ):
         validate_file_binding(
             binding,
@@ -1907,6 +1965,10 @@ def validate_result_payload(
     tshark: Path = Path("/usr/bin/tshark"),
     dumpcap: Path = Path("/usr/bin/dumpcap"),
 ) -> dict[str, Any]:
+    # Replay may inspect old foundations, but no writer/admission entry point
+    # accepts them.  Validate here too so an invented foundation schema cannot
+    # bypass the version-specific packet and sink requirements below.
+    foundation = validate_foundation_payload(foundation, allow_historical=True)
     fields = {
         "schema_version",
         "qualification_id",
@@ -1951,6 +2013,25 @@ def validate_result_payload(
     if verdict == "passed":
         if value["failure_code"] is not None or value["failure_evidence"] is not None:
             raise ValueError("passed browser-egress vector carries failure evidence")
+        capture_value = value["capture"]
+        analysis_value = capture_value.get("analysis") if isinstance(capture_value, Mapping) else None
+        analysis_schema = analysis_value.get("schema_version") if isinstance(
+            analysis_value, Mapping
+        ) else None
+        fresh = foundation["schema_version"] == FOUNDATION_SCHEMA_VERSION
+        if type(analysis_schema) is not int or analysis_schema not in ({5} if fresh else {3, 4}):
+            raise ValueError("browser-egress packet analysis schema differs from its foundation")
+        sink_value = value["sink"]
+        paired_dns = vector.packet_policy in {
+            "approved-dns-prefetch-zero", "approved-dns-prefetch-positive"
+        }
+        expected_sink_schema = 2 if fresh and paired_dns else 1
+        if (
+            not isinstance(sink_value, Mapping)
+            or type(sink_value.get("schema_version")) is not int
+            or sink_value["schema_version"] != expected_sink_schema
+        ):
+            raise ValueError("browser-egress sink schema differs from its foundation and vector")
         runtime = validate_runtime_binding(
             value["runtime"],
             foundation=foundation,
@@ -2593,7 +2674,9 @@ def build_attempt_topology_binding(
 ) -> dict[str, Any]:
     """Build the exact Docker label identity carried by an attempt intent."""
 
-    validated_foundation = validate_foundation_payload(foundation)
+    # Pure derivation is also used to check historical runtime receipts.  Live
+    # attempt creation rejects historical foundations at its admission boundary.
+    validated_foundation = validate_foundation_payload(foundation, allow_historical=True)
     foundation_sha256 = canonical_json_sha256(validated_foundation)
     return {
         "cohort_version": validated_foundation["cohort_version"],
@@ -2674,7 +2757,7 @@ def validate_attempt_intent_payload(
     }
     if not isinstance(value, Mapping) or set(value) != fields:
         raise ValueError("browser-egress attempt-intent fields are invalid")
-    validated_foundation = validate_foundation_payload(foundation)
+    validated_foundation = validate_foundation_payload(foundation, allow_historical=True)
     global_ordinal = _integer(
         value["global_ordinal"], label="attempt-intent global ordinal", minimum=1
     )

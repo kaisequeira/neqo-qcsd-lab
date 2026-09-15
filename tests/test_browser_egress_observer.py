@@ -8,8 +8,12 @@ from pathlib import Path
 import pytest
 
 import qcsd_lab.browser_egress_observer as observer_module
+from qcsd_lab.browser_egress_dns import dns_control_nxdomain_response
+from qcsd_lab.browser_egress_dns_evidence import dns_wire_record, empty_dns_control_evidence
 from qcsd_lab.browser_egress_fixture import (
     FIXTURE_TOPOLOGY,
+    combine_sink_receipt,
+    dns_query_message,
     expected_sink_counters,
     vector_by_id,
 )
@@ -189,7 +193,8 @@ def test_paired_preconnect_control_requires_approved_endpoint_handshake_only_whe
         )
 
 
-def test_paired_dns_control_binds_exact_query_name_and_count() -> None:
+@pytest.mark.parametrize("analysis_version", [3, 4])
+def test_historical_paired_dns_control_binds_exact_query_name_and_count(analysis_version: int) -> None:
     vector = vector_by_id(
         "browser-service-control--default-profile--dns-prefetch-enabled"
     )
@@ -211,14 +216,122 @@ def test_paired_dns_control_binds_exact_query_name_and_count() -> None:
         for frame in range(1, 4)
     ]
     validate_packet_analysis(
-        analyse_packet_records(records, vector=vector), vector=vector
+        analyse_packet_records(records, vector=vector, analysis_schema_version=analysis_version),
+        vector=vector,
     )
     wrong = copy.deepcopy(records)
     wrong[-1]["dns_name"] = "attacker.test"
     with pytest.raises(ValueError, match="dns_query_names"):
         validate_packet_analysis(
-            analyse_packet_records(wrong, vector=vector), vector=vector
+            analyse_packet_records(wrong, vector=vector, analysis_schema_version=analysis_version),
+            vector=vector,
         )
+
+
+def _current_dns_control(count: int, *, ipv6: bool = False) -> tuple[list[dict], dict]:
+    vector = vector_by_id(
+        "browser-service-control--default-profile--dns-prefetch-"
+        + ("enabled" if count else "disabled")
+    )
+    name = FIXTURE_TOPOLOGY["browser_service_controls"]["dns_exception_hostname"]
+    browser = FIXTURE_TOPOLOGY["browser_addresses"][int(ipv6)]
+    dns = FIXTURE_TOPOLOGY["dns_sink_addresses"][int(ipv6)]
+    control = empty_dns_control_evidence(name)
+    records = []
+    for index in range(count):
+        query = dns_query_message(name, identifier=index + 1)
+        response = dns_control_nxdomain_response(query, hostname=name)
+        control["queries"].append(dns_wire_record(query, (browser, 49000 + index), transport="udp"))
+        control["responses"].append(dns_wire_record(response, (browser, 49000 + index), transport="udp"))
+        for src, dst, source_port, dest_port, message, kind in (
+            ("127.0.0.1", "127.0.0.11", 48000 + index, 58173, query, "query"),
+            (browser, dns, 49000 + index, 53, query, "query"),
+            (dns, browser, 53, 49000 + index, response, "response"),
+            ("127.0.0.11", "127.0.0.1", 53, 48000 + index, response, "response"),
+        ):
+            record = _packet(
+                len(records) + 1, src=src, dst=dst, transport="udp", src_port=source_port,
+                dst_port=dest_port, payload=len(message), dns_kind=kind, dns_name=name,
+            )
+            record.update({
+                "schema_version": 2, "outer_ip_protocol": 17, "quoted_transport": None,
+                "icmp_type": None, "icmp_code": None,
+                "dns_id": index + 1, "dns_type": 1, "dns_class": 1,
+                "dns_rcode": 0 if kind == "query" else 3,
+                "dns_payload_sha256": hashlib.sha256(message).hexdigest(),
+            })
+            records.append(record)
+    empty = expected_sink_counters(vector)
+    sink = combine_sink_receipt(
+        vector=vector, tcp=empty["tcp"], udp=empty["udp"],
+        dns={
+            "udp_names": [name] * count, "tcp_names": [], "control": control,
+            "ip_versions": {
+                family: {"udp_names": [name] * count if selected else [], "tcp_names": []}
+                for family, selected in (("ipv4", not ipv6), ("ipv6", ipv6))
+            },
+        },
+        forbidden_ready_ns=1, dns_ready_ns=2, forbidden_stopped_ns=3, dns_stopped_ns=4,
+    )
+    return records, sink
+
+
+@pytest.mark.parametrize("count", [0, 1, 2, 5])
+@pytest.mark.parametrize("ipv6", [False, True])
+def test_current_dns_pair_counts_all_legs_but_reconciles_only_sink_arrivals(count: int, ipv6: bool) -> None:
+    records, sink = _current_dns_control(count, ipv6=ipv6)
+    vector = vector_by_id(sink["vector_id"])
+    analysis = analyse_packet_records(records, vector=vector)
+    assert analysis["dns_udp_queries"] == analysis["dns_udp_responses"] == 2 * count
+    assert len(analysis["dns_control_packets"]) == 4 * count
+    assert analysis["dns_udp_datagrams"] == sink["dns"]["udp_queries_received"] == count
+    assert analysis["unexpected_browser_egress_packets"] == 0
+    before = copy.deepcopy(analysis)
+    validate_packet_analysis(analysis, vector=vector)
+    reconcile_sink_and_packet_evidence(vector=vector, analysis=analysis, sink=sink)
+    assert analysis == before
+
+
+@pytest.mark.parametrize("key", [
+    "dns_udp_queries", "dns_udp_queries_ipv4", "dns_udp_responses",
+    "dns_udp_datagrams", "dns_udp_datagrams_ipv4", "decoded_transport_packets",
+])
+def test_current_dns_packet_counts_cannot_disagree_with_wire_projection(key: str) -> None:
+    records, sink = _current_dns_control(1)
+    vector = vector_by_id(sink["vector_id"])
+    analysis = analyse_packet_records(records, vector=vector)
+    analysis[key] = 0
+    with pytest.raises(ValueError):
+        validate_packet_analysis(analysis, vector=vector)
+
+
+def test_current_dns_pair_cannot_substitute_a_historical_counter_only_sink() -> None:
+    records, sink = _current_dns_control(0)
+    vector = vector_by_id(sink["vector_id"])
+    analysis = analyse_packet_records(records, vector=vector)
+    sink["schema_version"] = 1
+    sink["dns"].pop("control")
+    with pytest.raises(ValueError, match="schema-2 wire-bound sink"):
+        reconcile_sink_and_packet_evidence(vector=vector, analysis=analysis, sink=sink)
+
+
+@pytest.mark.parametrize("index", [0, 1, 2, 3])
+def test_current_dns_pair_rejects_any_missing_query_or_reply_leg(index: int) -> None:
+    records, sink = _current_dns_control(1)
+    vector = vector_by_id(sink["vector_id"])
+    records.pop(index)
+    with pytest.raises(observer_module.PacketPolicyError, match="four-leg"):
+        validate_packet_analysis(analyse_packet_records(records, vector=vector), vector=vector)
+
+
+def test_fresh_negative_vectors_reject_unsolicited_dns_responses() -> None:
+    records, _ = _current_dns_control(1)
+    vector = vector_by_id("browser-service--browser--dns-prefetch")
+    analysis = analyse_packet_records([records[2]], vector=vector)
+    assert analysis["dns_udp_queries"] == 0
+    assert analysis["dns_udp_responses"] == 1
+    with pytest.raises(observer_module.PacketPolicyError, match="dns_udp_responses"):
+        validate_packet_analysis(analysis, vector=vector)
 
 
 @pytest.mark.parametrize("suffix", ["disabled", "enabled"])
@@ -307,7 +420,7 @@ def test_packet_analysis_records_timestamp_regressions_in_frame_order() -> None:
     analysis = analyse_packet_records(records, vector=vector)
 
     assert records == original
-    assert analysis["schema_version"] == 4
+    assert analysis["schema_version"] == 5
     assert analysis["timestamp_regressions"] == 2
     assert analysis["maximum_timestamp_regression_ns"] == 2_000
     assert validate_packet_analysis(analysis, vector=vector) == analysis
@@ -465,13 +578,8 @@ def _capture(vector_id: str) -> dict:
             "path": "/usr/bin/tshark",
             "sha256": "c" * 64,
             "version_first_line": "TShark 4.0",
-            "fields": [
-                "frame.number", "frame.time_epoch", "frame.interface_id", "ip.src", "ip.dst",
-                "ipv6.src", "ipv6.dst", "tcp.srcport", "tcp.dstport", "tcp.flags.syn",
-                "tcp.flags.ack", "tcp.len", "udp.srcport", "udp.dstport", "udp.length",
-                "dns.flags.response", "dns.qry.name",
-            ],
-            "argv": ["/usr/bin/tshark"],
+            "fields": list(observer_module.TSHARK_FIELDS),
+            "argv": observer_module.tshark_command(Path("<PCAP>")),
         },
         "analysis": analysis,
     }
@@ -656,7 +764,7 @@ def test_live_observer_closes_and_binds_pcap_before_analysis(
         "sha256": "b" * 64,
         "version_first_line": "TShark 4.0",
         "fields": list(observer_module.TSHARK_FIELDS),
-        "argv": ["/usr/bin/tshark"],
+        "argv": observer_module.tshark_command(Path("<PCAP>")),
     }
     monkeypatch.setattr(
         observer_module,
@@ -811,25 +919,30 @@ def test_deep_capture_validation_ignores_version_stderr_diagnostics(
         == receipt
     )
 
-    historical = copy.deepcopy(receipt)
-    historical["analysis"] = analyse_pcap(
-        pcap,
-        vector=vector,
-        tshark=tshark,
-        analysis_schema_version=3,
-    )[0]
-    assert historical["analysis"]["schema_version"] == 3
-    assert (
-        validate_capture_receipt(
-            historical,
-            vector=vector,
-            evidence_root=tmp_path,
-            deep=True,
-            tshark=tshark,
-            dumpcap=dumpcap,
+    for version in (3, 4):
+        historical = copy.deepcopy(receipt)
+        historical["analysis"], historical["packet_decoder"] = analyse_pcap(
+            pcap, vector=vector, tshark=tshark, analysis_schema_version=version,
         )
-        == historical
-    )
+        assert historical["analysis"]["schema_version"] == version
+        assert historical["packet_decoder"]["fields"] == list(
+            observer_module.HISTORICAL_TSHARK_FIELDS
+        )
+        assert "occurrence=f" in historical["packet_decoder"]["argv"]
+        assert (
+            validate_capture_receipt(
+                historical,
+                vector=vector,
+                evidence_root=tmp_path,
+                deep=True,
+                tshark=tshark,
+                dumpcap=dumpcap,
+            )
+            == historical
+        )
+        historical["packet_decoder"] = decoder
+        with pytest.raises(ValueError, match="packet decoder binding"):
+            validate_capture_receipt(historical, vector=vector)
 
     changed_version = copy.deepcopy(receipt)
     changed_version["capture_tool"]["version_first_line"] = "Dumpcap changed-version"

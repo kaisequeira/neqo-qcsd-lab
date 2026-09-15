@@ -34,6 +34,12 @@ from .browser_egress import (
     WEBSOCKET_POLICY_CLOSE_CODE,
     WEBSOCKET_POLICY_CLOSE_REASON,
 )
+from .browser_egress_dns import dns_control_nxdomain_response
+from .browser_egress_dns_evidence import (
+    dns_wire_record,
+    empty_dns_control_evidence,
+    validate_dns_control_evidence,
+)
 from .class_study import canonical_json_bytes, canonical_json_sha256
 
 QUALIFICATION_ID = "browser-egress-qualification-v1"
@@ -41,6 +47,7 @@ VECTOR_SCHEMA_VERSION = 4
 SEMANTIC_OBSERVATION_SCHEMA_VERSION = 4
 ACTION_CONTRACT_SCHEMA_VERSION = 4
 SINK_RECEIPT_SCHEMA_VERSION = 1
+DNS_CONTROL_SINK_RECEIPT_SCHEMA_VERSION = 2
 VECTOR_COUNT = 110
 BROWSER_LAUNCH_CONTRACT_SCHEMA_VERSION = 1
 CLOSE_GRACE_MS = 5_000
@@ -2348,7 +2355,9 @@ class IndependentUdpSink:
 class IndependentDnsSink:
     """Separate UDP/TCP DNS query counter; it never consults packet evidence."""
 
-    def __init__(self, host: str, port: int = 53) -> None:
+    def __init__(
+        self, host: str, port: int = 53, *, control_hostname: str | None = None
+    ) -> None:
         self.host = host
         self.port = port
         self._udp: socket.socket | None = None
@@ -2360,6 +2369,11 @@ class IndependentDnsSink:
         self._tcp_names: list[str] = []
         self._udp_names_by_version: dict[int, list[str]] = {4: [], 6: []}
         self._tcp_names_by_version: dict[int, list[str]] = {4: [], 6: []}
+        self._control_hostname = control_hostname
+        self._control = (
+            empty_dns_control_evidence(control_hostname)
+            if control_hostname is not None else None
+        )
 
     def start(self) -> None:
         family = socket.AF_INET6 if ":" in self.host else socket.AF_INET
@@ -2381,22 +2395,61 @@ class IndependentDnsSink:
     def _serve(self) -> None:
         assert self._udp is not None and self._tcp is not None
         while not self._stop.is_set():
-            readable, _writable, _errors = select.select([self._udp, self._tcp], [], [], 0.1)
+            try:
+                readable, _writable, _errors = select.select([self._udp, self._tcp], [], [], 0.1)
+            except (OSError, ValueError):
+                if not self._stop.is_set():
+                    if self._control is not None:
+                        self._control["rejected_messages"] += 1
+                    raise
+                break
             for sock in readable:
                 if sock is self._udp:
                     try:
                         message, address = sock.recvfrom(65_535)
+                    except OSError:
+                        if not self._stop.is_set() and self._control is not None:
+                            self._control["rejected_messages"] += 1
+                        continue
+                    try:
                         name = _dns_query_name(message)
-                    except (OSError, ValueError):
+                    except ValueError:
+                        if self._control is not None:
+                            self._control["rejected_messages"] += 1
                         continue
                     with self._lock:
                         self._udp_names.append(name)
                         self._udp_names_by_version[_peer_ip_version(address)].append(name)
+                    if self._control is not None:
+                        assert self._control_hostname is not None
+                        self._control["queries"].append(
+                            dns_wire_record(message, address, transport="udp")
+                        )
+                        try:
+                            response = dns_control_nxdomain_response(
+                                message, hostname=self._control_hostname
+                            )
+                        except ValueError:
+                            self._control["rejected_messages"] += 1
+                            continue
+                        try:
+                            if sock.sendto(response, address) != len(response):
+                                raise OSError("DNS control reply was not sent in full")
+                        except OSError:
+                            self._control["send_errors"] += 1
+                        else:
+                            self._control["responses"].append(
+                                dns_wire_record(response, address, transport="udp")
+                            )
                 else:
                     try:
                         connection, address = sock.accept()
                     except OSError:
                         continue
+                    if self._control is not None:
+                        # Reject the transport itself, including empty, partial
+                        # and malformed connections before question parsing.
+                        self._control["rejected_messages"] += 1
                     with connection:
                         connection.settimeout(1)
                         try:
@@ -2429,7 +2482,7 @@ class IndependentDnsSink:
             if self._thread.is_alive():
                 raise RuntimeError("DNS sink thread did not stop")
         with self._lock:
-            return {
+            receipt = {
                 "udp_names": sorted(self._udp_names),
                 "tcp_names": sorted(self._tcp_names),
                 "ip_versions": {
@@ -2440,6 +2493,9 @@ class IndependentDnsSink:
                     for version in (4, 6)
                 },
             }
+            if self._control is not None:
+                receipt["control"] = self._control
+            return receipt
 
 
 def _dns_query_name(message: bytes) -> str:
@@ -2516,6 +2572,9 @@ def combine_sink_receipt(
             "dns_stopped_ns": dns_stopped_ns,
         },
     }
+    if "control" in dns:
+        receipt["schema_version"] = DNS_CONTROL_SINK_RECEIPT_SCHEMA_VERSION
+        receipt["dns"]["control"] = dns["control"]
     return validate_sink_receipt(receipt, vector=vector)
 
 
@@ -2917,7 +2976,9 @@ def validate_sink_receipt(value: object, *, vector: BrowserEgressVector) -> dict
         raise ValueError("browser-egress sink receipt fields are invalid")
     if (
         type(value["schema_version"]) is not int
-        or value["schema_version"] != SINK_RECEIPT_SCHEMA_VERSION
+        or value["schema_version"] not in {
+            SINK_RECEIPT_SCHEMA_VERSION, DNS_CONTROL_SINK_RECEIPT_SCHEMA_VERSION
+        }
         or value["vector_id"] != vector.vector_id
     ):
         raise ValueError("browser-egress sink receipt identity is invalid")
@@ -2939,12 +3000,16 @@ def validate_sink_receipt(value: object, *, vector: BrowserEgressVector) -> dict
         "ip_versions",
     }:
         raise ValueError("browser-egress UDP sink fields are invalid")
-    if not isinstance(dns, Mapping) or set(dns) != {
+    dns_fields = {
         "udp_queries_received",
         "tcp_queries_received",
         "query_names",
         "ip_versions",
-    }:
+    }
+    control_schema = value["schema_version"] == DNS_CONTROL_SINK_RECEIPT_SCHEMA_VERSION
+    if control_schema:
+        dns_fields.add("control")
+    if not isinstance(dns, Mapping) or set(dns) != dns_fields:
         raise ValueError("browser-egress DNS sink fields are invalid")
     chronology_fields = {
         "forbidden_ready_ns",
@@ -3049,6 +3114,40 @@ def validate_sink_receipt(value: object, *, vector: BrowserEgressVector) -> dict
         raise ValueError("browser-egress DNS IP-family totals do not reconcile")
 
     expected = expected_sink_counters(vector)
+    if control_schema:
+        if vector.packet_policy not in {
+            "approved-dns-prefetch-zero", "approved-dns-prefetch-positive"
+        }:
+            raise ValueError("DNS control sink schema is not valid for this vector")
+        hostname = FIXTURE_TOPOLOGY["browser_service_controls"]["dns_exception_hostname"]
+        control = validate_dns_control_evidence(
+            dns["control"],
+            hostname=hostname,
+            allowed_peers=FIXTURE_TOPOLOGY["browser_addresses"],
+            enabled=vector.packet_policy == "approved-dns-prefetch-positive",
+        )
+        observed_queries = control["queries"]
+        expected["schema_version"] = DNS_CONTROL_SINK_RECEIPT_SCHEMA_VERSION
+        expected["dns"] = {
+            "udp_queries_received": len(observed_queries),
+            "tcp_queries_received": 0,
+            "query_names": [hostname] * len(observed_queries),
+            "ip_versions": {
+                family: {
+                    "udp_queries_received": sum(
+                        ipaddress.ip_address(query["peer_ip"]).version == version
+                        for query in observed_queries
+                    ),
+                    "tcp_queries_received": 0,
+                    "query_names": [
+                        hostname for query in observed_queries
+                        if ipaddress.ip_address(query["peer_ip"]).version == version
+                    ],
+                }
+                for family, version in (("ipv4", 4), ("ipv6", 6))
+            },
+            "control": control,
+        }
     if {key: value[key] for key in ("schema_version", "vector_id", "tcp", "udp", "dns")} != {
         key: expected[key] for key in ("schema_version", "vector_id", "tcp", "udp", "dns")
     }:

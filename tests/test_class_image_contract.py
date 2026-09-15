@@ -121,7 +121,7 @@ def test_prepare_image_installs_browser_egress_roles_and_packet_tools() -> None:
         "      /usr/local/bin/qcsd-browser-egress-qualification"
     ) in dockerfile
     for config in (
-        "browser-egress-qualification-v1.json",
+        "browser-egress-qualification-v2.json",
         "browser-egress-chromium-argv-v1.json",
     ):
         assert f'root / "config/class-study/v1/{config}"' in dockerfile

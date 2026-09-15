@@ -53,6 +53,7 @@ from qcsd_lab.browser_egress_fixture import (
 )
 from qcsd_lab.browser_egress_observer import (
     LivePacketObserver,
+    PacketPolicyError,
     reconcile_sink_and_packet_evidence,
     validate_capture_receipt,
 )
@@ -101,6 +102,9 @@ CAPTURE_CLOSURE_PATH = Path("/tmp/qcsd-browser-egress-capture-closure.json")
 CAPTURE_CLOSED_READY_PATH = Path("/tmp/qcsd-browser-egress-capture-closed.ready")
 CAPTURE_ANALYSIS_FAILED_READY_PATH = Path(
     "/tmp/qcsd-browser-egress-capture-analysis-failed.ready"
+)
+CAPTURE_POLICY_FAILED_READY_PATH = Path(
+    "/tmp/qcsd-browser-egress-capture-policy-failed.ready"
 )
 RECEIPT_READY_PATH = Path("/tmp/qcsd-browser-egress-receipt.ready")
 STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM)
@@ -436,7 +440,16 @@ def _forbidden_sink(args: argparse.Namespace) -> None:
 def _dns_sink(args: argparse.Namespace) -> None:
     vector = vector_by_id(args.vector_id)
     stopped = _install_stop_event()
-    sink = IndependentDnsSink("::", FIXTURE_TOPOLOGY["ports"]["dns"])
+    control_hostname = (
+        FIXTURE_TOPOLOGY["browser_service_controls"]["dns_exception_hostname"]
+        if vector.packet_policy in {
+            "approved-dns-prefetch-zero", "approved-dns-prefetch-positive"
+        }
+        else None
+    )
+    sink = IndependentDnsSink(
+        "::", FIXTURE_TOPOLOGY["ports"]["dns"], control_hostname=control_hostname
+    )
     sink.start()
     ready_ns = _ready()
     _wait(stopped)
@@ -1062,9 +1075,12 @@ def _observer(args: argparse.Namespace) -> None:
     _wait(capture_extracted)
     try:
         receipt = observer.finish_closed_capture(vector=vector, closure=closure)
-    except Exception:  # noqa: BLE001 - every decoder failure must preserve the tmpfs evidence
+    except Exception as error:  # noqa: BLE001 - retain every closed-capture failure
         traceback.print_exc(file=sys.stderr)
-        CAPTURE_ANALYSIS_FAILED_READY_PATH.write_text("failed\n", encoding="ascii")
+        if isinstance(error, PacketPolicyError):
+            CAPTURE_POLICY_FAILED_READY_PATH.write_text("failed\n", encoding="ascii")
+        else:
+            CAPTURE_ANALYSIS_FAILED_READY_PATH.write_text("failed\n", encoding="ascii")
         # Keep the mount-free tmpfs alive until the coordinator has preserved
         # the closure and raw PCAP as non-promoted failure evidence.
         _wait(stopped)

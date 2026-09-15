@@ -13,13 +13,14 @@ These repository-local rules apply throughout `neqo-qcsd-lab/`.
 - Report accepted scientific counters only from final deep-verified receipts.
   Historical passing prefixes and non-evidentiary probes advance no numerator.
 - At this checkpoint, use **browser-egress 0/110, certification 0/900, formal
-  capture 0/16,000**. V86's build/completion and pinned-CDP receipts verify.
-  Its checkpoint preserves 97 passing vectors and a vector-98 operational
-  failure caused by requesting a default-profile tab without an existing
-  window. The window-creation and cleanup fix passes 630 selected host tests
-  and 13 real-Chromium integration tests. These regression checks do not
-  authorise old-cohort resume or a qualification pass. Preserve v86; v87 is
-  the next planned fresh cohort at 13 September 2026. Re-read
+  capture 0/16,000**. V87 completed build and pinned-CDP checks, then preserved
+  98 passing vectors and a vector-99 DNS-prefetch failure. Pending fixes add
+  bounded DNS replies, four-leg packet/sink accounting and fresh-version
+  enforcement. The local Lab suite completed with 5,237 passed and 26 skipped;
+  this does not authorise a qualification pass or old-cohort resume. Fresh-image
+  validation and a fresh pinned build remain required. Preserve
+  v87's original failure and all evidence. V88 is the next planned fresh cohort
+  at 15 September 2026, subject to allocator authority. Re-read
   [README.md](README.md), the latest immutable receipts, and live checkpoint
   state before any later update rather than carrying these figures forward
   from memory.
@@ -70,6 +71,9 @@ These repository-local rules apply throughout `neqo-qcsd-lab/`.
 - Use `apply_patch` for file edits. Preserve unrelated user changes in the
   shared worktree, and do not commit or tag unless the user or coordinating
   agent authorises it.
+- For local documentation and agent guidance, link only to repository-relative,
+  tracked files. Do not reference private parent-workspace notes, ledgers, or
+  archived READMEs; a fresh checkout must contain the referenced guidance.
 - If a client/Lab/defence defect appears during the campaign, diagnose and fix
   it within client-only scope, preserve the failed cohort, validate the fix,
   and restart under a fresh cohort. Do not weaken an acceptance gate.

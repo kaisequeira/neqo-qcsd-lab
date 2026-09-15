@@ -1,6 +1,6 @@
 # QCSD Lab operator guide
 
-Documentation refresh: 13 September 2026, Australia/Sydney (AEST, UTC+10)
+Documentation refresh: 15 September 2026, Australia/Sydney (AEST, UTC+10)
 
 This repository orchestrates reproducible HTTP/3 traffic capture for the QCSD
 Neqo fork. It freezes workload graphs, runs visits under a selected client-side
@@ -22,16 +22,23 @@ selectable modes**. BuFLO and CS-BuFLO are candidate client-only QUIC
 adaptations, not bilateral or paper-equivalent implementations. Do not claim
 seven validated defences until the final validation attestation verifies.
 
-Cohort v86 binds clean Lab `7ad66e1a512574d3e660ec9ce06e50db7d089c5b` and
+Cohort v87 binds Lab `4db93077025fcc16eeab427aef0880bff69abb5c` and
 Rust/gitlink `46313bef90ad392b7ca293ab7cf28108d2f35c7f`. Its no-cache
-build/completion and pinned-CDP receipts verify. Browser-egress preserves 97
-passing vector receipts and an operational failure at vector 98: the first
-default-profile control requested a tab without an existing window. No final
-browser-egress receipt exists. The client-side window-creation and cleanup fix
-passes 630 selected host tests and all 13 real-Chromium integration tests;
-these are regression checks, not replacement qualification evidence. Retain
-v86 and rebuild under a fresh cohort (next planned: v87) before downstream
-reproof. Scientific progress remains browser-egress **0/110**, certification
+build/completion and pinned-CDP checks completed. Browser-egress preserves 98
+passing vector receipts, then a failure at vector 99 (enabled DNS prefetch).
+The failure exposed a passive DNS fixture and incorrect accounting of Docker's
+local-resolver and forwarded packet legs. Preserve its original failure
+classification and bytes; no final browser-egress receipt exists.
+
+The pending source fixes add bounded authoritative DNS replies, exact four-leg
+packet/sink reconciliation and versioned receipt requirements. The complete
+local Lab suite passed on 15 September: 5,237 passed and 26 explicitly skipped;
+skips are not passes. Fresh-image qualification remains required, including
+the image-only Chromium checks. Manifest v2 and foundation schema 5 apply to
+fresh execution;
+historical contracts remain replay-only. Retain v87 and use the allocator's
+next unused cohort (planned: v88) for all 110 checks and downstream reproof.
+Scientific progress remains browser-egress **0/110**, certification
 **0/900**, and formal capture **0/16,000**.
 
 The nine modes, in stable order, are `undefended`, `static`, `front`, `tamaraw`,

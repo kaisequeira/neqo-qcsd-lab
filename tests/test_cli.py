@@ -3233,11 +3233,14 @@ def test_browser_egress_observer_protocol_extracts_closed_pcap_before_exit() -> 
     assert 'cp "${browser_egress_observer_id}:/tmp/capture.pcapng"' not in measured
 
 
-@pytest.mark.parametrize("analysis_fails", [False, True])
+@pytest.mark.parametrize(
+    ("analysis_fails", "policy_failure"), [(False, False), (True, False), (True, True)]
+)
 def test_browser_egress_observer_two_phase_close_survives_analysis_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     analysis_fails: bool,
+    policy_failure: bool,
 ) -> None:
     tool_path = Path(__file__).parents[1] / "tools/browser_egress_qualification.py"
     namespace = runpy.run_path(str(tool_path), run_name="qcsd_browser_egress_observer_test")
@@ -3274,17 +3277,21 @@ def test_browser_egress_observer_two_phase_close_survives_analysis_failure(
         def finish_closed_capture(self, **_kwargs: object) -> dict:
             sequence.append("analyse")
             if analysis_fails:
+                if policy_failure:
+                    raise role_globals["PacketPolicyError"]("synthetic packet policy failure")
                 raise ValueError("synthetic post-capture analysis failure")
             return {"schema_version": 2, "pcap": closure["pcap"]}
 
     closure_destination = tmp_path / "published-closure.json"
     closed_marker = tmp_path / "capture-closed.ready"
     failed_marker = tmp_path / "analysis-failed.ready"
+    policy_marker = tmp_path / "policy-failed.ready"
     receipt_marker = tmp_path / "receipt.ready"
     monkeypatch.setitem(role_globals, "LivePacketObserver", FakeObserver)
     monkeypatch.setitem(role_globals, "CAPTURE_CLOSURE_PATH", closure_destination)
     monkeypatch.setitem(role_globals, "CAPTURE_CLOSED_READY_PATH", closed_marker)
     monkeypatch.setitem(role_globals, "CAPTURE_ANALYSIS_FAILED_READY_PATH", failed_marker)
+    monkeypatch.setitem(role_globals, "CAPTURE_POLICY_FAILED_READY_PATH", policy_marker)
     monkeypatch.setitem(role_globals, "RECEIPT_READY_PATH", receipt_marker)
     monkeypatch.setitem(role_globals, "SUBJECT_STARTED_READY_PATH", tmp_path / "subject.ready")
     monkeypatch.setitem(role_globals, "GRACE_READY_PATH", tmp_path / "grace.ready")
@@ -3304,13 +3311,17 @@ def test_browser_egress_observer_two_phase_close_survives_analysis_failure(
         with pytest.raises(SystemExit) as error:
             observer_function(args)
         assert error.value.code == 1
-        assert failed_marker.read_text(encoding="ascii") == "failed\n"
+        selected_marker = policy_marker if policy_failure else failed_marker
+        unselected_marker = failed_marker if policy_failure else policy_marker
+        assert selected_marker.read_text(encoding="ascii") == "failed\n"
+        assert not unselected_marker.exists()
         assert not receipt_marker.exists()
         assert emitted == []
         assert sequence[-2:] == ["analyse", "wait"]
     else:
         observer_function(args)
         assert not failed_marker.exists()
+        assert not policy_marker.exists()
         assert receipt_marker.read_text(encoding="ascii") == "ready\n"
         assert len(emitted) == 1 and emitted[0]["role"] == "observer"
         assert sequence[-3:] == ["wait", "analyse", "wait"]
@@ -3322,7 +3333,7 @@ def test_browser_egress_observer_two_phase_close_survives_analysis_failure(
 
 @pytest.mark.parametrize(
     ("marker", "expected_status"),
-    [("receipt", 0), ("analysis-failed", 1)],
+    [("receipt", 0), ("analysis-failed", 1), ("policy-failed", 1)],
 )
 def test_browser_egress_observer_finalisation_distinguishes_analysis_failure(
     tmp_path: Path,
@@ -3338,16 +3349,26 @@ def test_browser_egress_observer_finalisation_distinguishes_analysis_failure(
         "set -euo pipefail\n"
         + finalisation
         + f"MARKER={marker!r}\n"
+        + "browser_egress_failure_verdict=operational-failure\n"
+        + "browser_egress_failure_code=capture-process-failed\n"
+        + "browser_egress_failure_stage=capture-finalization\n"
         + "_qcsd_docker_api() {\n"
         + '  if [[ "$1" == exec && "$5" == /tmp/qcsd-browser-egress-receipt.ready ]]; '
         + 'then [[ "$MARKER" == receipt ]]; return; fi\n'
+        + '  if [[ "$1" == exec && "$5" == '
+        + '/tmp/qcsd-browser-egress-capture-policy-failed.ready ]]; '
+        + 'then [[ "$MARKER" == policy-failed ]]; return; fi\n'
         + '  if [[ "$1" == exec && "$5" == '
         + '/tmp/qcsd-browser-egress-capture-analysis-failed.ready ]]; '
         + 'then [[ "$MARKER" == analysis-failed ]]; return; fi\n'
         + '  if [[ "$1 $2" == "container inspect" ]]; then echo running; return; fi\n'
         + "  return 90\n"
         + "}\n"
-        + "browser_egress_wait_observer_finalisation observer\n",
+        + "if browser_egress_wait_observer_finalisation observer; then result=0; "
+        + "else result=$?; fi\n"
+        + 'printf "%s %s %s\\n" "$browser_egress_failure_verdict" '
+        + '"$browser_egress_failure_code" "$browser_egress_failure_stage"\n'
+        + 'exit "$result"\n',
         encoding="utf-8",
     )
     completed = subprocess.run(
@@ -3356,8 +3377,15 @@ def test_browser_egress_observer_finalisation_distinguishes_analysis_failure(
     assert completed.returncode == expected_status
     if marker == "analysis-failed":
         assert "rejected the closed capture during analysis" in completed.stderr
+    elif marker == "policy-failed":
+        assert "rejected the closed capture packet policy" in completed.stderr
     else:
         assert completed.stderr == ""
+    assert completed.stdout.strip() == (
+        "semantic-failure packet-policy-failed packet-policy"
+        if marker == "policy-failed"
+        else "operational-failure capture-process-failed capture-finalization"
+    )
 
 
 def test_browser_egress_runtime_projection_declares_stdout_destination() -> None:

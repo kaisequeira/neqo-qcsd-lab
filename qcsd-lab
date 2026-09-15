@@ -9884,6 +9884,15 @@ browser_egress_wait_observer_finalisation() {
   deadline=$((SECONDS + 30))
   while (( SECONDS < deadline )); do
     if _qcsd_docker_api exec "${container_id}" \
+        test -f /tmp/qcsd-browser-egress-capture-policy-failed.ready \
+        >/dev/null 2>&1; then
+      browser_egress_failure_verdict=semantic-failure
+      browser_egress_failure_code=packet-policy-failed
+      browser_egress_failure_stage=packet-policy
+      echo "browser-egress observer rejected the closed capture packet policy" >&2
+      return 1
+    fi
+    if _qcsd_docker_api exec "${container_id}" \
         test -f /tmp/qcsd-browser-egress-receipt.ready >/dev/null 2>&1; then
       return 0
     fi

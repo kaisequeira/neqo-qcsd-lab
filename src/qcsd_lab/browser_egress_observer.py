@@ -9,6 +9,7 @@ forbidden transport was prevented.
 from __future__ import annotations
 
 import csv
+import hashlib
 import ipaddress
 import json
 import os
@@ -22,6 +23,12 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .browser_egress_dns_packets import (
+    dns_control_packet_projection,
+    dns_control_packet_route,
+    reconcile_dns_control_packets,
+    validate_dns_control_packets,
+)
 from .browser_egress_fixture import (
     FIXTURE_TOPOLOGY,
     BrowserEgressVector,
@@ -30,9 +37,9 @@ from .browser_egress_fixture import (
 from .class_study import canonical_json_bytes
 from .util import sha256_file
 
-PACKET_RECORD_SCHEMA_VERSION = 1
-PACKET_ANALYSIS_SCHEMA_VERSION = 4
-HISTORICAL_PACKET_ANALYSIS_SCHEMA_VERSIONS = frozenset({3})
+PACKET_RECORD_SCHEMA_VERSION = 2
+PACKET_ANALYSIS_SCHEMA_VERSION = 5
+HISTORICAL_PACKET_ANALYSIS_SCHEMA_VERSIONS = frozenset({3, 4})
 SUPPORTED_PACKET_ANALYSIS_SCHEMA_VERSIONS = (
     HISTORICAL_PACKET_ANALYSIS_SCHEMA_VERSIONS | {PACKET_ANALYSIS_SCHEMA_VERSION}
 )
@@ -40,7 +47,7 @@ CAPTURE_RECEIPT_SCHEMA_VERSION = 2
 CAPTURE_ARTIFACT_TYPE = "qcsd-browser-egress-packet-capture"
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 
-TSHARK_FIELDS = (
+HISTORICAL_TSHARK_FIELDS = (
     "frame.number",
     "frame.time_epoch",
     "frame.interface_id",
@@ -59,6 +66,59 @@ TSHARK_FIELDS = (
     "dns.flags.response",
     "dns.qry.name",
 )
+TSHARK_FIELDS = HISTORICAL_TSHARK_FIELDS + (
+    "frame.protocols",
+    "ip.proto",
+    "ipv6.nxt",
+    "ipv6.hopopts.nxt",
+    "ipv6.routing.nxt",
+    "ipv6.fraghdr.nxt",
+    "ipv6.dstopts.nxt",
+    "ah.next_header",
+    "icmp.type",
+    "icmp.code",
+    "icmpv6.type",
+    "icmpv6.code",
+    "dns.id",
+    "dns.count.queries",
+    "dns.qry.type",
+    "dns.qry.class",
+    "dns.flags.rcode",
+    "udp.payload",
+)
+_V2_RECORD_FIELDS = {
+    "outer_ip_protocol", "quoted_transport", "icmp_type", "icmp_code",
+    "dns_id", "dns_type", "dns_class", "dns_rcode", "dns_payload_sha256",
+}
+_CONTROL_DIAGNOSTIC_FIELDS = {
+    "decoded_control_packets", "control_ipv4_packets", "control_ipv6_packets",
+    "icmp_packets", "icmpv6_packets", "quoted_tcp_packets", "quoted_udp_packets",
+    "other_ip_packets",
+}
+_DNS_CONTROL_POLICIES = {"approved-dns-prefetch-zero", "approved-dns-prefetch-positive"}
+_OBSERVED_DNS_CONTROL_FIELDS = {
+    "dns_udp_queries", "dns_udp_queries_ipv4", "dns_udp_queries_ipv6",
+    "dns_udp_datagrams", "dns_udp_datagrams_ipv4", "dns_udp_datagrams_ipv6",
+    "dns_udp_responses", "dns_udp_responses_ipv4", "dns_udp_responses_ipv6",
+    "dns_query_names", "dns_control_packets",
+}
+
+
+class PacketPolicyError(ValueError):
+    """Well-formed packet evidence violates the selected vector's policy."""
+
+
+def tshark_fields(analysis_schema_version: int) -> tuple[str, ...]:
+    """Bind historical receipts to their original field/decoding contract."""
+
+    if (
+        type(analysis_schema_version) is not int
+        or analysis_schema_version not in SUPPORTED_PACKET_ANALYSIS_SCHEMA_VERSIONS
+    ):
+        raise ValueError("browser-egress packet analysis schema is unsupported")
+    if analysis_schema_version in HISTORICAL_PACKET_ANALYSIS_SCHEMA_VERSIONS:
+        return HISTORICAL_TSHARK_FIELDS
+    return TSHARK_FIELDS
 
 
 def _tool_version_stdout_first_line(executable: Path, *, label: str) -> str:
@@ -158,13 +218,15 @@ def validate_packet_record(value: object) -> dict[str, Any]:
         "dns_kind",
         "dns_name",
     }
-    if not isinstance(value, Mapping) or set(value) != fields:
+    if not isinstance(value, Mapping):
         raise ValueError("browser-egress packet record fields are invalid")
-    if (
-        type(value["schema_version"]) is not int
-        or value["schema_version"] != PACKET_RECORD_SCHEMA_VERSION
-    ):
+    schema_version = value.get("schema_version")
+    if type(schema_version) is not int or schema_version not in {1, 2}:
         raise ValueError("browser-egress packet record schema is invalid")
+    if schema_version == 2:
+        fields |= _V2_RECORD_FIELDS
+    if set(value) != fields:
+        raise ValueError("browser-egress packet record fields are invalid")
     _integer(value["frame_number"], label="frame number", minimum=1)
     _integer(value["timestamp_ns"], label="packet timestamp")
     interface_id = value["interface_id"]
@@ -175,17 +237,24 @@ def validate_packet_record(value: object) -> dict[str, Any]:
     if src_version != dst_version or value["ip_version"] != src_version:
         raise ValueError("browser-egress packet IP family is inconsistent")
     transport = value["transport"]
-    if transport not in {"tcp", "udp"}:
+    transports = {"tcp", "udp"} if schema_version == 1 else {
+        "tcp", "udp", "icmp", "icmpv6", "other",
+    }
+    if transport not in transports:
         raise ValueError("browser-egress packet transport is invalid")
     for key in ("src_port", "dst_port"):
+        if transport not in {"tcp", "udp"}:
+            if value[key] is not None:
+                raise ValueError("control packet cannot carry transport ports")
+            continue
         port = _integer(value[key], label=f"packet {key}")
         if port > 65_535:
             raise ValueError(f"packet {key} exceeds 65535")
     for key in ("tcp_syn", "tcp_ack"):
         if type(value[key]) is not bool:
             raise ValueError(f"packet {key} must be a boolean")
-    if transport == "udp" and (value["tcp_syn"] or value["tcp_ack"]):
-        raise ValueError("UDP packet cannot carry TCP flags")
+    if transport != "tcp" and (value["tcp_syn"] or value["tcp_ack"]):
+        raise ValueError("non-TCP packet cannot carry TCP flags")
     _integer(value["payload_bytes"], label="packet payload bytes")
     dns_kind = value["dns_kind"]
     dns_name = value["dns_name"]
@@ -196,6 +265,44 @@ def validate_packet_record(value: object) -> dict[str, Any]:
             raise ValueError("non-DNS packet cannot carry a DNS name")
     elif not isinstance(dns_name, str) or not dns_name or dns_name != dns_name.lower().rstrip("."):
         raise ValueError("browser-egress packet DNS name is not canonical")
+    if schema_version == 2:
+        protocol = _integer(value["outer_ip_protocol"], label="outer IP protocol")
+        if protocol > 255:
+            raise ValueError("outer IP protocol exceeds 255")
+        expected_transport = {6: "tcp", 17: "udp", 1: "icmp", 58: "icmpv6"}.get(
+            protocol, "other"
+        )
+        if transport != expected_transport or (
+            transport in {"icmp", "icmpv6"}
+            and src_version != {"icmp": 4, "icmpv6": 6}[transport]
+        ):
+            raise ValueError("outer IP protocol and transport are inconsistent")
+        if value["quoted_transport"] not in {None, "tcp", "udp"}:
+            raise ValueError("quoted transport is invalid")
+        if transport in {"icmp", "icmpv6"}:
+            for key in ("icmp_type", "icmp_code"):
+                if _integer(value[key], label=key) > 255:
+                    raise ValueError(f"{key} exceeds 255")
+        elif any(value[key] is not None for key in (
+            "icmp_type", "icmp_code", "quoted_transport",
+        )):
+            raise ValueError("non-ICMP packet cannot carry ICMP diagnostics")
+        dns_fields = ("dns_id", "dns_type", "dns_class", "dns_rcode")
+        if dns_kind == "none":
+            if any(value[key] is not None for key in (*dns_fields, "dns_payload_sha256")):
+                raise ValueError("non-DNS packet cannot carry DNS transaction fields")
+        else:
+            if transport not in {"tcp", "udp"}:
+                raise ValueError("control packet cannot carry a DNS transaction")
+            for key in dns_fields:
+                if _integer(value[key], label=key) > (15 if key == "dns_rcode" else 65_535):
+                    raise ValueError(f"{key} exceeds its wire range")
+            if dns_kind == "query" and value["dns_rcode"] != 0:
+                raise ValueError("DNS query cannot carry a response error code")
+            if transport == "udp":
+                _digest(value["dns_payload_sha256"], label="DNS payload SHA-256")
+            elif value["dns_payload_sha256"] is not None:
+                raise ValueError("TCP DNS packet cannot carry a UDP payload digest")
     return json.loads(canonical_json_bytes(value))
 
 
@@ -252,13 +359,19 @@ def _empty_analysis(
         "approved_nel_error_initial_syn": 0,
         "unexpected_browser_egress_packets": 0,
     }
-    if schema_version == PACKET_ANALYSIS_SCHEMA_VERSION:
+    if schema_version >= 4:
         analysis.update(
             {
                 "timestamp_regressions": 0,
                 "maximum_timestamp_regression_ns": 0,
             }
         )
+    if schema_version >= 5:
+        analysis.update(dict.fromkeys(_CONTROL_DIAGNOSTIC_FIELDS, 0))
+        analysis["dns_control_packets"] = []
+        for transport in ("udp", "tcp"):
+            for suffix in ("", "_ipv4", "_ipv6"):
+                analysis[f"dns_{transport}_responses{suffix}"] = 0
     return analysis
 
 
@@ -279,11 +392,14 @@ def analyse_packet_records(
     fixture = set(FIXTURE_TOPOLOGY["fixture_addresses"])
     forbidden = set(FIXTURE_TOPOLOGY["forbidden_sink_addresses"])
     dns_sinks = set(FIXTURE_TOPOLOGY["dns_sink_addresses"])
+    paired_dns_control = analysis_schema_version >= 5 and vector.packet_policy in _DNS_CONTROL_POLICIES
     last_frame = 0
     last_time = -1
     names: list[str] = []
     for raw in records:
         record = validate_packet_record(raw)
+        if analysis_schema_version < 5 and record["schema_version"] != 1:
+            raise ValueError("historical packet analysis requires version-1 records")
         frame = record["frame_number"]
         timestamp = record["timestamp_ns"]
         # frame.number is the file/capture-order authority.  libpcap timestamps
@@ -294,7 +410,7 @@ def analyse_packet_records(
                 "browser-egress packet record frame numbers are not strictly increasing"
             )
         if last_time >= 0 and timestamp < last_time:
-            if analysis_schema_version in HISTORICAL_PACKET_ANALYSIS_SCHEMA_VERSIONS:
+            if analysis_schema_version == 3:
                 # Schema 3 made timestamp monotonicity part of its acceptance
                 # contract.  Retain that exact historical behaviour when old
                 # receipts are replayed; only schema 4 adopts frame-number
@@ -307,6 +423,17 @@ def analyse_packet_records(
             )
         last_frame = frame
         last_time = timestamp
+        if record["transport"] not in {"tcp", "udp"}:
+            analysis["decoded_control_packets"] += 1
+            analysis[f"control_ipv{record['ip_version']}_packets"] += 1
+            if record["transport"] in {"icmp", "icmpv6"}:
+                analysis[f"{record['transport']}_packets"] += 1
+                if record["quoted_transport"] is not None:
+                    analysis[f"quoted_{record['quoted_transport']}_packets"] += 1
+            else:
+                analysis["other_ip_packets"] += 1
+                analysis["unexpected_browser_egress_packets"] += 1
+            continue
         analysis["decoded_transport_packets"] += 1
         analysis[f"ipv{record['ip_version']}_packets"] += 1
         outbound = record["src"] in browser
@@ -335,6 +462,16 @@ def analyse_packet_records(
             and record["src"] in dns_sinks
             and record["src_port"] == FIXTURE_TOPOLOGY["ports"]["dns"]
         )
+        control_route = None
+        if paired_dns_control and (
+            record["dns_kind"] != "none" or dns_exchange
+            or {record["src"], record["dst"]} == {"127.0.0.1", "127.0.0.11"}
+        ):
+            projection = dns_control_packet_projection(record)
+            analysis["dns_control_packets"].append(projection)
+            control_route = dns_control_packet_route(
+                projection, browser_addresses=browser, sink_addresses=dns_sinks
+            )
         forbidden_tcp = record["transport"] == "tcp" and (
             to_forbidden
             and record["dst_port"] == FIXTURE_TOPOLOGY["ports"]["forbidden_tcp"]
@@ -354,6 +491,7 @@ def analyse_packet_records(
             or forbidden_tcp
             or forbidden_udp
             or local_namespace
+            or control_route is not None
         ):
             # The capture runs inside the browser network namespace on `any`.
             # Unknown source addresses therefore cannot be discarded as
@@ -430,6 +568,9 @@ def analyse_packet_records(
                 analysis["dns_tcp_queries"] += 1
                 analysis[f"dns_tcp_queries_ipv{record['ip_version']}"] += 1
             names.append(record["dns_name"])
+        elif analysis_schema_version >= 5 and record["dns_kind"] == "response":
+            analysis[f"dns_{record['transport']}_responses"] += 1
+            analysis[f"dns_{record['transport']}_responses_ipv{record['ip_version']}"] += 1
         if outbound and record["dst_port"] == FIXTURE_TOPOLOGY["ports"]["dns"]:
             if record["transport"] == "udp":
                 analysis["dns_udp_datagrams"] += 1
@@ -458,7 +599,7 @@ def expected_packet_analysis(
             vector.vector_id, schema_version=analysis_schema_version
         ).items()
         if key
-        not in {
+        not in _CONTROL_DIAGNOSTIC_FIELDS | {
             "decoded_transport_packets",
             "ipv4_packets",
             "ipv6_packets",
@@ -517,21 +658,23 @@ def expected_packet_analysis(
             }
         )
     elif vector.packet_policy == "approved-dns-prefetch-positive":
-        count = FIXTURE_TOPOLOGY["browser_service_controls"][
-            "dns_positive_query_count"
-        ]
-        name = FIXTURE_TOPOLOGY["browser_service_controls"][
-            "dns_exception_hostname"
-        ]
-        expected.update(
-            {
-                "dns_udp_queries": count,
-                "dns_udp_queries_ipv4": count,
-                "dns_udp_datagrams": count,
-                "dns_udp_datagrams_ipv4": count,
-                "dns_query_names": [name] * count,
-            }
-        )
+        if analysis_schema_version >= 5:
+            # Browser/resolver query counts are observed. The complete four-leg
+            # and independent socket-wire inventories are the exact witness.
+            for key in _OBSERVED_DNS_CONTROL_FIELDS:
+                expected.pop(key)
+        else:
+            count = FIXTURE_TOPOLOGY["browser_service_controls"]["dns_positive_query_count"]
+            name = FIXTURE_TOPOLOGY["browser_service_controls"]["dns_exception_hostname"]
+            expected.update(
+                {
+                    "dns_udp_queries": count,
+                    "dns_udp_queries_ipv4": count,
+                    "dns_udp_datagrams": count,
+                    "dns_udp_datagrams_ipv4": count,
+                    "dns_query_names": [name] * count,
+                }
+            )
     elif vector.packet_policy == "approved-preconnect-positive":
         expected.update(
             {
@@ -562,16 +705,27 @@ def validate_packet_analysis(value: object, *, vector: BrowserEgressVector) -> d
     )
     if set(value) != expected_fields:
         raise ValueError("browser-egress packet analysis fields are invalid")
-    for key in expected_fields - {"vector_id", "dns_query_names"}:
+    for key in expected_fields - {"vector_id", "dns_query_names", "dns_control_packets"}:
         if key == "schema_version":
             continue
         _integer(value[key], label=f"packet analysis {key}")
     if value["decoded_transport_packets"] != value["ipv4_packets"] + value["ipv6_packets"]:
         raise ValueError("browser-egress packet family counts do not reconcile")
-    if schema_version == PACKET_ANALYSIS_SCHEMA_VERSION:
+    if schema_version >= 5:
+        if value["decoded_control_packets"] != (
+            value["control_ipv4_packets"] + value["control_ipv6_packets"]
+        ) or value["decoded_control_packets"] != (
+            value["icmp_packets"] + value["icmpv6_packets"] + value["other_ip_packets"]
+        ) or value["quoted_tcp_packets"] + value["quoted_udp_packets"] > (
+            value["icmp_packets"] + value["icmpv6_packets"]
+        ):
+            raise ValueError("browser-egress control packet diagnostics do not reconcile")
+    if schema_version >= 4:
         regressions = value["timestamp_regressions"]
         maximum_regression = value["maximum_timestamp_regression_ns"]
-        possible_adjacent_pairs = max(0, value["decoded_transport_packets"] - 1)
+        possible_adjacent_pairs = max(
+            0, value["decoded_transport_packets"] + value.get("decoded_control_packets", 0) - 1
+        )
         if (
             regressions > possible_adjacent_pairs
             or (regressions == 0) != (maximum_regression == 0)
@@ -591,7 +745,38 @@ def validate_packet_analysis(value: object, *, vector: BrowserEgressVector) -> d
     )
     for key, wanted in expected.items():
         if value[key] != wanted:
-            raise ValueError(f"browser-egress packet policy failed at {key}")
+            raise PacketPolicyError(f"browser-egress packet policy failed at {key}")
+    if schema_version >= 5 and vector.packet_policy in _DNS_CONTROL_POLICIES:
+        try:
+            routes = validate_dns_control_packets(
+                value["dns_control_packets"],
+                hostname=FIXTURE_TOPOLOGY["browser_service_controls"]["dns_exception_hostname"],
+                browser_addresses=FIXTURE_TOPOLOGY["browser_addresses"],
+                sink_addresses=FIXTURE_TOPOLOGY["dns_sink_addresses"],
+                enabled=vector.packet_policy == "approved-dns-prefetch-positive",
+            )
+        except ValueError as error:
+            raise PacketPolicyError(str(error)) from error
+        queries = routes["resolver-query"] + routes["sink-query"]
+        responses = routes["sink-response"] + routes["resolver-response"]
+        if len(queries) + len(responses) > value["decoded_transport_packets"] or any(
+            sum(p["ip_version"] == family for p in queries + responses) > value[f"ipv{family}_packets"]
+            for family in (4, 6)
+        ):
+            raise PacketPolicyError("DNS packet inventory exceeds captured transport/family totals")
+        inventories = {
+            "dns_udp_queries": queries,
+            "dns_udp_responses": responses,
+            "dns_udp_datagrams": routes["sink-query"],
+        }
+        for key, packets in inventories.items():
+            if value[key] != len(packets) or any(
+                value[f"{key}_ipv{family}"] != sum(p["ip_version"] == family for p in packets)
+                for family in (4, 6)
+            ):
+                raise PacketPolicyError(f"browser-egress DNS packet counts disagree at {key}")
+        if value["dns_query_names"] != sorted(p["dns_name"] for p in queries):
+            raise PacketPolicyError("browser-egress DNS names disagree with the packet inventory")
     return json.loads(canonical_json_bytes(value))
 
 
@@ -600,6 +785,26 @@ def reconcile_sink_and_packet_evidence(
 ) -> None:
     packet = validate_packet_analysis(analysis, vector=vector)
     counters = validate_sink_receipt(sink, vector=vector)
+    if packet["schema_version"] >= 5 and vector.packet_policy in _DNS_CONTROL_POLICIES:
+        if counters["schema_version"] != 2:
+            raise ValueError("current DNS packet evidence requires a schema-2 wire-bound sink")
+        reconcile_dns_control_packets(
+            packet["dns_control_packets"], counters["dns"]["control"],
+            hostname=FIXTURE_TOPOLOGY["browser_service_controls"]["dns_exception_hostname"],
+            browser_addresses=FIXTURE_TOPOLOGY["browser_addresses"],
+            sink_addresses=FIXTURE_TOPOLOGY["dns_sink_addresses"],
+            enabled=vector.packet_policy == "approved-dns-prefetch-positive",
+        )
+        # The independent sink sees only the external leg. Namespace totals
+        # above deliberately retain both copies; never compare those to socket
+        # arrivals, and never mutate the sealed analysis while projecting it.
+        queries = [p for p in packet["dns_control_packets"] if (
+            p["dns_kind"] == "query" and p["src"] in FIXTURE_TOPOLOGY["browser_addresses"]
+        )]
+        packet["dns_udp_queries"] = len(queries)
+        packet["dns_query_names"] = sorted(p["dns_name"] for p in queries)
+        for family in (4, 6):
+            packet[f"dns_udp_queries_ipv{family}"] = sum(p["ip_version"] == family for p in queries)
     if packet["forbidden_tcp_syn_ack"] != counters["tcp"]["accepted_connections"]:
         raise ValueError("PCAP and sink disagree on accepted TCP connection count")
     if packet["forbidden_tcp_payload_bytes"] != counters["tcp"]["received_payload_bytes"]:
@@ -632,7 +837,13 @@ def reconcile_sink_and_packet_evidence(
             raise ValueError(f"PCAP and sink disagree on {family} evidence")
 
 
-def tshark_command(pcap: Path, *, tshark: Path = Path("/usr/bin/tshark")) -> list[str]:
+def tshark_command(
+    pcap: Path,
+    *,
+    tshark: Path = Path("/usr/bin/tshark"),
+    analysis_schema_version: int = PACKET_ANALYSIS_SCHEMA_VERSION,
+) -> list[str]:
+    fields = tshark_fields(analysis_schema_version)
     command = [
         str(tshark),
         "-n",
@@ -647,9 +858,9 @@ def tshark_command(pcap: Path, *, tshark: Path = Path("/usr/bin/tshark")) -> lis
         "-E",
         "quote=d",
         "-E",
-        "occurrence=f",
+        "occurrence=f" if analysis_schema_version < 5 else "occurrence=a",
     ]
-    for field in TSHARK_FIELDS:
+    for field in fields:
         command.extend(("-e", field))
     return command
 
@@ -662,15 +873,17 @@ def _field_integer(value: str, *, label: str, default: int | None = None) -> int
     return int(value)
 
 
-def _records_from_tshark_output(output: str) -> list[dict[str, Any]]:
+def _historical_records_from_tshark_output(output: str) -> list[dict[str, Any]]:
+    """Frozen schema-3/4 decoder, including historical dissector limitations."""
+
     records: list[dict[str, Any]] = []
     reader = csv.reader(output.splitlines(), delimiter="\t", quotechar='"')
     for columns in reader:
         if not columns or all(column == "" for column in columns):
             continue
-        if len(columns) != len(TSHARK_FIELDS):
+        if len(columns) != len(HISTORICAL_TSHARK_FIELDS):
             raise ValueError("tshark packet row has the wrong field count")
-        values = dict(zip(TSHARK_FIELDS, columns))
+        values = dict(zip(HISTORICAL_TSHARK_FIELDS, columns))
         ipv4 = values["ip.src"] or values["ip.dst"]
         src = values["ip.src"] if ipv4 else values["ipv6.src"]
         dst = values["ip.dst"] if ipv4 else values["ipv6.dst"]
@@ -705,7 +918,7 @@ def _records_from_tshark_output(output: str) -> list[dict[str, Any]]:
             payload_bytes = udp_length - 8
         interface = values["frame.interface_id"]
         record = {
-            "schema_version": PACKET_RECORD_SCHEMA_VERSION,
+            "schema_version": 1,
             "frame_number": _field_integer(values["frame.number"], label="frame number"),
             "timestamp_ns": timestamp_ns,
             "interface_id": (
@@ -727,6 +940,207 @@ def _records_from_tshark_output(output: str) -> list[dict[str, Any]]:
     return records
 
 
+def _wire_integer(value: str, *, label: str, maximum: int = 65_535) -> int:
+    if re.fullmatch(r"0x[0-9a-fA-F]+|[0-9]+", value) is None:
+        raise ValueError(f"tshark {label} is not a wire integer")
+    number = int(value, 16 if value.startswith("0x") else 10)
+    if number > maximum:
+        raise ValueError(f"tshark {label} exceeds its wire range")
+    return number
+
+
+def _wire_boolean(value: str, *, label: str) -> bool:
+    if value not in {"0", "1", "False", "True"}:
+        raise ValueError(f"tshark {label} is not a recognised boolean")
+    return value in {"1", "True"}
+
+
+def _outer_packet_layer(values: Mapping[str, list[str]]) -> tuple[int, int, int, list[str]] | None:
+    """Find the first IP header, never a quoted or tunnelled transport header."""
+
+    protocols = values["frame.protocols"]
+    if len(protocols) != 1 or not protocols[0]:
+        raise ValueError("tshark frame protocol stack is missing or ambiguous")
+    stack = protocols[0].split(":")
+    if any(not protocol for protocol in stack):
+        raise ValueError("tshark frame protocol stack is malformed")
+    ip_index = next((index for index, token in enumerate(stack) if token in {"ip", "ipv6"}), None)
+    if ip_index is None:
+        if any(values[key] for key in ("ip.src", "ipv6.src", "tcp.srcport", "udp.srcport")):
+            raise ValueError("tshark network fields have no outer IP layer")
+        return None
+    family = 4 if stack[ip_index] == "ip" else 6
+    header_field = "ip.proto" if family == 4 else "ipv6.nxt"
+    if not values[header_field]:
+        raise ValueError("tshark outer IP protocol field is missing")
+    protocol = _wire_integer(values[header_field][0], label="outer IP protocol", maximum=255)
+    extension_headers = {
+        0: "ipv6.hopopts", 43: "ipv6.routing", 44: "ipv6.fraghdr",
+        60: "ipv6.dstopts", 51: "ah",
+    }
+    position = ip_index + 1
+    consumed: dict[str, int] = {}
+    while protocol in extension_headers and (family == 6 or protocol == 51):
+        token = extension_headers[protocol]
+        field = "ah.next_header" if token == "ah" else f"{token}.nxt"
+        occurrence = consumed.get(field, 0)
+        if position >= len(stack) or stack[position] != token or occurrence >= len(values[field]):
+            raise ValueError("tshark outer IP extension chain is incomplete or inconsistent")
+        protocol = _wire_integer(values[field][occurrence], label=field, maximum=255)
+        consumed[field] = occurrence + 1
+        position += 1
+    expected_token = {6: "tcp", 17: "udp", 1: "icmp", 58: "icmpv6"}.get(protocol)
+    if expected_token is not None and (position >= len(stack) or stack[position] != expected_token):
+        raise ValueError("tshark outer IP protocol disagrees with its decoded transport")
+    return family, protocol, position, stack
+
+
+def _records_from_tshark_output(
+    output: str,
+    *,
+    analysis_schema_version: int = PACKET_ANALYSIS_SCHEMA_VERSION,
+) -> list[dict[str, Any]]:
+    """Decode versioned TSV without treating ICMP quotes as new egress."""
+
+    fields = tshark_fields(analysis_schema_version)
+    if analysis_schema_version < 5:
+        return _historical_records_from_tshark_output(output)
+    records: list[dict[str, Any]] = []
+    reader = csv.reader(output.splitlines(), delimiter="\t", quotechar='"', strict=True)
+    try:
+        for columns in reader:
+            if not columns or all(column == "" for column in columns):
+                continue
+            if len(columns) != len(fields):
+                raise ValueError("tshark packet row has the wrong field count")
+            values = {
+                field: ([] if column == "" else column.split(","))
+                for field, column in zip(fields, columns)
+            }
+            if any(any(value == "" for value in group) for group in values.values()):
+                raise ValueError("tshark packet row has an empty repeated field")
+
+            def single(field: str, *, optional: bool = False) -> str:
+                group = values[field]
+                if not group and optional:
+                    return ""
+                if len(group) != 1:
+                    raise ValueError(f"tshark {field} is missing or ambiguous")
+                return group[0]
+
+            def first(field: str) -> str:
+                if not values[field]:
+                    raise ValueError(f"tshark {field} is missing")
+                return values[field][0]
+
+            layer = _outer_packet_layer(values)
+            if layer is None:
+                continue
+            family, protocol, position, stack = layer
+            transport = {6: "tcp", 17: "udp", 1: "icmp", 58: "icmpv6"}.get(protocol, "other")
+            try:
+                timestamp = Decimal(single("frame.time_epoch")) * 1_000_000_000
+                if (
+                    not timestamp.is_finite()
+                    or timestamp < 0
+                    or timestamp != timestamp.to_integral_value()
+                ):
+                    raise ValueError("timestamp is not an exact non-negative nanosecond")
+                timestamp_ns = int(timestamp)
+            except (InvalidOperation, ValueError, OverflowError) as error:
+                raise ValueError("tshark frame timestamp is invalid") from error
+            interface = single("frame.interface_id", optional=True)
+            prefix = "ip" if family == 4 else "ipv6"
+            record = {
+                "schema_version": 2,
+                "frame_number": _field_integer(single("frame.number"), label="frame number"),
+                "timestamp_ns": timestamp_ns,
+                "interface_id": (
+                    None if not interface else _field_integer(interface, label="interface ID")
+                ),
+                "ip_version": family,
+                "src": first(f"{prefix}.src"),
+                "dst": first(f"{prefix}.dst"),
+                "transport": transport,
+                "outer_ip_protocol": protocol,
+                "src_port": None,
+                "dst_port": None,
+                "tcp_syn": False,
+                "tcp_ack": False,
+                "payload_bytes": 0,
+                "quoted_transport": None,
+                "icmp_type": None,
+                "icmp_code": None,
+                "dns_kind": "none",
+                "dns_name": None,
+                "dns_id": None,
+                "dns_type": None,
+                "dns_class": None,
+                "dns_rcode": None,
+                "dns_payload_sha256": None,
+            }
+            if transport in {"icmp", "icmpv6"}:
+                for key in ("type", "code"):
+                    record[f"icmp_{key}"] = _wire_integer(
+                        first(f"{transport}.{key}"), label=f"ICMP {key}", maximum=255
+                    )
+                # Only error messages quote earlier packets.  Their nested DNS
+                # fields are diagnostic content, never a new query/response.
+                error_types = {3, 4, 5, 11, 12} if family == 4 else {1, 2, 3, 4}
+                quoted = stack[position + 1:]
+                if record["icmp_type"] in error_types and any(
+                    token in {"ip", "ipv6"} for token in quoted
+                ):
+                    record["quoted_transport"] = next(
+                        (token for token in quoted if token in {"tcp", "udp"}), None
+                    )
+            elif transport in {"tcp", "udp"}:
+                for key in ("src", "dst"):
+                    record[f"{key}_port"] = _wire_integer(
+                        first(f"{transport}.{key}port"), label=f"{transport} {key} port"
+                    )
+                if transport == "tcp":
+                    record["payload_bytes"] = _field_integer(first("tcp.len"), label="TCP payload")
+                    record["tcp_syn"] = _wire_boolean(first("tcp.flags.syn"), label="TCP SYN")
+                    record["tcp_ack"] = _wire_boolean(first("tcp.flags.ack"), label="TCP ACK")
+                else:
+                    length = _wire_integer(first("udp.length"), label="UDP length")
+                    if length < 8:
+                        raise ValueError("tshark UDP length is smaller than its header")
+                    record["payload_bytes"] = length - 8
+                dns = position + 1 < len(stack) and stack[position + 1] == "dns"
+                if dns:
+                    response = _wire_boolean(single("dns.flags.response"), label="DNS response")
+                    if _wire_integer(single("dns.count.queries"), label="DNS question count") != 1:
+                        raise ValueError("tshark DNS transaction must contain exactly one question")
+                    record["dns_kind"] = "response" if response else "query"
+                    record["dns_name"] = single("dns.qry.name").lower().rstrip(".")
+                    for key, field in (
+                        ("dns_id", "dns.id"), ("dns_type", "dns.qry.type"),
+                        ("dns_class", "dns.qry.class"),
+                    ):
+                        record[key] = _wire_integer(single(field), label=key)
+                    rcode = single("dns.flags.rcode", optional=not response)
+                    record["dns_rcode"] = _wire_integer(rcode or "0", label="DNS rcode", maximum=15)
+                    if transport == "udp":
+                        payload = single("udp.payload")
+                        if re.fullmatch(
+                            r"(?:[0-9a-fA-F]{2})+|(?:[0-9a-fA-F]{2}:)+[0-9a-fA-F]{2}",
+                            payload,
+                        ) is None:
+                            raise ValueError(
+                                "tshark DNS UDP payload is not complete hexadecimal bytes"
+                            )
+                        payload_bytes = bytes.fromhex(payload.replace(":", ""))
+                        if len(payload_bytes) != record["payload_bytes"]:
+                            raise ValueError("tshark DNS UDP payload does not match UDP length")
+                        record["dns_payload_sha256"] = hashlib.sha256(payload_bytes).hexdigest()
+            records.append(validate_packet_record(record))
+    except csv.Error as error:
+        raise ValueError("tshark packet row is malformed TSV") from error
+    return records
+
+
 def analyse_pcap(
     pcap: Path,
     *,
@@ -740,7 +1154,9 @@ def analyse_pcap(
     if executable.is_symlink() or not executable.is_file():
         raise ValueError("tshark executable is unavailable or a symlink")
     version_first_line = _tool_version_stdout_first_line(executable, label="tshark")
-    command = tshark_command(Path(pcap), tshark=executable)
+    command = tshark_command(
+        Path(pcap), tshark=executable, analysis_schema_version=analysis_schema_version
+    )
     decoded = subprocess.run(
         command,
         check=False,
@@ -750,7 +1166,9 @@ def analyse_pcap(
     )
     if decoded.returncode != 0:
         raise ValueError(f"tshark failed to decode capture: {decoded.stderr.strip()}")
-    records = _records_from_tshark_output(decoded.stdout)
+    records = _records_from_tshark_output(
+        decoded.stdout, analysis_schema_version=analysis_schema_version
+    )
     analysis = analyse_packet_records(
         records,
         vector=vector,
@@ -760,7 +1178,7 @@ def analyse_pcap(
         "path": str(executable),
         "sha256": sha256_file(executable),
         "version_first_line": version_first_line,
-        "fields": list(TSHARK_FIELDS),
+        "fields": list(tshark_fields(analysis_schema_version)),
         "argv": [*command[:3], "<PCAP>", *command[4:]],
     }
     return analysis, tool
@@ -893,6 +1311,7 @@ def validate_capture_receipt(
     if chronology["reporting_grace_finished_ns"] - chronology["subject_exited_ns"] < 5_000_000_000:
         raise ValueError("browser-egress capture omitted the five-second close/reporting grace")
     decoder = value["packet_decoder"]
+    analysis = validate_packet_analysis(value["analysis"], vector=vector)
     if not isinstance(decoder, Mapping) or set(decoder) != {
         "path",
         "sha256",
@@ -906,13 +1325,19 @@ def validate_capture_receipt(
         or not decoder["path"].startswith("/")
         or not isinstance(decoder["version_first_line"], str)
         or not decoder["version_first_line"]
-        or decoder["fields"] != list(TSHARK_FIELDS)
+        or decoder["fields"] != list(tshark_fields(analysis["schema_version"]))
         or not isinstance(decoder["argv"], list)
         or any(not isinstance(item, str) for item in decoder["argv"])
+        or (
+            analysis["schema_version"] >= 5
+            and decoder["argv"] != tshark_command(
+                Path("<PCAP>"), tshark=Path(decoder["path"]),
+                analysis_schema_version=analysis["schema_version"],
+            )
+        )
     ):
         raise ValueError("browser-egress packet decoder binding is invalid")
     _digest(decoder["sha256"], label="packet decoder SHA-256")
-    analysis = validate_packet_analysis(value["analysis"], vector=vector)
 
     if deep:
         if evidence_root is None:

@@ -171,7 +171,7 @@ runtime_paths = [
     root / "tools/build_class_catalogue.py",
     root / "tools/browser_egress_qualification.py",
     root / "tools/qcsd_chromium_child_wrapper.sh",
-    root / "config/class-study/v1/browser-egress-qualification-v1.json",
+    root / "config/class-study/v1/browser-egress-qualification-v2.json",
     root / "config/class-study/v1/browser-egress-chromium-argv-v1.json",
     root / "config/class-study/v1/chromium-managed-policy-v1.json",
     root / "config/class-study/v1/chromium-network-prediction-positive-control-v1.json",
@@ -525,8 +525,8 @@ COPY pyproject.toml uv.lock README.md ./
 COPY src/ ./src/
 COPY tools/build_class_catalogue.py ./tools/build_class_catalogue.py
 COPY tools/browser_egress_qualification.py ./tools/browser_egress_qualification.py
-COPY config/class-study/v1/browser-egress-qualification-v1.json \
-    ./config/class-study/v1/browser-egress-qualification-v1.json
+COPY config/class-study/v1/browser-egress-qualification-v2.json \
+    ./config/class-study/v1/browser-egress-qualification-v2.json
 COPY config/class-study/v1/browser-egress-chromium-argv-v1.json \
     ./config/class-study/v1/browser-egress-chromium-argv-v1.json
 COPY --from=source-metadata /source-metadata.json /usr/share/qcsd-lab/source.json
@@ -752,7 +752,7 @@ RUN uv lock --check && \
     /usr/bin/dumpcap --version >/dev/null && \
     /usr/bin/tshark --version >/dev/null && \
     /usr/local/bin/qcsd-browser-egress-qualification --help >/dev/null && \
-    test -r /opt/qcsd-lab/config/class-study/v1/browser-egress-qualification-v1.json && \
+    test -r /opt/qcsd-lab/config/class-study/v1/browser-egress-qualification-v2.json && \
     test -r /opt/qcsd-lab/config/class-study/v1/browser-egress-chromium-argv-v1.json && \
     /usr/local/bin/qcsd-chromium --version >/dev/null && \
     python3 -m qcsd_lab.runtime_provenance verify
