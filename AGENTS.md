@@ -12,15 +12,12 @@ These repository-local rules apply throughout `neqo-qcsd-lab/`.
   make a defence, fitting stage, or capture pass.
 - Report accepted scientific counters only from final deep-verified receipts.
   Historical passing prefixes and non-evidentiary probes advance no numerator.
-- At this checkpoint, use **browser-egress 0/110, certification 0/900, formal
-  capture 0/16,000**. V88 completed build and pinned-CDP, then was stopped with
-  79 passing browser-egress vectors and no final qualification receipt. The
-  15 September 2026 prospective acquisition amendment is implemented and
-  locally tested; it has no fresh pinned-image evidence. Preserve all old
-  cohorts and use the allocator's next unused version after source freeze. Re-read
-  [README.md](README.md), the latest immutable receipts, and live checkpoint
-  state before any later update rather than carrying these figures forward
-  from memory.
+- Do not carry checkpoint figures forward from these instructions or memory.
+  Read [README.md](README.md), the latest immutable receipts, and live
+  checkpoint state. Separate a completed historical gate from authority for
+  changed source: v89's verified 110-vector browser gate cannot authorise the
+  subsequent consumer fixes. Preserve all old cohorts and use the allocator's
+  next unused version after source freeze.
 
 ## Live source-bound operations
 

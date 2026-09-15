@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from qcsd_lab import browser_egress_qualification as browser_producer
+from qcsd_lab import class_build_admission as admission
 from qcsd_lab.class_build_admission import _parser, resolve_action_admission
 from qcsd_lab.class_study import canonical_json_bytes
 from qcsd_lab.util import sha256_file
@@ -17,6 +20,24 @@ PROVENANCE = "qcsd-class-study-acquisition-provenance"
 COMPLETION = "qcsd-class-study-acquisition-completion"
 
 
+def _browser_final(root: Path, foundation: Path, *, cohort: int) -> Path:
+    """Publish only the final build-admission projection, not packet evidence."""
+
+    return _publish(
+        root / "final.json", browser_producer.FINAL_RECEIPT_TYPE,
+        {
+            "schema_version": browser_producer.FINAL_SCHEMA_VERSION,
+            "cohort_version": cohort,
+            "verdict": "passed",
+            "foundation": {
+                "path": "foundation.json",
+                "sha256": sha256_file(foundation),
+                "payload_sha256": json.loads(foundation.read_bytes())["payload_sha256"],
+            },
+        },
+    )
+
+
 @pytest.fixture
 def authority_fixture(tmp_path: Path):
     fixture = _class_build_admission_fixture(tmp_path)
@@ -26,13 +47,15 @@ def authority_fixture(tmp_path: Path):
     fixture.browser = fixture.root / "artifacts/browser-egress-qualification-v62"
     browser_foundation = _publish(
         fixture.browser / "foundation.json",
-        "qcsd-browser-egress-qualification-foundation",
+        browser_producer.FOUNDATION_RECEIPT_TYPE,
         {
-            "schema_version": 4,
+            "schema_version": browser_producer.FOUNDATION_SCHEMA_VERSION,
             "cohort_version": 62,
             "source": prepare_source,
             "build_execution": {
                 **_binding(fixture.build),
+                "path": fixture.build.relative_to(fixture.root).as_posix(),
+                "size_bytes": fixture.build.stat().st_size,
                 "completion_path": build.identity["completion_path"],
                 "completion_sha256": build.completion_sha256,
                 "collection_image_id": build.collection_image,
@@ -41,20 +64,7 @@ def authority_fixture(tmp_path: Path):
             },
         },
     )
-    _publish(
-        fixture.browser / "final.json",
-        "qcsd-browser-egress-qualification-final",
-        {
-            "schema_version": 1,
-            "cohort_version": 62,
-            "verdict": "passed",
-            "foundation": {
-                "path": "foundation.json",
-                "sha256": sha256_file(browser_foundation),
-                "payload_sha256": json.loads(browser_foundation.read_bytes())["payload_sha256"],
-            },
-        },
-    )
+    _browser_final(fixture.browser, browser_foundation, cohort=62)
     study = fixture.root / "config/class-study/v1/study.json"
     study.parent.mkdir(parents=True)
     study.write_bytes(canonical_json_bytes({"study_id": "classifier-multiorigin100-v1"}))
@@ -124,6 +134,114 @@ def test_authority_creation_needs_only_build_cdp_and_egress(authority_fixture) -
         pinned_cdp=fixture.pinned,
         browser_egress=fixture.browser,
     ) == fixture.admitted
+
+
+def test_standalone_browser_schema_constants_match_the_producer() -> None:
+    # The host stays stdlib-only; this test is the intentional cross-boundary import.
+    assert admission._BROWSER_EGRESS_FOUNDATION_SCHEMA == browser_producer.FOUNDATION_SCHEMA_VERSION
+    assert admission._HISTORICAL_BROWSER_EGRESS_FOUNDATION_SCHEMAS == (
+        browser_producer.HISTORICAL_FOUNDATION_SCHEMA_VERSIONS
+    )
+    assert admission._BROWSER_EGRESS_FINAL_SCHEMA == browser_producer.FINAL_SCHEMA_VERSION
+
+
+def test_authority_admission_accepts_production_built_browser_foundation(tmp_path: Path) -> None:
+    from tests.test_browser_egress_qualification import _lab
+
+    # _lab invokes the real build_foundation_payload and its validator. It
+    # supplies deterministic source files/daemon data, without executing Docker.
+    root, payload = _lab(tmp_path)
+    browser_producer.validate_foundation_payload(payload)
+    build_binding = payload["build_execution"]
+    build_path = root / build_binding["path"]
+    source = {**payload["source"], "image_digest": build_binding["collection_image_id"]}
+    identity = {
+        "cohort_version": payload["cohort_version"], "sha256": sha256_file(build_path),
+        "completion_path": build_binding["completion_path"],
+        "completion_sha256": build_binding["completion_sha256"],
+        "collection_image": build_binding["collection_image_id"],
+        "started_at": "2026-09-07T00:00:00+00:00", "finished_at": "2026-09-07T00:01:00+00:00",
+    }
+    build = admission.BuildAdmission(
+        receipt_path=build_path, receipt_sha256=sha256_file(build_path),
+        cohort_version=payload["cohort_version"],
+        collection_image=build_binding["collection_image_id"],
+        prepare_image=build_binding["prepare_image_id"],
+        reference_image=build_binding["reference_image_id"],
+        completion_path=build_path.parent / "build-completion-v71.json",
+        completion_sha256=build_binding["completion_sha256"],
+        completion_payload_sha256="f" * 64, source=source, identity=identity,
+    )
+    fixture = SimpleNamespace(root=root, build=build_path, admitted=build)
+    pinned = _class_build_pinned_cdp_receipt(fixture, schema=13)
+    browser = root / "artifacts/browser-egress-qualification-v71"
+    foundation = _publish(browser / "foundation.json", browser_producer.FOUNDATION_RECEIPT_TYPE, payload)
+    _browser_final(browser, foundation, cohort=build.cohort_version)
+    observed = []
+
+    def load(path: Path, *, expected_cohort=None):
+        observed.append((path, expected_cohort))
+        assert path == build_path
+        assert expected_cohort in (None, build.cohort_version)
+        return build
+
+    assert build_binding["size_bytes"] == build_path.stat().st_size
+    assert resolve_action_admission(
+        root, action="acquisition-authority", cohort_version=build.cohort_version,
+        options={"build": str(build_path), "pinned_cdp": str(pinned), "browser_egress": str(browser)},
+        build_loader=load,
+    ) == build
+    assert observed == [(build_path, build.cohort_version)]
+
+
+@pytest.mark.parametrize("schema", (2, 3, 4))
+def test_browser_historical_foundations_are_not_current_authority(authority_fixture, schema) -> None:
+    fixture = authority_fixture
+    _rewrite(fixture.browser / "foundation.json", lambda value: value.update(schema_version=schema))
+    with pytest.raises(admission._HistoricalAuthority, match="historical"):
+        _resolve(fixture, "acquisition-authority", build=fixture.build,
+                 pinned_cdp=fixture.pinned, browser_egress=fixture.browser)
+
+
+@pytest.mark.parametrize("schema", (True, False, 2.0, 3.0, 4.0, 5.0, "5", None, 0, 1, 6))
+def test_browser_foundation_schema_aliases_and_unknowns_are_invalid(authority_fixture, schema) -> None:
+    fixture = authority_fixture
+    _rewrite(fixture.browser / "foundation.json", lambda value: value.update(schema_version=schema))
+    with pytest.raises(ValueError, match="current build authority") as error:
+        _resolve(fixture, "acquisition-authority", build=fixture.build,
+                 pinned_cdp=fixture.pinned, browser_egress=fixture.browser)
+    assert not isinstance(error.value, admission._HistoricalAuthority)
+
+
+@pytest.mark.parametrize("field,value", (
+    ("schema_version", True), ("schema_version", False), ("schema_version", 1.0),
+    ("schema_version", "1"), ("schema_version", None), ("schema_version", 0), ("schema_version", 2),
+    ("cohort_version", 62.0), ("cohort_version", True), ("cohort_version", "62"),
+    ("cohort_version", None), ("cohort_version", 63), ("verdict", "failed"),
+))
+def test_browser_final_payload_requires_exact_current_types(authority_fixture, field, value) -> None:
+    fixture = authority_fixture
+    _rewrite(fixture.browser / "final.json", lambda payload: payload.update({field: value}))
+    with pytest.raises(ValueError, match="final receipt"):
+        _resolve(fixture, "acquisition-authority", build=fixture.build,
+                 pinned_cdp=fixture.pinned, browser_egress=fixture.browser)
+
+
+@pytest.mark.parametrize("mutation", ("missing", "receipt-type", "path", "sha256", "payload_sha256"))
+def test_browser_final_envelope_must_bind_the_exact_foundation(authority_fixture, mutation) -> None:
+    fixture = authority_fixture
+    final = fixture.browser / "final.json"
+    if mutation == "missing":
+        final.unlink()
+    elif mutation == "receipt-type":
+        _publish(final, browser_producer.FOUNDATION_RECEIPT_TYPE, json.loads(final.read_bytes())["payload"])
+    else:
+        _rewrite(final, lambda payload: payload["foundation"].update({
+            mutation: "other.json" if mutation == "path" else "0" * 64,
+        }))
+    with pytest.raises(ValueError, match="final receipt"):
+        _resolve(fixture, "acquisition-authority", build=fixture.build,
+                 pinned_cdp=fixture.pinned, browser_egress=fixture.browser)
 
 
 @pytest.mark.parametrize("missing", ("build", "pinned_cdp", "browser_egress"))

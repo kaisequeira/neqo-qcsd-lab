@@ -113,6 +113,11 @@ _SUCCESSOR_DECISION_SCHEMA = 3
 _SUCCESSOR_RESTART_SCHEMA = 2
 _PINNED_CDP_SCHEMA = 13
 _HISTORICAL_PINNED_CDP_SCHEMAS = frozenset({8, 9, 11, 12})
+# Mirrored from browser_egress_qualification and checked against its producer
+# in tests. Importing the package here would break the stdlib-only host gate.
+_BROWSER_EGRESS_FOUNDATION_SCHEMA = 5
+_HISTORICAL_BROWSER_EGRESS_FOUNDATION_SCHEMAS = frozenset({2, 3, 4})
+_BROWSER_EGRESS_FINAL_SCHEMA = 1
 _HANDOFF_HISTORICAL_POST = "inputs/class-study-historical-post-snapshot.json"
 _BASE_STUDY_ID = "classifier-multiorigin100-v1"
 _SUCCESSOR_STUDY_ID = re.compile(
@@ -1101,11 +1106,17 @@ class _Resolver:
             expected_type=_BROWSER_EGRESS,
         )
         schema = payload.get("schema_version")
-        if schema in {2, 3}:
+        if type(schema) is int and schema in _HISTORICAL_BROWSER_EGRESS_FOUNDATION_SCHEMAS:
             raise _HistoricalAuthority("browser-egress qualification is historical")
         binding = payload.get("build_execution")
         cohort = payload.get("cohort_version")
-        if schema != 4 or type(cohort) is not int or not isinstance(binding, Mapping):
+        if (
+            type(schema) is not int
+            or schema != _BROWSER_EGRESS_FOUNDATION_SCHEMA
+            or type(cohort) is not int
+            or cohort < 1
+            or not isinstance(binding, Mapping)
+        ):
             raise ValueError("browser-egress qualification has no current build authority")
         _final_path, _final_value, final_payload = _envelope(
             self.root,
@@ -1119,7 +1130,9 @@ class _Resolver:
             "payload_sha256": foundation_value["payload_sha256"],
         }
         if (
-            final_payload.get("schema_version") != 1
+            type(final_payload.get("schema_version")) is not int
+            or final_payload.get("schema_version") != _BROWSER_EGRESS_FINAL_SCHEMA
+            or type(final_payload.get("cohort_version")) is not int
             or final_payload.get("cohort_version") != cohort
             or final_payload.get("verdict") != "passed"
             or final_payload.get("foundation") != expected_foundation

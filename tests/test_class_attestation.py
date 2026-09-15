@@ -103,6 +103,7 @@ def _browser_egress_result(root: Path, build: dict[str, Any]) -> dict[str, Any]:
         "build_execution": {
             "path": str(Path(build["path"]).absolute()),
             "sha256": build["sha256"],
+            "size_bytes": Path(build["path"]).stat().st_size,
             "payload_sha256": build["payload_sha256"],
             "cohort_version": 23,
             **_completion_identity(),

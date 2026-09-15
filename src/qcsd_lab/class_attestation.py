@@ -3770,14 +3770,23 @@ def _validate_browser_egress_qualification(
     expected_build_fields = {
         "path",
         "sha256",
+        "size_bytes",
         "payload_sha256",
         "cohort_version",
         "collection_image_id",
         "prepare_image_id",
         "reference_image_id",
     }
-    if not allow_historical:
-        expected_build_fields.update({"completion_path", "completion_sha256"})
+    completion_fields = {"completion_path", "completion_sha256"}
+    # The producer has already deep-verified the schema-specific binding.
+    # Historical replay permits schema 2 without completion, but must retain
+    # and compare the complete pair carried by schemas 3 and later.
+    require_completion = not allow_historical or (
+        isinstance(qualification_build, Mapping)
+        and bool(completion_fields.intersection(qualification_build))
+    )
+    if require_completion:
+        expected_build_fields.update(completion_fields)
     images = build.get("images")
     if not isinstance(images, Mapping) or set(images) != {"collection", "prepare", "reference"}:
         raise ValueError("browser-egress qualification build image roles are incomplete")
@@ -3803,10 +3812,14 @@ def _validate_browser_egress_qualification(
         or receipt.get("prepare_image_id") != images["prepare"].get("id")
         or qualification_build_path.absolute() != Path(str(build.get("path"))).absolute()
         or qualification_build.get("sha256") != build.get("sha256")
+        or type(qualification_build.get("size_bytes")) is not int
+        or qualification_build["size_bytes"] < 1
+        or qualification_build["size_bytes"]
+        != _regular_file(Path(str(build.get("path"))), "no-cache build execution").stat().st_size
         or qualification_build.get("payload_sha256") != build_payload_sha256
         or qualification_build.get("cohort_version") != cohort_version
         or (
-            not allow_historical
+            require_completion
             and (
                 qualification_build.get("completion_path")
                 != f"/lab/artifacts/buflo-study/build-completion-v{cohort_version}.json"

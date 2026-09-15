@@ -542,6 +542,7 @@ def _real_prepare_runtime_foundation(
         "build_execution": {
             "path": str(build_path.absolute()),
             "sha256": build["sha256"],
+            "size_bytes": build_path.stat().st_size,
             "payload_sha256": build_value["payload_sha256"],
             "cohort_version": cohort_version,
             "completion_path": (

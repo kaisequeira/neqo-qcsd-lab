@@ -1,6 +1,6 @@
 # QCSD Lab operator guide
 
-Documentation refresh: 15 September 2026, Australia/Sydney (AEST, UTC+10)
+Documentation refresh: 16 September 2026, Australia/Sydney (AEST, UTC+10)
 
 This repository orchestrates reproducible HTTP/3 traffic capture for the QCSD
 Neqo fork. It freezes workload graphs, runs visits under a selected client-side
@@ -22,14 +22,16 @@ selectable modes**. BuFLO and CS-BuFLO are candidate client-only QUIC
 adaptations, not bilateral or paper-equivalent implementations. Do not claim
 seven validated defences until the final validation attestation verifies.
 
-Cohort v88 completed its build and pinned-CDP checks, then was stopped during
-browser-egress qualification with 79 passing vectors preserved. It has no
-final qualification receipt and must not be resumed after source changes.
-The prospective acquisition amendment is implemented and locally tested; it
-has not run under a fresh pinned image. Use the allocator's next unused cohort,
-not an old incomplete directory. Scientific progress remains browser-egress
-**0/110**, certification **0/900**, and formal capture **0/16,000**. Local
-tests and isolated diagnostics do not advance these counts.
+Cohort v89 completed its build, pinned-CDP and independently verified
+**110/110 browser-egress** gate. Acquisition-authority creation then failed
+before Docker: the host reader expected an obsolete browser receipt schema.
+The source correction also reconciles the downstream build-size field and
+adds producer-to-consumer regression tests. This changed source needs the
+allocator's next unused cohort and fresh prerequisite evidence; v89 remains
+valid only for its original checkout. Public acquisition has not started:
+pilot **0/120**, final classes **0/100**, certification **0/900**, and formal
+capture **0/16,000**. Browser qualification is not class or defence validation.
+Read the latest immutable receipts for subsequent progress.
 
 The nine modes, in stable order, are `undefended`, `static`, `front`, `tamaraw`,
 `traffic-morphing`, `wtf-pad`, `walkie-talkie`, `buflo`, and `cs-buflo`.

@@ -120,6 +120,7 @@ def acquisition_evidence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dic
         "build_execution": {
             "path": str(build_path),
             "sha256": build["sha256"],
+            "size_bytes": build_path.stat().st_size,
             "payload_sha256": build["payload_sha256"],
             "cohort_version": 23,
             "completion_path": "/lab/artifacts/buflo-study/build-completion-v23.json",
@@ -215,6 +216,72 @@ def test_creation_runs_only_focused_gate_once_and_verification_is_read_only(
     assert result["acquisition_correctness"]["stdout_sha256"] == hashlib.sha256(
         b"25 passed\n"
     ).hexdigest()
+
+
+@pytest.mark.parametrize("size_bytes", (None, True, 3.0, "3", 0, -1, 4))
+def test_browser_build_size_must_match_real_file_before_correctness_execution(
+    acquisition_evidence: dict[str, Any], size_bytes: object
+) -> None:
+    state = acquisition_evidence
+    state["browser"]["build_execution"]["size_bytes"] = size_bytes
+    with pytest.raises(ValueError, match="different source/build/image"):
+        _create(state)
+    assert "tests" not in state["calls"]
+    assert not state["destination"].exists()
+
+
+def test_browser_build_size_cannot_be_omitted(
+    acquisition_evidence: dict[str, Any]
+) -> None:
+    state = acquisition_evidence
+    del state["browser"]["build_execution"]["size_bytes"]
+    with pytest.raises(ValueError, match="build binding is invalid"):
+        _create(state)
+    assert "tests" not in state["calls"]
+    assert not state["destination"].exists()
+
+
+@pytest.mark.parametrize("allow_historical", (False, True))
+@pytest.mark.parametrize(
+    "completion", ("both", "neither", "path-only", "hash-only", "wrong-path", "wrong-hash")
+)
+def test_browser_consumer_retains_deep_verified_completion_in_historical_replay(
+    acquisition_evidence: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+    allow_historical: bool, completion: str,
+) -> None:
+    state = acquisition_evidence
+    receipt = state["browser"]
+    binding = receipt["build_execution"]
+    if completion in {"neither", "hash-only"}:
+        del binding["completion_path"]
+    if completion in {"neither", "path-only"}:
+        del binding["completion_sha256"]
+    if completion == "wrong-path":
+        binding["completion_path"] = "/lab/artifacts/buflo-study/build-completion-v24.json"
+    if completion == "wrong-hash":
+        binding["completion_sha256"] = "e" * 64
+
+    # Isolate this projection reader. The producer separately proves that only
+    # historical schema 2 may reach it without either completion field.
+    def verified_projection(root: Path, **kwargs: Any) -> dict[str, Any]:
+        assert root == state["inputs"]["browser_egress_qualification_root"]
+        assert kwargs["allow_historical"] is allow_historical
+        return receipt
+
+    monkeypatch.setattr(authority, "verify_browser_egress_qualification", verified_projection)
+
+    def consume() -> dict[str, Any]:
+        return authority._validate_browser_egress_qualification(
+            state["inputs"]["browser_egress_qualification_root"],
+            cohort_version=23, build=state["build"], allow_historical=allow_historical,
+        )
+
+    if completion == "both" or (allow_historical and completion == "neither"):
+        assert consume() == receipt
+    else:
+        with pytest.raises(ValueError, match="build binding is invalid|different source/build/image"):
+            consume()
+    assert "tests" not in state["calls"]
 
 
 def test_prepare_validation_binds_exact_prepare_image_without_new_execution(

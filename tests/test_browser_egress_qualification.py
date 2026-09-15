@@ -3333,6 +3333,37 @@ def test_full_vector_chain_final_and_portable_deep_verify_are_closed(
     assert verified["passed_vector_count"] == vector_count
     assert verified["qualification_started_at"] == _wall_time(2)
     assert verified["qualification_finished_at"] == _wall_time(vector_count * 2 + 1)
+
+    # Exercise the attestation boundary with the producer's actual closed-chain
+    # output. A hand-written build mapping previously hid its size_bytes field.
+    from qcsd_lab import class_attestation
+
+    build_path = lab_root / foundation["build_execution"]["path"]
+    build = _BuildValidator(foundation)(
+        build_path, expected_cohort_version=71, allow_historical=False
+    )
+    raw_build = build_path.read_bytes()
+    assert verified["build_execution"] == foundation["build_execution"]
+    assert verified["build_execution"]["size_bytes"] == len(raw_build)
+    assert verified["build_execution"]["sha256"] == hashlib.sha256(raw_build).hexdigest()
+    assert verified["build_execution"]["payload_sha256"] == json.loads(raw_build)["payload_sha256"]
+    forwarded = []
+
+    def verified_chain(root, **kwargs):
+        forwarded.append((root, kwargs))
+        return verified
+
+    monkeypatch.setattr(class_attestation, "LAB_ROOT", lab_root)
+    monkeypatch.setattr(class_attestation, "verify_browser_egress_qualification", verified_chain)
+    consumed = class_attestation._validate_browser_egress_qualification(
+        result_root, cohort_version=71, build=build
+    )
+    assert forwarded == [(result_root, {
+        "lab_root": lab_root, "expected_cohort_version": 71, "allow_historical": False,
+    })]
+    assert consumed == verified
+    assert consumed["build_execution"] == foundation["build_execution"]
+
     rogue = result_root / "evidence/unbound.bin"
     rogue.write_bytes(b"unbound")
     rogue.chmod(0o600)
