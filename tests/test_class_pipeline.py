@@ -748,9 +748,11 @@ def test_status_exposes_stability_and_certification_contracts():
     assert status["attestation_generated"] is False
 
 
+@pytest.mark.parametrize("binding_key", ["foundation_attestation", "acquisition_authority"])
 def test_standalone_acquisition_status_deep_verifies_bound_runtime_but_is_informational(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    binding_key: str,
 ) -> None:
     import qcsd_lab.class_acquisition as acquisition
 
@@ -763,7 +765,7 @@ def test_standalone_acquisition_status_deep_verifies_bound_runtime_but_is_inform
     foundation_sha256 = pipeline.sha256_file(foundation)
     provenance = pipeline.bind_receipt(
         {
-            "foundation_attestation": {
+            binding_key: {
                 "path": str(foundation.absolute()),
                 "sha256": foundation_sha256,
             }
@@ -794,9 +796,10 @@ def test_standalone_acquisition_status_deep_verifies_bound_runtime_but_is_inform
     assert result.status == "complete"
     assert result.details["valid"] is True
     assert result.details["authoritative"] is False
+    prefix = "acquisition_authority" if binding_key == "acquisition_authority" else "foundation"
     assert result.details["gate_verification"] == {
-        "foundation_path": str(foundation.absolute()),
-        "foundation_sha256": foundation_sha256,
+        f"{prefix}_path": str(foundation.absolute()),
+        f"{prefix}_sha256": foundation_sha256,
         "informational_only": True,
     }
 
@@ -1088,8 +1091,9 @@ def test_status_verifies_supplied_promotion_receipts(
     assert status["attestation_generated"] is True
 
 
-def test_foundation_action_requires_and_forwards_canonical_pinned_cdp_receipt(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize("action", ["foundation", "acquisition-authority"])
+def test_authority_action_requires_and_forwards_canonical_pinned_cdp_receipt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, action: str
 ) -> None:
     import qcsd_lab.class_attestation as attestation
 
@@ -1099,7 +1103,7 @@ def test_foundation_action_requires_and_forwards_canonical_pinned_cdp_receipt(
     pinned = evidence_root / "pinned-cdp-execution-v23.json"
     browser_egress = evidence_root / "browser-egress-qualification-v23"
     browser_egress.mkdir()
-    destination = tmp_path / "artifacts/class-study-foundation-v23.json"
+    destination = tmp_path / f"artifacts/class-study-{action}-v23.json"
     other = tmp_path / "other.json"
     for path in (build, pinned, other):
         path.write_text("{}\n", encoding="utf-8")
@@ -1111,44 +1115,55 @@ def test_foundation_action_requires_and_forwards_canonical_pinned_cdp_receipt(
         observed.update(kwargs)
         return path
 
-    monkeypatch.setattr(attestation, "create_class_foundation_attestation", create)
+    creator = (
+        "create_class_foundation_attestation" if action == "foundation"
+        else "create_class_acquisition_authority"
+    )
+    validator = (
+        "validate_class_foundation_attestation" if action == "foundation"
+        else "validate_class_acquisition_authority"
+    )
+    monkeypatch.setattr(attestation, creator, create)
     monkeypatch.setattr(
         attestation,
-        "validate_class_foundation_attestation",
+        validator,
         lambda path, **_kwargs: {"path": str(path), "valid": True},
     )
     kwargs = {
         "cohort_version": 23,
         "build_execution_receipt": build,
-        "reference_receipt": other,
-        "code_gate_receipt": other,
-        "controlled_qualification_receipt": other,
         "destination": destination,
     }
+    if action == "foundation":
+        kwargs.update({
+            "reference_receipt": other,
+            "code_gate_receipt": other,
+            "controlled_qualification_receipt": other,
+        })
 
     with pytest.raises(ValueError, match="--pinned-cdp-receipt"):
-        pipeline.run_class_study_action("foundation", **kwargs)
+        pipeline.run_class_study_action(action, **kwargs)
     with pytest.raises(ValueError, match="--browser-egress-qualification-root"):
         pipeline.run_class_study_action(
-            "foundation", **kwargs, pinned_cdp_receipt=pinned
+            action, **kwargs, pinned_cdp_receipt=pinned
         )
     with pytest.raises(ValueError, match="wrong canonical filename"):
         pipeline.run_class_study_action(
-            "foundation",
+            action,
             **kwargs,
             pinned_cdp_receipt=tmp_path / "copied-probe.json",
             browser_egress_qualification_root=browser_egress,
         )
     with pytest.raises(ValueError, match="wrong canonical path"):
         pipeline.run_class_study_action(
-            "foundation",
+            action,
             **kwargs,
             pinned_cdp_receipt=pinned,
             browser_egress_qualification_root=tmp_path / "copied-browser-egress",
         )
 
     result = pipeline.run_class_study_action(
-        "foundation",
+        action,
         **kwargs,
         pinned_cdp_receipt=pinned,
         browser_egress_qualification_root=browser_egress,
@@ -4088,6 +4103,41 @@ def test_cli_exposes_class_study_without_implicit_execution():
     assert parsed.foundation_attestation == Path("foundation.json")
     assert parsed.readiness_attestation == Path("readiness.json")
     assert parsed.historical_pre_snapshot == Path("pre.json")
+
+
+def test_cli_exposes_acquisition_only_authority_without_promoting_it() -> None:
+    from qcsd_lab.cli import parser
+
+    parsed = parser().parse_args([
+        "class-study", "acquisition-init", "--acquisition-authority", "authority.json"
+    ])
+    assert parsed.acquisition_authority == Path("authority.json")
+    assert parsed.foundation_attestation is None
+    assert parsed.execute is False
+    assert parser().parse_args(["class-study", "acquisition-authority"]).action == "acquisition-authority"
+
+
+def test_acquisition_authority_verify_dispatch_does_not_use_foundation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import qcsd_lab.class_attestation as attestation
+
+    path = tmp_path / "authority.json"
+    path.write_text(json.dumps({"receipt_type": attestation.ACQUISITION_AUTHORITY_RECEIPT_TYPE}))
+    monkeypatch.setattr(
+        attestation, "validate_class_foundation_attestation",
+        lambda *_a, **_k: pytest.fail("acquisition-only receipt entered foundation validator"),
+    )
+    observed = []
+
+    def validate(target: Path, *, runtime_role: str):
+        observed.append((target, runtime_role))
+        return {"path": str(target), "promotion_authority": False}
+
+    monkeypatch.setattr(attestation, "validate_class_acquisition_authority", validate)
+    result = pipeline.run_class_study_action("verify", target=path)
+    assert result.details["promotion_authority"] is False
+    assert observed == [(path, "collection")]
 
 
 def test_final_selection_is_recomputed_from_pilot_fit_and_compatibility(monkeypatch, tmp_path):

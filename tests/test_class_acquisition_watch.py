@@ -699,6 +699,7 @@ class Fixture:
         first = payload["candidates"][self.candidate_ids[0]]
         first["watch_test_revision"] = first.get("watch_test_revision", 0) + 1
         _write_receipt(self.paths.checkpoint, watch.CHECKPOINT_TYPE, payload)
+        _materialise_selection(self, _selection_fixture(watch.CANDIDATE_COUNT))
 
 
 @pytest.fixture
@@ -735,7 +736,7 @@ def acquisition(tmp_path: Path) -> Fixture:
     catalogue_payload = {
         "study_id": watch.STUDY_ID,
         "catalogue_schema_version": 1,
-        "tranco": {},
+        "tranco": {"list_sha256": "a" * 64},
         "selection": {},
         "candidates": [
             {
@@ -1172,10 +1173,11 @@ def acquisition(tmp_path: Path) -> Fixture:
         "candidate_catalogue_sha256": catalogue_sha256,
         "candidate_catalogue_payload_sha256": catalogue["payload_sha256"],
         "candidate_count": watch.CANDIDATE_COUNT,
-        "foundation_attestation": {
+        "acquisition_authority": {
             "path": "/lab/artifacts/class-study-foundation-v23.json",
             "sha256": hashlib.sha256(foundation_path.read_bytes()).hexdigest(),
         },
+        "acquisition_selection_policy": watch.ACQUISITION_SELECTION_POLICY,
         "started_at": "2026-08-29T00:00:00Z",
         "image_digest": image,
         "source": prepare_source,
@@ -1190,7 +1192,7 @@ def acquisition(tmp_path: Path) -> Fixture:
         "acquisition_action_timing_contract": copy.deepcopy(
             watch._ACQUISITION_ACTION_TIMING_CONTRACT
         ),
-        "baseline_scheduling_contract": copy.deepcopy(watch._BASELINE_SCHEDULING_CONTRACT),
+        "baseline_scheduling_contract": copy.deepcopy(watch._TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT),
         "registrable_domain_policy": watch._REGISTRABLE_DOMAIN_POLICY,
         "domain_safety_policy": copy.deepcopy(watch._DOMAIN_SAFETY_POLICY),
         "domain_safety_policy_sha256": watch._DOMAIN_SAFETY_POLICY_SHA256,
@@ -1231,6 +1233,467 @@ def _accept_fixture_source(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(watch, "_validate_host_source", lambda _paths, _binding: None)
 
 
+def _selection_fixture(
+    terminal: int = 0, *, terminal_ids: list[str] | None = None, first24: bool = False
+) -> dict[str, Any]:
+    candidates = [f"tranco-{rank:07d}" for rank in range(1, 601)]
+    terminals = set(candidates[:terminal] if terminal_ids is None else terminal_ids)
+    strata = []
+    for index, name in enumerate(("1-1000", "1001-10000", "10001-100000", "100001-500000", "500001-1000000")):
+        members = candidates[index * 120:(index + 1) * 120]
+        potential = members[:24] if first24 else [*members[:23], members[-1]]
+        eligible = [item for item in potential if item in terminals]
+        complete = len(eligible) == 24
+        cutoff = members.index(eligible[-1]) + 1 if complete else len(members)
+        prefix = members[:cutoff]
+        needed = [item for item in prefix if item not in terminals]
+        strata.append({
+            "id": name, "complete": complete and not needed, "quota_unmet": not complete and not needed,
+            "cutoff_id": eligible[-1] if complete else None,
+            "prefix_ids": prefix, "eligible_ids": eligible, "needed_ids": needed,
+            "admission_ids": [item for item in members if item not in terminals or item in eligible][:24],
+            "unassessed_ids": [item for item in members[cutoff:] if item not in terminals],
+        })
+    complete = all(row["complete"] for row in strata)
+    return {
+        "schema_version": 1, "policy": watch.ACQUISITION_SELECTION_POLICY,
+        "tranco_list_sha256": "a" * 64, "complete": complete,
+        "quota_unmet_strata": [row["id"] for row in strata if row["quota_unmet"]],
+        "candidate_ids": candidates, "terminal_ids": [item for item in candidates if item in terminals],
+        "prefix_ids": [item for row in strata for item in row["prefix_ids"]],
+        "needed_ids": [item for row in strata for item in row["needed_ids"]],
+        "admission_ids": [item for row in strata for item in row["admission_ids"]],
+        "remaining_ids": [item for item in candidates if item not in terminals],
+        "unassessed_ids": [item for row in strata for item in row["unassessed_ids"]],
+        "pilot_ids": [item for row in strata for item in row["eligible_ids"]] if complete else [],
+        "strata": strata,
+    }
+
+
+def _materialise_selection(
+    acquisition: Fixture, selection: dict[str, Any], *, blocked_ids: tuple[str, ...] = (),
+) -> None:
+    """Give fake-runner outcomes real receipt/state bindings, not live-page proof."""
+
+    from qcsd_lab.acquisition_timing import greedy_baseline_schedule
+
+    checkpoint = _checkpoint_payload(acquisition)
+    eligible = [item for row in selection["strata"] for item in row["eligible_ids"]]
+    terminal_ids = set(selection["terminal_ids"]) | set(blocked_ids)
+    batches = []
+    by_candidate = {}
+    starts = greedy_baseline_schedule(datetime(2026, 8, 29, tzinfo=UTC), (len(eligible) + 1) // 2)
+    for index, start in enumerate(starts):
+        members = eligible[index * 2:(index + 1) * 2]
+        batch = _batch("baseline", {
+            "baseline_started_at": start.isoformat().replace("+00:00", "Z"), "candidate_ids": members,
+            "live_page_count": len(members),
+        })
+        batches.append(batch)
+        by_candidate.update(dict.fromkeys(members, batch))
+    for candidate_id in selection["candidate_ids"]:
+        if candidate_id not in terminal_ids:
+            continue
+        batch = by_candidate.get(candidate_id)
+        state = {**checkpoint["candidates"][candidate_id], "terminal": None}
+        if batch is None:
+            kind = "pre-probe-rejection"
+            state.update(state="pending", pages=[], navigation_attempts=[{
+                "outcome": "recoverable-error" if candidate_id in blocked_ids else "terminal-policy-rejection",
+            }])
+            state.pop("baseline_started_at", None)
+            terminalised = "2026-08-29T00:00:00Z"
+        else:
+            kind = "eligible"
+            state.update(state="probing", pages=[{}], baseline_started_at=batch["baseline_started_at"])
+            terminalised = (datetime.fromisoformat(batch["baseline_started_at"]) + timedelta(hours=73)).isoformat().replace("+00:00", "Z")
+        terminal = {
+            "terminal_schema_version": 3, "checkpoint_schema_version": 2,
+            "candidate_id": candidate_id, "kind": kind, "reason": "fixture outcome",
+            "terminalised_at": terminalised,
+            "checkpoint_state_sha256": hashlib.sha256(_canonical(state)).hexdigest(),
+            "provenance_sha256": checkpoint["provenance_sha256"], "baseline_batch": batch,
+            "stability_receipt": None, "admitted_workload": None,
+        }
+        relative = f"terminals/{candidate_id}.json"
+        path = acquisition.paths.acquisition_root / relative
+        path.parent.mkdir(exist_ok=True)
+        _write_receipt(path, "qcsd-class-study-acquisition-terminal", terminal)
+        state.update(state="terminal", terminal={
+            "path": relative, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        })
+        checkpoint["candidates"][candidate_id] = state
+    checkpoint["baseline_batches"] = batches
+    checkpoint["active_batch"] = None
+    _replace_checkpoint(acquisition, checkpoint)
+
+
+def _acquisition_only_authority(acquisition: Fixture) -> Path:
+    root = acquisition.paths.lab_root
+    foundation = json.loads(acquisition.foundation_path.read_bytes())["payload"]
+    provenance = json.loads(acquisition.paths.provenance.read_bytes())["payload"]
+    study_path = root / "config/class-study/v1/study.json"
+    study_path.write_bytes(b"{}\n")
+    inputs = {}
+    for relative in (*watch._ACQUISITION_CORRECTNESS_TESTS, "pyproject.toml", "uv.lock"):
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists():
+            path.write_bytes(f"fixture {relative}\n".encode())
+        inputs[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+    study = {"path": "/lab/config/class-study/v1/study.json", "sha256": hashlib.sha256(study_path.read_bytes()).hexdigest()}
+    correctness = {
+        "schema_version": 1, "gate": "acquisition-focused-correctness",
+        "argv": ["/opt/qcsd-venv/bin/python", "-m", "pytest", "-p", "no:cacheprovider", *watch._ACQUISITION_CORRECTNESS_TESTS],
+        "cwd": "/lab", "input_sha256": inputs, "source": foundation["source"],
+        "build_execution_identity": foundation["build_execution_identity"], "study_contract": study,
+        "started_at": "2026-08-28T02:15:00+00:00", "finished_at": "2026-08-28T02:30:00+00:00",
+        "exit_code": 0, "stdout": "1 passed\n", "stdout_bytes": 9,
+        "stdout_sha256": hashlib.sha256(b"1 passed\n").hexdigest(),
+    }
+    evidence = {key: foundation["evidence"][key] for key in ("build_execution", "pinned_cdp_probe", "browser_egress_qualification")}
+    identity = foundation["build_execution_identity"]
+    browser = evidence["browser_egress_qualification"]
+    gate_evidence = {
+        "current-clean-source-and-no-cache-build": [identity["sha256"], identity["completion_sha256"]],
+        "acquisition-focused-correctness": [hashlib.sha256(_canonical(correctness)).hexdigest()],
+        "pinned-cdp-integration-probe": [evidence["pinned_cdp_probe"]["sha256"]],
+        "browser-egress-packet-qualification-110-of-110": [browser["sha256"], browser["payload_sha256"], browser["expanded_vectors_sha256"]],
+    }
+    payload = {
+        **{key: foundation[key] for key in ("study_id", "cohort_version", "recorded_at", "promotion_authority", "implementation_scope", "paper_equivalent", "no_waivers", "source", "build_execution_identity")},
+        "attestation_schema_version": 1, "artifact_type": watch.ACQUISITION_AUTHORITY_TYPE,
+        "implementation_status": "acquisition-ready", "authority_scope": "public-page-acquisition-only",
+        "prepare_source": provenance["source"], "study_contract": study, "evidence": evidence,
+        "acquisition_correctness": correctness, "all_acquisition_gates_passed": True,
+        "hard_gates": [
+            {"ordinal": ordinal, "gate": gate, "gate_identity_sha256": hashlib.sha256(_canonical({"ordinal": ordinal, "gate": gate})).hexdigest(),
+             "result": "pass", "evidence_sha256s": sorted(set(hashes))}
+            for ordinal, (gate, hashes) in enumerate(gate_evidence.items(), 1)
+        ],
+    }
+    path = root / "artifacts/class-study-acquisition-authority-v23.json"
+    _write_receipt(path, watch.ACQUISITION_AUTHORITY_TYPE, payload)
+    provenance["acquisition_authority"] = {"path": "/lab/artifacts/class-study-acquisition-authority-v23.json", "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+    _write_receipt(acquisition.paths.provenance, watch.PROVENANCE_TYPE, provenance)
+    checkpoint = _checkpoint_payload(acquisition)
+    checkpoint["provenance_sha256"] = hashlib.sha256(acquisition.paths.provenance.read_bytes()).hexdigest()
+    _replace_checkpoint(acquisition, checkpoint)
+    return path
+
+
+def test_acquisition_only_authority_verifies_without_execution_or_full_foundation(
+    acquisition: Fixture, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _acquisition_only_authority(acquisition)
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("verification must not execute tests or enter full foundation")
+    monkeypatch.setattr(watch.subprocess, "run", forbidden)
+    monkeypatch.setattr(watch, "_validate_foundation", forbidden)
+    binding = watch._validate_immutable_binding(acquisition.paths)
+    assert binding.acquisition_authority_sha256 == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert binding.foundation_sha256 is None
+
+
+@pytest.mark.parametrize("mutation", ("argv", "cwd", "exit", "stdout", "length", "input", "study", "gates", "scope", "prepare_source", "chronology"))
+def test_acquisition_only_authority_rejects_resealed_gate_drift(
+    acquisition: Fixture, monkeypatch: pytest.MonkeyPatch, mutation: str,
+) -> None:
+    path = _acquisition_only_authority(acquisition)
+    payload = json.loads(path.read_bytes())["payload"]
+    correctness = payload["acquisition_correctness"]
+    if mutation == "argv":
+        correctness["argv"][-1] = "tests/test_buflo_study.py"
+    elif mutation == "cwd":
+        correctness["cwd"] = "/tmp"
+    elif mutation == "exit":
+        correctness["exit_code"] = False
+    elif mutation == "stdout":
+        correctness["stdout"] = "0 passed\n"
+    elif mutation == "length":
+        correctness["stdout_bytes"] += 1
+    elif mutation == "input":
+        correctness["input_sha256"]["uv.lock"] = "0" * 64
+    elif mutation == "study":
+        payload["study_contract"]["sha256"] = "0" * 64
+    elif mutation == "gates":
+        payload["hard_gates"].reverse()
+    elif mutation == "scope":
+        payload["authority_scope"] = "formal-capture"
+    elif mutation == "prepare_source":
+        payload["prepare_source"]["image_digest"] = "sha256:" + "0" * 64
+    elif mutation == "chronology":
+        correctness["started_at"] = "2026-08-28T00:00:00+00:00"
+    _write_receipt(path, watch.ACQUISITION_AUTHORITY_TYPE, payload)
+    provenance = json.loads(acquisition.paths.provenance.read_bytes())["payload"]
+    provenance["acquisition_authority"]["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    _write_receipt(acquisition.paths.provenance, watch.PROVENANCE_TYPE, provenance)
+    monkeypatch.setattr(watch.subprocess, "run", lambda *_args, **_kwargs: pytest.fail("verification executed a command"))
+    with pytest.raises(watch.WatchError):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+def test_watcher_acquisition_contracts_match_runtime() -> None:
+    from qcsd_lab.acquisition_timing import TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT
+    from qcsd_lab.class_attestation import ACQUISITION_CORRECTNESS_TESTS
+    assert watch._TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT == TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT
+    assert watch._ACQUISITION_CORRECTNESS_TESTS == ACQUISITION_CORRECTNESS_TESTS
+
+
+def test_watcher_accepts_complete_120_member_terminal_prefix_with_480_unassessed() -> None:
+    terminal_ids = [f"tranco-{index * 120 + rank:07d}" for index in range(5) for rank in range(1, 25)]
+    details = _details(terminal=120)
+    details.update(selection=_selection_fixture(terminal_ids=terminal_ids, first24=True),
+                   pending_count=0, work_due_now=False, complete=True)
+    watch._validate_status_details(details, action="acquisition-status")
+    assert len(details["selection"]["pilot_ids"]) == 120
+    assert len(details["selection"]["unassessed_ids"]) == 480
+    assert details["selection"]["remaining_ids"] == details["selection"]["unassessed_ids"]
+
+
+def _complete_prefix_details() -> dict[str, Any]:
+    terminal_ids = [f"tranco-{index * 120 + rank:07d}" for index in range(5) for rank in range(1, 25)]
+    details = _details(terminal=120)
+    details.update(selection=_selection_fixture(terminal_ids=terminal_ids, first24=True),
+                   pending_count=0, work_due_now=False, complete=True)
+    return details
+
+
+def test_watcher_rejects_complete_prefix_invented_from_all_pending_checkpoint(
+    acquisition: Fixture,
+) -> None:
+    details = _complete_prefix_details()
+    before = acquisition.paths.checkpoint.read_bytes()
+    runner = FakeRunner([_completed(_result("acquisition-status", details))])
+    with pytest.raises(watch.WatchError, match="authenticated checkpoint terminals"):
+        watch.watch_acquisition(paths=acquisition.paths, runner=runner)
+    assert acquisition.paths.checkpoint.read_bytes() == before
+    assert not (acquisition.paths.acquisition_root / "completion.json").exists()
+
+
+@pytest.mark.parametrize("mutation", ("hidden-blocker", "false-eligible", "hidden-started"))
+def test_watcher_joins_status_outcomes_to_checkpoint(
+    acquisition: Fixture, mutation: str,
+) -> None:
+    details = _complete_prefix_details()
+    actual = copy.deepcopy(details["selection"])
+    blocked = ()
+    if mutation == "hidden-blocker":
+        blocked = (acquisition.candidate_ids[24],)
+    elif mutation == "false-eligible":
+        # Keep the reported scientific terminal inventory, but its first
+        # member's authenticated outcome is rejection rather than eligible.
+        actual["strata"][0]["eligible_ids"].pop(0)
+    _materialise_selection(acquisition, actual, blocked_ids=blocked)
+    if mutation == "hidden-started":
+        checkpoint = _checkpoint_payload(acquisition)
+        checkpoint["candidates"][acquisition.candidate_ids[24]]["navigation_attempts"] = [
+            {"outcome": "recoverable-error"}
+        ]
+        _replace_checkpoint(acquisition, checkpoint)
+    runner = FakeRunner([_completed(_result("acquisition-status", details))])
+    with pytest.raises(watch.WatchError, match="authenticated|hides started"):
+        watch.watch_acquisition(paths=acquisition.paths, runner=runner)
+
+
+@pytest.mark.parametrize("mutation", (
+    "raw-hash", "state-hash", "provenance", "candidate", "batch", "kind", "schema",
+    "missing-binding", "pending-with-binding", "path", "prebaseline",
+))
+def test_watcher_rejects_terminal_receipt_or_state_drift(
+    acquisition: Fixture, mutation: str,
+) -> None:
+    details = _complete_prefix_details()
+    _materialise_selection(acquisition, details["selection"])
+    checkpoint = _checkpoint_payload(acquisition)
+    state = checkpoint["candidates"][acquisition.candidate_ids[0]]
+    path = acquisition.paths.acquisition_root / state["terminal"]["path"]
+    terminal = json.loads(path.read_bytes())["payload"]
+    if mutation == "raw-hash":
+        state["terminal"]["sha256"] = "0" * 64
+    elif mutation == "state-hash":
+        state["pages"][0]["rejection"] = {"kind": "probe-retry-exhausted"}
+    elif mutation == "missing-binding":
+        state["terminal"] = None
+    elif mutation == "pending-with-binding":
+        state["state"] = "pending"
+    elif mutation == "path":
+        state["terminal"]["path"] = "terminals/another-candidate.json"
+    else:
+        if mutation == "provenance":
+            terminal["provenance_sha256"] = "0" * 64
+        elif mutation == "candidate":
+            terminal["candidate_id"] = acquisition.candidate_ids[1]
+        elif mutation == "batch":
+            terminal["baseline_batch"] = None
+        elif mutation == "kind":
+            terminal["kind"] = "invented"
+        elif mutation == "schema":
+            terminal["terminal_schema_version"] = True
+        elif mutation == "prebaseline":
+            terminal["terminalised_at"] = "2026-08-28T00:00:00Z"
+        _write_receipt(path, "qcsd-class-study-acquisition-terminal", terminal)
+        state["terminal"]["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    _replace_checkpoint(acquisition, checkpoint)
+    runner = FakeRunner([_completed(_result("acquisition-status", details))])
+    with pytest.raises(watch.WatchError, match="terminal"):
+        watch.watch_acquisition(paths=acquisition.paths, runner=runner)
+
+
+@pytest.mark.parametrize(("kind", "state", "expected"), (
+    ("eligible", {"pages": [{}]}, True),
+    ("stable-page-unavailable", {"pages": [{}]}, False),
+    ("probe-window-missed", {"pages": [{}]}, None),
+    ("eligible", {"pages": [{"rejection": {"kind": "probe-retry-exhausted"}}]}, None),
+    ("stable-page-unavailable", {"pages": [{"rejection": {"kind": "probe-retry-exhausted"}}]}, None),
+    ("pre-probe-rejection", {"pages": [], "navigation_attempts": [{"outcome": "terminal-policy-rejection"}]}, False),
+    ("pre-probe-rejection", {"pages": [], "navigation_attempts": [{"outcome": "recoverable-error"}]}, None),
+    ("pre-probe-rejection", {"pages": [], "navigation_attempts": []}, None),
+))
+def test_watcher_terminal_outcome_projection_matches_runtime(kind, state, expected) -> None:
+    from qcsd_lab.class_acquisition import _scientific_terminal_eligibility
+
+    terminal = {"kind": kind}
+    assert watch._scientific_terminal_eligibility(terminal, state) is expected
+    assert _scientific_terminal_eligibility(terminal, state) is expected
+
+
+def test_watcher_accepts_runtime_produced_selection_from_bound_terminal_outcomes(
+    acquisition: Fixture,
+) -> None:
+    from qcsd_lab.class_acquisition import _checkpoint_terminal_payloads, _derive_checkpoint_selection
+    from qcsd_lab.class_study import ClassCandidate, TRANCO_RANK_STRATA, deterministic_candidate_order
+
+    candidates = deterministic_candidate_order([
+        ClassCandidate(
+            acquisition.candidate_ids[index * 120 + offset],
+            f"site-{index}-{offset}.example", stratum.minimum_rank + offset, False,
+        )
+        for index, stratum in enumerate(TRANCO_RANK_STRATA) for offset in range(120)
+    ], tranco_list_sha256="a" * 64)
+    catalogue = json.loads(acquisition.paths.candidate_catalogue.read_bytes())
+    catalogue["payload"]["candidates"] = [candidate.as_dict() for candidate in candidates]
+    _write_receipt(acquisition.paths.candidate_catalogue, watch.CATALOGUE_TYPE, catalogue["payload"])
+    catalogue = json.loads(acquisition.paths.candidate_catalogue.read_bytes())
+    catalogue_sha256 = hashlib.sha256(acquisition.paths.candidate_catalogue.read_bytes()).hexdigest()
+    provenance = json.loads(acquisition.paths.provenance.read_bytes())["payload"]
+    provenance.update(candidate_catalogue_sha256=catalogue_sha256,
+                      candidate_catalogue_payload_sha256=catalogue["payload_sha256"])
+    _write_receipt(acquisition.paths.provenance, watch.PROVENANCE_TYPE, provenance)
+    checkpoint = _checkpoint_payload(acquisition)
+    checkpoint.update(candidate_catalogue_sha256=catalogue_sha256,
+                      provenance_sha256=hashlib.sha256(acquisition.paths.provenance.read_bytes()).hexdigest())
+    _replace_checkpoint(acquisition, checkpoint)
+    acquisition.candidate_ids = [candidate.candidate_id for candidate in candidates]
+    initial, _ = _derive_checkpoint_selection(candidates, catalogue, checkpoint["candidates"], {})
+    # This exercises real runtime projection, not live three-window page proof.
+    terminal_ids = initial["admission_ids"]
+    prospective_terminals = {candidate_id: {"kind": "eligible"} for candidate_id in terminal_ids}
+    selection, _ = _derive_checkpoint_selection(
+        candidates, catalogue, checkpoint["candidates"], prospective_terminals,
+    )
+    _materialise_selection(acquisition, selection)
+    checkpoint = _checkpoint_payload(acquisition)
+    terminals = _checkpoint_terminal_payloads(acquisition.paths.acquisition_root, checkpoint["candidates"])
+    selection, blocked = _derive_checkpoint_selection(candidates, catalogue, checkpoint["candidates"], terminals)
+    details = _details(terminal=len(terminals))
+    details.update(selection=selection, selection_blocked_candidate_ids=blocked,
+                   pending_count=0, work_due_now=False, complete=True)
+    before = acquisition.paths.checkpoint.read_bytes()
+    result = watch.watch_acquisition(
+        paths=acquisition.paths,
+        runner=FakeRunner([_completed(_result("acquisition-status", details))]),
+    )
+    assert result["details"]["complete"] is True
+    assert len(selection["unassessed_ids"]) == 480
+    assert acquisition.paths.checkpoint.read_bytes() == before
+    assert not (acquisition.paths.acquisition_root / "completion.json").exists()
+
+
+def test_watcher_infrastructure_terminal_blocks_completion_without_site_ineligibility() -> None:
+    terminal_ids = [
+        f"tranco-{index * 120 + rank:07d}" for index in range(5) for rank in range(1, 25)
+    ]
+    details = _details(terminal=121)
+    details.update(
+        selection=_selection_fixture(terminal_ids=terminal_ids, first24=True),
+        selection_blocked_candidate_ids=["tranco-0000025"],
+        pending_count=0,
+        work_due_now=False,
+        complete=False,
+    )
+    watch._validate_status_details(details, action="acquisition-status")
+    assert "tranco-0000025" not in details["selection"]["terminal_ids"]
+    assert "tranco-0000025" in details["selection"]["remaining_ids"]
+    details["complete"] = True
+    with pytest.raises(watch.WatchError, match="completion flag"):
+        watch._validate_status_details(details, action="acquisition-status")
+
+
+@pytest.mark.parametrize("mutation", ("unknown-as-rejected", "pilot-order", "needed", "admission", "quota", "blocked"))
+def test_watcher_rejects_selection_inventory_or_completion_drift(mutation: str) -> None:
+    details = _details(terminal=600)
+    selection = details["selection"]
+    if mutation == "unknown-as-rejected":
+        selection["terminal_ids"].pop(0)
+    elif mutation == "pilot-order":
+        selection["pilot_ids"].reverse()
+    elif mutation == "needed":
+        selection["needed_ids"] = [selection["candidate_ids"][0]]
+    elif mutation == "admission":
+        selection["admission_ids"].pop()
+    elif mutation == "quota":
+        selection["strata"][0]["eligible_ids"].pop()
+    elif mutation == "blocked":
+        details["selection_blocked_candidate_ids"] = [selection["candidate_ids"][0]]
+    with pytest.raises(watch.WatchError):
+        watch._validate_status_details(details, action="acquisition-status")
+
+
+@pytest.mark.parametrize("mutation", (None, "late", "missed", "retry", "hash"))
+def test_watcher_replays_causal_scientific_terminal_release(
+    acquisition: Fixture, mutation: str | None,
+) -> None:
+    payload = _checkpoint_payload(acquisition)
+    first, second = acquisition.candidate_ids[:2]
+    starts = ("2026-08-29T01:00:00Z", "2026-08-31T01:00:00Z")
+    batches = []
+    for candidate_id, started in zip((first, second), starts, strict=True):
+        payload["candidates"][candidate_id] = {
+            "state": "probing", "pages": [{"page": {"ordinal": 0}}],
+            "terminal": None, "baseline_started_at": started,
+        }
+        batches.append(_batch("baseline", {
+            "baseline_started_at": started, "candidate_ids": [candidate_id], "live_page_count": 1,
+        }))
+    payload["baseline_batches"] = batches
+    state = payload["candidates"][first]
+    if mutation == "retry":
+        state["pages"][0]["rejection"] = {"kind": "probe-retry-exhausted"}
+    terminal = {
+        "terminal_schema_version": 3, "checkpoint_schema_version": 2,
+        "candidate_id": first, "kind": "probe-window-missed" if mutation == "missed" else "stable-page-unavailable",
+        "terminalised_at": "2026-08-31T00:21:00Z" if mutation == "late" else "2026-08-29T01:01:00Z",
+        "provenance_sha256": payload["provenance_sha256"], "baseline_batch": batches[0],
+        "checkpoint_state_sha256": hashlib.sha256(_canonical(state)).hexdigest(),
+        "reason": "fixture scientific rejection", "stability_receipt": None,
+        "admitted_workload": None,
+    }
+    relative = f"terminals/{first}.json"
+    path = acquisition.paths.acquisition_root / relative
+    path.parent.mkdir(exist_ok=True)
+    _write_receipt(path, "qcsd-class-study-acquisition-terminal", terminal)
+    state["state"] = "terminal"
+    state["terminal"] = {"path": relative, "sha256": "0" * 64 if mutation == "hash" else hashlib.sha256(path.read_bytes()).hexdigest()}
+    _replace_checkpoint(acquisition, payload)
+    binding = watch._validate_immutable_binding(acquisition.paths)
+    if mutation is None:
+        watch._validate_checkpoint(acquisition.paths, binding)
+    else:
+        with pytest.raises(watch.WatchError):
+            watch._validate_checkpoint(acquisition.paths, binding)
+
+
 def _details(
     *,
     terminal: int = 0,
@@ -1269,6 +1732,8 @@ def _details(
         "work_due_now": work_due,
         "complete": complete,
         "next_due": next_due,
+        "selection": _selection_fixture(terminal),
+        "selection_blocked_candidate_ids": [],
     }
 
 
@@ -1300,8 +1765,8 @@ def _result(
         }
         payload["authoritative"] = False
         payload["gate_verification"] = {
-            "foundation_path": "/lab/artifacts/class-study-foundation-v23.json",
-            "foundation_sha256": foundation_sha256,
+            "acquisition_authority_path": "/lab/artifacts/class-study-foundation-v23.json",
+            "acquisition_authority_sha256": foundation_sha256,
             "informational_only": True,
         }
         status = "complete"
@@ -1406,10 +1871,10 @@ class FakeRunner:
                 verification = value.get("details", {}).get("gate_verification")
                 if (
                     isinstance(verification, dict)
-                    and verification.get("foundation_sha256") == "0" * 64
+                    and verification.get("acquisition_authority_sha256") == "0" * 64
                 ):
                     binding = watch._validate_immutable_binding(self._paths(command))
-                    verification["foundation_sha256"] = binding.foundation_sha256
+                    verification["acquisition_authority_sha256"] = binding.acquisition_authority_sha256
                     response = _completed(value)
         return response
 
@@ -1441,7 +1906,7 @@ class FakeMonotonic:
 
 
 def test_due_work_uses_exact_command_environment_and_paths(acquisition: Fixture) -> None:
-    assert watch.ACQUISITION_SCHEMA_VERSION == 5
+    assert watch.ACQUISITION_SCHEMA_VERSION == 6
     assert watch.CHECKPOINT_SCHEMA_VERSION == 2
     assert watch.ACQUISITION_TIMEOUT_MS == 60_000
     assert watch.PENDING_BASELINE_GUARD_MS == 2_400_000
@@ -1708,6 +2173,7 @@ def test_action_status_validates_finalisable_work_as_disjoint_and_due() -> None:
 
 def test_complete_exits_without_creating_completion_receipt(acquisition: Fixture) -> None:
     complete = _details(terminal=watch.CANDIDATE_COUNT)
+    _materialise_selection(acquisition, complete["selection"])
     runner = FakeRunner([_completed(_result("acquisition-status", complete))])
 
     watch.watch_acquisition(paths=acquisition.paths, runner=runner)
@@ -1720,6 +2186,7 @@ def test_browser_egress_deep_verify_is_exactly_once_before_status(
     acquisition: Fixture,
 ) -> None:
     complete = _details(terminal=watch.CANDIDATE_COUNT)
+    _materialise_selection(acquisition, complete["selection"])
     runner = FakeRunner([_completed(_result("acquisition-status", complete))])
 
     watch.watch_acquisition(paths=acquisition.paths, runner=runner)
@@ -1996,10 +2463,43 @@ def test_lock_contention_fails_before_calling_coordinator(acquisition: Fixture) 
 
 def test_incomplete_status_without_due_or_next_due_fails(acquisition: Fixture) -> None:
     stuck = _details(terminal=watch.CANDIDATE_COUNT - 1, probing=1, blocked=False)
+    _materialise_selection(acquisition, stuck["selection"])
     runner = FakeRunner([_completed(_result("acquisition-status", stuck))])
 
     with pytest.raises(watch.WatchError, match="no due work and no next_due"):
         watch.watch_acquisition(paths=acquisition.paths, runner=runner)
+
+
+@pytest.mark.parametrize("kind", ("infrastructure", "quota"))
+def test_drained_watcher_explains_selection_blocker(acquisition: Fixture, kind: str) -> None:
+    if kind == "infrastructure":
+        details = _details(terminal=1)
+        details.update(
+            selection=_selection_fixture(),
+            selection_blocked_candidate_ids=[acquisition.candidate_ids[0]],
+            pending_count=0,
+            work_due_now=False,
+        )
+        reason = "selection blocked by infrastructure outcomes"
+    else:
+        details = _details(terminal=600)
+        selection = details["selection"]
+        selection["strata"][0].update(
+            eligible_ids=[], admission_ids=[], cutoff_id=None,
+            complete=False, quota_unmet=True,
+        )
+        selection.update(
+            complete=False, pilot_ids=[], quota_unmet_strata=["1-1000"],
+            admission_ids=[item for row in selection["strata"] for item in row["admission_ids"]],
+        )
+        details["complete"] = False
+        reason = "scientific quota remains unmet"
+    _materialise_selection(acquisition, details["selection"],
+                           blocked_ids=tuple(details["selection_blocked_candidate_ids"]))
+    runner = FakeRunner([_completed(_result("acquisition-status", details))])
+    with pytest.raises(watch.WatchError, match=reason):
+        watch.watch_acquisition(paths=acquisition.paths, runner=runner)
+    assert not any(call[0][2] == "acquisition-run" for call in runner.calls)
 
 
 @pytest.mark.parametrize(
@@ -2365,7 +2865,7 @@ def _replace_foundation_and_rebind_provenance(
     _write_receipt(acquisition.foundation_path, watch.FOUNDATION_TYPE, payload)
     provenance = json.loads(acquisition.paths.provenance.read_text(encoding="utf-8"))
     provenance_payload = copy.deepcopy(provenance["payload"])
-    provenance_payload["foundation_attestation"]["sha256"] = hashlib.sha256(
+    provenance_payload["acquisition_authority"]["sha256"] = hashlib.sha256(
         acquisition.foundation_path.read_bytes()
     ).hexdigest()
     _write_receipt(acquisition.paths.provenance, watch.PROVENANCE_TYPE, provenance_payload)
@@ -2767,6 +3267,8 @@ def test_source_binding_preimage_versions_the_build_completion_identity(
         "build_execution_sha256": binding.build_execution_sha256,
         "cohort_version": binding.cohort_version,
         "foundation_sha256": binding.foundation_sha256,
+        "acquisition_authority_path": binding.acquisition_authority_path,
+        "acquisition_authority_sha256": binding.acquisition_authority_sha256,
         "pinned_cdp_contract_sha256": binding.pinned_cdp_contract_sha256,
         "pinned_cdp_payload_sha256": binding.pinned_cdp_payload_sha256,
         "pinned_cdp_sha256": binding.pinned_cdp_sha256,
@@ -2775,7 +3277,7 @@ def test_source_binding_preimage_versions_the_build_completion_identity(
         "source": dict(binding.source),
         "source_binding_preimage_schema_version": (watch.SOURCE_BINDING_PREIMAGE_SCHEMA_VERSION),
     }
-    assert watch.SOURCE_BINDING_PREIMAGE_SCHEMA_VERSION == 2
+    assert watch.SOURCE_BINDING_PREIMAGE_SCHEMA_VERSION == 3
     assert watch._source_binding_sha256(binding) == watch._sha256_bytes(
         watch._canonical_json_bytes(preimage)
     )
@@ -2784,6 +3286,8 @@ def test_source_binding_preimage_versions_the_build_completion_identity(
     del legacy_preimage["source_binding_preimage_schema_version"]
     del legacy_preimage["build_completion_path"]
     del legacy_preimage["build_completion_sha256"]
+    del legacy_preimage["acquisition_authority_path"]
+    del legacy_preimage["acquisition_authority_sha256"]
     assert watch._source_binding_sha256(binding) != watch._sha256_bytes(
         watch._canonical_json_bytes(legacy_preimage)
     )
@@ -3779,6 +4283,7 @@ def test_admission_precedes_first_checkpoint_read_and_source_precedes_admission(
     acquisition: Fixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     complete = _details(terminal=watch.CANDIDATE_COUNT)
+    _materialise_selection(acquisition, complete["selection"])
     events: list[str] = []
     real_checkpoint = watch._validate_checkpoint
 
@@ -3953,6 +4458,7 @@ def test_signal_latched_after_final_success_check_is_not_swallowed(
     acquisition: Fixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     complete = _details(terminal=watch.CANDIDATE_COUNT)
+    _materialise_selection(acquisition, complete["selection"])
     original_raise = watch._SignalLatch.raise_if_set
     checks = 0
 
@@ -5765,6 +6271,8 @@ def test_internal_scope_accepts_each_current_canonical_action_binding(
         catalogue_sha256="2" * 64,
         provenance_sha256="3" * 64,
         foundation_sha256="6" * 64,
+        acquisition_authority_path="/lab/artifacts/class-study-foundation-v23.json",
+        acquisition_authority_sha256="6" * 64,
         pinned_cdp_sha256="7" * 64,
         pinned_cdp_payload_sha256="8" * 64,
         pinned_cdp_contract_sha256="9" * 64,

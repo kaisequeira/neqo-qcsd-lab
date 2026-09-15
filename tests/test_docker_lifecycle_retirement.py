@@ -888,6 +888,55 @@ qcsd_reconcile_docker_lifecycle validate
     assert (root / "HANDOFF").is_file()
 
 
+@pytest.mark.parametrize("boundary", ["H3", "H13"])
+def test_browser_egress_normal_cleanup_latches_term_through_native_retirement(
+    retirement_environment: dict[str, str], boundary: str,
+) -> None:
+    """Keep real TERM/EXIT handling outside the publication-to-retirement gap."""
+
+    from tests.test_cli import _browser_egress_cleanup_lifetime_shell
+
+    environment = {
+        **retirement_environment,
+        "QCSD_TEST_RETIREMENT_BOUNDARY": boundary,
+    }
+    result = _run_bash(
+        'set -euo pipefail\nsource "$HELPER"\n'
+        + _browser_egress_cleanup_lifetime_shell()
+        + r'''
+QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS=()
+QCSD_DOCKER_IDS_BROWSER_EGRESS_NETWORKS=()
+QCSD_DOCKER_IDS_BROWSER_EGRESS_VOLUMES=()
+qcsd_run_detached_docker QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS docker run fake-image
+printf '%s\n' "$_qcsd_lifecycle_root" >"$FAKE_DOCKER_STATE/retiring-root"
+_qcsd_retirement_boundary_hook() {
+  printf '%s\n' "$1" >>"$FAKE_DOCKER_STATE/retirement-boundaries.log"
+  if [[ "$1" == "$QCSD_TEST_RETIREMENT_BOUNDARY" ]]; then
+    kill -TERM "$BASHPID"
+  fi
+}
+_qcsd_cleanup_terminal_hook() {
+  printf 'containers=%s\n' "${QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS[*]}"
+}
+trap browser_egress_exit_cleanup EXIT
+browser_egress_cleanup_topology || false
+echo publication-must-not-run
+''',
+        environment=environment,
+    )
+    assert result.returncode == 143, (result.stdout, result.stderr)
+    assert result.stdout == "containers=\n"
+    assert "retirement failed" not in result.stderr
+    state = Path(environment["FAKE_DOCKER_STATE"])
+    visited = (state / "retirement-boundaries.log").read_text(encoding="ascii").splitlines()
+    assert visited.count("H0") == visited.count("H3") == visited.count("H13") == 1
+    root = Path((state / "retiring-root").read_text(encoding="ascii").strip())
+    assert root.parent == Path(environment["QCSD_TEST_LIFECYCLE_BASE"])
+    assert not root.exists()
+    assert all(not path.exists() for path in _retirement_names(root))
+    assert not (state / "container").exists()
+
+
 @pytest.mark.parametrize("boundary", [f"H{index}" for index in range(14)])
 def test_sigkill_at_every_retirement_boundary_converges_on_restart(
     retirement_environment: dict[str, str], boundary: str

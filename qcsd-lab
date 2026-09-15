@@ -5476,7 +5476,7 @@ print(GLOBAL_LIVE_PAGE_CAP)
   class_final_qualification_manifest="${class_final_qualification_root}/_qualification-set.json"
   class_study_action="${2:-}"
   case "${class_study_action}" in
-    status|acquisition-init|acquisition-run|acquisition-status|acquisition-admission|acquisition-complete|stability|cohort|campaigns|fit-numeric|prefix-specs|qualify-prefix|finalize-fitting|capture|resume|export|evaluate|foundation|readiness|historical-snapshot|comparison-review|attest|successor-policy|successor-decision|successor-restart|successor-verify|verify) ;;
+    status|acquisition-authority|acquisition-init|acquisition-run|acquisition-status|acquisition-admission|acquisition-complete|stability|cohort|campaigns|fit-numeric|prefix-specs|qualify-prefix|finalize-fitting|capture|resume|export|evaluate|foundation|readiness|historical-snapshot|comparison-review|attest|successor-policy|successor-decision|successor-restart|successor-verify|verify) ;;
     *)
       echo "class-study requires one recognised action" >&2
       exit 2
@@ -5544,7 +5544,7 @@ print(GLOBAL_LIVE_PAGE_CAP)
         class_index=$((class_index + 1))
         continue
         ;;
-      --candidate-catalogue|--acquisition-root|--stability-root|--stability-input|--workload-root|--acquisition-completion|--pilot-cohort|--pilot-cohort-assembly|--final-cohort|--final-cohort-assembly|--cohort|--cohort-assembly|--final-selection|--campaign-root|--campaign|--results-root|--capture-result|--result|--regression-result|--controlled-result|--canary-result|--formal-result|--artifacts-root|--numeric-bundle|--prefix-spec-root|--qualification-checkpoint|--qualification-sidecar-root|--qualification-publication-root|--qualification-manifest|--final-bundle|--handoff|--evaluation-receipt|--build-execution-receipt|--pinned-cdp-receipt|--browser-egress-qualification-root|--reference-receipt|--code-gate-receipt|--controlled-qualification-receipt|--pilot-fitting-result|--pilot-compatibility-result|--authoritative-fitting-result|--certification-result|--foundation-attestation|--readiness-attestation|--historical-pre-snapshot|--historical-post-snapshot|--comparison-review|--comparison-review-input|--validation-attestation|--successor-policy|--successor-decision|--successor-restart|--destination|--target|--dlsvm-cache-directory)
+      --candidate-catalogue|--acquisition-root|--stability-root|--stability-input|--workload-root|--acquisition-completion|--pilot-cohort|--pilot-cohort-assembly|--final-cohort|--final-cohort-assembly|--cohort|--cohort-assembly|--final-selection|--campaign-root|--campaign|--results-root|--capture-result|--result|--regression-result|--controlled-result|--canary-result|--formal-result|--artifacts-root|--numeric-bundle|--prefix-spec-root|--qualification-checkpoint|--qualification-sidecar-root|--qualification-publication-root|--qualification-manifest|--final-bundle|--handoff|--evaluation-receipt|--build-execution-receipt|--pinned-cdp-receipt|--browser-egress-qualification-root|--reference-receipt|--code-gate-receipt|--controlled-qualification-receipt|--pilot-fitting-result|--pilot-compatibility-result|--authoritative-fitting-result|--certification-result|--acquisition-authority|--foundation-attestation|--readiness-attestation|--historical-pre-snapshot|--historical-post-snapshot|--comparison-review|--comparison-review-input|--validation-attestation|--successor-policy|--successor-decision|--successor-restart|--destination|--target|--dlsvm-cache-directory)
         if (( ! class_inline )); then
           class_next=$((class_index + 1))
           if (( class_next > $# )); then
@@ -5612,7 +5612,7 @@ print(GLOBAL_LIVE_PAGE_CAP)
 
   class_fresh_layout=0
   case "${class_study_action}" in
-    acquisition-init|acquisition-run|acquisition-status|acquisition-complete|stability|cohort|campaigns|fit-numeric|prefix-specs|qualify-prefix|finalize-fitting|capture|foundation|readiness|historical-snapshot|comparison-review|attest)
+    acquisition-authority|acquisition-init|acquisition-run|acquisition-status|acquisition-complete|stability|cohort|campaigns|fit-numeric|prefix-specs|qualify-prefix|finalize-fitting|capture|foundation|readiness|historical-snapshot|comparison-review|attest)
       class_fresh_layout=1
       ;;
   esac
@@ -5926,7 +5926,7 @@ PY
   fi
 
   case "${class_study_action}" in
-    foundation|readiness|historical-snapshot|comparison-review|attest|successor-policy|successor-decision|successor-restart)
+    acquisition-authority|foundation|readiness|historical-snapshot|comparison-review|attest|successor-policy|successor-decision|successor-restart)
       if (( class_successor_mode )); then
         :
       else
@@ -6016,7 +6016,7 @@ PY
         class_add_unique class_direct_rw_dirs "${class_path_hosts[--capture-result]}"
       fi
       ;;
-    export|evaluate|foundation|readiness|historical-snapshot|attest|successor-policy|successor-decision)
+    export|evaluate|acquisition-authority|foundation|readiness|historical-snapshot|attest|successor-policy|successor-decision)
       class_require_output_parent "${class_path_hosts[--destination]:-}" "destination"
       class_add_unique class_guarded_rw_dirs "$(dirname "${class_path_hosts[--destination]}")"
       if [[ "${class_study_action}" == "evaluate" &&
@@ -6379,6 +6379,7 @@ if [[ "${1:-}" == "class-study" ]]; then
   for class_build_admission_option in \
     build:--build-execution-receipt \
     foundation:--foundation-attestation \
+    acquisition-authority:--acquisition-authority \
     readiness:--readiness-attestation \
     historical-pre:--historical-pre-snapshot \
     historical-post:--historical-post-snapshot \
@@ -6518,7 +6519,8 @@ if [[ "${1:-}" == "buflo-study" && "${2:-}" == "reference" ]]; then
 fi
 if [[ "${1:-}" == "class-study" &&
       ( "${class_study_action}" == "qualify-prefix" ||
-        "${class_study_action}" == acquisition-* ) ]]; then
+        ( "${class_study_action}" == acquisition-* &&
+          "${class_study_action}" != "acquisition-authority" ) ) ]]; then
   image="${PREPARE_IMAGE}"
 fi
 
@@ -7202,6 +7204,7 @@ fi
 if [[ "${1:-}" == "class-study" &&
       ( ( "${class_study_action}" == "qualify-prefix" &&
           "${class_study_live}" == "1" ) ||
+        "${class_study_action}" == "acquisition-authority" ||
         "${class_study_action}" == "acquisition-init" ||
         "${class_study_action}" == "acquisition-run" ||
         "${class_study_action}" == "acquisition-status" ||
@@ -9443,7 +9446,12 @@ browser_egress_wait_healthy() {
 browser_egress_cleanup_topology() {
   local cleanup_status=0 container_id network_id volume_name container_index
   local volume_inventory
+  local prior_cleanup_active="${_QCSD_LIFETIME_CLEANUP_ACTIVE:-0}"
   local -a retained_containers=() retained_networks=() retained_volumes=()
+  # Normal per-vector teardown also owns a retirement transaction. Keep TERM
+  # from entering EXIT cleanup with already-retired IDs still in the arrays,
+  # or with a published retirement authority that has not finished yet.
+  _QCSD_LIFETIME_CLEANUP_ACTIVE=1
   for ((container_index=${#QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS[@]}-1;
        container_index>=0; container_index--)); do
     container_id="${QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS[container_index]}"
@@ -9478,6 +9486,12 @@ browser_egress_cleanup_topology() {
     fi
   done
   QCSD_DOCKER_IDS_BROWSER_EGRESS_VOLUMES=("${retained_volumes[@]}")
+  _QCSD_LIFETIME_CLEANUP_ACTIVE="${prior_cleanup_active}"
+  if (( prior_cleanup_active == 0 && ${_QCSD_LIFETIME_SIGNAL_STATUS:-0} != 0 )); then
+    # Arrays now contain only genuinely unproved identities. Let the existing
+    # EXIT handler finish those, but never proceed to result publication.
+    exit "${_QCSD_LIFETIME_SIGNAL_STATUS}"
+  fi
   return "${cleanup_status}"
 }
 

@@ -12,6 +12,8 @@ bound for the browser/Neqo call tree.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from copy import deepcopy
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 ACQUISITION_ACTION_SOFT_TIMEOUT_MS = 1_800_000
@@ -134,6 +136,30 @@ BASELINE_SCHEDULING_CONTRACT = {
     },
 }
 
+# Prospective runners opt into this contract explicitly.  Keep the v2 value
+# and its readers unchanged: later terminal evidence must not retrospectively
+# relax the scheduling contract recorded by an older acquisition campaign.
+# With all 600 candidates surviving, the 300-batch zero-duration projection
+# remains 3,042,300,000 ms (~35.21 days) through the last t+72h earliest start.
+# This policy removes unnecessary reservations, not genuine stability waits.
+TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT = {
+    **deepcopy(BASELINE_SCHEDULING_CONTRACT),
+    "schema_version": 3,
+    "policy": "serial-terminal-released-stability-window-batch-reservations-v3",
+    "reservation_release": (
+        "all-batch-members-scientifically-terminal-plus-full-serial-reservation"
+    ),
+    "reservation_release_evidence": (
+        "latest-immutable-hash-bound-batch-member-terminalised-at"
+    ),
+    "reservation_release_delay_ms": WINDOW_START_RESERVATION_MS,
+    "reservation_release_validation": "causal-at-each-recorded-baseline-start",
+    "infrastructure_failure_policy": (
+        "timeout-interruption-and-missed-window-block-not-site-ineligibility"
+    ),
+    "action_priority": "due-probes-before-new-baselines-and-navigation",
+}
+
 RUN_WAIT_POLICY = {
     "navigation_phase": "separate-bounded-action-before-baseline",
     "t+30s": "same-action-interruptible-wait-to-earliest-then-probe",
@@ -254,3 +280,118 @@ def greedy_baseline_schedule(start: datetime, count: int) -> tuple[datetime, ...
         selected.append(candidate)
         candidate += spacing
     return tuple(selected)
+
+
+@dataclass(frozen=True)
+class BaselineReservation:
+    """One batch's reservation and optional authenticated scientific terminal.
+
+    The caller must authenticate every member's immutable terminal receipt and
+    supply their latest ``terminalised_at`` only when all members are resolved
+    scientifically.  Timeouts, interruptions, and missed windows are not site
+    ineligibility and cannot supply this release.  A full existing reservation
+    is retained after the terminal time so worker completion cannot waive the
+    configured action, cleanup, and status bounds.
+    """
+
+    baseline_started_at: datetime
+    terminalised_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        baseline = self.baseline_started_at
+        terminal = self.terminalised_at
+        if not isinstance(baseline, datetime) or baseline.tzinfo is None:
+            raise ValueError("acquisition baseline must be timezone-aware")
+        baseline = baseline.astimezone(UTC)
+        object.__setattr__(self, "baseline_started_at", baseline)
+        if terminal is not None:
+            if not isinstance(terminal, datetime) or terminal.tzinfo is None:
+                raise ValueError("acquisition terminal time must be timezone-aware")
+            terminal = terminal.astimezone(UTC)
+            if terminal < baseline:
+                raise ValueError("acquisition terminal time predates its baseline")
+            object.__setattr__(self, "terminalised_at", terminal)
+
+    @property
+    def released_at(self) -> datetime | None:
+        if self.terminalised_at is None:
+            return None
+        return self.terminalised_at + timedelta(milliseconds=WINDOW_START_RESERVATION_MS)
+
+
+def _validated_reservations(
+    reservations: Iterable[BaselineReservation],
+) -> tuple[BaselineReservation, ...]:
+    values = tuple(reservations)
+    if any(not isinstance(value, BaselineReservation) for value in values):
+        raise ValueError("acquisition reservations must be BaselineReservation values")
+    return values
+
+
+def baseline_is_safe_with_releases(
+    candidate: datetime, reservations: Iterable[BaselineReservation]
+) -> bool:
+    """Apply v2 bounds, releasing only batches resolved before this baseline."""
+
+    if not isinstance(candidate, datetime) or candidate.tzinfo is None:
+        raise ValueError("acquisition baseline must be timezone-aware")
+    candidate = candidate.astimezone(UTC)
+    values = _validated_reservations(reservations)
+    return baseline_is_safe(
+        candidate,
+        (
+            value.baseline_started_at
+            for value in values
+            if value.released_at is None or candidate < value.released_at
+        ),
+    )
+
+
+def earliest_safe_baseline_with_releases(
+    not_before: datetime, reservations: Iterable[BaselineReservation]
+) -> datetime:
+    """Find the exact earliest v3 baseline, including causal release boundaries.
+
+    A v2 collision interval ends at its original boundary or the authenticated
+    batch release, whichever comes first.  No measured or mean execution time
+    substitutes for the configured reservation.
+    """
+
+    if not isinstance(not_before, datetime) or not_before.tzinfo is None:
+        raise ValueError("acquisition schedule start must be timezone-aware")
+    candidate = not_before.astimezone(UTC)
+    values = _validated_reservations(reservations)
+    reservation = timedelta(milliseconds=WINDOW_START_RESERVATION_MS)
+    intervals: list[tuple[datetime, datetime]] = []
+    for value in values:
+        release = value.released_at
+        for candidate_offset in SERIAL_ACTION_START_OFFSETS_MS:
+            offset = timedelta(milliseconds=candidate_offset)
+            for existing_start in scheduled_action_starts(value.baseline_started_at):
+                centre = existing_start - offset
+                high = centre + reservation
+                if release is not None:
+                    high = min(high, release)
+                intervals.append((centre - reservation, high))
+    while True:
+        containing = tuple(high for low, high in intervals if low < candidate < high)
+        if not containing:
+            if not baseline_is_safe_with_releases(candidate, values):
+                raise AssertionError("baseline release solver reached an unsafe boundary")
+            return candidate
+        candidate = max(containing)
+
+
+def validate_baseline_schedule_with_releases(
+    reservations: Iterable[BaselineReservation],
+) -> None:
+    """Replay v3 admission at each baseline, never using later release early."""
+
+    values = sorted(
+        _validated_reservations(reservations), key=lambda value: value.baseline_started_at
+    )
+    accepted: list[BaselineReservation] = []
+    for value in values:
+        if not baseline_is_safe_with_releases(value.baseline_started_at, accepted):
+            raise ValueError("acquisition baselines violate the serial scheduling contract")
+        accepted.append(value)

@@ -6,14 +6,11 @@ from pathlib import Path
 
 import pytest
 
-import qcsd_lab.class_acquisition as acquisition_module
 import qcsd_lab.class_cohort as cohort_module
-from qcsd_lab.acquisition_errors import RecoverableAcquisitionError
-from qcsd_lab.acquisition_timing import MAX_CANDIDATES_PER_ACTION
+from qcsd_lab.acquisition_selection import derive_acquisition_selection
 from qcsd_lab.class_acquisition import (
-    initialise_runner,
-    run_due_acquisition,
-    write_acquisition_completion,
+    COMPLETION_TYPE,
+    SELECTION_TYPE,
 )
 from qcsd_lab.class_catalogue import (
     CANDIDATE_RECEIPT_TYPE,
@@ -44,30 +41,11 @@ from qcsd_lab.class_study import (
     canonical_json_bytes,
     canonical_json_sha256,
     deterministic_candidate_order,
+    validate_hash_bound_receipt,
 )
 from qcsd_lab.util import sha256_file
 
 LIST_SHA = "a" * 64
-
-
-@pytest.fixture(autouse=True)
-def _minimal_foundation_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep cohort tests focused on acquisition/cohort reconciliation."""
-
-    def binding(path: Path) -> dict[str, str]:
-        source = path.absolute()
-        return {"path": str(source), "sha256": sha256_file(source)}
-
-    monkeypatch.setattr(
-        acquisition_module,
-        "_foundation_attestation_binding",
-        binding,
-    )
-
-
-class _RejectingBackend:
-    def discover_navigation(self, domain: str):
-        raise RecoverableAcquisitionError(f"unavailable: {domain}")
 
 
 def _candidates() -> tuple[ClassCandidate, ...]:
@@ -114,41 +92,49 @@ def _catalogue(path: Path) -> Path:
     return path
 
 
-def _completion(tmp_path: Path, catalogue: Path) -> Path:
-    workloads = tmp_path / "workloads"
-    stability = tmp_path / "stability"
-    workloads.mkdir(exist_ok=True)
-    stability.mkdir(exist_ok=True)
-    foundation = tmp_path / "foundation.json"
-    foundation.write_bytes(
-        canonical_json_bytes(
-            bind_receipt(
-                {"study_id": STUDY_ID},
-                receipt_type="qcsd-class-study-foundation-attestation",
-            )
-        )
+def _completion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, prefix: bool = False
+) -> Path:
+    """Synthetic validated input boundary, not an acquisition gate pass.
+
+    Acquisition completion reconstruction is tested in test_class_acquisition;
+    this fixture isolates cohort rebuild and its terminal/selection joins.
+    """
+    payload: dict[str, object] = {
+        "completion_schema_version": 2,
+        "provenance_sha256": "1" * 64,
+        "terminal_receipts": {},
+    }
+    if prefix:
+        candidates = _candidates()
+        eligible = {
+            candidate.candidate_id: True
+            for stratum in TRANCO_RANK_STRATA
+            for candidate in [
+                item for item in candidates
+                if stratum.minimum_rank <= item.rank <= stratum.maximum_rank
+            ][:24]
+        }
+        payload.update({
+            "completion_schema_version": 3,
+            "selection": bind_receipt(
+                derive_acquisition_selection(
+                    candidates, tranco_list_sha256=LIST_SHA,
+                    terminal_eligibility=eligible,
+                ),
+                receipt_type=SELECTION_TYPE,
+            ),
+        })
+    root = tmp_path / "acquisition"
+    root.mkdir(exist_ok=True)
+    path = root / "completion.json"
+    path.write_bytes(canonical_json_bytes(bind_receipt(payload, receipt_type=COMPLETION_TYPE)))
+    monkeypatch.setattr(
+        cohort_module,
+        "validate_acquisition_completion",
+        lambda value, **_kwargs: validate_hash_bound_receipt(value, expected_type=COMPLETION_TYPE),
     )
-    runner = initialise_runner(
-        tmp_path / "acquisition",
-        candidate_catalogue_path=catalogue,
-        foundation_attestation=foundation,
-        started_at="2026-08-28T00:00:00Z",
-        browser_tool="test",
-    )
-    for _ in range(CANDIDATE_COUNT):
-        status = run_due_acquisition(
-            runner,
-            candidate_catalogue_path=catalogue,
-            stability_root=stability,
-            workload_root=workloads,
-            backend=_RejectingBackend(),
-            max_candidates=MAX_CANDIDATES_PER_ACTION,
-        )
-        if status["complete"]:
-            break
-    else:
-        raise AssertionError("bounded acquisition did not terminalise the catalogue")
-    return write_acquisition_completion(runner, candidate_catalogue_path=catalogue)
+    return path
 
 
 def _eligible_evidence(candidate: ClassCandidate, **_kwargs: object):
@@ -187,7 +173,7 @@ def test_assembly_is_exactly_rebuilt_and_publication_is_idempotent(
     stability.mkdir()
     workloads.mkdir()
     output.mkdir()
-    completion = _completion(tmp_path, catalogue)
+    completion = _completion(tmp_path, monkeypatch)
     monkeypatch.setattr(cohort_module, "_candidate_evidence", _eligible_evidence)
     # This test exercises exact assembly rebuild/publication with synthetic
     # candidate evidence.  Acquisition lineage itself is covered separately.
@@ -244,6 +230,105 @@ def test_assembly_is_exactly_rebuilt_and_publication_is_idempotent(
             workload_root=workloads,
             acquisition_completion_path=completion,
         )
+
+
+def test_completed_prefix_builds_120_class_pilot_without_failing_unused_tail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    catalogue = _catalogue(tmp_path / "candidates.json")
+    stability = tmp_path / "stability"
+    workloads = tmp_path / "workloads"
+    stability.mkdir()
+    workloads.mkdir()
+    completion = _completion(tmp_path, monkeypatch, prefix=True)
+    payload = json.loads(completion.read_text())["payload"]
+    prefix = payload["selection"]["payload"]
+    terminal_root = completion.parent / "terminals"
+    terminal_root.mkdir()
+    for candidate_id in prefix["terminal_ids"]:
+        terminal = bind_receipt(
+            {
+                "candidate_id": candidate_id,
+                "kind": "eligible",
+                "stability_receipt": {
+                    "path": str(stability / candidate_id / "page-00.json"),
+                    "sha256": "c" * 64,
+                },
+                "admitted_workload": {
+                    "path": str(workloads / f"{candidate_id}.json"),
+                    "sha256": "d" * 64,
+                },
+            },
+            receipt_type="qcsd-class-study-acquisition-terminal",
+        )
+        path = terminal_root / f"{candidate_id}.json"
+        path.write_bytes(canonical_json_bytes(terminal))
+        payload["terminal_receipts"][candidate_id] = {
+            "path": f"terminals/{candidate_id}.json",
+            "sha256": sha256_file(path),
+        }
+    completion.write_bytes(canonical_json_bytes(bind_receipt(payload, receipt_type=COMPLETION_TYPE)))
+    monkeypatch.setattr(cohort_module, "_candidate_evidence", _eligible_evidence)
+    cohort, assembly = build_evidenced_cohort(
+        catalogue, stability_root=stability, workload_root=workloads,
+        acquisition_completion_path=completion,
+    )
+    assert assembly["payload"]["eligible_count"] == 120
+    assert assembly["payload"]["selected_evidence_count"] == 120
+    tail = [row for row in assembly["payload"]["candidates"] if not row["eligible"]]
+    assert len(tail) == 480
+    assert all(row["reasons"] == ["unassessed-deterministic-prefix-tail"] for row in tail)
+    assert set(row["candidate_id"] for row in tail) == set(prefix["unassessed_ids"])
+    validate_cohort_assembly(
+        assembly, cohort=cohort, candidate_catalogue_path=catalogue,
+        stability_root=stability, workload_root=workloads,
+        acquisition_completion_path=completion,
+    )
+    # A new publication in an explicitly unassessed tail cannot be silently
+    # ignored, even when candidate evidence lookup is stubbed for this test.
+    (workloads / f"{tail[0]['candidate_id']}.json").write_text("{}")
+    with pytest.raises(ValueError, match="unassessed.*published evidence"):
+        build_evidenced_cohort(
+            catalogue, stability_root=stability, workload_root=workloads,
+            acquisition_completion_path=completion,
+        )
+
+
+@pytest.mark.parametrize("mutation", ["terminal", "eligibility", "rejection", "stability"])
+def test_unassessed_tail_cannot_be_relabelled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    completion = _completion(tmp_path, monkeypatch, prefix=True)
+    payload = json.loads(completion.read_text())["payload"]
+    candidate_id = payload["selection"]["payload"]["unassessed_ids"][0]
+    record = cohort_module._unassessed_record(candidate_id)
+    stability = tmp_path / "stability"
+    workloads = tmp_path / "workloads"
+    stability.mkdir()
+    workloads.mkdir()
+    if mutation == "terminal":
+        payload["terminal_receipts"][candidate_id] = {"path": "made-up.json", "sha256": "a" * 64}
+    elif mutation == "eligibility":
+        record["eligible"] = True
+    elif mutation == "rejection":
+        record["reasons"] = ["site-unavailable"]
+    else:
+        (stability / candidate_id).mkdir()
+    with pytest.raises(ValueError, match="unassessed"):
+        _reconcile_acquisition_terminal(
+            candidate_id, record, completion_payload=payload,
+            completion_root=completion.parent, stability_root=stability,
+            workload_root=workloads,
+        )
+
+
+def test_cohort_pilot_must_equal_completed_prefix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    completion = _completion(tmp_path, monkeypatch, prefix=True)
+    payload = json.loads(completion.read_text())["payload"]
+    with pytest.raises(ValueError, match="pilot differs"):
+        cohort_module._verify_selected_prefix(payload, _candidates()[:120])
 
 
 def test_candidate_evidence_binds_selected_stability_and_workload_bytes(

@@ -434,6 +434,11 @@ def test_prospective_contract_tracks_current_foundation_gates() -> None:
     assert contract["authority_gates"]["foundation"]["reconstructed_gates"] == list(
         class_attestation._FOUNDATION_GATES
     )
+    assert contract["authority_gates"]["acquisition"]["reconstructed_gates"] == list(
+        class_attestation._ACQUISITION_AUTHORITY_GATES
+    )
+    assert "public-page-acquisition" not in contract["authority_gates"]["foundation"]["required_before"]
+    assert contract["authority_gates"]["acquisition"]["promotion_authority"] is False
 
 
 @pytest.mark.parametrize(

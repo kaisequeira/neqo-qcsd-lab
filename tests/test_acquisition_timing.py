@@ -8,17 +8,22 @@ import pytest
 from qcsd_lab.acquisition_timing import (
     ACTION_TIMING_CONTRACT,
     BASELINE_SCHEDULING_CONTRACT,
+    BaselineReservation,
     GLOBAL_LIVE_PAGE_CAP,
     MAX_CANDIDATES_PER_ACTION,
     MINIMUM_BASELINE_SPACING_MS,
     SERIAL_ACTION_START_OFFSETS_MS,
     STABILITY_WINDOW_EARLIEST_OFFSETS_MS,
+    TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT,
     baseline_is_safe,
+    baseline_is_safe_with_releases,
     earliest_safe_baseline,
+    earliest_safe_baseline_with_releases,
     greedy_baseline_schedule,
     scheduled_action_starts,
     scheduled_window_starts,
     validate_baseline_schedule,
+    validate_baseline_schedule_with_releases,
 )
 
 
@@ -161,3 +166,170 @@ def test_greedy_projection_is_not_misrepresented_as_a_global_lower_bound() -> No
     validate_baseline_schedule(delayed)
     assert delayed[-1] - start == timedelta(days=32, hours=3, minutes=10)
     assert delayed[-1] < greedy[-1]
+
+
+def test_terminal_release_contract_preserves_historical_bounds_and_projection() -> None:
+    current = TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT
+    assert BASELINE_SCHEDULING_CONTRACT["schema_version"] == 2
+    assert current["schema_version"] == 3
+    assert current["maximum_candidates_per_batch"] == 2
+    assert current["global_live_page_cap"] == 5
+    assert current["reservation_release_delay_ms"] == MINIMUM_BASELINE_SPACING_MS
+    assert current["reservation_release_delay_ms"] == 2_400_000
+    assert current["action_priority"] == "due-probes-before-new-baselines-and-navigation"
+    assert current["infrastructure_failure_policy"] == (
+        "timeout-interruption-and-missed-window-block-not-site-ineligibility"
+    )
+    for key in (
+        "minimum_baseline_spacing_ms",
+        "window_start_reservation_ms",
+        "acquisition_outer_configured_hard_cutoff_ms",
+        "status_configured_hard_cutoff_ms",
+        "scheduler_margin_ms",
+        "serial_action_start_offsets_ms",
+        "stability_window_earliest_offsets_ms",
+        "strict_serial_zero_duration_projection",
+    ):
+        assert current[key] == BASELINE_SCHEDULING_CONTRACT[key]
+    assert current["strict_serial_zero_duration_projection"] is not (
+        BASELINE_SCHEDULING_CONTRACT["strict_serial_zero_duration_projection"]
+    )
+
+
+def test_120_candidate_60_batch_ideal_projection_preserves_all_survivor_schedule() -> None:
+    start = datetime(2026, 9, 4, tzinfo=UTC)
+    historical = greedy_baseline_schedule(start, 60)
+    reservations: list[BaselineReservation] = []
+    next_start = start
+    for expected in historical:
+        selected = earliest_safe_baseline_with_releases(next_start, reservations)
+        assert selected == expected
+        reservations.append(
+            BaselineReservation(
+                selected,
+                selected + timedelta(milliseconds=SERIAL_ACTION_START_OFFSETS_MS[-1]),
+            )
+        )
+        next_start = selected + timedelta(milliseconds=MINIMUM_BASELINE_SPACING_MS)
+    validate_baseline_schedule_with_releases(reservations)
+    assert (historical[-1] - start) == timedelta(milliseconds=399_900_000)
+    last_probe = historical[-1] + timedelta(
+        milliseconds=STABILITY_WINDOW_EARLIEST_OFFSETS_MS[-1]
+    )
+    assert last_probe - start == timedelta(milliseconds=658_200_000)
+    assert last_probe - start == timedelta(days=7, hours=14, minutes=50)
+
+
+@pytest.mark.parametrize("offset_ms", (0, 2_399_999, 2_400_000, 85_500_000, 172_800_000))
+def test_unreleased_batches_retain_exact_historical_admission(offset_ms: int) -> None:
+    start = datetime(2026, 9, 4, tzinfo=UTC)
+    existing = (start, start + timedelta(hours=1))
+    requested = start + timedelta(milliseconds=offset_ms)
+    reservations = tuple(BaselineReservation(value) for value in existing)
+    assert baseline_is_safe_with_releases(requested, iter(reservations)) == (
+        baseline_is_safe(requested, existing)
+    )
+    assert earliest_safe_baseline_with_releases(requested, iter(reservations)) == (
+        earliest_safe_baseline(requested, existing)
+    )
+
+
+def test_terminal_release_removes_only_proven_unnecessary_future_reservations() -> None:
+    start = datetime(2026, 9, 4, tzinfo=UTC)
+    reservation = BaselineReservation(start, start + timedelta(minutes=1))
+    # v2 still reserves this rejected batch's +24h action.  Prospective v3
+    # admits a new batch, without moving any real observation window.
+    requested = start + timedelta(milliseconds=SERIAL_ACTION_START_OFFSETS_MS[1])
+    assert baseline_is_safe(requested, (start,)) is False
+    assert baseline_is_safe_with_releases(requested, (reservation,)) is True
+    assert earliest_safe_baseline_with_releases(requested, (reservation,)) == requested
+    assert scheduled_window_starts(requested) == tuple(
+        requested + timedelta(milliseconds=offset)
+        for offset in (25_000, 85_500_000, 258_300_000)
+    )
+
+
+def test_terminal_release_cannot_waive_full_cleanup_and_status_reservation() -> None:
+    start = datetime(2026, 9, 4, tzinfo=UTC)
+    next_probe = start + timedelta(milliseconds=SERIAL_ACTION_START_OFFSETS_MS[1])
+    terminal = next_probe - timedelta(minutes=20)
+    reservation = BaselineReservation(start, terminal)
+    release = terminal + timedelta(minutes=40)
+    assert reservation.released_at == release
+    assert baseline_is_safe_with_releases(release - timedelta(microseconds=1), (reservation,)) is False
+    assert baseline_is_safe_with_releases(release, (reservation,)) is True
+    # Release is itself an exact interval boundary, before the old collision
+    # interval would otherwise end at next_probe + 40 minutes.
+    assert earliest_safe_baseline_with_releases(next_probe, (reservation,)) == release
+
+
+def test_release_solver_closes_overlapping_live_and_released_batch_bans() -> None:
+    start = datetime(2026, 9, 4, tzinfo=UTC)
+    requested = start + timedelta(milliseconds=SERIAL_ACTION_START_OFFSETS_MS[1])
+    released = BaselineReservation(start, requested - timedelta(minutes=20))
+    live = BaselineReservation(start + timedelta(minutes=40))
+    selected = earliest_safe_baseline_with_releases(requested, (released, live))
+    assert selected == requested + timedelta(minutes=80)
+    assert baseline_is_safe_with_releases(selected, (released, live)) is True
+    assert baseline_is_safe_with_releases(
+        selected - timedelta(microseconds=1), (released, live)
+    ) is False
+
+
+def test_schedule_replay_cannot_use_later_terminal_evidence_retroactively() -> None:
+    start = datetime(2026, 9, 4, tzinfo=UTC)
+    collision = start + timedelta(milliseconds=SERIAL_ACTION_START_OFFSETS_MS[1])
+    late_terminal = BaselineReservation(start, collision + timedelta(minutes=1))
+    with pytest.raises(ValueError, match="serial scheduling contract"):
+        validate_baseline_schedule_with_releases(
+            (late_terminal, BaselineReservation(collision))
+        )
+    early_terminal = BaselineReservation(start, start + timedelta(minutes=1))
+    validate_baseline_schedule_with_releases(
+        (BaselineReservation(collision), early_terminal)
+    )
+    # Historical validation remains strict even for that same timestamp pair.
+    with pytest.raises(ValueError, match="serial scheduling contract"):
+        validate_baseline_schedule((start, collision))
+
+
+@pytest.mark.parametrize("field", ("baseline", "terminal"))
+def test_terminal_release_rejects_naive_timestamps(field: str) -> None:
+    start = datetime(2026, 9, 4, tzinfo=UTC)
+    with pytest.raises(ValueError, match="timezone-aware"):
+        BaselineReservation(
+            start.replace(tzinfo=None) if field == "baseline" else start,
+            start.replace(tzinfo=None) if field == "terminal" else None,
+        )
+    with pytest.raises(ValueError, match="timezone-aware"):
+        baseline_is_safe_with_releases(start.replace(tzinfo=None), ())
+    with pytest.raises(ValueError, match="timezone-aware"):
+        earliest_safe_baseline_with_releases(start.replace(tzinfo=None), ())
+
+
+def test_terminal_release_rejects_impossible_or_untyped_evidence() -> None:
+    start = datetime(2026, 9, 4, tzinfo=UTC)
+    with pytest.raises(ValueError, match="predates"):
+        BaselineReservation(start, start - timedelta(microseconds=1))
+    for operation in (
+        baseline_is_safe_with_releases,
+        earliest_safe_baseline_with_releases,
+    ):
+        with pytest.raises(ValueError, match="BaselineReservation"):
+            operation(start, (start,))
+    with pytest.raises(ValueError, match="BaselineReservation"):
+        validate_baseline_schedule_with_releases((start,))
+    with pytest.raises(ValueError, match="serial scheduling contract"):
+        validate_baseline_schedule_with_releases(
+            (BaselineReservation(start), BaselineReservation(start))
+        )
+
+
+def test_terminal_release_uses_elapsed_utc_time_across_dst() -> None:
+    new_york = ZoneInfo("America/New_York")
+    baseline = datetime(2026, 3, 8, 1, 30, tzinfo=new_york)
+    terminal = datetime(2026, 3, 8, 1, 50, tzinfo=new_york)
+    reservation = BaselineReservation(baseline, terminal)
+    assert reservation.baseline_started_at == baseline.astimezone(UTC)
+    assert reservation.terminalised_at == terminal.astimezone(UTC)
+    assert reservation.released_at == datetime(2026, 3, 8, 7, 30, tzinfo=UTC)

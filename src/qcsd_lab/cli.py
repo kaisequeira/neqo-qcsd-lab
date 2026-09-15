@@ -181,6 +181,7 @@ def parser() -> argparse.ArgumentParser:
         "action",
         choices=(
             "status",
+            "acquisition-authority",
             "acquisition-init",
             "acquisition-run",
             "acquisition-status",
@@ -316,6 +317,7 @@ def parser() -> argparse.ArgumentParser:
     class_study.add_argument("--authoritative-fitting-result", type=Path)
     class_study.add_argument("--certification-result", type=Path)
     class_study.add_argument("--foundation-attestation", type=Path)
+    class_study.add_argument("--acquisition-authority", type=Path)
     class_study.add_argument("--readiness-attestation", type=Path)
     class_study.add_argument("--historical-pre-snapshot", type=Path)
     class_study.add_argument("--historical-post-snapshot", type=Path)
@@ -779,6 +781,7 @@ def main(argv: list[str] | None = None) -> None:
                 ),
                 certification_result=absolute(args.certification_result),
                 foundation_attestation=absolute(args.foundation_attestation),
+                acquisition_authority=absolute(args.acquisition_authority),
                 readiness_attestation=absolute(args.readiness_attestation),
                 historical_pre_snapshot=absolute(args.historical_pre_snapshot),
                 historical_post_snapshot=absolute(args.historical_post_snapshot),

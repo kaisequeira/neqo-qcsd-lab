@@ -3,7 +3,8 @@
 
 This host-side process deliberately has no third-party or ``qcsd_lab`` import.
 The acquisition checkpoint remains the only resume authority: this process
-validates the immutable foundation, deeply replays its browser-egress gate at
+validates the immutable acquisition authority (or stronger full foundation),
+deeply replays its browser-egress gate at
 admission, asks the existing coordinator for status, invokes bounded due work,
 and otherwise sleeps only as far as the next five-second heartbeat.
 """
@@ -38,9 +39,9 @@ from typing import Any, Protocol
 STUDY_ID = "classifier-multiorigin100-v1"
 CANDIDATE_COUNT = 600
 SCHEMA_VERSION = 1
-SOURCE_BINDING_PREIMAGE_SCHEMA_VERSION = 2
-ACQUISITION_SCHEMA_VERSION = 5
-HISTORICAL_ACQUISITION_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4})
+SOURCE_BINDING_PREIMAGE_SCHEMA_VERSION = 3
+ACQUISITION_SCHEMA_VERSION = 6
+HISTORICAL_ACQUISITION_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5})
 CHECKPOINT_SCHEMA_VERSION = 2
 FOUNDATION_SCHEMA_VERSION = 4
 HISTORICAL_FOUNDATION_SCHEMA_VERSION = 3
@@ -48,6 +49,24 @@ CATALOGUE_TYPE = "qcsd-class-study-candidate-catalogue"
 PROVENANCE_TYPE = "qcsd-class-study-acquisition-provenance"
 CHECKPOINT_TYPE = "qcsd-class-study-acquisition-checkpoint"
 FOUNDATION_TYPE = "qcsd-class-study-foundation-attestation"
+ACQUISITION_AUTHORITY_TYPE = "qcsd-class-study-acquisition-authority"
+ACQUISITION_SELECTION_POLICY = "first-24-eligible-terminal-prefix-per-stratum-v1"
+_ACQUISITION_CORRECTNESS_TESTS = (
+    "tests/test_discover.py",
+    "tests/test_discovery_evidence.py",
+    "tests/test_prepare.py",
+    "tests/test_manifest.py",
+    "tests/test_cdp_targets.py",
+    "tests/test_playwright_driver.py",
+    "tests/test_browser_egress.py",
+    "tests/test_class_acquisition.py",
+    "tests/test_acquisition_selection.py",
+    "tests/test_acquisition_timing.py",
+    "tests/test_class_catalogue.py",
+    "tests/test_class_cohort.py",
+    "tests/test_class_acquisition_authority.py",
+    "tests/test_class_build_admission_acquisition_authority.py",
+)
 PINNED_CDP_TYPE = "qcsd-class-study-pinned-cdp-probe"
 BUILD_EXECUTION_TYPE = "qcsd-buflo-study-no-cache-build-execution"
 BUILD_EXECUTION_MAX_BYTES = 16 * 1024 * 1024
@@ -304,7 +323,8 @@ _PROVENANCE_PAYLOAD_KEYS = {
     "candidate_catalogue_sha256",
     "candidate_catalogue_payload_sha256",
     "candidate_count",
-    "foundation_attestation",
+    "acquisition_authority",
+    "acquisition_selection_policy",
     "started_at",
     "image_digest",
     "source",
@@ -1348,6 +1368,23 @@ _BASELINE_SCHEDULING_CONTRACT = {
         "last_t+72h_earliest_offset_ms": 3_042_300_000,
     },
 }
+_TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT = {
+    **_BASELINE_SCHEDULING_CONTRACT,
+    "schema_version": 3,
+    "policy": "serial-terminal-released-stability-window-batch-reservations-v3",
+    "reservation_release": (
+        "all-batch-members-scientifically-terminal-plus-full-serial-reservation"
+    ),
+    "reservation_release_evidence": (
+        "latest-immutable-hash-bound-batch-member-terminalised-at"
+    ),
+    "reservation_release_delay_ms": PENDING_BASELINE_GUARD_MS,
+    "reservation_release_validation": "causal-at-each-recorded-baseline-start",
+    "infrastructure_failure_policy": (
+        "timeout-interruption-and-missed-window-block-not-site-ineligibility"
+    ),
+    "action_priority": "due-probes-before-new-baselines-and-navigation",
+}
 _RUN_WAIT_POLICY = {
     "navigation_phase": "separate-bounded-action-before-baseline",
     "t+30s": "same-action-interruptible-wait-to-earliest-then-probe",
@@ -1379,6 +1416,8 @@ _STATUS_KEYS = {
     "work_due_now",
     "complete",
     "next_due",
+    "selection",
+    "selection_blocked_candidate_ids",
 }
 _STATUS_DETAIL_KEYS = _STATUS_KEYS | {
     "valid",
@@ -1506,7 +1545,7 @@ class AcquisitionBinding:
     cohort_version: int
     catalogue_sha256: str
     provenance_sha256: str
-    foundation_sha256: str
+    foundation_sha256: str | None
     pinned_cdp_sha256: str
     pinned_cdp_payload_sha256: str
     pinned_cdp_contract_sha256: str
@@ -1518,6 +1557,8 @@ class AcquisitionBinding:
     candidate_ids: frozenset[str]
     candidate_order: tuple[str, ...]
     source: Mapping[str, Any]
+    acquisition_authority_path: str
+    acquisition_authority_sha256: str
 
 
 @dataclass(frozen=True)
@@ -1606,6 +1647,8 @@ def _source_binding_sha256(binding: AcquisitionBinding) -> str:
                 "build_execution_sha256": binding.build_execution_sha256,
                 "cohort_version": binding.cohort_version,
                 "foundation_sha256": binding.foundation_sha256,
+                "acquisition_authority_path": binding.acquisition_authority_path,
+                "acquisition_authority_sha256": binding.acquisition_authority_sha256,
                 "pinned_cdp_contract_sha256": binding.pinned_cdp_contract_sha256,
                 "pinned_cdp_payload_sha256": binding.pinned_cdp_payload_sha256,
                 "pinned_cdp_sha256": binding.pinned_cdp_sha256,
@@ -4737,6 +4780,57 @@ def _validate_foundation(
     prepare_image: str,
     acquisition_started_at: Any,
 ) -> dict[str, Any]:
+    return _validate_acquisition_gate_evidence(
+        binding,
+        paths=paths,
+        prepare_source=prepare_source,
+        prepare_image=prepare_image,
+        acquisition_started_at=acquisition_started_at,
+        receipt_type=FOUNDATION_TYPE,
+    )
+
+
+def _validate_acquisition_authority(
+    binding: Any,
+    *,
+    paths: WatchPaths,
+    prepare_source: Mapping[str, Any],
+    prepare_image: str,
+    acquisition_started_at: Any,
+) -> dict[str, Any]:
+    if not isinstance(binding, dict) or set(binding) != {"path", "sha256"}:
+        raise WatchError("acquisition authority binding is malformed")
+    path = _container_binding_path(binding["path"], paths=paths, label="acquisition authority")
+    raw, _digest = _read_stable_file(path, root=paths.lab_root, label="acquisition authority")
+    try:
+        envelope = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise WatchError("acquisition authority is not valid UTF-8 JSON") from error
+    receipt_type = envelope.get("receipt_type") if isinstance(envelope, dict) else None
+    if receipt_type == FOUNDATION_TYPE:
+        return _validate_foundation(
+            binding, paths=paths, prepare_source=prepare_source,
+            prepare_image=prepare_image, acquisition_started_at=acquisition_started_at,
+        )
+    if receipt_type != ACQUISITION_AUTHORITY_TYPE:
+        raise WatchError("acquisition authority receipt type is unsupported")
+    return _validate_acquisition_gate_evidence(
+        binding, paths=paths, prepare_source=prepare_source,
+        prepare_image=prepare_image, acquisition_started_at=acquisition_started_at,
+        receipt_type=ACQUISITION_AUTHORITY_TYPE,
+    )
+
+
+def _validate_acquisition_gate_evidence(
+    binding: Any,
+    *,
+    paths: WatchPaths,
+    prepare_source: Mapping[str, Any],
+    prepare_image: str,
+    acquisition_started_at: Any,
+    receipt_type: str,
+) -> dict[str, Any]:
+    acquisition_only = receipt_type == ACQUISITION_AUTHORITY_TYPE
     if not isinstance(binding, dict) or set(binding) != {"path", "sha256"}:
         raise WatchError("acquisition foundation binding is malformed")
     claimed = binding["sha256"]
@@ -4748,7 +4842,7 @@ def _validate_foundation(
     snapshot = _load_canonical_receipt(
         foundation_path,
         root=paths.lab_root,
-        receipt_type=FOUNDATION_TYPE,
+        receipt_type=receipt_type,
         label="acquisition foundation",
     )
     if snapshot.sha256 != claimed:
@@ -4772,21 +4866,35 @@ def _validate_foundation(
         "hard_gates",
         "all_foundation_gates_passed",
     }
+    if acquisition_only:
+        expected_foundation_keys = (
+            expected_foundation_keys - {"summary", "all_foundation_gates_passed"}
+        ) | {
+            "authority_scope", "prepare_source", "study_contract",
+            "acquisition_correctness", "all_acquisition_gates_passed",
+        }
     cohort = payload.get("cohort_version")
     if (
         set(payload) != expected_foundation_keys
-        or payload.get("attestation_schema_version") != FOUNDATION_SCHEMA_VERSION
-        or payload.get("artifact_type") != FOUNDATION_TYPE
+        or type(payload.get("attestation_schema_version")) is not int
+        or payload.get("attestation_schema_version") != (1 if acquisition_only else FOUNDATION_SCHEMA_VERSION)
+        or payload.get("artifact_type") != receipt_type
         or payload.get("study_id") != STUDY_ID
         or type(cohort) is not int
         or cohort < 1
-        or payload.get("implementation_status") != "foundation-ready-for-class-acquisition"
+        or payload.get("implementation_status") != (
+            "acquisition-ready" if acquisition_only else "foundation-ready-for-class-acquisition"
+        )
         or payload.get("promotion_authority") is not False
         or payload.get("implementation_scope") != "client_only_quic"
         or payload.get("paper_equivalent") is not False
         or payload.get("no_waivers") is not True
-        or payload.get("all_foundation_gates_passed") is not True
-        or binding["path"] != f"/lab/artifacts/class-study-foundation-v{cohort}.json"
+        or payload.get("all_acquisition_gates_passed" if acquisition_only else "all_foundation_gates_passed") is not True
+        or binding["path"] != (
+            f"/lab/artifacts/class-study-acquisition-authority-v{cohort}.json"
+            if acquisition_only else f"/lab/artifacts/class-study-foundation-v{cohort}.json"
+        )
+        or acquisition_only and payload.get("authority_scope") != "public-page-acquisition-only"
     ):
         raise WatchError("acquisition foundation authority envelope is invalid")
     collection_source = payload.get("source")
@@ -4799,7 +4907,7 @@ def _validate_foundation(
         label="acquisition foundation collection source",
     )
     evidence = payload.get("evidence")
-    if not isinstance(evidence, dict) or set(evidence) != {
+    expected_evidence = {
         "build_execution",
         "pinned_cdp_probe",
         "browser_egress_qualification",
@@ -4808,7 +4916,10 @@ def _validate_foundation(
         "controlled_qualification",
         "regression_results",
         "controlled_results",
-    }:
+    }
+    if acquisition_only:
+        expected_evidence = {"build_execution", "pinned_cdp_probe", "browser_egress_qualification"}
+    if not isinstance(evidence, dict) or set(evidence) != expected_evidence:
         raise WatchError("acquisition foundation evidence inventory is incomplete")
     build_binding = evidence.get("build_execution")
     if (
@@ -4953,6 +5064,27 @@ def _validate_foundation(
     if not build_finished <= probe_recorded <= foundation_recorded <= acquisition_started:
         raise WatchError("acquisition foundation/pinned CDP chronology is invalid")
 
+    authority = {
+        "foundation_sha256": snapshot.sha256 if not acquisition_only else None,
+        "pinned_cdp_sha256": pinned_snapshot.sha256,
+        "pinned_cdp_payload_sha256": pinned_snapshot.value["payload_sha256"],
+        "pinned_cdp_contract_sha256": contract_sha256,
+        "build_execution_sha256": build_snapshot.sha256,
+        "build_completion_path": expected_identity["completion_path"],
+        "build_completion_sha256": build_completion_sha256,
+        "cohort_version": cohort,
+        "browser_egress_qualification": browser_egress,
+        "acquisition_authority_path": binding["path"],
+        "acquisition_authority_sha256": snapshot.sha256,
+    }
+    if acquisition_only:
+        _validate_acquisition_correctness_authority(
+            payload, paths=paths, prepare_source=expected_prepare_source,
+            build_finished=build_finished, probe_recorded=probe_recorded,
+            recorded=foundation_recorded,
+        )
+        return authority
+
     summary = payload.get("summary")
     if (
         not isinstance(summary, dict)
@@ -5024,17 +5156,89 @@ def _validate_foundation(
     )
     if gates[-1]["evidence_sha256s"] != expected_browser_egress_gate:
         raise WatchError("acquisition foundation browser-egress hard gate is not exact")
-    return {
-        "foundation_sha256": snapshot.sha256,
-        "pinned_cdp_sha256": pinned_snapshot.sha256,
-        "pinned_cdp_payload_sha256": pinned_snapshot.value["payload_sha256"],
-        "pinned_cdp_contract_sha256": contract_sha256,
-        "build_execution_sha256": build_snapshot.sha256,
-        "build_completion_path": expected_identity["completion_path"],
-        "build_completion_sha256": build_completion_sha256,
-        "cohort_version": cohort,
-        "browser_egress_qualification": browser_egress,
+    return authority
+
+
+def _validate_acquisition_correctness_authority(
+    payload: Mapping[str, Any],
+    *,
+    paths: WatchPaths,
+    prepare_source: Mapping[str, Any],
+    build_finished: datetime,
+    probe_recorded: datetime,
+    recorded: datetime,
+) -> None:
+    """Reconstruct the acquisition-only gate from immutable bytes, never run it."""
+
+    study = payload["study_contract"]
+    study_path = paths.lab_root / "config/class-study/v1/study.json"
+    _raw, study_sha256 = _read_stable_file(
+        study_path, root=paths.lab_root, label="acquisition study contract"
+    )
+    if study != {"path": "/lab/config/class-study/v1/study.json", "sha256": study_sha256}:
+        raise WatchError("acquisition authority study contract differs")
+    if payload["prepare_source"] != dict(prepare_source):
+        raise WatchError("acquisition authority prepare source differs")
+    correctness = payload["acquisition_correctness"]
+    if not isinstance(correctness, dict) or set(correctness) != {
+        "schema_version", "gate", "argv", "cwd", "input_sha256", "source",
+        "build_execution_identity", "study_contract", "started_at", "finished_at",
+        "exit_code", "stdout", "stdout_bytes", "stdout_sha256",
+    }:
+        raise WatchError("acquisition correctness evidence inventory is invalid")
+    inputs = {}
+    for relative in (*_ACQUISITION_CORRECTNESS_TESTS, "pyproject.toml", "uv.lock"):
+        _raw, digest = _read_stable_file(
+            paths.lab_root / relative, root=paths.lab_root, label="acquisition correctness input"
+        )
+        inputs[relative] = digest
+    output = correctness["stdout"]
+    if (
+        type(correctness["schema_version"]) is not int or correctness["schema_version"] != 1
+        or correctness["gate"] != "acquisition-focused-correctness"
+        or correctness["argv"] != [
+            "/opt/qcsd-venv/bin/python", "-m", "pytest", "-p", "no:cacheprovider",
+            *_ACQUISITION_CORRECTNESS_TESTS,
+        ]
+        or correctness["cwd"] != "/lab"
+        or correctness["input_sha256"] != inputs
+        or correctness["source"] != payload["source"]
+        or correctness["build_execution_identity"] != payload["build_execution_identity"]
+        or correctness["study_contract"] != study
+        or type(correctness["exit_code"]) is not int or correctness["exit_code"] != 0
+        or not isinstance(output, str) or not output
+        or type(correctness["stdout_bytes"]) is not int
+        or correctness["stdout_bytes"] != len(output.encode("utf-8"))
+        or correctness["stdout_sha256"] != _sha256_bytes(output.encode("utf-8"))
+    ):
+        raise WatchError("acquisition correctness evidence differs from pinned inputs")
+    started = _evidence_timestamp(correctness["started_at"], label="acquisition correctness start")
+    finished = _evidence_timestamp(correctness["finished_at"], label="acquisition correctness finish")
+    browser = payload["evidence"]["browser_egress_qualification"]
+    browser_recorded = _evidence_timestamp(browser["recorded_at"], label="browser receipt")
+    if not (build_finished <= probe_recorded <= started <= finished <= recorded
+            and browser_recorded <= started):
+        raise WatchError("acquisition correctness chronology is invalid")
+    identity = payload["build_execution_identity"]
+    evidence = payload["evidence"]
+    gate_evidence = {
+        "current-clean-source-and-no-cache-build": [identity["sha256"], identity["completion_sha256"]],
+        "acquisition-focused-correctness": [_sha256_bytes(_canonical_json_bytes(correctness))],
+        "pinned-cdp-integration-probe": [evidence["pinned_cdp_probe"]["sha256"]],
+        "browser-egress-packet-qualification-110-of-110": [
+            browser["sha256"], browser["payload_sha256"], browser["expanded_vectors_sha256"]
+        ],
     }
+    expected_gates = [
+        {
+            "ordinal": ordinal, "gate": gate,
+            "gate_identity_sha256": _sha256_bytes(_canonical_json_bytes({"ordinal": ordinal, "gate": gate})),
+            "result": "pass", "evidence_sha256s": sorted(set(hashes)),
+        }
+        for ordinal, (gate, hashes) in enumerate(gate_evidence.items(), 1)
+    ]
+    if not _matches_json_contract(payload["hard_gates"], expected_gates):
+        raise WatchError("acquisition authority hard gates differ from reconstructed evidence")
 
 
 def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
@@ -5108,7 +5312,7 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
     if acquisition_schema_version != ACQUISITION_SCHEMA_VERSION:
         raise WatchError("acquisition provenance uses an unsupported schema")
     if set(payload) != _PROVENANCE_PAYLOAD_KEYS:
-        raise WatchError("acquisition provenance payload fields differ from the v5 contract")
+        raise WatchError("acquisition provenance payload fields differ from the v6 contract")
     fixed_contract = {
         "browser_tool": _EXPECTED_BROWSER_TOOL_IDENTITY,
         "navigation_implementation": _NAVIGATION_IMPLEMENTATION,
@@ -5119,7 +5323,8 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
         "browser_navigation_timeout_ms": BROWSER_NAVIGATION_TIMEOUT_MS,
         "passive_render_hard_cap_after_load_ms": PASSIVE_RENDER_HARD_CAP_MS,
         "acquisition_action_timing_contract": _ACQUISITION_ACTION_TIMING_CONTRACT,
-        "baseline_scheduling_contract": _BASELINE_SCHEDULING_CONTRACT,
+        "baseline_scheduling_contract": _TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT,
+        "acquisition_selection_policy": ACQUISITION_SELECTION_POLICY,
         "registrable_domain_policy": _REGISTRABLE_DOMAIN_POLICY,
         "domain_safety_policy": _DOMAIN_SAFETY_POLICY,
         "domain_safety_policy_sha256": _DOMAIN_SAFETY_POLICY_SHA256,
@@ -5163,8 +5368,8 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
         or source.get("neqo_patch_sha256") != EMPTY_SHA256
     ):
         raise WatchError("acquisition provenance does not bind an exact clean source checkout")
-    foundation_authority = _validate_foundation(
-        payload["foundation_attestation"],
+    foundation_authority = _validate_acquisition_authority(
+        payload["acquisition_authority"],
         paths=paths,
         prepare_source=source,
         prepare_image=image,
@@ -5176,6 +5381,8 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
         catalogue_sha256=catalogue_sha256,
         provenance_sha256=provenance_snapshot.sha256,
         foundation_sha256=foundation_authority["foundation_sha256"],
+        acquisition_authority_path=foundation_authority["acquisition_authority_path"],
+        acquisition_authority_sha256=foundation_authority["acquisition_authority_sha256"],
         pinned_cdp_sha256=foundation_authority["pinned_cdp_sha256"],
         pinned_cdp_payload_sha256=foundation_authority["pinned_cdp_payload_sha256"],
         pinned_cdp_contract_sha256=foundation_authority["pinned_cdp_contract_sha256"],
@@ -5233,6 +5440,7 @@ def _validate_checkpoint(paths: WatchPaths, binding: AcquisitionBinding) -> Rece
         payload["baseline_batches"],
         binding=binding,
         states=states,
+        paths=paths,
     )
     _validate_active_batch(
         payload["active_batch"],
@@ -5278,13 +5486,14 @@ def _validate_baseline_batches(
     *,
     binding: AcquisitionBinding,
     states: Mapping[str, Mapping[str, Any]],
+    paths: WatchPaths | None = None,
 ) -> dict[str, Mapping[str, Any]]:
     if not isinstance(value, list):
         raise WatchError("acquisition checkpoint baseline batch ledger is malformed")
     batch_ids: set[str] = set()
     batch_by_candidate: dict[str, Mapping[str, Any]] = {}
     previous_baseline: datetime | None = None
-    action_starts: list[tuple[datetime, str]] = []
+    reservations: list[tuple[datetime, Mapping[str, Any]]] = []
     for batch in value:
         if not isinstance(batch, dict) or set(batch) != {
             "batch_id",
@@ -5308,13 +5517,21 @@ def _validate_baseline_batches(
         if previous_baseline is not None and baseline <= previous_baseline:
             raise WatchError("acquisition checkpoint baseline batches are not append-ordered")
         previous_baseline = baseline
-        action_starts.extend(
-            (
-                baseline + timedelta(milliseconds=offset),
-                batch_id,
+        offsets = _BASELINE_SCHEDULING_CONTRACT["serial_action_start_offsets_ms"]
+        for previous_start, previous_batch in reservations:
+            collision = any(
+                abs((baseline + timedelta(milliseconds=left))
+                    - (previous_start + timedelta(milliseconds=right)))
+                < timedelta(milliseconds=PENDING_BASELINE_GUARD_MS)
+                for left in offsets for right in offsets
             )
-            for offset in _BASELINE_SCHEDULING_CONTRACT["serial_action_start_offsets_ms"]
-        )
+            if collision:
+                release = _baseline_batch_release(
+                    previous_batch, states=states, binding=binding, paths=paths
+                )
+                if release is None or baseline < release:
+                    raise WatchError("acquisition checkpoint baseline batches violate the serial schedule")
+        reservations.append((baseline, batch))
         candidate_ids = _candidate_id_list(
             batch["candidate_ids"],
             binding=binding,
@@ -5342,12 +5559,6 @@ def _validate_baseline_batches(
             batch_by_candidate[candidate_id] = batch
         if live_pages != observed_live_pages:
             raise WatchError("acquisition checkpoint baseline batch live-page count is false")
-    ordered_starts = sorted(action_starts)
-    for (left, left_batch), (right, right_batch) in pairwise(ordered_starts):
-        if left_batch != right_batch and right - left < timedelta(
-            milliseconds=PENDING_BASELINE_GUARD_MS
-        ):
-            raise WatchError("acquisition checkpoint baseline batches violate the serial schedule")
     state_candidates = {
         candidate_id for candidate_id, state in states.items() if "baseline_started_at" in state
     }
@@ -5356,6 +5567,160 @@ def _validate_baseline_batches(
             "acquisition checkpoint baseline batches do not exactly cover candidate state"
         )
     return batch_by_candidate
+
+
+def _baseline_batch_release(
+    batch: Mapping[str, Any],
+    *,
+    states: Mapping[str, Mapping[str, Any]],
+    binding: AcquisitionBinding,
+    paths: WatchPaths | None,
+) -> datetime | None:
+    """Authenticate causal whole-batch release without reclassifying failures."""
+
+    if paths is None:
+        return None
+    terminals: list[datetime] = []
+    for candidate_id in batch["candidate_ids"]:
+        state = states[candidate_id]
+        terminal = _authenticated_checkpoint_terminal(
+            candidate_id, state=state, baseline_batch=batch, binding=binding, paths=paths
+        )
+        if terminal is None or _scientific_terminal_eligibility(terminal, state) is None:
+            return None
+        terminals.append(_parse_timestamp(terminal["terminalised_at"], label="acquisition terminal"))
+    return max(terminals) + timedelta(milliseconds=PENDING_BASELINE_GUARD_MS)
+
+
+def _authenticated_checkpoint_terminal(
+    candidate_id: str,
+    *,
+    state: Mapping[str, Any],
+    baseline_batch: Mapping[str, Any] | None,
+    binding: AcquisitionBinding,
+    paths: WatchPaths,
+) -> Mapping[str, Any] | None:
+    """Join a terminal receipt to its exact checkpoint state and provenance.
+
+    The pinned acquisition runner owns scientific validation. This host check
+    authenticates its recorded outcome, without reassessing page eligibility.
+    """
+
+    terminal_binding = state.get("terminal")
+    if terminal_binding is None:
+        if state.get("state") == "terminal":
+            raise WatchError("acquisition terminal state has no receipt binding")
+        return None
+    relative = f"terminals/{candidate_id}.json"
+    if (not isinstance(terminal_binding, dict)
+            or set(terminal_binding) != {"path", "sha256"}
+            or terminal_binding["path"] != relative):
+        raise WatchError("acquisition terminal binding is malformed")
+    snapshot = _load_canonical_receipt(
+        paths.acquisition_root / relative, root=paths.lab_root,
+        receipt_type="qcsd-class-study-acquisition-terminal", label="acquisition terminal",
+    )
+    terminal = snapshot.value["payload"]
+    kind = terminal.get("kind")
+    if (set(terminal) != {
+                "terminal_schema_version", "checkpoint_schema_version", "candidate_id",
+                "kind", "reason", "terminalised_at", "checkpoint_state_sha256",
+                "provenance_sha256", "baseline_batch", "stability_receipt", "admitted_workload",
+            }
+            or snapshot.sha256 != terminal_binding["sha256"]
+            or type(terminal.get("terminal_schema_version")) is not int
+            or terminal.get("terminal_schema_version") != 3
+            or type(terminal.get("checkpoint_schema_version")) is not int
+            or terminal.get("checkpoint_schema_version") != CHECKPOINT_SCHEMA_VERSION
+            or terminal.get("candidate_id") != candidate_id
+            or terminal.get("provenance_sha256") != binding.provenance_sha256
+            or terminal.get("baseline_batch") != baseline_batch
+            or state.get("state") != "terminal"
+            or kind not in {
+                "eligible", "stable-page-unavailable", "probe-window-missed", "pre-probe-rejection"
+            }
+            or (kind == "pre-probe-rejection") != (baseline_batch is None)):
+        raise WatchError("acquisition terminal evidence differs from the checkpoint")
+    normalised = {
+        **state, "state": "pending" if kind == "pre-probe-rejection" else "probing",
+        "terminal": None,
+    }
+    if terminal["checkpoint_state_sha256"] != _sha256_bytes(_canonical_json_bytes(normalised)):
+        raise WatchError("acquisition terminal checkpoint hash differs")
+    terminal_time = _parse_timestamp(terminal["terminalised_at"], label="acquisition terminal")
+    if baseline_batch is not None and terminal_time < _parse_timestamp(
+        baseline_batch["baseline_started_at"], label="acquisition baseline"
+    ):
+        raise WatchError("acquisition terminal predates its baseline")
+    return terminal
+
+
+def _scientific_terminal_eligibility(
+    terminal: Mapping[str, Any], state: Mapping[str, Any]
+) -> bool | None:
+    """Project the runner's recorded outcome; infrastructure remains unknown."""
+
+    pages = state.get("pages", [])
+    if not isinstance(pages, list) or any(not isinstance(page, dict) for page in pages):
+        raise WatchError("acquisition terminal page state is malformed")
+    if terminal["kind"] == "probe-window-missed" or any(
+        page["rejection"].get("kind") == "probe-retry-exhausted"
+        for page in pages if isinstance(page.get("rejection"), dict)
+    ):
+        return None
+    if terminal["kind"] == "pre-probe-rejection":
+        attempts = state.get("navigation_attempts", [])
+        if (not isinstance(attempts, list)
+                or attempts and not isinstance(attempts[-1], dict)):
+            raise WatchError("acquisition terminal navigation state is malformed")
+        if not attempts or attempts[-1].get("outcome") != "terminal-policy-rejection":
+            return None
+    return terminal["kind"] == "eligible"
+
+
+def _validate_reported_selection(
+    details: Mapping[str, Any],
+    *,
+    checkpoint: Mapping[str, Any],
+    paths: WatchPaths,
+    binding: AcquisitionBinding,
+) -> None:
+    """Bind self-consistent status inventories to authenticated terminal facts."""
+
+    states = checkpoint["candidates"]
+    batches = {
+        candidate_id: batch
+        for batch in checkpoint["baseline_batches"] for candidate_id in batch["candidate_ids"]
+    }
+    outcomes: dict[str, bool | None] = {}
+    for candidate_id in binding.candidate_order:
+        state = states[candidate_id]
+        terminal = _authenticated_checkpoint_terminal(
+            candidate_id, state=state, baseline_batch=batches.get(candidate_id),
+            binding=binding, paths=paths,
+        )
+        if terminal is not None:
+            outcomes[candidate_id] = _scientific_terminal_eligibility(terminal, state)
+    selection = details["selection"]
+    if (selection["terminal_ids"] != [key for key, outcome in outcomes.items() if outcome is not None]
+            or details["selection_blocked_candidate_ids"] != [
+                key for key, outcome in outcomes.items() if outcome is None
+            ]
+            or details["terminal_count"] != len(outcomes)):
+        raise WatchError("acquisition selection differs from authenticated checkpoint terminals")
+    for index, stratum in enumerate(selection["strata"]):
+        members = binding.candidate_order[index * 120:(index + 1) * 120]
+        expected_eligible = [candidate_id for candidate_id in members if outcomes.get(candidate_id) is True][:24]
+        if stratum["eligible_ids"] != expected_eligible:
+            raise WatchError("acquisition selection eligibility differs from authenticated terminals")
+    if details["complete"] and any(
+        state.get("terminal") is None and (
+            state.get("state") in {"baseline-ready", "probing"}
+            or state.get("navigation_attempts") or state.get("pending_navigation")
+        )
+        for state in states.values()
+    ):
+        raise WatchError("acquisition selection completion hides started checkpoint work")
 
 
 def _validate_active_batch(
@@ -8631,15 +8996,15 @@ def _validate_action_result(value: Any, *, action: str) -> dict[str, Any]:
             details["authoritative"] is not False
             or not isinstance(gate_verification, dict)
             or set(gate_verification)
-            != {"foundation_path", "foundation_sha256", "informational_only"}
-            or not isinstance(gate_verification["foundation_path"], str)
+            != {"acquisition_authority_path", "acquisition_authority_sha256", "informational_only"}
+            or not isinstance(gate_verification["acquisition_authority_path"], str)
             or re.fullmatch(
-                r"/lab/artifacts/class-study-foundation-v[1-9][0-9]*\.json",
-                gate_verification["foundation_path"],
+                r"/lab/artifacts/class-study-(?:foundation|acquisition-authority)-v[1-9][0-9]*\.json",
+                gate_verification["acquisition_authority_path"],
             )
             is None
-            or not isinstance(gate_verification["foundation_sha256"], str)
-            or _SHA256_RE.fullmatch(gate_verification["foundation_sha256"]) is None
+            or not isinstance(gate_verification["acquisition_authority_sha256"], str)
+            or _SHA256_RE.fullmatch(gate_verification["acquisition_authority_sha256"]) is None
             or gate_verification["informational_only"] is not True
         ):
             raise WatchError("acquisition-status foundation verification is not informational")
@@ -8658,6 +9023,86 @@ def _validate_action_result(value: Any, *, action: str) -> dict[str, Any]:
     return value
 
 
+def _validate_selection_details(selection: Any, blocked: Any) -> None:
+    """Reconstruct the prefix inventory; unknown outcomes remain unknown."""
+
+    expected_keys = {
+        "schema_version", "policy", "tranco_list_sha256", "complete", "quota_unmet_strata",
+        "candidate_ids", "terminal_ids", "prefix_ids", "needed_ids", "admission_ids",
+        "remaining_ids", "unassessed_ids", "pilot_ids", "strata",
+    }
+    if (not isinstance(selection, dict) or set(selection) != expected_keys
+            or type(selection["schema_version"]) is not int or selection["schema_version"] != 1
+            or selection["policy"] != ACQUISITION_SELECTION_POLICY
+            or _SHA256_RE.fullmatch(str(selection["tranco_list_sha256"])) is None):
+        raise WatchError("acquisition selection inventory is malformed")
+    candidates = selection["candidate_ids"]
+    if (not isinstance(candidates, list) or len(candidates) != CANDIDATE_COUNT
+            or any(not isinstance(item, str) for item in candidates)
+            or len(set(candidates)) != len(candidates)):
+        raise WatchError("acquisition selection candidate inventory is invalid")
+    for name in expected_keys & {
+        "terminal_ids", "prefix_ids", "needed_ids", "admission_ids", "remaining_ids",
+        "unassessed_ids", "pilot_ids",
+    }:
+        ids = selection[name]
+        if (not isinstance(ids, list) or any(not isinstance(item, str) for item in ids)
+                or ids != [item for item in candidates if item in ids]):
+            raise WatchError("acquisition selection ID inventory is invalid")
+    terminals = set(selection["terminal_ids"])
+    if (not isinstance(blocked, list) or any(not isinstance(item, str) for item in blocked)
+            or blocked != [item for item in candidates if item in blocked]
+            or terminals.intersection(blocked)):
+        raise WatchError("acquisition selection blocked inventory is invalid")
+    strata = selection["strata"]
+    if not isinstance(strata, list) or len(strata) != 5:
+        raise WatchError("acquisition selection strata are invalid")
+    expected_strata = []
+    for index, stratum in enumerate(strata):
+        if not isinstance(stratum, dict) or set(stratum) != {
+            "id", "complete", "quota_unmet", "cutoff_id", "prefix_ids", "eligible_ids",
+            "needed_ids", "admission_ids", "unassessed_ids",
+        } or not isinstance(stratum["id"], str):
+            raise WatchError("acquisition selection stratum inventory is invalid")
+        members = candidates[index * 120:(index + 1) * 120]
+        eligible = stratum["eligible_ids"]
+        if (not isinstance(eligible, list) or any(not isinstance(item, str) for item in eligible)
+                or len(eligible) > 24 or not set(eligible).issubset(terminals)
+                or eligible != [item for item in members if item in eligible]):
+            raise WatchError("acquisition selection eligible prefix is invalid")
+        quota_met = len(eligible) == 24
+        cutoff = members.index(eligible[-1]) + 1 if quota_met else len(members)
+        prefix = members[:cutoff]
+        needed = [item for item in prefix if item not in terminals]
+        expected_strata.append({
+            "id": stratum["id"], "complete": quota_met and not needed,
+            "quota_unmet": not quota_met and not needed,
+            "cutoff_id": eligible[-1] if quota_met else None,
+            "prefix_ids": prefix, "eligible_ids": eligible, "needed_ids": needed,
+            "admission_ids": [item for item in members if item not in terminals or item in eligible][:24],
+            "unassessed_ids": [item for item in members[cutoff:] if item not in terminals],
+        })
+    if len({row["id"] for row in expected_strata}) != 5:
+        raise WatchError("acquisition selection strata are duplicated")
+    if [row["id"] for row in expected_strata] != [
+        "1-1000", "1001-10000", "10001-100000", "100001-500000", "500001-1000000"
+    ]:
+        raise WatchError("acquisition selection rank strata differ from the study")
+    complete = all(row["complete"] for row in expected_strata)
+    expected = {
+        **selection,
+        "complete": complete,
+        "quota_unmet_strata": [row["id"] for row in expected_strata if row["quota_unmet"]],
+        "remaining_ids": [item for item in candidates if item not in terminals],
+        "pilot_ids": [item for row in expected_strata for item in row["eligible_ids"]] if complete else [],
+        "strata": expected_strata,
+    }
+    for name in ("prefix_ids", "needed_ids", "admission_ids", "unassessed_ids"):
+        expected[name] = [item for row in expected_strata for item in row[name]]
+    if not _matches_json_contract(selection, expected):
+        raise WatchError("acquisition selection differs from its deterministic terminal prefix")
+
+
 def _validate_status_details(details: Mapping[str, Any], *, action: str) -> None:
     if (
         type(details["acquisition_schema_version"]) is not int
@@ -8670,6 +9115,9 @@ def _validate_status_details(details: Mapping[str, Any], *, action: str) -> None
         or details["global_live_page_cap"] != GLOBAL_LIVE_PAGE_CAP
     ):
         raise WatchError(f"{action} result carries another acquisition schema or batch cap")
+    selection = details["selection"]
+    blocked = details["selection_blocked_candidate_ids"]
+    _validate_selection_details(selection, blocked)
     active_batch = details["active_batch"]
     if active_batch is not None:
         if not isinstance(active_batch, dict) or set(active_batch) != {
@@ -8728,7 +9176,8 @@ def _validate_status_details(details: Mapping[str, Any], *, action: str) -> None
     if (
         details["candidate_count"] != CANDIDATE_COUNT
         or details["terminal_count"] + details["pending_count"] + details["probing_count"]
-        != CANDIDATE_COUNT
+        > CANDIDATE_COUNT
+        or details["terminal_count"] != len(selection["terminal_ids"]) + len(blocked)
         or details["due_now_count"] + details["finalisable_count"] + details["missed_window_count"]
         > details["probing_count"]
         or details["recovery_required_count"]
@@ -8752,7 +9201,8 @@ def _validate_status_details(details: Mapping[str, Any], *, action: str) -> None
     if details["work_due_now"] != expected_due:
         raise WatchError(f"{action} result due-work flag is inconsistent")
     expected_complete = (
-        details["terminal_count"] == CANDIDATE_COUNT
+        selection["complete"] and not blocked
+        and details["pending_count"] == 0 and details["probing_count"] == 0
         and details["recovery_required_count"] == 0
         and details["finalisable_count"] == 0
         and active_batch is None
@@ -8893,12 +9343,19 @@ def _run_verified_action(
     )
     if result["details"]["active_batch"] != observed_active_batch:
         raise WatchError(f"{action} result active batch differs from the checkpoint")
+    if result["details"]["selection"]["candidate_ids"] != list(binding.candidate_order):
+        raise WatchError(f"{action} selection differs from the frozen candidate order")
+    catalogue, _order, catalogue_sha256 = _validate_catalogue(paths)
+    tranco = catalogue["payload"]["tranco"]
+    if (catalogue_sha256 != binding.catalogue_sha256
+            or not isinstance(tranco, dict)
+            or result["details"]["selection"]["tranco_list_sha256"]
+            != tranco.get("list_sha256")):
+        raise WatchError(f"{action} selection differs from the frozen Tranco list")
     if action == "acquisition-status":
         expected_gate_verification = {
-            "foundation_path": (
-                f"/lab/artifacts/class-study-foundation-v{binding.cohort_version}.json"
-            ),
-            "foundation_sha256": binding.foundation_sha256,
+            "acquisition_authority_path": binding.acquisition_authority_path,
+            "acquisition_authority_sha256": binding.acquisition_authority_sha256,
             "informational_only": True,
         }
         if not _matches_json_contract(
@@ -8927,6 +9384,9 @@ def _run_verified_action(
         )
         if not benign_launch_drift:
             raise WatchError("acquisition-run did not advance the checkpoint")
+    _validate_reported_selection(
+        result["details"], checkpoint=after.value["payload"], paths=paths, binding=binding
+    )
     return result, before, after
 
 
@@ -8941,7 +9401,7 @@ def watch_acquisition(
     environment: Mapping[str, str] | None = None,
     heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS,
 ) -> dict[str, Any]:
-    """Run until the existing checkpoint reports every candidate terminal."""
+    """Run until the deterministic terminal prefix is complete and work drains."""
 
     global _active_signal_latch
     if isinstance(heartbeat_seconds, bool) or not isinstance(heartbeat_seconds, (int, float)):
@@ -9040,6 +9500,19 @@ def watch_acquisition(
                     continue
                 next_due = details["next_due"]
                 if next_due is None:
+                    # Due work and future observations drain first.  Once no
+                    # work remains, preserve the distinction between an
+                    # infrastructure blocker and exhausted scientific quota.
+                    if details["selection_blocked_candidate_ids"]:
+                        raise WatchError(
+                            "acquisition selection blocked by infrastructure outcomes: "
+                            + ", ".join(details["selection_blocked_candidate_ids"])
+                        )
+                    if details["selection"]["quota_unmet_strata"]:
+                        raise WatchError(
+                            "acquisition scientific quota remains unmet in strata: "
+                            + ", ".join(details["selection"]["quota_unmet_strata"])
+                        )
                     raise WatchError("incomplete acquisition has no due work and no next_due")
                 target = _parse_timestamp(next_due, label="acquisition-status next_due")
                 remaining = (target - _utc_now(clock)).total_seconds()

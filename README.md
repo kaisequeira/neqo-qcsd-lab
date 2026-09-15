@@ -22,24 +22,14 @@ selectable modes**. BuFLO and CS-BuFLO are candidate client-only QUIC
 adaptations, not bilateral or paper-equivalent implementations. Do not claim
 seven validated defences until the final validation attestation verifies.
 
-Cohort v87 binds Lab `4db93077025fcc16eeab427aef0880bff69abb5c` and
-Rust/gitlink `46313bef90ad392b7ca293ab7cf28108d2f35c7f`. Its no-cache
-build/completion and pinned-CDP checks completed. Browser-egress preserves 98
-passing vector receipts, then a failure at vector 99 (enabled DNS prefetch).
-The failure exposed a passive DNS fixture and incorrect accounting of Docker's
-local-resolver and forwarded packet legs. Preserve its original failure
-classification and bytes; no final browser-egress receipt exists.
-
-The pending source fixes add bounded authoritative DNS replies, exact four-leg
-packet/sink reconciliation and versioned receipt requirements. The complete
-local Lab suite passed on 15 September: 5,237 passed and 26 explicitly skipped;
-skips are not passes. Fresh-image qualification remains required, including
-the image-only Chromium checks. Manifest v2 and foundation schema 5 apply to
-fresh execution;
-historical contracts remain replay-only. Retain v87 and use the allocator's
-next unused cohort (planned: v88) for all 110 checks and downstream reproof.
-Scientific progress remains browser-egress **0/110**, certification
-**0/900**, and formal capture **0/16,000**.
+Cohort v88 completed its build and pinned-CDP checks, then was stopped during
+browser-egress qualification with 79 passing vectors preserved. It has no
+final qualification receipt and must not be resumed after source changes.
+The prospective acquisition amendment is implemented and locally tested; it
+has not run under a fresh pinned image. Use the allocator's next unused cohort,
+not an old incomplete directory. Scientific progress remains browser-egress
+**0/110**, certification **0/900**, and formal capture **0/16,000**. Local
+tests and isolated diagnostics do not advance these counts.
 
 The nine modes, in stable order, are `undefended`, `static`, `front`, `tamaraw`,
 `traffic-morphing`, `wtf-pad`, `walkie-talkie`, `buflo`, and `cs-buflo`.
@@ -129,6 +119,10 @@ qualification, capture, export, evaluation, comparison, attestation, successor,
 and verification actions. `acquisition-watch` is the host-only bounded
 supervisor for due acquisition work.
 
+`buflo-study code-gate` explicitly runs and records the Lab test commands.
+Receipt verification checks their recorded outputs and bound evidence; it does
+not rerun tests, including during deep status or admission checks.
+
 ## Immutable execution rules
 
 1. Supply the allocator-authorised next unused positive cohort version. Receipt
@@ -138,9 +132,10 @@ supervisor for due acquisition work.
    cohort and fresh downstream evidence.
 3. Evidence destinations are create-only. Never overwrite a receipt, accepted
    sample, sealed result, handoff, or attestation.
-4. `experiment.json` is the authoritative checkpoint. Resume only with the
-   same source and arguments after an ordinary interruption. Never resume an
-   old cohort after a source-changing fix.
+4. `experiment.json` is the authoritative capture-campaign checkpoint.
+   Acquisition uses its `checkpoint.json` and bound `provenance.json`. Resume
+   only with the same source and arguments after an ordinary interruption.
+   Never resume an old cohort after a source-changing fix.
 5. Preserve every failed attempt. Do not delete, substitute, relabel, or promote
    it. A pass counts only when the required final receipt deep-verifies.
 6. Run source-bound Docker stages serially. While one is live, do not edit or
@@ -159,32 +154,49 @@ authority.
 
 At a high level, the sequence is:
 
-1. After any pending source correction is validated and committed, allocate the
+1. After source corrections are validated and committed, allocate the
    next unused cohort, build fresh images, run pinned-CDP and all 110
-   browser-egress vectors, then pass isolated reference, timing-stress,
-   nine-mode regression, code, and controlled qualification gates.
-2. Publish and verify the class-foundation attestation.
-3. Initialise, run/watch, verify, and complete public acquisition before
-   freezing the final 100-class cohort. Multi-origin resources remain eligible
-   and must not be intentionally omitted.
+   browser-egress vectors, then publish `acquisition-authority`. Its fixed
+   acquisition/preparation test inventory executes once at creation; subsequent
+   verification checks its immutable evidence. This receipt permits only
+   public-page acquisition, never defended capture.
+2. Initialise with `--acquisition-authority`, then run/watch acquisition. Keep
+   the genuine 30-second, 24-hour and 72-hour stability checks. Complete each
+   stratum's frozen-order prefix through its 24th eligible class; all earlier
+   candidates must have scientific terminal outcomes. The unused catalogue
+   tail stays explicitly unassessed. Infrastructure failures block completion,
+   not class eligibility. Multi-origin resources must not be omitted.
+3. Freeze the 120-class pilot. Before any fitting or class-study capture, pass
+   isolated reference, timing-stress, nine-mode regression, code and controlled
+   qualification, then publish the full class-foundation attestation. The two
+   authorities must bind the same source, build and acquisition inputs.
 4. Generate pilot and authoritative fitting campaigns over independent visits;
    derive and qualify every numeric or prefix input required by the applicable
-   defences.
-5. Run the 100-class × nine-mode × one-visit certification campaign and its
-   prescribed canaries. A cell counts only after exact workload correctness and
+   defences. Pilot compatibility and qualified pairing determine the final 100
+   classes and 20 reserves under the checked-in selection rules.
+5. Run the 100-class × nine-mode × one-visit certification campaign. A cell
+   counts only after exact workload correctness and
    defence evidence pass.
-6. Freeze readiness and historical-pre evidence, then capture the 100-class ×
-   eight research-mode × 20-visit formal corpus (16,000 accepted samples) in
+6. Freeze readiness and historical-pre evidence, then run each prescribed
+   canary before its formal block and capture the 100-class ×
+   eight-mode × 20-visit formal corpus (16,000 accepted samples; includes
+   `undefended`, excludes `static`) in
    its prescribed order.
 7. Seal and verify results, create the immutable handoff, evaluate, complete the
    comparison review, and publish `validation-attestation.json` only if every
    gate passes.
 
+The acquisition scheduler preserves hard action limits and the two-candidate /
+five-live-page caps. It releases obsolete reservations only after every batch
+member is scientifically terminal plus the full 40-minute guard. With no
+rejections, the ideal 120-candidate schedule still spans about 7.62 days;
+actual execution and replacements can extend it. This is not a completion-time
+guarantee or permission to shorten the stability windows.
+
 Useful read-only checks include:
 
 ```shell
 ./qcsd-lab class-study status
-./qcsd-lab class-study acquisition-status --acquisition-root PATH
 ./qcsd-lab class-study verify --target RECEIPT_OR_RESULT
 ```
 
@@ -215,9 +227,9 @@ verified receipt.
 
 ## Troubleshooting and safety
 
-- First inspect the command's terminal message and the relevant
-  `experiment.json`, attempt result, and preserved logs. Do not delete a failed
-  root to “retry”.
+- First inspect the command's terminal message, its campaign or acquisition
+  checkpoint, attempt result, and preserved logs. Do not delete a failed root
+  to “retry”.
 - Confirm the exact heads and Gitlink with the read-only Git commands shown
   above before and after an idle-period diagnosis, never during a live
   source-bound operation.

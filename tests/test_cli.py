@@ -664,8 +664,8 @@ def _class_build_admission_fixture(tmp_path: Path):
         acquisition / "provenance.json",
         "qcsd-class-study-acquisition-provenance",
         {
-            "acquisition_schema_version": 5,
-            "foundation_attestation": binding(foundation),
+            "acquisition_schema_version": 6,
+            "acquisition_authority": binding(foundation),
             "image_digest": admitted.prepare_image,
             "source": {**source, "image_digest": admitted.prepare_image},
         },
@@ -674,8 +674,8 @@ def _class_build_admission_fixture(tmp_path: Path):
         acquisition / "completion.json",
         "qcsd-class-study-acquisition-completion",
         {
-            "acquisition_schema_version": 5,
-            "completion_schema_version": 2,
+            "acquisition_schema_version": 6,
+            "completion_schema_version": 3,
             "provenance_sha256": sha256_file(acquisition_provenance),
         },
     )
@@ -1140,8 +1140,8 @@ def _second_class_build_admission_fixture(fixture):
         acquisition / "provenance.json",
         "qcsd-class-study-acquisition-provenance",
         {
-            "acquisition_schema_version": 5,
-            "foundation_attestation": binding(foundation),
+            "acquisition_schema_version": 6,
+            "acquisition_authority": binding(foundation),
             "image_digest": admitted.prepare_image,
             "source": {**source, "image_digest": admitted.prepare_image},
         },
@@ -1150,8 +1150,8 @@ def _second_class_build_admission_fixture(fixture):
         acquisition / "completion.json",
         "qcsd-class-study-acquisition-completion",
         {
-            "acquisition_schema_version": 5,
-            "completion_schema_version": 2,
+            "acquisition_schema_version": 6,
+            "completion_schema_version": 3,
             "provenance_sha256": sha256_file(provenance),
         },
     )
@@ -2475,6 +2475,7 @@ def test_class_build_admission_precedes_first_class_docker_mutation() -> None:
     expected_options = {
         "build:--build-execution-receipt",
         "foundation:--foundation-attestation",
+        "acquisition-authority:--acquisition-authority",
         "readiness:--readiness-attestation",
         "historical-pre:--historical-pre-snapshot",
         "historical-post:--historical-post-snapshot",
@@ -4397,6 +4398,105 @@ def test_browser_egress_stale_topology_wrapper_retires_bound_policy_volume_last(
         f"network {network}",
         f"volume {volume}",
     ]
+
+
+def _browser_egress_cleanup_lifetime_shell() -> str:
+    """Compose the production lifetime handler and both cleanup entry paths."""
+
+    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
+    start = launcher.index("_QCSD_LIFETIME_SIGNAL_STATUS=0\n")
+    end = launcher.index("\nrequire_submodule()", start)
+    return launcher[start:end] + "\n" + "".join(
+        _launcher_shell_function(launcher, name)
+        for name in (
+            "_qcsd_begin_latched_cleanup",
+            "_qcsd_cleanup_terminal_hook",
+            "_qcsd_finish_latched_cleanup",
+            "browser_egress_cleanup_topology",
+            "browser_egress_exit_cleanup",
+        )
+    )
+
+
+@pytest.mark.parametrize("prior_active,pending_status", [(0, 0), (1, 0), (1, 143)])
+@pytest.mark.parametrize("retirement_fails", [False, True])
+def test_browser_egress_cleanup_restores_prior_latch_on_return(
+    tmp_path: Path, prior_active: int, pending_status: int, retirement_fails: bool,
+) -> None:
+    script = tmp_path / "cleanup-latch-return.sh"
+    script.write_text(
+        "set -euo pipefail\n"
+        + _browser_egress_cleanup_lifetime_shell()
+        + f"_QCSD_LIFETIME_CLEANUP_ACTIVE={prior_active}\n"
+        + f"_QCSD_LIFETIME_SIGNAL_STATUS={pending_status}\n"
+        + "QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS=(c1)\n"
+        + "QCSD_DOCKER_IDS_BROWSER_EGRESS_NETWORKS=()\n"
+        + "QCSD_DOCKER_IDS_BROWSER_EGRESS_VOLUMES=()\n"
+        + "_qcsd_docker_api() { :; }\n"
+        + f"qcsd_retire_docker_handoff() {{ return {int(retirement_fails)}; }}\n"
+        + "status=0\nbrowser_egress_cleanup_topology || status=$?\n"
+        + "printf '%s %s %s %s\\n' \"$status\" \"$_QCSD_LIFETIME_CLEANUP_ACTIVE\" "
+        + '"$_QCSD_LIFETIME_SIGNAL_STATUS" "${QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS[*]}"\n',
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["bash", str(script)], capture_output=True, text=True, check=False, timeout=10,
+    )
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    retained = "c1" if retirement_fails else ""
+    assert result.stdout == f"{int(retirement_fails)} {prior_active} {pending_status} {retained}\n"
+
+
+@pytest.mark.parametrize("retain_failure", [False, True])
+def test_browser_egress_cleanup_term_after_retirement_does_not_retry_retired_ids(
+    tmp_path: Path, retain_failure: bool,
+) -> None:
+    script = tmp_path / "cleanup-term.sh"
+    log = tmp_path / "retirements.log"
+    script.write_text(
+        "set -euo pipefail\n"
+        + _browser_egress_cleanup_lifetime_shell()
+        + f"LOG={shlex.quote(str(log))}\nRETAIN_FAILURE={int(retain_failure)}\n"
+        + r'''
+QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS=(c1 c2)
+QCSD_DOCKER_IDS_BROWSER_EGRESS_NETWORKS=()
+QCSD_DOCKER_IDS_BROWSER_EGRESS_VOLUMES=()
+declare -A retired=()
+_qcsd_docker_api() { :; }
+qcsd_retire_docker_handoff() {
+  local object_id="$2"
+  if [[ -v 'retired[$object_id]' ]]; then
+    echo "duplicate $object_id" >>"$LOG"
+    return 1
+  fi
+  if [[ "$object_id" == c1 && "$RETAIN_FAILURE" == 1 ]]; then
+    echo "unproved $object_id" >>"$LOG"
+    return 1
+  fi
+  retired["$object_id"]=1
+  echo "retired $object_id" >>"$LOG"
+  if [[ "$object_id" == c2 ]]; then kill -TERM "$BASHPID"; fi
+  return 0
+}
+_qcsd_cleanup_terminal_hook() {
+  printf 'containers=%s\n' "${QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS[*]}"
+}
+trap browser_egress_exit_cleanup EXIT
+browser_egress_cleanup_topology || false
+echo publication-must-not-run
+''',
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["bash", str(script)], capture_output=True, text=True, check=False, timeout=10,
+    )
+    assert result.returncode == 143, (result.stdout, result.stderr)
+    assert result.stderr == ""
+    assert result.stdout == f"containers={'c1' if retain_failure else ''}\n"
+    assert log.read_text(encoding="utf-8").splitlines() == (
+        ["retired c2", "unproved c1", "unproved c1"]
+        if retain_failure else ["retired c2", "retired c1"]
+    )
 
 
 def test_browser_egress_cleanup_returns_and_err_path_seals_after_cleanup(

@@ -170,6 +170,7 @@ _CURRENT_CANDIDATE_RUNTIME_KINDS = {
 
 STUDY_ACTIONS = (
     "status",
+    "acquisition-authority",
     "acquisition-init",
     "acquisition-run",
     "acquisition-status",
@@ -199,6 +200,7 @@ STUDY_ACTIONS = (
 
 _FRESH_LAYOUT_ACTIONS = frozenset(
     {
+        "acquisition-authority",
         "acquisition-init",
         "acquisition-run",
         "acquisition-status",
@@ -1313,6 +1315,7 @@ def class_study_status(
     handoff: Path | None = None,
     evaluation_receipt: Path | None = None,
     foundation_attestation: Path | None = None,
+    acquisition_authority: Path | None = None,
     readiness_attestation: Path | None = None,
     historical_pre_snapshot: Path | None = None,
     historical_post_snapshot: Path | None = None,
@@ -1325,6 +1328,7 @@ def class_study_status(
     stages: dict[str, Any] = {}
     from .class_attestation import (
         class_qualification_authority,
+        validate_class_acquisition_authority,
         validate_class_comparison_review,
         validate_class_foundation_attestation,
         validate_class_historical_snapshot,
@@ -1344,6 +1348,15 @@ def class_study_status(
         stages["foundation"] = {"state": "verified", **verified_foundation}
     else:
         stages["foundation"] = {"state": "absent"}
+    verified_acquisition = None
+    if acquisition_authority is not None:
+        verified_acquisition = validate_class_acquisition_authority(
+            acquisition_authority, runtime_role="collection"
+        )
+        stages["acquisition_authority"] = {"state": "verified", **verified_acquisition}
+    else:
+        stages["acquisition_authority"] = {"state": "absent"}
+    acquisition_gate = verified_acquisition or verified_foundation
     qualification_authority: dict[str, Any] | None = None
     if qualification_manifests or final_bundle_roots or final_selection_path is not None:
         if foundation_attestation is None:
@@ -1396,9 +1409,10 @@ def class_study_status(
             "gate": stability_gate(),
             "authoritative": False,
         }
-        if verified_foundation is None:
+        if acquisition_gate is None:
             acquisition_stage["reason"] = (
-                "acquisition runner status requires --foundation-attestation for "
+                "acquisition runner status requires --acquisition-authority or "
+                "--foundation-attestation for "
                 "current deep gate verification"
             )
         elif (
@@ -1418,7 +1432,9 @@ def class_study_status(
                 _load_json_object(provenance_path, "class acquisition provenance"),
                 expected_type=class_acquisition.PROVENANCE_TYPE,
             )
-            foundation_binding = provenance.get("foundation_attestation")
+            foundation_binding = provenance.get(
+                "acquisition_authority", provenance.get("foundation_attestation")
+            )
             if (
                 not isinstance(foundation_binding, Mapping)
                 or set(foundation_binding) != {"path", "sha256"}
@@ -1431,8 +1447,8 @@ def class_study_status(
                 "class acquisition foundation",
             )
             if (
-                str(bound_foundation) != verified_foundation.get("path")
-                or foundation_binding["sha256"] != verified_foundation.get("sha256")
+                str(bound_foundation) != acquisition_gate.get("path")
+                or foundation_binding["sha256"] != acquisition_gate.get("sha256")
                 or sha256_file(bound_foundation) != foundation_binding["sha256"]
             ):
                 raise ValueError(
@@ -1442,9 +1458,17 @@ def class_study_status(
                 {
                     "state": "verified",
                     "gate_verification": {
-                        "foundation_path": str(bound_foundation),
-                        "foundation_sha256": foundation_binding["sha256"],
-                        "browser_egress_vectors": verified_foundation["summary"][
+                        (
+                            "acquisition_authority_path"
+                            if "acquisition_authority" in provenance
+                            else "foundation_path"
+                        ): str(bound_foundation),
+                        (
+                            "acquisition_authority_sha256"
+                            if "acquisition_authority" in provenance
+                            else "foundation_sha256"
+                        ): foundation_binding["sha256"],
+                        "browser_egress_vectors": acquisition_gate["summary"][
                             "browser_egress_vectors"
                         ],
                         "informational_only": True,
@@ -1894,6 +1918,7 @@ def run_class_study_action(
     authoritative_fitting_result: Path | None = None,
     certification_result: Path | None = None,
     foundation_attestation: Path | None = None,
+    acquisition_authority: Path | None = None,
     readiness_attestation: Path | None = None,
     historical_pre_snapshot: Path | None = None,
     historical_post_snapshot: Path | None = None,
@@ -2018,22 +2043,39 @@ def run_class_study_action(
         if action == "acquisition-init":
             if not isinstance(acquisition_started_at, str) or not acquisition_started_at:
                 raise ValueError("acquisition initialisation requires --acquisition-started-at")
-            foundation_path = _required(foundation_attestation, "--foundation-attestation")
-            from .class_attestation import validate_class_foundation_attestation
-
-            foundation = validate_class_foundation_attestation(
-                foundation_path,
-                deep_code_gate=True,
-                runtime_role="prepare",
+            from .class_attestation import (
+                validate_class_acquisition_authority,
+                validate_class_foundation_attestation,
             )
+
+            if acquisition_authority is not None and foundation_attestation is not None:
+                raise ValueError("acquisition initialisation accepts one authority, not both")
+            if acquisition_authority is not None:
+                foundation_path = acquisition_authority
+                foundation = validate_class_acquisition_authority(
+                    foundation_path, runtime_role="prepare"
+                )
+            else:
+                foundation_path = _required(
+                    foundation_attestation,
+                    "--acquisition-authority or --foundation-attestation",
+                )
+                foundation = validate_class_foundation_attestation(
+                    foundation_path, deep_code_gate=True, runtime_role="prepare"
+                )
             if _class_aware_timestamp(
                 foundation.get("recorded_at"), label="foundation attestation"
             ) > _class_aware_timestamp(acquisition_started_at, label="acquisition start"):
                 raise ValueError("class acquisition starts before its foundation gate")
+            authority_argument = (
+                {"acquisition_authority": foundation_path}
+                if acquisition_authority is not None
+                else {"foundation_attestation": foundation_path}
+            )
             output = initialise_runner(
                 runner,
                 candidate_catalogue_path=catalogue,
-                foundation_attestation=foundation_path,
+                **authority_argument,
                 started_at=acquisition_started_at,
                 browser_tool=acquisition_browser_tool,
             )
@@ -2054,7 +2096,9 @@ def run_class_study_action(
             # prepare-image, source, and deeply reconstructed foundation
             # contract as a mutating acquisition action.
             class_acquisition._validate_runner_runtime(provenance)
-            foundation_binding = provenance.get("foundation_attestation")
+            foundation_binding = provenance.get(
+                "acquisition_authority", provenance.get("foundation_attestation")
+            )
             if (
                 not isinstance(foundation_binding, Mapping)
                 or set(foundation_binding) != {"path", "sha256"}
@@ -2071,8 +2115,16 @@ def run_class_study_action(
                     "gate": stability_gate(),
                     "authoritative": False,
                     "gate_verification": {
-                        "foundation_path": foundation_binding["path"],
-                        "foundation_sha256": foundation_binding["sha256"],
+                        (
+                            "acquisition_authority_path"
+                            if "acquisition_authority" in provenance
+                            else "foundation_path"
+                        ): foundation_binding["path"],
+                        (
+                            "acquisition_authority_sha256"
+                            if "acquisition_authority" in provenance
+                            else "foundation_sha256"
+                        ): foundation_binding["sha256"],
                         "informational_only": True,
                     },
                 }
@@ -2192,6 +2244,7 @@ def run_class_study_action(
             handoff=handoff,
             evaluation_receipt=evaluation_receipt,
             foundation_attestation=foundation_attestation,
+            acquisition_authority=acquisition_authority,
             readiness_attestation=readiness_attestation,
             historical_pre_snapshot=historical_pre_snapshot,
             historical_post_snapshot=historical_post_snapshot,
@@ -2365,9 +2418,11 @@ def run_class_study_action(
             validator(verification_target),
         )
 
-    if action == "foundation":
+    if action in {"foundation", "acquisition-authority"}:
         from .class_attestation import (
+            create_class_acquisition_authority,
             create_class_foundation_attestation,
+            validate_class_acquisition_authority,
             validate_class_foundation_attestation,
         )
 
@@ -2399,18 +2454,28 @@ def run_class_study_action(
         foundation_destination = _required(destination, "--destination")
         expected_foundation_destination = (
             Path(build_path).absolute().parent.parent
-            / f"class-study-foundation-v{cohort_version}.json"
+            / f"class-study-{action}-v{cohort_version}.json"
         )
         if Path(foundation_destination).absolute() != expected_foundation_destination:
             raise ValueError(
                 "class-study foundation destination has the wrong canonical filename"
             )
-        output = create_class_foundation_attestation(
-            foundation_destination,
+        common_inputs = dict(
             cohort_version=cohort_version,
             build_execution_receipt=build_path,
             pinned_cdp_receipt=pinned_path,
             browser_egress_qualification_root=browser_egress_root,
+        )
+        if action == "acquisition-authority":
+            output = create_class_acquisition_authority(
+                foundation_destination, **common_inputs
+            )
+            return ClassStudyActionResult(
+                action, "complete", validate_class_acquisition_authority(output)
+            )
+        output = create_class_foundation_attestation(
+            foundation_destination,
+            **common_inputs,
             reference_receipt=_required(reference_receipt, "--reference-receipt"),
             code_gate_receipt=_required(code_gate_receipt, "--code-gate-receipt"),
             controlled_qualification_receipt=_required(
@@ -3279,11 +3344,13 @@ def _verify_class_promotion_target(
     value = _load_json_object(path, "class-study verification target")
     receipt_type = value.get("receipt_type")
     from .class_attestation import (
+        ACQUISITION_AUTHORITY_RECEIPT_TYPE,
         COMPARISON_REVIEW_RECEIPT_TYPE,
         FOUNDATION_RECEIPT_TYPE,
         HISTORICAL_SNAPSHOT_RECEIPT_TYPE,
         READINESS_RECEIPT_TYPE,
         VALIDATION_RECEIPT_TYPE,
+        validate_class_acquisition_authority,
         validate_class_comparison_review,
         validate_class_foundation_attestation,
         validate_class_historical_snapshot,
@@ -3291,6 +3358,8 @@ def _verify_class_promotion_target(
         validate_class_validation_attestation,
     )
 
+    if receipt_type == ACQUISITION_AUTHORITY_RECEIPT_TYPE:
+        return validate_class_acquisition_authority(path, runtime_role="collection")
     if receipt_type == FOUNDATION_RECEIPT_TYPE:
         return validate_class_foundation_attestation(
             path,
@@ -5520,6 +5589,7 @@ def _validate_fresh_layout_arguments(
     if (
         action
         in {
+            "acquisition-authority",
             "foundation",
             "readiness",
             "historical-snapshot",
@@ -6151,12 +6221,17 @@ def _next_required_stage(
 ) -> str:
     if stages["catalogue"]["state"] != "verified":
         return "prospective-catalogue"
-    if stages["foundation"]["state"] != "verified":
-        return "source-reference-code-regression-controlled-foundation"
+    if (
+        stages["foundation"]["state"] != "verified"
+        and stages.get("acquisition_authority", {}).get("state") != "verified"
+    ):
+        return "source-browser-preparation-acquisition-authority"
     if stages["acquisition_completion"]["state"] != "verified":
         return "complete-30s-24h-72h-acquisition"
     if stages["pilot_cohort"]["state"] != "verified":
         return "pilot-selection-and-assembly-freeze"
+    if stages["foundation"]["state"] != "verified":
+        return "source-reference-code-regression-controlled-foundation"
     if stages["campaigns"]["state"] != "verified" or stages["campaigns"].get("stage") not in {
         PILOT_STAGE,
         AUTHORITATIVE_STAGE,

@@ -90,6 +90,31 @@ from tests.test_pinned_cdp import _observation as _pinned_cdp_observation
 _PRODUCTION_FOUNDATION_ATTESTATION_BINDING = acquisition_module._foundation_attestation_binding
 
 
+@pytest.fixture(autouse=True)
+def _miniature_ledger_selection_policy(monkeypatch: pytest.MonkeyPatch):
+    """Isolate old one-candidate ledger fixtures from the full 600-candidate policy.
+
+    Production-sized tests always use the real selector.  These fixtures
+    deliberately replace catalogue loading to test receipt/legacy mechanics;
+    they are not evidence that a miniature study can meet acquisition quotas.
+    """
+    original = acquisition_module._derive_checkpoint_selection
+
+    def derive(candidates, catalogue, states, terminal_payloads):
+        if len(candidates) == CANDIDATE_COUNT:
+            return original(candidates, catalogue, states, terminal_payloads)
+        ids = [candidate.candidate_id for candidate in candidates]
+        terminals = [candidate_id for candidate_id in ids if candidate_id in terminal_payloads]
+        remaining = [candidate_id for candidate_id in ids if candidate_id not in terminal_payloads]
+        return ({"fixture_only": "miniature-ledger", "candidate_ids": ids,
+                 "terminal_ids": terminals, "remaining_ids": remaining,
+                 "needed_ids": remaining, "admission_ids": ids, "unassessed_ids": [],
+                 "prefix_ids": ids, "pilot_ids": terminals if not remaining else [],
+                 "quota_unmet_strata": [], "complete": not remaining}, [])
+
+    monkeypatch.setattr(acquisition_module, "_derive_checkpoint_selection", derive)
+
+
 def _egress_prearm_summary() -> dict[str, object]:
     return {
         "schema_version": EGRESS_PREARM_SUMMARY_SCHEMA_VERSION,
@@ -558,6 +583,12 @@ def _real_prepare_runtime_foundation(
 
 
 def _replace_receipt_payload(path: Path, payload: dict) -> None:
+    if path.name == "provenance.json" and payload.get("acquisition_schema_version", 6) < 6:
+        if "acquisition_authority" in payload:
+            payload["foundation_attestation"] = payload.pop("acquisition_authority")
+        payload.pop("acquisition_selection_policy", None)
+        if "baseline_scheduling_contract" in payload:
+            payload["baseline_scheduling_contract"] = acquisition_module.BASELINE_SCHEDULING_CONTRACT
     receipt_type = load_json(path)["receipt_type"]
     path.write_bytes(canonical_json_bytes(bind_receipt(payload, receipt_type=receipt_type)))
 
@@ -893,7 +924,7 @@ def test_runner_distinguishes_component_limits_from_whole_action_cutoffs(
 
     assert MAX_ACQUISITION_BACKEND_TIMEOUT_MS == 60_000
     assert MAX_PASSIVE_RENDER_AFTER_LOAD_MS == 30_000
-    assert provenance["acquisition_schema_version"] == 5
+    assert provenance["acquisition_schema_version"] == 6
     assert provenance["browser_tool"] == playwright_driver.expected_browser_tool_identity()
     tampered = copy.deepcopy(provenance)
     tampered["browser_tool"]["chromium_version"] = "caller-authored"
@@ -909,7 +940,7 @@ def test_runner_distinguishes_component_limits_from_whole_action_cutoffs(
         acquisition_module.ACTION_TIMING_CONTRACT
     )
     assert provenance["baseline_scheduling_contract"] == (
-        acquisition_module.BASELINE_SCHEDULING_CONTRACT
+        acquisition_module.TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT
     )
     assert "browser_discovery_attempt_budget_ms" not in provenance
     assert "pending_baseline_guard_ms" not in provenance["origin_policy"]
@@ -1501,6 +1532,11 @@ def test_prepare_runtime_deep_foundation_supports_acquisition_and_authority(
     foundation, build_path, collection_source, active_source = _real_prepare_runtime_foundation(
         tmp_path, monkeypatch
     )
+    monkeypatch.setattr(
+        buflo_study,
+        "_run_lab_code_gate_commands",
+        lambda: pytest.fail("acquisition authority validation must not execute Lab tests"),
+    )
     catalogue_path = _catalogue(tmp_path / "catalogue.json")
     catalogue, candidates = acquisition_module.load_candidate_catalogue_receipt(catalogue_path)
     candidates = candidates[:2]
@@ -1626,6 +1662,181 @@ def test_prepare_runtime_deep_foundation_supports_acquisition_and_authority(
     build_path.write_bytes(build_bytes)
 
 
+@pytest.mark.parametrize("deep", (None, False, True), ids=("default", "shallow", "deep"))
+def test_current_code_gate_validation_does_not_execute_commands(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    deep: bool | None,
+) -> None:
+    foundation, build_path, collection_source, _active_source = _real_prepare_runtime_foundation(
+        tmp_path, monkeypatch
+    )
+    code_gate_path = Path(load_json(foundation)["payload"]["evidence"]["code_gate"]["path"])
+    before = {path: path.read_bytes() for path in (foundation, build_path, code_gate_path)}
+    monkeypatch.setattr(
+        buflo_study,
+        "_run_lab_code_gate_commands",
+        lambda: pytest.fail("code-gate validation must not execute Lab tests"),
+    )
+
+    validated = buflo_study.validate_code_gate_receipt(
+        code_gate_path,
+        expected_cohort_version=59,
+        _expected_collection_source=collection_source,
+        **({} if deep is None else {"deep": deep}),
+    )
+
+    assert validated["passed"] is True
+    assert validated["source"] == collection_source
+    assert validated["lab_commands"] == load_json(code_gate_path)["lab_commands"]
+    assert {path: path.read_bytes() for path in before} == before
+
+
+def test_current_code_gate_creation_executes_once_and_rejects_execution_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    foundation, _build_path, collection_source, active_source = _real_prepare_runtime_foundation(
+        tmp_path, monkeypatch
+    )
+    code_gate_path = Path(load_json(foundation)["payload"]["evidence"]["code_gate"]["path"])
+    prior = load_json(code_gate_path)
+    regression_roots = tuple(Path(record["root"]) for record in prior["live_regression"]["results"])
+    active_source["value"] = collection_source
+    monkeypatch.setenv("QCSD_LAB_IMAGE_DIGEST", str(collection_source["image_digest"]))
+    executions = []
+
+    def run_commands():
+        executions.append("executed")
+        return copy.deepcopy(prior["lab_commands"])
+
+    monkeypatch.setattr(buflo_study, "_run_lab_code_gate_commands", run_commands)
+    created = buflo_study.create_code_gate_receipt(
+        tmp_path / "explicit-code-gate-v59.json",
+        regression_result_roots=regression_roots,
+        cohort_version=59,
+    )
+    assert executions == ["executed"]
+    for kwargs in ({}, {"deep": False}, {"deep": True}):
+        assert buflo_study.validate_code_gate_receipt(created, **kwargs)["passed"] is True
+    assert executions == ["executed"]
+
+    def fail_commands():
+        raise RuntimeError("explicit Lab gate failed")
+
+    monkeypatch.setattr(buflo_study, "_run_lab_code_gate_commands", fail_commands)
+    rejected_destination = tmp_path / "failed-code-gate-v59.json"
+    with pytest.raises(RuntimeError, match="explicit Lab gate failed"):
+        buflo_study.create_code_gate_receipt(
+            rejected_destination,
+            regression_result_roots=regression_roots,
+            cohort_version=59,
+        )
+    assert not rejected_destination.exists()
+
+
+@pytest.mark.parametrize("deep", (False, True), ids=("shallow", "deep"))
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    (
+        pytest.param(
+            lambda value: value["lab_commands"].pop(),
+            "command inventory",
+            id="inventory",
+        ),
+        pytest.param(
+            lambda value: value["lab_commands"].reverse(),
+            "command receipt",
+            id="order",
+        ),
+        pytest.param(
+            lambda value: value["lab_commands"][0].update(gate="unattested-gate"),
+            "command receipt",
+            id="gate",
+        ),
+        pytest.param(
+            lambda value: value["lab_commands"][0]["argv"].append("--collect-only"),
+            "command receipt",
+            id="argv",
+        ),
+        pytest.param(
+            lambda value: value["lab_commands"][0].update(cwd="/another-lab"),
+            "command receipt",
+            id="cwd",
+        ),
+        pytest.param(
+            lambda value: value["lab_commands"][0].update(exit_code=1),
+            "command receipt",
+            id="exit-code",
+        ),
+        pytest.param(
+            lambda value: value["lab_commands"][0].update(stdout_bytes=0),
+            "command receipt",
+            id="stdout-length",
+        ),
+        pytest.param(
+            lambda value: value["lab_commands"][0].update(stdout_sha256="0" * 64),
+            "command receipt",
+            id="stdout-hash",
+        ),
+        pytest.param(
+            lambda value: value["lab_commands"][0].update(
+                stdout="F" + value["lab_commands"][0]["stdout"][1:]
+            ),
+            "command receipt",
+            id="stdout-content-same-length",
+        ),
+        pytest.param(
+            lambda value: value["source"].update(lab_commit="9" * 40),
+            "identity or source",
+            id="source-binding",
+        ),
+        pytest.param(
+            lambda value: value["build_execution_receipt"].update(sha256="0" * 64),
+            "selected cohort build",
+            id="build-binding",
+        ),
+        pytest.param(
+            lambda value: value["rust_code_gate"].update(receipt_sha256="0" * 64),
+            "Rust build gate",
+            id="rust-binding",
+        ),
+        pytest.param(
+            lambda value: value["live_regression"].update(samples=17),
+            "regression18 evidence",
+            id="regression-binding",
+        ),
+    ),
+)
+def test_current_code_gate_validation_rejects_tampering_without_execution(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    deep: bool,
+    mutate,
+    message: str,
+) -> None:
+    foundation, _build_path, collection_source, _active_source = _real_prepare_runtime_foundation(
+        tmp_path, monkeypatch
+    )
+    code_gate_path = Path(load_json(foundation)["payload"]["evidence"]["code_gate"]["path"])
+    monkeypatch.setattr(
+        buflo_study,
+        "_run_lab_code_gate_commands",
+        lambda: pytest.fail("invalid code-gate evidence must not execute Lab tests"),
+    )
+    value = load_json(code_gate_path)
+    mutate(value)
+    code_gate_path.write_bytes(canonical_json_bytes(value))
+
+    with pytest.raises(ValueError, match=message):
+        buflo_study.validate_code_gate_receipt(
+            code_gate_path,
+            deep=deep,
+            expected_cohort_version=59,
+            _expected_collection_source=collection_source,
+        )
+
+
 @pytest.mark.parametrize("operation", ("run", "completion"))
 def test_direct_runner_mutators_reject_generic_foundation_on_resume(
     monkeypatch: pytest.MonkeyPatch,
@@ -1739,7 +1950,7 @@ def test_navigation_pair_is_prepublished_and_coordinator_merged(
         ]
         for candidate_id in expected_ids
     )
-    assert status["pending_count"] == CANDIDATE_COUNT
+    assert status["pending_count"] == 120
 
 
 def test_five_page_pair_uses_one_baseline_and_never_exceeds_global_cap(
@@ -2778,7 +2989,7 @@ def test_preparation_error_taxonomy_retries_only_explicit_transient_failures():
     assert not issubclass(PreparationError, RecoverableAcquisitionError)
 
 
-def test_all_candidates_require_terminal_evidence_and_completion_detects_tamper(
+def test_all_rejected_candidates_fail_quota_and_completion_publication_detects_tamper(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -2816,9 +3027,11 @@ def test_all_candidates_require_terminal_evidence_and_completion_detects_tamper(
             max_candidates=MAX_CANDIDATES_PER_ACTION,
             **common,
         )
-    assert status == {
+    assert status["selection"]["quota_unmet_strata"] == [stratum.id for stratum in TRANCO_RANK_STRATA]
+    assert {key: value for key, value in status.items()
+            if key not in {"selection", "selection_blocked_candidate_ids"}} == {
         "candidate_count": CANDIDATE_COUNT,
-        "acquisition_schema_version": 5,
+        "acquisition_schema_version": 6,
         "checkpoint_schema_version": 2,
         "maximum_candidates_per_action": 2,
         "global_live_page_cap": 5,
@@ -2832,9 +3045,21 @@ def test_all_candidates_require_terminal_evidence_and_completion_detects_tamper(
         "recovery_required_count": 0,
         "pending_start_blocked": False,
         "work_due_now": False,
-        "complete": True,
+        "complete": False,
         "next_due": None,
     }
+    with pytest.raises(ValueError, match="resolved deterministic prefix"):
+        write_acquisition_completion(runner, candidate_catalogue_path=catalogue)
+    # Below, isolate immutable publication/ledger-tamper mechanics from the
+    # scientifically impossible all-rejected quota.  The real quota rejection
+    # is asserted above; separate full-catalogue tests cover accepted prefixes.
+    original_selection = acquisition_module._derive_checkpoint_selection
+
+    def publication_fixture_selection(*args):
+        selection, blocked = original_selection(*args)
+        return {**selection, "complete": True}, blocked
+
+    monkeypatch.setattr(acquisition_module, "_derive_checkpoint_selection", publication_fixture_selection)
     original_create = acquisition_module.durable_create
     completion_path = runner / "completion.json"
     prelink = runner / (f".{completion_path.name}{acquisition_module.ATOMIC_TEMP_MARKER}prelink")
@@ -2959,7 +3184,7 @@ def test_initial_status_is_resumable_and_incomplete(tmp_path: Path):
         browser_tool="test-browser@1",
     )
     assert acquisition_status(runner, candidate_catalogue_path=catalogue)["terminal_count"] == 0
-    with pytest.raises(ValueError, match="terminal evidence for all"):
+    with pytest.raises(ValueError, match="resolved deterministic prefix"):
         write_acquisition_completion(runner, candidate_catalogue_path=catalogue)
 
 
@@ -3156,6 +3381,7 @@ def test_completion_validation_accepts_each_legacy_schema_shape(
             "checkpoint_schema_version",
             "baseline_batches",
             "baseline_batches_sha256",
+            "selection",
         }
     }
     legacy_completion_payload.update(
@@ -3266,6 +3492,7 @@ def test_schema_one_observed_eligible_completion_uses_its_original_evidence_shap
             "checkpoint_schema_version",
             "baseline_batches",
             "baseline_batches_sha256",
+            "selection",
         }
     }
     legacy_completion_payload.update(
@@ -3424,6 +3651,7 @@ def test_schema_three_observed_eligible_completion_rebinds_transitive_evidence(
             "checkpoint_schema_version",
             "baseline_batches",
             "baseline_batches_sha256",
+            "selection",
         }
     }
     legacy_completion_payload.update(
@@ -3891,7 +4119,7 @@ def test_serial_spacing_refuses_a_second_baseline_batch_but_allows_navigation(
         )
         == 2
     )
-    assert status["pending_count"] == CANDIDATE_COUNT - 2
+    assert status["pending_count"] == 118
     assert status["pending_start_blocked"] is False
     assert status["work_due_now"] is True
     assert status["next_due"] == "2026-08-28T00:40:20Z"
@@ -4037,7 +4265,7 @@ def test_due_probe_at_latest_edge_outranks_an_already_missed_candidate(
     )
 
 
-def test_missed_window_becomes_terminal_and_does_not_block_remaining_candidates(
+def test_missed_window_is_retained_but_blocks_new_selection_work(
     tmp_path: Path,
 ):
     catalogue = _catalogue(tmp_path / "catalogue.json")
@@ -4111,8 +4339,12 @@ def test_missed_window_becomes_terminal_and_does_not_block_remaining_candidates(
             state["state"] == "baseline-ready"
             for state in checkpoint["payload"]["candidates"].values()
         )
-        == 1
+        == 0
     )
+    status = acquisition_status(runner, candidate_catalogue_path=catalogue, now=clock.value)
+    assert status["selection_blocked_candidate_ids"] == [armed_id]
+    assert armed_id in status["selection"]["admission_ids"]
+    assert status["complete"] is False and status["work_due_now"] is False
 
 
 def test_orphan_terminal_is_validated_and_recovered_after_checkpoint_interruption(
@@ -6759,3 +6991,233 @@ def test_replay_identity_excludes_per_run_preparation_evidence(
         changed = copy.deepcopy(first)
         changed["preparation"][field] = replacement
         assert _prepared_replay_identity_sha256(first) != _prepared_replay_identity_sha256(changed)
+
+
+def _prefix_selection_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Full catalogue/selection/closure fixture; terminal science is a separate unit."""
+    catalogue = _catalogue(tmp_path / "catalogue.json")
+    runner = initialise_runner(
+        tmp_path / "runner", candidate_catalogue_path=catalogue,
+        foundation_attestation=_foundation(tmp_path / "foundation.json"),
+        started_at="2026-08-28T00:00:00Z", browser_tool="ignored",
+    )
+    checkpoint = load_json(runner / "checkpoint.json")["payload"]
+    selection = acquisition_status(runner, candidate_catalogue_path=catalogue)["selection"]
+    for candidate_id in selection["admission_ids"]:
+        terminal_path = runner / "terminals" / f"{candidate_id}.json"
+        terminal_path.write_bytes(canonical_json_bytes(bind_receipt({
+            "candidate_id": candidate_id, "kind": "eligible",
+            "terminalised_at": "2026-08-31T00:00:00Z",
+        }, receipt_type=acquisition_module.TERMINAL_TYPE)))
+        checkpoint["candidates"][candidate_id] = {
+            "state": "terminal", "pages": [], "terminal": {
+                "path": f"terminals/{candidate_id}.json",
+                "sha256": acquisition_module.sha256_file(terminal_path),
+            },
+        }
+    _replace_receipt_payload(runner / "checkpoint.json", checkpoint)
+
+    def admitted_terminal_binding(path, *, candidate, **_kwargs):
+        # The fixture supplies already-admitted eligibility; leave receipt
+        # hashes, catalogue inventory, policy, chronology and closure real.
+        payload = acquisition_module.validate_hash_bound_receipt(
+            load_json(path), expected_type=acquisition_module.TERMINAL_TYPE,
+        )
+        assert payload["candidate_id"] == candidate.candidate_id
+        return {"path": f"terminals/{candidate.candidate_id}.json",
+                "sha256": acquisition_module.sha256_file(path)}
+
+    monkeypatch.setattr(acquisition_module, "_validated_terminal_binding", admitted_terminal_binding)
+    return runner, catalogue
+
+
+def test_schema_six_completion_preserves_unassessed_tail_and_seals_exact_prefix(tmp_path, monkeypatch):
+    runner, catalogue = _prefix_selection_runner(tmp_path, monkeypatch)
+    checkpoint_before = (runner / "checkpoint.json").read_bytes()
+    status = acquisition_status(runner, candidate_catalogue_path=catalogue)
+    assert status["complete"] is True
+    assert status["terminal_count"] == 120
+    assert status["pending_count"] == 0 and status["work_due_now"] is False
+    assert len(status["selection"]["candidate_ids"]) == 600
+    assert len(status["selection"]["unassessed_ids"]) == 480
+    completion = load_json(write_acquisition_completion(runner, candidate_catalogue_path=catalogue))
+    payload = validate_acquisition_completion(completion, candidate_catalogue_path=catalogue, runner_root=runner)
+    assert payload["completion_schema_version"] == 3
+    selection = acquisition_module.validate_hash_bound_receipt(
+        payload["selection"], expected_type=acquisition_module.SELECTION_TYPE,
+    )
+    assert selection == status["selection"]
+    assert set(payload["terminal_receipts"]) == set(selection["terminal_ids"])
+    assert not set(payload["terminal_receipts"]).intersection(selection["unassessed_ids"])
+    assert (runner / "checkpoint.json").read_bytes() == checkpoint_before
+    run_due_acquisition(
+        runner, candidate_catalogue_path=catalogue, stability_root=tmp_path / "stability",
+        workload_root=tmp_path / "workloads", backend=NoNetworkBackend(),
+    )
+    assert (runner / "checkpoint.json").read_bytes() == checkpoint_before
+    for key in ("pilot_ids", "unassessed_ids", "prefix_ids"):
+        changed = copy.deepcopy(payload)
+        inventory = changed["selection"]["payload"]
+        inventory[key] = inventory[key][1:]
+        changed["selection"] = bind_receipt(inventory, receipt_type=acquisition_module.SELECTION_TYPE)
+        with pytest.raises(ValueError, match="selection prefix"):
+            validate_acquisition_completion(bind_receipt(changed, receipt_type=COMPLETION_TYPE),
+                                            candidate_catalogue_path=catalogue, runner_root=runner)
+
+
+def test_schema_six_completion_blocks_earlier_unresolved(tmp_path, monkeypatch):
+    runner, catalogue = _prefix_selection_runner(tmp_path, monkeypatch)
+    checkpoint = load_json(runner / "checkpoint.json")["payload"]
+    selected_id = acquisition_status(runner, candidate_catalogue_path=catalogue)["selection"]["pilot_ids"][0]
+    checkpoint["candidates"][selected_id] = {"state": "pending", "pages": [], "terminal": None}
+    (runner / "terminals" / f"{selected_id}.json").unlink()
+    _replace_receipt_payload(runner / "checkpoint.json", checkpoint)
+    status = acquisition_status(runner, candidate_catalogue_path=catalogue)
+    assert status["complete"] is False
+    assert selected_id in status["selection"]["needed_ids"]
+    assert status["selection"]["pilot_ids"] == []
+    with pytest.raises(ValueError, match="resolved deterministic prefix"):
+        write_acquisition_completion(runner, candidate_catalogue_path=catalogue)
+
+
+def test_schema_six_started_tail_must_drain_before_completion(tmp_path, monkeypatch):
+    runner, catalogue = _prefix_selection_runner(tmp_path, monkeypatch)
+    status = acquisition_status(runner, candidate_catalogue_path=catalogue)
+    tail_id = status["selection"]["unassessed_ids"][0]
+    checkpoint = load_json(runner / "checkpoint.json")["payload"]
+    checkpoint["candidates"][tail_id]["navigation_attempts"] = [{
+        "attempt": 1, "started_at": "2026-08-31T00:00:00Z",
+        "completed_at": "2026-08-31T00:00:01Z", "outcome": "interrupted",
+        "reason": "fixture interruption", "policy_evidence": None,
+    }]
+    _replace_receipt_payload(runner / "checkpoint.json", checkpoint)
+    status = acquisition_status(runner, candidate_catalogue_path=catalogue)
+    assert status["selection"]["complete"] is True and status["complete"] is False
+    assert status["pending_count"] == 1 and status["work_due_now"] is True
+    with pytest.raises(ValueError, match="resolved deterministic prefix"):
+        write_acquisition_completion(runner, candidate_catalogue_path=catalogue)
+
+
+def test_schema_six_missed_terminal_blocks_without_advancing_frontier(tmp_path, monkeypatch):
+    runner, catalogue = _prefix_selection_runner(tmp_path, monkeypatch)
+    initial = acquisition_status(runner, candidate_catalogue_path=catalogue)
+    candidate_id = initial["selection"]["pilot_ids"][0]
+    checkpoint = load_json(runner / "checkpoint.json")["payload"]
+    binding = checkpoint["candidates"][candidate_id]["terminal"]
+    terminal_path = runner / binding["path"]
+    terminal = load_json(terminal_path)["payload"]
+    terminal["kind"] = "probe-window-missed"
+    _replace_receipt_payload(terminal_path, terminal)
+    binding["sha256"] = acquisition_module.sha256_file(terminal_path)
+    _replace_receipt_payload(runner / "checkpoint.json", checkpoint)
+    status = acquisition_status(runner, candidate_catalogue_path=catalogue)
+    assert status["complete"] is False
+    assert status["selection_blocked_candidate_ids"] == [candidate_id]
+    assert candidate_id in status["selection"]["admission_ids"]
+    assert status["pending_count"] == 0 and status["work_due_now"] is False
+    assert status["selection"]["pilot_ids"] == []
+    with pytest.raises(ValueError, match="resolved deterministic prefix"):
+        write_acquisition_completion(runner, candidate_catalogue_path=catalogue)
+
+
+def test_batch_reservation_releases_only_after_all_scientific_terminals():
+    baseline = datetime(2026, 8, 28, tzinfo=UTC)
+    batches = [{"baseline_started_at": acquisition_module._format_time(baseline),
+                "candidate_ids": ["a", "b"]}]
+    states = {"a": {"pages": []}, "b": {"pages": []}}
+    terminals = {"a": {"kind": "stable-page-unavailable", "terminalised_at": "2026-08-28T00:00:30Z"}}
+    assert acquisition_module._baseline_batch_reservations(batches, states, terminals)[0].released_at is None
+    terminals["b"] = {"kind": "eligible", "terminalised_at": "2026-08-28T00:00:40Z"}
+    reservation = acquisition_module._baseline_batch_reservations(batches, states, terminals)[0]
+    assert reservation.released_at == baseline + timedelta(minutes=40, seconds=40)
+    terminals["b"]["kind"] = "probe-window-missed"
+    assert acquisition_module._baseline_batch_reservations(batches, states, terminals)[0].released_at is None
+
+
+@pytest.mark.parametrize("kind,state,expected", [
+    ("eligible", {"pages": []}, True),
+    ("stable-page-unavailable", {"pages": []}, False),
+    ("pre-probe-rejection", {"navigation_attempts": [{"outcome": "terminal-policy-rejection"}]}, False),
+    ("pre-probe-rejection", {"navigation_attempts": [{"outcome": "recoverable-failure"}]}, None),
+    ("probe-window-missed", {"pages": []}, None),
+    ("stable-page-unavailable", {"pages": [{"rejection": {"kind": "probe-retry-exhausted"}}]}, None),
+    ("eligible", {"pages": [{"rejection": {"kind": "probe-retry-exhausted"}}]}, None),
+])
+def test_only_scientific_terminal_outcomes_release_selection_slots(kind, state, expected):
+    assert acquisition_module._scientific_terminal_eligibility({"kind": kind}, state) is expected
+
+
+def test_acquisition_authority_is_explicit_mutually_exclusive_and_prepare_validated(tmp_path, monkeypatch):
+    catalogue = _catalogue(tmp_path / "catalogue.json")
+    authority = tmp_path / "authority.json"
+    authority.write_bytes(canonical_json_bytes(bind_receipt(
+        {"fixture": True}, receipt_type=class_attestation.ACQUISITION_AUTHORITY_RECEIPT_TYPE,
+    )))
+    calls = []
+
+    def validate(path, *, runtime_role):
+        calls.append((path, runtime_role))
+        return {"path": str(path), "sha256": acquisition_module.sha256_file(path)}
+
+    monkeypatch.setattr(class_attestation, "validate_class_acquisition_authority", validate)
+    common = {"candidate_catalogue_path": catalogue,
+              "started_at": "2026-08-28T00:00:00Z", "browser_tool": "ignored"}
+    with pytest.raises(ValueError, match="exactly one"):
+        initialise_runner(tmp_path / "missing", **common)
+    with pytest.raises(ValueError, match="exactly one"):
+        initialise_runner(tmp_path / "both", acquisition_authority=authority,
+                          foundation_attestation=authority, **common)
+    runner = initialise_runner(tmp_path / "runner", acquisition_authority=authority, **common)
+    provenance = load_json(runner / "provenance.json")["payload"]
+    assert "foundation_attestation" not in provenance
+    assert provenance["acquisition_authority"]["path"] == str(authority)
+    acquisition_module._validate_runner_runtime(provenance)
+    assert calls == [(authority, "prepare"), (authority, "prepare")]
+
+
+def test_schema_five_fixed_contract_and_policy_ledgers_remain_verification_only(tmp_path):
+    catalogue = _catalogue(tmp_path / "catalogue.json")
+    runner = initialise_runner(
+        tmp_path / "runner", candidate_catalogue_path=catalogue,
+        foundation_attestation=_foundation(tmp_path / "foundation.json"),
+        started_at="2026-08-28T00:00:00Z", browser_tool="ignored",
+    )
+    run_due_acquisition(runner, candidate_catalogue_path=catalogue, stability_root=tmp_path / "stability",
+                        workload_root=tmp_path / "workloads", backend=RejectingBackend())
+    provenance_path = runner / "provenance.json"
+    provenance = load_json(provenance_path)["payload"]
+    provenance["acquisition_schema_version"] = 5
+    _replace_receipt_payload(provenance_path, provenance)
+    provenance = load_json(provenance_path)["payload"]
+    checkpoint = load_json(runner / "checkpoint.json")["payload"]
+    checkpoint["provenance_sha256"] = acquisition_module.sha256_file(provenance_path)
+    for state in checkpoint["candidates"].values():
+        if state["terminal"] is None:
+            continue
+        terminal_path = runner / state["terminal"]["path"]
+        terminal = load_json(terminal_path)["payload"]
+        terminal["provenance_sha256"] = checkpoint["provenance_sha256"]
+        _replace_receipt_payload(terminal_path, terminal)
+        state["terminal"]["sha256"] = acquisition_module.sha256_file(terminal_path)
+    _replace_receipt_payload(runner / "checkpoint.json", checkpoint)
+    before = (runner / "checkpoint.json").read_bytes()
+    status = acquisition_status(runner, candidate_catalogue_path=catalogue)
+    assert status["acquisition_schema_version"] == 5 and "selection" not in status
+    assert status["terminal_count"] == 2 and status["pending_count"] == 598
+    assert set(provenance) == acquisition_module.SCHEMA_FIVE_PROVENANCE_FIELDS
+    with pytest.raises(ValueError, match="provenance policy"):
+        acquisition_module._validate_current_provenance_contract({
+            **provenance,
+            "baseline_scheduling_contract": acquisition_module.TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT,
+        })
+    with pytest.raises(ValueError, match="historical acquisition runners"):
+        run_due_acquisition(runner, candidate_catalogue_path=catalogue,
+                            stability_root=tmp_path / "stability", workload_root=tmp_path / "workloads",
+                            backend=NoNetworkBackend())
+    assert (runner / "checkpoint.json").read_bytes() == before
+    changed = copy.deepcopy(checkpoint)
+    first = next(state for state in changed["candidates"].values() if state["terminal"] is not None)
+    first["navigation_attempts"][0].pop("policy_evidence")
+    _replace_receipt_payload(runner / "checkpoint.json", changed)
+    with pytest.raises(ValueError, match="navigation-attempt ledger"):
+        acquisition_status(runner, candidate_catalogue_path=catalogue)

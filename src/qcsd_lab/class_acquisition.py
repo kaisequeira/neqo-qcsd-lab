@@ -40,10 +40,16 @@ from .acquisition_timing import (
     GLOBAL_LIVE_PAGE_CAP,
     MAX_CANDIDATES_PER_ACTION,
     MINIMUM_BASELINE_SPACING_MS,
+    TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT,
+    BaselineReservation,
     baseline_is_safe,
+    baseline_is_safe_with_releases,
     earliest_safe_baseline,
+    earliest_safe_baseline_with_releases,
     validate_baseline_schedule,
+    validate_baseline_schedule_with_releases,
 )
+from .acquisition_selection import ACQUISITION_SELECTION_POLICY, derive_acquisition_selection
 from .cdp_targets import (
     CDP_TARGET_INSTRUMENTATION_POLICY,
     BrowserSharedWorkerGuard,
@@ -93,15 +99,16 @@ from .util import (
     source_metadata,
 )
 
-SCHEMA_VERSION = 5
-HISTORICAL_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4})
+SCHEMA_VERSION = 6
+HISTORICAL_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5})
 SUPPORTED_SCHEMA_VERSIONS = HISTORICAL_SCHEMA_VERSIONS | {SCHEMA_VERSION}
 PROVENANCE_TYPE = "qcsd-class-study-acquisition-provenance"
 TERMINAL_TYPE = "qcsd-class-study-acquisition-terminal"
 CHECKPOINT_SCHEMA_VERSION = 2
 TERMINAL_SCHEMA_VERSION = 3
 COMPLETION_TYPE = "qcsd-class-study-acquisition-completion"
-COMPLETION_SCHEMA_VERSION = 2
+SELECTION_TYPE = "qcsd-class-study-acquisition-selection"
+COMPLETION_SCHEMA_VERSION = 3
 CHECKPOINT_TYPE = "qcsd-class-study-acquisition-checkpoint"
 ACTIVE_BATCH_SCHEMA_VERSION = 1
 DOCUMENT_RESPONSE_RECEIPT_TYPE = "qcsd-class-study-document-response"
@@ -336,7 +343,7 @@ ORIGIN_POLICY = {
     "dns": "all-answers-global-and-browser-host-resolver-pinned",
     "neqo": "QCSD_PUBLIC_ORIGIN_ONLY-resolve-once-connect-exact-address",
 }
-CURRENT_PROVENANCE_FIELDS = frozenset(
+SCHEMA_FIVE_PROVENANCE_FIELDS = frozenset(
     {
         "study_id",
         "acquisition_schema_version",
@@ -365,6 +372,9 @@ CURRENT_PROVENANCE_FIELDS = frozenset(
         "prohibited_inputs",
     }
 )
+CURRENT_PROVENANCE_FIELDS = (
+    SCHEMA_FIVE_PROVENANCE_FIELDS - {"foundation_attestation"}
+) | {"acquisition_authority", "acquisition_selection_policy"}
 _SOURCE_FIELDS = frozenset(
     {
         "image_digest",
@@ -1195,7 +1205,8 @@ def initialise_runner(
     root: Path,
     *,
     candidate_catalogue_path: Path,
-    foundation_attestation: Path,
+    foundation_attestation: Path | None = None,
+    acquisition_authority: Path | None = None,
     started_at: str,
     browser_tool: str,
 ) -> Path:
@@ -1207,7 +1218,11 @@ def initialise_runner(
     del browser_tool
     catalogue, candidates = load_candidate_catalogue_receipt(candidate_catalogue_path)
     started = _timestamp(started_at)
-    foundation = _foundation_attestation_binding(foundation_attestation)
+    if (foundation_attestation is None) == (acquisition_authority is None):
+        raise ValueError("supply exactly one acquisition authority or foundation attestation")
+    authority = _acquisition_authority_binding(
+        acquisition_authority if acquisition_authority is not None else foundation_attestation
+    )
     destination = _new_directory(root)
     (destination / "terminals").mkdir()
     (destination / "document-response-receipts").mkdir()
@@ -1221,7 +1236,7 @@ def initialise_runner(
             "candidate_catalogue_sha256": sha256_file(candidate_catalogue_path),
             "candidate_catalogue_payload_sha256": catalogue["payload_sha256"],
             "candidate_count": len(candidates),
-            "foundation_attestation": foundation,
+            "acquisition_authority": authority,
             "started_at": _format_time(started),
             "image_digest": os.environ.get("QCSD_LAB_IMAGE_DIGEST", "native"),
             "source": source_metadata(),
@@ -1234,7 +1249,8 @@ def initialise_runner(
             "browser_navigation_timeout_ms": MAX_ACQUISITION_BACKEND_TIMEOUT_MS,
             "passive_render_hard_cap_after_load_ms": (MAX_PASSIVE_RENDER_AFTER_LOAD_MS),
             "acquisition_action_timing_contract": ACTION_TIMING_CONTRACT,
-            "baseline_scheduling_contract": BASELINE_SCHEDULING_CONTRACT,
+            "baseline_scheduling_contract": TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT,
+            "acquisition_selection_policy": ACQUISITION_SELECTION_POLICY,
             "registrable_domain_policy": REGISTRABLE_DOMAIN_POLICY,
             "domain_safety_policy": DOMAIN_SAFETY_POLICY,
             "domain_safety_policy_sha256": sha256_bytes(canonical_json_bytes(DOMAIN_SAFETY_POLICY)),
@@ -1378,6 +1394,13 @@ def run_due_acquisition(
             now=read_clock(),
         )
 
+    terminal_payloads = _checkpoint_terminal_payloads(runner, states)
+    selection, selection_blocked = _derive_checkpoint_selection(
+        candidates, _catalogue, states, terminal_payloads
+    )
+    admission_ids = set(selection["admission_ids"]) if not selection_blocked else set()
+    reservations = _baseline_batch_reservations(baseline_batches, states, terminal_payloads)
+
     def classify(
         current_time: datetime,
     ) -> tuple[list[Any], list[Any], list[Any], list[Any], list[Any]]:
@@ -1413,7 +1436,9 @@ def run_due_acquisition(
                         due_values.append((candidate, pages, probe_ids.pop()))
             elif state["state"] == "baseline-ready":
                 ready_values.append(candidate)
-            elif state["state"] == "pending":
+            elif state["state"] == "pending" and (
+                candidate.candidate_id in admission_ids or state.get("navigation_attempts")
+            ):
                 pending_values.append(candidate)
         return (
             finalisable_values,
@@ -1430,7 +1455,7 @@ def run_due_acquisition(
         finalisable, due, missed, ready, pending = classify(current)
         if due or finalisable or missed:
             break
-        if ready and baseline_is_safe(current, _baseline_batch_starts(baseline_batches)):
+        if ready and baseline_is_safe_with_releases(current, reservations):
             selected_ready = _select_compatible_batch(
                 [
                     (candidate, len(states[candidate.candidate_id]["pages"]), "t+30s")
@@ -1439,10 +1464,7 @@ def run_due_acquisition(
                 maximum=max_candidates,
             )
             actual_baseline = read_clock()
-            if not baseline_is_safe(
-                actual_baseline,
-                _baseline_batch_starts(baseline_batches),
-            ):
+            if not baseline_is_safe_with_releases(actual_baseline, reservations):
                 scheduling_rechecks += 1
                 if scheduling_rechecks > MAX_CANDIDATES_PER_ACTION:
                     raise ValueError("clock repeatedly crossed a baseline scheduling boundary")
@@ -2385,6 +2407,86 @@ def _finalisable_probe_terminal_time(state: Mapping[str, Any]) -> datetime:
     return max(completed)
 
 
+def _scientific_terminal_eligibility(
+    terminal: Mapping[str, Any], state: Mapping[str, Any]
+) -> bool | None:
+    """Project authenticated science outcomes; infrastructure is unresolved."""
+
+    if terminal["kind"] == "probe-window-missed" or any(
+        page.get("rejection", {}).get("kind") == "probe-retry-exhausted"
+        for page in state.get("pages", []) if isinstance(page.get("rejection"), Mapping)
+    ):
+        return None
+    if terminal["kind"] == "pre-probe-rejection":
+        attempts = state.get("navigation_attempts", [])
+        if not attempts or attempts[-1]["outcome"] != "terminal-policy-rejection":
+            return None
+    return terminal["kind"] == "eligible"
+
+
+def _checkpoint_terminal_payloads(
+    runner: Path, states: Mapping[str, Any]
+) -> dict[str, dict[str, Any]]:
+    """Read terminal projections only after the caller deeply validated checkpoint state."""
+
+    terminals = {}
+    for candidate_id, state in states.items():
+        binding = state.get("terminal")
+        if binding is None:
+            continue
+        path = runner / binding["path"]
+        if path.is_symlink() or not path.is_file() or sha256_file(path) != binding["sha256"]:
+            raise ValueError("acquisition terminal projection binding changed")
+        envelope = load_json(path)
+        if path.read_bytes() != canonical_json_bytes(envelope):
+            raise ValueError("acquisition terminal projection is not canonical")
+        terminal = validate_hash_bound_receipt(envelope, expected_type=TERMINAL_TYPE)
+        if terminal["candidate_id"] != candidate_id:
+            raise ValueError("acquisition terminal projection identity changed")
+        terminals[candidate_id] = terminal
+    return terminals
+
+
+def _derive_checkpoint_selection(
+    candidates: Sequence[Any], catalogue: Mapping[str, Any], states: Mapping[str, Any],
+    terminal_payloads: Mapping[str, Mapping[str, Any]],
+) -> tuple[dict[str, Any], list[str]]:
+    outcomes = {candidate_id: _scientific_terminal_eligibility(terminal, states[candidate_id])
+                for candidate_id, terminal in terminal_payloads.items()}
+    selection = derive_acquisition_selection(
+        candidates, tranco_list_sha256=catalogue["payload"]["tranco"]["list_sha256"],
+        terminal_eligibility={candidate_id: outcome for candidate_id, outcome in outcomes.items()
+                              if outcome is not None},
+    )
+    blocked = [candidate_id for candidate_id in selection["candidate_ids"]
+               if candidate_id in outcomes and outcomes[candidate_id] is None]
+    return selection, blocked
+
+
+def _baseline_batch_reservations(
+    batches: Sequence[Mapping[str, Any]], states: Mapping[str, Any],
+    terminal_payloads: Mapping[str, Mapping[str, Any]],
+) -> tuple[BaselineReservation, ...]:
+    if not isinstance(batches, (list, tuple)):
+        raise ValueError("acquisition baseline-batch ledger is malformed")
+    reservations = []
+    for batch in batches:
+        if not isinstance(batch, Mapping) or not isinstance(batch.get("baseline_started_at"), str):
+            raise ValueError("acquisition baseline-batch ledger is malformed")
+        members = batch["candidate_ids"]
+        if not isinstance(members, list) or not members or any(
+            not isinstance(candidate_id, str) or candidate_id not in states for candidate_id in members
+        ):
+            raise ValueError("acquisition baseline-batch ledger is malformed")
+        resolved = all(candidate_id in terminal_payloads and _scientific_terminal_eligibility(
+            terminal_payloads[candidate_id], states[candidate_id]
+        ) is not None for candidate_id in members)
+        terminalised = max(_timestamp(terminal_payloads[candidate_id]["terminalised_at"])
+                           for candidate_id in members) if resolved else None
+        reservations.append(BaselineReservation(_timestamp(batch["baseline_started_at"]), terminalised))
+    return tuple(reservations)
+
+
 def acquisition_status(
     root: Path,
     *,
@@ -2407,9 +2509,24 @@ def acquisition_status(
         load_json(Path(root) / "provenance.json"), expected_type=PROVENANCE_TYPE
     )
     acquisition_schema_version = provenance["acquisition_schema_version"]
+    selection = None
+    selection_blocked: list[str] = []
+    reservations = None
+    scheduling_states = states
+    if acquisition_schema_version == SCHEMA_VERSION:
+        catalogue, candidates = load_candidate_catalogue_receipt(candidate_catalogue_path)
+        terminal_payloads = _checkpoint_terminal_payloads(Path(root), states)
+        selection, selection_blocked = _derive_checkpoint_selection(
+            candidates, catalogue, states, terminal_payloads
+        )
+        admission_ids = set(selection["admission_ids"]) if not selection_blocked else set()
+        scheduling_states = {candidate_id: state for candidate_id, state in states.items()
+                             if state["state"] != "pending" or candidate_id in admission_ids
+                             or state.get("navigation_attempts")}
+        reservations = _baseline_batch_reservations(payload["baseline_batches"], states, terminal_payloads)
     baseline_starts = (
         _baseline_batch_starts(payload["baseline_batches"])
-        if acquisition_schema_version in {4, SCHEMA_VERSION}
+        if acquisition_schema_version in {4, 5, SCHEMA_VERSION}
         else _checkpoint_baselines(states)
     )
     active = payload.get("active_batch")
@@ -2431,7 +2548,7 @@ def acquisition_status(
     due_now = 0
     finalisable = 0
     missed = 0
-    for candidate_id, state in states.items():
+    for candidate_id, state in scheduling_states.items():
         if state["terminal"] is None and state["state"] in {
             "pending",
             "baseline-ready",
@@ -2439,7 +2556,7 @@ def acquisition_status(
             pending += 1
         if state["terminal"] is None and state["state"] == "probing":
             probing += 1
-            if acquisition_schema_version == SCHEMA_VERSION and _probe_candidate_is_finalisable(
+            if acquisition_schema_version in {5, SCHEMA_VERSION} and _probe_candidate_is_finalisable(
                 state
             ):
                 finalisable += 1
@@ -2461,18 +2578,27 @@ def acquisition_status(
                     if due > current:
                         next_due = due if next_due is None or due < next_due else next_due
     pending_due = _next_pending_start(
-        states,
+        scheduling_states,
         current,
         baseline_starts=baseline_starts,
+        reservations=reservations,
     )
     if pending_due is not None:
         next_due = pending_due if next_due is None or pending_due < next_due else next_due
     terminal = sum(state["terminal"] is not None for state in states.values())
     pending_blocked = bool(pending) and _pending_baseline_blocked(
-        states,
+        scheduling_states,
         current,
         baseline_starts=baseline_starts,
+        reservations=reservations,
     )
+    started_nonterminal = any(state["terminal"] is None and (
+        state["state"] in {"baseline-ready", "probing"}
+        or state.get("navigation_attempts") or state.get("pending_navigation")
+    ) for state in states.values())
+    complete = (terminal == len(states) if selection is None else (
+        selection["complete"] and not selection_blocked and not started_nonterminal
+    )) and recovery_required == 0 and active is None
     return {
         "acquisition_schema_version": acquisition_schema_version,
         "checkpoint_schema_version": payload.get("checkpoint_schema_version"),
@@ -2495,7 +2621,9 @@ def acquisition_status(
             or missed
             or (pending and not pending_blocked)
         ),
-        "complete": (terminal == len(states) and recovery_required == 0 and active is None),
+        "complete": complete,
+        **({"selection": selection, "selection_blocked_candidate_ids": selection_blocked}
+           if selection is not None else {}),
         "next_due": _format_time(next_due) if next_due else None,
     }
 
@@ -2509,7 +2637,7 @@ def write_acquisition_completion(root: Path, *, candidate_catalogue_path: Path) 
         raise ValueError("historical acquisition runners cannot publish new completion evidence")
     status = acquisition_status(root, candidate_catalogue_path=candidate_catalogue_path)
     if not status["complete"]:
-        raise ValueError("acquisition completion requires terminal evidence for all candidates")
+        raise ValueError("acquisition completion requires a resolved deterministic prefix and no outstanding work")
     runner = Path(root)
     checkpoint, persisted_terminal_recoveries = _load_checkpoint(
         runner / "checkpoint.json", runner / "provenance.json", candidate_catalogue_path
@@ -2541,8 +2669,10 @@ def write_acquisition_completion(root: Path, *, candidate_catalogue_path: Path) 
             "baseline_batches": baseline_batches,
             "baseline_batches_sha256": evidence_sha256(baseline_batches),
             "observed_toolchain": observed_toolchain,
+            "selection": bind_receipt(status["selection"], receipt_type=SELECTION_TYPE),
             "terminal_receipts": {
                 candidate_id: state["terminal"] for candidate_id, state in terminals.items()
+                if state["terminal"] is not None
             },
         },
         receipt_type=COMPLETION_TYPE,
@@ -2595,8 +2725,10 @@ def validate_acquisition_completion(
         "baseline_batches",
         "baseline_batches_sha256",
     }
-    if acquisition_schema_version in {4, SCHEMA_VERSION}:
-        if acquisition_schema_version == SCHEMA_VERSION:
+    if acquisition_schema_version == SCHEMA_VERSION:
+        current_fields.add("selection")
+    if acquisition_schema_version in {4, 5, SCHEMA_VERSION}:
+        if acquisition_schema_version in {5, SCHEMA_VERSION}:
             _validate_current_provenance_contract(
                 provenance,
                 candidate_catalogue_path=candidate_catalogue_path,
@@ -2604,7 +2736,9 @@ def validate_acquisition_completion(
         if (
             set(payload) != current_fields
             or type(payload["completion_schema_version"]) is not int
-            or payload["completion_schema_version"] != COMPLETION_SCHEMA_VERSION
+            or payload["completion_schema_version"] != (
+                COMPLETION_SCHEMA_VERSION if acquisition_schema_version == SCHEMA_VERSION else 2
+            )
             or type(payload["checkpoint_schema_version"]) is not int
             or payload["checkpoint_schema_version"] != CHECKPOINT_SCHEMA_VERSION
         ):
@@ -2630,7 +2764,7 @@ def validate_acquisition_completion(
     )
     if checkpoint_recoveries:
         raise ValueError("completion binds a checkpoint requiring recovery")
-    if acquisition_schema_version in {4, SCHEMA_VERSION} and (
+    if acquisition_schema_version in {4, 5, SCHEMA_VERSION} and (
         checkpoint["payload"]["active_batch"] is not None
         or payload["baseline_batches"] != checkpoint["payload"]["baseline_batches"]
         or payload["baseline_batches_sha256"]
@@ -2641,7 +2775,21 @@ def validate_acquisition_completion(
     checkpoint_terminals = {
         candidate_id: state["terminal"]
         for candidate_id, state in checkpoint["payload"]["candidates"].items()
+        if acquisition_schema_version != SCHEMA_VERSION or state["terminal"] is not None
     }
+    if acquisition_schema_version == SCHEMA_VERSION:
+        states = checkpoint["payload"]["candidates"]
+        terminal_payloads = _checkpoint_terminal_payloads(runner_root, states)
+        selection, blocked = _derive_checkpoint_selection(candidates, _catalogue, states, terminal_payloads)
+        sealed_selection = validate_hash_bound_receipt(payload["selection"], expected_type=SELECTION_TYPE)
+        if (not selection["complete"] or blocked
+            or not _matches_json_contract(sealed_selection, selection)
+            or any(state["terminal"] is None and (
+                state["state"] in {"baseline-ready", "probing"}
+                or state.get("navigation_attempts") or state.get("pending_navigation")
+            ) for state in states.values())):
+            raise ValueError("acquisition completion selection prefix or unassessed tail does not verify")
+        expected = set(selection["terminal_ids"])
     if (
         set(payload["terminal_receipts"]) != expected
         or payload["terminal_receipts"] != checkpoint_terminals
@@ -3643,7 +3791,7 @@ def _validated_terminal_binding(
             or payload["terminal_schema_version"] != 2
         ):
             raise ValueError("terminal evidence schema differs from the current contract")
-    elif acquisition_schema_version in {4, SCHEMA_VERSION}:
+    elif acquisition_schema_version in {4, 5, SCHEMA_VERSION}:
         if set(payload) != terminal_v3_fields:
             raise ValueError("terminal evidence fields differ from the contract")
         if (
@@ -3655,7 +3803,7 @@ def _validated_terminal_binding(
             raise ValueError("terminal evidence schema differs from the current contract")
     else:
         raise ValueError("terminal evidence belongs to an unsupported acquisition schema")
-    if acquisition_schema_version in {2, 3, 4, SCHEMA_VERSION} and not isinstance(
+    if acquisition_schema_version in {2, 3, 4, 5, SCHEMA_VERSION} and not isinstance(
         candidate_state, Mapping
     ):
         raise ValueError("terminal evidence fields differ from the contract")
@@ -3672,7 +3820,7 @@ def _validated_terminal_binding(
         kind != "eligible" and (not isinstance(reason, str) or not reason)
     ):
         raise ValueError("terminal evidence reason differs from its outcome kind")
-    if acquisition_schema_version in {4, SCHEMA_VERSION}:
+    if acquisition_schema_version in {4, 5, SCHEMA_VERSION}:
         expected_baseline_batch = (
             None
             if kind == "pre-probe-rejection"
@@ -3683,7 +3831,7 @@ def _validated_terminal_binding(
         if payload["baseline_batch"] != expected_baseline_batch:
             raise ValueError("terminal evidence baseline-batch binding differs")
     selected_checkpoint = None
-    if acquisition_schema_version in {2, 3, 4, SCHEMA_VERSION}:
+    if acquisition_schema_version in {2, 3, 4, 5, SCHEMA_VERSION}:
         terminalised_raw = payload["terminalised_at"]
         if (
             not isinstance(terminalised_raw, str)
@@ -3701,7 +3849,7 @@ def _validated_terminal_binding(
             kind=kind,
             reason=reason,
             terminalised_at=_timestamp(terminalised_raw),
-            enforce_duration_limit=(acquisition_schema_version in {3, 4, SCHEMA_VERSION}),
+            enforce_duration_limit=(acquisition_schema_version in {3, 4, 5, SCHEMA_VERSION}),
         )
     stability_binding = payload["stability_receipt"]
     workload_binding = payload["admitted_workload"]
@@ -3724,7 +3872,7 @@ def _validated_terminal_binding(
             != sha256_file(workload_path)
         ):
             raise ValueError("eligible terminal stability/workload binding is invalid")
-        if acquisition_schema_version in {2, 3, 4, SCHEMA_VERSION}:
+        if acquisition_schema_version in {2, 3, 4, 5, SCHEMA_VERSION}:
             if selected_checkpoint is None:
                 raise ValueError("eligible terminal has no selected checkpoint page")
             page_state, page, observations = selected_checkpoint
@@ -3783,12 +3931,36 @@ def _foundation_attestation_binding(path: Path) -> dict[str, str]:
     return binding
 
 
+def _acquisition_authority_binding(path: Path) -> dict[str, str]:
+    """Validate narrow current authority, or the unchanged full-foundation fallback."""
+
+    source = Path(os.path.abspath(path))
+    if source.is_symlink() or not source.is_file():
+        raise ValueError("class acquisition authority must be a regular file")
+    value = load_json(source)
+    if source.read_bytes() != canonical_json_bytes(value):
+        raise ValueError("class acquisition authority is not canonically encoded")
+    if value.get("receipt_type") == "qcsd-class-study-foundation-attestation":
+        return _foundation_attestation_binding(source)
+    from .class_attestation import (
+        ACQUISITION_AUTHORITY_RECEIPT_TYPE,
+        validate_class_acquisition_authority,
+    )
+
+    validate_hash_bound_receipt(value, expected_type=ACQUISITION_AUTHORITY_RECEIPT_TYPE)
+    validated = validate_class_acquisition_authority(source, runtime_role="prepare")
+    binding = {"path": str(source), "sha256": sha256_file(source)}
+    if any(validated.get(key) != item for key, item in binding.items()):
+        raise ValueError("class acquisition authority validator returned another binding")
+    return binding
+
+
 def _validate_current_provenance_contract(
     provenance: Mapping[str, Any],
     *,
     candidate_catalogue_path: Path | None = None,
 ) -> dict[str, Any]:
-    """Reconstruct schema-five provenance without consulting ambient runtime state.
+    """Reconstruct schema-five/six provenance without ambient runtime state.
 
     Historical acquisition schemas remain readable under their original
     contracts.  Current evidence, however, must retain every fixed acquisition
@@ -3797,16 +3969,18 @@ def _validate_current_provenance_contract(
     prepare process that created it.
     """
 
-    if not isinstance(provenance, Mapping) or set(provenance) != CURRENT_PROVENANCE_FIELDS:
+    schema = provenance.get("acquisition_schema_version") if isinstance(provenance, Mapping) else None
+    fields = SCHEMA_FIVE_PROVENANCE_FIELDS if schema == 5 else CURRENT_PROVENANCE_FIELDS
+    if not isinstance(provenance, Mapping) or set(provenance) != fields:
         raise ValueError("schema-five acquisition provenance fields differ from the contract")
-    foundation = provenance.get("foundation_attestation")
+    foundation = provenance.get("foundation_attestation" if schema == 5 else "acquisition_authority")
     source = provenance.get("source")
     candidate_count = provenance.get("candidate_count")
     image_digest = provenance.get("image_digest")
     started_at = provenance.get("started_at")
     if (
         type(provenance.get("acquisition_schema_version")) is not int
-        or provenance["acquisition_schema_version"] != SCHEMA_VERSION
+        or provenance["acquisition_schema_version"] not in {5, SCHEMA_VERSION}
         or provenance.get("study_id") != "classifier-multiorigin100-v1"
         or type(candidate_count) is not int
         or candidate_count < 1
@@ -3839,7 +4013,8 @@ def _validate_current_provenance_contract(
         "browser_navigation_timeout_ms": MAX_ACQUISITION_BACKEND_TIMEOUT_MS,
         "passive_render_hard_cap_after_load_ms": MAX_PASSIVE_RENDER_AFTER_LOAD_MS,
         "acquisition_action_timing_contract": ACTION_TIMING_CONTRACT,
-        "baseline_scheduling_contract": BASELINE_SCHEDULING_CONTRACT,
+        "baseline_scheduling_contract": (BASELINE_SCHEDULING_CONTRACT if schema == 5
+                                         else TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT),
         "registrable_domain_policy": REGISTRABLE_DOMAIN_POLICY,
         "domain_safety_policy": DOMAIN_SAFETY_POLICY,
         "domain_safety_policy_sha256": sha256_bytes(canonical_json_bytes(DOMAIN_SAFETY_POLICY)),
@@ -3847,6 +4022,8 @@ def _validate_current_provenance_contract(
         "eligibility_inputs": ELIGIBILITY_INPUTS,
         "prohibited_inputs": PROHIBITED_INPUTS,
     }
+    if schema == SCHEMA_VERSION:
+        expected_fixed["acquisition_selection_policy"] = ACQUISITION_SELECTION_POLICY
     if any(
         not _matches_json_contract(provenance.get(field), expected)
         for field, expected in expected_fixed.items()
@@ -3894,16 +4071,19 @@ def _validate_current_provenance_contract(
 def _validate_runner_runtime(provenance: Mapping[str, Any]) -> None:
     """Prevent later stability probes from changing the frozen prepare image."""
 
-    foundation = provenance.get("foundation_attestation")
+    schema_version = provenance.get("acquisition_schema_version")
+    foundation = provenance.get("acquisition_authority" if schema_version == SCHEMA_VERSION
+                                else "foundation_attestation")
     if not isinstance(foundation, Mapping):
         raise ValueError("class acquisition provenance has no foundation binding")
     foundation_path = _verified_bound_file(foundation, label="class acquisition foundation")
-    if _foundation_attestation_binding(foundation_path) != dict(foundation):
+    validate_authority = (_acquisition_authority_binding if schema_version == SCHEMA_VERSION
+                          else _foundation_attestation_binding)
+    if validate_authority(foundation_path) != dict(foundation):
         raise ValueError("class acquisition foundation binding changed")
     current_image = os.environ.get("QCSD_LAB_IMAGE_DIGEST", "native")
     current_source = source_metadata()
-    schema_version = provenance.get("acquisition_schema_version")
-    if type(schema_version) is int and schema_version == SCHEMA_VERSION:
+    if type(schema_version) is int and schema_version in {5, SCHEMA_VERSION}:
         _validate_current_provenance_contract(provenance)
     if (
         provenance.get("image_digest") != current_image
@@ -3996,12 +4176,12 @@ def _validate_observation_provenance(
     require_instrumentation_evidence = acquisition_schema_version in {
         2,
         3,
-        4,
+        4, 5,
         SCHEMA_VERSION,
     }
     require_current_evidence = acquisition_schema_version in {
         3,
-        4,
+        4, 5,
         SCHEMA_VERSION,
     }
     prepared_root: Path | None = None
@@ -4295,7 +4475,7 @@ def _validate_navigation_attempts(
             "outcome",
             "reason",
         }
-        if acquisition_schema_version == SCHEMA_VERSION:
+        if acquisition_schema_version in {5, SCHEMA_VERSION}:
             expected_fields.add("policy_evidence")
         if not isinstance(item, Mapping) or set(item) != expected_fields:
             raise ValueError("acquisition navigation-attempt ledger is malformed")
@@ -4346,7 +4526,7 @@ def _validate_navigation_attempts(
                 and (not isinstance(item["reason"], str) or not item["reason"])
             )
             or (
-                acquisition_schema_version == SCHEMA_VERSION
+                acquisition_schema_version in {5, SCHEMA_VERSION}
                 and item["outcome"] != "terminal-policy-rejection"
                 and policy_evidence is not None
             )
@@ -4435,7 +4615,7 @@ def _validate_probe_attempts(
         }
         expected_fields = (
             base_fields | {"policy_evidence"}
-            if acquisition_schema_version == SCHEMA_VERSION
+            if acquisition_schema_version in {5, SCHEMA_VERSION}
             else base_fields
         )
         if not isinstance(item, Mapping) or set(item) != expected_fields:
@@ -4447,7 +4627,7 @@ def _validate_probe_attempts(
             _validated_terminal_policy_evidence(
                 policy_evidence,
                 allow_non_replayable_egress=(
-                    acquisition_schema_version == SCHEMA_VERSION
+                    acquisition_schema_version in {5, SCHEMA_VERSION}
                 ),
             )
         probe_id = item["probe_id"]
@@ -4892,13 +5072,15 @@ def _next_pending_start(
     now: datetime,
     *,
     baseline_starts: Sequence[datetime],
+    reservations: Sequence[BaselineReservation] | None = None,
 ) -> datetime | None:
     candidates: list[datetime] = []
     if any(
         state.get("terminal") is None and state.get("state") == "baseline-ready"
         for state in states.values()
     ):
-        safe = earliest_safe_baseline(now, baseline_starts)
+        safe = (earliest_safe_baseline(now, baseline_starts) if reservations is None
+                else earliest_safe_baseline_with_releases(now, reservations))
         if safe > now:
             candidates.append(safe)
     candidates.extend(start for start in _incomplete_probe_starts(states) if start > now)
@@ -4910,12 +5092,15 @@ def _pending_baseline_blocked(
     now: datetime,
     *,
     baseline_starts: Sequence[datetime],
+    reservations: Sequence[BaselineReservation] | None = None,
 ) -> bool:
     ready = any(
         state.get("terminal") is None and state.get("state") == "baseline-ready"
         for state in states.values()
     )
-    if ready and baseline_is_safe(now, baseline_starts):
+    safe = (baseline_is_safe(now, baseline_starts) if reservations is None
+            else baseline_is_safe_with_releases(now, reservations))
+    if ready and safe:
         return False
     pending_navigation = any(
         state.get("terminal") is None and state.get("state") == "pending"
@@ -5164,6 +5349,7 @@ def _validate_baseline_batches(
     *,
     states: Mapping[str, Any],
     candidate_order: Sequence[str],
+    reservations: Sequence[BaselineReservation] | None = None,
 ) -> tuple[Mapping[str, Any], ...]:
     if not isinstance(value, list):
         raise ValueError("acquisition baseline-batch ledger is malformed")
@@ -5229,7 +5415,12 @@ def _validate_baseline_batches(
     starts = _baseline_batch_starts(validated)
     if tuple(sorted(starts)) != starts:
         raise ValueError("baseline batches are not append-ordered by start")
-    validate_baseline_schedule(starts)
+    if reservations is None:
+        validate_baseline_schedule(starts)
+    else:
+        if tuple(reservation.baseline_started_at for reservation in reservations) != starts:
+            raise ValueError("baseline reservation identities differ from their ledger")
+        validate_baseline_schedule_with_releases(reservations)
     return tuple(validated)
 
 
@@ -5419,8 +5610,8 @@ def _load_checkpoint_state(
     ):
         raise ValueError("acquisition checkpoint uses an unsupported schema")
     current_schema = acquisition_schema_version == SCHEMA_VERSION
-    modern_checkpoint_schema = acquisition_schema_version in {4, SCHEMA_VERSION}
-    if current_schema:
+    modern_checkpoint_schema = acquisition_schema_version in {4, 5, SCHEMA_VERSION}
+    if acquisition_schema_version in {5, SCHEMA_VERSION}:
         _validate_current_provenance_contract(
             provenance_payload,
             candidate_catalogue_path=catalogue_path,
@@ -5489,7 +5680,7 @@ def _load_checkpoint_state(
     for candidate in candidates:
         state = states[candidate.candidate_id]
         permitted_states = {"pending", "probing", "terminal"}
-        if acquisition_schema_version in {3, 4, SCHEMA_VERSION}:
+        if acquisition_schema_version in {3, 4, 5, SCHEMA_VERSION}:
             permitted_states.add("baseline-ready")
         if not isinstance(state, dict) or state.get("state") not in permitted_states:
             raise ValueError("acquisition checkpoint candidate state is invalid")
@@ -5498,7 +5689,7 @@ def _load_checkpoint_state(
         _validate_navigation_attempts(
             state,
             acquisition_schema_version=acquisition_schema_version,
-            enforce_duration_limit=(acquisition_schema_version in {3, 4, SCHEMA_VERSION}),
+            enforce_duration_limit=(acquisition_schema_version in {3, 4, 5, SCHEMA_VERSION}),
             require_canonical_timestamps=modern_checkpoint_schema,
         )
         if "navigation_rejections" in state:
@@ -5527,7 +5718,7 @@ def _load_checkpoint_state(
                     candidate_id=candidate.candidate_id,
                     acquisition_schema_version=acquisition_schema_version,
                     baseline_started_at=state.get("baseline_started_at"),
-                    enforce_duration_limit=(acquisition_schema_version in {3, 4, SCHEMA_VERSION}),
+                    enforce_duration_limit=(acquisition_schema_version in {3, 4, 5, SCHEMA_VERSION}),
                     require_canonical_timestamps=modern_checkpoint_schema,
                     require_observation_attempt_bindings=modern_checkpoint_schema,
                 )
@@ -5568,10 +5759,14 @@ def _load_checkpoint_state(
             raise ValueError("checkpoint references missing terminal evidence")
     candidate_order = [candidate.candidate_id for candidate in candidates]
     if modern_checkpoint_schema:
+        reservations = (_baseline_batch_reservations(
+            baseline_batches, states, _checkpoint_terminal_payloads(path.parent, states)
+        ) if current_schema else None)
         validated_baseline_batches = _validate_baseline_batches(
             baseline_batches,
             states=states,
             candidate_order=candidate_order,
+            reservations=reservations,
         )
         active_recoveries = _validate_active_batch(
             active_batch,
@@ -5600,12 +5795,12 @@ def _load_checkpoint_state(
     _validate_document_response_receipt_namespace(
         path.parent,
         states,
-        required=(acquisition_schema_version in {2, 3, 4, SCHEMA_VERSION}),
+        required=(acquisition_schema_version in {2, 3, 4, 5, SCHEMA_VERSION}),
     )
     _validate_prepared_probe_namespace(
         path.parent,
         states,
-        required=(acquisition_schema_version in {2, 3, 4, SCHEMA_VERSION}),
+        required=(acquisition_schema_version in {2, 3, 4, 5, SCHEMA_VERSION}),
     )
     if internal_failures:
         raise InternalAcquisitionError(

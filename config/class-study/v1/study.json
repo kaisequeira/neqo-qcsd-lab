@@ -2,6 +2,17 @@
   "schema_version": 1,
   "artifact_type": "qcsd-class-study-prospective-contract",
   "study_id": "classifier-multiorigin100-v1",
+  "prospective_acquisition_amendment": {
+    "schema_version": 1,
+    "date": "2026-09-15",
+    "scope": "new-source-bound-acquisition-only-no-historical-evidence-promotion",
+    "reason": "separate-public-page-acquisition-authority-from-defence-foundation-and-stop-after-deterministically-sufficient-terminal-prefixes",
+    "acquisition_schema_version": 6,
+    "completion_schema_version": 3,
+    "catalogue_and_order": "unchanged-600-candidates-120-per-stratum",
+    "final_endpoint": "unchanged-100-classes-900-nine-mode-certification-and-16000-eight-mode-formal-samples",
+    "historical_schema_policy": "verify-only-never-resume-under-amended-source"
+  },
   "status": {
     "phase": "candidate-catalogue-created",
     "prospective": true,
@@ -11,6 +22,7 @@
     "real_class_acquisition_observations": 0,
     "real_class_study_samples_executed": 0,
     "foundation_attestation": "absent",
+    "acquisition_authority": "absent",
     "class_readiness_attestation": "absent",
     "historical_pre_snapshot": "absent",
     "cohort_selection_receipt": "absent",
@@ -199,8 +211,14 @@
       "interruption_recovery": "published-active-batch-attempts-become-interrupted-never-completed"
     },
     "baseline_scheduling_contract": {
-      "schema_version": 2,
-      "policy": "serial-nonoverlapping-stability-window-batch-reservations-v2",
+      "schema_version": 3,
+      "policy": "serial-terminal-released-stability-window-batch-reservations-v3",
+      "reservation_release": "all-batch-members-scientifically-terminal-plus-full-serial-reservation",
+      "reservation_release_evidence": "latest-immutable-hash-bound-batch-member-terminalised-at",
+      "reservation_release_delay_ms": 2400000,
+      "reservation_release_validation": "causal-at-each-recorded-baseline-start",
+      "infrastructure_failure_policy": "timeout-interruption-and-missed-window-block-not-site-ineligibility",
+      "action_priority": "due-probes-before-new-baselines-and-navigation",
       "maximum_candidates_per_batch": 2,
       "global_live_page_cap": 5,
       "minimum_baseline_spacing_ms": 2400000,
@@ -235,6 +253,19 @@
         "last_baseline_offset_ms": 2784000000,
         "last_t+72h_earliest_offset_ms": 3042300000
       }
+    },
+    "acquisition_selection_contract": {
+      "schema_version": 1,
+      "policy": "first-24-eligible-terminal-prefix-per-stratum-v1",
+      "eligible_per_stratum": 24,
+      "pilot_count": 120,
+      "completion": "every-earlier-candidate-scientifically-terminal-and-24-eligible-per-stratum",
+      "new_work_admission": "first-24-non-rejected-candidates-per-stratum-in-frozen-order",
+      "unused_tail": "explicitly-unassessed-not-failed-no-invented-terminal-receipts",
+      "infrastructure_and_missed_windows": "block-not-candidate-rejection",
+      "active_or_interrupted_work": "must-terminalise-or-recover-before-completion",
+      "all_survivor_120_candidate_zero_duration_projection_ms": 658200000,
+      "projection_caveat": "not-wall-time-guarantee-rejections-and-real-execution-may-extend-duration-no-reduction-in-genuine-stability-windows"
     },
     "resource_origin_policy": {
       "multi_origin_pages_allowed": true,
@@ -513,10 +544,11 @@
   },
   "stage_order": [
     "pinned-tranco-receipt-and-deterministic-600-domain-candidate-catalogue",
-    "fresh-no-cache-build-reference-code-regression-controlled-pinned-cdp-and-browser-egress-gates",
-    "class-acquisition-foundation-attestation-freeze",
+    "fresh-no-cache-build-pinned-cdp-complete-browser-egress-and-acquisition-correctness-gates",
+    "class-acquisition-authority-freeze",
     "30s-24h-72h-public-page-acquisition-and-stability-evidence",
     "pilot-selection-and-cohort-assembly-receipts-freeze",
+    "full-reference-code-regression-controlled-foundation-freeze-before-any-class-study-capture",
     "pilot-fitting",
     "pilot-full-chaff-and-prefix-qualification",
     "pilot-nine-mode-compatibility",
@@ -531,12 +563,27 @@
     "historical-post-snapshot-handoff-evaluation-comparison-and-attestation"
   ],
   "authority_gates": {
+    "acquisition": {
+      "artifact_type": "qcsd-class-study-acquisition-authority",
+      "attestation_schema_version": 1,
+      "state": "absent",
+      "promotion_authority": false,
+      "required_before": ["public-page-acquisition"],
+      "scope": "public-page-acquisition-only",
+      "reconstructed_gates": [
+        "current-clean-source-and-no-cache-build",
+        "acquisition-focused-correctness",
+        "pinned-cdp-integration-probe",
+        "browser-egress-packet-qualification-110-of-110"
+      ],
+      "foundation_substitution": "full-current-foundation-allowed-as-stronger-acquisition-authority-only",
+      "later_foundation_join": "exact-source-build-study-contract-pinned-cdp-and-browser-egress-evidence"
+    },
     "foundation": {
       "artifact_type": "qcsd-class-study-foundation-attestation",
       "state": "absent",
       "promotion_authority": false,
       "required_before": [
-        "public-page-acquisition",
         "every-class-study-capture-role"
       ],
       "reconstructed_gates": [
@@ -820,7 +867,8 @@
     "historical_classifier_corpus": "read-only-byte-for-byte-unchanged"
   },
   "readiness_gates": {
-    "foundation_attestation": "required-before-any-real-public-page-acquisition-or-class-study-capture-role-and-frozen-by-every-result-only-after-the-seven-source-build-reference-code-regression-controlled-pinned-cdp-and-browser-egress-gates-pass",
+    "acquisition_authority": "required-before-public-page-acquisition-clean-build-pinned-cdp-complete-110-browser-egress-and-source-bound-acquisition-correctness-no-defended-capture-authority",
+    "foundation_attestation": "required-before-every-class-study-capture-role-including-fitting-and-frozen-by-every-result-only-after-the-seven-source-build-reference-code-regression-controlled-pinned-cdp-and-browser-egress-gates-pass",
     "class_readiness_attestation": "required-before-any-canary-or-formal-launch-and-only-after-foundation-acquisition-admission-final-selection-and-assembly-final-fitting-final-qualification-and-900-of-900-first-launch-certification-verify",
     "historical_pre_snapshot": "required-after-readiness-and-before-every-canary-or-formal-launch",
     "validation_attestation": "only-after-1000-of-1000-canaries-16000-of-16000-formal-samples-handoff-correctness-performance-classifier-evaluation-paper-comparison-historical-post-snapshot-and-independent-hash-verification-pass",

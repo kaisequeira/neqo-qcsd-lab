@@ -9553,6 +9553,15 @@ def validate_code_gate_receipt(
     _expected_collection_source: Mapping[str, Any] | None = None,
     allow_historical: bool = False,
 ) -> dict[str, Any]:
+    """Verify recorded execution and its bound evidence without running tests.
+
+    ``deep`` remains accepted for caller compatibility. Both values validate
+    the complete receipt, command outputs, source/build bindings, Rust gate and
+    regression evidence under the selected current or historical policy. A
+    fresh test execution belongs to ``create_code_gate_receipt``; verification
+    attests the recorded execution, not the current ambient test environment.
+    """
+
     binding = _file_binding(path)
     value = load_json(Path(binding["path"]))
     historical = isinstance(value, Mapping) and value.get("schema_version") == 1
@@ -9730,10 +9739,6 @@ def validate_code_gate_receipt(
         expected_baseline["path"] = _portable_lab_path(Path(expected_baseline["path"]))
     if value.get("established_seven_baseline") != expected_baseline:
         raise ValueError("study code gate does not bind the pre-change seven-mode oracle")
-    if deep:
-        rerun = _run_lab_code_gate_commands()
-        if any(record["exit_code"] != 0 for record in rerun):
-            raise ValueError("study code-gate semantic re-execution failed")
     return {"path": binding["path"], "sha256": binding["sha256"], **value}
 
 

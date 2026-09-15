@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from .class_acquisition import (
+    SELECTION_TYPE,
     TERMINAL_TYPE,
     validate_acquisition_completion,
     validate_class_study_preparation,
@@ -60,7 +61,8 @@ def build_evidenced_cohort(
     """Build the cohort and its independently auditable evidence index.
 
     Stability files use ``STABILITY_ROOT/CANDIDATE_ID/page-NN.json``.  Missing
-    candidate directories are ordinary ineligible outcomes.  A present
+    candidate directories need terminal evidence, unless the completed prefix
+    explicitly leaves them unassessed.  A present
     directory, however, must contain only a contiguous page sequence beginning
     at the canonical homepage.  This fails closed on stale or ambiguous files.
     """
@@ -94,8 +96,9 @@ def build_evidenced_cohort(
     resolved: list[ClassCandidate] = []
     evidence: list[dict[str, Any]] = []
     for candidate in candidates:
-        eligible, record = _candidate_evidence(
+        eligible, record = _candidate_acquisition_evidence(
             candidate,
+            completion_payload=completion_payload,
             stability_root=stability,
             workload_root=workloads,
             tranco=catalogue_payload["tranco"],
@@ -118,6 +121,7 @@ def build_evidenced_cohort(
         feasible_pairs=feasible_pairs,
     )
     selection = validate_study_receipt(cohort)
+    _verify_selected_prefix(completion_payload, selection.pilot)
     final_selection = _final_selection_binding(
         final_selection_receipt_path,
         feasible_pairs=selection.feasible_pairs,
@@ -491,8 +495,9 @@ def _build_evidenced_cohort(
     resolved: list[ClassCandidate] = []
     evidence: list[dict[str, Any]] = []
     for candidate in candidates:
-        eligible, record = _candidate_evidence(
+        eligible, record = _candidate_acquisition_evidence(
             candidate,
+            completion_payload=completion_payload,
             stability_root=stability,
             workload_root=workloads,
             tranco=catalogue_payload["tranco"],
@@ -514,6 +519,7 @@ def _build_evidenced_cohort(
         feasible_pairs=feasible_pairs,
     )
     selection = validate_study_receipt(cohort)
+    _verify_selected_prefix(completion_payload, selection.pilot)
     final_selection = _final_selection_binding(
         final_selection_receipt_path,
         feasible_pairs=selection.feasible_pairs,
@@ -598,6 +604,59 @@ def publish_evidenced_cohort(
     return cohort_path, assembly_path
 
 
+def _completed_prefix(completion_payload: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    if completion_payload.get("completion_schema_version") != 3:
+        return None
+    selection = validate_hash_bound_receipt(
+        completion_payload["selection"], expected_type=SELECTION_TYPE
+    )
+    if selection.get("complete") is not True or selection.get("needed_ids") != []:
+        raise ValueError("cohort acquisition prefix is not complete")
+    return selection
+
+
+def _unassessed_record(candidate_id: str) -> dict[str, Any]:
+    # False means not admitted to this cohort, not an observed scientific
+    # failure.  The reason and bound completion inventory preserve that fact.
+    return {
+        "candidate_id": candidate_id,
+        "eligible": False,
+        "selected_page": None,
+        "stability_receipt": None,
+        "prepared_workload": None,
+        "reasons": ["unassessed-deterministic-prefix-tail"],
+    }
+
+
+def _candidate_acquisition_evidence(
+    candidate: ClassCandidate,
+    *,
+    completion_payload: Mapping[str, Any],
+    stability_root: Path,
+    workload_root: Path,
+    tranco: Mapping[str, Any],
+) -> tuple[bool, dict[str, Any]]:
+    prefix = _completed_prefix(completion_payload)
+    if prefix is not None and candidate.candidate_id in prefix["unassessed_ids"]:
+        return False, _unassessed_record(candidate.candidate_id)
+    return _candidate_evidence(
+        candidate,
+        stability_root=stability_root,
+        workload_root=workload_root,
+        tranco=tranco,
+    )
+
+
+def _verify_selected_prefix(
+    completion_payload: Mapping[str, Any], pilot: Sequence[ClassCandidate]
+) -> None:
+    prefix = _completed_prefix(completion_payload)
+    if prefix is not None and prefix["pilot_ids"] != [
+        candidate.candidate_id for candidate in pilot
+    ]:
+        raise ValueError("cohort pilot differs from its completed acquisition prefix")
+
+
 def _reconcile_acquisition_terminal(
     candidate_id: str,
     record: Mapping[str, Any],
@@ -611,6 +670,17 @@ def _reconcile_acquisition_terminal(
 
     terminals = completion_payload.get("terminal_receipts")
     binding = terminals.get(candidate_id) if isinstance(terminals, Mapping) else None
+    prefix = _completed_prefix(completion_payload)
+    if prefix is not None and candidate_id in prefix["unassessed_ids"]:
+        if binding is not None or dict(record) != _unassessed_record(candidate_id):
+            raise ValueError("unassessed acquisition candidate has terminal or cohort evidence")
+        for path in (
+            stability_root / candidate_id,
+            workload_root / f"{candidate_id}.json",
+        ):
+            if path.exists() or path.is_symlink():
+                raise ValueError("unassessed acquisition candidate has published evidence")
+        return
     if not isinstance(binding, Mapping) or set(binding) != {"path", "sha256"}:
         raise ValueError(f"acquisition has no terminal binding for {candidate_id}")
     terminal_path = completion_root / str(binding["path"])

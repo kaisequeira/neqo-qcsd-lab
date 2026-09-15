@@ -53,6 +53,7 @@ _COMPARISON = "qcsd-class-study-comparison-review"
 _VALIDATION = "qcsd-class-study-validation-attestation"
 _EVALUATION = "qcsd-class-study-evaluation"
 _ACQUISITION = "qcsd-class-study-acquisition-provenance"
+_ACQUISITION_AUTHORITY = "qcsd-class-study-acquisition-authority"
 _ACQUISITION_COMPLETION = "qcsd-class-study-acquisition-completion"
 _SUCCESSOR_POLICY = "qcsd-class-study-successor-policy"
 _SUCCESSOR_DECISION = "qcsd-class-study-successor-decision"
@@ -106,7 +107,7 @@ _WORKLOAD_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 
 _FOUNDATION_SCHEMA = 4
 _READINESS_SCHEMA = 3
-_ACQUISITION_SCHEMA = 5
+_ACQUISITION_SCHEMA = 6
 _EVALUATION_SCHEMA = 2
 _SUCCESSOR_DECISION_SCHEMA = 3
 _SUCCESSOR_RESTART_SCHEMA = 2
@@ -859,6 +860,86 @@ class _Resolver:
         root = _regular_directory(self.root, raw, label="class handoff")
         return self.historical(root / _HANDOFF_HISTORICAL_POST)
 
+    def acquisition_authority(self, raw: str | os.PathLike[str]) -> BuildAdmission:
+        """Resolve acquisition-only proof without accepting it as a foundation."""
+
+        _path, _value, payload = _envelope(
+            self.root,
+            raw,
+            label="class acquisition authority",
+            expected_type=_ACQUISITION_AUTHORITY,
+        )
+        evidence = payload.get("evidence")
+        cohort = payload.get("cohort_version")
+        if (
+            payload.get("artifact_type") != _ACQUISITION_AUTHORITY
+            or type(payload.get("attestation_schema_version")) is not int
+            or payload.get("attestation_schema_version") != 1
+            or payload.get("authority_scope") != "public-page-acquisition-only"
+            or payload.get("promotion_authority") is not False
+            or payload.get("no_waivers") is not True
+            or type(cohort) is not int
+            or cohort < 1
+            or not isinstance(evidence, Mapping)
+        ):
+            raise ValueError("class acquisition authority is not current acquisition-only proof")
+        build = self.build(
+            _bound_file(self.root, evidence.get("build_execution"), label="acquisition build"),
+            expected_cohort=cohort,
+        )
+        if (
+            payload.get("source") != build.source
+            or payload.get("prepare_source")
+            != {**dict(build.source), "image_digest": build.prepare_image}
+            or payload.get("build_execution_identity") != build.identity
+        ):
+            raise ValueError("class acquisition authority differs from its current build")
+        study = _bound_file(
+            self.root, payload.get("study_contract"), label="acquisition study contract"
+        )
+        if study != self.root / "config/class-study/v1/study.json":
+            raise ValueError("class acquisition authority binds another study contract")
+        correctness = payload.get("acquisition_correctness")
+        if (
+            not isinstance(correctness, Mapping)
+            or correctness.get("source") != build.source
+            or correctness.get("build_execution_identity") != build.identity
+            or correctness.get("study_contract") != payload.get("study_contract")
+        ):
+            raise ValueError("acquisition correctness proof differs from its current build")
+        # The image validator reconstructs the complete correctness command/log
+        # and 110-vector packet evidence; this host boundary resolves their build.
+        return _require_same_build(
+            (
+                build,
+                self.pinned_cdp(
+                    _bound_file(
+                        self.root,
+                        evidence.get("pinned_cdp_probe"),
+                        label="acquisition pinned CDP probe",
+                    )
+                ),
+                self.browser_egress(
+                    _bound_directory(
+                        self.root,
+                        evidence.get("browser_egress_qualification"),
+                        label="acquisition browser-egress qualification",
+                    )
+                ),
+            )
+        )
+
+    def acquisition_authority_or_foundation(
+        self, raw: str | os.PathLike[str]
+    ) -> BuildAdmission:
+        _path, value = _load_json_file(self.root, raw, label="acquisition authority")
+        receipt_type = value.get("receipt_type") if isinstance(value, Mapping) else None
+        if receipt_type == _ACQUISITION_AUTHORITY:
+            return self.acquisition_authority(raw)
+        if receipt_type == _FOUNDATION:
+            return self.foundation(raw)
+        raise ValueError("acquisition authority must be acquisition-only or full foundation")
+
     def acquisition(self, raw: str | os.PathLike[str]) -> BuildAdmission:
         runner = _regular_directory(self.root, raw, label="class acquisition root")
         _path, _value, payload = _envelope(
@@ -867,20 +948,25 @@ class _Resolver:
             label="class acquisition provenance",
             expected_type=_ACQUISITION,
         )
-        if payload.get("acquisition_schema_version") != _ACQUISITION_SCHEMA:
-            raise ValueError("class acquisition provenance is historical")
-        foundation_path = _bound_file(
+        schema = payload.get("acquisition_schema_version")
+        if type(schema) is int and schema < _ACQUISITION_SCHEMA:
+            raise _HistoricalAuthority("class acquisition provenance is historical")
+        if type(schema) is not int or schema != _ACQUISITION_SCHEMA:
+            raise ValueError("class acquisition provenance schema is invalid")
+        if "foundation_attestation" in payload:
+            raise ValueError("current acquisition provenance contains a legacy foundation binding")
+        authority_path = _bound_file(
             self.root,
-            payload.get("foundation_attestation"),
-            label="acquisition foundation",
+            payload.get("acquisition_authority"),
+            label="acquisition authority",
         )
-        build = self.foundation(foundation_path)
+        build = self.acquisition_authority_or_foundation(authority_path)
         expected_source = {**dict(build.source), "image_digest": build.prepare_image}
         if (
             payload.get("image_digest") != build.prepare_image
             or payload.get("source") != expected_source
         ):
-            raise ValueError("class acquisition source differs from the foundation build")
+            raise ValueError("class acquisition source differs from the authority build")
         return build
 
     def comparison(self, raw: str | os.PathLike[str]) -> BuildAdmission:
@@ -1667,8 +1753,10 @@ class _Resolver:
             raise _HistoricalAuthority("class acquisition completion is historical")
         provenance_sha256 = completion.get("provenance_sha256")
         if (
-            acquisition_schema != _ACQUISITION_SCHEMA
-            or completion.get("completion_schema_version") != 2
+            type(acquisition_schema) is not int
+            or acquisition_schema != _ACQUISITION_SCHEMA
+            or type(completion.get("completion_schema_version")) is not int
+            or completion.get("completion_schema_version") != 3
             or not isinstance(provenance_sha256, str)
             or _DIGEST.fullmatch(provenance_sha256) is None
         ):
@@ -2926,6 +3014,7 @@ class _Resolver:
         _path, value = _load_json_file(self.root, path, label="class verification target")
         receipt_type = value.get("receipt_type") if isinstance(value, Mapping) else None
         routes: dict[str, Callable[[str | os.PathLike[str]], BuildAdmission]] = {
+            _ACQUISITION_AUTHORITY: self.acquisition_authority,
             _FOUNDATION: self.foundation,
             _READINESS: self.readiness,
             _HISTORICAL: self.historical,
@@ -3706,6 +3795,7 @@ def resolve_action_admission(
                 target_value.get("receipt_type") if isinstance(target_value, Mapping) else None
             )
             if receipt_type in {
+                _ACQUISITION_AUTHORITY,
                 _FOUNDATION,
                 _READINESS,
                 _HISTORICAL,
@@ -3782,7 +3872,27 @@ def resolve_action_admission(
     }:
         add_carrier_directories("prefix_spec_root")
 
-    if action == "foundation":
+    if action == "acquisition-authority":
+        build = _required(
+            values,
+            "build",
+            "class-study acquisition-authority requires --build-execution-receipt before Docker",
+        )
+        admissions.append(
+            resolver.build(
+                _regular_file(resolver.root, build, label="acquisition authority build"),
+                expected_cohort=cohort_version,
+            )
+        )
+        for name, route in (
+            ("pinned_cdp", resolver.pinned_cdp),
+            ("browser_egress", resolver.browser_egress),
+        ):
+            raw = _required(
+                values, name, f"class-study acquisition-authority requires {name} before Docker"
+            )
+            admissions.append(route(raw))
+    elif action == "foundation":
         build = _required(
             values,
             "build",
@@ -3868,7 +3978,15 @@ def resolve_action_admission(
         )
         add_results("capture_result")
     elif action == "acquisition-init":
-        add_foundation()
+        authority = _single(values, "acquisition_authority")
+        if authority and _single(values, "foundation"):
+            raise ValueError(
+                "acquisition-init accepts exactly one acquisition authority or foundation"
+            )
+        if authority:
+            admissions.append(resolver.acquisition_authority(authority))
+        else:
+            add_foundation()
     elif action in {"acquisition-run", "acquisition-status", "acquisition-complete"}:
         acquisition = _required(
             values,
@@ -3986,6 +4104,7 @@ def resolve_action_admission(
             raise ValueError("class-study attest requires --evaluation-receipt before Docker")
         add_results("canary_results", "formal_results")
     elif action == "status":
+        add_single("acquisition_authority", resolver.acquisition_authority)
         for name, route, receipt_type in (
             (
                 "foundation",
@@ -4132,6 +4251,7 @@ def _parser() -> argparse.ArgumentParser:
     for name in (
         "build",
         "foundation",
+        "acquisition-authority",
         "readiness",
         "historical-pre",
         "historical-post",
@@ -4189,6 +4309,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
         for name in (
             "build",
             "foundation",
+            "acquisition_authority",
             "readiness",
             "historical_pre",
             "historical_post",

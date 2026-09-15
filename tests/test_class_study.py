@@ -9,7 +9,7 @@ import pytest
 
 from qcsd_lab.acquisition_timing import (
     ACTION_TIMING_CONTRACT,
-    BASELINE_SCHEDULING_CONTRACT,
+    TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT,
 )
 from qcsd_lab.class_handoff import SCHEMA_VERSION as HANDOFF_SCHEMA_VERSION
 from qcsd_lab.class_study import (
@@ -68,7 +68,7 @@ def test_checked_in_handoff_contract_matches_current_exporter_and_kernel_sidecar
     )
     assert (
         study["page_admission"]["baseline_scheduling_contract"]
-        == BASELINE_SCHEDULING_CONTRACT
+        == TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT
     )
     assert evaluation["handoff_schema_version"] == HANDOFF_SCHEMA_VERSION == 3
     assert kernel == {

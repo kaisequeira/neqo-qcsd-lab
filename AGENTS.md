@@ -13,14 +13,11 @@ These repository-local rules apply throughout `neqo-qcsd-lab/`.
 - Report accepted scientific counters only from final deep-verified receipts.
   Historical passing prefixes and non-evidentiary probes advance no numerator.
 - At this checkpoint, use **browser-egress 0/110, certification 0/900, formal
-  capture 0/16,000**. V87 completed build and pinned-CDP checks, then preserved
-  98 passing vectors and a vector-99 DNS-prefetch failure. Pending fixes add
-  bounded DNS replies, four-leg packet/sink accounting and fresh-version
-  enforcement. The local Lab suite completed with 5,237 passed and 26 skipped;
-  this does not authorise a qualification pass or old-cohort resume. Fresh-image
-  validation and a fresh pinned build remain required. Preserve
-  v87's original failure and all evidence. V88 is the next planned fresh cohort
-  at 15 September 2026, subject to allocator authority. Re-read
+  capture 0/16,000**. V88 completed build and pinned-CDP, then was stopped with
+  79 passing browser-egress vectors and no final qualification receipt. The
+  15 September 2026 prospective acquisition amendment is implemented and
+  locally tested; it has no fresh pinned-image evidence. Preserve all old
+  cohorts and use the allocator's next unused version after source freeze. Re-read
   [README.md](README.md), the latest immutable receipts, and live checkpoint
   state before any later update rather than carrying these figures forward
   from memory.
@@ -41,8 +38,9 @@ These repository-local rules apply throughout `neqo-qcsd-lab/`.
 
 ## Evidence and cohort discipline
 
-- `experiment.json` is the authoritative checkpoint for interruption, resume,
-  attempt order, and completion state.
+- `experiment.json` is the authoritative capture-campaign checkpoint for
+  interruption, resume, attempt order, and completion state. Acquisition uses
+  its `checkpoint.json` and bound `provenance.json`.
 - Cohort versions and evidence destinations are create-only. Receipt absence
   does not make a claimed or attempted version reusable.
 - Resume only an unchanged-source, unchanged-input checkpoint using the exact
@@ -50,6 +48,14 @@ These repository-local rules apply throughout `neqo-qcsd-lab/`.
   change requires the next unused cohort and complete downstream reproof.
 - Preserve failed attempts, logs, captures, checkpoints, and receipts. Never
   delete, overwrite, substitute, relabel, or post-hoc promote evidence.
+- Acquisition-only authority cannot replace the full defence foundation for
+  any capture role, including fitting. The later foundation must bind the same
+  source, build, acquisition contract, pinned-CDP and browser-egress evidence.
+- Complete acquisition only after the first 24 eligible candidates per stratum
+  and every earlier candidate have scientific terminal evidence. Preserve the
+  unused tail as unassessed. Infrastructure errors and missed stability windows
+  are blockers, not selective site rejections. No active/recovery work may be
+  hidden by a complete prefix.
 - Do not edit or regenerate `config/`, `artifacts/`, `results/`, or `handoffs/`
   unless the user's scoped task and the authoritative workflow explicitly
   require that mutation.

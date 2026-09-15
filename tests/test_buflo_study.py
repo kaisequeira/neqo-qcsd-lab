@@ -136,6 +136,54 @@ def _remove_test_checkout_build_taints(tmp_path: Path):
         shutil.rmtree(root)
 
 
+@pytest.mark.parametrize("failed_gate", [None, 0, 1])
+def test_lab_code_gate_executor_runs_ordered_commands_and_records_outputs(
+    monkeypatch: pytest.MonkeyPatch, failed_gate: int | None,
+) -> None:
+    calls: list[list[str]] = []
+    outputs = ["full suite: passed ✓\n", "schema suite: passed ✓\n"]
+
+    def run(argv, **kwargs):
+        assert kwargs == {
+            "cwd": LAB_ROOT,
+            "text": True,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.STDOUT,
+            "check": False,
+        }
+        index = len(calls)
+        calls.append(argv)
+        return subprocess.CompletedProcess(
+            argv, 1 if index == failed_gate else 0, stdout=outputs[index]
+        )
+
+    monkeypatch.setattr(buflo_study.subprocess, "run", run)
+    if failed_gate is not None:
+        gate = buflo_study._LAB_CODE_GATE_COMMANDS[failed_gate][0]
+        with pytest.raises(RuntimeError, match=f"code gate failed: {gate}"):
+            buflo_study._run_lab_code_gate_commands()
+        assert len(calls) == failed_gate + 1
+    else:
+        records = buflo_study._run_lab_code_gate_commands()
+        assert len(records) == len(buflo_study._LAB_CODE_GATE_COMMANDS)
+        for record, (gate, _), output, argv in zip(
+            records, buflo_study._LAB_CODE_GATE_COMMANDS, outputs, calls, strict=True
+        ):
+            assert record == {
+                "gate": gate,
+                "argv": argv,
+                "cwd": str(LAB_ROOT),
+                "exit_code": 0,
+                "stdout_bytes": len(output.encode("utf-8")),
+                "stdout_sha256": hashlib.sha256(output.encode("utf-8")).hexdigest(),
+                "stdout": output,
+            }
+    assert calls == [
+        [str(Path(os.sys.executable)) if item == "python" else item for item in template]
+        for _gate, template in buflo_study._LAB_CODE_GATE_COMMANDS[:len(calls)]
+    ]
+
+
 def test_rust_code_gate_sidecar_hash_binds_exact_unsorted_json_bytes(
     tmp_path: Path,
 ) -> None:
@@ -7410,10 +7458,17 @@ def test_reference_gate_accepts_a_fully_validated_schema_two_build(
     assert receipt["profiles_checked"] == 8
 
 
-def test_checked_in_v20_reference_and_code_gate_remain_historically_verifiable() -> None:
+@pytest.mark.parametrize("deep", [None, False, True])
+def test_checked_in_v20_reference_and_code_gate_remain_historically_verifiable(
+    monkeypatch: pytest.MonkeyPatch, deep: bool | None,
+) -> None:
     reference = LAB_ROOT / "artifacts/buflo-study/reference-execution-v20.json"
     code_gate = LAB_ROOT / "artifacts/buflo-study/code-gate-v20.json"
 
+    def unexpected_execution():
+        pytest.fail("historical receipt verification must not execute current tests")
+
+    monkeypatch.setattr(buflo_study, "_run_lab_code_gate_commands", unexpected_execution)
     with pytest.raises(ValueError, match="current reference admission requires schema 2"):
         validate_reference_gate_receipt(reference)
     with pytest.raises(ValueError, match="current code-gate admission requires schema 2"):
@@ -7425,7 +7480,7 @@ def test_checked_in_v20_reference_and_code_gate_remain_historically_verifiable()
     historical_code_gate = buflo_study.validate_code_gate_receipt(
         code_gate,
         allow_historical=True,
-        deep=False,
+        **({} if deep is None else {"deep": deep}),
     )
 
     assert historical_reference["build_execution"]["cohort_version"] == 20
