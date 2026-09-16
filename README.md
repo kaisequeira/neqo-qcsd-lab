@@ -22,13 +22,14 @@ selectable modes**. BuFLO and CS-BuFLO are candidate client-only QUIC
 adaptations, not bilateral or paper-equivalent implementations. Do not claim
 seven validated defences until the final validation attestation verifies.
 
-Cohort v89 completed its build, pinned-CDP and independently verified
-**110/110 browser-egress** gate. Acquisition-authority creation then failed
-before Docker: the host reader expected an obsolete browser receipt schema.
-The source correction also reconciles the downstream build-size field and
-adds producer-to-consumer regression tests. This changed source needs the
-allocator's next unused cohort and fresh prerequisite evidence; v89 remains
-valid only for its original checkout. Public acquisition has not started:
+Cohort v89 completed an independently verified **110/110 browser-egress**
+gate, valid only for its original checkout. After receipt-consumer fixes,
+v90 passed build and pinned-CDP checks but browser qualification was
+interrupted with 21 passing vectors and no final receipt. Post-reboot cleanup
+has been recovered; the permanent boot-aware recovery fix passed local
+validation (502 tests passed, nine skipped). Changed source needs the
+allocator's next unused cohort and
+fresh prerequisite evidence. Public acquisition has not started:
 pilot **0/120**, final classes **0/100**, certification **0/900**, and formal
 capture **0/16,000**. Browser qualification is not class or defence validation.
 Read the latest immutable receipts for subsequent progress.

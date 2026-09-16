@@ -1144,3 +1144,318 @@ qcsd_reconcile_docker_lifecycle recover
     assert not authority.exists() and not authority.is_symlink()
     assert not retired.exists() and not retired.is_symlink()
     assert not (Path(environment["FAKE_DOCKER_STATE"]) / "container").exists()
+
+
+_PRIOR_BOOT_ID = "00000000-0000-4000-8000-000000000001"
+
+
+def _crash_retirement_at_boundary(
+    environment: dict[str, str], boundary: str
+) -> tuple[Path, Path]:
+    """Create a genuine interrupted authority solely in the isolated fixture."""
+
+    crashed = _run_bash(
+        r'''
+set -euo pipefail
+source "$HELPER"
+_qcsd_retirement_boundary_hook() {
+  if [[ "$1" == "$QCSD_TEST_RETIREMENT_BOUNDARY" ]]; then
+    kill -KILL "$BASHPID"
+  fi
+}
+QCSD_DOCKER_IDS_RETIREMENT=()
+qcsd_run_detached_docker QCSD_DOCKER_IDS_RETIREMENT docker run fake-image
+printf '%s\n' "$_qcsd_lifecycle_root" >"$FAKE_DOCKER_STATE/retiring-root"
+docker rm --force "${QCSD_DOCKER_IDS_RETIREMENT[0]}" >/dev/null
+qcsd_retire_docker_handoff \
+  run "${QCSD_DOCKER_IDS_RETIREMENT[0]}" QCSD_DOCKER_IDS_RETIREMENT
+''',
+        environment={
+            **environment,
+            "QCSD_TEST_RETIREMENT_BOUNDARY": "H3" if boundary == "staged" else boundary,
+        },
+    )
+    assert crashed.returncode == -signal.SIGKILL, (crashed.stdout, crashed.stderr)
+    state = Path(environment["FAKE_DOCKER_STATE"])
+    root = Path((state / "retiring-root").read_text(encoding="ascii").strip())
+    assert root.parent == Path(environment["QCSD_TEST_LIFECYCLE_BASE"])
+    staged, authority, _ = _retirement_names(root)
+    assert authority.is_file()
+    if boundary == "staged":
+        # H2 precedes publish entirely; model a crash after the native staged
+        # file was fsynced but before its no-replace rename to final authority.
+        authority.rename(staged)
+        authority = staged
+    return root, authority
+
+
+def _replace_fixture_authority_fields(authority: Path, **fields: str) -> None:
+    """Model changed boot/PID observations, never touch real lifecycle evidence."""
+
+    lines = authority.read_text(encoding="ascii").splitlines(keepends=True)
+    for field, value in fields.items():
+        matching = [i for i, line in enumerate(lines) if line.startswith(f"{field}=")]
+        assert len(matching) == 1, field
+        lines[matching[0]] = f"{field}={value}\n"
+    authority.write_text("".join(lines), encoding="ascii")
+
+
+@pytest.mark.parametrize("boundary", ["staged", "H3", "H6", "H9", "H11", "H12"])
+def test_prior_boot_retirement_boundaries_converge_without_pid_reuse_checks(
+    retirement_environment: dict[str, str], boundary: str
+) -> None:
+    root, authority = _crash_retirement_at_boundary(retirement_environment, boundary)
+    assert retirement_environment["_QCSD_DOCKER_PINNED_BOOT_ID"] != _PRIOR_BOOT_ID
+    _replace_fixture_authority_fields(authority, host_boot_id=_PRIOR_BOOT_ID)
+    before = _tree_snapshot(root.parent)
+    validate = _run_bash(
+        r'''
+set -euo pipefail
+source "$HELPER"
+_qcsd_bound_process_is_gone() {
+  echo prior-boot-pid-must-not-be-compared >&2
+  return 1
+}
+qcsd_reconcile_docker_lifecycle validate
+''',
+        environment=retirement_environment,
+    )
+    assert validate.returncode == 0, (validate.stdout, validate.stderr)
+    assert _tree_snapshot(root.parent) == before
+    recovered = _run_bash(
+        r'''
+set -euo pipefail
+source "$HELPER"
+_qcsd_bound_process_is_gone() {
+  echo prior-boot-pid-must-not-be-compared >&2
+  return 1
+}
+qcsd_reconcile_docker_lifecycle recover
+qcsd_reconcile_docker_lifecycle validate
+''',
+        environment=retirement_environment,
+    )
+    assert recovered.returncode == 0, (recovered.stdout, recovered.stderr)
+    assert not root.exists()
+    assert all(not path.exists() for path in _retirement_names(root))
+
+
+@pytest.mark.parametrize(
+    "contradiction",
+    ["exact-id-present", "token-present", "boot-drift", "daemon-mismatch", "scope-present"],
+)
+def test_prior_boot_retirement_keeps_live_boundary_checks_fail_closed(
+    retirement_environment: dict[str, str], contradiction: str
+) -> None:
+    root, authority = _crash_retirement_at_boundary(retirement_environment, "H11")
+    _replace_fixture_authority_fields(authority, host_boot_id=_PRIOR_BOOT_ID)
+    fields = dict(
+        line.split("=", 1)
+        for line in authority.read_text(encoding="ascii").splitlines()
+        if not line.startswith("child\t")
+    )
+    state = Path(retirement_environment["FAKE_DOCKER_STATE"])
+    environment = dict(retirement_environment)
+    probe = ""
+    if contradiction in {"exact-id-present", "token-present"}:
+        # The exact ID and the unique ownership token are separate absence proofs.
+        (state / "container").write_text(
+            fields["object_id"] if contradiction == "exact-id-present" else "f" * 64,
+            encoding="ascii",
+        )
+        (state / "container-token").write_text(
+            "e" * 32 if contradiction == "exact-id-present" else fields["token"],
+            encoding="ascii",
+        )
+    elif contradiction == "boot-drift":
+        environment["_QCSD_DOCKER_PINNED_BOOT_ID"] = _PRIOR_BOOT_ID
+    elif contradiction == "daemon-mismatch":
+        environment["FAKE_DOCKER_SERVER_ID"] = "changed-daemon-id"
+    else:
+        probe = r'''
+_qcsd_query_user_scope() {
+  printf '%s\n' "$1" >>"$FAKE_DOCKER_STATE/scope-reproof.log"
+  _qcsd_scope_state=active
+  return 0
+}
+'''
+    before = _tree_snapshot(root.parent)
+    calls_before = (state / "calls.log").read_text(encoding="ascii").splitlines()
+    recovered = _run_bash(
+        'set -euo pipefail\nsource "$HELPER"\n'
+        + probe
+        + "qcsd_reconcile_docker_lifecycle recover\n",
+        environment=environment,
+    )
+    assert recovered.returncode != 0, (recovered.stdout, recovered.stderr)
+    assert _tree_snapshot(root.parent) == before
+    if contradiction in {"exact-id-present", "token-present"}:
+        assert (state / "container").is_file()
+        calls = (state / "calls.log").read_text(encoding="ascii").splitlines()
+        assert not any(line.startswith("RM ") for line in calls[len(calls_before):])
+    elif contradiction == "scope-present":
+        assert (state / "scope-reproof.log").read_text(encoding="ascii").strip() == fields["scope_unit"]
+
+
+def test_same_boot_retirement_refuses_live_launcher_identity(
+    retirement_environment: dict[str, str],
+) -> None:
+    root, authority = _crash_retirement_at_boundary(retirement_environment, "H11")
+    launcher = subprocess.Popen(
+        [sys.executable, "-I", "-c", "import time; time.sleep(30)"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    try:
+        identity = Path(f"/proc/{launcher.pid}/stat").read_text().rsplit(") ", 1)[1].split()
+        assert identity[2] == identity[3] == str(launcher.pid)
+        _replace_fixture_authority_fields(
+            authority,
+            launcher_pid=str(launcher.pid),
+            launcher_start_time=identity[19],
+            launcher_session=identity[3],
+            launcher_process_group=identity[2],
+        )
+        before = _tree_snapshot(root.parent)
+        recovered = _run_bash(
+            'set -euo pipefail\nsource "$HELPER"\n'
+            "qcsd_reconcile_docker_lifecycle recover\n",
+            environment=retirement_environment,
+        )
+        assert recovered.returncode != 0, (recovered.stdout, recovered.stderr)
+        assert _tree_snapshot(root.parent) == before
+        assert launcher.poll() is None
+    finally:
+        launcher.terminate()
+        launcher.wait(timeout=3)
+
+
+@pytest.mark.parametrize("prior_boot", [False, True])
+def test_new_retirement_authority_never_rebinds_prior_boot_launcher(
+    retirement_environment: dict[str, str], prior_boot: bool
+) -> None:
+    root, authority = _crash_retirement_at_boundary(retirement_environment, "H3")
+    handoff = root / "HANDOFF"
+    original = dict(
+        line.split("=", 1) for line in handoff.read_text(encoding="ascii").splitlines()
+    )
+    if prior_boot:
+        # Simulate an intact older-boot root before preparing its new authority.
+        for name in ("SUPERVISION", "HANDOFF"):
+            if (root / name).is_file():
+                _replace_fixture_authority_fields(root / name, host_boot_id=_PRIOR_BOOT_ID)
+    before = _tree_snapshot(root.parent)
+    prepared = _run_bash(
+        r'''
+set -euo pipefail
+source "$HELPER"
+_qcsd_secure_lifecycle_base
+_qcsd_retirement_prepare_authority \
+  "$QCSD_TEST_RETIRING_ROOT" handoff-retired 0 "$QCSD_TEST_RETIRING_AUTHORITY"
+''',
+        environment={
+            **retirement_environment,
+            "QCSD_TEST_RETIRING_ROOT": str(root),
+            "QCSD_TEST_RETIRING_AUTHORITY": str(authority),
+        },
+    )
+    assert prepared.returncode == 0, (prepared.stdout, prepared.stderr)
+    fields = dict(
+        line.split("=", 1)
+        for line in prepared.stdout.splitlines()
+        if not line.startswith("child\t")
+    )
+    assert fields["host_boot_id"] == retirement_environment["_QCSD_DOCKER_PINNED_BOOT_ID"]
+    for name in ("pid", "start_time", "session", "process_group"):
+        assert fields[f"launcher_{name}"] == (
+            "unavailable" if prior_boot else original[f"scope_launcher_{name}"]
+        )
+    assert fields["scope_unit"] == original["scope_unit"]
+    assert fields["record_sha256"] == hashlib.sha256(handoff.read_bytes()).hexdigest()
+    assert _tree_snapshot(root.parent) == before
+
+
+@pytest.mark.parametrize(
+    ("prior_boot", "scope_absent", "expected_pass"),
+    [(True, True, True), (True, False, False), (False, True, False)],
+)
+def test_recovery_boundary_limits_launcher_checks_to_recorded_boot(
+    retirement_environment: dict[str, str], prior_boot: bool,
+    scope_absent: bool, expected_pass: bool,
+) -> None:
+    result = _run_bash(
+        r'''
+set -euo pipefail
+source "$HELPER"
+_qcsd_bound_process_is_gone() {
+  printf 'launcher\n' >>"$FAKE_DOCKER_STATE/recovery-boundary.log"
+  return 1
+}
+_qcsd_wait_user_scope_inactive() {
+  printf 'scope\n' >>"$FAKE_DOCKER_STATE/recovery-boundary.log"
+  [[ "$QCSD_TEST_SCOPE_ABSENT" == 1 ]]
+}
+declare -A candidate=(
+  [host_boot_id]="$QCSD_TEST_RECORD_BOOT"
+  [scope_launcher_pid]=999999
+  [scope_launcher_start_time]=123
+  [scope_launcher_session]=999999
+  [scope_launcher_process_group]=999999
+  [scope_unit]=qcsd-docker-run-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.scope
+)
+_qcsd_lifecycle_reprove_recovery_boundary \
+  run candidate "$_QCSD_DOCKER_PINNED_BOOT_ID"
+''',
+        environment={
+            **retirement_environment,
+            "QCSD_TEST_RECORD_BOOT": (
+                _PRIOR_BOOT_ID if prior_boot
+                else retirement_environment["_QCSD_DOCKER_PINNED_BOOT_ID"]
+            ),
+            "QCSD_TEST_SCOPE_ABSENT": "1" if scope_absent else "0",
+        },
+    )
+    assert (result.returncode == 0) == expected_pass, (result.stdout, result.stderr)
+    observed = (Path(retirement_environment["FAKE_DOCKER_STATE"]) / "recovery-boundary.log").read_text(
+        encoding="ascii"
+    ).splitlines()
+    assert observed == (["scope"] if prior_boot else ["launcher"])
+
+
+@pytest.mark.parametrize("same_boot", [False, True])
+def test_retirement_launcher_collision_identity_includes_boot(
+    retirement_environment: dict[str, str], same_boot: bool,
+) -> None:
+    first_root, first_authority = _crash_retirement_at_boundary(
+        retirement_environment, "H11"
+    )
+    _, second_authority = _crash_retirement_at_boundary(
+        {**retirement_environment, "FAKE_DOCKER_CONTAINER_ID": "b" * 64}, "H11"
+    )
+    for authority, boot in (
+        (first_authority, _PRIOR_BOOT_ID),
+        (
+            second_authority,
+            _PRIOR_BOOT_ID if same_boot else "00000000-0000-4000-8000-000000000002",
+        ),
+    ):
+        _replace_fixture_authority_fields(
+            authority,
+            host_boot_id=boot,
+            launcher_pid="999999",
+            launcher_start_time="123",
+            launcher_session="999999",
+            launcher_process_group="999999",
+        )
+    before = _tree_snapshot(first_root.parent)
+    validated = _run_bash(
+        'set -euo pipefail\nsource "$HELPER"\n'
+        "qcsd_reconcile_docker_lifecycle validate\n",
+        environment=retirement_environment,
+    )
+    assert (validated.returncode == 0) == (not same_boot), (
+        validated.stdout, validated.stderr
+    )
+    assert _tree_snapshot(first_root.parent) == before

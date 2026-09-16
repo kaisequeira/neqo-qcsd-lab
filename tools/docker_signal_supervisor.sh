@@ -5746,10 +5746,16 @@ _qcsd_retirement_prepare_authority() {
       supervisor_label="${_QCSD_LIFECYCLE_SELECTED_VALUES[supervisor_label]:-unavailable}"
       scope_unit="${_QCSD_LIFECYCLE_SELECTED_VALUES[scope_unit]:-unavailable}"
       registration_name="${_QCSD_LIFECYCLE_SELECTED_VALUES[registration_name]:-unavailable}"
-      launcher_pid="${_QCSD_LIFECYCLE_SELECTED_VALUES[scope_launcher_pid]:-unavailable}"
-      launcher_start="${_QCSD_LIFECYCLE_SELECTED_VALUES[scope_launcher_start_time]:-unavailable}"
-      launcher_session="${_QCSD_LIFECYCLE_SELECTED_VALUES[scope_launcher_session]:-unavailable}"
-      launcher_group="${_QCSD_LIFECYCLE_SELECTED_VALUES[scope_launcher_process_group]:-unavailable}"
+      # The new authority belongs to this boot. Never rebind a historical
+      # launcher tuple to it: PID/start ticks are meaningful only within one
+      # boot. The original record and its hash retain the historical tuple.
+      if [[ "${_QCSD_LIFECYCLE_SELECTED_VALUES[host_boot_id]}" == \
+            "${_QCSD_DOCKER_PINNED_BOOT_ID}" ]]; then
+        launcher_pid="${_QCSD_LIFECYCLE_SELECTED_VALUES[scope_launcher_pid]:-unavailable}"
+        launcher_start="${_QCSD_LIFECYCLE_SELECTED_VALUES[scope_launcher_start_time]:-unavailable}"
+        launcher_session="${_QCSD_LIFECYCLE_SELECTED_VALUES[scope_launcher_session]:-unavailable}"
+        launcher_group="${_QCSD_LIFECYCLE_SELECTED_VALUES[scope_launcher_process_group]:-unavailable}"
+      fi
       if [[ "${kind}" == run ]]; then
         object_id="${_QCSD_LIFECYCLE_SELECTED_VALUES[container_id]}"
       elif [[ "${kind}" == network ]]; then
@@ -6104,8 +6110,10 @@ _qcsd_retirement_terminal_reproof() {
       echo "Docker lifecycle retirement refused because daemon identity changed" >&2
       return 1
     fi
-    [[ "${values_ref[host_boot_id]}" == "${_QCSD_DOCKER_PINNED_BOOT_ID}" &&
-        "${values_ref[docker_context]}" == "${_QCSD_DOCKER_PINNED_CONTEXT}" &&
+    # A durable authority may outlive its host boot. Current boot stability,
+    # source/lock bindings and the same daemon remain mandatory; the old boot
+    # only determines whether its launcher tuple can still name a process.
+    [[ "${values_ref[docker_context]}" == "${_QCSD_DOCKER_PINNED_CONTEXT}" &&
         "${values_ref[docker_host]}" == "${_QCSD_DOCKER_PINNED_HOST}" &&
         "${values_ref[docker_server_id]}" == "${_QCSD_DOCKER_PINNED_SERVER_ID}" ]] || return 1
   fi
@@ -6128,7 +6136,8 @@ _qcsd_retirement_terminal_reproof() {
     _qcsd_query_user_scope "${values_ref[scope_unit]}" || return 1
     [[ "${_qcsd_scope_state}" == absent ]] || return 1
   fi
-  if [[ "${values_ref[launcher_pid]}" != unavailable ]]; then
+  if [[ "${values_ref[launcher_pid]}" != unavailable &&
+        "${values_ref[host_boot_id]}" == "${_QCSD_DOCKER_PINNED_BOOT_ID}" ]]; then
     _qcsd_bound_process_is_gone "${values_ref[launcher_pid]}" \
       "${values_ref[launcher_start_time]}" "${values_ref[launcher_session]}" \
       "${values_ref[launcher_process_group]}" || return 1
@@ -6349,7 +6358,8 @@ _qcsd_lifecycle_reprove_recovery_boundary() {
   case "${root_kind}" in
     run)
       pid="${values_ref[scope_launcher_pid]}"
-      if [[ "${pid}" != unavailable ]]; then
+      if [[ "${pid}" != unavailable &&
+            "${values_ref[host_boot_id]}" == "${current_boot}" ]]; then
         _qcsd_bound_process_is_gone "${pid}" \
           "${values_ref[scope_launcher_start_time]}" \
           "${values_ref[scope_launcher_session]}" \
@@ -6529,7 +6539,7 @@ qcsd_reconcile_docker_lifecycle() {
       seen_scopes["${_QCSD_RETIRE_VALUES[scope_unit]}"]="${root}"
     fi
     if [[ "${_QCSD_RETIRE_VALUES[launcher_pid]}" != unavailable ]]; then
-      launcher_key="${_QCSD_RETIRE_VALUES[launcher_pid]}:${_QCSD_RETIRE_VALUES[launcher_start_time]}:${_QCSD_RETIRE_VALUES[launcher_session]}:${_QCSD_RETIRE_VALUES[launcher_process_group]}"
+      launcher_key="${_QCSD_RETIRE_VALUES[host_boot_id]}:${_QCSD_RETIRE_VALUES[launcher_pid]}:${_QCSD_RETIRE_VALUES[launcher_start_time]}:${_QCSD_RETIRE_VALUES[launcher_session]}:${_QCSD_RETIRE_VALUES[launcher_process_group]}"
       [[ -z "${seen_launchers[${launcher_key}]+x}" ]] || return 1
       seen_launchers["${launcher_key}"]="${root}"
     fi
@@ -6566,7 +6576,7 @@ qcsd_reconcile_docker_lifecycle() {
       seen_ids["${object_key}"]="${root}"
     fi
     if [[ "${_QCSD_RETIRE_VALUES[launcher_pid]}" != unavailable ]]; then
-      launcher_key="${_QCSD_RETIRE_VALUES[launcher_pid]}:${_QCSD_RETIRE_VALUES[launcher_start_time]}:${_QCSD_RETIRE_VALUES[launcher_session]}:${_QCSD_RETIRE_VALUES[launcher_process_group]}"
+      launcher_key="${_QCSD_RETIRE_VALUES[host_boot_id]}:${_QCSD_RETIRE_VALUES[launcher_pid]}:${_QCSD_RETIRE_VALUES[launcher_start_time]}:${_QCSD_RETIRE_VALUES[launcher_session]}:${_QCSD_RETIRE_VALUES[launcher_process_group]}"
       [[ -z "${seen_launchers[${launcher_key}]+x}" ]] || return 1
       seen_launchers["${launcher_key}"]="${root}"
     fi
@@ -6612,7 +6622,7 @@ qcsd_reconcile_docker_lifecycle() {
         return 1
       seen_scopes["${_QCSD_LIFECYCLE_SELECTED_VALUES[scope_unit]}"]="${root}"
       if [[ "${_QCSD_LIFECYCLE_SELECTED_VALUES[scope_launcher_pid]}" != unavailable ]]; then
-        launcher_key="${_QCSD_LIFECYCLE_SELECTED_VALUES[scope_launcher_pid]}:${_QCSD_LIFECYCLE_SELECTED_VALUES[scope_launcher_start_time]}:${_QCSD_LIFECYCLE_SELECTED_VALUES[scope_launcher_session]}:${_QCSD_LIFECYCLE_SELECTED_VALUES[scope_launcher_process_group]}"
+        launcher_key="${_QCSD_LIFECYCLE_SELECTED_VALUES[host_boot_id]}:${_QCSD_LIFECYCLE_SELECTED_VALUES[scope_launcher_pid]}:${_QCSD_LIFECYCLE_SELECTED_VALUES[scope_launcher_start_time]}:${_QCSD_LIFECYCLE_SELECTED_VALUES[scope_launcher_session]}:${_QCSD_LIFECYCLE_SELECTED_VALUES[scope_launcher_process_group]}"
         [[ -z "${seen_launchers[${launcher_key}]+x}" ]] || return 1
         seen_launchers["${launcher_key}"]="${root}"
       fi
