@@ -447,7 +447,12 @@ docker.rmdir()
               local duration="$1"
               shift
               [[ "$duration" =~ ^[1-9][0-9]*$ && $# -gt 0 ]] || return 125
-              "$@"
+              case "$1" in
+                qcsd-native-docker-*)
+                  /usr/bin/python3 "$QCSD_TEST_NATIVE_DOCKER_ADAPTER" "$@"
+                  ;;
+                *) "$@" ;;
+              esac
             }
             _qcsd_create_lifecycle_root() {
               local kind="$1" token="$2"
@@ -876,7 +881,7 @@ eval "$(declare -f _qcsd_docker_api_service_with_timeout | sed \
 _qcsd_docker_api_service_with_timeout() {
   local duration="$1"
   shift
-  if [[ "${4:-}" == qcsd-docker-daemon-identity ]]; then
+  if [[ "${1:-}" == qcsd-native-docker-verify ]]; then
     printf '%s %s\n' "${fixture_retirement_kind:-ordinary}" "$duration" \
       >>"$FAKE_DOCKER_STATE/identity-durations.log"
   fi

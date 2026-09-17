@@ -18,6 +18,111 @@ ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / "tools/docker_signal_supervisor.sh"
 CONTAINER_ID = "a" * 64
 NETWORK_ID = "b" * 64
+_HARNESS_REGISTRIES: dict[str, "_HarnessRegistry"] = {}
+
+
+class _HarnessRegistry:
+    """Own test harnesses before they can publish any readiness evidence."""
+
+    def __init__(self) -> None:
+        self.processes: list[
+            tuple[subprocess.Popen, int, tuple[int, int, int]]
+        ] = []
+
+    def start(self, *args, **kwargs) -> subprocess.Popen:
+        assert kwargs.get("start_new_session") is True
+        process = subprocess.Popen(*args, **kwargs)
+        pidfd = None
+        try:
+            # Popen still owns this unreaped child. Capture its birth before
+            # returning it to a test, including tests that fail before ready.
+            pidfd = os.pidfd_open(process.pid)
+            identity = _process_identity(process.pid)
+            assert identity is not None, process.pid
+            _, birth, session, group = identity
+            assert session == group == process.pid, identity
+            self.processes.append((process, pidfd, (birth, session, group)))
+        except BaseException:
+            process.kill()
+            process.wait(timeout=2)
+            if pidfd is not None:
+                os.close(pidfd)
+            raise
+        return process
+
+    def stop(self) -> list[str]:
+        errors: list[str] = []
+        for process, pidfd, expected in self.processes:
+            try:
+                if process.returncode is None:
+                    identity = _process_identity(process.pid)
+                    if identity is not None:
+                        assert identity[1:] == expected, (
+                            f"harness PID {process.pid} birth/session/group changed: "
+                            f"{identity[1:]} != {expected}"
+                        )
+                        # Kill the authenticated session leader's group before
+                        # sampling roots/units; otherwise a slow harness can
+                        # create an unobserved scope after teardown's census.
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        try:
+                            signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    process.wait(timeout=2)
+            except (AssertionError, OSError, subprocess.TimeoutExpired) as error:
+                errors.append(f"harness PID {process.pid}: {error}")
+            finally:
+                os.close(pidfd)
+                # Escaped, separately scoped children can still hold pipes.
+                # Reap the leader without waiting for their pipe EOF; the
+                # fixture's exact scope/PID cleanup follows this producer stop.
+                for stream in (process.stdin, process.stdout, process.stderr):
+                    if stream is not None:
+                        stream.close()
+        self.processes.clear()
+        return errors
+
+
+def _start_owned_harness(*args, env: dict[str, str], **kwargs) -> subprocess.Popen:
+    registry = _HARNESS_REGISTRIES[env["FAKE_DOCKER_STATE"]]
+    return registry.start(*args, env=env, **kwargs)
+
+
+def _fake_native_identity_reader_source(fake_docker: Path) -> str:
+    """Replace only identity I/O in private test copies of the native module.
+
+    The production dispatcher, status handling, environment stripping and
+    leased-service protocol remain real. Existing fake-Docker sequencing keeps
+    identity drift, unavailable reads and timeout assertions observable without
+    ever connecting to the host's Docker socket.
+    """
+
+    return textwrap.dedent(
+        f'''
+        def _docker_daemon_id(host, *, environment=None, pass_fds=()):
+            result = subprocess.run(
+                ({str(fake_docker)!r}, "--host", host, "info", "--format", "{{{{.ID}}}}"),
+                close_fds=True,
+                pass_fds=pass_fds,
+                env=_docker_identity_environment(
+                    dict(os.environ) if environment is None else environment
+                ),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=DOCKER_IDENTITY_TIMEOUT_SECONDS,
+            )
+            if result.returncode != 0 or len(result.stdout) > DOCKER_INFO_MAX_BYTES:
+                raise RuntimeError("fixture Docker identity is unavailable")
+            return _validate_docker_daemon_id(
+                result.stdout.decode("ascii").removesuffix("\\n")
+            )
+        '''
+    )
 
 
 LIFECYCLE_ISOLATION_SHIM = r'''\
@@ -717,6 +822,30 @@ def fake_environment(tmp_path: Path):
     docker = binary_root / "docker"
     docker.write_text(FAKE_DOCKER, encoding="utf-8")
     docker.chmod(0o755)
+    native_adapter = tmp_path / "native-docker-test-adapter.py"
+    native_adapter.write_text(
+        textwrap.dedent(
+            f'''\
+            import importlib.util
+            import os
+            import sys
+
+            spec = importlib.util.spec_from_file_location(
+                "qcsd_native_docker_fixture", {str(ROOT / "tools/docker_lifecycle_native.py")!r}
+            )
+            native = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = native
+            spec.loader.exec_module(native)
+            exec({_fake_native_identity_reader_source(docker)!r}, native.__dict__)
+            status = native._dispatch_docker_request(
+                sys.argv[1:], environment=dict(os.environ), pass_fds=()
+            )
+            raise SystemExit(125 if status is None else status)
+            '''
+        ),
+        encoding="utf-8",
+    )
+    native_adapter.chmod(0o600)
     state = tmp_path / "state"
     state.mkdir()
     lifecycle_base = tmp_path / "isolated-lifecycle"
@@ -813,8 +942,14 @@ _qcsd_lifecycle_remove_root() {
 # native service controller is exercised by the guardian integration suite.
 _qcsd_docker_api_service_with_timeout() {
   local duration="${1:?}" duration_whole outer_duration unit variable
-  local -a environment_arguments=()
+  local -a environment_arguments=() command=()
   shift
+  command=("$@")
+  case "${command[0]:-}" in
+    qcsd-native-docker-*)
+      command=(/usr/bin/python3 "$QCSD_TEST_NATIVE_DOCKER_ADAPTER" "${command[@]}")
+      ;;
+  esac
   if [[ "${duration}" =~ ^([0-9]+)([.][0-9]+)?$ ]]; then
     duration_whole="${BASH_REMATCH[1]}"
     outer_duration=$((10#${duration_whole} + 3))
@@ -832,7 +967,7 @@ _qcsd_docker_api_service_with_timeout() {
       --property=ExitType=cgroup --property=KillMode=control-group \
       --property=KillSignal=SIGKILL --property=TimeoutStopSec=1s \
       --property="RuntimeMaxSec=${duration}s" \
-      "${environment_arguments[@]}" -- "$@"
+      "${environment_arguments[@]}" -- "${command[@]}"
 }
 _qcsd_build_wait_ready_hook() {
   if [[ "${FAKE_BUILD_SUPERVISOR_SIGNAL_GATE:-}" == 1 ]]; then
@@ -876,9 +1011,15 @@ _qcsd_run_wait_ready_hook() {
         _QCSD_DOCKER_BUILD_DAEMON_ID="daemon-test-id",
         QCSD_TEST_LIFECYCLE_BASE=str(lifecycle_base),
         QCSD_TEST_LIFECYCLE_SHIM=str(lifecycle_isolation_shim),
+        QCSD_TEST_NATIVE_DOCKER_ADAPTER=str(native_adapter),
     )
+    registry = _HarnessRegistry()
+    assert str(state) not in _HARNESS_REGISTRIES
+    _HARNESS_REGISTRIES[str(state)] = registry
     yield environment
 
+    cleanup_errors = registry.stop()
+    del _HARNESS_REGISTRIES[str(state)]
     recorded_roots: set[Path] = set()
     permitted_lifecycle_bases = {lifecycle_base}
     roots_log = state / "supervisor-roots.log"
@@ -922,36 +1063,27 @@ _qcsd_run_wait_ready_hook() {
                 )
 
     for unit in sorted(owned_units):
-        subprocess.run(
-            [
-                "systemctl",
-                "--user",
-                "kill",
-                "--kill-whom=all",
-                "--signal=KILL",
-                "--",
-                unit,
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=3,
-            check=False,
-        )
-        subprocess.run(
-            ["systemctl", "--user", "stop", "--", unit],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=3,
-            check=False,
-        )
-        subprocess.run(
-            ["systemctl", "--user", "reset-failed", "--", unit],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=3,
-            check=False,
-        )
-        _assert_user_scope_inactive(unit)
+        for arguments in (
+            ["kill", "--kill-whom=all", "--signal=KILL", "--", unit],
+            ["stop", "--", unit],
+            ["reset-failed", "--", unit],
+        ):
+            try:
+                subprocess.run(
+                    ["systemctl", "--user", *arguments],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=3,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as error:
+                # A controller timeout must not skip the remaining exact unit
+                # and PID cleanup, nor silently turn teardown into success.
+                cleanup_errors.append(f"{unit}: {error}")
+        try:
+            _assert_user_scope_inactive(unit)
+        except (AssertionError, OSError, subprocess.TimeoutExpired) as error:
+            cleanup_errors.append(f"{unit}: {error}")
 
     launcher_cleanup_errors: list[str] = []
     for root in sorted(recorded_roots):
@@ -1000,7 +1132,8 @@ _qcsd_run_wait_ready_hook() {
     # A malformed or identity-mismatched birth record must retain its durable
     # evidence.  In particular, never turn a teardown parsing failure into
     # permission to recursively delete the only record binding a stopped PID.
-    assert not launcher_cleanup_errors, "; ".join(launcher_cleanup_errors)
+    cleanup_errors.extend(launcher_cleanup_errors)
+    assert not cleanup_errors, "; ".join(cleanup_errors)
 
     for root in recorded_roots:
         if root.exists():
@@ -1632,7 +1765,7 @@ def _assert_scoped_build_receipt(
 
 
 def _start_attached(environment: dict[str, str]) -> subprocess.Popen[str]:
-    return subprocess.Popen(
+    return _start_owned_harness(
         [*SIGNAL_CLEAN_BASH, textwrap.dedent(ATTACHED_HARNESS)],
         env=environment,
         stdout=subprocess.PIPE,
@@ -1643,7 +1776,7 @@ def _start_attached(environment: dict[str, str]) -> subprocess.Popen[str]:
 
 
 def _start_build(environment: dict[str, str]) -> subprocess.Popen[str]:
-    return subprocess.Popen(
+    return _start_owned_harness(
         [*SIGNAL_CLEAN_BASH, textwrap.dedent(BUILD_HARNESS)],
         cwd=ROOT,
         env=environment,
@@ -1813,6 +1946,84 @@ def _assert_lifecycle_receipt_identity(root: Path, receipt: str, state: str) -> 
     )
     assert re.search(r"^supervisor_source_device=[1-9][0-9]*$", receipt, re.MULTILINE)
     assert re.search(r"^supervisor_source_inode=[1-9][0-9]*$", receipt, re.MULTILINE)
+
+
+@pytest.mark.parametrize("launch", ["attached", "build", "direct"])
+def test_fixture_reaps_harness_when_readiness_fails_before_root_publication(
+    tmp_path: Path, launch: str,
+) -> None:
+    # Drive the actual fixture teardown after an assertion fails, as pytest
+    # does. A stopped shell makes the pre-readiness failure deterministic and
+    # cannot race through the later root publication while the assertion runs.
+    fixture = fake_environment.__wrapped__(tmp_path)
+    environment = next(fixture)
+    state = Path(environment["FAKE_DOCKER_STATE"])
+    blocked_helper = tmp_path / "blocked-helper.sh"
+    blocked_helper.write_text(
+        'printf "blocked\\n" >"$FAKE_DOCKER_STATE/startup-blocked"\n'
+        'kill -STOP "$BASHPID"\n'
+        'printf "late\\n" >"$FAKE_DOCKER_STATE/supervisor-roots.log"\n',
+        encoding="ascii",
+    )
+    environment["HELPER"] = str(blocked_helper)
+    process = None
+    try:
+        if launch == "attached":
+            process = _start_attached(environment)
+        elif launch == "build":
+            process = _start_build(environment)
+        else:
+            process = _start_owned_harness(
+                [*SIGNAL_CLEAN_BASH, 'source "$HELPER"'],
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True,
+            )
+        _wait(state / "startup-blocked")
+        with pytest.raises(AssertionError, match="timed out waiting"):
+            _wait(state / "run-ready", timeout=0.02)
+    finally:
+        with pytest.raises(StopIteration):
+            next(fixture)
+    assert process is not None
+    assert process.returncode == -signal.SIGKILL
+    assert _process_identity(process.pid) is None
+    assert str(state) not in _HARNESS_REGISTRIES
+    assert not (state / "supervisor-roots.log").exists()
+    assert not list(Path(environment["QCSD_TEST_LIFECYCLE_BASE"]).iterdir())
+    assert _lock_available(Path(environment["LOCK_PATH"]))
+
+
+def test_fixture_controller_timeout_does_not_skip_remaining_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = fake_environment.__wrapped__(tmp_path)
+    environment = next(fixture)
+    state = Path(environment["FAKE_DOCKER_STATE"])
+    unit = "qcsd-docker-run-" + "e" * 32 + ".scope"
+    (state / "test-cgroup").write_text(unit, encoding="ascii")
+    observed: list[str] = []
+
+    def controller(arguments, **kwargs):
+        assert arguments[:2] == ["systemctl", "--user"], arguments
+        assert arguments[-1] == unit
+        assert kwargs["timeout"] == 3
+        observed.append(arguments[2])
+        if arguments[2] == "kill":
+            raise subprocess.TimeoutExpired(arguments, 3)
+        return subprocess.CompletedProcess(arguments, 0)
+
+    monkeypatch.setattr(subprocess, "run", controller)
+    monkeypatch.setitem(
+        globals(), "_assert_user_scope_inactive",
+        lambda actual: observed.append(f"inactive:{actual}"),
+    )
+    with pytest.raises(AssertionError, match="timed out after 3 seconds"):
+        next(fixture)
+    assert observed == ["kill", "stop", "reset-failed", f"inactive:{unit}"]
+    assert str(state) not in _HARNESS_REGISTRIES
 
 
 def test_fake_environment_binds_lifecycle_namespace_and_lock_to_private_paths(
@@ -2742,7 +2953,7 @@ _qcsd_lifecycle_root_created_hook() {{
     elif kind == "build":
         process = _start_build(environment)
     else:
-        process = subprocess.Popen(
+        process = _start_owned_harness(
             [
                 *SIGNAL_CLEAN_BASH,
                 'set -euo pipefail; source "$HELPER"; QCSD_DOCKER_IDS_TEST=(); '
@@ -3305,7 +3516,7 @@ exercise_latch
     previous_handler = signal.getsignal(signal.SIGTERM)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     try:
-        process = subprocess.Popen(
+        process = _start_owned_harness(
             [*SIGNAL_CLEAN_BASH, textwrap.dedent(script)],
             env={
                 **fake_environment,
@@ -3523,7 +3734,7 @@ def test_process_group_signal_latched_before_wait_cannot_block_on_cli(
     previous_handler = signal.getsignal(requested)
     signal.signal(requested, signal.SIG_IGN)
     try:
-        process = subprocess.Popen(
+        process = _start_owned_harness(
             [*SIGNAL_CLEAN_BASH, textwrap.dedent(ATTACHED_HARNESS)],
             env=fake_environment,
             stdout=subprocess.PIPE,
@@ -4339,7 +4550,7 @@ exit "$status"
     previous_handler = signal.getsignal(requested)
     signal.signal(requested, signal.SIG_IGN)
     try:
-        process = subprocess.Popen(
+        process = _start_owned_harness(
             [*SIGNAL_CLEAN_BASH, textwrap.dedent(script)],
             env=fake_environment,
             stdout=subprocess.PIPE,
@@ -4598,7 +4809,7 @@ exit "$status"
     previous_handler = signal.getsignal(requested)
     signal.signal(requested, signal.SIG_IGN)
     try:
-        process = subprocess.Popen(
+        process = _start_owned_harness(
             [*SIGNAL_CLEAN_BASH, textwrap.dedent(script)],
             env=fake_environment,
             stdout=subprocess.PIPE,
@@ -5426,7 +5637,7 @@ flock -n 9
 _QCSD_DOCKER_BUILD_LOCK_FD=9
 {invocation}
 '''
-    process = subprocess.Popen(
+    process = _start_owned_harness(
         ["bash", "-c", textwrap.dedent(script)],
         cwd=ROOT,
         env=fake_environment,
@@ -5530,7 +5741,7 @@ _qcsd_publish_supervision_file() {
 }
 qcsd_run_attached_docker docker run fake-image
 '''
-    process = subprocess.Popen(
+    process = _start_owned_harness(
         ["bash", "-c", textwrap.dedent(script)],
         cwd=ROOT,
         env=fake_environment,
@@ -5573,7 +5784,7 @@ _qcsd_publish_supervision_file() {
 QCSD_DOCKER_IDS_TEST=()
 qcsd_run_detached_docker QCSD_DOCKER_IDS_TEST docker run fake-image
 '''
-    process = subprocess.Popen(
+    process = _start_owned_harness(
         ["bash", "-c", textwrap.dedent(script)],
         cwd=ROOT,
         env=fake_environment,
@@ -5610,7 +5821,7 @@ qcsd_run_detached_docker QCSD_DOCKER_IDS_TEST docker run fake-image
 printf '%s\n' "$_qcsd_lifecycle_root" >"$FAKE_DOCKER_STATE/returned-root"
 kill -KILL "$BASHPID"
 '''
-    process = subprocess.Popen(
+    process = _start_owned_harness(
         ["bash", "-c", textwrap.dedent(script)],
         env=fake_environment,
         stdin=subprocess.DEVNULL,
@@ -6334,7 +6545,7 @@ exit "$status"
     previous_handler = signal.getsignal(signal.SIGTERM)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     try:
-        process = subprocess.Popen(
+        process = _start_owned_harness(
             [*SIGNAL_CLEAN_BASH, textwrap.dedent(script)],
             env=fake_environment,
             text=True,

@@ -3096,7 +3096,8 @@ def _process_references_buildx_candidate(
                 before_state, _, _, _, before_start = _process_record(pid)
                 before_owner = _process_uid(pid)
                 referenced = False
-                if before_owner == os.getuid() and before_start >= threshold:
+                eligible = before_owner == os.getuid() and before_start >= threshold
+                if eligible:
                     reader = (
                         _read_buildx_process_references
                         if reference_reader is None
@@ -3140,9 +3141,19 @@ def _process_references_buildx_candidate(
 
             if before_start != after_start or before_owner != after_owner:
                 _fail("Buildx process census identity changed")
-            if before_state in {"X", "x", "Z"} or after_state in {"X", "x", "Z"}:
+            # A zombie thread-group leader need not make its pidfd readable
+            # while other threads remain alive. Candidates already excluded by
+            # owner/birth need no exit proof, but still undergo the identity
+            # and terminal-binding/replacement checks on either side here.
+            if eligible and (
+                before_state in {"X", "x", "Z"} or after_state in {"X", "x", "Z"}
+            ):
                 if not _pidfd_is_terminal(pidfd, 1):
-                    _fail("Buildx process census terminal state is indeterminate")
+                    _fail(
+                        "Buildx process census terminal state is indeterminate: "
+                        f"PID {pid}, UID {before_owner}, start {before_start}, "
+                        f"threshold {threshold}, states {before_state}/{after_state}"
+                    )
             if _pidfd_is_terminal(pidfd):
                 terminal_transitions += 1
                 if terminal_transitions > BUILDX_CENSUS_ATTEMPTS:

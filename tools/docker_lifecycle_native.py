@@ -47,6 +47,10 @@ SYSTEMD_RUN = "/usr/bin/systemd-run"
 TIMEOUT = "/usr/bin/timeout"
 DOCKER_CONFIG_MODE = 0o500
 BUILDX_CONFIG_MODE = 0o700
+DOCKER_INFO_MAX_BYTES = 4 * 1024 * 1024
+DOCKER_IDENTITY_TIMEOUT_SECONDS = 10
+DOCKER_NPIPE_HOST = "npipe:////./pipe/dockerDesktopLinuxEngine"
+DOCKER_DAEMON_ID = re.compile(r"[A-Za-z0-9_.:-]+")
 
 libc = ctypes.CDLL(None, use_errno=True)
 renameat2 = libc.renameat2
@@ -636,6 +640,213 @@ def _validate_api_lease_descriptors(
     return lock_fd, singleton_fd
 
 
+def _docker_socket_path(host: str) -> str | None:
+    """Validate the existing local-host contract without endpoint fallback."""
+
+    if host == DOCKER_NPIPE_HOST:
+        return None
+    if re.fullmatch(r"unix:///[A-Za-z0-9_./-]+", host) is None:
+        raise RuntimeError("Docker identity endpoint is not a supported local host")
+    path = host[len("unix://") :]
+    if path == "/" or any(part in {"", ".", ".."} for part in path[1:].split("/")):
+        raise RuntimeError("Docker identity socket path is not canonical")
+    return path
+
+
+def _docker_identity_environment(environment: dict[str, str]) -> dict[str, str]:
+    result = dict(environment)
+    for name in ("DOCKER_CONTEXT", "DOCKER_HOST", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH"):
+        result.pop(name, None)
+    return result
+
+
+def _validate_docker_daemon_id(value: object) -> str:
+    if (
+        not isinstance(value, str)
+        or DOCKER_DAEMON_ID.fullmatch(value) is None
+        or value == "unavailable"
+    ):
+        raise RuntimeError("Docker daemon identity is malformed")
+    return value
+
+
+def _docker_info_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    value: dict[str, object] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate Docker info JSON key")
+        value[key] = item
+    return value
+
+
+def _reject_docker_info_constant(value: str) -> NoReturn:
+    raise ValueError("non-finite Docker info JSON constant")
+
+
+def _docker_daemon_id(
+    host: str,
+    *,
+    environment: dict[str, str] | None = None,
+    pass_fds: tuple[int, ...] = (),
+) -> str:
+    """Read one fresh Engine ID; no cache, mutation, redirect or retry.
+
+    Docker CLI ``info`` discovers client plugins even for an ID-only template.
+    Unix callers read the same Engine ``/info`` field without that unrelated
+    work. The enclosing leased API service still supplies the original total
+    runtime bound. The socket timeout is only an additional finite local bound.
+    The existing exact named-pipe endpoint retains its Docker CLI transport.
+    """
+
+    path = _docker_socket_path(host)
+    if path is None:
+        result = subprocess.run(
+            ("docker", "--host", host, "info", "--format", "{{.ID}}"),
+            close_fds=True,
+            pass_fds=pass_fds,
+            env=_docker_identity_environment(
+                dict(os.environ) if environment is None else environment
+            ),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=DOCKER_IDENTITY_TIMEOUT_SECONDS,
+        )
+        if result.returncode != 0 or len(result.stdout) > DOCKER_INFO_MAX_BYTES:
+            raise RuntimeError("Docker named-pipe identity is unavailable")
+        try:
+            # The CLI prints one newline. Do not normalise whitespace in IDs.
+            value = result.stdout.decode("ascii").removesuffix("\n")
+        except UnicodeError as error:
+            raise RuntimeError("Docker named-pipe identity is malformed") from error
+        return _validate_docker_daemon_id(value)
+
+    # Most invocations perform only leased filesystem/process operations.
+    # Avoid importing the HTTP/email/TLS stack in those unrelated helpers.
+    import http.client
+
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        connection.settimeout(DOCKER_IDENTITY_TIMEOUT_SECONDS)
+        connection.connect(path)
+        connection.sendall(
+            b"GET /info HTTP/1.1\r\nHost: docker\r\n"
+            b"Accept: application/json\r\nConnection: close\r\n\r\n"
+        )
+        try:
+            with http.client.HTTPResponse(connection, method="GET") as response:
+                response.begin()
+                if response.status != 200 or response.headers.defects:
+                    raise RuntimeError("Docker info response is not a valid HTTP success")
+                lengths = response.headers.get_all("Content-Length", [])
+                transfers = response.headers.get_all("Transfer-Encoding", [])
+                encodings = response.headers.get_all("Content-Encoding", [])
+                content_types = response.headers.get_all("Content-Type", [])
+                if (
+                    len(lengths) > 1
+                    or len(transfers) > 1
+                    or (lengths and transfers)
+                    or (transfers and transfers[0].lower() != "chunked")
+                    or len(encodings) > 1
+                    or (encodings and encodings[0].lower() != "identity")
+                    or len(content_types) > 1
+                    or (
+                        content_types
+                        and content_types[0].split(";", maxsplit=1)[0].strip().lower()
+                        != "application/json"
+                    )
+                ):
+                    raise RuntimeError("Docker info response framing or encoding is invalid")
+                expected_length: int | None = None
+                if lengths:
+                    if DECIMAL.fullmatch(lengths[0]) is None:
+                        raise RuntimeError("Docker info response length is invalid")
+                    expected_length = int(lengths[0])
+                    if expected_length > DOCKER_INFO_MAX_BYTES:
+                        raise RuntimeError("Docker info response is oversized")
+                payload = response.read(DOCKER_INFO_MAX_BYTES + 1)
+                if len(payload) > DOCKER_INFO_MAX_BYTES:
+                    raise RuntimeError("Docker info response is oversized")
+                if expected_length is not None and len(payload) != expected_length:
+                    raise RuntimeError("Docker info response is truncated")
+        except (http.client.HTTPException, ValueError) as error:
+            raise RuntimeError("Docker info HTTP response is malformed") from error
+    try:
+        info = json.loads(
+            payload.decode("utf-8"),
+            object_pairs_hook=_docker_info_object,
+            parse_constant=_reject_docker_info_constant,
+        )
+    except (UnicodeError, ValueError, RecursionError) as error:
+        raise RuntimeError("Docker info JSON response is malformed") from error
+    if not isinstance(info, dict):
+        raise RuntimeError("Docker info JSON response is not an object")
+    return _validate_docker_daemon_id(info.get("ID"))
+
+
+def _dispatch_docker_request(
+    command: Sequence[str],
+    *,
+    environment: dict[str, str],
+    pass_fds: tuple[int, ...],
+) -> int | None:
+    """Handle internal Docker requests only inside an acknowledged API lease."""
+
+    if not command or not command[0].startswith("qcsd-native-docker-"):
+        return None
+    mode = command[0]
+    saved_signals: dict[int, object] = {}
+    try:
+        if mode == "qcsd-native-docker-id":
+            if len(command) != 2:
+                raise RuntimeError("Docker identity request arguments are malformed")
+        elif mode == "qcsd-native-docker-verify":
+            if len(command) != 3:
+                raise RuntimeError("Docker verification request arguments are malformed")
+            _validate_docker_daemon_id(command[2])
+        elif mode == "qcsd-native-docker-exec":
+            if (
+                len(command) < 5
+                or command[3] != "--"
+                or not command[4]
+                or command[4].startswith("-")
+            ):
+                raise RuntimeError("Pinned Docker request arguments are malformed")
+            _validate_docker_daemon_id(command[2])
+        else:
+            raise RuntimeError("Docker native request kind is unsupported")
+        # Match the prior in-service shell trap. Restore dispositions for local
+        # test callers; the leased service remains cgroup-bounded by SIGKILL.
+        for requested in (signal.SIGHUP, signal.SIGINT, signal.SIGQUIT, signal.SIGTERM):
+            saved_signals[requested] = signal.getsignal(requested)
+            signal.signal(requested, signal.SIG_IGN)
+        command_environment = _docker_identity_environment(environment)
+        observed = _docker_daemon_id(
+            command[1], environment=command_environment, pass_fds=pass_fds
+        )
+        if mode == "qcsd-native-docker-id":
+            print(observed, flush=True)
+            return 0
+        if observed != command[2]:
+            print("Docker pinned daemon identity changed", file=sys.stderr)
+            return 42 if mode == "qcsd-native-docker-verify" else 125
+        if mode == "qcsd-native-docker-verify":
+            return 0
+        result = subprocess.run(
+            ("docker", "--host", command[1], *command[4:]),
+            close_fds=True,
+            pass_fds=pass_fds,
+            env=command_environment,
+            check=False,
+        )
+        return result.returncode if result.returncode >= 0 else 128 - result.returncode
+    except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
+        print(f"Docker native identity request failed: {error}", file=sys.stderr)
+        return 125
+    finally:
+        for requested, disposition in saved_signals.items():
+            signal.signal(requested, disposition)
+
+
 def _api_service_wrapper(arguments: Sequence[str]) -> int:
     if len(arguments) < 9 or arguments[7] != "--":
         _die("API-service wrapper arguments are malformed")
@@ -724,6 +935,13 @@ def _api_service_wrapper(arguments: Sequence[str]) -> int:
         command_environment = dict(os.environ)
         command_environment["DOCKER_CONFIG"] = f"/proc/self/fd/{docker_config_fd}"
         command_environment["BUILDX_CONFIG"] = f"/proc/self/fd/{buildx_config_fd}"
+        dispatched = _dispatch_docker_request(
+            command,
+            environment=command_environment,
+            pass_fds=(docker_config_fd, buildx_config_fd),
+        )
+        if dispatched is not None:
+            return dispatched
         result = subprocess.run(
             command,
             close_fds=True,

@@ -2075,8 +2075,7 @@ require_docker() {
     echo "qcsd-lab requires one local Docker endpoint" >&2
     exit 1
   fi
-  pinned_server_id="$(_qcsd_docker_api --context "${pinned_context}" info \
-    --format '{{.ID}}' 2>/dev/null)"
+  pinned_server_id="$(_qcsd_read_docker_daemon_id "${pinned_endpoint}" 2>/dev/null)"
   if [[ ! "${pinned_server_id}" =~ ^[A-Za-z0-9_.:-]+$ ||
         "${pinned_server_id}" == "unavailable" ]]; then
     echo "qcsd-lab cannot bind the local Docker daemon identity" >&2
@@ -2103,7 +2102,7 @@ require_docker() {
   _QCSD_DOCKER_PINNED_HOST="${pinned_endpoint}"
   _QCSD_DOCKER_PINNED_SERVER_ID="${pinned_server_id}"
   _QCSD_DOCKER_PINNED_BOOT_ID="${pinned_boot_id}"
-  observed_server_id="$(_qcsd_docker_api info --format '{{.ID}}' 2>/dev/null)"
+  observed_server_id="$(_qcsd_read_docker_daemon_id "${pinned_endpoint}" 2>/dev/null)"
   if [[ "${observed_server_id}" != "${pinned_server_id}" ]]; then
     echo "Docker is installed but its daemon is unavailable" >&2
     exit 1
@@ -2129,7 +2128,7 @@ require_docker() {
     unset class_watch_scope_recovery
   fi
   reconcile_stale_docker_supervisors || exit 1
-  observed_server_id="$(_qcsd_docker_api info --format '{{.ID}}' 2>/dev/null)"
+  observed_server_id="$(_qcsd_read_docker_daemon_id "${pinned_endpoint}" 2>/dev/null)"
   if [[ "${observed_server_id}" != "${pinned_server_id}" ]]; then
     echo "qcsd-lab Docker daemon changed across lifecycle admission" >&2
     exit 1
@@ -2841,7 +2840,8 @@ validate_local_docker_build_endpoint() {
     return 1
   fi
   current_server_json="$(
-    _qcsd_docker_api --context "${current_context}" info --format '{{json .}}'
+    _qcsd_docker_api_with_timeout "${_QCSD_DOCKER_METADATA_TIMEOUT_SECONDS}" \
+      --context "${current_context}" info --format '{{json .}}'
   )"
   if ! mapfile -t current_server_fields < <(
     printf '%s\n' "${current_server_json}" | python3 -I -c '
@@ -3970,7 +3970,8 @@ prepare_supervised_request(Path(sys.argv[1]), sys.argv[2:])
 
   etf_probe_stage="docker-provenance"
   _qcsd_docker_api version --format '{{json .}}' >"${etf_probe_version}"
-  _qcsd_docker_api info --format '{{json .}}' >"${etf_probe_info}"
+  _qcsd_docker_api_with_timeout "${_QCSD_DOCKER_METADATA_TIMEOUT_SECONDS}" \
+    info --format '{{json .}}' >"${etf_probe_info}"
   etf_probe_requested_image="$(QCSD_ETF_PROBE_LAB_ROOT="${ROOT}" \
     "${etf_probe_python}" -I -c '
 import os
@@ -4241,7 +4242,8 @@ if [[ "${1:-}" == "build" ]]; then
     esac
     : >"${buildx_plugins_json_path}"
     : >"${buildx_version_output_path}"
-    if ! _qcsd_docker_api --context "${build_docker_context}" info \
+    if ! _qcsd_docker_api_with_timeout "${_QCSD_DOCKER_METADATA_TIMEOUT_SECONDS}" \
+        --context "${build_docker_context}" info \
         --format '{{json .ClientInfo.Plugins}}' \
         >"${buildx_plugins_json_path}"; then
       echo "qcsd-lab cannot capture Docker-selected Buildx metadata at ${boundary}" >&2
@@ -6062,7 +6064,8 @@ if [[ "${1:-}" == "class-study" &&
   unset QCSD_CLASS_WATCH_STATE_ROOT QCSD_CLASS_WATCH_SCOPE_ROOT
   unset QCSD_CLASS_WATCH_REQUEST_AUTHORITY QCSD_CLASS_WATCH_ACTION_SHA256
   unset QCSD_CLASS_WATCH_SOURCE_BINDING_SHA256
-  class_admission_observed_server_id="$(_qcsd_docker_api info --format '{{.ID}}')" ||
+  class_admission_observed_server_id="$(_qcsd_read_docker_daemon_id \
+    "${_QCSD_DOCKER_PINNED_HOST}")" ||
     class_admission_observed_server_id=""
   if [[ "${class_admission_observed_server_id}" != \
         "${_QCSD_DOCKER_PINNED_SERVER_ID}" ]]; then
@@ -6829,7 +6832,8 @@ if [[ ( "${1:-}" == "run" &&
     exit 1
   fi
   study_docker_version="$(_qcsd_docker_api version --format '{{json .}}')"
-  study_docker_info="$(_qcsd_docker_api info --format '{{json .}}')"
+  study_docker_info="$(_qcsd_docker_api_with_timeout \
+    "${_QCSD_DOCKER_METADATA_TIMEOUT_SECONDS}" info --format '{{json .}}')"
   QCSD_DOCKER_OUTPUT_STUDY_BUILD_INPUTS=""
   qcsd_capture_attached_docker_output QCSD_DOCKER_OUTPUT_STUDY_BUILD_INPUTS \
     docker run --entrypoint /bin/cat \
@@ -7218,7 +7222,8 @@ fi
 capture_scheduler_host_partition_b64() {
   local docker_ncpu inspect_json
   local -a study_container_ids=()
-  docker_ncpu="$(_qcsd_docker_api info --format '{{.NCPU}}')"
+  docker_ncpu="$(_qcsd_docker_api_with_timeout \
+    "${_QCSD_DOCKER_METADATA_TIMEOUT_SECONDS}" info --format '{{.NCPU}}')"
   if [[ ! "${docker_ncpu}" =~ ^[0-9]+$ ]] || (( docker_ncpu <= 11 )); then
     echo "capture scheduler requires at least 12 Docker CPUs" >&2
     return 1
@@ -9967,7 +9972,8 @@ browser_egress_live_docker_binding() {
     echo "browser-egress could not inspect the live Docker version" >&2
     return 1
   }
-  docker_info_json="$(_qcsd_docker_api info --format '{{json .}}')" || {
+  docker_info_json="$(_qcsd_docker_api_with_timeout \
+    "${_QCSD_DOCKER_METADATA_TIMEOUT_SECONDS}" info --format '{{json .}}')" || {
     echo "browser-egress could not inspect the live Docker daemon" >&2
     return 1
   }

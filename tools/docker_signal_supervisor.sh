@@ -3,11 +3,14 @@
 # Signal-safe supervision for Docker operations whose caller owns a host flock
 # or post-run evidence/topology cleanup. Docker closes unrelated inherited
 # descriptors, so the lock-owning shell stays alive and binds lifecycle work to
-# daemon-issued, full object IDs. Ordinary auxiliary or control-plane calls
-# have a three-second bound; target-bound waits and attached run/build
-# operations use their separately declared runtime envelopes.
+# daemon-issued, full object IDs. Ordinary control-plane calls have a
+# three-second bound; setup metadata, target-bound waits and attached
+# run/build operations use their separately declared runtime envelopes.
 
 _QCSD_DOCKER_API_TIMEOUT_SECONDS=3
+# Evidence/setup `docker info` reads intentionally include client plugins.
+# They are one-shot reads outside the terminal-signal control path.
+_QCSD_DOCKER_METADATA_TIMEOUT_SECONDS=10
 # BuildKit export can briefly saturate the daemon after the build process has
 # finished. Only terminal build retirement gets this longer read-only proof;
 # ordinary API calls and run/signal retirement keep their existing bounds.
@@ -635,6 +638,17 @@ _qcsd_valid_pinned_docker_host() {
       "${socket_path}" != */. ]]
 }
 
+_qcsd_read_docker_daemon_id() {
+  # Identity-only reads must not invoke `docker info` client/plugin discovery.
+  # The pinned native wrapper performs this request only after authenticating
+  # the ordinary API-service lease; the existing runtime bound still applies.
+  (( $# == 1 )) || return 2
+  _qcsd_valid_pinned_docker_host "$1" || return 125
+  _qcsd_revalidate_helper_source_identity || return 125
+  _qcsd_docker_api_service_with_timeout \
+    "${_QCSD_DOCKER_API_TIMEOUT_SECONDS}" qcsd-native-docker-id "$1"
+}
+
 _qcsd_pinned_docker_api_with_timeout() {
   local duration="$1"
   shift
@@ -649,24 +663,11 @@ _qcsd_pinned_docker_api_with_timeout() {
     fi
     shift 2
   fi
-  _qcsd_docker_api_service_with_timeout "${duration}" /bin/sh -c '
-trap "" HUP INT QUIT TERM
-host=$1
-expected=$2
-shift 2
-observed=$(env -u DOCKER_CONTEXT -u DOCKER_HOST -u DOCKER_TLS_VERIFY \
-  -u DOCKER_CERT_PATH docker --host "${host}" info --format "{{.ID}}") || {
-  echo "Docker pinned daemon identity is unavailable" >&2
-  exit 125
-}
-[ "${observed}" = "${expected}" ] || {
-  echo "Docker pinned daemon identity changed" >&2
-  exit 125
-}
-exec env -u DOCKER_CONTEXT -u DOCKER_HOST -u DOCKER_TLS_VERIFY \
-  -u DOCKER_CERT_PATH docker --host "${host}" "$@"
-' qcsd-pinned-docker-api "${_QCSD_DOCKER_PINNED_HOST}" \
-    "${_QCSD_DOCKER_PINNED_SERVER_ID}" "$@"
+  # Fresh daemon equality and the original one-shot Docker operation remain
+  # inside the same leased service. No identity is cached across requests.
+  _qcsd_docker_api_service_with_timeout "${duration}" \
+    qcsd-native-docker-exec "${_QCSD_DOCKER_PINNED_HOST}" \
+    "${_QCSD_DOCKER_PINNED_SERVER_ID}" -- "$@"
 }
 
 _qcsd_docker_api_raw_with_timeout() {
@@ -750,15 +751,7 @@ _qcsd_verify_pinned_docker_daemon() {
     # returned mismatch while 125 (or any other infrastructure failure) is
     # eligible for the one existing read-only retry.
     if _qcsd_docker_api_service_with_timeout \
-        "${duration}" /bin/sh -c '
-trap "" HUP INT QUIT TERM
-host=$1
-expected=$2
-observed=$(env -u DOCKER_CONTEXT -u DOCKER_HOST -u DOCKER_TLS_VERIFY \
-  -u DOCKER_CERT_PATH docker --host "${host}" info --format "{{.ID}}") || \
-  exit 125
-[ "${observed}" = "${expected}" ] || exit 42
-' qcsd-docker-daemon-identity "${_QCSD_DOCKER_PINNED_HOST}" \
+        "${duration}" qcsd-native-docker-verify "${_QCSD_DOCKER_PINNED_HOST}" \
       "${_QCSD_DOCKER_PINNED_SERVER_ID}" >/dev/null 2>&1; then
       return 0
     else

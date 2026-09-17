@@ -4203,7 +4203,9 @@ def test_browser_egress_live_daemon_is_admitted_at_every_evidence_boundary() -> 
         "\n}", maxsplit=1
     )[0]
     assert "_qcsd_docker_api version --format '{{json .}}'" in projection
-    assert "_qcsd_docker_api info --format '{{json .}}'" in projection
+    assert "_qcsd_docker_api_with_timeout" in projection
+    assert '"${_QCSD_DOCKER_METADATA_TIMEOUT_SECONDS}" info --format' in projection
+    assert "info --format '{{json .}}'" in projection
     assert "live-docker-binding" in projection
     assert '"${_QCSD_DOCKER_PINNED_CONTEXT}"' in projection
     assert '"${_QCSD_DOCKER_PINNED_HOST}"' in projection
@@ -4239,7 +4241,9 @@ def test_browser_egress_live_daemon_projection_stays_in_supervisor_process(
         + "_QCSD_DOCKER_PINNED_CONTEXT=default\n"
         + "_QCSD_DOCKER_PINNED_HOST=unix:///var/run/docker.sock\n"
         + "_QCSD_DOCKER_PINNED_SERVER_ID=server\n"
+        + "_QCSD_DOCKER_METADATA_TIMEOUT_SECONDS=10\n"
         + '_qcsd_docker_api() { printf \'{"probe":"%s"}\\n\' "$1"; }\n'
+        + '_qcsd_docker_api_with_timeout() { [[ "$1" == 10 && "$2" == info ]] || return 92; shift; _qcsd_docker_api "$@"; }\n'
         + "qcsd_capture_attached_docker_output() {\n"
         + "  local -n output=$1\n"
         + '  [[ "$BASHPID" == "$supervisor_pid" ]] || return 91\n'
@@ -7025,12 +7029,32 @@ def test_lifecycle_recovery_completion_failure_is_terminal(
     assert recovery_frames == b"a" * 64 + b"\n"
 
 
+def test_docker_metadata_reads_have_separate_bounded_setup_allowance() -> None:
+    root = Path(__file__).parents[1]
+    launcher = (root / "qcsd-lab").read_text(encoding="utf-8")
+    helper = (root / "tools/docker_signal_supervisor.sh").read_text(encoding="utf-8")
+    assert "\n_QCSD_DOCKER_API_TIMEOUT_SECONDS=3\n" in helper
+    assert "\n_QCSD_DOCKER_METADATA_TIMEOUT_SECONDS=10\n" in helper
+    assert "\n_QCSD_DOCKER_SUPERVISOR_SIGNAL_ENVELOPE_SECONDS=120\n" in helper
+    # Every use of the longer metadata allowance is an explicit info read;
+    # control/mutation paths must not silently inherit it.
+    flattened = re.sub(r"\\\n\s*", " ", launcher)
+    metadata_reads = re.findall(
+        r'_qcsd_docker_api_with_timeout\s+"\$\{_QCSD_DOCKER_METADATA_TIMEOUT_SECONDS\}"'
+        r'\s+(?:--context "\$\{[a-z_]+\}"\s+)?info\s+--format',
+        flattened,
+    )
+    assert len(metadata_reads) == 6
+    assert launcher.count('"${_QCSD_DOCKER_METADATA_TIMEOUT_SECONDS}"') == 6
+    assert launcher.count("$(_qcsd_read_docker_daemon_id ") == 4
+
+
 def test_docker_recovery_precedes_reproof_and_final_admission() -> None:
     launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
     body = launcher.split("require_docker() {", 1)[1].split("\n}", 1)[0]
     guardian = body.index("_qcsd_require_lifecycle_guardian_entry")
     recovery = body.index("reconcile_stale_docker_supervisors")
-    daemon_reproof = body.index('observed_server_id="$(_qcsd_docker_api info', recovery)
+    daemon_reproof = body.index('observed_server_id="$(_qcsd_read_docker_daemon_id', recovery)
     boot_reproof = body.index(
         "IFS= read -r observed_boot_id </proc/sys/kernel/random/boot_id",
         daemon_reproof,

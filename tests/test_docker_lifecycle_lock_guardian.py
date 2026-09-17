@@ -14,6 +14,7 @@ import socket
 import stat
 import subprocess
 import sys
+import tempfile
 import textwrap
 import threading
 import time
@@ -21,7 +22,10 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from tests.test_docker_signal_supervisor import FAKE_DOCKER
+from tests.test_docker_signal_supervisor import (
+    FAKE_DOCKER,
+    _fake_native_identity_reader_source,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -674,6 +678,28 @@ PY
     done
     printf 'completed\n' >"$state/api-fast-identity-completed"
     ;;
+  api-real-unix-identity)
+    ready
+    load_real_helper_with_guardian_proof
+    _qcsd_lifecycle_base="$state/api-real-identity-base"
+    mkdir -m 700 "$_qcsd_lifecycle_base"
+    export PATH="$state/bin:$PATH" FAKE_DOCKER_STATE="$state"
+    export DOCKER_CONTEXT=default
+    _QCSD_DOCKER_PINNED_CONTEXT=default
+    _QCSD_DOCKER_PINNED_HOST=$(<"$state/identity-host")
+    _QCSD_DOCKER_PINNED_SERVER_ID=daemon-test-id
+    _QCSD_DOCKER_PINNED_BOOT_ID=$(</proc/sys/kernel/random/boot_id)
+    _qcsd_verify_pinned_docker_daemon
+    identity_api_timeout=3
+    [[ $(<"$state/identity-mode") != slow-body ]] || identity_api_timeout=1
+    if _qcsd_docker_api_with_timeout "$identity_api_timeout" \
+      network create --label org.qcsd.supervisor.instance=identity-test \
+      identity-test >"$state/identity-exec-output"; then
+      printf '0\n' >"$state/identity-exec-status"
+    else
+      printf '%s\n' "$?" >"$state/identity-exec-status"
+    fi
+    ;;
   handoff-sequential-retirement|handoff-predecessor-sequential-retirement|\
   handoff-predecessor-reconcile)
     ready
@@ -1090,8 +1116,6 @@ def guardian_bundle(tmp_path: Path):
         source.replace(shared_socket, isolated_socket), encoding="utf-8"
     )
     guardian.chmod(0o600)
-    shutil.copyfile(NATIVE, native)
-    native.chmod(0o600)
     shutil.copyfile(HELPER, helper)
     helper.chmod(0o600)
     qcsd.write_text(FAKE_QCSD, encoding="ascii")
@@ -1105,6 +1129,16 @@ def guardian_bundle(tmp_path: Path):
     fake_docker = fake_bin / "docker"
     fake_docker.write_text(FAKE_DOCKER, encoding="utf-8")
     fake_docker.chmod(0o755)
+    native_source = NATIVE.read_text(encoding="utf-8")
+    main_guard = 'if __name__ == "__main__":'
+    assert native_source.count(main_guard) == 1
+    native.write_text(
+        native_source.replace(
+            main_guard, _fake_native_identity_reader_source(fake_docker) + "\n" + main_guard
+        ),
+        encoding="utf-8",
+    )
+    native.chmod(0o600)
     socket_name = _isolated_guardian_socket_proc_name(lock_parent)
 
     def socket_count() -> int:
@@ -5495,6 +5529,139 @@ def test_buildx_crash_root_is_not_removed_while_process_refers(
     assert not tuple(guardian_bundle[2].glob(".qcsd-buildx-*"))
 
 
+@pytest.mark.parametrize("state", ["Z", "X", "x"])
+@pytest.mark.parametrize("eligibility", ["prebirth", "other-owner", "eligible"])
+def test_buildx_census_terminal_stat_requires_pidfd_only_for_eligible_process(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    state: str,
+    eligibility: str,
+) -> None:
+    module = _load_guardian(guardian_bundle[0])
+    child = os.fork()
+    if child == 0:
+        while True:
+            signal.pause()
+    record = module._process_record(child)
+    child_start = record[-1]
+    reference_reads = 0
+
+    def references(_candidate, _paths, _path_bytes):
+        nonlocal reference_reads
+        reference_reads += 1
+        return False
+
+    # A /proc terminal-looking state is not a substitute for pidfd evidence.
+    # Keep a real, live pidfd while controlling the stat snapshot: relevant
+    # holders must fail closed, but already excluded processes need no proof
+    # of exit merely because their leader has a terminal-looking state.
+    monkeypatch.setattr(module, "_process_record", lambda _pid: (state, *record[1:]))
+    monkeypatch.setattr(
+        module,
+        "_process_uid",
+        lambda _pid: os.getuid() + (eligibility == "other-owner"),
+    )
+    monkeypatch.setattr(module, "_read_buildx_process_references", references)
+    try:
+        arguments = {
+            "threshold": child_start + (eligibility == "prebirth"),
+            "paths": (guardian_bundle[2] / "unused-root",),
+            "path_bytes": (b"unused-root",),
+        }
+        if eligibility == "eligible":
+            with pytest.raises(
+                module.GuardianError,
+                match="Buildx process census terminal state is indeterminate",
+            ):
+                module._process_references_buildx_candidate(
+                    child, Path(f"/proc/{child}"), **arguments
+                )
+            assert reference_reads == 1
+        else:
+            assert module._process_references_buildx_candidate(
+                child, Path(f"/proc/{child}"), **arguments
+            ) is False
+            assert reference_reads == 0
+    finally:
+        os.kill(child, signal.SIGKILL)
+        os.waitpid(child, 0)
+
+
+@pytest.mark.parametrize("changed", ["start", "owner"])
+def test_buildx_census_excluded_terminal_candidate_keeps_identity_check(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    changed: str,
+) -> None:
+    module = _load_guardian(guardian_bundle[0])
+    pid = os.getpid()
+    record = module._process_record(pid)
+    records = iter((
+        ("Z", *record[1:]),
+        ("Z", *record[1:-1], record[-1] + (changed == "start")),
+    ))
+    owners = iter((os.getuid(), os.getuid() + (changed == "owner")))
+    monkeypatch.setattr(module, "_process_record", lambda _pid: next(records))
+    monkeypatch.setattr(module, "_process_uid", lambda _pid: next(owners))
+    monkeypatch.setattr(
+        module,
+        "_read_buildx_process_references",
+        lambda *_args: pytest.fail("prebirth candidate must not be inspected"),
+    )
+
+    with pytest.raises(module.GuardianError, match="census identity changed"):
+        module._process_references_buildx_candidate(
+            pid,
+            Path(f"/proc/{pid}"),
+            threshold=record[-1] + 1,
+            paths=(guardian_bundle[2] / "unused-root",),
+            path_bytes=(b"unused-root",),
+        )
+
+
+def test_buildx_census_excluded_terminal_candidate_reinspects_replacement(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_guardian(guardian_bundle[0])
+    pid = os.getpid()
+    record = module._process_record(pid)
+    before = ("Z", *record[1:])
+    replacement = ("S", *record[1:-1], record[-1] + 1)
+    records = iter((before, before, replacement, replacement))
+    # The excluded task exits after its stable stat snapshot. Rebinding the
+    # numeric slot must inspect a new eligible process, not return early.
+    polls = iter((False, True, False, False, False))
+    opens = 0
+    reference_reads = 0
+    open_pidfd = module._open_process_pidfd
+
+    def counted_open(observed: int):
+        nonlocal opens
+        opens += 1
+        return open_pidfd(observed)
+
+    def references(*_args):
+        nonlocal reference_reads
+        reference_reads += 1
+        return True
+
+    monkeypatch.setattr(module, "_open_process_pidfd", counted_open)
+    monkeypatch.setattr(module, "_pidfd_is_terminal", lambda *_args: next(polls))
+    monkeypatch.setattr(module, "_process_record", lambda _pid: next(records))
+    monkeypatch.setattr(module, "_read_buildx_process_references", references)
+
+    assert module._process_references_buildx_candidate(
+        pid,
+        Path(f"/proc/{pid}"),
+        threshold=record[-1] + 1,
+        paths=(guardian_bundle[2] / "unused-root",),
+        path_bytes=(b"unused-root",),
+    ) is True
+    assert opens == 2
+    assert reference_reads == 1
+
+
 def test_buildx_user_census_tolerates_only_exact_zombie_transition(
     guardian_bundle: tuple[Path, Path, Path, Path],
     monkeypatch: pytest.MonkeyPatch,
@@ -6952,6 +7119,101 @@ def test_real_api_holder_accepts_five_fast_daemon_identity_proofs(
     ) == "completed\n"
     calls = (state / "calls.log").read_text(encoding="utf-8")
     assert calls.count("INFO unix:///var/run/docker.sock") == 5
+    assert _can_lock(_lock_path(guardian_bundle))
+
+
+@pytest.mark.parametrize("mode", ["match", "mismatch", "slow-body"])
+def test_real_leased_unix_identity_gates_and_bounds_docker_cli(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+    mode: str,
+) -> None:
+    # Unlike the surrounding fake-Docker tests, this one exercises the actual
+    # Unix HTTP reader inside the real acknowledged native API lease. Restore
+    # production source before the guardian hashes and opens its source bundle.
+    native = guardian_bundle[0].parent / NATIVE.name
+    native.write_bytes(NATIVE.read_bytes())
+    state = guardian_bundle[3]
+    (state / "identity-mode").write_text(mode, encoding="ascii")
+    requests: list[bytes] = []
+    errors: list[Exception] = []
+    finished = threading.Event()
+
+    # Keep the sockaddr pathname short independently of pytest's test-name
+    # directory; the socket and its owner directory remain fixture-private.
+    with tempfile.TemporaryDirectory(prefix="qcsd-identity-") as temporary:
+        socket_path = Path(temporary) / "engine.sock"
+        (state / "identity-host").write_text(f"unix://{socket_path}", encoding="ascii")
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(str(socket_path))
+            listener.listen(2)
+            listener.settimeout(0.1)
+
+            def serve() -> None:
+                try:
+                    while not finished.is_set():
+                        try:
+                            connection, _ = listener.accept()
+                        except TimeoutError:
+                            continue
+                        with connection:
+                            connection.settimeout(2)
+                            request = b""
+                            while b"\r\n\r\n" not in request:
+                                chunk = connection.recv(4096)
+                                if not chunk or len(request) + len(chunk) > 4096:
+                                    raise AssertionError("invalid identity HTTP request")
+                                request += chunk
+                            requests.append(request)
+                            daemon_id = "daemon-test-id"
+                            if len(requests) > 1 and mode == "mismatch":
+                                daemon_id = "changed-daemon-id"
+                            body = json.dumps({"ID": daemon_id}).encode("ascii")
+                            connection.sendall(
+                                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                                + f"Content-Length: {len(body)}\r\n".encode("ascii")
+                                + b"Connection: close\r\n\r\n"
+                                + (body[:1] if len(requests) > 1 and mode == "slow-body" else body)
+                            )
+                            if len(requests) > 1 and mode == "slow-body":
+                                # The socket reader itself allows 10 seconds.
+                                # Its leased RuntimeMaxSec=1 must terminate it
+                                # before this deliberately unfinished body can.
+                                finished.wait(12)
+                except Exception as error:
+                    errors.append(error)
+
+            worker = threading.Thread(target=serve, daemon=True)
+            worker.start()
+            try:
+                started = time.monotonic()
+                result = _run_guardian(guardian_bundle, "api-real-unix-identity", timeout=20)
+                elapsed = time.monotonic() - started
+            finally:
+                finished.set()
+                worker.join(timeout=3)
+            assert not worker.is_alive()
+
+    assert not errors
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    status = int((state / "identity-exec-status").read_text(encoding="ascii"))
+    assert len(requests) == 2
+    assert all(request.startswith(b"GET /info HTTP/1.1\r\n") for request in requests)
+    if mode == "match":
+        assert status == 0
+        calls = (state / "calls.log").read_text(encoding="ascii").splitlines()
+        assert sum(line.startswith("NETWORK_CREATE_BEGIN ") for line in calls) == 1
+        assert sum(line.startswith("NETWORK_CREATE_END ") for line in calls) == 1
+        assert not any(line.startswith("INFO ") for line in calls)
+        assert (state / "network").is_file()
+    else:
+        if mode == "mismatch":
+            assert status == 125
+        else:
+            assert status != 0
+        assert not (state / "calls.log").exists()
+        assert not (state / "network").exists()
+        if mode == "slow-body":
+            assert elapsed < 8, (elapsed, result.stderr)
     assert _can_lock(_lock_path(guardian_bundle))
 
 
