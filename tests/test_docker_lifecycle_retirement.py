@@ -850,6 +850,93 @@ def test_native_authority_unlink_rechecks_path_after_hash(
     assert moved.read_text(encoding="ascii") == "authorised\n"
 
 
+@pytest.mark.parametrize("kind", ["build", "run"])
+def test_real_retirement_selects_only_build_identity_allowance(
+    retirement_environment: dict[str, str], kind: str,
+) -> None:
+    """Observe the real authority/reproof path, not a replacement retire call."""
+
+    result = _run_bash(
+        r'''
+set -euo pipefail
+source "$HELPER"
+[[ "$_QCSD_DOCKER_API_TIMEOUT_SECONDS" == 3 &&
+   "$_QCSD_DOCKER_BUILD_RETIREMENT_IDENTITY_TIMEOUT_SECONDS" == 10 &&
+   "$_QCSD_DOCKER_DAEMON_IDENTITY_ATTEMPTS" == 2 &&
+   "$_QCSD_DOCKER_SUPERVISOR_SIGNAL_ENVELOPE_SECONDS" == 120 ]]
+eval "$(declare -f _qcsd_retirement_terminal_reproof | sed \
+  '1s/_qcsd_retirement_terminal_reproof/_fixture_terminal_reproof/')"
+_qcsd_retirement_terminal_reproof() {
+  local -n fixture_values="$1"
+  local fixture_retirement_kind="${fixture_values[kind]}"
+  _fixture_terminal_reproof "$@"
+}
+eval "$(declare -f _qcsd_docker_api_service_with_timeout | sed \
+  '1s/_qcsd_docker_api_service_with_timeout/_fixture_api_service/')"
+_qcsd_docker_api_service_with_timeout() {
+  local duration="$1"
+  shift
+  if [[ "${4:-}" == qcsd-docker-daemon-identity ]]; then
+    printf '%s %s\n' "${fixture_retirement_kind:-ordinary}" "$duration" \
+      >>"$FAKE_DOCKER_STATE/identity-durations.log"
+  fi
+  _fixture_api_service "$duration" "$@"
+}
+_qcsd_verify_pinned_docker_daemon
+if [[ "$QCSD_TEST_RETIREMENT_KIND" == build ]]; then
+  exec 9>"$RETIREMENT_LOCK_PATH"
+  chmod 600 "$RETIREMENT_LOCK_PATH"
+  flock -n 9
+  _QCSD_DOCKER_BUILD_LOCK_FD=9
+  qcsd_run_docker_build docker --context default build fake-context
+else
+  QCSD_DOCKER_IDS_RETIREMENT=()
+  qcsd_run_detached_docker QCSD_DOCKER_IDS_RETIREMENT docker run fake-image
+  docker rm --force "${QCSD_DOCKER_IDS_RETIREMENT[0]}" >/dev/null
+  qcsd_retire_docker_handoff \
+    run "${QCSD_DOCKER_IDS_RETIREMENT[0]}" QCSD_DOCKER_IDS_RETIREMENT
+fi
+_qcsd_verify_pinned_docker_daemon ordinary
+[[ "$_QCSD_DOCKER_API_TIMEOUT_SECONDS" == 3 &&
+   "$_QCSD_DOCKER_DAEMON_IDENTITY_ATTEMPTS" == 2 &&
+   "$_QCSD_DOCKER_SUPERVISOR_SIGNAL_ENVELOPE_SECONDS" == 120 ]]
+''',
+        environment={
+            **retirement_environment,
+            "FAKE_BUILD_BEHAVIOR": "natural0",
+            "QCSD_TEST_RETIREMENT_KIND": kind,
+        },
+    )
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    state = Path(retirement_environment["FAKE_DOCKER_STATE"])
+    rows = [
+        line.split()
+        for line in (state / "identity-durations.log").read_text(
+            encoding="ascii"
+        ).splitlines()
+    ]
+    assert rows[0] == rows[-1] == ["ordinary", "3"]
+    retirement_rows = [row for row in rows if row[0] == kind]
+    assert retirement_rows
+    assert all(row == [kind, "10" if kind == "build" else "3"]
+               for row in retirement_rows)
+    assert all(row[0] in {"ordinary", kind} for row in rows)
+    assert all(row == ["ordinary", "3"] for row in rows if row[0] == "ordinary")
+    roots = {
+        Path(line)
+        for line in (state / "supervisor-roots.log").read_text(
+            encoding="ascii"
+        ).splitlines()
+    }
+    assert len(roots) == 1
+    root = roots.pop()
+    assert root.name.startswith(f"{kind}.")
+    assert not root.exists()
+    assert all(not path.exists() for path in _retirement_names(root))
+    calls = (state / "calls.log").read_text(encoding="ascii").splitlines()
+    assert sum(line.startswith("BUILD ") for line in calls) == (kind == "build")
+
+
 def test_validate_is_non_mutating_for_a_handoff_ready_for_retirement(
     retirement_environment: dict[str, str],
 ) -> None:

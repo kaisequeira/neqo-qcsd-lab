@@ -5731,6 +5731,86 @@ exit "$status"
     _assert_user_scope_inactive(unit)
 
 
+@pytest.mark.parametrize(
+    ("purpose", "duration"),
+    [(None, "3"), ("ordinary", "3"), ("build-retirement", "10")],
+)
+@pytest.mark.parametrize(
+    ("first_status", "second_status", "expected_calls", "success"),
+    [(125, 0, 2, True), (42, 0, 1, False), (125, 125, 2, False)],
+)
+def test_daemon_identity_purpose_preserves_bounded_retry_rules(
+    fake_environment: dict[str, str], purpose: str | None, duration: str,
+    first_status: int, second_status: int, expected_calls: int, success: bool,
+) -> None:
+    """Inject terminal service outcomes without adding wall-clock sleeps."""
+
+    script = r'''
+set -euo pipefail
+source "$HELPER"
+fixture_attempt=0
+_qcsd_docker_api_service_with_timeout() {
+  fixture_attempt=$((fixture_attempt + 1))
+  printf '%s\n' "$1" >>"$FAKE_DOCKER_STATE/identity-durations.log"
+  if (( fixture_attempt == 1 )); then
+    return "$QCSD_TEST_FIRST_STATUS"
+  fi
+  return "$QCSD_TEST_SECOND_STATUS"
+}
+_qcsd_verify_pinned_docker_daemon "$@"
+'''
+    arguments = [] if purpose is None else [purpose]
+    result = subprocess.run(
+        ["bash", "-c", textwrap.dedent(script), "identity-purpose-test", *arguments],
+        cwd=ROOT,
+        env={
+            **fake_environment,
+            "QCSD_TEST_FIRST_STATUS": str(first_status),
+            "QCSD_TEST_SECOND_STATUS": str(second_status),
+        },
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+    assert (result.returncode == 0) == success, (result.stdout, result.stderr)
+    state = Path(fake_environment["FAKE_DOCKER_STATE"])
+    assert (state / "identity-durations.log").read_text(
+        encoding="ascii"
+    ).splitlines() == [duration] * expected_calls
+    assert not (state / "calls.log").exists()
+    assert not (state / "supervisor-roots.log").exists()
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [("",), ("unknown",), ("ordinary", "extra"), ("build-retirement", "extra")],
+)
+def test_daemon_identity_rejects_invalid_purpose_before_service(
+    fake_environment: dict[str, str], arguments: tuple[str, ...],
+) -> None:
+    script = r'''
+set -euo pipefail
+source "$HELPER"
+_qcsd_docker_api_service_with_timeout() {
+  printf 'unexpected-service\n' >"$FAKE_DOCKER_STATE/identity-service-called"
+  return 0
+}
+_qcsd_verify_pinned_docker_daemon "$@"
+'''
+    result = subprocess.run(
+        ["bash", "-c", textwrap.dedent(script), "identity-purpose-test", *arguments],
+        cwd=ROOT,
+        env=fake_environment,
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+    assert result.returncode != 0, (result.stdout, result.stderr)
+    state = Path(fake_environment["FAKE_DOCKER_STATE"])
+    assert not (state / "identity-service-called").exists()
+    assert not (state / "calls.log").exists()
+
+
 def test_daemon_identity_proof_retries_one_unavailable_observation(
     fake_environment: dict[str, str],
 ) -> None:

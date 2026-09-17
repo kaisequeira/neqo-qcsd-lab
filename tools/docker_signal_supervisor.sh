@@ -8,10 +8,13 @@
 # operations use their separately declared runtime envelopes.
 
 _QCSD_DOCKER_API_TIMEOUT_SECONDS=3
+# BuildKit export can briefly saturate the daemon after the build process has
+# finished. Only terminal build retirement gets this longer read-only proof;
+# ordinary API calls and run/signal retirement keep their existing bounds.
+_QCSD_DOCKER_BUILD_RETIREMENT_IDENTITY_TIMEOUT_SECONDS=10
 # A read-only daemon-identity proof may be retried once when the first bounded
-# observation is unavailable.  This covers a transient control-plane stall
-# immediately after a large BuildKit export without extending the lifetime of
-# any individual API service.  A returned mismatch is terminal and mutating
+# observation is unavailable. Each attempt has its purpose-specific service
+# bound. A returned mismatch is terminal and mutating
 # Docker requests remain strictly one-shot.
 _QCSD_DOCKER_DAEMON_IDENTITY_ATTEMPTS=2
 # Handoff retirement is allowed one fresh read-only exact-presence proof after
@@ -721,7 +724,15 @@ _qcsd_target_docker_api_with_timeout() {
 }
 
 _qcsd_verify_pinned_docker_daemon() {
-  local attempt status
+  local attempt status duration
+  (( $# <= 1 )) || return 1
+  case "${1-ordinary}" in
+    ordinary) duration="${_QCSD_DOCKER_API_TIMEOUT_SECONDS}" ;;
+    build-retirement)
+      duration="${_QCSD_DOCKER_BUILD_RETIREMENT_IDENTITY_TIMEOUT_SECONDS}"
+      ;;
+    *) return 1 ;;
+  esac
   if [[ ! "${_QCSD_DOCKER_PINNED_CONTEXT:-}" =~ ^[A-Za-z0-9_.-]+$ ]] ||
      ! _qcsd_valid_pinned_docker_host \
        "${_QCSD_DOCKER_PINNED_HOST:-}" ||
@@ -739,7 +750,7 @@ _qcsd_verify_pinned_docker_daemon() {
     # returned mismatch while 125 (or any other infrastructure failure) is
     # eligible for the one existing read-only retry.
     if _qcsd_docker_api_service_with_timeout \
-        "${_QCSD_DOCKER_API_TIMEOUT_SECONDS}" /bin/sh -c '
+        "${duration}" /bin/sh -c '
 trap "" HUP INT QUIT TERM
 host=$1
 expected=$2
@@ -6037,6 +6048,7 @@ _qcsd_validate_retirement_phase() {
 
 _qcsd_retirement_terminal_reproof() {
   local values_name="$1" presence receipt_meta source_name path_key identity_key hash_key
+  local identity_purpose=ordinary
   local lifecycle_base_metadata lock_metadata lock_parent_metadata
   local docker_config_metadata docker_config_first_entry
   local buildx_config_metadata buildx_config_links source_metadata source_digest
@@ -6106,8 +6118,11 @@ _qcsd_retirement_terminal_reproof() {
   fi
   if [[ "${values_ref[host_boot_id]}" != unavailable ]]; then
     _qcsd_verify_pinned_host_boot || return 1
-    if ! _qcsd_verify_pinned_docker_daemon; then
-      echo "Docker lifecycle retirement refused because daemon identity changed" >&2
+    if [[ "${values_ref[kind]}" == build ]]; then
+      identity_purpose=build-retirement
+    fi
+    if ! _qcsd_verify_pinned_docker_daemon "${identity_purpose}"; then
+      echo "Docker lifecycle retirement refused because daemon identity could not be verified" >&2
       return 1
     fi
     # A durable authority may outlive its host boot. Current boot stability,
