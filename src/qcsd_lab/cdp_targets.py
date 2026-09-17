@@ -33,7 +33,7 @@ from .browser_egress import (
 )
 
 CDP_TARGET_INSTRUMENTATION_POLICY = (
-    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v14"
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v15"
 )
 BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION = 1
 EGRESS_PREARM_SUMMARY_SCHEMA_VERSION = 2
@@ -124,9 +124,7 @@ _CDP_PROTOCOL_ERROR_MESSAGE_MAX_CHARS = 240
 _BLOCKED_DOCUMENT_FAILURE_FIELDS = frozenset(
     {"requestId", "timestamp", "type", "errorText", "canceled", "blockedReason"}
 )
-_ERROR_DOCUMENT_FINISH_FIELDS = frozenset(
-    {"requestId", "timestamp", "encodedDataLength"}
-)
+_ERROR_DOCUMENT_FINISH_FIELDS = frozenset({"requestId", "timestamp", "encodedDataLength"})
 _ERROR_DOCUMENT_URL = "chrome-error://chromewebdata/"
 _ERROR_DOCUMENT_RESOURCE_REQUEST_FIELDS = frozenset(
     {
@@ -154,9 +152,7 @@ _ERROR_DOCUMENT_RESOURCE_INNER_REQUEST_FIELDS = frozenset(
         "isSameSite",
     }
 )
-_ERROR_DOCUMENT_RESOURCE_INITIATOR_FIELDS = frozenset(
-    {"type", "url", "lineNumber", "columnNumber"}
-)
+_ERROR_DOCUMENT_RESOURCE_INITIATOR_FIELDS = frozenset({"type", "url", "lineNumber", "columnNumber"})
 _ERROR_DOCUMENT_RESOURCE_RESPONSE_FIELDS = frozenset(
     {"requestId", "loaderId", "timestamp", "type", "response", "hasExtraInfo", "frameId"}
 )
@@ -762,27 +758,22 @@ class RecursiveCdpTargetRouter:
         self._document_fetch_by_policy_identity: dict[
             tuple[CdpTargetSource, str], _DocumentFetchDecision
         ] = {}
-        self._seen_document_fetch_policy_identities: set[
-            tuple[CdpTargetSource, str]
-        ] = set()
+        self._seen_document_fetch_policy_identities: set[tuple[CdpTargetSource, str]] = set()
         self._pending_blocked_documents: dict[
             tuple[tuple[str, ...], str, int, str], _DocumentFetchDecision
         ] = {}
         self._error_document_finishes: dict[
             tuple[tuple[str, ...], str, int, str], _ErrorDocumentFinish
         ] = {}
-        self._retired_error_document_chains: set[
-            tuple[tuple[str, ...], str, int, str]
-        ] = set()
+        self._retired_error_document_chains: set[tuple[tuple[str, ...], str, int, str]] = set()
+        self._cached_inline_data_requests: set[tuple[tuple[str, ...], str, int, str]] = set()
         self._error_document_resources: dict[
             tuple[tuple[str, ...], str, int, str], _ErrorDocumentResources
         ] = {}
         self._error_resource_by_request_id: dict[
             tuple[tuple[str, ...], str, int, str], _ErrorDocumentResources
         ] = {}
-        self._retired_error_resource_request_ids: set[
-            tuple[tuple[str, ...], str, int, str]
-        ] = set()
+        self._retired_error_resource_request_ids: set[tuple[tuple[str, ...], str, int, str]] = set()
         self._claimed_worker_bootstraps: set[tuple[CdpTargetSource, str]] = set()
         self._root_browser_context_id: str | None = None
         self._worker_bootstraps: dict[CdpTargetSource, _WorkerBootstrap] = {}
@@ -1486,6 +1477,8 @@ class RecursiveCdpTargetRouter:
         """
 
         self.raise_if_failed()
+        if self._aborting:
+            raise CdpTargetIntegrityError("CDP policy commands are forbidden during abort")
         if method not in _EMPTY_RESULT_POLICY_COMMANDS:
             raise CdpTargetIntegrityError(
                 f"result-bearing or unsupported routed CDP command was rejected: {method}"
@@ -1504,9 +1497,7 @@ class RecursiveCdpTargetRouter:
         )
         if document_decision is not None:
             if document_decision.decided:
-                raise CdpTargetIntegrityError(
-                    "Document Fetch policy was decided more than once"
-                )
+                raise CdpTargetIntegrityError("Document Fetch policy was decided more than once")
             document_decision.decided = True
             if method == "Fetch.failRequest" and parameters == {
                 "requestId": document_decision.fetch_request_id,
@@ -1840,9 +1831,7 @@ class RecursiveCdpTargetRouter:
             return None
         occurrences = list(self._active_requests.get(network_id, ()))
         if len(occurrences) > 1:
-            raise CdpTargetIntegrityError(
-                "Document Fetch has no unique active Network occurrence"
-            )
+            raise CdpTargetIntegrityError("Document Fetch has no unique active Network occurrence")
         active = self._resolve_active_request(
             source,
             network_id,
@@ -1869,18 +1858,14 @@ class RecursiveCdpTargetRouter:
             )
         policy_identity = (source, fetch_request_id)
         if policy_identity in self._seen_document_fetch_policy_identities:
-            raise CdpTargetIntegrityError(
-                "Document Fetch interception was duplicated or reused"
-            )
+            raise CdpTargetIntegrityError("Document Fetch interception was duplicated or reused")
         chain_key = source.request_chain_key(network_id)
         if (
             chain_key in self._pending_blocked_documents
             or chain_key in self._error_document_finishes
             or chain_key in self._retired_error_document_chains
         ):
-            raise CdpTargetIntegrityError(
-                "Document Fetch named a pending or retired request chain"
-            )
+            raise CdpTargetIntegrityError("Document Fetch named a pending or retired request chain")
         decision = _DocumentFetchDecision(
             policy_source=source,
             active=active,
@@ -1946,6 +1931,50 @@ class RecursiveCdpTargetRouter:
             frame_id=finish.frame_id,
             latest_timestamp=float(timestamp),
         )
+        return True
+
+    def _consume_error_document_abort(
+        self,
+        source: CdpTargetSource,
+        event: Mapping[str, Any],
+    ) -> bool:
+        """Drain one cancelled internal error document during exceptional disposal.
+
+        Chromium can abort the error document while a rejected navigation pass
+        closes its context, after the acknowledged inspector failure but before
+        the optional error-document finish. This is not another application
+        request terminal and must not enter discovery evidence. Outside that
+        exact pending lifecycle and explicit abort boundary, duplicates remain
+        integrity failures.
+        """
+
+        if not self._aborting or not self._shutting_down:
+            return False
+        request_id = event.get("requestId")
+        if not isinstance(request_id, str) or not request_id:
+            return False
+        chain_key = source.request_chain_key(request_id)
+        finish = self._error_document_finishes.get(chain_key)
+        if finish is None:
+            return False
+        timestamp = event.get("timestamp")
+        if (
+            source != self.root_source
+            or source != finish.canonical_source
+            or source != finish.terminal_source
+            or frozenset(event) != {"requestId", "timestamp", "type", "errorText", "canceled"}
+            or not _is_finite_protocol_number(timestamp)
+            or float(timestamp) <= finish.failed_timestamp
+            or event.get("type") != "Document"
+            or event.get("errorText") != "net::ERR_ABORTED"
+            or event.get("canceled") is not True
+        ):
+            raise CdpTargetIntegrityError(
+                "Chromium error-document abort did not match its exact terminal signature"
+            )
+        # Retain the retired-chain marker: no further terminal, redirect or
+        # request-ID reuse is admitted, and no internal-resource owner is made.
+        self._error_document_finishes.pop(chain_key)
         return True
 
     @staticmethod
@@ -2022,14 +2051,10 @@ class RecursiveCdpTargetRouter:
             )
         url = request.get("url")
         if not isinstance(url, str):
-            raise CdpTargetIntegrityError(
-                "Chromium error-document resource URL was invalid"
-            )
+            raise CdpTargetIntegrityError("Chromium error-document resource URL was invalid")
         signature = self._error_document_resource_signature(url)
         if signature is None:
-            raise CdpTargetIntegrityError(
-                "Chromium error-document resource URL was not pinned"
-            )
+            raise CdpTargetIntegrityError("Chromium error-document resource URL was not pinned")
         signature_index, _length = signature
         if (
             lifecycle.active is not None
@@ -2122,19 +2147,21 @@ class RecursiveCdpTargetRouter:
             if isinstance(request_id, str) and request_id
             else None
         )
-        if isinstance(request_id, str) and request_id and (
-            any(
-                key[-1] == request_id and key != resource_key
-                for key in self._error_resource_by_request_id
-            )
-            or any(
-                key[-1] == request_id and key != resource_key
-                for key in self._retired_error_resource_request_ids
+        if (
+            isinstance(request_id, str)
+            and request_id
+            and (
+                any(
+                    key[-1] == request_id and key != resource_key
+                    for key in self._error_resource_by_request_id
+                )
+                or any(
+                    key[-1] == request_id and key != resource_key
+                    for key in self._retired_error_resource_request_ids
+                )
             )
         ):
-            raise CdpTargetIntegrityError(
-                "Chromium error-document resource crossed target sources"
-            )
+            raise CdpTargetIntegrityError("Chromium error-document resource crossed target sources")
         if resource_key is not None and resource_key in self._retired_error_resource_request_ids:
             raise CdpTargetIntegrityError(
                 "Chromium error-document resource request identity was reused"
@@ -2158,9 +2185,7 @@ class RecursiveCdpTargetRouter:
                 for candidate in self._error_document_resources.values()
             )
         ):
-            raise CdpTargetIntegrityError(
-                "Chromium error-document loader crossed target sources"
-            )
+            raise CdpTargetIntegrityError("Chromium error-document loader crossed target sources")
 
         if method == "Network.requestWillBeSent":
             initiator = event.get("initiator")
@@ -2201,17 +2226,10 @@ class RecursiveCdpTargetRouter:
             or resource is None
             or resource.request_id != request_id
         ):
-            raise CdpTargetIntegrityError(
-                "Chromium error-document resource state was ambiguous"
-            )
+            raise CdpTargetIntegrityError("Chromium error-document resource state was ambiguous")
         if method == "Network.requestServedFromCache":
-            if (
-                resource.phase != "awaiting-cache"
-                or frozenset(event) != {"requestId"}
-            ):
-                raise CdpTargetIntegrityError(
-                    "Chromium error-document cache marker was invalid"
-                )
+            if resource.phase != "awaiting-cache" or frozenset(event) != {"requestId"}:
+                raise CdpTargetIntegrityError("Chromium error-document cache marker was invalid")
             resource.phase = "awaiting-response"
             return True
         if method == "Network.responseReceived":
@@ -2421,6 +2439,8 @@ class RecursiveCdpTargetRouter:
         event: Mapping[str, Any],
     ) -> None:
         state = self._state(source.session_path)
+        if state.source != source:
+            raise CdpTargetIntegrityError("CDP event source does not match its target identity")
         if state.phase not in {"ready", "resuming"}:
             request = event.get("request")
             request_id = event.get("requestId")
@@ -2431,10 +2451,11 @@ class RecursiveCdpTargetRouter:
             )
         if self._consume_error_document_resource_event(source, method, event):
             return
+        if method == "Fetch.requestPaused" and self._aborting:
+            self._hold_aborted_fetch(event)
+            return
         if method == "Network.requestServedFromCache":
-            raise CdpTargetIntegrityError(
-                "CDP served a request from cache despite the disabled-cache policy"
-            )
+            self._record_inline_data_cache_marker(source, event)
         event_source = source
         advance_bootstraps = False
         bootstrap_fetch: _BootstrapFetchDecision | None = None
@@ -2529,10 +2550,13 @@ class RecursiveCdpTargetRouter:
                     source, event
                 ):
                     return
+                if method == "Network.loadingFailed" and self._consume_error_document_abort(
+                    source, event
+                ):
+                    return
                 if (
                     request_id
-                    and source.request_chain_key(request_id)
-                    in self._retired_error_document_chains
+                    and source.request_chain_key(request_id) in self._retired_error_document_chains
                 ):
                     raise CdpTargetIntegrityError(
                         "CDP repeated a terminal event for a retired Document chain"
@@ -2576,8 +2600,7 @@ class RecursiveCdpTargetRouter:
             if isinstance(request_id, str):
                 if (
                     request_id
-                    and source.request_chain_key(request_id)
-                    in self._retired_error_document_chains
+                    and source.request_chain_key(request_id) in self._retired_error_document_chains
                 ):
                     raise CdpTargetIntegrityError(
                         "CDP emitted a Network event for a retired Document chain"
@@ -2616,6 +2639,73 @@ class RecursiveCdpTargetRouter:
             # The evidence consumer must observe the owning Script occurrence
             # before resuming code in the target that it created.
             self._advance_pending_worker_bootstraps()
+
+    def _hold_aborted_fetch(self, event: Mapping[str, Any]) -> None:
+        """Leave request-stage interceptions paused until rejected-context disposal.
+
+        Calling the application policy while context.close() drains events can
+        release new requests or fail against the closing session. No callback,
+        policy decision or success evidence is produced on this abort-only path.
+        """
+
+        request = event.get("request")
+        if (
+            not self._shutting_down
+            or self._abort_finished
+            or not isinstance(event.get("requestId"), str)
+            or not event["requestId"]
+            or not isinstance(request, Mapping)
+            or not isinstance(request.get("method"), str)
+            or not request["method"]
+            or not isinstance(request.get("url"), str)
+            or not request["url"]
+            or any(
+                field in event
+                for field in (
+                    "responseStatusCode",
+                    "responseStatusText",
+                    "responseHeaders",
+                    "responseErrorReason",
+                )
+            )
+            or (
+                "networkId" in event
+                and (not isinstance(event["networkId"], str) or not event["networkId"])
+            )
+        ):
+            raise CdpTargetIntegrityError("invalid request-stage Fetch pause during abort")
+
+    def _record_inline_data_cache_marker(
+        self, source: CdpTargetSource, event: Mapping[str, Any]
+    ) -> None:
+        """Distinguish one inline data-URL marker from forbidden network caching.
+
+        Chromium reports inline page data through Network even though no HTTP
+        response was cached. Keep its ordinary request/response/terminal audit;
+        only the cache marker is classified using its exact live occurrence.
+        """
+
+        request_id = event.get("requestId")
+        active = (
+            self._resolve_active_request(source, request_id, allow_target_migration=False)
+            if isinstance(request_id, str) and request_id
+            else None
+        )
+        if (
+            frozenset(event) != {"requestId"}
+            or active is None
+            or active.source != source
+            or active.method != "GET"
+            or not isinstance(active.url, str)
+            or not active.url.startswith("data:")
+        ):
+            raise CdpTargetIntegrityError(
+                "CDP served a request from cache despite the disabled-cache policy"
+            )
+        key = source.request_chain_key(request_id)
+        if key in self._cached_inline_data_requests:
+            raise CdpTargetIntegrityError("CDP repeated an inline data cache marker")
+        self._cached_inline_data_requests.add(key)
 
     def _bind_bootstrap_owner(
         self,
@@ -4019,6 +4109,9 @@ class RecursiveCdpTargetRouter:
         return candidates[0] if candidates else None
 
     def _remove_active(self, active: _ActiveRequest) -> None:
+        self._cached_inline_data_requests.discard(
+            active.source.request_chain_key(active.request_id)
+        )
         state = self._state(active.source.session_path)
         state.active_request_ids.discard(active.request_id)
         candidates = self._active_requests.get(active.request_id, [])

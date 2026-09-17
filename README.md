@@ -1,6 +1,6 @@
 # QCSD Lab operator guide
 
-Documentation refresh: 16 September 2026, Australia/Sydney (AEST, UTC+10)
+Documentation refresh: 17 September 2026, Australia/Sydney (AEST, UTC+10)
 
 This repository orchestrates reproducible HTTP/3 traffic capture for the QCSD
 Neqo fork. It freezes workload graphs, runs visits under a selected client-side
@@ -22,17 +22,16 @@ selectable modes**. BuFLO and CS-BuFLO are candidate client-only QUIC
 adaptations, not bilateral or paper-equivalent implementations. Do not claim
 seven validated defences until the final validation attestation verifies.
 
-Cohort v89 completed an independently verified **110/110 browser-egress**
-gate, valid only for its original checkout. After receipt-consumer fixes,
-v90 passed build and pinned-CDP checks but browser qualification was
-interrupted with 21 passing vectors and no final receipt. Post-reboot cleanup
-has been recovered; the permanent boot-aware recovery fix passed local
-validation (502 tests passed, nine skipped). Changed source needs the
-allocator's next unused cohort and
-fresh prerequisite evidence. Public acquisition has not started:
-pilot **0/120**, final classes **0/100**, certification **0/900**, and formal
-capture **0/16,000**. Browser qualification is not class or defence validation.
-Read the latest immutable receipts for subsequent progress.
+Cohort v91 completed independently verified **110/110 browser-egress** checks
+and acquisition-only authority. The first public acquisition batch stopped on
+internal browser lifecycle errors; both failed attempts are retained, not
+classified as site rejections. The client/Lab fixes passed 1,523 local tests
+and diagnostic navigation on both affected sites, with multiple origins
+preserved. Changed source still requires the allocator's next unused cohort
+and fresh prerequisite evidence. Accepted progress remains pilot **0/120**,
+final classes **0/100**, certification **0/900**, and formal capture
+**0/16,000**. Neither local tests nor browser qualification certify public
+classes or defences. Read the latest immutable receipts for subsequent progress.
 
 The nine modes, in stable order, are `undefended`, `static`, `front`, `tamaraw`,
 `traffic-morphing`, `wtf-pad`, `walkie-talkie`, `buflo`, and `cs-buflo`.

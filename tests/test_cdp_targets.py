@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -839,6 +840,43 @@ def _error_document_finish(**changes: Any) -> dict[str, Any]:
     return event
 
 
+def _error_document_abort(**changes: Any) -> dict[str, Any]:
+    event: dict[str, Any] = {
+        "requestId": _BLOCKED_DOCUMENT_REQUEST_ID,
+        "timestamp": 41.26,
+        "type": "Document",
+        "errorText": "net::ERR_ABORTED",
+        "canceled": True,
+    }
+    event.update(changes)
+    return event
+
+
+def _invalid_error_document_aborts() -> list[tuple[str, dict[str, Any]]]:
+    exact = _error_document_abort()
+    return [
+        *((f"missing-{field}", _without(exact, field)) for field in exact),
+        ("equal-timestamp", _error_document_abort(timestamp=41.25)),
+        ("earlier-timestamp", _error_document_abort(timestamp=41.24)),
+        ("boolean-timestamp", _error_document_abort(timestamp=True)),
+        ("string-timestamp", _error_document_abort(timestamp="41.26")),
+        ("null-timestamp", _error_document_abort(timestamp=None)),
+        ("nan-timestamp", _error_document_abort(timestamp=float("nan"))),
+        ("infinite-timestamp", _error_document_abort(timestamp=float("inf"))),
+        ("wrong-type", _error_document_abort(type="Image")),
+        ("wrong-error", _error_document_abort(errorText="net::ERR_FAILED")),
+        ("original-error", _error_document_abort(errorText="net::ERR_BLOCKED_BY_CLIENT")),
+        ("false-canceled", _error_document_abort(canceled=False)),
+        ("numeric-canceled", _error_document_abort(canceled=1)),
+        ("string-canceled", _error_document_abort(canceled="true")),
+        ("inspector-reason", _error_document_abort(blockedReason="inspector")),
+        ("extra-field", _error_document_abort(extra=True)),
+        ("empty-request", _error_document_abort(requestId="")),
+        ("numeric-request", _error_document_abort(requestId=1)),
+        ("unrelated-request", _error_document_abort(requestId="unrelated-document")),
+    ]
+
+
 def _without(event: Mapping[str, Any], field: str) -> dict[str, Any]:
     return {key: value for key, value in event.items() if key != field}
 
@@ -1225,7 +1263,7 @@ def test_policy_is_pinned_and_root_is_instrumented_before_navigation() -> None:
     router, _observed = _router(session)
 
     assert CDP_TARGET_INSTRUMENTATION_POLICY == (
-        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v14"
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v15"
     )
     assert [method for route, method, _params in session.commands if route == ()] == [
         "Target.getTargetInfo",
@@ -1584,9 +1622,7 @@ def test_worker_initial_resume_ack_rejects_a_missing_result() -> None:
         session_id="missing-resume-result-session",
         target_id="missing-resume-result-target",
     )
-    selected = next(
-        item for item in session.held if item[2] == "Runtime.runIfWaitingForDebugger"
-    )
+    selected = next(item for item in session.held if item[2] == "Runtime.runIfWaitingForDebugger")
     session.held.remove(selected)
     route, command_id, _method, _result = selected
     session._deliver(route, {"id": command_id})
@@ -2391,6 +2427,226 @@ def test_error_document_finish_is_optional_at_context_disposal() -> None:
     session.emit((), "Network.loadingFailed", _blocked_document_failure())
     router.raise_if_failed()
     _clean_shutdown(router)
+
+
+def test_exact_blocked_document_abort_is_consumed_only_during_exceptional_disposal() -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _begin_blocked_document(session)
+    session.emit((), "Network.loadingFailed", _blocked_document_failure())
+    chain_key = router.root_source.request_chain_key(_BLOCKED_DOCUMENT_REQUEST_ID)
+    assert chain_key in router._error_document_finishes
+    _browser_session, guard = _guard_for(router)
+    router.begin_abort()
+    guard.begin_abort()
+
+    session.emit((), "Network.loadingFailed", _error_document_abort())
+    router.raise_if_failed()
+
+    assert router.active_request_identities == ()
+    assert chain_key not in router._error_document_finishes
+    assert chain_key in router._retired_error_document_chains
+    assert router._error_document_resources == {}
+    assert router._error_resource_by_request_id == {}
+    terminals = [
+        (source, method, event)
+        for source, method, event in observed
+        if event.get("requestId") == _BLOCKED_DOCUMENT_REQUEST_ID
+        and method in {"Network.loadingFailed", "Network.loadingFinished"}
+    ]
+    assert terminals == [(router.root_source, "Network.loadingFailed", _blocked_document_failure())]
+    guard.finish_abort()
+    router.finish_abort()
+    with pytest.raises(CdpTargetIntegrityError, match="during abort"):
+        router.finish()
+
+
+@pytest.mark.parametrize("shutdown", [False, True])
+def test_error_document_abort_requires_exceptional_not_normal_shutdown(shutdown: bool) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _begin_blocked_document(session)
+    session.emit((), "Network.loadingFailed", _blocked_document_failure())
+    if shutdown:
+        _begin_shutdown(router)
+
+    session.emit((), "Network.loadingFailed", _error_document_abort())
+    with pytest.raises(CdpTargetIntegrityError):
+        router.raise_if_failed()
+    assert router._error_document_resources == {}
+
+
+@pytest.mark.parametrize(
+    "terminal",
+    [pytest.param(event, id=name) for name, event in _invalid_error_document_aborts()],
+)
+def test_error_document_abort_requires_exact_later_signature(
+    terminal: Mapping[str, Any],
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _begin_blocked_document(session)
+    session.emit((), "Network.loadingFailed", _blocked_document_failure())
+    router.begin_abort()
+
+    session.emit((), "Network.loadingFailed", terminal)
+    with pytest.raises(CdpTargetIntegrityError):
+        router.raise_if_failed()
+    assert router._error_document_resources == {}
+
+
+@pytest.mark.parametrize(
+    "source_changes",
+    [
+        pytest.param({"target_id": "other-root"}, id="target"),
+        pytest.param({"generation": 1}, id="generation"),
+        pytest.param({"target_type": "iframe"}, id="type"),
+        pytest.param({"parent_session_path": ("other-parent",)}, id="parent"),
+        pytest.param({"parent_frame_id": "other-frame"}, id="frame"),
+    ],
+)
+def test_error_document_abort_rejects_changed_source_identity(
+    source_changes: dict[str, Any],
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _begin_blocked_document(session)
+    session.emit((), "Network.loadingFailed", _blocked_document_failure())
+    router.begin_abort()
+
+    with pytest.raises(CdpTargetIntegrityError):
+        router._handle_forwarded(
+            replace(router.root_source, **source_changes),
+            "Network.loadingFailed",
+            _error_document_abort(),
+        )
+    assert len(router._error_document_finishes) == 1
+    assert router._error_document_resources == {}
+
+
+@pytest.mark.parametrize("second_terminal", ["abort", "finish", "after-disposal"])
+def test_consumed_error_document_abort_rejects_any_further_terminal(
+    second_terminal: str,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _begin_blocked_document(session)
+    session.emit((), "Network.loadingFailed", _blocked_document_failure())
+    _browser_session, guard = _guard_for(router)
+    router.begin_abort()
+    guard.begin_abort()
+    session.emit((), "Network.loadingFailed", _error_document_abort())
+    router.raise_if_failed()
+    if second_terminal == "after-disposal":
+        guard.finish_abort()
+        router.finish_abort()
+
+    session.emit(
+        (),
+        "Network.loadingFinished" if second_terminal == "finish" else "Network.loadingFailed",
+        _error_document_finish(timestamp=41.27)
+        if second_terminal == "finish"
+        else _error_document_abort(timestamp=41.27),
+    )
+    with pytest.raises(CdpTargetIntegrityError, match="retired Document"):
+        router.raise_if_failed()
+    assert router._error_document_resources == {}
+
+
+def test_error_document_abort_cannot_replace_an_already_consumed_finish() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _begin_blocked_document(session)
+    session.emit((), "Network.loadingFailed", _blocked_document_failure())
+    session.emit((), "Network.loadingFinished", _error_document_finish())
+    router.raise_if_failed()
+    router.begin_abort()
+
+    session.emit((), "Network.loadingFailed", _error_document_abort(timestamp=41.27))
+    with pytest.raises(CdpTargetIntegrityError, match="retired Document"):
+        router.raise_if_failed()
+
+
+@pytest.mark.parametrize("policy_kind", ["continue", "wrong-failure", "no-document"])
+def test_error_document_abort_requires_acknowledged_blocked_document(policy_kind: str) -> None:
+    session = _FakeNonFlatSession()
+    policy = None
+    if policy_kind == "wrong-failure":
+
+        def policy(
+            _source: CdpTargetSource, event: Mapping[str, Any]
+        ) -> tuple[str, dict[str, str]]:
+            return (
+                "Fetch.failRequest",
+                {"requestId": event["requestId"], "errorReason": "Aborted"},
+            )
+
+    router, _observed = _router(session, fetch_policy=policy)
+    if policy_kind != "no-document":
+        _begin_blocked_document(session)
+        session.emit((), "Network.loadingFailed", _blocked_document_failure())
+    router.raise_if_failed()
+    router.begin_abort()
+
+    session.emit((), "Network.loadingFailed", _error_document_abort())
+    with pytest.raises(CdpTargetIntegrityError, match="no active request"):
+        router.raise_if_failed()
+    assert router._error_document_resources == {}
+
+
+def test_error_document_abort_rejects_failure_before_denial_acknowledgement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+    original_result = session._result
+
+    def failure_before_ack(
+        route: tuple[str, ...],
+        method: str,
+        params: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if route == () and method == "Fetch.failRequest":
+            session.emit((), "Network.loadingFailed", _blocked_document_failure())
+        return original_result(route, method, params)
+
+    monkeypatch.setattr(session, "_result", failure_before_ack)
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _begin_blocked_document(session)
+    with pytest.raises(CdpTargetIntegrityError, match="before its denial acknowledgement"):
+        router.raise_if_failed()
+    assert router._error_document_finishes == {}
+    router.begin_abort()
+
+    # Direct dispatch exposes the new event's rejection independently of the
+    # earlier recorded integrity error, which must also remain unchanged.
+    with pytest.raises(CdpTargetIntegrityError, match="no active request"):
+        router._handle_forwarded(
+            router.root_source, "Network.loadingFailed", _error_document_abort()
+        )
+    with pytest.raises(CdpTargetIntegrityError, match="before its denial acknowledgement"):
+        router.raise_if_failed()
+    assert router._error_document_resources == {}
+
+
+def test_error_document_abort_rejects_same_raw_request_id_on_child_source() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    iframe = session.attach(
+        (),
+        session_id="error-abort-iframe-session",
+        target_id="error-abort-iframe-target",
+        target_type="iframe",
+        parent_frame_id="root-frame",
+    )
+    _begin_blocked_document(session)
+    session.emit((), "Network.loadingFailed", _blocked_document_failure())
+    router.begin_abort()
+
+    session.emit(iframe, "Network.loadingFailed", _error_document_abort())
+    with pytest.raises(CdpTargetIntegrityError, match="no active request"):
+        router.raise_if_failed()
+    assert len(router._error_document_finishes) == 1
+    assert router._error_document_resources == {}
 
 
 @pytest.mark.parametrize(
@@ -5789,3 +6045,364 @@ def test_bootstrap_prearm_summary_validator_rejects_inconsistent_states(mutate) 
     mutate(value)
     with pytest.raises(ValueError, match="prearm"):
         validate_bootstrap_prearm_summary(value, require_terminal=True)
+
+
+def _abort_fetch_pause(**changes: Any) -> dict[str, Any]:
+    event: dict[str, Any] = {
+        "requestId": "abort-paused-favicon",
+        "networkId": "abort-favicon-network",
+        "frameId": "root-frame",
+        "resourceType": "Other",
+        "request": {"method": "GET", "url": "https://root.test/favicon.ico"},
+    }
+    event.update(changes)
+    return event
+
+
+@pytest.mark.parametrize("child", [False, True])
+@pytest.mark.parametrize("resource_type", ["Other", "Document", "Script"])
+@pytest.mark.parametrize("network_seen", [False, True])
+def test_abort_fetch_stays_paused_without_callback_registration_or_io(
+    monkeypatch: pytest.MonkeyPatch,
+    child: bool,
+    resource_type: str,
+    network_seen: bool,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    route = ()
+    if child:
+        route = session.attach(
+            (),
+            session_id="abort-fetch-child",
+            target_id="abort-fetch-frame",
+            target_type="iframe",
+            parent_frame_id="root-frame",
+        )
+    event = _abort_fetch_pause(resourceType=resource_type)
+    if network_seen:
+        session.emit(
+            route,
+            "Network.requestWillBeSent",
+            {
+                "requestId": event["networkId"],
+                "loaderId": event["networkId"],
+                "frameId": event["frameId"],
+                "type": resource_type,
+                "request": event["request"],
+            },
+        )
+    active_before = router.active_request_identities
+    observed_before = list(observed)
+
+    def forbidden_registration(*_args: Any, **_kwargs: Any) -> None:
+        pytest.fail("exceptional disposal must not create a new Fetch decision")
+
+    monkeypatch.setattr(router, "_register_document_fetch", forbidden_registration)
+    monkeypatch.setattr(router, "_register_bootstrap_fetch", forbidden_registration)
+    _browser_session, guard = _guard_for(router)
+    router.begin_abort()
+    guard.begin_abort()
+    commands_before = list(session.commands)
+    session.emit(route, "Fetch.requestPaused", event)
+    router.raise_if_failed()
+
+    assert session.commands == commands_before
+    assert observed == observed_before
+    assert router.active_request_identities == active_before
+    assert router._document_fetch_by_policy_identity == {}
+    assert router._pending_blocked_documents == {}
+    guard.finish_abort()
+    router.finish_abort()
+    assert router.active_request_identities == ()
+    assert observed == observed_before
+
+
+@pytest.mark.parametrize("normal_shutdown", [False, True])
+def test_abort_fetch_hold_does_not_change_normal_policy(normal_shutdown: bool) -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    if normal_shutdown:
+        _begin_shutdown(router)
+    event = _abort_fetch_pause()
+    session.emit((), "Fetch.requestPaused", event)
+    router.raise_if_failed()
+    assert ((), "Fetch.continueRequest", {"requestId": event["requestId"]}) in session.commands
+    assert observed[-1] == (router.root_source, "Fetch.requestPaused", event)
+    if normal_shutdown:
+        _finish(router)
+    else:
+        _clean_shutdown(router)
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        pytest.param(_without(_abort_fetch_pause(), "requestId"), id="missing-id"),
+        pytest.param(_abort_fetch_pause(requestId=""), id="empty-id"),
+        pytest.param(_abort_fetch_pause(requestId=7), id="numeric-id"),
+        pytest.param(_abort_fetch_pause(request=None), id="null-request"),
+        pytest.param(_abort_fetch_pause(request=[]), id="array-request"),
+        pytest.param(_abort_fetch_pause(request={"method": "GET"}), id="missing-url"),
+        pytest.param(_abort_fetch_pause(request={"method": "GET", "url": 7}), id="numeric-url"),
+        pytest.param(
+            _abort_fetch_pause(request={"method": "", "url": "https://root.test/"}),
+            id="empty-method",
+        ),
+        pytest.param(_abort_fetch_pause(networkId=1), id="numeric-network-id"),
+        pytest.param(_abort_fetch_pause(networkId=""), id="empty-network-id"),
+        pytest.param(_abort_fetch_pause(responseStatusCode=200), id="response-status"),
+        pytest.param(_abort_fetch_pause(responseStatusText="OK"), id="response-status-text"),
+        pytest.param(_abort_fetch_pause(responseHeaders=[]), id="response-headers"),
+        pytest.param(_abort_fetch_pause(responseErrorReason="Failed"), id="response-error"),
+    ],
+)
+def test_abort_fetch_hold_rejects_malformed_or_response_stage_pauses(
+    event: Mapping[str, Any],
+) -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    router.begin_abort()
+    commands_before = list(session.commands)
+    observed_before = list(observed)
+    session.emit((), "Fetch.requestPaused", event)
+    with pytest.raises(CdpTargetIntegrityError):
+        router.raise_if_failed()
+    assert session.commands == commands_before
+    assert observed == observed_before
+
+
+@pytest.mark.parametrize(
+    "change", [{"generation": 1}, {"target_id": "other"}, {"target_type": "iframe"}]
+)
+def test_abort_fetch_hold_rejects_changed_source(change: dict[str, Any]) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    router.begin_abort()
+    commands_before = list(session.commands)
+    with pytest.raises(CdpTargetIntegrityError):
+        router._handle_forwarded(
+            replace(router.root_source, **change), "Fetch.requestPaused", _abort_fetch_pause()
+        )
+    assert session.commands == commands_before
+
+
+def test_abort_fetch_hold_rejects_post_disposal_pauses() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    _browser_session, guard = _guard_for(router)
+    router.begin_abort()
+    guard.begin_abort()
+    guard.finish_abort()
+    router.finish_abort()
+    commands_before = list(session.commands)
+    session.emit((), "Fetch.requestPaused", _abort_fetch_pause())
+    with pytest.raises(CdpTargetIntegrityError):
+        router.raise_if_failed()
+    assert session.commands == commands_before
+
+
+def test_abort_fetch_hold_accepts_missing_optional_network_id() -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    router.begin_abort()
+    commands_before = list(session.commands)
+    observed_before = list(observed)
+    session.emit((), "Fetch.requestPaused", _without(_abort_fetch_pause(), "networkId"))
+    router.raise_if_failed()
+    assert session.commands == commands_before
+    assert observed == observed_before
+
+
+def test_abort_fetch_hold_rejects_detached_source() -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    route = session.attach(
+        (), session_id="aborted-detached", target_id="aborted-frame", target_type="iframe"
+    )
+    source = router._state(route).source
+    session.detach((), session_id=route[-1])
+    router.begin_abort()
+    commands_before = list(session.commands)
+    observed_before = list(observed)
+    with pytest.raises(CdpTargetIntegrityError):
+        router._handle_forwarded(source, "Fetch.requestPaused", _abort_fetch_pause())
+    assert session.commands == commands_before
+    assert observed == observed_before
+
+
+@pytest.mark.parametrize("method", ["Fetch.continueRequest", "Fetch.failRequest"])
+def test_abort_rejects_direct_fetch_policy_send_without_io(method: str) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    router.begin_abort()
+    commands_before = list(session.commands)
+    params = {"requestId": "abort-paused-favicon"}
+    if method == "Fetch.failRequest":
+        params["errorReason"] = "BlockedByClient"
+    with pytest.raises(CdpTargetIntegrityError):
+        router.send(router.root_source, method, params, label="test-abort-policy")
+    assert session.commands == commands_before
+
+
+def test_abort_fetch_hold_keeps_error_resource_integrity_check_first(
+    pinned_error_resource_urls: tuple[str, str, str],
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _arm_error_document_resources(session)
+    session.emit(
+        (), "Network.requestWillBeSent", _error_resource_request(pinned_error_resource_urls[0], 0)
+    )
+    router.begin_abort()
+    commands_before = list(session.commands)
+    session.emit(
+        (),
+        "Fetch.requestPaused",
+        _abort_fetch_pause(
+            networkId="error-resource-0",
+            resourceType="Image",
+            request={"method": "GET", "url": pinned_error_resource_urls[0]},
+        ),
+    )
+    with pytest.raises(CdpTargetIntegrityError, match="inline resource entered Fetch"):
+        router.raise_if_failed()
+    assert session.commands == commands_before
+
+
+def _data_cache_request(**changes: Any) -> dict[str, Any]:
+    event: dict[str, Any] = {
+        "requestId": "inline-data-image",
+        "type": "Image",
+        "request": {"method": "GET", "url": "data:image/png;base64,AA=="},
+    }
+    event.update(changes)
+    return event
+
+
+@pytest.mark.parametrize("child", [False, True])
+def test_inline_data_cache_marker_preserves_full_forwarded_lifecycle(child: bool) -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    route = ()
+    if child:
+        route = session.attach(
+            (), session_id="data-cache-child", target_id="data-cache-frame", target_type="iframe"
+        )
+    event = _data_cache_request()
+    request_id = event["requestId"]
+    observed_before = len(observed)
+    lifecycle = [
+        ("Network.requestWillBeSent", event),
+        ("Network.requestServedFromCache", {"requestId": request_id}),
+        (
+            "Network.responseReceived",
+            {"requestId": request_id, "response": {"url": event["request"]["url"]}},
+        ),
+        ("Network.loadingFinished", {"requestId": request_id}),
+    ]
+    for method, payload in lifecycle:
+        session.emit(route, method, payload)
+    router.raise_if_failed()
+    assert [(method, payload) for _, method, payload in observed[observed_before:]] == lifecycle
+    assert all(source.session_path == route for source, _, _ in observed[observed_before:])
+    assert router.active_request_identities == ()
+    if child:
+        session.detach((), session_id=route[-1])
+    _clean_shutdown(router)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://root.test/a",
+        "http://root.test/a",
+        "blob:https://root.test/id",
+        "file:///tmp/a",
+        "DATA:image/png;base64,AA==",
+        " data:image/png;base64,AA==",
+    ],
+)
+def test_inline_data_cache_exception_rejects_other_url_forms(url: str) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    session.emit(
+        (), "Network.requestWillBeSent", _data_cache_request(request={"method": "GET", "url": url})
+    )
+    session.emit((), "Network.requestServedFromCache", {"requestId": "inline-data-image"})
+    with pytest.raises(CdpTargetIntegrityError):
+        router.raise_if_failed()
+
+
+@pytest.mark.parametrize("method", ["POST", "HEAD", "get", ""])
+def test_inline_data_cache_requires_exact_get(method: str) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    session.emit(
+        (),
+        "Network.requestWillBeSent",
+        _data_cache_request(request={"method": method, "url": "data:text/plain,x"}),
+    )
+    session.emit((), "Network.requestServedFromCache", {"requestId": "inline-data-image"})
+    with pytest.raises(CdpTargetIntegrityError):
+        router.raise_if_failed()
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [{}, {"requestId": ""}, {"requestId": 1}, {"requestId": "inline-data-image", "extra": True}],
+)
+def test_inline_data_cache_requires_exact_marker_fields(marker: Mapping[str, Any]) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    session.emit((), "Network.requestWillBeSent", _data_cache_request())
+    session.emit((), "Network.requestServedFromCache", marker)
+    with pytest.raises(CdpTargetIntegrityError):
+        router.raise_if_failed()
+
+
+@pytest.mark.parametrize("state", ["unknown", "retired", "duplicate"])
+def test_inline_data_cache_rejects_unknown_retired_and_duplicate_markers(state: str) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    if state != "unknown":
+        session.emit((), "Network.requestWillBeSent", _data_cache_request())
+        if state == "retired":
+            session.emit((), "Network.loadingFinished", {"requestId": "inline-data-image"})
+        else:
+            session.emit((), "Network.requestServedFromCache", {"requestId": "inline-data-image"})
+        router.raise_if_failed()
+    session.emit((), "Network.requestServedFromCache", {"requestId": "inline-data-image"})
+    with pytest.raises(CdpTargetIntegrityError):
+        router.raise_if_failed()
+
+
+def test_inline_data_cache_requires_same_source_not_oopif_migration() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    iframe = session.attach(
+        (), session_id="cache-migration", target_id="cache-frame", target_type="iframe"
+    )
+    session.emit(
+        (),
+        "Network.requestWillBeSent",
+        _data_cache_request(type="Document", loaderId="inline-data-image", frameId="cache-frame"),
+    )
+    session.emit(iframe, "Network.requestServedFromCache", {"requestId": "inline-data-image"})
+    with pytest.raises(CdpTargetIntegrityError):
+        router.raise_if_failed()
+
+
+def test_inline_data_cache_duplicate_tracking_is_per_active_occurrence() -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    for terminal in ("Network.loadingFailed", "Network.loadingFinished"):
+        session.emit((), "Network.requestWillBeSent", _data_cache_request())
+        session.emit((), "Network.requestServedFromCache", {"requestId": "inline-data-image"})
+        session.emit((), terminal, {"requestId": "inline-data-image"})
+        router.raise_if_failed()
+    assert (
+        len([method for _, method, _ in observed if method == "Network.requestServedFromCache"])
+        == 2
+    )
+    _clean_shutdown(router)
