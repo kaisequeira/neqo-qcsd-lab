@@ -55,6 +55,9 @@ from .class_study import (
 )
 from .discover import (
     DiscoveredRequest,
+    _abort_rejected_render,
+    _dispose_failed_context,
+    _finish_render_shutdown,
     _RequestExtraInfoAssociator,
     _RequestObservationLedger,
 )
@@ -106,9 +109,9 @@ _HISTORICAL_PINNED_CDP_RESOLVER_PROJECTION = {
 }
 
 RECEIPT_TYPE = "qcsd-class-study-pinned-cdp-probe"
-PROBE_SCHEMA_VERSION = 13
+PROBE_SCHEMA_VERSION = 14
 HISTORICAL_PROBE_SCHEMA_VERSION = 8
-HISTORICAL_PROBE_SCHEMA_VERSIONS = frozenset({8, 9, 11, 12})
+HISTORICAL_PROBE_SCHEMA_VERSIONS = frozenset({8, 9, 11, 12, 13})
 EXPECTED_PLAYWRIGHT_VERSION = PLAYWRIGHT_VERSION
 EXPECTED_CHROMIUM_EXECUTABLE = str(DEFAULT_CONFIGURED_EXECUTABLE)
 PROBE_OBSERVATION_TIMEOUT_MS = 10_000
@@ -258,13 +261,27 @@ _HISTORICAL_PROBE_CONTRACT_V12_SHA256 = canonical_json_sha256(
     _HISTORICAL_PROBE_CONTRACT_V12
 )
 
-# Outer schema 13 was advanced for the current error-document lifecycle work
-# but has never been executed.  It therefore intentionally binds that router
-# policy and the corrected v8 driver together; immutable v83 evidence remains
-# outer schema 12 and is dispatched above with the frozen v7 driver binding.
-PROBE_CONTRACT: dict[str, Any] = _worker_webtransport_probe_contract(
+# Outer schema 13 is immutable v95 evidence. It binds the error-document
+# lifecycle router policy and corrected v8 driver, before the catalogue-only
+# exact InvalidInterceptionId correlation was introduced.
+_HISTORICAL_PROBE_CONTRACT_V13 = _worker_webtransport_probe_contract(
     schema_version=12,
     policy="pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v12",
+    instrumentation_policy=(
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v15"
+    ),
+    playwright_driver_ownership_policy=OWNERSHIP_POLICY_RECEIPT,
+    playwright_driver_binding=EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
+)
+_HISTORICAL_PROBE_CONTRACT_V13_SHA256 = canonical_json_sha256(
+    _HISTORICAL_PROBE_CONTRACT_V13
+)
+
+# Outer schema 14 binds the v16 router lifecycle and remains source-bound by
+# the enclosing no-cache build receipt.
+PROBE_CONTRACT: dict[str, Any] = _worker_webtransport_probe_contract(
+    schema_version=13,
+    policy="pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v13",
     instrumentation_policy=CDP_TARGET_INSTRUMENTATION_POLICY,
     playwright_driver_ownership_policy=OWNERSHIP_POLICY_RECEIPT,
     playwright_driver_binding=EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
@@ -656,7 +673,6 @@ def run_pinned_cdp_probe(*, expected_uid: int, expected_gid: int) -> dict[str, A
 
     server = _ProbeServer(("127.0.0.1", 0))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
     observed_events: list[tuple[str, str, str]] = []
     target_activity = _TargetActivityLedger()
     http_status_counts: dict[str, Counter[str]] = {}
@@ -677,13 +693,22 @@ def run_pinned_cdp_probe(*, expected_uid: int, expected_gid: int) -> dict[str, A
     egress_guard: NonReplayableEgressGuard | None = None
     router: RecursiveCdpTargetRouter | None = None
     worker_webtransport_collector = _WorkerWebTransportGuardCollector()
+    thread_started = False
+    server_primary: BaseException | None = None
     try:
+        thread.start()
+        thread_started = True
         with playwright_driver_session(sync_playwright, exclusive=True) as playwright:
             browser, browser_egress_command_line = launch_pinned_cdp_probe_browser(
                 playwright,
                 approved_origins=_PINNED_CDP_APPROVED_ORIGINS,
                 origin_ip_pins=_PINNED_CDP_ORIGIN_IP_PINS,
             )
+            context: Any | None = None
+            browser_guard: BrowserSharedWorkerGuard | None = None
+            normal_shutdown_started = False
+            normal_shutdown_cleanup_started = False
+            primary_error: BaseException | None = None
             try:
                 chromium_version = browser.version
                 context = browser.new_context(service_workers="block")
@@ -814,6 +839,7 @@ def run_pinned_cdp_probe(*, expected_uid: int, expected_gid: int) -> dict[str, A
                 if browser_context_service_worker_count:
                     raise RuntimeError("pinned CDP probe observed a browser service worker")
                 router.begin_shutdown()
+                normal_shutdown_started = True
                 quiescent_target_activity = target_activity.snapshot()
                 if (
                     quiescent_target_activity["generation"] != convergence_generation
@@ -823,30 +849,104 @@ def run_pinned_cdp_probe(*, expected_uid: int, expected_gid: int) -> dict[str, A
                 bootstrap_prearm_summary = router.bootstrap_prearm_summary
                 egress_prearm_summary = router.egress_prearm_summary
                 non_replayable_egress_summary = egress_guard.success_summary()
-                browser_guard.begin_shutdown()
-                context.close()
-                browser_guard.finish()
-                browser_guard_closed = True
-                router.finish()
-                router_closed = True
+                normal_shutdown_cleanup_started = True
+                if _finish_render_shutdown(
+                    context,
+                    router,
+                    browser_guard,
+                    cleanup_label="pinned-CDP probe",
+                ):
+                    browser_guard_closed = True
+                    router_closed = True
                 ledger.finish()
                 ledger_closed = True
                 extra_info.finish()
                 extra_info_closed = True
+            except BaseException as error:
+                primary_error = error
+                if not normal_shutdown_started:
+                    if context is not None and router is not None and browser_guard is not None:
+                        _abort_rejected_render(
+                            context,
+                            router,
+                            browser_guard,
+                            error,
+                            cleanup_label="pinned-CDP probe",
+                        )
+                    elif context is not None:
+                        _dispose_failed_context(
+                            context,
+                            error,
+                            cleanup_label="pinned-CDP probe",
+                        )
+                elif (
+                    not normal_shutdown_cleanup_started
+                    and context is not None
+                    and router is not None
+                    and browser_guard is not None
+                ):
+                    _finish_render_shutdown(
+                        context,
+                        router,
+                        browser_guard,
+                        cleanup_label="pinned-CDP probe",
+                        primary=error,
+                    )
+                raise
             finally:
                 try:
                     browser.close()
                     browser_closed = True
+                except BaseException as error:
+                    if primary_error is None:
+                        raise
+                    primary_error.add_note(
+                        f"pinned-CDP probe cleanup browser-close failed with {type(error).__name__}"
+                    )
                 finally:
                     if egress_guard is not None:
                         egress_guard.raise_if_failed()
                     if router is not None:
                         router.raise_if_failed()
             non_replayable_egress_summary = egress_guard.success_summary()
+    except BaseException as error:
+        server_primary = error
+        raise
     finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
+        server_cleanup_errors: list[tuple[str, BaseException]] = []
+        thread_alive = False
+        if thread_started:
+            try:
+                thread_alive = thread.is_alive()
+            except BaseException as error:  # noqa: BLE001 - preserve the probe primary
+                server_cleanup_errors.append(("server-thread-state", error))
+        if thread_alive:
+            try:
+                server.shutdown()
+            except BaseException as error:  # noqa: BLE001 - preserve the probe primary
+                server_cleanup_errors.append(("server-shutdown", error))
+        try:
+            server.server_close()
+        except BaseException as error:  # noqa: BLE001 - preserve the probe primary
+            server_cleanup_errors.append(("server-close", error))
+        if thread_started:
+            try:
+                thread.join(timeout=2)
+            except BaseException as error:  # noqa: BLE001 - preserve the probe primary
+                server_cleanup_errors.append(("server-thread-join", error))
+        if server_cleanup_errors:
+            if server_primary is None:
+                _step, cleanup_primary = server_cleanup_errors.pop(0)
+                for step, error in server_cleanup_errors:
+                    cleanup_primary.add_note(
+                        "pinned-CDP probe cleanup "
+                        f"{step} failed with {type(error).__name__}"
+                    )
+                raise cleanup_primary
+            for step, error in server_cleanup_errors:
+                server_primary.add_note(
+                    f"pinned-CDP probe cleanup {step} failed with {type(error).__name__}"
+                )
 
     topology = {
         **_event_topology(observed_events),
@@ -1382,6 +1482,9 @@ def _validate_payload(
     elif probe_schema_version == 12:
         expected_contract = _HISTORICAL_PROBE_CONTRACT_V12
         expected_contract_sha256 = _HISTORICAL_PROBE_CONTRACT_V12_SHA256
+    elif probe_schema_version == 13:
+        expected_contract = _HISTORICAL_PROBE_CONTRACT_V13
+        expected_contract_sha256 = _HISTORICAL_PROBE_CONTRACT_V13_SHA256
     else:
         expected_contract = PROBE_CONTRACT
         expected_contract_sha256 = PROBE_CONTRACT_SHA256
@@ -1405,7 +1508,8 @@ def _validate_payload(
     observation = _validate_observation(
         payload.get("observation"),
         require_worker_response_consumption=probe_schema_version not in {8, 9},
-        require_worker_webtransport_probe=probe_schema_version in {12, PROBE_SCHEMA_VERSION},
+        require_worker_webtransport_probe=probe_schema_version
+        in {12, 13, PROBE_SCHEMA_VERSION},
         expected_resolver_projection=(
             _HISTORICAL_PINNED_CDP_RESOLVER_PROJECTION
             if probe_schema_version in {8, 9, 11}

@@ -33,7 +33,7 @@ from .browser_egress import (
 )
 
 CDP_TARGET_INSTRUMENTATION_POLICY = (
-    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v15"
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v16"
 )
 BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION = 1
 EGRESS_PREARM_SUMMARY_SCHEMA_VERSION = 2
@@ -79,6 +79,17 @@ _TARGET_LIFECYCLE_METHODS = frozenset(
     }
 )
 _EMPTY_RESULT_POLICY_COMMANDS = frozenset({"Fetch.continueRequest", "Fetch.failRequest"})
+_ROOT_CONTINUE_INVALID_INTERCEPTION_MESSAGE = (
+    "CDPSession.send: Protocol error (Fetch.continueRequest): Invalid InterceptionId."
+)
+_ROOT_CONTINUE_INVALID_INTERCEPTION_POLICY_LABEL = (
+    "catalogue-navigation-policy:Fetch.continueRequest"
+)
+_ROOT_CONTINUE_INVALID_INTERCEPTION_RESOURCE_TYPES = frozenset({"Font", "Stylesheet"})
+_ROOT_TERMINAL_HISTORY_LIMIT = 4_096
+_ROOT_CONTINUE_DIAGNOSTIC_LIMIT = 32
+_ROOT_FETCH_IDENTITY_LIMIT = 20_000
+_ROOT_NETWORK_IDENTITY_LIMIT = 20_000
 _BASE_SETUP_COMMANDS = (
     # Network.Initiator.stack is populated for script-created requests only
     # when the Debugger domain was enabled before the relevant script ran.
@@ -308,6 +319,43 @@ def _sanitised_protocol_error(error: object) -> str:
     return f"code={code}, message={message[:_CDP_PROTOCOL_ERROR_MESSAGE_MAX_CHARS]}"
 
 
+def _exception_fingerprint(error: Exception) -> str:
+    """Hash a transport exception without retaining its potentially sensitive text."""
+
+    identity = {
+        "module": type(error).__module__,
+        "qualname": type(error).__qualname__,
+        "name": getattr(error, "name", None),
+        "message": str(error),
+    }
+    encoded = json.dumps(
+        identity,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        default=lambda value: f"<{type(value).__name__}>",
+    ).encode("utf-8")
+    return f"exception_sha256={hashlib.sha256(encoded).hexdigest()}"
+
+
+def _is_exact_root_continue_invalid_interception(
+    error: Exception,
+    *,
+    expected_type: type[Exception] | None,
+) -> bool:
+    """Match only the pinned Playwright error observed for a stale Fetch ID."""
+
+    return (
+        expected_type is not None
+        and type(error) is expected_type
+        and getattr(error, "name", None) == "Error"
+        and getattr(error, "message", None)
+        == _ROOT_CONTINUE_INVALID_INTERCEPTION_MESSAGE
+        and str(error) == _ROOT_CONTINUE_INVALID_INTERCEPTION_MESSAGE
+        and error.args == (_ROOT_CONTINUE_INVALID_INTERCEPTION_MESSAGE,)
+    )
+
+
 _SHARED_WORKER_GUARD_FILTER = [
     {"type": "shared_worker", "exclude": False},
     # Browser-scope ``tab`` targets expose a paused creation tripwire for a
@@ -347,6 +395,17 @@ _PAGE_DISCOVERY_DISABLE_COMMAND = (
 
 class CdpTargetIntegrityError(RuntimeError):
     """A malformed, incomplete, or uninstrumented related-target event stream."""
+
+
+class _RootInvalidInterception(CdpTargetIntegrityError):
+    """The one pinned Playwright/Chromium invalid-interception transport error."""
+
+    def __init__(self, *, fingerprint: str) -> None:
+        super().__init__(
+            "root CDP Fetch.continueRequest encountered InvalidInterceptionId "
+            f"({fingerprint})"
+        )
+        self.fingerprint = fingerprint
 
 
 def validate_bootstrap_prearm_summary(
@@ -630,6 +689,34 @@ class _ActiveRequest:
     url: str | None
 
 
+@dataclass(frozen=True)
+class _RootTerminalRequest:
+    """One exact root Network occurrence and its real terminal event."""
+
+    active: _ActiveRequest
+    terminal_method: str
+
+
+@dataclass
+class _RootFetchDecision:
+    """One callback-scoped request-stage policy decision on the root session."""
+
+    policy_source: CdpTargetSource
+    fetch_request_id: str
+    network_id: str
+    frame_id: str
+    resource_type: str
+    method: str
+    url: str
+    active: _ActiveRequest | None
+    terminal: _RootTerminalRequest | None
+    decided: bool = False
+    continue_issued: bool = False
+    provisional: bool = False
+    abort_owned: bool = False
+    transport_fingerprint: str | None = None
+
+
 @dataclass
 class _DocumentFetchDecision:
     """One callback-scoped policy decision for an exact root Document."""
@@ -708,6 +795,7 @@ class _WorkerBootstrap:
     fetch_request_id: str | None = None
     fetch_network_id: str | None = None
     fetch_policy_outcome: str | None = None
+    fetch_release_issued: bool = False
     fetch_released: bool = False
     fetch_release_after_setup_envelopes: bool | None = None
 
@@ -734,15 +822,28 @@ class RecursiveCdpTargetRouter:
         session: _CdpSession,
         *,
         on_event: Callable[[CdpTargetSource, str, Mapping[str, Any]], None],
+        root_frame_id: str | None = None,
+        root_continue_error_type: type[Exception] | None = None,
         on_target_activity: Callable[[CdpTargetSource, str], None] | None = None,
         on_non_replayable_egress: (
             Callable[[CdpTargetSource | None, str, str, object | None], None] | None
         ) = None,
     ) -> None:
+        if root_frame_id is not None and (
+            not isinstance(root_frame_id, str) or not root_frame_id
+        ):
+            raise ValueError("root frame identity must be a non-empty string")
+        if root_continue_error_type is not None and (
+            not isinstance(root_continue_error_type, type)
+            or not issubclass(root_continue_error_type, Exception)
+        ):
+            raise ValueError("root continue error type must be an Exception type")
         self._session = session
         self._on_event = on_event
         self._on_target_activity = on_target_activity
         self._on_non_replayable_egress = on_non_replayable_egress
+        self._root_frame_id = root_frame_id
+        self._root_continue_error_type = root_continue_error_type
         self._root_source: CdpTargetSource | None = None
         self._states: dict[tuple[str, ...], _TargetState] = {}
         self._target_routes: dict[str, tuple[str, ...]] = {}
@@ -755,6 +856,33 @@ class RecursiveCdpTargetRouter:
         self._abort_finished = False
         self._target_generations: dict[str, int] = {}
         self._active_requests: dict[str, list[_ActiveRequest]] = {}
+        self._root_fetch_by_policy_identity: dict[
+            tuple[CdpTargetSource, str], _RootFetchDecision
+        ] = {}
+        self._seen_root_fetch_policy_identities: set[tuple[CdpTargetSource, str]] = set()
+        self._root_fetch_identity_saturated = False
+        self._eligible_root_network_occurrences: dict[
+            tuple[CdpTargetSource, str], list[_ActiveRequest]
+        ] = {}
+        self._eligible_root_network_occurrence_count = 0
+        self._root_network_identity_saturated = False
+        self._root_terminal_requests: dict[
+            tuple[CdpTargetSource, str], _RootTerminalRequest
+        ] = {}
+        self._root_terminal_history_saturated = False
+        self._pending_root_invalid_interceptions: dict[
+            tuple[CdpTargetSource, str], _RootFetchDecision
+        ] = {}
+        self._claimed_root_invalid_interception_occurrences: dict[
+            int, _ActiveRequest
+        ] = {}
+        self._disabled_root_invalid_interception_networks: set[
+            tuple[CdpTargetSource, str]
+        ] = set()
+        self._root_invalid_interception_total = 0
+        self._root_invalid_interception_aborted = 0
+        self._root_invalid_interception_outcomes = {"Network.loadingFinished": 0}
+        self._root_invalid_interception_diagnostics: list[dict[str, Any]] = []
         self._document_fetch_by_policy_identity: dict[
             tuple[CdpTargetSource, str], _DocumentFetchDecision
         ] = {}
@@ -808,6 +936,35 @@ class RecursiveCdpTargetRouter:
                 ),
             )
         )
+
+    @property
+    def root_invalid_interception_summary(self) -> dict[str, Any]:
+        """Return bounded, identifier-free evidence for recovered root continues."""
+
+        resolved = sum(self._root_invalid_interception_outcomes.values())
+        pending = len(self._pending_root_invalid_interceptions)
+        if self._root_invalid_interception_total != (
+            resolved + pending + self._root_invalid_interception_aborted
+        ):
+            raise CdpTargetIntegrityError(
+                "root InvalidInterceptionId accounting invariant was violated"
+            )
+        return {
+            "schema_version": 1,
+            "total": self._root_invalid_interception_total,
+            "resolved": resolved,
+            "pending": pending,
+            "aborted": self._root_invalid_interception_aborted,
+            "fetch_identity_saturated": self._root_fetch_identity_saturated,
+            "network_identity_saturated": self._root_network_identity_saturated,
+            "terminal_history_saturated": self._root_terminal_history_saturated,
+            "terminal_outcomes": dict(self._root_invalid_interception_outcomes),
+            "diagnostics_truncated": max(
+                0,
+                resolved - len(self._root_invalid_interception_diagnostics),
+            ),
+            "diagnostics": [dict(item) for item in self._root_invalid_interception_diagnostics],
+        }
 
     @property
     def root_source(self) -> CdpTargetSource:
@@ -1490,6 +1647,15 @@ class RecursiveCdpTargetRouter:
             )
         parameters = dict(params)
         request_id = parameters.get("requestId")
+        root_fetch_decision = (
+            self._root_fetch_by_policy_identity.get((source, request_id))
+            if isinstance(request_id, str)
+            else None
+        )
+        if root_fetch_decision is not None:
+            if root_fetch_decision.decided:
+                raise CdpTargetIntegrityError("root Fetch policy was decided more than once")
+            root_fetch_decision.decided = True
         document_decision = (
             self._document_fetch_by_policy_identity.get((source, request_id))
             if isinstance(request_id, str)
@@ -1516,20 +1682,16 @@ class RecursiveCdpTargetRouter:
                     )
                 # A terminal event is exceptional only after Chromium has
                 # acknowledged this router's exact inspector-block decision.
-                self._send_policy_decision(source, method, parameters, label=label)
-                if (
-                    self._resolve_active_request(
-                        source,
-                        document_decision.network_id,
-                        allow_target_migration=False,
-                    )
-                    is not document_decision.active
-                ):
-                    raise CdpTargetIntegrityError(
-                        "Document request changed or terminated before its denial acknowledgement"
-                    )
-                document_decision.blocked_by_client_acknowledged = True
-                self._pending_blocked_documents[chain_key] = document_decision
+                self._send_policy_decision(
+                    source,
+                    method,
+                    parameters,
+                    label=label,
+                    on_success=lambda _result, decision=document_decision, key=chain_key: (
+                        self._acknowledge_blocked_document(decision, key)
+                    ),
+                    root_fetch_decision=root_fetch_decision,
+                )
                 return
         bootstrap_decision = (
             self._bootstrap_fetch_by_policy_identity.get((source, request_id))
@@ -1561,7 +1723,13 @@ class RecursiveCdpTargetRouter:
             bootstrap.fetch_policy_outcome = "continue"
             self._maybe_release_bootstrap_continue(bootstrap)
             return
-        self._send_policy_decision(source, method, parameters, label=label)
+        self._send_policy_decision(
+            source,
+            method,
+            parameters,
+            label=label,
+            root_fetch_decision=root_fetch_decision,
+        )
 
     def begin_shutdown(self) -> None:
         """Freeze target creation after all setup/policy commands are acknowledged.
@@ -1597,6 +1765,12 @@ class RecursiveCdpTargetRouter:
             raise CdpTargetIntegrityError("CDP target abort started more than once")
         if self._root_source is None or not self._shared_guard_registered:
             raise CdpTargetIntegrityError("CDP target abort began before complete root/guard setup")
+        for decision in self._pending_root_invalid_interceptions.values():
+            if decision.abort_owned:
+                raise CdpTargetIntegrityError(
+                    "root InvalidInterceptionId provisional was abort-owned twice"
+                )
+            decision.abort_owned = True
         self._aborting = True
         self._shutting_down = True
 
@@ -1640,9 +1814,14 @@ class RecursiveCdpTargetRouter:
                 raise CdpTargetIntegrityError("related CDP target did not reach a terminal state")
             if not route and state.phase != "ready":
                 raise CdpTargetIntegrityError("root CDP target did not remain instrumented")
-        if self._document_fetch_by_policy_identity or self._pending_blocked_documents:
+        if (
+            self._root_fetch_by_policy_identity
+            or self._pending_root_invalid_interceptions
+            or self._document_fetch_by_policy_identity
+            or self._pending_blocked_documents
+        ):
             raise CdpTargetIntegrityError(
-                "CDP target finished with an unresolved Document policy lifecycle"
+                "CDP target finished with an unresolved Fetch policy lifecycle"
             )
         if self._error_resource_by_request_id or any(
             lifecycle.started and not lifecycle.complete
@@ -1657,6 +1836,11 @@ class RecursiveCdpTargetRouter:
         self._error_document_finishes.clear()
         self._error_document_resources.clear()
         self._retired_error_resource_request_ids.clear()
+        self._root_terminal_requests.clear()
+        self._claimed_root_invalid_interception_occurrences.clear()
+        self._disabled_root_invalid_interception_networks.clear()
+        self._eligible_root_network_occurrences.clear()
+        self._eligible_root_network_occurrence_count = 0
 
     def finish_abort(self) -> None:
         """Retire rejected observations after ``BrowserContext.close()``.
@@ -1689,6 +1873,23 @@ class RecursiveCdpTargetRouter:
             if state.source.session_path and state.phase != "destroyed":
                 state.phase = "detached"
         self._pending.clear()
+        self._root_fetch_by_policy_identity.clear()
+        if any(
+            not decision.abort_owned
+            for decision in self._pending_root_invalid_interceptions.values()
+        ):
+            raise CdpTargetIntegrityError(
+                "root InvalidInterceptionId provisional escaped abort ownership"
+            )
+        self._root_invalid_interception_aborted += len(
+            self._pending_root_invalid_interceptions
+        )
+        self._pending_root_invalid_interceptions.clear()
+        self._root_terminal_requests.clear()
+        self._claimed_root_invalid_interception_occurrences.clear()
+        self._disabled_root_invalid_interception_networks.clear()
+        self._eligible_root_network_occurrences.clear()
+        self._eligible_root_network_occurrence_count = 0
         self._document_fetch_by_policy_identity.clear()
         self._pending_blocked_documents.clear()
         self._error_document_finishes.clear()
@@ -1727,8 +1928,16 @@ class RecursiveCdpTargetRouter:
         try:
             result = self._session.send(method, dict(params))
         except Exception as error:
+            fingerprint = _exception_fingerprint(error)
+            if method == "Fetch.continueRequest" and (
+                _is_exact_root_continue_invalid_interception(
+                    error,
+                    expected_type=self._root_continue_error_type,
+                )
+            ):
+                raise _RootInvalidInterception(fingerprint=fingerprint) from error
             raise CdpTargetIntegrityError(
-                f"root CDP command {method} failed: {type(error).__name__}"
+                f"root CDP command {method} failed ({fingerprint})"
             ) from error
         if not isinstance(result, dict):
             raise CdpTargetIntegrityError(f"root CDP command {method} returned malformed data")
@@ -1757,6 +1966,7 @@ class RecursiveCdpTargetRouter:
         )
         return (
             any(command.policy_decision for command in self._pending.values())
+            or bool(self._pending_root_invalid_interceptions)
             or any(
                 state.phase not in {"ready", "detached", "destroyed"}
                 for state in self._states.values()
@@ -1777,24 +1987,419 @@ class RecursiveCdpTargetRouter:
         params: dict[str, Any],
         *,
         label: str,
+        on_success: Callable[[Mapping[str, Any]], None] | None = None,
+        root_fetch_decision: _RootFetchDecision | None = None,
     ) -> None:
         if not source.session_path:
-            result = self._root_send(method, params)
+            recoverable_root_continue = (
+                self._root_continue_error_type is not None
+                and root_fetch_decision is not None
+                and on_success is None
+                and method == "Fetch.continueRequest"
+                and label == _ROOT_CONTINUE_INVALID_INTERCEPTION_POLICY_LABEL
+                and params == {"requestId": root_fetch_decision.fetch_request_id}
+            )
+            if recoverable_root_continue:
+                if root_fetch_decision.continue_issued:
+                    raise CdpTargetIntegrityError(
+                        "root Fetch continue was issued more than once"
+                    )
+                # This transition is deliberately immediately before the
+                # synchronous transport call. A re-entrant Network terminal
+                # can then be attributed to this exact issued command.
+                root_fetch_decision.continue_issued = True
+            try:
+                result = self._root_send(method, params)
+            except _RootInvalidInterception as error:
+                if not recoverable_root_continue:
+                    raise
+                assert root_fetch_decision is not None
+                self._provision_root_invalid_interception(
+                    root_fetch_decision,
+                    fingerprint=error.fingerprint,
+                )
+                return
             if type(result) is not dict or result != {}:
                 raise CdpTargetIntegrityError(
                     f"root CDP policy command {label} did not return an exact empty result"
                 )
+            if on_success is not None:
+                on_success(result)
             return
         self._queue_command(
             source,
             method,
             params,
             label=label,
+            on_success=on_success,
             policy_decision=True,
         )
 
+    @staticmethod
+    def _root_fetch_matches_active(
+        decision: _RootFetchDecision,
+        active: _ActiveRequest,
+    ) -> bool:
+        return (
+            active.source == decision.policy_source
+            and active.request_id == decision.network_id
+            and active.frame_id == decision.frame_id
+            and active.resource_type == decision.resource_type
+            and active.method == decision.method
+            and active.url == decision.url
+        )
+
+    def _root_occurrence_is_recovery_eligible(self, active: _ActiveRequest) -> bool:
+        return (
+            active.source == self.root_source
+            and self._root_frame_id is not None
+            and active.frame_id == self._root_frame_id
+            and active.resource_type
+            in _ROOT_CONTINUE_INVALID_INTERCEPTION_RESOURCE_TYPES
+            and active.method == "GET"
+            and isinstance(active.url, str)
+            and bool(active.url)
+        )
+
+    @staticmethod
+    def _root_occurrences_are_fetch_indistinguishable(
+        left: _ActiveRequest,
+        right: _ActiveRequest,
+    ) -> bool:
+        return (
+            left.source == right.source
+            and left.request_id == right.request_id
+            and left.frame_id == right.frame_id
+            and left.resource_type == right.resource_type
+            and left.method == right.method
+            and left.url == right.url
+        )
+
+    def _track_root_network_occurrence(
+        self,
+        active: _ActiveRequest,
+        *,
+        replaced: _ActiveRequest | None,
+    ) -> None:
+        """Bound root Network identity history used by exact Fetch correlation."""
+
+        if not self._root_occurrence_is_recovery_eligible(active):
+            return
+        key = (active.source, active.request_id)
+        history = self._eligible_root_network_occurrences.get(key, ())
+        if replaced is None and history:
+            # This is a fresh occurrence rather than a redirect leg. A late
+            # Fetch pause from the prior occurrence would be indistinguishable
+            # whenever its visible fields match, so recovery stays disabled.
+            self._disabled_root_invalid_interception_networks.add(key)
+            return
+        if any(
+            self._root_occurrences_are_fetch_indistinguishable(previous, active)
+            for previous in history
+        ):
+            # Fetch carries no redirect-leg serial. Repeating any visible
+            # signature in A->B->A (not merely the immediately replaced leg)
+            # makes a delayed pause occurrence-ambiguous.
+            self._disabled_root_invalid_interception_networks.add(key)
+            return
+        if self._root_network_identity_saturated:
+            return
+        if (
+            self._eligible_root_network_occurrence_count
+            >= _ROOT_NETWORK_IDENTITY_LIMIT
+        ):
+            self._root_network_identity_saturated = True
+            return
+        self._eligible_root_network_occurrences.setdefault(key, []).append(active)
+        self._eligible_root_network_occurrence_count += 1
+
+    def _claim_root_fetch_occurrence(
+        self,
+        active: _ActiveRequest,
+    ) -> None:
+        """Claim one exact Network occurrence for one eligible Fetch pause."""
+
+        identity = id(active)
+        claimed = self._claimed_root_invalid_interception_occurrences.get(identity)
+        if claimed is not None:
+            if claimed is not active:
+                raise CdpTargetIntegrityError(
+                    "root Network occurrence identity was unexpectedly reused"
+                )
+            raise CdpTargetIntegrityError(
+                "root Network occurrence was claimed by more than one Fetch decision"
+            )
+        self._claimed_root_invalid_interception_occurrences[identity] = active
+
+    def _require_claimed_root_fetch_occurrence(self, active: _ActiveRequest) -> None:
+        """Require the exact occurrence claim made when the Fetch pause arrived."""
+
+        if self._claimed_root_invalid_interception_occurrences.get(id(active)) is not active:
+            raise CdpTargetIntegrityError(
+                "InvalidInterceptionId named an unclaimed root Network occurrence"
+            )
+
+    def _provision_root_invalid_interception(
+        self,
+        decision: _RootFetchDecision,
+        *,
+        fingerprint: str,
+    ) -> None:
+        """Accept the exact Chromium race only while its Network occurrence proves terminal."""
+
+        if (
+            decision.policy_source != self.root_source
+            or self._root_frame_id is None
+            or decision.frame_id != self._root_frame_id
+            or decision.resource_type
+            not in _ROOT_CONTINUE_INVALID_INTERCEPTION_RESOURCE_TYPES
+            or decision.method != "GET"
+            or decision.provisional
+            or not decision.decided
+            or not decision.continue_issued
+            or decision.abort_owned
+        ):
+            raise CdpTargetIntegrityError(
+                "InvalidInterceptionId did not name one undecorated root Fetch decision"
+            )
+        network_key = (decision.policy_source, decision.network_id)
+        if (
+            self._root_fetch_identity_saturated
+            or self._root_network_identity_saturated
+            or self._root_terminal_history_saturated
+            or network_key in self._disabled_root_invalid_interception_networks
+        ):
+            raise CdpTargetIntegrityError(
+                "InvalidInterceptionId recovery was disabled by ambiguous or saturated state"
+            )
+        if network_key in self._pending_root_invalid_interceptions:
+            raise CdpTargetIntegrityError(
+                "InvalidInterceptionId duplicated a pending root Network occurrence"
+            )
+        active = self._resolve_active_request(
+            decision.policy_source,
+            decision.network_id,
+            allow_target_migration=False,
+        )
+        terminal = self._root_terminal_requests.get(network_key)
+        if active is not None and terminal is not None:
+            raise CdpTargetIntegrityError(
+                "InvalidInterceptionId matched both active and terminal Network occurrences"
+            )
+        if active is not None:
+            if decision.active is not active or not self._root_fetch_matches_active(
+                decision, active
+            ):
+                raise CdpTargetIntegrityError(
+                    "InvalidInterceptionId Fetch did not match its active Network occurrence"
+                )
+            self._require_claimed_root_fetch_occurrence(active)
+            decision.provisional = True
+            decision.transport_fingerprint = fingerprint
+            self._root_invalid_interception_total += 1
+            self._pending_root_invalid_interceptions[network_key] = decision
+            return
+        if terminal is not None:
+            bound_before_callback = decision.terminal is terminal
+            terminated_during_send = (
+                decision.continue_issued and decision.active is terminal.active
+            )
+            if (
+                not (bound_before_callback or terminated_during_send)
+                or not self._root_fetch_matches_active(decision, terminal.active)
+            ):
+                raise CdpTargetIntegrityError(
+                    "InvalidInterceptionId Fetch did not match its terminal Network occurrence"
+                )
+            self._require_claimed_root_fetch_occurrence(terminal.active)
+            decision.provisional = True
+            decision.transport_fingerprint = fingerprint
+            self._root_invalid_interception_total += 1
+            self._record_resolved_root_invalid_interception(
+                decision,
+                terminal_method=terminal.terminal_method,
+                terminal_before_policy=bound_before_callback,
+                fingerprint=fingerprint,
+            )
+            return
+        raise CdpTargetIntegrityError(
+            "InvalidInterceptionId Fetch has no exact root Network occurrence"
+        )
+
+    def _record_resolved_root_invalid_interception(
+        self,
+        decision: _RootFetchDecision,
+        *,
+        terminal_method: str,
+        terminal_before_policy: bool,
+        fingerprint: str | None = None,
+    ) -> None:
+        if terminal_method not in self._root_invalid_interception_outcomes:
+            raise CdpTargetIntegrityError(
+                "InvalidInterceptionId resolved with an unsupported Network terminal"
+            )
+        self._root_invalid_interception_outcomes[terminal_method] += 1
+        if len(self._root_invalid_interception_diagnostics) >= _ROOT_CONTINUE_DIAGNOSTIC_LIMIT:
+            return
+
+        def digest(value: str) -> str:
+            return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+        diagnostic = {
+            "fetch_request_id_sha256": digest(decision.fetch_request_id),
+            "network_id_sha256": digest(decision.network_id),
+            "frame_id_sha256": digest(decision.frame_id),
+            "url_sha256": digest(decision.url),
+            "resource_type": decision.resource_type,
+            "method": decision.method,
+            "terminal_method": terminal_method,
+            "terminal_before_policy": terminal_before_policy,
+        }
+        if fingerprint is not None:
+            diagnostic["transport_exception"] = fingerprint
+        self._root_invalid_interception_diagnostics.append(diagnostic)
+
+    def _acknowledge_blocked_document(
+        self,
+        decision: _DocumentFetchDecision,
+        chain_key: tuple[tuple[str, ...], str, int, str],
+    ) -> None:
+        if decision.blocked_by_client_acknowledged:
+            raise CdpTargetIntegrityError("Document denial acknowledgement was duplicated")
+        if (
+            chain_key in self._pending_blocked_documents
+            or chain_key in self._error_document_finishes
+            or chain_key in self._retired_error_document_chains
+        ):
+            raise CdpTargetIntegrityError(
+                "blocked Document request chain was duplicated or reused"
+            )
+        if (
+            self._resolve_active_request(
+                decision.policy_source,
+                decision.network_id,
+                allow_target_migration=False,
+            )
+            is not decision.active
+        ):
+            raise CdpTargetIntegrityError(
+                "Document request changed or terminated before its denial acknowledgement"
+            )
+        decision.blocked_by_client_acknowledged = True
+        self._pending_blocked_documents[chain_key] = decision
+
     def _guarded_shared_bootstrap_for_target_id(self, target_id: str) -> _WorkerBootstrap | None:
         return self._guarded_shared_workers.get(target_id)
+
+    def _register_root_fetch(
+        self,
+        source: CdpTargetSource,
+        event: Mapping[str, Any],
+    ) -> _RootFetchDecision | None:
+        """Bind a request-stage root Fetch pause to exact Network evidence when available."""
+
+        if (
+            source != self.root_source
+            or self._root_frame_id is None
+            or self._root_continue_error_type is None
+        ):
+            return None
+        frame_id = event.get("frameId")
+        resource_type = event.get("resourceType")
+        request = event.get("request")
+        if not isinstance(request, Mapping):
+            return None
+        method = request.get("method")
+        if (
+            frame_id != self._root_frame_id
+            or resource_type not in _ROOT_CONTINUE_INVALID_INTERCEPTION_RESOURCE_TYPES
+            or method != "GET"
+            or any(
+                field in event
+                for field in (
+                    "responseStatusCode",
+                    "responseStatusText",
+                    "responseHeaders",
+                    "responseErrorReason",
+                )
+            )
+        ):
+            return None
+        fetch_request_id = event.get("requestId")
+        network_id = event.get("networkId")
+        if (
+            not isinstance(fetch_request_id, str)
+            or not fetch_request_id
+            or not isinstance(network_id, str)
+            or not network_id
+            or fetch_request_id == network_id
+            or not isinstance(request.get("url"), str)
+            or not request.get("url")
+        ):
+            return None
+        identity = (source, fetch_request_id)
+        if identity in self._seen_root_fetch_policy_identities:
+            raise CdpTargetIntegrityError("root Fetch interception was duplicated or reused")
+        if (
+            self._root_fetch_identity_saturated
+            or self._root_network_identity_saturated
+            or self._root_terminal_history_saturated
+        ):
+            return None
+        if len(self._seen_root_fetch_policy_identities) >= _ROOT_FETCH_IDENTITY_LIMIT:
+            self._root_fetch_identity_saturated = True
+            return None
+        network_key = (source, network_id)
+        if network_key in self._disabled_root_invalid_interception_networks:
+            return None
+        occurrences = list(self._active_requests.get(network_id, ()))
+        if len(occurrences) > 1:
+            raise CdpTargetIntegrityError(
+                "root Fetch has no unique active Network occurrence"
+            )
+        active = self._resolve_active_request(
+            source,
+            network_id,
+            allow_target_migration=False,
+        )
+        if active is None and occurrences:
+            raise CdpTargetIntegrityError(
+                "root Fetch collided with an unrelated Network occurrence"
+            )
+        terminal = self._root_terminal_requests.get((source, network_id))
+        if active is not None and terminal is not None:
+            raise CdpTargetIntegrityError(
+                "root Fetch matched both active and terminal Network occurrences"
+            )
+        if active is None and terminal is None:
+            return None
+        decision = _RootFetchDecision(
+            policy_source=source,
+            fetch_request_id=fetch_request_id,
+            network_id=network_id,
+            frame_id=frame_id,
+            resource_type=resource_type,
+            method=method,
+            url=request["url"],
+            active=active,
+            terminal=terminal,
+        )
+        if active is not None and not self._root_fetch_matches_active(decision, active):
+            raise CdpTargetIntegrityError(
+                "root Fetch does not exactly match its active Network occurrence"
+            )
+        if terminal is not None and not self._root_fetch_matches_active(
+            decision, terminal.active
+        ):
+            raise CdpTargetIntegrityError(
+                "root Fetch does not exactly match its terminal Network occurrence"
+            )
+        self._claim_root_fetch_occurrence(
+            active if active is not None else terminal.active
+        )
+        self._seen_root_fetch_policy_identities.add(identity)
+        self._root_fetch_by_policy_identity[identity] = decision
+        return decision
 
     def _register_document_fetch(
         self,
@@ -2353,7 +2958,11 @@ class RecursiveCdpTargetRouter:
         return decision
 
     def _maybe_release_bootstrap_continue(self, bootstrap: _WorkerBootstrap) -> None:
-        if bootstrap.fetch_policy_outcome != "continue" or bootstrap.fetch_released:
+        if (
+            bootstrap.fetch_policy_outcome != "continue"
+            or bootstrap.fetch_release_issued
+            or bootstrap.fetch_released
+        ):
             return
         if bootstrap.source is None:
             return
@@ -2374,14 +2983,44 @@ class RecursiveCdpTargetRouter:
             raise CdpTargetIntegrityError(
                 "worker-bootstrap owner detached before its held request was released"
             )
+        bootstrap.fetch_release_issued = True
         self._send_policy_decision(
             source,
             "Fetch.continueRequest",
             {"requestId": request_id},
             label="worker-bootstrap-prearmed:Fetch.continueRequest",
+            on_success=lambda _result, held=bootstrap: (
+                self._acknowledge_bootstrap_continue(held)
+            ),
         )
+
+    def _acknowledge_bootstrap_continue(self, bootstrap: _WorkerBootstrap) -> None:
+        if (
+            bootstrap.fetch_policy_outcome != "continue"
+            or not bootstrap.fetch_release_issued
+            or bootstrap.fetch_released
+        ):
+            raise CdpTargetIntegrityError(
+                "worker-bootstrap continue acknowledgement was out of sequence"
+            )
         bootstrap.fetch_released = True
         bootstrap.fetch_release_after_setup_envelopes = True
+        if self._aborting:
+            return
+        source = bootstrap.fetch_source
+        if source is None:
+            raise CdpTargetIntegrityError(
+                "worker-bootstrap continue acknowledgement lost its owner identity"
+            )
+        state = self._state(source.session_path)
+        if state.source != source or state.phase not in {"ready", "resuming"}:
+            raise CdpTargetIntegrityError(
+                "worker-bootstrap owner detached before its continue acknowledgement"
+            )
+        if bootstrap.source is None:
+            raise CdpTargetIntegrityError(
+                "worker-bootstrap continue acknowledgement lost its child identity"
+            )
         child_state = self._state(bootstrap.source.session_path)
         if child_state.phase in {
             "awaiting-bootstrap-policy",
@@ -2460,6 +3099,7 @@ class RecursiveCdpTargetRouter:
         advance_bootstraps = False
         bootstrap_fetch: _BootstrapFetchDecision | None = None
         document_fetch: _DocumentFetchDecision | None = None
+        root_fetch: _RootFetchDecision | None = None
         if method == "Network.requestWillBeSent":
             request_id = event.get("requestId")
             if not isinstance(request_id, str) or not request_id:
@@ -2518,6 +3158,29 @@ class RecursiveCdpTargetRouter:
             if len(local) > 1:
                 raise CdpTargetIntegrityError("CDP request identity is ambiguous within one target")
             replaced = migrated or (local[0] if local else None)
+            self._track_root_network_occurrence(active, replaced=replaced)
+            root_network_key = (canonical_source, request_id)
+            if replaced is not None:
+                pending_root_continue = self._pending_root_invalid_interceptions.get(
+                    root_network_key
+                )
+                if pending_root_continue is not None:
+                    if pending_root_continue.active is not replaced:
+                        raise CdpTargetIntegrityError(
+                            "root redirect found a mismatched provisional Fetch occurrence"
+                        )
+                    raise CdpTargetIntegrityError(
+                        "root Network occurrence redirected while its Fetch continue was provisional"
+                    )
+            elif root_network_key in self._root_terminal_requests:
+                # A fresh Network occurrence reused a raw request ID whose
+                # prior occurrence is retained as a tombstone. Fetch exposes
+                # no occurrence serial, so keep ordinary successful policy
+                # sends but permanently disable race recovery for this key.
+                self._root_terminal_requests.pop(root_network_key)
+                self._disabled_root_invalid_interception_networks.add(
+                    root_network_key
+                )
             if replaced is not None:
                 candidates = self._active_requests[request_id]
                 candidates[candidates.index(replaced)] = active
@@ -2594,6 +3257,12 @@ class RecursiveCdpTargetRouter:
                     frame_id=blocked_document.frame_id,
                     failed_timestamp=float(event["timestamp"]),
                 )
+            if source == active.source and active.source == self.root_source:
+                self._record_root_terminal_request(
+                    active,
+                    terminal_method=method,
+                    event=event,
+                )
             self._remove_active(active)
         elif method.startswith("Network."):
             request_id = event.get("requestId")
@@ -2617,11 +3286,17 @@ class RecursiveCdpTargetRouter:
                         "CDP network event collided with an unrelated active request identity"
                     )
         elif method == "Fetch.requestPaused":
+            root_fetch = self._register_root_fetch(source, event)
             bootstrap_fetch = self._register_bootstrap_fetch(source, event)
             document_fetch = self._register_document_fetch(source, event)
         try:
             self._on_event(event_source, method, event)
         finally:
+            if root_fetch is not None:
+                self._root_fetch_by_policy_identity.pop(
+                    (source, root_fetch.fetch_request_id),
+                    None,
+                )
             if document_fetch is not None:
                 self._document_fetch_by_policy_identity.pop(
                     (source, document_fetch.fetch_request_id),
@@ -2630,6 +3305,10 @@ class RecursiveCdpTargetRouter:
         if bootstrap_fetch is not None and not bootstrap_fetch.decided:
             raise CdpTargetIntegrityError(
                 "worker-bootstrap Fetch policy callback returned without a decision"
+            )
+        if root_fetch is not None and not root_fetch.decided:
+            raise CdpTargetIntegrityError(
+                "root Fetch policy callback returned without a decision"
             )
         if document_fetch is not None and not document_fetch.decided:
             raise CdpTargetIntegrityError(
@@ -3867,8 +4546,7 @@ class RecursiveCdpTargetRouter:
             }
             and not state.active_request_ids
         ):
-            for key in route_pending:
-                self._pending.pop(key, None)
+            self._cancel_detached_route_commands(route_pending)
             state.setup_pending.clear()
             state.phase = "detached"
             self._pending_worker_sources.discard(state.source)
@@ -3883,8 +4561,7 @@ class RecursiveCdpTargetRouter:
                     request_id,
                     synthetic_shutdown=not self._aborting,
                 )
-            for key in route_pending:
-                self._pending.pop(key, None)
+            self._cancel_detached_route_commands(route_pending)
             state.phase = "detached"
             self._pending_worker_sources.discard(state.source)
             self._target_routes.pop(state.source.target_id, None)
@@ -3901,6 +4578,25 @@ class RecursiveCdpTargetRouter:
         self._target_routes.pop(state.source.target_id, None)
         self._session_routes.pop(session_id, None)
         self._notify_target_activity(state.source, "target-detached")
+
+    def _cancel_detached_route_commands(
+        self,
+        keys: list[tuple[tuple[str, ...], int]],
+    ) -> None:
+        policy_commands = [
+            self._pending[key]
+            for key in keys
+            if key in self._pending and self._pending[key].policy_decision
+        ]
+        if policy_commands and not self._aborting:
+            labels = ", ".join(sorted(command.label for command in policy_commands))
+            raise CdpTargetIntegrityError(
+                f"CDP target detached with policy acknowledgements pending: {labels}"
+            )
+        for key in keys:
+            pending = self._pending.get(key)
+            if pending is not None and not pending.policy_decision:
+                self._pending.pop(key, None)
 
     def _notify_target_activity(self, source: CdpTargetSource, event: str) -> None:
         if self._on_target_activity is not None:
@@ -4119,6 +4815,95 @@ class RecursiveCdpTargetRouter:
             candidates.remove(active)
         if not candidates:
             self._active_requests.pop(active.request_id, None)
+
+    def _record_root_terminal_request(
+        self,
+        active: _ActiveRequest,
+        *,
+        terminal_method: str,
+        event: Mapping[str, Any],
+    ) -> None:
+        """Retain a bounded exact tombstone and resolve a provisional continue."""
+
+        if active.source != self.root_source:
+            raise CdpTargetIntegrityError(
+                "root terminal history received a non-root Network occurrence"
+            )
+        key = (active.source, active.request_id)
+        if key in self._root_terminal_requests:
+            raise CdpTargetIntegrityError(
+                "root Network occurrence emitted more than one terminal event"
+            )
+        terminal_is_eligible = self._is_eligible_root_terminal_event(
+            active,
+            terminal_method=terminal_method,
+            event=event,
+        )
+        pending = self._pending_root_invalid_interceptions.get(key)
+        if pending is not None:
+            if pending.active is not active or not self._root_fetch_matches_active(
+                pending, active
+            ):
+                raise CdpTargetIntegrityError(
+                    "InvalidInterceptionId terminal did not match its provisional Fetch"
+                )
+            if pending.abort_owned:
+                if not self._aborting:
+                    raise CdpTargetIntegrityError(
+                        "abort-owned InvalidInterceptionId provisional escaped abort"
+                    )
+                # Disposal terminals cannot promote already rejected evidence.
+                # The provisional remains owned until finish_abort accounts it.
+                return
+            if not terminal_is_eligible:
+                raise CdpTargetIntegrityError(
+                    "InvalidInterceptionId received a malformed or ineligible Network terminal"
+                )
+        elif self._aborting:
+            return
+        if not terminal_is_eligible:
+            return
+        terminal = _RootTerminalRequest(active=active, terminal_method=terminal_method)
+        if pending is not None:
+            # Identity and full-field validation above must complete before
+            # state removal so a mismatch cannot be misreported as an abort.
+            self._pending_root_invalid_interceptions.pop(key)
+            self._record_resolved_root_invalid_interception(
+                pending,
+                terminal_method=terminal_method,
+                terminal_before_policy=False,
+                fingerprint=pending.transport_fingerprint,
+            )
+        if len(self._root_terminal_requests) >= _ROOT_TERMINAL_HISTORY_LIMIT:
+            self._root_terminal_history_saturated = True
+            return
+        self._root_terminal_requests[key] = terminal
+
+    def _is_eligible_root_terminal_event(
+        self,
+        active: _ActiveRequest,
+        *,
+        terminal_method: str,
+        event: Mapping[str, Any],
+    ) -> bool:
+        if (
+            self._root_frame_id is None
+            or active.frame_id != self._root_frame_id
+            or active.resource_type
+            not in _ROOT_CONTINUE_INVALID_INTERCEPTION_RESOURCE_TYPES
+            or active.method != "GET"
+            or not isinstance(active.url, str)
+            or not active.url
+            or event.get("requestId") != active.request_id
+        ):
+            return False
+        return (
+            terminal_method == "Network.loadingFinished"
+            and frozenset(event) == {"requestId", "timestamp", "encodedDataLength"}
+            and _is_finite_protocol_number(event.get("timestamp"))
+            and _is_finite_protocol_number(event.get("encodedDataLength"))
+            and float(event["encodedDataLength"]) >= 0
+        )
 
     def _terminalise_request(
         self,

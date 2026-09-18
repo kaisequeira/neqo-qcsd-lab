@@ -710,17 +710,18 @@ _BUILD_STORAGE_PREFLIGHT_KEYS = {
     "passed",
 }
 _CDP_TARGET_INSTRUMENTATION_POLICY = (
-    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v15"
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v16"
 )
 _PLAYWRIGHT_VERSION = "1.57.0"
 _CHROMIUM_VERSION = "143.0.7499.4"
 _CHROMIUM_EXECUTABLE = "/usr/local/bin/qcsd-chromium"
-_PINNED_CDP_SCHEMA_VERSION = 13
+_PINNED_CDP_SCHEMA_VERSION = 14
 _HISTORICAL_PINNED_CDP_SCHEMA_VERSION = 8
-_HISTORICAL_PINNED_CDP_SCHEMA_VERSIONS = frozenset({8, 9, 11, 12})
-_PINNED_CDP_CONTRACT_SCHEMA_VERSION = 12
+_HISTORICAL_PINNED_CDP_SCHEMA_VERSIONS = frozenset({8, 9, 11, 12, 13})
+_PINNED_CDP_CONTRACT_SCHEMA_VERSION = 13
 _HISTORICAL_PINNED_CDP_CONTRACT_SCHEMA_VERSION = 8
 _HISTORICAL_PINNED_CDP_CONTRACT_V12_SCHEMA_VERSION = 11
+_HISTORICAL_PINNED_CDP_CONTRACT_V13_SCHEMA_VERSION = 12
 _BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION = 1
 _EGRESS_PREARM_SUMMARY_SCHEMA_VERSION = 2
 _PINNED_CDP_TARGET_ACTIVITY_SCHEMA_VERSION = 1
@@ -1033,13 +1034,21 @@ _HISTORICAL_PINNED_CDP_CONTRACT_V12 = {
         _PINNED_CDP_WORKER_WEBTRANSPORT_PROBE_SCHEMA_VERSION
     ),
 }
-_PINNED_CDP_CONTRACT = {
+_HISTORICAL_PINNED_CDP_CONTRACT_V13 = {
     **_HISTORICAL_PINNED_CDP_CONTRACT_V12,
-    "schema_version": _PINNED_CDP_CONTRACT_SCHEMA_VERSION,
+    "schema_version": _HISTORICAL_PINNED_CDP_CONTRACT_V13_SCHEMA_VERSION,
     "policy": "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v12",
-    "instrumentation_policy": _CDP_TARGET_INSTRUMENTATION_POLICY,
+    "instrumentation_policy": (
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v15"
+    ),
     "playwright_driver_ownership_policy": _PLAYWRIGHT_DRIVER_OWNERSHIP_POLICY,
     "playwright_driver_binding": _EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
+}
+_PINNED_CDP_CONTRACT = {
+    **_HISTORICAL_PINNED_CDP_CONTRACT_V13,
+    "schema_version": _PINNED_CDP_CONTRACT_SCHEMA_VERSION,
+    "policy": "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v13",
+    "instrumentation_policy": _CDP_TARGET_INSTRUMENTATION_POLICY,
 }
 _HISTORICAL_PINNED_CDP_CONTRACT = {
     "schema_version": _HISTORICAL_PINNED_CDP_CONTRACT_SCHEMA_VERSION,
@@ -1266,7 +1275,7 @@ _ORIGIN_POLICY = {
     "dns": "all-answers-global-and-browser-host-resolver-pinned",
     "neqo": "QCSD_PUBLIC_ORIGIN_ONLY-resolve-once-connect-exact-address",
 }
-_NAVIGATION_IMPLEMENTATION = "playwright-public-cdp-recursive-catalogue-boundary-egress-guard-v4"
+_NAVIGATION_IMPLEMENTATION = "playwright-public-cdp-recursive-catalogue-boundary-egress-guard-v5"
 _REGISTRABLE_DOMAIN_POLICY = "exact-frozen-tranco-candidate-domain"
 _DOMAIN_SAFETY_POLICY = {
     "policy": "frozen-domain-safety-deny-v2",

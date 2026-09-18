@@ -8,6 +8,7 @@ import pytest
 
 from qcsd_lab import browser_egress_qualification as browser_producer
 from qcsd_lab import class_build_admission as admission
+from qcsd_lab import pinned_cdp as pinned_cdp_producer
 from qcsd_lab.class_build_admission import _parser, resolve_action_admission
 from qcsd_lab.class_study import canonical_json_bytes
 from qcsd_lab.util import sha256_file
@@ -43,7 +44,9 @@ def authority_fixture(tmp_path: Path):
     fixture = _class_build_admission_fixture(tmp_path)
     build = fixture.admitted
     prepare_source = {**dict(build.source), "image_digest": build.prepare_image}
-    fixture.pinned = _class_build_pinned_cdp_receipt(fixture, schema=13)
+    fixture.pinned = _class_build_pinned_cdp_receipt(
+        fixture, schema=pinned_cdp_producer.PROBE_SCHEMA_VERSION
+    )
     fixture.browser = fixture.root / "artifacts/browser-egress-qualification-v62"
     browser_foundation = _publish(
         fixture.browser / "foundation.json",
@@ -173,7 +176,9 @@ def test_authority_admission_accepts_production_built_browser_foundation(tmp_pat
         completion_payload_sha256="f" * 64, source=source, identity=identity,
     )
     fixture = SimpleNamespace(root=root, build=build_path, admitted=build)
-    pinned = _class_build_pinned_cdp_receipt(fixture, schema=13)
+    pinned = _class_build_pinned_cdp_receipt(
+        fixture, schema=pinned_cdp_producer.PROBE_SCHEMA_VERSION
+    )
     browser = root / "artifacts/browser-egress-qualification-v71"
     foundation = _publish(browser / "foundation.json", browser_producer.FOUNDATION_RECEIPT_TYPE, payload)
     _browser_final(browser, foundation, cohort=build.cohort_version)

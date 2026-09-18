@@ -53,6 +53,7 @@ from .acquisition_selection import ACQUISITION_SELECTION_POLICY, derive_acquisit
 from .cdp_targets import (
     CDP_TARGET_INSTRUMENTATION_POLICY,
     BrowserSharedWorkerGuard,
+    CdpTargetIntegrityError,
     CdpTargetSource,
     RecursiveCdpTargetRouter,
 )
@@ -323,7 +324,7 @@ DOMAIN_SAFETY_POLICY = {
 }
 
 NAVIGATION_IMPLEMENTATION = (
-    "playwright-public-cdp-recursive-catalogue-boundary-egress-guard-v4"
+    "playwright-public-cdp-recursive-catalogue-boundary-egress-guard-v5"
 )
 REGISTRABLE_DOMAIN_POLICY = "exact-frozen-tranco-candidate-domain"
 ELIGIBILITY_INPUTS = ["page-safety", "three-window-technical-stability"]
@@ -876,6 +877,7 @@ def _catalogue_boundary_navigation_pass(
                 approved_origins=tuple(sorted(navigation_pins)),
                 origin_ip_pins=navigation_pins,
             )
+            graph_primary: BaseException | None = None
             try:
                 context = browser.new_context(ignore_https_errors=False, service_workers="block")
                 egress_guard = NonReplayableEgressGuard()
@@ -948,6 +950,8 @@ def _catalogue_boundary_navigation_pass(
                 router = RecursiveCdpTargetRouter(
                     session,
                     on_event=protocol_event,
+                    root_frame_id=root_frame_id,
+                    root_continue_error_type=playwright_error,
                     on_non_replayable_egress=lambda source, api, mechanism, request_url: (
                         egress_guard.record(
                             source=source,
@@ -1165,16 +1169,37 @@ def _catalogue_boundary_navigation_pass(
                 browser_guard.finish()
                 router.finish()
                 graph_closed = True
+                _require_unexceptional_navigation_completion(
+                    router.root_invalid_interception_summary
+                )
+            except BaseException as error:
+                graph_primary = error
+                raise
             finally:
                 if "graph_closed" in locals() and not graph_closed:
-                    cleanup_primary = RuntimeError("catalogue navigation graph disposal")
+                    cleanup_primary = graph_primary or RuntimeError(
+                        "catalogue navigation graph disposal"
+                    )
                     _abort_rejected_render(context, router, browser_guard, cleanup_primary)
                 try:
                     browser.close()
+                except Exception as error:
+                    if graph_primary is None:
+                        graph_primary = error
+                        raise
+                    graph_primary.add_note(
+                        "catalogue navigation cleanup browser-close failed with "
+                        f"{type(error).__name__}"
+                    )
                 finally:
                     if "egress_guard" in locals():
+                        # Retained egress evidence is a scientific policy
+                        # failure and must outrank a retryable Playwright or
+                        # navigation-expansion exception.
                         egress_guard.raise_if_failed()
                     if "router" in locals():
+                        # Likewise, retained protocol-integrity evidence is
+                        # never demoted to a cleanup note.
                         router.raise_if_failed()
     except _NavigationPinExpansion:
         raise
@@ -1199,6 +1224,43 @@ def _catalogue_boundary_navigation_pass(
         tuple(rejections),
         tuple(page_observed_origins),
     )
+
+
+def _require_unexceptional_navigation_completion(
+    summary: Mapping[str, Any],
+) -> None:
+    """Discard any pass that needed exceptional root-Fetch race recovery."""
+
+    total = summary.get("total")
+    resolved = summary.get("resolved")
+    pending = summary.get("pending")
+    aborted = summary.get("aborted")
+    terminal_outcomes = summary.get("terminal_outcomes")
+    if (
+        type(total) is not int
+        or type(resolved) is not int
+        or type(pending) is not int
+        or type(aborted) is not int
+        or min(total, resolved, pending, aborted) < 0
+        or pending != 0
+        or aborted != 0
+        or resolved != total
+        or type(terminal_outcomes) is not dict
+        or set(terminal_outcomes) != {"Network.loadingFinished"}
+        or type(terminal_outcomes["Network.loadingFinished"]) is not int
+        or terminal_outcomes["Network.loadingFinished"] != resolved
+    ):
+        raise CdpTargetIntegrityError(
+            "catalogue navigation root Fetch recovery summary is non-terminal"
+        )
+    if total:
+        # The existing attempt ledger persists this bounded, identifier-free
+        # reason. A later attempt may succeed, but an accepted navigation can
+        # never silently depend on the Chromium interception race.
+        raise RecoverableAcquisitionError(
+            "catalogue navigation discarded after "
+            f"{total} correlated root Fetch continuation race(s)"
+        )
 
 
 def initialise_runner(

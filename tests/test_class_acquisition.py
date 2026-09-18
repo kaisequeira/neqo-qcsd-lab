@@ -23,6 +23,7 @@ from qcsd_lab.browser_egress import (
 from qcsd_lab.cdp_targets import (
     CDP_TARGET_INSTRUMENTATION_POLICY,
     EGRESS_PREARM_SUMMARY_SCHEMA_VERSION,
+    CdpTargetIntegrityError,
 )
 from qcsd_lab.class_acquisition import (
     CHECKPOINT_SCHEMA_VERSION,
@@ -5274,6 +5275,8 @@ def test_navigation_redirect_convergence_rejects_private_subdomain_answer(
 def _run_navigation_pass_with_primary_redirect(
     target_url: str,
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    retained_router_failure: Exception | None = None,
 ):
     holder: dict[str, object] = {}
 
@@ -5387,6 +5390,7 @@ def _run_navigation_pass_with_primary_redirect(
 
         def __init__(self, _session, *, on_event, **_kwargs):
             self.on_event = on_event
+            self.aborting = False
             holder["router"] = self
 
         def start(self):
@@ -5396,9 +5400,12 @@ def _run_navigation_pass_with_primary_redirect(
             return None
 
         def raise_if_failed(self):
+            if self.aborting and retained_router_failure is not None:
+                raise retained_router_failure
             return None
 
         def begin_abort(self):
+            self.aborting = True
             return None
 
         def finish_abort(self):
@@ -5461,6 +5468,70 @@ def test_navigation_pass_retains_out_of_boundary_redirect_as_explicit_policy_rej
         match="document navigation left the allowed HTTPS candidate-domain boundary",
     ):
         _run_navigation_pass_with_primary_redirect("https://example.net/", monkeypatch)
+
+
+def test_navigation_pass_retained_router_failure_outranks_retryable_pin_expansion(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    retained = CdpTargetIntegrityError("synthetic retained router failure")
+    with pytest.raises(CdpTargetIntegrityError, match="synthetic retained router failure"):
+        _run_navigation_pass_with_primary_redirect(
+            "https://news.example.com/article",
+            monkeypatch,
+            retained_router_failure=retained,
+        )
+
+
+def test_navigation_completion_discards_resolved_root_continue_race() -> None:
+    with pytest.raises(
+        RecoverableAcquisitionError,
+        match="discarded after 1 correlated root Fetch continuation race",
+    ):
+        acquisition_module._require_unexceptional_navigation_completion(
+            {
+                "total": 1,
+                "resolved": 1,
+                "pending": 0,
+                "aborted": 0,
+                "terminal_outcomes": {"Network.loadingFinished": 1},
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "summary",
+    (
+        {
+            "total": 1,
+            "resolved": 0,
+            "pending": 1,
+            "aborted": 0,
+            "terminal_outcomes": {"Network.loadingFinished": 0},
+        },
+        {
+            "total": 1,
+            "resolved": 0,
+            "pending": 0,
+            "aborted": 1,
+            "terminal_outcomes": {"Network.loadingFinished": 0},
+        },
+    ),
+)
+def test_navigation_completion_rejects_nonterminal_root_continue_summary(summary) -> None:
+    with pytest.raises(CdpTargetIntegrityError, match="summary is non-terminal"):
+        acquisition_module._require_unexceptional_navigation_completion(summary)
+
+
+def test_navigation_completion_accepts_no_root_continue_race() -> None:
+    acquisition_module._require_unexceptional_navigation_completion(
+        {
+            "total": 0,
+            "resolved": 0,
+            "pending": 0,
+            "aborted": 0,
+            "terminal_outcomes": {"Network.loadingFinished": 0},
+        }
+    )
 
 
 def test_content_type_probe_validates_then_uses_central_browser_launch(

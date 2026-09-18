@@ -767,11 +767,13 @@ def _abort_rejected_render(
     context: Any,
     router: RecursiveCdpTargetRouter,
     browser_guard: BrowserSharedWorkerGuard,
-    primary: TerminalAcquisitionPolicyError,
+    primary: BaseException,
+    *,
+    cleanup_label: str = "rejected-render",
 ) -> None:
-    """Dispose a rejected, potentially unready target graph without masking it."""
+    """Dispose a failed, potentially unready target graph without masking it."""
 
-    cleanup_errors: list[tuple[str, Exception]] = []
+    cleanup_errors: list[tuple[str, BaseException]] = []
     router_started = False
     guard_started = False
     context_disposed = False
@@ -779,32 +781,97 @@ def _abort_rejected_render(
     try:
         router.begin_abort()
         router_started = True
-    except Exception as error:  # noqa: BLE001 - preserve the typed primary rejection
+    except BaseException as error:  # noqa: BLE001 - preserve the primary failure
         cleanup_errors.append(("router-begin-abort", error))
     if router_started:
         try:
             browser_guard.begin_abort()
             guard_started = True
-        except Exception as error:  # noqa: BLE001 - preserve the typed primary rejection
+        except BaseException as error:  # noqa: BLE001 - preserve the primary failure
             cleanup_errors.append(("guard-begin-abort", error))
     try:
         context.close()
         context_disposed = True
-    except Exception as error:  # noqa: BLE001 - browser.close remains the outer fallback
+    except BaseException as error:  # noqa: BLE001 - browser.close remains the outer fallback
         cleanup_errors.append(("context-dispose", error))
     if guard_started and context_disposed:
         try:
             browser_guard.finish_abort()
             guard_finished = True
-        except Exception as error:  # noqa: BLE001 - preserve the typed primary rejection
+        except BaseException as error:  # noqa: BLE001 - preserve the primary failure
             cleanup_errors.append(("guard-finish-abort", error))
     if router_started and guard_finished:
         try:
             router.finish_abort()
-        except Exception as error:  # noqa: BLE001 - preserve the typed primary rejection
+        except BaseException as error:  # noqa: BLE001 - preserve the primary failure
             cleanup_errors.append(("router-finish-abort", error))
     for step, error in cleanup_errors:
-        primary.add_note(f"rejected-render cleanup {step} failed with {type(error).__name__}")
+        primary.add_note(f"{cleanup_label} cleanup {step} failed with {type(error).__name__}")
+
+
+def _dispose_failed_context(
+    context: Any,
+    primary: BaseException,
+    *,
+    cleanup_label: str,
+) -> None:
+    """Dispose a context created before the complete target graph was available."""
+
+    try:
+        context.close()
+    except BaseException as error:  # noqa: BLE001 - preserve the primary failure
+        primary.add_note(
+            f"{cleanup_label} cleanup context-dispose failed with {type(error).__name__}"
+        )
+
+
+def _finish_render_shutdown(
+    context: Any,
+    router: RecursiveCdpTargetRouter,
+    browser_guard: BrowserSharedWorkerGuard,
+    *,
+    cleanup_label: str,
+    primary: BaseException | None = None,
+) -> bool:
+    """Finish declared normal shutdown while always attempting context disposal."""
+
+    cleanup_errors: list[tuple[str, BaseException]] = []
+    guard_started = False
+    context_disposed = False
+    guard_finished = False
+    try:
+        browser_guard.begin_shutdown()
+        guard_started = True
+    except BaseException as error:  # noqa: BLE001 - context disposal remains mandatory
+        cleanup_errors.append(("guard-begin-shutdown", error))
+    try:
+        context.close()
+        context_disposed = True
+    except BaseException as error:  # noqa: BLE001 - browser.close remains the outer fallback
+        cleanup_errors.append(("context-dispose", error))
+    if guard_started and context_disposed:
+        try:
+            browser_guard.finish()
+            guard_finished = True
+        except BaseException as error:  # noqa: BLE001 - preserve the first shutdown failure
+            cleanup_errors.append(("guard-finish", error))
+    if guard_finished:
+        try:
+            router.finish()
+        except BaseException as error:  # noqa: BLE001 - preserve the first shutdown failure
+            cleanup_errors.append(("router-finish", error))
+    if not cleanup_errors:
+        return True
+    if primary is None:
+        _step, primary = cleanup_errors.pop(0)
+        for step, error in cleanup_errors:
+            primary.add_note(
+                f"{cleanup_label} cleanup {step} failed with {type(error).__name__}"
+            )
+        raise primary
+    for step, error in cleanup_errors:
+        primary.add_note(f"{cleanup_label} cleanup {step} failed with {type(error).__name__}")
+    return False
 
 
 @dataclass(frozen=True)
@@ -1179,6 +1246,12 @@ def discover_page(
                 approved_origins=approved,
                 origin_ip_pins=pins,
             )
+            context: Any | None = None
+            browser_guard: BrowserSharedWorkerGuard | None = None
+            normal_shutdown_started = False
+            normal_shutdown_cleanup_started = False
+            failure_cleanup_attempted = False
+            primary_error: BaseException | None = None
             try:
                 chromium_version = browser.version
                 # Fetch interception does not see frame-owned requests already handled
@@ -1526,39 +1599,94 @@ def discover_page(
                         load_event_ms=load_event_ms,
                     )
                     egress_guard.raise_if_failed()
-                except TerminalAcquisitionPolicyError as error:
-                    _abort_rejected_render(context, router, browser_guard, error)
+                    # Quiescence is established from the router's live active set,
+                    # before shutdown can synthesize any cancellation terminal.
+                    if router.active_request_identities or not router.shutdown_ready:
+                        raise DiscoveryIntegrityError(
+                            "passive render accepted before recursive target shutdown readiness"
+                        )
                     audit.freeze()
-                    raise
-                # Quiescence is established from the router's live active set,
-                # before shutdown can synthesize any cancellation terminal.
-                if router.active_request_identities or not router.shutdown_ready:
-                    raise DiscoveryIntegrityError(
-                        "passive render accepted before recursive target shutdown readiness"
+                    final_url = page.url
+                    router.begin_shutdown()
+                    normal_shutdown_started = True
+                    normal_shutdown_cleanup_started = True
+                    _finish_render_shutdown(
+                        context,
+                        router,
+                        browser_guard,
+                        cleanup_label="browser-discovery",
                     )
-                audit.freeze()
-                final_url = page.url
-                router.begin_shutdown()
-                browser_guard.begin_shutdown()
-                context.close()
-                browser_guard.finish()
-                router.finish()
-                extra_info.finish()
-                observation_ledger.finish()
-                _validate_request_instance_ledger(discovered)
+                    extra_info.finish()
+                    observation_ledger.finish()
+                    _validate_request_instance_ledger(discovered)
+                except BaseException as error:
+                    primary_error = error
+                    failure_cleanup_attempted = True
+                    if not normal_shutdown_started:
+                        _abort_rejected_render(context, router, browser_guard, error)
+                    elif not normal_shutdown_cleanup_started:
+                        _finish_render_shutdown(
+                            context,
+                            router,
+                            browser_guard,
+                            cleanup_label="browser-discovery",
+                            primary=error,
+                        )
+                    if isinstance(error, TerminalAcquisitionPolicyError):
+                        audit.freeze()
+                    raise
+            except BaseException as error:
+                if not failure_cleanup_attempted:
+                    primary_error = error
+                    if not normal_shutdown_started:
+                        if context is not None and router is not None and browser_guard is not None:
+                            _abort_rejected_render(context, router, browser_guard, error)
+                        elif context is not None:
+                            _dispose_failed_context(
+                                context,
+                                error,
+                                cleanup_label="browser-discovery",
+                            )
+                    elif (
+                        not normal_shutdown_cleanup_started
+                        and context is not None
+                        and router is not None
+                        and browser_guard is not None
+                    ):
+                        _finish_render_shutdown(
+                            context,
+                            router,
+                            browser_guard,
+                            cleanup_label="browser-discovery",
+                            primary=error,
+                        )
+                    if isinstance(error, TerminalAcquisitionPolicyError):
+                        audit.freeze()
+                    failure_cleanup_attempted = True
+                raise
             finally:
                 try:
                     browser.close()
+                except BaseException as error:
+                    if primary_error is None:
+                        raise
+                    primary_error.add_note(
+                        "browser-discovery cleanup browser-close failed with "
+                        f"{type(error).__name__}"
+                    )
                 finally:
                     if egress_guard is not None:
+                        # A retained egress violation is scientific policy
+                        # evidence, not a mechanical cleanup failure.  It must
+                        # remain higher priority than a coincident browser
+                        # exception.
                         egress_guard.raise_if_failed()
                     if router is not None:
+                        # Likewise, protocol-integrity failures stay fatal;
+                        # only errors raised by the ordered abort operations
+                        # themselves are attached as cleanup notes above.
                         router.raise_if_failed()
     except PlaywrightError as error:
-        if egress_guard is not None:
-            egress_guard.raise_if_failed()
-        if router is not None:
-            router.raise_if_failed()
         if isinstance(error, DiscoveryIntegrityError):
             raise
         raise RecoverableAcquisitionError(f"Playwright discovery failed: {error}") from error

@@ -7,8 +7,8 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
-import qcsd_lab.cdp_targets as cdp_targets_module
 
+import qcsd_lab.cdp_targets as cdp_targets_module
 from qcsd_lab.acquisition_errors import NonReplayableEgressPolicyError
 from qcsd_lab.browser_egress import (
     NON_REPLAYABLE_EGRESS_POLICY,
@@ -31,6 +31,19 @@ from qcsd_lab.cdp_targets import (
     _sanitised_protocol_error,
     validate_bootstrap_prearm_summary,
 )
+
+
+class _PinnedPlaywrightError(Exception):
+    """Minimal exact-type stand-in for the optional Playwright dependency."""
+
+    def __init__(self, message: str, *, name: str = "Error") -> None:
+        super().__init__(message)
+        self.message = message
+        self.name = name
+
+
+class _PinnedPlaywrightErrorSubclass(_PinnedPlaywrightError):
+    pass
 
 
 class _FakeNonFlatSession:
@@ -686,6 +699,8 @@ def _router(
     session: _FakeNonFlatSession,
     *,
     fetch_policy: Any = None,
+    fetch_policy_label: str | None = None,
+    root_continue_error_type: type[Exception] | None = _PinnedPlaywrightError,
     on_non_replayable_egress: Any = None,
 ) -> tuple[
     RecursiveCdpTargetRouter,
@@ -709,12 +724,14 @@ def _router(
                 source,
                 command,
                 params,
-                label=f"test-policy:{command}",
+                label=fetch_policy_label or f"test-policy:{command}",
             )
 
     router = RecursiveCdpTargetRouter(
         session,
         on_event=on_event,
+        root_frame_id="root-frame",
+        root_continue_error_type=root_continue_error_type,
         on_non_replayable_egress=on_non_replayable_egress,
     )
     router_holder.append(router)
@@ -747,6 +764,80 @@ def _finish(router: RecursiveCdpTargetRouter) -> None:
 def _clean_shutdown(router: RecursiveCdpTargetRouter) -> None:
     _begin_shutdown(router)
     _finish(router)
+
+
+def _clean_abort(router: RecursiveCdpTargetRouter) -> None:
+    _browser_session, guard = _guard_for(router)
+    router.begin_abort()
+    guard.begin_abort()
+    guard.finish_abort()
+    router.finish_abort()
+
+
+def _invalid_interception_error(
+    message: str = (
+        "CDPSession.send: Protocol error (Fetch.continueRequest): "
+        "Invalid InterceptionId."
+    ),
+    *,
+    name: str = "Error",
+) -> _PinnedPlaywrightError:
+    return _PinnedPlaywrightError(message, name=name)
+
+
+def _invalid_interception_with_changed_message_attribute() -> _PinnedPlaywrightError:
+    error = _invalid_interception_error()
+    error.message = "different protocol error"
+    return error
+
+
+def _root_request_events(
+    *,
+    network_id: str,
+    fetch_id: str,
+    resource_type: str = "Font",
+    url: str = "https://root.test/font.woff2",
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    request = {"method": "GET", "url": url}
+    return (
+        {
+            "requestId": network_id,
+            "loaderId": "root-loader",
+            "frameId": "root-frame",
+            "type": resource_type,
+            "request": dict(request),
+        },
+        {
+            "requestId": fetch_id,
+            "networkId": network_id,
+            "frameId": "root-frame",
+            "resourceType": resource_type,
+            "request": dict(request),
+        },
+    )
+
+
+def _root_terminal_event(
+    request_id: str,
+    terminal_method: str,
+    *,
+    resource_type: str = "Font",
+) -> dict[str, Any]:
+    if terminal_method == "Network.loadingFinished":
+        return {
+            "requestId": request_id,
+            "timestamp": 12.5,
+            "encodedDataLength": 321,
+        }
+    if terminal_method == "Network.loadingFailed":
+        return {
+            "requestId": request_id,
+            "timestamp": 12.5,
+            "type": resource_type,
+            "errorText": "net::ERR_ABORTED",
+            "canceled": True,
+        }
+    raise AssertionError(f"unsupported terminal method: {terminal_method}")
 
 
 def _complete_request(
@@ -1263,7 +1354,7 @@ def test_policy_is_pinned_and_root_is_instrumented_before_navigation() -> None:
     router, _observed = _router(session)
 
     assert CDP_TARGET_INSTRUMENTATION_POLICY == (
-        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v15"
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v16"
     )
     assert [method for route, method, _params in session.commands if route == ()] == [
         "Target.getTargetInfo",
@@ -2196,6 +2287,1236 @@ def test_fetch_policy_decision_requires_an_exact_empty_acknowledgement(
         router.raise_if_failed()
 
 
+def test_child_document_failure_state_waits_for_exact_nested_acknowledgement() -> None:
+    session = _FakeNonFlatSession(hold_methods={"Fetch.failRequest"})
+    acknowledged = [False]
+    pending_chains: set[tuple[tuple[str, ...], str, int, str]] = set()
+    router_holder: list[RecursiveCdpTargetRouter] = []
+
+    def on_event(
+        source: CdpTargetSource,
+        method: str,
+        event: Mapping[str, Any],
+    ) -> None:
+        if method != "Fetch.requestPaused":
+            return
+        chain_key = source.request_chain_key(str(event["networkId"]))
+
+        def acknowledge(_result: Mapping[str, Any]) -> None:
+            acknowledged[0] = True
+            pending_chains.add(chain_key)
+
+        router_holder[0]._send_policy_decision(
+            source,
+            "Fetch.failRequest",
+            {"requestId": event["requestId"], "errorReason": "BlockedByClient"},
+            label="child-document-policy:Fetch.failRequest",
+            on_success=acknowledge,
+        )
+
+    router = RecursiveCdpTargetRouter(session, on_event=on_event)
+    router_holder.append(router)
+    router.start()
+    browser_session = _FakeBrowserSession()
+    guard = BrowserSharedWorkerGuard(browser_session, router)
+    guard.start()
+    _ROUTER_GUARDS[router] = (browser_session, guard)
+    iframe = session.attach(
+        (),
+        session_id="held-document-policy-session",
+        target_id="held-document-policy-target",
+        target_type="iframe",
+        parent_frame_id="root-frame",
+    )
+    chain_key = router._state(iframe).source.request_chain_key("child-document-network")
+
+    session.emit(
+        iframe,
+        "Fetch.requestPaused",
+        {
+            "requestId": "child-document-fetch",
+            "networkId": "child-document-network",
+            "frameId": "held-document-policy-target",
+            "resourceType": "Document",
+            "request": {"method": "GET", "url": "https://frame.test/blocked"},
+        },
+    )
+
+    assert acknowledged == [False]
+    assert chain_key not in pending_chains
+    assert sum(command.policy_decision for command in router._pending.values()) == 1
+    session.release_held("Fetch.failRequest")
+    assert acknowledged == [True]
+    assert pending_chains == {chain_key}
+    assert not any(command.policy_decision for command in router._pending.values())
+
+
+def test_exact_root_invalid_interception_waits_for_matching_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    terminal_method = "Network.loadingFinished"
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    network_event, fetch_event = _root_request_events(
+        network_id="root-font-network",
+        fetch_id="root-font-fetch",
+    )
+    session.emit((), "Network.requestWillBeSent", network_event)
+    original_send = session.send
+
+    def invalid_continue(method: str, params=None):
+        result = original_send(method, params)
+        if method == "Fetch.continueRequest":
+            raise _invalid_interception_error()
+        return result
+
+    monkeypatch.setattr(session, "send", invalid_continue)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+
+    router.raise_if_failed()
+    assert router.root_invalid_interception_summary == {
+        "schema_version": 1,
+        "total": 1,
+        "resolved": 0,
+        "pending": 1,
+        "aborted": 0,
+        "fetch_identity_saturated": False,
+        "network_identity_saturated": False,
+        "terminal_history_saturated": False,
+        "terminal_outcomes": {
+            "Network.loadingFinished": 0,
+        },
+        "diagnostics_truncated": 0,
+        "diagnostics": [],
+    }
+    assert router.shutdown_ready is False
+    with pytest.raises(CdpTargetIntegrityError, match="policy commands pending"):
+        router.begin_shutdown()
+
+    session.emit(
+        (),
+        terminal_method,
+        _root_terminal_event("root-font-network", terminal_method),
+    )
+    summary = router.root_invalid_interception_summary
+    assert summary["resolved"] == 1
+    assert summary["pending"] == 0
+    assert summary["terminal_outcomes"][terminal_method] == 1
+    assert len(summary["diagnostics"]) == 1
+    serialized = json.dumps(summary, sort_keys=True)
+    assert "root-font-network" not in serialized
+    assert "root-font-fetch" not in serialized
+    assert "font.woff2" not in serialized
+    _clean_shutdown(router)
+
+
+def test_exact_root_invalid_interception_accepts_terminal_before_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    network_event, fetch_event = _root_request_events(
+        network_id="terminal-first-network",
+        fetch_id="terminal-first-fetch",
+        resource_type="Stylesheet",
+        url="https://root.test/site.css",
+    )
+    session.emit((), "Network.requestWillBeSent", network_event)
+    session.emit(
+        (),
+        "Network.loadingFinished",
+        _root_terminal_event(
+            "terminal-first-network",
+            "Network.loadingFinished",
+            resource_type="Stylesheet",
+        ),
+    )
+    original_send = session.send
+
+    def invalid_continue(method: str, params=None):
+        result = original_send(method, params)
+        if method == "Fetch.continueRequest":
+            raise _invalid_interception_error()
+        return result
+
+    monkeypatch.setattr(session, "send", invalid_continue)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+
+    router.raise_if_failed()
+    summary = router.root_invalid_interception_summary
+    assert summary["total"] == summary["resolved"] == 1
+    assert summary["pending"] == 0
+    assert summary["diagnostics"][0]["terminal_before_policy"] is True
+    _clean_shutdown(router)
+
+
+def test_exact_root_invalid_interception_accepts_terminal_dispatched_during_send(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    network_event, fetch_event = _root_request_events(
+        network_id="reentrant-network",
+        fetch_id="reentrant-fetch",
+        resource_type="Stylesheet",
+        url="https://root.test/reentrant.css",
+    )
+    session.emit((), "Network.requestWillBeSent", network_event)
+    original_send = session.send
+
+    def terminal_then_invalid(method: str, params=None):
+        result = original_send(method, params)
+        if method == "Fetch.continueRequest":
+            session.emit(
+                (),
+                "Network.loadingFinished",
+                _root_terminal_event(
+                    "reentrant-network",
+                    "Network.loadingFinished",
+                    resource_type="Stylesheet",
+                ),
+            )
+            raise _invalid_interception_error()
+        return result
+
+    monkeypatch.setattr(session, "send", terminal_then_invalid)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+
+    router.raise_if_failed()
+    summary = router.root_invalid_interception_summary
+    assert summary["total"] == summary["resolved"] == 1
+    assert summary["diagnostics"][0]["terminal_before_policy"] is False
+    _clean_shutdown(router)
+
+
+@pytest.mark.parametrize(
+    ("frame_id", "resource_type", "label"),
+    (
+        (
+            "in-process-child-frame",
+            "Font",
+            "catalogue-navigation-policy:Fetch.continueRequest",
+        ),
+        (
+            "root-frame",
+            "Image",
+            "catalogue-navigation-policy:Fetch.continueRequest",
+        ),
+        ("root-frame", "Font", "request-stage-policy:Fetch.continueRequest"),
+    ),
+)
+def test_exact_invalid_interception_recovery_has_a_narrow_policy_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    frame_id: str,
+    resource_type: str,
+    label: str,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy_label=label)
+    network_event, fetch_event = _root_request_events(
+        network_id="ineligible-network",
+        fetch_id="ineligible-fetch",
+        resource_type=resource_type,
+        url="https://root.test/ineligible.bin",
+    )
+    network_event["frameId"] = frame_id
+    fetch_event["frameId"] = frame_id
+    session.emit((), "Network.requestWillBeSent", network_event)
+    original_send = session.send
+
+    def invalid_continue(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", invalid_continue)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+
+    with pytest.raises(CdpTargetIntegrityError, match="InvalidInterceptionId"):
+        router.raise_if_failed()
+    assert router.root_invalid_interception_summary["total"] == 0
+
+
+def test_provisional_invalid_interception_rejects_a_malformed_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    network_event, fetch_event = _root_request_events(
+        network_id="malformed-terminal-network",
+        fetch_id="malformed-terminal-fetch",
+    )
+    session.emit((), "Network.requestWillBeSent", network_event)
+    original_send = session.send
+
+    def invalid_continue(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", invalid_continue)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+    session.emit(
+        (),
+        "Network.loadingFinished",
+        {"requestId": "malformed-terminal-network"},
+    )
+
+    with pytest.raises(CdpTargetIntegrityError, match="malformed or ineligible"):
+        router.raise_if_failed()
+
+
+def test_provisional_invalid_interception_rejects_loading_failed_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    network_event, fetch_event = _root_request_events(
+        network_id="failed-terminal-network",
+        fetch_id="failed-terminal-fetch",
+    )
+    session.emit((), "Network.requestWillBeSent", network_event)
+    original_send = session.send
+
+    def invalid_continue(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", invalid_continue)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+    session.emit(
+        (),
+        "Network.loadingFailed",
+        _root_terminal_event(
+            "failed-terminal-network",
+            "Network.loadingFailed",
+        ),
+    )
+
+    with pytest.raises(CdpTargetIntegrityError, match="malformed or ineligible"):
+        router.raise_if_failed()
+    assert router.root_invalid_interception_summary["resolved"] == 0
+    assert router.root_invalid_interception_summary["pending"] == 1
+
+
+def test_exact_invalid_interception_is_never_accepted_for_fail_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+
+    def deny(_source: CdpTargetSource, event: Mapping[str, Any]):
+        return "Fetch.failRequest", {
+            "requestId": event["requestId"],
+            "errorReason": "BlockedByClient",
+        }
+
+    router, _observed = _router(session, fetch_policy=deny)
+    network_event, fetch_event = _root_request_events(
+        network_id="denied-network",
+        fetch_id="denied-fetch",
+    )
+    session.emit((), "Network.requestWillBeSent", network_event)
+    original_send = session.send
+
+    def invalid_failure(method: str, params=None):
+        if method == "Fetch.failRequest":
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", invalid_failure)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+
+    with pytest.raises(CdpTargetIntegrityError, match="exception_sha256"):
+        router.raise_if_failed()
+    assert router.root_invalid_interception_summary["total"] == 0
+
+
+def test_document_denial_lifecycle_never_enters_root_continue_recovery() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _begin_blocked_document(session)
+    session.emit((), "Network.loadingFailed", _blocked_document_failure())
+
+    router.raise_if_failed()
+    summary = router.root_invalid_interception_summary
+    assert summary["total"] == 0
+    assert summary["resolved"] == 0
+    assert summary["pending"] == 0
+    assert summary["aborted"] == 0
+    _clean_abort(router)
+
+
+@pytest.mark.parametrize(
+    "error_factory",
+    (
+        lambda: RuntimeError(
+            "CDPSession.send: Protocol error (Fetch.continueRequest): "
+            "Invalid InterceptionId."
+        ),
+        lambda: _invalid_interception_error("different protocol error"),
+        lambda: _invalid_interception_error(name="TargetClosedError"),
+        _invalid_interception_with_changed_message_attribute,
+        lambda: _PinnedPlaywrightErrorSubclass(
+            cdp_targets_module._ROOT_CONTINUE_INVALID_INTERCEPTION_MESSAGE,
+            name="Error",
+        ),
+    ),
+)
+def test_root_continue_rejects_every_non_exact_transport_error(
+    monkeypatch: pytest.MonkeyPatch,
+    error_factory: Any,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    network_event, fetch_event = _root_request_events(
+        network_id="wrong-error-network",
+        fetch_id="wrong-error-fetch",
+    )
+    session.emit((), "Network.requestWillBeSent", network_event)
+    original_send = session.send
+
+    def fail_continue(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            raise error_factory()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", fail_continue)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+
+    with pytest.raises(CdpTargetIntegrityError, match="exception_sha256") as captured:
+        router.raise_if_failed()
+    assert "different protocol error" not in str(captured.value)
+    assert router.root_invalid_interception_summary["total"] == 0
+
+
+def test_exact_error_recovery_requires_an_explicit_error_type_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+        root_continue_error_type=None,
+    )
+    network_event, fetch_event = _root_request_events(
+        network_id="no-opt-in-network",
+        fetch_id="no-opt-in-fetch",
+    )
+    session.emit((), "Network.requestWillBeSent", network_event)
+    original_send = session.send
+
+    def invalid_continue(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", invalid_continue)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+
+    with pytest.raises(CdpTargetIntegrityError, match="exception_sha256"):
+        router.raise_if_failed()
+    assert router.root_invalid_interception_summary["total"] == 0
+
+
+@pytest.mark.parametrize("response_stage", [False, True])
+def test_exact_error_recovery_rejects_changed_method_or_response_stage(
+    monkeypatch: pytest.MonkeyPatch,
+    response_stage: bool,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    network_event, fetch_event = _root_request_events(
+        network_id="wrong-stage-network",
+        fetch_id="wrong-stage-fetch",
+    )
+    if response_stage:
+        fetch_event["responseStatusCode"] = 200
+    else:
+        network_event["request"]["method"] = "POST"
+        fetch_event["request"]["method"] = "POST"
+    session.emit((), "Network.requestWillBeSent", network_event)
+    original_send = session.send
+
+    def invalid_continue(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", invalid_continue)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+
+    with pytest.raises(CdpTargetIntegrityError, match="InvalidInterceptionId"):
+        router.raise_if_failed()
+    assert router.root_invalid_interception_summary["total"] == 0
+
+
+def test_exact_error_recovery_rejects_changed_continue_parameters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+
+    def changed_params(_source: CdpTargetSource, event: Mapping[str, Any]):
+        return "Fetch.continueRequest", {
+            "requestId": event["requestId"],
+            "url": event["request"]["url"],
+        }
+
+    router, _observed = _router(
+        session,
+        fetch_policy=changed_params,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    network_event, fetch_event = _root_request_events(
+        network_id="changed-params-network",
+        fetch_id="changed-params-fetch",
+    )
+    session.emit((), "Network.requestWillBeSent", network_event)
+    original_send = session.send
+
+    def invalid_continue(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", invalid_continue)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+
+    with pytest.raises(CdpTargetIntegrityError, match="InvalidInterceptionId"):
+        router.raise_if_failed()
+    assert router.root_invalid_interception_summary["total"] == 0
+
+
+def test_exact_invalid_interception_requires_matching_network_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    _network_event, fetch_event = _root_request_events(
+        network_id="missing-network",
+        fetch_id="missing-fetch",
+    )
+    original_send = session.send
+
+    def invalid_continue(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", invalid_continue)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+
+    with pytest.raises(CdpTargetIntegrityError, match="InvalidInterceptionId"):
+        router.raise_if_failed()
+    assert router.root_invalid_interception_summary["total"] == 0
+
+
+def test_root_fetch_rejects_mismatched_and_duplicate_policy_identities() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    network_event, fetch_event = _root_request_events(
+        network_id="identity-network",
+        fetch_id="identity-fetch",
+    )
+    session.emit((), "Network.requestWillBeSent", network_event)
+    mismatched = dict(fetch_event)
+    mismatched["request"] = {"method": "GET", "url": "https://root.test/other.css"}
+    session.emit((), "Fetch.requestPaused", mismatched)
+    with pytest.raises(CdpTargetIntegrityError, match="does not exactly match"):
+        router.raise_if_failed()
+
+    clean_session = _FakeNonFlatSession()
+    clean_router, _observed = _router(clean_session)
+    clean_session.emit((), "Network.requestWillBeSent", network_event)
+    clean_session.emit((), "Fetch.requestPaused", fetch_event)
+    clean_session.emit((), "Fetch.requestPaused", fetch_event)
+    with pytest.raises(CdpTargetIntegrityError, match="duplicated or reused"):
+        clean_router.raise_if_failed()
+
+
+def test_distinct_fetch_id_cannot_claim_one_provisional_network_occurrence_twice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    network_event, fetch_event = _root_request_events(
+        network_id="double-claim-network",
+        fetch_id="double-claim-fetch-a",
+    )
+    session.emit((), "Network.requestWillBeSent", network_event)
+    original_send = session.send
+
+    def invalid_continue(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", invalid_continue)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+    second_fetch = dict(fetch_event)
+    second_fetch["requestId"] = "double-claim-fetch-b"
+    session.emit((), "Fetch.requestPaused", second_fetch)
+
+    with pytest.raises(CdpTargetIntegrityError, match="claimed by more than one"):
+        router.raise_if_failed()
+    summary = router.root_invalid_interception_summary
+    assert summary["total"] == 1
+    assert summary["pending"] == 1
+
+
+def test_distinct_fetch_id_cannot_reclaim_after_a_successful_continue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    network_event, first_fetch = _root_request_events(
+        network_id="successful-double-claim-network",
+        fetch_id="successful-double-claim-fetch-a",
+    )
+    session.emit((), "Network.requestWillBeSent", network_event)
+    session.emit((), "Fetch.requestPaused", first_fetch)
+    second_fetch = dict(first_fetch)
+    second_fetch["requestId"] = "successful-double-claim-fetch-b"
+    original_send = session.send
+
+    def invalid_continue(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", invalid_continue)
+    session.emit((), "Fetch.requestPaused", second_fetch)
+
+    with pytest.raises(CdpTargetIntegrityError, match="claimed by more than one"):
+        router.raise_if_failed()
+    assert router.root_invalid_interception_summary["total"] == 0
+
+
+def test_distinct_fetch_id_cannot_reclaim_one_terminal_network_occurrence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    network_event, fetch_event = _root_request_events(
+        network_id="terminal-double-claim-network",
+        fetch_id="terminal-double-claim-fetch-a",
+    )
+    session.emit((), "Network.requestWillBeSent", network_event)
+    session.emit(
+        (),
+        "Network.loadingFinished",
+        _root_terminal_event(
+            "terminal-double-claim-network",
+            "Network.loadingFinished",
+        ),
+    )
+    original_send = session.send
+
+    def invalid_continue(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", invalid_continue)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+    second_fetch = dict(fetch_event)
+    second_fetch["requestId"] = "terminal-double-claim-fetch-b"
+    session.emit((), "Fetch.requestPaused", second_fetch)
+
+    with pytest.raises(CdpTargetIntegrityError, match="claimed by more than one"):
+        router.raise_if_failed()
+    summary = router.root_invalid_interception_summary
+    assert summary["total"] == summary["resolved"] == 1
+
+
+def test_distinct_redirect_legs_can_each_receive_successful_continue() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    first_network, first_fetch = _root_request_events(
+        network_id="redirect-network",
+        fetch_id="redirect-fetch-a",
+        resource_type="Stylesheet",
+        url="https://root.test/old.css",
+    )
+    session.emit((), "Network.requestWillBeSent", first_network)
+    session.emit((), "Fetch.requestPaused", first_fetch)
+
+    redirected_network = dict(first_network)
+    redirected_network["redirectResponse"] = {"status": 302}
+    redirected_network["request"] = {
+        "method": "GET",
+        "url": "https://root.test/new.css",
+    }
+    second_fetch = dict(first_fetch)
+    second_fetch["requestId"] = "redirect-fetch-b"
+    second_fetch["request"] = dict(redirected_network["request"])
+    session.emit((), "Network.requestWillBeSent", redirected_network)
+    session.emit((), "Fetch.requestPaused", second_fetch)
+    session.emit(
+        (),
+        "Network.loadingFinished",
+        _root_terminal_event(
+            "redirect-network",
+            "Network.loadingFinished",
+            resource_type="Stylesheet",
+        ),
+    )
+
+    router.raise_if_failed()
+    assert router.root_invalid_interception_summary["total"] == 0
+    _clean_shutdown(router)
+
+
+def test_redirect_cannot_replace_a_provisional_invalid_interception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    network_event, fetch_event = _root_request_events(
+        network_id="provisional-redirect-network",
+        fetch_id="provisional-redirect-fetch",
+        resource_type="Stylesheet",
+        url="https://root.test/old.css",
+    )
+    session.emit((), "Network.requestWillBeSent", network_event)
+    original_send = session.send
+
+    def invalid_continue(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", invalid_continue)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+    redirect = dict(network_event)
+    redirect["redirectResponse"] = {"status": 302}
+    redirect["request"] = {"method": "GET", "url": "https://root.test/new.css"}
+    session.emit((), "Network.requestWillBeSent", redirect)
+
+    with pytest.raises(CdpTargetIntegrityError, match="redirected while"):
+        router.raise_if_failed()
+
+
+def test_identical_field_redirect_disables_invalid_interception_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    network_event, fetch_event = _root_request_events(
+        network_id="identical-redirect-network",
+        fetch_id="identical-redirect-fetch-a",
+        resource_type="Stylesheet",
+        url="https://root.test/same.css",
+    )
+    session.emit((), "Network.requestWillBeSent", network_event)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+    redirect = dict(network_event)
+    redirect["redirectResponse"] = {"status": 304}
+    session.emit((), "Network.requestWillBeSent", redirect)
+    second_fetch = dict(fetch_event)
+    second_fetch["requestId"] = "identical-redirect-fetch-b"
+    original_send = session.send
+
+    def invalid_continue(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", invalid_continue)
+    session.emit((), "Fetch.requestPaused", second_fetch)
+
+    with pytest.raises(CdpTargetIntegrityError, match="InvalidInterceptionId"):
+        router.raise_if_failed()
+    assert router.root_invalid_interception_summary["total"] == 0
+
+
+def test_nonadjacent_identical_redirect_leg_disables_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    first_network, delayed_fetch = _root_request_events(
+        network_id="aba-redirect-network",
+        fetch_id="aba-delayed-fetch",
+        resource_type="Stylesheet",
+        url="https://root.test/a.css",
+    )
+    session.emit((), "Network.requestWillBeSent", first_network)
+    middle_network = dict(first_network)
+    middle_network["redirectResponse"] = {"status": 302}
+    middle_network["request"] = {
+        "method": "GET",
+        "url": "https://root.test/b.css",
+    }
+    session.emit((), "Network.requestWillBeSent", middle_network)
+    final_network = dict(first_network)
+    final_network["redirectResponse"] = {"status": 302}
+    session.emit((), "Network.requestWillBeSent", final_network)
+    session.emit(
+        (),
+        "Network.loadingFinished",
+        _root_terminal_event(
+            "aba-redirect-network",
+            "Network.loadingFinished",
+            resource_type="Stylesheet",
+        ),
+    )
+    original_send = session.send
+
+    def invalid_continue(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", invalid_continue)
+    session.emit((), "Fetch.requestPaused", delayed_fetch)
+
+    with pytest.raises(CdpTargetIntegrityError, match="InvalidInterceptionId"):
+        router.raise_if_failed()
+    assert router.root_invalid_interception_summary["total"] == 0
+
+
+def test_raw_network_id_reuse_disables_invalid_interception_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    first_network, _first_fetch = _root_request_events(
+        network_id="reused-network",
+        fetch_id="old-fetch",
+    )
+    session.emit((), "Network.requestWillBeSent", first_network)
+    session.emit(
+        (),
+        "Network.loadingFinished",
+        _root_terminal_event("reused-network", "Network.loadingFinished"),
+    )
+    second_network, second_fetch = _root_request_events(
+        network_id="reused-network",
+        fetch_id="new-fetch",
+    )
+    session.emit((), "Network.requestWillBeSent", second_network)
+    original_send = session.send
+
+    def invalid_continue(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", invalid_continue)
+    session.emit((), "Fetch.requestPaused", second_fetch)
+
+    with pytest.raises(CdpTargetIntegrityError, match="InvalidInterceptionId"):
+        router.raise_if_failed()
+    assert router.root_invalid_interception_summary["total"] == 0
+
+
+def test_network_id_reuse_after_loading_failed_disables_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    first_network, _first_fetch = _root_request_events(
+        network_id="failed-reuse-network",
+        fetch_id="failed-reuse-old-fetch",
+    )
+    session.emit((), "Network.requestWillBeSent", first_network)
+    session.emit(
+        (),
+        "Network.loadingFailed",
+        _root_terminal_event(
+            "failed-reuse-network",
+            "Network.loadingFailed",
+        ),
+    )
+    second_network, second_fetch = _root_request_events(
+        network_id="failed-reuse-network",
+        fetch_id="failed-reuse-new-fetch",
+    )
+    session.emit((), "Network.requestWillBeSent", second_network)
+    original_send = session.send
+
+    def invalid_continue(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", invalid_continue)
+    session.emit((), "Fetch.requestPaused", second_fetch)
+
+    with pytest.raises(CdpTargetIntegrityError, match="InvalidInterceptionId"):
+        router.raise_if_failed()
+    assert router.root_invalid_interception_summary["total"] == 0
+
+
+def test_fetch_identity_saturation_disables_invalid_interception_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cdp_targets_module, "_ROOT_FETCH_IDENTITY_LIMIT", 1)
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    first_network, first_fetch = _root_request_events(
+        network_id="identity-cap-network-a",
+        fetch_id="identity-cap-fetch-a",
+    )
+    session.emit((), "Network.requestWillBeSent", first_network)
+    session.emit((), "Fetch.requestPaused", first_fetch)
+    session.emit(
+        (),
+        "Network.loadingFinished",
+        _root_terminal_event("identity-cap-network-a", "Network.loadingFinished"),
+    )
+
+    second_network, second_fetch = _root_request_events(
+        network_id="identity-cap-network-b",
+        fetch_id="identity-cap-fetch-b",
+    )
+    session.emit((), "Network.requestWillBeSent", second_network)
+    original_send = session.send
+
+    def invalid_continue(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", invalid_continue)
+    session.emit((), "Fetch.requestPaused", second_fetch)
+
+    with pytest.raises(CdpTargetIntegrityError, match="InvalidInterceptionId"):
+        router.raise_if_failed()
+    summary = router.root_invalid_interception_summary
+    assert summary["total"] == 0
+    assert summary["fetch_identity_saturated"] is True
+
+
+def test_network_identity_saturation_disables_invalid_interception_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cdp_targets_module, "_ROOT_NETWORK_IDENTITY_LIMIT", 1)
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    first_network, _first_fetch = _root_request_events(
+        network_id="network-cap-a",
+        fetch_id="network-cap-fetch-a",
+    )
+    session.emit((), "Network.requestWillBeSent", first_network)
+    session.emit(
+        (),
+        "Network.loadingFinished",
+        _root_terminal_event("network-cap-a", "Network.loadingFinished"),
+    )
+    second_network, second_fetch = _root_request_events(
+        network_id="network-cap-b",
+        fetch_id="network-cap-fetch-b",
+    )
+    session.emit((), "Network.requestWillBeSent", second_network)
+    original_send = session.send
+
+    def invalid_continue(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", invalid_continue)
+    session.emit((), "Fetch.requestPaused", second_fetch)
+
+    with pytest.raises(CdpTargetIntegrityError, match="InvalidInterceptionId"):
+        router.raise_if_failed()
+    summary = router.root_invalid_interception_summary
+    assert summary["total"] == 0
+    assert summary["network_identity_saturated"] is True
+
+
+def test_exact_invalid_interception_is_not_available_to_child_targets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    iframe = session.attach(
+        (),
+        session_id="invalid-interception-child-session",
+        target_id="invalid-interception-child-target",
+        target_type="iframe",
+        parent_frame_id="root-frame",
+    )
+    network_event, fetch_event = _root_request_events(
+        network_id="child-network",
+        fetch_id="child-fetch",
+        resource_type="Font",
+        url="https://frame.test/font.woff2",
+    )
+    network_event["frameId"] = "invalid-interception-child-target"
+    fetch_event["frameId"] = "invalid-interception-child-target"
+    session.emit(iframe, "Network.requestWillBeSent", network_event)
+    original_send = session.send
+
+    def invalid_child_transport(method: str, params=None):
+        if method == "Target.sendMessageToTarget":
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", invalid_child_transport)
+    session.emit(iframe, "Fetch.requestPaused", fetch_event)
+
+    with pytest.raises(CdpTargetIntegrityError, match="exception_sha256"):
+        router.raise_if_failed()
+    assert router.root_invalid_interception_summary["total"] == 0
+
+
+def test_provisional_root_invalid_interception_rejects_child_terminal_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    child = session.attach(
+        (),
+        session_id="terminal-source-child-session",
+        target_id="terminal-source-child-target",
+        target_type="iframe",
+        parent_frame_id="root-frame",
+    )
+    network_event, fetch_event = _root_request_events(
+        network_id="terminal-source-network",
+        fetch_id="terminal-source-fetch",
+    )
+    session.emit((), "Network.requestWillBeSent", network_event)
+    original_send = session.send
+
+    def invalid_continue(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", invalid_continue)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+    session.emit(
+        child,
+        "Network.loadingFinished",
+        _root_terminal_event("terminal-source-network", "Network.loadingFinished"),
+    )
+
+    with pytest.raises(CdpTargetIntegrityError, match="no active request occurrence"):
+        router.raise_if_failed()
+    summary = router.root_invalid_interception_summary
+    assert summary["pending"] == 1
+    assert summary["resolved"] == 0
+
+
+def test_abort_retires_but_never_resolves_provisional_invalid_interception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    network_event, fetch_event = _root_request_events(
+        network_id="aborted-network",
+        fetch_id="aborted-fetch",
+    )
+    session.emit((), "Network.requestWillBeSent", network_event)
+    original_send = session.send
+
+    def invalid_continue(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", invalid_continue)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+    assert router.root_invalid_interception_summary["pending"] == 1
+
+    _browser_session, guard = _guard_for(router)
+    router.begin_abort()
+    guard.begin_abort()
+    assert router.root_invalid_interception_summary["pending"] == 1
+    assert router.root_invalid_interception_summary["aborted"] == 0
+    session.emit(
+        (),
+        "Network.loadingFinished",
+        _root_terminal_event("aborted-network", "Network.loadingFinished"),
+    )
+    assert router.root_invalid_interception_summary["resolved"] == 0
+    assert router.root_invalid_interception_summary["pending"] == 1
+    guard.finish_abort()
+    router.finish_abort()
+    assert router.root_invalid_interception_summary == {
+        "schema_version": 1,
+        "total": 1,
+        "resolved": 0,
+        "pending": 0,
+        "aborted": 1,
+        "fetch_identity_saturated": False,
+        "network_identity_saturated": False,
+        "terminal_history_saturated": False,
+        "terminal_outcomes": {
+            "Network.loadingFinished": 0,
+        },
+        "diagnostics_truncated": 0,
+        "diagnostics": [],
+    }
+
+
+def test_invalid_interception_diagnostics_are_bounded_and_identifier_free(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cdp_targets_module, "_ROOT_CONTINUE_DIAGNOSTIC_LIMIT", 2)
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    original_send = session.send
+
+    def invalid_continue(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", invalid_continue)
+    raw_values: list[str] = []
+    for index in range(3):
+        network_id = f"bounded-network-{index}"
+        fetch_id = f"bounded-fetch-{index}"
+        url = f"https://root.test/private-{index}.css"
+        raw_values.extend((network_id, fetch_id, url))
+        network_event, fetch_event = _root_request_events(
+            network_id=network_id,
+            fetch_id=fetch_id,
+            resource_type="Stylesheet",
+            url=url,
+        )
+        session.emit((), "Network.requestWillBeSent", network_event)
+        session.emit((), "Fetch.requestPaused", fetch_event)
+        session.emit(
+            (),
+            "Network.loadingFinished",
+            _root_terminal_event(
+                network_id,
+                "Network.loadingFinished",
+                resource_type="Stylesheet",
+            ),
+        )
+
+    summary = router.root_invalid_interception_summary
+    assert summary["total"] == summary["resolved"] == 3
+    assert len(summary["diagnostics"]) == 2
+    assert summary["diagnostics_truncated"] == 1
+    serialized = json.dumps(summary, sort_keys=True)
+    assert all(value not in serialized for value in raw_values)
+    _clean_shutdown(router)
+
+
+def test_saturated_terminal_history_disables_late_recovery_without_eviction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cdp_targets_module, "_ROOT_TERMINAL_HISTORY_LIMIT", 1)
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    first_network, _first_fetch = _root_request_events(
+        network_id="retained-terminal-network",
+        fetch_id="retained-terminal-fetch",
+    )
+    session.emit((), "Network.requestWillBeSent", first_network)
+    session.emit(
+        (),
+        "Network.loadingFinished",
+        _root_terminal_event(
+            "retained-terminal-network",
+            "Network.loadingFinished",
+        ),
+    )
+    second_network, second_fetch = _root_request_events(
+        network_id="unretained-terminal-network",
+        fetch_id="unretained-terminal-fetch",
+        resource_type="Stylesheet",
+        url="https://root.test/unretained.css",
+    )
+    session.emit((), "Network.requestWillBeSent", second_network)
+    session.emit(
+        (),
+        "Network.loadingFinished",
+        _root_terminal_event(
+            "unretained-terminal-network",
+            "Network.loadingFinished",
+            resource_type="Stylesheet",
+        ),
+    )
+    assert router.root_invalid_interception_summary["terminal_history_saturated"] is True
+    original_send = session.send
+
+    def invalid_continue(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", invalid_continue)
+    session.emit((), "Fetch.requestPaused", second_fetch)
+
+    with pytest.raises(CdpTargetIntegrityError, match="InvalidInterceptionId"):
+        router.raise_if_failed()
+
+
 def test_dedicated_worker_setup_waits_for_late_bootstrap_owner_before_resume() -> None:
     session = _FakeNonFlatSession()
     router, _observed = _router(session)
@@ -2615,6 +3936,7 @@ def test_error_document_abort_rejects_failure_before_denial_acknowledgement(
     with pytest.raises(CdpTargetIntegrityError, match="before its denial acknowledgement"):
         router.raise_if_failed()
     assert router._error_document_finishes == {}
+    assert router._pending_blocked_documents == {}
     router.begin_abort()
 
     # Direct dispatch exposes the new event's rejection independently of the
@@ -2894,6 +4216,7 @@ def test_document_denial_requires_an_exact_empty_policy_ack(
 
     with pytest.raises(CdpTargetIntegrityError, match="exact empty result"):
         router.raise_if_failed()
+    assert router._pending_blocked_documents == {}
 
 
 def test_duplicate_document_fetch_interception_is_rejected() -> None:
@@ -4604,16 +5927,155 @@ def test_oopif_owner_releases_its_exact_shared_bootstrap_after_prearm() -> None:
         "worker": 0,
         "shared_worker": 0,
     }
-    assert shared_summary["released_after_setup_envelopes"] == 1
+    assert shared_summary["released"] == 0
+    assert shared_summary["pending"] == 1
+    assert shared_summary["released_after_setup_envelopes"] == 0
     assert router.shutdown_ready is False
+    assert not any(
+        route == child_route and method == "Runtime.runIfWaitingForDebugger"
+        for route, method, _params in page_session.commands
+    )
 
     page_session.release_held("Fetch.continueRequest")
+    shared_summary = router.bootstrap_prearm_summary["by_worker_type"]["shared_worker"]
+    assert shared_summary["released"] == 1
+    assert shared_summary["pending"] == 0
+    assert shared_summary["released_after_setup_envelopes"] == 1
+    assert not any(
+        route == child_route and method == "Runtime.runIfWaitingForDebugger"
+        for route, method, _params in page_session.commands
+    )
     page_session.release_held("Network.enable")
+    assert any(
+        route == child_route and method == "Runtime.runIfWaitingForDebugger"
+        for route, method, _params in page_session.commands
+    )
     page_session.emit(child_route, "Network.loadingFinished", {"requestId": target_id})
     page_session.detach((), session_id=child_route[0])
     browser_session.detach(guardian_session_id="oopif-shared-guardian", target_id=target_id)
     page_session.detach((), session_id=iframe[-1])
     _clean_shutdown(router)
+
+
+def test_oopif_shared_bootstrap_nonempty_continue_ack_never_releases_or_resumes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page_session = _FakeNonFlatSession()
+    router, _observed = _router(page_session)
+    iframe = page_session.attach(
+        (),
+        session_id="nonempty-continue-owner-session",
+        target_id="nonempty-continue-owner-target",
+        target_type="iframe",
+    )
+    original_result = page_session._result
+
+    def nonempty_continue_ack(
+        route: tuple[str, ...],
+        method: str,
+        params: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if route == iframe and method == "Fetch.continueRequest":
+            return {"unexpected": True}
+        return original_result(route, method, params)
+
+    monkeypatch.setattr(page_session, "_result", nonempty_continue_ack)
+    browser_session, _guard = _start_shared_worker_guard(page_session, router)
+    target_id = "nonempty-continue-shared-target"
+    target_url = "https://worker.test/nonempty-continue.js"
+    child_route = ("nonempty-continue-shared-session",)
+    page_session.prepare_guarded_adoption(
+        target_id=target_id,
+        page_session_id=child_route[0],
+        target_url=target_url,
+    )
+    _begin_script_bootstrap(
+        page_session,
+        iframe,
+        target_id=target_id,
+        target_url=target_url,
+        frame_id="nonempty-continue-owner-target",
+    )
+    page_session.before_adoption_attachment = lambda: _pause_script_bootstrap(
+        page_session,
+        iframe,
+        target_id=target_id,
+        target_url=target_url,
+        frame_id="nonempty-continue-owner-target",
+    )
+
+    browser_session.attach(
+        guardian_session_id="nonempty-continue-shared-guardian",
+        target_id=target_id,
+        target_url=target_url,
+    )
+
+    shared_summary = router.bootstrap_prearm_summary["by_worker_type"]["shared_worker"]
+    assert shared_summary["held"] == 1
+    assert shared_summary["released"] == 0
+    assert shared_summary["pending"] == 1
+    assert shared_summary["released_after_setup_envelopes"] == 0
+    assert not any(
+        route == child_route and method == "Runtime.runIfWaitingForDebugger"
+        for route, method, _params in page_session.commands
+    )
+    assert sum(
+        route == iframe and method == "Fetch.continueRequest"
+        for route, method, _params in page_session.commands
+    ) == 1
+    with pytest.raises(CdpTargetIntegrityError, match="exact empty result"):
+        router.raise_if_failed()
+
+
+def test_abort_detach_keeps_inflight_shared_bootstrap_continue_until_disposal() -> None:
+    page_session = _FakeNonFlatSession(hold_methods={"Fetch.continueRequest"})
+    router, _observed = _router(page_session)
+    iframe = page_session.attach(
+        (),
+        session_id="inflight-continue-owner-session",
+        target_id="inflight-continue-owner-target",
+        target_type="iframe",
+    )
+    browser_session, guard = _start_shared_worker_guard(page_session, router)
+    target_id = "inflight-continue-shared-target"
+    target_url = "https://worker.test/inflight-continue.js"
+    child_route = ("inflight-continue-shared-session",)
+    page_session.prepare_guarded_adoption(
+        target_id=target_id,
+        page_session_id=child_route[0],
+        target_url=target_url,
+    )
+    _begin_script_bootstrap(
+        page_session,
+        iframe,
+        target_id=target_id,
+        target_url=target_url,
+        frame_id="inflight-continue-owner-target",
+    )
+    page_session.before_adoption_attachment = lambda: _pause_script_bootstrap(
+        page_session,
+        iframe,
+        target_id=target_id,
+        target_url=target_url,
+        frame_id="inflight-continue-owner-target",
+    )
+    browser_session.attach(
+        guardian_session_id="inflight-continue-shared-guardian",
+        target_id=target_id,
+        target_url=target_url,
+    )
+
+    assert router.bootstrap_prearm_summary["pending_total"] == 1
+    assert sum(command.policy_decision for command in router._pending.values()) == 1
+    router.begin_abort()
+    guard.begin_abort()
+    page_session.detach((), session_id=iframe[-1])
+    assert sum(command.policy_decision for command in router._pending.values()) == 1
+    guard.finish_abort()
+    assert sum(command.policy_decision for command in router._pending.values()) == 1
+
+    router.finish_abort()
+    assert router._pending == {}
 
 
 def test_shared_bootstrap_terminal_before_adoption_release_fails_closed() -> None:

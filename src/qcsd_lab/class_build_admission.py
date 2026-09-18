@@ -111,8 +111,8 @@ _ACQUISITION_SCHEMA = 6
 _EVALUATION_SCHEMA = 2
 _SUCCESSOR_DECISION_SCHEMA = 3
 _SUCCESSOR_RESTART_SCHEMA = 2
-_PINNED_CDP_SCHEMA = 13
-_HISTORICAL_PINNED_CDP_SCHEMAS = frozenset({8, 9, 11, 12})
+_PINNED_CDP_SCHEMA = 14
+_HISTORICAL_PINNED_CDP_SCHEMAS = frozenset({8, 9, 11, 12, 13})
 # Mirrored from browser_egress_qualification and checked against its producer
 # in tests. Importing the package here would break the stdlib-only host gate.
 _BROWSER_EGRESS_FOUNDATION_SCHEMA = 6

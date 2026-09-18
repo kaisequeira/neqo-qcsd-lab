@@ -3621,6 +3621,7 @@ def test_watcher_pinned_cdp_contract_matches_runtime_contract() -> None:
     assert watch._HISTORICAL_PINNED_CDP_CONTRACT == (pinned_cdp._HISTORICAL_PROBE_CONTRACT)
     assert watch._HISTORICAL_PINNED_CDP_CONTRACT_V11 == (pinned_cdp._HISTORICAL_PROBE_CONTRACT_V11)
     assert watch._HISTORICAL_PINNED_CDP_CONTRACT_V12 == (pinned_cdp._HISTORICAL_PROBE_CONTRACT_V12)
+    assert watch._HISTORICAL_PINNED_CDP_CONTRACT_V13 == (pinned_cdp._HISTORICAL_PROBE_CONTRACT_V13)
     assert watch._PINNED_CDP_EVENT_METHODS == pinned_cdp._EVENT_METHODS
     assert watch._PINNED_CDP_HTTP_STATUS_COUNTS == (pinned_cdp._EXPECTED_HTTP_STATUS_COUNTS)
     assert watch._PINNED_CDP_SERVER_REQUEST_COUNTS == (pinned_cdp._EXPECTED_SERVER_REQUEST_COUNTS)

@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 from qcsd_lab import pinned_cdp
+from qcsd_lab.acquisition_errors import NonReplayableEgressPolicyError
 from qcsd_lab.browser_egress import (
     BROWSER_EGRESS_DISABLED_BASE_FEATURES,
     BROWSER_EGRESS_DISABLED_BLINK_FEATURES,
@@ -520,6 +521,72 @@ def test_schema12_receipt_still_requires_worker_webtransport_probe(
         )
 
 
+def test_schema13_receipt_is_historical_only_with_v8_driver(
+    tmp_path: Path,
+    fake_build: Path,
+) -> None:
+    current = _create(tmp_path, fake_build)
+    envelope = json.loads(current.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(envelope["payload"])
+    payload["probe_schema_version"] = 13
+    payload["probe_contract"] = copy.deepcopy(
+        pinned_cdp._HISTORICAL_PROBE_CONTRACT_V13
+    )
+    payload["probe_contract_sha256"] = (
+        pinned_cdp._HISTORICAL_PROBE_CONTRACT_V13_SHA256
+    )
+    historical = tmp_path / "pinned-cdp-schema13.json"
+    historical.write_bytes(
+        canonical_json_bytes(bind_receipt(payload, receipt_type=pinned_cdp.RECEIPT_TYPE))
+    )
+
+    with pytest.raises(ValueError, match="identity or result"):
+        pinned_cdp.validate_pinned_cdp_receipt(
+            historical,
+            build_execution_receipt=fake_build,
+            expected_cohort_version=59,
+        )
+
+    validated = pinned_cdp.validate_pinned_cdp_receipt(
+        historical,
+        build_execution_receipt=fake_build,
+        expected_cohort_version=59,
+        allow_historical=True,
+    )
+    assert validated["probe_schema_version"] == 13
+    assert validated["observation"]["playwright_driver"] == _driver_binding()
+    assert "worker_webtransport_probe" in validated["observation"]["topology"]
+
+
+def test_schema13_receipt_still_requires_worker_webtransport_probe(
+    tmp_path: Path,
+    fake_build: Path,
+) -> None:
+    current = _create(tmp_path, fake_build)
+    envelope = json.loads(current.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(envelope["payload"])
+    payload["probe_schema_version"] = 13
+    payload["probe_contract"] = copy.deepcopy(
+        pinned_cdp._HISTORICAL_PROBE_CONTRACT_V13
+    )
+    payload["probe_contract_sha256"] = (
+        pinned_cdp._HISTORICAL_PROBE_CONTRACT_V13_SHA256
+    )
+    payload["observation"]["topology"].pop("worker_webtransport_probe")
+    historical = tmp_path / "pinned-cdp-schema13-without-worker-probe.json"
+    historical.write_bytes(
+        canonical_json_bytes(bind_receipt(payload, receipt_type=pinned_cdp.RECEIPT_TYPE))
+    )
+
+    with pytest.raises(ValueError, match="topology fields"):
+        pinned_cdp.validate_pinned_cdp_receipt(
+            historical,
+            build_execution_receipt=fake_build,
+            expected_cohort_version=59,
+            allow_historical=True,
+        )
+
+
 def test_current_receipt_rejects_frozen_historical_resolver_projection(
     tmp_path: Path,
     fake_build: Path,
@@ -995,14 +1062,16 @@ def test_required_topology_wait_condition_is_event_driven() -> None:
         "dedicated_worker_fetch_paused_on_page": True,
         "shared_worker_fetch_paused_on_shared_worker": True,
     }
-    assert pinned_cdp.PROBE_SCHEMA_VERSION == 13
-    assert pinned_cdp.HISTORICAL_PROBE_SCHEMA_VERSIONS == frozenset({8, 9, 11, 12})
-    assert pinned_cdp.PROBE_CONTRACT["schema_version"] == 12
+    assert pinned_cdp.PROBE_SCHEMA_VERSION == 14
+    assert pinned_cdp.HISTORICAL_PROBE_SCHEMA_VERSIONS == frozenset(
+        {8, 9, 11, 12, 13}
+    )
+    assert pinned_cdp.PROBE_CONTRACT["schema_version"] == 13
     assert pinned_cdp.PROBE_CONTRACT["policy"] == (
-        "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v12"
+        "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v13"
     )
     assert pinned_cdp.PROBE_CONTRACT["instrumentation_policy"] == (
-        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v15"
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v16"
     )
     assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V11["schema_version"] == 10
     assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V11["instrumentation_policy"].endswith("-v12")
@@ -1010,6 +1079,13 @@ def test_required_topology_wait_condition_is_event_driven() -> None:
     assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V12["instrumentation_policy"].endswith("-v13")
     assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V12_SHA256 == (
         "0fc670bdaf43dd1bcb7745f9931f99f8910989291fe1dfb5d7856414161042e9"
+    )
+    assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V13["schema_version"] == 12
+    assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V13["instrumentation_policy"].endswith(
+        "-v15"
+    )
+    assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V13_SHA256 == (
+        "6f688dfc91ef63ca096a1d2ed1df9b5d87053cdb46ef604467d6a8f723f395ac"
     )
     assert pinned_cdp.PROBE_CONTRACT["worker_webtransport_probe_schema_version"] == 1
     assert pinned_cdp.PROBE_CONTRACT["chromium_version"] == "143.0.7499.4"
@@ -1445,6 +1521,7 @@ def test_probe_creates_browser_session_for_shared_worker_guard(
     page_session = object()
     guard_sessions: list[tuple[object, object]] = []
     start_order: list[str] = []
+    cleanup_order: list[str] = []
 
     class Page:
         def set_default_timeout(self, _timeout: int) -> None:
@@ -1456,7 +1533,9 @@ def test_probe_creates_browser_session_for_shared_worker_guard(
     page = Page()
 
     class Context:
-        service_workers: list[object] = []
+        def __init__(self) -> None:
+            self.service_workers: list[object] = []
+            self.closed = False
 
         def new_page(self) -> Page:
             return page
@@ -1464,6 +1543,12 @@ def test_probe_creates_browser_session_for_shared_worker_guard(
         def new_cdp_session(self, requested_page: Page) -> object:
             assert requested_page is page
             return page_session
+
+        def close(self) -> None:
+            self.closed = True
+            cleanup_order.append("context-close")
+
+    context = Context()
 
     class Browser:
         version = "test-chromium"
@@ -1474,7 +1559,7 @@ def test_probe_creates_browser_session_for_shared_worker_guard(
 
         def new_context(self, **options: object) -> Context:
             assert options == {"service_workers": "block"}
-            return Context()
+            return context
 
         def new_browser_cdp_session(self) -> object:
             self.browser_session_calls += 1
@@ -1512,6 +1597,12 @@ def test_probe_creates_browser_session_for_shared_worker_guard(
         def raise_if_failed(self) -> None:
             return None
 
+        def begin_abort(self) -> None:
+            cleanup_order.append("router-begin-abort")
+
+        def finish_abort(self) -> None:
+            cleanup_order.append("router-finish-abort")
+
     class BrowserGuard:
         def __init__(self, requested_session: object, router: object) -> None:
             guard_sessions.append((requested_session, router))
@@ -1519,6 +1610,12 @@ def test_probe_creates_browser_session_for_shared_worker_guard(
         def start(self) -> None:
             start_order.append("browser-guard")
             raise GuardReached("browser guard received its browser-level session")
+
+        def begin_abort(self) -> None:
+            cleanup_order.append("guard-begin-abort")
+
+        def finish_abort(self) -> None:
+            cleanup_order.append("guard-finish-abort")
 
     executable = tmp_path / "qcsd-chromium"
     executable.write_bytes(b"fixture")
@@ -1570,7 +1667,339 @@ def test_probe_creates_browser_session_for_shared_worker_guard(
     assert guard_sessions[0][0] is browser_session
     assert isinstance(guard_sessions[0][1], Router)
     assert start_order == ["router", "browser-guard"]
+    assert cleanup_order == [
+        "router-begin-abort",
+        "guard-begin-abort",
+        "context-close",
+        "guard-finish-abort",
+        "router-finish-abort",
+    ]
+    assert context.closed is True
     assert browser.closed is True
+
+
+@pytest.mark.parametrize(
+    "failure_kind",
+    [
+        "exception-abort-cleanup",
+        "keyboard-interrupt-browser-close",
+        "normal-shutdown-summary",
+        "egress-priority",
+        "router-priority",
+        "server-cleanup",
+    ],
+)
+def test_probe_preserves_primary_across_lifecycle_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_kind: str,
+) -> None:
+    lifecycle: list[str] = []
+
+    class ProbeFailure(RuntimeError):
+        pass
+
+    class ShutdownFailure(RuntimeError):
+        pass
+
+    keyboard_primary = KeyboardInterrupt("synthetic probe interrupt")
+    egress_primary = NonReplayableEgressPolicyError("synthetic retained egress failure")
+    router_primary = RuntimeError("synthetic retained router failure")
+    router_post_close_checks = [0]
+
+    class Page:
+        def __init__(self) -> None:
+            self.handlers: dict[str, object] = {}
+
+        def set_default_timeout(self, _timeout: int) -> None:
+            return None
+
+        def set_default_navigation_timeout(self, _timeout: int) -> None:
+            return None
+
+        def on(self, event: str, handler: object) -> None:
+            self.handlers[event] = handler
+
+        def goto(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+    page = Page()
+
+    class Context:
+        def __init__(self) -> None:
+            self.closed = False
+            self.service_workers: list[object] = []
+
+        def new_page(self) -> Page:
+            return page
+
+        def new_cdp_session(self, requested_page: Page) -> object:
+            assert requested_page is page
+            return object()
+
+        def close(self) -> None:
+            self.closed = True
+            lifecycle.append("context-close")
+
+    context = Context()
+
+    class Browser:
+        version = "test-chromium"
+
+        def __init__(self) -> None:
+            self.closed = False
+
+        def new_context(self, **options: object) -> Context:
+            assert options == {"service_workers": "block"}
+            return context
+
+        def new_browser_cdp_session(self) -> object:
+            return object()
+
+        def close(self) -> None:
+            self.closed = True
+            lifecycle.append("browser-close")
+            if failure_kind == "keyboard-interrupt-browser-close":
+                raise LookupError("synthetic browser close failure")
+
+    browser = Browser()
+
+    class DriverSession:
+        def __enter__(self) -> object:
+            return object()
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    class EgressGuard:
+        def __init__(self) -> None:
+            return None
+
+        def bind_root_page(self, requested_page: Page) -> None:
+            assert requested_page is page
+
+        def raise_if_failed(self) -> None:
+            if failure_kind == "egress-priority" and browser.closed:
+                raise egress_primary
+            return None
+
+        def success_summary(self) -> dict[str, object]:
+            return _non_replayable_egress_summary()
+
+        def record(self, **_kwargs: object) -> None:
+            return None
+
+    class Router:
+        def __init__(self, _session: object, **_kwargs: object) -> None:
+            return None
+
+        def start(self) -> None:
+            lifecycle.append("router-start")
+
+        def begin_abort(self) -> None:
+            lifecycle.append("router-begin-abort")
+
+        def finish_abort(self) -> None:
+            lifecycle.append("router-finish-abort")
+            if failure_kind == "exception-abort-cleanup":
+                raise LookupError("synthetic router cleanup failure")
+
+        def raise_if_failed(self) -> None:
+            if failure_kind in {"egress-priority", "router-priority"} and browser.closed:
+                router_post_close_checks[0] += 1
+                raise router_primary
+            return None
+
+        def begin_shutdown(self) -> None:
+            lifecycle.append("router-begin-shutdown")
+
+        @property
+        def bootstrap_prearm_summary(self) -> dict[str, object]:
+            if failure_kind == "normal-shutdown-summary":
+                raise ShutdownFailure("synthetic post-transition summary failure")
+            return {}
+
+        @property
+        def egress_prearm_summary(self) -> dict[str, object]:
+            return _egress_prearm_summary()
+
+        def finish(self) -> None:
+            lifecycle.append("router-finish")
+
+    class BrowserGuard:
+        def __init__(self, _session: object, _router: Router) -> None:
+            return None
+
+        def start(self) -> None:
+            lifecycle.append("guard-start")
+
+        def begin_abort(self) -> None:
+            lifecycle.append("guard-begin-abort")
+
+        def finish_abort(self) -> None:
+            lifecycle.append("guard-finish-abort")
+
+        def begin_shutdown(self) -> None:
+            lifecycle.append("guard-begin-shutdown")
+
+        def finish(self) -> None:
+            lifecycle.append("guard-finish")
+
+    class WorkerCollector:
+        def arm(self) -> None:
+            lifecycle.append("collector-arm")
+            if failure_kind == "normal-shutdown-summary":
+                return
+            if failure_kind == "keyboard-interrupt-browser-close":
+                raise keyboard_primary
+            raise ProbeFailure("synthetic probe timeout")
+
+    if failure_kind == "server-cleanup":
+
+        class ProbeServer:
+            server_port = 8080
+
+            def __init__(self, _address: object) -> None:
+                return None
+
+            def serve_forever(self) -> None:
+                return None
+
+            def shutdown(self) -> None:
+                lifecycle.append("server-shutdown")
+
+            def server_close(self) -> None:
+                lifecycle.append("server-close")
+                raise OSError("synthetic server close failure")
+
+        class ProbeThread:
+            def __init__(self, *, target: object, daemon: bool) -> None:
+                assert target
+                assert daemon is True
+                self.alive = False
+
+            def start(self) -> None:
+                self.alive = True
+
+            def is_alive(self) -> bool:
+                return self.alive
+
+            def join(self, *, timeout: int) -> None:
+                assert timeout == 2
+                lifecycle.append("server-thread-join")
+                self.alive = False
+
+        monkeypatch.setattr(pinned_cdp, "_ProbeServer", ProbeServer)
+        monkeypatch.setattr(pinned_cdp.threading, "Thread", ProbeThread)
+
+    executable = tmp_path / "qcsd-chromium"
+    executable.write_bytes(b"fixture")
+    executable.chmod(0o755)
+    monkeypatch.setattr(pinned_cdp, "_observe_isolation", lambda **_kwargs: {})
+    monkeypatch.setattr(
+        pinned_cdp,
+        "validate_default_playwright_driver_once",
+        lambda: {"validated": True},
+    )
+    monkeypatch.setattr(
+        pinned_cdp.importlib.metadata,
+        "version",
+        lambda _package: pinned_cdp.EXPECTED_PLAYWRIGHT_VERSION,
+    )
+    monkeypatch.setattr(pinned_cdp, "EXPECTED_CHROMIUM_EXECUTABLE", str(executable))
+    monkeypatch.setattr(
+        pinned_cdp,
+        "pinned_chromium_executable_path",
+        lambda: str(executable),
+    )
+    monkeypatch.setattr(
+        pinned_cdp,
+        "playwright_driver_session",
+        lambda _factory, *, exclusive: DriverSession(),
+    )
+    monkeypatch.setattr(
+        pinned_cdp,
+        "launch_pinned_cdp_probe_browser",
+        lambda _playwright, **_kwargs: (browser, {}),
+    )
+    monkeypatch.setattr(pinned_cdp, "NonReplayableEgressGuard", EgressGuard)
+    monkeypatch.setattr(
+        pinned_cdp,
+        "install_context_egress_guards",
+        lambda _context, _guard: None,
+    )
+    monkeypatch.setattr(pinned_cdp, "RecursiveCdpTargetRouter", Router)
+    monkeypatch.setattr(pinned_cdp, "BrowserSharedWorkerGuard", BrowserGuard)
+    monkeypatch.setattr(pinned_cdp, "_WorkerWebTransportGuardCollector", WorkerCollector)
+    monkeypatch.setattr(pinned_cdp, "_wait_for_page_load", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        pinned_cdp,
+        "_wait_for_required_observations",
+        lambda *_args, **_kwargs: (0, {}, {}),
+    )
+
+    if failure_kind in {"exception-abort-cleanup", "server-cleanup"}:
+        with pytest.raises(ProbeFailure, match="synthetic probe timeout") as caught:
+            pinned_cdp.run_pinned_cdp_probe(expected_uid=1000, expected_gid=1000)
+        expected_notes = (
+            ["pinned-CDP probe cleanup router-finish-abort failed with LookupError"]
+            if failure_kind == "exception-abort-cleanup"
+            else ["pinned-CDP probe cleanup server-close failed with OSError"]
+        )
+        assert getattr(caught.value, "__notes__", []) == expected_notes
+    elif failure_kind == "keyboard-interrupt-browser-close":
+        with pytest.raises(KeyboardInterrupt) as caught:
+            pinned_cdp.run_pinned_cdp_probe(expected_uid=1000, expected_gid=1000)
+        assert caught.value is keyboard_primary
+        assert getattr(caught.value, "__notes__", []) == [
+            "pinned-CDP probe cleanup browser-close failed with LookupError"
+        ]
+    elif failure_kind == "normal-shutdown-summary":
+        with pytest.raises(ShutdownFailure, match="synthetic post-transition summary failure"):
+            pinned_cdp.run_pinned_cdp_probe(expected_uid=1000, expected_gid=1000)
+    elif failure_kind == "egress-priority":
+        with pytest.raises(NonReplayableEgressPolicyError) as caught:
+            pinned_cdp.run_pinned_cdp_probe(expected_uid=1000, expected_gid=1000)
+        assert caught.value is egress_primary
+        assert router_post_close_checks == [0]
+    else:
+        assert failure_kind == "router-priority"
+        with pytest.raises(RuntimeError, match="synthetic retained router failure") as caught:
+            pinned_cdp.run_pinned_cdp_probe(expected_uid=1000, expected_gid=1000)
+        assert caught.value is router_primary
+        assert router_post_close_checks == [1]
+
+    assert context.closed is True
+    assert browser.closed is True
+    if failure_kind == "normal-shutdown-summary":
+        assert lifecycle == [
+            "router-start",
+            "guard-start",
+            "collector-arm",
+            "router-begin-shutdown",
+            "guard-begin-shutdown",
+            "context-close",
+            "guard-finish",
+            "router-finish",
+            "browser-close",
+        ]
+    else:
+        expected_lifecycle = [
+            "router-start",
+            "guard-start",
+            "collector-arm",
+            "router-begin-abort",
+            "guard-begin-abort",
+            "context-close",
+            "guard-finish-abort",
+            "router-finish-abort",
+            "browser-close",
+        ]
+        if failure_kind == "server-cleanup":
+            expected_lifecycle.extend(
+                ["server-shutdown", "server-close", "server-thread-join"]
+            )
+        assert lifecycle == expected_lifecycle
 
 
 def test_main_fails_closed_without_wrapper_identity_environment(

@@ -3726,6 +3726,7 @@ def _pinned_cdp_binding(receipt: Mapping[str, Any]) -> dict[str, Any]:
         9,
         11,
         12,
+        13,
         PINNED_CDP_PROBE_SCHEMA_VERSION,
     }:
         identity = receipt.get("build_execution_identity")

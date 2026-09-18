@@ -7,13 +7,13 @@ import pytest
 
 import qcsd_lab.discover as discover_module
 from qcsd_lab.acquisition_errors import (
+    NonReplayableEgressPolicyError,
     PassiveRenderPolicyError,
     RecoverableAcquisitionError,
 )
 from qcsd_lab.browser_egress import (
     NON_REPLAYABLE_EGRESS_POLICY,
     NonReplayableEgressGuard,
-    TARGET_EGRESS_APIS,
     target_egress_apis,
 )
 from qcsd_lab.cdp_targets import (
@@ -1368,18 +1368,48 @@ def test_passive_render_hard_cap_rejects_unready_router_without_active_requests(
     assert observation["cutoff_reason"] == "hard-cap-non-quiescent"
 
 
-def test_discover_page_aborts_pending_prearm_without_masking_policy_error(
+@pytest.mark.parametrize(
+    "failure_kind",
+    [
+        "policy",
+        "playwright",
+        "playwright-cleanup-failure",
+        "playwright-browser-close-failure",
+        "keyboard-interrupt",
+        "router-start-setup-failure",
+        "partial-guard-start",
+        "normal-shutdown-guard-failure",
+        "egress-priority",
+        "router-priority",
+    ],
+)
+def test_discover_page_aborts_pre_shutdown_failure_without_masking_primary(
     monkeypatch,
+    failure_kind: str,
 ) -> None:
     clock_ns = [0]
     lifecycle: list[str] = []
     monkeypatch.setattr(discover_module.time, "monotonic_ns", lambda: clock_ns[0])
     monkeypatch.setattr(discover_module, "validate_default_playwright_driver_once", lambda: None)
 
+    class PlaywrightFailure(RuntimeError):
+        pass
+
+    class SetupFailure(RuntimeError):
+        pass
+
+    class ShutdownFailure(RuntimeError):
+        pass
+
+    keyboard_primary = KeyboardInterrupt("synthetic discovery interrupt")
+    router_post_close_checks = [0]
+
     class Router:
         active_request_identities = ()
-        shutdown_ready = False
-        bootstrap_prearm_summary = _bootstrap_prearm_summary(held=1)
+        shutdown_ready = failure_kind == "normal-shutdown-guard-failure"
+        bootstrap_prearm_summary = _bootstrap_prearm_summary(
+            held=0 if failure_kind == "normal-shutdown-guard-failure" else 1
+        )
         egress_prearm_summary = _egress_prearm_summary()
 
         def __init__(self, *_args, **_kwargs) -> None:
@@ -1387,12 +1417,19 @@ def test_discover_page_aborts_pending_prearm_without_masking_policy_error(
 
         def start(self) -> None:
             lifecycle.append("router-start")
+            if failure_kind == "router-start-setup-failure":
+                raise SetupFailure("synthetic router setup failure")
 
         def raise_if_failed(self) -> None:
+            if failure_kind in {"egress-priority", "router-priority"} and browser.closed:
+                router_post_close_checks[0] += 1
+                raise CdpTargetIntegrityError("synthetic retained router failure")
             return None
 
         def begin_shutdown(self) -> None:
-            raise AssertionError("unready router must not use normal shutdown")
+            if failure_kind != "normal-shutdown-guard-failure":
+                raise AssertionError("unready router must not use normal shutdown")
+            lifecycle.append("router-begin-shutdown")
 
         def begin_abort(self) -> None:
             self.abort_started = True
@@ -1401,6 +1438,8 @@ def test_discover_page_aborts_pending_prearm_without_masking_policy_error(
         def finish_abort(self) -> None:
             assert self.abort_started
             lifecycle.append("router-finish-abort")
+            if failure_kind == "playwright-cleanup-failure":
+                raise LookupError("synthetic router cleanup failure")
 
     class Guard:
         def __init__(self, _session, router: Router) -> None:
@@ -1409,6 +1448,8 @@ def test_discover_page_aborts_pending_prearm_without_masking_policy_error(
 
         def start(self) -> None:
             lifecycle.append("guard-start")
+            if failure_kind == "partial-guard-start":
+                raise SetupFailure("synthetic partial guard start")
 
         def begin_abort(self) -> None:
             assert self.router.abort_started
@@ -1418,6 +1459,14 @@ def test_discover_page_aborts_pending_prearm_without_masking_policy_error(
         def finish_abort(self) -> None:
             assert self.abort_started
             lifecycle.append("guard-finish-abort")
+
+        def begin_shutdown(self) -> None:
+            lifecycle.append("guard-begin-shutdown")
+            if failure_kind == "normal-shutdown-guard-failure":
+                raise ShutdownFailure("synthetic guard shutdown failure")
+
+        def finish(self) -> None:
+            lifecycle.append("guard-finish")
 
     class Page:
         url = "https://page.test/"
@@ -1429,6 +1478,13 @@ def test_discover_page_aborts_pending_prearm_without_masking_policy_error(
             self.handlers[event] = handler
 
         def goto(self, *_args, **_kwargs) -> None:
+            if failure_kind == "keyboard-interrupt":
+                raise keyboard_primary
+            if failure_kind.startswith("playwright") or failure_kind in {
+                "egress-priority",
+                "router-priority",
+            }:
+                raise PlaywrightFailure("synthetic navigation timeout")
             self.handlers["load"]()
 
         def wait_for_timeout(self, milliseconds: int) -> None:
@@ -1462,6 +1518,8 @@ def test_discover_page_aborts_pending_prearm_without_masking_policy_error(
             self.closed = True
             lifecycle.append("context-close")
 
+    egress_guards: list[NonReplayableEgressGuard] = []
+
     class Browser:
         version = "test-chromium"
 
@@ -1478,6 +1536,15 @@ def test_discover_page_aborts_pending_prearm_without_masking_policy_error(
         def close(self) -> None:
             self.closed = True
             lifecycle.append("browser-close")
+            if failure_kind == "egress-priority":
+                egress_guards[0].record(
+                    source=None,
+                    api="WebSocket",
+                    mechanism="paused-target-runtime-shim",
+                    url=None,
+                )
+            if failure_kind in {"playwright-browser-close-failure", "keyboard-interrupt"}:
+                raise LookupError("synthetic browser close failure")
 
     browser = Browser()
     monkeypatch.setattr(
@@ -1503,7 +1570,7 @@ def test_discover_page_aborts_pending_prearm_without_masking_policy_error(
             return None
 
     sync_api = ModuleType("playwright.sync_api")
-    sync_api.Error = RuntimeError  # type: ignore[attr-defined]
+    sync_api.Error = PlaywrightFailure  # type: ignore[attr-defined]
     sync_api.sync_playwright = PlaywrightManager  # type: ignore[attr-defined]
     playwright = ModuleType("playwright")
     playwright.sync_api = sync_api  # type: ignore[attr-defined]
@@ -1512,29 +1579,122 @@ def test_discover_page_aborts_pending_prearm_without_masking_policy_error(
     monkeypatch.setattr(discover_module, "RecursiveCdpTargetRouter", Router)
     monkeypatch.setattr(discover_module, "BrowserSharedWorkerGuard", Guard)
 
-    with pytest.raises(PassiveRenderPolicyError) as caught:
-        discover_page(
-            "https://page.test/",
-            allow_origins=["https://page.test"],
-            timeout_ms=1_000,
-            origin_ip_pins={"https://page.test": "1.1.1.1"},
-        )
+    def new_egress_guard() -> NonReplayableEgressGuard:
+        guard = NonReplayableEgressGuard()
+        egress_guards.append(guard)
+        return guard
 
-    observation = caught.value.evidence["render_observation"]
-    assert observation["bootstrap_prearm_summary"]["pending_total"] == 1
-    assert observation["cutoff_reason"] == "hard-cap-non-quiescent"
+    monkeypatch.setattr(discover_module, "NonReplayableEgressGuard", new_egress_guard)
+
+    if failure_kind == "policy":
+        with pytest.raises(PassiveRenderPolicyError) as caught:
+            discover_page(
+                "https://page.test/",
+                allow_origins=["https://page.test"],
+                timeout_ms=1_000,
+                origin_ip_pins={"https://page.test": "1.1.1.1"},
+            )
+        observation = caught.value.evidence["render_observation"]
+        assert observation["bootstrap_prearm_summary"]["pending_total"] == 1
+        assert observation["cutoff_reason"] == "hard-cap-non-quiescent"
+    elif failure_kind.startswith("playwright"):
+        with pytest.raises(RecoverableAcquisitionError) as caught:
+            discover_page(
+                "https://page.test/",
+                allow_origins=["https://page.test"],
+                timeout_ms=1_000,
+                origin_ip_pins={"https://page.test": "1.1.1.1"},
+            )
+        assert isinstance(caught.value.__cause__, PlaywrightFailure)
+        notes = getattr(caught.value.__cause__, "__notes__", [])
+        if failure_kind == "playwright-cleanup-failure":
+            assert notes == ["rejected-render cleanup router-finish-abort failed with LookupError"]
+        elif failure_kind == "playwright-browser-close-failure":
+            assert notes == [
+                "browser-discovery cleanup browser-close failed with LookupError"
+            ]
+        else:
+            assert notes == []
+    elif failure_kind == "keyboard-interrupt":
+        with pytest.raises(KeyboardInterrupt) as caught:
+            discover_page(
+                "https://page.test/",
+                allow_origins=["https://page.test"],
+                timeout_ms=1_000,
+                origin_ip_pins={"https://page.test": "1.1.1.1"},
+            )
+        assert caught.value is keyboard_primary
+        assert getattr(caught.value, "__notes__", []) == [
+            "browser-discovery cleanup browser-close failed with LookupError"
+        ]
+    elif failure_kind in {"router-start-setup-failure", "partial-guard-start"}:
+        expected = (
+            "synthetic router setup failure"
+            if failure_kind == "router-start-setup-failure"
+            else "synthetic partial guard start"
+        )
+        with pytest.raises(SetupFailure, match=expected):
+            discover_page(
+                "https://page.test/",
+                allow_origins=["https://page.test"],
+                timeout_ms=1_000,
+                origin_ip_pins={"https://page.test": "1.1.1.1"},
+            )
+    elif failure_kind == "normal-shutdown-guard-failure":
+        with pytest.raises(ShutdownFailure, match="synthetic guard shutdown failure"):
+            discover_page(
+                "https://page.test/",
+                allow_origins=["https://page.test"],
+                timeout_ms=1_000,
+                origin_ip_pins={"https://page.test": "1.1.1.1"},
+            )
+    elif failure_kind == "egress-priority":
+        with pytest.raises(NonReplayableEgressPolicyError):
+            discover_page(
+                "https://page.test/",
+                allow_origins=["https://page.test"],
+                timeout_ms=1_000,
+                origin_ip_pins={"https://page.test": "1.1.1.1"},
+            )
+        assert router_post_close_checks == [0]
+    else:
+        assert failure_kind == "router-priority"
+        with pytest.raises(CdpTargetIntegrityError, match="synthetic retained router failure"):
+            discover_page(
+                "https://page.test/",
+                allow_origins=["https://page.test"],
+                timeout_ms=1_000,
+                origin_ip_pins={"https://page.test": "1.1.1.1"},
+            )
+        assert router_post_close_checks == [1]
     assert browser.context.closed is True
     assert browser.closed is True
-    assert lifecycle == [
-        "router-start",
-        "guard-start",
-        "router-begin-abort",
-        "guard-begin-abort",
-        "context-close",
-        "guard-finish-abort",
-        "router-finish-abort",
-        "browser-close",
-    ]
+    if failure_kind == "normal-shutdown-guard-failure":
+        assert lifecycle == [
+            "router-start",
+            "guard-start",
+            "router-begin-shutdown",
+            "guard-begin-shutdown",
+            "context-close",
+            "browser-close",
+        ]
+    elif failure_kind == "router-start-setup-failure":
+        assert lifecycle == [
+            "router-start",
+            "context-close",
+            "browser-close",
+        ]
+    else:
+        assert lifecycle == [
+            "router-start",
+            "guard-start",
+            "router-begin-abort",
+            "guard-begin-abort",
+            "context-close",
+            "guard-finish-abort",
+            "router-finish-abort",
+            "browser-close",
+        ]
 
 
 def test_post_cutoff_network_occurrence_cannot_enter_an_accepted_graph() -> None:

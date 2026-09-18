@@ -1682,9 +1682,10 @@ def _class_build_pinned_cdp_receipt(fixture, *, schema: object) -> Path:
 
 def test_class_build_admission_accepts_current_pinned_cdp_schema(tmp_path: Path) -> None:
     from qcsd_lab.class_build_admission import resolve_action_admission
+    from qcsd_lab.pinned_cdp import PROBE_SCHEMA_VERSION
 
     fixture = _class_build_admission_fixture(tmp_path)
-    pinned = _class_build_pinned_cdp_receipt(fixture, schema=13)
+    pinned = _class_build_pinned_cdp_receipt(fixture, schema=PROBE_SCHEMA_VERSION)
 
     assert (
         resolve_action_admission(
@@ -1698,7 +1699,7 @@ def test_class_build_admission_accepts_current_pinned_cdp_schema(tmp_path: Path)
     )
 
 
-@pytest.mark.parametrize("schema", (13.0, "13", True))
+@pytest.mark.parametrize("schema", (14.0, "14", True))
 def test_class_build_admission_rejects_current_pinned_cdp_schema_aliases(
     tmp_path: Path,
     schema: object,
@@ -1718,7 +1719,7 @@ def test_class_build_admission_rejects_current_pinned_cdp_schema_aliases(
         )
 
 
-@pytest.mark.parametrize("schema", (8, 9, 11, 12))
+@pytest.mark.parametrize("schema", (8, 9, 11, 12, 13))
 def test_class_build_admission_classifies_old_pinned_cdp_schemas_as_historical(
     tmp_path: Path,
     schema: int,
