@@ -109,9 +109,9 @@ from .util import SOURCE_METADATA_KEYS, load_json, sha256_file
 
 MANIFEST_SCHEMA_VERSION = 2
 ARGV_SCHEMA_VERSION = 1
-FOUNDATION_SCHEMA_VERSION = 5
+FOUNDATION_SCHEMA_VERSION = 6
 HISTORICAL_FOUNDATION_SCHEMA_VERSION = 2
-HISTORICAL_FOUNDATION_SCHEMA_VERSIONS = frozenset({2, 3, 4})
+HISTORICAL_FOUNDATION_SCHEMA_VERSIONS = frozenset({2, 3, 4, 5})
 ATTEMPT_INTENT_SCHEMA_VERSION = 1
 RESULT_SCHEMA_VERSION = 1
 CHECKPOINT_SCHEMA_VERSION = 1
@@ -169,6 +169,22 @@ LIVE_DOCKER_DAEMON_FIELDS = BUILD_DOCKER_DAEMON_FIELDS | {
     "storage_driver",
     "docker_root_dir",
 }
+DOCKER_DAEMON_CAPACITY_FIELDS = frozenset({"ncpu", "mem_total_bytes"})
+DOCKER_DAEMON_IDENTITY_FIELDS = (
+    LIVE_DOCKER_DAEMON_FIELDS - DOCKER_DAEMON_CAPACITY_FIELDS
+)
+DOCKER_CAPACITY_CONTRACT = {
+    "schema_version": 1,
+    "ncpu_policy": "exact",
+    "required_ncpu": 12,
+    "mem_total_bytes_policy": "positive-provenance-only",
+    "mem_total_bytes_threshold": None,
+}
+
+# Schema 5 introduced the packet-level DNS evidence contract and the v2
+# manifest/source inventory.  It remains portable historical evidence after
+# schema 6 separates stable daemon identity from raw capacity observations.
+PACKET_DNS_FOUNDATION_SCHEMA_VERSIONS = frozenset({5, FOUNDATION_SCHEMA_VERSION})
 
 HISTORICAL_SOURCE_BINDING_PATHS = (
     "Dockerfile",
@@ -234,14 +250,16 @@ PACKET_DNS_EVIDENCE_CONTRACT = {
 
 def _foundation_manifest_path(schema_version: int) -> str:
     return (
-        MANIFEST_RELATIVE_PATH if schema_version == FOUNDATION_SCHEMA_VERSION
+        MANIFEST_RELATIVE_PATH
+        if schema_version in PACKET_DNS_FOUNDATION_SCHEMA_VERSIONS
         else HISTORICAL_MANIFEST_RELATIVE_PATH
     )
 
 
 def _foundation_source_paths(schema_version: int) -> tuple[str, ...]:
     return (
-        REQUIRED_SOURCE_BINDING_PATHS if schema_version == FOUNDATION_SCHEMA_VERSION
+        REQUIRED_SOURCE_BINDING_PATHS
+        if schema_version in PACKET_DNS_FOUNDATION_SCHEMA_VERSIONS
         else HISTORICAL_SOURCE_BINDING_PATHS
     )
 
@@ -938,7 +956,7 @@ def _browser_binding(
         driver_receipt_sha256 = PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_RECEIPT_SHA256
         driver_payload_sha256 = PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256
         driver_content_sha256 = PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_CONTENT_SHA256
-    elif foundation_schema_version in {4, FOUNDATION_SCHEMA_VERSION}:
+    elif foundation_schema_version in {4, *PACKET_DNS_FOUNDATION_SCHEMA_VERSIONS}:
         driver_receipt_sha256 = EXPECTED_PLAYWRIGHT_DRIVER_RECEIPT_SHA256
         driver_payload_sha256 = EXPECTED_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256
         driver_content_sha256 = EXPECTED_PLAYWRIGHT_DRIVER_CONTENT_SHA256
@@ -968,7 +986,7 @@ def validate_build_docker_daemon_binding(value: object) -> dict[str, str]:
 
 
 def validate_docker_daemon_binding(value: object) -> dict[str, Any]:
-    """Validate the full live daemon admission and capacity projection."""
+    """Validate a full raw live daemon identity and capacity observation."""
 
     if not isinstance(value, Mapping) or set(value) != LIVE_DOCKER_DAEMON_FIELDS:
         raise ValueError("browser-egress live Docker daemon binding fields are invalid")
@@ -984,6 +1002,20 @@ def validate_docker_daemon_binding(value: object) -> dict[str, Any]:
     return json.loads(canonical_json_bytes(value))
 
 
+def validate_docker_capacity_contract(value: object) -> dict[str, Any]:
+    """Validate the immutable schema-6 capacity-admission policy."""
+
+    if not isinstance(value, Mapping):
+        raise ValueError("browser-egress Docker capacity contract is invalid")
+    try:
+        encoded = canonical_json_bytes(value)
+    except (TypeError, ValueError):
+        raise ValueError("browser-egress Docker capacity contract is invalid") from None
+    if encoded != canonical_json_bytes(DOCKER_CAPACITY_CONTRACT):
+        raise ValueError("browser-egress Docker capacity contract is invalid")
+    return json.loads(encoded)
+
+
 def build_docker_daemon_projection(value: object) -> dict[str, str]:
     """Project a validated live daemon onto fields recorded by the build."""
 
@@ -991,14 +1023,55 @@ def build_docker_daemon_projection(value: object) -> dict[str, str]:
     return {key: live[key] for key in sorted(BUILD_DOCKER_DAEMON_FIELDS)}
 
 
-def require_live_docker_daemon(value: object, *, expected: Mapping[str, Any]) -> dict[str, Any]:
-    """Fail closed unless a fresh live projection exactly matches a receipt."""
+def _docker_daemon_identity_projection(value: object) -> dict[str, Any]:
+    """Project stable daemon identity/configuration without raw capacity."""
+
+    live = validate_docker_daemon_binding(value)
+    return {key: live[key] for key in sorted(DOCKER_DAEMON_IDENTITY_FIELDS)}
+
+
+def _require_docker_capacity(
+    value: object, *, capacity_contract: object
+) -> dict[str, Any]:
+    """Admit only the frozen CPU policy while retaining raw memory provenance."""
+
+    live = validate_docker_daemon_binding(value)
+    contract = validate_docker_capacity_contract(capacity_contract)
+    if live["ncpu"] != contract["required_ncpu"]:
+        raise ValueError("browser-egress live Docker CPU capacity differs from its contract")
+    # validate_docker_daemon_binding already requires a positive integer.  No
+    # memory threshold is invented: daemon total memory is provenance, while
+    # later resource-intensive stages perform their own measured admissions.
+    return live
+
+
+def require_live_docker_daemon(
+    value: object,
+    *,
+    expected: Mapping[str, Any],
+    foundation_schema_version: int,
+    capacity_contract: object | None,
+) -> dict[str, Any]:
+    """Fail closed under the schema-specific daemon admission contract."""
 
     live = validate_docker_daemon_binding(value)
     recorded = validate_docker_daemon_binding(expected)
-    if live != recorded:
+    if type(foundation_schema_version) is not int:
+        raise ValueError("browser-egress Docker admission schema is invalid")
+    if foundation_schema_version in HISTORICAL_FOUNDATION_SCHEMA_VERSIONS:
+        if capacity_contract is not None:
+            raise ValueError("historical browser-egress foundation has a capacity contract")
+        if live != recorded:
+            raise ValueError("browser-egress live Docker daemon differs from its foundation")
+        return live
+    if foundation_schema_version != FOUNDATION_SCHEMA_VERSION:
+        raise ValueError("browser-egress Docker admission schema is invalid")
+    if _docker_daemon_identity_projection(live) != _docker_daemon_identity_projection(
+        recorded
+    ):
         raise ValueError("browser-egress live Docker daemon differs from its foundation")
-    return live
+    _require_docker_capacity(recorded, capacity_contract=capacity_contract)
+    return _require_docker_capacity(live, capacity_contract=capacity_contract)
 
 
 def build_live_docker_daemon_binding(
@@ -1087,7 +1160,10 @@ def build_foundation_payload(
         build_file_value.get("payload_sha256"), label="build execution payload SHA-256"
     )
     build_docker_daemon = validate_build_docker_daemon_binding(build_file_value.get("docker"))
-    docker_daemon = validate_docker_daemon_binding(live_docker_daemon)
+    docker_daemon = _require_docker_capacity(
+        live_docker_daemon,
+        capacity_contract=DOCKER_CAPACITY_CONTRACT,
+    )
     if build_docker_daemon_projection(docker_daemon) != build_docker_daemon:
         raise ValueError("browser-egress live Docker daemon differs from the no-cache build daemon")
     completion_path, completion_sha256 = _current_build_completion_identity(
@@ -1112,6 +1188,7 @@ def build_foundation_payload(
         },
         "prepare_image": {"id": prepare_id, "repo_digests": list(prepare_repo_digests)},
         "docker_daemon": docker_daemon,
+        "docker_capacity_contract": DOCKER_CAPACITY_CONTRACT,
         "source": source,
         "browser": _browser_binding(),
         "contracts": {
@@ -1148,21 +1225,25 @@ def validate_foundation_payload(value: object, *, allow_historical: bool = False
         "execution_contract",
         "consumer_contract",
     }
-    if not isinstance(value, Mapping) or set(value) != fields:
+    if not isinstance(value, Mapping):
         raise ValueError("browser-egress foundation fields are invalid")
-    cohort_version = _integer(
-        value["cohort_version"], label="browser-egress cohort version", minimum=1
-    )
-    schema_version = value["schema_version"]
+    schema_version = value.get("schema_version")
     if (
         type(schema_version) is not int
         or schema_version
         not in {FOUNDATION_SCHEMA_VERSION, *HISTORICAL_FOUNDATION_SCHEMA_VERSIONS}
         or (schema_version in HISTORICAL_FOUNDATION_SCHEMA_VERSIONS and not allow_historical)
-        or value["qualification_id"] != QUALIFICATION_ID
-        or value["study_id"] != STUDY_ID
+        or value.get("qualification_id") != QUALIFICATION_ID
+        or value.get("study_id") != STUDY_ID
     ):
         raise ValueError("browser-egress foundation identity is invalid")
+    if schema_version == FOUNDATION_SCHEMA_VERSION:
+        fields.add("docker_capacity_contract")
+    if set(value) != fields:
+        raise ValueError("browser-egress foundation fields are invalid")
+    cohort_version = _integer(
+        value["cohort_version"], label="browser-egress cohort version", minimum=1
+    )
     build = value["build_execution"]
     build_fields = {
         "path",
@@ -1217,7 +1298,12 @@ def validate_foundation_payload(value: object, *, allow_historical: bool = False
     ):
         raise ValueError("browser-egress prepare image repo digests are invalid")
     validate_source_binding(value["source"], prepare_image_id=image["id"])
-    validate_docker_daemon_binding(value["docker_daemon"])
+    docker_daemon = validate_docker_daemon_binding(value["docker_daemon"])
+    if schema_version == FOUNDATION_SCHEMA_VERSION:
+        _require_docker_capacity(
+            docker_daemon,
+            capacity_contract=value["docker_capacity_contract"],
+        )
     if value["browser"] != _browser_binding(foundation_schema_version=schema_version):
         raise ValueError("browser-egress pinned browser binding is invalid")
     contracts = value["contracts"]
@@ -1227,11 +1313,11 @@ def validate_foundation_payload(value: object, *, allow_historical: bool = False
         "expanded_vectors_sha256",
         "fixture_contract_sha256",
     }
-    if schema_version == FOUNDATION_SCHEMA_VERSION:
+    if schema_version in PACKET_DNS_FOUNDATION_SCHEMA_VERSIONS:
         contract_fields.add("packet_dns_evidence_contract_sha256")
     if not isinstance(contracts, Mapping) or set(contracts) != contract_fields:
         raise ValueError("browser-egress contract binding fields are invalid")
-    if schema_version == FOUNDATION_SCHEMA_VERSION and contracts[
+    if schema_version in PACKET_DNS_FOUNDATION_SCHEMA_VERSIONS and contracts[
         "packet_dns_evidence_contract_sha256"
     ] != canonical_json_sha256(PACKET_DNS_EVIDENCE_CONTRACT):
         raise ValueError("browser-egress packet/DNS evidence contract digest is invalid")
@@ -1880,13 +1966,18 @@ def validate_runtime_binding(
         raise ValueError("browser-egress runtime binding fields are invalid")
     if (
         value["prepare_image_id"] != foundation["prepare_image"]["id"]
-        or value["docker_daemon"] != foundation["docker_daemon"]
         or value["source"] != foundation["source"]
         or value["browser"] != foundation["browser"]
         or value["child_environment"] != expected_argv_config()["child_environment"]
         or value["fixture_contract_sha256"] != fixture_contract_sha256()
     ):
         raise ValueError("browser-egress runtime differs from its foundation")
+    require_live_docker_daemon(
+        value["docker_daemon"],
+        expected=foundation["docker_daemon"],
+        foundation_schema_version=foundation["schema_version"],
+        capacity_contract=foundation.get("docker_capacity_contract"),
+    )
     vector = vector_by_id(vector_id)
     expected_topology = build_attempt_topology_binding(
         foundation=foundation,
@@ -2018,14 +2109,16 @@ def validate_result_payload(
         analysis_schema = analysis_value.get("schema_version") if isinstance(
             analysis_value, Mapping
         ) else None
-        fresh = foundation["schema_version"] == FOUNDATION_SCHEMA_VERSION
-        if type(analysis_schema) is not int or analysis_schema not in ({5} if fresh else {3, 4}):
+        packet_dns = foundation["schema_version"] in PACKET_DNS_FOUNDATION_SCHEMA_VERSIONS
+        if type(analysis_schema) is not int or analysis_schema not in (
+            {5} if packet_dns else {3, 4}
+        ):
             raise ValueError("browser-egress packet analysis schema differs from its foundation")
         sink_value = value["sink"]
         paired_dns = vector.packet_policy in {
             "approved-dns-prefetch-zero", "approved-dns-prefetch-positive"
         }
-        expected_sink_schema = 2 if fresh and paired_dns else 1
+        expected_sink_schema = 2 if packet_dns and paired_dns else 1
         if (
             not isinstance(sink_value, Mapping)
             or type(sink_value.get("schema_version")) is not int

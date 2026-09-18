@@ -194,7 +194,7 @@ def test_authority_admission_accepts_production_built_browser_foundation(tmp_pat
     assert observed == [(build_path, build.cohort_version)]
 
 
-@pytest.mark.parametrize("schema", (2, 3, 4))
+@pytest.mark.parametrize("schema", (2, 3, 4, 5))
 def test_browser_historical_foundations_are_not_current_authority(authority_fixture, schema) -> None:
     fixture = authority_fixture
     _rewrite(fixture.browser / "foundation.json", lambda value: value.update(schema_version=schema))
@@ -203,7 +203,9 @@ def test_browser_historical_foundations_are_not_current_authority(authority_fixt
                  pinned_cdp=fixture.pinned, browser_egress=fixture.browser)
 
 
-@pytest.mark.parametrize("schema", (True, False, 2.0, 3.0, 4.0, 5.0, "5", None, 0, 1, 6))
+@pytest.mark.parametrize(
+    "schema", (True, False, 2.0, 3.0, 4.0, 5.0, 6.0, "6", None, 0, 1, 7)
+)
 def test_browser_foundation_schema_aliases_and_unknowns_are_invalid(authority_fixture, schema) -> None:
     fixture = authority_fixture
     _rewrite(fixture.browser / "foundation.json", lambda value: value.update(schema_version=schema))

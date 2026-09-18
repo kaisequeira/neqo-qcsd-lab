@@ -115,8 +115,8 @@ _PINNED_CDP_SCHEMA = 13
 _HISTORICAL_PINNED_CDP_SCHEMAS = frozenset({8, 9, 11, 12})
 # Mirrored from browser_egress_qualification and checked against its producer
 # in tests. Importing the package here would break the stdlib-only host gate.
-_BROWSER_EGRESS_FOUNDATION_SCHEMA = 5
-_HISTORICAL_BROWSER_EGRESS_FOUNDATION_SCHEMAS = frozenset({2, 3, 4})
+_BROWSER_EGRESS_FOUNDATION_SCHEMA = 6
+_HISTORICAL_BROWSER_EGRESS_FOUNDATION_SCHEMAS = frozenset({2, 3, 4, 5})
 _BROWSER_EGRESS_FINAL_SCHEMA = 1
 _HANDOFF_HISTORICAL_POST = "inputs/class-study-historical-post-snapshot.json"
 _BASE_STUDY_ID = "classifier-multiorigin100-v1"

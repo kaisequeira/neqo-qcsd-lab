@@ -1131,7 +1131,10 @@ def _admit_resume(args: argparse.Namespace) -> None:
         mode=FoundationVerificationMode.EXECUTION,
     )
     require_live_docker_daemon(
-        _live_docker_argument(args), expected=validated_foundation["docker_daemon"]
+        _live_docker_argument(args),
+        expected=validated_foundation["docker_daemon"],
+        foundation_schema_version=validated_foundation["schema_version"],
+        capacity_contract=validated_foundation.get("docker_capacity_contract"),
     )
     expected_build = validate_build_execution_receipt(
         args.build_execution_receipt,
@@ -1165,7 +1168,10 @@ def _reconcile_filesystem(args: argparse.Namespace) -> None:
         mode=FoundationVerificationMode.EXECUTION,
     )
     require_live_docker_daemon(
-        _live_docker_argument(args), expected=validated_foundation["docker_daemon"]
+        _live_docker_argument(args),
+        expected=validated_foundation["docker_daemon"],
+        foundation_schema_version=validated_foundation["schema_version"],
+        capacity_contract=validated_foundation.get("docker_capacity_contract"),
     )
     expected_build = validate_build_execution_receipt(
         args.build_execution_receipt,
@@ -1196,7 +1202,10 @@ def _recover_resume(args: argparse.Namespace) -> None:
         mode=FoundationVerificationMode.EXECUTION,
     )
     require_live_docker_daemon(
-        _live_docker_argument(args), expected=validated_foundation["docker_daemon"]
+        _live_docker_argument(args),
+        expected=validated_foundation["docker_daemon"],
+        foundation_schema_version=validated_foundation["schema_version"],
+        capacity_contract=validated_foundation.get("docker_capacity_contract"),
     )
     expected_build = validate_build_execution_receipt(
         args.build_execution_receipt,
@@ -1662,7 +1671,12 @@ def _verify(args: argparse.Namespace) -> None:
         foundation_envelope,
         expected_type="qcsd-browser-egress-qualification-foundation",
     )
-    require_live_docker_daemon(_live_docker_argument(args), expected=foundation["docker_daemon"])
+    require_live_docker_daemon(
+        _live_docker_argument(args),
+        expected=foundation["docker_daemon"],
+        foundation_schema_version=foundation["schema_version"],
+        capacity_contract=foundation.get("docker_capacity_contract"),
+    )
     expected_build = validate_build_execution_receipt(
         args.build_execution_receipt,
         expected_cohort_version=args.cohort_version,
@@ -1691,7 +1705,10 @@ def _project_runtime(args: argparse.Namespace) -> None:
         expected_type="qcsd-browser-egress-qualification-foundation",
     )
     live_docker_daemon = require_live_docker_daemon(
-        _live_docker_argument(args), expected=foundation["docker_daemon"]
+        _live_docker_argument(args),
+        expected=foundation["docker_daemon"],
+        foundation_schema_version=foundation["schema_version"],
+        capacity_contract=foundation.get("docker_capacity_contract"),
     )
     attempt_topology = build_attempt_topology_binding(
         foundation=foundation,

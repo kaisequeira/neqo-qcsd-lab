@@ -75,6 +75,7 @@ from qcsd_lab.browser_egress_observer import (
 from qcsd_lab.browser_egress_qualification import (
     ARGV_RELATIVE_PATH,
     CONSUMER_CONTRACT,
+    DOCKER_CAPACITY_CONTRACT,
     DOCKER_INSPECT_PROJECTION_SCHEMA_VERSION,
     EFFECTIVE_ARGV_BINDING_SCHEMA_VERSION,
     EMPTY_SHA256,
@@ -243,17 +244,20 @@ def _historical_foundation(root: Path, foundation: dict, schema_version: int) ->
     historical = copy.deepcopy(foundation)
     historical["schema_version"] = schema_version
     historical["browser"] = _browser_binding(foundation_schema_version=schema_version)
-    historical["contracts"].pop("packet_dns_evidence_contract_sha256")
-    manifest = root / HISTORICAL_MANIFEST_RELATIVE_PATH
-    historical["contracts"]["manifest"] = {
-        "path": HISTORICAL_MANIFEST_RELATIVE_PATH,
-        "sha256": sha256_file(manifest),
-        "size_bytes": manifest.stat().st_size,
-    }
-    historical["source_files"] = [
-        binding for binding in historical["source_files"]
-        if binding["path"] in HISTORICAL_SOURCE_BINDING_PATHS
-    ]
+    historical.pop("docker_capacity_contract")
+    if schema_version < 5:
+        historical["contracts"].pop("packet_dns_evidence_contract_sha256")
+        manifest = root / HISTORICAL_MANIFEST_RELATIVE_PATH
+        historical["contracts"]["manifest"] = {
+            "path": HISTORICAL_MANIFEST_RELATIVE_PATH,
+            "sha256": sha256_file(manifest),
+            "size_bytes": manifest.stat().st_size,
+        }
+        historical["source_files"] = [
+            binding
+            for binding in historical["source_files"]
+            if binding["path"] in HISTORICAL_SOURCE_BINDING_PATHS
+        ]
     if schema_version == 2:
         historical["build_execution"].pop("completion_path")
         historical["build_execution"].pop("completion_sha256")
@@ -577,9 +581,16 @@ def test_foundation_rejects_bool_float_and_adversarial_reseal(tmp_path: Path) ->
             build_validator=_BuildValidator(foundation),
             mode=FoundationVerificationMode.PORTABLE_REPLAY,
         )
-    assert FOUNDATION_SCHEMA_VERSION == 5
+    assert FOUNDATION_SCHEMA_VERSION == 6
     assert HISTORICAL_FOUNDATION_SCHEMA_VERSION == 2
-    assert HISTORICAL_FOUNDATION_SCHEMA_VERSIONS == frozenset({2, 3, 4})
+    assert HISTORICAL_FOUNDATION_SCHEMA_VERSIONS == frozenset({2, 3, 4, 5})
+    assert DOCKER_CAPACITY_CONTRACT == {
+        "schema_version": 1,
+        "ncpu_policy": "exact",
+        "required_ncpu": 12,
+        "mem_total_bytes_policy": "positive-provenance-only",
+        "mem_total_bytes_threshold": None,
+    }
     for historical_schema in sorted(HISTORICAL_FOUNDATION_SCHEMA_VERSIONS):
         historical = _historical_foundation(_root, foundation, historical_schema)
         with pytest.raises(ValueError, match="foundation identity"):
@@ -620,11 +631,166 @@ def test_foundation_rejects_cross_daemon_and_resealed_daemon_claim(
             build_validator=_BuildValidator(foundation),
         )
 
-    forged = copy.deepcopy(foundation)
-    forged["docker_daemon"]["mem_total_bytes"] += 1
-    resealed = bind_receipt(forged, receipt_type="qcsd-browser-egress-qualification-foundation")
+
+
+@pytest.mark.parametrize("memory_delta", [-8192, 8192])
+def test_schema_6_accepts_raw_memory_drift_and_preserves_the_live_runtime_observation(
+    tmp_path: Path, memory_delta: int
+) -> None:
+    _lab_root, foundation = _lab(tmp_path)
+    live = _live_daemon()
+    live["mem_total_bytes"] += memory_delta
+
+    assert require_live_docker_daemon(
+        live,
+        expected=foundation["docker_daemon"],
+        foundation_schema_version=foundation["schema_version"],
+        capacity_contract=foundation["docker_capacity_contract"],
+    ) == live
+
+    vector_id = "constructor--page--websocket"
+    runtime = _runtime(foundation, vector_id=vector_id, seed=95)
+    runtime["docker_daemon"] = copy.deepcopy(live)
+    validated = validate_runtime_binding(
+        runtime,
+        foundation=foundation,
+        vector_id=vector_id,
+        global_ordinal=1,
+        attempt_number=1,
+        started_at=_wall_time(2),
+    )
+    assert validated["docker_daemon"] == live
+    assert validated["docker_daemon"]["mem_total_bytes"] == (
+        foundation["docker_daemon"]["mem_total_bytes"] + memory_delta
+    )
+
+
+@pytest.mark.parametrize("ncpu", [11, 13])
+def test_schema_6_rejects_live_cpu_capacity_drift(tmp_path: Path, ncpu: int) -> None:
+    _lab_root, foundation = _lab(tmp_path)
+    live = _live_daemon()
+    live["ncpu"] = ncpu
+    with pytest.raises(ValueError, match="CPU capacity"):
+        require_live_docker_daemon(
+            live,
+            expected=foundation["docker_daemon"],
+            foundation_schema_version=foundation["schema_version"],
+            capacity_contract=foundation["docker_capacity_contract"],
+        )
+
+
+@pytest.mark.parametrize("schema_version", [True, 6.0, "6", None])
+def test_live_daemon_admission_rejects_schema_aliases(
+    tmp_path: Path, schema_version: object
+) -> None:
+    _lab_root, foundation = _lab(tmp_path)
+    with pytest.raises(ValueError, match="admission schema"):
+        require_live_docker_daemon(
+            _live_daemon(),
+            expected=foundation["docker_daemon"],
+            foundation_schema_version=schema_version,
+            capacity_contract=foundation["docker_capacity_contract"],
+        )
+
+
+@pytest.mark.parametrize("mem_total_bytes", [1, 2**63])
+def test_schema_6_treats_positive_raw_memory_as_provenance_only(
+    tmp_path: Path, mem_total_bytes: int
+) -> None:
+    _lab_root, foundation = _lab(tmp_path)
+    live = _live_daemon()
+    live["mem_total_bytes"] = mem_total_bytes
+    assert require_live_docker_daemon(
+        live,
+        expected=foundation["docker_daemon"],
+        foundation_schema_version=foundation["schema_version"],
+        capacity_contract=foundation["docker_capacity_contract"],
+    )["mem_total_bytes"] == mem_total_bytes
+
+
+@pytest.mark.parametrize("mem_total_bytes", [0, -1, True, 1.0])
+def test_schema_6_rejects_invalid_raw_memory_observations(
+    tmp_path: Path, mem_total_bytes: object
+) -> None:
+    _lab_root, foundation = _lab(tmp_path)
+    live = _live_daemon()
+    live["mem_total_bytes"] = mem_total_bytes
+    with pytest.raises(ValueError, match="live Docker capacity"):
+        require_live_docker_daemon(
+            live,
+            expected=foundation["docker_daemon"],
+            foundation_schema_version=foundation["schema_version"],
+            capacity_contract=foundation["docker_capacity_contract"],
+        )
+
+
+@pytest.mark.parametrize(
+    "field,replacement",
+    [
+        ("client_version", "29.0.2"),
+        ("server_version", "29.0.2"),
+        ("context", "different-context"),
+        ("endpoint", "unix:///run/different-docker.sock"),
+        ("server_name", "different-server"),
+        ("server_operating_system", "Different Docker Desktop"),
+        ("server_os_type", "different-os"),
+        ("server_architecture", "x86_64"),
+        ("server_id", "different-daemon-id"),
+        ("storage_driver", "different-storage-driver"),
+        ("docker_root_dir", "/srv/docker"),
+    ],
+)
+def test_schema_6_rejects_every_stable_daemon_identity_or_configuration_change(
+    tmp_path: Path, field: str, replacement: str
+) -> None:
+    _lab_root, foundation = _lab(tmp_path)
+    live = _live_daemon()
+    live[field] = replacement
     with pytest.raises(ValueError, match="live Docker daemon differs"):
-        require_live_docker_daemon(_live_daemon(), expected=resealed["payload"]["docker_daemon"])
+        require_live_docker_daemon(
+            live,
+            expected=foundation["docker_daemon"],
+            foundation_schema_version=foundation["schema_version"],
+            capacity_contract=foundation["docker_capacity_contract"],
+        )
+
+
+def test_schema_5_remains_portable_but_requires_an_exact_live_daemon(tmp_path: Path) -> None:
+    lab_root, foundation = _lab(tmp_path)
+    historical = _historical_foundation(lab_root, foundation, 5)
+    assert "docker_capacity_contract" not in historical
+    assert validate_foundation_payload(historical, allow_historical=True) == historical
+    assert deep_validate_foundation(
+        historical,
+        lab_root=lab_root,
+        build_validator=_BuildValidator(historical, allow_historical=True),
+        mode=FoundationVerificationMode.PORTABLE_REPLAY,
+        allow_historical=True,
+    ) == historical
+
+    live = _live_daemon()
+    live["mem_total_bytes"] += 8192
+    with pytest.raises(ValueError, match="live Docker daemon differs"):
+        require_live_docker_daemon(
+            live,
+            expected=historical["docker_daemon"],
+            foundation_schema_version=historical["schema_version"],
+            capacity_contract=None,
+        )
+
+
+@pytest.mark.parametrize("mutation", ["missing", "changed"])
+def test_schema_6_rejects_a_missing_or_mutated_capacity_contract(
+    tmp_path: Path, mutation: str
+) -> None:
+    _lab_root, foundation = _lab(tmp_path)
+    forged = copy.deepcopy(foundation)
+    if mutation == "missing":
+        forged.pop("docker_capacity_contract")
+    else:
+        forged["docker_capacity_contract"]["required_ncpu"] = 11
+    with pytest.raises(ValueError, match="fields|capacity contract"):
+        validate_foundation_payload(forged)
 
 
 def test_real_current_docker_daemon_binding_happy_path() -> None:
@@ -672,7 +838,12 @@ def test_real_current_docker_daemon_binding_happy_path() -> None:
         endpoint=endpoint,
         pinned_server_id=info["ID"],
     )
-    assert require_live_docker_daemon(live, expected=live) == live
+    assert require_live_docker_daemon(
+        live,
+        expected=live,
+        foundation_schema_version=FOUNDATION_SCHEMA_VERSION,
+        capacity_contract=DOCKER_CAPACITY_CONTRACT,
+    ) == live
     assert build_docker_daemon_projection(live)["server_id"] == info["ID"]
 
 
@@ -1730,6 +1901,35 @@ def test_historical_foundation_four_pass_and_intent_replay_but_cannot_create(
     incompatible["capture"] = receipt["payload"]["capture"]
     with pytest.raises(ValueError, match="analysis schema differs from its foundation"):
         validate_result_payload(incompatible, foundation=historical)
+
+
+def test_historical_foundation_five_replays_packet_dns_schema_five_and_sink_two(
+    tmp_path: Path,
+) -> None:
+    root, foundation = _lab(tmp_path)
+    historical = _historical_foundation(root, foundation, 5)
+    vector = vector_by_id("browser-service-control--default-profile--dns-prefetch-enabled")
+    result_root = tmp_path / "result"
+    receipt, _pcap = _passed_receipt(
+        result_root,
+        foundation,
+        vector_id=vector.vector_id,
+        global_ordinal=1,
+        attempt_number=1,
+        previous_result_sha256="0" * 64,
+        seed=1,
+    )
+    payload = copy.deepcopy(receipt["payload"])
+    payload["foundation_payload_sha256"] = canonical_json_sha256(historical)
+    payload["runtime"] = _runtime(historical, vector_id=vector.vector_id, seed=1)
+    assert payload["capture"]["analysis"]["schema_version"] == 5
+    assert payload["sink"]["schema_version"] == 2
+    assert validate_result_payload(
+        payload,
+        foundation=historical,
+        evidence_root=result_root,
+        deep=True,
+    ) == payload
 
 
 def test_docker_projection_binds_five_exact_distinct_roles_and_network() -> None:
