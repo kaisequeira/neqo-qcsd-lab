@@ -112,7 +112,7 @@ _HISTORICAL_PINNED_CDP_RESOLVER_PROJECTION = {
 }
 
 RECEIPT_TYPE = "qcsd-class-study-pinned-cdp-probe"
-PROBE_SCHEMA_VERSION = 15
+PROBE_SCHEMA_VERSION = 16
 HISTORICAL_PROBE_SCHEMA_VERSION = 8
 HISTORICAL_PROBE_SCHEMA_VERSIONS = frozenset({8, 9, 11, 12, 13, 14})
 EXPECTED_PLAYWRIGHT_VERSION = PLAYWRIGHT_VERSION
@@ -295,19 +295,19 @@ _HISTORICAL_PROBE_CONTRACT_V14_SHA256 = canonical_json_sha256(
     _HISTORICAL_PROBE_CONTRACT_V14
 )
 
-# Outer schema 15 binds the v17 router and requires one exact, identifier-
-# minimised root ``about:srcdoc`` loader-bound orphan-abort lifecycle from the
-# local probe.  Schema 15 has not been released, so the corrected inner summary
-# schema can be bound here without inventing another outer receipt generation.
+# Outer schema 16 binds the v18 router and requires one exact, identifier-
+# minimised root ``about:srcdoc`` loader-bound orphan terminal lifecycle from
+# the local probe.  Failed, unpublished outer schema 15 is deliberately not a
+# historical evidence format.
 PROBE_CONTRACT: dict[str, Any] = _worker_webtransport_probe_contract(
-    schema_version=14,
-    policy="pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v14",
+    schema_version=15,
+    policy="pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v15",
     instrumentation_policy=CDP_TARGET_INSTRUMENTATION_POLICY,
     playwright_driver_ownership_policy=OWNERSHIP_POLICY_RECEIPT,
     playwright_driver_binding=EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
 )
 PROBE_CONTRACT["required_observations"].append(
-    "root-about-srcdoc-loader-bound-orphan-abort-lifecycle"
+    "root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-lifecycle"
 )
 PROBE_CONTRACT["srcdoc_pseudo_document_summary_schema_version"] = (
     SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION

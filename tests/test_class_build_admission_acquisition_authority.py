@@ -158,7 +158,7 @@ def test_standalone_browser_schema_constants_match_the_producer() -> None:
         == acquisition_producer.CHECKPOINT_SCHEMA_VERSION
         == 3
     )
-    assert admission._PINNED_CDP_SCHEMA == pinned_cdp_producer.PROBE_SCHEMA_VERSION == 15
+    assert admission._PINNED_CDP_SCHEMA == pinned_cdp_producer.PROBE_SCHEMA_VERSION == 16
     assert 14 in admission._HISTORICAL_PINNED_CDP_SCHEMAS
 
 

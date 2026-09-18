@@ -84,9 +84,12 @@ def _target_activity() -> dict[str, object]:
     }
 
 
-def _srcdoc_pseudo_document_summary() -> dict[str, object]:
+def _srcdoc_pseudo_document_summary(
+    *,
+    terminal_method: str = "Network.loadingFailed",
+) -> dict[str, object]:
     loader_digest = hashlib.sha256(b"fixture-srcdoc-loader").hexdigest()
-    return {
+    summary: dict[str, object] = {
         "schema_version": pinned_cdp.SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
         "policy": pinned_cdp.SRCDOC_PSEUDO_DOCUMENT_POLICY,
         "enabled": True,
@@ -98,9 +101,13 @@ def _srcdoc_pseudo_document_summary() -> dict[str, object]:
         "network_history_saturated": False,
         "fetch_history_saturated": False,
         "candidate_limit_saturated": False,
+        "terminal_outcome_counts": {
+            "Network.loadingFailed": 1,
+            "Network.loadingFinished": 0,
+        },
         "diagnostics": [
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "source_role": "root-page",
                 "frame_id_sha256": hashlib.sha256(b"fixture-srcdoc-frame").hexdigest(),
                 "loader_id_sha256": loader_digest,
@@ -116,6 +123,7 @@ def _srcdoc_pseudo_document_summary() -> dict[str, object]:
                 "url_kind": "about:srcdoc",
                 "loader_binding": "Page.frameStartedNavigating.loaderId",
                 "request_id_matches_loader": True,
+                "terminal_variant": "loading-failed-document-abort",
                 "terminal_method": "Network.loadingFailed",
                 "terminal_fields": [
                     "canceled",
@@ -127,12 +135,33 @@ def _srcdoc_pseudo_document_summary() -> dict[str, object]:
                 "resource_type": "Document",
                 "error_text": "net::ERR_ABORTED",
                 "canceled": True,
+                "encoded_data_length": None,
                 "network_request_seen": False,
                 "fetch_pause_seen": False,
                 "frame_stopped_after_terminal": True,
             }
         ],
     }
+    if terminal_method == "Network.loadingFinished":
+        summary["terminal_outcome_counts"] = {
+            "Network.loadingFailed": 0,
+            "Network.loadingFinished": 1,
+        }
+        diagnostic = summary["diagnostics"][0]
+        diagnostic.update(
+            {
+                "terminal_variant": "loading-finished",
+                "terminal_method": "Network.loadingFinished",
+                "terminal_fields": ["encodedDataLength", "requestId", "timestamp"],
+                "resource_type": None,
+                "error_text": None,
+                "canceled": None,
+                "encoded_data_length": 33,
+            }
+        )
+    elif terminal_method != "Network.loadingFailed":
+        raise AssertionError(f"unsupported terminal method: {terminal_method}")
+    return summary
 
 
 def _egress_prearm_summary() -> dict[str, object]:
@@ -186,7 +215,12 @@ def _source(image: str) -> dict[str, object]:
     }
 
 
-def _observation(uid: int = 1000, gid: int = 1000) -> dict[str, object]:
+def _observation(
+    uid: int = 1000,
+    gid: int = 1000,
+    *,
+    srcdoc_terminal_method: str = "Network.loadingFailed",
+) -> dict[str, object]:
     return {
         "playwright_version": "1.57.0",
         "chromium_version": "143.0.7499.4",
@@ -238,7 +272,9 @@ def _observation(uid: int = 1000, gid: int = 1000) -> dict[str, object]:
                 pinned_cdp._EXPECTED_PINNED_BOOTSTRAP_PREARM_SUMMARY
             ),
             "egress_prearm_summary": _egress_prearm_summary(),
-            "srcdoc_pseudo_document_summary": _srcdoc_pseudo_document_summary(),
+            "srcdoc_pseudo_document_summary": _srcdoc_pseudo_document_summary(
+                terminal_method=srcdoc_terminal_method
+            ),
             "non_replayable_egress_summary": _non_replayable_egress_summary(),
             "browser_egress_command_line": _browser_egress_command_line_projection(),
             "browser_context_service_worker_count": 0,
@@ -343,11 +379,44 @@ def test_receipt_is_create_only_and_binds_build_source_prepare_image_and_cohort(
     assert validated["build_execution_identity"]["completion_path"] == (
         "/lab/artifacts/buflo-study/build-completion-v59.json"
     )
-    assert validated["build_execution_identity"]["completion_sha256"] == (BUILD_COMPLETION_SHA256)
+    assert validated["build_execution_identity"]["completion_sha256"] == (
+        BUILD_COMPLETION_SHA256
+    )
     assert output.read_bytes() == canonical_json_bytes(json.loads(output.read_text()))
 
     with pytest.raises(FileExistsError, match="create-only"):
         _create(tmp_path, fake_build)
+
+
+def test_receipt_accepts_the_exact_loading_finished_srcdoc_variant(
+    tmp_path: Path,
+    fake_build: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        pinned_cdp,
+        "run_pinned_cdp_probe",
+        lambda **_kwargs: _observation(
+            srcdoc_terminal_method="Network.loadingFinished"
+        ),
+    )
+
+    output = _create(tmp_path, fake_build)
+    validated = pinned_cdp.validate_pinned_cdp_receipt(
+        output,
+        build_execution_receipt=fake_build,
+        expected_cohort_version=59,
+        runtime_role="prepare",
+    )
+    summary = validated["observation"]["topology"][
+        "srcdoc_pseudo_document_summary"
+    ]
+    assert summary["terminal_outcome_counts"] == {
+        "Network.loadingFailed": 0,
+        "Network.loadingFinished": 1,
+    }
+    assert summary["diagnostics"][0]["terminal_variant"] == "loading-finished"
+    assert summary["diagnostics"][0]["encoded_data_length"] == 33
 
 
 def test_schema8_receipt_is_historical_only_and_round_trips(
@@ -987,6 +1056,10 @@ def test_prepare_role_revalidates_playwright_driver_binding(
                     **_srcdoc_pseudo_document_summary(),
                     "total": 0,
                     "resolved": 0,
+                    "terminal_outcome_counts": {
+                        "Network.loadingFailed": 0,
+                        "Network.loadingFinished": 0,
+                    },
                     "diagnostics": [],
                 }
             ),
@@ -1244,16 +1317,16 @@ def test_required_topology_wait_condition_is_event_driven() -> None:
         "dedicated_worker_fetch_paused_on_page": True,
         "shared_worker_fetch_paused_on_shared_worker": True,
     }
-    assert pinned_cdp.PROBE_SCHEMA_VERSION == 15
+    assert pinned_cdp.PROBE_SCHEMA_VERSION == 16
     assert pinned_cdp.HISTORICAL_PROBE_SCHEMA_VERSIONS == frozenset(
         {8, 9, 11, 12, 13, 14}
     )
-    assert pinned_cdp.PROBE_CONTRACT["schema_version"] == 14
+    assert pinned_cdp.PROBE_CONTRACT["schema_version"] == 15
     assert pinned_cdp.PROBE_CONTRACT["policy"] == (
-        "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v14"
+        "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v15"
     )
     assert pinned_cdp.PROBE_CONTRACT["instrumentation_policy"] == (
-        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v17"
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v18"
     )
     assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V11["schema_version"] == 10
     assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V11["instrumentation_policy"].endswith("-v12")
@@ -1285,12 +1358,12 @@ def test_required_topology_wait_condition_is_event_driven() -> None:
     assert pinned_cdp.PROBE_CONTRACT[
         "srcdoc_pseudo_document_summary_schema_version"
     ] == pinned_cdp.SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION
-    assert pinned_cdp.SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION == 2
+    assert pinned_cdp.SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION == 3
     assert pinned_cdp.PROBE_CONTRACT["srcdoc_pseudo_document_policy"] == (
         pinned_cdp.SRCDOC_PSEUDO_DOCUMENT_POLICY
     )
     assert pinned_cdp.SRCDOC_PSEUDO_DOCUMENT_POLICY == (
-        "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-v1"
+        "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-v2"
     )
     assert pinned_cdp.PROBE_CONTRACT["required_srcdoc_pseudo_document_count"] == 1
     assert pinned_cdp.PROBE_CONTRACT["playwright_driver_binding"] == (
@@ -1321,7 +1394,7 @@ def test_required_topology_wait_condition_is_event_driven() -> None:
         in pinned_cdp.PROBE_CONTRACT["required_observations"]
     )
     assert (
-        "root-about-srcdoc-loader-bound-orphan-abort-lifecycle"
+        "root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-lifecycle"
         in pinned_cdp.PROBE_CONTRACT["required_observations"]
     )
 

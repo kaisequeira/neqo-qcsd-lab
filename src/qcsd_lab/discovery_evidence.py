@@ -56,7 +56,7 @@ PASSIVE_RENDER_CONTRACT: dict[str, Any] = {
         "recursive-target-router-shutdown-ready",
         "no-pending-shared-worker-bootstrap-prearm",
         "all-observed-target-egress-shims-prearmed",
-        "terminal-root-srcdoc-loader-bound-orphan-abort-lifecycle",
+        "terminal-root-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-lifecycle",
         "zero-non-replayable-egress-attempts",
         "zero-browser-context-service-workers",
     ],

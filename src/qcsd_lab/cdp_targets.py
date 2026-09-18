@@ -34,13 +34,13 @@ from .browser_egress import (
 )
 
 CDP_TARGET_INSTRUMENTATION_POLICY = (
-    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v17"
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v18"
 )
 BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION = 1
 EGRESS_PREARM_SUMMARY_SCHEMA_VERSION = 2
-SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION = 2
+SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION = 3
 SRCDOC_PSEUDO_DOCUMENT_POLICY = (
-    "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-v1"
+    "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-v2"
 )
 _BOOTSTRAP_WORKER_TYPES = ("worker", "shared_worker")
 _BOOTSTRAP_OWNER_TYPES = ("page", "iframe", "worker", "shared_worker")
@@ -113,8 +113,16 @@ _SRCDOC_REQUEST_FIELDS = frozenset({"frameId", "reason", "url", "disposition"})
 _SRCDOC_STARTED_NAVIGATING_FIELDS = frozenset(
     {"frameId", "loaderId", "navigationType", "url"}
 )
-_SRCDOC_TERMINAL_FIELDS = frozenset(
+_SRCDOC_ABORT_TERMINAL_FIELDS = frozenset(
     {"requestId", "timestamp", "type", "errorText", "canceled"}
+)
+_SRCDOC_FINISH_TERMINAL_FIELDS = frozenset(
+    {"requestId", "timestamp", "encodedDataLength"}
+)
+_SRCDOC_FINISH_ENCODED_DATA_LENGTH = 33
+_SRCDOC_TERMINAL_METHODS = (
+    "Network.loadingFailed",
+    "Network.loadingFinished",
 )
 _BASE_SETUP_COMMANDS = (
     # Network.Initiator.stack is populated for script-created requests only
@@ -647,11 +655,12 @@ def validate_srcdoc_pseudo_document_summary(
 ) -> dict[str, Any]:
     """Validate the identifier-minimised root ``about:srcdoc`` exception receipt.
 
-    Chromium 143 can report one aborted pseudo-Document terminal for an
-    in-process ``srcdoc`` frame without a Network request occurrence.  This
-    receipt never turns that terminal into a request: it proves the exact
-    bracketing Page lifecycle and ``frameStartedNavigating.loaderId`` equality
-    that authorised the router to consume it.
+    Chromium 143 can report either of two pseudo-Document terminals for an
+    in-process ``srcdoc`` frame without a Network request occurrence: an exact
+    Document abort or an exact loading finish.  This receipt never turns either
+    terminal into a request: it proves the bracketing Page lifecycle and
+    ``frameStartedNavigating.loaderId`` equality that authorised the router to
+    consume it.
     """
 
     fields = {
@@ -666,6 +675,7 @@ def validate_srcdoc_pseudo_document_summary(
         "network_history_saturated",
         "fetch_history_saturated",
         "candidate_limit_saturated",
+        "terminal_outcome_counts",
         "diagnostics",
     }
     if not isinstance(value, Mapping) or set(value) != fields:
@@ -694,6 +704,19 @@ def validate_srcdoc_pseudo_document_summary(
     ):
         if type(value[field_name]) is not bool:
             raise ValueError("srcdoc pseudo-Document saturation flag is invalid")
+    outcome_counts = value["terminal_outcome_counts"]
+    if (
+        not isinstance(outcome_counts, Mapping)
+        or set(outcome_counts) != set(_SRCDOC_TERMINAL_METHODS)
+        or any(
+            type(outcome_counts[method]) is not int
+            or outcome_counts[method] < 0
+            or outcome_counts[method] > _SRCDOC_PSEUDO_DOCUMENT_LIMIT
+            for method in _SRCDOC_TERMINAL_METHODS
+        )
+        or sum(outcome_counts.values()) != value["total"]
+    ):
+        raise ValueError("srcdoc pseudo-Document terminal outcomes are invalid")
     diagnostics = value["diagnostics"]
     if type(diagnostics) is not list or len(diagnostics) != value["resolved"]:
         raise ValueError("srcdoc pseudo-Document diagnostic inventory is invalid")
@@ -714,11 +737,13 @@ def validate_srcdoc_pseudo_document_summary(
         "url_kind",
         "loader_binding",
         "request_id_matches_loader",
+        "terminal_variant",
         "terminal_method",
         "terminal_fields",
         "resource_type",
         "error_text",
         "canceled",
+        "encoded_data_length",
         "network_request_seen",
         "fetch_pause_seen",
         "frame_stopped_after_terminal",
@@ -728,6 +753,7 @@ def validate_srcdoc_pseudo_document_summary(
     request_hashes: set[str] = set()
     all_ordinals: set[int] = set()
     previous_stopped_ordinal = 0
+    resolved_outcome_counts = {method: 0 for method in _SRCDOC_TERMINAL_METHODS}
     for diagnostic in diagnostics:
         if not isinstance(diagnostic, Mapping) or set(diagnostic) != diagnostic_fields:
             raise ValueError("srcdoc pseudo-Document diagnostic fields are invalid")
@@ -773,9 +799,6 @@ def validate_srcdoc_pseudo_document_summary(
             "disposition": "currentTab",
             "url_kind": "about:srcdoc",
             "loader_binding": "Page.frameStartedNavigating.loaderId",
-            "terminal_method": "Network.loadingFailed",
-            "resource_type": "Document",
-            "error_text": "net::ERR_ABORTED",
         }
         if any(
             type(diagnostic[field_name]) is not str
@@ -783,18 +806,44 @@ def validate_srcdoc_pseudo_document_summary(
             for field_name, expected in exact_strings.items()
         ):
             raise ValueError("srcdoc pseudo-Document diagnostic strings are invalid")
+        terminal_variant = diagnostic["terminal_variant"]
+        terminal_method = diagnostic["terminal_method"]
+        terminal_fields = diagnostic["terminal_fields"]
+        if terminal_variant == "loading-failed-document-abort":
+            valid_terminal = (
+                terminal_method == "Network.loadingFailed"
+                and terminal_fields == sorted(_SRCDOC_ABORT_TERMINAL_FIELDS)
+                and diagnostic["resource_type"] == "Document"
+                and diagnostic["error_text"] == "net::ERR_ABORTED"
+                and diagnostic["canceled"] is True
+                and diagnostic["encoded_data_length"] is None
+            )
+        elif terminal_variant == "loading-finished":
+            encoded_data_length = diagnostic["encoded_data_length"]
+            valid_terminal = (
+                terminal_method == "Network.loadingFinished"
+                and terminal_fields == sorted(_SRCDOC_FINISH_TERMINAL_FIELDS)
+                and diagnostic["resource_type"] is None
+                and diagnostic["error_text"] is None
+                and diagnostic["canceled"] is None
+                and type(encoded_data_length) is int
+                and encoded_data_length == _SRCDOC_FINISH_ENCODED_DATA_LENGTH
+            )
+        else:
+            valid_terminal = False
         if (
             type(diagnostic["schema_version"]) is not int
             or diagnostic["schema_version"]
             != SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION
             or diagnostic["request_id_matches_loader"] is not True
-            or type(diagnostic["terminal_fields"]) is not list
+            or type(terminal_variant) is not str
+            or type(terminal_method) is not str
+            or type(terminal_fields) is not list
             or any(
                 type(field_name) is not str
-                for field_name in diagnostic["terminal_fields"]
+                for field_name in terminal_fields
             )
-            or diagnostic["terminal_fields"] != sorted(_SRCDOC_TERMINAL_FIELDS)
-            or diagnostic["canceled"] is not True
+            or not valid_terminal
             or diagnostic["network_request_seen"] is not False
             or diagnostic["fetch_pause_seen"] is not False
             or diagnostic["frame_stopped_after_terminal"] is not True
@@ -807,6 +856,12 @@ def validate_srcdoc_pseudo_document_summary(
         frame_hashes.add(frame_hash)
         loader_hashes.add(loader_hash)
         request_hashes.add(request_hash)
+        resolved_outcome_counts[terminal_method] += 1
+    if any(
+        resolved_outcome_counts[method] > outcome_counts[method]
+        for method in _SRCDOC_TERMINAL_METHODS
+    ):
+        raise ValueError("srcdoc pseudo-Document resolved outcomes are inconsistent")
     if value["total"] != value["resolved"] + value["pending"] + value["aborted"]:
         raise ValueError("srcdoc pseudo-Document aggregate is inconsistent")
     if not value["enabled"] and any(
@@ -816,6 +871,7 @@ def validate_srcdoc_pseudo_document_summary(
             value["network_history_saturated"],
             value["fetch_history_saturated"],
             value["candidate_limit_saturated"],
+            sum(outcome_counts.values()),
             len(diagnostics),
         )
     ):
@@ -951,6 +1007,13 @@ class _SrcdocPseudoDocument:
     terminal_event_ordinal: int | None = None
     stopped_event_ordinal: int | None = None
     terminal_request_id: str | None = None
+    terminal_variant: str | None = None
+    terminal_method: str | None = None
+    terminal_fields: tuple[str, ...] | None = None
+    terminal_resource_type: str | None = None
+    terminal_error_text: str | None = None
+    terminal_canceled: bool | None = None
+    terminal_encoded_data_length: int | None = None
     abort_owned: bool = False
 
 
@@ -1150,6 +1213,9 @@ class RecursiveCdpTargetRouter:
         self._srcdoc_event_ordinal = 0
         self._srcdoc_total = 0
         self._srcdoc_aborted = 0
+        self._srcdoc_terminal_outcomes = {
+            method: 0 for method in _SRCDOC_TERMINAL_METHODS
+        }
         self._srcdoc_diagnostics: list[dict[str, Any]] = []
         self._document_fetch_by_policy_identity: dict[
             tuple[CdpTargetSource, str], _DocumentFetchDecision
@@ -1258,6 +1324,7 @@ class RecursiveCdpTargetRouter:
             "network_history_saturated": self._srcdoc_network_history_saturated,
             "fetch_history_saturated": self._srcdoc_fetch_history_saturated,
             "candidate_limit_saturated": self._srcdoc_candidate_limit_saturated,
+            "terminal_outcome_counts": dict(self._srcdoc_terminal_outcomes),
             "diagnostics": [dict(item) for item in self._srcdoc_diagnostics],
         }
         try:
@@ -3612,6 +3679,9 @@ class RecursiveCdpTargetRouter:
             or candidate.started_navigating_event_ordinal is None
             or candidate.started_event_ordinal is None
             or candidate.loader_id != candidate.terminal_request_id
+            or candidate.terminal_variant is None
+            or candidate.terminal_method not in _SRCDOC_TERMINAL_METHODS
+            or candidate.terminal_fields is None
         ):
             raise CdpTargetIntegrityError("srcdoc pseudo-Document lost its start evidence")
         loader_hash = hashlib.sha256(candidate.loader_id.encode()).hexdigest()
@@ -3636,11 +3706,13 @@ class RecursiveCdpTargetRouter:
             "url_kind": "about:srcdoc",
             "loader_binding": "Page.frameStartedNavigating.loaderId",
             "request_id_matches_loader": True,
-            "terminal_method": "Network.loadingFailed",
-            "terminal_fields": sorted(_SRCDOC_TERMINAL_FIELDS),
-            "resource_type": "Document",
-            "error_text": "net::ERR_ABORTED",
-            "canceled": True,
+            "terminal_variant": candidate.terminal_variant,
+            "terminal_method": candidate.terminal_method,
+            "terminal_fields": list(candidate.terminal_fields),
+            "resource_type": candidate.terminal_resource_type,
+            "error_text": candidate.terminal_error_text,
+            "canceled": candidate.terminal_canceled,
+            "encoded_data_length": candidate.terminal_encoded_data_length,
             "network_request_seen": False,
             "fetch_pause_seen": False,
             "frame_stopped_after_terminal": True,
@@ -3781,30 +3853,62 @@ class RecursiveCdpTargetRouter:
         if (
             not self._track_root_srcdoc_lifecycle
             or source != self.root_source
-            or method != "Network.loadingFailed"
-            or set(event) != _SRCDOC_TERMINAL_FIELDS
-            or event.get("type") != "Document"
-            or event.get("errorText") != "net::ERR_ABORTED"
-            or event.get("canceled") is not True
+            or method not in _SRCDOC_TERMINAL_METHODS
             or not _is_finite_protocol_number(event.get("timestamp"))
         ):
             return False
+        if method == "Network.loadingFailed":
+            if (
+                set(event) != _SRCDOC_ABORT_TERMINAL_FIELDS
+                or event.get("type") != "Document"
+                or event.get("errorText") != "net::ERR_ABORTED"
+                or event.get("canceled") is not True
+            ):
+                return False
+            terminal_variant = "loading-failed-document-abort"
+            terminal_fields = tuple(sorted(_SRCDOC_ABORT_TERMINAL_FIELDS))
+            terminal_resource_type: str | None = "Document"
+            terminal_error_text: str | None = "net::ERR_ABORTED"
+            terminal_canceled: bool | None = True
+            terminal_encoded_data_length: int | None = None
+        else:
+            encoded_data_length = event.get("encodedDataLength")
+            if (
+                set(event) != _SRCDOC_FINISH_TERMINAL_FIELDS
+                or type(encoded_data_length) is not int
+                or encoded_data_length != _SRCDOC_FINISH_ENCODED_DATA_LENGTH
+            ):
+                return False
+            terminal_variant = "loading-finished"
+            terminal_fields = tuple(sorted(_SRCDOC_FINISH_TERMINAL_FIELDS))
+            terminal_resource_type = None
+            terminal_error_text = None
+            terminal_canceled = None
+            terminal_encoded_data_length = encoded_data_length
         request_id = event.get("requestId")
         if not isinstance(request_id, str) or not request_id:
             return False
-        eligible = [
+        loading_candidates = [
             candidate
             for candidate in self._srcdoc_candidates.values()
             if candidate.phase == "loading"
-            and candidate.loader_id == request_id
             and candidate.started_navigating_event_ordinal is not None
             and candidate.started_event_ordinal is not None
             and candidate.terminal_request_id is None
+        ]
+        eligible = [
+            candidate
+            for candidate in loading_candidates
+            if candidate.loader_id == request_id
         ]
         if len(eligible) > 1:
             raise CdpTargetIntegrityError(
                 "srcdoc pseudo-Document terminal matched multiple Page loaders"
             )
+        if method == "Network.loadingFinished" and (
+            len(self._srcdoc_candidates) != 1 or len(loading_candidates) != 1
+        ):
+            return False
         if len(eligible) != 1:
             return False
         candidate = eligible[0]
@@ -3836,12 +3940,20 @@ class RecursiveCdpTargetRouter:
                 "srcdoc pseudo-Document accepted identity bound was exceeded"
             )
         candidate.terminal_request_id = request_id
+        candidate.terminal_variant = terminal_variant
+        candidate.terminal_method = method
+        candidate.terminal_fields = terminal_fields
+        candidate.terminal_resource_type = terminal_resource_type
+        candidate.terminal_error_text = terminal_error_text
+        candidate.terminal_canceled = terminal_canceled
+        candidate.terminal_encoded_data_length = terminal_encoded_data_length
         candidate.terminal_event_ordinal = self._next_srcdoc_event_ordinal()
         candidate.phase = "quarantined"
         candidate.abort_owned = candidate.abort_owned or self._aborting
         self._srcdoc_accepted_frame_loaders[candidate.frame_id] = request_id
         self._srcdoc_terminal_request_ids.add(request_id)
         self._srcdoc_total += 1
+        self._srcdoc_terminal_outcomes[method] += 1
         return True
 
     def _handle_root_event(self, method: str, event: Mapping[str, Any]) -> None:

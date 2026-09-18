@@ -46,9 +46,12 @@ def _target_activity() -> dict[str, Any]:
     }
 
 
-def _srcdoc_pseudo_document_summary() -> dict[str, Any]:
+def _srcdoc_pseudo_document_summary(
+    *,
+    terminal_method: str = "Network.loadingFailed",
+) -> dict[str, Any]:
     loader_digest = hashlib.sha256(b"fixture-srcdoc-loader").hexdigest()
-    return {
+    summary: dict[str, Any] = {
         "schema_version": watch._PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
         "policy": watch._PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_POLICY,
         "enabled": True,
@@ -60,9 +63,13 @@ def _srcdoc_pseudo_document_summary() -> dict[str, Any]:
         "network_history_saturated": False,
         "fetch_history_saturated": False,
         "candidate_limit_saturated": False,
+        "terminal_outcome_counts": {
+            "Network.loadingFailed": 1,
+            "Network.loadingFinished": 0,
+        },
         "diagnostics": [
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "source_role": "root-page",
                 "frame_id_sha256": hashlib.sha256(b"fixture-srcdoc-frame").hexdigest(),
                 "loader_id_sha256": loader_digest,
@@ -78,6 +85,7 @@ def _srcdoc_pseudo_document_summary() -> dict[str, Any]:
                 "url_kind": "about:srcdoc",
                 "loader_binding": "Page.frameStartedNavigating.loaderId",
                 "request_id_matches_loader": True,
+                "terminal_variant": "loading-failed-document-abort",
                 "terminal_method": "Network.loadingFailed",
                 "terminal_fields": [
                     "canceled",
@@ -89,12 +97,32 @@ def _srcdoc_pseudo_document_summary() -> dict[str, Any]:
                 "resource_type": "Document",
                 "error_text": "net::ERR_ABORTED",
                 "canceled": True,
+                "encoded_data_length": None,
                 "network_request_seen": False,
                 "fetch_pause_seen": False,
                 "frame_stopped_after_terminal": True,
             }
         ],
     }
+    if terminal_method == "Network.loadingFinished":
+        summary["terminal_outcome_counts"] = {
+            "Network.loadingFailed": 0,
+            "Network.loadingFinished": 1,
+        }
+        summary["diagnostics"][0].update(
+            {
+                "terminal_variant": "loading-finished",
+                "terminal_method": "Network.loadingFinished",
+                "terminal_fields": ["encodedDataLength", "requestId", "timestamp"],
+                "resource_type": None,
+                "error_text": None,
+                "canceled": None,
+                "encoded_data_length": 33,
+            }
+        )
+    elif terminal_method != "Network.loadingFailed":
+        raise AssertionError(f"unsupported terminal method: {terminal_method}")
+    return summary
 
 
 def _egress_prearm_summary() -> dict[str, Any]:
@@ -3873,6 +3901,54 @@ def test_watcher_rejects_resealed_pinned_cdp_topology_tamper(
         watch._validate_immutable_binding(acquisition.paths)
 
 
+def test_watcher_accepts_exact_loading_finished_srcdoc_evidence(
+    acquisition: Fixture,
+) -> None:
+    pinned = json.loads(acquisition.pinned_cdp_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(pinned["payload"])
+    payload["observation"]["topology"]["srcdoc_pseudo_document_summary"] = (
+        _srcdoc_pseudo_document_summary(
+            terminal_method="Network.loadingFinished"
+        )
+    )
+    _replace_pinned_and_rebind_foundation(acquisition, payload)
+
+    watch._validate_immutable_binding(acquisition.paths)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "replacement"),
+    [
+        pytest.param("terminal_variant", "loading-finished-other", id="variant"),
+        pytest.param("terminal_method", "Network.loadingFailed", id="method"),
+        pytest.param(
+            "terminal_fields",
+            ["requestId", "encodedDataLength", "timestamp"],
+            id="field-order",
+        ),
+        pytest.param("resource_type", "Document", id="resource-type"),
+        pytest.param("error_text", "net::ERR_ABORTED", id="error-text"),
+        pytest.param("canceled", False, id="canceled"),
+        pytest.param("encoded_data_length", True, id="boolean-length"),
+        pytest.param("encoded_data_length", 33.0, id="float-length"),
+        pytest.param("encoded_data_length", 0, id="zero-length"),
+        pytest.param("encoded_data_length", 34, id="different-length"),
+        pytest.param("encoded_data_length", None, id="missing-length"),
+    ],
+)
+def test_watcher_rejects_inexact_loading_finished_srcdoc_evidence(
+    field_name: str,
+    replacement: Any,
+) -> None:
+    summary = _srcdoc_pseudo_document_summary(
+        terminal_method="Network.loadingFinished"
+    )
+    summary["diagnostics"][0][field_name] = replacement
+
+    with pytest.raises(watch.WatchError, match="diagnostic is inconsistent"):
+        watch._validate_srcdoc_pseudo_document_summary(summary)
+
+
 @pytest.mark.parametrize(
     ("field_path", "replacement", "message"),
     (
@@ -3918,6 +3994,24 @@ def test_watcher_rejects_resealed_pinned_cdp_topology_tamper(
             ("srcdoc_pseudo_document_summary", "schema_version"),
             True,
             "srcdoc loader-bound summary identity",
+        ),
+        (
+            (
+                "srcdoc_pseudo_document_summary",
+                "terminal_outcome_counts",
+                "Network.loadingFailed",
+            ),
+            True,
+            "srcdoc loader-bound terminal outcomes",
+        ),
+        (
+            (
+                "srcdoc_pseudo_document_summary",
+                "terminal_outcome_counts",
+                "Network.loadingFinished",
+            ),
+            1,
+            "srcdoc loader-bound terminal outcomes",
         ),
         (
             (
@@ -4043,7 +4137,15 @@ def test_watcher_rejects_identifier_bearing_or_zero_srcdoc_proof(
             summary["diagnostics"][0]["frame_id"] = "raw-frame-id"
             message = "srcdoc loader-bound diagnostic fields"
         else:
-            summary.update(total=0, resolved=0, diagnostics=[])
+            summary.update(
+                total=0,
+                resolved=0,
+                terminal_outcome_counts={
+                    "Network.loadingFailed": 0,
+                    "Network.loadingFinished": 0,
+                },
+                diagnostics=[],
+            )
             message = "srcdoc loader-bound topology observation"
         _replace_pinned_and_rebind_foundation(acquisition, payload)
         with pytest.raises(watch.WatchError, match=message):
@@ -4063,7 +4165,15 @@ def test_watcher_rejects_reused_srcdoc_frame_digest(acquisition: Fixture) -> Non
     duplicate["started_event_ordinal"] = 8
     duplicate["terminal_event_ordinal"] = 9
     duplicate["stopped_event_ordinal"] = 10
-    summary.update(total=2, resolved=2, diagnostics=[*summary["diagnostics"], duplicate])
+    summary.update(
+        total=2,
+        resolved=2,
+        terminal_outcome_counts={
+            "Network.loadingFailed": 2,
+            "Network.loadingFinished": 0,
+        },
+        diagnostics=[*summary["diagnostics"], duplicate],
+    )
     _replace_pinned_and_rebind_foundation(acquisition, payload)
 
     with pytest.raises(watch.WatchError, match="diagnostic is inconsistent"):
@@ -4084,7 +4194,15 @@ def test_watcher_rejects_reused_srcdoc_event_ordinal(acquisition: Fixture) -> No
     duplicate["started_event_ordinal"] = 8
     duplicate["terminal_event_ordinal"] = 9
     duplicate["stopped_event_ordinal"] = 10
-    summary.update(total=2, resolved=2, diagnostics=[*summary["diagnostics"], duplicate])
+    summary.update(
+        total=2,
+        resolved=2,
+        terminal_outcome_counts={
+            "Network.loadingFailed": 2,
+            "Network.loadingFinished": 0,
+        },
+        diagnostics=[*summary["diagnostics"], duplicate],
+    )
     _replace_pinned_and_rebind_foundation(acquisition, payload)
 
     with pytest.raises(watch.WatchError, match="ordinals are not globally unique"):

@@ -889,6 +889,20 @@ def _srcdoc_terminal(
     return event
 
 
+def _srcdoc_finished_terminal(
+    *,
+    request_id: str = _SRCDOC_REQUEST_ID,
+    **changes: Any,
+) -> dict[str, Any]:
+    event: dict[str, Any] = {
+        "requestId": request_id,
+        "timestamp": 17.25,
+        "encodedDataLength": 33,
+    }
+    event.update(changes)
+    return event
+
+
 def _srcdoc_started_navigating(
     *,
     frame_id: str = _SRCDOC_FRAME_ID,
@@ -942,9 +956,10 @@ def _srcdoc_diagnostic(
     frame_id: str = _SRCDOC_FRAME_ID,
     loader_id: str = _SRCDOC_REQUEST_ID,
     first_ordinal: int = 1,
+    terminal_method: str = "Network.loadingFailed",
 ) -> dict[str, Any]:
-    return {
-        "schema_version": 2,
+    diagnostic = {
+        "schema_version": 3,
         "source_role": "root-page",
         "frame_id_sha256": hashlib.sha256(frame_id.encode()).hexdigest(),
         "loader_id_sha256": hashlib.sha256(loader_id.encode()).hexdigest(),
@@ -960,21 +975,58 @@ def _srcdoc_diagnostic(
         "url_kind": "about:srcdoc",
         "loader_binding": "Page.frameStartedNavigating.loaderId",
         "request_id_matches_loader": True,
-        "terminal_method": "Network.loadingFailed",
-        "terminal_fields": ["canceled", "errorText", "requestId", "timestamp", "type"],
-        "resource_type": "Document",
-        "error_text": "net::ERR_ABORTED",
-        "canceled": True,
         "network_request_seen": False,
         "fetch_pause_seen": False,
         "frame_stopped_after_terminal": True,
     }
+    if terminal_method == "Network.loadingFailed":
+        diagnostic.update(
+            {
+                "terminal_variant": "loading-failed-document-abort",
+                "terminal_method": terminal_method,
+                "terminal_fields": [
+                    "canceled",
+                    "errorText",
+                    "requestId",
+                    "timestamp",
+                    "type",
+                ],
+                "resource_type": "Document",
+                "error_text": "net::ERR_ABORTED",
+                "canceled": True,
+                "encoded_data_length": None,
+            }
+        )
+    elif terminal_method == "Network.loadingFinished":
+        diagnostic.update(
+            {
+                "terminal_variant": "loading-finished",
+                "terminal_method": terminal_method,
+                "terminal_fields": ["encodedDataLength", "requestId", "timestamp"],
+                "resource_type": None,
+                "error_text": None,
+                "canceled": None,
+                "encoded_data_length": 33,
+            }
+        )
+    else:
+        raise AssertionError(f"unsupported srcdoc terminal method: {terminal_method}")
+    return diagnostic
 
 
 def _srcdoc_summary(*diagnostics: dict[str, Any]) -> dict[str, Any]:
+    terminal_outcome_counts = {
+        "Network.loadingFailed": 0,
+        "Network.loadingFinished": 0,
+    }
+    for diagnostic in diagnostics:
+        terminal_outcome_counts[diagnostic["terminal_method"]] += 1
     return {
-        "schema_version": 2,
-        "policy": "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-v1",
+        "schema_version": 3,
+        "policy": (
+            "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-"
+            "finish-v2"
+        ),
         "enabled": True,
         "total": len(diagnostics),
         "resolved": len(diagnostics),
@@ -984,6 +1036,7 @@ def _srcdoc_summary(*diagnostics: dict[str, Any]) -> dict[str, Any]:
         "network_history_saturated": False,
         "fetch_history_saturated": False,
         "candidate_limit_saturated": False,
+        "terminal_outcome_counts": terminal_outcome_counts,
         "diagnostics": list(diagnostics),
     }
 
@@ -1502,7 +1555,7 @@ def test_policy_is_pinned_and_root_is_instrumented_before_navigation() -> None:
     router, _observed = _router(session)
 
     assert CDP_TARGET_INSTRUMENTATION_POLICY == (
-        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v17"
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v18"
     )
     assert [method for route, method, _params in session.commands if route == ()] == [
         "Target.getTargetInfo",
@@ -1599,8 +1652,11 @@ def test_exact_root_srcdoc_pseudo_document_is_consumed_and_reported_once() -> No
     assert observed == []
     summary = router.srcdoc_pseudo_document_summary
     assert summary == {
-        "schema_version": 2,
-        "policy": "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-v1",
+        "schema_version": 3,
+        "policy": (
+            "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-"
+            "finish-v2"
+        ),
         "enabled": True,
         "total": 1,
         "resolved": 1,
@@ -1610,6 +1666,10 @@ def test_exact_root_srcdoc_pseudo_document_is_consumed_and_reported_once() -> No
         "network_history_saturated": False,
         "fetch_history_saturated": False,
         "candidate_limit_saturated": False,
+        "terminal_outcome_counts": {
+            "Network.loadingFailed": 1,
+            "Network.loadingFinished": 0,
+        },
         "diagnostics": [diagnostic],
     }
     serialized = json.dumps(summary, sort_keys=True)
@@ -1675,6 +1735,114 @@ def test_srcdoc_summary_validator_rejects_inexact_field_types(
 
     with pytest.raises(ValueError):
         validate_srcdoc_pseudo_document_summary(summary, require_terminal=False)
+
+
+def test_srcdoc_summary_validator_accepts_the_exact_loading_finished_variant() -> None:
+    diagnostic = _srcdoc_diagnostic(terminal_method="Network.loadingFinished")
+
+    assert validate_srcdoc_pseudo_document_summary(
+        _srcdoc_summary(diagnostic),
+        require_terminal=True,
+    ) == _srcdoc_summary(diagnostic)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "invalid_value"),
+    [
+        pytest.param("terminal_variant", "loading-finished-other", id="variant"),
+        pytest.param("terminal_method", "Network.loadingFailed", id="method"),
+        pytest.param(
+            "terminal_fields",
+            ["requestId", "encodedDataLength", "timestamp"],
+            id="field-order",
+        ),
+        pytest.param("resource_type", "Document", id="resource-type"),
+        pytest.param("error_text", "net::ERR_ABORTED", id="error-text"),
+        pytest.param("canceled", False, id="canceled"),
+        pytest.param("encoded_data_length", True, id="boolean-length"),
+        pytest.param("encoded_data_length", 33.0, id="float-length"),
+        pytest.param("encoded_data_length", 0, id="zero-length"),
+        pytest.param("encoded_data_length", 34, id="different-length"),
+        pytest.param("encoded_data_length", None, id="missing-length"),
+    ],
+)
+def test_srcdoc_summary_validator_rejects_inexact_loading_finished_evidence(
+    field_name: str,
+    invalid_value: Any,
+) -> None:
+    diagnostic = _srcdoc_diagnostic(terminal_method="Network.loadingFinished")
+    diagnostic[field_name] = invalid_value
+
+    with pytest.raises(ValueError, match="diagnostic is inconsistent"):
+        validate_srcdoc_pseudo_document_summary(
+            _srcdoc_summary(diagnostic),
+            require_terminal=False,
+        )
+
+
+@pytest.mark.parametrize(
+    "outcome_counts",
+    [
+        pytest.param([], id="non-mapping"),
+        pytest.param({"Network.loadingFailed": 1}, id="missing-method"),
+        pytest.param(
+            {
+                "Network.loadingFailed": 1,
+                "Network.loadingFinished": 0,
+                "Network.other": 0,
+            },
+            id="extra-method",
+        ),
+        pytest.param(
+            {"Network.loadingFailed": True, "Network.loadingFinished": 0},
+            id="boolean-count",
+        ),
+        pytest.param(
+            {"Network.loadingFailed": -1, "Network.loadingFinished": 2},
+            id="negative-count",
+        ),
+        pytest.param(
+            {"Network.loadingFailed": 0, "Network.loadingFinished": 0},
+            id="total-mismatch",
+        ),
+        pytest.param(
+            {"Network.loadingFailed": 0, "Network.loadingFinished": 1},
+            id="resolved-method-mismatch",
+        ),
+    ],
+)
+def test_srcdoc_summary_validator_rejects_invalid_terminal_outcome_counts(
+    outcome_counts: object,
+) -> None:
+    summary = _srcdoc_summary(_srcdoc_diagnostic())
+    summary["terminal_outcome_counts"] = outcome_counts
+
+    with pytest.raises(ValueError, match="terminal outcomes|resolved outcomes"):
+        validate_srcdoc_pseudo_document_summary(summary, require_terminal=False)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "invalid_value"),
+    [
+        pytest.param("terminal_variant", "loading-finished", id="variant"),
+        pytest.param("encoded_data_length", 33, id="encoded-length"),
+        pytest.param("resource_type", None, id="resource-type"),
+        pytest.param("error_text", None, id="error-text"),
+        pytest.param("canceled", None, id="canceled"),
+    ],
+)
+def test_srcdoc_summary_validator_rejects_inexact_abort_variant_evidence(
+    field_name: str,
+    invalid_value: Any,
+) -> None:
+    diagnostic = _srcdoc_diagnostic()
+    diagnostic[field_name] = invalid_value
+
+    with pytest.raises(ValueError, match="diagnostic is inconsistent"):
+        validate_srcdoc_pseudo_document_summary(
+            _srcdoc_summary(diagnostic),
+            require_terminal=False,
+        )
 
 
 def test_srcdoc_summary_validator_enforces_runtime_count_bounds() -> None:
@@ -1766,8 +1934,11 @@ def test_root_srcdoc_page_lifecycle_without_an_orphan_terminal_is_benign() -> No
     assert observed == []
     assert internal == []
     assert router.srcdoc_pseudo_document_summary == {
-        "schema_version": 2,
-        "policy": "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-v1",
+        "schema_version": 3,
+        "policy": (
+            "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-"
+            "finish-v2"
+        ),
         "enabled": True,
         "total": 0,
         "resolved": 0,
@@ -1777,6 +1948,10 @@ def test_root_srcdoc_page_lifecycle_without_an_orphan_terminal_is_benign() -> No
         "network_history_saturated": False,
         "fetch_history_saturated": False,
         "candidate_limit_saturated": False,
+        "terminal_outcome_counts": {
+            "Network.loadingFailed": 0,
+            "Network.loadingFinished": 0,
+        },
         "diagnostics": [],
     }
     _clean_shutdown(router)
@@ -1897,28 +2072,205 @@ def test_root_srcdoc_terminal_requires_the_exact_orphan_signature(
     assert internal == []
 
 
-def test_root_srcdoc_never_consumes_an_orphan_loading_finished_event() -> None:
+def test_exact_root_srcdoc_loading_finished_terminal_is_consumed_and_reported_once() -> None:
+    session = _FakeNonFlatSession()
+    internal: list[tuple[CdpTargetSource, Mapping[str, Any]]] = []
+    router, observed = _router(
+        session,
+        track_root_srcdoc_lifecycle=True,
+        on_internal_document_lifecycle=lambda source, event: internal.append(
+            (source, dict(event))
+        ),
+    )
+    _begin_srcdoc_loading(session)
+    session.emit((), "Network.loadingFinished", _srcdoc_finished_terminal())
+
+    router.raise_if_failed()
+    assert router.srcdoc_pseudo_document_summary["pending"] == 1
+    assert router.shutdown_ready is False
+    assert observed == []
+    assert internal == []
+
+    session.emit((), "Page.frameStoppedLoading", {"frameId": _SRCDOC_FRAME_ID})
+    router.raise_if_failed()
+    diagnostic = _srcdoc_diagnostic(terminal_method="Network.loadingFinished")
+    assert internal == [(router.root_source, diagnostic)]
+    assert router.srcdoc_pseudo_document_summary == _srcdoc_summary(diagnostic)
+    assert observed == []
+
+    session.emit((), "Page.frameStoppedLoading", {"frameId": _SRCDOC_FRAME_ID})
+    router.raise_if_failed()
+    assert internal == [(router.root_source, diagnostic)]
+    _clean_shutdown(router)
+
+
+@pytest.mark.parametrize(
+    "terminal",
+    [
+        pytest.param(
+            _without(_srcdoc_finished_terminal(), "encodedDataLength"),
+            id="missing-field",
+        ),
+        pytest.param(_srcdoc_finished_terminal(extra=True), id="extra-field"),
+        pytest.param(_srcdoc_finished_terminal(timestamp=True), id="boolean-timestamp"),
+        pytest.param(
+            _srcdoc_finished_terminal(timestamp=float("nan")),
+            id="non-finite-timestamp",
+        ),
+        pytest.param(
+            _srcdoc_finished_terminal(encodedDataLength=True),
+            id="boolean-length",
+        ),
+        pytest.param(
+            _srcdoc_finished_terminal(encodedDataLength=33.0),
+            id="float-length",
+        ),
+        pytest.param(
+            _srcdoc_finished_terminal(encodedDataLength=0),
+            id="zero-length",
+        ),
+        pytest.param(
+            _srcdoc_finished_terminal(encodedDataLength=-1),
+            id="negative-length",
+        ),
+        pytest.param(
+            _srcdoc_finished_terminal(encodedDataLength=34),
+            id="different-length",
+        ),
+        pytest.param(
+            _srcdoc_finished_terminal(encodedDataLength=float("inf")),
+            id="non-finite-length",
+        ),
+        pytest.param(
+            _srcdoc_finished_terminal(encodedDataLength="33"),
+            id="string-length",
+        ),
+        pytest.param(_srcdoc_finished_terminal(request_id=""), id="empty-request-id"),
+    ],
+)
+def test_root_srcdoc_loading_finished_requires_the_exact_observed_signature(
+    terminal: Mapping[str, Any],
+) -> None:
     session = _FakeNonFlatSession()
     router, observed = _router(session, track_root_srcdoc_lifecycle=True)
     _begin_srcdoc_loading(session)
-    session.emit(
-        (),
-        "Network.loadingFinished",
-        {
-            "requestId": _SRCDOC_REQUEST_ID,
-            "timestamp": 42.0,
-            "encodedDataLength": 0.0,
-        },
-    )
+    session.emit((), "Network.loadingFinished", terminal)
 
     with pytest.raises(CdpTargetIntegrityError, match="no active request occurrence"):
         router.raise_if_failed()
     assert observed == []
 
 
+@pytest.mark.parametrize(
+    ("first_method", "first_terminal", "second_method", "second_terminal"),
+    [
+        pytest.param(
+            "Network.loadingFinished",
+            _srcdoc_finished_terminal(),
+            "Network.loadingFinished",
+            _srcdoc_finished_terminal(),
+            id="duplicate-finish",
+        ),
+        pytest.param(
+            "Network.loadingFinished",
+            _srcdoc_finished_terminal(),
+            "Network.loadingFailed",
+            _srcdoc_terminal(),
+            id="finish-then-abort",
+        ),
+        pytest.param(
+            "Network.loadingFailed",
+            _srcdoc_terminal(),
+            "Network.loadingFinished",
+            _srcdoc_finished_terminal(),
+            id="abort-then-finish",
+        ),
+    ],
+)
+def test_root_srcdoc_rejects_duplicate_or_mixed_orphan_terminals(
+    first_method: str,
+    first_terminal: Mapping[str, Any],
+    second_method: str,
+    second_terminal: Mapping[str, Any],
+) -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session, track_root_srcdoc_lifecycle=True)
+    _begin_srcdoc_loading(session)
+    session.emit((), first_method, first_terminal)
+    router.raise_if_failed()
+    assert router.srcdoc_pseudo_document_summary["pending"] == 1
+
+    session.emit((), second_method, second_terminal)
+    with pytest.raises(CdpTargetIntegrityError, match="no active request occurrence"):
+        router.raise_if_failed()
+    assert observed == []
+
+
+@pytest.mark.parametrize(
+    "competing_phase",
+    ["armed", "navigating", "loading", "quarantined"],
+)
+def test_root_srcdoc_loading_finished_requires_one_total_candidate(
+    competing_phase: str,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session, track_root_srcdoc_lifecycle=True)
+    _begin_srcdoc_loading(session)
+    _attach_srcdoc_frame(session, frame_id="competing-srcdoc-frame")
+    session.emit(
+        (),
+        "Page.frameRequestedNavigation",
+        _srcdoc_navigation_request(frame_id="competing-srcdoc-frame"),
+    )
+    if competing_phase in {"navigating", "loading", "quarantined"}:
+        session.emit(
+            (),
+            "Page.frameStartedNavigating",
+            _srcdoc_started_navigating(
+                frame_id="competing-srcdoc-frame",
+                loader_id="competing-srcdoc-loader",
+            ),
+        )
+    if competing_phase in {"loading", "quarantined"}:
+        session.emit(
+            (),
+            "Page.frameStartedLoading",
+            {"frameId": "competing-srcdoc-frame"},
+        )
+    if competing_phase == "quarantined":
+        session.emit(
+            (),
+            "Network.loadingFailed",
+            _srcdoc_terminal(request_id="competing-srcdoc-loader"),
+        )
+    router.raise_if_failed()
+
+    session.emit((), "Network.loadingFinished", _srcdoc_finished_terminal())
+    with pytest.raises(CdpTargetIntegrityError, match="no active request occurrence"):
+        router.raise_if_failed()
+    assert observed == []
+
+
+@pytest.mark.parametrize(
+    ("terminal_method", "terminal"),
+    [
+        pytest.param(
+            "Network.loadingFailed",
+            _srcdoc_terminal(),
+            id="loading-failed",
+        ),
+        pytest.param(
+            "Network.loadingFinished",
+            _srcdoc_finished_terminal(),
+            id="loading-finished",
+        ),
+    ],
+)
 @pytest.mark.parametrize("timing", ["before-navigation", "before-loading", "after-stop"])
 def test_root_srcdoc_terminal_outside_the_loading_window_is_not_consumed(
     timing: str,
+    terminal_method: str,
+    terminal: Mapping[str, Any],
 ) -> None:
     session = _FakeNonFlatSession()
     router, observed = _router(session, track_root_srcdoc_lifecycle=True)
@@ -1934,7 +2286,7 @@ def test_root_srcdoc_terminal_outside_the_loading_window_is_not_consumed(
         session.emit((), "Page.frameStartedLoading", {"frameId": _SRCDOC_FRAME_ID})
         session.emit((), "Page.frameStoppedLoading", {"frameId": _SRCDOC_FRAME_ID})
 
-    session.emit((), "Network.loadingFailed", _srcdoc_terminal())
+    session.emit((), terminal_method, terminal)
     with pytest.raises(CdpTargetIntegrityError, match="no active request occurrence"):
         router.raise_if_failed()
     assert observed == []
@@ -2028,22 +2380,50 @@ def test_root_srcdoc_rejects_a_loader_reused_after_a_benign_lifecycle() -> None:
         router.raise_if_failed()
 
 
-def test_root_srcdoc_terminal_with_a_mismatched_loader_is_not_consumed() -> None:
+@pytest.mark.parametrize(
+    ("terminal_method", "terminal"),
+    [
+        pytest.param(
+            "Network.loadingFailed",
+            _srcdoc_terminal(request_id="different-srcdoc-loader"),
+            id="loading-failed",
+        ),
+        pytest.param(
+            "Network.loadingFinished",
+            _srcdoc_finished_terminal(request_id="different-srcdoc-loader"),
+            id="loading-finished",
+        ),
+    ],
+)
+def test_root_srcdoc_terminal_with_a_mismatched_loader_is_not_consumed(
+    terminal_method: str,
+    terminal: Mapping[str, Any],
+) -> None:
     session = _FakeNonFlatSession()
     router, observed = _router(session, track_root_srcdoc_lifecycle=True)
     _begin_srcdoc_loading(session, loader_id="expected-srcdoc-loader")
 
-    session.emit(
-        (),
-        "Network.loadingFailed",
-        _srcdoc_terminal(request_id="different-srcdoc-loader"),
-    )
+    session.emit((), terminal_method, terminal)
     with pytest.raises(CdpTargetIntegrityError, match="no active request occurrence"):
         router.raise_if_failed()
     assert observed == []
 
 
-def test_child_target_terminal_cannot_authorise_a_root_srcdoc_candidate() -> None:
+@pytest.mark.parametrize(
+    ("terminal_method", "terminal"),
+    [
+        pytest.param("Network.loadingFailed", _srcdoc_terminal(), id="loading-failed"),
+        pytest.param(
+            "Network.loadingFinished",
+            _srcdoc_finished_terminal(),
+            id="loading-finished",
+        ),
+    ],
+)
+def test_child_target_terminal_cannot_authorise_a_root_srcdoc_candidate(
+    terminal_method: str,
+    terminal: Mapping[str, Any],
+) -> None:
     session = _FakeNonFlatSession()
     router, observed = _router(session, track_root_srcdoc_lifecycle=True)
     iframe = session.attach(
@@ -2055,10 +2435,10 @@ def test_child_target_terminal_cannot_authorise_a_root_srcdoc_candidate() -> Non
     router.raise_if_failed()
     _begin_srcdoc_loading(session)
 
-    session.emit(iframe, "Network.loadingFailed", _srcdoc_terminal())
+    session.emit(iframe, terminal_method, terminal)
     with pytest.raises(CdpTargetIntegrityError, match="no active request occurrence"):
         router.raise_if_failed()
-    assert not any(method == "Network.loadingFailed" for _source, method, _event in observed)
+    assert not any(method == terminal_method for _source, method, _event in observed)
 
 
 def test_root_frame_cannot_be_armed_as_a_srcdoc_candidate() -> None:
@@ -2125,6 +2505,86 @@ def test_root_srcdoc_loader_binding_requires_no_prior_network_identity(
     _begin_srcdoc_loading(session)
     with pytest.raises(CdpTargetIntegrityError, match="loader identity was reused"):
         router.raise_if_failed()
+
+
+@pytest.mark.parametrize(
+    "identity_event",
+    ["network-request-id", "network-loader-id", "fetch-network-id"],
+)
+def test_root_srcdoc_loading_finished_rejects_late_network_identity_evidence(
+    identity_event: str,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session, track_root_srcdoc_lifecycle=True)
+    _begin_srcdoc_loading(session)
+    if identity_event in {"network-request-id", "network-loader-id"}:
+        request_id = (
+            _SRCDOC_REQUEST_ID
+            if identity_event == "network-request-id"
+            else "late-ordinary-request"
+        )
+        loader_id = (
+            "late-ordinary-loader"
+            if identity_event == "network-request-id"
+            else _SRCDOC_REQUEST_ID
+        )
+        session.emit(
+            (),
+            "Network.requestWillBeSent",
+            {
+                "requestId": request_id,
+                "loaderId": loader_id,
+                "frameId": session.root_frame_id,
+                "type": "Image",
+                "request": {"method": "GET", "url": "https://root.test/late.png"},
+            },
+        )
+        session.emit((), "Network.loadingFinished", {"requestId": request_id})
+    else:
+        session.emit(
+            (),
+            "Fetch.requestPaused",
+            {
+                "requestId": "late-fetch",
+                "networkId": _SRCDOC_REQUEST_ID,
+                "frameId": session.root_frame_id,
+                "resourceType": "Image",
+                "request": {"method": "GET", "url": "https://root.test/late.png"},
+            },
+        )
+    router.raise_if_failed()
+    observed_before_terminal = list(observed)
+
+    session.emit((), "Network.loadingFinished", _srcdoc_finished_terminal())
+    with pytest.raises(CdpTargetIntegrityError, match="not provably orphaned"):
+        router.raise_if_failed()
+    assert observed == observed_before_terminal
+
+
+def test_root_srcdoc_loading_finished_rejects_a_matching_terminal_tombstone() -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session, track_root_srcdoc_lifecycle=True)
+    _begin_srcdoc_loading(session)
+    active = cdp_targets_module._ActiveRequest(
+        source=router.root_source,
+        request_id=_SRCDOC_REQUEST_ID,
+        loader_id="retired-loader",
+        frame_id=session.root_frame_id,
+        resource_type="Image",
+        method="GET",
+        url="https://root.test/retired.png",
+    )
+    router._root_terminal_requests[(router.root_source, _SRCDOC_REQUEST_ID)] = (
+        cdp_targets_module._RootTerminalRequest(
+            active=active,
+            terminal_method="Network.loadingFinished",
+        )
+    )
+
+    session.emit((), "Network.loadingFinished", _srcdoc_finished_terminal())
+    with pytest.raises(CdpTargetIntegrityError, match="not provably orphaned"):
+        router.raise_if_failed()
+    assert observed == []
 
 
 @pytest.mark.parametrize("match_kind", ["frame", "loader"])
@@ -2328,7 +2788,21 @@ def test_root_document_evidence_after_srcdoc_quarantine_is_rejected(
         router.raise_if_failed()
 
 
-def test_active_network_terminal_keeps_precedence_over_srcdoc_exception() -> None:
+@pytest.mark.parametrize(
+    ("terminal_method", "terminal"),
+    [
+        pytest.param("Network.loadingFailed", _srcdoc_terminal(), id="loading-failed"),
+        pytest.param(
+            "Network.loadingFinished",
+            _srcdoc_finished_terminal(),
+            id="loading-finished",
+        ),
+    ],
+)
+def test_active_network_terminal_keeps_precedence_over_srcdoc_exception(
+    terminal_method: str,
+    terminal: Mapping[str, Any],
+) -> None:
     session = _FakeNonFlatSession()
     router, observed = _router(session, track_root_srcdoc_lifecycle=True)
     _begin_srcdoc_loading(session)
@@ -2343,14 +2817,14 @@ def test_active_network_terminal_keeps_precedence_over_srcdoc_exception() -> Non
             "request": {"method": "GET", "url": "https://root.test/image.png"},
         },
     )
-    session.emit((), "Network.loadingFailed", _srcdoc_terminal())
+    session.emit((), terminal_method, terminal)
     session.emit((), "Page.frameStoppedLoading", {"frameId": _SRCDOC_FRAME_ID})
     router.raise_if_failed()
 
     assert router.srcdoc_pseudo_document_summary["total"] == 0
     assert [method for _source, method, _event in observed] == [
         "Network.requestWillBeSent",
-        "Network.loadingFailed",
+        terminal_method,
     ]
     _clean_shutdown(router)
 
@@ -2410,8 +2884,21 @@ def test_resolved_root_srcdoc_identity_cannot_be_reused_by_late_network_events(
     assert len(internal) == 1
 
 
+@pytest.mark.parametrize(
+    ("terminal_method", "terminal"),
+    [
+        pytest.param("Network.loadingFailed", _srcdoc_terminal(), id="loading-failed"),
+        pytest.param(
+            "Network.loadingFinished",
+            _srcdoc_finished_terminal(),
+            id="loading-finished",
+        ),
+    ],
+)
 def test_root_srcdoc_network_identity_history_saturation_disables_consumption(
     monkeypatch: pytest.MonkeyPatch,
+    terminal_method: str,
+    terminal: Mapping[str, Any],
 ) -> None:
     monkeypatch.setattr(cdp_targets_module, "_SRCDOC_IDENTITY_HISTORY_LIMIT", 2)
     session = _FakeNonFlatSession()
@@ -2445,7 +2932,52 @@ def test_root_srcdoc_network_identity_history_saturation_disables_consumption(
     observed_before_terminal = list(observed)
 
     _begin_srcdoc_loading(session)
-    session.emit((), "Network.loadingFailed", _srcdoc_terminal())
+    session.emit((), terminal_method, terminal)
+    with pytest.raises(CdpTargetIntegrityError, match="not provably orphaned"):
+        router.raise_if_failed()
+    assert observed == observed_before_terminal
+
+
+@pytest.mark.parametrize(
+    ("terminal_method", "terminal"),
+    [
+        pytest.param("Network.loadingFailed", _srcdoc_terminal(), id="loading-failed"),
+        pytest.param(
+            "Network.loadingFinished",
+            _srcdoc_finished_terminal(),
+            id="loading-finished",
+        ),
+    ],
+)
+def test_root_srcdoc_fetch_identity_history_saturation_disables_consumption(
+    monkeypatch: pytest.MonkeyPatch,
+    terminal_method: str,
+    terminal: Mapping[str, Any],
+) -> None:
+    monkeypatch.setattr(cdp_targets_module, "_SRCDOC_IDENTITY_HISTORY_LIMIT", 1)
+    session = _FakeNonFlatSession()
+    router, observed = _router(session, track_root_srcdoc_lifecycle=True)
+    for suffix in ("bounded", "overflow"):
+        session.emit(
+            (),
+            "Fetch.requestPaused",
+            {
+                "requestId": f"{suffix}-fetch",
+                "networkId": f"{suffix}-network",
+                "frameId": session.root_frame_id,
+                "resourceType": "Image",
+                "request": {
+                    "method": "GET",
+                    "url": f"https://root.test/{suffix}.png",
+                },
+            },
+        )
+    router.raise_if_failed()
+    assert router.srcdoc_pseudo_document_summary["fetch_history_saturated"] is True
+    observed_before_terminal = list(observed)
+
+    _begin_srcdoc_loading(session)
+    session.emit((), terminal_method, terminal)
     with pytest.raises(CdpTargetIntegrityError, match="not provably orphaned"):
         router.raise_if_failed()
     assert observed == observed_before_terminal
@@ -2466,7 +2998,21 @@ def test_disabled_root_srcdoc_policy_keeps_orphan_failure_and_avoids_page_domain
     assert observed == []
 
 
-def test_abort_never_promotes_pending_root_srcdoc_evidence_to_resolved() -> None:
+@pytest.mark.parametrize(
+    ("terminal_method", "terminal"),
+    [
+        pytest.param("Network.loadingFailed", _srcdoc_terminal(), id="loading-failed"),
+        pytest.param(
+            "Network.loadingFinished",
+            _srcdoc_finished_terminal(),
+            id="loading-finished",
+        ),
+    ],
+)
+def test_abort_never_promotes_pending_root_srcdoc_evidence_to_resolved(
+    terminal_method: str,
+    terminal: Mapping[str, Any],
+) -> None:
     session = _FakeNonFlatSession()
     internal: list[tuple[CdpTargetSource, Mapping[str, Any]]] = []
     router, observed = _router(
@@ -2475,7 +3021,7 @@ def test_abort_never_promotes_pending_root_srcdoc_evidence_to_resolved() -> None
         on_internal_document_lifecycle=lambda source, event: internal.append((source, dict(event))),
     )
     _begin_srcdoc_loading(session)
-    session.emit((), "Network.loadingFailed", _srcdoc_terminal())
+    session.emit((), terminal_method, terminal)
     assert router.srcdoc_pseudo_document_summary["pending"] == 1
 
     _browser_session, guard = _guard_for(router)
@@ -2497,9 +3043,24 @@ def test_abort_never_promotes_pending_root_srcdoc_evidence_to_resolved() -> None
     assert summary["aborted"] == 1
     assert summary["open_candidates"] == 0
     assert summary["diagnostics"] == []
+    assert summary["terminal_outcome_counts"][terminal_method] == 1
 
 
-def test_root_srcdoc_terminal_arriving_during_abort_remains_abort_owned() -> None:
+@pytest.mark.parametrize(
+    ("terminal_method", "terminal"),
+    [
+        pytest.param("Network.loadingFailed", _srcdoc_terminal(), id="loading-failed"),
+        pytest.param(
+            "Network.loadingFinished",
+            _srcdoc_finished_terminal(),
+            id="loading-finished",
+        ),
+    ],
+)
+def test_root_srcdoc_terminal_arriving_during_abort_remains_abort_owned(
+    terminal_method: str,
+    terminal: Mapping[str, Any],
+) -> None:
     session = _FakeNonFlatSession()
     router, observed = _router(session, track_root_srcdoc_lifecycle=True)
     _begin_srcdoc_loading(session)
@@ -2507,7 +3068,7 @@ def test_root_srcdoc_terminal_arriving_during_abort_remains_abort_owned() -> Non
     router.begin_abort()
     guard.begin_abort()
 
-    session.emit((), "Network.loadingFailed", _srcdoc_terminal())
+    session.emit((), terminal_method, terminal)
     session.emit((), "Page.frameStoppedLoading", {"frameId": _SRCDOC_FRAME_ID})
     router.raise_if_failed()
     assert router.srcdoc_pseudo_document_summary["pending"] == 1
@@ -2518,6 +3079,9 @@ def test_root_srcdoc_terminal_arriving_during_abort_remains_abort_owned() -> Non
     router.finish_abort()
     assert router.srcdoc_pseudo_document_summary["aborted"] == 1
     assert router.srcdoc_pseudo_document_summary["pending"] == 0
+    assert router.srcdoc_pseudo_document_summary["terminal_outcome_counts"][
+        terminal_method
+    ] == 1
 
 
 @pytest.mark.parametrize("detach_order", ["parent-subtree", "child-first"])

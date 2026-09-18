@@ -12,7 +12,7 @@
     "terminal_schema_version": 4,
     "completion_schema_version": 4,
     "document_response_schema_version": 2,
-    "pinned_cdp_probe_schema_version": 15,
+    "pinned_cdp_probe_schema_version": 16,
     "render_observation_schema_version": 4,
     "discovery_event_audit_schema_version": 5,
     "passive_render_contract_schema_version": 4,
@@ -159,12 +159,12 @@
     "service_worker_dependency": "forbidden",
     "cross-domain-redirect-alias": "forbidden",
     "approved_origins": "explicit-and-frozen",
-    "cdp_target_instrumentation_policy": "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v17",
+    "cdp_target_instrumentation_policy": "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v18",
     "render_observation_schema_version": 4,
     "discovery_event_audit_schema_version": 5,
     "srcdoc_pseudo_document_contract": {
-      "schema_version": 2,
-      "policy": "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-v1"
+      "schema_version": 3,
+      "policy": "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-v2"
     },
     "passive_render_contract": {
       "schema_version": 4,
@@ -195,7 +195,7 @@
         "recursive-target-router-shutdown-ready",
         "no-pending-shared-worker-bootstrap-prearm",
         "all-observed-target-egress-shims-prearmed",
-        "terminal-root-srcdoc-loader-bound-orphan-abort-lifecycle",
+        "terminal-root-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-lifecycle",
         "zero-non-replayable-egress-attempts",
         "zero-browser-context-service-workers"
       ],
@@ -212,7 +212,7 @@
       ],
       "hard_cap_policy": "typed-candidate-rejection"
     },
-    "passive_render_contract_sha256": "d5682b9b054a805866c06548acc8a9ebcdd388cfcd581eec80ac375d404baa31",
+    "passive_render_contract_sha256": "6a63003feeb667799414bfdd9d24b473b0a43a29853932f55a992c46b8e9bd4e",
     "browser_navigation_timeout_ms": 60000,
     "passive_render_hard_cap_after_load_ms": 30000,
     "acquisition_action_timing_contract": {

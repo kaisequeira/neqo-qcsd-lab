@@ -130,7 +130,7 @@ def _srcdoc_diagnostic(
 ) -> dict:
     loader_hash = request_hash_character * 64
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "source_role": "root-page",
         "frame_id_sha256": frame_hash_character * 64,
         "loader_id_sha256": loader_hash,
@@ -146,6 +146,7 @@ def _srcdoc_diagnostic(
         "url_kind": "about:srcdoc",
         "loader_binding": "Page.frameStartedNavigating.loaderId",
         "request_id_matches_loader": True,
+        "terminal_variant": "loading-failed-document-abort",
         "terminal_method": "Network.loadingFailed",
         "terminal_fields": sorted(
             {"requestId", "timestamp", "type", "errorText", "canceled"}
@@ -153,6 +154,7 @@ def _srcdoc_diagnostic(
         "resource_type": "Document",
         "error_text": "net::ERR_ABORTED",
         "canceled": True,
+        "encoded_data_length": None,
         "network_request_seen": False,
         "fetch_pause_seen": False,
         "frame_stopped_after_terminal": True,
@@ -171,6 +173,12 @@ def _internal_document_lifecycle_summary(
     candidate_limit_saturated: bool = False,
 ) -> dict:
     resolved_diagnostics = deepcopy(diagnostics or [])
+    terminal_outcome_counts = {
+        "Network.loadingFailed": pending + aborted,
+        "Network.loadingFinished": 0,
+    }
+    for diagnostic in resolved_diagnostics:
+        terminal_outcome_counts[diagnostic["terminal_method"]] += 1
     return {
         "schema_version": SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
         "policy": SRCDOC_PSEUDO_DOCUMENT_POLICY,
@@ -183,6 +191,7 @@ def _internal_document_lifecycle_summary(
         "network_history_saturated": network_history_saturated,
         "fetch_history_saturated": fetch_history_saturated,
         "candidate_limit_saturated": candidate_limit_saturated,
+        "terminal_outcome_counts": terminal_outcome_counts,
         "diagnostics": resolved_diagnostics,
     }
 
@@ -450,13 +459,13 @@ def test_internal_document_lifecycle_bumps_discovery_evidence_schemas() -> None:
     assert DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION == 5
     assert PASSIVE_RENDER_CONTRACT["policy"] == "bounded-passive-render-quiescence-v4"
     assert (
-        "terminal-root-srcdoc-loader-bound-orphan-abort-lifecycle"
+        "terminal-root-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-lifecycle"
         in PASSIVE_RENDER_CONTRACT["quiescence_requires"]
     )
     assert "browser-internal-document" in PASSIVE_RENDER_CONTRACT["relevant_events"]
-    assert SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION == 2
+    assert SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION == 3
     assert SRCDOC_PSEUDO_DOCUMENT_POLICY == (
-        "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-v1"
+        "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-v2"
     )
 
 

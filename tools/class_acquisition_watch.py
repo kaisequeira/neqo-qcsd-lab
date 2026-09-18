@@ -715,15 +715,15 @@ _BUILD_STORAGE_PREFLIGHT_KEYS = {
     "passed",
 }
 _CDP_TARGET_INSTRUMENTATION_POLICY = (
-    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v17"
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v18"
 )
 _PLAYWRIGHT_VERSION = "1.57.0"
 _CHROMIUM_VERSION = "143.0.7499.4"
 _CHROMIUM_EXECUTABLE = "/usr/local/bin/qcsd-chromium"
-_PINNED_CDP_SCHEMA_VERSION = 15
+_PINNED_CDP_SCHEMA_VERSION = 16
 _HISTORICAL_PINNED_CDP_SCHEMA_VERSION = 8
 _HISTORICAL_PINNED_CDP_SCHEMA_VERSIONS = frozenset({8, 9, 11, 12, 13, 14})
-_PINNED_CDP_CONTRACT_SCHEMA_VERSION = 14
+_PINNED_CDP_CONTRACT_SCHEMA_VERSION = 15
 _HISTORICAL_PINNED_CDP_CONTRACT_SCHEMA_VERSION = 8
 _HISTORICAL_PINNED_CDP_CONTRACT_V12_SCHEMA_VERSION = 11
 _HISTORICAL_PINNED_CDP_CONTRACT_V13_SCHEMA_VERSION = 12
@@ -732,9 +732,9 @@ _BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION = 1
 _EGRESS_PREARM_SUMMARY_SCHEMA_VERSION = 2
 _PINNED_CDP_TARGET_ACTIVITY_SCHEMA_VERSION = 1
 _PINNED_CDP_WORKER_WEBTRANSPORT_PROBE_SCHEMA_VERSION = 1
-_PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION = 2
+_PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION = 3
 _PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_POLICY = (
-    "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-v1"
+    "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-v2"
 )
 _PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_LIMIT = 32
 _PINNED_CDP_SRCDOC_EVENT_ORDINAL_LIMIT = 20_480
@@ -1067,11 +1067,11 @@ _HISTORICAL_PINNED_CDP_CONTRACT_V14 = {
 _PINNED_CDP_CONTRACT = {
     **_HISTORICAL_PINNED_CDP_CONTRACT_V14,
     "schema_version": _PINNED_CDP_CONTRACT_SCHEMA_VERSION,
-    "policy": "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v14",
+    "policy": "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v15",
     "instrumentation_policy": _CDP_TARGET_INSTRUMENTATION_POLICY,
     "required_observations": [
         *_HISTORICAL_PINNED_CDP_CONTRACT_V14["required_observations"],
-        "root-about-srcdoc-loader-bound-orphan-abort-lifecycle",
+        "root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-lifecycle",
     ],
     "srcdoc_pseudo_document_summary_schema_version": (
         _PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION
@@ -1264,7 +1264,7 @@ _PASSIVE_RENDER_CONTRACT = {
         "recursive-target-router-shutdown-ready",
         "no-pending-shared-worker-bootstrap-prearm",
         "all-observed-target-egress-shims-prearmed",
-        "terminal-root-srcdoc-loader-bound-orphan-abort-lifecycle",
+        "terminal-root-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-lifecycle",
         "zero-non-replayable-egress-attempts",
         "zero-browser-context-service-workers",
     ],
@@ -4280,6 +4280,7 @@ def _validate_srcdoc_pseudo_document_summary(value: Any) -> None:
         "network_history_saturated",
         "fetch_history_saturated",
         "candidate_limit_saturated",
+        "terminal_outcome_counts",
         "diagnostics",
     }
     if not isinstance(value, Mapping) or set(value) != fields:
@@ -4313,6 +4314,20 @@ def _validate_srcdoc_pseudo_document_summary(value: Any) -> None:
     )
     if any(type(value.get(field)) is not bool for field in saturation_fields):
         raise WatchError("pinned CDP srcdoc loader-bound saturation flags are invalid")
+    terminal_methods = ("Network.loadingFailed", "Network.loadingFinished")
+    outcome_counts = value.get("terminal_outcome_counts")
+    if (
+        not isinstance(outcome_counts, Mapping)
+        or set(outcome_counts) != set(terminal_methods)
+        or any(
+            type(outcome_counts.get(method)) is not int
+            or outcome_counts[method] < 0
+            or outcome_counts[method] > _PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_LIMIT
+            for method in terminal_methods
+        )
+        or sum(outcome_counts.values()) != value["total"]
+    ):
+        raise WatchError("pinned CDP srcdoc loader-bound terminal outcomes are invalid")
     diagnostics = value.get("diagnostics")
     if type(diagnostics) is not list or len(diagnostics) != value["resolved"]:
         raise WatchError("pinned CDP srcdoc loader-bound diagnostics are invalid")
@@ -4333,11 +4348,13 @@ def _validate_srcdoc_pseudo_document_summary(value: Any) -> None:
         "url_kind",
         "loader_binding",
         "request_id_matches_loader",
+        "terminal_variant",
         "terminal_method",
         "terminal_fields",
         "resource_type",
         "error_text",
         "canceled",
+        "encoded_data_length",
         "network_request_seen",
         "fetch_pause_seen",
         "frame_stopped_after_terminal",
@@ -4347,6 +4364,7 @@ def _validate_srcdoc_pseudo_document_summary(value: Any) -> None:
     request_hashes: set[str] = set()
     all_ordinals: set[int] = set()
     previous_stopped_ordinal = 0
+    resolved_outcome_counts = {method: 0 for method in terminal_methods}
     for diagnostic in diagnostics:
         if not isinstance(diagnostic, Mapping) or set(diagnostic) != diagnostic_fields:
             raise WatchError(
@@ -4400,9 +4418,6 @@ def _validate_srcdoc_pseudo_document_summary(value: Any) -> None:
             "disposition": "currentTab",
             "url_kind": "about:srcdoc",
             "loader_binding": "Page.frameStartedNavigating.loaderId",
-            "terminal_method": "Network.loadingFailed",
-            "resource_type": "Document",
-            "error_text": "net::ERR_ABORTED",
         }
         if any(
             type(diagnostic.get(field_name)) is not str
@@ -4412,14 +4427,41 @@ def _validate_srcdoc_pseudo_document_summary(value: Any) -> None:
             raise WatchError(
                 "pinned CDP srcdoc loader-bound diagnostic strings are invalid"
             )
+        terminal_variant = diagnostic.get("terminal_variant")
+        terminal_method = diagnostic.get("terminal_method")
+        terminal_fields = diagnostic.get("terminal_fields")
+        if terminal_variant == "loading-failed-document-abort":
+            valid_terminal = (
+                terminal_method == "Network.loadingFailed"
+                and terminal_fields
+                == ["canceled", "errorText", "requestId", "timestamp", "type"]
+                and diagnostic.get("resource_type") == "Document"
+                and diagnostic.get("error_text") == "net::ERR_ABORTED"
+                and diagnostic.get("canceled") is True
+                and diagnostic.get("encoded_data_length") is None
+            )
+        elif terminal_variant == "loading-finished":
+            valid_terminal = (
+                terminal_method == "Network.loadingFinished"
+                and terminal_fields == ["encodedDataLength", "requestId", "timestamp"]
+                and diagnostic.get("resource_type") is None
+                and diagnostic.get("error_text") is None
+                and diagnostic.get("canceled") is None
+                and type(diagnostic.get("encoded_data_length")) is int
+                and diagnostic.get("encoded_data_length") == 33
+            )
+        else:
+            valid_terminal = False
         if (
             type(diagnostic.get("schema_version")) is not int
-            or diagnostic.get("schema_version") != 2
+            or diagnostic.get("schema_version")
+            != _PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION
             or diagnostic.get("request_id_matches_loader") is not True
-            or type(diagnostic.get("terminal_fields")) is not list
-            or diagnostic.get("terminal_fields")
-            != ["canceled", "errorText", "requestId", "timestamp", "type"]
-            or diagnostic.get("canceled") is not True
+            or type(terminal_variant) is not str
+            or type(terminal_method) is not str
+            or type(terminal_fields) is not list
+            or any(type(field_name) is not str for field_name in terminal_fields)
+            or not valid_terminal
             or diagnostic.get("network_request_seen") is not False
             or diagnostic.get("fetch_pause_seen") is not False
             or diagnostic.get("frame_stopped_after_terminal") is not True
@@ -4432,6 +4474,14 @@ def _validate_srcdoc_pseudo_document_summary(value: Any) -> None:
         frame_hashes.add(frame_hash)
         loader_hashes.add(loader_hash)
         request_hashes.add(request_hash)
+        resolved_outcome_counts[terminal_method] += 1
+    if any(
+        resolved_outcome_counts[method] > outcome_counts[method]
+        for method in terminal_methods
+    ):
+        raise WatchError(
+            "pinned CDP srcdoc loader-bound resolved outcomes are inconsistent"
+        )
     if value["total"] != value["resolved"] + value["pending"] + value["aborted"]:
         raise WatchError("pinned CDP srcdoc loader-bound aggregate is inconsistent")
     if (

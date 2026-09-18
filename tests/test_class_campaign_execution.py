@@ -131,6 +131,10 @@ def _terminal_internal_document_lifecycle_summary() -> dict[str, object]:
         "network_history_saturated": False,
         "fetch_history_saturated": False,
         "candidate_limit_saturated": False,
+        "terminal_outcome_counts": {
+            "Network.loadingFailed": 0,
+            "Network.loadingFinished": 0,
+        },
         "diagnostics": [],
     }
 

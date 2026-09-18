@@ -90,7 +90,7 @@ def test_checked_in_handoff_contract_matches_current_exporter_and_kernel_sidecar
     assert amendment["terminal_schema_version"] == ACQUISITION_TERMINAL_SCHEMA_VERSION == 4
     assert amendment["completion_schema_version"] == ACQUISITION_COMPLETION_SCHEMA_VERSION == 4
     assert amendment["document_response_schema_version"] == DOCUMENT_RESPONSE_SCHEMA_VERSION == 2
-    assert amendment["pinned_cdp_probe_schema_version"] == PINNED_CDP_PROBE_SCHEMA_VERSION == 15
+    assert amendment["pinned_cdp_probe_schema_version"] == PINNED_CDP_PROBE_SCHEMA_VERSION == 16
     assert amendment["render_observation_schema_version"] == RENDER_OBSERVATION_SCHEMA_VERSION
     assert amendment["discovery_event_audit_schema_version"] == DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION
     assert (
