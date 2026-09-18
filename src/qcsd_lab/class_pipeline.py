@@ -1334,6 +1334,7 @@ def class_study_status(
         validate_class_historical_snapshot,
         validate_class_readiness_attestation,
         validate_class_validation_attestation,
+        validate_current_acquisition_completion_authority,
     )
 
     verified_foundation: dict[str, Any] | None = None
@@ -1350,10 +1351,20 @@ def class_study_status(
         stages["foundation"] = {"state": "absent"}
     verified_acquisition = None
     if acquisition_authority is not None:
-        verified_acquisition = validate_class_acquisition_authority(
-            acquisition_authority, runtime_role="collection"
+        inspected_acquisition = validate_class_acquisition_authority(
+            acquisition_authority,
+            runtime_role="collection",
+            allow_historical=True,
         )
-        stages["acquisition_authority"] = {"state": "verified", **verified_acquisition}
+        historical_acquisition = (
+            inspected_acquisition.get("verification_status") == "historical-verify-only"
+        )
+        stages["acquisition_authority"] = {
+            "state": "historical-verify-only" if historical_acquisition else "verified",
+            **inspected_acquisition,
+        }
+        if not historical_acquisition:
+            verified_acquisition = inspected_acquisition
     else:
         stages["acquisition_authority"] = {"state": "absent"}
     acquisition_gate = verified_acquisition or verified_foundation
@@ -1485,21 +1496,41 @@ def class_study_status(
             "reason": "acquisition completion verification requires the candidate catalogue",
         }
     else:
-        from .class_acquisition import validate_acquisition_completion
+        from . import class_acquisition as acquisition_module
 
         completion_path = _regular_file(acquisition_completion_path, "acquisition completion")
         completion_value = _load_json_object(completion_path, "acquisition completion")
-        completion_payload = validate_acquisition_completion(
+        completion_payload = acquisition_module.validate_acquisition_completion(
             completion_value,
             candidate_catalogue_path=candidate_catalogue_path,
             runner_root=completion_path.parent,
         )
+        current_completion = all(
+            type(completion_payload.get(field)) is int and completion_payload[field] == expected
+            for field, expected in (
+                ("acquisition_schema_version", acquisition_module.SCHEMA_VERSION),
+                (
+                    "completion_schema_version",
+                    acquisition_module.COMPLETION_SCHEMA_VERSION,
+                ),
+                (
+                    "checkpoint_schema_version",
+                    acquisition_module.CHECKPOINT_SCHEMA_VERSION,
+                ),
+            )
+        )
+        if current_completion:
+            validate_current_acquisition_completion_authority(
+                completion_payload,
+                runner_root=completion_path.parent,
+            )
         stages["acquisition_completion"] = {
-            "state": "verified",
+            "state": "verified" if current_completion else "historical-verify-only",
             "path": str(completion_path),
             "sha256": sha256_file(completion_path),
             "payload_sha256": completion_value["payload_sha256"],
             "terminal_candidates": len(completion_payload["terminal_receipts"]),
+            **({} if current_completion else {"verification_status": "historical-verify-only"}),
         }
 
     pilot_admission = _optional_admission(
@@ -3359,7 +3390,11 @@ def _verify_class_promotion_target(
     )
 
     if receipt_type == ACQUISITION_AUTHORITY_RECEIPT_TYPE:
-        return validate_class_acquisition_authority(path, runtime_role="collection")
+        return validate_class_acquisition_authority(
+            path,
+            runtime_role="collection",
+            allow_historical=True,
+        )
     if receipt_type == FOUNDATION_RECEIPT_TYPE:
         return validate_class_foundation_attestation(
             path,

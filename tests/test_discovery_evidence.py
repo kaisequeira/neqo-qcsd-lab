@@ -13,16 +13,19 @@ from qcsd_lab.browser_egress import (
 from qcsd_lab.cdp_targets import (
     CDP_TARGET_INSTRUMENTATION_POLICY,
     EGRESS_PREARM_SUMMARY_SCHEMA_VERSION,
+    SRCDOC_PSEUDO_DOCUMENT_POLICY,
+    SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
 )
 from qcsd_lab.discovery_evidence import (
     DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION,
+    PASSIVE_RENDER_CONTRACT,
+    PASSIVE_RENDER_CONTRACT_SCHEMA_VERSION,
     PASSIVE_RENDER_CONTRACT_SHA256,
     RENDER_OBSERVATION_SCHEMA_VERSION,
     evidence_sha256,
     validate_render_observation,
     verify_discovery_event_audit,
 )
-
 
 ROOT = {
     "session_path": [],
@@ -116,6 +119,71 @@ def _non_replayable_egress_summary() -> dict:
         "context_service_worker_listener_installed": True,
         "cdp_tripwires_are_pre_io": False,
         "packet_level_completeness_claimed": False,
+    }
+
+
+def _srcdoc_diagnostic(
+    request_hash_character: str = "a",
+    *,
+    frame_hash_character: str = "f",
+    ordinal_offset: int = 0,
+) -> dict:
+    loader_hash = request_hash_character * 64
+    return {
+        "schema_version": 2,
+        "source_role": "root-page",
+        "frame_id_sha256": frame_hash_character * 64,
+        "loader_id_sha256": loader_hash,
+        "request_id_sha256": loader_hash,
+        "requested_event_ordinal": ordinal_offset + 1,
+        "started_navigating_event_ordinal": ordinal_offset + 2,
+        "started_event_ordinal": ordinal_offset + 3,
+        "terminal_event_ordinal": ordinal_offset + 4,
+        "stopped_event_ordinal": ordinal_offset + 5,
+        "navigation_reason": "initialFrameNavigation",
+        "navigation_type": "differentDocument",
+        "disposition": "currentTab",
+        "url_kind": "about:srcdoc",
+        "loader_binding": "Page.frameStartedNavigating.loaderId",
+        "request_id_matches_loader": True,
+        "terminal_method": "Network.loadingFailed",
+        "terminal_fields": sorted(
+            {"requestId", "timestamp", "type", "errorText", "canceled"}
+        ),
+        "resource_type": "Document",
+        "error_text": "net::ERR_ABORTED",
+        "canceled": True,
+        "network_request_seen": False,
+        "fetch_pause_seen": False,
+        "frame_stopped_after_terminal": True,
+    }
+
+
+def _internal_document_lifecycle_summary(
+    *,
+    diagnostics: list[dict] | None = None,
+    pending: int = 0,
+    aborted: int = 0,
+    open_candidates: int | None = None,
+    enabled: bool = True,
+    network_history_saturated: bool = False,
+    fetch_history_saturated: bool = False,
+    candidate_limit_saturated: bool = False,
+) -> dict:
+    resolved_diagnostics = deepcopy(diagnostics or [])
+    return {
+        "schema_version": SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
+        "policy": SRCDOC_PSEUDO_DOCUMENT_POLICY,
+        "enabled": enabled,
+        "total": len(resolved_diagnostics) + pending + aborted,
+        "resolved": len(resolved_diagnostics),
+        "pending": pending,
+        "aborted": aborted,
+        "open_candidates": pending if open_candidates is None else open_candidates,
+        "network_history_saturated": network_history_saturated,
+        "fetch_history_saturated": fetch_history_saturated,
+        "candidate_limit_saturated": candidate_limit_saturated,
+        "diagnostics": resolved_diagnostics,
     }
 
 
@@ -241,6 +309,16 @@ def _target(source: dict, target_event: str) -> dict:
     }
 
 
+def _internal_document(diagnostic: dict, *, source: dict = ROOT) -> dict:
+    return {
+        "sequence": 0,
+        "monotonic_ms": 0,
+        "kind": "browser-internal-document",
+        "source": source,
+        "diagnostic": deepcopy(diagnostic),
+    }
+
+
 def _resource(resource_id: int, url: str, dependencies: list[int] | None = None) -> dict:
     return {
         "id": resource_id,
@@ -264,6 +342,9 @@ def _audit(events: list[dict]) -> dict:
             "event_count": len(events),
             "target_event_count": sum(
                 event["kind"] == "target-activity" for event in events
+            ),
+            "browser_internal_document_count": sum(
+                event["kind"] == "browser-internal-document" for event in events
             ),
             "network_request_count": sum(
                 event["kind"] == "network-request" for event in events
@@ -308,6 +389,15 @@ def _render_for(audit: dict) -> dict:
         "router_shutdown_ready": True,
         "bootstrap_prearm_summary": _bootstrap_prearm_summary(),
         "egress_prearm_summary": _egress_prearm_summary(),
+        "internal_document_lifecycle_summary": (
+            _internal_document_lifecycle_summary(
+                diagnostics=[
+                    event["diagnostic"]
+                    for event in audit["events"]
+                    if event["kind"] == "browser-internal-document"
+                ]
+            )
+        ),
         "non_replayable_egress_summary": _non_replayable_egress_summary(),
         "browser_context_service_worker_count": 0,
         "cutoff_reason": "quiescent",
@@ -354,6 +444,22 @@ def _root_resource_audit(*extra_events: dict) -> tuple[dict, list[dict]]:
     )
 
 
+def test_internal_document_lifecycle_bumps_discovery_evidence_schemas() -> None:
+    assert PASSIVE_RENDER_CONTRACT_SCHEMA_VERSION == 4
+    assert RENDER_OBSERVATION_SCHEMA_VERSION == 4
+    assert DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION == 5
+    assert PASSIVE_RENDER_CONTRACT["policy"] == "bounded-passive-render-quiescence-v4"
+    assert (
+        "terminal-root-srcdoc-loader-bound-orphan-abort-lifecycle"
+        in PASSIVE_RENDER_CONTRACT["quiescence_requires"]
+    )
+    assert "browser-internal-document" in PASSIVE_RENDER_CONTRACT["relevant_events"]
+    assert SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION == 2
+    assert SRCDOC_PSEUDO_DOCUMENT_POLICY == (
+        "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-v1"
+    )
+
+
 def test_quiescent_render_requires_router_shutdown_readiness() -> None:
     audit, _resources = _root_resource_audit()
     render = _render_for(audit)
@@ -384,6 +490,100 @@ def test_quiescent_render_accepts_released_shared_worker_prearm() -> None:
     validate_render_observation(render)
 
 
+def test_quiescent_render_requires_terminal_internal_document_lifecycle() -> None:
+    audit, _resources = _root_resource_audit()
+    render = _render_for(audit)
+    render["internal_document_lifecycle_summary"] = (
+        _internal_document_lifecycle_summary(pending=1)
+    )
+
+    with pytest.raises(ValueError, match="lifecycle is not terminal"):
+        validate_render_observation(render)
+
+
+def test_quiescent_render_accepts_resolved_internal_document_lifecycle() -> None:
+    diagnostic = _srcdoc_diagnostic()
+    audit, _resources = _root_resource_audit(_internal_document(diagnostic))
+
+    validate_render_observation(_render_for(audit))
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        (
+            lambda diagnostic: diagnostic.update(loader_id_sha256="e" * 64),
+            "diagnostic is inconsistent",
+        ),
+        (
+            lambda diagnostic: diagnostic.pop("started_navigating_event_ordinal"),
+            "diagnostic fields",
+        ),
+        (
+            lambda diagnostic: diagnostic.update(
+                loader_binding="Page.frameStartedLoading.loaderId"
+            ),
+            "diagnostic strings are invalid",
+        ),
+        (
+            lambda diagnostic: diagnostic.update(navigation_type="sameDocument"),
+            "diagnostic strings are invalid",
+        ),
+        (
+            lambda diagnostic: diagnostic.update(request_id_matches_loader=False),
+            "diagnostic is inconsistent",
+        ),
+    ),
+)
+def test_internal_document_summary_requires_exact_loader_binding(
+    mutation,
+    message: str,
+) -> None:
+    diagnostic = _srcdoc_diagnostic()
+    mutation(diagnostic)
+    audit, _resources = _root_resource_audit(_internal_document(diagnostic))
+
+    with pytest.raises(ValueError, match=message):
+        validate_render_observation(_render_for(audit))
+
+
+def test_internal_document_summary_requires_globally_unique_event_ordinals() -> None:
+    first = _srcdoc_diagnostic("a")
+    second = _srcdoc_diagnostic("b", frame_hash_character="e", ordinal_offset=10)
+    second["requested_event_ordinal"] = first["stopped_event_ordinal"]
+    audit, _resources = _root_resource_audit(
+        _internal_document(first),
+        _internal_document(second),
+    )
+
+    with pytest.raises(ValueError, match="ordinals are not globally unique"):
+        validate_render_observation(_render_for(audit))
+
+
+def test_internal_document_summary_requires_diagnostics_in_emitted_order() -> None:
+    first = _srcdoc_diagnostic("a")
+    second = _srcdoc_diagnostic("b", frame_hash_character="e", ordinal_offset=10)
+    audit, _resources = _root_resource_audit(
+        _internal_document(second),
+        _internal_document(first),
+    )
+
+    with pytest.raises(ValueError, match="diagnostics are not in emitted order"):
+        validate_render_observation(_render_for(audit))
+
+
+def test_internal_document_summary_rejects_reused_frame_identity() -> None:
+    first = _srcdoc_diagnostic("a")
+    second = _srcdoc_diagnostic("b", ordinal_offset=10)
+    audit, _resources = _root_resource_audit(
+        _internal_document(first),
+        _internal_document(second),
+    )
+
+    with pytest.raises(ValueError, match="diagnostic is inconsistent"):
+        validate_render_observation(_render_for(audit))
+
+
 def test_hard_cap_render_can_record_an_unready_router_without_active_requests() -> None:
     audit, _resources = _root_resource_audit()
     render = _render_for(audit)
@@ -394,11 +594,77 @@ def test_hard_cap_render_can_record_an_unready_router_without_active_requests() 
             "cutoff_ms": load + 30_000,
             "router_shutdown_ready": False,
             "bootstrap_prearm_summary": _bootstrap_prearm_summary(held=1),
+            "internal_document_lifecycle_summary": (
+                _internal_document_lifecycle_summary(pending=1)
+            ),
             "cutoff_reason": "hard-cap-non-quiescent",
         }
     )
 
     validate_render_observation(render, allow_failure=True)
+
+
+def test_internal_document_audit_event_matches_the_render_diagnostics() -> None:
+    diagnostic = _srcdoc_diagnostic()
+    audit, resources = _root_resource_audit(_internal_document(diagnostic))
+
+    summary = _verify(audit, resources)
+
+    assert summary["browser_internal_document_count"] == 1
+
+
+def test_internal_document_audit_event_requires_exact_fields_and_root_source() -> None:
+    diagnostic = _srcdoc_diagnostic()
+    extra_field = _internal_document(diagnostic)
+    extra_field["unexpected"] = True
+    audit, resources = _root_resource_audit(extra_field)
+    with pytest.raises(ValueError, match="event fields"):
+        _verify(audit, resources)
+
+    child = _source("child-session", "child-target")
+    audit, resources = _root_resource_audit(
+        _target(child, "target-attached"),
+        _internal_document(diagnostic, source=child),
+    )
+    with pytest.raises(ValueError, match="must use the root source"):
+        _verify(audit, resources)
+
+
+def test_internal_document_audit_diagnostics_preserve_exact_render_order() -> None:
+    first = _srcdoc_diagnostic("a")
+    second = _srcdoc_diagnostic("b", frame_hash_character="e", ordinal_offset=10)
+    audit, resources = _root_resource_audit(
+        _internal_document(first),
+        _internal_document(second),
+    )
+    render = _render_for(audit)
+    internal_events = [
+        event
+        for event in audit["events"]
+        if event["kind"] == "browser-internal-document"
+    ]
+    internal_events[0]["diagnostic"] = deepcopy(second)
+    internal_events[1]["diagnostic"] = deepcopy(first)
+    audit["render_observation_sha256"] = evidence_sha256(render)
+
+    with pytest.raises(ValueError, match="diagnostics differ from the render summary"):
+        verify_discovery_event_audit(
+            audit,
+            render_observation=render,
+            resources=resources,
+            exclusions=[],
+            approved_origins=["https://page.test"],
+            observed_request_count=1,
+        )
+
+
+def test_internal_document_audit_summary_count_is_exact() -> None:
+    diagnostic = _srcdoc_diagnostic()
+    audit, resources = _root_resource_audit(_internal_document(diagnostic))
+    audit["summary"]["browser_internal_document_count"] = 0
+
+    with pytest.raises(ValueError, match="summary does not verify"):
+        _verify(audit, resources)
 
 
 def test_target_replay_requires_exact_parent_route_and_never_reuses_a_route() -> None:

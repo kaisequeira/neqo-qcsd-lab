@@ -1073,8 +1073,8 @@ def _install_final_reproof_drift(
     source = launcher.read_text(encoding="utf-8")
     final_daemon_reproof = (
         "  reconcile_stale_docker_supervisors || exit 1\n"
-        "  observed_server_id=\"$(_qcsd_docker_api info --format "
-        "'{{.ID}}' 2>/dev/null)\""
+        "  observed_server_id=\"$(_qcsd_read_docker_daemon_id "
+        "\"${pinned_endpoint}\" 2>/dev/null)\""
     )
     assert source.count(final_daemon_reproof) == 1
     source = source.replace(
@@ -1082,7 +1082,7 @@ def _install_final_reproof_drift(
         "  reconcile_stale_docker_supervisors || exit 1\n"
         '  case "${QCSD_TEST_FINAL_REPROOF_DRIFT:-}" in\n'
         "    daemon)\n"
-        "      printf '0\\n' >"
+        "      printf '1\\n' >"
         '"${QCSD_TEST_FINAL_DAEMON_DRIFT_COUNTER:?}"\n'
         "      ;;\n"
         "    boot)\n"
@@ -1091,8 +1091,8 @@ def _install_final_reproof_drift(
         "      ;;\n"
         "    *) exit 98 ;;\n"
         "  esac\n"
-        "  observed_server_id=\"$(_qcsd_docker_api info --format "
-        "'{{.ID}}' 2>/dev/null)\"",
+        "  observed_server_id=\"$(_qcsd_read_docker_daemon_id "
+        "\"${pinned_endpoint}\" 2>/dev/null)\"",
     )
     final_boot_reproof = """  IFS= read -r observed_boot_id </proc/sys/kernel/random/boot_id ||
     observed_boot_id=""

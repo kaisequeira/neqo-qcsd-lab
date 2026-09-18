@@ -23,6 +23,8 @@ from qcsd_lab.browser_egress import (
 from qcsd_lab.cdp_targets import (
     CDP_TARGET_INSTRUMENTATION_POLICY,
     EGRESS_PREARM_SUMMARY_SCHEMA_VERSION,
+    SRCDOC_PSEUDO_DOCUMENT_POLICY,
+    SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
     CdpTargetIntegrityError,
 )
 from qcsd_lab.class_acquisition import (
@@ -89,6 +91,75 @@ from tests.test_buflo_study import _write_schema5_build_pair
 from tests.test_pinned_cdp import _observation as _pinned_cdp_observation
 
 _PRODUCTION_FOUNDATION_ATTESTATION_BINDING = acquisition_module._foundation_attestation_binding
+_HISTORICAL_ACQUISITION_CONTRACTS = load_json(
+    Path(__file__).parent / "fixtures/class-acquisition-historical-contracts.json"
+)
+
+
+def _merge_frozen_contract(target: dict, overlay: dict) -> None:
+    for key, value in overlay.items():
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            _merge_frozen_contract(target[key], value)
+        else:
+            target[key] = copy.deepcopy(value)
+
+
+def _schema_five_fixed_projection(variant: dict) -> dict:
+    projection = copy.deepcopy(_HISTORICAL_ACQUISITION_CONTRACTS["schema5_v10"]["fixed_provenance"])
+    overlay_name = variant["fixed_projection_overlay"]
+    if overlay_name is not None:
+        _merge_frozen_contract(
+            projection,
+            _HISTORICAL_ACQUISITION_CONTRACTS["fixed_projection_overlays"][overlay_name],
+        )
+    projection["cdp_target_instrumentation_policy"] = variant["instrumentation_policy"]
+    return projection
+
+
+def _schema_six_fixed_projection(variant: dict) -> dict:
+    schema_five_v14 = next(
+        item
+        for item in _HISTORICAL_ACQUISITION_CONTRACTS["schema5_source_variants"]
+        if item["instrumentation_policy"].endswith("-v14")
+    )
+    projection = _schema_five_fixed_projection(schema_five_v14)
+    _merge_frozen_contract(
+        projection,
+        _HISTORICAL_ACQUISITION_CONTRACTS["fixed_projection_overlays"]["schema6_from_schema5_v14"],
+    )
+    projection["cdp_target_instrumentation_policy"] = variant["instrumentation_policy"]
+    projection["navigation_implementation"] = variant["navigation_implementation"]
+    return projection
+
+
+def _synthetic_historical_provenance(
+    schema: int,
+    *,
+    fixed_projection: dict,
+    source_lab_commit: str,
+) -> dict:
+    authority_field = "foundation_attestation" if schema == 5 else "acquisition_authority"
+    return {
+        "study_id": "classifier-multiorigin100-v1",
+        "acquisition_schema_version": schema,
+        "candidate_catalogue_sha256": "a" * 64,
+        "candidate_catalogue_payload_sha256": "b" * 64,
+        "candidate_count": 1,
+        authority_field: {"path": "/frozen/historical-authority.json", "sha256": "c" * 64},
+        "started_at": "2026-01-01T00:00:00Z",
+        "image_digest": "native",
+        "source": {
+            "image_digest": "native",
+            "lab_commit": source_lab_commit,
+            "lab_dirty": False,
+            "lab_patch_sha256": hashlib.sha256(b"").hexdigest(),
+            "neqo_commit": "d" * 40,
+            "neqo_pinned_commit": "d" * 40,
+            "neqo_dirty": False,
+            "neqo_patch_sha256": hashlib.sha256(b"").hexdigest(),
+        },
+        **copy.deepcopy(fixed_projection),
+    }
 
 
 @pytest.fixture(autouse=True)
@@ -107,11 +178,22 @@ def _miniature_ledger_selection_policy(monkeypatch: pytest.MonkeyPatch):
         ids = [candidate.candidate_id for candidate in candidates]
         terminals = [candidate_id for candidate_id in ids if candidate_id in terminal_payloads]
         remaining = [candidate_id for candidate_id in ids if candidate_id not in terminal_payloads]
-        return ({"fixture_only": "miniature-ledger", "candidate_ids": ids,
-                 "terminal_ids": terminals, "remaining_ids": remaining,
-                 "needed_ids": remaining, "admission_ids": ids, "unassessed_ids": [],
-                 "prefix_ids": ids, "pilot_ids": terminals if not remaining else [],
-                 "quota_unmet_strata": [], "complete": not remaining}, [])
+        return (
+            {
+                "fixture_only": "miniature-ledger",
+                "candidate_ids": ids,
+                "terminal_ids": terminals,
+                "remaining_ids": remaining,
+                "needed_ids": remaining,
+                "admission_ids": ids,
+                "unassessed_ids": [],
+                "prefix_ids": ids,
+                "pilot_ids": terminals if not remaining else [],
+                "quota_unmet_strata": [],
+                "complete": not remaining,
+            },
+            [],
+        )
 
     monkeypatch.setattr(acquisition_module, "_derive_checkpoint_selection", derive)
 
@@ -147,6 +229,23 @@ def _non_replayable_egress_summary() -> dict[str, object]:
     guard.mark_context_guards_installed()
     guard.bind_root_page(object())
     return guard.success_summary()
+
+
+def _terminal_internal_document_lifecycle_summary() -> dict[str, object]:
+    return {
+        "schema_version": SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
+        "policy": SRCDOC_PSEUDO_DOCUMENT_POLICY,
+        "enabled": True,
+        "total": 0,
+        "resolved": 0,
+        "pending": 0,
+        "aborted": 0,
+        "open_candidates": 0,
+        "network_history_saturated": False,
+        "fetch_history_saturated": False,
+        "candidate_limit_saturated": False,
+        "diagnostics": [],
+    }
 
 
 @pytest.fixture(autouse=True)
@@ -585,12 +684,44 @@ def _real_prepare_runtime_foundation(
 
 
 def _replace_receipt_payload(path: Path, payload: dict) -> None:
-    if path.name == "provenance.json" and payload.get("acquisition_schema_version", 6) < 6:
-        if "acquisition_authority" in payload:
-            payload["foundation_attestation"] = payload.pop("acquisition_authority")
-        payload.pop("acquisition_selection_policy", None)
-        if "baseline_scheduling_contract" in payload:
-            payload["baseline_scheduling_contract"] = acquisition_module.BASELINE_SCHEDULING_CONTRACT
+    if path.name == "provenance.json":
+        schema = payload.get("acquisition_schema_version", acquisition_module.SCHEMA_VERSION)
+        if schema in {2, 3, 4}:
+            source_contract = _HISTORICAL_ACQUISITION_CONTRACTS["schema3_4"]
+            payload["cdp_target_instrumentation_policy"] = source_contract["instrumentation_policy"]
+            if schema >= 3:
+                payload["passive_render_contract"] = copy.deepcopy(
+                    source_contract["passive_render_contract"]
+                )
+                payload["passive_render_contract_sha256"] = source_contract[
+                    "passive_render_contract_sha256"
+                ]
+        elif schema == 5:
+            payload.update(
+                copy.deepcopy(_HISTORICAL_ACQUISITION_CONTRACTS["schema5_v10"]["fixed_provenance"])
+            )
+            payload["source"]["lab_commit"] = _HISTORICAL_ACQUISITION_CONTRACTS["schema5_v10"][
+                "source_revision"
+            ]
+        elif schema == 6:
+            payload["cdp_target_instrumentation_policy"] = (
+                acquisition_module._SCHEMA_SIX_CDP_TARGET_INSTRUMENTATION_POLICY
+            )
+            payload["passive_render_contract"] = copy.deepcopy(
+                acquisition_module._SCHEMA_SIX_PASSIVE_RENDER_CONTRACT
+            )
+            payload["passive_render_contract_sha256"] = (
+                acquisition_module._SCHEMA_SIX_PASSIVE_RENDER_CONTRACT_SHA256
+            )
+            payload["source"]["lab_commit"] = "6957614b83e67cced5fd262fe97814824d21c8f9"
+        if schema < 6:
+            if "acquisition_authority" in payload:
+                payload["foundation_attestation"] = payload.pop("acquisition_authority")
+            payload.pop("acquisition_selection_policy", None)
+            if "baseline_scheduling_contract" in payload:
+                payload["baseline_scheduling_contract"] = (
+                    acquisition_module.BASELINE_SCHEDULING_CONTRACT
+                )
     receipt_type = load_json(path)["receipt_type"]
     path.write_bytes(canonical_json_bytes(bind_receipt(payload, receipt_type=receipt_type)))
 
@@ -606,6 +737,118 @@ def _strip_schema_five_policy_evidence(value: dict) -> None:
         for page in state.get("pages", []):
             for attempt in page.get("probe_attempts", []):
                 attempt.pop("policy_evidence", None)
+
+
+def _downgrade_observation_to_historical_contract(
+    runner: Path,
+    observation: dict,
+    *,
+    provenance_sha256: str,
+    acquisition_schema_version: int,
+) -> None:
+    """Rewrite a current observation into an exact source-era evidence shape."""
+
+    if acquisition_schema_version in {3, 4}:
+        source_contract = _HISTORICAL_ACQUISITION_CONTRACTS["schema3_4"]
+        render_schema_version = source_contract["render_observation"]["schema_version"]
+        audit_schema_version = source_contract["discovery_event_audit_schema_version"]
+        instrumentation_policy = source_contract["instrumentation_policy"]
+        passive_render_contract = source_contract["passive_render_contract"]
+        passive_render_contract_sha256 = source_contract["passive_render_contract_sha256"]
+    elif acquisition_schema_version == 6:
+        render_schema_version = acquisition_module._SCHEMA_SIX_RENDER_OBSERVATION_SCHEMA_VERSION
+        audit_schema_version = acquisition_module._SCHEMA_SIX_DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION
+        instrumentation_policy = acquisition_module._SCHEMA_SIX_CDP_TARGET_INSTRUMENTATION_POLICY
+        passive_render_contract = acquisition_module._SCHEMA_SIX_PASSIVE_RENDER_CONTRACT
+        passive_render_contract_sha256 = (
+            acquisition_module._SCHEMA_SIX_PASSIVE_RENDER_CONTRACT_SHA256
+        )
+    else:  # pragma: no cover - test helper misuse
+        raise AssertionError("unsupported historical observation fixture")
+
+    prepared_path = Path(observation["prepared_path"])
+    manifest = load_json(prepared_path)
+    preparation = manifest["preparation"]
+    render = copy.deepcopy(preparation["render_observation"])
+    internal = render.pop("internal_document_lifecycle_summary")
+    assert internal["total"] == 0 and internal["diagnostics"] == []
+    if acquisition_schema_version in {3, 4}:
+        for field in (
+            "router_shutdown_ready",
+            "bootstrap_prearm_summary",
+            "egress_prearm_summary",
+            "non_replayable_egress_summary",
+            "browser_context_service_worker_count",
+        ):
+            render.pop(field)
+        render["last_relevant_event_ms"] = (
+            render["load_event_ms"]
+            + source_contract["passive_render_contract"]["hard_cap_after_load_ms"]
+            - source_contract["passive_render_contract"]["quiet_window_ms"]
+        )
+        render["quiet_started_ms"] = render["last_relevant_event_ms"]
+        render["cutoff_ms"] = (
+            render["load_event_ms"]
+            + source_contract["passive_render_contract"]["hard_cap_after_load_ms"]
+        )
+    render["schema_version"] = render_schema_version
+    render_sha256 = evidence_sha256(render)
+    audit = copy.deepcopy(preparation["discovery_event_audit"])
+    assert all(event.get("kind") != "browser-internal-document" for event in audit["events"])
+    if acquisition_schema_version in {3, 4}:
+        audit["events"][-1]["monotonic_ms"] = render["last_relevant_event_ms"]
+    audit["schema_version"] = audit_schema_version
+    audit["instrumentation_policy"] = instrumentation_policy
+    audit["passive_render_contract_sha256"] = passive_render_contract_sha256
+    audit["render_observation_sha256"] = render_sha256
+    audit["summary"].pop("browser_internal_document_count")
+    audit_sha256 = evidence_sha256(audit)
+    preparation["passive_render_contract"] = copy.deepcopy(passive_render_contract)
+    preparation["passive_render_contract_sha256"] = passive_render_contract_sha256
+    preparation["render_observation"] = render
+    preparation["render_observation_sha256"] = render_sha256
+    preparation["discovery_event_audit"] = audit
+    preparation["discovery_event_audit_sha256"] = audit_sha256
+    coverage = preparation["coverage_admission"]
+    coverage["passive_render_contract_sha256"] = passive_render_contract_sha256
+    coverage["render_observation_sha256"] = render_sha256
+    coverage["discovery_event_audit_sha256"] = audit_sha256
+    prepared_path.write_bytes(canonical_json_bytes(manifest))
+    prepared_sha256 = acquisition_module.sha256_file(prepared_path)
+    resource_graph_sha256 = acquisition_module._prepared_replay_identity_sha256(
+        manifest,
+        acquisition_schema_version=acquisition_schema_version,
+    )
+
+    observation["runner_provenance_sha256"] = provenance_sha256
+    observation["discovery_instrumentation_policy"] = instrumentation_policy
+    observation["passive_render_contract_sha256"] = passive_render_contract_sha256
+    observation["render_observation"] = render
+    observation["render_observation_sha256"] = render_sha256
+    observation["discovery_event_audit_sha256"] = audit_sha256
+    observation["prepared_workload_sha256"] = prepared_sha256
+    observation["resource_graph_sha256"] = resource_graph_sha256
+
+    response_path = runner / observation["document_response_receipt_path"]
+    response_payload = copy.deepcopy(load_json(response_path)["payload"])
+    assert response_payload["document_response_schema_version"] == (
+        acquisition_module.DOCUMENT_RESPONSE_SCHEMA_VERSION
+    )
+    response_payload["document_response_schema_version"] = (
+        acquisition_module.SCHEMA_SIX_DOCUMENT_RESPONSE_SCHEMA_VERSION
+    )
+    response_payload["runner_provenance_sha256"] = provenance_sha256
+    response_payload["prepared_workload_sha256"] = prepared_sha256
+    response_payload["resource_graph_sha256"] = resource_graph_sha256
+    response_payload["cdp_target_instrumentation_policy"] = instrumentation_policy
+    _replace_receipt_payload(response_path, response_payload)
+    observation["document_response_receipt_sha256"] = acquisition_module.sha256_file(response_path)
+    acquisition_module._validate_versioned_class_study_preparation(
+        manifest,
+        workload_id=prepared_path.stem,
+        acquisition_schema_version=acquisition_schema_version,
+        instrumentation_policy=instrumentation_policy,
+    )
 
 
 def _first_terminal_state(runner: Path) -> tuple[str, dict]:
@@ -776,6 +1019,7 @@ def _prepared_manifest(url: str, approved_origins, *, source_override=None) -> d
             },
         },
         "egress_prearm_summary": _egress_prearm_summary(),
+        "internal_document_lifecycle_summary": (_terminal_internal_document_lifecycle_summary()),
         "non_replayable_egress_summary": _non_replayable_egress_summary(),
         "browser_context_service_worker_count": 0,
         "cutoff_reason": "quiescent",
@@ -790,6 +1034,7 @@ def _prepared_manifest(url: str, approved_origins, *, source_override=None) -> d
         "summary": {
             "event_count": len(events),
             "target_event_count": 0,
+            "browser_internal_document_count": 0,
             "network_request_count": len(resources),
             "fetch_request_count": len(resources),
             "fetch_internal_restart_count": 0,
@@ -926,14 +1171,14 @@ def test_runner_distinguishes_component_limits_from_whole_action_cutoffs(
 
     assert MAX_ACQUISITION_BACKEND_TIMEOUT_MS == 60_000
     assert MAX_PASSIVE_RENDER_AFTER_LOAD_MS == 30_000
-    assert provenance["acquisition_schema_version"] == 6
+    assert provenance["acquisition_schema_version"] == acquisition_module.SCHEMA_VERSION
     assert provenance["browser_tool"] == playwright_driver.expected_browser_tool_identity()
     tampered = copy.deepcopy(provenance)
     tampered["browser_tool"]["chromium_version"] = "caller-authored"
     with pytest.raises(ValueError, match="provenance policy"):
         acquisition_module._validate_runner_runtime(tampered)
     checkpoint = load_json(runner / "checkpoint.json")["payload"]
-    assert checkpoint["checkpoint_schema_version"] == 2
+    assert checkpoint["checkpoint_schema_version"] == CHECKPOINT_SCHEMA_VERSION
     assert checkpoint["baseline_batches"] == []
     assert checkpoint["active_batch"] is None
     assert provenance["browser_navigation_timeout_ms"] == 60_000
@@ -1041,7 +1286,7 @@ def test_current_completion_rejects_coherently_rebound_provenance_tamper(
         resealed_completion["payload"]["checkpoint_payload_sha256"] == checkpoint["payload_sha256"]
     )
 
-    with pytest.raises(ValueError, match="schema-five acquisition"):
+    with pytest.raises(ValueError, match="versioned acquisition"):
         validate_acquisition_completion(
             resealed_completion,
             candidate_catalogue_path=catalogue,
@@ -1945,10 +2190,10 @@ def test_navigation_pair_is_prepublished_and_coordinator_merged(
                 "attempt": 1,
                 "started_at": acquisition_module._format_time(now),
                 "completed_at": acquisition_module._format_time(now),
-                    "outcome": "completed",
-                    "reason": None,
-                    "policy_evidence": None,
-                }
+                "outcome": "completed",
+                "reason": None,
+                "policy_evidence": None,
+            }
         ]
         for candidate_id in expected_ids
     )
@@ -3029,12 +3274,17 @@ def test_all_rejected_candidates_fail_quota_and_completion_publication_detects_t
             max_candidates=MAX_CANDIDATES_PER_ACTION,
             **common,
         )
-    assert status["selection"]["quota_unmet_strata"] == [stratum.id for stratum in TRANCO_RANK_STRATA]
-    assert {key: value for key, value in status.items()
-            if key not in {"selection", "selection_blocked_candidate_ids"}} == {
+    assert status["selection"]["quota_unmet_strata"] == [
+        stratum.id for stratum in TRANCO_RANK_STRATA
+    ]
+    assert {
+        key: value
+        for key, value in status.items()
+        if key not in {"selection", "selection_blocked_candidate_ids"}
+    } == {
         "candidate_count": CANDIDATE_COUNT,
-        "acquisition_schema_version": 6,
-        "checkpoint_schema_version": 2,
+        "acquisition_schema_version": acquisition_module.SCHEMA_VERSION,
+        "checkpoint_schema_version": CHECKPOINT_SCHEMA_VERSION,
         "maximum_candidates_per_action": 2,
         "global_live_page_cap": 5,
         "active_batch": None,
@@ -3061,7 +3311,9 @@ def test_all_rejected_candidates_fail_quota_and_completion_publication_detects_t
         selection, blocked = original_selection(*args)
         return {**selection, "complete": True}, blocked
 
-    monkeypatch.setattr(acquisition_module, "_derive_checkpoint_selection", publication_fixture_selection)
+    monkeypatch.setattr(
+        acquisition_module, "_derive_checkpoint_selection", publication_fixture_selection
+    )
     original_create = acquisition_module.durable_create
     completion_path = runner / "completion.json"
     prelink = runner / (f".{completion_path.name}{acquisition_module.ATOMIC_TEMP_MARKER}prelink")
@@ -3236,6 +3488,307 @@ def test_historical_schemas_are_readable_but_cannot_be_mutated(
     with pytest.raises(ValueError, match="historical acquisition runners"):
         write_acquisition_completion(runner, candidate_catalogue_path=catalogue)
     assert checkpoint_path.read_bytes() == checkpoint_before
+
+
+@pytest.mark.parametrize("legacy_schema", (4, 5))
+def test_historical_modern_schemas_keep_their_exact_read_only_checkpoint_shape(
+    tmp_path: Path,
+    legacy_schema: int,
+) -> None:
+    catalogue = _catalogue(tmp_path / "catalogue.json")
+    runner = initialise_runner(
+        tmp_path / "runner",
+        candidate_catalogue_path=catalogue,
+        foundation_attestation=_foundation(tmp_path / "foundation.json"),
+        started_at="2026-08-28T00:00:00Z",
+        browser_tool="ignored",
+    )
+    provenance_path = runner / "provenance.json"
+    provenance = copy.deepcopy(load_json(provenance_path)["payload"])
+    provenance["acquisition_schema_version"] = legacy_schema
+    _replace_receipt_payload(provenance_path, provenance)
+    checkpoint_path = runner / "checkpoint.json"
+    checkpoint = copy.deepcopy(load_json(checkpoint_path)["payload"])
+    checkpoint["checkpoint_schema_version"] = (
+        acquisition_module.SCHEMA_SIX_CHECKPOINT_SCHEMA_VERSION
+    )
+    checkpoint["provenance_sha256"] = acquisition_module.sha256_file(provenance_path)
+    if legacy_schema == 4:
+        _strip_schema_five_policy_evidence(checkpoint)
+    _replace_receipt_payload(checkpoint_path, checkpoint)
+    before = checkpoint_path.read_bytes()
+
+    status = acquisition_status(runner, candidate_catalogue_path=catalogue)
+    assert status["acquisition_schema_version"] == legacy_schema
+    assert status["checkpoint_schema_version"] == (
+        acquisition_module.SCHEMA_SIX_CHECKPOINT_SCHEMA_VERSION
+    )
+    assert status["pending_count"] == CANDIDATE_COUNT
+    assert "selection" not in status
+    with pytest.raises(ValueError, match="historical acquisition runners"):
+        run_due_acquisition(
+            runner,
+            candidate_catalogue_path=catalogue,
+            stability_root=tmp_path / "stability",
+            workload_root=tmp_path / "workloads",
+            backend=NoNetworkBackend(),
+        )
+    with pytest.raises(ValueError, match="historical acquisition runners"):
+        write_acquisition_completion(runner, candidate_catalogue_path=catalogue)
+    assert checkpoint_path.read_bytes() == before
+
+
+def test_historical_schema_policy_map_and_render_contract_are_frozen() -> None:
+    source_contract = _HISTORICAL_ACQUISITION_CONTRACTS["schema3_4"]
+    schema_five_variants = _HISTORICAL_ACQUISITION_CONTRACTS["schema5_source_variants"]
+    schema_six_variants = _HISTORICAL_ACQUISITION_CONTRACTS["schema6_receipts"]
+    manifest = _prepared_manifest("https://example.com/", ["https://example.com"])
+    render_v3 = copy.deepcopy(manifest["preparation"]["render_observation"])
+    render_v3.pop("internal_document_lifecycle_summary")
+    render_v3["schema_version"] = acquisition_module._SCHEMA_SIX_RENDER_OBSERVATION_SCHEMA_VERSION
+    render_v1 = copy.deepcopy(source_contract["render_observation"])
+
+    with pytest.raises(ValueError, match="no instrumentation contract"):
+        acquisition_module._instrumentation_policy_for(1)
+    with pytest.raises(ValueError, match="no passive-render contract"):
+        acquisition_module._passive_render_contract_for(1)
+    with pytest.raises(ValueError, match="no document-response contract"):
+        acquisition_module._document_response_schema_for(1)
+
+    assert (
+        acquisition_module._instrumentation_policy_for(2)
+        == source_contract["instrumentation_policy"]
+    )
+    assert acquisition_module._document_response_schema_for(2) == 1
+    with pytest.raises(ValueError, match="no passive-render contract"):
+        acquisition_module._passive_render_contract_for(2)
+
+    for schema in (3, 4):
+        assert (
+            acquisition_module._instrumentation_policy_for(schema)
+            == source_contract["instrumentation_policy"]
+        )
+        assert (
+            acquisition_module._passive_render_contract_for(schema)
+            == (source_contract["passive_render_contract"])
+        )
+        assert (
+            acquisition_module._passive_render_contract_sha256_for(schema)
+            == (source_contract["passive_render_contract_sha256"])
+        )
+        acquisition_module._validate_versioned_render_observation(
+            render_v1,
+            acquisition_schema_version=schema,
+        )
+
+    with pytest.raises(ValueError, match="ambiguous"):
+        acquisition_module._instrumentation_policy_for(5)
+    for variant in schema_five_variants:
+        policy = variant["instrumentation_policy"]
+        assert (
+            acquisition_module._instrumentation_policy_for(
+                5,
+                recorded_policy=policy,
+            )
+            == policy
+        )
+        contract = acquisition_module._historical_evidence_contract_for(
+            5,
+            instrumentation_policy=policy,
+        )
+        assert contract["fixed_provenance_sha256"] == variant["fixed_provenance_sha256"]
+        assert contract["source_lab_commits"] == tuple(variant["source_lab_commits"])
+    acquisition_module._validate_versioned_render_observation(
+        render_v3,
+        acquisition_schema_version=5,
+    )
+
+    with pytest.raises(ValueError, match="ambiguous"):
+        acquisition_module._instrumentation_policy_for(6)
+    for variant in schema_six_variants:
+        policy = variant["instrumentation_policy"]
+        assert (
+            acquisition_module._instrumentation_policy_for(
+                6,
+                recorded_policy=policy,
+            )
+            == policy
+        )
+        contract = acquisition_module._historical_evidence_contract_for(
+            6,
+            instrumentation_policy=policy,
+        )
+        assert contract["fixed_provenance_sha256"] == variant["fixed_provenance_sha256"]
+        assert contract["source_lab_commits"] == (variant["source_lab_commit"],)
+    acquisition_module._validate_versioned_render_observation(
+        render_v3,
+        acquisition_schema_version=6,
+    )
+
+    for schema in (3, 4):
+        with pytest.raises(ValueError, match="historical render observation fields"):
+            acquisition_module._validate_versioned_render_observation(
+                render_v3,
+                acquisition_schema_version=schema,
+            )
+    for schema in (5, 6):
+        with pytest.raises(ValueError, match="historical render observation fields"):
+            acquisition_module._validate_versioned_render_observation(
+                render_v1,
+                acquisition_schema_version=schema,
+            )
+    with pytest.raises(ValueError, match="does not match its schema"):
+        acquisition_module._historical_evidence_contract_for(
+            5,
+            instrumentation_policy=source_contract["instrumentation_policy"],
+        )
+    with pytest.raises(ValueError, match="does not match its schema"):
+        acquisition_module._historical_evidence_contract_for(
+            5,
+            instrumentation_policy=(
+                "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v11"
+            ),
+        )
+
+
+def test_source_era_schema_five_fixed_projection_is_a_golden_contract() -> None:
+    variants = _HISTORICAL_ACQUISITION_CONTRACTS["schema5_source_variants"]
+    assert [variant["instrumentation_policy"].rsplit("-", 1)[-1] for variant in variants] == [
+        "v10",
+        "v12",
+        "v13",
+        "v14",
+    ]
+    for index, variant in enumerate(variants):
+        projection = _schema_five_fixed_projection(variant)
+        assert (
+            hashlib.sha256(canonical_json_bytes(projection)).hexdigest()
+            == variant["fixed_provenance_sha256"]
+        )
+        contract = acquisition_module._historical_evidence_contract_for(
+            5,
+            instrumentation_policy=variant["instrumentation_policy"],
+        )
+        assert contract["fixed_provenance_sha256"] == variant["fixed_provenance_sha256"]
+        assert contract["source_lab_commits"] == tuple(variant["source_lab_commits"])
+        for source_lab_commit in variant["source_lab_commits"]:
+            provenance = _synthetic_historical_provenance(
+                5,
+                fixed_projection=projection,
+                source_lab_commit=source_lab_commit,
+            )
+            assert acquisition_module._validate_current_provenance_contract(provenance) == (
+                provenance
+            )
+
+        mismatched_source = variants[(index + 1) % len(variants)]["source_lab_commits"][0]
+        mismatched = _synthetic_historical_provenance(
+            5,
+            fixed_projection=projection,
+            source_lab_commit=mismatched_source,
+        )
+        with pytest.raises(ValueError, match="provenance policy"):
+            acquisition_module._validate_current_provenance_contract(mismatched)
+
+
+def test_schema_six_frozen_projections_are_self_contained_golden_contracts() -> None:
+    variants = _HISTORICAL_ACQUISITION_CONTRACTS["schema6_receipts"]
+    for index, variant in enumerate(variants):
+        projection = _schema_six_fixed_projection(variant)
+        assert (
+            hashlib.sha256(canonical_json_bytes(projection)).hexdigest()
+            == variant["fixed_provenance_sha256"]
+        )
+        provenance = _synthetic_historical_provenance(
+            6,
+            fixed_projection=projection,
+            source_lab_commit=variant["source_lab_commit"],
+        )
+        assert acquisition_module._validate_current_provenance_contract(provenance) == provenance
+
+        mismatched = copy.deepcopy(provenance)
+        mismatched["source"]["lab_commit"] = variants[(index + 1) % len(variants)][
+            "source_lab_commit"
+        ]
+        with pytest.raises(ValueError, match="provenance policy"):
+            acquisition_module._validate_current_provenance_contract(mismatched)
+
+
+@pytest.mark.parametrize(
+    ("variant_index", "relative_root", "durable_failure"),
+    (
+        (
+            0,
+            "artifacts/class-study-retired-acquisitions/cohort-v91-c60641b7ead8/acquisition",
+            "tranco-0000697, tranco-0000984",
+        ),
+        (
+            1,
+            "artifacts/class-study-retired-acquisitions/cohort-v95-b93507604671/acquisition",
+            "tranco-0000697",
+        ),
+        (
+            2,
+            "artifacts/classifier-multiorigin100-v1-acquisition",
+            "tranco-0000697",
+        ),
+    ),
+)
+def test_immutable_schema_six_acquisitions_reach_their_durable_state_verifier(
+    variant_index: int,
+    relative_root: str,
+    durable_failure: str,
+) -> None:
+    repository = Path(__file__).resolve().parents[1]
+    artifact_roots = (
+        "artifacts/class-study-retired-acquisitions/cohort-v91-c60641b7ead8/acquisition",
+        "artifacts/class-study-retired-acquisitions/cohort-v95-b93507604671/acquisition",
+        "artifacts/classifier-multiorigin100-v1-acquisition",
+    )
+    assert relative_root == artifact_roots[variant_index]
+    runner = repository / relative_root
+    if not runner.is_dir():
+        pytest.skip("immutable acquisition artifact is not present in this checkout")
+    variant = _HISTORICAL_ACQUISITION_CONTRACTS["schema6_receipts"][variant_index]
+    provenance_path = runner / "provenance.json"
+    provenance = load_json(provenance_path)
+    assert (
+        hashlib.sha256(provenance_path.read_bytes()).hexdigest()
+        == variant["provenance_file_sha256"]
+    )
+    assert provenance["payload_sha256"] == variant["provenance_payload_sha256"]
+    payload = acquisition_module.validate_hash_bound_receipt(
+        provenance,
+        expected_type=acquisition_module.PROVENANCE_TYPE,
+    )
+    assert payload["source"]["lab_commit"] == variant["source_lab_commit"]
+    assert acquisition_module._validate_current_provenance_contract(payload) == payload
+
+    checkpoint_path = runner / "checkpoint.json"
+    before = checkpoint_path.read_bytes()
+    catalogue = repository / "config/class-study/v1/classifier-multiorigin100-v1-candidates.json"
+    with pytest.raises(InternalAcquisitionError, match=durable_failure):
+        acquisition_status(runner, candidate_catalogue_path=catalogue)
+    assert checkpoint_path.read_bytes() == before
+
+    mismatched = copy.deepcopy(payload)
+    other = _HISTORICAL_ACQUISITION_CONTRACTS["schema6_receipts"][(variant_index + 1) % 3]
+    mismatched["cdp_target_instrumentation_policy"] = other["instrumentation_policy"]
+    with pytest.raises(ValueError, match="provenance policy"):
+        acquisition_module._validate_current_provenance_contract(mismatched)
+
+    other_provenance_path = repository / artifact_roots[(variant_index + 1) % 3] / "provenance.json"
+    if other_provenance_path.is_file():
+        other_payload = acquisition_module.validate_hash_bound_receipt(
+            load_json(other_provenance_path),
+            expected_type=acquisition_module.PROVENANCE_TYPE,
+        )
+        coherent_other_contract_with_wrong_source = copy.deepcopy(other_payload)
+        coherent_other_contract_with_wrong_source["source"] = copy.deepcopy(payload["source"])
+        with pytest.raises(ValueError, match="provenance policy"):
+            acquisition_module._validate_current_provenance_contract(
+                coherent_other_contract_with_wrong_source
+            )
 
 
 def test_historical_orphan_terminals_are_verify_only(tmp_path: Path) -> None:
@@ -3590,14 +4143,12 @@ def test_schema_three_observed_eligible_completion_rebinds_transitive_evidence(
     for page in state["pages"]:
         for observation in page["observations"]:
             assert set(observation) == acquisition_module.CURRENT_OBSERVATION_FIELDS
-            observation["runner_provenance_sha256"] = provenance_sha256
-            response_path = runner / observation["document_response_receipt_path"]
-            response_payload = copy.deepcopy(load_json(response_path)["payload"])
-            response_payload["runner_provenance_sha256"] = provenance_sha256
-            _replace_receipt_payload(response_path, response_payload)
-            observation["document_response_receipt_sha256"] = hashlib.sha256(
-                response_path.read_bytes()
-            ).hexdigest()
+            _downgrade_observation_to_historical_contract(
+                runner,
+                observation,
+                provenance_sha256=provenance_sha256,
+                acquisition_schema_version=3,
+            )
 
     terminal_path = runner / state["terminal"]["path"]
     terminal_payload = copy.deepcopy(load_json(terminal_path)["payload"])
@@ -3625,11 +4176,17 @@ def test_schema_three_observed_eligible_completion_rebinds_transitive_evidence(
         observations=observations,
     ).as_dict()
     _replace_receipt_payload(stability_path, stability_payload)
+    admitted_path = Path(terminal_payload["admitted_workload"]["path"])
+    selected_prepared_path = Path(selected_page["observations"][0]["prepared_path"])
+    admitted_path.write_bytes(selected_prepared_path.read_bytes())
 
     terminal_payload["terminal_schema_version"] = 2
     terminal_payload["provenance_sha256"] = provenance_sha256
     terminal_payload["stability_receipt"]["sha256"] = hashlib.sha256(
         stability_path.read_bytes()
+    ).hexdigest()
+    terminal_payload["admitted_workload"]["sha256"] = hashlib.sha256(
+        admitted_path.read_bytes()
     ).hexdigest()
     terminal_payload["checkpoint_state_sha256"] = (
         acquisition_module._normalised_terminal_state_sha256(
@@ -6760,7 +7317,9 @@ def test_completion_provenance_retains_each_probe_origin_set():
             "discovery_observed_origins": discovered_origins,
             "discovery_expandable_origins": approved_origins,
             "discovery_origin_ip_pins": {approved_origins[0]: pin},
-            "discovery_instrumentation_policy": CDP_TARGET_INSTRUMENTATION_POLICY,
+            "discovery_instrumentation_policy": (
+                acquisition_module._SCHEMA_THREE_FOUR_CDP_TARGET_INSTRUMENTATION_POLICY
+            ),
             "chromium_version": "Chromium 1",
             "neqo_provenance": {"neqo_version": "1"},
             "observed_at": observed_at,
@@ -7069,20 +7628,32 @@ def _prefix_selection_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Full catalogue/selection/closure fixture; terminal science is a separate unit."""
     catalogue = _catalogue(tmp_path / "catalogue.json")
     runner = initialise_runner(
-        tmp_path / "runner", candidate_catalogue_path=catalogue,
+        tmp_path / "runner",
+        candidate_catalogue_path=catalogue,
         foundation_attestation=_foundation(tmp_path / "foundation.json"),
-        started_at="2026-08-28T00:00:00Z", browser_tool="ignored",
+        started_at="2026-08-28T00:00:00Z",
+        browser_tool="ignored",
     )
     checkpoint = load_json(runner / "checkpoint.json")["payload"]
     selection = acquisition_status(runner, candidate_catalogue_path=catalogue)["selection"]
     for candidate_id in selection["admission_ids"]:
         terminal_path = runner / "terminals" / f"{candidate_id}.json"
-        terminal_path.write_bytes(canonical_json_bytes(bind_receipt({
-            "candidate_id": candidate_id, "kind": "eligible",
-            "terminalised_at": "2026-08-31T00:00:00Z",
-        }, receipt_type=acquisition_module.TERMINAL_TYPE)))
+        terminal_path.write_bytes(
+            canonical_json_bytes(
+                bind_receipt(
+                    {
+                        "candidate_id": candidate_id,
+                        "kind": "eligible",
+                        "terminalised_at": "2026-08-31T00:00:00Z",
+                    },
+                    receipt_type=acquisition_module.TERMINAL_TYPE,
+                )
+            )
+        )
         checkpoint["candidates"][candidate_id] = {
-            "state": "terminal", "pages": [], "terminal": {
+            "state": "terminal",
+            "pages": [],
+            "terminal": {
                 "path": f"terminals/{candidate_id}.json",
                 "sha256": acquisition_module.sha256_file(terminal_path),
             },
@@ -7093,17 +7664,24 @@ def _prefix_selection_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         # The fixture supplies already-admitted eligibility; leave receipt
         # hashes, catalogue inventory, policy, chronology and closure real.
         payload = acquisition_module.validate_hash_bound_receipt(
-            load_json(path), expected_type=acquisition_module.TERMINAL_TYPE,
+            load_json(path),
+            expected_type=acquisition_module.TERMINAL_TYPE,
         )
         assert payload["candidate_id"] == candidate.candidate_id
-        return {"path": f"terminals/{candidate.candidate_id}.json",
-                "sha256": acquisition_module.sha256_file(path)}
+        return {
+            "path": f"terminals/{candidate.candidate_id}.json",
+            "sha256": acquisition_module.sha256_file(path),
+        }
 
-    monkeypatch.setattr(acquisition_module, "_validated_terminal_binding", admitted_terminal_binding)
+    monkeypatch.setattr(
+        acquisition_module, "_validated_terminal_binding", admitted_terminal_binding
+    )
     return runner, catalogue
 
 
-def test_schema_six_completion_preserves_unassessed_tail_and_seals_exact_prefix(tmp_path, monkeypatch):
+def test_schema_seven_completion_preserves_unassessed_tail_and_seals_exact_prefix(
+    tmp_path, monkeypatch
+):
     runner, catalogue = _prefix_selection_runner(tmp_path, monkeypatch)
     checkpoint_before = (runner / "checkpoint.json").read_bytes()
     status = acquisition_status(runner, candidate_catalogue_path=catalogue)
@@ -7113,34 +7691,47 @@ def test_schema_six_completion_preserves_unassessed_tail_and_seals_exact_prefix(
     assert len(status["selection"]["candidate_ids"]) == 600
     assert len(status["selection"]["unassessed_ids"]) == 480
     completion = load_json(write_acquisition_completion(runner, candidate_catalogue_path=catalogue))
-    payload = validate_acquisition_completion(completion, candidate_catalogue_path=catalogue, runner_root=runner)
-    assert payload["completion_schema_version"] == 3
+    payload = validate_acquisition_completion(
+        completion, candidate_catalogue_path=catalogue, runner_root=runner
+    )
+    assert payload["completion_schema_version"] == acquisition_module.COMPLETION_SCHEMA_VERSION
     selection = acquisition_module.validate_hash_bound_receipt(
-        payload["selection"], expected_type=acquisition_module.SELECTION_TYPE,
+        payload["selection"],
+        expected_type=acquisition_module.SELECTION_TYPE,
     )
     assert selection == status["selection"]
     assert set(payload["terminal_receipts"]) == set(selection["terminal_ids"])
     assert not set(payload["terminal_receipts"]).intersection(selection["unassessed_ids"])
     assert (runner / "checkpoint.json").read_bytes() == checkpoint_before
     run_due_acquisition(
-        runner, candidate_catalogue_path=catalogue, stability_root=tmp_path / "stability",
-        workload_root=tmp_path / "workloads", backend=NoNetworkBackend(),
+        runner,
+        candidate_catalogue_path=catalogue,
+        stability_root=tmp_path / "stability",
+        workload_root=tmp_path / "workloads",
+        backend=NoNetworkBackend(),
     )
     assert (runner / "checkpoint.json").read_bytes() == checkpoint_before
     for key in ("pilot_ids", "unassessed_ids", "prefix_ids"):
         changed = copy.deepcopy(payload)
         inventory = changed["selection"]["payload"]
         inventory[key] = inventory[key][1:]
-        changed["selection"] = bind_receipt(inventory, receipt_type=acquisition_module.SELECTION_TYPE)
+        changed["selection"] = bind_receipt(
+            inventory, receipt_type=acquisition_module.SELECTION_TYPE
+        )
         with pytest.raises(ValueError, match="selection prefix"):
-            validate_acquisition_completion(bind_receipt(changed, receipt_type=COMPLETION_TYPE),
-                                            candidate_catalogue_path=catalogue, runner_root=runner)
+            validate_acquisition_completion(
+                bind_receipt(changed, receipt_type=COMPLETION_TYPE),
+                candidate_catalogue_path=catalogue,
+                runner_root=runner,
+            )
 
 
-def test_schema_six_completion_blocks_earlier_unresolved(tmp_path, monkeypatch):
+def test_schema_seven_completion_blocks_earlier_unresolved(tmp_path, monkeypatch):
     runner, catalogue = _prefix_selection_runner(tmp_path, monkeypatch)
     checkpoint = load_json(runner / "checkpoint.json")["payload"]
-    selected_id = acquisition_status(runner, candidate_catalogue_path=catalogue)["selection"]["pilot_ids"][0]
+    selected_id = acquisition_status(runner, candidate_catalogue_path=catalogue)["selection"][
+        "pilot_ids"
+    ][0]
     checkpoint["candidates"][selected_id] = {"state": "pending", "pages": [], "terminal": None}
     (runner / "terminals" / f"{selected_id}.json").unlink()
     _replace_receipt_payload(runner / "checkpoint.json", checkpoint)
@@ -7152,16 +7743,21 @@ def test_schema_six_completion_blocks_earlier_unresolved(tmp_path, monkeypatch):
         write_acquisition_completion(runner, candidate_catalogue_path=catalogue)
 
 
-def test_schema_six_started_tail_must_drain_before_completion(tmp_path, monkeypatch):
+def test_schema_seven_started_tail_must_drain_before_completion(tmp_path, monkeypatch):
     runner, catalogue = _prefix_selection_runner(tmp_path, monkeypatch)
     status = acquisition_status(runner, candidate_catalogue_path=catalogue)
     tail_id = status["selection"]["unassessed_ids"][0]
     checkpoint = load_json(runner / "checkpoint.json")["payload"]
-    checkpoint["candidates"][tail_id]["navigation_attempts"] = [{
-        "attempt": 1, "started_at": "2026-08-31T00:00:00Z",
-        "completed_at": "2026-08-31T00:00:01Z", "outcome": "interrupted",
-        "reason": "fixture interruption", "policy_evidence": None,
-    }]
+    checkpoint["candidates"][tail_id]["navigation_attempts"] = [
+        {
+            "attempt": 1,
+            "started_at": "2026-08-31T00:00:00Z",
+            "completed_at": "2026-08-31T00:00:01Z",
+            "outcome": "interrupted",
+            "reason": "fixture interruption",
+            "policy_evidence": None,
+        }
+    ]
     _replace_receipt_payload(runner / "checkpoint.json", checkpoint)
     status = acquisition_status(runner, candidate_catalogue_path=catalogue)
     assert status["selection"]["complete"] is True and status["complete"] is False
@@ -7170,7 +7766,7 @@ def test_schema_six_started_tail_must_drain_before_completion(tmp_path, monkeypa
         write_acquisition_completion(runner, candidate_catalogue_path=catalogue)
 
 
-def test_schema_six_missed_terminal_blocks_without_advancing_frontier(tmp_path, monkeypatch):
+def test_schema_seven_missed_terminal_blocks_without_advancing_frontier(tmp_path, monkeypatch):
     runner, catalogue = _prefix_selection_runner(tmp_path, monkeypatch)
     initial = acquisition_status(runner, candidate_catalogue_path=catalogue)
     candidate_id = initial["selection"]["pilot_ids"][0]
@@ -7194,37 +7790,71 @@ def test_schema_six_missed_terminal_blocks_without_advancing_frontier(tmp_path, 
 
 def test_batch_reservation_releases_only_after_all_scientific_terminals():
     baseline = datetime(2026, 8, 28, tzinfo=UTC)
-    batches = [{"baseline_started_at": acquisition_module._format_time(baseline),
-                "candidate_ids": ["a", "b"]}]
+    batches = [
+        {
+            "baseline_started_at": acquisition_module._format_time(baseline),
+            "candidate_ids": ["a", "b"],
+        }
+    ]
     states = {"a": {"pages": []}, "b": {"pages": []}}
-    terminals = {"a": {"kind": "stable-page-unavailable", "terminalised_at": "2026-08-28T00:00:30Z"}}
-    assert acquisition_module._baseline_batch_reservations(batches, states, terminals)[0].released_at is None
+    terminals = {
+        "a": {"kind": "stable-page-unavailable", "terminalised_at": "2026-08-28T00:00:30Z"}
+    }
+    assert (
+        acquisition_module._baseline_batch_reservations(batches, states, terminals)[0].released_at
+        is None
+    )
     terminals["b"] = {"kind": "eligible", "terminalised_at": "2026-08-28T00:00:40Z"}
     reservation = acquisition_module._baseline_batch_reservations(batches, states, terminals)[0]
     assert reservation.released_at == baseline + timedelta(minutes=40, seconds=40)
     terminals["b"]["kind"] = "probe-window-missed"
-    assert acquisition_module._baseline_batch_reservations(batches, states, terminals)[0].released_at is None
+    assert (
+        acquisition_module._baseline_batch_reservations(batches, states, terminals)[0].released_at
+        is None
+    )
 
 
-@pytest.mark.parametrize("kind,state,expected", [
-    ("eligible", {"pages": []}, True),
-    ("stable-page-unavailable", {"pages": []}, False),
-    ("pre-probe-rejection", {"navigation_attempts": [{"outcome": "terminal-policy-rejection"}]}, False),
-    ("pre-probe-rejection", {"navigation_attempts": [{"outcome": "recoverable-failure"}]}, None),
-    ("probe-window-missed", {"pages": []}, None),
-    ("stable-page-unavailable", {"pages": [{"rejection": {"kind": "probe-retry-exhausted"}}]}, None),
-    ("eligible", {"pages": [{"rejection": {"kind": "probe-retry-exhausted"}}]}, None),
-])
+@pytest.mark.parametrize(
+    "kind,state,expected",
+    [
+        ("eligible", {"pages": []}, True),
+        ("stable-page-unavailable", {"pages": []}, False),
+        (
+            "pre-probe-rejection",
+            {"navigation_attempts": [{"outcome": "terminal-policy-rejection"}]},
+            False,
+        ),
+        (
+            "pre-probe-rejection",
+            {"navigation_attempts": [{"outcome": "recoverable-failure"}]},
+            None,
+        ),
+        ("probe-window-missed", {"pages": []}, None),
+        (
+            "stable-page-unavailable",
+            {"pages": [{"rejection": {"kind": "probe-retry-exhausted"}}]},
+            None,
+        ),
+        ("eligible", {"pages": [{"rejection": {"kind": "probe-retry-exhausted"}}]}, None),
+    ],
+)
 def test_only_scientific_terminal_outcomes_release_selection_slots(kind, state, expected):
     assert acquisition_module._scientific_terminal_eligibility({"kind": kind}, state) is expected
 
 
-def test_acquisition_authority_is_explicit_mutually_exclusive_and_prepare_validated(tmp_path, monkeypatch):
+def test_acquisition_authority_is_explicit_mutually_exclusive_and_prepare_validated(
+    tmp_path, monkeypatch
+):
     catalogue = _catalogue(tmp_path / "catalogue.json")
     authority = tmp_path / "authority.json"
-    authority.write_bytes(canonical_json_bytes(bind_receipt(
-        {"fixture": True}, receipt_type=class_attestation.ACQUISITION_AUTHORITY_RECEIPT_TYPE,
-    )))
+    authority.write_bytes(
+        canonical_json_bytes(
+            bind_receipt(
+                {"fixture": True},
+                receipt_type=class_attestation.ACQUISITION_AUTHORITY_RECEIPT_TYPE,
+            )
+        )
+    )
     calls = []
 
     def validate(path, *, runtime_role):
@@ -7232,13 +7862,20 @@ def test_acquisition_authority_is_explicit_mutually_exclusive_and_prepare_valida
         return {"path": str(path), "sha256": acquisition_module.sha256_file(path)}
 
     monkeypatch.setattr(class_attestation, "validate_class_acquisition_authority", validate)
-    common = {"candidate_catalogue_path": catalogue,
-              "started_at": "2026-08-28T00:00:00Z", "browser_tool": "ignored"}
+    common = {
+        "candidate_catalogue_path": catalogue,
+        "started_at": "2026-08-28T00:00:00Z",
+        "browser_tool": "ignored",
+    }
     with pytest.raises(ValueError, match="exactly one"):
         initialise_runner(tmp_path / "missing", **common)
     with pytest.raises(ValueError, match="exactly one"):
-        initialise_runner(tmp_path / "both", acquisition_authority=authority,
-                          foundation_attestation=authority, **common)
+        initialise_runner(
+            tmp_path / "both",
+            acquisition_authority=authority,
+            foundation_attestation=authority,
+            **common,
+        )
     runner = initialise_runner(tmp_path / "runner", acquisition_authority=authority, **common)
     provenance = load_json(runner / "provenance.json")["payload"]
     assert "foundation_attestation" not in provenance
@@ -7250,24 +7887,38 @@ def test_acquisition_authority_is_explicit_mutually_exclusive_and_prepare_valida
 def test_schema_five_fixed_contract_and_policy_ledgers_remain_verification_only(tmp_path):
     catalogue = _catalogue(tmp_path / "catalogue.json")
     runner = initialise_runner(
-        tmp_path / "runner", candidate_catalogue_path=catalogue,
+        tmp_path / "runner",
+        candidate_catalogue_path=catalogue,
         foundation_attestation=_foundation(tmp_path / "foundation.json"),
-        started_at="2026-08-28T00:00:00Z", browser_tool="ignored",
+        started_at="2026-08-28T00:00:00Z",
+        browser_tool="ignored",
     )
-    run_due_acquisition(runner, candidate_catalogue_path=catalogue, stability_root=tmp_path / "stability",
-                        workload_root=tmp_path / "workloads", backend=RejectingBackend())
+    run_due_acquisition(
+        runner,
+        candidate_catalogue_path=catalogue,
+        stability_root=tmp_path / "stability",
+        workload_root=tmp_path / "workloads",
+        backend=RejectingBackend(),
+    )
     provenance_path = runner / "provenance.json"
     provenance = load_json(provenance_path)["payload"]
     provenance["acquisition_schema_version"] = 5
     _replace_receipt_payload(provenance_path, provenance)
     provenance = load_json(provenance_path)["payload"]
     checkpoint = load_json(runner / "checkpoint.json")["payload"]
+    checkpoint["checkpoint_schema_version"] = (
+        acquisition_module.SCHEMA_SIX_CHECKPOINT_SCHEMA_VERSION
+    )
     checkpoint["provenance_sha256"] = acquisition_module.sha256_file(provenance_path)
     for state in checkpoint["candidates"].values():
         if state["terminal"] is None:
             continue
         terminal_path = runner / state["terminal"]["path"]
         terminal = load_json(terminal_path)["payload"]
+        terminal["terminal_schema_version"] = acquisition_module.SCHEMA_SIX_TERMINAL_SCHEMA_VERSION
+        terminal["checkpoint_schema_version"] = (
+            acquisition_module.SCHEMA_SIX_CHECKPOINT_SCHEMA_VERSION
+        )
         terminal["provenance_sha256"] = checkpoint["provenance_sha256"]
         _replace_receipt_payload(terminal_path, terminal)
         state["terminal"]["sha256"] = acquisition_module.sha256_file(terminal_path)
@@ -7278,14 +7929,22 @@ def test_schema_five_fixed_contract_and_policy_ledgers_remain_verification_only(
     assert status["terminal_count"] == 2 and status["pending_count"] == 598
     assert set(provenance) == acquisition_module.SCHEMA_FIVE_PROVENANCE_FIELDS
     with pytest.raises(ValueError, match="provenance policy"):
-        acquisition_module._validate_current_provenance_contract({
-            **provenance,
-            "baseline_scheduling_contract": acquisition_module.TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT,
-        })
+        acquisition_module._validate_current_provenance_contract(
+            {
+                **provenance,
+                "baseline_scheduling_contract": (
+                    acquisition_module.TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT
+                ),
+            }
+        )
     with pytest.raises(ValueError, match="historical acquisition runners"):
-        run_due_acquisition(runner, candidate_catalogue_path=catalogue,
-                            stability_root=tmp_path / "stability", workload_root=tmp_path / "workloads",
-                            backend=NoNetworkBackend())
+        run_due_acquisition(
+            runner,
+            candidate_catalogue_path=catalogue,
+            stability_root=tmp_path / "stability",
+            workload_root=tmp_path / "workloads",
+            backend=NoNetworkBackend(),
+        )
     assert (runner / "checkpoint.json").read_bytes() == before
     changed = copy.deepcopy(checkpoint)
     first = next(state for state in changed["candidates"].values() if state["terminal"] is not None)
@@ -7293,3 +7952,181 @@ def test_schema_five_fixed_contract_and_policy_ledgers_remain_verification_only(
     _replace_receipt_payload(runner / "checkpoint.json", changed)
     with pytest.raises(ValueError, match="navigation-attempt ledger"):
         acquisition_status(runner, candidate_catalogue_path=catalogue)
+
+
+def test_schema_six_exact_contract_is_readable_but_cannot_resume_or_publish(
+    tmp_path: Path,
+) -> None:
+    catalogue = _catalogue(tmp_path / "catalogue.json")
+    runner = initialise_runner(
+        tmp_path / "runner",
+        candidate_catalogue_path=catalogue,
+        foundation_attestation=_foundation(tmp_path / "foundation.json"),
+        started_at="2026-08-28T00:00:00Z",
+        browser_tool="ignored",
+    )
+    provenance_path = runner / "provenance.json"
+    provenance = copy.deepcopy(load_json(provenance_path)["payload"])
+    provenance["acquisition_schema_version"] = 6
+    _replace_receipt_payload(provenance_path, provenance)
+    provenance = load_json(provenance_path)["payload"]
+    assert acquisition_module._validate_current_provenance_contract(provenance) == provenance
+    assert (
+        provenance["cdp_target_instrumentation_policy"]
+        == acquisition_module._SCHEMA_SIX_CDP_TARGET_INSTRUMENTATION_POLICY
+    )
+    assert (
+        provenance["passive_render_contract_sha256"]
+        == acquisition_module._SCHEMA_SIX_PASSIVE_RENDER_CONTRACT_SHA256
+    )
+
+    checkpoint_path = runner / "checkpoint.json"
+    checkpoint = copy.deepcopy(load_json(checkpoint_path)["payload"])
+    checkpoint["checkpoint_schema_version"] = (
+        acquisition_module.SCHEMA_SIX_CHECKPOINT_SCHEMA_VERSION
+    )
+    checkpoint["provenance_sha256"] = acquisition_module.sha256_file(provenance_path)
+    _replace_receipt_payload(checkpoint_path, checkpoint)
+    before = checkpoint_path.read_bytes()
+
+    status = acquisition_status(runner, candidate_catalogue_path=catalogue)
+    assert status["acquisition_schema_version"] == 6
+    assert status["checkpoint_schema_version"] == (
+        acquisition_module.SCHEMA_SIX_CHECKPOINT_SCHEMA_VERSION
+    )
+    assert "selection" in status
+    assert status["pending_count"] == len(status["selection"]["admission_ids"])
+    with pytest.raises(ValueError, match="historical acquisition runners"):
+        run_due_acquisition(
+            runner,
+            candidate_catalogue_path=catalogue,
+            stability_root=tmp_path / "stability",
+            workload_root=tmp_path / "workloads",
+            backend=NoNetworkBackend(),
+        )
+    with pytest.raises(ValueError, match="historical acquisition runners"):
+        write_acquisition_completion(runner, candidate_catalogue_path=catalogue)
+    assert checkpoint_path.read_bytes() == before
+
+
+def test_schema_six_and_seven_contract_discriminators_cannot_collide(
+    tmp_path: Path,
+) -> None:
+    catalogue = _catalogue(tmp_path / "catalogue.json")
+    runner = initialise_runner(
+        tmp_path / "runner",
+        candidate_catalogue_path=catalogue,
+        foundation_attestation=_foundation(tmp_path / "foundation.json"),
+        started_at="2026-08-28T00:00:00Z",
+        browser_tool="ignored",
+    )
+    provenance_path = runner / "provenance.json"
+    provenance = copy.deepcopy(load_json(provenance_path)["payload"])
+    provenance["acquisition_schema_version"] = 6
+    _replace_receipt_payload(provenance_path, provenance)
+    provenance = load_json(provenance_path)["payload"]
+    tampered = copy.deepcopy(provenance)
+    tampered["cdp_target_instrumentation_policy"] = CDP_TARGET_INSTRUMENTATION_POLICY
+    with pytest.raises(ValueError, match="provenance policy"):
+        acquisition_module._validate_current_provenance_contract(tampered)
+
+    checkpoint_path = runner / "checkpoint.json"
+    checkpoint = copy.deepcopy(load_json(checkpoint_path)["payload"])
+    checkpoint["provenance_sha256"] = acquisition_module.sha256_file(provenance_path)
+    # A schema-seven checkpoint discriminator cannot be relabelled as schema six.
+    _replace_receipt_payload(checkpoint_path, checkpoint)
+    with pytest.raises(ValueError, match="modern acquisition checkpoint shape"):
+        acquisition_status(runner, candidate_catalogue_path=catalogue)
+
+    checkpoint["checkpoint_schema_version"] = (
+        acquisition_module.SCHEMA_SIX_CHECKPOINT_SCHEMA_VERSION
+    )
+    _replace_receipt_payload(checkpoint_path, checkpoint)
+    assert (
+        acquisition_status(runner, candidate_catalogue_path=catalogue)["acquisition_schema_version"]
+        == 6
+    )
+
+
+def test_schema_six_completion_receipt_tuple_remains_exactly_verifiable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalogue = _catalogue(tmp_path / "catalogue.json")
+    catalogue_value, candidates = acquisition_module.load_candidate_catalogue_receipt(catalogue)
+    monkeypatch.setattr(
+        acquisition_module,
+        "load_candidate_catalogue_receipt",
+        lambda _path: (catalogue_value, candidates[:1]),
+    )
+    runner = initialise_runner(
+        tmp_path / "runner",
+        candidate_catalogue_path=catalogue,
+        foundation_attestation=_foundation(tmp_path / "foundation.json"),
+        started_at="2026-08-28T00:00:00Z",
+        browser_tool="ignored",
+    )
+    run_due_acquisition(
+        runner,
+        candidate_catalogue_path=catalogue,
+        stability_root=tmp_path / "stability",
+        workload_root=tmp_path / "workloads",
+        backend=RejectingBackend(),
+    )
+    completion = copy.deepcopy(
+        load_json(write_acquisition_completion(runner, candidate_catalogue_path=catalogue))[
+            "payload"
+        ]
+    )
+
+    provenance_path = runner / "provenance.json"
+    provenance = copy.deepcopy(load_json(provenance_path)["payload"])
+    provenance["acquisition_schema_version"] = 6
+    _replace_receipt_payload(provenance_path, provenance)
+    provenance_sha256 = acquisition_module.sha256_file(provenance_path)
+    checkpoint_path = runner / "checkpoint.json"
+    checkpoint = copy.deepcopy(load_json(checkpoint_path)["payload"])
+    checkpoint["checkpoint_schema_version"] = (
+        acquisition_module.SCHEMA_SIX_CHECKPOINT_SCHEMA_VERSION
+    )
+    checkpoint["provenance_sha256"] = provenance_sha256
+    terminal_receipts = {}
+    for candidate_id, state in checkpoint["candidates"].items():
+        terminal_path = runner / state["terminal"]["path"]
+        terminal = copy.deepcopy(load_json(terminal_path)["payload"])
+        terminal["terminal_schema_version"] = acquisition_module.SCHEMA_SIX_TERMINAL_SCHEMA_VERSION
+        terminal["checkpoint_schema_version"] = (
+            acquisition_module.SCHEMA_SIX_CHECKPOINT_SCHEMA_VERSION
+        )
+        terminal["provenance_sha256"] = provenance_sha256
+        _replace_receipt_payload(terminal_path, terminal)
+        state["terminal"]["sha256"] = acquisition_module.sha256_file(terminal_path)
+        terminal_receipts[candidate_id] = copy.deepcopy(state["terminal"])
+    _replace_receipt_payload(checkpoint_path, checkpoint)
+    sealed_checkpoint = load_json(checkpoint_path)
+    completion.update(
+        acquisition_schema_version=6,
+        completion_schema_version=(acquisition_module.SCHEMA_SIX_COMPLETION_SCHEMA_VERSION),
+        checkpoint_schema_version=(acquisition_module.SCHEMA_SIX_CHECKPOINT_SCHEMA_VERSION),
+        provenance_sha256=provenance_sha256,
+        checkpoint_payload_sha256=sealed_checkpoint["payload_sha256"],
+        terminal_receipts=terminal_receipts,
+    )
+    schema_six_completion = bind_receipt(completion, receipt_type=COMPLETION_TYPE)
+    assert (
+        validate_acquisition_completion(
+            schema_six_completion,
+            candidate_catalogue_path=catalogue,
+            runner_root=runner,
+        )["acquisition_schema_version"]
+        == 6
+    )
+
+    colliding = copy.deepcopy(completion)
+    colliding["completion_schema_version"] = COMPLETION_SCHEMA_VERSION
+    with pytest.raises(ValueError, match="acquisition completion schema"):
+        validate_acquisition_completion(
+            bind_receipt(colliding, receipt_type=COMPLETION_TYPE),
+            candidate_catalogue_path=catalogue,
+            runner_root=runner,
+        )

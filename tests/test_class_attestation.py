@@ -117,6 +117,141 @@ def _browser_egress_result(root: Path, build: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _completion_authority_inputs(
+    tmp_path: Path,
+    *,
+    receipt_type: str = attestation.ACQUISITION_AUTHORITY_RECEIPT_TYPE,
+) -> tuple[Path, Path, dict[str, Any]]:
+    authority_path = tmp_path / "current-acquisition-authority.json"
+    authority_path.write_bytes(
+        canonical_json_bytes(
+            bind_receipt(
+                {"fixture": "current-authority"},
+                receipt_type=receipt_type,
+            )
+        )
+    )
+    binding = {
+        "path": str(authority_path.resolve()),
+        "sha256": sha256_file(authority_path),
+    }
+    provenance_path = tmp_path / "provenance.json"
+    provenance_path.write_bytes(
+        canonical_json_bytes(
+            bind_receipt(
+                {
+                    "acquisition_schema_version": attestation.ACQUISITION_SCHEMA_VERSION,
+                    "acquisition_authority": binding,
+                },
+                receipt_type=attestation.ACQUISITION_PROVENANCE_TYPE,
+            )
+        )
+    )
+    completion = {
+        "acquisition_schema_version": attestation.ACQUISITION_SCHEMA_VERSION,
+        "completion_schema_version": attestation.ACQUISITION_COMPLETION_SCHEMA_VERSION,
+        "checkpoint_schema_version": attestation.ACQUISITION_CHECKPOINT_SCHEMA_VERSION,
+        "provenance_sha256": sha256_file(provenance_path),
+    }
+    return authority_path, provenance_path, completion
+
+
+@pytest.mark.parametrize(
+    "receipt_type",
+    (
+        attestation.ACQUISITION_AUTHORITY_RECEIPT_TYPE,
+        attestation.FOUNDATION_RECEIPT_TYPE,
+    ),
+)
+def test_current_completion_authority_verifies_offline_narrow_or_foundation_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    receipt_type: str,
+) -> None:
+    authority_path, _provenance_path, completion = _completion_authority_inputs(
+        tmp_path,
+        receipt_type=receipt_type,
+    )
+    binding = {
+        "path": str(authority_path.resolve()),
+        "sha256": sha256_file(authority_path),
+    }
+    observed: list[tuple[str, Path, dict[str, Any]]] = []
+
+    def validate_narrow(path: Path, **kwargs: Any) -> dict[str, Any]:
+        observed.append(("narrow", path, kwargs))
+        return dict(binding)
+
+    def validate_foundation(path: Path, **kwargs: Any) -> dict[str, Any]:
+        observed.append(("foundation", path, kwargs))
+        return dict(binding)
+
+    monkeypatch.setattr(attestation, "validate_class_acquisition_authority", validate_narrow)
+    monkeypatch.setattr(attestation, "validate_class_foundation_attestation", validate_foundation)
+
+    result = attestation.validate_current_acquisition_completion_authority(
+        completion,
+        runner_root=tmp_path,
+    )
+
+    assert result == {"receipt_type": receipt_type, **binding}
+    if receipt_type == attestation.ACQUISITION_AUTHORITY_RECEIPT_TYPE:
+        assert observed == [
+            (
+                "narrow",
+                authority_path.resolve(),
+                {"runtime_role": None, "allow_historical": False},
+            )
+        ]
+    else:
+        assert observed == [
+            (
+                "foundation",
+                authority_path.resolve(),
+                {
+                    "deep_code_gate": True,
+                    "runtime_role": None,
+                    "allow_historical": False,
+                },
+            )
+        ]
+
+
+@pytest.mark.parametrize("mutation", ("missing", "hash-tampered", "historical-v96"))
+def test_current_completion_authority_rejects_missing_tampered_or_historical_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    authority_path, _provenance_path, completion = _completion_authority_inputs(tmp_path)
+
+    if mutation == "missing":
+        authority_path.unlink()
+        expected = "regular file"
+    elif mutation == "hash-tampered":
+        authority_path.write_text("changed\n", encoding="utf-8")
+        expected = "digest changed"
+    else:
+        expected = "historical.*verify-only"
+
+        def reject_historical(path: Path, **kwargs: Any) -> dict[str, Any]:
+            assert path == authority_path.resolve()
+            assert kwargs == {"runtime_role": None, "allow_historical": False}
+            raise ValueError("historical v96 acquisition authority is verify-only")
+
+        monkeypatch.setattr(
+            attestation,
+            "validate_class_acquisition_authority",
+            reject_historical,
+        )
+
+    with pytest.raises(ValueError, match=expected):
+        attestation.validate_current_acquisition_completion_authority(
+            completion,
+            runner_root=tmp_path,
+        )
+
+
 def test_qualification_authority_derives_prepare_identity_from_exact_foundation_build(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -880,6 +1015,11 @@ def test_foundation_runtime_accepts_only_bound_collection_or_prepare_image(
     build = tmp_path / "build.json"
     build.write_text("{}\n", encoding="utf-8")
     payload = {"source": source, "cohort_version": 23}
+    attestation._validate_foundation_runtime(
+        payload,
+        runtime_role=None,
+        build_execution_receipt=build,
+    )
     monkeypatch.setattr(
         attestation,
         "validate_build_execution_receipt",
@@ -1088,6 +1228,9 @@ def test_foundation_binds_pinned_cdp_and_seventh_browser_egress_gate(
         "expected_cohort_version": 23,
         "allow_historical": False,
     }
+    observed.clear()
+    assert attestation._foundation_value(**{**kwargs, "pinned_runtime_role": None}) == value
+    assert observed["runtime_role"] is None
 
     pinned["recorded_at"] = "2026-08-28T04:00:00+00:00"
     with pytest.raises(ValueError, match="build finish <= pinned CDP probe <= foundation"):
@@ -1227,7 +1370,15 @@ def test_hard_gate_inventory_is_ordered_typed_and_nonempty() -> None:
 
 @pytest.mark.parametrize(
     ("schema", "retains_identity"),
-    ((8, False), (9, True), (11, True), (12, True), (13, True)),
+    (
+        (8, False),
+        (9, True),
+        (11, True),
+        (12, True),
+        (13, True),
+        (14, True),
+        (attestation.PINNED_CDP_PROBE_SCHEMA_VERSION, True),
+    ),
 )
 def test_pinned_cdp_binding_preserves_schema_specific_identity_shape(
     tmp_path: Path,

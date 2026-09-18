@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from qcsd_lab import browser_egress_qualification as qualification_module
 from qcsd_lab.browser_egress import (
     BROWSER_EGRESS_PLAYWRIGHT_ENABLED_FEATURES,
     BROWSER_EGRESS_PLAYWRIGHT_FEATURE_ARGUMENT,
@@ -102,6 +103,7 @@ from qcsd_lab.browser_egress_qualification import (
     FoundationVerificationMode,
     _browser_binding,
     _validate_effective_argv,
+    _validate_git_source_binding,
     append_result,
     begin_attempt,
     build_attempt_topology_binding,
@@ -2779,6 +2781,117 @@ def test_foundation_has_explicit_prepare_execution_and_portable_replay_modes(
             build_validator=validator,
             mode="portable-attestation-replay",  # type: ignore[arg-type]
         )
+
+
+def test_historical_source_replay_hashes_the_exact_git_blob_not_the_worktree(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    subprocess.run(["/usr/bin/git", "-C", str(repository), "init", "-q"], check=True)
+    subprocess.run(
+        ["/usr/bin/git", "-C", str(repository), "config", "user.name", "QCSD test"],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "/usr/bin/git",
+            "-C",
+            str(repository),
+            "config",
+            "user.email",
+            "qcsd-test@example.invalid",
+        ],
+        check=True,
+    )
+    source = repository / "source.py"
+    committed = b"committed source\n"
+    source.write_bytes(committed)
+    subprocess.run(["/usr/bin/git", "-C", str(repository), "add", "source.py"], check=True)
+    subprocess.run(
+        ["/usr/bin/git", "-C", str(repository), "commit", "-qm", "source"],
+        check=True,
+    )
+    commit = subprocess.run(
+        ["/usr/bin/git", "-C", str(repository), "rev-parse", "HEAD"],
+        check=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    ).stdout.strip()
+    binding = {
+        "path": "source.py",
+        "sha256": hashlib.sha256(committed).hexdigest(),
+        "size_bytes": len(committed),
+    }
+
+    source.write_bytes(b"later worktree source\n")
+    assert _validate_git_source_binding(binding, root=repository, commit=commit) == binding
+
+    forged = {**binding, "sha256": "0" * 64}
+    with pytest.raises(ValueError, match="Git source binding does not verify"):
+        _validate_git_source_binding(forged, root=repository, commit=commit)
+    with pytest.raises(ValueError, match="Git source blob is unavailable"):
+        _validate_git_source_binding(binding, root=repository, commit="f" * 40)
+
+
+def test_v96_historical_source_replay_is_exact_and_portable_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_files = [
+        {"path": path, "sha256": "1" * 64, "size_bytes": 1}
+        for path in REQUIRED_SOURCE_BINDING_PATHS
+    ]
+    payload = {
+        "schema_version": FOUNDATION_SCHEMA_VERSION,
+        "cohort_version": 96,
+        "source": copy.deepcopy(
+            qualification_module._V96_HISTORICAL_SOURCE_REPLAY_SOURCE
+        ),
+        "source_files": source_files,
+    }
+    observed: list[tuple[dict, Path, str]] = []
+
+    def validate_git_source(binding: dict, *, root: Path, commit: str) -> dict:
+        observed.append((binding, root, commit))
+        return binding
+
+    monkeypatch.setattr(
+        qualification_module,
+        "_validate_git_source_binding",
+        validate_git_source,
+    )
+    qualification_module._validate_v96_historical_source_replay(
+        payload,
+        root=tmp_path,
+        mode=FoundationVerificationMode.PORTABLE_REPLAY,
+    )
+    assert [binding for binding, _root, _commit in observed] == source_files
+    assert {root for _binding, root, _commit in observed} == {tmp_path}
+    assert {commit for _binding, _root, commit in observed} == {
+        qualification_module._V96_HISTORICAL_SOURCE_REPLAY_LAB_COMMIT
+    }
+
+    with pytest.raises(ValueError, match="portable replay only"):
+        qualification_module._validate_v96_historical_source_replay(
+            payload,
+            root=tmp_path,
+            mode=FoundationVerificationMode.EXECUTION,
+        )
+    for mutation in ("cohort", "source", "inventory"):
+        forged = copy.deepcopy(payload)
+        if mutation == "cohort":
+            forged["cohort_version"] = 97
+        elif mutation == "source":
+            forged["source"]["lab_commit"] = "f" * 40
+        else:
+            forged["source_files"].reverse()
+        with pytest.raises(ValueError, match="replay contract is invalid"):
+            qualification_module._validate_v96_historical_source_replay(
+                forged,
+                root=tmp_path,
+                mode=FoundationVerificationMode.PORTABLE_REPLAY,
+            )
 
 
 def test_absent_or_tampered_pcap_cannot_publish_or_advance(

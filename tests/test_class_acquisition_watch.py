@@ -46,6 +46,57 @@ def _target_activity() -> dict[str, Any]:
     }
 
 
+def _srcdoc_pseudo_document_summary() -> dict[str, Any]:
+    loader_digest = hashlib.sha256(b"fixture-srcdoc-loader").hexdigest()
+    return {
+        "schema_version": watch._PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
+        "policy": watch._PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_POLICY,
+        "enabled": True,
+        "total": 1,
+        "resolved": 1,
+        "pending": 0,
+        "aborted": 0,
+        "open_candidates": 0,
+        "network_history_saturated": False,
+        "fetch_history_saturated": False,
+        "candidate_limit_saturated": False,
+        "diagnostics": [
+            {
+                "schema_version": 2,
+                "source_role": "root-page",
+                "frame_id_sha256": hashlib.sha256(b"fixture-srcdoc-frame").hexdigest(),
+                "loader_id_sha256": loader_digest,
+                "request_id_sha256": loader_digest,
+                "requested_event_ordinal": 1,
+                "started_navigating_event_ordinal": 2,
+                "started_event_ordinal": 3,
+                "terminal_event_ordinal": 4,
+                "stopped_event_ordinal": 5,
+                "navigation_reason": "initialFrameNavigation",
+                "navigation_type": "differentDocument",
+                "disposition": "currentTab",
+                "url_kind": "about:srcdoc",
+                "loader_binding": "Page.frameStartedNavigating.loaderId",
+                "request_id_matches_loader": True,
+                "terminal_method": "Network.loadingFailed",
+                "terminal_fields": [
+                    "canceled",
+                    "errorText",
+                    "requestId",
+                    "timestamp",
+                    "type",
+                ],
+                "resource_type": "Document",
+                "error_text": "net::ERR_ABORTED",
+                "canceled": True,
+                "network_request_seen": False,
+                "fetch_pause_seen": False,
+                "frame_stopped_after_terminal": True,
+            }
+        ],
+    }
+
+
 def _egress_prearm_summary() -> dict[str, Any]:
     by_target_type = {}
     for target_type in ("page", "iframe", "worker", "shared_worker"):
@@ -146,7 +197,7 @@ def _write_receipt(path: Path, receipt_type: str, payload: dict[str, Any]) -> No
     path.write_bytes(_canonical(_receipt(receipt_type, payload)))
 
 
-@pytest.mark.parametrize("historical_schema", (1, 2, 3, 4))
+@pytest.mark.parametrize("historical_schema", (1, 2, 3, 4, 5, 6))
 def test_receipt_loader_accepts_legitimate_historical_payload_schemas(
     tmp_path: Path,
     historical_schema: int,
@@ -996,6 +1047,7 @@ def acquisition(tmp_path: Path) -> Fixture:
                     watch._PINNED_CDP_BOOTSTRAP_PREARM_SUMMARY
                 ),
                 "egress_prearm_summary": _egress_prearm_summary(),
+                "srcdoc_pseudo_document_summary": _srcdoc_pseudo_document_summary(),
                 "non_replayable_egress_summary": _non_replayable_egress_summary(),
                 "browser_egress_command_line": _browser_egress_command_line(),
                 "browser_context_service_worker_count": 0,
@@ -1308,7 +1360,8 @@ def _materialise_selection(
             state.update(state="probing", pages=[{}], baseline_started_at=batch["baseline_started_at"])
             terminalised = (datetime.fromisoformat(batch["baseline_started_at"]) + timedelta(hours=73)).isoformat().replace("+00:00", "Z")
         terminal = {
-            "terminal_schema_version": 3, "checkpoint_schema_version": 2,
+            "terminal_schema_version": watch.TERMINAL_SCHEMA_VERSION,
+            "checkpoint_schema_version": watch.CHECKPOINT_SCHEMA_VERSION,
             "candidate_id": candidate_id, "kind": kind, "reason": "fixture outcome",
             "terminalised_at": terminalised,
             "checkpoint_state_sha256": hashlib.sha256(_canonical(state)).hexdigest(),
@@ -1561,8 +1614,15 @@ def test_watcher_terminal_outcome_projection_matches_runtime(kind, state, expect
 def test_watcher_accepts_runtime_produced_selection_from_bound_terminal_outcomes(
     acquisition: Fixture,
 ) -> None:
-    from qcsd_lab.class_acquisition import _checkpoint_terminal_payloads, _derive_checkpoint_selection
-    from qcsd_lab.class_study import ClassCandidate, TRANCO_RANK_STRATA, deterministic_candidate_order
+    from qcsd_lab.class_acquisition import (
+        _checkpoint_terminal_payloads,
+        _derive_checkpoint_selection,
+    )
+    from qcsd_lab.class_study import (
+        TRANCO_RANK_STRATA,
+        ClassCandidate,
+        deterministic_candidate_order,
+    )
 
     candidates = deterministic_candidate_order([
         ClassCandidate(
@@ -1671,7 +1731,8 @@ def test_watcher_replays_causal_scientific_terminal_release(
     if mutation == "retry":
         state["pages"][0]["rejection"] = {"kind": "probe-retry-exhausted"}
     terminal = {
-        "terminal_schema_version": 3, "checkpoint_schema_version": 2,
+        "terminal_schema_version": watch.TERMINAL_SCHEMA_VERSION,
+        "checkpoint_schema_version": watch.CHECKPOINT_SCHEMA_VERSION,
         "candidate_id": first, "kind": "probe-window-missed" if mutation == "missed" else "stable-page-unavailable",
         "terminalised_at": "2026-08-31T00:21:00Z" if mutation == "late" else "2026-08-29T01:01:00Z",
         "provenance_sha256": payload["provenance_sha256"], "baseline_batch": batches[0],
@@ -1906,8 +1967,13 @@ class FakeMonotonic:
 
 
 def test_due_work_uses_exact_command_environment_and_paths(acquisition: Fixture) -> None:
-    assert watch.ACQUISITION_SCHEMA_VERSION == 6
-    assert watch.CHECKPOINT_SCHEMA_VERSION == 2
+    assert watch.ACQUISITION_SCHEMA_VERSION == 7
+    assert watch.CHECKPOINT_SCHEMA_VERSION == 3
+    assert watch.TERMINAL_SCHEMA_VERSION == 4
+    assert watch.COMPLETION_SCHEMA_VERSION == 4
+    assert watch.SCHEMA_SIX_CHECKPOINT_SCHEMA_VERSION == 2
+    assert watch.SCHEMA_SIX_TERMINAL_SCHEMA_VERSION == 3
+    assert watch.SCHEMA_SIX_COMPLETION_SCHEMA_VERSION == 3
     assert watch.ACQUISITION_TIMEOUT_MS == 60_000
     assert watch.PENDING_BASELINE_GUARD_MS == 2_400_000
     assert watch.MAX_CANDIDATES == 2
@@ -3604,6 +3670,18 @@ def test_watcher_pinned_cdp_contract_matches_runtime_contract() -> None:
     assert watch._EGRESS_PREARM_SUMMARY_SCHEMA_VERSION == (
         cdp_targets.EGRESS_PREARM_SUMMARY_SCHEMA_VERSION
     )
+    assert watch._PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION == (
+        cdp_targets.SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION
+    )
+    assert watch._PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_POLICY == (
+        cdp_targets.SRCDOC_PSEUDO_DOCUMENT_POLICY
+    )
+    assert watch._PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_LIMIT == (
+        cdp_targets._SRCDOC_PSEUDO_DOCUMENT_LIMIT
+    )
+    assert watch._PINNED_CDP_SRCDOC_EVENT_ORDINAL_LIMIT == (
+        cdp_targets._SRCDOC_EVENT_ORDINAL_LIMIT
+    )
     assert watch._PINNED_CDP_SCHEMA_VERSION == pinned_cdp.PROBE_SCHEMA_VERSION
     assert watch._HISTORICAL_PINNED_CDP_SCHEMA_VERSION == (
         pinned_cdp.HISTORICAL_PROBE_SCHEMA_VERSION
@@ -3622,6 +3700,7 @@ def test_watcher_pinned_cdp_contract_matches_runtime_contract() -> None:
     assert watch._HISTORICAL_PINNED_CDP_CONTRACT_V11 == (pinned_cdp._HISTORICAL_PROBE_CONTRACT_V11)
     assert watch._HISTORICAL_PINNED_CDP_CONTRACT_V12 == (pinned_cdp._HISTORICAL_PROBE_CONTRACT_V12)
     assert watch._HISTORICAL_PINNED_CDP_CONTRACT_V13 == (pinned_cdp._HISTORICAL_PROBE_CONTRACT_V13)
+    assert watch._HISTORICAL_PINNED_CDP_CONTRACT_V14 == (pinned_cdp._HISTORICAL_PROBE_CONTRACT_V14)
     assert watch._PINNED_CDP_EVENT_METHODS == pinned_cdp._EVENT_METHODS
     assert watch._PINNED_CDP_HTTP_STATUS_COUNTS == (pinned_cdp._EXPECTED_HTTP_STATUS_COUNTS)
     assert watch._PINNED_CDP_SERVER_REQUEST_COUNTS == (pinned_cdp._EXPECTED_SERVER_REQUEST_COUNTS)
@@ -3712,6 +3791,18 @@ def test_watcher_pinned_cdp_contract_matches_runtime_contract() -> None:
     assert watch.HISTORICAL_ACQUISITION_SCHEMA_VERSIONS == (
         class_acquisition.HISTORICAL_SCHEMA_VERSIONS
     )
+    assert watch.CHECKPOINT_SCHEMA_VERSION == class_acquisition.CHECKPOINT_SCHEMA_VERSION
+    assert watch.TERMINAL_SCHEMA_VERSION == class_acquisition.TERMINAL_SCHEMA_VERSION
+    assert watch.COMPLETION_SCHEMA_VERSION == class_acquisition.COMPLETION_SCHEMA_VERSION
+    assert watch.SCHEMA_SIX_CHECKPOINT_SCHEMA_VERSION == (
+        class_acquisition.SCHEMA_SIX_CHECKPOINT_SCHEMA_VERSION
+    )
+    assert watch.SCHEMA_SIX_TERMINAL_SCHEMA_VERSION == (
+        class_acquisition.SCHEMA_SIX_TERMINAL_SCHEMA_VERSION
+    )
+    assert watch.SCHEMA_SIX_COMPLETION_SCHEMA_VERSION == (
+        class_acquisition.SCHEMA_SIX_COMPLETION_SCHEMA_VERSION
+    )
     assert watch._PROVENANCE_PAYLOAD_KEYS == class_acquisition.CURRENT_PROVENANCE_FIELDS
     assert watch._NAVIGATION_IMPLEMENTATION == class_acquisition.NAVIGATION_IMPLEMENTATION
     assert watch._REGISTRABLE_DOMAIN_POLICY == class_acquisition.REGISTRABLE_DOMAIN_POLICY
@@ -3729,7 +3820,7 @@ def test_watcher_pinned_cdp_contract_matches_runtime_contract() -> None:
     assert watch._BASELINE_SCHEDULING_CONTRACT == (class_acquisition.BASELINE_SCHEDULING_CONTRACT)
 
 
-@pytest.mark.parametrize("historical_schema", (1, 2, 3, 4))
+@pytest.mark.parametrize("historical_schema", (1, 2, 3, 4, 5, 6))
 def test_watcher_treats_historical_provenance_as_verify_only(
     acquisition: Fixture,
     historical_schema: int,
@@ -3743,7 +3834,7 @@ def test_watcher_treats_historical_provenance_as_verify_only(
         watch._validate_immutable_binding(acquisition.paths)
 
 
-@pytest.mark.parametrize("schema_alias", (True, 5.0, "5"))
+@pytest.mark.parametrize("schema_alias", (True, 7.0, "7"))
 def test_watcher_rejects_non_integer_current_provenance_schema(
     acquisition: Fixture,
     schema_alias: object,
@@ -3824,6 +3915,76 @@ def test_watcher_rejects_resealed_pinned_cdp_topology_tamper(
             "WebTransport action or telemetry",
         ),
         (
+            ("srcdoc_pseudo_document_summary", "schema_version"),
+            True,
+            "srcdoc loader-bound summary identity",
+        ),
+        (
+            (
+                "srcdoc_pseudo_document_summary",
+                "diagnostics",
+                0,
+                "frame_id_sha256",
+            ),
+            "raw-frame-id",
+            "srcdoc loader-bound diagnostic hash",
+        ),
+        (
+            (
+                "srcdoc_pseudo_document_summary",
+                "diagnostics",
+                0,
+                "stopped_event_ordinal",
+            ),
+            3,
+            "srcdoc loader-bound event ordering",
+        ),
+        (
+            (
+                "srcdoc_pseudo_document_summary",
+                "diagnostics",
+                0,
+                "started_navigating_event_ordinal",
+            ),
+            3,
+            "srcdoc loader-bound event ordering",
+        ),
+        (
+            (
+                "srcdoc_pseudo_document_summary",
+                "diagnostics",
+                0,
+                "loader_id_sha256",
+            ),
+            "e" * 64,
+            "srcdoc loader-bound diagnostic is inconsistent",
+        ),
+        (
+            (
+                "srcdoc_pseudo_document_summary",
+                "diagnostics",
+                0,
+                "navigation_type",
+            ),
+            "sameDocument",
+            "srcdoc loader-bound diagnostic strings are invalid",
+        ),
+        (
+            (
+                "srcdoc_pseudo_document_summary",
+                "diagnostics",
+                0,
+                "request_id_matches_loader",
+            ),
+            False,
+            "srcdoc loader-bound diagnostic is inconsistent",
+        ),
+        (
+            ("srcdoc_pseudo_document_summary", "network_history_saturated"),
+            True,
+            "srcdoc loader-bound topology observation",
+        ),
+        (
             ("browser_egress_command_line", "schema_version"),
             True,
             "command-line projection",
@@ -3853,7 +4014,7 @@ def test_watcher_rejects_resealed_pinned_cdp_topology_tamper(
 )
 def test_watcher_rejects_resealed_pinned_cdp_egress_tamper(
     acquisition: Fixture,
-    field_path: tuple[str, ...],
+    field_path: tuple[str | int, ...],
     replacement: Any,
     message: str,
 ) -> None:
@@ -3867,6 +4028,83 @@ def test_watcher_rejects_resealed_pinned_cdp_egress_tamper(
 
     with pytest.raises(watch.WatchError, match=message):
         watch._validate_immutable_binding(acquisition.paths)
+
+
+def test_watcher_rejects_identifier_bearing_or_zero_srcdoc_proof(
+    acquisition: Fixture,
+) -> None:
+    pinned = json.loads(acquisition.pinned_cdp_path.read_text(encoding="utf-8"))
+    for kind in ("raw-identifier", "zero-proof"):
+        payload = copy.deepcopy(pinned["payload"])
+        summary = payload["observation"]["topology"][
+            "srcdoc_pseudo_document_summary"
+        ]
+        if kind == "raw-identifier":
+            summary["diagnostics"][0]["frame_id"] = "raw-frame-id"
+            message = "srcdoc loader-bound diagnostic fields"
+        else:
+            summary.update(total=0, resolved=0, diagnostics=[])
+            message = "srcdoc loader-bound topology observation"
+        _replace_pinned_and_rebind_foundation(acquisition, payload)
+        with pytest.raises(watch.WatchError, match=message):
+            watch._validate_immutable_binding(acquisition.paths)
+
+
+def test_watcher_rejects_reused_srcdoc_frame_digest(acquisition: Fixture) -> None:
+    pinned = json.loads(acquisition.pinned_cdp_path.read_text(encoding="utf-8"))
+    payload = pinned["payload"]
+    summary = payload["observation"]["topology"]["srcdoc_pseudo_document_summary"]
+    duplicate = copy.deepcopy(summary["diagnostics"][0])
+    second_loader = hashlib.sha256(b"second-srcdoc-loader").hexdigest()
+    duplicate["loader_id_sha256"] = second_loader
+    duplicate["request_id_sha256"] = second_loader
+    duplicate["requested_event_ordinal"] = 6
+    duplicate["started_navigating_event_ordinal"] = 7
+    duplicate["started_event_ordinal"] = 8
+    duplicate["terminal_event_ordinal"] = 9
+    duplicate["stopped_event_ordinal"] = 10
+    summary.update(total=2, resolved=2, diagnostics=[*summary["diagnostics"], duplicate])
+    _replace_pinned_and_rebind_foundation(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match="diagnostic is inconsistent"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+def test_watcher_rejects_reused_srcdoc_event_ordinal(acquisition: Fixture) -> None:
+    pinned = json.loads(acquisition.pinned_cdp_path.read_text(encoding="utf-8"))
+    payload = pinned["payload"]
+    summary = payload["observation"]["topology"]["srcdoc_pseudo_document_summary"]
+    duplicate = copy.deepcopy(summary["diagnostics"][0])
+    duplicate["frame_id_sha256"] = hashlib.sha256(b"second-srcdoc-frame").hexdigest()
+    second_loader = hashlib.sha256(b"second-srcdoc-loader").hexdigest()
+    duplicate["loader_id_sha256"] = second_loader
+    duplicate["request_id_sha256"] = second_loader
+    duplicate["requested_event_ordinal"] = 5
+    duplicate["started_navigating_event_ordinal"] = 7
+    duplicate["started_event_ordinal"] = 8
+    duplicate["terminal_event_ordinal"] = 9
+    duplicate["stopped_event_ordinal"] = 10
+    summary.update(total=2, resolved=2, diagnostics=[*summary["diagnostics"], duplicate])
+    _replace_pinned_and_rebind_foundation(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match="ordinals are not globally unique"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+def test_watcher_rejects_srcdoc_event_ordinals_above_the_bounded_history() -> None:
+    summary = _srcdoc_pseudo_document_summary()
+    diagnostic = summary["diagnostics"][0]
+    for field_name in (
+        "requested_event_ordinal",
+        "started_navigating_event_ordinal",
+        "started_event_ordinal",
+        "terminal_event_ordinal",
+        "stopped_event_ordinal",
+    ):
+        diagnostic[field_name] += watch._PINNED_CDP_SRCDOC_EVENT_ORDINAL_LIMIT
+
+    with pytest.raises(watch.WatchError, match="event ordering is invalid"):
+        watch._validate_srcdoc_pseudo_document_summary(summary)
 
 
 @pytest.mark.parametrize(

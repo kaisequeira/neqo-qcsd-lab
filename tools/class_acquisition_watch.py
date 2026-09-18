@@ -40,9 +40,14 @@ STUDY_ID = "classifier-multiorigin100-v1"
 CANDIDATE_COUNT = 600
 SCHEMA_VERSION = 1
 SOURCE_BINDING_PREIMAGE_SCHEMA_VERSION = 3
-ACQUISITION_SCHEMA_VERSION = 6
-HISTORICAL_ACQUISITION_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5})
-CHECKPOINT_SCHEMA_VERSION = 2
+ACQUISITION_SCHEMA_VERSION = 7
+HISTORICAL_ACQUISITION_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6})
+CHECKPOINT_SCHEMA_VERSION = 3
+TERMINAL_SCHEMA_VERSION = 4
+COMPLETION_SCHEMA_VERSION = 4
+SCHEMA_SIX_CHECKPOINT_SCHEMA_VERSION = 2
+SCHEMA_SIX_TERMINAL_SCHEMA_VERSION = 3
+SCHEMA_SIX_COMPLETION_SCHEMA_VERSION = 3
 FOUNDATION_SCHEMA_VERSION = 4
 HISTORICAL_FOUNDATION_SCHEMA_VERSION = 3
 CATALOGUE_TYPE = "qcsd-class-study-candidate-catalogue"
@@ -710,22 +715,29 @@ _BUILD_STORAGE_PREFLIGHT_KEYS = {
     "passed",
 }
 _CDP_TARGET_INSTRUMENTATION_POLICY = (
-    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v16"
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v17"
 )
 _PLAYWRIGHT_VERSION = "1.57.0"
 _CHROMIUM_VERSION = "143.0.7499.4"
 _CHROMIUM_EXECUTABLE = "/usr/local/bin/qcsd-chromium"
-_PINNED_CDP_SCHEMA_VERSION = 14
+_PINNED_CDP_SCHEMA_VERSION = 15
 _HISTORICAL_PINNED_CDP_SCHEMA_VERSION = 8
-_HISTORICAL_PINNED_CDP_SCHEMA_VERSIONS = frozenset({8, 9, 11, 12, 13})
-_PINNED_CDP_CONTRACT_SCHEMA_VERSION = 13
+_HISTORICAL_PINNED_CDP_SCHEMA_VERSIONS = frozenset({8, 9, 11, 12, 13, 14})
+_PINNED_CDP_CONTRACT_SCHEMA_VERSION = 14
 _HISTORICAL_PINNED_CDP_CONTRACT_SCHEMA_VERSION = 8
 _HISTORICAL_PINNED_CDP_CONTRACT_V12_SCHEMA_VERSION = 11
 _HISTORICAL_PINNED_CDP_CONTRACT_V13_SCHEMA_VERSION = 12
+_HISTORICAL_PINNED_CDP_CONTRACT_V14_SCHEMA_VERSION = 13
 _BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION = 1
 _EGRESS_PREARM_SUMMARY_SCHEMA_VERSION = 2
 _PINNED_CDP_TARGET_ACTIVITY_SCHEMA_VERSION = 1
 _PINNED_CDP_WORKER_WEBTRANSPORT_PROBE_SCHEMA_VERSION = 1
+_PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION = 2
+_PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_POLICY = (
+    "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-v1"
+)
+_PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_LIMIT = 32
+_PINNED_CDP_SRCDOC_EVENT_ORDINAL_LIMIT = 20_480
 _NON_REPLAYABLE_EGRESS_POLICY = "blocked-non-urlloader-egress-v1"
 _NON_REPLAYABLE_EGRESS_SCHEMA_VERSION = 2
 _BROWSER_EGRESS_COMMAND_LINE_SCHEMA_VERSION = 4
@@ -1044,11 +1056,28 @@ _HISTORICAL_PINNED_CDP_CONTRACT_V13 = {
     "playwright_driver_ownership_policy": _PLAYWRIGHT_DRIVER_OWNERSHIP_POLICY,
     "playwright_driver_binding": _EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
 }
-_PINNED_CDP_CONTRACT = {
+_HISTORICAL_PINNED_CDP_CONTRACT_V14 = {
     **_HISTORICAL_PINNED_CDP_CONTRACT_V13,
-    "schema_version": _PINNED_CDP_CONTRACT_SCHEMA_VERSION,
+    "schema_version": _HISTORICAL_PINNED_CDP_CONTRACT_V14_SCHEMA_VERSION,
     "policy": "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v13",
+    "instrumentation_policy": (
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v16"
+    ),
+}
+_PINNED_CDP_CONTRACT = {
+    **_HISTORICAL_PINNED_CDP_CONTRACT_V14,
+    "schema_version": _PINNED_CDP_CONTRACT_SCHEMA_VERSION,
+    "policy": "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v14",
     "instrumentation_policy": _CDP_TARGET_INSTRUMENTATION_POLICY,
+    "required_observations": [
+        *_HISTORICAL_PINNED_CDP_CONTRACT_V14["required_observations"],
+        "root-about-srcdoc-loader-bound-orphan-abort-lifecycle",
+    ],
+    "srcdoc_pseudo_document_summary_schema_version": (
+        _PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION
+    ),
+    "srcdoc_pseudo_document_policy": _PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_POLICY,
+    "required_srcdoc_pseudo_document_count": 1,
 }
 _HISTORICAL_PINNED_CDP_CONTRACT = {
     "schema_version": _HISTORICAL_PINNED_CDP_CONTRACT_SCHEMA_VERSION,
@@ -1218,8 +1247,8 @@ _FOUNDATION_GATES = (
     "browser-egress-packet-qualification-110-of-110",
 )
 _PASSIVE_RENDER_CONTRACT = {
-    "schema_version": 3,
-    "policy": "bounded-passive-render-quiescence-v3",
+    "schema_version": 4,
+    "policy": "bounded-passive-render-quiescence-v4",
     "viewport": {"width": 1365, "height": 768, "deviceScaleFactor": 1},
     "cache": "disabled",
     "service_workers": "bypassed-and-registration-blocked",
@@ -1235,6 +1264,7 @@ _PASSIVE_RENDER_CONTRACT = {
         "recursive-target-router-shutdown-ready",
         "no-pending-shared-worker-bootstrap-prearm",
         "all-observed-target-egress-shims-prearmed",
+        "terminal-root-srcdoc-loader-bound-orphan-abort-lifecycle",
         "zero-non-replayable-egress-attempts",
         "zero-browser-context-service-workers",
     ],
@@ -1246,6 +1276,7 @@ _PASSIVE_RENDER_CONTRACT = {
         "target-detached",
         "target-destroyed",
         "target-info-changed",
+        "browser-internal-document",
         "non-replayable-egress-attempt",
     ],
     "non_replayable_egress_policy": _NON_REPLAYABLE_EGRESS_POLICY,
@@ -4234,6 +4265,190 @@ def _validate_worker_webtransport_probe(value: Any) -> None:
             raise WatchError("pinned CDP worker WebTransport action or telemetry did not pass")
 
 
+def _validate_srcdoc_pseudo_document_summary(value: Any) -> None:
+    """Validate the exact identifier-free ``frameStartedNavigating`` binding."""
+
+    fields = {
+        "schema_version",
+        "policy",
+        "enabled",
+        "total",
+        "resolved",
+        "pending",
+        "aborted",
+        "open_candidates",
+        "network_history_saturated",
+        "fetch_history_saturated",
+        "candidate_limit_saturated",
+        "diagnostics",
+    }
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise WatchError("pinned CDP srcdoc loader-bound summary fields are invalid")
+    if (
+        type(value.get("schema_version")) is not int
+        or value["schema_version"]
+        != _PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION
+        or type(value.get("policy")) is not str
+        or value.get("policy") != _PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_POLICY
+        or type(value.get("enabled")) is not bool
+    ):
+        raise WatchError("pinned CDP srcdoc loader-bound summary identity is invalid")
+    count_fields = ("total", "resolved", "pending", "aborted", "open_candidates")
+    if any(
+        type(value.get(field)) is not int
+        or value[field] < 0
+        or value[field] > _PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_LIMIT
+        for field in count_fields
+    ):
+        raise WatchError("pinned CDP srcdoc loader-bound counts are invalid")
+    if (
+        value["pending"] + value["open_candidates"]
+        > _PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_LIMIT
+    ):
+        raise WatchError("pinned CDP srcdoc loader-bound candidate inventory is invalid")
+    saturation_fields = (
+        "network_history_saturated",
+        "fetch_history_saturated",
+        "candidate_limit_saturated",
+    )
+    if any(type(value.get(field)) is not bool for field in saturation_fields):
+        raise WatchError("pinned CDP srcdoc loader-bound saturation flags are invalid")
+    diagnostics = value.get("diagnostics")
+    if type(diagnostics) is not list or len(diagnostics) != value["resolved"]:
+        raise WatchError("pinned CDP srcdoc loader-bound diagnostics are invalid")
+    diagnostic_fields = {
+        "schema_version",
+        "source_role",
+        "frame_id_sha256",
+        "loader_id_sha256",
+        "request_id_sha256",
+        "requested_event_ordinal",
+        "started_navigating_event_ordinal",
+        "started_event_ordinal",
+        "terminal_event_ordinal",
+        "stopped_event_ordinal",
+        "navigation_reason",
+        "navigation_type",
+        "disposition",
+        "url_kind",
+        "loader_binding",
+        "request_id_matches_loader",
+        "terminal_method",
+        "terminal_fields",
+        "resource_type",
+        "error_text",
+        "canceled",
+        "network_request_seen",
+        "fetch_pause_seen",
+        "frame_stopped_after_terminal",
+    }
+    frame_hashes: set[str] = set()
+    loader_hashes: set[str] = set()
+    request_hashes: set[str] = set()
+    all_ordinals: set[int] = set()
+    previous_stopped_ordinal = 0
+    for diagnostic in diagnostics:
+        if not isinstance(diagnostic, Mapping) or set(diagnostic) != diagnostic_fields:
+            raise WatchError(
+                "pinned CDP srcdoc loader-bound diagnostic fields are invalid"
+            )
+        frame_hash = diagnostic.get("frame_id_sha256")
+        loader_hash = diagnostic.get("loader_id_sha256")
+        request_hash = diagnostic.get("request_id_sha256")
+        if (
+            type(frame_hash) is not str
+            or _SHA256_RE.fullmatch(frame_hash) is None
+            or type(loader_hash) is not str
+            or _SHA256_RE.fullmatch(loader_hash) is None
+            or type(request_hash) is not str
+            or _SHA256_RE.fullmatch(request_hash) is None
+        ):
+            raise WatchError("pinned CDP srcdoc loader-bound diagnostic hash is invalid")
+        ordinals = tuple(
+            diagnostic.get(field)
+            for field in (
+                "requested_event_ordinal",
+                "started_navigating_event_ordinal",
+                "started_event_ordinal",
+                "terminal_event_ordinal",
+                "stopped_event_ordinal",
+            )
+        )
+        if any(
+            type(ordinal) is not int
+            or ordinal < 1
+            or ordinal > _PINNED_CDP_SRCDOC_EVENT_ORDINAL_LIMIT
+            for ordinal in ordinals
+        ) or not (
+            ordinals[0] < ordinals[1] < ordinals[2] < ordinals[3] < ordinals[4]
+        ):
+            raise WatchError("pinned CDP srcdoc loader-bound event ordering is invalid")
+        if any(ordinal in all_ordinals for ordinal in ordinals):
+            raise WatchError(
+                "pinned CDP srcdoc loader-bound event ordinals are not globally unique"
+            )
+        if ordinals[-1] <= previous_stopped_ordinal:
+            raise WatchError(
+                "pinned CDP srcdoc loader-bound diagnostics are not in emitted order"
+            )
+        all_ordinals.update(ordinals)
+        previous_stopped_ordinal = ordinals[-1]
+        exact_strings = {
+            "source_role": "root-page",
+            "navigation_reason": "initialFrameNavigation",
+            "navigation_type": "differentDocument",
+            "disposition": "currentTab",
+            "url_kind": "about:srcdoc",
+            "loader_binding": "Page.frameStartedNavigating.loaderId",
+            "terminal_method": "Network.loadingFailed",
+            "resource_type": "Document",
+            "error_text": "net::ERR_ABORTED",
+        }
+        if any(
+            type(diagnostic.get(field_name)) is not str
+            or diagnostic[field_name] != expected
+            for field_name, expected in exact_strings.items()
+        ):
+            raise WatchError(
+                "pinned CDP srcdoc loader-bound diagnostic strings are invalid"
+            )
+        if (
+            type(diagnostic.get("schema_version")) is not int
+            or diagnostic.get("schema_version") != 2
+            or diagnostic.get("request_id_matches_loader") is not True
+            or type(diagnostic.get("terminal_fields")) is not list
+            or diagnostic.get("terminal_fields")
+            != ["canceled", "errorText", "requestId", "timestamp", "type"]
+            or diagnostic.get("canceled") is not True
+            or diagnostic.get("network_request_seen") is not False
+            or diagnostic.get("fetch_pause_seen") is not False
+            or diagnostic.get("frame_stopped_after_terminal") is not True
+            or loader_hash != request_hash
+            or frame_hash in frame_hashes
+            or loader_hash in loader_hashes
+            or request_hash in request_hashes
+        ):
+            raise WatchError("pinned CDP srcdoc loader-bound diagnostic is inconsistent")
+        frame_hashes.add(frame_hash)
+        loader_hashes.add(loader_hash)
+        request_hashes.add(request_hash)
+    if value["total"] != value["resolved"] + value["pending"] + value["aborted"]:
+        raise WatchError("pinned CDP srcdoc loader-bound aggregate is inconsistent")
+    if (
+        value["enabled"] is not True
+        or value["total"] != 1
+        or value["resolved"] != 1
+        or value["pending"] != 0
+        or value["aborted"] != 0
+        or value["open_candidates"] != 0
+        or any(value[field] for field in saturation_fields)
+        or len(diagnostics) != 1
+    ):
+        raise WatchError(
+            "pinned CDP srcdoc loader-bound topology observation did not pass"
+        )
+
+
 def _validate_browser_egress_command_line(value: Any) -> None:
     fields = {
         "schema_version",
@@ -4405,6 +4620,7 @@ def _validate_pinned_cdp_observation(value: Any) -> None:
         "server_request_counts",
         "bootstrap_prearm_summary",
         "egress_prearm_summary",
+        "srcdoc_pseudo_document_summary",
         "non_replayable_egress_summary",
         "browser_egress_command_line",
         "browser_context_service_worker_count",
@@ -4433,6 +4649,9 @@ def _validate_pinned_cdp_observation(value: Any) -> None:
     prearm = topology.get("bootstrap_prearm_summary")
     _validate_bootstrap_prearm_summary(prearm, require_terminal=True)
     egress_prearm = _validate_egress_prearm_summary(topology.get("egress_prearm_summary"))
+    _validate_srcdoc_pseudo_document_summary(
+        topology.get("srcdoc_pseudo_document_summary")
+    )
     _validate_non_replayable_egress_summary(topology.get("non_replayable_egress_summary"))
     _validate_worker_webtransport_probe(topology.get("worker_webtransport_probe"))
     _validate_browser_egress_command_line(topology.get("browser_egress_command_line"))
@@ -5321,7 +5540,7 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
     if acquisition_schema_version != ACQUISITION_SCHEMA_VERSION:
         raise WatchError("acquisition provenance uses an unsupported schema")
     if set(payload) != _PROVENANCE_PAYLOAD_KEYS:
-        raise WatchError("acquisition provenance payload fields differ from the v6 contract")
+        raise WatchError("acquisition provenance payload fields differ from the v7 contract")
     fixed_contract = {
         "browser_tool": _EXPECTED_BROWSER_TOOL_IDENTITY,
         "navigation_implementation": _NAVIGATION_IMPLEMENTATION,
@@ -5432,7 +5651,7 @@ def _validate_checkpoint(paths: WatchPaths, binding: AcquisitionBinding) -> Rece
     checkpoint = snapshot.value
     payload = checkpoint["payload"]
     if set(payload) != _CHECKPOINT_PAYLOAD_KEYS:
-        raise WatchError("acquisition checkpoint payload fields differ from the v2 contract")
+        raise WatchError("acquisition checkpoint payload fields differ from the v3 contract")
     if (
         type(payload["checkpoint_schema_version"]) is not int
         or payload["checkpoint_schema_version"] != CHECKPOINT_SCHEMA_VERSION
@@ -5638,7 +5857,7 @@ def _authenticated_checkpoint_terminal(
             }
             or snapshot.sha256 != terminal_binding["sha256"]
             or type(terminal.get("terminal_schema_version")) is not int
-            or terminal.get("terminal_schema_version") != 3
+            or terminal.get("terminal_schema_version") != TERMINAL_SCHEMA_VERSION
             or type(terminal.get("checkpoint_schema_version")) is not int
             or terminal.get("checkpoint_schema_version") != CHECKPOINT_SCHEMA_VERSION
             or terminal.get("candidate_id") != candidate_id

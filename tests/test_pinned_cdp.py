@@ -84,6 +84,57 @@ def _target_activity() -> dict[str, object]:
     }
 
 
+def _srcdoc_pseudo_document_summary() -> dict[str, object]:
+    loader_digest = hashlib.sha256(b"fixture-srcdoc-loader").hexdigest()
+    return {
+        "schema_version": pinned_cdp.SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
+        "policy": pinned_cdp.SRCDOC_PSEUDO_DOCUMENT_POLICY,
+        "enabled": True,
+        "total": 1,
+        "resolved": 1,
+        "pending": 0,
+        "aborted": 0,
+        "open_candidates": 0,
+        "network_history_saturated": False,
+        "fetch_history_saturated": False,
+        "candidate_limit_saturated": False,
+        "diagnostics": [
+            {
+                "schema_version": 2,
+                "source_role": "root-page",
+                "frame_id_sha256": hashlib.sha256(b"fixture-srcdoc-frame").hexdigest(),
+                "loader_id_sha256": loader_digest,
+                "request_id_sha256": loader_digest,
+                "requested_event_ordinal": 1,
+                "started_navigating_event_ordinal": 2,
+                "started_event_ordinal": 3,
+                "terminal_event_ordinal": 4,
+                "stopped_event_ordinal": 5,
+                "navigation_reason": "initialFrameNavigation",
+                "navigation_type": "differentDocument",
+                "disposition": "currentTab",
+                "url_kind": "about:srcdoc",
+                "loader_binding": "Page.frameStartedNavigating.loaderId",
+                "request_id_matches_loader": True,
+                "terminal_method": "Network.loadingFailed",
+                "terminal_fields": [
+                    "canceled",
+                    "errorText",
+                    "requestId",
+                    "timestamp",
+                    "type",
+                ],
+                "resource_type": "Document",
+                "error_text": "net::ERR_ABORTED",
+                "canceled": True,
+                "network_request_seen": False,
+                "fetch_pause_seen": False,
+                "frame_stopped_after_terminal": True,
+            }
+        ],
+    }
+
+
 def _egress_prearm_summary() -> dict[str, object]:
     by_type = {}
     for target_type in ("page", "iframe", "worker", "shared_worker"):
@@ -187,6 +238,7 @@ def _observation(uid: int = 1000, gid: int = 1000) -> dict[str, object]:
                 pinned_cdp._EXPECTED_PINNED_BOOTSTRAP_PREARM_SUMMARY
             ),
             "egress_prearm_summary": _egress_prearm_summary(),
+            "srcdoc_pseudo_document_summary": _srcdoc_pseudo_document_summary(),
             "non_replayable_egress_summary": _non_replayable_egress_summary(),
             "browser_egress_command_line": _browser_egress_command_line_projection(),
             "browser_context_service_worker_count": 0,
@@ -319,6 +371,7 @@ def test_schema8_receipt_is_historical_only_and_round_trips(
     payload["build_execution_identity"].pop("completion_sha256")
     payload["observation"]["topology"].pop("worker_response_consumption")
     payload["observation"]["topology"].pop("worker_webtransport_probe")
+    payload["observation"]["topology"].pop("srcdoc_pseudo_document_summary")
     historical = tmp_path / "pinned-cdp-schema8.json"
     historical.write_bytes(
         canonical_json_bytes(bind_receipt(payload, receipt_type=pinned_cdp.RECEIPT_TYPE))
@@ -377,6 +430,7 @@ def test_schema9_receipt_is_historical_only_and_keeps_current_build_identity(
     ] = copy.deepcopy(pinned_cdp._HISTORICAL_PINNED_CDP_RESOLVER_PROJECTION)
     payload["observation"]["topology"].pop("worker_response_consumption")
     payload["observation"]["topology"].pop("worker_webtransport_probe")
+    payload["observation"]["topology"].pop("srcdoc_pseudo_document_summary")
     historical = tmp_path / "pinned-cdp-schema9.json"
     historical.write_bytes(
         canonical_json_bytes(bind_receipt(payload, receipt_type=pinned_cdp.RECEIPT_TYPE))
@@ -425,6 +479,7 @@ def test_schema11_receipt_is_historical_only_with_v7_driver(
         "host_resolver_policy"
     ] = copy.deepcopy(pinned_cdp._HISTORICAL_PINNED_CDP_RESOLVER_PROJECTION)
     payload["observation"]["topology"].pop("worker_webtransport_probe")
+    payload["observation"]["topology"].pop("srcdoc_pseudo_document_summary")
     historical = tmp_path / "pinned-cdp-schema11.json"
     historical.write_bytes(
         canonical_json_bytes(bind_receipt(payload, receipt_type=pinned_cdp.RECEIPT_TYPE))
@@ -465,6 +520,7 @@ def test_schema12_receipt_is_historical_only_with_v7_driver(
     payload["observation"]["playwright_driver"] = copy.deepcopy(
         pinned_cdp.PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_BINDING
     )
+    payload["observation"]["topology"].pop("srcdoc_pseudo_document_summary")
     historical = tmp_path / "pinned-cdp-schema12.json"
     historical.write_bytes(
         canonical_json_bytes(bind_receipt(payload, receipt_type=pinned_cdp.RECEIPT_TYPE))
@@ -507,6 +563,7 @@ def test_schema12_receipt_still_requires_worker_webtransport_probe(
         pinned_cdp.PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_BINDING
     )
     payload["observation"]["topology"].pop("worker_webtransport_probe")
+    payload["observation"]["topology"].pop("srcdoc_pseudo_document_summary")
     historical = tmp_path / "pinned-cdp-schema12-without-worker-probe.json"
     historical.write_bytes(
         canonical_json_bytes(bind_receipt(payload, receipt_type=pinned_cdp.RECEIPT_TYPE))
@@ -535,6 +592,7 @@ def test_schema13_receipt_is_historical_only_with_v8_driver(
     payload["probe_contract_sha256"] = (
         pinned_cdp._HISTORICAL_PROBE_CONTRACT_V13_SHA256
     )
+    payload["observation"]["topology"].pop("srcdoc_pseudo_document_summary")
     historical = tmp_path / "pinned-cdp-schema13.json"
     historical.write_bytes(
         canonical_json_bytes(bind_receipt(payload, receipt_type=pinned_cdp.RECEIPT_TYPE))
@@ -573,6 +631,7 @@ def test_schema13_receipt_still_requires_worker_webtransport_probe(
         pinned_cdp._HISTORICAL_PROBE_CONTRACT_V13_SHA256
     )
     payload["observation"]["topology"].pop("worker_webtransport_probe")
+    payload["observation"]["topology"].pop("srcdoc_pseudo_document_summary")
     historical = tmp_path / "pinned-cdp-schema13-without-worker-probe.json"
     historical.write_bytes(
         canonical_json_bytes(bind_receipt(payload, receipt_type=pinned_cdp.RECEIPT_TYPE))
@@ -585,6 +644,43 @@ def test_schema13_receipt_still_requires_worker_webtransport_probe(
             expected_cohort_version=59,
             allow_historical=True,
         )
+
+
+def test_schema14_receipt_is_historical_only_without_srcdoc_summary(
+    tmp_path: Path,
+    fake_build: Path,
+) -> None:
+    current = _create(tmp_path, fake_build)
+    envelope = json.loads(current.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(envelope["payload"])
+    payload["probe_schema_version"] = 14
+    payload["probe_contract"] = copy.deepcopy(
+        pinned_cdp._HISTORICAL_PROBE_CONTRACT_V14
+    )
+    payload["probe_contract_sha256"] = (
+        pinned_cdp._HISTORICAL_PROBE_CONTRACT_V14_SHA256
+    )
+    payload["observation"]["topology"].pop("srcdoc_pseudo_document_summary")
+    historical = tmp_path / "pinned-cdp-schema14.json"
+    historical.write_bytes(
+        canonical_json_bytes(bind_receipt(payload, receipt_type=pinned_cdp.RECEIPT_TYPE))
+    )
+
+    with pytest.raises(ValueError, match="identity or result"):
+        pinned_cdp.validate_pinned_cdp_receipt(
+            historical,
+            build_execution_receipt=fake_build,
+            expected_cohort_version=59,
+        )
+
+    validated = pinned_cdp.validate_pinned_cdp_receipt(
+        historical,
+        build_execution_receipt=fake_build,
+        expected_cohort_version=59,
+        allow_historical=True,
+    )
+    assert validated["probe_schema_version"] == 14
+    assert "srcdoc_pseudo_document_summary" not in validated["observation"]["topology"]
 
 
 def test_current_receipt_rejects_frozen_historical_resolver_projection(
@@ -836,6 +932,84 @@ def test_prepare_role_revalidates_playwright_driver_binding(
             "topology fields",
         ),
         (
+            lambda observation: observation["topology"].pop(
+                "srcdoc_pseudo_document_summary"
+            ),
+            "topology fields",
+        ),
+        (
+            lambda observation: observation["topology"][
+                "srcdoc_pseudo_document_summary"
+            ]["diagnostics"][0].update(frame_id="raw-frame-id"),
+            "diagnostic fields",
+        ),
+        (
+            lambda observation: observation["topology"][
+                "srcdoc_pseudo_document_summary"
+            ]["diagnostics"][0].update(frame_id_sha256="raw-frame-id"),
+            "diagnostic hash",
+        ),
+        (
+            lambda observation: observation["topology"][
+                "srcdoc_pseudo_document_summary"
+            ]["diagnostics"][0].update(stopped_event_ordinal=3),
+            "event ordering",
+        ),
+        (
+            lambda observation: observation["topology"][
+                "srcdoc_pseudo_document_summary"
+            ]["diagnostics"][0].update(started_navigating_event_ordinal=3),
+            "event ordering",
+        ),
+        (
+            lambda observation: observation["topology"][
+                "srcdoc_pseudo_document_summary"
+            ]["diagnostics"][0].update(loader_id_sha256="e" * 64),
+            "diagnostic is inconsistent",
+        ),
+        (
+            lambda observation: observation["topology"][
+                "srcdoc_pseudo_document_summary"
+            ]["diagnostics"][0].update(
+                loader_binding="Page.frameStartedLoading.loaderId"
+            ),
+            "diagnostic strings are invalid",
+        ),
+        (
+            lambda observation: observation["topology"][
+                "srcdoc_pseudo_document_summary"
+            ]["diagnostics"][0].update(request_id_matches_loader=False),
+            "diagnostic is inconsistent",
+        ),
+        (
+            lambda observation: observation["topology"].update(
+                srcdoc_pseudo_document_summary={
+                    **_srcdoc_pseudo_document_summary(),
+                    "total": 0,
+                    "resolved": 0,
+                    "diagnostics": [],
+                }
+            ),
+            "topology evidence",
+        ),
+        (
+            lambda observation: observation["topology"].update(
+                srcdoc_pseudo_document_summary={
+                    **_srcdoc_pseudo_document_summary(),
+                    "resolved": 0,
+                    "pending": 1,
+                    "diagnostics": [],
+                }
+            ),
+            "lifecycle is not terminal",
+        ),
+        (
+            lambda observation: observation["topology"][
+                "srcdoc_pseudo_document_summary"
+            ].update(network_history_saturated=True),
+            "lifecycle is not terminal",
+        ),
+        (
             lambda observation: observation["topology"]["worker_webtransport_probe"][
                 "by_target_type"
             ]["worker"]["measurement"].update(action_succeeded=True),
@@ -995,6 +1169,14 @@ def test_worker_fixtures_consume_exact_success_responses_and_emit_exact_sentinel
         ),
     )
     try:
+        connection.request("GET", "/")
+        response = connection.getresponse()
+        root_fixture = response.read().decode("utf-8")
+        assert response.status == 200
+        assert response.getheader("Content-Type") == "text/html"
+        assert root_fixture.count("<iframe srcdoc=") == 1
+        assert "qcsd-root-srcdoc-lifecycle" in root_fixture
+
         for (
             script_path,
             data_path,
@@ -1062,16 +1244,16 @@ def test_required_topology_wait_condition_is_event_driven() -> None:
         "dedicated_worker_fetch_paused_on_page": True,
         "shared_worker_fetch_paused_on_shared_worker": True,
     }
-    assert pinned_cdp.PROBE_SCHEMA_VERSION == 14
+    assert pinned_cdp.PROBE_SCHEMA_VERSION == 15
     assert pinned_cdp.HISTORICAL_PROBE_SCHEMA_VERSIONS == frozenset(
-        {8, 9, 11, 12, 13}
+        {8, 9, 11, 12, 13, 14}
     )
-    assert pinned_cdp.PROBE_CONTRACT["schema_version"] == 13
+    assert pinned_cdp.PROBE_CONTRACT["schema_version"] == 14
     assert pinned_cdp.PROBE_CONTRACT["policy"] == (
-        "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v13"
+        "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v14"
     )
     assert pinned_cdp.PROBE_CONTRACT["instrumentation_policy"] == (
-        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v16"
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v17"
     )
     assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V11["schema_version"] == 10
     assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V11["instrumentation_policy"].endswith("-v12")
@@ -1087,12 +1269,30 @@ def test_required_topology_wait_condition_is_event_driven() -> None:
     assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V13_SHA256 == (
         "6f688dfc91ef63ca096a1d2ed1df9b5d87053cdb46ef604467d6a8f723f395ac"
     )
+    assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V14["schema_version"] == 13
+    assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V14["instrumentation_policy"].endswith(
+        "-v16"
+    )
+    assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V14_SHA256 == (
+        "92dddabdd9b2ab9476d89fe97d5e3b7f084c3d7a409b07452b62fd3da3c57733"
+    )
     assert pinned_cdp.PROBE_CONTRACT["worker_webtransport_probe_schema_version"] == 1
     assert pinned_cdp.PROBE_CONTRACT["chromium_version"] == "143.0.7499.4"
     assert pinned_cdp.PROBE_CONTRACT["chromium_executable"] == ("/usr/local/bin/qcsd-chromium")
     assert pinned_cdp.PROBE_CONTRACT["observation_timeout_ms"] == 10_000
     assert pinned_cdp.PROBE_CONTRACT["required_quiet_interval_ms"] == 250
     assert pinned_cdp.PROBE_CONTRACT["target_activity_schema_version"] == 1
+    assert pinned_cdp.PROBE_CONTRACT[
+        "srcdoc_pseudo_document_summary_schema_version"
+    ] == pinned_cdp.SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION
+    assert pinned_cdp.SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION == 2
+    assert pinned_cdp.PROBE_CONTRACT["srcdoc_pseudo_document_policy"] == (
+        pinned_cdp.SRCDOC_PSEUDO_DOCUMENT_POLICY
+    )
+    assert pinned_cdp.SRCDOC_PSEUDO_DOCUMENT_POLICY == (
+        "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-v1"
+    )
+    assert pinned_cdp.PROBE_CONTRACT["required_srcdoc_pseudo_document_count"] == 1
     assert pinned_cdp.PROBE_CONTRACT["playwright_driver_binding"] == (
         pinned_cdp.EXPECTED_PLAYWRIGHT_DRIVER_BINDING
     )
@@ -1118,6 +1318,10 @@ def test_required_topology_wait_condition_is_event_driven() -> None:
     )
     assert (
         "dedicated-and-shared-worker-webtransport-blocked-after-prearm-with-exact-telemetry"
+        in pinned_cdp.PROBE_CONTRACT["required_observations"]
+    )
+    assert (
+        "root-about-srcdoc-loader-bound-orphan-abort-lifecycle"
         in pinned_cdp.PROBE_CONTRACT["required_observations"]
     )
 
@@ -1520,6 +1724,7 @@ def test_probe_creates_browser_session_for_shared_worker_guard(
     browser_session = object()
     page_session = object()
     guard_sessions: list[tuple[object, object]] = []
+    router_options: list[dict[str, object]] = []
     start_order: list[str] = []
     cleanup_order: list[str] = []
 
@@ -1588,8 +1793,9 @@ def test_probe_creates_browser_session_for_shared_worker_guard(
             return None
 
     class Router:
-        def __init__(self, requested_session: object, **_kwargs: object) -> None:
+        def __init__(self, requested_session: object, **kwargs: object) -> None:
             assert requested_session is page_session
+            router_options.append(dict(kwargs))
 
         def start(self) -> None:
             start_order.append("router")
@@ -1666,6 +1872,7 @@ def test_probe_creates_browser_session_for_shared_worker_guard(
     assert len(guard_sessions) == 1
     assert guard_sessions[0][0] is browser_session
     assert isinstance(guard_sessions[0][1], Router)
+    assert router_options[0]["track_root_srcdoc_lifecycle"] is True
     assert start_order == ["router", "browser-guard"]
     assert cleanup_order == [
         "router-begin-abort",

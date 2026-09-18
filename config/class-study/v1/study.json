@@ -3,15 +3,28 @@
   "artifact_type": "qcsd-class-study-prospective-contract",
   "study_id": "classifier-multiorigin100-v1",
   "prospective_acquisition_amendment": {
-    "schema_version": 1,
-    "date": "2026-09-15",
+    "schema_version": 2,
+    "date": "2026-09-19",
     "scope": "new-source-bound-acquisition-only-no-historical-evidence-promotion",
-    "reason": "separate-public-page-acquisition-authority-from-defence-foundation-and-stop-after-deterministically-sufficient-terminal-prefixes",
-    "acquisition_schema_version": 6,
-    "completion_schema_version": 3,
+    "reason": "retire-the-v96-cdp-interception-contract-and-bind-srcdoc-loader-lifecycle-evidence-before-new-public-page-acquisition",
+    "acquisition_schema_version": 7,
+    "checkpoint_schema_version": 3,
+    "terminal_schema_version": 4,
+    "completion_schema_version": 4,
+    "document_response_schema_version": 2,
+    "pinned_cdp_probe_schema_version": 15,
+    "render_observation_schema_version": 4,
+    "discovery_event_audit_schema_version": 5,
+    "passive_render_contract_schema_version": 4,
     "catalogue_and_order": "unchanged-600-candidates-120-per-stratum",
     "final_endpoint": "unchanged-100-classes-900-nine-mode-certification-and-16000-eight-mode-formal-samples",
-    "historical_schema_policy": "verify-only-never-resume-under-amended-source"
+    "historical_schema_policy": "verify-only-never-resume-under-amended-source",
+    "retired_v96_contract": {
+      "acquisition_schema_version": 6,
+      "completion_schema_version": 3,
+      "pinned_cdp_probe_schema_version": 14,
+      "authority": "historical-verify-only-never-current-admission"
+    }
   },
   "status": {
     "phase": "candidate-catalogue-created",
@@ -146,9 +159,16 @@
     "service_worker_dependency": "forbidden",
     "cross-domain-redirect-alias": "forbidden",
     "approved_origins": "explicit-and-frozen",
+    "cdp_target_instrumentation_policy": "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v17",
+    "render_observation_schema_version": 4,
+    "discovery_event_audit_schema_version": 5,
+    "srcdoc_pseudo_document_contract": {
+      "schema_version": 2,
+      "policy": "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-v1"
+    },
     "passive_render_contract": {
-      "schema_version": 1,
-      "policy": "bounded-passive-render-quiescence-v1",
+      "schema_version": 4,
+      "policy": "bounded-passive-render-quiescence-v4",
       "viewport": {
         "width": 1365,
         "height": 768,
@@ -162,7 +182,23 @@
       "quiet_window_begins": "after-minimum-or-last-relevant-event-whichever-is-later",
       "hard_cap_after_load_ms": 30000,
       "poll_interval_ms": 100,
-      "active_request_scope": "all-network-request-occurrences",
+      "active_request_scope": "all-instrumented-urlloader-request-occurrences",
+      "non_replayable_egress_policy": "blocked-non-urlloader-egress-v1",
+      "non_replayable_egress_boundary": {
+        "page_frame_websocket": "playwright-route-before-page",
+        "paused_target_constructor_shim": true,
+        "cdp_network_events": "post-construction-tripwire-only",
+        "packet_level_completeness_claimed": false
+      },
+      "quiescence_requires": [
+        "no-active-network-request-occurrences",
+        "recursive-target-router-shutdown-ready",
+        "no-pending-shared-worker-bootstrap-prearm",
+        "all-observed-target-egress-shims-prearmed",
+        "terminal-root-srcdoc-loader-bound-orphan-abort-lifecycle",
+        "zero-non-replayable-egress-attempts",
+        "zero-browser-context-service-workers"
+      ],
       "relevant_events": [
         "network-request",
         "fetch-request",
@@ -170,11 +206,13 @@
         "target-attached",
         "target-detached",
         "target-destroyed",
-        "target-info-changed"
+        "target-info-changed",
+        "browser-internal-document",
+        "non-replayable-egress-attempt"
       ],
       "hard_cap_policy": "typed-candidate-rejection"
     },
-    "passive_render_contract_sha256": "690d1715642ae553f7329bb13f2458f3089545a4483460874abd7d546faa192d",
+    "passive_render_contract_sha256": "d5682b9b054a805866c06548acc8a9ebcdd388cfcd581eec80ac375d404baa31",
     "browser_navigation_timeout_ms": 60000,
     "passive_render_hard_cap_after_load_ms": 30000,
     "acquisition_action_timing_contract": {

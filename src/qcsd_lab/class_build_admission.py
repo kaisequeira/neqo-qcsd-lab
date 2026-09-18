@@ -107,12 +107,14 @@ _WORKLOAD_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 
 _FOUNDATION_SCHEMA = 4
 _READINESS_SCHEMA = 3
-_ACQUISITION_SCHEMA = 6
+_ACQUISITION_SCHEMA = 7
+_ACQUISITION_COMPLETION_SCHEMA = 4
+_ACQUISITION_CHECKPOINT_SCHEMA = 3
 _EVALUATION_SCHEMA = 2
 _SUCCESSOR_DECISION_SCHEMA = 3
 _SUCCESSOR_RESTART_SCHEMA = 2
-_PINNED_CDP_SCHEMA = 14
-_HISTORICAL_PINNED_CDP_SCHEMAS = frozenset({8, 9, 11, 12, 13})
+_PINNED_CDP_SCHEMA = 15
+_HISTORICAL_PINNED_CDP_SCHEMAS = frozenset({8, 9, 11, 12, 13, 14})
 # Mirrored from browser_egress_qualification and checked against its producer
 # in tests. Importing the package here would break the stdlib-only host gate.
 _BROWSER_EGRESS_FOUNDATION_SCHEMA = 6
@@ -1769,7 +1771,9 @@ class _Resolver:
             type(acquisition_schema) is not int
             or acquisition_schema != _ACQUISITION_SCHEMA
             or type(completion.get("completion_schema_version")) is not int
-            or completion.get("completion_schema_version") != 3
+            or completion.get("completion_schema_version") != _ACQUISITION_COMPLETION_SCHEMA
+            or type(completion.get("checkpoint_schema_version")) is not int
+            or completion.get("checkpoint_schema_version") != _ACQUISITION_CHECKPOINT_SCHEMA
             or not isinstance(provenance_sha256, str)
             or _DIGEST.fullmatch(provenance_sha256) is None
         ):
@@ -2931,19 +2935,42 @@ class _Resolver:
 
         return role, _require_same_build(linked)
 
-    def inspection_is_historical(self, raw: str | os.PathLike[str], receipt_type: str) -> bool:
+    def inspection_is_historical(
+        self,
+        raw: str | os.PathLike[str],
+        receipt_type: str,
+        *,
+        label: str = "class inspection target",
+    ) -> bool:
         """Classify only an explicit top-level inspection artefact as historical."""
 
         _path, _value, payload = _envelope(
             self.root,
             raw,
-            label="class inspection target",
+            label=label,
             expected_type=receipt_type,
         )
         if receipt_type in {_FOUNDATION, _READINESS}:
             schema = payload.get("attestation_schema_version")
             current = _FOUNDATION_SCHEMA if receipt_type == _FOUNDATION else _READINESS_SCHEMA
             return type(schema) is int and schema < current
+        if receipt_type == _ACQUISITION_AUTHORITY:
+            evidence = payload.get("evidence")
+            if not isinstance(evidence, Mapping):
+                return False
+            pinned_path = _bound_file(
+                self.root,
+                evidence.get("pinned_cdp_probe"),
+                label="historical acquisition pinned CDP probe",
+            )
+            _pinned_path, _pinned_value, pinned = _envelope(
+                self.root,
+                pinned_path,
+                label="historical acquisition pinned CDP probe",
+                expected_type=_PINNED_CDP,
+            )
+            schema = pinned.get("probe_schema_version")
+            return type(schema) is int and schema in _HISTORICAL_PINNED_CDP_SCHEMAS
         if receipt_type == _EVALUATION:
             schema = payload.get("schema_version")
             return type(schema) is int and schema < _EVALUATION_SCHEMA
@@ -4117,7 +4144,13 @@ def resolve_action_admission(
             raise ValueError("class-study attest requires --evaluation-receipt before Docker")
         add_results("canary_results", "formal_results")
     elif action == "status":
-        add_single("acquisition_authority", resolver.acquisition_authority)
+        raw_acquisition_authority = _single(values, "acquisition_authority")
+        if raw_acquisition_authority and not resolver.inspection_is_historical(
+            raw_acquisition_authority,
+            _ACQUISITION_AUTHORITY,
+            label="class acquisition authority",
+        ):
+            admissions.append(resolver.acquisition_authority(raw_acquisition_authority))
         for name, route, receipt_type in (
             (
                 "foundation",

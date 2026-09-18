@@ -40,10 +40,13 @@ from .browser_egress import (
 from .buflo_study import validate_build_execution_receipt
 from .cdp_targets import (
     CDP_TARGET_INSTRUMENTATION_POLICY,
+    SRCDOC_PSEUDO_DOCUMENT_POLICY,
+    SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
     BrowserSharedWorkerGuard,
     RecursiveCdpTargetRouter,
     validate_bootstrap_prearm_summary,
     validate_egress_prearm_summary,
+    validate_srcdoc_pseudo_document_summary,
 )
 from .class_study import (
     STUDY_ID,
@@ -70,9 +73,9 @@ from .playwright_driver import (
     LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
     LEGACY_OWNERSHIP_POLICY_RECEIPT,
     OWNERSHIP_POLICY_RECEIPT,
+    PLAYWRIGHT_VERSION,
     PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
     PREVIOUS_OWNERSHIP_POLICY_RECEIPT,
-    PLAYWRIGHT_VERSION,
     pinned_chromium_executable_path,
     playwright_driver_session,
     validate_default_playwright_driver_once,
@@ -109,9 +112,9 @@ _HISTORICAL_PINNED_CDP_RESOLVER_PROJECTION = {
 }
 
 RECEIPT_TYPE = "qcsd-class-study-pinned-cdp-probe"
-PROBE_SCHEMA_VERSION = 14
+PROBE_SCHEMA_VERSION = 15
 HISTORICAL_PROBE_SCHEMA_VERSION = 8
-HISTORICAL_PROBE_SCHEMA_VERSIONS = frozenset({8, 9, 11, 12, 13})
+HISTORICAL_PROBE_SCHEMA_VERSIONS = frozenset({8, 9, 11, 12, 13, 14})
 EXPECTED_PLAYWRIGHT_VERSION = PLAYWRIGHT_VERSION
 EXPECTED_CHROMIUM_EXECUTABLE = str(DEFAULT_CONFIGURED_EXECUTABLE)
 PROBE_OBSERVATION_TIMEOUT_MS = 10_000
@@ -277,15 +280,40 @@ _HISTORICAL_PROBE_CONTRACT_V13_SHA256 = canonical_json_sha256(
     _HISTORICAL_PROBE_CONTRACT_V13
 )
 
-# Outer schema 14 binds the v16 router lifecycle and remains source-bound by
-# the enclosing no-cache build receipt.
-PROBE_CONTRACT: dict[str, Any] = _worker_webtransport_probe_contract(
+# Outer schema 14 is immutable v96 evidence.  It binds the v16 router lifecycle
+# but predates the exact root ``about:srcdoc`` loader-bound orphan-abort proof.
+_HISTORICAL_PROBE_CONTRACT_V14 = _worker_webtransport_probe_contract(
     schema_version=13,
     policy="pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v13",
+    instrumentation_policy=(
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v16"
+    ),
+    playwright_driver_ownership_policy=OWNERSHIP_POLICY_RECEIPT,
+    playwright_driver_binding=EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
+)
+_HISTORICAL_PROBE_CONTRACT_V14_SHA256 = canonical_json_sha256(
+    _HISTORICAL_PROBE_CONTRACT_V14
+)
+
+# Outer schema 15 binds the v17 router and requires one exact, identifier-
+# minimised root ``about:srcdoc`` loader-bound orphan-abort lifecycle from the
+# local probe.  Schema 15 has not been released, so the corrected inner summary
+# schema can be bound here without inventing another outer receipt generation.
+PROBE_CONTRACT: dict[str, Any] = _worker_webtransport_probe_contract(
+    schema_version=14,
+    policy="pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v14",
     instrumentation_policy=CDP_TARGET_INSTRUMENTATION_POLICY,
     playwright_driver_ownership_policy=OWNERSHIP_POLICY_RECEIPT,
     playwright_driver_binding=EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
 )
+PROBE_CONTRACT["required_observations"].append(
+    "root-about-srcdoc-loader-bound-orphan-abort-lifecycle"
+)
+PROBE_CONTRACT["srcdoc_pseudo_document_summary_schema_version"] = (
+    SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION
+)
+PROBE_CONTRACT["srcdoc_pseudo_document_policy"] = SRCDOC_PSEUDO_DOCUMENT_POLICY
+PROBE_CONTRACT["required_srcdoc_pseudo_document_count"] = 1
 PROBE_CONTRACT_SHA256 = canonical_json_sha256(PROBE_CONTRACT)
 
 _TARGET_ACTIVITY_EVENTS = (
@@ -561,6 +589,7 @@ class _Handler(BaseHTTPRequestHandler):
         server.record_request(path)
         if path == "/":
             body = b"""<link rel='icon' href='data:,'>
+            <iframe srcdoc='<p>qcsd-root-srcdoc-lifecycle</p>'></iframe>
             <iframe src='http://b.test:PORT/frame'></iframe><script>
             window.qcsdWorkerResponses = {
                 dedicated_worker: null,
@@ -678,6 +707,7 @@ def run_pinned_cdp_probe(*, expected_uid: int, expected_gid: int) -> dict[str, A
     http_status_counts: dict[str, Counter[str]] = {}
     bootstrap_prearm_summary: dict[str, Any] | None = None
     egress_prearm_summary: dict[str, Any] | None = None
+    srcdoc_pseudo_document_summary: dict[str, Any] | None = None
     non_replayable_egress_summary: dict[str, Any] | None = None
     browser_egress_command_line: dict[str, object] | None = None
     browser_context_service_worker_count: int | None = None
@@ -799,6 +829,7 @@ def run_pinned_cdp_probe(*, expected_uid: int, expected_gid: int) -> dict[str, A
                 router = RecursiveCdpTargetRouter(
                     session,
                     on_event=event,
+                    track_root_srcdoc_lifecycle=True,
                     on_target_activity=target_activity.record,
                     on_non_replayable_egress=non_replayable_egress,
                 )
@@ -848,6 +879,9 @@ def run_pinned_cdp_probe(*, expected_uid: int, expected_gid: int) -> dict[str, A
                     raise RuntimeError("pinned CDP target activity changed after quiescence")
                 bootstrap_prearm_summary = router.bootstrap_prearm_summary
                 egress_prearm_summary = router.egress_prearm_summary
+                srcdoc_pseudo_document_summary = _validate_required_srcdoc_summary(
+                    router.srcdoc_pseudo_document_summary
+                )
                 non_replayable_egress_summary = egress_guard.success_summary()
                 normal_shutdown_cleanup_started = True
                 if _finish_render_shutdown(
@@ -957,6 +991,7 @@ def run_pinned_cdp_probe(*, expected_uid: int, expected_gid: int) -> dict[str, A
         "server_request_counts": server.request_count_snapshot(),
         "bootstrap_prearm_summary": bootstrap_prearm_summary,
         "egress_prearm_summary": egress_prearm_summary,
+        "srcdoc_pseudo_document_summary": srcdoc_pseudo_document_summary,
         "non_replayable_egress_summary": non_replayable_egress_summary,
         "browser_egress_command_line": browser_egress_command_line,
         "browser_context_service_worker_count": browser_context_service_worker_count,
@@ -1284,6 +1319,26 @@ def _validate_target_activity_summary(value: object) -> dict[str, Any]:
     return json.loads(canonical_json_bytes(value))
 
 
+def _validate_required_srcdoc_summary(value: object) -> dict[str, Any]:
+    """Require one exact identifier-minimised loader-bound lifecycle."""
+
+    summary = validate_srcdoc_pseudo_document_summary(value, require_terminal=True)
+    if (
+        summary["enabled"] is not True
+        or summary["total"] != 1
+        or summary["resolved"] != 1
+        or summary["pending"] != 0
+        or summary["aborted"] != 0
+        or summary["open_candidates"] != 0
+        or summary["network_history_saturated"] is not False
+        or summary["fetch_history_saturated"] is not False
+        or summary["candidate_limit_saturated"] is not False
+        or len(summary["diagnostics"]) != 1
+    ):
+        raise ValueError("pinned CDP srcdoc loader-bound topology evidence did not pass")
+    return summary
+
+
 def create_pinned_cdp_receipt(
     destination: Path,
     *,
@@ -1485,6 +1540,9 @@ def _validate_payload(
     elif probe_schema_version == 13:
         expected_contract = _HISTORICAL_PROBE_CONTRACT_V13
         expected_contract_sha256 = _HISTORICAL_PROBE_CONTRACT_V13_SHA256
+    elif probe_schema_version == 14:
+        expected_contract = _HISTORICAL_PROBE_CONTRACT_V14
+        expected_contract_sha256 = _HISTORICAL_PROBE_CONTRACT_V14_SHA256
     else:
         expected_contract = PROBE_CONTRACT
         expected_contract_sha256 = PROBE_CONTRACT_SHA256
@@ -1509,7 +1567,10 @@ def _validate_payload(
         payload.get("observation"),
         require_worker_response_consumption=probe_schema_version not in {8, 9},
         require_worker_webtransport_probe=probe_schema_version
-        in {12, 13, PROBE_SCHEMA_VERSION},
+        in {12, 13, 14, PROBE_SCHEMA_VERSION},
+        require_srcdoc_pseudo_document_summary=(
+            probe_schema_version == PROBE_SCHEMA_VERSION
+        ),
         expected_resolver_projection=(
             _HISTORICAL_PINNED_CDP_RESOLVER_PROJECTION
             if probe_schema_version in {8, 9, 11}
@@ -1543,6 +1604,7 @@ def _validate_observation(
     *,
     require_worker_response_consumption: bool = True,
     require_worker_webtransport_probe: bool = True,
+    require_srcdoc_pseudo_document_summary: bool = True,
     expected_playwright_driver_binding: Mapping[str, Any] = (EXPECTED_PLAYWRIGHT_DRIVER_BINDING),
     expected_resolver_projection: Mapping[str, Any] = (_PINNED_CDP_RESOLVER_PROJECTION),
 ) -> dict[str, Any]:
@@ -1598,6 +1660,8 @@ def _validate_observation(
         expected_topology_fields.add("worker_response_consumption")
     if require_worker_webtransport_probe:
         expected_topology_fields.add("worker_webtransport_probe")
+    if require_srcdoc_pseudo_document_summary:
+        expected_topology_fields.add("srcdoc_pseudo_document_summary")
     if not isinstance(topology, Mapping) or set(topology) != expected_topology_fields:
         raise ValueError("pinned CDP probe topology fields are invalid")
     target_types = topology.get("observed_target_types")
@@ -1646,6 +1710,8 @@ def _validate_observation(
     target_activity = _validate_target_activity_summary(topology.get("quiescent_target_activity"))
     if require_worker_webtransport_probe:
         _validate_worker_webtransport_probe(topology.get("worker_webtransport_probe"))
+    if require_srcdoc_pseudo_document_summary:
+        _validate_required_srcdoc_summary(topology.get("srcdoc_pseudo_document_summary"))
     activity_by_type = target_activity["by_target_type"]
     http_status_counts = topology.get("http_status_counts")
     server_request_counts = topology.get("server_request_counts")

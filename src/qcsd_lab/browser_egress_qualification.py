@@ -16,6 +16,7 @@ import os
 import re
 import secrets
 import stat
+import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from enum import Enum
@@ -234,6 +235,30 @@ REQUIRED_SOURCE_BINDING_PATHS = HISTORICAL_SOURCE_BINDING_PATHS + (
     "src/qcsd_lab/browser_egress_dns_evidence.py",
     "src/qcsd_lab/browser_egress_dns_packets.py",
 )
+
+# V96 completed under the current schema-6 browser contract immediately before
+# the acquisition contract changed.  Read-only authority replay must recover
+# its source bytes from this exact clean commit rather than silently comparing
+# its frozen bindings with a later worktree.  This is deliberately narrower
+# than schema-level historical admission: it cannot authorise execution and it
+# does not make any other schema-6 receipt portable across source changes.
+_V96_HISTORICAL_SOURCE_REPLAY_COHORT_VERSION = 96
+_V96_HISTORICAL_SOURCE_REPLAY_LAB_COMMIT = (
+    "6957614b83e67cced5fd262fe97814824d21c8f9"
+)
+_V96_HISTORICAL_SOURCE_REPLAY_SOURCE_PATHS_SHA256 = (
+    "44fa5f7d143648945ceb8337fbe70c8e55df93639287701384a8c017ba53fcd5"
+)
+_V96_HISTORICAL_SOURCE_REPLAY_SOURCE = {
+    "image_digest": "sha256:ea8ee4388fe840d5cd09b582edd0088a29bd294dd4e7be7f1ed2af7e00d14cb2",
+    "lab_commit": _V96_HISTORICAL_SOURCE_REPLAY_LAB_COMMIT,
+    "lab_dirty": False,
+    "lab_patch_sha256": EMPTY_SHA256,
+    "neqo_commit": "46313bef90ad392b7ca293ab7cf28108d2f35c7f",
+    "neqo_dirty": False,
+    "neqo_patch_sha256": EMPTY_SHA256,
+    "neqo_pinned_commit": "46313bef90ad392b7ca293ab7cf28108d2f35c7f",
+}
 
 # This policy is independently receipted, not inferred from whichever reader
 # happens to replay a result.  Historical foundations retain their old contract.
@@ -928,6 +953,85 @@ def validate_file_binding(
     return json.loads(canonical_json_bytes(value))
 
 
+def _validate_git_source_binding(
+    value: object,
+    *,
+    root: Path,
+    commit: str,
+) -> dict[str, Any]:
+    """Re-hash one source binding from an exact local Git commit blob."""
+
+    binding = validate_file_binding(value, label="browser-egress Git source")
+    if _COMMIT.fullmatch(commit) is None:
+        raise ValueError("browser-egress Git source commit is invalid")
+    repository = _safe_directory(root, label="browser-egress Git source repository")
+    object_name = f"{commit}:{binding['path']}"
+    try:
+        completed = subprocess.run(
+            [
+                "/usr/bin/git",
+                "--no-replace-objects",
+                "-c",
+                "core.fsmonitor=false",
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                f"safe.directory={repository}",
+                "-C",
+                str(repository),
+                "cat-file",
+                "blob",
+                object_name,
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=10,
+            env={
+                "GIT_NO_REPLACE_OBJECTS": "1",
+                "LANG": "C",
+                "LC_ALL": "C",
+            },
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ValueError("browser-egress Git source blob is unavailable") from error
+    if completed.returncode != 0:
+        raise ValueError("browser-egress Git source blob is unavailable")
+    blob = completed.stdout
+    if len(blob) != binding["size_bytes"] or hashlib.sha256(blob).hexdigest() != binding["sha256"]:
+        raise ValueError("browser-egress Git source binding does not verify")
+    return binding
+
+
+def _validate_v96_historical_source_replay(
+    payload: Mapping[str, Any],
+    *,
+    root: Path,
+    mode: FoundationVerificationMode,
+) -> None:
+    """Verify the exact v96 source snapshot without admitting live execution."""
+
+    if mode is not FoundationVerificationMode.PORTABLE_REPLAY:
+        raise ValueError("v96 browser-egress historical source is portable replay only")
+    source_files = payload.get("source_files")
+    if (
+        payload.get("schema_version") != FOUNDATION_SCHEMA_VERSION
+        or payload.get("cohort_version") != _V96_HISTORICAL_SOURCE_REPLAY_COHORT_VERSION
+        or payload.get("source") != _V96_HISTORICAL_SOURCE_REPLAY_SOURCE
+        or not isinstance(source_files, list)
+        or canonical_json_sha256([binding.get("path") for binding in source_files])
+        != _V96_HISTORICAL_SOURCE_REPLAY_SOURCE_PATHS_SHA256
+    ):
+        raise ValueError("v96 browser-egress historical source replay contract is invalid")
+    for binding in source_files:
+        _validate_git_source_binding(
+            binding,
+            root=root,
+            commit=_V96_HISTORICAL_SOURCE_REPLAY_LAB_COMMIT,
+        )
+
+
 def validate_source_binding(value: object, *, prepare_image_id: str) -> dict[str, Any]:
     if not isinstance(value, Mapping) or set(value) != SOURCE_METADATA_KEYS:
         raise ValueError("browser-egress source binding fields are invalid")
@@ -1356,6 +1460,7 @@ def deep_validate_foundation(
     build_validator: Callable[..., Mapping[str, Any]] | None = None,
     mode: FoundationVerificationMode = FoundationVerificationMode.PORTABLE_REPLAY,
     allow_historical: bool = False,
+    allow_v96_historical_source_replay: bool = False,
 ) -> dict[str, Any]:
     """Re-hash immutable inputs, optionally admitting live prepare execution.
 
@@ -1391,16 +1496,21 @@ def deep_validate_foundation(
     )
     validate_manifest_config(load_json(root / manifest_path), allow_historical=historical)
     validate_argv_config(load_json(root / ARGV_RELATIVE_PATH))
-    for binding, expected_path in zip(
-        payload["source_files"], _foundation_source_paths(payload["schema_version"]), strict=True
-    ):
-        validate_file_binding(
-            binding,
-            expected_path=expected_path,
-            root=root,
-            deep=True,
-            label="browser-egress source",
-        )
+    if allow_v96_historical_source_replay:
+        _validate_v96_historical_source_replay(payload, root=root, mode=mode)
+    else:
+        for binding, expected_path in zip(
+            payload["source_files"],
+            _foundation_source_paths(payload["schema_version"]),
+            strict=True,
+        ):
+            validate_file_binding(
+                binding,
+                expected_path=expected_path,
+                root=root,
+                deep=True,
+                label="browser-egress source",
+            )
     build = payload["build_execution"]
     validate_file_binding(
         {key: build[key] for key in ("path", "sha256", "size_bytes")},
@@ -4498,6 +4608,7 @@ def verify_qualification(
     build_validator: Callable[..., Mapping[str, Any]] | None = None,
     verification_mode: FoundationVerificationMode = FoundationVerificationMode.PORTABLE_REPLAY,
     allow_historical: bool = False,
+    allow_v96_historical_source_replay: bool = False,
     tshark: Path = Path("/usr/bin/tshark"),
     dumpcap: Path = Path("/usr/bin/dumpcap"),
 ) -> dict[str, Any]:
@@ -4517,6 +4628,7 @@ def verify_qualification(
         build_validator=build_validator,
         mode=verification_mode,
         allow_historical=allow_historical,
+        allow_v96_historical_source_replay=allow_v96_historical_source_replay,
     )
     if (
         expected_cohort_version is not None

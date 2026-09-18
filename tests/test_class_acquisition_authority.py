@@ -41,15 +41,15 @@ def acquisition_evidence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dic
     }
     state: dict[str, Any] = {"source": dict(source), "calls": [], "returncode": 0}
     monkeypatch.setattr(authority, "source_metadata", lambda: dict(state["source"]))
-    build_path = tmp_path / "build-execution-v23.json"
+    build_path = tmp_path / "build-execution-v96.json"
     build_path.write_text("{}\n", encoding="utf-8")
-    completion = tmp_path / "build-completion-v23.json"
+    completion = tmp_path / "build-completion-v96.json"
     completion.write_text("{}\n", encoding="utf-8")
     build = {
         "path": str(build_path),
         "sha256": sha256_file(build_path),
         "payload_sha256": "4" * 64,
-        "cohort_version": 23,
+        "cohort_version": 96,
         "collection_image": source["image_digest"],
         "completion_path": str(completion),
         "completion_sha256": sha256_file(completion),
@@ -67,7 +67,7 @@ def acquisition_evidence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dic
         assert path == build_path
         assert kwargs == {
             "expected_collection_image": source["image_digest"],
-            "expected_cohort_version": 23,
+            "expected_cohort_version": state.get("expected_cohort_version", 96),
             "allow_historical": False,
         }
         state["calls"].append("build")
@@ -93,17 +93,18 @@ def acquisition_evidence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dic
 
     def validate_pinned(path: Path, **kwargs: Any) -> dict[str, Any]:
         assert path == pinned_path
+        historical = state.get("historical", False)
         assert kwargs == {
             "build_execution_receipt": build_path,
-            "expected_cohort_version": 23,
-            "runtime_role": state.get("role", "collection"),
-            "allow_historical": False,
+            "expected_cohort_version": state.get("expected_cohort_version", 96),
+            "runtime_role": None if historical else state.get("role", "collection"),
+            "allow_historical": historical,
         }
         state["calls"].append("pinned")
         return copy.deepcopy(pinned)
 
     monkeypatch.setattr(authority, "validate_pinned_cdp_receipt", validate_pinned)
-    browser_root = tmp_path / "browser-egress-v23"
+    browser_root = tmp_path / "browser-egress-v96"
     browser_root.mkdir()
     final = browser_root / "final.json"
     final.write_text("{}\n", encoding="utf-8")
@@ -112,7 +113,7 @@ def acquisition_evidence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dic
         "sha256": sha256_file(final),
         "payload_sha256": "9" * 64,
         "qualification_id": authority.BROWSER_EGRESS_QUALIFICATION_ID,
-        "cohort_version": 23,
+        "cohort_version": 96,
         "qualification_started_at": "2026-08-01T02:10:00+00:00",
         "qualification_finished_at": "2026-08-01T02:20:00+00:00",
         "recorded_at": "2026-08-01T02:30:00+00:00",
@@ -122,8 +123,8 @@ def acquisition_evidence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dic
             "sha256": build["sha256"],
             "size_bytes": build_path.stat().st_size,
             "payload_sha256": build["payload_sha256"],
-            "cohort_version": 23,
-            "completion_path": "/lab/artifacts/buflo-study/build-completion-v23.json",
+            "cohort_version": 96,
+            "completion_path": "/lab/artifacts/buflo-study/build-completion-v96.json",
             "completion_sha256": build["completion_sha256"],
             **{f"{role}_image_id": image["id"] for role, image in build["images"].items()},
         },
@@ -134,11 +135,14 @@ def acquisition_evidence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dic
 
     def verify_browser(root: Path, **kwargs: Any) -> dict[str, Any]:
         assert root == browser_root
-        assert kwargs == {
+        expected_kwargs = {
             "lab_root": tmp_path,
-            "expected_cohort_version": 23,
+            "expected_cohort_version": state.get("expected_cohort_version", 96),
             "allow_historical": False,
         }
+        if state.get("historical", False):
+            expected_kwargs["allow_v96_historical_source_replay"] = True
+        assert kwargs == expected_kwargs
         state["calls"].append("browser")
         return copy.deepcopy(browser)
 
@@ -166,7 +170,7 @@ def acquisition_evidence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dic
     state.update(
         destination=tmp_path / "acquisition-authority.json",
         inputs={
-            "cohort_version": 23,
+            "cohort_version": 96,
             "build_execution_receipt": build_path,
             "pinned_cdp_receipt": pinned_path,
             "browser_egress_qualification_root": browser_root,
@@ -186,6 +190,33 @@ def _reseal(path: Path, payload: dict[str, Any]) -> None:
     path.write_bytes(canonical_json_bytes(bind_receipt(
         payload, receipt_type=authority.ACQUISITION_AUTHORITY_RECEIPT_TYPE
     )))
+
+
+def _rewrite_as_v96_historical_authority(state: dict[str, Any]) -> Path:
+    path = _create(state)
+    payload = load_json(path)["payload"]
+    state["historical"] = True
+    state["pinned"]["probe_schema_version"] = authority._V96_PINNED_CDP_PROBE_SCHEMA_VERSION
+    correctness = payload["acquisition_correctness"]
+    correctness.update(copy.deepcopy(authority._V96_ACQUISITION_CORRECTNESS_SPEC))
+    correctness["study_contract"] = copy.deepcopy(authority._V96_STUDY_CONTRACT)
+    context = authority._acquisition_authority_context(
+        cohort_version=96,
+        build_execution_receipt=state["inputs"]["build_execution_receipt"],
+        pinned_cdp_receipt=state["inputs"]["pinned_cdp_receipt"],
+        browser_egress_qualification_root=state["inputs"]["browser_egress_qualification_root"],
+        evidence_source=payload["source"],
+        runtime_role="collection",
+        recorded_study_contract=authority._V96_STUDY_CONTRACT,
+        allow_historical=True,
+    )
+    historical = authority._acquisition_authority_value(
+        context,
+        correctness=correctness,
+        recorded_at=payload["recorded_at"],
+    )
+    _reseal(path, historical)
+    return path
 
 
 def test_creation_runs_only_focused_gate_once_and_verification_is_read_only(
@@ -216,6 +247,109 @@ def test_creation_runs_only_focused_gate_once_and_verification_is_read_only(
     assert result["acquisition_correctness"]["stdout_sha256"] == hashlib.sha256(
         b"25 passed\n"
     ).hexdigest()
+
+
+def test_v96_authority_reconstructs_only_in_explicit_historical_verification(
+    acquisition_evidence: dict[str, Any],
+) -> None:
+    state = acquisition_evidence
+    path = _rewrite_as_v96_historical_authority(state)
+    result = authority.validate_class_acquisition_authority(
+        path,
+        allow_historical=True,
+    )
+    assert result["verification_status"] == "historical-verify-only"
+    assert (
+        result["evidence"]["pinned_cdp_probe"]["build_execution_identity"]
+        == result["build_execution_identity"]
+    )
+
+    state["historical"] = False
+    with pytest.raises(ValueError, match="verify-only"):
+        authority.validate_class_acquisition_authority(path)
+
+
+def test_offline_runtime_none_validates_current_authority_without_ambient_source(
+    acquisition_evidence: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = acquisition_evidence
+    path = _create(state)
+    state["role"] = None
+    monkeypatch.setattr(
+        authority,
+        "source_metadata",
+        lambda: pytest.fail("offline current validation read ambient source"),
+    )
+
+    result = authority.validate_class_acquisition_authority(
+        path,
+        runtime_role=None,
+    )
+
+    assert result["path"] == str(path.resolve())
+    assert state["calls"][-3:] == ["build", "pinned", "browser"]
+    assert "verification_status" not in result
+
+
+def test_offline_runtime_none_does_not_admit_v96_authority_as_current(
+    acquisition_evidence: dict[str, Any],
+) -> None:
+    state = acquisition_evidence
+    path = _rewrite_as_v96_historical_authority(state)
+    state["historical"] = False
+    state["role"] = None
+
+    with pytest.raises(ValueError, match="verify-only"):
+        authority.validate_class_acquisition_authority(
+            path,
+            runtime_role=None,
+        )
+
+
+def test_schema14_non_v96_authority_cannot_select_the_frozen_v96_contract(
+    acquisition_evidence: dict[str, Any],
+) -> None:
+    state = acquisition_evidence
+    state["historical"] = True
+    state["expected_cohort_version"] = 97
+    state["pinned"]["probe_schema_version"] = authority._V96_PINNED_CDP_PROBE_SCHEMA_VERSION
+
+    with pytest.raises(ValueError, match="exact v96 cohort"):
+        authority._acquisition_authority_context(
+            cohort_version=97,
+            build_execution_receipt=state["inputs"]["build_execution_receipt"],
+            pinned_cdp_receipt=state["inputs"]["pinned_cdp_receipt"],
+            browser_egress_qualification_root=state["inputs"]["browser_egress_qualification_root"],
+            evidence_source=state["source"],
+            runtime_role="collection",
+            recorded_study_contract=authority._V96_STUDY_CONTRACT,
+            allow_historical=True,
+        )
+
+
+@pytest.mark.parametrize("mutation", ("correctness", "build-identity", "study"))
+def test_v96_historical_authority_tampering_is_rejected(
+    acquisition_evidence: dict[str, Any],
+    mutation: str,
+) -> None:
+    state = acquisition_evidence
+    path = _rewrite_as_v96_historical_authority(state)
+    payload = load_json(path)["payload"]
+    if mutation == "correctness":
+        payload["acquisition_correctness"]["input_sha256"]["uv.lock"] = "e" * 64
+    elif mutation == "build-identity":
+        payload["build_execution_identity"]["sha256"] = "e" * 64
+    else:
+        payload["study_contract"]["sha256"] = "e" * 64
+        payload["acquisition_correctness"]["study_contract"]["sha256"] = "e" * 64
+    _reseal(path, payload)
+
+    with pytest.raises(ValueError):
+        authority.validate_class_acquisition_authority(
+            path,
+            allow_historical=True,
+        )
 
 
 @pytest.mark.parametrize("size_bytes", (None, True, 3.0, "3", 0, -1, 4))
@@ -273,7 +407,9 @@ def test_browser_consumer_retains_deep_verified_completion_in_historical_replay(
     def consume() -> dict[str, Any]:
         return authority._validate_browser_egress_qualification(
             state["inputs"]["browser_egress_qualification_root"],
-            cohort_version=23, build=state["build"], allow_historical=allow_historical,
+            cohort_version=96,
+            build=state["build"],
+            allow_historical=allow_historical,
         )
 
     if completion == "both" or (allow_historical and completion == "neither"):

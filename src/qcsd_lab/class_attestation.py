@@ -204,6 +204,47 @@ ACQUISITION_CORRECTNESS_TESTS = (
     "tests/test_class_build_admission_acquisition_authority.py",
 )
 
+# The last authority issued before the schema-7/schema-15 amendment remains
+# reproducible for read-only verification.  Its source-adjacent correctness
+# inputs and study contract are immutable historical data, not aliases for the
+# files in a later checkout.
+_V96_ACQUISITION_AUTHORITY_COHORT_VERSION = 96
+_V96_PINNED_CDP_PROBE_SCHEMA_VERSION = 14
+_V96_STUDY_CONTRACT = {
+    "path": "/lab/config/class-study/v1/study.json",
+    "sha256": "711eac705cd05e0c5bdbd8c6d4b8675dc11175d4b7300c0333e4e6cf229ac168",
+}
+_V96_ACQUISITION_CORRECTNESS_SPEC = {
+    "gate": "acquisition-focused-correctness",
+    "argv": [
+        "/opt/qcsd-venv/bin/python",
+        "-m",
+        "pytest",
+        "-p",
+        "no:cacheprovider",
+        *ACQUISITION_CORRECTNESS_TESTS,
+    ],
+    "cwd": "/lab",
+    "input_sha256": {
+        "pyproject.toml": "976e5c387654ec2e2899bb566f25424a496ddb6da3254c55073262c49cac25df",
+        "tests/test_acquisition_selection.py": "d973c685d5d66ffb3d54670b0bea2ddf7951cf7abe4cc57788edd8ffeb47e6f5",
+        "tests/test_acquisition_timing.py": "24708397756256a616abae96a475bf7993720e113cbbb2b6877ca27df0e4b155",
+        "tests/test_browser_egress.py": "485a373986ff18a5ac72b49130d9743ab6ff01cfb132f3f6a471b494b2dd7f3c",
+        "tests/test_cdp_targets.py": "16405a8ef1671ad4628319c6b0c5513ac35a94cbeb3b0f4de485e6a46d71680a",
+        "tests/test_class_acquisition.py": "523bd5c9245160b481f809ab14da1370be46be4a8a1848c8e65c90292bbb007a",
+        "tests/test_class_acquisition_authority.py": "38c2ee63e383cb8ad956545704c45aea3f27086e64d341662e804acc6603e9ac",
+        "tests/test_class_build_admission_acquisition_authority.py": "5cd81931065647d1efdcef6ba7c4a26aec81e7c4bcbaa2ed5d99e80ea4e955b4",
+        "tests/test_class_catalogue.py": "481c29f4cbaef6f1838dfbbc714991aaefe6ca284b40b4ee952b46b1adfb4fcd",
+        "tests/test_class_cohort.py": "1f4babc024fdbba6cc89f2df8fd1367dca83382a24ad48f8fc99f4c56f172850",
+        "tests/test_discover.py": "fcd0539475cc7252049116ff5a4484396da013f1d0d63acb098abb9c5aa315d4",
+        "tests/test_discovery_evidence.py": "b476e5f9e6c6ce1ab709825495e1ae2be546c28d615076f50db751191ab914d8",
+        "tests/test_manifest.py": "93ec9d2c26dbca1cb50f3ee17c37d3a13351e8a919127478109a340a1b919657",
+        "tests/test_playwright_driver.py": "981d04085bf1211821320a5cc6e605494e204a90c4a7c797b49d2f488e0b8c34",
+        "tests/test_prepare.py": "8a725b5d05b2125e8c68af7762dd53bc67318b4f66d55eb0d0eb0f960826b257",
+        "uv.lock": "eb9fbc7d641c821c597043b733575f1b2ccc519a13e6d025e9b6a1e19204cb1a",
+    },
+}
+
 _FINAL_GATES = (
     "class-readiness-attestation",
     "pre-block-canaries-1000-of-1000",
@@ -275,13 +316,19 @@ def create_class_acquisition_authority(
 
 
 def validate_class_acquisition_authority(
-    path: Path, *, runtime_role: str = "collection"
+    path: Path,
+    *,
+    runtime_role: str | None = "collection",
+    allow_historical: bool = False,
 ) -> dict[str, Any]:
-    """Reconstruct current acquisition-only evidence without executing tests.
+    """Reconstruct acquisition-only evidence without executing tests.
 
-    There is no historical-admission mode and no full-foundation fallback.
-    The role chooses only which exact image from the same pinned build must
-    be running; it cannot change the receipt's acquisition-only scope.
+    Historical validation is limited to the frozen v96 contract and is
+    verification-only.  The default remains current admission, and there is
+    no full-foundation fallback.  A concrete role chooses which exact image
+    from the same pinned build must be running; ``None`` is reserved for
+    runtime-independent reconstruction of current evidence and does not enable
+    historical validation or change the receipt's acquisition-only scope.
     """
 
     receipt_path, value, payload = _load_bound_receipt(
@@ -304,12 +351,16 @@ def validate_class_acquisition_authority(
         build_execution_receipt=_path_from_binding(
             evidence["build_execution"], label="acquisition build execution"
         ),
-        pinned_cdp_receipt=_pinned_cdp_path_from_binding(evidence["pinned_cdp_probe"]),
+        pinned_cdp_receipt=_pinned_cdp_path_from_binding(
+            evidence["pinned_cdp_probe"], allow_historical=allow_historical
+        ),
         browser_egress_qualification_root=_browser_egress_root_from_binding(
             evidence["browser_egress_qualification"]
         ),
         evidence_source=payload.get("source"),
         runtime_role=runtime_role,
+        recorded_study_contract=payload.get("study_contract"),
+        allow_historical=allow_historical,
     )
     expected = _acquisition_authority_value(
         context,
@@ -318,7 +369,7 @@ def validate_class_acquisition_authority(
     )
     if payload != expected:
         raise ValueError("class acquisition authority differs from reconstructed evidence")
-    return {
+    result = {
         "path": str(receipt_path),
         "sha256": sha256_file(receipt_path),
         "payload_sha256": value["payload_sha256"],
@@ -330,6 +381,84 @@ def validate_class_acquisition_authority(
             "browser_egress_packet_qualification": "pass",
         },
     }
+    if context["historical"]:
+        result["verification_status"] = "historical-verify-only"
+    return result
+
+
+def validate_current_acquisition_completion_authority(
+    completion_payload: Mapping[str, Any],
+    *,
+    runner_root: Path,
+) -> dict[str, Any]:
+    """Deep-verify the current authority bound by a schema-7 completion.
+
+    This is the offline publication boundary: it reconstructs the exact narrow
+    acquisition authority or current full-foundation fallback without requiring
+    the verifier to be running in either build image. Historical authorities
+    remain readable through their explicit verification path, but are never
+    accepted here as current completion authority.
+    """
+
+    current_versions = (
+        ("acquisition_schema_version", ACQUISITION_SCHEMA_VERSION),
+        ("completion_schema_version", ACQUISITION_COMPLETION_SCHEMA_VERSION),
+        ("checkpoint_schema_version", ACQUISITION_CHECKPOINT_SCHEMA_VERSION),
+    )
+    if not isinstance(completion_payload, Mapping) or any(
+        type(completion_payload.get(field)) is not int or completion_payload[field] != expected
+        for field, expected in current_versions
+    ):
+        raise ValueError("current acquisition completion requires exact 7/4/3 schemas")
+
+    provenance_path, _provenance_value, provenance = _load_bound_receipt(
+        Path(runner_root) / "provenance.json",
+        expected_type=ACQUISITION_PROVENANCE_TYPE,
+    )
+    if (
+        completion_payload.get("provenance_sha256") != sha256_file(provenance_path)
+        or provenance.get("acquisition_schema_version") != ACQUISITION_SCHEMA_VERSION
+    ):
+        raise ValueError("current acquisition completion provenance is not exact schema 7")
+
+    binding = provenance.get("acquisition_authority")
+    authority_path = _path_from_binding(
+        binding,
+        label="current acquisition authority",
+    )
+    authority_value = _load_regular_json(
+        authority_path,
+        "current acquisition authority",
+    )
+    receipt_type = authority_value.get("receipt_type")
+    if receipt_type == ACQUISITION_AUTHORITY_RECEIPT_TYPE:
+        validated = validate_class_acquisition_authority(
+            authority_path,
+            runtime_role=None,
+            allow_historical=False,
+        )
+    elif receipt_type == FOUNDATION_RECEIPT_TYPE:
+        validated = validate_class_foundation_attestation(
+            authority_path,
+            deep_code_gate=True,
+            runtime_role=None,
+            allow_historical=False,
+        )
+    else:
+        raise ValueError("current acquisition completion authority type is invalid")
+
+    expected_binding = {
+        "path": str(authority_path),
+        "sha256": sha256_file(authority_path),
+    }
+    if binding != expected_binding or any(
+        validated.get(field) != expected for field, expected in expected_binding.items()
+    ):
+        raise ValueError("current acquisition completion authority binding is not exact")
+    return {
+        "receipt_type": receipt_type,
+        **expected_binding,
+    }
 
 
 def _acquisition_authority_context(
@@ -339,14 +468,19 @@ def _acquisition_authority_context(
     pinned_cdp_receipt: Path,
     browser_egress_qualification_root: Path,
     evidence_source: object,
-    runtime_role: str,
+    runtime_role: str | None,
+    recorded_study_contract: object | None = None,
+    allow_historical: bool = False,
 ) -> dict[str, Any]:
     if type(cohort_version) is not int or cohort_version < 1:
         raise ValueError("class acquisition authority cohort must be a positive integer")
-    if runtime_role not in {"collection", "prepare"}:
+    if runtime_role not in {None, "collection", "prepare"}:
         raise ValueError("class acquisition authority runtime role is invalid")
     _validate_immutable_source(evidence_source, label="class acquisition authority source")
     source = dict(evidence_source)
+    # V96 retired only its acquisition/pinned-CDP contract.  Its completed
+    # schema-5 build and schema-6 browser qualification remain current-format
+    # dependencies and must not inherit the broader historical admission mode.
     build = validate_build_execution_receipt(
         build_execution_receipt,
         expected_collection_image=source["image_digest"],
@@ -358,27 +492,57 @@ def _acquisition_authority_context(
     identity = _build_identity(build)
     prepare_source = {**source, "image_digest": build["images"]["prepare"]["id"]}
     _validate_immutable_source(prepare_source, label="class acquisition prepare source")
-    if source_metadata() != (prepare_source if runtime_role == "prepare" else source):
+    if (
+        runtime_role is not None
+        and not allow_historical
+        and source_metadata() != (prepare_source if runtime_role == "prepare" else source)
+    ):
         raise ValueError("class acquisition authority runtime differs from its pinned build")
     pinned = validate_pinned_cdp_receipt(
         pinned_cdp_receipt,
         build_execution_receipt=build_execution_receipt,
         expected_cohort_version=cohort_version,
-        runtime_role=runtime_role,
-        allow_historical=False,
+        runtime_role=None if allow_historical else runtime_role,
+        allow_historical=allow_historical,
     )
+    pinned_schema = pinned.get("probe_schema_version")
+    historical = pinned_schema == _V96_PINNED_CDP_PROBE_SCHEMA_VERSION
+    if historical and not allow_historical:
+        raise ValueError("historical class acquisition authority is verify-only")
+    if historical and cohort_version != _V96_ACQUISITION_AUTHORITY_COHORT_VERSION:
+        raise ValueError("historical class acquisition authority is not the exact v96 cohort")
+    if pinned_schema not in {
+        _V96_PINNED_CDP_PROBE_SCHEMA_VERSION,
+        PINNED_CDP_PROBE_SCHEMA_VERSION,
+    }:
+        raise ValueError("class acquisition authority pinned CDP schema is unsupported")
+    if (
+        allow_historical
+        and not historical
+        and runtime_role is not None
+        and source_metadata() != (prepare_source if runtime_role == "prepare" else source)
+    ):
+        raise ValueError("class acquisition authority runtime differs from its pinned build")
     browser = _validate_browser_egress_qualification(
         browser_egress_qualification_root,
         cohort_version=cohort_version,
         build=build,
         allow_historical=False,
+        allow_v96_historical_source_replay=historical,
     )
+    study_contract = (
+        _V96_STUDY_CONTRACT
+        if historical
+        else _file_binding(LAB_ROOT / "config/class-study/v1/study.json")
+    )
+    if historical and recorded_study_contract != _V96_STUDY_CONTRACT:
+        raise ValueError("historical class acquisition authority study contract is invalid")
     return {
         "cohort_version": cohort_version,
         "source": source,
         "prepare_source": prepare_source,
         "build_execution_identity": identity,
-        "study_contract": _file_binding(LAB_ROOT / "config/class-study/v1/study.json"),
+        "study_contract": dict(study_contract),
         "evidence": {
             "build_execution": _file_binding(build_execution_receipt),
             "pinned_cdp_probe": _pinned_cdp_binding(pinned),
@@ -388,6 +552,7 @@ def _acquisition_authority_context(
         },
         "build_finished_at": build["finished_at"],
         "pinned_recorded_at": pinned["recorded_at"],
+        "historical": historical,
     }
 
 
@@ -436,7 +601,11 @@ def _run_acquisition_correctness(context: Mapping[str, Any]) -> dict[str, Any]:
 def _acquisition_authority_value(
     context: Mapping[str, Any], *, correctness: object, recorded_at: object
 ) -> dict[str, Any]:
-    spec = _acquisition_correctness_spec()
+    spec = (
+        _V96_ACQUISITION_CORRECTNESS_SPEC
+        if context.get("historical") is True
+        else _acquisition_correctness_spec()
+    )
     if not isinstance(correctness, Mapping) or set(correctness) != {
         "schema_version", "gate", "argv", "cwd", "input_sha256", "source",
         "build_execution_identity", "study_contract", "started_at", "finished_at",
@@ -540,10 +709,15 @@ def validate_class_foundation_attestation(
     path: Path,
     *,
     deep_code_gate: bool = True,
-    runtime_role: str = "collection",
+    runtime_role: str | None = "collection",
     allow_historical: bool = False,
 ) -> dict[str, Any]:
-    """Reconstruct the seven prerequisite gates from immutable evidence."""
+    """Reconstruct the seven prerequisite gates from immutable evidence.
+
+    ``runtime_role=None`` skips only the ambient-image comparison needed by an
+    offline current-evidence join. Historical reconstruction still requires
+    the separate explicit allowance.
+    """
 
     receipt_path, value, payload = _load_bound_receipt(path, expected_type=FOUNDATION_RECEIPT_TYPE)
     _validate_foundation_envelope(payload, allow_historical=allow_historical)
@@ -1061,7 +1235,7 @@ def _foundation_value(
     recorded_at: object,
     deep_code_gate: bool,
     evidence_source: object,
-    pinned_runtime_role: str,
+    pinned_runtime_role: str | None,
     attestation_schema_version: int = FOUNDATION_SCHEMA_VERSION,
     allow_historical: bool = False,
 ) -> dict[str, Any]:
@@ -3374,10 +3548,12 @@ def _validate_immutable_source(value: object, *, label: str) -> None:
 def _validate_foundation_runtime(
     payload: Mapping[str, Any],
     *,
-    runtime_role: str,
+    runtime_role: str | None,
     build_execution_receipt: Path,
     allow_historical: bool = False,
 ) -> None:
+    if runtime_role is None:
+        return
     if runtime_role not in {"collection", "prepare"}:
         raise ValueError("class foundation runtime role is invalid")
     bound_source = payload.get("source")
@@ -3727,6 +3903,7 @@ def _pinned_cdp_binding(receipt: Mapping[str, Any]) -> dict[str, Any]:
         11,
         12,
         13,
+        14,
         PINNED_CDP_PROBE_SCHEMA_VERSION,
     }:
         identity = receipt.get("build_execution_identity")
@@ -3742,14 +3919,17 @@ def _validate_browser_egress_qualification(
     cohort_version: int,
     build: Mapping[str, Any],
     allow_historical: bool = False,
+    allow_v96_historical_source_replay: bool = False,
 ) -> dict[str, Any]:
     qualification_root = _regular_directory(root, "browser-egress qualification root")
-    receipt = verify_browser_egress_qualification(
-        qualification_root,
-        lab_root=LAB_ROOT,
-        expected_cohort_version=cohort_version,
-        allow_historical=allow_historical,
-    )
+    verification_kwargs = {
+        "lab_root": LAB_ROOT,
+        "expected_cohort_version": cohort_version,
+        "allow_historical": allow_historical,
+    }
+    if allow_v96_historical_source_replay:
+        verification_kwargs["allow_v96_historical_source_replay"] = True
+    receipt = verify_browser_egress_qualification(qualification_root, **verification_kwargs)
     required = {
         "path",
         "sha256",

@@ -1,0 +1,529 @@
+{
+  "schema3_4": {
+    "discovery_event_audit_schema_version": 2,
+    "document_response_schema_version": 1,
+    "instrumentation_policy": "playwright-1.52-public-cdp-recursive-non-flat-paused-debugger-targets-v3",
+    "passive_render_contract": {
+      "active_request_scope": "all-network-request-occurrences",
+      "cache": "disabled",
+      "hard_cap_after_load_ms": 30000,
+      "hard_cap_policy": "typed-candidate-rejection",
+      "interaction": "none",
+      "minimum_after_load_ms": 10000,
+      "policy": "bounded-passive-render-quiescence-v1",
+      "poll_interval_ms": 100,
+      "quiet_window_begins": "after-minimum-or-last-relevant-event-whichever-is-later",
+      "quiet_window_ms": 3000,
+      "relevant_events": [
+        "network-request",
+        "fetch-request",
+        "network-terminal",
+        "target-attached",
+        "target-detached",
+        "target-destroyed",
+        "target-info-changed"
+      ],
+      "schema_version": 1,
+      "service_workers": "bypassed-and-registration-blocked",
+      "viewport": {
+        "deviceScaleFactor": 1,
+        "height": 768,
+        "width": 1365
+      }
+    },
+    "passive_render_contract_sha256": "690d1715642ae553f7329bb13f2458f3089545a4483460874abd7d546faa192d",
+    "render_observation": {
+      "active_request_count": 0,
+      "active_request_ids": [],
+      "clock": "monotonic-relative-ms",
+      "cutoff_ms": 13000,
+      "cutoff_reason": "quiescent",
+      "last_relevant_event_ms": 0,
+      "load_event_ms": 0,
+      "navigation_started_ms": 0,
+      "quiet_started_ms": 10000,
+      "schema_version": 1
+    }
+  },
+  "schema5_v10": {
+    "discovery_event_audit_schema_version": 4,
+    "document_response_schema_version": 1,
+    "fixed_provenance": {
+      "acquisition_action_timing_contract": {
+        "batch_selection": "same-priority-same-stage-immutable-catalogue-order-compatible-pair-otherwise-singleton",
+        "bounded_candidates": 2,
+        "browser_navigation_timeout_ms": 60000,
+        "browser_navigation_timeout_scope": "navigation-component-only",
+        "coordinator_merge": "deterministic-immutable-catalogue-order-after-all-workers-return",
+        "direct_public_acquisition_run": "forbidden-without-validated-watcher-scope-authority",
+        "global_live_page_cap": 5,
+        "inner_timeout": {
+          "cleanup_grace_ms": 120000,
+          "hard_deadline_ms": 1920000,
+          "hard_signal": "SIGKILL",
+          "scope": "in-container-coordinator-process-group",
+          "soft_deadline_ms": 1800000,
+          "soft_signal": "SIGINT"
+        },
+        "interruption_recovery": "published-active-batch-attempts-become-interrupted-never-completed",
+        "outer_timeout": {
+          "cleanup_grace_ms": 120000,
+          "final_signal": "SIGKILL",
+          "hard_deadline_ms": 2040000,
+          "runtime_max_ms": 1920000,
+          "runtime_signal": "SIGINT",
+          "scope": "canonical-host-acquisition-watch-user-systemd-scope"
+        },
+        "passive_render_hard_cap_after_load_ms": 30000,
+        "passive_render_timeout_scope": "post-load-component-only",
+        "policy": "bounded-compatible-candidate-batch-whole-action-deadline-v2",
+        "schema_version": 2,
+        "successful_ledger_attempt_duration_limit_ms": 1800000,
+        "transactional_publication": "active-batch-and-pending-attempts-published-before-parallel-work",
+        "whole_action_duration_evidence": "externally-enforced-process-status-no-per-action-duration-receipt"
+      },
+      "baseline_scheduling_contract": {
+        "acquisition_outer_configured_hard_cutoff_ms": 2040000,
+        "collision_scope": "baseline-arming-and-t+24h-t+72h-action-starts-across-batches",
+        "global_live_page_cap": 5,
+        "longest_probe_window_width_ms": 1800000,
+        "maximum_candidates_per_batch": 2,
+        "minimum_baseline_spacing_ms": 2400000,
+        "navigation_phase": "separate-bounded-action-before-baseline",
+        "outer_probes": "watcher-launches-acquisition-run-at-window-earliest",
+        "policy": "serial-nonoverlapping-stability-window-batch-reservations-v2",
+        "schedule_validation_unit": "baseline-batches-not-raw-candidate-timestamps",
+        "scheduler_margin_ms": 50000,
+        "schema_version": 2,
+        "serial_action_start_offsets_ms": [
+          0,
+          85500000,
+          258300000
+        ],
+        "short_probe": "same-action-wait-until-t+30s-earliest",
+        "stability_window_earliest_offsets_ms": [
+          25000,
+          85500000,
+          258300000
+        ],
+        "status_configured_hard_cutoff_ms": 310000,
+        "strict_serial_zero_duration_projection": {
+          "algorithm": "greedy-earliest-safe-baseline-batches",
+          "batch_count": 300,
+          "candidate_count": 600,
+          "last_baseline_offset_ms": 2784000000,
+          "last_t+72h_earliest_offset_ms": 3042300000,
+          "maximum_candidates_per_batch": 2,
+          "pairing_assumption": "all-candidates-form-300-compatible-two-candidate-batches"
+        },
+        "unpaired_candidate_policy": "singleton-when-no-compatible-partner",
+        "window_start_reservation_ms": 2400000,
+        "within_batch_baseline": "one-equal-baseline-per-recorded-baseline-batch"
+      },
+      "browser_navigation_timeout_ms": 60000,
+      "browser_tool": {
+        "chromium_revision": "1200",
+        "chromium_version": "143.0.7499.4",
+        "configured_executable_path": "/usr/local/bin/qcsd-chromium",
+        "name": "playwright-chromium",
+        "playwright_driver": {
+          "browsers_json_sha256": "b509d013de89d621a142818e0937de356fbb0169096922c08581a4f83e463b8e",
+          "chromium_executable_sha256": "6f72e258e11d85ec413b1671422c83d65af9f9ddcbc811657a43700b324ce928",
+          "content_sha256": "f2f774b92c6074dcab28bc5a0afa13b43c70e372057558b7246d4ba168602d51",
+          "payload_sha256": "926b894666e6b5d6dcdb31dc28d581a9cb22eba1f6dc924be74b49402c44e3c3",
+          "policy": {
+            "activation_environment_variable": "QCSD_EXCLUSIVE_CDP_TARGET_OWNERSHIP",
+            "activation_value": "1",
+            "browser_service_containment": {
+              "dns_over_https_policy": {
+                "DnsOverHttpsMode": "off"
+              },
+              "network_prediction_policy": {
+                "NetworkPredictionOptions": 2
+              },
+              "ordinary_playwright_launch": true,
+              "same_approved_origin_speculation_prefetch_required": true
+            },
+            "chromium_child_environment": {
+              "HOME": "/nonexistent",
+              "LANG": "C",
+              "LC_ALL": "C",
+              "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+              "TMPDIR": "/tmp",
+              "TZ": "UTC"
+            },
+            "driver_start_environment_lock": "held-only-through-sync-playwright-enter",
+            "forbidden_driver_environment_variables": [
+              "NODE_OPTIONS",
+              "NODE_PATH",
+              "PLAYWRIGHT_NODEJS_PATH",
+              "PLAYWRIGHT_NODEJS_PORT",
+              "PLAYWRIGHT_DISABLE_FORCED_CHROMIUM_PROXIED_LOOPBACK",
+              "PLAYWRIGHT_DISABLE_SERVICE_WORKER_CONSOLE",
+              "PLAYWRIGHT_DISABLE_SERVICE_WORKER_NETWORK",
+              "PLAYWRIGHT_HOST_PLATFORM_OVERRIDE",
+              "PLAYWRIGHT_LEGACY_SCREENSHOT",
+              "PLAYWRIGHT_SKIP_NAVIGATION_CHECK",
+              "PWDEBUG",
+              "PW_CHROMIUM_ATTACH_TO_OTHER",
+              "SELENIUM_REMOTE_CAPABILITIES",
+              "SELENIUM_REMOTE_HEADERS",
+              "SELENIUM_REMOTE_URL"
+            ],
+            "inactive_semantics": "native-playwright-unfiltered-auto-attach",
+            "name": "qcsd-conditional-exclusive-recursive-cdp-target-ownership-v6",
+            "shared_worker_pause_fix": {
+              "chromium_commit": "0606a60db66fc14d6fd76c8d532392b26504b308",
+              "chromium_position": 1529406,
+              "required_semantics": "wait-for-debugger-on-start-holds-new-shared-worker"
+            }
+          },
+          "receipt_sha256": "7194034787b5c1c34ffd88d62cf9969b1510fca7955a0ed7b7c3168f23a8bfb2"
+        },
+        "playwright_version": "1.57.0",
+        "schema_version": 1
+      },
+      "cdp_target_instrumentation_policy": "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v10",
+      "domain_safety_policy": {
+        "denied_exact_domains": [
+          "deep-nudes.com",
+          "ebonyfacial.net",
+          "greenxh.live",
+          "hanime.tv",
+          "joyclub.de",
+          "mygirls.me",
+          "xvideos.tube",
+          "xnxx.com"
+        ],
+        "denied_substrings": [
+          "adult",
+          "bet",
+          "casino",
+          "escort",
+          "gambl",
+          "hentai",
+          "malware",
+          "phishing",
+          "porn",
+          "sex",
+          "xxx"
+        ],
+        "policy": "frozen-domain-safety-deny-v2"
+      },
+      "domain_safety_policy_sha256": "ab087e57ecc61e8bf200522f4f4a3f9d582fc20774c4cf661abd25c364b5f13c",
+      "eligibility_inputs": [
+        "page-safety",
+        "three-window-technical-stability"
+      ],
+      "navigation_implementation": "playwright-public-cdp-recursive-catalogue-boundary-egress-guard-v4",
+      "non_replayable_egress_contract": {
+        "browser_popup_tab_tripwire_is_pre_io": false,
+        "cdp_tripwires_are_pre_io": false,
+        "chromium_popup_blocking": "default-enabled",
+        "context_init_target_type": "page",
+        "context_page_init_sha256": "dbfe0d8953c31631129dfe030d090cf5f7b9936c9b042336d456101e59ed33aa",
+        "fresh_image_kernel_counter_qualification_required": true,
+        "no_pings_is_admission_boundary": false,
+        "packet_level_completeness_claimed": false,
+        "page_frame_websocket_boundary": "playwright-browser-context-route-before-first-page",
+        "policy": "blocked-non-urlloader-egress-v1",
+        "popup_navigation_guard_sha256": "69b182afbcd0c9bb0b8ecb2c3224a4bc3e6443c1572b939f074eb02e367f2dfe",
+        "popup_urlloader_boundary": "playwright-browser-context-navigation-route-before-first-page-bound-to-root-page",
+        "required_chromium_switches": [
+          "--disable-background-networking",
+          "--disable-client-side-phishing-detection",
+          "--disable-component-update",
+          "--disable-crashpad-for-testing",
+          "--disable-default-apps",
+          "--disable-domain-reliability",
+          "--disable-extensions",
+          "--disable-quic",
+          "--disable-sync",
+          "--no-first-run",
+          "--no-pings",
+          "--no-proxy-server",
+          "--no-sandbox",
+          "--no-service-autorun",
+          "--no-zygote"
+        ],
+        "schema_version": 2,
+        "service_worker_policy": "browser-context-block-plus-browser-target-tripwire",
+        "target_shim_schema_version": 1,
+        "target_shim_sha256": {
+          "iframe": "c3e6347e810fbc1b1c1517a0d6888d1743578cebbcb6641df763ef1a11cf9fdf",
+          "page": "c3e6347e810fbc1b1c1517a0d6888d1743578cebbcb6641df763ef1a11cf9fdf",
+          "shared_worker": "41e85a575dac0d0cc1bd67a904ae28666a15f9ab878825170901b58ad736ad7e",
+          "worker": "41e85a575dac0d0cc1bd67a904ae28666a15f9ab878825170901b58ad736ad7e"
+        },
+        "worker_websocket_boundary": "paused-target-runtime-shim"
+      },
+      "origin_policy": {
+        "dns": "all-answers-global-and-browser-host-resolver-pinned",
+        "max_navigation_attempts": 3,
+        "max_navigation_redirect_passes": 8,
+        "max_observed_audit_origins": 512,
+        "max_origins": 32,
+        "max_passes": 8,
+        "max_probe_attempts_per_window": 3,
+        "navigation_seed_scope": "page-specific-in-boundary-https-get-origins",
+        "neqo": "QCSD_PUBLIC_ORIGIN_ONLY-resolve-once-connect-exact-address",
+        "request_instance_identity": "observation-order-resource-id-with-preceding-initiator-and-redirect-edges",
+        "resource_graph_scope": "iteratively-converged-public-https-get-request-instances"
+      },
+      "passive_render_contract": {
+        "active_request_scope": "all-instrumented-urlloader-request-occurrences",
+        "cache": "disabled",
+        "hard_cap_after_load_ms": 30000,
+        "hard_cap_policy": "typed-candidate-rejection",
+        "interaction": "none",
+        "minimum_after_load_ms": 10000,
+        "non_replayable_egress_boundary": {
+          "cdp_network_events": "post-construction-tripwire-only",
+          "packet_level_completeness_claimed": false,
+          "page_frame_websocket": "playwright-route-before-page",
+          "paused_target_constructor_shim": true
+        },
+        "non_replayable_egress_policy": "blocked-non-urlloader-egress-v1",
+        "policy": "bounded-passive-render-quiescence-v3",
+        "poll_interval_ms": 100,
+        "quiescence_requires": [
+          "no-active-network-request-occurrences",
+          "recursive-target-router-shutdown-ready",
+          "no-pending-shared-worker-bootstrap-prearm",
+          "all-observed-target-egress-shims-prearmed",
+          "zero-non-replayable-egress-attempts",
+          "zero-browser-context-service-workers"
+        ],
+        "quiet_window_begins": "after-minimum-or-last-relevant-event-whichever-is-later",
+        "quiet_window_ms": 3000,
+        "relevant_events": [
+          "network-request",
+          "fetch-request",
+          "network-terminal",
+          "target-attached",
+          "target-detached",
+          "target-destroyed",
+          "target-info-changed",
+          "non-replayable-egress-attempt"
+        ],
+        "schema_version": 3,
+        "service_workers": "bypassed-and-registration-blocked",
+        "viewport": {
+          "deviceScaleFactor": 1,
+          "height": 768,
+          "width": 1365
+        }
+      },
+      "passive_render_contract_sha256": "8679865eb1125ff78d614e06b89432a0c73b62326d6042f216a3320480a74ec9",
+      "passive_render_hard_cap_after_load_ms": 30000,
+      "prohibited_inputs": [
+        "classifier",
+        "defence",
+        "latency",
+        "bandwidth",
+        "privacy"
+      ],
+      "registrable_domain_policy": "exact-frozen-tranco-candidate-domain"
+    },
+    "fixed_provenance_sha256": "8c79b0093409f359b78a4bb5abd526ab6446ef872da56981471939e5cfd23820",
+    "render_observation_schema_version": 3,
+    "source_revision": "a20382c658857ca0362fcf877559c8e3320ac376"
+  },
+  "fixed_projection_overlays": {
+    "schema5_driver_v7": {
+      "browser_tool": {
+        "playwright_driver": {
+          "content_sha256": "4d8f576c788db015ecfd977fb3868a437c55ba45b39da7943990f3938ee7798f",
+          "payload_sha256": "91982e3a741cc7bc58c4b3abe85358cd63946ed6db11e15dd754b0e7cf51409f",
+          "policy": {
+            "exclusive_context_route": {
+              "http_credentials": "rejected-before-network-manager-state-mutation",
+              "playwright_fetch_resource_types": [
+                "Document"
+              ],
+              "purpose": "pre-io-popup-and-document-navigation-policy",
+              "request_stage": "Request",
+              "subresource_admission_owner": "qcsd-recursive-cdp-fetch"
+            },
+            "name": "qcsd-conditional-exclusive-recursive-cdp-target-ownership-v7"
+          },
+          "receipt_sha256": "709f81c4f07b3b06eb6bd4c29f4b6eb69a5e8157f8378638b75a453226ed0caa"
+        }
+      }
+    },
+    "schema5_driver_v8": {
+      "browser_tool": {
+        "playwright_driver": {
+          "content_sha256": "3f8b25f097d439ccbfa4404efc887357d441d437ccefaca5852a93e3dfe28186",
+          "payload_sha256": "3e14582e31c0f2bf9fb7f5c6222643dd351403e44a02a8096dc8441f91e820e0",
+          "policy": {
+            "exclusive_context_route": {
+              "http_credentials": "rejected-at-awaited-pre-context-and-runtime-mutation-boundaries",
+              "http_credentials_rejection": {
+                "client_certificate_proxy_override": "allowed-when-unauthenticated",
+                "context_reuse": "new-context-guarded-and-reset-cannot-introduce-credentials",
+                "ephemeral_context": "browser-new-context-before-validation-or-target-creation",
+                "persistent_context": "browser-type-launch-persistent-context-before-browser-launch",
+                "runtime_update": "browser-context-set-http-credentials-before-mutation",
+                "scope": "exclusive-chromium-only"
+              },
+              "playwright_fetch_resource_types": [
+                "Document"
+              ],
+              "purpose": "pre-io-popup-and-document-navigation-policy",
+              "request_stage": "Request",
+              "subresource_admission_owner": "qcsd-recursive-cdp-fetch"
+            },
+            "name": "qcsd-conditional-exclusive-recursive-cdp-target-ownership-v8"
+          },
+          "receipt_sha256": "a5aada06e4fd315d08b2235701480a13f0852188749e489d6bc9386b3a34632f"
+        }
+      }
+    },
+    "schema6_from_schema5_v14": {
+      "acquisition_selection_policy": "first-24-eligible-terminal-prefix-per-stratum-v1",
+      "baseline_scheduling_contract": {
+        "acquisition_outer_configured_hard_cutoff_ms": 2040000,
+        "action_priority": "due-probes-before-new-baselines-and-navigation",
+        "collision_scope": "baseline-arming-and-t+24h-t+72h-action-starts-across-batches",
+        "global_live_page_cap": 5,
+        "infrastructure_failure_policy": "timeout-interruption-and-missed-window-block-not-site-ineligibility",
+        "longest_probe_window_width_ms": 1800000,
+        "maximum_candidates_per_batch": 2,
+        "minimum_baseline_spacing_ms": 2400000,
+        "navigation_phase": "separate-bounded-action-before-baseline",
+        "outer_probes": "watcher-launches-acquisition-run-at-window-earliest",
+        "policy": "serial-terminal-released-stability-window-batch-reservations-v3",
+        "reservation_release": "all-batch-members-scientifically-terminal-plus-full-serial-reservation",
+        "reservation_release_delay_ms": 2400000,
+        "reservation_release_evidence": "latest-immutable-hash-bound-batch-member-terminalised-at",
+        "reservation_release_validation": "causal-at-each-recorded-baseline-start",
+        "schedule_validation_unit": "baseline-batches-not-raw-candidate-timestamps",
+        "scheduler_margin_ms": 50000,
+        "schema_version": 3,
+        "serial_action_start_offsets_ms": [
+          0,
+          85500000,
+          258300000
+        ],
+        "short_probe": "same-action-wait-until-t+30s-earliest",
+        "stability_window_earliest_offsets_ms": [
+          25000,
+          85500000,
+          258300000
+        ],
+        "status_configured_hard_cutoff_ms": 310000,
+        "strict_serial_zero_duration_projection": {
+          "algorithm": "greedy-earliest-safe-baseline-batches",
+          "batch_count": 300,
+          "candidate_count": 600,
+          "last_baseline_offset_ms": 2784000000,
+          "last_t+72h_earliest_offset_ms": 3042300000,
+          "maximum_candidates_per_batch": 2,
+          "pairing_assumption": "all-candidates-form-300-compatible-two-candidate-batches"
+        },
+        "unpaired_candidate_policy": "singleton-when-no-compatible-partner",
+        "window_start_reservation_ms": 2400000,
+        "within_batch_baseline": "one-equal-baseline-per-recorded-baseline-batch"
+      }
+    }
+  },
+  "schema5_source_variants": [
+    {
+      "fixed_projection_overlay": null,
+      "fixed_provenance_sha256": "8c79b0093409f359b78a4bb5abd526ab6446ef872da56981471939e5cfd23820",
+      "instrumentation_policy": "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v10",
+      "source_lab_commits": [
+        "a20382c658857ca0362fcf877559c8e3320ac376",
+        "e719219b42826126fdc7771c2dec0463d425a83d",
+        "69a14ebe48f78d08a8b36d3e573955ec64f00ff9",
+        "d7ff286e8606eb7802ccfc9bc48e540eeef0be79",
+        "24d1972f1550cf9db5102d7ad2585b638e21df87",
+        "9d53e08f95c5130c60aadbef8a99273a44d117b5",
+        "c55b08aa06fbb4ac16e3655d6d3911109d853730",
+        "2d96c924e653aa45ffef5964ff216ba6307cbb0c",
+        "d2ff0f6bc439675ab016c94770015456890020ae",
+        "81dd702affed4066322faa21ff27f3c7b842ed6b",
+        "18d4ab3144e04f0a012ffcba54d349b4046c4336",
+        "9a6a45c9d3adfa1b5d5dacd6c51b08440c07bde6",
+        "d73ee3f67d9c001e5d4abcad64d6f9497ee73ef9",
+        "93f7cfc0d5feb0b286e00056c32f2b7364f62c25"
+      ]
+    },
+    {
+      "fixed_projection_overlay": "schema5_driver_v7",
+      "fixed_provenance_sha256": "9f73fb7b93e64e8a14783d957818ab24945abbc034e3ebfb2fa066d96deed5aa",
+      "instrumentation_policy": "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v12",
+      "source_lab_commits": [
+        "01547462b212ac946aa4a47936e0fd99e2b09c78",
+        "a0ed21ebe264dd7d4b8ea838ef456071df75564a",
+        "9c85da3abac680cc787dd65c38ebd72ead026e7d",
+        "fbb2112bc437ef36007c9db510120125cd64a48b",
+        "03b0953235e45dcbd71cfcad63b3342924f9c3b8",
+        "3b8c78895400c4b4eb8c5cba399d08226a002458",
+        "2bab7a2c0a0d06e82e0f55102a3c1b7e552ef86f",
+        "bee5b1a4bada4a461ac7f0a5c2d22c3f5aa14cdc",
+        "15e478dc7bf8a52740d773de4fad4877140bc4a4",
+        "60909195e3138957b8fdd12d70dedbf4eeb03224",
+        "6da10dcb52e5856ce580759453925d20550fd683",
+        "8223740fff4d8f928e912822935cad6d0b8e8426",
+        "e57c6229a47524c0b23cb5047a75e9ff6fe2632e",
+        "8ae6610bf4999af70d9327c874a3783ebabf9f7b"
+      ]
+    },
+    {
+      "fixed_projection_overlay": "schema5_driver_v7",
+      "fixed_provenance_sha256": "c3fee8c6ccfa41028c74a3d0c06042812dfe71eabe07843457787032d6c74e02",
+      "instrumentation_policy": "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v13",
+      "source_lab_commits": [
+        "3229a2996e7ec2c148886d431fe95b28ada703fa",
+        "045fb99654ef77b93ba7ba3c64d57fcc07b904b9",
+        "b466cd63e8f17835a75e10e97718cf4aae8b304e",
+        "8e1a11d5071c58bfbd96633ee2e01629f19ec1c0",
+        "ea4cf2b65b4a3fd650c0497beda600ea235db456"
+      ]
+    },
+    {
+      "fixed_projection_overlay": "schema5_driver_v8",
+      "fixed_provenance_sha256": "7f87a9b49211f96a9169d80066cca5c1813fe4583bb6f60cf9b247853514eed1",
+      "instrumentation_policy": "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v14",
+      "source_lab_commits": [
+        "46eb8172a4fba42a07e7e4da3a40c444ee48259d",
+        "083612c02c07cd633ecd76b5df6df691f9d7ecf8",
+        "7ad66e1a512574d3e660ec9ce06e50db7d089c5b",
+        "4db93077025fcc16eeab427aef0880bff69abb5c",
+        "44142d2e14917e03b26ffa9f819d1768c716087a"
+      ]
+    }
+  ],
+  "schema6_receipts": [
+    {
+      "cohort": "v91",
+      "fixed_provenance_sha256": "96ab7c6958bd99a3662745a17c3f8f2548b786c385af4b9af36ca2b58610acae",
+      "instrumentation_policy": "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v14",
+      "navigation_implementation": "playwright-public-cdp-recursive-catalogue-boundary-egress-guard-v4",
+      "provenance_file_sha256": "e62a8637e7a869e4df4b069df7101a25c0af654faaff59e4acea91299d334f50",
+      "provenance_payload_sha256": "3b5ce72c19c85add60b57adc28d2445c63098a27d832b1a29cdfe35ccdf7f498",
+      "source_lab_commit": "8eaf1daa4113cbe261c0c79d7a3404c9fd8b3eda"
+    },
+    {
+      "cohort": "v95",
+      "fixed_provenance_sha256": "c90b21d46b3dd1081a7734f0d765eb85bbbffc31266af1e5d0a5da45dfc4d04c",
+      "instrumentation_policy": "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v15",
+      "navigation_implementation": "playwright-public-cdp-recursive-catalogue-boundary-egress-guard-v4",
+      "provenance_file_sha256": "5b295de837467442d978854e21844c46ae18d2d7941b965cd894fe30aaad33fa",
+      "provenance_payload_sha256": "9d00a8e63ebd0eead5d521162bdfafd4c75f8291d3c50c9209c4fb295a9c9739",
+      "source_lab_commit": "9aed576a13659a51b0c25c6f81bf9115ebb8e149"
+    },
+    {
+      "cohort": "v96",
+      "fixed_provenance_sha256": "c709214c3e4bad8310cae0b0b23deff3144ed52639c2ab3aeccb2bad4d25e36d",
+      "instrumentation_policy": "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v16",
+      "navigation_implementation": "playwright-public-cdp-recursive-catalogue-boundary-egress-guard-v5",
+      "provenance_file_sha256": "fc6b6c96cc7627e4c2683c75c9bce743e769eec418e11c9c817136180cd604fb",
+      "provenance_payload_sha256": "1002557215a54583add89af52ca1a95ca401dfb1e65ef40a4c509c12e86af24b",
+      "source_lab_commit": "6957614b83e67cced5fd262fe97814824d21c8f9"
+    }
+  ],
+  "source_note": "Frozen from clean schema3/4 source commits, every clean schema5 producer commit grouped by its exact fixed projection, and immutable v91/v95/v96 schema6 acquisition provenances. Projection overlays encode only source-verified field deltas and are hash-checked after reconstruction."
+}

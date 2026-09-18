@@ -17,6 +17,7 @@ import hashlib
 import json
 import math
 from collections.abc import Callable, Mapping
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -33,10 +34,14 @@ from .browser_egress import (
 )
 
 CDP_TARGET_INSTRUMENTATION_POLICY = (
-    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v16"
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v17"
 )
 BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION = 1
 EGRESS_PREARM_SUMMARY_SCHEMA_VERSION = 2
+SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION = 2
+SRCDOC_PSEUDO_DOCUMENT_POLICY = (
+    "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-v1"
+)
 _BOOTSTRAP_WORKER_TYPES = ("worker", "shared_worker")
 _BOOTSTRAP_OWNER_TYPES = ("page", "iframe", "worker", "shared_worker")
 _ALLOWED_CHILD_TARGET_TYPES = frozenset({"iframe", "shared_worker", "worker"})
@@ -90,6 +95,27 @@ _ROOT_TERMINAL_HISTORY_LIMIT = 4_096
 _ROOT_CONTINUE_DIAGNOSTIC_LIMIT = 32
 _ROOT_FETCH_IDENTITY_LIMIT = 20_000
 _ROOT_NETWORK_IDENTITY_LIMIT = 20_000
+_SRCDOC_IDENTITY_HISTORY_LIMIT = 20_000
+_SRCDOC_PSEUDO_DOCUMENT_LIMIT = 32
+_PAGE_FRAME_IDENTITY_LIMIT = 4_096
+_SRCDOC_EVENT_ORDINAL_LIMIT = _PAGE_FRAME_IDENTITY_LIMIT * 5
+_ROOT_PAGE_LIFECYCLE_METHODS = frozenset(
+    {
+        "Page.frameAttached",
+        "Page.frameDetached",
+        "Page.frameRequestedNavigation",
+        "Page.frameStartedNavigating",
+        "Page.frameStartedLoading",
+        "Page.frameStoppedLoading",
+    }
+)
+_SRCDOC_REQUEST_FIELDS = frozenset({"frameId", "reason", "url", "disposition"})
+_SRCDOC_STARTED_NAVIGATING_FIELDS = frozenset(
+    {"frameId", "loaderId", "navigationType", "url"}
+)
+_SRCDOC_TERMINAL_FIELDS = frozenset(
+    {"requestId", "timestamp", "type", "errorText", "canceled"}
+)
 _BASE_SETUP_COMMANDS = (
     # Network.Initiator.stack is populated for script-created requests only
     # when the Debugger domain was enabled before the relevant script ran.
@@ -614,6 +640,201 @@ def validate_egress_prearm_summary(
     return json.loads(json.dumps(value, sort_keys=True, separators=(",", ":")))
 
 
+def validate_srcdoc_pseudo_document_summary(
+    value: object,
+    *,
+    require_terminal: bool,
+) -> dict[str, Any]:
+    """Validate the identifier-minimised root ``about:srcdoc`` exception receipt.
+
+    Chromium 143 can report one aborted pseudo-Document terminal for an
+    in-process ``srcdoc`` frame without a Network request occurrence.  This
+    receipt never turns that terminal into a request: it proves the exact
+    bracketing Page lifecycle and ``frameStartedNavigating.loaderId`` equality
+    that authorised the router to consume it.
+    """
+
+    fields = {
+        "schema_version",
+        "policy",
+        "enabled",
+        "total",
+        "resolved",
+        "pending",
+        "aborted",
+        "open_candidates",
+        "network_history_saturated",
+        "fetch_history_saturated",
+        "candidate_limit_saturated",
+        "diagnostics",
+    }
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise ValueError("srcdoc pseudo-Document summary fields are invalid")
+    if (
+        type(value["schema_version"]) is not int
+        or value["schema_version"] != SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION
+        or type(value["policy"]) is not str
+        or value["policy"] != SRCDOC_PSEUDO_DOCUMENT_POLICY
+        or type(value["enabled"]) is not bool
+    ):
+        raise ValueError("srcdoc pseudo-Document summary identity is invalid")
+    for field_name in ("total", "resolved", "pending", "aborted", "open_candidates"):
+        if (
+            type(value[field_name]) is not int
+            or value[field_name] < 0
+            or value[field_name] > _SRCDOC_PSEUDO_DOCUMENT_LIMIT
+        ):
+            raise ValueError("srcdoc pseudo-Document counts are invalid")
+    if value["pending"] + value["open_candidates"] > _SRCDOC_PSEUDO_DOCUMENT_LIMIT:
+        raise ValueError("srcdoc pseudo-Document candidate inventory is invalid")
+    for field_name in (
+        "network_history_saturated",
+        "fetch_history_saturated",
+        "candidate_limit_saturated",
+    ):
+        if type(value[field_name]) is not bool:
+            raise ValueError("srcdoc pseudo-Document saturation flag is invalid")
+    diagnostics = value["diagnostics"]
+    if type(diagnostics) is not list or len(diagnostics) != value["resolved"]:
+        raise ValueError("srcdoc pseudo-Document diagnostic inventory is invalid")
+    diagnostic_fields = {
+        "schema_version",
+        "source_role",
+        "frame_id_sha256",
+        "loader_id_sha256",
+        "request_id_sha256",
+        "requested_event_ordinal",
+        "started_navigating_event_ordinal",
+        "started_event_ordinal",
+        "terminal_event_ordinal",
+        "stopped_event_ordinal",
+        "navigation_reason",
+        "navigation_type",
+        "disposition",
+        "url_kind",
+        "loader_binding",
+        "request_id_matches_loader",
+        "terminal_method",
+        "terminal_fields",
+        "resource_type",
+        "error_text",
+        "canceled",
+        "network_request_seen",
+        "fetch_pause_seen",
+        "frame_stopped_after_terminal",
+    }
+    frame_hashes: set[str] = set()
+    loader_hashes: set[str] = set()
+    request_hashes: set[str] = set()
+    all_ordinals: set[int] = set()
+    previous_stopped_ordinal = 0
+    for diagnostic in diagnostics:
+        if not isinstance(diagnostic, Mapping) or set(diagnostic) != diagnostic_fields:
+            raise ValueError("srcdoc pseudo-Document diagnostic fields are invalid")
+        frame_hash = diagnostic["frame_id_sha256"]
+        loader_hash = diagnostic["loader_id_sha256"]
+        request_hash = diagnostic["request_id_sha256"]
+        if any(
+            type(digest) is not str
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+            for digest in (frame_hash, loader_hash, request_hash)
+        ):
+            raise ValueError("srcdoc pseudo-Document diagnostic hash is invalid")
+        ordinals = tuple(
+            diagnostic[field_name]
+            for field_name in (
+                "requested_event_ordinal",
+                "started_navigating_event_ordinal",
+                "started_event_ordinal",
+                "terminal_event_ordinal",
+                "stopped_event_ordinal",
+            )
+        )
+        if any(
+            type(ordinal) is not int
+            or ordinal < 1
+            or ordinal > _SRCDOC_EVENT_ORDINAL_LIMIT
+            for ordinal in ordinals
+        ) or not (
+            ordinals[0] < ordinals[1] < ordinals[2] < ordinals[3] < ordinals[4]
+        ):
+            raise ValueError("srcdoc pseudo-Document event ordering is invalid")
+        if any(ordinal in all_ordinals for ordinal in ordinals):
+            raise ValueError("srcdoc pseudo-Document event ordinals are not globally unique")
+        if ordinals[-1] <= previous_stopped_ordinal:
+            raise ValueError("srcdoc pseudo-Document diagnostics are not in emitted order")
+        all_ordinals.update(ordinals)
+        previous_stopped_ordinal = ordinals[-1]
+        exact_strings = {
+            "source_role": "root-page",
+            "navigation_reason": "initialFrameNavigation",
+            "navigation_type": "differentDocument",
+            "disposition": "currentTab",
+            "url_kind": "about:srcdoc",
+            "loader_binding": "Page.frameStartedNavigating.loaderId",
+            "terminal_method": "Network.loadingFailed",
+            "resource_type": "Document",
+            "error_text": "net::ERR_ABORTED",
+        }
+        if any(
+            type(diagnostic[field_name]) is not str
+            or diagnostic[field_name] != expected
+            for field_name, expected in exact_strings.items()
+        ):
+            raise ValueError("srcdoc pseudo-Document diagnostic strings are invalid")
+        if (
+            type(diagnostic["schema_version"]) is not int
+            or diagnostic["schema_version"]
+            != SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION
+            or diagnostic["request_id_matches_loader"] is not True
+            or type(diagnostic["terminal_fields"]) is not list
+            or any(
+                type(field_name) is not str
+                for field_name in diagnostic["terminal_fields"]
+            )
+            or diagnostic["terminal_fields"] != sorted(_SRCDOC_TERMINAL_FIELDS)
+            or diagnostic["canceled"] is not True
+            or diagnostic["network_request_seen"] is not False
+            or diagnostic["fetch_pause_seen"] is not False
+            or diagnostic["frame_stopped_after_terminal"] is not True
+            or loader_hash != request_hash
+            or frame_hash in frame_hashes
+            or loader_hash in loader_hashes
+            or request_hash in request_hashes
+        ):
+            raise ValueError("srcdoc pseudo-Document diagnostic is inconsistent")
+        frame_hashes.add(frame_hash)
+        loader_hashes.add(loader_hash)
+        request_hashes.add(request_hash)
+    if value["total"] != value["resolved"] + value["pending"] + value["aborted"]:
+        raise ValueError("srcdoc pseudo-Document aggregate is inconsistent")
+    if not value["enabled"] and any(
+        (
+            value["total"],
+            value["open_candidates"],
+            value["network_history_saturated"],
+            value["fetch_history_saturated"],
+            value["candidate_limit_saturated"],
+            len(diagnostics),
+        )
+    ):
+        raise ValueError("disabled srcdoc pseudo-Document evidence is non-empty")
+    if require_terminal and (
+        not value["enabled"]
+        or value["pending"]
+        or value["aborted"]
+        or value["open_candidates"]
+        or value["candidate_limit_saturated"]
+        or (
+            value["total"]
+            and (value["network_history_saturated"] or value["fetch_history_saturated"])
+        )
+    ):
+        raise ValueError("srcdoc pseudo-Document lifecycle is not terminal")
+    return json.loads(json.dumps(value, sort_keys=True, separators=(",", ":")))
+
+
 class _CdpSession(Protocol):
     def on(self, event: str, handler: Callable[[dict[str, Any]], None]) -> None: ...
 
@@ -715,6 +936,22 @@ class _RootFetchDecision:
     provisional: bool = False
     abort_owned: bool = False
     transport_fingerprint: str | None = None
+
+
+@dataclass
+class _SrcdocPseudoDocument:
+    """One exact root Page lifecycle awaiting its loader-bound Chromium terminal."""
+
+    frame_id: str
+    requested_event_ordinal: int
+    phase: str = "armed"
+    loader_id: str | None = None
+    started_navigating_event_ordinal: int | None = None
+    started_event_ordinal: int | None = None
+    terminal_event_ordinal: int | None = None
+    stopped_event_ordinal: int | None = None
+    terminal_request_id: str | None = None
+    abort_owned: bool = False
 
 
 @dataclass
@@ -824,6 +1061,10 @@ class RecursiveCdpTargetRouter:
         on_event: Callable[[CdpTargetSource, str, Mapping[str, Any]], None],
         root_frame_id: str | None = None,
         root_continue_error_type: type[Exception] | None = None,
+        track_root_srcdoc_lifecycle: bool = False,
+        on_internal_document_lifecycle: (
+            Callable[[CdpTargetSource, Mapping[str, Any]], None] | None
+        ) = None,
         on_target_activity: Callable[[CdpTargetSource, str], None] | None = None,
         on_non_replayable_egress: (
             Callable[[CdpTargetSource | None, str, str, object | None], None] | None
@@ -838,12 +1079,23 @@ class RecursiveCdpTargetRouter:
             or not issubclass(root_continue_error_type, Exception)
         ):
             raise ValueError("root continue error type must be an Exception type")
+        if type(track_root_srcdoc_lifecycle) is not bool:
+            raise ValueError("root srcdoc lifecycle switch must be boolean")
+        if on_internal_document_lifecycle is not None and (
+            not track_root_srcdoc_lifecycle
+            or not callable(on_internal_document_lifecycle)
+        ):
+            raise ValueError(
+                "internal Document lifecycle callback requires enabled srcdoc tracking"
+            )
         self._session = session
         self._on_event = on_event
         self._on_target_activity = on_target_activity
         self._on_non_replayable_egress = on_non_replayable_egress
         self._root_frame_id = root_frame_id
         self._root_continue_error_type = root_continue_error_type
+        self._track_root_srcdoc_lifecycle = track_root_srcdoc_lifecycle
+        self._on_internal_document_lifecycle = on_internal_document_lifecycle
         self._root_source: CdpTargetSource | None = None
         self._states: dict[tuple[str, ...], _TargetState] = {}
         self._target_routes: dict[str, tuple[str, ...]] = {}
@@ -883,6 +1135,22 @@ class RecursiveCdpTargetRouter:
         self._root_invalid_interception_aborted = 0
         self._root_invalid_interception_outcomes = {"Network.loadingFinished": 0}
         self._root_invalid_interception_diagnostics: list[dict[str, Any]] = []
+        self._page_frame_parents: dict[str, str | None] = {}
+        self._seen_page_frame_ids: set[str] = set()
+        self._srcdoc_ineligible_frame_ids: set[str] = set()
+        self._srcdoc_candidates: dict[str, _SrcdocPseudoDocument] = {}
+        self._srcdoc_seen_page_loader_ids: set[str] = set()
+        self._srcdoc_accepted_frame_loaders: dict[str, str] = {}
+        self._srcdoc_terminal_request_ids: set[str] = set()
+        self._srcdoc_seen_network_request_ids: set[str] = set()
+        self._srcdoc_seen_fetch_network_ids: set[str] = set()
+        self._srcdoc_network_history_saturated = False
+        self._srcdoc_fetch_history_saturated = False
+        self._srcdoc_candidate_limit_saturated = False
+        self._srcdoc_event_ordinal = 0
+        self._srcdoc_total = 0
+        self._srcdoc_aborted = 0
+        self._srcdoc_diagnostics: list[dict[str, Any]] = []
         self._document_fetch_by_policy_identity: dict[
             tuple[CdpTargetSource, str], _DocumentFetchDecision
         ] = {}
@@ -965,6 +1233,42 @@ class RecursiveCdpTargetRouter:
             ),
             "diagnostics": [dict(item) for item in self._root_invalid_interception_diagnostics],
         }
+
+    @property
+    def srcdoc_pseudo_document_summary(self) -> dict[str, Any]:
+        """Return exact, identifier-minimised evidence for the Page exception."""
+
+        pending = sum(
+            candidate.terminal_request_id is not None
+            for candidate in self._srcdoc_candidates.values()
+        )
+        open_candidates = sum(
+            candidate.terminal_request_id is None
+            for candidate in self._srcdoc_candidates.values()
+        )
+        summary = {
+            "schema_version": SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
+            "policy": SRCDOC_PSEUDO_DOCUMENT_POLICY,
+            "enabled": self._track_root_srcdoc_lifecycle,
+            "total": self._srcdoc_total,
+            "resolved": len(self._srcdoc_diagnostics),
+            "pending": pending,
+            "aborted": self._srcdoc_aborted,
+            "open_candidates": open_candidates,
+            "network_history_saturated": self._srcdoc_network_history_saturated,
+            "fetch_history_saturated": self._srcdoc_fetch_history_saturated,
+            "candidate_limit_saturated": self._srcdoc_candidate_limit_saturated,
+            "diagnostics": [dict(item) for item in self._srcdoc_diagnostics],
+        }
+        try:
+            return validate_srcdoc_pseudo_document_summary(
+                summary,
+                require_terminal=False,
+            )
+        except ValueError as error:
+            raise CdpTargetIntegrityError(
+                "srcdoc pseudo-Document accounting invariant was violated"
+            ) from error
 
     @property
     def root_source(self) -> CdpTargetSource:
@@ -1121,6 +1425,16 @@ class RecursiveCdpTargetRouter:
                     lambda event, forwarded=method: self._handle_root_event(forwarded, event)
                 ),
             )
+        if self._track_root_srcdoc_lifecycle:
+            for method in _ROOT_PAGE_LIFECYCLE_METHODS:
+                self._session.on(
+                    method,
+                    self._guard(
+                        lambda event, lifecycle=method: self._handle_root_page_lifecycle(
+                            lifecycle, event
+                        )
+                    ),
+                )
         for method in _NON_REPLAYABLE_EGRESS_EVENTS:
             self._session.on(
                 method,
@@ -1169,6 +1483,18 @@ class RecursiveCdpTargetRouter:
         self._root_browser_context_id = browser_context_id
         self._states[()] = _TargetState(source, "page", "ready")
         self._target_routes[target_id] = ()
+
+        if self._track_root_srcdoc_lifecycle:
+            # Page.getFrameTree works before Page.enable.  Taking the snapshot
+            # first establishes the exact root/ancestry against which every
+            # subsequently enabled lifecycle event is checked, without an
+            # event-enabled interval in which the root identity is unknown.
+            self._install_root_page_frame_tree(self._root_send("Page.getFrameTree", {}))
+            page_enable = self._root_send("Page.enable", {})
+            if page_enable != {}:
+                raise CdpTargetIntegrityError(
+                    "root Page.enable did not return an exact empty result"
+                )
 
         for method, params in _BASE_SETUP_COMMANDS:
             self._root_send(method, dict(params))
@@ -1771,6 +2097,8 @@ class RecursiveCdpTargetRouter:
                     "root InvalidInterceptionId provisional was abort-owned twice"
                 )
             decision.abort_owned = True
+        for candidate in self._srcdoc_candidates.values():
+            candidate.abort_owned = True
         self._aborting = True
         self._shutting_down = True
 
@@ -1823,6 +2151,20 @@ class RecursiveCdpTargetRouter:
             raise CdpTargetIntegrityError(
                 "CDP target finished with an unresolved Fetch policy lifecycle"
             )
+        if self._srcdoc_candidates:
+            raise CdpTargetIntegrityError(
+                "CDP target finished with an unresolved srcdoc Page lifecycle"
+            )
+        if self._track_root_srcdoc_lifecycle:
+            try:
+                validate_srcdoc_pseudo_document_summary(
+                    self.srcdoc_pseudo_document_summary,
+                    require_terminal=True,
+                )
+            except ValueError as error:
+                raise CdpTargetIntegrityError(
+                    "CDP target finished with non-terminal srcdoc evidence"
+                ) from error
         if self._error_resource_by_request_id or any(
             lifecycle.started and not lifecycle.complete
             for lifecycle in self._error_document_resources.values()
@@ -1885,6 +2227,11 @@ class RecursiveCdpTargetRouter:
             self._pending_root_invalid_interceptions
         )
         self._pending_root_invalid_interceptions.clear()
+        self._srcdoc_aborted += sum(
+            candidate.terminal_request_id is not None
+            for candidate in self._srcdoc_candidates.values()
+        )
+        self._srcdoc_candidates.clear()
         self._root_terminal_requests.clear()
         self._claimed_root_invalid_interception_occurrences.clear()
         self._disabled_root_invalid_interception_networks.clear()
@@ -1967,6 +2314,7 @@ class RecursiveCdpTargetRouter:
         return (
             any(command.policy_decision for command in self._pending.values())
             or bool(self._pending_root_invalid_interceptions)
+            or bool(self._srcdoc_candidates)
             or any(
                 state.phase not in {"ready", "detached", "destroyed"}
                 for state in self._states.values()
@@ -3028,6 +3376,474 @@ class RecursiveCdpTargetRouter:
         }:
             self._resume_instrumented_child(bootstrap.source)
 
+    def _install_root_page_frame_tree(self, result: Mapping[str, Any]) -> None:
+        """Establish the pre-navigation root Page frame and descendant ancestry."""
+
+        tree = result.get("frameTree")
+        if not isinstance(tree, Mapping):
+            raise CdpTargetIntegrityError("root Page frame-tree response is malformed")
+
+        discovered: dict[str, str | None] = {}
+
+        def visit(node: object, parent_id: str | None) -> None:
+            if not isinstance(node, Mapping):
+                raise CdpTargetIntegrityError("root Page frame-tree node is malformed")
+            frame = node.get("frame")
+            if not isinstance(frame, Mapping):
+                raise CdpTargetIntegrityError("root Page frame-tree omitted a frame")
+            frame_id = frame.get("id")
+            if not isinstance(frame_id, str) or not frame_id or frame_id in discovered:
+                raise CdpTargetIntegrityError("root Page frame-tree identity is malformed")
+            reported_parent = frame.get("parentId")
+            if parent_id is None:
+                if reported_parent is not None:
+                    raise CdpTargetIntegrityError("root Page frame unexpectedly names a parent")
+            elif reported_parent != parent_id:
+                raise CdpTargetIntegrityError("root Page frame-tree ancestry is inconsistent")
+            if len(discovered) >= _PAGE_FRAME_IDENTITY_LIMIT:
+                raise CdpTargetIntegrityError("root Page frame-tree exceeded its identity bound")
+            discovered[frame_id] = parent_id
+            children = node.get("childFrames", [])
+            if not isinstance(children, list):
+                raise CdpTargetIntegrityError("root Page frame-tree children are malformed")
+            for child in children:
+                visit(child, frame_id)
+
+        visit(tree, None)
+        roots = [frame_id for frame_id, parent_id in discovered.items() if parent_id is None]
+        if len(roots) != 1:
+            raise CdpTargetIntegrityError("root Page frame-tree has no unique root")
+        observed_root = roots[0]
+        if self._root_frame_id is not None and self._root_frame_id != observed_root:
+            raise CdpTargetIntegrityError("root Page frame identity changed before instrumentation")
+        self._root_frame_id = observed_root
+        self._page_frame_parents = discovered
+        self._seen_page_frame_ids = set(discovered)
+
+    def _next_srcdoc_event_ordinal(self) -> int:
+        if self._srcdoc_event_ordinal >= _SRCDOC_EVENT_ORDINAL_LIMIT:
+            raise CdpTargetIntegrityError("srcdoc Page event ordinal bound was exceeded")
+        self._srcdoc_event_ordinal += 1
+        return self._srcdoc_event_ordinal
+
+    def _handle_root_page_lifecycle(
+        self,
+        method: str,
+        event: Mapping[str, Any],
+    ) -> None:
+        """Track only the Page lifecycle needed to prove the srcdoc anomaly."""
+
+        if not self._track_root_srcdoc_lifecycle or self._root_source is None:
+            raise CdpTargetIntegrityError("root Page lifecycle arrived outside its policy")
+        if method == "Page.frameAttached":
+            if not {"frameId", "parentFrameId"}.issubset(event) or not set(event).issubset(
+                {"frameId", "parentFrameId", "stack"}
+            ):
+                raise CdpTargetIntegrityError("root Page frame attachment is malformed")
+            frame_id = event.get("frameId")
+            parent_id = event.get("parentFrameId")
+            if (
+                not isinstance(frame_id, str)
+                or not frame_id
+                or not isinstance(parent_id, str)
+                or not parent_id
+                or parent_id not in self._page_frame_parents
+                or frame_id == self._root_frame_id
+                or frame_id in self._page_frame_parents
+                or ("stack" in event and not isinstance(event["stack"], Mapping))
+            ):
+                raise CdpTargetIntegrityError("root Page frame attachment identity is invalid")
+            if frame_id in self._seen_page_frame_ids:
+                # Frame identifiers can be reused across Chromium process
+                # swaps.  Keep ordinary browsing functional but permanently
+                # disqualify that ambiguous identity from this exception.
+                self._srcdoc_ineligible_frame_ids.add(frame_id)
+            elif len(self._seen_page_frame_ids) >= _PAGE_FRAME_IDENTITY_LIMIT:
+                raise CdpTargetIntegrityError("root Page frame identity history saturated")
+            self._seen_page_frame_ids.add(frame_id)
+            self._page_frame_parents[frame_id] = parent_id
+            return
+        if method == "Page.frameDetached":
+            if set(event) != {"frameId", "reason"}:
+                raise CdpTargetIntegrityError("root Page frame detachment is malformed")
+            frame_id = event.get("frameId")
+            if (
+                not isinstance(frame_id, str)
+                or not frame_id
+                or frame_id == self._root_frame_id
+                or frame_id not in self._page_frame_parents
+                or event.get("reason") not in {"remove", "swap"}
+            ):
+                raise CdpTargetIntegrityError("root Page frame detachment identity is invalid")
+            descendants = {
+                candidate_id
+                for candidate_id in self._page_frame_parents
+                if self._page_frame_is_descendant(candidate_id, frame_id)
+            }
+            descendants.add(frame_id)
+            for candidate_id in descendants:
+                candidate = self._srcdoc_candidates.get(candidate_id)
+                if candidate is not None and candidate.terminal_request_id is not None:
+                    if not candidate.abort_owned:
+                        raise CdpTargetIntegrityError(
+                            "srcdoc pseudo-Document frame detached before its stop event"
+                        )
+                    # Context disposal may report the detach before a final
+                    # frameStoppedLoading (or omit that stop altogether).
+                    # Retire abort-owned evidence at the first terminal Page
+                    # event so either ordering has the same accounting and a
+                    # later stop is an idempotent event for an ineligible frame.
+                    self._srcdoc_aborted += 1
+                    self._srcdoc_candidates.pop(candidate_id)
+                elif candidate is not None:
+                    self._srcdoc_candidates.pop(candidate_id)
+                self._page_frame_parents.pop(candidate_id, None)
+                self._srcdoc_ineligible_frame_ids.add(candidate_id)
+            return
+        if method == "Page.frameRequestedNavigation":
+            if event.get("url") != "about:srcdoc":
+                return
+            if set(event) != _SRCDOC_REQUEST_FIELDS:
+                raise CdpTargetIntegrityError("srcdoc Page navigation request is malformed")
+            frame_id = event.get("frameId")
+            if (
+                not isinstance(frame_id, str)
+                or not frame_id
+                or frame_id == self._root_frame_id
+                or frame_id not in self._page_frame_parents
+                or frame_id in self._srcdoc_ineligible_frame_ids
+                or event.get("reason") != "initialFrameNavigation"
+                or event.get("disposition") != "currentTab"
+                or frame_id in self._srcdoc_candidates
+                or (self._shutting_down and not self._aborting)
+            ):
+                raise CdpTargetIntegrityError("srcdoc Page navigation request is ineligible")
+            if len(self._srcdoc_candidates) >= _SRCDOC_PSEUDO_DOCUMENT_LIMIT:
+                self._srcdoc_candidate_limit_saturated = True
+                raise CdpTargetIntegrityError("srcdoc Page lifecycle candidate bound was exceeded")
+            self._srcdoc_candidates[frame_id] = _SrcdocPseudoDocument(
+                frame_id=frame_id,
+                requested_event_ordinal=self._next_srcdoc_event_ordinal(),
+                abort_owned=self._aborting,
+            )
+            return
+        frame_id = event.get("frameId")
+        candidate = (
+            self._srcdoc_candidates.get(frame_id)
+            if isinstance(frame_id, str) and frame_id
+            else None
+        )
+        if candidate is None:
+            return
+        if method == "Page.frameStartedNavigating":
+            loader_id = event.get("loaderId")
+            if (
+                set(event) != _SRCDOC_STARTED_NAVIGATING_FIELDS
+                or event.get("frameId") != candidate.frame_id
+                or not isinstance(loader_id, str)
+                or not loader_id
+                or event.get("navigationType") != "differentDocument"
+                or event.get("url") != "about:srcdoc"
+            ):
+                raise CdpTargetIntegrityError(
+                    "srcdoc Page started-navigation event is malformed"
+                )
+            if (
+                candidate.phase != "armed"
+                or candidate.loader_id is not None
+                or candidate.started_navigating_event_ordinal is not None
+            ):
+                raise CdpTargetIntegrityError(
+                    "srcdoc Page navigation started out of sequence"
+                )
+            if (
+                loader_id in self._srcdoc_seen_page_loader_ids
+                or loader_id in self._srcdoc_seen_network_request_ids
+                or loader_id in self._srcdoc_seen_fetch_network_ids
+                or loader_id in self._srcdoc_terminal_request_ids
+                or loader_id in self._seen_page_frame_ids
+                or self._active_requests.get(loader_id)
+                or any(key[1] == loader_id for key in self._root_terminal_requests)
+            ):
+                raise CdpTargetIntegrityError(
+                    "srcdoc Page loader identity was reused or network-observed"
+                )
+            if len(self._srcdoc_seen_page_loader_ids) >= _PAGE_FRAME_IDENTITY_LIMIT:
+                raise CdpTargetIntegrityError(
+                    "srcdoc Page loader identity history saturated"
+                )
+            self._srcdoc_seen_page_loader_ids.add(loader_id)
+            candidate.loader_id = loader_id
+            candidate.started_navigating_event_ordinal = (
+                self._next_srcdoc_event_ordinal()
+            )
+            candidate.phase = "navigating"
+            return
+        if set(event) != {"frameId"}:
+            raise CdpTargetIntegrityError("srcdoc Page loading event is malformed")
+        if method == "Page.frameStartedLoading":
+            if (
+                candidate.phase != "navigating"
+                or candidate.loader_id is None
+                or candidate.started_navigating_event_ordinal is None
+                or candidate.started_event_ordinal is not None
+            ):
+                raise CdpTargetIntegrityError("srcdoc Page loading started out of sequence")
+            candidate.started_event_ordinal = self._next_srcdoc_event_ordinal()
+            candidate.phase = "loading"
+            return
+        if method != "Page.frameStoppedLoading":
+            raise CdpTargetIntegrityError(f"unsupported root Page lifecycle event: {method}")
+        stopped_ordinal = self._next_srcdoc_event_ordinal()
+        self._srcdoc_ineligible_frame_ids.add(candidate.frame_id)
+        if candidate.terminal_request_id is None:
+            if candidate.phase not in {"armed", "navigating", "loading"}:
+                raise CdpTargetIntegrityError("srcdoc Page loading stopped out of sequence")
+            self._srcdoc_candidates.pop(candidate.frame_id)
+            return
+        if candidate.phase != "quarantined" or candidate.terminal_event_ordinal is None:
+            raise CdpTargetIntegrityError("srcdoc pseudo-Document stop was out of sequence")
+        candidate.stopped_event_ordinal = stopped_ordinal
+        if candidate.abort_owned:
+            candidate.phase = "abort-drained"
+            return
+        if (
+            candidate.loader_id is None
+            or candidate.started_navigating_event_ordinal is None
+            or candidate.started_event_ordinal is None
+            or candidate.loader_id != candidate.terminal_request_id
+        ):
+            raise CdpTargetIntegrityError("srcdoc pseudo-Document lost its start evidence")
+        loader_hash = hashlib.sha256(candidate.loader_id.encode()).hexdigest()
+        diagnostic = {
+            "schema_version": SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
+            "source_role": "root-page",
+            "frame_id_sha256": hashlib.sha256(candidate.frame_id.encode()).hexdigest(),
+            "loader_id_sha256": loader_hash,
+            "request_id_sha256": hashlib.sha256(
+                candidate.terminal_request_id.encode()
+            ).hexdigest(),
+            "requested_event_ordinal": candidate.requested_event_ordinal,
+            "started_navigating_event_ordinal": (
+                candidate.started_navigating_event_ordinal
+            ),
+            "started_event_ordinal": candidate.started_event_ordinal,
+            "terminal_event_ordinal": candidate.terminal_event_ordinal,
+            "stopped_event_ordinal": stopped_ordinal,
+            "navigation_reason": "initialFrameNavigation",
+            "navigation_type": "differentDocument",
+            "disposition": "currentTab",
+            "url_kind": "about:srcdoc",
+            "loader_binding": "Page.frameStartedNavigating.loaderId",
+            "request_id_matches_loader": True,
+            "terminal_method": "Network.loadingFailed",
+            "terminal_fields": sorted(_SRCDOC_TERMINAL_FIELDS),
+            "resource_type": "Document",
+            "error_text": "net::ERR_ABORTED",
+            "canceled": True,
+            "network_request_seen": False,
+            "fetch_pause_seen": False,
+            "frame_stopped_after_terminal": True,
+        }
+        self._srcdoc_diagnostics.append(diagnostic)
+        self._srcdoc_candidates.pop(candidate.frame_id)
+        callback = self._on_internal_document_lifecycle
+        if callback is not None:
+            callback(self.root_source, deepcopy(diagnostic))
+
+    def _page_frame_is_descendant(self, frame_id: str, ancestor_id: str) -> bool:
+        parent_id = self._page_frame_parents.get(frame_id)
+        visited: set[str] = set()
+        while parent_id is not None and parent_id not in visited:
+            if parent_id == ancestor_id:
+                return True
+            visited.add(parent_id)
+            parent_id = self._page_frame_parents.get(parent_id)
+        return False
+
+    def _record_srcdoc_identity_history(
+        self,
+        method: str,
+        event: Mapping[str, Any],
+    ) -> None:
+        """Retain every raw identity that could disprove an orphan terminal."""
+
+        if not self._track_root_srcdoc_lifecycle:
+            return
+        document_evidence = (
+            method == "Network.requestWillBeSent" and event.get("type") == "Document"
+        ) or (
+            method == "Fetch.requestPaused"
+            and event.get("resourceType") == "Document"
+        )
+        if document_evidence:
+            frame_id = event.get("frameId")
+            event_loader_ids = {
+                identity
+                for identity in (
+                    (event.get("requestId"), event.get("loaderId"))
+                    if method == "Network.requestWillBeSent"
+                    else (event.get("networkId"),)
+                )
+                if isinstance(identity, str) and identity
+            }
+            matching_accepted = [
+                accepted_frame_id
+                for accepted_frame_id, accepted_loader_id in (
+                    self._srcdoc_accepted_frame_loaders.items()
+                )
+                if (
+                    isinstance(frame_id, str)
+                    and frame_id
+                    and frame_id == accepted_frame_id
+                )
+                or accepted_loader_id in event_loader_ids
+            ]
+            matching_candidates = [
+                candidate
+                for candidate in self._srcdoc_candidates.values()
+                if (
+                    isinstance(frame_id, str)
+                    and frame_id
+                    and frame_id == candidate.frame_id
+                )
+                or candidate.loader_id in event_loader_ids
+            ]
+            if matching_accepted or any(
+                candidate.terminal_request_id is not None
+                for candidate in matching_candidates
+            ):
+                raise CdpTargetIntegrityError(
+                    "Document evidence arrived after srcdoc pseudo-Document quarantine"
+                )
+            if len(matching_candidates) > 1:
+                raise CdpTargetIntegrityError(
+                    "Document evidence ambiguously matched srcdoc Page candidates"
+                )
+            if matching_candidates:
+                candidate = matching_candidates[0]
+                self._srcdoc_candidates.pop(candidate.frame_id)
+                self._srcdoc_ineligible_frame_ids.add(candidate.frame_id)
+        if method == "Network.requestWillBeSent":
+            request_id = event.get("requestId")
+            loader_id = event.get("loaderId")
+            network_identities = {
+                identity
+                for identity in (request_id, loader_id)
+                if isinstance(identity, str) and identity
+            }
+            for identity in network_identities:
+                if identity in self._srcdoc_terminal_request_ids:
+                    raise CdpTargetIntegrityError(
+                        "Network request or loader reused a srcdoc pseudo-Document "
+                        "terminal identity"
+                    )
+                if identity not in self._srcdoc_seen_network_request_ids:
+                    if (
+                        len(self._srcdoc_seen_network_request_ids)
+                        >= _SRCDOC_IDENTITY_HISTORY_LIMIT
+                    ):
+                        self._srcdoc_network_history_saturated = True
+                        if self._srcdoc_total:
+                            raise CdpTargetIntegrityError(
+                                "srcdoc Network identity history saturated after acceptance"
+                            )
+                    else:
+                        self._srcdoc_seen_network_request_ids.add(identity)
+        elif method == "Fetch.requestPaused":
+            network_id = event.get("networkId")
+            if isinstance(network_id, str) and network_id:
+                if network_id in self._srcdoc_terminal_request_ids:
+                    raise CdpTargetIntegrityError(
+                        "Fetch pause reused a srcdoc pseudo-Document terminal identity"
+                    )
+                if network_id not in self._srcdoc_seen_fetch_network_ids:
+                    if (
+                        len(self._srcdoc_seen_fetch_network_ids)
+                        >= _SRCDOC_IDENTITY_HISTORY_LIMIT
+                    ):
+                        self._srcdoc_fetch_history_saturated = True
+                        if self._srcdoc_total:
+                            raise CdpTargetIntegrityError(
+                                "srcdoc Fetch identity history saturated after acceptance"
+                            )
+                    else:
+                        self._srcdoc_seen_fetch_network_ids.add(network_id)
+
+    def _consume_srcdoc_pseudo_document_terminal(
+        self,
+        source: CdpTargetSource,
+        method: str,
+        event: Mapping[str, Any],
+    ) -> bool:
+        """Quarantine the exact loader-bound otherwise-orphaned srcdoc terminal."""
+
+        if (
+            not self._track_root_srcdoc_lifecycle
+            or source != self.root_source
+            or method != "Network.loadingFailed"
+            or set(event) != _SRCDOC_TERMINAL_FIELDS
+            or event.get("type") != "Document"
+            or event.get("errorText") != "net::ERR_ABORTED"
+            or event.get("canceled") is not True
+            or not _is_finite_protocol_number(event.get("timestamp"))
+        ):
+            return False
+        request_id = event.get("requestId")
+        if not isinstance(request_id, str) or not request_id:
+            return False
+        eligible = [
+            candidate
+            for candidate in self._srcdoc_candidates.values()
+            if candidate.phase == "loading"
+            and candidate.loader_id == request_id
+            and candidate.started_navigating_event_ordinal is not None
+            and candidate.started_event_ordinal is not None
+            and candidate.terminal_request_id is None
+        ]
+        if len(eligible) > 1:
+            raise CdpTargetIntegrityError(
+                "srcdoc pseudo-Document terminal matched multiple Page loaders"
+            )
+        if len(eligible) != 1:
+            return False
+        candidate = eligible[0]
+        if (
+            self._srcdoc_network_history_saturated
+            or self._srcdoc_fetch_history_saturated
+            or request_id in self._srcdoc_seen_network_request_ids
+            or request_id in self._srcdoc_seen_fetch_network_ids
+            or request_id in self._srcdoc_terminal_request_ids
+            or request_id in self._seen_page_frame_ids
+            or self._active_requests.get(request_id)
+            or any(key[1] == request_id for key in self._root_terminal_requests)
+        ):
+            raise CdpTargetIntegrityError(
+                "srcdoc pseudo-Document terminal identity is not provably orphaned"
+            )
+        if self._srcdoc_total >= _SRCDOC_PSEUDO_DOCUMENT_LIMIT:
+            self._srcdoc_candidate_limit_saturated = True
+            raise CdpTargetIntegrityError(
+                "srcdoc pseudo-Document receipt bound was exceeded"
+            )
+        if (
+            candidate.frame_id in self._srcdoc_accepted_frame_loaders
+            or len(self._srcdoc_accepted_frame_loaders)
+            >= _SRCDOC_PSEUDO_DOCUMENT_LIMIT
+        ):
+            self._srcdoc_candidate_limit_saturated = True
+            raise CdpTargetIntegrityError(
+                "srcdoc pseudo-Document accepted identity bound was exceeded"
+            )
+        candidate.terminal_request_id = request_id
+        candidate.terminal_event_ordinal = self._next_srcdoc_event_ordinal()
+        candidate.phase = "quarantined"
+        candidate.abort_owned = candidate.abort_owned or self._aborting
+        self._srcdoc_accepted_frame_loaders[candidate.frame_id] = request_id
+        self._srcdoc_terminal_request_ids.add(request_id)
+        self._srcdoc_total += 1
+        return True
+
     def _handle_root_event(self, method: str, event: Mapping[str, Any]) -> None:
         self._handle_forwarded(self.root_source, method, event)
 
@@ -3088,6 +3904,7 @@ class RecursiveCdpTargetRouter:
                 f"CDP {source.target_type} target emitted {method} for "
                 f"request {request_id!r} ({url!r}) during {state.phase}"
             )
+        self._record_srcdoc_identity_history(method, event)
         if self._consume_error_document_resource_event(source, method, event):
             return
         if method == "Fetch.requestPaused" and self._aborting:
@@ -3224,6 +4041,8 @@ class RecursiveCdpTargetRouter:
                     raise CdpTargetIntegrityError(
                         "CDP repeated a terminal event for a retired Document chain"
                     )
+                if self._consume_srcdoc_pseudo_document_terminal(source, method, event):
+                    return
                 raise CdpTargetIntegrityError(
                     "CDP loading terminal event has no active request occurrence"
                 )

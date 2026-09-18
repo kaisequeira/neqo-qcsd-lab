@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from qcsd_lab import browser_egress_qualification as browser_producer
+from qcsd_lab import class_acquisition as acquisition_producer
 from qcsd_lab import class_build_admission as admission
 from qcsd_lab import pinned_cdp as pinned_cdp_producer
 from qcsd_lab.class_build_admission import _parser, resolve_action_admission
@@ -146,6 +147,19 @@ def test_standalone_browser_schema_constants_match_the_producer() -> None:
         browser_producer.HISTORICAL_FOUNDATION_SCHEMA_VERSIONS
     )
     assert admission._BROWSER_EGRESS_FINAL_SCHEMA == browser_producer.FINAL_SCHEMA_VERSION
+    assert admission._ACQUISITION_SCHEMA == acquisition_producer.SCHEMA_VERSION == 7
+    assert (
+        admission._ACQUISITION_COMPLETION_SCHEMA
+        == acquisition_producer.COMPLETION_SCHEMA_VERSION
+        == 4
+    )
+    assert (
+        admission._ACQUISITION_CHECKPOINT_SCHEMA
+        == acquisition_producer.CHECKPOINT_SCHEMA_VERSION
+        == 3
+    )
+    assert admission._PINNED_CDP_SCHEMA == pinned_cdp_producer.PROBE_SCHEMA_VERSION == 15
+    assert 14 in admission._HISTORICAL_PINNED_CDP_SCHEMAS
 
 
 def test_authority_admission_accepts_production_built_browser_foundation(tmp_path: Path) -> None:
@@ -286,7 +300,7 @@ def test_new_authority_flag_requires_narrow_receipt_type(authority_fixture, acti
 
 
 @pytest.mark.parametrize("action", ("acquisition-run", "acquisition-status", "acquisition-complete"))
-def test_schema6_keeps_previously_bound_full_foundation_fallback(
+def test_current_acquisition_keeps_previously_bound_full_foundation_fallback(
     authority_fixture, action: str
 ) -> None:
     fixture = authority_fixture
@@ -313,13 +327,13 @@ def test_narrow_authority_is_never_accepted_as_foundation(authority_fixture, act
 @pytest.mark.parametrize(
     "action", ("acquisition-run", "acquisition-status", "acquisition-complete", "status")
 )
-def test_schema6_acquisition_uses_its_bound_authority(authority_fixture, action: str) -> None:
+def test_current_acquisition_uses_its_bound_authority(authority_fixture, action: str) -> None:
     fixture = authority_fixture
     _use_authority(fixture)
     assert _resolve(fixture, action, acquisition_root=fixture.acquisition) == fixture.admitted
 
 
-def test_schema6_completion_uses_bound_provenance_and_authority(authority_fixture) -> None:
+def test_current_completion_uses_bound_provenance_and_authority(authority_fixture) -> None:
     fixture = authority_fixture
     _use_authority(fixture)
     assert _resolve(
@@ -327,7 +341,7 @@ def test_schema6_completion_uses_bound_provenance_and_authority(authority_fixtur
     ) == fixture.admitted
 
 
-@pytest.mark.parametrize("schema", (1, 2, 3, 4, 5))
+@pytest.mark.parametrize("schema", (1, 2, 3, 4, 5, 6))
 def test_legacy_acquisition_is_inspectable_but_not_current_launch_authority(
     authority_fixture, schema: int
 ) -> None:
@@ -380,16 +394,58 @@ def test_current_provenance_rejects_legacy_binding(authority_fixture) -> None:
         _resolve(fixture, "acquisition-run", acquisition_root=fixture.acquisition)
 
 
-@pytest.mark.parametrize("field,value", (
-    ("acquisition_schema_version", 6.0),
-    ("completion_schema_version", 3.0),
-    ("completion_schema_version", True),
-))
+@pytest.mark.parametrize(
+    "field,value",
+    (
+        ("acquisition_schema_version", float(acquisition_producer.SCHEMA_VERSION)),
+        ("completion_schema_version", float(acquisition_producer.COMPLETION_SCHEMA_VERSION)),
+        ("completion_schema_version", True),
+    ),
+)
 def test_current_completion_rejects_schema_aliases(authority_fixture, field, value) -> None:
     fixture = authority_fixture
     _rewrite(fixture.acquisition_completion, lambda payload: payload.update({field: value}))
     with pytest.raises(ValueError, match="not current build authority"):
         _resolve(fixture, "cohort", acquisition_completion=fixture.acquisition_completion)
+
+
+@pytest.mark.parametrize("checkpoint", (None, 2, True, 3.0))
+def test_current_completion_requires_exact_checkpoint_schema(
+    authority_fixture,
+    checkpoint: object,
+) -> None:
+    fixture = authority_fixture
+
+    def mutate(payload: dict[str, object]) -> None:
+        if checkpoint is None:
+            payload.pop("checkpoint_schema_version")
+        else:
+            payload["checkpoint_schema_version"] = checkpoint
+
+    _rewrite(fixture.acquisition_completion, mutate)
+    with pytest.raises(ValueError, match="not current build authority"):
+        _resolve(fixture, "cohort", acquisition_completion=fixture.acquisition_completion)
+
+
+def test_v96_authority_is_verify_only_and_never_current_admission(authority_fixture) -> None:
+    fixture = authority_fixture
+    _rewrite(
+        fixture.pinned,
+        lambda payload: payload.update(probe_schema_version=14),
+    )
+    _rewrite(
+        fixture.authority,
+        lambda payload: payload["evidence"].update(pinned_cdp_probe=_binding(fixture.pinned)),
+    )
+
+    assert _resolve(fixture, "verify", target=fixture.authority) is None
+    assert _resolve(fixture, "status", acquisition_authority=fixture.authority) is None
+    with pytest.raises(admission._HistoricalAuthority, match="historical"):
+        _resolve(
+            fixture,
+            "acquisition-init",
+            acquisition_authority=fixture.authority,
+        )
 
 
 def test_bound_study_contract_drift_rejects_current_authority(authority_fixture) -> None:

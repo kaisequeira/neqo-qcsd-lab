@@ -21,6 +21,11 @@ from types import SimpleNamespace
 import pytest
 
 import qcsd_lab.cli as cli
+from qcsd_lab.class_acquisition import (
+    CHECKPOINT_SCHEMA_VERSION as CLASS_ACQUISITION_CHECKPOINT_SCHEMA_VERSION,
+    COMPLETION_SCHEMA_VERSION as CLASS_ACQUISITION_COMPLETION_SCHEMA_VERSION,
+    SCHEMA_VERSION as CLASS_ACQUISITION_SCHEMA_VERSION,
+)
 from qcsd_lab.orchestrator import CampaignIncomplete
 from qcsd_lab.util import atomic_text, sha256_file
 
@@ -664,7 +669,7 @@ def _class_build_admission_fixture(tmp_path: Path):
         acquisition / "provenance.json",
         "qcsd-class-study-acquisition-provenance",
         {
-            "acquisition_schema_version": 6,
+            "acquisition_schema_version": CLASS_ACQUISITION_SCHEMA_VERSION,
             "acquisition_authority": binding(foundation),
             "image_digest": admitted.prepare_image,
             "source": {**source, "image_digest": admitted.prepare_image},
@@ -674,8 +679,9 @@ def _class_build_admission_fixture(tmp_path: Path):
         acquisition / "completion.json",
         "qcsd-class-study-acquisition-completion",
         {
-            "acquisition_schema_version": 6,
-            "completion_schema_version": 3,
+            "acquisition_schema_version": CLASS_ACQUISITION_SCHEMA_VERSION,
+            "completion_schema_version": CLASS_ACQUISITION_COMPLETION_SCHEMA_VERSION,
+            "checkpoint_schema_version": CLASS_ACQUISITION_CHECKPOINT_SCHEMA_VERSION,
             "provenance_sha256": sha256_file(acquisition_provenance),
         },
     )
@@ -1140,7 +1146,7 @@ def _second_class_build_admission_fixture(fixture):
         acquisition / "provenance.json",
         "qcsd-class-study-acquisition-provenance",
         {
-            "acquisition_schema_version": 6,
+            "acquisition_schema_version": CLASS_ACQUISITION_SCHEMA_VERSION,
             "acquisition_authority": binding(foundation),
             "image_digest": admitted.prepare_image,
             "source": {**source, "image_digest": admitted.prepare_image},
@@ -1150,8 +1156,9 @@ def _second_class_build_admission_fixture(fixture):
         acquisition / "completion.json",
         "qcsd-class-study-acquisition-completion",
         {
-            "acquisition_schema_version": 6,
-            "completion_schema_version": 3,
+            "acquisition_schema_version": CLASS_ACQUISITION_SCHEMA_VERSION,
+            "completion_schema_version": CLASS_ACQUISITION_COMPLETION_SCHEMA_VERSION,
+            "checkpoint_schema_version": CLASS_ACQUISITION_CHECKPOINT_SCHEMA_VERSION,
             "provenance_sha256": sha256_file(provenance),
         },
     )

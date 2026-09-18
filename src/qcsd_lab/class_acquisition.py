@@ -33,10 +33,11 @@ from .browser_egress import (
     install_context_egress_guards,
     launch_production_browser,
     validate_non_replayable_egress_failure_evidence,
+    validate_non_replayable_egress_success_summary,
 )
 from .acquisition_timing import (
     ACTION_TIMING_CONTRACT,
-    BASELINE_SCHEDULING_CONTRACT,
+    BASELINE_SCHEDULING_CONTRACT,  # noqa: F401 - retained for historical verifier callers
     GLOBAL_LIVE_PAGE_CAP,
     MAX_CANDIDATES_PER_ACTION,
     MINIMUM_BASELINE_SPACING_MS,
@@ -52,10 +53,15 @@ from .acquisition_timing import (
 from .acquisition_selection import ACQUISITION_SELECTION_POLICY, derive_acquisition_selection
 from .cdp_targets import (
     CDP_TARGET_INSTRUMENTATION_POLICY,
+    SRCDOC_PSEUDO_DOCUMENT_POLICY,
+    SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
     BrowserSharedWorkerGuard,
     CdpTargetIntegrityError,
     CdpTargetSource,
     RecursiveCdpTargetRouter,
+    validate_bootstrap_prearm_summary,
+    validate_egress_prearm_summary,
+    validate_srcdoc_pseudo_document_summary,
 )
 from .class_catalogue import (
     HTML_MEDIA_TYPES,
@@ -79,10 +85,15 @@ from .discovery_evidence import (
     DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION,
     PASSIVE_RENDER_CONTRACT,
     PASSIVE_RENDER_CONTRACT_SHA256,
+    RENDER_OBSERVATION_SCHEMA_VERSION,
     evidence_sha256,
     validate_render_observation,
 )
-from .manifest import runtime_manifest, validate_research_preparation
+from .manifest import (
+    project_stable_response_lengths,
+    runtime_manifest,
+    validate_research_preparation,
+)
 from .playwright_driver import (
     expected_browser_tool_identity,
     playwright_driver_session,
@@ -100,19 +111,32 @@ from .util import (
     source_metadata,
 )
 
-SCHEMA_VERSION = 6
-HISTORICAL_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5})
+SCHEMA_VERSION = 7
+HISTORICAL_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6})
 SUPPORTED_SCHEMA_VERSIONS = HISTORICAL_SCHEMA_VERSIONS | {SCHEMA_VERSION}
 PROVENANCE_TYPE = "qcsd-class-study-acquisition-provenance"
 TERMINAL_TYPE = "qcsd-class-study-acquisition-terminal"
-CHECKPOINT_SCHEMA_VERSION = 2
-TERMINAL_SCHEMA_VERSION = 3
+CHECKPOINT_SCHEMA_VERSION = 3
+TERMINAL_SCHEMA_VERSION = 4
 COMPLETION_TYPE = "qcsd-class-study-acquisition-completion"
 SELECTION_TYPE = "qcsd-class-study-acquisition-selection"
-COMPLETION_SCHEMA_VERSION = 3
+COMPLETION_SCHEMA_VERSION = 4
 CHECKPOINT_TYPE = "qcsd-class-study-acquisition-checkpoint"
 ACTIVE_BATCH_SCHEMA_VERSION = 1
 DOCUMENT_RESPONSE_RECEIPT_TYPE = "qcsd-class-study-document-response"
+DOCUMENT_RESPONSE_SCHEMA_VERSION = 2
+SCHEMA_SIX_CHECKPOINT_SCHEMA_VERSION = 2
+SCHEMA_SIX_TERMINAL_SCHEMA_VERSION = 3
+SCHEMA_SIX_COMPLETION_SCHEMA_VERSION = 3
+SCHEMA_SIX_DOCUMENT_RESPONSE_SCHEMA_VERSION = 1
+_MODERN_CHECKPOINT_SCHEMA_VERSIONS = frozenset({4, 5, 6, SCHEMA_VERSION})
+_FIXED_PROVENANCE_SCHEMA_VERSIONS = frozenset({5, 6, SCHEMA_VERSION})
+_POLICY_EVIDENCE_SCHEMA_VERSIONS = frozenset({5, 6, SCHEMA_VERSION})
+_SELECTION_SCHEMA_VERSIONS = frozenset({6, SCHEMA_VERSION})
+_INSTRUMENTATION_EVIDENCE_SCHEMA_VERSIONS = frozenset({2, 3, 4, 5, 6, SCHEMA_VERSION})
+_RENDER_EVIDENCE_SCHEMA_VERSIONS = frozenset({3, 4, 5, 6, SCHEMA_VERSION})
+_TERMINAL_STATE_SCHEMA_VERSIONS = frozenset({2, 3, 4, 5, 6, SCHEMA_VERSION})
+_DURATION_LIMIT_SCHEMA_VERSIONS = frozenset({3, 4, 5, 6, SCHEMA_VERSION})
 MAX_ORIGIN_PASSES = 8
 MAX_APPROVED_ORIGINS = 32
 MAX_OBSERVED_AUDIT_ORIGINS = 512
@@ -323,9 +347,7 @@ DOMAIN_SAFETY_POLICY = {
     ],
 }
 
-NAVIGATION_IMPLEMENTATION = (
-    "playwright-public-cdp-recursive-catalogue-boundary-egress-guard-v5"
-)
+NAVIGATION_IMPLEMENTATION = "playwright-public-cdp-recursive-catalogue-boundary-egress-guard-v5"
 REGISTRABLE_DOMAIN_POLICY = "exact-frozen-tranco-candidate-domain"
 ELIGIBILITY_INPUTS = ["page-safety", "three-window-technical-stability"]
 PROHIBITED_INPUTS = ["classifier", "defence", "latency", "bandwidth", "privacy"]
@@ -373,9 +395,341 @@ SCHEMA_FIVE_PROVENANCE_FIELDS = frozenset(
         "prohibited_inputs",
     }
 )
-CURRENT_PROVENANCE_FIELDS = (
-    SCHEMA_FIVE_PROVENANCE_FIELDS - {"foundation_attestation"}
-) | {"acquisition_authority", "acquisition_selection_policy"}
+CURRENT_PROVENANCE_FIELDS = (SCHEMA_FIVE_PROVENANCE_FIELDS - {"foundation_attestation"}) | {
+    "acquisition_authority",
+    "acquisition_selection_policy",
+}
+_FIXED_PROVENANCE_FIELDS = frozenset(
+    {
+        "browser_tool",
+        "navigation_implementation",
+        "cdp_target_instrumentation_policy",
+        "non_replayable_egress_contract",
+        "passive_render_contract",
+        "passive_render_contract_sha256",
+        "browser_navigation_timeout_ms",
+        "passive_render_hard_cap_after_load_ms",
+        "acquisition_action_timing_contract",
+        "baseline_scheduling_contract",
+        "registrable_domain_policy",
+        "domain_safety_policy",
+        "domain_safety_policy_sha256",
+        "origin_policy",
+        "eligibility_inputs",
+        "prohibited_inputs",
+    }
+)
+# Historical contracts are literals recovered from the clean source that first
+# emitted each schema, plus the immutable schema-six acquisition receipts.  Do
+# not derive them from current imports: several policies changed without an
+# acquisition-schema bump.
+_SCHEMA_THREE_FOUR_CDP_TARGET_INSTRUMENTATION_POLICY = (
+    "playwright-1.52-public-cdp-recursive-non-flat-paused-debugger-targets-v3"
+)
+_SCHEMA_THREE_FOUR_RENDER_OBSERVATION_SCHEMA_VERSION = 1
+_SCHEMA_THREE_FOUR_DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION = 2
+_SCHEMA_THREE_FOUR_PASSIVE_RENDER_CONTRACT: dict[str, Any] = {
+    "schema_version": 1,
+    "policy": "bounded-passive-render-quiescence-v1",
+    "viewport": {"width": 1365, "height": 768, "deviceScaleFactor": 1},
+    "cache": "disabled",
+    "service_workers": "bypassed-and-registration-blocked",
+    "interaction": "none",
+    "minimum_after_load_ms": 10_000,
+    "quiet_window_ms": 3_000,
+    "quiet_window_begins": "after-minimum-or-last-relevant-event-whichever-is-later",
+    "hard_cap_after_load_ms": 30_000,
+    "poll_interval_ms": 100,
+    "active_request_scope": "all-network-request-occurrences",
+    "relevant_events": [
+        "network-request",
+        "fetch-request",
+        "network-terminal",
+        "target-attached",
+        "target-detached",
+        "target-destroyed",
+        "target-info-changed",
+    ],
+    "hard_cap_policy": "typed-candidate-rejection",
+}
+_SCHEMA_THREE_FOUR_PASSIVE_RENDER_CONTRACT_SHA256 = (
+    "690d1715642ae553f7329bb13f2458f3089545a4483460874abd7d546faa192d"
+)
+_SCHEMA_FIVE_CDP_TARGET_INSTRUMENTATION_POLICY_V10 = (
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v10"
+)
+_SCHEMA_FIVE_CDP_TARGET_INSTRUMENTATION_POLICY_V12 = (
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v12"
+)
+_SCHEMA_FIVE_CDP_TARGET_INSTRUMENTATION_POLICY_V13 = (
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v13"
+)
+_SCHEMA_FIVE_CDP_TARGET_INSTRUMENTATION_POLICY_V14 = (
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v14"
+)
+_SCHEMA_FIVE_CDP_TARGET_INSTRUMENTATION_POLICY = _SCHEMA_FIVE_CDP_TARGET_INSTRUMENTATION_POLICY_V10
+_SCHEMA_FIVE_FIXED_PROVENANCE_SHA256_BY_INSTRUMENTATION_POLICY = {
+    _SCHEMA_FIVE_CDP_TARGET_INSTRUMENTATION_POLICY_V10: (
+        "8c79b0093409f359b78a4bb5abd526ab6446ef872da56981471939e5cfd23820"
+    ),
+    _SCHEMA_FIVE_CDP_TARGET_INSTRUMENTATION_POLICY_V12: (
+        "9f73fb7b93e64e8a14783d957818ab24945abbc034e3ebfb2fa066d96deed5aa"
+    ),
+    _SCHEMA_FIVE_CDP_TARGET_INSTRUMENTATION_POLICY_V13: (
+        "c3fee8c6ccfa41028c74a3d0c06042812dfe71eabe07843457787032d6c74e02"
+    ),
+    _SCHEMA_FIVE_CDP_TARGET_INSTRUMENTATION_POLICY_V14: (
+        "7f87a9b49211f96a9169d80066cca5c1813fe4583bb6f60cf9b247853514eed1"
+    ),
+}
+_SCHEMA_FIVE_FIXED_PROVENANCE_SHA256 = (
+    _SCHEMA_FIVE_FIXED_PROVENANCE_SHA256_BY_INSTRUMENTATION_POLICY[
+        _SCHEMA_FIVE_CDP_TARGET_INSTRUMENTATION_POLICY
+    ]
+)
+_SCHEMA_FIVE_SOURCE_LAB_COMMITS_BY_INSTRUMENTATION_POLICY = {
+    _SCHEMA_FIVE_CDP_TARGET_INSTRUMENTATION_POLICY_V10: (
+        "a20382c658857ca0362fcf877559c8e3320ac376",
+        "e719219b42826126fdc7771c2dec0463d425a83d",
+        "69a14ebe48f78d08a8b36d3e573955ec64f00ff9",
+        "d7ff286e8606eb7802ccfc9bc48e540eeef0be79",
+        "24d1972f1550cf9db5102d7ad2585b638e21df87",
+        "9d53e08f95c5130c60aadbef8a99273a44d117b5",
+        "c55b08aa06fbb4ac16e3655d6d3911109d853730",
+        "2d96c924e653aa45ffef5964ff216ba6307cbb0c",
+        "d2ff0f6bc439675ab016c94770015456890020ae",
+        "81dd702affed4066322faa21ff27f3c7b842ed6b",
+        "18d4ab3144e04f0a012ffcba54d349b4046c4336",
+        "9a6a45c9d3adfa1b5d5dacd6c51b08440c07bde6",
+        "d73ee3f67d9c001e5d4abcad64d6f9497ee73ef9",
+        "93f7cfc0d5feb0b286e00056c32f2b7364f62c25",
+    ),
+    _SCHEMA_FIVE_CDP_TARGET_INSTRUMENTATION_POLICY_V12: (
+        "01547462b212ac946aa4a47936e0fd99e2b09c78",
+        "a0ed21ebe264dd7d4b8ea838ef456071df75564a",
+        "9c85da3abac680cc787dd65c38ebd72ead026e7d",
+        "fbb2112bc437ef36007c9db510120125cd64a48b",
+        "03b0953235e45dcbd71cfcad63b3342924f9c3b8",
+        "3b8c78895400c4b4eb8c5cba399d08226a002458",
+        "2bab7a2c0a0d06e82e0f55102a3c1b7e552ef86f",
+        "bee5b1a4bada4a461ac7f0a5c2d22c3f5aa14cdc",
+        "15e478dc7bf8a52740d773de4fad4877140bc4a4",
+        "60909195e3138957b8fdd12d70dedbf4eeb03224",
+        "6da10dcb52e5856ce580759453925d20550fd683",
+        "8223740fff4d8f928e912822935cad6d0b8e8426",
+        "e57c6229a47524c0b23cb5047a75e9ff6fe2632e",
+        "8ae6610bf4999af70d9327c874a3783ebabf9f7b",
+    ),
+    _SCHEMA_FIVE_CDP_TARGET_INSTRUMENTATION_POLICY_V13: (
+        "3229a2996e7ec2c148886d431fe95b28ada703fa",
+        "045fb99654ef77b93ba7ba3c64d57fcc07b904b9",
+        "b466cd63e8f17835a75e10e97718cf4aae8b304e",
+        "8e1a11d5071c58bfbd96633ee2e01629f19ec1c0",
+        "ea4cf2b65b4a3fd650c0497beda600ea235db456",
+    ),
+    _SCHEMA_FIVE_CDP_TARGET_INSTRUMENTATION_POLICY_V14: (
+        "46eb8172a4fba42a07e7e4da3a40c444ee48259d",
+        "083612c02c07cd633ecd76b5df6df691f9d7ecf8",
+        "7ad66e1a512574d3e660ec9ce06e50db7d089c5b",
+        "4db93077025fcc16eeab427aef0880bff69abb5c",
+        "44142d2e14917e03b26ffa9f819d1768c716087a",
+    ),
+}
+_SCHEMA_SIX_CDP_TARGET_INSTRUMENTATION_POLICY_V14 = (
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v14"
+)
+_SCHEMA_SIX_CDP_TARGET_INSTRUMENTATION_POLICY_V15 = (
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v15"
+)
+_SCHEMA_SIX_CDP_TARGET_INSTRUMENTATION_POLICY = (
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v16"
+)
+_SCHEMA_SIX_FIXED_PROVENANCE_SHA256_BY_INSTRUMENTATION_POLICY = {
+    _SCHEMA_SIX_CDP_TARGET_INSTRUMENTATION_POLICY_V14: (
+        "96ab7c6958bd99a3662745a17c3f8f2548b786c385af4b9af36ca2b58610acae"
+    ),
+    _SCHEMA_SIX_CDP_TARGET_INSTRUMENTATION_POLICY_V15: (
+        "c90b21d46b3dd1081a7734f0d765eb85bbbffc31266af1e5d0a5da45dfc4d04c"
+    ),
+    _SCHEMA_SIX_CDP_TARGET_INSTRUMENTATION_POLICY: (
+        "c709214c3e4bad8310cae0b0b23deff3144ed52639c2ab3aeccb2bad4d25e36d"
+    ),
+}
+_SCHEMA_SIX_FIXED_PROVENANCE_SHA256 = _SCHEMA_SIX_FIXED_PROVENANCE_SHA256_BY_INSTRUMENTATION_POLICY[
+    _SCHEMA_SIX_CDP_TARGET_INSTRUMENTATION_POLICY
+]
+_SCHEMA_SIX_RENDER_OBSERVATION_SCHEMA_VERSION = 3
+_SCHEMA_SIX_DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION = 4
+_SCHEMA_SIX_PASSIVE_RENDER_CONTRACT: dict[str, Any] = {
+    "schema_version": 3,
+    "policy": "bounded-passive-render-quiescence-v3",
+    "viewport": {"width": 1365, "height": 768, "deviceScaleFactor": 1},
+    "cache": "disabled",
+    "service_workers": "bypassed-and-registration-blocked",
+    "interaction": "none",
+    "minimum_after_load_ms": 10_000,
+    "quiet_window_ms": 3_000,
+    "quiet_window_begins": "after-minimum-or-last-relevant-event-whichever-is-later",
+    "hard_cap_after_load_ms": 30_000,
+    "poll_interval_ms": 100,
+    "active_request_scope": "all-instrumented-urlloader-request-occurrences",
+    "non_replayable_egress_policy": "blocked-non-urlloader-egress-v1",
+    "non_replayable_egress_boundary": {
+        "page_frame_websocket": "playwright-route-before-page",
+        "paused_target_constructor_shim": True,
+        "cdp_network_events": "post-construction-tripwire-only",
+        "packet_level_completeness_claimed": False,
+    },
+    "quiescence_requires": [
+        "no-active-network-request-occurrences",
+        "recursive-target-router-shutdown-ready",
+        "no-pending-shared-worker-bootstrap-prearm",
+        "all-observed-target-egress-shims-prearmed",
+        "zero-non-replayable-egress-attempts",
+        "zero-browser-context-service-workers",
+    ],
+    "relevant_events": [
+        "network-request",
+        "fetch-request",
+        "network-terminal",
+        "target-attached",
+        "target-detached",
+        "target-destroyed",
+        "target-info-changed",
+        "non-replayable-egress-attempt",
+    ],
+    "hard_cap_policy": "typed-candidate-rejection",
+}
+_SCHEMA_SIX_PASSIVE_RENDER_CONTRACT_SHA256 = (
+    "8679865eb1125ff78d614e06b89432a0c73b62326d6042f216a3320480a74ec9"
+)
+_HISTORICAL_ACQUISITION_EVIDENCE_CONTRACTS: dict[int, tuple[Mapping[str, Any], ...]] = {
+    # Schema one predates CDP instrumentation and document/render evidence.
+    1: (
+        {
+            "instrumentation_policy": None,
+            "passive_render_contract": None,
+            "passive_render_contract_sha256": None,
+            "render_observation_schema_version": None,
+            "discovery_event_audit_schema_version": None,
+            "document_response_schema_version": None,
+            "fixed_provenance_sha256": None,
+            "source_lab_commits": ("3ea8490ac8fd1c2b31b0ed828a11ae72d17d79c2",),
+        },
+    ),
+    # No schema-two producer survives.  The schema-three reader at bbc0be9
+    # nevertheless declares policy-v3 observations and schema-one document
+    # response namespaces for schema two, but no render/audit contract.
+    2: (
+        {
+            "instrumentation_policy": (_SCHEMA_THREE_FOUR_CDP_TARGET_INSTRUMENTATION_POLICY),
+            "passive_render_contract": None,
+            "passive_render_contract_sha256": None,
+            "render_observation_schema_version": None,
+            "discovery_event_audit_schema_version": None,
+            "document_response_schema_version": 1,
+            "fixed_provenance_sha256": None,
+            "source_lab_commits": (),
+        },
+    ),
+    3: (
+        {
+            "instrumentation_policy": (_SCHEMA_THREE_FOUR_CDP_TARGET_INSTRUMENTATION_POLICY),
+            "passive_render_contract": _SCHEMA_THREE_FOUR_PASSIVE_RENDER_CONTRACT,
+            "passive_render_contract_sha256": (_SCHEMA_THREE_FOUR_PASSIVE_RENDER_CONTRACT_SHA256),
+            "render_observation_schema_version": (
+                _SCHEMA_THREE_FOUR_RENDER_OBSERVATION_SCHEMA_VERSION
+            ),
+            "discovery_event_audit_schema_version": (
+                _SCHEMA_THREE_FOUR_DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION
+            ),
+            "document_response_schema_version": 1,
+            "fixed_provenance_sha256": None,
+            "source_lab_commits": ("bbc0be968ec21fddf5431493cf54c38d369208f5",),
+        },
+    ),
+    4: (
+        {
+            "instrumentation_policy": (_SCHEMA_THREE_FOUR_CDP_TARGET_INSTRUMENTATION_POLICY),
+            "passive_render_contract": _SCHEMA_THREE_FOUR_PASSIVE_RENDER_CONTRACT,
+            "passive_render_contract_sha256": (_SCHEMA_THREE_FOUR_PASSIVE_RENDER_CONTRACT_SHA256),
+            "render_observation_schema_version": (
+                _SCHEMA_THREE_FOUR_RENDER_OBSERVATION_SCHEMA_VERSION
+            ),
+            "discovery_event_audit_schema_version": (
+                _SCHEMA_THREE_FOUR_DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION
+            ),
+            "document_response_schema_version": 1,
+            "fixed_provenance_sha256": None,
+            "source_lab_commits": (
+                "84d6a19d155f54cee2bb1539abb6ff7797ac26ac",
+                "a420d3240b43d92ee0fb1b063ab3c550bd4fbe6f",
+            ),
+        },
+    ),
+    5: tuple(
+        {
+            "instrumentation_policy": instrumentation_policy,
+            "passive_render_contract": _SCHEMA_SIX_PASSIVE_RENDER_CONTRACT,
+            "passive_render_contract_sha256": (_SCHEMA_SIX_PASSIVE_RENDER_CONTRACT_SHA256),
+            "render_observation_schema_version": (_SCHEMA_SIX_RENDER_OBSERVATION_SCHEMA_VERSION),
+            "discovery_event_audit_schema_version": (
+                _SCHEMA_SIX_DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION
+            ),
+            "document_response_schema_version": 1,
+            "fixed_provenance_sha256": fixed_provenance_sha256,
+            "source_lab_commits": source_lab_commits,
+        }
+        for instrumentation_policy, fixed_provenance_sha256, source_lab_commits in (
+            (
+                policy,
+                _SCHEMA_FIVE_FIXED_PROVENANCE_SHA256_BY_INSTRUMENTATION_POLICY[policy],
+                _SCHEMA_FIVE_SOURCE_LAB_COMMITS_BY_INSTRUMENTATION_POLICY[policy],
+            )
+            for policy in (
+                _SCHEMA_FIVE_CDP_TARGET_INSTRUMENTATION_POLICY_V10,
+                _SCHEMA_FIVE_CDP_TARGET_INSTRUMENTATION_POLICY_V12,
+                _SCHEMA_FIVE_CDP_TARGET_INSTRUMENTATION_POLICY_V13,
+                _SCHEMA_FIVE_CDP_TARGET_INSTRUMENTATION_POLICY_V14,
+            )
+        )
+    ),
+    6: tuple(
+        {
+            "instrumentation_policy": instrumentation_policy,
+            "passive_render_contract": _SCHEMA_SIX_PASSIVE_RENDER_CONTRACT,
+            "passive_render_contract_sha256": (_SCHEMA_SIX_PASSIVE_RENDER_CONTRACT_SHA256),
+            "render_observation_schema_version": (_SCHEMA_SIX_RENDER_OBSERVATION_SCHEMA_VERSION),
+            "discovery_event_audit_schema_version": (
+                _SCHEMA_SIX_DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION
+            ),
+            "document_response_schema_version": 1,
+            "fixed_provenance_sha256": fixed_provenance_sha256,
+            "source_lab_commits": (source_lab_commit,),
+        }
+        for instrumentation_policy, fixed_provenance_sha256, source_lab_commit in (
+            (
+                _SCHEMA_SIX_CDP_TARGET_INSTRUMENTATION_POLICY_V14,
+                _SCHEMA_SIX_FIXED_PROVENANCE_SHA256_BY_INSTRUMENTATION_POLICY[
+                    _SCHEMA_SIX_CDP_TARGET_INSTRUMENTATION_POLICY_V14
+                ],
+                "8eaf1daa4113cbe261c0c79d7a3404c9fd8b3eda",
+            ),
+            (
+                _SCHEMA_SIX_CDP_TARGET_INSTRUMENTATION_POLICY_V15,
+                _SCHEMA_SIX_FIXED_PROVENANCE_SHA256_BY_INSTRUMENTATION_POLICY[
+                    _SCHEMA_SIX_CDP_TARGET_INSTRUMENTATION_POLICY_V15
+                ],
+                "9aed576a13659a51b0c25c6f81bf9115ebb8e149",
+            ),
+            (
+                _SCHEMA_SIX_CDP_TARGET_INSTRUMENTATION_POLICY,
+                _SCHEMA_SIX_FIXED_PROVENANCE_SHA256,
+                "6957614b83e67cced5fd262fe97814824d21c8f9",
+            ),
+        )
+    ),
+}
 _SOURCE_FIELDS = frozenset(
     {
         "image_digest",
@@ -401,6 +755,582 @@ def _matches_json_contract(value: object, expected: object) -> bool:
         return canonical_json_bytes(value) == canonical_json_bytes(expected)
     except (TypeError, ValueError):
         return False
+
+
+def _checkpoint_schema_for(acquisition_schema_version: int) -> int:
+    if acquisition_schema_version == SCHEMA_VERSION:
+        return CHECKPOINT_SCHEMA_VERSION
+    if acquisition_schema_version in {4, 5, 6}:
+        return SCHEMA_SIX_CHECKPOINT_SCHEMA_VERSION
+    raise ValueError("acquisition schema has no versioned checkpoint contract")
+
+
+def _terminal_schema_for(acquisition_schema_version: int) -> int:
+    if acquisition_schema_version == SCHEMA_VERSION:
+        return TERMINAL_SCHEMA_VERSION
+    if acquisition_schema_version in {4, 5, 6}:
+        return SCHEMA_SIX_TERMINAL_SCHEMA_VERSION
+    if acquisition_schema_version in {2, 3}:
+        return 2
+    raise ValueError("acquisition schema has no versioned terminal contract")
+
+
+def _completion_schema_for(acquisition_schema_version: int) -> int:
+    if acquisition_schema_version == SCHEMA_VERSION:
+        return COMPLETION_SCHEMA_VERSION
+    if acquisition_schema_version == 6:
+        return SCHEMA_SIX_COMPLETION_SCHEMA_VERSION
+    if acquisition_schema_version in {4, 5}:
+        return 2
+    raise ValueError("acquisition schema has no versioned completion contract")
+
+
+def _historical_evidence_contract_for(
+    acquisition_schema_version: int,
+    *,
+    instrumentation_policy: object = None,
+) -> Mapping[str, Any]:
+    variants = _HISTORICAL_ACQUISITION_EVIDENCE_CONTRACTS.get(acquisition_schema_version)
+    if variants is None:
+        raise ValueError("acquisition evidence schema is unsupported")
+    if instrumentation_policy is None:
+        if len(variants) != 1:
+            raise ValueError(
+                "historical acquisition evidence contract is ambiguous without its "
+                "instrumentation policy"
+            )
+        return variants[0]
+    matches = [
+        contract
+        for contract in variants
+        if contract["instrumentation_policy"] == instrumentation_policy
+    ]
+    if len(matches) != 1:
+        raise ValueError("historical acquisition instrumentation policy does not match its schema")
+    return matches[0]
+
+
+def _shared_historical_contract_value(
+    acquisition_schema_version: int,
+    field: str,
+) -> object:
+    variants = _HISTORICAL_ACQUISITION_EVIDENCE_CONTRACTS.get(acquisition_schema_version)
+    if variants is None:
+        raise ValueError("acquisition evidence schema is unsupported")
+    encoded = {canonical_json_bytes(contract[field]) for contract in variants}
+    if len(encoded) != 1:
+        raise ValueError(f"historical acquisition {field} is ambiguous")
+    return variants[0][field]
+
+
+def _document_response_schema_for(
+    acquisition_schema_version: int,
+    *,
+    instrumentation_policy: object = None,
+) -> int:
+    if acquisition_schema_version == SCHEMA_VERSION:
+        return DOCUMENT_RESPONSE_SCHEMA_VERSION
+    if acquisition_schema_version in HISTORICAL_SCHEMA_VERSIONS:
+        if instrumentation_policy is None:
+            value = _shared_historical_contract_value(
+                acquisition_schema_version,
+                "document_response_schema_version",
+            )
+        else:
+            value = _historical_evidence_contract_for(
+                acquisition_schema_version,
+                instrumentation_policy=instrumentation_policy,
+            )["document_response_schema_version"]
+        if type(value) is int:
+            return value
+        raise ValueError("acquisition schema has no document-response contract")
+    raise ValueError("acquisition schema has no document-response contract")
+
+
+def _instrumentation_policy_for(
+    acquisition_schema_version: int,
+    *,
+    recorded_policy: object = None,
+) -> str:
+    if acquisition_schema_version == SCHEMA_VERSION:
+        if recorded_policy is not None and recorded_policy != CDP_TARGET_INSTRUMENTATION_POLICY:
+            raise ValueError("current acquisition instrumentation policy is invalid")
+        return CDP_TARGET_INSTRUMENTATION_POLICY
+    if acquisition_schema_version in HISTORICAL_SCHEMA_VERSIONS:
+        contract = _historical_evidence_contract_for(
+            acquisition_schema_version,
+            instrumentation_policy=recorded_policy,
+        )
+        value = contract["instrumentation_policy"]
+        if isinstance(value, str):
+            return value
+        raise ValueError("acquisition schema has no instrumentation contract")
+    raise ValueError("acquisition instrumentation schema is unsupported")
+
+
+def _passive_render_contract_for(acquisition_schema_version: int) -> Mapping[str, Any]:
+    if acquisition_schema_version == SCHEMA_VERSION:
+        return PASSIVE_RENDER_CONTRACT
+    if acquisition_schema_version in HISTORICAL_SCHEMA_VERSIONS:
+        value = _shared_historical_contract_value(
+            acquisition_schema_version,
+            "passive_render_contract",
+        )
+        if isinstance(value, Mapping):
+            return value
+        raise ValueError("acquisition schema has no passive-render contract")
+    raise ValueError("acquisition render schema is unsupported")
+
+
+def _passive_render_contract_sha256_for(acquisition_schema_version: int) -> str:
+    if acquisition_schema_version == SCHEMA_VERSION:
+        return PASSIVE_RENDER_CONTRACT_SHA256
+    if acquisition_schema_version in HISTORICAL_SCHEMA_VERSIONS:
+        value = _shared_historical_contract_value(
+            acquisition_schema_version,
+            "passive_render_contract_sha256",
+        )
+        if isinstance(value, str):
+            return value
+        raise ValueError("acquisition schema has no passive-render contract")
+    raise ValueError("acquisition render schema is unsupported")
+
+
+def _validate_schema_three_four_render_observation(
+    value: object,
+    *,
+    allow_failure: bool = False,
+) -> None:
+    """Validate the render-observation v1 shape emitted by schemas three/four."""
+
+    fields = {
+        "schema_version",
+        "clock",
+        "navigation_started_ms",
+        "load_event_ms",
+        "last_relevant_event_ms",
+        "quiet_started_ms",
+        "cutoff_ms",
+        "active_request_ids",
+        "active_request_count",
+        "cutoff_reason",
+    }
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise ValueError("historical render observation fields differ from the contract")
+    if (
+        type(value["schema_version"]) is not int
+        or value["schema_version"] != _SCHEMA_THREE_FOUR_RENDER_OBSERVATION_SCHEMA_VERSION
+        or value["clock"] != "monotonic-relative-ms"
+    ):
+        raise ValueError("historical render observation schema or clock is invalid")
+    timing_fields = (
+        "navigation_started_ms",
+        "load_event_ms",
+        "last_relevant_event_ms",
+        "quiet_started_ms",
+        "cutoff_ms",
+    )
+    if any(type(value[field]) is not int or value[field] < 0 for field in timing_fields):
+        raise ValueError("historical render observation timestamps are invalid")
+    navigation = value["navigation_started_ms"]
+    load = value["load_event_ms"]
+    last = value["last_relevant_event_ms"]
+    quiet = value["quiet_started_ms"]
+    cutoff = value["cutoff_ms"]
+    contract = _SCHEMA_THREE_FOUR_PASSIVE_RENDER_CONTRACT
+    minimum_boundary = load + contract["minimum_after_load_ms"]
+    if (
+        not navigation <= load <= quiet <= cutoff
+        or last > cutoff
+        or quiet != max(minimum_boundary, last)
+    ):
+        raise ValueError("historical render observation monotonic ordering is invalid")
+    active = value["active_request_ids"]
+    if (
+        not isinstance(active, list)
+        or any(not isinstance(item, str) or not item for item in active)
+        or active != sorted(set(active))
+        or type(value["active_request_count"]) is not int
+        or value["active_request_count"] != len(active)
+    ):
+        raise ValueError("historical render observation active-request ledger is invalid")
+    elapsed = cutoff - load
+    quiet_elapsed = cutoff - quiet
+    reason = value["cutoff_reason"]
+    if reason == "quiescent":
+        if active or elapsed < contract["minimum_after_load_ms"]:
+            raise ValueError("historical quiescent render cutoff is premature")
+        if quiet_elapsed < contract["quiet_window_ms"]:
+            raise ValueError("historical render cutoff lacks the required quiet interval")
+        if elapsed > contract["hard_cap_after_load_ms"]:
+            raise ValueError("historical quiescent render cutoff exceeds its hard cap")
+    elif reason == "hard-cap-non-quiescent" and allow_failure:
+        hard_cap = contract["hard_cap_after_load_ms"]
+        poll = contract["poll_interval_ms"]
+        if not hard_cap <= elapsed <= hard_cap + poll:
+            raise ValueError("historical hard-cap rejection is outside its boundary")
+        if not active and quiet_elapsed >= contract["quiet_window_ms"]:
+            raise ValueError("historical hard-cap rejection was already quiescent")
+    else:
+        raise ValueError("historical render observation cutoff reason is invalid")
+
+
+def _validate_schema_six_render_observation(
+    value: object,
+    *,
+    allow_failure: bool = False,
+) -> None:
+    """Validate the exact render-observation v3 contract used by schemas five/six."""
+
+    fields = {
+        "schema_version",
+        "clock",
+        "navigation_started_ms",
+        "load_event_ms",
+        "last_relevant_event_ms",
+        "quiet_started_ms",
+        "cutoff_ms",
+        "active_request_ids",
+        "active_request_count",
+        "router_shutdown_ready",
+        "bootstrap_prearm_summary",
+        "egress_prearm_summary",
+        "non_replayable_egress_summary",
+        "browser_context_service_worker_count",
+        "cutoff_reason",
+    }
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise ValueError("historical render observation fields differ from the contract")
+    if (
+        type(value["schema_version"]) is not int
+        or value["schema_version"] != _SCHEMA_SIX_RENDER_OBSERVATION_SCHEMA_VERSION
+        or value["clock"] != "monotonic-relative-ms"
+    ):
+        raise ValueError("historical render observation schema or clock is invalid")
+    timing_fields = (
+        "navigation_started_ms",
+        "load_event_ms",
+        "last_relevant_event_ms",
+        "quiet_started_ms",
+        "cutoff_ms",
+    )
+    if any(type(value[field]) is not int or value[field] < 0 for field in timing_fields):
+        raise ValueError("historical render observation timestamps are invalid")
+    navigation = value["navigation_started_ms"]
+    load = value["load_event_ms"]
+    last = value["last_relevant_event_ms"]
+    quiet = value["quiet_started_ms"]
+    cutoff = value["cutoff_ms"]
+    minimum_boundary = load + _SCHEMA_SIX_PASSIVE_RENDER_CONTRACT["minimum_after_load_ms"]
+    if (
+        not navigation <= load <= quiet <= cutoff
+        or last > cutoff
+        or quiet != max(minimum_boundary, last)
+    ):
+        raise ValueError("historical render observation monotonic ordering is invalid")
+    active = value["active_request_ids"]
+    if (
+        not isinstance(active, list)
+        or any(not isinstance(item, str) or not item for item in active)
+        or active != sorted(set(active))
+        or value["active_request_count"] != len(active)
+    ):
+        raise ValueError("historical render observation active-request ledger is invalid")
+    elapsed = cutoff - load
+    quiet_elapsed = cutoff - quiet
+    reason = value["cutoff_reason"]
+    router_shutdown_ready = value["router_shutdown_ready"]
+    if type(router_shutdown_ready) is not bool:
+        raise ValueError("historical render observation router readiness is invalid")
+    validate_bootstrap_prearm_summary(
+        value["bootstrap_prearm_summary"],
+        require_terminal=reason == "quiescent",
+    )
+    validate_egress_prearm_summary(
+        value["egress_prearm_summary"],
+        require_terminal=reason == "quiescent",
+    )
+    validate_non_replayable_egress_success_summary(value["non_replayable_egress_summary"])
+    service_worker_count = value["browser_context_service_worker_count"]
+    if type(service_worker_count) is not int or service_worker_count < 0:
+        raise ValueError("historical render observation service-worker count is invalid")
+    if reason == "quiescent":
+        if (
+            active
+            or not router_shutdown_ready
+            or service_worker_count != 0
+            or elapsed < _SCHEMA_SIX_PASSIVE_RENDER_CONTRACT["minimum_after_load_ms"]
+        ):
+            raise ValueError("historical quiescent render cutoff is premature")
+        if quiet_elapsed < _SCHEMA_SIX_PASSIVE_RENDER_CONTRACT["quiet_window_ms"]:
+            raise ValueError("historical render cutoff lacks the required quiet interval")
+        if elapsed >= _SCHEMA_SIX_PASSIVE_RENDER_CONTRACT["hard_cap_after_load_ms"]:
+            raise ValueError("historical quiescent render cutoff exceeds its hard cap")
+    elif reason == "hard-cap-non-quiescent" and allow_failure:
+        if elapsed < _SCHEMA_SIX_PASSIVE_RENDER_CONTRACT["hard_cap_after_load_ms"]:
+            raise ValueError("historical hard-cap rejection is outside its boundary")
+    else:
+        raise ValueError("historical render observation cutoff reason is invalid")
+
+
+def _validate_versioned_render_observation(
+    value: object,
+    *,
+    acquisition_schema_version: int,
+    allow_failure: bool = False,
+) -> None:
+    if acquisition_schema_version == SCHEMA_VERSION:
+        validate_render_observation(value, allow_failure=allow_failure)
+        return
+    if acquisition_schema_version in {3, 4}:
+        _validate_schema_three_four_render_observation(
+            value,
+            allow_failure=allow_failure,
+        )
+        return
+    if acquisition_schema_version in {5, 6}:
+        _validate_schema_six_render_observation(value, allow_failure=allow_failure)
+        return
+    raise ValueError("acquisition render schema is unsupported")
+
+
+def _zero_internal_document_lifecycle_summary() -> dict[str, Any]:
+    """Return the current exact terminal zero-event lifecycle receipt."""
+
+    summary = {
+        "schema_version": SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
+        "policy": SRCDOC_PSEUDO_DOCUMENT_POLICY,
+        "enabled": True,
+        "total": 0,
+        "resolved": 0,
+        "pending": 0,
+        "aborted": 0,
+        "open_candidates": 0,
+        "network_history_saturated": False,
+        "fetch_history_saturated": False,
+        "candidate_limit_saturated": False,
+        "diagnostics": [],
+    }
+    return validate_srcdoc_pseudo_document_summary(summary, require_terminal=True)
+
+
+def _zero_bootstrap_prearm_summary() -> dict[str, Any]:
+    worker = {
+        "held": 0,
+        "released": 0,
+        "pending": 0,
+        "released_after_setup_envelopes": 0,
+        "owner_target_types": {
+            "page": 0,
+            "iframe": 0,
+            "worker": 0,
+            "shared_worker": 0,
+        },
+    }
+    summary = {
+        "schema_version": 1,
+        "held_total": 0,
+        "released_total": 0,
+        "pending_total": 0,
+        "release_before_setup_envelopes_total": 0,
+        "by_worker_type": {
+            "worker": deepcopy(worker),
+            "shared_worker": deepcopy(worker),
+        },
+    }
+    return validate_bootstrap_prearm_summary(summary, require_terminal=True)
+
+
+def _zero_egress_prearm_summary() -> dict[str, Any]:
+    summary = {
+        "schema_version": 2,
+        "policy": "blocked-non-urlloader-egress-v1",
+        "target_total": 0,
+        "installed_total": 0,
+        "pending_total": 0,
+        "popup_guard_required_total": 0,
+        "popup_guard_installed_total": 0,
+        "by_target_type": {
+            target_type: {
+                "target_count": 0,
+                "installed_count": 0,
+                "pending_count": 0,
+                "protected_api_observations": 0,
+                "unavailable_api_observations": 0,
+                "popup_guard_required_count": 0,
+                "popup_guard_installed_count": 0,
+            }
+            for target_type in ("page", "iframe", "worker", "shared_worker")
+        },
+    }
+    return validate_egress_prearm_summary(summary, require_terminal=True)
+
+
+def _zero_non_replayable_egress_summary() -> dict[str, Any]:
+    guard = NonReplayableEgressGuard()
+    guard.mark_context_guards_installed()
+    guard.bind_root_page(object())
+    return validate_non_replayable_egress_success_summary(guard.success_summary())
+
+
+def _validate_versioned_class_study_preparation(
+    manifest: dict[str, Any],
+    *,
+    workload_id: str,
+    acquisition_schema_version: int,
+    instrumentation_policy: object,
+) -> None:
+    """Deep-validate current evidence or an exact historical projection.
+
+    The adapter checks the source-era discriminators and hashes before adding
+    synthetic zero-valued fields that did not exist in that era.  Current
+    validators can then replay the otherwise unchanged resource/audit graph.
+    """
+
+    if acquisition_schema_version == SCHEMA_VERSION:
+        validate_class_study_preparation(manifest, workload_id=workload_id)
+        return
+    if acquisition_schema_version not in HISTORICAL_SCHEMA_VERSIONS:
+        raise ValueError("acquisition preparation schema is unsupported")
+    if acquisition_schema_version < 3:
+        raise ValueError("acquisition schema has no bounded-render preparation contract")
+    if not isinstance(manifest, dict):
+        raise TypeError("historical class-study manifest is not an object")
+    upgraded = deepcopy(manifest)
+    preparation = upgraded.get("preparation")
+    if not isinstance(preparation, dict):
+        raise TypeError("historical class-study preparation is not an object")
+    render_observation = preparation.get("render_observation")
+    render_observation_sha256 = preparation.get("render_observation_sha256")
+    audit = preparation.get("discovery_event_audit")
+    audit_sha256 = preparation.get("discovery_event_audit_sha256")
+    if not isinstance(audit, Mapping):
+        raise ValueError("historical preparation discovery evidence does not verify")
+    contract = _historical_evidence_contract_for(
+        acquisition_schema_version,
+        instrumentation_policy=instrumentation_policy,
+    )
+    passive_render_contract = contract["passive_render_contract"]
+    passive_render_contract_sha256 = contract["passive_render_contract_sha256"]
+    if (
+        not _matches_json_contract(
+            preparation.get("passive_render_contract"),
+            passive_render_contract,
+        )
+        or preparation.get("passive_render_contract_sha256") != passive_render_contract_sha256
+        or not isinstance(render_observation, Mapping)
+        or not isinstance(render_observation_sha256, str)
+        or evidence_sha256(render_observation) != render_observation_sha256
+        or not isinstance(audit_sha256, str)
+        or evidence_sha256(audit) != audit_sha256
+    ):
+        raise ValueError("historical preparation discovery evidence does not verify")
+    _validate_versioned_render_observation(
+        render_observation,
+        acquisition_schema_version=acquisition_schema_version,
+    )
+    expected_audit_fields = {
+        "schema_version",
+        "instrumentation_policy",
+        "passive_render_contract_sha256",
+        "render_observation_sha256",
+        "events",
+        "summary",
+    }
+    events = audit.get("events")
+    summary = audit.get("summary")
+    if (
+        set(audit) != expected_audit_fields
+        or type(audit.get("schema_version")) is not int
+        or audit["schema_version"] != contract["discovery_event_audit_schema_version"]
+        or audit.get("instrumentation_policy") != contract["instrumentation_policy"]
+        or audit.get("passive_render_contract_sha256") != passive_render_contract_sha256
+        or audit.get("render_observation_sha256") != render_observation_sha256
+        or not isinstance(events, list)
+        or any(
+            not isinstance(event, Mapping) or event.get("kind") == "browser-internal-document"
+            for event in events
+        )
+        or not isinstance(summary, Mapping)
+        or "browser_internal_document_count" in summary
+    ):
+        raise ValueError("historical discovery-event audit contract is invalid")
+    coverage = preparation.get("coverage_admission")
+    if not isinstance(coverage, dict) or any(
+        coverage.get(field) != expected
+        for field, expected in {
+            "passive_render_contract_sha256": passive_render_contract_sha256,
+            "render_observation_sha256": render_observation_sha256,
+            "discovery_event_audit_sha256": audit_sha256,
+        }.items()
+    ):
+        raise ValueError("historical coverage-admission evidence does not verify")
+
+    current_render = deepcopy(dict(render_observation))
+    shifted_boundary_event_ms: tuple[int, int] | None = None
+    if acquisition_schema_version in {3, 4}:
+        current_render.update(
+            router_shutdown_ready=True,
+            bootstrap_prearm_summary=_zero_bootstrap_prearm_summary(),
+            egress_prearm_summary=_zero_egress_prearm_summary(),
+            non_replayable_egress_summary=_zero_non_replayable_egress_summary(),
+            browser_context_service_worker_count=0,
+        )
+        # Render-observation v1 admitted a quiescent cutoff exactly at its
+        # hard cap; v3 made the hard-cap boundary strict.  The source-era
+        # observation has already been validated above, so nudge only the
+        # synthetic current projection used to replay the unchanged audit.
+        render_contract = _SCHEMA_THREE_FOUR_PASSIVE_RENDER_CONTRACT
+        if (
+            current_render["cutoff_reason"] == "quiescent"
+            and current_render["cutoff_ms"] - current_render["load_event_ms"]
+            == render_contract["hard_cap_after_load_ms"]
+        ):
+            current_render["cutoff_ms"] -= 1
+            if (
+                current_render["cutoff_ms"] - current_render["quiet_started_ms"]
+                < render_contract["quiet_window_ms"]
+            ):
+                old_last = current_render["last_relevant_event_ms"]
+                if (
+                    current_render["quiet_started_ms"] != old_last
+                    or old_last
+                    <= current_render["load_event_ms"] + render_contract["minimum_after_load_ms"]
+                ):
+                    raise ValueError("historical render hard-cap boundary is inconsistent")
+                current_render["last_relevant_event_ms"] = old_last - 1
+                current_render["quiet_started_ms"] = old_last - 1
+                shifted_boundary_event_ms = (old_last, old_last - 1)
+    current_render["schema_version"] = RENDER_OBSERVATION_SCHEMA_VERSION
+    current_render["internal_document_lifecycle_summary"] = (
+        _zero_internal_document_lifecycle_summary()
+    )
+    current_render_sha256 = evidence_sha256(current_render)
+    current_audit = deepcopy(dict(audit))
+    if shifted_boundary_event_ms is not None:
+        old_last, new_last = shifted_boundary_event_ms
+        for event in current_audit["events"]:
+            if type(event.get("monotonic_ms")) is int and event["monotonic_ms"] == old_last:
+                event["monotonic_ms"] = new_last
+    current_audit["schema_version"] = DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION
+    current_audit["instrumentation_policy"] = CDP_TARGET_INSTRUMENTATION_POLICY
+    current_audit["passive_render_contract_sha256"] = PASSIVE_RENDER_CONTRACT_SHA256
+    current_audit["render_observation_sha256"] = current_render_sha256
+    current_audit["summary"] = {
+        **dict(summary),
+        "browser_internal_document_count": 0,
+    }
+    current_audit_sha256 = evidence_sha256(current_audit)
+    preparation["passive_render_contract"] = deepcopy(PASSIVE_RENDER_CONTRACT)
+    preparation["passive_render_contract_sha256"] = PASSIVE_RENDER_CONTRACT_SHA256
+    preparation["render_observation"] = current_render
+    preparation["render_observation_sha256"] = current_render_sha256
+    preparation["discovery_event_audit"] = current_audit
+    preparation["discovery_event_audit_sha256"] = current_audit_sha256
+    coverage["passive_render_contract_sha256"] = PASSIVE_RENDER_CONTRACT_SHA256
+    coverage["render_observation_sha256"] = current_render_sha256
+    coverage["discovery_event_audit_sha256"] = current_audit_sha256
+    validate_class_study_preparation(upgraded, workload_id=workload_id)
 
 
 @dataclass(frozen=True)
@@ -615,7 +1545,11 @@ class ExistingAcquisitionBackend:
         )
 
 
-def _prepared_replay_identity_sha256(manifest: Mapping[str, Any]) -> str:
+def _prepared_replay_identity_sha256(
+    manifest: Mapping[str, Any],
+    *,
+    acquisition_schema_version: int = SCHEMA_VERSION,
+) -> str:
     """Hash stable replay semantics while excluding run-specific evidence.
 
     A prepared manifest intentionally contains packet-capture qualification
@@ -632,6 +1566,16 @@ def _prepared_replay_identity_sha256(manifest: Mapping[str, Any]) -> str:
     approved = preparation.get("approved_origins")
     if not isinstance(expected, list) or not isinstance(approved, list):
         raise ValueError("prepared replay identity is incomplete")
+    runtime = (
+        runtime_manifest(dict(manifest))
+        if acquisition_schema_version == SCHEMA_VERSION
+        else {
+            "resources": project_stable_response_lengths(
+                deepcopy(list(manifest.get("resources", []))),
+                deepcopy(expected),
+            )
+        }
+    )
     identity = {
         "schema_version": 3,
         "source_url": preparation.get("source_url"),
@@ -642,7 +1586,7 @@ def _prepared_replay_identity_sha256(manifest: Mapping[str, Any]) -> str:
         "request_header_transformation": preparation.get("request_header_transformation"),
         "expected_responses": expected,
         "passive_render_contract_sha256": preparation.get("passive_render_contract_sha256"),
-        "runtime_manifest": runtime_manifest(dict(manifest)),
+        "runtime_manifest": runtime,
     }
     return sha256_bytes(canonical_json_bytes(identity))
 
@@ -748,7 +1692,10 @@ def _create_document_response_receipt(
     content_type = _normalise_content_type(prepared.content_type)
     browser_version = prepared.document_response_chromium_version or prepared.chromium_version
     payload = {
-        "document_response_schema_version": 1,
+        "document_response_schema_version": _document_response_schema_for(
+            runner_provenance["acquisition_schema_version"],
+            instrumentation_policy=runner_provenance.get("cdp_target_instrumentation_policy"),
+        ),
         "workload_id": workload_id,
         "requested_url": requested_url,
         "final_url": prepared.final_url,
@@ -766,7 +1713,10 @@ def _create_document_response_receipt(
         "chromium_version": browser_version,
         "preparation_chromium_version": prepared.chromium_version,
         "neqo_provenance": dict(prepared.neqo_provenance),
-        "cdp_target_instrumentation_policy": CDP_TARGET_INSTRUMENTATION_POLICY,
+        "cdp_target_instrumentation_policy": _instrumentation_policy_for(
+            runner_provenance["acquisition_schema_version"],
+            recorded_policy=runner_provenance.get("cdp_target_instrumentation_policy"),
+        ),
         "browser_tool": runner_provenance["browser_tool"],
         "runner_provenance_sha256": runner_provenance_sha256,
         "image_digest": runner_provenance["image_digest"],
@@ -952,6 +1902,7 @@ def _catalogue_boundary_navigation_pass(
                     on_event=protocol_event,
                     root_frame_id=root_frame_id,
                     root_continue_error_type=playwright_error,
+                    track_root_srcdoc_lifecycle=True,
                     on_non_replayable_egress=lambda source, api, mechanism, request_url: (
                         egress_guard.record(
                             source=source,
@@ -1171,6 +2122,10 @@ def _catalogue_boundary_navigation_pass(
                 graph_closed = True
                 _require_unexceptional_navigation_completion(
                     router.root_invalid_interception_summary
+                )
+                validate_srcdoc_pseudo_document_summary(
+                    router.srcdoc_pseudo_document_summary,
+                    require_terminal=True,
                 )
             except BaseException as error:
                 graph_primary = error
@@ -1400,9 +2355,9 @@ def run_due_acquisition(
     provenance_path = runner / "provenance.json"
     provenance = load_json(provenance_path)
     provenance_payload = validate_hash_bound_receipt(provenance, expected_type=PROVENANCE_TYPE)
-    _validate_runner_runtime(provenance_payload)
     if provenance_payload.get("acquisition_schema_version") != SCHEMA_VERSION:
         raise ValueError("historical acquisition runners are verification-only")
+    _validate_runner_runtime(provenance_payload)
     _catalogue, candidates = load_candidate_catalogue_receipt(candidate_catalogue_path)
     if provenance_payload["candidate_catalogue_sha256"] != sha256_file(candidate_catalogue_path):
         raise ValueError("runner provenance is bound to another catalogue")
@@ -2186,6 +3141,7 @@ def _run_probe_batch(
                         _validated_terminal_policy_evidence(
                             error.evidence,
                             allow_non_replayable_egress=True,
+                            acquisition_schema_version=SCHEMA_VERSION,
                         )
                         if error.evidence is not None
                         else None
@@ -2476,7 +3432,8 @@ def _scientific_terminal_eligibility(
 
     if terminal["kind"] == "probe-window-missed" or any(
         page.get("rejection", {}).get("kind") == "probe-retry-exhausted"
-        for page in state.get("pages", []) if isinstance(page.get("rejection"), Mapping)
+        for page in state.get("pages", [])
+        if isinstance(page.get("rejection"), Mapping)
     ):
         return None
     if terminal["kind"] == "pre-probe-rejection":
@@ -2510,23 +3467,35 @@ def _checkpoint_terminal_payloads(
 
 
 def _derive_checkpoint_selection(
-    candidates: Sequence[Any], catalogue: Mapping[str, Any], states: Mapping[str, Any],
+    candidates: Sequence[Any],
+    catalogue: Mapping[str, Any],
+    states: Mapping[str, Any],
     terminal_payloads: Mapping[str, Mapping[str, Any]],
 ) -> tuple[dict[str, Any], list[str]]:
-    outcomes = {candidate_id: _scientific_terminal_eligibility(terminal, states[candidate_id])
-                for candidate_id, terminal in terminal_payloads.items()}
+    outcomes = {
+        candidate_id: _scientific_terminal_eligibility(terminal, states[candidate_id])
+        for candidate_id, terminal in terminal_payloads.items()
+    }
     selection = derive_acquisition_selection(
-        candidates, tranco_list_sha256=catalogue["payload"]["tranco"]["list_sha256"],
-        terminal_eligibility={candidate_id: outcome for candidate_id, outcome in outcomes.items()
-                              if outcome is not None},
+        candidates,
+        tranco_list_sha256=catalogue["payload"]["tranco"]["list_sha256"],
+        terminal_eligibility={
+            candidate_id: outcome
+            for candidate_id, outcome in outcomes.items()
+            if outcome is not None
+        },
     )
-    blocked = [candidate_id for candidate_id in selection["candidate_ids"]
-               if candidate_id in outcomes and outcomes[candidate_id] is None]
+    blocked = [
+        candidate_id
+        for candidate_id in selection["candidate_ids"]
+        if candidate_id in outcomes and outcomes[candidate_id] is None
+    ]
     return selection, blocked
 
 
 def _baseline_batch_reservations(
-    batches: Sequence[Mapping[str, Any]], states: Mapping[str, Any],
+    batches: Sequence[Mapping[str, Any]],
+    states: Mapping[str, Any],
     terminal_payloads: Mapping[str, Mapping[str, Any]],
 ) -> tuple[BaselineReservation, ...]:
     if not isinstance(batches, (list, tuple)):
@@ -2536,16 +3505,34 @@ def _baseline_batch_reservations(
         if not isinstance(batch, Mapping) or not isinstance(batch.get("baseline_started_at"), str):
             raise ValueError("acquisition baseline-batch ledger is malformed")
         members = batch["candidate_ids"]
-        if not isinstance(members, list) or not members or any(
-            not isinstance(candidate_id, str) or candidate_id not in states for candidate_id in members
+        if (
+            not isinstance(members, list)
+            or not members
+            or any(
+                not isinstance(candidate_id, str) or candidate_id not in states
+                for candidate_id in members
+            )
         ):
             raise ValueError("acquisition baseline-batch ledger is malformed")
-        resolved = all(candidate_id in terminal_payloads and _scientific_terminal_eligibility(
-            terminal_payloads[candidate_id], states[candidate_id]
-        ) is not None for candidate_id in members)
-        terminalised = max(_timestamp(terminal_payloads[candidate_id]["terminalised_at"])
-                           for candidate_id in members) if resolved else None
-        reservations.append(BaselineReservation(_timestamp(batch["baseline_started_at"]), terminalised))
+        resolved = all(
+            candidate_id in terminal_payloads
+            and _scientific_terminal_eligibility(
+                terminal_payloads[candidate_id], states[candidate_id]
+            )
+            is not None
+            for candidate_id in members
+        )
+        terminalised = (
+            max(
+                _timestamp(terminal_payloads[candidate_id]["terminalised_at"])
+                for candidate_id in members
+            )
+            if resolved
+            else None
+        )
+        reservations.append(
+            BaselineReservation(_timestamp(batch["baseline_started_at"]), terminalised)
+        )
     return tuple(reservations)
 
 
@@ -2575,20 +3562,26 @@ def acquisition_status(
     selection_blocked: list[str] = []
     reservations = None
     scheduling_states = states
-    if acquisition_schema_version == SCHEMA_VERSION:
+    if acquisition_schema_version in _SELECTION_SCHEMA_VERSIONS:
         catalogue, candidates = load_candidate_catalogue_receipt(candidate_catalogue_path)
         terminal_payloads = _checkpoint_terminal_payloads(Path(root), states)
         selection, selection_blocked = _derive_checkpoint_selection(
             candidates, catalogue, states, terminal_payloads
         )
         admission_ids = set(selection["admission_ids"]) if not selection_blocked else set()
-        scheduling_states = {candidate_id: state for candidate_id, state in states.items()
-                             if state["state"] != "pending" or candidate_id in admission_ids
-                             or state.get("navigation_attempts")}
-        reservations = _baseline_batch_reservations(payload["baseline_batches"], states, terminal_payloads)
+        scheduling_states = {
+            candidate_id: state
+            for candidate_id, state in states.items()
+            if state["state"] != "pending"
+            or candidate_id in admission_ids
+            or state.get("navigation_attempts")
+        }
+        reservations = _baseline_batch_reservations(
+            payload["baseline_batches"], states, terminal_payloads
+        )
     baseline_starts = (
         _baseline_batch_starts(payload["baseline_batches"])
-        if acquisition_schema_version in {4, 5, SCHEMA_VERSION}
+        if acquisition_schema_version in _MODERN_CHECKPOINT_SCHEMA_VERSIONS
         else _checkpoint_baselines(states)
     )
     active = payload.get("active_batch")
@@ -2618,8 +3611,9 @@ def acquisition_status(
             pending += 1
         if state["terminal"] is None and state["state"] == "probing":
             probing += 1
-            if acquisition_schema_version in {5, SCHEMA_VERSION} and _probe_candidate_is_finalisable(
-                state
+            if (
+                acquisition_schema_version in _POLICY_EVIDENCE_SCHEMA_VERSIONS
+                and _probe_candidate_is_finalisable(state)
             ):
                 finalisable += 1
                 continue
@@ -2654,13 +3648,24 @@ def acquisition_status(
         baseline_starts=baseline_starts,
         reservations=reservations,
     )
-    started_nonterminal = any(state["terminal"] is None and (
-        state["state"] in {"baseline-ready", "probing"}
-        or state.get("navigation_attempts") or state.get("pending_navigation")
-    ) for state in states.values())
-    complete = (terminal == len(states) if selection is None else (
-        selection["complete"] and not selection_blocked and not started_nonterminal
-    )) and recovery_required == 0 and active is None
+    started_nonterminal = any(
+        state["terminal"] is None
+        and (
+            state["state"] in {"baseline-ready", "probing"}
+            or state.get("navigation_attempts")
+            or state.get("pending_navigation")
+        )
+        for state in states.values()
+    )
+    complete = (
+        (
+            terminal == len(states)
+            if selection is None
+            else (selection["complete"] and not selection_blocked and not started_nonterminal)
+        )
+        and recovery_required == 0
+        and active is None
+    )
     return {
         "acquisition_schema_version": acquisition_schema_version,
         "checkpoint_schema_version": payload.get("checkpoint_schema_version"),
@@ -2684,8 +3689,11 @@ def acquisition_status(
             or (pending and not pending_blocked)
         ),
         "complete": complete,
-        **({"selection": selection, "selection_blocked_candidate_ids": selection_blocked}
-           if selection is not None else {}),
+        **(
+            {"selection": selection, "selection_blocked_candidate_ids": selection_blocked}
+            if selection is not None
+            else {}
+        ),
         "next_due": _format_time(next_due) if next_due else None,
     }
 
@@ -2694,12 +3702,15 @@ def write_acquisition_completion(root: Path, *, candidate_catalogue_path: Path) 
     provenance_value = validate_hash_bound_receipt(
         load_json(Path(root) / "provenance.json"), expected_type=PROVENANCE_TYPE
     )
-    _validate_runner_runtime(provenance_value)
     if provenance_value.get("acquisition_schema_version") != SCHEMA_VERSION:
         raise ValueError("historical acquisition runners cannot publish new completion evidence")
+    _validate_runner_runtime(provenance_value)
     status = acquisition_status(root, candidate_catalogue_path=candidate_catalogue_path)
     if not status["complete"]:
-        raise ValueError("acquisition completion requires a resolved deterministic prefix and no outstanding work")
+        raise ValueError(
+            "acquisition completion requires a resolved deterministic prefix "
+            "and no outstanding work"
+        )
     runner = Path(root)
     checkpoint, persisted_terminal_recoveries = _load_checkpoint(
         runner / "checkpoint.json", runner / "provenance.json", candidate_catalogue_path
@@ -2733,7 +3744,8 @@ def write_acquisition_completion(root: Path, *, candidate_catalogue_path: Path) 
             "observed_toolchain": observed_toolchain,
             "selection": bind_receipt(status["selection"], receipt_type=SELECTION_TYPE),
             "terminal_receipts": {
-                candidate_id: state["terminal"] for candidate_id, state in terminals.items()
+                candidate_id: state["terminal"]
+                for candidate_id, state in terminals.items()
                 if state["terminal"] is not None
             },
         },
@@ -2787,10 +3799,10 @@ def validate_acquisition_completion(
         "baseline_batches",
         "baseline_batches_sha256",
     }
-    if acquisition_schema_version == SCHEMA_VERSION:
+    if acquisition_schema_version in _SELECTION_SCHEMA_VERSIONS:
         current_fields.add("selection")
-    if acquisition_schema_version in {4, 5, SCHEMA_VERSION}:
-        if acquisition_schema_version in {5, SCHEMA_VERSION}:
+    if acquisition_schema_version in _MODERN_CHECKPOINT_SCHEMA_VERSIONS:
+        if acquisition_schema_version in _FIXED_PROVENANCE_SCHEMA_VERSIONS:
             _validate_current_provenance_contract(
                 provenance,
                 candidate_catalogue_path=candidate_catalogue_path,
@@ -2798,11 +3810,11 @@ def validate_acquisition_completion(
         if (
             set(payload) != current_fields
             or type(payload["completion_schema_version"]) is not int
-            or payload["completion_schema_version"] != (
-                COMPLETION_SCHEMA_VERSION if acquisition_schema_version == SCHEMA_VERSION else 2
-            )
+            or payload["completion_schema_version"]
+            != _completion_schema_for(acquisition_schema_version)
             or type(payload["checkpoint_schema_version"]) is not int
-            or payload["checkpoint_schema_version"] != CHECKPOINT_SCHEMA_VERSION
+            or payload["checkpoint_schema_version"]
+            != _checkpoint_schema_for(acquisition_schema_version)
         ):
             raise ValueError("acquisition completion schema is invalid")
     elif acquisition_schema_version in {1, 2, 3}:
@@ -2826,7 +3838,7 @@ def validate_acquisition_completion(
     )
     if checkpoint_recoveries:
         raise ValueError("completion binds a checkpoint requiring recovery")
-    if acquisition_schema_version in {4, 5, SCHEMA_VERSION} and (
+    if acquisition_schema_version in _MODERN_CHECKPOINT_SCHEMA_VERSIONS and (
         checkpoint["payload"]["active_batch"] is not None
         or payload["baseline_batches"] != checkpoint["payload"]["baseline_batches"]
         or payload["baseline_batches_sha256"]
@@ -2837,20 +3849,35 @@ def validate_acquisition_completion(
     checkpoint_terminals = {
         candidate_id: state["terminal"]
         for candidate_id, state in checkpoint["payload"]["candidates"].items()
-        if acquisition_schema_version != SCHEMA_VERSION or state["terminal"] is not None
+        if acquisition_schema_version not in _SELECTION_SCHEMA_VERSIONS
+        or state["terminal"] is not None
     }
-    if acquisition_schema_version == SCHEMA_VERSION:
+    if acquisition_schema_version in _SELECTION_SCHEMA_VERSIONS:
         states = checkpoint["payload"]["candidates"]
         terminal_payloads = _checkpoint_terminal_payloads(runner_root, states)
-        selection, blocked = _derive_checkpoint_selection(candidates, _catalogue, states, terminal_payloads)
-        sealed_selection = validate_hash_bound_receipt(payload["selection"], expected_type=SELECTION_TYPE)
-        if (not selection["complete"] or blocked
+        selection, blocked = _derive_checkpoint_selection(
+            candidates, _catalogue, states, terminal_payloads
+        )
+        sealed_selection = validate_hash_bound_receipt(
+            payload["selection"], expected_type=SELECTION_TYPE
+        )
+        if (
+            not selection["complete"]
+            or blocked
             or not _matches_json_contract(sealed_selection, selection)
-            or any(state["terminal"] is None and (
-                state["state"] in {"baseline-ready", "probing"}
-                or state.get("navigation_attempts") or state.get("pending_navigation")
-            ) for state in states.values())):
-            raise ValueError("acquisition completion selection prefix or unassessed tail does not verify")
+            or any(
+                state["terminal"] is None
+                and (
+                    state["state"] in {"baseline-ready", "probing"}
+                    or state.get("navigation_attempts")
+                    or state.get("pending_navigation")
+                )
+                for state in states.values()
+            )
+        ):
+            raise ValueError(
+                "acquisition completion selection prefix or unassessed tail does not verify"
+            )
         expected = set(selection["terminal_ids"])
     if (
         set(payload["terminal_receipts"]) != expected
@@ -3039,9 +4066,7 @@ def browser_document_content_type(
                             or not request_id
                             or not isinstance(request, Mapping)
                         ):
-                            raise RuntimeError(
-                                "content-type probe Fetch event is malformed"
-                            )
+                            raise RuntimeError("content-type probe Fetch event is malformed")
                         allowed = (
                             request.get("method") == "GET"
                             and isinstance(request.get("url"), str)
@@ -3049,9 +4074,7 @@ def browser_document_content_type(
                             and event.get("resourceType") == "Document"
                             and event.get("frameId") == root_frame_id
                         )
-                        command = (
-                            "Fetch.continueRequest" if allowed else "Fetch.failRequest"
-                        )
+                        command = "Fetch.continueRequest" if allowed else "Fetch.failRequest"
                         parameters = (
                             {"requestId": request_id}
                             if allowed
@@ -3853,19 +4876,21 @@ def _validated_terminal_binding(
             or payload["terminal_schema_version"] != 2
         ):
             raise ValueError("terminal evidence schema differs from the current contract")
-    elif acquisition_schema_version in {4, 5, SCHEMA_VERSION}:
+    elif acquisition_schema_version in _MODERN_CHECKPOINT_SCHEMA_VERSIONS:
         if set(payload) != terminal_v3_fields:
             raise ValueError("terminal evidence fields differ from the contract")
         if (
             type(payload["terminal_schema_version"]) is not int
-            or payload["terminal_schema_version"] != TERMINAL_SCHEMA_VERSION
+            or payload["terminal_schema_version"]
+            != _terminal_schema_for(acquisition_schema_version)
             or type(payload["checkpoint_schema_version"]) is not int
-            or payload["checkpoint_schema_version"] != CHECKPOINT_SCHEMA_VERSION
+            or payload["checkpoint_schema_version"]
+            != _checkpoint_schema_for(acquisition_schema_version)
         ):
             raise ValueError("terminal evidence schema differs from the current contract")
     else:
         raise ValueError("terminal evidence belongs to an unsupported acquisition schema")
-    if acquisition_schema_version in {2, 3, 4, 5, SCHEMA_VERSION} and not isinstance(
+    if acquisition_schema_version in _TERMINAL_STATE_SCHEMA_VERSIONS and not isinstance(
         candidate_state, Mapping
     ):
         raise ValueError("terminal evidence fields differ from the contract")
@@ -3882,7 +4907,7 @@ def _validated_terminal_binding(
         kind != "eligible" and (not isinstance(reason, str) or not reason)
     ):
         raise ValueError("terminal evidence reason differs from its outcome kind")
-    if acquisition_schema_version in {4, 5, SCHEMA_VERSION}:
+    if acquisition_schema_version in _MODERN_CHECKPOINT_SCHEMA_VERSIONS:
         expected_baseline_batch = (
             None
             if kind == "pre-probe-rejection"
@@ -3893,7 +4918,7 @@ def _validated_terminal_binding(
         if payload["baseline_batch"] != expected_baseline_batch:
             raise ValueError("terminal evidence baseline-batch binding differs")
     selected_checkpoint = None
-    if acquisition_schema_version in {2, 3, 4, 5, SCHEMA_VERSION}:
+    if acquisition_schema_version in _TERMINAL_STATE_SCHEMA_VERSIONS:
         terminalised_raw = payload["terminalised_at"]
         if (
             not isinstance(terminalised_raw, str)
@@ -3911,7 +4936,7 @@ def _validated_terminal_binding(
             kind=kind,
             reason=reason,
             terminalised_at=_timestamp(terminalised_raw),
-            enforce_duration_limit=(acquisition_schema_version in {3, 4, 5, SCHEMA_VERSION}),
+            enforce_duration_limit=(acquisition_schema_version in _DURATION_LIMIT_SCHEMA_VERSIONS),
         )
     stability_binding = payload["stability_receipt"]
     workload_binding = payload["admitted_workload"]
@@ -3934,7 +4959,7 @@ def _validated_terminal_binding(
             != sha256_file(workload_path)
         ):
             raise ValueError("eligible terminal stability/workload binding is invalid")
-        if acquisition_schema_version in {2, 3, 4, 5, SCHEMA_VERSION}:
+        if acquisition_schema_version in _TERMINAL_STATE_SCHEMA_VERSIONS:
             if selected_checkpoint is None:
                 raise ValueError("eligible terminal has no selected checkpoint page")
             page_state, page, observations = selected_checkpoint
@@ -4022,7 +5047,7 @@ def _validate_current_provenance_contract(
     *,
     candidate_catalogue_path: Path | None = None,
 ) -> dict[str, Any]:
-    """Reconstruct schema-five/six provenance without ambient runtime state.
+    """Reconstruct schema-five-through-seven provenance without schema collision.
 
     Historical acquisition schemas remain readable under their original
     contracts.  Current evidence, however, must retain every fixed acquisition
@@ -4031,18 +5056,22 @@ def _validate_current_provenance_contract(
     prepare process that created it.
     """
 
-    schema = provenance.get("acquisition_schema_version") if isinstance(provenance, Mapping) else None
+    schema = (
+        provenance.get("acquisition_schema_version") if isinstance(provenance, Mapping) else None
+    )
     fields = SCHEMA_FIVE_PROVENANCE_FIELDS if schema == 5 else CURRENT_PROVENANCE_FIELDS
     if not isinstance(provenance, Mapping) or set(provenance) != fields:
-        raise ValueError("schema-five acquisition provenance fields differ from the contract")
-    foundation = provenance.get("foundation_attestation" if schema == 5 else "acquisition_authority")
+        raise ValueError("versioned acquisition provenance fields differ from the contract")
+    foundation = provenance.get(
+        "foundation_attestation" if schema == 5 else "acquisition_authority"
+    )
     source = provenance.get("source")
     candidate_count = provenance.get("candidate_count")
     image_digest = provenance.get("image_digest")
     started_at = provenance.get("started_at")
     if (
         type(provenance.get("acquisition_schema_version")) is not int
-        or provenance["acquisition_schema_version"] not in {5, SCHEMA_VERSION}
+        or provenance["acquisition_schema_version"] not in _FIXED_PROVENANCE_SCHEMA_VERSIONS
         or provenance.get("study_id") != "classifier-multiorigin100-v1"
         or type(candidate_count) is not int
         or candidate_count < 1
@@ -4064,46 +5093,66 @@ def _validate_current_provenance_contract(
         or not isinstance(source, Mapping)
         or set(source) != _SOURCE_FIELDS
     ):
-        raise ValueError("schema-five acquisition provenance identity is invalid")
-    expected_fixed = {
-        "browser_tool": expected_browser_tool_identity(),
-        "navigation_implementation": NAVIGATION_IMPLEMENTATION,
-        "cdp_target_instrumentation_policy": CDP_TARGET_INSTRUMENTATION_POLICY,
-        "non_replayable_egress_contract": NON_REPLAYABLE_EGRESS_CONTRACT,
-        "passive_render_contract": PASSIVE_RENDER_CONTRACT,
-        "passive_render_contract_sha256": PASSIVE_RENDER_CONTRACT_SHA256,
-        "browser_navigation_timeout_ms": MAX_ACQUISITION_BACKEND_TIMEOUT_MS,
-        "passive_render_hard_cap_after_load_ms": MAX_PASSIVE_RENDER_AFTER_LOAD_MS,
-        "acquisition_action_timing_contract": ACTION_TIMING_CONTRACT,
-        "baseline_scheduling_contract": (BASELINE_SCHEDULING_CONTRACT if schema == 5
-                                         else TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT),
-        "registrable_domain_policy": REGISTRABLE_DOMAIN_POLICY,
-        "domain_safety_policy": DOMAIN_SAFETY_POLICY,
-        "domain_safety_policy_sha256": sha256_bytes(canonical_json_bytes(DOMAIN_SAFETY_POLICY)),
-        "origin_policy": ORIGIN_POLICY,
-        "eligibility_inputs": ELIGIBILITY_INPUTS,
-        "prohibited_inputs": PROHIBITED_INPUTS,
-    }
-    if schema == SCHEMA_VERSION:
-        expected_fixed["acquisition_selection_policy"] = ACQUISITION_SELECTION_POLICY
-    if any(
-        not _matches_json_contract(provenance.get(field), expected)
-        for field, expected in expected_fixed.items()
-    ):
-        raise ValueError("schema-five acquisition provenance policy differs from the contract")
+        raise ValueError("versioned acquisition provenance identity is invalid")
+    fixed_fields = set(_FIXED_PROVENANCE_FIELDS)
+    if schema in _SELECTION_SCHEMA_VERSIONS:
+        fixed_fields.add("acquisition_selection_policy")
+    fixed_projection = {field: provenance.get(field) for field in fixed_fields}
+    if schema in {5, 6}:
+        try:
+            contract = _historical_evidence_contract_for(
+                schema,
+                instrumentation_policy=provenance.get("cdp_target_instrumentation_policy"),
+            )
+        except ValueError as error:
+            raise ValueError(
+                "versioned acquisition provenance policy differs from the contract"
+            ) from error
+        expected_fixed_sha256 = contract["fixed_provenance_sha256"]
+        if not isinstance(expected_fixed_sha256, str):
+            raise ValueError("versioned acquisition provenance contract is incomplete")
+        source_lab_commits = contract["source_lab_commits"]
+        fixed_contract_valid = (
+            sha256_bytes(canonical_json_bytes(fixed_projection)) == expected_fixed_sha256
+            and isinstance(source_lab_commits, tuple)
+            and source.get("lab_commit") in source_lab_commits
+        )
+    else:
+        expected_fixed = {
+            "browser_tool": expected_browser_tool_identity(),
+            "navigation_implementation": NAVIGATION_IMPLEMENTATION,
+            "cdp_target_instrumentation_policy": CDP_TARGET_INSTRUMENTATION_POLICY,
+            "non_replayable_egress_contract": NON_REPLAYABLE_EGRESS_CONTRACT,
+            "passive_render_contract": PASSIVE_RENDER_CONTRACT,
+            "passive_render_contract_sha256": PASSIVE_RENDER_CONTRACT_SHA256,
+            "browser_navigation_timeout_ms": MAX_ACQUISITION_BACKEND_TIMEOUT_MS,
+            "passive_render_hard_cap_after_load_ms": MAX_PASSIVE_RENDER_AFTER_LOAD_MS,
+            "acquisition_action_timing_contract": ACTION_TIMING_CONTRACT,
+            "baseline_scheduling_contract": TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT,
+            "acquisition_selection_policy": ACQUISITION_SELECTION_POLICY,
+            "registrable_domain_policy": REGISTRABLE_DOMAIN_POLICY,
+            "domain_safety_policy": DOMAIN_SAFETY_POLICY,
+            "domain_safety_policy_sha256": sha256_bytes(canonical_json_bytes(DOMAIN_SAFETY_POLICY)),
+            "origin_policy": ORIGIN_POLICY,
+            "eligibility_inputs": ELIGIBILITY_INPUTS,
+            "prohibited_inputs": PROHIBITED_INPUTS,
+        }
+        fixed_contract_valid = _matches_json_contract(fixed_projection, expected_fixed)
+    if not fixed_contract_valid:
+        raise ValueError("versioned acquisition provenance policy differs from the contract")
     browser_tool = provenance["browser_tool"]
     if (
         not isinstance(browser_tool, Mapping)
         or type(browser_tool.get("schema_version")) is not int
         or browser_tool["schema_version"] != 1
     ):
-        raise ValueError("schema-five acquisition browser identity is invalid")
+        raise ValueError("versioned acquisition browser identity is invalid")
 
     # A native unit-test runner cannot claim immutable image provenance.  Any
     # actual image-bound acquisition can and must carry one clean source.
     if image_digest == "native":
         if source.get("image_digest") not in {None, "native"}:
-            raise ValueError("native schema-five acquisition source is inconsistent")
+            raise ValueError("native versioned acquisition source is inconsistent")
     elif (
         source.get("image_digest") != image_digest
         or not isinstance(source.get("lab_commit"), str)
@@ -4116,7 +5165,7 @@ def _validate_current_provenance_contract(
         or source.get("lab_patch_sha256") != _EMPTY_SHA256
         or source.get("neqo_patch_sha256") != _EMPTY_SHA256
     ):
-        raise ValueError("schema-five acquisition source is not one clean immutable image")
+        raise ValueError("versioned acquisition source is not one clean immutable image")
 
     if candidate_catalogue_path is not None:
         catalogue_path = Path(candidate_catalogue_path)
@@ -4126,7 +5175,7 @@ def _validate_current_provenance_contract(
             or provenance["candidate_catalogue_payload_sha256"] != catalogue["payload_sha256"]
             or candidate_count != len(candidates)
         ):
-            raise ValueError("schema-five acquisition provenance binds another catalogue")
+            raise ValueError("versioned acquisition provenance binds another catalogue")
     return dict(provenance)
 
 
@@ -4134,18 +5183,23 @@ def _validate_runner_runtime(provenance: Mapping[str, Any]) -> None:
     """Prevent later stability probes from changing the frozen prepare image."""
 
     schema_version = provenance.get("acquisition_schema_version")
-    foundation = provenance.get("acquisition_authority" if schema_version == SCHEMA_VERSION
-                                else "foundation_attestation")
+    uses_acquisition_authority = schema_version in _SELECTION_SCHEMA_VERSIONS
+    foundation = provenance.get(
+        "acquisition_authority" if uses_acquisition_authority else "foundation_attestation"
+    )
     if not isinstance(foundation, Mapping):
         raise ValueError("class acquisition provenance has no foundation binding")
     foundation_path = _verified_bound_file(foundation, label="class acquisition foundation")
-    validate_authority = (_acquisition_authority_binding if schema_version == SCHEMA_VERSION
-                          else _foundation_attestation_binding)
+    validate_authority = (
+        _acquisition_authority_binding
+        if uses_acquisition_authority
+        else _foundation_attestation_binding
+    )
     if validate_authority(foundation_path) != dict(foundation):
         raise ValueError("class acquisition foundation binding changed")
     current_image = os.environ.get("QCSD_LAB_IMAGE_DIGEST", "native")
     current_source = source_metadata()
-    if type(schema_version) is int and schema_version in {5, SCHEMA_VERSION}:
+    if type(schema_version) is int and schema_version in _FIXED_PROVENANCE_SCHEMA_VERSIONS:
         _validate_current_provenance_contract(provenance)
     if (
         provenance.get("image_digest") != current_image
@@ -4197,7 +5251,10 @@ def _validate_document_response_receipt(
     if observation.get("content_type") != content_type:
         raise ValueError("checkpoint document response content type is not normalised")
     expected_payload = {
-        "document_response_schema_version": 1,
+        "document_response_schema_version": _document_response_schema_for(
+            runner_provenance["acquisition_schema_version"],
+            instrumentation_policy=runner_provenance.get("cdp_target_instrumentation_policy"),
+        ),
         "workload_id": workload_id,
         "requested_url": requested_url,
         "final_url": observation.get("final_url"),
@@ -4215,7 +5272,10 @@ def _validate_document_response_receipt(
         "chromium_version": chromium_version,
         "preparation_chromium_version": chromium_version,
         "neqo_provenance": dict(neqo_provenance),
-        "cdp_target_instrumentation_policy": CDP_TARGET_INSTRUMENTATION_POLICY,
+        "cdp_target_instrumentation_policy": _instrumentation_policy_for(
+            runner_provenance["acquisition_schema_version"],
+            recorded_policy=runner_provenance.get("cdp_target_instrumentation_policy"),
+        ),
         "browser_tool": runner_provenance["browser_tool"],
         "runner_provenance_sha256": provenance_sha256,
         "image_digest": runner_provenance["image_digest"],
@@ -4235,17 +5295,23 @@ def _validate_observation_provenance(
 ) -> dict[str, Any] | None:
     identities: dict[str, dict[str, Any]] = {}
     acquisition_schema_version = runner_provenance.get("acquisition_schema_version")
-    require_instrumentation_evidence = acquisition_schema_version in {
-        2,
-        3,
-        4, 5,
-        SCHEMA_VERSION,
-    }
-    require_current_evidence = acquisition_schema_version in {
-        3,
-        4, 5,
-        SCHEMA_VERSION,
-    }
+    require_instrumentation_evidence = (
+        acquisition_schema_version in _INSTRUMENTATION_EVIDENCE_SCHEMA_VERSIONS
+    )
+    require_current_evidence = acquisition_schema_version in _RENDER_EVIDENCE_SCHEMA_VERSIONS
+    expected_instrumentation_policy = (
+        _instrumentation_policy_for(
+            acquisition_schema_version,
+            recorded_policy=runner_provenance.get("cdp_target_instrumentation_policy"),
+        )
+        if require_instrumentation_evidence
+        else None
+    )
+    expected_passive_render_sha256 = (
+        _passive_render_contract_sha256_for(acquisition_schema_version)
+        if require_current_evidence
+        else None
+    )
     prepared_root: Path | None = None
     if require_current_evidence:
         if runner_root is None:
@@ -4306,9 +5372,9 @@ def _validate_observation_provenance(
                         pass
                 current_evidence_invalid = require_current_evidence and (
                     observation.get("discovery_instrumentation_policy")
-                    != CDP_TARGET_INSTRUMENTATION_POLICY
+                    != expected_instrumentation_policy
                     or observation.get("passive_render_contract_sha256")
-                    != PASSIVE_RENDER_CONTRACT_SHA256
+                    != expected_passive_render_sha256
                     or not isinstance(render_observation, Mapping)
                     or not isinstance(render_observation_sha256, str)
                     or evidence_sha256(render_observation) != render_observation_sha256
@@ -4332,7 +5398,7 @@ def _validate_observation_provenance(
                     or (
                         require_instrumentation_evidence
                         and observation.get("discovery_instrumentation_policy")
-                        != CDP_TARGET_INSTRUMENTATION_POLICY
+                        != expected_instrumentation_policy
                     )
                     or not approved_ledger_valid
                     or not _is_canonical_origin_ledger(
@@ -4361,11 +5427,16 @@ def _validate_observation_provenance(
                     assert isinstance(render_observation, Mapping)
                     assert prepared_path is not None
                     try:
-                        validate_render_observation(render_observation)
+                        _validate_versioned_render_observation(
+                            render_observation,
+                            acquisition_schema_version=acquisition_schema_version,
+                        )
                         prepared_manifest = load_json(prepared_path)
-                        validate_class_study_preparation(
+                        _validate_versioned_class_study_preparation(
                             prepared_manifest,
                             workload_id=prepared_path.stem,
+                            acquisition_schema_version=acquisition_schema_version,
+                            instrumentation_policy=expected_instrumentation_policy,
                         )
                     except (OSError, TypeError, ValueError) as error:
                         raise ValueError(
@@ -4402,7 +5473,10 @@ def _validate_observation_provenance(
                         or observation.get("body_bytes") != expected["bytes"]
                         or observation.get("body_sha256") != expected["body_sha256"]
                         or observation.get("resource_graph_sha256")
-                        != _prepared_replay_identity_sha256(prepared_manifest)
+                        != _prepared_replay_identity_sha256(
+                            prepared_manifest,
+                            acquisition_schema_version=acquisition_schema_version,
+                        )
                         or observation_approved != prepared_evidence["approved_origins"]
                         or observation.get("preparation_origin_ip_pins") != preparation_pins
                         or pins != preparation_pins
@@ -4537,7 +5611,7 @@ def _validate_navigation_attempts(
             "outcome",
             "reason",
         }
-        if acquisition_schema_version in {5, SCHEMA_VERSION}:
+        if acquisition_schema_version in _POLICY_EVIDENCE_SCHEMA_VERSIONS:
             expected_fields.add("policy_evidence")
         if not isinstance(item, Mapping) or set(item) != expected_fields:
             raise ValueError("acquisition navigation-attempt ledger is malformed")
@@ -4588,7 +5662,7 @@ def _validate_navigation_attempts(
                 and (not isinstance(item["reason"], str) or not item["reason"])
             )
             or (
-                acquisition_schema_version in {5, SCHEMA_VERSION}
+                acquisition_schema_version in _POLICY_EVIDENCE_SCHEMA_VERSIONS
                 and item["outcome"] != "terminal-policy-rejection"
                 and policy_evidence is not None
             )
@@ -4616,6 +5690,7 @@ def _validated_terminal_policy_evidence(
     value: object,
     *,
     allow_non_replayable_egress: bool,
+    acquisition_schema_version: int = SCHEMA_VERSION,
 ) -> dict[str, Any]:
     """Validate the closed union of content-minimised terminal-policy receipts."""
 
@@ -4634,15 +5709,20 @@ def _validated_terminal_policy_evidence(
         "render_observation",
         "render_observation_sha256",
     }
+    passive_render_contract = _passive_render_contract_for(acquisition_schema_version)
+    passive_render_contract_sha256 = _passive_render_contract_sha256_for(acquisition_schema_version)
     if (
         set(value) != expected_policy_fields
-        or value["passive_render_contract"] != PASSIVE_RENDER_CONTRACT
-        or value["passive_render_contract_sha256"] != PASSIVE_RENDER_CONTRACT_SHA256
-        or evidence_sha256(value["render_observation"])
-        != value["render_observation_sha256"]
+        or not _matches_json_contract(value["passive_render_contract"], passive_render_contract)
+        or value["passive_render_contract_sha256"] != passive_render_contract_sha256
+        or evidence_sha256(value["render_observation"]) != value["render_observation_sha256"]
     ):
         raise ValueError("acquisition passive-render policy evidence does not verify")
-    validate_render_observation(value["render_observation"], allow_failure=True)
+    _validate_versioned_render_observation(
+        value["render_observation"],
+        acquisition_schema_version=acquisition_schema_version,
+        allow_failure=True,
+    )
     return deepcopy(dict(value))
 
 
@@ -4677,7 +5757,7 @@ def _validate_probe_attempts(
         }
         expected_fields = (
             base_fields | {"policy_evidence"}
-            if acquisition_schema_version in {5, SCHEMA_VERSION}
+            if acquisition_schema_version in _POLICY_EVIDENCE_SCHEMA_VERSIONS
             else base_fields
         )
         if not isinstance(item, Mapping) or set(item) != expected_fields:
@@ -4689,8 +5769,9 @@ def _validate_probe_attempts(
             _validated_terminal_policy_evidence(
                 policy_evidence,
                 allow_non_replayable_egress=(
-                    acquisition_schema_version in {5, SCHEMA_VERSION}
+                    acquisition_schema_version in _POLICY_EVIDENCE_SCHEMA_VERSIONS
                 ),
+                acquisition_schema_version=acquisition_schema_version,
             )
         probe_id = item["probe_id"]
         attempt = item["attempt"]
@@ -5141,8 +6222,11 @@ def _next_pending_start(
         state.get("terminal") is None and state.get("state") == "baseline-ready"
         for state in states.values()
     ):
-        safe = (earliest_safe_baseline(now, baseline_starts) if reservations is None
-                else earliest_safe_baseline_with_releases(now, reservations))
+        safe = (
+            earliest_safe_baseline(now, baseline_starts)
+            if reservations is None
+            else earliest_safe_baseline_with_releases(now, reservations)
+        )
         if safe > now:
             candidates.append(safe)
     candidates.extend(start for start in _incomplete_probe_starts(states) if start > now)
@@ -5160,8 +6244,11 @@ def _pending_baseline_blocked(
         state.get("terminal") is None and state.get("state") == "baseline-ready"
         for state in states.values()
     )
-    safe = (baseline_is_safe(now, baseline_starts) if reservations is None
-            else baseline_is_safe_with_releases(now, reservations))
+    safe = (
+        baseline_is_safe(now, baseline_starts)
+        if reservations is None
+        else baseline_is_safe_with_releases(now, reservations)
+    )
     if ready and safe:
         return False
     pending_navigation = any(
@@ -5672,8 +6759,9 @@ def _load_checkpoint_state(
     ):
         raise ValueError("acquisition checkpoint uses an unsupported schema")
     current_schema = acquisition_schema_version == SCHEMA_VERSION
-    modern_checkpoint_schema = acquisition_schema_version in {4, 5, SCHEMA_VERSION}
-    if acquisition_schema_version in {5, SCHEMA_VERSION}:
+    selection_schema = acquisition_schema_version in _SELECTION_SCHEMA_VERSIONS
+    modern_checkpoint_schema = acquisition_schema_version in _MODERN_CHECKPOINT_SCHEMA_VERSIONS
+    if acquisition_schema_version in _FIXED_PROVENANCE_SCHEMA_VERSIONS:
         _validate_current_provenance_contract(
             provenance_payload,
             candidate_catalogue_path=catalogue_path,
@@ -5692,7 +6780,8 @@ def _load_checkpoint_state(
         if (
             set(payload) != current_fields
             or type(payload.get("checkpoint_schema_version")) is not int
-            or payload.get("checkpoint_schema_version") != CHECKPOINT_SCHEMA_VERSION
+            or payload.get("checkpoint_schema_version")
+            != _checkpoint_schema_for(acquisition_schema_version)
         ):
             raise ValueError("modern acquisition checkpoint shape is invalid")
         baseline_batches = payload["baseline_batches"]
@@ -5742,16 +6831,20 @@ def _load_checkpoint_state(
     for candidate in candidates:
         state = states[candidate.candidate_id]
         permitted_states = {"pending", "probing", "terminal"}
-        if acquisition_schema_version in {3, 4, 5, SCHEMA_VERSION}:
+        if acquisition_schema_version in _DURATION_LIMIT_SCHEMA_VERSIONS:
             permitted_states.add("baseline-ready")
         if not isinstance(state, dict) or state.get("state") not in permitted_states:
             raise ValueError("acquisition checkpoint candidate state is invalid")
-        if modern_checkpoint_schema and "pending_navigation" in state and state["pending_navigation"] is None:
+        if (
+            modern_checkpoint_schema
+            and "pending_navigation" in state
+            and state["pending_navigation"] is None
+        ):
             raise ValueError("current acquisition pending navigation is null")
         _validate_navigation_attempts(
             state,
             acquisition_schema_version=acquisition_schema_version,
-            enforce_duration_limit=(acquisition_schema_version in {3, 4, 5, SCHEMA_VERSION}),
+            enforce_duration_limit=(acquisition_schema_version in _DURATION_LIMIT_SCHEMA_VERSIONS),
             require_canonical_timestamps=modern_checkpoint_schema,
         )
         if "navigation_rejections" in state:
@@ -5780,7 +6873,9 @@ def _load_checkpoint_state(
                     candidate_id=candidate.candidate_id,
                     acquisition_schema_version=acquisition_schema_version,
                     baseline_started_at=state.get("baseline_started_at"),
-                    enforce_duration_limit=(acquisition_schema_version in {3, 4, 5, SCHEMA_VERSION}),
+                    enforce_duration_limit=(
+                        acquisition_schema_version in _DURATION_LIMIT_SCHEMA_VERSIONS
+                    ),
                     require_canonical_timestamps=modern_checkpoint_schema,
                     require_observation_attempt_bindings=modern_checkpoint_schema,
                 )
@@ -5821,9 +6916,13 @@ def _load_checkpoint_state(
             raise ValueError("checkpoint references missing terminal evidence")
     candidate_order = [candidate.candidate_id for candidate in candidates]
     if modern_checkpoint_schema:
-        reservations = (_baseline_batch_reservations(
-            baseline_batches, states, _checkpoint_terminal_payloads(path.parent, states)
-        ) if current_schema else None)
+        reservations = (
+            _baseline_batch_reservations(
+                baseline_batches, states, _checkpoint_terminal_payloads(path.parent, states)
+            )
+            if selection_schema
+            else None
+        )
         validated_baseline_batches = _validate_baseline_batches(
             baseline_batches,
             states=states,
@@ -5857,12 +6956,12 @@ def _load_checkpoint_state(
     _validate_document_response_receipt_namespace(
         path.parent,
         states,
-        required=(acquisition_schema_version in {2, 3, 4, 5, SCHEMA_VERSION}),
+        required=(acquisition_schema_version in _INSTRUMENTATION_EVIDENCE_SCHEMA_VERSIONS),
     )
     _validate_prepared_probe_namespace(
         path.parent,
         states,
-        required=(acquisition_schema_version in {2, 3, 4, 5, SCHEMA_VERSION}),
+        required=(acquisition_schema_version in _INSTRUMENTATION_EVIDENCE_SCHEMA_VERSIONS),
     )
     if internal_failures:
         raise InternalAcquisitionError(

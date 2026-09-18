@@ -914,6 +914,154 @@ def test_status_keeps_acquisition_runner_unverified_without_foundation(
     assert "gate_verification" not in runner
 
 
+def test_status_labels_historical_acquisition_authority_without_using_it_as_gate(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import qcsd_lab.class_acquisition as acquisition
+    import qcsd_lab.class_attestation as attestation
+
+    catalogue = tmp_path / "catalogue.json"
+    catalogue.write_text("{}\n", encoding="utf-8")
+    authority = tmp_path / "acquisition-authority-v96.json"
+    authority.write_text("{}\n", encoding="utf-8")
+    runner_root = tmp_path / "acquisition"
+    runner_root.mkdir()
+    observed: list[dict[str, object]] = []
+
+    def validate_authority(path: Path, **kwargs: object) -> dict[str, object]:
+        observed.append({"path": path, **kwargs})
+        return {
+            "path": str(path.absolute()),
+            "sha256": pipeline.sha256_file(path),
+            "verification_status": "historical-verify-only",
+            "summary": {"browser_egress_vectors": 98},
+        }
+
+    monkeypatch.setattr(
+        pipeline,
+        "load_candidate_catalogue_receipt",
+        lambda _path: ({}, [_Candidate("candidate-001")]),
+    )
+    monkeypatch.setattr(attestation, "validate_class_acquisition_authority", validate_authority)
+    monkeypatch.setattr(
+        acquisition,
+        "acquisition_status",
+        lambda *_args, **_kwargs: {
+            "acquisition_schema_version": acquisition.SCHEMA_VERSION,
+            "candidate_count": 1,
+        },
+    )
+
+    status = pipeline.class_study_status(
+        candidate_catalogue_path=catalogue,
+        acquisition_root=runner_root,
+        acquisition_authority=authority,
+    )
+
+    assert observed == [
+        {
+            "path": authority,
+            "runtime_role": "collection",
+            "allow_historical": True,
+        }
+    ]
+    assert status["stages"]["acquisition_authority"]["state"] == "historical-verify-only"
+    runner = status["stages"]["acquisition_runner"]
+    assert runner["state"] == "unverified"
+    assert runner["authoritative"] is False
+    assert "current deep gate verification" in runner["reason"]
+    assert "gate_verification" not in runner
+
+
+@pytest.mark.parametrize(
+    ("acquisition_schema", "completion_schema", "checkpoint_schema", "current"),
+    (
+        (7, 4, 3, True),
+        (6, 3, None, False),
+        (7, 3, 3, False),
+        (7, 4, 2, False),
+    ),
+)
+def test_status_only_advances_exact_current_acquisition_completion(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    acquisition_schema: int,
+    completion_schema: int,
+    checkpoint_schema: int | None,
+    current: bool,
+) -> None:
+    import qcsd_lab.class_acquisition as acquisition
+    import qcsd_lab.class_attestation as attestation
+
+    catalogue = tmp_path / "catalogue.json"
+    catalogue.write_text("{}\n", encoding="utf-8")
+    foundation = tmp_path / "foundation.json"
+    foundation.write_text("{}\n", encoding="utf-8")
+    completion = tmp_path / "acquisition/completion.json"
+    completion.parent.mkdir()
+    completion.write_text(json.dumps({"payload_sha256": "a" * 64}) + "\n", encoding="utf-8")
+    completion_payload: dict[str, object] = {
+        "acquisition_schema_version": acquisition_schema,
+        "completion_schema_version": completion_schema,
+        "terminal_receipts": {},
+    }
+    if checkpoint_schema is not None:
+        completion_payload["checkpoint_schema_version"] = checkpoint_schema
+    deep_calls: list[tuple[dict[str, object], Path]] = []
+
+    monkeypatch.setattr(
+        pipeline,
+        "load_candidate_catalogue_receipt",
+        lambda _path: ({}, [_Candidate("candidate-001")]),
+    )
+    monkeypatch.setattr(
+        attestation,
+        "validate_class_foundation_attestation",
+        lambda path, **_kwargs: {
+            "path": str(path.absolute()),
+            "sha256": pipeline.sha256_file(path),
+        },
+    )
+    monkeypatch.setattr(
+        acquisition,
+        "validate_acquisition_completion",
+        lambda *_args, **_kwargs: dict(completion_payload),
+    )
+    monkeypatch.setattr(
+        attestation,
+        "validate_current_acquisition_completion_authority",
+        lambda payload, *, runner_root: deep_calls.append((dict(payload), runner_root)),
+    )
+
+    status = pipeline.class_study_status(
+        candidate_catalogue_path=catalogue,
+        acquisition_completion_path=completion,
+        foundation_attestation=foundation,
+    )
+
+    stage = status["stages"]["acquisition_completion"]
+    if current:
+        assert (
+            acquisition_schema,
+            completion_schema,
+            checkpoint_schema,
+        ) == (
+            acquisition.SCHEMA_VERSION,
+            acquisition.COMPLETION_SCHEMA_VERSION,
+            acquisition.CHECKPOINT_SCHEMA_VERSION,
+        )
+        assert stage["state"] == "verified"
+        assert "verification_status" not in stage
+        assert deep_calls == [(completion_payload, completion.parent)]
+        assert status["next_required_stage"] == "pilot-selection-and-assembly-freeze"
+    else:
+        assert stage["state"] == "historical-verify-only"
+        assert stage["verification_status"] == "historical-verify-only"
+        assert deep_calls == []
+        assert status["next_required_stage"] == "complete-30s-24h-72h-acquisition"
+
+
 def test_status_deep_verifies_current_foundation_but_keeps_runner_informational(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -4130,14 +4278,14 @@ def test_acquisition_authority_verify_dispatch_does_not_use_foundation(
     )
     observed = []
 
-    def validate(target: Path, *, runtime_role: str):
-        observed.append((target, runtime_role))
+    def validate(target: Path, *, runtime_role: str, allow_historical: bool):
+        observed.append((target, runtime_role, allow_historical))
         return {"path": str(target), "promotion_authority": False}
 
     monkeypatch.setattr(attestation, "validate_class_acquisition_authority", validate)
     result = pipeline.run_class_study_action("verify", target=path)
     assert result.details["promotion_authority"] is False
-    assert observed == [(path, "collection")]
+    assert observed == [(path, "collection", True)]
 
 
 def test_final_selection_is_recomputed_from_pilot_fit_and_compatibility(monkeypatch, tmp_path):

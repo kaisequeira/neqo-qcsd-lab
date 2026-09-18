@@ -17,7 +17,10 @@ from pathlib import Path
 from typing import Any
 
 from .class_acquisition import (
+    CHECKPOINT_SCHEMA_VERSION as ACQUISITION_CHECKPOINT_SCHEMA_VERSION,
+    COMPLETION_SCHEMA_VERSION as ACQUISITION_COMPLETION_SCHEMA_VERSION,
     SELECTION_TYPE,
+    SCHEMA_VERSION as ACQUISITION_SCHEMA_VERSION,
     TERMINAL_TYPE,
     validate_acquisition_completion,
     validate_class_study_preparation,
@@ -81,6 +84,10 @@ def build_evidenced_cohort(
     completion_payload = validate_acquisition_completion(
         completion,
         candidate_catalogue_path=catalogue_path,
+        runner_root=completion_path.parent,
+    )
+    completion_payload = _require_current_acquisition_completion(
+        completion_payload,
         runner_root=completion_path.parent,
     )
     known_ids = {candidate.candidate_id for candidate in candidates}
@@ -483,6 +490,10 @@ def _build_evidenced_cohort(
         candidate_catalogue_path=catalogue_path,
         runner_root=completion_path.parent,
     )
+    completion_payload = _require_current_acquisition_completion(
+        completion_payload,
+        runner_root=completion_path.parent,
+    )
     known_ids = {candidate.candidate_id for candidate in candidates}
     unexpected = sorted(
         entry.name for entry in stability.iterdir() if entry.name not in known_ids
@@ -604,8 +615,46 @@ def publish_evidenced_cohort(
     return cohort_path, assembly_path
 
 
+def _require_current_acquisition_completion(
+    completion_payload: Mapping[str, Any],
+    *,
+    runner_root: Path,
+) -> Mapping[str, Any]:
+    if (
+        type(completion_payload.get("acquisition_schema_version")) is not int
+        or completion_payload["acquisition_schema_version"] != ACQUISITION_SCHEMA_VERSION
+        or type(completion_payload.get("completion_schema_version")) is not int
+        or completion_payload["completion_schema_version"] != ACQUISITION_COMPLETION_SCHEMA_VERSION
+        or type(completion_payload.get("checkpoint_schema_version")) is not int
+        or completion_payload["checkpoint_schema_version"] != ACQUISITION_CHECKPOINT_SCHEMA_VERSION
+    ):
+        raise ValueError(
+            "cohort publication requires current acquisition, completion and checkpoint schemas"
+        )
+    _validate_current_completion_authority(
+        completion_payload,
+        runner_root=runner_root,
+    )
+    return completion_payload
+
+
+def _validate_current_completion_authority(
+    completion_payload: Mapping[str, Any],
+    *,
+    runner_root: Path,
+) -> None:
+    # Keep this lazy: class_attestation also consumes cohort evidence through
+    # readiness reconstruction and imports class_acquisition at module load.
+    from .class_attestation import validate_current_acquisition_completion_authority
+
+    validate_current_acquisition_completion_authority(
+        completion_payload,
+        runner_root=runner_root,
+    )
+
+
 def _completed_prefix(completion_payload: Mapping[str, Any]) -> Mapping[str, Any] | None:
-    if completion_payload.get("completion_schema_version") != 3:
+    if completion_payload.get("completion_schema_version") != ACQUISITION_COMPLETION_SCHEMA_VERSION:
         return None
     selection = validate_hash_bound_receipt(
         completion_payload["selection"], expected_type=SELECTION_TYPE

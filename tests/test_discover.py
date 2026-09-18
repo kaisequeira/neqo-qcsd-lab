@@ -17,31 +17,33 @@ from qcsd_lab.browser_egress import (
     target_egress_apis,
 )
 from qcsd_lab.cdp_targets import (
+    EGRESS_PREARM_SUMMARY_SCHEMA_VERSION,
+    SRCDOC_PSEUDO_DOCUMENT_POLICY,
+    SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
     CdpTargetIntegrityError,
     CdpTargetSource,
-    EGRESS_PREARM_SUMMARY_SCHEMA_VERSION,
-)
-from qcsd_lab.discovery_evidence import (
-    PASSIVE_RENDER_CONTRACT_SHA256,
-    RENDER_OBSERVATION_SCHEMA_VERSION,
 )
 from qcsd_lab.discover import (
-    _DependencyOccurrence,
-    DiscoveryIntegrityError,
     DiscoveredRequest,
-    _SanitizedEventProjection,
-    _RequestExtraInfoAssociator,
+    DiscoveryIntegrityError,
+    _DependencyOccurrence,
     _RequestAdmission,
+    _RequestExtraInfoAssociator,
     _RequestObservationLedger,
-    _validate_request_instance_ledger,
     _resolve_dependency_url,
+    _SanitizedEventProjection,
     _stack_frame_urls,
+    _validate_request_instance_ledger,
     _wait_for_navigation_load,
     _wait_for_passive_render,
     build_resources,
     discover_page,
     exclusion_reason,
     merge_request_headers,
+)
+from qcsd_lab.discovery_evidence import (
+    PASSIVE_RENDER_CONTRACT_SHA256,
+    RENDER_OBSERVATION_SCHEMA_VERSION,
 )
 
 
@@ -111,6 +113,23 @@ def _egress_prearm_summary() -> dict:
             }
             for target_type in ("page", "iframe", "worker", "shared_worker")
         },
+    }
+
+
+def _srcdoc_pseudo_document_summary() -> dict:
+    return {
+        "schema_version": SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
+        "policy": SRCDOC_PSEUDO_DOCUMENT_POLICY,
+        "enabled": True,
+        "total": 0,
+        "resolved": 0,
+        "pending": 0,
+        "aborted": 0,
+        "open_candidates": 0,
+        "network_history_saturated": False,
+        "fetch_history_saturated": False,
+        "candidate_limit_saturated": False,
+        "diagnostics": [],
     }
 
 
@@ -758,6 +777,8 @@ def test_discover_page_installs_request_stage_policy_before_navigation(monkeypat
                         "browserContextId": "browser-context",
                     }
                 }
+            if command == "Page.getFrameTree":
+                return {"frameTree": {"frame": {"id": "root-frame"}}}
             if command == "Page.addScriptToEvaluateOnNewDocument":
                 return {"identifier": "root-egress-init"}
             if command == "Runtime.evaluate":
@@ -1092,16 +1113,18 @@ def test_discover_page_installs_request_stage_policy_before_navigation(monkeypat
         "cutoff_ms": 13_000,
         "active_request_ids": [],
         "active_request_count": 0,
-            "router_shutdown_ready": True,
-            "bootstrap_prearm_summary": _bootstrap_prearm_summary(),
-            "egress_prearm_summary": _egress_prearm_summary(),
-            "non_replayable_egress_summary": _successful_egress_guard().success_summary(),
-            "browser_context_service_worker_count": 0,
-            "cutoff_reason": "quiescent",
-        }
+        "router_shutdown_ready": True,
+        "bootstrap_prearm_summary": _bootstrap_prearm_summary(),
+        "egress_prearm_summary": _egress_prearm_summary(),
+        "internal_document_lifecycle_summary": _srcdoc_pseudo_document_summary(),
+        "non_replayable_egress_summary": _successful_egress_guard().success_summary(),
+        "browser_context_service_worker_count": 0,
+        "cutoff_reason": "quiescent",
+    }
     assert result.discovery_event_audit["summary"] == {
         "event_count": 17,
         "target_event_count": 0,
+        "browser_internal_document_count": 0,
         "network_request_count": 6,
         "fetch_request_count": 6,
         "fetch_internal_restart_count": 0,
@@ -1206,6 +1229,7 @@ class _PassiveRouter:
         self.shutdown_ready = shutdown_ready
         self.bootstrap_prearm_summary = bootstrap_prearm_summary or _bootstrap_prearm_summary()
         self.egress_prearm_summary = _egress_prearm_summary()
+        self.srcdoc_pseudo_document_summary = _srcdoc_pseudo_document_summary()
 
     def raise_if_failed(self) -> None:
         return None
@@ -1411,6 +1435,7 @@ def test_discover_page_aborts_pre_shutdown_failure_without_masking_primary(
             held=0 if failure_kind == "normal-shutdown-guard-failure" else 1
         )
         egress_prearm_summary = _egress_prearm_summary()
+        srcdoc_pseudo_document_summary = _srcdoc_pseudo_document_summary()
 
         def __init__(self, *_args, **_kwargs) -> None:
             self.abort_started = False
@@ -1758,6 +1783,7 @@ def test_post_cutoff_network_occurrence_cannot_enter_an_accepted_graph() -> None
                 },
             },
         },
+        "internal_document_lifecycle_summary": _srcdoc_pseudo_document_summary(),
         "non_replayable_egress_summary": _successful_egress_guard().success_summary(),
         "browser_context_service_worker_count": 0,
         "cutoff_reason": "quiescent",

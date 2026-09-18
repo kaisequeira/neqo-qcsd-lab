@@ -11,6 +11,18 @@ from qcsd_lab.acquisition_timing import (
     ACTION_TIMING_CONTRACT,
     TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT,
 )
+from qcsd_lab.cdp_targets import (
+    CDP_TARGET_INSTRUMENTATION_POLICY,
+    SRCDOC_PSEUDO_DOCUMENT_POLICY,
+    SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
+)
+from qcsd_lab.class_acquisition import (
+    CHECKPOINT_SCHEMA_VERSION as ACQUISITION_CHECKPOINT_SCHEMA_VERSION,
+    COMPLETION_SCHEMA_VERSION as ACQUISITION_COMPLETION_SCHEMA_VERSION,
+    DOCUMENT_RESPONSE_SCHEMA_VERSION,
+    SCHEMA_VERSION as ACQUISITION_SCHEMA_VERSION,
+    TERMINAL_SCHEMA_VERSION as ACQUISITION_TERMINAL_SCHEMA_VERSION,
+)
 from qcsd_lab.class_handoff import SCHEMA_VERSION as HANDOFF_SCHEMA_VERSION
 from qcsd_lab.class_study import (
     CANDIDATE_COUNT,
@@ -51,6 +63,13 @@ from qcsd_lab.experiment import (
     KERNEL_TX_EVIDENCE_FILES,
     KERNEL_TX_EVIDENCE_RECEIPT_SOURCE,
 )
+from qcsd_lab.discovery_evidence import (
+    DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION,
+    PASSIVE_RENDER_CONTRACT,
+    PASSIVE_RENDER_CONTRACT_SHA256,
+    RENDER_OBSERVATION_SCHEMA_VERSION,
+)
+from qcsd_lab.pinned_cdp import PROBE_SCHEMA_VERSION as PINNED_CDP_PROBE_SCHEMA_VERSION
 
 LIST_SHA = "a" * 64
 OTHER_LIST_SHA = "b" * 64
@@ -61,13 +80,45 @@ def test_checked_in_handoff_contract_matches_current_exporter_and_kernel_sidecar
     study = json.loads((root / "config/class-study/v1/study.json").read_text())
     evaluation = study["classifier_contract"]
     kernel = evaluation["handoff_kernel_tx_evidence"]
+    amendment = study["prospective_acquisition_amendment"]
+    page_admission = study["page_admission"]
 
+    assert amendment["schema_version"] == 2
+    assert amendment["date"] == "2026-09-19"
+    assert amendment["acquisition_schema_version"] == ACQUISITION_SCHEMA_VERSION == 7
+    assert amendment["checkpoint_schema_version"] == ACQUISITION_CHECKPOINT_SCHEMA_VERSION == 3
+    assert amendment["terminal_schema_version"] == ACQUISITION_TERMINAL_SCHEMA_VERSION == 4
+    assert amendment["completion_schema_version"] == ACQUISITION_COMPLETION_SCHEMA_VERSION == 4
+    assert amendment["document_response_schema_version"] == DOCUMENT_RESPONSE_SCHEMA_VERSION == 2
+    assert amendment["pinned_cdp_probe_schema_version"] == PINNED_CDP_PROBE_SCHEMA_VERSION == 15
+    assert amendment["render_observation_schema_version"] == RENDER_OBSERVATION_SCHEMA_VERSION
+    assert amendment["discovery_event_audit_schema_version"] == DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION
     assert (
-        study["page_admission"]["acquisition_action_timing_contract"]
-        == ACTION_TIMING_CONTRACT
+        amendment["passive_render_contract_schema_version"]
+        == PASSIVE_RENDER_CONTRACT["schema_version"]
     )
+    assert amendment["retired_v96_contract"] == {
+        "acquisition_schema_version": 6,
+        "completion_schema_version": 3,
+        "pinned_cdp_probe_schema_version": 14,
+        "authority": "historical-verify-only-never-current-admission",
+    }
+    assert page_admission["passive_render_contract"] == PASSIVE_RENDER_CONTRACT
+    assert page_admission["passive_render_contract_sha256"] == PASSIVE_RENDER_CONTRACT_SHA256
+    assert page_admission["cdp_target_instrumentation_policy"] == CDP_TARGET_INSTRUMENTATION_POLICY
+    assert page_admission["render_observation_schema_version"] == RENDER_OBSERVATION_SCHEMA_VERSION
     assert (
-        study["page_admission"]["baseline_scheduling_contract"]
+        page_admission["discovery_event_audit_schema_version"]
+        == DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION
+    )
+    assert page_admission["srcdoc_pseudo_document_contract"] == {
+        "schema_version": SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
+        "policy": SRCDOC_PSEUDO_DOCUMENT_POLICY,
+    }
+
+    assert page_admission["acquisition_action_timing_contract"] == ACTION_TIMING_CONTRACT
+    assert (
+        page_admission["baseline_scheduling_contract"]
         == TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT
     )
     assert evaluation["handoff_schema_version"] == HANDOFF_SCHEMA_VERSION == 3

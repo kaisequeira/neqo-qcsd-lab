@@ -6,10 +6,14 @@ from pathlib import Path
 
 import pytest
 
+from qcsd_lab import class_attestation as attestation
 import qcsd_lab.class_cohort as cohort_module
 from qcsd_lab.acquisition_selection import derive_acquisition_selection
 from qcsd_lab.class_acquisition import (
+    CHECKPOINT_SCHEMA_VERSION,
+    COMPLETION_SCHEMA_VERSION,
     COMPLETION_TYPE,
+    SCHEMA_VERSION as ACQUISITION_SCHEMA_VERSION,
     SELECTION_TYPE,
 )
 from qcsd_lab.class_catalogue import (
@@ -101,12 +105,14 @@ def _completion(
     this fixture isolates cohort rebuild and its terminal/selection joins.
     """
     payload: dict[str, object] = {
-        "completion_schema_version": 2,
+        "acquisition_schema_version": ACQUISITION_SCHEMA_VERSION,
+        "completion_schema_version": COMPLETION_SCHEMA_VERSION,
+        "checkpoint_schema_version": CHECKPOINT_SCHEMA_VERSION,
         "provenance_sha256": "1" * 64,
         "terminal_receipts": {},
     }
+    candidates = _candidates()
     if prefix:
-        candidates = _candidates()
         eligible = {
             candidate.candidate_id: True
             for stratum in TRANCO_RANK_STRATA
@@ -115,16 +121,40 @@ def _completion(
                 if stratum.minimum_rank <= item.rank <= stratum.maximum_rank
             ][:24]
         }
-        payload.update({
-            "completion_schema_version": 3,
+        selection = derive_acquisition_selection(
+            candidates,
+            tranco_list_sha256=LIST_SHA,
+            terminal_eligibility=eligible,
+        )
+    else:
+        selected = {
+            candidate.candidate_id
+            for stratum in TRANCO_RANK_STRATA
+            for candidate in [
+                item
+                for item in candidates
+                if stratum.minimum_rank <= item.rank <= stratum.maximum_rank
+            ][:24]
+        }
+        selection = {
+            "complete": True,
+            "needed_ids": [],
+            "pilot_ids": [
+                candidate.candidate_id
+                for candidate in candidates
+                if candidate.candidate_id in selected
+            ],
+            "terminal_ids": [candidate.candidate_id for candidate in candidates],
+            "unassessed_ids": [],
+        }
+    payload.update(
+        {
             "selection": bind_receipt(
-                derive_acquisition_selection(
-                    candidates, tranco_list_sha256=LIST_SHA,
-                    terminal_eligibility=eligible,
-                ),
+                selection,
                 receipt_type=SELECTION_TYPE,
             ),
-        })
+        }
+    )
     root = tmp_path / "acquisition"
     root.mkdir(exist_ok=True)
     path = root / "completion.json"
@@ -134,7 +164,129 @@ def _completion(
         "validate_acquisition_completion",
         lambda value, **_kwargs: validate_hash_bound_receipt(value, expected_type=COMPLETION_TYPE),
     )
+    monkeypatch.setattr(
+        cohort_module,
+        "_validate_current_completion_authority",
+        lambda *_args, **_kwargs: None,
+    )
     return path
+
+
+@pytest.mark.parametrize(
+    ("acquisition_schema", "completion_schema", "checkpoint_schema"),
+    (
+        (6, 3, 2),
+        (ACQUISITION_SCHEMA_VERSION, 3, CHECKPOINT_SCHEMA_VERSION),
+        (6, COMPLETION_SCHEMA_VERSION, CHECKPOINT_SCHEMA_VERSION),
+        (ACQUISITION_SCHEMA_VERSION, COMPLETION_SCHEMA_VERSION, 2),
+    ),
+)
+def test_current_cohort_publication_rejects_historical_acquisition_completion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    acquisition_schema: int,
+    completion_schema: int,
+    checkpoint_schema: int,
+) -> None:
+    catalogue = _catalogue(tmp_path / "candidates.json")
+    completion = _completion(tmp_path, monkeypatch)
+    value = json.loads(completion.read_text())
+    value["payload"]["acquisition_schema_version"] = acquisition_schema
+    value["payload"]["completion_schema_version"] = completion_schema
+    value["payload"]["checkpoint_schema_version"] = checkpoint_schema
+    completion.write_bytes(
+        canonical_json_bytes(bind_receipt(value["payload"], receipt_type=COMPLETION_TYPE))
+    )
+    stability = tmp_path / "stability"
+    workloads = tmp_path / "workloads"
+    stability.mkdir()
+    workloads.mkdir()
+    monkeypatch.setattr(
+        cohort_module,
+        "_candidate_acquisition_evidence",
+        lambda *_a, **_k: pytest.fail("historical completion reached cohort evidence"),
+    )
+
+    with pytest.raises(ValueError, match="current acquisition, completion and checkpoint"):
+        build_evidenced_cohort(
+            catalogue,
+            stability_root=stability,
+            workload_root=workloads,
+            acquisition_completion_path=completion,
+        )
+
+
+def test_direct_cohort_publication_deep_rejects_v96_acquisition_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deep_validator = cohort_module._validate_current_completion_authority
+    catalogue = _catalogue(tmp_path / "candidates.json")
+    completion = _completion(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        cohort_module,
+        "_validate_current_completion_authority",
+        deep_validator,
+    )
+    authority_path = tmp_path / "acquisition-authority-v96.json"
+    authority_path.write_bytes(
+        canonical_json_bytes(
+            bind_receipt(
+                {"fixture": "historical-v96-schema14"},
+                receipt_type=attestation.ACQUISITION_AUTHORITY_RECEIPT_TYPE,
+            )
+        )
+    )
+    provenance_path = completion.parent / "provenance.json"
+    provenance_path.write_bytes(
+        canonical_json_bytes(
+            bind_receipt(
+                {
+                    "acquisition_schema_version": ACQUISITION_SCHEMA_VERSION,
+                    "acquisition_authority": {
+                        "path": str(authority_path.resolve()),
+                        "sha256": sha256_file(authority_path),
+                    },
+                },
+                receipt_type=attestation.ACQUISITION_PROVENANCE_TYPE,
+            )
+        )
+    )
+    completion_value = json.loads(completion.read_text())
+    completion_payload = completion_value["payload"]
+    completion_payload["checkpoint_schema_version"] = CHECKPOINT_SCHEMA_VERSION
+    completion_payload["provenance_sha256"] = sha256_file(provenance_path)
+    completion.write_bytes(
+        canonical_json_bytes(bind_receipt(completion_payload, receipt_type=COMPLETION_TYPE))
+    )
+    stability = tmp_path / "stability"
+    workloads = tmp_path / "workloads"
+    stability.mkdir()
+    workloads.mkdir()
+
+    def reject_historical(path: Path, **kwargs: object) -> dict[str, object]:
+        assert path == authority_path.resolve()
+        assert kwargs == {"runtime_role": None, "allow_historical": False}
+        raise ValueError("historical v96 schema14 authority is verify-only")
+
+    monkeypatch.setattr(
+        attestation,
+        "validate_class_acquisition_authority",
+        reject_historical,
+    )
+    monkeypatch.setattr(
+        cohort_module,
+        "_candidate_acquisition_evidence",
+        lambda *_a, **_k: pytest.fail("historical authority reached cohort evidence"),
+    )
+
+    with pytest.raises(ValueError, match="historical v96 schema14.*verify-only"):
+        build_evidenced_cohort(
+            catalogue,
+            stability_root=stability,
+            workload_root=workloads,
+            acquisition_completion_path=completion,
+        )
 
 
 def _eligible_evidence(candidate: ClassCandidate, **_kwargs: object):

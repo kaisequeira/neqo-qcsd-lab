@@ -52,6 +52,7 @@ set -euo pipefail
 ROOT={shlex.quote(str(LAB_ROOT))}
 _QCSD_LIFETIME_SIGNAL_STATUS=0
 _QCSD_LIFETIME_CLEANUP_ACTIVE=0
+readonly _QCSD_DOCKER_METADATA_TIMEOUT_SECONDS=10
 etf_probe_network_present=0
 etf_probe_receiver_present=0
 
@@ -143,8 +144,22 @@ qcsd_run_attached_docker() {{
 }}
 
 _qcsd_docker_api_with_timeout() {{
-  _qcsd_log receiver-wait
-  printf '%s\\n' 0
+  local duration="${{1:?}}"
+  shift
+  if [[ "$duration" == "$_QCSD_DOCKER_METADATA_TIMEOUT_SECONDS" &&
+        "$#" == 3 && "$1" == info && "$2" == --format &&
+        "$3" == '{{{{json .}}}}' ]]; then
+    _qcsd_docker_api "$@"
+  elif [[ "$duration" == 15 && "$#" == 3 &&
+          "$1" == container && "$2" == wait &&
+          "$3" == {shlex.quote(RECEIVER_ID)} ]]; then
+    _qcsd_log receiver-wait
+    printf '%s\\n' 0
+  else
+    printf 'unexpected bounded synthetic Docker call: %s %s\\n' \\
+      "$duration" "$*" >&2
+    return 2
+  fi
 }}
 
 _qcsd_docker_exact_id_presence() {{

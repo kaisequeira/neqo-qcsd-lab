@@ -1450,10 +1450,28 @@ def _launcher_boundary_fixture(
     launcher.chmod(0o755)
     (tmp_path / "tools").mkdir()
     supervisor = tmp_path / "tools/docker_signal_supervisor.sh"
-    supervisor.write_bytes(
+    supervisor_source = (
         (LAB_ROOT / "tools/docker_signal_supervisor.sh").read_bytes()
-        + b"""\n# Test-only exact lifecycle namespace; production has no environment override.\n_qcsd_secure_lifecycle_base() {\n  local entry canonical metadata\n  _qcsd_lifecycle_base="${QCSD_TEST_LIFECYCLE_BASE:?}"\n  [[ "${_qcsd_lifecycle_base}" == /* && ! -L "${_qcsd_lifecycle_base}" &&\n      -d "${_qcsd_lifecycle_base}" ]] || return 1\n  canonical="$(readlink -f -- "${_qcsd_lifecycle_base}")" || return 1\n  [[ "${canonical}" == "${_qcsd_lifecycle_base}" ]] || return 1\n  metadata="$(stat -Lc '%u:%a:%F' -- "${_qcsd_lifecycle_base}")" || return 1\n  [[ "${metadata}" == "$(id -u):700:directory" ]] || return 1\n  for entry in "${_qcsd_lifecycle_base}"/*; do\n    [[ -e "${entry}" || -L "${entry}" ]] || continue\n    [[ "${entry##*/}" =~ ^(run|network|build|transaction)[.][0-9a-f]{32}$ &&\n        ! -L "${entry}" && -d "${entry}" ]] || return 1\n    _qcsd_validate_lifecycle_root_contents "${entry}" || return 1\n  done\n}\n_qcsd_lifecycle_lock_path() {\n  printf '%s.lock\\n' "${QCSD_TEST_LIFECYCLE_BASE:?}"\n}\n# This copied fixture keeps fake Docker calls local and fast. The production\n# leased transient-service boundary is covered by the guardian/native suite.\n_qcsd_docker_api_service_with_timeout() {\n  local duration="${1:?}"\n  shift\n  /usr/bin/timeout --signal=KILL --kill-after=1 "${duration}s" "$@"\n}\n_qcsd_launcher_birth_bound_hook() {\n  local kind="$1" launcher_pid="$2" root="$3"\n  if [[ "${QCSD_TEST_KILL_GUARDIAN_AFTER_BIRTH_KIND:-}" == "$kind" &&\n        ! -e "${QCSD_TEST_HANDOVER_DISABLE:-/nonexistent}" ]]; then\n    printf '%s %s\\n' "$launcher_pid" "$root" >"$QCSD_TEST_HANDOVER_MARKER"\n    kill -KILL "$_QCSD_LIFECYCLE_GUARD_PID"\n    while :; do sleep 1; done\n  fi\n}\n"""
+        + b"""\n# Test-only exact lifecycle namespace; production has no environment override.\n_qcsd_secure_lifecycle_base() {\n  local entry canonical metadata\n  _qcsd_lifecycle_base="${QCSD_TEST_LIFECYCLE_BASE:?}"\n  [[ "${_qcsd_lifecycle_base}" == /* && ! -L "${_qcsd_lifecycle_base}" &&\n      -d "${_qcsd_lifecycle_base}" ]] || return 1\n  canonical="$(readlink -f -- "${_qcsd_lifecycle_base}")" || return 1\n  [[ "${canonical}" == "${_qcsd_lifecycle_base}" ]] || return 1\n  metadata="$(stat -Lc '%u:%a:%F' -- "${_qcsd_lifecycle_base}")" || return 1\n  [[ "${metadata}" == "$(id -u):700:directory" ]] || return 1\n  for entry in "${_qcsd_lifecycle_base}"/*; do\n    [[ -e "${entry}" || -L "${entry}" ]] || continue\n    [[ "${entry##*/}" =~ ^(run|network|build|transaction)[.][0-9a-f]{32}$ &&\n        ! -L "${entry}" && -d "${entry}" ]] || return 1\n    _qcsd_validate_lifecycle_root_contents "${entry}" || return 1\n  done\n}\n_qcsd_lifecycle_lock_path() {\n  printf '%s.lock\\n' "${QCSD_TEST_LIFECYCLE_BASE:?}"\n}\n# This copied fixture keeps fake Docker calls local and fast. The production\n# leased transient-service boundary is covered by the guardian/native suite.\n# Preserve the native identity-service command contract so copied launchers\n# still exercise pinned-daemon equality before every fake Docker operation.\n_qcsd_docker_api_service_with_timeout() {\n  local duration="${1:?}" service="${2:?}" host expected observed\n  shift 2\n  [[ "${duration}" =~ ^[1-9][0-9]*$ ]] || return 125\n  case "${service}" in\n    qcsd-native-docker-id)\n      (( $# == 1 )) || return 125\n      host="$1"\n      _qcsd_valid_pinned_docker_host "${host}" || return 125\n      /usr/bin/timeout --signal=KILL --kill-after=1 "${duration}s" \\\n        docker --host "${host}" info --format '{{.ID}}'\n      ;;\n    qcsd-native-docker-verify)\n      (( $# == 2 )) || return 125\n      host="$1"\n      expected="$2"\n      _qcsd_valid_pinned_docker_host "${host}" || return 125\n      [[ "${expected}" =~ ^[A-Za-z0-9_.:-]+$ ]] || return 125\n      observed="$(/usr/bin/timeout --signal=KILL --kill-after=1 \\\n        "${duration}s" docker --host "${host}" info --format '{{.ID}}')" ||\n        return 125\n      [[ "${observed}" == "${expected}" ]] || return 42\n      ;;\n    qcsd-native-docker-exec)\n      (( $# >= 4 )) || return 125\n      host="$1"\n      expected="$2"\n      [[ "$3" == -- && "${expected}" =~ ^[A-Za-z0-9_.:-]+$ ]] || return 125\n      shift 3\n      _qcsd_valid_pinned_docker_host "${host}" || return 125\n      observed="$(/usr/bin/timeout --signal=KILL --kill-after=1 \\\n        "${duration}s" docker --host "${host}" info --format '{{.ID}}')" ||\n        return 125\n      [[ "${observed}" == "${expected}" ]] || return 125\n      /usr/bin/timeout --signal=KILL --kill-after=1 "${duration}s" \\\n        env -u DOCKER_CONTEXT -u DOCKER_HOST -u DOCKER_TLS_VERIFY \\\n          -u DOCKER_CERT_PATH docker --host "${host}" "$@"\n      ;;\n    *)\n      /usr/bin/timeout --signal=KILL --kill-after=1 "${duration}s" \\\n        "${service}" "$@"\n      ;;\n  esac\n}\n_qcsd_launcher_birth_bound_hook() {\n  local kind="$1" launcher_pid="$2" root="$3"\n  if [[ "${QCSD_TEST_KILL_GUARDIAN_AFTER_BIRTH_KIND:-}" == "$kind" &&\n        ! -e "${QCSD_TEST_HANDOVER_DISABLE:-/nonexistent}" ]]; then\n    printf '%s %s\\n' "$launcher_pid" "$root" >"$QCSD_TEST_HANDOVER_MARKER"\n    kill -KILL "$_QCSD_LIFECYCLE_GUARD_PID"\n    while :; do sleep 1; done\n  fi\n}\n"""
     )
+    verify_mismatch = b'      [[ "${observed}" == "${expected}" ]] || return 42\n'
+    exec_mismatch = b'      [[ "${observed}" == "${expected}" ]] || return 125\n'
+    assert supervisor_source.count(verify_mismatch) == 1
+    assert supervisor_source.count(exec_mismatch) == 1
+    supervisor_source = supervisor_source.replace(
+        verify_mismatch,
+        b'      if [[ "${observed}" != "${expected}" ]]; then\n'
+        b'        echo "Docker pinned daemon identity changed" >&2\n'
+        b'        return 42\n'
+        b'      fi\n',
+    ).replace(
+        exec_mismatch,
+        b'      if [[ "${observed}" != "${expected}" ]]; then\n'
+        b'        echo "Docker pinned daemon identity changed" >&2\n'
+        b'        return 125\n'
+        b'      fi\n',
+    )
+    supervisor.write_bytes(supervisor_source)
     supervisor.chmod(0o755)
     native = tmp_path / "tools/docker_lifecycle_native.py"
     native.write_bytes((LAB_ROOT / "tools/docker_lifecycle_native.py").read_bytes())
@@ -8148,6 +8166,13 @@ docker() {{
   fi
 }}
 _qcsd_docker_api() {{ docker "$@"; }}
+_QCSD_DOCKER_METADATA_TIMEOUT_SECONDS=10
+_qcsd_docker_api_with_timeout() {{
+  local duration="$1"
+  shift
+  [[ "$duration" == "$_QCSD_DOCKER_METADATA_TIMEOUT_SECONDS" ]] || return 125
+  docker "$@"
+}}
 study_capture_scheduler_contract=qcsd-client-rr1-cpu10-etf-helper-cpu11-v1
 capture_scheduler_host_partition_b64 "$@"
 """
@@ -9674,7 +9699,8 @@ def test_build_preflight_failure_prevents_any_docker_build_or_receipt(
             "QCSD_TEST_DOCKER_ID_CHANGE_AFTER_BUILDS",
             "1",
             1,
-            "daemon identity changed",
+            "Docker lifecycle retirement refused because daemon identity "
+            "could not be verified",
         ),
     ),
 )

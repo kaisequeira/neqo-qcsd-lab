@@ -17,7 +17,11 @@ from qcsd_lab.browser_egress import (
     target_egress_apis,
 )
 from qcsd_lab.capture import ObserverPacket
-from qcsd_lab.cdp_targets import EGRESS_PREARM_SUMMARY_SCHEMA_VERSION
+from qcsd_lab.cdp_targets import (
+    EGRESS_PREARM_SUMMARY_SCHEMA_VERSION,
+    SRCDOC_PSEUDO_DOCUMENT_POLICY,
+    SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
+)
 from qcsd_lab.discovery_evidence import (
     CDP_TARGET_INSTRUMENTATION_POLICY,
     DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION,
@@ -131,6 +135,23 @@ def _non_replayable_egress_summary() -> dict[str, object]:
         "context_service_worker_listener_installed": True,
         "cdp_tripwires_are_pre_io": False,
         "packet_level_completeness_claimed": False,
+    }
+
+
+def _terminal_internal_document_lifecycle_summary() -> dict[str, object]:
+    return {
+        "schema_version": SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
+        "policy": SRCDOC_PSEUDO_DOCUMENT_POLICY,
+        "enabled": True,
+        "total": 0,
+        "resolved": 0,
+        "pending": 0,
+        "aborted": 0,
+        "open_candidates": 0,
+        "network_history_saturated": False,
+        "fetch_history_saturated": False,
+        "candidate_limit_saturated": False,
+        "diagnostics": [],
     }
 
 
@@ -270,6 +291,9 @@ def _prepared_workload(workload_id: str, origin_count: int) -> dict:
         "router_shutdown_ready": True,
         "bootstrap_prearm_summary": _terminal_bootstrap_prearm_summary(),
         "egress_prearm_summary": _terminal_egress_prearm_summary(),
+        "internal_document_lifecycle_summary": (
+            _terminal_internal_document_lifecycle_summary()
+        ),
         "non_replayable_egress_summary": _non_replayable_egress_summary(),
         "browser_context_service_worker_count": 0,
         "cutoff_reason": "quiescent",
@@ -284,6 +308,7 @@ def _prepared_workload(workload_id: str, origin_count: int) -> dict:
         "summary": {
             "event_count": len(events),
             "target_event_count": 0,
+            "browser_internal_document_count": 0,
             "network_request_count": len(resources),
             "fetch_request_count": len(resources),
             "fetch_internal_restart_count": 0,

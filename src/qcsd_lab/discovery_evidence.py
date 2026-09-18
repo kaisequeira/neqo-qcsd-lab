@@ -10,30 +10,30 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections import Counter
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
 from urllib.parse import urlsplit
 
-from .cdp_targets import (
-    CDP_TARGET_INSTRUMENTATION_POLICY,
-    validate_bootstrap_prearm_summary,
-    validate_egress_prearm_summary,
-)
 from .browser_egress import (
     NON_REPLAYABLE_EGRESS_POLICY,
     validate_non_replayable_egress_success_summary,
 )
+from .cdp_targets import (
+    CDP_TARGET_INSTRUMENTATION_POLICY,
+    validate_bootstrap_prearm_summary,
+    validate_egress_prearm_summary,
+    validate_srcdoc_pseudo_document_summary,
+)
 
-PASSIVE_RENDER_CONTRACT_SCHEMA_VERSION = 3
-RENDER_OBSERVATION_SCHEMA_VERSION = 3
-DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION = 4
+PASSIVE_RENDER_CONTRACT_SCHEMA_VERSION = 4
+RENDER_OBSERVATION_SCHEMA_VERSION = 4
+DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION = 5
 
 PASSIVE_RENDER_CONTRACT: dict[str, Any] = {
     "schema_version": PASSIVE_RENDER_CONTRACT_SCHEMA_VERSION,
-    "policy": "bounded-passive-render-quiescence-v3",
+    "policy": "bounded-passive-render-quiescence-v4",
     "viewport": {"width": 1365, "height": 768, "deviceScaleFactor": 1},
     "cache": "disabled",
     "service_workers": "bypassed-and-registration-blocked",
@@ -56,6 +56,7 @@ PASSIVE_RENDER_CONTRACT: dict[str, Any] = {
         "recursive-target-router-shutdown-ready",
         "no-pending-shared-worker-bootstrap-prearm",
         "all-observed-target-egress-shims-prearmed",
+        "terminal-root-srcdoc-loader-bound-orphan-abort-lifecycle",
         "zero-non-replayable-egress-attempts",
         "zero-browser-context-service-workers",
     ],
@@ -67,6 +68,7 @@ PASSIVE_RENDER_CONTRACT: dict[str, Any] = {
         "target-detached",
         "target-destroyed",
         "target-info-changed",
+        "browser-internal-document",
         "non-replayable-egress-attempt",
     ],
     "hard_cap_policy": "typed-candidate-rejection",
@@ -113,6 +115,7 @@ def validate_render_observation(value: Any, *, allow_failure: bool = False) -> N
         "router_shutdown_ready",
         "bootstrap_prearm_summary",
         "egress_prearm_summary",
+        "internal_document_lifecycle_summary",
         "non_replayable_egress_summary",
         "browser_context_service_worker_count",
         "cutoff_reason",
@@ -168,6 +171,10 @@ def validate_render_observation(value: Any, *, allow_failure: bool = False) -> N
     )
     validate_egress_prearm_summary(
         value["egress_prearm_summary"],
+        require_terminal=reason == "quiescent",
+    )
+    validate_srcdoc_pseudo_document_summary(
+        value["internal_document_lifecycle_summary"],
         require_terminal=reason == "quiescent",
     )
     validate_non_replayable_egress_success_summary(
@@ -242,6 +249,7 @@ _TERMINAL_EVENT_FIELDS = _COMMON_EVENT_FIELDS | {
     "network_occurrence_ids",
 }
 _TARGET_EVENT_FIELDS = _COMMON_EVENT_FIELDS | {"target_event"}
+_BROWSER_INTERNAL_DOCUMENT_EVENT_FIELDS = _COMMON_EVENT_FIELDS | {"diagnostic"}
 _DEPENDENCY_EVIDENCE_FIELDS = {"kind", "value", "resolved_resource_id"}
 
 
@@ -559,6 +567,7 @@ def verify_discovery_event_audit(
     networks: dict[str, Mapping[str, Any]] = {}
     fetches: list[Mapping[str, Any]] = []
     terminals: list[Mapping[str, Any]] = []
+    internal_document_diagnostics: list[Mapping[str, Any]] = []
     mapped_resources: set[int] = set()
     exclusion_occurrences: set[int] = set()
     mapped_exclusion_pairs: set[tuple[str, str]] = set()
@@ -972,8 +981,30 @@ def verify_discovery_event_audit(
                 detached_target_sources.remove(source_key)
             else:
                 raise ValueError("discovery target activity is unsupported")
+        elif kind == "browser-internal-document":
+            if set(event) != _BROWSER_INTERNAL_DOCUMENT_EVENT_FIELDS:
+                raise ValueError(
+                    "browser internal-document audit event fields are invalid"
+                )
+            if source_key != root_source_key:
+                raise ValueError(
+                    "browser internal-document audit event must use the root source"
+                )
+            diagnostic = event["diagnostic"]
+            if not isinstance(diagnostic, Mapping):
+                raise ValueError(
+                    "browser internal-document audit diagnostic is malformed"
+                )
+            internal_document_diagnostics.append(diagnostic)
         else:
             raise ValueError("discovery event audit contains an unsupported event kind")
+
+    if internal_document_diagnostics != render_observation[
+        "internal_document_lifecycle_summary"
+    ]["diagnostics"]:
+        raise ValueError(
+            "browser internal-document audit diagnostics differ from the render summary"
+        )
 
     primary_events = [
         event
@@ -1250,6 +1281,7 @@ def verify_discovery_event_audit(
     summary = {
         "event_count": len(events),
         "target_event_count": counts["target-activity"],
+        "browser_internal_document_count": counts["browser-internal-document"],
         "network_request_count": counts["network-request"],
         "fetch_request_count": counts["fetch-request"],
         "fetch_internal_restart_count": sum(

@@ -25,8 +25,6 @@ from .cdp_targets import (
     CdpTargetSource,
     RecursiveCdpTargetRouter,
 )
-from .manifest import https_origin, safe_discovery_headers
-from .playwright_driver import playwright_driver_session, validate_default_playwright_driver_once
 from .discovery_evidence import (
     DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION,
     PASSIVE_RENDER_CONTRACT,
@@ -37,6 +35,8 @@ from .discovery_evidence import (
     validate_render_observation,
     verify_discovery_event_audit,
 )
+from .manifest import https_origin, safe_discovery_headers
+from .playwright_driver import playwright_driver_session, validate_default_playwright_driver_once
 
 # Historical manifests expose this scalar.  New evidence binds the complete
 # passive-render contract; the scalar remains its minimum post-load duration.
@@ -466,6 +466,19 @@ class _SanitizedEventProjection:
             {"target_event": target_event},
         )
 
+    def record_internal_document(
+        self,
+        source: CdpTargetSource,
+        diagnostic: Mapping[str, Any],
+    ) -> None:
+        """Record one sanitised loader-bound ``srcdoc`` lifecycle completion."""
+
+        self._append(
+            source,
+            "browser-internal-document",
+            {"diagnostic": deepcopy(dict(diagnostic))},
+        )
+
     def record_network(self, source: CdpTargetSource, event: Mapping[str, Any]) -> dict[str, Any]:
         request = event.get("request", {})
         if not isinstance(request, Mapping):
@@ -583,6 +596,7 @@ class _SanitizedEventProjection:
             raise DiscoveryIntegrityError("discovery event audit was not frozen at cutoff")
         counts: dict[str, int] = {
             "target-activity": 0,
+            "browser-internal-document": 0,
             "network-request": 0,
             "fetch-request": 0,
             "network-terminal": 0,
@@ -613,6 +627,9 @@ class _SanitizedEventProjection:
             "summary": {
                 "event_count": len(self._events),
                 "target_event_count": counts["target-activity"],
+                "browser_internal_document_count": counts[
+                    "browser-internal-document"
+                ],
                 "network_request_count": counts["network-request"],
                 "fetch_request_count": counts["fetch-request"],
                 "fetch_internal_restart_count": sum(
@@ -667,6 +684,9 @@ def _render_observation(
         "router_shutdown_ready": router.shutdown_ready,
         "bootstrap_prearm_summary": router.bootstrap_prearm_summary,
         "egress_prearm_summary": router.egress_prearm_summary,
+        "internal_document_lifecycle_summary": (
+            router.srcdoc_pseudo_document_summary
+        ),
         "non_replayable_egress_summary": egress_guard.success_summary(),
         "browser_context_service_worker_count": browser_context_service_worker_count,
         "cutoff_reason": cutoff_reason,
@@ -1561,6 +1581,8 @@ def discover_page(
                 router = RecursiveCdpTargetRouter(
                     session,
                     on_event=protocol_event,
+                    track_root_srcdoc_lifecycle=True,
+                    on_internal_document_lifecycle=audit.record_internal_document,
                     on_target_activity=audit.record_target,
                     on_non_replayable_egress=lambda source, api, mechanism, request_url: (
                         egress_guard.record(
