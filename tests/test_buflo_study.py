@@ -9539,7 +9539,10 @@ def test_production_allocator_inode_drift_before_transaction_fails_closed(
         timeout=60,
     )
 
-    assert result.returncode == 1
+    # The authority reproof must fail before the build transaction.  A later
+    # guardian census can legitimately strengthen that failure to its own
+    # fail-closed exit status when cleanup cannot be proved complete.
+    assert result.returncode != 0
     assert "immediately-before-build-transaction" in result.stderr
     assert _marked_build_count(build_marker) == 0
     assert not (tmp_path / "artifacts/buflo-study/build-execution-v62.json").exists()

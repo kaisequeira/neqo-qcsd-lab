@@ -1555,7 +1555,7 @@ def test_policy_is_pinned_and_root_is_instrumented_before_navigation() -> None:
     router, _observed = _router(session)
 
     assert CDP_TARGET_INSTRUMENTATION_POLICY == (
-        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v18"
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v19"
     )
     assert [method for route, method, _params in session.commands if route == ()] == [
         "Target.getTargetInfo",
@@ -3122,6 +3122,267 @@ def test_root_srcdoc_candidate_is_retired_by_frame_subtree_detach_order(
     router.raise_if_failed()
     assert router.srcdoc_pseudo_document_summary["open_candidates"] == 0
     _clean_shutdown(router)
+
+
+def test_root_frame_swap_then_normal_shutdown_remove_is_consumed_once() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, track_root_srcdoc_lifecycle=True)
+    frame_id = "cross-origin-frame"
+    session.emit(
+        (),
+        "Page.frameAttached",
+        {"frameId": frame_id, "parentFrameId": session.root_frame_id},
+    )
+    session.emit(
+        (),
+        "Page.frameDetached",
+        {"frameId": frame_id, "reason": "swap"},
+    )
+    router.raise_if_failed()
+
+    _begin_shutdown(router)
+    session.emit(
+        (),
+        "Page.frameDetached",
+        {"frameId": frame_id, "reason": "remove"},
+    )
+    router.raise_if_failed()
+    _finish(router)
+
+
+@pytest.mark.parametrize("shutdown_kind", ["normal", "abort"])
+def test_root_frame_unconsumed_swap_tombstone_ends_at_context_disposal(
+    shutdown_kind: str,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, track_root_srcdoc_lifecycle=True)
+    frame_id = "cross-origin-frame"
+    session.emit(
+        (),
+        "Page.frameAttached",
+        {"frameId": frame_id, "parentFrameId": session.root_frame_id},
+    )
+    session.emit(
+        (),
+        "Page.frameDetached",
+        {"frameId": frame_id, "reason": "swap"},
+    )
+    router.raise_if_failed()
+    assert router._page_frame_pending_swap_removals == {frame_id}
+
+    if shutdown_kind == "normal":
+        _clean_shutdown(router)
+    else:
+        _clean_abort(router)
+    assert router._page_frame_pending_swap_removals == set()
+
+
+def test_root_frame_swap_shutdown_remove_authority_is_one_shot() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, track_root_srcdoc_lifecycle=True)
+    frame_id = "cross-origin-frame"
+    session.emit(
+        (),
+        "Page.frameAttached",
+        {"frameId": frame_id, "parentFrameId": session.root_frame_id},
+    )
+    session.emit(
+        (),
+        "Page.frameDetached",
+        {"frameId": frame_id, "reason": "swap"},
+    )
+    router.raise_if_failed()
+    _begin_shutdown(router)
+    session.emit(
+        (),
+        "Page.frameDetached",
+        {"frameId": frame_id, "reason": "remove"},
+    )
+    router.raise_if_failed()
+    session.emit(
+        (),
+        "Page.frameDetached",
+        {"frameId": frame_id, "reason": "remove"},
+    )
+
+    with pytest.raises(CdpTargetIntegrityError, match="detachment identity is invalid"):
+        router.raise_if_failed()
+
+
+@pytest.mark.parametrize(
+    ("first_reason", "second_reason"),
+    [
+        pytest.param("remove", "remove", id="remove-then-remove"),
+        pytest.param("swap", "swap", id="swap-then-swap"),
+    ],
+)
+def test_root_frame_detach_tombstone_rejects_other_repeated_transitions(
+    first_reason: str,
+    second_reason: str,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, track_root_srcdoc_lifecycle=True)
+    frame_id = "cross-origin-frame"
+    session.emit(
+        (),
+        "Page.frameAttached",
+        {"frameId": frame_id, "parentFrameId": session.root_frame_id},
+    )
+    session.emit(
+        (),
+        "Page.frameDetached",
+        {"frameId": frame_id, "reason": first_reason},
+    )
+    router.raise_if_failed()
+    _begin_shutdown(router)
+    session.emit(
+        (),
+        "Page.frameDetached",
+        {"frameId": frame_id, "reason": second_reason},
+    )
+
+    with pytest.raises(CdpTargetIntegrityError, match="detachment identity is invalid"):
+        router.raise_if_failed()
+
+
+@pytest.mark.parametrize("phase", ["running", "aborting"])
+def test_root_frame_swap_remove_is_accepted_only_during_normal_shutdown(
+    phase: str,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, track_root_srcdoc_lifecycle=True)
+    frame_id = "cross-origin-frame"
+    session.emit(
+        (),
+        "Page.frameAttached",
+        {"frameId": frame_id, "parentFrameId": session.root_frame_id},
+    )
+    session.emit(
+        (),
+        "Page.frameDetached",
+        {"frameId": frame_id, "reason": "swap"},
+    )
+    router.raise_if_failed()
+    if phase == "aborting":
+        _browser_session, guard = _guard_for(router)
+        router.begin_abort()
+        guard.begin_abort()
+    session.emit(
+        (),
+        "Page.frameDetached",
+        {"frameId": frame_id, "reason": "remove"},
+    )
+
+    with pytest.raises(CdpTargetIntegrityError, match="detachment identity is invalid"):
+        router.raise_if_failed()
+
+
+def test_root_frame_swap_during_shutdown_creates_no_later_remove_authority() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, track_root_srcdoc_lifecycle=True)
+    frame_id = "cross-origin-frame"
+    session.emit(
+        (),
+        "Page.frameAttached",
+        {"frameId": frame_id, "parentFrameId": session.root_frame_id},
+    )
+    _begin_shutdown(router)
+    session.emit(
+        (),
+        "Page.frameDetached",
+        {"frameId": frame_id, "reason": "swap"},
+    )
+    router.raise_if_failed()
+    session.emit(
+        (),
+        "Page.frameDetached",
+        {"frameId": frame_id, "reason": "remove"},
+    )
+
+    with pytest.raises(CdpTargetIntegrityError, match="detachment identity is invalid"):
+        router.raise_if_failed()
+
+
+@pytest.mark.parametrize("reason", ["remove", "swap"])
+@pytest.mark.parametrize("frame_id", ["unknown-frame", "root-frame"])
+def test_root_frame_detach_tombstone_never_authorises_unknown_or_root_identity(
+    reason: str,
+    frame_id: str,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, track_root_srcdoc_lifecycle=True)
+    _begin_shutdown(router)
+    session.emit(
+        (),
+        "Page.frameDetached",
+        {"frameId": frame_id, "reason": reason},
+    )
+
+    with pytest.raises(CdpTargetIntegrityError, match="detachment identity is invalid"):
+        router.raise_if_failed()
+
+
+def test_root_frame_reattach_clears_prior_swap_remove_authority() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, track_root_srcdoc_lifecycle=True)
+    frame_id = "cross-origin-frame"
+    attachment = {"frameId": frame_id, "parentFrameId": session.root_frame_id}
+    session.emit((), "Page.frameAttached", attachment)
+    session.emit(
+        (),
+        "Page.frameDetached",
+        {"frameId": frame_id, "reason": "swap"},
+    )
+    session.emit((), "Page.frameAttached", attachment)
+    router.raise_if_failed()
+
+    _begin_shutdown(router)
+    session.emit(
+        (),
+        "Page.frameDetached",
+        {"frameId": frame_id, "reason": "remove"},
+    )
+    router.raise_if_failed()
+    session.emit(
+        (),
+        "Page.frameDetached",
+        {"frameId": frame_id, "reason": "remove"},
+    )
+
+    with pytest.raises(CdpTargetIntegrityError, match="detachment identity is invalid"):
+        router.raise_if_failed()
+
+
+def test_root_frame_swap_tombstone_does_not_cover_recursively_retired_descendants() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, track_root_srcdoc_lifecycle=True)
+    parent_id = "cross-origin-parent"
+    child_id = "cross-origin-child"
+    session.emit(
+        (),
+        "Page.frameAttached",
+        {"frameId": parent_id, "parentFrameId": session.root_frame_id},
+    )
+    session.emit(
+        (),
+        "Page.frameAttached",
+        {"frameId": child_id, "parentFrameId": parent_id},
+    )
+    session.emit(
+        (),
+        "Page.frameDetached",
+        {"frameId": parent_id, "reason": "swap"},
+    )
+    router.raise_if_failed()
+    _begin_shutdown(router)
+    session.emit(
+        (),
+        "Page.frameDetached",
+        {"frameId": child_id, "reason": "remove"},
+    )
+
+    with pytest.raises(CdpTargetIntegrityError, match="detachment identity is invalid"):
+        router.raise_if_failed()
 
 
 def test_root_srcdoc_detach_after_quarantine_fails_closed() -> None:

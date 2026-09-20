@@ -295,7 +295,7 @@ _HISTORICAL_PROBE_CONTRACT_V14_SHA256 = canonical_json_sha256(
     _HISTORICAL_PROBE_CONTRACT_V14
 )
 
-# Outer schema 16 binds the v18 router and requires one exact, identifier-
+# Outer schema 16 binds the v19 router and requires one exact, identifier-
 # minimised root ``about:srcdoc`` loader-bound orphan terminal lifecycle from
 # the local probe.  Failed, unpublished outer schema 15 is deliberately not a
 # historical evidence format.

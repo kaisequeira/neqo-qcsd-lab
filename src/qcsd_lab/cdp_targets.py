@@ -34,7 +34,7 @@ from .browser_egress import (
 )
 
 CDP_TARGET_INSTRUMENTATION_POLICY = (
-    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v18"
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v19"
 )
 BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION = 1
 EGRESS_PREARM_SUMMARY_SCHEMA_VERSION = 2
@@ -1200,6 +1200,7 @@ class RecursiveCdpTargetRouter:
         self._root_invalid_interception_diagnostics: list[dict[str, Any]] = []
         self._page_frame_parents: dict[str, str | None] = {}
         self._seen_page_frame_ids: set[str] = set()
+        self._page_frame_pending_swap_removals: set[str] = set()
         self._srcdoc_ineligible_frame_ids: set[str] = set()
         self._srcdoc_candidates: dict[str, _SrcdocPseudoDocument] = {}
         self._srcdoc_seen_page_loader_ids: set[str] = set()
@@ -2250,6 +2251,7 @@ class RecursiveCdpTargetRouter:
         self._disabled_root_invalid_interception_networks.clear()
         self._eligible_root_network_occurrences.clear()
         self._eligible_root_network_occurrence_count = 0
+        self._page_frame_pending_swap_removals.clear()
 
     def finish_abort(self) -> None:
         """Retire rejected observations after ``BrowserContext.close()``.
@@ -2299,6 +2301,7 @@ class RecursiveCdpTargetRouter:
             for candidate in self._srcdoc_candidates.values()
         )
         self._srcdoc_candidates.clear()
+        self._page_frame_pending_swap_removals.clear()
         self._root_terminal_requests.clear()
         self._claimed_root_invalid_interception_occurrences.clear()
         self._disabled_root_invalid_interception_networks.clear()
@@ -3528,19 +3531,43 @@ class RecursiveCdpTargetRouter:
             elif len(self._seen_page_frame_ids) >= _PAGE_FRAME_IDENTITY_LIMIT:
                 raise CdpTargetIntegrityError("root Page frame identity history saturated")
             self._seen_page_frame_ids.add(frame_id)
+            # A new attachment is a new live occurrence of this identity.  It
+            # must not inherit the one-use removal authority retained for the
+            # preceding swapped-out occurrence.
+            self._page_frame_pending_swap_removals.discard(frame_id)
             self._page_frame_parents[frame_id] = parent_id
             return
         if method == "Page.frameDetached":
             if set(event) != {"frameId", "reason"}:
                 raise CdpTargetIntegrityError("root Page frame detachment is malformed")
             frame_id = event.get("frameId")
+            reason = event.get("reason")
             if (
                 not isinstance(frame_id, str)
                 or not frame_id
                 or frame_id == self._root_frame_id
-                or frame_id not in self._page_frame_parents
-                or event.get("reason") not in {"remove", "swap"}
+                or reason not in {"remove", "swap"}
             ):
+                raise CdpTargetIntegrityError("root Page frame detachment identity is invalid")
+            if frame_id not in self._page_frame_parents:
+                if (
+                    reason == "remove"
+                    and self._shutting_down
+                    and not self._aborting
+                    and frame_id in self._page_frame_pending_swap_removals
+                    and frame_id in self._seen_page_frame_ids
+                    and frame_id in self._srcdoc_ineligible_frame_ids
+                    and frame_id not in self._srcdoc_candidates
+                ):
+                    # Chromium 143 can first retire a cross-origin iframe with
+                    # reason=swap, then emit its final reason=remove while the
+                    # browser context is closing.  Accept that exact causal
+                    # successor once; no unknown or reused frame gains generic
+                    # absent-identity detach authority.
+                    self._page_frame_pending_swap_removals.remove(frame_id)
+                    return
+                raise CdpTargetIntegrityError("root Page frame detachment identity is invalid")
+            if frame_id in self._page_frame_pending_swap_removals:
                 raise CdpTargetIntegrityError("root Page frame detachment identity is invalid")
             descendants = {
                 candidate_id
@@ -3566,6 +3593,11 @@ class RecursiveCdpTargetRouter:
                     self._srcdoc_candidates.pop(candidate_id)
                 self._page_frame_parents.pop(candidate_id, None)
                 self._srcdoc_ineligible_frame_ids.add(candidate_id)
+            if reason == "swap" and not self._shutting_down and not self._aborting:
+                # The frame identity is already part of the bounded, permanent
+                # seen-frame history, so this optional one-use set cannot grow
+                # beyond the existing frame-identity limit.
+                self._page_frame_pending_swap_removals.add(frame_id)
             return
         if method == "Page.frameRequestedNavigation":
             if event.get("url") != "about:srcdoc":

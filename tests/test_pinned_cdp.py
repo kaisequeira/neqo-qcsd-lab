@@ -1326,7 +1326,7 @@ def test_required_topology_wait_condition_is_event_driven() -> None:
         "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v15"
     )
     assert pinned_cdp.PROBE_CONTRACT["instrumentation_policy"] == (
-        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v18"
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v19"
     )
     assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V11["schema_version"] == 10
     assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V11["instrumentation_policy"].endswith("-v12")

@@ -3542,6 +3542,48 @@ exercise_latch
     assert "unexpected EOF" not in stderr
 
 
+def test_signal_latch_survives_publication_stat_substitution(
+    fake_environment: dict[str, str],
+) -> None:
+    """Force TERM through the real durable-record parser's ``stat`` boundary."""
+    state = Path(fake_environment["FAKE_DOCKER_STATE"])
+    binary_root = Path(fake_environment["PATH"].split(os.pathsep, 1)[0])
+    stat_wrapper = binary_root / "stat"
+    stat_wrapper.write_text(
+        textwrap.dedent(
+            r'''#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${FAKE_STAT_SUBSTITUTION_GATE:-}" == 1 && "$#" == 4 &&
+      "$1" == -Lc && "$2" == %s && "$3" == -- &&
+      "$4" == */SUPERVISION.next ]] &&
+   mkdir -- "$FAKE_DOCKER_STATE/stat-substitution-once" 2>/dev/null; then
+  printf 'ready\n' >"$FAKE_DOCKER_STATE/stat-substitution-ready"
+  while [[ ! -e "$FAKE_DOCKER_STATE/stat-substitution-release" ]]; do
+    /usr/bin/sleep 0.01
+  done
+fi
+exec /usr/bin/stat "$@"
+'''
+        ),
+        encoding="utf-8",
+    )
+    stat_wrapper.chmod(0o755)
+    fake_environment.update(
+        FAKE_DOCKER_BEHAVIOR="no-cid",
+        FAKE_STAT_SUBSTITUTION_GATE="1",
+    )
+    process = _start_attached(fake_environment)
+    _wait(state / "stat-substitution-ready")
+    os.kill(process.pid, signal.SIGTERM)
+    # Keep TERM pending until the command-substitution child returns so Bash
+    # dispatches the production latch at the recursive-parser boundary.
+    time.sleep(0.05)
+    (state / "stat-substitution-release").touch()
+    stdout, stderr = _communicate(process, timeout=10)
+    assert process.returncode == 143, (stdout, stderr)
+    assert "unexpected EOF" not in stderr
+
+
 def _multiple_command_substitution_blocks(source_text: str) -> list[tuple[int, str]]:
     """Find supported simple-command blocks containing multiple ``$(...)``."""
     source = source_text.splitlines()
@@ -3629,11 +3671,20 @@ def test_no_cidfile_cli_race_is_bounded_and_preserves_recovery_identity(
 def test_interrupted_early_cli_exit_without_cid_preserves_nonce(
     fake_environment: dict[str, str],
 ) -> None:
-    fake_environment["FAKE_DOCKER_BEHAVIOR"] = "early-no-cid"
+    fake_environment.update(
+        FAKE_DOCKER_BEHAVIOR="early-no-cid",
+        FAKE_RUN_SUPERVISOR_SIGNAL_GATE="1",
+    )
     process = _start_attached(fake_environment)
     state = Path(fake_environment["FAKE_DOCKER_STATE"])
     _wait(state / "run-ready")
+    # Select the durable supervisor boundary explicitly.  The fake CLI still
+    # exits naturally without publishing a CID, but full-suite load must not
+    # turn its 150 ms lifetime into an accidental signal-injection oracle for
+    # an unrelated Bash 5.2 command-substitution parser window.
+    _wait_for_run_signal_ready(state)
     os.kill(process.pid, signal.SIGTERM)
+    _wait(state / "run-supervisor-signal-latched")
     stdout, stderr = _communicate(process, timeout=10)
     assert process.returncode == 143, (stdout, stderr)
     recovery = _recovery_path(stderr)

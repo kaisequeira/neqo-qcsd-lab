@@ -715,7 +715,7 @@ _BUILD_STORAGE_PREFLIGHT_KEYS = {
     "passed",
 }
 _CDP_TARGET_INSTRUMENTATION_POLICY = (
-    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v18"
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v19"
 )
 _PLAYWRIGHT_VERSION = "1.57.0"
 _CHROMIUM_VERSION = "143.0.7499.4"

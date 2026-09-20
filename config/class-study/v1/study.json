@@ -159,7 +159,7 @@
     "service_worker_dependency": "forbidden",
     "cross-domain-redirect-alias": "forbidden",
     "approved_origins": "explicit-and-frozen",
-    "cdp_target_instrumentation_policy": "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v18",
+    "cdp_target_instrumentation_policy": "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v19",
     "render_observation_schema_version": 4,
     "discovery_event_audit_schema_version": 5,
     "srcdoc_pseudo_document_contract": {
