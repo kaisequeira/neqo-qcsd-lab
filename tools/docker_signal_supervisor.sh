@@ -6895,11 +6895,37 @@ _qcsd_handoff_retirement_error() {
   return 1
 }
 
+_qcsd_select_handoff_retirement_authority() {
+  local root_kind="$1" object_id="$2" registration_name="$3"
+  local output_name="$4" authority_path match_count=0
+  local nullglob_was_set=0
+  local -a authorities=()
+  local -n output_ref="${output_name}"
+  output_ref=""
+  shopt -q nullglob && nullglob_was_set=1
+  shopt -s nullglob
+  authorities=("${_qcsd_lifecycle_base}/retirement.${root_kind}."*)
+  (( nullglob_was_set != 0 )) || shopt -u nullglob
+  for authority_path in "${authorities[@]}"; do
+    [[ "${authority_path}" != *.next ]] || continue
+    _qcsd_validate_retirement_phase "${authority_path}" || return 1
+    if [[ "${_QCSD_RETIRE_VALUES[kind]}" == "${root_kind}" &&
+          "${_QCSD_RETIRE_VALUES[reason]}" == handoff-retired &&
+          "${_QCSD_RETIRE_VALUES[object_id]}" == "${object_id}" &&
+          "${_QCSD_RETIRE_VALUES[registration_name]}" == "${registration_name}" ]]; then
+      output_ref="${authority_path}"
+      match_count=$((match_count + 1))
+    fi
+  done
+  (( match_count <= 1 ))
+}
+
 qcsd_retire_docker_handoff() {
   local root_kind="${1:-}"
   local object_id="${2:-}"
   local registration_name="${3:-}"
-  local root candidate="" candidate_count=0 presence candidate_sha="" observed_sha
+  local root authority="" candidate="" candidate_count=0 presence
+  local candidate_sha="" observed_sha
   local candidate_manifest="" observed_manifest entry attempt
   local nullglob_was_set=0
   local -a roots=()
@@ -6924,6 +6950,22 @@ qcsd_retire_docker_handoff() {
     _qcsd_handoff_retirement_error lifecycle-base \
       "durable lifecycle base validation failed"
     return 1
+  fi
+  # Publication proves that exact HANDOFF selection already succeeded. Resume
+  # it before looking for an active root, which may already have been renamed.
+  if ! _qcsd_select_handoff_retirement_authority \
+      "${root_kind}" "${object_id}" "${registration_name}" authority; then
+    _qcsd_handoff_retirement_error authority-selection \
+      "invalid or non-unique durable ${root_kind} retirement authority"
+    return 1
+  fi
+  if [[ -n "${authority}" ]]; then
+    if ! _qcsd_resume_retirement "${authority}"; then
+      _qcsd_handoff_retirement_error durable-authority-continuation \
+        "authenticated retirement did not complete; retained ${authority}"
+      return 1
+    fi
+    return 0
   fi
   shopt -q nullglob && nullglob_was_set=1
   shopt -s nullglob

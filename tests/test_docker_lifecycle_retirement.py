@@ -942,6 +942,151 @@ _qcsd_verify_pinned_docker_daemon ordinary
     assert sum(line.startswith("BUILD ") for line in calls) == (kind == "build")
 
 
+@pytest.mark.parametrize("kind", ["run", "network"])
+def test_handoff_retirement_retry_resumes_post_rename_authority_and_reproofs_absence(
+    retirement_environment: dict[str, str], kind: str,
+) -> None:
+    result = _run_bash(
+        r'''
+set -euo pipefail
+source "$HELPER"
+QCSD_DOCKER_IDS_RETIREMENT=()
+kind="$QCSD_TEST_RETIREMENT_KIND"
+if [[ "$kind" == run ]]; then
+  qcsd_run_detached_docker QCSD_DOCKER_IDS_RETIREMENT docker run fake-image
+  object_state=container
+else
+  qcsd_create_docker_network QCSD_DOCKER_IDS_RETIREMENT \
+    docker network create test-network
+  object_state=network
+fi
+root=$_qcsd_lifecycle_root
+object_id="${QCSD_DOCKER_IDS_RETIREMENT[0]}"
+token="${root##*.}"
+authority="${root%/*}/retirement.${kind}.${token}"
+retired="${root%/*}/.retired.${kind}.${token}"
+if [[ "$kind" == run ]]; then
+  docker rm --force "$object_id" >/dev/null
+else
+  docker network rm "$object_id" >/dev/null
+fi
+
+eval "$(declare -f _qcsd_retirement_terminal_reproof | sed \
+  '1s/_qcsd_retirement_terminal_reproof/_fixture_terminal_reproof/')"
+fixture_reproof_count=0
+_qcsd_retirement_terminal_reproof() {
+  fixture_reproof_count=$((fixture_reproof_count + 1))
+  if (( fixture_reproof_count == 2 )); then
+    return 1
+  fi
+  _fixture_terminal_reproof "$@"
+}
+
+set +e
+qcsd_retire_docker_handoff \
+  "$kind" "$object_id" QCSD_DOCKER_IDS_RETIREMENT
+first_status=$?
+set -e
+test "$first_status" -ne 0
+test ! -e "$root"
+test -f "$authority"
+test -d "$retired"
+test -f "$retired/HANDOFF"
+
+# A durable continuation must reprove terminal Docker absence. Reappearance
+# of the exact object remains terminal and must preserve every survivor.
+printf '%s' "$object_id" >"$FAKE_DOCKER_STATE/$object_state"
+printf '%s' "$token" >"$FAKE_DOCKER_STATE/$object_state-token"
+set +e
+qcsd_retire_docker_handoff \
+  "$kind" "$object_id" QCSD_DOCKER_IDS_RETIREMENT
+present_status=$?
+set -e
+test "$present_status" -ne 0
+test -f "$authority"
+test -d "$retired"
+test -f "$retired/HANDOFF"
+
+rm -f -- "$FAKE_DOCKER_STATE/$object_state" \
+  "$FAKE_DOCKER_STATE/$object_state-token"
+qcsd_retire_docker_handoff \
+  "$kind" "$object_id" QCSD_DOCKER_IDS_RETIREMENT
+test ! -e "$authority"
+test ! -e "$retired"
+printf 'REPROOFS %d\n' "$fixture_reproof_count"
+''',
+        environment={
+            **retirement_environment,
+            "QCSD_TEST_RETIREMENT_KIND": kind,
+        },
+    )
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert "REPROOFS 5\n" in result.stdout
+    assert result.stderr.count("failed at durable-root-removal:") == 1
+    assert result.stderr.count("failed at durable-authority-continuation:") == 1
+    assert "failed at candidate-selection:" not in result.stderr
+
+
+def test_browser_cleanup_retries_retained_id_through_post_rename_authority(
+    retirement_environment: dict[str, str],
+) -> None:
+    """Exercise the production browser cleanup entry path for this recovery."""
+
+    from tests.test_cli import _browser_egress_cleanup_lifetime_shell
+
+    result = _run_bash(
+        'set -euo pipefail\nsource "$HELPER"\n'
+        + _browser_egress_cleanup_lifetime_shell()
+        + r'''
+QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS=()
+QCSD_DOCKER_IDS_BROWSER_EGRESS_NETWORKS=()
+QCSD_DOCKER_IDS_BROWSER_EGRESS_VOLUMES=()
+qcsd_run_detached_docker \
+  QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS docker run fake-image
+object_id="${QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS[0]}"
+root="$_qcsd_lifecycle_root"
+token="${root##*.}"
+authority="${root%/*}/retirement.run.${token}"
+retired="${root%/*}/.retired.run.${token}"
+
+eval "$(declare -f _qcsd_retirement_terminal_reproof | sed \
+  '1s/_qcsd_retirement_terminal_reproof/_fixture_terminal_reproof/')"
+fixture_reproof_count=0
+_qcsd_retirement_terminal_reproof() {
+  fixture_reproof_count=$((fixture_reproof_count + 1))
+  if (( fixture_reproof_count == 2 )); then
+    return 1
+  fi
+  _fixture_terminal_reproof "$@"
+}
+
+first_status=0
+browser_egress_cleanup_topology || first_status=$?
+test "$first_status" -ne 0
+test "${QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS[*]}" = "$object_id"
+test ! -e "$root"
+test -f "$authority"
+test -d "$retired"
+test -f "$retired/HANDOFF"
+test ! -e "$FAKE_DOCKER_STATE/container"
+
+browser_egress_cleanup_topology
+test "${#QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS[@]}" -eq 0
+test ! -e "$authority"
+test ! -e "$retired"
+printf 'REPROOFS %d\n' "$fixture_reproof_count"
+''',
+        environment=retirement_environment,
+    )
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert result.stdout == "REPROOFS 4\n"
+    assert result.stderr.count("failed at durable-root-removal:") == 1
+    assert result.stderr.count("failed at durable-authority-continuation:") == 0
+    assert "failed at candidate-selection:" not in result.stderr
+
+
 def test_validate_is_non_mutating_for_a_handoff_ready_for_retirement(
     retirement_environment: dict[str, str],
 ) -> None:

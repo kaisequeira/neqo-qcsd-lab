@@ -969,7 +969,14 @@ def _resolve_dependency_url(
     best_rank = min(rank for rank, _candidate in candidates)
     best = [candidate for rank, candidate in candidates if rank == best_rank]
     scopes = {(candidate.source, candidate.scope) for candidate in best}
-    if len(scopes) > 1:
+    # The persisted resource graph defines a URL dependency scope by the
+    # Chromium frame scope, not by the transient CDP target session that
+    # reported it.  Page and worker/OOPIF sessions can therefore legitimately
+    # report preceding occurrences in the same exact frame scope.  This is the
+    # same latest-preceding (scope, URL) rule used by ``build_resources``.
+    # Parent-frame and parent-session fallbacks do not have that identity proof
+    # and must remain fail-closed when more than one source/scope is possible.
+    if best_rank != 0 and len(scopes) > 1:
         raise DiscoveryIntegrityError("Chromium stack dependency scope is ambiguous")
     return max(best, key=lambda candidate: candidate.resource_id).resource_id
 

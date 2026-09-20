@@ -426,7 +426,10 @@ def _independent_url_dependency(
         )
         for candidate in best
     }
-    if len(scopes) > 1:
+    # Exact-frame matches share the persisted (scope, URL) dependency identity,
+    # even when Chromium reports them through different target sessions.  All
+    # less-specific parent/session fallbacks remain ambiguity-failing.
+    if best_rank != 0 and len(scopes) > 1:
         raise ValueError("discovery URL dependency scope is ambiguous")
     return max(best, key=lambda candidate: candidate["mapping"]["resource_id"])[
         "mapping"

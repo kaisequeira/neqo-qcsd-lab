@@ -3733,7 +3733,7 @@ def test_schema_six_frozen_projections_are_self_contained_golden_contracts() -> 
         ),
         (
             2,
-            "artifacts/classifier-multiorigin100-v1-acquisition",
+            "artifacts/class-study-retired-acquisitions/cohort-v96-bab80c20096b/acquisition",
             "tranco-0000697",
         ),
     ),
@@ -3747,7 +3747,7 @@ def test_immutable_schema_six_acquisitions_reach_their_durable_state_verifier(
     artifact_roots = (
         "artifacts/class-study-retired-acquisitions/cohort-v91-c60641b7ead8/acquisition",
         "artifacts/class-study-retired-acquisitions/cohort-v95-b93507604671/acquisition",
-        "artifacts/classifier-multiorigin100-v1-acquisition",
+        "artifacts/class-study-retired-acquisitions/cohort-v96-bab80c20096b/acquisition",
     )
     assert relative_root == artifact_roots[variant_index]
     runner = repository / relative_root
@@ -3793,6 +3793,103 @@ def test_immutable_schema_six_acquisitions_reach_their_durable_state_verifier(
             acquisition_module._validate_current_provenance_contract(
                 coherent_other_contract_with_wrong_source
             )
+
+
+def test_immutable_schema_seven_v100_acquisition_reaches_its_durable_state_verifier() -> None:
+    repository = Path(__file__).resolve().parents[1]
+    runner = (
+        repository
+        / "artifacts/class-study-retired-acquisitions/cohort-v100-eb2631f0a7de/acquisition"
+    )
+    if not runner.is_dir():
+        pytest.skip("immutable v100 acquisition artifact is not present in this checkout")
+    variants = _HISTORICAL_ACQUISITION_CONTRACTS["schema7_archived_receipts"]
+    assert len(variants) == 1
+    variant = variants[0]
+    assert variant["cohort"] == "v100"
+
+    strict_path = runner.parent / "strict-verification.json"
+    assert strict_path.stat().st_mode & 0o777 == 0o600
+    assert (
+        hashlib.sha256(strict_path.read_bytes()).hexdigest()
+        == variant["strict_verification_file_sha256"]
+    )
+    strict = load_json(strict_path)
+    assert (
+        strict["payload_sha256"]
+        == variant["strict_verification_payload_sha256"]
+    )
+    strict_payload = acquisition_module.validate_hash_bound_receipt(
+        strict,
+        expected_type="qcsd-class-study-retired-acquisition-strict-verification",
+    )
+    assert strict_payload["evidentiary_status"] == "non-scientific-maintenance-only"
+    assert strict_payload["promotion_authority"] is False
+    assert strict_payload["strict_checks"] == {
+        "archive_inode_tree_matches_pre_move_receipt": True,
+        "authority_mode_octal": "0600",
+        "candidate_catalogue_mode_octal": "0600",
+        "docker_boot_id_matches_maintenance_receipt": True,
+        "docker_containers_with_owner_label": 0,
+        "docker_daemon_id_matches_maintenance_receipt": True,
+        "docker_networks_with_owner_label": 0,
+        "docker_volume_response_has_volumes_key": True,
+        "docker_volumes_with_owner_label": 0,
+        "docker_warnings": None,
+        "intent_receipt_delta": ["completed_utc", "status"],
+        "source_path_absent": True,
+    }
+
+    authority_path = repository / "artifacts/class-study-acquisition-authority-v100.json"
+    assert (
+        hashlib.sha256(authority_path.read_bytes()).hexdigest()
+        == variant["authority_file_sha256"]
+    )
+    authority = load_json(authority_path)
+    assert authority["payload_sha256"] == variant["authority_payload_sha256"]
+    authority_payload = acquisition_module.validate_hash_bound_receipt(
+        authority,
+        expected_type="qcsd-class-study-acquisition-authority",
+    )
+    assert authority_payload["cohort_version"] == 100
+    assert authority_payload["promotion_authority"] is False
+
+    provenance_path = runner / "provenance.json"
+    assert (
+        hashlib.sha256(provenance_path.read_bytes()).hexdigest()
+        == variant["provenance_file_sha256"]
+    )
+    provenance = load_json(provenance_path)
+    assert provenance["payload_sha256"] == variant["provenance_payload_sha256"]
+    provenance_payload = acquisition_module.validate_hash_bound_receipt(
+        provenance,
+        expected_type=acquisition_module.PROVENANCE_TYPE,
+    )
+    assert provenance_payload["acquisition_schema_version"] == 7
+    assert provenance_payload["source"]["lab_commit"] == variant["source_lab_commit"]
+    assert provenance_payload["acquisition_authority"]["sha256"] == variant[
+        "authority_file_sha256"
+    ]
+    assert (
+        acquisition_module._validate_current_provenance_contract(provenance_payload)
+        == provenance_payload
+    )
+
+    checkpoint_path = runner / "checkpoint.json"
+    before = checkpoint_path.read_bytes()
+    assert hashlib.sha256(before).hexdigest() == variant["checkpoint_file_sha256"]
+    checkpoint = load_json(checkpoint_path)
+    assert checkpoint["payload_sha256"] == variant["checkpoint_payload_sha256"]
+    checkpoint_payload = acquisition_module.validate_hash_bound_receipt(
+        checkpoint,
+        expected_type=acquisition_module.CHECKPOINT_TYPE,
+    )
+    assert checkpoint_payload["checkpoint_schema_version"] == 3
+    assert checkpoint_payload["provenance_sha256"] == variant["provenance_file_sha256"]
+    catalogue = repository / "config/class-study/v1/classifier-multiorigin100-v1-candidates.json"
+    with pytest.raises(InternalAcquisitionError, match="tranco-0000697"):
+        acquisition_status(runner, candidate_catalogue_path=catalogue)
+    assert checkpoint_path.read_bytes() == before
 
 
 def test_historical_orphan_terminals_are_verify_only(tmp_path: Path) -> None:

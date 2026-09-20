@@ -1844,6 +1844,55 @@ def test_initiator_stack_recurses_and_dependency_resolution_is_latest_scoped() -
     )
 
 
+def test_dependency_resolution_selects_latest_across_sources_in_exact_frame_scope() -> None:
+    page = CdpTargetSource((), "page", "page")
+    worker = CdpTargetSource(
+        ("worker-session",),
+        "worker",
+        "worker",
+        parent_session_path=(),
+        parent_frame_id="root-frame",
+    )
+    url = "https://page.test/app.js"
+    occurrences = [
+        _DependencyOccurrence(page, "root-frame", url, 3),
+        _DependencyOccurrence(worker, "root-frame", url, 7),
+    ]
+
+    assert (
+        _resolve_dependency_url(
+            occurrences,
+            source=worker,
+            scope="root-frame",
+            url=url,
+        )
+        == 7
+    )
+
+
+def test_dependency_resolution_keeps_parent_frame_fallback_ambiguity_closed() -> None:
+    first = CdpTargetSource(("first",), "first", "iframe")
+    second = CdpTargetSource(("second",), "second", "iframe")
+    current = CdpTargetSource(
+        ("current",),
+        "current",
+        "worker",
+        parent_frame_id="parent-frame",
+    )
+    url = "https://page.test/app.js"
+
+    with pytest.raises(DiscoveryIntegrityError, match="scope is ambiguous"):
+        _resolve_dependency_url(
+            [
+                _DependencyOccurrence(first, "parent-frame", url, 3),
+                _DependencyOccurrence(second, "parent-frame", url, 7),
+            ],
+            source=current,
+            scope="current-frame",
+            url=url,
+        )
+
+
 def test_cdp_header_merge_is_case_insensitive_and_extra_info_wins():
     headers: dict[str, str] = {}
 

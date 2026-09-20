@@ -22,6 +22,7 @@ from qcsd_lab.discovery_evidence import (
     PASSIVE_RENDER_CONTRACT_SCHEMA_VERSION,
     PASSIVE_RENDER_CONTRACT_SHA256,
     RENDER_OBSERVATION_SCHEMA_VERSION,
+    _independent_url_dependency,
     evidence_sha256,
     validate_render_observation,
     verify_discovery_event_audit,
@@ -979,6 +980,76 @@ def test_dependency_verifier_does_not_cross_frame_scope_for_a_later_duplicate() 
     forged_resources[2]["depends_on"] = [1]
     with pytest.raises(ValueError, match="latest-preceding"):
         _verify(forged, forged_resources)
+
+
+def test_independent_dependency_selects_latest_across_exact_frame_sources() -> None:
+    duplicate = "https://page.test/script.js"
+    worker = _source("worker-session", "worker-target")
+    previous = [
+        _network(
+            source=ROOT,
+            network_id="root-network",
+            occurrence_id="root-request",
+            resource_id=3,
+            url=duplicate,
+        ),
+        _network(
+            source=worker,
+            network_id="worker-network",
+            occurrence_id="worker-request",
+            resource_id=7,
+            url=duplicate,
+        ),
+    ]
+    current = _network(
+        source=worker,
+        network_id="current-network",
+        occurrence_id="current-request",
+        resource_id=8,
+        url="https://page.test/data",
+    )
+
+    assert (
+        _independent_url_dependency(previous, current=current, url=duplicate) == 7
+    )
+
+
+def test_independent_dependency_keeps_parent_frame_fallback_ambiguity_closed() -> None:
+    duplicate = "https://page.test/script.js"
+    current_source = _source(
+        "current-session",
+        "current-target",
+        parent_frame="parent-frame",
+    )
+    previous = [
+        _network(
+            source=_source("first-session", "first-target"),
+            network_id="first-network",
+            occurrence_id="first-request",
+            resource_id=3,
+            url=duplicate,
+            frame_id="parent-frame",
+        ),
+        _network(
+            source=_source("second-session", "second-target"),
+            network_id="second-network",
+            occurrence_id="second-request",
+            resource_id=7,
+            url=duplicate,
+            frame_id="parent-frame",
+        ),
+    ]
+    current = _network(
+        source=current_source,
+        network_id="current-network",
+        occurrence_id="current-request",
+        resource_id=8,
+        url="https://page.test/data",
+        frame_id="current-frame",
+    )
+
+    with pytest.raises(ValueError, match="scope is ambiguous"):
+        _independent_url_dependency(previous, current=current, url=duplicate)
 
 
 def test_dependency_verifier_rejects_a_future_resource_edge() -> None:
