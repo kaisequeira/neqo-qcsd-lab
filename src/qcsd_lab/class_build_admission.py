@@ -107,14 +107,14 @@ _WORKLOAD_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 
 _FOUNDATION_SCHEMA = 4
 _READINESS_SCHEMA = 3
-_ACQUISITION_SCHEMA = 7
+_ACQUISITION_SCHEMA = 8
 _ACQUISITION_COMPLETION_SCHEMA = 4
 _ACQUISITION_CHECKPOINT_SCHEMA = 3
 _EVALUATION_SCHEMA = 2
 _SUCCESSOR_DECISION_SCHEMA = 3
 _SUCCESSOR_RESTART_SCHEMA = 2
-_PINNED_CDP_SCHEMA = 16
-_HISTORICAL_PINNED_CDP_SCHEMAS = frozenset({8, 9, 11, 12, 13, 14})
+_PINNED_CDP_SCHEMA = 17
+_HISTORICAL_PINNED_CDP_SCHEMAS = frozenset({8, 9, 11, 12, 13, 14, 16})
 # Mirrored from browser_egress_qualification and checked against its producer
 # in tests. Importing the package here would break the stdlib-only host gate.
 _BROWSER_EGRESS_FOUNDATION_SCHEMA = 6

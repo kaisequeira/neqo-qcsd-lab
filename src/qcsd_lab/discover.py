@@ -24,11 +24,13 @@ from .cdp_targets import (
     CdpTargetIntegrityError,
     CdpTargetSource,
     RecursiveCdpTargetRouter,
+    validate_normal_shutdown_disposal_summary,
 )
 from .discovery_evidence import (
     DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION,
     PASSIVE_RENDER_CONTRACT,
     PASSIVE_RENDER_CONTRACT_SHA256,
+    REQUEST_STAGE_OBSERVATION_POLICY,
     RENDER_OBSERVATION_SCHEMA_VERSION,
     evidence_sha256,
     passive_render_contract,
@@ -41,6 +43,7 @@ from .playwright_driver import playwright_driver_session, validate_default_playw
 # Historical manifests expose this scalar.  New evidence binds the complete
 # passive-render contract; the scalar remains its minimum post-load duration.
 SETTLE_MS = int(PASSIVE_RENDER_CONTRACT["minimum_after_load_ms"])
+_POST_CUTOFF_EXTRA_INFO_LIMIT = 4_096
 
 
 # One integrity taxonomy covers both target instrumentation and the request
@@ -92,14 +95,23 @@ class _ObservedGet:
 @dataclass
 class _NetworkObservation:
     source: CdpTargetSource
+    network_id: str
     request: _ObservedGet
+    resource_type: str = "Other"
+    initiator_type: str = ""
+    initiator_request_id: str | None = None
+    redirected: bool = False
+    response_observed: bool = False
     matched: bool = False
     terminal: bool = False
+    terminal_outcome: str | None = None
+    terminal_failure: dict[str, Any] | None = None
     sequence: int = 0
     terminal_sequence: int | None = None
     occurrence_id: str = ""
     audit_event: dict[str, Any] | None = None
     fetch_matches: int = 0
+    blocked_preflight_occurrence_id: str | None = None
 
 
 @dataclass
@@ -110,7 +122,10 @@ class _FetchObservation:
     request: _ObservedGet
     redirected_request_id: str | None
     frame_id: str | None
+    policy_decision: str | None = None
+    policy_reason: str | None = None
     matched: bool = False
+    matched_occurrence_id: str | None = None
     sequence: int = 0
     redirect_consumed: bool = False
     audit_event: dict[str, Any] | None = None
@@ -142,6 +157,10 @@ class _RequestObservationLedger:
         request_id: str,
         method: str,
         url: str,
+        resource_type: str = "Other",
+        initiator_type: str = "",
+        initiator_request_id: str | None = None,
+        redirected: bool = False,
         occurrence_id: str | None = None,
         audit_event: dict[str, Any] | None = None,
     ) -> None:
@@ -158,7 +177,12 @@ class _RequestObservationLedger:
         self._network.setdefault(request_id, []).append(
             _NetworkObservation(
                 source,
+                request_id,
                 _ObservedGet(method, url),
+                resource_type=resource_type,
+                initiator_type=initiator_type,
+                initiator_request_id=initiator_request_id,
+                redirected=redirected,
                 sequence=self._sequence,
                 occurrence_id=identity,
                 audit_event=audit_event,
@@ -172,6 +196,8 @@ class _RequestObservationLedger:
         event: Mapping[str, Any],
         *,
         audit_event: dict[str, Any] | None = None,
+        policy_decision: str | None = None,
+        policy_reason: str | None = None,
     ) -> None:
         request = event.get("request", {})
         if not isinstance(request, Mapping):
@@ -232,6 +258,8 @@ class _RequestObservationLedger:
             _ObservedGet(method, url),
             redirected if isinstance(redirected, str) else None,
             _frame_id(event),
+            policy_decision=policy_decision,
+            policy_reason=policy_reason,
             sequence=self._sequence,
             audit_event=audit_event,
         )
@@ -242,18 +270,38 @@ class _RequestObservationLedger:
             predecessor.redirect_consumed = True
         self._reconcile(network_id)
 
-    def add_terminal(self, source: CdpTargetSource, request_id: str) -> tuple[str, ...]:
+    def add_response(self, source: CdpTargetSource, request_id: str) -> None:
+        candidates = [
+            item
+            for item in self._network.get(request_id, ())
+            if item.source == source and not item.terminal
+        ]
+        if not candidates:
+            return
+        candidates[-1].response_observed = True
+
+    def add_terminal(
+        self,
+        source: CdpTargetSource,
+        request_id: str,
+        *,
+        outcome: str = "finished",
+        event: Mapping[str, Any] | None = None,
+    ) -> tuple[str, ...]:
         self._sequence += 1
         candidates = [
             item
             for item in self._network.get(request_id, ())
-            if item.source == source and item.matched and not item.terminal
+            if item.source == source and not item.terminal
         ]
         if not candidates:
             return ()
+        terminal_failure = _terminal_failure_evidence(outcome, event or {})
         # One loading terminal closes a complete redirect chain.
         for item in candidates:
             item.terminal = True
+            item.terminal_outcome = outcome
+            item.terminal_failure = deepcopy(terminal_failure)
             item.terminal_sequence = self._sequence
         return tuple(item.occurrence_id for item in candidates)
 
@@ -261,18 +309,143 @@ class _RequestObservationLedger:
         for request_id in set(self._network) | set(self._intercepted):
             self._reconcile(request_id)
             self._reconcile_internal_restarts(request_id)
-        if any(
-            not item.matched
-            for values in (*self._network.values(), *self._intercepted.values())
+        unmatched_networks = [
+            item for values in self._network.values() for item in values if not item.matched
+        ]
+        unmatched_fetches = [
+            item
+            for values in self._intercepted.values()
             for item in values
+            if not item.matched
+        ]
+        used_preflights: set[str] = set()
+        for network in unmatched_networks:
+            preflight = self._blocked_after_failed_cors_preflight(
+                network,
+                used_preflights=used_preflights,
+            )
+            if preflight is None:
+                continue
+            network.blocked_preflight_occurrence_id = preflight.occurrence_id
+            used_preflights.add(preflight.occurrence_id)
+            if network.audit_event is None:
+                raise DiscoveryIntegrityError(
+                    "blocked CORS-preflight dependent omitted its audit occurrence"
+                )
+            network.audit_event["interception_exception"] = {
+                "kind": "blocked-after-failed-cors-preflight-v1",
+                "preflight_occurrence_id": preflight.occurrence_id,
+            }
+        if unmatched_fetches or any(
+            item.blocked_preflight_occurrence_id is None for item in unmatched_networks
         ):
             raise DiscoveryIntegrityError(
-                "eligible HTTPS GET observation and request-stage interception ledgers differ"
+                "eligible HTTP observation and request-stage interception ledgers differ"
             )
         if any(not item.terminal for values in self._network.values() for item in values):
             raise DiscoveryIntegrityError(
                 "eligible HTTPS GET observation omitted its loading terminal event"
             )
+
+    def _blocked_after_failed_cors_preflight(
+        self,
+        network: _NetworkObservation,
+        *,
+        used_preflights: set[str],
+    ) -> _NetworkObservation | None:
+        if (
+            network.request.method != "POST"
+            or origin(network.request.url) is None
+            or network.resource_type != "Fetch"
+            or network.initiator_type != "script"
+            or network.initiator_request_id is not None
+            or network.redirected
+            or network.response_observed
+            or not self._has_terminal_signature(network, blocked_reason="other")
+            or self._audit_exclusion_reason(network) != "unsafe method: POST"
+            or len(
+                [
+                    item
+                    for item in self._network.get(network.network_id, ())
+                    if item.source == network.source
+                ]
+            )
+            != 1
+        ):
+            return None
+        candidates = [
+            candidate
+            for values in self._network.values()
+            for candidate in values
+            if candidate is not network
+            and candidate.source == network.source
+            and candidate.request == _ObservedGet("OPTIONS", network.request.url)
+            and candidate.resource_type == "Other"
+            and candidate.initiator_type == "preflight"
+            and candidate.initiator_request_id == network.network_id
+            and candidate.network_id != network.network_id
+            and not candidate.redirected
+            and not candidate.response_observed
+            and candidate.matched
+            and candidate.fetch_matches == 1
+            and candidate.occurrence_id not in used_preflights
+            and len(
+                [
+                    item
+                    for item in self._network.get(candidate.network_id, ())
+                    if item.source == candidate.source
+                ]
+            )
+            == 1
+            and self._has_terminal_signature(candidate, blocked_reason="inspector")
+            and self._audit_exclusion_reason(candidate) == "unsafe method: OPTIONS"
+        ]
+        if len(candidates) != 1:
+            return None
+        [preflight] = candidates
+        matching_fetches = [
+            fetch
+            for fetch in self._fetches
+            if fetch.matched_occurrence_id == preflight.occurrence_id
+        ]
+        if (
+            len(matching_fetches) != 1
+            or matching_fetches[0].policy_decision != "fail"
+            or matching_fetches[0].policy_reason != "unsafe method: OPTIONS"
+            or matching_fetches[0].redirected_request_id is not None
+            or preflight.terminal_sequence is None
+            or network.terminal_sequence is None
+            or matching_fetches[0].sequence >= preflight.terminal_sequence
+            or matching_fetches[0].sequence >= network.terminal_sequence
+        ):
+            return None
+        return preflight
+
+    @staticmethod
+    def _audit_exclusion_reason(network: _NetworkObservation) -> str | None:
+        mapping = network.audit_event.get("mapping") if network.audit_event else None
+        if not isinstance(mapping, Mapping) or mapping.get("kind") != "exclusion":
+            return None
+        reason = mapping.get("reason")
+        return reason if isinstance(reason, str) else None
+
+    @staticmethod
+    def _has_terminal_signature(
+        network: _NetworkObservation,
+        *,
+        blocked_reason: str,
+    ) -> bool:
+        return (
+            network.terminal
+            and network.terminal_outcome == "failed"
+            and network.terminal_failure
+            == {
+                "error_text": "net::ERR_BLOCKED_BY_CLIENT",
+                "canceled": False,
+                "blocked_reason": blocked_reason,
+                "cors_error_status_present": False,
+            }
+        )
 
     def _reconcile_internal_restarts(self, request_id: str) -> None:
         networks = self._network.get(request_id, [])
@@ -333,6 +506,7 @@ class _RequestObservationLedger:
 
     @staticmethod
     def _bind_audit_match(network: _NetworkObservation, fetch: _FetchObservation) -> None:
+        fetch.matched_occurrence_id = network.occurrence_id
         if fetch.audit_event is not None:
             fetch.audit_event["network_occurrence_id"] = network.occurrence_id
             fetch.audit_event["relationship"] = (
@@ -393,6 +567,36 @@ def _frame_id(event: Mapping[str, Any]) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _terminal_failure_evidence(
+    outcome: str,
+    event: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    if outcome == "finished":
+        return None
+    if outcome != "failed":
+        raise DiscoveryIntegrityError("network terminal outcome is unsupported")
+    error_text = event.get("errorText")
+    canceled = event.get("canceled")
+    blocked_reason = event.get("blockedReason")
+    cors_error_status = event.get("corsErrorStatus")
+    if not isinstance(error_text, str) or not error_text:
+        raise DiscoveryIntegrityError("Chromium loading failure omitted its error text")
+    if canceled is not None and type(canceled) is not bool:
+        raise DiscoveryIntegrityError("Chromium loading failure cancellation flag is malformed")
+    if blocked_reason is not None and (
+        not isinstance(blocked_reason, str) or not blocked_reason
+    ):
+        raise DiscoveryIntegrityError("Chromium loading failure blocked reason is malformed")
+    if cors_error_status is not None and not isinstance(cors_error_status, Mapping):
+        raise DiscoveryIntegrityError("Chromium loading failure CORS status is malformed")
+    return {
+        "error_text": error_text,
+        "canceled": canceled,
+        "blocked_reason": blocked_reason,
+        "cors_error_status_present": cors_error_status is not None,
+    }
+
+
 def _source_evidence(source: CdpTargetSource) -> dict[str, Any]:
     return {
         "session_path": list(source.session_path),
@@ -423,6 +627,7 @@ class _SanitizedEventProjection:
         self._chain_occurrences: dict[tuple[tuple[str, ...], str, int, str], int] = {}
         self._previous_chain_occurrence: dict[tuple[tuple[str, ...], str, int, str], str] = {}
         self._active_chain_occurrences: dict[tuple[tuple[str, ...], str, int, str], list[str]] = {}
+        self._network_events_by_occurrence: dict[str, dict[str, Any]] = {}
         self._last_relevant_event_ms = 0
         self._frozen = False
 
@@ -480,9 +685,23 @@ class _SanitizedEventProjection:
         )
 
     def record_network(self, source: CdpTargetSource, event: Mapping[str, Any]) -> dict[str, Any]:
+        if self._frozen:
+            raise DiscoveryIntegrityError(
+                "post-cutoff Network occurrence reached the scientific audit"
+            )
         request = event.get("request", {})
         if not isinstance(request, Mapping):
             raise DiscoveryIntegrityError("Chromium network request payload is malformed")
+        initiator = event.get("initiator", {})
+        if not isinstance(initiator, Mapping):
+            raise DiscoveryIntegrityError("Chromium request initiator payload is malformed")
+        initiator_request_id = initiator.get("requestId")
+        if initiator_request_id is not None and (
+            not isinstance(initiator_request_id, str) or not initiator_request_id
+        ):
+            raise DiscoveryIntegrityError(
+                "Chromium request initiator identity is malformed"
+            )
         request_id = str(event.get("requestId", ""))
         chain = (*source.request_chain_key(request_id)[:3], request_id)
         occurrence_index = self._chain_occurrences.get(chain, 0)
@@ -493,7 +712,14 @@ class _SanitizedEventProjection:
         predecessor = self._previous_chain_occurrence.get(chain)
         self._previous_chain_occurrence[chain] = occurrence_id
         self._active_chain_occurrences.setdefault(chain, []).append(occurrence_id)
-        return self._append(
+        if redirected and predecessor is not None:
+            predecessor_event = self._network_events_by_occurrence.get(predecessor)
+            if predecessor_event is None:
+                raise DiscoveryIntegrityError(
+                    "Chromium redirect predecessor is absent from the audit"
+                )
+            predecessor_event["response_observed"] = True
+        audit_event = self._append(
             source,
             "network-request",
             {
@@ -504,6 +730,8 @@ class _SanitizedEventProjection:
                 "url": str(request.get("url", "")),
                 "frame_id": _frame_id(event),
                 "resource_type": str(event.get("type", "Other")),
+                "initiator_type": str(initiator.get("type", "")),
+                "initiator_request_id": initiator_request_id,
                 "safe_request_headers": None,
                 "interception_required": _network_interception_required(
                     str(request.get("url", ""))
@@ -511,10 +739,37 @@ class _SanitizedEventProjection:
                 "redirected": redirected,
                 "redirect_from_occurrence_id": predecessor if redirected else None,
                 "mapping": None,
+                "response_observed": False,
+                "interception_exception": None,
                 "dependency_evidence": [],
                 "resolved_dependency_resource_ids": [],
             },
         )
+        self._network_events_by_occurrence[occurrence_id] = audit_event
+        return audit_event
+
+    def record_response(self, source: CdpTargetSource, event: Mapping[str, Any]) -> None:
+        if self._frozen:
+            raise DiscoveryIntegrityError(
+                "post-cutoff Network response reached the scientific audit"
+            )
+        request_id = str(event.get("requestId", ""))
+        if not request_id:
+            raise DiscoveryIntegrityError(
+                "Chromium network response omitted its request identifier"
+            )
+        chain = (*source.request_chain_key(request_id)[:3], request_id)
+        occurrences = self._active_chain_occurrences.get(chain, [])
+        if not occurrences:
+            raise DiscoveryIntegrityError(
+                "Chromium network response has no active request occurrence"
+            )
+        occurrence = self._network_events_by_occurrence.get(occurrences[-1])
+        if occurrence is None or occurrence["response_observed"] is True:
+            raise DiscoveryIntegrityError(
+                "Chromium network response occurrence is missing or duplicated"
+            )
+        occurrence["response_observed"] = True
 
     def exclusion_mapping(self, reason: str) -> dict[str, Any]:
         result = {
@@ -533,6 +788,10 @@ class _SanitizedEventProjection:
         decision: str,
         reason: str | None,
     ) -> dict[str, Any]:
+        if self._frozen:
+            raise DiscoveryIntegrityError(
+                "post-cutoff Fetch occurrence reached the scientific audit"
+            )
         request = event.get("request", {})
         if not isinstance(request, Mapping):
             raise DiscoveryIntegrityError("Chromium request interception payload is malformed")
@@ -562,6 +821,10 @@ class _SanitizedEventProjection:
         outcome: str,
         occurrence_ids: Sequence[str],
     ) -> None:
+        if self._frozen:
+            raise DiscoveryIntegrityError(
+                "post-cutoff terminal reached the scientific audit"
+            )
         request_id = str(event.get("requestId", ""))
         chain = (*source.request_chain_key(request_id)[:3], request_id)
         all_occurrences = self._active_chain_occurrences.pop(chain, [])
@@ -577,6 +840,7 @@ class _SanitizedEventProjection:
             {
                 "network_id": request_id,
                 "outcome": outcome,
+                "failure": _terminal_failure_evidence(outcome, event),
                 "network_occurrence_ids": all_occurrences,
             },
         )
@@ -591,6 +855,7 @@ class _SanitizedEventProjection:
         approved_origins: Sequence[str],
         observed_origins: Sequence[str],
         observed_request_count: int,
+        normal_shutdown_disposal_summary: Mapping[str, Any],
     ) -> dict[str, Any]:
         if not self._frozen:
             raise DiscoveryIntegrityError("discovery event audit was not frozen at cutoff")
@@ -621,8 +886,12 @@ class _SanitizedEventProjection:
         audit = {
             "schema_version": DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION,
             "instrumentation_policy": instrumentation_policy,
+            "request_stage_observation_policy": REQUEST_STAGE_OBSERVATION_POLICY,
             "passive_render_contract_sha256": PASSIVE_RENDER_CONTRACT_SHA256,
             "render_observation_sha256": evidence_sha256(render_observation),
+            "normal_shutdown_disposal_summary": deepcopy(
+                dict(normal_shutdown_disposal_summary)
+            ),
             "events": self._events,
             "summary": {
                 "event_count": len(self._events),
@@ -640,6 +909,11 @@ class _SanitizedEventProjection:
                 "terminal_event_count": counts["network-terminal"],
                 "resource_occurrence_count": resource_count,
                 "exclusion_occurrence_count": exclusion_count,
+                "blocked_preflight_dependent_count": sum(
+                    event.get("interception_exception") is not None
+                    for event in self._events
+                    if event["kind"] == "network-request"
+                ),
             },
         }
         verify_discovery_event_audit(
@@ -974,10 +1248,14 @@ def _resolve_dependency_url(
     # reported it.  Page and worker/OOPIF sessions can therefore legitimately
     # report preceding occurrences in the same exact frame scope.  This is the
     # same latest-preceding (scope, URL) rule used by ``build_resources``.
-    # Parent-frame and parent-session fallbacks do not have that identity proof
-    # and must remain fail-closed when more than one source/scope is possible.
+    # Same-source, parent-frame, and parent-session fallbacks do not have that
+    # identity proof.  Multiple equally ranked fallback identities therefore
+    # remain explicitly unresolved: choosing one would manufacture a
+    # cross-frame dependency from a URL-only Chromium hint.  The sanitized
+    # audit records that outcome as a nullable resolved_resource_id for
+    # independent reconstruction.
     if best_rank != 0 and len(scopes) > 1:
-        raise DiscoveryIntegrityError("Chromium stack dependency scope is ambiguous")
+        return None
     return max(best, key=lambda candidate: candidate.resource_id).resource_id
 
 
@@ -1146,6 +1424,118 @@ class _RequestExtraInfoAssociator:
             chain.next_occurrence += 1
 
 
+@dataclass(frozen=True)
+class _StagedCutoffExtraInfo:
+    chain_key: tuple[tuple[str, ...], str, int, str]
+    headers: dict[str, Any]
+
+
+class _DiscoveryCutoffBoundary:
+    """Keep context-disposal traffic outside the scientific request graph.
+
+    The router remains authoritative for Network/Fetch/terminal disposal
+    reconciliation and consumes every disposal-owned callback.  Only delayed
+    ExtraInfo that the router cannot classify may reach this boundary; it is
+    applied solely when its exact source/request chain existed at cutoff.
+    """
+
+    def __init__(self) -> None:
+        self._scientific_chains: frozenset[
+            tuple[tuple[str, ...], str, int, str]
+        ] | None = None
+        self._staged_extra_info: list[_StagedCutoffExtraInfo] = []
+        self._finished = False
+
+    def begin(
+        self,
+        scientific_chains: Mapping[
+            tuple[tuple[str, ...], str, int, str], object
+        ],
+    ) -> None:
+        if self._scientific_chains is not None or self._finished:
+            raise DiscoveryIntegrityError("discovery cutoff boundary began more than once")
+        snapshot = frozenset(scientific_chains)
+        if not snapshot:
+            raise DiscoveryIntegrityError("discovery cutoff omitted its scientific chains")
+        self._scientific_chains = snapshot
+
+    @staticmethod
+    def _chain_key(
+        source: CdpTargetSource,
+        event: Mapping[str, Any],
+    ) -> tuple[tuple[str, ...], str, int, str]:
+        request_id = event.get("requestId")
+        if not isinstance(request_id, str) or not request_id:
+            raise DiscoveryIntegrityError(
+                "post-cutoff Network event omitted its request identifier"
+            )
+        return source.request_chain_key(request_id)
+
+    def route(
+        self,
+        source: CdpTargetSource,
+        method: str,
+        event: Mapping[str, Any],
+    ) -> bool:
+        """Return true after consuming one post-cutoff protocol callback."""
+
+        scientific = self._scientific_chains
+        if scientific is None:
+            return False
+        if self._finished:
+            raise DiscoveryIntegrityError(
+                "CDP event arrived after the discovery cutoff boundary finished"
+            )
+        if method == "Network.requestWillBeSentExtraInfo":
+            if len(self._staged_extra_info) >= _POST_CUTOFF_EXTRA_INFO_LIMIT:
+                raise DiscoveryIntegrityError(
+                    "post-cutoff ExtraInfo staging bound was exceeded"
+                )
+            headers = event.get("headers")
+            if not isinstance(headers, Mapping):
+                raise DiscoveryIntegrityError(
+                    "post-cutoff ExtraInfo event supplied malformed headers"
+                )
+            self._staged_extra_info.append(
+                _StagedCutoffExtraInfo(
+                    self._chain_key(source, event),
+                    deepcopy(dict(headers)),
+                )
+            )
+            return True
+        raise DiscoveryIntegrityError(
+            f"post-cutoff protocol event escaped router quarantine: {method}"
+        )
+
+    def finish(
+        self,
+        extra_info: _RequestExtraInfoAssociator,
+        disposal_summary: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        if self._scientific_chains is None or self._finished:
+            raise DiscoveryIntegrityError(
+                "discovery cutoff boundary did not reach one live terminal state"
+            )
+        try:
+            validated = validate_normal_shutdown_disposal_summary(
+                disposal_summary,
+                require_terminal=True,
+            )
+        except ValueError as error:
+            raise DiscoveryIntegrityError(
+                "normal-shutdown disposal summary did not verify"
+            ) from error
+        for staged in self._staged_extra_info:
+            if staged.chain_key not in self._scientific_chains:
+                raise DiscoveryIntegrityError(
+                    "post-cutoff ExtraInfo ownership is not an exact scientific chain"
+                )
+        for staged in self._staged_extra_info:
+            extra_info.add_extra_info(staged.chain_key, staged.headers)
+        self._finished = True
+        return validated
+
+
 @dataclass
 class DiscoveryResult:
     """Browser request graph and the evidence needed to audit its preparation."""
@@ -1265,6 +1655,7 @@ def discover_page(
     router: RecursiveCdpTargetRouter | None = None
     egress_guard: NonReplayableEgressGuard | None = None
     render_observation: dict[str, Any] | None = None
+    normal_shutdown_disposal_summary: dict[str, Any] | None = None
     audit = _SanitizedEventProjection()
     try:
         with playwright_driver_session(sync_playwright, exclusive=True) as playwright:
@@ -1308,6 +1699,7 @@ def discover_page(
                 latest_request_indices: dict[str, list[tuple[CdpTargetSource, str, int]]] = {}
                 dependency_occurrences: list[_DependencyOccurrence] = []
                 extra_info = _RequestExtraInfoAssociator()
+                cutoff_boundary = _DiscoveryCutoffBoundary()
                 observation_ledger = _RequestObservationLedger(
                     eligible=lambda _method, candidate_url: _network_interception_required(
                         candidate_url
@@ -1333,18 +1725,37 @@ def discover_page(
                         raise DiscoveryIntegrityError(
                             "Chromium network event omitted its request identifier"
                         )
+                    initiator = event.get("initiator", {})
+                    if not isinstance(initiator, Mapping):
+                        raise DiscoveryIntegrityError(
+                            "Chromium request initiator payload is malformed"
+                        )
+                    initiator_type = initiator.get("type")
+                    if not isinstance(initiator_type, str) or not initiator_type:
+                        raise DiscoveryIntegrityError(
+                            "Chromium request initiator type is malformed"
+                        )
+                    initiator_request_id = initiator.get("requestId")
+                    redirected = event.get("redirectResponse") is not None
                     chain_key = source.request_chain_key(request_id)
                     observation_ledger.add_network(
                         source,
                         request_id=request_id,
                         method=method,
                         url=request_url,
+                        resource_type=str(event.get("type", "Other")),
+                        initiator_type=initiator_type,
+                        initiator_request_id=(
+                            initiator_request_id
+                            if isinstance(initiator_request_id, str)
+                            else None
+                        ),
+                        redirected=redirected,
                         occurrence_id=str(audit_event["occurrence_id"]),
                         audit_event=audit_event,
                     )
                     occurrence = occurrence_counts.get(chain_key, 0)
                     occurrence_counts[chain_key] = occurrence + 1
-                    redirected = event.get("redirectResponse") is not None
                     redirect_has_extra_info = (
                         event.get("redirectHasExtraInfo") if redirected else None
                     )
@@ -1517,6 +1928,8 @@ def discover_page(
                             "Chromium response bypassed the fresh network policy"
                         )
                     request_id = str(event.get("requestId", ""))
+                    audit.record_response(source, event)
+                    observation_ledger.add_response(source, request_id)
                     extra_info.add_response(
                         source.request_chain_key(request_id), event.get("hasExtraInfo")
                     )
@@ -1526,6 +1939,8 @@ def discover_page(
                     method: str,
                     event: Mapping[str, Any],
                 ) -> None:
+                    if cutoff_boundary.route(source, method, event):
+                        return
                     if method == "Network.requestWillBeSent":
                         audit_event = audit.record_network(source, event)
                         request_seen(source, event, audit_event)
@@ -1535,17 +1950,17 @@ def discover_page(
                         response_seen(source, event)
                     elif method in {"Network.loadingFinished", "Network.loadingFailed"}:
                         request_id = str(event.get("requestId", ""))
-                        closed = observation_ledger.add_terminal(source, request_id)
+                        outcome = "failed" if method == "Network.loadingFailed" else "finished"
+                        closed = observation_ledger.add_terminal(
+                            source,
+                            request_id,
+                            outcome=outcome,
+                            event=event,
+                        )
                         audit.record_terminal(
                             source,
                             event,
-                            outcome=(
-                                "shutdown-cancelled"
-                                if event.get("qcsdShutdown") is True
-                                else "failed"
-                                if method == "Network.loadingFailed"
-                                else "finished"
-                            ),
+                            outcome=outcome,
                             occurrence_ids=closed,
                         )
                         extra_info.add_terminal(
@@ -1575,7 +1990,15 @@ def discover_page(
                                 reason=reason,
                             )
                             observation_ledger.add_interception(
-                                source, event, audit_event=audit_event
+                                source,
+                                event,
+                                audit_event=audit_event,
+                                policy_decision=(
+                                    "continue"
+                                    if command == "Fetch.continueRequest"
+                                    else "fail"
+                                ),
+                                policy_reason=reason,
                             )
                         assert router is not None
                         router.send(
@@ -1633,9 +2056,15 @@ def discover_page(
                     if router.active_request_identities or not router.shutdown_ready:
                         raise DiscoveryIntegrityError(
                             "passive render accepted before recursive target shutdown readiness"
-                        )
-                    audit.freeze()
+                    )
                     final_url = page.url
+                    # Reconcile the scientific request-stage proof while the
+                    # audit projection is still mutable.  No request remains
+                    # active at this point, and the cutoff below quarantines
+                    # every context-disposal event separately.
+                    observation_ledger.finish()
+                    cutoff_boundary.begin(occurrence_counts)
+                    audit.freeze()
                     router.begin_shutdown()
                     normal_shutdown_started = True
                     normal_shutdown_cleanup_started = True
@@ -1645,8 +2074,11 @@ def discover_page(
                         browser_guard,
                         cleanup_label="browser-discovery",
                     )
+                    normal_shutdown_disposal_summary = cutoff_boundary.finish(
+                        extra_info,
+                        router.normal_shutdown_disposal_summary,
+                    )
                     extra_info.finish()
-                    observation_ledger.finish()
                     _validate_request_instance_ledger(discovered)
                 except BaseException as error:
                     primary_error = error
@@ -1722,6 +2154,10 @@ def discover_page(
 
     if egress_guard is None or render_observation is None:
         raise DiscoveryIntegrityError("browser discovery omitted its egress evidence")
+    if normal_shutdown_disposal_summary is None:
+        raise DiscoveryIntegrityError(
+            "browser discovery omitted its normal-shutdown disposal evidence"
+        )
     if (
         egress_guard.success_summary()
         != render_observation["non_replayable_egress_summary"]
@@ -1744,6 +2180,7 @@ def discover_page(
         approved_origins=approved,
         observed_origins=sorted(admission.observed_origins),
         observed_request_count=admission.observed_request_count,
+        normal_shutdown_disposal_summary=normal_shutdown_disposal_summary,
     )
     contract = passive_render_contract()
     return DiscoveryResult(

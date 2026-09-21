@@ -125,6 +125,27 @@ def _srcdoc_pseudo_document_summary(
     return summary
 
 
+def _normal_shutdown_disposal_summary() -> dict[str, Any]:
+    return {
+        "schema_version": watch._NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
+        "policy": watch._NORMAL_SHUTDOWN_DISPOSAL_POLICY,
+        "started": True,
+        "terminal": True,
+        "network_total": 0,
+        "fetch_total": 0,
+        "matched_total": 0,
+        "network_only_synthetic_total": 0,
+        "pending_network_total": 0,
+        "pending_fetch_total": 0,
+        "terminal_outcomes": {
+            "Network.loadingFinished": 0,
+            "Network.loadingFailed": 0,
+            "Network.redirectResponse": 0,
+            "qcsd-shutdown": 0,
+        },
+    }
+
+
 def _egress_prearm_summary() -> dict[str, Any]:
     by_target_type = {}
     for target_type in ("page", "iframe", "worker", "shared_worker"):
@@ -1076,6 +1097,9 @@ def acquisition(tmp_path: Path) -> Fixture:
                 ),
                 "egress_prearm_summary": _egress_prearm_summary(),
                 "srcdoc_pseudo_document_summary": _srcdoc_pseudo_document_summary(),
+                "normal_shutdown_disposal_summary": (
+                    _normal_shutdown_disposal_summary()
+                ),
                 "non_replayable_egress_summary": _non_replayable_egress_summary(),
                 "browser_egress_command_line": _browser_egress_command_line(),
                 "browser_context_service_worker_count": 0,
@@ -1995,7 +2019,7 @@ class FakeMonotonic:
 
 
 def test_due_work_uses_exact_command_environment_and_paths(acquisition: Fixture) -> None:
-    assert watch.ACQUISITION_SCHEMA_VERSION == 7
+    assert watch.ACQUISITION_SCHEMA_VERSION == 8
     assert watch.CHECKPOINT_SCHEMA_VERSION == 3
     assert watch.TERMINAL_SCHEMA_VERSION == 4
     assert watch.COMPLETION_SCHEMA_VERSION == 4
@@ -3710,6 +3734,15 @@ def test_watcher_pinned_cdp_contract_matches_runtime_contract() -> None:
     assert watch._PINNED_CDP_SRCDOC_EVENT_ORDINAL_LIMIT == (
         cdp_targets._SRCDOC_EVENT_ORDINAL_LIMIT
     )
+    assert watch._NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION == (
+        cdp_targets.NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
+    )
+    assert watch._NORMAL_SHUTDOWN_DISPOSAL_POLICY == (
+        cdp_targets.NORMAL_SHUTDOWN_DISPOSAL_POLICY
+    )
+    assert watch._NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT == (
+        cdp_targets._NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT
+    )
     assert watch._PINNED_CDP_SCHEMA_VERSION == pinned_cdp.PROBE_SCHEMA_VERSION
     assert watch._HISTORICAL_PINNED_CDP_SCHEMA_VERSION == (
         pinned_cdp.HISTORICAL_PROBE_SCHEMA_VERSION
@@ -3729,6 +3762,7 @@ def test_watcher_pinned_cdp_contract_matches_runtime_contract() -> None:
     assert watch._HISTORICAL_PINNED_CDP_CONTRACT_V12 == (pinned_cdp._HISTORICAL_PROBE_CONTRACT_V12)
     assert watch._HISTORICAL_PINNED_CDP_CONTRACT_V13 == (pinned_cdp._HISTORICAL_PROBE_CONTRACT_V13)
     assert watch._HISTORICAL_PINNED_CDP_CONTRACT_V14 == (pinned_cdp._HISTORICAL_PROBE_CONTRACT_V14)
+    assert watch._HISTORICAL_PINNED_CDP_CONTRACT_V16 == (pinned_cdp._HISTORICAL_PROBE_CONTRACT_V16)
     assert watch._PINNED_CDP_EVENT_METHODS == pinned_cdp._EVENT_METHODS
     assert watch._PINNED_CDP_HTTP_STATUS_COUNTS == (pinned_cdp._EXPECTED_HTTP_STATUS_COUNTS)
     assert watch._PINNED_CDP_SERVER_REQUEST_COUNTS == (pinned_cdp._EXPECTED_SERVER_REQUEST_COUNTS)
@@ -3848,7 +3882,7 @@ def test_watcher_pinned_cdp_contract_matches_runtime_contract() -> None:
     assert watch._BASELINE_SCHEDULING_CONTRACT == (class_acquisition.BASELINE_SCHEDULING_CONTRACT)
 
 
-@pytest.mark.parametrize("historical_schema", (1, 2, 3, 4, 5, 6))
+@pytest.mark.parametrize("historical_schema", (1, 2, 3, 4, 5, 6, 7))
 def test_watcher_treats_historical_provenance_as_verify_only(
     acquisition: Fixture,
     historical_schema: int,
@@ -3862,7 +3896,7 @@ def test_watcher_treats_historical_provenance_as_verify_only(
         watch._validate_immutable_binding(acquisition.paths)
 
 
-@pytest.mark.parametrize("schema_alias", (True, 7.0, "7"))
+@pytest.mark.parametrize("schema_alias", (True, 8.0, "8"))
 def test_watcher_rejects_non_integer_current_provenance_schema(
     acquisition: Fixture,
     schema_alias: object,
@@ -3898,6 +3932,40 @@ def test_watcher_rejects_resealed_pinned_cdp_topology_tamper(
     _replace_pinned_and_rebind_foundation(acquisition, payload)
 
     with pytest.raises(watch.WatchError, match="topology observation"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        (
+            lambda summary: summary.update(terminal=False),
+            "not terminal and consistent",
+        ),
+        (
+            lambda summary: summary.update(policy="unbound-disposal-policy"),
+            "disposal contract",
+        ),
+        (
+            lambda summary: summary["terminal_outcomes"].pop(
+                "Network.redirectResponse"
+            ),
+            "terminal outcomes",
+        ),
+    ),
+)
+def test_watcher_rejects_resealed_pinned_cdp_shutdown_disposal_tamper(
+    acquisition: Fixture,
+    mutation,
+    message: str,
+) -> None:
+    pinned = json.loads(acquisition.pinned_cdp_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(pinned["payload"])
+    mutation(payload["observation"]["topology"]["normal_shutdown_disposal_summary"])
+
+    _replace_pinned_and_rebind_foundation(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match=message):
         watch._validate_immutable_binding(acquisition.paths)
 
 

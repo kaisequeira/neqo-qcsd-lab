@@ -24,12 +24,16 @@ from .cdp_targets import (
     CDP_TARGET_INSTRUMENTATION_POLICY,
     validate_bootstrap_prearm_summary,
     validate_egress_prearm_summary,
+    validate_normal_shutdown_disposal_summary,
     validate_srcdoc_pseudo_document_summary,
 )
 
 PASSIVE_RENDER_CONTRACT_SCHEMA_VERSION = 4
 RENDER_OBSERVATION_SCHEMA_VERSION = 4
-DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION = 5
+DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION = 7
+REQUEST_STAGE_OBSERVATION_POLICY = (
+    "chromium-143-fetch-primary-or-failed-cors-preflight-v1"
+)
 
 PASSIVE_RENDER_CONTRACT: dict[str, Any] = {
     "schema_version": PASSIVE_RENDER_CONTRACT_SCHEMA_VERSION,
@@ -223,11 +227,15 @@ _NETWORK_EVENT_FIELDS = _COMMON_EVENT_FIELDS | {
     "url",
     "frame_id",
     "resource_type",
+    "initiator_type",
+    "initiator_request_id",
     "safe_request_headers",
     "interception_required",
     "redirected",
     "redirect_from_occurrence_id",
     "mapping",
+    "response_observed",
+    "interception_exception",
     "dependency_evidence",
     "resolved_dependency_resource_ids",
 }
@@ -246,6 +254,7 @@ _FETCH_EVENT_FIELDS = _COMMON_EVENT_FIELDS | {
 _TERMINAL_EVENT_FIELDS = _COMMON_EVENT_FIELDS | {
     "network_id",
     "outcome",
+    "failure",
     "network_occurrence_ids",
 }
 _TARGET_EVENT_FIELDS = _COMMON_EVENT_FIELDS | {"target_event"}
@@ -427,10 +436,13 @@ def _independent_url_dependency(
         for candidate in best
     }
     # Exact-frame matches share the persisted (scope, URL) dependency identity,
-    # even when Chromium reports them through different target sessions.  All
-    # less-specific parent/session fallbacks remain ambiguity-failing.
+    # even when Chromium reports them through different target sessions.  A
+    # URL-only same-source/parent fallback with multiple equally ranked
+    # identities has no independently provable edge, so it must remain
+    # unresolved rather than selecting or synthesizing a cross-frame
+    # dependency.
     if best_rank != 0 and len(scopes) > 1:
-        raise ValueError("discovery URL dependency scope is ambiguous")
+        return None
     return max(best, key=lambda candidate: candidate["mapping"]["resource_id"])[
         "mapping"
     ]["resource_id"]
@@ -529,8 +541,10 @@ def verify_discovery_event_audit(
     fields = {
         "schema_version",
         "instrumentation_policy",
+        "request_stage_observation_policy",
         "passive_render_contract_sha256",
         "render_observation_sha256",
+        "normal_shutdown_disposal_summary",
         "events",
         "summary",
     }
@@ -544,10 +558,16 @@ def verify_discovery_event_audit(
     validate_render_observation(render_observation)
     if (
         value["instrumentation_policy"] != CDP_TARGET_INSTRUMENTATION_POLICY
+        or value["request_stage_observation_policy"]
+        != REQUEST_STAGE_OBSERVATION_POLICY
         or value["passive_render_contract_sha256"] != PASSIVE_RENDER_CONTRACT_SHA256
         or value["render_observation_sha256"] != evidence_sha256(render_observation)
     ):
         raise ValueError("discovery event audit provenance is invalid")
+    validate_normal_shutdown_disposal_summary(
+        value["normal_shutdown_disposal_summary"],
+        require_terminal=True,
+    )
     events = value["events"]
     if not isinstance(events, list) or not events:
         raise ValueError("discovery event audit requires a non-empty event sequence")
@@ -660,6 +680,35 @@ def verify_discovery_event_audit(
                 or event["frame_id"] is not None
                 and (not isinstance(event["frame_id"], str) or not event["frame_id"])
                 or not isinstance(event["resource_type"], str)
+                or not isinstance(event["initiator_type"], str)
+                or not event["initiator_type"]
+                or (
+                    event["initiator_request_id"] is not None
+                    and (
+                        not isinstance(event["initiator_request_id"], str)
+                        or not event["initiator_request_id"]
+                    )
+                )
+                or type(event["response_observed"]) is not bool
+                or (
+                    event["interception_exception"] is not None
+                    and (
+                        not isinstance(event["interception_exception"], Mapping)
+                        or set(event["interception_exception"])
+                        != {"kind", "preflight_occurrence_id"}
+                        or event["interception_exception"].get("kind")
+                        != "blocked-after-failed-cors-preflight-v1"
+                        or not isinstance(
+                            event["interception_exception"].get(
+                                "preflight_occurrence_id"
+                            ),
+                            str,
+                        )
+                        or not event["interception_exception"].get(
+                            "preflight_occurrence_id"
+                        )
+                    )
+                )
                 or (
                     event["safe_request_headers"] is not None
                     and (
@@ -902,6 +951,42 @@ def verify_discovery_event_audit(
                 not isinstance(event["network_id"], str)
                 or not event["network_id"]
                 or event["outcome"] not in {"finished", "failed"}
+                or (
+                    event["outcome"] == "finished"
+                    and event["failure"] is not None
+                )
+                or (
+                    event["outcome"] == "failed"
+                    and (
+                        not isinstance(event["failure"], Mapping)
+                        or set(event["failure"])
+                        != {
+                            "error_text",
+                            "canceled",
+                            "blocked_reason",
+                            "cors_error_status_present",
+                        }
+                        or not isinstance(event["failure"].get("error_text"), str)
+                        or not event["failure"].get("error_text")
+                        or (
+                            event["failure"].get("canceled") is not None
+                            and type(event["failure"].get("canceled")) is not bool
+                        )
+                        or (
+                            event["failure"].get("blocked_reason") is not None
+                            and (
+                                not isinstance(
+                                    event["failure"].get("blocked_reason"), str
+                                )
+                                or not event["failure"].get("blocked_reason")
+                            )
+                        )
+                        or type(
+                            event["failure"].get("cors_error_status_present")
+                        )
+                        is not bool
+                    )
+                )
                 or not isinstance(event["network_occurrence_ids"], list)
                 or not event["network_occurrence_ids"]
             ):
@@ -1126,9 +1211,13 @@ def verify_discovery_event_audit(
             reconcile_primary(event["network_id"])
 
     terminal_sequence_by_occurrence: dict[str, int] = {}
+    terminal_by_occurrence: dict[str, Mapping[str, Any]] = {}
     for terminal in terminals:
         for occurrence_id in terminal["network_occurrence_ids"]:
+            if occurrence_id in terminal_by_occurrence:
+                raise ValueError("network occurrence has duplicate terminal evidence")
             terminal_sequence_by_occurrence[occurrence_id] = terminal["sequence"]
+            terminal_by_occurrence[occurrence_id] = terminal
     for network_id, candidates_fetch in unmatched_fetches.items():
         candidates_network = unmatched_networks.get(network_id, [])
         for fetch in candidates_fetch:
@@ -1219,18 +1308,138 @@ def verify_discovery_event_audit(
         for occurrence_id, event in networks.items()
         if event["interception_required"]
     }
-    for occurrence_id in required_networks:
+
+    def has_blocked_terminal(occurrence_id: str, *, reason: str) -> bool:
+        terminal = terminal_by_occurrence.get(occurrence_id)
+        return (
+            terminal is not None
+            and terminal["outcome"] == "failed"
+            and terminal["failure"]
+            == {
+                "error_text": "net::ERR_BLOCKED_BY_CLIENT",
+                "canceled": False,
+                "blocked_reason": reason,
+                "cors_error_status_present": False,
+            }
+        )
+
+    derived_preflight_exceptions: dict[str, str] = {}
+    used_preflight_occurrences: set[str] = set()
+    for occurrence_id in sorted(required_networks):
+        occurrence = networks[occurrence_id]
+        primary = primary_fetch_by_occurrence.get(occurrence_id)
+        if primary is not None:
+            if occurrence["interception_exception"] is not None or occurrence[
+                "redirected"
+            ] != (primary["redirected_fetch_id"] is not None):
+                raise ValueError("Network and Fetch redirect identities do not correspond")
+            continue
+        actual_source = _validate_source(occurrence["source"])
+        actual_chain = network_events_by_chain[
+            (*actual_source, occurrence["network_id"])
+        ]
+        candidates = [
+            candidate
+            for candidate_id, candidate in networks.items()
+            if candidate_id != occurrence_id
+            and _same_source(candidate["source"], occurrence["source"])
+            and candidate["network_id"] != occurrence["network_id"]
+            and candidate["method"] == "OPTIONS"
+            and candidate["url"] == occurrence["url"]
+            and candidate["resource_type"] == "Other"
+            and candidate["initiator_type"] == "preflight"
+            and candidate["initiator_request_id"] == occurrence["network_id"]
+            and not candidate["redirected"]
+            and not candidate["response_observed"]
+            and candidate["interception_exception"] is None
+            and candidate["mapping"]
+            == {
+                "kind": "exclusion",
+                "exclusion_occurrence_id": candidate["mapping"].get(
+                    "exclusion_occurrence_id"
+                ),
+                "reason": "unsafe method: OPTIONS",
+            }
+            and candidate_id not in used_preflight_occurrences
+            and len(
+                network_events_by_chain[
+                    (*_validate_source(candidate["source"]), candidate["network_id"])
+                ]
+            )
+            == 1
+            and has_blocked_terminal(candidate_id, reason="inspector")
+            and fetch_count_by_network[candidate_id] == 1
+            and primary_count_by_network[candidate_id] == 1
+            and (
+                candidate_fetch := primary_fetch_by_occurrence.get(candidate_id)
+            )
+            is not None
+            and candidate_fetch["policy_decision"] == "fail"
+            and candidate_fetch["policy_reason"] == "unsafe method: OPTIONS"
+            and candidate_fetch["redirected_fetch_id"] is None
+        ]
+        if (
+            occurrence["method"] != "POST"
+            or _https_origin(occurrence["url"]) is None
+            or occurrence["resource_type"] != "Fetch"
+            or occurrence["initiator_type"] != "script"
+            or occurrence["initiator_request_id"] is not None
+            or occurrence["redirected"]
+            or occurrence["response_observed"]
+            or len(actual_chain) != 1
+            or occurrence["mapping"].get("kind") != "exclusion"
+            or occurrence["mapping"].get("reason") != "unsafe method: POST"
+            or fetch_count_by_network[occurrence_id] != 0
+            or not has_blocked_terminal(occurrence_id, reason="other")
+            or len(candidates) != 1
+        ):
+            raise ValueError("Network/Fetch occurrence reconciliation is incomplete")
+        [preflight] = candidates
+        preflight_id = preflight["occurrence_id"]
+        preflight_fetch = primary_fetch_by_occurrence[preflight_id]
+        actual_terminal = terminal_by_occurrence[occurrence_id]
+        preflight_terminal = terminal_by_occurrence[preflight_id]
+        if (
+            preflight_fetch["sequence"] >= preflight_terminal["sequence"]
+            or preflight_fetch["sequence"] >= actual_terminal["sequence"]
+        ):
+            raise ValueError("failed CORS preflight proof has invalid event ordering")
+        expected_exception = {
+            "kind": "blocked-after-failed-cors-preflight-v1",
+            "preflight_occurrence_id": preflight_id,
+        }
+        if occurrence["interception_exception"] != expected_exception:
+            raise ValueError("failed CORS preflight exception claim does not verify")
+        derived_preflight_exceptions[occurrence_id] = preflight_id
+        used_preflight_occurrences.add(preflight_id)
+
+    claimed_preflight_exceptions = {
+        occurrence_id
+        for occurrence_id, occurrence in networks.items()
+        if occurrence["interception_exception"] is not None
+    }
+    if claimed_preflight_exceptions != set(derived_preflight_exceptions):
+        raise ValueError("failed CORS preflight exception set does not verify")
+    ordinary_required_networks = required_networks - set(
+        derived_preflight_exceptions
+    )
+    if set(fetch_count_by_network) != ordinary_required_networks or any(
+        primary_count_by_network[occurrence_id] != 1
+        for occurrence_id in ordinary_required_networks
+    ):
+        raise ValueError("Network/Fetch occurrence reconciliation is incomplete")
+    if any(
+        occurrence_id in fetch_count_by_network
+        for occurrence_id in derived_preflight_exceptions
+    ):
+        raise ValueError("failed CORS preflight dependent unexpectedly has Fetch evidence")
+    for occurrence_id in ordinary_required_networks:
         occurrence = networks[occurrence_id]
         primary = primary_fetch_by_occurrence.get(occurrence_id)
         if primary is None or occurrence["redirected"] != (
             primary["redirected_fetch_id"] is not None
         ):
             raise ValueError("Network and Fetch redirect identities do not correspond")
-    if set(fetch_count_by_network) != required_networks or any(
-        primary_count_by_network[occurrence_id] != 1
-        for occurrence_id in required_networks
-    ):
-        raise ValueError("Network/Fetch occurrence reconciliation is incomplete")
 
     terminal_counts: Counter[str] = Counter()
     if set(terminal_events_by_chain) != set(network_events_by_chain):
@@ -1293,6 +1502,9 @@ def verify_discovery_event_audit(
         "terminal_event_count": counts["network-terminal"],
         "resource_occurrence_count": len(mapped_resources),
         "exclusion_occurrence_count": len(exclusion_occurrences),
+        "blocked_preflight_dependent_count": len(
+            derived_preflight_exceptions
+        ),
     }
     if value["summary"] != summary:
         raise ValueError("discovery event audit summary does not verify")

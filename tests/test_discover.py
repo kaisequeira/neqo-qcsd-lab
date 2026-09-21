@@ -18,6 +18,8 @@ from qcsd_lab.browser_egress import (
 )
 from qcsd_lab.cdp_targets import (
     EGRESS_PREARM_SUMMARY_SCHEMA_VERSION,
+    NORMAL_SHUTDOWN_DISPOSAL_POLICY,
+    NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
     SRCDOC_PSEUDO_DOCUMENT_POLICY,
     SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
     CdpTargetIntegrityError,
@@ -27,6 +29,7 @@ from qcsd_lab.discover import (
     DiscoveredRequest,
     DiscoveryIntegrityError,
     _DependencyOccurrence,
+    _DiscoveryCutoffBoundary,
     _RequestAdmission,
     _RequestExtraInfoAssociator,
     _RequestObservationLedger,
@@ -134,6 +137,33 @@ def _srcdoc_pseudo_document_summary() -> dict:
             "Network.loadingFinished": 0,
         },
         "diagnostics": [],
+    }
+
+
+def _normal_shutdown_disposal_summary(
+    *,
+    network_total: int = 0,
+    fetch_total: int = 0,
+    matched_total: int = 0,
+    network_only_synthetic_total: int = 0,
+) -> dict:
+    return {
+        "schema_version": NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
+        "policy": NORMAL_SHUTDOWN_DISPOSAL_POLICY,
+        "started": True,
+        "terminal": True,
+        "network_total": network_total,
+        "fetch_total": fetch_total,
+        "matched_total": matched_total,
+        "network_only_synthetic_total": network_only_synthetic_total,
+        "pending_network_total": 0,
+        "pending_fetch_total": 0,
+        "terminal_outcomes": {
+            "Network.loadingFinished": 0,
+            "Network.loadingFailed": 0,
+            "Network.redirectResponse": 0,
+            "qcsd-shutdown": network_total,
+        },
     }
 
 
@@ -263,6 +293,337 @@ def test_ephemeral_cdp_ids_do_not_change_the_canonical_resource_graph():
     first_graph = json.dumps(build_resources(first), sort_keys=True).encode()
     second_graph = json.dumps(build_resources(second), sort_keys=True).encode()
     assert hashlib.sha256(first_graph).hexdigest() == hashlib.sha256(second_graph).hexdigest()
+
+
+_FAILED_CORS_URL = "https://page.test/report"
+
+
+def _failed_cors_terminal(blocked_reason: str) -> dict[str, object]:
+    return {
+        "errorText": "net::ERR_BLOCKED_BY_CLIENT",
+        "canceled": False,
+        "blockedReason": blocked_reason,
+    }
+
+
+def _exercise_failed_cors_preflight_exception(
+    *,
+    order: str = "options-first",
+    mutation: str | None = None,
+) -> tuple[dict, dict, dict]:
+    """Construct the one narrowly receipted Network-without-Fetch exception."""
+
+    ledger = _RequestObservationLedger(eligible=lambda _method, _url: True)
+    source = CdpTargetSource((), "page", "page")
+    other_source = CdpTargetSource(("iframe-session",), "iframe", "iframe")
+    post_id = "post-network"
+    preflight_id = "preflight-network"
+    preflight_source = source
+    fetch_source = source
+    preflight_url = _FAILED_CORS_URL
+    preflight_resource = "Other"
+    preflight_initiator = "preflight"
+    preflight_cause: str | None = post_id
+    preflight_redirected = False
+    preflight_response = False
+    post_resource = "Fetch"
+    post_initiator = "script"
+    post_cause: str | None = None
+    post_redirected = False
+    post_response = False
+    policy_decision = "fail"
+    policy_reason = "unsafe method: OPTIONS"
+    preflight_audit_reason = "unsafe method: OPTIONS"
+    post_audit_reason = "unsafe method: POST"
+    preflight_outcome = "failed"
+    post_outcome = "failed"
+    preflight_terminal = _failed_cors_terminal("inspector")
+    post_terminal = _failed_cors_terminal("other")
+    duplicate_preflight = False
+    duplicate_post = False
+    duplicate_fetch = False
+    dependent_terminal_before_preflight = False
+
+    if mutation == "missing-causal-id":
+        preflight_cause = None
+    elif mutation == "wrong-causal-id":
+        preflight_cause = "unrelated-network"
+    elif mutation == "wrong-source":
+        preflight_source = other_source
+        fetch_source = other_source
+    elif mutation == "wrong-url":
+        preflight_url = "https://page.test/different"
+    elif mutation == "duplicate-preflight":
+        duplicate_preflight = True
+    elif mutation == "duplicate-dependent":
+        duplicate_post = True
+    elif mutation == "duplicate-fetch":
+        duplicate_fetch = True
+    elif mutation == "preflight-resource":
+        preflight_resource = "Fetch"
+    elif mutation == "dependent-resource":
+        post_resource = "XHR"
+    elif mutation == "preflight-initiator":
+        preflight_initiator = "script"
+    elif mutation == "dependent-initiator":
+        post_initiator = "other"
+    elif mutation == "dependent-causal-id":
+        post_cause = "unexpected-parent"
+    elif mutation == "preflight-redirect":
+        preflight_redirected = True
+    elif mutation == "dependent-redirect":
+        post_redirected = True
+    elif mutation == "preflight-response":
+        preflight_response = True
+    elif mutation == "dependent-response":
+        post_response = True
+    elif mutation == "fetch-decision":
+        policy_decision = "continue"
+    elif mutation == "fetch-reason":
+        policy_reason = "origin not approved"
+    elif mutation == "preflight-audit-reason":
+        preflight_audit_reason = "origin not approved"
+    elif mutation == "dependent-audit-reason":
+        post_audit_reason = "origin not approved"
+    elif mutation == "preflight-finished":
+        preflight_outcome = "finished"
+    elif mutation == "dependent-finished":
+        post_outcome = "finished"
+    elif mutation == "preflight-error-text":
+        preflight_terminal["errorText"] = "net::ERR_FAILED"
+    elif mutation == "dependent-error-text":
+        post_terminal["errorText"] = "net::ERR_FAILED"
+    elif mutation == "preflight-canceled":
+        preflight_terminal["canceled"] = True
+    elif mutation == "dependent-canceled":
+        post_terminal["canceled"] = True
+    elif mutation == "preflight-blocked-reason":
+        preflight_terminal["blockedReason"] = "other"
+    elif mutation == "dependent-blocked-reason":
+        post_terminal["blockedReason"] = "inspector"
+    elif mutation == "preflight-cors-status":
+        preflight_terminal["corsErrorStatus"] = {"corsError": "InvalidResponse"}
+    elif mutation == "dependent-cors-status":
+        post_terminal["corsErrorStatus"] = {"corsError": "InvalidResponse"}
+    elif mutation == "dependent-terminal-before-preflight":
+        dependent_terminal_before_preflight = True
+    elif mutation is not None:
+        raise AssertionError(f"unknown failed-preflight mutation: {mutation}")
+
+    preflight_audit = {
+        "mapping": {"kind": "exclusion", "reason": preflight_audit_reason}
+    }
+    post_audit = {"mapping": {"kind": "exclusion", "reason": post_audit_reason}}
+    fetch_audit: dict = {}
+
+    def add_preflight(
+        *,
+        network_id: str = preflight_id,
+        fetch_id: str = "preflight-fetch",
+        occurrence_id: str = "preflight-occurrence",
+        audit_event: dict = preflight_audit,
+        interception_audit: dict = fetch_audit,
+    ) -> None:
+        ledger.add_network(
+            preflight_source,
+            request_id=network_id,
+            method="OPTIONS",
+            url=preflight_url,
+            resource_type=preflight_resource,
+            initiator_type=preflight_initiator,
+            initiator_request_id=preflight_cause,
+            redirected=preflight_redirected,
+            occurrence_id=occurrence_id,
+            audit_event=audit_event,
+        )
+        ledger.add_interception(
+            fetch_source,
+            {
+                "requestId": fetch_id,
+                "networkId": network_id,
+                "request": {"method": "OPTIONS", "url": preflight_url},
+            },
+            audit_event=interception_audit,
+            policy_decision=policy_decision,
+            policy_reason=policy_reason,
+        )
+        if duplicate_fetch and network_id == preflight_id:
+            ledger.add_interception(
+                fetch_source,
+                {
+                    "requestId": "preflight-fetch-restart",
+                    "networkId": network_id,
+                    "request": {"method": "OPTIONS", "url": preflight_url},
+                },
+                policy_decision=policy_decision,
+                policy_reason=policy_reason,
+            )
+        if preflight_response:
+            ledger.add_response(preflight_source, network_id)
+        ledger.add_terminal(
+            preflight_source,
+            network_id,
+            outcome=preflight_outcome,
+            event=preflight_terminal,
+        )
+
+    def terminate_post() -> None:
+        ledger.add_terminal(
+            source,
+            post_id,
+            outcome=post_outcome,
+            event=post_terminal,
+        )
+
+    def add_post(*, terminate: bool = True) -> None:
+        ledger.add_network(
+            source,
+            request_id=post_id,
+            method="POST",
+            url=_FAILED_CORS_URL,
+            resource_type=post_resource,
+            initiator_type=post_initiator,
+            initiator_request_id=post_cause,
+            redirected=post_redirected,
+            occurrence_id="post-occurrence",
+            audit_event=post_audit,
+        )
+        if duplicate_post:
+            ledger.add_network(
+                source,
+                request_id=post_id,
+                method="POST",
+                url=_FAILED_CORS_URL,
+                resource_type=post_resource,
+                initiator_type=post_initiator,
+                initiator_request_id=post_cause,
+                redirected=post_redirected,
+                occurrence_id="post-occurrence-duplicate",
+                audit_event={
+                    "mapping": {"kind": "exclusion", "reason": post_audit_reason}
+                },
+            )
+        if post_response:
+            ledger.add_response(source, post_id)
+        if terminate:
+            terminate_post()
+
+    if order == "options-first":
+        add_preflight()
+        if duplicate_preflight:
+            add_preflight(
+                network_id="preflight-network-duplicate",
+                fetch_id="preflight-fetch-duplicate",
+                occurrence_id="preflight-occurrence-duplicate",
+                audit_event={
+                    "mapping": {
+                        "kind": "exclusion",
+                        "reason": preflight_audit_reason,
+                    }
+                },
+                interception_audit={},
+            )
+        add_post()
+    elif order == "post-first":
+        # Chromium may report the dependent POST Network event before its
+        # OPTIONS preflight, but the failed preflight must still precede the
+        # POST terminal that proves the request never reached Fetch.
+        add_post(terminate=dependent_terminal_before_preflight)
+        add_preflight()
+        if duplicate_preflight:
+            add_preflight(
+                network_id="preflight-network-duplicate",
+                fetch_id="preflight-fetch-duplicate",
+                occurrence_id="preflight-occurrence-duplicate",
+                audit_event={
+                    "mapping": {
+                        "kind": "exclusion",
+                        "reason": preflight_audit_reason,
+                    }
+                },
+                interception_audit={},
+            )
+        if not dependent_terminal_before_preflight:
+            terminate_post()
+    else:
+        raise AssertionError(f"unknown request order: {order}")
+
+    ledger.finish()
+    return preflight_audit, fetch_audit, post_audit
+
+
+@pytest.mark.parametrize("order", ["options-first", "post-first"])
+def test_failed_cors_preflight_exception_accepts_both_request_orders_and_claims_exactly(
+    order: str,
+) -> None:
+    preflight_audit, fetch_audit, post_audit = _exercise_failed_cors_preflight_exception(
+        order=order
+    )
+
+    assert preflight_audit == {
+        "mapping": {"kind": "exclusion", "reason": "unsafe method: OPTIONS"}
+    }
+    assert fetch_audit == {
+        "network_occurrence_id": "preflight-occurrence",
+        "relationship": "primary",
+    }
+    assert post_audit == {
+        "mapping": {"kind": "exclusion", "reason": "unsafe method: POST"},
+        "interception_exception": {
+            "kind": "blocked-after-failed-cors-preflight-v1",
+            "preflight_occurrence_id": "preflight-occurrence",
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing-causal-id",
+        "wrong-causal-id",
+        "wrong-source",
+        "wrong-url",
+        "duplicate-preflight",
+        "duplicate-dependent",
+        "duplicate-fetch",
+        "preflight-resource",
+        "dependent-resource",
+        "preflight-initiator",
+        "dependent-initiator",
+        "dependent-causal-id",
+        "preflight-redirect",
+        "dependent-redirect",
+        "preflight-response",
+        "dependent-response",
+        "fetch-decision",
+        "fetch-reason",
+        "preflight-audit-reason",
+        "dependent-audit-reason",
+        "preflight-finished",
+        "dependent-finished",
+        "preflight-error-text",
+        "dependent-error-text",
+        "preflight-canceled",
+        "dependent-canceled",
+        "preflight-blocked-reason",
+        "dependent-blocked-reason",
+        "preflight-cors-status",
+        "dependent-cors-status",
+    ],
+)
+def test_failed_cors_preflight_exception_rejects_every_mutated_proof(
+    mutation: str,
+) -> None:
+    with pytest.raises(DiscoveryIntegrityError, match="ledgers differ"):
+        _exercise_failed_cors_preflight_exception(mutation=mutation)
+
+
+def test_failed_cors_preflight_exception_rejects_post_terminal_before_preflight() -> None:
+    with pytest.raises(DiscoveryIntegrityError, match="ledgers differ"):
+        _exercise_failed_cors_preflight_exception(
+            order="post-first",
+            mutation="dependent-terminal-before-preflight",
+        )
 
 
 def test_https_get_observation_requires_matching_source_aware_interception():
@@ -689,7 +1050,11 @@ def test_request_stage_admission_rejects_a_response_stage_event():
         )
 
 
-def test_discover_page_installs_request_stage_policy_before_navigation(monkeypatch):
+@pytest.mark.parametrize("shutdown_case", ["none", "network-fetch", "network-only"])
+def test_discover_page_installs_request_stage_policy_before_navigation(
+    monkeypatch,
+    shutdown_case: str,
+):
     clock_ns = [0]
     driver_validations = []
     monkeypatch.setattr(discover_module.time, "monotonic_ns", lambda: clock_ns[0])
@@ -758,6 +1123,8 @@ def test_discover_page_installs_request_stage_policy_before_navigation(monkeypat
             "documentURL": "https://page.test/",
         },
     ]
+    for event in events:
+        event["initiator"] = {"type": "other"}
 
     class Session:
         def __init__(self) -> None:
@@ -814,7 +1181,7 @@ def test_discover_page_installs_request_stage_policy_before_navigation(monkeypat
                     self.handlers["Network.responseReceived"](
                         {
                             "requestId": network_id,
-                            "hasExtraInfo": False,
+                            "hasExtraInfo": network_id == "cdn",
                             "response": {},
                         }
                     )
@@ -822,7 +1189,14 @@ def test_discover_page_installs_request_stage_policy_before_navigation(monkeypat
             if command == "Fetch.failRequest":
                 network_event = self.paused[parameters["requestId"]].pop(0)
                 self.handlers["Network.requestWillBeSent"](network_event)
-                self.handlers["Network.loadingFailed"]({"requestId": network_event["requestId"]})
+                self.handlers["Network.loadingFailed"](
+                    {
+                        "requestId": network_event["requestId"],
+                        "errorText": "net::ERR_BLOCKED_BY_CLIENT",
+                        "canceled": False,
+                        "blockedReason": "inspector",
+                    }
+                )
             return {}
 
     class Page:
@@ -899,6 +1273,42 @@ def test_discover_page_installs_request_stage_policy_before_navigation(monkeypat
 
         def close(self) -> None:
             self.closed = True
+            network = None
+            if shutdown_case in {"network-fetch", "network-only"}:
+                network = {
+                    "requestId": "shutdown-network",
+                    "loaderId": "shutdown-loader",
+                    "frameId": "root-frame",
+                    "type": "Other",
+                    "request": {
+                        "method": "GET",
+                        "url": "https://page.test/favicon.ico",
+                    },
+                }
+                self.session.handlers["Network.requestWillBeSent"](network)
+                if shutdown_case == "network-fetch":
+                    self.session.handlers["Network.requestWillBeSentExtraInfo"](
+                        {
+                            "requestId": "shutdown-network",
+                            "headers": {"X-QCSD-Cutoff": "disposal"},
+                        }
+                    )
+            self.session.handlers["Network.requestWillBeSentExtraInfo"](
+                {
+                    "requestId": "cdn",
+                    "headers": {"X-QCSD-Cutoff": "scientific"},
+                }
+            )
+            if network is not None and shutdown_case == "network-fetch":
+                self.session.handlers["Fetch.requestPaused"](
+                    {
+                        "requestId": "shutdown-fetch",
+                        "networkId": "shutdown-network",
+                        "frameId": "root-frame",
+                        "resourceType": "Other",
+                        "request": network["request"],
+                    }
+                )
             self.page.close()
 
     class BrowserSession:
@@ -1089,6 +1499,10 @@ def test_discover_page_installs_request_stage_policy_before_navigation(monkeypat
     ]
     assert [resource["id"] for resource in result.resources] == [0, 1, 2, 3]
     assert [resource["depends_on"] for resource in result.resources] == [[], [0], [1], [1]]
+    assert result.resources[2]["headers"] == [
+        ["accept", "*/*"],
+        ["x-qcsd-cutoff", "scientific"],
+    ]
     assert result.observed_request_count == 6
     assert result.expandable_origins == [
         "https://cdn.test",
@@ -1135,7 +1549,35 @@ def test_discover_page_installs_request_stage_policy_before_navigation(monkeypat
         "terminal_event_count": 5,
         "resource_occurrence_count": 4,
         "exclusion_occurrence_count": 2,
+        "blocked_preflight_dependent_count": 0,
     }
+    if shutdown_case == "network-fetch":
+        expected_disposal = _normal_shutdown_disposal_summary(
+            network_total=1,
+            fetch_total=1,
+            matched_total=1,
+        )
+    elif shutdown_case == "network-only":
+        expected_disposal = _normal_shutdown_disposal_summary(
+            network_total=1,
+            network_only_synthetic_total=1,
+        )
+    else:
+        expected_disposal = _normal_shutdown_disposal_summary()
+    assert (
+        result.discovery_event_audit["normal_shutdown_disposal_summary"]
+        == expected_disposal
+    )
+    assert all(
+        event.get("url") != "https://page.test/favicon.ico"
+        for event in result.discovery_event_audit["events"]
+    )
+    assert all(
+        command not in {"Fetch.continueRequest", "Fetch.failRequest"}
+        or not isinstance(parameters, dict)
+        or parameters.get("requestId") != "shutdown-fetch"
+        for command, parameters in browser.context.session.commands
+    )
 
 
 def test_navigation_load_wait_surfaces_router_failure_after_one_poll(
@@ -1441,13 +1883,35 @@ def test_discover_page_aborts_pre_shutdown_failure_without_masking_primary(
         egress_prearm_summary = _egress_prearm_summary()
         srcdoc_pseudo_document_summary = _srcdoc_pseudo_document_summary()
 
-        def __init__(self, *_args, **_kwargs) -> None:
+        def __init__(self, *_args, **kwargs) -> None:
             self.abort_started = False
+            self.on_event = kwargs["on_event"]
 
         def start(self) -> None:
             lifecycle.append("router-start")
             if failure_kind == "router-start-setup-failure":
                 raise SetupFailure("synthetic router setup failure")
+            if failure_kind == "normal-shutdown-guard-failure":
+                self.on_event(
+                    CdpTargetSource((), "page", "page"),
+                    "Network.requestWillBeSent",
+                    {
+                        "requestId": "page",
+                        "request": {
+                            "method": "GET",
+                            "url": "about:blank",
+                            "headers": {},
+                        },
+                        "type": "Other",
+                        "initiator": {"type": "other"},
+                        "documentURL": "https://page.test/",
+                    },
+                )
+                self.on_event(
+                    CdpTargetSource((), "page", "page"),
+                    "Network.loadingFinished",
+                    {"requestId": "page"},
+                )
 
         def raise_if_failed(self) -> None:
             if failure_kind in {"egress-priority", "router-priority"} and browser.closed:
@@ -1756,61 +2220,136 @@ def test_post_cutoff_network_occurrence_cannot_enter_an_accepted_graph() -> None
         occurrence_ids=[event["occurrence_id"]],
     )
     audit.freeze()
-    late = audit.record_network(
-        source,
-        {
-            "requestId": "late",
-            "request": {"method": "GET", "url": "https://page.test/late"},
-            "type": "Script",
-        },
-    )
-    late["mapping"] = {"kind": "resource", "resource_id": 1}
-    render = {
-        "schema_version": RENDER_OBSERVATION_SCHEMA_VERSION,
-        "clock": "monotonic-relative-ms",
-        "navigation_started_ms": 0,
-        "load_event_ms": 0,
-        "last_relevant_event_ms": 0,
-        "quiet_started_ms": 10_000,
-        "cutoff_ms": 13_000,
-        "active_request_ids": [],
-        "active_request_count": 0,
-        "router_shutdown_ready": True,
-        "bootstrap_prearm_summary": _bootstrap_prearm_summary(),
-        "egress_prearm_summary": {
-            **_egress_prearm_summary(),
-            "by_target_type": {
-                **_egress_prearm_summary()["by_target_type"],
-                "page": {
-                    **_egress_prearm_summary()["by_target_type"]["page"],
-                    "protected_api_observations": len(target_egress_apis("page")),
-                },
+    with pytest.raises(
+        DiscoveryIntegrityError,
+        match="post-cutoff Network occurrence reached the scientific audit",
+    ):
+        audit.record_network(
+            source,
+            {
+                "requestId": "late",
+                "request": {"method": "GET", "url": "https://page.test/late"},
+                "type": "Script",
             },
-        },
-        "internal_document_lifecycle_summary": _srcdoc_pseudo_document_summary(),
-        "non_replayable_egress_summary": _successful_egress_guard().success_summary(),
-        "browser_context_service_worker_count": 0,
-        "cutoff_reason": "quiescent",
-    }
-    resources = [
-        {"id": 0, "url": "https://page.test/", "type": "Document", "depends_on": []},
-        {
-            "id": 1,
-            "url": "https://page.test/late",
-            "type": "Script",
-            "depends_on": [],
-        },
-    ]
-    with pytest.raises(ValueError, match="map every retained resource"):
-        audit.build(
-            instrumentation_policy=discover_module.CDP_TARGET_INSTRUMENTATION_POLICY,
-            render_observation=render,
-            resources=resources,
-            exclusions=[],
-            approved_origins=["https://page.test"],
-            observed_origins=["https://page.test"],
-            observed_request_count=2,
         )
+
+
+def test_cutoff_boundary_applies_only_exact_delayed_scientific_extra_info() -> None:
+    source = CdpTargetSource((), "page", "page")
+    chain_key = source.request_chain_key("scientific")
+    request = DiscoveredRequest("https://page.test/", "Document", {})
+    extra_info = _RequestExtraInfoAssociator()
+    extra_info.add_request(chain_key, request, redirected=False)
+    extra_info.add_response(chain_key, True)
+    extra_info.add_terminal(chain_key, failed=False)
+    boundary = _DiscoveryCutoffBoundary()
+    boundary.begin({chain_key: 1})
+
+    assert boundary.route(
+        source,
+        "Network.requestWillBeSentExtraInfo",
+        {"requestId": "scientific", "headers": {"X-Cutoff": "exact"}},
+    )
+    assert boundary.finish(
+        extra_info,
+        _normal_shutdown_disposal_summary(
+            network_total=1,
+            fetch_total=1,
+            matched_total=1,
+        ),
+    )["terminal"] is True
+    extra_info.finish()
+    assert request.headers == {"x-cutoff": "exact"}
+
+    with pytest.raises(DiscoveryIntegrityError, match="after the discovery cutoff"):
+        boundary.route(
+            source,
+            "Network.requestWillBeSentExtraInfo",
+            {"requestId": "scientific", "headers": {}},
+        )
+
+
+def test_cutoff_boundary_rejects_unprovable_worker_owner_extra_info() -> None:
+    owner = CdpTargetSource((), "page", "page")
+    worker = CdpTargetSource(
+        ("worker-session",),
+        "worker-target",
+        "worker",
+        parent_session_path=(),
+    )
+    chain_key = worker.request_chain_key("shared-raw-id")
+    boundary = _DiscoveryCutoffBoundary()
+    boundary.begin({chain_key: 1})
+    boundary.route(
+        owner,
+        "Network.requestWillBeSentExtraInfo",
+        {"requestId": "shared-raw-id", "headers": {"X-Cutoff": "unproven"}},
+    )
+
+    with pytest.raises(DiscoveryIntegrityError, match="not an exact scientific chain"):
+        boundary.finish(
+            _RequestExtraInfoAssociator(),
+            _normal_shutdown_disposal_summary(),
+        )
+
+
+def test_cutoff_boundary_resolves_all_extra_info_before_applying_any() -> None:
+    source = CdpTargetSource((), "page", "page")
+    chain_key = source.request_chain_key("scientific")
+    request = DiscoveredRequest("https://page.test/", "Document", {})
+    extra_info = _RequestExtraInfoAssociator()
+    extra_info.add_request(chain_key, request, redirected=False)
+    extra_info.add_response(chain_key, True)
+    extra_info.add_terminal(chain_key, failed=False)
+    boundary = _DiscoveryCutoffBoundary()
+    boundary.begin({chain_key: 1})
+    boundary.route(
+        source,
+        "Network.requestWillBeSentExtraInfo",
+        {"requestId": "scientific", "headers": {"X-Cutoff": "valid"}},
+    )
+    boundary.route(
+        source,
+        "Network.requestWillBeSentExtraInfo",
+        {"requestId": "unknown", "headers": {"X-Cutoff": "unknown"}},
+    )
+
+    with pytest.raises(DiscoveryIntegrityError, match="not an exact scientific chain"):
+        boundary.finish(extra_info, _normal_shutdown_disposal_summary())
+    assert request.headers == {}
+
+
+@pytest.mark.parametrize(
+    "method",
+    [
+        "Fetch.requestPaused",
+        "Network.requestWillBeSent",
+        "Network.requestServedFromCache",
+        "Network.responseReceived",
+        "Network.loadingFinished",
+        "Network.loadingFailed",
+    ],
+)
+def test_cutoff_boundary_rejects_non_extra_info_callbacks(method: str) -> None:
+    source = CdpTargetSource((), "page", "page")
+    chain_key = source.request_chain_key("scientific")
+    boundary = _DiscoveryCutoffBoundary()
+    boundary.begin({chain_key: 1})
+
+    with pytest.raises(DiscoveryIntegrityError, match="escaped router quarantine"):
+        boundary.route(source, method, {"requestId": "scientific"})
+
+
+def test_cutoff_boundary_requires_a_terminal_disposal_summary() -> None:
+    source = CdpTargetSource((), "page", "page")
+    chain_key = source.request_chain_key("scientific")
+    boundary = _DiscoveryCutoffBoundary()
+    boundary.begin({chain_key: 1})
+    summary = _normal_shutdown_disposal_summary()
+    summary["terminal"] = False
+
+    with pytest.raises(DiscoveryIntegrityError, match="summary did not verify"):
+        boundary.finish(_RequestExtraInfoAssociator(), summary)
 
 
 def test_initiator_stack_recurses_and_dependency_resolution_is_latest_scoped() -> None:
@@ -1870,7 +2409,7 @@ def test_dependency_resolution_selects_latest_across_sources_in_exact_frame_scop
     )
 
 
-def test_dependency_resolution_keeps_parent_frame_fallback_ambiguity_closed() -> None:
+def test_dependency_resolution_leaves_parent_frame_fallback_ambiguity_unresolved() -> None:
     first = CdpTargetSource(("first",), "first", "iframe")
     second = CdpTargetSource(("second",), "second", "iframe")
     current = CdpTargetSource(
@@ -1881,7 +2420,7 @@ def test_dependency_resolution_keeps_parent_frame_fallback_ambiguity_closed() ->
     )
     url = "https://page.test/app.js"
 
-    with pytest.raises(DiscoveryIntegrityError, match="scope is ambiguous"):
+    assert (
         _resolve_dependency_url(
             [
                 _DependencyOccurrence(first, "parent-frame", url, 3),
@@ -1891,6 +2430,44 @@ def test_dependency_resolution_keeps_parent_frame_fallback_ambiguity_closed() ->
             scope="current-frame",
             url=url,
         )
+        is None
+    )
+
+
+@pytest.mark.parametrize("scope_count", [2, 4])
+def test_dependency_resolution_leaves_same_source_cross_frame_urls_unresolved(
+    scope_count: int,
+) -> None:
+    source = CdpTargetSource((), "root-page", "page")
+    url = "https://page.test/repeated.js"
+
+    assert (
+        _resolve_dependency_url(
+            [
+                _DependencyOccurrence(source, f"frame-{index}", url, index)
+                for index in range(scope_count)
+            ],
+            source=source,
+            scope="current-frame",
+            url=url,
+        )
+        is None
+    )
+
+
+def test_dependency_resolution_retains_a_unique_same_source_fallback() -> None:
+    source = CdpTargetSource((), "root-page", "page")
+    url = "https://page.test/unique.js"
+
+    assert (
+        _resolve_dependency_url(
+            [_DependencyOccurrence(source, "other-frame", url, 7)],
+            source=source,
+            scope="current-frame",
+            url=url,
+        )
+        == 7
+    )
 
 
 def test_cdp_header_merge_is_case_insensitive_and_extra_info_wins():

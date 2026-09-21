@@ -24,12 +24,15 @@ from qcsd_lab.cdp_targets import (
     _IFRAME_INSTALLATION_KIND,
     BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION,
     CDP_TARGET_INSTRUMENTATION_POLICY,
+    NORMAL_SHUTDOWN_DISPOSAL_POLICY,
+    NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
     BrowserSharedWorkerGuard,
     CdpTargetIntegrityError,
     CdpTargetSource,
     RecursiveCdpTargetRouter,
     _sanitised_protocol_error,
     validate_bootstrap_prearm_summary,
+    validate_normal_shutdown_disposal_summary,
     validate_srcdoc_pseudo_document_summary,
 )
 
@@ -1555,7 +1558,7 @@ def test_policy_is_pinned_and_root_is_instrumented_before_navigation() -> None:
     router, _observed = _router(session)
 
     assert CDP_TARGET_INSTRUMENTATION_POLICY == (
-        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v19"
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v20"
     )
     assert [method for route, method, _params in session.commands if route == ()] == [
         "Target.getTargetInfo",
@@ -3177,7 +3180,8 @@ def test_root_frame_unconsumed_swap_tombstone_ends_at_context_disposal(
     assert router._page_frame_pending_swap_removals == set()
 
 
-def test_root_frame_swap_shutdown_remove_authority_is_one_shot() -> None:
+@pytest.mark.parametrize("phase", ["running", "normal-shutdown"])
+def test_root_frame_swap_remove_authority_is_one_shot(phase: str) -> None:
     session = _FakeNonFlatSession()
     router, _observed = _router(session, track_root_srcdoc_lifecycle=True)
     frame_id = "cross-origin-frame"
@@ -3192,13 +3196,16 @@ def test_root_frame_swap_shutdown_remove_authority_is_one_shot() -> None:
         {"frameId": frame_id, "reason": "swap"},
     )
     router.raise_if_failed()
-    _begin_shutdown(router)
+    assert router._page_frame_pending_swap_removals == {frame_id}
+    if phase == "normal-shutdown":
+        _begin_shutdown(router)
     session.emit(
         (),
         "Page.frameDetached",
         {"frameId": frame_id, "reason": "remove"},
     )
     router.raise_if_failed()
+    assert router._page_frame_pending_swap_removals == set()
     session.emit(
         (),
         "Page.frameDetached",
@@ -3245,10 +3252,7 @@ def test_root_frame_detach_tombstone_rejects_other_repeated_transitions(
         router.raise_if_failed()
 
 
-@pytest.mark.parametrize("phase", ["running", "aborting"])
-def test_root_frame_swap_remove_is_accepted_only_during_normal_shutdown(
-    phase: str,
-) -> None:
+def test_root_frame_swap_remove_is_rejected_during_abort() -> None:
     session = _FakeNonFlatSession()
     router, _observed = _router(session, track_root_srcdoc_lifecycle=True)
     frame_id = "cross-origin-frame"
@@ -3263,10 +3267,9 @@ def test_root_frame_swap_remove_is_accepted_only_during_normal_shutdown(
         {"frameId": frame_id, "reason": "swap"},
     )
     router.raise_if_failed()
-    if phase == "aborting":
-        _browser_session, guard = _guard_for(router)
-        router.begin_abort()
-        guard.begin_abort()
+    _browser_session, guard = _guard_for(router)
+    router.begin_abort()
+    guard.begin_abort()
     session.emit(
         (),
         "Page.frameDetached",
@@ -3303,15 +3306,51 @@ def test_root_frame_swap_during_shutdown_creates_no_later_remove_authority() -> 
         router.raise_if_failed()
 
 
+def test_root_frame_swap_during_abort_creates_no_later_remove_authority() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, track_root_srcdoc_lifecycle=True)
+    frame_id = "cross-origin-frame"
+    session.emit(
+        (),
+        "Page.frameAttached",
+        {"frameId": frame_id, "parentFrameId": session.root_frame_id},
+    )
+    _browser_session, guard = _guard_for(router)
+    router.begin_abort()
+    guard.begin_abort()
+    session.emit(
+        (),
+        "Page.frameDetached",
+        {"frameId": frame_id, "reason": "swap"},
+    )
+    router.raise_if_failed()
+    assert router._page_frame_pending_swap_removals == set()
+    session.emit(
+        (),
+        "Page.frameDetached",
+        {"frameId": frame_id, "reason": "remove"},
+    )
+
+    with pytest.raises(CdpTargetIntegrityError, match="detachment identity is invalid"):
+        router.raise_if_failed()
+
+
 @pytest.mark.parametrize("reason", ["remove", "swap"])
 @pytest.mark.parametrize("frame_id", ["unknown-frame", "root-frame"])
+@pytest.mark.parametrize("phase", ["running", "normal-shutdown", "aborting"])
 def test_root_frame_detach_tombstone_never_authorises_unknown_or_root_identity(
     reason: str,
     frame_id: str,
+    phase: str,
 ) -> None:
     session = _FakeNonFlatSession()
     router, _observed = _router(session, track_root_srcdoc_lifecycle=True)
-    _begin_shutdown(router)
+    if phase == "normal-shutdown":
+        _begin_shutdown(router)
+    elif phase == "aborting":
+        _browser_session, guard = _guard_for(router)
+        router.begin_abort()
+        guard.begin_abort()
     session.emit(
         (),
         "Page.frameDetached",
@@ -9649,6 +9688,88 @@ def _abort_fetch_pause(**changes: Any) -> dict[str, Any]:
     return event
 
 
+def _normal_shutdown_network(**changes: Any) -> dict[str, Any]:
+    event: dict[str, Any] = {
+        "requestId": "abort-favicon-network",
+        "loaderId": "shutdown-loader",
+        "frameId": "root-frame",
+        "type": "Other",
+        "request": {"method": "GET", "url": "https://root.test/favicon.ico"},
+    }
+    event.update(changes)
+    return event
+
+
+def _valid_normal_shutdown_disposal_summary() -> dict[str, Any]:
+    return {
+        "schema_version": NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
+        "policy": NORMAL_SHUTDOWN_DISPOSAL_POLICY,
+        "started": True,
+        "terminal": True,
+        "network_total": 2,
+        "fetch_total": 1,
+        "matched_total": 1,
+        "network_only_synthetic_total": 1,
+        "pending_network_total": 0,
+        "pending_fetch_total": 0,
+        "terminal_outcomes": {
+            "Network.loadingFinished": 1,
+            "Network.loadingFailed": 0,
+            "Network.redirectResponse": 0,
+            "qcsd-shutdown": 1,
+        },
+    }
+
+
+def _ready_shutdown_worker(
+    session: _FakeNonFlatSession,
+    router: RecursiveCdpTargetRouter,
+    *,
+    stem: str,
+) -> tuple[tuple[str, ...], CdpTargetSource]:
+    route, _browser_session, target_id, _target_url = _attach_worker_kind(
+        session,
+        router,
+        target_type="worker",
+        stem=stem,
+    )
+    session.emit(route, "Network.loadingFinished", {"requestId": target_id})
+    router.raise_if_failed()
+    return route, router._state(route).source
+
+
+def _shutdown_worker_network(
+    request_id: str,
+    *,
+    suffix: str = "data",
+) -> dict[str, Any]:
+    return _normal_shutdown_network(
+        requestId=request_id,
+        loaderId=f"{request_id}-loader",
+        frameId=None,
+        type="Fetch",
+        request={"method": "GET", "url": f"https://worker.test/{suffix}"},
+    )
+
+
+def _finish_test_network(
+    session: _FakeNonFlatSession,
+    route: tuple[str, ...],
+    request_id: str,
+    *,
+    timestamp: float,
+) -> None:
+    session.emit(
+        route,
+        "Network.loadingFinished",
+        {
+            "requestId": request_id,
+            "timestamp": timestamp,
+            "encodedDataLength": 0,
+        },
+    )
+
+
 @pytest.mark.parametrize("child", [False, True])
 @pytest.mark.parametrize("resource_type", ["Other", "Document", "Script"])
 @pytest.mark.parametrize("network_seen", [False, True])
@@ -9708,21 +9829,1383 @@ def test_abort_fetch_stays_paused_without_callback_registration_or_io(
     assert observed == observed_before
 
 
-@pytest.mark.parametrize("normal_shutdown", [False, True])
-def test_abort_fetch_hold_does_not_change_normal_policy(normal_shutdown: bool) -> None:
+def test_abort_fetch_hold_does_not_change_running_policy() -> None:
     session = _FakeNonFlatSession()
     router, observed = _router(session)
-    if normal_shutdown:
-        _begin_shutdown(router)
     event = _abort_fetch_pause()
     session.emit((), "Fetch.requestPaused", event)
     router.raise_if_failed()
     assert ((), "Fetch.continueRequest", {"requestId": event["requestId"]}) in session.commands
     assert observed[-1] == (router.root_source, "Fetch.requestPaused", event)
-    if normal_shutdown:
+    _clean_shutdown(router)
+
+
+@pytest.mark.parametrize("order", ["network-fetch", "fetch-network"])
+@pytest.mark.parametrize("terminal", ["real", "synthetic"])
+def test_normal_shutdown_fetch_is_held_and_exactly_reconciled(
+    order: str,
+    terminal: str,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    network = _normal_shutdown_network()
+    fetch = _abort_fetch_pause()
+    _begin_shutdown(router)
+    commands_before = list(session.commands)
+    observed_before = list(observed)
+
+    events = (
+        (("Network.requestWillBeSent", network), ("Fetch.requestPaused", fetch))
+        if order == "network-fetch"
+        else (("Fetch.requestPaused", fetch), ("Network.requestWillBeSent", network))
+    )
+    for method, event in events:
+        session.emit((), method, event)
+        router.raise_if_failed()
+    if terminal == "real":
+        session.emit(
+            (),
+            "Network.loadingFinished",
+            {
+                "requestId": network["requestId"],
+                "timestamp": 1.0,
+                "encodedDataLength": 0,
+            },
+        )
+        router.raise_if_failed()
+    _finish(router)
+
+    assert session.commands == commands_before
+    assert observed == observed_before
+    assert router.normal_shutdown_disposal_summary == {
+        "schema_version": NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
+        "policy": NORMAL_SHUTDOWN_DISPOSAL_POLICY,
+        "started": True,
+        "terminal": True,
+        "network_total": 1,
+        "fetch_total": 1,
+        "matched_total": 1,
+        "network_only_synthetic_total": 0,
+        "pending_network_total": 0,
+        "pending_fetch_total": 0,
+            "terminal_outcomes": {
+                "Network.loadingFinished": int(terminal == "real"),
+                "Network.loadingFailed": 0,
+                "Network.redirectResponse": 0,
+                "qcsd-shutdown": int(terminal == "synthetic"),
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "order",
+    [
+        ("network-first", "network-final", "fetch-first", "fetch-final"),
+        ("network-first", "fetch-first", "network-final", "fetch-final"),
+        ("network-first", "fetch-first", "fetch-final", "network-final"),
+        ("fetch-first", "network-first", "network-final", "fetch-final"),
+        ("fetch-first", "network-first", "fetch-final", "network-final"),
+        ("fetch-first", "fetch-final", "network-first", "network-final"),
+    ],
+)
+def test_normal_shutdown_redirect_reconciles_every_cross_domain_order(
+    order: tuple[str, str, str, str],
+) -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    request_id = "shutdown-redirect-network"
+    first_url = "https://root.test/redirect-first"
+    final_url = "https://root.test/redirect-final"
+    network_first = _normal_shutdown_network(
+        requestId=request_id,
+        request={"method": "GET", "url": first_url},
+    )
+    network_final = _normal_shutdown_network(
+        requestId=request_id,
+        request={"method": "GET", "url": final_url},
+        redirectResponse={"status": 302},
+    )
+    fetch_first = _abort_fetch_pause(
+        requestId="shutdown-fetch-first",
+        networkId=request_id,
+        request={"method": "GET", "url": first_url},
+    )
+    fetch_final = _abort_fetch_pause(
+        requestId="shutdown-fetch-final",
+        networkId=request_id,
+        redirectedRequestId=fetch_first["requestId"],
+        request={"method": "GET", "url": final_url},
+    )
+    events = {
+        "network-first": ("Network.requestWillBeSent", network_first),
+        "network-final": ("Network.requestWillBeSent", network_final),
+        "fetch-first": ("Fetch.requestPaused", fetch_first),
+        "fetch-final": ("Fetch.requestPaused", fetch_final),
+    }
+    _begin_shutdown(router)
+    observed_before = list(observed)
+
+    for name in order:
+        method, event = events[name]
+        session.emit((), method, event)
+        router.raise_if_failed()
+    _finish(router)
+
+    assert observed == observed_before
+    assert router.normal_shutdown_disposal_summary == {
+        "schema_version": NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
+        "policy": NORMAL_SHUTDOWN_DISPOSAL_POLICY,
+        "started": True,
+        "terminal": True,
+        "network_total": 2,
+        "fetch_total": 2,
+        "matched_total": 2,
+        "network_only_synthetic_total": 0,
+        "pending_network_total": 0,
+        "pending_fetch_total": 0,
+        "terminal_outcomes": {
+            "Network.loadingFinished": 0,
+            "Network.loadingFailed": 0,
+            "Network.redirectResponse": 1,
+            "qcsd-shutdown": 1,
+        },
+    }
+
+
+def test_normal_shutdown_redirect_requires_network_and_fetch_predecessors() -> None:
+    network_session = _FakeNonFlatSession()
+    network_router, network_observed = _router(network_session)
+    _begin_shutdown(network_router)
+    network_observed_before = list(network_observed)
+    network_session.emit(
+        (),
+        "Network.requestWillBeSent",
+        _normal_shutdown_network(redirectResponse={"status": 302}),
+    )
+    with pytest.raises(CdpTargetIntegrityError, match="redirect omitted its predecessor"):
+        network_router.raise_if_failed()
+    assert network_observed == network_observed_before
+
+    fetch_session = _FakeNonFlatSession()
+    fetch_router, fetch_observed = _router(fetch_session)
+    _begin_shutdown(fetch_router)
+    fetch_observed_before = list(fetch_observed)
+    fetch_session.emit(
+        (),
+        "Fetch.requestPaused",
+        _abort_fetch_pause(
+            requestId="redirect-fetch",
+            redirectedRequestId="missing-fetch",
+        ),
+    )
+    with pytest.raises(CdpTargetIntegrityError, match="predecessor is missing"):
+        fetch_router.raise_if_failed()
+    assert fetch_observed == fetch_observed_before
+
+
+def test_normal_shutdown_redirect_rejects_missing_fetch_predecessor_field() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    request_id = "missing-fetch-predecessor-field"
+    first_url = "https://root.test/first"
+    final_url = "https://root.test/final"
+    _begin_shutdown(router)
+    for method, event in (
+        (
+            "Network.requestWillBeSent",
+            _normal_shutdown_network(
+                requestId=request_id,
+                request={"method": "GET", "url": first_url},
+            ),
+        ),
+        (
+            "Network.requestWillBeSent",
+            _normal_shutdown_network(
+                requestId=request_id,
+                redirectResponse={"status": 302},
+                request={"method": "GET", "url": final_url},
+            ),
+        ),
+        (
+            "Fetch.requestPaused",
+            _abort_fetch_pause(
+                requestId="first-fetch",
+                networkId=request_id,
+                request={"method": "GET", "url": first_url},
+            ),
+        ),
+        (
+            "Fetch.requestPaused",
+            _abort_fetch_pause(
+                requestId="final-fetch",
+                networkId=request_id,
+                request={"method": "GET", "url": final_url},
+            ),
+        ),
+    ):
+        session.emit((), method, event)
+        router.raise_if_failed()
+
+    with pytest.raises(CdpTargetIntegrityError, match="no exact Network occurrence"):
         _finish(router)
+
+
+def test_normal_shutdown_redirect_fetch_predecessor_must_keep_network_identity() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    _begin_shutdown(router)
+    first = _abort_fetch_pause(
+        requestId="first-fetch",
+        networkId="first-network",
+    )
+    session.emit((), "Fetch.requestPaused", first)
+    session.emit(
+        (),
+        "Fetch.requestPaused",
+        _abort_fetch_pause(
+            requestId="redirect-fetch",
+            networkId="other-network",
+            redirectedRequestId=first["requestId"],
+        ),
+    )
+
+    with pytest.raises(CdpTargetIntegrityError, match="predecessor is invalid"):
+        router.raise_if_failed()
+
+
+def test_normal_shutdown_redirect_fetch_predecessor_must_be_unique() -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    child = session.attach(
+        (),
+        session_id="redirect-predecessor-child-session",
+        target_id="redirect-predecessor-child",
+        target_type="iframe",
+        parent_frame_id=session.root_frame_id,
+    )
+    request_id = "ambiguous-redirect-network"
+    first = _abort_fetch_pause(
+        requestId="ambiguous-predecessor-fetch",
+        networkId=request_id,
+        frameId="redirect-predecessor-child",
+    )
+    _begin_shutdown(router)
+    session.emit((), "Fetch.requestPaused", first)
+    session.emit(child, "Fetch.requestPaused", first)
+    router.raise_if_failed()
+    observed_before = list(observed)
+    session.emit(
+        child,
+        "Fetch.requestPaused",
+        _abort_fetch_pause(
+            requestId="ambiguous-successor-fetch",
+            networkId=request_id,
+            frameId="redirect-predecessor-child",
+            redirectedRequestId=first["requestId"],
+        ),
+    )
+
+    with pytest.raises(CdpTargetIntegrityError, match="predecessor is missing or ambiguous"):
+        router.raise_if_failed()
+    assert observed == observed_before
+
+
+@pytest.mark.parametrize("kind", ["network", "fetch"])
+def test_normal_shutdown_redirect_legs_count_towards_identity_bounds(
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+) -> None:
+    monkeypatch.setattr(cdp_targets_module, "_NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT", 1)
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    _begin_shutdown(router)
+    if kind == "network":
+        session.emit((), "Network.requestWillBeSent", _normal_shutdown_network())
+        router.raise_if_failed()
+        session.emit(
+            (),
+            "Network.requestWillBeSent",
+            _normal_shutdown_network(
+                redirectResponse={"status": 302},
+                request={"method": "GET", "url": "https://root.test/final"},
+            ),
+        )
     else:
-        _clean_shutdown(router)
+        first = _abort_fetch_pause()
+        session.emit((), "Fetch.requestPaused", first)
+        router.raise_if_failed()
+        session.emit(
+            (),
+            "Fetch.requestPaused",
+            _abort_fetch_pause(
+                requestId="redirect-fetch",
+                redirectedRequestId=first["requestId"],
+                request={"method": "GET", "url": "https://root.test/final"},
+            ),
+        )
+
+    with pytest.raises(CdpTargetIntegrityError, match="identity bound was exceeded"):
+        router.raise_if_failed()
+
+
+def test_normal_shutdown_network_only_requires_and_records_synthetic_cancellation() -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    _begin_shutdown(router)
+    observed_before = list(observed)
+    session.emit((), "Network.requestWillBeSent", _normal_shutdown_network())
+    router.raise_if_failed()
+    _finish(router)
+
+    assert observed == observed_before
+    summary = router.normal_shutdown_disposal_summary
+    assert summary["terminal"] is True
+    assert summary["network_total"] == 1
+    assert summary["fetch_total"] == 0
+    assert summary["matched_total"] == 0
+    assert summary["network_only_synthetic_total"] == 1
+    assert summary["terminal_outcomes"] == {
+        "Network.loadingFinished": 0,
+        "Network.loadingFailed": 0,
+        "Network.redirectResponse": 0,
+        "qcsd-shutdown": 1,
+    }
+
+
+def test_normal_shutdown_quarantines_every_disposal_owned_network_event() -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    network = _normal_shutdown_network()
+    _begin_shutdown(router)
+    observed_before = list(observed)
+
+    for method, event in (
+        ("Network.requestWillBeSent", network),
+        (
+            "Network.requestWillBeSentExtraInfo",
+            {"requestId": network["requestId"], "headers": {}},
+        ),
+        (
+            "Network.responseReceived",
+            {
+                "requestId": network["requestId"],
+                "timestamp": 1.0,
+                "type": "Other",
+                "response": {},
+            },
+        ),
+        ("Fetch.requestPaused", _abort_fetch_pause()),
+        (
+            "Network.loadingFinished",
+            {
+                "requestId": network["requestId"],
+                "timestamp": 2.0,
+                "encodedDataLength": 0,
+            },
+        ),
+    ):
+        session.emit((), method, event)
+        router.raise_if_failed()
+
+    _finish(router)
+    assert observed == observed_before
+
+
+def test_normal_shutdown_forwards_an_unclassified_delayed_network_event() -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    _begin_shutdown(router)
+    event = {"requestId": "unclassified-request", "headers": {}}
+
+    session.emit((), "Network.requestWillBeSentExtraInfo", event)
+    router.raise_if_failed()
+
+    assert observed[-1] == (
+        router.root_source,
+        "Network.requestWillBeSentExtraInfo",
+        event,
+    )
+    _finish(router)
+
+
+def test_normal_shutdown_preserves_pre_cutoff_scientific_network_callbacks() -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    network = _normal_shutdown_network(requestId="scientific-network")
+    session.emit((), "Network.requestWillBeSent", network)
+    router.raise_if_failed()
+    _begin_shutdown(router)
+    response = {
+        "requestId": network["requestId"],
+        "timestamp": 1.0,
+        "type": "Other",
+        "response": {},
+    }
+
+    session.emit((), "Network.responseReceived", response)
+    router.raise_if_failed()
+    _finish(router)
+
+    assert observed[-3:] == [
+        (router.root_source, "Network.requestWillBeSent", network),
+        (router.root_source, "Network.responseReceived", response),
+        (
+            router.root_source,
+            "Network.loadingFailed",
+            {
+                "requestId": network["requestId"],
+                "canceled": True,
+                "qcsdShutdown": True,
+            },
+        ),
+    ]
+
+
+@pytest.mark.parametrize("terminal_phase", ["before-shutdown", "during-shutdown"])
+def test_normal_shutdown_routes_delayed_worker_extra_info_to_scientific_source(
+    terminal_phase: str,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    worker, worker_source = _ready_shutdown_worker(
+        session,
+        router,
+        stem=f"delayed-extra-info-{terminal_phase}",
+    )
+    request_id = "delayed-worker-data"
+    session.emit(worker, "Network.requestWillBeSent", _shutdown_worker_network(request_id))
+    router.raise_if_failed()
+    if terminal_phase == "before-shutdown":
+        _finish_test_network(session, worker, request_id, timestamp=1.0)
+        router.raise_if_failed()
+    _begin_shutdown(router)
+    if terminal_phase == "during-shutdown":
+        _finish_test_network(session, worker, request_id, timestamp=1.0)
+        router.raise_if_failed()
+
+    session.emit(
+        (),
+        "Network.requestWillBeSentExtraInfo",
+        {"requestId": request_id, "headers": {}},
+    )
+    router.raise_if_failed()
+
+    assert observed[-1] == (
+        worker_source,
+        "Network.requestWillBeSentExtraInfo",
+        {"requestId": request_id, "headers": {}},
+    )
+    _finish(router)
+
+
+def test_normal_shutdown_routes_live_worker_extra_info_before_its_terminal() -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    worker, worker_source = _ready_shutdown_worker(
+        session,
+        router,
+        stem="live-extra-info-order",
+    )
+    request_id = "live-worker-data"
+    session.emit(worker, "Network.requestWillBeSent", _shutdown_worker_network(request_id))
+    router.raise_if_failed()
+    _begin_shutdown(router)
+
+    session.emit(
+        (),
+        "Network.requestWillBeSentExtraInfo",
+        {"requestId": request_id, "headers": {}},
+    )
+    router.raise_if_failed()
+    assert observed[-1][0] == worker_source
+    _finish_test_network(session, worker, request_id, timestamp=1.0)
+    router.raise_if_failed()
+    _finish(router)
+
+
+def test_live_worker_redirect_routes_extra_info_for_each_network_occurrence() -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    worker, worker_source = _ready_shutdown_worker(
+        session,
+        router,
+        stem="live-extra-info-redirect",
+    )
+    request_id = "live-worker-redirect"
+    first = _shutdown_worker_network(request_id, suffix="redirect-first")
+    redirected = {
+        **_shutdown_worker_network(request_id, suffix="redirect-final"),
+        "redirectResponse": {"status": 302},
+    }
+    session.emit(worker, "Network.requestWillBeSent", first)
+    session.emit(
+        (),
+        "Network.requestWillBeSentExtraInfo",
+        {"requestId": request_id, "headers": {"x-leg": "first"}},
+    )
+    router.raise_if_failed()
+    session.emit(worker, "Network.requestWillBeSent", redirected)
+    session.emit(
+        (),
+        "Network.requestWillBeSentExtraInfo",
+        {"requestId": request_id, "headers": {"x-leg": "final"}},
+    )
+    router.raise_if_failed()
+
+    routed = [
+        source
+        for source, method, event in observed
+        if method == "Network.requestWillBeSentExtraInfo"
+        and event.get("requestId") == request_id
+    ]
+    assert routed == [worker_source, worker_source]
+    _finish_test_network(session, worker, request_id, timestamp=1.0)
+    router.raise_if_failed()
+    _clean_shutdown(router)
+
+
+def test_delayed_worker_redirect_routes_exact_fifo_then_rejects_excess() -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    worker, worker_source = _ready_shutdown_worker(
+        session,
+        router,
+        stem="delayed-extra-info-redirect",
+    )
+    request_id = "delayed-worker-redirect"
+    session.emit(
+        worker,
+        "Network.requestWillBeSent",
+        _shutdown_worker_network(request_id, suffix="redirect-first"),
+    )
+    session.emit(
+        worker,
+        "Network.requestWillBeSent",
+        {
+            **_shutdown_worker_network(request_id, suffix="redirect-final"),
+            "redirectResponse": {"status": 302},
+        },
+    )
+    _finish_test_network(session, worker, request_id, timestamp=1.0)
+    router.raise_if_failed()
+    _begin_shutdown(router)
+
+    for leg in ("first", "final"):
+        session.emit(
+            (),
+            "Network.requestWillBeSentExtraInfo",
+            {"requestId": request_id, "headers": {"x-leg": leg}},
+        )
+        router.raise_if_failed()
+        assert observed[-1][0] == worker_source
+    observed_before = list(observed)
+    session.emit(
+        (),
+        "Network.requestWillBeSentExtraInfo",
+        {"requestId": request_id, "headers": {"x-leg": "excess"}},
+    )
+
+    with pytest.raises(CdpTargetIntegrityError, match="occurrence bound"):
+        router.raise_if_failed()
+    assert observed == observed_before
+
+
+def test_delayed_worker_extra_info_rejects_scientific_owner_collision() -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    request_id = "scientific-owner-collision"
+    owner_network = _normal_shutdown_network(requestId=request_id)
+    session.emit((), "Network.requestWillBeSent", owner_network)
+    _finish_test_network(session, (), request_id, timestamp=1.0)
+    worker, _worker_source = _ready_shutdown_worker(
+        session,
+        router,
+        stem="scientific-owner-collision",
+    )
+    session.emit(worker, "Network.requestWillBeSent", _shutdown_worker_network(request_id))
+    _finish_test_network(session, worker, request_id, timestamp=2.0)
+    router.raise_if_failed()
+    _begin_shutdown(router)
+    observed_before = list(observed)
+
+    session.emit(
+        (),
+        "Network.requestWillBeSentExtraInfo",
+        {"requestId": request_id, "headers": {}},
+    )
+
+    with pytest.raises(CdpTargetIntegrityError, match="owner history"):
+        router.raise_if_failed()
+    assert observed == observed_before
+
+
+def test_delayed_worker_extra_info_rejects_two_scientific_workers() -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    request_id = "ambiguous-scientific-workers"
+    for index in range(2):
+        worker, _worker_source = _ready_shutdown_worker(
+            session,
+            router,
+            stem=f"ambiguous-scientific-worker-{index}",
+        )
+        session.emit(
+            worker,
+            "Network.requestWillBeSent",
+            _shutdown_worker_network(request_id, suffix=f"data-{index}"),
+        )
+        _finish_test_network(
+            session,
+            worker,
+            request_id,
+            timestamp=float(index + 1),
+        )
+        router.raise_if_failed()
+    _begin_shutdown(router)
+    observed_before = list(observed)
+
+    session.emit(
+        (),
+        "Network.requestWillBeSentExtraInfo",
+        {"requestId": request_id, "headers": {}},
+    )
+
+    with pytest.raises(CdpTargetIntegrityError, match="scientific migration is ambiguous"):
+        router.raise_if_failed()
+    assert observed == observed_before
+
+
+def test_delayed_worker_extra_info_rejects_reused_target_generation() -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    request_id = "generation-reused-worker-data"
+    target_id = "generation-reused-worker"
+    for generation in range(2):
+        worker_source = CdpTargetSource(
+            (f"generation-reused-worker-session-{generation}",),
+            target_id,
+            "worker",
+            generation,
+            (),
+            session.root_frame_id,
+        )
+        identity = (worker_source, request_id)
+        router._pre_shutdown_network_identities.add(identity)
+        router._pre_shutdown_network_occurrence_counts[identity] = 1
+        router._pre_shutdown_network_occurrence_total += 1
+        router._worker_bootstraps[worker_source] = cdp_targets_module._WorkerBootstrap(
+            source=worker_source,
+            url=f"https://worker.test/generation-{generation}.js",
+            parent_route=(),
+            parent_frame_id=session.root_frame_id,
+            browser_context_id="root-context",
+            owner_source=router.root_source,
+        )
+    _begin_shutdown(router)
+    observed_before = list(observed)
+
+    session.emit(
+        (),
+        "Network.requestWillBeSentExtraInfo",
+        {"requestId": request_id, "headers": {}},
+    )
+
+    with pytest.raises(CdpTargetIntegrityError, match="scientific migration is ambiguous"):
+        router.raise_if_failed()
+    assert observed == observed_before
+
+
+def test_delayed_worker_extra_info_rejects_reused_scientific_identity() -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    worker, _worker_source = _ready_shutdown_worker(
+        session,
+        router,
+        stem="reused-scientific-worker",
+    )
+    request_id = "reused-scientific-worker-data"
+    for index in range(2):
+        session.emit(
+            worker,
+            "Network.requestWillBeSent",
+            _shutdown_worker_network(request_id, suffix=f"data-{index}"),
+        )
+        _finish_test_network(
+            session,
+            worker,
+            request_id,
+            timestamp=float(index + 1),
+        )
+        router.raise_if_failed()
+    _begin_shutdown(router)
+    observed_before = list(observed)
+
+    session.emit(
+        (),
+        "Network.requestWillBeSentExtraInfo",
+        {"requestId": request_id, "headers": {}},
+    )
+
+    with pytest.raises(CdpTargetIntegrityError, match="scientific identity was reused"):
+        router.raise_if_failed()
+    assert observed == observed_before
+
+
+def test_delayed_worker_extra_info_rejects_a_second_claim() -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    worker, _worker_source = _ready_shutdown_worker(
+        session,
+        router,
+        stem="claimed-scientific-worker",
+    )
+    request_id = "claimed-scientific-worker-data"
+    session.emit(worker, "Network.requestWillBeSent", _shutdown_worker_network(request_id))
+    session.emit(
+        (),
+        "Network.requestWillBeSentExtraInfo",
+        {"requestId": request_id, "headers": {}},
+    )
+    _finish_test_network(session, worker, request_id, timestamp=1.0)
+    router.raise_if_failed()
+    _begin_shutdown(router)
+    observed_before = list(observed)
+
+    session.emit(
+        (),
+        "Network.requestWillBeSentExtraInfo",
+        {"requestId": request_id, "headers": {}},
+    )
+
+    with pytest.raises(CdpTargetIntegrityError, match="occurrence bound"):
+        router.raise_if_failed()
+    assert observed == observed_before
+
+
+def test_delayed_worker_extra_info_rejects_competing_disposal_owner() -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    scientific_worker, _scientific_source = _ready_shutdown_worker(
+        session,
+        router,
+        stem="scientific-extra-info-owner",
+    )
+    disposal_worker, _disposal_source = _ready_shutdown_worker(
+        session,
+        router,
+        stem="disposal-extra-info-owner",
+    )
+    request_id = "cross-cutoff-worker-data"
+    session.emit(
+        scientific_worker,
+        "Network.requestWillBeSent",
+        _shutdown_worker_network(request_id, suffix="scientific"),
+    )
+    _finish_test_network(
+        session,
+        scientific_worker,
+        request_id,
+        timestamp=1.0,
+    )
+    router.raise_if_failed()
+    _begin_shutdown(router)
+    session.emit(
+        disposal_worker,
+        "Network.requestWillBeSent",
+        _shutdown_worker_network(request_id, suffix="disposal"),
+    )
+    router.raise_if_failed()
+    observed_before = list(observed)
+
+    session.emit(
+        (),
+        "Network.requestWillBeSentExtraInfo",
+        {"requestId": request_id, "headers": {}},
+    )
+
+    with pytest.raises(CdpTargetIntegrityError, match="competing live and delayed"):
+        router.raise_if_failed()
+    assert observed == observed_before
+
+
+def test_normal_shutdown_rejects_a_pre_cutoff_network_identity_reuse() -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    network = _normal_shutdown_network(requestId="cross-cutoff-network")
+    session.emit((), "Network.requestWillBeSent", network)
+    session.emit(
+        (),
+        "Network.loadingFinished",
+        {
+            "requestId": network["requestId"],
+            "timestamp": 1.0,
+            "encodedDataLength": 0,
+        },
+    )
+    router.raise_if_failed()
+    _begin_shutdown(router)
+    observed_before = list(observed)
+
+    session.emit((), "Network.requestWillBeSent", network)
+
+    with pytest.raises(CdpTargetIntegrityError, match="crossed the normal shutdown boundary"):
+        router.raise_if_failed()
+    assert observed == observed_before
+
+
+@pytest.mark.parametrize("disposal_terminal", [False, True])
+def test_normal_shutdown_rejects_owner_routed_extra_info_aliasing_scientific_history(
+    disposal_terminal: bool,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    historical = _normal_shutdown_network(requestId="shared-network-identity")
+    session.emit((), "Network.requestWillBeSent", historical)
+    session.emit(
+        (),
+        "Network.loadingFinished",
+        {
+            "requestId": historical["requestId"],
+            "timestamp": 1.0,
+            "encodedDataLength": 0,
+        },
+    )
+    worker, _browser_session, _target_id, _target_url = _attach_worker_kind(
+        session,
+        router,
+        target_type="worker",
+        stem="shutdown-extra-info-alias",
+    )
+    _begin_shutdown(router)
+    disposal = _normal_shutdown_network(
+        requestId=historical["requestId"],
+        loaderId="shutdown-worker-loader",
+        frameId=None,
+        type="Fetch",
+        request={"method": "GET", "url": "https://worker.test/data"},
+    )
+    session.emit(worker, "Network.requestWillBeSent", disposal)
+    router.raise_if_failed()
+    if disposal_terminal:
+        session.emit(
+            worker,
+            "Network.loadingFinished",
+            {
+                "requestId": disposal["requestId"],
+                "timestamp": 2.0,
+                "encodedDataLength": 0,
+            },
+        )
+        router.raise_if_failed()
+    observed_before = list(observed)
+
+    session.emit(
+        (),
+        "Network.requestWillBeSentExtraInfo",
+        {"requestId": historical["requestId"], "headers": {}},
+    )
+
+    with pytest.raises(
+        CdpTargetIntegrityError,
+        match="ambiguous across the normal shutdown boundary",
+    ):
+        router.raise_if_failed()
+    assert observed == observed_before
+
+
+def test_normal_shutdown_requires_complete_pre_cutoff_network_identity_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cdp_targets_module, "_PRE_SHUTDOWN_NETWORK_IDENTITY_LIMIT", 1)
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    for index in range(2):
+        network = _normal_shutdown_network(requestId=f"bounded-network-{index}")
+        session.emit((), "Network.requestWillBeSent", network)
+        session.emit(
+            (),
+            "Network.loadingFinished",
+            {
+                "requestId": network["requestId"],
+                "timestamp": float(index + 1),
+                "encodedDataLength": 0,
+            },
+        )
+        router.raise_if_failed()
+
+    with pytest.raises(CdpTargetIntegrityError, match="identity separation"):
+        _begin_shutdown(router)
+
+
+def test_abort_preserves_non_fetch_network_callbacks() -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    _browser_session, guard = _guard_for(router)
+    router.begin_abort()
+    guard.begin_abort()
+    network = _normal_shutdown_network()
+    events = (
+        ("Network.requestWillBeSent", network),
+        (
+            "Network.responseReceived",
+            {
+                "requestId": network["requestId"],
+                "timestamp": 1.0,
+                "type": "Other",
+                "response": {},
+            },
+        ),
+        (
+            "Network.loadingFinished",
+            {
+                "requestId": network["requestId"],
+                "timestamp": 2.0,
+                "encodedDataLength": 0,
+            },
+        ),
+    )
+    observed_before = len(observed)
+
+    for method, event in events:
+        session.emit((), method, event)
+        router.raise_if_failed()
+
+    assert observed[observed_before:] == [
+        (router.root_source, method, event) for method, event in events
+    ]
+    guard.finish_abort()
+    router.finish_abort()
+
+
+def test_normal_shutdown_disposal_summary_validator_requires_terminal_when_requested() -> None:
+    value = _valid_normal_shutdown_disposal_summary()
+    validated = validate_normal_shutdown_disposal_summary(value, require_terminal=True)
+    assert validated == value
+    assert validated is not value
+
+    incomplete = {
+        **value,
+        "terminal": False,
+        "network_total": 1,
+        "fetch_total": 1,
+        "matched_total": 0,
+        "network_only_synthetic_total": 0,
+        "pending_network_total": 1,
+        "pending_fetch_total": 1,
+        "terminal_outcomes": {
+            "Network.loadingFinished": 0,
+            "Network.loadingFailed": 0,
+            "Network.redirectResponse": 0,
+            "qcsd-shutdown": 0,
+        },
+    }
+    validate_normal_shutdown_disposal_summary(incomplete, require_terminal=False)
+    with pytest.raises(ValueError, match="counts are inconsistent"):
+        validate_normal_shutdown_disposal_summary(incomplete, require_terminal=True)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda value: value.update(extra=True),
+        lambda value: value.pop("policy"),
+        lambda value: value.update(schema_version=True),
+        lambda value: value.update(policy="other"),
+        lambda value: value.update(started=1),
+        lambda value: value.update(terminal=1),
+        lambda value: value.update(network_total=True),
+        lambda value: value.update(
+            network_total=cdp_targets_module._NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT
+            + 1,
+            network_only_synthetic_total=(
+                cdp_targets_module._NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT
+            ),
+            terminal_outcomes={
+                "Network.loadingFinished": 1,
+                "Network.loadingFailed": 0,
+                "Network.redirectResponse": 0,
+                "qcsd-shutdown": (
+                    cdp_targets_module._NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT
+                ),
+            },
+        ),
+        lambda value: value.update(fetch_total=2),
+        lambda value: value.update(matched_total=2),
+        lambda value: value.update(network_only_synthetic_total=2),
+        lambda value: value.update(pending_network_total=1),
+        lambda value: value["terminal_outcomes"].update({"qcsd-shutdown": True}),
+        lambda value: value["terminal_outcomes"].update({"other": 0}),
+    ],
+)
+def test_normal_shutdown_disposal_summary_validator_rejects_tampering(
+    mutate: Any,
+) -> None:
+    value = _valid_normal_shutdown_disposal_summary()
+    mutate(value)
+    with pytest.raises(ValueError, match="normal shutdown disposal"):
+        validate_normal_shutdown_disposal_summary(value, require_terminal=True)
+
+
+@pytest.mark.parametrize(
+    "fetch",
+    [
+        pytest.param(
+            _abort_fetch_pause(request={"method": "POST", "url": "https://root.test/favicon.ico"}),
+            id="method",
+        ),
+        pytest.param(
+            _abort_fetch_pause(
+                request={"method": "GET", "url": "https://root.test/other.ico"}
+            ),
+            id="url",
+        ),
+        pytest.param(_abort_fetch_pause(frameId="other-frame"), id="frame"),
+        pytest.param(_abort_fetch_pause(resourceType="Image"), id="resource-type"),
+    ],
+)
+def test_normal_shutdown_fetch_must_exactly_match_its_network(
+    fetch: Mapping[str, Any],
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    _begin_shutdown(router)
+    session.emit((), "Network.requestWillBeSent", _normal_shutdown_network())
+    session.emit((), "Fetch.requestPaused", dict(fetch))
+    router.raise_if_failed()
+
+    with pytest.raises(CdpTargetIntegrityError, match="no exact Network occurrence"):
+        _finish(router)
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        pytest.param(_without(_abort_fetch_pause(), "requestId"), id="missing-fetch-id"),
+        pytest.param(_abort_fetch_pause(requestId=""), id="empty-fetch-id"),
+        pytest.param(_without(_abort_fetch_pause(), "networkId"), id="missing-network-id"),
+        pytest.param(_abort_fetch_pause(networkId=""), id="empty-network-id"),
+        pytest.param(
+            _abort_fetch_pause(requestId="abort-favicon-network"),
+            id="identical-fetch-network-id",
+        ),
+        pytest.param(_abort_fetch_pause(resourceType=None), id="missing-resource-type"),
+        pytest.param(_abort_fetch_pause(frameId=7), id="numeric-frame"),
+        pytest.param(_abort_fetch_pause(redirectedRequestId="prior"), id="redirect"),
+        pytest.param(_abort_fetch_pause(responseStatusCode=200), id="response-stage"),
+    ],
+)
+def test_normal_shutdown_fetch_hold_rejects_malformed_pause(
+    event: Mapping[str, Any],
+) -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    _begin_shutdown(router)
+    commands_before = list(session.commands)
+    observed_before = list(observed)
+    session.emit((), "Fetch.requestPaused", dict(event))
+
+    with pytest.raises(CdpTargetIntegrityError, match="Fetch pause is malformed"):
+        router.raise_if_failed()
+    assert session.commands == commands_before
+    assert observed == observed_before
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        pytest.param(_normal_shutdown_network(type=None), id="missing-resource-type"),
+        pytest.param(
+            _normal_shutdown_network(request={"method": "", "url": "https://root.test/"}),
+            id="empty-method",
+        ),
+        pytest.param(
+            _normal_shutdown_network(request={"method": "GET", "url": ""}),
+            id="empty-url",
+        ),
+    ],
+)
+def test_normal_shutdown_disposal_rejects_malformed_network(
+    event: Mapping[str, Any],
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    _begin_shutdown(router)
+    session.emit((), "Network.requestWillBeSent", dict(event))
+
+    with pytest.raises(CdpTargetIntegrityError, match="Network occurrence is malformed"):
+        router.raise_if_failed()
+
+
+def test_normal_shutdown_rejects_duplicate_fetch_and_network_identities() -> None:
+    fetch_session = _FakeNonFlatSession()
+    fetch_router, _observed = _router(fetch_session)
+    _begin_shutdown(fetch_router)
+    fetch_session.emit((), "Fetch.requestPaused", _abort_fetch_pause())
+    fetch_session.emit((), "Fetch.requestPaused", _abort_fetch_pause())
+    with pytest.raises(CdpTargetIntegrityError, match="Fetch identity was duplicated"):
+        fetch_router.raise_if_failed()
+
+    network_session = _FakeNonFlatSession()
+    network_router, _observed = _router(network_session)
+    _begin_shutdown(network_router)
+    network = _normal_shutdown_network()
+    network_session.emit((), "Network.requestWillBeSent", network)
+    network_session.emit(
+        (),
+        "Network.loadingFinished",
+        {"requestId": network["requestId"], "timestamp": 1.0, "encodedDataLength": 0},
+    )
+    network_router.raise_if_failed()
+    network_session.emit((), "Network.requestWillBeSent", network)
+    with pytest.raises(CdpTargetIntegrityError, match="Network identity was duplicated"):
+        network_router.raise_if_failed()
+
+
+def test_normal_shutdown_reconciles_an_exact_child_target_request() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    route = session.attach(
+        (),
+        session_id="shutdown-child-session",
+        target_id="shutdown-child-frame",
+        target_type="iframe",
+        parent_frame_id=session.root_frame_id,
+    )
+    network = _normal_shutdown_network(
+        requestId="child-network",
+        loaderId="child-loader",
+        frameId="shutdown-child-frame",
+        request={"method": "GET", "url": "https://child.test/favicon.ico"},
+    )
+    fetch = _abort_fetch_pause(
+        requestId="child-fetch",
+        networkId="child-network",
+        frameId="shutdown-child-frame",
+        request={"method": "GET", "url": "https://child.test/favicon.ico"},
+    )
+    _begin_shutdown(router)
+    session.emit(route, "Fetch.requestPaused", fetch)
+    session.emit(route, "Network.requestWillBeSent", network)
+    router.raise_if_failed()
+    _finish(router)
+
+    summary = router.normal_shutdown_disposal_summary
+    assert summary["terminal"] is True
+    assert summary["network_total"] == summary["fetch_total"] == 1
+    assert summary["matched_total"] == 1
+
+
+def test_normal_shutdown_reconciles_worker_network_with_parent_page_fetch() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    worker, _browser_session, _target_id, _target_url = _attach_worker_kind(
+        session,
+        router,
+        target_type="worker",
+        stem="shutdown-worker",
+    )
+    _begin_shutdown(router)
+    session.emit(
+        worker,
+        "Network.requestWillBeSent",
+        _normal_shutdown_network(
+            requestId="worker-network",
+            loaderId="worker-loader",
+            frameId=None,
+            type="Fetch",
+            request={"method": "GET", "url": "https://worker.test/data"},
+        ),
+    )
+    session.emit(
+        (),
+        "Fetch.requestPaused",
+        _abort_fetch_pause(
+            requestId="worker-fetch",
+            networkId="worker-network",
+            frameId=session.root_frame_id,
+            resourceType="Fetch",
+            request={"method": "GET", "url": "https://worker.test/data"},
+        ),
+    )
+    router.raise_if_failed()
+    _finish(router)
+
+    summary = router.normal_shutdown_disposal_summary
+    assert summary["terminal"] is True
+    assert summary["network_total"] == summary["fetch_total"] == 1
+    assert summary["matched_total"] == 1
+
+
+def test_normal_shutdown_rejects_fetch_from_an_unrelated_child_source() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    first = session.attach(
+        (),
+        session_id="shutdown-first-session",
+        target_id="shutdown-first-frame",
+        target_type="iframe",
+        parent_frame_id=session.root_frame_id,
+    )
+    second = session.attach(
+        (),
+        session_id="shutdown-second-session",
+        target_id="shutdown-second-frame",
+        target_type="iframe",
+        parent_frame_id=session.root_frame_id,
+    )
+    _begin_shutdown(router)
+    session.emit(
+        first,
+        "Network.requestWillBeSent",
+        _normal_shutdown_network(
+            requestId="child-network",
+            loaderId="child-loader",
+            frameId="shutdown-first-frame",
+            request={"method": "GET", "url": "https://child.test/favicon.ico"},
+        ),
+    )
+    session.emit(
+        second,
+        "Fetch.requestPaused",
+        _abort_fetch_pause(
+            requestId="child-fetch",
+            networkId="child-network",
+            frameId="shutdown-first-frame",
+            request={"method": "GET", "url": "https://child.test/favicon.ico"},
+        ),
+    )
+    router.raise_if_failed()
+
+    with pytest.raises(CdpTargetIntegrityError, match="no exact Network occurrence"):
+        _finish(router)
+
+
+@pytest.mark.parametrize(
+    "order",
+    [
+        ("root-network", "child-network", "fetch"),
+        ("root-network", "fetch", "child-network"),
+        ("child-network", "root-network", "fetch"),
+        ("child-network", "fetch", "root-network"),
+        ("fetch", "root-network", "child-network"),
+        ("fetch", "child-network", "root-network"),
+    ],
+)
+def test_normal_shutdown_rejects_late_ambiguous_assignment_in_every_order(
+    order: tuple[str, str, str],
+) -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    child_route = session.attach(
+        (),
+        session_id="shutdown-ambiguous-child-session",
+        target_id="shutdown-ambiguous-child-frame",
+        target_type="iframe",
+        parent_frame_id=session.root_frame_id,
+    )
+    network = _normal_shutdown_network(
+        requestId="ambiguous-network",
+        frameId="shutdown-ambiguous-child-frame",
+        request={"method": "GET", "url": "https://child.test/favicon.ico"},
+    )
+    fetch = _abort_fetch_pause(
+        requestId="ambiguous-fetch",
+        networkId="ambiguous-network",
+        frameId="shutdown-ambiguous-child-frame",
+        request={"method": "GET", "url": "https://child.test/favicon.ico"},
+    )
+    actions = {
+        "root-network": ((), "Network.requestWillBeSent", network),
+        "child-network": (child_route, "Network.requestWillBeSent", network),
+        "fetch": (child_route, "Fetch.requestPaused", fetch),
+    }
+    _begin_shutdown(router)
+    observed_before = list(observed)
+
+    for action in order[:2]:
+        route, method, event = actions[action]
+        session.emit(route, method, event)
+        router.raise_if_failed()
+    route, method, event = actions[order[2]]
+    session.emit(route, method, event)
+
+    with pytest.raises(CdpTargetIntegrityError, match="assignment is ambiguous"):
+        router.raise_if_failed()
+    assert observed == observed_before
+
+
+def test_normal_shutdown_disposal_ledger_requires_every_network_terminal() -> None:
+    ledger = cdp_targets_module._NormalShutdownDisposalLedger()
+    ledger.begin()
+    ledger.add_network(
+        cdp_targets_module._ActiveRequest(
+            source=CdpTargetSource((), "root", "page"),
+            request_id="network",
+            loader_id="loader",
+            frame_id="root",
+            resource_type="Other",
+            method="GET",
+            url="https://root.test/favicon.ico",
+        )
+    )
+
+    with pytest.raises(CdpTargetIntegrityError, match="omitted its terminal"):
+        ledger.finish()
+
+
+def test_normal_shutdown_network_without_fetch_rejects_a_real_terminal() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    network = _normal_shutdown_network()
+    _begin_shutdown(router)
+    session.emit((), "Network.requestWillBeSent", network)
+    session.emit(
+        (),
+        "Network.loadingFailed",
+        {
+            "requestId": network["requestId"],
+            "timestamp": 1.0,
+            "type": "Other",
+            "errorText": "net::ERR_ABORTED",
+            "canceled": True,
+        },
+    )
+    router.raise_if_failed()
+
+    with pytest.raises(CdpTargetIntegrityError, match="lacked exact local cancellation"):
+        _finish(router)
+
+
+@pytest.mark.parametrize("kind", ["network", "fetch"])
+def test_normal_shutdown_disposal_identity_bound_is_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+) -> None:
+    monkeypatch.setattr(cdp_targets_module, "_NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT", 1)
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    _begin_shutdown(router)
+    method = "Network.requestWillBeSent" if kind == "network" else "Fetch.requestPaused"
+    first = _normal_shutdown_network() if kind == "network" else _abort_fetch_pause()
+    session.emit((), method, first)
+    router.raise_if_failed()
+    second = (
+        _normal_shutdown_network(
+            requestId="second-network",
+            loaderId="second-loader",
+            request={"method": "GET", "url": "https://root.test/second.ico"},
+        )
+        if kind == "network"
+        else _abort_fetch_pause(
+            requestId="second-fetch",
+            networkId="second-network",
+            request={"method": "GET", "url": "https://root.test/second.ico"},
+        )
+    )
+    session.emit((), method, second)
+
+    with pytest.raises(CdpTargetIntegrityError, match="identity bound was exceeded"):
+        router.raise_if_failed()
 
 
 @pytest.mark.parametrize(

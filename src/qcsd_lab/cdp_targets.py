@@ -34,10 +34,12 @@ from .browser_egress import (
 )
 
 CDP_TARGET_INSTRUMENTATION_POLICY = (
-    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v19"
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v20"
 )
 BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION = 1
 EGRESS_PREARM_SUMMARY_SCHEMA_VERSION = 2
+NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION = 2
+NORMAL_SHUTDOWN_DISPOSAL_POLICY = "chromium-143-post-quiescence-context-disposal-v1"
 SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION = 3
 SRCDOC_PSEUDO_DOCUMENT_POLICY = (
     "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-v2"
@@ -95,6 +97,8 @@ _ROOT_TERMINAL_HISTORY_LIMIT = 4_096
 _ROOT_CONTINUE_DIAGNOSTIC_LIMIT = 32
 _ROOT_FETCH_IDENTITY_LIMIT = 20_000
 _ROOT_NETWORK_IDENTITY_LIMIT = 20_000
+_PRE_SHUTDOWN_NETWORK_IDENTITY_LIMIT = 20_000
+_NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT = 4_096
 _SRCDOC_IDENTITY_HISTORY_LIMIT = 20_000
 _SRCDOC_PSEUDO_DOCUMENT_LIMIT = 32
 _PAGE_FRAME_IDENTITY_LIMIT = 4_096
@@ -440,6 +444,103 @@ class _RootInvalidInterception(CdpTargetIntegrityError):
             f"({fingerprint})"
         )
         self.fingerprint = fingerprint
+
+
+def validate_normal_shutdown_disposal_summary(
+    value: object,
+    *,
+    require_terminal: bool,
+) -> dict[str, Any]:
+    """Validate identifier-free accounting for the normal context-close drain."""
+
+    fields = {
+        "schema_version",
+        "policy",
+        "started",
+        "terminal",
+        "network_total",
+        "fetch_total",
+        "matched_total",
+        "network_only_synthetic_total",
+        "pending_network_total",
+        "pending_fetch_total",
+        "terminal_outcomes",
+    }
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise ValueError("normal shutdown disposal summary fields are invalid")
+    if (
+        type(value.get("schema_version")) is not int
+        or value["schema_version"]
+        != NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
+        or value.get("policy") != NORMAL_SHUTDOWN_DISPOSAL_POLICY
+        or type(value.get("started")) is not bool
+        or type(value.get("terminal")) is not bool
+    ):
+        raise ValueError("normal shutdown disposal summary contract is invalid")
+    count_fields = (
+        "network_total",
+        "fetch_total",
+        "matched_total",
+        "network_only_synthetic_total",
+        "pending_network_total",
+        "pending_fetch_total",
+    )
+    if any(
+        type(value.get(field)) is not int or value[field] < 0
+        for field in count_fields
+    ):
+        raise ValueError("normal shutdown disposal summary counts are invalid")
+    terminal_outcomes = value.get("terminal_outcomes")
+    outcome_names = {
+        "Network.loadingFinished",
+        "Network.loadingFailed",
+        "Network.redirectResponse",
+        "qcsd-shutdown",
+    }
+    if (
+        not isinstance(terminal_outcomes, Mapping)
+        or set(terminal_outcomes) != outcome_names
+        or any(
+            type(terminal_outcomes.get(outcome)) is not int
+            or terminal_outcomes[outcome] < 0
+            for outcome in outcome_names
+        )
+    ):
+        raise ValueError("normal shutdown disposal terminal outcomes are invalid")
+    network_total = value["network_total"]
+    fetch_total = value["fetch_total"]
+    matched_total = value["matched_total"]
+    network_only_synthetic = value["network_only_synthetic_total"]
+    pending_network = value["pending_network_total"]
+    pending_fetch = value["pending_fetch_total"]
+    if (
+        matched_total > network_total
+        or matched_total > fetch_total
+        or network_total > _NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT
+        or fetch_total > _NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT
+        or pending_fetch != fetch_total - matched_total
+        or sum(terminal_outcomes.values()) + pending_network != network_total
+        or network_only_synthetic > network_total - matched_total
+        or network_only_synthetic > terminal_outcomes["qcsd-shutdown"]
+        or (
+            not value["started"]
+            and (value["terminal"] or any(value[field] for field in count_fields))
+        )
+        or (not value["started"] and any(terminal_outcomes.values()))
+        or (value["terminal"] and not value["started"])
+        or (
+            value["terminal"]
+            and (
+                pending_network
+                or pending_fetch
+                or fetch_total != matched_total
+                or network_total != matched_total + network_only_synthetic
+            )
+        )
+        or (require_terminal and not value["terminal"])
+    ):
+        raise ValueError("normal shutdown disposal summary counts are inconsistent")
+    return json.loads(json.dumps(value, sort_keys=True, separators=(",", ":")))
 
 
 def validate_bootstrap_prearm_summary(
@@ -995,6 +1096,35 @@ class _RootFetchDecision:
 
 
 @dataclass
+class _NormalShutdownNetwork:
+    """One Network occurrence created after the normal-disposal boundary."""
+
+    active: _ActiveRequest
+    predecessor: _NormalShutdownNetwork | None = None
+    successor: _NormalShutdownNetwork | None = None
+    leg_index: int = 0
+    matched_fetch: _NormalShutdownFetch | None = None
+    terminal_outcome: str | None = None
+
+
+@dataclass
+class _NormalShutdownFetch:
+    """One request-stage pause held while the accepted context is closing."""
+
+    source: CdpTargetSource
+    fetch_request_id: str
+    network_id: str
+    frame_id: str | None
+    resource_type: str
+    method: str
+    url: str
+    predecessor: _NormalShutdownFetch | None = None
+    successor: _NormalShutdownFetch | None = None
+    leg_index: int = 0
+    matched_network: _NormalShutdownNetwork | None = None
+
+
+@dataclass
 class _SrcdocPseudoDocument:
     """One exact root Page lifecycle awaiting its loader-bound Chromium terminal."""
 
@@ -1114,6 +1244,569 @@ class _BootstrapFetchDecision:
     decided: bool = False
 
 
+class _NormalShutdownDisposalLedger:
+    """Reconcile requests born only after deliberate normal shutdown begins.
+
+    Chromium may start a final root or descendant request while
+    ``BrowserContext.close()`` is disposing an already quiescent page.  Fetch
+    pauses from that interval must stay held: attempting a policy command on
+    the closing root session can race with target destruction.  This ledger is
+    deliberately separate from accepted render evidence and permits a missing
+    Fetch pause only when the still-live Network occurrence is retired by the
+    router's exact local shutdown cancellation.
+    """
+
+    def __init__(self) -> None:
+        self._started = False
+        self._terminal = False
+        self._networks: dict[str, list[_NormalShutdownNetwork]] = {}
+        self._fetches: dict[str, list[_NormalShutdownFetch]] = {}
+        self._network_by_active_identity: dict[int, _NormalShutdownNetwork] = {}
+        self._network_roots: dict[
+            tuple[CdpTargetSource, str], _NormalShutdownNetwork
+        ] = {}
+        self._network_total = 0
+        self._fetch_identities: set[tuple[CdpTargetSource, str]] = set()
+        self._fetches_by_request_id: dict[str, list[_NormalShutdownFetch]] = {}
+
+    def begin(self) -> None:
+        if self._started or self._terminal:
+            raise CdpTargetIntegrityError(
+                "normal shutdown disposal ledger started more than once"
+            )
+        self._started = True
+
+    @staticmethod
+    def _sources_compatible(
+        network: CdpTargetSource,
+        fetch: CdpTargetSource,
+        frame_id: str | None,
+    ) -> bool:
+        if network == fetch:
+            return True
+        if network.target_id == fetch.target_id and network.generation != fetch.generation:
+            return False
+        if network.target_type in {"page", "iframe"} and fetch.target_type in {
+            "page",
+            "iframe",
+        }:
+            return (
+                network.session_path == fetch.parent_session_path
+                or fetch.session_path == network.parent_session_path
+            )
+        if network.target_type not in {"worker", "shared_worker"}:
+            return False
+        if fetch.target_type not in {"page", "iframe"}:
+            return False
+        return network.parent_session_path == fetch.session_path or (
+            frame_id is not None
+            and network.parent_frame_id is not None
+            and network.parent_frame_id == frame_id
+        )
+
+    @classmethod
+    def _matches(
+        cls,
+        network: _NormalShutdownNetwork,
+        fetch: _NormalShutdownFetch,
+    ) -> bool:
+        if network.leg_index != fetch.leg_index:
+            return False
+        network_leg: _NormalShutdownNetwork | None = network
+        fetch_leg: _NormalShutdownFetch | None = fetch
+        while network_leg is not None and fetch_leg is not None:
+            active = network_leg.active
+            frames_match = active.frame_id == fetch_leg.frame_id or (
+                active.source.target_type in {"worker", "shared_worker"}
+                and fetch_leg.source.target_type in {"page", "iframe"}
+                and active.frame_id is None
+                and fetch_leg.frame_id is not None
+                and active.source.parent_frame_id == fetch_leg.frame_id
+            )
+            if not (
+                active.request_id == fetch_leg.network_id
+                and frames_match
+                and active.resource_type == fetch_leg.resource_type
+                and active.method == fetch_leg.method
+                and active.url == fetch_leg.url
+                and cls._sources_compatible(
+                    active.source,
+                    fetch_leg.source,
+                    fetch_leg.frame_id,
+                )
+            ):
+                return False
+            network_leg = network_leg.predecessor
+            fetch_leg = fetch_leg.predecessor
+        return network_leg is None and fetch_leg is None
+
+    def _require_open(self) -> None:
+        if not self._started or self._terminal:
+            raise CdpTargetIntegrityError(
+                "normal shutdown disposal ledger is outside its live boundary"
+            )
+
+    def add_network(
+        self,
+        active: _ActiveRequest,
+        *,
+        redirected: bool = False,
+        predecessor_active: _ActiveRequest | None = None,
+    ) -> None:
+        self._require_open()
+        if (
+            not isinstance(active.request_id, str)
+            or not active.request_id
+            or not isinstance(active.resource_type, str)
+            or not active.resource_type
+            or not isinstance(active.method, str)
+            or not active.method
+            or not isinstance(active.url, str)
+            or not active.url
+        ):
+            raise CdpTargetIntegrityError(
+                "normal shutdown Network occurrence is malformed"
+            )
+        identity = (active.source, active.request_id)
+        predecessor: _NormalShutdownNetwork | None = None
+        if redirected:
+            if predecessor_active is None:
+                raise CdpTargetIntegrityError(
+                    "normal shutdown Network redirect omitted its predecessor"
+                )
+            predecessor = self._network_by_active_identity.get(
+                id(predecessor_active)
+            )
+            if (
+                predecessor is None
+                or predecessor.active is not predecessor_active
+                or predecessor.active.source != active.source
+                or predecessor.active.request_id != active.request_id
+                or predecessor.successor is not None
+                or predecessor.terminal_outcome is not None
+                or self._network_roots.get(identity) is None
+            ):
+                raise CdpTargetIntegrityError(
+                    "normal shutdown Network redirect predecessor is invalid"
+                )
+        elif predecessor_active is not None or identity in self._network_roots:
+            raise CdpTargetIntegrityError(
+                "normal shutdown Network identity was duplicated or reused"
+            )
+        if self._network_total >= _NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT:
+            raise CdpTargetIntegrityError(
+                "normal shutdown Network identity bound was exceeded"
+            )
+        occurrence = _NormalShutdownNetwork(
+            active=active,
+            predecessor=predecessor,
+            leg_index=0 if predecessor is None else predecessor.leg_index + 1,
+        )
+        if predecessor is None:
+            self._network_roots[identity] = occurrence
+        else:
+            predecessor.successor = occurrence
+            predecessor.terminal_outcome = "Network.redirectResponse"
+        self._networks.setdefault(active.request_id, []).append(occurrence)
+        active_identity = id(active)
+        if active_identity in self._network_by_active_identity:
+            raise CdpTargetIntegrityError(
+                "normal shutdown Network object identity was reused"
+            )
+        self._network_by_active_identity[active_identity] = occurrence
+        self._network_total += 1
+        self._reconcile(active.request_id)
+
+    def add_fetch(self, source: CdpTargetSource, event: Mapping[str, Any]) -> None:
+        self._require_open()
+        request = event.get("request")
+        fetch_request_id = event.get("requestId")
+        network_id = event.get("networkId")
+        frame_id = event.get("frameId")
+        resource_type = event.get("resourceType")
+        has_redirect_predecessor = "redirectedRequestId" in event
+        redirected_request_id = event.get("redirectedRequestId")
+        if (
+            not isinstance(fetch_request_id, str)
+            or not fetch_request_id
+            or not isinstance(network_id, str)
+            or not network_id
+            or fetch_request_id == network_id
+            or not isinstance(request, Mapping)
+            or not isinstance(request.get("method"), str)
+            or not request["method"]
+            or not isinstance(request.get("url"), str)
+            or not request["url"]
+            or (frame_id is not None and (not isinstance(frame_id, str) or not frame_id))
+            or not isinstance(resource_type, str)
+            or not resource_type
+            or (
+                has_redirect_predecessor
+                and (
+                    not isinstance(redirected_request_id, str)
+                    or not redirected_request_id
+                    or redirected_request_id == fetch_request_id
+                )
+            )
+            or any(
+                field in event
+                for field in (
+                    "responseStatusCode",
+                    "responseStatusText",
+                    "responseHeaders",
+                    "responseErrorReason",
+                )
+            )
+        ):
+            raise CdpTargetIntegrityError(
+                "normal shutdown request-stage Fetch pause is malformed"
+            )
+        identity = (source, fetch_request_id)
+        if identity in self._fetch_identities:
+            raise CdpTargetIntegrityError(
+                "normal shutdown Fetch identity was duplicated or reused"
+            )
+        if len(self._fetch_identities) >= _NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT:
+            raise CdpTargetIntegrityError(
+                "normal shutdown Fetch identity bound was exceeded"
+            )
+        predecessor: _NormalShutdownFetch | None = None
+        if has_redirect_predecessor:
+            predecessor_candidates = [
+                candidate
+                for candidate in self._fetches_by_request_id.get(
+                    redirected_request_id,
+                    (),
+                )
+                if self._sources_compatible(
+                    candidate.source,
+                    source,
+                    frame_id,
+                )
+            ]
+            if len(predecessor_candidates) != 1:
+                raise CdpTargetIntegrityError(
+                    "normal shutdown request-stage Fetch pause is malformed: "
+                    "redirect predecessor is missing or ambiguous"
+                )
+            predecessor = predecessor_candidates[0]
+            if (
+                predecessor.network_id != network_id
+                or predecessor.successor is not None
+            ):
+                raise CdpTargetIntegrityError(
+                    "normal shutdown request-stage Fetch pause is malformed: "
+                    "redirect predecessor is invalid"
+                )
+        fetch = _NormalShutdownFetch(
+            source=source,
+            fetch_request_id=fetch_request_id,
+            network_id=network_id,
+            frame_id=frame_id,
+            resource_type=resource_type,
+            method=request["method"],
+            url=request["url"],
+            predecessor=predecessor,
+            leg_index=0 if predecessor is None else predecessor.leg_index + 1,
+        )
+        if predecessor is not None:
+            predecessor.successor = fetch
+        self._fetch_identities.add(identity)
+        self._fetches.setdefault(network_id, []).append(fetch)
+        self._fetches_by_request_id.setdefault(fetch_request_id, []).append(fetch)
+        self._reconcile(network_id)
+
+    def _reconcile(self, network_id: str) -> None:
+        networks = self._networks.get(network_id, ())
+        fetches = self._fetches.get(network_id, ())
+        candidates_by_fetch = {
+            id(fetch): [network for network in networks if self._matches(network, fetch)]
+            for fetch in fetches
+        }
+        candidates_by_network = {
+            id(network): [fetch for fetch in fetches if self._matches(network, fetch)]
+            for network in networks
+        }
+        if any(len(candidates) > 1 for candidates in candidates_by_fetch.values()) or any(
+            len(candidates) > 1 for candidates in candidates_by_network.values()
+        ):
+            raise CdpTargetIntegrityError(
+                "normal shutdown Network/Fetch assignment is ambiguous"
+            )
+        for network in networks:
+            network.matched_fetch = None
+        for fetch in fetches:
+            fetch.matched_network = None
+        for fetch in fetches:
+            candidates = candidates_by_fetch[id(fetch)]
+            if candidates:
+                network = candidates[0]
+                network_candidates = candidates_by_network[id(network)]
+                if len(network_candidates) != 1 or network_candidates[0] is not fetch:
+                    # The degree checks above make this unreachable unless a
+                    # caller mutates an occurrence during reconciliation.
+                    raise CdpTargetIntegrityError(
+                        "normal shutdown Network/Fetch assignment changed unexpectedly"
+                    )
+                if network.matched_fetch is not None:
+                    raise CdpTargetIntegrityError(
+                        "normal shutdown Network/Fetch assignment is ambiguous"
+                    )
+                network.matched_fetch = fetch
+                fetch.matched_network = network
+
+    def owned_source(
+        self,
+        source: CdpTargetSource,
+        request_id: str,
+    ) -> CdpTargetSource | None:
+        """Return the one canonical disposal owner for a later Network event."""
+
+        candidates = [
+            occurrence.active.source
+            for occurrence in self._networks.get(request_id, ())
+            if occurrence.active.source == source
+            or self._sources_compatible(occurrence.active.source, source, None)
+        ]
+        unique = set(candidates)
+        if len(unique) > 1:
+            raise CdpTargetIntegrityError(
+                "normal shutdown Network event has ambiguous disposal ownership"
+            )
+        return next(iter(unique)) if unique else None
+
+    def owns(self, active: _ActiveRequest) -> bool:
+        occurrence = self._network_by_active_identity.get(id(active))
+        if occurrence is None:
+            return False
+        if occurrence.active is not active:
+            raise CdpTargetIntegrityError(
+                "normal shutdown Network object identity changed unexpectedly"
+            )
+        return True
+
+    def add_terminal(
+        self,
+        active: _ActiveRequest,
+        *,
+        terminal_method: str,
+        synthetic_shutdown: bool,
+    ) -> None:
+        self._require_open()
+        occurrence = self._network_by_active_identity.get(id(active))
+        if occurrence is None or occurrence.active is not active:
+            raise CdpTargetIntegrityError(
+                "normal shutdown terminal has no disposal Network occurrence"
+            )
+        if occurrence.successor is not None:
+            raise CdpTargetIntegrityError(
+                "normal shutdown terminal targeted a redirected Network leg"
+            )
+        if occurrence.terminal_outcome is not None:
+            raise CdpTargetIntegrityError(
+                "normal shutdown Network occurrence terminated more than once"
+            )
+        if terminal_method not in {"Network.loadingFinished", "Network.loadingFailed"}:
+            raise CdpTargetIntegrityError(
+                "normal shutdown Network terminal method is invalid"
+            )
+        if synthetic_shutdown and terminal_method != "Network.loadingFailed":
+            raise CdpTargetIntegrityError(
+                "normal shutdown synthetic terminal is not a loading failure"
+            )
+        occurrence.terminal_outcome = (
+            "qcsd-shutdown" if synthetic_shutdown else terminal_method
+        )
+
+    def _network_chains(self) -> list[list[_NormalShutdownNetwork]]:
+        chains: list[list[_NormalShutdownNetwork]] = []
+        seen: set[int] = set()
+        for root in self._network_roots.values():
+            chain: list[_NormalShutdownNetwork] = []
+            current: _NormalShutdownNetwork | None = root
+            predecessor: _NormalShutdownNetwork | None = None
+            while current is not None:
+                identity = id(current)
+                if (
+                    identity in seen
+                    or current.predecessor is not predecessor
+                    or current.leg_index != len(chain)
+                ):
+                    raise CdpTargetIntegrityError(
+                        "normal shutdown Network redirect chain is invalid"
+                    )
+                seen.add(identity)
+                chain.append(current)
+                predecessor = current
+                current = current.successor
+            chains.append(chain)
+        if len(seen) != self._network_total or self._network_total != sum(
+            len(values) for values in self._networks.values()
+        ):
+            raise CdpTargetIntegrityError(
+                "normal shutdown Network redirect accounting is invalid"
+            )
+        return chains
+
+    def _fetch_chains(self) -> list[list[_NormalShutdownFetch]]:
+        fetches = [item for values in self._fetches.values() for item in values]
+        roots = [item for item in fetches if item.predecessor is None]
+        chains: list[list[_NormalShutdownFetch]] = []
+        seen: set[int] = set()
+        for root in roots:
+            chain: list[_NormalShutdownFetch] = []
+            current: _NormalShutdownFetch | None = root
+            predecessor: _NormalShutdownFetch | None = None
+            while current is not None:
+                identity = id(current)
+                if (
+                    identity in seen
+                    or current.predecessor is not predecessor
+                    or current.leg_index != len(chain)
+                ):
+                    raise CdpTargetIntegrityError(
+                        "normal shutdown Fetch redirect chain is invalid"
+                    )
+                seen.add(identity)
+                chain.append(current)
+                predecessor = current
+                current = current.successor
+            chains.append(chain)
+        if len(seen) != len(fetches):
+            raise CdpTargetIntegrityError(
+                "normal shutdown Fetch redirect accounting is invalid"
+            )
+        return chains
+
+    @staticmethod
+    def _network_chain_is_fully_matched(
+        chain: list[_NormalShutdownNetwork],
+    ) -> bool:
+        return bool(chain) and all(item.matched_fetch is not None for item in chain) and (
+            chain[-1].matched_fetch is not None
+            and chain[-1].matched_fetch.successor is None
+        )
+
+    @staticmethod
+    def _fetch_chain_is_fully_matched(
+        chain: list[_NormalShutdownFetch],
+    ) -> bool:
+        return bool(chain) and all(item.matched_network is not None for item in chain) and (
+            chain[-1].matched_network is not None
+            and chain[-1].matched_network.successor is None
+        )
+
+    def finish(self) -> None:
+        self._require_open()
+        for request_id in set(self._networks) | set(self._fetches):
+            self._reconcile(request_id)
+        if any(
+            fetch.matched_network is None
+            for values in self._fetches.values()
+            for fetch in values
+        ):
+            raise CdpTargetIntegrityError(
+                "normal shutdown Fetch pause has no exact Network occurrence"
+            )
+        network_chains = self._network_chains()
+        fetch_chains = self._fetch_chains()
+        if any(
+            item.terminal_outcome != "Network.redirectResponse"
+            for chain in network_chains
+            for item in chain[:-1]
+        ):
+            raise CdpTargetIntegrityError(
+                "normal shutdown redirected Network leg lacked its exact outcome"
+            )
+        if any(
+            chain[-1].terminal_outcome in {None, "Network.redirectResponse"}
+            for chain in network_chains
+        ):
+            raise CdpTargetIntegrityError(
+                "normal shutdown Network occurrence omitted its terminal"
+            )
+        for chain in network_chains:
+            matched = [item.matched_fetch is not None for item in chain]
+            if any(matched) and not self._network_chain_is_fully_matched(chain):
+                raise CdpTargetIntegrityError(
+                    "normal shutdown Network redirect chain was only partially matched"
+                )
+            if not any(matched) and (
+                len(chain) != 1
+                or chain[-1].terminal_outcome != "qcsd-shutdown"
+            ):
+                raise CdpTargetIntegrityError(
+                    "normal shutdown Network-only occurrence lacked exact local cancellation"
+                )
+        if any(not self._fetch_chain_is_fully_matched(chain) for chain in fetch_chains):
+            raise CdpTargetIntegrityError(
+                "normal shutdown Fetch redirect chain was only partially matched"
+            )
+        self._terminal = True
+
+    @property
+    def summary(self) -> dict[str, Any]:
+        networks = [item for values in self._networks.values() for item in values]
+        fetches = [item for values in self._fetches.values() for item in values]
+        network_chains = self._network_chains()
+        fetch_chains = self._fetch_chains()
+        matched = sum(item.matched_fetch is not None for item in networks)
+        matched_fetches = sum(item.matched_network is not None for item in fetches)
+        terminal_outcomes = {
+            outcome: sum(item.terminal_outcome == outcome for item in networks)
+            for outcome in (
+                "Network.loadingFinished",
+                "Network.loadingFailed",
+                "Network.redirectResponse",
+                "qcsd-shutdown",
+            )
+        }
+        network_only_synthetic = sum(
+            item.matched_fetch is None and item.terminal_outcome == "qcsd-shutdown"
+            for item in networks
+        )
+        pending_network = sum(item.terminal_outcome is None for item in networks)
+        pending_fetch = len(fetches) - matched_fetches
+        if any(
+            item.matched_fetch is not None
+            and item.matched_fetch.matched_network is not item
+            for item in networks
+        ) or any(
+            item.matched_network is not None
+            and item.matched_network.matched_fetch is not item
+            for item in fetches
+        ):
+            raise CdpTargetIntegrityError(
+                "normal shutdown disposal accounting invariant was violated"
+            )
+        if matched != matched_fetches:
+            raise CdpTargetIntegrityError(
+                "normal shutdown redirect matching invariant was violated"
+            )
+        summary = {
+            "schema_version": NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
+            "policy": NORMAL_SHUTDOWN_DISPOSAL_POLICY,
+            "started": self._started,
+            "terminal": self._terminal,
+            "network_total": len(networks),
+            "fetch_total": len(fetches),
+            "matched_total": matched,
+            "network_only_synthetic_total": network_only_synthetic,
+            "pending_network_total": pending_network,
+            "pending_fetch_total": pending_fetch,
+            "terminal_outcomes": terminal_outcomes,
+        }
+        try:
+            return validate_normal_shutdown_disposal_summary(
+                summary,
+                require_terminal=self._terminal,
+            )
+        except ValueError as error:
+            raise CdpTargetIntegrityError(
+                "normal shutdown disposal accounting invariant was violated"
+            ) from error
+
+
 class RecursiveCdpTargetRouter:
     """Instrument a root page plus every recursively related iframe/worker target."""
 
@@ -1169,8 +1862,23 @@ class RecursiveCdpTargetRouter:
         self._shutting_down = False
         self._aborting = False
         self._abort_finished = False
+        self._normal_shutdown_disposal = _NormalShutdownDisposalLedger()
         self._target_generations: dict[str, int] = {}
         self._active_requests: dict[str, list[_ActiveRequest]] = {}
+        self._pre_shutdown_network_identities: set[
+            tuple[CdpTargetSource, str]
+        ] = set()
+        self._pre_shutdown_network_occurrence_counts: dict[
+            tuple[CdpTargetSource, str], int
+        ] = {}
+        self._pre_shutdown_network_occurrence_total = 0
+        self._pre_shutdown_reused_network_identities: set[
+            tuple[CdpTargetSource, str]
+        ] = set()
+        self._pre_shutdown_worker_extra_info_claims: dict[
+            tuple[CdpTargetSource, str], int
+        ] = {}
+        self._pre_shutdown_network_identity_saturated = False
         self._root_fetch_by_policy_identity: dict[
             tuple[CdpTargetSource, str], _RootFetchDecision
         ] = {}
@@ -1271,6 +1979,12 @@ class RecursiveCdpTargetRouter:
                 ),
             )
         )
+
+    @property
+    def normal_shutdown_disposal_summary(self) -> dict[str, Any]:
+        """Return identifier-free proof for requests born during context disposal."""
+
+        return self._normal_shutdown_disposal.summary
 
     @property
     def root_invalid_interception_summary(self) -> dict[str, Any]:
@@ -2145,6 +2859,11 @@ class RecursiveCdpTargetRouter:
                 "CDP target shutdown began with setup, ownership, adoption, "
                 "bootstrap prearm, or policy commands pending"
             )
+        if self._pre_shutdown_network_identity_saturated:
+            raise CdpTargetIntegrityError(
+                "CDP target shutdown cannot prove Network identity separation"
+            )
+        self._normal_shutdown_disposal.begin()
         self._shutting_down = True
 
     def begin_abort(self) -> None:
@@ -2203,6 +2922,7 @@ class RecursiveCdpTargetRouter:
                     request_id,
                     synthetic_shutdown=True,
                 )
+        self._normal_shutdown_disposal.finish()
         for route, state in self._states.items():
             if state.active_request_ids:
                 raise CdpTargetIntegrityError("CDP target finished with active requests")
@@ -2251,6 +2971,11 @@ class RecursiveCdpTargetRouter:
         self._disabled_root_invalid_interception_networks.clear()
         self._eligible_root_network_occurrences.clear()
         self._eligible_root_network_occurrence_count = 0
+        self._pre_shutdown_network_identities.clear()
+        self._pre_shutdown_network_occurrence_counts.clear()
+        self._pre_shutdown_network_occurrence_total = 0
+        self._pre_shutdown_reused_network_identities.clear()
+        self._pre_shutdown_worker_extra_info_claims.clear()
         self._page_frame_pending_swap_removals.clear()
 
     def finish_abort(self) -> None:
@@ -2307,6 +3032,11 @@ class RecursiveCdpTargetRouter:
         self._disabled_root_invalid_interception_networks.clear()
         self._eligible_root_network_occurrences.clear()
         self._eligible_root_network_occurrence_count = 0
+        self._pre_shutdown_network_identities.clear()
+        self._pre_shutdown_network_occurrence_counts.clear()
+        self._pre_shutdown_network_occurrence_total = 0
+        self._pre_shutdown_reused_network_identities.clear()
+        self._pre_shutdown_worker_extra_info_claims.clear()
         self._document_fetch_by_policy_identity.clear()
         self._pending_blocked_documents.clear()
         self._error_document_finishes.clear()
@@ -3552,7 +4282,6 @@ class RecursiveCdpTargetRouter:
             if frame_id not in self._page_frame_parents:
                 if (
                     reason == "remove"
-                    and self._shutting_down
                     and not self._aborting
                     and frame_id in self._page_frame_pending_swap_removals
                     and frame_id in self._seen_page_frame_ids
@@ -3560,10 +4289,11 @@ class RecursiveCdpTargetRouter:
                     and frame_id not in self._srcdoc_candidates
                 ):
                     # Chromium 143 can first retire a cross-origin iframe with
-                    # reason=swap, then emit its final reason=remove while the
-                    # browser context is closing.  Accept that exact causal
-                    # successor once; no unknown or reused frame gains generic
-                    # absent-identity detach authority.
+                    # reason=swap, then emit its final reason=remove either
+                    # during ordinary browsing or while the browser context is
+                    # closing.  Accept that exact causal successor once; no
+                    # unknown or reused frame gains generic absent-identity
+                    # detach authority.
                     self._page_frame_pending_swap_removals.remove(frame_id)
                     return
                 raise CdpTargetIntegrityError("root Page frame detachment identity is invalid")
@@ -4051,12 +4781,16 @@ class RecursiveCdpTargetRouter:
         self._record_srcdoc_identity_history(method, event)
         if self._consume_error_document_resource_event(source, method, event):
             return
-        if method == "Fetch.requestPaused" and self._aborting:
-            self._hold_aborted_fetch(event)
+        if method == "Fetch.requestPaused" and self._shutting_down:
+            if self._aborting:
+                self._hold_aborted_fetch(event)
+            else:
+                self._normal_shutdown_disposal.add_fetch(source, event)
             return
         if method == "Network.requestServedFromCache":
             self._record_inline_data_cache_marker(source, event)
         event_source = source
+        quarantine_event = False
         advance_bootstraps = False
         bootstrap_fetch: _BootstrapFetchDecision | None = None
         document_fetch: _DocumentFetchDecision | None = None
@@ -4119,6 +4853,48 @@ class RecursiveCdpTargetRouter:
             if len(local) > 1:
                 raise CdpTargetIntegrityError("CDP request identity is ambiguous within one target")
             replaced = migrated or (local[0] if local else None)
+            network_identity = (canonical_source, request_id)
+            if (
+                self._shutting_down
+                and not self._aborting
+                and replaced is None
+                and network_identity in self._pre_shutdown_network_identities
+            ):
+                raise CdpTargetIntegrityError(
+                    "CDP Network identity crossed the normal shutdown boundary"
+                )
+            if not self._shutting_down:
+                known_pre_shutdown_identity = (
+                    network_identity in self._pre_shutdown_network_identities
+                )
+                if known_pre_shutdown_identity:
+                    if not redirected or replaced is None:
+                        # A fresh occurrence is indistinguishable from delayed
+                        # ExtraInfo for its predecessor. Redirect legs instead
+                        # retain their protocol FIFO below.
+                        self._pre_shutdown_reused_network_identities.add(
+                            network_identity
+                        )
+                if (
+                    self._pre_shutdown_network_occurrence_total
+                    >= _PRE_SHUTDOWN_NETWORK_IDENTITY_LIMIT
+                ):
+                    self._pre_shutdown_network_identity_saturated = True
+                else:
+                    if not known_pre_shutdown_identity:
+                        self._pre_shutdown_network_identities.add(
+                            network_identity
+                        )
+                    self._pre_shutdown_network_occurrence_counts[
+                        network_identity
+                    ] = (
+                        self._pre_shutdown_network_occurrence_counts.get(
+                            network_identity,
+                            0,
+                        )
+                        + 1
+                    )
+                    self._pre_shutdown_network_occurrence_total += 1
             self._track_root_network_occurrence(active, replaced=replaced)
             root_network_key = (canonical_source, request_id)
             if replaced is not None:
@@ -4149,6 +4925,13 @@ class RecursiveCdpTargetRouter:
             else:
                 state.active_request_ids.add(request_id)
                 self._active_requests.setdefault(request_id, []).append(active)
+            if self._shutting_down and not self._aborting:
+                self._normal_shutdown_disposal.add_network(
+                    active,
+                    redirected=redirected,
+                    predecessor_active=replaced,
+                )
+                quarantine_event = True
             advance_bootstraps = True
         elif method in {"Network.loadingFinished", "Network.loadingFailed"}:
             request_id = event.get("requestId")
@@ -4226,6 +5009,13 @@ class RecursiveCdpTargetRouter:
                     terminal_method=method,
                     event=event,
                 )
+            if self._normal_shutdown_disposal.owns(active):
+                self._normal_shutdown_disposal.add_terminal(
+                    active,
+                    terminal_method=method,
+                    synthetic_shutdown=False,
+                )
+                quarantine_event = True
             self._remove_active(active)
         elif method.startswith("Network."):
             request_id = event.get("requestId")
@@ -4237,23 +5027,90 @@ class RecursiveCdpTargetRouter:
                     raise CdpTargetIntegrityError(
                         "CDP emitted a Network event for a retired Document chain"
                     )
+                delayed_worker_source = (
+                    self._delayed_pre_shutdown_worker_extra_info_source(
+                        source,
+                        request_id,
+                    )
+                    if method == "Network.requestWillBeSentExtraInfo"
+                    else None
+                )
                 active = self._resolve_active_request(
                     source, request_id, allow_target_migration=True
                 )
+                owner_routed_worker = False
                 if active is None and method == "Network.requestWillBeSentExtraInfo":
                     active = self._resolve_worker_subresource_extra_info(source, request_id)
+                    owner_routed_worker = active is not None
                 if active is not None:
+                    if delayed_worker_source is not None:
+                        raise CdpTargetIntegrityError(
+                            "CDP Network event has competing live and delayed "
+                            "scientific owners"
+                        )
+                    disposal_owned = self._normal_shutdown_disposal.owns(active)
+                    if (
+                        disposal_owned
+                        and (source, request_id)
+                        in self._pre_shutdown_network_identities
+                    ):
+                        raise CdpTargetIntegrityError(
+                            "CDP Network event is ambiguous across the normal "
+                            "shutdown boundary"
+                        )
+                    if owner_routed_worker:
+                        if (
+                            active.source != source
+                            and (source, request_id)
+                            in self._pre_shutdown_network_identities
+                        ):
+                            raise CdpTargetIntegrityError(
+                                "worker ExtraInfo collides with scientific owner history"
+                            )
+                        self._claim_pre_shutdown_worker_extra_info(
+                            active.source,
+                            request_id,
+                        )
                     event_source = active.source
+                    quarantine_event = disposal_owned
                 elif self._active_requests.get(request_id):
                     raise CdpTargetIntegrityError(
                         "CDP network event collided with an unrelated active request identity"
                     )
+                else:
+                    disposal_source = self._normal_shutdown_disposal.owned_source(
+                        source,
+                        request_id,
+                    )
+                    if disposal_source is not None:
+                        if delayed_worker_source is not None:
+                            raise CdpTargetIntegrityError(
+                                "CDP Network event has competing disposal and "
+                                "delayed scientific owners"
+                            )
+                        if (
+                            (source, request_id)
+                            in self._pre_shutdown_network_identities
+                        ):
+                            raise CdpTargetIntegrityError(
+                                "CDP Network event is ambiguous across the normal "
+                                "shutdown boundary"
+                            )
+                        event_source = disposal_source
+                        quarantine_event = True
+                    elif delayed_worker_source is not None:
+                        self._claim_pre_shutdown_worker_extra_info(
+                            delayed_worker_source,
+                            request_id,
+                        )
+                        event_source = delayed_worker_source
         elif method == "Fetch.requestPaused":
             root_fetch = self._register_root_fetch(source, event)
             bootstrap_fetch = self._register_bootstrap_fetch(source, event)
             document_fetch = self._register_document_fetch(source, event)
         try:
-            self._on_event(event_source, method, event)
+            if not quarantine_event:
+                self._on_event(event_source, method, event)
         finally:
             if root_fetch is not None:
                 self._root_fetch_by_policy_identity.pop(
@@ -5767,6 +6624,79 @@ class RecursiveCdpTargetRouter:
             raise CdpTargetIntegrityError("worker subresource ExtraInfo migration is ambiguous")
         return candidates[0] if candidates else None
 
+    def _delayed_pre_shutdown_worker_extra_info_source(
+        self,
+        owner_source: CdpTargetSource,
+        request_id: str,
+    ) -> CdpTargetSource | None:
+        """Resolve one terminal scientific worker occurrence after the cutoff.
+
+        Chromium can deliver a worker subresource's owner-routed request-header
+        evidence after its worker-side Network terminal.  ExtraInfo exposes
+        only the raw request ID, so reconstruction is allowed only from the
+        bounded pre-shutdown identity history and the exact retained bootstrap
+        owner.  Live occurrences are left to the ordinary resolver.
+        """
+
+        if not self._shutting_down or self._aborting:
+            return None
+        if self._pre_shutdown_network_identity_saturated:
+            raise CdpTargetIntegrityError(
+                "delayed worker ExtraInfo has saturated scientific history"
+            )
+        live_sources = {
+            active.source for active in self._active_requests.get(request_id, ())
+        }
+        candidates: list[CdpTargetSource] = []
+        for candidate_source, candidate_request_id in (
+            self._pre_shutdown_network_identities
+        ):
+            if (
+                candidate_request_id != request_id
+                or candidate_source in live_sources
+                or candidate_source.target_type not in _WORKER_TARGET_TYPES
+            ):
+                continue
+            bootstrap = self._worker_bootstraps.get(candidate_source)
+            if bootstrap is not None and bootstrap.owner_source == owner_source:
+                candidates.append(candidate_source)
+        if not candidates:
+            return None
+        if (owner_source, request_id) in self._pre_shutdown_network_identities:
+            raise CdpTargetIntegrityError(
+                "delayed worker ExtraInfo collides with scientific owner history"
+            )
+        if len(candidates) > 1:
+            raise CdpTargetIntegrityError(
+                "delayed worker ExtraInfo scientific migration is ambiguous"
+            )
+        identity = (candidates[0], request_id)
+        if identity in self._pre_shutdown_reused_network_identities:
+            raise CdpTargetIntegrityError(
+                "delayed worker ExtraInfo scientific identity was reused"
+            )
+        return candidates[0]
+
+    def _claim_pre_shutdown_worker_extra_info(
+        self,
+        worker_source: CdpTargetSource,
+        request_id: str,
+    ) -> None:
+        identity = (worker_source, request_id)
+        occurrence_total = self._pre_shutdown_network_occurrence_counts.get(identity)
+        if occurrence_total is None:
+            return
+        if identity in self._pre_shutdown_reused_network_identities:
+            raise CdpTargetIntegrityError(
+                "worker ExtraInfo scientific identity was reused"
+            )
+        claimed_total = self._pre_shutdown_worker_extra_info_claims.get(identity, 0)
+        if claimed_total >= occurrence_total:
+            raise CdpTargetIntegrityError(
+                "worker ExtraInfo scientific occurrence bound was exceeded"
+            )
+        self._pre_shutdown_worker_extra_info_claims[identity] = claimed_total + 1
+
     def _remove_active(self, active: _ActiveRequest) -> None:
         self._cached_inline_data_requests.discard(
             active.source.request_chain_key(active.request_id)
@@ -5882,8 +6812,17 @@ class RecursiveCdpTargetRouter:
             active.source.request_chain_key(request_id),
             None,
         )
+        disposal_owned = (
+            synthetic_shutdown and self._normal_shutdown_disposal.owns(active)
+        )
+        if disposal_owned:
+            self._normal_shutdown_disposal.add_terminal(
+                active,
+                terminal_method="Network.loadingFailed",
+                synthetic_shutdown=True,
+            )
         self._remove_active(active)
-        if synthetic_shutdown:
+        if synthetic_shutdown and not disposal_owned:
             self._on_event(
                 active.source,
                 "Network.loadingFailed",

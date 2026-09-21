@@ -53,6 +53,8 @@ from .acquisition_timing import (
 from .acquisition_selection import ACQUISITION_SELECTION_POLICY, derive_acquisition_selection
 from .cdp_targets import (
     CDP_TARGET_INSTRUMENTATION_POLICY,
+    NORMAL_SHUTDOWN_DISPOSAL_POLICY,
+    NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
     SRCDOC_PSEUDO_DOCUMENT_POLICY,
     SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
     BrowserSharedWorkerGuard,
@@ -61,6 +63,7 @@ from .cdp_targets import (
     RecursiveCdpTargetRouter,
     validate_bootstrap_prearm_summary,
     validate_egress_prearm_summary,
+    validate_normal_shutdown_disposal_summary,
     validate_srcdoc_pseudo_document_summary,
 )
 from .class_catalogue import (
@@ -85,6 +88,7 @@ from .discovery_evidence import (
     DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION,
     PASSIVE_RENDER_CONTRACT,
     PASSIVE_RENDER_CONTRACT_SHA256,
+    REQUEST_STAGE_OBSERVATION_POLICY,
     RENDER_OBSERVATION_SCHEMA_VERSION,
     evidence_sha256,
     validate_render_observation,
@@ -111,8 +115,8 @@ from .util import (
     source_metadata,
 )
 
-SCHEMA_VERSION = 7
-HISTORICAL_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6})
+SCHEMA_VERSION = 8
+HISTORICAL_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7})
 SUPPORTED_SCHEMA_VERSIONS = HISTORICAL_SCHEMA_VERSIONS | {SCHEMA_VERSION}
 PROVENANCE_TYPE = "qcsd-class-study-acquisition-provenance"
 TERMINAL_TYPE = "qcsd-class-study-acquisition-terminal"
@@ -129,14 +133,16 @@ SCHEMA_SIX_CHECKPOINT_SCHEMA_VERSION = 2
 SCHEMA_SIX_TERMINAL_SCHEMA_VERSION = 3
 SCHEMA_SIX_COMPLETION_SCHEMA_VERSION = 3
 SCHEMA_SIX_DOCUMENT_RESPONSE_SCHEMA_VERSION = 1
-_MODERN_CHECKPOINT_SCHEMA_VERSIONS = frozenset({4, 5, 6, SCHEMA_VERSION})
-_FIXED_PROVENANCE_SCHEMA_VERSIONS = frozenset({5, 6, SCHEMA_VERSION})
-_POLICY_EVIDENCE_SCHEMA_VERSIONS = frozenset({5, 6, SCHEMA_VERSION})
-_SELECTION_SCHEMA_VERSIONS = frozenset({6, SCHEMA_VERSION})
-_INSTRUMENTATION_EVIDENCE_SCHEMA_VERSIONS = frozenset({2, 3, 4, 5, 6, SCHEMA_VERSION})
-_RENDER_EVIDENCE_SCHEMA_VERSIONS = frozenset({3, 4, 5, 6, SCHEMA_VERSION})
-_TERMINAL_STATE_SCHEMA_VERSIONS = frozenset({2, 3, 4, 5, 6, SCHEMA_VERSION})
-_DURATION_LIMIT_SCHEMA_VERSIONS = frozenset({3, 4, 5, 6, SCHEMA_VERSION})
+_MODERN_CHECKPOINT_SCHEMA_VERSIONS = frozenset({4, 5, 6, 7, SCHEMA_VERSION})
+_FIXED_PROVENANCE_SCHEMA_VERSIONS = frozenset({5, 6, 7, SCHEMA_VERSION})
+_POLICY_EVIDENCE_SCHEMA_VERSIONS = frozenset({5, 6, 7, SCHEMA_VERSION})
+_SELECTION_SCHEMA_VERSIONS = frozenset({6, 7, SCHEMA_VERSION})
+_INSTRUMENTATION_EVIDENCE_SCHEMA_VERSIONS = frozenset(
+    {2, 3, 4, 5, 6, 7, SCHEMA_VERSION}
+)
+_RENDER_EVIDENCE_SCHEMA_VERSIONS = frozenset({3, 4, 5, 6, 7, SCHEMA_VERSION})
+_TERMINAL_STATE_SCHEMA_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, SCHEMA_VERSION})
+_DURATION_LIMIT_SCHEMA_VERSIONS = frozenset({3, 4, 5, 6, 7, SCHEMA_VERSION})
 MAX_ORIGIN_PASSES = 8
 MAX_APPROVED_ORIGINS = 32
 MAX_OBSERVED_AUDIT_ORIGINS = 512
@@ -603,6 +609,59 @@ _SCHEMA_SIX_PASSIVE_RENDER_CONTRACT: dict[str, Any] = {
 _SCHEMA_SIX_PASSIVE_RENDER_CONTRACT_SHA256 = (
     "8679865eb1125ff78d614e06b89432a0c73b62326d6042f216a3320480a74ec9"
 )
+_SCHEMA_SEVEN_CDP_TARGET_INSTRUMENTATION_POLICY = (
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v19"
+)
+_SCHEMA_SEVEN_FIXED_PROVENANCE_SHA256 = (
+    "6534b4ff87066c1717f32018638aa8e67e7e0ab792dde271dbc7717d42401fb9"
+)
+_SCHEMA_SEVEN_RENDER_OBSERVATION_SCHEMA_VERSION = 4
+_SCHEMA_SEVEN_DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION = 5
+_SCHEMA_SEVEN_PASSIVE_RENDER_CONTRACT: dict[str, Any] = {
+    "schema_version": 4,
+    "policy": "bounded-passive-render-quiescence-v4",
+    "viewport": {"width": 1365, "height": 768, "deviceScaleFactor": 1},
+    "cache": "disabled",
+    "service_workers": "bypassed-and-registration-blocked",
+    "interaction": "none",
+    "minimum_after_load_ms": 10_000,
+    "quiet_window_ms": 3_000,
+    "quiet_window_begins": "after-minimum-or-last-relevant-event-whichever-is-later",
+    "hard_cap_after_load_ms": 30_000,
+    "poll_interval_ms": 100,
+    "active_request_scope": "all-instrumented-urlloader-request-occurrences",
+    "non_replayable_egress_policy": "blocked-non-urlloader-egress-v1",
+    "non_replayable_egress_boundary": {
+        "page_frame_websocket": "playwright-route-before-page",
+        "paused_target_constructor_shim": True,
+        "cdp_network_events": "post-construction-tripwire-only",
+        "packet_level_completeness_claimed": False,
+    },
+    "quiescence_requires": [
+        "no-active-network-request-occurrences",
+        "recursive-target-router-shutdown-ready",
+        "no-pending-shared-worker-bootstrap-prearm",
+        "all-observed-target-egress-shims-prearmed",
+        "terminal-root-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-lifecycle",
+        "zero-non-replayable-egress-attempts",
+        "zero-browser-context-service-workers",
+    ],
+    "relevant_events": [
+        "network-request",
+        "fetch-request",
+        "network-terminal",
+        "target-attached",
+        "target-detached",
+        "target-destroyed",
+        "target-info-changed",
+        "browser-internal-document",
+        "non-replayable-egress-attempt",
+    ],
+    "hard_cap_policy": "typed-candidate-rejection",
+}
+_SCHEMA_SEVEN_PASSIVE_RENDER_CONTRACT_SHA256 = (
+    "6a63003feeb667799414bfdd9d24b473b0a43a29853932f55a992c46b8e9bd4e"
+)
 _HISTORICAL_ACQUISITION_EVIDENCE_CONTRACTS: dict[int, tuple[Mapping[str, Any], ...]] = {
     # Schema one predates CDP instrumentation and document/render evidence.
     1: (
@@ -729,6 +788,27 @@ _HISTORICAL_ACQUISITION_EVIDENCE_CONTRACTS: dict[int, tuple[Mapping[str, Any], .
             ),
         )
     ),
+    7: (
+        {
+            "instrumentation_policy": (_SCHEMA_SEVEN_CDP_TARGET_INSTRUMENTATION_POLICY),
+            "passive_render_contract": _SCHEMA_SEVEN_PASSIVE_RENDER_CONTRACT,
+            "passive_render_contract_sha256": (
+                _SCHEMA_SEVEN_PASSIVE_RENDER_CONTRACT_SHA256
+            ),
+            "render_observation_schema_version": (
+                _SCHEMA_SEVEN_RENDER_OBSERVATION_SCHEMA_VERSION
+            ),
+            "discovery_event_audit_schema_version": (
+                _SCHEMA_SEVEN_DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION
+            ),
+            "document_response_schema_version": 2,
+            "fixed_provenance_sha256": _SCHEMA_SEVEN_FIXED_PROVENANCE_SHA256,
+            "source_lab_commits": (
+                "af6839fd9e4d389d04b1cfab5a6caa0299c5df0e",
+                "679e1490774e3238c3693e780f1361078d6f7cd7",
+            ),
+        },
+    ),
 }
 _SOURCE_FIELDS = frozenset(
     {
@@ -758,7 +838,7 @@ def _matches_json_contract(value: object, expected: object) -> bool:
 
 
 def _checkpoint_schema_for(acquisition_schema_version: int) -> int:
-    if acquisition_schema_version == SCHEMA_VERSION:
+    if acquisition_schema_version in {7, SCHEMA_VERSION}:
         return CHECKPOINT_SCHEMA_VERSION
     if acquisition_schema_version in {4, 5, 6}:
         return SCHEMA_SIX_CHECKPOINT_SCHEMA_VERSION
@@ -766,7 +846,7 @@ def _checkpoint_schema_for(acquisition_schema_version: int) -> int:
 
 
 def _terminal_schema_for(acquisition_schema_version: int) -> int:
-    if acquisition_schema_version == SCHEMA_VERSION:
+    if acquisition_schema_version in {7, SCHEMA_VERSION}:
         return TERMINAL_SCHEMA_VERSION
     if acquisition_schema_version in {4, 5, 6}:
         return SCHEMA_SIX_TERMINAL_SCHEMA_VERSION
@@ -776,7 +856,7 @@ def _terminal_schema_for(acquisition_schema_version: int) -> int:
 
 
 def _completion_schema_for(acquisition_schema_version: int) -> int:
-    if acquisition_schema_version == SCHEMA_VERSION:
+    if acquisition_schema_version in {7, SCHEMA_VERSION}:
         return COMPLETION_SCHEMA_VERSION
     if acquisition_schema_version == 6:
         return SCHEMA_SIX_COMPLETION_SCHEMA_VERSION
@@ -1079,7 +1159,7 @@ def _validate_versioned_render_observation(
     acquisition_schema_version: int,
     allow_failure: bool = False,
 ) -> None:
-    if acquisition_schema_version == SCHEMA_VERSION:
+    if acquisition_schema_version in {7, SCHEMA_VERSION}:
         validate_render_observation(value, allow_failure=allow_failure)
         return
     if acquisition_schema_version in {3, 4}:
@@ -1116,6 +1196,32 @@ def _zero_internal_document_lifecycle_summary() -> dict[str, Any]:
         "diagnostics": [],
     }
     return validate_srcdoc_pseudo_document_summary(summary, require_terminal=True)
+
+
+def _zero_normal_shutdown_disposal_summary() -> dict[str, Any]:
+    """Return a compatibility-only terminal zero-request disposal receipt."""
+
+    return validate_normal_shutdown_disposal_summary(
+        {
+            "schema_version": NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
+            "policy": NORMAL_SHUTDOWN_DISPOSAL_POLICY,
+            "started": True,
+            "terminal": True,
+            "network_total": 0,
+            "fetch_total": 0,
+            "matched_total": 0,
+            "network_only_synthetic_total": 0,
+            "pending_network_total": 0,
+            "pending_fetch_total": 0,
+            "terminal_outcomes": {
+                "Network.loadingFinished": 0,
+                "Network.loadingFailed": 0,
+                "Network.redirectResponse": 0,
+                "qcsd-shutdown": 0,
+            },
+        },
+        require_terminal=True,
+    )
 
 
 def _zero_bootstrap_prearm_summary() -> dict[str, Any]:
@@ -1251,12 +1357,20 @@ def _validate_versioned_class_study_preparation(
         or audit.get("passive_render_contract_sha256") != passive_render_contract_sha256
         or audit.get("render_observation_sha256") != render_observation_sha256
         or not isinstance(events, list)
-        or any(
-            not isinstance(event, Mapping) or event.get("kind") == "browser-internal-document"
-            for event in events
+        or any(not isinstance(event, Mapping) for event in events)
+        or (
+            acquisition_schema_version < 7
+            and any(event.get("kind") == "browser-internal-document" for event in events)
         )
         or not isinstance(summary, Mapping)
-        or "browser_internal_document_count" in summary
+        or (
+            acquisition_schema_version < 7
+            and "browser_internal_document_count" in summary
+        )
+        or (
+            acquisition_schema_version == 7
+            and "browser_internal_document_count" not in summary
+        )
     ):
         raise ValueError("historical discovery-event audit contract is invalid")
     coverage = preparation.get("coverage_admission")
@@ -1306,9 +1420,10 @@ def _validate_versioned_class_study_preparation(
                 current_render["quiet_started_ms"] = old_last - 1
                 shifted_boundary_event_ms = (old_last, old_last - 1)
     current_render["schema_version"] = RENDER_OBSERVATION_SCHEMA_VERSION
-    current_render["internal_document_lifecycle_summary"] = (
-        _zero_internal_document_lifecycle_summary()
-    )
+    if acquisition_schema_version < 7:
+        current_render["internal_document_lifecycle_summary"] = (
+            _zero_internal_document_lifecycle_summary()
+        )
     current_render_sha256 = evidence_sha256(current_render)
     current_audit = deepcopy(dict(audit))
     if shifted_boundary_event_ms is not None:
@@ -1318,12 +1433,35 @@ def _validate_versioned_class_study_preparation(
                 event["monotonic_ms"] = new_last
     current_audit["schema_version"] = DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION
     current_audit["instrumentation_policy"] = CDP_TARGET_INSTRUMENTATION_POLICY
+    current_audit["request_stage_observation_policy"] = (
+        REQUEST_STAGE_OBSERVATION_POLICY
+    )
     current_audit["passive_render_contract_sha256"] = PASSIVE_RENDER_CONTRACT_SHA256
     current_audit["render_observation_sha256"] = current_render_sha256
-    current_audit["summary"] = {
-        **dict(summary),
-        "browser_internal_document_count": 0,
-    }
+    current_audit["normal_shutdown_disposal_summary"] = (
+        _zero_normal_shutdown_disposal_summary()
+    )
+    current_audit["summary"] = dict(summary)
+    if acquisition_schema_version < 7:
+        current_audit["summary"]["browser_internal_document_count"] = 0
+    current_audit["summary"]["blocked_preflight_dependent_count"] = 0
+    for event in current_audit["events"]:
+        if event.get("kind") == "network-request":
+            event["initiator_type"] = "historical-unavailable"
+            event["initiator_request_id"] = None
+            event["response_observed"] = False
+            event["interception_exception"] = None
+        elif event.get("kind") == "network-terminal":
+            event["failure"] = (
+                None
+                if event.get("outcome") == "finished"
+                else {
+                    "error_text": "historical-unavailable",
+                    "canceled": None,
+                    "blocked_reason": None,
+                    "cors_error_status_present": False,
+                }
+            )
     current_audit_sha256 = evidence_sha256(current_audit)
     preparation["passive_render_contract"] = deepcopy(PASSIVE_RENDER_CONTRACT)
     preparation["passive_render_contract_sha256"] = PASSIVE_RENDER_CONTRACT_SHA256
@@ -5051,7 +5189,7 @@ def _validate_current_provenance_contract(
     *,
     candidate_catalogue_path: Path | None = None,
 ) -> dict[str, Any]:
-    """Reconstruct schema-five-through-seven provenance without schema collision.
+    """Reconstruct schema-five-through-eight provenance without schema collision.
 
     Historical acquisition schemas remain readable under their original
     contracts.  Current evidence, however, must retain every fixed acquisition
@@ -5102,7 +5240,7 @@ def _validate_current_provenance_contract(
     if schema in _SELECTION_SCHEMA_VERSIONS:
         fixed_fields.add("acquisition_selection_policy")
     fixed_projection = {field: provenance.get(field) for field in fixed_fields}
-    if schema in {5, 6}:
+    if schema in {5, 6, 7}:
         try:
             contract = _historical_evidence_contract_for(
                 schema,

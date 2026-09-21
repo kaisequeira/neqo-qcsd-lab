@@ -147,7 +147,7 @@ def test_standalone_browser_schema_constants_match_the_producer() -> None:
         browser_producer.HISTORICAL_FOUNDATION_SCHEMA_VERSIONS
     )
     assert admission._BROWSER_EGRESS_FINAL_SCHEMA == browser_producer.FINAL_SCHEMA_VERSION
-    assert admission._ACQUISITION_SCHEMA == acquisition_producer.SCHEMA_VERSION == 7
+    assert admission._ACQUISITION_SCHEMA == acquisition_producer.SCHEMA_VERSION == 8
     assert (
         admission._ACQUISITION_COMPLETION_SCHEMA
         == acquisition_producer.COMPLETION_SCHEMA_VERSION
@@ -158,8 +158,8 @@ def test_standalone_browser_schema_constants_match_the_producer() -> None:
         == acquisition_producer.CHECKPOINT_SCHEMA_VERSION
         == 3
     )
-    assert admission._PINNED_CDP_SCHEMA == pinned_cdp_producer.PROBE_SCHEMA_VERSION == 16
-    assert 14 in admission._HISTORICAL_PINNED_CDP_SCHEMAS
+    assert admission._PINNED_CDP_SCHEMA == pinned_cdp_producer.PROBE_SCHEMA_VERSION == 17
+    assert {14, 16}.issubset(admission._HISTORICAL_PINNED_CDP_SCHEMAS)
 
 
 def test_authority_admission_accepts_production_built_browser_foundation(tmp_path: Path) -> None:
@@ -341,7 +341,7 @@ def test_current_completion_uses_bound_provenance_and_authority(authority_fixtur
     ) == fixture.admitted
 
 
-@pytest.mark.parametrize("schema", (1, 2, 3, 4, 5, 6))
+@pytest.mark.parametrize("schema", (1, 2, 3, 4, 5, 6, 7))
 def test_legacy_acquisition_is_inspectable_but_not_current_launch_authority(
     authority_fixture, schema: int
 ) -> None:

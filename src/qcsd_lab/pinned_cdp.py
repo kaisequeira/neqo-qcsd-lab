@@ -40,12 +40,15 @@ from .browser_egress import (
 from .buflo_study import validate_build_execution_receipt
 from .cdp_targets import (
     CDP_TARGET_INSTRUMENTATION_POLICY,
+    NORMAL_SHUTDOWN_DISPOSAL_POLICY,
+    NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
     SRCDOC_PSEUDO_DOCUMENT_POLICY,
     SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
     BrowserSharedWorkerGuard,
     RecursiveCdpTargetRouter,
     validate_bootstrap_prearm_summary,
     validate_egress_prearm_summary,
+    validate_normal_shutdown_disposal_summary,
     validate_srcdoc_pseudo_document_summary,
 )
 from .class_study import (
@@ -112,9 +115,9 @@ _HISTORICAL_PINNED_CDP_RESOLVER_PROJECTION = {
 }
 
 RECEIPT_TYPE = "qcsd-class-study-pinned-cdp-probe"
-PROBE_SCHEMA_VERSION = 16
+PROBE_SCHEMA_VERSION = 17
 HISTORICAL_PROBE_SCHEMA_VERSION = 8
-HISTORICAL_PROBE_SCHEMA_VERSIONS = frozenset({8, 9, 11, 12, 13, 14})
+HISTORICAL_PROBE_SCHEMA_VERSIONS = frozenset({8, 9, 11, 12, 13, 14, 16})
 EXPECTED_PLAYWRIGHT_VERSION = PLAYWRIGHT_VERSION
 EXPECTED_CHROMIUM_EXECUTABLE = str(DEFAULT_CONFIGURED_EXECUTABLE)
 PROBE_OBSERVATION_TIMEOUT_MS = 10_000
@@ -295,13 +298,38 @@ _HISTORICAL_PROBE_CONTRACT_V14_SHA256 = canonical_json_sha256(
     _HISTORICAL_PROBE_CONTRACT_V14
 )
 
-# Outer schema 16 binds the v19 router and requires one exact, identifier-
-# minimised root ``about:srcdoc`` loader-bound orphan terminal lifecycle from
-# the local probe.  Failed, unpublished outer schema 15 is deliberately not a
-# historical evidence format.
-PROBE_CONTRACT: dict[str, Any] = _worker_webtransport_probe_contract(
+# Outer schema 16 is immutable v100/v101 evidence.  It binds the v19 router and
+# one exact, identifier-minimised root ``about:srcdoc`` loader-bound orphan
+# terminal lifecycle.  Failed, unpublished outer schema 15 is deliberately not
+# a historical evidence format.
+_HISTORICAL_PROBE_CONTRACT_V16: dict[str, Any] = _worker_webtransport_probe_contract(
     schema_version=15,
     policy="pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v15",
+    instrumentation_policy=(
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v19"
+    ),
+    playwright_driver_ownership_policy=OWNERSHIP_POLICY_RECEIPT,
+    playwright_driver_binding=EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
+)
+_HISTORICAL_PROBE_CONTRACT_V16["required_observations"].append(
+    "root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-lifecycle"
+)
+_HISTORICAL_PROBE_CONTRACT_V16["srcdoc_pseudo_document_summary_schema_version"] = (
+    SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION
+)
+_HISTORICAL_PROBE_CONTRACT_V16["srcdoc_pseudo_document_policy"] = (
+    SRCDOC_PSEUDO_DOCUMENT_POLICY
+)
+_HISTORICAL_PROBE_CONTRACT_V16["required_srcdoc_pseudo_document_count"] = 1
+_HISTORICAL_PROBE_CONTRACT_V16_SHA256 = canonical_json_sha256(
+    _HISTORICAL_PROBE_CONTRACT_V16
+)
+
+# Outer schema 17 binds the v20 router.  The independently versioned inner
+# contract advances as well so no current receipt can collide with schema 16.
+PROBE_CONTRACT: dict[str, Any] = _worker_webtransport_probe_contract(
+    schema_version=16,
+    policy="pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v16",
     instrumentation_policy=CDP_TARGET_INSTRUMENTATION_POLICY,
     playwright_driver_ownership_policy=OWNERSHIP_POLICY_RECEIPT,
     playwright_driver_binding=EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
@@ -309,11 +337,18 @@ PROBE_CONTRACT: dict[str, Any] = _worker_webtransport_probe_contract(
 PROBE_CONTRACT["required_observations"].append(
     "root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-lifecycle"
 )
+PROBE_CONTRACT["required_observations"].append(
+    "terminal-normal-shutdown-disposal-network-fetch-reconciliation"
+)
 PROBE_CONTRACT["srcdoc_pseudo_document_summary_schema_version"] = (
     SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION
 )
 PROBE_CONTRACT["srcdoc_pseudo_document_policy"] = SRCDOC_PSEUDO_DOCUMENT_POLICY
 PROBE_CONTRACT["required_srcdoc_pseudo_document_count"] = 1
+PROBE_CONTRACT["normal_shutdown_disposal_summary_schema_version"] = (
+    NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
+)
+PROBE_CONTRACT["normal_shutdown_disposal_policy"] = NORMAL_SHUTDOWN_DISPOSAL_POLICY
 PROBE_CONTRACT_SHA256 = canonical_json_sha256(PROBE_CONTRACT)
 
 _TARGET_ACTIVITY_EVENTS = (
@@ -708,6 +743,7 @@ def run_pinned_cdp_probe(*, expected_uid: int, expected_gid: int) -> dict[str, A
     bootstrap_prearm_summary: dict[str, Any] | None = None
     egress_prearm_summary: dict[str, Any] | None = None
     srcdoc_pseudo_document_summary: dict[str, Any] | None = None
+    normal_shutdown_disposal_summary: dict[str, Any] | None = None
     non_replayable_egress_summary: dict[str, Any] | None = None
     browser_egress_command_line: dict[str, object] | None = None
     browser_context_service_worker_count: int | None = None
@@ -892,6 +928,12 @@ def run_pinned_cdp_probe(*, expected_uid: int, expected_gid: int) -> dict[str, A
                 ):
                     browser_guard_closed = True
                     router_closed = True
+                normal_shutdown_disposal_summary = (
+                    validate_normal_shutdown_disposal_summary(
+                        router.normal_shutdown_disposal_summary,
+                        require_terminal=True,
+                    )
+                )
                 ledger.finish()
                 ledger_closed = True
                 extra_info.finish()
@@ -992,6 +1034,7 @@ def run_pinned_cdp_probe(*, expected_uid: int, expected_gid: int) -> dict[str, A
         "bootstrap_prearm_summary": bootstrap_prearm_summary,
         "egress_prearm_summary": egress_prearm_summary,
         "srcdoc_pseudo_document_summary": srcdoc_pseudo_document_summary,
+        "normal_shutdown_disposal_summary": normal_shutdown_disposal_summary,
         "non_replayable_egress_summary": non_replayable_egress_summary,
         "browser_egress_command_line": browser_egress_command_line,
         "browser_context_service_worker_count": browser_context_service_worker_count,
@@ -1543,6 +1586,9 @@ def _validate_payload(
     elif probe_schema_version == 14:
         expected_contract = _HISTORICAL_PROBE_CONTRACT_V14
         expected_contract_sha256 = _HISTORICAL_PROBE_CONTRACT_V14_SHA256
+    elif probe_schema_version == 16:
+        expected_contract = _HISTORICAL_PROBE_CONTRACT_V16
+        expected_contract_sha256 = _HISTORICAL_PROBE_CONTRACT_V16_SHA256
     else:
         expected_contract = PROBE_CONTRACT
         expected_contract_sha256 = PROBE_CONTRACT_SHA256
@@ -1567,8 +1613,11 @@ def _validate_payload(
         payload.get("observation"),
         require_worker_response_consumption=probe_schema_version not in {8, 9},
         require_worker_webtransport_probe=probe_schema_version
-        in {12, 13, 14, PROBE_SCHEMA_VERSION},
+        in {12, 13, 14, 16, PROBE_SCHEMA_VERSION},
         require_srcdoc_pseudo_document_summary=(
+            probe_schema_version in {16, PROBE_SCHEMA_VERSION}
+        ),
+        require_normal_shutdown_disposal_summary=(
             probe_schema_version == PROBE_SCHEMA_VERSION
         ),
         expected_resolver_projection=(
@@ -1605,6 +1654,7 @@ def _validate_observation(
     require_worker_response_consumption: bool = True,
     require_worker_webtransport_probe: bool = True,
     require_srcdoc_pseudo_document_summary: bool = True,
+    require_normal_shutdown_disposal_summary: bool = True,
     expected_playwright_driver_binding: Mapping[str, Any] = (EXPECTED_PLAYWRIGHT_DRIVER_BINDING),
     expected_resolver_projection: Mapping[str, Any] = (_PINNED_CDP_RESOLVER_PROJECTION),
 ) -> dict[str, Any]:
@@ -1662,6 +1712,8 @@ def _validate_observation(
         expected_topology_fields.add("worker_webtransport_probe")
     if require_srcdoc_pseudo_document_summary:
         expected_topology_fields.add("srcdoc_pseudo_document_summary")
+    if require_normal_shutdown_disposal_summary:
+        expected_topology_fields.add("normal_shutdown_disposal_summary")
     if not isinstance(topology, Mapping) or set(topology) != expected_topology_fields:
         raise ValueError("pinned CDP probe topology fields are invalid")
     target_types = topology.get("observed_target_types")
@@ -1712,6 +1764,11 @@ def _validate_observation(
         _validate_worker_webtransport_probe(topology.get("worker_webtransport_probe"))
     if require_srcdoc_pseudo_document_summary:
         _validate_required_srcdoc_summary(topology.get("srcdoc_pseudo_document_summary"))
+    if require_normal_shutdown_disposal_summary:
+        validate_normal_shutdown_disposal_summary(
+            topology.get("normal_shutdown_disposal_summary"),
+            require_terminal=True,
+        )
     activity_by_type = target_activity["by_target_type"]
     http_status_counts = topology.get("http_status_counts")
     server_request_counts = topology.get("server_request_counts")

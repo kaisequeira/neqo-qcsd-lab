@@ -13,6 +13,8 @@ from qcsd_lab.browser_egress import (
 from qcsd_lab.cdp_targets import (
     CDP_TARGET_INSTRUMENTATION_POLICY,
     EGRESS_PREARM_SUMMARY_SCHEMA_VERSION,
+    NORMAL_SHUTDOWN_DISPOSAL_POLICY,
+    NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
     SRCDOC_PSEUDO_DOCUMENT_POLICY,
     SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
 )
@@ -21,6 +23,7 @@ from qcsd_lab.discovery_evidence import (
     PASSIVE_RENDER_CONTRACT,
     PASSIVE_RENDER_CONTRACT_SCHEMA_VERSION,
     PASSIVE_RENDER_CONTRACT_SHA256,
+    REQUEST_STAGE_OBSERVATION_POLICY,
     RENDER_OBSERVATION_SCHEMA_VERSION,
     _independent_url_dependency,
     evidence_sha256,
@@ -221,6 +224,7 @@ def _network(
     occurrence_id: str,
     resource_id: int | None,
     url: str,
+    method: str = "GET",
     frame_id: str | None = "root-frame",
     occurrence_index: int = 0,
     redirected: bool = False,
@@ -232,6 +236,10 @@ def _network(
     interception_required: bool = True,
     safe_request_headers: list[list[str]] | None = None,
     resource_type: str | None = None,
+    initiator_type: str = "parser",
+    initiator_request_id: str | None = None,
+    response_observed: bool = False,
+    interception_exception: dict | None = None,
 ) -> dict:
     mapping = (
         {"kind": "resource", "resource_id": resource_id}
@@ -250,10 +258,12 @@ def _network(
         "network_id": network_id,
         "occurrence_id": occurrence_id,
         "occurrence_index": occurrence_index,
-        "method": "GET",
+        "method": method,
         "url": url,
         "frame_id": frame_id,
         "resource_type": resource_type or ("Script" if resource_id else "Document"),
+        "initiator_type": initiator_type,
+        "initiator_request_id": initiator_request_id,
         "safe_request_headers": (
             (safe_request_headers or []) if resource_id is not None else None
         ),
@@ -261,6 +271,8 @@ def _network(
         "redirected": redirected,
         "redirect_from_occurrence_id": redirect_from,
         "mapping": mapping,
+        "response_observed": response_observed,
+        "interception_exception": interception_exception,
         "dependency_evidence": evidence or [],
         "resolved_dependency_resource_ids": dependencies or [],
     }
@@ -273,9 +285,12 @@ def _fetch(
     network_id: str,
     occurrence_id: str,
     url: str,
+    method: str = "GET",
     frame_id: str | None = "root-frame",
     redirected_fetch_id: str | None = None,
     relationship: str = "primary",
+    policy_decision: str = "continue",
+    policy_reason: str | None = None,
 ) -> dict:
     return {
         "sequence": 0,
@@ -286,17 +301,22 @@ def _fetch(
         "network_id": network_id,
         "redirected_fetch_id": redirected_fetch_id,
         "network_occurrence_id": occurrence_id,
-        "method": "GET",
+        "method": method,
         "url": url,
         "frame_id": frame_id,
-        "policy_decision": "continue",
-        "policy_reason": None,
+        "policy_decision": policy_decision,
+        "policy_reason": policy_reason,
         "relationship": relationship,
     }
 
 
 def _terminal(
-    *, source: dict = ROOT, network_id: str, occurrences: list[str]
+    *,
+    source: dict = ROOT,
+    network_id: str,
+    occurrences: list[str],
+    outcome: str = "finished",
+    failure: dict | None = None,
 ) -> dict:
     return {
         "sequence": 0,
@@ -304,7 +324,8 @@ def _terminal(
         "kind": "network-terminal",
         "source": source,
         "network_id": network_id,
-        "outcome": "finished",
+        "outcome": outcome,
+        "failure": failure,
         "network_occurrence_ids": occurrences,
     }
 
@@ -338,6 +359,27 @@ def _resource(resource_id: int, url: str, dependencies: list[int] | None = None)
     }
 
 
+def _normal_shutdown_disposal_summary() -> dict:
+    return {
+        "schema_version": NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
+        "policy": NORMAL_SHUTDOWN_DISPOSAL_POLICY,
+        "started": True,
+        "terminal": True,
+        "network_total": 0,
+        "fetch_total": 0,
+        "matched_total": 0,
+        "network_only_synthetic_total": 0,
+        "pending_network_total": 0,
+        "pending_fetch_total": 0,
+        "terminal_outcomes": {
+            "Network.loadingFinished": 0,
+            "Network.loadingFailed": 0,
+            "Network.redirectResponse": 0,
+            "qcsd-shutdown": 0,
+        },
+    }
+
+
 def _audit(events: list[dict]) -> dict:
     for sequence, event in enumerate(events, 1):
         event["sequence"] = sequence
@@ -345,8 +387,10 @@ def _audit(events: list[dict]) -> dict:
     return {
         "schema_version": DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION,
         "instrumentation_policy": CDP_TARGET_INSTRUMENTATION_POLICY,
+        "request_stage_observation_policy": REQUEST_STAGE_OBSERVATION_POLICY,
         "passive_render_contract_sha256": PASSIVE_RENDER_CONTRACT_SHA256,
         "render_observation_sha256": "a" * 64,
+        "normal_shutdown_disposal_summary": _normal_shutdown_disposal_summary(),
         "events": events,
         "summary": {
             "event_count": len(events),
@@ -378,6 +422,11 @@ def _audit(events: list[dict]) -> dict:
             "exclusion_occurrence_count": sum(
                 event["kind"] == "network-request"
                 and event["mapping"]["kind"] == "exclusion"
+                for event in events
+            ),
+            "blocked_preflight_dependent_count": sum(
+                event["kind"] == "network-request"
+                and event["interception_exception"] is not None
                 for event in events
             ),
         },
@@ -454,10 +503,95 @@ def _root_resource_audit(*extra_events: dict) -> tuple[dict, list[dict]]:
     )
 
 
+def _blocked_by_client_failure(blocked_reason: str) -> dict:
+    return {
+        "error_text": "net::ERR_BLOCKED_BY_CLIENT",
+        "canceled": False,
+        "blocked_reason": blocked_reason,
+        "cors_error_status_present": False,
+    }
+
+
+def _blocked_preflight_audit(
+    request_order: str,
+) -> tuple[dict, list[dict], list[dict]]:
+    url = "https://page.test/api"
+    actual_occurrence = "actual-post-request"
+    preflight_occurrence = "preflight-request"
+    actual_first = request_order == "actual-first"
+    if not actual_first and request_order != "preflight-first":
+        raise ValueError("unsupported blocked-preflight request order")
+    exclusion_ids = {
+        "actual": 0 if actual_first else 1,
+        "preflight": 1 if actual_first else 0,
+    }
+    actual = _network(
+        network_id="actual-post-network",
+        occurrence_id=actual_occurrence,
+        resource_id=None,
+        url=url,
+        method="POST",
+        resource_type="Fetch",
+        initiator_type="script",
+        exclusion_id=exclusion_ids["actual"],
+        reason="unsafe method: POST",
+        interception_exception={
+            "kind": "blocked-after-failed-cors-preflight-v1",
+            "preflight_occurrence_id": preflight_occurrence,
+        },
+    )
+    preflight = _network(
+        network_id="preflight-network",
+        occurrence_id=preflight_occurrence,
+        resource_id=None,
+        url=url,
+        method="OPTIONS",
+        resource_type="Other",
+        initiator_type="preflight",
+        initiator_request_id="actual-post-network",
+        exclusion_id=exclusion_ids["preflight"],
+        reason="unsafe method: OPTIONS",
+    )
+    ordered_requests = [actual, preflight] if actual_first else [preflight, actual]
+    pair_events = [
+        *ordered_requests,
+        _fetch(
+            fetch_id="preflight-fetch",
+            network_id="preflight-network",
+            occurrence_id=preflight_occurrence,
+            url=url,
+            method="OPTIONS",
+            policy_decision="fail",
+            policy_reason="unsafe method: OPTIONS",
+        ),
+        _terminal(
+            network_id="preflight-network",
+            occurrences=[preflight_occurrence],
+            outcome="failed",
+            failure=_blocked_by_client_failure("inspector"),
+        ),
+        _terminal(
+            network_id="actual-post-network",
+            occurrences=[actual_occurrence],
+            outcome="failed",
+            failure=_blocked_by_client_failure("other"),
+        ),
+    ]
+    audit, resources = _root_resource_audit(*pair_events)
+    exclusions = [
+        {"url": url, "reason": "unsafe method: POST"},
+        {"url": url, "reason": "unsafe method: OPTIONS"},
+    ]
+    return audit, resources, exclusions
+
+
 def test_internal_document_lifecycle_bumps_discovery_evidence_schemas() -> None:
     assert PASSIVE_RENDER_CONTRACT_SCHEMA_VERSION == 4
     assert RENDER_OBSERVATION_SCHEMA_VERSION == 4
-    assert DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION == 5
+    assert DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION == 7
+    assert REQUEST_STAGE_OBSERVATION_POLICY == (
+        "chromium-143-fetch-primary-or-failed-cors-preflight-v1"
+    )
     assert PASSIVE_RENDER_CONTRACT["policy"] == "bounded-passive-render-quiescence-v4"
     assert (
         "terminal-root-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-lifecycle"
@@ -468,6 +602,169 @@ def test_internal_document_lifecycle_bumps_discovery_evidence_schemas() -> None:
     assert SRCDOC_PSEUDO_DOCUMENT_POLICY == (
         "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-v2"
     )
+
+
+@pytest.mark.parametrize("request_order", ["actual-first", "preflight-first"])
+def test_verifier_accepts_exact_blocked_preflight_exception_in_either_request_order(
+    request_order: str,
+) -> None:
+    audit, resources, exclusions = _blocked_preflight_audit(request_order)
+
+    summary = _verify(audit, resources, exclusions)
+
+    assert summary == {
+        "event_count": 8,
+        "target_event_count": 0,
+        "browser_internal_document_count": 0,
+        "network_request_count": 3,
+        "fetch_request_count": 2,
+        "fetch_internal_restart_count": 0,
+        "terminal_event_count": 3,
+        "resource_occurrence_count": 1,
+        "exclusion_occurrence_count": 2,
+        "blocked_preflight_dependent_count": 1,
+    }
+
+
+@pytest.mark.parametrize(
+    ("mutation", "error"),
+    [
+        ("missing-claim", "exception claim"),
+        ("wrong-claim", "exception claim"),
+        ("wrong-causal-id", "reconciliation is incomplete"),
+        ("different-url", "reconciliation is incomplete"),
+        ("actual-response", "reconciliation is incomplete"),
+        ("preflight-response", "reconciliation is incomplete"),
+        ("continued-preflight", "policy decision"),
+        ("actual-terminal-signature", "reconciliation is incomplete"),
+        ("preflight-terminal-signature", "reconciliation is incomplete"),
+        ("duplicate-preflight", "reconciliation is incomplete"),
+        ("forged-summary-count", "summary does not verify"),
+    ],
+)
+def test_verifier_rejects_forged_blocked_preflight_exception(
+    mutation: str,
+    error: str,
+) -> None:
+    audit, resources, exclusions = _blocked_preflight_audit("actual-first")
+    events = audit["events"]
+    actual = next(
+        event
+        for event in events
+        if event.get("occurrence_id") == "actual-post-request"
+    )
+    preflight = next(
+        event
+        for event in events
+        if event.get("occurrence_id") == "preflight-request"
+    )
+    preflight_fetch = next(
+        event for event in events if event.get("fetch_id") == "preflight-fetch"
+    )
+    actual_terminal = next(
+        event
+        for event in events
+        if event["kind"] == "network-terminal"
+        and event["network_id"] == "actual-post-network"
+    )
+    preflight_terminal = next(
+        event
+        for event in events
+        if event["kind"] == "network-terminal"
+        and event["network_id"] == "preflight-network"
+    )
+
+    if mutation == "missing-claim":
+        actual["interception_exception"] = None
+    elif mutation == "wrong-claim":
+        actual["interception_exception"]["preflight_occurrence_id"] = "unknown"
+    elif mutation == "wrong-causal-id":
+        preflight["initiator_request_id"] = "unrelated-post"
+    elif mutation == "different-url":
+        preflight["url"] = "https://page.test/different-api"
+        preflight_fetch["url"] = preflight["url"]
+        exclusions[1]["url"] = preflight["url"]
+    elif mutation == "actual-response":
+        actual["response_observed"] = True
+    elif mutation == "preflight-response":
+        preflight["response_observed"] = True
+    elif mutation == "continued-preflight":
+        preflight_fetch["policy_decision"] = "continue"
+        preflight_fetch["policy_reason"] = None
+    elif mutation == "actual-terminal-signature":
+        actual_terminal["failure"]["blocked_reason"] = "inspector"
+    elif mutation == "preflight-terminal-signature":
+        preflight_terminal["failure"]["cors_error_status_present"] = True
+    elif mutation == "duplicate-preflight":
+        insertion = events.index(preflight_terminal)
+        events[insertion:insertion] = [
+            _network(
+                network_id="duplicate-preflight-network",
+                occurrence_id="duplicate-preflight-request",
+                resource_id=None,
+                url=actual["url"],
+                method="OPTIONS",
+                resource_type="Other",
+                initiator_type="preflight",
+                initiator_request_id="actual-post-network",
+                exclusion_id=2,
+                reason="unsafe method: OPTIONS",
+            ),
+            _fetch(
+                fetch_id="duplicate-preflight-fetch",
+                network_id="duplicate-preflight-network",
+                occurrence_id="duplicate-preflight-request",
+                url=actual["url"],
+                method="OPTIONS",
+                policy_decision="fail",
+                policy_reason="unsafe method: OPTIONS",
+            ),
+            _terminal(
+                network_id="duplicate-preflight-network",
+                occurrences=["duplicate-preflight-request"],
+                outcome="failed",
+                failure=_blocked_by_client_failure("inspector"),
+            ),
+        ]
+        audit = _audit(events)
+    elif mutation == "forged-summary-count":
+        audit["summary"]["blocked_preflight_dependent_count"] = 2
+    else:  # pragma: no cover - the parameter table is exhaustive.
+        raise AssertionError(f"unknown mutation: {mutation}")
+
+    with pytest.raises(ValueError, match=error):
+        _verify(audit, resources, exclusions)
+
+
+def test_discovery_audit_binds_terminal_disposal_summary_outside_scientific_events() -> None:
+    audit, resources = _root_resource_audit()
+    audit["normal_shutdown_disposal_summary"] = {
+        **_normal_shutdown_disposal_summary(),
+        "network_total": 2,
+        "fetch_total": 1,
+        "matched_total": 1,
+        "network_only_synthetic_total": 1,
+        "terminal_outcomes": {
+            "Network.loadingFinished": 1,
+            "Network.loadingFailed": 0,
+            "Network.redirectResponse": 0,
+            "qcsd-shutdown": 1,
+        },
+    }
+
+    summary = _verify(audit, resources)
+    assert summary["network_request_count"] == 1
+    assert summary["terminal_event_count"] == 1
+
+    missing = deepcopy(audit)
+    missing.pop("normal_shutdown_disposal_summary")
+    with pytest.raises(ValueError, match="fields differ"):
+        _verify(missing, resources)
+
+    incomplete = deepcopy(audit)
+    incomplete["normal_shutdown_disposal_summary"]["terminal"] = False
+    with pytest.raises(ValueError, match="counts are inconsistent"):
+        _verify(incomplete, resources)
 
 
 def test_quiescent_render_requires_router_shutdown_readiness() -> None:
@@ -1014,7 +1311,7 @@ def test_independent_dependency_selects_latest_across_exact_frame_sources() -> N
     )
 
 
-def test_independent_dependency_keeps_parent_frame_fallback_ambiguity_closed() -> None:
+def test_independent_dependency_leaves_parent_frame_fallback_ambiguity_unresolved() -> None:
     duplicate = "https://page.test/script.js"
     current_source = _source(
         "current-session",
@@ -1048,8 +1345,125 @@ def test_independent_dependency_keeps_parent_frame_fallback_ambiguity_closed() -
         frame_id="current-frame",
     )
 
-    with pytest.raises(ValueError, match="scope is ambiguous"):
-        _independent_url_dependency(previous, current=current, url=duplicate)
+    assert _independent_url_dependency(previous, current=current, url=duplicate) is None
+
+
+@pytest.mark.parametrize("scope_count", [2, 4])
+def test_independent_dependency_leaves_same_source_cross_frame_urls_unresolved(
+    scope_count: int,
+) -> None:
+    duplicate = "https://page.test/script.js"
+    previous = [
+        _network(
+            network_id=f"network-{index}",
+            occurrence_id=f"request-{index}",
+            resource_id=index,
+            url=duplicate,
+            frame_id=f"frame-{index}",
+        )
+        for index in range(scope_count)
+    ]
+    current = _network(
+        network_id="current-network",
+        occurrence_id="current-request",
+        resource_id=4,
+        url="https://page.test/data",
+        frame_id="current-frame",
+    )
+
+    assert _independent_url_dependency(previous, current=current, url=duplicate) is None
+
+
+def test_independent_dependency_retains_a_unique_same_source_fallback() -> None:
+    duplicate = "https://page.test/script.js"
+    previous = [
+        _network(
+            network_id="previous-network",
+            occurrence_id="previous-request",
+            resource_id=3,
+            url=duplicate,
+            frame_id="other-frame",
+        )
+    ]
+    current = _network(
+        network_id="current-network",
+        occurrence_id="current-request",
+        resource_id=4,
+        url="https://page.test/data",
+        frame_id="current-frame",
+    )
+
+    assert _independent_url_dependency(previous, current=current, url=duplicate) == 3
+
+
+def test_dependency_verifier_accepts_unresolved_cross_frame_url_and_rejects_forgery() -> None:
+    duplicate = "https://page.test/script.js"
+    data = "https://page.test/data"
+    resources = [
+        _resource(0, duplicate),
+        _resource(1, duplicate),
+        _resource(2, data),
+    ]
+    events: list[dict] = []
+    for resource_id, frame_id in ((0, "frame-a"), (1, "frame-b")):
+        occurrence = f"request-{resource_id}"
+        network_id = f"network-{resource_id}"
+        events.extend(
+            [
+                _network(
+                    network_id=network_id,
+                    occurrence_id=occurrence,
+                    resource_id=resource_id,
+                    url=duplicate,
+                    frame_id=frame_id,
+                ),
+                _fetch(
+                    fetch_id=f"fetch-{resource_id}",
+                    network_id=network_id,
+                    occurrence_id=occurrence,
+                    url=duplicate,
+                    frame_id=frame_id,
+                ),
+                _terminal(network_id=network_id, occurrences=[occurrence]),
+            ]
+        )
+    events.extend(
+        [
+            _network(
+                network_id="network-2",
+                occurrence_id="request-2",
+                resource_id=2,
+                url=data,
+                frame_id="current-frame",
+                evidence=[
+                    {
+                        "kind": "stack-call-frame",
+                        "value": duplicate,
+                        "resolved_resource_id": None,
+                    }
+                ],
+            ),
+            _fetch(
+                fetch_id="fetch-2",
+                network_id="network-2",
+                occurrence_id="request-2",
+                url=data,
+                frame_id="current-frame",
+            ),
+            _terminal(network_id="network-2", occurrences=["request-2"]),
+        ]
+    )
+    audit = _audit(events)
+    _verify(audit, resources)
+
+    forged = deepcopy(audit)
+    forged_event = forged["events"][6]
+    forged_event["dependency_evidence"][0]["resolved_resource_id"] = 1
+    forged_event["resolved_dependency_resource_ids"] = [1]
+    forged_resources = deepcopy(resources)
+    forged_resources[2]["depends_on"] = [1]
+    with pytest.raises(ValueError, match="latest-preceding"):
+        _verify(forged, forged_resources)
 
 
 def test_dependency_verifier_rejects_a_future_resource_edge() -> None:

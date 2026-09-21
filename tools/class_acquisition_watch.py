@@ -40,8 +40,8 @@ STUDY_ID = "classifier-multiorigin100-v1"
 CANDIDATE_COUNT = 600
 SCHEMA_VERSION = 1
 SOURCE_BINDING_PREIMAGE_SCHEMA_VERSION = 3
-ACQUISITION_SCHEMA_VERSION = 7
-HISTORICAL_ACQUISITION_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6})
+ACQUISITION_SCHEMA_VERSION = 8
+HISTORICAL_ACQUISITION_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7})
 CHECKPOINT_SCHEMA_VERSION = 3
 TERMINAL_SCHEMA_VERSION = 4
 COMPLETION_SCHEMA_VERSION = 4
@@ -715,15 +715,15 @@ _BUILD_STORAGE_PREFLIGHT_KEYS = {
     "passed",
 }
 _CDP_TARGET_INSTRUMENTATION_POLICY = (
-    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v19"
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v20"
 )
 _PLAYWRIGHT_VERSION = "1.57.0"
 _CHROMIUM_VERSION = "143.0.7499.4"
 _CHROMIUM_EXECUTABLE = "/usr/local/bin/qcsd-chromium"
-_PINNED_CDP_SCHEMA_VERSION = 16
+_PINNED_CDP_SCHEMA_VERSION = 17
 _HISTORICAL_PINNED_CDP_SCHEMA_VERSION = 8
-_HISTORICAL_PINNED_CDP_SCHEMA_VERSIONS = frozenset({8, 9, 11, 12, 13, 14})
-_PINNED_CDP_CONTRACT_SCHEMA_VERSION = 15
+_HISTORICAL_PINNED_CDP_SCHEMA_VERSIONS = frozenset({8, 9, 11, 12, 13, 14, 16})
+_PINNED_CDP_CONTRACT_SCHEMA_VERSION = 16
 _HISTORICAL_PINNED_CDP_CONTRACT_SCHEMA_VERSION = 8
 _HISTORICAL_PINNED_CDP_CONTRACT_V12_SCHEMA_VERSION = 11
 _HISTORICAL_PINNED_CDP_CONTRACT_V13_SCHEMA_VERSION = 12
@@ -738,6 +738,11 @@ _PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_POLICY = (
 )
 _PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_LIMIT = 32
 _PINNED_CDP_SRCDOC_EVENT_ORDINAL_LIMIT = 20_480
+_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION = 2
+_NORMAL_SHUTDOWN_DISPOSAL_POLICY = (
+    "chromium-143-post-quiescence-context-disposal-v1"
+)
+_NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT = 4_096
 _NON_REPLAYABLE_EGRESS_POLICY = "blocked-non-urlloader-egress-v1"
 _NON_REPLAYABLE_EGRESS_SCHEMA_VERSION = 2
 _BROWSER_EGRESS_COMMAND_LINE_SCHEMA_VERSION = 4
@@ -1064,11 +1069,13 @@ _HISTORICAL_PINNED_CDP_CONTRACT_V14 = {
         "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v16"
     ),
 }
-_PINNED_CDP_CONTRACT = {
+_HISTORICAL_PINNED_CDP_CONTRACT_V16 = {
     **_HISTORICAL_PINNED_CDP_CONTRACT_V14,
-    "schema_version": _PINNED_CDP_CONTRACT_SCHEMA_VERSION,
+    "schema_version": 15,
     "policy": "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v15",
-    "instrumentation_policy": _CDP_TARGET_INSTRUMENTATION_POLICY,
+    "instrumentation_policy": (
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v19"
+    ),
     "required_observations": [
         *_HISTORICAL_PINNED_CDP_CONTRACT_V14["required_observations"],
         "root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-lifecycle",
@@ -1078,6 +1085,20 @@ _PINNED_CDP_CONTRACT = {
     ),
     "srcdoc_pseudo_document_policy": _PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_POLICY,
     "required_srcdoc_pseudo_document_count": 1,
+}
+_PINNED_CDP_CONTRACT = {
+    **_HISTORICAL_PINNED_CDP_CONTRACT_V16,
+    "schema_version": _PINNED_CDP_CONTRACT_SCHEMA_VERSION,
+    "policy": "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v16",
+    "instrumentation_policy": _CDP_TARGET_INSTRUMENTATION_POLICY,
+    "required_observations": [
+        *_HISTORICAL_PINNED_CDP_CONTRACT_V16["required_observations"],
+        "terminal-normal-shutdown-disposal-network-fetch-reconciliation",
+    ],
+    "normal_shutdown_disposal_summary_schema_version": (
+        _NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
+    ),
+    "normal_shutdown_disposal_policy": _NORMAL_SHUTDOWN_DISPOSAL_POLICY,
 }
 _HISTORICAL_PINNED_CDP_CONTRACT = {
     "schema_version": _HISTORICAL_PINNED_CDP_CONTRACT_SCHEMA_VERSION,
@@ -4564,6 +4585,90 @@ def _validate_browser_egress_command_line(value: Any) -> None:
         raise WatchError("pinned CDP browser egress command-line projection is invalid")
 
 
+def _validate_normal_shutdown_disposal_summary(value: Any) -> None:
+    fields = {
+        "schema_version",
+        "policy",
+        "started",
+        "terminal",
+        "network_total",
+        "fetch_total",
+        "matched_total",
+        "network_only_synthetic_total",
+        "pending_network_total",
+        "pending_fetch_total",
+        "terminal_outcomes",
+    }
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise WatchError("pinned CDP normal-shutdown disposal summary fields are invalid")
+    if (
+        type(value.get("schema_version")) is not int
+        or value["schema_version"]
+        != _NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
+        or value.get("policy") != _NORMAL_SHUTDOWN_DISPOSAL_POLICY
+        or type(value.get("started")) is not bool
+        or type(value.get("terminal")) is not bool
+    ):
+        raise WatchError("pinned CDP normal-shutdown disposal contract is invalid")
+    count_fields = (
+        "network_total",
+        "fetch_total",
+        "matched_total",
+        "network_only_synthetic_total",
+        "pending_network_total",
+        "pending_fetch_total",
+    )
+    if any(
+        type(value.get(field)) is not int or value[field] < 0
+        for field in count_fields
+    ):
+        raise WatchError("pinned CDP normal-shutdown disposal counts are invalid")
+    terminal_outcomes = value.get("terminal_outcomes")
+    outcome_names = {
+        "Network.loadingFinished",
+        "Network.loadingFailed",
+        "Network.redirectResponse",
+        "qcsd-shutdown",
+    }
+    if (
+        not isinstance(terminal_outcomes, Mapping)
+        or set(terminal_outcomes) != outcome_names
+        or any(
+            type(terminal_outcomes.get(outcome)) is not int
+            or terminal_outcomes[outcome] < 0
+            for outcome in outcome_names
+        )
+    ):
+        raise WatchError(
+            "pinned CDP normal-shutdown disposal terminal outcomes are invalid"
+        )
+    network_total = value["network_total"]
+    fetch_total = value["fetch_total"]
+    matched_total = value["matched_total"]
+    network_only_synthetic = value["network_only_synthetic_total"]
+    pending_network = value["pending_network_total"]
+    pending_fetch = value["pending_fetch_total"]
+    if (
+        matched_total > network_total
+        or matched_total > fetch_total
+        or network_total > _NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT
+        or fetch_total > _NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT
+        or pending_fetch != fetch_total - matched_total
+        or sum(terminal_outcomes.values()) + pending_network != network_total
+        or network_only_synthetic > network_total - matched_total
+        or network_only_synthetic > terminal_outcomes["qcsd-shutdown"]
+        or value["started"] is not True
+        or value["terminal"] is not True
+        or pending_network
+        or pending_fetch
+        or fetch_total != matched_total
+        or network_total != matched_total + network_only_synthetic
+    ):
+        raise WatchError(
+            "pinned CDP normal-shutdown disposal summary is not terminal and consistent"
+        )
+
+
 def _validate_pinned_cdp_observation(value: Any) -> None:
     if not isinstance(value, dict) or set(value) != {
         "playwright_version",
@@ -4671,6 +4776,7 @@ def _validate_pinned_cdp_observation(value: Any) -> None:
         "bootstrap_prearm_summary",
         "egress_prearm_summary",
         "srcdoc_pseudo_document_summary",
+        "normal_shutdown_disposal_summary",
         "non_replayable_egress_summary",
         "browser_egress_command_line",
         "browser_context_service_worker_count",
@@ -4701,6 +4807,9 @@ def _validate_pinned_cdp_observation(value: Any) -> None:
     egress_prearm = _validate_egress_prearm_summary(topology.get("egress_prearm_summary"))
     _validate_srcdoc_pseudo_document_summary(
         topology.get("srcdoc_pseudo_document_summary")
+    )
+    _validate_normal_shutdown_disposal_summary(
+        topology.get("normal_shutdown_disposal_summary")
     )
     _validate_non_replayable_egress_summary(topology.get("non_replayable_egress_summary"))
     _validate_worker_webtransport_probe(topology.get("worker_webtransport_probe"))
@@ -5590,7 +5699,7 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
     if acquisition_schema_version != ACQUISITION_SCHEMA_VERSION:
         raise WatchError("acquisition provenance uses an unsupported schema")
     if set(payload) != _PROVENANCE_PAYLOAD_KEYS:
-        raise WatchError("acquisition provenance payload fields differ from the v7 contract")
+        raise WatchError("acquisition provenance payload fields differ from the v8 contract")
     fixed_contract = {
         "browser_tool": _EXPECTED_BROWSER_TOOL_IDENTITY,
         "navigation_implementation": _NAVIGATION_IMPLEMENTATION,

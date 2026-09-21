@@ -23,6 +23,8 @@ from qcsd_lab.browser_egress import (
 from qcsd_lab.cdp_targets import (
     CDP_TARGET_INSTRUMENTATION_POLICY,
     EGRESS_PREARM_SUMMARY_SCHEMA_VERSION,
+    NORMAL_SHUTDOWN_DISPOSAL_POLICY,
+    NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
     SRCDOC_PSEUDO_DOCUMENT_POLICY,
     SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
     CdpTargetIntegrityError,
@@ -81,6 +83,7 @@ from qcsd_lab.discover import DiscoveryResult, origin
 from qcsd_lab.discovery_evidence import (
     DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION,
     PASSIVE_RENDER_CONTRACT_SHA256,
+    REQUEST_STAGE_OBSERVATION_POLICY,
     RENDER_OBSERVATION_SCHEMA_VERSION,
     evidence_sha256,
     passive_render_contract,
@@ -718,6 +721,17 @@ def _replace_receipt_payload(path: Path, payload: dict) -> None:
                 acquisition_module._SCHEMA_SIX_PASSIVE_RENDER_CONTRACT_SHA256
             )
             payload["source"]["lab_commit"] = "6957614b83e67cced5fd262fe97814824d21c8f9"
+        elif schema == 7:
+            payload["cdp_target_instrumentation_policy"] = (
+                acquisition_module._SCHEMA_SEVEN_CDP_TARGET_INSTRUMENTATION_POLICY
+            )
+            payload["passive_render_contract"] = copy.deepcopy(
+                acquisition_module._SCHEMA_SEVEN_PASSIVE_RENDER_CONTRACT
+            )
+            payload["passive_render_contract_sha256"] = (
+                acquisition_module._SCHEMA_SEVEN_PASSIVE_RENDER_CONTRACT_SHA256
+            )
+            payload["source"]["lab_commit"] = "af6839fd9e4d389d04b1cfab5a6caa0299c5df0e"
         if schema < 6:
             if "acquisition_authority" in payload:
                 payload["foundation_attestation"] = payload.pop("acquisition_authority")
@@ -767,6 +781,20 @@ def _downgrade_observation_to_historical_contract(
         passive_render_contract_sha256 = (
             acquisition_module._SCHEMA_SIX_PASSIVE_RENDER_CONTRACT_SHA256
         )
+    elif acquisition_schema_version == 7:
+        render_schema_version = (
+            acquisition_module._SCHEMA_SEVEN_RENDER_OBSERVATION_SCHEMA_VERSION
+        )
+        audit_schema_version = (
+            acquisition_module._SCHEMA_SEVEN_DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION
+        )
+        instrumentation_policy = (
+            acquisition_module._SCHEMA_SEVEN_CDP_TARGET_INSTRUMENTATION_POLICY
+        )
+        passive_render_contract = acquisition_module._SCHEMA_SEVEN_PASSIVE_RENDER_CONTRACT
+        passive_render_contract_sha256 = (
+            acquisition_module._SCHEMA_SEVEN_PASSIVE_RENDER_CONTRACT_SHA256
+        )
     else:  # pragma: no cover - test helper misuse
         raise AssertionError("unsupported historical observation fixture")
 
@@ -774,8 +802,10 @@ def _downgrade_observation_to_historical_contract(
     manifest = load_json(prepared_path)
     preparation = manifest["preparation"]
     render = copy.deepcopy(preparation["render_observation"])
-    internal = render.pop("internal_document_lifecycle_summary")
+    internal = render["internal_document_lifecycle_summary"]
     assert internal["total"] == 0 and internal["diagnostics"] == []
+    if acquisition_schema_version < 7:
+        render.pop("internal_document_lifecycle_summary")
     if acquisition_schema_version in {3, 4}:
         for field in (
             "router_shutdown_ready",
@@ -798,14 +828,27 @@ def _downgrade_observation_to_historical_contract(
     render["schema_version"] = render_schema_version
     render_sha256 = evidence_sha256(render)
     audit = copy.deepcopy(preparation["discovery_event_audit"])
-    assert all(event.get("kind") != "browser-internal-document" for event in audit["events"])
+    if acquisition_schema_version < 7:
+        assert all(event.get("kind") != "browser-internal-document" for event in audit["events"])
     if acquisition_schema_version in {3, 4}:
         audit["events"][-1]["monotonic_ms"] = render["last_relevant_event_ms"]
     audit["schema_version"] = audit_schema_version
     audit["instrumentation_policy"] = instrumentation_policy
     audit["passive_render_contract_sha256"] = passive_render_contract_sha256
     audit["render_observation_sha256"] = render_sha256
-    audit["summary"].pop("browser_internal_document_count")
+    audit.pop("request_stage_observation_policy")
+    audit.pop("normal_shutdown_disposal_summary")
+    audit["summary"].pop("blocked_preflight_dependent_count")
+    for event in audit["events"]:
+        if event["kind"] == "network-request":
+            event.pop("initiator_type")
+            event.pop("initiator_request_id")
+            event.pop("response_observed")
+            event.pop("interception_exception")
+        elif event["kind"] == "network-terminal":
+            event.pop("failure")
+    if acquisition_schema_version < 7:
+        audit["summary"].pop("browser_internal_document_count")
     audit_sha256 = evidence_sha256(audit)
     preparation["passive_render_contract"] = copy.deepcopy(passive_render_contract)
     preparation["passive_render_contract_sha256"] = passive_render_contract_sha256
@@ -839,7 +882,9 @@ def _downgrade_observation_to_historical_contract(
         acquisition_module.DOCUMENT_RESPONSE_SCHEMA_VERSION
     )
     response_payload["document_response_schema_version"] = (
-        acquisition_module.SCHEMA_SIX_DOCUMENT_RESPONSE_SCHEMA_VERSION
+        acquisition_module.DOCUMENT_RESPONSE_SCHEMA_VERSION
+        if acquisition_schema_version == 7
+        else acquisition_module.SCHEMA_SIX_DOCUMENT_RESPONSE_SCHEMA_VERSION
     )
     response_payload["runner_provenance_sha256"] = provenance_sha256
     response_payload["prepared_workload_sha256"] = prepared_sha256
@@ -953,11 +998,15 @@ def _prepared_manifest(url: str, approved_origins, *, source_override=None) -> d
                     "url": resource["url"],
                     "frame_id": None,
                     "resource_type": resource["type"],
+                    "initiator_type": "other",
+                    "initiator_request_id": None,
                     "safe_request_headers": resource["headers"],
                     "interception_required": True,
                     "redirected": False,
                     "redirect_from_occurrence_id": None,
                     "mapping": {"kind": "resource", "resource_id": resource_id},
+                    "response_observed": True,
+                    "interception_exception": None,
                     "dependency_evidence": dependency_evidence,
                     "resolved_dependency_resource_ids": resource["depends_on"],
                 },
@@ -984,6 +1033,7 @@ def _prepared_manifest(url: str, approved_origins, *, source_override=None) -> d
                     "source": target_source,
                     "network_id": f"network-{resource_id}",
                     "outcome": "finished",
+                    "failure": None,
                     "network_occurrence_ids": [occurrence_id],
                 },
             ]
@@ -1032,8 +1082,27 @@ def _prepared_manifest(url: str, approved_origins, *, source_override=None) -> d
     discovery_event_audit = {
         "schema_version": DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION,
         "instrumentation_policy": CDP_TARGET_INSTRUMENTATION_POLICY,
+        "request_stage_observation_policy": REQUEST_STAGE_OBSERVATION_POLICY,
         "passive_render_contract_sha256": PASSIVE_RENDER_CONTRACT_SHA256,
         "render_observation_sha256": render_observation_sha256,
+        "normal_shutdown_disposal_summary": {
+            "schema_version": NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
+            "policy": NORMAL_SHUTDOWN_DISPOSAL_POLICY,
+            "started": True,
+            "terminal": True,
+            "network_total": 0,
+            "fetch_total": 0,
+            "matched_total": 0,
+            "network_only_synthetic_total": 0,
+            "pending_network_total": 0,
+            "pending_fetch_total": 0,
+            "terminal_outcomes": {
+                "Network.loadingFinished": 0,
+                "Network.loadingFailed": 0,
+                "Network.redirectResponse": 0,
+                "qcsd-shutdown": 0,
+            },
+        },
         "events": events,
         "summary": {
             "event_count": len(events),
@@ -1045,6 +1114,7 @@ def _prepared_manifest(url: str, approved_origins, *, source_override=None) -> d
             "terminal_event_count": len(resources),
             "resource_occurrence_count": len(resources),
             "exclusion_occurrence_count": 0,
+            "blocked_preflight_dependent_count": 0,
         },
     }
     discovery_event_audit_sha256 = evidence_sha256(discovery_event_audit)
@@ -3546,7 +3616,9 @@ def test_historical_schema_policy_map_and_render_contract_are_frozen() -> None:
     source_contract = _HISTORICAL_ACQUISITION_CONTRACTS["schema3_4"]
     schema_five_variants = _HISTORICAL_ACQUISITION_CONTRACTS["schema5_source_variants"]
     schema_six_variants = _HISTORICAL_ACQUISITION_CONTRACTS["schema6_receipts"]
+    schema_seven_variants = _HISTORICAL_ACQUISITION_CONTRACTS["schema7_archived_receipts"]
     manifest = _prepared_manifest("https://example.com/", ["https://example.com"])
+    render_v4 = copy.deepcopy(manifest["preparation"]["render_observation"])
     render_v3 = copy.deepcopy(manifest["preparation"]["render_observation"])
     render_v3.pop("internal_document_lifecycle_summary")
     render_v3["schema_version"] = acquisition_module._SCHEMA_SIX_RENDER_OBSERVATION_SCHEMA_VERSION
@@ -3629,6 +3701,36 @@ def test_historical_schema_policy_map_and_render_contract_are_frozen() -> None:
         acquisition_schema_version=6,
     )
 
+    assert (
+        acquisition_module._instrumentation_policy_for(7)
+        == acquisition_module._SCHEMA_SEVEN_CDP_TARGET_INSTRUMENTATION_POLICY
+    )
+    assert (
+        acquisition_module._passive_render_contract_for(7)
+        == acquisition_module._SCHEMA_SEVEN_PASSIVE_RENDER_CONTRACT
+    )
+    assert (
+        acquisition_module._passive_render_contract_sha256_for(7)
+        == acquisition_module._SCHEMA_SEVEN_PASSIVE_RENDER_CONTRACT_SHA256
+    )
+    assert acquisition_module._document_response_schema_for(7) == 2
+    contract = acquisition_module._historical_evidence_contract_for(
+        7,
+        instrumentation_policy=(
+            acquisition_module._SCHEMA_SEVEN_CDP_TARGET_INSTRUMENTATION_POLICY
+        ),
+    )
+    assert contract["fixed_provenance_sha256"] == (
+        acquisition_module._SCHEMA_SEVEN_FIXED_PROVENANCE_SHA256
+    )
+    assert contract["source_lab_commits"] == tuple(
+        variant["source_lab_commit"] for variant in schema_seven_variants
+    )
+    acquisition_module._validate_versioned_render_observation(
+        render_v4,
+        acquisition_schema_version=7,
+    )
+
     for schema in (3, 4):
         with pytest.raises(ValueError, match="historical render observation fields"):
             acquisition_module._validate_versioned_render_observation(
@@ -3641,6 +3743,11 @@ def test_historical_schema_policy_map_and_render_contract_are_frozen() -> None:
                 render_v1,
                 acquisition_schema_version=schema,
             )
+    with pytest.raises(ValueError, match="render observation"):
+        acquisition_module._validate_versioned_render_observation(
+            render_v3,
+            acquisition_schema_version=7,
+        )
     with pytest.raises(ValueError, match="does not match its schema"):
         acquisition_module._historical_evidence_contract_for(
             5,
@@ -3652,6 +3759,69 @@ def test_historical_schema_policy_map_and_render_contract_are_frozen() -> None:
             instrumentation_policy=(
                 "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v11"
             ),
+        )
+
+
+def test_schema_seven_audit_five_projects_read_only_but_cannot_alias_schema_eight() -> None:
+    assert acquisition_module.SCHEMA_VERSION == 8
+    manifest = _prepared_manifest("https://example.com/", ["https://example.com"])
+    preparation = manifest["preparation"]
+    render = copy.deepcopy(preparation["render_observation"])
+    render_sha256 = evidence_sha256(render)
+    audit = copy.deepcopy(preparation["discovery_event_audit"])
+    audit["schema_version"] = (
+        acquisition_module._SCHEMA_SEVEN_DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION
+    )
+    audit["instrumentation_policy"] = (
+        acquisition_module._SCHEMA_SEVEN_CDP_TARGET_INSTRUMENTATION_POLICY
+    )
+    audit["passive_render_contract_sha256"] = (
+        acquisition_module._SCHEMA_SEVEN_PASSIVE_RENDER_CONTRACT_SHA256
+    )
+    audit["render_observation_sha256"] = render_sha256
+    audit.pop("request_stage_observation_policy")
+    audit.pop("normal_shutdown_disposal_summary")
+    audit["summary"].pop("blocked_preflight_dependent_count")
+    for event in audit["events"]:
+        if event["kind"] == "network-request":
+            event.pop("initiator_type")
+            event.pop("initiator_request_id")
+            event.pop("response_observed")
+            event.pop("interception_exception")
+        elif event["kind"] == "network-terminal":
+            event.pop("failure")
+    audit_sha256 = evidence_sha256(audit)
+    preparation["passive_render_contract"] = copy.deepcopy(
+        acquisition_module._SCHEMA_SEVEN_PASSIVE_RENDER_CONTRACT
+    )
+    preparation["passive_render_contract_sha256"] = (
+        acquisition_module._SCHEMA_SEVEN_PASSIVE_RENDER_CONTRACT_SHA256
+    )
+    preparation["render_observation"] = render
+    preparation["render_observation_sha256"] = render_sha256
+    preparation["discovery_event_audit"] = audit
+    preparation["discovery_event_audit_sha256"] = audit_sha256
+    coverage = preparation["coverage_admission"]
+    coverage["passive_render_contract_sha256"] = (
+        acquisition_module._SCHEMA_SEVEN_PASSIVE_RENDER_CONTRACT_SHA256
+    )
+    coverage["render_observation_sha256"] = render_sha256
+    coverage["discovery_event_audit_sha256"] = audit_sha256
+
+    acquisition_module._validate_versioned_class_study_preparation(
+        manifest,
+        workload_id="example",
+        acquisition_schema_version=7,
+        instrumentation_policy=(
+            acquisition_module._SCHEMA_SEVEN_CDP_TARGET_INSTRUMENTATION_POLICY
+        ),
+    )
+    with pytest.raises(ValueError, match="discovery event audit"):
+        acquisition_module._validate_versioned_class_study_preparation(
+            manifest,
+            workload_id="example",
+            acquisition_schema_version=acquisition_module.SCHEMA_VERSION,
+            instrumentation_policy=CDP_TARGET_INSTRUMENTATION_POLICY,
         )
 
 
@@ -3804,8 +3974,8 @@ def test_immutable_schema_seven_v100_acquisition_reaches_its_durable_state_verif
     if not runner.is_dir():
         pytest.skip("immutable v100 acquisition artifact is not present in this checkout")
     variants = _HISTORICAL_ACQUISITION_CONTRACTS["schema7_archived_receipts"]
-    assert len(variants) == 1
-    variant = variants[0]
+    assert {variant["cohort"] for variant in variants} == {"v100", "v101"}
+    variant = next(variant for variant in variants if variant["cohort"] == "v100")
     assert variant["cohort"] == "v100"
 
     strict_path = runner.parent / "strict-verification.json"
@@ -3889,6 +4059,64 @@ def test_immutable_schema_seven_v100_acquisition_reaches_its_durable_state_verif
     catalogue = repository / "config/class-study/v1/classifier-multiorigin100-v1-candidates.json"
     with pytest.raises(InternalAcquisitionError, match="tranco-0000697"):
         acquisition_status(runner, candidate_catalogue_path=catalogue)
+    assert checkpoint_path.read_bytes() == before
+
+
+def test_immutable_schema_seven_v101_acquisition_is_exactly_verify_only() -> None:
+    repository = Path(__file__).resolve().parents[1]
+    runner = repository / "artifacts/classifier-multiorigin100-v1-acquisition"
+    if not runner.is_dir():
+        pytest.skip("immutable v101 acquisition artifact is not present in this checkout")
+    variants = _HISTORICAL_ACQUISITION_CONTRACTS["schema7_archived_receipts"]
+    variant = next(variant for variant in variants if variant["cohort"] == "v101")
+
+    authority_path = repository / "artifacts/class-study-acquisition-authority-v101.json"
+    assert hashlib.sha256(authority_path.read_bytes()).hexdigest() == variant[
+        "authority_file_sha256"
+    ]
+    authority = load_json(authority_path)
+    assert authority["payload_sha256"] == variant["authority_payload_sha256"]
+
+    provenance_path = runner / "provenance.json"
+    assert hashlib.sha256(provenance_path.read_bytes()).hexdigest() == variant[
+        "provenance_file_sha256"
+    ]
+    provenance = load_json(provenance_path)
+    assert provenance["payload_sha256"] == variant["provenance_payload_sha256"]
+    payload = acquisition_module.validate_hash_bound_receipt(
+        provenance,
+        expected_type=acquisition_module.PROVENANCE_TYPE,
+    )
+    assert payload["acquisition_schema_version"] == 7
+    assert payload["source"]["lab_commit"] == variant["source_lab_commit"]
+    assert acquisition_module._validate_current_provenance_contract(payload) == payload
+    unknown_source = copy.deepcopy(payload)
+    unknown_source["source"]["lab_commit"] = "f" * 40
+    with pytest.raises(ValueError, match="provenance policy"):
+        acquisition_module._validate_current_provenance_contract(unknown_source)
+    current_alias = copy.deepcopy(payload)
+    current_alias["acquisition_schema_version"] = acquisition_module.SCHEMA_VERSION
+    with pytest.raises(ValueError, match="provenance policy"):
+        acquisition_module._validate_current_provenance_contract(current_alias)
+
+    checkpoint_path = runner / "checkpoint.json"
+    before = checkpoint_path.read_bytes()
+    assert hashlib.sha256(before).hexdigest() == variant["checkpoint_file_sha256"]
+    checkpoint = load_json(checkpoint_path)
+    assert checkpoint["payload_sha256"] == variant["checkpoint_payload_sha256"]
+    catalogue = repository / "config/class-study/v1/classifier-multiorigin100-v1-candidates.json"
+    with pytest.raises(InternalAcquisitionError, match="tranco-0000697"):
+        acquisition_status(runner, candidate_catalogue_path=catalogue)
+    with pytest.raises(ValueError, match="historical acquisition runners"):
+        run_due_acquisition(
+            runner,
+            candidate_catalogue_path=catalogue,
+            stability_root=repository / "artifacts/classifier-multiorigin100-v1-stability",
+            workload_root=repository / "config/workloads",
+            backend=NoNetworkBackend(),
+        )
+    with pytest.raises(ValueError, match="historical acquisition runners"):
+        write_acquisition_completion(runner, candidate_catalogue_path=catalogue)
     assert checkpoint_path.read_bytes() == before
 
 
@@ -6774,11 +7002,15 @@ def _root_redirect_manifest() -> dict:
                 "url": final,
                 "frame_id": None,
                 "resource_type": "Document",
+                "initiator_type": "other",
+                "initiator_request_id": None,
                 "safe_request_headers": [],
                 "interception_required": True,
                 "redirected": True,
                 "redirect_from_occurrence_id": initial_occurrence,
                 "mapping": {"kind": "resource", "resource_id": 1},
+                "response_observed": True,
+                "interception_exception": None,
                 "dependency_evidence": [
                     {
                         "kind": "redirect",
@@ -6811,6 +7043,7 @@ def _root_redirect_manifest() -> dict:
                 "source": root_source,
                 "network_id": "network-0",
                 "outcome": "finished",
+                "failure": None,
                 "network_occurrence_ids": [
                     initial_occurrence,
                     "request-00000001",
@@ -8110,7 +8343,7 @@ def test_schema_six_exact_contract_is_readable_but_cannot_resume_or_publish(
     assert checkpoint_path.read_bytes() == before
 
 
-def test_schema_six_and_seven_contract_discriminators_cannot_collide(
+def test_schema_six_and_eight_contract_discriminators_cannot_collide(
     tmp_path: Path,
 ) -> None:
     catalogue = _catalogue(tmp_path / "catalogue.json")
@@ -8134,7 +8367,7 @@ def test_schema_six_and_seven_contract_discriminators_cannot_collide(
     checkpoint_path = runner / "checkpoint.json"
     checkpoint = copy.deepcopy(load_json(checkpoint_path)["payload"])
     checkpoint["provenance_sha256"] = acquisition_module.sha256_file(provenance_path)
-    # A schema-seven checkpoint discriminator cannot be relabelled as schema six.
+    # A schema-eight checkpoint discriminator cannot be relabelled as schema six.
     _replace_receipt_payload(checkpoint_path, checkpoint)
     with pytest.raises(ValueError, match="modern acquisition checkpoint shape"):
         acquisition_status(runner, candidate_catalogue_path=catalogue)

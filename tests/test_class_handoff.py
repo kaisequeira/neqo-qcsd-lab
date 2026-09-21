@@ -19,6 +19,8 @@ from qcsd_lab.browser_egress import (
 from qcsd_lab.capture import ObserverPacket
 from qcsd_lab.cdp_targets import (
     EGRESS_PREARM_SUMMARY_SCHEMA_VERSION,
+    NORMAL_SHUTDOWN_DISPOSAL_POLICY,
+    NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
     SRCDOC_PSEUDO_DOCUMENT_POLICY,
     SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
 )
@@ -26,6 +28,7 @@ from qcsd_lab.discovery_evidence import (
     CDP_TARGET_INSTRUMENTATION_POLICY,
     DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION,
     PASSIVE_RENDER_CONTRACT_SHA256,
+    REQUEST_STAGE_OBSERVATION_POLICY,
     RENDER_OBSERVATION_SCHEMA_VERSION,
     evidence_sha256,
     passive_render_contract,
@@ -247,11 +250,15 @@ def _prepared_workload(workload_id: str, origin_count: int) -> dict:
                     "url": resource["url"],
                     "frame_id": "root-frame",
                     "resource_type": resource["type"],
+                    "initiator_type": "other",
+                    "initiator_request_id": None,
                     "safe_request_headers": resource["headers"],
                     "interception_required": True,
                     "redirected": False,
                     "redirect_from_occurrence_id": None,
                     "mapping": {"kind": "resource", "resource_id": resource_id},
+                    "response_observed": True,
+                    "interception_exception": None,
                     "dependency_evidence": dependency_evidence,
                     "resolved_dependency_resource_ids": resource["depends_on"],
                 },
@@ -278,6 +285,7 @@ def _prepared_workload(workload_id: str, origin_count: int) -> dict:
                     "source": target_source,
                     "network_id": f"network-{resource_id}",
                     "outcome": "finished",
+                    "failure": None,
                     "network_occurrence_ids": [occurrence_id],
                 },
             ]
@@ -306,8 +314,27 @@ def _prepared_workload(workload_id: str, origin_count: int) -> dict:
     discovery_event_audit = {
         "schema_version": DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION,
         "instrumentation_policy": CDP_TARGET_INSTRUMENTATION_POLICY,
+        "request_stage_observation_policy": REQUEST_STAGE_OBSERVATION_POLICY,
         "passive_render_contract_sha256": PASSIVE_RENDER_CONTRACT_SHA256,
         "render_observation_sha256": render_observation_sha256,
+        "normal_shutdown_disposal_summary": {
+            "schema_version": NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
+            "policy": NORMAL_SHUTDOWN_DISPOSAL_POLICY,
+            "started": True,
+            "terminal": True,
+            "network_total": 0,
+            "fetch_total": 0,
+            "matched_total": 0,
+            "network_only_synthetic_total": 0,
+            "pending_network_total": 0,
+            "pending_fetch_total": 0,
+            "terminal_outcomes": {
+                "Network.loadingFinished": 0,
+                "Network.loadingFailed": 0,
+                "Network.redirectResponse": 0,
+                "qcsd-shutdown": 0,
+            },
+        },
         "events": events,
         "summary": {
             "event_count": len(events),
@@ -319,6 +346,7 @@ def _prepared_workload(workload_id: str, origin_count: int) -> dict:
             "terminal_event_count": len(resources),
             "resource_occurrence_count": len(resources),
             "exclusion_occurrence_count": 0,
+            "blocked_preflight_dependent_count": 0,
         },
     }
     discovery_event_audit_sha256 = evidence_sha256(discovery_event_audit)

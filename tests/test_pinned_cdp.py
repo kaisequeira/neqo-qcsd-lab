@@ -164,6 +164,34 @@ def _srcdoc_pseudo_document_summary(
     return summary
 
 
+def _normal_shutdown_disposal_summary(
+    *,
+    network_total: int = 0,
+    fetch_total: int = 0,
+    loading_finished_total: int = 0,
+    loading_failed_total: int = 0,
+    network_only_synthetic_total: int = 0,
+) -> dict[str, object]:
+    return {
+        "schema_version": pinned_cdp.NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
+        "policy": pinned_cdp.NORMAL_SHUTDOWN_DISPOSAL_POLICY,
+        "started": True,
+        "terminal": True,
+        "network_total": network_total,
+        "fetch_total": fetch_total,
+        "matched_total": fetch_total,
+        "network_only_synthetic_total": network_only_synthetic_total,
+        "pending_network_total": 0,
+        "pending_fetch_total": 0,
+        "terminal_outcomes": {
+            "Network.loadingFinished": loading_finished_total,
+            "Network.loadingFailed": loading_failed_total,
+            "Network.redirectResponse": 0,
+            "qcsd-shutdown": network_only_synthetic_total,
+        },
+    }
+
+
 def _egress_prearm_summary() -> dict[str, object]:
     by_type = {}
     for target_type in ("page", "iframe", "worker", "shared_worker"):
@@ -275,6 +303,7 @@ def _observation(
             "srcdoc_pseudo_document_summary": _srcdoc_pseudo_document_summary(
                 terminal_method=srcdoc_terminal_method
             ),
+            "normal_shutdown_disposal_summary": _normal_shutdown_disposal_summary(),
             "non_replayable_egress_summary": _non_replayable_egress_summary(),
             "browser_egress_command_line": _browser_egress_command_line_projection(),
             "browser_context_service_worker_count": 0,
@@ -441,6 +470,7 @@ def test_schema8_receipt_is_historical_only_and_round_trips(
     payload["observation"]["topology"].pop("worker_response_consumption")
     payload["observation"]["topology"].pop("worker_webtransport_probe")
     payload["observation"]["topology"].pop("srcdoc_pseudo_document_summary")
+    payload["observation"]["topology"].pop("normal_shutdown_disposal_summary")
     historical = tmp_path / "pinned-cdp-schema8.json"
     historical.write_bytes(
         canonical_json_bytes(bind_receipt(payload, receipt_type=pinned_cdp.RECEIPT_TYPE))
@@ -500,6 +530,7 @@ def test_schema9_receipt_is_historical_only_and_keeps_current_build_identity(
     payload["observation"]["topology"].pop("worker_response_consumption")
     payload["observation"]["topology"].pop("worker_webtransport_probe")
     payload["observation"]["topology"].pop("srcdoc_pseudo_document_summary")
+    payload["observation"]["topology"].pop("normal_shutdown_disposal_summary")
     historical = tmp_path / "pinned-cdp-schema9.json"
     historical.write_bytes(
         canonical_json_bytes(bind_receipt(payload, receipt_type=pinned_cdp.RECEIPT_TYPE))
@@ -549,6 +580,7 @@ def test_schema11_receipt_is_historical_only_with_v7_driver(
     ] = copy.deepcopy(pinned_cdp._HISTORICAL_PINNED_CDP_RESOLVER_PROJECTION)
     payload["observation"]["topology"].pop("worker_webtransport_probe")
     payload["observation"]["topology"].pop("srcdoc_pseudo_document_summary")
+    payload["observation"]["topology"].pop("normal_shutdown_disposal_summary")
     historical = tmp_path / "pinned-cdp-schema11.json"
     historical.write_bytes(
         canonical_json_bytes(bind_receipt(payload, receipt_type=pinned_cdp.RECEIPT_TYPE))
@@ -590,6 +622,7 @@ def test_schema12_receipt_is_historical_only_with_v7_driver(
         pinned_cdp.PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_BINDING
     )
     payload["observation"]["topology"].pop("srcdoc_pseudo_document_summary")
+    payload["observation"]["topology"].pop("normal_shutdown_disposal_summary")
     historical = tmp_path / "pinned-cdp-schema12.json"
     historical.write_bytes(
         canonical_json_bytes(bind_receipt(payload, receipt_type=pinned_cdp.RECEIPT_TYPE))
@@ -633,6 +666,7 @@ def test_schema12_receipt_still_requires_worker_webtransport_probe(
     )
     payload["observation"]["topology"].pop("worker_webtransport_probe")
     payload["observation"]["topology"].pop("srcdoc_pseudo_document_summary")
+    payload["observation"]["topology"].pop("normal_shutdown_disposal_summary")
     historical = tmp_path / "pinned-cdp-schema12-without-worker-probe.json"
     historical.write_bytes(
         canonical_json_bytes(bind_receipt(payload, receipt_type=pinned_cdp.RECEIPT_TYPE))
@@ -662,6 +696,7 @@ def test_schema13_receipt_is_historical_only_with_v8_driver(
         pinned_cdp._HISTORICAL_PROBE_CONTRACT_V13_SHA256
     )
     payload["observation"]["topology"].pop("srcdoc_pseudo_document_summary")
+    payload["observation"]["topology"].pop("normal_shutdown_disposal_summary")
     historical = tmp_path / "pinned-cdp-schema13.json"
     historical.write_bytes(
         canonical_json_bytes(bind_receipt(payload, receipt_type=pinned_cdp.RECEIPT_TYPE))
@@ -701,6 +736,7 @@ def test_schema13_receipt_still_requires_worker_webtransport_probe(
     )
     payload["observation"]["topology"].pop("worker_webtransport_probe")
     payload["observation"]["topology"].pop("srcdoc_pseudo_document_summary")
+    payload["observation"]["topology"].pop("normal_shutdown_disposal_summary")
     historical = tmp_path / "pinned-cdp-schema13-without-worker-probe.json"
     historical.write_bytes(
         canonical_json_bytes(bind_receipt(payload, receipt_type=pinned_cdp.RECEIPT_TYPE))
@@ -730,6 +766,7 @@ def test_schema14_receipt_is_historical_only_without_srcdoc_summary(
         pinned_cdp._HISTORICAL_PROBE_CONTRACT_V14_SHA256
     )
     payload["observation"]["topology"].pop("srcdoc_pseudo_document_summary")
+    payload["observation"]["topology"].pop("normal_shutdown_disposal_summary")
     historical = tmp_path / "pinned-cdp-schema14.json"
     historical.write_bytes(
         canonical_json_bytes(bind_receipt(payload, receipt_type=pinned_cdp.RECEIPT_TYPE))
@@ -750,6 +787,106 @@ def test_schema14_receipt_is_historical_only_without_srcdoc_summary(
     )
     assert validated["probe_schema_version"] == 14
     assert "srcdoc_pseudo_document_summary" not in validated["observation"]["topology"]
+
+
+def test_schema16_v19_receipt_is_frozen_historical_only(
+    tmp_path: Path,
+    fake_build: Path,
+) -> None:
+    current = _create(tmp_path, fake_build)
+    envelope = json.loads(current.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(envelope["payload"])
+    payload["probe_schema_version"] = 16
+    payload["probe_contract"] = copy.deepcopy(
+        pinned_cdp._HISTORICAL_PROBE_CONTRACT_V16
+    )
+    payload["probe_contract_sha256"] = (
+        pinned_cdp._HISTORICAL_PROBE_CONTRACT_V16_SHA256
+    )
+    payload["observation"]["topology"].pop("normal_shutdown_disposal_summary")
+    historical = tmp_path / "pinned-cdp-schema16.json"
+    historical.write_bytes(
+        canonical_json_bytes(bind_receipt(payload, receipt_type=pinned_cdp.RECEIPT_TYPE))
+    )
+
+    with pytest.raises(ValueError, match="identity or result"):
+        pinned_cdp.validate_pinned_cdp_receipt(
+            historical,
+            build_execution_receipt=fake_build,
+            expected_cohort_version=59,
+        )
+    validated = pinned_cdp.validate_pinned_cdp_receipt(
+        historical,
+        build_execution_receipt=fake_build,
+        expected_cohort_version=59,
+        allow_historical=True,
+    )
+    assert validated["probe_schema_version"] == 16
+    assert validated["probe_contract_sha256"] == (
+        "c6d390ca768027725febd211430681b41205b0bd5d7ed3f5fe57b4c4eca1ad5b"
+    )
+    assert "normal_shutdown_disposal_summary" not in validated["observation"]["topology"]
+
+    colliding = copy.deepcopy(payload)
+    colliding["probe_contract"] = copy.deepcopy(pinned_cdp.PROBE_CONTRACT)
+    colliding["probe_contract_sha256"] = pinned_cdp.PROBE_CONTRACT_SHA256
+    collision = tmp_path / "pinned-cdp-schema16-current-contract.json"
+    collision.write_bytes(
+        canonical_json_bytes(bind_receipt(colliding, receipt_type=pinned_cdp.RECEIPT_TYPE))
+    )
+    with pytest.raises(ValueError, match="source/build/prepare image"):
+        pinned_cdp.validate_pinned_cdp_receipt(
+            collision,
+            build_execution_receipt=fake_build,
+            expected_cohort_version=59,
+            allow_historical=True,
+        )
+
+
+@pytest.mark.parametrize(
+    ("cohort", "receipt_sha256", "payload_sha256"),
+    (
+        (
+            100,
+            "7b04a61a99f18e683c8bf90897f54dba1c9db8e64072751a6e14b633f23877ba",
+            "b32f96133c8a216c8eb8f96afcfd9ae8c4a90fcb68693f8797bc4710121066f4",
+        ),
+        (
+            101,
+            "d9f3327f058a28078dfdd3519c54605769e5ffe3dd6c16f4bd7d53e1e4b3abf4",
+            "bc5cfce103be3318c80dfaab6c94ebff7d6e5effec26c3afbcb3e36ffa9caa18",
+        ),
+    ),
+)
+def test_immutable_schema16_v19_receipts_verify_only_under_the_frozen_contract(
+    cohort: int,
+    receipt_sha256: str,
+    payload_sha256: str,
+) -> None:
+    root = Path(__file__).resolve().parents[1] / "artifacts/buflo-study"
+    receipt = root / f"pinned-cdp-execution-v{cohort}.json"
+    build = root / f"build-execution-v{cohort}.json"
+    if not receipt.is_file() or not build.is_file():
+        pytest.skip(f"immutable v{cohort} pinned-CDP evidence is not present")
+    assert hashlib.sha256(receipt.read_bytes()).hexdigest() == receipt_sha256
+    envelope = json.loads(receipt.read_text(encoding="utf-8"))
+    assert envelope["payload_sha256"] == payload_sha256
+    with pytest.raises(ValueError, match="identity or result"):
+        pinned_cdp.validate_pinned_cdp_receipt(
+            receipt,
+            build_execution_receipt=build,
+            expected_cohort_version=cohort,
+        )
+    validated = pinned_cdp.validate_pinned_cdp_receipt(
+        receipt,
+        build_execution_receipt=build,
+        expected_cohort_version=cohort,
+        allow_historical=True,
+    )
+    assert validated["probe_schema_version"] == 16
+    assert validated["probe_contract_sha256"] == (
+        pinned_cdp._HISTORICAL_PROBE_CONTRACT_V16_SHA256
+    )
 
 
 def test_current_receipt_rejects_frozen_historical_resolver_projection(
@@ -1005,6 +1142,24 @@ def test_prepare_role_revalidates_playwright_driver_binding(
                 "srcdoc_pseudo_document_summary"
             ),
             "topology fields",
+        ),
+        (
+            lambda observation: observation["topology"].pop(
+                "normal_shutdown_disposal_summary"
+            ),
+            "topology fields",
+        ),
+        (
+            lambda observation: observation["topology"][
+                "normal_shutdown_disposal_summary"
+            ].update(terminal=False),
+            "counts are inconsistent",
+        ),
+        (
+            lambda observation: observation["topology"][
+                "normal_shutdown_disposal_summary"
+            ].update(policy="unbound-disposal-policy"),
+            "contract is invalid",
         ),
         (
             lambda observation: observation["topology"][
@@ -1317,16 +1472,16 @@ def test_required_topology_wait_condition_is_event_driven() -> None:
         "dedicated_worker_fetch_paused_on_page": True,
         "shared_worker_fetch_paused_on_shared_worker": True,
     }
-    assert pinned_cdp.PROBE_SCHEMA_VERSION == 16
+    assert pinned_cdp.PROBE_SCHEMA_VERSION == 17
     assert pinned_cdp.HISTORICAL_PROBE_SCHEMA_VERSIONS == frozenset(
-        {8, 9, 11, 12, 13, 14}
+        {8, 9, 11, 12, 13, 14, 16}
     )
-    assert pinned_cdp.PROBE_CONTRACT["schema_version"] == 15
+    assert pinned_cdp.PROBE_CONTRACT["schema_version"] == 16
     assert pinned_cdp.PROBE_CONTRACT["policy"] == (
-        "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v15"
+        "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v16"
     )
     assert pinned_cdp.PROBE_CONTRACT["instrumentation_policy"] == (
-        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v19"
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v20"
     )
     assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V11["schema_version"] == 10
     assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V11["instrumentation_policy"].endswith("-v12")
@@ -1349,6 +1504,20 @@ def test_required_topology_wait_condition_is_event_driven() -> None:
     assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V14_SHA256 == (
         "92dddabdd9b2ab9476d89fe97d5e3b7f084c3d7a409b07452b62fd3da3c57733"
     )
+    assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V16["schema_version"] == 15
+    assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V16["instrumentation_policy"].endswith(
+        "-v19"
+    )
+    assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V16_SHA256 == (
+        "c6d390ca768027725febd211430681b41205b0bd5d7ed3f5fe57b4c4eca1ad5b"
+    )
+    assert (
+        "terminal-normal-shutdown-disposal-network-fetch-reconciliation"
+        not in pinned_cdp._HISTORICAL_PROBE_CONTRACT_V16["required_observations"]
+    )
+    assert "normal_shutdown_disposal_summary_schema_version" not in (
+        pinned_cdp._HISTORICAL_PROBE_CONTRACT_V16
+    )
     assert pinned_cdp.PROBE_CONTRACT["worker_webtransport_probe_schema_version"] == 1
     assert pinned_cdp.PROBE_CONTRACT["chromium_version"] == "143.0.7499.4"
     assert pinned_cdp.PROBE_CONTRACT["chromium_executable"] == ("/usr/local/bin/qcsd-chromium")
@@ -1366,6 +1535,12 @@ def test_required_topology_wait_condition_is_event_driven() -> None:
         "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-v2"
     )
     assert pinned_cdp.PROBE_CONTRACT["required_srcdoc_pseudo_document_count"] == 1
+    assert pinned_cdp.PROBE_CONTRACT[
+        "normal_shutdown_disposal_summary_schema_version"
+    ] == pinned_cdp.NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
+    assert pinned_cdp.PROBE_CONTRACT["normal_shutdown_disposal_policy"] == (
+        pinned_cdp.NORMAL_SHUTDOWN_DISPOSAL_POLICY
+    )
     assert pinned_cdp.PROBE_CONTRACT["playwright_driver_binding"] == (
         pinned_cdp.EXPECTED_PLAYWRIGHT_DRIVER_BINDING
     )
@@ -1397,6 +1572,24 @@ def test_required_topology_wait_condition_is_event_driven() -> None:
         "root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-lifecycle"
         in pinned_cdp.PROBE_CONTRACT["required_observations"]
     )
+    assert (
+        "terminal-normal-shutdown-disposal-network-fetch-reconciliation"
+        in pinned_cdp.PROBE_CONTRACT["required_observations"]
+    )
+
+
+def test_current_observation_accepts_terminal_nonzero_shutdown_disposal() -> None:
+    observation = _observation()
+    observation["topology"]["normal_shutdown_disposal_summary"] = (
+        _normal_shutdown_disposal_summary(
+            network_total=2,
+            fetch_total=1,
+            loading_finished_total=1,
+            network_only_synthetic_total=1,
+        )
+    )
+
+    assert pinned_cdp._validate_observation(observation) == observation
 
 
 def test_target_only_activity_resets_probe_quiescence(

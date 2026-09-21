@@ -3,18 +3,19 @@
   "artifact_type": "qcsd-class-study-prospective-contract",
   "study_id": "classifier-multiorigin100-v1",
   "prospective_acquisition_amendment": {
-    "schema_version": 2,
-    "date": "2026-09-19",
+    "schema_version": 4,
+    "date": "2026-09-21",
     "scope": "new-source-bound-acquisition-only-no-historical-evidence-promotion",
-    "reason": "retire-the-v96-cdp-interception-contract-and-bind-srcdoc-loader-lifecycle-evidence-before-new-public-page-acquisition",
-    "acquisition_schema_version": 7,
+    "reason": "retire-the-v100-v101-policy-v19-audit-v5-contract-and-bind-terminal-normal-shutdown-disposal-plus-exact-failed-cors-preflight-evidence-before-new-public-page-acquisition",
+    "acquisition_schema_version": 8,
     "checkpoint_schema_version": 3,
     "terminal_schema_version": 4,
     "completion_schema_version": 4,
     "document_response_schema_version": 2,
-    "pinned_cdp_probe_schema_version": 16,
+    "pinned_cdp_probe_schema_version": 17,
     "render_observation_schema_version": 4,
-    "discovery_event_audit_schema_version": 5,
+    "discovery_event_audit_schema_version": 7,
+    "request_stage_observation_policy": "chromium-143-fetch-primary-or-failed-cors-preflight-v1",
     "passive_render_contract_schema_version": 4,
     "catalogue_and_order": "unchanged-600-candidates-120-per-stratum",
     "final_endpoint": "unchanged-100-classes-900-nine-mode-certification-and-16000-eight-mode-formal-samples",
@@ -23,6 +24,26 @@
       "acquisition_schema_version": 6,
       "completion_schema_version": 3,
       "pinned_cdp_probe_schema_version": 14,
+      "authority": "historical-verify-only-never-current-admission"
+    },
+    "retired_v100_contract": {
+      "acquisition_schema_version": 7,
+      "checkpoint_schema_version": 3,
+      "terminal_schema_version": 4,
+      "completion_schema_version": 4,
+      "pinned_cdp_probe_schema_version": 16,
+      "discovery_event_audit_schema_version": 5,
+      "cdp_target_instrumentation_policy": "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v19",
+      "authority": "historical-verify-only-never-current-admission"
+    },
+    "retired_v101_contract": {
+      "acquisition_schema_version": 7,
+      "checkpoint_schema_version": 3,
+      "terminal_schema_version": 4,
+      "completion_schema_version": 4,
+      "pinned_cdp_probe_schema_version": 16,
+      "discovery_event_audit_schema_version": 5,
+      "cdp_target_instrumentation_policy": "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v19",
       "authority": "historical-verify-only-never-current-admission"
     }
   },
@@ -159,12 +180,18 @@
     "service_worker_dependency": "forbidden",
     "cross-domain-redirect-alias": "forbidden",
     "approved_origins": "explicit-and-frozen",
-    "cdp_target_instrumentation_policy": "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v19",
+    "cdp_target_instrumentation_policy": "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v20",
     "render_observation_schema_version": 4,
-    "discovery_event_audit_schema_version": 5,
+    "discovery_event_audit_schema_version": 7,
+    "request_stage_observation_policy": "chromium-143-fetch-primary-or-failed-cors-preflight-v1",
     "srcdoc_pseudo_document_contract": {
       "schema_version": 3,
       "policy": "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-v2"
+    },
+    "normal_shutdown_disposal_contract": {
+      "schema_version": 2,
+      "policy": "chromium-143-post-quiescence-context-disposal-v1",
+      "required_state": "terminal"
     },
     "passive_render_contract": {
       "schema_version": 4,
