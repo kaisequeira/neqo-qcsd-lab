@@ -4751,7 +4751,8 @@ def test_launcher_rewrites_class_paths_and_never_mounts_workspace_rw():
     assert "QCSD_CLASS_FOUNDATION_ATTESTATION" in launcher
     assert "QCSD_CLASS_READINESS_ATTESTATION" in launcher
     assert "QCSD_CLASS_HISTORICAL_PRE_SNAPSHOT" in launcher
-    assert "QCSD_STUDY_ENVIRONMENT_B64" in launcher
+    assert "QCSD_STUDY_ENVIRONMENT_PATH" in launcher
+    assert '--env "QCSD_STUDY_ENVIRONMENT_B64=' not in launcher
     assert '"${class_study_execute}" == "1"' in launcher
     assert (
         'study_capture_scheduler_contract="qcsd-client-rr1-cpu10-etf-helper-cpu11-v1"'

@@ -948,6 +948,7 @@ def test_class_result_materializes_and_revalidates_real_study_environment(
         "completion_payload_sha256": completion["payload_sha256"],
         "completion": completion,
     }
+    monkeypatch.delenv("QCSD_STUDY_ENVIRONMENT_PATH", raising=False)
     monkeypatch.setenv(
         "QCSD_STUDY_ENVIRONMENT_B64",
         base64.b64encode(json.dumps(environment).encode()).decode(),

@@ -122,6 +122,7 @@ def _buflo_resume_configuration(tmp_path: Path, *, max_attempts: int = 3) -> Pat
 
 
 def _allow_synthetic_study_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("QCSD_STUDY_ENVIRONMENT_PATH", raising=False)
     monkeypatch.setenv(
         "QCSD_STUDY_ENVIRONMENT_B64",
         base64.b64encode(b"{}").decode("ascii"),

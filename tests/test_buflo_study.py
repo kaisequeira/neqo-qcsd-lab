@@ -8091,6 +8091,105 @@ def test_launcher_requires_clean_capture_image_and_no_cache_build() -> None:
     assert "artifacts/buflo-study/build-execution-v${study_cohort_version}.json" in launcher
     assert '"artifact_type": "qcsd-buflo-study-no-cache-build-execution"' in launcher
     assert '"build_execution": {' in launcher
+    assert 'QCSD_STUDY_BUILD_EXECUTION="${study_build_execution}"' not in launcher
+    assert 'QCSD_STUDY_BUILD_COMPLETION="${study_build_completion}"' not in launcher
+    assert 'QCSD_STUDY_ENVIRONMENT_B64=${study_environment_b64}' not in launcher
+    assert launcher.count(
+        'QCSD_STUDY_ENVIRONMENT_PATH=${study_environment_container_path}'
+    ) == 2
+    assert launcher.count(
+        '${study_environment_host_path}:${study_environment_container_path}:ro'
+    ) == 2
+
+
+def test_study_environment_file_transport_exceeds_linux_single_string_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    receipt = tmp_path / "study-environment.json"
+    raw = b'{"padding":"' + (b"x" * 200_000) + b'"}'
+    assert len(raw) > 131_072
+    receipt.write_bytes(raw)
+    receipt.chmod(0o600)
+    monkeypatch.setattr(buflo_study, "STUDY_ENVIRONMENT_CONTAINER_PATH", receipt)
+    monkeypatch.setenv(buflo_study.STUDY_ENVIRONMENT_PATH_ENV, str(receipt))
+    monkeypatch.delenv(buflo_study.STUDY_ENVIRONMENT_LEGACY_B64_ENV, raising=False)
+
+    assert buflo_study._study_environment_transport_bytes() == raw
+
+
+def test_study_environment_transport_rejects_multiple_sources_and_symlinks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    receipt = tmp_path / "study-environment.json"
+    receipt.write_text("{}", encoding="utf-8")
+    receipt.chmod(0o600)
+    monkeypatch.setattr(buflo_study, "STUDY_ENVIRONMENT_CONTAINER_PATH", receipt)
+    monkeypatch.setenv(buflo_study.STUDY_ENVIRONMENT_PATH_ENV, str(receipt))
+    monkeypatch.setenv(
+        buflo_study.STUDY_ENVIRONMENT_LEGACY_B64_ENV,
+        base64.b64encode(b"{}").decode("ascii"),
+    )
+    with pytest.raises(ValueError, match="multiple transports"):
+        buflo_study._study_environment_transport_bytes()
+
+    link = tmp_path / "study-environment-link.json"
+    link.symlink_to(receipt)
+    monkeypatch.setattr(buflo_study, "STUDY_ENVIRONMENT_CONTAINER_PATH", link)
+    monkeypatch.setenv(buflo_study.STUDY_ENVIRONMENT_PATH_ENV, str(link))
+    monkeypatch.delenv(buflo_study.STUDY_ENVIRONMENT_LEGACY_B64_ENV)
+    with pytest.raises(ValueError, match="file is unavailable"):
+        buflo_study._study_environment_transport_bytes()
+
+    monkeypatch.setattr(buflo_study, "STUDY_ENVIRONMENT_CONTAINER_PATH", receipt)
+    monkeypatch.setenv(buflo_study.STUDY_ENVIRONMENT_PATH_ENV, str(receipt))
+    receipt.chmod(0o644)
+    with pytest.raises(ValueError, match="file is unsafe"):
+        buflo_study._study_environment_transport_bytes()
+
+    receipt.chmod(0o600)
+    hard_link = tmp_path / "study-environment-hard-link.json"
+    hard_link.hardlink_to(receipt)
+    with pytest.raises(ValueError, match="file is unsafe"):
+        buflo_study._study_environment_transport_bytes()
+
+
+def test_launcher_removes_exact_study_environment_transport() -> None:
+    launcher = (LAB_ROOT / "qcsd-lab").read_text(encoding="utf-8")
+    cleanup = (
+        "remove_study_environment_transport() {"
+        + launcher.split("remove_study_environment_transport() {", 1)[1].split(
+            "\n}\n\ncleanup_study_environment_transport_on_exit()", 1
+        )[0]
+        + "\n}\n"
+    )
+    completed = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f"""
+set -euo pipefail
+{cleanup}
+study_environment_transport_dir="$(
+  mktemp -d --tmpdir=/tmp qcsd-study-environment.XXXXXXXX
+)"
+study_environment_host_path="${{study_environment_transport_dir}}/study-environment.json"
+: >"${{study_environment_host_path}}"
+chmod 600 "${{study_environment_host_path}}"
+saved_directory="${{study_environment_transport_dir}}"
+remove_study_environment_transport
+test ! -e "${{saved_directory}}"
+test -z "${{study_environment_transport_dir}}"
+test -z "${{study_environment_host_path}}"
+""",
+        ],
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_launcher_applies_least_privilege_rr1_capture_partition() -> None:
@@ -8236,6 +8335,13 @@ def test_controlled_topology_cleanup_is_fail_closed_and_state_aware(
         )[0]
         + "\n"
     )
+    study_environment_cleanup = (
+        "remove_study_environment_transport() {"
+        + launcher.split("remove_study_environment_transport() {", 1)[1].split(
+            "\n}\n\ncleanup_study_environment_transport_on_exit()", 1
+        )[0]
+        + "\n}\n"
+    )
     sidecar_cleanup = (
         "cleanup_sidecars() {"
         + launcher.split("cleanup_sidecars() {", 1)[1].split(
@@ -8281,6 +8387,9 @@ def test_controlled_topology_cleanup_is_fail_closed_and_state_aware(
         script = f"""
 set -u
 {lifetime_signal_helpers}
+study_environment_transport_dir=""
+study_environment_host_path=""
+{study_environment_cleanup}
 {cleanup_signal_helpers}
 {sidecar_cleanup}
 {controlled_cleanup}

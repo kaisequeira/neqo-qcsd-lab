@@ -18,6 +18,7 @@ import random
 import re
 import secrets
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -100,6 +101,10 @@ ABORTED_TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION = 5
 TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION = 6
 CONTROLLED_NETWORK_RECEIPT_SCHEMA_VERSION = 2
 KERNEL_TX_CONTROLLED_NETWORK_RECEIPT_ENV = "QCSD_KERNEL_TX_CONTROLLED_NETWORK_RECEIPT_B64"
+STUDY_ENVIRONMENT_LEGACY_B64_ENV = "QCSD_STUDY_ENVIRONMENT_B64"
+STUDY_ENVIRONMENT_PATH_ENV = "QCSD_STUDY_ENVIRONMENT_PATH"
+STUDY_ENVIRONMENT_CONTAINER_PATH = Path("/run/qcsd-study-environment.json")
+STUDY_ENVIRONMENT_MAX_BYTES = 64 * 1024 * 1024
 STUDY_ROOT = LAB_ROOT / "config/buflo-study/v1"
 STUDY_PLAN = STUDY_ROOT / "study.json"
 TIMING_STRESS_PARAMETERS = STUDY_ROOT / "buflo-timing-stress-v4.json"
@@ -5688,14 +5693,97 @@ def _timing_stress_schedule_evidence(
     }
 
 
+def _study_environment_transport_bytes() -> bytes | None:
+    """Read one bounded study-environment transport without following links."""
+
+    mounted = os.environ.get(STUDY_ENVIRONMENT_PATH_ENV)
+    legacy = os.environ.get(STUDY_ENVIRONMENT_LEGACY_B64_ENV)
+    if mounted is not None and legacy is not None:
+        raise ValueError("study Docker environment receipt has multiple transports")
+    if mounted is None and legacy is None:
+        return None
+    if mounted is not None:
+        if not mounted or Path(mounted) != STUDY_ENVIRONMENT_CONTAINER_PATH:
+            raise ValueError("study Docker environment receipt path is invalid")
+        descriptor = -1
+        try:
+            descriptor = os.open(
+                mounted,
+                os.O_RDONLY
+                | os.O_CLOEXEC
+                | getattr(os, "O_NOFOLLOW", 0),
+            )
+            before = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_uid != os.geteuid()
+                or stat.S_IMODE(before.st_mode) != 0o600
+                or before.st_nlink != 1
+                or before.st_size <= 0
+                or before.st_size > STUDY_ENVIRONMENT_MAX_BYTES
+            ):
+                raise ValueError("study Docker environment receipt file is unsafe")
+            chunks: list[bytes] = []
+            remaining = before.st_size
+            while remaining:
+                chunk = os.read(descriptor, min(1024 * 1024, remaining))
+                if not chunk:
+                    raise ValueError("study Docker environment receipt file is truncated")
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            if os.read(descriptor, 1):
+                raise ValueError("study Docker environment receipt file grew while read")
+            after = os.fstat(descriptor)
+            if (
+                (
+                    after.st_dev,
+                    after.st_ino,
+                    after.st_uid,
+                    after.st_gid,
+                    after.st_mode,
+                    after.st_nlink,
+                    after.st_size,
+                    after.st_mtime_ns,
+                    after.st_ctime_ns,
+                )
+                != (
+                    before.st_dev,
+                    before.st_ino,
+                    before.st_uid,
+                    before.st_gid,
+                    before.st_mode,
+                    before.st_nlink,
+                    before.st_size,
+                    before.st_mtime_ns,
+                    before.st_ctime_ns,
+                )
+            ):
+                raise ValueError("study Docker environment receipt file changed while read")
+            raw = b"".join(chunks)
+        except OSError as error:
+            raise ValueError("study Docker environment receipt file is unavailable") from error
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+    else:
+        if not legacy:
+            raise ValueError("study Docker environment receipt is malformed")
+        try:
+            raw = base64.b64decode(legacy, validate=True)
+        except ValueError as error:
+            raise ValueError("study Docker environment receipt is malformed") from error
+        if not raw or len(raw) > STUDY_ENVIRONMENT_MAX_BYTES:
+            raise ValueError("study Docker environment receipt is outside its size bound")
+    return raw
+
+
 def _timing_stress_environment_input(
     root: Path, source: Mapping[str, Any]
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    encoded = os.environ.get("QCSD_STUDY_ENVIRONMENT_B64")
-    if not encoded:
+    raw = _study_environment_transport_bytes()
+    if raw is None:
         raise ValueError("timing-stress capture requires the host Docker environment receipt")
     try:
-        raw = base64.b64decode(encoded, validate=True)
         value = json.loads(raw.decode("utf-8"))
     except (UnicodeError, ValueError, json.JSONDecodeError) as error:
         raise ValueError("timing-stress Docker environment receipt is malformed") from error

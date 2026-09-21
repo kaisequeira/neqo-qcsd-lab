@@ -3388,20 +3388,28 @@ def _study_environment_from_environment(
 ) -> tuple[bytes, Any, Mapping[str, Any]] | None:
     """Decode and validate the prospective host environment without writing it."""
 
-    encoded = os.environ.get("QCSD_STUDY_ENVIRONMENT_B64")
+    legacy = os.environ.get("QCSD_STUDY_ENVIRONMENT_B64")
+    mounted = os.environ.get("QCSD_STUDY_ENVIRONMENT_PATH")
     is_study = campaign.name.startswith("buflo-study-v1-") or _is_class_study_campaign(campaign)
     if not is_study:
-        if encoded is not None:
+        if legacy is not None or mounted is not None:
             raise ValueError("study environment receipt cannot be applied to a non-study campaign")
         return None
-    if not encoded:
+    from .buflo_study import (
+        _study_environment_transport_bytes,
+        validate_study_environment_receipt,
+    )
+
+    try:
+        raw = _study_environment_transport_bytes()
+    except ValueError as error:
+        raise ValueError("study Docker environment receipt is malformed") from error
+    if raw is None:
         raise ValueError("research campaign requires a host Docker environment receipt")
     try:
-        raw = base64.b64decode(encoded, validate=True)
         value = json.loads(raw.decode("utf-8"))
     except (UnicodeError, ValueError, json.JSONDecodeError) as error:
         raise ValueError("study Docker environment receipt is malformed") from error
-    from .buflo_study import validate_study_environment_receipt
 
     validated = validate_study_environment_receipt(
         value,

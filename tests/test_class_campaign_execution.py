@@ -386,6 +386,7 @@ def _install_preclaim_authority(
             lambda path, *, expected_phase=None: snapshot,
         )
 
+    monkeypatch.delenv("QCSD_STUDY_ENVIRONMENT_PATH", raising=False)
     monkeypatch.setenv(
         "QCSD_STUDY_ENVIRONMENT_B64",
         base64.b64encode(json.dumps({"synthetic": True}).encode()).decode(),
@@ -406,6 +407,39 @@ def _install_preclaim_authority(
 def _assert_no_class_launch_state(results: Path, campaign: Campaign) -> None:
     assert not (results / ".classifier-multiorigin100-v1-launches").exists()
     assert not (results / campaign.name).exists()
+
+
+def test_orchestrator_reads_large_study_environment_from_file_transport(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "study-environment.json"
+    value = {"padding": "x" * 200_000}
+    raw = json.dumps(value, separators=(",", ":")).encode()
+    assert len(raw) > 131_072
+    path.write_bytes(raw)
+    path.chmod(0o600)
+    campaign = replace(
+        _campaign((_workload(0),)),
+        name="buflo-study-v1-regression-large-transport-1200",
+    )
+    validated = {"image_id": _SOURCE["image_digest"]}
+    monkeypatch.setattr(buflo_study, "STUDY_ENVIRONMENT_CONTAINER_PATH", path)
+    monkeypatch.setenv(buflo_study.STUDY_ENVIRONMENT_PATH_ENV, str(path))
+    monkeypatch.delenv(buflo_study.STUDY_ENVIRONMENT_LEGACY_B64_ENV, raising=False)
+    monkeypatch.setattr(
+        buflo_study,
+        "validate_study_environment_receipt",
+        lambda observed, *, expected_image_digest=None: (
+            validated
+            if observed == value and expected_image_digest == _SOURCE["image_digest"]
+            else pytest.fail("file-transport receipt validation received different input")
+        ),
+    )
+
+    observed = orchestrator._study_environment_from_environment(campaign, _SOURCE)
+
+    assert observed == (raw, value, validated)
 
 
 def test_formal_block_has_exact_class_mode_counts_and_balanced_latin_rows() -> None:
@@ -1808,6 +1842,7 @@ def test_every_class_role_requires_foundation_before_global_claim(
         orchestrator.CLASS_STUDY_READINESS_ENV,
         orchestrator.CLASS_STUDY_HISTORICAL_PRE_ENV,
         "QCSD_STUDY_ENVIRONMENT_B64",
+        "QCSD_STUDY_ENVIRONMENT_PATH",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -1850,6 +1885,7 @@ def test_class_preclaim_rejects_wrong_source_and_malformed_environment_without_c
 
     _install_preclaim_authority(tmp_path, monkeypatch, campaign)
     monkeypatch.delenv("QCSD_STUDY_ENVIRONMENT_B64")
+    monkeypatch.delenv("QCSD_STUDY_ENVIRONMENT_PATH", raising=False)
     with pytest.raises(ValueError, match="requires a host Docker environment"):
         orchestrator._claim_class_study_launch(
             campaign,
@@ -2395,6 +2431,7 @@ def test_class_preclaim_uses_the_real_environment_receipt_build_identity(
         orchestrator.CLASS_STUDY_FOUNDATION_ENV,
         str(foundation_path),
     )
+    monkeypatch.delenv("QCSD_STUDY_ENVIRONMENT_PATH", raising=False)
     monkeypatch.setenv(
         "QCSD_STUDY_ENVIRONMENT_B64",
         base64.b64encode(json.dumps(environment).encode()).decode(),

@@ -6790,16 +6790,65 @@ if [[ ( "${1:-}" == "buflo-study" && "${2:-}" == "capture" ) ||
     exit 1
   fi
 fi
-study_environment_b64=""
+study_environment_host_path=""
+study_environment_container_path="/run/qcsd-study-environment.json"
+study_environment_transport_dir=""
+
+remove_study_environment_transport() {
+  if [[ -z "${study_environment_transport_dir}" ]]; then
+    return 0
+  fi
+  if [[ ! "${study_environment_transport_dir}" =~ ^/tmp/qcsd-study-environment\.[A-Za-z0-9]{8}$ ||
+        "${study_environment_host_path}" != \
+          "${study_environment_transport_dir}/study-environment.json" ]]; then
+    echo "refusing to remove an invalid study-environment transport path" >&2
+    return 1
+  fi
+  local cleanup_status=0
+  if [[ -e "${study_environment_host_path}" || -L "${study_environment_host_path}" ]]; then
+    if [[ -L "${study_environment_host_path}" ||
+          ! -f "${study_environment_host_path}" ]]; then
+      echo "study-environment transport changed type before cleanup" >&2
+      cleanup_status=1
+    elif ! rm -f -- "${study_environment_host_path}"; then
+      echo "cannot remove the study-environment transport file" >&2
+      cleanup_status=1
+    fi
+  fi
+  if [[ -L "${study_environment_transport_dir}" ||
+        ! -d "${study_environment_transport_dir}" ]]; then
+    echo "study-environment transport directory changed type before cleanup" >&2
+    cleanup_status=1
+  elif ! rmdir -- "${study_environment_transport_dir}"; then
+    echo "cannot remove the study-environment transport directory" >&2
+    cleanup_status=1
+  fi
+  if (( cleanup_status == 0 )); then
+    study_environment_host_path=""
+    study_environment_transport_dir=""
+  fi
+  return "${cleanup_status}"
+}
+
+cleanup_study_environment_transport_on_exit() {
+  local cleanup_entry_status="$1"
+  trap - EXIT
+  if ! remove_study_environment_transport && (( cleanup_entry_status == 0 )); then
+    cleanup_entry_status=1
+  fi
+  exit "${cleanup_entry_status}"
+}
+
 if [[ "${1:-}" == "class-study" && "${class_study_execute}" == "1" &&
       "${class_study_action}" == "resume" ]]; then
-  study_environment_b64="$(
-    python3 -I -c '
-import base64, sys
-from pathlib import Path
-print(base64.b64encode(Path(sys.argv[1]).read_bytes()).decode())
-' "${class_resume_environment}"
-  )"
+  if [[ -L "${class_resume_environment}" ||
+        ! -f "${class_resume_environment}" ||
+        "$(stat -c '%u:%g:%a:%h' -- "${class_resume_environment}" 2>/dev/null)" != \
+          "${qcsd_invoking_uid}:${qcsd_invoking_gid}:600:1" ]]; then
+    echo "class-study resume environment must be an owned 0600 single-link regular file" >&2
+    exit 1
+  fi
+  study_environment_host_path="${class_resume_environment}"
 fi
 if [[ ( "${1:-}" == "run" &&
         "${study_campaign_name}" =~ ^buflo-study-v1-(smoke|rehearsal|formal-[0-9]{2})\.yml$ ) ||
@@ -6826,8 +6875,6 @@ if [[ ( "${1:-}" == "run" &&
     echo "research capture build receipt/completion pair changed before environment capture" >&2
     exit 1
   fi
-  study_build_execution="$(/bin/cat "${study_build_execution_path}")"
-  study_build_completion="$(/bin/cat "${study_build_completion_path}")"
   if [[ "$(sha256sum -- "${study_build_execution_path}" | awk '{print $1}')" != \
           "${study_build_execution_sha256}" ||
         "$(sha256sum -- "${study_build_completion_path}" | awk '{print $1}')" != \
@@ -6860,22 +6907,90 @@ print(json.dumps({
 '
   study_repo_digests="$(_qcsd_docker_api image inspect \
     --format '{{json .RepoDigests}}' "${image_id}")"
-  study_environment_b64="$(
+  study_environment_transport_dir="$(
+    mktemp -d --tmpdir=/tmp qcsd-study-environment.XXXXXXXX
+  )"
+  study_environment_host_path="${study_environment_transport_dir}/study-environment.json"
+  trap 'cleanup_study_environment_transport_on_exit "$?"' EXIT
+
     QCSD_STUDY_DOCKER_VERSION="${study_docker_version}" \
     QCSD_STUDY_DOCKER_INFO="${study_docker_info}" \
     QCSD_STUDY_BUILD_INPUTS="${QCSD_DOCKER_OUTPUT_STUDY_BUILD_INPUTS}" \
-    QCSD_STUDY_BUILD_EXECUTION="${study_build_execution}" \
-    QCSD_STUDY_BUILD_EXECUTION_SHA256="${study_build_execution_sha256}" \
-    QCSD_STUDY_BUILD_COMPLETION="${study_build_completion}" \
     QCSD_STUDY_BUILD_COMPLETION_PATH="/lab/${study_build_completion_path#${ROOT}/}" \
-    QCSD_STUDY_BUILD_COMPLETION_SHA256="${study_build_completion_sha256}" \
     QCSD_STUDY_BUILD_COMPLETION_PAYLOAD_SHA256="${study_build_completion_payload_sha256}" \
     QCSD_STUDY_CONTAINER_CLOCK="${QCSD_DOCKER_OUTPUT_STUDY_CONTAINER_CLOCK}" \
     QCSD_STUDY_REPO_DIGESTS="${study_repo_digests}" \
     QCSD_STUDY_IMAGE_ID="${image_id}" \
     QCSD_STUDY_CAPTURE_SCHEDULER_CONTRACT="${study_capture_scheduler_contract}" \
     python3 -I -c '
-import base64, json, os, subprocess, time
+import hashlib, json, os, stat, subprocess, sys, time
+from pathlib import Path
+
+def read_receipt(path_text, expected_sha256, label):
+    path = Path(path_text)
+    before = path.lstat()
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+            or opened.st_uid != os.geteuid()
+            or opened.st_nlink != 1
+            or opened.st_size <= 0
+            or opened.st_size > 64 * 1024 * 1024
+        ):
+            raise SystemExit(f"{label} is not a safe regular file")
+        chunks = []
+        remaining = opened.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                raise SystemExit(f"{label} was truncated while read")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        if os.read(descriptor, 1):
+            raise SystemExit(f"{label} grew while read")
+        after = os.fstat(descriptor)
+        if (
+            after.st_dev,
+            after.st_ino,
+            after.st_uid,
+            after.st_gid,
+            after.st_mode,
+            after.st_nlink,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        ) != (
+            opened.st_dev,
+            opened.st_ino,
+            opened.st_uid,
+            opened.st_gid,
+            opened.st_mode,
+            opened.st_nlink,
+            opened.st_size,
+            opened.st_mtime_ns,
+            opened.st_ctime_ns,
+        ):
+            raise SystemExit(f"{label} changed while read")
+    finally:
+        os.close(descriptor)
+    raw = b"".join(chunks)
+    if hashlib.sha256(raw).hexdigest() != expected_sha256:
+        raise SystemExit(f"{label} hash differs from its admitted binding")
+    try:
+        return json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise SystemExit(f"{label} is not JSON") from error
+
+build_receipt = read_receipt(sys.argv[1], sys.argv[2], "study build receipt")
+completion_receipt = read_receipt(
+    sys.argv[3], sys.argv[4], "study build completion"
+)
 version = json.loads(os.environ["QCSD_STUDY_DOCKER_VERSION"])
 info = json.loads(os.environ["QCSD_STUDY_DOCKER_INFO"])
 try:
@@ -6946,14 +7061,14 @@ value = {
     },
     "build_inputs": json.loads(os.environ["QCSD_STUDY_BUILD_INPUTS"]),
     "build_execution": {
-        "sha256": os.environ["QCSD_STUDY_BUILD_EXECUTION_SHA256"],
-        "receipt": json.loads(os.environ["QCSD_STUDY_BUILD_EXECUTION"]),
+        "sha256": sys.argv[2],
+        "receipt": build_receipt,
         "completion_path": os.environ["QCSD_STUDY_BUILD_COMPLETION_PATH"],
-        "completion_sha256": os.environ["QCSD_STUDY_BUILD_COMPLETION_SHA256"],
+        "completion_sha256": sys.argv[4],
         "completion_payload_sha256": os.environ[
             "QCSD_STUDY_BUILD_COMPLETION_PAYLOAD_SHA256"
         ],
-        "completion": json.loads(os.environ["QCSD_STUDY_BUILD_COMPLETION"]),
+        "completion": completion_receipt,
     },
     "clock_status": {
         "relationship": "container-shares-host-kernel-realtime-clock",
@@ -6970,9 +7085,65 @@ value = {
     "capture_scheduler": capture_scheduler,
 }
 encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
-print(base64.b64encode(encoded).decode())
-'
-  )"
+output = Path(sys.argv[5])
+parent_descriptor = os.open(
+    output.parent,
+    os.O_RDONLY
+    | os.O_CLOEXEC
+    | getattr(os, "O_NOFOLLOW", 0)
+    | os.O_DIRECTORY,
+)
+output_descriptor = -1
+try:
+    parent = os.fstat(parent_descriptor)
+    if (
+        not stat.S_ISDIR(parent.st_mode)
+        or parent.st_uid != os.geteuid()
+        or stat.S_IMODE(parent.st_mode) != 0o700
+    ):
+        raise SystemExit("study-environment transport parent is unsafe")
+    output_descriptor = os.open(
+        output.name,
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | os.O_CLOEXEC
+        | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+        dir_fd=parent_descriptor,
+    )
+    view = memoryview(encoded)
+    while view:
+        written = os.write(output_descriptor, view)
+        if written <= 0:
+            raise SystemExit("study-environment transport write made no progress")
+        view = view[written:]
+    os.fchmod(output_descriptor, 0o600)
+    written_status = os.fstat(output_descriptor)
+    if (
+        not stat.S_ISREG(written_status.st_mode)
+        or written_status.st_uid != os.geteuid()
+        or stat.S_IMODE(written_status.st_mode) != 0o600
+        or written_status.st_nlink != 1
+        or written_status.st_size != len(encoded)
+    ):
+        raise SystemExit("study-environment transport output is unsafe")
+    os.fsync(output_descriptor)
+    os.fsync(parent_descriptor)
+finally:
+    if output_descriptor >= 0:
+        os.close(output_descriptor)
+    os.close(parent_descriptor)
+' "${study_build_execution_path}" "${study_build_execution_sha256}" \
+    "${study_build_completion_path}" "${study_build_completion_sha256}" \
+    "${study_environment_host_path}"
+  if [[ -L "${study_environment_host_path}" ||
+        ! -f "${study_environment_host_path}" ||
+        "$(stat -c '%u:%g:%a:%h' -- "${study_environment_host_path}")" != \
+          "${qcsd_invoking_uid}:${qcsd_invoking_gid}:600:1" ]]; then
+    echo "study-environment transport was not created safely" >&2
+    exit 1
+  fi
 fi
 
 if [[ "${1:-}" == "qualify-chaff" ]]; then
@@ -7572,8 +7743,11 @@ if [[ -n "${study_capture_scheduler_contract}" ]]; then
     container+=(--env "QCSD_CAPTURE_ETF_INTERFACE=eth0")
   fi
 fi
-if [[ -n "${study_environment_b64}" ]]; then
-  container+=(--env "QCSD_STUDY_ENVIRONMENT_B64=${study_environment_b64}")
+if [[ -n "${study_environment_host_path}" ]]; then
+  container+=(
+    --env "QCSD_STUDY_ENVIRONMENT_PATH=${study_environment_container_path}"
+    --volume "${study_environment_host_path}:${study_environment_container_path}:ro"
+  )
 fi
 if [[ -n "${study_capture_admission_container}" ]]; then
   container+=(--env "QCSD_BUFLO_CAPTURE_ADMISSION=${study_capture_admission_container}")
@@ -8495,6 +8669,9 @@ _qcsd_finish_latched_cleanup() {
   # discarding a signal or allowing it to interrupt teardown.
   cleanup_complete=1
   _qcsd_cleanup_terminal_hook
+  if ! remove_study_environment_transport; then
+    cleanup_failure_status=1
+  fi
   if (( cleanup_entry_status != 0 )); then
     exit "${cleanup_entry_status}"
   elif (( _QCSD_LIFETIME_SIGNAL_STATUS != 0 )); then
@@ -8648,9 +8825,10 @@ run_buflo_controlled_profile() {
   local scheduler_host_partition_b64
   local controlled_results_mount="${ROOT}/results:/lab/results:rw"
   local -a study_environment_argument=()
-  if [[ -n "${study_environment_b64}" ]]; then
+  if [[ -n "${study_environment_host_path}" ]]; then
     study_environment_argument=(
-      --env "QCSD_STUDY_ENVIRONMENT_B64=${study_environment_b64}"
+      --env "QCSD_STUDY_ENVIRONMENT_PATH=${study_environment_container_path}"
+      --volume "${study_environment_host_path}:${study_environment_container_path}:ro"
     )
   fi
   configure_buflo_router "${router_id}" "${profile}"
