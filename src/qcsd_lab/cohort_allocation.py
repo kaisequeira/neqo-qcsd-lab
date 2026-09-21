@@ -160,6 +160,8 @@ _FILE_STAT_KEYS = {
 }
 _DIRECTORY_BINDING_KEYS = {"dev", "inode", "uid", "gid", "mode", "nlink"}
 _AUTHORITY_FILE_IDENTITY_KEYS = _FILE_STAT_KEYS
+_AUTHORITY_DIRECTORY_IDENTITY_KEYS = {"type", "dev", "inode", "uid", "gid", "mode"}
+_AUTHORITY_SCHEMA_VERSIONS = {1, 2}
 
 
 class CohortAllocationError(ValueError):
@@ -286,6 +288,22 @@ def _integer_record(value: Any, *, keys: set[str]) -> bool:
         and all(type(item) is int and item >= 0 for item in value.values())
         and 0 <= value["mode"] <= 0o7777
         and value["nlink"] >= 1
+    )
+
+
+def _authority_directory_record(
+    value: Any, *, schema_version: int, name: str
+) -> bool:
+    if schema_version == 1 or name != "git":
+        return _integer_record(value, keys=_AUTHORITY_FILE_IDENTITY_KEYS)
+    return (
+        isinstance(value, Mapping)
+        and set(value) == _AUTHORITY_DIRECTORY_IDENTITY_KEYS
+        and all(type(item) is int and item >= 0 for item in value.values())
+        and value["type"] == stat.S_IFDIR
+        and value["dev"] > 0
+        and value["inode"] > 0
+        and 0 <= value["mode"] <= 0o7777
     )
 
 
@@ -926,11 +944,12 @@ def _close_guardian_lock_proof(proof: _GuardianLockProof) -> None:
 
 
 def _validate_authority(value: Any) -> _BaseAuthority:
+    schema_version = value.get("schema_version") if isinstance(value, Mapping) else None
     if (
         not isinstance(value, Mapping)
         or set(value) != _AUTHORITY_KEYS
-        or type(value.get("schema_version")) is not int
-        or value.get("schema_version") != 1
+        or type(schema_version) is not int
+        or schema_version not in _AUTHORITY_SCHEMA_VERSIONS
         or value.get("artifact_type") != AUTHORITY_ARTIFACT_TYPE
         or not isinstance(value.get("git"), Mapping)
         or not isinstance(value.get("filesystem"), Mapping)
@@ -1031,10 +1050,14 @@ def _validate_authority(value: Any) -> _BaseAuthority:
         not isinstance(directories, Mapping)
         or set(directories) != _AUTHORITY_DIRECTORY_NAMES
         or any(
-            not _integer_record(identity, keys=_AUTHORITY_FILE_IDENTITY_KEYS)
+            not _authority_directory_record(
+                identity,
+                schema_version=schema_version,
+                name=name,
+            )
             or identity["uid"] != os.geteuid()
             or identity["mode"] & 0o022 != 0
-            for identity in directories.values()
+            for name, identity in directories.items()
         )
         or not _integer_record(filesystem["ledger"], keys=_AUTHORITY_FILE_IDENTITY_KEYS)
         or not _integer_record(filesystem["git_index"], keys=_AUTHORITY_FILE_IDENTITY_KEYS)

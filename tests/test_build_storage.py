@@ -235,7 +235,9 @@ def _file_stat(*, inode: int, mode: int, size: int) -> dict[str, int]:
     }
 
 
-def _cohort_authority(allocation: dict[str, Any]) -> dict[str, Any]:
+def _cohort_authority(
+    allocation: dict[str, Any], *, schema_version: int = 2
+) -> dict[str, Any]:
     ledger_size = len(base64.b64decode(allocation["ledger_payload_base64"]))
     directories = {
         name: {
@@ -246,8 +248,18 @@ def _cohort_authority(allocation: dict[str, Any]) -> dict[str, Any]:
             ("repository-root", "config", "buflo-study", "v1", "git")
         )
     }
+    if schema_version == 2:
+        git_identity = directories["git"]
+        directories["git"] = {
+            "type": stat.S_IFDIR,
+            "dev": git_identity["dev"],
+            "inode": git_identity["inode"],
+            "uid": git_identity["uid"],
+            "gid": git_identity["gid"],
+            "mode": git_identity["mode"],
+        }
     return {
-        "schema_version": 1,
+        "schema_version": schema_version,
         "artifact_type": "qcsd-buflo-study-cohort-allocation-authority",
         "git": {
             "object_format": allocation["git_object_format"],
@@ -270,6 +282,8 @@ def _cohort_authority(allocation: dict[str, Any]) -> dict[str, Any]:
 
 def _cohort_claim_evidence(
     allocation: dict[str, Any],
+    *,
+    authority_schema_version: int = 2,
 ) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
     version = allocation["allocated_version"]
     predecessor = {
@@ -284,7 +298,12 @@ def _cohort_claim_evidence(
     for claim_version in range(allocation["last_consumed_version"] + 1, version + 1):
         claim_allocation = json.loads(json.dumps(allocation))
         claim_allocation["allocated_version"] = claim_version
-        authority = _cohort_authority(claim_allocation)
+        authority = _cohort_authority(
+            claim_allocation,
+            schema_version=(
+                authority_schema_version if claim_version == version else 1
+            ),
+        )
         authority_sha256 = _canonical_digest(authority)
         claim_payload = {
             "policy": "dense-prefix-durable-publications-consume-v1",
@@ -1226,6 +1245,14 @@ def test_schema_5_claim_contract_tracks_the_allocator_contract() -> None:
         build_storage._COHORT_AUTHORITY_DIRECTORY_NAMES
         == cohort_allocation._AUTHORITY_DIRECTORY_NAMES
     )
+    assert (
+        build_storage._COHORT_AUTHORITY_SCHEMA_VERSIONS
+        == cohort_allocation._AUTHORITY_SCHEMA_VERSIONS
+    )
+    assert (
+        build_storage._COHORT_AUTHORITY_GIT_DIRECTORY_KEYS
+        == cohort_allocation._AUTHORITY_DIRECTORY_IDENTITY_KEYS
+    )
     assert build_storage._COHORT_CLAIM_SOURCE_KEYS == cohort_allocation._SOURCE_KEYS
     assert (
         build_storage._COHORT_CLAIM_LEDGER_KEYS
@@ -1353,6 +1380,44 @@ def test_schema_5_accepts_snapshot_published_by_cohort_allocator(tmp_path: Path)
     validated = build_storage.validate_build_execution_envelope(value)
 
     assert validated["cohort_claim"] == snapshot
+
+
+def test_schema_5_accepts_mixed_historical_and_stable_directory_authorities() -> None:
+    value = _build_receipt(
+        schema_version=5,
+        host_storage_preflight=_non_wsl_preflight(),
+        cohort_version=35,
+    )
+
+    validated = build_storage.validate_build_execution_envelope(value)
+
+    claims = value["cohort_claim_chain"]["claims"]
+    first = json.loads(base64.b64decode(claims[0]["payload_base64"], validate=True))
+    last = json.loads(base64.b64decode(claims[-1]["payload_base64"], validate=True))
+    assert first["payload"]["authority"]["schema_version"] == 1
+    assert last["payload"]["authority"]["schema_version"] == 2
+    assert set(last["payload"]["authority"]["filesystem"]["directories"]["git"]) == {
+        "type",
+        "dev",
+        "inode",
+        "uid",
+        "gid",
+        "mode",
+    }
+    assert validated["cohort_claim_chain"] == value["cohort_claim_chain"]
+
+
+def test_schema_two_authority_rejects_legacy_full_git_directory_identity() -> None:
+    allocation = _cohort_allocation()
+    authority = _cohort_authority(allocation, schema_version=1)
+    authority["schema_version"] = 2
+
+    with pytest.raises(ValueError, match="Git directory binding"):
+        build_storage._validate_embedded_cohort_authority(
+            authority,
+            allocation=allocation,
+            ledger_size=len(base64.b64decode(allocation["ledger_payload_base64"])),
+        )
 
 
 def test_schema_5_accepts_proof_from_real_git_commit_and_tree_objects(

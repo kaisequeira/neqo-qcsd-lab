@@ -466,7 +466,9 @@ def _cohort_file_stat(*, inode: int, mode: int, size: int) -> dict[str, int]:
     }
 
 
-def _cohort_authority(allocation: dict[str, Any]) -> dict[str, Any]:
+def _cohort_authority(
+    allocation: dict[str, Any], *, schema_version: int = 2
+) -> dict[str, Any]:
     ledger_size = len(base64.b64decode(allocation["ledger_payload_base64"]))
     directories = {
         name: {
@@ -475,8 +477,18 @@ def _cohort_authority(allocation: dict[str, Any]) -> dict[str, Any]:
         }
         for index, name in enumerate(("repository-root", "config", "buflo-study", "v1", "git"))
     }
+    if schema_version == 2:
+        git_identity = directories["git"]
+        directories["git"] = {
+            "type": stat.S_IFDIR,
+            "dev": git_identity["dev"],
+            "inode": git_identity["inode"],
+            "uid": git_identity["uid"],
+            "gid": git_identity["gid"],
+            "mode": git_identity["mode"],
+        }
     return {
-        "schema_version": 1,
+        "schema_version": schema_version,
         "artifact_type": watch._COHORT_AUTHORITY_TYPE,
         "git": {
             "object_format": "sha1",
@@ -3144,6 +3156,38 @@ def test_current_foundation_watcher_accepts_exact_schema5_build_and_completion(
         snapshot.completion_sha256
         == hashlib.sha256(acquisition.build_completion_path.read_bytes()).hexdigest()
     )
+
+
+def test_watcher_accepts_historical_and_current_cohort_authority_schemas() -> None:
+    allocation = _cohort_allocation(cohort_version=23, neqo_commit="e" * 40)
+    ledger_size = len(base64.b64decode(allocation["ledger_payload_base64"]))
+
+    historical = watch._validate_embedded_cohort_authority(
+        _cohort_authority(allocation, schema_version=1),
+        allocation=allocation,
+        ledger_size=ledger_size,
+    )
+    current = watch._validate_embedded_cohort_authority(
+        _cohort_authority(allocation, schema_version=2),
+        allocation=allocation,
+        ledger_size=ledger_size,
+    )
+
+    assert historical["schema_version"] == 1
+    assert current["schema_version"] == 2
+
+
+def test_watcher_rejects_schema_two_legacy_full_git_directory_identity() -> None:
+    allocation = _cohort_allocation(cohort_version=23, neqo_commit="e" * 40)
+    authority = _cohort_authority(allocation, schema_version=1)
+    authority["schema_version"] = 2
+
+    with pytest.raises(watch.WatchError, match="Git directory binding"):
+        watch._validate_embedded_cohort_authority(
+            authority,
+            allocation=allocation,
+            ledger_size=len(base64.b64decode(allocation["ledger_payload_base64"])),
+        )
 
 
 def test_schema4_build_remains_historically_parseable_but_cannot_found_current_admission(

@@ -3314,7 +3314,7 @@ receipt = {
     "allocated_version": requested,
 }
 authority = {
-    "schema_version": 1,
+    "schema_version": 2,
     "artifact_type": "qcsd-buflo-study-cohort-allocation-authority",
     "git": {
         "object_format": object_format,
@@ -3328,7 +3328,11 @@ authority = {
     },
     "filesystem": {
         "directories": {
-            label: identity(initial)
+            label: (
+                stable_directory_identity(initial)
+                if label == "git"
+                else identity(initial)
+            )
             for label, _fd, initial, _parent, _name in opened
             if label not in {"ledger", "git-index"}
         },
@@ -3641,7 +3645,7 @@ if set(value)!={"schema_version","artifact_type","git","filesystem","receipt"}:
 git=value["git"]
 receipt=value["receipt"]
 if (
-    value["schema_version"] != 1
+    value["schema_version"] != 2
     or value["artifact_type"] != "qcsd-buflo-study-cohort-allocation-authority"
     or not isinstance(git, dict)
     or not isinstance(receipt, dict)
@@ -4640,7 +4644,7 @@ if (
     not isinstance(cohort_allocation_authority, dict)
     or set(cohort_allocation_authority)
     != {"schema_version", "artifact_type", "git", "filesystem", "receipt"}
-    or cohort_allocation_authority.get("schema_version") != 1
+    or cohort_allocation_authority.get("schema_version") != 2
     or cohort_allocation_authority.get("artifact_type")
     != "qcsd-buflo-study-cohort-allocation-authority"
     or not isinstance(cohort_allocation_authority.get("receipt"), dict)

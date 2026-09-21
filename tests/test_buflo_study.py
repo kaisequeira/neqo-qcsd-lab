@@ -1343,7 +1343,7 @@ def _launcher_boundary_fixture(
         "_qcsd_validate_consumed_cohort_ledger() {\n"
         "  [[ \"$1\" =~ ^[1-9][0-9]*$ ]] && (( $1 >= 2 )) || return 1\n"
         "  python3 -I - \"$1\" \"${ROOT}/test-markers/cohort-lab-commit\" <<'PY'\n"
-        "import base64, hashlib, json, os, sys\n"
+        "import base64, hashlib, json, os, stat, sys\n"
         "from pathlib import Path\n"
         "version = int(sys.argv[1])\n"
         "ledger = {\n"
@@ -1383,6 +1383,10 @@ def _launcher_boundary_fixture(
         "    'mtime_ns': 1, 'ctime_ns': 1,\n"
         "}\n"
         "directory_identity = {**identity, 'mode': 0o755, 'size': 1}\n"
+        "stable_git_directory_identity = {\n"
+        "    'type': stat.S_IFDIR, 'dev': 1, 'inode': 1,\n"
+        "    'uid': os.geteuid(), 'gid': os.getegid(), 'mode': 0o755,\n"
+        "}\n"
         "receipt = {\n"
         "    'schema_version': 1,\n"
         "    'artifact_type': 'qcsd-buflo-study-cohort-allocation',\n"
@@ -1408,7 +1412,7 @@ def _launcher_boundary_fixture(
         "    'allocated_version': version,\n"
         "}\n"
         "authority = {\n"
-        "    'schema_version': 1,\n"
+        "    'schema_version': 2,\n"
         "    'artifact_type': 'qcsd-buflo-study-cohort-allocation-authority',\n"
         "    'git': {\n"
         "        'object_format': 'sha1', 'lab_head': lab_commit,\n"
@@ -1418,8 +1422,11 @@ def _launcher_boundary_fixture(
         "    },\n"
         "    'filesystem': {\n"
         "        'directories': {\n"
-        "            name: dict(directory_identity)\n"
-        "            for name in ('repository-root', 'config', 'buflo-study', 'v1', 'git')\n"
+        "            **{\n"
+        "                name: dict(directory_identity)\n"
+        "                for name in ('repository-root', 'config', 'buflo-study', 'v1')\n"
+        "            },\n"
+        "            'git': dict(stable_git_directory_identity),\n"
         "        },\n"
         "        'ledger': dict(identity),\n"
         "        'git_index': dict(identity),\n"
@@ -9225,6 +9232,59 @@ def test_build_rechecks_full_source_authority_after_receipt_staging(
     assert (
         tmp_path / "artifacts/buflo-study/cohort-claims-v1/claim-v62.json"
     ).is_file()
+
+
+def test_build_reproof_ignores_transient_git_directory_child_churn(
+    tmp_path: Path,
+) -> None:
+    boundary = (
+        '  _qcsd_reprove_build_cohort_authority '
+        '"immediately-before-prepare-build" || exit 1'
+    )
+    churn = (
+        '  /usr/bin/printf "%s\\n" transient >"${ROOT}/.git/qcsd-test-transient"\n'
+        '  /usr/bin/rm -f -- "${ROOT}/.git/qcsd-test-transient"'
+    )
+    launcher, build_marker, environment = _launcher_boundary_fixture(
+        tmp_path,
+        production_allocator=True,
+        production_cohort_version=62,
+        committed_launcher_hooks=((boundary, churn),),
+    )
+
+    result = subprocess.run(
+        [str(launcher), "build", "--cohort-version", "62"],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert _marked_build_count(build_marker) == 3
+    receipt = json.loads(
+        (tmp_path / "artifacts/buflo-study/build-execution-v62.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    claim = json.loads(
+        base64.b64decode(
+            receipt["cohort_claim"]["claim"]["payload_base64"],
+            validate=True,
+        )
+    )
+    authority = claim["payload"]["authority"]
+    assert authority["schema_version"] == 2
+    assert set(authority["filesystem"]["directories"]["git"]) == {
+        "type",
+        "dev",
+        "inode",
+        "uid",
+        "gid",
+        "mode",
+    }
 
 
 def test_build_executes_production_allocator_across_guardian_and_transaction(

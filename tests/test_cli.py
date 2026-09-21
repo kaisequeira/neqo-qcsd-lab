@@ -6271,7 +6271,7 @@ def test_consumed_cohort_ledger_authenticates_any_fresh_claim_candidate(
         "filesystem",
         "receipt",
     }
-    assert authority["schema_version"] == 1
+    assert authority["schema_version"] == 2
     assert authority["artifact_type"] == ("qcsd-buflo-study-cohort-allocation-authority")
     git = authority["git"]
     receipt = authority["receipt"]
@@ -6325,6 +6325,27 @@ def test_consumed_cohort_ledger_authenticates_any_fresh_claim_candidate(
         "mtime_ns",
         "ctime_ns",
     }
+    assert set(authority["filesystem"]["directories"]["git"]) == {
+        "type",
+        "dev",
+        "inode",
+        "uid",
+        "gid",
+        "mode",
+    }
+    assert authority["filesystem"]["directories"]["git"]["type"] == stat.S_IFDIR
+    for name in ("repository-root", "config", "buflo-study", "v1"):
+        assert set(authority["filesystem"]["directories"][name]) == {
+            "dev",
+            "inode",
+            "uid",
+            "gid",
+            "mode",
+            "nlink",
+            "size",
+            "mtime_ns",
+            "ctime_ns",
+        }
 
     later = _run_cohort_ledger_validator(root, "63")
     assert later.returncode == 0, later.stderr
@@ -6518,6 +6539,28 @@ def test_consumed_cohort_ledger_allows_benign_directory_child_churn(
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_consumed_cohort_authority_ignores_cross_boundary_git_child_churn(
+    tmp_path: Path,
+) -> None:
+    root, _path = _cohort_git_repository(tmp_path, payload=_valid_cohort_ledger())
+    before_stat = (root / ".git").stat()
+    before = _run_cohort_ledger_validator(root, "62")
+    assert before.returncode == 0, before.stderr
+
+    transient = root / ".git/qcsd-benign-transient"
+    transient.write_text("transient\n", encoding="ascii")
+    transient.unlink()
+
+    after_stat = (root / ".git").stat()
+    after = _run_cohort_ledger_validator(root, "62")
+    assert after.returncode == 0, after.stderr
+    assert (before_stat.st_mtime_ns, before_stat.st_ctime_ns) != (
+        after_stat.st_mtime_ns,
+        after_stat.st_ctime_ns,
+    )
+    assert before.stdout == after.stdout
 
 
 @pytest.mark.parametrize(

@@ -33,6 +33,7 @@ IDENTITY_KEYS = {
     "mtime_ns",
     "ctime_ns",
 }
+STABLE_DIRECTORY_IDENTITY_KEYS = {"type", "dev", "inode", "uid", "gid", "mode"}
 
 
 def _canonical(value: Any, *, newline: bool = False) -> bytes:
@@ -58,6 +59,21 @@ def _identity(seed: int) -> dict[str, int]:
         "mtime_ns": seed + 3,
         "ctime_ns": seed + 4,
     }
+
+
+def _schema_two_authority(allocated: int) -> dict[str, Any]:
+    authority = _authority(allocated)
+    authority["schema_version"] = 2
+    git_identity = authority["filesystem"]["directories"]["git"]
+    authority["filesystem"]["directories"]["git"] = {
+        "type": stat.S_IFDIR,
+        "dev": git_identity["dev"],
+        "inode": git_identity["inode"],
+        "uid": git_identity["uid"],
+        "gid": git_identity["gid"],
+        "mode": 0o700,
+    }
+    return authority
 
 
 def _ledger_raw(*, base: int = BASE_VERSION, marker: str | None = None) -> bytes:
@@ -371,6 +387,34 @@ def test_publish_is_canonical_permanent_and_exactly_verifiable(tmp_path: Path) -
     }
     assert claim.read_bytes() == _canonical(stored, newline=True)
     assert cohort_allocation.verify_cohort_claim(root, snapshot) == snapshot
+
+
+def test_schema_two_authority_uses_stable_git_directory_identity(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    authority = _schema_two_authority(4)
+
+    snapshot = cohort_allocation.publish_cohort_claim(root, authority)
+
+    stored = json.loads(_claim(root, 4).read_text(encoding="ascii"))
+    assert stored["payload"]["authority"] == authority
+    assert set(authority["filesystem"]["directories"]["git"]) == (
+        STABLE_DIRECTORY_IDENTITY_KEYS
+    )
+    for name in ("repository-root", "config", "buflo-study", "v1"):
+        assert set(authority["filesystem"]["directories"][name]) == IDENTITY_KEYS
+    assert cohort_allocation.verify_cohort_claim(root, snapshot) == snapshot
+
+
+def test_schema_two_authority_rejects_legacy_git_directory_identity(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    authority = _authority(4)
+    authority["schema_version"] = 2
+
+    with pytest.raises(
+        cohort_allocation.CohortAllocationError,
+        match="filesystem authority",
+    ):
+        cohort_allocation.publish_cohort_claim(root, authority)
 
 
 def test_successors_form_a_dense_hash_chain_and_old_snapshots_remain_valid(

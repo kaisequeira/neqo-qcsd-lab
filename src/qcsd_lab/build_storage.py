@@ -324,6 +324,8 @@ _COHORT_FILE_STAT_KEYS = {
     "ctime_ns",
 }
 _COHORT_DIRECTORY_STAT_KEYS = {"dev", "inode", "uid", "gid", "mode", "nlink"}
+_COHORT_AUTHORITY_GIT_DIRECTORY_KEYS = {"type", "dev", "inode", "uid", "gid", "mode"}
+_COHORT_AUTHORITY_SCHEMA_VERSIONS = {1, 2}
 _COHORT_REPROOF_KEYS = {
     "boundary",
     "observed_at",
@@ -1358,17 +1360,35 @@ def _validate_cohort_stat(
     return {key: value[key] for key in keys}
 
 
+def _validate_cohort_git_directory_authority(value: Any) -> dict[str, int]:
+    keys = _COHORT_AUTHORITY_GIT_DIRECTORY_KEYS
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != keys
+        or any(type(value[key]) is not int for key in keys)
+        or value["type"] != stat.S_IFDIR
+        or value["dev"] <= 0
+        or value["inode"] <= 0
+        or value["uid"] < 0
+        or value["gid"] < 0
+        or not 0 <= value["mode"] <= 0o7777
+    ):
+        raise ValueError("no-cache build cohort authority Git directory binding is invalid")
+    return {key: value[key] for key in keys}
+
+
 def _validate_embedded_cohort_authority(
     value: Any,
     *,
     allocation: Mapping[str, Any],
     ledger_size: int,
 ) -> dict[str, Any]:
+    schema_version = value.get("schema_version") if isinstance(value, Mapping) else None
     if (
         not isinstance(value, Mapping)
         or set(value) != _COHORT_AUTHORITY_KEYS
-        or type(value.get("schema_version")) is not int
-        or value.get("schema_version") != 1
+        or type(schema_version) is not int
+        or schema_version not in _COHORT_AUTHORITY_SCHEMA_VERSIONS
         or value.get("artifact_type") != _COHORT_AUTHORITY_ARTIFACT_TYPE
         or not isinstance(value.get("receipt"), Mapping)
         or dict(value["receipt"]) != dict(allocation)
@@ -1401,11 +1421,15 @@ def _validate_embedded_cohort_authority(
         or set(filesystem["directories"]) != _COHORT_AUTHORITY_DIRECTORY_NAMES
     ):
         raise ValueError("no-cache build cohort claim filesystem authority is invalid")
-    for identity in filesystem["directories"].values():
-        validated = _validate_cohort_stat(
-            identity,
-            keys=_COHORT_FILE_STAT_KEYS,
-            label="no-cache build cohort authority directory",
+    for name, identity in filesystem["directories"].items():
+        validated = (
+            _validate_cohort_git_directory_authority(identity)
+            if schema_version == 2 and name == "git"
+            else _validate_cohort_stat(
+                identity,
+                keys=_COHORT_FILE_STAT_KEYS,
+                label="no-cache build cohort authority directory",
+            )
         )
         if validated["mode"] & 0o022:
             raise ValueError("no-cache build cohort claim filesystem authority is invalid")
