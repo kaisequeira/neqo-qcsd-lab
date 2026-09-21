@@ -1377,6 +1377,8 @@ def test_hard_gate_inventory_is_ordered_typed_and_nonempty() -> None:
         (12, True),
         (13, True),
         (14, True),
+        (16, True),
+        (17, True),
         (attestation.PINNED_CDP_PROBE_SCHEMA_VERSION, True),
     ),
 )

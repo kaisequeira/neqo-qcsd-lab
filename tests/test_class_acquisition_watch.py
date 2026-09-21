@@ -125,16 +125,21 @@ def _srcdoc_pseudo_document_summary(
     return summary
 
 
-def _normal_shutdown_disposal_summary() -> dict[str, Any]:
+def _normal_shutdown_disposal_summary(
+    *,
+    fetch_total: int = 0,
+    fetch_only_context_disposal_total: int = 0,
+) -> dict[str, Any]:
     return {
         "schema_version": watch._NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
         "policy": watch._NORMAL_SHUTDOWN_DISPOSAL_POLICY,
         "started": True,
         "terminal": True,
         "network_total": 0,
-        "fetch_total": 0,
-        "matched_total": 0,
+        "fetch_total": fetch_total,
+        "matched_total": fetch_total - fetch_only_context_disposal_total,
         "network_only_synthetic_total": 0,
+        "fetch_only_context_disposal_total": fetch_only_context_disposal_total,
         "pending_network_total": 0,
         "pending_fetch_total": 0,
         "terminal_outcomes": {
@@ -2019,7 +2024,7 @@ class FakeMonotonic:
 
 
 def test_due_work_uses_exact_command_environment_and_paths(acquisition: Fixture) -> None:
-    assert watch.ACQUISITION_SCHEMA_VERSION == 8
+    assert watch.ACQUISITION_SCHEMA_VERSION == 9
     assert watch.CHECKPOINT_SCHEMA_VERSION == 3
     assert watch.TERMINAL_SCHEMA_VERSION == 4
     assert watch.COMPLETION_SCHEMA_VERSION == 4
@@ -3919,6 +3924,21 @@ def test_watcher_accepts_current_runtime_pinned_cdp_observation(
     observation = receipt["payload"]["observation"]
 
     assert pinned_cdp._validate_observation(copy.deepcopy(observation)) == observation
+    watch._validate_pinned_cdp_observation(copy.deepcopy(observation))
+
+
+def test_watcher_accepts_one_fetch_only_context_disposal(
+    acquisition: Fixture,
+) -> None:
+    receipt = json.loads(acquisition.pinned_cdp_path.read_text(encoding="utf-8"))
+    observation = receipt["payload"]["observation"]
+    observation["topology"]["normal_shutdown_disposal_summary"] = (
+        _normal_shutdown_disposal_summary(
+            fetch_total=1,
+            fetch_only_context_disposal_total=1,
+        )
+    )
+
     watch._validate_pinned_cdp_observation(copy.deepcopy(observation))
 
 

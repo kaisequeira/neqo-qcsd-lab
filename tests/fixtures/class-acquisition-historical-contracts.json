@@ -549,5 +549,18 @@
       "source_lab_commit": "679e1490774e3238c3693e780f1361078d6f7cd7"
     }
   ],
-  "source_note": "Frozen from clean schema3/4 source commits, every clean schema5 producer commit grouped by its exact fixed projection, immutable v91/v95/v96 schema6 acquisition provenances, and the immutable v100/v101 schema7 provenance/checkpoint receipt pairs. Projection overlays encode only source-verified field deltas and are hash-checked after reconstruction."
+  "schema8_archived_receipts": [
+    {
+      "authority_file_sha256": "7f8fa773f729203a687a7ce2e168cdb7a9b1d09d11d337725f12421d6bc5ec76",
+      "authority_payload_sha256": "717a64e66bcd8ece42d2d3a26c1205ee81bd967ee220c318dc5813b85222ccbb",
+      "checkpoint_file_sha256": "d20469f0a19463d4b4a85fe26eb88116f65e5709d568f42a4dac94c37b1f5170",
+      "checkpoint_payload_sha256": "f2afad2f983f68772dbb13f9c4a36daeda2b4f97bb1d40d43509ab4f2904fd6f",
+      "cohort": "v102",
+      "fixed_provenance_sha256": "32841a18afb288885aeb55f42e5c734cfbbc4de0725f1b1fd40644bdb4b78046",
+      "provenance_file_sha256": "395ce1a34e487f5078017ab28c63238b7d302aad6a11b356d5fa51199f59f5ff",
+      "provenance_payload_sha256": "5e503d67d1763f7ee24f3804225e0aa3f32a3ee537de6c5de4c57b68d03a4e71",
+      "source_lab_commit": "8975d543e051b378b30df4b1c45e1b1a4349cc37"
+    }
+  ],
+  "source_note": "Frozen from clean schema3/4 source commits, every clean schema5 producer commit grouped by its exact fixed projection, immutable v91/v95/v96 schema6 acquisition provenances, the immutable v100/v101 schema7 provenance/checkpoint receipt pairs, and the immutable v102 schema8 authority/provenance/checkpoint receipt set. Projection overlays encode only source-verified field deltas and are hash-checked after reconstruction."
 }

@@ -115,8 +115,8 @@ from .util import (
     source_metadata,
 )
 
-SCHEMA_VERSION = 8
-HISTORICAL_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7})
+SCHEMA_VERSION = 9
+HISTORICAL_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7, 8})
 SUPPORTED_SCHEMA_VERSIONS = HISTORICAL_SCHEMA_VERSIONS | {SCHEMA_VERSION}
 PROVENANCE_TYPE = "qcsd-class-study-acquisition-provenance"
 TERMINAL_TYPE = "qcsd-class-study-acquisition-terminal"
@@ -133,16 +133,16 @@ SCHEMA_SIX_CHECKPOINT_SCHEMA_VERSION = 2
 SCHEMA_SIX_TERMINAL_SCHEMA_VERSION = 3
 SCHEMA_SIX_COMPLETION_SCHEMA_VERSION = 3
 SCHEMA_SIX_DOCUMENT_RESPONSE_SCHEMA_VERSION = 1
-_MODERN_CHECKPOINT_SCHEMA_VERSIONS = frozenset({4, 5, 6, 7, SCHEMA_VERSION})
-_FIXED_PROVENANCE_SCHEMA_VERSIONS = frozenset({5, 6, 7, SCHEMA_VERSION})
-_POLICY_EVIDENCE_SCHEMA_VERSIONS = frozenset({5, 6, 7, SCHEMA_VERSION})
-_SELECTION_SCHEMA_VERSIONS = frozenset({6, 7, SCHEMA_VERSION})
+_MODERN_CHECKPOINT_SCHEMA_VERSIONS = frozenset({4, 5, 6, 7, 8, SCHEMA_VERSION})
+_FIXED_PROVENANCE_SCHEMA_VERSIONS = frozenset({5, 6, 7, 8, SCHEMA_VERSION})
+_POLICY_EVIDENCE_SCHEMA_VERSIONS = frozenset({5, 6, 7, 8, SCHEMA_VERSION})
+_SELECTION_SCHEMA_VERSIONS = frozenset({6, 7, 8, SCHEMA_VERSION})
 _INSTRUMENTATION_EVIDENCE_SCHEMA_VERSIONS = frozenset(
-    {2, 3, 4, 5, 6, 7, SCHEMA_VERSION}
+    {2, 3, 4, 5, 6, 7, 8, SCHEMA_VERSION}
 )
-_RENDER_EVIDENCE_SCHEMA_VERSIONS = frozenset({3, 4, 5, 6, 7, SCHEMA_VERSION})
-_TERMINAL_STATE_SCHEMA_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, SCHEMA_VERSION})
-_DURATION_LIMIT_SCHEMA_VERSIONS = frozenset({3, 4, 5, 6, 7, SCHEMA_VERSION})
+_RENDER_EVIDENCE_SCHEMA_VERSIONS = frozenset({3, 4, 5, 6, 7, 8, SCHEMA_VERSION})
+_TERMINAL_STATE_SCHEMA_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, SCHEMA_VERSION})
+_DURATION_LIMIT_SCHEMA_VERSIONS = frozenset({3, 4, 5, 6, 7, 8, SCHEMA_VERSION})
 MAX_ORIGIN_PASSES = 8
 MAX_APPROVED_ORIGINS = 32
 MAX_OBSERVED_AUDIT_ORIGINS = 512
@@ -662,6 +662,21 @@ _SCHEMA_SEVEN_PASSIVE_RENDER_CONTRACT: dict[str, Any] = {
 _SCHEMA_SEVEN_PASSIVE_RENDER_CONTRACT_SHA256 = (
     "6a63003feeb667799414bfdd9d24b473b0a43a29853932f55a992c46b8e9bd4e"
 )
+_SCHEMA_EIGHT_CDP_TARGET_INSTRUMENTATION_POLICY = (
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v20"
+)
+_SCHEMA_EIGHT_FIXED_PROVENANCE_SHA256 = (
+    "32841a18afb288885aeb55f42e5c734cfbbc4de0725f1b1fd40644bdb4b78046"
+)
+_SCHEMA_EIGHT_RENDER_OBSERVATION_SCHEMA_VERSION = 4
+_SCHEMA_EIGHT_DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION = 7
+_SCHEMA_EIGHT_REQUEST_STAGE_OBSERVATION_POLICY = (
+    "chromium-143-fetch-primary-or-failed-cors-preflight-v1"
+)
+_SCHEMA_EIGHT_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION = 2
+_SCHEMA_EIGHT_NORMAL_SHUTDOWN_DISPOSAL_POLICY = (
+    "chromium-143-post-quiescence-context-disposal-v1"
+)
 _HISTORICAL_ACQUISITION_EVIDENCE_CONTRACTS: dict[int, tuple[Mapping[str, Any], ...]] = {
     # Schema one predates CDP instrumentation and document/render evidence.
     1: (
@@ -809,6 +824,26 @@ _HISTORICAL_ACQUISITION_EVIDENCE_CONTRACTS: dict[int, tuple[Mapping[str, Any], .
             ),
         },
     ),
+    8: (
+        {
+            "instrumentation_policy": (_SCHEMA_EIGHT_CDP_TARGET_INSTRUMENTATION_POLICY),
+            "passive_render_contract": _SCHEMA_SEVEN_PASSIVE_RENDER_CONTRACT,
+            "passive_render_contract_sha256": (
+                _SCHEMA_SEVEN_PASSIVE_RENDER_CONTRACT_SHA256
+            ),
+            "render_observation_schema_version": (
+                _SCHEMA_EIGHT_RENDER_OBSERVATION_SCHEMA_VERSION
+            ),
+            "discovery_event_audit_schema_version": (
+                _SCHEMA_EIGHT_DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION
+            ),
+            "document_response_schema_version": 2,
+            "fixed_provenance_sha256": _SCHEMA_EIGHT_FIXED_PROVENANCE_SHA256,
+            "source_lab_commits": (
+                "8975d543e051b378b30df4b1c45e1b1a4349cc37",
+            ),
+        },
+    ),
 }
 _SOURCE_FIELDS = frozenset(
     {
@@ -838,7 +873,7 @@ def _matches_json_contract(value: object, expected: object) -> bool:
 
 
 def _checkpoint_schema_for(acquisition_schema_version: int) -> int:
-    if acquisition_schema_version in {7, SCHEMA_VERSION}:
+    if acquisition_schema_version in {7, 8, SCHEMA_VERSION}:
         return CHECKPOINT_SCHEMA_VERSION
     if acquisition_schema_version in {4, 5, 6}:
         return SCHEMA_SIX_CHECKPOINT_SCHEMA_VERSION
@@ -846,7 +881,7 @@ def _checkpoint_schema_for(acquisition_schema_version: int) -> int:
 
 
 def _terminal_schema_for(acquisition_schema_version: int) -> int:
-    if acquisition_schema_version in {7, SCHEMA_VERSION}:
+    if acquisition_schema_version in {7, 8, SCHEMA_VERSION}:
         return TERMINAL_SCHEMA_VERSION
     if acquisition_schema_version in {4, 5, 6}:
         return SCHEMA_SIX_TERMINAL_SCHEMA_VERSION
@@ -856,7 +891,7 @@ def _terminal_schema_for(acquisition_schema_version: int) -> int:
 
 
 def _completion_schema_for(acquisition_schema_version: int) -> int:
-    if acquisition_schema_version in {7, SCHEMA_VERSION}:
+    if acquisition_schema_version in {7, 8, SCHEMA_VERSION}:
         return COMPLETION_SCHEMA_VERSION
     if acquisition_schema_version == 6:
         return SCHEMA_SIX_COMPLETION_SCHEMA_VERSION
@@ -1159,7 +1194,7 @@ def _validate_versioned_render_observation(
     acquisition_schema_version: int,
     allow_failure: bool = False,
 ) -> None:
-    if acquisition_schema_version in {7, SCHEMA_VERSION}:
+    if acquisition_schema_version in {7, 8, SCHEMA_VERSION}:
         validate_render_observation(value, allow_failure=allow_failure)
         return
     if acquisition_schema_version in {3, 4}:
@@ -1211,6 +1246,7 @@ def _zero_normal_shutdown_disposal_summary() -> dict[str, Any]:
             "fetch_total": 0,
             "matched_total": 0,
             "network_only_synthetic_total": 0,
+            "fetch_only_context_disposal_total": 0,
             "pending_network_total": 0,
             "pending_fetch_total": 0,
             "terminal_outcomes": {
@@ -1220,6 +1256,33 @@ def _zero_normal_shutdown_disposal_summary() -> dict[str, Any]:
                 "qcsd-shutdown": 0,
             },
         },
+        require_terminal=True,
+    )
+
+
+def _upgrade_historical_normal_shutdown_disposal_summary(
+    value: object,
+) -> dict[str, Any]:
+    """Translate the frozen schema-eight shutdown ledger without losing counts."""
+
+    if (
+        not isinstance(value, Mapping)
+        or value.get("schema_version")
+        != _SCHEMA_EIGHT_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
+        or value.get("policy") != _SCHEMA_EIGHT_NORMAL_SHUTDOWN_DISPOSAL_POLICY
+    ):
+        raise ValueError("schema-eight shutdown disposal contract is invalid")
+    historical = validate_normal_shutdown_disposal_summary(
+        value,
+        require_terminal=True,
+        allow_historical=True,
+    )
+    upgraded = deepcopy(historical)
+    upgraded["schema_version"] = NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
+    upgraded["policy"] = NORMAL_SHUTDOWN_DISPOSAL_POLICY
+    upgraded["fetch_only_context_disposal_total"] = 0
+    return validate_normal_shutdown_disposal_summary(
+        upgraded,
         require_terminal=True,
     )
 
@@ -1347,6 +1410,13 @@ def _validate_versioned_class_study_preparation(
         "events",
         "summary",
     }
+    if acquisition_schema_version == 8:
+        expected_audit_fields.update(
+            {
+                "request_stage_observation_policy",
+                "normal_shutdown_disposal_summary",
+            }
+        )
     events = audit.get("events")
     summary = audit.get("summary")
     if (
@@ -1356,6 +1426,11 @@ def _validate_versioned_class_study_preparation(
         or audit.get("instrumentation_policy") != contract["instrumentation_policy"]
         or audit.get("passive_render_contract_sha256") != passive_render_contract_sha256
         or audit.get("render_observation_sha256") != render_observation_sha256
+        or (
+            acquisition_schema_version == 8
+            and audit.get("request_stage_observation_policy")
+            != _SCHEMA_EIGHT_REQUEST_STAGE_OBSERVATION_POLICY
+        )
         or not isinstance(events, list)
         or any(not isinstance(event, Mapping) for event in events)
         or (
@@ -1368,11 +1443,15 @@ def _validate_versioned_class_study_preparation(
             and "browser_internal_document_count" in summary
         )
         or (
-            acquisition_schema_version == 7
+            acquisition_schema_version in {7, 8}
             and "browser_internal_document_count" not in summary
         )
     ):
         raise ValueError("historical discovery-event audit contract is invalid")
+    if acquisition_schema_version == 8:
+        _upgrade_historical_normal_shutdown_disposal_summary(
+            audit.get("normal_shutdown_disposal_summary")
+        )
     coverage = preparation.get("coverage_admission")
     if not isinstance(coverage, dict) or any(
         coverage.get(field) != expected
@@ -1439,29 +1518,34 @@ def _validate_versioned_class_study_preparation(
     current_audit["passive_render_contract_sha256"] = PASSIVE_RENDER_CONTRACT_SHA256
     current_audit["render_observation_sha256"] = current_render_sha256
     current_audit["normal_shutdown_disposal_summary"] = (
-        _zero_normal_shutdown_disposal_summary()
+        _upgrade_historical_normal_shutdown_disposal_summary(
+            audit["normal_shutdown_disposal_summary"]
+        )
+        if acquisition_schema_version == 8
+        else _zero_normal_shutdown_disposal_summary()
     )
     current_audit["summary"] = dict(summary)
     if acquisition_schema_version < 7:
         current_audit["summary"]["browser_internal_document_count"] = 0
-    current_audit["summary"]["blocked_preflight_dependent_count"] = 0
-    for event in current_audit["events"]:
-        if event.get("kind") == "network-request":
-            event["initiator_type"] = "historical-unavailable"
-            event["initiator_request_id"] = None
-            event["response_observed"] = False
-            event["interception_exception"] = None
-        elif event.get("kind") == "network-terminal":
-            event["failure"] = (
-                None
-                if event.get("outcome") == "finished"
-                else {
-                    "error_text": "historical-unavailable",
-                    "canceled": None,
-                    "blocked_reason": None,
-                    "cors_error_status_present": False,
-                }
-            )
+    if acquisition_schema_version < 8:
+        current_audit["summary"]["blocked_preflight_dependent_count"] = 0
+        for event in current_audit["events"]:
+            if event.get("kind") == "network-request":
+                event["initiator_type"] = "historical-unavailable"
+                event["initiator_request_id"] = None
+                event["response_observed"] = False
+                event["interception_exception"] = None
+            elif event.get("kind") == "network-terminal":
+                event["failure"] = (
+                    None
+                    if event.get("outcome") == "finished"
+                    else {
+                        "error_text": "historical-unavailable",
+                        "canceled": None,
+                        "blocked_reason": None,
+                        "cors_error_status_present": False,
+                    }
+                )
     current_audit_sha256 = evidence_sha256(current_audit)
     preparation["passive_render_contract"] = deepcopy(PASSIVE_RENDER_CONTRACT)
     preparation["passive_render_contract_sha256"] = PASSIVE_RENDER_CONTRACT_SHA256
@@ -5189,7 +5273,7 @@ def _validate_current_provenance_contract(
     *,
     candidate_catalogue_path: Path | None = None,
 ) -> dict[str, Any]:
-    """Reconstruct schema-five-through-eight provenance without schema collision.
+    """Reconstruct schema-five-through-nine provenance without schema collision.
 
     Historical acquisition schemas remain readable under their original
     contracts.  Current evidence, however, must retain every fixed acquisition
@@ -5240,7 +5324,7 @@ def _validate_current_provenance_contract(
     if schema in _SELECTION_SCHEMA_VERSIONS:
         fixed_fields.add("acquisition_selection_policy")
     fixed_projection = {field: provenance.get(field) for field in fixed_fields}
-    if schema in {5, 6, 7}:
+    if schema in {5, 6, 7, 8}:
         try:
             contract = _historical_evidence_contract_for(
                 schema,

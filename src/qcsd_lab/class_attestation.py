@@ -391,7 +391,7 @@ def validate_current_acquisition_completion_authority(
     *,
     runner_root: Path,
 ) -> dict[str, Any]:
-    """Deep-verify the current authority bound by a schema-8 completion.
+    """Deep-verify the current authority bound by a schema-9 completion.
 
     This is the offline publication boundary: it reconstructs the exact narrow
     acquisition authority or current full-foundation fallback without requiring
@@ -409,7 +409,7 @@ def validate_current_acquisition_completion_authority(
         type(completion_payload.get(field)) is not int or completion_payload[field] != expected
         for field, expected in current_versions
     ):
-        raise ValueError("current acquisition completion requires exact 8/4/3 schemas")
+        raise ValueError("current acquisition completion requires exact 9/4/3 schemas")
 
     provenance_path, _provenance_value, provenance = _load_bound_receipt(
         Path(runner_root) / "provenance.json",
@@ -419,7 +419,7 @@ def validate_current_acquisition_completion_authority(
         completion_payload.get("provenance_sha256") != sha256_file(provenance_path)
         or provenance.get("acquisition_schema_version") != ACQUISITION_SCHEMA_VERSION
     ):
-        raise ValueError("current acquisition completion provenance is not exact schema 8")
+        raise ValueError("current acquisition completion provenance is not exact schema 9")
 
     binding = provenance.get("acquisition_authority")
     authority_path = _path_from_binding(
@@ -3905,6 +3905,7 @@ def _pinned_cdp_binding(receipt: Mapping[str, Any]) -> dict[str, Any]:
         13,
         14,
         16,
+        17,
         PINNED_CDP_PROBE_SCHEMA_VERSION,
     }:
         identity = receipt.get("build_execution_identity")

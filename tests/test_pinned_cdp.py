@@ -171,6 +171,7 @@ def _normal_shutdown_disposal_summary(
     loading_finished_total: int = 0,
     loading_failed_total: int = 0,
     network_only_synthetic_total: int = 0,
+    fetch_only_context_disposal_total: int = 0,
 ) -> dict[str, object]:
     return {
         "schema_version": pinned_cdp.NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
@@ -179,8 +180,9 @@ def _normal_shutdown_disposal_summary(
         "terminal": True,
         "network_total": network_total,
         "fetch_total": fetch_total,
-        "matched_total": fetch_total,
+        "matched_total": fetch_total - fetch_only_context_disposal_total,
         "network_only_synthetic_total": network_only_synthetic_total,
+        "fetch_only_context_disposal_total": fetch_only_context_disposal_total,
         "pending_network_total": 0,
         "pending_fetch_total": 0,
         "terminal_outcomes": {
@@ -843,6 +845,64 @@ def test_schema16_v19_receipt_is_frozen_historical_only(
         )
 
 
+def test_schema17_v20_receipt_rejects_shutdown_summary_contract_collisions(
+    tmp_path: Path,
+    fake_build: Path,
+) -> None:
+    current = _create(tmp_path, fake_build)
+    envelope = json.loads(current.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(envelope["payload"])
+    payload["probe_schema_version"] = 17
+    payload["probe_contract"] = copy.deepcopy(
+        pinned_cdp._HISTORICAL_PROBE_CONTRACT_V17
+    )
+    payload["probe_contract_sha256"] = (
+        pinned_cdp._HISTORICAL_PROBE_CONTRACT_V17_SHA256
+    )
+
+    current_summary_collision = tmp_path / "pinned-cdp-schema17-summary-v3.json"
+    current_summary_collision.write_bytes(
+        canonical_json_bytes(bind_receipt(payload, receipt_type=pinned_cdp.RECEIPT_TYPE))
+    )
+    with pytest.raises(
+        ValueError,
+        match="historical pinned CDP shutdown disposal summary differs from its contract",
+    ):
+        pinned_cdp.validate_pinned_cdp_receipt(
+            current_summary_collision,
+            build_execution_receipt=fake_build,
+            expected_cohort_version=59,
+            allow_historical=True,
+        )
+
+    historical_with_v3_field = copy.deepcopy(payload)
+    shutdown_summary = historical_with_v3_field["observation"]["topology"][
+        "normal_shutdown_disposal_summary"
+    ]
+    shutdown_summary["schema_version"] = 2
+    shutdown_summary["policy"] = "chromium-143-post-quiescence-context-disposal-v1"
+    assert "fetch_only_context_disposal_total" in shutdown_summary
+    field_collision = tmp_path / "pinned-cdp-schema17-summary-v2-with-v3-field.json"
+    field_collision.write_bytes(
+        canonical_json_bytes(
+            bind_receipt(
+                historical_with_v3_field,
+                receipt_type=pinned_cdp.RECEIPT_TYPE,
+            )
+        )
+    )
+    with pytest.raises(
+        ValueError,
+        match="normal shutdown disposal summary fields are invalid",
+    ):
+        pinned_cdp.validate_pinned_cdp_receipt(
+            field_collision,
+            build_execution_receipt=fake_build,
+            expected_cohort_version=59,
+            allow_historical=True,
+        )
+
+
 @pytest.mark.parametrize(
     ("cohort", "receipt_sha256", "payload_sha256"),
     (
@@ -887,6 +947,51 @@ def test_immutable_schema16_v19_receipts_verify_only_under_the_frozen_contract(
     assert validated["probe_contract_sha256"] == (
         pinned_cdp._HISTORICAL_PROBE_CONTRACT_V16_SHA256
     )
+
+
+def test_immutable_schema17_v20_receipt_verifies_only_under_the_frozen_contract() -> None:
+    root = Path(__file__).resolve().parents[1] / "artifacts/buflo-study"
+    receipt = root / "pinned-cdp-execution-v102.json"
+    build = root / "build-execution-v102.json"
+    if not receipt.is_file():
+        pytest.skip("immutable v102 pinned-CDP evidence is not present")
+
+    receipt_sha256 = "f21fa84fb1c5de1ab6309866c154765406909caf55cb93ad011a82314e732589"
+    payload_sha256 = "674112dd284f74908f4fff4c2ec455d0301c8a4a44ed7d4354816708c5a3a8a8"
+    contract_sha256 = "67352f99ed5ee9ddd37923fd2d2579de1f681c57c4c91a37a6cb42b2f99de1ac"
+
+    assert hashlib.sha256(receipt.read_bytes()).hexdigest() == receipt_sha256
+    envelope = json.loads(receipt.read_text(encoding="utf-8"))
+    assert envelope["payload_sha256"] == payload_sha256
+    assert envelope["payload"]["probe_contract_sha256"] == contract_sha256
+    assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V17_SHA256 == contract_sha256
+
+    if not build.is_file():
+        pytest.skip("immutable v102 no-cache build receipt is not present")
+    with pytest.raises(ValueError, match="identity or result"):
+        pinned_cdp.validate_pinned_cdp_receipt(
+            receipt,
+            build_execution_receipt=build,
+            expected_cohort_version=102,
+        )
+    validated = pinned_cdp.validate_pinned_cdp_receipt(
+        receipt,
+        build_execution_receipt=build,
+        expected_cohort_version=102,
+        allow_historical=True,
+    )
+    assert validated["sha256"] == receipt_sha256
+    assert validated["payload_sha256"] == payload_sha256
+    assert validated["probe_schema_version"] == 17
+    assert validated["probe_contract_sha256"] == contract_sha256
+    shutdown_summary = validated["observation"]["topology"][
+        "normal_shutdown_disposal_summary"
+    ]
+    assert shutdown_summary["schema_version"] == 2
+    assert shutdown_summary["policy"] == (
+        "chromium-143-post-quiescence-context-disposal-v1"
+    )
+    assert "fetch_only_context_disposal_total" not in shutdown_summary
 
 
 def test_current_receipt_rejects_frozen_historical_resolver_projection(
@@ -1472,16 +1577,16 @@ def test_required_topology_wait_condition_is_event_driven() -> None:
         "dedicated_worker_fetch_paused_on_page": True,
         "shared_worker_fetch_paused_on_shared_worker": True,
     }
-    assert pinned_cdp.PROBE_SCHEMA_VERSION == 17
+    assert pinned_cdp.PROBE_SCHEMA_VERSION == 18
     assert pinned_cdp.HISTORICAL_PROBE_SCHEMA_VERSIONS == frozenset(
-        {8, 9, 11, 12, 13, 14, 16}
+        {8, 9, 11, 12, 13, 14, 16, 17}
     )
-    assert pinned_cdp.PROBE_CONTRACT["schema_version"] == 16
+    assert pinned_cdp.PROBE_CONTRACT["schema_version"] == 17
     assert pinned_cdp.PROBE_CONTRACT["policy"] == (
-        "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v16"
+        "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v17"
     )
     assert pinned_cdp.PROBE_CONTRACT["instrumentation_policy"] == (
-        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v20"
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v21"
     )
     assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V11["schema_version"] == 10
     assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V11["instrumentation_policy"].endswith("-v12")
@@ -1538,8 +1643,12 @@ def test_required_topology_wait_condition_is_event_driven() -> None:
     assert pinned_cdp.PROBE_CONTRACT[
         "normal_shutdown_disposal_summary_schema_version"
     ] == pinned_cdp.NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
+    assert pinned_cdp.NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION == 3
     assert pinned_cdp.PROBE_CONTRACT["normal_shutdown_disposal_policy"] == (
         pinned_cdp.NORMAL_SHUTDOWN_DISPOSAL_POLICY
+    )
+    assert pinned_cdp.NORMAL_SHUTDOWN_DISPOSAL_POLICY == (
+        "chromium-143-post-quiescence-context-disposal-v2"
     )
     assert pinned_cdp.PROBE_CONTRACT["playwright_driver_binding"] == (
         pinned_cdp.EXPECTED_PLAYWRIGHT_DRIVER_BINDING
@@ -1573,7 +1682,7 @@ def test_required_topology_wait_condition_is_event_driven() -> None:
         in pinned_cdp.PROBE_CONTRACT["required_observations"]
     )
     assert (
-        "terminal-normal-shutdown-disposal-network-fetch-reconciliation"
+        "terminal-normal-shutdown-disposal-network-fetch-or-singleton-ping-reconciliation"
         in pinned_cdp.PROBE_CONTRACT["required_observations"]
     )
 
@@ -1586,6 +1695,18 @@ def test_current_observation_accepts_terminal_nonzero_shutdown_disposal() -> Non
             fetch_total=1,
             loading_finished_total=1,
             network_only_synthetic_total=1,
+        )
+    )
+
+    assert pinned_cdp._validate_observation(observation) == observation
+
+
+def test_current_observation_accepts_one_fetch_only_context_disposal() -> None:
+    observation = _observation()
+    observation["topology"]["normal_shutdown_disposal_summary"] = (
+        _normal_shutdown_disposal_summary(
+            fetch_total=1,
+            fetch_only_context_disposal_total=1,
         )
     )
 

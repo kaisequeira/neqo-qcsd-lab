@@ -40,8 +40,8 @@ STUDY_ID = "classifier-multiorigin100-v1"
 CANDIDATE_COUNT = 600
 SCHEMA_VERSION = 1
 SOURCE_BINDING_PREIMAGE_SCHEMA_VERSION = 3
-ACQUISITION_SCHEMA_VERSION = 8
-HISTORICAL_ACQUISITION_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7})
+ACQUISITION_SCHEMA_VERSION = 9
+HISTORICAL_ACQUISITION_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7, 8})
 CHECKPOINT_SCHEMA_VERSION = 3
 TERMINAL_SCHEMA_VERSION = 4
 COMPLETION_SCHEMA_VERSION = 4
@@ -715,15 +715,15 @@ _BUILD_STORAGE_PREFLIGHT_KEYS = {
     "passed",
 }
 _CDP_TARGET_INSTRUMENTATION_POLICY = (
-    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v20"
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v21"
 )
 _PLAYWRIGHT_VERSION = "1.57.0"
 _CHROMIUM_VERSION = "143.0.7499.4"
 _CHROMIUM_EXECUTABLE = "/usr/local/bin/qcsd-chromium"
-_PINNED_CDP_SCHEMA_VERSION = 17
+_PINNED_CDP_SCHEMA_VERSION = 18
 _HISTORICAL_PINNED_CDP_SCHEMA_VERSION = 8
-_HISTORICAL_PINNED_CDP_SCHEMA_VERSIONS = frozenset({8, 9, 11, 12, 13, 14, 16})
-_PINNED_CDP_CONTRACT_SCHEMA_VERSION = 16
+_HISTORICAL_PINNED_CDP_SCHEMA_VERSIONS = frozenset({8, 9, 11, 12, 13, 14, 16, 17})
+_PINNED_CDP_CONTRACT_SCHEMA_VERSION = 17
 _HISTORICAL_PINNED_CDP_CONTRACT_SCHEMA_VERSION = 8
 _HISTORICAL_PINNED_CDP_CONTRACT_V12_SCHEMA_VERSION = 11
 _HISTORICAL_PINNED_CDP_CONTRACT_V13_SCHEMA_VERSION = 12
@@ -738,9 +738,9 @@ _PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_POLICY = (
 )
 _PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_LIMIT = 32
 _PINNED_CDP_SRCDOC_EVENT_ORDINAL_LIMIT = 20_480
-_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION = 2
+_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION = 3
 _NORMAL_SHUTDOWN_DISPOSAL_POLICY = (
-    "chromium-143-post-quiescence-context-disposal-v1"
+    "chromium-143-post-quiescence-context-disposal-v2"
 )
 _NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT = 4_096
 _NON_REPLAYABLE_EGRESS_POLICY = "blocked-non-urlloader-egress-v1"
@@ -1086,14 +1086,30 @@ _HISTORICAL_PINNED_CDP_CONTRACT_V16 = {
     "srcdoc_pseudo_document_policy": _PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_POLICY,
     "required_srcdoc_pseudo_document_count": 1,
 }
-_PINNED_CDP_CONTRACT = {
+_HISTORICAL_PINNED_CDP_CONTRACT_V17 = {
     **_HISTORICAL_PINNED_CDP_CONTRACT_V16,
-    "schema_version": _PINNED_CDP_CONTRACT_SCHEMA_VERSION,
+    "schema_version": 16,
     "policy": "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v16",
-    "instrumentation_policy": _CDP_TARGET_INSTRUMENTATION_POLICY,
+    "instrumentation_policy": (
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v20"
+    ),
     "required_observations": [
         *_HISTORICAL_PINNED_CDP_CONTRACT_V16["required_observations"],
         "terminal-normal-shutdown-disposal-network-fetch-reconciliation",
+    ],
+    "normal_shutdown_disposal_summary_schema_version": 2,
+    "normal_shutdown_disposal_policy": (
+        "chromium-143-post-quiescence-context-disposal-v1"
+    ),
+}
+_PINNED_CDP_CONTRACT = {
+    **_HISTORICAL_PINNED_CDP_CONTRACT_V16,
+    "schema_version": _PINNED_CDP_CONTRACT_SCHEMA_VERSION,
+    "policy": "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v17",
+    "instrumentation_policy": _CDP_TARGET_INSTRUMENTATION_POLICY,
+    "required_observations": [
+        *_HISTORICAL_PINNED_CDP_CONTRACT_V16["required_observations"],
+        "terminal-normal-shutdown-disposal-network-fetch-or-singleton-ping-reconciliation",
     ],
     "normal_shutdown_disposal_summary_schema_version": (
         _NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
@@ -4595,6 +4611,7 @@ def _validate_normal_shutdown_disposal_summary(value: Any) -> None:
         "fetch_total",
         "matched_total",
         "network_only_synthetic_total",
+        "fetch_only_context_disposal_total",
         "pending_network_total",
         "pending_fetch_total",
         "terminal_outcomes",
@@ -4615,6 +4632,7 @@ def _validate_normal_shutdown_disposal_summary(value: Any) -> None:
         "fetch_total",
         "matched_total",
         "network_only_synthetic_total",
+        "fetch_only_context_disposal_total",
         "pending_network_total",
         "pending_fetch_total",
     )
@@ -4646,6 +4664,7 @@ def _validate_normal_shutdown_disposal_summary(value: Any) -> None:
     fetch_total = value["fetch_total"]
     matched_total = value["matched_total"]
     network_only_synthetic = value["network_only_synthetic_total"]
+    fetch_only_context_disposal = value["fetch_only_context_disposal_total"]
     pending_network = value["pending_network_total"]
     pending_fetch = value["pending_fetch_total"]
     if (
@@ -4653,7 +4672,14 @@ def _validate_normal_shutdown_disposal_summary(value: Any) -> None:
         or matched_total > fetch_total
         or network_total > _NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT
         or fetch_total > _NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT
-        or pending_fetch != fetch_total - matched_total
+        or matched_total + fetch_only_context_disposal > fetch_total
+        or fetch_only_context_disposal > 1
+        or (
+            fetch_only_context_disposal == 1
+            and (fetch_total != 1 or matched_total != 0)
+        )
+        or pending_fetch
+        != fetch_total - matched_total - fetch_only_context_disposal
         or sum(terminal_outcomes.values()) + pending_network != network_total
         or network_only_synthetic > network_total - matched_total
         or network_only_synthetic > terminal_outcomes["qcsd-shutdown"]
@@ -4661,7 +4687,7 @@ def _validate_normal_shutdown_disposal_summary(value: Any) -> None:
         or value["terminal"] is not True
         or pending_network
         or pending_fetch
-        or fetch_total != matched_total
+        or fetch_total != matched_total + fetch_only_context_disposal
         or network_total != matched_total + network_only_synthetic
     ):
         raise WatchError(
@@ -5699,7 +5725,7 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
     if acquisition_schema_version != ACQUISITION_SCHEMA_VERSION:
         raise WatchError("acquisition provenance uses an unsupported schema")
     if set(payload) != _PROVENANCE_PAYLOAD_KEYS:
-        raise WatchError("acquisition provenance payload fields differ from the v8 contract")
+        raise WatchError("acquisition provenance payload fields differ from the v9 contract")
     fixed_contract = {
         "browser_tool": _EXPECTED_BROWSER_TOOL_IDENTITY,
         "navigation_implementation": _NAVIGATION_IMPLEMENTATION,

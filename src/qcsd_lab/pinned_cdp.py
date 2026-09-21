@@ -115,9 +115,9 @@ _HISTORICAL_PINNED_CDP_RESOLVER_PROJECTION = {
 }
 
 RECEIPT_TYPE = "qcsd-class-study-pinned-cdp-probe"
-PROBE_SCHEMA_VERSION = 17
+PROBE_SCHEMA_VERSION = 18
 HISTORICAL_PROBE_SCHEMA_VERSION = 8
-HISTORICAL_PROBE_SCHEMA_VERSIONS = frozenset({8, 9, 11, 12, 13, 14, 16})
+HISTORICAL_PROBE_SCHEMA_VERSIONS = frozenset({8, 9, 11, 12, 13, 14, 16, 17})
 EXPECTED_PLAYWRIGHT_VERSION = PLAYWRIGHT_VERSION
 EXPECTED_CHROMIUM_EXECUTABLE = str(DEFAULT_CONFIGURED_EXECUTABLE)
 PROBE_OBSERVATION_TIMEOUT_MS = 10_000
@@ -325,11 +325,45 @@ _HISTORICAL_PROBE_CONTRACT_V16_SHA256 = canonical_json_sha256(
     _HISTORICAL_PROBE_CONTRACT_V16
 )
 
-# Outer schema 17 binds the v20 router.  The independently versioned inner
-# contract advances as well so no current receipt can collide with schema 16.
-PROBE_CONTRACT: dict[str, Any] = _worker_webtransport_probe_contract(
+# Outer schema 17 is immutable v102 evidence.  It binds the v20 router and the
+# first exact normal-shutdown Network/Fetch reconciliation contract.
+_HISTORICAL_PROBE_CONTRACT_V17: dict[str, Any] = _worker_webtransport_probe_contract(
     schema_version=16,
     policy="pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v16",
+    instrumentation_policy=(
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v20"
+    ),
+    playwright_driver_ownership_policy=OWNERSHIP_POLICY_RECEIPT,
+    playwright_driver_binding=EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
+)
+_HISTORICAL_PROBE_CONTRACT_V17["required_observations"].append(
+    "root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-lifecycle"
+)
+_HISTORICAL_PROBE_CONTRACT_V17["required_observations"].append(
+    "terminal-normal-shutdown-disposal-network-fetch-reconciliation"
+)
+_HISTORICAL_PROBE_CONTRACT_V17["srcdoc_pseudo_document_summary_schema_version"] = (
+    SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION
+)
+_HISTORICAL_PROBE_CONTRACT_V17["srcdoc_pseudo_document_policy"] = (
+    SRCDOC_PSEUDO_DOCUMENT_POLICY
+)
+_HISTORICAL_PROBE_CONTRACT_V17["required_srcdoc_pseudo_document_count"] = 1
+_HISTORICAL_PROBE_CONTRACT_V17[
+    "normal_shutdown_disposal_summary_schema_version"
+] = 2
+_HISTORICAL_PROBE_CONTRACT_V17["normal_shutdown_disposal_policy"] = (
+    "chromium-143-post-quiescence-context-disposal-v1"
+)
+_HISTORICAL_PROBE_CONTRACT_V17_SHA256 = canonical_json_sha256(
+    _HISTORICAL_PROBE_CONTRACT_V17
+)
+
+# Outer schema 18 binds the v21 router and its explicitly accounted singleton
+# Fetch-only context-disposal Ping contract.
+PROBE_CONTRACT: dict[str, Any] = _worker_webtransport_probe_contract(
+    schema_version=17,
+    policy="pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v17",
     instrumentation_policy=CDP_TARGET_INSTRUMENTATION_POLICY,
     playwright_driver_ownership_policy=OWNERSHIP_POLICY_RECEIPT,
     playwright_driver_binding=EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
@@ -338,7 +372,7 @@ PROBE_CONTRACT["required_observations"].append(
     "root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-lifecycle"
 )
 PROBE_CONTRACT["required_observations"].append(
-    "terminal-normal-shutdown-disposal-network-fetch-reconciliation"
+    "terminal-normal-shutdown-disposal-network-fetch-or-singleton-ping-reconciliation"
 )
 PROBE_CONTRACT["srcdoc_pseudo_document_summary_schema_version"] = (
     SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION
@@ -1589,6 +1623,9 @@ def _validate_payload(
     elif probe_schema_version == 16:
         expected_contract = _HISTORICAL_PROBE_CONTRACT_V16
         expected_contract_sha256 = _HISTORICAL_PROBE_CONTRACT_V16_SHA256
+    elif probe_schema_version == 17:
+        expected_contract = _HISTORICAL_PROBE_CONTRACT_V17
+        expected_contract_sha256 = _HISTORICAL_PROBE_CONTRACT_V17_SHA256
     else:
         expected_contract = PROBE_CONTRACT
         expected_contract_sha256 = PROBE_CONTRACT_SHA256
@@ -1613,12 +1650,15 @@ def _validate_payload(
         payload.get("observation"),
         require_worker_response_consumption=probe_schema_version not in {8, 9},
         require_worker_webtransport_probe=probe_schema_version
-        in {12, 13, 14, 16, PROBE_SCHEMA_VERSION},
+        in {12, 13, 14, 16, 17, PROBE_SCHEMA_VERSION},
         require_srcdoc_pseudo_document_summary=(
-            probe_schema_version in {16, PROBE_SCHEMA_VERSION}
+            probe_schema_version in {16, 17, PROBE_SCHEMA_VERSION}
         ),
         require_normal_shutdown_disposal_summary=(
-            probe_schema_version == PROBE_SCHEMA_VERSION
+            probe_schema_version in {17, PROBE_SCHEMA_VERSION}
+        ),
+        allow_historical_normal_shutdown_disposal_summary=(
+            probe_schema_version == 17
         ),
         expected_resolver_projection=(
             _HISTORICAL_PINNED_CDP_RESOLVER_PROJECTION
@@ -1655,6 +1695,7 @@ def _validate_observation(
     require_worker_webtransport_probe: bool = True,
     require_srcdoc_pseudo_document_summary: bool = True,
     require_normal_shutdown_disposal_summary: bool = True,
+    allow_historical_normal_shutdown_disposal_summary: bool = False,
     expected_playwright_driver_binding: Mapping[str, Any] = (EXPECTED_PLAYWRIGHT_DRIVER_BINDING),
     expected_resolver_projection: Mapping[str, Any] = (_PINNED_CDP_RESOLVER_PROJECTION),
 ) -> dict[str, Any]:
@@ -1765,9 +1806,23 @@ def _validate_observation(
     if require_srcdoc_pseudo_document_summary:
         _validate_required_srcdoc_summary(topology.get("srcdoc_pseudo_document_summary"))
     if require_normal_shutdown_disposal_summary:
+        shutdown_summary = topology.get("normal_shutdown_disposal_summary")
+        if allow_historical_normal_shutdown_disposal_summary and (
+            not isinstance(shutdown_summary, Mapping)
+            or shutdown_summary.get("schema_version")
+            != _HISTORICAL_PROBE_CONTRACT_V17[
+                "normal_shutdown_disposal_summary_schema_version"
+            ]
+            or shutdown_summary.get("policy")
+            != _HISTORICAL_PROBE_CONTRACT_V17["normal_shutdown_disposal_policy"]
+        ):
+            raise ValueError(
+                "historical pinned CDP shutdown disposal summary differs from its contract"
+            )
         validate_normal_shutdown_disposal_summary(
-            topology.get("normal_shutdown_disposal_summary"),
+            shutdown_summary,
             require_terminal=True,
+            allow_historical=allow_historical_normal_shutdown_disposal_summary,
         )
     activity_by_type = target_activity["by_target_type"]
     http_status_counts = topology.get("http_status_counts")

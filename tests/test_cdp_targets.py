@@ -1558,7 +1558,11 @@ def test_policy_is_pinned_and_root_is_instrumented_before_navigation() -> None:
     router, _observed = _router(session)
 
     assert CDP_TARGET_INSTRUMENTATION_POLICY == (
-        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v20"
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v21"
+    )
+    assert NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION == 3
+    assert NORMAL_SHUTDOWN_DISPOSAL_POLICY == (
+        "chromium-143-post-quiescence-context-disposal-v2"
     )
     assert [method for route, method, _params in session.commands if route == ()] == [
         "Target.getTargetInfo",
@@ -9700,6 +9704,21 @@ def _normal_shutdown_network(**changes: Any) -> dict[str, Any]:
     return event
 
 
+def _normal_shutdown_fetch_only_ping(**changes: Any) -> dict[str, Any]:
+    event = _abort_fetch_pause(
+        requestId="shutdown-ping-fetch",
+        networkId="shutdown-ping-network",
+        frameId="root-frame",
+        resourceType="Ping",
+        request={
+            "method": "GET",
+            "url": "https://top-fwz1.mail.ru/tracker?event=context-disposal",
+        },
+    )
+    event.update(changes)
+    return event
+
+
 def _valid_normal_shutdown_disposal_summary() -> dict[str, Any]:
     return {
         "schema_version": NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
@@ -9710,6 +9729,7 @@ def _valid_normal_shutdown_disposal_summary() -> dict[str, Any]:
         "fetch_total": 1,
         "matched_total": 1,
         "network_only_synthetic_total": 1,
+        "fetch_only_context_disposal_total": 0,
         "pending_network_total": 0,
         "pending_fetch_total": 0,
         "terminal_outcomes": {
@@ -9877,6 +9897,7 @@ def test_normal_shutdown_fetch_is_held_and_exactly_reconciled(
 
     assert session.commands == commands_before
     assert observed == observed_before
+    assert router.active_request_identities == ()
     assert router.normal_shutdown_disposal_summary == {
         "schema_version": NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
         "policy": NORMAL_SHUTDOWN_DISPOSAL_POLICY,
@@ -9886,6 +9907,7 @@ def test_normal_shutdown_fetch_is_held_and_exactly_reconciled(
         "fetch_total": 1,
         "matched_total": 1,
         "network_only_synthetic_total": 0,
+        "fetch_only_context_disposal_total": 0,
         "pending_network_total": 0,
         "pending_fetch_total": 0,
             "terminal_outcomes": {
@@ -9895,6 +9917,271 @@ def test_normal_shutdown_fetch_is_held_and_exactly_reconciled(
                 "qcsd-shutdown": int(terminal == "synthetic"),
         },
     }
+
+
+def test_normal_shutdown_holds_one_exact_fetch_only_root_ping_until_context_disposal(
+) -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    fetch = _normal_shutdown_fetch_only_ping()
+    _begin_shutdown(router)
+    commands_before = list(session.commands)
+    observed_before = list(observed)
+
+    session.emit((), "Fetch.requestPaused", fetch)
+    router.raise_if_failed()
+
+    assert session.commands == commands_before
+    assert observed == observed_before
+    assert router.normal_shutdown_disposal_summary == {
+        "schema_version": NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
+        "policy": NORMAL_SHUTDOWN_DISPOSAL_POLICY,
+        "started": True,
+        "terminal": False,
+        "network_total": 0,
+        "fetch_total": 1,
+        "matched_total": 0,
+        "network_only_synthetic_total": 0,
+        "fetch_only_context_disposal_total": 0,
+        "pending_network_total": 0,
+        "pending_fetch_total": 1,
+        "terminal_outcomes": {
+            "Network.loadingFinished": 0,
+            "Network.loadingFailed": 0,
+            "Network.redirectResponse": 0,
+            "qcsd-shutdown": 0,
+        },
+    }
+
+    _finish(router)
+
+    assert session.commands == commands_before
+    assert observed == observed_before
+    assert router.normal_shutdown_disposal_summary == {
+        "schema_version": NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
+        "policy": NORMAL_SHUTDOWN_DISPOSAL_POLICY,
+        "started": True,
+        "terminal": True,
+        "network_total": 0,
+        "fetch_total": 1,
+        "matched_total": 0,
+        "network_only_synthetic_total": 0,
+        "fetch_only_context_disposal_total": 1,
+        "pending_network_total": 0,
+        "pending_fetch_total": 0,
+        "terminal_outcomes": {
+            "Network.loadingFinished": 0,
+            "Network.loadingFailed": 0,
+            "Network.redirectResponse": 0,
+            "qcsd-shutdown": 0,
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        pytest.param({"resourceType": "Other"}, id="non-ping-resource"),
+        pytest.param(
+            {
+                "request": {
+                    "method": "POST",
+                    "url": "https://tracker.test/ping",
+                }
+            },
+            id="non-get-method",
+        ),
+        pytest.param(
+            {
+                "request": {
+                    "method": "GET",
+                    "url": "http://tracker.test/ping",
+                }
+            },
+            id="non-https-url",
+        ),
+        pytest.param(
+            {
+                "request": {
+                    "method": "GET",
+                    "url": "https://tracker.test:invalid/ping",
+                }
+            },
+            id="malformed-port",
+        ),
+        pytest.param(
+            {
+                "request": {
+                    "method": "GET",
+                    "url": "https://tracker test/ping",
+                }
+            },
+            id="hostname-whitespace",
+        ),
+        pytest.param(
+            {
+                "request": {
+                    "method": "GET",
+                    "url": "https://tracker.test/ping\ncontinued",
+                }
+            },
+            id="control-character",
+        ),
+        pytest.param({"frameId": "other-frame"}, id="non-root-frame"),
+    ],
+)
+def test_normal_shutdown_fetch_only_context_disposal_shape_is_fail_closed(
+    changes: dict[str, Any],
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    _begin_shutdown(router)
+    session.emit((), "Fetch.requestPaused", _normal_shutdown_fetch_only_ping(**changes))
+    router.raise_if_failed()
+
+    with pytest.raises(CdpTargetIntegrityError, match="no exact Network occurrence"):
+        _finish(router)
+
+
+def test_normal_shutdown_fetch_only_ping_rejects_a_pre_cutoff_network_identity() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    fetch = _normal_shutdown_fetch_only_ping()
+    network = _normal_shutdown_network(
+        requestId=fetch["networkId"],
+        frameId=fetch["frameId"],
+        type=fetch["resourceType"],
+        request=fetch["request"],
+    )
+    session.emit((), "Network.requestWillBeSent", network)
+    session.emit(
+        (),
+        "Network.loadingFinished",
+        {
+            "requestId": network["requestId"],
+            "timestamp": 1.0,
+            "encodedDataLength": 0,
+        },
+    )
+    router.raise_if_failed()
+    _begin_shutdown(router)
+    session.emit((), "Fetch.requestPaused", fetch)
+    router.raise_if_failed()
+
+    with pytest.raises(CdpTargetIntegrityError, match="no exact Network occurrence"):
+        _finish(router)
+
+
+def test_normal_shutdown_fetch_only_ping_rejects_a_same_id_network_mismatch() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    fetch = _normal_shutdown_fetch_only_ping()
+    _begin_shutdown(router)
+    session.emit(
+        (),
+        "Network.requestWillBeSent",
+        _normal_shutdown_network(requestId=fetch["networkId"]),
+    )
+    session.emit((), "Fetch.requestPaused", fetch)
+    router.raise_if_failed()
+
+    with pytest.raises(CdpTargetIntegrityError, match="no exact Network occurrence"):
+        _finish(router)
+
+
+def test_normal_shutdown_fetch_only_context_disposal_is_globally_singleton() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    _begin_shutdown(router)
+    for suffix in ("first", "second"):
+        session.emit(
+            (),
+            "Fetch.requestPaused",
+            _normal_shutdown_fetch_only_ping(
+                requestId=f"shutdown-ping-fetch-{suffix}",
+                networkId=f"shutdown-ping-network-{suffix}",
+                request={
+                    "method": "GET",
+                    "url": f"https://tracker.test/{suffix}",
+                },
+            ),
+        )
+        router.raise_if_failed()
+
+    with pytest.raises(CdpTargetIntegrityError, match="no exact Network occurrence"):
+        _finish(router)
+
+
+def test_normal_shutdown_fetch_only_context_disposal_rejects_a_child_source() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    child = session.attach(
+        (),
+        session_id="shutdown-ping-child-session",
+        target_id="shutdown-ping-child-frame",
+        target_type="iframe",
+        parent_frame_id=session.root_frame_id,
+    )
+    _begin_shutdown(router)
+    session.emit(
+        child,
+        "Fetch.requestPaused",
+        _normal_shutdown_fetch_only_ping(frameId="shutdown-ping-child-frame"),
+    )
+    router.raise_if_failed()
+
+    with pytest.raises(CdpTargetIntegrityError, match="no exact Network occurrence"):
+        _finish(router)
+
+
+def test_normal_shutdown_fetch_only_context_disposal_rejects_a_redirect_chain() -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    first = _normal_shutdown_fetch_only_ping()
+    second = _normal_shutdown_fetch_only_ping(
+        requestId="shutdown-ping-fetch-redirect",
+        redirectedRequestId=first["requestId"],
+        request={
+            "method": "GET",
+            "url": "https://top-fwz1.mail.ru/tracker-final?event=context-disposal",
+        },
+    )
+    _begin_shutdown(router)
+    commands_before = list(session.commands)
+    observed_before = list(observed)
+    session.emit((), "Fetch.requestPaused", first)
+    session.emit((), "Fetch.requestPaused", second)
+    router.raise_if_failed()
+
+    with pytest.raises(CdpTargetIntegrityError, match="no exact Network occurrence"):
+        _finish(router)
+    assert session.commands == commands_before
+    assert observed == observed_before
+
+
+def test_normal_shutdown_exact_network_ping_pair_is_ordinary_reconciliation() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    fetch = _normal_shutdown_fetch_only_ping()
+    network = _normal_shutdown_network(
+        requestId=fetch["networkId"],
+        frameId=fetch["frameId"],
+        type=fetch["resourceType"],
+        request=fetch["request"],
+    )
+    _begin_shutdown(router)
+    session.emit((), "Network.requestWillBeSent", network)
+    session.emit((), "Fetch.requestPaused", fetch)
+    router.raise_if_failed()
+    _finish(router)
+
+    summary = router.normal_shutdown_disposal_summary
+    assert summary["network_total"] == 1
+    assert summary["fetch_total"] == 1
+    assert summary["matched_total"] == 1
+    assert summary["network_only_synthetic_total"] == 0
+    assert summary["fetch_only_context_disposal_total"] == 0
+    assert summary["terminal_outcomes"]["qcsd-shutdown"] == 1
 
 
 @pytest.mark.parametrize(
@@ -9961,6 +10248,7 @@ def test_normal_shutdown_redirect_reconciles_every_cross_domain_order(
         "fetch_total": 2,
         "matched_total": 2,
         "network_only_synthetic_total": 0,
+        "fetch_only_context_disposal_total": 0,
         "pending_network_total": 0,
         "pending_fetch_total": 0,
         "terminal_outcomes": {
@@ -10164,6 +10452,7 @@ def test_normal_shutdown_network_only_requires_and_records_synthetic_cancellatio
     assert summary["fetch_total"] == 0
     assert summary["matched_total"] == 0
     assert summary["network_only_synthetic_total"] == 1
+    assert summary["fetch_only_context_disposal_total"] == 0
     assert summary["terminal_outcomes"] == {
         "Network.loadingFinished": 0,
         "Network.loadingFailed": 0,
@@ -10790,6 +11079,7 @@ def test_normal_shutdown_disposal_summary_validator_requires_terminal_when_reque
         "fetch_total": 1,
         "matched_total": 0,
         "network_only_synthetic_total": 0,
+        "fetch_only_context_disposal_total": 0,
         "pending_network_total": 1,
         "pending_fetch_total": 1,
         "terminal_outcomes": {
@@ -10802,6 +11092,27 @@ def test_normal_shutdown_disposal_summary_validator_requires_terminal_when_reque
     validate_normal_shutdown_disposal_summary(incomplete, require_terminal=False)
     with pytest.raises(ValueError, match="counts are inconsistent"):
         validate_normal_shutdown_disposal_summary(incomplete, require_terminal=True)
+
+
+def test_historical_normal_shutdown_disposal_summary_requires_explicit_opt_in() -> None:
+    historical = _valid_normal_shutdown_disposal_summary()
+    historical["schema_version"] = 2
+    historical["policy"] = "chromium-143-post-quiescence-context-disposal-v1"
+    historical.pop("fetch_only_context_disposal_total")
+
+    with pytest.raises(ValueError, match="contract is invalid"):
+        validate_normal_shutdown_disposal_summary(
+            historical,
+            require_terminal=True,
+        )
+
+    validated = validate_normal_shutdown_disposal_summary(
+        historical,
+        require_terminal=True,
+        allow_historical=True,
+    )
+    assert validated == historical
+    assert validated is not historical
 
 
 @pytest.mark.parametrize(
@@ -10832,6 +11143,7 @@ def test_normal_shutdown_disposal_summary_validator_requires_terminal_when_reque
         lambda value: value.update(fetch_total=2),
         lambda value: value.update(matched_total=2),
         lambda value: value.update(network_only_synthetic_total=2),
+        lambda value: value.update(fetch_only_context_disposal_total=2),
         lambda value: value.update(pending_network_total=1),
         lambda value: value["terminal_outcomes"].update({"qcsd-shutdown": True}),
         lambda value: value["terminal_outcomes"].update({"other": 0}),

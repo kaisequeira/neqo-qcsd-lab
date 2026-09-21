@@ -348,6 +348,7 @@ def class_study_prepared_manifest():
             "fetch_total": 0,
             "matched_total": 0,
             "network_only_synthetic_total": 0,
+            "fetch_only_context_disposal_total": 0,
             "pending_network_total": 0,
             "pending_fetch_total": 0,
             "terminal_outcomes": {

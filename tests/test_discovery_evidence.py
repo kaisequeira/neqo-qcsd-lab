@@ -369,6 +369,7 @@ def _normal_shutdown_disposal_summary() -> dict:
         "fetch_total": 0,
         "matched_total": 0,
         "network_only_synthetic_total": 0,
+        "fetch_only_context_disposal_total": 0,
         "pending_network_total": 0,
         "pending_fetch_total": 0,
         "terminal_outcomes": {
@@ -588,7 +589,7 @@ def _blocked_preflight_audit(
 def test_internal_document_lifecycle_bumps_discovery_evidence_schemas() -> None:
     assert PASSIVE_RENDER_CONTRACT_SCHEMA_VERSION == 4
     assert RENDER_OBSERVATION_SCHEMA_VERSION == 4
-    assert DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION == 7
+    assert DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION == 8
     assert REQUEST_STAGE_OBSERVATION_POLICY == (
         "chromium-143-fetch-primary-or-failed-cors-preflight-v1"
     )
@@ -744,6 +745,7 @@ def test_discovery_audit_binds_terminal_disposal_summary_outside_scientific_even
         "fetch_total": 1,
         "matched_total": 1,
         "network_only_synthetic_total": 1,
+        "fetch_only_context_disposal_total": 0,
         "terminal_outcomes": {
             "Network.loadingFinished": 1,
             "Network.loadingFailed": 0,

@@ -147,7 +147,7 @@ def test_standalone_browser_schema_constants_match_the_producer() -> None:
         browser_producer.HISTORICAL_FOUNDATION_SCHEMA_VERSIONS
     )
     assert admission._BROWSER_EGRESS_FINAL_SCHEMA == browser_producer.FINAL_SCHEMA_VERSION
-    assert admission._ACQUISITION_SCHEMA == acquisition_producer.SCHEMA_VERSION == 8
+    assert admission._ACQUISITION_SCHEMA == acquisition_producer.SCHEMA_VERSION == 9
     assert (
         admission._ACQUISITION_COMPLETION_SCHEMA
         == acquisition_producer.COMPLETION_SCHEMA_VERSION
@@ -158,8 +158,8 @@ def test_standalone_browser_schema_constants_match_the_producer() -> None:
         == acquisition_producer.CHECKPOINT_SCHEMA_VERSION
         == 3
     )
-    assert admission._PINNED_CDP_SCHEMA == pinned_cdp_producer.PROBE_SCHEMA_VERSION == 17
-    assert {14, 16}.issubset(admission._HISTORICAL_PINNED_CDP_SCHEMAS)
+    assert admission._PINNED_CDP_SCHEMA == pinned_cdp_producer.PROBE_SCHEMA_VERSION == 18
+    assert {14, 16, 17}.issubset(admission._HISTORICAL_PINNED_CDP_SCHEMAS)
 
 
 def test_authority_admission_accepts_production_built_browser_foundation(tmp_path: Path) -> None:
@@ -445,6 +445,26 @@ def test_v96_authority_is_verify_only_and_never_current_admission(authority_fixt
             fixture,
             "acquisition-init",
             acquisition_authority=fixture.authority,
+        )
+
+
+def test_v102_pinned_cdp_contract_is_verify_only_and_never_current_admission(
+    authority_fixture,
+) -> None:
+    fixture = authority_fixture
+    _rewrite(
+        fixture.pinned,
+        lambda payload: payload.update(probe_schema_version=17),
+    )
+
+    assert _resolve(fixture, "verify", target=fixture.pinned) is None
+    with pytest.raises(admission._HistoricalAuthority, match="historical"):
+        _resolve(
+            fixture,
+            "acquisition-authority",
+            build=fixture.build,
+            pinned_cdp=fixture.pinned,
+            browser_egress=fixture.browser,
         )
 
 

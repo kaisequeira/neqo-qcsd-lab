@@ -20,6 +20,7 @@ from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 from .browser_egress import (
     NON_REPLAYABLE_EGRESS_POLICY,
@@ -34,12 +35,16 @@ from .browser_egress import (
 )
 
 CDP_TARGET_INSTRUMENTATION_POLICY = (
-    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v20"
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v21"
 )
 BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION = 1
 EGRESS_PREARM_SUMMARY_SCHEMA_VERSION = 2
-NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION = 2
-NORMAL_SHUTDOWN_DISPOSAL_POLICY = "chromium-143-post-quiescence-context-disposal-v1"
+NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION = 3
+NORMAL_SHUTDOWN_DISPOSAL_POLICY = "chromium-143-post-quiescence-context-disposal-v2"
+_HISTORICAL_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION = 2
+_HISTORICAL_NORMAL_SHUTDOWN_DISPOSAL_POLICY = (
+    "chromium-143-post-quiescence-context-disposal-v1"
+)
 SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION = 3
 SRCDOC_PSEUDO_DOCUMENT_POLICY = (
     "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-v2"
@@ -450,9 +455,18 @@ def validate_normal_shutdown_disposal_summary(
     value: object,
     *,
     require_terminal: bool,
+    allow_historical: bool = False,
 ) -> dict[str, Any]:
     """Validate identifier-free accounting for the normal context-close drain."""
 
+    if type(allow_historical) is not bool:
+        raise ValueError("normal shutdown historical switch is invalid")
+    historical = (
+        isinstance(value, Mapping)
+        and value.get("schema_version")
+        == _HISTORICAL_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
+        and value.get("policy") == _HISTORICAL_NORMAL_SHUTDOWN_DISPOSAL_POLICY
+    )
     fields = {
         "schema_version",
         "policy",
@@ -462,17 +476,30 @@ def validate_normal_shutdown_disposal_summary(
         "fetch_total",
         "matched_total",
         "network_only_synthetic_total",
+        "fetch_only_context_disposal_total",
         "pending_network_total",
         "pending_fetch_total",
         "terminal_outcomes",
     }
+    if historical:
+        fields.remove("fetch_only_context_disposal_total")
     if not isinstance(value, Mapping) or set(value) != fields:
         raise ValueError("normal shutdown disposal summary fields are invalid")
+    expected_schema_version = (
+        _HISTORICAL_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
+        if historical
+        else NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
+    )
+    expected_policy = (
+        _HISTORICAL_NORMAL_SHUTDOWN_DISPOSAL_POLICY
+        if historical
+        else NORMAL_SHUTDOWN_DISPOSAL_POLICY
+    )
     if (
         type(value.get("schema_version")) is not int
-        or value["schema_version"]
-        != NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
-        or value.get("policy") != NORMAL_SHUTDOWN_DISPOSAL_POLICY
+        or value["schema_version"] != expected_schema_version
+        or value.get("policy") != expected_policy
+        or (historical and not allow_historical)
         or type(value.get("started")) is not bool
         or type(value.get("terminal")) is not bool
     ):
@@ -482,9 +509,16 @@ def validate_normal_shutdown_disposal_summary(
         "fetch_total",
         "matched_total",
         "network_only_synthetic_total",
+        "fetch_only_context_disposal_total",
         "pending_network_total",
         "pending_fetch_total",
     )
+    if historical:
+        count_fields = tuple(
+            field
+            for field in count_fields
+            if field != "fetch_only_context_disposal_total"
+        )
     if any(
         type(value.get(field)) is not int or value[field] < 0
         for field in count_fields
@@ -511,6 +545,9 @@ def validate_normal_shutdown_disposal_summary(
     fetch_total = value["fetch_total"]
     matched_total = value["matched_total"]
     network_only_synthetic = value["network_only_synthetic_total"]
+    fetch_only_context_disposal = (
+        0 if historical else value["fetch_only_context_disposal_total"]
+    )
     pending_network = value["pending_network_total"]
     pending_fetch = value["pending_fetch_total"]
     if (
@@ -518,7 +555,15 @@ def validate_normal_shutdown_disposal_summary(
         or matched_total > fetch_total
         or network_total > _NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT
         or fetch_total > _NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT
-        or pending_fetch != fetch_total - matched_total
+        or matched_total + fetch_only_context_disposal > fetch_total
+        or fetch_only_context_disposal > 1
+        or (not value["terminal"] and fetch_only_context_disposal)
+        or (
+            fetch_only_context_disposal == 1
+            and (fetch_total != 1 or matched_total != 0)
+        )
+        or pending_fetch
+        != fetch_total - matched_total - fetch_only_context_disposal
         or sum(terminal_outcomes.values()) + pending_network != network_total
         or network_only_synthetic > network_total - matched_total
         or network_only_synthetic > terminal_outcomes["qcsd-shutdown"]
@@ -533,7 +578,7 @@ def validate_normal_shutdown_disposal_summary(
             and (
                 pending_network
                 or pending_fetch
-                or fetch_total != matched_total
+                or fetch_total != matched_total + fetch_only_context_disposal
                 or network_total != matched_total + network_only_synthetic
             )
         )
@@ -1122,6 +1167,9 @@ class _NormalShutdownFetch:
     successor: _NormalShutdownFetch | None = None
     leg_index: int = 0
     matched_network: _NormalShutdownNetwork | None = None
+    pre_shutdown_network_id_seen: bool = False
+    root_page_context_disposal_candidate: bool = False
+    context_disposal_held: bool = False
 
 
 @dataclass
@@ -1245,15 +1293,19 @@ class _BootstrapFetchDecision:
 
 
 class _NormalShutdownDisposalLedger:
-    """Reconcile requests born only after deliberate normal shutdown begins.
+    """Reconcile request callbacks observed during deliberate normal shutdown.
 
     Chromium may start a final root or descendant request while
     ``BrowserContext.close()`` is disposing an already quiescent page.  Fetch
     pauses from that interval must stay held: attempting a policy command on
     the closing root session can race with target destruction.  This ledger is
-    deliberately separate from accepted render evidence and permits a missing
-    Fetch pause only when the still-live Network occurrence is retired by the
-    router's exact local shutdown cancellation.
+    deliberately separate from accepted render evidence.  It permits a
+    missing Fetch pause only when the still-live Network occurrence is retired
+    by the router's exact local shutdown cancellation.  Conversely, Chromium
+    143 can expose a root-page GET ``Ping`` pause during context disposal
+    without exposing a corresponding Network occurrence before destruction.
+    That exact singleton remains held, is never continued, and becomes
+    terminal only after the caller's successful context-close barrier.
     """
 
     def __init__(self) -> None:
@@ -1417,7 +1469,14 @@ class _NormalShutdownDisposalLedger:
         self._network_total += 1
         self._reconcile(active.request_id)
 
-    def add_fetch(self, source: CdpTargetSource, event: Mapping[str, Any]) -> None:
+    def add_fetch(
+        self,
+        source: CdpTargetSource,
+        event: Mapping[str, Any],
+        *,
+        pre_shutdown_network_id_seen: bool,
+        root_page_context_disposal_candidate: bool,
+    ) -> None:
         self._require_open()
         request = event.get("request")
         fetch_request_id = event.get("requestId")
@@ -1427,7 +1486,9 @@ class _NormalShutdownDisposalLedger:
         has_redirect_predecessor = "redirectedRequestId" in event
         redirected_request_id = event.get("redirectedRequestId")
         if (
-            not isinstance(fetch_request_id, str)
+            type(pre_shutdown_network_id_seen) is not bool
+            or type(root_page_context_disposal_candidate) is not bool
+            or not isinstance(fetch_request_id, str)
             or not fetch_request_id
             or not isinstance(network_id, str)
             or not network_id
@@ -1508,6 +1569,10 @@ class _NormalShutdownDisposalLedger:
             url=request["url"],
             predecessor=predecessor,
             leg_index=0 if predecessor is None else predecessor.leg_index + 1,
+            pre_shutdown_network_id_seen=pre_shutdown_network_id_seen,
+            root_page_context_disposal_candidate=(
+                root_page_context_disposal_candidate
+            ),
         )
         if predecessor is not None:
             predecessor.successor = fetch
@@ -1696,14 +1761,69 @@ class _NormalShutdownDisposalLedger:
             and chain[-1].matched_network.successor is None
         )
 
+    def _is_exact_fetch_only_context_disposal(
+        self,
+        fetch: _NormalShutdownFetch,
+    ) -> bool:
+        """Whether one held root beacon is terminal at context disposal.
+
+        This deliberately recognises only the event shape reproduced from the
+        pinned Chromium 143 acquisition image.  Any redirect, target/source
+        variation, prior scientific identity, same-ID Network occurrence, or
+        additional Fetch occurrence remains a hard integrity failure.
+        """
+
+        try:
+            parsed_url = urlsplit(fetch.url)
+            # Accessing ``port`` forces urllib to reject malformed or
+            # out-of-range ports instead of leaving them hidden in ``netloc``.
+            parsed_port = parsed_url.port
+            has_unsafe_codepoint = any(
+                character.isspace()
+                or ord(character) < 0x20
+                or 0x7F <= ord(character) <= 0x9F
+                for character in fetch.url
+            )
+            absolute_https_url = (
+                parsed_url.scheme == "https"
+                and parsed_url.hostname is not None
+                and parsed_url.username is None
+                and parsed_url.password is None
+                and (parsed_port is None or 0 < parsed_port <= 65_535)
+                and not has_unsafe_codepoint
+            )
+        except ValueError:
+            absolute_https_url = False
+        same_id_fetches = self._fetches.get(fetch.network_id, ())
+        return (
+            len(self._fetch_identities) == 1
+            and len(same_id_fetches) == 1
+            and same_id_fetches[0] is fetch
+            and not self._networks.get(fetch.network_id)
+            and fetch.predecessor is None
+            and fetch.successor is None
+            and fetch.leg_index == 0
+            and fetch.matched_network is None
+            and not fetch.pre_shutdown_network_id_seen
+            and fetch.root_page_context_disposal_candidate
+            and fetch.resource_type == "Ping"
+            and fetch.method == "GET"
+            and absolute_https_url
+        )
+
     def finish(self) -> None:
         self._require_open()
         for request_id in set(self._networks) | set(self._fetches):
             self._reconcile(request_id)
-        if any(
-            fetch.matched_network is None
+        unmatched_fetches = [
+            fetch
             for values in self._fetches.values()
             for fetch in values
+            if fetch.matched_network is None
+        ]
+        if any(
+            not self._is_exact_fetch_only_context_disposal(fetch)
+            for fetch in unmatched_fetches
         ):
             raise CdpTargetIntegrityError(
                 "normal shutdown Fetch pause has no exact Network occurrence"
@@ -1738,10 +1858,20 @@ class _NormalShutdownDisposalLedger:
                 raise CdpTargetIntegrityError(
                     "normal shutdown Network-only occurrence lacked exact local cancellation"
                 )
-        if any(not self._fetch_chain_is_fully_matched(chain) for chain in fetch_chains):
+        if any(
+            not self._fetch_chain_is_fully_matched(chain)
+            and not (
+                len(chain) == 1
+                and chain[0].matched_network is None
+                and self._is_exact_fetch_only_context_disposal(chain[0])
+            )
+            for chain in fetch_chains
+        ):
             raise CdpTargetIntegrityError(
                 "normal shutdown Fetch redirect chain was only partially matched"
             )
+        for fetch in unmatched_fetches:
+            fetch.context_disposal_held = True
         self._terminal = True
 
     @property
@@ -1765,8 +1895,11 @@ class _NormalShutdownDisposalLedger:
             item.matched_fetch is None and item.terminal_outcome == "qcsd-shutdown"
             for item in networks
         )
+        fetch_only_context_disposal = sum(
+            item.context_disposal_held for item in fetches
+        )
         pending_network = sum(item.terminal_outcome is None for item in networks)
-        pending_fetch = len(fetches) - matched_fetches
+        pending_fetch = len(fetches) - matched_fetches - fetch_only_context_disposal
         if any(
             item.matched_fetch is not None
             and item.matched_fetch.matched_network is not item
@@ -1792,6 +1925,7 @@ class _NormalShutdownDisposalLedger:
             "fetch_total": len(fetches),
             "matched_total": matched,
             "network_only_synthetic_total": network_only_synthetic,
+            "fetch_only_context_disposal_total": fetch_only_context_disposal,
             "pending_network_total": pending_network,
             "pending_fetch_total": pending_fetch,
             "terminal_outcomes": terminal_outcomes,
@@ -4785,7 +4919,25 @@ class RecursiveCdpTargetRouter:
             if self._aborting:
                 self._hold_aborted_fetch(event)
             else:
-                self._normal_shutdown_disposal.add_fetch(source, event)
+                network_id = event.get("networkId")
+                self._normal_shutdown_disposal.add_fetch(
+                    source,
+                    event,
+                    pre_shutdown_network_id_seen=(
+                        isinstance(network_id, str)
+                        and any(
+                            candidate_id == network_id
+                            for _candidate_source, candidate_id in (
+                                self._pre_shutdown_network_identities
+                            )
+                        )
+                    ),
+                    root_page_context_disposal_candidate=(
+                        source == self.root_source
+                        and self._root_frame_id is not None
+                        and event.get("frameId") == self._root_frame_id
+                    ),
+                )
             return
         if method == "Network.requestServedFromCache":
             self._record_inline_data_cache_marker(source, event)

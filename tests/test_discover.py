@@ -146,6 +146,7 @@ def _normal_shutdown_disposal_summary(
     fetch_total: int = 0,
     matched_total: int = 0,
     network_only_synthetic_total: int = 0,
+    fetch_only_context_disposal_total: int = 0,
 ) -> dict:
     return {
         "schema_version": NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
@@ -156,6 +157,7 @@ def _normal_shutdown_disposal_summary(
         "fetch_total": fetch_total,
         "matched_total": matched_total,
         "network_only_synthetic_total": network_only_synthetic_total,
+        "fetch_only_context_disposal_total": fetch_only_context_disposal_total,
         "pending_network_total": 0,
         "pending_fetch_total": 0,
         "terminal_outcomes": {

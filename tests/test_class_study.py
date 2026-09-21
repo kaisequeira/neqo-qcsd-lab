@@ -86,14 +86,14 @@ def test_checked_in_handoff_contract_matches_current_exporter_and_kernel_sidecar
     amendment = study["prospective_acquisition_amendment"]
     page_admission = study["page_admission"]
 
-    assert amendment["schema_version"] == 4
+    assert amendment["schema_version"] == 5
     assert amendment["date"] == "2026-09-21"
-    assert amendment["acquisition_schema_version"] == ACQUISITION_SCHEMA_VERSION == 8
+    assert amendment["acquisition_schema_version"] == ACQUISITION_SCHEMA_VERSION == 9
     assert amendment["checkpoint_schema_version"] == ACQUISITION_CHECKPOINT_SCHEMA_VERSION == 3
     assert amendment["terminal_schema_version"] == ACQUISITION_TERMINAL_SCHEMA_VERSION == 4
     assert amendment["completion_schema_version"] == ACQUISITION_COMPLETION_SCHEMA_VERSION == 4
     assert amendment["document_response_schema_version"] == DOCUMENT_RESPONSE_SCHEMA_VERSION == 2
-    assert amendment["pinned_cdp_probe_schema_version"] == PINNED_CDP_PROBE_SCHEMA_VERSION == 17
+    assert amendment["pinned_cdp_probe_schema_version"] == PINNED_CDP_PROBE_SCHEMA_VERSION == 18
     assert amendment["render_observation_schema_version"] == RENDER_OBSERVATION_SCHEMA_VERSION
     assert amendment["discovery_event_audit_schema_version"] == DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION
     assert amendment["request_stage_observation_policy"] == REQUEST_STAGE_OBSERVATION_POLICY
@@ -120,6 +120,18 @@ def test_checked_in_handoff_contract_matches_current_exporter_and_kernel_sidecar
         "authority": "historical-verify-only-never-current-admission",
     }
     assert amendment["retired_v101_contract"] == amendment["retired_v100_contract"]
+    assert amendment["retired_v102_contract"] == {
+        "acquisition_schema_version": 8,
+        "checkpoint_schema_version": 3,
+        "terminal_schema_version": 4,
+        "completion_schema_version": 4,
+        "pinned_cdp_probe_schema_version": 17,
+        "discovery_event_audit_schema_version": 7,
+        "cdp_target_instrumentation_policy": (
+            "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v20"
+        ),
+        "authority": "historical-verify-only-never-current-admission",
+    }
     assert page_admission["passive_render_contract"] == PASSIVE_RENDER_CONTRACT
     assert page_admission["passive_render_contract_sha256"] == PASSIVE_RENDER_CONTRACT_SHA256
     assert page_admission["cdp_target_instrumentation_policy"] == CDP_TARGET_INSTRUMENTATION_POLICY
