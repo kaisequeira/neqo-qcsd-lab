@@ -912,7 +912,7 @@
         "cs_buflo"
       ],
       "required_for_runtime_kind": "buflo",
-      "required_runner_wakeup_schema_version": 14,
+      "required_runner_wakeup_schema_version": 15,
       "accepted_sample_inventory_relationship": "separate-checksum-bound-sidecar-does-not-change-the-five-file-accepted-sample-inventory",
       "sidecar_source": "accepted-kernel-tx-sidecar-v1",
       "sidecar_files": [

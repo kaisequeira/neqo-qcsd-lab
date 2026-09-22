@@ -785,7 +785,7 @@ def _runner_kernel_tx_requirement(
     wakeups = run.get("runner_wakeup_metrics") if isinstance(run, Mapping) else None
     schema = wakeups.get("schema_version") if isinstance(wakeups, Mapping) else None
     raw = wakeups.get("buflo_kernel_tx") if isinstance(wakeups, Mapping) else None
-    required = runtime_kind == "buflo" and schema in {11, 12, 13, 14}
+    required = runtime_kind == "buflo" and schema in {11, 12, 13, 14, 15}
     if required and not isinstance(raw, Mapping):
         raise ValueError("kernel-TX BuFLO handoff sample has no raw runner receipt")
     if required and not _runner_wakeup_metrics_valid(wakeups):

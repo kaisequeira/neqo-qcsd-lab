@@ -24,7 +24,8 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-KERNEL_TX_RUNNER_SCHEMA_VERSION = 5
+KERNEL_TX_RUNNER_SCHEMA_VERSION = 6
+KERNEL_TX_RUNNER_V5_SCHEMA_VERSION = 5
 KERNEL_TX_RUNNER_V4_SCHEMA_VERSION = 4
 KERNEL_TX_RUNNER_V3_SCHEMA_VERSION = 3
 KERNEL_TX_HISTORICAL_RUNNER_SCHEMA_VERSION = 1
@@ -47,6 +48,7 @@ _KERNEL_TX_ETF_DELTA_BY_RUNNER_SCHEMA = {
     2: KERNEL_TX_HISTORICAL_ETF_DELTA_NS,
     KERNEL_TX_RUNNER_V3_SCHEMA_VERSION: KERNEL_TX_HISTORICAL_ETF_DELTA_NS,
     KERNEL_TX_RUNNER_V4_SCHEMA_VERSION: KERNEL_TX_ETF_DELTA_NS,
+    KERNEL_TX_RUNNER_V5_SCHEMA_VERSION: KERNEL_TX_ETF_DELTA_NS,
     KERNEL_TX_RUNNER_SCHEMA_VERSION: KERNEL_TX_ETF_DELTA_NS,
 }
 
@@ -135,7 +137,7 @@ KERNEL_TX_RUNNER_V4_SEMANTICS = (
     "client_only_preselection_adaptation=true; paper_equivalent=false; "
     "raw_runner_receipt_does_not_claim_post_veth_observation=true"
 )
-KERNEL_TX_RUNNER_SEMANTICS = (
+KERNEL_TX_RUNNER_V5_SEMANTICS = (
     "client_only_buflo_kernel_timed_egress_v5; "
     "clock=CLOCK_TAI_bracketed_against_CLOCK_MONOTONIC_and_CLOCK_REALTIME; "
     "exact_outgoing=SO_TXTIME_SCM_TXTIME_ETF; "
@@ -164,6 +166,46 @@ KERNEL_TX_RUNNER_SEMANTICS = (
     "strict_realization_window_is_half_open; no_catch_up=true; "
     "client_only_preselection_adaptation=true; paper_equivalent=false; "
     "raw_runner_receipt_does_not_claim_post_veth_observation=true"
+)
+KERNEL_TX_PROTECTED_SELECTION_WAIT_SEMANTICS = (
+    "CLOCK_TAI_is_authoritative; admission=release_minus_10ms; "
+    "selection=release_minus_5ms; "
+    "release=defense_start_plus_tick_times_20ms; "
+    "entry_requires_admission<=entered_tai<selection; "
+    "active_poll_runs_until_selection; "
+    "pre_admission_calls_create_no_entry; "
+    "first_entry_at_or_after_selection_is_selection_entry_late; "
+    "selection_success_requires_selection<=completed_tai<release; "
+    "completed_tai_is_immutable_selection_completion=true; "
+    "confirmation_attempts=count_each_confirm_call_exactly_once; "
+    "confirmation_phase_order=tick_zero_completed<=staging<=dispatch<release_or_rolling_completed<=dispatch<release; "
+    "failed_confirmation_retains_prior_phase_evidence=true; "
+    "exact_release_is_expired; "
+    "every_recorded_wait_clock_read_attempt_is_counted; "
+    "successful_job_confirmation_attempts=tick_zero:2,rolling:1; "
+    "terminal_no_job_confirmation_attempts=phase_bounded_tick_zero_0_to_2_rolling_0_to_1; "
+    "completed_job_release_tai_must_equal_entry_release_tai=true; "
+    "consecutive_successful_samples_must_not_regress; "
+    "failures_are_typed_and_fail_closed; no_early_packet_construction; "
+    "no_window_extension; no_catch_up"
+)
+KERNEL_TX_RUNNER_SEMANTICS = KERNEL_TX_RUNNER_V5_SEMANTICS.replace(
+    "client_only_buflo_kernel_timed_egress_v5; ",
+    "client_only_buflo_kernel_timed_egress_v6; ",
+).replace(
+    "sender_exclusivity_is_current_thread_control_flow_not_OS_socket_ownership; ",
+    "sender_exclusivity_is_current_thread_control_flow_not_OS_socket_ownership; "
+    "protected_selection_wait=CLOCK_TAI_active_poll_from_release_minus_10ms_to_release_minus_5ms; "
+    "protected_selection_wait_applies_to_tick_zero_and_rolling_slots=true; "
+    "protected_selection_epoch_binding=release_tai_defense_start_plus_tick_times_20ms; "
+    "protected_selection_job_binding=completed_entry_release_tai_equals_job_release_tai_and_job_deadline_equals_release_plus_5ms; "
+    "epoch_absence_requires_no_protected_selection_entries_or_jobs=true; "
+    "confirmation_attempts=count_each_phase_confirmation_call_exactly_once; "
+    "confirmation_phase_timestamps=selection_completion_retained_then_nullable_staging_and_dispatch; "
+    "successful_job_confirmation_attempts=tick_zero:2,rolling:1; "
+    "terminal_no_job_confirmation_attempts=phase_bounded_tick_zero_0_to_2_rolling_0_to_1; "
+    "selection_window_is_half_open_release_minus_5ms_through_release=true; "
+    "late_or_failed_selection_remains_fatal=true; ",
 )
 KERNEL_TX_EVIDENCE_SEMANTICS = (
     "buflo_kernel_timed_egress_lab_reconciliation_v1; "
@@ -612,6 +654,62 @@ _RUNNER_AGGREGATE_KEYS = frozenset(
         "terminal_outcome",
     }
 )
+_PROTECTED_SELECTION_FAILURE_KEYS = frozenset(
+    {
+        "schema_version",
+        "slot",
+        "tick",
+        "tick_zero",
+        "kind",
+        "detail",
+        "admission_tai_ns",
+        "selection_tai_ns",
+        "release_tai_ns",
+        "entered_tai_ns",
+        "previous_tai_ns",
+        "observed_tai_ns",
+        "clock_read_attempts",
+    }
+)
+_PROTECTED_SELECTION_ENTRY_KEYS = frozenset(
+    {
+        "schema_version",
+        "slot",
+        "tick",
+        "tick_zero",
+        "admission_tai_ns",
+        "selection_tai_ns",
+        "release_tai_ns",
+        "entered_tai_ns",
+        "completed_tai_ns",
+        "staging_confirmed_tai_ns",
+        "dispatch_confirmed_tai_ns",
+        "clock_read_attempts",
+        "confirmation_attempts",
+        "wait_duration_ns",
+        "max_sample_gap_ns",
+        "entry_lateness_ns",
+        "outcome",
+        "failure",
+    }
+)
+_PROTECTED_SELECTION_WAIT_KEYS = frozenset(
+    {
+        "schema_version",
+        "semantics",
+        "entries",
+        "entry_count",
+        "completed_count",
+        "failed_count",
+        "clock_read_attempts",
+        "confirmation_attempts",
+        "total_wait_duration_ns",
+        "max_wait_duration_ns",
+        "max_sample_gap_ns",
+        "max_entry_lateness_ns",
+        "last_failure",
+    }
+)
 _RUNNER_RECEIPT_KEYS = frozenset(
     {
         "schema_version",
@@ -633,6 +731,7 @@ _RUNNER_RECEIPT_KEYS = frozenset(
         "terminal_errors",
     }
 )
+_RUNNER_V6_RECEIPT_KEYS = _RUNNER_RECEIPT_KEYS | {"protected_selection_wait"}
 
 _QDISC_SNAPSHOT_KEYS = frozenset(
     {
@@ -2917,7 +3016,12 @@ def _unmapped_runner_jobs_valid(
     )
 
 
-def _runner_aggregate(value: Any, jobs: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+def _runner_aggregate(
+    value: Any,
+    jobs: Sequence[Mapping[str, Any]],
+    *,
+    terminal_outcome: str,
+) -> dict[str, Any] | None:
     aggregate = _exact_mapping(value, _RUNNER_AGGREGATE_KEYS)
     if (
         aggregate is None
@@ -2970,23 +3074,373 @@ def _runner_aggregate(value: Any, jobs: Sequence[Mapping[str, Any]]) -> dict[str
         "window_violation_count": outcomes.count("window-violation"),
         "unresolved_item_count": 0,
         "max_tx_software_lateness_ns": max(tx_lateness, default=0),
-        "terminal_outcome": (
-            "complete"
-            if jobs
-            and all(outcome == "transmitted" for outcome in outcomes)
-            and all(job["terminal_outcome"] == "complete" for job in jobs)
-            else "failed"
-        ),
+        # The producer also folds mapping, helper-lifecycle, primary-error,
+        # cleanup-error, and terminal-error state into this field.  Those
+        # independent predicates are validated by the surrounding receipt;
+        # retain the producer's top-level outcome here while recomputing every
+        # numeric aggregate exactly.
+        "terminal_outcome": terminal_outcome,
     }
     return dict(aggregate) if dict(aggregate) == expected else None
+
+
+def _protected_selection_failure_valid(
+    value: Any,
+    *,
+    entry: Mapping[str, Any],
+) -> bool:
+    failure = _exact_mapping(value, _PROTECTED_SELECTION_FAILURE_KEYS)
+    if (
+        failure is None
+        or not _schema(failure)
+        or failure.get("slot") != entry.get("slot")
+        or failure.get("tick") != entry.get("tick")
+        or failure.get("tick_zero") is not entry.get("tick_zero")
+        or failure.get("kind")
+        not in {
+            "selection-entry-late",
+            "selection-expired",
+            "clock-regression",
+            "clock-read-error",
+        }
+        or not _string(failure.get("detail"))
+        or failure.get("admission_tai_ns") != entry.get("admission_tai_ns")
+        or failure.get("selection_tai_ns") != entry.get("selection_tai_ns")
+        or failure.get("release_tai_ns") != entry.get("release_tai_ns")
+        or failure.get("entered_tai_ns") != entry.get("entered_tai_ns")
+        or not _nullable_u64(failure.get("previous_tai_ns"))
+        or not _nullable_u64(failure.get("observed_tai_ns"))
+        or failure.get("clock_read_attempts") != entry.get("clock_read_attempts")
+    ):
+        return False
+    entered = failure["entered_tai_ns"]
+    previous = failure["previous_tai_ns"]
+    observed = failure["observed_tai_ns"]
+    kind = failure["kind"]
+    confirmation_attempts = entry.get("confirmation_attempts")
+    if not _u64(confirmation_attempts):
+        return False
+    if confirmation_attempts == 0:
+        if entry.get("completed_tai_ns") is not None:
+            return False
+        if entered is None:
+            return bool(
+                kind == "clock-read-error"
+                and previous is None
+                and observed is None
+                and failure["clock_read_attempts"] == 1
+                and entry["wait_duration_ns"] == 0
+            )
+        if entered < failure["admission_tai_ns"]:
+            return False
+        if kind == "selection-entry-late":
+            return bool(
+                failure["selection_tai_ns"] <= entered < failure["release_tai_ns"]
+                and previous == entered
+                and observed == entered
+                and failure["clock_read_attempts"] == 1
+                and entry["wait_duration_ns"] == 0
+            )
+        if kind == "selection-expired":
+            return bool(
+                previous is not None
+                and observed is not None
+                and entered <= previous <= observed
+                and observed >= failure["release_tai_ns"]
+                and entry["wait_duration_ns"] == observed - entered
+            )
+        if kind == "clock-regression":
+            return bool(
+                previous is not None
+                and observed is not None
+                and previous >= entered
+                and observed < previous
+                and entry["wait_duration_ns"] == previous - entered
+            )
+        return bool(
+            previous is not None
+            and previous >= entered
+            and observed is None
+            and entry["wait_duration_ns"] == previous - entered
+        )
+
+    completed = entry.get("completed_tai_ns")
+    expected_previous = (
+        entry.get("staging_confirmed_tai_ns")
+        if entry.get("tick_zero") is True and confirmation_attempts == 2
+        else completed
+    )
+    if (
+        entered is None
+        or completed is None
+        or kind == "selection-entry-late"
+        or previous != expected_previous
+        or previous is None
+    ):
+        return False
+    if kind == "selection-expired":
+        return bool(
+            observed is not None
+            and observed >= failure["release_tai_ns"]
+            and observed >= previous
+        )
+    if kind == "clock-regression":
+        return bool(observed is not None and observed < previous)
+    return bool(kind == "clock-read-error" and observed is None)
+
+
+def _protected_selection_wait_valid(
+    value: Any,
+    *,
+    defense_start_tai_ns: int | None,
+    jobs: Sequence[Mapping[str, Any]],
+    success: bool,
+) -> bool:
+    wait = _exact_mapping(value, _PROTECTED_SELECTION_WAIT_KEYS)
+    if (
+        wait is None
+        or not _schema(wait)
+        or wait.get("semantics") != KERNEL_TX_PROTECTED_SELECTION_WAIT_SEMANTICS
+        or not isinstance(wait.get("entries"), list)
+        or any(
+            not _u64(wait.get(key))
+            for key in (
+                "entry_count",
+                "completed_count",
+                "failed_count",
+                "clock_read_attempts",
+                "confirmation_attempts",
+                "total_wait_duration_ns",
+                "max_wait_duration_ns",
+                "max_sample_gap_ns",
+                "max_entry_lateness_ns",
+            )
+        )
+    ):
+        return False
+    entries = wait["entries"]
+    if defense_start_tai_ns is None and entries:
+        return False
+    completed_count = 0
+    failed_count = 0
+    failures: list[Mapping[str, Any]] = []
+    clock_read_attempts = 0
+    confirmation_attempts = 0
+    total_wait_duration_ns = 0
+    max_wait_duration_ns = 0
+    max_sample_gap_ns = 0
+    max_entry_lateness_ns = 0
+    for index, value in enumerate(entries):
+        entry = _exact_mapping(value, _PROTECTED_SELECTION_ENTRY_KEYS)
+        expected_release = (
+            None
+            if defense_start_tai_ns is None
+            else defense_start_tai_ns + index * KERNEL_TX_CADENCE_NS
+        )
+        if (
+            entry is None
+            or not _schema(entry)
+            or entry.get("slot") != 2 * index
+            or entry.get("tick") != index
+            or entry.get("tick_zero") is not (index == 0)
+            or not all(
+                _u64(entry.get(key))
+                for key in (
+                    "admission_tai_ns",
+                    "selection_tai_ns",
+                    "release_tai_ns",
+                    "clock_read_attempts",
+                    "confirmation_attempts",
+                    "wait_duration_ns",
+                    "max_sample_gap_ns",
+                    "entry_lateness_ns",
+                )
+            )
+            or not _nullable_u64(entry.get("entered_tai_ns"))
+            or not _nullable_u64(entry.get("completed_tai_ns"))
+            or not _nullable_u64(entry.get("staging_confirmed_tai_ns"))
+            or not _nullable_u64(entry.get("dispatch_confirmed_tai_ns"))
+            or entry["selection_tai_ns"] - entry["admission_tai_ns"]
+            != KERNEL_TX_REALIZATION_WINDOW_NS
+            or entry["release_tai_ns"] - entry["selection_tai_ns"]
+            != KERNEL_TX_REALIZATION_WINDOW_NS
+            or entry["release_tai_ns"] != expected_release
+            or entry["clock_read_attempts"] == 0
+            or entry["confirmation_attempts"] > (2 if index == 0 else 1)
+        ):
+            return False
+        entered = entry["entered_tai_ns"]
+        completed = entry["completed_tai_ns"]
+        staging = entry["staging_confirmed_tai_ns"]
+        dispatch = entry["dispatch_confirmed_tai_ns"]
+        if (
+            completed is not None
+            and entry["clock_read_attempts"] < 2 + entry["confirmation_attempts"]
+        ):
+            return False
+        if entered is not None and (
+            entered < entry["admission_tai_ns"]
+            or entry["entry_lateness_ns"] != entered - entry["admission_tai_ns"]
+        ):
+            return False
+        if entered is None and entry["entry_lateness_ns"] != 0:
+            return False
+        completed_selection_valid = bool(
+            entered is not None
+            and completed is not None
+            and entry["admission_tai_ns"] <= entered < entry["selection_tai_ns"]
+            and entry["selection_tai_ns"] <= completed < entry["release_tai_ns"]
+            and entry["wait_duration_ns"] == completed - entered
+        )
+        if staging is not None and (
+            completed is None or not completed <= staging < entry["release_tai_ns"]
+        ):
+            return False
+        previous_confirmation = staging if staging is not None else completed
+        if dispatch is not None and (
+            previous_confirmation is None
+            or not previous_confirmation <= dispatch < entry["release_tai_ns"]
+        ):
+            return False
+        phase_shape = (
+            entry["tick_zero"],
+            entry["confirmation_attempts"],
+            entry["outcome"],
+            staging is not None,
+            dispatch is not None,
+        )
+        if phase_shape not in {
+            (True, 0, "selection-reached", False, False),
+            (False, 0, "selection-reached", False, False),
+            (True, 0, "failed", False, False),
+            (False, 0, "failed", False, False),
+            (True, 1, "selection-reached", True, False),
+            (True, 1, "failed", False, False),
+            (False, 1, "failed", False, False),
+            (True, 2, "selection-reached", True, True),
+            (True, 2, "failed", True, False),
+            (False, 1, "selection-reached", False, True),
+        }:
+            return False
+        if entry["outcome"] == "selection-reached":
+            if (
+                entry["failure"] is not None
+                or not completed_selection_valid
+                or entry["max_sample_gap_ns"] > entry["wait_duration_ns"]
+            ):
+                return False
+            completed_count += 1
+        elif entry["outcome"] == "failed":
+            if (
+                not _protected_selection_failure_valid(entry.get("failure"), entry=entry)
+                or (
+                    entry["confirmation_attempts"] > 0
+                    and not completed_selection_valid
+                )
+                or index != len(entries) - 1
+            ):
+                return False
+            failure = entry["failure"]
+            assert isinstance(failure, Mapping)
+            if entered is None and (
+                entry["wait_duration_ns"] != 0 or entry["max_sample_gap_ns"] != 0
+            ):
+                return False
+            if entry["max_sample_gap_ns"] > entry["wait_duration_ns"]:
+                return False
+            failed_count += 1
+            failures.append(failure)
+        else:
+            return False
+        clock_read_attempts += entry["clock_read_attempts"]
+        confirmation_attempts += entry["confirmation_attempts"]
+        total_wait_duration_ns += entry["wait_duration_ns"]
+        max_wait_duration_ns = max(max_wait_duration_ns, entry["wait_duration_ns"])
+        max_sample_gap_ns = max(max_sample_gap_ns, entry["max_sample_gap_ns"])
+        max_entry_lateness_ns = max(max_entry_lateness_ns, entry["entry_lateness_ns"])
+    expected_last_failure = dict(failures[-1]) if failures else None
+    expected = {
+        "entry_count": len(entries),
+        "completed_count": completed_count,
+        "failed_count": failed_count,
+        "clock_read_attempts": clock_read_attempts,
+        "confirmation_attempts": confirmation_attempts,
+        "total_wait_duration_ns": total_wait_duration_ns,
+        "max_wait_duration_ns": max_wait_duration_ns,
+        "max_sample_gap_ns": max_sample_gap_ns,
+        "max_entry_lateness_ns": max_entry_lateness_ns,
+        "last_failure": expected_last_failure,
+    }
+    if any(wait[key] != expected[key] for key in expected):
+        return False
+    if failed_count > 1 or failed_count != len(entries) - completed_count:
+        return False
+    jobs_bound = all(
+        _u64(job.get("release_tai_ns"))
+        and _u64(job.get("deadline_tai_ns"))
+        and entry["release_tai_ns"] == job.get("release_tai_ns")
+        and job.get("deadline_tai_ns")
+        == job["release_tai_ns"] + KERNEL_TX_REALIZATION_WINDOW_NS
+        and entry["confirmation_attempts"] == (2 if index == 0 else 1)
+        and (
+            (
+                index == 0
+                and entry["completed_tai_ns"] is not None
+                and entry["staging_confirmed_tai_ns"] is not None
+                and entry["dispatch_confirmed_tai_ns"] is not None
+                and entry["completed_tai_ns"]
+                <= entry["staging_confirmed_tai_ns"]
+                <= entry["dispatch_confirmed_tai_ns"]
+                < entry["release_tai_ns"]
+            )
+            or (
+                index != 0
+                and entry["staging_confirmed_tai_ns"] is None
+                and entry["completed_tai_ns"] is not None
+                and entry["dispatch_confirmed_tai_ns"] is not None
+                and entry["completed_tai_ns"]
+                <= entry["dispatch_confirmed_tai_ns"]
+                < entry["release_tai_ns"]
+            )
+        )
+        for index, (entry, job) in enumerate(zip(entries, jobs, strict=False))
+    ) and len(entries) >= len(jobs)
+    # A completed wait precedes packet construction; a later fail-closed path
+    # can therefore leave at most one more completed wait than kernel job.
+    if (
+        not len(jobs) <= len(entries) <= len(jobs) + 1
+        or not len(jobs) <= completed_count <= len(jobs) + 1
+        or not jobs_bound
+        or (
+            len(entries) > len(jobs)
+            and entries[-1]["outcome"] == "selection-reached"
+            and not entries[-1]["tick_zero"]
+            and entries[-1]["confirmation_attempts"] == 0
+        )
+    ):
+        return False
+    return bool(
+        not success
+        or failed_count == 0
+        and completed_count == len(jobs)
+        and completed_count > 0
+    )
 
 
 def kernel_tx_runner_receipt_valid(value: Any) -> bool:
     """Validate Rust-observable kernel timing evidence without capture claims."""
 
-    receipt = _exact_mapping(value, _RUNNER_RECEIPT_KEYS)
-    receipt_schema_version = (
-        receipt.get("schema_version") if receipt is not None else None
+    receipt_schema_version = value.get("schema_version") if isinstance(value, Mapping) else None
+    receipt_keys = (
+        _RUNNER_V6_RECEIPT_KEYS
+        if receipt_schema_version == KERNEL_TX_RUNNER_SCHEMA_VERSION
+        else _RUNNER_RECEIPT_KEYS
+    )
+    receipt = _exact_mapping(value, receipt_keys)
+    nested_schema_version = (
+        KERNEL_TX_RUNNER_V5_SCHEMA_VERSION
+        if receipt_schema_version == KERNEL_TX_RUNNER_SCHEMA_VERSION
+        else receipt_schema_version
     )
     expected_semantics = {
         KERNEL_TX_HISTORICAL_RUNNER_SCHEMA_VERSION: (
@@ -2995,6 +3449,7 @@ def kernel_tx_runner_receipt_valid(value: Any) -> bool:
         2: KERNEL_TX_RUNNER_V2_SEMANTICS,
         KERNEL_TX_RUNNER_V3_SCHEMA_VERSION: KERNEL_TX_RUNNER_V3_SEMANTICS,
         KERNEL_TX_RUNNER_V4_SCHEMA_VERSION: KERNEL_TX_RUNNER_V4_SEMANTICS,
+        KERNEL_TX_RUNNER_V5_SCHEMA_VERSION: KERNEL_TX_RUNNER_V5_SEMANTICS,
         KERNEL_TX_RUNNER_SCHEMA_VERSION: KERNEL_TX_RUNNER_SEMANTICS,
     }.get(receipt_schema_version)
     if (
@@ -3030,6 +3485,16 @@ def kernel_tx_runner_receipt_valid(value: Any) -> bool:
     ):
         return False
     success = receipt["terminal_outcome"] == "complete"
+    jobs = receipt["jobs"]
+    if receipt_schema_version == KERNEL_TX_RUNNER_SCHEMA_VERSION and not (
+        _protected_selection_wait_valid(
+            receipt.get("protected_selection_wait"),
+            defense_start_tai_ns=receipt["defense_start_tai_ns"],
+            jobs=jobs,
+            success=success,
+        )
+    ):
+        return False
     mapping = receipt["clock_mapping"]
     clock_start = receipt["clock_start"]
     clock_end = receipt["clock_end"]
@@ -3054,7 +3519,7 @@ def kernel_tx_runner_receipt_valid(value: Any) -> bool:
         receipt["clock_mapping_valid"] is not True
         or receipt["clock_mapping_error"] is not None
         or clock_end is None
-        or mapping["schema_version"] != receipt_schema_version
+        or mapping["schema_version"] != nested_schema_version
         or mapping["start"] != clock_start
         or mapping["end"] != clock_end
     ):
@@ -3070,7 +3535,6 @@ def kernel_tx_runner_receipt_valid(value: Any) -> bool:
     ):
         return False
     if mapping is None:
-        jobs = receipt["jobs"]
         runtime = receipt.get("runtime_contract")
         if not _runtime_contract_valid(runtime, success=False, jobs=jobs):
             return False
@@ -3086,9 +3550,14 @@ def kernel_tx_runner_receipt_valid(value: Any) -> bool:
                 clock_end=clock_end,
                 clock_mapping_error=receipt["clock_mapping_error"],
                 socket_setup=runtime["socket_setup"],
-                runner_schema_version=receipt_schema_version,
+                runner_schema_version=nested_schema_version,
             )
-            and _runner_aggregate(receipt.get("aggregate"), jobs) is not None
+            and _runner_aggregate(
+                receipt.get("aggregate"),
+                jobs,
+                terminal_outcome=receipt["terminal_outcome"],
+            )
+            is not None
         )
     if receipt["defense_start_monotonic_ns"] is None or receipt["defense_start_tai_ns"] is None:
         return False
@@ -3107,7 +3576,6 @@ def kernel_tx_runner_receipt_valid(value: Any) -> bool:
     ):
         return False
     contract = receipt["qdisc_contract"]
-    jobs = receipt["jobs"]
     runtime = receipt.get("runtime_contract")
     if not _runtime_contract_valid(runtime, success=success, jobs=jobs):
         return False
@@ -3145,10 +3613,21 @@ def kernel_tx_runner_receipt_valid(value: Any) -> bool:
         or jobs[0]["release_tai_ns"] != receipt["defense_start_tai_ns"]
     ):
         return False
-    aggregate = _runner_aggregate(receipt.get("aggregate"), jobs)
+    aggregate = _runner_aggregate(
+        receipt.get("aggregate"),
+        jobs,
+        terminal_outcome=receipt["terminal_outcome"],
+    )
     return bool(
         aggregate is not None
         and aggregate["terminal_outcome"] == receipt["terminal_outcome"]
+        and (
+            success
+            or receipt["primary_error"] is not None
+            or bool(receipt["cleanup_errors"])
+            or bool(receipt["terminal_errors"])
+            or any(job["terminal_outcome"] != "complete" for job in jobs)
+        )
         and (
             not success
             or aggregate["job_count"] > 0

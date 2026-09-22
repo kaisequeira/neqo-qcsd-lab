@@ -10,7 +10,10 @@ import pytest
 
 from qcsd_lab import buflo_study
 from qcsd_lab.fidelity import SCHEDULE_PREFIX_FIELDS, SCHEDULE_QCSD_FIELDS
-from qcsd_lab.kernel_tx import build_observer_topology_receipt
+from qcsd_lab.kernel_tx import (
+    KERNEL_TX_PROTECTED_SELECTION_WAIT_SEMANTICS,
+    build_observer_topology_receipt,
+)
 from qcsd_lab.parameters import (
     PREVIOUS_TIMING_STRESS_INPUT_POLICY,
     PREVIOUS_TIMING_STRESS_V2_INPUT_POLICY,
@@ -18,6 +21,7 @@ from qcsd_lab.parameters import (
     PREVIOUS_TIMING_STRESS_V4_INPUT_POLICY,
     PREVIOUS_TIMING_STRESS_V5_INPUT_POLICY,
     PREVIOUS_TIMING_STRESS_V6_INPUT_POLICY,
+    PREVIOUS_TIMING_STRESS_V7_INPUT_POLICY,
     TIMING_STRESS_INPUT_POLICY,
     validate_parameter_artifact,
 )
@@ -31,6 +35,7 @@ from tests.test_kernel_tx import (
     _runner_wakeup_v12,
     _runner_wakeup_v13,
     _runner_wakeup_v14,
+    _runner_wakeup_v15,
     _topology,
 )
 
@@ -55,7 +60,7 @@ def test_timing_stress_contract_preserves_frozen_campaign_counts_and_dynamic_dra
         "packet_size": 1_200,
         "max_events_per_direction": 6_000,
         "strict_half_open_window_us": 5_000,
-        "contract_schema_version": 7,
+        "contract_schema_version": 8,
         "cadence_semantics": ("inclusive-minimum-prefix-plus-bounded-terminal-whole-cell-drain"),
         "mandatory_prefix_opportunities_per_direction": 5_001,
         "minimum_kernel_timed_outgoing_releases_after_tick_zero_per_visit": 5_000,
@@ -75,12 +80,12 @@ def test_timing_stress_contract_preserves_frozen_campaign_counts_and_dynamic_dra
         "etf_delta_ns": 4_500_000,
         "minimum_adapter_realization_window_ns": 4_999_000,
         "minimum_post_etf_observer_guard_ns": 499_000,
-        "realization_backend": "linux-etf-so-txtime-post-veth-v2",
-        "runner_wakeup_schema_version": 14,
+        "realization_backend": "linux-etf-so-txtime-post-veth-v3",
+        "runner_wakeup_schema_version": 15,
         "legacy_userspace_exact_release_projection": (
             "schema-10-compatibility-fields-retained-and-neutral"
         ),
-        "kernel_tx_runner_receipt_schema_version": 5,
+        "kernel_tx_runner_receipt_schema_version": 6,
         "kernel_tx_evidence_schema_version": 1,
         "observer_topology_receipt_schema_version": 1,
         "physical_outgoing_observer": "router-ingress-post-client-veth-pre-netem",
@@ -127,11 +132,17 @@ def test_timing_stress_parameters_require_narrow_explicit_admission() -> None:
     assert buflo_study._timing_stress_parameter_inputs()["input_policy"] == (
         TIMING_STRESS_INPUT_POLICY
     )
+    assert sha256_file(parameter) == (
+        "9249fd4324c1d24dd6e4d03221b6f92fe4eb6a331b2c756206e91aa318e21285"
+    )
+    assert sha256_file(provenance) == (
+        "d21bfc31c113eaaf01a5f9b2115a6014cf55010371c8a28ed606e0e23555d90b"
+    )
 
     provenance_value = json.loads(provenance.read_text(encoding="utf-8"))
-    assert provenance_value["schema_version"] == 7
+    assert provenance_value["schema_version"] == 8
     assert provenance_value["capture_contract"] == {
-        "schema_version": 7,
+        "schema_version": 8,
         "visits": 12,
         "max_attempts": 1,
         "authoritative_checkpoint": "experiment.json",
@@ -154,12 +165,12 @@ def test_timing_stress_parameters_require_narrow_explicit_admission() -> None:
         "minimum_adapter_realization_window_ns": 4_999_000,
         "minimum_post_etf_observer_guard_ns": 499_000,
         "catch_up": False,
-        "realization_backend": "linux-etf-so-txtime-post-veth-v2",
-        "runner_wakeup_schema_version": 14,
+        "realization_backend": "linux-etf-so-txtime-post-veth-v3",
+        "runner_wakeup_schema_version": 15,
         "legacy_userspace_exact_release_projection": (
             "schema-10-compatibility-fields-retained-and-neutral"
         ),
-        "kernel_tx_runner_receipt_schema_version": 5,
+        "kernel_tx_runner_receipt_schema_version": 6,
         "kernel_tx_evidence_schema_version": 1,
         "observer_topology_receipt_schema_version": 1,
         "physical_outgoing_observer": "router-ingress-post-client-veth-pre-netem",
@@ -202,7 +213,7 @@ def test_schema_two_timing_stress_parameters_remain_historical_not_current() -> 
 
     assert artifact.input_policy == PREVIOUS_TIMING_STRESS_V2_INPUT_POLICY
     assert artifact.input_policy != TIMING_STRESS_INPUT_POLICY
-    assert buflo_study.TIMING_STRESS_PARAMETERS.name == "buflo-timing-stress-v7.json"
+    assert buflo_study.TIMING_STRESS_PARAMETERS.name == "buflo-timing-stress-v8.json"
     assert json.loads(provenance.read_text(encoding="utf-8"))["schema_version"] == 2
 
 
@@ -221,7 +232,7 @@ def test_schema_three_timing_stress_parameters_remain_historical_not_current() -
 
     assert artifact.input_policy == PREVIOUS_TIMING_STRESS_V3_INPUT_POLICY
     assert artifact.input_policy != TIMING_STRESS_INPUT_POLICY
-    assert buflo_study.TIMING_STRESS_PARAMETERS.name == "buflo-timing-stress-v7.json"
+    assert buflo_study.TIMING_STRESS_PARAMETERS.name == "buflo-timing-stress-v8.json"
     assert json.loads(provenance.read_text(encoding="utf-8"))["schema_version"] == 3
 
 
@@ -240,7 +251,7 @@ def test_schema_four_timing_stress_parameters_remain_historical_not_current() ->
 
     assert artifact.input_policy == PREVIOUS_TIMING_STRESS_V4_INPUT_POLICY
     assert artifact.input_policy != TIMING_STRESS_INPUT_POLICY
-    assert buflo_study.TIMING_STRESS_PARAMETERS.name == "buflo-timing-stress-v7.json"
+    assert buflo_study.TIMING_STRESS_PARAMETERS.name == "buflo-timing-stress-v8.json"
     assert json.loads(provenance.read_text(encoding="utf-8"))["schema_version"] == 4
 
 
@@ -259,7 +270,7 @@ def test_schema_five_timing_stress_parameters_remain_historical_not_current() ->
 
     assert artifact.input_policy == PREVIOUS_TIMING_STRESS_V5_INPUT_POLICY
     assert artifact.input_policy != TIMING_STRESS_INPUT_POLICY
-    assert buflo_study.TIMING_STRESS_PARAMETERS.name == "buflo-timing-stress-v7.json"
+    assert buflo_study.TIMING_STRESS_PARAMETERS.name == "buflo-timing-stress-v8.json"
     assert json.loads(provenance.read_text(encoding="utf-8"))["schema_version"] == 5
 
 
@@ -278,8 +289,27 @@ def test_schema_six_timing_stress_parameters_remain_historical_not_current() -> 
 
     assert artifact.input_policy == PREVIOUS_TIMING_STRESS_V6_INPUT_POLICY
     assert artifact.input_policy != TIMING_STRESS_INPUT_POLICY
-    assert buflo_study.TIMING_STRESS_PARAMETERS.name == "buflo-timing-stress-v7.json"
+    assert buflo_study.TIMING_STRESS_PARAMETERS.name == "buflo-timing-stress-v8.json"
     assert json.loads(provenance.read_text(encoding="utf-8"))["schema_version"] == 6
+
+
+def test_schema_seven_timing_stress_parameters_remain_historical_not_current() -> None:
+    parameter = buflo_study.STUDY_ROOT / "buflo-timing-stress-v7.json"
+    provenance = parameter.with_suffix(parameter.suffix + ".provenance.json")
+
+    artifact = validate_parameter_artifact(
+        parameter,
+        provenance_path=provenance,
+        expected_kind="buflo",
+        allow_timing_stress=True,
+        expected_qcsd_profile="research-1200",
+        expected_udp_payload_ceiling=1_200,
+    )
+
+    assert artifact.input_policy == PREVIOUS_TIMING_STRESS_V7_INPUT_POLICY
+    assert artifact.input_policy != TIMING_STRESS_INPUT_POLICY
+    assert buflo_study.TIMING_STRESS_PARAMETERS.name == "buflo-timing-stress-v8.json"
+    assert json.loads(provenance.read_text(encoding="utf-8"))["schema_version"] == 7
 
 
 def test_historical_timing_stress_inputs_remain_byte_identical() -> None:
@@ -319,6 +349,12 @@ def test_historical_timing_stress_inputs_remain_byte_identical() -> None:
         ),
         "buflo-timing-stress-v6.json.provenance.json": (
             "88041052ef3e6dedeb58f2e106ad956afe0afee9540fa6407630e4192ba7b98c"
+        ),
+        "buflo-timing-stress-v7.json": (
+            "9249fd4324c1d24dd6e4d03221b6f92fe4eb6a331b2c756206e91aa318e21285"
+        ),
+        "buflo-timing-stress-v7.json.provenance.json": (
+            "2e5f03363f9e5c40dae9f3f3b71f5a5f5d31a9871b23b537a86ca21b64b82b9d"
         ),
     }
 
@@ -814,7 +850,7 @@ def _patch_small_schedule_contract(
     monkeypatch.setattr(buflo_study, "TIMING_STRESS_MINIMUM_GUARDS_PER_VISIT", 2)
     monkeypatch.setattr(buflo_study, "TIMING_STRESS_MAXIMUM_GUARDS_PER_VISIT", 4)
     # The production terminal validator retains the live ten-second floor.  This
-    # scaled cadence fixture exercises the surrounding schema-5 evidence contract.
+    # scaled cadence fixture exercises the surrounding schema-6 evidence contract.
     monkeypatch.setattr(fidelity, "buflo_terminal_diagnostics_valid", lambda *args, **kwargs: True)
     monkeypatch.setattr(
         fidelity,
@@ -856,15 +892,29 @@ def _patch_small_schedule_contract(
         buflo_study,
         "_timing_stress_kernel_tx_evidence",
         lambda *args, **kwargs: {
-            "realization_backend": "linux-etf-so-txtime-post-veth-v2",
-            "runner_wakeup_schema_version": 14,
+            "realization_backend": "linux-etf-so-txtime-post-veth-v3",
+            "runner_wakeup_schema_version": 15,
             "legacy_userspace_exact_release_projection": {
                 "schema_version": 10,
                 "neutral": True,
             },
-            "runner_receipt_schema_version": 5,
+            "runner_receipt_schema_version": 6,
             "evidence_schema_version": 1,
             "observer_topology_schema_version": 1,
+            "protected_selection_wait": {
+                "schema_version": 1,
+                "semantics": KERNEL_TX_PROTECTED_SELECTION_WAIT_SEMANTICS,
+                "entry_count": opportunities,
+                "completed_count": opportunities,
+                "failed_count": 0,
+                "confirmation_attempts": opportunities + 1,
+                "clock_read_attempts": opportunities * 100,
+                "total_wait_duration_ns": opportunities * 4_100_000,
+                "max_wait_duration_ns": 4_100_000,
+                "max_sample_gap_ns": 100_000,
+                "max_entry_lateness_ns": 1_000_000,
+                "last_failure": None,
+            },
             "job_count": opportunities,
             "item_count": opportunities,
             "etf_item_count": opportunities,
@@ -901,7 +951,7 @@ def test_timing_stress_schedule_requires_exact_cells_and_credit_bytes(
     evidence = buflo_study._timing_stress_schedule_evidence(
         tmp_path, run, network_receipt={}
     )
-    assert evidence["contract_schema_version"] == 7
+    assert evidence["contract_schema_version"] == 8
     assert evidence["cadence"] == {
         "interval_us": 20,
         "minimum_duration_us": 40,
@@ -919,8 +969,8 @@ def test_timing_stress_schedule_requires_exact_cells_and_credit_bytes(
         "retired": 0,
         "unresolved": 0,
     }
-    assert evidence["realization_backend"] == "linux-etf-so-txtime-post-veth-v2"
-    assert evidence["runner_wakeup_schema_version"] == 14
+    assert evidence["realization_backend"] == "linux-etf-so-txtime-post-veth-v3"
+    assert evidence["runner_wakeup_schema_version"] == 15
     assert evidence["legacy_userspace_exact_release_projection"] == {
         "schema_version": 10,
         "neutral": True,
@@ -1076,13 +1126,15 @@ def _write_kernel_tx_attempt(
     attempt: Path,
     monkeypatch: pytest.MonkeyPatch,
     *,
-    runner_schema_version: int = 5,
+    runner_schema_version: int = 6,
 ) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
     neqo = attempt / "neqo"
     diagnostics = attempt / "diagnostics"
     neqo.mkdir(parents=True)
     diagnostics.mkdir()
-    if runner_schema_version == 5:
+    if runner_schema_version == 6:
+        wakeups = _runner_wakeup_v15()
+    elif runner_schema_version == 5:
         wakeups = _runner_wakeup_v14()
     elif runner_schema_version == 4:
         wakeups = _runner_wakeup_v13()
@@ -1092,8 +1144,8 @@ def _write_kernel_tx_attempt(
         wakeups = _runner_wakeup_v11()
     if runner_schema_version == 2:
         wakeups["buflo_kernel_tx"] = _runner_receipt_v2()
-    elif runner_schema_version not in {1, 3, 4, 5}:
-        raise ValueError("test runner schema must be 1, 2, 3, 4, or 5")
+    elif runner_schema_version not in {1, 3, 4, 5, 6}:
+        raise ValueError("test runner schema must be 1, 2, 3, 4, 5, or 6")
     run = {"runner_wakeup_metrics": wakeups}
     run_path = neqo / "run.json"
     run_path.write_text(json.dumps(run), encoding="utf-8")
@@ -1156,13 +1208,27 @@ def test_timing_stress_kernel_tx_evidence_accepts_complete_current_boundary(
         network_receipt=network,
     )
 
-    assert evidence["realization_backend"] == "linux-etf-so-txtime-post-veth-v2"
-    assert evidence["runner_wakeup_schema_version"] == 14
+    assert evidence["realization_backend"] == "linux-etf-so-txtime-post-veth-v3"
+    assert evidence["runner_wakeup_schema_version"] == 15
     assert evidence["legacy_userspace_exact_release_projection"] == {
         "schema_version": 10,
         "neutral": True,
     }
     assert evidence["job_count"] == 1
+    assert evidence["protected_selection_wait"] == {
+        "schema_version": 1,
+        "semantics": KERNEL_TX_PROTECTED_SELECTION_WAIT_SEMANTICS,
+        "entry_count": 1,
+        "completed_count": 1,
+        "failed_count": 0,
+        "confirmation_attempts": 2,
+        "clock_read_attempts": 100,
+        "total_wait_duration_ns": 4_100_000,
+        "max_wait_duration_ns": 4_100_000,
+        "max_sample_gap_ns": 100_000,
+        "max_entry_lateness_ns": 1_000_000,
+        "last_failure": None,
+    }
     assert evidence["etf_item_count"] == 1
     assert evidence["matched_item_count"] == evidence["item_count"] == 2
     assert evidence["max_post_veth_outgoing_release_lateness_ns"] == 200_000
@@ -1180,7 +1246,7 @@ def test_timing_stress_kernel_tx_evidence_rejects_historical_nested_schema(
         runner_schema_version=1,
     )
 
-    with pytest.raises(ValueError, match="current schema-14 kernel-TX evidence"):
+    with pytest.raises(ValueError, match="current schema-15 kernel-TX evidence"):
         buflo_study._timing_stress_kernel_tx_evidence(
             tmp_path,
             run,
@@ -1265,15 +1331,29 @@ def _aggregate_timing(opportunities: int) -> dict[str, Any]:
         "counts": [0, 0, 0, 0, 0, 0, releases, 0],
     }
     kernel = {
-        "realization_backend": "linux-etf-so-txtime-post-veth-v2",
-        "runner_wakeup_schema_version": 14,
+        "realization_backend": "linux-etf-so-txtime-post-veth-v3",
+        "runner_wakeup_schema_version": 15,
         "legacy_userspace_exact_release_projection": {
             "schema_version": 10,
             "neutral": True,
         },
-        "runner_receipt_schema_version": 5,
+        "runner_receipt_schema_version": 6,
         "evidence_schema_version": 1,
         "observer_topology_schema_version": 1,
+        "protected_selection_wait": {
+            "schema_version": 1,
+            "semantics": KERNEL_TX_PROTECTED_SELECTION_WAIT_SEMANTICS,
+            "entry_count": opportunities,
+            "completed_count": opportunities,
+            "failed_count": 0,
+            "confirmation_attempts": opportunities + 1,
+            "clock_read_attempts": opportunities * 100,
+            "total_wait_duration_ns": opportunities * 4_100_000,
+            "max_wait_duration_ns": 4_100_000,
+            "max_sample_gap_ns": 100_000,
+            "max_entry_lateness_ns": 1_000_000,
+            "last_failure": None,
+        },
         "job_count": opportunities,
         "item_count": opportunities * 2,
         "etf_item_count": opportunities,
@@ -1298,7 +1378,7 @@ def _aggregate_timing(opportunities: int) -> dict[str, Any]:
         "network_receipt_sha256": "5" * 64,
     }
     return {
-        "contract_schema_version": 7,
+        "contract_schema_version": 8,
         "cadence": {
             "interval_us": 20_000,
             "minimum_duration_us": 100_000_000,
@@ -1330,8 +1410,8 @@ def _aggregate_timing(opportunities: int) -> dict[str, Any]:
         },
         "max_schedule_outgoing_terminal_lateness_us": 4_999,
         "max_incoming_credit_advertisement_delay_us": 4_999,
-        "realization_backend": "linux-etf-so-txtime-post-veth-v2",
-        "runner_wakeup_schema_version": 14,
+        "realization_backend": "linux-etf-so-txtime-post-veth-v3",
+        "runner_wakeup_schema_version": 15,
         "legacy_userspace_exact_release_projection": {
             "schema_version": 10,
             "neutral": True,
@@ -1390,6 +1470,19 @@ def test_timing_stress_aggregate_binds_dynamic_mixed_visit_counts() -> None:
         "nonneutral_visits": 0,
     }
     assert aggregate["kernel_tx"]["job_count"] == 62_892
+    assert aggregate["kernel_tx"]["protected_selection_wait"] == {
+        "schema_version": 1,
+        "semantics": KERNEL_TX_PROTECTED_SELECTION_WAIT_SEMANTICS,
+        "entry_count": 62_892,
+        "completed_count": 62_892,
+        "failed_count": 0,
+        "confirmation_attempts": 62_904,
+        "clock_read_attempts": 6_289_200,
+        "total_wait_duration_ns": 257_857_200_000,
+        "max_wait_duration_ns": 4_100_000,
+        "max_sample_gap_ns": 100_000,
+        "max_entry_lateness_ns": 1_000_000,
+    }
     assert aggregate["kernel_tx"]["etf_item_count"] == 62_892
     assert aggregate["kernel_tx"]["item_count"] == 125_784
     assert aggregate["kernel_tx"]["matched_item_count"] == 125_784
@@ -1442,11 +1535,56 @@ def test_current_timing_stress_aggregate_rejects_nested_schema_substitution(
 @pytest.mark.parametrize(
     "tamper",
     (
+        "extra-field",
+        "schema",
+        "failure",
+        "count",
+        "confirmations",
+        "attempts",
+        "gap",
+        "lateness",
+    ),
+)
+def test_current_timing_stress_aggregate_rejects_protected_wait_tamper(
+    tamper: str,
+) -> None:
+    timing = _aggregate_timing(5_001)
+    wait = timing["kernel_tx"]["protected_selection_wait"]
+    if tamper == "extra-field":
+        wait["unexpected"] = 0
+    elif tamper == "schema":
+        wait["schema_version"] = 2
+    elif tamper == "failure":
+        wait["failed_count"] = 1
+    elif tamper == "count":
+        wait["completed_count"] -= 1
+    elif tamper == "confirmations":
+        wait["confirmation_attempts"] -= 1
+    elif tamper == "attempts":
+        wait["clock_read_attempts"] = wait["entry_count"]
+    elif tamper == "gap":
+        wait["max_sample_gap_ns"] = wait["max_wait_duration_ns"] + 1
+    else:
+        wait["max_entry_lateness_ns"] = 5_000_000
+
+    with pytest.raises(ValueError, match="protected-selection wait evidence"):
+        buflo_study._timing_stress_aggregate(
+            [{"timing": copy.deepcopy(timing)} for _ in range(12)]
+        )
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    (
         "above-maximum",
         "sensitivity",
         "failure-count",
         "kernel-job-count",
         "legacy-projection",
+        "protected-failure",
+        "protected-count",
+        "protected-semantics",
+        "protected-gap",
     ),
 )
 def test_timing_stress_dynamic_aggregate_rejects_contract_tamper(tamper: str) -> None:
@@ -1463,14 +1601,23 @@ def test_timing_stress_dynamic_aggregate_rejects_contract_tamper(tamper: str) ->
         aggregate["zero_failure_counts"]["late_post_veth_outgoing_releases"] = 1
     elif tamper == "kernel-job-count":
         aggregate["kernel_tx"]["job_count"] -= 1
-    else:
+    elif tamper == "legacy-projection":
         aggregate["legacy_userspace_exact_release_projection"]["nonneutral_visits"] = 1
+    elif tamper == "protected-failure":
+        aggregate["kernel_tx"]["protected_selection_wait"]["failed_count"] = 1
+    elif tamper == "protected-count":
+        aggregate["kernel_tx"]["protected_selection_wait"]["completed_count"] -= 1
+    elif tamper == "protected-semantics":
+        aggregate["kernel_tx"]["protected_selection_wait"]["semantics"] = "drifted"
+    else:
+        wait = aggregate["kernel_tx"]["protected_selection_wait"]
+        wait["max_sample_gap_ns"] = wait["max_wait_duration_ns"] + 1
 
     with pytest.raises(ValueError, match="aggregate zero-failure gate"):
         buflo_study._validate_timing_stress_aggregate(aggregate)
 
 
-def test_schema_seven_regression_receipt_binds_stress_rejects_aborted_five_and_six_and_preserves_four(
+def test_schema_eight_regression_receipt_binds_stress_rejects_superseded_five_through_seven(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     called: list[object] = []
@@ -1506,19 +1653,19 @@ def test_schema_seven_regression_receipt_binds_stress_rejects_aborted_five_and_s
     }
     stress_binding = {"path": "/evidence/buflo-timing-stress/receipt.json", "sha256": "0" * 64}
     current = {
-        "schema_version": 7,
+        "schema_version": 8,
         **common,
         "timing_stress": stress_binding,
     }
     assert buflo_study.validate_controlled_campaign_receipt(current) == current
 
-    for schema_version in (5, 6):
+    for schema_version in (5, 6, 7):
         previous = {
             "schema_version": schema_version,
             **common,
             "timing_stress": stress_binding,
         }
-        with pytest.raises(ValueError, match="schema 5 or 6"):
+        with pytest.raises(ValueError, match="schema 5, 6, or 7"):
             buflo_study.validate_controlled_campaign_receipt(previous)
     assert called == [stress_binding]
 
@@ -1555,7 +1702,7 @@ def test_current_and_standalone_regression_stress_binding_rejects_every_identity
         stress["cohort_version"] = 38
     binding = {"path": str(binding_path), "sha256": "0" * 64}
     controlled = {
-        "schema_version": 7,
+        "schema_version": 8,
         "network": network,
         "cohort_version": 37,
         "timing_stress": binding,
@@ -1593,7 +1740,7 @@ def test_current_regression_stress_binding_accepts_exact_sibling(
     }
     binding = {"path": str(receipt_path), "sha256": "0" * 64}
     controlled = {
-        "schema_version": 7,
+        "schema_version": 8,
         "network": network,
         "cohort_version": 37,
         "timing_stress": binding,

@@ -506,7 +506,7 @@ def _runner_receipt_v5() -> dict[str, object]:
 
     raw = _runner_receipt_v4()
     raw["schema_version"] = 5
-    raw["semantics"] = KERNEL_TX_RUNNER_SEMANTICS
+    raw["semantics"] = kernel_tx.KERNEL_TX_RUNNER_V5_SEMANTICS
     mapping = raw["clock_mapping"]
     assert isinstance(mapping, dict)
     mapping["schema_version"] = 5
@@ -516,6 +516,112 @@ def _runner_receipt_v5() -> dict[str, object]:
     for job in raw["jobs"]:
         for item in job["items"]:
             item["schema_version"] = 5
+    return raw
+
+
+def _runner_receipt_v6() -> dict[str, object]:
+    """Upgrade the frozen schema-five fixture with protected-selection evidence."""
+
+    raw = _runner_receipt_v5()
+    raw["schema_version"] = 6
+    raw["semantics"] = KERNEL_TX_RUNNER_SEMANTICS
+    entry = {
+        "schema_version": 1,
+        "slot": 0,
+        "tick": 0,
+        "tick_zero": True,
+        "admission_tai_ns": _RELEASE_TAI_NS - 10_000_000,
+        "selection_tai_ns": _RELEASE_TAI_NS - 5_000_000,
+        "release_tai_ns": _RELEASE_TAI_NS,
+        "entered_tai_ns": _RELEASE_TAI_NS - 9_000_000,
+        "completed_tai_ns": _RELEASE_TAI_NS - 4_900_000,
+        "staging_confirmed_tai_ns": _RELEASE_TAI_NS - 4_800_000,
+        "dispatch_confirmed_tai_ns": _RELEASE_TAI_NS - 4_700_000,
+        "clock_read_attempts": 100,
+        "confirmation_attempts": 2,
+        "wait_duration_ns": 4_100_000,
+        "max_sample_gap_ns": 100_000,
+        "entry_lateness_ns": 1_000_000,
+        "outcome": "selection-reached",
+        "failure": None,
+    }
+    raw["protected_selection_wait"] = {
+        "schema_version": 1,
+        "semantics": kernel_tx.KERNEL_TX_PROTECTED_SELECTION_WAIT_SEMANTICS,
+        "entries": [entry],
+        "entry_count": 1,
+        "completed_count": 1,
+        "failed_count": 0,
+        "clock_read_attempts": 100,
+        "confirmation_attempts": 2,
+        "total_wait_duration_ns": 4_100_000,
+        "max_wait_duration_ns": 4_100_000,
+        "max_sample_gap_ns": 100_000,
+        "max_entry_lateness_ns": 1_000_000,
+        "last_failure": None,
+    }
+    return raw
+
+
+def _runner_receipt_v6_selection_entry_late() -> dict[str, object]:
+    raw = _runner_receipt_v6()
+    release = _RELEASE_TAI_NS + kernel_tx.KERNEL_TX_CADENCE_NS
+    entered = release - kernel_tx.KERNEL_TX_REALIZATION_WINDOW_NS
+    detail = (
+        "BuFLO kernel slot 2 entered its protected CLOCK_TAI wait at or after "
+        "the selection boundary"
+    )
+    failure = {
+        "schema_version": 1,
+        "slot": 2,
+        "tick": 1,
+        "tick_zero": False,
+        "kind": "selection-entry-late",
+        "detail": detail,
+        "admission_tai_ns": release - 2 * kernel_tx.KERNEL_TX_REALIZATION_WINDOW_NS,
+        "selection_tai_ns": entered,
+        "release_tai_ns": release,
+        "entered_tai_ns": entered,
+        "previous_tai_ns": entered,
+        "observed_tai_ns": entered,
+        "clock_read_attempts": 1,
+    }
+    entry = {
+        "schema_version": 1,
+        "slot": 2,
+        "tick": 1,
+        "tick_zero": False,
+        "admission_tai_ns": failure["admission_tai_ns"],
+        "selection_tai_ns": entered,
+        "release_tai_ns": release,
+        "entered_tai_ns": entered,
+        "completed_tai_ns": None,
+        "staging_confirmed_tai_ns": None,
+        "dispatch_confirmed_tai_ns": None,
+        "clock_read_attempts": 1,
+        "confirmation_attempts": 0,
+        "wait_duration_ns": 0,
+        "max_sample_gap_ns": 0,
+        "entry_lateness_ns": kernel_tx.KERNEL_TX_REALIZATION_WINDOW_NS,
+        "outcome": "failed",
+        "failure": failure,
+    }
+    wait = raw["protected_selection_wait"]
+    wait["entries"].append(entry)
+    wait.update(
+        {
+            "entry_count": 2,
+            "completed_count": 1,
+            "failed_count": 1,
+            "clock_read_attempts": 101,
+            "confirmation_attempts": 2,
+            "max_entry_lateness_ns": kernel_tx.KERNEL_TX_REALIZATION_WINDOW_NS,
+            "last_failure": copy.deepcopy(failure),
+        }
+    )
+    raw["terminal_outcome"] = "failed"
+    raw["primary_error"] = detail
+    raw["aggregate"]["terminal_outcome"] = "failed"
     return raw
 
 
@@ -725,6 +831,21 @@ def _runner_wakeup_v14() -> dict[str, object]:
                 "instant-authoritative-fallback-v1"
             ),
             "buflo_kernel_tx": _runner_receipt_v5(),
+        }
+    )
+    return value
+
+
+def _runner_wakeup_v15() -> dict[str, object]:
+    value = _runner_wakeup_receipt(10)
+    value.update(
+        {
+            "schema_version": 15,
+            "semantics": fidelity.RUNNER_WAKEUP_V15_SEMANTICS,
+            "buflo_exact_release_active_wait_poll_source": (
+                "instant-authoritative-fallback-v1"
+            ),
+            "buflo_kernel_tx": _runner_receipt_v6(),
         }
     )
     return value
@@ -1148,6 +1269,216 @@ def test_runner_schema_fourteen_binds_current_schema_five_kernel_tx() -> None:
     wakeups["buflo_kernel_tx"] = historical
     assert kernel_tx_runner_receipt_success_valid(historical)
     assert not fidelity._runner_wakeup_v14_valid(wakeups)
+
+
+def test_runner_schema_fifteen_binds_current_schema_six_kernel_tx() -> None:
+    wakeups = _runner_wakeup_v15()
+
+    assert kernel_tx_runner_receipt_success_valid(wakeups["buflo_kernel_tx"])
+    assert fidelity._runner_wakeup_v15_valid(wakeups)
+    assert fidelity._runner_wakeup_metrics_valid(wakeups)
+    assert capture_session._runner_wakeup_metrics_valid(wakeups)
+
+    historical = _runner_receipt_v5()
+    wakeups["buflo_kernel_tx"] = historical
+    assert kernel_tx_runner_receipt_success_valid(historical)
+    assert not fidelity._runner_wakeup_v15_valid(wakeups)
+
+
+def test_kernel_tx_schema_six_protected_selection_wait_is_fail_closed() -> None:
+    assert kernel_tx_runner_receipt_success_valid(_runner_receipt_v6())
+    failed = _runner_receipt_v6_selection_entry_late()
+    assert kernel_tx_runner_receipt_valid(failed)
+    assert not kernel_tx_runner_receipt_success_valid(failed)
+
+    mismatched_failure = copy.deepcopy(failed)
+    mismatched_failure["protected_selection_wait"]["entries"][1]["failure"][
+        "previous_tai_ns"
+    ] -= 1
+    assert not kernel_tx_runner_receipt_valid(mismatched_failure)
+
+    late_success = _runner_receipt_v6()
+    late_entry = late_success["protected_selection_wait"]["entries"][0]
+    late_entry.update(
+        {
+            "entered_tai_ns": _RELEASE_TAI_NS - 5_000_000,
+            "entry_lateness_ns": 5_000_000,
+            "wait_duration_ns": 100_000,
+            "max_sample_gap_ns": 100_000,
+        }
+    )
+    late_wait = late_success["protected_selection_wait"]
+    late_wait.update(
+        {
+            "total_wait_duration_ns": 100_000,
+            "max_wait_duration_ns": 100_000,
+            "max_sample_gap_ns": 100_000,
+            "max_entry_lateness_ns": 5_000_000,
+        }
+    )
+    assert not kernel_tx_runner_receipt_valid(late_success)
+
+    under_sampled_success = _runner_receipt_v6()
+    under_sampled_success["protected_selection_wait"]["entries"][0][
+        "clock_read_attempts"
+    ] = 2
+    under_sampled_success["protected_selection_wait"]["clock_read_attempts"] = 2
+    assert not kernel_tx_runner_receipt_valid(under_sampled_success)
+
+    mutations = (
+        lambda raw: raw["protected_selection_wait"].update(unexpected=None),
+        lambda raw: raw["protected_selection_wait"].update(entry_count=2),
+        lambda raw: raw["protected_selection_wait"].update(completed_count=0),
+        lambda raw: raw["protected_selection_wait"].update(clock_read_attempts=99),
+        lambda raw: raw["protected_selection_wait"].update(
+            total_wait_duration_ns=4_099_999
+        ),
+        lambda raw: raw["protected_selection_wait"]["entries"][0].update(slot=2),
+        lambda raw: raw["protected_selection_wait"]["entries"][0].update(tick_zero=False),
+        lambda raw: raw["protected_selection_wait"]["entries"][0].update(
+            admission_tai_ns=_RELEASE_TAI_NS - 10_000_001
+        ),
+        lambda raw: raw["protected_selection_wait"]["entries"][0].update(
+            completed_tai_ns=_RELEASE_TAI_NS
+        ),
+        lambda raw: raw["protected_selection_wait"]["entries"][0].pop(
+            "staging_confirmed_tai_ns"
+        ),
+        lambda raw: raw["protected_selection_wait"]["entries"][0].update(
+            staging_confirmed_tai_ns=_RELEASE_TAI_NS - 5_000_000
+        ),
+        lambda raw: raw["protected_selection_wait"]["entries"][0].update(
+            dispatch_confirmed_tai_ns=_RELEASE_TAI_NS - 4_900_001
+        ),
+        lambda raw: raw["protected_selection_wait"]["entries"][0].update(
+            dispatch_confirmed_tai_ns=_RELEASE_TAI_NS
+        ),
+        lambda raw: raw["protected_selection_wait"]["entries"][0].update(
+            max_sample_gap_ns=4_100_001
+        ),
+        lambda raw: raw["protected_selection_wait"]["entries"][0].update(
+            failure={}
+        ),
+    )
+    for mutate in mutations:
+        raw = _runner_receipt_v6()
+        mutate(raw)
+        assert not kernel_tx_runner_receipt_valid(raw)
+
+
+@pytest.mark.parametrize("confirmation_attempts", (1, 2))
+def test_kernel_tx_schema_six_retains_tick_zero_confirmation_failure_phase(
+    confirmation_attempts: int,
+) -> None:
+    raw = _runner_receipt_v6()
+    wait = copy.deepcopy(raw["protected_selection_wait"])
+    entry = wait["entries"][0]
+    if confirmation_attempts == 1:
+        entry["staging_confirmed_tai_ns"] = None
+        previous = entry["completed_tai_ns"]
+    else:
+        previous = entry["staging_confirmed_tai_ns"]
+    entry["dispatch_confirmed_tai_ns"] = None
+    entry["confirmation_attempts"] = confirmation_attempts
+    detail = "synthetic protected-selection confirmation CLOCK_TAI read failure"
+    failure = {
+        "schema_version": 1,
+        "slot": 0,
+        "tick": 0,
+        "tick_zero": True,
+        "kind": "clock-read-error",
+        "detail": detail,
+        "admission_tai_ns": entry["admission_tai_ns"],
+        "selection_tai_ns": entry["selection_tai_ns"],
+        "release_tai_ns": entry["release_tai_ns"],
+        "entered_tai_ns": entry["entered_tai_ns"],
+        "previous_tai_ns": previous,
+        "observed_tai_ns": None,
+        "clock_read_attempts": entry["clock_read_attempts"],
+    }
+    entry["outcome"] = "failed"
+    entry["failure"] = failure
+    wait.update(
+        {
+            "completed_count": 0,
+            "failed_count": 1,
+            "confirmation_attempts": confirmation_attempts,
+            "last_failure": copy.deepcopy(failure),
+        }
+    )
+
+    assert kernel_tx._protected_selection_wait_valid(
+        wait,
+        defense_start_tai_ns=_RELEASE_TAI_NS,
+        jobs=[],
+        success=False,
+    )
+
+    stale_phase = copy.deepcopy(wait)
+    stale_phase["entries"][0]["staging_confirmed_tai_ns"] = (
+        _RELEASE_TAI_NS - 4_800_000
+        if confirmation_attempts == 1
+        else None
+    )
+    assert not kernel_tx._protected_selection_wait_valid(
+        stale_phase,
+        defense_start_tai_ns=_RELEASE_TAI_NS,
+        jobs=[],
+        success=False,
+    )
+
+    wrong_previous = copy.deepcopy(wait)
+    wrong_previous["entries"][0]["failure"]["previous_tai_ns"] -= 1
+    wrong_previous["last_failure"]["previous_tai_ns"] -= 1
+    assert not kernel_tx._protected_selection_wait_valid(
+        wrong_previous,
+        defense_start_tai_ns=_RELEASE_TAI_NS,
+        jobs=[],
+        success=False,
+    )
+
+    under_counted_reads = copy.deepcopy(wait)
+    minimum_minus_one = 1 + confirmation_attempts
+    under_counted_reads["entries"][0]["clock_read_attempts"] = minimum_minus_one
+    under_counted_reads["entries"][0]["failure"][
+        "clock_read_attempts"
+    ] = minimum_minus_one
+    under_counted_reads["clock_read_attempts"] = minimum_minus_one
+    under_counted_reads["last_failure"]["clock_read_attempts"] = minimum_minus_one
+    assert not kernel_tx._protected_selection_wait_valid(
+        under_counted_reads,
+        defense_start_tai_ns=_RELEASE_TAI_NS,
+        jobs=[],
+        success=False,
+    )
+
+
+def test_kernel_tx_schema_six_accepts_terminal_tick_zero_wait_before_confirmation() -> None:
+    raw = _runner_receipt_v6()
+    wait = copy.deepcopy(raw["protected_selection_wait"])
+    entry = wait["entries"][0]
+    entry.update(
+        {
+            "staging_confirmed_tai_ns": None,
+            "dispatch_confirmed_tai_ns": None,
+            "clock_read_attempts": 2,
+            "confirmation_attempts": 0,
+        }
+    )
+    wait.update({"clock_read_attempts": 2, "confirmation_attempts": 0})
+
+    assert kernel_tx._protected_selection_wait_valid(
+        wait,
+        defense_start_tai_ns=_RELEASE_TAI_NS,
+        jobs=[],
+        success=False,
+    )
+    assert not kernel_tx._protected_selection_wait_valid(
+        wait,
+        defense_start_tai_ns=_RELEASE_TAI_NS,
+        jobs=[],
+        success=True,
+    )
 
 
 def test_runner_schema_eleven_preserves_failed_before_arm_without_eligibility() -> None:
@@ -1748,7 +2079,7 @@ def test_kernel_tx_schema_two_accepts_controller_finalization_failure() -> None:
     assert not kernel_tx_runner_receipt_valid(current)
 
 
-@pytest.mark.parametrize("runner_schema_version", (2, 3, 4, 5))
+@pytest.mark.parametrize("runner_schema_version", (2, 3, 4, 5, 6))
 def test_failed_final_job_may_end_before_its_nominal_deadline(
     runner_schema_version: int,
 ) -> None:
@@ -1772,6 +2103,7 @@ def test_failed_final_job_may_end_before_its_nominal_deadline(
         3: _runner_receipt_v3,
         4: _runner_receipt_v4,
         5: _runner_receipt_v5,
+        6: _runner_receipt_v6,
     }[runner_schema_version]
     failed = runner_factory()
     item = failed["jobs"][0]["items"][1]
@@ -2054,7 +2386,7 @@ def test_kernel_tx_schema_two_retains_large_monotonic_drift_as_exact_diagnostic(
     assert not kernel_tx_runner_receipt_valid(current)
 
 
-def test_kernel_tx_schema_five_constants_match_the_rust_producer() -> None:
+def test_kernel_tx_schema_six_constants_match_the_rust_producer() -> None:
     source = (Path(__file__).parents[1] / "neqo-qcsd/neqo-bin/src/qcsd/mod.rs").read_text(
         encoding="utf-8"
     )
@@ -2064,6 +2396,17 @@ def test_kernel_tx_schema_five_constants_match_the_rust_producer() -> None:
     )
     assert runner_line.endswith('";')
     assert KERNEL_TX_RUNNER_SEMANTICS == runner_line[len(runner_prefix) : -2]
+    protected_prefix = (
+        'const BUFLO_KERNEL_PROTECTED_SELECTION_WAIT_SEMANTICS: &str = "'
+    )
+    protected_line = next(
+        line for line in source.splitlines() if line.startswith(protected_prefix)
+    )
+    assert protected_line.endswith('";')
+    assert (
+        kernel_tx.KERNEL_TX_PROTECTED_SELECTION_WAIT_SEMANTICS
+        == protected_line[len(protected_prefix) : -2]
+    )
     mapping_prefix = 'const BUFLO_KERNEL_CLOCK_MAPPING_SEMANTICS: &str = "'
     mapping_line = next(
         line for line in source.splitlines() if line.startswith(mapping_prefix)
@@ -2074,7 +2417,7 @@ def test_kernel_tx_schema_five_constants_match_the_rust_producer() -> None:
         == mapping_line[len(mapping_prefix) : -2]
     )
     assert "const BUFLO_KERNEL_TX_ETF_DELTA: Duration = Duration::from_micros(4_500);" in source
-    assert "const BUFLO_KERNEL_TX_RECEIPT_SCHEMA_VERSION: u32 = 5;" in source
+    assert "const BUFLO_KERNEL_TX_RECEIPT_SCHEMA_VERSION: u32 = 6;" in source
     assert "const BUFLO_KERNEL_ITEM_RECEIPT_SCHEMA_VERSION: u32 = 5;" in source
     assert "const BUFLO_KERNEL_CLOCK_MAPPING_SCHEMA_VERSION: u32 = 5;" in source
 
@@ -2090,10 +2433,12 @@ def test_kernel_tx_schema_five_constants_match_the_rust_producer() -> None:
 def test_kernel_tx_etf_delta_is_versioned_and_cross_pairs_fail_closed() -> None:
     historical = _runner_receipt_v3()
     frozen = _runner_receipt_v4()
-    current = _runner_receipt_v5()
+    tai_deadline = _runner_receipt_v5()
+    current = _runner_receipt_v6()
 
     assert historical["qdisc_contract"]["delta_ns"] == 4_000_000
     assert frozen["qdisc_contract"]["delta_ns"] == 4_500_000
+    assert tai_deadline["qdisc_contract"]["delta_ns"] == 4_500_000
     assert current["qdisc_contract"]["delta_ns"] == 4_500_000
     assert current["qdisc_contract"]["delta_ns"] < min(
         kernel_tx.KERNEL_TX_ADAPTER_WINDOW_NS
@@ -2105,6 +2450,7 @@ def test_kernel_tx_etf_delta_is_versioned_and_cross_pairs_fail_closed() -> None:
     )
     assert kernel_tx_runner_receipt_success_valid(historical)
     assert kernel_tx_runner_receipt_success_valid(frozen)
+    assert kernel_tx_runner_receipt_success_valid(tai_deadline)
     assert kernel_tx_runner_receipt_success_valid(current)
 
     for invalid_delta_ns in (0, 4_999_000, 5_000_000):
@@ -2367,7 +2713,7 @@ def test_failed_runner_retains_create_only_raw_qdisc_observation(
     assert path.read_bytes() == original
 
 
-@pytest.mark.parametrize("runner_schema_version", [1, 2, 3, 4, 5])
+@pytest.mark.parametrize("runner_schema_version", [1, 2, 3, 4, 5, 6])
 def test_runner_kernel_tx_serialises_end_clock_mapping_failure_after_jobs(
     runner_schema_version: int,
 ) -> None:
@@ -2377,8 +2723,9 @@ def test_runner_kernel_tx_serialises_end_clock_mapping_failure_after_jobs(
         3: _runner_receipt_v3,
         4: _runner_receipt_v4,
         5: _runner_receipt_v5,
+        6: _runner_receipt_v6,
     }[runner_schema_version]()
-    if runner_schema_version in {2, 3, 4, 5}:
+    if runner_schema_version in {2, 3, 4, 5, 6}:
         # Preserve producer ordering while moving the retained post-TX
         # MONOTONIC offset away from the direct enqueue TAI bracket.  Historical
         # schema two treated that offset overlap as a hard predicate; schema
@@ -2428,7 +2775,7 @@ def test_runner_kernel_tx_serialises_end_clock_mapping_failure_after_jobs(
         item["terminal_error"] = "final_conservative_envelope_validation_failed"
         item["terminal_error_detail"] = (
             _schema_three_unmapped_error_detail(item)
-            if runner_schema_version in {3, 4, 5}
+            if runner_schema_version in {3, 4, 5, 6}
             else (
                 _schema_two_unmapped_error_detail(item)
                 if runner_schema_version == 2
@@ -2451,7 +2798,7 @@ def test_runner_kernel_tx_serialises_end_clock_mapping_failure_after_jobs(
     assert kernel_tx_runner_receipt_valid(raw)
     assert not kernel_tx_runner_receipt_success_valid(raw)
 
-    if runner_schema_version in {2, 3, 4, 5}:
+    if runner_schema_version in {2, 3, 4, 5, 6}:
         expected_first_consistency = (
             "false" if runner_schema_version == 2 else "true"
         )

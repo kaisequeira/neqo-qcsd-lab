@@ -91,15 +91,16 @@ HISTORICAL_MULTI_ORIGIN_V36_SOURCE = {
     "neqo_pinned_commit": "fb699636c191e91848ffcce859c43bb4d69f7d94",
 }
 PREVIOUS_TIMING_STRESS_SCHEMA_VERSION = 2
-TIMING_STRESS_SCHEMA_VERSION = 7
-TIMING_STRESS_SEED_NAMESPACE = "buflo-timing-stress-v7"
+TIMING_STRESS_SCHEMA_VERSION = 8
+TIMING_STRESS_SEED_NAMESPACE = "buflo-timing-stress-v8"
 TIMING_STRESS_ARTIFACT_TYPE = "qcsd-buflo-timing-stress-execution"
 TIMING_STRESS_CHECKPOINT_TYPE = "qcsd-buflo-timing-stress-checkpoint"
 TIMING_STRESS_ATTEMPT_ERROR_TYPE = "qcsd-buflo-timing-stress-attempt-error"
 TIMING_STRESS_ATTEMPT_ERROR_SCHEMA_VERSION = 1
 ABORTED_TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION = 5
 SUPERSEDED_TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION = 6
-TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION = 7
+PREVIOUS_TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION = 7
+TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION = 8
 CONTROLLED_NETWORK_RECEIPT_SCHEMA_VERSION = 2
 KERNEL_TX_CONTROLLED_NETWORK_RECEIPT_ENV = "QCSD_KERNEL_TX_CONTROLLED_NETWORK_RECEIPT_B64"
 STUDY_ENVIRONMENT_LEGACY_B64_ENV = "QCSD_STUDY_ENVIRONMENT_B64"
@@ -108,7 +109,7 @@ STUDY_ENVIRONMENT_CONTAINER_PATH = Path("/run/qcsd-study-environment.json")
 STUDY_ENVIRONMENT_MAX_BYTES = 64 * 1024 * 1024
 STUDY_ROOT = LAB_ROOT / "config/buflo-study/v1"
 STUDY_PLAN = STUDY_ROOT / "study.json"
-TIMING_STRESS_PARAMETERS = STUDY_ROOT / "buflo-timing-stress-v7.json"
+TIMING_STRESS_PARAMETERS = STUDY_ROOT / "buflo-timing-stress-v8.json"
 TIMING_STRESS_PARAMETERS_PROVENANCE = TIMING_STRESS_PARAMETERS.with_suffix(
     TIMING_STRESS_PARAMETERS.suffix + ".provenance.json"
 )
@@ -145,9 +146,9 @@ TIMING_STRESS_WINDOW_US = 5_000
 TIMING_STRESS_ETF_DELTA_NS = 4_500_000
 TIMING_STRESS_MINIMUM_ADAPTER_WINDOW_NS = 4_999_000
 TIMING_STRESS_MINIMUM_POST_ETF_OBSERVER_GUARD_NS = 499_000
-TIMING_STRESS_REALIZATION_BACKEND = "linux-etf-so-txtime-post-veth-v2"
-TIMING_STRESS_RUNNER_WAKEUP_SCHEMA_VERSION = 14
-TIMING_STRESS_KERNEL_TX_RUNNER_RECEIPT_SCHEMA_VERSION = 5
+TIMING_STRESS_REALIZATION_BACKEND = "linux-etf-so-txtime-post-veth-v3"
+TIMING_STRESS_RUNNER_WAKEUP_SCHEMA_VERSION = 15
+TIMING_STRESS_KERNEL_TX_RUNNER_RECEIPT_SCHEMA_VERSION = 6
 TIMING_STRESS_TXTIME_DROP_TIMESTAMP_SEMANTICS = (
     "requested-tai-correlation-context-never-transmit-evidence"
 )
@@ -1123,9 +1124,10 @@ def validate_controlled_campaign_receipt(
     if schema_version in {
         ABORTED_TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION,
         SUPERSEDED_TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION,
+        PREVIOUS_TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION,
     }:
         raise ValueError(
-            "controlled campaign receipt schema 5 or 6 belongs to a failed or "
+            "controlled campaign receipt schema 5, 6, or 7 belongs to a failed or "
             "superseded timing-stress lineage and cannot authorise the current contract"
         )
     if not isinstance(value, Mapping) or not (
@@ -4866,7 +4868,7 @@ def _timing_stress_parameter_inputs() -> dict[str, Any]:
     if parameter != expected_parameter:
         raise ValueError("timing-stress parameters must change only canonical minimum_duration_us")
     expected_provenance = {
-        "schema_version": 7,
+        "schema_version": TIMING_STRESS_SCHEMA_VERSION,
         "artifact_type": "qcsd-buflo-timing-stress-parameters",
         "status": "controlled-test-only",
         "production_ready": False,
@@ -5246,7 +5248,7 @@ def _timing_stress_kernel_tx_evidence(
     opportunities: int,
     network_receipt: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Deeply revalidate schema-14 sender and independent post-veth evidence."""
+    """Deeply revalidate schema-15 sender and independent post-veth evidence."""
 
     from .fidelity import (
         RUNNER_WAKEUP_V7_HISTOGRAM_UPPER_BOUNDS,
@@ -5288,15 +5290,23 @@ def _timing_stress_kernel_tx_evidence(
         or not kernel_tx_runner_receipt_success_valid(raw)
     ):
         raise ValueError(
-            "timing-stress requires current schema-14 kernel-TX evidence and a neutral "
+            "timing-stress requires current schema-15 kernel-TX evidence and a neutral "
             "schema-10 projection"
         )
     raw_aggregate = raw["aggregate"]
+    protected_wait = raw["protected_selection_wait"]
     if (
         raw_aggregate.get("job_count") != opportunities
         or raw_aggregate.get("etf_item_count") != opportunities
+        or protected_wait.get("entry_count") != opportunities
+        or protected_wait.get("completed_count") != opportunities
+        or protected_wait.get("failed_count") != 0
+        or protected_wait.get("confirmation_attempts") != opportunities + 1
+        or protected_wait.get("last_failure") is not None
     ):
-        raise ValueError("timing-stress kernel-TX job inventory differs from its schedule")
+        raise ValueError(
+            "timing-stress kernel-TX job/protected-selection inventory differs from its schedule"
+        )
 
     result = load_json(paths["attempt"])
     topology = result.get("observer_topology_receipt") if isinstance(result, Mapping) else None
@@ -5378,6 +5388,23 @@ def _timing_stress_kernel_tx_evidence(
         "runner_receipt_schema_version": raw["schema_version"],
         "evidence_schema_version": evidence["schema_version"],
         "observer_topology_schema_version": topology["schema_version"],
+        "protected_selection_wait": {
+            key: protected_wait[key]
+            for key in (
+                "schema_version",
+                "semantics",
+                "entry_count",
+                "completed_count",
+                "failed_count",
+                "clock_read_attempts",
+                "confirmation_attempts",
+                "total_wait_duration_ns",
+                "max_wait_duration_ns",
+                "max_sample_gap_ns",
+                "max_entry_lateness_ns",
+                "last_failure",
+            )
+        },
         "job_count": raw_aggregate["job_count"],
         "item_count": raw_aggregate["item_count"],
         "etf_item_count": raw_aggregate["etf_item_count"],
@@ -6337,6 +6364,8 @@ def _validate_timing_stress_v2_aggregate(aggregate: Mapping[str, Any]) -> None:
 def _timing_stress_aggregate(samples: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """Aggregate the current kernel-timed, independently observed contract."""
 
+    from .kernel_tx import KERNEL_TX_PROTECTED_SELECTION_WAIT_SEMANTICS
+
     timings = [sample.get("timing") for sample in samples]
     if len(timings) != TIMING_STRESS_VISITS or any(
         not isinstance(timing, Mapping) for timing in timings
@@ -6364,6 +6393,52 @@ def _timing_stress_aggregate(samples: Sequence[Mapping[str, Any]]) -> dict[str, 
     ):
         raise ValueError("timing-stress sample does not use the current kernel-TX contract")
     typed_kernels = [dict(kernel) for kernel in kernels if isinstance(kernel, Mapping)]
+    protected_waits = [kernel.get("protected_selection_wait") for kernel in typed_kernels]
+    protected_wait_keys = {
+        "schema_version",
+        "semantics",
+        "entry_count",
+        "completed_count",
+        "failed_count",
+        "clock_read_attempts",
+        "confirmation_attempts",
+        "total_wait_duration_ns",
+        "max_wait_duration_ns",
+        "max_sample_gap_ns",
+        "max_entry_lateness_ns",
+        "last_failure",
+    }
+    if any(
+        not isinstance(wait, Mapping)
+        or set(wait) != protected_wait_keys
+        or wait.get("schema_version") != 1
+        or wait.get("semantics") != KERNEL_TX_PROTECTED_SELECTION_WAIT_SEMANTICS
+        or type(wait.get("entry_count")) is not int
+        or wait.get("entry_count") != kernel.get("job_count")
+        or type(wait.get("completed_count")) is not int
+        or wait.get("completed_count") != kernel.get("job_count")
+        or type(wait.get("failed_count")) is not int
+        or wait.get("failed_count") != 0
+        or type(wait.get("confirmation_attempts")) is not int
+        or wait["confirmation_attempts"] != wait["entry_count"] + 1
+        or type(wait.get("clock_read_attempts")) is not int
+        or wait["clock_read_attempts"] < 3 * wait["entry_count"] + 1
+        or type(wait.get("total_wait_duration_ns")) is not int
+        or wait["total_wait_duration_ns"] < 0
+        or type(wait.get("max_wait_duration_ns")) is not int
+        or not 0 <= wait["max_wait_duration_ns"] < 10_000_000
+        or wait["total_wait_duration_ns"] < wait["max_wait_duration_ns"]
+        or type(wait.get("max_sample_gap_ns")) is not int
+        or not 0 <= wait["max_sample_gap_ns"] <= wait["max_wait_duration_ns"]
+        or type(wait.get("max_entry_lateness_ns")) is not int
+        or not 0 <= wait["max_entry_lateness_ns"] < 5_000_000
+        or wait.get("last_failure") is not None
+        for kernel, wait in zip(typed_kernels, protected_waits, strict=True)
+    ):
+        raise ValueError("timing-stress protected-selection wait evidence is incomplete")
+    typed_protected_waits = [
+        dict(wait) for wait in protected_waits if isinstance(wait, Mapping)
+    ]
     observed_total_releases = sum(
         int(timing["kernel_timed_outgoing_releases_after_tick_zero"]) for timing in typed_timings
     )
@@ -6471,6 +6546,38 @@ def _timing_stress_aggregate(samples: Sequence[Mapping[str, Any]]) -> dict[str, 
             ),
             "evidence_schema_version": 1,
             "observer_topology_schema_version": 1,
+            "protected_selection_wait": {
+                "schema_version": 1,
+                "semantics": KERNEL_TX_PROTECTED_SELECTION_WAIT_SEMANTICS,
+                "entry_count": sum(
+                    int(wait["entry_count"]) for wait in typed_protected_waits
+                ),
+                "completed_count": sum(
+                    int(wait["completed_count"]) for wait in typed_protected_waits
+                ),
+                "failed_count": sum(
+                    int(wait["failed_count"]) for wait in typed_protected_waits
+                ),
+                "clock_read_attempts": sum(
+                    int(wait["clock_read_attempts"]) for wait in typed_protected_waits
+                ),
+                "confirmation_attempts": sum(
+                    int(wait["confirmation_attempts"])
+                    for wait in typed_protected_waits
+                ),
+                "total_wait_duration_ns": sum(
+                    int(wait["total_wait_duration_ns"]) for wait in typed_protected_waits
+                ),
+                "max_wait_duration_ns": max(
+                    int(wait["max_wait_duration_ns"]) for wait in typed_protected_waits
+                ),
+                "max_sample_gap_ns": max(
+                    int(wait["max_sample_gap_ns"]) for wait in typed_protected_waits
+                ),
+                "max_entry_lateness_ns": max(
+                    int(wait["max_entry_lateness_ns"]) for wait in typed_protected_waits
+                ),
+            },
             "job_count": sum(int(kernel["job_count"]) for kernel in typed_kernels),
             "item_count": sum(int(kernel["item_count"]) for kernel in typed_kernels),
             "etf_item_count": sum(int(kernel["etf_item_count"]) for kernel in typed_kernels),
@@ -6531,6 +6638,7 @@ def _timing_stress_aggregate(samples: Sequence[Mapping[str, Any]]) -> dict[str, 
             "retired_incoming_bytes": 0,
             "unresolved_incoming_bytes": 0,
             "runner_failed_kernel_tx_items": 0,
+            "protected_selection_wait_failures": 0,
             "runner_unresolved_kernel_tx_items": 0,
             "evidence_unresolved_kernel_tx_items": 0,
             "qdisc_drops": 0,
@@ -6547,6 +6655,7 @@ def _validate_timing_stress_aggregate(aggregate: Mapping[str, Any]) -> None:
     """Require every current ETF release and post-veth observation to pass."""
 
     from .fidelity import RUNNER_WAKEUP_V7_HISTOGRAM_UPPER_BOUNDS
+    from .kernel_tx import KERNEL_TX_PROTECTED_SELECTION_WAIT_SEMANTICS
 
     top_level_keys = {
         "contract_schema_version",
@@ -6583,6 +6692,7 @@ def _validate_timing_stress_aggregate(aggregate: Mapping[str, Any]) -> None:
         "runner_receipt_schema_version",
         "evidence_schema_version",
         "observer_topology_schema_version",
+        "protected_selection_wait",
         "job_count",
         "item_count",
         "etf_item_count",
@@ -6615,6 +6725,7 @@ def _validate_timing_stress_aggregate(aggregate: Mapping[str, Any]) -> None:
         "retired_incoming_bytes": 0,
         "unresolved_incoming_bytes": 0,
         "runner_failed_kernel_tx_items": 0,
+        "protected_selection_wait_failures": 0,
         "runner_unresolved_kernel_tx_items": 0,
         "evidence_unresolved_kernel_tx_items": 0,
         "qdisc_drops": 0,
@@ -6628,6 +6739,9 @@ def _validate_timing_stress_aggregate(aggregate: Mapping[str, Any]) -> None:
     opportunities_by_visit = aggregate.get("opportunities_per_direction_by_visit")
     drain_by_visit = aggregate.get("terminal_drain_opportunities_per_direction_by_visit")
     kernel = aggregate.get("kernel_tx")
+    protected_wait = (
+        kernel.get("protected_selection_wait") if isinstance(kernel, Mapping) else None
+    )
     histogram = aggregate.get("kernel_timed_release_lateness_histogram_after_tick_zero")
     if (
         set(aggregate) != top_level_keys
@@ -6636,6 +6750,21 @@ def _validate_timing_stress_aggregate(aggregate: Mapping[str, Any]) -> None:
         or type(incoming) is not int
         or not isinstance(kernel, Mapping)
         or set(kernel) != kernel_keys
+        or not isinstance(protected_wait, Mapping)
+        or set(protected_wait)
+        != {
+            "schema_version",
+            "semantics",
+            "entry_count",
+            "completed_count",
+            "failed_count",
+            "clock_read_attempts",
+            "confirmation_attempts",
+            "total_wait_duration_ns",
+            "max_wait_duration_ns",
+            "max_sample_gap_ns",
+            "max_entry_lateness_ns",
+        }
         or not isinstance(histogram, Mapping)
         or set(histogram) != {"upper_bounds_nanoseconds", "counts"}
         or not isinstance(opportunities_by_visit, list)
@@ -6720,6 +6849,28 @@ def _validate_timing_stress_aggregate(aggregate: Mapping[str, Any]) -> None:
         != TIMING_STRESS_KERNEL_TX_RUNNER_RECEIPT_SCHEMA_VERSION
         or kernel.get("evidence_schema_version") != 1
         or kernel.get("observer_topology_schema_version") != 1
+        or protected_wait.get("schema_version") != 1
+        or protected_wait.get("semantics")
+        != KERNEL_TX_PROTECTED_SELECTION_WAIT_SEMANTICS
+        or protected_wait.get("entry_count") != outgoing
+        or protected_wait.get("completed_count") != outgoing
+        or protected_wait.get("failed_count") != 0
+        or type(protected_wait.get("clock_read_attempts")) is not int
+        or protected_wait["clock_read_attempts"]
+        < 3 * outgoing + TIMING_STRESS_VISITS
+        or protected_wait.get("confirmation_attempts")
+        != outgoing + TIMING_STRESS_VISITS
+        or type(protected_wait.get("total_wait_duration_ns")) is not int
+        or protected_wait["total_wait_duration_ns"] < 0
+        or type(protected_wait.get("max_wait_duration_ns")) is not int
+        or not 0 <= protected_wait["max_wait_duration_ns"] < 10_000_000
+        or protected_wait["total_wait_duration_ns"] < protected_wait["max_wait_duration_ns"]
+        or type(protected_wait.get("max_sample_gap_ns")) is not int
+        or not 0
+        <= protected_wait["max_sample_gap_ns"]
+        <= protected_wait["max_wait_duration_ns"]
+        or type(protected_wait.get("max_entry_lateness_ns")) is not int
+        or not 0 <= protected_wait["max_entry_lateness_ns"] < 5_000_000
         or kernel.get("job_count") != outgoing
         or kernel.get("etf_item_count") != outgoing
         or type(kernel.get("item_count")) is not int
