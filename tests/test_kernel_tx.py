@@ -2238,6 +2238,26 @@ def test_runner_kernel_tx_serialises_end_clock_mapping_failure_after_jobs(
         2: _runner_receipt_v2,
         3: _runner_receipt_v3,
     }[runner_schema_version]()
+    if runner_schema_version in {2, 3}:
+        # Preserve producer ordering while moving the retained post-TX
+        # MONOTONIC offset away from the direct enqueue TAI bracket.  Historical
+        # schema two treated that offset overlap as a hard predicate; schema
+        # three deliberately retains only the directly observed operation order.
+        first = raw["jobs"][0]["items"][0]
+        phase = first["post_tx_clock_phase"]
+        phase["monotonic"]["clock_ns"] -= 500_000
+        assert not kernel_tx._item_local_enqueue_clock_consistent(
+            phase,
+            enqueue_monotonic_ns=first["enqueue_monotonic_ns"],
+            enqueue_tai_lower_ns=first["enqueue_tai_lower_ns"],
+            enqueue_tai_upper_ns=first["enqueue_tai_upper_ns"],
+        )
+        assert kernel_tx._item_local_enqueue_operation_ordered(
+            phase,
+            enqueue_monotonic_ns=first["enqueue_monotonic_ns"],
+            enqueue_tai_lower_ns=first["enqueue_tai_lower_ns"],
+            enqueue_tai_upper_ns=first["enqueue_tai_upper_ns"],
+        )
     mapping_error = "BuFLO final clock sample failed: synthetic"
     raw.update(
         {
@@ -2292,10 +2312,15 @@ def test_runner_kernel_tx_serialises_end_clock_mapping_failure_after_jobs(
     assert not kernel_tx_runner_receipt_success_valid(raw)
 
     if runner_schema_version in {2, 3}:
-        assert all(
-            "enqueue_clock_consistent=true" in item["terminal_error_detail"]
-            for item in raw["jobs"][0]["items"]
+        expected_first_consistency = (
+            "false" if runner_schema_version == 2 else "true"
         )
+        first, second = raw["jobs"][0]["items"]
+        assert (
+            f"enqueue_clock_consistent={expected_first_consistency}"
+            in first["terminal_error_detail"]
+        )
+        assert "enqueue_clock_consistent=true" in second["terminal_error_detail"]
         # A mapping failure does not erase the retained item phases.  Their
         # producer order remains independently verifiable even without a final
         # mapping or end phase.
