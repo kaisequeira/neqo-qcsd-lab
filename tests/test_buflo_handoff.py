@@ -459,9 +459,9 @@ def _complete_buflo_run(
     if current_runner:
         if scheduled_outgoing != 1:
             raise ValueError("current kernel-TX fixture supports one outgoing opportunity")
-        from tests.test_kernel_tx import _runner_wakeup_v12
+        from tests.test_kernel_tx import _runner_wakeup_v13
 
-        runner_wakeup_metrics = _runner_wakeup_v12()
+        runner_wakeup_metrics = _runner_wakeup_v13()
     return {
         "completion_status": "complete",
         "error": None,
@@ -825,13 +825,13 @@ def _kernel_tx_handoff_fixture(
     dict[str, object],
     list[dict[str, object]],
 ]:
-    from tests.test_kernel_tx import _evidence, _runner_wakeup_v11
+    from tests.test_kernel_tx import _evidence, _runner_wakeup_v13
 
     source_root = (tmp_path / "source").resolve()
     sample_id = "sample-001"
     source_run = source_root / "samples/example/as-defined/visit-001/buflo/neqo/run.json"
     source_run.parent.mkdir(parents=True)
-    wakeups = _runner_wakeup_v11()
+    wakeups = _runner_wakeup_v13()
     run: dict[str, object] = {"runner_wakeup_metrics": wakeups}
     run_bytes = json.dumps(run, sort_keys=True, separators=(",", ":")).encode()
     source_run.write_bytes(run_bytes)
@@ -936,6 +936,46 @@ def test_focused_handoff_copies_and_deep_verifies_kernel_tx_sidecar(
         path.is_relative_to(root / "raw/sample-001")
         for path in (root / handoff.KERNEL_TX_EVIDENCE_DIRECTORY).rglob("*")
     )
+
+
+def test_handoff_kernel_tx_runner_pairs_preserve_history_and_reject_cross_versions() -> None:
+    from tests.test_kernel_tx import (
+        _runner_receipt_v2,
+        _runner_receipt_v3,
+        _runner_receipt_v4,
+        _runner_wakeup_v11,
+        _runner_wakeup_v12,
+        _runner_wakeup_v13,
+    )
+
+    schema_eleven_v2 = _runner_wakeup_v11()
+    schema_eleven_v2["buflo_kernel_tx"] = _runner_receipt_v2()
+    schema_eleven_v2["semantics"] = fidelity_module.RUNNER_WAKEUP_V11_SEMANTICS
+    for wakeups in (
+        _runner_wakeup_v11(),
+        schema_eleven_v2,
+        _runner_wakeup_v12(),
+        _runner_wakeup_v13(),
+    ):
+        required, raw = handoff._runner_kernel_tx_requirement(
+            {"runner_wakeup_metrics": wakeups},
+            runtime_kind="buflo",
+        )
+        assert required is True
+        assert raw is wakeups["buflo_kernel_tx"]
+
+    invalid_pairs = (
+        (_runner_wakeup_v11(), _runner_receipt_v3()),
+        (_runner_wakeup_v12(), _runner_receipt_v4()),
+        (_runner_wakeup_v13(), _runner_receipt_v3()),
+    )
+    for wakeups, raw in invalid_pairs:
+        wakeups["buflo_kernel_tx"] = raw
+        with pytest.raises(ValueError, match="runner-wakeup/raw schema pairing"):
+            handoff._runner_kernel_tx_requirement(
+                {"runner_wakeup_metrics": wakeups},
+                runtime_kind="buflo",
+            )
 
 
 def test_focused_handoff_kernel_tx_deep_verification_rejects_coherent_reseal(
@@ -1557,7 +1597,7 @@ def test_buflo_algorithm_diagnostics_bind_typed_tail_action_and_control_packet(
         events_path=events,
         packets_path=packets,
     )
-    assert run["runner_wakeup_metrics"]["schema_version"] == 12
+    assert run["runner_wakeup_metrics"]["schema_version"] == 13
     assert algorithm["schema_version"] == 4
     assert evaluation_module._load_algorithm_diagnostics(algorithm, defense="buflo") == algorithm
     assert algorithm["buflo_state"]["schema_version"] == 3

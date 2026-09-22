@@ -1968,7 +1968,7 @@ def test_completed_candidate_binding_requires_current_wakeup_schema(
         terminal_validation_calls.append(
             (kind, require_application_complete, require_current_schema, schema)
         )
-        expected_current_schema = 12 if kind == "buflo" else 10
+        expected_current_schema = 13 if kind == "buflo" else 10
         return (require_current_schema and schema == expected_current_schema) or (
             not require_current_schema and 1 <= schema <= 9
         )
@@ -1981,7 +1981,8 @@ def test_completed_candidate_binding_requires_current_wakeup_schema(
     monkeypatch.setattr(
         orchestrator.capture_engine,
         "_runner_wakeup_metrics_valid",
-        lambda value: value.get("schema_version") in {2, 5, 6, 7, 8, 9, 10, 11, 12},
+        lambda value: value.get("schema_version")
+        in {2, 5, 6, 7, 8, 9, 10, 11, 12, 13},
     )
     monkeypatch.setattr(
         orchestrator.capture_engine,
@@ -2120,7 +2121,7 @@ def test_completed_candidate_binding_requires_current_wakeup_schema(
             context=context,
             historical_candidate_source={**historical_source, "lab_dirty": True},
         )
-    current_schema = 12 if runtime_kind == "buflo" else 10
+    current_schema = 13 if runtime_kind == "buflo" else 10
     run["runner_wakeup_metrics"]["schema_version"] = current_schema
     _validate_run_binding(
         run,
@@ -2704,6 +2705,12 @@ def test_kernel_tx_sidecar_promotes_outside_exact_five_file_sample(
 
     monkeypatch.setattr(orchestrator, "load_json", load_kernel_fixture)
     monkeypatch.setattr(
+        orchestrator,
+        "_runner_wakeup_metrics_valid",
+        lambda value: value
+        == {"buflo_kernel_tx": {"fixture": True}},
+    )
+    monkeypatch.setattr(
         kernel_tx,
         "kernel_tx_evidence_success_valid",
         lambda *_args, **_kwargs: True,
@@ -2737,6 +2744,54 @@ def test_kernel_tx_sidecar_promotes_outside_exact_five_file_sample(
         "kernel-tx-evidence.json",
     }
     assert not attempt.exists()
+
+
+@pytest.mark.parametrize(
+    ("outer_schema", "raw_schema"),
+    ((12, 4), (13, 3)),
+)
+def test_kernel_tx_promotion_rejects_outer_raw_schema_cross_pair(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    outer_schema: int,
+    raw_schema: int,
+) -> None:
+    sample_id = "a" * 64
+    root = tmp_path / "result"
+    sample = {"sample_id": sample_id}
+    attempt = root / f"failures/{sample_id}/attempt-001"
+    (attempt / "neqo").mkdir(parents=True)
+    (attempt / "diagnostics").mkdir()
+    (attempt / "neqo/run.json").write_text("{}\n", encoding="utf-8")
+    for name in (
+        "kernel-tx-post-veth-raw.pcapng",
+        "kernel-tx-post-veth-receipt.json",
+        "kernel-tx-evidence.json",
+    ):
+        (attempt / "diagnostics" / name).write_text("{}\n", encoding="utf-8")
+
+    wakeups = {
+        "schema_version": outer_schema,
+        "buflo_kernel_tx": {"schema_version": raw_schema},
+    }
+    monkeypatch.setattr(
+        orchestrator,
+        "load_json",
+        lambda path: {"runner_wakeup_metrics": wakeups}
+        if path == attempt / "neqo/run.json"
+        else {},
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_runner_wakeup_metrics_valid",
+        lambda value: (
+            value.get("schema_version") == 13
+            and value.get("buflo_kernel_tx", {}).get("schema_version") == 4
+        ),
+    )
+
+    with pytest.raises(ValueError, match="runner-wakeup schema binding"):
+        orchestrator._kernel_tx_promotion_receipt(root, sample, attempt)
 
 
 def test_accepted_scheduler_validation_does_not_reload_experiment_per_sample() -> None:

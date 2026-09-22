@@ -16,6 +16,8 @@ from .kernel_tx import (
     KERNEL_TX_HISTORICAL_RUNNER_SEMANTICS,
     KERNEL_TX_RUNNER_SCHEMA_VERSION,
     KERNEL_TX_RUNNER_SEMANTICS,
+    KERNEL_TX_RUNNER_V3_SCHEMA_VERSION,
+    KERNEL_TX_RUNNER_V3_SEMANTICS,
     KERNEL_TX_RUNNER_V2_SEMANTICS,
     kernel_tx_runner_receipt_success_valid,
     kernel_tx_runner_receipt_valid,
@@ -2340,11 +2342,20 @@ RUNNER_WAKEUP_V12_SEMANTICS = (
     "runner_schema12_retains_schema10_layout_for_non_kernel_metrics=true; "
     "buflo_legacy_exact_release_guard_metrics_are_zero_with_kernel_tx=true; "
     "buflo_kernel_tx_raw_semantics="
+    f"{KERNEL_TX_RUNNER_V3_SEMANTICS}; "
+    "post_veth_and_qdisc_end_state_are_separate_lab_evidence=true"
+)
+RUNNER_WAKEUP_V13_SEMANTICS = (
+    f"{RUNNER_WAKEUP_V10_SEMANTICS}; "
+    "runner_schema13_retains_schema10_layout_for_non_kernel_metrics=true; "
+    "buflo_legacy_exact_release_guard_metrics_are_zero_with_kernel_tx=true; "
+    "buflo_kernel_tx_raw_semantics="
     f"{KERNEL_TX_RUNNER_SEMANTICS}; "
     "post_veth_and_qdisc_end_state_are_separate_lab_evidence=true"
 )
 RUNNER_WAKEUP_V11_REQUIRED_KEYS = RUNNER_WAKEUP_V10_REQUIRED_KEYS | {"buflo_kernel_tx"}
 RUNNER_WAKEUP_V12_REQUIRED_KEYS = RUNNER_WAKEUP_V11_REQUIRED_KEYS
+RUNNER_WAKEUP_V13_REQUIRED_KEYS = RUNNER_WAKEUP_V12_REQUIRED_KEYS
 
 
 def _runner_wakeup_v10_checked_u64_sum(*values: int) -> int | None:
@@ -3304,17 +3315,18 @@ def new_defense_terminal_receipts_valid(
     ):
         return False
     wakeup_metrics = run["runner_wakeup_metrics"]
-    current_runner_schema = 12 if defense_kind == "buflo" else 10
+    current_runner_schema = 13 if defense_kind == "buflo" else 10
     if require_current_schema and wakeup_metrics["schema_version"] != current_runner_schema:
         return False
     if (
-        wakeup_metrics["schema_version"] in {11, 12}
+        wakeup_metrics["schema_version"] in {11, 12, 13}
         and defense_kind != "buflo"
         and wakeup_metrics["buflo_kernel_tx"] is not None
     ):
         return False
     if (
-        wakeup_metrics["schema_version"] in {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
+        wakeup_metrics["schema_version"]
+        in {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}
         and defense_kind != "buflo"
         and any(
             wakeup_metrics[key]
@@ -3329,7 +3341,7 @@ def new_defense_terminal_receipts_valid(
     ):
         return False
     if (
-        wakeup_metrics["schema_version"] in {5, 6, 7, 8, 9, 10, 11, 12}
+        wakeup_metrics["schema_version"] in {5, 6, 7, 8, 9, 10, 11, 12, 13}
         and defense_kind != "buflo"
         and any(
             wakeup_metrics[key]
@@ -3342,7 +3354,7 @@ def new_defense_terminal_receipts_valid(
     ):
         return False
     if (
-        wakeup_metrics["schema_version"] in {4, 5, 6, 7, 8, 9, 10, 11, 12}
+        wakeup_metrics["schema_version"] in {4, 5, 6, 7, 8, 9, 10, 11, 12, 13}
         and defense_kind != "cs_buflo"
         and any(
             wakeup_metrics[key]
@@ -3396,7 +3408,7 @@ def new_defense_terminal_receipts_valid(
             != confirmations
         ):
             return False
-    if wakeup_metrics["schema_version"] in {11, 12} and defense_kind == "buflo":
+    if wakeup_metrics["schema_version"] in {11, 12, 13} and defense_kind == "buflo":
         scheduled_outgoing = diagnostics.get("buflo_scheduled_outgoing_cells")
         kernel_tx = wakeup_metrics.get("buflo_kernel_tx")
         if (
@@ -5886,7 +5898,7 @@ def _runner_wakeup_v11_valid(value: Any) -> bool:
 
 
 def _runner_wakeup_v12_valid(value: Any) -> bool:
-    """Validate current schema 12 with an exact nested runner-v3 receipt."""
+    """Validate frozen schema 12 with an exact nested runner-v3 receipt."""
 
     if (
         not isinstance(value, Mapping)
@@ -5899,7 +5911,29 @@ def _runner_wakeup_v12_valid(value: Any) -> bool:
     kernel_tx = value.get("buflo_kernel_tx")
     return bool(
         isinstance(kernel_tx, Mapping)
-        and kernel_tx.get("schema_version") == KERNEL_TX_RUNNER_SCHEMA_VERSION == 3
+        and kernel_tx.get("schema_version")
+        == KERNEL_TX_RUNNER_V3_SCHEMA_VERSION
+        == 3
+        and kernel_tx_runner_receipt_valid(kernel_tx)
+        and _runner_wakeup_v11_legacy_buflo_metrics_neutral(value)
+    )
+
+
+def _runner_wakeup_v13_valid(value: Any) -> bool:
+    """Validate current schema 13 with an exact nested runner-v4 receipt."""
+
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != RUNNER_WAKEUP_V13_REQUIRED_KEYS
+        or value.get("schema_version") != 13
+        or value.get("semantics") != RUNNER_WAKEUP_V13_SEMANTICS
+        or not _runner_wakeup_v10_valid(_runner_wakeup_v11_project_schema_ten(value))
+    ):
+        return False
+    kernel_tx = value.get("buflo_kernel_tx")
+    return bool(
+        isinstance(kernel_tx, Mapping)
+        and kernel_tx.get("schema_version") == KERNEL_TX_RUNNER_SCHEMA_VERSION == 4
         and kernel_tx_runner_receipt_valid(kernel_tx)
         and _runner_wakeup_v11_legacy_buflo_metrics_neutral(value)
     )
@@ -5940,6 +5974,8 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
     schema_version = value.get("schema_version")
     if type(schema_version) is not int:
         return False
+    if schema_version == 13:
+        return _runner_wakeup_v13_valid(value)
     if schema_version == 12:
         return _runner_wakeup_v12_valid(value)
     if schema_version == 11:

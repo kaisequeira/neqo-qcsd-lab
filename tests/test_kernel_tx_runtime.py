@@ -38,7 +38,7 @@ def _installed(*, packets: int = 0) -> list[dict[str, object]]:
             "parent": "1:1",
             "options": {
                 "clockid": "TAI",
-                "delta": 4_000_000,
+                "delta": 4_500_000,
                 "offload": "off",
                 "deadline_mode": "off",
                 "skip_sock_check": "off",

@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import struct
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -45,7 +46,7 @@ def _etf(*, drops: int, packets: int, bytes_: int) -> dict[str, Any]:
         "bytes": bytes_,
         "options": {
             "clockid": "TAI",
-            "delta": 4_000_000,
+            "delta": etf_probe.ETF_DELTA_NS,
             "offload": "off",
             "deadline_mode": "off",
             "skip_sock_check": "off",
@@ -83,12 +84,14 @@ def _qdisc(sender: dict[str, Any], snapshot: str, kind: str) -> dict[str, Any]:
 
 def _valid_pair() -> tuple[dict[str, Any], dict[str, Any]]:
     payloads = etf_probe.EXPECTED_PAYLOADS
+    past_target = RELEASE - 1_000_000
     sender = {
+        "schema_version": etf_probe.SCHEMA_VERSION,
         "status": "sender-complete",
         "qdisc_restoration_exact": True,
         "configuration": {
             "clockid": "CLOCK_TAI",
-            "delta_ns": 4_000_000,
+            "delta_ns": etf_probe.ETF_DELTA_NS,
             "realization_window_ns": 5_000_000,
             "timed_priority": 6,
             "timed_priority_mechanism": "serialized-socket-global-SO_PRIORITY",
@@ -157,7 +160,33 @@ def _valid_pair() -> tuple[dict[str, Any], dict[str, Any]]:
             {
                 "name": "past_txtime",
                 "destination": _destination(),
+                "clockid": 11,
+                "include_cmsg": True,
+                "timestamping": True,
+                "target_ns": past_target,
+                "sent_bytes": len(payloads["past_txtime"].encode()),
                 "send_error": None,
+                "error_queue": [
+                    {
+                        "tx_software_timestamp": None,
+                        "txtime_context_timestamp": {
+                            "seconds": past_target // 1_000_000_000,
+                            "nanoseconds": past_target % 1_000_000_000,
+                            "raw_ns": past_target,
+                            "requested_txtime_tai_ns": past_target,
+                        },
+                        "extended_errors": [
+                            {
+                                "errno": 22,
+                                "origin": 6,
+                                "type": 0,
+                                "code": 1,
+                                "info": past_target & 0xFFFF_FFFF,
+                                "data": past_target >> 32,
+                            }
+                        ],
+                    }
+                ],
             },
         ],
         "positive": {
@@ -167,7 +196,7 @@ def _valid_pair() -> tuple[dict[str, Any], dict[str, Any]]:
             "ready": {
                 "release_tai_ns": RELEASE,
                 "deadline_tai_ns": DEADLINE,
-                "scm_txtime_tai_ns": RELEASE + 4_000_000,
+                "scm_txtime_tai_ns": RELEASE + etf_probe.ETF_DELTA_NS,
                 "so_txtime_flags": 2,
                 "deadline_mode": False,
                 "destination": _destination(),
@@ -224,18 +253,22 @@ def _valid_pair() -> tuple[dict[str, Any], dict[str, Any]]:
                 "error_queue": [
                     {
                         "tx_software_timestamp": {"realtime_ns": 1},
+                        "txtime_context_timestamp": None,
                         "extended_errors": [{"origin": 4, "info": 1, "data": 0}],
                     },
                     {
                         "tx_software_timestamp": {"realtime_ns": 2},
+                        "txtime_context_timestamp": None,
                         "extended_errors": [{"origin": 4, "info": 0, "data": 0}],
                     },
                     {
                         "tx_software_timestamp": {"realtime_ns": 3},
+                        "txtime_context_timestamp": None,
                         "extended_errors": [{"origin": 4, "info": 1, "data": 1}],
                     },
                     {
                         "tx_software_timestamp": {"realtime_ns": 4},
+                        "txtime_context_timestamp": None,
                         "extended_errors": [{"origin": 4, "info": 0, "data": 1}],
                     },
                 ],
@@ -257,6 +290,7 @@ def _valid_pair() -> tuple[dict[str, Any], dict[str, Any]]:
         },
     }
     receiver = {
+        "schema_version": etf_probe.SCHEMA_VERSION,
         "timeout_seconds": etf_probe.RECEIVER_TIMEOUT_SECONDS,
         "events": [
             _event(payloads["scm_priority_preflight"], RELEASE - 450_000_000),
@@ -584,6 +618,44 @@ def test_validate_probe_rejects_negative_control_delivery() -> None:
     assert "negative_controls_rejected" in result["failed_gates"]
 
 
+def test_validate_probe_requires_current_nested_probe_schemas() -> None:
+    sender, receiver = _valid_pair()
+    sender["schema_version"] = etf_probe.HISTORICAL_SCHEMA_VERSION
+    receiver["schema_version"] = etf_probe.HISTORICAL_SCHEMA_VERSION
+
+    result = etf_probe.validate_probe(sender, receiver)
+
+    assert result["passed"] is False
+    assert "sender_completed_and_restored" in result["failed_gates"]
+
+
+def test_validate_probe_never_treats_txtime_context_as_transmit_proof() -> None:
+    sender, receiver = _valid_pair()
+    past = next(
+        item for item in sender["negative_controls"] if item["name"] == "past_txtime"
+    )
+    message = past["error_queue"][0]
+    message["tx_software_timestamp"] = message.pop("txtime_context_timestamp")
+
+    result = etf_probe.validate_probe(sender, receiver)
+
+    assert result["passed"] is False
+    assert "txtime_error_queue_context" in result["failed_gates"]
+
+
+def test_validate_probe_binds_txtime_error_words_to_requested_tai() -> None:
+    sender, receiver = _valid_pair()
+    past = next(
+        item for item in sender["negative_controls"] if item["name"] == "past_txtime"
+    )
+    past["error_queue"][0]["extended_errors"][0]["info"] += 1
+
+    result = etf_probe.validate_probe(sender, receiver)
+
+    assert result["passed"] is False
+    assert "txtime_error_queue_context" in result["failed_gates"]
+
+
 def test_validate_probe_requires_distinct_sched_and_send_tx_receipts() -> None:
     sender, receiver = _valid_pair()
     sender["positive"]["final"]["error_queue"][1]["extended_errors"][0]["info"] = 1
@@ -609,25 +681,76 @@ def test_destination_is_create_only(tmp_path: Path) -> None:
 
 
 def test_probe_receipt_is_read_only_and_payload_bound(tmp_path: Path) -> None:
-    receipt = {
-        "artifact_type": etf_probe.ARTIFACT_TYPE,
-        "schema_version": 1,
-        "evidentiary": False,
-        "authorizes_capture": False,
-        "status": "passed",
-    }
-    receipt["payload_sha256"] = etf_probe._payload_sha256(receipt)
-    path = tmp_path / "probe.json"
-    path.write_bytes(etf_probe._canonical_json(receipt))
-    path.chmod(0o444)
-    assert etf_probe.validate_probe_receipt(path) == receipt
+    request, bundle, path = _valid_supervised_bundle(tmp_path)
+    etf_probe.finalize_supervised_bundle(request, bundle)
+    receipt = etf_probe.validate_probe_receipt(path)
 
     path.chmod(0o644)
-    receipt["status"] = "failed"
+    receipt["started_at"] = "2026-09-04T00:00:01Z"
     path.write_bytes(etf_probe._canonical_json(receipt))
     path.chmod(0o444)
     with pytest.raises(ValueError, match="payload hash"):
         etf_probe.validate_probe_receipt(path)
+
+
+def test_probe_receipt_preserves_frozen_schema_one_binding(tmp_path: Path) -> None:
+    request, bundle, current_path = _valid_supervised_bundle(tmp_path)
+    etf_probe.finalize_supervised_bundle(request, bundle)
+    historical = copy.deepcopy(etf_probe.validate_probe_receipt(current_path))
+    historical["schema_version"] = etf_probe.HISTORICAL_SCHEMA_VERSION
+    historical["configuration"]["etf_delta_ns"] = etf_probe.HISTORICAL_ETF_DELTA_NS
+    historical["configuration"].pop("post_etf_observer_guard_ns")
+    historical["sender"]["schema_version"] = etf_probe.HISTORICAL_SCHEMA_VERSION
+    historical["receiver"]["schema_version"] = etf_probe.HISTORICAL_SCHEMA_VERSION
+    historical["payload_sha256"] = etf_probe._payload_sha256(historical)
+    historical_path = tmp_path / "historical-probe.json"
+    historical_path.write_bytes(etf_probe._canonical_json(historical))
+    historical_path.chmod(0o444)
+
+    assert etf_probe.validate_probe_receipt(historical_path) == historical
+
+
+@pytest.mark.parametrize(
+    ("tamper", "message"),
+    (
+        ("outer-float", "schema"),
+        ("outer-one-current-config", "timing contract"),
+        ("outer-one-nested-two", "schemas are not paired"),
+        ("sender-one", "schemas are not paired"),
+        ("receiver-one", "schemas are not paired"),
+        ("sender-float", "schemas are not paired"),
+    ),
+)
+def test_probe_receipt_rejects_schema_relabelling_and_cross_pairs(
+    tmp_path: Path,
+    tamper: str,
+    message: str,
+) -> None:
+    request, bundle, current_path = _valid_supervised_bundle(tmp_path)
+    etf_probe.finalize_supervised_bundle(request, bundle)
+    receipt = copy.deepcopy(etf_probe.validate_probe_receipt(current_path))
+    if tamper == "outer-float":
+        receipt["schema_version"] = 2.0
+    elif tamper == "outer-one-current-config":
+        receipt["schema_version"] = etf_probe.HISTORICAL_SCHEMA_VERSION
+    elif tamper == "outer-one-nested-two":
+        receipt["schema_version"] = etf_probe.HISTORICAL_SCHEMA_VERSION
+        receipt["configuration"]["etf_delta_ns"] = etf_probe.HISTORICAL_ETF_DELTA_NS
+        receipt["configuration"].pop("post_etf_observer_guard_ns")
+    elif tamper == "sender-one":
+        receipt["sender"]["schema_version"] = etf_probe.HISTORICAL_SCHEMA_VERSION
+    elif tamper == "receiver-one":
+        receipt["receiver"]["schema_version"] = etf_probe.HISTORICAL_SCHEMA_VERSION
+    else:
+        receipt["sender"]["schema_version"] = 2.0
+    if type(receipt["schema_version"]) is int:
+        receipt["payload_sha256"] = etf_probe._payload_sha256(receipt)
+    tampered_path = tmp_path / f"tampered-{tamper}.json"
+    tampered_path.write_bytes(etf_probe._canonical_json(receipt))
+    tampered_path.chmod(0o444)
+
+    with pytest.raises(ValueError, match=message):
+        etf_probe.validate_probe_receipt(tampered_path)
 
 
 def test_supervised_bundle_finalises_non_evidentiary_receipt(tmp_path: Path) -> None:
@@ -751,7 +874,7 @@ def test_container_qdisc_contract_uses_high_priority_etf_band() -> None:
                 "parent": "1:1",
                 "options": {
                     "clockid": "TAI",
-                    "delta": 4_000_000,
+                    "delta": etf_probe.ETF_DELTA_NS,
                     "offload": "off",
                     "deadline_mode": "off",
                     "skip_sock_check": "off",
@@ -760,6 +883,76 @@ def test_container_qdisc_contract_uses_high_priority_etf_band() -> None:
         ]
     }
     module._validate_installed_qdisc(copy.deepcopy(snapshot))
+
+
+@pytest.mark.parametrize(
+    ("origin", "expected_key", "unexpected_key"),
+    [
+        (6, "txtime_context_timestamp", "tx_software_timestamp"),
+        (4, "tx_software_timestamp", "txtime_context_timestamp"),
+    ],
+)
+def test_container_classifies_timestamping_by_extended_error_origin(
+    origin: int,
+    expected_key: str,
+    unexpected_key: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = Path(__file__).parents[1] / "tools/etf_probe_container.py"
+    spec = importlib.util.spec_from_file_location(
+        f"qcsd_etf_probe_container_origin_{origin}", source
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    timestamp_ns = 1_790_061_466_219_487_402
+    ancillary = [
+        (
+            module.socket.SOL_SOCKET,
+            module.SO_TIMESTAMPING,
+            struct.pack(
+                "=qqqqqq",
+                timestamp_ns // 1_000_000_000,
+                timestamp_ns % 1_000_000_000,
+                0,
+                0,
+                0,
+                0,
+            ),
+        ),
+        (
+            module.socket.SOL_IP,
+            module.IP_RECVERR,
+            struct.pack(
+                "=IBBBxII",
+                22,
+                origin,
+                0,
+                1 if origin == 6 else 0,
+                timestamp_ns & 0xFFFF_FFFF,
+                timestamp_ns >> 32,
+            ),
+        ),
+    ]
+
+    class FakeSocket:
+        def setblocking(self, _blocking: bool) -> None:
+            pass
+
+        def recvmsg(self, *_args: Any) -> tuple[bytes, list[Any], int, None]:
+            return b"", ancillary, module.socket.MSG_ERRQUEUE, None
+
+    monotonic = iter([0.0, 2.0])
+    monkeypatch.setattr(module.time, "monotonic", lambda: next(monotonic))
+    messages = module._drain_error_queue(FakeSocket(), until_monotonic=1.0)
+
+    assert len(messages) == 1
+    assert messages[0][expected_key]["raw_ns"] == timestamp_ns
+    assert messages[0][unexpected_key] is None
+    if origin == 6:
+        assert messages[0][expected_key]["requested_txtime_tai_ns"] == timestamp_ns
+    else:
+        assert messages[0][expected_key]["realtime_ns"] == timestamp_ns
 
 
 def test_container_positive_path_matches_production_ipv4_state_mix(

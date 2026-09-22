@@ -1503,7 +1503,7 @@ def test_buflo_kernel_tx_sidecars_are_separate_and_fully_bound(tmp_path: Path) -
     assert not list((destination / "raw").rglob("router-capture.pcapng"))
     for row in buflo_rows:
         run = json.loads((destination / row["products"]["run"]["path"]).read_text())
-        assert run["runner_wakeup_metrics"]["schema_version"] == 12
+        assert run["runner_wakeup_metrics"]["schema_version"] == 13
         assert set(row["source"]["artifacts"]) == {
             "pcapng",
             "run",

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import csv
 import fcntl
 import hashlib
@@ -54,6 +53,7 @@ from .experiment import (
 from .fidelity import (
     BUFLO_INCOMING_CREDIT_ADVERTISEMENT_DELAY_LIMIT_US,
     _runner_csv_u64,
+    _runner_wakeup_metrics_valid,
     _schedule_realization_metrics,
     fidelity_eligible,
     terminal_evidence_render_receipt_valid,
@@ -5071,6 +5071,10 @@ def _kernel_tx_promotion_receipt(
         return None
     if not isinstance(raw, Mapping):
         raise ValueError("non-kernel successful attempt retains a kernel-TX evidence sidecar")
+    if not _runner_wakeup_metrics_valid(wakeups):
+        raise ValueError(
+            "successful kernel-TX attempt has an invalid runner-wakeup schema binding"
+        )
     if not terminal_evidence_render_receipt_valid(
         run_data,
         require_present=True,

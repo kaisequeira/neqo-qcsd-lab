@@ -26,7 +26,8 @@ from .util import LAB_ROOT, durable_create, fsync_directory, sha256_file
 
 
 ARTIFACT_TYPE = "qcsd-etf-capability-probe"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+HISTORICAL_SCHEMA_VERSION = 1
 SUPERVISED_REQUEST_TYPE = "qcsd-etf-supervised-request"
 CONTAINER_TOOL = LAB_ROOT / "tools/etf_probe_container.py"
 DOCKER_SUPERVISOR = LAB_ROOT / "tools/docker_signal_supervisor.sh"
@@ -34,6 +35,9 @@ DEFAULT_IMAGE = "neqo-qcsd-lab-collection:local"
 PORT = 45678
 RECEIVER_TIMEOUT_SECONDS = 12.0
 RELEASE_LEAD_NS = 500_000_000
+ETF_DELTA_NS = 4_500_000
+HISTORICAL_ETF_DELTA_NS = 4_000_000
+STRICT_REALIZATION_WINDOW_NS = 5_000_000
 IPV4_UDP_HEADER_BYTES = 20 + 8
 UNTAGGED_ETHERNET_HEADER_BYTES = 14
 ETHERNET_ARP_FRAME_BYTES = 14 + 28
@@ -47,6 +51,31 @@ EXPECTED_PAYLOADS = {
     "positive": "qcsd-etf-probe:positive-v1",
     **{name: f"qcsd-etf-probe:{name.replace('_', '-')}-v1" for name in NEGATIVE_NAMES},
 }
+_RECEIPT_REQUIRED_KEYS = frozenset(
+    {
+        "artifact_type",
+        "schema_version",
+        "evidentiary",
+        "authorizes_capture",
+        "purpose",
+        "status",
+        "started_at",
+        "configuration",
+        "resources",
+        "source",
+        "cpu_assignment",
+        "container_exit_codes",
+        "lifecycle_supervision",
+        "validation",
+        "cleanup",
+        "cleanup_passed",
+        "finished_at",
+        "payload_sha256",
+    }
+)
+_RECEIPT_OPTIONAL_KEYS = frozenset(
+    {"docker", "sender", "receiver", "execution_errors"}
+)
 
 
 def _utc_now() -> str:
@@ -64,9 +93,96 @@ def _sha256_bytes(value: bytes) -> str:
 def _payload_sha256(value: dict[str, Any]) -> str:
     payload = dict(value)
     payload.pop("payload_sha256", None)
+    schema_version = payload.get("schema_version")
+    if type(schema_version) is not int or schema_version not in {
+        HISTORICAL_SCHEMA_VERSION,
+        SCHEMA_VERSION,
+    }:
+        raise ValueError("ETF probe payload schema is invalid")
     return _sha256_bytes(
-        b"qcsd-etf-capability-probe-v1\0" + _canonical_json(payload)
+        f"qcsd-etf-capability-probe-v{schema_version}\0".encode()
+        + _canonical_json(payload)
     )
+
+
+def _validate_receipt_structure(value: dict[str, Any]) -> None:
+    """Bind immutable outer schemas to their probe and timing contracts."""
+
+    schema_version = value.get("schema_version")
+    if type(schema_version) is not int or schema_version not in {
+        HISTORICAL_SCHEMA_VERSION,
+        SCHEMA_VERSION,
+    }:
+        raise ValueError("ETF probe receipt schema is invalid")
+    if not _RECEIPT_REQUIRED_KEYS.issubset(value) or not set(value).issubset(
+        _RECEIPT_REQUIRED_KEYS | _RECEIPT_OPTIONAL_KEYS
+    ):
+        raise ValueError("ETF probe receipt fields are invalid")
+
+    configuration = value.get("configuration")
+    validation = value.get("validation")
+    cleanup = value.get("cleanup")
+    if not all(isinstance(item, dict) for item in (configuration, validation, cleanup)):
+        raise ValueError("ETF probe receipt structure is invalid")
+    expected_delta_ns = (
+        HISTORICAL_ETF_DELTA_NS
+        if schema_version == HISTORICAL_SCHEMA_VERSION
+        else ETF_DELTA_NS
+    )
+    if (
+        configuration.get("clockid") != "CLOCK_TAI"
+        or configuration.get("etf_delta_ns") != expected_delta_ns
+        or configuration.get("strict_realization_window_ns")
+        != STRICT_REALIZATION_WINDOW_NS
+    ):
+        raise ValueError("ETF probe receipt timing contract is invalid")
+    if schema_version == HISTORICAL_SCHEMA_VERSION:
+        if "post_etf_observer_guard_ns" in configuration:
+            raise ValueError("historical ETF probe receipt contains a future timing field")
+    elif configuration.get("post_etf_observer_guard_ns") != (
+        STRICT_REALIZATION_WINDOW_NS - ETF_DELTA_NS
+    ):
+        raise ValueError("ETF probe receipt observer guard is invalid")
+
+    passed = value.get("status") == "passed"
+    failed_gates = validation.get("failed_gates")
+    if (
+        value.get("status") not in {"passed", "failed"}
+        or validation.get("passed") is not passed
+        or not isinstance(failed_gates, list)
+        or any(not isinstance(item, str) or not item for item in failed_gates)
+        or (passed and failed_gates)
+        or (not passed and not failed_gates)
+    ):
+        raise ValueError("ETF probe receipt status binding is invalid")
+
+    sender = value.get("sender")
+    receiver = value.get("receiver")
+    if passed:
+        if not isinstance(sender, dict) or not isinstance(receiver, dict):
+            raise ValueError("passed ETF probe receipt lacks probe outputs")
+        if (
+            type(sender.get("schema_version")) is not int
+            or type(receiver.get("schema_version")) is not int
+            or sender.get("schema_version") != schema_version
+            or receiver.get("schema_version") != schema_version
+        ):
+            raise ValueError("ETF probe receipt schemas are not paired")
+        if (
+            value.get("cleanup_passed") is not True
+            or cleanup.get("passed") is not True
+            or value.get("container_exit_codes")
+            != {"sender": 0, "receiver": 0}
+        ):
+            raise ValueError("passed ETF probe receipt runtime outcome is invalid")
+
+        if schema_version == SCHEMA_VERSION:
+            replayed = validate_probe(sender, receiver)
+            gates = validation.get("gates")
+            if replayed.get("passed") is not True or not isinstance(gates, dict):
+                raise ValueError("ETF probe receipt outputs do not replay as passed")
+            if any(gates.get(name) != gate for name, gate in replayed["gates"].items()):
+                raise ValueError("ETF probe receipt validation replay differs")
 
 
 def validate_probe_receipt(path: Path) -> dict[str, Any]:
@@ -83,12 +199,11 @@ def validate_probe_receipt(path: Path) -> dict[str, Any]:
         raise ValueError("ETF probe receipt is invalid JSON") from error
     if not isinstance(value, dict):
         raise ValueError("ETF probe receipt root is not an object")
-    if value.get("artifact_type") != ARTIFACT_TYPE or value.get("schema_version") != 1:
+    if value.get("artifact_type") != ARTIFACT_TYPE:
         raise ValueError("ETF probe receipt identity is invalid")
     if value.get("evidentiary") is not False or value.get("authorizes_capture") is not False:
         raise ValueError("ETF probe receipt makes a forbidden evidence claim")
-    if value.get("status") not in {"passed", "failed"}:
-        raise ValueError("ETF probe receipt status is invalid")
+    _validate_receipt_structure(value)
     if value.get("payload_sha256") != _payload_sha256(value):
         raise ValueError("ETF probe receipt payload hash is invalid")
     return value
@@ -389,9 +504,13 @@ def validate_probe(sender: dict[str, Any], receiver: dict[str, Any]) -> dict[str
 
     gate(
         "sender_completed_and_restored",
-        sender.get("status") == "sender-complete"
+        sender.get("schema_version") == SCHEMA_VERSION
+        and receiver.get("schema_version") == SCHEMA_VERSION
+        and sender.get("status") == "sender-complete"
         and sender.get("qdisc_restoration_exact") is True,
         {
+            "sender_schema_version": sender.get("schema_version"),
+            "receiver_schema_version": receiver.get("schema_version"),
             "status": sender.get("status"),
             "qdisc_restoration_exact": sender.get("qdisc_restoration_exact"),
             "error": sender.get("error"),
@@ -401,8 +520,11 @@ def validate_probe(sender: dict[str, Any], receiver: dict[str, Any]) -> dict[str
     gate(
         "fixed_qdisc_contract",
         configuration.get("clockid") == "CLOCK_TAI"
-        and configuration.get("delta_ns") == 4_000_000
-        and configuration.get("realization_window_ns") == 5_000_000
+        and configuration.get("delta_ns") == ETF_DELTA_NS
+        and configuration.get("realization_window_ns")
+        == STRICT_REALIZATION_WINDOW_NS
+        and 0 < ETF_DELTA_NS < STRICT_REALIZATION_WINDOW_NS
+        and STRICT_REALIZATION_WINDOW_NS - ETF_DELTA_NS == 500_000
         and configuration.get("timed_priority") == 6
         and configuration.get("timed_priority_mechanism")
         == "serialized-socket-global-SO_PRIORITY"
@@ -743,6 +865,48 @@ def validate_probe(sender: dict[str, Any], receiver: dict[str, Any]) -> dict[str
             "receiver_counts": {name: event_counts.get(name) for name in NEGATIVE_NAMES},
         },
     )
+    past_txtime = controls.get("past_txtime", {})
+    past_target = past_txtime.get("target_ns")
+    past_messages = past_txtime.get("error_queue", [])
+    past_message = past_messages[0] if len(past_messages) == 1 else {}
+    past_context = past_message.get("txtime_context_timestamp", {})
+    past_errors = past_message.get("extended_errors", [])
+    past_error = past_errors[0] if len(past_errors) == 1 else {}
+    encoded_past_target = (
+        (past_error.get("data") << 32) | past_error.get("info")
+        if isinstance(past_error.get("data"), int)
+        and isinstance(past_error.get("info"), int)
+        else None
+    )
+    gate(
+        "txtime_error_queue_context",
+        isinstance(past_target, int)
+        and not isinstance(past_target, bool)
+        and past_txtime.get("clockid") == 11
+        and past_txtime.get("include_cmsg") is True
+        and past_txtime.get("timestamping") is True
+        and past_txtime.get("send_error") is None
+        and past_txtime.get("sent_bytes")
+        == len(EXPECTED_PAYLOADS["past_txtime"].encode())
+        and len(past_messages) == 1
+        and past_message.get("tx_software_timestamp") is None
+        and past_context.get("requested_txtime_tai_ns") == past_target
+        and past_context.get("raw_ns") == past_target
+        and len(past_errors) == 1
+        and past_error.get("errno") == 22
+        and past_error.get("origin") == 6
+        and past_error.get("type") == 0
+        and past_error.get("code") == 1
+        and encoded_past_target == past_target,
+        {
+            "control": past_txtime,
+            "encoded_requested_txtime_tai_ns": encoded_past_target,
+            "semantics": (
+                "SCM_TIMESTAMPING ts0 on a TXTIME-origin error is requested-TAI "
+                "correlation context, never transmit evidence"
+            ),
+        },
+    )
     timestamp_messages = [
         item for item in final.get("error_queue", []) if item.get("tx_software_timestamp")
     ]
@@ -1029,8 +1193,10 @@ def finalize_supervised_probe(
             "topology": "disposable-docker-bridge-veth",
             "qdisc": "root-prio/normal-pfifo/timed-etf",
             "clockid": "CLOCK_TAI",
-            "etf_delta_ns": 4_000_000,
-            "strict_realization_window_ns": 5_000_000,
+            "etf_delta_ns": ETF_DELTA_NS,
+            "strict_realization_window_ns": STRICT_REALIZATION_WINDOW_NS,
+            "post_etf_observer_guard_ns": STRICT_REALIZATION_WINDOW_NS
+            - ETF_DELTA_NS,
             "timed_priority": 6,
             "timed_priority_mechanism": "serialized-socket-global-SO_PRIORITY",
             "scm_priority_probe": "receipted capability fact; never used as fallback",

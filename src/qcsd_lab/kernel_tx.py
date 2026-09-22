@@ -24,13 +24,15 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-KERNEL_TX_RUNNER_SCHEMA_VERSION = 3
+KERNEL_TX_RUNNER_SCHEMA_VERSION = 4
+KERNEL_TX_RUNNER_V3_SCHEMA_VERSION = 3
 KERNEL_TX_HISTORICAL_RUNNER_SCHEMA_VERSION = 1
 KERNEL_TX_EVIDENCE_SCHEMA_VERSION = 1
 KERNEL_TX_REALIZATION_WINDOW_NS = 5_000_000
 KERNEL_TX_ADAPTER_WINDOW_NS = frozenset({4_999_000, 5_000_000})
 KERNEL_TX_CADENCE_NS = 20_000_000
-KERNEL_TX_ETF_DELTA_NS = 4_000_000
+KERNEL_TX_HISTORICAL_ETF_DELTA_NS = 4_000_000
+KERNEL_TX_ETF_DELTA_NS = 4_500_000
 KERNEL_TX_PRIO_MAP = [1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 KERNEL_TX_MAX_CLOCK_BRACKET_NS = 250_000
 KERNEL_TX_MAX_CLOCK_OFFSET_DRIFT_NS = 250_000
@@ -38,6 +40,13 @@ KERNEL_TX_MAX_UDP_PAYLOAD_BYTES = 1_200
 _SOF_TXTIME_REPORT_ERRORS = 1 << 1
 OBSERVER_TOPOLOGY_RECEIPT_SCHEMA_VERSION = 1
 OBSERVER_TOPOLOGY_RECEIPT_SOURCE = "accepted-attempt-observer-topology-v1"
+
+_KERNEL_TX_ETF_DELTA_BY_RUNNER_SCHEMA = {
+    KERNEL_TX_HISTORICAL_RUNNER_SCHEMA_VERSION: KERNEL_TX_HISTORICAL_ETF_DELTA_NS,
+    2: KERNEL_TX_HISTORICAL_ETF_DELTA_NS,
+    KERNEL_TX_RUNNER_V3_SCHEMA_VERSION: KERNEL_TX_HISTORICAL_ETF_DELTA_NS,
+    KERNEL_TX_RUNNER_SCHEMA_VERSION: KERNEL_TX_ETF_DELTA_NS,
+}
 
 KERNEL_TX_HISTORICAL_RUNNER_SEMANTICS = (
     "client_only_buflo_kernel_timed_egress_v2; "
@@ -77,7 +86,7 @@ KERNEL_TX_RUNNER_V2_SEMANTICS = (
     "client_only_preselection_adaptation=true; paper_equivalent=false; "
     "raw_runner_receipt_does_not_claim_post_veth_observation=true"
 )
-KERNEL_TX_RUNNER_SEMANTICS = (
+KERNEL_TX_RUNNER_V3_SEMANTICS = (
     "client_only_buflo_kernel_timed_egress_v3; "
     "clock=CLOCK_TAI_bracketed_against_CLOCK_MONOTONIC_and_CLOCK_REALTIME; "
     "exact_outgoing=SO_TXTIME_SCM_TXTIME_ETF; "
@@ -91,6 +100,31 @@ KERNEL_TX_RUNNER_SEMANTICS = (
     "sender_exclusivity_is_current_thread_control_flow_not_OS_socket_ownership; "
     "selection_cutoff=release_minus_5ms; "
     "tx_sched_and_tx_software_are_linux_error_queue_timestamps; "
+    "enqueue_clock_evidence=TAI_before_sendmsg_then_MONOTONIC_after_sendmsg_then_TAI_after; "
+    "post_tx_phase_same_clock_order_is_hard=true; "
+    "post_tx_monotonic_offset_overlap_is_diagnostic=true; "
+    "global_monotonic_drift_is_diagnostic=true; "
+    "strict_realization_window_is_half_open; no_catch_up=true; "
+    "client_only_preselection_adaptation=true; paper_equivalent=false; "
+    "raw_runner_receipt_does_not_claim_post_veth_observation=true"
+)
+KERNEL_TX_RUNNER_SEMANTICS = (
+    "client_only_buflo_kernel_timed_egress_v4; "
+    "clock=CLOCK_TAI_bracketed_against_CLOCK_MONOTONIC_and_CLOCK_REALTIME; "
+    "exact_outgoing=SO_TXTIME_SCM_TXTIME_ETF; "
+    "tick_zero_is_kernel_timed_after_future_defense_start_arm=true; "
+    "residual_incoming_credit=ordered_after_exact_transmit; "
+    "same_endpoint_credit_may_be_coalesced_in_exact_outgoing=true; "
+    "packet_priority=per_datagram_SCM_PRIORITY_after_IP_controls_or_single_threaded_serialized_SO_PRIORITY; "
+    "serialized_ipv4_traffic_class=socket_IP_TOS_before_SO_PRIORITY_and_restore_IP_TOS_before_SO_PRIORITY; "
+    "serialized_ipv6_traffic_class=per_message_IPV6_TCLASS; "
+    "serialized_socket_state_requires_verified_traffic_class_and_priority_readback_and_restoration; "
+    "sender_exclusivity_is_current_thread_control_flow_not_OS_socket_ownership; "
+    "selection_cutoff=release_minus_5ms; "
+    "etf_delta=4.5ms; "
+    "etf_expiry_precedes_minimum_half_open_deadline_by_499us_or_more=true; "
+    "tx_sched_and_tx_software_are_linux_error_queue_timestamps; "
+    "txtime_drop_scm_timestamping_is_requested_tai_context_not_transmit_evidence=true; "
     "enqueue_clock_evidence=TAI_before_sendmsg_then_MONOTONIC_after_sendmsg_then_TAI_after; "
     "post_tx_phase_same_clock_order_is_hard=true; "
     "post_tx_monotonic_offset_overlap_is_diagnostic=true; "
@@ -447,6 +481,7 @@ _ITEM_V1_KEYS = frozenset(
 )
 _ITEM_V2_KEYS = _ITEM_V1_KEYS | {"post_tx_clock_phase"}
 _ITEM_V3_KEYS = _ITEM_V2_KEYS
+_ITEM_V4_KEYS = _ITEM_V3_KEYS
 _JOB_KEYS = frozenset(
     {
         "schema_version",
@@ -965,6 +1000,7 @@ def _clock_mapping_valid(value: Any) -> bool:
         1: _EFFECTIVE_ENVELOPE_SEMANTICS_V1,
         2: _EFFECTIVE_ENVELOPE_SEMANTICS_V2,
         3: _EFFECTIVE_ENVELOPE_SEMANTICS_V3,
+        4: _EFFECTIVE_ENVELOPE_SEMANTICS_V3,
     }.get(schema_version)
     if (
         mapping is None
@@ -1049,7 +1085,7 @@ def _clock_mapping_valid(value: Any) -> bool:
         <= KERNEL_TX_MAX_CLOCK_BRACKET_NS
         and phase_drift <= mapping["max_observed_offset_drift_ns"]
         and (
-            schema_version in {2, 3}
+            schema_version in {2, 3, 4}
             or mapping["max_observed_offset_drift_ns"]
             <= KERNEL_TX_MAX_CLOCK_OFFSET_DRIFT_NS
         )
@@ -1069,7 +1105,7 @@ def _clock_mapping_valid(value: Any) -> bool:
 def _clock_mapping_matches_items(
     mapping: Mapping[str, Any], jobs: Sequence[Mapping[str, Any]]
 ) -> bool:
-    if mapping["schema_version"] in {2, 3}:
+    if mapping["schema_version"] in {2, 3, 4}:
         return _clock_mapping_v2_matches_items(mapping, jobs)
     envelopes = {
         clock: list(_phase_offset_envelope(mapping, clock))
@@ -1578,10 +1614,16 @@ def _runtime_contract_valid(value: Any, *, success: bool, jobs: Sequence[Mapping
     )
 
 
-def _qdisc_contract_valid(value: Any) -> bool:
+def _kernel_tx_etf_delta_ns(runner_schema_version: int) -> int | None:
+    return _KERNEL_TX_ETF_DELTA_BY_RUNNER_SCHEMA.get(runner_schema_version)
+
+
+def _qdisc_contract_valid(value: Any, *, runner_schema_version: int) -> bool:
     contract = _exact_mapping(value, _QDISC_CONTRACT_KEYS)
+    expected_delta_ns = _kernel_tx_etf_delta_ns(runner_schema_version)
     if not (
         contract is not None
+        and expected_delta_ns is not None
         and _schema(contract)
         and type(contract.get("interface")) is str
         and bool(contract["interface"])
@@ -1600,7 +1642,9 @@ def _qdisc_contract_valid(value: Any) -> bool:
         and contract.get("ordinary_handle") == "10:"
         and contract.get("clock_id") == "CLOCK_TAI"
         and type(contract.get("delta_ns")) is int
-        and contract["delta_ns"] == KERNEL_TX_ETF_DELTA_NS
+        and contract["delta_ns"] > 0
+        and contract["delta_ns"] == expected_delta_ns
+        and contract["delta_ns"] < min(KERNEL_TX_ADAPTER_WINDOW_NS)
         and contract.get("deadline_mode") is False
         and contract.get("offload") is False
         and contract.get("skip_socket_check") is False
@@ -1815,6 +1859,7 @@ def _runner_item_valid(
         1: _ITEM_V1_KEYS,
         2: _ITEM_V2_KEYS,
         3: _ITEM_V3_KEYS,
+        4: _ITEM_V4_KEYS,
     }.get(item_schema_version)
     if item_keys is None:
         return False
@@ -1823,7 +1868,7 @@ def _runner_item_valid(
         item is None
         or not _schema(item, item_schema_version)
         or (
-            item_schema_version in {2, 3}
+            item_schema_version in {2, 3, 4}
             and item.get("post_tx_clock_phase") is not None
             and not _clock_phase_valid(item["post_tx_clock_phase"])
         )
@@ -1883,7 +1928,7 @@ def _runner_item_valid(
     ):
         return False
     post_tx_phase = item.get("post_tx_clock_phase")
-    if item_schema_version in {2, 3} and post_tx_phase is not None and any(
+    if item_schema_version in {2, 3, 4} and post_tx_phase is not None and any(
         item.get(key) is None
         for key in (
             "enqueue_monotonic_ns",
@@ -1915,7 +1960,7 @@ def _runner_item_valid(
                 enqueue_tai_lower_ns=enqueue_lower,
                 enqueue_tai_upper_ns=enqueue_upper,
             )
-        elif item_schema_version == 3:
+        elif item_schema_version in {3, 4}:
             enqueue_clock_consistent = _item_local_enqueue_operation_ordered(
                 post_tx_phase,
                 enqueue_monotonic_ns=enqueue_monotonic,
@@ -1957,7 +2002,7 @@ def _runner_item_valid(
     )
     if (provisional[0] is None) != (provisional[1] is None):
         return False
-    if item_schema_version in {2, 3} and provisional[0] is not None and post_tx_phase is None:
+    if item_schema_version in {2, 3, 4} and provisional[0] is not None and post_tx_phase is None:
         return False
     if provisional[0] is not None:
         if (
@@ -1970,7 +2015,7 @@ def _runner_item_valid(
             or item["tx_software_tai_upper_ns"] < provisional[1]
         ):
             return False
-        if item_schema_version in {2, 3} and (
+        if item_schema_version in {2, 3, 4} and (
             provisional[0] > item["tx_software_tai_lower_ns"]
             or provisional[1] < item["tx_software_tai_upper_ns"]
         ):
@@ -2369,6 +2414,7 @@ def _unmapped_runner_item_valid(
         1: _ITEM_V1_KEYS,
         2: _ITEM_V2_KEYS,
         3: _ITEM_V3_KEYS,
+        4: _ITEM_V4_KEYS,
     }.get(runner_schema_version)
     if item_keys is None:
         return False
@@ -2377,7 +2423,7 @@ def _unmapped_runner_item_valid(
         item is None
         or not _schema(item, runner_schema_version)
         or (
-            runner_schema_version in {2, 3}
+            runner_schema_version in {2, 3, 4}
             and item.get("post_tx_clock_phase") is not None
             and not _clock_phase_valid(item["post_tx_clock_phase"])
         )
@@ -2483,7 +2529,7 @@ def _unmapped_runner_item_valid(
                 enqueue_tai_lower_ns=enqueue_tai_lower_ns,
                 enqueue_tai_upper_ns=enqueue_tai_upper_ns,
             )
-        elif runner_schema_version == 3:
+        elif runner_schema_version in {3, 4}:
             enqueue_clock_consistent = _item_local_enqueue_operation_ordered(
                 post_tx_phase,
                 enqueue_monotonic_ns=enqueue_monotonic_ns,
@@ -2503,7 +2549,8 @@ def _unmapped_runner_item_valid(
             or item.get("event_id") != 2 * job["tick"]
             or item["udp_payload_bytes"] != KERNEL_TX_MAX_UDP_PAYLOAD_BYTES
             or item.get("scm_txtime_tai_ns")
-            != job["release_tai_ns"] + KERNEL_TX_ETF_DELTA_NS
+            != job["release_tai_ns"]
+            + _KERNEL_TX_ETF_DELTA_BY_RUNNER_SCHEMA[runner_schema_version]
         ):
             return False
     elif (
@@ -2529,7 +2576,7 @@ def _unmapped_runner_item_valid(
         and item["enqueue_tai_upper_ns"] < job["release_tai_ns"]
     )
     if (
-        runner_schema_version in {2, 3}
+        runner_schema_version in {2, 3, 4}
         and item["terminal_error"]
         == "final_conservative_envelope_validation_failed"
         and item["terminal_error_detail"]
@@ -2902,13 +2949,17 @@ def kernel_tx_runner_receipt_valid(value: Any) -> bool:
             KERNEL_TX_HISTORICAL_RUNNER_SEMANTICS
         ),
         2: KERNEL_TX_RUNNER_V2_SEMANTICS,
+        KERNEL_TX_RUNNER_V3_SCHEMA_VERSION: KERNEL_TX_RUNNER_V3_SEMANTICS,
         KERNEL_TX_RUNNER_SCHEMA_VERSION: KERNEL_TX_RUNNER_SEMANTICS,
     }.get(receipt_schema_version)
     if (
         receipt is None
         or expected_semantics is None
         or receipt.get("semantics") != expected_semantics
-        or not _qdisc_contract_valid(receipt.get("qdisc_contract"))
+        or not _qdisc_contract_valid(
+            receipt.get("qdisc_contract"),
+            runner_schema_version=receipt_schema_version,
+        )
         or receipt.get("terminal_outcome") not in {"complete", "failed"}
         or not _nullable_string(receipt.get("primary_error"))
         or not isinstance(receipt.get("cleanup_errors"), list)

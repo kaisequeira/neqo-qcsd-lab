@@ -40,7 +40,9 @@ SOF_TIMESTAMPING_OPT_ID = 1 << 7
 SOF_TIMESTAMPING_TX_SCHED = 1 << 8
 SOF_TIMESTAMPING_OPT_TSONLY = 1 << 11
 SOF_TXTIME_REPORT_ERRORS = 1 << 1
-PROBE_SCHEMA_VERSION = 1
+PROBE_SCHEMA_VERSION = 2
+ETF_DELTA_NS = 4_500_000
+STRICT_REALIZATION_WINDOW_NS = 5_000_000
 PROBE_PAYLOADS = {
     "fifo": b"qcsd-etf-probe:fifo-v1",
     "fifo_concurrent": b"qcsd-etf-probe:fifo-concurrent-v1",
@@ -257,7 +259,7 @@ def _install_qdisc(commands: list[dict[str, Any]]) -> None:
                 "clockid",
                 "CLOCK_TAI",
                 "delta",
-                "4000000",
+                str(ETF_DELTA_NS),
             ]
         )
     )
@@ -284,7 +286,7 @@ def _validate_installed_qdisc(snapshot: dict[str, Any]) -> None:
     etf_options = etf.get("options", {})
     if etf_options.get("clockid") not in {"TAI", "CLOCK_TAI"}:
         raise RuntimeError("ETF qdisc does not use CLOCK_TAI")
-    if etf_options.get("delta") != 4_000_000:
+    if etf_options.get("delta") != ETF_DELTA_NS:
         raise RuntimeError("ETF qdisc delta is incorrect")
     if any(
         etf_options.get(key) not in {False, "off", 0, None}
@@ -331,7 +333,9 @@ def _extended_error(ancillary: list[tuple[int, int, bytes]]) -> list[dict[str, i
     return errors
 
 
-def _tx_timestamp(ancillary: list[tuple[int, int, bytes]]) -> dict[str, int] | None:
+def _scm_timestamping_ts0(
+    ancillary: list[tuple[int, int, bytes]],
+) -> dict[str, int] | None:
     for level, kind, data in ancillary:
         if level == socket.SOL_SOCKET and kind == SO_TIMESTAMPING and len(data) >= 48:
             values = struct.unpack_from("=qqqqqq", data)
@@ -339,7 +343,7 @@ def _tx_timestamp(ancillary: list[tuple[int, int, bytes]]) -> dict[str, int] | N
                 return {
                     "seconds": values[0],
                     "nanoseconds": values[1],
-                    "realtime_ns": values[0] * 1_000_000_000 + values[1],
+                    "raw_ns": values[0] * 1_000_000_000 + values[1],
                 }
     return None
 
@@ -355,11 +359,31 @@ def _drain_error_queue(sock: socket.socket, *, until_monotonic: float) -> list[d
         except BlockingIOError:
             time.sleep(0.001)
             continue
+        errors = _extended_error(ancillary)
+        timestamp = _scm_timestamping_ts0(ancillary)
+        origins = {error["origin"] for error in errors}
+        timestamp_origin = origins == {4}
+        txtime_origin = origins == {6}
         messages.append(
             {
                 "flags": flags,
-                "tx_software_timestamp": _tx_timestamp(ancillary),
-                "extended_errors": _extended_error(ancillary),
+                "tx_software_timestamp": (
+                    None
+                    if timestamp is None or not timestamp_origin
+                    else {
+                        **timestamp,
+                        "realtime_ns": timestamp["raw_ns"],
+                    }
+                ),
+                "txtime_context_timestamp": (
+                    None
+                    if timestamp is None or not txtime_origin
+                    else {
+                        **timestamp,
+                        "requested_txtime_tai_ns": timestamp["raw_ns"],
+                    }
+                ),
+                "extended_errors": errors,
             }
         )
     return messages
@@ -372,12 +396,13 @@ def _control_send(
     clockid: int | None,
     include_cmsg: bool,
     target_ns: int | None,
+    timestamping: bool = False,
 ) -> dict[str, Any]:
     started = time.clock_gettime_ns(CLOCK_TAI)
     sock = (
         socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         if clockid is None
-        else _txtime_socket(clockid, timestamping=False)
+        else _txtime_socket(clockid, timestamping=timestamping)
     )
     sock.setsockopt(socket.SOL_SOCKET, SO_PRIORITY, 6)
     priority_before = sock.getsockopt(socket.SOL_SOCKET, SO_PRIORITY)
@@ -407,6 +432,7 @@ def _control_send(
         "finished_tai_ns": time.clock_gettime_ns(CLOCK_TAI),
         "clockid": clockid,
         "include_cmsg": include_cmsg,
+        "timestamping": timestamping,
         "target_ns": target_ns,
         "priority_mechanism": "serialized-socket-global-SO_PRIORITY",
         "priority_before_send": priority_before,
@@ -478,8 +504,8 @@ def _positive_helper(
     ready: dict[str, Any] = {
         "phase": "ready-for-serialized-priority-transaction",
         "release_tai_ns": release_tai_ns,
-        "deadline_tai_ns": release_tai_ns + 5_000_000,
-        "scm_txtime_tai_ns": release_tai_ns + 4_000_000,
+        "deadline_tai_ns": release_tai_ns + STRICT_REALIZATION_WINDOW_NS,
+        "scm_txtime_tai_ns": release_tai_ns + ETF_DELTA_NS,
         "so_txtime_flags": SOF_TXTIME_REPORT_ERRORS,
         "deadline_mode": False,
         "destination": {"ipv4": destination[0], "port": destination[1]},
@@ -711,8 +737,8 @@ def send(args: argparse.Namespace) -> int:
         "interface": "eth0",
         "configuration": {
             "clockid": "CLOCK_TAI",
-            "delta_ns": 4_000_000,
-            "realization_window_ns": 5_000_000,
+            "delta_ns": ETF_DELTA_NS,
+            "realization_window_ns": STRICT_REALIZATION_WINDOW_NS,
             "normal_priority": 0,
             "timed_priority": 6,
             "timed_priority_mechanism": "serialized-socket-global-SO_PRIORITY",
@@ -781,6 +807,7 @@ def send(args: argparse.Namespace) -> int:
                 clockid=CLOCK_TAI,
                 include_cmsg=True,
                 target_ns=time.clock_gettime_ns(CLOCK_TAI) - 1_000_000,
+                timestamping=True,
             ),
         ]
         receipt["qdisc_after_negative_controls"] = _qdisc_snapshot()

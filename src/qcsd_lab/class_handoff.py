@@ -3,7 +3,7 @@
 This exporter is deliberately disjoint from the historical classifier and
 BuFLO-study handoffs.  It accepts only the ten sealed schema-two ``formal``
 results, preserves the five accepted source artifacts byte-for-byte, retains
-schema-11/12 BuFLO kernel-TX evidence in a separate subtree, and derives
+schema-11/12/13 BuFLO kernel-TX evidence in a separate subtree, and derives
 classifier products solely from observer time, client-relative direction,
 and Ethernet frame length.
 """
@@ -2516,7 +2516,7 @@ modes, {dimensions.block_count} temporal acquisition blocks, and
 training, block 9 is validation, and block 10 is held-out test evidence.
 
 The five accepted source files are preserved under `raw/`; classic raw PCAP is
-derived alongside them. Schema-11/12 BuFLO kernel-TX sidecars are copied into the
+derived alongside them. Schema-11/12/13 BuFLO kernel-TX sidecars are copied into the
 separate `kernel-tx-evidence/` subtree and do not alter that five-file source
 inventory. Classifiers must consume only `traces/*.csv` or `shape/*.pcap`.
 Those products contain only relative timestamp, client-relative direction, and

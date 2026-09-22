@@ -1098,6 +1098,50 @@ def test_current_buflo_capture_requires_kernel_tx_scheduler_before_mutation(
     assert not attempt.exists()
 
 
+def test_kernel_tx_runner_admission_preserves_history_and_requires_exact_schema_pairs() -> None:
+    from tests.test_kernel_tx import (
+        _runner_receipt_v3,
+        _runner_receipt_v4,
+        _runner_wakeup_v11,
+        _runner_wakeup_v12,
+        _runner_wakeup_v13,
+    )
+
+    for wakeups in (_runner_wakeup_v11(), _runner_wakeup_v12(), _runner_wakeup_v13()):
+        assert capture_session._runner_wakeup_metrics_valid(wakeups)
+        raw = wakeups["buflo_kernel_tx"]
+        assert isinstance(raw, dict)
+        scheduler = deepcopy(raw["runtime_contract"]["scheduler_initial"])
+        run = {
+            "process_scheduler": scheduler,
+            "resolved_configuration": {"defense": {"kind": "buflo"}},
+            "runner_wakeup_metrics": wakeups,
+        }
+        assert capture_session._process_scheduler_bound_to_run_valid(
+            run,
+            expected_contract="qcsd-client-rr1-cpu10-etf-helper-cpu11-v1",
+        )
+
+    schema_twelve_with_raw_four = _runner_wakeup_v12()
+    schema_twelve_with_raw_four["buflo_kernel_tx"] = _runner_receipt_v4()
+    schema_thirteen_with_raw_three = _runner_wakeup_v13()
+    schema_thirteen_with_raw_three["buflo_kernel_tx"] = _runner_receipt_v3()
+    for wakeups in (schema_twelve_with_raw_four, schema_thirteen_with_raw_three):
+        assert not capture_session._runner_wakeup_metrics_valid(wakeups)
+        raw = wakeups["buflo_kernel_tx"]
+        assert isinstance(raw, dict)
+        scheduler = deepcopy(raw["runtime_contract"]["scheduler_initial"])
+        run = {
+            "process_scheduler": scheduler,
+            "resolved_configuration": {"defense": {"kind": "buflo"}},
+            "runner_wakeup_metrics": wakeups,
+        }
+        assert not capture_session._process_scheduler_bound_to_run_valid(
+            run,
+            expected_contract="qcsd-client-rr1-cpu10-etf-helper-cpu11-v1",
+        )
+
+
 def _configuration(
     directory: Path,
     address: str,
