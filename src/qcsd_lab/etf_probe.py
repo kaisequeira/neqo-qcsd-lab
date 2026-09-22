@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import errno
 import hashlib
 import ipaddress
 import json
@@ -867,11 +868,49 @@ def validate_probe(sender: dict[str, Any], receiver: dict[str, Any]) -> dict[str
     )
     past_txtime = controls.get("past_txtime", {})
     past_target = past_txtime.get("target_ns")
+    past_started = past_txtime.get("started_tai_ns")
     past_messages = past_txtime.get("error_queue", [])
-    past_message = past_messages[0] if len(past_messages) == 1 else {}
-    past_context = past_message.get("txtime_context_timestamp", {})
-    past_errors = past_message.get("extended_errors", [])
-    past_error = past_errors[0] if len(past_errors) == 1 else {}
+
+    def single_extended_error(message: dict[str, Any]) -> dict[str, Any]:
+        errors = message.get("extended_errors", [])
+        return errors[0] if len(errors) == 1 and isinstance(errors[0], dict) else {}
+
+    past_sched_messages = [
+        message
+        for message in past_messages
+        if isinstance(message, dict)
+        and single_extended_error(message).get("origin") == 4
+    ]
+    past_txtime_messages = [
+        message
+        for message in past_messages
+        if isinstance(message, dict)
+        and single_extended_error(message).get("origin") == 6
+    ]
+    past_sched_message = (
+        past_sched_messages[0] if len(past_sched_messages) == 1 else {}
+    )
+    past_txtime_message = (
+        past_txtime_messages[0] if len(past_txtime_messages) == 1 else {}
+    )
+    past_sched_error = single_extended_error(past_sched_message)
+    past_error = single_extended_error(past_txtime_message)
+    past_sched_timestamp = past_sched_message.get("tx_software_timestamp", {})
+    past_context = past_txtime_message.get("txtime_context_timestamp", {})
+    past_sched_timestamp_valid = (
+        isinstance(past_sched_timestamp, dict)
+        and all(
+            isinstance(past_sched_timestamp.get(name), int)
+            and not isinstance(past_sched_timestamp.get(name), bool)
+            for name in ("seconds", "nanoseconds", "raw_ns", "realtime_ns")
+        )
+        and 0 <= past_sched_timestamp.get("nanoseconds", -1) < 1_000_000_000
+        and past_sched_timestamp.get("raw_ns")
+        == past_sched_timestamp.get("seconds", 0) * 1_000_000_000
+        + past_sched_timestamp.get("nanoseconds", -1)
+        and past_sched_timestamp.get("realtime_ns")
+        == past_sched_timestamp.get("raw_ns")
+    )
     encoded_past_target = (
         (past_error.get("data") << 32) | past_error.get("info")
         if isinstance(past_error.get("data"), int)
@@ -882,28 +921,46 @@ def validate_probe(sender: dict[str, Any], receiver: dict[str, Any]) -> dict[str
         "txtime_error_queue_context",
         isinstance(past_target, int)
         and not isinstance(past_target, bool)
+        and isinstance(past_started, int)
+        and not isinstance(past_started, bool)
+        and past_target < past_started
         and past_txtime.get("clockid") == 11
         and past_txtime.get("include_cmsg") is True
         and past_txtime.get("timestamping") is True
-        and past_txtime.get("send_error") is None
-        and past_txtime.get("sent_bytes")
-        == len(EXPECTED_PAYLOADS["past_txtime"].encode())
-        and len(past_messages) == 1
-        and past_message.get("tx_software_timestamp") is None
+        and past_txtime.get("sent_bytes") is None
+        and past_txtime.get("send_error", {}).get("errno") == errno.ENOBUFS
+        and past_txtime.get("send_error", {}).get("name") == "ENOBUFS"
+        and len(past_messages) == 2
+        and len(past_sched_messages) == 1
+        and len(past_txtime_messages) == 1
+        and past_sched_timestamp_valid
+        and past_sched_message.get("txtime_context_timestamp") is None
+        and past_sched_error.get("errno") == errno.ENOMSG
+        and past_sched_error.get("origin") == 4
+        and past_sched_error.get("type") == 0
+        and past_sched_error.get("code") == 0
+        and past_sched_error.get("info") == 1
+        and past_sched_error.get("data") == 0
+        and past_txtime_message.get("tx_software_timestamp") is None
         and past_context.get("requested_txtime_tai_ns") == past_target
         and past_context.get("raw_ns") == past_target
-        and len(past_errors) == 1
-        and past_error.get("errno") == 22
+        and past_context.get("seconds") == past_target // 1_000_000_000
+        and past_context.get("nanoseconds") == past_target % 1_000_000_000
+        and past_error.get("errno") == errno.EINVAL
         and past_error.get("origin") == 6
         and past_error.get("type") == 0
         and past_error.get("code") == 1
         and encoded_past_target == past_target,
         {
             "control": past_txtime,
+            "scheduler_receipts": past_sched_messages,
+            "txtime_receipts": past_txtime_messages,
+            "scheduler_timestamp_valid": past_sched_timestamp_valid,
             "encoded_requested_txtime_tai_ns": encoded_past_target,
             "semantics": (
-                "SCM_TIMESTAMPING ts0 on a TXTIME-origin error is requested-TAI "
-                "correlation context, never transmit evidence"
+                "SCM_TSTAMP_SCHED precedes ETF validation and is not transmit "
+                "proof; SCM_TIMESTAMPING ts0 on a TXTIME-origin error is "
+                "requested-TAI correlation context, never transmit evidence"
             ),
         },
     )

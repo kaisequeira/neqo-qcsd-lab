@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import errno
 import importlib.util
 import json
 import struct
@@ -164,9 +165,29 @@ def _valid_pair() -> tuple[dict[str, Any], dict[str, Any]]:
                 "include_cmsg": True,
                 "timestamping": True,
                 "target_ns": past_target,
-                "sent_bytes": len(payloads["past_txtime"].encode()),
-                "send_error": None,
+                "started_tai_ns": RELEASE,
+                "sent_bytes": None,
+                "send_error": {"errno": errno.ENOBUFS, "name": "ENOBUFS"},
                 "error_queue": [
+                    {
+                        "tx_software_timestamp": {
+                            "seconds": 0,
+                            "nanoseconds": 1,
+                            "raw_ns": 1,
+                            "realtime_ns": 1,
+                        },
+                        "txtime_context_timestamp": None,
+                        "extended_errors": [
+                            {
+                                "errno": errno.ENOMSG,
+                                "origin": 4,
+                                "type": 0,
+                                "code": 0,
+                                "info": 1,
+                                "data": 0,
+                            }
+                        ],
+                    },
                     {
                         "tx_software_timestamp": None,
                         "txtime_context_timestamp": {
@@ -177,7 +198,7 @@ def _valid_pair() -> tuple[dict[str, Any], dict[str, Any]]:
                         },
                         "extended_errors": [
                             {
-                                "errno": 22,
+                                "errno": errno.EINVAL,
                                 "origin": 6,
                                 "type": 0,
                                 "code": 1,
@@ -634,7 +655,11 @@ def test_validate_probe_never_treats_txtime_context_as_transmit_proof() -> None:
     past = next(
         item for item in sender["negative_controls"] if item["name"] == "past_txtime"
     )
-    message = past["error_queue"][0]
+    message = next(
+        item
+        for item in past["error_queue"]
+        if item["extended_errors"][0]["origin"] == 6
+    )
     message["tx_software_timestamp"] = message.pop("txtime_context_timestamp")
 
     result = etf_probe.validate_probe(sender, receiver)
@@ -648,7 +673,97 @@ def test_validate_probe_binds_txtime_error_words_to_requested_tai() -> None:
     past = next(
         item for item in sender["negative_controls"] if item["name"] == "past_txtime"
     )
-    past["error_queue"][0]["extended_errors"][0]["info"] += 1
+    message = next(
+        item
+        for item in past["error_queue"]
+        if item["extended_errors"][0]["origin"] == 6
+    )
+    message["extended_errors"][0]["info"] += 1
+
+    result = etf_probe.validate_probe(sender, receiver)
+
+    assert result["passed"] is False
+    assert "txtime_error_queue_context" in result["failed_gates"]
+
+
+def test_validate_probe_accepts_past_txtime_receipts_independent_of_queue_order() -> None:
+    sender, receiver = _valid_pair()
+    past = next(
+        item for item in sender["negative_controls"] if item["name"] == "past_txtime"
+    )
+    past["error_queue"].reverse()
+
+    result = etf_probe.validate_probe(sender, receiver)
+
+    assert result["passed"] is True
+
+
+@pytest.mark.parametrize("mutation", ("missing", "duplicate", "sent"))
+def test_validate_probe_requires_one_sched_receipt_without_transmit_proof(
+    mutation: str,
+) -> None:
+    sender, receiver = _valid_pair()
+    past = next(
+        item for item in sender["negative_controls"] if item["name"] == "past_txtime"
+    )
+    sched = next(
+        item
+        for item in past["error_queue"]
+        if item["extended_errors"][0]["origin"] == 4
+    )
+    if mutation == "missing":
+        past["error_queue"].remove(sched)
+    elif mutation == "duplicate":
+        past["error_queue"].append(copy.deepcopy(sched))
+    else:
+        sched["extended_errors"][0]["info"] = 0
+
+    result = etf_probe.validate_probe(sender, receiver)
+
+    assert result["passed"] is False
+    assert "txtime_error_queue_context" in result["failed_gates"]
+
+
+@pytest.mark.parametrize("mutation", ("missing", "duplicate"))
+def test_validate_probe_requires_exactly_one_txtime_rejection_receipt(
+    mutation: str,
+) -> None:
+    sender, receiver = _valid_pair()
+    past = next(
+        item for item in sender["negative_controls"] if item["name"] == "past_txtime"
+    )
+    rejection = next(
+        item
+        for item in past["error_queue"]
+        if item["extended_errors"][0]["origin"] == 6
+    )
+    if mutation == "missing":
+        past["error_queue"].remove(rejection)
+    else:
+        past["error_queue"].append(copy.deepcopy(rejection))
+
+    result = etf_probe.validate_probe(sender, receiver)
+
+    assert result["passed"] is False
+    assert "txtime_error_queue_context" in result["failed_gates"]
+
+
+@pytest.mark.parametrize(
+    ("sent_bytes", "send_error"),
+    (
+        (len(etf_probe.EXPECTED_PAYLOADS["past_txtime"].encode()), None),
+        (None, {"errno": errno.EINVAL, "name": "EINVAL"}),
+    ),
+)
+def test_validate_probe_requires_synchronous_enobufs_for_past_txtime_drop(
+    sent_bytes: int | None, send_error: dict[str, Any] | None
+) -> None:
+    sender, receiver = _valid_pair()
+    past = next(
+        item for item in sender["negative_controls"] if item["name"] == "past_txtime"
+    )
+    past["sent_bytes"] = sent_bytes
+    past["send_error"] = send_error
 
     result = etf_probe.validate_probe(sender, receiver)
 
