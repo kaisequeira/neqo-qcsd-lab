@@ -2757,6 +2757,8 @@ def test_kernel_tx_sidecar_promotes_outside_exact_five_file_sample(
         (15, 5),
         (15, 7),
         (16, 6),
+        (16, 8),
+        (17, 7),
     ),
 )
 def test_kernel_tx_promotion_rejects_outer_raw_schema_cross_pair(
@@ -2794,8 +2796,8 @@ def test_kernel_tx_promotion_rejects_outer_raw_schema_cross_pair(
         orchestrator,
         "_runner_wakeup_metrics_valid",
         lambda value: (
-            value.get("schema_version") == 16
-            and value.get("buflo_kernel_tx", {}).get("schema_version") == 7
+            value.get("schema_version") == 17
+            and value.get("buflo_kernel_tx", {}).get("schema_version") == 8
         ),
     )
 

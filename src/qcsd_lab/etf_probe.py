@@ -27,7 +27,8 @@ from .util import LAB_ROOT, durable_create, fsync_directory, sha256_file
 
 
 ARTIFACT_TYPE = "qcsd-etf-capability-probe"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+PREVIOUS_SCHEMA_VERSION = 2
 HISTORICAL_SCHEMA_VERSION = 1
 SUPERVISED_REQUEST_TYPE = "qcsd-etf-supervised-request"
 CONTAINER_TOOL = LAB_ROOT / "tools/etf_probe_container.py"
@@ -36,7 +37,8 @@ DEFAULT_IMAGE = "neqo-qcsd-lab-collection:local"
 PORT = 45678
 RECEIVER_TIMEOUT_SECONDS = 12.0
 RELEASE_LEAD_NS = 500_000_000
-ETF_DELTA_NS = 4_500_000
+ETF_DELTA_NS = 10_000_000
+PREVIOUS_ETF_DELTA_NS = 4_500_000
 HISTORICAL_ETF_DELTA_NS = 4_000_000
 STRICT_REALIZATION_WINDOW_NS = 5_000_000
 IPV4_UDP_HEADER_BYTES = 20 + 8
@@ -97,6 +99,7 @@ def _payload_sha256(value: dict[str, Any]) -> str:
     schema_version = payload.get("schema_version")
     if type(schema_version) is not int or schema_version not in {
         HISTORICAL_SCHEMA_VERSION,
+        PREVIOUS_SCHEMA_VERSION,
         SCHEMA_VERSION,
     }:
         raise ValueError("ETF probe payload schema is invalid")
@@ -112,6 +115,7 @@ def _validate_receipt_structure(value: dict[str, Any]) -> None:
     schema_version = value.get("schema_version")
     if type(schema_version) is not int or schema_version not in {
         HISTORICAL_SCHEMA_VERSION,
+        PREVIOUS_SCHEMA_VERSION,
         SCHEMA_VERSION,
     }:
         raise ValueError("ETF probe receipt schema is invalid")
@@ -125,11 +129,11 @@ def _validate_receipt_structure(value: dict[str, Any]) -> None:
     cleanup = value.get("cleanup")
     if not all(isinstance(item, dict) for item in (configuration, validation, cleanup)):
         raise ValueError("ETF probe receipt structure is invalid")
-    expected_delta_ns = (
-        HISTORICAL_ETF_DELTA_NS
-        if schema_version == HISTORICAL_SCHEMA_VERSION
-        else ETF_DELTA_NS
-    )
+    expected_delta_ns = {
+        HISTORICAL_SCHEMA_VERSION: HISTORICAL_ETF_DELTA_NS,
+        PREVIOUS_SCHEMA_VERSION: PREVIOUS_ETF_DELTA_NS,
+        SCHEMA_VERSION: ETF_DELTA_NS,
+    }[schema_version]
     if (
         configuration.get("clockid") != "CLOCK_TAI"
         or configuration.get("etf_delta_ns") != expected_delta_ns
@@ -138,12 +142,37 @@ def _validate_receipt_structure(value: dict[str, Any]) -> None:
     ):
         raise ValueError("ETF probe receipt timing contract is invalid")
     if schema_version == HISTORICAL_SCHEMA_VERSION:
-        if "post_etf_observer_guard_ns" in configuration:
+        if any(
+            name in configuration
+            for name in (
+                "post_etf_observer_guard_ns",
+                "scm_txtime_offset_ns",
+                "etf_dequeue_target_offset_ns",
+                "etf_expiry_horizon_ns",
+            )
+        ):
             raise ValueError("historical ETF probe receipt contains a future timing field")
-    elif configuration.get("post_etf_observer_guard_ns") != (
-        STRICT_REALIZATION_WINDOW_NS - ETF_DELTA_NS
+    elif schema_version == PREVIOUS_SCHEMA_VERSION:
+        if (
+            configuration.get("post_etf_observer_guard_ns")
+            != STRICT_REALIZATION_WINDOW_NS - PREVIOUS_ETF_DELTA_NS
+            or any(
+                name in configuration
+                for name in (
+                    "scm_txtime_offset_ns",
+                    "etf_dequeue_target_offset_ns",
+                    "etf_expiry_horizon_ns",
+                )
+            )
+        ):
+            raise ValueError("ETF probe receipt observer guard is invalid")
+    elif (
+        "post_etf_observer_guard_ns" in configuration
+        or configuration.get("scm_txtime_offset_ns") != ETF_DELTA_NS
+        or configuration.get("etf_dequeue_target_offset_ns") != 0
+        or configuration.get("etf_expiry_horizon_ns") != ETF_DELTA_NS
     ):
-        raise ValueError("ETF probe receipt observer guard is invalid")
+        raise ValueError("ETF probe receipt schema-3 timing semantics are invalid")
 
     passed = value.get("status") == "passed"
     failed_gates = validation.get("failed_gates")
@@ -524,8 +553,7 @@ def validate_probe(sender: dict[str, Any], receiver: dict[str, Any]) -> dict[str
         and configuration.get("delta_ns") == ETF_DELTA_NS
         and configuration.get("realization_window_ns")
         == STRICT_REALIZATION_WINDOW_NS
-        and 0 < ETF_DELTA_NS < STRICT_REALIZATION_WINDOW_NS
-        and STRICT_REALIZATION_WINDOW_NS - ETF_DELTA_NS == 500_000
+        and ETF_DELTA_NS == 10_000_000
         and configuration.get("timed_priority") == 6
         and configuration.get("timed_priority_mechanism")
         == "serialized-socket-global-SO_PRIORITY"
@@ -1252,8 +1280,9 @@ def finalize_supervised_probe(
             "clockid": "CLOCK_TAI",
             "etf_delta_ns": ETF_DELTA_NS,
             "strict_realization_window_ns": STRICT_REALIZATION_WINDOW_NS,
-            "post_etf_observer_guard_ns": STRICT_REALIZATION_WINDOW_NS
-            - ETF_DELTA_NS,
+            "scm_txtime_offset_ns": ETF_DELTA_NS,
+            "etf_dequeue_target_offset_ns": 0,
+            "etf_expiry_horizon_ns": ETF_DELTA_NS,
             "timed_priority": 6,
             "timed_priority_mechanism": "serialized-socket-global-SO_PRIORITY",
             "scm_priority_probe": "receipted capability fact; never used as fallback",

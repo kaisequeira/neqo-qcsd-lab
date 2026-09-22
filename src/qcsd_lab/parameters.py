@@ -34,7 +34,8 @@ PREVIOUS_TIMING_STRESS_V5_INPUT_POLICY = "controlled-test-only-timing-stress-v5"
 PREVIOUS_TIMING_STRESS_V6_INPUT_POLICY = "controlled-test-only-timing-stress-v6"
 PREVIOUS_TIMING_STRESS_V7_INPUT_POLICY = "controlled-test-only-timing-stress-v7"
 PREVIOUS_TIMING_STRESS_V8_INPUT_POLICY = "controlled-test-only-timing-stress-v8"
-TIMING_STRESS_INPUT_POLICY = "controlled-test-only-timing-stress-v9"
+PREVIOUS_TIMING_STRESS_V9_INPUT_POLICY = "controlled-test-only-timing-stress-v9"
+TIMING_STRESS_INPUT_POLICY = "controlled-test-only-timing-stress-v10"
 PARAMETER_ARTIFACT_NAME = "defense-parameters.json"
 PARAMETER_PROVENANCE_ARTIFACT_NAME = "defense-parameters.provenance.json"
 
@@ -872,6 +873,7 @@ def _validate_timing_stress_parameter_artifact(
     v7_parameter_path = timing_root / "buflo-timing-stress-v7.json"
     v8_parameter_path = timing_root / "buflo-timing-stress-v8.json"
     v9_parameter_path = timing_root / "buflo-timing-stress-v9.json"
+    v10_parameter_path = timing_root / "buflo-timing-stress-v10.json"
     if parameter_path == v1_parameter_path:
         provenance_schema_version = 1
         input_policy = PREVIOUS_TIMING_STRESS_INPUT_POLICY
@@ -1156,7 +1158,7 @@ def _validate_timing_stress_parameter_artifact(
         }
     elif parameter_path == v9_parameter_path:
         provenance_schema_version = 9
-        input_policy = TIMING_STRESS_INPUT_POLICY
+        input_policy = PREVIOUS_TIMING_STRESS_V9_INPUT_POLICY
         expected_capture_contract = {
             "schema_version": 9,
             "visits": 12,
@@ -1189,6 +1191,49 @@ def _validate_timing_stress_parameter_artifact(
                 "schema-10-compatibility-fields-retained-and-neutral"
             ),
             "kernel_tx_runner_receipt_schema_version": 7,
+            "kernel_tx_evidence_schema_version": 1,
+            "observer_topology_receipt_schema_version": 1,
+            "physical_outgoing_observer": "router-ingress-post-client-veth-pre-netem",
+            "txtime_drop_scm_timestamping_semantics": (
+                "requested-tai-correlation-context-never-transmit-evidence"
+            ),
+            "tick_zero_physical_observation_required": True,
+        }
+    elif parameter_path == v10_parameter_path:
+        provenance_schema_version = 10
+        input_policy = TIMING_STRESS_INPUT_POLICY
+        expected_capture_contract = {
+            "schema_version": 10,
+            "visits": 12,
+            "max_attempts": 1,
+            "authoritative_checkpoint": "experiment.json",
+            "mandatory_prefix_opportunities_per_direction": 5_001,
+            "maximum_opportunities_per_direction": 6_000,
+            "minimum_kernel_timed_outgoing_releases_after_tick_zero_per_visit": 5_000,
+            "maximum_kernel_timed_outgoing_releases_after_tick_zero_per_visit": 5_999,
+            "minimum_incoming_bytes_per_visit": 6_001_200,
+            "maximum_incoming_bytes_per_visit": 7_200_000,
+            "cadence_semantics": (
+                "inclusive-minimum-prefix-plus-bounded-terminal-whole-cell-drain"
+            ),
+            "terminal_drain_suffix": "contiguous-exact-paired-whole-cell-opportunities",
+            "logical_order_evidence": "direction-target-slot-identity",
+            "physical_row_order": "terminal-resolution-order-not-dispatch-order",
+            "terminal_schedule_stop_policy": (
+                "stop_new_opportunities_at_first_terminal_whole_cell_capacity_exhaustion_"
+                "then_drain_already_advertised_incoming_credit"
+            ),
+            "strict_half_open_window_us": 5_000,
+            "etf_delta_ns": 10_000_000,
+            "minimum_adapter_realization_window_ns": 4_999_000,
+            "minimum_etf_expiry_after_realization_deadline_ns": 5_000_000,
+            "catch_up": False,
+            "realization_backend": "linux-etf-so-txtime-post-veth-v5",
+            "runner_wakeup_schema_version": 17,
+            "legacy_userspace_exact_release_projection": (
+                "schema-10-compatibility-fields-retained-and-neutral"
+            ),
+            "kernel_tx_runner_receipt_schema_version": 8,
             "kernel_tx_evidence_schema_version": 1,
             "observer_topology_receipt_schema_version": 1,
             "physical_outgoing_observer": "router-ingress-post-client-veth-pre-netem",

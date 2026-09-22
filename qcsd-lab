@@ -162,7 +162,7 @@ WSL_HOST_BUILD_MIN_AVAILABLE_BYTES=68719476736
 QCSD_LAUNCH_ACTION="${1:-}"
 
 usage() {
-  echo "Usage: qcsd-lab {lifecycle-recover|build|prepare|derive-chaff-prefix-specs|qualify-chaff|qualify-response-chaff|run|resume|verify|analyze|fit|buflo-study|class-study|etf-probe|test} [arguments...]" >&2
+  echo "Usage: qcsd-lab {lifecycle-recover|build|prepare|derive-chaff-prefix-specs|qualify-chaff|qualify-response-chaff|run|resume|verify|analyze|fit|buflo-study|class-study|etf-probe|etf-veth-probe|test} [arguments...]" >&2
 }
 
 _qcsd_trusted_git() {
@@ -600,6 +600,27 @@ lab_root = Path(os.environ["QCSD_ETF_PROBE_LAB_ROOT"]).resolve()
 os.environ["QCSD_LAB_ROOT"] = str(lab_root)
 sys.path.insert(0, str(lab_root / "src"))
 from qcsd_lab.etf_probe import main
+
+main(sys.argv[1:])
+' "${@:2}"
+fi
+
+if [[ "${1:-}" == "etf-veth-probe" && $# == 2 &&
+      ( "${2}" == "-h" || "${2}" == "--help" ) ]]; then
+  etf_veth_probe_python="/usr/bin/python3"
+  [[ -x "${etf_veth_probe_python}" ]] || {
+    echo "etf-veth-probe requires python3 on the host" >&2
+    exit 1
+  }
+  QCSD_ETF_VETH_PROBE_LAB_ROOT="${ROOT}" exec "${etf_veth_probe_python}" -I -c '
+import os
+import sys
+from pathlib import Path
+
+lab_root = Path(os.environ["QCSD_ETF_VETH_PROBE_LAB_ROOT"]).resolve()
+os.environ["QCSD_LAB_ROOT"] = str(lab_root)
+sys.path.insert(0, str(lab_root / "src"))
+from qcsd_lab.etf_veth_probe import main
 
 main(sys.argv[1:])
 ' "${@:2}"
@@ -3727,7 +3748,8 @@ elif [[ "${1:-}" == "lifecycle-recover" ]]; then
   require_docker
   echo "qcsd-lab Docker lifecycle reconciliation completed" >&2
   exit 0
-elif [[ "${1:-}" != "class-study" && "${1:-}" != "etf-probe" ]]; then
+elif [[ "${1:-}" != "class-study" && "${1:-}" != "etf-probe" &&
+        "${1:-}" != "etf-veth-probe" ]]; then
   # Defer Docker/lifecycle recovery until any current build receipt and its
   # authoritative completion companion have been validated below.  Argument
   # parsing and local evidence validation before that boundary are read-only.
@@ -4120,6 +4142,393 @@ _wait_for_file(Path(sys.argv[1]), timeout_seconds=5.0)
     exit 1
   fi
   etf_probe_stage="complete"
+  exit 0
+fi
+
+# A bounded kernel-timing-geometry/post-veth-isolation preflight. It does not
+# exercise Rust/QUIC construction, the production priority transaction, or a
+# main/helper split and cannot authorise the mandatory HTTP/3 post-veth PCAP
+# gate. It deliberately stays outside every campaign/evidence namespace.
+if [[ "${1:-}" == "etf-veth-probe" ]]; then
+  require_docker
+  etf_veth_probe_python="/usr/bin/python3"
+  [[ -x "${etf_veth_probe_python}" ]] || {
+    echo "etf-veth-probe requires python3 on the host" >&2
+    exit 1
+  }
+
+  etf_veth_probe_scratch="$(mktemp -d --tmpdir=/tmp qcsd-etf-veth-probe.XXXXXXXX)"
+  etf_veth_probe_output="${etf_veth_probe_scratch}/output"
+  mkdir -- "${etf_veth_probe_output}"
+  chmod 0777 -- "${etf_veth_probe_output}"
+  etf_veth_probe_request="${etf_veth_probe_scratch}/request.json"
+  etf_veth_probe_version="${etf_veth_probe_scratch}/docker-version.json"
+  etf_veth_probe_info="${etf_veth_probe_scratch}/docker-info.json"
+  etf_veth_probe_image="${etf_veth_probe_scratch}/docker-image.json"
+  etf_veth_probe_state="${etf_veth_probe_scratch}/lifecycle.state"
+  etf_veth_probe_request_ready=0
+  etf_veth_probe_stage="request-validation"
+  etf_veth_probe_network_name="unavailable"
+  etf_veth_probe_peer_name="unavailable"
+  etf_veth_probe_sender_name="unavailable"
+  etf_veth_probe_network_id="unavailable"
+  etf_veth_probe_peer_id="unavailable"
+  etf_veth_probe_peer_cpu="unavailable"
+  etf_veth_probe_main_cpu="unavailable"
+  etf_veth_probe_helper_cpu="unavailable"
+  etf_veth_probe_sender_exit="unavailable"
+  etf_veth_probe_peer_exit="unavailable"
+  etf_veth_probe_peer_presence_before="not-created"
+  etf_veth_probe_peer_remove_status="not-attempted"
+  etf_veth_probe_peer_presence_after="not-created"
+  etf_veth_probe_peer_handoff_retired=0
+  etf_veth_probe_network_presence_before="not-created"
+  etf_veth_probe_network_remove_status="not-attempted"
+  etf_veth_probe_network_presence_after="not-created"
+  etf_veth_probe_network_handoff_retired=0
+  QCSD_DOCKER_IDS_ETF_VETH_PEERS=()
+  QCSD_DOCKER_IDS_ETF_VETH_NETWORKS=()
+
+  cleanup_etf_veth_probe() {
+    local cleanup_entry_status="$1"
+    local cleanup_status=0 cleanup_failure_status=0
+    local etf_veth_probe_finalizer_status=0 etf_veth_probe_state_staged=""
+    _QCSD_LIFETIME_CLEANUP_ACTIVE=1
+    trap - EXIT
+
+    if (( ${#QCSD_DOCKER_IDS_ETF_VETH_PEERS[@]} > 0 )); then
+      etf_veth_probe_peer_id="${QCSD_DOCKER_IDS_ETF_VETH_PEERS[-1]}"
+      etf_veth_probe_peer_presence_before="$(_qcsd_docker_exact_id_presence \
+        "${etf_veth_probe_peer_id}")"
+      if [[ "${etf_veth_probe_peer_presence_before}" == "present" ]]; then
+        if _qcsd_docker_api rm --force \
+            "${etf_veth_probe_peer_id}" >/dev/null 2>&1; then
+          etf_veth_probe_peer_remove_status=0
+        else
+          etf_veth_probe_peer_remove_status=$?
+          cleanup_status=1
+        fi
+      else
+        echo "ETF/veth peer disappeared before teardown" >&2
+        cleanup_status=1
+      fi
+      etf_veth_probe_peer_presence_after="$(_qcsd_docker_exact_id_presence \
+        "${etf_veth_probe_peer_id}")"
+      if [[ "${etf_veth_probe_peer_presence_after}" != "absent" ]]; then
+        cleanup_status=1
+      elif qcsd_retire_docker_handoff run \
+          "${etf_veth_probe_peer_id}" QCSD_DOCKER_IDS_ETF_VETH_PEERS; then
+        etf_veth_probe_peer_handoff_retired=1
+      else
+        cleanup_status=1
+      fi
+    fi
+
+    if (( ${#QCSD_DOCKER_IDS_ETF_VETH_NETWORKS[@]} > 0 )); then
+      etf_veth_probe_network_id="${QCSD_DOCKER_IDS_ETF_VETH_NETWORKS[-1]}"
+      etf_veth_probe_network_presence_before="$(_qcsd_docker_exact_network_presence \
+        "${etf_veth_probe_network_id}")"
+      if [[ "${etf_veth_probe_network_presence_before}" == "present" ]]; then
+        if _qcsd_docker_api network rm \
+            "${etf_veth_probe_network_id}" >/dev/null 2>&1; then
+          etf_veth_probe_network_remove_status=0
+        else
+          etf_veth_probe_network_remove_status=$?
+          cleanup_status=1
+        fi
+      else
+        echo "ETF/veth network disappeared before teardown" >&2
+        cleanup_status=1
+      fi
+      etf_veth_probe_network_presence_after="$(_qcsd_docker_exact_network_presence \
+        "${etf_veth_probe_network_id}")"
+      if [[ "${etf_veth_probe_network_presence_after}" != "absent" ]]; then
+        cleanup_status=1
+      elif qcsd_retire_docker_handoff network \
+          "${etf_veth_probe_network_id}" QCSD_DOCKER_IDS_ETF_VETH_NETWORKS; then
+        etf_veth_probe_network_handoff_retired=1
+      else
+        cleanup_status=1
+      fi
+    fi
+
+    if (( etf_veth_probe_request_ready != 0 )); then
+      etf_veth_probe_state_staged="${etf_veth_probe_state}.next"
+      if {
+        printf 'network_name=%s\n' "${etf_veth_probe_network_name}"
+        printf 'peer_name=%s\n' "${etf_veth_probe_peer_name}"
+        printf 'sender_name=%s\n' "${etf_veth_probe_sender_name}"
+        printf 'network_id=%s\n' "${etf_veth_probe_network_id}"
+        printf 'peer_id=%s\n' "${etf_veth_probe_peer_id}"
+        printf 'peer_cpu=%s\n' "${etf_veth_probe_peer_cpu}"
+        printf 'main_cpu=%s\n' "${etf_veth_probe_main_cpu}"
+        printf 'helper_cpu=%s\n' "${etf_veth_probe_helper_cpu}"
+        printf 'sender_exit_code=%s\n' "${etf_veth_probe_sender_exit}"
+        printf 'peer_exit_code=%s\n' "${etf_veth_probe_peer_exit}"
+        printf 'launcher_exit_code=%s\n' "${cleanup_entry_status}"
+        printf 'signal_status=%s\n' "${_QCSD_LIFETIME_SIGNAL_STATUS}"
+        printf 'stage=%s\n' "${etf_veth_probe_stage}"
+        printf 'peer_presence_before=%s\n' \
+          "${etf_veth_probe_peer_presence_before}"
+        printf 'peer_remove_status=%s\n' "${etf_veth_probe_peer_remove_status}"
+        printf 'peer_presence_after=%s\n' "${etf_veth_probe_peer_presence_after}"
+        printf 'peer_handoff_retired=%s\n' "${etf_veth_probe_peer_handoff_retired}"
+        printf 'network_presence_before=%s\n' \
+          "${etf_veth_probe_network_presence_before}"
+        printf 'network_remove_status=%s\n' \
+          "${etf_veth_probe_network_remove_status}"
+        printf 'network_presence_after=%s\n' \
+          "${etf_veth_probe_network_presence_after}"
+        printf 'network_handoff_retired=%s\n' \
+          "${etf_veth_probe_network_handoff_retired}"
+        if (( cleanup_status == 0 )); then
+          printf 'cleanup_passed=1\n'
+        else
+          printf 'cleanup_passed=0\n'
+        fi
+      } >"${etf_veth_probe_state_staged}" &&
+         chmod 0600 -- "${etf_veth_probe_state_staged}" &&
+         sync -f "${etf_veth_probe_state_staged}" &&
+         mv -f -- "${etf_veth_probe_state_staged}" "${etf_veth_probe_state}" &&
+         sync -f "${etf_veth_probe_scratch}"; then
+        if QCSD_ETF_VETH_PROBE_LAB_ROOT="${ROOT}" \
+            "${etf_veth_probe_python}" -I -c '
+import json
+import os
+import sys
+from pathlib import Path
+
+lab_root = Path(os.environ["QCSD_ETF_VETH_PROBE_LAB_ROOT"]).resolve()
+os.environ["QCSD_LAB_ROOT"] = str(lab_root)
+sys.path.insert(0, str(lab_root / "src"))
+from qcsd_lab.etf_veth_probe import finalize_supervised_bundle
+
+path, digest, passed = finalize_supervised_bundle(Path(sys.argv[1]), Path(sys.argv[2]))
+print(json.dumps({"passed": passed, "path": str(path), "sha256": digest}, sort_keys=True))
+raise SystemExit(0 if passed else 10)
+' "${etf_veth_probe_request}" "${etf_veth_probe_scratch}"; then
+          etf_veth_probe_finalizer_status=0
+        else
+          etf_veth_probe_finalizer_status=$?
+          cleanup_status=1
+        fi
+      else
+        echo "cannot publish the ETF/veth supervised lifecycle bundle" >&2
+        cleanup_status=1
+        etf_veth_probe_finalizer_status=1
+      fi
+    fi
+
+    if (( etf_veth_probe_request_ready == 0 ||
+          etf_veth_probe_finalizer_status == 0 ||
+          etf_veth_probe_finalizer_status == 10 )); then
+      if ! rm -f -- \
+          "${etf_veth_probe_output}/peer.ready" \
+          "${etf_veth_probe_output}/sender.done" \
+          "${etf_veth_probe_output}/peer.json" \
+          "${etf_veth_probe_output}/sender.json" \
+          "${etf_veth_probe_request}" "${etf_veth_probe_version}" \
+          "${etf_veth_probe_info}" "${etf_veth_probe_image}" \
+          "${etf_veth_probe_state}" "${etf_veth_probe_state}.next"; then
+        cleanup_status=1
+      fi
+      if ! rmdir -- "${etf_veth_probe_output}" "${etf_veth_probe_scratch}"; then
+        echo "ETF/veth scratch root contains unexpected state: ${etf_veth_probe_scratch}" >&2
+        cleanup_status=1
+      fi
+    else
+      echo "ETF/veth finalisation failed; preserving ${etf_veth_probe_scratch}" >&2
+    fi
+
+    (( cleanup_status == 0 )) || cleanup_failure_status=1
+    if (( cleanup_entry_status != 0 )); then
+      exit "${cleanup_entry_status}"
+    elif (( _QCSD_LIFETIME_SIGNAL_STATUS != 0 )); then
+      exit "${_QCSD_LIFETIME_SIGNAL_STATUS}"
+    else
+      exit "${cleanup_failure_status}"
+    fi
+  }
+  trap 'cleanup_etf_veth_probe "$?"' EXIT
+
+  if QCSD_ETF_VETH_PROBE_LAB_ROOT="${ROOT}" \
+      "${etf_veth_probe_python}" -I -c '
+import os
+import sys
+from pathlib import Path
+
+lab_root = Path(os.environ["QCSD_ETF_VETH_PROBE_LAB_ROOT"]).resolve()
+os.environ["QCSD_LAB_ROOT"] = str(lab_root)
+sys.path.insert(0, str(lab_root / "src"))
+from qcsd_lab.etf_veth_probe import prepare_supervised_request
+
+prepare_supervised_request(Path(sys.argv[1]), sys.argv[2:])
+' "${etf_veth_probe_request}" "${@:2}"; then
+    [[ ! -L "${etf_veth_probe_request}" && -f "${etf_veth_probe_request}" ]] || {
+      echo "ETF/veth request validation returned without a regular request" >&2
+      exit 1
+    }
+    etf_veth_probe_request_ready=1
+  else
+    exit $?
+  fi
+
+  etf_veth_probe_stage="docker-provenance"
+  _qcsd_docker_api version --format '{{json .}}' >"${etf_veth_probe_version}"
+  _qcsd_docker_api_with_timeout "${_QCSD_DOCKER_METADATA_TIMEOUT_SECONDS}" \
+    info --format '{{json .}}' >"${etf_veth_probe_info}"
+  etf_veth_probe_requested_image="$(QCSD_ETF_VETH_PROBE_LAB_ROOT="${ROOT}" \
+    "${etf_veth_probe_python}" -I -c '
+import os
+import sys
+from pathlib import Path
+lab_root = Path(os.environ["QCSD_ETF_VETH_PROBE_LAB_ROOT"]).resolve()
+os.environ["QCSD_LAB_ROOT"] = str(lab_root)
+sys.path.insert(0, str(lab_root / "src"))
+from qcsd_lab.etf_veth_probe import load_supervised_request
+print(load_supervised_request(Path(sys.argv[1]))["image"])
+' "${etf_veth_probe_request}")"
+  _qcsd_docker_api image inspect --format '{{json .}}' \
+    "${etf_veth_probe_requested_image}" >"${etf_veth_probe_image}"
+  mapfile -t etf_veth_probe_fields < <(QCSD_ETF_VETH_PROBE_LAB_ROOT="${ROOT}" \
+    "${etf_veth_probe_python}" -I -c '
+import os
+import sys
+from pathlib import Path
+lab_root = Path(os.environ["QCSD_ETF_VETH_PROBE_LAB_ROOT"]).resolve()
+os.environ["QCSD_LAB_ROOT"] = str(lab_root)
+sys.path.insert(0, str(lab_root / "src"))
+from qcsd_lab.etf_veth_probe import supervised_docker_binding
+for value in supervised_docker_binding(*(Path(item) for item in sys.argv[1:])):
+    print(value)
+' "${etf_veth_probe_request}" "${etf_veth_probe_version}" \
+    "${etf_veth_probe_info}" "${etf_veth_probe_image}")
+  if (( ${#etf_veth_probe_fields[@]} != 4 )) ||
+     [[ ! "${etf_veth_probe_fields[0]}" =~ ^sha256:[0-9a-f]{64}$ ||
+        ! "${etf_veth_probe_fields[1]}" =~ ^(3|[4-9]|[1-9][0-9]+)$ ||
+        ! "${etf_veth_probe_fields[2]}" =~ ^[0-9]+$ ||
+        ! "${etf_veth_probe_fields[3]}" =~ ^[0-9a-f]{32}$ ]]; then
+    echo "ETF/veth Docker binding is invalid" >&2
+    exit 1
+  fi
+  etf_veth_probe_image_id="${etf_veth_probe_fields[0]}"
+  etf_veth_probe_cpu_count="${etf_veth_probe_fields[1]}"
+  etf_veth_probe_samples="${etf_veth_probe_fields[2]}"
+  etf_veth_probe_series_id="${etf_veth_probe_fields[3]}"
+  etf_veth_probe_peer_cpu=$((etf_veth_probe_cpu_count - 3))
+  etf_veth_probe_main_cpu=$((etf_veth_probe_cpu_count - 2))
+  etf_veth_probe_helper_cpu=$((etf_veth_probe_cpu_count - 1))
+
+  etf_veth_probe_token="$(_qcsd_supervisor_token)"
+  [[ "${etf_veth_probe_token}" =~ ^[0-9a-f]{32}$ ]] || {
+    echo "cannot derive an ETF/veth resource token" >&2
+    exit 1
+  }
+  etf_veth_probe_network_name="qcsd-etf-veth-probe-${etf_veth_probe_token}"
+  etf_veth_probe_peer_name="${etf_veth_probe_network_name}-peer"
+  etf_veth_probe_sender_name="${etf_veth_probe_network_name}-sender"
+  if _qcsd_docker_api network inspect \
+       "${etf_veth_probe_network_name}" >/dev/null 2>&1 ||
+     _qcsd_docker_api container inspect \
+       "${etf_veth_probe_peer_name}" >/dev/null 2>&1 ||
+     _qcsd_docker_api container inspect \
+       "${etf_veth_probe_sender_name}" >/dev/null 2>&1; then
+    echo "ETF/veth resource name already exists" >&2
+    exit 1
+  fi
+
+  etf_veth_probe_stage="network-create"
+  qcsd_create_docker_network QCSD_DOCKER_IDS_ETF_VETH_NETWORKS \
+    docker network create --driver bridge \
+    --label "org.qcsd.owner=qcsd-lab" \
+    --label "org.qcsd.study=etf-veth-series-probe" \
+    "${etf_veth_probe_network_name}" >/dev/null
+  etf_veth_probe_network_id="${QCSD_DOCKER_IDS_ETF_VETH_NETWORKS[-1]}"
+
+  etf_veth_probe_stage="peer-start"
+  qcsd_run_detached_docker QCSD_DOCKER_IDS_ETF_VETH_PEERS \
+    docker run --name "${etf_veth_probe_peer_name}" \
+    --network "${etf_veth_probe_network_id}" \
+    --cpuset-cpus "${etf_veth_probe_peer_cpu}" \
+    --label "org.qcsd.owner=qcsd-lab" \
+    --label "org.qcsd.study=etf-veth-series-probe" \
+    --label "org.qcsd.role=post-veth-peer" \
+    --cap-drop ALL --security-opt no-new-privileges:true --read-only \
+    --volume "${ROOT}/tools/etf_probe_container.py:/probe/etf_probe_container.py:ro" \
+    --volume "${ROOT}/tools/etf_veth_probe_container.py:/probe/etf_veth_probe_container.py:ro" \
+    --volume "${etf_veth_probe_output}:/probe-output:rw" \
+    --entrypoint /usr/bin/tini "${etf_veth_probe_image_id}" -- \
+    /usr/bin/python3 -B /probe/etf_veth_probe_container.py receive \
+    --output /probe-output/peer.json --ready /probe-output/peer.ready \
+    --done /probe-output/sender.done --series-id "${etf_veth_probe_series_id}" \
+    --samples "${etf_veth_probe_samples}" --port 45679 \
+    --timeout-seconds 110.0 >/dev/null
+  etf_veth_probe_peer_id="${QCSD_DOCKER_IDS_ETF_VETH_PEERS[-1]}"
+
+  etf_veth_probe_stage="peer-readiness"
+  QCSD_ETF_VETH_PROBE_LAB_ROOT="${ROOT}" "${etf_veth_probe_python}" -I -c '
+import os
+import sys
+import time
+from pathlib import Path
+path = Path(sys.argv[1])
+deadline = time.monotonic() + 5.0
+while time.monotonic() < deadline:
+    if path.is_file() and not path.is_symlink():
+        raise SystemExit(0)
+    time.sleep(0.025)
+raise SystemExit("timed out waiting for ETF/veth peer readiness")
+' "${etf_veth_probe_output}/peer.ready"
+
+  etf_veth_probe_stage="sender-run"
+  if qcsd_run_attached_docker \
+      docker run --name "${etf_veth_probe_sender_name}" \
+      --network "${etf_veth_probe_network_id}" \
+      --cpuset-cpus "${etf_veth_probe_main_cpu},${etf_veth_probe_helper_cpu}" \
+      --ulimit rtprio=1:1 \
+      --label "org.qcsd.owner=qcsd-lab" \
+      --label "org.qcsd.study=etf-veth-series-probe" \
+      --label "org.qcsd.role=etf-series-sender" \
+      --cap-drop ALL --cap-add NET_ADMIN --cap-add NET_RAW \
+      --security-opt no-new-privileges:true --read-only \
+      --volume "${ROOT}/tools/etf_probe_container.py:/probe/etf_probe_container.py:ro" \
+      --volume "${ROOT}/tools/etf_veth_probe_container.py:/probe/etf_veth_probe_container.py:ro" \
+      --volume "${etf_veth_probe_output}:/probe-output:rw" \
+      --entrypoint /usr/bin/tini "${etf_veth_probe_image_id}" -- \
+      /usr/bin/timeout --signal=TERM --kill-after=2s 115s \
+      /usr/bin/python3 -B /probe/etf_veth_probe_container.py send \
+      --output /probe-output/sender.json --done /probe-output/sender.done \
+      --receiver "${etf_veth_probe_peer_name}" --port 45679 \
+      --series-id "${etf_veth_probe_series_id}" \
+      --samples "${etf_veth_probe_samples}" \
+      --main-cpu "${etf_veth_probe_main_cpu}" \
+      --helper-cpu "${etf_veth_probe_helper_cpu}"; then
+    etf_veth_probe_sender_exit=0
+  else
+    etf_veth_probe_sender_exit=$?
+    [[ -e "${etf_veth_probe_output}/sender.done" ]] ||
+      printf 'done\n' >"${etf_veth_probe_output}/sender.done"
+    case "${etf_veth_probe_sender_exit}" in
+      129|130|131|143)
+        if (( _QCSD_LIFETIME_SIGNAL_STATUS == 0 )); then
+          _QCSD_LIFETIME_SIGNAL_STATUS="${etf_veth_probe_sender_exit}"
+        fi
+        exit "${etf_veth_probe_sender_exit}"
+        ;;
+    esac
+  fi
+
+  etf_veth_probe_stage="peer-wait"
+  if etf_veth_probe_peer_wait="$(_qcsd_docker_api_with_timeout 120 \
+      container wait "${etf_veth_probe_peer_id}")" &&
+     [[ "${etf_veth_probe_peer_wait}" =~ ^(0|[1-9][0-9]*)$ ]] &&
+     (( etf_veth_probe_peer_wait <= 255 )); then
+    etf_veth_probe_peer_exit="${etf_veth_probe_peer_wait}"
+  else
+    echo "ETF/veth peer did not publish a valid bounded exit status" >&2
+    exit 1
+  fi
+  etf_veth_probe_stage="complete"
   exit 0
 fi
 

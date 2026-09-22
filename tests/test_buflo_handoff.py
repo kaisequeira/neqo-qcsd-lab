@@ -459,9 +459,9 @@ def _complete_buflo_run(
     if current_runner:
         if scheduled_outgoing != 1:
             raise ValueError("current kernel-TX fixture supports one outgoing opportunity")
-        from tests.test_kernel_tx import _runner_wakeup_v16
+        from tests.test_kernel_tx import _runner_wakeup_v17
 
-        runner_wakeup_metrics = _runner_wakeup_v16()
+        runner_wakeup_metrics = _runner_wakeup_v17()
     return {
         "completion_status": "complete",
         "error": None,
@@ -825,13 +825,13 @@ def _kernel_tx_handoff_fixture(
     dict[str, object],
     list[dict[str, object]],
 ]:
-    from tests.test_kernel_tx import _evidence, _runner_wakeup_v16
+    from tests.test_kernel_tx import _evidence, _runner_wakeup_v17
 
     source_root = (tmp_path / "source").resolve()
     sample_id = "sample-001"
     source_run = source_root / "samples/example/as-defined/visit-001/buflo/neqo/run.json"
     source_run.parent.mkdir(parents=True)
-    wakeups = _runner_wakeup_v16()
+    wakeups = _runner_wakeup_v17()
     run: dict[str, object] = {"runner_wakeup_metrics": wakeups}
     run_bytes = json.dumps(run, sort_keys=True, separators=(",", ":")).encode()
     source_run.write_bytes(run_bytes)
@@ -946,12 +946,14 @@ def test_handoff_kernel_tx_runner_pairs_preserve_history_and_reject_cross_versio
         _runner_receipt_v5,
         _runner_receipt_v6,
         _runner_receipt_v7,
+        _runner_receipt_v8,
         _runner_wakeup_v11,
         _runner_wakeup_v12,
         _runner_wakeup_v13,
         _runner_wakeup_v14,
         _runner_wakeup_v15,
         _runner_wakeup_v16,
+        _runner_wakeup_v17,
     )
 
     schema_eleven_v2 = _runner_wakeup_v11()
@@ -965,6 +967,7 @@ def test_handoff_kernel_tx_runner_pairs_preserve_history_and_reject_cross_versio
         _runner_wakeup_v14(),
         _runner_wakeup_v15(),
         _runner_wakeup_v16(),
+        _runner_wakeup_v17(),
     ):
         required, raw = handoff._runner_kernel_tx_requirement(
             {"runner_wakeup_metrics": wakeups},
@@ -982,6 +985,8 @@ def test_handoff_kernel_tx_runner_pairs_preserve_history_and_reject_cross_versio
         (_runner_wakeup_v15(), _runner_receipt_v5()),
         (_runner_wakeup_v16(), _runner_receipt_v6()),
         (_runner_wakeup_v15(), _runner_receipt_v7()),
+        (_runner_wakeup_v16(), _runner_receipt_v8()),
+        (_runner_wakeup_v17(), _runner_receipt_v7()),
     )
     for wakeups, raw in invalid_pairs:
         wakeups["buflo_kernel_tx"] = raw
@@ -1611,7 +1616,7 @@ def test_buflo_algorithm_diagnostics_bind_typed_tail_action_and_control_packet(
         events_path=events,
         packets_path=packets,
     )
-    assert run["runner_wakeup_metrics"]["schema_version"] == 16
+    assert run["runner_wakeup_metrics"]["schema_version"] == 17
     assert algorithm["schema_version"] == 4
     assert evaluation_module._load_algorithm_diagnostics(algorithm, defense="buflo") == algorithm
     assert algorithm["buflo_state"]["schema_version"] == 3

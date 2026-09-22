@@ -4633,7 +4633,7 @@ def _validate_current_candidate_sample_receipt(
         raise ValueError(
             f"{role} {mode} sample {sample_id} lacks a valid current "
             f"schema-4 terminal receipt and runner-wakeup "
-            f"schema-{'16 with kernel-TX evidence' if runtime_kind == 'buflo' else '10'} "
+            f"schema-{'17 with kernel-TX evidence' if runtime_kind == 'buflo' else '10'} "
             f"(observed terminal schema {schema!r})"
         )
     # Import lazily so the coordinator's core/result metadata import graph stays

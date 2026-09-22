@@ -1,0 +1,58 @@
+{
+  "schema_version": 10,
+  "artifact_type": "qcsd-buflo-timing-stress-parameters",
+  "status": "controlled-test-only",
+  "production_ready": false,
+  "evidence_class": "timing-stress-nonformal-excluded",
+  "study_id": "buflo-csbuflo-qcsd-v1",
+  "defense_kind": "buflo",
+  "qcsd_profile": "research-1200",
+  "udp_payload_ceiling": 1200,
+  "implementation_scope": "client_only_quic",
+  "paper_equivalent": false,
+  "canonical_parameter": {
+    "path": "../../defense-params/buflo-live.json",
+    "sha256": "8ba1b822d512e87382b25d83460e0cfe1ecf1f47aa66c17ee9dabb28999596e2"
+  },
+  "parameter_file": {
+    "path": "buflo-timing-stress-v10.json",
+    "sha256": "9249fd4324c1d24dd6e4d03221b6f92fe4eb6a331b2c756206e91aa318e21285"
+  },
+  "derivation": {
+    "policy": "canonical-live-buflo-with-only-minimum-duration-extended-for-excluded-captured-timing-stress",
+    "changed_field": "minimum_duration_us",
+    "canonical_value": 10000000,
+    "stress_value": 100000000
+  },
+  "capture_contract": {
+    "schema_version": 10,
+    "visits": 12,
+    "max_attempts": 1,
+    "authoritative_checkpoint": "experiment.json",
+    "mandatory_prefix_opportunities_per_direction": 5001,
+    "maximum_opportunities_per_direction": 6000,
+    "minimum_kernel_timed_outgoing_releases_after_tick_zero_per_visit": 5000,
+    "maximum_kernel_timed_outgoing_releases_after_tick_zero_per_visit": 5999,
+    "minimum_incoming_bytes_per_visit": 6001200,
+    "maximum_incoming_bytes_per_visit": 7200000,
+    "cadence_semantics": "inclusive-minimum-prefix-plus-bounded-terminal-whole-cell-drain",
+    "terminal_drain_suffix": "contiguous-exact-paired-whole-cell-opportunities",
+    "logical_order_evidence": "direction-target-slot-identity",
+    "physical_row_order": "terminal-resolution-order-not-dispatch-order",
+    "terminal_schedule_stop_policy": "stop_new_opportunities_at_first_terminal_whole_cell_capacity_exhaustion_then_drain_already_advertised_incoming_credit",
+    "strict_half_open_window_us": 5000,
+    "etf_delta_ns": 10000000,
+    "minimum_adapter_realization_window_ns": 4999000,
+    "minimum_etf_expiry_after_realization_deadline_ns": 5000000,
+    "catch_up": false,
+    "realization_backend": "linux-etf-so-txtime-post-veth-v5",
+    "runner_wakeup_schema_version": 17,
+    "legacy_userspace_exact_release_projection": "schema-10-compatibility-fields-retained-and-neutral",
+    "kernel_tx_runner_receipt_schema_version": 8,
+    "kernel_tx_evidence_schema_version": 1,
+    "observer_topology_receipt_schema_version": 1,
+    "physical_outgoing_observer": "router-ingress-post-client-veth-pre-netem",
+    "txtime_drop_scm_timestamping_semantics": "requested-tai-correlation-context-never-transmit-evidence",
+    "tick_zero_physical_observation_required": true
+  }
+}

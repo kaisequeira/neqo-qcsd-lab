@@ -40,8 +40,8 @@ SOF_TIMESTAMPING_OPT_ID = 1 << 7
 SOF_TIMESTAMPING_TX_SCHED = 1 << 8
 SOF_TIMESTAMPING_OPT_TSONLY = 1 << 11
 SOF_TXTIME_REPORT_ERRORS = 1 << 1
-PROBE_SCHEMA_VERSION = 2
-ETF_DELTA_NS = 4_500_000
+PROBE_SCHEMA_VERSION = 3
+ETF_DELTA_NS = 10_000_000
 STRICT_REALIZATION_WINDOW_NS = 5_000_000
 PROBE_PAYLOADS = {
     "fifo": b"qcsd-etf-probe:fifo-v1",
@@ -739,6 +739,9 @@ def send(args: argparse.Namespace) -> int:
             "clockid": "CLOCK_TAI",
             "delta_ns": ETF_DELTA_NS,
             "realization_window_ns": STRICT_REALIZATION_WINDOW_NS,
+            "scm_txtime_offset_ns": ETF_DELTA_NS,
+            "etf_dequeue_target_offset_ns": 0,
+            "etf_expiry_horizon_ns": ETF_DELTA_NS,
             "normal_priority": 0,
             "timed_priority": 6,
             "timed_priority_mechanism": "serialized-socket-global-SO_PRIORITY",

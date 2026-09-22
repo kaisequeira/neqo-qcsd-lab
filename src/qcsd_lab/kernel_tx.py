@@ -24,7 +24,8 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-KERNEL_TX_RUNNER_SCHEMA_VERSION = 7
+KERNEL_TX_RUNNER_SCHEMA_VERSION = 8
+KERNEL_TX_RUNNER_V7_SCHEMA_VERSION = 7
 KERNEL_TX_RUNNER_V6_SCHEMA_VERSION = 6
 KERNEL_TX_RUNNER_V5_SCHEMA_VERSION = 5
 KERNEL_TX_RUNNER_V4_SCHEMA_VERSION = 4
@@ -52,6 +53,7 @@ _KERNEL_TX_ETF_DELTA_BY_RUNNER_SCHEMA = {
     KERNEL_TX_RUNNER_V4_SCHEMA_VERSION: KERNEL_TX_V4_TO_V6_ETF_DELTA_NS,
     KERNEL_TX_RUNNER_V5_SCHEMA_VERSION: KERNEL_TX_V4_TO_V6_ETF_DELTA_NS,
     KERNEL_TX_RUNNER_V6_SCHEMA_VERSION: KERNEL_TX_V4_TO_V6_ETF_DELTA_NS,
+    KERNEL_TX_RUNNER_V7_SCHEMA_VERSION: KERNEL_TX_ETF_DELTA_NS,
     KERNEL_TX_RUNNER_SCHEMA_VERSION: KERNEL_TX_ETF_DELTA_NS,
 }
 
@@ -220,7 +222,7 @@ KERNEL_TX_RUNNER_V6_SEMANTICS = KERNEL_TX_RUNNER_V5_SEMANTICS.replace(
     "selection_window_is_half_open_release_minus_5ms_through_release=true; "
     "late_or_failed_selection_remains_fatal=true; ",
 )
-KERNEL_TX_RUNNER_SEMANTICS = KERNEL_TX_RUNNER_V6_SEMANTICS.replace(
+KERNEL_TX_RUNNER_V7_SEMANTICS = KERNEL_TX_RUNNER_V6_SEMANTICS.replace(
     "client_only_buflo_kernel_timed_egress_v6; ",
     "client_only_buflo_kernel_timed_egress_v7; "
     "schema7_retains_schema6_layout=true;"
@@ -237,6 +239,16 @@ KERNEL_TX_RUNNER_SEMANTICS = KERNEL_TX_RUNNER_V6_SEMANTICS.replace(
     "etf_expiry_precedes_minimum_half_open_deadline_by_499us_or_more=true; ",
     "",
 )
+KERNEL_TX_RUNNER_SEMANTICS = KERNEL_TX_RUNNER_V7_SEMANTICS.replace(
+    "client_only_buflo_kernel_timed_egress_v7; ",
+    "client_only_buflo_kernel_timed_egress_v8; "
+    "schema8_retains_schema7_layout=true;"
+    "main_coalesced_credit_without_residual_reconciled_at_"
+    "proven_physical_time_before_current_tai_expiry=true;"
+    "any_residual_pending_credit_defers_initial_global_reduction_until_"
+    "first_residual_owner_turn=true;"
+    "completed_credit_inventory_precedes_current_tai_expiry=true;",
+).replace("schema7_retains_schema6_layout=true;", "")
 KERNEL_TX_EVIDENCE_SEMANTICS = (
     "buflo_kernel_timed_egress_lab_reconciliation_v1; "
     "runner_receipt_binding=canonical_json_sha256; "
@@ -1694,7 +1706,11 @@ def _runtime_contract_valid(
     expected_prebuild_semantics = (
         KERNEL_TX_PROTECTED_PREBUILD_SELECTION_SEMANTICS
         if runner_schema_version
-        in {KERNEL_TX_RUNNER_V6_SCHEMA_VERSION, KERNEL_TX_RUNNER_SCHEMA_VERSION}
+        in {
+            KERNEL_TX_RUNNER_V6_SCHEMA_VERSION,
+            KERNEL_TX_RUNNER_V7_SCHEMA_VERSION,
+            KERNEL_TX_RUNNER_SCHEMA_VERSION,
+        }
         else KERNEL_TX_HISTORICAL_PREBUILD_SELECTION_SEMANTICS
         if runner_schema_version
         in {
@@ -1833,7 +1849,8 @@ def _qdisc_contract_valid(value: Any, *, runner_schema_version: int) -> bool:
         and contract["delta_ns"] > 0
         and contract["delta_ns"] == expected_delta_ns
         and (
-            runner_schema_version == KERNEL_TX_RUNNER_SCHEMA_VERSION
+            runner_schema_version
+            in {KERNEL_TX_RUNNER_V7_SCHEMA_VERSION, KERNEL_TX_RUNNER_SCHEMA_VERSION}
             or contract["delta_ns"] < min(KERNEL_TX_ADAPTER_WINDOW_NS)
         )
         and contract.get("deadline_mode") is False
@@ -3491,14 +3508,22 @@ def kernel_tx_runner_receipt_valid(value: Any) -> bool:
     receipt_keys = (
         _RUNNER_V6_RECEIPT_KEYS
         if receipt_schema_version
-        in {KERNEL_TX_RUNNER_V6_SCHEMA_VERSION, KERNEL_TX_RUNNER_SCHEMA_VERSION}
+        in {
+            KERNEL_TX_RUNNER_V6_SCHEMA_VERSION,
+            KERNEL_TX_RUNNER_V7_SCHEMA_VERSION,
+            KERNEL_TX_RUNNER_SCHEMA_VERSION,
+        }
         else _RUNNER_RECEIPT_KEYS
     )
     receipt = _exact_mapping(value, receipt_keys)
     nested_schema_version = (
         KERNEL_TX_RUNNER_V5_SCHEMA_VERSION
         if receipt_schema_version
-        in {KERNEL_TX_RUNNER_V6_SCHEMA_VERSION, KERNEL_TX_RUNNER_SCHEMA_VERSION}
+        in {
+            KERNEL_TX_RUNNER_V6_SCHEMA_VERSION,
+            KERNEL_TX_RUNNER_V7_SCHEMA_VERSION,
+            KERNEL_TX_RUNNER_SCHEMA_VERSION,
+        }
         else receipt_schema_version
     )
     expected_semantics = {
@@ -3510,6 +3535,7 @@ def kernel_tx_runner_receipt_valid(value: Any) -> bool:
         KERNEL_TX_RUNNER_V4_SCHEMA_VERSION: KERNEL_TX_RUNNER_V4_SEMANTICS,
         KERNEL_TX_RUNNER_V5_SCHEMA_VERSION: KERNEL_TX_RUNNER_V5_SEMANTICS,
         KERNEL_TX_RUNNER_V6_SCHEMA_VERSION: KERNEL_TX_RUNNER_V6_SEMANTICS,
+        KERNEL_TX_RUNNER_V7_SCHEMA_VERSION: KERNEL_TX_RUNNER_V7_SEMANTICS,
         KERNEL_TX_RUNNER_SCHEMA_VERSION: KERNEL_TX_RUNNER_SEMANTICS,
     }.get(receipt_schema_version)
     if (
@@ -3548,6 +3574,7 @@ def kernel_tx_runner_receipt_valid(value: Any) -> bool:
     jobs = receipt["jobs"]
     if receipt_schema_version in {
         KERNEL_TX_RUNNER_V6_SCHEMA_VERSION,
+        KERNEL_TX_RUNNER_V7_SCHEMA_VERSION,
         KERNEL_TX_RUNNER_SCHEMA_VERSION,
     } and not (
         _protected_selection_wait_valid(

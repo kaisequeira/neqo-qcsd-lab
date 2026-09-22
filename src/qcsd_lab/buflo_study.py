@@ -91,8 +91,8 @@ HISTORICAL_MULTI_ORIGIN_V36_SOURCE = {
     "neqo_pinned_commit": "fb699636c191e91848ffcce859c43bb4d69f7d94",
 }
 PREVIOUS_TIMING_STRESS_SCHEMA_VERSION = 2
-TIMING_STRESS_SCHEMA_VERSION = 9
-TIMING_STRESS_SEED_NAMESPACE = "buflo-timing-stress-v9"
+TIMING_STRESS_SCHEMA_VERSION = 10
+TIMING_STRESS_SEED_NAMESPACE = "buflo-timing-stress-v10"
 TIMING_STRESS_ARTIFACT_TYPE = "qcsd-buflo-timing-stress-execution"
 TIMING_STRESS_CHECKPOINT_TYPE = "qcsd-buflo-timing-stress-checkpoint"
 TIMING_STRESS_ATTEMPT_ERROR_TYPE = "qcsd-buflo-timing-stress-attempt-error"
@@ -100,8 +100,9 @@ TIMING_STRESS_ATTEMPT_ERROR_SCHEMA_VERSION = 1
 ABORTED_TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION = 5
 SUPERSEDED_TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION = 6
 SUPERSEDED_TIMING_STRESS_BOUND_REGRESSION_V7_RECEIPT_SCHEMA_VERSION = 7
-PREVIOUS_TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION = 8
-TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION = 9
+SUPERSEDED_TIMING_STRESS_BOUND_REGRESSION_V8_RECEIPT_SCHEMA_VERSION = 8
+PREVIOUS_TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION = 9
+TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION = 10
 CONTROLLED_NETWORK_RECEIPT_SCHEMA_VERSION = 2
 KERNEL_TX_CONTROLLED_NETWORK_RECEIPT_ENV = "QCSD_KERNEL_TX_CONTROLLED_NETWORK_RECEIPT_B64"
 STUDY_ENVIRONMENT_LEGACY_B64_ENV = "QCSD_STUDY_ENVIRONMENT_B64"
@@ -110,7 +111,7 @@ STUDY_ENVIRONMENT_CONTAINER_PATH = Path("/run/qcsd-study-environment.json")
 STUDY_ENVIRONMENT_MAX_BYTES = 64 * 1024 * 1024
 STUDY_ROOT = LAB_ROOT / "config/buflo-study/v1"
 STUDY_PLAN = STUDY_ROOT / "study.json"
-TIMING_STRESS_PARAMETERS = STUDY_ROOT / "buflo-timing-stress-v9.json"
+TIMING_STRESS_PARAMETERS = STUDY_ROOT / "buflo-timing-stress-v10.json"
 TIMING_STRESS_PARAMETERS_PROVENANCE = TIMING_STRESS_PARAMETERS.with_suffix(
     TIMING_STRESS_PARAMETERS.suffix + ".provenance.json"
 )
@@ -147,9 +148,9 @@ TIMING_STRESS_WINDOW_US = 5_000
 TIMING_STRESS_ETF_DELTA_NS = 10_000_000
 TIMING_STRESS_MINIMUM_ADAPTER_WINDOW_NS = 4_999_000
 TIMING_STRESS_MINIMUM_ETF_EXPIRY_AFTER_REALIZATION_DEADLINE_NS = 5_000_000
-TIMING_STRESS_REALIZATION_BACKEND = "linux-etf-so-txtime-post-veth-v4"
-TIMING_STRESS_RUNNER_WAKEUP_SCHEMA_VERSION = 16
-TIMING_STRESS_KERNEL_TX_RUNNER_RECEIPT_SCHEMA_VERSION = 7
+TIMING_STRESS_REALIZATION_BACKEND = "linux-etf-so-txtime-post-veth-v5"
+TIMING_STRESS_RUNNER_WAKEUP_SCHEMA_VERSION = 17
+TIMING_STRESS_KERNEL_TX_RUNNER_RECEIPT_SCHEMA_VERSION = 8
 TIMING_STRESS_TXTIME_DROP_TIMESTAMP_SEMANTICS = (
     "requested-tai-correlation-context-never-transmit-evidence"
 )
@@ -1126,10 +1127,11 @@ def validate_controlled_campaign_receipt(
         ABORTED_TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION,
         SUPERSEDED_TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION,
         SUPERSEDED_TIMING_STRESS_BOUND_REGRESSION_V7_RECEIPT_SCHEMA_VERSION,
+        SUPERSEDED_TIMING_STRESS_BOUND_REGRESSION_V8_RECEIPT_SCHEMA_VERSION,
         PREVIOUS_TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION,
     }:
         raise ValueError(
-            "controlled campaign receipt schema 5 through 8 belongs to a failed or "
+            "controlled campaign receipt schema 5 through 9 belongs to a failed or "
             "superseded timing-stress lineage and cannot authorise the current contract"
         )
     if not isinstance(value, Mapping) or not (
@@ -5250,7 +5252,7 @@ def _timing_stress_kernel_tx_evidence(
     opportunities: int,
     network_receipt: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Deeply revalidate schema-16 sender and independent post-veth evidence."""
+    """Deeply revalidate schema-17 sender and independent post-veth evidence."""
 
     from .fidelity import (
         RUNNER_WAKEUP_V7_HISTOGRAM_UPPER_BOUNDS,
@@ -5292,7 +5294,7 @@ def _timing_stress_kernel_tx_evidence(
         or not kernel_tx_runner_receipt_success_valid(raw)
     ):
         raise ValueError(
-            "timing-stress requires current schema-16 kernel-TX evidence and a neutral "
+            "timing-stress requires current schema-17 kernel-TX evidence and a neutral "
             "schema-10 projection"
         )
     raw_aggregate = raw["aggregate"]

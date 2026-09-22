@@ -3,7 +3,7 @@
 This exporter is deliberately disjoint from the historical classifier and
 BuFLO-study handoffs.  It accepts only the ten sealed schema-two ``formal``
 results, preserves the five accepted source artifacts byte-for-byte, retains
-current schema-16 BuFLO kernel-TX evidence in a separate subtree, and derives
+current schema-17 BuFLO kernel-TX evidence in a separate subtree, and derives
 classifier products solely from observer time, client-relative direction,
 and Ethernet frame length.
 """

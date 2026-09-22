@@ -172,8 +172,8 @@ def test_checked_in_handoff_contract_matches_current_exporter_and_kernel_sidecar
             "cs_buflo",
         ],
         "required_for_runtime_kind": "buflo",
-        "required_runner_wakeup_schema_version": 16,
-        "required_kernel_tx_runner_receipt_schema_version": 7,
+        "required_runner_wakeup_schema_version": 17,
+        "required_kernel_tx_runner_receipt_schema_version": 8,
         "accepted_sample_inventory_relationship": (
             "separate-checksum-bound-sidecar-does-not-change-the-five-file-accepted-"
             "sample-inventory"

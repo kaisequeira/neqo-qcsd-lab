@@ -785,7 +785,7 @@ def _runner_kernel_tx_requirement(
     wakeups = run.get("runner_wakeup_metrics") if isinstance(run, Mapping) else None
     schema = wakeups.get("schema_version") if isinstance(wakeups, Mapping) else None
     raw = wakeups.get("buflo_kernel_tx") if isinstance(wakeups, Mapping) else None
-    required = runtime_kind == "buflo" and schema in {11, 12, 13, 14, 15, 16}
+    required = runtime_kind == "buflo" and schema in {11, 12, 13, 14, 15, 16, 17}
     if required and not isinstance(raw, Mapping):
         raise ValueError("kernel-TX BuFLO handoff sample has no raw runner receipt")
     if required and not _runner_wakeup_metrics_valid(wakeups):
@@ -4047,7 +4047,7 @@ bilateral implementations. `samples.jsonl` is authoritative for temporal block
 splits and paired-visit membership. Validate the closed inventory with
 `sha256sum -c SHA256SUMS` and the semantic protocol with `buflo-study verify`.
 
-Schema 2 copies each schema-11 through schema-16 BuFLO post-veth proof into the separate
+Schema 2 copies each schema-11 through schema-17 BuFLO post-veth proof into the separate
 `kernel-tx-evidence/<sample-id>/` tree. Each sample row binds the source receipt
 and the exact router capture, router receipt, and reconciliation receipt by
 canonical path and SHA-256. These three files remain outside the accepted

@@ -572,7 +572,7 @@ def _runner_receipt_v7() -> dict[str, object]:
 
     raw = _runner_receipt_v6()
     raw["schema_version"] = 7
-    raw["semantics"] = KERNEL_TX_RUNNER_SEMANTICS
+    raw["semantics"] = kernel_tx.KERNEL_TX_RUNNER_V7_SEMANTICS
     raw["qdisc_contract"]["delta_ns"] = kernel_tx.KERNEL_TX_ETF_DELTA_NS
     for job in raw["jobs"]:
         for item in job["items"]:
@@ -580,6 +580,15 @@ def _runner_receipt_v7() -> dict[str, object]:
                 item["scm_txtime_tai_ns"] = (
                     item["target_tai_ns"] + kernel_tx.KERNEL_TX_ETF_DELTA_NS
                 )
+    return raw
+
+
+def _runner_receipt_v8() -> dict[str, object]:
+    """Upgrade frozen schema seven to inventory-before-expiry semantics."""
+
+    raw = _runner_receipt_v7()
+    raw["schema_version"] = 8
+    raw["semantics"] = KERNEL_TX_RUNNER_SEMANTICS
     return raw
 
 
@@ -881,6 +890,21 @@ def _runner_wakeup_v16() -> dict[str, object]:
                 "instant-authoritative-fallback-v1"
             ),
             "buflo_kernel_tx": _runner_receipt_v7(),
+        }
+    )
+    return value
+
+
+def _runner_wakeup_v17() -> dict[str, object]:
+    value = _runner_wakeup_receipt(10)
+    value.update(
+        {
+            "schema_version": 17,
+            "semantics": fidelity.RUNNER_WAKEUP_V17_SEMANTICS,
+            "buflo_exact_release_active_wait_poll_source": (
+                "instant-authoritative-fallback-v1"
+            ),
+            "buflo_kernel_tx": _runner_receipt_v8(),
         }
     )
     return value
@@ -1320,7 +1344,7 @@ def test_runner_schema_fifteen_preserves_frozen_schema_six_kernel_tx() -> None:
     assert not fidelity._runner_wakeup_v15_valid(wakeups)
 
 
-def test_runner_schema_sixteen_binds_current_schema_seven_kernel_tx() -> None:
+def test_runner_schema_sixteen_preserves_frozen_schema_seven_kernel_tx() -> None:
     wakeups = _runner_wakeup_v16()
 
     assert kernel_tx_runner_receipt_success_valid(wakeups["buflo_kernel_tx"])
@@ -1332,6 +1356,20 @@ def test_runner_schema_sixteen_binds_current_schema_seven_kernel_tx() -> None:
     wakeups["buflo_kernel_tx"] = historical
     assert kernel_tx_runner_receipt_success_valid(historical)
     assert not fidelity._runner_wakeup_v16_valid(wakeups)
+
+
+def test_runner_schema_seventeen_binds_current_schema_eight_kernel_tx() -> None:
+    wakeups = _runner_wakeup_v17()
+
+    assert kernel_tx_runner_receipt_success_valid(wakeups["buflo_kernel_tx"])
+    assert fidelity._runner_wakeup_v17_valid(wakeups)
+    assert fidelity._runner_wakeup_metrics_valid(wakeups)
+    assert capture_session._runner_wakeup_metrics_valid(wakeups)
+
+    historical = _runner_receipt_v7()
+    wakeups["buflo_kernel_tx"] = historical
+    assert kernel_tx_runner_receipt_success_valid(historical)
+    assert not fidelity._runner_wakeup_v17_valid(wakeups)
 
 
 def test_kernel_tx_schema_six_accepts_v114_protected_prebuild_semantics() -> None:
@@ -2149,7 +2187,7 @@ def test_kernel_tx_schema_two_accepts_controller_finalization_failure() -> None:
     assert not kernel_tx_runner_receipt_valid(current)
 
 
-@pytest.mark.parametrize("runner_schema_version", (2, 3, 4, 5, 6, 7))
+@pytest.mark.parametrize("runner_schema_version", (2, 3, 4, 5, 6, 7, 8))
 def test_failed_final_job_may_end_before_its_nominal_deadline(
     runner_schema_version: int,
 ) -> None:
@@ -2175,6 +2213,7 @@ def test_failed_final_job_may_end_before_its_nominal_deadline(
         5: _runner_receipt_v5,
         6: _runner_receipt_v6,
         7: _runner_receipt_v7,
+        8: _runner_receipt_v8,
     }[runner_schema_version]
     failed = runner_factory()
     item = failed["jobs"][0]["items"][1]
@@ -2457,7 +2496,7 @@ def test_kernel_tx_schema_two_retains_large_monotonic_drift_as_exact_diagnostic(
     assert not kernel_tx_runner_receipt_valid(current)
 
 
-def test_kernel_tx_schema_seven_constants_match_the_rust_producer() -> None:
+def test_kernel_tx_schema_eight_constants_match_the_rust_producer() -> None:
     source = (Path(__file__).parents[1] / "neqo-qcsd/neqo-bin/src/qcsd/mod.rs").read_text(
         encoding="utf-8"
     )
@@ -2488,7 +2527,7 @@ def test_kernel_tx_schema_seven_constants_match_the_rust_producer() -> None:
         == mapping_line[len(mapping_prefix) : -2]
     )
     assert "const BUFLO_KERNEL_TX_ETF_DELTA: Duration = Duration::from_millis(10);" in source
-    assert "const BUFLO_KERNEL_TX_RECEIPT_SCHEMA_VERSION: u32 = 7;" in source
+    assert "const BUFLO_KERNEL_TX_RECEIPT_SCHEMA_VERSION: u32 = 8;" in source
     assert "const BUFLO_KERNEL_ITEM_RECEIPT_SCHEMA_VERSION: u32 = 5;" in source
     assert "const BUFLO_KERNEL_CLOCK_MAPPING_SCHEMA_VERSION: u32 = 5;" in source
 
@@ -2506,7 +2545,8 @@ def test_kernel_tx_etf_delta_is_versioned_and_cross_pairs_fail_closed() -> None:
     frozen = _runner_receipt_v4()
     tai_deadline = _runner_receipt_v5()
     protected = _runner_receipt_v6()
-    current = _runner_receipt_v7()
+    horizon = _runner_receipt_v7()
+    current = _runner_receipt_v8()
 
     assert historical["qdisc_contract"]["delta_ns"] == 4_000_000
     assert frozen["qdisc_contract"]["delta_ns"] == 4_500_000
@@ -2520,6 +2560,7 @@ def test_kernel_tx_etf_delta_is_versioned_and_cross_pairs_fail_closed() -> None:
         - protected["qdisc_contract"]["delta_ns"]
         == 499_000
     )
+    assert horizon["qdisc_contract"]["delta_ns"] == 10_000_000
     assert current["qdisc_contract"]["delta_ns"] == 10_000_000
     assert current["qdisc_contract"]["delta_ns"] > max(
         kernel_tx.KERNEL_TX_ADAPTER_WINDOW_NS
@@ -2528,6 +2569,7 @@ def test_kernel_tx_etf_delta_is_versioned_and_cross_pairs_fail_closed() -> None:
     assert kernel_tx_runner_receipt_success_valid(frozen)
     assert kernel_tx_runner_receipt_success_valid(tai_deadline)
     assert kernel_tx_runner_receipt_success_valid(protected)
+    assert kernel_tx_runner_receipt_success_valid(horizon)
     assert kernel_tx_runner_receipt_success_valid(current)
 
     for invalid_delta_ns in (0, 4_999_000, 5_000_000):
@@ -2555,15 +2597,15 @@ def test_kernel_tx_etf_delta_is_versioned_and_cross_pairs_fail_closed() -> None:
     assert not kernel_tx_runner_receipt_valid(current)
 
 
-def test_kernel_tx_schema_seven_keeps_the_strict_five_millisecond_boundary() -> None:
-    current = _runner_receipt_v7()
+def test_kernel_tx_schema_eight_keeps_the_strict_five_millisecond_boundary() -> None:
+    current = _runner_receipt_v8()
     exact = current["jobs"][0]["items"][0]
 
     assert exact["scm_txtime_tai_ns"] == _RELEASE_TAI_NS + 10_000_000
     assert exact["tx_software_tai_upper_ns"] < _RELEASE_TAI_NS + 5_000_000
     assert kernel_tx_runner_receipt_success_valid(current)
 
-    at_deadline = _runner_receipt_v7()
+    at_deadline = _runner_receipt_v8()
     job = at_deadline["jobs"][0]
     item = job["items"][1]
     deadline = job["deadline_tai_ns"]
@@ -2593,7 +2635,7 @@ def test_kernel_tx_schema_seven_keeps_the_strict_five_millisecond_boundary() -> 
     )
     _refresh_failed_runner_receipt(
         at_deadline,
-        primary_error="synthetic schema-seven physical window failure",
+        primary_error="synthetic schema-eight physical window failure",
     )
     assert kernel_tx_runner_receipt_valid(at_deadline)
     assert not kernel_tx_runner_receipt_success_valid(at_deadline)
@@ -2880,7 +2922,7 @@ def test_failed_runner_retains_create_only_raw_qdisc_observation(
     assert path.read_bytes() == original
 
 
-@pytest.mark.parametrize("runner_schema_version", [1, 2, 3, 4, 5, 6, 7])
+@pytest.mark.parametrize("runner_schema_version", [1, 2, 3, 4, 5, 6, 7, 8])
 def test_runner_kernel_tx_serialises_end_clock_mapping_failure_after_jobs(
     runner_schema_version: int,
 ) -> None:
@@ -2892,8 +2934,9 @@ def test_runner_kernel_tx_serialises_end_clock_mapping_failure_after_jobs(
         5: _runner_receipt_v5,
         6: _runner_receipt_v6,
         7: _runner_receipt_v7,
+        8: _runner_receipt_v8,
     }[runner_schema_version]()
-    if runner_schema_version in {2, 3, 4, 5, 6, 7}:
+    if runner_schema_version in {2, 3, 4, 5, 6, 7, 8}:
         # Preserve producer ordering while moving the retained post-TX
         # MONOTONIC offset away from the direct enqueue TAI bracket.  Historical
         # schema two treated that offset overlap as a hard predicate; schema
@@ -2943,7 +2986,7 @@ def test_runner_kernel_tx_serialises_end_clock_mapping_failure_after_jobs(
         item["terminal_error"] = "final_conservative_envelope_validation_failed"
         item["terminal_error_detail"] = (
             _schema_three_unmapped_error_detail(item)
-            if runner_schema_version in {3, 4, 5, 6, 7}
+            if runner_schema_version in {3, 4, 5, 6, 7, 8}
             else (
                 _schema_two_unmapped_error_detail(item)
                 if runner_schema_version == 2
@@ -2966,7 +3009,7 @@ def test_runner_kernel_tx_serialises_end_clock_mapping_failure_after_jobs(
     assert kernel_tx_runner_receipt_valid(raw)
     assert not kernel_tx_runner_receipt_success_valid(raw)
 
-    if runner_schema_version in {2, 3, 4, 5, 6, 7}:
+    if runner_schema_version in {2, 3, 4, 5, 6, 7, 8}:
         expected_first_consistency = (
             "false" if runner_schema_version == 2 else "true"
         )

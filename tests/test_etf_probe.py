@@ -814,7 +814,12 @@ def test_probe_receipt_preserves_frozen_schema_one_binding(tmp_path: Path) -> No
     historical = copy.deepcopy(etf_probe.validate_probe_receipt(current_path))
     historical["schema_version"] = etf_probe.HISTORICAL_SCHEMA_VERSION
     historical["configuration"]["etf_delta_ns"] = etf_probe.HISTORICAL_ETF_DELTA_NS
-    historical["configuration"].pop("post_etf_observer_guard_ns")
+    for name in (
+        "scm_txtime_offset_ns",
+        "etf_dequeue_target_offset_ns",
+        "etf_expiry_horizon_ns",
+    ):
+        historical["configuration"].pop(name)
     historical["sender"]["schema_version"] = etf_probe.HISTORICAL_SCHEMA_VERSION
     historical["receiver"]["schema_version"] = etf_probe.HISTORICAL_SCHEMA_VERSION
     historical["payload_sha256"] = etf_probe._payload_sha256(historical)
@@ -823,6 +828,29 @@ def test_probe_receipt_preserves_frozen_schema_one_binding(tmp_path: Path) -> No
     historical_path.chmod(0o444)
 
     assert etf_probe.validate_probe_receipt(historical_path) == historical
+
+
+def test_probe_receipt_preserves_frozen_schema_two_binding(tmp_path: Path) -> None:
+    request, bundle, current_path = _valid_supervised_bundle(tmp_path)
+    etf_probe.finalize_supervised_bundle(request, bundle)
+    previous = copy.deepcopy(etf_probe.validate_probe_receipt(current_path))
+    previous["schema_version"] = etf_probe.PREVIOUS_SCHEMA_VERSION
+    previous["configuration"]["etf_delta_ns"] = etf_probe.PREVIOUS_ETF_DELTA_NS
+    for name in (
+        "scm_txtime_offset_ns",
+        "etf_dequeue_target_offset_ns",
+        "etf_expiry_horizon_ns",
+    ):
+        previous["configuration"].pop(name)
+    previous["configuration"]["post_etf_observer_guard_ns"] = 500_000
+    previous["sender"]["schema_version"] = etf_probe.PREVIOUS_SCHEMA_VERSION
+    previous["receiver"]["schema_version"] = etf_probe.PREVIOUS_SCHEMA_VERSION
+    previous["payload_sha256"] = etf_probe._payload_sha256(previous)
+    previous_path = tmp_path / "previous-probe.json"
+    previous_path.write_bytes(etf_probe._canonical_json(previous))
+    previous_path.chmod(0o444)
+
+    assert etf_probe.validate_probe_receipt(previous_path) == previous
 
 
 @pytest.mark.parametrize(
@@ -851,7 +879,12 @@ def test_probe_receipt_rejects_schema_relabelling_and_cross_pairs(
     elif tamper == "outer-one-nested-two":
         receipt["schema_version"] = etf_probe.HISTORICAL_SCHEMA_VERSION
         receipt["configuration"]["etf_delta_ns"] = etf_probe.HISTORICAL_ETF_DELTA_NS
-        receipt["configuration"].pop("post_etf_observer_guard_ns")
+        for name in (
+            "scm_txtime_offset_ns",
+            "etf_dequeue_target_offset_ns",
+            "etf_expiry_horizon_ns",
+        ):
+            receipt["configuration"].pop(name)
     elif tamper == "sender-one":
         receipt["sender"]["schema_version"] = etf_probe.HISTORICAL_SCHEMA_VERSION
     elif tamper == "receiver-one":

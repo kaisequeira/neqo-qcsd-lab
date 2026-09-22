@@ -77,6 +77,7 @@ from qcsd_lab.fidelity import (
     RUNNER_WAKEUP_V14_SEMANTICS,
     RUNNER_WAKEUP_V15_SEMANTICS,
     RUNNER_WAKEUP_V16_SEMANTICS,
+    RUNNER_WAKEUP_V17_SEMANTICS,
     SCHEDULE_PREFIX_FIELDS,
     SCHEDULE_QCSD_FIELDS,
     _cs_buflo_padding_targets_match,
@@ -98,6 +99,7 @@ from qcsd_lab.kernel_tx import (
     KERNEL_TX_RUNNER_V4_SEMANTICS,
     KERNEL_TX_RUNNER_V5_SEMANTICS,
     KERNEL_TX_RUNNER_V6_SEMANTICS,
+    KERNEL_TX_RUNNER_V7_SEMANTICS,
 )
 from qcsd_lab.util import LAB_ROOT
 
@@ -2687,17 +2689,30 @@ def test_runner_wakeup_schema_fifteen_semantics_remain_frozen() -> None:
     )
 
 
-def test_runner_wakeup_schema_sixteen_semantics_exactly_match_rust_producer() -> None:
+def test_runner_wakeup_schema_sixteen_semantics_remain_frozen() -> None:
+    assert RUNNER_WAKEUP_V16_SEMANTICS == (
+        f"{RUNNER_WAKEUP_V10_SEMANTICS}; "
+        "runner_schema16_retains_schema15_and_schema10_layout_for_non_kernel_metrics=true; "
+        "buflo_legacy_exact_release_guard_metrics_are_zero_with_kernel_tx=true; "
+        f"buflo_kernel_tx_raw_semantics={KERNEL_TX_RUNNER_V7_SEMANTICS}; "
+        "buflo_kernel_protected_selection_wait_semantics="
+        f"{KERNEL_TX_PROTECTED_SELECTION_WAIT_SEMANTICS}; "
+        "post_veth_and_qdisc_end_state_are_separate_lab_evidence=true"
+    )
+
+
+def test_runner_wakeup_schema_seventeen_semantics_exactly_match_rust_producer() -> None:
     source = (LAB_ROOT / "neqo-qcsd/neqo-bin/src/qcsd/mod.rs").read_text(encoding="utf-8")
     kernel_prefix = 'const BUFLO_KERNEL_TX_SEMANTICS: &str = "'
     kernel_line = next(line for line in source.splitlines() if line.startswith(kernel_prefix))
     assert kernel_line.endswith('";')
     assert KERNEL_TX_RUNNER_SEMANTICS == kernel_line[len(kernel_prefix) : -2]
-    assert "runner_schema16_retains_schema15_and_schema10_layout_for_non_kernel_metrics=true" in (
-        RUNNER_WAKEUP_V16_SEMANTICS
+    assert (
+        "runner_schema17_retains_schema16_schema15_and_schema10_layout_for_non_kernel_metrics=true"
+        in RUNNER_WAKEUP_V17_SEMANTICS
     )
     assert f"buflo_kernel_tx_raw_semantics={KERNEL_TX_RUNNER_SEMANTICS}; " in (
-        RUNNER_WAKEUP_V16_SEMANTICS
+        RUNNER_WAKEUP_V17_SEMANTICS
     )
     assert RUNNER_WAKEUP_V11_SEMANTICS == (
         f"{RUNNER_WAKEUP_V10_SEMANTICS}; "
@@ -2716,6 +2731,7 @@ def test_runner_wakeup_schema_sixteen_semantics_exactly_match_rust_producer() ->
         "{BUFLO_KERNEL_PROTECTED_SELECTION_WAIT_SEMANTICS}; "
         'post_veth_and_qdisc_end_state_are_separate_lab_evidence=true"'
     ) in source
+    assert "const BUFLO_KERNEL_RUNNER_WAKEUP_METRICS_SCHEMA_VERSION: u32 = 17;" in source
 
 
 def test_runner_wakeup_schema_ten_adds_watchdog_to_frozen_schema_nine() -> None:
@@ -12039,9 +12055,9 @@ def test_buflo_fidelity_requires_every_zero_error_and_typed_terminal_once() -> N
         )
 
 
-def test_current_buflo_terminal_receipt_requires_schema_fifteen_kernel_tx() -> None:
+def test_current_buflo_terminal_receipt_requires_schema_seventeen_kernel_tx() -> None:
     from tests.test_buflo_handoff import _complete_buflo_run
-    from tests.test_kernel_tx import _runner_wakeup_v14, _runner_wakeup_v15
+    from tests.test_kernel_tx import _runner_wakeup_v16, _runner_wakeup_v17
 
     schema_ten = _complete_buflo_run(
         scheduled_outgoing=1,
@@ -12056,7 +12072,7 @@ def test_current_buflo_terminal_receipt_requires_schema_fifteen_kernel_tx() -> N
     )
 
     historical = json.loads(json.dumps(schema_ten))
-    historical["runner_wakeup_metrics"] = _runner_wakeup_v14()
+    historical["runner_wakeup_metrics"] = _runner_wakeup_v16()
     assert not new_defense_terminal_receipts_valid(
         historical,
         "buflo",
@@ -12065,7 +12081,7 @@ def test_current_buflo_terminal_receipt_requires_schema_fifteen_kernel_tx() -> N
     )
 
     current = json.loads(json.dumps(schema_ten))
-    current["runner_wakeup_metrics"] = _runner_wakeup_v15()
+    current["runner_wakeup_metrics"] = _runner_wakeup_v17()
     assert new_defense_terminal_receipts_valid(
         current,
         "buflo",
