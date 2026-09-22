@@ -24,7 +24,8 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-KERNEL_TX_RUNNER_SCHEMA_VERSION = 6
+KERNEL_TX_RUNNER_SCHEMA_VERSION = 7
+KERNEL_TX_RUNNER_V6_SCHEMA_VERSION = 6
 KERNEL_TX_RUNNER_V5_SCHEMA_VERSION = 5
 KERNEL_TX_RUNNER_V4_SCHEMA_VERSION = 4
 KERNEL_TX_RUNNER_V3_SCHEMA_VERSION = 3
@@ -34,7 +35,8 @@ KERNEL_TX_REALIZATION_WINDOW_NS = 5_000_000
 KERNEL_TX_ADAPTER_WINDOW_NS = frozenset({4_999_000, 5_000_000})
 KERNEL_TX_CADENCE_NS = 20_000_000
 KERNEL_TX_HISTORICAL_ETF_DELTA_NS = 4_000_000
-KERNEL_TX_ETF_DELTA_NS = 4_500_000
+KERNEL_TX_V4_TO_V6_ETF_DELTA_NS = 4_500_000
+KERNEL_TX_ETF_DELTA_NS = 10_000_000
 KERNEL_TX_PRIO_MAP = [1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 KERNEL_TX_MAX_CLOCK_BRACKET_NS = 250_000
 KERNEL_TX_MAX_CLOCK_OFFSET_DRIFT_NS = 250_000
@@ -47,8 +49,9 @@ _KERNEL_TX_ETF_DELTA_BY_RUNNER_SCHEMA = {
     KERNEL_TX_HISTORICAL_RUNNER_SCHEMA_VERSION: KERNEL_TX_HISTORICAL_ETF_DELTA_NS,
     2: KERNEL_TX_HISTORICAL_ETF_DELTA_NS,
     KERNEL_TX_RUNNER_V3_SCHEMA_VERSION: KERNEL_TX_HISTORICAL_ETF_DELTA_NS,
-    KERNEL_TX_RUNNER_V4_SCHEMA_VERSION: KERNEL_TX_ETF_DELTA_NS,
-    KERNEL_TX_RUNNER_V5_SCHEMA_VERSION: KERNEL_TX_ETF_DELTA_NS,
+    KERNEL_TX_RUNNER_V4_SCHEMA_VERSION: KERNEL_TX_V4_TO_V6_ETF_DELTA_NS,
+    KERNEL_TX_RUNNER_V5_SCHEMA_VERSION: KERNEL_TX_V4_TO_V6_ETF_DELTA_NS,
+    KERNEL_TX_RUNNER_V6_SCHEMA_VERSION: KERNEL_TX_V4_TO_V6_ETF_DELTA_NS,
     KERNEL_TX_RUNNER_SCHEMA_VERSION: KERNEL_TX_ETF_DELTA_NS,
 }
 
@@ -189,7 +192,17 @@ KERNEL_TX_PROTECTED_SELECTION_WAIT_SEMANTICS = (
     "failures_are_typed_and_fail_closed; no_early_packet_construction; "
     "no_window_extension; no_catch_up"
 )
-KERNEL_TX_RUNNER_SEMANTICS = KERNEL_TX_RUNNER_V5_SEMANTICS.replace(
+KERNEL_TX_HISTORICAL_PREBUILD_SELECTION_SEMANTICS = (
+    "application_and_transport_state_selected_at_nominal_release_while_wall_clock_is_one_strict_window_early; "
+    "runner_freezes_until_kernel_tx_software_receipt; client_only_adaptation; paper_equivalent=false"
+)
+KERNEL_TX_PROTECTED_PREBUILD_SELECTION_SEMANTICS = (
+    "CLOCK_TAI_protected_wait_enters_during_release_minus_10ms_to_release_minus_5ms; "
+    "application_and_transport_state_selected_at_nominal_release_while_wall_clock_is_one_strict_window_early; "
+    "runner_freezes_until_kernel_tx_software_receipt; late_wait_entry_and_release_expiry_fail_closed; "
+    "client_only_adaptation; paper_equivalent=false"
+)
+KERNEL_TX_RUNNER_V6_SEMANTICS = KERNEL_TX_RUNNER_V5_SEMANTICS.replace(
     "client_only_buflo_kernel_timed_egress_v5; ",
     "client_only_buflo_kernel_timed_egress_v6; ",
 ).replace(
@@ -206,6 +219,23 @@ KERNEL_TX_RUNNER_SEMANTICS = KERNEL_TX_RUNNER_V5_SEMANTICS.replace(
     "terminal_no_job_confirmation_attempts=phase_bounded_tick_zero_0_to_2_rolling_0_to_1; "
     "selection_window_is_half_open_release_minus_5ms_through_release=true; "
     "late_or_failed_selection_remains_fatal=true; ",
+)
+KERNEL_TX_RUNNER_SEMANTICS = KERNEL_TX_RUNNER_V6_SEMANTICS.replace(
+    "client_only_buflo_kernel_timed_egress_v6; ",
+    "client_only_buflo_kernel_timed_egress_v7; "
+    "schema7_retains_schema6_layout=true;"
+    "selection_cutoff=release_minus_5ms;"
+    "etf_delta=10ms;"
+    "scm_txtime=release_plus_10ms;"
+    "etf_dequeue_target=release_via_txtime_minus_delta;"
+    "etf_expiry_is_diagnostic_horizon_at_release_plus_10ms;"
+    "strict_realization_deadline_remains_release_plus_5ms;"
+    "physical_tx_at_or_after_strict_deadline_is_fatal_before_incoming_credit=true; ",
+).replace(
+    "selection_cutoff=release_minus_5ms; "
+    "etf_delta=4.5ms; "
+    "etf_expiry_precedes_minimum_half_open_deadline_by_499us_or_more=true; ",
+    "",
 )
 KERNEL_TX_EVIDENCE_SEMANTICS = (
     "buflo_kernel_timed_egress_lab_reconciliation_v1; "
@@ -1653,10 +1683,32 @@ def _helper_shutdown_valid(value: Any) -> bool:
     )
 
 
-def _runtime_contract_valid(value: Any, *, success: bool, jobs: Sequence[Mapping[str, Any]]) -> bool:
+def _runtime_contract_valid(
+    value: Any,
+    *,
+    success: bool,
+    jobs: Sequence[Mapping[str, Any]],
+    runner_schema_version: int,
+) -> bool:
     contract = _exact_mapping(value, _RUNTIME_CONTRACT_KEYS)
+    expected_prebuild_semantics = (
+        KERNEL_TX_PROTECTED_PREBUILD_SELECTION_SEMANTICS
+        if runner_schema_version
+        in {KERNEL_TX_RUNNER_V6_SCHEMA_VERSION, KERNEL_TX_RUNNER_SCHEMA_VERSION}
+        else KERNEL_TX_HISTORICAL_PREBUILD_SELECTION_SEMANTICS
+        if runner_schema_version
+        in {
+            KERNEL_TX_HISTORICAL_RUNNER_SCHEMA_VERSION,
+            2,
+            KERNEL_TX_RUNNER_V3_SCHEMA_VERSION,
+            KERNEL_TX_RUNNER_V4_SCHEMA_VERSION,
+            KERNEL_TX_RUNNER_V5_SCHEMA_VERSION,
+        }
+        else None
+    )
     if (
         contract is None
+        or expected_prebuild_semantics is None
         or not _schema(contract)
         or any(not isinstance(job, Mapping) for job in jobs)
         or any(
@@ -1700,8 +1752,7 @@ def _runtime_contract_valid(value: Any, *, success: bool, jobs: Sequence[Mapping
         or helper.get("max_post_main_datagrams") != socket_count
         or contract.get("single_threaded_sender_control_flow_enforced") is not True
         or contract.get("prebuild_selection_cutoff_lead_ns") != 5_000_000
-        or contract.get("prebuild_selection_semantics")
-        != "application_and_transport_state_selected_at_nominal_release_while_wall_clock_is_one_strict_window_early; runner_freezes_until_kernel_tx_software_receipt; client_only_adaptation; paper_equivalent=false"
+        or contract.get("prebuild_selection_semantics") != expected_prebuild_semantics
         or contract.get("post_main_inventory_semantics")
         != "residual_scheduled_incoming_credit_is_deduplicated_by_endpoint_owner; at_most_one_immediate_datagram_per_owner_per_job; a_second_datagram_for_the_same_owner_is_a_hard_failure; same_endpoint_credit_may_be_coalesced_in_the_exact_main_datagram"
         or contract.get("max_post_main_datagrams") != socket_count
@@ -1781,7 +1832,10 @@ def _qdisc_contract_valid(value: Any, *, runner_schema_version: int) -> bool:
         and type(contract.get("delta_ns")) is int
         and contract["delta_ns"] > 0
         and contract["delta_ns"] == expected_delta_ns
-        and contract["delta_ns"] < min(KERNEL_TX_ADAPTER_WINDOW_NS)
+        and (
+            runner_schema_version == KERNEL_TX_RUNNER_SCHEMA_VERSION
+            or contract["delta_ns"] < min(KERNEL_TX_ADAPTER_WINDOW_NS)
+        )
         and contract.get("deadline_mode") is False
         and contract.get("offload") is False
         and contract.get("skip_socket_check") is False
@@ -2550,6 +2604,7 @@ def _unmapped_runner_item_valid(
     expected_item_id: int,
     expected_order_index: int,
     socket_setup: Sequence[Mapping[str, Any]],
+    item_schema_version: int,
     runner_schema_version: int,
 ) -> bool:
     item_keys = {
@@ -2558,15 +2613,15 @@ def _unmapped_runner_item_valid(
         3: _ITEM_V3_KEYS,
         4: _ITEM_V4_KEYS,
         5: _ITEM_V5_KEYS,
-    }.get(runner_schema_version)
+    }.get(item_schema_version)
     if item_keys is None:
         return False
     item = _exact_mapping(value, item_keys)
     if (
         item is None
-        or not _schema(item, runner_schema_version)
+        or not _schema(item, item_schema_version)
         or (
-            runner_schema_version in {2, 3, 4, 5}
+            item_schema_version in {2, 3, 4, 5}
             and item.get("post_tx_clock_phase") is not None
             and not _clock_phase_valid(item["post_tx_clock_phase"])
         )
@@ -2665,14 +2720,14 @@ def _unmapped_runner_item_valid(
             or tx_software_realtime_ns is None
         ):
             return False
-        if runner_schema_version == 2:
+        if item_schema_version == 2:
             enqueue_clock_consistent = _item_local_enqueue_clock_consistent(
                 post_tx_phase,
                 enqueue_monotonic_ns=enqueue_monotonic_ns,
                 enqueue_tai_lower_ns=enqueue_tai_lower_ns,
                 enqueue_tai_upper_ns=enqueue_tai_upper_ns,
             )
-        elif runner_schema_version in {3, 4, 5}:
+        elif item_schema_version in {3, 4, 5}:
             enqueue_clock_consistent = _item_local_enqueue_operation_ordered(
                 post_tx_phase,
                 enqueue_monotonic_ns=enqueue_monotonic_ns,
@@ -2719,7 +2774,7 @@ def _unmapped_runner_item_valid(
         and item["enqueue_tai_upper_ns"] < job["release_tai_ns"]
     )
     if (
-        runner_schema_version in {2, 3, 4, 5}
+        item_schema_version in {2, 3, 4, 5}
         and item["terminal_error"]
         == "final_conservative_envelope_validation_failed"
         and item["terminal_error_detail"]
@@ -2890,6 +2945,7 @@ def _unmapped_runner_jobs_valid(
     clock_end: Mapping[str, Any] | None,
     clock_mapping_error: str,
     socket_setup: Sequence[Mapping[str, Any]],
+    item_schema_version: int,
     runner_schema_version: int,
 ) -> bool:
     if jobs and (defense_start_monotonic_ns is None or defense_start_tai_ns is None):
@@ -2941,6 +2997,7 @@ def _unmapped_runner_jobs_valid(
                 expected_item_id=expected_item_id,
                 expected_order_index=order_index,
                 socket_setup=socket_setup,
+                item_schema_version=item_schema_version,
                 runner_schema_version=runner_schema_version,
             ):
                 return False
@@ -3005,7 +3062,7 @@ def _unmapped_runner_jobs_valid(
             ):
                 return False
     return bool(
-        runner_schema_version == 1
+        item_schema_version == 1
         or _schema_two_mapping_failure_matches_evidence(
             clock_start=clock_start,
             clock_end=clock_end,
@@ -3433,13 +3490,15 @@ def kernel_tx_runner_receipt_valid(value: Any) -> bool:
     receipt_schema_version = value.get("schema_version") if isinstance(value, Mapping) else None
     receipt_keys = (
         _RUNNER_V6_RECEIPT_KEYS
-        if receipt_schema_version == KERNEL_TX_RUNNER_SCHEMA_VERSION
+        if receipt_schema_version
+        in {KERNEL_TX_RUNNER_V6_SCHEMA_VERSION, KERNEL_TX_RUNNER_SCHEMA_VERSION}
         else _RUNNER_RECEIPT_KEYS
     )
     receipt = _exact_mapping(value, receipt_keys)
     nested_schema_version = (
         KERNEL_TX_RUNNER_V5_SCHEMA_VERSION
-        if receipt_schema_version == KERNEL_TX_RUNNER_SCHEMA_VERSION
+        if receipt_schema_version
+        in {KERNEL_TX_RUNNER_V6_SCHEMA_VERSION, KERNEL_TX_RUNNER_SCHEMA_VERSION}
         else receipt_schema_version
     )
     expected_semantics = {
@@ -3450,6 +3509,7 @@ def kernel_tx_runner_receipt_valid(value: Any) -> bool:
         KERNEL_TX_RUNNER_V3_SCHEMA_VERSION: KERNEL_TX_RUNNER_V3_SEMANTICS,
         KERNEL_TX_RUNNER_V4_SCHEMA_VERSION: KERNEL_TX_RUNNER_V4_SEMANTICS,
         KERNEL_TX_RUNNER_V5_SCHEMA_VERSION: KERNEL_TX_RUNNER_V5_SEMANTICS,
+        KERNEL_TX_RUNNER_V6_SCHEMA_VERSION: KERNEL_TX_RUNNER_V6_SEMANTICS,
         KERNEL_TX_RUNNER_SCHEMA_VERSION: KERNEL_TX_RUNNER_SEMANTICS,
     }.get(receipt_schema_version)
     if (
@@ -3486,7 +3546,10 @@ def kernel_tx_runner_receipt_valid(value: Any) -> bool:
         return False
     success = receipt["terminal_outcome"] == "complete"
     jobs = receipt["jobs"]
-    if receipt_schema_version == KERNEL_TX_RUNNER_SCHEMA_VERSION and not (
+    if receipt_schema_version in {
+        KERNEL_TX_RUNNER_V6_SCHEMA_VERSION,
+        KERNEL_TX_RUNNER_SCHEMA_VERSION,
+    } and not (
         _protected_selection_wait_valid(
             receipt.get("protected_selection_wait"),
             defense_start_tai_ns=receipt["defense_start_tai_ns"],
@@ -3536,7 +3599,12 @@ def kernel_tx_runner_receipt_valid(value: Any) -> bool:
         return False
     if mapping is None:
         runtime = receipt.get("runtime_contract")
-        if not _runtime_contract_valid(runtime, success=False, jobs=jobs):
+        if not _runtime_contract_valid(
+            runtime,
+            success=False,
+            jobs=jobs,
+            runner_schema_version=receipt_schema_version,
+        ):
             return False
         assert isinstance(runtime, Mapping)
         return bool(
@@ -3550,7 +3618,8 @@ def kernel_tx_runner_receipt_valid(value: Any) -> bool:
                 clock_end=clock_end,
                 clock_mapping_error=receipt["clock_mapping_error"],
                 socket_setup=runtime["socket_setup"],
-                runner_schema_version=nested_schema_version,
+                item_schema_version=nested_schema_version,
+                runner_schema_version=receipt_schema_version,
             )
             and _runner_aggregate(
                 receipt.get("aggregate"),
@@ -3577,7 +3646,12 @@ def kernel_tx_runner_receipt_valid(value: Any) -> bool:
         return False
     contract = receipt["qdisc_contract"]
     runtime = receipt.get("runtime_contract")
-    if not _runtime_contract_valid(runtime, success=success, jobs=jobs):
+    if not _runtime_contract_valid(
+        runtime,
+        success=success,
+        jobs=jobs,
+        runner_schema_version=receipt_schema_version,
+    ):
         return False
     socket_setup = runtime["socket_setup"]
     priority_methods = {setup["priority_method"] for setup in socket_setup}

@@ -91,16 +91,17 @@ HISTORICAL_MULTI_ORIGIN_V36_SOURCE = {
     "neqo_pinned_commit": "fb699636c191e91848ffcce859c43bb4d69f7d94",
 }
 PREVIOUS_TIMING_STRESS_SCHEMA_VERSION = 2
-TIMING_STRESS_SCHEMA_VERSION = 8
-TIMING_STRESS_SEED_NAMESPACE = "buflo-timing-stress-v8"
+TIMING_STRESS_SCHEMA_VERSION = 9
+TIMING_STRESS_SEED_NAMESPACE = "buflo-timing-stress-v9"
 TIMING_STRESS_ARTIFACT_TYPE = "qcsd-buflo-timing-stress-execution"
 TIMING_STRESS_CHECKPOINT_TYPE = "qcsd-buflo-timing-stress-checkpoint"
 TIMING_STRESS_ATTEMPT_ERROR_TYPE = "qcsd-buflo-timing-stress-attempt-error"
 TIMING_STRESS_ATTEMPT_ERROR_SCHEMA_VERSION = 1
 ABORTED_TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION = 5
 SUPERSEDED_TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION = 6
-PREVIOUS_TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION = 7
-TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION = 8
+SUPERSEDED_TIMING_STRESS_BOUND_REGRESSION_V7_RECEIPT_SCHEMA_VERSION = 7
+PREVIOUS_TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION = 8
+TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION = 9
 CONTROLLED_NETWORK_RECEIPT_SCHEMA_VERSION = 2
 KERNEL_TX_CONTROLLED_NETWORK_RECEIPT_ENV = "QCSD_KERNEL_TX_CONTROLLED_NETWORK_RECEIPT_B64"
 STUDY_ENVIRONMENT_LEGACY_B64_ENV = "QCSD_STUDY_ENVIRONMENT_B64"
@@ -109,7 +110,7 @@ STUDY_ENVIRONMENT_CONTAINER_PATH = Path("/run/qcsd-study-environment.json")
 STUDY_ENVIRONMENT_MAX_BYTES = 64 * 1024 * 1024
 STUDY_ROOT = LAB_ROOT / "config/buflo-study/v1"
 STUDY_PLAN = STUDY_ROOT / "study.json"
-TIMING_STRESS_PARAMETERS = STUDY_ROOT / "buflo-timing-stress-v8.json"
+TIMING_STRESS_PARAMETERS = STUDY_ROOT / "buflo-timing-stress-v9.json"
 TIMING_STRESS_PARAMETERS_PROVENANCE = TIMING_STRESS_PARAMETERS.with_suffix(
     TIMING_STRESS_PARAMETERS.suffix + ".provenance.json"
 )
@@ -143,12 +144,12 @@ TIMING_STRESS_MINIMUM_DURATION_US = 100_000_000
 TIMING_STRESS_PACKET_SIZE = 1_200
 TIMING_STRESS_MAX_EVENTS_PER_DIRECTION = 6_000
 TIMING_STRESS_WINDOW_US = 5_000
-TIMING_STRESS_ETF_DELTA_NS = 4_500_000
+TIMING_STRESS_ETF_DELTA_NS = 10_000_000
 TIMING_STRESS_MINIMUM_ADAPTER_WINDOW_NS = 4_999_000
-TIMING_STRESS_MINIMUM_POST_ETF_OBSERVER_GUARD_NS = 499_000
-TIMING_STRESS_REALIZATION_BACKEND = "linux-etf-so-txtime-post-veth-v3"
-TIMING_STRESS_RUNNER_WAKEUP_SCHEMA_VERSION = 15
-TIMING_STRESS_KERNEL_TX_RUNNER_RECEIPT_SCHEMA_VERSION = 6
+TIMING_STRESS_MINIMUM_ETF_EXPIRY_AFTER_REALIZATION_DEADLINE_NS = 5_000_000
+TIMING_STRESS_REALIZATION_BACKEND = "linux-etf-so-txtime-post-veth-v4"
+TIMING_STRESS_RUNNER_WAKEUP_SCHEMA_VERSION = 16
+TIMING_STRESS_KERNEL_TX_RUNNER_RECEIPT_SCHEMA_VERSION = 7
 TIMING_STRESS_TXTIME_DROP_TIMESTAMP_SEMANTICS = (
     "requested-tai-correlation-context-never-transmit-evidence"
 )
@@ -599,8 +600,8 @@ def validate_study_plan(value: Mapping[str, Any]) -> None:
         "minimum_adapter_realization_window_ns": (
             TIMING_STRESS_MINIMUM_ADAPTER_WINDOW_NS
         ),
-        "minimum_post_etf_observer_guard_ns": (
-            TIMING_STRESS_MINIMUM_POST_ETF_OBSERVER_GUARD_NS
+        "minimum_etf_expiry_after_realization_deadline_ns": (
+            TIMING_STRESS_MINIMUM_ETF_EXPIRY_AFTER_REALIZATION_DEADLINE_NS
         ),
         "realization_backend": TIMING_STRESS_REALIZATION_BACKEND,
         "runner_wakeup_schema_version": TIMING_STRESS_RUNNER_WAKEUP_SCHEMA_VERSION,
@@ -1124,10 +1125,11 @@ def validate_controlled_campaign_receipt(
     if schema_version in {
         ABORTED_TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION,
         SUPERSEDED_TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION,
+        SUPERSEDED_TIMING_STRESS_BOUND_REGRESSION_V7_RECEIPT_SCHEMA_VERSION,
         PREVIOUS_TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION,
     }:
         raise ValueError(
-            "controlled campaign receipt schema 5, 6, or 7 belongs to a failed or "
+            "controlled campaign receipt schema 5 through 8 belongs to a failed or "
             "superseded timing-stress lineage and cannot authorise the current contract"
         )
     if not isinstance(value, Mapping) or not (
@@ -4928,8 +4930,8 @@ def _timing_stress_parameter_inputs() -> dict[str, Any]:
             "minimum_adapter_realization_window_ns": (
                 TIMING_STRESS_MINIMUM_ADAPTER_WINDOW_NS
             ),
-            "minimum_post_etf_observer_guard_ns": (
-                TIMING_STRESS_MINIMUM_POST_ETF_OBSERVER_GUARD_NS
+            "minimum_etf_expiry_after_realization_deadline_ns": (
+                TIMING_STRESS_MINIMUM_ETF_EXPIRY_AFTER_REALIZATION_DEADLINE_NS
             ),
             "catch_up": False,
             "realization_backend": TIMING_STRESS_REALIZATION_BACKEND,
@@ -5248,7 +5250,7 @@ def _timing_stress_kernel_tx_evidence(
     opportunities: int,
     network_receipt: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Deeply revalidate schema-15 sender and independent post-veth evidence."""
+    """Deeply revalidate schema-16 sender and independent post-veth evidence."""
 
     from .fidelity import (
         RUNNER_WAKEUP_V7_HISTOGRAM_UPPER_BOUNDS,
@@ -5290,7 +5292,7 @@ def _timing_stress_kernel_tx_evidence(
         or not kernel_tx_runner_receipt_success_valid(raw)
     ):
         raise ValueError(
-            "timing-stress requires current schema-15 kernel-TX evidence and a neutral "
+            "timing-stress requires current schema-16 kernel-TX evidence and a neutral "
             "schema-10 projection"
         )
     raw_aggregate = raw["aggregate"]

@@ -44,6 +44,7 @@ from .fidelity import (
     _runner_wakeup_v13_valid,
     _runner_wakeup_v14_valid,
     _runner_wakeup_v15_valid,
+    _runner_wakeup_v16_valid,
     new_defense_terminal_receipts_valid,
     reconcile_direct_runner_artifacts,
     terminal_evidence_render_receipt_valid,
@@ -1598,7 +1599,7 @@ def _process_scheduler_bound_to_run_valid(
     ``CAP_NET_ADMIN`` and ``CAP_SETPCAP`` through endpoint socket setup; its
     ETF top-level snapshot must therefore contain exactly ``0x1100`` and is
     accepted only when the
-    nested schema-11/12/13/14/15 receipt is successful, repeats that exact initial
+    nested schema-11/12/13/14/15/16 receipt is successful, repeats that exact initial
     scheduler snapshot, and proves the permanent all-set capability drop.
     """
 
@@ -1628,7 +1629,7 @@ def _process_scheduler_bound_to_run_valid(
         expected_contract == _BUFLO_ETF_SCHEDULER_CONTRACT
         and defense_kind == "buflo"
         and isinstance(wakeups, Mapping)
-        and wakeups.get("schema_version") in {11, 12, 13, 14, 15}
+        and wakeups.get("schema_version") in {11, 12, 13, 14, 15, 16}
         and _runner_wakeup_metrics_valid(wakeups)
         and kernel_tx_runner_receipt_success_valid(raw)
         and raw["runtime_contract"]["scheduler_initial"] == scheduler
@@ -1730,6 +1731,8 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
     schema_version = value.get("schema_version")
     if type(schema_version) is not int:
         return False
+    if schema_version == 16:
+        return _runner_wakeup_v16_valid(value)
     if schema_version == 15:
         return _runner_wakeup_v15_valid(value)
     if schema_version == 14:

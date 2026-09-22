@@ -487,7 +487,7 @@ def _runner_receipt_v4() -> dict[str, object]:
     raw = _runner_receipt_v3()
     raw["schema_version"] = 4
     raw["semantics"] = KERNEL_TX_RUNNER_V4_SEMANTICS
-    raw["qdisc_contract"]["delta_ns"] = kernel_tx.KERNEL_TX_ETF_DELTA_NS
+    raw["qdisc_contract"]["delta_ns"] = kernel_tx.KERNEL_TX_V4_TO_V6_ETF_DELTA_NS
     mapping = raw["clock_mapping"]
     assert isinstance(mapping, dict)
     mapping["schema_version"] = 4
@@ -496,7 +496,8 @@ def _runner_receipt_v4() -> dict[str, object]:
             item["schema_version"] = 4
             if item["send_path"] == "etf":
                 item["scm_txtime_tai_ns"] = (
-                    item["target_tai_ns"] + kernel_tx.KERNEL_TX_ETF_DELTA_NS
+                    item["target_tai_ns"]
+                    + kernel_tx.KERNEL_TX_V4_TO_V6_ETF_DELTA_NS
                 )
     return raw
 
@@ -524,7 +525,10 @@ def _runner_receipt_v6() -> dict[str, object]:
 
     raw = _runner_receipt_v5()
     raw["schema_version"] = 6
-    raw["semantics"] = KERNEL_TX_RUNNER_SEMANTICS
+    raw["semantics"] = kernel_tx.KERNEL_TX_RUNNER_V6_SEMANTICS
+    raw["runtime_contract"]["prebuild_selection_semantics"] = (
+        kernel_tx.KERNEL_TX_PROTECTED_PREBUILD_SELECTION_SEMANTICS
+    )
     entry = {
         "schema_version": 1,
         "slot": 0,
@@ -560,6 +564,22 @@ def _runner_receipt_v6() -> dict[str, object]:
         "max_entry_lateness_ns": 1_000_000,
         "last_failure": None,
     }
+    return raw
+
+
+def _runner_receipt_v7() -> dict[str, object]:
+    """Upgrade frozen schema six to the 10 ms diagnostic expiry horizon."""
+
+    raw = _runner_receipt_v6()
+    raw["schema_version"] = 7
+    raw["semantics"] = KERNEL_TX_RUNNER_SEMANTICS
+    raw["qdisc_contract"]["delta_ns"] = kernel_tx.KERNEL_TX_ETF_DELTA_NS
+    for job in raw["jobs"]:
+        for item in job["items"]:
+            if item["send_path"] == "etf":
+                item["scm_txtime_tai_ns"] = (
+                    item["target_tai_ns"] + kernel_tx.KERNEL_TX_ETF_DELTA_NS
+                )
     return raw
 
 
@@ -846,6 +866,21 @@ def _runner_wakeup_v15() -> dict[str, object]:
                 "instant-authoritative-fallback-v1"
             ),
             "buflo_kernel_tx": _runner_receipt_v6(),
+        }
+    )
+    return value
+
+
+def _runner_wakeup_v16() -> dict[str, object]:
+    value = _runner_wakeup_receipt(10)
+    value.update(
+        {
+            "schema_version": 16,
+            "semantics": fidelity.RUNNER_WAKEUP_V16_SEMANTICS,
+            "buflo_exact_release_active_wait_poll_source": (
+                "instant-authoritative-fallback-v1"
+            ),
+            "buflo_kernel_tx": _runner_receipt_v7(),
         }
     )
     return value
@@ -1271,7 +1306,7 @@ def test_runner_schema_fourteen_binds_current_schema_five_kernel_tx() -> None:
     assert not fidelity._runner_wakeup_v14_valid(wakeups)
 
 
-def test_runner_schema_fifteen_binds_current_schema_six_kernel_tx() -> None:
+def test_runner_schema_fifteen_preserves_frozen_schema_six_kernel_tx() -> None:
     wakeups = _runner_wakeup_v15()
 
     assert kernel_tx_runner_receipt_success_valid(wakeups["buflo_kernel_tx"])
@@ -1283,6 +1318,41 @@ def test_runner_schema_fifteen_binds_current_schema_six_kernel_tx() -> None:
     wakeups["buflo_kernel_tx"] = historical
     assert kernel_tx_runner_receipt_success_valid(historical)
     assert not fidelity._runner_wakeup_v15_valid(wakeups)
+
+
+def test_runner_schema_sixteen_binds_current_schema_seven_kernel_tx() -> None:
+    wakeups = _runner_wakeup_v16()
+
+    assert kernel_tx_runner_receipt_success_valid(wakeups["buflo_kernel_tx"])
+    assert fidelity._runner_wakeup_v16_valid(wakeups)
+    assert fidelity._runner_wakeup_metrics_valid(wakeups)
+    assert capture_session._runner_wakeup_metrics_valid(wakeups)
+
+    historical = _runner_receipt_v6()
+    wakeups["buflo_kernel_tx"] = historical
+    assert kernel_tx_runner_receipt_success_valid(historical)
+    assert not fidelity._runner_wakeup_v16_valid(wakeups)
+
+
+def test_kernel_tx_schema_six_accepts_v114_protected_prebuild_semantics() -> None:
+    frozen = _runner_receipt_v6()
+
+    assert frozen["runtime_contract"]["prebuild_selection_semantics"] == (
+        kernel_tx.KERNEL_TX_PROTECTED_PREBUILD_SELECTION_SEMANTICS
+    )
+    assert kernel_tx_runner_receipt_success_valid(frozen)
+
+    stale = copy.deepcopy(frozen)
+    stale["runtime_contract"]["prebuild_selection_semantics"] = (
+        kernel_tx.KERNEL_TX_HISTORICAL_PREBUILD_SELECTION_SEMANTICS
+    )
+    assert not kernel_tx_runner_receipt_valid(stale)
+
+    historical = _runner_receipt_v5()
+    assert historical["runtime_contract"]["prebuild_selection_semantics"] == (
+        kernel_tx.KERNEL_TX_HISTORICAL_PREBUILD_SELECTION_SEMANTICS
+    )
+    assert kernel_tx_runner_receipt_success_valid(historical)
 
 
 def test_kernel_tx_schema_six_protected_selection_wait_is_fail_closed() -> None:
@@ -2079,7 +2149,7 @@ def test_kernel_tx_schema_two_accepts_controller_finalization_failure() -> None:
     assert not kernel_tx_runner_receipt_valid(current)
 
 
-@pytest.mark.parametrize("runner_schema_version", (2, 3, 4, 5, 6))
+@pytest.mark.parametrize("runner_schema_version", (2, 3, 4, 5, 6, 7))
 def test_failed_final_job_may_end_before_its_nominal_deadline(
     runner_schema_version: int,
 ) -> None:
@@ -2104,6 +2174,7 @@ def test_failed_final_job_may_end_before_its_nominal_deadline(
         4: _runner_receipt_v4,
         5: _runner_receipt_v5,
         6: _runner_receipt_v6,
+        7: _runner_receipt_v7,
     }[runner_schema_version]
     failed = runner_factory()
     item = failed["jobs"][0]["items"][1]
@@ -2386,7 +2457,7 @@ def test_kernel_tx_schema_two_retains_large_monotonic_drift_as_exact_diagnostic(
     assert not kernel_tx_runner_receipt_valid(current)
 
 
-def test_kernel_tx_schema_six_constants_match_the_rust_producer() -> None:
+def test_kernel_tx_schema_seven_constants_match_the_rust_producer() -> None:
     source = (Path(__file__).parents[1] / "neqo-qcsd/neqo-bin/src/qcsd/mod.rs").read_text(
         encoding="utf-8"
     )
@@ -2416,8 +2487,8 @@ def test_kernel_tx_schema_six_constants_match_the_rust_producer() -> None:
         kernel_tx._EFFECTIVE_ENVELOPE_SEMANTICS_V5
         == mapping_line[len(mapping_prefix) : -2]
     )
-    assert "const BUFLO_KERNEL_TX_ETF_DELTA: Duration = Duration::from_micros(4_500);" in source
-    assert "const BUFLO_KERNEL_TX_RECEIPT_SCHEMA_VERSION: u32 = 6;" in source
+    assert "const BUFLO_KERNEL_TX_ETF_DELTA: Duration = Duration::from_millis(10);" in source
+    assert "const BUFLO_KERNEL_TX_RECEIPT_SCHEMA_VERSION: u32 = 7;" in source
     assert "const BUFLO_KERNEL_ITEM_RECEIPT_SCHEMA_VERSION: u32 = 5;" in source
     assert "const BUFLO_KERNEL_CLOCK_MAPPING_SCHEMA_VERSION: u32 = 5;" in source
 
@@ -2434,23 +2505,29 @@ def test_kernel_tx_etf_delta_is_versioned_and_cross_pairs_fail_closed() -> None:
     historical = _runner_receipt_v3()
     frozen = _runner_receipt_v4()
     tai_deadline = _runner_receipt_v5()
-    current = _runner_receipt_v6()
+    protected = _runner_receipt_v6()
+    current = _runner_receipt_v7()
 
     assert historical["qdisc_contract"]["delta_ns"] == 4_000_000
     assert frozen["qdisc_contract"]["delta_ns"] == 4_500_000
     assert tai_deadline["qdisc_contract"]["delta_ns"] == 4_500_000
-    assert current["qdisc_contract"]["delta_ns"] == 4_500_000
-    assert current["qdisc_contract"]["delta_ns"] < min(
+    assert protected["qdisc_contract"]["delta_ns"] == 4_500_000
+    assert protected["qdisc_contract"]["delta_ns"] < min(
         kernel_tx.KERNEL_TX_ADAPTER_WINDOW_NS
     )
     assert (
         min(kernel_tx.KERNEL_TX_ADAPTER_WINDOW_NS)
-        - current["qdisc_contract"]["delta_ns"]
+        - protected["qdisc_contract"]["delta_ns"]
         == 499_000
+    )
+    assert current["qdisc_contract"]["delta_ns"] == 10_000_000
+    assert current["qdisc_contract"]["delta_ns"] > max(
+        kernel_tx.KERNEL_TX_ADAPTER_WINDOW_NS
     )
     assert kernel_tx_runner_receipt_success_valid(historical)
     assert kernel_tx_runner_receipt_success_valid(frozen)
     assert kernel_tx_runner_receipt_success_valid(tai_deadline)
+    assert kernel_tx_runner_receipt_success_valid(protected)
     assert kernel_tx_runner_receipt_success_valid(current)
 
     for invalid_delta_ns in (0, 4_999_000, 5_000_000):
@@ -2465,12 +2542,102 @@ def test_kernel_tx_etf_delta_is_versioned_and_cross_pairs_fail_closed() -> None:
     historical["jobs"][0]["items"][0]["scm_txtime_tai_ns"] = (
         _RELEASE_TAI_NS + 4_500_000
     )
-    current["qdisc_contract"]["delta_ns"] = 4_000_000
-    current["jobs"][0]["items"][0]["scm_txtime_tai_ns"] = (
+    protected["qdisc_contract"]["delta_ns"] = 4_000_000
+    protected["jobs"][0]["items"][0]["scm_txtime_tai_ns"] = (
         _RELEASE_TAI_NS + 4_000_000
     )
+    current["qdisc_contract"]["delta_ns"] = 4_500_000
+    current["jobs"][0]["items"][0]["scm_txtime_tai_ns"] = (
+        _RELEASE_TAI_NS + 4_500_000
+    )
     assert not kernel_tx_runner_receipt_valid(historical)
+    assert not kernel_tx_runner_receipt_valid(protected)
     assert not kernel_tx_runner_receipt_valid(current)
+
+
+def test_kernel_tx_schema_seven_keeps_the_strict_five_millisecond_boundary() -> None:
+    current = _runner_receipt_v7()
+    exact = current["jobs"][0]["items"][0]
+
+    assert exact["scm_txtime_tai_ns"] == _RELEASE_TAI_NS + 10_000_000
+    assert exact["tx_software_tai_upper_ns"] < _RELEASE_TAI_NS + 5_000_000
+    assert kernel_tx_runner_receipt_success_valid(current)
+
+    at_deadline = _runner_receipt_v7()
+    job = at_deadline["jobs"][0]
+    item = job["items"][1]
+    deadline = job["deadline_tai_ns"]
+    shift = deadline - item["tx_software_tai_ns"]
+    item["tx_software_realtime_ns"] += shift
+    for key in (
+        "tx_software_tai_ns",
+        "tx_software_tai_lower_ns",
+        "tx_software_tai_upper_ns",
+    ):
+        item[key] = deadline
+    for sample in item["post_tx_clock_phase"].values():
+        sample["clock_ns"] += shift
+        sample["tai_before_ns"] += shift
+        sample["tai_after_ns"] += shift
+    item["provisional_tx_software_tai_lower_ns"] = None
+    item["provisional_tx_software_tai_upper_ns"] = None
+    item["finalization_state"] = "physical-transmit-proven"
+    item["terminal_outcome"] = "window-violation"
+    item["terminal_error"] = "final_conservative_envelope_validation_failed"
+    item["terminal_error_detail"] = (
+        "item 1 failed final mapping: enqueue_complete=true, "
+        "enqueue_clock_consistent=true, timestamp_complete=true, tx_order=true, "
+        "physical_window=false, provisional_interval=false, endpoint_tuple=true, "
+        "item_sequence=true, job_identity=true, controller_trace_finalized=false, "
+        "structural_order=true"
+    )
+    _refresh_failed_runner_receipt(
+        at_deadline,
+        primary_error="synthetic schema-seven physical window failure",
+    )
+    assert kernel_tx_runner_receipt_valid(at_deadline)
+    assert not kernel_tx_runner_receipt_success_valid(at_deadline)
+
+    evidence, capture, packets = _evidence(current)
+    arguments = _evidence_arguments(capture, packets)
+    assert kernel_tx_evidence_success_valid(
+        evidence,
+        runner_receipt=current,
+        **arguments,
+    )
+    packets[1]["capture_realtime_ns"] = deadline - _REALTIME_TO_TAI_NS
+    network, binding, network_digest = _topology()
+    boundary_evidence = build_kernel_tx_evidence(
+        runner_receipt=current,
+        runner_run_json_sha256="a" * 64,
+        qdisc_evidence={
+            "schema_version": 1,
+            "source": "tc-json-v1",
+            "observed_contract": copy.deepcopy(current["qdisc_contract"]),
+            "installed_before_runner": True,
+            "verified_after_runner": True,
+            "restored_after_capture": True,
+            "before": _snapshot(),
+            "after": _snapshot(packets=1),
+        },
+        router_capture_receipt=capture,
+        router_packets=packets,
+        controlled_network_receipt=network,
+        controlled_network_receipt_sha256=network_digest,
+        controlled_observer_binding=binding,
+    )
+    boundary_arguments = _evidence_arguments(capture, packets)
+    assert kernel_tx_evidence_valid(
+        boundary_evidence,
+        runner_receipt=current,
+        **boundary_arguments,
+    )
+    assert boundary_evidence["aggregate"]["window_violation_item_count"] == 1
+    assert not kernel_tx_evidence_success_valid(
+        boundary_evidence,
+        runner_receipt=current,
+        **boundary_arguments,
+    )
 
 
 def test_runner_kernel_tx_validates_the_exact_per_item_clock_envelope() -> None:
@@ -2713,7 +2880,7 @@ def test_failed_runner_retains_create_only_raw_qdisc_observation(
     assert path.read_bytes() == original
 
 
-@pytest.mark.parametrize("runner_schema_version", [1, 2, 3, 4, 5, 6])
+@pytest.mark.parametrize("runner_schema_version", [1, 2, 3, 4, 5, 6, 7])
 def test_runner_kernel_tx_serialises_end_clock_mapping_failure_after_jobs(
     runner_schema_version: int,
 ) -> None:
@@ -2724,8 +2891,9 @@ def test_runner_kernel_tx_serialises_end_clock_mapping_failure_after_jobs(
         4: _runner_receipt_v4,
         5: _runner_receipt_v5,
         6: _runner_receipt_v6,
+        7: _runner_receipt_v7,
     }[runner_schema_version]()
-    if runner_schema_version in {2, 3, 4, 5, 6}:
+    if runner_schema_version in {2, 3, 4, 5, 6, 7}:
         # Preserve producer ordering while moving the retained post-TX
         # MONOTONIC offset away from the direct enqueue TAI bracket.  Historical
         # schema two treated that offset overlap as a hard predicate; schema
@@ -2775,7 +2943,7 @@ def test_runner_kernel_tx_serialises_end_clock_mapping_failure_after_jobs(
         item["terminal_error"] = "final_conservative_envelope_validation_failed"
         item["terminal_error_detail"] = (
             _schema_three_unmapped_error_detail(item)
-            if runner_schema_version in {3, 4, 5, 6}
+            if runner_schema_version in {3, 4, 5, 6, 7}
             else (
                 _schema_two_unmapped_error_detail(item)
                 if runner_schema_version == 2
@@ -2798,7 +2966,7 @@ def test_runner_kernel_tx_serialises_end_clock_mapping_failure_after_jobs(
     assert kernel_tx_runner_receipt_valid(raw)
     assert not kernel_tx_runner_receipt_success_valid(raw)
 
-    if runner_schema_version in {2, 3, 4, 5, 6}:
+    if runner_schema_version in {2, 3, 4, 5, 6, 7}:
         expected_first_consistency = (
             "false" if runner_schema_version == 2 else "true"
         )

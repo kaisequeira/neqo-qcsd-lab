@@ -1025,8 +1025,10 @@ def _install_buflo_candidate_evidence(sample_root: Path) -> None:
     from qcsd_lab import buflo_handoff
     from qcsd_lab.fidelity import SCHEDULE_QCSD_FIELDS
     from tests.test_buflo_handoff import _complete_buflo_run
+    from tests.test_kernel_tx import _runner_wakeup_v16
 
     run = _complete_buflo_run(scheduled_outgoing=1, scheduled_incoming=1)
+    run["runner_wakeup_metrics"] = _runner_wakeup_v16()
     run["endpoints"] = [{"fixture": True}]
     (sample_root / "neqo/run.json").write_text(
         json.dumps(run, sort_keys=True) + "\n", encoding="utf-8"
@@ -1503,7 +1505,7 @@ def test_buflo_kernel_tx_sidecars_are_separate_and_fully_bound(tmp_path: Path) -
     assert not list((destination / "raw").rglob("router-capture.pcapng"))
     for row in buflo_rows:
         run = json.loads((destination / row["products"]["run"]["path"]).read_text())
-        assert run["runner_wakeup_metrics"]["schema_version"] == 15
+        assert run["runner_wakeup_metrics"]["schema_version"] == 16
         assert set(row["source"]["artifacts"]) == {
             "pcapng",
             "run",

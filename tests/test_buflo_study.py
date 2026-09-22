@@ -76,6 +76,7 @@ from qcsd_lab.fidelity import (
     RUNNER_WAKEUP_V13_SEMANTICS,
     RUNNER_WAKEUP_V14_SEMANTICS,
     RUNNER_WAKEUP_V15_SEMANTICS,
+    RUNNER_WAKEUP_V16_SEMANTICS,
     SCHEDULE_PREFIX_FIELDS,
     SCHEDULE_QCSD_FIELDS,
     _cs_buflo_padding_targets_match,
@@ -90,11 +91,13 @@ from qcsd_lab.fidelity import (
     _runner_wakeup_metrics_valid as _fidelity_runner_wakeup_metrics_valid,
 )
 from qcsd_lab.kernel_tx import (
+    KERNEL_TX_PROTECTED_SELECTION_WAIT_SEMANTICS,
     KERNEL_TX_RUNNER_SEMANTICS,
     KERNEL_TX_RUNNER_V2_SEMANTICS,
     KERNEL_TX_RUNNER_V3_SEMANTICS,
     KERNEL_TX_RUNNER_V4_SEMANTICS,
     KERNEL_TX_RUNNER_V5_SEMANTICS,
+    KERNEL_TX_RUNNER_V6_SEMANTICS,
 )
 from qcsd_lab.util import LAB_ROOT
 
@@ -2672,17 +2675,29 @@ def test_runner_wakeup_schema_fourteen_semantics_remain_frozen() -> None:
     )
 
 
-def test_runner_wakeup_schema_fifteen_semantics_exactly_match_rust_producer() -> None:
+def test_runner_wakeup_schema_fifteen_semantics_remain_frozen() -> None:
+    assert RUNNER_WAKEUP_V15_SEMANTICS == (
+        f"{RUNNER_WAKEUP_V10_SEMANTICS}; "
+        "runner_schema15_retains_schema10_layout_for_non_kernel_metrics=true; "
+        "buflo_legacy_exact_release_guard_metrics_are_zero_with_kernel_tx=true; "
+        f"buflo_kernel_tx_raw_semantics={KERNEL_TX_RUNNER_V6_SEMANTICS}; "
+        "buflo_kernel_protected_selection_wait_semantics="
+        f"{KERNEL_TX_PROTECTED_SELECTION_WAIT_SEMANTICS}; "
+        "post_veth_and_qdisc_end_state_are_separate_lab_evidence=true"
+    )
+
+
+def test_runner_wakeup_schema_sixteen_semantics_exactly_match_rust_producer() -> None:
     source = (LAB_ROOT / "neqo-qcsd/neqo-bin/src/qcsd/mod.rs").read_text(encoding="utf-8")
     kernel_prefix = 'const BUFLO_KERNEL_TX_SEMANTICS: &str = "'
     kernel_line = next(line for line in source.splitlines() if line.startswith(kernel_prefix))
     assert kernel_line.endswith('";')
     assert KERNEL_TX_RUNNER_SEMANTICS == kernel_line[len(kernel_prefix) : -2]
-    assert "runner_schema15_retains_schema10_layout_for_non_kernel_metrics=true" in (
-        RUNNER_WAKEUP_V15_SEMANTICS
+    assert "runner_schema16_retains_schema15_and_schema10_layout_for_non_kernel_metrics=true" in (
+        RUNNER_WAKEUP_V16_SEMANTICS
     )
     assert f"buflo_kernel_tx_raw_semantics={KERNEL_TX_RUNNER_SEMANTICS}; " in (
-        RUNNER_WAKEUP_V15_SEMANTICS
+        RUNNER_WAKEUP_V16_SEMANTICS
     )
     assert RUNNER_WAKEUP_V11_SEMANTICS == (
         f"{RUNNER_WAKEUP_V10_SEMANTICS}; "
@@ -2691,10 +2706,10 @@ def test_runner_wakeup_schema_fifteen_semantics_exactly_match_rust_producer() ->
         f"buflo_kernel_tx_raw_semantics={KERNEL_TX_RUNNER_V2_SEMANTICS}; "
         "post_veth_and_qdisc_end_state_are_separate_lab_evidence=true"
     )
-    assert "self.schema_version = 15;" in source
+    assert "self.schema_version = BUFLO_KERNEL_RUNNER_WAKEUP_METRICS_SCHEMA_VERSION;" in source
     assert (
         '"{RUNNER_WAKEUP_METRICS_SEMANTICS}; '
-        "runner_schema15_retains_schema10_layout_for_non_kernel_metrics=true; "
+        "{BUFLO_KERNEL_RUNNER_WAKEUP_RETENTION_SEMANTICS}; "
         "buflo_legacy_exact_release_guard_metrics_are_zero_with_kernel_tx=true; "
         "buflo_kernel_tx_raw_semantics={BUFLO_KERNEL_TX_SEMANTICS}; "
         "buflo_kernel_protected_selection_wait_semantics="

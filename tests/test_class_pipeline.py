@@ -1987,10 +1987,10 @@ def _candidate_verified_result(
         and isinstance(wakeups, dict)
         and wakeups.get("schema_version") == 10
     ):
-        from tests.test_kernel_tx import _runner_wakeup_v15
+        from tests.test_kernel_tx import _runner_wakeup_v16
 
         run = json.loads(json.dumps(run))
-        run["runner_wakeup_metrics"] = _runner_wakeup_v15()
+        run["runner_wakeup_metrics"] = _runner_wakeup_v16()
     root = (tmp_path / "candidate-result").resolve()
     sample_relative = "samples/class-000/as-defined/visit-001/buflo"
     sample_root = root / sample_relative
@@ -2236,7 +2236,7 @@ def test_class_result_rejects_schema_ten_guarded_buflo_receipt(tmp_path: Path) -
         ),
     )
 
-    with pytest.raises(ValueError, match="runner-wakeup schema-15 with kernel-TX evidence"):
+    with pytest.raises(ValueError, match="runner-wakeup schema-16 with kernel-TX evidence"):
         pipeline._validate_current_candidate_sample_receipt(verified, sample, role="certification")
 
 
@@ -2247,7 +2247,7 @@ def test_class_result_rejects_historical_schema_eight_runner_receipt(tmp_path: P
     run["runner_wakeup_metrics"] = _runner_wakeup_receipt(8)
     verified, sample = _candidate_verified_result(tmp_path, run)
 
-    with pytest.raises(ValueError, match="runner-wakeup schema-15 with kernel-TX evidence"):
+    with pytest.raises(ValueError, match="runner-wakeup schema-16 with kernel-TX evidence"):
         pipeline._validate_current_candidate_sample_receipt(verified, sample, role="certification")
 
 
