@@ -74,6 +74,7 @@ from qcsd_lab.fidelity import (
     RUNNER_WAKEUP_V11_SEMANTICS,
     RUNNER_WAKEUP_V12_SEMANTICS,
     RUNNER_WAKEUP_V13_SEMANTICS,
+    RUNNER_WAKEUP_V14_SEMANTICS,
     SCHEDULE_PREFIX_FIELDS,
     SCHEDULE_QCSD_FIELDS,
     _cs_buflo_padding_targets_match,
@@ -91,6 +92,7 @@ from qcsd_lab.kernel_tx import (
     KERNEL_TX_RUNNER_SEMANTICS,
     KERNEL_TX_RUNNER_V2_SEMANTICS,
     KERNEL_TX_RUNNER_V3_SEMANTICS,
+    KERNEL_TX_RUNNER_V4_SEMANTICS,
 )
 from qcsd_lab.util import LAB_ROOT
 
@@ -2648,7 +2650,17 @@ def test_runner_wakeup_schema_twelve_semantics_remain_frozen() -> None:
     )
 
 
-def test_runner_wakeup_schema_thirteen_semantics_exactly_match_rust_producer() -> None:
+def test_runner_wakeup_schema_thirteen_semantics_remain_frozen() -> None:
+    assert RUNNER_WAKEUP_V13_SEMANTICS == (
+        f"{RUNNER_WAKEUP_V10_SEMANTICS}; "
+        "runner_schema13_retains_schema10_layout_for_non_kernel_metrics=true; "
+        "buflo_legacy_exact_release_guard_metrics_are_zero_with_kernel_tx=true; "
+        f"buflo_kernel_tx_raw_semantics={KERNEL_TX_RUNNER_V4_SEMANTICS}; "
+        "post_veth_and_qdisc_end_state_are_separate_lab_evidence=true"
+    )
+
+
+def test_runner_wakeup_schema_fourteen_semantics_exactly_match_rust_producer() -> None:
     source = (LAB_ROOT / "neqo-qcsd/neqo-bin/src/qcsd/mod.rs").read_text(encoding="utf-8")
     kernel_prefix = 'const BUFLO_KERNEL_TX_SEMANTICS: &str = "'
     kernel_line = next(line for line in source.splitlines() if line.startswith(kernel_prefix))
@@ -2656,12 +2668,12 @@ def test_runner_wakeup_schema_thirteen_semantics_exactly_match_rust_producer() -
     assert KERNEL_TX_RUNNER_SEMANTICS == kernel_line[len(kernel_prefix) : -2]
     current_expected = (
         f"{RUNNER_WAKEUP_V10_SEMANTICS}; "
-        "runner_schema13_retains_schema10_layout_for_non_kernel_metrics=true; "
+        "runner_schema14_retains_schema10_layout_for_non_kernel_metrics=true; "
         "buflo_legacy_exact_release_guard_metrics_are_zero_with_kernel_tx=true; "
         f"buflo_kernel_tx_raw_semantics={KERNEL_TX_RUNNER_SEMANTICS}; "
         "post_veth_and_qdisc_end_state_are_separate_lab_evidence=true"
     )
-    assert RUNNER_WAKEUP_V13_SEMANTICS == current_expected
+    assert RUNNER_WAKEUP_V14_SEMANTICS == current_expected
     assert RUNNER_WAKEUP_V11_SEMANTICS == (
         f"{RUNNER_WAKEUP_V10_SEMANTICS}; "
         "runner_schema10_layout_is_retained_for_non_kernel_metrics; "
@@ -2669,10 +2681,10 @@ def test_runner_wakeup_schema_thirteen_semantics_exactly_match_rust_producer() -
         f"buflo_kernel_tx_raw_semantics={KERNEL_TX_RUNNER_V2_SEMANTICS}; "
         "post_veth_and_qdisc_end_state_are_separate_lab_evidence=true"
     )
-    assert "self.schema_version = 13;" in source
+    assert "self.schema_version = 14;" in source
     assert (
         '"{RUNNER_WAKEUP_METRICS_SEMANTICS}; '
-        "runner_schema13_retains_schema10_layout_for_non_kernel_metrics=true; "
+        "runner_schema14_retains_schema10_layout_for_non_kernel_metrics=true; "
         "buflo_legacy_exact_release_guard_metrics_are_zero_with_kernel_tx=true; "
         "buflo_kernel_tx_raw_semantics={BUFLO_KERNEL_TX_SEMANTICS}; "
         'post_veth_and_qdisc_end_state_are_separate_lab_evidence=true"'
@@ -12000,9 +12012,9 @@ def test_buflo_fidelity_requires_every_zero_error_and_typed_terminal_once() -> N
         )
 
 
-def test_current_buflo_terminal_receipt_requires_schema_thirteen_kernel_tx() -> None:
+def test_current_buflo_terminal_receipt_requires_schema_fourteen_kernel_tx() -> None:
     from tests.test_buflo_handoff import _complete_buflo_run
-    from tests.test_kernel_tx import _runner_wakeup_v13
+    from tests.test_kernel_tx import _runner_wakeup_v14
 
     schema_ten = _complete_buflo_run(
         scheduled_outgoing=1,
@@ -12017,7 +12029,7 @@ def test_current_buflo_terminal_receipt_requires_schema_thirteen_kernel_tx() -> 
     )
 
     current = json.loads(json.dumps(schema_ten))
-    current["runner_wakeup_metrics"] = _runner_wakeup_v13()
+    current["runner_wakeup_metrics"] = _runner_wakeup_v14()
     assert new_defense_terminal_receipts_valid(
         current,
         "buflo",

@@ -258,7 +258,7 @@ def test_generic_nonstudy_schema_six_remains_compatible(tmp_path: Path) -> None:
     }
 
 
-@pytest.mark.parametrize("schema_version", (6, 7, 8, 9, 11, 12))
+@pytest.mark.parametrize("schema_version", (6, 7, 8, 9, 11, 12, 13))
 def test_current_class_sample_rejects_historical_runner_wakeup_schema(
     tmp_path: Path,
     schema_version: int,
@@ -282,8 +282,8 @@ def test_current_class_sample_rejects_historical_runner_wakeup_schema(
 @pytest.mark.parametrize(
     ("runtime_kind", "runner_schema", "message"),
     [
-        ("buflo", 12, "BuFLO sample requires runner-wakeup schema 13"),
-        ("cs_buflo", 13, "CS-BuFLO sample requires runner-wakeup schema 10"),
+        ("buflo", 13, "BuFLO sample requires runner-wakeup schema 14"),
+        ("cs_buflo", 14, "CS-BuFLO sample requires runner-wakeup schema 10"),
     ],
 )
 def test_current_class_candidates_require_mode_specific_runner_schema(
@@ -310,7 +310,7 @@ def test_current_class_candidates_require_mode_specific_runner_schema(
         validate_accepted_samples(root, experiment)
 
 
-@pytest.mark.parametrize("runner_schema", (11, 12, 13))
+@pytest.mark.parametrize("runner_schema", (11, 12, 13, 14))
 def test_kernel_tx_buflo_rejects_absent_kernel_sidecar(
     tmp_path: Path, runner_schema: int
 ) -> None:
@@ -318,6 +318,7 @@ def test_kernel_tx_buflo_rejects_absent_kernel_sidecar(
         _runner_wakeup_v11,
         _runner_wakeup_v12,
         _runner_wakeup_v13,
+        _runner_wakeup_v14,
     )
 
     sample = {
@@ -332,6 +333,7 @@ def test_kernel_tx_buflo_rejects_absent_kernel_sidecar(
         11: _runner_wakeup_v11,
         12: _runner_wakeup_v12,
         13: _runner_wakeup_v13,
+        14: _runner_wakeup_v14,
     }[runner_schema]()
     atomic_json(
         sample_root / "neqo/run.json",
@@ -347,7 +349,7 @@ def test_kernel_tx_buflo_rejects_absent_kernel_sidecar(
 
 @pytest.mark.parametrize(
     ("runner_schema", "raw_schema"),
-    ((11, 3), (12, 4), (13, 3)),
+    ((11, 3), (12, 4), (13, 3), (13, 5), (14, 4)),
 )
 def test_kernel_tx_sidecar_rejects_cross_version_runner_pairing(
     tmp_path: Path,
@@ -357,9 +359,11 @@ def test_kernel_tx_sidecar_rejects_cross_version_runner_pairing(
     from tests.test_kernel_tx import (
         _runner_receipt_v3,
         _runner_receipt_v4,
+        _runner_receipt_v5,
         _runner_wakeup_v11,
         _runner_wakeup_v12,
         _runner_wakeup_v13,
+        _runner_wakeup_v14,
     )
 
     sample = {
@@ -375,10 +379,12 @@ def test_kernel_tx_sidecar_rejects_cross_version_runner_pairing(
         11: _runner_wakeup_v11,
         12: _runner_wakeup_v12,
         13: _runner_wakeup_v13,
+        14: _runner_wakeup_v14,
     }[runner_schema]()
     wakeups["buflo_kernel_tx"] = {
         3: _runner_receipt_v3,
         4: _runner_receipt_v4,
+        5: _runner_receipt_v5,
     }[raw_schema]()
     atomic_json(
         sample_root / "neqo/run.json",

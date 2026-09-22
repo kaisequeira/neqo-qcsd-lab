@@ -2748,7 +2748,7 @@ def test_kernel_tx_sidecar_promotes_outside_exact_five_file_sample(
 
 @pytest.mark.parametrize(
     ("outer_schema", "raw_schema"),
-    ((12, 4), (13, 3)),
+    ((12, 4), (13, 3), (13, 5), (14, 4)),
 )
 def test_kernel_tx_promotion_rejects_outer_raw_schema_cross_pair(
     tmp_path: Path,
@@ -2785,8 +2785,8 @@ def test_kernel_tx_promotion_rejects_outer_raw_schema_cross_pair(
         orchestrator,
         "_runner_wakeup_metrics_valid",
         lambda value: (
-            value.get("schema_version") == 13
-            and value.get("buflo_kernel_tx", {}).get("schema_version") == 4
+            value.get("schema_version") == 14
+            and value.get("buflo_kernel_tx", {}).get("schema_version") == 5
         ),
     )
 

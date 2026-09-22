@@ -91,8 +91,8 @@ HISTORICAL_MULTI_ORIGIN_V36_SOURCE = {
     "neqo_pinned_commit": "fb699636c191e91848ffcce859c43bb4d69f7d94",
 }
 PREVIOUS_TIMING_STRESS_SCHEMA_VERSION = 2
-TIMING_STRESS_SCHEMA_VERSION = 6
-TIMING_STRESS_SEED_NAMESPACE = "buflo-timing-stress-v6"
+TIMING_STRESS_SCHEMA_VERSION = 7
+TIMING_STRESS_SEED_NAMESPACE = "buflo-timing-stress-v7"
 TIMING_STRESS_ARTIFACT_TYPE = "qcsd-buflo-timing-stress-execution"
 TIMING_STRESS_CHECKPOINT_TYPE = "qcsd-buflo-timing-stress-checkpoint"
 TIMING_STRESS_ATTEMPT_ERROR_TYPE = "qcsd-buflo-timing-stress-attempt-error"
@@ -108,7 +108,7 @@ STUDY_ENVIRONMENT_CONTAINER_PATH = Path("/run/qcsd-study-environment.json")
 STUDY_ENVIRONMENT_MAX_BYTES = 64 * 1024 * 1024
 STUDY_ROOT = LAB_ROOT / "config/buflo-study/v1"
 STUDY_PLAN = STUDY_ROOT / "study.json"
-TIMING_STRESS_PARAMETERS = STUDY_ROOT / "buflo-timing-stress-v6.json"
+TIMING_STRESS_PARAMETERS = STUDY_ROOT / "buflo-timing-stress-v7.json"
 TIMING_STRESS_PARAMETERS_PROVENANCE = TIMING_STRESS_PARAMETERS.with_suffix(
     TIMING_STRESS_PARAMETERS.suffix + ".provenance.json"
 )
@@ -146,8 +146,8 @@ TIMING_STRESS_ETF_DELTA_NS = 4_500_000
 TIMING_STRESS_MINIMUM_ADAPTER_WINDOW_NS = 4_999_000
 TIMING_STRESS_MINIMUM_POST_ETF_OBSERVER_GUARD_NS = 499_000
 TIMING_STRESS_REALIZATION_BACKEND = "linux-etf-so-txtime-post-veth-v2"
-TIMING_STRESS_RUNNER_WAKEUP_SCHEMA_VERSION = 13
-TIMING_STRESS_KERNEL_TX_RUNNER_RECEIPT_SCHEMA_VERSION = 4
+TIMING_STRESS_RUNNER_WAKEUP_SCHEMA_VERSION = 14
+TIMING_STRESS_KERNEL_TX_RUNNER_RECEIPT_SCHEMA_VERSION = 5
 TIMING_STRESS_TXTIME_DROP_TIMESTAMP_SEMANTICS = (
     "requested-tai-correlation-context-never-transmit-evidence"
 )
@@ -4866,7 +4866,7 @@ def _timing_stress_parameter_inputs() -> dict[str, Any]:
     if parameter != expected_parameter:
         raise ValueError("timing-stress parameters must change only canonical minimum_duration_us")
     expected_provenance = {
-        "schema_version": 6,
+        "schema_version": 7,
         "artifact_type": "qcsd-buflo-timing-stress-parameters",
         "status": "controlled-test-only",
         "production_ready": False,
@@ -5246,7 +5246,7 @@ def _timing_stress_kernel_tx_evidence(
     opportunities: int,
     network_receipt: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Deeply revalidate schema-13 sender and independent post-veth evidence."""
+    """Deeply revalidate schema-14 sender and independent post-veth evidence."""
 
     from .fidelity import (
         RUNNER_WAKEUP_V7_HISTOGRAM_UPPER_BOUNDS,
@@ -5288,7 +5288,7 @@ def _timing_stress_kernel_tx_evidence(
         or not kernel_tx_runner_receipt_success_valid(raw)
     ):
         raise ValueError(
-            "timing-stress requires current schema-13 kernel-TX evidence and a neutral "
+            "timing-stress requires current schema-14 kernel-TX evidence and a neutral "
             "schema-10 projection"
         )
     raw_aggregate = raw["aggregate"]

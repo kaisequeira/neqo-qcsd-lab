@@ -1102,12 +1102,19 @@ def test_kernel_tx_runner_admission_preserves_history_and_requires_exact_schema_
     from tests.test_kernel_tx import (
         _runner_receipt_v3,
         _runner_receipt_v4,
+        _runner_receipt_v5,
         _runner_wakeup_v11,
         _runner_wakeup_v12,
         _runner_wakeup_v13,
+        _runner_wakeup_v14,
     )
 
-    for wakeups in (_runner_wakeup_v11(), _runner_wakeup_v12(), _runner_wakeup_v13()):
+    for wakeups in (
+        _runner_wakeup_v11(),
+        _runner_wakeup_v12(),
+        _runner_wakeup_v13(),
+        _runner_wakeup_v14(),
+    ):
         assert capture_session._runner_wakeup_metrics_valid(wakeups)
         raw = wakeups["buflo_kernel_tx"]
         assert isinstance(raw, dict)
@@ -1126,7 +1133,16 @@ def test_kernel_tx_runner_admission_preserves_history_and_requires_exact_schema_
     schema_twelve_with_raw_four["buflo_kernel_tx"] = _runner_receipt_v4()
     schema_thirteen_with_raw_three = _runner_wakeup_v13()
     schema_thirteen_with_raw_three["buflo_kernel_tx"] = _runner_receipt_v3()
-    for wakeups in (schema_twelve_with_raw_four, schema_thirteen_with_raw_three):
+    schema_fourteen_with_raw_four = _runner_wakeup_v14()
+    schema_fourteen_with_raw_four["buflo_kernel_tx"] = _runner_receipt_v4()
+    schema_thirteen_with_raw_five = _runner_wakeup_v13()
+    schema_thirteen_with_raw_five["buflo_kernel_tx"] = _runner_receipt_v5()
+    for wakeups in (
+        schema_twelve_with_raw_four,
+        schema_thirteen_with_raw_three,
+        schema_fourteen_with_raw_four,
+        schema_thirteen_with_raw_five,
+    ):
         assert not capture_session._runner_wakeup_metrics_valid(wakeups)
         raw = wakeups["buflo_kernel_tx"]
         assert isinstance(raw, dict)
