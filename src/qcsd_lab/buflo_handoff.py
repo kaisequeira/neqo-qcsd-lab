@@ -784,9 +784,9 @@ def _runner_kernel_tx_requirement(
     wakeups = run.get("runner_wakeup_metrics") if isinstance(run, Mapping) else None
     schema = wakeups.get("schema_version") if isinstance(wakeups, Mapping) else None
     raw = wakeups.get("buflo_kernel_tx") if isinstance(wakeups, Mapping) else None
-    required = runtime_kind == "buflo" and schema == 11
+    required = runtime_kind == "buflo" and schema in {11, 12}
     if required and not isinstance(raw, Mapping):
-        raise ValueError("schema-11 BuFLO handoff sample has no raw kernel-TX receipt")
+        raise ValueError("kernel-TX BuFLO handoff sample has no raw runner receipt")
     if not required and raw is not None:
         raise ValueError("non-kernel handoff sample carries a raw kernel-TX receipt")
     return required, raw if isinstance(raw, Mapping) else None
@@ -815,11 +815,11 @@ def _expected_kernel_tx_binding(
             raise ValueError("non-kernel handoff sample claims kernel-TX evidence")
         return None
     if not isinstance(retained_value, Mapping):
-        raise ValueError("schema-11 BuFLO source sidecar receipt is unavailable")
+        raise ValueError("kernel-TX BuFLO source sidecar receipt is unavailable")
 
     sample_id = sample.get("sample_id")
     if not isinstance(sample_id, str) or _COMPONENT.fullmatch(sample_id) is None:
-        raise ValueError("schema-11 BuFLO source sidecar sample identity is invalid")
+        raise ValueError("kernel-TX BuFLO source sidecar sample identity is invalid")
     source_directory = f"{KERNEL_TX_EVIDENCE_DIRECTORY}/{sample_id}"
     source_artifacts = retained_value.get("artifacts")
     if (
@@ -833,7 +833,7 @@ def _expected_kernel_tx_binding(
         or set(source_artifacts) != KERNEL_TX_EVIDENCE_FILES
         or any(_DIGEST.fullmatch(str(value)) is None for value in source_artifacts.values())
     ):
-        raise ValueError("schema-11 BuFLO source sidecar receipt is invalid")
+        raise ValueError("kernel-TX BuFLO source sidecar receipt is invalid")
 
     artifacts: dict[str, dict[str, str]] = {}
     for name in sorted(KERNEL_TX_EVIDENCE_FILES):
@@ -846,7 +846,7 @@ def _expected_kernel_tx_binding(
             or not source.is_file()
             or sha256_file(source) != digest
         ):
-            raise ValueError("schema-11 BuFLO source sidecar differs from its evidence seal")
+            raise ValueError("kernel-TX BuFLO source sidecar differs from its evidence seal")
         artifacts[name] = {
             "source_path": source_path,
             "path": source_path,
@@ -881,7 +881,7 @@ def _export_kernel_tx_sidecar(
         destination = candidate / artifact["path"]
         _copy_sealed_file(receipt, source, destination)
         if sha256_file(destination) != artifact["sha256"]:
-            raise ValueError("copied schema-11 BuFLO kernel-TX evidence changed")
+            raise ValueError("copied BuFLO kernel-TX evidence changed")
     return binding
 
 
@@ -903,7 +903,7 @@ def _validate_kernel_tx_binding(
     sample_id = str(row.get("sample_id"))
     expected_directory = f"{KERNEL_TX_EVIDENCE_DIRECTORY}/{sample_id}"
     if not isinstance(binding, Mapping):
-        raise ValueError("schema-11 BuFLO handoff row lacks kernel-TX evidence")
+        raise ValueError("kernel-TX BuFLO handoff row lacks evidence")
     source_receipt = binding.get("source_receipt")
     artifacts = binding.get("artifacts")
     if (
@@ -919,7 +919,7 @@ def _validate_kernel_tx_binding(
         or not isinstance(artifacts, Mapping)
         or set(artifacts) != KERNEL_TX_EVIDENCE_FILES
     ):
-        raise ValueError("schema-11 BuFLO handoff kernel-TX binding is invalid")
+        raise ValueError("BuFLO handoff kernel-TX binding is invalid")
 
     directory_candidate = root / expected_directory
     directory = directory_candidate.resolve()
@@ -930,7 +930,7 @@ def _validate_kernel_tx_binding(
         or {item.name for item in directory.iterdir()} != KERNEL_TX_EVIDENCE_FILES
         or any(item.is_symlink() or not item.is_file() for item in directory.iterdir())
     ):
-        raise ValueError("schema-11 BuFLO handoff kernel-TX directory is invalid")
+        raise ValueError("BuFLO handoff kernel-TX directory is invalid")
     expected_files: set[str] = set()
     for name in sorted(KERNEL_TX_EVIDENCE_FILES):
         artifact = artifacts.get(name)
@@ -943,7 +943,7 @@ def _validate_kernel_tx_binding(
             or _DIGEST.fullmatch(str(artifact.get("sha256"))) is None
             or sha256_file(root / expected_path) != artifact.get("sha256")
         ):
-            raise ValueError("schema-11 BuFLO handoff kernel-TX artifact binding is invalid")
+            raise ValueError("BuFLO handoff kernel-TX artifact binding is invalid")
         expected_files.add(expected_path)
     return expected_files
 
@@ -962,10 +962,10 @@ def _deep_validate_kernel_tx_binding(
         return
     binding = row.get("kernel_tx_evidence")
     if not isinstance(binding, Mapping) or raw is None:
-        raise ValueError("schema-11 BuFLO handoff lacks deep kernel-TX evidence")
+        raise ValueError("BuFLO handoff lacks deep kernel-TX evidence")
     artifacts = binding.get("artifacts")
     if not isinstance(artifacts, Mapping):
-        raise ValueError("schema-11 BuFLO handoff kernel-TX artifacts are invalid")
+        raise ValueError("BuFLO handoff kernel-TX artifacts are invalid")
     router_capture = root / str(artifacts["router-capture.pcapng"]["path"])
     router_receipt = load_json(root / str(artifacts["router-receipt.json"]["path"]))
     evidence = load_json(root / str(artifacts["kernel-tx-evidence.json"]["path"]))
@@ -982,7 +982,7 @@ def _deep_validate_kernel_tx_binding(
         router_capture_receipt=router_receipt,
         router_packets=router_packets,
     ):
-        raise ValueError("schema-11 BuFLO handoff kernel-TX evidence failed deep validation")
+        raise ValueError("BuFLO handoff kernel-TX evidence failed deep validation")
 
 
 def _sample_input_bindings(
@@ -4044,7 +4044,7 @@ bilateral implementations. `samples.jsonl` is authoritative for temporal block
 splits and paired-visit membership. Validate the closed inventory with
 `sha256sum -c SHA256SUMS` and the semantic protocol with `buflo-study verify`.
 
-Schema 2 copies each schema-11 BuFLO post-veth proof into the separate
+Schema 2 copies each schema-11/12 BuFLO post-veth proof into the separate
 `kernel-tx-evidence/<sample-id>/` tree. Each sample row binds the source receipt
 and the exact router capture, router receipt, and reconciliation receipt by
 canonical path and SHA-256. These three files remain outside the accepted

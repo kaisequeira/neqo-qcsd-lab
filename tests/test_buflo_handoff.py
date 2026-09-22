@@ -459,9 +459,9 @@ def _complete_buflo_run(
     if current_runner:
         if scheduled_outgoing != 1:
             raise ValueError("current kernel-TX fixture supports one outgoing opportunity")
-        from tests.test_kernel_tx import _runner_wakeup_v11
+        from tests.test_kernel_tx import _runner_wakeup_v12
 
-        runner_wakeup_metrics = _runner_wakeup_v11()
+        runner_wakeup_metrics = _runner_wakeup_v12()
     return {
         "completion_status": "complete",
         "error": None,
@@ -1557,7 +1557,7 @@ def test_buflo_algorithm_diagnostics_bind_typed_tail_action_and_control_packet(
         events_path=events,
         packets_path=packets,
     )
-    assert run["runner_wakeup_metrics"]["schema_version"] == 11
+    assert run["runner_wakeup_metrics"]["schema_version"] == 12
     assert algorithm["schema_version"] == 4
     assert evaluation_module._load_algorithm_diagnostics(algorithm, defense="buflo") == algorithm
     assert algorithm["buflo_state"]["schema_version"] == 3

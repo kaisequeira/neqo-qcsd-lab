@@ -10,6 +10,7 @@ from qcsd_lab import capture_session, fidelity, kernel_tx
 from qcsd_lab.kernel_tx import (
     KERNEL_TX_EVIDENCE_SEMANTICS,
     KERNEL_TX_RUNNER_SEMANTICS,
+    KERNEL_TX_RUNNER_V2_SEMANTICS,
     build_kernel_tx_evidence,
     build_observer_topology_receipt,
     kernel_tx_evidence_success_valid,
@@ -427,7 +428,7 @@ def _runner_receipt_v2() -> dict[str, object]:
 
     raw = _runner_receipt()
     raw["schema_version"] = 2
-    raw["semantics"] = KERNEL_TX_RUNNER_SEMANTICS
+    raw["semantics"] = KERNEL_TX_RUNNER_V2_SEMANTICS
     mapping = raw["clock_mapping"]
     assert isinstance(mapping, dict)
     mapping["schema_version"] = 2
@@ -459,6 +460,24 @@ def _runner_receipt_v2() -> dict[str, object]:
                     _REALTIME_TO_TAI_NS,
                 ),
             }
+    return raw
+
+
+def _runner_receipt_v3() -> dict[str, object]:
+    """Upgrade the schema-two fixture to operation-ordered enqueue evidence."""
+
+    raw = _runner_receipt_v2()
+    raw["schema_version"] = 3
+    raw["semantics"] = KERNEL_TX_RUNNER_SEMANTICS
+    mapping = raw["clock_mapping"]
+    assert isinstance(mapping, dict)
+    mapping["schema_version"] = 3
+    mapping["effective_envelope_semantics"] = (
+        kernel_tx._EFFECTIVE_ENVELOPE_SEMANTICS_V3
+    )
+    for job in raw["jobs"]:
+        for item in job["items"]:
+            item["schema_version"] = 3
     return raw
 
 
@@ -512,7 +531,9 @@ def _clear_final_clock_translations(item: dict[str, object]) -> None:
             item[f"{prefix}_{suffix}"] = None
 
 
-def _schema_two_unmapped_error_detail(item: dict[str, object]) -> str:
+def _unmapped_error_detail(
+    item: dict[str, object], *, enqueue_clock_consistent: bool
+) -> str:
     enqueue_complete = (
         item["enqueue_tai_lower_ns"] is not None
         and item["enqueue_tai_upper_ns"] is not None
@@ -538,12 +559,59 @@ def _schema_two_unmapped_error_detail(item: dict[str, object]) -> str:
     return (
         f"item {item['item_id']} failed final mapping: "
         f"enqueue_complete={rust_bool(enqueue_complete)}, "
-        "enqueue_clock_consistent=false, timestamp_complete=false, "
+        f"enqueue_clock_consistent={rust_bool(enqueue_clock_consistent)}, "
+        "timestamp_complete=false, "
         f"tx_order={rust_bool(tx_order)}, physical_window=false, "
         "provisional_interval=false, endpoint_tuple=true, item_sequence=true, "
         "job_identity=true, "
         f"controller_trace_finalized={rust_bool(controller_finalized)}, "
         f"structural_order={rust_bool(structural_order)}"
+    )
+
+
+def _schema_two_unmapped_error_detail(item: dict[str, object]) -> str:
+    phase = item.get("post_tx_clock_phase")
+    enqueue_monotonic_ns = item.get("enqueue_monotonic_ns")
+    enqueue_tai_lower_ns = item.get("enqueue_tai_lower_ns")
+    enqueue_tai_upper_ns = item.get("enqueue_tai_upper_ns")
+    enqueue_clock_consistent = bool(
+        phase is not None
+        and enqueue_monotonic_ns is not None
+        and enqueue_tai_lower_ns is not None
+        and enqueue_tai_upper_ns is not None
+        and kernel_tx._item_local_enqueue_clock_consistent(
+            phase,
+            enqueue_monotonic_ns=enqueue_monotonic_ns,
+            enqueue_tai_lower_ns=enqueue_tai_lower_ns,
+            enqueue_tai_upper_ns=enqueue_tai_upper_ns,
+        )
+    )
+    return _unmapped_error_detail(
+        item,
+        enqueue_clock_consistent=enqueue_clock_consistent,
+    )
+
+
+def _schema_three_unmapped_error_detail(item: dict[str, object]) -> str:
+    phase = item.get("post_tx_clock_phase")
+    enqueue_monotonic_ns = item.get("enqueue_monotonic_ns")
+    enqueue_tai_lower_ns = item.get("enqueue_tai_lower_ns")
+    enqueue_tai_upper_ns = item.get("enqueue_tai_upper_ns")
+    enqueue_clock_consistent = bool(
+        phase is not None
+        and enqueue_monotonic_ns is not None
+        and enqueue_tai_lower_ns is not None
+        and enqueue_tai_upper_ns is not None
+        and kernel_tx._item_local_enqueue_operation_ordered(
+            phase,
+            enqueue_monotonic_ns=enqueue_monotonic_ns,
+            enqueue_tai_lower_ns=enqueue_tai_lower_ns,
+            enqueue_tai_upper_ns=enqueue_tai_upper_ns,
+        )
+    )
+    return _unmapped_error_detail(
+        item,
+        enqueue_clock_consistent=enqueue_clock_consistent,
     )
 
 
@@ -571,9 +639,24 @@ def _runner_wakeup_v11() -> dict[str, object]:
     value.update(
         {
             "schema_version": 11,
-            "semantics": fidelity.RUNNER_WAKEUP_V11_SEMANTICS,
+            "semantics": fidelity.RUNNER_WAKEUP_V11_V1_SEMANTICS,
             "buflo_exact_release_active_wait_poll_source": ("instant-authoritative-fallback-v1"),
             "buflo_kernel_tx": _runner_receipt(),
+        }
+    )
+    return value
+
+
+def _runner_wakeup_v12() -> dict[str, object]:
+    value = _runner_wakeup_receipt(10)
+    value.update(
+        {
+            "schema_version": 12,
+            "semantics": fidelity.RUNNER_WAKEUP_V12_SEMANTICS,
+            "buflo_exact_release_active_wait_poll_source": (
+                "instant-authoritative-fallback-v1"
+            ),
+            "buflo_kernel_tx": _runner_receipt_v3(),
         }
     )
     return value
@@ -944,6 +1027,34 @@ def test_runner_schema_eleven_binds_raw_kernel_tx_without_rewriting_schema_ten()
     assert not fidelity._runner_wakeup_v11_valid(wakeups)
 
 
+def test_runner_schema_twelve_binds_current_schema_three_kernel_tx() -> None:
+    wakeups = _runner_wakeup_v12()
+
+    assert kernel_tx_runner_receipt_success_valid(wakeups["buflo_kernel_tx"])
+    assert fidelity._runner_wakeup_v12_valid(wakeups)
+    assert fidelity._runner_wakeup_metrics_valid(wakeups)
+    assert capture_session._runner_wakeup_metrics_valid(wakeups)
+
+    raw = wakeups["buflo_kernel_tx"]
+    scheduler = copy.deepcopy(raw["runtime_contract"]["scheduler_initial"])
+    run = {
+        "process_scheduler": scheduler,
+        "resolved_configuration": {"defense": {"kind": "buflo"}},
+        "runner_wakeup_metrics": wakeups,
+    }
+    assert capture_session._process_scheduler_bound_to_run_valid(
+        run,
+        expected_contract="qcsd-client-rr1-cpu10-etf-helper-cpu11-v1",
+    )
+
+    wakeups["buflo_kernel_tx"]["schema_version"] = 2
+    assert not fidelity._runner_wakeup_v12_valid(wakeups)
+    assert not capture_session._process_scheduler_bound_to_run_valid(
+        run,
+        expected_contract="qcsd-client-rr1-cpu10-etf-helper-cpu11-v1",
+    )
+
+
 def test_runner_schema_eleven_preserves_failed_before_arm_without_eligibility() -> None:
     wakeups = _runner_wakeup_v11()
     raw = _failed_before_arm_runner_receipt()
@@ -1005,9 +1116,10 @@ def test_kernel_tx_schema_two_refines_realtime_and_preserves_schema_one() -> Non
     historical["semantics"] = kernel_tx.KERNEL_TX_HISTORICAL_RUNNER_SEMANTICS
     current["semantics"] = kernel_tx.KERNEL_TX_HISTORICAL_RUNNER_SEMANTICS
     assert not kernel_tx_runner_receipt_valid(current)
-    current["semantics"] = KERNEL_TX_RUNNER_SEMANTICS
+    current["semantics"] = KERNEL_TX_RUNNER_V2_SEMANTICS
     wakeups = _runner_wakeup_v11()
     wakeups["buflo_kernel_tx"] = copy.deepcopy(current)
+    wakeups["semantics"] = fidelity.RUNNER_WAKEUP_V11_SEMANTICS
     assert fidelity._runner_wakeup_v11_valid(wakeups)
     assert capture_session._runner_wakeup_metrics_valid(wakeups)
 
@@ -1025,7 +1137,7 @@ def test_kernel_tx_schema_two_refines_realtime_and_preserves_schema_one() -> Non
 
     failed_before_arm = _failed_before_arm_runner_receipt()
     failed_before_arm["schema_version"] = 2
-    failed_before_arm["semantics"] = KERNEL_TX_RUNNER_SEMANTICS
+    failed_before_arm["semantics"] = KERNEL_TX_RUNNER_V2_SEMANTICS
     assert kernel_tx_runner_receipt_valid(failed_before_arm)
 
 
@@ -1142,6 +1254,83 @@ def test_kernel_tx_schema_two_uses_item_local_monotonic_corroboration() -> None:
     # The mapping-wide union still overlaps the exact enqueue bracket, but the
     # item's own phase does not.  Schema two must reject that substitution.
     assert not kernel_tx_runner_receipt_valid(current)
+
+
+def test_kernel_tx_schema_three_treats_post_tx_offset_movement_as_diagnostic() -> None:
+    def move_post_tx_monotonic_offset(raw: dict[str, object]) -> None:
+        mapping = raw["clock_mapping"]
+        first = raw["jobs"][0]["items"][0]
+        monotonic = first["post_tx_clock_phase"]["monotonic"]
+        drift_ns = 500_000
+        monotonic["clock_ns"] -= drift_ns
+        mapping["effective_monotonic_offset_upper_ns"] += drift_ns
+        mapping["max_observed_offset_drift_ns"] = drift_ns
+
+        mapped_lower = (
+            first["enqueue_monotonic_ns"]
+            + monotonic["tai_before_ns"]
+            - monotonic["clock_ns"]
+        )
+        assert mapped_lower > first["enqueue_tai_upper_ns"]
+
+    current = _runner_receipt_v3()
+    move_post_tx_monotonic_offset(current)
+    assert kernel_tx_runner_receipt_success_valid(current)
+
+    historical = _runner_receipt_v2()
+    move_post_tx_monotonic_offset(historical)
+    assert not kernel_tx_runner_receipt_valid(historical)
+
+
+def test_kernel_tx_schema_three_preserves_operation_order_as_a_hard_gate() -> None:
+    current = _runner_receipt_v3()
+    first = current["jobs"][0]["items"][0]
+    phase = first["post_tx_clock_phase"]
+    assert kernel_tx._item_local_enqueue_operation_ordered(
+        phase,
+        enqueue_monotonic_ns=first["enqueue_monotonic_ns"],
+        enqueue_tai_lower_ns=first["enqueue_tai_lower_ns"],
+        enqueue_tai_upper_ns=first["enqueue_tai_upper_ns"],
+    )
+
+    assert not kernel_tx._item_local_enqueue_operation_ordered(
+        phase,
+        enqueue_monotonic_ns=first["enqueue_monotonic_ns"],
+        enqueue_tai_lower_ns=first["enqueue_tai_upper_ns"] + 1,
+        enqueue_tai_upper_ns=first["enqueue_tai_upper_ns"],
+    )
+    assert not kernel_tx._item_local_enqueue_operation_ordered(
+        phase,
+        enqueue_monotonic_ns=first["enqueue_monotonic_ns"],
+        enqueue_tai_lower_ns=first["enqueue_tai_lower_ns"],
+        enqueue_tai_upper_ns=phase["monotonic"]["tai_before_ns"] + 1,
+    )
+    first["post_tx_clock_phase"]["monotonic"]["clock_ns"] = (
+        first["enqueue_monotonic_ns"] - 1
+    )
+
+    assert not kernel_tx_runner_receipt_valid(current)
+
+
+def test_kernel_tx_schema_three_does_not_apply_phase_width_cap_to_enqueue_bracket() -> None:
+    current = _runner_receipt_v3()
+    first = current["jobs"][0]["items"][0]
+    enqueue_midpoint = first["enqueue_tai_ns"]
+    first["enqueue_tai_lower_ns"] = enqueue_midpoint - 141_210
+    first["enqueue_tai_upper_ns"] = enqueue_midpoint + 141_211
+    first["enqueue_tai_ns"] = (
+        first["enqueue_tai_lower_ns"] + first["enqueue_tai_upper_ns"]
+    ) // 2
+
+    assert first["enqueue_tai_upper_ns"] - first["enqueue_tai_lower_ns"] == 282_421
+    assert kernel_tx_runner_receipt_success_valid(current)
+
+    clock_phase_too_wide = _runner_receipt_v3()
+    start = clock_phase_too_wide["clock_mapping"]["start"]["monotonic"]
+    start["tai_after_ns"] += 250_001
+    start["bracket_width_ns"] = 250_001
+    clock_phase_too_wide["clock_mapping"]["max_observed_bracket_width_ns"] = 250_001
+    assert not kernel_tx_runner_receipt_valid(clock_phase_too_wide)
 
 
 def test_kernel_tx_schema_two_accepts_typed_physical_window_failure() -> None:
@@ -1464,6 +1653,58 @@ def test_kernel_tx_schema_two_accepts_controller_finalization_failure() -> None:
     assert not kernel_tx_runner_receipt_valid(current)
 
 
+@pytest.mark.parametrize("runner_schema_version", (2, 3))
+def test_failed_final_job_may_end_before_its_nominal_deadline(
+    runner_schema_version: int,
+) -> None:
+    def end_mapping_after_release(raw: dict[str, object]) -> None:
+        end_tai_ns = raw["jobs"][0]["release_tai_ns"] + 1_000_000
+        phase = {
+            "monotonic": _clock_sample(
+                end_tai_ns - _MONOTONIC_TO_TAI_NS,
+                _MONOTONIC_TO_TAI_NS,
+            ),
+            "realtime": _clock_sample(
+                end_tai_ns - _REALTIME_TO_TAI_NS,
+                _REALTIME_TO_TAI_NS,
+            ),
+        }
+        raw["clock_end"] = copy.deepcopy(phase)
+        raw["clock_mapping"]["end"] = copy.deepcopy(phase)
+
+    runner_factory = {
+        2: _runner_receipt_v2,
+        3: _runner_receipt_v3,
+    }[runner_schema_version]
+    failed = runner_factory()
+    item = failed["jobs"][0]["items"][1]
+    item.update(
+        {
+            "finalization_state": "physical-transmit-proven",
+            "terminal_outcome": "controller-trace-finalization-failed",
+            "terminal_error": "controller_or_trace_finalization_failed",
+            "terminal_error_detail": "synthetic controller finalization failure",
+        }
+    )
+    _refresh_failed_runner_receipt(
+        failed,
+        primary_error="synthetic controller finalization failure",
+    )
+    end_mapping_after_release(failed)
+    job = failed["jobs"][0]
+    assert (
+        job["release_monotonic_ns"]
+        < failed["clock_end"]["monotonic"]["clock_ns"]
+        < job["deadline_monotonic_ns"]
+    )
+    assert kernel_tx_runner_receipt_valid(failed)
+    assert not kernel_tx_runner_receipt_success_valid(failed)
+
+    successful = runner_factory()
+    end_mapping_after_release(successful)
+    assert not kernel_tx_runner_receipt_valid(successful)
+
+
 def test_kernel_tx_schema_two_accepts_terminal_txtime_failure() -> None:
     current = _runner_receipt_v2()
     job = current["jobs"][0]
@@ -1716,7 +1957,7 @@ def test_kernel_tx_schema_two_retains_large_monotonic_drift_as_exact_diagnostic(
     assert not kernel_tx_runner_receipt_valid(current)
 
 
-def test_kernel_tx_schema_two_constants_match_the_rust_producer() -> None:
+def test_kernel_tx_schema_three_constants_match_the_rust_producer() -> None:
     source = (Path(__file__).parents[1] / "neqo-qcsd/neqo-bin/src/qcsd/mod.rs").read_text(
         encoding="utf-8"
     )
@@ -1732,12 +1973,12 @@ def test_kernel_tx_schema_two_constants_match_the_rust_producer() -> None:
     )
     assert mapping_line.endswith('";')
     assert (
-        kernel_tx._EFFECTIVE_ENVELOPE_SEMANTICS_V2
+        kernel_tx._EFFECTIVE_ENVELOPE_SEMANTICS_V3
         == mapping_line[len(mapping_prefix) : -2]
     )
-    assert "const BUFLO_KERNEL_TX_RECEIPT_SCHEMA_VERSION: u32 = 2;" in source
-    assert "const BUFLO_KERNEL_ITEM_RECEIPT_SCHEMA_VERSION: u32 = 2;" in source
-    assert "const BUFLO_KERNEL_CLOCK_MAPPING_SCHEMA_VERSION: u32 = 2;" in source
+    assert "const BUFLO_KERNEL_TX_RECEIPT_SCHEMA_VERSION: u32 = 3;" in source
+    assert "const BUFLO_KERNEL_ITEM_RECEIPT_SCHEMA_VERSION: u32 = 3;" in source
+    assert "const BUFLO_KERNEL_CLOCK_MAPPING_SCHEMA_VERSION: u32 = 3;" in source
 
     raw = _runner_receipt()
     raw["clock_start"] = None
@@ -1988,11 +2229,15 @@ def test_failed_runner_retains_create_only_raw_qdisc_observation(
     assert path.read_bytes() == original
 
 
-@pytest.mark.parametrize("runner_schema_version", [1, 2])
+@pytest.mark.parametrize("runner_schema_version", [1, 2, 3])
 def test_runner_kernel_tx_serialises_end_clock_mapping_failure_after_jobs(
     runner_schema_version: int,
 ) -> None:
-    raw = _runner_receipt_v2() if runner_schema_version == 2 else _runner_receipt()
+    raw = {
+        1: _runner_receipt,
+        2: _runner_receipt_v2,
+        3: _runner_receipt_v3,
+    }[runner_schema_version]()
     mapping_error = "BuFLO final clock sample failed: synthetic"
     raw.update(
         {
@@ -2022,9 +2267,13 @@ def test_runner_kernel_tx_serialises_end_clock_mapping_failure_after_jobs(
             item[key] = None
         item["terminal_error"] = "final_conservative_envelope_validation_failed"
         item["terminal_error_detail"] = (
-            _schema_two_unmapped_error_detail(item)
-            if runner_schema_version == 2
-            else "synthetic final mapping failure"
+            _schema_three_unmapped_error_detail(item)
+            if runner_schema_version == 3
+            else (
+                _schema_two_unmapped_error_detail(item)
+                if runner_schema_version == 2
+                else "synthetic final mapping failure"
+            )
         )
         item["terminal_outcome"] = "timestamp-evidence-missing"
     raw["aggregate"].update(
@@ -2042,7 +2291,11 @@ def test_runner_kernel_tx_serialises_end_clock_mapping_failure_after_jobs(
     assert kernel_tx_runner_receipt_valid(raw)
     assert not kernel_tx_runner_receipt_success_valid(raw)
 
-    if runner_schema_version == 2:
+    if runner_schema_version in {2, 3}:
+        assert all(
+            "enqueue_clock_consistent=true" in item["terminal_error_detail"]
+            for item in raw["jobs"][0]["items"]
+        )
         # A mapping failure does not erase the retained item phases.  Their
         # producer order remains independently verifiable even without a final
         # mapping or end phase.

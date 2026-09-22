@@ -91,8 +91,8 @@ HISTORICAL_MULTI_ORIGIN_V36_SOURCE = {
     "neqo_pinned_commit": "fb699636c191e91848ffcce859c43bb4d69f7d94",
 }
 PREVIOUS_TIMING_STRESS_SCHEMA_VERSION = 2
-TIMING_STRESS_SCHEMA_VERSION = 4
-TIMING_STRESS_SEED_NAMESPACE = "buflo-timing-stress-v4"
+TIMING_STRESS_SCHEMA_VERSION = 5
+TIMING_STRESS_SEED_NAMESPACE = "buflo-timing-stress-v5"
 TIMING_STRESS_ARTIFACT_TYPE = "qcsd-buflo-timing-stress-execution"
 TIMING_STRESS_CHECKPOINT_TYPE = "qcsd-buflo-timing-stress-checkpoint"
 TIMING_STRESS_ATTEMPT_ERROR_TYPE = "qcsd-buflo-timing-stress-attempt-error"
@@ -107,7 +107,7 @@ STUDY_ENVIRONMENT_CONTAINER_PATH = Path("/run/qcsd-study-environment.json")
 STUDY_ENVIRONMENT_MAX_BYTES = 64 * 1024 * 1024
 STUDY_ROOT = LAB_ROOT / "config/buflo-study/v1"
 STUDY_PLAN = STUDY_ROOT / "study.json"
-TIMING_STRESS_PARAMETERS = STUDY_ROOT / "buflo-timing-stress-v4.json"
+TIMING_STRESS_PARAMETERS = STUDY_ROOT / "buflo-timing-stress-v5.json"
 TIMING_STRESS_PARAMETERS_PROVENANCE = TIMING_STRESS_PARAMETERS.with_suffix(
     TIMING_STRESS_PARAMETERS.suffix + ".provenance.json"
 )
@@ -585,11 +585,11 @@ def validate_study_plan(value: Mapping[str, Any]) -> None:
             "then_drain_already_advertised_incoming_credit"
         ),
         "realization_backend": "linux-etf-so-txtime-post-veth-v1",
-        "runner_wakeup_schema_version": 11,
+        "runner_wakeup_schema_version": 12,
         "legacy_userspace_exact_release_projection": (
             "schema-10-compatibility-fields-retained-and-neutral"
         ),
-        "kernel_tx_runner_receipt_schema_version": 2,
+        "kernel_tx_runner_receipt_schema_version": 3,
         "kernel_tx_evidence_schema_version": 1,
         "observer_topology_receipt_schema_version": 1,
         "physical_outgoing_observer": "router-ingress-post-client-veth-pre-netem",
@@ -4841,7 +4841,7 @@ def _timing_stress_parameter_inputs() -> dict[str, Any]:
     if parameter != expected_parameter:
         raise ValueError("timing-stress parameters must change only canonical minimum_duration_us")
     expected_provenance = {
-        "schema_version": 4,
+        "schema_version": 5,
         "artifact_type": "qcsd-buflo-timing-stress-parameters",
         "status": "controlled-test-only",
         "production_ready": False,
@@ -4899,11 +4899,11 @@ def _timing_stress_parameter_inputs() -> dict[str, Any]:
             "strict_half_open_window_us": TIMING_STRESS_WINDOW_US,
             "catch_up": False,
             "realization_backend": "linux-etf-so-txtime-post-veth-v1",
-            "runner_wakeup_schema_version": 11,
+            "runner_wakeup_schema_version": 12,
             "legacy_userspace_exact_release_projection": (
                 "schema-10-compatibility-fields-retained-and-neutral"
             ),
-            "kernel_tx_runner_receipt_schema_version": 2,
+            "kernel_tx_runner_receipt_schema_version": 3,
             "kernel_tx_evidence_schema_version": 1,
             "observer_topology_receipt_schema_version": 1,
             "physical_outgoing_observer": "router-ingress-post-client-veth-pre-netem",
@@ -5209,7 +5209,7 @@ def _timing_stress_kernel_tx_evidence(
     opportunities: int,
     network_receipt: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Deeply revalidate schema-11 sender and independent post-veth evidence."""
+    """Deeply revalidate schema-12 sender and independent post-veth evidence."""
 
     from .fidelity import (
         RUNNER_WAKEUP_V7_HISTOGRAM_UPPER_BOUNDS,
@@ -5242,15 +5242,15 @@ def _timing_stress_kernel_tx_evidence(
     raw = wakeups.get("buflo_kernel_tx") if isinstance(wakeups, Mapping) else None
     if (
         not isinstance(wakeups, Mapping)
-        or wakeups.get("schema_version") != 11
+        or wakeups.get("schema_version") != 12
         or not _runner_wakeup_metrics_valid(wakeups)
         or not _runner_wakeup_v11_legacy_buflo_metrics_neutral(wakeups)
         or not isinstance(raw, Mapping)
-        or raw.get("schema_version") != 2
+        or raw.get("schema_version") != 3
         or not kernel_tx_runner_receipt_success_valid(raw)
     ):
         raise ValueError(
-            "timing-stress requires current schema-11 kernel-TX evidence and a neutral "
+            "timing-stress requires current schema-12 kernel-TX evidence and a neutral "
             "schema-10 projection"
         )
     raw_aggregate = raw["aggregate"]
@@ -5332,7 +5332,7 @@ def _timing_stress_kernel_tx_evidence(
     evidence_aggregate = evidence["aggregate"]
     return {
         "realization_backend": "linux-etf-so-txtime-post-veth-v1",
-        "runner_wakeup_schema_version": 11,
+        "runner_wakeup_schema_version": 12,
         "legacy_userspace_exact_release_projection": {
             "schema_version": 10,
             "neutral": True,
@@ -6310,13 +6310,13 @@ def _timing_stress_aggregate(samples: Sequence[Mapping[str, Any]]) -> dict[str, 
     if any(
         timing.get("contract_schema_version") != TIMING_STRESS_SCHEMA_VERSION
         or timing.get("realization_backend") != "linux-etf-so-txtime-post-veth-v1"
-        or timing.get("runner_wakeup_schema_version") != 11
+        or timing.get("runner_wakeup_schema_version") != 12
         or timing.get("legacy_userspace_exact_release_projection") != expected_projection
         or not isinstance(kernel, Mapping)
         or kernel.get("realization_backend") != "linux-etf-so-txtime-post-veth-v1"
-        or kernel.get("runner_wakeup_schema_version") != 11
+        or kernel.get("runner_wakeup_schema_version") != 12
         or kernel.get("legacy_userspace_exact_release_projection") != expected_projection
-        or kernel.get("runner_receipt_schema_version") != 2
+        or kernel.get("runner_receipt_schema_version") != 3
         or kernel.get("evidence_schema_version") != 1
         or kernel.get("observer_topology_schema_version") != 1
         for timing, kernel in zip(typed_timings, kernels, strict=True)
@@ -6418,14 +6418,14 @@ def _timing_stress_aggregate(samples: Sequence[Mapping[str, Any]]) -> dict[str, 
             int(timing["max_incoming_credit_advertisement_delay_us"]) for timing in typed_timings
         ),
         "realization_backend": "linux-etf-so-txtime-post-veth-v1",
-        "runner_wakeup_schema_version": 11,
+        "runner_wakeup_schema_version": 12,
         "legacy_userspace_exact_release_projection": {
             "schema_version": 10,
             "neutral_visits": TIMING_STRESS_VISITS,
             "nonneutral_visits": 0,
         },
         "kernel_tx": {
-            "runner_receipt_schema_version": 2,
+            "runner_receipt_schema_version": 3,
             "evidence_schema_version": 1,
             "observer_topology_schema_version": 1,
             "job_count": sum(int(kernel["job_count"]) for kernel in typed_kernels),
@@ -6665,14 +6665,14 @@ def _validate_timing_stress_aggregate(aggregate: Mapping[str, Any]) -> None:
         <= aggregate["max_incoming_credit_advertisement_delay_us"]
         < TIMING_STRESS_WINDOW_US
         or aggregate.get("realization_backend") != "linux-etf-so-txtime-post-veth-v1"
-        or aggregate.get("runner_wakeup_schema_version") != 11
+        or aggregate.get("runner_wakeup_schema_version") != 12
         or aggregate.get("legacy_userspace_exact_release_projection")
         != {
             "schema_version": 10,
             "neutral_visits": TIMING_STRESS_VISITS,
             "nonneutral_visits": 0,
         }
-        or kernel.get("runner_receipt_schema_version") != 2
+        or kernel.get("runner_receipt_schema_version") != 3
         or kernel.get("evidence_schema_version") != 1
         or kernel.get("observer_topology_schema_version") != 1
         or kernel.get("job_count") != outgoing

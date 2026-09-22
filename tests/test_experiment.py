@@ -282,8 +282,8 @@ def test_current_class_sample_rejects_historical_runner_wakeup_schema(
 @pytest.mark.parametrize(
     ("runtime_kind", "runner_schema", "message"),
     [
-        ("buflo", 10, "BuFLO sample requires runner-wakeup schema 11"),
-        ("cs_buflo", 11, "CS-BuFLO sample requires runner-wakeup schema 10"),
+        ("buflo", 10, "BuFLO sample requires runner-wakeup schema 12"),
+        ("cs_buflo", 12, "CS-BuFLO sample requires runner-wakeup schema 10"),
     ],
 )
 def test_current_class_candidates_require_mode_specific_runner_schema(
@@ -310,7 +310,10 @@ def test_current_class_candidates_require_mode_specific_runner_schema(
         validate_accepted_samples(root, experiment)
 
 
-def test_schema_eleven_buflo_rejects_absent_kernel_sidecar(tmp_path: Path) -> None:
+@pytest.mark.parametrize("runner_schema", (11, 12))
+def test_kernel_tx_buflo_rejects_absent_kernel_sidecar(
+    tmp_path: Path, runner_schema: int
+) -> None:
     sample = {
         **_sample(),
         "state": "accepted",
@@ -324,13 +327,13 @@ def test_schema_eleven_buflo_rejects_absent_kernel_sidecar(tmp_path: Path) -> No
         {
             "terminal_evidence_render_errors": [],
             "runner_wakeup_metrics": {
-                "schema_version": 11,
+                "schema_version": runner_schema,
                 "buflo_kernel_tx": {"fixture": "raw-kernel-receipt"},
             }
         },
     )
 
-    with pytest.raises(ValueError, match="lacks its kernel-TX evidence sidecar"):
+    with pytest.raises(ValueError, match="lacks its evidence sidecar"):
         validate_accepted_kernel_tx_evidence(tmp_path, sample)
 
 

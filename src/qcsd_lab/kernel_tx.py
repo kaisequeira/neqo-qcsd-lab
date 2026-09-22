@@ -24,7 +24,7 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-KERNEL_TX_RUNNER_SCHEMA_VERSION = 2
+KERNEL_TX_RUNNER_SCHEMA_VERSION = 3
 KERNEL_TX_HISTORICAL_RUNNER_SCHEMA_VERSION = 1
 KERNEL_TX_EVIDENCE_SCHEMA_VERSION = 1
 KERNEL_TX_REALIZATION_WINDOW_NS = 5_000_000
@@ -57,7 +57,7 @@ KERNEL_TX_HISTORICAL_RUNNER_SEMANTICS = (
     "client_only_preselection_adaptation=true; paper_equivalent=false; "
     "raw_runner_receipt_does_not_claim_post_veth_observation=true"
 )
-KERNEL_TX_RUNNER_SEMANTICS = (
+KERNEL_TX_RUNNER_V2_SEMANTICS = (
     "client_only_buflo_kernel_timed_egress_v2; "
     "clock=CLOCK_TAI_bracketed_against_CLOCK_MONOTONIC_and_CLOCK_REALTIME; "
     "exact_outgoing=SO_TXTIME_SCM_TXTIME_ETF; "
@@ -72,6 +72,28 @@ KERNEL_TX_RUNNER_SEMANTICS = (
     "selection_cutoff=release_minus_5ms; "
     "tx_sched_and_tx_software_are_linux_error_queue_timestamps; "
     "enqueue_monotonic_corroboration=item_local_post_tx_phase; "
+    "global_monotonic_drift_is_diagnostic=true; "
+    "strict_realization_window_is_half_open; no_catch_up=true; "
+    "client_only_preselection_adaptation=true; paper_equivalent=false; "
+    "raw_runner_receipt_does_not_claim_post_veth_observation=true"
+)
+KERNEL_TX_RUNNER_SEMANTICS = (
+    "client_only_buflo_kernel_timed_egress_v3; "
+    "clock=CLOCK_TAI_bracketed_against_CLOCK_MONOTONIC_and_CLOCK_REALTIME; "
+    "exact_outgoing=SO_TXTIME_SCM_TXTIME_ETF; "
+    "tick_zero_is_kernel_timed_after_future_defense_start_arm=true; "
+    "residual_incoming_credit=ordered_after_exact_transmit; "
+    "same_endpoint_credit_may_be_coalesced_in_exact_outgoing=true; "
+    "packet_priority=per_datagram_SCM_PRIORITY_after_IP_controls_or_single_threaded_serialized_SO_PRIORITY; "
+    "serialized_ipv4_traffic_class=socket_IP_TOS_before_SO_PRIORITY_and_restore_IP_TOS_before_SO_PRIORITY; "
+    "serialized_ipv6_traffic_class=per_message_IPV6_TCLASS; "
+    "serialized_socket_state_requires_verified_traffic_class_and_priority_readback_and_restoration; "
+    "sender_exclusivity_is_current_thread_control_flow_not_OS_socket_ownership; "
+    "selection_cutoff=release_minus_5ms; "
+    "tx_sched_and_tx_software_are_linux_error_queue_timestamps; "
+    "enqueue_clock_evidence=TAI_before_sendmsg_then_MONOTONIC_after_sendmsg_then_TAI_after; "
+    "post_tx_phase_same_clock_order_is_hard=true; "
+    "post_tx_monotonic_offset_overlap_is_diagnostic=true; "
     "global_monotonic_drift_is_diagnostic=true; "
     "strict_realization_window_is_half_open; no_catch_up=true; "
     "client_only_preselection_adaptation=true; paper_equivalent=false; "
@@ -174,6 +196,21 @@ _EFFECTIVE_ENVELOPE_SEMANTICS_V2 = (
     "translated_only_with_its_item_local_post_TX_monotonic_phase_and_must_overlap_"
     "its_direct_enqueue_TAI_bracket; "
     "realtime_offset_is_the_nonempty_running_intersection_used_online_and_recomputed_"
+    "exactly_at_finalization; final_realtime_interval_must_be_contained_by_every_"
+    "provisional_interval; direct_enqueue_TAI_before_release_and_causal_order_"
+    "predicates_remain_hard_gates; incoming_TX_lower_must_not_precede_its_enqueue_"
+    "TAI_lower"
+)
+_EFFECTIVE_ENVELOPE_SEMANTICS_V3 = (
+    "start_and_end_clock_phases_plus_every_explicit_per_item_post_tx_clock_phase; "
+    "every_clock_phase_subsample_and_instant_alignment_bracket_is_at_most_250us; "
+    "effective_monotonic_offset_is_a_nonfatal_diagnostic_union_and_max_observed_"
+    "offset_drift_is_the_exact_maximum_start_relative_midpoint_drift_across_both_"
+    "clocks_and_all_retained_phases; each_enqueue_TAI_interval_is_direct_send_"
+    "sequence_evidence_and_must_be_ordered; each_enqueue_MONOTONIC_and_TAI_upper_"
+    "must_precede_its_post_TX_phase_in_their_respective_clock_frames; enqueue_to_"
+    "post_TX_MONOTONIC_offset_overlap_is_diagnostic_not_a_hard_gate; realtime_"
+    "offset_is_the_nonempty_running_intersection_used_online_and_recomputed_"
     "exactly_at_finalization; final_realtime_interval_must_be_contained_by_every_"
     "provisional_interval; direct_enqueue_TAI_before_release_and_causal_order_"
     "predicates_remain_hard_gates; incoming_TX_lower_must_not_precede_its_enqueue_"
@@ -409,6 +446,7 @@ _ITEM_V1_KEYS = frozenset(
     }
 )
 _ITEM_V2_KEYS = _ITEM_V1_KEYS | {"post_tx_clock_phase"}
+_ITEM_V3_KEYS = _ITEM_V2_KEYS
 _JOB_KEYS = frozenset(
     {
         "schema_version",
@@ -926,6 +964,7 @@ def _clock_mapping_valid(value: Any) -> bool:
     expected_semantics = {
         1: _EFFECTIVE_ENVELOPE_SEMANTICS_V1,
         2: _EFFECTIVE_ENVELOPE_SEMANTICS_V2,
+        3: _EFFECTIVE_ENVELOPE_SEMANTICS_V3,
     }.get(schema_version)
     if (
         mapping is None
@@ -1010,7 +1049,7 @@ def _clock_mapping_valid(value: Any) -> bool:
         <= KERNEL_TX_MAX_CLOCK_BRACKET_NS
         and phase_drift <= mapping["max_observed_offset_drift_ns"]
         and (
-            schema_version == 2
+            schema_version in {2, 3}
             or mapping["max_observed_offset_drift_ns"]
             <= KERNEL_TX_MAX_CLOCK_OFFSET_DRIFT_NS
         )
@@ -1030,7 +1069,7 @@ def _clock_mapping_valid(value: Any) -> bool:
 def _clock_mapping_matches_items(
     mapping: Mapping[str, Any], jobs: Sequence[Mapping[str, Any]]
 ) -> bool:
-    if mapping["schema_version"] == 2:
+    if mapping["schema_version"] in {2, 3}:
         return _clock_mapping_v2_matches_items(mapping, jobs)
     envelopes = {
         clock: list(_phase_offset_envelope(mapping, clock))
@@ -1239,6 +1278,23 @@ def _item_local_enqueue_clock_consistent(
         and mapped_lower <= mapped_upper
         and mapped_lower <= enqueue_tai_upper_ns
         and enqueue_tai_lower_ns <= mapped_upper
+    )
+
+
+def _item_local_enqueue_operation_ordered(
+    phase: Any,
+    *,
+    enqueue_monotonic_ns: int,
+    enqueue_tai_lower_ns: int,
+    enqueue_tai_upper_ns: int,
+) -> bool:
+    """Validate schema three's directly observed send-sequence ordering."""
+
+    return bool(
+        _clock_phase_valid(phase)
+        and enqueue_tai_lower_ns <= enqueue_tai_upper_ns
+        and enqueue_monotonic_ns <= phase["monotonic"]["clock_ns"]
+        and enqueue_tai_upper_ns <= phase["monotonic"]["tai_before_ns"]
     )
 
 
@@ -1755,13 +1811,19 @@ def _runner_item_valid(
     strict_success: bool,
 ) -> bool:
     item_schema_version = mapping["schema_version"]
-    item_keys = _ITEM_V2_KEYS if item_schema_version == 2 else _ITEM_V1_KEYS
+    item_keys = {
+        1: _ITEM_V1_KEYS,
+        2: _ITEM_V2_KEYS,
+        3: _ITEM_V3_KEYS,
+    }.get(item_schema_version)
+    if item_keys is None:
+        return False
     item = _exact_mapping(value, item_keys)
     if (
         item is None
         or not _schema(item, item_schema_version)
         or (
-            item_schema_version == 2
+            item_schema_version in {2, 3}
             and item.get("post_tx_clock_phase") is not None
             and not _clock_phase_valid(item["post_tx_clock_phase"])
         )
@@ -1821,7 +1883,7 @@ def _runner_item_valid(
     ):
         return False
     post_tx_phase = item.get("post_tx_clock_phase")
-    if item_schema_version == 2 and post_tx_phase is not None and any(
+    if item_schema_version in {2, 3} and post_tx_phase is not None and any(
         item.get(key) is None
         for key in (
             "enqueue_monotonic_ns",
@@ -1848,6 +1910,13 @@ def _runner_item_valid(
         assert all(isinstance(value, int) for value in enqueue_fields)
         if item_schema_version == 2:
             enqueue_clock_consistent = _item_local_enqueue_clock_consistent(
+                post_tx_phase,
+                enqueue_monotonic_ns=enqueue_monotonic,
+                enqueue_tai_lower_ns=enqueue_lower,
+                enqueue_tai_upper_ns=enqueue_upper,
+            )
+        elif item_schema_version == 3:
+            enqueue_clock_consistent = _item_local_enqueue_operation_ordered(
                 post_tx_phase,
                 enqueue_monotonic_ns=enqueue_monotonic,
                 enqueue_tai_lower_ns=enqueue_lower,
@@ -1888,7 +1957,7 @@ def _runner_item_valid(
     )
     if (provisional[0] is None) != (provisional[1] is None):
         return False
-    if item_schema_version == 2 and provisional[0] is not None and post_tx_phase is None:
+    if item_schema_version in {2, 3} and provisional[0] is not None and post_tx_phase is None:
         return False
     if provisional[0] is not None:
         if (
@@ -1901,7 +1970,7 @@ def _runner_item_valid(
             or item["tx_software_tai_upper_ns"] < provisional[1]
         ):
             return False
-        if item_schema_version == 2 and (
+        if item_schema_version in {2, 3} and (
             provisional[0] > item["tx_software_tai_lower_ns"]
             or provisional[1] < item["tx_software_tai_upper_ns"]
         ):
@@ -2100,10 +2169,18 @@ def _runner_job_valid(
             clock="monotonic",
             raw_ns=job["release_monotonic_ns"],
         )
-        or not _clock_frame_contains(
-            mapping,
-            clock="monotonic",
-            raw_ns=job["deadline_monotonic_ns"],
+        or (
+            not _clock_frame_contains(
+                mapping,
+                clock="monotonic",
+                raw_ns=job["deadline_monotonic_ns"],
+            )
+            and not (
+                not strict_success
+                and job.get("terminal_outcome") == "failed"
+                and job["deadline_monotonic_ns"]
+                > mapping["end"]["monotonic"]["clock_ns"]
+            )
         )
         or job["deadline_monotonic_ns"] - job["release_monotonic_ns"]
         != KERNEL_TX_REALIZATION_WINDOW_NS
@@ -2288,13 +2365,19 @@ def _unmapped_runner_item_valid(
     socket_setup: Sequence[Mapping[str, Any]],
     runner_schema_version: int,
 ) -> bool:
-    item_keys = _ITEM_V2_KEYS if runner_schema_version == 2 else _ITEM_V1_KEYS
+    item_keys = {
+        1: _ITEM_V1_KEYS,
+        2: _ITEM_V2_KEYS,
+        3: _ITEM_V3_KEYS,
+    }.get(runner_schema_version)
+    if item_keys is None:
+        return False
     item = _exact_mapping(value, item_keys)
     if (
         item is None
         or not _schema(item, runner_schema_version)
         or (
-            runner_schema_version == 2
+            runner_schema_version in {2, 3}
             and item.get("post_tx_clock_phase") is not None
             and not _clock_phase_valid(item["post_tx_clock_phase"])
         )
@@ -2376,6 +2459,7 @@ def _unmapped_runner_item_valid(
     ):
         return False
     post_tx_phase = item.get("post_tx_clock_phase")
+    enqueue_clock_consistent = False
     if post_tx_phase is not None:
         enqueue_monotonic_ns = item.get("enqueue_monotonic_ns")
         enqueue_tai_lower_ns = item.get("enqueue_tai_lower_ns")
@@ -2392,6 +2476,20 @@ def _unmapped_runner_item_valid(
             or tx_software_realtime_ns is None
         ):
             return False
+        if runner_schema_version == 2:
+            enqueue_clock_consistent = _item_local_enqueue_clock_consistent(
+                post_tx_phase,
+                enqueue_monotonic_ns=enqueue_monotonic_ns,
+                enqueue_tai_lower_ns=enqueue_tai_lower_ns,
+                enqueue_tai_upper_ns=enqueue_tai_upper_ns,
+            )
+        elif runner_schema_version == 3:
+            enqueue_clock_consistent = _item_local_enqueue_operation_ordered(
+                post_tx_phase,
+                enqueue_monotonic_ns=enqueue_monotonic_ns,
+                enqueue_tai_lower_ns=enqueue_tai_lower_ns,
+                enqueue_tai_upper_ns=enqueue_tai_upper_ns,
+            )
     provisional_lower = item["provisional_tx_software_tai_lower_ns"]
     provisional_upper = item["provisional_tx_software_tai_upper_ns"]
     if (provisional_lower is None) != (provisional_upper is None) or (
@@ -2431,14 +2529,14 @@ def _unmapped_runner_item_valid(
         and item["enqueue_tai_upper_ns"] < job["release_tai_ns"]
     )
     if (
-        runner_schema_version == 2
+        runner_schema_version in {2, 3}
         and item["terminal_error"]
         == "final_conservative_envelope_validation_failed"
         and item["terminal_error_detail"]
         != _final_mapping_error_detail(
             item,
             enqueue_interval_complete=enqueue_interval_complete,
-            enqueue_clock_consistent=False,
+            enqueue_clock_consistent=enqueue_clock_consistent,
             timestamp_evidence_complete=False,
             tx_order_valid=tx_order_valid,
             physical_window_valid=False,
@@ -2803,6 +2901,7 @@ def kernel_tx_runner_receipt_valid(value: Any) -> bool:
         KERNEL_TX_HISTORICAL_RUNNER_SCHEMA_VERSION: (
             KERNEL_TX_HISTORICAL_RUNNER_SEMANTICS
         ),
+        2: KERNEL_TX_RUNNER_V2_SEMANTICS,
         KERNEL_TX_RUNNER_SCHEMA_VERSION: KERNEL_TX_RUNNER_SEMANTICS,
     }.get(receipt_schema_version)
     if (

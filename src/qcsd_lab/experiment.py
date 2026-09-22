@@ -630,11 +630,11 @@ def validate_accepted_scheduler_runtime_receipt(
     runner_schema = wakeups.get("schema_version") if isinstance(wakeups, Mapping) else None
     if (
         _buflo_study_experiment(experiment)
-        and runner_schema not in {10, 11}
+        and runner_schema not in {10, 12}
         and not _historical_buflo_v36_experiment(experiment)
     ):
         raise ValueError(
-            "current BuFLO-study sample requires runner-wakeup schema 10/11 or an exact "
+            "current BuFLO-study sample requires runner-wakeup schema 10/12 or an exact "
             "pinned v36 experiment ledger"
         )
     configuration = experiment.get("configuration")
@@ -654,15 +654,15 @@ def validate_accepted_scheduler_runtime_receipt(
     ):
         raise ValueError("accepted sample has invalid terminal evidence rendering state")
     if (current_buflo_role or current_class_role) and runtime_kind == "buflo":
-        if runner_schema != 11:
+        if runner_schema != 12:
             raise ValueError(
-                "current BuFLO sample requires runner-wakeup schema 11 with kernel-TX evidence"
+                "current BuFLO sample requires runner-wakeup schema 12 with kernel-TX evidence"
             )
     elif (current_buflo_role or current_class_role) and runtime_kind == "cs_buflo":
         if runner_schema != 10:
             raise ValueError("current CS-BuFLO sample requires runner-wakeup schema 10")
-    elif current_class_role and runner_schema not in {10, 11}:
-        raise ValueError("current class-study sample requires runner-wakeup schema 10/11")
+    elif current_class_role and runner_schema not in {10, 12}:
+        raise ValueError("current class-study sample requires runner-wakeup schema 10/12")
     required = scheduler_runtime_receipt_required(run, experiment)
     if not required:
         if retained is not None:
@@ -814,7 +814,7 @@ def _validate_kernel_tx_sidecar_files(
 def validate_accepted_kernel_tx_evidence(
     root: Path, sample: Mapping[str, Any]
 ) -> None:
-    """Reopen the sealed post-veth sidecar for one schema-11 BuFLO sample."""
+    """Reopen the sealed post-veth sidecar for a kernel-TX BuFLO sample."""
 
     if sample.get("state") != "accepted":
         raise ValueError("kernel-TX evidence validation requires an accepted sample")
@@ -826,7 +826,7 @@ def validate_accepted_kernel_tx_evidence(
     wakeups = run.get("runner_wakeup_metrics") if isinstance(run, Mapping) else None
     runner_schema = wakeups.get("schema_version") if isinstance(wakeups, Mapping) else None
     raw = wakeups.get("buflo_kernel_tx") if isinstance(wakeups, Mapping) else None
-    required = sample.get("runtime_kind") == "buflo" and runner_schema == 11
+    required = sample.get("runtime_kind") == "buflo" and runner_schema in {11, 12}
     retained, target = _kernel_tx_sidecar_reference(root, sample)
     if not required:
         if raw is not None or retained is not None:
@@ -841,7 +841,7 @@ def validate_accepted_kernel_tx_evidence(
     ):
         raise ValueError("accepted kernel-TX sample has invalid terminal rendering evidence")
     if not isinstance(raw, Mapping) or retained is None:
-        raise ValueError("schema-11 BuFLO sample lacks its kernel-TX evidence sidecar")
+        raise ValueError("kernel-TX BuFLO sample lacks its evidence sidecar")
     files = _validate_kernel_tx_sidecar_files(root, sample, retained, target)
     router_receipt = load_json(files["router-receipt.json"])
     evidence = load_json(files["kernel-tx-evidence.json"])
