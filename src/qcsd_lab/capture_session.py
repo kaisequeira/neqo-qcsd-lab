@@ -1043,14 +1043,32 @@ def _collect_attempt(
                 or "client resource usage was not produced by the measured Neqo process"
             )
         else:
-            client_resource_usage = _merge_runner_wakeup_metrics(
-                client_resource_usage,
-                run_data.get("runner_wakeup_metrics"),
-                required=(
-                    defense.kind in {"buflo", "cs_buflo"}
-                    and run_data.get("completion_status") == "complete"
-                ),
-            )
+            try:
+                client_resource_usage = _merge_runner_wakeup_metrics(
+                    client_resource_usage,
+                    run_data.get("runner_wakeup_metrics"),
+                    required=(
+                        defense.kind in {"buflo", "cs_buflo"}
+                        and run_data.get("completion_status") == "complete"
+                    ),
+                )
+            except ValueError as error:
+                # A runner may fail before its cumulative wakeup receipt is
+                # complete.  Preserve a coherent typed Rust failure as the
+                # authoritative attempt outcome instead of replacing it with
+                # a secondary Lab parsing error.  Successful runs retain the
+                # strict wakeup-metric gate below and still raise here.
+                typed_runner_failure = bool(
+                    run_data.get("completion_status") != "complete"
+                    and isinstance(run_data.get("error_class"), str)
+                    and _runner_error_receipt_coherent(run_data)
+                )
+                if not typed_runner_failure:
+                    raise
+                runner_output_error = runner_output_error or (
+                    "failed runner wakeup metrics were retained without measurement "
+                    f"binding: {error}"
+                )
             existing_resource_usage = run_data.get("client_resource_usage")
             if (
                 existing_resource_usage is not None

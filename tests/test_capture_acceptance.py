@@ -1098,6 +1098,203 @@ def test_current_buflo_capture_requires_kernel_tx_scheduler_before_mutation(
     assert not attempt.exists()
 
 
+def test_typed_runner_failure_preserves_invalid_wakeup_receipt_but_complete_run_rejects_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class CaptureProcess:
+        returncode: int | None = None
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def send_signal(self, _signal: int) -> None:
+            self.returncode = 0
+
+        def wait(self, timeout: float | None = None) -> int:
+            del timeout
+            if self.returncode is None:
+                self.returncode = 0
+            return self.returncode
+
+        def terminate(self) -> None:
+            self.returncode = 0
+
+    manifest = tmp_path / "runtime.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "resources": [
+                    {
+                        "id": 0,
+                        "url": "https://example.test/",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    application_source = tmp_path / "prepared.json"
+    application_source.write_text("{}\n", encoding="utf-8")
+    chaff_manifest = tmp_path / "chaff.json"
+    chaff_manifest.write_text("{}\n", encoding="utf-8")
+    usage = {
+        "schema_version": 1,
+        "source": "gnu-time-and-python-monotonic-v1",
+        "user_cpu_seconds": 0.1,
+        "system_cpu_seconds": 0.05,
+        "wall_time_seconds": 0.2,
+        "maximum_rss_bytes": 4_096,
+        "voluntary_context_switches": 1,
+        "involuntary_context_switches": 0,
+        "timer_wakeups": None,
+        "timer_wakeups_unavailable_reason": "runner failed before wakeup finalisation",
+        "rapl_energy_joules": None,
+        "rapl_unavailable_reason": "not available in unit test",
+    }
+    run_state = {
+        "completion_status": "error",
+        "error": "synthetic early defense failure",
+        "error_class": "client-defense-execution-v1",
+        "terminal_evidence_render_errors": [],
+    }
+
+    def fake_client_command(*args: Any, **_kwargs: Any) -> list[str]:
+        return [str(args[6])]
+
+    def fake_run_client(
+        command: list[str],
+        *,
+        log: Path,
+        configured_timeout_seconds: int,
+    ) -> tuple[SimpleNamespace, bool, float]:
+        del configured_timeout_seconds
+        output = Path(command[0])
+        output.mkdir(parents=True)
+        log.write_text("synthetic client failure\n", encoding="utf-8")
+        atomic_json(
+            output / "run.json",
+            {
+                **run_state,
+                "runner_wakeup_metrics": {"schema_version": 14},
+                "resolved_configuration": {"max_udp_payload_size": 1_200},
+                "endpoints": [],
+                "responses": [],
+            },
+        )
+        return (
+            SimpleNamespace(
+                returncode=1,
+                client_resource_usage=dict(usage),
+                scheduler_runtime_evidence=None,
+            ),
+            False,
+            120.0,
+        )
+
+    def fake_tool(command: list[str], **_kwargs: Any) -> SimpleNamespace:
+        if command[0] == "tshark":
+            output = Path(command[command.index("-w") + 1])
+            output.write_bytes(b"synthetic pcapng")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        assert command[0] == "capinfos"
+        return SimpleNamespace(returncode=0, stdout="Ethernet", stderr="")
+
+    monkeypatch.setattr(capture_session, "_capture_scheduler_contract", lambda: None)
+    monkeypatch.setattr(
+        capture_session,
+        "kernel_tx_lab_runtime_required",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(capture_session, "_offload_metadata", lambda _interface: {})
+    monkeypatch.setattr(capture_session, "offload_evidence_is_valid", lambda *_a, **_k: True)
+    monkeypatch.setattr(capture_session, "_public_study_network_condition", lambda *_a: None)
+    monkeypatch.setattr(capture_session.subprocess, "Popen", lambda *_a, **_k: CaptureProcess())
+    monkeypatch.setattr(capture_session, "_wait_for_capture_start", lambda *_a: None)
+    monkeypatch.setattr(capture_session, "_clock_anchor", lambda: {})
+    monkeypatch.setattr(
+        capture_session,
+        "_capture_clock_anchors_after_stop",
+        lambda *_a: {
+            "start_realtime_unix_ns": 1,
+            "start_monotonic_ns": 1,
+            "end_realtime_unix_ns": 2,
+            "end_monotonic_ns": 2,
+            "start_pairing_uncertainty_ns": 0,
+            "end_pairing_uncertainty_ns": 0,
+        },
+    )
+    monkeypatch.setattr(capture_session, "_client_command", fake_client_command)
+    monkeypatch.setattr(capture_session, "_run_neqo_client", fake_run_client)
+    monkeypatch.setattr(capture_session, "_validate_run_binding", lambda *_a, **_k: None)
+    monkeypatch.setattr(capture_session, "padding_event_guard_triggered", lambda _run: False)
+    monkeypatch.setattr(capture_session, "run", fake_tool)
+    monkeypatch.setattr(capture_session, "extract_trace", lambda *_a: [object()])
+    monkeypatch.setattr(
+        capture_session,
+        "write_normalized_trace",
+        lambda path, _trace: path.write_text("trace\n", encoding="utf-8"),
+    )
+    monkeypatch.setattr(
+        capture_session,
+        "udp_ceiling_evidence",
+        lambda *_a: {"valid": True},
+    )
+
+    defense = capture_session.Defense(
+        name="cs-buflo",
+        kind="cs_buflo",
+        baseline=False,
+    )
+    context = SimpleNamespace(
+        qcsd_profile="live",
+        request_policy="as-defined",
+        limits=capture_session.Limits(settle_seconds=0),
+        udp_payload_ceiling=1_200,
+    )
+    failed_attempt = tmp_path / "failed-attempt"
+    result = capture_session._collect_attempt(
+        failed_attempt,
+        manifest,
+        chaff_manifest,
+        "site",
+        defense,
+        7,
+        context,
+        application_workload_source=application_source,
+    )
+
+    assert result["success"] is False
+    assert result["runner_error"] == "synthetic early defense failure"
+    assert result["runner_error_class"] == "client-defense-execution-v1"
+    assert result["failure"]["type"] == "StrictClientDefenseExecutionFailure"
+    assert "runner wakeup metrics are invalid" in result["runner_output_error"]
+    assert load_json(failed_attempt / "attempt.json") == result
+    retained_run = load_json(failed_attempt / "neqo/run.json")
+    assert retained_run["runner_wakeup_metrics"] == {"schema_version": 14}
+    assert retained_run["client_resource_usage"] == usage
+
+    run_state.update(
+        {
+            "completion_status": "complete",
+            "error": None,
+            "error_class": None,
+        }
+    )
+    completed_attempt = tmp_path / "completed-attempt"
+    with pytest.raises(ValueError, match="runner wakeup metrics are invalid"):
+        capture_session._collect_attempt(
+            completed_attempt,
+            manifest,
+            chaff_manifest,
+            "site",
+            defense,
+            8,
+            context,
+            application_workload_source=application_source,
+        )
+    assert not (completed_attempt / "attempt.json").exists()
+
+
 def test_kernel_tx_runner_admission_preserves_history_and_requires_exact_schema_pairs() -> None:
     from tests.test_kernel_tx import (
         _runner_receipt_v3,
