@@ -383,8 +383,17 @@ stage resolved as `chromium-archive-` because a global, unvalued
 published a permanent claim and remains consumed, with no image or build
 receipt. The redundant global declaration was removed; stage-local arguments
 remain for build commands. All seven image contract tests and a Docker Buildx
-Dockerfile check passed after the change. V120 is the next candidate pending
-clean source, lifecycle recovery and allocator proof.
+Dockerfile check passed after the change. Docker Desktop was restarted and its
+post-restart audit found the v119 Buildx record terminal in error with no
+images, containers, active build scope or launcher. A locked exact-state
+maintenance helper moved the build root and transaction root, in that order,
+to `artifacts/buflo-study/build-failure-v119/metadata`; the original file
+hashes and inodes were verified after the move. The private maintenance
+receipt hashes to `e4f30004f4ec538adc5716324ff56061ef8bbda4ab11cab56f7822d46e8eead0`.
+The active lifecycle namespace became empty and the public
+`./qcsd-lab lifecycle-recover` command passed. The archive confers no
+scientific authority and v119 cannot be reused. V120 is the next candidate
+pending clean source and allocator proof.
 
 ## Maintenance contract
 
