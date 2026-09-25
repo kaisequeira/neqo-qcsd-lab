@@ -38,9 +38,10 @@ WSL data now reside on D:. The desktop's user systemd/cgroup manager and
 Docker data backing volume passed host checks. Portable CPU assignment uses
 the CPU IDs observed inside the collection image, and the required focused
 source suite passed 712 tests. A complete native three-image build and live
-qualification remain the next milestone. V121 exported one provisional
-collection image, but no desktop build, browser gate or scientific collection
-has been accepted.
+qualification remain the next milestone. V122 exported one provisional
+collection image and passed post-collection Buildx metadata, but its preparation
+image failed at managed-policy installation. No complete desktop build, browser
+gate or scientific collection has been accepted.
 
 | Checkpoint identity | Published desktop migration baseline |
 |---|---|
@@ -50,7 +51,7 @@ has been accepted.
 | Rust commit and Lab Gitlink | `b69398ff3085d852f95f8d435938b6d5e8976482` |
 | Source cleanliness | Both clean at the checkpoint |
 | Latest browser execution | v116: 75 passing vectors, two operational result records, one outstanding interrupted attempt, zero recorded semantic failures |
-| Desktop build allocation | v117–v121 durably claimed and consumed. V121 exported a provisional collection image after all six Rust gates, then its post-collection Buildx metadata read timed out; no complete build receipt or prepare/reference image. Next candidate v122, subject to allocator admission |
+| Desktop build allocation | v117–v122 durably claimed and consumed. V122 exported a provisional collection image and passed post-collection Buildx metadata, then preparation failed because the managed-policy JSON was absent; no prepare/reference image or build-execution/completion receipt. Next candidate v123, subject to allocator admission |
 | Outstanding v116 vector | Vector 76, `popup--page--window-open-attacker-name`; global intent 78 |
 | Desktop authority | Fresh native build, host qualification and all subsequent gates pending |
 

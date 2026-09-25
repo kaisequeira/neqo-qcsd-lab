@@ -443,6 +443,36 @@ failures. These source checks do not authorise the provisional image. V122 is
 the next candidate, pending clean source, allocator proof and the registered
 build gates.
 
+The clean Lab `87b947c70b97a21a39e4afb210a6d78bc59ce97c` and Rust/Gitlink
+`e8575fd8e54921ed6ff867de475b4a734064866e` claimed v122. Its pull/no-cache
+collection build completed and exported image
+`sha256:cef62eb227439ecbe30703afc5ea9539db3c1c6411e80c79150075cd9b0e38eb`.
+Post-collection Docker-selected Buildx metadata passed. Preparation then failed
+at Dockerfile managed-policy installation because the versioned policy JSON had
+not been copied into the image. No preparation or reference image or
+build-execution/completion receipt was produced. V122 is consumed and has no
+scientific authority.
+
+After Docker Desktop restart, the reviewed initial maintenance helper wrote
+`artifacts/buflo-study/build-failure-v122/provisional-image-proof.json` (SHA-256
+`6698cb54c240b56f55ba238b79eb7cf1aa110ed0f948cd7c72f44057247ee01a`)
+and established empty metadata, but stopped before moving the unresolved build
+and transaction roots because the Buildx `Error.Stack` embedded a volatile
+inspect PID. A separately reviewed continuation moved both roots into the
+v122 failure archive. Its
+`artifacts/buflo-study/build-failure-v122/maintenance-continuation-receipt.json`
+has SHA-256
+`b58057cd8a0d1c27859ea16e85af98163cdc5276c0e334817be1da89360fa328`;
+the active lifecycle namespace is empty and `./qcsd-lab lifecycle-recover`
+passed. The retained collection image remains provisional, and v122 cannot be
+reused.
+
+Lab `20328d5` copies the versioned managed-policy JSON into the preparation
+image as root-owned read-only data. Its focused image contract passed eight
+tests. This source repair has not passed a new evidentiary build. V123 is the
+next candidate, pending clean source, allocator proof and the registered build
+gates.
+
 ## Maintenance contract
 
 Future maintainers should append a dated, evidence-backed outcome after each
