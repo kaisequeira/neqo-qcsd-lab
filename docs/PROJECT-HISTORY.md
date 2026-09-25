@@ -376,6 +376,16 @@ parse it at microsecond precision. The live PowerShell observation passed the
 isolated validator after this change. V118 remains consumed; v119 is the next
 candidate pending focused tests, clean source and allocator proof.
 
+The clean-source v119 entry passed host-storage preflight but Docker rejected
+the collection Dockerfile before any image stage ran: its dynamic Chromium
+stage resolved as `chromium-archive-` because a global, unvalued
+`ARG TARGETARCH` shadowed BuildKit's automatic target architecture. V119
+published a permanent claim and remains consumed, with no image or build
+receipt. The redundant global declaration was removed; stage-local arguments
+remain for build commands. All seven image contract tests and a Docker Buildx
+Dockerfile check passed after the change. V120 is the next candidate pending
+clean source, lifecycle recovery and allocator proof.
+
 ## Maintenance contract
 
 Future maintainers should append a dated, evidence-backed outcome after each

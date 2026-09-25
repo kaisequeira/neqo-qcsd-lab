@@ -47,6 +47,9 @@ def test_class_runtime_uses_separate_receipt_without_changing_qualification_sche
 
 def test_prepare_and_collection_images_have_required_acquisition_and_evaluation_stacks() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    # BuildKit supplies TARGETARCH in global scope for dynamic FROM expansion.
+    # An unvalued global redeclaration shadows that value on some builders.
+    assert "ARG TARGETARCH" not in dockerfile.split("FROM ${UV_IMAGE}", maxsplit=1)[0]
     chromium_stage = dockerfile.split(
         "FROM ${DEBIAN_IMAGE} AS chromium-archive-arm64", maxsplit=1
     )[1].split("FROM ${DEBIAN_IMAGE} AS source-metadata", maxsplit=1)[0]
@@ -78,6 +81,7 @@ def test_prepare_and_collection_images_have_required_acquisition_and_evaluation_
     assert dockerfile.count(archive_url) == 1
     assert 'hashlib.file_digest(stream, "sha256").hexdigest() != archive_sha256' in chromium_stage
     assert "FROM chromium-archive-${TARGETARCH} AS chromium-browser" in chromium_stage
+    assert "FROM chromium-archive-${TARGETARCH} AS chromium-browser\nARG TARGETARCH" in chromium_stage
     assert f"ADD --checksum=sha256:{playwright_driver.AMD64_CHROMIUM_ARCHIVE_SHA256}" in chromium_stage
     assert playwright_driver.AMD64_CHROMIUM_ARCHIVE_URL in chromium_stage
     assert "if len(files) != file_count" in chromium_stage
