@@ -4755,7 +4755,7 @@ def test_launcher_rewrites_class_paths_and_never_mounts_workspace_rw():
     assert '--env "QCSD_STUDY_ENVIRONMENT_B64=' not in launcher
     assert '"${class_study_execute}" == "1"' in launcher
     assert (
-        'study_capture_scheduler_contract="qcsd-client-rr1-cpu10-etf-helper-cpu11-v1"'
+        'study_capture_scheduler_contract="qcsd-client-rr1-portable-etf-helper-v4"'
         in launcher
     )
     assert "research capture requires the completed create-only no-cache build pair" in launcher

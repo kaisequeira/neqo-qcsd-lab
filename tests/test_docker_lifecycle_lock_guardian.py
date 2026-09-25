@@ -7606,9 +7606,11 @@ def test_api_transfer_denies_unbound_or_drifting_same_uid_wrapper(
         os.close(buildx_config_fd)
 
 
+@pytest.mark.parametrize("versions", [(249, 249), (254, 254)])
 def test_normal_pretransfer_manager_rejection_releases_safely(
     guardian_bundle: tuple[Path, Path, Path, Path],
     monkeypatch: pytest.MonkeyPatch,
+    versions: tuple[int, int],
 ) -> None:
     native = _load_native(guardian_bundle[0].parent / NATIVE.name)
 
@@ -7622,7 +7624,14 @@ def test_normal_pretransfer_manager_rejection_releases_safely(
     monkeypatch.setattr(native, "_systemd_unit_snapshot", lambda _unit: (
         "not-found", "inactive", "", 0
     ))
-    monkeypatch.setattr(native.subprocess, "Popen", lambda *_args, **_kwargs: RejectedLauncher())
+    monkeypatch.setattr(native, "_systemd_versions", lambda: versions)
+    launched: list[tuple[str, ...]] = []
+
+    def reject(arguments: tuple[str, ...], **_kwargs: object) -> RejectedLauncher:
+        launched.append(arguments)
+        return RejectedLauncher()
+
+    monkeypatch.setattr(native.subprocess, "Popen", reject)
     singleton, _ = native._api_listener()
     lock_path = guardian_bundle[3] / "manager-rejection-lock"
     lock_path.touch(mode=0o600)
@@ -7634,7 +7643,7 @@ def test_normal_pretransfer_manager_rejection_releases_safely(
         assert native._watch_api_service(
             unit=f"qcsd-docker-api-{'f' * 32}.service",
             duration=1,
-            command=("/bin/true",),
+            command=("/bin/echo", "literal-$HOME"),
             native_source_fd=source_fd,
             native_source_hash=hashlib.sha256(
                 (guardian_bundle[0].parent / NATIVE.name).read_bytes()
@@ -7644,6 +7653,10 @@ def test_normal_pretransfer_manager_rejection_releases_safely(
             docker_config_fd=docker_config_fd,
             buildx_config_fd=buildx_config_fd,
         ) == 125
+        assert len(launched) == 1
+        assert ("--expand-environment=no" in launched[0]) == (versions[0] >= 254)
+        assert ("--property=ExitType=cgroup" in launched[0]) == (versions[0] >= 250)
+        assert ("literal-$HOME" if versions[0] >= 254 else "literal-$$HOME") in launched[0]
     finally:
         os.close(source_fd)
         os.close(lock_fd)
@@ -7682,6 +7695,7 @@ def test_transfer_wins_same_iteration_as_normal_launcher_exit(
         lambda _unit: ("not-found", "inactive", "", 0),
     )
     monkeypatch.setattr(native, "_transfer_api_lease", transfer)
+    monkeypatch.setattr(native, "_systemd_versions", lambda: (249, 249))
     monkeypatch.setattr(
         native.select,
         "select",
@@ -7744,6 +7758,7 @@ def test_pretransfer_timeout_or_signal_retains_authority(
     monkeypatch.setattr(native, "_systemd_unit_snapshot", lambda _unit: (
         "not-found", "inactive", "", 0
     ))
+    monkeypatch.setattr(native, "_systemd_versions", lambda: (249, 249))
     monkeypatch.setattr(native.subprocess, "Popen", lambda *_args, **_kwargs: AmbiguousLauncher())
     singleton, _ = native._api_listener()
     lock_path = guardian_bundle[3] / f"ambiguous-{ambiguous_status}-lock"
@@ -8333,10 +8348,47 @@ def test_shell_startup_and_path_injection_are_removed_before_inner_exec(
     assert inner_path.startswith(
         "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     )
-    fixed_powershell = Path(
-        "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
-    )
-    if fixed_powershell.exists():
+    powershell = _load_guardian(GUARDIAN)._trusted_wsl_powershell_path()
+    if powershell is not None:
         assert (guardian_bundle[3] / "powershell-path").read_text(
             encoding="ascii"
-        ).strip() == str(fixed_powershell)
+        ).strip() == str(powershell)
+
+
+def test_wsl_powershell_lookup_accepts_a_different_automount_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_guardian(GUARDIAN)
+    if not (
+        "microsoft" in os.uname().release.lower() or Path("/run/WSL").is_dir()
+    ) or not module._WSLPATH_PATH.exists():
+        pytest.skip("WSL path mapper is unavailable")
+    translated = (
+        tmp_path
+        / "drives"
+        / "c"
+        / "Windows"
+        / "System32"
+        / "WindowsPowerShell"
+        / "v1.0"
+        / "powershell.exe"
+    )
+    translated.parent.mkdir(parents=True)
+    translated.write_bytes(b"test executable\n")
+    translated.chmod(0o755)
+    original_run = module.subprocess.run
+
+    def mapped_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert argv == [str(module._WSLPATH_PATH), "-u", module._WINDOWS_POWERSHELL_PATH]
+        assert kwargs["env"] == {
+            "PATH": module._SAFE_PATH,
+            "LANG": "C",
+            "LC_ALL": "C",
+        }
+        return subprocess.CompletedProcess(argv, 0, str(translated) + "\n", "")
+
+    monkeypatch.setattr(module.subprocess, "run", mapped_run)
+    try:
+        assert module._trusted_wsl_powershell_path() == translated
+    finally:
+        monkeypatch.setattr(module.subprocess, "run", original_run)

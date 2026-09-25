@@ -101,6 +101,7 @@ from qcsd_lab.kernel_tx import (
     KERNEL_TX_RUNNER_V6_SEMANTICS,
     KERNEL_TX_RUNNER_V7_SEMANTICS,
 )
+from qcsd_lab.process_scheduler import _host_partition_valid
 from qcsd_lab.util import LAB_ROOT
 
 
@@ -766,8 +767,10 @@ def _build_execution_value(
                 "wsl_distro_name_env_present": True,
                 "run_wsl_directory_present": True,
             },
-            "policy": "docker-data-vhdx-backing-volume-minimum-v1",
-            "required_available_bytes": (buflo_study.BUILD_WSL_HOST_MIN_AVAILABLE_BYTES),
+            "policy": build_storage.BUILD_HOST_STORAGE_POLICY,
+            "required_available_bytes": (
+                build_storage.BUILD_HOST_STORAGE_REQUIRED_AVAILABLE_BYTES
+            ),
             "observations": observations,
             "minimum_available_bytes": 128 * 1024**3,
             "passed": True,
@@ -1026,7 +1029,13 @@ def _install_fake_wsl_storage_probe(
     uname.chmod(0o755)
     wslpath = binary_root / "wslpath"
     wslpath.write_text(
-        '#!/bin/sh\nset -eu\nfor argument do last="$argument"; done\nprintf \'%s\\n\' "$last"\n',
+        '#!/bin/sh\nset -eu\n'
+        'if [ "${1:-}" = "-u" ]; then\n'
+        '  printf \'%s/powershell.exe\\n\' "$(dirname "$0")"\n'
+        'else\n'
+        '  for argument do last="$argument"; done\n'
+        '  printf \'%s\\n\' "$last"\n'
+        'fi\n',
         encoding="utf-8",
     )
     wslpath.chmod(0o755)
@@ -1055,7 +1064,7 @@ available = int(
     os.environ.get("QCSD_TEST_WSL_AVAILABLE_BYTES", str(128 * 1024**3))
 )
 if os.environ.get("QCSD_TEST_WSL_LOW_BOUNDARY") == boundary:
-    available = 64 * 1024**3 - 1
+    available = 0
 slash = chr(92)
 path = os.environ.get(
     "QCSD_TEST_WSL_DATA_PATH",
@@ -1328,10 +1337,7 @@ def _launcher_boundary_fixture(
     launcher = tmp_path / "qcsd-lab"
     original_launcher_source = (LAB_ROOT / "qcsd-lab").read_text(encoding="utf-8")
     launcher_source = original_launcher_source
-    trusted_path = (
-        "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:"
-        "/mnt/c/Windows/System32/WindowsPowerShell/v1.0"
-    )
+    trusted_path = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     trusted_path_assignment = f'readonly PATH="{trusted_path}"'
     assert launcher_source.count(trusted_path_assignment) == 1
     launcher_source = launcher_source.replace(
@@ -7562,32 +7568,46 @@ def test_reference_gate_accepts_a_fully_validated_schema_two_build(
     assert receipt["profiles_checked"] == 8
 
 
+def test_checked_in_v20_reference_remains_historically_verifiable() -> None:
+    reference = LAB_ROOT / "artifacts/buflo-study/reference-execution-v20.json"
+    with pytest.raises(ValueError, match="current reference admission requires schema 2"):
+        validate_reference_gate_receipt(reference)
+    historical_reference = validate_reference_gate_receipt(
+        reference, allow_historical=True
+    )
+
+    assert historical_reference["build_execution"]["cohort_version"] == 20
+
+
 @pytest.mark.parametrize("deep", [None, False, True])
-def test_checked_in_v20_reference_and_code_gate_remain_historically_verifiable(
+def test_checked_in_v20_code_gate_remains_historically_verifiable(
     monkeypatch: pytest.MonkeyPatch, deep: bool | None,
 ) -> None:
-    reference = LAB_ROOT / "artifacts/buflo-study/reference-execution-v20.json"
     code_gate = LAB_ROOT / "artifacts/buflo-study/code-gate-v20.json"
 
     def unexpected_execution():
         pytest.fail("historical receipt verification must not execute current tests")
 
     monkeypatch.setattr(buflo_study, "_run_lab_code_gate_commands", unexpected_execution)
-    with pytest.raises(ValueError, match="current reference admission requires schema 2"):
-        validate_reference_gate_receipt(reference)
     with pytest.raises(ValueError, match="current code-gate admission requires schema 2"):
         buflo_study.validate_code_gate_receipt(code_gate, deep=False)
 
-    historical_reference = validate_reference_gate_receipt(
-        reference, allow_historical=True
+    # The checked-in receipt is immutable, but its three sealed raw regression
+    # results are intentionally outside Git. A fresh clone can verify the
+    # reference above; the deep code gate needs the optional historical corpus.
+    assert hashlib.sha256(code_gate.read_bytes()).hexdigest() == (
+        "3460c7402758059a0fb9afe2fc3a6ec7b8ab75d58585d30bf5481dcf308df12b"
     )
+    regression_root = LAB_ROOT / "results/buflo-study-regression-v20"
+    if not regression_root.exists() and not regression_root.is_symlink():
+        pytest.skip("v20 sealed regression results are absent from this clone")
+
     historical_code_gate = buflo_study.validate_code_gate_receipt(
         code_gate,
         allow_historical=True,
         **({} if deep is None else {"deep": deep}),
     )
 
-    assert historical_reference["build_execution"]["cohort_version"] == 20
     assert historical_code_gate["cohort_version"] == 20
     assert historical_code_gate["live_regression"]["samples"] == 18
 
@@ -8117,7 +8137,7 @@ def test_launcher_requires_clean_capture_image_and_no_cache_build() -> None:
         launcher,
         flags=re.MULTILINE,
     )
-    assert "WSL_HOST_BUILD_MIN_AVAILABLE_BYTES=68719476736" in launcher
+    assert "WSL_HOST_BUILD_MIN_AVAILABLE_BYTES=1" in launcher
     assert launcher.count('wsl_host_build_storage_probe "') == 4
     assert "windows_docker_storage_probe.ps1" in launcher
     assert '"schema_version": 5' in launcher
@@ -8280,14 +8300,17 @@ def test_launcher_applies_least_privilege_rr1_capture_partition() -> None:
     )[0]
 
     assert (
-        'study_capture_scheduler_contract="qcsd-client-rr1-cpu10-etf-helper-cpu11-v1"' in launcher
+        'study_capture_scheduler_contract="qcsd-client-rr1-portable-etf-helper-v4"' in launcher
     )
-    assert 'runtime+=(--cpuset-cpus "10-11" --ulimit "rtprio=1:1")' in launcher
-    assert "--cpuset-cpus 10-11" in launcher
+    assert 'runtime+=(--cpuset-cpus "${study_capture_collection_cpuset}" --ulimit "rtprio=1:1")' in launcher
+    assert '--cpuset-cpus "${study_capture_collection_cpuset}"' in launcher
     assert "--ulimit rtprio=1:1" in launcher
     assert "_qcsd_docker_api ps --format '{{.ID}}'" in launcher
     assert "docker-inspect-all-running-containers-prelaunch-v1" in launcher
     assert "docker-inspect-all-running-containers-prelaunch-v2" in launcher
+    assert "docker-inspect-all-running-containers-prelaunch-v3" in launcher
+    assert "docker-inspect-all-running-containers-prelaunch-v4" in launcher
+    assert "os.sched_getaffinity(0)" in launcher
     assert "QCSD_CAPTURE_ETF_INTERFACE=eth0" in launcher
     assert "QCSD_KERNEL_TX_POST_VETH_CAPTURE_ENDPOINT" in launcher
     assert "buflo_kernel_tx_observer_binding_base64()" in launcher
@@ -8302,17 +8325,29 @@ def test_launcher_applies_least_privilege_rr1_capture_partition() -> None:
     assert launcher.count('--label "org.qcsd.owner=qcsd-lab"') >= 5
     # Acceptance server, ordinary controlled server, controlled router, and
     # routed public observer remain outside the isolated client CPU partition.
-    assert launcher.count("--cpuset-cpus 0-9") == 4
+    assert launcher.count('--cpuset-cpus "${study_capture_sidecar_cpuset}"') == 4
     assert "SYS_NICE" not in launcher
     assert "--cpu-rt-runtime" not in launcher
     assert "unsupported capture scheduler contract" in entrypoint
-    assert "taskset --cpu-list 11 qcsd-lab-internal" in entrypoint
+    assert 'taskset --cpu-list "${orchestrator_cpu}" qcsd-lab-internal' in entrypoint
     assert "+sys_nice" not in entrypoint
     assert '_qcsd_docker_api exec "${container_id}" /usr/bin/python3 -c' in network_probe
     assert "/usr/local/bin/python3" not in network_probe
 
 
-def test_capture_scheduler_rejects_swapped_name_to_exact_id_binding() -> None:
+@pytest.mark.parametrize(
+    ("ncpu", "contract", "available_cpus"),
+    [
+        (12, "qcsd-client-rr1-cpu10-etf-helper-cpu11-v1", list(range(12))),
+        (3, "qcsd-client-rr1-portable-etf-helper-v3", list(range(3))),
+        (8, "qcsd-client-rr1-portable-etf-helper-v3", list(range(8))),
+        (8, "qcsd-client-rr1-portable-etf-helper-v4", [2, 4, 7]),
+        (8, "qcsd-client-rr1-portable-etf-helper-v4", [4, 5, 6]),
+    ],
+)
+def test_capture_scheduler_rejects_swapped_name_to_exact_id_binding(
+    ncpu: int, contract: str, available_cpus: list[int]
+) -> None:
     launcher = (LAB_ROOT / "qcsd-lab").read_text(encoding="utf-8")
     scheduler_function = (
         "capture_scheduler_host_partition_b64() {"
@@ -8323,6 +8358,10 @@ def test_capture_scheduler_rejects_swapped_name_to_exact_id_binding() -> None:
     )
     first_id = "a" * 64
     second_id = "b" * 64
+    sidecar_cpuset = (
+        ",".join(map(str, available_cpus[:-2]))
+        if contract.endswith("-v4") else f"0-{ncpu - 3}"
+    )
     inspected = json.dumps(
         [
             {
@@ -8330,14 +8369,14 @@ def test_capture_scheduler_rejects_swapped_name_to_exact_id_binding() -> None:
                 "Name": "/first",
                 "Config": {"Labels": {"org.qcsd.owner": "qcsd-lab"}},
                 "State": {"Running": True},
-                "HostConfig": {"CpusetCpus": "0-9"},
+                "HostConfig": {"CpusetCpus": sidecar_cpuset},
             },
             {
                 "Id": second_id,
                 "Name": "/second",
                 "Config": {"Labels": {"org.qcsd.owner": "qcsd-lab"}},
                 "State": {"Running": True},
-                "HostConfig": {"CpusetCpus": "0-9"},
+                "HostConfig": {"CpusetCpus": sidecar_cpuset},
             },
         ]
     )
@@ -8345,7 +8384,7 @@ def test_capture_scheduler_rejects_swapped_name_to_exact_id_binding() -> None:
 set -u
 {scheduler_function}
 docker() {{
-  if [[ "$1" == info ]]; then printf '12\\n'
+  if [[ "$1" == info ]]; then printf '{ncpu}\\n'
   elif [[ "$1" == ps ]]; then printf '%s\\n%s\\n' '{first_id}' '{second_id}'
   elif [[ "$1" == container && "$2" == inspect ]]; then printf '%s\\n' "$INSPECTED"
   else return 2
@@ -8359,7 +8398,9 @@ _qcsd_docker_api_with_timeout() {{
   [[ "$duration" == "$_QCSD_DOCKER_METADATA_TIMEOUT_SECONDS" ]] || return 125
   docker "$@"
 }}
-study_capture_scheduler_contract=qcsd-client-rr1-cpu10-etf-helper-cpu11-v1
+study_capture_scheduler_contract={contract}
+study_capture_docker_ncpu={ncpu}
+study_capture_available_cpus_json='{json.dumps(available_cpus, separators=(",", ":"))}'
 capture_scheduler_host_partition_b64 "$@"
 """
 
@@ -8373,6 +8414,7 @@ capture_scheduler_host_partition_b64 "$@"
     assert correct.returncode == 0, correct.stderr
     receipt = json.loads(base64.b64decode(correct.stdout.strip(), validate=True))
     assert receipt["running_container_set_matches_expected"] is True
+    assert _host_partition_valid(receipt)
 
     swapped = subprocess.run(
         ["bash", "-c", harness, "scheduler", "first", second_id, "second", first_id],
@@ -9901,7 +9943,7 @@ def test_buildx_identity_change_stops_before_the_next_image_and_creates_no_recei
 @pytest.mark.parametrize(
     ("variable", "value"),
     (
-        ("QCSD_TEST_WSL_AVAILABLE_BYTES", str(64 * 1024**3 - 1)),
+        ("QCSD_TEST_WSL_AVAILABLE_BYTES", "0"),
         ("QCSD_TEST_WSL_MALFORMED", "1"),
         ("QCSD_TEST_WSL_PROBE_FAIL", "1"),
     ),
@@ -10634,6 +10676,137 @@ catch {
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.parametrize(
+    ("base_path", "settings_present", "main_vhd_present", "expected_error"),
+    [
+        (r"D:\WSL\Docker\main", False, True, None),
+        (
+            r"D:\WSL\Docker\other",
+            False,
+            True,
+            "active data location is not authoritatively configured",
+        ),
+        (
+            r"D:\WSL\Docker\main",
+            False,
+            False,
+            "registered docker-desktop WSL VHDX is missing",
+        ),
+        (
+            r"D:\WSL\Docker\main",
+            True,
+            True,
+            "registration and settings contain conflicting data locations",
+        ),
+    ],
+)
+def test_windows_storage_probe_derives_only_registered_sibling_disk(
+    tmp_path: Path,
+    base_path: str,
+    settings_present: bool,
+    main_vhd_present: bool,
+    expected_error: str | None,
+) -> None:
+    if shutil.which("powershell.exe") is None:
+        pytest.skip("Windows PowerShell interop is unavailable")
+    probe = (LAB_ROOT / "tools/windows_docker_storage_probe.ps1").read_text(encoding="utf-8")
+    function = probe.split("function Get-CanonicalDataVhd {", 1)[1].split(
+        "\n\n$resolved = Get-CanonicalDataVhd", 1
+    )[0]
+    harness = tmp_path / "probe-sibling-disk.ps1"
+    harness.write_text(
+        r"""
+$ErrorActionPreference = "Stop"
+Set-StrictMode -Version 3.0
+$env:APPDATA = 'C:\Users\test\AppData\Roaming'
+$script:basePath = '__BASE_PATH__'
+$script:settingsPresent = __SETTINGS_PRESENT__
+$script:mainVhdPresent = __MAIN_VHD_PRESENT__
+function Test-Path {
+    param([string]$LiteralPath, [string]$PathType)
+    if ($LiteralPath -eq 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss') {
+        return $true
+    }
+    if ($LiteralPath -eq 'C:\Users\test\AppData\Roaming\Docker\settings-store.json') {
+        return $script:settingsPresent
+    }
+    if ($LiteralPath -eq 'D:\WSL\Docker\main\ext4.vhdx') {
+        return $script:mainVhdPresent
+    }
+    return $LiteralPath -eq 'D:\WSL\Docker\disk\docker_data.vhdx'
+}
+function Get-ChildItem {
+    param([string]$LiteralPath)
+    return [pscustomobject]@{ PSPath = 'registry-item' }
+}
+function Get-ItemProperty {
+    param([string]$LiteralPath)
+    return [pscustomobject]@{
+        DistributionName = 'docker-desktop'
+        BasePath = $script:basePath
+        VhdFileName = 'ext4.vhdx'
+    }
+}
+function Get-Item {
+    param([switch]$Force, [string]$LiteralPath)
+    return [pscustomobject]@{
+        PSIsContainer = $false
+        Attributes = [System.IO.FileAttributes]::Archive
+        FullName = $LiteralPath
+        Length = 123
+    }
+}
+function Get-Content {
+    param([switch]$Raw, [string]$LiteralPath)
+    return '{"diskImageLocation":"C:\\Unrelated"}'
+}
+function Get-CanonicalDataVhd {
+"""
+        .replace("__BASE_PATH__", base_path)
+        .replace("__SETTINGS_PRESENT__", "$true" if settings_present else "$false")
+        .replace("__MAIN_VHD_PRESENT__", "$true" if main_vhd_present else "$false")
+        + function
+        + r"""
+try {
+    $resolved = Get-CanonicalDataVhd
+    if ('__EXPECTED_ERROR__' -ne '') {
+        throw 'an invalid layout was accepted'
+    }
+    if ($resolved.Count -ne 2 -or
+        $resolved[0].FullName -ne 'D:\WSL\Docker\disk\docker_data.vhdx' -or
+        $resolved[1] -ne 'wsl-lxss-docker-desktop-sibling-disk') {
+        throw 'the registered sibling data disk was not selected'
+    }
+}
+catch {
+    if ('__EXPECTED_ERROR__' -eq '' -or
+        $_.Exception.Message -notlike '*__EXPECTED_ERROR__*') {
+        Write-Error $_
+        exit 1
+    }
+}
+""".replace("__EXPECTED_ERROR__", expected_error or ""),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(harness),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_windows_storage_probe_smoke_reports_the_actual_backing_volume() -> None:
     if shutil.which("powershell.exe") is None or shutil.which("wslpath") is None:
         pytest.skip("Windows PowerShell interop is unavailable")
@@ -10676,11 +10849,12 @@ def test_windows_storage_probe_smoke_reports_the_actual_backing_volume() -> None
     assert observation["probe_sha256"] == probe_sha256
     assert observation["location_source"] in (
         "wsl-lxss-docker-desktop-data",
+        "wsl-lxss-docker-desktop-sibling-disk",
         "docker-settings-store",
         "docker-legacy-settings",
     )
     assert observation["data_vhd_path"].lower().endswith(".vhdx")
-    if observation["available_bytes"] < build_storage.BUILD_WSL_HOST_MIN_AVAILABLE_BYTES:
+    if observation["available_bytes"] < build_storage.BUILD_HOST_STORAGE_REQUIRED_AVAILABLE_BYTES:
         with pytest.raises(ValueError, match="requires at least"):
             build_storage.validate_build_host_storage_observation(
                 observation,
@@ -10880,7 +11054,7 @@ def test_launcher_build_v5_is_create_only_and_preserves_prior_cohort(
 ) -> None:
     launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
     environment["QCSD_TEST_DOCKER_SERVER_ID"] = "12345678-1234-1234-1234-123456789abc"
-    environment["QCSD_TEST_WSL_AVAILABLE_BYTES"] = str(64 * 1024**3)
+    environment["QCSD_TEST_WSL_AVAILABLE_BYTES"] = str(2 * 1024**3)
     environment["QCSD_TEST_WSL_DATA_PATH"] = r"D:\DockerData\disk\docker_data.vhdx"
     powershell_marker = tmp_path / "powershell-boundaries"
     environment["QCSD_TEST_POWERSHELL_MARKER"] = str(powershell_marker)
@@ -10921,7 +11095,7 @@ def test_launcher_build_v5_is_create_only_and_preserves_prior_cohort(
         for command in current_value["commands"]
     )
     preflight = current_value["host_storage_preflight"]
-    assert preflight["required_available_bytes"] == 64 * 1024**3
+    assert preflight["required_available_bytes"] == 1
     assert [item["boundary"] for item in preflight["observations"]] == [
         "before-collection",
         "before-prepare",
@@ -11229,9 +11403,23 @@ def test_study_environment_receipt_binds_minimized_docker_bases_and_locks() -> N
     )
     assert kernel_validated["capture_scheduler"]["timed_egress_helper_affinity_cpus"] == [11]
     assert kernel_validated["capture_scheduler"]["timed_egress_helper_policy"] == "SCHED_RR"
+    for ncpu in (3, 8):
+        portable = json.loads(json.dumps(scheduled))
+        portable["docker"]["ncpu"] = ncpu
+        portable["capture_scheduler"] = (
+            buflo_study._portable_etf_capture_scheduler_environment_contract(ncpu)
+        )
+        portable_validated = validate_study_environment_receipt(
+            portable, expected_image_digest="sha256:" + "a" * 64, allow_historical=True
+        )
+        assert portable_validated["capture_scheduler"]["client_affinity_cpus"] == [ncpu - 2]
+        changed_partition = json.loads(json.dumps(portable))
+        changed_partition["capture_scheduler"]["client_affinity_cpus"] = [ncpu - 1]
+        with pytest.raises(ValueError, match="scheduler environment"):
+            validate_study_environment_receipt(changed_partition, allow_historical=True)
     wrong_topology = json.loads(json.dumps(scheduled))
     wrong_topology["docker"]["ncpu"] = 16
-    with pytest.raises(ValueError, match="exact 12-CPU topology"):
+    with pytest.raises(ValueError, match="historical scheduler requires its frozen 12-CPU topology"):
         validate_study_environment_receipt(wrong_topology, allow_historical=True)
     wrong_partition = json.loads(json.dumps(scheduled))
     wrong_partition["capture_scheduler"]["client_affinity_cpus"] = [9]
@@ -11297,6 +11485,17 @@ def test_current_study_environment_binds_completion_and_projects_full_identity(
     validated = validate_study_environment_receipt(
         value, expected_image_digest="sha256:" + "a" * 64
     )
+    sparse = json.loads(json.dumps(value))
+    sparse["capture_scheduler"] = (
+        buflo_study._portable_etf_v4_capture_scheduler_environment_contract([2, 4, 7])
+    )
+    sparse_validated = validate_study_environment_receipt(
+        sparse, expected_image_digest="sha256:" + "a" * 64
+    )
+    assert sparse_validated["capture_scheduler"]["sidecar_affinity_cpus"] == [2]
+    sparse["capture_scheduler"]["client_affinity_cpus"] = [5]
+    with pytest.raises(ValueError, match="scheduler environment"):
+        validate_study_environment_receipt(sparse)
     identity = buflo_study._one_build_execution_identity([validated])
 
     assert identity == {

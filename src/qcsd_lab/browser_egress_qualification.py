@@ -170,10 +170,17 @@ DOCKER_DAEMON_CAPACITY_FIELDS = frozenset({"ncpu", "mem_total_bytes"})
 DOCKER_DAEMON_IDENTITY_FIELDS = (
     LIVE_DOCKER_DAEMON_FIELDS - DOCKER_DAEMON_CAPACITY_FIELDS
 )
-DOCKER_CAPACITY_CONTRACT = {
+HISTORICAL_DOCKER_CAPACITY_CONTRACT = {
     "schema_version": 1,
     "ncpu_policy": "exact",
     "required_ncpu": 12,
+    "mem_total_bytes_policy": "positive-provenance-only",
+    "mem_total_bytes_threshold": None,
+}
+DOCKER_CAPACITY_CONTRACT = {
+    "schema_version": 2,
+    "ncpu_policy": "positive-provenance-only",
+    "required_ncpu": None,
     "mem_total_bytes_policy": "positive-provenance-only",
     "mem_total_bytes_threshold": None,
 }
@@ -1117,7 +1124,7 @@ def validate_docker_daemon_binding(value: object) -> dict[str, Any]:
 
 
 def validate_docker_capacity_contract(value: object) -> dict[str, Any]:
-    """Validate the immutable schema-6 capacity-admission policy."""
+    """Validate a frozen capacity policy, including old exact-12 receipts."""
 
     if not isinstance(value, Mapping):
         raise ValueError("browser-egress Docker capacity contract is invalid")
@@ -1125,7 +1132,10 @@ def validate_docker_capacity_contract(value: object) -> dict[str, Any]:
         encoded = canonical_json_bytes(value)
     except (TypeError, ValueError):
         raise ValueError("browser-egress Docker capacity contract is invalid") from None
-    if encoded != canonical_json_bytes(DOCKER_CAPACITY_CONTRACT):
+    if encoded not in {
+        canonical_json_bytes(HISTORICAL_DOCKER_CAPACITY_CONTRACT),
+        canonical_json_bytes(DOCKER_CAPACITY_CONTRACT),
+    }:
         raise ValueError("browser-egress Docker capacity contract is invalid")
     return json.loads(encoded)
 
@@ -1147,11 +1157,11 @@ def _docker_daemon_identity_projection(value: object) -> dict[str, Any]:
 def _require_docker_capacity(
     value: object, *, capacity_contract: object
 ) -> dict[str, Any]:
-    """Admit only the frozen CPU policy while retaining raw memory provenance."""
+    """Admit a versioned CPU policy while retaining raw memory provenance."""
 
     live = validate_docker_daemon_binding(value)
     contract = validate_docker_capacity_contract(capacity_contract)
-    if live["ncpu"] != contract["required_ncpu"]:
+    if contract["ncpu_policy"] == "exact" and live["ncpu"] != contract["required_ncpu"]:
         raise ValueError("browser-egress live Docker CPU capacity differs from its contract")
     # validate_docker_daemon_binding already requires a positive integer.  No
     # memory threshold is invented: daemon total memory is provenance, while

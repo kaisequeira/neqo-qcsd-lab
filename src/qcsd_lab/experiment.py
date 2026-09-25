@@ -731,7 +731,11 @@ def validate_accepted_observer_topology_receipt(
     matched = bool(
         isinstance(scheduler, Mapping)
         and scheduler.get("contract")
-        == "qcsd-client-rr1-cpu10-etf-helper-cpu11-v1"
+        in {
+            "qcsd-client-rr1-cpu10-etf-helper-cpu11-v1",
+            "qcsd-client-rr1-portable-etf-helper-v3",
+            "qcsd-client-rr1-portable-etf-helper-v4",
+        }
     )
     historical = _historical_buflo_v36_experiment(experiment)
     required = matched and _requires_durable_attempt_evidence(experiment) and not historical

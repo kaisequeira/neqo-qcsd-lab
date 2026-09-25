@@ -31,10 +31,13 @@ import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from itertools import pairwise
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
+
+# The host watcher uses only the system standard library, including Python 3.10.
+UTC = timezone.utc
 
 STUDY_ID = "classifier-multiorigin100-v1"
 CANDIDATE_COUNT = 600
@@ -204,8 +207,14 @@ _BROWSER_EGRESS_VECTOR_IDS = tuple(
 )
 if len(_BROWSER_EGRESS_VECTOR_IDS) != BROWSER_EGRESS_VECTOR_COUNT:  # pragma: no cover
     raise RuntimeError("browser-egress watcher vector inventory is inconsistent")
-BUILD_WSL_HOST_MIN_AVAILABLE_BYTES = 64 * 1024**3
-BUILD_HOST_STORAGE_POLICY = "docker-data-vhdx-backing-volume-minimum-v1"
+BUILD_HOST_STORAGE_POLICY = "docker-data-vhdx-backing-volume-positive-free-space-v2"
+BUILD_HOST_STORAGE_REQUIRED_AVAILABLE_BYTES = 1
+BUILD_LEGACY_HOST_STORAGE_POLICY = "docker-data-vhdx-backing-volume-minimum-v1"
+BUILD_LEGACY_HOST_STORAGE_REQUIRED_AVAILABLE_BYTES = 64 * 1024**3
+BUILD_HOST_STORAGE_POLICY_REQUIREMENTS = {
+    BUILD_HOST_STORAGE_POLICY: BUILD_HOST_STORAGE_REQUIRED_AVAILABLE_BYTES,
+    BUILD_LEGACY_HOST_STORAGE_POLICY: BUILD_LEGACY_HOST_STORAGE_REQUIRED_AVAILABLE_BYTES,
+}
 BUILD_HOST_STORAGE_PROBE = "powershell-get-volume-docker-data-vhdx-v1"
 BUILD_HOST_STORAGE_BOUNDARIES = (
     "before-collection",
@@ -215,6 +224,7 @@ BUILD_HOST_STORAGE_BOUNDARIES = (
 )
 BUILD_HOST_STORAGE_LOCATION_SOURCES = {
     "wsl-lxss-docker-desktop-data",
+    "wsl-lxss-docker-desktop-sibling-disk",
     "docker-settings-store",
     "docker-legacy-settings",
 }
@@ -2210,6 +2220,7 @@ def _validate_build_storage_observation(
     *,
     boundary: str,
     probe_sha256: str,
+    policy: str = BUILD_HOST_STORAGE_POLICY,
 ) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != _BUILD_STORAGE_OBSERVATION_KEYS:
         raise WatchError("foundation no-cache build storage observation schema is invalid")
@@ -2252,22 +2263,36 @@ def _validate_build_storage_observation(
     ):
         raise WatchError("foundation no-cache build storage observation is invalid")
     _evidence_timestamp(value["observed_at"], label="foundation no-cache build storage observation")
-    if available_bytes < BUILD_WSL_HOST_MIN_AVAILABLE_BYTES:
+    required_available_bytes = (
+        BUILD_HOST_STORAGE_POLICY_REQUIREMENTS.get(policy)
+        if isinstance(policy, str)
+        else None
+    )
+    if required_available_bytes is None:
+        raise WatchError("foundation no-cache build storage policy is invalid")
+    if available_bytes < required_available_bytes:
         raise WatchError(
-            "foundation no-cache build storage observation falls below the 64 GiB minimum"
+            "foundation no-cache build storage observation has insufficient free space"
         )
     return dict(value)
 
 
 def _validate_build_storage_preflight(value: Any, *, probe_sha256: str) -> dict[str, Any]:
+    policy = value.get("policy") if isinstance(value, dict) else None
+    required_available_bytes = (
+        BUILD_HOST_STORAGE_POLICY_REQUIREMENTS.get(policy)
+        if isinstance(policy, str)
+        else None
+    )
     if (
         not isinstance(value, dict)
         or set(value) != _BUILD_STORAGE_PREFLIGHT_KEYS
         or type(value.get("schema_version")) is not int
         or value["schema_version"] != 1
         or not isinstance(value.get("applicable"), bool)
-        or value.get("policy") != BUILD_HOST_STORAGE_POLICY
-        or value.get("required_available_bytes") != BUILD_WSL_HOST_MIN_AVAILABLE_BYTES
+        or required_available_bytes is None
+        or type(value.get("required_available_bytes")) is not int
+        or value["required_available_bytes"] != required_available_bytes
         or value.get("passed") is not True
     ):
         raise WatchError("foundation no-cache build storage preflight schema is invalid")
@@ -2331,6 +2356,7 @@ def _validate_build_storage_preflight(value: Any, *, probe_sha256: str) -> dict[
             observation,
             boundary=boundary,
             probe_sha256=probe_sha256,
+            policy=policy,
         )
         for observation, boundary in zip(
             value["observations"], BUILD_HOST_STORAGE_BOUNDARIES, strict=True
@@ -6899,7 +6925,7 @@ def _scope_signal(
     completed = _systemctl(
         unit,
         "kill",
-        "--kill-whom=all",
+        "--kill-who=all",
         f"--signal={requested}",
         environment=environment,
     )
@@ -8908,6 +8934,26 @@ def _create_scope_root(
         raise WatchError("cannot publish durable acquisition scope root") from error
 
 
+def _systemd_scope_expansion_args() -> tuple[str, ...]:
+    """Keep scope command arguments literal across systemd versions."""
+    try:
+        result = subprocess.run(
+            ("/usr/bin/systemd-run", "--version"),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=3,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise WatchError("cannot establish systemd-run argument semantics") from error
+    match = re.match(r"^systemd ([0-9]+)(?:[ \n]|$)", result.stdout)
+    if result.returncode != 0 or match is None:
+        raise WatchError("cannot establish systemd-run argument semantics")
+    # Before 254, systemd-run did not offer the switch and scope argv was
+    # literal by default.  Use the explicit policy where the switch exists.
+    return ("--expand-environment=no",) if int(match[1]) >= 254 else ()
+
+
 def _scope_completed(
     command: Sequence[str],
     *,
@@ -8920,6 +8966,7 @@ def _scope_completed(
 ) -> subprocess.CompletedProcess[str]:
     runtime = _scope_command_runtime(command)
     _validate_lock_identity(state_root / "WATCH.lock", authority_fd)
+    expansion_args = _systemd_scope_expansion_args()
     token = secrets.token_hex(16)
     unit = f"qcsd-class-watch-{token}.scope"
     environment = _safe_host_environment(env)
@@ -8962,7 +9009,7 @@ def _scope_completed(
         "--scope",
         "--collect",
         "--quiet",
-        "--expand-environment=no",
+        *expansion_args,
         f"--unit={unit}",
         "--property=KillMode=control-group",
         f"--property=KillSignal={kill_signal}",

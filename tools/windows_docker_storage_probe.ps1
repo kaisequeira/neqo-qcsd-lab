@@ -11,18 +11,29 @@ function Get-CanonicalDataVhd {
     $locationSource = $null
     $candidatePaths = @()
     $registrationCandidate = $null
+    $registrationSource = $null
 
     $lxssRoot = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss"
-    $dataRegistrations = @()
+    $registrations = @()
     if (Test-Path -LiteralPath $lxssRoot) {
-        $dataRegistrations = @(
+        $registrations = @(
             Get-ChildItem -LiteralPath $lxssRoot |
-                ForEach-Object { Get-ItemProperty -LiteralPath $_.PSPath } |
-                Where-Object { $_.DistributionName -eq "docker-desktop-data" }
+                ForEach-Object { Get-ItemProperty -LiteralPath $_.PSPath }
         )
     }
+    $dataRegistrations = @(
+        $registrations |
+            Where-Object { $_.DistributionName -eq "docker-desktop-data" }
+    )
+    $desktopRegistrations = @(
+        $registrations |
+            Where-Object { $_.DistributionName -eq "docker-desktop" }
+    )
     if ($dataRegistrations.Count -gt 1) {
         throw "multiple docker-desktop-data WSL registrations were found"
+    }
+    if ($desktopRegistrations.Count -gt 1) {
+        throw "multiple docker-desktop WSL registrations were found"
     }
     if ($dataRegistrations.Count -eq 1) {
         $registration = $dataRegistrations[0]
@@ -52,6 +63,61 @@ function Get-CanonicalDataVhd {
             throw "the docker-desktop-data WSL VHD filename is invalid"
         }
         $registrationCandidate = Join-Path $basePath $vhdFileName
+        $registrationSource = "wsl-lxss-docker-desktop-data"
+    }
+    elseif ($desktopRegistrations.Count -eq 1) {
+        # This Docker Desktop layout registers its engine under main and stores
+        # the data disk in the sibling disk directory.
+        $registration = $desktopRegistrations[0]
+        $basePath = [Environment]::ExpandEnvironmentVariables(
+            [string]$registration.BasePath
+        )
+        if ($basePath.StartsWith("\\?\")) {
+            $basePath = $basePath.Substring(4)
+        }
+        if (-not [System.IO.Path]::IsPathRooted($basePath)) {
+            throw "the docker-desktop WSL BasePath is not absolute"
+        }
+        $basePath = [System.IO.Path]::GetFullPath($basePath).TrimEnd("\")
+        if (
+            [string]::Equals(
+                [System.IO.Path]::GetFileName($basePath),
+                "main",
+                [System.StringComparison]::OrdinalIgnoreCase
+            )
+        ) {
+            $vhdFileNameProperty = $registration.PSObject.Properties["VhdFileName"]
+            $vhdFileName = if ($null -eq $vhdFileNameProperty) {
+                ""
+            }
+            else {
+                [string]$vhdFileNameProperty.Value
+            }
+            if ([string]::IsNullOrWhiteSpace($vhdFileName)) {
+                $vhdFileName = "ext4.vhdx"
+            }
+            if (
+                [System.IO.Path]::GetFileName($vhdFileName) -ne $vhdFileName -or
+                [System.IO.Path]::GetExtension($vhdFileName) -ne ".vhdx"
+            ) {
+                throw "the docker-desktop WSL VHD filename is invalid"
+            }
+            $mainVhdPath = Join-Path $basePath $vhdFileName
+            if (-not (Test-Path -LiteralPath $mainVhdPath -PathType Leaf)) {
+                throw "the registered docker-desktop WSL VHDX is missing"
+            }
+            $mainVhd = Get-Item -Force -LiteralPath $mainVhdPath
+            if (
+                $mainVhd.PSIsContainer -or
+                $mainVhd.Length -le 0 -or
+                ($mainVhd.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+            ) {
+                throw "the registered docker-desktop WSL VHDX is not a regular file"
+            }
+            $dataRoot = [System.IO.Path]::GetDirectoryName($basePath)
+            $registrationCandidate = Join-Path $dataRoot "disk\docker_data.vhdx"
+            $registrationSource = "wsl-lxss-docker-desktop-sibling-disk"
+        }
     }
 
     $settingsStore = Join-Path $env:APPDATA "Docker\settings-store.json"
@@ -143,7 +209,7 @@ function Get-CanonicalDataVhd {
             }
         }
         $candidatePaths = @($registrationCandidate)
-        $locationSource = "wsl-lxss-docker-desktop-data"
+        $locationSource = $registrationSource
     }
     elseif ($settingsCandidates.Count -gt 0) {
         $candidatePaths = $settingsCandidates
@@ -201,10 +267,24 @@ $driveLetter = if ($null -eq $volume.DriveLetter) {
 else {
     [string]$volume.DriveLetter
 }
+$sha256 = [System.Security.Cryptography.SHA256]::Create()
+try {
+    $probeStream = [System.IO.File]::OpenRead($PSCommandPath)
+    try {
+        $probeHashBytes = $sha256.ComputeHash($probeStream)
+    }
+    finally {
+        $probeStream.Dispose()
+    }
+}
+finally {
+    $sha256.Dispose()
+}
+$probeHash = [System.BitConverter]::ToString($probeHashBytes).Replace("-", "").ToLowerInvariant()
 $observation = [ordered]@{
     schema_version = 1
     probe = "powershell-get-volume-docker-data-vhdx-v1"
-    probe_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $PSCommandPath).Hash.ToLowerInvariant()
+    probe_sha256 = $probeHash
     boundary = $Boundary
     observed_at = [DateTimeOffset]::UtcNow.ToString("o")
     location_source = $locationSource

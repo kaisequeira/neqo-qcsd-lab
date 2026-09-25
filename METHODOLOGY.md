@@ -158,11 +158,18 @@ Schemas 1–4 remain historical readers, including schema 2's former exact
 The current full-window policy
 can actively occupy roughly 5/20, or 25%, of one CPU while BuFLO is running.
 That implementation cost is therefore included in client CPU and wakeup
-reporting. The measured client is pinned to CPU 10 under `SCHED_RR` priority 1,
-with collection sidecars confined away from that CPU; the receipt explicitly
-states that this is a container affinity partition rather than physical host
-CPU isolation. Live zero-miss gates remain authoritative for residual host,
-hypervisor, and interrupt jitter.
+reporting. The measured client is pinned to a selected logical CPU under
+`SCHED_RR` priority 1. Collection sidecars, the measured client, and the
+orchestrator/ETF helper occupy three separate logical CPU partitions. The
+selected CPUs and affinity partition are recorded in the receipt; this is
+container affinity rather than physical host CPU isolation. Live zero-miss
+gates remain authoritative for residual host, hypervisor, and interrupt jitter.
+For current captures, the launcher observes the actual CPU IDs available
+inside the pinned collection image. It assigns the two highest observed IDs
+to the measured client and helper, and the remaining IDs to sidecars. At least
+three available IDs are required; IDs need not start at zero or be contiguous.
+The version 4 scheduler receipt binds the full observed set and the selected
+roles, and the collection entrypoint verifies its exact two-CPU affinity.
 
 ## Observer and capture boundary
 

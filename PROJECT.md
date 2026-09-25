@@ -1,6 +1,6 @@
 # QCSD thesis project ledger
 
-Checkpoint: **25 September 2026, Australia/Sydney (AEST, UTC+10)**.
+Checkpoint: **26 September 2026, Australia/Sydney (AEST, UTC+10)**.
 This is the current research ledger. The [history](docs/PROJECT-HISTORY.md)
 preserves the development record and the [class-study runbook](docs/CLASS-STUDY.md)
 defines continuation. The [operator README](README.md) covers normal Lab use.
@@ -28,18 +28,23 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-Migration source support and the portable project record have been prepared.
-The next milestone is verified desktop restoration and native qualification;
-the private handoff records final publication and transfer status. Future
-collection moves from the laptop to native x64 Ubuntu under WSL2. The laptop
-retains historical raw campaigns; the desktop receives the sealed classifier
-handoff, all local artifacts, source and research documents. See the
-[evidence index](docs/EVIDENCE-INDEX.md) for retention boundaries.
+Desktop restoration has been verified from the private migration transfer.
+All 29 evidence parts, the support part, both restored file inventories and
+the sealed classifier handoff passed checksum and count checks on the desktop.
+The published Lab and Rust commits and the final Lab bundle were verified.
+The laptop retains historical raw campaigns; see the
+[evidence index](docs/EVIDENCE-INDEX.md) for retention boundaries. Docker and
+WSL data now reside on D:. The desktop's user systemd/cgroup manager and
+Docker data backing volume passed host checks. Portable CPU assignment uses
+the CPU IDs observed inside the collection image, and the required focused
+source suite passed 712 tests. A fresh native image and live qualification
+remain the next milestone. No desktop image, browser gate or scientific
+collection has been accepted.
 
-| Checkpoint identity | Value before migration edits |
+| Checkpoint identity | Published desktop migration baseline |
 |---|---|
-| Lab branch | `research-readiness` |
-| Lab commit | `ce3a844315912ae5f85f2dae265fa31f76f691ea` |
+| Lab branch | `main` |
+| Lab commit | `877cb9a10e8e54090f3e89e1bd680593d09a2a3d` |
 | Rust branch | `main` |
 | Rust commit and Lab Gitlink | `b69398ff3085d852f95f8d435938b6d5e8976482` |
 | Source cleanliness | Both clean at the checkpoint |
@@ -144,8 +149,9 @@ the matching architecture. Historical ARM identities remain unchanged. Local
 architecture and provenance tests have passed; a native desktop image, timing
 probes and live qualification have not been executed.
 
-1. Verify the migration bundle and protected handoff; clone the published Lab
-   branch and exact Rust Gitlink on the desktop.
+1. Retain the verified migration manifests, protected handoff and exact
+   published source baseline. Recheck the private desktop receipt after any
+   evidence relocation.
 2. Recheck the implemented native amd64 browser profile on the desktop, including
    pinned archive, executable and distribution identities. Preserve historical
    ARM64 verification. Native desktop evidence is still pending.

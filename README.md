@@ -21,14 +21,24 @@ adaptations. Only a verifying final attestation permits their promotion.
 Use Linux; the desktop continuation targets Ubuntu under Windows x64 WSL2.
 Keep the checkout in the Linux filesystem. Required tools are Git, Python
 3.11+, `uv`, and Docker with user systemd/cgroup v2 available. Docker 29.0.1
-is the recorded laptop baseline. The existing scheduler requires at least
-12 visible CPUs, including CPU indices 10 and 11. Prevent sleep and clock
-changes during collection.
+is the recorded laptop baseline. The `uv` project environment supplies Python
+3.11+; Ubuntu 22.04's system Python 3.10 can run the isolated host proof tools.
+Evidentiary capture needs at least three
+Docker-visible logical CPUs: one for collection sidecars, one for the measured
+client, and one for the orchestrator and ETF helper. The scheduler selects and
+records this affinity partition from available CPUs. Its isolation and live
+timing checks still determine whether a host can produce valid evidence.
+The launcher probes the CPU IDs available inside the pinned collection image
+and uses the sorted observed IDs, including offset or sparse sets. It records
+that list in the environment and prelaunch partition receipts and verifies the
+measured container's exact two-CPU affinity before execution.
+Prevent sleep and clock changes during collection.
 
-Fresh builds require at least 64 GiB free on Docker's actual backing volume.
-Later capture admission independently requires three times the projected
-remaining evidence storage. Native architecture profiles, browser provenance,
-network capabilities and timing must pass on each new collection host.
+Check that Docker's actual backing volume is healthy and has positive free
+space before a fresh build; the build preflight records its capacity. Later
+capture admission independently requires three times the projected remaining
+evidence storage. Native architecture profiles, browser provenance, network
+capabilities and timing must pass on each new collection host.
 
 From a fresh clone:
 

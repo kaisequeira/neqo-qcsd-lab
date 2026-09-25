@@ -27,6 +27,7 @@ import signal
 import socket
 import stat
 import struct
+import subprocess
 import sys
 import time
 from typing import Callable, NoReturn, Sequence
@@ -97,8 +98,14 @@ _UNSAFE_ENVIRONMENT = frozenset(
     }
 )
 _SAFE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-_POWERSHELL_PATH = Path(
-    "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+_WSLPATH_PATH = Path("/usr/bin/wslpath")
+_WINDOWS_POWERSHELL_PATH = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+_WINDOWS_POWERSHELL_PARTS = (
+    "Windows",
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
 )
 HANDSHAKE_FIELDS = frozenset(
     {
@@ -3634,6 +3641,69 @@ def _verify_runtime_environment(expected: RuntimeEnvironmentIdentity) -> None:
             _fail("fixed runtime path identity changed")
 
 
+def _trusted_wsl_powershell_path() -> Path | None:
+    """Resolve the Windows system executable through WSL's drive mapping."""
+
+    if not (
+        "microsoft" in os.uname().release.lower()
+        or Path("/run/WSL").is_dir()
+    ) or not _WSLPATH_PATH.exists():
+        return None
+    try:
+        mapper = _WSLPATH_PATH.resolve(strict=True)
+        mapper_entry = _WSLPATH_PATH.lstat()
+        mapper_value = mapper.stat(follow_symlinks=False)
+    except OSError as error:
+        raise GuardianError("cannot validate the WSL path mapper") from error
+    if (
+        mapper_entry.st_uid != 0
+        or not stat.S_ISREG(mapper_value.st_mode)
+        or mapper_value.st_uid != 0
+        or stat.S_IMODE(mapper_value.st_mode) & 0o022
+        or not stat.S_IMODE(mapper_value.st_mode) & 0o111
+    ):
+        _fail("WSL path mapper has an unsafe identity")
+    try:
+        result = subprocess.run(
+            [str(_WSLPATH_PATH), "-u", _WINDOWS_POWERSHELL_PATH],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+            env={"PATH": _SAFE_PATH, "LANG": "C", "LC_ALL": "C"},
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise GuardianError("cannot resolve the WSL PowerShell path") from error
+    raw_path = result.stdout.rstrip("\n")
+    path = Path(raw_path)
+    if (
+        result.returncode != 0
+        or not raw_path
+        or "\n" in raw_path
+        or "\0" in raw_path
+        or not path.is_absolute()
+        or path.parts[-len(_WINDOWS_POWERSHELL_PARTS) :] != _WINDOWS_POWERSHELL_PARTS
+    ):
+        _fail("WSL path mapper returned an invalid PowerShell path")
+    if not path.exists():
+        return None
+    try:
+        canonical = path.resolve(strict=True)
+        value = path.stat(follow_symlinks=False)
+    except OSError as error:
+        raise GuardianError("cannot validate the WSL PowerShell path") from error
+    if (
+        canonical != path
+        or path.is_symlink()
+        or not stat.S_ISREG(value.st_mode)
+        or value.st_uid not in {0, os.getuid()}
+        or stat.S_IMODE(value.st_mode) & 0o022
+        or not stat.S_IMODE(value.st_mode) & 0o111
+    ):
+        _fail("WSL PowerShell path has an unsafe identity")
+    return path
+
+
 def _sanitized_environment(
     runtime: RuntimeEnvironmentIdentity,
 ) -> dict[str, str]:
@@ -3658,24 +3728,9 @@ def _sanitized_environment(
             continue
         environment[key] = value
     safe_path = _SAFE_PATH
-    if _POWERSHELL_PATH.exists():
-        try:
-            canonical = _POWERSHELL_PATH.resolve(strict=True)
-            value = _POWERSHELL_PATH.stat(follow_symlinks=False)
-        except OSError as error:
-            raise GuardianError(
-                "cannot validate the fixed WSL PowerShell path"
-            ) from error
-        if (
-            canonical != _POWERSHELL_PATH
-            or _POWERSHELL_PATH.is_symlink()
-            or not stat.S_ISREG(value.st_mode)
-            or value.st_uid not in {0, os.getuid()}
-            or stat.S_IMODE(value.st_mode) & 0o022
-            or not stat.S_IMODE(value.st_mode) & 0o111
-        ):
-            _fail("fixed WSL PowerShell path has an unsafe identity")
-        safe_path += f":{_POWERSHELL_PATH.parent}"
+    powershell_path = _trusted_wsl_powershell_path()
+    if powershell_path is not None:
+        safe_path += f":{powershell_path.parent}"
     environment["PATH"] = safe_path
     environment["LANG"] = "C"
     environment["LC_ALL"] = "C"

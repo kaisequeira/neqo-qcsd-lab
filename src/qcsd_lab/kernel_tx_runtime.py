@@ -465,7 +465,11 @@ def kernel_tx_lab_runtime_required(*, defense_kind: str, scheduler_contract: str
 
     return bool(
         defense_kind == "buflo"
-        and scheduler_contract == "qcsd-client-rr1-cpu10-etf-helper-cpu11-v1"
+        and scheduler_contract in {
+            "qcsd-client-rr1-cpu10-etf-helper-cpu11-v1",
+            "qcsd-client-rr1-portable-etf-helper-v3",
+            "qcsd-client-rr1-portable-etf-helper-v4",
+        }
     )
 
 

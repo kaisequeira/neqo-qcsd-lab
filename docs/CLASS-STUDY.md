@@ -1,6 +1,6 @@
 # Extended-class study: acquisition and continuation
 
-Current protocol summary: 25 September 2026, Australia/Sydney. The
+Current protocol summary: 26 September 2026, Australia/Sydney. The
 [project ledger](../PROJECT.md) records progress; this document records the
 next work and its purpose. The checked-in
 [study contract](../config/class-study/v1/study.json), implemented validators
@@ -36,9 +36,9 @@ repeating expensive qualification. They do not replace mandatory gates.
 
 | Order | Stage | Purpose and exit condition |
 |---:|---|---|
-| 1 | Focused local tests and synthetic receipt/consumer replay | Check architecture selection, schemas, acquisition rules and lifecycle handling; reproduce known failures cheaply |
-| 2 | Native development image, host/ETF/veth and focused browser/teardown diagnostics | Verify timing/network support and known late-failing behaviour before the full browser gate; explicitly non-evidentiary |
-| 3 | Clean source freeze, unused cohort, fresh no-cache build and pinned-CDP | Bind exact source, images, browser executable/distribution and host |
+| 1 | Focused host-only checks and synthetic receipt/consumer replay | Check architecture selection, schemas, acquisition rules, lifecycle handling and host prerequisites cheaply |
+| 2 | Clean source freeze, allocator, unused cohort and registered no-cache build | Bind exact source and collection image through `./qcsd-lab build --cohort-version N` |
+| 3 | ETF/veth diagnostics, pinned-CDP and focused browser/teardown checks using the registered image | Verify timing/network support, browser identity and known late-failing behaviour before the full browser gate |
 | 4 | 110-vector browser-egress gate and acquisition authority | Packet-observed browser coverage plus acquisition-correctness evidence authorise public acquisition |
 | 5 | Acquisition and genuine 30-second/24-hour/72-hour observations | Admit the first 24 eligible candidates per stratum; freeze 120-class pilot selection and assembly |
 | 6 | Reference, timing stress, 18 regression, code and 160 controlled samples; foundation | Authorise all class-study capture roles, including fitting, on the same source/build/acquisition lineage |
@@ -68,11 +68,21 @@ must bind the pinned Chromium/Playwright version and verified archive,
 executable and distribution hashes. Native desktop qualification is pending.
 
 Before an evidentiary build, verify user systemd/cgroup v2, Docker access,
-network namespace and traffic-control capability, clock stability, and at least
-12 Docker-visible CPUs including indices 10/11. Keep the checkout on the
-Linux filesystem. Require 64 GiB free on Docker's actual backing volume.
-Disable sleep during collection. Run the cheap diagnostics first, repairing
-client-side defects before source freeze.
+network namespace and traffic-control capability, and clock stability.
+Before capture, verify at least three Docker-visible logical CPUs. The launcher
+assigns separate CPUs
+to collection sidecars, the measured client, and the orchestrator/ETF helper,
+then records the selected partition. Timing and isolation gates still decide
+whether a host can produce valid evidence. Keep the checkout on the Linux
+filesystem.
+The launcher probes the CPU IDs available inside the pinned collection image
+and assigns the last two observed IDs to the client and helper. All other
+observed IDs serve sidecars, so offset and sparse sets retain three separate
+partitions. The full ID list is recorded in version 4 scheduler receipts.
+Check that Docker's actual backing volume is healthy and has positive free
+space, then inspect the build preflight's capacity observation. Disable sleep
+during collection. Run the cheap diagnostics first, repairing client-side
+defects before source freeze.
 
 Begin with these read-only/development commands while no campaign is live:
 

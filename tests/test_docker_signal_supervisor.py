@@ -941,8 +941,10 @@ _qcsd_lifecycle_remove_root() {
 # remains observable through the fixture environment. Production's leased
 # native service controller is exercised by the guardian integration suite.
 _qcsd_docker_api_service_with_timeout() {
-  local duration="${1:?}" duration_whole outer_duration unit variable
-  local -a environment_arguments=() command=()
+  local duration="${1:?}" duration_whole outer_duration unit variable argument
+  local manager_version runner_version manager_major runner_major
+  local -a environment_arguments=() command=() encoded_command=()
+  local -a expansion_option=() exit_type_option=()
   shift
   command=("$@")
   case "${command[0]:-}" in
@@ -958,13 +960,30 @@ _qcsd_docker_api_service_with_timeout() {
     return 125
   fi
   unit="qcsd-docker-api-$(printf '%032x' "$RANDOM$RANDOM").service"
+  manager_version="$(/usr/bin/systemctl --user show --property=Version --value --no-pager)" || return 125
+  runner_version="$(/usr/bin/systemd-run --version)" || return 125
+  [[ "${manager_version}" =~ ^([0-9]+)([.]|[-+~]|$) ]] || return 125
+  manager_major="${BASH_REMATCH[1]}"
+  [[ "${runner_version}" =~ ^systemd\ ([0-9]+)[[:space:]] ]] || return 125
+  runner_major="${BASH_REMATCH[1]}"
+  if (( manager_major >= 250 )); then
+    exit_type_option=(--property=ExitType=cgroup)
+  fi
+  if (( runner_major >= 254 && manager_major >= 254 )); then
+    expansion_option=(--expand-environment=no)
+  else
+    for argument in "${command[@]}"; do
+      encoded_command+=("${argument//\$/\$\$}")
+    done
+    command=("${encoded_command[@]}")
+  fi
   while IFS= read -r variable; do
     environment_arguments+=("--setenv=${variable}=${!variable}")
   done < <(compgen -e)
   setsid timeout --signal=KILL --kill-after=1 "${outer_duration}s" \
     /usr/bin/systemd-run --user --wait --pipe --collect --quiet --same-dir \
-      --expand-environment=no --service-type=exec --unit="${unit}" \
-      --property=ExitType=cgroup --property=KillMode=control-group \
+      "${expansion_option[@]}" --service-type=exec --unit="${unit}" \
+      "${exit_type_option[@]}" --property=KillMode=control-group \
       --property=KillSignal=SIGKILL --property=TimeoutStopSec=1s \
       --property="RuntimeMaxSec=${duration}s" \
       "${environment_arguments[@]}" -- "${command[@]}"
@@ -1064,7 +1083,7 @@ _qcsd_run_wait_ready_hook() {
 
     for unit in sorted(owned_units):
         for arguments in (
-            ["kill", "--kill-whom=all", "--signal=KILL", "--", unit],
+            ["kill", "--kill-who=all", "--signal=KILL", "--", unit],
             ["stop", "--", unit],
             ["reset-failed", "--", unit],
         ):

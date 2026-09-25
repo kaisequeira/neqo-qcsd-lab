@@ -378,6 +378,7 @@ def _valid_supervised_bundle(
         "sender_name": f"qcsd-etf-probe-{token}-sender",
         "network_id": "a" * 64,
         "receiver_id": "b" * 64,
+        "available_cpus": "[0,1,2,3,4,5,6,7,8,9,10,11]",
         "receiver_cpu": "9",
         "main_cpu": "10",
         "helper_cpu": "11",
@@ -813,6 +814,7 @@ def test_probe_receipt_preserves_frozen_schema_one_binding(tmp_path: Path) -> No
     etf_probe.finalize_supervised_bundle(request, bundle)
     historical = copy.deepcopy(etf_probe.validate_probe_receipt(current_path))
     historical["schema_version"] = etf_probe.HISTORICAL_SCHEMA_VERSION
+    historical.pop("cpu_observation")
     historical["configuration"]["etf_delta_ns"] = etf_probe.HISTORICAL_ETF_DELTA_NS
     for name in (
         "scm_txtime_offset_ns",
@@ -835,6 +837,7 @@ def test_probe_receipt_preserves_frozen_schema_two_binding(tmp_path: Path) -> No
     etf_probe.finalize_supervised_bundle(request, bundle)
     previous = copy.deepcopy(etf_probe.validate_probe_receipt(current_path))
     previous["schema_version"] = etf_probe.PREVIOUS_SCHEMA_VERSION
+    previous.pop("cpu_observation")
     previous["configuration"]["etf_delta_ns"] = etf_probe.PREVIOUS_ETF_DELTA_NS
     for name in (
         "scm_txtime_offset_ns",
@@ -851,6 +854,50 @@ def test_probe_receipt_preserves_frozen_schema_two_binding(tmp_path: Path) -> No
     previous_path.chmod(0o444)
 
     assert etf_probe.validate_probe_receipt(previous_path) == previous
+
+
+def test_probe_receipt_preserves_frozen_schema_three_binding(tmp_path: Path) -> None:
+    request, bundle, current_path = _valid_supervised_bundle(tmp_path)
+    etf_probe.finalize_supervised_bundle(request, bundle)
+    previous = copy.deepcopy(etf_probe.validate_probe_receipt(current_path))
+    previous["schema_version"] = etf_probe.SCHEMA_VERSION
+    previous.pop("cpu_observation")
+    previous["payload_sha256"] = etf_probe._payload_sha256(previous)
+    previous_path = tmp_path / "schema-three-probe.json"
+    previous_path.write_bytes(etf_probe._canonical_json(previous))
+    previous_path.chmod(0o444)
+
+    assert etf_probe.validate_probe_receipt(previous_path) == previous
+
+
+def test_probe_receipt_accepts_sparse_observed_cpu_ids(tmp_path: Path) -> None:
+    request, bundle, destination = _valid_supervised_bundle(tmp_path)
+    state_path = bundle / "lifecycle.state"
+    state = dict(line.split("=", 1) for line in state_path.read_text().splitlines())
+    state.update(
+        available_cpus="[4,8,25,30,47]",
+        receiver_cpu="25",
+        main_cpu="30",
+        helper_cpu="47",
+    )
+    state_path.write_text(
+        "".join(f"{key}={value}\n" for key, value in state.items()), encoding="ascii"
+    )
+    sender_path = bundle / "output" / "sender.json"
+    sender = json.loads(sender_path.read_text(encoding="utf-8"))
+    sender["configuration"]["main_cpu"] = 30
+    sender["configuration"]["helper_cpu"] = 47
+    sender["positive"]["main_affinity"] = [30]
+    sender["positive"]["ready"]["affinity"] = [47]
+    _write_json(sender_path, sender)
+
+    _path, _digest, passed = etf_probe.finalize_supervised_bundle(request, bundle)
+    receipt = etf_probe.validate_probe_receipt(destination)
+
+    assert passed is True
+    assert receipt["schema_version"] == etf_probe.PORTABLE_RECEIPT_SCHEMA_VERSION
+    assert receipt["cpu_observation"] == [4, 8, 25, 30, 47]
+    assert receipt["cpu_assignment"] == {"receiver": 25, "main": 30, "timed_helper": 47}
 
 
 @pytest.mark.parametrize(
@@ -878,6 +925,7 @@ def test_probe_receipt_rejects_schema_relabelling_and_cross_pairs(
         receipt["schema_version"] = etf_probe.HISTORICAL_SCHEMA_VERSION
     elif tamper == "outer-one-nested-two":
         receipt["schema_version"] = etf_probe.HISTORICAL_SCHEMA_VERSION
+        receipt.pop("cpu_observation")
         receipt["configuration"]["etf_delta_ns"] = etf_probe.HISTORICAL_ETF_DELTA_NS
         for name in (
             "scm_txtime_offset_ns",
@@ -964,6 +1012,11 @@ def test_launcher_composes_probe_through_durable_helpers_and_latches_signal() ->
     assert "qcsd_create_docker_network QCSD_DOCKER_IDS_ETF_NETWORKS" in branch
     assert "qcsd_run_detached_docker QCSD_DOCKER_IDS_ETF_RECEIVERS" in branch
     assert "qcsd_run_attached_docker" in branch
+    assert "qcsd_capture_attached_docker_output QCSD_DOCKER_OUTPUT_ETF_CPU_IDS" in branch
+    assert '--entrypoint /usr/bin/python3 "${etf_probe_image_id}" -I -c' in branch
+    assert "os.sched_getaffinity(0)" in branch
+    assert "'available_cpus=%s\\n' \"${etf_probe_available_cpus_json}\"" in branch
+    assert "etf_probe_cpu_count - 3" not in branch
     assert "qcsd_retire_docker_handoff run" in branch
     assert "qcsd_retire_docker_handoff network" in branch
     assert '129|130|131|143)' in branch

@@ -70,6 +70,20 @@ _qcsd_require_user_cgroup_manager() {
     [[ "$(stat -fc '%T' /sys/fs/cgroup 2>/dev/null)" == "cgroup2fs" ]]
 }
 
+# The switch was added in systemd 254.  Older systemd-run versions preserve
+# scope argv literally by default; newer versions receive the explicit policy
+# so a future default change cannot expand a Docker argument containing "$".
+_qcsd_systemd_scope_expansion_args() {
+  local -n options_ref="$1"
+  local version
+  version="$(/usr/bin/systemd-run --version 2>/dev/null)" || return 1
+  [[ "${version}" =~ ^systemd\ ([0-9]+)([[:space:]]|$) ]] || return 1
+  options_ref=()
+  if (( BASH_REMATCH[1] >= 254 )); then
+    options_ref=(--expand-environment=no)
+  fi
+}
+
 _qcsd_restore_signal_trap() {
   local saved="$1"
   local signal="$2"
@@ -1424,15 +1438,15 @@ _qcsd_kill_user_scope() {
   [[ "${requested}" == "INT" || "${requested}" == "KILL" ]] || return 1
   setsid timeout --signal=KILL \
     "${_QCSD_DOCKER_SCOPE_API_TIMEOUT_SECONDS}s" \
-    systemctl --user kill --kill-whom=all --signal="${requested}" \
+    systemctl --user kill --kill-who=all --signal="${requested}" \
       "${unit}" >/dev/null 2>&1
 }
 
-# Execute one Docker client operation in a transient user service whose
-# lifetime is the entire cgroup, not merely the direct CLI PID.  ExitType=cgroup
-# means a daemonising/setsid descendant cannot turn a completed parent into a
-# successful call, while RuntimeMaxSec and the outer client bound guarantee a
-# finite return even when that descendant retains stdout or stderr.
+# Execute one Docker client operation in a transient user service.  systemd
+# 250+ keeps the service alive for its cgroup; older managers are covered by
+# the native wrapper's descendant census and the watcher's cgroup-empty proof.
+# RuntimeMaxSec and the outer client bound guarantee a finite return even when
+# a descendant retains stdout or stderr.
 _qcsd_docker_api_service_with_timeout() {
   local duration="$1"
   shift
@@ -2072,6 +2086,11 @@ _qcsd_run_docker_supervised() {
     echo "Docker supervisor cannot bind durable lifecycle state" >&2
     return 1
   fi
+  local -a systemd_scope_expansion_option=()
+  if ! _qcsd_systemd_scope_expansion_args systemd_scope_expansion_option; then
+    echo "Docker supervisor cannot establish systemd-run argument semantics" >&2
+    return 1
+  fi
 
   local caller_had_errexit=0
   if [[ "$-" == *e* ]]; then
@@ -2340,7 +2359,8 @@ exec docker --host "${host}" "$@"
     )
   fi
   run_exec_command=(
-    systemd-run --user --scope --collect --quiet --expand-environment=no
+    systemd-run --user --scope --collect --quiet
+    "${systemd_scope_expansion_option[@]}"
     --unit="${run_scope_unit}" --property=KillMode=control-group
     --property=TimeoutStopSec=10s -- /bin/bash -c '
 status_path=$1
@@ -2372,7 +2392,7 @@ for fd_path in /proc/${BASHPID}/fd/*; do
   case "${fd}" in 0|1|2|"${birth_fd}") continue ;; *[!0-9]*|"") exit 125 ;; esac
   eval "exec ${fd}>&-"
 done
-stat_line=$(<"/proc/${BASHPID}/stat") || exit 125
+IFS= read -r stat_line <"/proc/${BASHPID}/stat" || exit 125
 stat_tail=${stat_line##*) }
 read -r -a stat_fields <<<"${stat_tail}"
 (( ${#stat_fields[@]} >= 20 )) || exit 125
@@ -2415,7 +2435,7 @@ for fd_path in /proc/${BASHPID}/fd/*; do
   case "${fd}" in 0|1|2|"${birth_fd}") continue ;; *[!0-9]*|"") exit 125 ;; esac
   eval "exec ${fd}>&-"
 done
-stat_line=$(<"/proc/${BASHPID}/stat") || exit 125
+IFS= read -r stat_line <"/proc/${BASHPID}/stat" || exit 125
 stat_tail=${stat_line##*) }
 read -r -a stat_fields <<<"${stat_tail}"
 (( ${#stat_fields[@]} >= 20 )) || exit 125
@@ -3459,6 +3479,12 @@ qcsd_run_docker_build() {
     (( caller_had_errexit )) && set -e
     return 1
   fi
+  local -a systemd_scope_expansion_option=()
+  if ! _qcsd_systemd_scope_expansion_args systemd_scope_expansion_option; then
+    echo "Docker build supervisor cannot establish systemd-run argument semantics" >&2
+    (( caller_had_errexit )) && set -e
+    return 1
+  fi
   if ! command -v systemd-run >/dev/null 2>&1 ||
      ! command -v systemctl >/dev/null 2>&1 ||
      [[ "$(stat -fc '%T' /sys/fs/cgroup 2>/dev/null)" != "cgroup2fs" ]]; then
@@ -3632,7 +3658,8 @@ exec docker --host "${host}" "$@"
     )
   fi
   build_exec_command=(
-    systemd-run --user --scope --collect --quiet --expand-environment=no
+    systemd-run --user --scope --collect --quiet
+    "${systemd_scope_expansion_option[@]}"
     --unit="${build_scope_unit}" --property=KillMode=control-group
     --property=TimeoutStopSec=10s -- /bin/bash -c '
 status_path=$1
@@ -3663,7 +3690,7 @@ for fd_path in /proc/${BASHPID}/fd/*; do
   case "${fd}" in 0|1|2|"${birth_fd}") continue ;; *[!0-9]*|"") exit 125 ;; esac
   eval "exec ${fd}>&-"
 done
-stat_line=$(<"/proc/${BASHPID}/stat") || exit 125
+IFS= read -r stat_line <"/proc/${BASHPID}/stat" || exit 125
 stat_tail=${stat_line##*) }
 read -r -a stat_fields <<<"${stat_tail}"
 (( ${#stat_fields[@]} >= 20 )) || exit 125

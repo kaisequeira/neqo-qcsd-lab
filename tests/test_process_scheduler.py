@@ -5,12 +5,18 @@ from pathlib import Path
 
 import pytest
 
+from qcsd_lab.capture_session import _process_scheduler_receipt_valid
+from qcsd_lab.kernel_tx import _process_scheduler_valid as _kernel_process_scheduler_valid
 from qcsd_lab.process_scheduler import (
     CAPTURE_CLIENT_CPU,
+    PORTABLE_ETF_SCHEDULER_CONTRACT,
+    PORTABLE_ETF_SCHEDULER_CONTRACT_V4,
     CaptureSchedulerMonitor,
     _host_partition_valid,
+    capture_scheduler_launch_prefix,
     capture_scheduler_runtime_evidence_valid,
 )
+from tests.scheduler_fixtures import process_scheduler_receipt
 
 
 def _host_partition() -> dict:
@@ -62,6 +68,180 @@ def _host_partition_v2() -> dict:
             "host-kernel and hypervisor scheduling of the selected logical CPUs",
         ],
     }
+
+
+def _host_partition_v3(ncpu: int) -> dict:
+    client_cpu, helper_cpu = ncpu - 2, ncpu - 1
+    receipt = _host_partition_v2()
+    receipt.update(
+        schema_version=3,
+        source="docker-inspect-all-running-containers-prelaunch-v3",
+        protected_cpus=[client_cpu, helper_cpu],
+        docker_ncpu=ncpu,
+        overlapping_container_ids_by_cpu={str(client_cpu): [], str(helper_cpu): []},
+        verified_scope=(
+            "all running Docker containers at prelaunch; every container must carry the "
+            f"qcsd-lab owner label and avoid protected logical CPUs {client_cpu} and {helper_cpu}"
+        ),
+    )
+    return receipt
+
+
+def _host_partition_v4(available_cpus: list[int], ncpu: int = 8) -> dict:
+    client_cpu, helper_cpu = available_cpus[-2:]
+    receipt = _host_partition_v3(ncpu)
+    receipt.update(
+        schema_version=4,
+        source="docker-inspect-all-running-containers-prelaunch-v4",
+        available_cpus=available_cpus,
+        protected_cpus=[client_cpu, helper_cpu],
+        overlapping_container_ids_by_cpu={str(client_cpu): [], str(helper_cpu): []},
+        verified_scope=(
+            "all running Docker containers at prelaunch; every container must carry the "
+            f"qcsd-lab owner label and avoid protected logical CPUs {client_cpu} and {helper_cpu}"
+        ),
+    )
+    return receipt
+
+
+@pytest.mark.parametrize("available_cpus", [[2, 4, 7], [4, 5, 6], [0, 1, 2]])
+def test_sparse_partition_monitor_and_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, available_cpus: list[int]
+) -> None:
+    client_cpu, helper_cpu = available_cpus[-2:]
+    monkeypatch.setenv("QCSD_CAPTURE_SCHEDULER_CONTRACT", PORTABLE_ETF_SCHEDULER_CONTRACT_V4)
+    monkeypatch.setenv("QCSD_CAPTURE_CLIENT_CPU", str(client_cpu))
+    monkeypatch.setenv("QCSD_CAPTURE_ORCHESTRATOR_CPU", str(helper_cpu))
+    proc_root, cpu_stat = _fixture(tmp_path)
+    (proc_root / "stat").write_text(
+        f"cpu 1 2 3 4 5 6 7 0 0 0\ncpu{client_cpu} 1 2 3 4 5 6 7 0 0 0\n",
+        encoding="ascii",
+    )
+    monitor = CaptureSchedulerMonitor(
+        proc_root=proc_root,
+        cgroup_cpu_stat_paths=(cpu_stat,),
+        interval_us=1_000_000,
+        host_partition=_host_partition_v4(available_cpus),
+    )
+    _write_task(
+        proc_root,
+        tgid=77,
+        tid=77,
+        process_group=77,
+        cpus=str(client_cpu),
+        name="neqo-qcsd-client",
+    )
+    monitor.process_started(77)
+    evidence = monitor.finish()
+    assert evidence["schema_version"] == 4
+    assert capture_scheduler_runtime_evidence_valid(evidence)
+    altered = copy.deepcopy(evidence)
+    altered["host_partition"]["available_cpus"][-1] += 1
+    assert not capture_scheduler_runtime_evidence_valid(altered)
+
+    receipt = process_scheduler_receipt()
+    receipt.update(
+        affinity_cpus=[client_cpu],
+        cgroup_effective_cpuset=(
+            f"{client_cpu}-{helper_cpu}" if helper_cpu == client_cpu + 1
+            else f"{client_cpu},{helper_cpu}"
+        ),
+        contract=PORTABLE_ETF_SCHEDULER_CONTRACT_V4,
+    )
+    assert _process_scheduler_receipt_valid(
+        receipt,
+        expected_contract=PORTABLE_ETF_SCHEDULER_CONTRACT_V4,
+        allowed_capabilities=frozenset({"0000000000000000"}),
+    )
+    assert _kernel_process_scheduler_valid(receipt)
+    receipt["cgroup_effective_cpuset"] = f"{client_cpu},{helper_cpu},99"
+    assert not _process_scheduler_receipt_valid(
+        receipt,
+        expected_contract=PORTABLE_ETF_SCHEDULER_CONTRACT_V4,
+        allowed_capabilities=frozenset({"0000000000000000"}),
+    )
+
+
+@pytest.mark.parametrize("ncpu", [3, 8])
+def test_portable_partition_monitor_and_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ncpu: int
+) -> None:
+    client_cpu, helper_cpu = ncpu - 2, ncpu - 1
+    monkeypatch.setenv("QCSD_CAPTURE_SCHEDULER_CONTRACT", PORTABLE_ETF_SCHEDULER_CONTRACT)
+    monkeypatch.setenv("QCSD_CAPTURE_CLIENT_CPU", str(client_cpu))
+    monkeypatch.setenv("QCSD_CAPTURE_ORCHESTRATOR_CPU", str(helper_cpu))
+    proc_root, cpu_stat = _fixture(tmp_path)
+    (proc_root / "stat").write_text(
+        f"cpu 1 2 3 4 5 6 7 0 0 0\ncpu{client_cpu} 1 2 3 4 5 6 7 0 0 0\n",
+        encoding="ascii",
+    )
+    monitor = CaptureSchedulerMonitor(
+        proc_root=proc_root,
+        cgroup_cpu_stat_paths=(cpu_stat,),
+        interval_us=1_000_000,
+        host_partition=_host_partition_v3(ncpu),
+    )
+    _write_task(
+        proc_root,
+        tgid=77,
+        tid=77,
+        process_group=77,
+        cpus=str(client_cpu),
+        name="neqo-qcsd-client",
+    )
+    monitor.process_started(77)
+    evidence = monitor.finish()
+    assert evidence["schema_version"] == 3
+    assert evidence["client_cpu"] == client_cpu
+    assert evidence["orchestrator_cpu"] == helper_cpu
+    assert capture_scheduler_runtime_evidence_valid(evidence)
+
+    altered = copy.deepcopy(evidence)
+    altered["host_partition"]["protected_cpus"] = [client_cpu, client_cpu]
+    assert not capture_scheduler_runtime_evidence_valid(altered)
+
+
+@pytest.mark.parametrize("ncpu", [3, 8])
+def test_portable_client_process_receipt(ncpu: int) -> None:
+    client_cpu, helper_cpu = ncpu - 2, ncpu - 1
+    receipt = process_scheduler_receipt()
+    receipt.update(
+        affinity_cpus=[client_cpu],
+        cgroup_effective_cpuset=f"{client_cpu}-{helper_cpu}",
+        contract=PORTABLE_ETF_SCHEDULER_CONTRACT,
+    )
+    assert _process_scheduler_receipt_valid(
+        receipt,
+        expected_contract=PORTABLE_ETF_SCHEDULER_CONTRACT,
+        allowed_capabilities=frozenset({"0000000000000000"}),
+    )
+    assert _kernel_process_scheduler_valid(receipt)
+
+    receipt["cgroup_effective_cpuset"] = f"0-{helper_cpu}"
+    assert not _process_scheduler_receipt_valid(
+        receipt,
+        expected_contract=PORTABLE_ETF_SCHEDULER_CONTRACT,
+        allowed_capabilities=frozenset({"0000000000000000"}),
+    )
+    assert not _kernel_process_scheduler_valid(receipt)
+
+
+@pytest.mark.parametrize("ncpu", [3, 8])
+def test_portable_client_launch_prefix_uses_selected_cpu(
+    monkeypatch: pytest.MonkeyPatch, ncpu: int
+) -> None:
+    import os
+    import resource
+
+    client_cpu, helper_cpu = ncpu - 2, ncpu - 1
+    monkeypatch.setenv("QCSD_CAPTURE_SCHEDULER_CONTRACT", PORTABLE_ETF_SCHEDULER_CONTRACT)
+    monkeypatch.setenv("QCSD_CAPTURE_CLIENT_CPU", str(client_cpu))
+    monkeypatch.setenv("QCSD_CAPTURE_ORCHESTRATOR_CPU", str(helper_cpu))
+    monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: {helper_cpu})
+    monkeypatch.setattr(resource, "getrlimit", lambda _kind: (1, 1))
+    prefix = capture_scheduler_launch_prefix()
+    assert prefix[:3] == ["/usr/bin/taskset", "--cpu-list", str(client_cpu)]
+    assert "--bounding-set=-all,+net_admin,+setpcap" in prefix
 
 
 def _write_task(

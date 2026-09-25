@@ -28,14 +28,17 @@ from .etf_probe import (
     _docker_provenance,
     _git_command,
     _load_json_value,
+    _optional_state_cpu_ids,
     _sha256_bytes,
     _validate_image_reference,
+    _valid_cpu_observation,
 )
 from .util import LAB_ROOT, durable_create, fsync_directory, sha256_file
 
 
 ARTIFACT_TYPE = "qcsd-etf-veth-series-probe"
 SCHEMA_VERSION = 2
+PORTABLE_RECEIPT_SCHEMA_VERSION = 3
 PREVIOUS_SCHEMA_VERSION = 1
 REQUEST_TYPE = "qcsd-etf-veth-supervised-request"
 REQUEST_SCHEMA_VERSION = 1
@@ -74,7 +77,7 @@ _SERIES_ID = re.compile(r"[0-9a-f]{32}\Z")
 
 
 def _utc_now() -> str:
-    return dt.datetime.now(dt.UTC).isoformat().replace("+00:00", "Z")
+    return dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _validate_destination(destination: Path) -> Path:
@@ -968,6 +971,7 @@ _STATE_KEYS = frozenset(
         "sender_name",
         "network_id",
         "peer_id",
+        "available_cpus",
         "peer_cpu",
         "main_cpu",
         "helper_cpu",
@@ -1057,12 +1061,18 @@ def _apply_runtime_gates(
     cpu_assignment: Any,
     container_exit_codes: Any,
     lifecycle: Any,
+    available_cpus: Any = None,
+    portable: bool = False,
 ) -> dict[str, Any]:
     info = docker.get("info", {}) if isinstance(docker, dict) else {}
     image = docker.get("image", {}) if isinstance(docker, dict) else {}
     cpu_count = info.get("NCPU")
     expected_cpus = None
-    if type(cpu_count) is int and cpu_count >= 3:
+    if portable and _valid_cpu_observation(available_cpus):
+        expected_cpus = dict(
+            zip(("peer", "main", "helper"), available_cpus[-3:], strict=True)
+        )
+    elif not portable and type(cpu_count) is int and cpu_count >= 3:
         expected_cpus = {
             "peer": cpu_count - 3,
             "main": cpu_count - 2,
@@ -1128,6 +1138,8 @@ def _apply_runtime_gates(
             lifecycle.get("cleanup_passed") if isinstance(lifecycle, dict) else None
         ),
     }
+    if portable:
+        detail["available_cpus"] = available_cpus
     for name, passed in runtime_gates.items():
         gates[name] = {"passed": passed, "detail": detail}
     failed = [name for name, value in gates.items() if value.get("passed") is not True]
@@ -1195,6 +1207,7 @@ def _receipt_payload_sha256(receipt: dict[str, Any]) -> str:
     if type(schema_version) is not int or schema_version not in {
         PREVIOUS_SCHEMA_VERSION,
         SCHEMA_VERSION,
+        PORTABLE_RECEIPT_SCHEMA_VERSION,
     }:
         raise ValueError("ETF/veth receipt schema is invalid")
     return _sha256_bytes(
@@ -1320,6 +1333,7 @@ def finalize_supervised_bundle(
         "main": _state_int(state["main_cpu"]),
         "helper": _state_int(state["helper_cpu"]),
     }
+    available_cpus = _optional_state_cpu_ids(state["available_cpus"])
     resources = {
         "network": state["network_name"],
         "network_id": None if not network_created else state["network_id"],
@@ -1346,6 +1360,8 @@ def finalize_supervised_bundle(
         cpu_assignment=observed_cpus,
         container_exit_codes=container_exit_codes,
         lifecycle=lifecycle,
+        available_cpus=available_cpus,
+        portable=True,
     )
 
     sender_bytes = _canonical_json(sender)
@@ -1356,7 +1372,7 @@ def finalize_supervised_bundle(
     }
     receipt: dict[str, Any] = {
         "artifact_type": ARTIFACT_TYPE,
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": PORTABLE_RECEIPT_SCHEMA_VERSION,
         "evidentiary": False,
         "authorizes_capture": False,
         "purpose": PURPOSE,
@@ -1388,6 +1404,7 @@ def finalize_supervised_bundle(
         "docker": docker,
         "resources": resources,
         "cpu_assignment": observed_cpus,
+        "cpu_observation": available_cpus,
         "container_exit_codes": container_exit_codes,
         "lifecycle": lifecycle,
         "evaluation": evaluation,
@@ -1427,7 +1444,7 @@ def validate_bundle(path: Path) -> dict[str, Any]:
         receipt.get("artifact_type") != ARTIFACT_TYPE
         or type(receipt.get("schema_version")) is not int
         or receipt.get("schema_version")
-        not in {PREVIOUS_SCHEMA_VERSION, SCHEMA_VERSION}
+        not in {PREVIOUS_SCHEMA_VERSION, SCHEMA_VERSION, PORTABLE_RECEIPT_SCHEMA_VERSION}
         or receipt.get("evidentiary") is not False
         or receipt.get("authorizes_capture") is not False
         or receipt.get("status") not in {"complete", "incomplete"}
@@ -1447,8 +1464,19 @@ def validate_bundle(path: Path) -> dict[str, Any]:
     if not isinstance(sender, dict) or not isinstance(peer, dict):
         raise ValueError("ETF/veth worker outputs are invalid")
     if receipt["schema_version"] == PREVIOUS_SCHEMA_VERSION:
+        if "cpu_observation" in receipt:
+            raise ValueError("ETF/veth historical receipt contains a future CPU-ID observation")
         _validate_schema_one_contract(receipt, sender, peer)
-    if receipt["schema_version"] == SCHEMA_VERSION:
+    if receipt["schema_version"] in {SCHEMA_VERSION, PORTABLE_RECEIPT_SCHEMA_VERSION}:
+        portable = receipt["schema_version"] == PORTABLE_RECEIPT_SCHEMA_VERSION
+        if portable:
+            observation = receipt.get("cpu_observation")
+            if "cpu_observation" not in receipt or (
+                observation is not None and not _valid_cpu_observation(observation)
+            ):
+                raise ValueError("ETF/veth portable CPU-ID observation is invalid")
+        elif "cpu_observation" in receipt:
+            raise ValueError("ETF/veth historical receipt contains a future CPU-ID observation")
         if receipt.get("purpose") != PURPOSE:
             raise ValueError("ETF/veth schema-2 purpose limitation is invalid")
         configuration = receipt.get("configuration")
@@ -1500,6 +1528,8 @@ def validate_bundle(path: Path) -> dict[str, Any]:
             cpu_assignment=receipt.get("cpu_assignment"),
             container_exit_codes=receipt.get("container_exit_codes"),
             lifecycle=receipt.get("lifecycle"),
+            available_cpus=receipt.get("cpu_observation"),
+            portable=portable,
         )
         if receipt.get("evaluation") != replayed:
             raise ValueError("ETF/veth schema-2 embedded evaluation differs from replay")

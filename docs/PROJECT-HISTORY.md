@@ -293,6 +293,60 @@ implementation defects discovered by these gates must be fixed and requalified
 on fresh authority, not hidden by dropping a class, truncating a graph,
 weakening acceptance or adding bilateral server behaviour.
 
+## Desktop restoration on 25 September
+
+The desktop fetched all 29 evidence parts and the one support part from the
+private Drive transfer. Every downloaded file matched `MIGRATION-SHA256SUMS`;
+the two archive manifests also passed. The joined evidence archive matched
+SHA-256 `c77ff4abb98775b5fcaab3a0025848624be06be4a34a5d155e6f10f851c07494`;
+the support archive matched
+`7339df78e75cacec017187c4db7e6e975364a9a27928ed5216b773547eb3c985`.
+Staging and final destination verification checked all 19,005 evidence files
+and 79 support files. The final Lab bundle verified as complete. The cloned
+Lab `main` was `877cb9a10e8e54090f3e89e1bd680593d09a2a3d`, with Rust
+Gitlink and Rust `main` at `b69398ff3085d852f95f8d435938b6d5e8976482`.
+
+An initial staging check caught two nested reference-clone `.git/config`
+files after an editor added local `vscode-merge-base` settings. The archive
+members still matched the transfer manifest. Staging was moved outside the
+open workspace, those members were restored from the verified archive, and
+both full file inventories then passed in staging and at the destination.
+The private desktop verification receipt subsequently passed all 12,503
+classifier checksums and independently counted 2,500 samples: five classes
+with 500 each, 1,500 undefended, 500 FRONT and 500 Tamaraw.
+
+This establishes the historical working set on the desktop. No native build,
+browser qualification, acquisition authority or extended-study scientific
+counter was passed by the transfer. The next work is focused native source,
+host, ETF/veth and browser lifecycle qualification before clean source freeze.
+
+## Desktop portability checks on 26 September
+
+WSL Ubuntu and Docker Desktop data were relocated to the D: volume. The live
+Docker data VHDX backing-volume probe identified the sibling `disk` layout,
+found a healthy volume with positive free space, and retained the independent
+formal evidence-reserve requirement. The active 64 GiB build floor was removed;
+the old threshold remains only in its historical receipt validator. User
+systemd and cgroup v2 were available on Ubuntu 22.04/systemd 249 after the
+operator installed `dbus-user-session`.
+
+The capture launcher now observes actual CPU IDs inside the pinned collection
+image and records a version 4 partition. Sidecars, measured client and ETF
+helper use separate observed IDs; sparse and offset sets are supported. New
+browser capacity receipts record any positive Docker CPU count. Historical
+12-CPU and fixed-partition receipts retain their frozen readers. ETF/veth
+diagnostics use observed IDs too. The source-bound lifecycle supervisor now
+selects systemd options supported by the running user manager. A restored
+desktop may lack optional laptop raw regression data; its tests verify all
+checked-in reference bytes and skip only the wholly absent deep result tree.
+
+The focused START-HERE browser/acquisition suite passed 712 tests on the
+desktop. Focused scheduler, ETF/veth, storage and lifecycle checks also
+passed, along with Rust compile/test-code checks and documentation links.
+These checks are engineering progress. A clean source-bound native build,
+live ETF/veth, pinned-CDP, full browser gate and acquisition authority are
+still required before public acquisition.
+
 ## Maintenance contract
 
 Future maintainers should append a dated, evidence-backed outcome after each

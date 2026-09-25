@@ -24,6 +24,9 @@ the local working set into its original relative layout. Do not rewrite old
 receipt paths, hashes or provenance for the desktop. A historical receipt
 whose referenced raw campaign remains on the laptop may require that campaign
 for a full audit; copying the receipt does not make its dependencies portable.
+The desktop's private `migration-2026-09-25/inventories/desktop-handoff-verification.json`
+records the new 12,503-entry protected-handoff check. Keep it with the
+downloaded transfer manifests outside Git.
 
 ## Laptop research archive
 

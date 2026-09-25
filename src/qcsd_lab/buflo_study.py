@@ -38,7 +38,6 @@ import yaml
 from .build_storage import (
     BUILD_EXECUTION_ARTIFACT_TYPE as _BUILD_EXECUTION_ARTIFACT_TYPE,
     BUILD_IMAGE_TAGS,
-    BUILD_WSL_HOST_MIN_AVAILABLE_BYTES as _BUILD_WSL_HOST_MIN_AVAILABLE_BYTES,
     _canonical_finite_json_bytes,
     build_completion_path,
     load_stable_build_completion,
@@ -67,7 +66,6 @@ from .util import (
 )
 
 BUILD_EXECUTION_ARTIFACT_TYPE = _BUILD_EXECUTION_ARTIFACT_TYPE
-BUILD_WSL_HOST_MIN_AVAILABLE_BYTES = _BUILD_WSL_HOST_MIN_AVAILABLE_BYTES
 SCHEMA_VERSION = 1
 PREVIOUS_LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION = 3
 LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION = 4
@@ -8800,16 +8798,41 @@ def _capture_admission_value(
     build_environments.extend(record["environment"] for record in staged["public"].values())
     capture_scheduler = None
     if version >= 9:
-        expected_scheduler = _capture_scheduler_environment_contract()
+        if not build_environments:
+            raise ValueError("capture admission lacks build environments")
+        observed_ncpu = build_environments[0].get("docker", {}).get("ncpu")
+        if type(observed_ncpu) is not int or observed_ncpu <= 0:
+            raise ValueError("capture admission requires a positive Docker CPU count")
+        historical_scheduler = _capture_scheduler_environment_contract()
+        historical_etf_scheduler = _buflo_etf_capture_scheduler_environment_contract()
+        observed_scheduler = build_environments[0].get("capture_scheduler")
+        portable_scheduler = (
+            _portable_etf_capture_scheduler_environment_contract(observed_ncpu)
+            if observed_ncpu >= 3 else None
+        )
+        sparse_scheduler = None
+        if isinstance(observed_scheduler, Mapping) and observed_scheduler.get("contract") == (
+            "qcsd-client-rr1-portable-etf-helper-v4"
+        ):
+            sparse_scheduler = _portable_etf_v4_capture_scheduler_environment_contract(
+                observed_scheduler.get("docker_available_cpus")
+            )
+        expected_scheduler = (
+            observed_scheduler
+            if observed_scheduler in (historical_scheduler, historical_etf_scheduler)
+            else sparse_scheduler or portable_scheduler
+        )
+        if expected_scheduler in (historical_scheduler, historical_etf_scheduler) and observed_ncpu != 12:
+            raise ValueError("historical capture scheduler requires 12 Docker CPUs")
         if any(
             environment.get("schema_version") != (2 if historical_schema else 3)
             or environment.get("capture_scheduler") != expected_scheduler
-            or environment.get("docker", {}).get("ncpu") != 12
+            or environment.get("docker", {}).get("ncpu") != observed_ncpu
             for environment in build_environments
         ):
-            raise ValueError("capture admission requires one exact 12-CPU RR1 affinity contract")
+            raise ValueError("capture admission requires one consistent RR1 affinity contract")
         capture_scheduler = {
-            "docker_ncpu": 12,
+            "docker_ncpu": observed_ncpu,
             **expected_scheduler,
         }
     build_execution = _one_build_execution_identity(
@@ -11252,6 +11275,66 @@ def _buflo_etf_capture_scheduler_environment_contract() -> dict[str, Any]:
     }
 
 
+def _portable_etf_capture_scheduler_environment_contract(ncpu: int) -> dict[str, Any]:
+    """Describe the versioned partition selected from Docker's visible CPUs."""
+
+    if type(ncpu) is not int or ncpu < 3:
+        raise ValueError("portable capture scheduler requires at least three Docker CPUs")
+    client_cpu, helper_cpu = ncpu - 2, ncpu - 1
+    return {
+        "schema_version": 3,
+        "contract": "qcsd-client-rr1-portable-etf-helper-v3",
+        "scope": "all_measured_neqo_clients",
+        "collection_cpuset_cpus": [client_cpu, helper_cpu],
+        "orchestrator_affinity_cpus": [helper_cpu],
+        "client_affinity_cpus": [client_cpu],
+        "timed_egress_helper_affinity_cpus": [helper_cpu],
+        "sidecar_affinity_cpus": list(range(client_cpu)),
+        "policy": "SCHED_RR",
+        "priority": 1,
+        "timed_egress_helper_policy": "SCHED_RR",
+        "timed_egress_helper_priority": 1,
+        "rlimit_rtprio": {"soft": 1, "hard": 1},
+        "cap_sys_nice": False,
+        "docker_cpu_rt_runtime_configured": False,
+        "affinity_scope": "qcsd_container_affinity_partition_not_physical_cpu_isolation",
+    }
+
+
+def _portable_etf_v4_capture_scheduler_environment_contract(
+    available_cpus: Any,
+) -> dict[str, Any]:
+    """Bind the three capture roles to CPU IDs observed inside the collection image."""
+
+    if (
+        not isinstance(available_cpus, list)
+        or len(available_cpus) < 3
+        or any(type(cpu) is not int or cpu < 0 for cpu in available_cpus)
+        or available_cpus != sorted(set(available_cpus))
+    ):
+        raise ValueError("portable capture scheduler CPU ID observation is invalid")
+    client_cpu, helper_cpu = available_cpus[-2:]
+    return {
+        "schema_version": 4,
+        "contract": "qcsd-client-rr1-portable-etf-helper-v4",
+        "scope": "all_measured_neqo_clients",
+        "docker_available_cpus": available_cpus,
+        "collection_cpuset_cpus": [client_cpu, helper_cpu],
+        "orchestrator_affinity_cpus": [helper_cpu],
+        "client_affinity_cpus": [client_cpu],
+        "timed_egress_helper_affinity_cpus": [helper_cpu],
+        "sidecar_affinity_cpus": available_cpus[:-2],
+        "policy": "SCHED_RR",
+        "priority": 1,
+        "timed_egress_helper_policy": "SCHED_RR",
+        "timed_egress_helper_priority": 1,
+        "rlimit_rtprio": {"soft": 1, "hard": 1},
+        "cap_sys_nice": False,
+        "docker_cpu_rt_runtime_configured": False,
+        "affinity_scope": "qcsd_container_affinity_partition_not_physical_cpu_isolation",
+    }
+
+
 def validate_study_environment_receipt(
     value: Any,
     *,
@@ -11305,8 +11388,16 @@ def validate_study_environment_receipt(
     for key in ("ncpu", "mem_total_bytes"):
         if not isinstance(docker[key], int) or isinstance(docker[key], bool) or docker[key] <= 0:
             raise ValueError(f"study Docker capacity field is invalid: {key}")
-    if value["schema_version"] in {2, 3} and docker["ncpu"] != 12:
-        raise ValueError("study capture scheduler requires the exact 12-CPU topology")
+    if (
+        value["schema_version"] in {2, 3}
+        and docker["ncpu"] < 3
+        and not (
+            isinstance(value.get("capture_scheduler"), Mapping)
+            and value["capture_scheduler"].get("contract")
+            == "qcsd-client-rr1-portable-etf-helper-v4"
+        )
+    ):
+        raise ValueError("study capture scheduler requires at least three Docker CPUs")
 
     image = value["collection_image"]
     if not isinstance(image, Mapping) or set(image) != {"id", "repo_digests"}:
@@ -11471,11 +11562,34 @@ def validate_study_environment_receipt(
     capture_scheduler = value.get("capture_scheduler")
     historical_capture_scheduler = _capture_scheduler_environment_contract()
     kernel_timed_capture_scheduler = _buflo_etf_capture_scheduler_environment_contract()
-    if value["schema_version"] in {2, 3} and capture_scheduler not in (
-        historical_capture_scheduler,
-        kernel_timed_capture_scheduler,
+    portable_capture_scheduler = (
+        _portable_etf_capture_scheduler_environment_contract(docker["ncpu"])
+        if value["schema_version"] in {2, 3} and docker["ncpu"] >= 3
+        else None
+    )
+    sparse_capture_scheduler = None
+    if isinstance(capture_scheduler, Mapping) and capture_scheduler.get("contract") == (
+        "qcsd-client-rr1-portable-etf-helper-v4"
+    ):
+        sparse_capture_scheduler = _portable_etf_v4_capture_scheduler_environment_contract(
+            capture_scheduler.get("docker_available_cpus")
+        )
+    if value["schema_version"] in {2, 3} and (
+        not isinstance(capture_scheduler, Mapping)
+        or capture_scheduler not in (
+            historical_capture_scheduler,
+            kernel_timed_capture_scheduler,
+            portable_capture_scheduler,
+            sparse_capture_scheduler,
+        )
     ):
         raise ValueError("study capture scheduler environment receipt is invalid")
+    if (
+        value["schema_version"] in {2, 3}
+        and capture_scheduler in (historical_capture_scheduler, kernel_timed_capture_scheduler)
+        and docker["ncpu"] != 12
+    ):
+        raise ValueError("historical scheduler requires its frozen 12-CPU topology")
     validated = {
         "schema_version": value["schema_version"],
         "image_id": image_id,

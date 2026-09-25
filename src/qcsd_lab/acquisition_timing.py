@@ -14,7 +14,9 @@ from __future__ import annotations
 from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+UTC = timezone.utc
 
 ACQUISITION_ACTION_SOFT_TIMEOUT_MS = 1_800_000
 ACQUISITION_ACTION_CLEANUP_GRACE_MS = 120_000

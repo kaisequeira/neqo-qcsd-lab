@@ -24,6 +24,13 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from .process_scheduler import (
+    BUFLO_ETF_SCHEDULER_CONTRACT,
+    PORTABLE_ETF_SCHEDULER_CONTRACT,
+    PORTABLE_ETF_SCHEDULER_CONTRACT_V4,
+    scheduler_receipt_cpus,
+)
+
 KERNEL_TX_RUNNER_SCHEMA_VERSION = 8
 KERNEL_TX_RUNNER_V7_SCHEMA_VERSION = 7
 KERNEL_TX_RUNNER_V6_SCHEMA_VERSION = 6
@@ -1549,24 +1556,33 @@ def _privilege_valid(value: Any) -> bool:
 def _process_scheduler_valid(value: Any) -> bool:
     receipt = _exact_mapping(value, _PROCESS_SCHEDULER_KEYS)
     limit = receipt.get("rlimit_rtprio") if receipt is not None else None
+    contract = receipt.get("contract") if receipt is not None else None
+    cpus = scheduler_receipt_cpus(receipt, contract) if receipt is not None else None
     return bool(
         receipt is not None
         and _schema(receipt)
         and receipt.get("source") == "linux-sched-and-procfs-v1"
         and receipt.get("policy") == "SCHED_RR"
         and receipt.get("priority") == 1
-        and receipt.get("affinity_cpus") == [10]
+        and cpus is not None
+        and receipt.get("affinity_cpus") == [cpus[0]]
         and isinstance(limit, Mapping)
         and set(limit) == {"soft", "hard"}
         and limit.get("soft") == limit.get("hard") == 1
         and receipt.get("no_new_privileges") is True
         and receipt.get("effective_capabilities_hex")
         in {"0000000000001100", "0000000000000000"}
-        and receipt.get("cgroup_effective_cpuset") == "10-11"
+        and (
+            contract == PORTABLE_ETF_SCHEDULER_CONTRACT_V4
+            or receipt.get("cgroup_effective_cpuset") == f"{cpus[0]}-{cpus[1]}"
+        )
         and receipt.get("affinity_scope")
         == "qcsd_container_affinity_partition_not_physical_cpu_isolation"
-        and receipt.get("contract")
-        == "qcsd-client-rr1-cpu10-etf-helper-cpu11-v1"
+        and contract in {
+            BUFLO_ETF_SCHEDULER_CONTRACT,
+            PORTABLE_ETF_SCHEDULER_CONTRACT,
+            PORTABLE_ETF_SCHEDULER_CONTRACT_V4,
+        }
         and receipt.get("contract_valid") is True
     )
 
@@ -1739,10 +1755,22 @@ def _runtime_contract_valid(
     helper = _exact_mapping(contract.get("helper_thread"), _HELPER_THREAD_KEYS)
     lifecycle = contract.get("helper_lifecycle")
     shutdown = contract.get("helper_shutdown")
+    scheduler_contract = contract.get("scheduler_contract")
+    scheduler_initial = contract.get("scheduler_initial")
+    scheduler_cpus = (
+        scheduler_receipt_cpus(scheduler_initial, scheduler_contract)
+        if isinstance(scheduler_initial, Mapping)
+        else None
+    )
     if (
-        contract.get("scheduler_contract")
-        != "qcsd-client-rr1-cpu10-etf-helper-cpu11-v1"
-        or not _process_scheduler_valid(contract.get("scheduler_initial"))
+        scheduler_contract not in {
+            BUFLO_ETF_SCHEDULER_CONTRACT,
+            PORTABLE_ETF_SCHEDULER_CONTRACT,
+            PORTABLE_ETF_SCHEDULER_CONTRACT_V4,
+        }
+        or not _process_scheduler_valid(scheduler_initial)
+        or scheduler_cpus is None
+        or scheduler_initial.get("contract") != scheduler_contract
         or not isinstance(setups, list)
         or not setups
         or not all(_socket_setup_valid(item) for item in setups)
@@ -1752,10 +1780,9 @@ def _runtime_contract_valid(
         or not _privilege_valid(contract.get("privilege_drop"))
         or helper is None
         or not _schema(helper)
-        or helper.get("contract_name")
-        != "qcsd-client-rr1-cpu10-etf-helper-cpu11-v1"
-        or helper.get("target_cpu") != 11
-        or helper.get("observed_affinity") != [11]
+        or helper.get("contract_name") != scheduler_contract
+        or helper.get("target_cpu") != scheduler_cpus[1]
+        or helper.get("observed_affinity") != [scheduler_cpus[1]]
         or helper.get("scheduler_policy") != 2
         or helper.get("scheduler_policy_name") != "SCHED_RR"
         or helper.get("scheduler_priority") != 1

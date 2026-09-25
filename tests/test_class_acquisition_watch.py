@@ -991,7 +991,7 @@ def acquisition(tmp_path: Path) -> Fixture:
                     "run_wsl_directory_present": False,
                 },
                 "policy": watch.BUILD_HOST_STORAGE_POLICY,
-                "required_available_bytes": watch.BUILD_WSL_HOST_MIN_AVAILABLE_BYTES,
+                "required_available_bytes": watch.BUILD_HOST_STORAGE_REQUIRED_AVAILABLE_BYTES,
                 "observations": [],
                 "minimum_available_bytes": None,
                 "passed": True,
@@ -3561,6 +3561,81 @@ def test_watcher_rejects_fully_resealed_schema4_build_tampering(
         watch._validate_immutable_binding(acquisition.paths)
 
 
+def test_watcher_preserves_legacy_storage_policy_and_accepts_small_current_volume() -> None:
+    probe_sha256 = "a" * 64
+    boundaries = watch.BUILD_HOST_STORAGE_BOUNDARIES
+    observations = [
+        {
+            "schema_version": 1,
+            "probe": watch.BUILD_HOST_STORAGE_PROBE,
+            "probe_sha256": probe_sha256,
+            "boundary": boundary,
+            "observed_at": f"2026-09-01T00:00:0{index}+00:00",
+            "location_source": "wsl-lxss-docker-desktop-data",
+            "data_vhd_path": "D:\\Docker\\wsl\\data\\ext4.vhdx",
+            "data_vhd_file_length_bytes": 512 * 1024**3,
+            "backing_volume_unique_id": (
+                r"\\?\Volume{12345678-1234-1234-1234-123456789abc}" + "\\"
+            ),
+            "drive_letter": "D",
+            "file_system": "NTFS",
+            "health_status": "Healthy",
+            "operational_status": ["OK"],
+            "total_bytes": 1024**4,
+            "available_bytes": 2 * 1024**3,
+        }
+        for index, boundary in enumerate(boundaries, 1)
+    ]
+    preflight = {
+        "schema_version": 1,
+        "applicable": True,
+        "platform": "windows-wsl2",
+        "platform_detection": {
+            "schema_version": 1,
+            "probe": "wsl-multi-signal-v1",
+            "kernel_release": "6.6.87.2-microsoft-standard-WSL2",
+            "proc_version": "Linux version 6.6.87.2-microsoft-standard-WSL2",
+            "wsl_interop_env_present": True,
+            "wsl_distro_name_env_present": True,
+            "run_wsl_directory_present": True,
+        },
+        "policy": watch.BUILD_HOST_STORAGE_POLICY,
+        "required_available_bytes": watch.BUILD_HOST_STORAGE_REQUIRED_AVAILABLE_BYTES,
+        "observations": observations,
+        "minimum_available_bytes": 2 * 1024**3,
+        "passed": True,
+    }
+    assert (
+        watch._validate_build_storage_preflight(preflight, probe_sha256=probe_sha256)
+        == preflight
+    )
+    sibling_disk = copy.deepcopy(preflight)
+    for observation in sibling_disk["observations"]:
+        observation["location_source"] = "wsl-lxss-docker-desktop-sibling-disk"
+    assert (
+        watch._validate_build_storage_preflight(sibling_disk, probe_sha256=probe_sha256)
+        == sibling_disk
+    )
+
+    legacy = copy.deepcopy(preflight)
+    legacy["policy"] = watch.BUILD_LEGACY_HOST_STORAGE_POLICY
+    legacy["required_available_bytes"] = watch.BUILD_LEGACY_HOST_STORAGE_REQUIRED_AVAILABLE_BYTES
+    with pytest.raises(watch.WatchError, match="insufficient free space"):
+        watch._validate_build_storage_preflight(legacy, probe_sha256=probe_sha256)
+
+    for observation in legacy["observations"]:
+        observation["available_bytes"] = 64 * 1024**3
+    legacy["minimum_available_bytes"] = 64 * 1024**3
+    assert watch._validate_build_storage_preflight(legacy, probe_sha256=probe_sha256) == legacy
+
+    current_full = copy.deepcopy(preflight)
+    for observation in current_full["observations"]:
+        observation["available_bytes"] = 0
+    current_full["minimum_available_bytes"] = 0
+    with pytest.raises(watch.WatchError, match="insufficient free space"):
+        watch._validate_build_storage_preflight(current_full, probe_sha256=probe_sha256)
+
+
 def test_current_foundation_watcher_rejects_a_fully_valid_historical_schema3_build(
     acquisition: Fixture,
 ) -> None:
@@ -5790,7 +5865,7 @@ def test_stale_durable_scope_record_is_sigkilled_recovered_and_removed(
             "--scope",
             "--collect",
             "--quiet",
-            "--expand-environment=no",
+            *watch._systemd_scope_expansion_args(),
             f"--unit={unit}",
             "--property=KillMode=control-group",
             "--property=KillSignal=SIGKILL",
@@ -5843,7 +5918,7 @@ def test_stale_durable_scope_record_is_sigkilled_recovered_and_removed(
                     "/usr/bin/systemctl",
                     "--user",
                     "kill",
-                    "--kill-whom=all",
+                    "--kill-who=all",
                     "--signal=SIGKILL",
                     "--",
                     unit,
@@ -5950,7 +6025,7 @@ finally:
                     "/usr/bin/systemctl",
                     "--user",
                     "kill",
-                    "--kill-whom=all",
+                    "--kill-who=all",
                     "--signal=SIGKILL",
                     "--",
                     unit,
@@ -6095,7 +6170,7 @@ finally:
                     "/usr/bin/systemctl",
                     "--user",
                     "kill",
-                    "--kill-whom=all",
+                    "--kill-who=all",
                     "--signal=SIGKILL",
                     "--",
                     unit,

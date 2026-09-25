@@ -609,7 +609,7 @@ def _wsl_preflight(*, available_bytes: int = 128 * GIB) -> dict[str, Any]:
             "run_wsl_directory_present": True,
         },
         "policy": build_storage.BUILD_HOST_STORAGE_POLICY,
-        "required_available_bytes": build_storage.BUILD_WSL_HOST_MIN_AVAILABLE_BYTES,
+        "required_available_bytes": build_storage.BUILD_HOST_STORAGE_REQUIRED_AVAILABLE_BYTES,
         "observations": observations,
         "minimum_available_bytes": available_bytes,
         "passed": True,
@@ -647,7 +647,7 @@ def _non_wsl_preflight() -> dict[str, Any]:
             "run_wsl_directory_present": False,
         },
         "policy": build_storage.BUILD_HOST_STORAGE_POLICY,
-        "required_available_bytes": build_storage.BUILD_WSL_HOST_MIN_AVAILABLE_BYTES,
+        "required_available_bytes": build_storage.BUILD_HOST_STORAGE_REQUIRED_AVAILABLE_BYTES,
         "observations": [],
         "minimum_available_bytes": None,
         "passed": True,
@@ -3546,14 +3546,58 @@ def test_observation_rejects_malformed_or_noncanonical_volume_guid(
         _validate_observation(value)
 
 
-def test_available_space_threshold_is_inclusive_and_fail_closed_below_it() -> None:
-    threshold = build_storage.BUILD_WSL_HOST_MIN_AVAILABLE_BYTES
+def test_current_storage_policy_accepts_positive_free_space_and_rejects_full_volume() -> None:
+    threshold = build_storage.BUILD_HOST_STORAGE_REQUIRED_AVAILABLE_BYTES
     exact = _observation(*BOUNDARY_TIMES[0], available_bytes=threshold)
     assert _validate_observation(exact)["available_bytes"] == threshold
 
     below = _observation(*BOUNDARY_TIMES[0], available_bytes=threshold - 1)
     with pytest.raises(ValueError, match=rf"requires at least {threshold} available bytes"):
         _validate_observation(below)
+
+
+def test_current_storage_policy_accepts_a_small_healthy_build_volume() -> None:
+    preflight = _wsl_preflight(available_bytes=2 * GIB)
+    assert build_storage.validate_build_host_storage_preflight(preflight) == preflight
+
+
+def test_historical_storage_policy_preserves_its_original_floor() -> None:
+    preflight = _wsl_preflight(available_bytes=64 * GIB)
+    preflight["policy"] = build_storage.BUILD_LEGACY_HOST_STORAGE_POLICY
+    preflight["required_available_bytes"] = (
+        build_storage.BUILD_LEGACY_HOST_STORAGE_REQUIRED_AVAILABLE_BYTES
+    )
+    assert build_storage.validate_build_host_storage_preflight(preflight) == preflight
+
+    receipt = _build_receipt(schema_version=2, host_storage_preflight=preflight)
+    assert (
+        build_storage.validate_build_execution_envelope(receipt)["host_storage_preflight"]
+        == preflight
+    )
+
+    preflight["observations"][0]["available_bytes"] -= 1
+    preflight["minimum_available_bytes"] -= 1
+    with pytest.raises(ValueError, match="requires at least"):
+        build_storage.validate_build_host_storage_preflight(preflight)
+
+
+@pytest.mark.parametrize(
+    ("policy", "required_available_bytes"),
+    [
+        (build_storage.BUILD_HOST_STORAGE_POLICY, 64 * GIB),
+        (build_storage.BUILD_LEGACY_HOST_STORAGE_POLICY, 1),
+        ("unrecognized-policy", 1),
+        ([], 1),
+    ],
+)
+def test_storage_preflight_rejects_mismatched_policy_requirement(
+    policy: Any, required_available_bytes: int
+) -> None:
+    preflight = _wsl_preflight()
+    preflight["policy"] = policy
+    preflight["required_available_bytes"] = required_available_bytes
+    with pytest.raises(ValueError, match="preflight schema is invalid"):
+        build_storage.validate_build_host_storage_preflight(preflight)
 
 
 @pytest.mark.parametrize(
@@ -3609,6 +3653,13 @@ def test_observation_rejects_unreceipted_location_sources(
 
     with pytest.raises(ValueError, match="observation is invalid"):
         _validate_observation(value)
+
+
+def test_observation_accepts_registered_desktop_sibling_disk_source() -> None:
+    value = _observation(*BOUNDARY_TIMES[0])
+    value["location_source"] = "wsl-lxss-docker-desktop-sibling-disk"
+
+    assert _validate_observation(value) == value
 
 
 def test_build_envelope_rejects_source_collection_image_mismatch() -> None:

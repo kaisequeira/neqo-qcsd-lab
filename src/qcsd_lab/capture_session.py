@@ -82,12 +82,14 @@ from .parameters import (
 )
 from .process_scheduler import (
     BUFLO_ETF_SCHEDULER_CONTRACT as _BUFLO_ETF_SCHEDULER_CONTRACT,
-    CAPTURE_CLIENT_CPU as _CAPTURE_CLIENT_CPU,
     CAPTURE_SCHEDULER_CONTRACT as _CAPTURE_SCHEDULER_CONTRACT,
+    PORTABLE_ETF_SCHEDULER_CONTRACT as _PORTABLE_ETF_SCHEDULER_CONTRACT,
+    PORTABLE_ETF_SCHEDULER_CONTRACT_V4 as _PORTABLE_ETF_SCHEDULER_CONTRACT_V4,
     CaptureSchedulerMonitor as _CaptureSchedulerMonitor,
     capture_scheduler_contract as _capture_scheduler_contract,
     capture_scheduler_launch_prefix as _capture_scheduler_launch_prefix,
     capture_scheduler_runtime_evidence_valid as _capture_scheduler_runtime_evidence_valid,
+    scheduler_receipt_cpus as _scheduler_receipt_cpus,
 )
 from .util import (
     ProcessTimeoutError,
@@ -791,13 +793,21 @@ def _collect_attempt(
     selected_scheduler_contract = _capture_scheduler_contract()
     if (
         defense.kind == "buflo"
-        and selected_scheduler_contract != _BUFLO_ETF_SCHEDULER_CONTRACT
+        and selected_scheduler_contract not in {
+            _BUFLO_ETF_SCHEDULER_CONTRACT,
+            _PORTABLE_ETF_SCHEDULER_CONTRACT,
+            _PORTABLE_ETF_SCHEDULER_CONTRACT_V4,
+        }
     ):
         raise ValueError(
             "current BuFLO capture requires the kernel-TX ETF scheduler contract"
         )
     observer_topology_required = (
-        selected_scheduler_contract == _BUFLO_ETF_SCHEDULER_CONTRACT
+        selected_scheduler_contract in {
+            _BUFLO_ETF_SCHEDULER_CONTRACT,
+            _PORTABLE_ETF_SCHEDULER_CONTRACT,
+            _PORTABLE_ETF_SCHEDULER_CONTRACT_V4,
+        }
     )
     kernel_tx_required = kernel_tx_lab_runtime_required(
         defense_kind=defense.kind,
@@ -1555,23 +1565,30 @@ def _process_scheduler_receipt_valid(
         return False
     rtprio = value.get("rlimit_rtprio")
     capabilities = value.get("effective_capabilities_hex")
+    cpus = _scheduler_receipt_cpus(value, expected_contract)
     return bool(
         value.get("schema_version") == 1
         and value.get("source") == _PROCESS_SCHEDULER_SOURCE
         and value.get("policy") == "SCHED_RR"
         and value.get("priority") == 1
-        and value.get("affinity_cpus") == [_CAPTURE_CLIENT_CPU]
+        and cpus is not None
+        and value.get("affinity_cpus") == [cpus[0]]
         and isinstance(rtprio, dict)
         and set(rtprio) == {"soft", "hard"}
         and rtprio == {"soft": 1, "hard": 1}
         and value.get("no_new_privileges") is True
         and isinstance(capabilities, str)
         and capabilities in allowed_capabilities
-        and value.get("cgroup_effective_cpuset") == "10-11"
+        and (
+            expected_contract == _PORTABLE_ETF_SCHEDULER_CONTRACT_V4
+            or value.get("cgroup_effective_cpuset") == f"{cpus[0]}-{cpus[1]}"
+        )
         and value.get("affinity_scope") == _PROCESS_SCHEDULER_AFFINITY_SCOPE
         and expected_contract in {
             _CAPTURE_SCHEDULER_CONTRACT,
             _BUFLO_ETF_SCHEDULER_CONTRACT,
+            _PORTABLE_ETF_SCHEDULER_CONTRACT,
+            _PORTABLE_ETF_SCHEDULER_CONTRACT_V4,
         }
         and value.get("contract") == expected_contract
         and value.get("contract_valid") is True
@@ -1614,7 +1631,11 @@ def _process_scheduler_bound_to_run_valid(
         allowed_capabilities=frozenset({"0000000000000000"}),
     ):
         return bool(
-            expected_contract != _BUFLO_ETF_SCHEDULER_CONTRACT
+            expected_contract not in {
+                _BUFLO_ETF_SCHEDULER_CONTRACT,
+                _PORTABLE_ETF_SCHEDULER_CONTRACT,
+                _PORTABLE_ETF_SCHEDULER_CONTRACT_V4,
+            }
             or isinstance(defense_kind, str)
             and defense_kind != "buflo"
         )
@@ -1627,7 +1648,11 @@ def _process_scheduler_bound_to_run_valid(
     wakeups = run.get("runner_wakeup_metrics")
     raw = wakeups.get("buflo_kernel_tx") if isinstance(wakeups, Mapping) else None
     return bool(
-        expected_contract == _BUFLO_ETF_SCHEDULER_CONTRACT
+        expected_contract in {
+            _BUFLO_ETF_SCHEDULER_CONTRACT,
+            _PORTABLE_ETF_SCHEDULER_CONTRACT,
+            _PORTABLE_ETF_SCHEDULER_CONTRACT_V4,
+        }
         and defense_kind == "buflo"
         and isinstance(wakeups, Mapping)
         and wakeups.get("schema_version") in {11, 12, 13, 14, 15, 16, 17}

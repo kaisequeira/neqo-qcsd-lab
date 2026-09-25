@@ -18,9 +18,12 @@ import stat
 import subprocess
 import sys
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
+
+# This isolated host-side validator also runs under Ubuntu 22.04's Python 3.10.
+UTC = timezone.utc
 
 BUILD_EXECUTION_ARTIFACT_TYPE = "qcsd-buflo-study-no-cache-build-execution"
 BUILD_EXECUTION_MAX_BYTES = 16 * 1024 * 1024
@@ -31,8 +34,14 @@ BUILD_COMPLETION_FINAL_REPROOF_BOUNDARY = (
     "after-build-transaction-completion-before-completion-publication"
 )
 BUILD_COMPLETION_FINAL_REPROOF_MAX_AGE_SECONDS = 2.0
-BUILD_WSL_HOST_MIN_AVAILABLE_BYTES = 64 * 1024**3
-BUILD_HOST_STORAGE_POLICY = "docker-data-vhdx-backing-volume-minimum-v1"
+BUILD_HOST_STORAGE_POLICY = "docker-data-vhdx-backing-volume-positive-free-space-v2"
+BUILD_HOST_STORAGE_REQUIRED_AVAILABLE_BYTES = 1
+BUILD_LEGACY_HOST_STORAGE_POLICY = "docker-data-vhdx-backing-volume-minimum-v1"
+BUILD_LEGACY_HOST_STORAGE_REQUIRED_AVAILABLE_BYTES = 64 * 1024**3
+BUILD_HOST_STORAGE_POLICY_REQUIREMENTS = {
+    BUILD_HOST_STORAGE_POLICY: BUILD_HOST_STORAGE_REQUIRED_AVAILABLE_BYTES,
+    BUILD_LEGACY_HOST_STORAGE_POLICY: BUILD_LEGACY_HOST_STORAGE_REQUIRED_AVAILABLE_BYTES,
+}
 BUILD_HOST_STORAGE_PROBE = "powershell-get-volume-docker-data-vhdx-v1"
 BUILD_HOST_STORAGE_BOUNDARIES = (
     "before-collection",
@@ -42,6 +51,7 @@ BUILD_HOST_STORAGE_BOUNDARIES = (
 )
 BUILD_HOST_STORAGE_LOCATION_SOURCES = {
     "wsl-lxss-docker-desktop-data",
+    "wsl-lxss-docker-desktop-sibling-disk",
     "docker-settings-store",
     "docker-legacy-settings",
 }
@@ -2175,6 +2185,7 @@ def validate_build_host_storage_observation(
     *,
     expected_boundary: str,
     expected_probe_sha256: str | None = None,
+    policy: str = BUILD_HOST_STORAGE_POLICY,
 ) -> dict[str, Any]:
     """Validate one exact backing-volume observation."""
 
@@ -2219,10 +2230,17 @@ def validate_build_host_storage_observation(
     ):
         raise ValueError("host-storage observation is invalid")
     _aware_timestamp(value["observed_at"], label="host-storage observation")
-    if available_bytes < BUILD_WSL_HOST_MIN_AVAILABLE_BYTES:
+    required_available_bytes = (
+        BUILD_HOST_STORAGE_POLICY_REQUIREMENTS.get(policy)
+        if isinstance(policy, str)
+        else None
+    )
+    if required_available_bytes is None:
+        raise ValueError("host-storage policy is invalid")
+    if available_bytes < required_available_bytes:
         raise ValueError(
-            f"requires at least {BUILD_WSL_HOST_MIN_AVAILABLE_BYTES} available bytes "
-            f"(64 GiB) on the Docker data VHDX backing volume at "
+            f"requires at least {required_available_bytes} available bytes "
+            f"on the Docker data VHDX backing volume at "
             f"{expected_boundary}; observed {available_bytes}; no evidentiary receipt "
             "will be created"
         )
@@ -2234,14 +2252,21 @@ def validate_build_host_storage_preflight(
 ) -> dict[str, Any]:
     """Validate all WSL boundary observations or exact non-WSL evidence."""
 
+    policy = value.get("policy") if isinstance(value, Mapping) else None
+    required_available_bytes = (
+        BUILD_HOST_STORAGE_POLICY_REQUIREMENTS.get(policy)
+        if isinstance(policy, str)
+        else None
+    )
     if (
         not isinstance(value, Mapping)
         or set(value) != _PREFLIGHT_KEYS
         or type(value.get("schema_version")) is not int
         or value.get("schema_version") != 1
         or not isinstance(value.get("applicable"), bool)
-        or value.get("policy") != BUILD_HOST_STORAGE_POLICY
-        or value.get("required_available_bytes") != BUILD_WSL_HOST_MIN_AVAILABLE_BYTES
+        or required_available_bytes is None
+        or type(value.get("required_available_bytes")) is not int
+        or value["required_available_bytes"] != required_available_bytes
         or value.get("passed") is not True
     ):
         raise ValueError("host-storage preflight schema is invalid")
@@ -2305,6 +2330,7 @@ def validate_build_host_storage_preflight(
             observation,
             expected_boundary=boundary,
             expected_probe_sha256=expected_probe_sha256,
+            policy=policy,
         )
         for observation, boundary in zip(
             value["observations"], BUILD_HOST_STORAGE_BOUNDARIES, strict=True

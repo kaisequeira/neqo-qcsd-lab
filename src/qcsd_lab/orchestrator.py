@@ -4723,7 +4723,11 @@ def _observer_topology_receipt_for_promotion(
     matched = bool(
         isinstance(scheduler, Mapping)
         and scheduler.get("contract")
-        == "qcsd-client-rr1-cpu10-etf-helper-cpu11-v1"
+        in {
+            "qcsd-client-rr1-cpu10-etf-helper-cpu11-v1",
+            "qcsd-client-rr1-portable-etf-helper-v3",
+            "qcsd-client-rr1-portable-etf-helper-v4",
+        }
     )
     retained = result.get("observer_topology_receipt")
     if not matched:

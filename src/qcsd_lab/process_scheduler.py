@@ -13,13 +13,23 @@ from typing import Any, Mapping
 
 CAPTURE_SCHEDULER_CONTRACT = "qcsd-client-rr1-cpu10-v1"
 BUFLO_ETF_SCHEDULER_CONTRACT = "qcsd-client-rr1-cpu10-etf-helper-cpu11-v1"
+PORTABLE_ETF_SCHEDULER_CONTRACT = "qcsd-client-rr1-portable-etf-helper-v3"
+PORTABLE_ETF_SCHEDULER_CONTRACT_V4 = "qcsd-client-rr1-portable-etf-helper-v4"
 CAPTURE_ORCHESTRATOR_CPU = 11
 CAPTURE_CLIENT_CPU = 10
 CAPTURE_SCHEDULER_RUNTIME_SCHEMA_VERSION = 1
 BUFLO_ETF_SCHEDULER_RUNTIME_SCHEMA_VERSION = 2
+PORTABLE_ETF_SCHEDULER_RUNTIME_SCHEMA_VERSION = 3
+PORTABLE_ETF_SCHEDULER_RUNTIME_V4_SCHEMA_VERSION = 4
 CAPTURE_SCHEDULER_RUNTIME_SOURCE = "linux-cgroup-procfs-monitor-and-docker-host-prelaunch-v1"
 BUFLO_ETF_SCHEDULER_RUNTIME_SOURCE = (
     "linux-cgroup-procfs-monitor-and-docker-host-prelaunch-v2"
+)
+PORTABLE_ETF_SCHEDULER_RUNTIME_SOURCE = (
+    "linux-cgroup-procfs-monitor-and-docker-host-prelaunch-v3"
+)
+PORTABLE_ETF_SCHEDULER_RUNTIME_V4_SOURCE = (
+    "linux-cgroup-procfs-monitor-and-docker-host-prelaunch-v4"
 )
 CAPTURE_SCHEDULER_HOST_ENV = "QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_B64"
 CAPTURE_SCHEDULER_MONITOR_INTERVAL_US = 10_000
@@ -71,6 +81,7 @@ _HOST_PARTITION_V2_KEYS = {
     "verified_scope",
     "unavailable_scope",
 }
+_HOST_PARTITION_V4_KEYS = _HOST_PARTITION_V2_KEYS | {"available_cpus"}
 _HOST_CONTAINER_V2_KEYS = {
     "id",
     "name",
@@ -128,9 +139,76 @@ def capture_scheduler_contract() -> str | None:
     value = os.environ.get("QCSD_CAPTURE_SCHEDULER_CONTRACT")
     if value in {None, ""}:
         return None
-    if value not in {CAPTURE_SCHEDULER_CONTRACT, BUFLO_ETF_SCHEDULER_CONTRACT}:
+    if value not in {
+        CAPTURE_SCHEDULER_CONTRACT,
+        BUFLO_ETF_SCHEDULER_CONTRACT,
+        PORTABLE_ETF_SCHEDULER_CONTRACT,
+        PORTABLE_ETF_SCHEDULER_CONTRACT_V4,
+    }:
         raise ValueError(f"unsupported capture scheduler contract: {value}")
     return value
+
+
+def capture_scheduler_cpus(contract: str | None = None) -> tuple[int, int]:
+    """Read the selected launch partition; keep historical contracts immutable."""
+
+    selected = contract or capture_scheduler_contract()
+    if selected not in {
+        PORTABLE_ETF_SCHEDULER_CONTRACT,
+        PORTABLE_ETF_SCHEDULER_CONTRACT_V4,
+    }:
+        return CAPTURE_CLIENT_CPU, CAPTURE_ORCHESTRATOR_CPU
+    raw_client = os.environ.get("QCSD_CAPTURE_CLIENT_CPU", "")
+    raw_orchestrator = os.environ.get("QCSD_CAPTURE_ORCHESTRATOR_CPU", "")
+    if not raw_client.isdecimal() or not raw_orchestrator.isdecimal():
+        raise ValueError("portable capture scheduler CPUs were not supplied")
+    client, orchestrator = int(raw_client), int(raw_orchestrator)
+    if (
+        client < 1
+        or orchestrator <= client
+        or (selected == PORTABLE_ETF_SCHEDULER_CONTRACT and orchestrator != client + 1)
+    ):
+        raise ValueError("portable capture scheduler CPU partition is invalid")
+    return client, orchestrator
+
+
+def scheduler_receipt_cpus(
+    value: Mapping[str, Any], contract: str | None
+) -> tuple[int, int] | None:
+    """Validate the runner's observed partition without trusting launch env."""
+
+    if contract in {CAPTURE_SCHEDULER_CONTRACT, BUFLO_ETF_SCHEDULER_CONTRACT}:
+        return CAPTURE_CLIENT_CPU, CAPTURE_ORCHESTRATOR_CPU
+    if contract not in {
+        PORTABLE_ETF_SCHEDULER_CONTRACT,
+        PORTABLE_ETF_SCHEDULER_CONTRACT_V4,
+    }:
+        return None
+    affinity = value.get("affinity_cpus")
+    if (
+        not isinstance(affinity, list)
+        or len(affinity) != 1
+        or type(affinity[0]) is not int
+        or affinity[0] < 1
+    ):
+        return None
+    client_cpu = affinity[0]
+    if contract == PORTABLE_ETF_SCHEDULER_CONTRACT:
+        orchestrator_cpu = client_cpu + 1
+        if value.get("cgroup_effective_cpuset") != f"{client_cpu}-{orchestrator_cpu}":
+            return None
+    else:
+        cpuset = value.get("cgroup_effective_cpuset")
+        if not isinstance(cpuset, str):
+            return None
+        try:
+            observed = _cpu_list(cpuset)
+        except ValueError:
+            return None
+        if len(observed) != 2 or client_cpu != min(observed):
+            return None
+        orchestrator_cpu = max(observed)
+    return client_cpu, orchestrator_cpu
 
 
 def capture_scheduler_launch_prefix() -> list[str]:
@@ -138,11 +216,12 @@ def capture_scheduler_launch_prefix() -> list[str]:
 
     if capture_scheduler_contract() is None:
         return []
+    client_cpu, orchestrator_cpu = capture_scheduler_cpus()
     affinity = os.sched_getaffinity(0)
-    if affinity != {CAPTURE_ORCHESTRATOR_CPU}:
+    if affinity != {orchestrator_cpu}:
         raise ValueError(
             f"capture scheduler parent must be confined to orchestrator CPU "
-            f"{CAPTURE_ORCHESTRATOR_CPU}"
+            f"{orchestrator_cpu}"
         )
     rtprio = resource.getrlimit(resource.RLIMIT_RTPRIO)
     if rtprio != (1, 1):
@@ -150,19 +229,23 @@ def capture_scheduler_launch_prefix() -> list[str]:
     prefix = [
         "/usr/bin/taskset",
         "--cpu-list",
-        str(CAPTURE_CLIENT_CPU),
+        str(client_cpu),
         "/usr/bin/chrt",
         "--rr",
         "1",
         "/usr/bin/setpriv",
     ]
-    if capture_scheduler_contract() == BUFLO_ETF_SCHEDULER_CONTRACT:
+    if capture_scheduler_contract() in {
+        BUFLO_ETF_SCHEDULER_CONTRACT,
+        PORTABLE_ETF_SCHEDULER_CONTRACT,
+        PORTABLE_ETF_SCHEDULER_CONTRACT_V4,
+    }:
         # BuFLO's real UDP sockets must select CLOCK_TAI while the Linux ETF
         # qdisc still performs its normal socket consistency check.  Retain
         # exactly CAP_NET_ADMIN and CAP_SETPCAP for that bounded setup phase;
         # the Rust runner configures every socket, drops both capabilities and
         # the bounding set, verifies the capability-free state, and only then
-        # starts the CPU-11 timed-egress helper.  A complete run whose kernel
+        # starts the selected timed-egress helper CPU. A complete run whose kernel
         # receipt does not prove that transition is rejected by the Lab.
         prefix.extend(
             [
@@ -298,24 +381,50 @@ def _host_partition_v1_valid(value: Any) -> bool:
     )
 
 
-def _host_partition_v2_valid(value: Any) -> bool:
-    """Validate the CPU-10/11 partition needed by kernel-timed BuFLO."""
+def _host_partition_v2_valid(
+    value: Any, *, portable: bool = False, sparse: bool = False
+) -> bool:
+    """Validate a kernel-timed partition against its versioned topology."""
 
-    if not isinstance(value, Mapping) or set(value) != _HOST_PARTITION_V2_KEYS:
+    if not isinstance(value, Mapping) or set(value) != (
+        _HOST_PARTITION_V4_KEYS if sparse else _HOST_PARTITION_V2_KEYS
+    ):
         return False
     containers = value.get("running_study_containers")
     expected = value.get("expected_sidecar_names")
     overlaps = value.get("overlapping_container_ids_by_cpu")
-    protected_cpus = [CAPTURE_CLIENT_CPU, CAPTURE_ORCHESTRATOR_CPU]
+    ncpu = value.get("docker_ncpu")
+    if sparse:
+        available_cpus = value.get("available_cpus")
+        if (
+            not isinstance(available_cpus, list)
+            or len(available_cpus) < 3
+            or any(type(cpu) is not int or cpu < 0 for cpu in available_cpus)
+            or available_cpus != sorted(set(available_cpus))
+        ):
+            return False
+        protected_cpus = available_cpus[-2:]
+        sidecar_cpus = available_cpus[:-2]
+    elif portable:
+        if not _uint(ncpu) or ncpu < 3:
+            return False
+        protected_cpus = [ncpu - 2, ncpu - 1]
+        sidecar_cpus = list(range(ncpu - 2))
+    else:
+        protected_cpus = [CAPTURE_CLIENT_CPU, CAPTURE_ORCHESTRATOR_CPU]
+        sidecar_cpus = list(range(CAPTURE_CLIENT_CPU))
+    client_cpu, orchestrator_cpu = protected_cpus
+    version = 4 if sparse else (3 if portable else 2)
     if (
-        value.get("schema_version") != 2
-        or value.get("source") != "docker-inspect-all-running-containers-prelaunch-v2"
+        value.get("schema_version") != version
+        or value.get("source")
+        != f"docker-inspect-all-running-containers-prelaunch-v{version}"
         or not _uint(value.get("captured_at_unix_ns"))
         or value["captured_at_unix_ns"] == 0
         or value.get("protected_cpus") != protected_cpus
         or value.get("owner_label") != "org.qcsd.owner=qcsd-lab"
         or not _uint(value.get("docker_ncpu"))
-        or value["docker_ncpu"] <= CAPTURE_ORCHESTRATOR_CPU
+        or (not sparse and value["docker_ncpu"] <= orchestrator_cpu)
         or not isinstance(expected, list)
         or any(not isinstance(item, str) or not item for item in expected)
         or len(expected) != len(set(expected))
@@ -333,7 +442,7 @@ def _host_partition_v2_valid(value: Any) -> bool:
         or value.get("verified_scope")
         != (
             "all running Docker containers at prelaunch; every container must carry the "
-            "qcsd-lab owner label and avoid protected logical CPUs 10 and 11"
+            f"qcsd-lab owner label and avoid protected logical CPUs {client_cpu} and {orchestrator_cpu}"
         )
         or value.get("unavailable_scope")
         != [
@@ -377,15 +486,16 @@ def _host_partition_v2_valid(value: Any) -> bool:
             return False
         if configured:
             try:
-                if effective != sorted(_cpu_list(configured)):
+                configured_cpus = _cpu_list(configured)
+                if (sparse and not configured_cpus.issubset(available_cpus)) or effective != sorted(configured_cpus):
                     return False
             except ValueError:
                 return False
-        elif effective != list(range(value["docker_ncpu"])):
+        elif effective != (available_cpus if sparse else list(range(value["docker_ncpu"]))):
             return False
         if name in expected_set:
             observed_expected.add(name)
-            if effective != list(range(CAPTURE_CLIENT_CPU)):
+            if effective != sidecar_cpus:
                 return False
         for cpu in expected_overlaps:
             derived_overlaps[str(cpu)].append(container_id)
@@ -408,6 +518,10 @@ def _host_partition_valid(value: Any) -> bool:
         return _host_partition_v1_valid(value)
     if value.get("schema_version") == 2:
         return _host_partition_v2_valid(value)
+    if value.get("schema_version") == 3:
+        return _host_partition_v2_valid(value, portable=True)
+    if value.get("schema_version") == 4:
+        return _host_partition_v2_valid(value, sparse=True)
     return False
 
 
@@ -468,6 +582,32 @@ def _unavailable_host_partition_v2(reason: str) -> dict[str, Any]:
 
 
 def _unavailable_host_partition(reason: str) -> dict[str, Any]:
+    if capture_scheduler_contract() in {
+        PORTABLE_ETF_SCHEDULER_CONTRACT,
+        PORTABLE_ETF_SCHEDULER_CONTRACT_V4,
+    }:
+        sparse = capture_scheduler_contract() == PORTABLE_ETF_SCHEDULER_CONTRACT_V4
+        value = _unavailable_host_partition_v2(reason)
+        value["schema_version"] = 4 if sparse else 3
+        value["source"] = (
+            "docker-inspect-all-running-containers-prelaunch-v4" if sparse else
+            "docker-inspect-all-running-containers-prelaunch-v3"
+        )
+        try:
+            client_cpu, orchestrator_cpu = capture_scheduler_cpus()
+        except ValueError:
+            client_cpu, orchestrator_cpu = -1, -1
+        value["protected_cpus"] = [client_cpu, orchestrator_cpu]
+        if sparse:
+            value["available_cpus"] = []
+        value["overlapping_container_ids_by_cpu"] = {
+            str(client_cpu): [], str(orchestrator_cpu): []
+        }
+        value["verified_scope"] = (
+            "all running Docker containers at prelaunch; every container must carry the "
+            f"qcsd-lab owner label and avoid protected logical CPUs {client_cpu} and {orchestrator_cpu}"
+        )
+        return value
     if capture_scheduler_contract() == BUFLO_ETF_SCHEDULER_CONTRACT:
         return _unavailable_host_partition_v2(reason)
     return _unavailable_host_partition_v1(reason)
@@ -533,11 +673,11 @@ def _read_cpu_stat(paths: tuple[Path, ...]) -> dict[str, Any]:
     }
 
 
-def _read_cpu_steal(proc_root: Path) -> dict[str, Any]:
+def _read_cpu_steal(proc_root: Path, client_cpu: int = CAPTURE_CLIENT_CPU) -> dict[str, Any]:
     path = proc_root / "stat"
     try:
         lines = path.read_text(encoding="ascii").splitlines()
-        line = next(line for line in lines if line.startswith(f"cpu{CAPTURE_CLIENT_CPU} "))
+        line = next(line for line in lines if line.startswith(f"cpu{client_cpu} "))
         fields = line.split()[1:]
         if len(fields) < 8 or any(not field.isdecimal() for field in fields):
             raise ValueError("per-CPU stat lacks the Linux steal field")
@@ -589,9 +729,10 @@ class CaptureSchedulerMonitor:
         self._cgroup_paths = cgroup_cpu_stat_paths
         self._interval_us = interval_us
         self._contract = capture_scheduler_contract() or CAPTURE_SCHEDULER_CONTRACT
+        self._client_cpu, self._orchestrator_cpu = capture_scheduler_cpus(self._contract)
         self._host_partition = dict(host_partition or _load_host_partition())
         self._cpu_stat_before = _read_cpu_stat(self._cgroup_paths)
-        self._steal_before = _read_cpu_steal(self._proc_root)
+        self._steal_before = _read_cpu_steal(self._proc_root, self._client_cpu)
         self._pid_namespace_inode = self._namespace_inode()
         self._expected_process_group_id: int | None = None
         self._expected_task_observed = False
@@ -681,7 +822,7 @@ class CaptureSchedulerMonitor:
                     )
                     continue
                 visible += 1
-                if CAPTURE_CLIENT_CPU not in cpus:
+                if self._client_cpu not in cpus:
                     continue
                 eligible += 1
                 if process_group == self._expected_process_group_id:
@@ -725,13 +866,13 @@ class CaptureSchedulerMonitor:
                 f"scheduler monitor final scan failed: {type(error).__name__}: {error}"
             )
         cpu_stat_after = _read_cpu_stat(self._cgroup_paths)
-        steal_after = _read_cpu_steal(self._proc_root)
+        steal_after = _read_cpu_steal(self._proc_root, self._client_cpu)
         cpu_stat = _cpu_stat_delta(self._cpu_stat_before, cpu_stat_after)
-        steal = _steal_delta(self._steal_before, steal_after)
+        steal = _steal_delta(self._steal_before, steal_after, self._client_cpu)
         monitor = {
             "source": "procfs-task-affinity-sampled-v1",
             "scope": "tasks visible in the collection container PID namespace",
-            "client_cpu": CAPTURE_CLIENT_CPU,
+            "client_cpu": self._client_cpu,
             "sampling_interval_us": self._interval_us,
             "samples": self._sample_count,
             "pid_namespace_inode": self._pid_namespace_inode,
@@ -746,10 +887,22 @@ class CaptureSchedulerMonitor:
             "unexpected_task_receipt_overflow": self._overflowed_unexpected,
             "scan_errors": list(self._scan_errors),
         }
-        expected_partition_schema = 2 if self._contract == BUFLO_ETF_SCHEDULER_CONTRACT else 1
+        portable = self._contract == PORTABLE_ETF_SCHEDULER_CONTRACT
+        sparse = self._contract == PORTABLE_ETF_SCHEDULER_CONTRACT_V4
+        kernel_timed = self._contract in {
+            BUFLO_ETF_SCHEDULER_CONTRACT,
+            PORTABLE_ETF_SCHEDULER_CONTRACT,
+            PORTABLE_ETF_SCHEDULER_CONTRACT_V4,
+        }
+        expected_partition_schema = 4 if sparse else (3 if portable else (2 if kernel_timed else 1))
         valid = bool(
             _host_partition_valid(self._host_partition)
             and self._host_partition.get("schema_version") == expected_partition_schema
+            and (
+                not (portable or sparse)
+                or self._host_partition.get("protected_cpus")
+                == [self._client_cpu, self._orchestrator_cpu]
+            )
             and cpu_stat["available"] is True
             and cpu_stat["nr_throttled_delta"] == 0
             and cpu_stat["throttled_duration_delta"] == 0
@@ -761,14 +914,13 @@ class CaptureSchedulerMonitor:
             and not self._overflowed_unexpected
             and not self._scan_errors
         )
-        kernel_timed = self._contract == BUFLO_ETF_SCHEDULER_CONTRACT
         verified_scope = [
-            "measured process-group eligibility for logical CPU 10 in the collection PID namespace",
+            f"measured process-group eligibility for logical CPU {self._client_cpu} in the collection PID namespace",
             "collection-cgroup CPU throttling counters over the measured client interval",
-            "guest-visible logical CPU 10 steal ticks over the measured client interval when exposed",
+            f"guest-visible logical CPU {self._client_cpu} steal ticks over the measured client interval when exposed",
             (
                 "all running Docker container cpusets at host prelaunch, with every container "
-                "QCSD-owned and logical CPUs 10 and 11 protected"
+                f"QCSD-owned and logical CPUs {self._client_cpu} and {self._orchestrator_cpu} protected"
                 if kernel_timed
                 else (
                     "all running Docker container cpusets at host prelaunch, with every "
@@ -778,18 +930,20 @@ class CaptureSchedulerMonitor:
         ]
         return {
             "schema_version": (
-                BUFLO_ETF_SCHEDULER_RUNTIME_SCHEMA_VERSION
-                if kernel_timed
-                else CAPTURE_SCHEDULER_RUNTIME_SCHEMA_VERSION
+                PORTABLE_ETF_SCHEDULER_RUNTIME_V4_SCHEMA_VERSION if sparse else
+                PORTABLE_ETF_SCHEDULER_RUNTIME_SCHEMA_VERSION if portable else
+                BUFLO_ETF_SCHEDULER_RUNTIME_SCHEMA_VERSION if kernel_timed else
+                CAPTURE_SCHEDULER_RUNTIME_SCHEMA_VERSION
             ),
             "source": (
-                BUFLO_ETF_SCHEDULER_RUNTIME_SOURCE
-                if kernel_timed
-                else CAPTURE_SCHEDULER_RUNTIME_SOURCE
+                PORTABLE_ETF_SCHEDULER_RUNTIME_V4_SOURCE if sparse else
+                PORTABLE_ETF_SCHEDULER_RUNTIME_SOURCE if portable else
+                BUFLO_ETF_SCHEDULER_RUNTIME_SOURCE if kernel_timed else
+                CAPTURE_SCHEDULER_RUNTIME_SOURCE
             ),
             "contract": self._contract,
-            "client_cpu": CAPTURE_CLIENT_CPU,
-            "orchestrator_cpu": CAPTURE_ORCHESTRATOR_CPU,
+            "client_cpu": self._client_cpu,
+            "orchestrator_cpu": self._orchestrator_cpu,
             "cgroup_cpu_stat": cpu_stat,
             "proc_stat_steal": steal,
             "guest_task_monitor": monitor,
@@ -856,7 +1010,9 @@ def _cpu_stat_delta(before: Mapping[str, Any], after: Mapping[str, Any]) -> dict
     }
 
 
-def _steal_delta(before: Mapping[str, Any], after: Mapping[str, Any]) -> dict[str, Any]:
+def _steal_delta(
+    before: Mapping[str, Any], after: Mapping[str, Any], client_cpu: int = CAPTURE_CLIENT_CPU
+) -> dict[str, Any]:
     available = bool(
         before.get("available") is True
         and after.get("available") is True
@@ -869,7 +1025,7 @@ def _steal_delta(before: Mapping[str, Any], after: Mapping[str, Any]) -> dict[st
     if not available:
         return {
             "available": False,
-            "scope": "guest-visible aggregate for logical CPU 10, not client-process attribution",
+            "scope": f"guest-visible aggregate for logical CPU {client_cpu}, not client-process attribution",
             "path": before.get("path") or after.get("path"),
             "unavailable_reason": (
                 before.get("unavailable_reason")
@@ -883,7 +1039,7 @@ def _steal_delta(before: Mapping[str, Any], after: Mapping[str, Any]) -> dict[st
         }
     return {
         "available": True,
-        "scope": "guest-visible aggregate for logical CPU 10, not client-process attribution",
+        "scope": f"guest-visible aggregate for logical CPU {client_cpu}, not client-process attribution",
         "path": before["path"],
         "unavailable_reason": None,
         "clock_ticks_per_second": before["clock_ticks_per_second"],
@@ -913,27 +1069,51 @@ def capture_scheduler_runtime_evidence_valid(value: Any) -> bool:
     if not isinstance(value, Mapping) or set(value) != expected_keys:
         return False
     contract = value.get("contract")
-    if contract not in {CAPTURE_SCHEDULER_CONTRACT, BUFLO_ETF_SCHEDULER_CONTRACT}:
+    if contract not in {
+        CAPTURE_SCHEDULER_CONTRACT,
+        BUFLO_ETF_SCHEDULER_CONTRACT,
+        PORTABLE_ETF_SCHEDULER_CONTRACT,
+        PORTABLE_ETF_SCHEDULER_CONTRACT_V4,
+    }:
         return False
-    kernel_timed = contract == BUFLO_ETF_SCHEDULER_CONTRACT
+    portable = contract == PORTABLE_ETF_SCHEDULER_CONTRACT
+    sparse = contract == PORTABLE_ETF_SCHEDULER_CONTRACT_V4
+    kernel_timed = contract in {
+        BUFLO_ETF_SCHEDULER_CONTRACT,
+        PORTABLE_ETF_SCHEDULER_CONTRACT,
+        PORTABLE_ETF_SCHEDULER_CONTRACT_V4,
+    }
+    host_partition = value.get("host_partition")
+    if portable or sparse:
+        if not _host_partition_valid(host_partition):
+            return False
+        if sparse:
+            client_cpu, orchestrator_cpu = host_partition["available_cpus"][-2:]
+        else:
+            ncpu = host_partition["docker_ncpu"]
+            client_cpu, orchestrator_cpu = ncpu - 2, ncpu - 1
+    else:
+        client_cpu, orchestrator_cpu = CAPTURE_CLIENT_CPU, CAPTURE_ORCHESTRATOR_CPU
     expected_schema = (
-        BUFLO_ETF_SCHEDULER_RUNTIME_SCHEMA_VERSION
-        if kernel_timed
-        else CAPTURE_SCHEDULER_RUNTIME_SCHEMA_VERSION
+        PORTABLE_ETF_SCHEDULER_RUNTIME_V4_SCHEMA_VERSION if sparse else
+        PORTABLE_ETF_SCHEDULER_RUNTIME_SCHEMA_VERSION if portable else
+        BUFLO_ETF_SCHEDULER_RUNTIME_SCHEMA_VERSION if kernel_timed else
+        CAPTURE_SCHEDULER_RUNTIME_SCHEMA_VERSION
     )
     expected_source = (
-        BUFLO_ETF_SCHEDULER_RUNTIME_SOURCE
-        if kernel_timed
-        else CAPTURE_SCHEDULER_RUNTIME_SOURCE
+        PORTABLE_ETF_SCHEDULER_RUNTIME_V4_SOURCE if sparse else
+        PORTABLE_ETF_SCHEDULER_RUNTIME_SOURCE if portable else
+        BUFLO_ETF_SCHEDULER_RUNTIME_SOURCE if kernel_timed else
+        CAPTURE_SCHEDULER_RUNTIME_SOURCE
     )
-    expected_partition_schema = 2 if kernel_timed else 1
+    expected_partition_schema = 4 if sparse else (3 if portable else (2 if kernel_timed else 1))
     expected_verified_scope = [
-        "measured process-group eligibility for logical CPU 10 in the collection PID namespace",
+        f"measured process-group eligibility for logical CPU {client_cpu} in the collection PID namespace",
         "collection-cgroup CPU throttling counters over the measured client interval",
-        "guest-visible logical CPU 10 steal ticks over the measured client interval when exposed",
+        f"guest-visible logical CPU {client_cpu} steal ticks over the measured client interval when exposed",
         (
             "all running Docker container cpusets at host prelaunch, with every container "
-            "QCSD-owned and logical CPUs 10 and 11 protected"
+            f"QCSD-owned and logical CPUs {client_cpu} and {orchestrator_cpu} protected"
             if kernel_timed
             else (
                 "all running Docker container cpusets at host prelaunch, with every "
@@ -947,10 +1127,10 @@ def capture_scheduler_runtime_evidence_valid(value: Any) -> bool:
     if (
         value.get("schema_version") != expected_schema
         or value.get("source") != expected_source
-        or value.get("client_cpu") != CAPTURE_CLIENT_CPU
-        or value.get("orchestrator_cpu") != CAPTURE_ORCHESTRATOR_CPU
+        or value.get("client_cpu") != client_cpu
+        or value.get("orchestrator_cpu") != orchestrator_cpu
         or value.get("valid") is not True
-        or not _host_partition_valid(value.get("host_partition"))
+        or not _host_partition_valid(host_partition)
         or value["host_partition"].get("schema_version") != expected_partition_schema
         or not isinstance(cpu_stat, Mapping)
         or set(cpu_stat) != _CPU_STAT_EVIDENCE_KEYS
@@ -963,12 +1143,12 @@ def capture_scheduler_runtime_evidence_valid(value: Any) -> bool:
         or not isinstance(steal, Mapping)
         or set(steal) != _STEAL_EVIDENCE_KEYS
         or steal.get("scope")
-        != "guest-visible aggregate for logical CPU 10, not client-process attribution"
+        != f"guest-visible aggregate for logical CPU {client_cpu}, not client-process attribution"
         or not isinstance(monitor, Mapping)
         or set(monitor) != _TASK_MONITOR_KEYS
         or monitor.get("source") != "procfs-task-affinity-sampled-v1"
         or monitor.get("scope") != "tasks visible in the collection container PID namespace"
-        or monitor.get("client_cpu") != CAPTURE_CLIENT_CPU
+        or monitor.get("client_cpu") != client_cpu
         or not _uint(monitor.get("sampling_interval_us"))
         or not _uint(monitor.get("samples"))
         or monitor["samples"] < 3

@@ -28,6 +28,7 @@ from .util import LAB_ROOT, durable_create, fsync_directory, sha256_file
 
 ARTIFACT_TYPE = "qcsd-etf-capability-probe"
 SCHEMA_VERSION = 3
+PORTABLE_RECEIPT_SCHEMA_VERSION = 4
 PREVIOUS_SCHEMA_VERSION = 2
 HISTORICAL_SCHEMA_VERSION = 1
 SUPERVISED_REQUEST_TYPE = "qcsd-etf-supervised-request"
@@ -77,12 +78,12 @@ _RECEIPT_REQUIRED_KEYS = frozenset(
     }
 )
 _RECEIPT_OPTIONAL_KEYS = frozenset(
-    {"docker", "sender", "receiver", "execution_errors"}
+    {"docker", "sender", "receiver", "execution_errors", "cpu_observation"}
 )
 
 
 def _utc_now() -> str:
-    return dt.datetime.now(dt.UTC).isoformat().replace("+00:00", "Z")
+    return dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _canonical_json(value: Any) -> bytes:
@@ -101,6 +102,7 @@ def _payload_sha256(value: dict[str, Any]) -> str:
         HISTORICAL_SCHEMA_VERSION,
         PREVIOUS_SCHEMA_VERSION,
         SCHEMA_VERSION,
+        PORTABLE_RECEIPT_SCHEMA_VERSION,
     }:
         raise ValueError("ETF probe payload schema is invalid")
     return _sha256_bytes(
@@ -117,6 +119,7 @@ def _validate_receipt_structure(value: dict[str, Any]) -> None:
         HISTORICAL_SCHEMA_VERSION,
         PREVIOUS_SCHEMA_VERSION,
         SCHEMA_VERSION,
+        PORTABLE_RECEIPT_SCHEMA_VERSION,
     }:
         raise ValueError("ETF probe receipt schema is invalid")
     if not _RECEIPT_REQUIRED_KEYS.issubset(value) or not set(value).issubset(
@@ -133,6 +136,7 @@ def _validate_receipt_structure(value: dict[str, Any]) -> None:
         HISTORICAL_SCHEMA_VERSION: HISTORICAL_ETF_DELTA_NS,
         PREVIOUS_SCHEMA_VERSION: PREVIOUS_ETF_DELTA_NS,
         SCHEMA_VERSION: ETF_DELTA_NS,
+        PORTABLE_RECEIPT_SCHEMA_VERSION: ETF_DELTA_NS,
     }[schema_version]
     if (
         configuration.get("clockid") != "CLOCK_TAI"
@@ -174,6 +178,15 @@ def _validate_receipt_structure(value: dict[str, Any]) -> None:
     ):
         raise ValueError("ETF probe receipt schema-3 timing semantics are invalid")
 
+    observation = value.get("cpu_observation")
+    if schema_version == PORTABLE_RECEIPT_SCHEMA_VERSION:
+        if "cpu_observation" not in value or (
+            observation is not None and not _valid_cpu_observation(observation)
+        ):
+            raise ValueError("ETF probe CPU-ID observation is invalid")
+    elif "cpu_observation" in value:
+        raise ValueError("historical ETF probe receipt contains a future CPU-ID observation")
+
     passed = value.get("status") == "passed"
     failed_gates = validation.get("failed_gates")
     if (
@@ -191,11 +204,16 @@ def _validate_receipt_structure(value: dict[str, Any]) -> None:
     if passed:
         if not isinstance(sender, dict) or not isinstance(receiver, dict):
             raise ValueError("passed ETF probe receipt lacks probe outputs")
+        expected_worker_schema = (
+            SCHEMA_VERSION
+            if schema_version == PORTABLE_RECEIPT_SCHEMA_VERSION
+            else schema_version
+        )
         if (
             type(sender.get("schema_version")) is not int
             or type(receiver.get("schema_version")) is not int
-            or sender.get("schema_version") != schema_version
-            or receiver.get("schema_version") != schema_version
+            or sender.get("schema_version") != expected_worker_schema
+            or receiver.get("schema_version") != expected_worker_schema
         ):
             raise ValueError("ETF probe receipt schemas are not paired")
         if (
@@ -206,13 +224,41 @@ def _validate_receipt_structure(value: dict[str, Any]) -> None:
         ):
             raise ValueError("passed ETF probe receipt runtime outcome is invalid")
 
-        if schema_version == SCHEMA_VERSION:
+        if schema_version in {SCHEMA_VERSION, PORTABLE_RECEIPT_SCHEMA_VERSION}:
             replayed = validate_probe(sender, receiver)
             gates = validation.get("gates")
             if replayed.get("passed") is not True or not isinstance(gates, dict):
                 raise ValueError("ETF probe receipt outputs do not replay as passed")
             if any(gates.get(name) != gate for name, gate in replayed["gates"].items()):
                 raise ValueError("ETF probe receipt validation replay differs")
+        if schema_version == PORTABLE_RECEIPT_SCHEMA_VERSION:
+            if not _valid_cpu_observation(observation):
+                raise ValueError("passed ETF probe lacks valid CPU-ID observation")
+            if value.get("cpu_assignment") != dict(
+                zip(("receiver", "main", "timed_helper"), observation[-3:], strict=True)
+            ):
+                raise ValueError("ETF probe CPU assignment differs from the observed IDs")
+
+
+def _valid_cpu_observation(value: Any) -> bool:
+    return bool(
+        isinstance(value, list)
+        and len(value) >= 3
+        and all(type(cpu) is int and cpu >= 0 for cpu in value)
+        and value == sorted(set(value))
+    )
+
+
+def _optional_state_cpu_ids(raw: str) -> list[int] | None:
+    if raw == "unavailable":
+        return None
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise ValueError("ETF supervised CPU-ID observation is invalid JSON") from error
+    if not _valid_cpu_observation(value) or raw != json.dumps(value, separators=(",", ":")):
+        raise ValueError("ETF supervised CPU-ID observation is invalid")
+    return value
 
 
 def validate_probe_receipt(path: Path) -> dict[str, Any]:
@@ -1218,6 +1264,7 @@ def finalize_supervised_probe(
     receiver_cpu: int | None,
     main_cpu: int | None,
     helper_cpu: int | None,
+    available_cpus: list[int] | None,
     sender_exit_code: int | None,
     receiver_exit_code: int | None,
     launcher_exit_code: int | None,
@@ -1258,6 +1305,8 @@ def finalize_supervised_probe(
         for value in cpu_values
     ):
         raise ValueError("ETF probe CPU assignment is invalid")
+    if available_cpus is not None and not _valid_cpu_observation(available_cpus):
+        raise ValueError("ETF probe CPU-ID observation is invalid")
     if not isinstance(stage, str) or not stage or len(stage) > 80:
         raise ValueError("ETF probe launcher stage is invalid")
     if not isinstance(cleanup, dict) or cleanup.get("passed") not in {True, False}:
@@ -1265,7 +1314,7 @@ def finalize_supervised_probe(
 
     receipt: dict[str, Any] = {
         "artifact_type": ARTIFACT_TYPE,
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": PORTABLE_RECEIPT_SCHEMA_VERSION,
         "evidentiary": False,
         "authorizes_capture": False,
         "purpose": (
@@ -1311,6 +1360,7 @@ def finalize_supervised_probe(
             "main": main_cpu,
             "timed_helper": helper_cpu,
         },
+        "cpu_observation": available_cpus,
         "container_exit_codes": {
             "sender": sender_status,
             "receiver": receiver_status,
@@ -1337,13 +1387,10 @@ def finalize_supervised_probe(
             info_path=info_path,
             image_path=image_path,
         )
-        expected_cpu = receipt["docker"]["info"]["NCPU"]
-        if (receiver_cpu, main_cpu, helper_cpu) != (
-            expected_cpu - 3,
-            expected_cpu - 2,
-            expected_cpu - 1,
+        if available_cpus is None or (receiver_cpu, main_cpu, helper_cpu) != tuple(
+            available_cpus[-3:]
         ):
-            raise RuntimeError("ETF probe CPU assignment differs from Docker capacity")
+            raise RuntimeError("ETF probe CPU assignment differs from observed Docker CPU IDs")
         sender = _load_json(sender_path, label="ETF sender")
         receiver = _load_json(receiver_path, label="post-veth receiver")
         receipt["sender"] = sender
@@ -1448,6 +1495,7 @@ _SUPERVISED_STATE_KEYS = frozenset(
         "sender_name",
         "network_id",
         "receiver_id",
+        "available_cpus",
         "receiver_cpu",
         "main_cpu",
         "helper_cpu",
@@ -1540,6 +1588,7 @@ def finalize_supervised_bundle(
         receiver_cpu=_optional_state_int(state["receiver_cpu"]),
         main_cpu=_optional_state_int(state["main_cpu"]),
         helper_cpu=_optional_state_int(state["helper_cpu"]),
+        available_cpus=_optional_state_cpu_ids(state["available_cpus"]),
         sender_exit_code=_optional_state_int(state["sender_exit_code"]),
         receiver_exit_code=_optional_state_int(state["receiver_exit_code"]),
         launcher_exit_code=_optional_state_int(state["launcher_exit_code"]),

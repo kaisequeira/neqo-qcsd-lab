@@ -270,6 +270,7 @@ def _supervised_bundle(tmp_path: Path) -> tuple[Path, Path, Path]:
         "sender_name": f"{network}-sender",
         "network_id": "d" * 64,
         "peer_id": "e" * 64,
+        "available_cpus": "[0,1,2,3,4,5,6,7,8,9,10,11]",
         "peer_cpu": "9",
         "main_cpu": "10",
         "helper_cpu": "11",
@@ -637,6 +638,7 @@ def test_schema_one_bundle_validation_remains_supported(tmp_path: Path) -> None:
     _write_json(sender_path, sender)
     _write_json(peer_path, peer)
     receipt["schema_version"] = etf_veth_probe.PREVIOUS_SCHEMA_VERSION
+    receipt.pop("cpu_observation")
     receipt["purpose"] = etf_veth_probe.HISTORICAL_PURPOSE
     receipt["configuration"] = {
         "profile": etf_veth_probe.HISTORICAL_PROFILE,
@@ -690,8 +692,72 @@ def test_schema_two_bundle_cannot_bypass_replay_by_downgrade_relabelling(
     receipt_path.chmod(0o444)
     destination.chmod(0o555)
 
-    with pytest.raises(ValueError, match="schema-1 historical contract"):
+    with pytest.raises(ValueError, match="future CPU-ID observation"):
         etf_veth_probe.validate_bundle(destination)
+
+
+def test_schema_two_bundle_remains_readable(tmp_path: Path) -> None:
+    request, scratch, destination = _supervised_bundle(tmp_path)
+    etf_veth_probe.finalize_supervised_bundle(request, scratch)
+    destination.chmod(0o755)
+    receipt_path = destination / "receipt.json"
+    receipt_path.chmod(0o644)
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    sender = json.loads((destination / "sender.json").read_text(encoding="utf-8"))
+    peer = json.loads((destination / "peer.json").read_text(encoding="utf-8"))
+    receipt["schema_version"] = etf_veth_probe.SCHEMA_VERSION
+    receipt.pop("cpu_observation")
+    replayed = etf_veth_probe._replay_evaluation(
+        sender, peer, samples=etf_veth_probe.MIN_SAMPLES, series_id=SERIES_ID
+    )
+    receipt["evaluation"] = etf_veth_probe._apply_runtime_gates(
+        replayed,
+        sender=sender,
+        peer=peer,
+        docker=receipt["docker"],
+        resources=receipt["resources"],
+        cpu_assignment=receipt["cpu_assignment"],
+        container_exit_codes=receipt["container_exit_codes"],
+        lifecycle=receipt["lifecycle"],
+    )
+    receipt["payload_sha256"] = etf_veth_probe._receipt_payload_sha256(receipt)
+    _write_json(receipt_path, receipt)
+    receipt_path.chmod(0o444)
+    destination.chmod(0o555)
+
+    assert etf_veth_probe.validate_bundle(destination)["schema_version"] == (
+        etf_veth_probe.SCHEMA_VERSION
+    )
+
+
+def test_bundle_accepts_sparse_observed_cpu_ids(tmp_path: Path) -> None:
+    request, scratch, destination = _supervised_bundle(tmp_path)
+    state_path = scratch / "lifecycle.state"
+    state = dict(line.split("=", 1) for line in state_path.read_text().splitlines())
+    state.update(available_cpus="[4,8,25,30,47]", peer_cpu="25", main_cpu="30", helper_cpu="47")
+    state_path.write_text(
+        "".join(f"{key}={value}\n" for key, value in state.items()), encoding="ascii"
+    )
+    sender_path = scratch / "output" / "sender.json"
+    peer_path = scratch / "output" / "peer.json"
+    sender = json.loads(sender_path.read_text(encoding="utf-8"))
+    sender["configuration"]["main_cpu"] = 30
+    sender["configuration"]["helper_cpu"] = 47
+    sender["available_affinity"] = [30, 47]
+    sender["scheduler"]["affinity"] = [47]
+    _write_json(sender_path, sender)
+    peer = json.loads(peer_path.read_text(encoding="utf-8"))
+    peer["available_affinity"] = [25]
+    peer["scheduler"]["affinity"] = [25]
+    _write_json(peer_path, peer)
+
+    _path, _digest, passed = etf_veth_probe.finalize_supervised_bundle(request, scratch)
+    receipt = etf_veth_probe.validate_bundle(destination)
+
+    assert passed is True
+    assert receipt["schema_version"] == etf_veth_probe.PORTABLE_RECEIPT_SCHEMA_VERSION
+    assert receipt["cpu_observation"] == [4, 8, 25, 30, 47]
+    assert receipt["cpu_assignment"] == {"peer": 25, "main": 30, "helper": 47}
 
 
 def test_bundle_rejects_mismatched_lifecycle_cpu_observations(tmp_path: Path) -> None:
@@ -728,6 +794,11 @@ def test_public_cli_and_launcher_are_bounded_and_do_not_mutate_rps() -> None:
     assert "--samples \"${etf_veth_probe_samples}\"" in branch
     assert "--ulimit rtprio=1:1" in branch
     assert "--cpuset-cpus \"${etf_veth_probe_main_cpu},${etf_veth_probe_helper_cpu}\"" in branch
+    assert "qcsd_capture_attached_docker_output QCSD_DOCKER_OUTPUT_ETF_VETH_CPU_IDS" in branch
+    assert '--entrypoint /usr/bin/python3 "${etf_veth_probe_image_id}" -I -c' in branch
+    assert "os.sched_getaffinity(0)" in branch
+    assert "'available_cpus=%s\\n' \"${etf_veth_probe_available_cpus_json}\"" in branch
+    assert "etf_veth_probe_cpu_count - 3" not in branch
     assert "rps_cpus" not in branch
     assert "xps_cpus" not in branch
     assert "cannot authorise the mandatory HTTP/3 post-veth PCAP" in launcher

@@ -77,6 +77,7 @@ from qcsd_lab.browser_egress_qualification import (
     ARGV_RELATIVE_PATH,
     CONSUMER_CONTRACT,
     DOCKER_CAPACITY_CONTRACT,
+    HISTORICAL_DOCKER_CAPACITY_CONTRACT,
     DOCKER_INSPECT_PROJECTION_SCHEMA_VERSION,
     EFFECTIVE_ARGV_BINDING_SCHEMA_VERSION,
     EMPTY_SHA256,
@@ -588,6 +589,13 @@ def test_foundation_rejects_bool_float_and_adversarial_reseal(tmp_path: Path) ->
     assert HISTORICAL_FOUNDATION_SCHEMA_VERSION == 2
     assert HISTORICAL_FOUNDATION_SCHEMA_VERSIONS == frozenset({2, 3, 4, 5})
     assert DOCKER_CAPACITY_CONTRACT == {
+        "schema_version": 2,
+        "ncpu_policy": "positive-provenance-only",
+        "required_ncpu": None,
+        "mem_total_bytes_policy": "positive-provenance-only",
+        "mem_total_bytes_threshold": None,
+    }
+    assert HISTORICAL_DOCKER_CAPACITY_CONTRACT == {
         "schema_version": 1,
         "ncpu_policy": "exact",
         "required_ncpu": 12,
@@ -699,11 +707,47 @@ def test_schema_6_accepts_raw_memory_drift_and_preserves_the_live_runtime_observ
     )
 
 
-@pytest.mark.parametrize("ncpu", [11, 13])
-def test_schema_6_rejects_live_cpu_capacity_drift(tmp_path: Path, ncpu: int) -> None:
+@pytest.mark.parametrize("ncpu", [0, -1])
+def test_schema_6_rejects_nonpositive_live_cpu_capacity(tmp_path: Path, ncpu: int) -> None:
     _lab_root, foundation = _lab(tmp_path)
     live = _live_daemon()
     live["ncpu"] = ncpu
+    with pytest.raises(ValueError, match="capacity is invalid"):
+        require_live_docker_daemon(
+            live,
+            expected=foundation["docker_daemon"],
+            foundation_schema_version=foundation["schema_version"],
+            capacity_contract=foundation["docker_capacity_contract"],
+        )
+
+
+@pytest.mark.parametrize("ncpu", [1, 2, 3, 8, 13])
+def test_schema_6_accepts_portable_live_cpu_capacity(tmp_path: Path, ncpu: int) -> None:
+    _lab_root, foundation = _lab(tmp_path)
+    live = _live_daemon()
+    live["ncpu"] = ncpu
+    assert require_live_docker_daemon(
+        live,
+        expected=foundation["docker_daemon"],
+        foundation_schema_version=foundation["schema_version"],
+        capacity_contract=foundation["docker_capacity_contract"],
+    ) == live
+
+
+def test_schema_6_historical_capacity_contract_keeps_exact_12_reader(tmp_path: Path) -> None:
+    _lab_root, foundation = _lab(tmp_path)
+    foundation["docker_capacity_contract"] = HISTORICAL_DOCKER_CAPACITY_CONTRACT
+    assert validate_foundation_payload(foundation)["docker_capacity_contract"] == (
+        HISTORICAL_DOCKER_CAPACITY_CONTRACT
+    )
+    live = _live_daemon()
+    assert require_live_docker_daemon(
+        live,
+        expected=foundation["docker_daemon"],
+        foundation_schema_version=foundation["schema_version"],
+        capacity_contract=foundation["docker_capacity_contract"],
+    ) == live
+    live["ncpu"] = 13
     with pytest.raises(ValueError, match="CPU capacity"):
         require_live_docker_daemon(
             live,

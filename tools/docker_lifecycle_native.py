@@ -940,16 +940,25 @@ def _api_service_wrapper(arguments: Sequence[str]) -> int:
             environment=command_environment,
             pass_fds=(docker_config_fd, buildx_config_fd),
         )
-        if dispatched is not None:
-            return dispatched
-        result = subprocess.run(
-            command,
-            close_fds=True,
-            pass_fds=(docker_config_fd, buildx_config_fd),
-            env=command_environment,
-            check=False,
-        )
-        return result.returncode if result.returncode >= 0 else 128 - result.returncode
+        if dispatched is None:
+            result = subprocess.run(
+                command,
+                close_fds=True,
+                pass_fds=(docker_config_fd, buildx_config_fd),
+                env=command_environment,
+                check=False,
+            )
+            dispatched = (
+                result.returncode if result.returncode >= 0 else 128 - result.returncode
+            )
+        # systemd before 250 ends a service when its main process exits.  A
+        # Docker command that leaves a descendant behind must not turn that
+        # earlier main-process exit into an accepted API result.  Check the
+        # complete cgroup before reporting any result on every systemd version.
+        if not _service_cgroup_contains_only_self():
+            print("Docker API service retained a descendant", file=sys.stderr)
+            return 125
+        return dispatched
     finally:
         if lock_fd >= 0:
             os.close(lock_fd)
@@ -1196,6 +1205,63 @@ def _cgroup_terminal(control_group: str) -> bool:
         return False
 
 
+def _service_cgroup_contains_only_self() -> bool:
+    try:
+        lines = Path("/proc/self/cgroup").read_text(encoding="ascii").splitlines()
+        if len(lines) != 1 or not lines[0].startswith("0::"):
+            return False
+        control_group = lines[0][3:]
+        if (
+            not control_group.startswith("/")
+            or any(part in {"", ".", ".."} for part in control_group.split("/")[1:])
+        ):
+            return False
+        candidate = Path("/sys/fs/cgroup").joinpath(*control_group.split("/")[1:])
+        observed_self = False
+        for directory, _, names in os.walk(candidate):
+            if "cgroup.procs" not in names:
+                return False
+            for line in Path(directory, "cgroup.procs").read_text(
+                encoding="ascii"
+            ).splitlines():
+                if line != str(os.getpid()):
+                    return False
+                observed_self = True
+        return observed_self
+    except (OSError, UnicodeError):
+        return False
+
+
+def _systemd_versions() -> tuple[int, int] | None:
+    """Return the running user manager and local systemd-run major versions."""
+    try:
+        manager = subprocess.run(
+            (SYSTEMCTL, "--user", "show", "--property=Version", "--value", "--no-pager"),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=3,
+        )
+        runner = subprocess.run(
+            (SYSTEMD_RUN, "--version"),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=3,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if manager.returncode != 0 or runner.returncode != 0:
+        return None
+    manager_match = re.fullmatch(
+        r"([0-9]+)(?:[.][0-9]+)?(?:[-+~][^\n]*)?", manager.stdout.strip()
+    )
+    runner_match = re.match(r"^systemd ([0-9]+)(?:[ \n]|$)", runner.stdout)
+    if manager_match is None or runner_match is None:
+        return None
+    return int(manager_match[1]), int(runner_match[1])
+
+
 def _forever() -> NoReturn:
     while True:
         time.sleep(3600)
@@ -1213,6 +1279,14 @@ def _watch_api_service(
     docker_config_fd: int,
     buildx_config_fd: int,
 ) -> int:
+    versions = _systemd_versions()
+    if versions is None:
+        return 125
+    manager_version, runner_version = versions
+    # systemd-run gained --expand-environment in 254.  Earlier service
+    # managers expand $ in ExecStart arguments, where $$ denotes a literal $.
+    no_expansion = manager_version >= 254 and runner_version >= 254
+    exit_type_cgroup = manager_version >= 250
     initial = _systemd_unit_snapshot(unit)
     if initial != ("not-found", "inactive", "", 0):
         return 125
@@ -1262,17 +1336,21 @@ def _watch_api_service(
         "--collect",
         "--quiet",
         "--same-dir",
-        "--expand-environment=no",
+        *(("--expand-environment=no",) if no_expansion else ()),
         "--service-type=exec",
         f"--unit={unit}",
-        "--property=ExitType=cgroup",
+        *(("--property=ExitType=cgroup",) if exit_type_cgroup else ()),
         "--property=KillMode=control-group",
         "--property=KillSignal=SIGKILL",
         "--property=TimeoutStopSec=1s",
         f"--property=RuntimeMaxSec={duration}s",
         *environment_arguments,
         "--",
-        *wrapper,
+        *(
+            wrapper
+            if no_expansion
+            else tuple(value.replace("$", "$$") for value in wrapper)
+        ),
     )
 
     def reset_child_signals() -> None:
