@@ -27,14 +27,7 @@ from .acquisition_errors import (
     RecoverableAcquisitionError,
     TerminalAcquisitionPolicyError,
 )
-from .browser_egress import (
-    NON_REPLAYABLE_EGRESS_CONTRACT,
-    NonReplayableEgressGuard,
-    install_context_egress_guards,
-    launch_production_browser,
-    validate_non_replayable_egress_failure_evidence,
-    validate_non_replayable_egress_success_summary,
-)
+from .acquisition_selection import ACQUISITION_SELECTION_POLICY, derive_acquisition_selection
 from .acquisition_timing import (
     ACTION_TIMING_CONTRACT,
     BASELINE_SCHEDULING_CONTRACT,  # noqa: F401 - retained for historical verifier callers
@@ -50,7 +43,14 @@ from .acquisition_timing import (
     validate_baseline_schedule,
     validate_baseline_schedule_with_releases,
 )
-from .acquisition_selection import ACQUISITION_SELECTION_POLICY, derive_acquisition_selection
+from .browser_egress import (
+    NON_REPLAYABLE_EGRESS_CONTRACT,
+    NonReplayableEgressGuard,
+    install_context_egress_guards,
+    launch_production_browser,
+    validate_non_replayable_egress_failure_evidence,
+    validate_non_replayable_egress_success_summary,
+)
 from .cdp_targets import (
     CDP_TARGET_INSTRUMENTATION_POLICY,
     NORMAL_SHUTDOWN_DISPOSAL_POLICY,
@@ -88,8 +88,8 @@ from .discovery_evidence import (
     DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION,
     PASSIVE_RENDER_CONTRACT,
     PASSIVE_RENDER_CONTRACT_SHA256,
-    REQUEST_STAGE_OBSERVATION_POLICY,
     RENDER_OBSERVATION_SCHEMA_VERSION,
+    REQUEST_STAGE_OBSERVATION_POLICY,
     evidence_sha256,
     validate_render_observation,
 )
@@ -99,6 +99,7 @@ from .manifest import (
     validate_research_preparation,
 )
 from .playwright_driver import (
+    browser_machine_from_binding,
     expected_browser_tool_identity,
     playwright_driver_session,
     validate_default_playwright_driver_once,
@@ -5344,8 +5345,13 @@ def _validate_current_provenance_contract(
             and source.get("lab_commit") in source_lab_commits
         )
     else:
+        browser_tool = provenance.get("browser_tool")
+        if not isinstance(browser_tool, Mapping):
+            raise ValueError("versioned acquisition browser identity is invalid")
         expected_fixed = {
-            "browser_tool": expected_browser_tool_identity(),
+            "browser_tool": expected_browser_tool_identity(
+                browser_machine_from_binding(browser_tool.get("playwright_driver"))
+            ),
             "navigation_implementation": NAVIGATION_IMPLEMENTATION,
             "cdp_target_instrumentation_policy": CDP_TARGET_INSTRUMENTATION_POLICY,
             "non_replayable_egress_contract": NON_REPLAYABLE_EGRESS_CONTRACT,
@@ -5432,6 +5438,7 @@ def _validate_runner_runtime(provenance: Mapping[str, Any]) -> None:
         or provenance.get("source") != current_source
         or type(schema_version) is not int
         or schema_version not in SUPPORTED_SCHEMA_VERSIONS
+        or provenance.get("browser_tool") != expected_browser_tool_identity()
     ):
         raise ValueError("class acquisition runtime differs from its frozen source/prepare image")
 

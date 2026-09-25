@@ -87,6 +87,10 @@ BROWSER_EGRESS_MANIFEST_RELATIVE_PATH = "config/class-study/v1/browser-egress-qu
 BROWSER_EGRESS_MANIFEST_SHA256 = "5690dc4faca03b4d55d8f4e77ecd6ce55cc75bdb9a1b2f4903ac79a5ed1015ea"
 BROWSER_EGRESS_ARGV_RELATIVE_PATH = "config/class-study/v1/browser-egress-chromium-argv-v1.json"
 BROWSER_EGRESS_ARGV_SHA256 = "458f51042d64433c089e5c43ab1167bbfa337ed4b6bda5e9d0d4efc0edf99c36"
+AMD64_BROWSER_EGRESS_ARGV_RELATIVE_PATH = (
+    "config/class-study/v1/browser-egress-chromium-argv-amd64-v1.json"
+)
+AMD64_BROWSER_EGRESS_ARGV_SHA256 = "a5dd9cc3dea089272367c938a1a7027055cc7f5458fdaac9604e8c6da55defcf"
 _BROWSER_EGRESS_VECTOR_IDS = tuple(
     [
         f"constructor--{context}--{surface}"
@@ -976,6 +980,17 @@ _EXPECTED_BROWSER_TOOL_IDENTITY = {
     "configured_executable_path": _CHROMIUM_EXECUTABLE,
     "playwright_driver": _EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
 }
+_AMD64_EXPECTED_PLAYWRIGHT_DRIVER_BINDING = {
+    **_EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
+    "receipt_sha256": "dffba7b088ebdd9c23565077d7bc2919f784e5a3d0f3dae39312118066858407",
+    "payload_sha256": "c8dc95310b5fdbecfaae7c5ead1c78c4b5daa08d97ca0c1a87037c751dd97a7b",
+    "content_sha256": "3d5094d36743bb5fa9621b7f736c8299baf624ea574d5ced3fc3e5ae6c59c2a7",
+    "chromium_executable_sha256": "2e61bc3fd990bd4d7b419ef6b6303c67aaed683e5b83b3b25e416f015f343209",
+}
+_AMD64_EXPECTED_BROWSER_TOOL_IDENTITY = {
+    **_EXPECTED_BROWSER_TOOL_IDENTITY,
+    "playwright_driver": _AMD64_EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
+}
 _HISTORICAL_PINNED_CDP_CONTRACT_V11 = {
     # Probe schema 11 binds both the paused-OOPIF pre-author instrumentation
     # semantics and Document-only Playwright routing under exclusive QCSD
@@ -1118,6 +1133,28 @@ _PINNED_CDP_CONTRACT = {
     ),
     "normal_shutdown_disposal_policy": _NORMAL_SHUTDOWN_DISPOSAL_POLICY,
 }
+_AMD64_PINNED_CDP_CONTRACT = {
+    **_PINNED_CDP_CONTRACT,
+    "playwright_driver_binding": _AMD64_EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
+    "chromium_executable_sha256": (
+        _AMD64_EXPECTED_PLAYWRIGHT_DRIVER_BINDING["chromium_executable_sha256"]
+    ),
+}
+
+
+def _browser_profile_for_build(
+    build: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Select by bound daemon architecture, never the machine doing verification."""
+    docker = build.get("docker")
+    architecture = docker.get("server_architecture") if isinstance(docker, Mapping) else None
+    if architecture in {"aarch64", "arm64"}:
+        return _EXPECTED_BROWSER_TOOL_IDENTITY, _PINNED_CDP_CONTRACT
+    if architecture in {"x86_64", "amd64"}:
+        return _AMD64_EXPECTED_BROWSER_TOOL_IDENTITY, _AMD64_PINNED_CDP_CONTRACT
+    raise WatchError("acquisition build has an unsupported browser architecture")
+
+
 _HISTORICAL_PINNED_CDP_CONTRACT = {
     "schema_version": _HISTORICAL_PINNED_CDP_CONTRACT_SCHEMA_VERSION,
     "policy": "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v8",
@@ -4719,7 +4756,11 @@ def _validate_normal_shutdown_disposal_summary(value: Any) -> None:
         )
 
 
-def _validate_pinned_cdp_observation(value: Any) -> None:
+def _validate_pinned_cdp_observation(
+    value: Any,
+    *,
+    driver_binding: Mapping[str, Any] | None = None,
+) -> None:
     if not isinstance(value, dict) or set(value) != {
         "playwright_version",
         "chromium_version",
@@ -4736,7 +4777,10 @@ def _validate_pinned_cdp_observation(value: Any) -> None:
     ):
         raise WatchError("pinned CDP browser observation is invalid")
     driver = value.get("playwright_driver")
-    if driver != _EXPECTED_PLAYWRIGHT_DRIVER_BINDING:
+    expected_driver = (
+        driver_binding if driver_binding is not None else _EXPECTED_PLAYWRIGHT_DRIVER_BINDING
+    )
+    if driver != expected_driver:
         raise WatchError("pinned CDP Playwright driver observation is invalid")
     isolation = value.get("isolation")
     credential_fields = (
@@ -5375,6 +5419,7 @@ def _validate_acquisition_gate_evidence(
         require_current=True,
     )
     build = build_snapshot.value
+    browser_tool, probe_contract = _browser_profile_for_build(build)
     images = build.get("images")
     collection_role = images.get("collection") if isinstance(images, dict) else None
     prepare_role = images.get("prepare") if isinstance(images, dict) else None
@@ -5462,7 +5507,7 @@ def _validate_acquisition_gate_evidence(
         "observation",
     }:
         raise WatchError("foundation pinned CDP payload fields differ from the contract")
-    contract_sha256 = _sha256_bytes(_canonical_json_bytes(_PINNED_CDP_CONTRACT))
+    contract_sha256 = _sha256_bytes(_canonical_json_bytes(probe_contract))
     pinned_build = pinned.get("build_execution")
     expected_pinned_build = {
         "path": build_binding["path"],
@@ -5487,12 +5532,14 @@ def _validate_acquisition_gate_evidence(
         or pinned.get("prepare_source") != expected_prepare_source
         or dict(prepare_source) != expected_prepare_source
         or pinned.get("prepare_image_digest") != prepare_image
-        or pinned.get("probe_contract") != _PINNED_CDP_CONTRACT
+        or pinned.get("probe_contract") != probe_contract
         or pinned.get("probe_contract_sha256") != contract_sha256
         or pinned_binding.get("probe_contract_sha256") != contract_sha256
     ):
         raise WatchError("foundation pinned CDP source/build/contract binding differs")
-    _validate_pinned_cdp_observation(pinned.get("observation"))
+    _validate_pinned_cdp_observation(
+        pinned.get("observation"), driver_binding=browser_tool["playwright_driver"],
+    )
     build_finished = _evidence_timestamp(build.get("finished_at"), label="no-cache build finish")
     probe_recorded = _evidence_timestamp(pinned.get("recorded_at"), label="pinned CDP probe")
     acquisition_started = _evidence_timestamp(
@@ -5502,6 +5549,7 @@ def _validate_acquisition_gate_evidence(
         raise WatchError("acquisition foundation/pinned CDP chronology is invalid")
 
     authority = {
+        "browser_tool": browser_tool,
         "foundation_sha256": snapshot.sha256 if not acquisition_only else None,
         "pinned_cdp_sha256": pinned_snapshot.sha256,
         "pinned_cdp_payload_sha256": pinned_snapshot.value["payload_sha256"],
@@ -5690,6 +5738,11 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
             BROWSER_EGRESS_ARGV_SHA256,
             "browser-egress Chromium argv contract",
         ),
+        (
+            AMD64_BROWSER_EGRESS_ARGV_RELATIVE_PATH,
+            AMD64_BROWSER_EGRESS_ARGV_SHA256,
+            "browser-egress amd64 Chromium argv contract",
+        ),
     ):
         _raw, observed_sha256 = _read_stable_file(
             paths.lab_root / relative,
@@ -5750,8 +5803,17 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
         raise WatchError("acquisition provenance uses an unsupported schema")
     if set(payload) != _PROVENANCE_PAYLOAD_KEYS:
         raise WatchError("acquisition provenance payload fields differ from the v9 contract")
+    browser_tool = payload.get("browser_tool")
+    if not any(
+        _matches_json_contract(browser_tool, expected)
+        for expected in (_EXPECTED_BROWSER_TOOL_IDENTITY, _AMD64_EXPECTED_BROWSER_TOOL_IDENTITY)
+    ):
+        raise WatchError(
+            "acquisition provenance is bound to another study or catalogue "
+            "(invalid browser architecture profile)"
+        )
     fixed_contract = {
-        "browser_tool": _EXPECTED_BROWSER_TOOL_IDENTITY,
+        "browser_tool": browser_tool,
         "navigation_implementation": _NAVIGATION_IMPLEMENTATION,
         "cdp_target_instrumentation_policy": _CDP_TARGET_INSTRUMENTATION_POLICY,
         "non_replayable_egress_contract": _NON_REPLAYABLE_EGRESS_CONTRACT,
@@ -5776,7 +5838,6 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
         or payload["candidate_count"] != CANDIDATE_COUNT
         or payload["candidate_catalogue_sha256"] != catalogue_sha256
         or payload["candidate_catalogue_payload_sha256"] != catalogue["payload_sha256"]
-        or payload["browser_tool"] != _EXPECTED_BROWSER_TOOL_IDENTITY
         or not isinstance(payload["browser_tool"], dict)
         or type(payload["browser_tool"].get("schema_version")) is not int
         or payload["browser_tool"]["schema_version"] != 1
@@ -5812,6 +5873,8 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
         prepare_image=image,
         acquisition_started_at=payload["started_at"],
     )
+    if not _matches_json_contract(browser_tool, foundation_authority["browser_tool"]):
+        raise WatchError("acquisition browser profile differs from the build architecture")
     binding = AcquisitionBinding(
         prepare_image=image,
         cohort_version=foundation_authority["cohort_version"],

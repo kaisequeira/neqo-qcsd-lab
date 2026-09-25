@@ -14,7 +14,10 @@ from qcsd_lab import playwright_driver
 
 
 @pytest.fixture(autouse=True)
-def _reset_validation_cache():
+def _reset_validation_cache(monkeypatch: pytest.MonkeyPatch):
+    # Historical fixture layout is ARM64 irrespective of the host running tests.
+    # Native-profile tests explicitly override this or select x86_64 arguments.
+    monkeypatch.setattr(playwright_driver.platform, "machine", lambda: "aarch64")
     playwright_driver.reset_playwright_driver_validation_cache()
     yield
     playwright_driver.reset_playwright_driver_validation_cache()
@@ -32,6 +35,7 @@ class DriverFixture:
     managed_policy: Path
     originals: dict[str, bytes]
     patched: dict[str, bytes]
+    machine: str = "aarch64"
 
     def file_path(self, filename: str) -> Path:
         specification = next(
@@ -48,13 +52,15 @@ class DriverFixture:
             "expected_resolved_executable": self.resolved_executable,
             "subprocess_wrapper": self.subprocess_wrapper,
             "managed_policy": self.managed_policy,
-            "machine": playwright_driver.SUPPORTED_ARCHITECTURE,
+            "machine": self.machine,
             "expected_owner_uid": os.geteuid(),
         }
 
 
 @pytest.fixture
-def driver_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DriverFixture:
+def driver_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> DriverFixture:
+    machine = getattr(request, "param", "aarch64")
+    constant_prefix = "AMD64_" if machine == "x86_64" else "EXPECTED_"
     package_root = tmp_path / "site-packages/playwright"
     driver_root = package_root / "driver/package/lib/server/chromium"
     driver_root.mkdir(parents=True)
@@ -146,7 +152,7 @@ def driver_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DriverFix
     )
     monkeypatch.setattr(
         playwright_driver,
-        "EXPECTED_PLAYWRIGHT_PACKAGE_PRE_PATCH_TREE",
+        constant_prefix + "PLAYWRIGHT_PACKAGE_PRE_PATCH_TREE",
         pre_patch_tree,
     )
     for filename, content in patched.items():
@@ -160,7 +166,7 @@ def driver_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DriverFix
     )
     monkeypatch.setattr(
         playwright_driver,
-        "EXPECTED_PLAYWRIGHT_PACKAGE_POST_PATCH_TREE",
+        constant_prefix + "PLAYWRIGHT_PACKAGE_POST_PATCH_TREE",
         post_patch_tree,
     )
     for filename, content in originals.items():
@@ -171,19 +177,19 @@ def driver_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DriverFix
     resolved_executable = distribution_root / "chrome-linux/headless_shell"
     resolved_executable.parent.mkdir(parents=True)
     resolved_executable.write_text(
-        f"#!/bin/sh\nprintf '%s\\n' '{playwright_driver.EXPECTED_CHROMIUM_VERSION_OUTPUT}'\n",
+        f"#!/bin/sh\nprintf '%s\\n' '{playwright_driver.browser_profile(machine)['version_output']}'\n",
         encoding="utf-8",
     )
     resolved_executable.chmod(0o755)
     (resolved_executable.parent / "resources.pak").write_bytes(b"bound resource\n")
     monkeypatch.setattr(
         playwright_driver,
-        "EXPECTED_CHROMIUM_SHA256",
+        constant_prefix + "CHROMIUM_SHA256",
         playwright_driver._sha256(resolved_executable.read_bytes()),
     )
     monkeypatch.setattr(
         playwright_driver,
-        "EXPECTED_CHROMIUM_DISTRIBUTION_TREE",
+        constant_prefix + "CHROMIUM_DISTRIBUTION_TREE",
         playwright_driver._tree_identity(
             distribution_root,
             domain=playwright_driver.CHROMIUM_DISTRIBUTION_TREE_DOMAIN,
@@ -227,6 +233,7 @@ def driver_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DriverFix
         managed_policy=managed_policy,
         originals=originals,
         patched=patched,
+        machine=machine,
     )
 
 
@@ -243,6 +250,45 @@ def _verify(fixture: DriverFixture) -> dict[str, object]:
         fixture.receipt,
         **fixture.arguments,
     )
+
+
+@pytest.mark.parametrize("driver_fixture", ["x86_64"], indirect=True)
+def test_amd64_driver_patch_and_verification_bind_native_inputs(driver_fixture: DriverFixture) -> None:
+    receipt = _patch(driver_fixture)
+    assert _verify(driver_fixture) == receipt
+    assert receipt["chromium_executable"]["architecture"] == "x86_64"
+    assert receipt["chromium_executable"]["version_output"] == "Google Chrome for Testing 143.0.7499.4"
+    assert receipt["chromium_distribution_tree"]["archive_sha256"] == playwright_driver.AMD64_CHROMIUM_ARCHIVE_SHA256
+    arguments = dict(driver_fixture.arguments)
+    arguments["machine"] = "aarch64"
+    with pytest.raises(ValueError, match="package identity differs"):
+        playwright_driver.validate_playwright_driver(driver_fixture.receipt, **arguments)
+    resource = driver_fixture.resolved_executable.parent / "resources.pak"
+    resource.write_bytes(b"unbound amd64 resource")
+    with pytest.raises(ValueError, match="distribution identity differs"):
+        _verify(driver_fixture)
+
+
+def test_architecture_profile_receipts_keep_arm64_hashes_and_reject_mixed_bindings() -> None:
+    arm = playwright_driver.expected_playwright_driver_binding("aarch64")
+    amd = playwright_driver.expected_playwright_driver_binding("x86_64")
+    assert arm["receipt_sha256"] == "a5aada06e4fd315d08b2235701480a13f0852188749e489d6bc9386b3a34632f"
+    assert amd["receipt_sha256"] == "dffba7b088ebdd9c23565077d7bc2919f784e5a3d0f3dae39312118066858407"
+    assert arm["policy"] == amd["policy"]
+    for machine, binding in (("aarch64", arm), ("x86_64", amd)):
+        receipt = playwright_driver.expected_playwright_driver_receipt(machine)
+        assert playwright_driver._sha256(playwright_driver._canonical_json(receipt)) == binding["receipt_sha256"]
+        assert playwright_driver.browser_machine_from_binding(binding) == machine
+    mixed = {**arm, "chromium_executable_sha256": amd["chromium_executable_sha256"]}
+    with pytest.raises(ValueError, match="pinned architecture"):
+        playwright_driver.browser_machine_from_binding(mixed)
+
+
+def test_amd64_profile_uses_its_brand_specific_policy_root() -> None:
+    profile = playwright_driver.browser_profile("amd64")
+    assert profile["managed_policy"] == Path("/etc/opt/chrome_for_testing/policies/managed/qcsd-network-prediction.json")
+    assert Path("/etc/chromium/policies") in profile["alternate_policy_roots"]
+    assert Path("/etc/opt/chrome/policies") in profile["alternate_policy_roots"]
 
 
 def test_production_contract_matches_pinned_playwright_and_live_prototype() -> None:
@@ -1237,7 +1283,10 @@ def test_wrong_playwright_version_and_architecture_fail_before_mutation(
 
     arguments = dict(driver_fixture.arguments)
     arguments["machine"] = "x86_64"
-    with pytest.raises(ValueError, match="supported only on aarch64"):
+    with pytest.raises(ValueError, match="pre-patch package identity differs"):
+        playwright_driver.patch_playwright_driver(driver_fixture.receipt, **arguments)
+    arguments["machine"] = "riscv64"
+    with pytest.raises(ValueError, match="supported only on"):
         playwright_driver.patch_playwright_driver(driver_fixture.receipt, **arguments)
 
     for filename, expected in driver_fixture.originals.items():

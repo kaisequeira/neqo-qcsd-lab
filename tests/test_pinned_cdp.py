@@ -33,8 +33,12 @@ from qcsd_lab.playwright_driver import DEFAULT_CONFIGURED_EXECUTABLE
 
 COLLECTION_IMAGE = "sha256:" + "1" * 64
 PREPARE_IMAGE = "sha256:" + "2" * 64
-BUILD_SHA256 = "3" * 64
 BUILD_PAYLOAD_SHA256 = "4" * 64
+BUILD_VALUE = {
+    "payload_sha256": BUILD_PAYLOAD_SHA256,
+    "docker": {"server_architecture": "aarch64"},
+}
+BUILD_SHA256 = hashlib.sha256(canonical_json_bytes(BUILD_VALUE)).hexdigest()
 BUILD_COMPLETION_SHA256 = "8" * 64
 LAB_COMMIT = "5" * 40
 NEQO_COMMIT = "6" * 40
@@ -327,12 +331,17 @@ def _observation(
 
 
 @pytest.fixture
-def fake_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def fake_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> Path:
+    machine = getattr(request, "param", "aarch64")
     path = tmp_path / "build-execution-v59.json"
-    path.write_bytes(canonical_json_bytes({"payload_sha256": BUILD_PAYLOAD_SHA256}))
+    build_value = copy.deepcopy(BUILD_VALUE)
+    build_value["docker"]["server_architecture"] = machine
+    path.write_bytes(canonical_json_bytes(build_value))
     build = {
         "path": str(path.resolve()),
-        "sha256": BUILD_SHA256,
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         "cohort_version": 59,
         "completion_path": str((tmp_path / "build-completion-v59.json").resolve()),
         "completion_sha256": BUILD_COMPLETION_SHA256,
@@ -351,7 +360,7 @@ def fake_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     def validate(path_arg, *, expected_cohort_version=None, allow_historical=None, **_kwargs):
         assert Path(path_arg).resolve() == path.resolve()
         assert expected_cohort_version in {None, 59}
-        assert allow_historical is False
+        assert type(allow_historical) is bool
         return copy.deepcopy(build)
 
     monkeypatch.setattr(pinned_cdp, "validate_build_execution_receipt", validate)
@@ -361,15 +370,14 @@ def fake_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "validate_default_playwright_driver_once",
         lambda: {"validated": True},
     )
-    monkeypatch.setattr(
-        pinned_cdp,
-        "_driver_binding",
-        lambda _receipt: _driver_binding(),
-    )
+    driver = pinned_cdp.expected_playwright_driver_binding(machine)
+    observation = _observation()
+    observation["playwright_driver"] = driver
+    monkeypatch.setattr(pinned_cdp, "_driver_binding", lambda _receipt: copy.deepcopy(driver))
     monkeypatch.setattr(
         pinned_cdp,
         "run_pinned_cdp_probe",
-        lambda **_kwargs: _observation(),
+        lambda **_kwargs: copy.deepcopy(observation),
     )
     return path
 
@@ -416,6 +424,50 @@ def test_receipt_is_create_only_and_binds_build_source_prepare_image_and_cohort(
     assert output.read_bytes() == canonical_json_bytes(json.loads(output.read_text()))
 
     with pytest.raises(FileExistsError, match="create-only"):
+        _create(tmp_path, fake_build)
+
+
+@pytest.mark.parametrize("fake_build", ["aarch64", "x86_64"], indirect=True)
+def test_receipt_architecture_is_bound_to_build_not_reader_host(
+    tmp_path: Path, fake_build: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import platform
+
+    machine = json.loads(fake_build.read_text())["docker"]["server_architecture"]
+    other_machine = "aarch64" if machine == "x86_64" else "x86_64"
+    monkeypatch.setattr(platform, "machine", lambda: other_machine)
+    output = _create(tmp_path, fake_build)
+    validated = pinned_cdp.validate_pinned_cdp_receipt(
+        output,
+        build_execution_receipt=fake_build,
+        expected_cohort_version=59,
+        runtime_role="prepare",
+    )
+    assert validated["probe_contract"] == pinned_cdp.probe_contract_for_machine(machine)
+    observation = copy.deepcopy(validated["observation"])
+    observation["playwright_driver"] = pinned_cdp.expected_playwright_driver_binding(other_machine)
+    monkeypatch.setattr(pinned_cdp, "run_pinned_cdp_probe", lambda **_kwargs: observation)
+    with pytest.raises(ValueError, match="driver"):
+        pinned_cdp.create_pinned_cdp_receipt(
+            tmp_path / "mixed-profile.json",
+            build_execution_receipt=fake_build,
+            cohort_version=59,
+            expected_uid=1000,
+            expected_gid=1000,
+        )
+
+
+def test_receipt_rejects_build_bytes_changed_after_validation(
+    tmp_path: Path, fake_build: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_probe = pinned_cdp.run_pinned_cdp_probe
+
+    def probe(**kwargs):
+        fake_build.write_bytes(fake_build.read_bytes() + b"\n")
+        return original_probe(**kwargs)
+
+    monkeypatch.setattr(pinned_cdp, "run_pinned_cdp_probe", probe)
+    with pytest.raises(ValueError, match="build receipt bytes changed"):
         _create(tmp_path, fake_build)
 
 

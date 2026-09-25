@@ -63,8 +63,6 @@ from qcsd_lab.browser_egress_qualification import (
     FINAL_FILENAME,
     FIXTURE_TLS_MASK_DIRECTORY,
     FIXTURE_TLS_MASK_TMPFS_OPTIONS,
-    POLICY_VOLUME_MANAGED_DIRECTORY,
-    POLICY_VOLUME_POLICY_PATH,
     POLICY_VOLUME_PROJECTION_SCHEMA_VERSION,
     POLICY_VOLUME_ROLE,
     ROLE_TMPFS_OPTIONS,
@@ -93,6 +91,7 @@ from qcsd_lab.browser_egress_qualification import (
 )
 from qcsd_lab.buflo_study import validate_build_execution_receipt
 from qcsd_lab.class_study import canonical_json_bytes, validate_hash_bound_receipt
+from qcsd_lab.playwright_driver import browser_profile
 from qcsd_lab.util import LAB_ROOT, load_json, sha256_file, source_metadata
 
 READY_PATH = Path("/tmp/qcsd-browser-egress-role.ready")
@@ -354,7 +353,7 @@ def _fixture(args: argparse.Namespace) -> None:
 
 
 def _policy_volume_file_inventory() -> list[dict[str, Any]]:
-    path = Path(POLICY_VOLUME_POLICY_PATH)
+    path = browser_profile()["managed_policy"]
     metadata = path.lstat()
     entries = tuple(path.parent.iterdir())
     if (
@@ -1772,6 +1771,7 @@ def _project_runtime(args: argparse.Namespace) -> None:
         attempt_topology=attempt_topology,
         docker_root_dir=live_docker_daemon["docker_root_dir"],
         policy_file_inventory=actor["policy_volume_file_inventory"],
+        machine=foundation["docker_daemon"]["server_architecture"],
     )
     _emit(
         {
@@ -2028,7 +2028,7 @@ def _stale_topology_cleanup_plan(args: argparse.Namespace) -> None:
                 {
                     "Type": "volume",
                     "Name": expected_volume_name,
-                    "Destination": POLICY_VOLUME_MANAGED_DIRECTORY,
+                    "Destination": str(browser_profile()["managed_policy"].parent),
                     "RW": False,
                 }
             )
@@ -2194,6 +2194,7 @@ def _docker_projection(
     attempt_topology: Mapping[str, Any],
     docker_root_dir: str,
     policy_file_inventory: object,
+    machine: str = "aarch64",
 ) -> dict[str, Any]:
     role_order = ("browser", "observer", "fixture", "forbidden_sink", "dns_sink")
     expected_roles = set(role_order)
@@ -2456,6 +2457,7 @@ def _docker_projection(
         browser_gid=browser_gid,
         attempt_topology=attempt_topology,
         docker_root_dir=docker_root_dir,
+        machine=machine,
     )
 
 

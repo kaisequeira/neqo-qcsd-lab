@@ -830,6 +830,7 @@ def acquisition(tmp_path: Path) -> Fixture:
     for relative in (
         watch.BROWSER_EGRESS_MANIFEST_RELATIVE_PATH,
         watch.BROWSER_EGRESS_ARGV_RELATIVE_PATH,
+        watch.AMD64_BROWSER_EGRESS_ARGV_RELATIVE_PATH,
     ):
         target = paths.lab_root / relative
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -959,7 +960,7 @@ def acquisition(tmp_path: Path) -> Fixture:
                 "server_name": "fixture-docker",
                 "server_operating_system": "Ubuntu 24.04",
                 "server_os_type": "linux",
-                "server_architecture": "x86_64",
+                "server_architecture": "aarch64",
                 "server_id": "fixture-server-id",
             },
             "commands": build_commands,
@@ -3158,6 +3159,50 @@ def test_current_foundation_watcher_accepts_exact_schema5_build_and_completion(
     )
 
 
+@pytest.mark.parametrize("architecture", ["amd64", "x86_64"])
+def test_watcher_accepts_coherent_amd64_acquisition_authority(
+    acquisition: Fixture, architecture: str,
+) -> None:
+    build = json.loads(acquisition.build_execution_path.read_text())
+    build["docker"]["server_architecture"] = architecture
+    build.pop("payload_sha256")
+    _replace_build_and_rebind_foundation(acquisition, build)
+    pinned = json.loads(acquisition.pinned_cdp_path.read_text())["payload"]
+    pinned["probe_contract"] = copy.deepcopy(watch._AMD64_PINNED_CDP_CONTRACT)
+    pinned["probe_contract_sha256"] = hashlib.sha256(_canonical(pinned["probe_contract"])).hexdigest()
+    pinned["observation"]["playwright_driver"] = copy.deepcopy(
+        watch._AMD64_EXPECTED_PLAYWRIGHT_DRIVER_BINDING
+    )
+    _replace_pinned_and_rebind_foundation(acquisition, pinned)
+    provenance = json.loads(acquisition.paths.provenance.read_text())["payload"]
+    provenance["browser_tool"] = copy.deepcopy(watch._AMD64_EXPECTED_BROWSER_TOOL_IDENTITY)
+    _write_receipt(acquisition.paths.provenance, watch.PROVENANCE_TYPE, provenance)
+    assert watch._validate_immutable_binding(acquisition.paths).cohort_version == 23
+
+
+def test_watcher_rejects_arm_browser_on_amd64_build(acquisition: Fixture) -> None:
+    build = json.loads(acquisition.build_execution_path.read_text())
+    build["docker"]["server_architecture"] = "x86_64"
+    build.pop("payload_sha256")
+    _replace_build_and_rebind_foundation(acquisition, build)
+    with pytest.raises(watch.WatchError, match="pinned CDP source/build/contract"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+def test_watcher_rejects_amd64_provenance_on_arm_build(acquisition: Fixture) -> None:
+    provenance = json.loads(acquisition.paths.provenance.read_text())["payload"]
+    provenance["browser_tool"] = copy.deepcopy(watch._AMD64_EXPECTED_BROWSER_TOOL_IDENTITY)
+    _write_receipt(acquisition.paths.provenance, watch.PROVENANCE_TYPE, provenance)
+    with pytest.raises(watch.WatchError, match="browser profile differs from the build architecture"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+@pytest.mark.parametrize("architecture", ["i386", "", None])
+def test_watcher_rejects_unknown_browser_architecture(architecture: str | None) -> None:
+    with pytest.raises(watch.WatchError, match="unsupported browser architecture"):
+        watch._browser_profile_for_build({"docker": {"server_architecture": architecture}})
+
+
 def test_watcher_accepts_historical_and_current_cohort_authority_schemas() -> None:
     allocation = _cohort_allocation(cohort_version=23, neqo_commit="e" * 40)
     ledger_size = len(base64.b64decode(allocation["ledger_payload_base64"]))
@@ -3844,8 +3889,12 @@ def test_watcher_pinned_cdp_contract_matches_runtime_contract() -> None:
         playwright_driver.LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_BINDING
     )
     assert watch._EXPECTED_BROWSER_TOOL_IDENTITY == (
-        playwright_driver.expected_browser_tool_identity()
+        playwright_driver.expected_browser_tool_identity("aarch64")
     )
+    assert watch._AMD64_EXPECTED_BROWSER_TOOL_IDENTITY == (
+        playwright_driver.expected_browser_tool_identity("x86_64")
+    )
+    assert watch._AMD64_PINNED_CDP_CONTRACT == pinned_cdp.probe_contract_for_machine("x86_64")
     assert watch._NON_REPLAYABLE_EGRESS_CONTRACT == (browser_egress.NON_REPLAYABLE_EGRESS_CONTRACT)
     assert watch._BROWSER_EGRESS_COMMAND_LINE_SCHEMA_VERSION == (
         browser_egress.BROWSER_EGRESS_COMMAND_LINE_SCHEMA_VERSION

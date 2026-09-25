@@ -77,26 +77,19 @@ from .class_study import (
     validate_hash_bound_receipt,
 )
 from .playwright_driver import (
-    CHROMIUM_ARCHIVE_SHA256,
-    CHROMIUM_ARCHIVE_URL,
     CHROMIUM_CHILD_ENVIRONMENT,
     CHROMIUM_DNS_OVER_HTTPS_MODE,
     CHROMIUM_MANAGED_POLICY_MODE,
     CHROMIUM_SUBPROCESS_WRAPPER_MODE,
-    DEFAULT_CHROMIUM_MANAGED_POLICY,
     DEFAULT_CHROMIUM_SUBPROCESS_WRAPPER,
     DEFAULT_CONFIGURED_EXECUTABLE,
     DEFAULT_RESOLVED_EXECUTABLE,
     EXPECTED_BROWSERS_JSON_SHA256,
-    EXPECTED_CHROMIUM_REVISION,
-    EXPECTED_CHROMIUM_SHA256,
-    EXPECTED_CHROMIUM_MANAGED_POLICY_SHA256,
     EXPECTED_CHROMIUM_CONTROL_POLICY_SHA256,
+    EXPECTED_CHROMIUM_MANAGED_POLICY_SHA256,
+    EXPECTED_CHROMIUM_REVISION,
     EXPECTED_CHROMIUM_SUBPROCESS_WRAPPER_SHA256,
     EXPECTED_CHROMIUM_VERSION,
-    EXPECTED_PLAYWRIGHT_DRIVER_CONTENT_SHA256,
-    EXPECTED_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256,
-    EXPECTED_PLAYWRIGHT_DRIVER_RECEIPT_SHA256,
     FORBIDDEN_DRIVER_ENVIRONMENT_VARIABLES,
     LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_CONTENT_SHA256,
     LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256,
@@ -105,6 +98,8 @@ from .playwright_driver import (
     PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_CONTENT_SHA256,
     PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256,
     PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_RECEIPT_SHA256,
+    browser_profile,
+    expected_playwright_driver_binding,
 )
 from .util import SOURCE_METADATA_KEYS, load_json, sha256_file
 
@@ -121,6 +116,7 @@ FINAL_SCHEMA_VERSION = 1
 HISTORICAL_MANIFEST_RELATIVE_PATH = "config/class-study/v1/browser-egress-qualification-v1.json"
 MANIFEST_RELATIVE_PATH = "config/class-study/v1/browser-egress-qualification-v2.json"
 ARGV_RELATIVE_PATH = "config/class-study/v1/browser-egress-chromium-argv-v1.json"
+AMD64_ARGV_RELATIVE_PATH = "config/class-study/v1/browser-egress-chromium-argv-amd64-v1.json"
 FOUNDATION_FILENAME = "foundation.json"
 CHECKPOINT_FILENAME = "experiment.json"
 FINAL_FILENAME = "final.json"
@@ -543,7 +539,23 @@ def validate_manifest_config(value: object, *, allow_historical: bool = False) -
     return json.loads(canonical_json_bytes(value))
 
 
-def expected_argv_config() -> dict[str, Any]:
+def execution_contract_for_machine(machine: str = "aarch64") -> dict[str, Any]:
+    contract = json.loads(canonical_json_bytes(EXECUTION_CONTRACT))
+    contract["network_prediction_enabled_control_policy"]["runtime_path"] = str(
+        browser_profile(machine)["managed_policy"]
+    )
+    return contract
+
+
+def argv_relative_path(machine: str = "aarch64") -> str:
+    return (
+        AMD64_ARGV_RELATIVE_PATH
+        if browser_profile(machine)["architecture"] == "x86_64"
+        else ARGV_RELATIVE_PATH
+    )
+
+
+def expected_argv_config(machine: str = "aarch64") -> dict[str, Any]:
     ordinary_contract = expected_browser_launch_contract(expected_vectors()[0])
     qualification_launch = browser_egress_chromium_args(
         approved_origins=ordinary_contract["resolver_approved_origins"],
@@ -579,6 +591,8 @@ def expected_argv_config() -> dict[str, Any]:
                 "vector_ids": [contract["vector_id"] for contract in members],
             }
         )
+    profile = browser_profile(machine)
+    managed_policy = profile["managed_policy"]
     return {
         "schema_version": ARGV_SCHEMA_VERSION,
         "artifact_type": "qcsd-browser-egress-chromium-argv-contract",
@@ -587,16 +601,16 @@ def expected_argv_config() -> dict[str, Any]:
         "chromium_revision": EXPECTED_CHROMIUM_REVISION,
         "chromium_version": EXPECTED_CHROMIUM_VERSION,
         "chromium_executable": str(DEFAULT_CONFIGURED_EXECUTABLE),
-        "chromium_executable_sha256": EXPECTED_CHROMIUM_SHA256,
-        "chromium_archive_url": CHROMIUM_ARCHIVE_URL,
-        "chromium_archive_sha256": CHROMIUM_ARCHIVE_SHA256,
+        "chromium_executable_sha256": profile["executable_sha256"],
+        "chromium_archive_url": profile["archive_url"],
+        "chromium_archive_sha256": profile["archive_sha256"],
         "chromium_subprocess_wrapper": {
             "path": str(DEFAULT_CHROMIUM_SUBPROCESS_WRAPPER),
             "sha256": EXPECTED_CHROMIUM_SUBPROCESS_WRAPPER_SHA256,
             "mode": f"0o{CHROMIUM_SUBPROCESS_WRAPPER_MODE:o}",
         },
         "chromium_managed_policy": {
-            "path": str(DEFAULT_CHROMIUM_MANAGED_POLICY),
+            "path": str(managed_policy),
             "sha256": EXPECTED_CHROMIUM_MANAGED_POLICY_SHA256,
             "mode": f"0o{CHROMIUM_MANAGED_POLICY_MODE:o}",
             "managed_directory_file_count": 1,
@@ -611,7 +625,7 @@ def expected_argv_config() -> dict[str, Any]:
                 "config/class-study/v1/chromium-network-prediction-positive-control-v1.json"
             ),
             "seed_image_path": POLICY_VOLUME_SEED_SOURCE,
-            "runtime_path": POLICY_VOLUME_POLICY_PATH,
+            "runtime_path": str(managed_policy),
             "sha256": EXPECTED_CHROMIUM_CONTROL_POLICY_SHA256,
             "mode": "0o444",
             "managed_directory_file_count": 1,
@@ -637,25 +651,17 @@ def expected_argv_config() -> dict[str, Any]:
         },
         "policy_root_inventory": [
             {
-                "path": "/etc/chromium/policies/managed",
+                "path": str(managed_policy.parent),
                 "state": "sole-managed-policy",
                 "file_count": 1,
             },
             {
-                "path": "/etc/chromium/policies/recommended",
+                "path": str(managed_policy.parent.parent / "recommended"),
                 "state": "empty-directory",
                 "file_count": 0,
             },
-            {
-                "path": "/etc/opt/chrome/policies",
-                "state": "absent",
-                "file_count": 0,
-            },
-            {
-                "path": "/etc/chromium-browser/policies",
-                "state": "absent",
-                "file_count": 0,
-            },
+            *({"path": str(path), "state": "absent", "file_count": 0}
+              for path in profile["alternate_policy_roots"]),
         ],
         "qualification_control_profiles": control_profiles,
         "qualification_control_contracts_sha256": canonical_json_sha256(control_contracts),
@@ -676,8 +682,8 @@ def expected_argv_config() -> dict[str, Any]:
     }
 
 
-def validate_argv_config(value: object) -> dict[str, Any]:
-    expected = expected_argv_config()
+def validate_argv_config(value: object, *, machine: str = "aarch64") -> dict[str, Any]:
+    expected = expected_argv_config(machine)
     if canonical_json_bytes(value) != canonical_json_bytes(expected):
         raise ValueError("browser-egress Chromium argv contract differs from frozen v1")
     return json.loads(canonical_json_bytes(value))
@@ -1050,8 +1056,11 @@ def validate_source_binding(value: object, *, prepare_image_id: str) -> dict[str
 
 
 def _browser_binding(
-    *, foundation_schema_version: int = FOUNDATION_SCHEMA_VERSION
+    *, foundation_schema_version: int = FOUNDATION_SCHEMA_VERSION, machine: str = "aarch64"
 ) -> dict[str, Any]:
+    profile = browser_profile(machine)
+    if profile["architecture"] != "aarch64" and foundation_schema_version != FOUNDATION_SCHEMA_VERSION:
+        raise ValueError("historical browser-egress schemas support only the ARM64 profile")
     if foundation_schema_version == 2:
         driver_receipt_sha256 = LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_RECEIPT_SHA256
         driver_payload_sha256 = LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256
@@ -1061,9 +1070,10 @@ def _browser_binding(
         driver_payload_sha256 = PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256
         driver_content_sha256 = PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_CONTENT_SHA256
     elif foundation_schema_version in {4, *PACKET_DNS_FOUNDATION_SCHEMA_VERSIONS}:
-        driver_receipt_sha256 = EXPECTED_PLAYWRIGHT_DRIVER_RECEIPT_SHA256
-        driver_payload_sha256 = EXPECTED_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256
-        driver_content_sha256 = EXPECTED_PLAYWRIGHT_DRIVER_CONTENT_SHA256
+        binding = expected_playwright_driver_binding(machine)
+        driver_receipt_sha256 = binding["receipt_sha256"]
+        driver_payload_sha256 = binding["payload_sha256"]
+        driver_content_sha256 = binding["content_sha256"]
     else:
         raise ValueError("browser-egress foundation browser binding schema is invalid")
     return {
@@ -1071,7 +1081,7 @@ def _browser_binding(
         "chromium_revision": EXPECTED_CHROMIUM_REVISION,
         "chromium_version": EXPECTED_CHROMIUM_VERSION,
         "chromium_executable": str(DEFAULT_CONFIGURED_EXECUTABLE),
-        "chromium_executable_sha256": EXPECTED_CHROMIUM_SHA256,
+        "chromium_executable_sha256": profile["executable_sha256"],
         "playwright_browsers_json_sha256": EXPECTED_BROWSERS_JSON_SHA256,
         "playwright_driver_receipt_sha256": driver_receipt_sha256,
         "playwright_driver_payload_sha256": driver_payload_sha256,
@@ -1294,10 +1304,10 @@ def build_foundation_payload(
         "docker_daemon": docker_daemon,
         "docker_capacity_contract": DOCKER_CAPACITY_CONTRACT,
         "source": source,
-        "browser": _browser_binding(),
+        "browser": _browser_binding(machine=docker_daemon["server_architecture"]),
         "contracts": {
             "manifest": _file_binding(root, MANIFEST_RELATIVE_PATH),
-            "argv": _file_binding(root, ARGV_RELATIVE_PATH),
+            "argv": _file_binding(root, argv_relative_path(docker_daemon["server_architecture"])),
             "expanded_vectors_sha256": expanded_vectors_sha256(),
             "fixture_contract_sha256": fixture_contract_sha256(),
             "packet_dns_evidence_contract_sha256": canonical_json_sha256(
@@ -1307,7 +1317,7 @@ def build_foundation_payload(
         "source_files": [
             _file_binding(root, relative) for relative in REQUIRED_SOURCE_BINDING_PATHS
         ],
-        "execution_contract": EXECUTION_CONTRACT,
+        "execution_contract": execution_contract_for_machine(docker_daemon["server_architecture"]),
         "consumer_contract": CONSUMER_CONTRACT,
     }
     return validate_foundation_payload(payload)
@@ -1408,7 +1418,8 @@ def validate_foundation_payload(value: object, *, allow_historical: bool = False
             docker_daemon,
             capacity_contract=value["docker_capacity_contract"],
         )
-    if value["browser"] != _browser_binding(foundation_schema_version=schema_version):
+    machine = docker_daemon["server_architecture"]
+    if value["browser"] != _browser_binding(foundation_schema_version=schema_version, machine=machine):
         raise ValueError("browser-egress pinned browser binding is invalid")
     contracts = value["contracts"]
     contract_fields = {
@@ -1431,7 +1442,7 @@ def validate_foundation_payload(value: object, *, allow_historical: bool = False
         label="browser-egress manifest",
     )
     validate_file_binding(
-        contracts["argv"], expected_path=ARGV_RELATIVE_PATH, label="browser-egress argv"
+        contracts["argv"], expected_path=argv_relative_path(machine), label="browser-egress argv"
     )
     if (
         contracts["expanded_vectors_sha256"] != expanded_vectors_sha256()
@@ -1445,7 +1456,7 @@ def validate_foundation_payload(value: object, *, allow_historical: bool = False
     for binding, expected_path in zip(source_files, required_source_paths, strict=True):
         validate_file_binding(binding, expected_path=expected_path, label="browser-egress source")
     if canonical_json_bytes(value["execution_contract"]) != canonical_json_bytes(
-        EXECUTION_CONTRACT
+        execution_contract_for_machine(machine)
     ):
         raise ValueError("browser-egress execution contract is invalid")
     if canonical_json_bytes(value["consumer_contract"]) != canonical_json_bytes(CONSUMER_CONTRACT):
@@ -1489,13 +1500,14 @@ def deep_validate_foundation(
     )
     validate_file_binding(
         contracts["argv"],
-        expected_path=ARGV_RELATIVE_PATH,
+        expected_path=argv_relative_path(payload["docker_daemon"]["server_architecture"]),
         root=root,
         deep=True,
         label="browser-egress argv",
     )
     validate_manifest_config(load_json(root / manifest_path), allow_historical=historical)
-    validate_argv_config(load_json(root / ARGV_RELATIVE_PATH))
+    machine = payload["docker_daemon"]["server_architecture"]
+    validate_argv_config(load_json(root / argv_relative_path(machine)), machine=machine)
     if allow_v96_historical_source_replay:
         _validate_v96_historical_source_replay(payload, root=root, mode=mode)
     else:
@@ -1581,7 +1593,7 @@ def deep_validate_foundation(
 
         validated_driver = validate_default_playwright_driver_once()
         if canonical_json_bytes(validated_driver) != canonical_json_bytes(
-            expected_playwright_driver_receipt()
+            expected_playwright_driver_receipt(browser_profile(machine)["architecture"])
         ):
             raise ValueError("browser-egress pinned Playwright driver did not validate")
     return payload
@@ -1656,7 +1668,7 @@ def _validate_effective_argv(value: object, *, vector_id: str) -> dict[str, Any]
     return json.loads(canonical_json_bytes(value))
 
 
-def _validate_driver_runtime(value: object, *, vector_id: str) -> dict[str, Any]:
+def _validate_driver_runtime(value: object, *, vector_id: str, machine: str = "aarch64") -> dict[str, Any]:
     fields = {
         "schema_version",
         "artifact_type",
@@ -1672,6 +1684,8 @@ def _validate_driver_runtime(value: object, *, vector_id: str) -> dict[str, Any]
     if not isinstance(value, Mapping) or set(value) != fields:
         raise ValueError("browser-egress driver runtime fields are invalid")
     contract = expected_browser_launch_contract(vector_by_id(vector_id))
+    binding = expected_playwright_driver_binding(machine)
+    profile = browser_profile(machine)
     option = contract["managed_policy"]["NetworkPredictionOptions"]
     policy = (
         expected_argv_config()["chromium_network_prediction_control_policy"]
@@ -1679,7 +1693,7 @@ def _validate_driver_runtime(value: object, *, vector_id: str) -> dict[str, Any]
         else expected_argv_config()["chromium_managed_policy"]
     )
     expected_active = {
-        "path": POLICY_VOLUME_POLICY_PATH,
+        "path": str(profile["managed_policy"]),
         "sha256": policy["sha256"],
         "mode": policy["mode"],
         "managed_directory_file_count": 1,
@@ -1688,24 +1702,24 @@ def _validate_driver_runtime(value: object, *, vector_id: str) -> dict[str, Any]
     if (
         value["schema_version"] != 1
         or value["artifact_type"] != "qcsd-playwright-qualification-runtime"
-        or value["production_receipt_sha256"] != EXPECTED_PLAYWRIGHT_DRIVER_RECEIPT_SHA256
-        or value["production_receipt_payload_sha256"] != EXPECTED_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256
+        or value["production_receipt_sha256"] != binding["receipt_sha256"]
+        or value["production_receipt_payload_sha256"] != binding["payload_sha256"]
         or value["active_managed_policy"] != expected_active
         or value["dns_over_https_mode"] != CHROMIUM_DNS_OVER_HTTPS_MODE
         or value["network_prediction_options"] != option
         or value["semantics"]
         != ("predict-on-any-connection-qualification-control" if option == 0 else "never-predict")
-        or value["policy_directory_inventory"] != expected_argv_config()["policy_root_inventory"]
+        or value["policy_directory_inventory"] != expected_argv_config(machine)["policy_root_inventory"]
         or value["qualification_only_policy_substitution"] != (option == 0)
     ):
         raise ValueError("browser-egress driver runtime differs from its vector")
     return json.loads(canonical_json_bytes(value))
 
 
-def _validate_policy_file_inventory(value: object) -> list[dict[str, Any]]:
+def _validate_policy_file_inventory(value: object, *, machine: str = "aarch64") -> list[dict[str, Any]]:
     expected = [
         {
-            "path": POLICY_VOLUME_POLICY_PATH,
+            "path": str(browser_profile(machine)["managed_policy"]),
             "name": POLICY_VOLUME_POLICY_FILENAME,
             "type": "regular",
             "uid": 0,
@@ -1778,6 +1792,7 @@ def validate_docker_inspect_projection(
     browser_gid: int,
     attempt_topology: Mapping[str, Any],
     docker_root_dir: str,
+    machine: str = "aarch64",
 ) -> dict[str, Any]:
     """Validate the content-minimised two-phase Docker inspection."""
 
@@ -1902,7 +1917,7 @@ def validate_docker_inspect_projection(
                     "name": policy_volume_name(
                         vector_id=vector_id, attempt_topology=attempt_topology
                     ),
-                    "destination": POLICY_VOLUME_MANAGED_DIRECTORY,
+                    "destination": str(browser_profile(machine)["managed_policy"].parent),
                     "rw": False,
                 }
             )
@@ -2045,7 +2060,7 @@ def validate_docker_inspect_projection(
             != hashlib.sha256(expected_mountpoint.encode("utf-8")).hexdigest()
         ):
             raise ValueError("browser-egress policy volume inspection is invalid")
-        _validate_policy_file_inventory(volume["file_inventory"])
+        _validate_policy_file_inventory(volume["file_inventory"], machine=machine)
     return json.loads(canonical_json_bytes(value))
 
 
@@ -2106,7 +2121,8 @@ def validate_runtime_binding(
     if value["subject_kind"] != expected_subject:
         raise ValueError("browser-egress subject kind differs from its vector")
     _validate_effective_argv(value["effective_argv"], vector_id=vector.vector_id)
-    _validate_driver_runtime(value["driver_runtime"], vector_id=vector.vector_id)
+    machine = foundation["docker_daemon"]["server_architecture"]
+    _validate_driver_runtime(value["driver_runtime"], vector_id=vector.vector_id, machine=machine)
     _validate_fixture_tls_runtime(value["fixture_tls_runtime"], foundation=foundation)
     identity = value["browser_identity"]
     if not isinstance(identity, Mapping) or set(identity) != {"uid", "gid"}:
@@ -2126,6 +2142,7 @@ def validate_runtime_binding(
         browser_gid=identity["gid"],
         attempt_topology=expected_topology,
         docker_root_dir=foundation["docker_daemon"]["docker_root_dir"],
+        machine=machine,
     )
     return json.loads(canonical_json_bytes(value))
 

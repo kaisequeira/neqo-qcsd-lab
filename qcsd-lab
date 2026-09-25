@@ -11382,6 +11382,15 @@ print(relative)
   browser_egress_scratch="$(mktemp -d --tmpdir=/tmp qcsd-browser-egress.XXXXXXXX)"
   trap browser_egress_exit_cleanup EXIT
   browser_egress_network_name="qcsd-browser-egress-v1"
+  browser_egress_policy_directory="$(python3 -I -c '
+import json, sys
+value=json.load(open(sys.argv[1], encoding="utf-8"))
+machine=value["payload"]["docker_daemon"]["server_architecture"]
+paths={"aarch64":"/etc/chromium/policies/managed", "arm64":"/etc/chromium/policies/managed", "x86_64":"/etc/opt/chrome_for_testing/policies/managed", "amd64":"/etc/opt/chrome_for_testing/policies/managed"}
+if machine not in paths:
+    raise SystemExit("browser-egress architecture is unsupported")
+print(paths[machine])
+' "${browser_egress_result_host}/foundation.json")"
   while :; do
     browser_egress_attempt_scratch=""
     browser_egress_causal_inputs_ready=0
@@ -11582,7 +11591,7 @@ test "$1" = "4566be4f014df0cfd45cf8bdeb4333b341bf4c666139e364992306c12873df03"
 test "$(find /qcsd-policy -mindepth 1 -maxdepth 1 -type f -printf x)" = x
 ' || false
       browser_egress_browser_policy_mount=(
-        --volume "${browser_egress_policy_volume_name}:/etc/chromium/policies/managed:ro"
+        --volume "${browser_egress_policy_volume_name}:${browser_egress_policy_directory}:ro"
       )
     fi
     if _qcsd_docker_api network inspect "${browser_egress_network_name}" >/dev/null 2>&1; then

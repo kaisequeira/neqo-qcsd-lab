@@ -192,7 +192,8 @@ def _live_daemon() -> dict:
     }
 
 
-def _lab(tmp_path: Path) -> tuple[Path, dict]:
+def _lab(tmp_path: Path, *, machine: str = "aarch64") -> tuple[Path, dict]:
+    from qcsd_lab.browser_egress_qualification import argv_relative_path
     root = tmp_path / "lab"
     root.mkdir()
     checkout = Path(__file__).resolve().parents[1]
@@ -209,11 +210,11 @@ def _lab(tmp_path: Path) -> tuple[Path, dict]:
     (root / HISTORICAL_MANIFEST_RELATIVE_PATH).write_bytes(
         canonical_json_bytes(expected_manifest_config(schema_version=1))
     )
-    argv = root / ARGV_RELATIVE_PATH
-    argv.write_bytes(canonical_json_bytes(expected_argv_config()))
+    argv = root / argv_relative_path(machine)
+    argv.write_bytes(canonical_json_bytes(expected_argv_config(machine)))
     build_path = root / "artifacts/buflo-study/build-execution-v71.json"
     build_path.parent.mkdir(parents=True)
-    build_path.write_bytes(canonical_json_bytes({"payload_sha256": "a" * 64, "docker": _daemon()}))
+    build_path.write_bytes(canonical_json_bytes({"payload_sha256": "a" * 64, "docker": {**_daemon(), "server_architecture": machine}}))
     collection = "sha256:" + "3" * 64
     prepare = "sha256:" + "4" * 64
     reference = "sha256:" + "5" * 64
@@ -237,7 +238,7 @@ def _lab(tmp_path: Path) -> tuple[Path, dict]:
         build_execution=validated_build,
         prepare_repo_digests=["qcsd/prepare@sha256:" + "7" * 64],
         runtime_source=_source(prepare),
-        live_docker_daemon=_live_daemon(),
+        live_docker_daemon={**_live_daemon(), "server_architecture": machine},
     )
     return root, foundation
 
@@ -322,7 +323,7 @@ def _admit_create(
         return copy.deepcopy(foundation["source"])
 
     def valid_driver() -> dict:
-        return expected_playwright_driver_receipt()
+        return expected_playwright_driver_receipt(foundation["docker_daemon"]["server_architecture"])
 
     monkeypatch.setattr(util_module, "source_metadata", exact_source)
     monkeypatch.setattr(driver_module, "validate_default_playwright_driver_once", valid_driver)
@@ -617,6 +618,37 @@ def test_foundation_rejects_bool_float_and_adversarial_reseal(tmp_path: Path) ->
         ) == json.loads(canonical_json_bytes(historical))
 
 
+def test_amd64_foundation_replays_portably_but_rejects_arm_bindings(tmp_path: Path) -> None:
+    root, foundation = _lab(tmp_path, machine="x86_64")
+    deep_validate_foundation(
+        foundation, lab_root=root, build_validator=_BuildValidator(foundation),
+        mode=FoundationVerificationMode.PORTABLE_REPLAY,
+    )
+    assert foundation["contracts"]["argv"]["path"].endswith("-amd64-v1.json")
+    for mutate in (
+        lambda value: value["docker_daemon"].update(server_architecture="aarch64"),
+        lambda value: value.update(browser=_browser_binding()),
+        lambda value: value["contracts"]["argv"].update(path=ARGV_RELATIVE_PATH),
+        lambda value: value["execution_contract"]["network_prediction_enabled_control_policy"].update(runtime_path=POLICY_VOLUME_POLICY_PATH),
+    ):
+        forged = copy.deepcopy(foundation)
+        mutate(forged)
+        with pytest.raises(ValueError):
+            validate_foundation_payload(forged)
+
+
+def test_amd64_runtime_rejects_policy_volume_mounted_at_arm_path(tmp_path: Path) -> None:
+    _root, foundation = _lab(tmp_path, machine="x86_64")
+    vector_id = "browser-service-control--off-the-record--speculation-prefetch-enabled"
+    runtime = _runtime(foundation, vector_id=vector_id, seed=1)
+    kwargs = dict(foundation=foundation, vector_id=vector_id, global_ordinal=1,
+                  attempt_number=1, started_at=_wall_time(2))
+    validate_runtime_binding(runtime, **kwargs)
+    runtime["docker_inspect"]["containers"]["browser"]["mounts"][0]["destination"] = POLICY_VOLUME_MANAGED_DIRECTORY
+    with pytest.raises(ValueError, match="runtime isolation"):
+        validate_runtime_binding(runtime, **kwargs)
+
+
 def test_foundation_rejects_cross_daemon_and_resealed_daemon_claim(
     tmp_path: Path,
 ) -> None:
@@ -884,7 +916,10 @@ def _docker_projection(
     *,
     seed: int = 1,
     attempt_topology: dict | None = None,
+    machine: str = "aarch64",
 ) -> dict:
+    from qcsd_lab.playwright_driver import browser_profile
+    managed_policy = browser_profile(machine)["managed_policy"]
     if attempt_topology is None:
         attempt_topology = {
             "cohort_version": 71,
@@ -979,7 +1014,7 @@ def _docker_projection(
             {
                 "type": "volume",
                 "name": volume_name,
-                "destination": POLICY_VOLUME_MANAGED_DIRECTORY,
+                "destination": str(managed_policy.parent),
                 "rw": False,
             }
         ]
@@ -995,7 +1030,7 @@ def _docker_projection(
             "mountpoint_sha256": hashlib.sha256(mountpoint.encode()).hexdigest(),
             "file_inventory": [
                 {
-                    "path": POLICY_VOLUME_POLICY_PATH,
+                    "path": str(managed_policy),
                     "name": POLICY_VOLUME_POLICY_FILENAME,
                     "type": "regular",
                     "uid": 0,
@@ -1440,7 +1475,10 @@ def _runtime(
     projection = _effective_projection(vector_id)
     contract = expected_browser_launch_contract(vector)
     network_prediction_option = contract["managed_policy"]["NetworkPredictionOptions"]
-    argv_config = expected_argv_config()
+    from qcsd_lab.playwright_driver import browser_profile, expected_playwright_driver_binding
+    machine = foundation["docker_daemon"]["server_architecture"]
+    binding = expected_playwright_driver_binding(machine)
+    argv_config = expected_argv_config(machine)
     policy = (
         argv_config["chromium_network_prediction_control_policy"]
         if network_prediction_option == 0
@@ -1460,10 +1498,10 @@ def _runtime(
         "driver_runtime": {
             "schema_version": 1,
             "artifact_type": "qcsd-playwright-qualification-runtime",
-            "production_receipt_sha256": EXPECTED_PLAYWRIGHT_DRIVER_RECEIPT_SHA256,
-            "production_receipt_payload_sha256": EXPECTED_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256,
+            "production_receipt_sha256": binding["receipt_sha256"],
+            "production_receipt_payload_sha256": binding["payload_sha256"],
             "active_managed_policy": {
-                "path": POLICY_VOLUME_POLICY_PATH,
+                "path": str(browser_profile(machine)["managed_policy"]),
                 "sha256": policy["sha256"],
                 "mode": policy["mode"],
                 "managed_directory_file_count": 1,
@@ -1513,6 +1551,7 @@ def _runtime(
             foundation["prepare_image"]["id"],
             seed=seed,
             attempt_topology=attempt_topology,
+            machine=machine,
         ),
         "fixture_contract_sha256": foundation["contracts"]["fixture_contract_sha256"],
     }

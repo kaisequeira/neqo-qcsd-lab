@@ -79,6 +79,8 @@ from .playwright_driver import (
     PLAYWRIGHT_VERSION,
     PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
     PREVIOUS_OWNERSHIP_POLICY_RECEIPT,
+    browser_profile,
+    expected_playwright_driver_binding,
     pinned_chromium_executable_path,
     playwright_driver_session,
     validate_default_playwright_driver_once,
@@ -384,6 +386,15 @@ PROBE_CONTRACT["normal_shutdown_disposal_summary_schema_version"] = (
 )
 PROBE_CONTRACT["normal_shutdown_disposal_policy"] = NORMAL_SHUTDOWN_DISPOSAL_POLICY
 PROBE_CONTRACT_SHA256 = canonical_json_sha256(PROBE_CONTRACT)
+
+
+def probe_contract_for_machine(machine: str | None = None) -> dict[str, Any]:
+    """Bind the same probe semantics to one exact native browser distribution."""
+    contract = json.loads(canonical_json_bytes(PROBE_CONTRACT))
+    binding = expected_playwright_driver_binding(machine)
+    contract["playwright_driver_binding"] = binding
+    contract["chromium_executable_sha256"] = binding["chromium_executable_sha256"]
+    return contract
 
 _TARGET_ACTIVITY_EVENTS = (
     "target-attached",
@@ -1090,7 +1101,9 @@ def run_pinned_cdp_probe(*, expected_uid: int, expected_gid: int) -> dict[str, A
         "isolation": isolation,
         "topology": topology,
     }
-    return _validate_observation(observation)
+    return _validate_observation(
+        observation, expected_playwright_driver_binding=expected_playwright_driver_binding()
+    )
 
 
 def _record_http_status(
@@ -1122,7 +1135,7 @@ def _driver_binding(receipt: Mapping[str, Any]) -> dict[str, Any]:
         "browsers_json_sha256": browser_manifest.get("sha256"),
         "chromium_executable_sha256": executable.get("sha256"),
     }
-    if binding != EXPECTED_PLAYWRIGHT_DRIVER_BINDING:
+    if binding != expected_playwright_driver_binding(executable.get("architecture")):
         raise ValueError("Playwright ownership receipt differs from the pinned default binding")
     return json.loads(canonical_json_bytes(binding))
 
@@ -1416,6 +1429,18 @@ def _validate_required_srcdoc_summary(value: object) -> dict[str, Any]:
     return summary
 
 
+def _bound_build_value(build: Mapping[str, Any]) -> dict[str, Any]:
+    """Read fields omitted from the validator projection without losing its binding."""
+
+    raw = Path(build["path"]).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != build["sha256"]:
+        raise ValueError("pinned CDP validated build receipt bytes changed")
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise ValueError("pinned CDP validated build receipt must be an object")
+    return value
+
+
 def create_pinned_cdp_receipt(
     destination: Path,
     *,
@@ -1449,7 +1474,8 @@ def create_pinned_cdp_receipt(
         raise ValueError("pinned CDP probe runtime differs from the no-cache prepare image")
     observation = run_pinned_cdp_probe(expected_uid=expected_uid, expected_gid=expected_gid)
     recorded_at = datetime.now(UTC).isoformat()
-    build_value = load_json(Path(build["path"]))
+    build_value = _bound_build_value(build)
+    contract = probe_contract_for_machine(build_value["docker"]["server_architecture"])
     payload = {
         "probe_schema_version": PROBE_SCHEMA_VERSION,
         "artifact_type": RECEIPT_TYPE,
@@ -1466,8 +1492,8 @@ def create_pinned_cdp_receipt(
         "collection_source": build["source"],
         "prepare_source": prepare_source,
         "prepare_image_digest": build["images"]["prepare"]["id"],
-        "probe_contract": PROBE_CONTRACT,
-        "probe_contract_sha256": PROBE_CONTRACT_SHA256,
+        "probe_contract": contract,
+        "probe_contract_sha256": canonical_json_sha256(contract),
         "observation": observation,
     }
     _validate_payload(
@@ -1590,11 +1616,9 @@ def _validate_payload(
     build = validate_build_execution_receipt(
         build_path,
         expected_cohort_version=cohort_version,
-        allow_historical=(
-            allow_historical and probe_schema_version == HISTORICAL_PROBE_SCHEMA_VERSION
-        ),
+        allow_historical=allow_historical and historical_probe,
     )
-    build_value = load_json(Path(build["path"]))
+    build_value = _bound_build_value(build)
     expected_binding = {
         "path": _canonical_build_receipt_path(cohort_version),
         "sha256": build["sha256"],
@@ -1627,8 +1651,9 @@ def _validate_payload(
         expected_contract = _HISTORICAL_PROBE_CONTRACT_V17
         expected_contract_sha256 = _HISTORICAL_PROBE_CONTRACT_V17_SHA256
     else:
-        expected_contract = PROBE_CONTRACT
-        expected_contract_sha256 = PROBE_CONTRACT_SHA256
+        machine = browser_profile(build_value["docker"]["server_architecture"])["architecture"]
+        expected_contract = probe_contract_for_machine(machine)
+        expected_contract_sha256 = canonical_json_sha256(expected_contract)
     prepare_image = build["images"]["prepare"]["id"]
     collection_source = build["source"]
     prepare_source = {**collection_source, "image_digest": prepare_image}
@@ -1671,7 +1696,7 @@ def _validate_payload(
             else (
                 PREVIOUS_EXPECTED_PLAYWRIGHT_DRIVER_BINDING
                 if probe_schema_version in {11, 12}
-                else EXPECTED_PLAYWRIGHT_DRIVER_BINDING
+                else expected_contract["playwright_driver_binding"]
             )
         ),
     )

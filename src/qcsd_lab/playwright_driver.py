@@ -9,8 +9,8 @@ commands only verify the immutable receipt and installed driver bytes.
 from __future__ import annotations
 
 import argparse
-import copy
 import contextlib
+import copy
 import hashlib
 import importlib.metadata
 import importlib.util
@@ -34,6 +34,34 @@ EXPECTED_CHROMIUM_REVISION = "1200"
 EXPECTED_CHROMIUM_VERSION = "143.0.7499.4"
 EXPECTED_CHROMIUM_VERSION_OUTPUT = f"Chromium {EXPECTED_CHROMIUM_VERSION}"
 SUPPORTED_ARCHITECTURE = "aarch64"
+SUPPORTED_ARCHITECTURES = ("aarch64", "x86_64")
+# Immutable amd64 profile v1, measured from Playwright's official revision-1200
+# archive and the uv.lock-pinned 1.57.0 Linux x86_64 wheel. The ZIP's sole
+# chrome-linux64 directory is installed as chrome-linux; executable bytes are
+# unchanged. Chrome for Testing uses a different managed-policy root.
+AMD64_BROWSER_PROFILE_ID = "playwright-1.57-chromium-1200-linux-amd64-v1"
+AMD64_CHROMIUM_SHA256 = "2e61bc3fd990bd4d7b419ef6b6303c67aaed683e5b83b3b25e416f015f343209"
+AMD64_CHROMIUM_ARCHIVE_SHA256 = "ab56b2a7955c2961f74348e2349f1e907489283da23dba37c730b624e4d670bb"
+AMD64_CHROMIUM_ARCHIVE_URL = (
+    "https://cdn.playwright.dev/dbazure/download/playwright/builds/chromium/1200/"
+    "chromium-linux.zip"
+)
+AMD64_CHROMIUM_VERSION_OUTPUT = f"Google Chrome for Testing {EXPECTED_CHROMIUM_VERSION}"
+AMD64_CHROMIUM_DISTRIBUTION_TREE = {
+    "sha256": "9279029f61e9b5ea985a79564aa29e94dc707ccfd0b7ffff54ac3f77586e0799",
+    "file_count": 305,
+    "total_bytes": 373_244_611,
+}
+AMD64_PLAYWRIGHT_PACKAGE_PRE_PATCH_TREE = {
+    "sha256": "3c519869f957da99e0141794367903ce2e2255217c84359a9207040a90240a49",
+    "file_count": 401,
+    "total_bytes": 134_629_806,
+}
+AMD64_PLAYWRIGHT_PACKAGE_POST_PATCH_TREE = {
+    "sha256": "bb860e4555f459346a44c82bbf2538d12f427b95dab93a9e99af832ab35860ef",
+    "file_count": 401,
+    "total_bytes": 134_631_653,
+}
 EXPECTED_CHROMIUM_SHA256 = "6f72e258e11d85ec413b1671422c83d65af9f9ddcbc811657a43700b324ce928"
 EXPECTED_BROWSERS_JSON_SHA256 = "b509d013de89d621a142818e0937de356fbb0169096922c08581a4f83e463b8e"
 CHROMIUM_ARCHIVE_URL = (
@@ -217,6 +245,9 @@ DEFAULT_CHROMIUM_SUBPROCESS_WRAPPER = Path("/usr/local/libexec/qcsd-chromium-chi
 DEFAULT_CHROMIUM_MANAGED_POLICY = Path(
     "/etc/chromium/policies/managed/qcsd-network-prediction.json"
 )
+AMD64_CHROMIUM_MANAGED_POLICY = Path(
+    "/etc/opt/chrome_for_testing/policies/managed/qcsd-network-prediction.json"
+)
 DEFAULT_CHROMIUM_ALTERNATE_POLICY_ROOTS = (
     Path("/etc/opt/chrome/policies"),
     Path("/etc/chromium-browser/policies"),
@@ -238,6 +269,48 @@ CHROMIUM_MANAGED_POLICY_MODE = 0o444
 DEFAULT_PLAYWRIGHT_PACKAGE_ROOT = Path("/opt/qcsd-venv/lib/python3.11/site-packages/playwright")
 DEFAULT_DRIVER_ROOT = DEFAULT_PLAYWRIGHT_PACKAGE_ROOT / _DRIVER_RELATIVE_ROOT
 _DIGEST_LENGTH = 64
+
+
+def browser_profile(machine: str | None = None) -> dict[str, Any]:
+    """Select a pinned native profile; never infer it from untrusted hashes."""
+
+    architecture = platform.machine() if machine is None else machine
+    architecture = {"amd64": "x86_64", "arm64": "aarch64"}.get(architecture, architecture)
+    if architecture not in SUPPORTED_ARCHITECTURES:
+        raise ValueError(
+            f"pinned Playwright Chromium is supported only on {SUPPORTED_ARCHITECTURES}; "
+            f"found {architecture}"
+        )
+    amd64 = architecture == "x86_64"
+    return {
+        "architecture": architecture,
+        "executable_sha256": AMD64_CHROMIUM_SHA256 if amd64 else EXPECTED_CHROMIUM_SHA256,
+        "version_output": (
+            AMD64_CHROMIUM_VERSION_OUTPUT if amd64 else EXPECTED_CHROMIUM_VERSION_OUTPUT
+        ),
+        "archive_url": AMD64_CHROMIUM_ARCHIVE_URL if amd64 else CHROMIUM_ARCHIVE_URL,
+        "archive_sha256": AMD64_CHROMIUM_ARCHIVE_SHA256 if amd64 else CHROMIUM_ARCHIVE_SHA256,
+        "distribution_tree": dict(
+            AMD64_CHROMIUM_DISTRIBUTION_TREE if amd64 else EXPECTED_CHROMIUM_DISTRIBUTION_TREE
+        ),
+        "package_pre_patch_tree": dict(
+            AMD64_PLAYWRIGHT_PACKAGE_PRE_PATCH_TREE
+            if amd64 else EXPECTED_PLAYWRIGHT_PACKAGE_PRE_PATCH_TREE
+        ),
+        "package_post_patch_tree": dict(
+            AMD64_PLAYWRIGHT_PACKAGE_POST_PATCH_TREE
+            if amd64 else EXPECTED_PLAYWRIGHT_PACKAGE_POST_PATCH_TREE
+        ),
+        "managed_policy": (
+            AMD64_CHROMIUM_MANAGED_POLICY if amd64 else DEFAULT_CHROMIUM_MANAGED_POLICY
+        ),
+        "alternate_policy_roots": (
+            (*DEFAULT_CHROMIUM_ALTERNATE_POLICY_ROOTS, Path("/etc/chromium/policies"))
+            if amd64 else DEFAULT_CHROMIUM_ALTERNATE_POLICY_ROOTS
+        ),
+    }
+
+
 _ATTACH_EXPRESSION = b"{ autoAttach: true, waitForDebuggerOnStart: true, flatten: true }"
 _REPLACEMENT_COUNT = 2
 _NETWORK_FETCH_PATTERN_EXPRESSION = b'patterns: [{ urlPattern: "*", requestStage: "Request" }]'
@@ -930,6 +1003,7 @@ def _browser_service_containment_files(
     subprocess_wrapper: Path | None,
     managed_policy: Path | None,
     expected_owner_uid: int,
+    machine: str | None = None,
     expected_network_prediction_option: int = CHROMIUM_NETWORK_PREDICTION_NEVER,
 ) -> tuple[dict[str, object], dict[str, object]]:
     wrapper = _bound_runtime_file(
@@ -948,7 +1022,7 @@ def _browser_service_containment_files(
         raise ValueError("Chromium network-prediction policy option is invalid")
     policy = _bound_runtime_file(
         managed_policy,
-        default_path=DEFAULT_CHROMIUM_MANAGED_POLICY,
+        default_path=browser_profile(machine)["managed_policy"],
         expected_sha256=policy_sha256,
         expected_mode=CHROMIUM_MANAGED_POLICY_MODE,
         label="Chromium managed policy",
@@ -1053,12 +1127,8 @@ def _chromium_executable(
     dict[str, object],
     dict[str, object],
 ]:
-    architecture = platform.machine() if machine is None else machine
-    if architecture != SUPPORTED_ARCHITECTURE:
-        raise ValueError(
-            "pinned Playwright Chromium is supported only on "
-            f"{SUPPORTED_ARCHITECTURE}; found {architecture}"
-        )
+    profile = browser_profile(machine)
+    architecture = profile["architecture"]
     if configured_executable is None:
         configured_executable = Path(pinned_chromium_executable_path())
     configured = Path(configured_executable)
@@ -1107,7 +1177,7 @@ def _chromium_executable(
     )
     if not metadata.st_mode & 0o111:
         raise ValueError("resolved Playwright Chromium executable is not executable")
-    expected_sha256 = EXPECTED_CHROMIUM_SHA256
+    expected_sha256 = profile["executable_sha256"]
     if executable_sha256 != expected_sha256:
         raise ValueError("resolved Playwright Chromium executable hash is invalid")
     distribution_identity = _tree_identity(
@@ -1118,7 +1188,7 @@ def _chromium_executable(
     )
     _require_tree_identity(
         distribution_identity,
-        EXPECTED_CHROMIUM_DISTRIBUTION_TREE,
+        profile["distribution_tree"],
         label="Playwright Chromium distribution",
     )
     try:
@@ -1136,13 +1206,14 @@ def _chromium_executable(
     if (
         completed.returncode != 0
         or completed.stderr.strip()
-        or version_output != EXPECTED_CHROMIUM_VERSION_OUTPUT
+        or version_output != profile["version_output"]
     ):
         raise ValueError("Playwright Chromium version observation is invalid")
     wrapper, policy = _browser_service_containment_files(
         subprocess_wrapper=subprocess_wrapper,
         managed_policy=managed_policy,
         expected_owner_uid=expected_owner_uid,
+        machine=machine,
         expected_network_prediction_option=expected_network_prediction_option,
     )
     return (
@@ -1157,8 +1228,8 @@ def _chromium_executable(
         {
             "domain": CHROMIUM_DISTRIBUTION_TREE_DOMAIN,
             "root": str(distribution_root),
-            "archive_url": CHROMIUM_ARCHIVE_URL,
-            "archive_sha256": CHROMIUM_ARCHIVE_SHA256,
+            "archive_url": profile["archive_url"],
+            "archive_sha256": profile["archive_sha256"],
             **distribution_identity,
         },
         wrapper,
@@ -1207,9 +1278,10 @@ def _content_sha256(
     return _sha256(CONTENT_DOMAIN.encode() + b"\0" + _compact_json(inventory))
 
 
-def expected_playwright_driver_receipt() -> dict[str, Any]:
+def expected_playwright_driver_receipt(machine: str = "aarch64") -> dict[str, Any]:
     """Return the exact receipt expected at the immutable production paths."""
 
+    profile = browser_profile(machine)
     paths = {
         specification.filename: _driver_file_path(DEFAULT_DRIVER_ROOT, specification)
         for specification in _FILE_SPECS
@@ -1230,25 +1302,25 @@ def expected_playwright_driver_receipt() -> dict[str, Any]:
         "chromium_headless_shell_version": EXPECTED_CHROMIUM_VERSION,
     }
     chromium_executable = {
-        "architecture": SUPPORTED_ARCHITECTURE,
+        "architecture": profile["architecture"],
         "configured_path": str(DEFAULT_CONFIGURED_EXECUTABLE),
         "symlink_target": str(DEFAULT_RESOLVED_EXECUTABLE),
         "resolved_path": str(DEFAULT_RESOLVED_EXECUTABLE),
-        "sha256": EXPECTED_CHROMIUM_SHA256,
-        "version_output": EXPECTED_CHROMIUM_VERSION_OUTPUT,
+        "sha256": profile["executable_sha256"],
+        "version_output": profile["version_output"],
     }
     playwright_package_tree = {
         "domain": PLAYWRIGHT_PACKAGE_TREE_DOMAIN,
         "root": str(DEFAULT_PLAYWRIGHT_PACKAGE_ROOT),
-        "pre_patch": dict(EXPECTED_PLAYWRIGHT_PACKAGE_PRE_PATCH_TREE),
-        "post_patch": dict(EXPECTED_PLAYWRIGHT_PACKAGE_POST_PATCH_TREE),
+        "pre_patch": profile["package_pre_patch_tree"],
+        "post_patch": profile["package_post_patch_tree"],
     }
     chromium_distribution_tree = {
         "domain": CHROMIUM_DISTRIBUTION_TREE_DOMAIN,
         "root": str(DEFAULT_RESOLVED_EXECUTABLE.parents[1]),
-        "archive_url": CHROMIUM_ARCHIVE_URL,
-        "archive_sha256": CHROMIUM_ARCHIVE_SHA256,
-        **EXPECTED_CHROMIUM_DISTRIBUTION_TREE,
+        "archive_url": profile["archive_url"],
+        "archive_sha256": profile["archive_sha256"],
+        **profile["distribution_tree"],
     }
     chromium_subprocess_wrapper = {
         "path": str(DEFAULT_CHROMIUM_SUBPROCESS_WRAPPER),
@@ -1256,7 +1328,7 @@ def expected_playwright_driver_receipt() -> dict[str, Any]:
         "mode": f"0o{CHROMIUM_SUBPROCESS_WRAPPER_MODE:o}",
     }
     chromium_managed_policy = {
-        "path": str(DEFAULT_CHROMIUM_MANAGED_POLICY),
+        "path": str(profile["managed_policy"]),
         "sha256": EXPECTED_CHROMIUM_MANAGED_POLICY_SHA256,
         "mode": f"0o{CHROMIUM_MANAGED_POLICY_MODE:o}",
         "managed_directory_file_count": 1,
@@ -1312,7 +1384,47 @@ EXPECTED_PLAYWRIGHT_DRIVER_BINDING = {
 }
 
 
-def expected_browser_tool_identity() -> dict[str, Any]:
+def _computed_playwright_driver_binding(machine: str) -> dict[str, Any]:
+    receipt = expected_playwright_driver_receipt(browser_profile(machine)["architecture"])
+    return {
+        "receipt_sha256": _sha256(_canonical_json(receipt)),
+        "payload_sha256": receipt["payload_sha256"],
+        "content_sha256": receipt["content_sha256"],
+        "policy": copy.deepcopy(receipt["policy"]),
+        "browsers_json_sha256": receipt["browser_manifest"]["sha256"],
+        "chromium_executable_sha256": receipt["chromium_executable"]["sha256"],
+    }
+
+
+AMD64_EXPECTED_PLAYWRIGHT_DRIVER_BINDING = _computed_playwright_driver_binding("x86_64")
+if tuple(
+    AMD64_EXPECTED_PLAYWRIGHT_DRIVER_BINDING[key]
+    for key in ("receipt_sha256", "payload_sha256", "content_sha256")
+) != (
+    "dffba7b088ebdd9c23565077d7bc2919f784e5a3d0f3dae39312118066858407",
+    "c8dc95310b5fdbecfaae7c5ead1c78c4b5daa08d97ca0c1a87037c751dd97a7b",
+    "3d5094d36743bb5fa9621b7f736c8299baf624ea574d5ced3fc3e5ae6c59c2a7",
+):  # pragma: no cover - exact source-profile consistency invariant.
+    raise RuntimeError("amd64 Playwright driver receipt constants are inconsistent")
+
+
+def expected_playwright_driver_binding(machine: str | None = None) -> dict[str, Any]:
+    return copy.deepcopy(
+        AMD64_EXPECTED_PLAYWRIGHT_DRIVER_BINDING
+        if browser_profile(machine)["architecture"] == "x86_64"
+        else EXPECTED_PLAYWRIGHT_DRIVER_BINDING
+    )
+
+
+def browser_machine_from_binding(value: object) -> str:
+    """Resolve a complete exact binding for portable replay, never partial pins."""
+    for machine in SUPPORTED_ARCHITECTURES:
+        if value == expected_playwright_driver_binding(machine):
+            return machine
+    raise ValueError("Playwright driver binding does not match a pinned architecture")
+
+
+def expected_browser_tool_identity(machine: str | None = None) -> dict[str, Any]:
     """Return the exact browser identity permitted in acquisition evidence."""
 
     return {
@@ -1322,7 +1434,7 @@ def expected_browser_tool_identity() -> dict[str, Any]:
         "chromium_revision": EXPECTED_CHROMIUM_REVISION,
         "chromium_version": EXPECTED_CHROMIUM_VERSION,
         "configured_executable_path": str(DEFAULT_CONFIGURED_EXECUTABLE),
-        "playwright_driver": json.loads(_compact_json(EXPECTED_PLAYWRIGHT_DRIVER_BINDING)),
+        "playwright_driver": expected_playwright_driver_binding(machine),
     }
 
 
@@ -1433,6 +1545,7 @@ def patch_playwright_driver(
         expected_owner_uid=expected_owner_uid,
     )
     version = _require_version(installed_version)
+    profile = browser_profile(machine)
     root = _installed_driver_root(driver_root)
     package_root = root.parents[4]
     pre_patch_tree_identity = _tree_identity(
@@ -1443,7 +1556,7 @@ def patch_playwright_driver(
     )
     _require_tree_identity(
         pre_patch_tree_identity,
-        EXPECTED_PLAYWRIGHT_PACKAGE_PRE_PATCH_TREE,
+        profile["package_pre_patch_tree"],
         label="Playwright pre-patch package",
     )
     browser_manifest, _ = _browser_manifest(
@@ -1503,13 +1616,13 @@ def patch_playwright_driver(
         )
         _require_tree_identity(
             post_patch_tree_identity,
-            EXPECTED_PLAYWRIGHT_PACKAGE_POST_PATCH_TREE,
+            profile["package_post_patch_tree"],
             label="Playwright post-patch package",
         )
         playwright_package_tree = {
             "domain": PLAYWRIGHT_PACKAGE_TREE_DOMAIN,
             "root": str(package_root),
-            "pre_patch": dict(EXPECTED_PLAYWRIGHT_PACKAGE_PRE_PATCH_TREE),
+            "pre_patch": profile["package_pre_patch_tree"],
             "post_patch": dict(post_patch_tree_identity),
         }
 
@@ -1587,6 +1700,7 @@ def validate_playwright_driver(
     """Verify the receipt, package version, ownership policy, and patched bytes."""
 
     version = _require_version(installed_version)
+    profile = browser_profile(machine)
     root = _installed_driver_root(driver_root)
     package_root = root.parents[4]
     post_patch_tree_identity = _tree_identity(
@@ -1597,13 +1711,13 @@ def validate_playwright_driver(
     )
     _require_tree_identity(
         post_patch_tree_identity,
-        EXPECTED_PLAYWRIGHT_PACKAGE_POST_PATCH_TREE,
+        profile["package_post_patch_tree"],
         label="Playwright post-patch package",
     )
     playwright_package_tree = {
         "domain": PLAYWRIGHT_PACKAGE_TREE_DOMAIN,
         "root": str(package_root),
-        "pre_patch": dict(EXPECTED_PLAYWRIGHT_PACKAGE_PRE_PATCH_TREE),
+        "pre_patch": profile["package_pre_patch_tree"],
         "post_patch": dict(post_patch_tree_identity),
     }
     browser_manifest, _ = _browser_manifest(
@@ -1772,6 +1886,7 @@ def _require_effectively_readonly_ancestors(
 
 
 def _require_default_runtime_immutability() -> int:
+    managed_policy = browser_profile()["managed_policy"]
     effective_uid = os.geteuid()
     if effective_uid == 0:
         return effective_uid
@@ -1781,7 +1896,7 @@ def _require_default_runtime_immutability() -> int:
         (DEFAULT_RECEIPT, "Playwright receipt"),
         (DEFAULT_CONFIGURED_EXECUTABLE, "configured Chromium executable"),
         (DEFAULT_CHROMIUM_SUBPROCESS_WRAPPER, "Chromium subprocess wrapper"),
-        (DEFAULT_CHROMIUM_MANAGED_POLICY, "Chromium managed policy"),
+        (managed_policy, "Chromium managed policy"),
     ):
         _require_effectively_readonly_ancestors(path, label=label)
     for root, label in (
@@ -1803,8 +1918,8 @@ def _require_default_runtime_immutability() -> int:
         (DEFAULT_CONFIGURED_EXECUTABLE, "configured Chromium executable"),
         (DEFAULT_CHROMIUM_SUBPROCESS_WRAPPER.parent, "Chromium subprocess wrapper parent"),
         (DEFAULT_CHROMIUM_SUBPROCESS_WRAPPER, "Chromium subprocess wrapper"),
-        (DEFAULT_CHROMIUM_MANAGED_POLICY.parent, "Chromium managed policy parent"),
-        (DEFAULT_CHROMIUM_MANAGED_POLICY, "Chromium managed policy"),
+        (managed_policy.parent, "Chromium managed policy parent"),
+        (managed_policy, "Chromium managed policy"),
     ):
         _require_effectively_readonly(path, label=label)
     return effective_uid
@@ -1818,8 +1933,9 @@ def _runtime_policy_directory_inventory(
 ) -> list[dict[str, object]]:
     """Reject every unbound Chromium policy root consulted by this build."""
 
+    profile = browser_profile()
     managed_policy = (
-        DEFAULT_CHROMIUM_MANAGED_POLICY
+        profile["managed_policy"]
         if managed_policy is None
         else Path(managed_policy).absolute()
     )
@@ -1864,8 +1980,8 @@ def _runtime_policy_directory_inventory(
         tuple(Path(path).absolute() for path in alternate_policy_roots)
         if alternate_policy_roots is not None
         else (
-            DEFAULT_CHROMIUM_ALTERNATE_POLICY_ROOTS
-            if managed_policy == DEFAULT_CHROMIUM_MANAGED_POLICY
+            profile["alternate_policy_roots"]
+            if managed_policy == profile["managed_policy"]
             else ()
         )
     )
@@ -1887,6 +2003,8 @@ def validate_qualification_playwright_driver_once(
     independently required to be the exact read-only positive-control file.
     """
 
+    profile = browser_profile()
+    binding = expected_playwright_driver_binding(profile["architecture"])
     if expected_network_prediction_option == CHROMIUM_NETWORK_PREDICTION_NEVER:
         receipt = validate_default_playwright_driver_once()
         active_policy = dict(receipt["chromium_managed_policy"])
@@ -1903,7 +2021,7 @@ def validate_qualification_playwright_driver_once(
                 label="Playwright package",
                 expected_owner_uid=0,
             ),
-            EXPECTED_PLAYWRIGHT_PACKAGE_POST_PATCH_TREE,
+            profile["package_post_patch_tree"],
             label="Playwright post-patch package",
         )
         browser_manifest, _ = _browser_manifest(root, expected_owner_uid=0)
@@ -1921,7 +2039,7 @@ def validate_qualification_playwright_driver_once(
             expected_owner_uid=0,
             expected_network_prediction_option=expected_network_prediction_option,
         )
-        expected_receipt = expected_playwright_driver_receipt()
+        expected_receipt = expected_playwright_driver_receipt(profile["architecture"])
         raw, metadata = _regular_file(
             DEFAULT_RECEIPT,
             label="Playwright ownership receipt",
@@ -1930,7 +2048,7 @@ def validate_qualification_playwright_driver_once(
         if (
             metadata.st_mode & 0o222
             or raw != _canonical_json(expected_receipt)
-            or _sha256(raw) != EXPECTED_PLAYWRIGHT_DRIVER_RECEIPT_SHA256
+            or _sha256(raw) != binding["receipt_sha256"]
         ):
             raise ValueError("Playwright production receipt is invalid under control policy")
         for specification in _FILE_SPECS:
@@ -1958,7 +2076,7 @@ def validate_qualification_playwright_driver_once(
     return {
         "schema_version": 1,
         "artifact_type": "qcsd-playwright-qualification-runtime",
-        "production_receipt_sha256": EXPECTED_PLAYWRIGHT_DRIVER_RECEIPT_SHA256,
+        "production_receipt_sha256": binding["receipt_sha256"],
         "production_receipt_payload_sha256": receipt["payload_sha256"],
         "active_managed_policy": active_policy,
         "dns_over_https_mode": CHROMIUM_DNS_OVER_HTTPS_MODE,
@@ -1997,7 +2115,7 @@ def validate_default_playwright_driver_once() -> dict[str, Any]:
             return json.loads(_DEFAULT_VALIDATION_CACHE[1])
 
         receipt = validate_playwright_driver()
-        expected = expected_playwright_driver_receipt()
+        expected = expected_playwright_driver_receipt(browser_profile()["architecture"])
         if receipt != expected:
             raise ValueError("Playwright driver receipt is not the exact production receipt")
         receipt_sha256, _ = _sha256_regular_file(
@@ -2005,7 +2123,7 @@ def validate_default_playwright_driver_once() -> dict[str, Any]:
             label="Playwright ownership receipt",
             expected_owner_uid=0,
         )
-        if receipt_sha256 != EXPECTED_PLAYWRIGHT_DRIVER_RECEIPT_SHA256:
+        if receipt_sha256 != expected_playwright_driver_binding()["receipt_sha256"]:
             raise ValueError("Playwright driver receipt file hash is not the production hash")
         effective_uid = _require_default_runtime_immutability()
         canonical = _canonical_json(receipt)

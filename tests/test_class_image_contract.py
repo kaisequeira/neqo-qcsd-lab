@@ -5,7 +5,6 @@ from pathlib import Path
 from qcsd_lab import playwright_driver, runtime_provenance
 from qcsd_lab.chaff_qualification import IMPLEMENTATION_PYTHON_FILES
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -49,7 +48,7 @@ def test_class_runtime_uses_separate_receipt_without_changing_qualification_sche
 def test_prepare_and_collection_images_have_required_acquisition_and_evaluation_stacks() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     chromium_stage = dockerfile.split(
-        "FROM ${DEBIAN_IMAGE} AS chromium-browser", maxsplit=1
+        "FROM ${DEBIAN_IMAGE} AS chromium-archive-arm64", maxsplit=1
     )[1].split("FROM ${DEBIAN_IMAGE} AS source-metadata", maxsplit=1)[0]
     collection = dockerfile.split("FROM lab-runtime AS collection", maxsplit=1)[1].split(
         "FROM lab-runtime AS reference", maxsplit=1
@@ -77,27 +76,29 @@ def test_prepare_and_collection_images_have_required_acquisition_and_evaluation_
     assert f"ADD --checksum=sha256:{archive_sha256}" in chromium_stage
     assert archive_url in chromium_stage
     assert dockerfile.count(archive_url) == 1
-    assert f"{archive_sha256} \\" in chromium_stage
-    assert "/tmp/chromium.zip | sha256sum -c -" in chromium_stage
-    assert "if len(files) != 466" in chromium_stage
+    assert 'hashlib.file_digest(stream, "sha256").hexdigest() != archive_sha256' in chromium_stage
+    assert "FROM chromium-archive-${TARGETARCH} AS chromium-browser" in chromium_stage
+    assert f"ADD --checksum=sha256:{playwright_driver.AMD64_CHROMIUM_ARCHIVE_SHA256}" in chromium_stage
+    assert playwright_driver.AMD64_CHROMIUM_ARCHIVE_URL in chromium_stage
+    assert "if len(files) != file_count" in chromium_stage
+    assert '"chrome-linux64", 305' in chromium_stage
     assert "python3 -m playwright install --only-shell" not in dockerfile
     assert "python3 -m playwright install chromium" not in dockerfile
     assert "COPY --from=chromium-browser" in prepare
     assert "chromium-1200/chrome-linux/chrome" in prepare
     assert "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/local/bin/qcsd-chromium" in prepare
-    policy_directories = prepare.index("RUN install -d -o 0 -g 0 -m 0555")
+    policy_directories = prepare.index("install -d -o 0 -g 0 -m 0555")
     managed_policy = prepare.index(
-        "COPY --chmod=0444 config/class-study/v1/chromium-managed-policy-v1.json"
+        "/opt/qcsd-lab/config/class-study/v1/chromium-managed-policy-v1.json"
     )
     assert policy_directories < managed_policy
     for directory in (
-        "/etc/chromium",
-        "/etc/chromium/policies",
-        "/etc/chromium/policies/managed",
-        "/etc/chromium/policies/recommended",
+        '${policy_root}/managed',
+        '${policy_root}/recommended',
         "/usr/share/qcsd-lab/browser-egress-controls",
     ):
         assert directory in prepare[policy_directories:managed_policy]
+    assert 'browser_profile()["managed_policy"].parent.parent' in prepare
     patch = prepare.index("python3 -m qcsd_lab.playwright_driver patch")
     verify = prepare.index("python3 -m qcsd_lab.playwright_driver verify")
     runtime_verify = prepare.index("python3 -m qcsd_lab.runtime_provenance verify")
@@ -123,6 +124,7 @@ def test_prepare_image_installs_browser_egress_roles_and_packet_tools() -> None:
     for config in (
         "browser-egress-qualification-v2.json",
         "browser-egress-chromium-argv-v1.json",
+        "browser-egress-chromium-argv-amd64-v1.json",
     ):
         assert f'root / "config/class-study/v1/{config}"' in dockerfile
         assert f"COPY config/class-study/v1/{config}" in dockerfile

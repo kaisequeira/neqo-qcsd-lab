@@ -3,24 +3,29 @@ ARG DOCKERFILE_FRONTEND=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f281
 ARG RUST_IMAGE=docker.io/library/rust:1.90-bookworm@sha256:3914072ca0c3b8aad871db9169a651ccfce30cf58303e5d6f2db16d1d8a7e58f
 ARG DEBIAN_IMAGE=docker.io/library/debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
 ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.10.7@sha256:edd1fd89f3e5b005814cc8f777610445d7b7e3ed05361f9ddfae67bebfe8456a
+ARG TARGETARCH
 
 # Copy the uv executable from an immutable multi-platform image.  Every
 # Python environment below is synchronized directly from uv.lock.
 FROM ${UV_IMAGE} AS uv-bin
 
-# Fetch the exact arm64 Chromium distribution once. BuildKit verifies the declared
+# Fetch the native Chromium distribution. BuildKit verifies the declared
 # archive digest before this stage can extract it; the runtime verifier binds
 # both this archive identity and the complete extracted distribution tree.
-FROM ${DEBIAN_IMAGE} AS chromium-browser
+FROM ${DEBIAN_IMAGE} AS chromium-archive-arm64
 ADD --checksum=sha256:e73eeb680312e96d4f8fbca589ad42e3fb719178b4bdd8707f9fe796123bf48b \
     https://cdn.playwright.dev/dbazure/download/playwright/builds/chromium/1200/chromium-linux-arm64.zip \
     /tmp/chromium.zip
+FROM ${DEBIAN_IMAGE} AS chromium-archive-amd64
+ADD --checksum=sha256:ab56b2a7955c2961f74348e2349f1e907489283da23dba37c730b624e4d670bb \
+    https://cdn.playwright.dev/dbazure/download/playwright/builds/chromium/1200/chromium-linux.zip \
+    /tmp/chromium.zip
+FROM chromium-archive-${TARGETARCH} AS chromium-browser
+ARG TARGETARCH
 RUN apt-get update && apt-get install -y --no-install-recommends python3 && \
     rm -rf /var/lib/apt/lists/* && \
-    printf '%s  %s\n' \
-      e73eeb680312e96d4f8fbca589ad42e3fb719178b4bdd8707f9fe796123bf48b \
-      /tmp/chromium.zip | sha256sum -c - && \
     python3 - <<'PY'
+import hashlib
 import os
 import shutil
 import stat
@@ -28,6 +33,14 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 archive_path = Path("/tmp/chromium.zip")
+archive_profiles = {
+    "arm64": ("e73eeb680312e96d4f8fbca589ad42e3fb719178b4bdd8707f9fe796123bf48b", "chrome-linux", 466),
+    "amd64": ("ab56b2a7955c2961f74348e2349f1e907489283da23dba37c730b624e4d670bb", "chrome-linux64", 305),
+}
+archive_sha256, archive_root, file_count = archive_profiles[os.environ["TARGETARCH"]]
+with archive_path.open("rb") as stream:
+    if hashlib.file_digest(stream, "sha256").hexdigest() != archive_sha256:
+        raise SystemExit("Chromium archive digest is invalid")
 destination = Path("/out/opt/qcsd-playwright/chromium-1200")
 destination.mkdir(parents=True, mode=0o755)
 seen = set()
@@ -43,6 +56,10 @@ with zipfile.ZipFile(archive_path) as archive:
         ):
             raise SystemExit(f"unsafe Chromium archive member: {member.filename!r}")
         seen.add(relative.as_posix())
+        if relative.parts[0] != archive_root:
+            raise SystemExit("Chromium archive has an unexpected root")
+        # Preserve the existing immutable executable/wrapper path on both hosts.
+        relative = PurePosixPath("chrome-linux", *relative.parts[1:])
         archived_mode = member.external_attr >> 16
         if stat.S_ISLNK(archived_mode) or (
             archived_mode
@@ -66,7 +83,7 @@ for directory in sorted(
     directory.chmod(0o755)
 destination.chmod(0o755)
 files = [entry for entry in destination.rglob("*") if entry.is_file()]
-if len(files) != 466 or not (
+if len(files) != file_count or not (
     destination / "chrome-linux/chrome"
 ).is_file():
     raise SystemExit("Chromium archive inventory is invalid")
@@ -173,6 +190,7 @@ runtime_paths = [
     root / "tools/qcsd_chromium_child_wrapper.sh",
     root / "config/class-study/v1/browser-egress-qualification-v2.json",
     root / "config/class-study/v1/browser-egress-chromium-argv-v1.json",
+    root / "config/class-study/v1/browser-egress-chromium-argv-amd64-v1.json",
     root / "config/class-study/v1/chromium-managed-policy-v1.json",
     root / "config/class-study/v1/chromium-network-prediction-positive-control-v1.json",
     root / "config/class-study/v1/browser-egress-fixture-cert-v1.pem",
@@ -529,6 +547,8 @@ COPY config/class-study/v1/browser-egress-qualification-v2.json \
     ./config/class-study/v1/browser-egress-qualification-v2.json
 COPY config/class-study/v1/browser-egress-chromium-argv-v1.json \
     ./config/class-study/v1/browser-egress-chromium-argv-v1.json
+COPY config/class-study/v1/browser-egress-chromium-argv-amd64-v1.json \
+    ./config/class-study/v1/browser-egress-chromium-argv-amd64-v1.json
 COPY --from=source-metadata /source-metadata.json /usr/share/qcsd-lab/source.json
 COPY --from=source-metadata /python-runtime-source-files.json \
     /tmp/python-runtime-source-files.json
@@ -719,14 +739,13 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/qcsd-playwright \
 COPY --from=chromium-browser /out/opt/qcsd-playwright/ /opt/qcsd-playwright/
 COPY --chmod=0555 tools/qcsd_chromium_child_wrapper.sh \
     /usr/local/libexec/qcsd-chromium-child
-RUN install -d -o 0 -g 0 -m 0555 \
-      /etc/chromium \
-      /etc/chromium/policies \
-      /etc/chromium/policies/managed \
-      /etc/chromium/policies/recommended \
-      /usr/share/qcsd-lab/browser-egress-controls
-COPY --chmod=0444 config/class-study/v1/chromium-managed-policy-v1.json \
-    /etc/chromium/policies/managed/qcsd-network-prediction.json
+RUN policy_root="$(python3 -c 'from qcsd_lab.playwright_driver import browser_profile; print(browser_profile()["managed_policy"].parent.parent)')" && \
+    install -d -o 0 -g 0 -m 0555 \
+      "${policy_root}" "${policy_root}/managed" "${policy_root}/recommended" \
+      /usr/share/qcsd-lab/browser-egress-controls && \
+    install -o 0 -g 0 -m 0444 \
+      /opt/qcsd-lab/config/class-study/v1/chromium-managed-policy-v1.json \
+      "${policy_root}/managed/qcsd-network-prediction.json"
 COPY --chmod=0444 \
     config/class-study/v1/chromium-network-prediction-positive-control-v1.json \
     /usr/share/qcsd-lab/browser-egress-controls/network-prediction-options-0.json
@@ -754,6 +773,7 @@ RUN uv lock --check && \
     /usr/local/bin/qcsd-browser-egress-qualification --help >/dev/null && \
     test -r /opt/qcsd-lab/config/class-study/v1/browser-egress-qualification-v2.json && \
     test -r /opt/qcsd-lab/config/class-study/v1/browser-egress-chromium-argv-v1.json && \
+    test -r /opt/qcsd-lab/config/class-study/v1/browser-egress-chromium-argv-amd64-v1.json && \
     /usr/local/bin/qcsd-chromium --version >/dev/null && \
     python3 -m qcsd_lab.runtime_provenance verify
 LABEL org.opencontainers.image.title="neqo-qcsd-lab prepare" \

@@ -8145,7 +8145,8 @@ def test_launcher_requires_clean_capture_image_and_no_cache_build() -> None:
     )
     assert selected_pair < first_generic_docker
     generic_branch = launcher.split(
-        'elif [[ "${1:-}" != "class-study" && "${1:-}" != "etf-probe" ]]; then',
+        'elif [[ "${1:-}" != "class-study" && "${1:-}" != "etf-probe" &&\n'
+        '        "${1:-}" != "etf-veth-probe" ]]; then',
         1,
     )[1].split("\nfi", 1)[0]
     assert "qcsd_deferred_generic_docker=1" in generic_branch

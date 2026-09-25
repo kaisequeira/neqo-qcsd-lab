@@ -608,6 +608,9 @@ def _real_prepare_runtime_foundation(
     active_source["value"] = prepare_source
     monkeypatch.setenv("QCSD_LAB_IMAGE_DIGEST", str(prepare_source["image_digest"]))
     pinned_observation = _pinned_cdp_observation()
+    pinned_observation["playwright_driver"] = playwright_driver.expected_playwright_driver_binding(
+        str(build_value["docker"]["server_architecture"])
+    )
     monkeypatch.setattr(
         pinned_cdp,
         "validate_default_playwright_driver_once",

@@ -325,7 +325,7 @@ def test_launcher_routes_only_consolidated_public_commands():
     launcher_path = Path(__file__).parents[1] / "qcsd-lab"
     launcher = launcher_path.read_text(encoding="utf-8")
     assert (
-        "{lifecycle-recover|build|prepare|derive-chaff-prefix-specs|qualify-chaff|qualify-response-chaff|run|resume|verify|analyze|fit|buflo-study|class-study|etf-probe|test}"
+        "{lifecycle-recover|build|prepare|derive-chaff-prefix-specs|qualify-chaff|qualify-response-chaff|run|resume|verify|analyze|fit|buflo-study|class-study|etf-probe|etf-veth-probe|test}"
         in launcher
     )
     assert (
@@ -4173,7 +4173,7 @@ def test_browser_egress_policy_volume_and_fixture_tls_shell_contract_is_exact() 
     assert "--cap-drop ALL --security-opt no-new-privileges:true --read-only" in vector_loop
     assert '--volume "${browser_egress_policy_volume_name}:/qcsd-policy:rw"' in vector_loop
     assert (
-        '--volume "${browser_egress_policy_volume_name}:/etc/chromium/policies/managed:ro"'
+        '--volume "${browser_egress_policy_volume_name}:${browser_egress_policy_directory}:ro"'
     ) in vector_loop
     assert "install -o 0 -g 0 -m 0444" in vector_loop
     assert 'sync -f "$target"' in vector_loop
@@ -4418,9 +4418,11 @@ def _browser_egress_cleanup_lifetime_shell() -> str:
     launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
     start = launcher.index("_QCSD_LIFETIME_SIGNAL_STATUS=0\n")
     end = launcher.index("\nrequire_submodule()", start)
-    return launcher[start:end] + "\n" + "".join(
+    transport_state = "\nstudy_environment_transport_dir=''\nstudy_environment_host_path=''\n"
+    return launcher[start:end] + transport_state + "".join(
         _launcher_shell_function(launcher, name)
         for name in (
+            "remove_study_environment_transport",
             "_qcsd_begin_latched_cleanup",
             "_qcsd_cleanup_terminal_hook",
             "_qcsd_finish_latched_cleanup",
@@ -7095,8 +7097,8 @@ def test_docker_metadata_reads_have_separate_bounded_setup_allowance() -> None:
         r'\s+(?:--context "\$\{[a-z_]+\}"\s+)?info\s+--format',
         flattened,
     )
-    assert len(metadata_reads) == 6
-    assert launcher.count('"${_QCSD_DOCKER_METADATA_TIMEOUT_SECONDS}"') == 6
+    assert len(metadata_reads) == 7  # Includes the separate ETF/veth provenance read.
+    assert launcher.count('"${_QCSD_DOCKER_METADATA_TIMEOUT_SECONDS}"') == 7
     assert launcher.count("$(_qcsd_read_docker_daemon_id ") == 4
 
 
