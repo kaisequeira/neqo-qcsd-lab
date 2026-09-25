@@ -5375,6 +5375,11 @@ def test_host_source_validator_uses_two_identical_fixed_git_snapshots(
         raise AssertionError((arguments, cwd))
 
     monkeypatch.setattr(watch, "_git_text", git_text)
+    monkeypatch.setattr(
+        watch,
+        "_expected_neqo_git_dir",
+        lambda paths: paths.lab_root / ".git/modules/neqo-qcsd",
+    )
     monkeypatch.setattr(watch, "_verify_git_checkout_binding", lambda *_args: None)
     monkeypatch.setattr(watch, "_verify_git_index_bytes", lambda *_args: None)
     _REAL_VALIDATE_HOST_SOURCE(acquisition.paths, binding)
@@ -5436,6 +5441,49 @@ def test_watch_git_binding_rejects_local_exclude_and_worktree_redirect(
     subprocess.run(("git", "-C", checkout, "config", "core.worktree", str(alternate)), check=True)
     with pytest.raises(watch.WatchError, match="redirected worktree"):
         watch._verify_git_checkout_binding(paths, checkout, checkout / ".git")
+
+
+@pytest.mark.parametrize("module_relative", ("neqo-qcsd", "third_party/neqo-qcsd"))
+def test_watch_git_binding_accepts_both_canonical_submodule_gitdirs(
+    tmp_path: Path, module_relative: str
+) -> None:
+    lab_root = tmp_path / "lab"
+    checkout = lab_root / "neqo-qcsd"
+    checkout.mkdir(parents=True)
+    subprocess.run(("git", "init", "-q", str(lab_root)), check=True)
+    git_dir = lab_root / ".git/modules" / module_relative
+    git_dir.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ("git", "init", "-q", f"--separate-git-dir={git_dir}", str(checkout)),
+        check=True,
+    )
+    (checkout / ".git").write_text(
+        f"gitdir: ../.git/modules/{module_relative}\n", encoding="ascii"
+    )
+    paths = watch.WatchPaths.from_lab_root(lab_root, state_base=tmp_path / "state")
+
+    assert watch._expected_neqo_git_dir(paths) == git_dir
+    watch._verify_git_checkout_binding(paths, checkout, git_dir)
+    (git_dir / "info/exclude").write_text("hidden.py\n", encoding="ascii")
+    with pytest.raises(watch.WatchError, match="hide checkout bytes"):
+        watch._verify_git_checkout_binding(paths, checkout, git_dir)
+
+
+def test_watch_git_binding_rejects_redirected_submodule_gitdir(tmp_path: Path) -> None:
+    lab_root = tmp_path / "lab"
+    checkout = lab_root / "neqo-qcsd"
+    checkout.mkdir(parents=True)
+    subprocess.run(("git", "init", "-q", str(lab_root)), check=True)
+    other_git_dir = lab_root / ".git/modules/other"
+    other_git_dir.parent.mkdir(parents=True)
+    subprocess.run(
+        ("git", "init", "-q", f"--separate-git-dir={other_git_dir}", str(checkout)),
+        check=True,
+    )
+    paths = watch.WatchPaths.from_lab_root(lab_root, state_base=tmp_path / "state")
+
+    with pytest.raises(watch.WatchError, match="redirected submodule gitdir"):
+        watch._expected_neqo_git_dir(paths)
 
 
 def _scope_inventory(state_root: Path | None = None) -> tuple[set[Path], set[str]]:

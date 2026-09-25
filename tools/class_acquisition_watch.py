@@ -6565,6 +6565,33 @@ def _verify_git_checkout_binding(paths: WatchPaths, checkout: Path, expected_git
             raise WatchError("host source Git metadata can hide checkout bytes")
 
 
+def _expected_neqo_git_dir(paths: WatchPaths) -> Path:
+    """Accept only the two Git-owned locations used for this submodule."""
+
+    checkout = paths.lab_root / "neqo-qcsd"
+    observed = Path(_git_text(paths, "rev-parse", "--absolute-git-dir", cwd=checkout))
+    modules = paths.lab_root / ".git/modules"
+    current = modules / "neqo-qcsd"
+    historical = modules / "third_party/neqo-qcsd"
+    if observed not in (current, historical):
+        raise WatchError("host source checkout has a redirected submodule gitdir")
+    git_file = checkout / ".git"
+    metadata_path = (
+        paths.lab_root / ".git",
+        modules,
+        *((modules / "third_party",) if observed == historical else ()),
+        observed,
+    )
+    try:
+        if git_file.is_symlink() or not git_file.is_file() or any(
+            path.is_symlink() or not path.is_dir() for path in metadata_path
+        ):
+            raise WatchError("host source submodule Git metadata has an unsafe type")
+    except OSError as error:
+        raise WatchError("host source submodule Git metadata is unavailable") from error
+    return observed
+
+
 def _verify_git_index_bytes(paths: WatchPaths, checkout: Path) -> None:
     object_format = _git_text(paths, "rev-parse", "--show-object-format", cwd=checkout)
     if object_format not in {"sha1", "sha256"}:
@@ -6666,7 +6693,7 @@ def _host_source_snapshot(paths: WatchPaths) -> tuple[str, str, str | None, str,
     _verify_git_checkout_binding(
         paths,
         paths.lab_root / "neqo-qcsd",
-        paths.lab_root / ".git/modules/third_party/neqo-qcsd",
+        _expected_neqo_git_dir(paths),
     )
     _verify_git_index_bytes(paths, paths.lab_root)
     _verify_git_index_bytes(paths, paths.lab_root / "neqo-qcsd")

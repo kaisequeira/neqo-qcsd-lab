@@ -281,6 +281,28 @@ os.close(root_fd)
   return "${status}"
 }
 
+_qcsd_verify_neqo_checkout_binding() {
+  # Git names the module directory from the submodule name at clone time.
+  # Fresh clones use neqo-qcsd; older checkouts kept the pre-move name.
+  local modules="${ROOT}/.git/modules" candidate
+  [[ -d "${ROOT}/.git" && ! -L "${ROOT}/.git" &&
+     -f "${ROOT}/neqo-qcsd/.git" && ! -L "${ROOT}/neqo-qcsd/.git" &&
+     -d "${modules}" && ! -L "${modules}" ]] || return 1
+  for candidate in "${modules}/neqo-qcsd" \
+                   "${modules}/third_party/neqo-qcsd"; do
+    [[ -d "${candidate}" && ! -L "${candidate}" ]] || continue
+    if [[ "${candidate}" == */third_party/* &&
+          -L "${modules}/third_party" ]]; then
+      continue
+    fi
+    if _qcsd_verify_git_checkout_binding "${ROOT}/neqo-qcsd" \
+        "${candidate}"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 _qcsd_verify_clean_build_checkout() {
   local expected_lab_head="${1:-}"
   local expected_neqo_head="${2:-}"
@@ -293,8 +315,7 @@ _qcsd_verify_clean_build_checkout() {
     return 1
   fi
   _qcsd_verify_git_checkout_binding "${ROOT}" "${ROOT}/.git" &&
-    _qcsd_verify_git_checkout_binding "${ROOT}/neqo-qcsd" \
-      "${ROOT}/.git/modules/third_party/neqo-qcsd" &&
+    _qcsd_verify_neqo_checkout_binding &&
     _qcsd_verify_git_index_bytes "${ROOT}" &&
     _qcsd_verify_git_index_bytes "${ROOT}/neqo-qcsd" || return 1
   [[ -z "$(_qcsd_trusted_git -C "${ROOT}" status --porcelain --untracked-files=all)" &&
@@ -7812,8 +7833,7 @@ fi
 verify_qualification_checkout() {
   local operation="${1:-qualification/capture}"
   _qcsd_verify_git_checkout_binding "${ROOT}" "${ROOT}/.git" &&
-    _qcsd_verify_git_checkout_binding "${ROOT}/neqo-qcsd" \
-      "${ROOT}/.git/modules/third_party/neqo-qcsd" &&
+    _qcsd_verify_neqo_checkout_binding &&
     _qcsd_verify_git_index_bytes "${ROOT}" &&
     _qcsd_verify_git_index_bytes "${ROOT}/neqo-qcsd" || {
     echo "${operation} refuses redirected Git worktree or gitdir state" >&2
@@ -7852,8 +7872,7 @@ verify_qualification_checkout() {
 
 verify_fit_neqo_checkout() {
   _qcsd_verify_git_checkout_binding "${ROOT}" "${ROOT}/.git" &&
-    _qcsd_verify_git_checkout_binding "${ROOT}/neqo-qcsd" \
-      "${ROOT}/.git/modules/third_party/neqo-qcsd" &&
+    _qcsd_verify_neqo_checkout_binding &&
     _qcsd_verify_git_index_bytes "${ROOT}/neqo-qcsd" || {
     echo "fit refuses redirected Git worktree or gitdir state" >&2
     exit 1

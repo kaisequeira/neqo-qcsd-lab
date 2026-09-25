@@ -347,6 +347,14 @@ These checks are engineering progress. A clean source-bound native build,
 live ETF/veth, pinned-CDP, full browser gate and acquisition authority are
 still required before public acquisition.
 
+The first registered desktop build entry stopped before claiming v117 because
+the restored private claim directory had mode `0755`; the guardian requires
+`0700`. After correcting its mode, the next entry also stopped before claim:
+fresh Git clones use `.git/modules/neqo-qcsd`, while the source proof expected
+the historical `.git/modules/third_party/neqo-qcsd` layout. The source proof
+was updated to verify either exact Git-managed location without accepting an
+arbitrary redirected Git directory. Neither early stop produced v117 evidence.
+
 ## Maintenance contract
 
 Future maintainers should append a dated, evidence-backed outcome after each

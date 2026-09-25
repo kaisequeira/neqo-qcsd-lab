@@ -5999,6 +5999,73 @@ def test_launcher_checkout_binding_rejects_hidden_untracked_source(tmp_path: Pat
     assert result.returncode != 0
 
 
+def test_launcher_accepts_fresh_and_historical_submodule_gitdirs(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    checkout = tmp_path / "checkout"
+    source.mkdir()
+    checkout.mkdir()
+    for path in (source, checkout):
+        subprocess.run(["git", "-C", path, "init", "-q"], check=True)
+        subprocess.run(["git", "-C", path, "config", "user.name", "test"], check=True)
+        subprocess.run(
+            ["git", "-C", path, "config", "user.email", "test@example.invalid"],
+            check=True,
+        )
+    (source / "payload").write_text("pinned\n", encoding="ascii")
+    subprocess.run(["git", "-C", source, "add", "payload"], check=True)
+    subprocess.run(["git", "-C", source, "commit", "-qm", "source"], check=True)
+    subprocess.run(
+        [
+            "git", "-c", "protocol.file.allow=always", "-C", checkout,
+            "submodule", "add", "--name", "neqo-qcsd", str(source), "neqo-qcsd",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(["git", "-C", checkout, "commit", "-qam", "checkout"], check=True)
+
+    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
+    functions = launcher.split("_qcsd_trusted_git() {", 1)[1].split(
+        'if [[ "${1:-}" == "-h"', 1
+    )[0]
+    command = (
+        "_qcsd_trusted_git() {" + functions
+        + '\nROOT="$1"\n_qcsd_verify_clean_build_checkout\n'
+    )
+
+    def verify() -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", "--noprofile", "--norc", "-c", command, "verify", str(checkout)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    assert verify().returncode == 0
+    gitdir = checkout / ".git/modules/neqo-qcsd"
+    historical = checkout / ".git/modules/third_party/neqo-qcsd"
+    historical.parent.mkdir()
+    gitdir.rename(historical)
+    (checkout / "neqo-qcsd/.git").write_text(
+        "gitdir: ../.git/modules/third_party/neqo-qcsd\n", encoding="ascii"
+    )
+    subprocess.run(
+        ["git", "config", "--file", historical / "config", "core.worktree", "../../../../neqo-qcsd"],
+        check=True,
+    )
+    assert verify().returncode == 0
+    redirected = checkout / ".git/modules/redirected"
+    historical.rename(redirected)
+    (checkout / "neqo-qcsd/.git").write_text(
+        "gitdir: ../.git/modules/redirected\n", encoding="ascii"
+    )
+    subprocess.run(
+        ["git", "config", "--file", redirected / "config", "core.worktree", "../../../neqo-qcsd"],
+        check=True,
+    )
+    assert verify().returncode != 0
+
+
 def test_launcher_raw_index_verifier_rejects_intermediate_symlink(tmp_path: Path) -> None:
     checkout = tmp_path / "checkout"
     checkout.mkdir()

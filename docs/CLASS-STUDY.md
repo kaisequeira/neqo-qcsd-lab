@@ -102,6 +102,10 @@ Do not hardcode the next cohort from a previous chat. Reconcile the checked-in
 consumed-cohort ledger and restored allocation/attempt evidence. The build
 allocator must accept the chosen unused positive version. A missing final
 receipt does not make a version reusable.
+On a restored workspace, ensure the private
+`artifacts/buflo-study/cohort-claims-v1` directory is owned by the invoking
+user and has mode `0700`; the guardian refuses a broader mode before publishing
+a claim.
 
 After source freeze and preflight, run these commands **one at a time**, inspect
 each exit and receipt, and stop on failure. The shell parameter check requires
