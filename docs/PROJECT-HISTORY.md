@@ -392,8 +392,29 @@ hashes and inodes were verified after the move. The private maintenance
 receipt hashes to `e4f30004f4ec538adc5716324ff56061ef8bbda4ab11cab56f7822d46e8eead0`.
 The active lifecycle namespace became empty and the public
 `./qcsd-lab lifecycle-recover` command passed. The archive confers no
-scientific authority and v119 cannot be reused. V120 is the next candidate
-pending clean source and allocator proof.
+scientific authority and v119 cannot be reused.
+
+The clean Lab `701eaa7f84e8ef4c97a33a383e97f3812e37e0cb` and Rust/Gitlink
+`20b0944a6b998420dd2778c8c9e924706305e4f8` then claimed v120. Its
+pull/no-cache collection build reached the Rust code gate. Formatting and the
+preceding package tests completed, but warning-fatal workspace Clippy rejected
+two functions for `too_many_lines`: `buflo_kernel_helper_evidence_complete`
+at 103/100 lines and `process_scheduler_evidence` at 102/100 lines. The Buildx
+record ended in error with no image or build receipt. After a Docker Desktop
+restart and exact-state audit, the reviewed maintenance helper moved the
+failed build and transaction roots to
+`artifacts/buflo-study/build-failure-v120/metadata` without Docker mutation.
+Its receipt SHA-256 is
+`881fd206cc0568da16949ecadd32fb4090a76c5cf8cdcfe916938a0e463e2955`;
+it verifies zero images and containers, an empty active lifecycle namespace,
+and no scientific authority or version reuse. Public
+`./qcsd-lab lifecycle-recover` passed afterward. V120 remains consumed.
+
+Rust `7879a924` extracted the BuFLO privilege predicate and Lab `3243005`
+pinned that Gitlink. Rust `2c89ee1c` extracted scheduler affinity observation
+and Lab `661f229` pinned the second Gitlink. These are source repairs; no new
+image or evidence gate has passed on them. V121 is the next candidate, pending
+clean source, allocator proof and the registered build gates.
 
 ## Maintenance contract
 

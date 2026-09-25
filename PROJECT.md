@@ -49,7 +49,7 @@ collection has been accepted.
 | Rust commit and Lab Gitlink | `b69398ff3085d852f95f8d435938b6d5e8976482` |
 | Source cleanliness | Both clean at the checkpoint |
 | Latest browser execution | v116: 75 passing vectors, two operational result records, one outstanding interrupted attempt, zero recorded semantic failures |
-| Desktop build allocation | v117–v119 durably claimed and consumed; none produced an image or build receipt. V119 passed storage preflight and reached Dockerfile parsing; next candidate v120, subject to allocator admission |
+| Desktop build allocation | v117–v120 durably claimed and consumed; none produced an image or build receipt. V120 reached the Rust code gate and failed warning-fatal Clippy on two function line counts; next candidate v121, subject to allocator admission |
 | Outstanding v116 vector | Vector 76, `popup--page--window-open-attacker-name`; global intent 78 |
 | Desktop authority | Fresh native build, host qualification and all subsequent gates pending |
 
