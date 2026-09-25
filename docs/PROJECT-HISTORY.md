@@ -364,8 +364,17 @@ native API service's bare `--setenv=NAME` arguments as an invalid environment
 block. A direct transient-service check reproduced the rejection and accepted
 `--setenv=NAME=VALUE`. The API service now supplies explicit values. The
 launcher also reports the failed supervised context or daemon-ID stage while
-retaining fail-closed admission. V117 remains consumed; v118 is the next
-candidate pending clean no-cohort recovery and allocator proof.
+retaining fail-closed admission. V117 remains consumed.
+
+The clean-source v118 entry passed lifecycle recovery and published its
+permanent claim and consumed marker, then stopped at host-storage preflight
+before image compilation or a build receipt. The Windows PowerShell probe's
+standard round-trip timestamp contains seven fractional digits, which the
+isolated Ubuntu Python 3.10 receipt validator could not parse. The Lab's
+build and independent watcher readers now preserve the raw observation and
+parse it at microsecond precision. The live PowerShell observation passed the
+isolated validator after this change. V118 remains consumed; v119 is the next
+candidate pending focused tests, clean source and allocator proof.
 
 ## Maintenance contract
 

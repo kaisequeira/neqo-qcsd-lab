@@ -1132,8 +1132,16 @@ def _one_version_output_line(raw: bytes) -> str:
 
 
 def _aware_timestamp(value: Any, *, label: str) -> datetime:
+    # Windows PowerShell's round-trip format has seven fractional digits;
+    # Ubuntu 22.04's Python 3.10 accepts at most six. Keep the raw receipt
+    # unchanged and parse at the same microsecond precision as Python 3.11.
+    normalized = re.sub(
+        r"(\.\d{6})\d(?=[+-]\d{2}:\d{2}$)",
+        r"\1",
+        str(value).replace("Z", "+00:00"),
+    )
     try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(normalized)
     except ValueError as error:
         raise ValueError(f"{label} timestamp is invalid") from error
     if parsed.tzinfo is None:

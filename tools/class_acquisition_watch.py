@@ -2137,8 +2137,15 @@ def _validate_clean_source(value: Any, *, image: str, label: str) -> None:
 def _evidence_timestamp(value: Any, *, label: str) -> datetime:
     if not isinstance(value, str) or not value:
         raise WatchError(f"{label} timestamp is missing")
+    # The WSL backing-volume probe emits .NET's seven-digit round-trip time.
+    # Python 3.10 needs the seventh digit removed for microsecond parsing.
+    normalized = re.sub(
+        r"(\.\d{6})\d(?=[+-]\d{2}:\d{2}$)",
+        r"\1",
+        value.replace("Z", "+00:00"),
+    )
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(normalized)
     except ValueError as error:
         raise WatchError(f"{label} timestamp is invalid") from error
     if parsed.tzinfo is None:

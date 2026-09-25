@@ -3616,6 +3616,14 @@ def test_watcher_preserves_legacy_storage_policy_and_accepts_small_current_volum
         watch._validate_build_storage_preflight(sibling_disk, probe_sha256=probe_sha256)
         == sibling_disk
     )
+    powershell_timestamp = "2026-09-01T00:00:01.5913490+00:00"
+    sibling_disk["observations"][0]["observed_at"] = powershell_timestamp
+    assert (
+        watch._validate_build_storage_preflight(sibling_disk, probe_sha256=probe_sha256)
+        == sibling_disk
+    )
+    parsed = watch._evidence_timestamp(powershell_timestamp, label="host-storage observation")
+    assert parsed.microsecond == 591349
 
     legacy = copy.deepcopy(preflight)
     legacy["policy"] = watch.BUILD_LEGACY_HOST_STORAGE_POLICY

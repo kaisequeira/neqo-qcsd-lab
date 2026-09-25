@@ -3876,6 +3876,15 @@ def test_observation_and_preflight_reject_invalid_or_reversed_times(
         build_storage.validate_build_host_storage_preflight(preflight)
 
 
+def test_observation_accepts_powershell_seven_digit_timestamp() -> None:
+    observed_at = "2026-09-01T00:00:00.5913490+00:00"
+    observation = _observation("before-collection", observed_at)
+
+    assert _validate_observation(observation)["observed_at"] == observed_at
+    parsed = build_storage._aware_timestamp(observed_at, label="host-storage observation")
+    assert parsed.microsecond == 591349
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
