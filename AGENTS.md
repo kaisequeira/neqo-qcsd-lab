@@ -13,7 +13,7 @@ These repository-local rules apply throughout `neqo-qcsd-lab/`.
 - Report accepted scientific counters only from final deep-verified receipts.
   Historical passing prefixes and non-evidentiary probes advance no numerator.
 - Do not carry checkpoint figures forward from these instructions or memory.
-  Read [README.md](README.md), the latest immutable receipts, and live
+  Read [PROJECT.md](PROJECT.md), the latest immutable receipts, and live
   checkpoint state. Separate a completed historical gate from authority for
   changed source: v89's verified 110-vector browser gate cannot authorise the
   subsequent consumer fixes. Preserve all old cohorts and use the allocator's
@@ -32,6 +32,9 @@ These repository-local rules apply throughout `neqo-qcsd-lab/`.
   Docker commands. Resume ordinary work only after the process exits.
 - Keep the user informed during long operations without disturbing the live
   source boundary.
+- Keep the execution checkout pinned throughout its campaign. Publish research
+  progress from a separate authoring clone between live operations; a
+  documentation commit must not move the running checkout's source identity.
 
 ## Evidence and cohort discipline
 
@@ -75,8 +78,12 @@ These repository-local rules apply throughout `neqo-qcsd-lab/`.
   shared worktree, and do not commit or tag unless the user or coordinating
   agent authorises it.
 - For local documentation and agent guidance, link only to repository-relative,
-  tracked files. Do not reference private parent-workspace notes, ledgers, or
-  archived READMEs; a fresh checkout must contain the referenced guidance.
+  tracked files. [PROJECT.md](PROJECT.md) is the current ledger,
+  [docs/CLASS-STUDY.md](docs/CLASS-STUDY.md) is the continuation runbook, and
+  [docs/PROJECT-HISTORY.md](docs/PROJECT-HISTORY.md) preserves thesis progression.
+  Keep README.md an operator guide. Do not depend on private parent-workspace
+  notes or archived READMEs. Describe unavailable evidence with relative code
+  paths through [docs/EVIDENCE-INDEX.md](docs/EVIDENCE-INDEX.md).
 - If a client/Lab/defence defect appears during the campaign, diagnose and fix
   it within client-only scope, preserve the failed cohort, validate the fix,
   and restart under a fresh cohort. Do not weaken an acceptance gate.
@@ -91,7 +98,7 @@ These repository-local rules apply throughout `neqo-qcsd-lab/`.
 - A launched attempt, locally passing test, image, or partial vector sequence is
   engineering progress only. Claim a gate pass only after its required final
   receipt and closed inventory independently verify.
-- Use current status in [README.md](README.md), checked-in specifications such
+- Use current status in [PROJECT.md](PROJECT.md), checked-in specifications such
   as [config/class-study/v1/study.json](config/class-study/v1/study.json), the
   latest immutable receipts, and `./qcsd-lab class-study --help`. External or
   untracked workspace notes are not repository authority.

@@ -1,58 +1,36 @@
-# QCSD Lab operator guide
+# QCSD Lab
 
-Documentation refresh: 17 September 2026, Australia/Sydney (AEST, UTC+10)
+QCSD Lab prepares reproducible HTTP/3 workloads, runs the client-side Neqo
+defences, captures traffic and runtime evidence, and verifies, seals and exports
+the results. Each admitted workload retains its complete resource graph,
+including resources from multiple origins. Servers remain ordinary HTTP/3
+endpoints.
 
-This repository orchestrates reproducible HTTP/3 traffic capture for the QCSD
-Neqo fork. It freezes workload graphs, runs visits under a selected client-side
-defence, records packet and runtime evidence, and verifies and seals results
-before analysis or export. A workload may contain several origins; a defence
-must not remove those resources or reduce it to a single origin.
+Start with this operator guide. [PROJECT.md](PROJECT.md) records current
+progress and the thesis goal; the [class-study runbook](docs/CLASS-STUDY.md)
+explains the collection sequence. [METHODOLOGY.md](METHODOLOGY.md) defines
+measurement semantics. The [history](docs/PROJECT-HISTORY.md) and
+[evidence index](docs/EVIDENCE-INDEX.md) support research audits.
 
-This README is the checked-in operator entry point. The
-[methodology](METHODOLOGY.md) defines observation and metric semantics, the
-[class-study contract](config/class-study/v1/study.json) defines the frozen
-study inputs, and `./qcsd-lab class-study --help` is the command-line authority.
-Detailed cohort chronology is deliberately omitted from this practical guide;
-use immutable receipts and Git history when auditing earlier executions.
-
-## Current status
-
-The claim boundary remains **five validated defences plus two candidates / nine
+The claim remains **five validated defences plus two candidates / nine
 selectable modes**. BuFLO and CS-BuFLO are candidate client-only QUIC
-adaptations, not bilateral or paper-equivalent implementations. Do not claim
-seven validated defences until the final validation attestation verifies.
+adaptations. Only a verifying final attestation permits their promotion.
 
-Cohort v91 completed independently verified **110/110 browser-egress** checks
-and acquisition-only authority. The first public acquisition batch stopped on
-internal browser lifecycle errors; both failed attempts are retained, not
-classified as site rejections. The client/Lab fixes passed 1,523 local tests
-and diagnostic navigation on both affected sites, with multiple origins
-preserved. Changed source still requires the allocator's next unused cohort
-and fresh prerequisite evidence. Accepted progress remains pilot **0/120**,
-final classes **0/100**, certification **0/900**, and formal capture
-**0/16,000**. Neither local tests nor browser qualification certify public
-classes or defences. Read the latest immutable receipts for subsequent progress.
+## Setup
 
-The nine modes, in stable order, are `undefended`, `static`, `front`, `tamaraw`,
-`traffic-morphing`, `wtf-pad`, `walkie-talkie`, `buflo`, and `cs-buflo`.
-`undefended` and `static` are controls; the middle five research defences are
-validated; BuFLO and CS-BuFLO remain candidates.
+Use Linux; the desktop continuation targets Ubuntu under Windows x64 WSL2.
+Keep the checkout in the Linux filesystem. Required tools are Git, Python
+3.11+, `uv`, and Docker with user systemd/cgroup v2 available. Docker 29.0.1
+is the recorded laptop baseline. The existing scheduler requires at least
+12 visible CPUs, including CPU indices 10 and 11. Prevent sleep and clock
+changes during collection.
 
-## Prerequisites
+Fresh builds require at least 64 GiB free on Docker's actual backing volume.
+Later capture admission independently requires three times the projected
+remaining evidence storage. Native architecture profiles, browser provenance,
+network capabilities and timing must pass on each new collection host.
 
-- The study's Linux environment (currently Ubuntu under WSL2) with Git and a
-  working clock.
-- Docker 29.0.1 reachable from this distribution. Public capture and evidence
-  commands run through Docker.
-- Python 3.11 or newer and `uv` for local development and tests.
-- The checked-out `neqo-qcsd/` submodule at its pinned commit.
-- At least 64 GiB free on the actual Docker data-VHDX backing volume before a
-  fresh image build; the launcher performs stricter stage-specific checks.
-- Network access for fresh image pulls and authorised public-page acquisition.
-- The separately pinned paper, author-source, and archive inputs when running
-  the isolated reference gate.
-
-Initialise a development checkout from this directory:
+From a fresh clone:
 
 ```shell
 git submodule update --init --recursive
@@ -61,191 +39,84 @@ git status --short
 git -C neqo-qcsd status --short
 git submodule status neqo-qcsd
 ./qcsd-lab --help
-```
-
-Do not start an evidentiary build from a dirty or unpinned checkout. The wrapper
-revalidates source, Gitlink, Docker, storage, and receipt authority at multiple
-boundaries and fails closed on drift.
-
-## Repository map
-
-| Path | Purpose |
-|---|---|
-| `qcsd-lab` | Public host-side command wrapper and Docker supervisor |
-| `src/qcsd_lab/` | Python campaign expansion, validation, sealing, analysis, and export logic |
-| `tools/` | Container roles and narrowly scoped operator helpers |
-| `neqo-qcsd/` | Rust Neqo/QCSD submodule, including `neqo-csdef` |
-| `docker/`, `Dockerfile` | Pinned collection, preparation, and reference images |
-| `config/` | Versioned campaigns, workloads, parameters, reference receipts, and class-study contracts |
-| `artifacts/` | Build, qualification, fitting, foundation, evaluation, and attestation receipts |
-| `results/` | Attempt evidence, checkpoints, accepted samples, and sealed campaign results |
-| `handoffs/` | Immutable classifier/evaluation exports derived from sealed results |
-
-Treat `config/`, `artifacts/`, `results/`, and `handoffs/` as evidence-bearing
-trees. Never casually regenerate, rename, edit, or delete their contents.
-
-## Command surface
-
-Use the wrapper, not internal Python entry points. Start with help because the
-typed arguments and prerequisite checks are the authority:
-
-```shell
-./qcsd-lab --help
 ./qcsd-lab class-study --help
-./qcsd-lab test --help
-./qcsd-lab COMMAND --help
 ```
 
-The principal commands are:
+Restore the separately transferred evidence before continuing an existing
+study. See the [evidence index](docs/EVIDENCE-INDEX.md); a Git clone alone does
+not contain captured data, author reference inputs or local receipts.
 
-| Command | Role |
+## Commands
+
+Use the host wrapper `./qcsd-lab`. Its typed arguments and admission checks
+are authoritative; consult the appropriate command help before execution.
+
+| Command | Purpose |
 |---|---|
-| `build` | Allocate a fresh cohort and build the three pinned images with pull/no-cache evidence |
-| `prepare` | Acquire and freeze one workload and its response evidence |
-| `derive-chaff-prefix-specs` | Derive fitting-dependent prefix specifications |
-| `qualify-chaff` / `qualify-response-chaff` | Qualify controlled chaff capacity and response behaviour |
-| `run` / `resume` | Execute or continue a generic capture campaign |
-| `verify` | Deep-verify a generic result and its closed inventory |
-| `analyze` | Derive reports and plots from verified sealed evidence |
-| `fit` | Run the retained fitting workflow for defences that require learned inputs |
-| `test live` | Run bounded live HTTP/3 capture integration checks |
-| `test pinned-cdp` | Prove the pinned Chromium/Playwright target and egress contract |
-| `test browser-egress` | Create, resume, or verify the ordered 110-vector packet-observed browser gate |
-| `buflo-study` | Operate the retained focused BuFLO/CS-BuFLO study pipeline |
-| `class-study` | Operate the authoritative extended-class acquisition, fitting, capture, export, evaluation, and attestation pipeline |
-| `lifecycle-recover` | Inspect and recover a retained Docker lifecycle transaction under its strict policy |
-| `etf-probe` | Run the explicitly non-evidentiary ETF capability probe |
+| `build --cohort-version N` | Allocate an unused cohort and build pinned collection, preparation and reference images |
+| `prepare` | Discover and freeze a workload with response evidence |
+| `derive-chaff-prefix-specs`, `qualify-chaff`, `qualify-response-chaff` | Prepare and verify chaff capacity/prefix inputs |
+| `run`, `resume`, `verify`, `analyze`, `fit` | Generic campaign execution and analysis; class-study roles use their coordinator below |
+| `test live` | Bounded HTTP/3 integration capture |
+| `test pinned-cdp` | Verify the pinned browser, target routing and egress contract |
+| `test browser-egress {create,resume,verify}` | Operate the ordered 110-vector browser gate |
+| `buflo-study` | Reference, timing/regression, code and controlled foundation gates; retained focused-study workflow |
+| `class-study` | Acquisition, fitting, qualification, certification, formal capture, evaluation and attestation |
+| `class-study acquisition-watch` | Host supervisor for due acquisition observations |
+| `etf-probe`, `etf-veth-probe` | Non-evidentiary timing/transport capability diagnostics |
+| `lifecycle-recover` | Strict recovery of a retained Docker transaction |
 
-`class-study` provides `status`, acquisition, cohort, campaign, fitting,
-qualification, capture, export, evaluation, comparison, attestation, successor,
-and verification actions. `acquisition-watch` is the host-only bounded
-supervisor for due acquisition work.
-
-`buflo-study code-gate` explicitly runs and records the Lab test commands.
-Receipt verification checks their recorded outputs and bound evidence; it does
-not rerun tests, including during deep status or admission checks.
-
-## Immutable execution rules
-
-1. Supply the allocator-authorised next unused positive cohort version. Receipt
-   absence does not make an attempted version reusable.
-2. Build from one clean pinned Lab checkout and exact Rust Gitlink. A source,
-   parameter, workload, acceptance-rule, or image change requires a fresh
-   cohort and fresh downstream evidence.
-3. Evidence destinations are create-only. Never overwrite a receipt, accepted
-   sample, sealed result, handoff, or attestation.
-4. `experiment.json` is the authoritative capture-campaign checkpoint.
-   Acquisition uses its `checkpoint.json` and bound `provenance.json`. Resume
-   only with the same source and arguments after an ordinary interruption.
-   Never resume an old cohort after a source-changing fix.
-5. Preserve every failed attempt. Do not delete, substitute, relabel, or promote
-   it. A pass counts only when the required final receipt deep-verifies.
-6. Run source-bound Docker stages serially. While one is live, do not edit or
-   inspect the checkout, run Git or graph tools, issue unrelated Docker
-   commands, or start parallel agents; only poll the existing process.
-7. Keep all defence fixes client-side. Servers remain ordinary HTTP/3 servers;
-   do not introduce a symmetric defence protocol to make a gate pass.
-
-## Extended-class workflow
-
-Do not reconstruct typed arguments from this summary. Before each stage, read
-`./qcsd-lab class-study --help` and use the exact paths and identities produced
-by the preceding verified receipt. The checked-in
-[class-study contract](config/class-study/v1/study.json) is the study-input
-authority.
-
-At a high level, the sequence is:
-
-1. After source corrections are validated and committed, allocate the
-   next unused cohort, build fresh images, run pinned-CDP and all 110
-   browser-egress vectors, then publish `acquisition-authority`. Its fixed
-   acquisition/preparation test inventory executes once at creation; subsequent
-   verification checks its immutable evidence. This receipt permits only
-   public-page acquisition, never defended capture.
-2. Initialise with `--acquisition-authority`, then run/watch acquisition. Keep
-   the genuine 30-second, 24-hour and 72-hour stability checks. Complete each
-   stratum's frozen-order prefix through its 24th eligible class; all earlier
-   candidates must have scientific terminal outcomes. The unused catalogue
-   tail stays explicitly unassessed. Infrastructure failures block completion,
-   not class eligibility. Multi-origin resources must not be omitted.
-3. Freeze the 120-class pilot. Before any fitting or class-study capture, pass
-   isolated reference, timing-stress, nine-mode regression, code and controlled
-   qualification, then publish the full class-foundation attestation. The two
-   authorities must bind the same source, build and acquisition inputs.
-4. Generate pilot and authoritative fitting campaigns over independent visits;
-   derive and qualify every numeric or prefix input required by the applicable
-   defences. Pilot compatibility and qualified pairing determine the final 100
-   classes and 20 reserves under the checked-in selection rules.
-5. Run the 100-class × nine-mode × one-visit certification campaign. A cell
-   counts only after exact workload correctness and
-   defence evidence pass.
-6. Freeze readiness and historical-pre evidence, then run each prescribed
-   canary before its formal block and capture the 100-class ×
-   eight-mode × 20-visit formal corpus (16,000 accepted samples; includes
-   `undefended`, excludes `static`) in
-   its prescribed order.
-7. Seal and verify results, create the immutable handoff, evaluate, complete the
-   comparison review, and publish `validation-attestation.json` only if every
-   gate passes.
-
-The acquisition scheduler preserves hard action limits and the two-candidate /
-five-live-page caps. It releases obsolete reservations only after every batch
-member is scientifically terminal plus the full 40-minute guard. With no
-rejections, the ideal 120-candidate schedule still spans about 7.62 days;
-actual execution and replacements can extend it. This is not a completion-time
-guarantee or permission to shorten the stability windows.
-
-Useful read-only checks include:
+Read-only study inspection, when no source-bound process is live:
 
 ```shell
 ./qcsd-lab class-study status
 ./qcsd-lab class-study verify --target RECEIPT_OR_RESULT
 ```
 
-For a published, source-compatible checkpoint, use the exact `resume` action
-and arguments admitted by `./qcsd-lab class-study --help` and the checkpoint.
-If source changed, retain the old checkpoint and allocate the next cohort
-instead.
+For local Python development checks:
 
-## Evidence and result handling
+```shell
+uv run pytest
+git diff --check
+```
 
-An accepted generic sample contains the exact five-file inventory documented in
-[METHODOLOGY.md](METHODOLOGY.md). Browser qualification and candidate timing
-gates have their own typed sidecars and receipts. Consumers must accept only
-the schema versions and historical compatibility paths implemented by their
-validators; explanatory prose cannot upgrade evidence.
+Local tests do not replace the image-bound code gate or live qualification.
 
-The source-of-truth order is:
+## Execution and recovery
 
-1. the current Git checkout and pinned submodule;
-2. checked-in specifications and parameter receipts;
-3. immutable executed receipts, checkpoints, and sealed evidence;
-4. explanatory documentation.
+1. Use a clean Lab checkout and its exact clean Rust Gitlink. Choose the
+   allocator-authorised unused positive cohort; attempted versions remain
+   consumed even if no final receipt exists.
+2. Run source-bound Docker stages serially. During a live stage, agents only
+   poll that process/session. Repository inspection, edits, tests, Git and
+   unrelated Docker operations wait until it exits.
+3. Evidence destinations are create-only. Preserve failed attempts and use
+   `experiment.json` for capture resume. Acquisition uses `checkpoint.json`
+   and bound `provenance.json`. Use the original source, inputs and arguments.
+4. Diagnose with the smallest relevant local or live diagnostic first. A
+   client/Lab defect requires a client-side fix and fresh affected downstream
+   evidence. Source, image, parameter, workload or acceptance changes invalidate
+   authority tied to the previous identity.
+5. A failed final receipt or incomplete passing prefix is not a completed gate.
+   Distinguish operational interruptions from scientific failures before
+   choosing resume, repair or a fresh cohort.
 
-Use [artifacts/README.md](artifacts/README.md) and
-[results/README.md](results/README.md) for local tree conventions. Never use
-an archived README, a log line, or a passing prefix as a substitute for a final
-verified receipt.
+Keep an execution checkout pinned for its whole campaign. Publish progress
+documentation from a separate authoring clone between live operations, without
+changing that checkout. Agent operators must follow [AGENTS.md](AGENTS.md).
 
-## Troubleshooting and safety
+## Repository layout
 
-- First inspect the command's terminal message, its campaign or acquisition
-  checkpoint, attempt result, and preserved logs. Do not delete a failed root
-  to “retry”.
-- Confirm the exact heads and Gitlink with the read-only Git commands shown
-  above before and after an idle-period diagnosis, never during a live
-  source-bound operation.
-- Check Docker reachability with `docker info` and host/storage health with
-  read-only system tools. Do not prune Docker, caches, results, or evidence
-  while a transaction is active.
-- Use `./qcsd-lab lifecycle-recover` only for a retained lifecycle transaction
-  and follow its reported policy. It is not a way to turn a failed cohort into
-  reusable evidence.
-- Distinguish operational, semantic, workload, transport, defence-fidelity, and
-  infrastructure failures. Fix implementation defects when required, preserve
-  the failed evidence, and restart under a fresh cohort if source changes.
-- Before claiming progress, deep-verify the final receipt and report the
-  scientific numerator, not merely launched attempts or passing prefixes.
+| Path | Contents |
+|---|---|
+| `src/qcsd_lab/`, `tools/`, `qcsd-lab` | Lab implementation, container roles and host supervisor |
+| `neqo-qcsd/` | Rust Neqo/QCSD submodule |
+| `docker/`, `Dockerfile` | Pinned image definitions |
+| `config/` | Versioned study, workload, parameter and campaign specifications |
+| `artifacts/` | Local immutable build, qualification, fitting and authority receipts |
+| `results/` | Local attempts, checkpoints and sealed capture campaigns |
+| `handoffs/` | Local immutable exports |
+| `docs/` | Current research runbook, thesis progression and evidence index |
 
-Agent and harness operators must also follow the repository-local
-[AGENTS.md](AGENTS.md).
+Treat evidence-bearing directories as immutable inputs or create-only outputs.
+Never regenerate, relabel or prune a sealed inventory to make verification pass.
