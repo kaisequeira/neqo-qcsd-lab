@@ -2104,20 +2104,29 @@ require_docker() {
   }
   local pinned_context pinned_endpoint pinned_server_id observed_server_id
   local pinned_boot_id observed_boot_id
-  pinned_context="$(_qcsd_docker_api context show 2>/dev/null)"
+  if ! pinned_context="$(_qcsd_docker_api context show)"; then
+    echo "qcsd-lab cannot query Docker context through the lifecycle supervisor" >&2
+    exit 1
+  fi
   if [[ ! "${pinned_context}" =~ ^[A-Za-z0-9_.-]+$ ]]; then
     echo "qcsd-lab cannot pin one safe Docker context" >&2
     exit 1
   fi
-  pinned_endpoint="$(_qcsd_docker_api context inspect --format \
-    '{{.Endpoints.docker.Host}}' "${pinned_context}" 2>/dev/null)"
+  if ! pinned_endpoint="$(_qcsd_docker_api context inspect --format \
+    '{{.Endpoints.docker.Host}}' "${pinned_context}")"; then
+    echo "qcsd-lab cannot inspect the selected Docker context through the lifecycle supervisor" >&2
+    exit 1
+  fi
   if [[ "${pinned_endpoint}" != "unix:///var/run/docker.sock" &&
         "${pinned_endpoint}" != \
           "npipe:////./pipe/dockerDesktopLinuxEngine" ]]; then
     echo "qcsd-lab requires one local Docker endpoint" >&2
     exit 1
   fi
-  pinned_server_id="$(_qcsd_read_docker_daemon_id "${pinned_endpoint}" 2>/dev/null)"
+  if ! pinned_server_id="$(_qcsd_read_docker_daemon_id "${pinned_endpoint}")"; then
+    echo "qcsd-lab cannot query the Docker daemon identity through the lifecycle supervisor" >&2
+    exit 1
+  fi
   if [[ ! "${pinned_server_id}" =~ ^[A-Za-z0-9_.:-]+$ ||
         "${pinned_server_id}" == "unavailable" ]]; then
     echo "qcsd-lab cannot bind the local Docker daemon identity" >&2
@@ -2144,7 +2153,10 @@ require_docker() {
   _QCSD_DOCKER_PINNED_HOST="${pinned_endpoint}"
   _QCSD_DOCKER_PINNED_SERVER_ID="${pinned_server_id}"
   _QCSD_DOCKER_PINNED_BOOT_ID="${pinned_boot_id}"
-  observed_server_id="$(_qcsd_read_docker_daemon_id "${pinned_endpoint}" 2>/dev/null)"
+  if ! observed_server_id="$(_qcsd_read_docker_daemon_id "${pinned_endpoint}")"; then
+    echo "qcsd-lab cannot recheck the Docker daemon identity before recovery" >&2
+    exit 1
+  fi
   if [[ "${observed_server_id}" != "${pinned_server_id}" ]]; then
     echo "Docker is installed but its daemon is unavailable" >&2
     exit 1
@@ -2170,7 +2182,10 @@ require_docker() {
     unset class_watch_scope_recovery
   fi
   reconcile_stale_docker_supervisors || exit 1
-  observed_server_id="$(_qcsd_read_docker_daemon_id "${pinned_endpoint}" 2>/dev/null)"
+  if ! observed_server_id="$(_qcsd_read_docker_daemon_id "${pinned_endpoint}")"; then
+    echo "qcsd-lab cannot recheck the Docker daemon identity after recovery" >&2
+    exit 1
+  fi
   if [[ "${observed_server_id}" != "${pinned_server_id}" ]]; then
     echo "qcsd-lab Docker daemon changed across lifecycle admission" >&2
     exit 1

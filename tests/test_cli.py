@@ -7184,6 +7184,45 @@ def test_docker_recovery_precedes_reproof_and_final_admission() -> None:
     assert guardian < recovery < daemon_reproof < boot_reproof < final_admission
 
 
+@pytest.mark.parametrize(
+    ("failed_query", "expected_message"),
+    (
+        ("show", "cannot query Docker context through the lifecycle supervisor"),
+        ("inspect", "cannot inspect the selected Docker context through the lifecycle supervisor"),
+    ),
+)
+def test_docker_context_failure_is_reported_under_errexit(
+    failed_query: str, expected_message: str
+) -> None:
+    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
+    body = _launcher_shell_function(launcher, "require_docker")
+    command = (
+        "set -euo pipefail\n"
+        "_qcsd_require_lifecycle_guardian_entry() { :; }\n"
+        "_qcsd_secure_lifecycle_base() { :; }\n"
+        "docker() { :; }\n"
+        "_qcsd_docker_api() {\n"
+        '  if [[ "$1" == context && "$2" == show ]]; then\n'
+        '    [[ "$FAILED_QUERY" == show ]] && return 125\n'
+        '    printf "default\\n"\n'
+        "    return 0\n"
+        "  fi\n"
+        '  [[ "$FAILED_QUERY" == inspect ]] && return 125\n'
+        "  return 1\n"
+        "}\n"
+        + body + "\nrequire_docker\n"
+    )
+    result = subprocess.run(
+        ["bash", "--noprofile", "--norc", "-c", command],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "FAILED_QUERY": failed_query},
+    )
+    assert result.returncode == 1
+    assert expected_message in result.stderr
+
+
 def test_acquisition_scope_digest_binds_current_argv_before_recovery() -> None:
     launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
     digest = launcher.index('class_watch_current_action_sha256="$(')

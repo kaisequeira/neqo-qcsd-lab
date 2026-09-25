@@ -355,6 +355,17 @@ the historical `.git/modules/third_party/neqo-qcsd` layout. The source proof
 was updated to verify either exact Git-managed location without accepting an
 arbitrary redirected Git directory. Neither early stop produced v117 evidence.
 
+The subsequent clean-source v117 build entry published the permanent
+`claim-v117.json` and matching consumed marker. Their canonical bytes and the
+dense predecessor chain through v117 verified. The launcher then exited 125
+before a build image or build receipt appeared. No precise lower-level Docker
+service error survived the retired lifecycle state. The launcher's first
+supervised context query had suppressed stderr and ran in an unguarded
+`set -e` assignment, which can explain the silent exit; this is an inference,
+not a proven cause. The query and later daemon-ID reads now report their failed
+stage while retaining fail-closed admission. V117 remains consumed; v118 is the
+next candidate pending a clean no-cohort lifecycle check and allocator proof.
+
 ## Maintenance contract
 
 Future maintainers should append a dated, evidence-backed outcome after each
