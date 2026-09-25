@@ -7625,6 +7625,7 @@ def test_normal_pretransfer_manager_rejection_releases_safely(
         "not-found", "inactive", "", 0
     ))
     monkeypatch.setattr(native, "_systemd_versions", lambda: versions)
+    monkeypatch.setenv("QCSD_TEST_SYSTEMD_ENV", "portable")
     launched: list[tuple[str, ...]] = []
 
     def reject(arguments: tuple[str, ...], **_kwargs: object) -> RejectedLauncher:
@@ -7657,6 +7658,12 @@ def test_normal_pretransfer_manager_rejection_releases_safely(
         assert ("--expand-environment=no" in launched[0]) == (versions[0] >= 254)
         assert ("--property=ExitType=cgroup" in launched[0]) == (versions[0] >= 250)
         assert ("literal-$HOME" if versions[0] >= 254 else "literal-$$HOME") in launched[0]
+        assert "--setenv=QCSD_TEST_SYSTEMD_ENV=portable" in launched[0]
+        assert all(
+            "=" in argument[len("--setenv=") :]
+            for argument in launched[0]
+            if argument.startswith("--setenv=")
+        )
     finally:
         os.close(source_fd)
         os.close(lock_fd)

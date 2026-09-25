@@ -1313,8 +1313,10 @@ def _watch_api_service(
         "--",
         *command,
     )
+    # systemd-run 249 requires NAME=VALUE; NAME alone is rejected with
+    # "Invalid environment block" before the leased service can start.
     environment_arguments = tuple(
-        f"--setenv={name}"
+        f"--setenv={name}={os.environ[name]}"
         for name in sorted(os.environ)
         if name not in {"DOCKER_CONFIG", "BUILDX_CONFIG"}
         if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
