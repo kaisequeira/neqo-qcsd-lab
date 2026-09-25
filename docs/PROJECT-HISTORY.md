@@ -416,6 +416,33 @@ and Lab `661f229` pinned the second Gitlink. These are source repairs; no new
 image or evidence gate has passed on them. V121 is the next candidate, pending
 clean source, allocator proof and the registered build gates.
 
+The clean Lab `e276b288fa169d8303474da9587e675f4f15f105` and Rust/Gitlink
+`e8575fd8e54921ed6ff867de475b4a734064866e` claimed v121. Its
+pull/no-cache collection build completed all six Rust gates and exported
+image `sha256:60faf7eee3359ced8d0c47b63191c2d031677f4bd942080db531812bb4d346a1`.
+The subsequent Docker-selected Buildx metadata read timed out at its ten-second
+limit; the user journal confirmed `RuntimeMaxSec`. No preparation or reference
+image, build-execution receipt or build-completion receipt was produced.
+After Docker Desktop restart and an exact-state audit, reviewed maintenance
+archived the v121 transaction root under
+`artifacts/buflo-study/build-failure-v121/metadata`. The maintenance receipt
+SHA-256 is
+`a4cbbb5cb0c9487d85fe16c106070fcb0d1ae98ecad9ed45f0d92873ad437dcf`;
+the retained provisional image proof SHA-256 is
+`d62b40ee0cd854ef6e988a363b37a01fd943563604ff7802ac84d04c1083b2fc`.
+The receipt verifies an empty active lifecycle namespace, zero containers,
+and no scientific authority or version reuse. Public
+`./qcsd-lab lifecycle-recover` passed. V121 remains consumed.
+
+Lab `4f55b994` added a bounded 10-second/30-second retry for an empty
+Docker-selected Buildx plugin metadata read; 12 focused tests passed. Lab
+`2a901c6c` applied the same bounded empty-read retry to `buildx version`;
+its focused tests passed 7, 8 and 1 checks respectively. Both paths retain
+terminal rejection for partial output, invalid responses and daemon-identity
+failures. These source checks do not authorise the provisional image. V122 is
+the next candidate, pending clean source, allocator proof and the registered
+build gates.
+
 ## Maintenance contract
 
 Future maintainers should append a dated, evidence-backed outcome after each

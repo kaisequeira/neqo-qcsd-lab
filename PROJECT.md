@@ -37,9 +37,10 @@ The laptop retains historical raw campaigns; see the
 WSL data now reside on D:. The desktop's user systemd/cgroup manager and
 Docker data backing volume passed host checks. Portable CPU assignment uses
 the CPU IDs observed inside the collection image, and the required focused
-source suite passed 712 tests. A fresh native image and live qualification
-remain the next milestone. No desktop image, browser gate or scientific
-collection has been accepted.
+source suite passed 712 tests. A complete native three-image build and live
+qualification remain the next milestone. V121 exported one provisional
+collection image, but no desktop build, browser gate or scientific collection
+has been accepted.
 
 | Checkpoint identity | Published desktop migration baseline |
 |---|---|
@@ -49,7 +50,7 @@ collection has been accepted.
 | Rust commit and Lab Gitlink | `b69398ff3085d852f95f8d435938b6d5e8976482` |
 | Source cleanliness | Both clean at the checkpoint |
 | Latest browser execution | v116: 75 passing vectors, two operational result records, one outstanding interrupted attempt, zero recorded semantic failures |
-| Desktop build allocation | v117–v120 durably claimed and consumed; none produced an image or build receipt. V120 reached the Rust code gate and failed warning-fatal Clippy on two function line counts; next candidate v121, subject to allocator admission |
+| Desktop build allocation | v117–v121 durably claimed and consumed. V121 exported a provisional collection image after all six Rust gates, then its post-collection Buildx metadata read timed out; no complete build receipt or prepare/reference image. Next candidate v122, subject to allocator admission |
 | Outstanding v116 vector | Vector 76, `popup--page--window-open-attacker-name`; global intent 78 |
 | Desktop authority | Fresh native build, host qualification and all subsequent gates pending |
 
