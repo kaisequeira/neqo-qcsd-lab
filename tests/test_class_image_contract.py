@@ -93,7 +93,8 @@ def test_prepare_and_collection_images_have_required_acquisition_and_evaluation_
     assert "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/local/bin/qcsd-chromium" in prepare
     policy_directories = prepare.index("install -d -o 0 -g 0 -m 0555")
     managed_policy = prepare.index(
-        "/opt/qcsd-lab/config/class-study/v1/chromium-managed-policy-v1.json"
+        "    install -o 0 -g 0 -m 0444 \\\n"
+        "      /opt/qcsd-lab/config/class-study/v1/chromium-managed-policy-v1.json"
     )
     assert policy_directories < managed_policy
     for directory in (
@@ -149,6 +150,34 @@ def test_prepare_image_installs_browser_egress_roles_and_packet_tools() -> None:
         "COPY --chmod=0444 \\\n"
         "    config/class-study/v1/chromium-network-prediction-positive-control-v1.json"
     ) in prepare
+
+
+def test_prepare_managed_policy_is_present_before_install_with_source_proof() -> None:
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    policy = "config/class-study/v1/chromium-managed-policy-v1.json"
+    source_metadata = dockerfile.split(
+        "FROM ${DEBIAN_IMAGE} AS source-metadata", maxsplit=1
+    )[1].split("FROM ${DEBIAN_IMAGE} AS osad-builder", maxsplit=1)[0]
+    lab_runtime = dockerfile.split("FROM ${DEBIAN_IMAGE} AS lab-runtime", maxsplit=1)[
+        1
+    ].split("FROM lab-runtime AS collection", maxsplit=1)[0]
+    collection = dockerfile.split("FROM lab-runtime AS collection", maxsplit=1)[
+        1
+    ].split("FROM lab-runtime AS reference", maxsplit=1)[0]
+    prepare = dockerfile.split("FROM collection AS prepare", maxsplit=1)[1]
+    copy = (
+        "COPY --chown=0:0 --chmod=0444 \\\n"
+        f"    {policy} \\\n"
+        f"    /opt/qcsd-lab/{policy}"
+    )
+
+    assert (ROOT / policy).is_file()
+    assert f'root / "{policy}"' in source_metadata
+    assert policy not in lab_runtime
+    assert policy not in collection
+    assert prepare.count(copy) == 1
+    assert prepare.index(copy) < prepare.index("RUN policy_root=")
+    assert f"/opt/qcsd-lab/{policy}" in prepare
 
 
 def test_wrapper_selects_prepare_for_acquisition_and_keeps_workspace_read_only() -> None:

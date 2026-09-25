@@ -738,6 +738,9 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/qcsd-playwright \
 COPY --from=chromium-browser /out/opt/qcsd-playwright/ /opt/qcsd-playwright/
 COPY --chmod=0555 tools/qcsd_chromium_child_wrapper.sh \
     /usr/local/libexec/qcsd-chromium-child
+COPY --chown=0:0 --chmod=0444 \
+    config/class-study/v1/chromium-managed-policy-v1.json \
+    /opt/qcsd-lab/config/class-study/v1/chromium-managed-policy-v1.json
 RUN policy_root="$(python3 -c 'from qcsd_lab.playwright_driver import browser_profile; print(browser_profile()["managed_policy"].parent.parent)')" && \
     install -d -o 0 -g 0 -m 0555 \
       "${policy_root}" "${policy_root}/managed" "${policy_root}/recommended" \
