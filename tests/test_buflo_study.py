@@ -1111,6 +1111,7 @@ def _install_fake_boundary_docker(
     inventory_marker = build_marker.with_name(f"{build_marker.name}-inventory")
     buildx_mutation_marker = build_marker.with_name(f"{build_marker.name}-buildx-mutated")
     buildx_metadata_marker = build_marker.with_name(f"{build_marker.name}-buildx-metadata")
+    buildx_version_marker = build_marker.with_name(f"{build_marker.name}-buildx-version")
     cohort_lab_commit_marker = build_marker.with_name("cohort-lab-commit")
     buildx_version = "v0.29.1-test.1"
     buildx_commit = "28f6246ff24e2c05095e8741e48c48dcb2d3b4bc"
@@ -1249,6 +1250,13 @@ case "$command" in
     ;;
   buildx)
     [ "${{1:-}}" = "version" ] || exit 1
+    printf 'read\\n' >> {str(buildx_version_marker)!r}
+    version_reads="$(wc -l < {str(buildx_version_marker)!r})"
+    case ",${{QCSD_TEST_BUILDX_VERSION_FAIL_READS:-}}," in
+      *",$version_reads,"*)
+        exit "${{QCSD_TEST_BUILDX_VERSION_FAIL_STATUS:-1}}"
+        ;;
+    esac
     case "${{QCSD_TEST_BUILDX_VERSION_MODE:-valid}}" in
       valid)
         printf '%s\\n' 'github.com/docker/buildx {buildx_version} {buildx_commit}'
@@ -10005,6 +10013,65 @@ def test_buildx_metadata_retry_remains_bounded_and_identity_failure_is_terminal(
     metadata_marker = build_marker.with_name(f"{build_marker.name}-buildx-metadata")
     assert len(metadata_marker.read_text(encoding="utf-8").splitlines()) == expected_reads
     assert not (tmp_path / "artifacts/buflo-study/build-execution-v94.json").exists()
+
+
+def test_buildx_empty_version_timeout_retries_without_losing_four_boundary_proof(
+    tmp_path: Path,
+) -> None:
+    launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
+    environment["QCSD_TEST_BUILDX_VERSION_FAIL_READS"] = "2"
+
+    result = subprocess.run(
+        [str(launcher), "build", "--cohort-version", "95"],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert _marked_build_count(build_marker) == 3
+    version_marker = build_marker.with_name(f"{build_marker.name}-buildx-version")
+    assert len(version_marker.read_text(encoding="utf-8").splitlines()) == 5
+    receipt = json.loads(
+        (tmp_path / "artifacts/buflo-study/build-execution-v95.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert [item["boundary"] for item in receipt["buildx"]["observations"]] == [
+        "before-collection", "after-collection", "after-prepare", "after-reference"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("failed_reads", "status", "expected_reads"),
+    (("2,3", "1", 3), ("2", "125", 2)),
+)
+def test_buildx_version_retry_remains_bounded_and_identity_failure_is_terminal(
+    tmp_path: Path, failed_reads: str, status: str, expected_reads: int
+) -> None:
+    launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
+    environment["QCSD_TEST_BUILDX_VERSION_FAIL_READS"] = failed_reads
+    environment["QCSD_TEST_BUILDX_VERSION_FAIL_STATUS"] = status
+
+    result = subprocess.run(
+        [str(launcher), "build", "--cohort-version", "96"],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode != 0
+    assert "cannot capture the Buildx version at after-collection" in result.stderr
+    assert _marked_build_count(build_marker) == 1
+    version_marker = build_marker.with_name(f"{build_marker.name}-buildx-version")
+    assert len(version_marker.read_text(encoding="utf-8").splitlines()) == expected_reads
+    assert not (tmp_path / "artifacts/buflo-study/build-execution-v96.json").exists()
 
 
 @pytest.mark.parametrize(

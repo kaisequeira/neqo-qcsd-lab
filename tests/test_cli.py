@@ -7156,8 +7156,8 @@ def test_docker_metadata_reads_have_separate_bounded_setup_allowance() -> None:
     assert "\n_QCSD_DOCKER_API_TIMEOUT_SECONDS=3\n" in helper
     assert "\n_QCSD_DOCKER_METADATA_TIMEOUT_SECONDS=10\n" in helper
     assert "\n_QCSD_DOCKER_SUPERVISOR_SIGNAL_ENVELOPE_SECONDS=120\n" in helper
-    # Every use of the longer metadata allowance is an explicit info read;
-    # control/mutation paths must not silently inherit it.
+    # The direct metadata reads and the read-only Buildx observation receive
+    # longer bounds; control and mutation paths keep their ordinary bound.
     flattened = re.sub(r"\\\n\s*", " ", launcher)
     metadata_reads = re.findall(
         r'_qcsd_docker_api_with_timeout\s+"\$\{_QCSD_DOCKER_METADATA_TIMEOUT_SECONDS\}"'
@@ -7165,7 +7165,8 @@ def test_docker_metadata_reads_have_separate_bounded_setup_allowance() -> None:
         flattened,
     )
     assert len(metadata_reads) == 7  # Includes the separate ETF/veth provenance read.
-    assert launcher.count('"${_QCSD_DOCKER_METADATA_TIMEOUT_SECONDS}"') == 7
+    assert launcher.count('"${_QCSD_DOCKER_METADATA_TIMEOUT_SECONDS}"') == 8
+    assert 'local buildx_read_timeout="${_QCSD_DOCKER_METADATA_TIMEOUT_SECONDS}"' in launcher
     assert launcher.count("$(_qcsd_read_docker_daemon_id ") == 4
 
 

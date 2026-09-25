@@ -4755,6 +4755,8 @@ if [[ "${1:-}" == "build" ]]; then
     local observation=""
     local observation_sha256=""
     local metadata_attempt metadata_status metadata_timeout
+    local version_attempt version_status version_timeout
+    local buildx_read_timeout="${_QCSD_DOCKER_METADATA_TIMEOUT_SECONDS}"
     case "${boundary}" in
       before-collection|after-collection|after-prepare|after-reference) ;;
       *)
@@ -4764,7 +4766,7 @@ if [[ "${1:-}" == "build" ]]; then
     esac
     : >"${buildx_version_output_path}"
     for metadata_attempt in 1 2; do
-      metadata_timeout="${_QCSD_DOCKER_METADATA_TIMEOUT_SECONDS}"
+      metadata_timeout="${buildx_read_timeout}"
       if (( metadata_attempt == 2 )); then
         metadata_timeout=$(( metadata_timeout * 3 ))
       fi
@@ -4787,11 +4789,25 @@ if [[ "${1:-}" == "build" ]]; then
         return 1
       fi
     done
-    if ! _qcsd_docker_api --context "${build_docker_context}" buildx version \
-        >"${buildx_version_output_path}"; then
-      echo "qcsd-lab cannot capture the Buildx version at ${boundary}" >&2
-      return 1
-    fi
+    for version_attempt in 1 2; do
+      version_timeout="${buildx_read_timeout}"
+      if (( version_attempt == 2 )); then
+        version_timeout=$(( version_timeout * 3 ))
+      fi
+      : >"${buildx_version_output_path}"
+      if _qcsd_docker_api_with_timeout "${version_timeout}" \
+          --context "${build_docker_context}" buildx version \
+          >"${buildx_version_output_path}"; then
+        break
+      else
+        version_status=$?
+      fi
+      if (( version_attempt != 1 || version_status != 1 )) ||
+         [[ -s "${buildx_version_output_path}" ]]; then
+        echo "qcsd-lab cannot capture the Buildx version at ${boundary}" >&2
+        return 1
+      fi
+    done
     if ! observation="$(
       python3 -I "${ROOT}/src/qcsd_lab/build_storage.py" \
         buildx-observation \
