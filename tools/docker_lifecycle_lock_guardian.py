@@ -2560,6 +2560,7 @@ def _validate_buildx_record_common(
     root_name: str,
     parent: os.stat_result,
     lock: LockIdentity,
+    source: FileIdentity,
 ) -> None:
     common = {
         "guardian_source_device",
@@ -2603,9 +2604,7 @@ def _validate_buildx_record_common(
         or value["token"] != token
         or value["root_name"] != root_name
         or value["uid"] != os.getuid()
-        or value["parent_device"] != parent.st_dev
         or value["parent_inode"] != parent.st_ino
-        or value["lock_device"] != lock.device
         or value["lock_inode"] != lock.inode
         or value["lock_path"] != str(lock.path)
         or not isinstance(value["guardian_source_path"], str)
@@ -2629,6 +2628,40 @@ def _validate_buildx_record_common(
         or int(value["guardian_start_time"]) <= 0
     ):
         _fail("Buildx config ledger differs from schema 1")
+    if value["boot_id"] == _boot_id():
+        if (
+            value["parent_device"] != parent.st_dev
+            or value["lock_device"] != lock.device
+        ):
+            _fail("Buildx config ledger device binding changed")
+    elif (
+        # Both objects were created under the same private parent.  The old
+        # st_dev can change when that persistent filesystem is remounted, but
+        # its inode, source path/content and the current lock must still bind.
+        value["parent_device"] != value["lock_device"]
+        or value["guardian_source_path"] != str(source.path)
+        or value["guardian_source_inode"] != source.inode
+        or value["guardian_source_sha256"] != source.sha256
+        or lock.parent_device != parent.st_dev
+        or lock.parent_inode != parent.st_ino
+        or lock.device != parent.st_dev
+    ):
+        _fail("prior-boot Buildx config ledger identity changed")
+
+
+def _buildx_record_root_matches(
+    value: dict[str, object],
+    config: ConfigDirectoryIdentity,
+    parent: os.stat_result,
+) -> bool:
+    if value["root_inode"] != config.inode:
+        return False
+    if value["boot_id"] == _boot_id():
+        return value["root_device"] == config.device
+    return (
+        value["root_device"] == value["parent_device"]
+        and config.device == parent.st_dev
+    )
 
 
 def _open_buildx_root(
@@ -2676,6 +2709,7 @@ def _ledger_from_authority(
     authority_name: str,
     parent: os.stat_result,
     lock: LockIdentity,
+    source: FileIdentity,
 ) -> BuildxLedger | None:
     value, record = _read_exact_record(parent_fd, authority_name)
     root_name = f".qcsd-buildx-config-{os.getuid()}.{token}"
@@ -2686,6 +2720,7 @@ def _ledger_from_authority(
         root_name=root_name,
         parent=parent,
         lock=lock,
+        source=source,
     )
     try:
         root_fd, config = _open_buildx_root(
@@ -2701,8 +2736,7 @@ def _ledger_from_authority(
     try:
         exported = value["exported_path"]
         if (
-            value["root_device"] != config.device
-            or value["root_inode"] != config.inode
+            not _buildx_record_root_matches(value, config, parent)
             or not isinstance(exported, str)
             or re.fullmatch(
                 rf"/proc/{value['guardian_pid']}/fd/[1-9][0-9]*/"
@@ -2731,6 +2765,7 @@ def _recover_buildx_ledgers(
     parent_fd: int,
     guardian_pid: int,
     lock: LockIdentity,
+    source: FileIdentity,
 ) -> list[BuildxLedger]:
     uid = os.getuid()
     parent = os.fstat(parent_fd)
@@ -2768,13 +2803,11 @@ def _recover_buildx_ledgers(
                 root_name=root_name,
                 parent=parent,
                 lock=lock,
+                source=source,
             )
             root_fd, config = _open_buildx_root(parent_fd, guardian_pid, root_name)
             try:
-                if (
-                    value["root_device"],
-                    value["root_inode"],
-                ) != (config.device, config.inode):
+                if not _buildx_record_root_matches(value, config, parent):
                     _fail("staged Buildx authority root binding changed")
             finally:
                 os.close(root_fd)
@@ -2798,6 +2831,7 @@ def _recover_buildx_ledgers(
                 names["authority"],
                 parent,
                 lock,
+                source,
             )
             if ledger is not None:
                 ledgers.append(ledger)
@@ -2810,6 +2844,7 @@ def _recover_buildx_ledgers(
                     root_name=root_name,
                     parent=parent,
                     lock=lock,
+                    source=source,
                 )
                 _unlink_exact_record(parent_fd, intent_record)
             continue
@@ -2823,6 +2858,7 @@ def _recover_buildx_ledgers(
             root_name=root_name,
             parent=parent,
             lock=lock,
+            source=source,
         )
         if "root" in names:
             root_fd, config = _open_buildx_root(
@@ -2852,7 +2888,7 @@ def _prepare_buildx_config(
 ) -> tuple[int, ConfigDirectoryIdentity, list[BuildxLedger]]:
     """Publish a crash-recoverable linked private Buildx config."""
 
-    ledgers = _recover_buildx_ledgers(parent_fd, guardian_pid, lock)
+    ledgers = _recover_buildx_ledgers(parent_fd, guardian_pid, lock, source)
     parent = os.fstat(parent_fd)
     token = os.urandom(32).hex()
     root_name = f".qcsd-buildx-config-{os.getuid()}.{token}"
@@ -2901,6 +2937,7 @@ def _prepare_buildx_config(
             root_name=root_name,
             parent=parent,
             lock=lock,
+            source=source,
         )
         _unlink_exact_record(parent_fd, intent_record)
         ledgers.append(
@@ -3294,6 +3331,7 @@ def _cleanup_one_buildx_ledger(
     parent_fd: int,
     guardian_pid: int,
     lock: LockIdentity,
+    source: FileIdentity,
     ledger: BuildxLedger,
 ) -> None:
     parent = os.fstat(parent_fd)
@@ -3309,6 +3347,7 @@ def _cleanup_one_buildx_ledger(
         root_name=ledger.root_name,
         parent=parent,
         lock=lock,
+        source=source,
     )
     root_fd, config = _open_buildx_root(
         parent_fd, guardian_pid, ledger.root_name
@@ -3345,10 +3384,11 @@ def _cleanup_buildx_ledgers(
     parent_fd: int,
     guardian_pid: int,
     lock: LockIdentity,
+    source: FileIdentity,
     ledgers: Sequence[BuildxLedger],
 ) -> None:
     for ledger in ledgers:
-        _cleanup_one_buildx_ledger(parent_fd, guardian_pid, lock, ledger)
+        _cleanup_one_buildx_ledger(parent_fd, guardian_pid, lock, source, ledger)
 
 
 def _descriptor_lock_rows(process: int, descriptor: int) -> list[list[str]]:
@@ -5974,6 +6014,7 @@ def _guard_with_private_umask(
                         parent_fd,
                         os.getpid(),
                         lock_identity,
+                        source_identity,
                         buildx_ledgers,
                     )
                 except Exception as error:

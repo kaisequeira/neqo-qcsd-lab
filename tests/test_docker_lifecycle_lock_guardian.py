@@ -6204,7 +6204,7 @@ def test_buildx_intent_only_empty_root_recovers_without_authorising_content(
         os.fsync(parent_fd)
 
         recovered = module._recover_buildx_ledgers(
-            parent_fd, os.getpid(), lock
+            parent_fd, os.getpid(), lock, source
         )
 
         assert recovered == []
@@ -6247,7 +6247,7 @@ def test_buildx_staged_authority_is_reproved_and_promoted_on_restart(
         os.fsync(parent_fd)
 
         recovered = module._recover_buildx_ledgers(
-            parent_fd, os.getpid(), lock
+            parent_fd, os.getpid(), lock, source
         )
 
         assert len(recovered) == 1
@@ -6255,9 +6255,90 @@ def test_buildx_staged_authority_is_reproved_and_promoted_on_restart(
         assert not (guardian_bundle[2] / staged_name).exists()
         assert not (guardian_bundle[2] / intent_name).exists()
         module._cleanup_buildx_ledgers(
-            parent_fd, os.getpid(), lock, recovered
+            parent_fd, os.getpid(), lock, source, recovered
         )
         assert not tuple(guardian_bundle[2].glob(".qcsd-buildx-*"))
+    finally:
+        if buildx_fd >= 0:
+            os.close(buildx_fd)
+        os.close(source_fd)
+        os.close(lock_fd)
+        os.close(parent_fd)
+
+
+@pytest.mark.parametrize(
+    ("case", "accepted"),
+    [
+        ("prior_boot_remap", True),
+        ("same_boot_remap", False),
+        ("prior_boot_source_inode", False),
+        ("prior_boot_source_hash", False),
+        ("prior_boot_parent_inode", False),
+        ("prior_boot_lock_inode", False),
+        ("prior_boot_root_inode", False),
+        ("prior_boot_root_device", False),
+    ],
+)
+def test_buildx_authority_device_remap_is_bound_to_exact_prior_boot_state(
+    guardian_bundle: tuple[Path, Path, Path, Path], case: str, accepted: bool
+) -> None:
+    module, parent_fd, lock_fd, lock, source_fd, source = (
+        _direct_buildx_context(guardian_bundle)
+    )
+    buildx_fd = -1
+    try:
+        buildx_fd, _, ledgers = module._prepare_buildx_config(
+            parent_fd, os.getpid(), lock, source
+        )
+        ledger = ledgers[-1]
+        authority = guardian_bundle[2] / ledger.authority.name
+        root = guardian_bundle[2] / ledger.root_name
+        value = json.loads(authority.read_text(encoding="ascii"))
+        if case != "same_boot_remap":
+            value["boot_id"] = (
+                "00000000-0000-0000-0000-000000000001"
+                if module._boot_id() != "00000000-0000-0000-0000-000000000001"
+                else "00000000-0000-0000-0000-000000000002"
+            )
+        for key in (
+            "parent_device",
+            "lock_device",
+            "root_device",
+            "guardian_source_device",
+        ):
+            value[key] += 1
+        if case == "prior_boot_source_inode":
+            value["guardian_source_inode"] += 1
+        elif case == "prior_boot_source_hash":
+            value["guardian_source_sha256"] = "0" * 64
+        elif case == "prior_boot_parent_inode":
+            value["parent_inode"] += 1
+        elif case == "prior_boot_lock_inode":
+            value["lock_inode"] += 1
+        elif case == "prior_boot_root_inode":
+            value["root_inode"] += 1
+        elif case == "prior_boot_root_device":
+            value["root_device"] += 1
+        payload = module._canonical_json(value)
+        authority.write_bytes(payload)
+
+        if accepted:
+            recovered = module._recover_buildx_ledgers(
+                parent_fd, os.getpid(), lock, source
+            )
+            assert len(recovered) == 1
+            module._cleanup_buildx_ledgers(
+                parent_fd, os.getpid(), lock, source, recovered
+            )
+            assert not authority.exists()
+            assert not root.exists()
+        else:
+            with pytest.raises(module.GuardianError):
+                module._recover_buildx_ledgers(
+                    parent_fd, os.getpid(), lock, source
+                )
+            assert authority.read_bytes() == payload
+            assert root.is_dir()
     finally:
         if buildx_fd >= 0:
             os.close(buildx_fd)

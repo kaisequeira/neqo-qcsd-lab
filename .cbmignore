@@ -1,0 +1,19 @@
+# Keep the code graph limited to source, tests, and operator documentation.
+/artifacts/
+/results/
+/handoffs/
+/config/chaff-response-qualification-store/sets/buflo-study-public5-v*/
+/config/chaff-qualification-store/sets/classifier-multiorigin100-v1-pilot120-full-v1/
+/config/chaff-qualification-store/sets/classifier-multiorigin100-v1-final100-full-v1/
+/config/classifier-multiorigin100-v1-campaigns/
+/.cache/
+/.pytest_cache/
+/.ruff_cache/
+/.venv/
+**/__pycache__/
+**/target/
+**/corpus/
+*.pcap
+*.pcapng
+*.qlog
+*.log

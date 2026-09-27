@@ -1457,6 +1457,60 @@ def test_durable_root_rejects_cross_kind_private_children_before_mutation(
     assert root.exists()
 
 
+@pytest.mark.parametrize(
+    ("case", "accepted"),
+    [
+        ("prior_boot_device", True),
+        ("same_boot_device", False),
+        ("prior_boot_lock_inode", False),
+        ("prior_boot_lock_mode", False),
+    ],
+)
+def test_build_root_recovery_binds_prior_boot_lock_device_remap(
+    launcher_boundary: tuple[Path, Path, Path, Path, dict[str, str], list[Path]],
+    tmp_path: Path,
+    case: str,
+    accepted: bool,
+) -> None:
+    launcher, _builds, _state, operations, environment, roots = launcher_boundary
+    root, token = _new_lifecycle_root(roots, environment, "build")
+    lock = tmp_path / "build.lock"
+    lock.touch(mode=0o600)
+    lock.chmod(0o600)
+    fields = _durable_build_declared_fields(
+        launcher, root, token, environment, lock
+    )
+    current_boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    prior_boot = "00000000-0000-0000-0000-000000000001"
+    if prior_boot == current_boot:
+        prior_boot = "00000000-0000-0000-0000-000000000002"
+    if case != "same_boot_device":
+        fields = _replace_field(fields, "host_boot_id", prior_boot)
+    for key in ("supervisor_source_device", "build_lock_device"):
+        current = int(dict(fields)[key])
+        fields = _replace_field(fields, key, str(current + 1))
+    if case == "prior_boot_lock_inode":
+        fields = _replace_field(
+            fields, "build_lock_inode", str(lock.stat().st_ino + 1)
+        )
+    elif case == "prior_boot_lock_mode":
+        lock.chmod(0o644)
+    _write_record(root, "SUPERVISION", fields)
+    before = operations.read_text(encoding="utf-8")
+
+    result = _invoke_etf(launcher, environment, tmp_path)
+    after = operations.read_text(encoding="utf-8")[len(before):]
+
+    assert (not root.exists()) is accepted
+    if accepted:
+        assert "Recovered durable Docker build lifecycle state" in result.stderr
+        assert "malformed state" not in result.stderr
+    else:
+        assert "Docker lifecycle admission found malformed state" in result.stderr
+    assert "container-rm:" not in after
+    assert "network-rm:" not in after
+
+
 def test_legacy_dual_network_records_are_quarantined_without_inspection(
     launcher_boundary: tuple[Path, Path, Path, Path, dict[str, str], list[Path]],
     tmp_path: Path,

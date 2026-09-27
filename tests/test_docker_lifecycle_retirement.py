@@ -175,6 +175,58 @@ def _run_localised_secure_lifecycle_base(parent: Path) -> subprocess.CompletedPr
     )
 
 
+@pytest.mark.parametrize(
+    ("case", "accepted"),
+    [
+        ("prior_boot_device", True),
+        ("same_boot_device", False),
+        ("prior_boot_inode", False),
+        ("prior_boot_hash", False),
+        ("prior_boot_path", False),
+        ("unverified_current_boot", False),
+    ],
+)
+def test_lifecycle_source_device_remap_requires_an_exact_prior_boot_source(
+    case: str, accepted: bool
+) -> None:
+    environment = dict(os.environ)
+    environment.update(REAL_HELPER=str(HELPER), QCSD_TEST_DRIFT_CASE=case)
+    result = _run_bash(
+        r'''
+        source "$REAL_HELPER"
+        _qcsd_bind_helper_source_identity || exit 90
+        _QCSD_DOCKER_PINNED_BOOT_ID=$(</proc/sys/kernel/random/boot_id)
+        foreign_boot=00000000-0000-0000-0000-000000000001
+        [[ "$foreign_boot" != "$_QCSD_DOCKER_PINNED_BOOT_ID" ]] ||
+          foreign_boot=00000000-0000-0000-0000-000000000002
+        declare -A receipt=(
+          [host_boot_id]="$foreign_boot"
+          [supervisor_source_path]="$_qcsd_bound_source_path"
+          [supervisor_source_device]="$((_qcsd_bound_source_device + 1))"
+          [supervisor_source_inode]="$_qcsd_bound_source_inode"
+          [supervisor_source_sha256]="$_qcsd_bound_source_sha256"
+        )
+        case "$QCSD_TEST_DRIFT_CASE" in
+          prior_boot_device) ;;
+          same_boot_device)
+            receipt[host_boot_id]="$_QCSD_DOCKER_PINNED_BOOT_ID" ;;
+          prior_boot_inode)
+            receipt[supervisor_source_inode]="$((_qcsd_bound_source_inode + 1))" ;;
+          prior_boot_hash)
+            receipt[supervisor_source_sha256]=$(printf '0%.0s' {1..64}) ;;
+          prior_boot_path)
+            receipt[supervisor_source_path]="$_qcsd_bound_source_path.other" ;;
+          unverified_current_boot)
+            _QCSD_DOCKER_PINNED_BOOT_ID="$foreign_boot" ;;
+          *) exit 91 ;;
+        esac
+        _qcsd_lifecycle_validate_source_identity run HANDOFF receipt
+        ''',
+        environment=environment,
+    )
+    assert (result.returncode == 0) is accepted, result.stderr
+
+
 def _authority_arguments(authority: Path) -> tuple[object, ...]:
     value = authority.stat(follow_symlinks=False)
     return (
@@ -1435,6 +1487,184 @@ def _replace_fixture_authority_fields(authority: Path, **fields: str) -> None:
         assert len(matching) == 1, field
         lines[matching[0]] = f"{field}={value}\n"
     authority.write_text("".join(lines), encoding="ascii")
+
+
+def _simulate_prior_boot_device_remap(
+    authority: Path, *, recorded_boot: str = _PRIOR_BOOT_ID
+) -> None:
+    """Model unchanged files whose persisted device number changed on reboot."""
+
+    lines = authority.read_text(encoding="ascii").splitlines()
+    scalars = dict(
+        line.split("=", 1) for line in lines if "=" in line and not line.startswith("child\t")
+    )
+    base_device = int(scalars["base_identity"].split(":", 1)[0])
+    old_device = base_device + 32
+    assert old_device != base_device
+
+    def device_prefix(value: str, *, expected: int | None = None) -> str:
+        current, suffix = value.split(":", 1)
+        if expected is not None:
+            assert int(current) == expected
+        return f"{int(current) + 32}:{suffix}"
+
+    for key in (
+        "root_identity",
+        "base_identity",
+        "lock_parent_identity",
+    ):
+        scalars[key] = device_prefix(scalars[key], expected=base_device)
+    assert int(scalars["lock_device"]) == base_device
+    scalars["lock_device"] = str(old_device)
+    for key in (
+        "guardian_source_identity",
+        "qcsd_source_identity",
+        "helper_source_identity",
+        "native_source_identity",
+    ):
+        scalars[key] = device_prefix(scalars[key])
+    if scalars["transaction_receipt_device"] != "unavailable":
+        scalars["transaction_receipt_device"] = str(
+            int(scalars["transaction_receipt_device"]) + 32
+        )
+    scalars["host_boot_id"] = recorded_boot
+
+    children: list[str] = []
+    for line in lines:
+        if not line.startswith("child\t"):
+            continue
+        prefix, name, metadata, digest = line.split("\t")
+        assert prefix == "child"
+        children.append(
+            f"child\t{name}\t{device_prefix(metadata, expected=base_device)}\t{digest}"
+        )
+    root_device, root_inode, root_uid, root_mode, _links, root_type = (
+        scalars["root_identity"].split(":")
+    )
+    assert root_type == "directory"
+    manifest = (
+        f".\t{root_device}:{root_inode}:{root_uid}:{root_mode}:{root_type}"
+        "\tdirectory\n"
+    )
+    for line in children:
+        _prefix, name, metadata, digest = line.split("\t")
+        manifest += f"{name}\t{metadata}\t{digest if digest != 'fifo' else 'non-regular'}\n"
+    scalars["root_manifest_sha256"] = hashlib.sha256(
+        manifest.encode("ascii")
+    ).hexdigest()
+
+    rebuilt: list[str] = []
+    child_index = 0
+    for line in lines:
+        if line.startswith("child\t"):
+            rebuilt.append(children[child_index])
+            child_index += 1
+        elif "=" in line:
+            key = line.split("=", 1)[0]
+            rebuilt.append(f"{key}={scalars[key]}")
+        else:
+            rebuilt.append(line)
+    authority.write_text("\n".join(rebuilt) + "\n", encoding="ascii")
+
+
+@pytest.mark.parametrize("boundary", ["staged", "H3", "H6", "H9", "H11", "H12"])
+def test_prior_boot_retirement_device_remap_converges_at_each_durable_phase(
+    retirement_environment: dict[str, str], boundary: str
+) -> None:
+    root, authority = _crash_retirement_at_boundary(retirement_environment, boundary)
+    _simulate_prior_boot_device_remap(authority)
+    before = _tree_snapshot(root.parent)
+    validate = _run_bash(
+        'set -euo pipefail\nsource "$HELPER"\n'
+        "qcsd_reconcile_docker_lifecycle validate\n",
+        environment=retirement_environment,
+    )
+    assert validate.returncode == 0, (validate.stdout, validate.stderr)
+    assert _tree_snapshot(root.parent) == before
+
+    recovered = _run_bash(
+        'set -euo pipefail\nsource "$HELPER"\n'
+        "qcsd_reconcile_docker_lifecycle recover\n"
+        "qcsd_reconcile_docker_lifecycle validate\n",
+        environment=retirement_environment,
+    )
+    assert recovered.returncode == 0, (recovered.stdout, recovered.stderr)
+    assert not root.exists()
+    assert all(not path.exists() for path in _retirement_names(root))
+
+
+@pytest.mark.parametrize("case", ["same_boot", "child_content", "source_hash"])
+def test_retirement_device_remap_preserves_exact_boundary_rejections(
+    retirement_environment: dict[str, str], case: str
+) -> None:
+    root, authority = _crash_retirement_at_boundary(retirement_environment, "H6")
+    _simulate_prior_boot_device_remap(
+        authority,
+        recorded_boot=(
+            retirement_environment["_QCSD_DOCKER_PINNED_BOOT_ID"]
+            if case == "same_boot"
+            else _PRIOR_BOOT_ID
+        ),
+    )
+    if case == "child_content":
+        child = root.parent / f".retired.{root.name}" / "HANDOFF"
+        child.write_bytes(child.read_bytes() + b"\n")
+    elif case == "source_hash":
+        _replace_fixture_authority_fields(
+            authority, helper_source_sha256_full="0" * 64
+        )
+    before = _tree_snapshot(root.parent)
+    recovered = _run_bash(
+        'set -euo pipefail\nsource "$HELPER"\n'
+        "qcsd_reconcile_docker_lifecycle recover\n",
+        environment=retirement_environment,
+    )
+    assert recovered.returncode != 0, (recovered.stdout, recovered.stderr)
+    assert _tree_snapshot(root.parent) == before
+    assert authority.is_file()
+
+
+@pytest.mark.parametrize("tamper", ["none", "inode", "hash"])
+def test_prior_boot_retirement_receipt_device_projection_requires_exact_file(
+    retirement_environment: dict[str, str], tamper: str
+) -> None:
+    # The receipt is optional in schema 1. Attach one to a genuine interrupted
+    # authority to exercise its projection without needing a live transaction.
+    root, authority = _crash_retirement_at_boundary(retirement_environment, "H11")
+    receipt = Path(retirement_environment["FAKE_DOCKER_STATE"]) / "transaction-receipt"
+    _private_file(receipt, "committed\n")
+    metadata = receipt.stat(follow_symlinks=False)
+    _replace_fixture_authority_fields(
+        authority,
+        transaction_receipt=str(receipt),
+        transaction_receipt_device=str(metadata.st_dev),
+        transaction_receipt_inode=str(metadata.st_ino),
+        transaction_receipt_sha256=hashlib.sha256(receipt.read_bytes()).hexdigest(),
+    )
+    _simulate_prior_boot_device_remap(authority)
+    if tamper == "inode":
+        _replace_fixture_authority_fields(
+            authority, transaction_receipt_inode=str(metadata.st_ino + 1)
+        )
+    elif tamper == "hash":
+        receipt.write_bytes(b"changed\n")
+    before = _tree_snapshot(root.parent)
+    parsed = _run_bash(
+        'set -euo pipefail\nsource "$HELPER"\n'
+        '_qcsd_retirement_parse_authority "$QCSD_TEST_AUTHORITY"\n'
+        'printf "%s\\n" "${_QCSD_RETIRE_VALUES[transaction_receipt_device]}"\n',
+        environment={
+            **retirement_environment,
+            "QCSD_TEST_AUTHORITY": str(authority),
+        },
+    )
+    assert (parsed.returncode == 0) == (tamper == "none"), (
+        parsed.stdout,
+        parsed.stderr,
+    )
+    if tamper == "none":
+        assert parsed.stdout.strip() == str(metadata.st_dev)
+    assert _tree_snapshot(root.parent) == before
 
 
 @pytest.mark.parametrize("boundary", ["staged", "H3", "H6", "H9", "H11", "H12"])

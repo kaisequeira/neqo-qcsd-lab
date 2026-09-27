@@ -4523,14 +4523,32 @@ _qcsd_lifecycle_is_v57_source_successor() {
         "${_QCSD_DOCKER_V57_PREDECESSOR_SHA256}" ]]
 }
 
+_qcsd_lifecycle_recorded_device_matches() {
+  local recorded_device="$1" observed_device="$2" recorded_boot="$3"
+  [[ "${recorded_device}" =~ ^(0|[1-9][0-9]*)$ &&
+      "${observed_device}" =~ ^(0|[1-9][0-9]*)$ &&
+      "${recorded_boot}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] ||
+    return 1
+  [[ "${recorded_device}" != "${observed_device}" ]] || return 0
+  # The current boot must be pinned before interpreting a historical st_dev.
+  [[ "${recorded_boot}" != "${_QCSD_DOCKER_PINNED_BOOT_ID:-}" ]] || return 1
+  _qcsd_verify_pinned_host_boot
+}
+
 _qcsd_lifecycle_validate_source_identity() {
   local root_kind="$1" record_name="$2" values_name="$3"
   local -n values_ref="${values_name}"
   _qcsd_bind_helper_source_identity || return 1
   [[ "${values_ref[supervisor_source_path]}" == "${_qcsd_bound_source_path}" &&
-      "${values_ref[supervisor_source_device]}" == "${_qcsd_bound_source_device}" &&
       "${values_ref[supervisor_source_inode]}" == "${_qcsd_bound_source_inode}" ]] ||
     return 1
+  # st_dev is a mount-local number and can change when a persistent WSL
+  # filesystem is attached after a reboot.  The historical boot must differ,
+  # while the current boot, canonical source path, inode and content remain
+  # independently bound.  A same-boot device change is still a hard failure.
+  _qcsd_lifecycle_recorded_device_matches \
+    "${values_ref[supervisor_source_device]}" \
+    "${_qcsd_bound_source_device}" "${values_ref[host_boot_id]}" || return 1
   if [[ "${values_ref[supervisor_source_sha256]}" == \
         "${_qcsd_bound_source_sha256}" ]]; then
     return 0
@@ -4674,7 +4692,7 @@ _qcsd_lifecycle_validate_record() {
   local values_name="$4"
   local -n values_ref="${values_name}"
   local token="${root##*.}" state expected_object control_group canonical
-  local lock_metadata field
+  local lock_metadata lock_device lock_identity field
   _qcsd_lifecycle_required_fields "${values_name}" \
     object lifecycle_schema lifecycle_state lifecycle_root lifecycle_token \
     supervisor_source_path supervisor_source_sha256 supervisor_source_device \
@@ -4955,9 +4973,14 @@ _qcsd_lifecycle_validate_record() {
           -f "${values_ref[build_lock_path]}" ]] || return 1
       lock_metadata="$(stat -Lc '%d:%i:%u:%a:%h:%F' -- \
         "${values_ref[build_lock_path]}" 2>/dev/null)" || return 1
-      [[ "${lock_metadata}" == \
-        "${values_ref[build_lock_device]}:${values_ref[build_lock_inode]}:${EUID}:600:1:regular empty file" ]] ||
+      lock_device="${lock_metadata%%:*}"
+      lock_identity="${lock_metadata#*:}"
+      [[ "${lock_identity}" == \
+        "${values_ref[build_lock_inode]}:${EUID}:600:1:regular empty file" ]] ||
         return 1
+      _qcsd_lifecycle_recorded_device_matches \
+        "${values_ref[build_lock_device]}" "${lock_device}" \
+        "${values_ref[host_boot_id]}" || return 1
       _qcsd_lifecycle_validate_scope_tuple "${values_name}" 0 || return 1
       control_group="${values_ref[scope_control_group]}"
       if [[ "${control_group}" != "unavailable" ]]; then
@@ -5859,6 +5882,127 @@ _qcsd_retirement_prepare_authority() {
       "${observed_root_manifest}" == "${root_manifest}" ]]
 }
 
+_qcsd_retirement_authority_manifest_sha256() {
+  local root_identity="$1" required_device="$2" line name metadata digest
+  local root_device root_inode root_uid root_mode root_links root_type
+  IFS=: read -r root_device root_inode root_uid root_mode root_links root_type \
+    <<<"${root_identity}"
+  [[ "${root_device}" == "${required_device}" &&
+      "${root_type}" == directory ]] || return 1
+  for line in "${_QCSD_RETIRE_CHILDREN[@]}"; do
+    IFS=$'\t' read -r _ name metadata digest <<<"${line}"
+    [[ "${metadata%%:*}" == "${required_device}" ]] || return 1
+  done
+  {
+    printf '.\t%s:%s:%s:%s:%s\tdirectory\n' \
+      "${root_device}" "${root_inode}" "${root_uid}" "${root_mode}" \
+      "${root_type}"
+    for line in "${_QCSD_RETIRE_CHILDREN[@]}"; do
+      IFS=$'\t' read -r _ name metadata digest <<<"${line}"
+      [[ "${digest}" != fifo ]] || digest=non-regular
+      printf '%s\t%s\t%s\n' "${name}" "${metadata}" "${digest}"
+    done
+  } | sha256sum | awk '{print $1}'
+}
+
+_qcsd_retirement_rebind_prior_boot() {
+  local authority="$1" recorded_base_device current_base_device
+  local old_manifest new_manifest current_metadata recorded_metadata
+  local source_name path_key identity_key hash_key source_path source_digest
+  local lock_path lock_parent_metadata lock_metadata root_path root_name
+  local root_identity line name child_metadata digest
+  local -a rebound_children=()
+  [[ "${_QCSD_RETIRE_VALUES[host_boot_id]}" != \
+      "${_QCSD_DOCKER_PINNED_BOOT_ID:-}" ]] || return 0
+  _qcsd_verify_pinned_host_boot || return 1
+  recorded_base_device="${_QCSD_RETIRE_VALUES[base_identity]%%:*}"
+  current_metadata="$(stat -Lc '%d:%i:%u:%a:%F' -- \
+    "${authority%/*}")" || return 1
+  [[ "${current_metadata#*:}" == \
+      "${_QCSD_RETIRE_VALUES[base_identity]#*:}" ]] || return 1
+  current_base_device="${current_metadata%%:*}"
+  root_identity="${_QCSD_RETIRE_VALUES[root_identity]}"
+  [[ "${root_identity%%:*}" == "${recorded_base_device}" &&
+      "${_QCSD_RETIRE_VALUES[lock_device]}" == "${recorded_base_device}" &&
+      "${_QCSD_RETIRE_VALUES[lock_parent_identity]%%:*}" == \
+        "${recorded_base_device}" ]] || return 1
+  old_manifest="$(_qcsd_retirement_authority_manifest_sha256 \
+    "${root_identity}" "${recorded_base_device}")" || return 1
+  [[ "${old_manifest}" == \
+      "${_QCSD_RETIRE_VALUES[root_manifest_sha256]}" ]] || return 1
+
+  lock_path="${_QCSD_RETIRE_VALUES[lock_path]}"
+  [[ -f "${lock_path}" && ! -L "${lock_path}" ]] || return 1
+  lock_metadata="$(stat -Lc '%d:%i' -- "${lock_path}")" || return 1
+  lock_parent_metadata="$(stat -Lc '%d:%i' -- "${lock_path%/*}")" || return 1
+  [[ "${lock_metadata%%:*}" == "${current_base_device}" &&
+      "${lock_metadata#*:}" == "${_QCSD_RETIRE_VALUES[lock_inode]}" &&
+      "${lock_parent_metadata%%:*}" == "${current_base_device}" &&
+      "${lock_parent_metadata#*:}" == \
+        "${_QCSD_RETIRE_VALUES[lock_parent_identity]#*:}" ]] || return 1
+
+  for source_name in guardian qcsd helper native; do
+    path_key="${source_name}_source_path"
+    identity_key="${source_name}_source_identity"
+    hash_key="${source_name}_source_sha256"
+    [[ "${source_name}" != helper ]] || hash_key=helper_source_sha256_full
+    source_path="${_QCSD_RETIRE_VALUES[${path_key}]}"
+    [[ -f "${source_path}" && ! -L "${source_path}" ]] || return 1
+    current_metadata="$(stat -Lc '%d:%i:%u:%a:%h:%s:%F' -- \
+      "${source_path}")" || return 1
+    recorded_metadata="${_QCSD_RETIRE_VALUES[${identity_key}]}"
+    [[ "${current_metadata#*:}" == "${recorded_metadata#*:}" ]] || return 1
+    source_digest="$(sha256sum -- "${source_path}" | awk '{print $1}')" ||
+      return 1
+    [[ "${source_digest}" == "${_QCSD_RETIRE_VALUES[${hash_key}]}" ]] ||
+      return 1
+    _QCSD_RETIRE_VALUES["${identity_key}"]="${current_metadata}"
+  done
+
+  root_name="${_QCSD_RETIRE_VALUES[active_name]}"
+  root_path="${authority%/*}/${root_name}"
+  if [[ ! -e "${root_path}" && ! -L "${root_path}" ]]; then
+    root_path="${authority%/*}/${_QCSD_RETIRE_VALUES[retired_name]}"
+  fi
+  if [[ -e "${root_path}" || -L "${root_path}" ]]; then
+    [[ -d "${root_path}" && ! -L "${root_path}" ]] || return 1
+    current_metadata="$(stat -Lc '%d:%i:%u:%a:%h:%F' -- \
+      "${root_path}")" || return 1
+    [[ "${current_metadata%%:*}" == "${current_base_device}" &&
+        "${current_metadata#*:}" == "${root_identity#*:}" ]] || return 1
+  fi
+
+  for line in "${_QCSD_RETIRE_CHILDREN[@]}"; do
+    IFS=$'\t' read -r _ name child_metadata digest <<<"${line}"
+    [[ "${child_metadata%%:*}" == "${recorded_base_device}" ]] || return 1
+    rebound_children+=(
+      "$(printf 'child\t%s\t%s:%s\t%s' "${name}" \
+        "${current_base_device}" "${child_metadata#*:}" "${digest}")"
+    )
+  done
+  _QCSD_RETIRE_CHILDREN=("${rebound_children[@]}")
+  _QCSD_RETIRE_VALUES[root_identity]="${current_base_device}:${root_identity#*:}"
+  new_manifest="$(_qcsd_retirement_authority_manifest_sha256 \
+    "${_QCSD_RETIRE_VALUES[root_identity]}" "${current_base_device}")" ||
+    return 1
+  _QCSD_RETIRE_VALUES[root_manifest_sha256]="${new_manifest}"
+  _QCSD_RETIRE_VALUES[base_identity]="${current_base_device}:${_QCSD_RETIRE_VALUES[base_identity]#*:}"
+  _QCSD_RETIRE_VALUES[lock_device]="${current_base_device}"
+  _QCSD_RETIRE_VALUES[lock_parent_identity]="${lock_parent_metadata}"
+  if [[ "${_QCSD_RETIRE_VALUES[transaction_receipt_device]}" != unavailable ]]; then
+    root_path="${_QCSD_RETIRE_VALUES[transaction_receipt]}"
+    [[ -f "${root_path}" && ! -L "${root_path}" ]] || return 1
+    current_metadata="$(stat -Lc '%d:%i' -- "${root_path}")" || return 1
+    [[ "${current_metadata#*:}" == \
+        "${_QCSD_RETIRE_VALUES[transaction_receipt_inode]}" ]] || return 1
+    source_digest="$(sha256sum -- "${root_path}" | awk '{print $1}')" ||
+      return 1
+    [[ "${source_digest}" == \
+        "${_QCSD_RETIRE_VALUES[transaction_receipt_sha256]}" ]] || return 1
+    _QCSD_RETIRE_VALUES[transaction_receipt_device]="${current_metadata%%:*}"
+  fi
+}
+
 _qcsd_retirement_parse_authority() {
   local authority="$1" line key value child_count=0 scalar_index
   local source_name source_path_key source_identity_key source_hash_key
@@ -6003,7 +6147,9 @@ _qcsd_retirement_parse_authority() {
       ;;
   esac
   [[ "${authority##*/}" == "retirement.${_QCSD_RETIRE_VALUES[kind]}.${_QCSD_RETIRE_VALUES[token]}" ||
-      "${authority##*/}" == "retirement.${_QCSD_RETIRE_VALUES[kind]}.${_QCSD_RETIRE_VALUES[token]}.next" ]]
+      "${authority##*/}" == "retirement.${_QCSD_RETIRE_VALUES[kind]}.${_QCSD_RETIRE_VALUES[token]}.next" ]] ||
+    return 1
+  _qcsd_retirement_rebind_prior_boot "${authority}"
 }
 
 _qcsd_validate_retirement_phase() {
