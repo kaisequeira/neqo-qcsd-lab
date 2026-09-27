@@ -10284,7 +10284,8 @@ browser_egress_wait_healthy() {
       "${container_id}" 2>/dev/null)" || state="unavailable"
     case "${state}" in
       healthy) return 0 ;;
-      unhealthy|missing|unavailable)
+      unavailable) sleep 0.1; continue ;;
+      unhealthy|missing)
         echo "browser-egress role failed readiness: ${state}" >&2
         return 1
         ;;
@@ -10382,6 +10383,10 @@ if raw != canonical or not isinstance(value, dict) or value.get("role") != "obse
     fi
     state="$(_qcsd_docker_api container inspect --format '{{.State.Status}}' \
       "${container_id}" 2>/dev/null)" || state="unavailable"
+    if [[ "${state}" == "unavailable" ]]; then
+      sleep 0.1
+      continue
+    fi
     if [[ "${state}" != "running" ]]; then
       echo "browser-egress observer exited before PCAP extraction" >&2
       return 1
@@ -10735,6 +10740,10 @@ browser_egress_wait_container_marker() {
     fi
     state="$(_qcsd_docker_api container inspect --format '{{.State.Status}}' \
       "${container_id}" 2>/dev/null)" || state="unavailable"
+    if [[ "${state}" == "unavailable" ]]; then
+      sleep 0.1
+      continue
+    fi
     if [[ "${state}" != "running" ]]; then
       echo "browser-egress ${label} exited before its phase marker" >&2
       return 1
@@ -10770,6 +10779,10 @@ browser_egress_wait_observer_finalisation() {
     fi
     state="$(_qcsd_docker_api container inspect --format '{{.State.Status}}' \
       "${container_id}" 2>/dev/null)" || state="unavailable"
+    if [[ "${state}" == "unavailable" ]]; then
+      sleep 0.1
+      continue
+    fi
     if [[ "${state}" != "running" ]]; then
       echo "browser-egress observer exited before its finalisation marker" >&2
       return 1
@@ -10781,14 +10794,27 @@ browser_egress_wait_observer_finalisation() {
 }
 
 browser_egress_wait_exit_code() {
-  local container_id="$1" label="$2" deadline state exit_code
+  local container_id="$1" label="$2" deadline state exit_code observation
+  local unavailable_since=-1
   deadline=$((SECONDS + browser_egress_role_exit_wait_seconds))
   while (( SECONDS < deadline )); do
-    if ! read -r state exit_code < <(_qcsd_docker_api container inspect --format \
-      '{{.State.Status}} {{.State.ExitCode}}' "${container_id}" 2>/dev/null); then
-      echo "browser-egress ${label} exit state is unavailable" >&2
-      return 1
+    if ! observation="$(_qcsd_docker_api container inspect --format \
+      '{{.State.Status}} {{.State.ExitCode}}' "${container_id}" 2>/dev/null)" ||
+        [[ -z "${observation}" ]]; then
+      # One Docker API service timeout is not evidence of the role's exit state.
+      if (( unavailable_since < 0 )); then
+        unavailable_since=${SECONDS}
+      fi
+      if (( SECONDS - unavailable_since >=
+            browser_egress_role_exit_observation_grace_seconds )); then
+        echo "browser-egress ${label} exit state is unavailable" >&2
+        return 1
+      fi
+      sleep 0.1
+      continue
     fi
+    unavailable_since=-1
+    read -r state exit_code <<<"${observation}"
     case "${state}" in
       exited|dead)
         if [[ ! "${exit_code}" =~ ^(0|[1-9][0-9]{0,2})$ ]] ||

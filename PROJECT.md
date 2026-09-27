@@ -1,6 +1,6 @@
 # QCSD thesis project ledger
 
-Checkpoint: **26 September 2026, Australia/Sydney (AEST, UTC+10)**.
+Checkpoint: **28 September 2026, Australia/Sydney (AEST, UTC+10)**.
 This is the current research ledger. The [history](docs/PROJECT-HISTORY.md)
 preserves the development record and the [class-study runbook](docs/CLASS-STUDY.md)
 defines continuation. The [operator README](README.md) covers normal Lab use.
@@ -28,38 +28,27 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-Desktop restoration has been verified from the private migration transfer.
-All 29 evidence parts, the support part, both restored file inventories and
-the sealed classifier handoff passed checksum and count checks on the desktop.
-The published Lab and Rust commits and the final Lab bundle were verified.
-The laptop retains historical raw campaigns; see the
-[evidence index](docs/EVIDENCE-INDEX.md) for retention boundaries. Docker and
-WSL data now reside on D:. The desktop's user systemd/cgroup manager and
-Docker data backing volume passed host checks. Portable CPU assignment uses
-the CPU IDs observed inside the collection image, and the required focused
-source suite passed 712 tests. A complete native three-image build and live
-qualification remain the next milestone. V122 exported one provisional
-collection image and passed post-collection Buildx metadata, but its preparation
-image failed at managed-policy installation. No complete desktop build, browser
-gate or scientific collection has been accepted.
+Desktop restoration and the protected historical handoff remain verified; see
+the [evidence index](docs/EVIDENCE-INDEX.md) for retention boundaries. Docker
+and WSL data reside on D:. Source-bound v124 produced a verified native
+three-image build, ETF capability probe and pinned-CDP result. The 110-vector
+browser-egress gate stopped after 28 passing vectors: vector 29 has a sealed
+operational-failure receipt for a Docker API inspect timeout. Its open evidence
+inventory validates, but there is no final browser receipt or acquisition
+authority. The 28-vector prefix advances no scientific count. Three separate
+2,048-sample ETF/veth diagnostics remain incomplete and non-evidentiary.
 
-| Checkpoint identity | Published desktop migration baseline |
+| Checkpoint identity | v124 desktop execution and current state |
 |---|---|
-| Lab branch | `main` |
-| Lab commit | `877cb9a10e8e54090f3e89e1bd680593d09a2a3d` |
-| Rust branch | `main` |
-| Rust commit and Lab Gitlink | `b69398ff3085d852f95f8d435938b6d5e8976482` |
-| Source cleanliness | Both clean at the checkpoint |
-| Latest browser execution | v116: 75 passing vectors, two operational result records, one outstanding interrupted attempt, zero recorded semantic failures |
-| Desktop build allocation | v117–v122 durably claimed and consumed. V122 exported a provisional collection image and passed post-collection Buildx metadata, then preparation failed because the managed-policy JSON was absent; no prepare/reference image or build-execution/completion receipt. Next candidate v123, subject to allocator admission |
-| Outstanding v116 vector | Vector 76, `popup--page--window-open-attacker-name`; global intent 78 |
-| Desktop authority | Fresh native build, host qualification and all subsequent gates pending |
+| Lab branch and v124 source commit | `desktop-portability-2026-09-26`; `23cee75f3f7dec784776f5e128636317e63f2861` |
+| Rust commit and Lab Gitlink | `e8575fd8e54921ed6ff867de475b4a734064866e` |
+| Build and pinned CDP | `artifacts/buflo-study/build-execution-v124.json` and `artifacts/buflo-study/pinned-cdp-execution-v124.json` verified on their bound source |
+| Latest browser execution | `artifacts/buflo-study/browser-egress-qualification-v124/`: 28/110 passed, vector 29 operational failure, no `final.json` |
+| Desktop authority | No acquisition authority; pilot and formal collection remain at zero |
+| Next execution source | Docker inspect retry under validation; a source change requires allocator admission for a new cohort and complete downstream reproof |
 
-These commits identify the historical migration baseline, not a claim that
-later migration edits passed its gates. The final migration handoff records
-the published source identities. Preserve v116 unchanged as an incomplete
-laptop execution; do not resume or promote it on the desktop. Its unresolved
-Docker lifecycle incident is retained with the local operational handoff.
+Preserve the v124 failure and the earlier v116 incomplete laptop execution.
+Neither can authorise changed source or substitute for a complete browser gate.
 
 | Extended study scientific milestone | Accepted at this checkpoint |
 |---|---:|
@@ -142,33 +131,24 @@ historical schema descriptions remain in the history and methodology.
 
 ## Next actions and cheapest-first execution
 
-Native amd64 preparation support is implemented for the same pinned
-Playwright 1.57.0 / Chromium 143.0.7499.4 release. Its
-[versioned browser profile](config/class-study/v1/browser-egress-chromium-argv-amd64-v1.json)
-binds the separate archive, executable and distribution identities. Chrome for
-Testing uses its own managed-policy directory; Docker packaging, qualification,
-pinned-CDP, acquisition and the independent watcher now select and cross-check
-the matching architecture. Historical ARM identities remain unchanged. Local
-architecture and provenance tests have passed; a native desktop image, timing
-probes and live qualification have not been executed.
+The v124 browser failure is an operational Docker API observation fault, not a
+semantic vector rejection. The browser container later inspected as exited
+with code zero. A bounded retry now needs source validation and a fresh cohort.
+A proposed curated-population change is under review. The registered
+600-candidate, 120-pilot, 100-final-class contract remains in force until a
+prospective amendment and enough eligible candidates are established.
 
-1. Retain the verified migration manifests, protected handoff and exact
-   published source baseline. Recheck the private desktop receipt after any
-   evidence relocation.
-2. Recheck the implemented native amd64 browser profile on the desktop, including
-   pinned archive, executable and distribution identities. Preserve historical
-   ARM64 verification. Native desktop evidence is still pending.
-3. Run focused local tests, synthetic consumer replay, host/ETF/veth checks and
-   targeted reproductions of previous lifecycle failures before committing to
-   another full browser suite. Fix client/Lab defects at this stage where
-   possible.
-4. Freeze clean source; obtain the next unused cohort, fresh no-cache images,
+1. Preserve the verified migration manifests, historical handoff, v124 build,
+   pinned-CDP receipt and incomplete browser checkpoint.
+2. Validate the Docker inspect retry and resolve the curated-population choice.
+   Keep the registered study contract intact unless a new protocol is approved.
+3. Freeze clean source; obtain the next unused cohort, fresh no-cache images,
    pinned-CDP and 110/110 browser qualification. Publish acquisition authority.
-5. Acquire the 120-class pilot with genuine longitudinal observations. Complete
+4. Acquire the 120-class pilot with genuine longitudinal observations. Complete
    the full defence foundation before any class-study fitting or capture.
-6. Follow pilot fit/qualification/compatibility, final selection, authoritative
+5. Follow pilot fit/qualification/compatibility, final selection, authoritative
    fitting, final qualification and 900-cell certification.
-7. Freeze readiness and historical pre-snapshot; interleave ten canary blocks
+6. Freeze readiness and historical pre-snapshot; interleave ten canary blocks
    with ten formal blocks; seal, export, evaluate, compare and attest.
 
 The [runbook](docs/CLASS-STUDY.md) gives stage purposes, exact matrices,

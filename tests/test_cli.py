@@ -2857,6 +2857,163 @@ def test_browser_egress_signal_coordinated_roles_are_direct_tini_children() -> N
     assert "timeout_seconds=args.role_deadline_seconds" in tool
 
 
+@pytest.mark.parametrize("first_response", ("nonzero", "empty"))
+def test_browser_egress_exit_wait_recovers_from_transient_inspect_failure(
+    tmp_path: Path,
+    first_response: str,
+) -> None:
+    exit_wait = _browser_egress_shell_function(
+        "browser_egress_wait_exit_code", "browser_egress_live_docker_binding"
+    )
+    sentinel = tmp_path / "first-inspect-failed"
+    script = tmp_path / "exit-wait.sh"
+    script.write_text(
+        "set -euo pipefail\n"
+        + exit_wait
+        + "browser_egress_role_exit_wait_seconds=3\n"
+        + "browser_egress_role_exit_observation_grace_seconds=1\n"
+        + f"SENTINEL={str(sentinel)!r}\n"
+        + f"FIRST_RESPONSE={first_response!r}\n"
+        + "_qcsd_docker_api() {\n"
+        + '  [[ "$1 $2" == "container inspect" ]] || return 90\n'
+        + '  if [[ ! -e "$SENTINEL" ]]; then\n'
+        + '    : >"$SENTINEL"\n'
+        + '    [[ "$FIRST_RESPONSE" == nonzero ]] && return 28\n'
+        + '    return 0\n'
+        + '  fi\n'
+        + "  printf 'exited 0\\n'\n"
+        + "}\n"
+        + "browser_egress_wait_exit_code browser browser\n",
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        ["bash", str(script)], capture_output=True, text=True, check=False, timeout=5
+    )
+    assert completed.returncode == 0, (completed.stdout, completed.stderr)
+    assert completed.stdout == "0\n"
+    assert completed.stderr == ""
+    assert sentinel.exists()
+
+
+def test_browser_egress_exit_wait_rejects_persistent_inspect_failure(
+    tmp_path: Path,
+) -> None:
+    exit_wait = _browser_egress_shell_function(
+        "browser_egress_wait_exit_code", "browser_egress_live_docker_binding"
+    )
+    script = tmp_path / "exit-wait.sh"
+    script.write_text(
+        "set -euo pipefail\n"
+        + exit_wait
+        + "browser_egress_role_exit_wait_seconds=3\n"
+        + "browser_egress_role_exit_observation_grace_seconds=1\n"
+        + "_qcsd_docker_api() { return 28; }\n"
+        + "browser_egress_wait_exit_code browser browser\n",
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        ["bash", str(script)], capture_output=True, text=True, check=False, timeout=5
+    )
+    assert completed.returncode != 0
+    assert completed.stdout == ""
+    assert completed.stderr == "browser-egress browser exit state is unavailable\n"
+
+
+@pytest.mark.parametrize(
+    ("function_name", "next_name", "invocation"),
+    (
+        (
+            "browser_egress_wait_healthy",
+            "browser_egress_cleanup_topology",
+            "browser_egress_wait_healthy browser",
+        ),
+        (
+            "browser_egress_wait_container_marker",
+            "browser_egress_wait_observer_finalisation",
+            "browser_egress_wait_container_marker observer /tmp/marker subject",
+        ),
+        (
+            "browser_egress_wait_observer_finalisation",
+            "browser_egress_wait_exit_code",
+            "browser_egress_wait_observer_finalisation observer",
+        ),
+    ),
+)
+def test_browser_egress_role_waits_retry_transient_inspect_failure(
+    tmp_path: Path,
+    function_name: str,
+    next_name: str,
+    invocation: str,
+) -> None:
+    wait_function = _browser_egress_shell_function(function_name, next_name)
+    sentinel = tmp_path / "first-inspect-failed"
+    script = tmp_path / "role-wait.sh"
+    script.write_text(
+        "set -euo pipefail\n"
+        + wait_function
+        + f"SENTINEL={str(sentinel)!r}\n"
+        + "_qcsd_docker_api() {\n"
+        + '  if [[ "$1" == exec ]]; then\n'
+        + '    [[ -e "$SENTINEL" && "$5" == '
+        + '/tmp/qcsd-browser-egress-receipt.ready ]] && return 0\n'
+        + '    [[ -e "$SENTINEL" && "$5" == /tmp/marker ]] && return 0\n'
+        + '    return 1\n'
+        + '  fi\n'
+        + '  [[ "$1 $2" == "container inspect" ]] || return 90\n'
+        + '  if [[ ! -e "$SENTINEL" ]]; then : >"$SENTINEL"; return 28; fi\n'
+        + '  if [[ "$4" == *Health* ]]; then echo healthy; else echo running; fi\n'
+        + "}\n"
+        + invocation
+        + "\n",
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        ["bash", str(script)], capture_output=True, text=True, check=False, timeout=5
+    )
+    assert completed.returncode == 0, (completed.stdout, completed.stderr)
+    assert completed.stdout == ""
+    assert completed.stderr == ""
+    assert sentinel.exists()
+
+
+def test_browser_egress_observer_receipt_wait_retries_transient_inspect_failure(
+    tmp_path: Path,
+) -> None:
+    wait_function = _browser_egress_shell_function(
+        "browser_egress_wait_observer_receipt",
+        "browser_egress_fetch_observer_capture_closure",
+    )
+    sentinel = tmp_path / "first-inspect-failed"
+    destination = tmp_path / "observer.json"
+    script = tmp_path / "observer-wait.sh"
+    script.write_text(
+        "set -euo pipefail\n"
+        + wait_function
+        + f"SENTINEL={str(sentinel)!r}\n"
+        + "_qcsd_docker_api() {\n"
+        + '  if [[ "$1" == logs ]]; then\n'
+        + '    if [[ -e "$SENTINEL" ]]; then\n'
+        + "      printf '{\\n  \"role\": \"observer\"\\n}\\n'\n"
+        + '    else echo "{}"; fi\n'
+        + '    return 0\n'
+        + '  fi\n'
+        + '  [[ "$1 $2" == "container inspect" ]] || return 90\n'
+        + '  : >"$SENTINEL"\n'
+        + '  return 28\n'
+        + "}\n"
+        + f"browser_egress_wait_observer_receipt observer {str(destination)!r}\n",
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        ["bash", str(script)], capture_output=True, text=True, check=False, timeout=5
+    )
+    assert completed.returncode == 0, (completed.stdout, completed.stderr)
+    assert completed.stdout == ""
+    assert completed.stderr == ""
+    assert json.loads(destination.read_text(encoding="utf-8")) == {"role": "observer"}
+    assert sentinel.exists()
+
+
 def test_browser_egress_same_build_comparison_anchors_relative_binding_to_lab_root(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -473,6 +473,35 @@ tests. This source repair has not passed a new evidentiary build. V123 is the
 next candidate, pending clean source, allocator proof and the registered build
 gates.
 
+## 28 September desktop v124 continuation
+
+Lab `23cee75f3f7dec784776f5e128636317e63f2861` and Rust/Gitlink
+`e8575fd8e54921ed6ff867de475b4a734064866e` executed v124 on a clean
+checkout. The native three-image build passed its independent receipt verifier.
+`artifacts/buflo-study/build-execution-v124.json` has SHA-256
+`ccebbc6955e2f75c57811f678d5109895a97cf79b75ceb3771142ddf8ead15cd`;
+`artifacts/buflo-study/build-completion-v124.json` has SHA-256
+`4bb96132f62728baf73990659f9b639b939cf58a622fdeeb68d52b552dd6e0ec`.
+The ETF capability probe passed, and the pinned-CDP execution receipt passed
+its bound-source validator. The latter receipt SHA-256 is
+`01c94e84de8ff4e84a0d7846075f3d19d2ecbe82390a8006f06061f036eae614`.
+Three 2,048-sample ETF/veth diagnostics remained incomplete under their
+unchanged timing and clock-integrity limits; they are not capture authority.
+
+The v124 browser-egress service ran from 01:41:21 to 03:31:54 AEST. Its
+`artifacts/buflo-study/browser-egress-qualification-v124/experiment.json`
+records 28 passing vectors followed by an operational failure on vector 29,
+`constructor--cross-origin-frame--tcp-server`. The checkpoint SHA-256 is
+`3d17fab1e5732fba1b05f75b7c562a1b21acd9578aac37e9929e07f3b248c333`;
+the sealed result `attempts/result-0029.json` has SHA-256
+`ec85f2c9303aa5b2af92d6f8d07dba301da108bbcf0881e3c40051b8914dd478`.
+The open inventory validator passed. The browser's failure evidence later
+inspected its container as exited with code zero, while the 03:30:30 Docker
+API inspect service hit its three-second runtime limit at 03:30:33. The shell
+aborted on that single unavailable exit-state read. No `final.json` or
+acquisition authority exists; the 28-vector prefix is engineering evidence
+only. Preserve v124 and reprove any repair under a fresh source cohort.
+
 ## Maintenance contract
 
 Future maintainers should append a dated, evidence-backed outcome after each
