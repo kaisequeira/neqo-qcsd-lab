@@ -135,6 +135,23 @@ def _schema_six_fixed_projection(variant: dict) -> dict:
     return projection
 
 
+def _replace_with_frozen_schema_six_provenance(path: Path) -> dict:
+    """Give a synthetic runner the exact historical policy before relabelling it."""
+
+    variant = next(
+        item
+        for item in _HISTORICAL_ACQUISITION_CONTRACTS["schema6_receipts"]
+        if item["instrumentation_policy"]
+        == acquisition_module._SCHEMA_SIX_CDP_TARGET_INSTRUMENTATION_POLICY
+    )
+    provenance = copy.deepcopy(load_json(path)["payload"])
+    provenance.update(_schema_six_fixed_projection(variant))
+    provenance["acquisition_schema_version"] = 6
+    provenance["source"]["lab_commit"] = variant["source_lab_commit"]
+    _replace_receipt_payload(path, provenance)
+    return load_json(path)["payload"]
+
+
 def _synthetic_historical_provenance(
     schema: int,
     *,
@@ -163,6 +180,14 @@ def _synthetic_historical_provenance(
         },
         **copy.deepcopy(fixed_projection),
     }
+
+
+def _require_historical_terminal_tree(runner: Path) -> None:
+    """Archive integration checks need the optional terminal evidence tree."""
+
+    terminals = runner / "terminals"
+    if not terminals.exists() and not terminals.is_symlink():
+        pytest.skip("immutable acquisition terminal tree is not present in this checkout")
 
 
 @pytest.fixture(autouse=True)
@@ -4195,6 +4220,7 @@ def test_immutable_schema_six_acquisitions_reach_their_durable_state_verifier(
     checkpoint_path = runner / "checkpoint.json"
     before = checkpoint_path.read_bytes()
     catalogue = repository / "config/class-study/v1/classifier-multiorigin100-v1-candidates.json"
+    _require_historical_terminal_tree(runner)
     with pytest.raises(InternalAcquisitionError, match=durable_failure):
         acquisition_status(runner, candidate_catalogue_path=catalogue)
     assert checkpoint_path.read_bytes() == before
@@ -4311,6 +4337,7 @@ def test_immutable_schema_seven_v100_acquisition_reaches_its_durable_state_verif
     assert checkpoint_payload["checkpoint_schema_version"] == 3
     assert checkpoint_payload["provenance_sha256"] == variant["provenance_file_sha256"]
     catalogue = repository / "config/class-study/v1/classifier-multiorigin100-v1-candidates.json"
+    _require_historical_terminal_tree(runner)
     with pytest.raises(InternalAcquisitionError, match="tranco-0000697"):
         acquisition_status(runner, candidate_catalogue_path=catalogue)
     assert checkpoint_path.read_bytes() == before
@@ -4362,6 +4389,7 @@ def test_immutable_schema_seven_v101_acquisition_is_exactly_verify_only() -> Non
     checkpoint = load_json(checkpoint_path)
     assert checkpoint["payload_sha256"] == variant["checkpoint_payload_sha256"]
     catalogue = repository / "config/class-study/v1/classifier-multiorigin100-v1-candidates.json"
+    _require_historical_terminal_tree(runner)
     with pytest.raises(InternalAcquisitionError, match="tranco-0000697"):
         acquisition_status(runner, candidate_catalogue_path=catalogue)
     with pytest.raises(ValueError, match="historical acquisition runners"):
@@ -4446,6 +4474,7 @@ def test_immutable_schema_eight_v102_acquisition_is_exactly_verify_only() -> Non
     assert checkpoint_payload["checkpoint_schema_version"] == 3
     assert checkpoint_payload["provenance_sha256"] == variant["provenance_file_sha256"]
     catalogue = repository / "config/class-study/v1/classifier-multiorigin100-v1-candidates.json"
+    _require_historical_terminal_tree(runner)
     with pytest.raises(InternalAcquisitionError, match="tranco-0000697"):
         acquisition_status(runner, candidate_catalogue_path=catalogue)
     with pytest.raises(ValueError, match="historical acquisition runners"):
@@ -8641,10 +8670,11 @@ def test_schema_six_exact_contract_is_readable_but_cannot_resume_or_publish(
         browser_tool="ignored",
     )
     provenance_path = runner / "provenance.json"
-    provenance = copy.deepcopy(load_json(provenance_path)["payload"])
-    provenance["acquisition_schema_version"] = 6
-    _replace_receipt_payload(provenance_path, provenance)
-    provenance = load_json(provenance_path)["payload"]
+    relabelled_current = copy.deepcopy(load_json(provenance_path)["payload"])
+    relabelled_current["acquisition_schema_version"] = 6
+    with pytest.raises(ValueError, match="provenance policy"):
+        acquisition_module._validate_current_provenance_contract(relabelled_current)
+    provenance = _replace_with_frozen_schema_six_provenance(provenance_path)
     assert acquisition_module._validate_current_provenance_contract(provenance) == provenance
     assert (
         provenance["cdp_target_instrumentation_policy"]
@@ -8696,10 +8726,7 @@ def test_schema_six_and_eight_contract_discriminators_cannot_collide(
         browser_tool="ignored",
     )
     provenance_path = runner / "provenance.json"
-    provenance = copy.deepcopy(load_json(provenance_path)["payload"])
-    provenance["acquisition_schema_version"] = 6
-    _replace_receipt_payload(provenance_path, provenance)
-    provenance = load_json(provenance_path)["payload"]
+    provenance = _replace_with_frozen_schema_six_provenance(provenance_path)
     tampered = copy.deepcopy(provenance)
     tampered["cdp_target_instrumentation_policy"] = CDP_TARGET_INSTRUMENTATION_POLICY
     with pytest.raises(ValueError, match="provenance policy"):
@@ -8755,9 +8782,7 @@ def test_schema_six_completion_receipt_tuple_remains_exactly_verifiable(
     )
 
     provenance_path = runner / "provenance.json"
-    provenance = copy.deepcopy(load_json(provenance_path)["payload"])
-    provenance["acquisition_schema_version"] = 6
-    _replace_receipt_payload(provenance_path, provenance)
+    _replace_with_frozen_schema_six_provenance(provenance_path)
     provenance_sha256 = acquisition_module.sha256_file(provenance_path)
     checkpoint_path = runner / "checkpoint.json"
     checkpoint = copy.deepcopy(load_json(checkpoint_path)["payload"])
