@@ -140,15 +140,14 @@ source receipt at
 [`config/curated-sources/crux-73-v1.source.json`](config/curated-sources/crux-73-v1.source.json).
 It contains 73 domains and 5,507 historical resource-URL observations; seven
 domains match the existing pre-browser safety policy. This source receipt
-assigns no eligibility and supplies no live workload. Its treatment as a
-formal or exploratory population remains to be chosen. The registered
-600-candidate, 120-pilot, 100-final-class contract remains in force until a
-prospective amendment and enough eligible candidates are established.
+assigns no eligibility and supplies no live workload. On 28 September the
+user chose to retain the existing frozen catalogue for formal acquisition;
+the curated receipt is excluded from that run. The registered 600-candidate,
+120-pilot, 100-final-class contract remains in force.
 
 1. Preserve the verified migration manifests, historical handoff, v124 build,
    pinned-CDP receipt and incomplete browser checkpoint.
-2. Resolve the curated-population choice. Keep the registered study contract
-   intact unless a prospective amendment is adopted.
+2. Retain the registered Tranco candidate catalogue for this formal run.
 3. Freeze clean source; obtain the next unused cohort, fresh no-cache images,
    pinned-CDP and 110/110 browser qualification. Publish acquisition authority.
 4. Acquire the 120-class pilot with genuine longitudinal observations. Complete

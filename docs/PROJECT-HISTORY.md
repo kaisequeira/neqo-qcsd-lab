@@ -502,6 +502,18 @@ aborted on that single unavailable exit-state read. No `final.json` or
 acquisition authority exists; the 28-vector prefix is engineering evidence
 only. Preserve v124 and reprove any repair under a fresh source cohort.
 
+The user supplied a 73-domain curated resource-URL file. Lab `0cd12d5`
+imported its source-order domains and compact origin hints into the tracked,
+create-only `config/curated-sources/crux-73-v1.source.json` receipt without
+assigning scientific eligibility. The attached source SHA-256 is
+`548e4718cbc20e70e391e36206cb0285327da4c78434039ffb616d83b98d068b`;
+the receipt SHA-256 is
+`3a0dd1db826bbdcc154425d1d021884de8c7b47ba6572ab18d011fdbf5c7395e`.
+Seven domains match the existing pre-browser safety policy. On 28 September,
+the user chose to retain the frozen 600-candidate Tranco catalogue for the
+formal acquisition path. The curated receipt remains separate input
+provenance and advances no acquisition numerator.
+
 ## Maintenance contract
 
 Future maintainers should append a dated, evidence-backed outcome after each
