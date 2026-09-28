@@ -31,6 +31,12 @@ The desktop's private `migration-2026-09-25/inventories/desktop-handoff-verifica
 records the new 12,503-entry protected-handoff check. Keep it with the
 downloaded transfer manifests outside Git.
 
+The tracked curated-source receipt is
+[`config/curated-sources/crux-73-v1.source.json`](../config/curated-sources/crux-73-v1.source.json).
+It binds the user-supplied 73-domain file by SHA-256 and preserves source-order
+domains and compact origin hints. It is input provenance, not an acquisition
+receipt or authority for the registered study.
+
 ## Laptop research archive
 
 | Evidence family | Relative location | Retained purpose |

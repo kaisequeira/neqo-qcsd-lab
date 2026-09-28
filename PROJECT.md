@@ -45,7 +45,7 @@ authority. The 28-vector prefix advances no scientific count. Three separate
 | Build and pinned CDP | `artifacts/buflo-study/build-execution-v124.json` and `artifacts/buflo-study/pinned-cdp-execution-v124.json` verified on their bound source |
 | Latest browser execution | `artifacts/buflo-study/browser-egress-qualification-v124/`: 28/110 passed, vector 29 operational failure, no `final.json` |
 | Desktop authority | No acquisition authority; pilot and formal collection remain at zero |
-| Next execution source | Docker inspect retry under validation; a source change requires allocator admission for a new cohort and complete downstream reproof |
+| Next execution source | Docker inspect retry and curated-source importer validated locally; no source-bound gate has run on this later source |
 
 Preserve the v124 failure and the earlier v116 incomplete laptop execution.
 Neither can authorise changed source or substitute for a complete browser gate.
@@ -133,15 +133,22 @@ historical schema descriptions remain in the history and methodology.
 
 The v124 browser failure is an operational Docker API observation fault, not a
 semantic vector rejection. The browser container later inspected as exited
-with code zero. A bounded retry now needs source validation and a fresh cohort.
-A proposed curated-population change is under review. The registered
+with code zero. The bounded retry passes local tests but needs a fresh
+source-bound cohort for qualification.
+The supplied curated domain list has been imported as a portable, hash-bound
+source receipt at
+[`config/curated-sources/crux-73-v1.source.json`](config/curated-sources/crux-73-v1.source.json).
+It contains 73 domains and 5,507 historical resource-URL observations; seven
+domains match the existing pre-browser safety policy. This source receipt
+assigns no eligibility and supplies no live workload. Its treatment as a
+formal or exploratory population remains to be chosen. The registered
 600-candidate, 120-pilot, 100-final-class contract remains in force until a
 prospective amendment and enough eligible candidates are established.
 
 1. Preserve the verified migration manifests, historical handoff, v124 build,
    pinned-CDP receipt and incomplete browser checkpoint.
-2. Validate the Docker inspect retry and resolve the curated-population choice.
-   Keep the registered study contract intact unless a new protocol is approved.
+2. Resolve the curated-population choice. Keep the registered study contract
+   intact unless a prospective amendment is adopted.
 3. Freeze clean source; obtain the next unused cohort, fresh no-cache images,
    pinned-CDP and 110/110 browser qualification. Publish acquisition authority.
 4. Acquire the 120-class pilot with genuine longitudinal observations. Complete

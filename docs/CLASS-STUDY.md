@@ -146,6 +146,18 @@ The final actions are `readiness`, `historical-snapshot`, `export`, `evaluate`,
 
 ## Population, complete resource graphs and stability
 
+The separately imported
+[`crux-73-v1.source.json`](../config/curated-sources/crux-73-v1.source.json)
+records 73 supplied domains in source order, origin and URL-count hints, the
+exact source-file SHA-256, and seven matches to the frozen pre-browser safety
+policy. The URL observations are provenance hints only: they are not page
+URLs, current resource graphs, eligibility results or capture instructions.
+The receipt does not replace the catalogue below. To import another source,
+run `PYTHONPATH=src .venv/bin/python tools/import_curated_source.py SOURCE NEW_RECEIPT`
+from the repository root with a fresh destination. The importer validates the
+source and publishes a create-only receipt; the acquisition protocol still
+requires an explicit prospective population decision.
+
 The pinned Tranco W36Q9 snapshot contains one million domains. The frozen
 catalogue has 600 candidates, 120 from each rank stratum: 1–1,000;
 1,001–10,000; 10,001–100,000; 100,001–500,000; 500,001–1,000,000.

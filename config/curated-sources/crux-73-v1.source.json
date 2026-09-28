@@ -1,0 +1,1163 @@
+{
+  "payload": {
+    "candidate_count": 73,
+    "candidates": [
+      {
+        "candidate_id": "curated-32031dd8e737925f877f",
+        "domain": "444.hu",
+        "observed_resource_url_count": 36,
+        "origin_hints": [
+          {
+            "origin": "https://assets.4cdn.hu",
+            "url_count": 36,
+            "urls_sha256": "3fd6e4f0fefb37dd91574d0d6291d6cf23f422551a6147f9dd272c4ea5d144a7"
+          }
+        ],
+        "source_index": 1
+      },
+      {
+        "candidate_id": "curated-5c7779075a3a923ae406",
+        "domain": "angkanet26.com",
+        "observed_resource_url_count": 21,
+        "origin_hints": [
+          {
+            "origin": "https://angkanet26.com",
+            "url_count": 21,
+            "urls_sha256": "ed6fc471173c8be8845d557ff7870100ed064b3c1a7663346f4700ce87f8267b"
+          }
+        ],
+        "source_index": 2
+      },
+      {
+        "candidate_id": "curated-d16f2e420c0fac338270",
+        "domain": "bollyflix.af",
+        "observed_resource_url_count": 38,
+        "origin_hints": [
+          {
+            "origin": "https://bflixcdn.xyz",
+            "url_count": 22,
+            "urls_sha256": "ebda60516fd85b61aa9ae4d5744d26e5abae5afd9d10334ca343535be6eaf6d4"
+          },
+          {
+            "origin": "https://bollyflix.af",
+            "url_count": 16,
+            "urls_sha256": "fc850030a7828d9b90a401d0d78edd7617abb5af873b367b916f4de5028d2d63"
+          }
+        ],
+        "source_index": 3
+      },
+      {
+        "candidate_id": "curated-ad474feed02bf0b8ef5a",
+        "domain": "bookmark.xxx",
+        "observed_resource_url_count": 24,
+        "origin_hints": [
+          {
+            "origin": "https://cdn.bookmark.xxx",
+            "url_count": 24,
+            "urls_sha256": "3c39f77d6f83a76a6d71531438f09bb96ad212c1a72605caa4284a19fcbd9965"
+          }
+        ],
+        "source_index": 4
+      },
+      {
+        "candidate_id": "curated-7e29ecc64ecbf3e50849",
+        "domain": "calamitymod.wiki.gg",
+        "observed_resource_url_count": 19,
+        "origin_hints": [
+          {
+            "origin": "https://calamitymod.wiki.gg",
+            "url_count": 11,
+            "urls_sha256": "b60fab96108ed9e41772e7248e72207ca0df94608119f288e9743f65a1361e3f"
+          },
+          {
+            "origin": "https://terraria.wiki.gg",
+            "url_count": 8,
+            "urls_sha256": "4523838e53c3a4d53e4997b396168257183b57d27ab5fd4922a0e91cb56e2867"
+          }
+        ],
+        "source_index": 5
+      },
+      {
+        "candidate_id": "curated-4f86e59ee9134106b3d3",
+        "domain": "ca.pinterest.com",
+        "observed_resource_url_count": 19,
+        "origin_hints": [
+          {
+            "origin": "https://i.pinimg.com",
+            "url_count": 9,
+            "urls_sha256": "1e7a14f008a74999e9d7744c67964caf3125fccddb0ea855bbf86d48ffb7c894"
+          },
+          {
+            "origin": "https://s.pinimg.com",
+            "url_count": 10,
+            "urls_sha256": "90e1ab43400a68498f3707f6d95b4cb0eac35e7d1f45394c6cb1daf3a8eddd66"
+          }
+        ],
+        "source_index": 6
+      },
+      {
+        "candidate_id": "curated-574cbb327570be709950",
+        "domain": "chaturbate.com",
+        "observed_resource_url_count": 69,
+        "origin_hints": [
+          {
+            "origin": "https://web.static.mmcdn.com",
+            "url_count": 23,
+            "urls_sha256": "51735f56af0d083f2b83188b36b246b83c99cd4d56179f85dcb86b2e0d15a6ba"
+          },
+          {
+            "origin": "https://web2.static.mmcdn.com",
+            "url_count": 46,
+            "urls_sha256": "f725a173145141824bdc24e4702aba14bfca496e5fda8fbc0d621d5999989bd6"
+          }
+        ],
+        "source_index": 7
+      },
+      {
+        "candidate_id": "curated-d17c048f04d8cf9adf3a",
+        "domain": "deodap.in",
+        "observed_resource_url_count": 229,
+        "origin_hints": [
+          {
+            "origin": "https://cdn.shopify.com",
+            "url_count": 30,
+            "urls_sha256": "b53b993a5e296230e11a7bb0fc04b0b391e9cfc9e93e64cf24fa2e34a16dbc52"
+          },
+          {
+            "origin": "https://deodap.in",
+            "url_count": 199,
+            "urls_sha256": "451d15ba71150299e1baa9e83f2ba203b3ea07708359016b8aa0a57e53a6f875"
+          }
+        ],
+        "source_index": 8
+      },
+      {
+        "candidate_id": "curated-c8e8f9f979e435f9efb6",
+        "domain": "discord.com",
+        "observed_resource_url_count": 59,
+        "origin_hints": [
+          {
+            "origin": "https://cdn.prod.website-files.com",
+            "url_count": 59,
+            "urls_sha256": "a8382a9f4ef125501f7d4173f93cbdc6ccdc82d5cae0bc77cd53d2ed3e2b1009"
+          }
+        ],
+        "source_index": 9
+      },
+      {
+        "candidate_id": "curated-3486ddf0f7b0fdfb9063",
+        "domain": "dokterjav.com",
+        "observed_resource_url_count": 8,
+        "origin_hints": [
+          {
+            "origin": "https://dokterjav.com",
+            "url_count": 8,
+            "urls_sha256": "15cb8f34ed5e5d0efdc051a8d31dc9c123bc214adbf9f76539da8e5b688f4bed"
+          }
+        ],
+        "source_index": 10
+      },
+      {
+        "candidate_id": "curated-0b241133cd0216391928",
+        "domain": "doradobet.com",
+        "observed_resource_url_count": 103,
+        "origin_hints": [
+          {
+            "origin": "https://code-compiled.virtualsoft.tech",
+            "url_count": 54,
+            "urls_sha256": "d909e7f043f248ccfd3078d5e187b7bfcc65c7af4d990ce85186ef4b794e0b2b"
+          },
+          {
+            "origin": "https://images.virtualsoft.tech",
+            "url_count": 49,
+            "urls_sha256": "d6351a3bae5764fb46af12d5a53ca9ed52e1ea3deef64289eaa7cfdb37b52d36"
+          }
+        ],
+        "source_index": 11
+      },
+      {
+        "candidate_id": "curated-8eb3682ac51d385123bd",
+        "domain": "en-miwg.comfortweather.com",
+        "observed_resource_url_count": 14,
+        "origin_hints": [
+          {
+            "origin": "https://www.comfortweather.com",
+            "url_count": 14,
+            "urls_sha256": "42c2e2385e9f292da122d59d5dc79b0e7841ced7526fdc7ed83a8c6b40ba89c8"
+          }
+        ],
+        "source_index": 12
+      },
+      {
+        "candidate_id": "curated-be31b9ef2edf45c3bfb8",
+        "domain": "es.anysex.com",
+        "observed_resource_url_count": 9,
+        "origin_hints": [
+          {
+            "origin": "https://es.anysex.com",
+            "url_count": 9,
+            "urls_sha256": "b244f053ed6ee630c222e6888c7c1dd257499149b4f0ad503fd1e2daecc1cffa"
+          }
+        ],
+        "source_index": 13
+      },
+      {
+        "candidate_id": "curated-bdcee1e394376c311ffa",
+        "domain": "incontriamoci.xxx",
+        "observed_resource_url_count": 0,
+        "origin_hints": [],
+        "source_index": 14
+      },
+      {
+        "candidate_id": "curated-f44197314bcfbe3d8547",
+        "domain": "innovist.com",
+        "observed_resource_url_count": 164,
+        "origin_hints": [
+          {
+            "origin": "https://cdn.shopify.com",
+            "url_count": 42,
+            "urls_sha256": "ca0d31dd819844c6874ac09c6d5dd50c26096b90d6c9eb6a0a3e32eeeb7118ab"
+          },
+          {
+            "origin": "https://innovist.com",
+            "url_count": 122,
+            "urls_sha256": "3f384162f8985bdf14b3d9d0230348aa13def09bba72480b6d16259f7559da98"
+          }
+        ],
+        "source_index": 15
+      },
+      {
+        "candidate_id": "curated-da1d7c425a19c33724a3",
+        "domain": "kir2kos.net",
+        "observed_resource_url_count": 16,
+        "origin_hints": [
+          {
+            "origin": "https://kir2kos.net",
+            "url_count": 16,
+            "urls_sha256": "c7d137d23fe3e2144787baf48dd3faa925f110c09fdc668eaa2b96c5d7b50d9f"
+          }
+        ],
+        "source_index": 16
+      },
+      {
+        "candidate_id": "curated-80faab037661ecee2f78",
+        "domain": "m.fmkorea.com",
+        "observed_resource_url_count": 21,
+        "origin_hints": [
+          {
+            "origin": "https://image.fmkorea.com",
+            "url_count": 9,
+            "urls_sha256": "e6c6478e7f21212c09557b9a7c273f387c063d6ceb8c9ea5077ff06dd0de9b95"
+          },
+          {
+            "origin": "https://static.fmkorea.com",
+            "url_count": 12,
+            "urls_sha256": "9ee3220a1167eb018066aa8fa1d414663aab0e6fb610357d5603de0f8418c566"
+          }
+        ],
+        "source_index": 17
+      },
+      {
+        "candidate_id": "curated-7076a8aa95d82e2d627d",
+        "domain": "m.youtube.com",
+        "observed_resource_url_count": 67,
+        "origin_hints": [
+          {
+            "origin": "https://fonts.gstatic.com",
+            "url_count": 67,
+            "urls_sha256": "7911ae7b03c6826e95433c38a10015a478c91770f7611537e77155ad68560b82"
+          }
+        ],
+        "source_index": 18
+      },
+      {
+        "candidate_id": "curated-3d6774daa85546fa8dd1",
+        "domain": "news.google.com",
+        "observed_resource_url_count": 0,
+        "origin_hints": [],
+        "source_index": 19
+      },
+      {
+        "candidate_id": "curated-043c8b74d59501c0a955",
+        "domain": "ph.747.live",
+        "observed_resource_url_count": 782,
+        "origin_hints": [
+          {
+            "origin": "https://icons.747live.bet",
+            "url_count": 17,
+            "urls_sha256": "208bb621e09a0587b1803bb00beeaf88ba58ded538240a690f9ef1138312c955"
+          },
+          {
+            "origin": "https://ph.747.live",
+            "url_count": 259,
+            "urls_sha256": "71b0d56357d830c94bfa57af5ea6328084fa33f06783502aea329f75efaae756"
+          },
+          {
+            "origin": "https://www.747live.bet",
+            "url_count": 506,
+            "urls_sha256": "78ca1ddbf61eef515798be2f696eca7b105608059496bf41f44e7dc44bc40d3c"
+          }
+        ],
+        "source_index": 20
+      },
+      {
+        "candidate_id": "curated-1d4c4082a952876440dd",
+        "domain": "pimpbunny.com",
+        "observed_resource_url_count": 20,
+        "origin_hints": [
+          {
+            "origin": "https://web2.static.mmcdn.com",
+            "url_count": 20,
+            "urls_sha256": "8ad7887cfc662d05f4ecd2e099396d9567cd5f1e92b97501a9ea412d1daf8329"
+          }
+        ],
+        "source_index": 21
+      },
+      {
+        "candidate_id": "curated-e5114f8d4f027cce4481",
+        "domain": "poki.com",
+        "observed_resource_url_count": 276,
+        "origin_hints": [
+          {
+            "origin": "https://a.poki-cdn.com",
+            "url_count": 95,
+            "urls_sha256": "93914381e1174177a599e1aaa906a19f3af4d37396c7b6ceec5b36a059e7993d"
+          },
+          {
+            "origin": "https://img.poki-cdn.com",
+            "url_count": 181,
+            "urls_sha256": "463a1526093ea47636fa1b63fc9d7ef99157401a7dc1b94d5c7199f7ae70afc2"
+          }
+        ],
+        "source_index": 22
+      },
+      {
+        "candidate_id": "curated-7cd5c8f977da4216ba2f",
+        "domain": "pornone.com",
+        "observed_resource_url_count": 48,
+        "origin_hints": [
+          {
+            "origin": "https://pornone.com",
+            "url_count": 13,
+            "urls_sha256": "f25d5608fe75880c7acfe07d1656ae63c8e9914c6e4ff440a80d7dfb39114718"
+          },
+          {
+            "origin": "https://th-eu3.pornone.com",
+            "url_count": 8,
+            "urls_sha256": "c3fe56b1c2fb97696ea899abe165db6ea1e2a0c1b53a6b0368fe71ec6bf554e5"
+          },
+          {
+            "origin": "https://th-eu4.pornone.com",
+            "url_count": 27,
+            "urls_sha256": "02b7cfd8ff03eef91432b90d482a6fb612b29a66acc242d8d876fe6b7fc57586"
+          }
+        ],
+        "source_index": 23
+      },
+      {
+        "candidate_id": "curated-2bf895e695db5c125dab",
+        "domain": "redtape.com",
+        "observed_resource_url_count": 197,
+        "origin_hints": [
+          {
+            "origin": "https://assets.app.sagepilot.ai",
+            "url_count": 11,
+            "urls_sha256": "a8fcbcc324530a96efd2593a98d4c121bed691c603f354c5b74261799785cccd"
+          },
+          {
+            "origin": "https://cdn.shopify.com",
+            "url_count": 16,
+            "urls_sha256": "f1c3b70718607d13266ccca4362fa125c6bace56ba1fb178a3b28d8046be7ed8"
+          },
+          {
+            "origin": "https://redtape.com",
+            "url_count": 170,
+            "urls_sha256": "ff6e6e1fcf67f90ef10761042ae9f9a62c48043a72c143c69416e3e9abc561b5"
+          }
+        ],
+        "source_index": 24
+      },
+      {
+        "candidate_id": "curated-bb3026dbbb98cbcc8c4b",
+        "domain": "search-fast.org",
+        "observed_resource_url_count": 80,
+        "origin_hints": [
+          {
+            "origin": "https://img-s-msn-com.akamaized.net",
+            "url_count": 8,
+            "urls_sha256": "8fc4ada22fecc0183683137ae43fb9d1ef98aca882637a8695c74d66ce7dc81b"
+          },
+          {
+            "origin": "https://r.bing.com",
+            "url_count": 40,
+            "urls_sha256": "8929ec2ebc0fff05cb457906deae59e6e6bd12291034631458f894436e235b5b"
+          },
+          {
+            "origin": "https://www.bing.com",
+            "url_count": 32,
+            "urls_sha256": "b52162c0ae688d042d6c34834c696b80216f0dd5e97dfd99bdaba66e4fb970b5"
+          }
+        ],
+        "source_index": 25
+      },
+      {
+        "candidate_id": "curated-5000333ec88e8b7015fc",
+        "domain": "timesofindia.indiatimes.com",
+        "observed_resource_url_count": 69,
+        "origin_hints": [
+          {
+            "origin": "https://assets.toiimg.com",
+            "url_count": 64,
+            "urls_sha256": "39f6f01894c047f4124198a29f508757b41c1c767bb30380ebbc8e0b6410f883"
+          },
+          {
+            "origin": "https://static.toiimg.com",
+            "url_count": 5,
+            "urls_sha256": "07e84671fbb6e50d9236a6e0d24a415665c8b4c7a639bcfcd77ca5770ae2699b"
+          }
+        ],
+        "source_index": 26
+      },
+      {
+        "candidate_id": "curated-0211c4def94e16d99851",
+        "domain": "toom.de",
+        "observed_resource_url_count": 12,
+        "origin_hints": [
+          {
+            "origin": "https://app.usercentrics.eu",
+            "url_count": 12,
+            "urls_sha256": "45e0f6941dfe0851da29b860e8cd55317055471b306d7c284896fda874eba5bb"
+          }
+        ],
+        "source_index": 27
+      },
+      {
+        "candidate_id": "curated-9d0c39ad56fdcde7a9b9",
+        "domain": "variety.com",
+        "observed_resource_url_count": 0,
+        "origin_hints": [],
+        "source_index": 28
+      },
+      {
+        "candidate_id": "curated-93bbde743624d70af3c3",
+        "domain": "wayground.com",
+        "observed_resource_url_count": 24,
+        "origin_hints": [
+          {
+            "origin": "https://cdn.prod.website-files.com",
+            "url_count": 24,
+            "urls_sha256": "dd980fb1a40f32064281e17c312b9787eb9c843bf88c84de26a861007336a067"
+          }
+        ],
+        "source_index": 29
+      },
+      {
+        "candidate_id": "curated-cddf3216c8c1e44653d5",
+        "domain": "weather.com",
+        "observed_resource_url_count": 0,
+        "origin_hints": [],
+        "source_index": 30
+      },
+      {
+        "candidate_id": "curated-5b29d3cc2e29d7ace8e0",
+        "domain": "www.3bmeteo.com",
+        "observed_resource_url_count": 61,
+        "origin_hints": [
+          {
+            "origin": "https://image.3bmeteo.com",
+            "url_count": 6,
+            "urls_sha256": "a76b4d5f458fe1106c04250a4190167120d36f6117d1b60b4b2d7f744cc9f995"
+          },
+          {
+            "origin": "https://www.3bmeteo.com",
+            "url_count": 55,
+            "urls_sha256": "1ef05be4057337fe37e01ac75053e6f57548a5b24a2d3d6530e79f298c843814"
+          }
+        ],
+        "source_index": 31
+      },
+      {
+        "candidate_id": "curated-8e8d5180ca7a4c46e7a6",
+        "domain": "www.aajtak.in",
+        "observed_resource_url_count": 0,
+        "origin_hints": [],
+        "source_index": 32
+      },
+      {
+        "candidate_id": "curated-7af20f3c3f7f69d10d44",
+        "domain": "www.acgxmh.com",
+        "observed_resource_url_count": 0,
+        "origin_hints": [],
+        "source_index": 33
+      },
+      {
+        "candidate_id": "curated-cd4692036fec85a990d2",
+        "domain": "www.albumaty.com",
+        "observed_resource_url_count": 0,
+        "origin_hints": [],
+        "source_index": 34
+      },
+      {
+        "candidate_id": "curated-30f778352dfbe9e2e48c",
+        "domain": "www.alibaba.com",
+        "observed_resource_url_count": 142,
+        "origin_hints": [
+          {
+            "origin": "https://g.alicdn.com",
+            "url_count": 12,
+            "urls_sha256": "ba40e0bda499aeb3d2142c4527288250fe89292aaf151c6df4ba5cfe7a56e1d9"
+          },
+          {
+            "origin": "https://s.alicdn.com",
+            "url_count": 130,
+            "urls_sha256": "a537e38d944c06a47e89ef961f7434f0998db2719293ee87c6b2e5921ece5c0a"
+          }
+        ],
+        "source_index": 35
+      },
+      {
+        "candidate_id": "curated-5f44044454ef448148df",
+        "domain": "www.bing.com",
+        "observed_resource_url_count": 76,
+        "origin_hints": [
+          {
+            "origin": "https://img-s-msn-com.akamaized.net",
+            "url_count": 11,
+            "urls_sha256": "483da223e790398a4015370ec50696102b5e107ba7f1a8e8e029d138245aabb6"
+          },
+          {
+            "origin": "https://r.bing.com",
+            "url_count": 41,
+            "urls_sha256": "fc89a4455280a3b13408b5814c7225b30dcf1d90389c5bcf53f3d50a47a2c95e"
+          },
+          {
+            "origin": "https://th.bing.com",
+            "url_count": 6,
+            "urls_sha256": "65b9358cb084fa155b4c842a187107851895a41fd7ff4bd1f9845ae89f9f39a9"
+          },
+          {
+            "origin": "https://www.bing.com",
+            "url_count": 18,
+            "urls_sha256": "07747d411893f1c52e9f6aced09812b3ec5b74ccaa0c608a9e40f1517818b07a"
+          }
+        ],
+        "source_index": 36
+      },
+      {
+        "candidate_id": "curated-06791de9475637d708b8",
+        "domain": "www.clarin.com",
+        "observed_resource_url_count": 200,
+        "origin_hints": [
+          {
+            "origin": "https://cds.connatix.com",
+            "url_count": 11,
+            "urls_sha256": "ba5ee5fe819997ecb444a2f1fd317a715ebd47786a09b4225fd9b3b72c85cbe6"
+          },
+          {
+            "origin": "https://www.clarin.com",
+            "url_count": 189,
+            "urls_sha256": "bef015050113692b9717959231acab0c5e2439521b715da959e443f0dc7eb0a7"
+          }
+        ],
+        "source_index": 37
+      },
+      {
+        "candidate_id": "curated-30af7c218e117a9dfcd7",
+        "domain": "www.cronista.com",
+        "observed_resource_url_count": 0,
+        "origin_hints": [],
+        "source_index": 38
+      },
+      {
+        "candidate_id": "curated-8f43281d65a836678b90",
+        "domain": "www.dictionary.com",
+        "observed_resource_url_count": 37,
+        "origin_hints": [
+          {
+            "origin": "https://cdn.dictionary.com",
+            "url_count": 37,
+            "urls_sha256": "5434fc0c9c841a9dd8bb15389773cfad6e6abe02f8942fda3d8dbf8340ff513d"
+          }
+        ],
+        "source_index": 39
+      },
+      {
+        "candidate_id": "curated-b509bf3c3c25d6fdea6b",
+        "domain": "www.diretta.it",
+        "observed_resource_url_count": 140,
+        "origin_hints": [
+          {
+            "origin": "https://static.flashscore.com",
+            "url_count": 140,
+            "urls_sha256": "22cd545c0f255c6599bcc9cdef2eab23823b3ab126a4e2236c803df552e6d8c7"
+          }
+        ],
+        "source_index": 40
+      },
+      {
+        "candidate_id": "curated-249375c6fe8dbf10b03a",
+        "domain": "www.euronews.com",
+        "observed_resource_url_count": 115,
+        "origin_hints": [
+          {
+            "origin": "https://images.euronews.com",
+            "url_count": 9,
+            "urls_sha256": "12386bd3d976a2d2b14058efdc0b67669064df542e177d57c78cc9d55b9bd2e9"
+          },
+          {
+            "origin": "https://static.euronews.com",
+            "url_count": 12,
+            "urls_sha256": "7ba2de7256963deb71b656add2a96e9acba91653dcadb456365845d828f23d5f"
+          },
+          {
+            "origin": "https://www.euronews.com",
+            "url_count": 94,
+            "urls_sha256": "2cf8dad3bc154fa3f1cbfcfc5f0fa7496f1a3073f61faf9159d7aca12a7b0df0"
+          }
+        ],
+        "source_index": 41
+      },
+      {
+        "candidate_id": "curated-66149a4d1e10e22a8ff0",
+        "domain": "www.flashscore.com.mx",
+        "observed_resource_url_count": 232,
+        "origin_hints": [
+          {
+            "origin": "https://static.flashscore.com",
+            "url_count": 209,
+            "urls_sha256": "435208711399f96c0352c50a075c703865dec4ef5e7ba85d29ba5802ca9ed664"
+          },
+          {
+            "origin": "https://www.flashscore.com.mx",
+            "url_count": 23,
+            "urls_sha256": "1ee6c8d15934b572e3d4a7071fa7bef3b7f83d7c7b9774792bd9df9f609f3e6f"
+          }
+        ],
+        "source_index": 42
+      },
+      {
+        "candidate_id": "curated-275fb42182bb2533d5e1",
+        "domain": "www.flashscore.com",
+        "observed_resource_url_count": 181,
+        "origin_hints": [
+          {
+            "origin": "https://static.flashscore.com",
+            "url_count": 181,
+            "urls_sha256": "8dc1f71ca828528deb2d37e07bc578a36d86e3ddc22021ad89e7e7c081b2bf7b"
+          }
+        ],
+        "source_index": 43
+      },
+      {
+        "candidate_id": "curated-f48223df2b9952d12ae4",
+        "domain": "www.flashscore.com.ua",
+        "observed_resource_url_count": 196,
+        "origin_hints": [
+          {
+            "origin": "https://static.flashscore.com",
+            "url_count": 196,
+            "urls_sha256": "add8d97ac31140290e26cc0f9b815b83bb4e4d0043af3bc6f1e9848157922eb4"
+          }
+        ],
+        "source_index": 44
+      },
+      {
+        "candidate_id": "curated-4502b950485a10d10f05",
+        "domain": "www.fmkorea.com",
+        "observed_resource_url_count": 21,
+        "origin_hints": [
+          {
+            "origin": "https://image.fmkorea.com",
+            "url_count": 8,
+            "urls_sha256": "89014632252c15f04235323aa3981b76b24ba4cb33ee1365ec83ebc7dd9b186f"
+          },
+          {
+            "origin": "https://static.fmkorea.com",
+            "url_count": 13,
+            "urls_sha256": "d45f6d5242a1ef40edd41868ada585412edeec7c7a2d9e1d01b7d67625d38c4f"
+          }
+        ],
+        "source_index": 45
+      },
+      {
+        "candidate_id": "curated-152754046f6bfc677509",
+        "domain": "www.futura-sciences.com",
+        "observed_resource_url_count": 18,
+        "origin_hints": [
+          {
+            "origin": "https://www.futura-sciences.com",
+            "url_count": 18,
+            "urls_sha256": "dcdfe6755154561522dd6e47970e094da4d7d5b71f7f7fa920bd16ab45d98154"
+          }
+        ],
+        "source_index": 46
+      },
+      {
+        "candidate_id": "curated-67b0d5252809b8837adf",
+        "domain": "www.gharsoaps.shop",
+        "observed_resource_url_count": 162,
+        "origin_hints": [
+          {
+            "origin": "https://www.gharsoaps.shop",
+            "url_count": 162,
+            "urls_sha256": "9f7e4f4789db803193db45bc31422846f66ef625d1f544585a4fced2e61b224a"
+          }
+        ],
+        "source_index": 47
+      },
+      {
+        "candidate_id": "curated-c30e95a150efd72deb1e",
+        "domain": "www.giva.co",
+        "observed_resource_url_count": 61,
+        "origin_hints": [
+          {
+            "origin": "https://cdn.shopify.com",
+            "url_count": 18,
+            "urls_sha256": "afed865a7d0d9f21035d2503d491f8378e819b3e31428b02cff78c87cf65a904"
+          },
+          {
+            "origin": "https://www.giva.co",
+            "url_count": 43,
+            "urls_sha256": "8c3e6ee5236892a325918c5e293a84f228cbe33f4c5f059829e83c6fef1ef952"
+          }
+        ],
+        "source_index": 48
+      },
+      {
+        "candidate_id": "curated-7f1c77cf71293cc57c2a",
+        "domain": "www.goodreturns.in",
+        "observed_resource_url_count": 52,
+        "origin_hints": [
+          {
+            "origin": "https://images.goodreturns.in",
+            "url_count": 36,
+            "urls_sha256": "588cbda748e4d16b79c345489d8c5d0d739b669a3e358483fd0174eccf763a68"
+          },
+          {
+            "origin": "https://www.goodreturns.in",
+            "url_count": 16,
+            "urls_sha256": "07b5d8e284290708fda926279f067567436a25e9a5e6a6d23faa6c7288562234"
+          }
+        ],
+        "source_index": 49
+      },
+      {
+        "candidate_id": "curated-530954635201a84f9528",
+        "domain": "www.gooutdoors.co.uk",
+        "observed_resource_url_count": 214,
+        "origin_hints": [
+          {
+            "origin": "https://cdn.shopify.com",
+            "url_count": 24,
+            "urls_sha256": "afab0a46f78e75746b87b6d44a69367c39027e5cd067c4b0d1cf1e61e4528311"
+          },
+          {
+            "origin": "https://www.gooutdoors.co.uk",
+            "url_count": 190,
+            "urls_sha256": "4c3e7bf5f01e6139d25afd3b2dd7dd0a4766d24041a96c78708351848103e348"
+          }
+        ],
+        "source_index": 50
+      },
+      {
+        "candidate_id": "curated-9b3f0a283e79c0dcc755",
+        "domain": "www.haberler.com",
+        "observed_resource_url_count": 57,
+        "origin_hints": [
+          {
+            "origin": "https://foto.haberler.com",
+            "url_count": 43,
+            "urls_sha256": "9588497d438c0324f633885a2154c6d698c1146d3ae4f985dc00d48df2d68cd7"
+          },
+          {
+            "origin": "https://www.haberler.com",
+            "url_count": 14,
+            "urls_sha256": "b166234632e3abff25a45c855a055ac15dec9048bf5aab115841702f526b46b9"
+          }
+        ],
+        "source_index": 51
+      },
+      {
+        "candidate_id": "curated-246dd47b12111bd6f018",
+        "domain": "www.idrlabs.com",
+        "observed_resource_url_count": 65,
+        "origin_hints": [
+          {
+            "origin": "https://cdn.idrlabs.com",
+            "url_count": 5,
+            "urls_sha256": "aed59e9725ffe2e31b4d724618f8a7f54bf51b2ea5cc1fad02bfc12b1c33c10f"
+          },
+          {
+            "origin": "https://www.idrlabs.com",
+            "url_count": 60,
+            "urls_sha256": "0ae21925f0b52a878f932dc391dd79276ca45256b5a49ff35b4a9115fde41643"
+          }
+        ],
+        "source_index": 52
+      },
+      {
+        "candidate_id": "curated-65df4a1708aa10090b72",
+        "domain": "www.jutarnji.hr",
+        "observed_resource_url_count": 130,
+        "origin_hints": [
+          {
+            "origin": "https://apps.jutarnji.hr",
+            "url_count": 13,
+            "urls_sha256": "9354240e92bbd5de9845bf3afb1e08b673835d82d88d6620aacd3af6636e6385"
+          },
+          {
+            "origin": "https://media.jutarnji.hr",
+            "url_count": 78,
+            "urls_sha256": "f7c7fb95d321608ff3900167ef8670d4fb89f7ebf07e339aa0605b607dafacb0"
+          },
+          {
+            "origin": "https://www.jutarnji.hr",
+            "url_count": 39,
+            "urls_sha256": "7585ff1e2f0fd0dae2e63468d7431d4df3152f4d8120a5beecb077f8e2f7aa16"
+          }
+        ],
+        "source_index": 53
+      },
+      {
+        "candidate_id": "curated-711e7c5b2117e892ef8d",
+        "domain": "www.khaleejtimes.com",
+        "observed_resource_url_count": 0,
+        "origin_hints": [],
+        "source_index": 54
+      },
+      {
+        "candidate_id": "curated-18ea9340923d2f31c9a0",
+        "domain": "www.limelight.pk",
+        "observed_resource_url_count": 200,
+        "origin_hints": [
+          {
+            "origin": "https://www.limelight.pk",
+            "url_count": 200,
+            "urls_sha256": "0daa00c2e5fb036e924ca654c4b9283005ae942d1a37212f643b3f17d641d589"
+          }
+        ],
+        "source_index": 55
+      },
+      {
+        "candidate_id": "curated-6ff357a6522d1d09e469",
+        "domain": "www.msn.com",
+        "observed_resource_url_count": 53,
+        "origin_hints": [
+          {
+            "origin": "https://img-s-msn-com.akamaized.net",
+            "url_count": 53,
+            "urls_sha256": "b19bf336793ade50108b966fd908b5bb419359a9fe1875cf48a2b3eafe443519"
+          }
+        ],
+        "source_index": 56
+      },
+      {
+        "candidate_id": "curated-7f7b483665074752a570",
+        "domain": "www.programme-television.org",
+        "observed_resource_url_count": 22,
+        "origin_hints": [
+          {
+            "origin": "https://t7j.cdnartwhere.eu",
+            "url_count": 9,
+            "urls_sha256": "a56a46921bcd9bc2a64278ad0f5b42f45d34eef17553924739a12932d9ef7412"
+          },
+          {
+            "origin": "https://tv7j.cdnartwhere.eu",
+            "url_count": 13,
+            "urls_sha256": "938e539e372e9821abd928ab25675ecf2a65a54076e2bdfeea82664edc3303f0"
+          }
+        ],
+        "source_index": 57
+      },
+      {
+        "candidate_id": "curated-59bd55fd4c4007d5b405",
+        "domain": "www.sacnilk.com",
+        "observed_resource_url_count": 38,
+        "origin_hints": [
+          {
+            "origin": "https://cdn.sacnilk.com",
+            "url_count": 29,
+            "urls_sha256": "c4ab907427fa604e4a6325c717a0e853114b67e18c2d612d948f3d3da4842fbe"
+          },
+          {
+            "origin": "https://go.ezodn.com",
+            "url_count": 9,
+            "urls_sha256": "1cd3de8eb5b2c67ae8c3c967efd54a1cc2ffaff71f344359b9608c6806dd2d57"
+          }
+        ],
+        "source_index": 58
+      },
+      {
+        "candidate_id": "curated-8c4fdcd88d9319597fc1",
+        "domain": "www.savana.com",
+        "observed_resource_url_count": 70,
+        "origin_hints": [
+          {
+            "origin": "https://img201.savana.com",
+            "url_count": 70,
+            "urls_sha256": "fbdc2a94d2ed2725fb694b78b4301947b44fcfece2925763117a6673f1a332d1"
+          }
+        ],
+        "source_index": 59
+      },
+      {
+        "candidate_id": "curated-2364d12faf7fb289275c",
+        "domain": "www.sondakika.com",
+        "observed_resource_url_count": 24,
+        "origin_hints": [
+          {
+            "origin": "https://foto.sondakika.com",
+            "url_count": 24,
+            "urls_sha256": "723a6c2bd85e5aa99f8f1b902ceecbc9dc32d92033cf3a6e4352a52a805bb885"
+          }
+        ],
+        "source_index": 60
+      },
+      {
+        "candidate_id": "curated-f4c94cc137bae9f0a14a",
+        "domain": "www.tgju.org",
+        "observed_resource_url_count": 30,
+        "origin_hints": [
+          {
+            "origin": "https://static.tgju.org",
+            "url_count": 30,
+            "urls_sha256": "e6d0622fd153546140f8ddab934d4a6f4b9498c39fe32ffd2081ada7e1fd3bd8"
+          }
+        ],
+        "source_index": 61
+      },
+      {
+        "candidate_id": "curated-5c03fbd2cdd66f1c3064",
+        "domain": "www.theguardian.com",
+        "observed_resource_url_count": 58,
+        "origin_hints": [
+          {
+            "origin": "https://assets.guim.co.uk",
+            "url_count": 53,
+            "urls_sha256": "19dbc25384573c792e1b33ce94f9408b641d15c660da7ac0dcc5640875b2725e"
+          },
+          {
+            "origin": "https://sourcepoint.theguardian.com",
+            "url_count": 5,
+            "urls_sha256": "61b8a58c0f5eeb69c4f973c9fb056a4439e0a24ab7f6353c3f5d6e1084cf15a9"
+          }
+        ],
+        "source_index": 62
+      },
+      {
+        "candidate_id": "curated-e595a512e2cc9f01d9bd",
+        "domain": "www.tippmixpro.hu",
+        "observed_resource_url_count": 12,
+        "origin_hints": [
+          {
+            "origin": "https://sports2.tippmixpro.hu",
+            "url_count": 7,
+            "urls_sha256": "0bbc64ab62e6401642d6745e43d31d6ce3732942a18594a3470defac418cc945"
+          },
+          {
+            "origin": "https://unpkg.com",
+            "url_count": 5,
+            "urls_sha256": "4f481e81c745c7f8440022db49340860d9eb7a33ee90e25a4459c4ed04c7acb7"
+          }
+        ],
+        "source_index": 63
+      },
+      {
+        "candidate_id": "curated-d8a5db749e0a64cacccd",
+        "domain": "www.tomsguide.com",
+        "observed_resource_url_count": 0,
+        "origin_hints": [],
+        "source_index": 64
+      },
+      {
+        "candidate_id": "curated-33cf0099b3a212535175",
+        "domain": "www.tori.fi",
+        "observed_resource_url_count": 31,
+        "origin_hints": [
+          {
+            "origin": "https://assets.finn.no",
+            "url_count": 31,
+            "urls_sha256": "97b5c67ae85f11158863bf2f868e813c3317c17a85fc691c978bd5574ee7724b"
+          }
+        ],
+        "source_index": 65
+      },
+      {
+        "candidate_id": "curated-d4293e19645b22a65d58",
+        "domain": "www.weerplaza.nl",
+        "observed_resource_url_count": 48,
+        "origin_hints": [
+          {
+            "origin": "https://imn-rust-lb.infoplaza.io",
+            "url_count": 19,
+            "urls_sha256": "373eeeffeeed3e8b33fbfcf556a5a36780dd209d63581be088a22607a8156a00"
+          },
+          {
+            "origin": "https://www.weerplaza.nl",
+            "url_count": 29,
+            "urls_sha256": "dd9299c73658559cebecfcfc98ccfc901e8bc28e322d098d4f0de73c49637a8a"
+          }
+        ],
+        "source_index": 66
+      },
+      {
+        "candidate_id": "curated-8da76f443b900633042a",
+        "domain": "www.xbox.com",
+        "observed_resource_url_count": 10,
+        "origin_hints": [
+          {
+            "origin": "https://www.xbox.com",
+            "url_count": 10,
+            "urls_sha256": "02c4d5c35d0bbe097f17c29450b9e740829604f3e0db6fd61eb0f225aabb8448"
+          }
+        ],
+        "source_index": 67
+      },
+      {
+        "candidate_id": "curated-c76ee1cfee99f133b5fb",
+        "domain": "www.youjizz.com",
+        "observed_resource_url_count": 6,
+        "origin_hints": [
+          {
+            "origin": "https://cdne-pics.youjizz.com",
+            "url_count": 6,
+            "urls_sha256": "2b6208b3e509f10a97f60c24eb13f6e740e57ee76445090b591ef2e894907d5f"
+          }
+        ],
+        "source_index": 68
+      },
+      {
+        "candidate_id": "curated-6ce648ebafa1cff19530",
+        "domain": "www.zappos.com",
+        "observed_resource_url_count": 27,
+        "origin_hints": [
+          {
+            "origin": "https://assets.services.prod.kratos.zappos.com",
+            "url_count": 27,
+            "urls_sha256": "9566472421f56c5dd3e657c11f5fb744c9728b409331241592736970219ab3dc"
+          }
+        ],
+        "source_index": 69
+      },
+      {
+        "candidate_id": "curated-915a7193564f5e931cd8",
+        "domain": "xoilacxtb.tv",
+        "observed_resource_url_count": 34,
+        "origin_hints": [
+          {
+            "origin": "https://static.xoilacxba.tv",
+            "url_count": 22,
+            "urls_sha256": "874ba69fc109e63a6147800b2a6b76ecae4cf5d92a8e8e97dc5cc047fde49f1f"
+          },
+          {
+            "origin": "https://xoilacxba.tv",
+            "url_count": 12,
+            "urls_sha256": "95a73452cd76e621cede4e1bee51fb50a2f50a0402a64db9bd228c4bef55e421"
+          }
+        ],
+        "source_index": 70
+      },
+      {
+        "candidate_id": "curated-89a74a959bb9332aef60",
+        "domain": "xxxvideo.link",
+        "observed_resource_url_count": 69,
+        "origin_hints": [
+          {
+            "origin": "https://xlth1.xxxvideo.link",
+            "url_count": 15,
+            "urls_sha256": "b36610b0145b8d96da356089b036d3b071290a1eee0e10b31dd4ac885707e3fd"
+          },
+          {
+            "origin": "https://xlth2.xxxvideo.link",
+            "url_count": 6,
+            "urls_sha256": "935640e29a7317d9cc16e2e3db9de734a680160dd8c58993b491e959084735b4"
+          },
+          {
+            "origin": "https://xlth3.xxxvideo.link",
+            "url_count": 13,
+            "urls_sha256": "9c9cbccff2b8e82ceb3bef9bc55eeb8366494af9f903efe8271680b98693d366"
+          },
+          {
+            "origin": "https://xxxvideo.link",
+            "url_count": 35,
+            "urls_sha256": "89343be3f5ca58c23dff4391cc5fd185f3b294ae72eda2d4edea3a4957a9ba89"
+          }
+        ],
+        "source_index": 71
+      },
+      {
+        "candidate_id": "curated-c3afd8a4ffc95195efe4",
+        "domain": "zbporn.tv",
+        "observed_resource_url_count": 11,
+        "origin_hints": [
+          {
+            "origin": "https://cdnth.zbporn.tv",
+            "url_count": 11,
+            "urls_sha256": "3a1668aa44cd35393e0d3ce6effcf6b4ee0ed23bdbf19c8ee446a88ca58a9aad"
+          }
+        ],
+        "source_index": 72
+      },
+      {
+        "candidate_id": "curated-8244ebdfbb0beb3aa9bd",
+        "domain": "zerolifestyle.co",
+        "observed_resource_url_count": 180,
+        "origin_hints": [
+          {
+            "origin": "https://cdn.shopify.com",
+            "url_count": 14,
+            "urls_sha256": "006d1c821f27f25e2b1982f2c49e73b3b42def3a4152f3d5aa5dd1ab7804944a"
+          },
+          {
+            "origin": "https://zerolifestyle.co",
+            "url_count": 166,
+            "urls_sha256": "3d729e8490a72b9d5b1bce9913ffa0c315ae19db24e273b59d21a80602b77743"
+          }
+        ],
+        "source_index": 73
+      }
+    ],
+    "domain_safety_policy": {
+      "policy": "frozen-domain-safety-deny-v2",
+      "sha256": "ab087e57ecc61e8bf200522f4f4a3f9d582fc20774c4cf661abd25c364b5f13c"
+    },
+    "observed_resource_url_count": 5507,
+    "ordering_policy": "source-order-no-rank-eligibility-or-resource-filter-v1",
+    "pre_browser_safety_matches": [
+      {
+        "domain": "bookmark.xxx",
+        "reason": "domain-safety-policy-rejected:xxx"
+      },
+      {
+        "domain": "doradobet.com",
+        "reason": "domain-safety-policy-rejected:bet"
+      },
+      {
+        "domain": "es.anysex.com",
+        "reason": "domain-safety-policy-rejected:sex"
+      },
+      {
+        "domain": "incontriamoci.xxx",
+        "reason": "domain-safety-policy-rejected:xxx"
+      },
+      {
+        "domain": "pornone.com",
+        "reason": "domain-safety-policy-rejected:porn"
+      },
+      {
+        "domain": "xxxvideo.link",
+        "reason": "domain-safety-policy-rejected:xxx"
+      },
+      {
+        "domain": "zbporn.tv",
+        "reason": "domain-safety-policy-rejected:porn"
+      }
+    ],
+    "source_byte_count": 536980,
+    "source_format": "crux-domain-resources-v1",
+    "source_sha256": "548e4718cbc20e70e391e36206cb0285327da4c78434039ffb616d83b98d068b"
+  },
+  "payload_sha256": "6208ddedb668a80a3361b8a9b2db3307680c0c75636bb4e636485551da275817",
+  "receipt_type": "qcsd-curated-domain-source",
+  "schema_version": 1
+}
