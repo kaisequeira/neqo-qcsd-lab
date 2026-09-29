@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -13,6 +15,9 @@ from qcsd_lab.acquisition_timing import (
     MAX_CANDIDATES_PER_ACTION,
     MINIMUM_BASELINE_SPACING_MS,
     SERIAL_ACTION_START_OFFSETS_MS,
+    SHORT_STABILITY_WINDOW_EARLIEST_OFFSETS_MS,
+    SHORT_TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT,
+    SHORT_TERMINAL_RELEASE_DELAY_MS,
     STABILITY_WINDOW_EARLIEST_OFFSETS_MS,
     TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT,
     baseline_is_safe,
@@ -194,6 +199,100 @@ def test_terminal_release_contract_preserves_historical_bounds_and_projection() 
     assert current["strict_serial_zero_duration_projection"] is not (
         BASELINE_SCHEDULING_CONTRACT["strict_serial_zero_duration_projection"]
     )
+
+
+def test_short_terminal_release_is_causal_and_keeps_unresolved_reservations() -> None:
+    start = datetime(2026, 9, 4, tzinfo=UTC)
+    terminal = start + timedelta(minutes=5)
+    short = BaselineReservation(start, terminal, SHORT_TERMINAL_RELEASE_DELAY_MS)
+    unresolved = BaselineReservation(start, None, SHORT_TERMINAL_RELEASE_DELAY_MS)
+    release = terminal + timedelta(minutes=1)
+
+    assert SHORT_TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT[
+        "reservation_release_delay_ms"
+    ] == 60_000
+    assert SHORT_TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT[
+        "window_start_reservation_ms"
+    ] == MINIMUM_BASELINE_SPACING_MS
+    assert SHORT_TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT[
+        "longest_probe_window_width_ms"
+    ] == 1_830_000
+    assert short.released_at == release
+    assert unresolved.released_at is None
+    assert baseline_is_safe_with_releases(
+        release - timedelta(microseconds=1), (short,), short_window=True
+    ) is False
+    assert baseline_is_safe_with_releases(release, (short,), short_window=True) is True
+    assert earliest_safe_baseline_with_releases(
+        start, (short,), short_window=True
+    ) == release
+    assert earliest_safe_baseline_with_releases(
+        start, (unresolved,), short_window=True
+    ) == start + timedelta(milliseconds=MINIMUM_BASELINE_SPACING_MS)
+    assert BaselineReservation(start, terminal).released_at == (
+        terminal + timedelta(milliseconds=MINIMUM_BASELINE_SPACING_MS)
+    )
+    with pytest.raises(ValueError, match="serial scheduling contract"):
+        validate_baseline_schedule_with_releases(
+            (
+                short,
+                BaselineReservation(
+                    release - timedelta(microseconds=1),
+                    release - timedelta(microseconds=1) + timedelta(minutes=5),
+                    SHORT_TERMINAL_RELEASE_DELAY_MS,
+                ),
+            ),
+            short_window=True,
+        )
+    validate_baseline_schedule_with_releases(
+        (short, BaselineReservation(release, None, SHORT_TERMINAL_RELEASE_DELAY_MS)),
+        short_window=True,
+    )
+
+
+def test_short_terminal_release_projection_requires_earliest_scientific_terminals() -> None:
+    start = datetime(2026, 9, 4, tzinfo=UTC)
+    terminal_offset = timedelta(milliseconds=SHORT_STABILITY_WINDOW_EARLIEST_OFFSETS_MS[-1])
+    reservations: list[BaselineReservation] = []
+    selected = start
+    for _ in range(60):
+        selected = earliest_safe_baseline_with_releases(
+            selected, reservations, short_window=True
+        )
+        reservations.append(
+            BaselineReservation(
+                selected, selected + terminal_offset, SHORT_TERMINAL_RELEASE_DELAY_MS
+            )
+        )
+    validate_baseline_schedule_with_releases(reservations, short_window=True)
+    assert selected + terminal_offset - start == timedelta(hours=5, minutes=29)
+    assert SHORT_TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT[
+        "strict_serial_zero_duration_projection"
+    ]["last_t+5m_earliest_offset_ms"] == 98_940_000
+    # A real terminal at the nominal five-minute point shifts each release.
+    nominal_reservations: list[BaselineReservation] = []
+    nominal = start
+    for _ in range(60):
+        nominal = earliest_safe_baseline_with_releases(
+            nominal, nominal_reservations, short_window=True
+        )
+        nominal_reservations.append(
+            BaselineReservation(
+                nominal, nominal + timedelta(minutes=5), SHORT_TERMINAL_RELEASE_DELAY_MS
+            )
+        )
+    assert nominal + timedelta(minutes=5) - start == timedelta(hours=5, minutes=59)
+
+
+def test_short_release_contract_matches_preregistered_study() -> None:
+    study_path = Path(__file__).resolve().parents[1] / "config/class-study/v1/study.json"
+    study = json.loads(study_path.read_text(encoding="utf-8"))
+    assert study["page_admission"]["baseline_scheduling_contract"] == (
+        SHORT_TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT
+    )
+    assert study["page_admission"]["acquisition_selection_contract"][
+        "all_survivor_120_candidate_zero_duration_projection_ms"
+    ] == 19_740_000
 
 
 def test_120_candidate_60_batch_ideal_projection_preserves_all_survivor_schedule() -> None:

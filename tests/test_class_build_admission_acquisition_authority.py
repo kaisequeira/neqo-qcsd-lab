@@ -8,6 +8,7 @@ import pytest
 
 from qcsd_lab import browser_egress_qualification as browser_producer
 from qcsd_lab import class_acquisition as acquisition_producer
+from qcsd_lab import class_attestation as attestation_producer
 from qcsd_lab import class_build_admission as admission
 from qcsd_lab import pinned_cdp as pinned_cdp_producer
 from qcsd_lab.class_build_admission import _parser, resolve_action_admission
@@ -147,7 +148,13 @@ def test_standalone_browser_schema_constants_match_the_producer() -> None:
         browser_producer.HISTORICAL_FOUNDATION_SCHEMA_VERSIONS
     )
     assert admission._BROWSER_EGRESS_FINAL_SCHEMA == browser_producer.FINAL_SCHEMA_VERSION
-    assert admission._ACQUISITION_SCHEMA == acquisition_producer.SCHEMA_VERSION == 9
+    assert admission._ACQUISITION_SCHEMA == acquisition_producer.SCHEMA_VERSION == 10
+    assert admission._V127_ACQUISITION_AUTHORITY_COHORT == (
+        attestation_producer._V127_ACQUISITION_AUTHORITY_COHORT_VERSION
+    )
+    assert admission._V127_ACQUISITION_AUTHORITY_SHA256 == (
+        attestation_producer._V127_ACQUISITION_AUTHORITY_SHA256
+    )
     assert (
         admission._ACQUISITION_COMPLETION_SCHEMA
         == acquisition_producer.COMPLETION_SCHEMA_VERSION
@@ -341,7 +348,7 @@ def test_current_completion_uses_bound_provenance_and_authority(authority_fixtur
     ) == fixture.admitted
 
 
-@pytest.mark.parametrize("schema", (1, 2, 3, 4, 5, 6, 7))
+@pytest.mark.parametrize("schema", (1, 2, 3, 4, 5, 6, 7, 8, 9))
 def test_legacy_acquisition_is_inspectable_but_not_current_launch_authority(
     authority_fixture, schema: int
 ) -> None:
@@ -353,6 +360,26 @@ def test_legacy_acquisition_is_inspectable_but_not_current_launch_authority(
     assert _resolve(fixture, "status", acquisition_root=fixture.acquisition) is None
     with pytest.raises(ValueError, match="historical"):
         _resolve(fixture, "acquisition-run", acquisition_root=fixture.acquisition)
+
+
+def test_schema_nine_completion_is_verify_only_and_cannot_publish_cohort(
+    authority_fixture,
+) -> None:
+    fixture = authority_fixture
+    _rewrite(
+        fixture.acquisition / "provenance.json",
+        lambda payload: payload.update(acquisition_schema_version=9),
+    )
+    _rewrite(
+        fixture.acquisition_completion,
+        lambda payload: payload.update(
+            acquisition_schema_version=9,
+            provenance_sha256=sha256_file(fixture.acquisition / "provenance.json"),
+        ),
+    )
+    assert _resolve(fixture, "verify", target=fixture.acquisition_completion) is None
+    with pytest.raises(admission._HistoricalAuthority, match="historical"):
+        _resolve(fixture, "cohort", acquisition_completion=fixture.acquisition_completion)
 
 
 @pytest.mark.parametrize(
@@ -446,6 +473,26 @@ def test_v96_authority_is_verify_only_and_never_current_admission(authority_fixt
             "acquisition-init",
             acquisition_authority=fixture.authority,
         )
+
+
+def test_exact_v127_authority_is_verify_only_after_study_amendment(
+    authority_fixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = authority_fixture
+    monkeypatch.setattr(admission, "_V127_ACQUISITION_AUTHORITY_COHORT", 62)
+    monkeypatch.setattr(
+        admission, "_V127_ACQUISITION_AUTHORITY_SHA256", sha256_file(fixture.authority)
+    )
+    study = fixture.root / "config/class-study/v1/study.json"
+    study.write_text("prospective amended study\n", encoding="utf-8")
+
+    assert _resolve(fixture, "verify", target=fixture.authority) is None
+    with pytest.raises(admission._HistoricalAuthority, match="verify-only"):
+        _resolve(fixture, "acquisition-init", acquisition_authority=fixture.authority)
+
+    _rewrite(fixture.authority, lambda payload: payload.update(no_waivers=False))
+    with pytest.raises(ValueError):
+        _resolve(fixture, "verify", target=fixture.authority)
 
 
 def test_v102_pinned_cdp_contract_is_verify_only_and_never_current_admission(

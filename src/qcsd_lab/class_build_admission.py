@@ -107,9 +107,15 @@ _WORKLOAD_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 
 _FOUNDATION_SCHEMA = 4
 _READINESS_SCHEMA = 3
-_ACQUISITION_SCHEMA = 9
+_ACQUISITION_SCHEMA = 10
 _ACQUISITION_COMPLETION_SCHEMA = 4
 _ACQUISITION_CHECKPOINT_SCHEMA = 3
+# The exact pre-amendment v127 authority is inspection-only.  The host gate
+# must recognise it before comparing its frozen study binding to the new file.
+_V127_ACQUISITION_AUTHORITY_COHORT = 127
+_V127_ACQUISITION_AUTHORITY_SHA256 = (
+    "081dd3d0f11e656079e9988883b2f2cc36d99b3c363559f66560a9f5a163f60f"
+)
 _EVALUATION_SCHEMA = 2
 _SUCCESSOR_DECISION_SCHEMA = 3
 _SUCCESSOR_RESTART_SCHEMA = 2
@@ -350,6 +356,16 @@ def _sha256(path: Path) -> str:
         while block := source.read(1024 * 1024):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _is_v127_historical_acquisition_authority(
+    path: Path, payload: Mapping[str, Any]
+) -> bool:
+    return (
+        type(payload.get("cohort_version")) is int
+        and payload["cohort_version"] == _V127_ACQUISITION_AUTHORITY_COHORT
+        and _sha256(path) == _V127_ACQUISITION_AUTHORITY_SHA256
+    )
 
 
 def _under_root(root: Path, raw: str | os.PathLike[str], *, label: str) -> Path:
@@ -870,12 +886,14 @@ class _Resolver:
     def acquisition_authority(self, raw: str | os.PathLike[str]) -> BuildAdmission:
         """Resolve acquisition-only proof without accepting it as a foundation."""
 
-        _path, _value, payload = _envelope(
+        path, _value, payload = _envelope(
             self.root,
             raw,
             label="class acquisition authority",
             expected_type=_ACQUISITION_AUTHORITY,
         )
+        if _is_v127_historical_acquisition_authority(path, payload):
+            raise _HistoricalAuthority("v127 class acquisition authority is verify-only")
         evidence = payload.get("evidence")
         cohort = payload.get("cohort_version")
         if (
@@ -2955,6 +2973,8 @@ class _Resolver:
             current = _FOUNDATION_SCHEMA if receipt_type == _FOUNDATION else _READINESS_SCHEMA
             return type(schema) is int and schema < current
         if receipt_type == _ACQUISITION_AUTHORITY:
+            if _is_v127_historical_acquisition_authority(_path, payload):
+                return True
             evidence = payload.get("evidence")
             if not isinstance(evidence, Mapping):
                 return False

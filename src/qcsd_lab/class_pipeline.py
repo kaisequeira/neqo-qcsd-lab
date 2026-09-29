@@ -31,6 +31,7 @@ from .acquisition_timing import (
     GLOBAL_LIVE_PAGE_CAP,
     MAX_CANDIDATES_PER_ACTION,
     RUN_WAIT_POLICY,
+    SHORT_RUN_WAIT_POLICY,
 )
 from .chaff_qualification import (
     CLASS_STUDY_QUALIFICATION_SCHEMA_VERSION,
@@ -48,6 +49,8 @@ from .chaff_qualification import (
 )
 from .class_campaigns import CAPTURE_LIMITS, campaign_documents, validate_campaign_documents
 from .class_catalogue import (
+    SHORT_STABILITY_ACQUISITION_EVIDENCE_SCHEMA_VERSION,
+    SHORT_STABILITY_PROBE_WINDOWS,
     STABILITY_PROBE_WINDOWS,
     STABILITY_RECEIPT_TYPE,
     PageCandidate,
@@ -99,6 +102,7 @@ from .class_layout import (
     PILOT_COHORT_FILENAME,
     canonical_campaign_reference,
     class_study_layout,
+    require_canonical_acquisition_root,
     require_canonical_campaign_reference,
     require_canonical_fresh_child,
     require_canonical_fresh_path,
@@ -343,19 +347,24 @@ class CohortAdmission:
 ACQUISITION_RUN_WAIT_POLICY = dict(RUN_WAIT_POLICY)
 
 
-def stability_gate() -> dict[str, Any]:
-    """Return the exact, human-readable three-window admission contract."""
+def stability_gate(*, short_window: bool = False) -> dict[str, Any]:
+    """Return the exact, human-readable admission contract."""
 
+    windows = SHORT_STABILITY_PROBE_WINDOWS if short_window else STABILITY_PROBE_WINDOWS
     return {
-        "required_windows": [window.as_dict() for window in STABILITY_PROBE_WINDOWS],
-        "labels": [window.probe_id for window in STABILITY_PROBE_WINDOWS],
-        "all_three_required_per_page_receipt": True,
+        "required_windows": [window.as_dict() for window in windows],
+        "labels": [window.probe_id for window in windows],
+        **(
+            {"all_required_per_page_receipt": True, "profile": "t+30s-and-t+5m"}
+            if short_window
+            else {"all_three_required_per_page_receipt": True}
+        ),
         "acquisition_owner": "resumable-qcsd-class-study-production-runner",
         "batching": {
             "maximum_candidates_per_action": MAX_CANDIDATES_PER_ACTION,
             "global_live_page_cap": GLOBAL_LIVE_PAGE_CAP,
         },
-        "runner_wait_policy": dict(ACQUISITION_RUN_WAIT_POLICY),
+        "runner_wait_policy": dict(SHORT_RUN_WAIT_POLICY if short_window else ACQUISITION_RUN_WAIT_POLICY),
     }
 
 
@@ -368,7 +377,7 @@ def acquire_stability_receipt(
     baseline_started_at: str,
     probe: ProbeCallback,
 ) -> Path:
-    """Run an injected three-window callback and publish one immutable receipt.
+    """Run the historical three-window callback and publish one immutable receipt.
 
     The callback owns sleeping and browser/preparation execution.  This bridge
     supplies the fixed schedule and converts typed observations into the exact
@@ -408,10 +417,10 @@ def admit_stability_observation_batch(
         raise ValueError("stability observation batch page is invalid")
     page = PageCandidate(**dict(raw_page))
     raw_observations = batch["observations"]
-    if not isinstance(raw_observations, list) or len(raw_observations) != len(
-        STABILITY_PROBE_WINDOWS
-    ):
-        raise ValueError("stability observation batch requires exactly three observations")
+    if not isinstance(raw_observations, list) or len(raw_observations) not in {
+        len(STABILITY_PROBE_WINDOWS), len(SHORT_STABILITY_PROBE_WINDOWS)
+    }:
+        raise ValueError("stability observation batch has an invalid observation count")
     observations: list[StabilityObservation] = []
     for raw in raw_observations:
         if not isinstance(raw, Mapping) or set(raw) != _OBSERVATION_KEYS:
@@ -424,6 +433,7 @@ def admit_stability_observation_batch(
         page=page,
         baseline_started_at=batch["baseline_started_at"],
         observations=tuple(observations),
+        short_window=len(observations) == len(SHORT_STABILITY_PROBE_WINDOWS),
     )
 
 
@@ -435,6 +445,7 @@ def admit_stability_observations(
     page: PageCandidate,
     baseline_started_at: str,
     observations: Sequence[StabilityObservation],
+    short_window: bool = False,
 ) -> Path:
     """Build and idempotently publish one evidence-bound page receipt."""
 
@@ -456,6 +467,7 @@ def admit_stability_observations(
         tranco_list_sha256=payload["tranco"]["list_sha256"],
         baseline_started_at=baseline_started_at,
         observations=tuple(observations),
+        short_window=short_window,
     )
     root = _regular_directory(stability_root, "stability receipt root")
     candidate_root = root / candidate_id
@@ -500,6 +512,7 @@ def stability_status(
             + ", ".join(unknown)
         )
     receipt_count = 0
+    receipt_profiles: set[bool] = set()
     eligible_receipts = 0
     candidate_count = 0
     candidates_with_eligible_page = 0
@@ -523,6 +536,10 @@ def stability_status(
         for index, path in entries:
             value, decision = load_stability_receipt(path)
             payload = validate_hash_bound_receipt(value, expected_type=STABILITY_RECEIPT_TYPE)
+            receipt_profiles.add(
+                payload.get("acquisition_evidence_schema_version")
+                == SHORT_STABILITY_ACQUISITION_EVIDENCE_SCHEMA_VERSION
+            )
             if (
                 payload["candidate"]["candidate_id"] != candidate_id
                 or payload["candidate"]["domain"] != by_id[candidate_id].domain
@@ -540,9 +557,11 @@ def stability_status(
                 eligible_receipts += 1
                 any_eligible = True
         candidates_with_eligible_page += int(any_eligible)
+    if len(receipt_profiles) > 1:
+        raise ValueError("stability root mixes historical and short-window receipt profiles")
     return {
         "valid": True,
-        "gate": stability_gate(),
+        "gate": stability_gate(short_window=receipt_profiles != {False}),
         "prospective_candidates": len(candidates),
         "candidates_with_receipts": candidate_count,
         "candidates_without_receipts": len(candidates) - candidate_count,
@@ -1381,7 +1400,7 @@ def class_study_status(
         )
     stages["stability"] = {
         "state": "absent",
-        "gate": stability_gate(),
+        "gate": stability_gate(short_window=True),
     }
     if candidate_catalogue_path is not None:
         _receipt, candidates = load_candidate_catalogue_receipt(candidate_catalogue_path)
@@ -1399,12 +1418,12 @@ def class_study_status(
         stages["catalogue"] = {"state": "absent"}
 
     if acquisition_root is None:
-        stages["acquisition_runner"] = {"state": "absent", "gate": stability_gate()}
+        stages["acquisition_runner"] = {"state": "absent", "gate": stability_gate(short_window=True)}
     elif candidate_catalogue_path is None:
         stages["acquisition_runner"] = {
             "state": "unverified",
             "reason": "acquisition runner status requires the candidate catalogue",
-            "gate": stability_gate(),
+            "gate": stability_gate(short_window=True),
         }
     else:
         from . import class_acquisition
@@ -1417,7 +1436,10 @@ def class_study_status(
             **runner_status,
             "state": "unverified",
             "root": str(Path(acquisition_root).resolve()),
-            "gate": stability_gate(),
+            "gate": stability_gate(
+                short_window=runner_status.get("acquisition_schema_version")
+                == class_acquisition.SCHEMA_VERSION
+            ),
             "authoritative": False,
         }
         if acquisition_gate is None:
@@ -2143,7 +2165,10 @@ def run_class_study_action(
                 {
                     "valid": True,
                     "runner_root": str(Path(runner).resolve()),
-                    "gate": stability_gate(),
+                    "gate": stability_gate(
+                        short_window=provenance["acquisition_schema_version"]
+                        == class_acquisition.SCHEMA_VERSION
+                    ),
                     "authoritative": False,
                     "gate_verification": {
                         (
@@ -2194,7 +2219,7 @@ def run_class_study_action(
                     "valid": True,
                     "runner_root": str(Path(runner).resolve()),
                     "bounded_candidates": acquisition_max_candidates,
-                    "runner_wait_policy": dict(ACQUISITION_RUN_WAIT_POLICY),
+                    "runner_wait_policy": dict(SHORT_RUN_WAIT_POLICY),
                 }
             )
             return ClassStudyActionResult(
@@ -2211,8 +2236,8 @@ def run_class_study_action(
                     )
                     if details.get("work_due_now") is True
                     else (
-                        "rerun when next_due is reached; the host watcher waits between "
-                        "the t+24h and t+72h probe actions"
+                        "rerun when next_due is reached; the host watcher waits for "
+                        "the next navigation or baseline action"
                     ),
                 ),
             )
@@ -5416,9 +5441,8 @@ def _validate_fresh_layout_arguments(
             label="candidate catalogue",
         )
     if acquisition_root is not None:
-        require_canonical_fresh_path(
+        require_canonical_acquisition_root(
             acquisition_root,
-            field="acquisition_root",
             label="acquisition root",
         )
     if stability_root is not None:
@@ -6262,7 +6286,7 @@ def _next_required_stage(
     ):
         return "source-browser-preparation-acquisition-authority"
     if stages["acquisition_completion"]["state"] != "verified":
-        return "complete-30s-24h-72h-acquisition"
+        return "complete-30s-and-5m-two-replay-acquisition"
     if stages["pilot_cohort"]["state"] != "verified":
         return "pilot-selection-and-assembly-freeze"
     if stages["foundation"]["state"] != "verified":

@@ -86,7 +86,10 @@ These repository-local rules apply throughout `neqo-qcsd-lab/`.
   paths through [docs/EVIDENCE-INDEX.md](docs/EVIDENCE-INDEX.md).
 - If a client/Lab/defence defect appears during the campaign, diagnose and fix
   it within client-only scope, preserve the failed cohort, validate the fix,
-  and restart under a fresh cohort. Do not weaken an acceptance gate.
+  and restart under a fresh cohort. Do not weaken a gate to conceal a failed
+  attempt. An explicitly authorised study redesign must be prospective,
+  versioned, tested and bound to new source and evidence; old receipts remain
+  verifiable on their historical contract and gain no new authority.
 
 ## Validation and claims
 

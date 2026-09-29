@@ -41,6 +41,7 @@ STABILITY_RECEIPT_TYPE = "qcsd-class-study-page-stability"
 CANDIDATE_RECEIPT_TYPE = "qcsd-class-study-candidate-catalogue"
 CATALOGUE_SCHEMA_VERSION = 1
 STABILITY_ACQUISITION_EVIDENCE_SCHEMA_VERSION = 3
+SHORT_STABILITY_ACQUISITION_EVIDENCE_SCHEMA_VERSION = 4
 HISTORICAL_STABILITY_ACQUISITION_EVIDENCE_SCHEMA_VERSION = 2
 
 MAX_DISCOVERED_PAGES = 4
@@ -149,6 +150,14 @@ STABILITY_PROBE_WINDOWS = (
     ProbeWindow("t+30s", 30_000, 25_000, 35_000),
     ProbeWindow("t+24h", 86_400_000, 85_500_000, 87_300_000),
     ProbeWindow("t+72h", 259_200_000, 258_300_000, 260_100_000),
+)
+# Prospective accelerated admission compares two complete prepared replays.
+# The first starts near t+30s; the second starts no earlier than t+4m30s.
+# A broad second window accommodates the bounded first action without treating
+# an arbitrary later observation as the scheduled repeat.
+SHORT_STABILITY_PROBE_WINDOWS = (
+    STABILITY_PROBE_WINDOWS[0],
+    ProbeWindow("t+5m", 300_000, 270_000, 2_100_000),
 )
 
 
@@ -782,8 +791,9 @@ def collect_stability_observations(
     page: PageCandidate,
     *,
     probe: ProbeCallback,
+    short_window: bool = False,
 ) -> tuple[StabilityObservation, ...]:
-    """Invoke an explicit acquisition callback for the three fixed windows.
+    """Invoke an explicit acquisition callback for the selected fixed windows.
 
     The callback owns sleeping, HTTP/browser execution, workload preparation,
     and capture.  This function merely supplies the immutable schedule and
@@ -793,8 +803,9 @@ def collect_stability_observations(
     validate_page_candidate(page)
     if not callable(probe):
         raise ValueError("stability probe callback must be callable")
-    observations = tuple(probe(page, window) for window in STABILITY_PROBE_WINDOWS)
-    _validate_observation_shapes(observations)
+    windows = SHORT_STABILITY_PROBE_WINDOWS if short_window else STABILITY_PROBE_WINDOWS
+    observations = tuple(probe(page, window) for window in windows)
+    _validate_observation_shapes(observations, windows=windows)
     return observations
 
 
@@ -803,18 +814,20 @@ def derive_stability_decision(
     *,
     baseline_started_at: str,
     observations: Sequence[StabilityObservation],
+    short_window: bool = False,
 ) -> StabilityDecision:
-    """Apply the exact three-probe timing, acquisition, and drift gates."""
+    """Apply the selected timing, acquisition, and drift gates."""
 
     validate_page_candidate(page)
     baseline = _parse_utc_timestamp(baseline_started_at, label="stability baseline timestamp")
     values = tuple(observations)
-    _validate_observation_shapes(values)
+    windows = SHORT_STABILITY_PROBE_WINDOWS if short_window else STABILITY_PROBE_WINDOWS
+    _validate_observation_shapes(values, windows=windows)
 
     reasons: list[str] = []
     signatures: list[dict[str, Any]] = []
     previous_observed: datetime | None = None
-    for window, observation in zip(STABILITY_PROBE_WINDOWS, values, strict=True):
+    for window, observation in zip(windows, values, strict=True):
         observed = _parse_utc_timestamp(
             observation.observed_at,
             label=f"{window.probe_id} observation timestamp",
@@ -893,8 +906,7 @@ def derive_stability_decision(
             _add_reason(reasons, reason)
     # The full prepared manifest includes per-run packet qualification and
     # provenance, so its byte hash is not a longitudinal identity.  The first
-    # probe is the immutable workload admitted after the independently stable
-    # replay graph and response identities pass all three windows.
+    # probe is the immutable workload admitted after the selected window contract.
     stable = signatures[0] if not reasons else None
     return StabilityDecision(not reasons, tuple(reasons), stable)
 
@@ -907,6 +919,7 @@ def build_stability_receipt(
     tranco_list_sha256: str,
     baseline_started_at: str,
     observations: Sequence[StabilityObservation],
+    short_window: bool = False,
 ) -> dict[str, Any]:
     """Build one hash-bound stability receipt without writing it."""
 
@@ -922,6 +935,7 @@ def build_stability_receipt(
         page,
         baseline_started_at=baseline_started_at,
         observations=frozen_observations,
+        short_window=short_window,
     )
     payload = _stability_payload(
         candidate,
@@ -931,6 +945,7 @@ def build_stability_receipt(
         baseline_started_at=baseline_started_at,
         observations=frozen_observations,
         decision=decision,
+        short_window=short_window,
     )
     return bind_receipt(payload, receipt_type=STABILITY_RECEIPT_TYPE)
 
@@ -961,8 +976,11 @@ def validate_stability_receipt(value: Mapping[str, Any]) -> StabilityDecision:
         None,
         HISTORICAL_STABILITY_ACQUISITION_EVIDENCE_SCHEMA_VERSION,
         STABILITY_ACQUISITION_EVIDENCE_SCHEMA_VERSION,
+        SHORT_STABILITY_ACQUISITION_EVIDENCE_SCHEMA_VERSION,
     }:
         raise ValueError("stability receipt acquisition-evidence schema is invalid")
+    short_window = evidence_schema == SHORT_STABILITY_ACQUISITION_EVIDENCE_SCHEMA_VERSION
+    windows = SHORT_STABILITY_PROBE_WINDOWS if short_window else STABILITY_PROBE_WINDOWS
     candidate = _candidate_from_identity(payload["candidate"])
     page = _page_candidate_from_dict(payload["page"])
     if candidate.domain != page.candidate_domain:
@@ -972,7 +990,7 @@ def validate_stability_receipt(value: Mapping[str, Any]) -> StabilityDecision:
         raise ValueError("stability receipt Tranco binding is invalid")
     _validate_list_id(tranco["list_id"])
     _validate_sha256(tranco["list_sha256"], label="Tranco list SHA-256")
-    if payload["probe_schedule"] != [window.as_dict() for window in STABILITY_PROBE_WINDOWS]:
+    if payload["probe_schedule"] != [window.as_dict() for window in windows]:
         raise ValueError("stability receipt probe schedule differs from the contract")
     raw_observations = payload["observations"]
     if not isinstance(raw_observations, list):
@@ -982,6 +1000,7 @@ def validate_stability_receipt(value: Mapping[str, Any]) -> StabilityDecision:
         page,
         baseline_started_at=payload["baseline_started_at"],
         observations=observations,
+        short_window=short_window,
     )
     expected_payload = _stability_payload(
         candidate,
@@ -991,6 +1010,7 @@ def validate_stability_receipt(value: Mapping[str, Any]) -> StabilityDecision:
         baseline_started_at=payload["baseline_started_at"],
         observations=observations,
         decision=decision,
+        short_window=short_window,
     )
     if payload != expected_payload:
         raise ValueError("stability receipt differs from the independently derived contract")
@@ -1069,11 +1089,14 @@ def _stability_payload(
     baseline_started_at: str,
     observations: Sequence[StabilityObservation],
     decision: StabilityDecision,
+    short_window: bool = False,
 ) -> dict[str, Any]:
     current_evidence = all(
         observation.document_response_receipt_sha256 is not None
         for observation in observations
     )
+    if short_window and not current_evidence:
+        raise ValueError("short-window stability requires current document-response evidence")
     historical_acquisition_evidence = all(
         observation.passive_render_contract_sha256 is not None
         for observation in observations
@@ -1084,7 +1107,9 @@ def _stability_payload(
         **(
             {
                 "acquisition_evidence_schema_version": (
-                    STABILITY_ACQUISITION_EVIDENCE_SCHEMA_VERSION
+                    SHORT_STABILITY_ACQUISITION_EVIDENCE_SCHEMA_VERSION
+                    if short_window
+                    else STABILITY_ACQUISITION_EVIDENCE_SCHEMA_VERSION
                 )
             }
             if current_evidence
@@ -1103,15 +1128,22 @@ def _stability_payload(
             "list_sha256": tranco_list_sha256,
         },
         "baseline_started_at": baseline_started_at,
-        "probe_schedule": [window.as_dict() for window in STABILITY_PROBE_WINDOWS],
+        "probe_schedule": [
+            window.as_dict()
+            for window in (SHORT_STABILITY_PROBE_WINDOWS if short_window else STABILITY_PROBE_WINDOWS)
+        ],
         "observations": [observation.as_dict() for observation in observations],
         "decision": decision.as_dict(),
     }
 
 
-def _validate_observation_shapes(observations: Sequence[StabilityObservation]) -> None:
-    if len(observations) != len(STABILITY_PROBE_WINDOWS):
-        raise ValueError("stability evidence must contain exactly three observations")
+def _validate_observation_shapes(
+    observations: Sequence[StabilityObservation],
+    *,
+    windows: Sequence[ProbeWindow] = STABILITY_PROBE_WINDOWS,
+) -> None:
+    if len(observations) != len(windows):
+        raise ValueError(f"stability evidence must contain exactly {len(windows)} observations")
     current_flags = {
         observation.passive_render_contract_sha256 is not None
         for observation in observations
@@ -1126,7 +1158,7 @@ def _validate_observation_shapes(observations: Sequence[StabilityObservation]) -
         raise ValueError("stability evidence mixes response-receipt schema versions")
     if response_receipt_flags == {True} and current_flags != {True}:
         raise ValueError("stability response receipts require discovery evidence")
-    for window, observation in zip(STABILITY_PROBE_WINDOWS, observations, strict=True):
+    for window, observation in zip(windows, observations, strict=True):
         if not isinstance(observation, StabilityObservation):
             raise ValueError("stability observations have the wrong type")
         if observation.probe_id != window.probe_id:

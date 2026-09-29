@@ -514,6 +514,41 @@ the user chose to retain the frozen 600-candidate Tranco catalogue for the
 formal acquisition path. The curated receipt remains separate input
 provenance and advances no acquisition numerator.
 
+## 29 September desktop v127 qualification and acquisition boundary
+
+Lab `1292ad6bfa14f17948e90979439456eb98cab29c` and Rust/Gitlink
+`e8575fd8e54921ed6ff867de475b4a734064866e` executed v127 on the
+restored desktop. The no-cache build receipt
+`artifacts/buflo-study/build-execution-v127.json` has SHA-256
+`41c69107bced914dd849bcdddbb6eec03a4871c679fc87f8c0cadd471accbfe3`;
+the pinned-CDP receipt has SHA-256
+`e2a8554a6b83a7c983511312e96dcfb2a65526428a8370a4672be3b34dc722dd`.
+The final browser receipt at
+`artifacts/buflo-study/browser-egress-qualification-v127/final.json` has
+SHA-256 `3ce592bf7c3f4b0832889cbf18f8eb2812adeeac743d8c0e8e3652bdc688d378`
+and independently verified all 110 packet-observed vectors with zero failures.
+The public-acquisition-only authority
+`artifacts/class-study-acquisition-authority-v127.json` has SHA-256
+`081dd3d0f11e656079e9988883b2f2cc36d99b3c363559f66560a9f5a163f60f`;
+its four hard gates passed without waivers. It was not full defense foundation.
+
+The next `acquisition-init` requested the create-only versioned root
+`artifacts/classifier-multiorigin100-v1-acquisition-v127`. The public wrapper
+accepted that form, but Python's layout validator required the unversioned
+canonical root, so initialization failed before creating the v127 root. The
+older unversioned v126 checkpoint retained 600 pending candidate records,
+120 in its admission prefix, with no baseline batches and no eligible class.
+Its `checkpoint.json` SHA-256 is
+`7b97347a3d3472930ecabc0576130822d0413dcf74a84d2e30b0fa5bd6cc714c`
+and `provenance.json` SHA-256 is
+`b905bd4ef3ae748a88eab9eb9b4d5dd5effbdbcd0a770aa6976392e53d843a80`.
+V127 yielded **0/120 pilot classes and 0/16,000
+formal samples**. A prospective schema-10 amendment replaces the historical
+30-second, 24-hour and 72-hour acquisition observations with two genuine
+short-horizon prepared observations, while retaining complete graph comparison
+and new source-bound authority. The v127 receipts remain historical evidence
+on their recorded contract; they cannot authorize the changed source.
+
 ## Maintenance contract
 
 Future maintainers should append a dated, evidence-backed outcome after each

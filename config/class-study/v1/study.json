@@ -3,11 +3,11 @@
   "artifact_type": "qcsd-class-study-prospective-contract",
   "study_id": "classifier-multiorigin100-v1",
   "prospective_acquisition_amendment": {
-    "schema_version": 5,
-    "date": "2026-09-21",
+    "schema_version": 6,
+    "date": "2026-09-29",
     "scope": "new-source-bound-acquisition-only-no-historical-evidence-promotion",
-    "reason": "retire-the-v102-policy-v20-audit-v7-contract-and-bind-the-terminal-singleton-fetch-only-context-disposal-ping-outcome-before-new-public-page-acquisition",
-    "acquisition_schema_version": 9,
+    "reason": "prospectively-replace-the-three-day-stability-window-with-two-actual-prepared-replays-at-t+30s-and-t+5m-with-semantic-identity-comparison;preserve-all-previous-acquisition-evidence-as-historical-verify-only",
+    "acquisition_schema_version": 10,
     "checkpoint_schema_version": 3,
     "terminal_schema_version": 4,
     "completion_schema_version": 4,
@@ -55,6 +55,16 @@
       "discovery_event_audit_schema_version": 7,
       "cdp_target_instrumentation_policy": "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v20",
       "authority": "historical-verify-only-never-current-admission"
+    },
+    "retired_v127_contract": {
+      "acquisition_schema_version": 9,
+      "checkpoint_schema_version": 3,
+      "terminal_schema_version": 4,
+      "completion_schema_version": 4,
+      "pinned_cdp_probe_schema_version": 18,
+      "discovery_event_audit_schema_version": 8,
+      "stability_probe_profile": "t+30s-t+24h-t+72h",
+      "authority": "historical-verify-only-never-current-admission"
     }
   },
   "status": {
@@ -99,7 +109,8 @@
     "qualification_sets_root": "config/chaff-qualification-store/sets",
     "pilot_qualification_set_root": "config/chaff-qualification-store/sets/classifier-multiorigin100-v1-pilot120-full-v1",
     "final_qualification_set_root": "config/chaff-qualification-store/sets/classifier-multiorigin100-v1-final100-full-v1",
-    "fresh_path_policy": "exact-no-alternate-root-no-symlink-component",
+    "fresh_path_policy": "exact-except-acquisition-direct-vN-sibling-no-symlink-component",
+    "acquisition_root_versioned_sibling": "artifacts/classifier-multiorigin100-v1-acquisition-v[1-9][0-9]*",
     "campaign_to_study_reference_root": "../class-study/v1",
     "campaign_to_artifacts_reference_root": "../../artifacts",
     "frozen_result_policy": "sealed-result-inputs-are-validated-in-place-and-never-remapped-as-fresh-workspace-inputs"
@@ -286,47 +297,46 @@
       "interruption_recovery": "published-active-batch-attempts-become-interrupted-never-completed"
     },
     "baseline_scheduling_contract": {
-      "schema_version": 3,
-      "policy": "serial-terminal-released-stability-window-batch-reservations-v3",
-      "reservation_release": "all-batch-members-scientifically-terminal-plus-full-serial-reservation",
+      "schema_version": 4,
+      "policy": "serial-terminal-released-short-window-batch-reservations-v1",
+      "reservation_release": "all-batch-members-scientifically-terminal-plus-prospective-delay",
       "reservation_release_evidence": "latest-immutable-hash-bound-batch-member-terminalised-at",
-      "reservation_release_delay_ms": 2400000,
+      "reservation_release_delay_ms": 60000,
       "reservation_release_validation": "causal-at-each-recorded-baseline-start",
+      "scope_completion": "watcher-proves-prior-systemd-cgroup-empty-before-next-action",
       "infrastructure_failure_policy": "timeout-interruption-and-missed-window-block-not-site-ineligibility",
       "action_priority": "due-probes-before-new-baselines-and-navigation",
       "maximum_candidates_per_batch": 2,
       "global_live_page_cap": 5,
-      "minimum_baseline_spacing_ms": 2400000,
+      "minimum_baseline_spacing_ms": 60000,
       "window_start_reservation_ms": 2400000,
-      "longest_probe_window_width_ms": 1800000,
+      "longest_probe_window_width_ms": 1830000,
       "acquisition_outer_configured_hard_cutoff_ms": 2040000,
       "status_configured_hard_cutoff_ms": 310000,
       "scheduler_margin_ms": 50000,
       "navigation_phase": "separate-bounded-action-before-baseline",
-      "short_probe": "same-action-wait-until-t+30s-earliest",
-      "outer_probes": "watcher-launches-acquisition-run-at-window-earliest",
+      "short_probe": "two-same-action-replays-at-t+30s-and-t+5m-earliest",
+      "outer_probes": "none-both-replays-in-bounded-baseline-action",
       "within_batch_baseline": "one-equal-baseline-per-recorded-baseline-batch",
       "schedule_validation_unit": "baseline-batches-not-raw-candidate-timestamps",
       "unpaired_candidate_policy": "singleton-when-no-compatible-partner",
       "serial_action_start_offsets_ms": [
-        0,
-        85500000,
-        258300000
+        0
       ],
       "stability_window_earliest_offsets_ms": [
         25000,
-        85500000,
-        258300000
+        270000
       ],
-      "collision_scope": "baseline-arming-and-t+24h-t+72h-action-starts-across-batches",
+      "collision_scope": "baseline-arming-actions-across-batches-two-same-action-replays",
       "strict_serial_zero_duration_projection": {
         "candidate_count": 600,
         "maximum_candidates_per_batch": 2,
         "batch_count": 300,
         "pairing_assumption": "all-candidates-form-300-compatible-two-candidate-batches",
-        "algorithm": "greedy-earliest-safe-baseline-batches",
-        "last_baseline_offset_ms": 2784000000,
-        "last_t+72h_earliest_offset_ms": 3042300000
+        "terminal_assumption": "both-members-scientifically-terminal-at-t+5m-earliest",
+        "algorithm": "greedy-earliest-safe-baseline-batches-with-causal-terminal-release",
+        "last_baseline_offset_ms": 98670000,
+        "last_t+5m_earliest_offset_ms": 98940000
       }
     },
     "acquisition_selection_contract": {
@@ -339,8 +349,8 @@
       "unused_tail": "explicitly-unassessed-not-failed-no-invented-terminal-receipts",
       "infrastructure_and_missed_windows": "block-not-candidate-rejection",
       "active_or_interrupted_work": "must-terminalise-or-recover-before-completion",
-      "all_survivor_120_candidate_zero_duration_projection_ms": 658200000,
-      "projection_caveat": "not-wall-time-guarantee-rejections-and-real-execution-may-extend-duration-no-reduction-in-genuine-stability-windows"
+      "all_survivor_120_candidate_zero_duration_projection_ms": 19740000,
+      "projection_caveat": "conditional-on-all-120-surviving-and-each-paired-batch-terminalising-at-t+5m-earliest;not-wall-time-guarantee-rejections-status-and-real-execution-may-extend-duration;two-genuine-prepared-replays-are-required-per-admitted-page"
     },
     "resource_origin_policy": {
       "multi_origin_pages_allowed": true,
@@ -374,20 +384,14 @@
         "latest_ms": 35000
       },
       {
-        "id": "t+24h",
-        "target_ms": 86400000,
-        "earliest_ms": 85500000,
-        "latest_ms": 87300000
-      },
-      {
-        "id": "t+72h",
-        "target_ms": 259200000,
-        "earliest_ms": 258300000,
-        "latest_ms": 260100000
+        "id": "t+5m",
+        "target_ms": 300000,
+        "earliest_ms": 270000,
+        "latest_ms": 2100000
       }
     ],
     "stability_window_semantics": {
-      "registered_timestamp": "durably-checkpointed-network-observation-start",
+      "registered_timestamp": "durably-checkpointed-parallel-probe-batch-dispatch-not-per-worker-packet-start",
       "completion_timestamp": "probe_completed_at-recorded-separately",
       "retry_rule": "a-retry-must-start-within-the-same-window-and-records-its-actual-start-time",
       "retry_preparation_identity": "unique-durably-checkpointed-attempt-id-and-create-only-manifest;orphaned-manifests-cannot-be-relabelled"
@@ -414,7 +418,7 @@
     },
     "prepared_manifest_policy": {
       "all_probe_sha256s": "recorded-but-not-compared-as-the-longitudinal-identity",
-      "admitted_manifest": "first-t+30s-raw-prepared-manifest-after-all-three-semantic-stability-probes-pass",
+      "admitted_manifest": "first-t+30s-raw-prepared-manifest-after-both-semantic-prepared-replays-pass",
       "later_manifest_replacement": "forbidden"
     },
     "selection_inputs": [
@@ -621,7 +625,7 @@
     "pinned-tranco-receipt-and-deterministic-600-domain-candidate-catalogue",
     "fresh-no-cache-build-pinned-cdp-complete-browser-egress-and-acquisition-correctness-gates",
     "class-acquisition-authority-freeze",
-    "30s-24h-72h-public-page-acquisition-and-stability-evidence",
+    "30s-and-5m-public-page-acquisition-and-two-prepared-replay-stability-evidence",
     "pilot-selection-and-cohort-assembly-receipts-freeze",
     "full-reference-code-regression-controlled-foundation-freeze-before-any-class-study-capture",
     "pilot-fitting",

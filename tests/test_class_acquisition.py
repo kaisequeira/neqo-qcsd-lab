@@ -1323,7 +1323,7 @@ def test_runner_distinguishes_component_limits_from_whole_action_cutoffs(
         acquisition_module.ACTION_TIMING_CONTRACT
     )
     assert provenance["baseline_scheduling_contract"] == (
-        acquisition_module.TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT
+        acquisition_module.SHORT_TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT
     )
     assert "browser_discovery_attempt_budget_ms" not in provenance
     assert "pending_baseline_guard_ms" not in provenance["origin_policy"]
@@ -1725,6 +1725,9 @@ class BatchBackend:
         self.observed_at = observed_at
         self.page_counts = page_counts or {}
         self.runner = runner
+        if runner is not None:
+            (runner.parent / "stability").mkdir(exist_ok=True)
+            (runner.parent / "workloads").mkdir(exist_ok=True)
         self.navigation_barrier = navigation_barrier
         self.prepare_barrier = prepare_barrier
         self.interrupt_prefix = interrupt_prefix
@@ -1825,7 +1828,10 @@ class BatchBackend:
             )
             path.write_bytes(canonical_json_bytes(manifest))
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
-            observed_at = acquisition_module._format_time(self.observed_at)
+            completed_at = self.observed_at
+            if "-t5m-" in workload_id:
+                completed_at += timedelta(seconds=245)
+            observed_at = acquisition_module._format_time(completed_at)
             return PreparedProbe(
                 observed_at=observed_at,
                 final_url=url,
@@ -1860,6 +1866,28 @@ class BatchBackend:
             )
         finally:
             self._leave("prepare")
+
+
+def _stop_after_first_short_replay(
+    runner: Path,
+    *,
+    monkeypatch: pytest.MonkeyPatch,
+    arguments: dict,
+) -> None:
+    """Leave a durable live checkpoint between the two real v10 replays."""
+
+    original = acquisition_module._run_probe_batch
+
+    def stop(*args, **kwargs):
+        original(*args, **kwargs)
+        raise RuntimeError("fixture stops after first replay")
+
+    monkeypatch.setattr(acquisition_module, "_run_probe_batch", stop)
+    try:
+        with pytest.raises(RuntimeError, match="fixture stops"):
+            run_due_acquisition(runner, **arguments)
+    finally:
+        monkeypatch.setattr(acquisition_module, "_run_probe_batch", original)
 
 
 class NoNetworkBackend:
@@ -2380,7 +2408,7 @@ def test_five_page_pair_uses_one_baseline_and_never_exceeds_global_cap(
     ]
     assert backend.prepare_live_max == GLOBAL_LIVE_PAGE_CAP
     probe_snapshots = [active for active in backend.active_snapshots if active["stage"] == "probe"]
-    assert len(probe_snapshots) == GLOBAL_LIVE_PAGE_CAP
+    assert len(probe_snapshots) == 2 * GLOBAL_LIVE_PAGE_CAP
     assert all(
         active["candidate_ids"] == expected_ids
         and active["live_page_count"] == GLOBAL_LIVE_PAGE_CAP
@@ -2392,7 +2420,7 @@ def test_five_page_pair_uses_one_baseline_and_never_exceeds_global_cap(
         == GLOBAL_LIVE_PAGE_CAP
     )
     assert all(
-        len(page["observations"]) == 1
+        len(page["observations"]) == 2
         for candidate_id in expected_ids
         for page in payload["candidates"][candidate_id]["pages"]
     )
@@ -2426,7 +2454,7 @@ def test_five_page_pair_uses_one_baseline_and_never_exceeds_global_cap(
 
 
 def test_schema4_live_probing_state_rejects_rebound_structure_and_observations(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     catalogue = _catalogue(tmp_path / "catalogue.json")
     runner = initialise_runner(
@@ -2452,7 +2480,16 @@ def test_schema4_live_probing_state_rejects_rebound_structure_and_observations(
         "max_candidates": 1,
     }
     run_due_acquisition(runner, **arguments)
-    run_due_acquisition(runner, **arguments)
+    original_probe_batch = acquisition_module._run_probe_batch
+
+    def stop_after_first_prepared_replay(*args, **kwargs):
+        original_probe_batch(*args, **kwargs)
+        raise RuntimeError("fixture stops before the second replay")
+
+    monkeypatch.setattr(acquisition_module, "_run_probe_batch", stop_after_first_prepared_replay)
+    with pytest.raises(RuntimeError, match="fixture stops"):
+        run_due_acquisition(runner, **arguments)
+    monkeypatch.setattr(acquisition_module, "_run_probe_batch", original_probe_batch)
     original = copy.deepcopy(load_json(runner / "checkpoint.json")["payload"])
     assert original["candidates"][candidate_id]["state"] == "probing"
 
@@ -2657,7 +2694,7 @@ def test_active_probe_pair_recovers_every_attempt_transactionally(
     assert all(workload_id.endswith(("-a001", "-a002")) for workload_id in backend.workload_ids)
 
 
-def test_active_recovery_is_the_only_action_when_an_unrelated_pair_is_due(
+def test_active_recovery_is_the_only_action_when_unrelated_work_is_pending(
     tmp_path: Path,
 ) -> None:
     catalogue = _catalogue(tmp_path / "catalogue.json")
@@ -2687,9 +2724,7 @@ def test_active_recovery_is_the_only_action_when_an_unrelated_pair_is_due(
     due_before = {
         candidate_id: copy.deepcopy(payload["candidates"][candidate_id]) for candidate_id in due_ids
     }
-    due_at = baseline + timedelta(
-        milliseconds=acquisition_module.STABILITY_PROBE_WINDOWS[1].target_ms
-    )
+    due_at = baseline + timedelta(minutes=5)
     started_at = acquisition_module._format_time(due_at)
     attempts = []
     for candidate_id in active_ids:
@@ -2732,7 +2767,7 @@ def test_active_recovery_is_the_only_action_when_an_unrelated_pair_is_due(
         state = recovered["candidates"][candidate_id]
         assert "pending_navigation" not in state
         assert [attempt["outcome"] for attempt in state["navigation_attempts"]] == ["interrupted"]
-    assert status["due_now_count"] == 2
+    assert status["due_now_count"] == 0
     assert status["work_due_now"] is True
 
 
@@ -2759,12 +2794,8 @@ def _complete_one_probing_candidate(
     candidate_id, state = next(
         (candidate_id, state)
         for candidate_id, state in checkpoint["payload"]["candidates"].items()
-        if state["state"] == "probing"
+        if state["state"] == "terminal"
     )
-    baseline = datetime.fromisoformat(state["baseline_started_at"].replace("Z", "+00:00"))
-    for window in acquisition_module.STABILITY_PROBE_WINDOWS[1:]:
-        clock.value = baseline + timedelta(milliseconds=window.target_ms)
-        run_due_acquisition(runner, **arguments)
     final = load_json(runner / "checkpoint.json")
     return candidate_id, final["payload"]["candidates"][candidate_id]
 
@@ -2789,27 +2820,19 @@ def _leave_one_finalisable_candidate(
         "clock": clock,
         "max_candidates": 1,
     }
-    run_due_acquisition(runner, **arguments)
-    run_due_acquisition(runner, **arguments)
-    checkpoint = load_json(runner / "checkpoint.json")
-    candidate_id, state = next(
-        (candidate_id, state)
-        for candidate_id, state in checkpoint["payload"]["candidates"].items()
-        if state["state"] == "probing"
-    )
-    baseline = datetime.fromisoformat(state["baseline_started_at"].replace("Z", "+00:00"))
-    window = acquisition_module.STABILITY_PROBE_WINDOWS[1]
-    clock.value = baseline + timedelta(milliseconds=window.target_ms)
-    run_due_acquisition(runner, **arguments)
-
     original = acquisition_module._terminalise_completed_probe_candidate
+
+    def stop_after_final_replay(candidate, state, **kwargs):
+        if acquisition_module._probe_candidate_is_finalisable(state, short_window=True):
+            raise KeyboardInterrupt
+        return original(candidate, state, **kwargs)
+
     monkeypatch.setattr(
         acquisition_module,
         "_terminalise_completed_probe_candidate",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(KeyboardInterrupt),
+        stop_after_final_replay,
     )
-    window = acquisition_module.STABILITY_PROBE_WINDOWS[2]
-    clock.value = baseline + timedelta(milliseconds=window.target_ms)
+    run_due_acquisition(runner, **arguments)
     with pytest.raises(KeyboardInterrupt):
         run_due_acquisition(runner, **arguments)
     monkeypatch.setattr(
@@ -2818,8 +2841,9 @@ def _leave_one_finalisable_candidate(
         original,
     )
     payload = load_json(runner / "checkpoint.json")["payload"]
+    candidate_id = payload["baseline_batches"][0]["candidate_ids"][0]
     state = payload["candidates"][candidate_id]
-    assert acquisition_module._probe_candidate_is_finalisable(state)
+    assert acquisition_module._probe_candidate_is_finalisable(state, short_window=True)
     return candidate_id, state
 
 
@@ -2848,7 +2872,9 @@ def test_finalisable_probe_resume_is_local_crash_safe_and_idempotent(
         clock=clock,
         monkeypatch=monkeypatch,
     )
-    terminal_time = acquisition_module._finalisable_probe_terminal_time(finalisable_state)
+    terminal_time = acquisition_module._finalisable_probe_terminal_time(
+        finalisable_state, short_window=True
+    )
     status = acquisition_status(
         runner,
         candidate_catalogue_path=catalogue,
@@ -2961,17 +2987,22 @@ def test_due_at_latest_edge_outranks_unrelated_finalisable_candidate(
             origin_ip_pins=None,
         ):
             self.events.append(f"prepare:{workload_id.split('-p')[0]}")
-            if self.mode == "split" and "-t72h-" in workload_id:
+            if self.mode == "split" and "-t5m-" in workload_id:
                 if workload_id.startswith(candidate_ids[0]):
                     raise TerminalProbePolicyError("deterministic final-page rejection")
                 raise RecoverableAcquisitionError("retry remains due")
-            return super().prepare(
+            prepared = super().prepare(
                 workload_id,
                 url,
                 approved_origins,
                 output_root,
                 origin_ip_pins=origin_ip_pins,
             )
+            clock.value = max(
+                clock.value,
+                datetime.fromisoformat(prepared.observed_at.replace("Z", "+00:00")),
+            )
+            return prepared
 
     backend = MixedFinalBackend()
     arguments = {
@@ -2982,15 +3013,10 @@ def test_due_at_latest_edge_outranks_unrelated_finalisable_candidate(
         "clock": clock,
     }
     run_due_acquisition(runner, **arguments)
-    run_due_acquisition(runner, **arguments)
-    checkpoint = load_json(runner / "checkpoint.json")["payload"]
-    shared_baseline = datetime.fromisoformat(
-        checkpoint["baseline_batches"][0]["baseline_started_at"].replace("Z", "+00:00")
+    _stop_after_first_short_replay(
+        runner, monkeypatch=monkeypatch, arguments=arguments
     )
-    window = acquisition_module.STABILITY_PROBE_WINDOWS[1]
-    clock.value = shared_baseline + timedelta(milliseconds=window.target_ms)
-    backend.observed_at = clock.value
-    run_due_acquisition(runner, **arguments)
+    shared_baseline = baseline
 
     original_save = acquisition_module._save_acquisition_checkpoint
     crashed = False
@@ -3011,7 +3037,7 @@ def test_due_at_latest_edge_outranks_unrelated_finalisable_candidate(
             raise KeyboardInterrupt
 
     monkeypatch.setattr(acquisition_module, "_save_acquisition_checkpoint", crash_after_mixed_merge)
-    window = acquisition_module.STABILITY_PROBE_WINDOWS[2]
+    window = acquisition_module.SHORT_STABILITY_PROBE_WINDOWS[1]
     clock.value = shared_baseline + timedelta(milliseconds=window.latest_ms)
     backend.observed_at = clock.value
     backend.mode = "split"
@@ -3112,7 +3138,59 @@ def test_finalisable_publication_replays_prepared_evidence_before_any_output(
     assert (runner / "checkpoint.json").read_bytes() == checkpoint_before
 
 
-def test_missed_terminal_replays_response_evidence_before_publication(tmp_path: Path) -> None:
+def test_short_repeat_rejects_a_resealed_first_probe_completion_after_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalogue = _catalogue(tmp_path / "catalogue.json")
+    runner = initialise_runner(
+        tmp_path / "runner",
+        candidate_catalogue_path=catalogue,
+        foundation_attestation=_foundation(tmp_path / "foundation.json"),
+        started_at="2026-08-28T00:00:00Z",
+        browser_tool="test-browser@1",
+    )
+    stability = tmp_path / "stability"
+    stability.mkdir()
+    clock = FakeClock(datetime(2026, 8, 28, tzinfo=UTC))
+    candidate_id, _state = _leave_one_finalisable_candidate(
+        runner,
+        catalogue=catalogue,
+        stability=stability,
+        workloads=tmp_path / "workloads",
+        backend=SlowBackend(clock),
+        clock=clock,
+        monkeypatch=monkeypatch,
+    )
+    checkpoint_path = runner / "checkpoint.json"
+    payload = copy.deepcopy(load_json(checkpoint_path)["payload"])
+    attempts = payload["candidates"][candidate_id]["pages"][0]["probe_attempts"]
+    repeat_start = datetime.fromisoformat(attempts[1]["observed_at"].replace("Z", "+00:00"))
+    attempts[0]["completed_at"] = acquisition_module._format_time(
+        repeat_start + timedelta(seconds=1)
+    )
+    _replace_receipt_payload(checkpoint_path, payload)
+    with pytest.raises(ValueError, match="probe-attempt ledger"):
+        acquisition_status(runner, candidate_catalogue_path=catalogue, now=clock.value)
+
+
+def test_short_repeat_waits_for_every_first_probe_in_the_batch() -> None:
+    batch = {"candidate_ids": ["first", "second"]}
+    states = {
+        "first": {"pages": [{"probe_attempts": [
+            {"probe_id": "t+30s", "completed_at": "2026-08-28T00:05:01Z"},
+        ]}]},
+        "second": {"pages": [{"probe_attempts": [
+            {"probe_id": "t+30s", "completed_at": "2026-08-28T00:00:45Z"},
+            {"probe_id": "t+5m", "observed_at": "2026-08-28T00:05:00Z"},
+        ]}]},
+    }
+    with pytest.raises(ValueError, match="repeat predates first batch completion"):
+        acquisition_module._validate_short_probe_batch_order([batch], states)
+
+
+def test_missed_terminal_replays_response_evidence_before_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     catalogue = _catalogue(tmp_path / "catalogue.json")
     runner = initialise_runner(
         tmp_path / "runner",
@@ -3133,7 +3211,9 @@ def test_missed_terminal_replays_response_evidence_before_publication(tmp_path: 
         "max_candidates": 1,
     }
     run_due_acquisition(runner, now=baseline, **common)
-    run_due_acquisition(runner, now=baseline, **common)
+    _stop_after_first_short_replay(
+        runner, monkeypatch=monkeypatch, arguments={**common, "now": baseline}
+    )
     payload = load_json(runner / "checkpoint.json")["payload"]
     [baseline_batch] = payload["baseline_batches"]
     [candidate_id] = baseline_batch["candidate_ids"]
@@ -3144,7 +3224,7 @@ def test_missed_terminal_replays_response_evidence_before_publication(tmp_path: 
     checkpoint_before = (runner / "checkpoint.json").read_bytes()
     missed_at = datetime.fromisoformat(
         state["baseline_started_at"].replace("Z", "+00:00")
-    ) + timedelta(milliseconds=acquisition_module.STABILITY_PROBE_WINDOWS[1].latest_ms + 1)
+    ) + timedelta(milliseconds=acquisition_module.SHORT_STABILITY_PROBE_WINDOWS[1].latest_ms + 1)
     assert (
         acquisition_status(
             runner,
@@ -3160,7 +3240,9 @@ def test_missed_terminal_replays_response_evidence_before_publication(tmp_path: 
     assert (runner / "checkpoint.json").read_bytes() == checkpoint_before
 
 
-def test_due_batch_rechecks_actual_publication_clock_before_launch(tmp_path: Path) -> None:
+def test_due_batch_rechecks_actual_publication_clock_before_launch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     catalogue = _catalogue(tmp_path / "catalogue.json")
     runner = initialise_runner(
         tmp_path / "runner",
@@ -3180,12 +3262,16 @@ def test_due_batch_rechecks_actual_publication_clock_before_launch(tmp_path: Pat
         "max_candidates": 1,
     }
     run_due_acquisition(runner, backend=setup, now=baseline, **common)
-    run_due_acquisition(runner, backend=setup, now=baseline, **common)
+    _stop_after_first_short_replay(
+        runner,
+        monkeypatch=monkeypatch,
+        arguments={**common, "backend": setup, "now": baseline},
+    )
     payload = load_json(runner / "checkpoint.json")["payload"]
     [candidate_id] = payload["baseline_batches"][0]["candidate_ids"]
     state = payload["candidates"][candidate_id]
     armed = datetime.fromisoformat(state["baseline_started_at"].replace("Z", "+00:00"))
-    window = acquisition_module.STABILITY_PROBE_WINDOWS[1]
+    window = acquisition_module.SHORT_STABILITY_PROBE_WINDOWS[1]
     latest = armed + timedelta(milliseconds=window.latest_ms)
     after = latest + timedelta(milliseconds=1)
 
@@ -3213,7 +3299,7 @@ def test_due_batch_rechecks_actual_publication_clock_before_launch(tmp_path: Pat
     assert len(terminal_state["pages"][0]["probe_attempts"]) == 1
 
 
-def test_baseline_arm_reclassifies_when_clock_crosses_a_schedule_boundary(
+def test_short_baseline_guard_releases_after_forty_minutes(
     tmp_path: Path,
 ) -> None:
     catalogue = _catalogue(tmp_path / "catalogue.json")
@@ -3224,11 +3310,9 @@ def test_baseline_arm_reclassifies_when_clock_crosses_a_schedule_boundary(
         started_at="2026-08-28T00:00:00Z",
         browser_tool="test-browser@1",
     )
-    identities = _catalogue_candidate_identities(catalogue, 2)
     baseline = datetime(2026, 8, 28, tzinfo=UTC)
     setup = BatchBackend(
         baseline + timedelta(seconds=25),
-        page_counts={domain: 4 for _candidate_id, domain in identities},
         runner=runner,
     )
     common = {
@@ -3236,43 +3320,27 @@ def test_baseline_arm_reclassifies_when_clock_crosses_a_schedule_boundary(
         "stability_root": tmp_path / "stability",
         "workload_root": tmp_path / "workloads",
     }
-    run_due_acquisition(runner, backend=setup, now=baseline, **common)
-    run_due_acquisition(runner, backend=setup, now=baseline, **common)
+    run_due_acquisition(runner, backend=setup, now=baseline, max_candidates=1, **common)
+    run_due_acquisition(runner, backend=setup, now=baseline, max_candidates=1, **common)
+    run_due_acquisition(
+        runner,
+        backend=setup,
+        now=baseline + timedelta(minutes=1),
+        max_candidates=1,
+        **common,
+    )
     before = load_json(runner / "checkpoint.json")["payload"]
     [existing_batch] = before["baseline_batches"]
     existing = datetime.fromisoformat(existing_batch["baseline_started_at"].replace("Z", "+00:00"))
-    low_boundary = existing + timedelta(
-        milliseconds=(
-            acquisition_module.STABILITY_PROBE_WINDOWS[1].earliest_ms - PENDING_BASELINE_GUARD_MS
-        )
+    assert sum(state["state"] == "baseline-ready" for state in before["candidates"].values()) == 1
+    assert not acquisition_module.baseline_is_safe(
+        existing + timedelta(milliseconds=PENDING_BASELINE_GUARD_MS - 1),
+        (existing,), short_window=True,
     )
-    inside = low_boundary + timedelta(milliseconds=1)
-    assert acquisition_module.baseline_is_safe(low_boundary, (existing,))
-    assert not acquisition_module.baseline_is_safe(inside, (existing,))
-
-    class CrossingClock:
-        def __init__(self) -> None:
-            self.values = iter((low_boundary, low_boundary, inside, inside, inside))
-            self.last = inside
-
-        def __call__(self) -> datetime:
-            self.last = next(self.values, self.last)
-            return self.last
-
-    backend = NoNetworkBackend()
-    status = run_due_acquisition(
-        runner,
-        backend=backend,
-        clock=CrossingClock(),
-        **common,
+    assert acquisition_module.baseline_is_safe(
+        existing + timedelta(milliseconds=PENDING_BASELINE_GUARD_MS),
+        (existing,), short_window=True,
     )
-    after = load_json(runner / "checkpoint.json")["payload"]
-    assert backend.calls == []
-    assert after["baseline_batches"] == before["baseline_batches"]
-    assert after["active_batch"] is None
-    assert sum(state["state"] == "baseline-ready" for state in after["candidates"].values()) == 1
-    assert status["pending_start_blocked"] is True
-    assert status["work_due_now"] is False
 
 
 class InterruptOnceBackend(SlowBackend):
@@ -3856,8 +3924,8 @@ def test_historical_schema_policy_map_and_render_contract_are_frozen() -> None:
         )
 
 
-def test_schema_seven_audit_five_projects_read_only_but_cannot_alias_schema_nine() -> None:
-    assert acquisition_module.SCHEMA_VERSION == 9
+def test_schema_seven_audit_five_projects_read_only_but_cannot_alias_schema_ten() -> None:
+    assert acquisition_module.SCHEMA_VERSION == 10
     manifest = _prepared_manifest("https://example.com/", ["https://example.com"])
     preparation = manifest["preparation"]
     render = copy.deepcopy(preparation["render_observation"])
@@ -4662,7 +4730,7 @@ def test_completion_validation_accepts_each_legacy_schema_shape(
     assert checkpoint_path.read_bytes() == checkpoint_before
 
 
-def test_schema_one_observed_eligible_completion_uses_its_original_evidence_shape(
+def test_schema_one_rejects_short_profile_eligible_downgrade(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4762,37 +4830,16 @@ def test_schema_one_observed_eligible_completion_uses_its_original_evidence_shap
         receipt_type=COMPLETION_TYPE,
     )
     checkpoint_before = checkpoint_path.read_bytes()
-    assert (
+    with pytest.raises(ValueError, match="probe-attempt ledger"):
         validate_acquisition_completion(
             legacy_completion,
             candidate_catalogue_path=catalogue,
             runner_root=runner,
-        )["observed_toolchain"]
-        == current_completion["observed_toolchain"]
-    )
+        )
     assert checkpoint_path.read_bytes() == checkpoint_before
 
-    rebound_checkpoint_payload = copy.deepcopy(checkpoint["payload"])
-    rebound_checkpoint_payload["candidates"][candidate_id]["pages"][0]["observations"][0][
-        "unpublished_optional_evidence"
-    ] = "not-a-schema-one-field"
-    _replace_receipt_payload(checkpoint_path, rebound_checkpoint_payload)
-    rebound_checkpoint = load_json(checkpoint_path)
-    rebound_completion_payload = copy.deepcopy(legacy_completion_payload)
-    rebound_completion_payload["checkpoint_payload_sha256"] = rebound_checkpoint["payload_sha256"]
-    rebound_completion = bind_receipt(
-        rebound_completion_payload,
-        receipt_type=COMPLETION_TYPE,
-    )
-    with pytest.raises(ValueError, match="schema-one checkpoint observation fields"):
-        validate_acquisition_completion(
-            rebound_completion,
-            candidate_catalogue_path=catalogue,
-            runner_root=runner,
-        )
 
-
-def test_schema_three_observed_eligible_completion_rebinds_transitive_evidence(
+def test_schema_three_rejects_short_profile_eligible_downgrade(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4869,71 +4916,12 @@ def test_schema_three_observed_eligible_completion_rebinds_transitive_evidence(
     )
     page = PageCandidate(**selected_page["page"])
     stability_payload["observations"] = [observation.as_dict() for observation in observations]
-    stability_payload["decision"] = acquisition_module.derive_stability_decision(
-        page,
-        baseline_started_at=state["baseline_started_at"],
-        observations=observations,
-    ).as_dict()
-    _replace_receipt_payload(stability_path, stability_payload)
-    admitted_path = Path(terminal_payload["admitted_workload"]["path"])
-    selected_prepared_path = Path(selected_page["observations"][0]["prepared_path"])
-    admitted_path.write_bytes(selected_prepared_path.read_bytes())
-
-    terminal_payload["terminal_schema_version"] = 2
-    terminal_payload["provenance_sha256"] = provenance_sha256
-    terminal_payload["stability_receipt"]["sha256"] = hashlib.sha256(
-        stability_path.read_bytes()
-    ).hexdigest()
-    terminal_payload["admitted_workload"]["sha256"] = hashlib.sha256(
-        admitted_path.read_bytes()
-    ).hexdigest()
-    terminal_payload["checkpoint_state_sha256"] = (
-        acquisition_module._normalised_terminal_state_sha256(
-            state,
-            kind=terminal_payload["kind"],
+    with pytest.raises(ValueError, match="exactly 3 observations"):
+        acquisition_module.derive_stability_decision(
+            page,
+            baseline_started_at=state["baseline_started_at"],
+            observations=observations,
         )
-    )
-    terminal_payload.pop("checkpoint_schema_version")
-    terminal_payload.pop("baseline_batch")
-    _replace_receipt_payload(terminal_path, terminal_payload)
-    state["terminal"]["sha256"] = hashlib.sha256(terminal_path.read_bytes()).hexdigest()
-    _replace_receipt_payload(checkpoint_path, checkpoint_payload)
-    checkpoint = load_json(checkpoint_path)
-
-    legacy_completion_payload = {
-        key: copy.deepcopy(value)
-        for key, value in current_completion.items()
-        if key
-        not in {
-            "completion_schema_version",
-            "checkpoint_schema_version",
-            "baseline_batches",
-            "baseline_batches_sha256",
-            "selection",
-        }
-    }
-    legacy_completion_payload.update(
-        {
-            "acquisition_schema_version": 3,
-            "provenance_sha256": provenance_sha256,
-            "checkpoint_payload_sha256": checkpoint["payload_sha256"],
-            "terminal_receipts": {candidate_id: state["terminal"]},
-        }
-    )
-    legacy_completion = bind_receipt(
-        legacy_completion_payload,
-        receipt_type=COMPLETION_TYPE,
-    )
-    checkpoint_before = checkpoint_path.read_bytes()
-    assert (
-        validate_acquisition_completion(
-            legacy_completion,
-            candidate_catalogue_path=catalogue,
-            runner_root=runner,
-        )["observed_toolchain"]
-        == current_completion["observed_toolchain"]
-    )
-    assert checkpoint_path.read_bytes() == checkpoint_before
 
 
 def test_runner_creates_and_strictly_validates_document_response_namespace(
@@ -5156,7 +5144,10 @@ def test_baseline_action_prearms_short_probe_and_records_start_not_slow_completi
     assert states[first_id]["baseline_started_at"] == "2026-08-28T00:00:10Z"
     assert observation["observed_at"] == "2026-08-28T00:00:35Z"
     assert observation["probe_completed_at"] == "2026-08-28T00:00:55Z"
-    assert sum(state["state"] == "probing" for state in states.values()) == 1
+    repeat = states[first_id]["pages"][0]["observations"][1]
+    assert repeat["observed_at"] == "2026-08-28T00:04:40Z"
+    assert repeat["probe_completed_at"] == "2026-08-28T00:05:00Z"
+    assert sum(state["state"] == "terminal" for state in states.values()) == 1
 
 
 def test_current_navigation_success_duration_has_an_exact_soft_limit(
@@ -5292,7 +5283,7 @@ def test_clock_rollback_keeps_pending_start_and_recovery_records_interruption(
 
 
 def test_current_probe_success_duration_has_an_exact_soft_limit(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     catalogue = _catalogue(tmp_path / "catalogue.json")
     runner = initialise_runner(
@@ -5311,7 +5302,9 @@ def test_current_probe_success_duration_has_an_exact_soft_limit(
         "clock": clock,
     }
     run_due_acquisition(runner, **arguments)
-    run_due_acquisition(runner, **arguments)
+    _stop_after_first_short_replay(
+        runner, monkeypatch=monkeypatch, arguments=arguments
+    )
     checkpoint = load_json(runner / "checkpoint.json")
     payload = copy.deepcopy(checkpoint["payload"])
     state = next(item for item in payload["candidates"].values() if item["state"] == "probing")
@@ -5331,7 +5324,7 @@ def test_current_probe_success_duration_has_an_exact_soft_limit(
         acquisition_status(runner, candidate_catalogue_path=catalogue)
 
 
-def test_serial_spacing_refuses_a_second_baseline_batch_but_allows_navigation(
+def test_terminal_release_refuses_second_baseline_but_allows_navigation(
     tmp_path: Path,
 ):
     catalogue = _catalogue(tmp_path / "catalogue.json")
@@ -5357,13 +5350,13 @@ def test_serial_spacing_refuses_a_second_baseline_batch_but_allows_navigation(
     run_due_acquisition(runner, **arguments)
     status = run_due_acquisition(runner, **arguments)
     checkpoint = load_json(runner / "checkpoint.json")
-    probing = [
+    terminal = [
         state
         for state in checkpoint["payload"]["candidates"].values()
-        if state["state"] == "probing"
+        if state["state"] == "terminal"
     ]
-    assert len(probing) == 2
-    assert all(len(state["pages"][0]["observations"]) == 1 for state in probing)
+    assert len(terminal) == 2
+    assert all(len(state["pages"][0]["observations"]) == 2 for state in terminal)
     assert (
         sum(
             "baseline_started_at" in state for state in checkpoint["payload"]["candidates"].values()
@@ -5380,10 +5373,11 @@ def test_serial_spacing_refuses_a_second_baseline_batch_but_allows_navigation(
     assert status["pending_count"] == 118
     assert status["pending_start_blocked"] is False
     assert status["work_due_now"] is True
-    assert status["next_due"] == "2026-08-28T00:40:20Z"
+    assert status["next_due"] is not None
+    assert status["next_due"] < "2026-08-28T00:40:20Z"
 
 
-def test_current_checkpoint_rejects_a_cross_offset_baseline_collision(
+def test_current_checkpoint_rejects_an_overlapping_baseline_action(
     tmp_path: Path,
 ) -> None:
     catalogue = _catalogue(tmp_path / "catalogue.json")
@@ -5394,6 +5388,7 @@ def test_current_checkpoint_rejects_a_cross_offset_baseline_collision(
         started_at="2026-08-28T00:00:00Z",
         browser_tool="test-browser@1",
     )
+    (tmp_path / "stability").mkdir()
     clock = FakeClock(datetime(2026, 8, 28, tzinfo=UTC))
     arguments = {
         "candidate_catalogue_path": catalogue,
@@ -5407,16 +5402,21 @@ def test_current_checkpoint_rejects_a_cross_offset_baseline_collision(
     run_due_acquisition(runner, **arguments)
     checkpoint = load_json(runner / "checkpoint.json")
     payload = copy.deepcopy(checkpoint["payload"])
-    first = next(state for state in payload["candidates"].values() if state["state"] == "probing")
+    first = next(
+        state for state in payload["candidates"].values()
+        if "baseline_started_at" in state
+    )
     second = next(
         state for state in payload["candidates"].values() if state["state"] == "baseline-ready"
     )
     first_baseline = datetime.fromisoformat(first["baseline_started_at"].replace("Z", "+00:00"))
-    # Two baselines are far apart directly, but this second baseline's t+24h
-    # action would collide exactly with the first baseline's t+72h action.
+    # A second action before the first batch terminalises is not causally safe.
     second["state"] = "probing"
+    navigation_finished = datetime.fromisoformat(
+        second["navigation_attempts"][-1]["completed_at"].replace("Z", "+00:00")
+    )
     second["baseline_started_at"] = acquisition_module._format_time(
-        first_baseline + timedelta(hours=48)
+        navigation_finished + timedelta(seconds=1)
     )
     second_id = next(
         candidate_id for candidate_id, state in payload["candidates"].items() if state is second
@@ -5442,7 +5442,7 @@ def test_current_checkpoint_rejects_a_cross_offset_baseline_collision(
 
 
 def test_due_probe_at_latest_edge_outranks_an_already_missed_candidate(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     catalogue = _catalogue(tmp_path / "catalogue.json")
     runner = initialise_runner(
@@ -5462,9 +5462,10 @@ def test_due_probe_at_latest_edge_outranks_an_already_missed_candidate(
         "clock": clock,
         "max_candidates": 1,
     }
-    run_due_acquisition(runner, **arguments)
-    run_due_acquisition(runner, **arguments)
-    run_due_acquisition(runner, **arguments)
+    run_due_acquisition(runner, **{**arguments, "max_candidates": 2})
+    _stop_after_first_short_replay(
+        runner, monkeypatch=monkeypatch, arguments=arguments
+    )
     checkpoint = load_json(runner / "checkpoint.json")
     payload = copy.deepcopy(checkpoint["payload"])
     first = next(state for state in payload["candidates"].values() if state["state"] == "probing")
@@ -5472,7 +5473,7 @@ def test_due_probe_at_latest_edge_outranks_an_already_missed_candidate(
         state for state in payload["candidates"].values() if state["state"] == "baseline-ready"
     )
     first_baseline = datetime.fromisoformat(first["baseline_started_at"].replace("Z", "+00:00"))
-    second_baseline = first_baseline + timedelta(hours=24, minutes=25)
+    second_baseline = first_baseline + timedelta(minutes=40)
     second["state"] = "probing"
     second["baseline_started_at"] = acquisition_module._format_time(second_baseline)
     second_id = next(
@@ -5491,7 +5492,7 @@ def test_due_probe_at_latest_edge_outranks_an_already_missed_candidate(
     )
     _replace_receipt_payload(runner / "checkpoint.json", payload)
 
-    # Candidate one has already missed t+24h. Candidate two still owns the
+    # Candidate one has already missed t+5m. Candidate two still owns the
     # exact inclusive t+30s latest edge; spending the sole action on stale
     # cleanup would destroy that otherwise valid observation.
     clock.value = second_baseline + timedelta(seconds=35)
@@ -6121,23 +6122,26 @@ def test_final_preparation_origin_drift_reconverges_inside_the_same_window(tmp_p
     active = next(
         state
         for state in checkpoint["payload"]["candidates"].values()
-        if state["state"] == "probing"
+        if state["state"] == "terminal"
     )
     page = active["pages"][0]
-    assert [item["outcome"] for item in page["probe_attempts"]] == [
+    first_attempts = [
+        item for item in page["probe_attempts"] if item["probe_id"] == "t+30s"
+    ]
+    assert [item["outcome"] for item in first_attempts] == [
         "recoverable-failure",
         "completed",
     ]
-    assert [item["attempt"] for item in page["probe_attempts"]] == [1, 2]
+    assert [item["attempt"] for item in first_attempts] == [1, 2]
     assert backend.workload_ids[0].endswith("-a001")
     assert backend.workload_ids[1].endswith("-a002")
-    assert len(backend.discovery_calls) == 3
+    assert len(backend.discovery_calls) >= 3
     assert backend.discovery_calls[0] == backend.discovery_calls[1]
     assert backend.discovery_calls[2][1] == (
         "https://late-origin.example",
         backend.discovery_calls[0][1][0],
     )
-    assert len(page["observations"]) == 1
+    assert len(page["observations"]) == 2
 
 
 def test_unexpected_probe_fault_is_durably_checkpointed_and_blocks_resume(tmp_path: Path):
@@ -7674,7 +7678,10 @@ def test_each_page_uses_only_its_own_navigation_origin_seeds(tmp_path: Path):
             path.write_bytes(canonical_json_bytes(manifest))
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
             return PreparedProbe(
-                observed_at="2026-08-28T00:00:55Z",
+                observed_at=(
+                    "2026-08-28T00:05:00Z" if "-t5m-" in workload_id
+                    else "2026-08-28T00:00:55Z"
+                ),
                 final_url=url,
                 status=200,
                 content_type="text/html",
@@ -8152,9 +8159,8 @@ def test_current_observation_provenance_is_reconstructed_from_preparation_and_re
     candidate_id = next(
         candidate_id
         for candidate_id, state in states.items()
-        if state["state"] == "probing" and state["pages"][0]["observations"]
+        if state["state"] == "terminal" and state["pages"][0]["observations"]
     )
-    states[candidate_id]["terminal"] = {"test-only": True}
     provenance_path = runner / "provenance.json"
     provenance = acquisition_module.validate_hash_bound_receipt(
         load_json(provenance_path), expected_type=acquisition_module.PROVENANCE_TYPE

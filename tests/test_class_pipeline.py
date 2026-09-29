@@ -734,8 +734,7 @@ def test_status_exposes_stability_and_certification_contracts():
 
     assert status["stages"]["stability"]["gate"]["labels"] == [
         "t+30s",
-        "t+24h",
-        "t+72h",
+        "t+5m",
     ]
     assert status["certification_contract"] == {
         "classes": 100,
@@ -765,6 +764,7 @@ def test_standalone_acquisition_status_deep_verifies_bound_runtime_but_is_inform
     foundation_sha256 = pipeline.sha256_file(foundation)
     provenance = pipeline.bind_receipt(
         {
+            "acquisition_schema_version": acquisition.SCHEMA_VERSION,
             binding_key: {
                 "path": str(foundation.absolute()),
                 "sha256": foundation_sha256,
@@ -975,11 +975,12 @@ def test_status_labels_historical_acquisition_authority_without_using_it_as_gate
 
 
 @pytest.mark.parametrize(
-        ("acquisition_schema", "completion_schema", "checkpoint_schema", "current"),
-        (
-            (9, 4, 3, True),
-            (8, 4, 3, False),
-            (7, 4, 3, False),
+    ("acquisition_schema", "completion_schema", "checkpoint_schema", "current"),
+    (
+        (10, 4, 3, True),
+        (9, 4, 3, False),
+        (8, 4, 3, False),
+        (7, 4, 3, False),
         (6, 3, None, False),
         (7, 3, 3, False),
         (7, 4, 2, False),
@@ -1061,7 +1062,7 @@ def test_status_only_advances_exact_current_acquisition_completion(
         assert stage["state"] == "historical-verify-only"
         assert stage["verification_status"] == "historical-verify-only"
         assert deep_calls == []
-        assert status["next_required_stage"] == "complete-30s-24h-72h-acquisition"
+        assert status["next_required_stage"] == "complete-30s-and-5m-two-replay-acquisition"
 
 
 def test_status_deep_verifies_current_foundation_but_keeps_runner_informational(
@@ -1358,6 +1359,51 @@ def test_acquisition_init_rejects_invalid_pinned_foundation_before_runner(
         )
 
     assert observed == {"deep_code_gate": True, "runtime_role": "prepare"}
+
+
+def test_acquisition_init_passes_versioned_root_to_runner(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import qcsd_lab.class_acquisition as acquisition
+    import qcsd_lab.class_attestation as attestation
+
+    monkeypatch.setattr(util, "LAB_ROOT", tmp_path)
+    layout = pipeline.class_study_layout()
+    catalogue = layout.study_config_root / f"{STUDY_ID}-candidates.json"
+    runner = Path(f"{layout.acquisition_root}-v127")
+    authority = layout.artifacts_root / "class-study-acquisition-authority-v127.json"
+    observed: dict[str, object] = {}
+    monkeypatch.setattr(
+        attestation,
+        "validate_class_acquisition_authority",
+        lambda *_args, **_kwargs: {"recorded_at": "2026-09-29T11:05:10Z"},
+    )
+
+    def initialise(root: Path, **kwargs: object) -> Path:
+        observed.update({"root": root, **kwargs})
+        return root
+
+    monkeypatch.setattr(acquisition, "initialise_runner", initialise)
+    monkeypatch.setattr(
+        acquisition,
+        "acquisition_status",
+        lambda *_args, **_kwargs: {"candidate_count": CANDIDATE_COUNT},
+    )
+
+    result = pipeline.run_class_study_action(
+        "acquisition-init",
+        candidate_catalogue_path=catalogue,
+        acquisition_root=runner,
+        acquisition_started_at="2026-09-29T11:14:36Z",
+        acquisition_authority=authority,
+    )
+
+    assert result.status == "complete"
+    assert result.details["runner_root"] == str(runner)
+    assert observed["root"] == runner
+    assert observed["candidate_catalogue_path"] == catalogue
+    assert observed["acquisition_authority"] == authority
+    assert not runner.exists()
 
 
 def test_status_refits_numeric_and_final_bundles_against_unique_stage_result(
@@ -4798,8 +4844,8 @@ def test_acquisition_run_is_canonically_bounded_and_reports_wait_policy(
     def run(root, **kwargs):
         seen.update(kwargs)
         return {
-            "acquisition_schema_version": 4,
-            "checkpoint_schema_version": 2,
+            "acquisition_schema_version": acquisition.SCHEMA_VERSION,
+            "checkpoint_schema_version": acquisition.CHECKPOINT_SCHEMA_VERSION,
             "maximum_candidates_per_action": 2,
             "global_live_page_cap": 5,
             "active_batch": None,
@@ -4828,7 +4874,7 @@ def test_acquisition_run_is_canonically_bounded_and_reports_wait_policy(
     assert result.details["maximum_candidates_per_action"] == 2
     assert result.details["global_live_page_cap"] == 5
     assert result.details["finalisable_count"] == 0
-    assert result.details["runner_wait_policy"] == pipeline.ACQUISITION_RUN_WAIT_POLICY
+    assert result.details["runner_wait_policy"] == pipeline.SHORT_RUN_WAIT_POLICY
     assert "rerun now" in result.blockers[0]
     assert "interrupted recovery" in result.blockers[0]
     assert "unblocked navigation/baseline batch" in result.blockers[0]
@@ -4985,9 +5031,15 @@ def test_read_only_and_frozen_actions_bypass_prospective_layout_gate(
     )
 
 
-def test_acquisition_and_stability_use_exact_canonical_roots(
+@pytest.mark.parametrize(
+    "action", ("acquisition-init", "acquisition-run", "acquisition-status", "acquisition-complete")
+)
+@pytest.mark.parametrize("version_suffix", ("", "-v127"))
+def test_acquisition_and_stability_use_allowed_roots(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    action: str,
+    version_suffix: str,
 ) -> None:
     monkeypatch.setattr(util, "LAB_ROOT", tmp_path)
     layout = pipeline.class_study_layout()
@@ -5003,12 +5055,13 @@ def test_acquisition_and_stability_use_exact_canonical_roots(
             stability_root=tmp_path / "artifacts/alternate-stability",
         )
 
-    # The layout boundary itself accepts the two exact, stable study paths.
+    # The acquisition boundary accepts the canonical root or one exact
+    # versioned sibling, while the stability root remains canonical.
     pipeline._validate_fresh_layout_arguments(
-        action="acquisition-status",
+        action=action,
         stage=None,
         candidate_catalogue_path=None,
-        acquisition_root=layout.acquisition_root,
+        acquisition_root=Path(f"{layout.acquisition_root}{version_suffix}"),
         stability_root=layout.stability_root,
         workload_root=None,
         pilot_cohort_receipt_path=None,

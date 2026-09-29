@@ -34,6 +34,8 @@ from .acquisition_timing import (
     GLOBAL_LIVE_PAGE_CAP,
     MAX_CANDIDATES_PER_ACTION,
     MINIMUM_BASELINE_SPACING_MS,
+    SHORT_TERMINAL_RELEASE_DELAY_MS,
+    SHORT_TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT,
     TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT,
     BaselineReservation,
     baseline_is_safe,
@@ -68,6 +70,8 @@ from .cdp_targets import (
 )
 from .class_catalogue import (
     HTML_MEDIA_TYPES,
+    SHORT_STABILITY_ACQUISITION_EVIDENCE_SCHEMA_VERSION,
+    SHORT_STABILITY_PROBE_WINDOWS,
     STABILITY_PROBE_WINDOWS,
     DiscoveredLink,
     PageCandidate,
@@ -116,8 +120,8 @@ from .util import (
     source_metadata,
 )
 
-SCHEMA_VERSION = 9
-HISTORICAL_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7, 8})
+SCHEMA_VERSION = 10
+HISTORICAL_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7, 8, 9})
 SUPPORTED_SCHEMA_VERSIONS = HISTORICAL_SCHEMA_VERSIONS | {SCHEMA_VERSION}
 PROVENANCE_TYPE = "qcsd-class-study-acquisition-provenance"
 TERMINAL_TYPE = "qcsd-class-study-acquisition-terminal"
@@ -134,16 +138,16 @@ SCHEMA_SIX_CHECKPOINT_SCHEMA_VERSION = 2
 SCHEMA_SIX_TERMINAL_SCHEMA_VERSION = 3
 SCHEMA_SIX_COMPLETION_SCHEMA_VERSION = 3
 SCHEMA_SIX_DOCUMENT_RESPONSE_SCHEMA_VERSION = 1
-_MODERN_CHECKPOINT_SCHEMA_VERSIONS = frozenset({4, 5, 6, 7, 8, SCHEMA_VERSION})
-_FIXED_PROVENANCE_SCHEMA_VERSIONS = frozenset({5, 6, 7, 8, SCHEMA_VERSION})
-_POLICY_EVIDENCE_SCHEMA_VERSIONS = frozenset({5, 6, 7, 8, SCHEMA_VERSION})
-_SELECTION_SCHEMA_VERSIONS = frozenset({6, 7, 8, SCHEMA_VERSION})
+_MODERN_CHECKPOINT_SCHEMA_VERSIONS = frozenset({4, 5, 6, 7, 8, 9, SCHEMA_VERSION})
+_FIXED_PROVENANCE_SCHEMA_VERSIONS = frozenset({5, 6, 7, 8, 9, SCHEMA_VERSION})
+_POLICY_EVIDENCE_SCHEMA_VERSIONS = frozenset({5, 6, 7, 8, 9, SCHEMA_VERSION})
+_SELECTION_SCHEMA_VERSIONS = frozenset({6, 7, 8, 9, SCHEMA_VERSION})
 _INSTRUMENTATION_EVIDENCE_SCHEMA_VERSIONS = frozenset(
-    {2, 3, 4, 5, 6, 7, 8, SCHEMA_VERSION}
+    {2, 3, 4, 5, 6, 7, 8, 9, SCHEMA_VERSION}
 )
-_RENDER_EVIDENCE_SCHEMA_VERSIONS = frozenset({3, 4, 5, 6, 7, 8, SCHEMA_VERSION})
-_TERMINAL_STATE_SCHEMA_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, SCHEMA_VERSION})
-_DURATION_LIMIT_SCHEMA_VERSIONS = frozenset({3, 4, 5, 6, 7, 8, SCHEMA_VERSION})
+_RENDER_EVIDENCE_SCHEMA_VERSIONS = frozenset({3, 4, 5, 6, 7, 8, 9, SCHEMA_VERSION})
+_TERMINAL_STATE_SCHEMA_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, SCHEMA_VERSION})
+_DURATION_LIMIT_SCHEMA_VERSIONS = frozenset({3, 4, 5, 6, 7, 8, 9, SCHEMA_VERSION})
 MAX_ORIGIN_PASSES = 8
 MAX_APPROVED_ORIGINS = 32
 MAX_OBSERVED_AUDIT_ORIGINS = 512
@@ -356,7 +360,8 @@ DOMAIN_SAFETY_POLICY = {
 
 NAVIGATION_IMPLEMENTATION = "playwright-public-cdp-recursive-catalogue-boundary-egress-guard-v5"
 REGISTRABLE_DOMAIN_POLICY = "exact-frozen-tranco-candidate-domain"
-ELIGIBILITY_INPUTS = ["page-safety", "three-window-technical-stability"]
+ELIGIBILITY_INPUTS = ["page-safety", "short-window-technical-replay"]
+SCHEMA_NINE_ELIGIBILITY_INPUTS = ["page-safety", "three-window-technical-stability"]
 PROHIBITED_INPUTS = ["classifier", "defence", "latency", "bandwidth", "privacy"]
 ORIGIN_POLICY = {
     "max_passes": MAX_ORIGIN_PASSES,
@@ -864,6 +869,18 @@ _COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}\Z")
 _EMPTY_SHA256 = sha256_bytes(b"")
 
 
+def _probe_windows_for(acquisition_schema_version: int) -> tuple[Any, ...]:
+    if acquisition_schema_version == SCHEMA_VERSION:
+        return SHORT_STABILITY_PROBE_WINDOWS
+    if acquisition_schema_version in HISTORICAL_SCHEMA_VERSIONS:
+        return STABILITY_PROBE_WINDOWS
+    raise ValueError("acquisition stability schema is unsupported")
+
+
+def _short_window_for(acquisition_schema_version: int) -> bool:
+    return acquisition_schema_version == SCHEMA_VERSION
+
+
 def _matches_json_contract(value: object, expected: object) -> bool:
     """Compare JSON values without Python's ``bool``/``int`` equality alias."""
 
@@ -874,7 +891,7 @@ def _matches_json_contract(value: object, expected: object) -> bool:
 
 
 def _checkpoint_schema_for(acquisition_schema_version: int) -> int:
-    if acquisition_schema_version in {7, 8, SCHEMA_VERSION}:
+    if acquisition_schema_version in {7, 8, 9, SCHEMA_VERSION}:
         return CHECKPOINT_SCHEMA_VERSION
     if acquisition_schema_version in {4, 5, 6}:
         return SCHEMA_SIX_CHECKPOINT_SCHEMA_VERSION
@@ -882,7 +899,7 @@ def _checkpoint_schema_for(acquisition_schema_version: int) -> int:
 
 
 def _terminal_schema_for(acquisition_schema_version: int) -> int:
-    if acquisition_schema_version in {7, 8, SCHEMA_VERSION}:
+    if acquisition_schema_version in {7, 8, 9, SCHEMA_VERSION}:
         return TERMINAL_SCHEMA_VERSION
     if acquisition_schema_version in {4, 5, 6}:
         return SCHEMA_SIX_TERMINAL_SCHEMA_VERSION
@@ -892,7 +909,7 @@ def _terminal_schema_for(acquisition_schema_version: int) -> int:
 
 
 def _completion_schema_for(acquisition_schema_version: int) -> int:
-    if acquisition_schema_version in {7, 8, SCHEMA_VERSION}:
+    if acquisition_schema_version in {7, 8, 9, SCHEMA_VERSION}:
         return COMPLETION_SCHEMA_VERSION
     if acquisition_schema_version == 6:
         return SCHEMA_SIX_COMPLETION_SCHEMA_VERSION
@@ -944,7 +961,7 @@ def _document_response_schema_for(
     *,
     instrumentation_policy: object = None,
 ) -> int:
-    if acquisition_schema_version == SCHEMA_VERSION:
+    if acquisition_schema_version in {9, SCHEMA_VERSION}:
         return DOCUMENT_RESPONSE_SCHEMA_VERSION
     if acquisition_schema_version in HISTORICAL_SCHEMA_VERSIONS:
         if instrumentation_policy is None:
@@ -968,9 +985,9 @@ def _instrumentation_policy_for(
     *,
     recorded_policy: object = None,
 ) -> str:
-    if acquisition_schema_version == SCHEMA_VERSION:
+    if acquisition_schema_version in {9, SCHEMA_VERSION}:
         if recorded_policy is not None and recorded_policy != CDP_TARGET_INSTRUMENTATION_POLICY:
-            raise ValueError("current acquisition instrumentation policy is invalid")
+            raise ValueError("schema-9-or-10 acquisition instrumentation policy is invalid")
         return CDP_TARGET_INSTRUMENTATION_POLICY
     if acquisition_schema_version in HISTORICAL_SCHEMA_VERSIONS:
         contract = _historical_evidence_contract_for(
@@ -985,7 +1002,7 @@ def _instrumentation_policy_for(
 
 
 def _passive_render_contract_for(acquisition_schema_version: int) -> Mapping[str, Any]:
-    if acquisition_schema_version == SCHEMA_VERSION:
+    if acquisition_schema_version in {9, SCHEMA_VERSION}:
         return PASSIVE_RENDER_CONTRACT
     if acquisition_schema_version in HISTORICAL_SCHEMA_VERSIONS:
         value = _shared_historical_contract_value(
@@ -999,7 +1016,7 @@ def _passive_render_contract_for(acquisition_schema_version: int) -> Mapping[str
 
 
 def _passive_render_contract_sha256_for(acquisition_schema_version: int) -> str:
-    if acquisition_schema_version == SCHEMA_VERSION:
+    if acquisition_schema_version in {9, SCHEMA_VERSION}:
         return PASSIVE_RENDER_CONTRACT_SHA256
     if acquisition_schema_version in HISTORICAL_SCHEMA_VERSIONS:
         value = _shared_historical_contract_value(
@@ -1195,7 +1212,7 @@ def _validate_versioned_render_observation(
     acquisition_schema_version: int,
     allow_failure: bool = False,
 ) -> None:
-    if acquisition_schema_version in {7, 8, SCHEMA_VERSION}:
+    if acquisition_schema_version in {7, 8, 9, SCHEMA_VERSION}:
         validate_render_observation(value, allow_failure=allow_failure)
         return
     if acquisition_schema_version in {3, 4}:
@@ -1361,7 +1378,7 @@ def _validate_versioned_class_study_preparation(
     validators can then replay the otherwise unchanged resource/audit graph.
     """
 
-    if acquisition_schema_version == SCHEMA_VERSION:
+    if acquisition_schema_version in {9, SCHEMA_VERSION}:
         validate_class_study_preparation(manifest, workload_id=workload_id)
         return
     if acquisition_schema_version not in HISTORICAL_SCHEMA_VERSIONS:
@@ -1795,7 +1812,7 @@ def _prepared_replay_identity_sha256(
         raise ValueError("prepared replay identity is incomplete")
     runtime = (
         runtime_manifest(dict(manifest))
-        if acquisition_schema_version == SCHEMA_VERSION
+        if acquisition_schema_version in {9, SCHEMA_VERSION}
         else {
             "resources": project_stable_response_lengths(
                 deepcopy(list(manifest.get("resources", []))),
@@ -2493,7 +2510,7 @@ def initialise_runner(
             "browser_navigation_timeout_ms": MAX_ACQUISITION_BACKEND_TIMEOUT_MS,
             "passive_render_hard_cap_after_load_ms": (MAX_PASSIVE_RENDER_AFTER_LOAD_MS),
             "acquisition_action_timing_contract": ACTION_TIMING_CONTRACT,
-            "baseline_scheduling_contract": TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT,
+            "baseline_scheduling_contract": SHORT_TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT,
             "acquisition_selection_policy": ACQUISITION_SELECTION_POLICY,
             "registrable_domain_policy": REGISTRABLE_DOMAIN_POLICY,
             "domain_safety_policy": DOMAIN_SAFETY_POLICY,
@@ -2643,7 +2660,9 @@ def run_due_acquisition(
         candidates, _catalogue, states, terminal_payloads
     )
     admission_ids = set(selection["admission_ids"]) if not selection_blocked else set()
-    reservations = _baseline_batch_reservations(baseline_batches, states, terminal_payloads)
+    reservations = _baseline_batch_reservations(
+        baseline_batches, states, terminal_payloads, short_window=True
+    )
 
     def classify(
         current_time: datetime,
@@ -2658,7 +2677,7 @@ def run_due_acquisition(
             if state["terminal"] is not None:
                 continue
             if state["state"] == "probing":
-                if _probe_candidate_is_finalisable(state):
+                if _probe_candidate_is_finalisable(state, short_window=True):
                     finalisable_values.append(candidate)
                     continue
                 try:
@@ -2666,13 +2685,14 @@ def run_due_acquisition(
                         state,
                         current_time,
                         candidate_id=candidate.candidate_id,
+                        short_window=True,
                     )
                 except MissedProbeWindow:
                     missed_values.append(candidate)
                 else:
                     if pages:
                         probe_ids = {
-                            STABILITY_PROBE_WINDOWS[len(page["observations"])].probe_id
+                            SHORT_STABILITY_PROBE_WINDOWS[len(page["observations"])].probe_id
                             for page in pages
                         }
                         if len(probe_ids) != 1:
@@ -2699,7 +2719,7 @@ def run_due_acquisition(
         finalisable, due, missed, ready, pending = classify(current)
         if due or finalisable or missed:
             break
-        if ready and baseline_is_safe_with_releases(current, reservations):
+        if ready and baseline_is_safe_with_releases(current, reservations, short_window=True):
             selected_ready = _select_compatible_batch(
                 [
                     (candidate, len(states[candidate.candidate_id]["pages"]), "t+30s")
@@ -2708,7 +2728,9 @@ def run_due_acquisition(
                 maximum=max_candidates,
             )
             actual_baseline = read_clock()
-            if not baseline_is_safe_with_releases(actual_baseline, reservations):
+            if not baseline_is_safe_with_releases(
+                actual_baseline, reservations, short_window=True
+            ):
                 scheduling_rechecks += 1
                 if scheduling_rechecks > MAX_CANDIDATES_PER_ACTION:
                     raise ValueError("clock repeatedly crossed a baseline scheduling boundary")
@@ -2756,7 +2778,7 @@ def run_due_acquisition(
                 candidate_catalogue_path=candidate_catalogue_path,
                 stability_root=stability_root,
                 workload_root=workload_root,
-                terminalised_at=_finalisable_probe_terminal_time(state),
+                terminalised_at=_finalisable_probe_terminal_time(state, short_window=True),
                 baseline_batch=_baseline_batch_for_candidate(
                     baseline_batches,
                     candidate_id=candidate.candidate_id,
@@ -2797,7 +2819,7 @@ def run_due_acquisition(
             state["baseline_started_at"] = _format_time(baseline)
         save_checkpoint()
         current = wait_until(
-            baseline + timedelta(milliseconds=STABILITY_PROBE_WINDOWS[0].earliest_ms)
+            baseline + timedelta(milliseconds=SHORT_STABILITY_PROBE_WINDOWS[0].earliest_ms)
         )
         initial_pages: dict[str, list[dict[str, Any]]] = {}
         missed_after_wait: list[Any] = []
@@ -2807,6 +2829,7 @@ def run_due_acquisition(
                     states[candidate.candidate_id],
                     current,
                     candidate_id=candidate.candidate_id,
+                    short_window=True,
                 )
             except MissedProbeWindow:
                 missed_after_wait.append(candidate)
@@ -2847,7 +2870,74 @@ def run_due_acquisition(
                 save_checkpoint=save_checkpoint,
                 missed_reason=("recoverable probe retries exceeded the latest admissible window"),
             )
-    elif pending and not _pending_navigation_blocked(states, current):
+            # The accelerated profile compares two actual prepared replays.
+            # Run the repeat in this bounded action when possible so no
+            # watcher restart or second global reservation is needed.
+            repeat = tuple(
+                candidate
+                for candidate in remaining
+                if states[candidate.candidate_id]["terminal"] is None
+                and not _probe_candidate_is_finalisable(
+                    states[candidate.candidate_id], short_window=True
+                )
+            )
+            if repeat:
+                repeat_at = wait_until(
+                    baseline
+                    + timedelta(milliseconds=SHORT_STABILITY_PROBE_WINDOWS[1].earliest_ms)
+                )
+                repeat_pages: dict[str, list[dict[str, Any]]] = {}
+                repeat_missed: list[Any] = []
+                for candidate in repeat:
+                    state = states[candidate.candidate_id]
+                    try:
+                        repeat_pages[candidate.candidate_id] = _due_pages(
+                            state, repeat_at,
+                            candidate_id=candidate.candidate_id,
+                            short_window=True,
+                        )
+                    except MissedProbeWindow:
+                        repeat_missed.append(candidate)
+                for candidate in repeat_missed:
+                    state = states[candidate.candidate_id]
+                    _terminalise(
+                        runner, state, candidate.candidate_id,
+                        "probe-window-missed",
+                        "bounded action passed the latest admissible probe window",
+                        provenance_path,
+                        terminalised_at=repeat_at,
+                        baseline_batch=baseline_batch,
+                    )
+                if repeat_missed:
+                    save_checkpoint()
+                repeat_due = tuple(
+                    candidate for candidate in repeat
+                    if candidate.candidate_id not in {
+                        missed.candidate_id for missed in repeat_missed
+                    }
+                )
+                if repeat_due:
+                    _run_probe_batch(
+                        repeat_due,
+                        initial_pages=repeat_pages,
+                        runner=runner,
+                        provenance_path=provenance_path,
+                        provenance_payload=provenance_payload,
+                        candidate_catalogue_path=candidate_catalogue_path,
+                        stability_root=stability_root,
+                        workload_root=workload_root,
+                        backend=backend,
+                        states=states,
+                        baseline_batches=baseline_batches,
+                        read_clock=read_clock,
+                        publish=publish_active,
+                        clear=clear_active,
+                        save_checkpoint=save_checkpoint,
+                        missed_reason=(
+                            "recoverable probe retries exceeded the latest admissible window"
+                        ),
+                    )
+    elif pending and not _pending_navigation_blocked(states, current, short_window=True):
         selected = _select_compatible_batch(
             [(candidate, 1, "navigation") for candidate in pending],
             maximum=max_candidates,
@@ -3180,6 +3270,9 @@ def _run_probe_batch(
 ) -> None:
     """Run a deterministic, globally capped page batch and merge its results."""
 
+    if provenance_payload.get("acquisition_schema_version") != SCHEMA_VERSION:
+        raise ValueError("historical acquisition probe execution is verification-only")
+
     retries = {
         candidate.candidate_id: list(initial_pages[candidate.candidate_id])
         for candidate in candidates
@@ -3200,6 +3293,7 @@ def _run_probe_batch(
                     state,
                     published_at,
                     candidate_id=candidate_id,
+                    short_window=True,
                 )
             except MissedProbeWindow:
                 missed.add(candidate_id)
@@ -3216,7 +3310,7 @@ def _run_probe_batch(
                 raise ValueError("probe due set changed before active-batch publication")
             for page_state in retries[candidate_id]:
                 probe_index = len(page_state["observations"])
-                probe_id = STABILITY_PROBE_WINDOWS[probe_index].probe_id
+                probe_id = SHORT_STABILITY_PROBE_WINDOWS[probe_index].probe_id
                 attempts = [
                     item
                     for item in page_state.setdefault("probe_attempts", [])
@@ -3232,6 +3326,10 @@ def _run_probe_batch(
                         ),
                     }
                     continue
+                # This is the durable dispatch/publication time for the
+                # parallel probe batch, not an instrumented per-worker packet
+                # timestamp. The bounded action records worker completion
+                # separately and marks a window missed if dispatch is late.
                 observed_at = _format_time(published_at)
                 workload_id = _probe_attempt_workload_id(
                     candidate_id,
@@ -3476,7 +3574,10 @@ def _run_probe_batch(
                 continue
             terminal_clocks[candidate_id] = max(terminal_clocks[candidate_id], retry_clock)
             try:
-                _due_pages(states[candidate_id], retry_clock, candidate_id=candidate_id)
+                _due_pages(
+                    states[candidate_id], retry_clock,
+                    candidate_id=candidate_id, short_window=True,
+                )
             except MissedProbeWindow:
                 missed.add(candidate_id)
                 next_retries[candidate_id] = []
@@ -3532,7 +3633,7 @@ def _terminalise_completed_probe_candidate(
 ) -> None:
     if not all(
         page.get("rejection") is not None
-        or len(page["observations"]) == len(STABILITY_PROBE_WINDOWS)
+        or len(page["observations"]) == len(SHORT_STABILITY_PROBE_WINDOWS)
         for page in state["pages"]
     ):
         return
@@ -3569,6 +3670,7 @@ def _terminalise_completed_probe_candidate(
             page=page,
             baseline_started_at=state["baseline_started_at"],
             observations=observations,
+            short_window=True,
         )
         from .class_catalogue import load_stability_receipt
 
@@ -3612,7 +3714,9 @@ def _terminalise_completed_probe_candidate(
         )
 
 
-def _probe_candidate_is_finalisable(state: Mapping[str, Any]) -> bool:
+def _probe_candidate_is_finalisable(
+    state: Mapping[str, Any], *, short_window: bool = False
+) -> bool:
     """Whether a probing checkpoint needs only deterministic publication."""
 
     pages = state.get("pages")
@@ -3628,7 +3732,8 @@ def _probe_candidate_is_finalisable(state: Mapping[str, Any]) -> bool:
                 page.get("rejection") is not None
                 or (
                     isinstance(page.get("observations"), list)
-                    and len(page["observations"]) == len(STABILITY_PROBE_WINDOWS)
+                    and len(page["observations"])
+                    == len(SHORT_STABILITY_PROBE_WINDOWS if short_window else STABILITY_PROBE_WINDOWS)
                 )
             )
             for page in pages
@@ -3636,10 +3741,12 @@ def _probe_candidate_is_finalisable(state: Mapping[str, Any]) -> bool:
     )
 
 
-def _finalisable_probe_terminal_time(state: Mapping[str, Any]) -> datetime:
+def _finalisable_probe_terminal_time(
+    state: Mapping[str, Any], *, short_window: bool = False
+) -> datetime:
     """Recover the original final worker completion, never the resume time."""
 
-    if not _probe_candidate_is_finalisable(state):
+    if not _probe_candidate_is_finalisable(state, short_window=short_window):
         raise ValueError("probe candidate is not ready for deterministic finalisation")
     completed = [
         _timestamp(attempt["completed_at"])
@@ -3724,6 +3831,8 @@ def _baseline_batch_reservations(
     batches: Sequence[Mapping[str, Any]],
     states: Mapping[str, Any],
     terminal_payloads: Mapping[str, Mapping[str, Any]],
+    *,
+    short_window: bool = False,
 ) -> tuple[BaselineReservation, ...]:
     if not isinstance(batches, (list, tuple)):
         raise ValueError("acquisition baseline-batch ledger is malformed")
@@ -3758,7 +3867,14 @@ def _baseline_batch_reservations(
             else None
         )
         reservations.append(
-            BaselineReservation(_timestamp(batch["baseline_started_at"]), terminalised)
+            BaselineReservation(
+                _timestamp(batch["baseline_started_at"]),
+                terminalised,
+                release_delay_ms=(
+                    SHORT_TERMINAL_RELEASE_DELAY_MS
+                    if short_window else MINIMUM_BASELINE_SPACING_MS
+                ),
+            )
         )
     return tuple(reservations)
 
@@ -3785,6 +3901,8 @@ def acquisition_status(
         load_json(Path(root) / "provenance.json"), expected_type=PROVENANCE_TYPE
     )
     acquisition_schema_version = provenance["acquisition_schema_version"]
+    probe_windows = _probe_windows_for(acquisition_schema_version)
+    short_window = _short_window_for(acquisition_schema_version)
     selection = None
     selection_blocked: list[str] = []
     reservations = None
@@ -3804,7 +3922,8 @@ def acquisition_status(
             or state.get("navigation_attempts")
         }
         reservations = _baseline_batch_reservations(
-            payload["baseline_batches"], states, terminal_payloads
+            payload["baseline_batches"], states, terminal_payloads,
+            short_window=short_window,
         )
     baseline_starts = (
         _baseline_batch_starts(payload["baseline_batches"])
@@ -3840,12 +3959,14 @@ def acquisition_status(
             probing += 1
             if (
                 acquisition_schema_version in _POLICY_EVIDENCE_SCHEMA_VERSIONS
-                and _probe_candidate_is_finalisable(state)
+                and _probe_candidate_is_finalisable(state, short_window=short_window)
             ):
                 finalisable += 1
                 continue
             try:
-                if _due_pages(state, current, candidate_id=candidate_id):
+                if _due_pages(
+                    state, current, candidate_id=candidate_id, short_window=short_window
+                ):
                     due_now += 1
             except MissedProbeWindow:
                 missed += 1
@@ -3853,10 +3974,10 @@ def acquisition_status(
                 if page.get("rejection") is not None:
                     continue
                 index = len(page["observations"])
-                if index < len(STABILITY_PROBE_WINDOWS):
+                if index < len(probe_windows):
                     baseline = _timestamp(state["baseline_started_at"])
                     due = baseline + timedelta(
-                        milliseconds=STABILITY_PROBE_WINDOWS[index].earliest_ms
+                        milliseconds=probe_windows[index].earliest_ms
                     )
                     if due > current:
                         next_due = due if next_due is None or due < next_due else next_due
@@ -3865,6 +3986,7 @@ def acquisition_status(
         current,
         baseline_starts=baseline_starts,
         reservations=reservations,
+        short_window=short_window,
     )
     if pending_due is not None:
         next_due = pending_due if next_due is None or pending_due < next_due else next_due
@@ -3874,6 +3996,7 @@ def acquisition_status(
         current,
         baseline_starts=baseline_starts,
         reservations=reservations,
+        short_window=short_window,
     )
     started_nonterminal = any(
         state["terminal"] is None
@@ -4744,16 +4867,19 @@ def _checkpoint_stability_observations(
     return tuple(observations)
 
 
-def _validate_terminal_page_rejection(page_state: Mapping[str, Any]) -> None:
+def _validate_terminal_page_rejection(
+    page_state: Mapping[str, Any], *, acquisition_schema_version: int = 9
+) -> None:
     rejection = page_state.get("rejection")
     if not isinstance(rejection, Mapping) or set(rejection) != {"kind", "reason"}:
         raise ValueError("terminal checkpoint page rejection is malformed")
     if not isinstance(rejection["reason"], str) or not rejection["reason"]:
         raise ValueError("terminal checkpoint page rejection has no reason")
     observation_count = len(page_state["observations"])
-    if observation_count >= len(STABILITY_PROBE_WINDOWS):
+    windows = _probe_windows_for(acquisition_schema_version)
+    if observation_count >= len(windows):
         raise ValueError("completed terminal page cannot also be rejected")
-    probe_id = STABILITY_PROBE_WINDOWS[observation_count].probe_id
+    probe_id = windows[observation_count].probe_id
     attempts = [item for item in page_state["probe_attempts"] if item.get("probe_id") == probe_id]
     if not attempts:
         raise ValueError("terminal page rejection has no matching probe attempt")
@@ -4890,7 +5016,9 @@ def _validate_probing_terminal_state(
         elif approved_origins:
             raise ValueError("unobserved terminal page carries approved origins")
         if "rejection" in page_state:
-            _validate_terminal_page_rejection(page_state)
+            _validate_terminal_page_rejection(
+                page_state, acquisition_schema_version=acquisition_schema_version
+            )
             decision = None
         else:
             decision = (
@@ -4898,8 +5026,9 @@ def _validate_probing_terminal_state(
                     page,
                     baseline_started_at=state["baseline_started_at"],
                     observations=observations,
+                    short_window=_short_window_for(acquisition_schema_version),
                 )
-                if len(observations) == len(STABILITY_PROBE_WINDOWS)
+                if len(observations) == len(_probe_windows_for(acquisition_schema_version))
                 else None
             )
         for attempt in page_state["probe_attempts"]:
@@ -4913,6 +5042,7 @@ def _validate_live_probing_state(
     state: Mapping[str, Any],
     *,
     candidate: Any,
+    acquisition_schema_version: int,
 ) -> None:
     """Validate mutable probing evidence structurally without replaying history."""
 
@@ -4938,7 +5068,7 @@ def _validate_live_probing_state(
     _validate_probing_terminal_state(
         structural_state,
         candidate=candidate,
-        acquisition_schema_version=SCHEMA_VERSION,
+        acquisition_schema_version=acquisition_schema_version,
         terminalised_at=datetime.max.replace(tzinfo=UTC),
         enforce_duration_limit=True,
     )
@@ -5012,13 +5142,18 @@ def _validate_current_terminal_state(
     incomplete = tuple(
         record
         for record in pages
-        if "rejection" not in record[0] and len(record[2]) < len(STABILITY_PROBE_WINDOWS)
+        if "rejection" not in record[0]
+        and len(record[2]) < len(_probe_windows_for(acquisition_schema_version))
     )
     if kind == "probe-window-missed":
         if not incomplete:
             raise ValueError("missed-window terminal has no incomplete page")
         try:
-            _due_pages(state, terminalised_at, candidate_id=candidate.candidate_id)
+            _due_pages(
+                state, terminalised_at,
+                candidate_id=candidate.candidate_id,
+                short_window=_short_window_for(acquisition_schema_version),
+            )
         except MissedProbeWindow:
             pass
         else:
@@ -5027,7 +5162,7 @@ def _validate_current_terminal_state(
         if reason == retry_reason:
             retry_supported = False
             for page_state, _page, observations, _decision in incomplete:
-                probe_id = STABILITY_PROBE_WINDOWS[len(observations)].probe_id
+                probe_id = _probe_windows_for(acquisition_schema_version)[len(observations)].probe_id
                 current_attempts = [
                     item
                     for item in page_state["probe_attempts"]
@@ -5180,6 +5315,11 @@ def _validated_terminal_binding(
         )
         if (
             not decision.eligible
+            or (
+                acquisition_schema_version == SCHEMA_VERSION
+                and stability_payload.get("acquisition_evidence_schema_version")
+                != SHORT_STABILITY_ACQUISITION_EVIDENCE_SCHEMA_VERSION
+            )
             or stability_payload["candidate"]["candidate_id"] != candidate.candidate_id
             or stability_payload["candidate"]["domain"] != candidate.domain
             or stability_payload["decision"]["stable_values"]["prepared_workload_sha256"]
@@ -5211,6 +5351,7 @@ def _validated_terminal_binding(
                     page,
                     baseline_started_at=candidate_state["baseline_started_at"],
                     observations=observations,
+                    short_window=_short_window_for(acquisition_schema_version),
                 ).as_dict()
                 or page_state["observations"][0]["prepared_workload_sha256"]
                 != sha256_file(workload_path)
@@ -5360,13 +5501,19 @@ def _validate_current_provenance_contract(
             "browser_navigation_timeout_ms": MAX_ACQUISITION_BACKEND_TIMEOUT_MS,
             "passive_render_hard_cap_after_load_ms": MAX_PASSIVE_RENDER_AFTER_LOAD_MS,
             "acquisition_action_timing_contract": ACTION_TIMING_CONTRACT,
-            "baseline_scheduling_contract": TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT,
+            "baseline_scheduling_contract": (
+                SHORT_TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT
+                if schema == SCHEMA_VERSION
+                else TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT
+            ),
             "acquisition_selection_policy": ACQUISITION_SELECTION_POLICY,
             "registrable_domain_policy": REGISTRABLE_DOMAIN_POLICY,
             "domain_safety_policy": DOMAIN_SAFETY_POLICY,
             "domain_safety_policy_sha256": sha256_bytes(canonical_json_bytes(DOMAIN_SAFETY_POLICY)),
             "origin_policy": ORIGIN_POLICY,
-            "eligibility_inputs": ELIGIBILITY_INPUTS,
+            "eligibility_inputs": (
+                ELIGIBILITY_INPUTS if schema == SCHEMA_VERSION else SCHEMA_NINE_ELIGIBILITY_INPUTS
+            ),
             "prohibited_inputs": PROHIBITED_INPUTS,
         }
         fixed_contract_valid = _matches_json_contract(fixed_projection, expected_fixed)
@@ -5773,7 +5920,10 @@ def _probe_attempt_workload_id(
         or not candidate_id
         or type(page_ordinal) is not int
         or page_ordinal < 0
-        or probe_id not in {window.probe_id for window in STABILITY_PROBE_WINDOWS}
+        or probe_id not in {
+            window.probe_id
+            for window in (*STABILITY_PROBE_WINDOWS, *SHORT_STABILITY_PROBE_WINDOWS)
+        }
         or type(attempt) is not int
         or attempt < 1
     ):
@@ -5976,8 +6126,10 @@ def _validate_probe_attempts(
     successful: set[str] = set()
     completed_attempts: dict[str, Mapping[str, Any]] = {}
     finalised: set[str] = set()
-    probe_ids = tuple(window.probe_id for window in STABILITY_PROBE_WINDOWS)
+    windows = _probe_windows_for(acquisition_schema_version)
+    probe_ids = tuple(window.probe_id for window in windows)
     expected_attempts = {probe_id: 1 for probe_id in probe_ids}
+    latest_first_completion: datetime | None = None
     for item in attempts:
         base_fields = {
             "probe_id",
@@ -6014,7 +6166,7 @@ def _validate_probe_attempts(
         )
         start_in_window = True
         if observed_at is not None and baseline_started_at is not None and probe_index >= 0:
-            window = STABILITY_PROBE_WINDOWS[probe_index]
+            window = windows[probe_index]
             elapsed = observed_at - _timestamp(baseline_started_at)
             start_in_window = (
                 timedelta(milliseconds=window.earliest_ms)
@@ -6023,6 +6175,15 @@ def _validate_probe_attempts(
             )
         completed_at = (
             _timestamp(item["completed_at"]) if isinstance(item.get("completed_at"), str) else None
+        )
+        short_repeat_before_first_completed = (
+            acquisition_schema_version == SCHEMA_VERSION
+            and probe_index == 1
+            and (
+                latest_first_completion is None
+                or observed_at is None
+                or observed_at < latest_first_completion
+            )
         )
         if (
             probe_index < 0
@@ -6060,6 +6221,7 @@ def _validate_probe_attempts(
                 )
             )
             or completed_at < observed_at
+            or short_repeat_before_first_completed
             or (
                 enforce_duration_limit
                 and item["outcome"] == "completed"
@@ -6074,6 +6236,11 @@ def _validate_probe_attempts(
         ):
             raise ValueError("acquisition probe-attempt ledger is malformed")
         seen.add((probe_id, attempt))
+        if acquisition_schema_version == SCHEMA_VERSION and probe_index == 0:
+            latest_first_completion = (
+                completed_at if latest_first_completion is None
+                else max(latest_first_completion, completed_at)
+            )
         expected_attempts[probe_id] += 1
         if item["outcome"] == "completed":
             if probe_id in successful:
@@ -6121,9 +6288,9 @@ def _validate_probe_attempts(
     pending = page.get("pending_probe")
     if pending is not None:
         observation_count = len(page.get("observations", []))
-        if observation_count >= len(STABILITY_PROBE_WINDOWS):
+        if observation_count >= len(windows):
             raise ValueError("completed acquisition page retains a pending probe")
-        probe_id = STABILITY_PROBE_WINDOWS[observation_count].probe_id
+        probe_id = windows[observation_count].probe_id
         attempt, _started = _validate_pending_probe(
             pending,
             candidate_id=candidate_id,
@@ -6132,6 +6299,37 @@ def _validate_probe_attempts(
         )
         if attempt != expected_attempts[probe_id] or probe_id in finalised:
             raise ValueError("pending acquisition probe attempt is not sequential")
+
+
+def _validate_short_probe_batch_order(
+    baseline_batches: Sequence[Mapping[str, Any]],
+    states: Mapping[str, Mapping[str, Any]],
+) -> None:
+    """Replay the v10 producer's batch-wide first-then-repeat ordering."""
+
+    first_id, repeat_id = (window.probe_id for window in SHORT_STABILITY_PROBE_WINDOWS)
+    for batch in baseline_batches:
+        first_completions: list[datetime] = []
+        repeat_dispatches: list[datetime] = []
+        first_pending = False
+        for candidate_id in batch["candidate_ids"]:
+            for page in states[candidate_id]["pages"]:
+                for attempt in page.get("probe_attempts", []):
+                    if attempt["probe_id"] == first_id:
+                        first_completions.append(_timestamp(attempt["completed_at"]))
+                    elif attempt["probe_id"] == repeat_id:
+                        repeat_dispatches.append(_timestamp(attempt["observed_at"]))
+                pending = page.get("pending_probe")
+                if pending is not None:
+                    first_pending |= pending["probe_id"] == first_id
+                    if pending["probe_id"] == repeat_id:
+                        repeat_dispatches.append(_timestamp(pending["observed_at"]))
+        if repeat_dispatches and (
+            first_pending
+            or not first_completions
+            or min(repeat_dispatches) < max(first_completions)
+        ):
+            raise ValueError("short acquisition repeat predates first batch completion")
 
 
 def _validate_baseline_ready_state(state: Mapping[str, Any], *, candidate: Any) -> None:
@@ -6254,7 +6452,10 @@ def _validate_internal_acquisition_error(state: Mapping[str, Any]) -> Mapping[st
             type(value["page_ordinal"]) is not int
             or value["page_ordinal"] < 0
             or not isinstance(value["probe_id"], str)
-            or value["probe_id"] not in {window.probe_id for window in STABILITY_PROBE_WINDOWS}
+            or value["probe_id"] not in {
+                window.probe_id
+                for window in (*STABILITY_PROBE_WINDOWS, *SHORT_STABILITY_PROBE_WINDOWS)
+            }
         ):
             raise ValueError("probe internal acquisition error identity is malformed")
         matches = [
@@ -6274,17 +6475,22 @@ def _validate_internal_acquisition_error(state: Mapping[str, Any]) -> Mapping[st
 
 
 def _due_pages(
-    state: Mapping[str, Any], now: datetime, *, candidate_id: str
+    state: Mapping[str, Any],
+    now: datetime,
+    *,
+    candidate_id: str,
+    short_window: bool = False,
 ) -> list[dict[str, Any]]:
     baseline = _timestamp(state["baseline_started_at"])
+    windows = SHORT_STABILITY_PROBE_WINDOWS if short_window else STABILITY_PROBE_WINDOWS
     result: list[dict[str, Any]] = []
     for page in state["pages"]:
         if page.get("rejection") is not None:
             continue
         index = len(page["observations"])
-        if index >= len(STABILITY_PROBE_WINDOWS):
+        if index >= len(windows):
             continue
-        window = STABILITY_PROBE_WINDOWS[index]
+        window = windows[index]
         pending = page.get("pending_probe")
         if pending is not None:
             _attempt, pending_started = _validate_pending_probe(
@@ -6419,8 +6625,11 @@ def _checkpoint_baselines(states: Mapping[str, Any]) -> tuple[datetime, ...]:
 
 def _incomplete_probe_starts(
     states: Mapping[str, Any],
+    *,
+    short_window: bool = False,
 ) -> tuple[datetime, ...]:
     starts: set[datetime] = set()
+    windows = SHORT_STABILITY_PROBE_WINDOWS if short_window else STABILITY_PROBE_WINDOWS
     for state in states.values():
         if state.get("terminal") is not None or state.get("state") != "probing":
             continue
@@ -6429,18 +6638,23 @@ def _incomplete_probe_starts(
             if page.get("rejection") is not None:
                 continue
             index = len(page["observations"])
-            if index >= len(STABILITY_PROBE_WINDOWS) or page.get("pending_probe"):
+            if index >= len(windows) or page.get("pending_probe"):
                 continue
-            earliest = baseline + timedelta(milliseconds=STABILITY_PROBE_WINDOWS[index].earliest_ms)
+            earliest = baseline + timedelta(milliseconds=windows[index].earliest_ms)
             starts.add(earliest)
     return tuple(sorted(starts))
 
 
-def _pending_navigation_blocked(states: Mapping[str, Any], now: datetime) -> bool:
+def _pending_navigation_blocked(
+    states: Mapping[str, Any], now: datetime, *, short_window: bool = False
+) -> bool:
     """Protect the next watcher-launched probe from a long navigation action."""
 
     reservation = timedelta(milliseconds=PENDING_BASELINE_GUARD_MS)
-    return any(now < start < now + reservation for start in _incomplete_probe_starts(states))
+    return any(
+        now < start < now + reservation
+        for start in _incomplete_probe_starts(states, short_window=short_window)
+    )
 
 
 def _next_pending_start(
@@ -6449,6 +6663,7 @@ def _next_pending_start(
     *,
     baseline_starts: Sequence[datetime],
     reservations: Sequence[BaselineReservation] | None = None,
+    short_window: bool = False,
 ) -> datetime | None:
     candidates: list[datetime] = []
     if any(
@@ -6456,13 +6671,18 @@ def _next_pending_start(
         for state in states.values()
     ):
         safe = (
-            earliest_safe_baseline(now, baseline_starts)
+            earliest_safe_baseline(now, baseline_starts, short_window=short_window)
             if reservations is None
-            else earliest_safe_baseline_with_releases(now, reservations)
+            else earliest_safe_baseline_with_releases(
+                now, reservations, short_window=short_window
+            )
         )
         if safe > now:
             candidates.append(safe)
-    candidates.extend(start for start in _incomplete_probe_starts(states) if start > now)
+    candidates.extend(
+        start for start in _incomplete_probe_starts(states, short_window=short_window)
+        if start > now
+    )
     return min(candidates) if candidates else None
 
 
@@ -6472,15 +6692,16 @@ def _pending_baseline_blocked(
     *,
     baseline_starts: Sequence[datetime],
     reservations: Sequence[BaselineReservation] | None = None,
+    short_window: bool = False,
 ) -> bool:
     ready = any(
         state.get("terminal") is None and state.get("state") == "baseline-ready"
         for state in states.values()
     )
     safe = (
-        baseline_is_safe(now, baseline_starts)
+        baseline_is_safe(now, baseline_starts, short_window=short_window)
         if reservations is None
-        else baseline_is_safe_with_releases(now, reservations)
+        else baseline_is_safe_with_releases(now, reservations, short_window=short_window)
     )
     if ready and safe:
         return False
@@ -6488,7 +6709,9 @@ def _pending_baseline_blocked(
         state.get("terminal") is None and state.get("state") == "pending"
         for state in states.values()
     )
-    if pending_navigation and not _pending_navigation_blocked(states, now):
+    if pending_navigation and not _pending_navigation_blocked(
+        states, now, short_window=short_window
+    ):
         return False
     return ready or pending_navigation
 
@@ -6732,6 +6955,7 @@ def _validate_baseline_batches(
     states: Mapping[str, Any],
     candidate_order: Sequence[str],
     reservations: Sequence[BaselineReservation] | None = None,
+    short_window: bool = False,
 ) -> tuple[Mapping[str, Any], ...]:
     if not isinstance(value, list):
         raise ValueError("acquisition baseline-batch ledger is malformed")
@@ -6802,7 +7026,7 @@ def _validate_baseline_batches(
     else:
         if tuple(reservation.baseline_started_at for reservation in reservations) != starts:
             raise ValueError("baseline reservation identities differ from their ledger")
-        validate_baseline_schedule_with_releases(reservations)
+        validate_baseline_schedule_with_releases(reservations, short_window=short_window)
     return tuple(validated)
 
 
@@ -7125,7 +7349,11 @@ def _load_checkpoint_state(
         if modern_checkpoint_schema and state["state"] == "pending":
             _validate_current_pending_state(state)
         if modern_checkpoint_schema and state["state"] == "probing":
-            _validate_live_probing_state(state, candidate=candidate)
+            _validate_live_probing_state(
+                state,
+                candidate=candidate,
+                acquisition_schema_version=acquisition_schema_version,
+            )
         if state["state"] == "baseline-ready":
             _validate_baseline_ready_state(state, candidate=candidate)
         if _validate_internal_acquisition_error(state) is not None:
@@ -7151,7 +7379,8 @@ def _load_checkpoint_state(
     if modern_checkpoint_schema:
         reservations = (
             _baseline_batch_reservations(
-                baseline_batches, states, _checkpoint_terminal_payloads(path.parent, states)
+                baseline_batches, states, _checkpoint_terminal_payloads(path.parent, states),
+                short_window=_short_window_for(acquisition_schema_version),
             )
             if selection_schema
             else None
@@ -7161,7 +7390,10 @@ def _load_checkpoint_state(
             states=states,
             candidate_order=candidate_order,
             reservations=reservations,
+            short_window=_short_window_for(acquisition_schema_version),
         )
+        if current_schema:
+            _validate_short_probe_batch_order(validated_baseline_batches, states)
         active_recoveries = _validate_active_batch(
             active_batch,
             states=states,

@@ -1315,7 +1315,7 @@ def acquisition(tmp_path: Path) -> Fixture:
         "acquisition_action_timing_contract": copy.deepcopy(
             watch._ACQUISITION_ACTION_TIMING_CONTRACT
         ),
-        "baseline_scheduling_contract": copy.deepcopy(watch._TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT),
+        "baseline_scheduling_contract": copy.deepcopy(watch._SHORT_TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT),
         "registrable_domain_policy": watch._REGISTRABLE_DOMAIN_POLICY,
         "domain_safety_policy": copy.deepcopy(watch._DOMAIN_SAFETY_POLICY),
         "domain_safety_policy_sha256": watch._DOMAIN_SAFETY_POLICY_SHA256,
@@ -1558,9 +1558,13 @@ def test_acquisition_only_authority_rejects_resealed_gate_drift(
 
 
 def test_watcher_acquisition_contracts_match_runtime() -> None:
-    from qcsd_lab.acquisition_timing import TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT
+    from qcsd_lab.acquisition_timing import (
+        SHORT_TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT,
+        TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT,
+    )
     from qcsd_lab.class_attestation import ACQUISITION_CORRECTNESS_TESTS
     assert watch._TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT == TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT
+    assert watch._SHORT_TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT == SHORT_TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT
     assert watch._ACQUISITION_CORRECTNESS_TESTS == ACQUISITION_CORRECTNESS_TESTS
 
 
@@ -1781,13 +1785,17 @@ def test_watcher_rejects_selection_inventory_or_completion_drift(mutation: str) 
         watch._validate_status_details(details, action="acquisition-status")
 
 
-@pytest.mark.parametrize("mutation", (None, "late", "missed", "retry", "hash"))
+@pytest.mark.parametrize("mutation", (None, "before_boundary", "late", "missed", "retry", "hash"))
 def test_watcher_replays_causal_scientific_terminal_release(
     acquisition: Fixture, mutation: str | None,
 ) -> None:
     payload = _checkpoint_payload(acquisition)
     first, second = acquisition.candidate_ids[:2]
-    starts = ("2026-08-29T01:00:00Z", "2026-08-31T01:00:00Z")
+    starts = (
+        "2026-08-29T01:00:00Z",
+        "2026-08-29T01:01:59Z" if mutation == "before_boundary"
+        else "2026-08-29T01:02:00Z",
+    )
     batches = []
     for candidate_id, started in zip((first, second), starts, strict=True):
         payload["candidates"][candidate_id] = {
@@ -1805,7 +1813,7 @@ def test_watcher_replays_causal_scientific_terminal_release(
         "terminal_schema_version": watch.TERMINAL_SCHEMA_VERSION,
         "checkpoint_schema_version": watch.CHECKPOINT_SCHEMA_VERSION,
         "candidate_id": first, "kind": "probe-window-missed" if mutation == "missed" else "stable-page-unavailable",
-        "terminalised_at": "2026-08-31T00:21:00Z" if mutation == "late" else "2026-08-29T01:01:00Z",
+        "terminalised_at": "2026-08-29T01:01:01Z" if mutation == "late" else "2026-08-29T01:01:00Z",
         "provenance_sha256": payload["provenance_sha256"], "baseline_batch": batches[0],
         "checkpoint_state_sha256": hashlib.sha256(_canonical(state)).hexdigest(),
         "reason": "fixture scientific rejection", "stability_receipt": None,
@@ -1824,6 +1832,57 @@ def test_watcher_replays_causal_scientific_terminal_release(
     else:
         with pytest.raises(watch.WatchError):
             watch._validate_checkpoint(acquisition.paths, binding)
+
+
+def test_watcher_partial_pair_terminal_cannot_release_short_reservation(
+    acquisition: Fixture,
+) -> None:
+    payload = _checkpoint_payload(acquisition)
+    first, partner, following = acquisition.candidate_ids[:3]
+    early = "2026-08-29T01:00:00Z"
+    later = "2026-08-29T01:02:00Z"
+    first_batch = _batch("baseline", {
+        "baseline_started_at": early,
+        "candidate_ids": [first, partner],
+        "live_page_count": 2,
+    })
+    next_batch = _batch("baseline", {
+        "baseline_started_at": later,
+        "candidate_ids": [following],
+        "live_page_count": 1,
+    })
+    payload["baseline_batches"] = [first_batch, next_batch]
+    for candidate_id, started in ((first, early), (partner, early), (following, later)):
+        payload["candidates"][candidate_id] = {
+            "state": "probing",
+            "pages": [{"page": {"ordinal": 0}}],
+            "terminal": None,
+            "baseline_started_at": started,
+        }
+    state = payload["candidates"][first]
+    terminal = {
+        "terminal_schema_version": watch.TERMINAL_SCHEMA_VERSION,
+        "checkpoint_schema_version": watch.CHECKPOINT_SCHEMA_VERSION,
+        "candidate_id": first,
+        "kind": "stable-page-unavailable",
+        "terminalised_at": "2026-08-29T01:01:00Z",
+        "provenance_sha256": payload["provenance_sha256"],
+        "baseline_batch": first_batch,
+        "checkpoint_state_sha256": hashlib.sha256(_canonical(state)).hexdigest(),
+        "reason": "fixture scientific rejection",
+        "stability_receipt": None,
+        "admitted_workload": None,
+    }
+    relative = f"terminals/{first}.json"
+    path = acquisition.paths.acquisition_root / relative
+    path.parent.mkdir(exist_ok=True)
+    _write_receipt(path, "qcsd-class-study-acquisition-terminal", terminal)
+    state["state"] = "terminal"
+    state["terminal"] = {"path": relative, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+    _replace_checkpoint(acquisition, payload)
+    binding = watch._validate_immutable_binding(acquisition.paths)
+    with pytest.raises(watch.WatchError, match="violate the serial schedule"):
+        watch._validate_checkpoint(acquisition.paths, binding)
 
 
 def _details(
@@ -1886,8 +1945,9 @@ def _result(
     if action == "acquisition-status":
         payload["gate"] = {
             "required_windows": copy.deepcopy(watch._EXPECTED_WINDOWS),
-            "labels": ["t+30s", "t+24h", "t+72h"],
-            "all_three_required_per_page_receipt": True,
+            "labels": ["t+30s", "t+5m"],
+            "all_required_per_page_receipt": True,
+            "profile": "t+30s-and-t+5m",
             "acquisition_owner": "resumable-qcsd-class-study-production-runner",
             "batching": {
                 "maximum_candidates_per_action": watch.MAX_CANDIDATES,
@@ -2038,7 +2098,7 @@ class FakeMonotonic:
 
 
 def test_due_work_uses_exact_command_environment_and_paths(acquisition: Fixture) -> None:
-    assert watch.ACQUISITION_SCHEMA_VERSION == 9
+    assert watch.ACQUISITION_SCHEMA_VERSION == 10
     assert watch.CHECKPOINT_SCHEMA_VERSION == 3
     assert watch.TERMINAL_SCHEMA_VERSION == 4
     assert watch.COMPLETION_SCHEMA_VERSION == 4
@@ -2824,12 +2884,12 @@ def test_watcher_reconciles_baseline_batches_with_candidate_state(
             watch._validate_checkpoint(acquisition.paths, binding)
 
 
-def test_watcher_rejects_cross_offset_baseline_batch_collision(
+def test_watcher_rejects_unreleased_short_profile_baseline_batch_collision(
     acquisition: Fixture,
 ) -> None:
     payload = _checkpoint_payload(acquisition)
     candidate_ids = acquisition.candidate_ids[:2]
-    starts = ("2026-08-29T01:00:00Z", "2026-08-31T01:00:00Z")
+    starts = ("2026-08-29T01:00:00Z", "2026-08-29T01:39:59Z")
     batches = []
     for candidate_id, started_at in zip(candidate_ids, starts, strict=True):
         payload["candidates"][candidate_id] = {
@@ -2986,12 +3046,12 @@ def test_watcher_reconciles_transactional_probe_batch(
         watch._validate_checkpoint(acquisition.paths, binding)
 
     invalid = copy.deepcopy(payload)
-    second_workload = f"{candidate_id}-p01-t24h-a001"
+    second_workload = f"{candidate_id}-p01-t5m-a001"
     invalid["candidates"][candidate_id]["pages"].append(
         {
             "page": {"ordinal": 1},
             "pending_probe": {
-                "probe_id": "t+24h",
+                "probe_id": "t+5m",
                 "workload_id": second_workload,
                 "attempt": 1,
                 "observed_at": started_at,
@@ -3008,7 +3068,7 @@ def test_watcher_reconciles_transactional_probe_batch(
         {
             "candidate_id": candidate_id,
             "page_ordinal": 1,
-            "probe_id": "t+24h",
+            "probe_id": "t+5m",
             "workload_id": second_workload,
             "attempt": 1,
             "started_at": started_at,

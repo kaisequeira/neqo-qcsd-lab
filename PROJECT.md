@@ -2,8 +2,10 @@
 
 Checkpoint: **29 September 2026, Australia/Sydney (AEST, UTC+10)**.
 This is the current research ledger. The [history](docs/PROJECT-HISTORY.md)
-preserves the development record and the [class-study runbook](docs/CLASS-STUDY.md)
-defines continuation. The [operator README](README.md) covers normal Lab use.
+preserves the development record, the [class-study runbook](docs/CLASS-STUDY.md)
+defines continuation, and the [capture-readiness guide](docs/CAPTURE-READINESS.md)
+explains the evidence required before each capture role. The [operator
+README](README.md) covers normal Lab use.
 
 ## Goal and claim boundary
 
@@ -30,28 +32,31 @@ Existing-defence validation does not establish compatibility on new classes.
 
 Desktop restoration and the protected historical handoff remain verified; see
 the [evidence index](docs/EVIDENCE-INDEX.md) for retention boundaries. Docker
-and WSL data reside on D:. On source `97f8ed238c39d4294747066b7e3d1c130620e21f`,
-v126's final browser receipt passed and independently verified all 110 vectors
-with no operational or semantic failures. Its acquisition-only authority passed
-all four hard gates without waivers. The v126 acquisition was initialized, but
-its checkpoint still has 600 pending candidates, no baseline batch and no
-accepted class. The watcher exited before its first action because it rejected
-the browser receipt's valid nine-digit fractional timestamp. A source correction
-requires the next unused cohort and complete downstream reproof; v126 cannot
-authorise acquisition on changed source.
+and WSL data reside on D:. The v127 source corrected the v126 watcher timestamp
+failure. On v127, the final browser receipt independently verified all 110
+vectors, and acquisition-only authority passed all four hard gates without
+waivers. The subsequent `acquisition-init` rejected the requested create-only
+`-v127` acquisition root because Python required the exact canonical root,
+although the public wrapper accepted a versioned sibling. That v127 root was
+never created. The v126 canonical checkpoint still has 600 pending candidate
+records, with 120 in its current admission prefix and no baseline batch. The
+path correction and prospective acceleration need a new
+source identity and the allocator's next unused cohort; v127 cannot authorise
+acquisition on changed source or study contract.
 
-| Checkpoint identity | v126 desktop execution and current state |
+| Checkpoint identity | v127 desktop execution and current state |
 |---|---|
-| Lab branch and v126 source commit | `desktop-portability-2026-09-26`; `97f8ed238c39d4294747066b7e3d1c130620e21f` |
+| Lab branch and v127 source commit | `desktop-portability-2026-09-26`; `1292ad6bfa14f17948e90979439456eb98cab29c` |
 | Rust commit and Lab Gitlink | `e8575fd8e54921ed6ff867de475b4a734064866e` |
-| Build and pinned CDP | `artifacts/buflo-study/build-execution-v126.json` and `artifacts/buflo-study/pinned-cdp-execution-v126.json` verified on their bound source |
-| Browser execution | `artifacts/buflo-study/browser-egress-qualification-v126/final.json`: verified 110/110, zero failures |
-| Desktop authority | `artifacts/class-study-acquisition-authority-v126.json`: verified, public-page-acquisition-only; no full defence foundation |
-| Acquisition checkpoint | `artifacts/classifier-multiorigin100-v1-acquisition/`: initialized on v126; 600 pending, zero baseline batches |
-| Next execution | Repair timestamp parsing, then allocate a fresh cohort and reprove build, pinned CDP, browser and acquisition authority before a new versioned acquisition root |
+| Build and pinned CDP | `artifacts/buflo-study/build-execution-v127.json` and `artifacts/buflo-study/pinned-cdp-execution-v127.json` verified on their bound source |
+| Browser execution | `artifacts/buflo-study/browser-egress-qualification-v127/final.json`: verified 110/110, zero failures |
+| Desktop authority | `artifacts/class-study-acquisition-authority-v127.json`: verified, public-page-acquisition-only; no full defence foundation |
+| Acquisition checkpoint | v127 versioned root absent after failed init; v126 canonical root has 600 pending candidate records, 120 in its admission prefix and zero baseline batches |
+| Next execution | Freeze the path fix and prospective acceleration, then allocate a fresh cohort and reprove build, pinned CDP, browser and acquisition authority before a new versioned acquisition root |
 
-Preserve the v126 receipts, failed watcher journal and initialized checkpoint,
-as well as the earlier v124 failure and v116 incomplete laptop execution.
+Preserve v127 receipts and document the failed initialization attempt, v126 receipts,
+failed watcher journal and initialized checkpoint, as well as the earlier v124
+failure and v116 incomplete laptop execution.
 None can authorise changed source or supply a scientific numerator.
 
 | Extended study scientific milestone | Accepted at this checkpoint |
@@ -135,12 +140,13 @@ historical schema descriptions remain in the history and methodology.
 
 ## Next actions and cheapest-first execution
 
-The v126 browser and acquisition-only authority gates passed on their bound
-source. The watcher rejected a valid browser receipt timestamp with nine
-fractional digits before launching any acquisition batch. Correct the consumer
-parser, verify it, then use the next unused source-bound cohort. Preserve v126
-evidence and initialize a new versioned acquisition root; do not resume its
-checkpoint after changing source.
+The v127 browser and acquisition-only authority gates passed on their bound
+source. The versioned-root mismatch then stopped initialization before any
+acquisition action. Correct the Python path validator and its study-policy
+declaration, verify the prospective acquisition amendment, then use the next
+unused source-bound cohort. Preserve v126 and v127 evidence and initialize a
+new versioned acquisition root; do not resume an older checkpoint after
+changing source or policy.
 The supplied curated domain list has been imported as a portable, hash-bound
 source receipt at
 [`config/curated-sources/crux-73-v1.source.json`](config/curated-sources/crux-73-v1.source.json).
@@ -151,14 +157,19 @@ user chose to retain the existing frozen catalogue for formal acquisition;
 the curated receipt is excluded from that run. The registered 600-candidate,
 120-pilot, 100-final-class contract remains in force.
 
-1. Preserve the verified migration manifests, historical handoff, v126 receipts,
-   initialized acquisition checkpoint and failed watcher journal.
+1. Preserve the verified migration manifests, historical handoff, v126 and v127
+   receipts, initialized v126 checkpoint and failed watcher journal.
 2. Retain the registered Tranco candidate catalogue for this formal run.
-3. Repair and verify the watcher timestamp consumer; freeze clean source; obtain
-   the next unused cohort, fresh no-cache images, pinned-CDP and 110/110 browser
-   qualification. Publish new acquisition authority.
+3. Repair and verify the versioned acquisition-root consumer and prospective
+   protocol; freeze clean source; obtain the next unused cohort, fresh no-cache
+   images, pinned-CDP and 110/110 browser qualification. Publish new acquisition
+   authority.
 4. Initialize a new versioned acquisition root and acquire the 120-class pilot
-   with genuine longitudinal observations. Complete the full defence foundation
+   with two genuine short-horizon prepared observations per admitted page.
+   The prospective watcher can admit a later batch 60 seconds after all
+   members of the prior batch are scientifically terminal and its Docker scope
+   is empty; unresolved batches retain the 40-minute collision envelope.
+   Complete the full defence foundation
    before any class-study fitting or capture.
 5. Follow pilot fit/qualification/compatibility, final selection, authoritative
    fitting, final qualification and 900-cell certification.

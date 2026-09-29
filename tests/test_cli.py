@@ -5762,18 +5762,19 @@ def test_browser_egress_projection_accepts_only_real_docker_capability_shape(
             "org.qcsd.role": role,
         }
     volume_name = f"qcsd-be-{'c' * 32}-policy0"
+    managed_policy = Path(namespace["browser_profile"]()["managed_policy"])
     npo0_topology_containers[0]["Mounts"] = [
         {
             "Type": "volume",
             "Name": volume_name,
-            "Destination": "/etc/chromium/policies/managed",
+            "Destination": str(managed_policy.parent),
             "RW": False,
         }
     ]
     npo0_terminal_containers = terminal_snapshot(npo0_topology_containers)
     policy_inventory = [
         {
-            "path": "/etc/chromium/policies/managed/qcsd-network-prediction.json",
+            "path": str(managed_policy),
             "name": "qcsd-network-prediction.json",
             "type": "regular",
             "uid": 0,
@@ -5806,6 +5807,7 @@ def test_browser_egress_projection_accepts_only_real_docker_capability_shape(
         attempt_topology=attempt_topology,
         docker_root_dir="/var/lib/docker",
         policy_file_inventory=policy_inventory,
+        machine=namespace["browser_profile"]()["architecture"],
     )
     assert npo0_projection["policy_volume"]["name"] == volume_name
     assert "Mountpoint" not in json.dumps(npo0_projection)

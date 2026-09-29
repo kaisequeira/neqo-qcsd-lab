@@ -123,6 +123,34 @@ def require_canonical_fresh_path(
     return candidate
 
 
+def require_canonical_acquisition_root(
+    path: Path,
+    *,
+    label: str = "acquisition root",
+) -> Path:
+    """Require the canonical root or an exact versioned sibling beneath artifacts."""
+
+    layout = class_study_layout()
+    canonical = layout.acquisition_root
+    candidate = _absolute(path)
+    prefix = f"{canonical.name}-v"
+    version = candidate.name[len(prefix) :] if candidate.name.startswith(prefix) else ""
+    versioned_sibling = (
+        candidate.parent == canonical.parent
+        and bool(version)
+        and version.isascii()
+        and version.isdecimal()
+        and version[0] != "0"
+    )
+    if candidate != canonical and not versioned_sibling:
+        raise ValueError(
+            f"{label} is outside the canonical class-study layout: "
+            f"expected {canonical} or a versioned -vN sibling, got {candidate}"
+        )
+    _reject_existing_symlinks(candidate, root=layout.lab_root, label=label)
+    return candidate
+
+
 def require_canonical_fresh_child(
     path: Path,
     *,

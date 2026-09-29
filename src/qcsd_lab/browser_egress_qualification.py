@@ -263,6 +263,28 @@ _V96_HISTORICAL_SOURCE_REPLAY_SOURCE = {
     "neqo_pinned_commit": "46313bef90ad392b7ca293ab7cf28108d2f35c7f",
 }
 
+# V127 is the last acquisition authority issued before the prospective
+# short-window amendment. Its schema-6 browser receipt is current-format, but
+# its source bindings must be replayed from the exact clean commit after the
+# worktree changes. This path is portable verification only.
+_V127_HISTORICAL_SOURCE_REPLAY_COHORT_VERSION = 127
+_V127_HISTORICAL_SOURCE_REPLAY_LAB_COMMIT = (
+    "1292ad6bfa14f17948e90979439456eb98cab29c"
+)
+_V127_HISTORICAL_SOURCE_REPLAY_SOURCE_PATHS_SHA256 = (
+    "44fa5f7d143648945ceb8337fbe70c8e55df93639287701384a8c017ba53fcd5"
+)
+_V127_HISTORICAL_SOURCE_REPLAY_SOURCE = {
+    "image_digest": "sha256:38950a192483aed7234f8a7a11c3de5eab483c388d33629af58a0798e73bfca7",
+    "lab_commit": _V127_HISTORICAL_SOURCE_REPLAY_LAB_COMMIT,
+    "lab_dirty": False,
+    "lab_patch_sha256": EMPTY_SHA256,
+    "neqo_commit": "e8575fd8e54921ed6ff867de475b4a734064866e",
+    "neqo_dirty": False,
+    "neqo_patch_sha256": EMPTY_SHA256,
+    "neqo_pinned_commit": "e8575fd8e54921ed6ff867de475b4a734064866e",
+}
+
 # This policy is independently receipted, not inferred from whichever reader
 # happens to replay a result.  Historical foundations retain their old contract.
 PACKET_DNS_EVIDENCE_CONTRACT = {
@@ -1045,6 +1067,34 @@ def _validate_v96_historical_source_replay(
         )
 
 
+def _validate_v127_historical_source_replay(
+    payload: Mapping[str, Any],
+    *,
+    root: Path,
+    mode: FoundationVerificationMode,
+) -> None:
+    """Verify the exact v127 source snapshot without admitting live execution."""
+
+    if mode is not FoundationVerificationMode.PORTABLE_REPLAY:
+        raise ValueError("v127 browser-egress historical source is portable replay only")
+    source_files = payload.get("source_files")
+    if (
+        payload.get("schema_version") != FOUNDATION_SCHEMA_VERSION
+        or payload.get("cohort_version") != _V127_HISTORICAL_SOURCE_REPLAY_COHORT_VERSION
+        or payload.get("source") != _V127_HISTORICAL_SOURCE_REPLAY_SOURCE
+        or not isinstance(source_files, list)
+        or canonical_json_sha256([binding.get("path") for binding in source_files])
+        != _V127_HISTORICAL_SOURCE_REPLAY_SOURCE_PATHS_SHA256
+    ):
+        raise ValueError("v127 browser-egress historical source replay contract is invalid")
+    for binding in source_files:
+        _validate_git_source_binding(
+            binding,
+            root=root,
+            commit=_V127_HISTORICAL_SOURCE_REPLAY_LAB_COMMIT,
+        )
+
+
 def validate_source_binding(value: object, *, prepare_image_id: str) -> dict[str, Any]:
     if not isinstance(value, Mapping) or set(value) != SOURCE_METADATA_KEYS:
         raise ValueError("browser-egress source binding fields are invalid")
@@ -1482,6 +1532,7 @@ def deep_validate_foundation(
     mode: FoundationVerificationMode = FoundationVerificationMode.PORTABLE_REPLAY,
     allow_historical: bool = False,
     allow_v96_historical_source_replay: bool = False,
+    allow_v127_historical_source_replay: bool = False,
 ) -> dict[str, Any]:
     """Re-hash immutable inputs, optionally admitting live prepare execution.
 
@@ -1518,8 +1569,12 @@ def deep_validate_foundation(
     validate_manifest_config(load_json(root / manifest_path), allow_historical=historical)
     machine = payload["docker_daemon"]["server_architecture"]
     validate_argv_config(load_json(root / argv_relative_path(machine)), machine=machine)
+    if allow_v96_historical_source_replay and allow_v127_historical_source_replay:
+        raise ValueError("browser-egress historical source replay selects two cohorts")
     if allow_v96_historical_source_replay:
         _validate_v96_historical_source_replay(payload, root=root, mode=mode)
+    elif allow_v127_historical_source_replay:
+        _validate_v127_historical_source_replay(payload, root=root, mode=mode)
     else:
         for binding, expected_path in zip(
             payload["source_files"],
@@ -4636,6 +4691,7 @@ def verify_qualification(
     verification_mode: FoundationVerificationMode = FoundationVerificationMode.PORTABLE_REPLAY,
     allow_historical: bool = False,
     allow_v96_historical_source_replay: bool = False,
+    allow_v127_historical_source_replay: bool = False,
     tshark: Path = Path("/usr/bin/tshark"),
     dumpcap: Path = Path("/usr/bin/dumpcap"),
 ) -> dict[str, Any]:
@@ -4656,6 +4712,7 @@ def verify_qualification(
         mode=verification_mode,
         allow_historical=allow_historical,
         allow_v96_historical_source_replay=allow_v96_historical_source_replay,
+        allow_v127_historical_source_replay=allow_v127_historical_source_replay,
     )
     if (
         expected_cohort_version is not None

@@ -456,6 +456,12 @@ def test_prospective_contract_paths_match_the_canonical_layout() -> None:
     assert contract["final_selection"] == (
         "config/class-study/v1/" + class_layout.FINAL_SELECTION_FILENAME
     )
+    assert contract["fresh_path_policy"] == (
+        "exact-except-acquisition-direct-vN-sibling-no-symlink-component"
+    )
+    assert contract["acquisition_root_versioned_sibling"] == (
+        "artifacts/" + class_layout.ACQUISITION_DIRECTORY + "-v[1-9][0-9]*"
+    )
 
 
 def test_prospective_contract_tracks_current_foundation_gates() -> None:

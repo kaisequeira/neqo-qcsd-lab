@@ -112,6 +112,36 @@ def test_fresh_path_helper_rejects_alternate_and_frozen_roots(
         class_layout.require_canonical_fresh_path(expected, field="not_a_layout_field")
 
 
+def test_acquisition_root_accepts_only_canonical_or_versioned_sibling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "lab"
+    _use_lab_root(monkeypatch, root)
+    canonical = class_layout.class_study_layout().acquisition_root
+    versioned = canonical.with_name(f"{canonical.name}-v127")
+
+    assert class_layout.require_canonical_acquisition_root(canonical) == canonical
+    assert class_layout.require_canonical_acquisition_root(versioned) == versioned
+    for rejected in (
+        canonical.with_name(f"{canonical.name}-v0"),
+        canonical.with_name(f"{canonical.name}-v01"),
+        canonical.with_name(f"{canonical.name}-v1-extra"),
+        versioned / "child",
+        root / "alternate" / versioned.name,
+    ):
+        with pytest.raises(ValueError, match="outside the canonical class-study layout"):
+            class_layout.require_canonical_acquisition_root(rejected)
+
+    root.mkdir()
+    canonical.parent.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    versioned.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="symbolic-link component"):
+        class_layout.require_canonical_acquisition_root(versioned)
+
+
 def test_fresh_helpers_reject_existing_symlink_components(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

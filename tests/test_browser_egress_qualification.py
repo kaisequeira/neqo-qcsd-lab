@@ -2977,6 +2977,80 @@ def test_v96_historical_source_replay_is_exact_and_portable_only(
             )
 
 
+def test_v127_historical_source_replay_reads_frozen_git_blob_not_later_worktree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    subprocess.run(["/usr/bin/git", "-C", str(repository), "init", "-q"], check=True)
+    subprocess.run(
+        ["/usr/bin/git", "-C", str(repository), "config", "user.name", "QCSD test"],
+        check=True,
+    )
+    subprocess.run(
+        ["/usr/bin/git", "-C", str(repository), "config", "user.email", "qcsd-test@example.invalid"],
+        check=True,
+    )
+    source = repository / "source.py"
+    committed = b"v127 committed source\n"
+    source.write_bytes(committed)
+    subprocess.run(["/usr/bin/git", "-C", str(repository), "add", "source.py"], check=True)
+    subprocess.run(["/usr/bin/git", "-C", str(repository), "commit", "-qm", "v127 source"], check=True)
+    commit = subprocess.run(
+        ["/usr/bin/git", "-C", str(repository), "rev-parse", "HEAD"],
+        check=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    ).stdout.strip()
+    frozen_source = copy.deepcopy(
+        qualification_module._V127_HISTORICAL_SOURCE_REPLAY_SOURCE
+    )
+    frozen_source["lab_commit"] = commit
+    monkeypatch.setattr(
+        qualification_module, "_V127_HISTORICAL_SOURCE_REPLAY_LAB_COMMIT", commit
+    )
+    monkeypatch.setattr(
+        qualification_module, "_V127_HISTORICAL_SOURCE_REPLAY_SOURCE", frozen_source
+    )
+    monkeypatch.setattr(
+        qualification_module,
+        "_V127_HISTORICAL_SOURCE_REPLAY_SOURCE_PATHS_SHA256",
+        qualification_module.canonical_json_sha256(["source.py"]),
+    )
+    binding = {
+        "path": "source.py",
+        "sha256": hashlib.sha256(committed).hexdigest(),
+        "size_bytes": len(committed),
+    }
+    payload = {
+        "schema_version": FOUNDATION_SCHEMA_VERSION,
+        "cohort_version": 127,
+        "source": frozen_source,
+        "source_files": [binding],
+    }
+    source.write_bytes(b"new prospective source\n")
+    qualification_module._validate_v127_historical_source_replay(
+        payload, root=repository, mode=FoundationVerificationMode.PORTABLE_REPLAY
+    )
+    with pytest.raises(ValueError, match="portable replay only"):
+        qualification_module._validate_v127_historical_source_replay(
+            payload, root=repository, mode=FoundationVerificationMode.EXECUTION
+        )
+    forged = copy.deepcopy(payload)
+    forged["source_files"][0]["sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="Git source binding does not verify"):
+        qualification_module._validate_v127_historical_source_replay(
+            forged, root=repository, mode=FoundationVerificationMode.PORTABLE_REPLAY
+        )
+    forged = copy.deepcopy(payload)
+    forged["cohort_version"] = 128
+    with pytest.raises(ValueError, match="replay contract is invalid"):
+        qualification_module._validate_v127_historical_source_replay(
+            forged, root=repository, mode=FoundationVerificationMode.PORTABLE_REPLAY
+        )
+
+
 def test_absent_or_tampered_pcap_cannot_publish_or_advance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

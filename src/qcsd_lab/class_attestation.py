@@ -187,7 +187,7 @@ _ACQUISITION_AUTHORITY_GATES = (
 )
 # This explicit creation-time gate covers acquisition and its evidence boundary.
 # It deliberately excludes defence fitting, evaluation and the full Lab suite.
-ACQUISITION_CORRECTNESS_TESTS = (
+_V96_ACQUISITION_CORRECTNESS_TESTS = (
     "tests/test_discover.py",
     "tests/test_discovery_evidence.py",
     "tests/test_prepare.py",
@@ -202,6 +202,10 @@ ACQUISITION_CORRECTNESS_TESTS = (
     "tests/test_class_cohort.py",
     "tests/test_class_acquisition_authority.py",
     "tests/test_class_build_admission_acquisition_authority.py",
+)
+ACQUISITION_CORRECTNESS_TESTS = (
+    *_V96_ACQUISITION_CORRECTNESS_TESTS,
+    "tests/test_class_acquisition_short_profile.py",
 )
 
 # The last authority issued before the schema-7/schema-15 amendment remains
@@ -222,7 +226,7 @@ _V96_ACQUISITION_CORRECTNESS_SPEC = {
         "pytest",
         "-p",
         "no:cacheprovider",
-        *ACQUISITION_CORRECTNESS_TESTS,
+        *_V96_ACQUISITION_CORRECTNESS_TESTS,
     ],
     "cwd": "/lab",
     "input_sha256": {
@@ -241,6 +245,63 @@ _V96_ACQUISITION_CORRECTNESS_SPEC = {
         "tests/test_manifest.py": "93ec9d2c26dbca1cb50f3ee17c37d3a13351e8a919127478109a340a1b919657",
         "tests/test_playwright_driver.py": "981d04085bf1211821320a5cc6e605494e204a90c4a7c797b49d2f488e0b8c34",
         "tests/test_prepare.py": "8a725b5d05b2125e8c68af7762dd53bc67318b4f66d55eb0d0eb0f960826b257",
+        "uv.lock": "eb9fbc7d641c821c597043b733575f1b2ccc519a13e6d025e9b6a1e19204cb1a",
+    },
+}
+
+# V127 was the final schema-9 acquisition-only authority.  Its exact receipt
+# remains independently verifiable after the prospective short-window study
+# amendment, but it cannot authorise a new schema-10 runner.
+_V127_ACQUISITION_AUTHORITY_COHORT_VERSION = 127
+_V127_ACQUISITION_AUTHORITY_SHA256 = (
+    "081dd3d0f11e656079e9988883b2f2cc36d99b3c363559f66560a9f5a163f60f"
+)
+_V127_SOURCE = {
+    "image_digest": "sha256:b0f03ff2628555505b8f3efdeceec9f47c04642932f4023e3cb98273a2095fc9",
+    "lab_commit": "1292ad6bfa14f17948e90979439456eb98cab29c",
+    "lab_dirty": False,
+    "lab_patch_sha256": _EMPTY_SHA256,
+    "neqo_commit": "e8575fd8e54921ed6ff867de475b4a734064866e",
+    "neqo_pinned_commit": "e8575fd8e54921ed6ff867de475b4a734064866e",
+    "neqo_dirty": False,
+    "neqo_patch_sha256": _EMPTY_SHA256,
+}
+_V127_BUILD_EXECUTION_SHA256 = "41c69107bced914dd849bcdddbb6eec03a4871c679fc87f8c0cadd471accbfe3"
+_V127_PINNED_CDP_SHA256 = "e2a8554a6b83a7c983511312e96dcfb2a65526428a8370a4672be3b34dc722dd"
+_V127_BROWSER_EGRESS_SHA256 = "3ce592bf7c3f4b0832889cbf18f8eb2812adeeac743d8c0e8e3652bdc688d378"
+_V127_STUDY_CONTRACT = {
+    "path": "/lab/config/class-study/v1/study.json",
+    "sha256": "a57ed4277eef04f5b6e04e2380919d0befa1d2b525acf8eb9f3cd2752ba1c465",
+}
+_V127_ACQUISITION_CORRECTNESS_SPEC = {
+    "gate": "acquisition-focused-correctness",
+    "argv": [
+        "/opt/qcsd-venv/bin/python", "-m", "pytest", "-p", "no:cacheprovider",
+        "tests/test_discover.py", "tests/test_discovery_evidence.py", "tests/test_prepare.py",
+        "tests/test_manifest.py", "tests/test_cdp_targets.py",
+        "tests/test_playwright_driver.py", "tests/test_browser_egress.py",
+        "tests/test_class_acquisition.py", "tests/test_acquisition_selection.py",
+        "tests/test_acquisition_timing.py", "tests/test_class_catalogue.py",
+        "tests/test_class_cohort.py", "tests/test_class_acquisition_authority.py",
+        "tests/test_class_build_admission_acquisition_authority.py",
+    ],
+    "cwd": "/lab",
+    "input_sha256": {
+        "pyproject.toml": "976e5c387654ec2e2899bb566f25424a496ddb6da3254c55073262c49cac25df",
+        "tests/test_acquisition_selection.py": "d973c685d5d66ffb3d54670b0bea2ddf7951cf7abe4cc57788edd8ffeb47e6f5",
+        "tests/test_acquisition_timing.py": "24708397756256a616abae96a475bf7993720e113cbbb2b6877ca27df0e4b155",
+        "tests/test_browser_egress.py": "485a373986ff18a5ac72b49130d9743ab6ff01cfb132f3f6a471b494b2dd7f3c",
+        "tests/test_cdp_targets.py": "cad71a11bcbac17477cca54d7395d6dd17afac1ac349d524ff9e26cd42d36a49",
+        "tests/test_class_acquisition.py": "f6a51bd1ceefe33f770ffcb76a012dba4cdafed9c6732544197e753592118fbc",
+        "tests/test_class_acquisition_authority.py": "f9d65566b1d0e9d36905b8ecae238dc8d89594db1f5e298e089e32883765b2ad",
+        "tests/test_class_build_admission_acquisition_authority.py": "e2decf306884d2f78521888ec86040799ac94b66e2c992462975c55e87363527",
+        "tests/test_class_catalogue.py": "481c29f4cbaef6f1838dfbbc714991aaefe6ca284b40b4ee952b46b1adfb4fcd",
+        "tests/test_class_cohort.py": "626f50348a35d2fc38715a4b0e367b87ab0f11acaf79315678af82afc74183f3",
+        "tests/test_discover.py": "4e0a08f92b8413fb98309cbf1ffb49b67757537ce97a16149fcb9ac02f41a1e4",
+        "tests/test_discovery_evidence.py": "d33f7c141d2de5771da2f4b6df91fbb1e23e11a44bdfad1de25055a9ab3ec53b",
+        "tests/test_manifest.py": "373ce8720f8d6e46a502cfdfdc1286e009d03c9229b49c5c0a6d0820607c246e",
+        "tests/test_playwright_driver.py": "9d59b1d4e4e114bf263d48cd7f3bd21470485303b83566b603d2e52ab0f366e5",
+        "tests/test_prepare.py": "06d5dab27191a14db48f9b57044c25cfff8ee267f7c7a226654aac00167363c0",
         "uv.lock": "eb9fbc7d641c821c597043b733575f1b2ccc519a13e6d025e9b6a1e19204cb1a",
     },
 }
@@ -323,8 +384,8 @@ def validate_class_acquisition_authority(
 ) -> dict[str, Any]:
     """Reconstruct acquisition-only evidence without executing tests.
 
-    Historical validation is limited to the frozen v96 contract and is
-    verification-only.  The default remains current admission, and there is
+    Historical validation is limited to the frozen v96 and v127 contracts and
+    is verification-only.  The default remains current admission, and there is
     no full-foundation fallback.  A concrete role chooses which exact image
     from the same pinned build must be running; ``None`` is reserved for
     runtime-independent reconstruction of current evidence and does not enable
@@ -362,6 +423,11 @@ def validate_class_acquisition_authority(
         recorded_study_contract=payload.get("study_contract"),
         allow_historical=allow_historical,
     )
+    if (
+        context.get("historical_v127") is True
+        and sha256_file(receipt_path) != _V127_ACQUISITION_AUTHORITY_SHA256
+    ):
+        raise ValueError("historical v127 acquisition authority is not the exact frozen receipt")
     expected = _acquisition_authority_value(
         context,
         correctness=payload.get("acquisition_correctness"),
@@ -391,7 +457,7 @@ def validate_current_acquisition_completion_authority(
     *,
     runner_root: Path,
 ) -> dict[str, Any]:
-    """Deep-verify the current authority bound by a schema-9 completion.
+    """Deep-verify the current authority bound by a schema-10 completion.
 
     This is the offline publication boundary: it reconstructs the exact narrow
     acquisition authority or current full-foundation fallback without requiring
@@ -409,7 +475,7 @@ def validate_current_acquisition_completion_authority(
         type(completion_payload.get(field)) is not int or completion_payload[field] != expected
         for field, expected in current_versions
     ):
-        raise ValueError("current acquisition completion requires exact 9/4/3 schemas")
+        raise ValueError("current acquisition completion requires exact 10/4/3 schemas")
 
     provenance_path, _provenance_value, provenance = _load_bound_receipt(
         Path(runner_root) / "provenance.json",
@@ -419,7 +485,7 @@ def validate_current_acquisition_completion_authority(
         completion_payload.get("provenance_sha256") != sha256_file(provenance_path)
         or provenance.get("acquisition_schema_version") != ACQUISITION_SCHEMA_VERSION
     ):
-        raise ValueError("current acquisition completion provenance is not exact schema 9")
+        raise ValueError("current acquisition completion provenance is not exact schema 10")
 
     binding = provenance.get("acquisition_authority")
     authority_path = _path_from_binding(
@@ -506,11 +572,21 @@ def _acquisition_authority_context(
         allow_historical=allow_historical,
     )
     pinned_schema = pinned.get("probe_schema_version")
-    historical = pinned_schema == _V96_PINNED_CDP_PROBE_SCHEMA_VERSION
+    historical_v96 = pinned_schema == _V96_PINNED_CDP_PROBE_SCHEMA_VERSION
+    historical_v127 = cohort_version == _V127_ACQUISITION_AUTHORITY_COHORT_VERSION
+    historical = historical_v96 or historical_v127
     if historical and not allow_historical:
         raise ValueError("historical class acquisition authority is verify-only")
-    if historical and cohort_version != _V96_ACQUISITION_AUTHORITY_COHORT_VERSION:
+    if historical_v96 and cohort_version != _V96_ACQUISITION_AUTHORITY_COHORT_VERSION:
         raise ValueError("historical class acquisition authority is not the exact v96 cohort")
+    if historical_v127 and (
+        pinned_schema != PINNED_CDP_PROBE_SCHEMA_VERSION
+        or source != _V127_SOURCE
+        or build["sha256"] != _V127_BUILD_EXECUTION_SHA256
+        or pinned["sha256"] != _V127_PINNED_CDP_SHA256
+        or recorded_study_contract != _V127_STUDY_CONTRACT
+    ):
+        raise ValueError("historical class acquisition authority is not the exact v127 cohort")
     if pinned_schema not in {
         _V96_PINNED_CDP_PROBE_SCHEMA_VERSION,
         PINNED_CDP_PROBE_SCHEMA_VERSION,
@@ -528,14 +604,21 @@ def _acquisition_authority_context(
         cohort_version=cohort_version,
         build=build,
         allow_historical=False,
-        allow_v96_historical_source_replay=historical,
+        allow_v96_historical_source_replay=historical_v96,
+        allow_v127_historical_source_replay=historical_v127,
     )
+    if historical_v127 and browser["sha256"] != _V127_BROWSER_EGRESS_SHA256:
+        raise ValueError("historical v127 browser qualification binding differs")
     study_contract = (
         _V96_STUDY_CONTRACT
-        if historical
-        else _file_binding(LAB_ROOT / "config/class-study/v1/study.json")
+        if historical_v96
+        else (
+            _V127_STUDY_CONTRACT
+            if historical_v127
+            else _file_binding(LAB_ROOT / "config/class-study/v1/study.json")
+        )
     )
-    if historical and recorded_study_contract != _V96_STUDY_CONTRACT:
+    if historical_v96 and recorded_study_contract != _V96_STUDY_CONTRACT:
         raise ValueError("historical class acquisition authority study contract is invalid")
     return {
         "cohort_version": cohort_version,
@@ -553,6 +636,7 @@ def _acquisition_authority_context(
         "build_finished_at": build["finished_at"],
         "pinned_recorded_at": pinned["recorded_at"],
         "historical": historical,
+        "historical_v127": historical_v127,
     }
 
 
@@ -603,8 +687,12 @@ def _acquisition_authority_value(
 ) -> dict[str, Any]:
     spec = (
         _V96_ACQUISITION_CORRECTNESS_SPEC
-        if context.get("historical") is True
-        else _acquisition_correctness_spec()
+        if context.get("historical") is True and context.get("historical_v127") is not True
+        else (
+            _V127_ACQUISITION_CORRECTNESS_SPEC
+            if context.get("historical_v127") is True
+            else _acquisition_correctness_spec()
+        )
     )
     if not isinstance(correctness, Mapping) or set(correctness) != {
         "schema_version", "gate", "argv", "cwd", "input_sha256", "source",
@@ -3922,6 +4010,7 @@ def _validate_browser_egress_qualification(
     build: Mapping[str, Any],
     allow_historical: bool = False,
     allow_v96_historical_source_replay: bool = False,
+    allow_v127_historical_source_replay: bool = False,
 ) -> dict[str, Any]:
     qualification_root = _regular_directory(root, "browser-egress qualification root")
     verification_kwargs = {
@@ -3931,6 +4020,8 @@ def _validate_browser_egress_qualification(
     }
     if allow_v96_historical_source_replay:
         verification_kwargs["allow_v96_historical_source_replay"] = True
+    if allow_v127_historical_source_replay:
+        verification_kwargs["allow_v127_historical_source_replay"] = True
     receipt = verify_browser_egress_qualification(qualification_root, **verification_kwargs)
     required = {
         "path",

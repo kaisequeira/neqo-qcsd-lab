@@ -43,8 +43,8 @@ STUDY_ID = "classifier-multiorigin100-v1"
 CANDIDATE_COUNT = 600
 SCHEMA_VERSION = 1
 SOURCE_BINDING_PREIMAGE_SCHEMA_VERSION = 3
-ACQUISITION_SCHEMA_VERSION = 9
-HISTORICAL_ACQUISITION_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7, 8})
+ACQUISITION_SCHEMA_VERSION = 10
+HISTORICAL_ACQUISITION_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7, 8, 9})
 CHECKPOINT_SCHEMA_VERSION = 3
 TERMINAL_SCHEMA_VERSION = 4
 COMPLETION_SCHEMA_VERSION = 4
@@ -74,6 +74,7 @@ _ACQUISITION_CORRECTNESS_TESTS = (
     "tests/test_class_cohort.py",
     "tests/test_class_acquisition_authority.py",
     "tests/test_class_build_admission_acquisition_authority.py",
+    "tests/test_class_acquisition_short_profile.py",
 )
 PINNED_CDP_TYPE = "qcsd-class-study-pinned-cdp-probe"
 BUILD_EXECUTION_TYPE = "qcsd-buflo-study-no-cache-build-execution"
@@ -286,6 +287,7 @@ MINIMUM_BASELINE_SPACING_SECONDS = (
     + SERIAL_SCHEDULER_MARGIN_SECONDS
 )
 PENDING_BASELINE_GUARD_MS = MINIMUM_BASELINE_SPACING_SECONDS * 1_000
+SHORT_TERMINAL_RELEASE_DELAY_MS = 60_000
 SCOPE_CLIENT_GRACE_SECONDS = 15
 SCOPE_QUERY_TIMEOUT_SECONDS = 2
 SCOPE_SETTLE_SECONDS = 0.05
@@ -1422,7 +1424,7 @@ _DOMAIN_SAFETY_POLICY = {
 _DOMAIN_SAFETY_POLICY_SHA256 = hashlib.sha256(
     (json.dumps(_DOMAIN_SAFETY_POLICY, indent=2, sort_keys=True, allow_nan=False) + "\n").encode()
 ).hexdigest()
-_ELIGIBILITY_INPUTS = ["page-safety", "three-window-technical-stability"]
+_ELIGIBILITY_INPUTS = ["page-safety", "short-window-technical-replay"]
 _PROHIBITED_INPUTS = ["classifier", "defence", "latency", "bandwidth", "privacy"]
 _ACQUISITION_ACTION_TIMING_CONTRACT = {
     "schema_version": 2,
@@ -1510,10 +1512,37 @@ _TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT = {
     ),
     "action_priority": "due-probes-before-new-baselines-and-navigation",
 }
+_SHORT_TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT = {
+    **_TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT,
+    "schema_version": 4,
+    "policy": "serial-terminal-released-short-window-batch-reservations-v1",
+    "reservation_release": "all-batch-members-scientifically-terminal-plus-prospective-delay",
+    "reservation_release_delay_ms": SHORT_TERMINAL_RELEASE_DELAY_MS,
+    "scope_completion": "watcher-proves-prior-systemd-cgroup-empty-before-next-action",
+    "minimum_baseline_spacing_ms": SHORT_TERMINAL_RELEASE_DELAY_MS,
+    "longest_probe_window_width_ms": 1_830_000,
+    "short_probe": "two-same-action-replays-at-t+30s-and-t+5m-earliest",
+    "outer_probes": "none-both-replays-in-bounded-baseline-action",
+    "serial_action_start_offsets_ms": [0],
+    "stability_window_earliest_offsets_ms": [25_000, 270_000],
+    "collision_scope": "baseline-arming-actions-across-batches-two-same-action-replays",
+    "strict_serial_zero_duration_projection": {
+        "candidate_count": CANDIDATE_COUNT,
+        "maximum_candidates_per_batch": MAX_CANDIDATES,
+        "batch_count": 300,
+        "pairing_assumption": "all-candidates-form-300-compatible-two-candidate-batches",
+        "terminal_assumption": "both-members-scientifically-terminal-at-t+5m-earliest",
+        "algorithm": "greedy-earliest-safe-baseline-batches-with-causal-terminal-release",
+        "last_baseline_offset_ms": 299 * (270_000 + SHORT_TERMINAL_RELEASE_DELAY_MS),
+        "last_t+5m_earliest_offset_ms": (
+            299 * (270_000 + SHORT_TERMINAL_RELEASE_DELAY_MS) + 270_000
+        ),
+    },
+}
 _RUN_WAIT_POLICY = {
     "navigation_phase": "separate-bounded-action-before-baseline",
-    "t+30s": "same-action-interruptible-wait-to-earliest-then-probe",
-    "t+24h-and-t+72h": "host-watcher-launch-at-earliest-no-container-wait",
+    "t+30s-and-t+5m": "same-action-interruptible-waits-to-earliest-then-two-prepared-probes",
+    "outer_probes": "none-both-replays-in-bounded-baseline-action",
 }
 _CHECKPOINT_PAYLOAD_KEYS = {
     "checkpoint_schema_version",
@@ -1568,16 +1597,10 @@ _ACTION_KEYS = {
 _EXPECTED_WINDOWS = [
     {"probe_id": "t+30s", "target_ms": 30_000, "earliest_ms": 25_000, "latest_ms": 35_000},
     {
-        "probe_id": "t+24h",
-        "target_ms": 86_400_000,
-        "earliest_ms": 85_500_000,
-        "latest_ms": 87_300_000,
-    },
-    {
-        "probe_id": "t+72h",
-        "target_ms": 259_200_000,
-        "earliest_ms": 258_300_000,
-        "latest_ms": 260_100_000,
+        "probe_id": "t+5m",
+        "target_ms": 300_000,
+        "earliest_ms": 270_000,
+        "latest_ms": 2_100_000,
     },
 ]
 
@@ -5847,7 +5870,7 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
     if acquisition_schema_version != ACQUISITION_SCHEMA_VERSION:
         raise WatchError("acquisition provenance uses an unsupported schema")
     if set(payload) != _PROVENANCE_PAYLOAD_KEYS:
-        raise WatchError("acquisition provenance payload fields differ from the v9 contract")
+        raise WatchError("acquisition provenance payload fields differ from the v10 contract")
     browser_tool = payload.get("browser_tool")
     if not any(
         _matches_json_contract(browser_tool, expected)
@@ -5867,7 +5890,7 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
         "browser_navigation_timeout_ms": BROWSER_NAVIGATION_TIMEOUT_MS,
         "passive_render_hard_cap_after_load_ms": PASSIVE_RENDER_HARD_CAP_MS,
         "acquisition_action_timing_contract": _ACQUISITION_ACTION_TIMING_CONTRACT,
-        "baseline_scheduling_contract": _TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT,
+        "baseline_scheduling_contract": _SHORT_TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT,
         "acquisition_selection_policy": ACQUISITION_SELECTION_POLICY,
         "registrable_domain_policy": _REGISTRABLE_DOMAIN_POLICY,
         "domain_safety_policy": _DOMAIN_SAFETY_POLICY,
@@ -6062,7 +6085,9 @@ def _validate_baseline_batches(
         if previous_baseline is not None and baseline <= previous_baseline:
             raise WatchError("acquisition checkpoint baseline batches are not append-ordered")
         previous_baseline = baseline
-        offsets = _BASELINE_SCHEDULING_CONTRACT["serial_action_start_offsets_ms"]
+        offsets = _SHORT_TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT[
+            "serial_action_start_offsets_ms"
+        ]
         for previous_start, previous_batch in reservations:
             collision = any(
                 abs((baseline + timedelta(milliseconds=left))
@@ -6134,7 +6159,7 @@ def _baseline_batch_release(
         if terminal is None or _scientific_terminal_eligibility(terminal, state) is None:
             return None
         terminals.append(_parse_timestamp(terminal["terminalised_at"], label="acquisition terminal"))
-    return max(terminals) + timedelta(milliseconds=PENDING_BASELINE_GUARD_MS)
+    return max(terminals) + timedelta(milliseconds=SHORT_TERMINAL_RELEASE_DELAY_MS)
 
 
 def _authenticated_checkpoint_terminal(
@@ -9594,8 +9619,9 @@ def _validate_action_result(
         gate_verification = details["gate_verification"]
         expected_gate = {
             "required_windows": _EXPECTED_WINDOWS,
-            "labels": ["t+30s", "t+24h", "t+72h"],
-            "all_three_required_per_page_receipt": True,
+            "labels": ["t+30s", "t+5m"],
+            "all_required_per_page_receipt": True,
+            "profile": "t+30s-and-t+5m",
             "acquisition_owner": "resumable-qcsd-class-study-production-runner",
             "batching": {
                 "maximum_candidates_per_action": MAX_CANDIDATES,
