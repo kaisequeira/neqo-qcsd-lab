@@ -159,6 +159,19 @@ def test_acquisition_init_accepts_versioned_root_before_authority_gate() -> None
     assert not versioned_root.exists()
 
 
+def test_exact_v127_historical_verify_uses_clean_current_source_in_read_only_mount() -> None:
+    source = LAUNCHER.read_text(encoding="utf-8")
+    replay = source.split("# The exact v127 acquisition authority is historical", 1)[1].split(
+        'elif [[ "${1:-}" == "prepare"', 1
+    )[0]
+    assert class_attestation._V127_ACQUISITION_AUTHORITY_SHA256 in replay
+    assert '_qcsd_verify_clean_build_checkout' in replay
+    assert '/opt/qcsd-venv/bin/python3 -I -c' in replay
+    assert 'sys.path.insert(0, "/lab/src")' in replay
+    assert 'Path("/lab/src/qcsd_lab/__init__.py")' in replay
+    assert '--volume "${ROOT}:/lab:ro"' in source
+
+
 @pytest.mark.parametrize(
     ("arguments", "returncode", "message"),
     (

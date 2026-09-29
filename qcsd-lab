@@ -8285,6 +8285,28 @@ elif [[ "${1:-}" == "class-study" &&
   else
     class_image_command=(-- /usr/local/bin/qcsd-lab-internal)
   fi
+  if [[ "${class_study_action}" == "verify" &&
+        -n "${class_path_hosts[--target]:-}" &&
+        -f "${class_path_hosts[--target]}" &&
+        ! -L "${class_path_hosts[--target]}" ]]; then
+    # The exact v127 acquisition authority is historical after the amended
+    # study. Its old collection image still supplies pinned dependencies, but
+    # its installed verifier predates portable Git-blob replay. Run the clean
+    # current checkout's verifier from the read-only /lab mount for this one
+    # immutable target; never use this path for current admission.
+    class_verify_target_sha256="$(/usr/bin/sha256sum -- "${class_path_hosts[--target]}")"
+    if [[ "${class_verify_target_sha256%% *}" == \
+          "081dd3d0f11e656079e9988883b2f2cc36d99b3c363559f66560a9f5a163f60f" ]]; then
+      if ! _qcsd_verify_clean_build_checkout; then
+        echo "class-study historical v127 replay requires one clean Lab/Neqo checkout" >&2
+        exit 1
+      fi
+      class_image_command=(
+        -- /opt/qcsd-venv/bin/python3 -I -c
+        'import sys; from pathlib import Path; sys.path.insert(0, "/lab/src"); import qcsd_lab; assert Path(qcsd_lab.__file__).resolve() == Path("/lab/src/qcsd_lab/__init__.py"); from qcsd_lab.cli import main; main()'
+      )
+    fi
+  fi
 elif [[ "${1:-}" == "prepare" || "${1:-}" == "derive-chaff-prefix-specs" ||
       ( "${1:-}" == "buflo-study" && "${2:-}" == "reference" ) ||
       "${1:-}" == "qualify-chaff" || "${1:-}" == "qualify-response-chaff" ]]; then
