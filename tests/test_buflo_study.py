@@ -9956,11 +9956,11 @@ def test_buildx_identity_change_stops_before_the_next_image_and_creates_no_recei
     assert not (tmp_path / "artifacts/buflo-study/build-execution-v92.json").exists()
 
 
-def test_buildx_empty_metadata_timeout_retries_without_losing_four_boundary_proof(
+def test_buildx_empty_metadata_timeout_succeeds_on_third_attempt_with_four_boundary_proof(
     tmp_path: Path,
 ) -> None:
     launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
-    environment["QCSD_TEST_BUILDX_METADATA_FAIL_READS"] = "2"
+    environment["QCSD_TEST_BUILDX_METADATA_FAIL_READS"] = "2,3"
 
     result = subprocess.run(
         [str(launcher), "build", "--cohort-version", "93"],
@@ -9975,7 +9975,7 @@ def test_buildx_empty_metadata_timeout_retries_without_losing_four_boundary_proo
     assert result.returncode == 0, result.stderr
     assert _marked_build_count(build_marker) == 3
     metadata_marker = build_marker.with_name(f"{build_marker.name}-buildx-metadata")
-    assert len(metadata_marker.read_text(encoding="utf-8").splitlines()) == 5
+    assert len(metadata_marker.read_text(encoding="utf-8").splitlines()) == 6
     receipt = json.loads(
         (tmp_path / "artifacts/buflo-study/build-execution-v93.json").read_text(
             encoding="utf-8"
@@ -9988,7 +9988,7 @@ def test_buildx_empty_metadata_timeout_retries_without_losing_four_boundary_proo
 
 @pytest.mark.parametrize(
     ("failed_reads", "status", "expected_reads"),
-    (("2,3", "1", 3), ("2", "125", 2)),
+    (("2,3,4", "1", 4), ("2", "125", 2)),
 )
 def test_buildx_metadata_retry_remains_bounded_and_identity_failure_is_terminal(
     tmp_path: Path, failed_reads: str, status: str, expected_reads: int
@@ -10015,11 +10015,11 @@ def test_buildx_metadata_retry_remains_bounded_and_identity_failure_is_terminal(
     assert not (tmp_path / "artifacts/buflo-study/build-execution-v94.json").exists()
 
 
-def test_buildx_empty_version_timeout_retries_without_losing_four_boundary_proof(
+def test_buildx_empty_version_timeout_succeeds_on_third_attempt_with_four_boundary_proof(
     tmp_path: Path,
 ) -> None:
     launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
-    environment["QCSD_TEST_BUILDX_VERSION_FAIL_READS"] = "2"
+    environment["QCSD_TEST_BUILDX_VERSION_FAIL_READS"] = "2,3"
 
     result = subprocess.run(
         [str(launcher), "build", "--cohort-version", "95"],
@@ -10034,7 +10034,7 @@ def test_buildx_empty_version_timeout_retries_without_losing_four_boundary_proof
     assert result.returncode == 0, result.stderr
     assert _marked_build_count(build_marker) == 3
     version_marker = build_marker.with_name(f"{build_marker.name}-buildx-version")
-    assert len(version_marker.read_text(encoding="utf-8").splitlines()) == 5
+    assert len(version_marker.read_text(encoding="utf-8").splitlines()) == 6
     receipt = json.loads(
         (tmp_path / "artifacts/buflo-study/build-execution-v95.json").read_text(
             encoding="utf-8"
@@ -10047,7 +10047,7 @@ def test_buildx_empty_version_timeout_retries_without_losing_four_boundary_proof
 
 @pytest.mark.parametrize(
     ("failed_reads", "status", "expected_reads"),
-    (("2,3", "1", 3), ("2", "125", 2)),
+    (("2,3,4", "1", 4), ("2", "125", 2)),
 )
 def test_buildx_version_retry_remains_bounded_and_identity_failure_is_terminal(
     tmp_path: Path, failed_reads: str, status: str, expected_reads: int

@@ -4765,10 +4765,12 @@ if [[ "${1:-}" == "build" ]]; then
         ;;
     esac
     : >"${buildx_version_output_path}"
-    for metadata_attempt in 1 2; do
+    for metadata_attempt in 1 2 3; do
       metadata_timeout="${buildx_read_timeout}"
       if (( metadata_attempt == 2 )); then
         metadata_timeout=$(( metadata_timeout * 3 ))
+      elif (( metadata_attempt == 3 )); then
+        metadata_timeout=$(( metadata_timeout * 9 ))
       fi
       : >"${buildx_plugins_json_path}"
       if _qcsd_docker_api_with_timeout "${metadata_timeout}" \
@@ -4783,16 +4785,18 @@ if [[ "${1:-}" == "build" ]]; then
       # Its holder has proved the service terminal before this command returns.
       # Retry only an empty read: a daemon-identity failure (125), partial
       # response, or malformed successful response remains terminal.
-      if (( metadata_attempt != 1 || metadata_status != 1 )) ||
+      if (( metadata_attempt == 3 || metadata_status != 1 )) ||
          [[ -s "${buildx_plugins_json_path}" ]]; then
         echo "qcsd-lab cannot capture Docker-selected Buildx metadata at ${boundary}" >&2
         return 1
       fi
     done
-    for version_attempt in 1 2; do
+    for version_attempt in 1 2 3; do
       version_timeout="${buildx_read_timeout}"
       if (( version_attempt == 2 )); then
         version_timeout=$(( version_timeout * 3 ))
+      elif (( version_attempt == 3 )); then
+        version_timeout=$(( version_timeout * 9 ))
       fi
       : >"${buildx_version_output_path}"
       if _qcsd_docker_api_with_timeout "${version_timeout}" \
@@ -4802,7 +4806,7 @@ if [[ "${1:-}" == "build" ]]; then
       else
         version_status=$?
       fi
-      if (( version_attempt != 1 || version_status != 1 )) ||
+      if (( version_attempt == 3 || version_status != 1 )) ||
          [[ -s "${buildx_version_output_path}" ]]; then
         echo "qcsd-lab cannot capture the Buildx version at ${boundary}" >&2
         return 1
