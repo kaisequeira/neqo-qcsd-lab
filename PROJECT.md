@@ -1,11 +1,12 @@
 # QCSD thesis project ledger
 
-Checkpoint: **29 September 2026, Australia/Sydney (AEST, UTC+10)**.
+Checkpoint: **30 September 2026, Australia/Sydney (AEST, UTC+10)**.
 This is the current research ledger. The [history](docs/PROJECT-HISTORY.md)
 preserves the development record, the [class-study runbook](docs/CLASS-STUDY.md)
 defines continuation, and the [capture-readiness guide](docs/CAPTURE-READINESS.md)
-explains the evidence required before each capture role. The [operator
-README](README.md) covers normal Lab use.
+explains the evidence required before each capture role. The [timeline and
+estimate breakdown](docs/README.md) gives the planning arithmetic. The
+[operator README](README.md) covers normal Lab use.
 
 ## Goal and claim boundary
 
@@ -40,9 +41,12 @@ waivers. The subsequent `acquisition-init` rejected the requested create-only
 although the public wrapper accepted a versioned sibling. That v127 root was
 never created. The v126 canonical checkpoint still has 600 pending candidate
 records, with 120 in its current admission prefix and no baseline batch. The
-path correction and prospective acceleration need a new
-source identity and the allocator's next unused cohort; v127 cannot authorise
-acquisition on changed source or study contract.
+path correction and prospective acceleration were committed under a new source
+identity. Their v128 no-cache build claimed its cohort and assembled the
+collection image, but the wrapper timed out while capturing Docker-selected
+Buildx metadata after collection. It published no verified build receipt.
+Preserve the failed transaction and diagnose its retirement before another
+cohort. Neither v127 nor v128 can authorise acquisition on the new contract.
 
 | Checkpoint identity | v127 desktop execution and current state |
 |---|---|
@@ -52,7 +56,8 @@ acquisition on changed source or study contract.
 | Browser execution | `artifacts/buflo-study/browser-egress-qualification-v127/final.json`: verified 110/110, zero failures |
 | Desktop authority | `artifacts/class-study-acquisition-authority-v127.json`: verified, public-page-acquisition-only; no full defence foundation |
 | Acquisition checkpoint | v127 versioned root absent after failed init; v126 canonical root has 600 pending candidate records, 120 in its admission prefix and zero baseline batches |
-| Next execution | Freeze the path fix and prospective acceleration, then allocate a fresh cohort and reprove build, pinned CDP, browser and acquisition authority before a new versioned acquisition root |
+| Prospective source and failed build | The short-horizon acquisition and portable replay changes are on `desktop-portability-2026-09-26`; v128 was claimed, but its post-collection Buildx metadata capture timed out and no verified build receipt exists |
+| Next execution | Preserve and resolve the v128 uncommitted transaction, then allocate the next unused cohort on a clean source and reprove build, pinned CDP, browser and acquisition authority before a new versioned acquisition root |
 
 Preserve v127 receipts and document the failed initialization attempt, v126 receipts,
 failed watcher journal and initialized checkpoint, as well as the earlier v124
