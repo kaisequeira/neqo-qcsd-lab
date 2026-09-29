@@ -5919,6 +5919,21 @@ class_require_canonical_path() {
   fi
 }
 
+class_require_acquisition_path() {
+  local value="$1"
+  local expected="$2"
+  if [[ -z "${value}" || "${value}" == "${expected}" ]]; then
+    return
+  fi
+  local prefix="${expected}-v"
+  local version="${value:${#prefix}}"
+  if [[ "${value:0:${#prefix}}" != "${prefix}" ||
+        ! "${version}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "class-study acquisition root must use the canonical path or a versioned sibling" >&2
+    exit 2
+  fi
+}
+
 class_require_canonical_parent() {
   local value="$1"
   local expected="$2"
@@ -6319,10 +6334,9 @@ PY
       "${class_path_hosts[--artifacts-root]:-}" \
       "${class_artifacts_root}" \
       "artifact root"
-    class_require_canonical_path \
+    class_require_acquisition_path \
       "${class_path_hosts[--acquisition-root]:-}" \
-      "${class_acquisition_root}" \
-      "acquisition root"
+      "${class_acquisition_root}"
     class_require_canonical_path \
       "${class_path_hosts[--stability-root]:-}" \
       "${class_stability_root}" \
@@ -8340,11 +8354,12 @@ if [[ "${1:-}" == "test" && "${2:-}" == "pinned-cdp" ]]; then
 fi
 if [[ "${1:-}" == "class-study" &&
       "${class_study_action}" == "acquisition-run" ]]; then
+  class_acquisition_container_root="$(class_container_path "${class_path_hosts[--acquisition-root]}")"
   container+=(
     --name "qcsd-classifier-multiorigin100-v1-acquisition-run"
     --label "org.qcsd.study=classifier-multiorigin100-v1"
     --label "org.qcsd.role=acquisition-run"
-    --label "org.qcsd.acquisition-root=/lab/artifacts/classifier-multiorigin100-v1-acquisition"
+    --label "org.qcsd.acquisition-root=${class_acquisition_container_root}"
     --label "org.qcsd.image-id=${image_id}"
   )
 fi

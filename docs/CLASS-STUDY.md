@@ -1,6 +1,6 @@
 # Extended-class study: acquisition and continuation
 
-Current protocol summary: 26 September 2026, Australia/Sydney. The
+Current protocol summary: 29 September 2026, Australia/Sydney. The
 [project ledger](../PROJECT.md) records progress; this document records the
 next work and its purpose. The checked-in
 [study contract](../config/class-study/v1/study.json), implemented validators
@@ -23,11 +23,15 @@ selectable modes**. Qualification on the new classes remains pending for all
 modes. BuFLO/CS-BuFLO validation requires the final attestation, and describes
 client-only QUIC adaptations rather than bilateral paper implementations.
 
-At migration, v116 had 75 passing browser vectors, two operational failures
-and an interrupted outstanding attempt, with no recorded semantic failure.
-It remains incomplete on the laptop. Accepted extended-study progress is
-pilot 0/120, final classes 0/100, certification 0/900 and formal 0/16,000.
-The desktop must establish fresh source/build/host authority.
+The v126 desktop browser gate passed and independently verified all 110
+vectors; its acquisition-only authority passed all four hard gates without
+waivers. The v126 acquisition checkpoint was initialized but still has 600
+pending candidates and zero batches. Its watcher rejected the browser receipt's
+valid nine-digit fractional start timestamp before any acquisition action.
+Correcting that source defect requires the next unused cohort and complete
+downstream reproof, with a new versioned acquisition root. Preserve v126 intact.
+Accepted extended-study progress remains pilot 0/120, final classes 0/100,
+certification 0/900 and formal 0/16,000.
 
 ## Cost-escalating sequence
 
@@ -65,7 +69,8 @@ Restore and checksum-verify the working set described in the
 Use native amd64 preparation/browser execution on Windows x64/Ubuntu WSL2;
 the historical laptop browser evidence is ARM64. The architecture profile
 must bind the pinned Chromium/Playwright version and verified archive,
-executable and distribution hashes. Native desktop qualification is pending.
+executable and distribution hashes. V126 passed native desktop qualification on
+its bound source; changed source requires a new qualification.
 
 Before an evidentiary build, verify user systemd/cgroup v2, Docker access,
 network namespace and traffic-control capability, and clock stability.
@@ -133,8 +138,13 @@ AUTHORITY="artifacts/class-study-acquisition-authority-v${COHORT_VERSION}.json"
 ```
 
 For later actions, obtain exact input paths from the preceding verified
-receipts and the coordinator's help. Use `acquisition-init` with
-`--acquisition-authority`, then `acquisition-run` or `acquisition-watch`.
+receipts and the coordinator's help. After the corrected watcher source has
+new verified authority, choose a create-only versioned root such as
+`artifacts/classifier-multiorigin100-v1-acquisition-v${COHORT_VERSION}`.
+Pass that same path as `--acquisition-root` to `acquisition-init` with
+`--acquisition-authority` and to `acquisition-watch`. Do not resume or relabel
+the v126 checkpoint under changed source. Then use `acquisition-run` or let
+`acquisition-watch` schedule due actions.
 Complete acquisition with `acquisition-complete`; freeze pilot/final cohorts
 with `cohort` and campaigns with `campaigns --stage pilot|authoritative`.
 Use `capture`/`resume` through `class-study` for every study capture role;

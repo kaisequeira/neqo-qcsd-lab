@@ -21,6 +21,7 @@ import pytest
 from tools import class_acquisition_watch as watch
 
 _REAL_VALIDATE_HOST_SOURCE = watch._validate_host_source
+_CANONICAL_RUNNER_ROOT = f"/lab/artifacts/{watch.STUDY_ID}-acquisition"
 
 
 def _canonical(value: Any) -> bytes:
@@ -1879,7 +1880,7 @@ def _result(
     payload.update(
         {
             "valid": True,
-            "runner_root": runner_root or watch.CONTAINER_ACQUISITION_ROOT,
+            "runner_root": runner_root or _CANONICAL_RUNNER_ROOT,
         }
     )
     if action == "acquisition-status":
@@ -2176,7 +2177,9 @@ def test_action_status_validates_transactional_active_batch_summary() -> None:
     }
     details = _details(recovery=2, active_batch=active)
     watch._validate_action_result(
-        _result("acquisition-status", details), action="acquisition-status"
+        _result("acquisition-status", details),
+        action="acquisition-status",
+        expected_runner_root=_CANONICAL_RUNNER_ROOT,
     )
 
     probe_active = copy.deepcopy(active)
@@ -2192,6 +2195,7 @@ def test_action_status_validates_transactional_active_batch_summary() -> None:
             ),
         ),
         action="acquisition-status",
+        expected_runner_root=_CANONICAL_RUNNER_ROOT,
     )
 
     for field, value in (("stage", "baseline"), ("attempt_count", 1)):
@@ -2201,6 +2205,7 @@ def test_action_status_validates_transactional_active_batch_summary() -> None:
             watch._validate_action_result(
                 _result("acquisition-status", invalid),
                 action="acquisition-status",
+                expected_runner_root=_CANONICAL_RUNNER_ROOT,
             )
 
 
@@ -2210,7 +2215,11 @@ def test_action_result_requires_an_exact_integer_schema(schema_alias: object) ->
     result["schema_version"] = schema_alias
 
     with pytest.raises(watch.WatchError, match="identity is mismatched"):
-        watch._validate_action_result(result, action="acquisition-status")
+        watch._validate_action_result(
+            result,
+            action="acquisition-status",
+            expected_runner_root=_CANONICAL_RUNNER_ROOT,
+        )
 
 
 @pytest.mark.parametrize(
@@ -2234,6 +2243,7 @@ def test_action_status_requires_exact_integer_schema_and_cap_fields(
         watch._validate_action_result(
             _result("acquisition-status", details),
             action="acquisition-status",
+            expected_runner_root=_CANONICAL_RUNNER_ROOT,
         )
 
 
@@ -2246,7 +2256,11 @@ def test_action_status_gate_requires_exact_integer_nested_caps(alias_kind: str) 
     )
 
     with pytest.raises(watch.WatchError, match="another stability gate"):
-        watch._validate_action_result(result, action="acquisition-status")
+        watch._validate_action_result(
+            result,
+            action="acquisition-status",
+            expected_runner_root=_CANONICAL_RUNNER_ROOT,
+        )
 
 
 @pytest.mark.parametrize("alias_kind", ("bool", "float"))
@@ -2257,7 +2271,11 @@ def test_action_run_requires_an_exact_integer_candidate_cap(alias_kind: str) -> 
     )
 
     with pytest.raises(watch.WatchError, match="bounded wait contract"):
-        watch._validate_action_result(result, action="acquisition-run")
+        watch._validate_action_result(
+            result,
+            action="acquisition-run",
+            expected_runner_root=_CANONICAL_RUNNER_ROOT,
+        )
 
 
 @pytest.mark.parametrize("schema_alias", (True, 1.0))
@@ -2284,6 +2302,7 @@ def test_action_status_validates_finalisable_work_as_disjoint_and_due() -> None:
     watch._validate_action_result(
         _result("acquisition-status", finalisable),
         action="acquisition-status",
+        expected_runner_root=_CANONICAL_RUNNER_ROOT,
     )
 
     overlapping = _details(
@@ -2296,6 +2315,7 @@ def test_action_status_validates_finalisable_work_as_disjoint_and_due() -> None:
         watch._validate_action_result(
             _result("acquisition-status", overlapping),
             action="acquisition-status",
+            expected_runner_root=_CANONICAL_RUNNER_ROOT,
         )
 
     false_due_flag = copy.deepcopy(finalisable)
@@ -2304,6 +2324,43 @@ def test_action_status_validates_finalisable_work_as_disjoint_and_due() -> None:
         watch._validate_action_result(
             _result("acquisition-status", false_due_flag),
             action="acquisition-status",
+            expected_runner_root=_CANONICAL_RUNNER_ROOT,
+        )
+
+
+@pytest.mark.parametrize("action", ("acquisition-status", "acquisition-run"))
+def test_versioned_root_action_requires_matching_container_root(
+    tmp_path: Path, action: str
+) -> None:
+    versioned_root = tmp_path / "artifacts" / f"{watch.STUDY_ID}-acquisition-v127"
+    paths = watch.WatchPaths.from_lab_root(tmp_path, acquisition_root=versioned_root)
+    expected = f"/lab/artifacts/{watch.STUDY_ID}-acquisition-v127"
+    assert watch._container_acquisition_root(paths) == expected
+
+    calls: list[tuple[str, ...]] = []
+
+    def runner(command: tuple[str, ...], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return _completed(_result(action, _details(), runner_root=expected))
+
+    result = watch._run_action(
+        action,
+        paths=paths,
+        runner=runner,
+        environment={},
+        authority_fd=-1,
+        state_root=paths.state_root,
+        source_binding_sha256="0" * 64,
+    )
+    assert result["details"]["runner_root"] == expected
+    assert calls == [
+        watch._status_command(paths) if action == "acquisition-status" else watch._run_command(paths)
+    ]
+
+    wrong = _result(action, _details(), runner_root=_CANONICAL_RUNNER_ROOT)
+    with pytest.raises(watch.WatchError, match="another acquisition root"):
+        watch._validate_action_result(
+            wrong, action=action, expected_runner_root=expected
         )
 
 
@@ -3642,6 +3699,50 @@ def test_watcher_preserves_legacy_storage_policy_and_accepts_small_current_volum
     current_full["minimum_available_bytes"] = 0
     with pytest.raises(watch.WatchError, match="insufficient free space"):
         watch._validate_build_storage_preflight(current_full, probe_sha256=probe_sha256)
+
+
+def test_watcher_host_python_parses_browser_egress_nanosecond_timestamps() -> None:
+    host_python = Path("/usr/bin/python3")
+    if not host_python.is_file():
+        pytest.skip("the acquisition watcher requires /usr/bin/python3")
+    watcher = Path(__file__).parents[1] / "tools/class_acquisition_watch.py"
+    script = (
+        "import runpy, sys\n"
+        "namespace = runpy.run_path(sys.argv[1])\n"
+        "try:\n"
+        "    parsed = namespace['_evidence_timestamp'](sys.argv[2], label='evidence')\n"
+        "except namespace['WatchError'] as error:\n"
+        "    print(error, file=sys.stderr)\n"
+        "    raise SystemExit(3)\n"
+        "print(parsed.isoformat())\n"
+    )
+
+    def parse(value: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [str(host_python), "-I", "-c", script, str(watcher), value],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    accepted = {
+        "2026-09-28T17:12:48.987813003Z": "2026-09-28T17:12:48.987813+00:00",
+        "2026-09-29T00:41:42.578934297Z": "2026-09-29T00:41:42.578934+00:00",
+        "2026-09-01T00:00:01.5913490+00:00": "2026-09-01T00:00:01.591349+00:00",
+    }
+    for value, expected in accepted.items():
+        result = parse(value)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == expected
+
+    rejected = {
+        "2026-09-28T17:12:48.9878130034Z": "evidence timestamp is invalid",
+        "2026-09-28T17:12:48.987813": "evidence timestamp is not timezone-aware",
+    }
+    for value, expected in rejected.items():
+        result = parse(value)
+        assert result.returncode == 3
+        assert result.stderr.strip() == expected
 
 
 def test_current_foundation_watcher_rejects_a_fully_valid_historical_schema3_build(
@@ -5542,6 +5643,43 @@ def _scope_test_state(tmp_path: Path) -> tuple[Path, int]:
     state_root = watch._ensure_state_namespace(paths)
     descriptor = watch._acquire_mutation_lock(paths.mutation_lock)
     return state_root, descriptor
+
+
+def test_versioned_root_round_trips_through_watcher_paths_and_namespace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lab_root = tmp_path / "lab"
+    tool = lab_root / "tools/class_acquisition_watch.py"
+    tool.parent.mkdir(parents=True)
+    tool.write_text("# path fixture\n", encoding="utf-8")
+    monkeypatch.setattr(watch, "__file__", str(tool))
+    versioned_root = lab_root / "artifacts" / f"{watch.STUDY_ID}-acquisition-v127"
+    state_base = tmp_path / "watch-state"
+    paths = watch.WatchPaths.from_lab_root(
+        lab_root, acquisition_root=versioned_root, state_base=state_base
+    )
+    from_script = watch.WatchPaths.from_script(acquisition_root=versioned_root)
+    default = watch.WatchPaths.from_lab_root(lab_root, state_base=state_base)
+
+    assert from_script.lab_root == lab_root
+    assert from_script.acquisition_root == versioned_root
+    assert paths.provenance == versioned_root / "provenance.json"
+    assert paths.checkpoint == versioned_root / "checkpoint.json"
+    assert paths.action_lock == versioned_root / ".class-study-acquisition.lock"
+    assert paths.state_root != default.state_root
+    assert watch._status_command(paths)[-1] == str(versioned_root)
+    run = watch._run_command(paths)
+    assert run[run.index("--acquisition-root") + 1] == str(versioned_root)
+
+    state_root = watch._ensure_state_namespace(paths)
+    assert watch._paths_from_state_namespace(state_root) == paths
+
+    namespace = state_root / "NAMESPACE.json"
+    tampered = json.loads(namespace.read_text(encoding="utf-8"))
+    tampered["acquisition_root"] = str(default.acquisition_root)
+    namespace.write_bytes(_canonical(tampered))
+    with pytest.raises(watch.WatchError, match="digest does not verify"):
+        watch._paths_from_state_namespace(state_root)
 
 
 def test_state_namespace_promotes_exact_interrupted_publication(tmp_path: Path) -> None:

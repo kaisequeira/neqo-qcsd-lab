@@ -250,7 +250,6 @@ PREPARE_IMAGE_ENV = "QCSD_LAB_PREPARE_IMAGE"
 PINNED_CONTEXT_ENV = "QCSD_DOCKER_PINNED_CONTEXT"
 PINNED_HOST_ENV = "QCSD_DOCKER_PINNED_HOST"
 PINNED_SERVER_ID_ENV = "QCSD_DOCKER_PINNED_SERVER_ID"
-CONTAINER_ACQUISITION_ROOT = f"/lab/artifacts/{STUDY_ID}-acquisition"
 # One coordinator action may advance a compatible pair, while every page-level
 # worker shares this immutable process-wide concurrency budget. The core
 # coordinator publishes its transactional batch before starting either worker.
@@ -1602,7 +1601,7 @@ class CommandRunner(Protocol):
 
 @dataclass(frozen=True)
 class WatchPaths:
-    """The one fresh v1 acquisition layout accepted by the supervisor."""
+    """The source-bound v1 acquisition layout accepted by the supervisor."""
 
     lab_root: Path
     launcher: Path
@@ -1617,6 +1616,7 @@ class WatchPaths:
         cls,
         root: Path,
         *,
+        acquisition_root: Path | None = None,
         state_base: Path | None = None,
     ) -> WatchPaths:
         lab_root = Path(os.path.abspath(root))
@@ -1626,7 +1626,11 @@ class WatchPaths:
             candidate_catalogue=(
                 lab_root / "config/class-study/v1" / f"{STUDY_ID}-candidates.json"
             ),
-            acquisition_root=lab_root / "artifacts" / f"{STUDY_ID}-acquisition",
+            acquisition_root=(
+                Path(os.path.abspath(acquisition_root))
+                if acquisition_root is not None
+                else lab_root / "artifacts" / f"{STUDY_ID}-acquisition"
+            ),
             stability_root=lab_root / "artifacts" / f"{STUDY_ID}-stability",
             workload_root=lab_root / "config/workloads",
             state_base=Path(
@@ -1637,8 +1641,11 @@ class WatchPaths:
         )
 
     @classmethod
-    def from_script(cls) -> WatchPaths:
-        return cls.from_lab_root(Path(__file__).resolve(strict=True).parents[1])
+    def from_script(cls, *, acquisition_root: Path | None = None) -> WatchPaths:
+        return cls.from_lab_root(
+            Path(__file__).resolve(strict=True).parents[1],
+            acquisition_root=acquisition_root,
+        )
 
     @property
     def provenance(self) -> Path:
@@ -2137,12 +2144,17 @@ def _validate_clean_source(value: Any, *, image: str, label: str) -> None:
 def _evidence_timestamp(value: Any, *, label: str) -> datetime:
     if not isinstance(value, str) or not value:
         raise WatchError(f"{label} timestamp is missing")
-    # The WSL backing-volume probe emits .NET's seven-digit round-trip time.
-    # Python 3.10 needs the seventh digit removed for microsecond parsing.
+    # .NET and Docker receipts emit 7- and 9-digit fractions respectively.
+    # Python 3.10 accepts at most microseconds; reject excess precision before
+    # truncating so all supported Python versions validate the same format.
+    normalized = value.replace("Z", "+00:00")
+    fraction = re.search(r"\.(\d+)(?=[+-]\d{2}:\d{2}$)", normalized)
+    if fraction is not None and len(fraction.group(1)) > 9:
+        raise WatchError(f"{label} timestamp is invalid")
     normalized = re.sub(
-        r"(\.\d{6})\d(?=[+-]\d{2}:\d{2}$)",
+        r"(\.\d{6})\d{1,3}(?=[+-]\d{2}:\d{2}$)",
         r"\1",
-        value.replace("Z", "+00:00"),
+        normalized,
     )
     try:
         parsed = datetime.fromisoformat(normalized)
@@ -7737,7 +7749,11 @@ def _paths_from_state_namespace(state_root: Path) -> WatchPaths:
         label="acquisition watch state namespace receipt",
     )
     value = json.loads(raw.decode("utf-8"))
-    paths = WatchPaths.from_lab_root(Path(value["lab_root"]), state_base=state_root.parent)
+    paths = WatchPaths.from_lab_root(
+        Path(value["lab_root"]),
+        acquisition_root=Path(value["acquisition_root"]),
+        state_base=state_root.parent,
+    )
     if paths.state_root != state_root or str(paths.acquisition_root) != value["acquisition_root"]:
         raise WatchError("acquisition watch namespace does not derive canonical paths")
     return paths
@@ -9534,10 +9550,26 @@ def _run_action(
         completed.stdout,
         label=f"{action} child output",
     )
-    return _validate_action_result(result, action=action)
+    return _validate_action_result(
+        result,
+        action=action,
+        expected_runner_root=_container_acquisition_root(paths),
+    )
 
 
-def _validate_action_result(value: Any, *, action: str) -> dict[str, Any]:
+def _container_acquisition_root(paths: WatchPaths) -> str:
+    try:
+        relative = paths.acquisition_root.relative_to(paths.lab_root)
+    except ValueError as error:
+        raise WatchError("acquisition root escapes the canonical Lab root") from error
+    if relative == Path("."):
+        raise WatchError("acquisition root cannot be the Lab root")
+    return f"/lab/{relative.as_posix()}"
+
+
+def _validate_action_result(
+    value: Any, *, action: str, expected_runner_root: str
+) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != _ACTION_KEYS:
         raise WatchError(f"{action} result envelope differs from the coordinator contract")
     if (
@@ -9554,7 +9586,7 @@ def _validate_action_result(value: Any, *, action: str) -> dict[str, Any]:
     expected_keys = _STATUS_DETAIL_KEYS if action == "acquisition-status" else _RUN_DETAIL_KEYS
     if not isinstance(details, dict) or set(details) != expected_keys:
         raise WatchError(f"{action} result details differ from the coordinator contract")
-    if details["valid"] is not True or details["runner_root"] != CONTAINER_ACQUISITION_ROOT:
+    if details["valid"] is not True or details["runner_root"] != expected_runner_root:
         raise WatchError(f"{action} result names another acquisition root")
     _validate_status_details(details, action=action)
     if action == "acquisition-status":
@@ -10150,7 +10182,7 @@ class WatchSignalInterrupt(KeyboardInterrupt):
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Supervise the canonical classifier-multiorigin100-v1 acquisition "
+            "Supervise an initialized classifier-multiorigin100-v1 acquisition "
             "from its immutable checkpoint."
         )
     )
@@ -10159,6 +10191,11 @@ def _parser() -> argparse.ArgumentParser:
         type=float,
         default=DEFAULT_HEARTBEAT_SECONDS,
         help="host heartbeat while waiting (finite, 1 to 5 seconds; default: 5)",
+    )
+    parser.add_argument(
+        "--acquisition-root",
+        type=Path,
+        help="initialized acquisition root (default: canonical study artifacts path)",
     )
     parser.add_argument(
         "--recover-stale-scopes-internal",
@@ -10194,6 +10231,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     if arguments.recover_stale_scopes_internal:
         try:
+            if arguments.acquisition_root is not None:
+                raise WatchError("internal scope recovery cannot select an acquisition root")
             state_root = arguments.state_root_internal
             current_root = arguments.current_scope_root_internal
             current_authority = arguments.current_authority_internal
@@ -10259,7 +10298,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
     try:
-        result = watch_acquisition(heartbeat_seconds=arguments.heartbeat_seconds)
+        result = watch_acquisition(
+            paths=WatchPaths.from_script(acquisition_root=arguments.acquisition_root),
+            heartbeat_seconds=arguments.heartbeat_seconds,
+        )
     except WatchSignalInterrupt as interrupt:
         print("class acquisition watch interrupted; resume from checkpoint", file=sys.stderr)
         return 128 + interrupt.signum

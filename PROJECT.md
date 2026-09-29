@@ -1,6 +1,6 @@
 # QCSD thesis project ledger
 
-Checkpoint: **28 September 2026, Australia/Sydney (AEST, UTC+10)**.
+Checkpoint: **29 September 2026, Australia/Sydney (AEST, UTC+10)**.
 This is the current research ledger. The [history](docs/PROJECT-HISTORY.md)
 preserves the development record and the [class-study runbook](docs/CLASS-STUDY.md)
 defines continuation. The [operator README](README.md) covers normal Lab use.
@@ -30,25 +30,29 @@ Existing-defence validation does not establish compatibility on new classes.
 
 Desktop restoration and the protected historical handoff remain verified; see
 the [evidence index](docs/EVIDENCE-INDEX.md) for retention boundaries. Docker
-and WSL data reside on D:. Source-bound v124 produced a verified native
-three-image build, ETF capability probe and pinned-CDP result. The 110-vector
-browser-egress gate stopped after 28 passing vectors: vector 29 has a sealed
-operational-failure receipt for a Docker API inspect timeout. Its open evidence
-inventory validates, but there is no final browser receipt or acquisition
-authority. The 28-vector prefix advances no scientific count. Three separate
-2,048-sample ETF/veth diagnostics remain incomplete and non-evidentiary.
+and WSL data reside on D:. On source `97f8ed238c39d4294747066b7e3d1c130620e21f`,
+v126's final browser receipt passed and independently verified all 110 vectors
+with no operational or semantic failures. Its acquisition-only authority passed
+all four hard gates without waivers. The v126 acquisition was initialized, but
+its checkpoint still has 600 pending candidates, no baseline batch and no
+accepted class. The watcher exited before its first action because it rejected
+the browser receipt's valid nine-digit fractional timestamp. A source correction
+requires the next unused cohort and complete downstream reproof; v126 cannot
+authorise acquisition on changed source.
 
-| Checkpoint identity | v124 desktop execution and current state |
+| Checkpoint identity | v126 desktop execution and current state |
 |---|---|
-| Lab branch and v124 source commit | `desktop-portability-2026-09-26`; `23cee75f3f7dec784776f5e128636317e63f2861` |
+| Lab branch and v126 source commit | `desktop-portability-2026-09-26`; `97f8ed238c39d4294747066b7e3d1c130620e21f` |
 | Rust commit and Lab Gitlink | `e8575fd8e54921ed6ff867de475b4a734064866e` |
-| Build and pinned CDP | `artifacts/buflo-study/build-execution-v124.json` and `artifacts/buflo-study/pinned-cdp-execution-v124.json` verified on their bound source |
-| Latest browser execution | `artifacts/buflo-study/browser-egress-qualification-v124/`: 28/110 passed, vector 29 operational failure, no `final.json` |
-| Desktop authority | No acquisition authority; pilot and formal collection remain at zero |
-| Next execution source | Docker inspect retry and curated-source importer validated locally; no source-bound gate has run on this later source |
+| Build and pinned CDP | `artifacts/buflo-study/build-execution-v126.json` and `artifacts/buflo-study/pinned-cdp-execution-v126.json` verified on their bound source |
+| Browser execution | `artifacts/buflo-study/browser-egress-qualification-v126/final.json`: verified 110/110, zero failures |
+| Desktop authority | `artifacts/class-study-acquisition-authority-v126.json`: verified, public-page-acquisition-only; no full defence foundation |
+| Acquisition checkpoint | `artifacts/classifier-multiorigin100-v1-acquisition/`: initialized on v126; 600 pending, zero baseline batches |
+| Next execution | Repair timestamp parsing, then allocate a fresh cohort and reprove build, pinned CDP, browser and acquisition authority before a new versioned acquisition root |
 
-Preserve the v124 failure and the earlier v116 incomplete laptop execution.
-Neither can authorise changed source or substitute for a complete browser gate.
+Preserve the v126 receipts, failed watcher journal and initialized checkpoint,
+as well as the earlier v124 failure and v116 incomplete laptop execution.
+None can authorise changed source or supply a scientific numerator.
 
 | Extended study scientific milestone | Accepted at this checkpoint |
 |---|---:|
@@ -131,10 +135,12 @@ historical schema descriptions remain in the history and methodology.
 
 ## Next actions and cheapest-first execution
 
-The v124 browser failure is an operational Docker API observation fault, not a
-semantic vector rejection. The browser container later inspected as exited
-with code zero. The bounded retry passes local tests but needs a fresh
-source-bound cohort for qualification.
+The v126 browser and acquisition-only authority gates passed on their bound
+source. The watcher rejected a valid browser receipt timestamp with nine
+fractional digits before launching any acquisition batch. Correct the consumer
+parser, verify it, then use the next unused source-bound cohort. Preserve v126
+evidence and initialize a new versioned acquisition root; do not resume its
+checkpoint after changing source.
 The supplied curated domain list has been imported as a portable, hash-bound
 source receipt at
 [`config/curated-sources/crux-73-v1.source.json`](config/curated-sources/crux-73-v1.source.json).
@@ -145,13 +151,15 @@ user chose to retain the existing frozen catalogue for formal acquisition;
 the curated receipt is excluded from that run. The registered 600-candidate,
 120-pilot, 100-final-class contract remains in force.
 
-1. Preserve the verified migration manifests, historical handoff, v124 build,
-   pinned-CDP receipt and incomplete browser checkpoint.
+1. Preserve the verified migration manifests, historical handoff, v126 receipts,
+   initialized acquisition checkpoint and failed watcher journal.
 2. Retain the registered Tranco candidate catalogue for this formal run.
-3. Freeze clean source; obtain the next unused cohort, fresh no-cache images,
-   pinned-CDP and 110/110 browser qualification. Publish acquisition authority.
-4. Acquire the 120-class pilot with genuine longitudinal observations. Complete
-   the full defence foundation before any class-study fitting or capture.
+3. Repair and verify the watcher timestamp consumer; freeze clean source; obtain
+   the next unused cohort, fresh no-cache images, pinned-CDP and 110/110 browser
+   qualification. Publish new acquisition authority.
+4. Initialize a new versioned acquisition root and acquire the 120-class pilot
+   with genuine longitudinal observations. Complete the full defence foundation
+   before any class-study fitting or capture.
 5. Follow pilot fit/qualification/compatibility, final selection, authoritative
    fitting, final qualification and 900-cell certification.
 6. Freeze readiness and historical pre-snapshot; interleave ten canary blocks

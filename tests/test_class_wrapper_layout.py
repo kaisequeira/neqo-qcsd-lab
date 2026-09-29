@@ -116,6 +116,26 @@ def _lock_function_source() -> str:
             ),
             "qualification sidecar root must use the canonical path",
         ),
+        (
+            ("acquisition-init", "--acquisition-root", "artifacts/alternate-acquisition"),
+            "acquisition root must use the canonical path or a versioned sibling",
+        ),
+        (
+            (
+                "acquisition-init",
+                "--acquisition-root",
+                "artifacts/classifier-multiorigin100-v1-acquisition-v0",
+            ),
+            "acquisition root must use the canonical path or a versioned sibling",
+        ),
+        (
+            (
+                "acquisition-init",
+                "--acquisition-root",
+                "artifacts/classifier-multiorigin100-v1-acquisition-v127/child",
+            ),
+            "acquisition root must use the canonical path or a versioned sibling",
+        ),
     ),
 )
 def test_wrapper_rejects_alternate_fresh_layout_paths(
@@ -127,6 +147,16 @@ def test_wrapper_rejects_alternate_fresh_layout_paths(
     assert result.returncode == 2
     assert message in result.stderr
     assert "Missing image" not in result.stderr
+
+
+def test_acquisition_init_accepts_versioned_root_before_authority_gate() -> None:
+    versioned_root = Path(f"{class_study_layout().acquisition_root}-v99999999")
+    result = _run("acquisition-init", "--acquisition-root", str(versioned_root))
+
+    assert result.returncode == 1
+    assert "requires --foundation-attestation before Docker" in result.stderr
+    assert "canonical path or a versioned sibling" not in result.stderr
+    assert not versioned_root.exists()
 
 
 @pytest.mark.parametrize(
@@ -324,8 +354,9 @@ def test_acquisition_watch_help_is_host_only_and_bypasses_docker() -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    assert "Supervise the canonical classifier-multiorigin100-v1 acquisition" in (result.stdout)
+    assert "Supervise an initialized classifier-multiorigin100-v1 acquisition" in result.stdout
     assert "--heartbeat-seconds" in result.stdout
+    assert "--acquisition-root" in result.stdout
     assert "Missing image" not in result.stderr
     assert "Docker" not in result.stderr
 
@@ -349,7 +380,7 @@ def test_acquisition_watch_delegates_only_its_supported_host_arguments() -> None
         capture_output=True,
         text=True,
     )
-    unsupported = subprocess.run(
+    missing_root = subprocess.run(
         [str(LAUNCHER), "class-study", "acquisition-watch", "--acquisition-root", "x"],
         cwd=ROOT,
         env=environment,
@@ -361,9 +392,10 @@ def test_acquisition_watch_delegates_only_its_supported_host_arguments() -> None
     assert invalid_heartbeat.returncode == 1
     assert "heartbeat must be a finite number in [1, 5]" in invalid_heartbeat.stderr
     assert "Docker" not in invalid_heartbeat.stderr
-    assert unsupported.returncode == 2
-    assert "unrecognized arguments: --acquisition-root x" in unsupported.stderr
-    assert "Docker" not in unsupported.stderr
+    assert missing_root.returncode == 1
+    assert "acquisition root is not an existing directory" in missing_root.stderr
+    assert "unrecognized arguments" not in missing_root.stderr
+    assert "Docker" not in missing_root.stderr
 
 
 def test_wrapper_derives_layout_from_python_and_exempts_frozen_actions() -> None:
