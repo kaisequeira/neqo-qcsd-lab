@@ -89,6 +89,7 @@ from qcsd_lab.discovery_evidence import (
     passive_render_contract,
 )
 from qcsd_lab.prepare import PreparationError, PreparedWorkload, RecoverablePreparationError
+from qcsd_lab import h3_prebaseline
 from qcsd_lab.util import load_json
 from tests.test_buflo_study import _write_schema5_build_pair
 from tests.test_pinned_cdp import _observation as _pinned_cdp_observation
@@ -97,6 +98,456 @@ _PRODUCTION_FOUNDATION_ATTESTATION_BINDING = acquisition_module._foundation_atte
 _HISTORICAL_ACQUISITION_CONTRACTS = load_json(
     Path(__file__).parent / "fixtures/class-acquisition-historical-contracts.json"
 )
+
+
+def _h3_screen_attempt(
+    url: str, outcome: str, *, sequence: int = 0, at: datetime | None = None
+) -> dict[str, object]:
+    """One deterministic Neqo screen attempt without network work."""
+
+    if outcome == "known-valid":
+        code, stdout, known_valid = 0, "", True
+        output_text = json.dumps(
+            {
+                "resources": [{
+                    "id": 0, "url": url, "type": "Unknown",
+                    "content_length": 1, "data_length": 1,
+                    "chaff_priority": False, "known_valid": True,
+                    "depends_on": [], "headers": [],
+                }],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        output_sha256 = hashlib.sha256(output_text.encode()).hexdigest()
+    elif outcome == "idle-timeout":
+        code = 1
+        stdout = (
+            'Error: RunAborted("HTTP/3 endpoint 0 closed before accepted run '
+            'completion: Transport(IdleTimeout)")'
+        )
+        output_sha256, output_text, known_valid = None, None, None
+    elif outcome == "ambiguous":
+        code, stdout, output_sha256, output_text, known_valid = (
+            1, "Error: Other", None, None, None
+        )
+    else:
+        raise ValueError(f"unknown fake H3 outcome: {outcome}")
+    started_at = at or datetime(2026, 8, 28, tzinfo=UTC) + timedelta(seconds=2 * sequence)
+    return {
+        "url": url,
+        "started_at": acquisition_module._format_time(started_at),
+        "completed_at": acquisition_module._format_time(
+            started_at if at is not None else started_at + timedelta(seconds=1)
+        ),
+        "resolver_addresses": ["1.1.1.1"],
+        "resolver_error": None,
+        "exit_code": code,
+        "stdout_sha256": hashlib.sha256(stdout.encode()).hexdigest(),
+        "stdout_excerpt": stdout,
+        "output_sha256": output_sha256,
+        "output_text": output_text,
+        "known_valid": known_valid,
+        "outcome": outcome,
+    }
+
+
+def _h3_screen_receipt(
+    candidate_id: str,
+    domain: str,
+    pages: tuple[PageCandidate, ...] | list[PageCandidate],
+    *,
+    outcome: str = "pass",
+    navigation: NavigationDiscovery | None = None,
+    per_origin: dict[str, str] | None = None,
+    screen_at: datetime | None = None,
+) -> dict:
+    """Bind the same small screen shape returned by production backends."""
+
+    control_url = h3_prebaseline.PREBASELINE_H3_SCREEN_CONTRACT["control_url"]
+    control_before = _h3_screen_attempt(
+        control_url, "known-valid", sequence=0, at=screen_at
+    )
+    selected_pages = [
+        {
+            "url": page.url,
+            "request_origin": origin(page.url),
+        }
+        for page in pages
+    ]
+    selected_origins = sorted({item["request_origin"] for item in selected_pages})
+    default_origin_outcome = (
+        "idle-timeout" if outcome == "site-rejection" else "known-valid"
+    )
+    origin_attempts = []
+    for origin_index, value in enumerate(selected_origins):
+        origin_outcome = (per_origin or {}).get(value, default_origin_outcome)
+        origin_attempts.append({
+            "origin": value,
+            "attempts": [
+                _h3_screen_attempt(
+                    value + "/", origin_outcome,
+                    sequence=1 + 2 * origin_index + attempt_index,
+                    at=screen_at,
+                )
+                for attempt_index in range(2)
+            ],
+        })
+    control_after = _h3_screen_attempt(
+        control_url, "known-valid", sequence=1 + 2 * len(selected_origins), at=screen_at
+    )
+    if outcome == "blocked":
+        control_before = _h3_screen_attempt(
+            control_url, "ambiguous", sequence=0, at=screen_at
+        )
+        control_after = None
+        origin_attempts = []
+    runtime_image = acquisition_module.os.environ.get("QCSD_LAB_IMAGE_DIGEST", "native")
+    runtime_source = dict(acquisition_module.source_metadata())
+    if runtime_image == "native" and runtime_source.get("image_digest") is None:
+        runtime_source["image_digest"] = "native"
+    return h3_prebaseline.build_h3_screen_receipt(
+        candidate_id=candidate_id,
+        domain=domain,
+        selected_pages=selected_pages,
+        navigation_links=[
+            {"url": link.url, "content_type": link.content_type}
+            for link in navigation.links
+        ] if navigation is not None else [],
+        control_before=control_before,
+        origin_attempts=origin_attempts,
+        control_after=control_after,
+        image_digest=runtime_image,
+        source=runtime_source,
+    )
+
+
+def test_prebaseline_h3_screen_classifies_the_recorded_neqo_idle_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed = _h3_screen_attempt("https://consultant.ru/", "idle-timeout")
+    monkeypatch.setattr(
+        h3_prebaseline,
+        "_resolver_addresses",
+        lambda _url: (["1.1.1.1"], None),
+    )
+    monkeypatch.setattr(
+        h3_prebaseline,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1, stdout=observed["stdout_excerpt"]
+        ),
+    )
+    attempt = h3_prebaseline._run_one("https://consultant.ru/")
+    assert attempt["outcome"] == "idle-timeout"
+    assert attempt["stdout_excerpt"] == observed["stdout_excerpt"]
+
+
+def test_prebaseline_h3_screen_oversized_raw_output_blocks_without_success_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    url = "https://example.com/"
+    output_text = _h3_screen_attempt(url, "known-valid")["output_text"]
+    assert isinstance(output_text, str)
+    monkeypatch.setattr(h3_prebaseline, "_MAX_OUTPUT_CHARS", 1)
+    monkeypatch.setattr(
+        h3_prebaseline, "_resolver_addresses",
+        lambda _url: (["1.1.1.1"], None),
+    )
+    monkeypatch.setattr(h3_prebaseline, "capture_scheduler_launch_prefix", lambda: [])
+
+    def fake_run(command, **_kwargs):
+        Path(command[command.index("--output") + 1]).write_text(output_text)
+        return SimpleNamespace(returncode=0, stdout="")
+
+    monkeypatch.setattr(h3_prebaseline, "run", fake_run)
+    attempt = h3_prebaseline._run_one(url)
+    assert attempt["outcome"] == "ambiguous"
+    assert attempt["known_valid"] is None
+    assert attempt["output_text"] is None
+
+
+def test_prebaseline_h3_screen_failed_control_is_blocked_without_site_probes() -> None:
+    from qcsd_lab.class_catalogue import select_page_candidates
+
+    domain = "example.com"
+    pages = select_page_candidates(domain, registrable_domain=domain, discovered_links=())
+    receipt = _h3_screen_receipt("tranco-0000001", domain, pages, outcome="blocked")
+    payload = h3_prebaseline.validate_h3_screen_receipt(receipt)
+    assert payload["decision"] == "blocked"
+    assert payload["origin_attempts"] == []
+    assert payload["control_after"] is None
+
+
+def test_prebaseline_h3_screen_rejects_rehashed_false_site_decision() -> None:
+    from qcsd_lab.class_catalogue import select_page_candidates
+
+    domain = "example.com"
+    pages = select_page_candidates(domain, registrable_domain=domain, discovered_links=())
+    receipt = _h3_screen_receipt("tranco-0000001", domain, pages)
+    assert h3_prebaseline.validate_h3_screen_receipt(receipt)["decision"] == "pass"
+    forged = copy.deepcopy(receipt["payload"])
+    forged["decision"] = "site-rejection"
+    with pytest.raises(ValueError, match="decision"):
+        h3_prebaseline.validate_h3_screen_receipt(
+            bind_receipt(forged, receipt_type=h3_prebaseline.H3_SCREEN_RECEIPT_TYPE)
+        )
+
+
+@pytest.mark.parametrize(
+    ("outcome", "reason"),
+    (
+        ("terminal-policy-rejection", h3_prebaseline.H3_SITE_REASON),
+        ("recoverable-failure", h3_prebaseline.H3_BLOCK_REASON),
+    ),
+)
+def test_schema_eleven_h3_specific_navigation_reason_requires_receipt(
+    outcome: str, reason: str,
+) -> None:
+    state = {
+        "state": "pending", "pages": [], "terminal": None,
+        "navigation_attempts": [{
+            "attempt": 1,
+            "started_at": "2026-08-28T00:00:00Z",
+            "completed_at": "2026-08-28T00:00:01Z",
+            "outcome": outcome,
+            "reason": reason,
+            "policy_evidence": None,
+            "h3_screen_evidence": None,
+        }],
+    }
+    with pytest.raises(ValueError, match="H3 screen"):
+        acquisition_module._validate_navigation_attempts(
+            state,
+            candidate_id="tranco-0000001",
+            candidate_domain="example.com",
+            image_digest="native",
+            source={"image_digest": "native"},
+        )
+
+
+def test_prebaseline_h3_screen_rejects_tampered_raw_neqo_output() -> None:
+    from qcsd_lab.class_catalogue import select_page_candidates
+
+    domain = "example.com"
+    pages = select_page_candidates(domain, registrable_domain=domain, discovered_links=())
+    receipt = _h3_screen_receipt("tranco-0000001", domain, pages)
+    forged = copy.deepcopy(receipt["payload"])
+    forged["control_before"]["output_text"] += " "
+    with pytest.raises(ValueError, match="output proof"):
+        h3_prebaseline.validate_h3_screen_receipt(
+            bind_receipt(forged, receipt_type=h3_prebaseline.H3_SCREEN_RECEIPT_TYPE)
+        )
+
+
+def test_prebaseline_h3_screen_mixed_primary_origins_have_definite_outcomes() -> None:
+    from qcsd_lab.class_catalogue import select_page_candidates
+
+    domain = "example.com"
+    navigation = NavigationDiscovery(
+        registrable_domain=domain,
+        links=(DiscoveredLink("https://www.example.com/about", "text/html"),),
+    )
+    pages = select_page_candidates(
+        domain, registrable_domain=domain, discovered_links=navigation.links
+    )
+    definite = _h3_screen_receipt(
+        "tranco-0000001", domain, pages, navigation=navigation,
+        per_origin={
+            "https://example.com": "known-valid",
+            "https://www.example.com": "idle-timeout",
+        },
+    )
+    assert h3_prebaseline.validate_h3_screen_receipt(definite)["decision"] == "site-rejection"
+    uncertain = _h3_screen_receipt(
+        "tranco-0000001", domain, pages, navigation=navigation,
+        per_origin={
+            "https://example.com": "known-valid",
+            "https://www.example.com": "ambiguous",
+        },
+    )
+    assert h3_prebaseline.validate_h3_screen_receipt(uncertain)["decision"] == "blocked"
+
+
+def test_prebaseline_h3_screen_mixed_results_within_one_origin_block() -> None:
+    from qcsd_lab.class_catalogue import select_page_candidates
+
+    domain = "example.com"
+    pages = select_page_candidates(domain, registrable_domain=domain, discovered_links=())
+    passing = _h3_screen_receipt("tranco-0000001", domain, pages)
+    payload = copy.deepcopy(passing["payload"])
+    payload["origin_attempts"][0]["attempts"][1] = _h3_screen_attempt(
+        "https://example.com/", "idle-timeout", sequence=2
+    )
+    screened = h3_prebaseline.build_h3_screen_receipt(
+        candidate_id=payload["candidate_id"],
+        domain=domain,
+        selected_pages=payload["selected_pages"],
+        navigation_links=payload["navigation_links"],
+        control_before=payload["control_before"],
+        origin_attempts=payload["origin_attempts"],
+        control_after=payload["control_after"],
+        image_digest=payload["image_digest"],
+        source=payload["source"],
+    )
+    assert screened["payload"]["decision"] == "blocked"
+
+
+@pytest.mark.parametrize(
+    ("screen_outcome", "expected_science", "expected_attempts"),
+    (("site-rejection", False, 1), ("blocked", None, 3)),
+)
+def test_prebaseline_h3_screen_outcome_is_terminal_before_baseline(
+    tmp_path: Path,
+    screen_outcome: str,
+    expected_science: bool | None,
+    expected_attempts: int,
+) -> None:
+    catalogue = _catalogue(tmp_path / "catalogue.json")
+    runner = initialise_runner(
+        tmp_path / "runner",
+        candidate_catalogue_path=catalogue,
+        foundation_attestation=_foundation(tmp_path / "foundation.json"),
+        started_at="2026-08-28T00:00:00Z",
+        browser_tool="test-browser@1",
+    )
+    clock = FakeClock(datetime(2026, 8, 28, tzinfo=UTC))
+
+    class ScreenBackend(SlowBackend):
+        def screen_h3(self, candidate_id, domain, navigation, pages):
+            receipt = _h3_screen_receipt(
+                candidate_id, domain, pages, navigation=navigation,
+                outcome=screen_outcome, screen_at=self.clock.value,
+            )
+            if screen_outcome == "site-rejection":
+                raise h3_prebaseline.H3SiteUnavailable(receipt)
+            raise h3_prebaseline.H3ScreenBlocked(receipt)
+
+    result = run_due_acquisition(
+        runner,
+        candidate_catalogue_path=catalogue,
+        stability_root=tmp_path / "stability",
+        workload_root=tmp_path / "workloads",
+        backend=ScreenBackend(clock),
+        clock=clock,
+        max_candidates=1,
+    )
+    candidate_id, state = _first_terminal_state(runner)
+    terminal = load_json(runner / state["terminal"]["path"])["payload"]
+    assert terminal["kind"] == "pre-probe-rejection"
+    assert state["pages"] == []
+    assert len(state["navigation_attempts"]) == expected_attempts
+    assert [
+        h3_prebaseline.validate_h3_screen_receipt(attempt["h3_screen_evidence"])["decision"]
+        for attempt in state["navigation_attempts"]
+    ] == [screen_outcome] * expected_attempts
+    assert acquisition_module._scientific_terminal_eligibility(terminal, state) is expected_science
+    assert (candidate_id in result["selection_blocked_candidate_ids"]) == (
+        expected_science is None
+    )
+    assert load_json(runner / "checkpoint.json")["payload"]["baseline_batches"] == []
+
+
+def test_prebaseline_h3_screen_raw_output_is_deep_verified_after_rebinding(
+    tmp_path: Path,
+) -> None:
+    catalogue = _catalogue(tmp_path / "catalogue.json")
+    runner = initialise_runner(
+        tmp_path / "runner",
+        candidate_catalogue_path=catalogue,
+        foundation_attestation=_foundation(tmp_path / "foundation.json"),
+        started_at="2026-08-28T00:00:00Z",
+        browser_tool="test-browser@1",
+    )
+    clock = FakeClock(datetime(2026, 8, 28, tzinfo=UTC))
+
+    class UnavailableBackend(SlowBackend):
+        def screen_h3(self, candidate_id, domain, navigation, pages):
+            raise h3_prebaseline.H3SiteUnavailable(
+                _h3_screen_receipt(
+                    candidate_id, domain, pages, navigation=navigation,
+                    outcome="site-rejection", screen_at=self.clock.value,
+                )
+            )
+
+    run_due_acquisition(
+        runner,
+        candidate_catalogue_path=catalogue,
+        stability_root=tmp_path / "stability",
+        workload_root=tmp_path / "workloads",
+        backend=UnavailableBackend(clock),
+        clock=clock,
+        max_candidates=1,
+    )
+
+    def tamper(state, _terminal):
+        attempt = state["navigation_attempts"][-1]
+        payload = copy.deepcopy(attempt["h3_screen_evidence"]["payload"])
+        payload["control_before"]["output_text"] += " "
+        attempt["h3_screen_evidence"] = bind_receipt(
+            payload, receipt_type=h3_prebaseline.H3_SCREEN_RECEIPT_TYPE
+        )
+
+    _rewrite_terminal_and_checkpoint(runner, mutate=tamper)
+    with pytest.raises(ValueError, match="output proof"):
+        acquisition_status(runner, candidate_catalogue_path=catalogue)
+
+
+def test_schema_ten_short_window_checkpoint_remains_readable_but_verify_only(
+    tmp_path: Path,
+) -> None:
+    """Schema 11 must keep the schema-10 two-replay contract verifiable."""
+
+    catalogue = _catalogue(tmp_path / "catalogue.json")
+    runner = initialise_runner(
+        tmp_path / "runner",
+        candidate_catalogue_path=catalogue,
+        foundation_attestation=_foundation(tmp_path / "foundation.json"),
+        started_at="2026-08-28T00:00:00Z",
+        browser_tool="test-browser@1",
+    )
+    clock = FakeClock(datetime(2026, 8, 28, tzinfo=UTC))
+    run_due_acquisition(
+        runner,
+        candidate_catalogue_path=catalogue,
+        stability_root=tmp_path / "stability",
+        workload_root=tmp_path / "workloads",
+        backend=SlowBackend(clock),
+        clock=clock,
+        max_candidates=1,
+    )
+    provenance_path = runner / "provenance.json"
+    provenance = copy.deepcopy(load_json(provenance_path)["payload"])
+    provenance["acquisition_schema_version"] = 10
+    provenance.pop("prebaseline_h3_screen_contract")
+    provenance["eligibility_inputs"] = acquisition_module.SCHEMA_TEN_ELIGIBILITY_INPUTS
+    _replace_receipt_payload(provenance_path, provenance)
+    checkpoint_path = runner / "checkpoint.json"
+    checkpoint = copy.deepcopy(load_json(checkpoint_path)["payload"])
+    checkpoint["provenance_sha256"] = acquisition_module.sha256_file(provenance_path)
+    for state in checkpoint["candidates"].values():
+        for attempt in state.get("navigation_attempts", []):
+            attempt.pop("h3_screen_evidence")
+    _replace_receipt_payload(checkpoint_path, checkpoint)
+    before = checkpoint_path.read_bytes()
+
+    status = acquisition_status(runner, candidate_catalogue_path=catalogue, now=clock.value)
+    assert status["acquisition_schema_version"] == 10
+    assert status["pending_count"] >= 1
+    assert acquisition_module._short_window_for(10) is True
+    assert acquisition_module._probe_windows_for(10) == (
+        acquisition_module.SHORT_STABILITY_PROBE_WINDOWS
+    )
+    with pytest.raises(ValueError, match="historical acquisition runners"):
+        run_due_acquisition(
+            runner,
+            candidate_catalogue_path=catalogue,
+            stability_root=tmp_path / "stability",
+            workload_root=tmp_path / "workloads",
+            backend=NoNetworkBackend(),
+            clock=clock,
+        )
+    assert checkpoint_path.read_bytes() == before
 
 
 def _merge_frozen_contract(target: dict, overlay: dict) -> None:
@@ -147,6 +598,7 @@ def _replace_with_frozen_schema_six_provenance(path: Path) -> dict:
     provenance = copy.deepcopy(load_json(path)["payload"])
     provenance.update(_schema_six_fixed_projection(variant))
     provenance["acquisition_schema_version"] = 6
+    provenance.pop("prebaseline_h3_screen_contract")
     provenance["source"]["lab_commit"] = variant["source_lab_commit"]
     _replace_receipt_payload(path, provenance)
     return load_json(path)["payload"]
@@ -791,6 +1243,7 @@ def _strip_schema_five_policy_evidence(value: dict) -> None:
     for state in states:
         for attempt in state.get("navigation_attempts", []):
             attempt.pop("policy_evidence", None)
+            attempt.pop("h3_screen_evidence", None)
         for page in state.get("pages", []):
             for attempt in page.get("probe_attempts", []):
                 attempt.pop("policy_evidence", None)
@@ -1609,6 +2062,9 @@ class RejectingBackend:
     def discover_navigation(self, domain: str):
         raise TerminalProbePolicyError(f"typed DNS rejection for {domain}")
 
+    def screen_h3(self, candidate_id, domain, navigation, pages):
+        pytest.fail("rejected navigation reached the H3 screen")
+
 
 class SlowBackend:
     def __init__(self, clock):
@@ -1617,6 +2073,12 @@ class SlowBackend:
     def discover_navigation(self, domain: str):
         self.clock.value += timedelta(seconds=10)
         return _homepage_navigation(domain)
+
+    def screen_h3(self, candidate_id, domain, navigation, pages):
+        return _h3_screen_receipt(
+            candidate_id, domain, pages, navigation=navigation,
+            screen_at=self.clock.value,
+        )
 
     def discover(self, url, approved_origins):
         return DiscoveryResult(
@@ -1785,6 +2247,17 @@ class BatchBackend:
         finally:
             self._leave("navigation")
 
+    def screen_h3(self, candidate_id, domain, navigation, pages):
+        if self.runner is not None:
+            active = load_json(self.runner / "checkpoint.json")["payload"]["active_batch"]
+            screen_at = acquisition_module._timestamp(active["published_at"])
+        else:
+            screen_at = self.observed_at
+        return _h3_screen_receipt(
+            candidate_id, domain, pages, navigation=navigation,
+            screen_at=screen_at,
+        )
+
     def discover(self, url, approved_origins):
         return DiscoveryResult(
             source_url=url,
@@ -1902,6 +2375,9 @@ class NoNetworkBackend:
 
     def discover_navigation(self, domain: str):
         return self._called("navigation", domain)
+
+    def screen_h3(self, candidate_id, domain, navigation, pages):
+        return self._called("H3 screen", candidate_id)
 
     def discover(self, url, approved_origins):
         return self._called("discovery", url)
@@ -2347,20 +2823,19 @@ def test_navigation_pair_is_prepublished_and_coordinator_merged(
         checkpoint["candidates"][candidate_id]["state"] == "baseline-ready"
         for candidate_id in expected_ids
     )
-    assert all(
-        checkpoint["candidates"][candidate_id]["navigation_attempts"]
-        == [
-            {
-                "attempt": 1,
-                "started_at": acquisition_module._format_time(now),
-                "completed_at": acquisition_module._format_time(now),
-                "outcome": "completed",
-                "reason": None,
-                "policy_evidence": None,
-            }
-        ]
-        for candidate_id in expected_ids
-    )
+    for candidate_id in expected_ids:
+        [attempt] = checkpoint["candidates"][candidate_id]["navigation_attempts"]
+        assert {key: value for key, value in attempt.items() if key != "h3_screen_evidence"} == {
+            "attempt": 1,
+            "started_at": acquisition_module._format_time(now),
+            "completed_at": acquisition_module._format_time(now),
+            "outcome": "completed",
+            "reason": None,
+            "policy_evidence": None,
+        }
+        assert h3_prebaseline.validate_h3_screen_receipt(
+            attempt["h3_screen_evidence"], candidate_id=candidate_id
+        )["decision"] == "pass"
     assert status["pending_count"] == 120
 
 
@@ -3710,6 +4185,7 @@ def test_historical_modern_schemas_keep_their_exact_read_only_checkpoint_shape(
     provenance_path = runner / "provenance.json"
     provenance = copy.deepcopy(load_json(provenance_path)["payload"])
     provenance["acquisition_schema_version"] = legacy_schema
+    provenance.pop("prebaseline_h3_screen_contract")
     _replace_receipt_payload(provenance_path, provenance)
     checkpoint_path = runner / "checkpoint.json"
     checkpoint = copy.deepcopy(load_json(checkpoint_path)["payload"])
@@ -3924,8 +4400,8 @@ def test_historical_schema_policy_map_and_render_contract_are_frozen() -> None:
         )
 
 
-def test_schema_seven_audit_five_projects_read_only_but_cannot_alias_schema_ten() -> None:
-    assert acquisition_module.SCHEMA_VERSION == 10
+def test_schema_seven_audit_five_projects_read_only_but_cannot_alias_schema_eleven() -> None:
+    assert acquisition_module.SCHEMA_VERSION == 11
     manifest = _prepared_manifest("https://example.com/", ["https://example.com"])
     preparation = manifest["preparation"]
     render = copy.deepcopy(preparation["render_observation"])
@@ -4448,7 +4924,7 @@ def test_immutable_schema_seven_v101_acquisition_is_exactly_verify_only() -> Non
         acquisition_module._validate_current_provenance_contract(unknown_source)
     current_alias = copy.deepcopy(payload)
     current_alias["acquisition_schema_version"] = acquisition_module.SCHEMA_VERSION
-    with pytest.raises(ValueError, match="provenance policy"):
+    with pytest.raises(ValueError, match="versioned acquisition provenance fields"):
         acquisition_module._validate_current_provenance_contract(current_alias)
 
     checkpoint_path = runner / "checkpoint.json"
@@ -4527,7 +5003,7 @@ def test_immutable_schema_eight_v102_acquisition_is_exactly_verify_only() -> Non
         acquisition_module._validate_current_provenance_contract(unknown_source)
     current_alias = copy.deepcopy(payload)
     current_alias["acquisition_schema_version"] = acquisition_module.SCHEMA_VERSION
-    with pytest.raises(ValueError, match="provenance policy"):
+    with pytest.raises(ValueError, match="versioned acquisition provenance fields"):
         acquisition_module._validate_current_provenance_contract(current_alias)
 
     checkpoint_path = runner / "checkpoint.json"
@@ -4578,6 +5054,7 @@ def test_historical_orphan_terminals_are_verify_only(tmp_path: Path) -> None:
     provenance_path = runner / "provenance.json"
     provenance_payload = copy.deepcopy(load_json(provenance_path)["payload"])
     provenance_payload["acquisition_schema_version"] = 3
+    provenance_payload.pop("prebaseline_h3_screen_contract")
     _replace_receipt_payload(provenance_path, provenance_payload)
     provenance_sha256 = hashlib.sha256(provenance_path.read_bytes()).hexdigest()
 
@@ -4661,6 +5138,7 @@ def test_completion_validation_accepts_each_legacy_schema_shape(
     provenance_path = runner / "provenance.json"
     provenance_payload = copy.deepcopy(load_json(provenance_path)["payload"])
     provenance_payload["acquisition_schema_version"] = legacy_schema
+    provenance_payload.pop("prebaseline_h3_screen_contract")
     _replace_receipt_payload(provenance_path, provenance_payload)
     provenance_sha256 = hashlib.sha256(provenance_path.read_bytes()).hexdigest()
 
@@ -4766,6 +5244,7 @@ def test_schema_one_rejects_short_profile_eligible_downgrade(
     provenance_path = runner / "provenance.json"
     provenance_payload = copy.deepcopy(load_json(provenance_path)["payload"])
     provenance_payload["acquisition_schema_version"] = 1
+    provenance_payload.pop("prebaseline_h3_screen_contract")
     _replace_receipt_payload(provenance_path, provenance_payload)
     provenance_sha256 = hashlib.sha256(provenance_path.read_bytes()).hexdigest()
 
@@ -5215,6 +5694,7 @@ def test_interrupted_navigation_duration_is_not_fabricated_as_success(
             "outcome": "interrupted",
             "reason": "externally bounded action ended before an outcome",
             "policy_evidence": None,
+            "h3_screen_evidence": None,
         }
     ]
     _replace_receipt_payload(runner / "checkpoint.json", payload)
@@ -7655,6 +8135,12 @@ def test_each_page_uses_only_its_own_navigation_origin_seeds(tmp_path: Path):
                 page_observed_origins=tuple(sorted(page_origins.items())),
             )
 
+        def screen_h3(self, candidate_id, domain, navigation, pages):
+            return _h3_screen_receipt(
+                candidate_id, domain, pages, navigation=navigation,
+                screen_at=baseline,
+            )
+
         def discover(self, url, approved_origins):
             self.first_approved.setdefault(url, tuple(sorted(approved_origins)))
             return DiscoveryResult(
@@ -8466,6 +8952,7 @@ def test_schema_seven_started_tail_must_drain_before_completion(tmp_path, monkey
             "outcome": "interrupted",
             "reason": "fixture interruption",
             "policy_evidence": None,
+            "h3_screen_evidence": None,
         }
     ]
     _replace_receipt_payload(runner / "checkpoint.json", checkpoint)
@@ -8613,6 +9100,7 @@ def test_schema_five_fixed_contract_and_policy_ledgers_remain_verification_only(
     provenance_path = runner / "provenance.json"
     provenance = load_json(provenance_path)["payload"]
     provenance["acquisition_schema_version"] = 5
+    provenance.pop("prebaseline_h3_screen_contract")
     _replace_receipt_payload(provenance_path, provenance)
     provenance = load_json(provenance_path)["payload"]
     checkpoint = load_json(runner / "checkpoint.json")["payload"]
@@ -8621,6 +9109,8 @@ def test_schema_five_fixed_contract_and_policy_ledgers_remain_verification_only(
     )
     checkpoint["provenance_sha256"] = acquisition_module.sha256_file(provenance_path)
     for state in checkpoint["candidates"].values():
+        for attempt in state.get("navigation_attempts", []):
+            attempt.pop("h3_screen_evidence")
         if state["terminal"] is None:
             continue
         terminal_path = runner / state["terminal"]["path"]
@@ -8630,6 +9120,11 @@ def test_schema_five_fixed_contract_and_policy_ledgers_remain_verification_only(
             acquisition_module.SCHEMA_SIX_CHECKPOINT_SCHEMA_VERSION
         )
         terminal["provenance_sha256"] = checkpoint["provenance_sha256"]
+        terminal["checkpoint_state_sha256"] = (
+            acquisition_module._normalised_terminal_state_sha256(
+                state, kind=terminal["kind"]
+            )
+        )
         _replace_receipt_payload(terminal_path, terminal)
         state["terminal"]["sha256"] = acquisition_module.sha256_file(terminal_path)
     _replace_receipt_payload(runner / "checkpoint.json", checkpoint)
@@ -8678,6 +9173,7 @@ def test_schema_six_exact_contract_is_readable_but_cannot_resume_or_publish(
     provenance_path = runner / "provenance.json"
     relabelled_current = copy.deepcopy(load_json(provenance_path)["payload"])
     relabelled_current["acquisition_schema_version"] = 6
+    relabelled_current.pop("prebaseline_h3_screen_contract")
     with pytest.raises(ValueError, match="provenance policy"):
         acquisition_module._validate_current_provenance_contract(relabelled_current)
     provenance = _replace_with_frozen_schema_six_provenance(provenance_path)
@@ -8798,6 +9294,8 @@ def test_schema_six_completion_receipt_tuple_remains_exactly_verifiable(
     checkpoint["provenance_sha256"] = provenance_sha256
     terminal_receipts = {}
     for candidate_id, state in checkpoint["candidates"].items():
+        for attempt in state["navigation_attempts"]:
+            attempt.pop("h3_screen_evidence")
         terminal_path = runner / state["terminal"]["path"]
         terminal = copy.deepcopy(load_json(terminal_path)["payload"])
         terminal["terminal_schema_version"] = acquisition_module.SCHEMA_SIX_TERMINAL_SCHEMA_VERSION
@@ -8805,6 +9303,11 @@ def test_schema_six_completion_receipt_tuple_remains_exactly_verifiable(
             acquisition_module.SCHEMA_SIX_CHECKPOINT_SCHEMA_VERSION
         )
         terminal["provenance_sha256"] = provenance_sha256
+        terminal["checkpoint_state_sha256"] = (
+            acquisition_module._normalised_terminal_state_sha256(
+                state, kind=terminal["kind"]
+            )
+        )
         _replace_receipt_payload(terminal_path, terminal)
         state["terminal"]["sha256"] = acquisition_module.sha256_file(terminal_path)
         terminal_receipts[candidate_id] = copy.deepcopy(state["terminal"])

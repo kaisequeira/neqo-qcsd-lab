@@ -1803,6 +1803,64 @@ def test_retained_redirect_cannot_depend_on_an_excluded_predecessor() -> None:
         )
 
 
+def test_excluded_redirect_can_name_an_excluded_predecessor_without_a_resource() -> None:
+    first_url = "data:text/plain,first"
+    final_url = "data:text/plain,final"
+    reason = "not an absolute HTTPS request"
+    audit, resources = _root_resource_audit(
+        _network(
+            network_id="excluded-chain",
+            occurrence_id="excluded-first",
+            resource_id=None,
+            url=first_url,
+            exclusion_id=0,
+            reason=reason,
+            interception_required=False,
+            resource_type="Script",
+            response_observed=True,
+        ),
+        _network(
+            network_id="excluded-chain",
+            occurrence_id="excluded-final",
+            resource_id=None,
+            url=final_url,
+            exclusion_id=1,
+            reason=reason,
+            interception_required=False,
+            resource_type="Script",
+            occurrence_index=1,
+            redirected=True,
+            redirect_from="excluded-first",
+            evidence=[
+                {
+                    "kind": "redirect",
+                    "value": "excluded-first",
+                    "resolved_resource_id": None,
+                }
+            ],
+            response_observed=True,
+        ),
+        _terminal(
+            network_id="excluded-chain",
+            occurrences=["excluded-first", "excluded-final"],
+        ),
+    )
+    exclusions = [
+        {"url": first_url, "reason": reason},
+        {"url": final_url, "reason": reason},
+    ]
+    _verify(audit, resources, exclusions)
+
+    without_redirect_evidence = deepcopy(audit)
+    next(
+        event
+        for event in without_redirect_evidence["events"]
+        if event.get("occurrence_id") == "excluded-final"
+    )["dependency_evidence"] = []
+    with pytest.raises(ValueError, match="redirect dependency evidence"):
+        _verify(without_redirect_evidence, resources, exclusions)
+
+
 def test_internal_fetch_restart_is_explicit_and_independently_replayed() -> None:
     url = "https://page.test/"
     resources = [_resource(0, url)]

@@ -1320,6 +1320,9 @@ def acquisition(tmp_path: Path) -> Fixture:
         "domain_safety_policy": copy.deepcopy(watch._DOMAIN_SAFETY_POLICY),
         "domain_safety_policy_sha256": watch._DOMAIN_SAFETY_POLICY_SHA256,
         "origin_policy": copy.deepcopy(watch._ORIGIN_POLICY),
+        "prebaseline_h3_screen_contract": copy.deepcopy(
+            watch._PREBASELINE_H3_SCREEN_CONTRACT
+        ),
         "eligibility_inputs": copy.deepcopy(watch._ELIGIBILITY_INPUTS),
         "prohibited_inputs": copy.deepcopy(watch._PROHIBITED_INPUTS),
     }
@@ -2098,7 +2101,7 @@ class FakeMonotonic:
 
 
 def test_due_work_uses_exact_command_environment_and_paths(acquisition: Fixture) -> None:
-    assert watch.ACQUISITION_SCHEMA_VERSION == 10
+    assert watch.ACQUISITION_SCHEMA_VERSION == 11
     assert watch.CHECKPOINT_SCHEMA_VERSION == 3
     assert watch.TERMINAL_SCHEMA_VERSION == 4
     assert watch.COMPLETION_SCHEMA_VERSION == 4
@@ -4218,13 +4221,16 @@ def test_watcher_pinned_cdp_contract_matches_runtime_contract() -> None:
         ).hexdigest()
     )
     assert watch._ORIGIN_POLICY == class_acquisition.ORIGIN_POLICY
+    assert watch._PREBASELINE_H3_SCREEN_CONTRACT == (
+        class_acquisition.PREBASELINE_H3_SCREEN_CONTRACT
+    )
     assert watch._ELIGIBILITY_INPUTS == class_acquisition.ELIGIBILITY_INPUTS
     assert watch._PROHIBITED_INPUTS == class_acquisition.PROHIBITED_INPUTS
     assert watch._ACQUISITION_ACTION_TIMING_CONTRACT == (class_acquisition.ACTION_TIMING_CONTRACT)
     assert watch._BASELINE_SCHEDULING_CONTRACT == (class_acquisition.BASELINE_SCHEDULING_CONTRACT)
 
 
-@pytest.mark.parametrize("historical_schema", (1, 2, 3, 4, 5, 6, 7))
+@pytest.mark.parametrize("historical_schema", (1, 2, 3, 4, 5, 6, 7, 8, 9, 10))
 def test_watcher_treats_historical_provenance_as_verify_only(
     acquisition: Fixture,
     historical_schema: int,
@@ -4761,6 +4767,7 @@ def test_watcher_rejects_structurally_valid_missing_target_attach(
         ),
         (("cdp_target_instrumentation_policy",), "stale-policy"),
         (("origin_policy", "max_origins"), 31),
+        (("prebaseline_h3_screen_contract", "timeout_seconds"), 13),
         (("eligibility_inputs",), ["classifier"]),
     ),
 )

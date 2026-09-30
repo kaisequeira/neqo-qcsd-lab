@@ -33,36 +33,43 @@ Existing-defence validation does not establish compatibility on new classes.
 
 Desktop restoration and the protected historical handoff remain verified; see
 the [evidence index](docs/EVIDENCE-INDEX.md) for retention boundaries. Docker
-and WSL data reside on D:. The v127 source corrected the v126 watcher timestamp
-failure. On v127, the final browser receipt independently verified all 110
-vectors, and acquisition-only authority passed all four hard gates without
-waivers. The subsequent `acquisition-init` rejected the requested create-only
-`-v127` acquisition root because Python required the exact canonical root,
-although the public wrapper accepted a versioned sibling. That v127 root was
-never created. The v126 canonical checkpoint still has 600 pending candidate
-records, with 120 in its current admission prefix and no baseline batch. The
-path correction and prospective acceleration were committed under a new source
-identity. Their v128 no-cache build claimed its cohort and assembled the
-collection image, but the wrapper timed out while capturing Docker-selected
-Buildx metadata after collection. It published no verified build receipt.
-Preserve the failed transaction and diagnose its retirement before another
-cohort. Neither v127 nor v128 can authorise acquisition on the new contract.
+and WSL data reside on D:. The v127 browser and acquisition-only authority
+passed on their historical source, but a versioned-root validator stopped
+initialization. The v128 no-cache build assembled the image, then failed while
+reading Buildx metadata and issued no verified build receipt. Both cohorts
+remain historical evidence.
 
-| Checkpoint identity | v127 desktop execution and current state |
+On v129, the no-cache build, pinned CDP, 110/110 browser qualification and
+acquisition-only authority independently verified on the clean source below.
+`acquisition-init` created the versioned checkpoint. The watcher then stopped:
+`tranco-0000697` has a `probe-window-missed` terminal after recoverable probe
+retries exceeded the admissible window; `tranco-0000984` has a durable internal
+acquisition error when redirect dependency evidence did not match the redirect.
+The checkpoint contains **zero accepted pilot classes**. Preserve its failed
+attempts and receipts. A standalone, non-evidentiary diagnostic using the v129
+image found a successful `cloudflare-quic.com` Neqo control probe
+(`known_valid=true`), while `consultant.ru` and `www.consultant.ru` each
+returned `Error: Timeout(12)` on the default Docker bridge. That diagnostic
+has no formal receipt and cannot reclassify v129. The redirect evidence producer
+has been corrected, and a prospective pre-baseline HTTP/3 reachability screen
+has been implemented for the next cohort. Both require a fresh cohort with
+complete downstream reproof; v129 cannot be resumed under changed source or
+promoted into an accepted pilot.
+
+| Checkpoint identity | v129 desktop execution and current state |
 |---|---|
-| Lab branch and v127 source commit | `desktop-portability-2026-09-26`; `1292ad6bfa14f17948e90979439456eb98cab29c` |
+| Lab branch and v129 source commit | `desktop-portability-2026-09-26`; `cd5dd7d2a7c711f819a342046c191a3d80a5c3c9` |
 | Rust commit and Lab Gitlink | `e8575fd8e54921ed6ff867de475b4a734064866e` |
-| Build and pinned CDP | `artifacts/buflo-study/build-execution-v127.json` and `artifacts/buflo-study/pinned-cdp-execution-v127.json` verified on their bound source |
-| Browser execution | `artifacts/buflo-study/browser-egress-qualification-v127/final.json`: verified 110/110, zero failures |
-| Desktop authority | `artifacts/class-study-acquisition-authority-v127.json`: verified, public-page-acquisition-only; no full defence foundation |
-| Acquisition checkpoint | v127 versioned root absent after failed init; v126 canonical root has 600 pending candidate records, 120 in its admission prefix and zero baseline batches |
-| Prospective source and failed build | The short-horizon acquisition and portable replay changes are on `desktop-portability-2026-09-26`; v128 was claimed, but its post-collection Buildx metadata capture timed out and no verified build receipt exists |
-| Next execution | Preserve and resolve the v128 uncommitted transaction, then allocate the next unused cohort on a clean source and reprove build, pinned CDP, browser and acquisition authority before a new versioned acquisition root |
+| Build and pinned CDP | `artifacts/buflo-study/build-execution-v129.json` and `artifacts/buflo-study/pinned-cdp-execution-v129.json`: independently verified on their bound source |
+| Browser execution | `artifacts/buflo-study/browser-egress-qualification-v129/final.json`: independently verified 110/110, zero operational or semantic failures |
+| Desktop authority | `artifacts/class-study-acquisition-authority-v129.json`: all four hard gates passed without waivers; public-page-acquisition-only, not a full defence foundation |
+| Acquisition checkpoint | `artifacts/classifier-multiorigin100-v1-acquisition-v129/`: initialized; watcher stopped with a missed probe window and a durable redirect dependency error; 0/120 accepted |
+| Next execution | Preserve v129; freeze the corrected schema-11 source, allocate a fresh cohort, and reprove build, pinned CDP, browser and acquisition authority before new acquisition |
 
-Preserve v127 receipts and document the failed initialization attempt, v126 receipts,
-failed watcher journal and initialized checkpoint, as well as the earlier v124
-failure and v116 incomplete laptop execution.
-None can authorise changed source or supply a scientific numerator.
+Preserve the v129 checkpoint and failed attempts, v128 failed build, v127
+receipts and failed initialization, v126 checkpoint and failed watcher journal,
+and the earlier v124 failure and v116 incomplete laptop execution. Historical
+evidence cannot authorise changed source or supply a scientific numerator.
 
 | Extended study scientific milestone | Accepted at this checkpoint |
 |---|---:|
@@ -145,13 +152,24 @@ historical schema descriptions remain in the history and methodology.
 
 ## Next actions and cheapest-first execution
 
-The v127 browser and acquisition-only authority gates passed on their bound
-source. The versioned-root mismatch then stopped initialization before any
-acquisition action. Correct the Python path validator and its study-policy
-declaration, verify the prospective acquisition amendment, then use the next
-unused source-bound cohort. Preserve v126 and v127 evidence and initialize a
-new versioned acquisition root; do not resume an older checkpoint after
-changing source or policy.
+The v129 acquisition-only gates passed and its versioned checkpoint initialized,
+but the watcher stopped before accepting a pilot class. The redirect dependency
+producer is corrected and the prospective schema-11 pre-baseline HTTP/3 screen
+is implemented in source. If the first known-good Neqo control fails, the screen blocks without
+running candidate or second-control probes. Otherwise it runs two attempts per
+distinct selected-page URL request origin, then the second control. An origin
+passes only with two `known_valid=true` results and fails only with two
+classified connectivity timeouts. With both controls passing, a candidate is
+technically rejected if at least one origin fails and every other origin has
+a definite pass or fail. Any mixed or ambiguous origin blocks, even when
+another origin fails. The screen covers
+selected-page request origins only; third-party resource origins discovered
+during timed preparation can still cause a missed-window blocker. It does not
+prove that a complete page graph can be prepared. Preserve v129 as failed
+evidence. After source freeze, allocate a fresh source-bound
+cohort and repeat every downstream gate before initializing a new acquisition
+root. The v129 missed window remains an unresolved historical blocker, not a
+selective site rejection.
 The supplied curated domain list has been imported as a portable, hash-bound
 source receipt at
 [`config/curated-sources/crux-73-v1.source.json`](config/curated-sources/crux-73-v1.source.json).
@@ -162,13 +180,12 @@ user chose to retain the existing frozen catalogue for formal acquisition;
 the curated receipt is excluded from that run. The registered 600-candidate,
 120-pilot, 100-final-class contract remains in force.
 
-1. Preserve the verified migration manifests, historical handoff, v126 and v127
-   receipts, initialized v126 checkpoint and failed watcher journal.
+1. Preserve the verified migration manifests, historical handoff, v126 through
+   v129 receipts and checkpoints, and the failed watcher evidence.
 2. Retain the registered Tranco candidate catalogue for this formal run.
-3. Repair and verify the versioned acquisition-root consumer and prospective
-   protocol; freeze clean source; obtain the next unused cohort, fresh no-cache
-   images, pinned-CDP and 110/110 browser qualification. Publish new acquisition
-   authority.
+3. Freeze the corrected schema-11 source; obtain the next unused cohort,
+   fresh no-cache images, pinned-CDP and
+   110/110 browser qualification. Publish new acquisition authority.
 4. Initialize a new versioned acquisition root and acquire the 120-class pilot
    with two genuine short-horizon prepared observations per admitted page.
    The prospective watcher can admit a later batch 60 seconds after all

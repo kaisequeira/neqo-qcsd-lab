@@ -43,8 +43,8 @@ STUDY_ID = "classifier-multiorigin100-v1"
 CANDIDATE_COUNT = 600
 SCHEMA_VERSION = 1
 SOURCE_BINDING_PREIMAGE_SCHEMA_VERSION = 3
-ACQUISITION_SCHEMA_VERSION = 10
-HISTORICAL_ACQUISITION_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7, 8, 9})
+ACQUISITION_SCHEMA_VERSION = 11
+HISTORICAL_ACQUISITION_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
 CHECKPOINT_SCHEMA_VERSION = 3
 TERMINAL_SCHEMA_VERSION = 4
 COMPLETION_SCHEMA_VERSION = 4
@@ -362,6 +362,7 @@ _PROVENANCE_PAYLOAD_KEYS = {
     "domain_safety_policy",
     "domain_safety_policy_sha256",
     "origin_policy",
+    "prebaseline_h3_screen_contract",
     "eligibility_inputs",
     "prohibited_inputs",
 }
@@ -1424,7 +1425,24 @@ _DOMAIN_SAFETY_POLICY = {
 _DOMAIN_SAFETY_POLICY_SHA256 = hashlib.sha256(
     (json.dumps(_DOMAIN_SAFETY_POLICY, indent=2, sort_keys=True, allow_nan=False) + "\n").encode()
 ).hexdigest()
-_ELIGIBILITY_INPUTS = ["page-safety", "short-window-technical-replay"]
+_PREBASELINE_H3_SCREEN_CONTRACT = {
+    "schema_version": 1,
+    "policy": "prebaseline-primary-origin-neqo-h3-reachability-v1",
+    "control_url": "https://cloudflare-quic.com/",
+    "timeout_seconds": 12,
+    "control_probe_order": "before-and-after-candidate-origin-attempts",
+    "control_success": "both-known_valid-true",
+    "candidate_attempts_per_distinct_primary_origin": 2,
+    "site_rejection": (
+        "any-selected-page-request-origin-fails-both-attempts-with-classified-"
+        "http3-connectivity-timeout-or-idle-timeout"
+    ),
+    "uncertain_outcome": "mixed-ambiguous-or-control-failure-blocks",
+    "resolver_addresses": "diagnostic-only-no-neqo-pin-claim",
+}
+_ELIGIBILITY_INPUTS = [
+    "page-safety", "prebaseline-h3-reachability", "short-window-technical-replay"
+]
 _PROHIBITED_INPUTS = ["classifier", "defence", "latency", "bandwidth", "privacy"]
 _ACQUISITION_ACTION_TIMING_CONTRACT = {
     "schema_version": 2,
@@ -5870,7 +5888,7 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
     if acquisition_schema_version != ACQUISITION_SCHEMA_VERSION:
         raise WatchError("acquisition provenance uses an unsupported schema")
     if set(payload) != _PROVENANCE_PAYLOAD_KEYS:
-        raise WatchError("acquisition provenance payload fields differ from the v10 contract")
+        raise WatchError("acquisition provenance payload fields differ from the v11 contract")
     browser_tool = payload.get("browser_tool")
     if not any(
         _matches_json_contract(browser_tool, expected)
@@ -5896,6 +5914,7 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
         "domain_safety_policy": _DOMAIN_SAFETY_POLICY,
         "domain_safety_policy_sha256": _DOMAIN_SAFETY_POLICY_SHA256,
         "origin_policy": _ORIGIN_POLICY,
+        "prebaseline_h3_screen_contract": _PREBASELINE_H3_SCREEN_CONTRACT,
         "eligibility_inputs": _ELIGIBILITY_INPUTS,
         "prohibited_inputs": _PROHIBITED_INPUTS,
     }

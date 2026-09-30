@@ -107,7 +107,7 @@ _WORKLOAD_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 
 _FOUNDATION_SCHEMA = 4
 _READINESS_SCHEMA = 3
-_ACQUISITION_SCHEMA = 10
+_ACQUISITION_SCHEMA = 11
 _ACQUISITION_COMPLETION_SCHEMA = 4
 _ACQUISITION_CHECKPOINT_SCHEMA = 3
 # The exact pre-amendment v127 authority is inspection-only.  The host gate

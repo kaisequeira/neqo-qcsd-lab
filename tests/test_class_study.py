@@ -9,7 +9,7 @@ import pytest
 
 from qcsd_lab.acquisition_timing import (
     ACTION_TIMING_CONTRACT,
-    TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT,
+    SHORT_TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT,
 )
 from qcsd_lab.cdp_targets import (
     CDP_TARGET_INSTRUMENTATION_POLICY,
@@ -26,6 +26,7 @@ from qcsd_lab.class_acquisition import (
     TERMINAL_SCHEMA_VERSION as ACQUISITION_TERMINAL_SCHEMA_VERSION,
 )
 from qcsd_lab.class_handoff import SCHEMA_VERSION as HANDOFF_SCHEMA_VERSION
+from qcsd_lab.h3_prebaseline import PREBASELINE_H3_SCREEN_CONTRACT
 from qcsd_lab.class_study import (
     CANDIDATE_COUNT,
     CANDIDATES_PER_STRATUM,
@@ -86,9 +87,9 @@ def test_checked_in_handoff_contract_matches_current_exporter_and_kernel_sidecar
     amendment = study["prospective_acquisition_amendment"]
     page_admission = study["page_admission"]
 
-    assert amendment["schema_version"] == 5
-    assert amendment["date"] == "2026-09-21"
-    assert amendment["acquisition_schema_version"] == ACQUISITION_SCHEMA_VERSION == 9
+    assert amendment["schema_version"] == 7
+    assert amendment["date"] == "2026-09-30"
+    assert amendment["acquisition_schema_version"] == ACQUISITION_SCHEMA_VERSION == 11
     assert amendment["checkpoint_schema_version"] == ACQUISITION_CHECKPOINT_SCHEMA_VERSION == 3
     assert amendment["terminal_schema_version"] == ACQUISITION_TERMINAL_SCHEMA_VERSION == 4
     assert amendment["completion_schema_version"] == ACQUISITION_COMPLETION_SCHEMA_VERSION == 4
@@ -132,6 +133,44 @@ def test_checked_in_handoff_contract_matches_current_exporter_and_kernel_sidecar
         ),
         "authority": "historical-verify-only-never-current-admission",
     }
+    assert amendment["retired_v127_contract"] == {
+        "acquisition_schema_version": 9,
+        "checkpoint_schema_version": 3,
+        "terminal_schema_version": 4,
+        "completion_schema_version": 4,
+        "pinned_cdp_probe_schema_version": 18,
+        "discovery_event_audit_schema_version": 8,
+        "stability_probe_profile": "t+30s-t+24h-t+72h",
+        "authority": "historical-verify-only-never-current-admission",
+    }
+    assert amendment["retired_v129_contract"] == {
+        "acquisition_schema_version": 10,
+        "checkpoint_schema_version": 3,
+        "terminal_schema_version": 4,
+        "completion_schema_version": 4,
+        "pinned_cdp_probe_schema_version": 18,
+        "discovery_event_audit_schema_version": 8,
+        "stability_probe_profile": (
+            "two-prepared-observations-at-t+30s-and-t+5m-without-prebaseline-http3-screen"
+        ),
+        "authority": "historical-verify-only-never-current-admission",
+    }
+    assert page_admission["prebaseline_h3_screen_contract"] == {
+        "schema_version": 1,
+        "policy": "prebaseline-primary-origin-neqo-h3-reachability-v1",
+        "control_url": "https://cloudflare-quic.com/",
+        "timeout_seconds": 12,
+        "control_probe_order": "before-and-after-candidate-origin-attempts",
+        "control_success": "both-known_valid-true",
+        "candidate_attempts_per_distinct_primary_origin": 2,
+        "site_rejection": (
+            "any-selected-page-request-origin-fails-both-attempts-with-classified-"
+            "http3-connectivity-timeout-or-idle-timeout"
+        ),
+        "uncertain_outcome": "mixed-ambiguous-or-control-failure-blocks",
+        "resolver_addresses": "diagnostic-only-no-neqo-pin-claim",
+    }
+    assert page_admission["prebaseline_h3_screen_contract"] == PREBASELINE_H3_SCREEN_CONTRACT
     assert page_admission["passive_render_contract"] == PASSIVE_RENDER_CONTRACT
     assert page_admission["passive_render_contract_sha256"] == PASSIVE_RENDER_CONTRACT_SHA256
     assert page_admission["cdp_target_instrumentation_policy"] == CDP_TARGET_INSTRUMENTATION_POLICY
@@ -157,7 +196,7 @@ def test_checked_in_handoff_contract_matches_current_exporter_and_kernel_sidecar
     assert page_admission["acquisition_action_timing_contract"] == ACTION_TIMING_CONTRACT
     assert (
         page_admission["baseline_scheduling_contract"]
-        == TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT
+        == SHORT_TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT
     )
     assert evaluation["handoff_schema_version"] == HANDOFF_SCHEMA_VERSION == 3
     assert kernel == {

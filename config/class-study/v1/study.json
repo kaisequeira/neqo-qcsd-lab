@@ -3,11 +3,11 @@
   "artifact_type": "qcsd-class-study-prospective-contract",
   "study_id": "classifier-multiorigin100-v1",
   "prospective_acquisition_amendment": {
-    "schema_version": 6,
-    "date": "2026-09-29",
+    "schema_version": 7,
+    "date": "2026-09-30",
     "scope": "new-source-bound-acquisition-only-no-historical-evidence-promotion",
-    "reason": "prospectively-replace-the-three-day-stability-window-with-two-actual-prepared-replays-at-t+30s-and-t+5m-with-semantic-identity-comparison;preserve-all-previous-acquisition-evidence-as-historical-verify-only",
-    "acquisition_schema_version": 10,
+    "reason": "prospectively-screen-selected-page-request-origin-http3-reachability-before-arming-short-window-stability;reject-a-candidate-after-two-classified-failures-for-any-selected-page-request-origin-and-two-passing-bracketing-controls;preserve-all-previous-acquisition-evidence-as-historical-verify-only",
+    "acquisition_schema_version": 11,
     "checkpoint_schema_version": 3,
     "terminal_schema_version": 4,
     "completion_schema_version": 4,
@@ -64,6 +64,16 @@
       "pinned_cdp_probe_schema_version": 18,
       "discovery_event_audit_schema_version": 8,
       "stability_probe_profile": "t+30s-t+24h-t+72h",
+      "authority": "historical-verify-only-never-current-admission"
+    },
+    "retired_v129_contract": {
+      "acquisition_schema_version": 10,
+      "checkpoint_schema_version": 3,
+      "terminal_schema_version": 4,
+      "completion_schema_version": 4,
+      "pinned_cdp_probe_schema_version": 18,
+      "discovery_event_audit_schema_version": 8,
+      "stability_probe_profile": "two-prepared-observations-at-t+30s-and-t+5m-without-prebaseline-http3-screen",
       "authority": "historical-verify-only-never-current-admission"
     }
   },
@@ -201,6 +211,18 @@
     "service_worker_dependency": "forbidden",
     "cross-domain-redirect-alias": "forbidden",
     "approved_origins": "explicit-and-frozen",
+    "prebaseline_h3_screen_contract": {
+      "schema_version": 1,
+      "policy": "prebaseline-primary-origin-neqo-h3-reachability-v1",
+      "control_url": "https://cloudflare-quic.com/",
+      "timeout_seconds": 12,
+      "control_probe_order": "before-and-after-candidate-origin-attempts",
+      "control_success": "both-known_valid-true",
+      "candidate_attempts_per_distinct_primary_origin": 2,
+      "site_rejection": "any-selected-page-request-origin-fails-both-attempts-with-classified-http3-connectivity-timeout-or-idle-timeout",
+      "uncertain_outcome": "mixed-ambiguous-or-control-failure-blocks",
+      "resolver_addresses": "diagnostic-only-no-neqo-pin-claim"
+    },
     "cdp_target_instrumentation_policy": "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v21",
     "render_observation_schema_version": 4,
     "discovery_event_audit_schema_version": 8,

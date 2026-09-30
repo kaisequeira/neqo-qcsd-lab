@@ -101,8 +101,23 @@ non-replayable actions are outside the admitted workload. Every later mode
 must use the same complete prepared graph. Neither origin count nor later
 classifier/privacy performance is a selection quota.
 
-The **prospective schema-10 rule** uses two genuine prepared observations
-after a durably recorded scheduling baseline. Each probe batch must be
+The **prospective schema-11 rule** first runs a pre-baseline Neqo HTTP/3
+reachability screen. If the first `https://cloudflare-quic.com/` control fails,
+the screen blocks without candidate or second-control probes. Otherwise it
+runs two 12-second attempts for every distinct selected-page URL request
+origin, then a second control. An origin passes only with two
+`known_valid=true` results and fails only with two classified connectivity
+timeouts or `IdleTimeout` results. With both controls passing, at least one
+failed origin technically rejects the whole candidate only when every other
+origin has a definite pass or fail. Any mixed or ambiguous origin blocks,
+even if another fails; a failed second control also blocks. This screen's
+results are embedded in the
+hash-bound navigation-attempt ledger. It does not prove complete page-graph
+replay, and resolved addresses are diagnostics rather than a claim of pinned
+Neqo connections.
+
+After that screen, two genuine prepared observations follow a durably recorded
+scheduling baseline. Each probe batch must be
 durably published for dispatch within its window:
 
 | Probe | Allowed batch publication after baseline |
@@ -129,14 +144,16 @@ candidate surviving, and every second probe dispatched at its earliest
 4-minute-30-second boundary, the 120-candidate lower-bound projection is
 **5 hours 29 minutes** from the first baseline to the last second probe.
 At a five-minute terminal per batch it is **5 hours 59 minutes**. Real page
-time, navigation, rejected candidates and recovery change these figures.
+time, HTTP/3 screening, navigation, rejected candidates and recovery change
+these figures.
 They exclude fitting, certification and formal capture; neither is a forecast
 for 16,000 samples.
 
 The historical schema-9 rule required `t+30s`, `t+24h` and `t+72h` probes.
 Its corresponding all-survivor projection was **7 days 14 hours 50 minutes**.
-Those receipts remain on their original contract; schema 10 does not promote
-them or imply three-day stability for newly admitted classes. The new claim is
+Schema-10 receipts also remain historical under their two-observation rule
+without a pre-baseline screen. None is promoted into schema 11 or implies
+three-day stability for newly admitted classes. The new claim is
 short-horizon replay agreement, with later final certification and canaries
 providing separate drift observations.
 
@@ -243,30 +260,31 @@ evaluation, paper comparison and final attestation remain necessary for the
 thesis's validation claim. The temporal split is blocks 1–8 training, block 9
 validation and block 10 held-out test. No block-ten tuning is permitted.
 
-## Current blocker and what v127 actually proves
+## Current blocker and what v129 actually proves
 
-On source commit `1292ad6bfa14f17948e90979439456eb98cab29c` with Rust
-Gitlink `e8575fd8e54921ed6ff867de475b4a734064866e`, v127's final browser
-receipt at `artifacts/buflo-study/browser-egress-qualification-v127/final.json`
+On source commit `cd5dd7d2a7c711f819a342046c191a3d80a5c3c9` with Rust
+Gitlink `e8575fd8e54921ed6ff867de475b4a734064866e`, v129's build, pinned
+CDP and browser receipt at
+`artifacts/buflo-study/browser-egress-qualification-v129/final.json`
 passed and independently verified **110/110** vectors. Its
-`artifacts/class-study-acquisition-authority-v127.json` passed all four hard
+`artifacts/class-study-acquisition-authority-v129.json` passed all four hard
 gates without waivers. These are **public-acquisition-only** receipts on their
-recorded source/contract; neither is a full defense foundation.
+recorded source and schema-10 contract; neither is a full defense foundation.
 
-The subsequent v127 `acquisition-init` failed before creating
-`artifacts/classifier-multiorigin100-v1-acquisition-v127/`: the wrapper
-accepted a versioned acquisition root, while Python's canonical-layout check
-required the exact unversioned root. The older canonical v126 acquisition
-checkpoint remains initialized with 600 pending candidate records (120 in its
-current admission prefix), zero baseline batches and no eligible class. It
-cannot be relabeled or resumed under changed
-source. A narrow versioned-root source fix and matching contract clarification
-are being verified. Once frozen, they require the allocator's **next unused
-cohort (expected v128, subject to the allocator)** and fresh source-bound
-build, pinned CDP, 110-vector browser and acquisition authority before
-`acquisition-init` can be retried. No acquisition or formal sample has yet
-been accepted. Local evidence paths in this section are intentionally code
-paths; local artifacts are not guaranteed to exist in another clone.
+The v129 `acquisition-init` created
+`artifacts/classifier-multiorigin100-v1-acquisition-v129/`, but the watcher
+stopped with zero accepted classes. `tranco-0000697` has a missed-window
+terminal after recoverable Neqo failures, and `tranco-0000984` has a durable
+internal redirect-dependency error. A standalone v129-image diagnostic passed
+a `cloudflare-quic.com` Neqo control (`known_valid=true`) while
+`consultant.ru` and `www.consultant.ru` each returned `Error: Timeout(12)`
+on the default Docker bridge. That diagnostic has no formal receipt and cannot
+reclassify the v129 checkpoint. The redirect fix and prospective schema-11
+screen need a fresh source-bound build, pinned CDP, 110-vector browser gate and
+acquisition authority in the allocator's next unused cohort. No acquisition
+or formal sample has been accepted. Local evidence paths in this section are
+intentionally code paths; local artifacts are not guaranteed to exist in
+another clone.
 
 The versioned acquisition checkpoint alone does not isolate every publication
 path. Stability receipts under `artifacts/<study>-stability/` and admitted
@@ -319,11 +337,12 @@ new source/contract identity. The short-horizon acquisition amendment is the
 immediate change being implemented. The other options require their own
 implementation and evidence; none is an implicit waiver:
 
-1. **Use the prospective short-horizon gate.** Schema 10 replaces the three
-   old timed probes with two actual prepared observations at `t+30s` and
-   `t+5m` windows, preserving the semantic response/graph comparison. This
-   shortens the ideal first-120 acquisition projection by more than six days,
-   while narrowing the claim to short-horizon reproducibility. The new rule
+1. **Use the prospective short-horizon gate.** Schema 11 retains two actual
+   prepared observations at `t+30s` and `t+5m` windows after its pre-baseline
+   HTTP/3 screen, preserving the semantic response/graph comparison. Relative
+   to schema 9, the short windows reduce the ideal first-120 acquisition
+   projection by more than six days while narrowing the claim to short-horizon
+   reproducibility. The new rule
    still needs fresh qualification and live receipts before it has execution
    authority. Later drift must be reported, including failures, without
    retroactive cohort repair.

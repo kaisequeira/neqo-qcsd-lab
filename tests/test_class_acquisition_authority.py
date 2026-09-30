@@ -339,11 +339,16 @@ def test_current_gate_includes_short_profile_without_changing_historical_argv(
     acquisition_evidence: dict[str, Any],
 ) -> None:
     new_test = "tests/test_class_acquisition_short_profile.py"
+    watcher_test = "tests/test_class_acquisition_watch.py"
     current_spec = authority._acquisition_correctness_spec()
     assert new_test in current_spec["argv"]
     assert new_test in current_spec["input_sha256"]
+    assert watcher_test in current_spec["argv"]
+    assert watcher_test in current_spec["input_sha256"]
     assert new_test not in authority._V96_ACQUISITION_CORRECTNESS_SPEC["argv"]
     assert new_test not in authority._V127_ACQUISITION_CORRECTNESS_SPEC["argv"]
+    assert watcher_test not in authority._V96_ACQUISITION_CORRECTNESS_SPEC["argv"]
+    assert watcher_test not in authority._V127_ACQUISITION_CORRECTNESS_SPEC["argv"]
     assert authority._V96_ACQUISITION_CORRECTNESS_SPEC["argv"] == (
         authority._V127_ACQUISITION_CORRECTNESS_SPEC["argv"]
     )

@@ -148,7 +148,7 @@ def test_standalone_browser_schema_constants_match_the_producer() -> None:
         browser_producer.HISTORICAL_FOUNDATION_SCHEMA_VERSIONS
     )
     assert admission._BROWSER_EGRESS_FINAL_SCHEMA == browser_producer.FINAL_SCHEMA_VERSION
-    assert admission._ACQUISITION_SCHEMA == acquisition_producer.SCHEMA_VERSION == 10
+    assert admission._ACQUISITION_SCHEMA == acquisition_producer.SCHEMA_VERSION == 11
     assert admission._V127_ACQUISITION_AUTHORITY_COHORT == (
         attestation_producer._V127_ACQUISITION_AUTHORITY_COHORT_VERSION
     )
@@ -348,7 +348,7 @@ def test_current_completion_uses_bound_provenance_and_authority(authority_fixtur
     ) == fixture.admitted
 
 
-@pytest.mark.parametrize("schema", (1, 2, 3, 4, 5, 6, 7, 8, 9))
+@pytest.mark.parametrize("schema", (1, 2, 3, 4, 5, 6, 7, 8, 9, 10))
 def test_legacy_acquisition_is_inspectable_but_not_current_launch_authority(
     authority_fixture, schema: int
 ) -> None:
@@ -362,18 +362,19 @@ def test_legacy_acquisition_is_inspectable_but_not_current_launch_authority(
         _resolve(fixture, "acquisition-run", acquisition_root=fixture.acquisition)
 
 
-def test_schema_nine_completion_is_verify_only_and_cannot_publish_cohort(
-    authority_fixture,
+@pytest.mark.parametrize("schema", (9, 10))
+def test_historical_completion_is_verify_only_and_cannot_publish_cohort(
+    authority_fixture, schema: int,
 ) -> None:
     fixture = authority_fixture
     _rewrite(
         fixture.acquisition / "provenance.json",
-        lambda payload: payload.update(acquisition_schema_version=9),
+        lambda payload: payload.update(acquisition_schema_version=schema),
     )
     _rewrite(
         fixture.acquisition_completion,
         lambda payload: payload.update(
-            acquisition_schema_version=9,
+            acquisition_schema_version=schema,
             provenance_sha256=sha256_file(fixture.acquisition / "provenance.json"),
         ),
     )

@@ -206,6 +206,7 @@ _V96_ACQUISITION_CORRECTNESS_TESTS = (
 ACQUISITION_CORRECTNESS_TESTS = (
     *_V96_ACQUISITION_CORRECTNESS_TESTS,
     "tests/test_class_acquisition_short_profile.py",
+    "tests/test_class_acquisition_watch.py",
 )
 
 # The last authority issued before the schema-7/schema-15 amendment remains
@@ -251,7 +252,7 @@ _V96_ACQUISITION_CORRECTNESS_SPEC = {
 
 # V127 was the final schema-9 acquisition-only authority.  Its exact receipt
 # remains independently verifiable after the prospective short-window study
-# amendment, but it cannot authorise a new schema-10 runner.
+# amendment, but it cannot authorise a newer acquisition runner.
 _V127_ACQUISITION_AUTHORITY_COHORT_VERSION = 127
 _V127_ACQUISITION_AUTHORITY_SHA256 = (
     "081dd3d0f11e656079e9988883b2f2cc36d99b3c363559f66560a9f5a163f60f"
@@ -457,7 +458,7 @@ def validate_current_acquisition_completion_authority(
     *,
     runner_root: Path,
 ) -> dict[str, Any]:
-    """Deep-verify the current authority bound by a schema-10 completion.
+    """Deep-verify the current authority bound by a current-schema completion.
 
     This is the offline publication boundary: it reconstructs the exact narrow
     acquisition authority or current full-foundation fallback without requiring
@@ -475,7 +476,11 @@ def validate_current_acquisition_completion_authority(
         type(completion_payload.get(field)) is not int or completion_payload[field] != expected
         for field, expected in current_versions
     ):
-        raise ValueError("current acquisition completion requires exact 10/4/3 schemas")
+        raise ValueError(
+            "current acquisition completion requires exact "
+            f"{ACQUISITION_SCHEMA_VERSION}/{ACQUISITION_COMPLETION_SCHEMA_VERSION}/"
+            f"{ACQUISITION_CHECKPOINT_SCHEMA_VERSION} schemas"
+        )
 
     provenance_path, _provenance_value, provenance = _load_bound_receipt(
         Path(runner_root) / "provenance.json",
@@ -485,7 +490,10 @@ def validate_current_acquisition_completion_authority(
         completion_payload.get("provenance_sha256") != sha256_file(provenance_path)
         or provenance.get("acquisition_schema_version") != ACQUISITION_SCHEMA_VERSION
     ):
-        raise ValueError("current acquisition completion provenance is not exact schema 10")
+        raise ValueError(
+            "current acquisition completion provenance is not exact schema "
+            f"{ACQUISITION_SCHEMA_VERSION}"
+        )
 
     binding = provenance.get("acquisition_authority")
     authority_path = _path_from_binding(

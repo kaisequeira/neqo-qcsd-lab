@@ -1437,8 +1437,9 @@ def class_study_status(
             "state": "unverified",
             "root": str(Path(acquisition_root).resolve()),
             "gate": stability_gate(
-                short_window=runner_status.get("acquisition_schema_version")
-                == class_acquisition.SCHEMA_VERSION
+                short_window=class_acquisition._short_window_for(
+                    runner_status.get("acquisition_schema_version")
+                )
             ),
             "authoritative": False,
         }
@@ -2166,8 +2167,9 @@ def run_class_study_action(
                     "valid": True,
                     "runner_root": str(Path(runner).resolve()),
                     "gate": stability_gate(
-                        short_window=provenance["acquisition_schema_version"]
-                        == class_acquisition.SCHEMA_VERSION
+                        short_window=class_acquisition._short_window_for(
+                            provenance["acquisition_schema_version"]
+                        )
                     ),
                     "authoritative": False,
                     "gate_verification": {

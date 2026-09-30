@@ -1768,6 +1768,26 @@ def discover_page(
                         # Keep this defensive record, while Fetch remains the only
                         # callback that decides whether bytes may leave Chromium.
                         admission.exclude(request_url, reason)
+                        if redirected:
+                            predecessor_occurrence_id = audit_event[
+                                "redirect_from_occurrence_id"
+                            ]
+                            if not isinstance(predecessor_occurrence_id, str):
+                                raise DiscoveryIntegrityError(
+                                    "Chromium redirect event has no observed predecessor"
+                                )
+                            predecessor_resource_id = request_indices.get(chain_key)
+                            audit_event["dependency_evidence"] = [
+                                {
+                                    "kind": "redirect",
+                                    "value": predecessor_occurrence_id,
+                                    "resolved_resource_id": predecessor_resource_id,
+                                }
+                            ]
+                            if predecessor_resource_id is not None:
+                                audit_event["resolved_dependency_resource_ids"] = [
+                                    predecessor_resource_id
+                                ]
                         # Retain this occurrence in the ExtraInfo FIFO even though
                         # it cannot become a replay resource. Otherwise a later
                         # event sharing its redirect-chain ID could shift headers.

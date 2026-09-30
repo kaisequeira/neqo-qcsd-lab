@@ -1184,6 +1184,8 @@ def test_status_keeps_historical_acquisition_runner_unverified(
     assert runner["state"] == "unverified"
     assert runner["authoritative"] is False
     assert "historical" in runner["reason"]
+    assert runner["gate"]["labels"] == ["t+30s", "t+5m"]
+    assert runner["gate"]["profile"] == "t+30s-and-t+5m"
     assert "gate_verification" not in runner
 
 

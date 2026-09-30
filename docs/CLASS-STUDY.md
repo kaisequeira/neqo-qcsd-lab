@@ -1,6 +1,6 @@
 # Extended-class study: acquisition and continuation
 
-Current protocol summary: 29 September 2026, Australia/Sydney. The
+Current protocol summary: 30 September 2026, Australia/Sydney. The
 [project ledger](../PROJECT.md) records progress; this document records the
 next work and its purpose. The checked-in
 [study contract](../config/class-study/v1/study.json), implemented validators
@@ -25,17 +25,18 @@ selectable modes**. Qualification on the new classes remains pending for all
 modes. BuFLO/CS-BuFLO validation requires the final attestation, and describes
 client-only QUIC adaptations rather than bilateral paper implementations.
 
-The v127 desktop browser gate passed and independently verified all 110
-vectors; its acquisition-only authority passed all four hard gates without
-waivers. Its `acquisition-init` then rejected a create-only `-v127` root before
-any acquisition action: the public wrapper accepted a versioned root, but the
-Python layout check required the exact canonical root. The versioned root was
-not created. The v126 canonical checkpoint remains initialized with 600
-pending candidate records, 120 in its current admission prefix, and zero
-batches after its earlier watcher timestamp
-failure. Correcting the v127 path mismatch and prospectively changing any
-study rule require the next unused cohort and complete downstream reproof.
-Preserve both cohorts intact.
+The v129 desktop no-cache build, pinned CDP, 110-vector browser gate and
+acquisition-only authority passed on their bound source. A versioned
+acquisition checkpoint initialized, but its watcher stopped before accepting
+any pilot class. `tranco-0000697` missed its probe window after repeated
+recoverable Neqo HTTP/3 failures; `tranco-0000984` carries a durable internal
+redirect-dependency error. Preserve v129 and its attempts. A standalone v129
+image diagnostic, without a formal receipt, passed a Neqo control probe to
+`cloudflare-quic.com` and saw `Error: Timeout(12)` for `consultant.ru` and
+`www.consultant.ru` on the default Docker bridge. It cannot reclassify v129.
+The source fix and prospective schema-11 pre-baseline screen require the next
+unused cohort and complete downstream reproof. Earlier v127 and v126
+initialization failures also remain historical evidence.
 Accepted extended-study progress remains pilot 0/120, final classes 0/100,
 certification 0/900 and formal 0/16,000.
 
@@ -50,7 +51,7 @@ repeating expensive qualification. They do not replace mandatory gates.
 | 2 | Clean source freeze, allocator, unused cohort and registered no-cache build | Bind exact source and collection image through `./qcsd-lab build --cohort-version N` |
 | 3 | ETF/veth diagnostics, pinned-CDP and focused browser/teardown checks using the registered image | Verify timing/network support, browser identity and known late-failing behaviour before the full browser gate |
 | 4 | 110-vector browser-egress gate and acquisition authority | Packet-observed browser coverage plus acquisition-correctness evidence authorise public acquisition |
-| 5 | Acquisition and two genuine short-horizon prepared observations | Admit the first 24 eligible candidates per stratum; freeze 120-class pilot selection and assembly |
+| 5 | Pre-baseline HTTP/3 screen, acquisition and two genuine short-horizon prepared observations | Admit the first 24 eligible candidates per stratum; freeze 120-class pilot selection and assembly |
 | 6 | Reference, timing stress, 18 regression, code and 160 controlled samples; foundation | Authorise all class-study capture roles, including fitting, on the same source/build/acquisition lineage |
 | 7 | 480 pilot fitting, 720 qualification, 1,080 compatibility | Derive pilot profiles, qualify capacity/prefixes and establish each pilot class/mode combination |
 | 8 | Final selection, 2,000 authoritative fitting, 600 qualification, 900 certification | Freeze 100 classes plus reserves, refit and prove all final class/mode combinations |
@@ -144,8 +145,8 @@ AUTHORITY="artifacts/class-study-acquisition-authority-v${COHORT_VERSION}.json"
 ```
 
 For later actions, obtain exact input paths from the preceding verified
-receipts and the coordinator's help. After the corrected path-validator source
-has new verified authority, choose a create-only versioned root such as
+receipts and the coordinator's help. After the schema-11 source has fresh
+verified acquisition authority, choose a create-only versioned root such as
 `artifacts/classifier-multiorigin100-v1-acquisition-v${COHORT_VERSION}`.
 Pass that same path as `--acquisition-root` to `acquisition-init` with
 `--acquisition-authority` and to `acquisition-watch`. Do not resume or relabel
@@ -206,7 +207,27 @@ Stability compares final URL, status, content type, body length, body SHA-256
 and semantic `resource_graph_sha256`. Per-run provenance differs, so raw
 prepared-manifest hashes are recorded but not used as longitudinal identity.
 
-| Schema-10 observation | Allowed batch publication after baseline |
+Before arming a stability baseline, the prospective schema-11 screen probes a
+known-good HTTP/3 control at `https://cloudflare-quic.com/`. If it fails, the
+screen blocks without candidate or second-control probes. If it passes, the
+screen performs two 12-second Neqo attempts per distinct selected-page URL
+request origin, then probes the control again. An origin passes only with two
+`known_valid=true` results and fails only with two classified connectivity
+timeouts or `IdleTimeout` results. With both controls passing, a candidate is
+technically rejected if **at least one** origin fails and every other origin
+has a definite pass or fail: the fixed timed batch would otherwise still
+probe the dead page. If all origins pass, full page preparation follows. Any
+mixed or ambiguous origin blocks, even if another origin fails; a failed
+second control also blocks. The screen is bound as diagnostic
+evidence in the candidate's navigation attempt. It covers selected-page
+request origins only; third-party resource origins discovered during timed
+preparation can still cause a missed-window blocker. It does not establish
+that subresources or the full page graph are replayable. Resolved addresses are
+diagnostic observations only; this screen does not claim that Neqo connected to
+a pinned address. The registered candidate order and later complete-coverage
+requirements remain in force.
+
+| Schema-11 observation | Allowed batch publication after baseline |
 |---|---|
 | `t+30s` | 25–35 seconds |
 | `t+5m` | 4 min 30 sec–35 min |
@@ -217,10 +238,11 @@ both pass, admit the first `t+30s` manifest unchanged. Retries must start
 within the same registered window with their own durable attempt ID; they
 cannot inherit a previous timestamp or relabel an orphaned manifest. Missed
 windows and infrastructure errors block completion rather than count as
-selective site rejections. This prospective schema-10 rule establishes
+selective site rejections. This prospective schema-11 rule establishes
 short-horizon reproducibility at durably published dispatch windows; the
 individual concurrent page workers' network starts are not separately
-timestamped. Historical schema-9 receipts retain their
+timestamped. Historical schema-10 receipts retain their two-observation rule
+without a pre-baseline HTTP/3 screen. Historical schema-9 receipts retain their
 genuine 30-second, 24-hour and 72-hour rule and three-day claim boundary.
 
 The scheduler bounds action duration and admits at most two candidates and
@@ -228,10 +250,10 @@ five live pages. Unresolved batches keep a 40-minute collision envelope; once
 all members have verified scientific terminals, the next batch may begin
 60 seconds after the latest terminal, subject to the watcher's proof that the
 previous Docker scope is empty. The paired, all-survivor 120-candidate
-schema-10 lower bound is 5 hours 29 minutes from first baseline to last
+schema-11 lower bound is 5 hours 29 minutes from first baseline to last
 earliest repeat with zero-duration page work. A five-minute terminal per
-batch gives 5 hours 59 minutes before real navigation, status and recovery
-overhead. Preserve the true dispatch windows;
+batch gives 5 hours 59 minutes before real navigation, HTTP/3 screening,
+status and recovery overhead. Preserve the true dispatch windows;
 do not promise immediate pilot completion after the browser gate. Completion requires
 every earlier candidate in each selected prefix to have a scientific terminal
 outcome; the unused catalogue tail remains explicitly unassessed.

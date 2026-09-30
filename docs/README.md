@@ -22,13 +22,12 @@ capture, skipped gate, reused historical authority, or post-hoc promotion of
 an attempt.
 
 The starting point for every relative day below is the **next clean source
-freeze**. As of this snapshot, v127 has historical, verify-only acquisition
-authority. The new schema-10 acquisition has no live authority or accepted
-class. A v128 no-cache build was claimed and its collection image assembled,
-but the wrapper failed while capturing Docker-selected Buildx metadata after
-collection. That failed attempt supplies no new gate pass. The next execution
-needs the allocator's next unused cohort after the build issue is resolved;
-the cohort number must be checked again before launch.
+freeze**. V129 passed build, pinned CDP, all 110 browser vectors and its
+acquisition-only authority on its historical source. Its acquisition watcher
+then stopped with zero accepted classes. The prospective schema-11 HTTP/3
+screen and redirect fix have no new execution authority. The next execution
+needs the allocator's next unused cohort after source freeze; the cohort
+number must be checked again before launch.
 
 ## Stage-by-stage critical path
 
@@ -41,7 +40,7 @@ throughput. Counts are required accepted outputs unless a row says otherwise.
 | Order | Gate and work | Estimate from the next clean freeze | Basis and limit |
 |---:|---|---:|---|
 | 1 | No-cache build, pinned CDP, 110 browser-egress vectors and acquisition-only authority | **About 9–10 hours** | Last desktop cohort measured 1h05m26s for build, 7h38m54s for browser qualification and 11m25s for acquisition correctness, plus CDP, authority and handoff time. A failure requires diagnosis and fresh source/cohort as applicable. |
-| 2 | Acquire the first 24 eligible classes in each of five strata from the 600-candidate search pool; verify completion and assemble the 120-class pilot | **5h29m ideal lower bound**, or about **5h59m** if each batch terminates near five minutes; assembly extra | Schema 10 uses two real prepared observations with dispatch windows near 30 seconds and five minutes. These projections assume all candidates survive, two per action, zero page-work duration and prompt terminal release. Rejections, slow pages and recovery extend it. |
+| 2 | Screen selected-page request-origin HTTP/3 reachability, acquire the first 24 eligible classes in each of five strata from the 600-candidate search pool; verify completion and assemble the 120-class pilot | **5h29m ideal baseline-to-repeat lower bound**, or about **5h59m** if each batch terminates near five minutes; screening and assembly extra | Schema 11 retains two real prepared observations with dispatch windows near 30 seconds and five minutes after a separate pre-baseline screen. These projections assume all candidates survive, two per action, zero page-work and screening duration, and prompt terminal release. Rejections, slow pages and recovery extend it. |
 | 3 | Full defense foundation on the same source/build lineage: reference/code gates, 12 timing-stress visits, 18 nine-mode regression samples and 160 controlled samples | **Unmeasured**; 190 launches would be **3h19m** at the old proxy, plus reference, code and verification | The 190-count illustration does not estimate the source and reference checks. Acquisition-only authority cannot replace this foundation for fitting or capture. |
 | 4 | Pilot fitting: 120 classes × two visits × two policies = 480 | **8h22m proxy** | At 62.73 seconds per accepted cell; no new-cohort rate yet. |
 | 5 | Pilot chaff/prefix qualification: 120 × six = 720 | **12h33m proxy** | Qualification work may have a different duration from old formal captures. |

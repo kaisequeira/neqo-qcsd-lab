@@ -1124,6 +1124,28 @@ def test_discover_page_installs_request_stage_policy_before_navigation(
             "type": "Fetch",
             "documentURL": "https://page.test/",
         },
+        {
+            "requestId": "excluded-redirect-chain",
+            "request": {
+                "method": "GET",
+                "url": "https://cdn.test/redirect-start.js",
+                "headers": {},
+            },
+            "type": "Script",
+            "documentURL": "https://page.test/home",
+        },
+        {
+            "requestId": "excluded-redirect-chain",
+            "request": {
+                "method": "GET",
+                "url": "https://tracker.test/redirect-final.js",
+                "headers": {},
+            },
+            "type": "Script",
+            "documentURL": "https://page.test/home",
+            "redirectResponse": {"status": 302},
+            "redirectHasExtraInfo": False,
+        },
     ]
     for event in events:
         event["initiator"] = {"type": "other"}
@@ -1177,6 +1199,10 @@ def test_discover_page_installs_request_stage_policy_before_navigation(
                 is_redirect_predecessor = (
                     network_event["requestId"] == "page-chain"
                     and network_event["request"]["url"] == "https://page.test/"
+                ) or (
+                    network_event["requestId"] == "excluded-redirect-chain"
+                    and network_event["request"]["url"]
+                    == "https://cdn.test/redirect-start.js"
                 )
                 if not self.paused[parameters["requestId"]] and not is_redirect_predecessor:
                     network_id = network_event["requestId"]
@@ -1498,14 +1524,17 @@ def test_discover_page_installs_request_stage_policy_before_navigation(
         "https://page.test/home",
         "https://cdn.test/app.js",
         "https://cdn.test/app.js",
+        "https://cdn.test/redirect-start.js",
     ]
-    assert [resource["id"] for resource in result.resources] == [0, 1, 2, 3]
-    assert [resource["depends_on"] for resource in result.resources] == [[], [0], [1], [1]]
+    assert [resource["id"] for resource in result.resources] == [0, 1, 2, 3, 4]
+    assert [resource["depends_on"] for resource in result.resources] == [
+        [], [0], [1], [1], [1]
+    ]
     assert result.resources[2]["headers"] == [
         ["accept", "*/*"],
         ["x-qcsd-cutoff", "scientific"],
     ]
-    assert result.observed_request_count == 6
+    assert result.observed_request_count == 8
     assert result.expandable_origins == [
         "https://cdn.test",
         "https://page.test",
@@ -1518,6 +1547,10 @@ def test_discover_page_installs_request_stage_policy_before_navigation(
         },
         {
             "url": "https://tracker.test/beacon.js",
+            "reason": "origin not approved",
+        },
+        {
+            "url": "https://tracker.test/redirect-final.js",
             "reason": "origin not approved",
         },
     ]
@@ -1542,17 +1575,38 @@ def test_discover_page_installs_request_stage_policy_before_navigation(
         "cutoff_reason": "quiescent",
     }
     assert result.discovery_event_audit["summary"] == {
-        "event_count": 17,
+        "event_count": 22,
         "target_event_count": 0,
         "browser_internal_document_count": 0,
-        "network_request_count": 6,
-        "fetch_request_count": 6,
+        "network_request_count": 8,
+        "fetch_request_count": 8,
         "fetch_internal_restart_count": 0,
-        "terminal_event_count": 5,
-        "resource_occurrence_count": 4,
-        "exclusion_occurrence_count": 2,
+        "terminal_event_count": 6,
+        "resource_occurrence_count": 5,
+        "exclusion_occurrence_count": 3,
         "blocked_preflight_dependent_count": 0,
     }
+    excluded_redirect = next(
+        event
+        for event in result.discovery_event_audit["events"]
+        if event.get("kind") == "network-request"
+        and event.get("url") == "https://tracker.test/redirect-final.js"
+    )
+    predecessor = next(
+        event
+        for event in result.discovery_event_audit["events"]
+        if event.get("kind") == "network-request"
+        and event.get("url") == "https://cdn.test/redirect-start.js"
+    )
+    assert excluded_redirect["redirect_from_occurrence_id"] == predecessor["occurrence_id"]
+    assert excluded_redirect["dependency_evidence"] == [
+        {
+            "kind": "redirect",
+            "value": predecessor["occurrence_id"],
+            "resolved_resource_id": 4,
+        }
+    ]
+    assert excluded_redirect["resolved_dependency_resource_ids"] == [4]
     if shutdown_case == "network-fetch":
         expected_disposal = _normal_shutdown_disposal_summary(
             network_total=1,

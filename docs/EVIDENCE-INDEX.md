@@ -19,6 +19,11 @@ not present in every clone. The [project ledger](../PROJECT.md),
 | v124 native build and pinned CDP | `artifacts/buflo-study/build-execution-v124.json`, `artifacts/buflo-study/build-completion-v124.json`, `artifacts/buflo-study/pinned-cdp-execution-v124.json` | Verified desktop prerequisites bound to the v124 source; no browser or acquisition authority |
 | v124 browser evidence | `artifacts/buflo-study/browser-egress-qualification-v124/` | Valid open inventory with 28 passing vectors and a sealed operational failure on vector 29; no final receipt |
 | v124 ETF diagnostics | `artifacts/buflo-study/etf-probe-engineering-v124.json`, `artifacts/buflo-study/etf-veth-probe-2048-v124/`, `artifacts/buflo-study/etf-veth-probe-2048-v124-r1/`, `artifacts/buflo-study/etf-veth-probe-2048-v124-r2/` | Capability probe passed; three large timing/clock diagnostics incomplete and non-evidentiary |
+| v129 build and pinned CDP | `artifacts/buflo-study/build-execution-v129.json`, `artifacts/buflo-study/build-completion-v129.json`, `artifacts/buflo-study/pinned-cdp-execution-v129.json` | Independently verified clean-source no-cache build and pinned-CDP gate; bound to v129 only |
+| v129 browser qualification | `artifacts/buflo-study/browser-egress-qualification-v129/` | Independently verified final 110/110 with zero operational or semantic failures; bound to v129 only |
+| v129 acquisition-only authority | `artifacts/class-study-acquisition-authority-v129.json` | Independently verified four hard gates without waivers; permits public-page acquisition on v129, not later defence capture |
+| v129 failed acquisition | `artifacts/classifier-multiorigin100-v1-acquisition-v129/` | Initialized checkpoint, retained attempts and terminal evidence; `tranco-0000697` missed its probe window, and `tranco-0000984` has a durable internal redirect dependency error; zero accepted classes |
+| Prospective HTTP/3 screen | New source-bound acquisition checkpoint, once executed | Schema-11 pre-baseline control and selected-page request-origin outcomes belong in the hash-bound navigation-attempt ledger; no v129 receipt or classification is replaced |
 | Original ledgers, papers and unique local research files | Original relative paths recorded in migration manifest | Thesis sources and lossless documentation provenance |
 | Source backups and operational continuation | Git bundles and uncommitted migration handoff | Local/legacy revisions, published commit identities, transfer checksums and machine-specific recovery context |
 
@@ -27,6 +32,10 @@ the local working set into its original relative layout. Do not rewrite old
 receipt paths, hashes or provenance for the desktop. A historical receipt
 whose referenced raw campaign remains on the laptop may require that campaign
 for a full audit; copying the receipt does not make its dependencies portable.
+The standalone v129-image diagnostic that reached the `cloudflare-quic.com`
+Neqo control but timed out on `consultant.ru` and `www.consultant.ru` has no
+formal receipt. It is an engineering observation, not a scientific terminal or
+authority to resume or reclassify the v129 checkpoint.
 The desktop's private `migration-2026-09-25/inventories/desktop-handoff-verification.json`
 records the new 12,503-entry protected-handoff check. Keep it with the
 downloaded transfer manifests outside Git.
