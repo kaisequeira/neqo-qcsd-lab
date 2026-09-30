@@ -43,6 +43,7 @@ STUDY_ID = "classifier-multiorigin100-v1"
 CANDIDATE_COUNT = 600
 SCHEMA_VERSION = 1
 SOURCE_BINDING_PREIMAGE_SCHEMA_VERSION = 3
+BROWSER_DEFERRED_SOURCE_BINDING_PREIMAGE_SCHEMA_VERSION = 4
 ACQUISITION_SCHEMA_VERSION = 11
 HISTORICAL_ACQUISITION_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
 CHECKPOINT_SCHEMA_VERSION = 3
@@ -75,6 +76,7 @@ _ACQUISITION_CORRECTNESS_TESTS = (
     "tests/test_class_acquisition_authority.py",
     "tests/test_class_build_admission_acquisition_authority.py",
     "tests/test_class_acquisition_short_profile.py",
+    "tests/test_class_acquisition_watch.py",
 )
 PINNED_CDP_TYPE = "qcsd-class-study-pinned-cdp-probe"
 BUILD_EXECUTION_TYPE = "qcsd-buflo-study-no-cache-build-execution"
@@ -1726,8 +1728,8 @@ class AcquisitionBinding:
     build_execution_sha256: str
     build_completion_path: str
     build_completion_sha256: str
-    browser_egress_qualification: Mapping[str, Any]
-    browser_egress_tree_sha256: str
+    browser_egress_qualification: Mapping[str, Any] | None
+    browser_egress_tree_sha256: str | None
     candidate_ids: frozenset[str]
     candidate_order: tuple[str, ...]
     source: Mapping[str, Any]
@@ -1810,10 +1812,13 @@ def _state_namespace_identity(paths: WatchPaths) -> dict[str, Any]:
 
 
 def _source_binding_sha256(binding: AcquisitionBinding) -> str:
+    browser = binding.browser_egress_qualification
+    if (browser is None) != (binding.browser_egress_tree_sha256 is None):
+        raise WatchError("acquisition browser binding and tree digest differ")
     return _sha256_bytes(
         _canonical_json_bytes(
             {
-                "browser_egress_qualification": dict(binding.browser_egress_qualification),
+                "browser_egress_qualification": dict(browser) if browser is not None else None,
                 "browser_egress_tree_sha256": binding.browser_egress_tree_sha256,
                 "candidate_catalogue_sha256": binding.catalogue_sha256,
                 "build_completion_path": binding.build_completion_path,
@@ -1829,7 +1834,11 @@ def _source_binding_sha256(binding: AcquisitionBinding) -> str:
                 "prepare_image": binding.prepare_image,
                 "provenance_sha256": binding.provenance_sha256,
                 "source": dict(binding.source),
-                "source_binding_preimage_schema_version": (SOURCE_BINDING_PREIMAGE_SCHEMA_VERSION),
+                "source_binding_preimage_schema_version": (
+                    SOURCE_BINDING_PREIMAGE_SCHEMA_VERSION
+                    if browser is not None
+                    else BROWSER_DEFERRED_SOURCE_BINDING_PREIMAGE_SCHEMA_VERSION
+                ),
             }
         )
     )
@@ -5441,10 +5450,14 @@ def _validate_acquisition_gate_evidence(
             "acquisition_correctness", "all_acquisition_gates_passed",
         }
     cohort = payload.get("cohort_version")
+    authority_schema = payload.get("attestation_schema_version")
+    browser_deferred = acquisition_only and authority_schema == 2
     if (
         set(payload) != expected_foundation_keys
-        or type(payload.get("attestation_schema_version")) is not int
-        or payload.get("attestation_schema_version") != (1 if acquisition_only else FOUNDATION_SCHEMA_VERSION)
+        or type(authority_schema) is not int
+        or authority_schema not in (
+            (1, 2) if acquisition_only else (FOUNDATION_SCHEMA_VERSION,)
+        )
         or payload.get("artifact_type") != receipt_type
         or payload.get("study_id") != STUDY_ID
         or type(cohort) is not int
@@ -5485,7 +5498,9 @@ def _validate_acquisition_gate_evidence(
         "controlled_results",
     }
     if acquisition_only:
-        expected_evidence = {"build_execution", "pinned_cdp_probe", "browser_egress_qualification"}
+        expected_evidence = {"build_execution", "pinned_cdp_probe"}
+        if not browser_deferred:
+            expected_evidence.add("browser_egress_qualification")
     if not isinstance(evidence, dict) or set(evidence) != expected_evidence:
         raise WatchError("acquisition foundation evidence inventory is incomplete")
     build_binding = evidence.get("build_execution")
@@ -5535,20 +5550,22 @@ def _validate_acquisition_gate_evidence(
         raise WatchError("acquisition foundation build identity is invalid")
 
     foundation_recorded = _evidence_timestamp(payload.get("recorded_at"), label="class foundation")
-    browser_egress = _validate_browser_egress_qualification_binding(
-        evidence.get("browser_egress_qualification"),
-        paths=paths,
-        cohort=cohort,
-        build=build,
-        build_binding={
-            "path": build_binding["path"],
-            "sha256": build_snapshot.sha256,
-        },
-        build_size_bytes=build_snapshot.size_bytes,
-        build_completion_sha256=build_completion_sha256,
-        prepare_image=prepare_image,
-        foundation_recorded=foundation_recorded,
-    )
+    browser_egress = None
+    if not browser_deferred:
+        browser_egress = _validate_browser_egress_qualification_binding(
+            evidence.get("browser_egress_qualification"),
+            paths=paths,
+            cohort=cohort,
+            build=build,
+            build_binding={
+                "path": build_binding["path"],
+                "sha256": build_snapshot.sha256,
+            },
+            build_size_bytes=build_snapshot.size_bytes,
+            build_completion_sha256=build_completion_sha256,
+            prepare_image=prepare_image,
+            foundation_recorded=foundation_recorded,
+        )
 
     pinned_binding = evidence.get("pinned_cdp_probe")
     if not isinstance(pinned_binding, dict) or set(pinned_binding) != {
@@ -5785,21 +5802,25 @@ def _validate_acquisition_correctness_authority(
         raise WatchError("acquisition correctness evidence differs from pinned inputs")
     started = _evidence_timestamp(correctness["started_at"], label="acquisition correctness start")
     finished = _evidence_timestamp(correctness["finished_at"], label="acquisition correctness finish")
-    browser = payload["evidence"]["browser_egress_qualification"]
-    browser_recorded = _evidence_timestamp(browser["recorded_at"], label="browser receipt")
-    if not (build_finished <= probe_recorded <= started <= finished <= recorded
-            and browser_recorded <= started):
+    browser_deferred = payload["attestation_schema_version"] == 2
+    browser = None if browser_deferred else payload["evidence"]["browser_egress_qualification"]
+    if not build_finished <= probe_recorded <= started <= finished <= recorded:
         raise WatchError("acquisition correctness chronology is invalid")
+    if browser is not None:
+        browser_recorded = _evidence_timestamp(browser["recorded_at"], label="browser receipt")
+        if browser_recorded > started:
+            raise WatchError("acquisition correctness chronology is invalid")
     identity = payload["build_execution_identity"]
     evidence = payload["evidence"]
     gate_evidence = {
         "current-clean-source-and-no-cache-build": [identity["sha256"], identity["completion_sha256"]],
         "acquisition-focused-correctness": [_sha256_bytes(_canonical_json_bytes(correctness))],
         "pinned-cdp-integration-probe": [evidence["pinned_cdp_probe"]["sha256"]],
-        "browser-egress-packet-qualification-110-of-110": [
-            browser["sha256"], browser["payload_sha256"], browser["expanded_vectors_sha256"]
-        ],
     }
+    if browser is not None:
+        gate_evidence["browser-egress-packet-qualification-110-of-110"] = [
+            browser["sha256"], browser["payload_sha256"], browser["expanded_vectors_sha256"]
+        ]
     expected_gates = [
         {
             "ordinal": ordinal, "gate": gate,
@@ -5977,9 +5998,12 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
         build_completion_path=foundation_authority["build_completion_path"],
         build_completion_sha256=foundation_authority["build_completion_sha256"],
         browser_egress_qualification=foundation_authority["browser_egress_qualification"],
-        browser_egress_tree_sha256=_browser_egress_tree_sha256(
-            foundation_authority["browser_egress_qualification"],
-            paths=paths,
+        browser_egress_tree_sha256=(
+            _browser_egress_tree_sha256(
+                foundation_authority["browser_egress_qualification"], paths=paths
+            )
+            if foundation_authority["browser_egress_qualification"] is not None
+            else None
         ),
         candidate_ids=candidate_ids,
         candidate_order=candidate_order,
@@ -6830,6 +6854,8 @@ def _admission_command(paths: WatchPaths) -> tuple[str, ...]:
 def _browser_egress_verify_command(
     paths: WatchPaths, binding: AcquisitionBinding
 ) -> tuple[str, ...]:
+    if binding.browser_egress_qualification is None:
+        raise WatchError("browser-egress verification is not an acquisition v2 action")
     cohort = binding.cohort_version
     build_path = paths.lab_root / f"artifacts/buflo-study/build-execution-v{cohort}.json"
     result_root = paths.lab_root / f"artifacts/buflo-study/browser-egress-qualification-v{cohort}"
@@ -9458,6 +9484,8 @@ def _run_browser_egress_verification(
     state_root: Path,
     source_binding_sha256: str,
 ) -> dict[str, Any]:
+    if binding.browser_egress_qualification is None:
+        raise WatchError("browser-egress verification is not an acquisition v2 action")
     command = _browser_egress_verify_command(paths, binding)
     try:
         completed = runner(
@@ -10109,15 +10137,16 @@ def watch_acquisition(
             _validate_lock_identity(active_paths.mutation_lock, descriptor)
             _revalidate_immutable_and_source(active_paths, binding, validate_source)
             child_environment = _docker_environment(admission, binding)
-            _run_browser_egress_verification(
-                paths=active_paths,
-                binding=binding,
-                runner=active_runner,
-                environment=child_environment,
-                authority_fd=descriptor,
-                state_root=state_root,
-                source_binding_sha256=source_binding_sha256,
-            )
+            if binding.browser_egress_qualification is not None:
+                _run_browser_egress_verification(
+                    paths=active_paths,
+                    binding=binding,
+                    runner=active_runner,
+                    environment=child_environment,
+                    authority_fd=descriptor,
+                    state_root=state_root,
+                    source_binding_sha256=source_binding_sha256,
+                )
             _validate_lock_identity(active_paths.mutation_lock, descriptor)
             _revalidate_immutable_and_source(active_paths, binding, validate_source)
             _validate_checkpoint(active_paths, binding)
@@ -10303,11 +10332,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _sha256_bytes(_canonical_json_bytes(list(command)))
                 for command in (
                     _admission_command(paths),
-                    _browser_egress_verify_command(paths, binding),
                     _status_command(paths),
                     _run_command(paths),
                 )
             }
+            if binding.browser_egress_qualification is not None:
+                canonical_actions.add(
+                    _sha256_bytes(
+                        _canonical_json_bytes(list(_browser_egress_verify_command(paths, binding)))
+                    )
+                )
             canonical_source = _source_binding_sha256(binding)
             if (
                 expected_action_sha256 not in canonical_actions

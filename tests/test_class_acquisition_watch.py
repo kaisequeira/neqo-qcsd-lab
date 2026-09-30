@@ -24,6 +24,50 @@ _REAL_VALIDATE_HOST_SOURCE = watch._validate_host_source
 _CANONICAL_RUNNER_ROOT = f"/lab/artifacts/{watch.STUDY_ID}-acquisition"
 
 
+def _mock_safe_user_runtime_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    uid = os.getuid()
+    runtime = Path(f"/run/user/{uid}")
+    metadata = {
+        Path("/run"): (stat.S_IFDIR | 0o755, 0),
+        Path("/run/user"): (stat.S_IFDIR | 0o755, 0),
+        runtime: (stat.S_IFDIR | 0o700, uid),
+        runtime / "bus": (stat.S_IFSOCK | 0o666, uid),
+    }
+    real_resolve = Path.resolve
+    real_stat = Path.stat
+    real_is_symlink = Path.is_symlink
+
+    def resolve(path: Path, strict: bool = False) -> Path:
+        return path if path in metadata else real_resolve(path, strict=strict)
+
+    def path_stat(path: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+        if path in metadata:
+            mode, owner = metadata[path]
+            return os.stat_result((mode, 1, 1, 1, owner, owner, 0, 0, 0, 0))
+        return real_stat(path, follow_symlinks=follow_symlinks)
+
+    def is_symlink(path: Path) -> bool:
+        return False if path in metadata else real_is_symlink(path)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+    monkeypatch.setattr(Path, "stat", path_stat)
+    monkeypatch.setattr(Path, "is_symlink", is_symlink)
+
+
+@pytest.fixture(autouse=True)
+def _unit_tests_without_user_systemd(monkeypatch: pytest.MonkeyPatch) -> None:
+    try:
+        watch._safe_host_environment()
+    except watch.WatchError as error:
+        if str(error) != "user-systemd runtime path is unavailable":
+            return
+        runtime = Path(f"/run/user/{os.getuid()}")
+        paths = (Path("/run"), Path("/run/user"), runtime, runtime / "bus")
+        if any(path.is_symlink() for path in paths):
+            return
+        _mock_safe_user_runtime_metadata(monkeypatch)
+
+
 def _canonical(value: Any) -> bytes:
     return (json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n").encode()
 
@@ -1455,7 +1499,8 @@ def _materialise_selection(
     _replace_checkpoint(acquisition, checkpoint)
 
 
-def _acquisition_only_authority(acquisition: Fixture) -> Path:
+def _acquisition_only_authority(acquisition: Fixture, *, schema_version: int = 1) -> Path:
+    assert schema_version in {1, 2}
     root = acquisition.paths.lab_root
     foundation = json.loads(acquisition.foundation_path.read_bytes())["payload"]
     provenance = json.loads(acquisition.paths.provenance.read_bytes())["payload"]
@@ -1478,18 +1523,24 @@ def _acquisition_only_authority(acquisition: Fixture) -> Path:
         "exit_code": 0, "stdout": "1 passed\n", "stdout_bytes": 9,
         "stdout_sha256": hashlib.sha256(b"1 passed\n").hexdigest(),
     }
-    evidence = {key: foundation["evidence"][key] for key in ("build_execution", "pinned_cdp_probe", "browser_egress_qualification")}
+    evidence_keys = ("build_execution", "pinned_cdp_probe")
+    if schema_version == 1:
+        evidence_keys += ("browser_egress_qualification",)
+    evidence = {key: foundation["evidence"][key] for key in evidence_keys}
     identity = foundation["build_execution_identity"]
-    browser = evidence["browser_egress_qualification"]
     gate_evidence = {
         "current-clean-source-and-no-cache-build": [identity["sha256"], identity["completion_sha256"]],
         "acquisition-focused-correctness": [hashlib.sha256(_canonical(correctness)).hexdigest()],
         "pinned-cdp-integration-probe": [evidence["pinned_cdp_probe"]["sha256"]],
-        "browser-egress-packet-qualification-110-of-110": [browser["sha256"], browser["payload_sha256"], browser["expanded_vectors_sha256"]],
     }
+    if schema_version == 1:
+        browser = evidence["browser_egress_qualification"]
+        gate_evidence["browser-egress-packet-qualification-110-of-110"] = [
+            browser["sha256"], browser["payload_sha256"], browser["expanded_vectors_sha256"]
+        ]
     payload = {
         **{key: foundation[key] for key in ("study_id", "cohort_version", "recorded_at", "promotion_authority", "implementation_scope", "paper_equivalent", "no_waivers", "source", "build_execution_identity")},
-        "attestation_schema_version": 1, "artifact_type": watch.ACQUISITION_AUTHORITY_TYPE,
+        "attestation_schema_version": schema_version, "artifact_type": watch.ACQUISITION_AUTHORITY_TYPE,
         "implementation_status": "acquisition-ready", "authority_scope": "public-page-acquisition-only",
         "prepare_source": provenance["source"], "study_contract": study, "evidence": evidence,
         "acquisition_correctness": correctness, "all_acquisition_gates_passed": True,
@@ -1520,6 +1571,82 @@ def test_acquisition_only_authority_verifies_without_execution_or_full_foundatio
     binding = watch._validate_immutable_binding(acquisition.paths)
     assert binding.acquisition_authority_sha256 == hashlib.sha256(path.read_bytes()).hexdigest()
     assert binding.foundation_sha256 is None
+
+
+def test_v2_acquisition_authority_starts_without_browser_qualification(
+    acquisition: Fixture,
+) -> None:
+    _acquisition_only_authority(acquisition, schema_version=2)
+    acquisition.browser_egress_final_path.unlink()
+    binding = watch._validate_immutable_binding(acquisition.paths)
+    assert binding.browser_egress_qualification is None
+    assert binding.browser_egress_tree_sha256 is None
+    assert watch.BROWSER_DEFERRED_SOURCE_BINDING_PREIMAGE_SCHEMA_VERSION == 4
+    v2_preimage = {
+        "browser_egress_qualification": None,
+        "browser_egress_tree_sha256": None,
+        "candidate_catalogue_sha256": binding.catalogue_sha256,
+        "build_completion_path": binding.build_completion_path,
+        "build_completion_sha256": binding.build_completion_sha256,
+        "build_execution_sha256": binding.build_execution_sha256,
+        "cohort_version": binding.cohort_version,
+        "foundation_sha256": None,
+        "acquisition_authority_path": binding.acquisition_authority_path,
+        "acquisition_authority_sha256": binding.acquisition_authority_sha256,
+        "pinned_cdp_contract_sha256": binding.pinned_cdp_contract_sha256,
+        "pinned_cdp_payload_sha256": binding.pinned_cdp_payload_sha256,
+        "pinned_cdp_sha256": binding.pinned_cdp_sha256,
+        "prepare_image": binding.prepare_image,
+        "provenance_sha256": binding.provenance_sha256,
+        "source": dict(binding.source),
+        "source_binding_preimage_schema_version": 4,
+    }
+    assert watch._source_binding_sha256(binding) == watch._sha256_bytes(
+        watch._canonical_json_bytes(v2_preimage)
+    )
+    with pytest.raises(watch.WatchError, match="not an acquisition v2 action"):
+        watch._browser_egress_verify_command(acquisition.paths, binding)
+
+    complete = _details(terminal=watch.CANDIDATE_COUNT)
+    _materialise_selection(acquisition, complete["selection"])
+    status = _result("acquisition-status", complete)
+    status["details"]["gate_verification"]["acquisition_authority_path"] = (
+        binding.acquisition_authority_path
+    )
+    runner = FakeRunner([_completed(status)])
+    watch.watch_acquisition(paths=acquisition.paths, runner=runner)
+    assert [call[0] for call in runner.calls] == [
+        watch._admission_command(acquisition.paths),
+        watch._status_command(acquisition.paths),
+    ]
+    assert not (acquisition.paths.acquisition_root / "completion.json").exists()
+
+
+@pytest.mark.parametrize(
+    "mutation", ("extra-browser", "missing-pinned", "extra-gate", "wrong-schema")
+)
+def test_v2_acquisition_authority_rejects_resealed_contract_drift(
+    acquisition: Fixture, mutation: str,
+) -> None:
+    path = _acquisition_only_authority(acquisition, schema_version=2)
+    payload = json.loads(path.read_bytes())["payload"]
+    if mutation == "extra-browser":
+        foundation = json.loads(acquisition.foundation_path.read_bytes())["payload"]
+        payload["evidence"]["browser_egress_qualification"] = foundation["evidence"][
+            "browser_egress_qualification"
+        ]
+    elif mutation == "missing-pinned":
+        del payload["evidence"]["pinned_cdp_probe"]
+    elif mutation == "extra-gate":
+        payload["hard_gates"].append(payload["hard_gates"][-1])
+    elif mutation == "wrong-schema":
+        payload["attestation_schema_version"] = True
+    _write_receipt(path, watch.ACQUISITION_AUTHORITY_TYPE, payload)
+    provenance = json.loads(acquisition.paths.provenance.read_bytes())["payload"]
+    provenance["acquisition_authority"]["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    _write_receipt(acquisition.paths.provenance, watch.PROVENANCE_TYPE, provenance)
+    with pytest.raises(watch.WatchError):
+        watch._validate_immutable_binding(acquisition.paths)
 
 
 @pytest.mark.parametrize("mutation", ("argv", "cwd", "exit", "stdout", "length", "input", "study", "gates", "scope", "prepare_source", "chronology"))
@@ -5018,7 +5145,10 @@ def test_heartbeat_rejects_subsecond_and_nonfinite_values(
         )
 
 
-def test_trusted_environment_ignores_shell_python_docker_and_home_overrides() -> None:
+def test_trusted_environment_ignores_shell_python_docker_and_home_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_safe_user_runtime_metadata(monkeypatch)
     environment = watch._safe_host_environment(
         {
             "PATH": "/tmp/attacker",
@@ -5662,6 +5792,15 @@ def test_watch_git_binding_rejects_redirected_submodule_gitdir(tmp_path: Path) -
         watch._expected_neqo_git_dir(paths)
 
 
+def _systemd_environment_or_skip() -> dict[str, str]:
+    try:
+        return watch._safe_host_environment()
+    except watch.WatchError as error:
+        if str(error) != "user-systemd runtime path is unavailable":
+            raise
+        pytest.skip(f"user systemd is unavailable: {error}")
+
+
 def _scope_inventory(state_root: Path | None = None) -> tuple[set[Path], set[str]]:
     roots = set(state_root.glob("scope.*")) if state_root is not None else set()
     completed = subprocess.run(
@@ -5680,7 +5819,7 @@ def _scope_inventory(state_root: Path | None = None) -> tuple[set[Path], set[str
         text=True,
         check=False,
         timeout=5,
-        env=watch._safe_host_environment(),
+        env=_systemd_environment_or_skip(),
     )
     if completed.returncode != 0:
         pytest.skip("user systemd is unavailable")
@@ -5688,14 +5827,17 @@ def _scope_inventory(state_root: Path | None = None) -> tuple[set[Path], set[str
     return roots, units
 
 
-def _force_remove_test_scope_root(root: Path, *, state_root: Path) -> None:
+def _force_remove_test_scope_root(
+    root: Path, *, state_root: Path, never_launched: bool = False
+) -> None:
     """Remove a test-owned inert fixture, including deliberately corrupt records."""
     assert root.parent == state_root
     token = root.name.rsplit(".", 1)[-1]
     assert re.fullmatch(r"[0-9a-f]{32}", token)
-    assert watch._wait_scope_absent(
-        f"qcsd-class-watch-{token}.scope", watch._safe_host_environment()
-    )
+    if not never_launched:
+        assert watch._wait_scope_absent(
+            f"qcsd-class-watch-{token}.scope", watch._safe_host_environment()
+        )
     for child in root.iterdir():
         assert child.is_file() and not child.is_symlink()
         child.unlink()
@@ -5875,7 +6017,7 @@ def test_scope_record_and_request_require_exact_integer_schemas(
             watch._read_scope_request(root, record=supervision, required=True)
     finally:
         os.close(birth_lock_fd)
-        _force_remove_test_scope_root(root, state_root=state_root)
+        _force_remove_test_scope_root(root, state_root=state_root, never_launched=True)
         os.close(descriptor)
 
 
@@ -6788,7 +6930,24 @@ def test_scope_state_fails_closed_when_kernel_cgroup_is_unreadable(
         ),
     )
     with pytest.raises(watch.WatchError, match="kernel path is unavailable"):
-        watch._scope_state(unit, watch._safe_host_environment())
+        watch._scope_state(unit, {})
+
+
+def _fixed_cli_test_environment() -> dict[str, str]:
+    """Use fixed inputs for CLI rejection tests that never reach user systemd."""
+    return {
+        "PATH": "/usr/bin:/bin",
+        "HOME": "/nonexistent",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "TZ": "UTC",
+        "PYTHONNOUSERSITE": "1",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_OPTIONAL_LOCKS": "0",
+        "DOCKER_CONTEXT": "default",
+    }
 
 
 def test_qcsd_admission_rejects_extra_arguments_before_docker() -> None:
@@ -6801,7 +6960,7 @@ def test_qcsd_admission_rejects_extra_arguments_before_docker() -> None:
             "unexpected",
         ),
         cwd=root,
-        env=watch._safe_host_environment(),
+        env=_fixed_cli_test_environment(),
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -6825,7 +6984,7 @@ def test_qcsd_admission_requires_complete_scope_authority_before_docker(
     marker = tmp_path / "docker-was-called"
     docker.write_text(f"#!/bin/sh\n: > {marker}\nexit 97\n", encoding="utf-8")
     docker.chmod(0o755)
-    environment = watch._safe_host_environment()
+    environment = _fixed_cli_test_environment()
     environment["PATH"] = f"{fake_bin}:/usr/bin:/bin"
     if omitted != "all":
         environment.update(
@@ -6874,7 +7033,7 @@ def test_qcsd_rejects_cross_action_scope_digest_before_recovery_or_docker(
     replayed_digest = watch._sha256_bytes(
         watch._canonical_json_bytes(list(watch._status_command(paths)))
     )
-    environment = watch._safe_host_environment()
+    environment = _fixed_cli_test_environment()
     environment["PATH"] = f"{fake_bin}:/usr/bin:/bin"
     environment.update(
         {
@@ -6932,7 +7091,7 @@ def test_direct_qcsd_acquisition_action_has_no_watcher_authority_before_docker(
     marker = tmp_path / "docker-was-called"
     docker.write_text(f"#!/bin/sh\n: > {marker}\nexit 97\n", encoding="utf-8")
     docker.chmod(0o755)
-    environment = watch._safe_host_environment()
+    environment = _fixed_cli_test_environment()
     environment["PATH"] = f"{fake_bin}:/usr/bin:/bin"
 
     completed = subprocess.run(
@@ -6969,7 +7128,7 @@ def test_direct_qcsd_rejects_unbounded_acquisition_batch_before_authority_or_doc
     docker = fake_bin / "docker"
     docker.write_text(f"#!/bin/sh\n: > {marker}\nexit 97\n", encoding="utf-8")
     docker.chmod(0o755)
-    environment = watch._safe_host_environment()
+    environment = _fixed_cli_test_environment()
     environment["PATH"] = f"{fake_bin}:/usr/bin:/bin"
 
     completed = subprocess.run(
@@ -7088,6 +7247,7 @@ def test_acquisition_run_has_nested_truthful_action_deadlines() -> None:
 def test_scope_teardown_crash_boundaries_are_restart_recoverable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault_label: str
 ) -> None:
+    _scope_inventory()
     state_root, descriptor = _scope_test_state(tmp_path)
     root, supervision, birth_fd = watch._create_scope_root(
         state_root=state_root,
@@ -7260,5 +7420,5 @@ def test_recorded_watch_lock_holder_must_be_exact_supervisor(
         other.terminate()
         other.wait(timeout=5)
         os.close(birth_fd)
-        _force_remove_test_scope_root(root, state_root=state_root)
+        _force_remove_test_scope_root(root, state_root=state_root, never_launched=True)
         os.close(descriptor)

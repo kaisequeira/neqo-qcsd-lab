@@ -114,6 +114,7 @@ COMPARISON_REVIEW_RECEIPT_TYPE = "qcsd-class-study-comparison-review"
 QUALIFICATION_AUTHORITY_TYPE = "qcsd-class-study-qualification-authority"
 ACQUISITION_AUTHORITY_RECEIPT_TYPE = "qcsd-class-study-acquisition-authority"
 ACQUISITION_AUTHORITY_SCHEMA_VERSION = 1
+FAST_ACQUISITION_AUTHORITY_SCHEMA_VERSION = 2
 _CLASS_STUDY_FOUNDATION_INPUT = "inputs/class-study-foundation.json"
 _CLASS_STUDY_READINESS_INPUT = "inputs/class-study-readiness.json"
 _CLASS_STUDY_HISTORICAL_PRE_INPUT = "inputs/class-study-historical-pre-snapshot.json"
@@ -185,6 +186,7 @@ _ACQUISITION_AUTHORITY_GATES = (
     "pinned-cdp-integration-probe",
     _BROWSER_EGRESS_GATE,
 )
+_FAST_ACQUISITION_AUTHORITY_GATES = _ACQUISITION_AUTHORITY_GATES[:-1]
 # This explicit creation-time gate covers acquisition and its evidence boundary.
 # It deliberately excludes defence fitting, evaluation and the full Lab suite.
 _V96_ACQUISITION_CORRECTNESS_TESTS = (
@@ -329,25 +331,29 @@ def create_class_acquisition_authority(
     cohort_version: int,
     build_execution_receipt: Path,
     pinned_cdp_receipt: Path,
-    browser_egress_qualification_root: Path,
+    browser_egress_qualification_root: Path | None = None,
 ) -> Path:
     """Run focused acquisition tests once and seal acquisition-only authority.
 
     This is an explicit execution operation. Validation of the resulting
     receipt is read-only and never repeats the test command. The full defence
-    foundation is neither an input nor a substitute for this authority.
+    foundation is neither an input nor a substitute for this authority. Omitting
+    browser qualification selects schema 2; that gate remains required by the
+    later full foundation before fitting or formal capture.
     """
 
+    protected_inputs = [
+        build_execution_receipt,
+        pinned_cdp_receipt,
+        LAB_ROOT / "config",
+        LAB_ROOT / "src",
+        LAB_ROOT / "tests",
+    ]
+    if browser_egress_qualification_root is not None:
+        protected_inputs.append(browser_egress_qualification_root)
     destination = require_disjoint_path(
         destination,
-        [
-            build_execution_receipt,
-            pinned_cdp_receipt,
-            browser_egress_qualification_root,
-            LAB_ROOT / "config",
-            LAB_ROOT / "src",
-            LAB_ROOT / "tests",
-        ],
+        protected_inputs,
         label="class acquisition authority destination",
     )
     if destination.exists() or destination.is_symlink():
@@ -386,7 +392,8 @@ def validate_class_acquisition_authority(
     """Reconstruct acquisition-only evidence without executing tests.
 
     Historical validation is limited to the frozen v96 and v127 contracts and
-    is verification-only.  The default remains current admission, and there is
+    is verification-only. Schemas 1 and 2 remain distinct current contracts;
+    schema 2 defers browser qualification to the later foundation. There is
     no full-foundation fallback.  A concrete role chooses which exact image
     from the same pinned build must be running; ``None`` is reserved for
     runtime-independent reconstruction of current evidence and does not enable
@@ -396,17 +403,22 @@ def validate_class_acquisition_authority(
     receipt_path, value, payload = _load_bound_receipt(
         path, expected_type=ACQUISITION_AUTHORITY_RECEIPT_TYPE
     )
+    schema = payload.get("attestation_schema_version")
     if (
-        type(payload.get("attestation_schema_version")) is not int
-        or payload["attestation_schema_version"] != ACQUISITION_AUTHORITY_SCHEMA_VERSION
+        type(schema) is not int
+        or schema not in {
+            ACQUISITION_AUTHORITY_SCHEMA_VERSION,
+            FAST_ACQUISITION_AUTHORITY_SCHEMA_VERSION,
+        }
         or payload.get("artifact_type") != ACQUISITION_AUTHORITY_RECEIPT_TYPE
         or payload.get("study_id") != STUDY_ID
     ):
         raise ValueError("class acquisition authority schema or study is invalid")
     evidence = payload.get("evidence")
-    if not isinstance(evidence, Mapping) or set(evidence) != {
-        "build_execution", "pinned_cdp_probe", "browser_egress_qualification"
-    }:
+    expected_evidence = {"build_execution", "pinned_cdp_probe"}
+    if schema == ACQUISITION_AUTHORITY_SCHEMA_VERSION:
+        expected_evidence.add("browser_egress_qualification")
+    if not isinstance(evidence, Mapping) or set(evidence) != expected_evidence:
         raise ValueError("class acquisition authority evidence inventory is invalid")
     context = _acquisition_authority_context(
         cohort_version=payload.get("cohort_version"),
@@ -416,8 +428,9 @@ def validate_class_acquisition_authority(
         pinned_cdp_receipt=_pinned_cdp_path_from_binding(
             evidence["pinned_cdp_probe"], allow_historical=allow_historical
         ),
-        browser_egress_qualification_root=_browser_egress_root_from_binding(
-            evidence["browser_egress_qualification"]
+        browser_egress_qualification_root=(
+            _browser_egress_root_from_binding(evidence["browser_egress_qualification"])
+            if schema == ACQUISITION_AUTHORITY_SCHEMA_VERSION else None
         ),
         evidence_source=payload.get("source"),
         runtime_role=runtime_role,
@@ -429,6 +442,8 @@ def validate_class_acquisition_authority(
         and sha256_file(receipt_path) != _V127_ACQUISITION_AUTHORITY_SHA256
     ):
         raise ValueError("historical v127 acquisition authority is not the exact frozen receipt")
+    if schema != context["authority_schema_version"]:
+        raise ValueError("class acquisition authority evidence differs from its schema")
     expected = _acquisition_authority_value(
         context,
         correctness=payload.get("acquisition_correctness"),
@@ -436,17 +451,24 @@ def validate_class_acquisition_authority(
     )
     if payload != expected:
         raise ValueError("class acquisition authority differs from reconstructed evidence")
+    summary = {
+        "browser_egress_vectors": (
+            BROWSER_EGRESS_VECTOR_COUNT
+            if schema == ACQUISITION_AUTHORITY_SCHEMA_VERSION else 0
+        ),
+        "acquisition_focused_correctness": "pass",
+        "pinned_cdp_probe": "pass",
+        "browser_egress_packet_qualification": (
+            "pass" if schema == ACQUISITION_AUTHORITY_SCHEMA_VERSION
+            else "deferred-to-foundation"
+        ),
+    }
     result = {
         "path": str(receipt_path),
         "sha256": sha256_file(receipt_path),
         "payload_sha256": value["payload_sha256"],
         **expected,
-        "summary": {
-            "browser_egress_vectors": BROWSER_EGRESS_VECTOR_COUNT,
-            "acquisition_focused_correctness": "pass",
-            "pinned_cdp_probe": "pass",
-            "browser_egress_packet_qualification": "pass",
-        },
+        "summary": summary,
     }
     if context["historical"]:
         result["verification_status"] = "historical-verify-only"
@@ -540,7 +562,7 @@ def _acquisition_authority_context(
     cohort_version: int,
     build_execution_receipt: Path,
     pinned_cdp_receipt: Path,
-    browser_egress_qualification_root: Path,
+    browser_egress_qualification_root: Path | None,
     evidence_source: object,
     runtime_role: str | None,
     recorded_study_contract: object | None = None,
@@ -607,14 +629,18 @@ def _acquisition_authority_context(
         and source_metadata() != (prepare_source if runtime_role == "prepare" else source)
     ):
         raise ValueError("class acquisition authority runtime differs from its pinned build")
-    browser = _validate_browser_egress_qualification(
-        browser_egress_qualification_root,
-        cohort_version=cohort_version,
-        build=build,
-        allow_historical=False,
-        allow_v96_historical_source_replay=historical_v96,
-        allow_v127_historical_source_replay=historical_v127,
-    )
+    browser = None
+    if browser_egress_qualification_root is not None:
+        browser = _validate_browser_egress_qualification(
+            browser_egress_qualification_root,
+            cohort_version=cohort_version,
+            build=build,
+            allow_historical=False,
+            allow_v96_historical_source_replay=historical_v96,
+            allow_v127_historical_source_replay=historical_v127,
+        )
+    if historical and browser is None:
+        raise ValueError("historical acquisition authority requires browser evidence")
     if historical_v127 and browser["sha256"] != _V127_BROWSER_EGRESS_SHA256:
         raise ValueError("historical v127 browser qualification binding differs")
     study_contract = (
@@ -628,19 +654,25 @@ def _acquisition_authority_context(
     )
     if historical_v96 and recorded_study_contract != _V96_STUDY_CONTRACT:
         raise ValueError("historical class acquisition authority study contract is invalid")
+    evidence = {
+        "build_execution": _file_binding(build_execution_receipt),
+        "pinned_cdp_probe": _pinned_cdp_binding(pinned),
+    }
+    if browser is not None:
+        evidence["browser_egress_qualification"] = _browser_egress_binding(
+            browser, browser_egress_qualification_root
+        )
     return {
+        "authority_schema_version": (
+            ACQUISITION_AUTHORITY_SCHEMA_VERSION
+            if browser is not None else FAST_ACQUISITION_AUTHORITY_SCHEMA_VERSION
+        ),
         "cohort_version": cohort_version,
         "source": source,
         "prepare_source": prepare_source,
         "build_execution_identity": identity,
         "study_contract": dict(study_contract),
-        "evidence": {
-            "build_execution": _file_binding(build_execution_receipt),
-            "pinned_cdp_probe": _pinned_cdp_binding(pinned),
-            "browser_egress_qualification": _browser_egress_binding(
-                browser, browser_egress_qualification_root
-            ),
-        },
+        "evidence": evidence,
         "build_finished_at": build["finished_at"],
         "pinned_recorded_at": pinned["recorded_at"],
         "historical": historical,
@@ -693,6 +725,12 @@ def _run_acquisition_correctness(context: Mapping[str, Any]) -> dict[str, Any]:
 def _acquisition_authority_value(
     context: Mapping[str, Any], *, correctness: object, recorded_at: object
 ) -> dict[str, Any]:
+    schema = context.get("authority_schema_version", ACQUISITION_AUTHORITY_SCHEMA_VERSION)
+    if schema not in {
+        ACQUISITION_AUTHORITY_SCHEMA_VERSION,
+        FAST_ACQUISITION_AUTHORITY_SCHEMA_VERSION,
+    }:
+        raise ValueError("class acquisition authority schema is invalid")
     spec = (
         _V96_ACQUISITION_CORRECTNESS_SPEC
         if context.get("historical") is True and context.get("historical_v127") is not True
@@ -734,16 +772,20 @@ def _acquisition_authority_value(
     pinned_recorded = _aware_timestamp(
         context["pinned_recorded_at"], label="acquisition pinned CDP"
     )
-    browser = context["evidence"]["browser_egress_qualification"]
-    browser_start = _aware_timestamp(browser["qualification_started_at"], label="browser start")
-    browser_finish = _aware_timestamp(browser["qualification_finished_at"], label="browser finish")
-    browser_recorded = _aware_timestamp(browser["recorded_at"], label="browser receipt")
-    if not (
-        build_finished <= pinned_recorded <= started <= finished <= recorded
-        and build_finished <= browser_start <= browser_finish <= browser_recorded <= started
-    ):
+    if not build_finished <= pinned_recorded <= started <= finished <= recorded:
         raise ValueError("class acquisition authority gate timestamps are inconsistent")
     evidence = dict(context["evidence"])
+    browser = evidence.get("browser_egress_qualification")
+    if schema == ACQUISITION_AUTHORITY_SCHEMA_VERSION:
+        if not isinstance(browser, Mapping):
+            raise ValueError("class acquisition authority browser evidence is missing")
+        browser_start = _aware_timestamp(browser["qualification_started_at"], label="browser start")
+        browser_finish = _aware_timestamp(browser["qualification_finished_at"], label="browser finish")
+        browser_recorded = _aware_timestamp(browser["recorded_at"], label="browser receipt")
+        if not build_finished <= browser_start <= browser_finish <= browser_recorded <= started:
+            raise ValueError("class acquisition authority browser chronology is inconsistent")
+    elif browser is not None:
+        raise ValueError("fast acquisition authority cannot claim browser evidence")
     identity = context["build_execution_identity"]
     gate_evidence = {
         "current-clean-source-and-no-cache-build": [
@@ -751,12 +793,13 @@ def _acquisition_authority_value(
         ],
         "acquisition-focused-correctness": [canonical_json_sha256(correctness)],
         "pinned-cdp-integration-probe": [evidence["pinned_cdp_probe"]["sha256"]],
-        _BROWSER_EGRESS_GATE: [
-            browser["sha256"], browser["payload_sha256"], browser["expanded_vectors_sha256"]
-        ],
     }
+    if browser is not None:
+        gate_evidence[_BROWSER_EGRESS_GATE] = [
+            browser["sha256"], browser["payload_sha256"], browser["expanded_vectors_sha256"]
+        ]
     return {
-        "attestation_schema_version": ACQUISITION_AUTHORITY_SCHEMA_VERSION,
+        "attestation_schema_version": schema,
         "artifact_type": ACQUISITION_AUTHORITY_RECEIPT_TYPE,
         "study_id": STUDY_ID,
         "cohort_version": context["cohort_version"],
@@ -773,7 +816,12 @@ def _acquisition_authority_value(
         "study_contract": dict(context["study_contract"]),
         "evidence": evidence,
         "acquisition_correctness": dict(correctness),
-        "hard_gates": _hard_gate_records(_ACQUISITION_AUTHORITY_GATES, gate_evidence),
+        "hard_gates": _hard_gate_records(
+            _ACQUISITION_AUTHORITY_GATES
+            if schema == ACQUISITION_AUTHORITY_SCHEMA_VERSION
+            else _FAST_ACQUISITION_AUTHORITY_GATES,
+            gate_evidence,
+        ),
         "all_acquisition_gates_passed": True,
     }
 
@@ -3680,7 +3728,8 @@ def _validate_acquisition_foundation_join(
     This cannot construct or replace full-foundation authority: the caller has
     already reconstructed every defence gate. Acquisition may precede that
     foundation only when its own current authority proves the exact same
-    source/build, browser evidence and frozen acquisition protocol.
+    source/build and frozen acquisition protocol. Schema 1 also binds the
+    browser evidence; schema 2 defers that proof to the full foundation.
     """
 
     foundation_binding = _file_binding(foundation_attestation)
@@ -3708,6 +3757,9 @@ def _validate_acquisition_foundation_join(
             foundation_evidence = foundation.get("evidence")
             if not isinstance(foundation_evidence, Mapping):
                 raise ValueError("class acquisition join has no full-foundation evidence")
+            shared_evidence_keys = ("build_execution", "pinned_cdp_probe")
+            if authority["attestation_schema_version"] == ACQUISITION_AUTHORITY_SCHEMA_VERSION:
+                shared_evidence_keys += ("browser_egress_qualification",)
             if (
                 authority["source"] != foundation.get("source")
                 or authority["build_execution_identity"]
@@ -3715,10 +3767,7 @@ def _validate_acquisition_foundation_join(
                 or authority["study_contract"]
                 != _file_binding(LAB_ROOT / "config/class-study/v1/study.json")
                 or authority["evidence"] != {
-                    key: foundation_evidence.get(key)
-                    for key in (
-                        "build_execution", "pinned_cdp_probe", "browser_egress_qualification"
-                    )
+                    key: foundation_evidence.get(key) for key in shared_evidence_keys
                 }
             ):
                 raise ValueError("class acquisition authority differs from full foundation")

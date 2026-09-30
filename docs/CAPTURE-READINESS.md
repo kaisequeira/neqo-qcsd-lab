@@ -1,6 +1,6 @@
 # Evidence required to begin class-study capture
 
-Status: 29 September 2026, Australia/Sydney. This is an evidence map and
+Status: 30 September 2026, Australia/Sydney. This is an evidence map and
 decision record for the extended class study. The executable rules are the
 checked-in [study contract](../config/class-study/v1/study.json), the validators
 in [class attestation](../src/qcsd_lab/class_attestation.py) and
@@ -42,17 +42,22 @@ HTTP/3 servers. See [methodology](../METHODOLOGY.md) and the
    images and verify the build/completion receipts. The image, source, Rust
    commit, study contract and cohort must agree. Host tests alone are not a
    collection-image or source-bound gate.
-2. Verify the pinned CDP integration receipt and the final packet-observed
-   browser-egress receipt for **110 of 110 vectors**, zero operational and
-   semantic failures. The final receipt and its closed vector inventory,
-   rather than a passing prefix or service-journal line, establish the gate.
-3. Produce the authority for the intended role. Acquisition authority has four
-   reconstructed hard gates: current clean source/no-cache build,
-   acquisition-focused correctness, pinned CDP and complete browser egress.
-   The full foundation adds independent reference conformance, the complete
-   code gate (including its timing-stress dependencies), 18 of 18 nine-mode
-   regression samples and 160 of 160 controlled qualification samples. It
-   binds the same build, source, contract, CDP and browser evidence. Acquisition
+2. Verify the pinned CDP integration receipt. Under the prospective schema-2
+   path, run the acquisition-focused correctness suite in the registered image
+   and produce acquisition authority from three reconstructed hard gates:
+   current clean source/no-cache build, acquisition correctness and pinned
+   CDP. Independently verify that authority before public acquisition. The
+   existing schema-1 path remains valid when the complete browser-egress gate
+   is run first and supplied as its fourth acquisition-authority gate.
+3. Before any fitting or class-study capture, verify the final packet-observed
+   browser-egress receipt for **110 of 110 vectors**, with zero operational or
+   semantic failures, on the same source/build lineage. Its final receipt and
+   closed vector inventory, rather than a passing prefix or service-journal
+   line, establish the gate. The full foundation also needs independent
+   reference conformance, the complete code gate (including its timing-stress
+   dependencies), 18 of 18 nine-mode regression samples and 160 of 160
+   controlled qualification samples. It binds the same source, build,
+   acquisition and CDP lineage plus that browser receipt. Acquisition
    authority permits public acquisition only; it cannot authorize fitting.
 4. Independently verify the authority and every cited immutable receipt. Later
    acquisition, fitting, campaign, readiness and result receipts carry exact
@@ -166,9 +171,10 @@ Only then is the pilot cohort available to the fitting campaigns. The
 ## Defense foundation, pilot and final cohort
 
 The **full foundation must verify before any class-study capture role**, even
-undefended pilot fitting. It needs the same current source/build/CDP/browser
-lineage as acquisition, plus reference, code, regression and controlled-gate
-evidence described above. The independent BuFLO timing stress consists of 12
+undefended pilot fitting. It needs the same current source/build/acquisition/
+CDP lineage, a same-source 110-vector browser receipt, and reference, code,
+regression and controlled-gate evidence described above. The independent
+BuFLO timing stress consists of 12
 first-launch complex two-origin visits in the code-gate chain. A current
 acquisition-only authority cannot stand in for this foundation. The foundation
 receipt and each result's frozen `inputs/class-study-foundation.json` must
@@ -260,7 +266,7 @@ evaluation, paper comparison and final attestation remain necessary for the
 thesis's validation claim. The temporal split is blocks 1–8 training, block 9
 validation and block 10 held-out test. No block-ten tuning is permitted.
 
-## Current blocker and what v129 actually proves
+## Current blocker and what v129–v130 actually prove
 
 On source commit `cd5dd7d2a7c711f819a342046c191a3d80a5c3c9` with Rust
 Gitlink `e8575fd8e54921ed6ff867de475b4a734064866e`, v129's build, pinned
@@ -279,12 +285,25 @@ internal redirect-dependency error. A standalone v129-image diagnostic passed
 a `cloudflare-quic.com` Neqo control (`known_valid=true`) while
 `consultant.ru` and `www.consultant.ru` each returned `Error: Timeout(12)`
 on the default Docker bridge. That diagnostic has no formal receipt and cannot
-reclassify the v129 checkpoint. The redirect fix and prospective schema-11
-screen need a fresh source-bound build, pinned CDP, 110-vector browser gate and
-acquisition authority in the allocator's next unused cohort. No acquisition
-or formal sample has been accepted. Local evidence paths in this section are
-intentionally code paths; local artifacts are not guaranteed to exist in
-another clone.
+reclassify the v129 checkpoint. V130 then passed a no-cache build, pinned CDP
+probe and the full 110-vector browser gate on its bound source, but its
+acquisition-authority correctness suite failed (1,885 passed, 93 failed, 6
+skipped). No v130 authority was issued. A bounded v130-image live diagnostic
+encountered a root CDP `InvalidInterceptionId` on `consultant.ru`; for
+`elmundo.es`, navigation selected a page but the schema-11 HTTP/3 screen
+rejected both primary origins after two classified 12-second timeouts each,
+with passing controls. These diagnostic observations are non-evidentiary and
+cannot reclassify either cohort or count toward accepted acquisition.
+
+The source fix and prospective schema-2 authority need the allocator's next
+unused cohort, fresh no-cache build, pinned CDP and acquisition correctness
+before public acquisition. The 110-vector browser gate can follow acquisition
+on that **same source/build** but must verify before full foundation, fitting
+or capture. Schema 1 still requires browser qualification before its
+four-gate acquisition authority. V130's failed authority and diagnostic
+advanced no pilot, certification or formal count. Local evidence paths in
+this section are intentionally code paths; local artifacts are not guaranteed
+to exist in another clone.
 
 The versioned acquisition checkpoint alone does not isolate every publication
 path. Stability receipts under `artifacts/<study>-stability/` and admitted
@@ -372,10 +391,16 @@ implementation and evidence; none is an implicit waiver:
    ownership, with global cooldown and deterministic verification. It is a
    separate engineering change, not a Docker launch flag.
 
-The current execution sequence is: freeze the prospective short-horizon
-contract; qualify it on a fresh source-bound cohort; acquire the frozen
-population; complete the registered fitting and compatibility matrix; verify
-readiness and historical pre-snapshot; then run and seal block pairs
+The prospective schema-2 execution sequence is: freeze the amended source and
+contract; verify a fresh no-cache build, pinned CDP, acquisition correctness
+and acquisition authority; acquire the frozen population; then complete the
+same-source 110-vector browser gate and full foundation before fitting or
+capture. The observed v130 build took 1h07m and its CDP receipt followed
+about 8 minutes later; allow additional tens of minutes for correctness and
+verification before acquisition can start. The observed full browser gate
+took 7h47m and remains mandatory later. After foundation, complete the
+registered fitting and compatibility matrix; verify readiness and historical
+pre-snapshot; then run and seal block pairs
 continuously while measuring accepted cells per day. Keep every relaxation
 visible in the methods and limitations, preserving complete multi-origin
 graphs, disjoint training/certification/formal roles, and all failed evidence.

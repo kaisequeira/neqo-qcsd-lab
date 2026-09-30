@@ -130,7 +130,7 @@ def _use_authority(fixture) -> None:
     )
 
 
-def test_authority_creation_needs_only_build_cdp_and_egress(authority_fixture) -> None:
+def test_authority_creation_accepts_build_cdp_and_egress(authority_fixture) -> None:
     fixture = authority_fixture
     assert _resolve(
         fixture,
@@ -138,6 +138,16 @@ def test_authority_creation_needs_only_build_cdp_and_egress(authority_fixture) -
         build=fixture.build,
         pinned_cdp=fixture.pinned,
         browser_egress=fixture.browser,
+    ) == fixture.admitted
+
+
+def test_authority_creation_accepts_build_and_cdp_without_browser(authority_fixture) -> None:
+    fixture = authority_fixture
+    assert _resolve(
+        fixture,
+        "acquisition-authority",
+        build=fixture.build,
+        pinned_cdp=fixture.pinned,
     ) == fixture.admitted
 
 
@@ -272,13 +282,46 @@ def test_browser_final_envelope_must_bind_the_exact_foundation(authority_fixture
                  pinned_cdp=fixture.pinned, browser_egress=fixture.browser)
 
 
-@pytest.mark.parametrize("missing", ("build", "pinned_cdp", "browser_egress"))
-def test_authority_creation_requires_all_three_inputs(authority_fixture, missing: str) -> None:
+@pytest.mark.parametrize("missing", ("build", "pinned_cdp"))
+def test_authority_creation_requires_build_and_pinned_cdp(authority_fixture, missing: str) -> None:
     fixture = authority_fixture
     options = dict(build=fixture.build, pinned_cdp=fixture.pinned, browser_egress=fixture.browser)
     del options[missing]
     with pytest.raises(ValueError, match="requires"):
         _resolve(fixture, "acquisition-authority", **options)
+
+
+def test_v2_authority_admits_acquisition_without_browser_evidence(authority_fixture) -> None:
+    fixture = authority_fixture
+
+    def make_v2(payload) -> None:
+        payload["attestation_schema_version"] = 2
+        payload["evidence"].pop("browser_egress_qualification")
+
+    _rewrite(fixture.authority, make_v2)
+    (fixture.browser / "final.json").unlink()
+    assert _resolve(
+        fixture, "acquisition-init", acquisition_authority=fixture.authority
+    ) == fixture.admitted
+    _use_authority(fixture)
+    assert _resolve(
+        fixture, "acquisition-run", acquisition_root=fixture.acquisition
+    ) == fixture.admitted
+
+
+@pytest.mark.parametrize("extra", ("browser_egress_qualification", "unknown"))
+def test_v2_authority_rejects_browser_or_unknown_evidence(authority_fixture, extra: str) -> None:
+    fixture = authority_fixture
+
+    def make_v2_with_extra(payload) -> None:
+        payload["attestation_schema_version"] = 2
+        if extra == "unknown":
+            payload["evidence"].pop("browser_egress_qualification")
+            payload["evidence"]["unknown"] = "unexpected"
+
+    _rewrite(fixture.authority, make_v2_with_extra)
+    with pytest.raises(ValueError, match="v2 evidence inventory"):
+        _resolve(fixture, "acquisition-init", acquisition_authority=fixture.authority)
 
 
 @pytest.mark.parametrize("action", ("acquisition-init", "status"))

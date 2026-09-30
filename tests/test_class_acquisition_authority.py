@@ -315,6 +315,29 @@ def test_creation_runs_only_focused_gate_once_and_verification_is_read_only(
     ).hexdigest()
 
 
+def test_fast_authority_defers_browser_until_full_foundation(
+    acquisition_evidence: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = acquisition_evidence
+    state["inputs"].pop("browser_egress_qualification_root")
+    path = _create(state)
+    assert state["calls"] == ["build", "pinned", "tests", "build", "pinned"]
+
+    monkeypatch.setattr(
+        authority.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("verification executed tests"),
+    )
+    result = authority.validate_class_acquisition_authority(path)
+    assert result["attestation_schema_version"] == 2
+    assert set(result["evidence"]) == {"build_execution", "pinned_cdp_probe"}
+    assert [gate["gate"] for gate in result["hard_gates"]] == list(
+        authority._FAST_ACQUISITION_AUTHORITY_GATES
+    )
+    assert result["summary"]["browser_egress_packet_qualification"] == "deferred-to-foundation"
+    assert result["promotion_authority"] is False
+
+
 def test_v96_authority_reconstructs_only_in_explicit_historical_verification(
     acquisition_evidence: dict[str, Any],
 ) -> None:
@@ -726,6 +749,38 @@ def test_readiness_join_accepts_prior_acquisition_but_requires_same_full_foundat
         provenance, foundation=foundation, foundation_attestation=foundation_path
     )
     foundation["source"] = {**foundation["source"], "lab_commit": "e" * 40}
+    with pytest.raises(ValueError, match="differs from full foundation"):
+        authority._validate_acquisition_foundation_join(
+            provenance, foundation=foundation, foundation_attestation=foundation_path
+        )
+
+
+def test_fast_acquisition_join_requires_same_build_and_pinned_proof(
+    acquisition_evidence: dict[str, Any]
+) -> None:
+    state = acquisition_evidence
+    state["inputs"].pop("browser_egress_qualification_root")
+    path = _create(state)
+    result = authority.validate_class_acquisition_authority(path)
+    foundation_path = authority.LAB_ROOT / "foundation-fast.json"
+    foundation_path.write_bytes(b"full foundation independently verified\n")
+    foundation = {
+        "source": result["source"],
+        "build_execution_identity": result["build_execution_identity"],
+        "evidence": {
+            **result["evidence"],
+            "browser_egress_qualification": {"sha256": "a" * 64},
+        },
+    }
+    provenance = {
+        "acquisition_schema_version": authority.ACQUISITION_SCHEMA_VERSION,
+        "acquisition_authority": {"path": str(path), "sha256": sha256_file(path)},
+        "started_at": result["recorded_at"],
+    }
+    authority._validate_acquisition_foundation_join(
+        provenance, foundation=foundation, foundation_attestation=foundation_path
+    )
+    foundation["evidence"]["pinned_cdp_probe"] = {"sha256": "b" * 64}
     with pytest.raises(ValueError, match="differs from full foundation"):
         authority._validate_acquisition_foundation_join(
             provenance, foundation=foundation, foundation_attestation=foundation_path

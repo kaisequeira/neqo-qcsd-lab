@@ -896,10 +896,11 @@ class _Resolver:
             raise _HistoricalAuthority("v127 class acquisition authority is verify-only")
         evidence = payload.get("evidence")
         cohort = payload.get("cohort_version")
+        schema = payload.get("attestation_schema_version")
         if (
             payload.get("artifact_type") != _ACQUISITION_AUTHORITY
-            or type(payload.get("attestation_schema_version")) is not int
-            or payload.get("attestation_schema_version") != 1
+            or type(schema) is not int
+            or schema not in {1, 2}
             or payload.get("authority_scope") != "public-page-acquisition-only"
             or payload.get("promotion_authority") is not False
             or payload.get("no_waivers") is not True
@@ -908,6 +909,8 @@ class _Resolver:
             or not isinstance(evidence, Mapping)
         ):
             raise ValueError("class acquisition authority is not current acquisition-only proof")
+        if schema == 2 and set(evidence) != {"build_execution", "pinned_cdp_probe"}:
+            raise ValueError("class acquisition authority v2 evidence inventory is invalid")
         build = self.build(
             _bound_file(self.root, evidence.get("build_execution"), label="acquisition build"),
             expected_cohort=cohort,
@@ -932,27 +935,30 @@ class _Resolver:
             or correctness.get("study_contract") != payload.get("study_contract")
         ):
             raise ValueError("acquisition correctness proof differs from its current build")
-        # The image validator reconstructs the complete correctness command/log
-        # and 110-vector packet evidence; this host boundary resolves their build.
-        return _require_same_build(
-            (
-                build,
-                self.pinned_cdp(
-                    _bound_file(
-                        self.root,
-                        evidence.get("pinned_cdp_probe"),
-                        label="acquisition pinned CDP probe",
-                    )
-                ),
+        # The image validator reconstructs the correctness command and log.
+        # Browser qualification remains bound here for schema 1; schema 2
+        # defers it to the later full foundation.
+        linked = [
+            build,
+            self.pinned_cdp(
+                _bound_file(
+                    self.root,
+                    evidence.get("pinned_cdp_probe"),
+                    label="acquisition pinned CDP probe",
+                )
+            ),
+        ]
+        if schema == 1:
+            linked.append(
                 self.browser_egress(
                     _bound_directory(
                         self.root,
                         evidence.get("browser_egress_qualification"),
                         label="acquisition browser-egress qualification",
                     )
-                ),
+                )
             )
-        )
+        return _require_same_build(linked)
 
     def acquisition_authority_or_foundation(
         self, raw: str | os.PathLike[str]
@@ -3944,14 +3950,15 @@ def resolve_action_admission(
                 expected_cohort=cohort_version,
             )
         )
-        for name, route in (
-            ("pinned_cdp", resolver.pinned_cdp),
-            ("browser_egress", resolver.browser_egress),
-        ):
-            raw = _required(
-                values, name, f"class-study acquisition-authority requires {name} before Docker"
-            )
-            admissions.append(route(raw))
+        pinned = _required(
+            values,
+            "pinned_cdp",
+            "class-study acquisition-authority requires pinned_cdp before Docker",
+        )
+        admissions.append(resolver.pinned_cdp(pinned))
+        browser = _single(values, "browser_egress")
+        if browser:
+            admissions.append(resolver.browser_egress(browser))
     elif action == "foundation":
         build = _required(
             values,

@@ -35,8 +35,16 @@ image diagnostic, without a formal receipt, passed a Neqo control probe to
 `cloudflare-quic.com` and saw `Error: Timeout(12)` for `consultant.ru` and
 `www.consultant.ru` on the default Docker bridge. It cannot reclassify v129.
 The source fix and prospective schema-11 pre-baseline screen require the next
-unused cohort and complete downstream reproof. Earlier v127 and v126
-initialization failures also remain historical evidence.
+unused cohort and fresh source-bound proof. V130 passed its no-cache build,
+pinned CDP probe and 110-vector browser gate, but acquisition authority failed
+its correctness suite (1,885 passed, 93 failed, 6 skipped); it issued no
+authority. A bounded v130-image live diagnostic then observed a root CDP
+`InvalidInterceptionId` while navigating `consultant.ru`. It selected a page
+for `elmundo.es`, but the schema-11 HTTP/3 screen rejected both primary
+origins after two classified 12-second timeouts each, with passing controls.
+The diagnostic has no formal receipt or accepted credit and cannot reclassify
+either historical cohort. Earlier v127 and v126 initialization failures also
+remain historical evidence.
 Accepted extended-study progress remains pilot 0/120, final classes 0/100,
 certification 0/900 and formal 0/16,000.
 
@@ -49,20 +57,25 @@ repeating expensive qualification. They do not replace mandatory gates.
 |---:|---|---|
 | 1 | Focused host-only checks and synthetic receipt/consumer replay | Check architecture selection, schemas, acquisition rules, lifecycle handling and host prerequisites cheaply |
 | 2 | Clean source freeze, allocator, unused cohort and registered no-cache build | Bind exact source and collection image through `./qcsd-lab build --cohort-version N` |
-| 3 | ETF/veth diagnostics, pinned-CDP and focused browser/teardown checks using the registered image | Verify timing/network support, browser identity and known late-failing behaviour before the full browser gate |
-| 4 | 110-vector browser-egress gate and acquisition authority | Packet-observed browser coverage plus acquisition-correctness evidence authorise public acquisition |
+| 3 | ETF/veth diagnostics, pinned CDP and focused browser/teardown checks using the registered image | Verify timing/network support, browser identity and known late-failing behaviour |
+| 4 | Acquisition correctness and schema-2 acquisition authority | Clean build, acquisition correctness and pinned CDP authorise public acquisition after the authority independently verifies |
 | 5 | Pre-baseline HTTP/3 screen, acquisition and two genuine short-horizon prepared observations | Admit the first 24 eligible candidates per stratum; freeze 120-class pilot selection and assembly |
-| 6 | Reference, timing stress, 18 regression, code and 160 controlled samples; foundation | Authorise all class-study capture roles, including fitting, on the same source/build/acquisition lineage |
+| 6 | 110-vector browser-egress gate, reference, timing stress, 18 regression, code and 160 controlled samples; full foundation | Authorise all class-study capture roles, including fitting, on the same source/build/acquisition lineage |
 | 7 | 480 pilot fitting, 720 qualification, 1,080 compatibility | Derive pilot profiles, qualify capacity/prefixes and establish each pilot class/mode combination |
 | 8 | Final selection, 2,000 authoritative fitting, 600 qualification, 900 certification | Freeze 100 classes plus reserves, refit and prove all final class/mode combinations |
 | 9 | Readiness and historical pre-snapshot; ten canary/formal block pairs | Collect 1,000 excluded canaries and 16,000 formal samples |
 | 10 | Historical post-snapshot, sealing, handoff, evaluation, comparison and attestation | Establish final correctness, performance and leakage conclusions |
 
 The full foundation is required before any class-study fitting or capture.
-Public acquisition can begin under the narrower acquisition authority after
-step 4. Both authorities must bind identical source, build, acquisition
-contract, pinned-CDP and browser evidence. This is the current registered
-order; old prose requiring full foundation before acquisition is superseded.
+Under the prospective schema-2 route, public acquisition can begin after a
+verified step-4 authority binds the current clean source, no-cache build,
+acquisition contract, acquisition correctness and pinned CDP receipt. The
+110-vector browser gate is deferred until step 6; its final receipt and the
+full foundation must bind the same source/build lineage before fitting or
+defense capture. The existing schema-1 route remains available: complete and
+verify browser qualification first, then supply its root when creating the
+four-gate acquisition authority. No historical or diagnostic receipt gains
+credit from this revised order.
 
 Run source-bound Docker jobs serially. During a live job all agents only poll
 its existing process/session. Investigations, changes and documentation work
@@ -127,22 +140,24 @@ an externally chosen version; it does not itself authorise that version.
 : "${COHORT_VERSION:?set the allocator-authorised unused positive cohort}"
 BUILD="artifacts/buflo-study/build-execution-v${COHORT_VERSION}.json"
 PINNED_CDP="artifacts/buflo-study/pinned-cdp-execution-v${COHORT_VERSION}.json"
-BROWSER_EGRESS="artifacts/buflo-study/browser-egress-qualification-v${COHORT_VERSION}"
 AUTHORITY="artifacts/class-study-acquisition-authority-v${COHORT_VERSION}.json"
 
 ./qcsd-lab build --cohort-version "$COHORT_VERSION"
 ./qcsd-lab test pinned-cdp --cohort-version "$COHORT_VERSION" \
   --build-execution-receipt "$BUILD" --destination "$PINNED_CDP"
-./qcsd-lab test browser-egress create --cohort-version "$COHORT_VERSION" \
-  --build-execution-receipt "$BUILD" --result-root "$BROWSER_EGRESS"
-./qcsd-lab test browser-egress verify --cohort-version "$COHORT_VERSION" \
-  --build-execution-receipt "$BUILD" --result-root "$BROWSER_EGRESS"
 ./qcsd-lab class-study acquisition-authority --cohort-version "$COHORT_VERSION" \
   --build-execution-receipt "$BUILD" --pinned-cdp-receipt "$PINNED_CDP" \
-  --browser-egress-qualification-root "$BROWSER_EGRESS" \
   --destination "$AUTHORITY"
 ./qcsd-lab class-study verify --target "$AUTHORITY"
 ```
+
+This is the prospective schema-2 path; use it only after the amended contract
+and producer/consumer validators are implemented and checked on the frozen
+source. Its authority producer runs acquisition correctness in the registered
+image. A failed gate produces no authority. The schema-1 path still runs the
+browser commands below before authority creation and supplies
+`--browser-egress-qualification-root "$BROWSER_EGRESS"` to that command.
+Use a fresh create-only authority destination for either route.
 
 For later actions, obtain exact input paths from the preceding verified
 receipts and the coordinator's help. After the schema-11 source has fresh
@@ -159,6 +174,17 @@ scaling the watcher, and preserve all published evidence if a later fix needs
 a new cohort; a complete namespace migration is required for that restart.
 Complete acquisition with `acquisition-complete`; freeze pilot/final cohorts
 with `cohort` and campaigns with `campaigns --stage pilot|authoritative`.
+Before the full foundation or any fitting/capture role, run and verify the
+deferred 110-vector browser gate on the **same source and build**:
+
+```shell
+BROWSER_EGRESS="artifacts/buflo-study/browser-egress-qualification-v${COHORT_VERSION}"
+./qcsd-lab test browser-egress create --cohort-version "$COHORT_VERSION" \
+  --build-execution-receipt "$BUILD" --result-root "$BROWSER_EGRESS"
+./qcsd-lab test browser-egress verify --cohort-version "$COHORT_VERSION" \
+  --build-execution-receipt "$BUILD" --result-root "$BROWSER_EGRESS"
+```
+
 Use `capture`/`resume` through `class-study` for every study capture role;
 generic `run`/`resume` cannot bypass its prerequisite ledger. Numeric fitting,
 prefix derivation, qualification and final bundle publication use
@@ -254,7 +280,7 @@ schema-11 lower bound is 5 hours 29 minutes from first baseline to last
 earliest repeat with zero-duration page work. A five-minute terminal per
 batch gives 5 hours 59 minutes before real navigation, HTTP/3 screening,
 status and recovery overhead. Preserve the true dispatch windows;
-do not promise immediate pilot completion after the browser gate. Completion requires
+do not promise immediate pilot completion after acquisition authority. Completion requires
 every earlier candidate in each selected prefix to have a scientific terminal
 outcome; the unused catalogue tail remains explicitly unassessed.
 

@@ -24,10 +24,16 @@ an attempt.
 The starting point for every relative day below is the **next clean source
 freeze**. V129 passed build, pinned CDP, all 110 browser vectors and its
 acquisition-only authority on its historical source. Its acquisition watcher
-then stopped with zero accepted classes. The prospective schema-11 HTTP/3
-screen and redirect fix have no new execution authority. The next execution
-needs the allocator's next unused cohort after source freeze; the cohort
-number must be checked again before launch.
+then stopped with zero accepted classes. V130 passed build, pinned CDP and
+all 110 browser vectors on its bound source, but acquisition authority failed
+its correctness suite (1,885 passed, 93 failed, 6 skipped), so it issued no
+authority. A bounded v130-image live diagnostic observed a root CDP
+`InvalidInterceptionId` on `consultant.ru` and a schema-11 HTTP/3 site
+rejection for `elmundo.es` after two classified 12-second timeouts per primary
+origin with passing controls. Neither diagnostic advances accepted credit.
+The prospective schema-11 source and schema-2 authority need the allocator's
+next unused cohort after source freeze; the cohort number must be checked
+again before launch.
 
 ## Stage-by-stage critical path
 
@@ -39,22 +45,23 @@ throughput. Counts are required accepted outputs unless a row says otherwise.
 
 | Order | Gate and work | Estimate from the next clean freeze | Basis and limit |
 |---:|---|---:|---|
-| 1 | No-cache build, pinned CDP, 110 browser-egress vectors and acquisition-only authority | **About 9–10 hours** | Last desktop cohort measured 1h05m26s for build, 7h38m54s for browser qualification and 11m25s for acquisition correctness, plus CDP, authority and handoff time. A failure requires diagnosis and fresh source/cohort as applicable. |
+| 1 | No-cache build, pinned CDP, acquisition correctness and schema-2 acquisition-only authority | **Roughly 1½–2 hours** before public acquisition, conditional on passing gates | V130 measured 1h07m for build and about 8m more to its CDP receipt. Allow tens of minutes for correctness, authority creation and verification. Schema 2 defers the browser gate; schema 1 still requires it before acquisition authority. A failed gate needs diagnosis and a fresh source/cohort as applicable. |
 | 2 | Screen selected-page request-origin HTTP/3 reachability, acquire the first 24 eligible classes in each of five strata from the 600-candidate search pool; verify completion and assemble the 120-class pilot | **5h29m ideal baseline-to-repeat lower bound**, or about **5h59m** if each batch terminates near five minutes; screening and assembly extra | Schema 11 retains two real prepared observations with dispatch windows near 30 seconds and five minutes after a separate pre-baseline screen. These projections assume all candidates survive, two per action, zero page-work and screening duration, and prompt terminal release. Rejections, slow pages and recovery extend it. |
-| 3 | Full defense foundation on the same source/build lineage: reference/code gates, 12 timing-stress visits, 18 nine-mode regression samples and 160 controlled samples | **Unmeasured**; 190 launches would be **3h19m** at the old proxy, plus reference, code and verification | The 190-count illustration does not estimate the source and reference checks. Acquisition-only authority cannot replace this foundation for fitting or capture. |
-| 4 | Pilot fitting: 120 classes × two visits × two policies = 480 | **8h22m proxy** | At 62.73 seconds per accepted cell; no new-cohort rate yet. |
-| 5 | Pilot chaff/prefix qualification: 120 × six = 720 | **12h33m proxy** | Qualification work may have a different duration from old formal captures. |
-| 6 | Pilot nine-mode compatibility: 120 × nine = 1,080 | **18h49m proxy** | Also establishes qualified Walkie-Talkie pair eligibility. |
-| 7 | Select and assemble 100 final classes, 20 per stratum, with 20 reserves and the required qualified pair graph | **Unmeasured** | Selection and graph verification are gates; no time has been measured on the new cohort. |
-| 8 | Final fitting: 100 × ten visits × two policies = 2,000 | **34h51m proxy** | The final parameters must use the frozen cohort, separate from formal visits. |
-| 9 | Final full qualification: 100 × six = 600 | **10h27m proxy** | Requires the final parameters and complete graphs. |
-| 10 | First-launch certification: 100 × nine modes = 900 | **15h41m proxy** | All 900 accepted checks are required. This is the first useful new-cohort measurement of per-mode time, failure rate and evidence bytes. |
-| 11 | Readiness attestation and historical pre-snapshot | **Unmeasured** | Both must verify before the first canary. |
-| 12 | Ten pairs of 100 canaries followed by 1,600 formal samples | **29h37m per pair; 12d8h14m for all 17,000 cells**, at the old proxy | The historical final block instead averaged 130.89 seconds per cell, which would make these 17,000 cells **25d18h5m** before additional overhead. Each block must seal before its accepted numerator advances. |
-| 13 | Historical post-snapshot, handoff, evaluation, comparison and final attestation | **Unmeasured** | These close the thesis evidence and validation claim after capture; they are outside the 16,000-cell acquisition clock. |
+| 3 | Same-source packet-observed browser-egress qualification, 110/110 vectors | **7h47m observed for v130** | This gate remains mandatory before full foundation, fitting or defense capture. V130's browser receipt cannot transfer to a changed source. |
+| 4 | Full defense foundation on the same source/build/acquisition lineage: reference/code gates, 12 timing-stress visits, 18 nine-mode regression samples and 160 controlled samples | **Unmeasured**; 190 launches would be **3h19m** at the old proxy, plus reference, code and verification | The 190-count illustration does not estimate the source and reference checks. Acquisition-only authority cannot replace this foundation for fitting or capture. |
+| 5 | Pilot fitting: 120 classes × two visits × two policies = 480 | **8h22m proxy** | At 62.73 seconds per accepted cell; no new-cohort rate yet. |
+| 6 | Pilot chaff/prefix qualification: 120 × six = 720 | **12h33m proxy** | Qualification work may have a different duration from old formal captures. |
+| 7 | Pilot nine-mode compatibility: 120 × nine = 1,080 | **18h49m proxy** | Also establishes qualified Walkie-Talkie pair eligibility. |
+| 8 | Select and assemble 100 final classes, 20 per stratum, with 20 reserves and the required qualified pair graph | **Unmeasured** | Selection and graph verification are gates; no time has been measured on the new cohort. |
+| 9 | Final fitting: 100 × ten visits × two policies = 2,000 | **34h51m proxy** | The final parameters must use the frozen cohort, separate from formal visits. |
+| 10 | Final full qualification: 100 × six = 600 | **10h27m proxy** | Requires the final parameters and complete graphs. |
+| 11 | First-launch certification: 100 × nine modes = 900 | **15h41m proxy** | All 900 accepted checks are required. This is the first useful new-cohort measurement of per-mode time, failure rate and evidence bytes. |
+| 12 | Readiness attestation and historical pre-snapshot | **Unmeasured** | Both must verify before the first canary. |
+| 13 | Ten pairs of 100 canaries followed by 1,600 formal samples | **29h37m per pair; 12d8h14m for all 17,000 cells**, at the old proxy | The historical final block instead averaged 130.89 seconds per cell, which would make these 17,000 cells **25d18h5m** before additional overhead. Each block must seal before its accepted numerator advances. |
+| 14 | Historical post-snapshot, handoff, evaluation, comparison and final attestation | **Unmeasured** | These close the thesis evidence and validation claim after capture; they are outside the 16,000-cell acquisition clock. |
 
-Rows 4–6 total **2,280 pilot executions**, or **39h44m** at the old proxy.
-Rows 8–10 total **3,500 final executions**, or **60h59m** at that proxy. Thus
+Rows 5–7 total **2,280 pilot executions**, or **39h44m** at the old proxy.
+Rows 9–11 total **3,500 final executions**, or **60h59m** at that proxy. Thus
 the illustrated pre-formal fitting, qualification, compatibility and
 certification work totals **5,780 executions and about 100h43m**. The 190
 foundation launches, page acquisition, selection, attestations and failures
@@ -64,8 +71,9 @@ are additional. The registered work counts are explained in the
 ## Calendar interpretation
 
 If the new run matches every favorable assumption above, the arithmetic is
-roughly **9 hours** of fresh proof + **5½ hours** of acquisition + **3⅓ hours**
-for 190 foundation launches + **100¾ hours** of pre-formal executions. That
+roughly **1½–2 hours** to acquisition authority + **5½ hours** of acquisition
++ **7¾ hours** of deferred browser qualification + **3⅓ hours** for 190
+foundation launches + **100¾ hours** of pre-formal executions. That
 places the first formal cell around **day 5 after source freeze**. At the old
 overall 62.73-second wall rate, the 17,000 canary/formal cells then take
 **12.34 more days**, placing the last cell around **day 17–18**. This excludes

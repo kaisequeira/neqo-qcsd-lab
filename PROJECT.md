@@ -56,17 +56,33 @@ has been implemented for the next cohort. Both require a fresh cohort with
 complete downstream reproof; v129 cannot be resumed under changed source or
 promoted into an accepted pilot.
 
-| Checkpoint identity | v129 desktop execution and current state |
-|---|---|
-| Lab branch and v129 source commit | `desktop-portability-2026-09-26`; `cd5dd7d2a7c711f819a342046c191a3d80a5c3c9` |
-| Rust commit and Lab Gitlink | `e8575fd8e54921ed6ff867de475b4a734064866e` |
-| Build and pinned CDP | `artifacts/buflo-study/build-execution-v129.json` and `artifacts/buflo-study/pinned-cdp-execution-v129.json`: independently verified on their bound source |
-| Browser execution | `artifacts/buflo-study/browser-egress-qualification-v129/final.json`: independently verified 110/110, zero operational or semantic failures |
-| Desktop authority | `artifacts/class-study-acquisition-authority-v129.json`: all four hard gates passed without waivers; public-page-acquisition-only, not a full defence foundation |
-| Acquisition checkpoint | `artifacts/classifier-multiorigin100-v1-acquisition-v129/`: initialized; watcher stopped with a missed probe window and a durable redirect dependency error; 0/120 accepted |
-| Next execution | Preserve v129; freeze the corrected schema-11 source, allocate a fresh cohort, and reprove build, pinned CDP, browser and acquisition authority before new acquisition |
+On v130, the corrected source passed the no-cache build, pinned CDP and the
+independently verified 110/110 browser qualification. Acquisition authority
+then failed its creation-time correctness suite before publishing a receipt:
+the watcher and authority declared different test lists, and watcher tests
+assumed a user-systemd socket that is absent in the qualification container.
+The host watcher suite passed 379 tests with only the list mismatch failing.
+The v130 browser receipt remains valid for its source, but it cannot authorize
+acquisition under corrected source. No new acquisition checkpoint was created.
+A bounded v130-image diagnostic subsequently hit a root CDP
+`InvalidInterceptionId` while navigating `consultant.ru`. `elmundo.es`
+navigation completed, then its selected page origins each timed out twice in
+the prospective HTTP/3 screen while both control probes passed. These are
+engineering observations outside any acquisition checkpoint and add no
+scientific numerator.
 
-Preserve the v129 checkpoint and failed attempts, v128 failed build, v127
+| Checkpoint identity | v130 desktop qualification and current state |
+|---|---|
+| Lab branch and v130 source commit | `desktop-portability-2026-09-26`; `5fe0da7a8a8dc92713d91fb67b65f265325e4d51` |
+| Rust commit and Lab Gitlink | `e8575fd8e54921ed6ff867de475b4a734064866e` |
+| Build and pinned CDP | `artifacts/buflo-study/build-execution-v130.json` and `artifacts/buflo-study/pinned-cdp-execution-v130.json`: independently verified on their bound source |
+| Browser execution | `artifacts/buflo-study/browser-egress-qualification-v130/final.json`: independently verified 110/110 |
+| Desktop authority | v130 creation failed its correctness suite; no authority receipt issued |
+| Acquisition checkpoint | v129 remains the latest initialized checkpoint, with 0/120 accepted |
+| Next execution | Finish and preflight prospective schema-2 acquisition authority; allocate a fresh cohort, reprove build and pinned CDP, create authority, then start bounded acquisition. Defer the full 110-vector browser gate to the same-source full foundation before fitting or defence capture |
+
+Preserve the v130 qualification evidence and failed authority attempt, the v129
+checkpoint and failed attempts, v128 failed build, v127
 receipts and failed initialization, v126 checkpoint and failed watcher journal,
 and the earlier v124 failure and v116 incomplete laptop execution. Historical
 evidence cannot authorise changed source or supply a scientific numerator.

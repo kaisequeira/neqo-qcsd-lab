@@ -977,7 +977,8 @@ def test_status_labels_historical_acquisition_authority_without_using_it_as_gate
 @pytest.mark.parametrize(
     ("acquisition_schema", "completion_schema", "checkpoint_schema", "current"),
     (
-        (10, 4, 3, True),
+        (11, 4, 3, True),
+        (10, 4, 3, False),
         (9, 4, 3, False),
         (8, 4, 3, False),
         (7, 4, 3, False),
@@ -1139,6 +1140,73 @@ def test_status_deep_verifies_current_foundation_but_keeps_runner_informational(
     }
 
 
+def test_status_labels_v2_acquisition_browser_gate_as_deferred(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import qcsd_lab.class_acquisition as acquisition
+    import qcsd_lab.class_attestation as attestation
+
+    catalogue = tmp_path / "catalogue.json"
+    catalogue.write_text("{}\n", encoding="utf-8")
+    authority = tmp_path / "class-study-acquisition-authority-v130.json"
+    authority.write_text("{}\n", encoding="utf-8")
+    authority_sha256 = pipeline.sha256_file(authority)
+    runner_root = tmp_path / "acquisition"
+    runner_root.mkdir()
+    provenance = pipeline.bind_receipt(
+        {
+            "acquisition_schema_version": acquisition.SCHEMA_VERSION,
+            "acquisition_authority": {
+                "path": str(authority.absolute()),
+                "sha256": authority_sha256,
+            },
+        },
+        receipt_type=acquisition.PROVENANCE_TYPE,
+    )
+    (runner_root / "provenance.json").write_bytes(pipeline.canonical_json_bytes(provenance))
+    monkeypatch.setattr(
+        pipeline,
+        "load_candidate_catalogue_receipt",
+        lambda _path: ({}, [_Candidate("candidate-001")]),
+    )
+    monkeypatch.setattr(
+        attestation,
+        "validate_class_acquisition_authority",
+        lambda path, **_kwargs: {
+            "path": str(path.absolute()),
+            "sha256": pipeline.sha256_file(path),
+            "attestation_schema_version": 2,
+            "summary": {
+                "browser_egress_vectors": 0,
+                "browser_egress_packet_qualification": "deferred-to-foundation",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        acquisition,
+        "acquisition_status",
+        lambda *_args, **_kwargs: {
+            "acquisition_schema_version": acquisition.SCHEMA_VERSION,
+            "candidate_count": 1,
+        },
+    )
+
+    status = pipeline.class_study_status(
+        candidate_catalogue_path=catalogue,
+        acquisition_root=runner_root,
+        acquisition_authority=authority,
+    )
+
+    runner = status["stages"]["acquisition_runner"]
+    assert runner["state"] == "verified"
+    assert runner["gate_verification"] == {
+        "acquisition_authority_path": str(authority.absolute()),
+        "acquisition_authority_sha256": authority_sha256,
+        "browser_egress_packet_qualification": "deferred-to-foundation",
+        "informational_only": True,
+    }
+
+
 def test_status_keeps_historical_acquisition_runner_unverified(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1296,10 +1364,18 @@ def test_authority_action_requires_and_forwards_canonical_pinned_cdp_receipt(
 
     with pytest.raises(ValueError, match="--pinned-cdp-receipt"):
         pipeline.run_class_study_action(action, **kwargs)
-    with pytest.raises(ValueError, match="--browser-egress-qualification-root"):
-        pipeline.run_class_study_action(
+    if action == "foundation":
+        with pytest.raises(ValueError, match="--browser-egress-qualification-root"):
+            pipeline.run_class_study_action(
+                action, **kwargs, pinned_cdp_receipt=pinned
+            )
+    else:
+        without_browser = pipeline.run_class_study_action(
             action, **kwargs, pinned_cdp_receipt=pinned
         )
+        assert without_browser.status == "complete"
+        assert observed["browser_egress_qualification_root"] is None
+        observed.clear()
     with pytest.raises(ValueError, match="wrong canonical filename"):
         pipeline.run_class_study_action(
             action,

@@ -1488,26 +1488,29 @@ def class_study_status(
                 raise ValueError(
                     "class acquisition runner uses another foundation attestation"
                 )
+            gate_verification = {
+                (
+                    "acquisition_authority_path"
+                    if "acquisition_authority" in provenance
+                    else "foundation_path"
+                ): str(bound_foundation),
+                (
+                    "acquisition_authority_sha256"
+                    if "acquisition_authority" in provenance
+                    else "foundation_sha256"
+                ): foundation_binding["sha256"],
+                "informational_only": True,
+            }
+            if acquisition_gate.get("attestation_schema_version") == 2:
+                gate_verification["browser_egress_packet_qualification"] = (
+                    acquisition_gate["summary"]["browser_egress_packet_qualification"]
+                )
+            else:
+                gate_verification["browser_egress_vectors"] = acquisition_gate["summary"][
+                    "browser_egress_vectors"
+                ]
             acquisition_stage.update(
-                {
-                    "state": "verified",
-                    "gate_verification": {
-                        (
-                            "acquisition_authority_path"
-                            if "acquisition_authority" in provenance
-                            else "foundation_path"
-                        ): str(bound_foundation),
-                        (
-                            "acquisition_authority_sha256"
-                            if "acquisition_authority" in provenance
-                            else "foundation_sha256"
-                        ): foundation_binding["sha256"],
-                        "browser_egress_vectors": acquisition_gate["summary"][
-                            "browser_egress_vectors"
-                        ],
-                        "informational_only": True,
-                    },
-                }
+                {"state": "verified", "gate_verification": gate_verification}
             )
         stages["acquisition_runner"] = acquisition_stage
 
@@ -2488,9 +2491,13 @@ def run_class_study_action(
             raise ValueError("class-study foundation requires --cohort-version")
         build_path = _required(build_execution_receipt, "--build-execution-receipt")
         pinned_path = _required(pinned_cdp_receipt, "--pinned-cdp-receipt")
-        browser_egress_root = _required(
-            browser_egress_qualification_root,
-            "--browser-egress-qualification-root",
+        browser_egress_root = (
+            _required(
+                browser_egress_qualification_root,
+                "--browser-egress-qualification-root",
+            )
+            if action == "foundation"
+            else browser_egress_qualification_root
         )
         expected_pinned_path = (
             Path(build_path).absolute().parent
@@ -2504,9 +2511,12 @@ def run_class_study_action(
             Path(build_path).absolute().parent
             / f"browser-egress-qualification-v{cohort_version}"
         )
-        if Path(browser_egress_root).absolute() != expected_browser_egress_root:
+        if (
+            browser_egress_root is not None
+            and Path(browser_egress_root).absolute() != expected_browser_egress_root
+        ):
             raise ValueError(
-                "class-study foundation browser-egress qualification root has the "
+                f"class-study {action} browser-egress qualification root has the "
                 "wrong canonical path"
             )
         foundation_destination = _required(destination, "--destination")

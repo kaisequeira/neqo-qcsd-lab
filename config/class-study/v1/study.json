@@ -77,6 +77,21 @@
       "authority": "historical-verify-only-never-current-admission"
     }
   },
+  "prospective_acquisition_authority_amendment": {
+    "schema_version": 1,
+    "date": "2026-09-30",
+    "scope": "new-source-bound-public-page-acquisition-only",
+    "reason": "start and diagnose real public-page acquisition before the costly full browser qualification while preserving exact source, build, pinned CDP, study contract and acquisition correctness evidence",
+    "fast_authority_schema_version": 2,
+    "fast_authority_creation_gates": [
+      "current-clean-source-and-no-cache-build",
+      "acquisition-focused-correctness",
+      "pinned-cdp-integration-probe"
+    ],
+    "browser_egress_qualification": "deferred-to-same-source-full-foundation-before-any-fitting-or-defence-capture",
+    "acquisition_terminal_policy": "unchanged-schema-11-deep-verified-evidence-and-first-24-eligible-prefix-per-stratum",
+    "historical_evidence_policy": "no-retroactive-promotion-or-relabeling"
+  },
   "status": {
     "phase": "candidate-catalogue-created",
     "prospective": true,
@@ -969,7 +984,7 @@
     "historical_classifier_corpus": "read-only-byte-for-byte-unchanged"
   },
   "readiness_gates": {
-    "acquisition_authority": "required-before-public-page-acquisition-clean-build-pinned-cdp-complete-110-browser-egress-and-source-bound-acquisition-correctness-no-defended-capture-authority",
+    "acquisition_authority": "required-before-public-page-acquisition-schema-2-clean-build-pinned-cdp-and-source-bound-acquisition-correctness;110-browser-egress-deferred-to-same-source-full-foundation-before-fitting-or-defence-capture;schema-1-with-browser-remains-valid-on-its-own-source",
     "foundation_attestation": "required-before-every-class-study-capture-role-including-fitting-and-frozen-by-every-result-only-after-the-seven-source-build-reference-code-regression-controlled-pinned-cdp-and-browser-egress-gates-pass",
     "class_readiness_attestation": "required-before-any-canary-or-formal-launch-and-only-after-foundation-acquisition-admission-final-selection-and-assembly-final-fitting-final-qualification-and-900-of-900-first-launch-certification-verify",
     "historical_pre_snapshot": "required-after-readiness-and-before-every-canary-or-formal-launch",
