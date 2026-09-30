@@ -5793,6 +5793,14 @@ def test_watch_git_binding_rejects_redirected_submodule_gitdir(tmp_path: Path) -
 
 
 def _systemd_environment_or_skip() -> dict[str, str]:
+    required_tools = (Path("/usr/bin/systemctl"), Path("/usr/bin/systemd-run"))
+    missing_tools = [
+        str(path)
+        for path in required_tools
+        if not path.is_file() or not os.access(path, os.X_OK)
+    ]
+    if missing_tools:
+        pytest.skip(f"user systemd test tools are unavailable: {', '.join(missing_tools)}")
     try:
         return watch._safe_host_environment()
     except watch.WatchError as error:
