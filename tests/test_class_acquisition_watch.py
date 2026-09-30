@@ -2325,6 +2325,72 @@ def test_due_work_uses_exact_command_environment_and_paths(acquisition: Fixture)
     assert all(watch.LOCK_ENV not in call[2] for call in runner.calls)
 
 
+@pytest.mark.parametrize("invalid", (0, -1, True, 1.0, "1"))
+def test_max_actions_rejects_non_positive_or_non_integer_values(
+    acquisition: Fixture, invalid: object
+) -> None:
+    with pytest.raises(watch.WatchError, match="max actions must be a positive integer"):
+        watch.watch_acquisition(
+            paths=acquisition.paths,
+            runner=FakeRunner([]),
+            max_actions=invalid,
+        )
+
+
+def test_bounded_due_action_returns_verified_result_and_resumes_from_checkpoint(
+    acquisition: Fixture,
+) -> None:
+    due = _details(probing=1, due=1, blocked=True)
+    complete = _details(terminal=watch.CANDIDATE_COUNT)
+
+    def first_run(_command, _cwd, _env):
+        payload = _checkpoint_payload(acquisition)
+        first = payload["candidates"][acquisition.candidate_ids[0]]
+        first["watch_test_revision"] = 1
+        _replace_checkpoint(acquisition, payload)
+        return _completed(_result("acquisition-run", due))
+
+    first = FakeRunner(
+        [
+            _completed(_result("acquisition-status", due)),
+            first_run,
+        ]
+    )
+    result = watch.watch_acquisition(
+        paths=acquisition.paths,
+        runner=first,
+        max_actions=1,
+    )
+    assert result["action"] == "acquisition-run"
+    assert result["details"]["complete"] is False
+    assert [call[0][2] for call in first.calls[2:]] == [
+        "acquisition-status",
+        "acquisition-run",
+    ]
+
+    def final_run(_command, _cwd, _env):
+        acquisition.advance_checkpoint()
+        return _completed(_result("acquisition-run", complete))
+
+    resumed = FakeRunner(
+        [
+            _completed(_result("acquisition-status", due)),
+            final_run,
+        ]
+    )
+    final = watch.watch_acquisition(
+        paths=acquisition.paths,
+        runner=resumed,
+        max_actions=1,
+    )
+    assert final["action"] == "acquisition-run"
+    assert final["details"]["complete"] is True
+    assert [call[0][2] for call in resumed.calls[2:]] == [
+        "acquisition-status",
+        "acquisition-run",
+    ]
+
+
 def test_browser_egress_verify_command_has_one_exact_supervised_scope(
     acquisition: Fixture,
 ) -> None:
@@ -2708,6 +2774,39 @@ def test_waits_to_target_with_five_second_heartbeats_and_no_busy_spin(
         "acquisition-status",
         "acquisition-run",
         "acquisition-status",
+    ]
+
+
+def test_bounded_waiting_action_returns_after_verified_run(acquisition: Fixture) -> None:
+    start = datetime(2026, 8, 29, tzinfo=UTC)
+    target = start + timedelta(seconds=12)
+    waiting = _details(
+        probing=1,
+        blocked=True,
+        next_due=target.isoformat().replace("+00:00", "Z"),
+    )
+    complete = _details(terminal=watch.CANDIDATE_COUNT)
+
+    def run_response(_command, _cwd, _env):
+        acquisition.advance_checkpoint()
+        return _completed(_result("acquisition-run", complete))
+
+    runner = FakeRunner([_completed(_result("acquisition-status", waiting)), run_response])
+    clock = FakeClock(start)
+    result = watch.watch_acquisition(
+        paths=acquisition.paths,
+        runner=runner,
+        clock=clock,
+        sleeper=clock.sleep,
+        max_actions=1,
+    )
+
+    assert result["action"] == "acquisition-run"
+    assert result["details"]["complete"] is True
+    assert clock.sleeps == [5.0, 5.0, 2.0]
+    assert [call[0][2] for call in runner.calls[2:]] == [
+        "acquisition-status",
+        "acquisition-run",
     ]
 
 

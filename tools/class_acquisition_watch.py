@@ -10086,8 +10086,9 @@ def watch_acquisition(
     source_validator: Callable[[WatchPaths, AcquisitionBinding], None] | None = None,
     environment: Mapping[str, str] | None = None,
     heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS,
+    max_actions: int | None = None,
 ) -> dict[str, Any]:
-    """Run until the deterministic terminal prefix is complete and work drains."""
+    """Run until completion, or return after a bounded number of verified actions."""
 
     global _active_signal_latch
     if isinstance(heartbeat_seconds, bool) or not isinstance(heartbeat_seconds, (int, float)):
@@ -10095,6 +10096,8 @@ def watch_acquisition(
     heartbeat = float(heartbeat_seconds)
     if not math.isfinite(heartbeat) or not 1 <= heartbeat <= DEFAULT_HEARTBEAT_SECONDS:
         raise WatchError("heartbeat must be a finite number in [1, 5]")
+    if max_actions is not None and (type(max_actions) is not int or max_actions < 1):
+        raise WatchError("max actions must be a positive integer")
     active_paths = paths or WatchPaths.from_script()
     _require_regular_path(
         active_paths.acquisition_root,
@@ -10151,6 +10154,7 @@ def watch_acquisition(
             _revalidate_immutable_and_source(active_paths, binding, validate_source)
             _validate_checkpoint(active_paths, binding)
             last_source_check = monotonic()
+            completed_actions = 0
 
             while True:
                 latch.raise_if_set()
@@ -10173,7 +10177,7 @@ def watch_acquisition(
                     latch.raise_if_set()
                     return status_result
                 if details["work_due_now"]:
-                    _run_verified_action(
+                    run_result, _, _ = _run_verified_action(
                         "acquisition-run",
                         paths=active_paths,
                         binding=binding,
@@ -10184,6 +10188,9 @@ def watch_acquisition(
                         source_binding_sha256=source_binding_sha256,
                         source_validator=validate_source,
                     )
+                    completed_actions += 1
+                    if max_actions is not None and completed_actions >= max_actions:
+                        return run_result
                     continue
                 next_due = details["next_due"]
                 if next_due is None:
@@ -10217,7 +10224,7 @@ def watch_acquisition(
                         _validate_checkpoint(active_paths, binding)
                         last_source_check = monotonic_now
                     remaining = (target - _utc_now(clock)).total_seconds()
-                _run_verified_action(
+                run_result, _, _ = _run_verified_action(
                     "acquisition-run",
                     paths=active_paths,
                     binding=binding,
@@ -10228,6 +10235,9 @@ def watch_acquisition(
                     source_binding_sha256=source_binding_sha256,
                     source_validator=validate_source,
                 )
+                completed_actions += 1
+                if max_actions is not None and completed_actions >= max_actions:
+                    return run_result
         finally:
             # Every production action has already proved its scope empty, so
             # closing this descriptor releases the lock immediately.  Recheck
@@ -10270,6 +10280,11 @@ def _parser() -> argparse.ArgumentParser:
         "--acquisition-root",
         type=Path,
         help="initialized acquisition root (default: canonical study artifacts path)",
+    )
+    parser.add_argument(
+        "--max-actions",
+        type=int,
+        help="return after this many verified acquisition-run actions (default: run to completion)",
     )
     parser.add_argument(
         "--recover-stale-scopes-internal",
@@ -10380,6 +10395,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = watch_acquisition(
             paths=WatchPaths.from_script(acquisition_root=arguments.acquisition_root),
             heartbeat_seconds=arguments.heartbeat_seconds,
+            max_actions=arguments.max_actions,
         )
     except WatchSignalInterrupt as interrupt:
         print("class acquisition watch interrupted; resume from checkpoint", file=sys.stderr)

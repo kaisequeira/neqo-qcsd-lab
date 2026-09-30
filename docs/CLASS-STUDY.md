@@ -165,8 +165,26 @@ verified acquisition authority, choose a create-only versioned root such as
 `artifacts/classifier-multiorigin100-v1-acquisition-v${COHORT_VERSION}`.
 Pass that same path as `--acquisition-root` to `acquisition-init` with
 `--acquisition-authority` and to `acquisition-watch`. Do not resume or relabel
-an older checkpoint under changed source or contract. Then use `acquisition-run` or let
-`acquisition-watch` schedule due actions.
+an older checkpoint under changed source or contract. Use
+`acquisition-watch` to schedule due actions; direct `acquisition-run` is
+reserved for its supervised scope. Initialize from the verified authority,
+using a UTC start time at or after its recorded time, then run one action:
+
+```shell
+ACQUISITION_ROOT="artifacts/classifier-multiorigin100-v1-acquisition-v${COHORT_VERSION}"
+./qcsd-lab class-study acquisition-init \
+  --candidate-catalogue config/class-study/v1/classifier-multiorigin100-v1-candidates.json \
+  --acquisition-root "$ACQUISITION_ROOT" --acquisition-authority "$AUTHORITY" \
+  --acquisition-started-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+./qcsd-lab class-study acquisition-watch --acquisition-root "$ACQUISITION_ROOT" --max-actions 1
+```
+
+It exits after one fully verified coordinator action and
+prints that action's result, so inspect the checkpoint and failure details
+before invoking the watcher again. The registered action still covers up to
+two candidates; this limit changes only how many actions one watcher invocation
+performs. Omit `--max-actions` after the early batches are healthy to let the
+watcher supervise the remaining acquisition.
 The stability-receipt and admitted-workload roots remain canonical and
 create-only across cohorts. After a first such publication, a new source
 cohort can collide on the same candidate. Verify the first live batches before
