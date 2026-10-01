@@ -40,11 +40,15 @@ from typing import Any, Protocol
 UTC = timezone.utc
 
 STUDY_ID = "classifier-multiorigin100-v1"
+CLASS20_STUDY_ID = "classifier-multiorigin20-v1"
+SUPPORTED_STUDY_IDS = frozenset({STUDY_ID, CLASS20_STUDY_ID})
 CANDIDATE_COUNT = 600
 SCHEMA_VERSION = 1
 SOURCE_BINDING_PREIMAGE_SCHEMA_VERSION = 3
 BROWSER_DEFERRED_SOURCE_BINDING_PREIMAGE_SCHEMA_VERSION = 4
 ACQUISITION_SCHEMA_VERSION = 12
+CURRENT_ACQUISITION_SCHEMA_VERSION = 13
+CLASS20_ACQUISITION_SCHEMA_VERSION = CURRENT_ACQUISITION_SCHEMA_VERSION
 HISTORICAL_ACQUISITION_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11})
 CHECKPOINT_SCHEMA_VERSION = 3
 TERMINAL_SCHEMA_VERSION = 4
@@ -60,6 +64,35 @@ CHECKPOINT_TYPE = "qcsd-class-study-acquisition-checkpoint"
 FOUNDATION_TYPE = "qcsd-class-study-foundation-attestation"
 ACQUISITION_AUTHORITY_TYPE = "qcsd-class-study-acquisition-authority"
 ACQUISITION_SELECTION_POLICY = "first-24-eligible-terminal-prefix-per-stratum-v1"
+CLASS20_ACQUISITION_SELECTION_POLICY = (
+    "first-global-quota-eligible-resolved-prefix-with-operational-censor-v3"
+)
+CURRENT_V1_ACQUISITION_SELECTION_POLICY = (
+    "first-quota-eligible-resolved-prefix-with-operational-censor-v2"
+)
+CLASS20_ORDER_POLICY = "round-robin-five-frozen-within-stratum-orders"
+CLASS20_PILOT_COUNT = 30
+CLASS20_PROFILE_RELATIVE_PATH = "config/class-study/v2/study.json"
+CLASS20_PROFILE_SHA256 = "386a173a97dd26989c2b6b35d039efa06db9825e960985568ff49c0a9ae327a7"
+CLASS20_CATALOGUE_SHA256 = "9d2ec1d755648292526ff623700b07a9bab3988a67444c262aea9f4a855e5146"
+CLASS20_BASE_STUDY_SHA256 = "ab8d898836cb172338303ded7d0adda984fbfab720c5bcd219e08f90efbee7bc"
+CLASS20_OPERATIONAL_CENSOR_CAUSE = "root-fetch-failrequest-request-stage-invalidinterceptionid"
+CLASS20_OPERATIONAL_CENSOR_REASON = (
+    "three complete navigation discards after exact bound root Fetch.failRequest "
+    "InvalidInterceptionId; site eligibility was not assessed"
+)
+_CLASS20_DISCARD_REASON_RE = re.compile(
+    r"catalogue navigation discarded after exact bound catalogue request-stage "
+    r"denial during root Fetch denial: root CDP Fetch\.failRequest failed for a "
+    r"bound catalogue request-stage [A-Za-z][A-Za-z0-9_-]*; the navigation "
+    r"must be discarded \(exception_sha256=[0-9a-f]{64}\)\Z"
+)
+_CLASS20_DISCARD_EVIDENCE = {
+    "cause": CLASS20_OPERATIONAL_CENSOR_CAUSE,
+    "root_command": "Fetch.failRequest",
+    "race": "InvalidInterceptionId",
+    "whole_browser_abort_verified": True,
+}
 _ACQUISITION_CORRECTNESS_TESTS = (
     "tests/test_discover.py",
     "tests/test_discovery_evidence.py",
@@ -77,6 +110,12 @@ _ACQUISITION_CORRECTNESS_TESTS = (
     "tests/test_class_build_admission_acquisition_authority.py",
     "tests/test_class_acquisition_short_profile.py",
     "tests/test_class_acquisition_watch.py",
+)
+_CLASS20_ACQUISITION_CORRECTNESS_TESTS = (
+    *_ACQUISITION_CORRECTNESS_TESTS,
+    "tests/test_class_study.py",
+    "tests/test_class_pipeline.py",
+    "tests/test_class_cohort20.py",
 )
 PINNED_CDP_TYPE = "qcsd-class-study-pinned-cdp-probe"
 BUILD_EXECUTION_TYPE = "qcsd-buflo-study-no-cache-build-execution"
@@ -1675,7 +1714,7 @@ class CommandRunner(Protocol):
 
 @dataclass(frozen=True)
 class WatchPaths:
-    """The source-bound v1 acquisition layout accepted by the supervisor."""
+    """The source-bound acquisition layout accepted by the supervisor."""
 
     lab_root: Path
     launcher: Path
@@ -1684,6 +1723,7 @@ class WatchPaths:
     stability_root: Path
     workload_root: Path
     state_base: Path
+    study_id: str = STUDY_ID
 
     @classmethod
     def from_lab_root(
@@ -1692,9 +1732,12 @@ class WatchPaths:
         *,
         acquisition_root: Path | None = None,
         state_base: Path | None = None,
+        study_id: str = STUDY_ID,
     ) -> WatchPaths:
+        if study_id not in SUPPORTED_STUDY_IDS:
+            raise WatchError("acquisition watcher study is unsupported")
         lab_root = Path(os.path.abspath(root))
-        canonical_acquisition = lab_root / "artifacts" / f"{STUDY_ID}-acquisition"
+        canonical_acquisition = lab_root / "artifacts" / f"{study_id}-acquisition"
         selected_acquisition = (
             Path(os.path.abspath(acquisition_root))
             if acquisition_root is not None
@@ -1719,20 +1762,28 @@ class WatchPaths:
                 lab_root / "config/class-study/v1" / f"{STUDY_ID}-candidates.json"
             ),
             acquisition_root=selected_acquisition,
-            stability_root=lab_root / "artifacts" / f"{STUDY_ID}-stability{publication_suffix}",
-            workload_root=lab_root / "config" / f"workloads{publication_suffix}",
+            stability_root=lab_root / "artifacts" / f"{study_id}-stability{publication_suffix}",
+            workload_root=(
+                lab_root / "config" / f"workloads{publication_suffix}"
+                if study_id == STUDY_ID else
+                lab_root / "config" / f"{study_id}-workloads{publication_suffix}"
+            ),
             state_base=Path(
                 os.path.abspath(
                     state_base or Path("/var/tmp") / f"qcsd-class-watch-lifecycle-{os.getuid()}"
                 )
             ),
+            study_id=study_id,
         )
 
     @classmethod
-    def from_script(cls, *, acquisition_root: Path | None = None) -> WatchPaths:
+    def from_script(
+        cls, *, acquisition_root: Path | None = None, study_id: str = STUDY_ID
+    ) -> WatchPaths:
         return cls.from_lab_root(
             Path(__file__).resolve(strict=True).parents[1],
             acquisition_root=acquisition_root,
+            study_id=study_id,
         )
 
     @property
@@ -1780,6 +1831,7 @@ class AcquisitionBinding:
     source: Mapping[str, Any]
     acquisition_authority_path: str
     acquisition_authority_sha256: str
+    acquisition_schema_version: int = ACQUISITION_SCHEMA_VERSION
 
 
 @dataclass(frozen=True)
@@ -1852,8 +1904,37 @@ def _state_namespace_identity(paths: WatchPaths) -> dict[str, Any]:
         "artifact_type": SCOPE_NAMESPACE_TYPE,
         "lab_root": str(paths.lab_root),
         "schema_version": SCHEMA_VERSION,
-        "study_id": STUDY_ID,
+        "study_id": paths.study_id,
     }
+
+
+def _class20_profile_bindings(paths: WatchPaths) -> dict[str, dict[str, str]]:
+    """Re-read the registered prospective profile and its frozen inputs."""
+
+    bindings = {}
+    for name, relative, expected in (
+        ("profile", CLASS20_PROFILE_RELATIVE_PATH, CLASS20_PROFILE_SHA256),
+        ("base_study", "config/class-study/v1/study.json", CLASS20_BASE_STUDY_SHA256),
+        ("candidate_catalogue", "config/class-study/v1/" + f"{STUDY_ID}-candidates.json", CLASS20_CATALOGUE_SHA256),
+    ):
+        _raw, digest = _read_stable_file(
+            paths.lab_root / relative, root=paths.lab_root, label=f"20-site {name}"
+        )
+        if digest != expected:
+            raise WatchError(f"20-site {name} differs from the registered study")
+        bindings[name] = {"path": f"/lab/{relative}", "sha256": digest}
+    return bindings
+
+
+def _class20_candidate_order(catalogue_order: Sequence[str]) -> tuple[str, ...]:
+    """Interleave the five frozen 120-site hash orders, one site per group."""
+
+    if len(catalogue_order) != CANDIDATE_COUNT:
+        raise WatchError("20-site catalogue does not have 600 candidates")
+    groups = tuple(
+        catalogue_order[index * 120:(index + 1) * 120] for index in range(5)
+    )
+    return tuple(groups[group][index] for index in range(120) for group in range(5))
 
 
 def _source_binding_sha256(binding: AcquisitionBinding) -> str:
@@ -5424,6 +5505,8 @@ def _validate_acquisition_authority(
         raise WatchError("acquisition authority is not valid UTF-8 JSON") from error
     receipt_type = envelope.get("receipt_type") if isinstance(envelope, dict) else None
     if receipt_type == FOUNDATION_TYPE:
+        if paths.study_id == CLASS20_STUDY_ID:
+            raise WatchError("20-site acquisition requires its prospective acquisition authority")
         return _validate_foundation(
             binding, paths=paths, prepare_source=prepare_source,
             prepare_image=prepare_image, acquisition_started_at=acquisition_started_at,
@@ -5489,17 +5572,20 @@ def _validate_acquisition_gate_evidence(
             "authority_scope", "prepare_source", "study_contract",
             "acquisition_correctness", "all_acquisition_gates_passed",
         }
+        if paths.study_id == CLASS20_STUDY_ID:
+            expected_foundation_keys |= {"study_profile_sha256", "study_profile_inputs"}
     cohort = payload.get("cohort_version")
     authority_schema = payload.get("attestation_schema_version")
-    browser_deferred = acquisition_only and authority_schema == 2
+    browser_deferred = acquisition_only and authority_schema in {2, 3}
     if (
         set(payload) != expected_foundation_keys
         or type(authority_schema) is not int
         or authority_schema not in (
-            (1, 2) if acquisition_only else (FOUNDATION_SCHEMA_VERSION,)
+            ((3,) if paths.study_id == CLASS20_STUDY_ID else (1, 2))
+            if acquisition_only else (FOUNDATION_SCHEMA_VERSION,)
         )
         or payload.get("artifact_type") != receipt_type
-        or payload.get("study_id") != STUDY_ID
+        or payload.get("study_id") != paths.study_id
         or type(cohort) is not int
         or cohort < 1
         or payload.get("implementation_status") != (
@@ -5511,12 +5597,27 @@ def _validate_acquisition_gate_evidence(
         or payload.get("no_waivers") is not True
         or payload.get("all_acquisition_gates_passed" if acquisition_only else "all_foundation_gates_passed") is not True
         or binding["path"] != (
-            f"/lab/artifacts/class-study-acquisition-authority-v{cohort}.json"
-            if acquisition_only else f"/lab/artifacts/class-study-foundation-v{cohort}.json"
+            (
+                f"/lab/artifacts/{paths.study_id}-acquisition-authority-v{cohort}.json"
+                if paths.study_id == CLASS20_STUDY_ID
+                else f"/lab/artifacts/class-study-acquisition-authority-v{cohort}.json"
+            ) if acquisition_only
+            else f"/lab/artifacts/class-study-foundation-v{cohort}.json"
         )
         or acquisition_only and payload.get("authority_scope") != "public-page-acquisition-only"
     ):
         raise WatchError("acquisition foundation authority envelope is invalid")
+    if paths.study_id == CLASS20_STUDY_ID:
+        profile_bindings = _class20_profile_bindings(paths)
+        if (
+            payload.get("study_profile_sha256") != profile_bindings["profile"]["sha256"]
+            or not _matches_json_contract(
+                payload.get("study_profile_inputs"),
+                {key: profile_bindings[key] for key in ("base_study", "candidate_catalogue")},
+            )
+            or not _matches_json_contract(payload.get("study_contract"), profile_bindings["profile"])
+        ):
+            raise WatchError("20-site acquisition authority profile binding differs")
     collection_source = payload.get("source")
     if not isinstance(collection_source, dict):
         raise WatchError("acquisition foundation collection source is missing")
@@ -5799,11 +5900,15 @@ def _validate_acquisition_correctness_authority(
     """Reconstruct the acquisition-only gate from immutable bytes, never run it."""
 
     study = payload["study_contract"]
-    study_path = paths.lab_root / "config/class-study/v1/study.json"
+    study_relative = (
+        CLASS20_PROFILE_RELATIVE_PATH if paths.study_id == CLASS20_STUDY_ID
+        else "config/class-study/v1/study.json"
+    )
+    study_path = paths.lab_root / study_relative
     _raw, study_sha256 = _read_stable_file(
         study_path, root=paths.lab_root, label="acquisition study contract"
     )
-    if study != {"path": "/lab/config/class-study/v1/study.json", "sha256": study_sha256}:
+    if study != {"path": f"/lab/{study_relative}", "sha256": study_sha256}:
         raise WatchError("acquisition authority study contract differs")
     if payload["prepare_source"] != dict(prepare_source):
         raise WatchError("acquisition authority prepare source differs")
@@ -5815,7 +5920,11 @@ def _validate_acquisition_correctness_authority(
     }:
         raise WatchError("acquisition correctness evidence inventory is invalid")
     inputs = {}
-    for relative in (*_ACQUISITION_CORRECTNESS_TESTS, "pyproject.toml", "uv.lock"):
+    correctness_tests = (
+        _CLASS20_ACQUISITION_CORRECTNESS_TESTS
+        if paths.study_id == CLASS20_STUDY_ID else _ACQUISITION_CORRECTNESS_TESTS
+    )
+    for relative in (*correctness_tests, "pyproject.toml", "uv.lock"):
         _raw, digest = _read_stable_file(
             paths.lab_root / relative, root=paths.lab_root, label="acquisition correctness input"
         )
@@ -5826,7 +5935,7 @@ def _validate_acquisition_correctness_authority(
         or correctness["gate"] != "acquisition-focused-correctness"
         or correctness["argv"] != [
             "/opt/qcsd-venv/bin/python", "-m", "pytest", "-p", "no:cacheprovider",
-            *_ACQUISITION_CORRECTNESS_TESTS,
+            *correctness_tests,
         ]
         or correctness["cwd"] != "/lab"
         or correctness["input_sha256"] != inputs
@@ -5842,7 +5951,7 @@ def _validate_acquisition_correctness_authority(
         raise WatchError("acquisition correctness evidence differs from pinned inputs")
     started = _evidence_timestamp(correctness["started_at"], label="acquisition correctness start")
     finished = _evidence_timestamp(correctness["finished_at"], label="acquisition correctness finish")
-    browser_deferred = payload["attestation_schema_version"] == 2
+    browser_deferred = payload["attestation_schema_version"] in {2, 3}
     browser = None if browser_deferred else payload["evidence"]["browser_egress_qualification"]
     if not build_finished <= probe_recorded <= started <= finished <= recorded:
         raise WatchError("acquisition correctness chronology is invalid")
@@ -5874,6 +5983,14 @@ def _validate_acquisition_correctness_authority(
 
 
 def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
+    if paths.study_id == CLASS20_STUDY_ID and (
+        paths.launcher != paths.lab_root / "qcsd-lab"
+        or paths.candidate_catalogue != (
+            paths.lab_root / "config/class-study/v1"
+            / f"{STUDY_ID}-candidates.json"
+        )
+    ):
+        raise WatchError("20-site watcher source paths differ from its registered layout")
     for relative, expected_sha256, label in (
         (
             BROWSER_EGRESS_MANIFEST_RELATIVE_PATH,
@@ -5932,6 +6049,11 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
         label="acquisition provenance",
     )
     catalogue, candidate_order, catalogue_sha256 = _validate_catalogue(paths)
+    if paths.study_id == CLASS20_STUDY_ID:
+        profile_bindings = _class20_profile_bindings(paths)
+        if catalogue_sha256 != profile_bindings["candidate_catalogue"]["sha256"]:
+            raise WatchError("20-site candidate catalogue differs from its registered profile")
+        candidate_order = _class20_candidate_order(candidate_order)
     candidate_ids = frozenset(candidate_order)
     provenance_snapshot = _load_canonical_receipt(
         paths.provenance,
@@ -5946,10 +6068,19 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
         raise WatchError("acquisition provenance schema version is not an exact integer")
     if acquisition_schema_version in HISTORICAL_ACQUISITION_SCHEMA_VERSIONS:
         raise WatchError("historical acquisition provenance is verify-only and cannot be resumed")
-    if acquisition_schema_version != ACQUISITION_SCHEMA_VERSION:
+    supported_schemas = (
+        {CLASS20_ACQUISITION_SCHEMA_VERSION} if paths.study_id == CLASS20_STUDY_ID
+        else {ACQUISITION_SCHEMA_VERSION, CURRENT_ACQUISITION_SCHEMA_VERSION}
+    )
+    if acquisition_schema_version not in supported_schemas:
         raise WatchError("acquisition provenance uses an unsupported schema")
-    if set(payload) != _PROVENANCE_PAYLOAD_KEYS:
-        raise WatchError("acquisition provenance payload fields differ from the v12 contract")
+    expected_provenance_keys = (
+        _PROVENANCE_PAYLOAD_KEYS | {"study_profile_sha256"}
+        if acquisition_schema_version == CURRENT_ACQUISITION_SCHEMA_VERSION
+        else _PROVENANCE_PAYLOAD_KEYS
+    )
+    if set(payload) != expected_provenance_keys:
+        raise WatchError("acquisition provenance payload fields differ from its study contract")
     browser_tool = payload.get("browser_tool")
     if not any(
         _matches_json_contract(browser_tool, expected)
@@ -5970,7 +6101,13 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
         "passive_render_hard_cap_after_load_ms": PASSIVE_RENDER_HARD_CAP_MS,
         "acquisition_action_timing_contract": _ACQUISITION_ACTION_TIMING_CONTRACT,
         "baseline_scheduling_contract": _SHORT_TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT,
-        "acquisition_selection_policy": ACQUISITION_SELECTION_POLICY,
+        "acquisition_selection_policy": (
+            CLASS20_ACQUISITION_SELECTION_POLICY
+            if paths.study_id == CLASS20_STUDY_ID else
+            CURRENT_V1_ACQUISITION_SELECTION_POLICY
+            if acquisition_schema_version == CURRENT_ACQUISITION_SCHEMA_VERSION
+            else ACQUISITION_SELECTION_POLICY
+        ),
         "registrable_domain_policy": _REGISTRABLE_DOMAIN_POLICY,
         "domain_safety_policy": _DOMAIN_SAFETY_POLICY,
         "domain_safety_policy_sha256": _DOMAIN_SAFETY_POLICY_SHA256,
@@ -5980,8 +6117,13 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
         "prohibited_inputs": _PROHIBITED_INPUTS,
     }
     if (
-        payload["study_id"] != STUDY_ID
-        or payload["acquisition_schema_version"] != ACQUISITION_SCHEMA_VERSION
+        payload["study_id"] != paths.study_id
+        or payload["acquisition_schema_version"] != acquisition_schema_version
+        or (paths.study_id == CLASS20_STUDY_ID and
+            payload["study_profile_sha256"] != CLASS20_PROFILE_SHA256)
+        or (paths.study_id == STUDY_ID
+            and acquisition_schema_version == CURRENT_ACQUISITION_SCHEMA_VERSION
+            and payload["study_profile_sha256"] is not None)
         or type(payload["candidate_count"]) is not int
         or payload["candidate_count"] != CANDIDATE_COUNT
         or payload["candidate_catalogue_sha256"] != catalogue_sha256
@@ -6048,6 +6190,7 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
         candidate_ids=candidate_ids,
         candidate_order=candidate_order,
         source=dict(source),
+        acquisition_schema_version=acquisition_schema_version,
     )
     _require_cohort_publication_paths(paths, binding)
     return binding
@@ -6066,9 +6209,12 @@ def _require_cohort_publication_paths(
 
     version = binding.cohort_version
     expected = (
-        paths.lab_root / "artifacts" / f"{STUDY_ID}-acquisition-v{version}",
-        paths.lab_root / "artifacts" / f"{STUDY_ID}-stability-v{version}",
-        paths.lab_root / "config" / f"workloads-v{version}",
+        paths.lab_root / "artifacts" / f"{paths.study_id}-acquisition-v{version}",
+        paths.lab_root / "artifacts" / f"{paths.study_id}-stability-v{version}",
+        paths.lab_root / "config" / (
+            f"workloads-v{version}" if paths.study_id == STUDY_ID
+            else f"{paths.study_id}-workloads-v{version}"
+        ),
     )
     observed = (paths.acquisition_root, paths.stability_root, paths.workload_root)
     if observed != expected:
@@ -6332,20 +6478,25 @@ def _authenticated_checkpoint_terminal(
             }
             or snapshot.sha256 != terminal_binding["sha256"]
             or type(terminal.get("terminal_schema_version")) is not int
-            or terminal.get("terminal_schema_version") != TERMINAL_SCHEMA_VERSION
+            or terminal.get("terminal_schema_version") != (
+                5 if binding.acquisition_schema_version == CURRENT_ACQUISITION_SCHEMA_VERSION
+                else TERMINAL_SCHEMA_VERSION
+            )
             or type(terminal.get("checkpoint_schema_version")) is not int
             or terminal.get("checkpoint_schema_version") != CHECKPOINT_SCHEMA_VERSION
             or terminal.get("candidate_id") != candidate_id
             or terminal.get("provenance_sha256") != binding.provenance_sha256
             or terminal.get("baseline_batch") != baseline_batch
             or state.get("state") != "terminal"
-            or kind not in {
-                "eligible", "stable-page-unavailable", "probe-window-missed", "pre-probe-rejection"
-            }
-            or (kind == "pre-probe-rejection") != (baseline_batch is None)):
+            or kind not in (
+                {"eligible", "stable-page-unavailable", "probe-window-missed", "pre-probe-rejection", "operational-censor"}
+                if binding.acquisition_schema_version == CURRENT_ACQUISITION_SCHEMA_VERSION
+                else {"eligible", "stable-page-unavailable", "probe-window-missed", "pre-probe-rejection"}
+            )
+            or (kind in {"pre-probe-rejection", "operational-censor"}) != (baseline_batch is None)):
         raise WatchError("acquisition terminal evidence differs from the checkpoint")
     normalised = {
-        **state, "state": "pending" if kind == "pre-probe-rejection" else "probing",
+        **state, "state": "pending" if kind in {"pre-probe-rejection", "operational-censor"} else "probing",
         "terminal": None,
     }
     if terminal["checkpoint_state_sha256"] != _sha256_bytes(_canonical_json_bytes(normalised)):
@@ -6355,7 +6506,29 @@ def _authenticated_checkpoint_terminal(
         baseline_batch["baseline_started_at"], label="acquisition baseline"
     ):
         raise WatchError("acquisition terminal predates its baseline")
+    if kind == "operational-censor":
+        attempts = state.get("navigation_attempts")
+        if (
+            terminal.get("reason") != CLASS20_OPERATIONAL_CENSOR_REASON
+            or not isinstance(attempts, list)
+            or len(attempts) != MAX_PROBE_ATTEMPTS
+            or not all(_class20_operational_discard_attempt(attempt) for attempt in attempts)
+        ):
+            raise WatchError("operational censor lacks three exact discarded navigation attempts")
     return terminal
+
+
+def _class20_operational_discard_attempt(attempt: Any) -> bool:
+    if not isinstance(attempt, dict):
+        return False
+    return (
+        attempt.get("outcome") == "recoverable-failure"
+        and _matches_json_contract(attempt.get("operational_discard"), _CLASS20_DISCARD_EVIDENCE)
+        and isinstance(attempt.get("reason"), str)
+        and _CLASS20_DISCARD_REASON_RE.fullmatch(attempt["reason"]) is not None
+        and attempt.get("policy_evidence") is None
+        and attempt.get("h3_screen_evidence") is None
+    )
 
 
 def _scientific_terminal_eligibility(
@@ -6405,6 +6578,55 @@ def _validate_reported_selection(
         if terminal is not None:
             outcomes[candidate_id] = _scientific_terminal_eligibility(terminal, state)
     selection = details["selection"]
+    if binding.acquisition_schema_version == CURRENT_ACQUISITION_SCHEMA_VERSION:
+        dispositions: dict[str, str] = {}
+        blocked: list[str] = []
+        for candidate_id in binding.candidate_order:
+            if candidate_id not in outcomes:
+                continue
+            state = states[candidate_id]
+            terminal = _authenticated_checkpoint_terminal(
+                candidate_id, state=state, baseline_batch=batches.get(candidate_id),
+                binding=binding, paths=paths,
+            )
+            if terminal is None:  # pragma: no cover - outcome was authenticated above
+                raise WatchError("acquisition terminal disappeared during selection replay")
+            if terminal["kind"] == "operational-censor":
+                dispositions[candidate_id] = "operational-censor"
+            elif outcomes[candidate_id] is True:
+                dispositions[candidate_id] = "eligible"
+            elif outcomes[candidate_id] is False:
+                dispositions[candidate_id] = "site-rejected"
+            else:
+                blocked.append(candidate_id)
+        expected = (
+            _class20_selection_from_dispositions(
+                binding.candidate_order,
+                tranco_list_sha256=selection["tranco_list_sha256"],
+                dispositions=dispositions,
+            )
+            if paths.study_id == CLASS20_STUDY_ID else
+            _current_v1_selection_from_dispositions(
+                binding.candidate_order,
+                tranco_list_sha256=selection["tranco_list_sha256"],
+                dispositions=dispositions,
+            )
+        )
+        if (
+            not _matches_json_contract(selection, expected)
+            or details["selection_blocked_candidate_ids"] != blocked
+            or details["terminal_count"] != len(outcomes)
+        ):
+            raise WatchError("current selection differs from authenticated checkpoint terminals")
+        _class20_validate_operational_circuit(states)
+        if details["complete"] and any(
+            state.get("terminal") is None and (
+                state.get("state") in {"baseline-ready", "probing"}
+                or state.get("navigation_attempts") or state.get("pending_navigation"))
+            for state in states.values()
+        ):
+            raise WatchError("current acquisition completion hides started checkpoint work")
+        return
     if (selection["terminal_ids"] != [key for key, outcome in outcomes.items() if outcome is not None]
             or details["selection_blocked_candidate_ids"] != [
                 key for key, outcome in outcomes.items() if outcome is None
@@ -6424,6 +6646,25 @@ def _validate_reported_selection(
         for state in states.values()
     ):
         raise WatchError("acquisition selection completion hides started checkpoint work")
+
+
+def _class20_validate_operational_circuit(states: Mapping[str, Mapping[str, Any]]) -> None:
+    events: list[tuple[datetime, str, int, Mapping[str, Any]]] = []
+    for candidate_id, state in states.items():
+        for attempt in state.get("navigation_attempts", []):
+            if isinstance(attempt, dict) and isinstance(attempt.get("completed_at"), str):
+                events.append((
+                    _parse_timestamp(attempt["completed_at"], label="navigation attempt"),
+                    candidate_id, attempt["attempt"], attempt,
+                ))
+    seen: set[str] = set()
+    for _when, candidate_id, _ordinal, attempt in sorted(events):
+        if attempt.get("outcome") in {"completed", "terminal-policy-rejection"}:
+            seen.clear()
+        elif _class20_operational_discard_attempt(attempt):
+            seen.add(candidate_id)
+            if len(seen) > 1:
+                raise WatchError("operational collector fault repeated across candidates")
 
 
 def _validate_active_batch(
@@ -7887,7 +8128,8 @@ def _validate_state_namespace_root(state_root: Path) -> None:
         or value["artifact_type"] != SCOPE_NAMESPACE_TYPE
         or type(value["schema_version"]) is not int
         or value["schema_version"] != SCHEMA_VERSION
-        or value["study_id"] != STUDY_ID
+        or not isinstance(value["study_id"], str)
+        or value["study_id"] not in SUPPORTED_STUDY_IDS
         or value["namespace_sha256"] != state_root.name
         or not isinstance(value["lab_root"], str)
         or not os.path.isabs(value["lab_root"])
@@ -7913,6 +8155,7 @@ def _paths_from_state_namespace(state_root: Path) -> WatchPaths:
         Path(value["lab_root"]),
         acquisition_root=Path(value["acquisition_root"]),
         state_base=state_root.parent,
+        study_id=value["study_id"],
     )
     if paths.state_root != state_root or str(paths.acquisition_root) != value["acquisition_root"]:
         raise WatchError("acquisition watch namespace does not derive canonical paths")
@@ -9617,6 +9860,7 @@ def _status_command(paths: WatchPaths) -> tuple[str, ...]:
         str(paths.launcher),
         "class-study",
         "acquisition-status",
+        *(("--study-id", paths.study_id) if paths.study_id == CLASS20_STUDY_ID else ()),
         "--candidate-catalogue",
         str(paths.candidate_catalogue),
         "--acquisition-root",
@@ -9629,6 +9873,7 @@ def _run_command(paths: WatchPaths) -> tuple[str, ...]:
         str(paths.launcher),
         "class-study",
         "acquisition-run",
+        *(("--study-id", paths.study_id) if paths.study_id == CLASS20_STUDY_ID else ()),
         "--candidate-catalogue",
         str(paths.candidate_catalogue),
         "--acquisition-root",
@@ -9716,6 +9961,7 @@ def _run_action(
         result,
         action=action,
         expected_runner_root=_container_acquisition_root(paths),
+        study_id=paths.study_id,
     )
 
 
@@ -9730,7 +9976,8 @@ def _container_acquisition_root(paths: WatchPaths) -> str:
 
 
 def _validate_action_result(
-    value: Any, *, action: str, expected_runner_root: str
+    value: Any, *, action: str, expected_runner_root: str,
+    study_id: str = STUDY_ID,
 ) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != _ACTION_KEYS:
         raise WatchError(f"{action} result envelope differs from the coordinator contract")
@@ -9746,11 +9993,13 @@ def _validate_action_result(
         raise WatchError(f"{action} result blockers are malformed")
     details = value["details"]
     expected_keys = _STATUS_DETAIL_KEYS if action == "acquisition-status" else _RUN_DETAIL_KEYS
+    if isinstance(details, dict) and details.get("acquisition_schema_version") == CURRENT_ACQUISITION_SCHEMA_VERSION:
+        expected_keys = expected_keys | {"operational_censor_summary"}
     if not isinstance(details, dict) or set(details) != expected_keys:
         raise WatchError(f"{action} result details differ from the coordinator contract")
     if details["valid"] is not True or details["runner_root"] != expected_runner_root:
         raise WatchError(f"{action} result names another acquisition root")
-    _validate_status_details(details, action=action)
+    _validate_status_details(details, action=action, study_id=study_id)
     if action == "acquisition-status":
         gate = details["gate"]
         gate_verification = details["gate_verification"]
@@ -9775,7 +10024,11 @@ def _validate_action_result(
             != {"acquisition_authority_path", "acquisition_authority_sha256", "informational_only"}
             or not isinstance(gate_verification["acquisition_authority_path"], str)
             or re.fullmatch(
-                r"/lab/artifacts/class-study-(?:foundation|acquisition-authority)-v[1-9][0-9]*\.json",
+                (
+                    rf"/lab/artifacts/{re.escape(CLASS20_STUDY_ID)}-acquisition-authority-v[1-9][0-9]*\.json"
+                    if study_id == CLASS20_STUDY_ID else
+                    r"/lab/artifacts/class-study-(?:foundation|acquisition-authority)-v[1-9][0-9]*\.json"
+                ),
                 gate_verification["acquisition_authority_path"],
             )
             is None
@@ -9799,8 +10052,202 @@ def _validate_action_result(
     return value
 
 
-def _validate_selection_details(selection: Any, blocked: Any) -> None:
+def _class20_selection_from_dispositions(
+    candidate_order: Sequence[str], *, tranco_list_sha256: str,
+    dispositions: Mapping[str, str],
+) -> dict[str, Any]:
+    ordered = list(candidate_order)
+    if any(type(candidate_id) is not str for candidate_id in ordered):
+        raise WatchError("20-site selection candidate IDs are malformed")
+    if (
+        len(ordered) != CANDIDATE_COUNT
+        or len(set(ordered)) != CANDIDATE_COUNT
+        or not isinstance(tranco_list_sha256, str)
+        or _SHA256_RE.fullmatch(tranco_list_sha256) is None
+        or any(candidate_id not in ordered or disposition not in {
+            "eligible", "site-rejected", "operational-censor"
+        } for candidate_id, disposition in dispositions.items())
+    ):
+        raise WatchError("20-site selection inputs are invalid")
+    eligible = [candidate_id for candidate_id in ordered
+                if dispositions.get(candidate_id) == "eligible"][:CLASS20_PILOT_COUNT]
+    quota_met = len(eligible) == CLASS20_PILOT_COUNT
+    cutoff = ordered.index(eligible[-1]) + 1 if quota_met else len(ordered)
+    prefix = ordered[:cutoff]
+    needed = [candidate_id for candidate_id in prefix if candidate_id not in dispositions]
+    complete = quota_met and not needed
+    return {
+        "schema_version": 3,
+        "policy": CLASS20_ACQUISITION_SELECTION_POLICY,
+        "tranco_list_sha256": tranco_list_sha256,
+        "order_policy": CLASS20_ORDER_POLICY,
+        "order_sha256": _sha256_bytes(_canonical_json_bytes(ordered)),
+        "ordered_candidate_ids": ordered,
+        "candidate_ids": ordered,
+        "eligible_quota": CLASS20_PILOT_COUNT,
+        "complete": complete,
+        "quota_unmet": not quota_met and not needed,
+        "cutoff_id": eligible[-1] if quota_met else None,
+        "terminal_ids": [candidate_id for candidate_id in ordered
+                         if candidate_id in dispositions],
+        "prefix_ids": prefix,
+        "needed_ids": needed,
+        "admission_ids": [candidate_id for candidate_id in ordered
+                          if dispositions.get(candidate_id) not in {
+                              "site-rejected", "operational-censor"
+                          }][:CLASS20_PILOT_COUNT],
+        "remaining_ids": [candidate_id for candidate_id in ordered
+                          if candidate_id not in dispositions],
+        "unassessed_ids": [candidate_id for candidate_id in ordered[cutoff:]
+                           if candidate_id not in dispositions],
+        "eligible_ids": eligible,
+        "pilot_ids": eligible if complete else [],
+        "operational_censor_ids": [candidate_id for candidate_id in ordered
+                                   if dispositions.get(candidate_id) == "operational-censor"],
+        "site_rejected_ids": [candidate_id for candidate_id in ordered
+                              if dispositions.get(candidate_id) == "site-rejected"],
+    }
+
+
+def _current_v1_selection_from_dispositions(
+    candidate_order: Sequence[str], *, tranco_list_sha256: str,
+    dispositions: Mapping[str, str],
+) -> dict[str, Any]:
+    ordered = list(candidate_order)
+    if any(type(candidate_id) is not str for candidate_id in ordered):
+        raise WatchError("current v1 selection candidate IDs are malformed")
+    if (
+        len(ordered) != CANDIDATE_COUNT
+        or len(set(ordered)) != CANDIDATE_COUNT
+        or not isinstance(tranco_list_sha256, str)
+        or _SHA256_RE.fullmatch(tranco_list_sha256) is None
+        or any(candidate_id not in ordered or disposition not in {
+            "eligible", "site-rejected", "operational-censor"
+        } for candidate_id, disposition in dispositions.items())
+    ):
+        raise WatchError("current v1 selection inputs are invalid")
+    stratum_ids = (
+        "1-1000", "1001-10000", "10001-100000", "100001-500000", "500001-1000000"
+    )
+    strata: list[dict[str, Any]] = []
+    for index, stratum_id in enumerate(stratum_ids):
+        members = ordered[index * 120:(index + 1) * 120]
+        eligible = [candidate_id for candidate_id in members
+                    if dispositions.get(candidate_id) == "eligible"][:24]
+        quota_met = len(eligible) == 24
+        cutoff = members.index(eligible[-1]) + 1 if quota_met else len(members)
+        prefix = members[:cutoff]
+        unassessed = [candidate_id for candidate_id in members[cutoff:]
+                      if candidate_id not in dispositions]
+        visible = set(prefix + unassessed)
+        needed = [candidate_id for candidate_id in prefix
+                  if candidate_id not in dispositions]
+        strata.append({
+            "id": stratum_id,
+            "complete": quota_met and not needed,
+            "quota_unmet": not quota_met and not needed,
+            "cutoff_id": eligible[-1] if quota_met else None,
+            "prefix_ids": prefix,
+            "eligible_ids": eligible,
+            "needed_ids": needed,
+            "admission_ids": [candidate_id for candidate_id in members
+                              if dispositions.get(candidate_id) not in {
+                                  "site-rejected", "operational-censor"
+                              }][:24],
+            "unassessed_ids": unassessed,
+            "operational_censor_ids": [candidate_id for candidate_id in members
+                                       if candidate_id in visible and
+                                       dispositions.get(candidate_id) == "operational-censor"],
+            "site_rejected_ids": [candidate_id for candidate_id in members
+                                  if candidate_id in visible and
+                                  dispositions.get(candidate_id) == "site-rejected"],
+        })
+    complete = all(stratum["complete"] for stratum in strata)
+    result: dict[str, Any] = {
+        "schema_version": 2,
+        "policy": CURRENT_V1_ACQUISITION_SELECTION_POLICY,
+        "quota_per_stratum": 24,
+        "tranco_list_sha256": tranco_list_sha256,
+        "complete": complete,
+        "quota_unmet_strata": [stratum["id"] for stratum in strata
+                               if stratum["quota_unmet"]],
+        "candidate_ids": ordered,
+        "terminal_ids": [candidate_id for candidate_id in ordered
+                         if candidate_id in dispositions],
+        "remaining_ids": [candidate_id for candidate_id in ordered
+                          if candidate_id not in dispositions],
+        "pilot_ids": [candidate_id for stratum in strata
+                      for candidate_id in stratum["eligible_ids"]] if complete else [],
+        "operational_censor_ids": [candidate_id for candidate_id in ordered
+                                   if dispositions.get(candidate_id) == "operational-censor"],
+        "site_rejected_ids": [candidate_id for candidate_id in ordered
+                              if dispositions.get(candidate_id) == "site-rejected"],
+        "strata": strata,
+    }
+    for name in ("prefix_ids", "needed_ids", "admission_ids", "unassessed_ids"):
+        result[name] = [candidate_id for stratum in strata
+                        for candidate_id in stratum[name]]
+    return result
+
+
+def _validate_selection_details(
+    selection: Any, blocked: Any, *, study_id: str = STUDY_ID,
+    acquisition_schema_version: int = ACQUISITION_SCHEMA_VERSION,
+) -> None:
     """Reconstruct the prefix inventory; unknown outcomes remain unknown."""
+
+    if acquisition_schema_version == CURRENT_ACQUISITION_SCHEMA_VERSION:
+        if not isinstance(selection, dict):
+            raise WatchError("current acquisition selection inventory is malformed")
+        candidate_order = selection.get("candidate_ids")
+        if not isinstance(candidate_order, list):
+            raise WatchError("current acquisition candidate order is malformed")
+        terminal_ids = selection.get("terminal_ids")
+        site_rejected = selection.get("site_rejected_ids")
+        censored = selection.get("operational_censor_ids")
+        if (
+            any(not isinstance(item, list) for item in (terminal_ids, site_rejected, censored))
+            or any(type(candidate_id) is not str for ids in (terminal_ids, site_rejected, censored)
+                   for candidate_id in ids)
+        ):
+            raise WatchError("current acquisition terminal inventory is malformed")
+        terminal_set = set(terminal_ids)
+        rejected_set = set(site_rejected)
+        censored_set = set(censored)
+        if (
+            len(terminal_set) != len(terminal_ids)
+            or len(rejected_set) != len(site_rejected)
+            or len(censored_set) != len(censored)
+            or not rejected_set.isdisjoint(censored_set)
+            or not rejected_set <= terminal_set
+            or not censored_set <= terminal_set
+        ):
+            raise WatchError("current acquisition terminal disposition is malformed")
+        dispositions = {
+            candidate_id: (
+                "site-rejected" if candidate_id in rejected_set else
+                "operational-censor" if candidate_id in censored_set else "eligible"
+            ) for candidate_id in terminal_ids
+        }
+        expected = (
+            _class20_selection_from_dispositions
+            if study_id == CLASS20_STUDY_ID else _current_v1_selection_from_dispositions
+        )(
+            candidate_order, tranco_list_sha256=selection.get("tranco_list_sha256"),
+            dispositions=dispositions
+        )
+        if not _matches_json_contract(selection, expected):
+            raise WatchError("current selection differs from its deterministic prefix")
+        if (
+            not isinstance(blocked, list)
+            or any(type(candidate_id) is not str for candidate_id in blocked)
+            or len(set(blocked)) != len(blocked)
+            or blocked != [candidate_id for candidate_id in candidate_order
+                           if candidate_id in blocked]
+            or any(candidate_id in terminal_set for candidate_id in blocked)
+        ):
+            raise WatchError("current selection blocked inventory is malformed")
+        return
 
     expected_keys = {
         "schema_version", "policy", "tranco_list_sha256", "complete", "quota_unmet_strata",
@@ -9879,10 +10326,16 @@ def _validate_selection_details(selection: Any, blocked: Any) -> None:
         raise WatchError("acquisition selection differs from its deterministic terminal prefix")
 
 
-def _validate_status_details(details: Mapping[str, Any], *, action: str) -> None:
+def _validate_status_details(
+    details: Mapping[str, Any], *, action: str, study_id: str = STUDY_ID
+) -> None:
+    expected_schemas = (
+        {CURRENT_ACQUISITION_SCHEMA_VERSION} if study_id == CLASS20_STUDY_ID
+        else {ACQUISITION_SCHEMA_VERSION, CURRENT_ACQUISITION_SCHEMA_VERSION}
+    )
     if (
         type(details["acquisition_schema_version"]) is not int
-        or details["acquisition_schema_version"] != ACQUISITION_SCHEMA_VERSION
+        or details["acquisition_schema_version"] not in expected_schemas
         or type(details["checkpoint_schema_version"]) is not int
         or details["checkpoint_schema_version"] != CHECKPOINT_SCHEMA_VERSION
         or type(details["maximum_candidates_per_action"]) is not int
@@ -9893,7 +10346,19 @@ def _validate_status_details(details: Mapping[str, Any], *, action: str) -> None
         raise WatchError(f"{action} result carries another acquisition schema or batch cap")
     selection = details["selection"]
     blocked = details["selection_blocked_candidate_ids"]
-    _validate_selection_details(selection, blocked)
+    _validate_selection_details(
+        selection, blocked, study_id=study_id,
+        acquisition_schema_version=details["acquisition_schema_version"],
+    )
+    if details["acquisition_schema_version"] == CURRENT_ACQUISITION_SCHEMA_VERSION:
+        summary = details["operational_censor_summary"]
+        expected_summary = {
+            "cause": CLASS20_OPERATIONAL_CENSOR_CAUSE,
+            "count": len(selection["operational_censor_ids"]),
+            "candidate_ids": selection["operational_censor_ids"],
+        }
+        if not _matches_json_contract(summary, expected_summary):
+            raise WatchError("operational censor summary differs from selection")
     active_batch = details["active_batch"]
     if active_batch is not None:
         if not isinstance(active_batch, dict) or set(active_batch) != {
@@ -10293,7 +10758,9 @@ def watch_acquisition(
                             "acquisition selection blocked by infrastructure outcomes: "
                             + ", ".join(details["selection_blocked_candidate_ids"])
                         )
-                    if details["selection"]["quota_unmet_strata"]:
+                    if active_paths.study_id == CLASS20_STUDY_ID and details["selection"]["quota_unmet"]:
+                        raise WatchError("20-site acquisition quota remains unmet after all 600 candidates")
+                    if active_paths.study_id == STUDY_ID and details["selection"]["quota_unmet_strata"]:
                         raise WatchError(
                             "acquisition scientific quota remains unmet in strata: "
                             + ", ".join(details["selection"]["quota_unmet_strata"])
@@ -10357,7 +10824,7 @@ class WatchSignalInterrupt(KeyboardInterrupt):
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Supervise an initialized classifier-multiorigin100-v1 acquisition "
+            "Supervise an initialized class-study acquisition "
             "from its immutable checkpoint."
         )
     )
@@ -10366,6 +10833,12 @@ def _parser() -> argparse.ArgumentParser:
         type=float,
         default=DEFAULT_HEARTBEAT_SECONDS,
         help="host heartbeat while waiting (finite, 1 to 5 seconds; default: 5)",
+    )
+    parser.add_argument(
+        "--study-id",
+        choices=sorted(SUPPORTED_STUDY_IDS),
+        default=STUDY_ID,
+        help="registered acquisition study (default: classifier-multiorigin100-v1)",
     )
     parser.add_argument(
         "--acquisition-root",
@@ -10490,7 +10963,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     try:
         result = watch_acquisition(
-            paths=WatchPaths.from_script(acquisition_root=arguments.acquisition_root),
+            paths=WatchPaths.from_script(
+                acquisition_root=arguments.acquisition_root,
+                study_id=arguments.study_id,
+            ),
             heartbeat_seconds=arguments.heartbeat_seconds,
             max_actions=arguments.max_actions,
         )

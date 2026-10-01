@@ -7,6 +7,7 @@ import pytest
 
 from qcsd_lab import class_fitting, class_layout, util
 from qcsd_lab.class_campaigns import campaign_documents
+from qcsd_lab.class_study import CLASS20_PROFILE
 
 
 def _use_lab_root(monkeypatch: pytest.MonkeyPatch, root: Path) -> None:
@@ -84,6 +85,51 @@ def test_layout_uses_dynamic_lab_root_and_exact_directories(
         class_layout.FINAL_QUALIFICATION_SET
         == class_fitting.AUTHORITATIVE_QUALIFICATION_SET
     )
+
+
+def test_20_site_profile_has_separate_canonical_publication_graph(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "lab"
+    _use_lab_root(monkeypatch, root)
+    layout = class_layout.class_study_layout(profile=CLASS20_PROFILE)
+
+    assert layout.study_config_root == root / "config/class-study/v2"
+    assert layout.campaign_root == root / "config/classifier-multiorigin20-v1-campaigns"
+    assert layout.workload_root == root / "config/classifier-multiorigin20-v1-workloads"
+    assert layout.acquisition_root == root / "artifacts/classifier-multiorigin20-v1-acquisition"
+    assert layout.pilot_qualification_set_root.name == (
+        "classifier-multiorigin20-v1-pilot30-full-v1"
+    )
+    assert layout.final_qualification_set_root.name == (
+        "classifier-multiorigin20-v1-final20-full-v1"
+    )
+    runner = layout.acquisition_root.with_name(f"{layout.acquisition_root.name}-v140")
+    stability, workloads = class_layout.publication_roots_for_acquisition_root(
+        runner, profile=CLASS20_PROFILE
+    )
+    assert (stability.name, workloads.name) == (
+        "classifier-multiorigin20-v1-stability-v140",
+        "classifier-multiorigin20-v1-workloads-v140",
+    )
+    assert class_layout.require_cohort_publication_roots(
+        runner, stability, workloads, require_versioned=True, profile=CLASS20_PROFILE
+    ) == (stability, workloads)
+    with pytest.raises(ValueError, match="outside the canonical class-study layout"):
+        class_layout.require_canonical_acquisition_root(runner)
+    assert class_layout.canonical_campaign_reference(
+        field="study_config_root",
+        filename="classifier-multiorigin20-v1-cohort.json",
+        profile=CLASS20_PROFILE,
+    ) == "../class-study/v2/classifier-multiorigin20-v1-cohort.json"
+    with pytest.raises(ValueError, match="alternate class-study path"):
+        class_layout.require_canonical_campaign_reference(
+            class_layout.DEFAULT_COHORT_REFERENCE,
+            field="study_config_root",
+            filename="classifier-multiorigin20-v1-cohort.json",
+            profile=CLASS20_PROFILE,
+        )
 
 
 def test_fresh_path_helper_rejects_alternate_and_frozen_roots(

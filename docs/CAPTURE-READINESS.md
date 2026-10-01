@@ -1,15 +1,17 @@
 # Evidence required to begin class-study capture
 
-Status: 1 October 2026, Australia/Sydney. This is an evidence map and
+Status: 2 October 2026, Australia/Sydney. This is an evidence map and
 decision record for the extended class study. The executable rules are the
 checked-in [study contract](../config/class-study/v1/study.json), the validators
 in [class attestation](../src/qcsd_lab/class_attestation.py) and
 [class pipeline](../src/qcsd_lab/class_pipeline.py), and the coordinator's
 `./qcsd-lab class-study --help`. The [project ledger](../PROJECT.md) records the
 latest accepted counts. The [continuation runbook](CLASS-STUDY.md) gives the
-operator sequence. The faster schema-12 protocol is implemented prospectively
-in the working source; it has no formal authority until that source is frozen,
-built and bound to fresh verified execution receipts.
+operator sequence. The faster 20-site profile in
+`docs/CLASS-STUDY-20.md` is still prospective. It has no formal authority
+until its source is integrated, frozen, built and bound to fresh verified
+execution receipts. The table and detailed 100-site counts below describe
+the existing registered contract unless marked otherwise.
 
 ## Define the start line
 
@@ -270,21 +272,25 @@ validation and block 10 held-out test. No block-ten tuning is permitted.
 
 ## Current blocker and earlier authority
 
-V138's clean no-cache build, pinned CDP and acquisition-focused correctness
-suite produced an independently verified schema-2 acquisition-only authority.
-Its checkpoint at `artifacts/classifier-multiorigin100-v1-acquisition-v138/`
-was exercised in two bounded watcher actions. Three candidates received
-site-policy rejections; `tranco-0000837` received an immutable pre-probe
-terminal after three recoverable DNS failures. Under v138's rule, that terminal
-blocks the first stratum's 24 eligible-site selection, leaving 0/120 pilot
-classes and 0/16,000 formal samples. The prospective source change rejects
-a non-addressable site only after repeated target `EAI_NONAME`/NODATA with a
-distinct healthy public DNS control; transient and ambiguous DNS failures
-remain infrastructure blockers. Focused tests pass, but this change gives v138
-no new authority or classification. The changed source needs a new cohort and
-repeat build, pinned CDP and acquisition-only authority before a replacement runner.
-The same-source 110-vector browser and full defence foundation remain later
-gates before any fitting or capture.
+V139 is the latest source-bound attempt. Its recorded clean no-cache build,
+pinned CDP and acquisition-focused authority permitted public-page acquisition
+on that source only. Its checkpoint at
+`artifacts/classifier-multiorigin100-v1-acquisition-v139/` contains eight
+site-rejection terminals, one inconclusive pending HTTP/3 screen and a durable
+internal browser-control error on `tranco-0000280`. The read-only checkpoint
+validator refuses completion. The result remains **0/120 pilot classes and
+0/16,000 formal samples**. A later zero-credit navigation rehearsal exercised
+a proposed full-attempt discard for the exact browser fault, but it did not
+repair v139 or change any accepted count. The repaired source and prospective
+20-site profile require integration, a clean freeze, a new cohort, repeat
+build, pinned CDP and profile-bound acquisition authority. The same-source
+110-vector browser gate and full defence foundation remain later gates before
+any fitting or defended capture.
+
+V138 remains historical: it stopped after three site-policy rejections and an
+immutable DNS pre-probe blocker on `tranco-0000837`. A later DNS rule cannot
+retroactively reclassify that receipt. Preserve both cohorts and their failed
+attempts.
 
 ### Earlier cohorts
 
@@ -425,16 +431,14 @@ implementation and evidence; none is an implicit waiver:
    action exited and its scope emptied before launching another. This removes
    idle reservations without running uncoordinated containers. Actual release
    speed must be measured on live acquisition receipts.
-3. **Consider pre-formal repetition only after the first new cohort.** The
-   strongest scientific requirement to retain is a frozen, balanced 100-class
-   multi-origin corpus and one successful compatibility check for each final
-   class/mode. Pilot/final fitting visits and redundant qualification work
-   could be prospectively reduced after checking whether the fitting methods
-   still have enough independent observations and the per-class chaff/prefix
-   capacity remains demonstrated. This changes precision and generality. The
-   current amendment retains all registered pre-formal counts because changing
-   that matrix would delay the next authority and require wider verifier work.
-   Do not use formal samples for fitting.
+3. **Use the separately registered 20-site proposal only on new evidence.**
+   `docs/CLASS-STUDY-20.md` retains complete multi-origin graphs and the
+   16,000-sample target but reduces the pilot/final site counts and preparation
+   visits. Its 30-pilot/20-final selection, 15-pair screening, 180-cell
+   certification and 20-site qualification need their own integrated code and
+   source-bound receipts before formal capture. This changes the population
+   claim: results describe 20 measurable sites over time, not a balanced
+   100-site sample. Do not use formal samples for fitting.
 4. **Measure one end-to-end accepted sample before promising a schedule.**
    Certification provides the first relevant wall-time and byte basis. Use its
    observed distribution, accepted rate, failures and the preflight's storage
@@ -444,18 +448,18 @@ implementation and evidence; none is an implicit waiver:
    ownership, with global cooldown and deterministic verification. It is a
    separate engineering change, not a Docker launch flag.
 
-The prospective schema-2 execution sequence is: freeze the amended source and
-contract; verify a fresh no-cache build, pinned CDP, acquisition correctness
-and acquisition authority; acquire the frozen population; then complete the
-same-source 110-vector browser gate and full foundation before fitting or
-capture. The observed v130 build took 1h07m and its CDP receipt followed
-about 8 minutes later; allow additional tens of minutes for correctness and
-verification before acquisition can start. The observed full browser gate
-took 7h47m and remains mandatory later. After foundation, complete the
-registered fitting and compatibility matrix; verify readiness and historical
-pre-snapshot; then run and seal block pairs
-continuously while measuring accepted cells per day. Keep every relaxation
-visible in the methods and limitations, preserving complete multi-origin
-graphs, disjoint training/certification/formal roles, and all failed evidence.
-Do not call a redesigned gate complete until its actual receipt and closed
-inventory verify.
+The prospective 20-site execution sequence is: freeze its source and profile;
+verify a fresh no-cache build, pinned CDP, acquisition correctness and
+profile-bound acquisition authority; acquire 30 eligible pilot sites; then
+complete the same-source 110-vector browser gate and full foundation before
+fitting or defended capture. The observed v130 build took 1h07m and its CDP
+receipt followed about 8 minutes later; allow additional correctness and
+verification time before acquisition can start. The observed full browser
+gate took 7h47m and remains mandatory later. After foundation, complete the
+profile's fitting, pair screening, final qualification and certification;
+verify readiness and the historical pre-snapshot; then run and seal ten
+canary/formal block pairs while measuring accepted visits per day. Keep every
+relaxation visible in the methods and limitations, preserving complete
+multi-origin graphs, disjoint training/certification/formal roles, and all
+failed evidence. Do not call a redesigned gate complete until its actual
+receipt and closed inventory verify.

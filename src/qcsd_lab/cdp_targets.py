@@ -102,8 +102,17 @@ _EMPTY_RESULT_POLICY_COMMANDS = frozenset({"Fetch.continueRequest", "Fetch.failR
 _ROOT_CONTINUE_INVALID_INTERCEPTION_MESSAGE = (
     "CDPSession.send: Protocol error (Fetch.continueRequest): Invalid InterceptionId."
 )
+_ROOT_FAIL_INVALID_INTERCEPTION_MESSAGE = (
+    "CDPSession.send: Protocol error (Fetch.failRequest): Invalid InterceptionId."
+)
 _ROOT_CONTINUE_INVALID_INTERCEPTION_POLICY_LABEL = (
     "catalogue-navigation-policy:Fetch.continueRequest"
+)
+_ROOT_FAIL_INVALID_INTERCEPTION_POLICY_LABEL = (
+    "catalogue-navigation-policy:Fetch.failRequest"
+)
+_HTTP_METHOD_TOKEN_CHARS = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#$%&'*+-.^_`|~"
 )
 _ROOT_CONTINUE_INVALID_INTERCEPTION_RESOURCE_TYPES = frozenset({"Font", "Stylesheet"})
 _ROOT_CANCELED_INTERCEPTION_RETRY_RESOURCE_TYPES = frozenset({"Other", "Script"})
@@ -414,6 +423,23 @@ def _is_exact_root_continue_invalid_interception(
     )
 
 
+def _is_exact_root_fail_invalid_interception(
+    error: Exception,
+    *,
+    expected_type: type[Exception] | None,
+) -> bool:
+    """Match only the pinned Playwright error for a stale root Fetch denial."""
+
+    return (
+        expected_type is not None
+        and type(error) is expected_type
+        and getattr(error, "name", None) == "Error"
+        and getattr(error, "message", None) == _ROOT_FAIL_INVALID_INTERCEPTION_MESSAGE
+        and str(error) == _ROOT_FAIL_INVALID_INTERCEPTION_MESSAGE
+        and error.args == (_ROOT_FAIL_INVALID_INTERCEPTION_MESSAGE,)
+    )
+
+
 _SHARED_WORKER_GUARD_FILTER = [
     {"type": "shared_worker", "exclude": False},
     # Browser-scope ``tab`` targets expose a paused creation tripwire for a
@@ -472,6 +498,17 @@ class _RootInvalidInterception(CdpTargetIntegrityError):
         self.fingerprint = fingerprint
 
 
+class _RootFailInvalidInterception(CdpTargetIntegrityError):
+    """The pinned stale-interception error from an unacknowledged root denial."""
+
+    def __init__(self, *, fingerprint: str) -> None:
+        super().__init__(
+            "root CDP Fetch.failRequest encountered InvalidInterceptionId "
+            f"({fingerprint})"
+        )
+        self.fingerprint = fingerprint
+
+
 class _RootLateNetworkInvalidInterception(CdpTargetIntegrityError):
     """A failed root continue whose matching Network start arrived after Fetch.
 
@@ -524,6 +561,18 @@ class _RootRequestStageInvalidInterception(CdpTargetIntegrityError):
     def __init__(self, *, fingerprint: str, resource_type: str) -> None:
         super().__init__(
             "root CDP Fetch.continueRequest failed for a bound catalogue "
+            f"request-stage {resource_type}; the navigation must be discarded "
+            f"({fingerprint})"
+        )
+        self.cleanup_verified = False
+
+
+class _RootRequestStageFailedInterception(CdpTargetIntegrityError):
+    """An exact failed catalogue denial permits only full-attempt discard."""
+
+    def __init__(self, *, fingerprint: str, resource_type: str) -> None:
+        super().__init__(
+            "root CDP Fetch.failRequest failed for a bound catalogue "
             f"request-stage {resource_type}; the navigation must be discarded "
             f"({fingerprint})"
         )
@@ -1274,7 +1323,10 @@ class _RootRequestStageFetch:
     source: CdpTargetSource
     fetch_request_id: str
     resource_type: str
-    continue_issued: bool = False
+    method: str
+    scheme: str
+    correlated_recovery_owner: bool
+    policy_issued: bool = False
 
 
 @dataclass
@@ -2217,10 +2269,10 @@ class RecursiveCdpTargetRouter:
         ] = {}
         self._seen_root_fetch_policy_identities: set[tuple[CdpTargetSource, str]] = set()
         self._root_fetch_callback_stack: list[_RootRequestStageFetch | None] = []
-        self._seen_root_request_stage_continues: set[
+        self._seen_root_request_stage_policies: set[
             tuple[CdpTargetSource, str]
         ] = set()
-        self._root_request_stage_continue_saturated = False
+        self._root_request_stage_policy_saturated = False
         self._early_root_fetch_by_network: dict[tuple[CdpTargetSource, str], str] = {}
         self._root_fetch_identity_saturated = False
         self._eligible_root_network_occurrences: dict[
@@ -3386,7 +3438,7 @@ class RecursiveCdpTargetRouter:
                 state.phase = "detached"
         self._pending.clear()
         self._root_fetch_by_policy_identity.clear()
-        self._seen_root_request_stage_continues.clear()
+        self._seen_root_request_stage_policies.clear()
         if any(
             not decision.abort_owned
             for decision in self._pending_root_invalid_interceptions.values()
@@ -3466,6 +3518,11 @@ class RecursiveCdpTargetRouter:
                 )
             ):
                 raise _RootInvalidInterception(fingerprint=fingerprint) from error
+            if method == "Fetch.failRequest" and _is_exact_root_fail_invalid_interception(
+                error,
+                expected_type=self._root_continue_error_type,
+            ):
+                raise _RootFailInvalidInterception(fingerprint=fingerprint) from error
             raise CdpTargetIntegrityError(
                 f"root CDP command {method} failed ({fingerprint})"
             ) from error
@@ -3547,7 +3604,32 @@ class RecursiveCdpTargetRouter:
                 and label == _ROOT_CONTINUE_INVALID_INTERCEPTION_POLICY_LABEL
                 and callback_token is not None
                 and callback_token.source == source
+                and callback_token.method == "GET"
+                and callback_token.scheme == "https"
+                and not callback_token.correlated_recovery_owner
                 and params == {"requestId": callback_token.fetch_request_id}
+                and not self._pre_shutdown_fetch_identity_saturated
+                and (source, callback_token.fetch_request_id)
+                not in self._pre_shutdown_reused_fetch_identities
+            )
+            discardable_root_fail = (
+                self._root_continue_error_type is not None
+                and not self._shutting_down
+                and not self._aborting
+                and source == self.root_source
+                and on_success is None
+                and method == "Fetch.failRequest"
+                and label == _ROOT_FAIL_INVALID_INTERCEPTION_POLICY_LABEL
+                and callback_token is not None
+                and callback_token.source == source
+                and (
+                    not callback_token.correlated_recovery_owner
+                    or root_fetch_decision is not None
+                )
+                and params == {
+                    "requestId": callback_token.fetch_request_id,
+                    "errorReason": "BlockedByClient",
+                }
                 and not self._pre_shutdown_fetch_identity_saturated
                 and (source, callback_token.fetch_request_id)
                 not in self._pre_shutdown_reused_fetch_identities
@@ -3561,27 +3643,32 @@ class RecursiveCdpTargetRouter:
                 # synchronous transport call. A re-entrant Network terminal
                 # can then be attributed to this exact issued command.
                 root_fetch_decision.continue_issued = True
-            if discardable_root_continue:
+            if discardable_root_continue or discardable_root_fail:
                 assert callback_token is not None
                 identity = (source, callback_token.fetch_request_id)
                 if (
-                    callback_token.continue_issued
-                    or identity in self._seen_root_fetch_policy_identities
-                    or identity in self._seen_root_request_stage_continues
+                    callback_token.policy_issued
+                    or (
+                        root_fetch_decision is None
+                        and identity in self._seen_root_fetch_policy_identities
+                    )
+                    or identity in self._seen_root_request_stage_policies
                 ):
                     raise CdpTargetIntegrityError(
-                        "root catalogue Fetch continuation was duplicated or reused"
+                        "root catalogue Fetch policy was duplicated or reused"
                     )
                 if (
-                    self._root_request_stage_continue_saturated
-                    or len(self._seen_root_request_stage_continues)
+                    self._root_fetch_identity_saturated
+                    or self._root_request_stage_policy_saturated
+                    or len(self._seen_root_request_stage_policies)
                     >= _ROOT_FETCH_IDENTITY_LIMIT
                 ):
-                    self._root_request_stage_continue_saturated = True
+                    self._root_request_stage_policy_saturated = True
                     discardable_root_continue = False
+                    discardable_root_fail = False
                 else:
-                    callback_token.continue_issued = True
-                    self._seen_root_request_stage_continues.add(identity)
+                    callback_token.policy_issued = True
+                    self._seen_root_request_stage_policies.add(identity)
             try:
                 result = self._root_send(method, params)
             except _RootInvalidInterception as error:
@@ -3619,6 +3706,14 @@ class RecursiveCdpTargetRouter:
                     fingerprint=error.fingerprint,
                 )
                 return
+            except _RootFailInvalidInterception as error:
+                if not discardable_root_fail:
+                    raise
+                assert callback_token is not None
+                raise _RootRequestStageFailedInterception(
+                    fingerprint=error.fingerprint,
+                    resource_type=callback_token.resource_type,
+                ) from error
             if type(result) is not dict or result != {}:
                 raise CdpTargetIntegrityError(
                     f"root CDP policy command {label} did not return an exact empty result"
@@ -3994,6 +4089,8 @@ class RecursiveCdpTargetRouter:
         request = event.get("request")
         fetch_id = event.get("requestId")
         resource_type = event.get("resourceType")
+        method = request.get("method") if isinstance(request, Mapping) else None
+        request_url = request.get("url") if isinstance(request, Mapping) else None
         if (
             source != self.root_source
             or self._root_frame_id is None
@@ -4005,9 +4102,15 @@ class RecursiveCdpTargetRouter:
             or not isinstance(resource_type, str)
             or not resource_type
             or not isinstance(request, Mapping)
-            or request.get("method") != "GET"
-            or not isinstance(request.get("url"), str)
-            or not request["url"]
+            or not isinstance(method, str)
+            or not method
+            or any(character not in _HTTP_METHOD_TOKEN_CHARS for character in method)
+            or not isinstance(request_url, str)
+            or not request_url
+            or any(
+                ord(character) < 33 or ord(character) == 127
+                for character in request_url
+            )
             or any(
                 field in event
                 for field in (
@@ -4020,11 +4123,16 @@ class RecursiveCdpTargetRouter:
         ):
             return None
         try:
-            url_parts = urlsplit(request["url"])
+            url_parts = urlsplit(request_url)
             hostname = url_parts.hostname
         except ValueError:
             return None
-        if url_parts.scheme.lower() != "https" or not hostname:
+        scheme = url_parts.scheme.lower()
+        if (
+            not scheme
+            or not (url_parts.netloc or url_parts.path)
+            or (scheme in {"http", "https"} and not hostname)
+        ):
             return None
         network_id = event.get("networkId")
         if network_id is not None and (
@@ -4033,19 +4141,21 @@ class RecursiveCdpTargetRouter:
             or network_id == fetch_id
         ):
             return None
-        if (
-            event.get("frameId") == self._root_frame_id
+        correlated_recovery_owner = (
+            method == "GET"
+            and scheme == "https"
+            and event.get("frameId") == self._root_frame_id
             and network_id is not None
             and resource_type in (
                 _ROOT_CONTINUE_INVALID_INTERCEPTION_RESOURCE_TYPES
                 | _ROOT_CANCELED_INTERCEPTION_RETRY_RESOURCE_TYPES
             )
-        ):
-            # Existing Network-correlated decisions own these callbacks. If
-            # their exact correlation was disabled by reuse or saturation,
-            # the broader discard path must not override that decision.
-            return None
-        return _RootRequestStageFetch(source, fetch_id, resource_type)
+        )
+        # A correlated continue remains owned by its exact Network decision.
+        # A denial can only be discarded if that decision is currently bound.
+        return _RootRequestStageFetch(
+            source, fetch_id, resource_type, method, scheme, correlated_recovery_owner
+        )
 
     def _register_root_fetch(
         self,
@@ -4099,7 +4209,7 @@ class RecursiveCdpTargetRouter:
         identity = (source, fetch_request_id)
         if (
             identity in self._seen_root_fetch_policy_identities
-            or identity in self._seen_root_request_stage_continues
+            or identity in self._seen_root_request_stage_policies
         ):
             raise CdpTargetIntegrityError("root Fetch interception was duplicated or reused")
         if (

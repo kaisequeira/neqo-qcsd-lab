@@ -14,10 +14,9 @@ These repository-local rules apply throughout `neqo-qcsd-lab/`.
   Historical passing prefixes and non-evidentiary probes advance no numerator.
 - Do not carry checkpoint figures forward from these instructions or memory.
   Read [PROJECT.md](PROJECT.md), the latest immutable receipts, and live
-  checkpoint state. Separate a completed historical gate from authority for
-  changed source: v89's verified 110-vector browser gate cannot authorise the
-  subsequent consumer fixes. Preserve all old cohorts and use the allocator's
-  next unused version after source freeze.
+  checkpoint state. Separate a completed historical browser gate from authority
+  for changed source. Preserve all old cohorts and use the allocator's next
+  unused version after source freeze.
 
 ## Live source-bound operations
 
@@ -51,11 +50,14 @@ These repository-local rules apply throughout `neqo-qcsd-lab/`.
 - Acquisition-only authority cannot replace the full defence foundation for
   any capture role, including fitting. The later foundation must bind the same
   source, build, acquisition contract, pinned-CDP and browser-egress evidence.
-- Complete acquisition only after the first 24 eligible candidates per stratum
-  and every earlier candidate have scientific terminal evidence. Preserve the
-  unused tail as unassessed. Infrastructure errors and missed stability windows
-  are blockers, not selective site rejections. No active/recovery work may be
-  hidden by a complete prefix.
+- Complete acquisition under its bound study profile: the registered 100-site
+  contract requires the first 24 eligible candidates per stratum and every
+  earlier candidate to have scientific terminal evidence; the prospective
+  20-site contract requires its declared round-robin order through 30 eligible
+  pilots, with every earlier candidate accounted for. Preserve unused tails as
+  unassessed. Infrastructure errors and missed stability windows are blockers,
+  not selective site rejections. No active/recovery work may be hidden by a
+  complete prefix, and no old cohort gains the new profile's authority.
 - Do not edit or regenerate `config/`, `artifacts/`, `results/`, or `handoffs/`
   unless the user's scoped task and the authoritative workflow explicitly
   require that mutation.

@@ -1693,10 +1693,298 @@ def test_watcher_acquisition_contracts_match_runtime() -> None:
         SHORT_TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT,
         TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT,
     )
-    from qcsd_lab.class_attestation import ACQUISITION_CORRECTNESS_TESTS
+    from qcsd_lab.class_attestation import (
+        ACQUISITION_CORRECTNESS_TESTS,
+        CLASS20_ACQUISITION_CORRECTNESS_TESTS,
+    )
     assert watch._TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT == TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT
     assert watch._SHORT_TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT == SHORT_TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT
     assert watch._ACQUISITION_CORRECTNESS_TESTS == ACQUISITION_CORRECTNESS_TESTS
+    assert watch._CLASS20_ACQUISITION_CORRECTNESS_TESTS == CLASS20_ACQUISITION_CORRECTNESS_TESTS
+
+
+def test_class20_watcher_routes_only_through_its_versioned_publication_graph(
+    tmp_path: Path,
+) -> None:
+    runner = tmp_path / "artifacts/classifier-multiorigin20-v1-acquisition-v140"
+    paths = watch.WatchPaths.from_lab_root(
+        tmp_path, acquisition_root=runner, study_id=watch.CLASS20_STUDY_ID,
+    )
+    historical = watch.WatchPaths.from_lab_root(tmp_path, acquisition_root=runner)
+    assert paths.candidate_catalogue == (
+        tmp_path / "config/class-study/v1/classifier-multiorigin100-v1-candidates.json"
+    )
+    assert paths.stability_root == (
+        tmp_path / "artifacts/classifier-multiorigin20-v1-stability-v140"
+    )
+    assert paths.workload_root == (
+        tmp_path / "config/classifier-multiorigin20-v1-workloads-v140"
+    )
+    assert paths.namespace_sha256 != historical.namespace_sha256
+    assert watch._state_namespace_identity(paths)["study_id"] == watch.CLASS20_STUDY_ID
+    namespace = watch._ensure_state_namespace(paths)
+    assert watch._paths_from_state_namespace(namespace) == paths
+    assert watch._status_command(paths)[3:5] == (
+        "--study-id", watch.CLASS20_STUDY_ID
+    )
+    assert watch._run_command(paths)[3:5] == (
+        "--study-id", watch.CLASS20_STUDY_ID
+    )
+    assert "--study-id" not in watch._status_command(historical)
+    assert watch._parser().parse_args([
+        "--study-id", watch.CLASS20_STUDY_ID,
+        "--acquisition-root", str(runner),
+    ]).study_id == watch.CLASS20_STUDY_ID
+    with pytest.raises(watch.WatchError, match="study is unsupported"):
+        watch.WatchPaths.from_lab_root(tmp_path, study_id="unregistered-study")
+
+
+def test_class20_watcher_reconstructs_30_eligible_global_prefix_and_censor() -> None:
+    ids = [f"tranco-{index:07d}" for index in range(1, 601)]
+    order = watch._class20_candidate_order(ids)
+    dispositions = {
+        order[0]: "operational-censor",
+        order[1]: "site-rejected",
+        **{candidate_id: "eligible" for candidate_id in order[2:32]},
+    }
+    selection = watch._class20_selection_from_dispositions(
+        order, tranco_list_sha256="a" * 64, dispositions=dispositions,
+    )
+    assert selection["complete"] is True
+    assert selection["pilot_ids"] == list(order[2:32])
+    assert selection["prefix_ids"] == list(order[:32])
+    assert selection["cutoff_id"] == order[31]
+    assert selection["operational_censor_ids"] == [order[0]]
+    assert selection["site_rejected_ids"] == [order[1]]
+    watch._validate_selection_details(
+        selection, [], study_id=watch.CLASS20_STUDY_ID,
+        acquisition_schema_version=watch.CURRENT_ACQUISITION_SCHEMA_VERSION,
+    )
+    details = _details(terminal=32)
+    details.update(
+        acquisition_schema_version=watch.CURRENT_ACQUISITION_SCHEMA_VERSION,
+        selection=selection,
+        selection_blocked_candidate_ids=[],
+        operational_censor_summary={
+            "cause": watch.CLASS20_OPERATIONAL_CENSOR_CAUSE,
+            "count": 1,
+            "candidate_ids": [order[0]],
+        },
+        pending_count=0,
+        work_due_now=False,
+        complete=True,
+    )
+    watch._validate_status_details(
+        details, action="acquisition-status", study_id=watch.CLASS20_STUDY_ID
+    )
+    for field, replacement in (
+        ("order_sha256", "f" * 64),
+        ("eligible_quota", 31),
+        ("pilot_ids", list(order[1:31])),
+        ("operational_censor_ids", []),
+    ):
+        forged = copy.deepcopy(selection)
+        forged[field] = replacement
+        with pytest.raises(watch.WatchError):
+            watch._validate_selection_details(
+                forged, [], study_id=watch.CLASS20_STUDY_ID,
+                acquisition_schema_version=watch.CURRENT_ACQUISITION_SCHEMA_VERSION,
+            )
+    wrong_summary = copy.deepcopy(details)
+    wrong_summary["operational_censor_summary"]["count"] = 0
+    with pytest.raises(watch.WatchError, match="operational censor summary"):
+        watch._validate_status_details(
+            wrong_summary, action="acquisition-status", study_id=watch.CLASS20_STUDY_ID
+        )
+
+
+def test_class20_watcher_profile_and_order_match_registered_runtime() -> None:
+    from qcsd_lab.acquisition_selection import derive_global_operational_censor_selection
+    from qcsd_lab.class_catalogue import load_candidate_catalogue_receipt
+    from qcsd_lab.class_study import (
+        CLASS20_PROFILE,
+        deterministic_profile_candidate_order,
+    )
+
+    lab_root = Path(__file__).resolve().parents[1]
+    paths = watch.WatchPaths.from_lab_root(
+        lab_root, study_id=watch.CLASS20_STUDY_ID,
+    )
+    watch._class20_profile_bindings(paths)
+    catalogue, candidates = load_candidate_catalogue_receipt(paths.candidate_catalogue)
+    tranco_sha256 = catalogue["payload"]["tranco"]["list_sha256"]
+    runtime_order = [candidate.candidate_id for candidate in deterministic_profile_candidate_order(
+        candidates, tranco_list_sha256=tranco_sha256, profile=CLASS20_PROFILE,
+    )]
+    frozen_order = [row["candidate_id"] for row in catalogue["payload"]["candidates"]]
+    assert list(watch._class20_candidate_order(frozen_order)) == runtime_order
+    dispositions = {
+        runtime_order[0]: "operational-censor",
+        runtime_order[1]: "site-rejected",
+        runtime_order[2]: "eligible",
+    }
+    runtime_selection = derive_global_operational_censor_selection(
+        candidates,
+        tranco_list_sha256=tranco_sha256,
+        ordered_candidate_ids=runtime_order,
+        order_policy=watch.CLASS20_ORDER_POLICY,
+        eligible_quota=CLASS20_PROFILE.pilot_count,
+        terminal_disposition=dispositions,
+    )
+    watcher_selection = watch._class20_selection_from_dispositions(
+        runtime_order, tranco_list_sha256=tranco_sha256,
+        dispositions=dispositions,
+    )
+    assert watcher_selection == runtime_selection
+
+
+def test_class20_watcher_correctness_authority_defers_browser_until_foundation() -> None:
+    lab_root = Path(__file__).resolve().parents[1]
+    paths = watch.WatchPaths.from_lab_root(lab_root, study_id=watch.CLASS20_STUDY_ID)
+    study = watch._class20_profile_bindings(paths)["profile"]
+    source = {"image_digest": "sha256:" + "a" * 64}
+    build_identity = {"sha256": "b" * 64, "completion_sha256": "c" * 64}
+    pinned_sha256 = "d" * 64
+    correctness = {
+        "schema_version": 1,
+        "gate": "acquisition-focused-correctness",
+        "argv": [
+            "/opt/qcsd-venv/bin/python", "-m", "pytest", "-p", "no:cacheprovider",
+            *watch._CLASS20_ACQUISITION_CORRECTNESS_TESTS,
+        ],
+        "cwd": "/lab",
+        "input_sha256": {
+            relative: hashlib.sha256((lab_root / relative).read_bytes()).hexdigest()
+            for relative in (
+                *watch._CLASS20_ACQUISITION_CORRECTNESS_TESTS,
+                "pyproject.toml", "uv.lock",
+            )
+        },
+        "source": source,
+        "build_execution_identity": build_identity,
+        "study_contract": study,
+        "started_at": "2026-10-01T01:00:00+00:00",
+        "finished_at": "2026-10-01T01:01:00+00:00",
+        "exit_code": 0,
+        "stdout": "1 passed\n",
+        "stdout_bytes": len("1 passed\n".encode()),
+        "stdout_sha256": hashlib.sha256(b"1 passed\n").hexdigest(),
+    }
+    gates = [
+        ("current-clean-source-and-no-cache-build", ["b" * 64, "c" * 64]),
+        ("acquisition-focused-correctness", [hashlib.sha256(_canonical(correctness)).hexdigest()]),
+        ("pinned-cdp-integration-probe", [pinned_sha256]),
+    ]
+    hard_gates = [
+        {
+            "ordinal": index,
+            "gate": gate,
+            "gate_identity_sha256": hashlib.sha256(
+                _canonical({"ordinal": index, "gate": gate})
+            ).hexdigest(),
+            "result": "pass",
+            "evidence_sha256s": sorted(set(hashes)),
+        }
+        for index, (gate, hashes) in enumerate(gates, 1)
+    ]
+    payload = {
+        "attestation_schema_version": 3,
+        "study_contract": study,
+        "prepare_source": source,
+        "source": source,
+        "build_execution_identity": build_identity,
+        "acquisition_correctness": correctness,
+        "evidence": {"pinned_cdp_probe": {"sha256": pinned_sha256}},
+        "hard_gates": hard_gates,
+    }
+    watch._validate_acquisition_correctness_authority(
+        payload, paths=paths, prepare_source=source,
+        build_finished=datetime(2026, 10, 1, 0, 0, tzinfo=UTC),
+        probe_recorded=datetime(2026, 10, 1, 0, 1, tzinfo=UTC),
+        recorded=datetime(2026, 10, 1, 1, 2, tzinfo=UTC),
+    )
+    forged = copy.deepcopy(payload)
+    forged["study_contract"] = {
+        **study, "path": "/lab/config/class-study/v1/study.json"
+    }
+    with pytest.raises(watch.WatchError, match="study contract differs"):
+        watch._validate_acquisition_correctness_authority(
+            forged, paths=paths, prepare_source=source,
+            build_finished=datetime(2026, 10, 1, 0, 0, tzinfo=UTC),
+            probe_recorded=datetime(2026, 10, 1, 0, 1, tzinfo=UTC),
+            recorded=datetime(2026, 10, 1, 1, 2, tzinfo=UTC),
+        )
+
+
+def test_current_v1_watcher_reconstructs_per_stratum_censor_selection() -> None:
+    from qcsd_lab.acquisition_selection import derive_operational_censor_selection
+    from qcsd_lab.class_catalogue import load_candidate_catalogue_receipt
+
+    ids = [f"tranco-{index:07d}" for index in range(1, 601)]
+    dispositions = {
+        ids[0]: "operational-censor",
+        **{candidate_id: "eligible" for candidate_id in ids[1:25]},
+    }
+    selection = watch._current_v1_selection_from_dispositions(
+        ids, tranco_list_sha256="a" * 64, dispositions=dispositions,
+    )
+    assert selection["schema_version"] == 2
+    assert selection["strata"][0]["eligible_ids"] == ids[1:25]
+    assert selection["strata"][0]["complete"] is True
+    assert selection["operational_censor_ids"] == [ids[0]]
+    watch._validate_selection_details(
+        selection, [], study_id=watch.STUDY_ID,
+        acquisition_schema_version=watch.CURRENT_ACQUISITION_SCHEMA_VERSION,
+    )
+    forged = copy.deepcopy(selection)
+    forged["strata"][0]["operational_censor_ids"] = []
+    with pytest.raises(watch.WatchError, match="deterministic prefix"):
+        watch._validate_selection_details(
+            forged, [], study_id=watch.STUDY_ID,
+            acquisition_schema_version=watch.CURRENT_ACQUISITION_SCHEMA_VERSION,
+        )
+    catalogue, candidates = load_candidate_catalogue_receipt(
+        Path(__file__).resolve().parents[1]
+        / "config/class-study/v1/classifier-multiorigin100-v1-candidates.json"
+    )
+    real_ids = [row["candidate_id"] for row in catalogue["payload"]["candidates"]]
+    real_dispositions = {
+        real_ids[0]: "operational-censor",
+        real_ids[1]: "site-rejected",
+        real_ids[2]: "eligible",
+    }
+    tranco_sha256 = catalogue["payload"]["tranco"]["list_sha256"]
+    assert watch._current_v1_selection_from_dispositions(
+        real_ids, tranco_list_sha256=tranco_sha256,
+        dispositions=real_dispositions,
+    ) == derive_operational_censor_selection(
+        candidates, tranco_list_sha256=tranco_sha256,
+        terminal_disposition=real_dispositions,
+    )
+
+
+def test_current_watcher_operational_censor_needs_exact_discard_evidence() -> None:
+    attempt = {
+        "outcome": "recoverable-failure",
+        "reason": (
+            "catalogue navigation discarded after exact bound catalogue request-stage "
+            "denial during root Fetch denial: root CDP Fetch.failRequest failed for a "
+            "bound catalogue request-stage POST; the navigation must be discarded "
+            "(exception_sha256=" + "a" * 64 + ")"
+        ),
+        "operational_discard": dict(watch._CLASS20_DISCARD_EVIDENCE),
+        "policy_evidence": None,
+        "h3_screen_evidence": None,
+    }
+    assert watch._class20_operational_discard_attempt(attempt)
+    for key, replacement in (
+        ("outcome", "terminal-policy-rejection"),
+        ("reason", "unverified interception failure"),
+        ("operational_discard", None),
+        ("policy_evidence", {}),
+    ):
+        forged = {**attempt, key: replacement}
+        assert not watch._class20_operational_discard_attempt(forged)
 
 
 def test_watcher_accepts_complete_120_member_terminal_prefix_with_480_unassessed() -> None:
@@ -1851,17 +2139,24 @@ def test_watcher_accepts_runtime_produced_selection_from_bound_terminal_outcomes
                       provenance_sha256=hashlib.sha256(acquisition.paths.provenance.read_bytes()).hexdigest())
     _replace_checkpoint(acquisition, checkpoint)
     acquisition.candidate_ids = [candidate.candidate_id for candidate in candidates]
-    initial, _ = _derive_checkpoint_selection(candidates, catalogue, checkpoint["candidates"], {})
+    initial, _ = _derive_checkpoint_selection(
+        candidates, catalogue, checkpoint["candidates"], {},
+        acquisition_schema_version=watch.ACQUISITION_SCHEMA_VERSION,
+    )
     # This exercises real runtime projection, not live three-window page proof.
     terminal_ids = initial["admission_ids"]
     prospective_terminals = {candidate_id: {"kind": "eligible"} for candidate_id in terminal_ids}
     selection, _ = _derive_checkpoint_selection(
         candidates, catalogue, checkpoint["candidates"], prospective_terminals,
+        acquisition_schema_version=watch.ACQUISITION_SCHEMA_VERSION,
     )
     _materialise_selection(acquisition, selection)
     checkpoint = _checkpoint_payload(acquisition)
     terminals = _checkpoint_terminal_payloads(acquisition.paths.acquisition_root, checkpoint["candidates"])
-    selection, blocked = _derive_checkpoint_selection(candidates, catalogue, checkpoint["candidates"], terminals)
+    selection, blocked = _derive_checkpoint_selection(
+        candidates, catalogue, checkpoint["candidates"], terminals,
+        acquisition_schema_version=watch.ACQUISITION_SCHEMA_VERSION,
+    )
     details = _details(terminal=len(terminals))
     details.update(selection=selection, selection_blocked_candidate_ids=blocked,
                    pending_count=0, work_due_now=False, complete=True)
@@ -4504,13 +4799,16 @@ def test_watcher_pinned_cdp_contract_matches_runtime_contract() -> None:
     assert watch._PASSIVE_RENDER_CONTRACT_SHA256 == (
         discovery_evidence.PASSIVE_RENDER_CONTRACT_SHA256
     )
-    assert watch.ACQUISITION_SCHEMA_VERSION == class_acquisition.SCHEMA_VERSION
+    assert watch.CURRENT_ACQUISITION_SCHEMA_VERSION == class_acquisition.SCHEMA_VERSION
+    assert watch.ACQUISITION_SCHEMA_VERSION in class_acquisition.HISTORICAL_SCHEMA_VERSIONS
     assert watch.HISTORICAL_ACQUISITION_SCHEMA_VERSIONS == (
-        class_acquisition.HISTORICAL_SCHEMA_VERSIONS
+        class_acquisition.HISTORICAL_SCHEMA_VERSIONS - {watch.ACQUISITION_SCHEMA_VERSION}
     )
     assert watch.CHECKPOINT_SCHEMA_VERSION == class_acquisition.CHECKPOINT_SCHEMA_VERSION
-    assert watch.TERMINAL_SCHEMA_VERSION == class_acquisition.TERMINAL_SCHEMA_VERSION
-    assert watch.COMPLETION_SCHEMA_VERSION == class_acquisition.COMPLETION_SCHEMA_VERSION
+    assert watch.TERMINAL_SCHEMA_VERSION == class_acquisition.SCHEMA_TWELVE_TERMINAL_SCHEMA_VERSION
+    assert watch.COMPLETION_SCHEMA_VERSION == class_acquisition.SCHEMA_TWELVE_COMPLETION_SCHEMA_VERSION
+    assert class_acquisition.TERMINAL_SCHEMA_VERSION == 5
+    assert class_acquisition.COMPLETION_SCHEMA_VERSION == 5
     assert watch.SCHEMA_SIX_CHECKPOINT_SCHEMA_VERSION == (
         class_acquisition.SCHEMA_SIX_CHECKPOINT_SCHEMA_VERSION
     )
@@ -4520,7 +4818,8 @@ def test_watcher_pinned_cdp_contract_matches_runtime_contract() -> None:
     assert watch.SCHEMA_SIX_COMPLETION_SCHEMA_VERSION == (
         class_acquisition.SCHEMA_SIX_COMPLETION_SCHEMA_VERSION
     )
-    assert watch._PROVENANCE_PAYLOAD_KEYS == class_acquisition.CURRENT_PROVENANCE_FIELDS
+    assert watch._PROVENANCE_PAYLOAD_KEYS == class_acquisition.SCHEMA_TWELVE_PROVENANCE_FIELDS
+    assert watch._PROVENANCE_PAYLOAD_KEYS | {"study_profile_sha256"} == class_acquisition.CURRENT_PROVENANCE_FIELDS
     assert watch._NAVIGATION_IMPLEMENTATION == class_acquisition.NAVIGATION_IMPLEMENTATION
     assert watch._REGISTRABLE_DOMAIN_POLICY == class_acquisition.REGISTRABLE_DOMAIN_POLICY
     assert watch._DOMAIN_SAFETY_POLICY == class_acquisition.DOMAIN_SAFETY_POLICY

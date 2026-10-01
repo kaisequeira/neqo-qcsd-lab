@@ -1229,6 +1229,73 @@ def test_foundation_binds_pinned_cdp_and_seventh_browser_egress_gate(
         "expected_cohort_version": 23,
         "allow_historical": False,
     }
+
+    # The prospective foundation must retain every full-defence gate while
+    # adding independently reconstructed profile and inherited-input pins.
+    prospective = attestation._foundation_value(
+        **{**kwargs, "study_id": attestation.CLASS20_STUDY_ID}
+    )
+    assert prospective["attestation_schema_version"] == (
+        attestation.CLASS20_FOUNDATION_SCHEMA_VERSION
+    )
+    assert prospective["study_profile_sha256"] == attestation._CLASS20_OVERLAY_SHA256
+    assert prospective["study_profile_inputs"]["base_study"]["sha256"] == (
+        attestation._CLASS20_BASE_STUDY_SHA256
+    )
+    assert prospective["study_profile_inputs"]["candidate_catalogue"]["sha256"] == (
+        attestation._CLASS20_CATALOGUE_SHA256
+    )
+    assert [gate["gate"] for gate in prospective["hard_gates"]] == list(
+        attestation._CLASS20_FOUNDATION_GATES
+    )
+    with pytest.raises(ValueError, match="schema"):
+        attestation._foundation_value(
+            **{
+                **kwargs,
+                "study_id": attestation.CLASS20_STUDY_ID,
+                "attestation_schema_version": attestation.FOUNDATION_SCHEMA_VERSION,
+            }
+        )
+
+    monkeypatch.setattr(attestation, "source_metadata", lambda: dict(source))
+    destination = tmp_path / "class20-foundation.json"
+    create_inputs = {
+        key: value for key, value in kwargs.items()
+        if key not in {"recorded_at", "deep_code_gate", "evidence_source", "pinned_runtime_role"}
+    }
+    output = attestation.create_class_foundation_attestation(
+        destination,
+        study_id=attestation.CLASS20_STUDY_ID,
+        **create_inputs,
+    )
+    verified = attestation.validate_class_foundation_attestation(
+        output, runtime_role=None
+    )
+    assert verified["study_id"] == attestation.CLASS20_STUDY_ID
+    assert verified["attestation_schema_version"] == (
+        attestation.CLASS20_FOUNDATION_SCHEMA_VERSION
+    )
+    sealed = json.loads(output.read_text(encoding="utf-8"))
+    original = sealed["payload"]
+    for mutate in (
+        lambda payload: payload.update(study_profile_sha256=_digest("e")),
+        lambda payload: payload["study_profile_inputs"]["base_study"].update(
+            sha256=_digest("e")
+        ),
+        lambda payload: payload["study_profile_inputs"]["candidate_catalogue"].update(
+            sha256=_digest("e")
+        ),
+        lambda payload: payload.update(study_id=attestation.STUDY_ID),
+    ):
+        candidate = json.loads(canonical_json_bytes(original))
+        mutate(candidate)
+        output.write_bytes(canonical_json_bytes(bind_receipt(
+            candidate, receipt_type=attestation.FOUNDATION_RECEIPT_TYPE
+        )))
+        with pytest.raises(ValueError):
+            attestation.validate_class_foundation_attestation(output, runtime_role=None)
+    output.write_bytes(canonical_json_bytes(sealed))
+
     observed.clear()
     assert attestation._foundation_value(**{**kwargs, "pinned_runtime_role": None}) == value
     assert observed["runtime_role"] is None

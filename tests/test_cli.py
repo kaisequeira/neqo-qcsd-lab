@@ -26,6 +26,7 @@ from qcsd_lab.class_acquisition import (
     COMPLETION_SCHEMA_VERSION as CLASS_ACQUISITION_COMPLETION_SCHEMA_VERSION,
     SCHEMA_VERSION as CLASS_ACQUISITION_SCHEMA_VERSION,
 )
+from qcsd_lab.class_study import CLASS20_STUDY_ID
 from qcsd_lab.orchestrator import CampaignIncomplete
 from qcsd_lab.util import atomic_text, sha256_file
 
@@ -171,6 +172,45 @@ def test_class_acquisition_batch_size_defaults_to_two_and_is_bounded() -> None:
                 ["class-study", "acquisition-run", "--acquisition-max-candidates", value]
             )
         assert exit_status.value.code == 2
+
+
+@pytest.mark.parametrize("action", ("pair-screen", "final-select"))
+def test_profile_pair_actions_forward_screening_receipt(
+    action: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    import qcsd_lab.class_pipeline as pipeline
+
+    observed: dict[str, object] = {}
+    screening = tmp_path / "pair-screening.json"
+
+    def run(selected: str, **kwargs: object) -> SimpleNamespace:
+        observed.update(action=selected, **kwargs)
+        return SimpleNamespace(
+            status="complete",
+            as_dict=lambda: {"action": selected, "status": "complete"},
+        )
+
+    monkeypatch.setattr(pipeline, "run_class_study_action", run)
+    cli.main([
+        "class-study", action, "--study-id", CLASS20_STUDY_ID,
+        "--pair-screening", str(screening),
+    ])
+    assert observed["action"] == action
+    assert observed["study_id"] == CLASS20_STUDY_ID
+    assert observed["pair_screening_path"] == screening.absolute()
+    assert cli.parser().parse_args(["class-study", "status"]).study_id != CLASS20_STUDY_ID
+    capsys.readouterr()
+
+
+def test_profile_pair_actions_appear_in_class_study_help() -> None:
+    command = cli.parser()._subparsers._group_actions[0].choices["class-study"]
+    help_text = command.format_help()
+    assert "pair-screen" in help_text
+    assert "final-select" in help_text
+    assert "--pair-screening" in help_text
 
 
 def test_class_foundation_cli_forwards_pinned_cdp_receipt(
@@ -2497,6 +2537,7 @@ def test_class_build_admission_precedes_first_class_docker_mutation() -> None:
         "successor-restart:--successor-restart",
         "target:--target",
         "final-selection:--final-selection",
+        "pair-screening:--pair-screening",
         "pinned-cdp:--pinned-cdp-receipt",
         "browser-egress:--browser-egress-qualification-root",
         "reference:--reference-receipt",
@@ -2510,6 +2551,9 @@ def test_class_build_admission_precedes_first_class_docker_mutation() -> None:
         "qualification-checkpoint:--qualification-checkpoint",
         "qualification-sidecar-root:--qualification-sidecar-root",
         "qualification-publication-root:--qualification-publication-root",
+        "workload-root:--workload-root",
+        "pilot-cohort:--pilot-cohort",
+        "final-cohort:--final-cohort",
         "final-cohort-assembly:--final-cohort-assembly",
         "pilot-cohort-assembly:--pilot-cohort-assembly",
         "campaign-root:--campaign-root",

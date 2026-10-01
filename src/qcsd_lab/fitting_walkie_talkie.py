@@ -21,6 +21,10 @@ MAX_U64 = 2**64 - 1
 MAX_EXACT_BINARY64_INTEGER = 2**53 - 1
 BURST_DEFINITION = "global-application-batch-direction-transitions"
 CELL_BYTE_DOMAIN = "http3-request-stream-offset.bytes"
+FIXED_PAIR_ALGORITHM = "feasible-pair-constrained-minimum-weight-perfect-matching"
+FIXED_PAIR_OBJECTIVE = (
+    "minimum-base-symmetric-mold-padding-cost-conditional-on-selected-pairs"
+)
 
 
 @dataclass(frozen=True)
@@ -40,8 +44,10 @@ class ProfileEnvelope:
 
 def fit_walkie_talkie(
     traces: Mapping[str, Sequence[FittingTrace]],
+    *,
+    feasible_pairs: Collection[tuple[str, str]] | None = None,
 ) -> tuple[dict[str, object], dict[str, object]]:
-    """Envelope visits per workload, then solve a full-cohort perfect matching."""
+    """Envelope visits per workload, then solve the permitted perfect matching."""
 
     names = tuple(traces)
     if not names or len(names) % 2:
@@ -76,7 +82,7 @@ def fit_walkie_talkie(
             }
         )
 
-    pairs = minimum_weight_perfect_matching(envelopes)
+    pairs = minimum_weight_perfect_matching(envelopes, feasible_pairs=feasible_pairs)
     lexical_names = tuple(sorted(names))
     candidate_costs = [
         {
@@ -155,8 +161,14 @@ def fit_walkie_talkie(
         "profiles": profiles,
     }
     diagnostics: dict[str, object] = {
-        "algorithm": "full-cohort-minimum-weight-perfect-matching",
-        "pairing_objective": "minimum-base-symmetric-mold-padding-cost",
+        "algorithm": (
+            "full-cohort-minimum-weight-perfect-matching"
+            if feasible_pairs is None else FIXED_PAIR_ALGORITHM
+        ),
+        "pairing_objective": (
+            "minimum-base-symmetric-mold-padding-cost"
+            if feasible_pairs is None else FIXED_PAIR_OBJECTIVE
+        ),
         "receiver_continuation": receiver_continuation_contract(),
         "candidate_pair_costs": candidate_costs,
         "selected_pairs": pair_receipt,

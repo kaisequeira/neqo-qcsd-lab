@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .class_study import ClassStudyProfile
 from .fidelity import (
     BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT,
     BUFLO_TERMINAL_SUBCELL_POLICY,
@@ -232,6 +233,7 @@ def validate_parameter_artifact(
     qualification_authority: Mapping[str, Any] | None = None,
     expected_qualification_set: str | None = None,
     campaign_evidence_role: str | None = None,
+    expected_study_profile: ClassStudyProfile | None = None,
     expected_successor_study_id: str | None = None,
     expected_successor_restart_sha256: str | None = None,
 ) -> ParameterArtifact:
@@ -261,6 +263,7 @@ def validate_parameter_artifact(
         expected_qualification_set=expected_qualification_set,
         frozen_qualification_inputs=False,
         campaign_evidence_role=campaign_evidence_role,
+        expected_study_profile=expected_study_profile,
         expected_successor_study_id=expected_successor_study_id,
         expected_successor_restart_sha256=expected_successor_restart_sha256,
     )
@@ -283,6 +286,7 @@ def validate_frozen_parameter_artifact(
     qualification_authority: Mapping[str, Any] | None = None,
     expected_qualification_set: str | None = None,
     campaign_evidence_role: str | None = None,
+    expected_study_profile: ClassStudyProfile | None = None,
     expected_successor_study_id: str | None = None,
     expected_successor_restart_sha256: str | None = None,
 ) -> ParameterArtifact:
@@ -317,6 +321,7 @@ def validate_frozen_parameter_artifact(
         expected_qualification_set=expected_qualification_set,
         frozen_qualification_inputs=True,
         campaign_evidence_role=campaign_evidence_role,
+        expected_study_profile=expected_study_profile,
         expected_successor_study_id=expected_successor_study_id,
         expected_successor_restart_sha256=expected_successor_restart_sha256,
     )
@@ -342,6 +347,7 @@ def _validate_parameter_artifact(
     expected_qualification_set: str | None,
     frozen_qualification_inputs: bool,
     campaign_evidence_role: str | None,
+    expected_study_profile: ClassStudyProfile | None,
     expected_successor_study_id: str | None,
     expected_successor_restart_sha256: str | None,
 ) -> ParameterArtifact:
@@ -363,6 +369,12 @@ def _validate_parameter_artifact(
 
     parameter = _mapping(load_json(parameter_path), "defense parameters")
     receipt = _mapping(load_json(receipt_path), "parameter provenance")
+    if (
+        expected_study_profile is not None
+        and expected_kind in SEALED_RESEARCH_PARAMETER_KINDS
+        and receipt.get("artifact_type") != "qcsd-class-study-research-defense-bundle"
+    ):
+        raise ValueError("20-site data-driven parameters require a class fitting bundle")
     if receipt.get("artifact_type") == TIMING_STRESS_ARTIFACT_TYPE:
         return _validate_timing_stress_parameter_artifact(
             parameter,
@@ -467,6 +479,11 @@ def _validate_parameter_artifact(
             qualification_context=context,
             expected_successor_study_id=expected_successor_study_id,
             expected_successor_restart_sha256=expected_successor_restart_sha256,
+            **(
+                {"expected_study_profile": expected_study_profile}
+                if expected_study_profile is not None
+                else {}
+            ),
         )
         return ParameterArtifact(
             path=parameter_path,

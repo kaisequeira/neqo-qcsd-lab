@@ -1,4 +1,4 @@
-"""Fail-closed promotion receipts for ``classifier-multiorigin100-v1``.
+"""Fail-closed class-study promotion receipts.
 
 The class-study coordinator deliberately keeps capture orchestration separate
 from scientific authority.  This module is that authority boundary.  It emits
@@ -11,7 +11,7 @@ comparison, and final-validation receipts:
   controlled, pinned-CDP, and packet-observed browser-egress gates reverify,
   before any class-study fitting or capture;
 * a *readiness* receipt after the final cohort, authoritative fit, full live
-  qualification, and the 900-cell first-launch certification all reverify;
+  qualification, and the registered first-launch certification all reverify;
 * a final validation attestation after all ten canaries and formal blocks, the
   closed handoff, correctness/performance/classifier evaluation, comparison
   review, and before/after historical-corpus guard all reverify.
@@ -78,17 +78,23 @@ from .class_handoff import (
     verify_class_handoff,
 )
 from .class_study import (
+    CLASS20_PROFILE,
+    CLASS20_STUDY_ID,
     COMPATIBILITY_MODES,
     FINAL_CLASS_COUNT,
     FORMAL_BLOCK_COUNT,
     FORMAL_MODES,
     FORMAL_VISITS_PER_BLOCK,
     STUDY_ID,
+    _CLASS20_BASE_STUDY_SHA256,
+    _CLASS20_CATALOGUE_SHA256,
+    _CLASS20_OVERLAY_SHA256,
     bind_receipt,
     canonical_json_bytes,
     canonical_json_sha256,
     is_class_study_id,
     is_successor_study_id,
+    load_class20_profile_contract,
     validate_hash_bound_receipt,
     write_create_only_json,
 )
@@ -99,9 +105,14 @@ from .util import LAB_ROOT, load_json, require_disjoint_path, sha256_file, sourc
 from .verification import verify_result
 
 SCHEMA_VERSION = 1
+CLASS20_COMPARISON_REVIEW_SCHEMA_VERSION = 2
+CLASS20_VALIDATION_SCHEMA_VERSION = 2
 FOUNDATION_SCHEMA_VERSION = 4
+CLASS20_FOUNDATION_SCHEMA_VERSION = 5
 HISTORICAL_FOUNDATION_SCHEMA_VERSION = 3
 READINESS_SCHEMA_VERSION = 3
+CLASS20_READINESS_SCHEMA_VERSION = 4
+CLASS20_HISTORICAL_SNAPSHOT_SCHEMA_VERSION = 2
 HISTORICAL_READINESS_SCHEMA_VERSION = 2
 QUALIFICATION_AUTHORITY_SCHEMA_VERSION = 2
 HISTORICAL_QUALIFICATION_AUTHORITY_SCHEMA_VERSION = 1
@@ -115,6 +126,7 @@ QUALIFICATION_AUTHORITY_TYPE = "qcsd-class-study-qualification-authority"
 ACQUISITION_AUTHORITY_RECEIPT_TYPE = "qcsd-class-study-acquisition-authority"
 ACQUISITION_AUTHORITY_SCHEMA_VERSION = 1
 FAST_ACQUISITION_AUTHORITY_SCHEMA_VERSION = 2
+CLASS20_ACQUISITION_AUTHORITY_SCHEMA_VERSION = 3
 _CLASS_STUDY_FOUNDATION_INPUT = "inputs/class-study-foundation.json"
 _CLASS_STUDY_READINESS_INPUT = "inputs/class-study-readiness.json"
 _CLASS_STUDY_HISTORICAL_PRE_INPUT = "inputs/class-study-historical-pre-snapshot.json"
@@ -180,6 +192,10 @@ _FOUNDATION_GATES = (
     "pinned-cdp-integration-probe",
     _BROWSER_EGRESS_GATE,
 )
+_CLASS20_FOUNDATION_GATES = (
+    *_FOUNDATION_GATES,
+    "source-pinned-20-site-study-profile",
+)
 _ACQUISITION_AUTHORITY_GATES = (
     "current-clean-source-and-no-cache-build",
     "acquisition-focused-correctness",
@@ -209,6 +225,12 @@ ACQUISITION_CORRECTNESS_TESTS = (
     *_V96_ACQUISITION_CORRECTNESS_TESTS,
     "tests/test_class_acquisition_short_profile.py",
     "tests/test_class_acquisition_watch.py",
+)
+CLASS20_ACQUISITION_CORRECTNESS_TESTS = (
+    *ACQUISITION_CORRECTNESS_TESTS,
+    "tests/test_class_study.py",
+    "tests/test_class_pipeline.py",
+    "tests/test_class_cohort20.py",
 )
 
 # The last authority issued before the schema-7/schema-15 amendment remains
@@ -323,6 +345,10 @@ _FINAL_GATES = (
     "historical-corpus-before-after-identity",
     "current-source-and-no-waiver-promotion",
 )
+_CLASS20_FINAL_GATES = tuple(
+    "pre-block-canaries-200-of-200" if gate == "pre-block-canaries-1000-of-1000" else gate
+    for gate in _FINAL_GATES
+) + ("source-pinned-20-site-study-profile",)
 
 
 def create_class_acquisition_authority(
@@ -332,14 +358,15 @@ def create_class_acquisition_authority(
     build_execution_receipt: Path,
     pinned_cdp_receipt: Path,
     browser_egress_qualification_root: Path | None = None,
+    study_id: str = STUDY_ID,
 ) -> Path:
     """Run focused acquisition tests once and seal acquisition-only authority.
 
     This is an explicit execution operation. Validation of the resulting
     receipt is read-only and never repeats the test command. The full defence
     foundation is neither an input nor a substitute for this authority. Omitting
-    browser qualification selects schema 2; that gate remains required by the
-    later full foundation before fitting or formal capture.
+    browser qualification selects schema 2 for v1. The prospective 20-site
+    profile selects schema 3 and also defers that gate to its later foundation.
     """
 
     protected_inputs = [
@@ -365,6 +392,7 @@ def create_class_acquisition_authority(
         browser_egress_qualification_root=browser_egress_qualification_root,
         evidence_source=source_metadata(),
         runtime_role="collection",
+        study_id=study_id,
     )
     correctness = _run_acquisition_correctness(context)
     # Reject changes during explicit execution before publishing any authority.
@@ -393,7 +421,7 @@ def validate_class_acquisition_authority(
 
     Historical validation is limited to the frozen v96 and v127 contracts and
     is verification-only. Schemas 1 and 2 remain distinct current contracts;
-    schema 2 defers browser qualification to the later foundation. There is
+    schemas 2 and 3 defer browser qualification to the later foundation. There is
     no full-foundation fallback.  A concrete role chooses which exact image
     from the same pinned build must be running; ``None`` is reserved for
     runtime-independent reconstruction of current evidence and does not enable
@@ -409,9 +437,14 @@ def validate_class_acquisition_authority(
         or schema not in {
             ACQUISITION_AUTHORITY_SCHEMA_VERSION,
             FAST_ACQUISITION_AUTHORITY_SCHEMA_VERSION,
+            CLASS20_ACQUISITION_AUTHORITY_SCHEMA_VERSION,
         }
         or payload.get("artifact_type") != ACQUISITION_AUTHORITY_RECEIPT_TYPE
-        or payload.get("study_id") != STUDY_ID
+        or payload.get("study_id") != (
+            CLASS20_STUDY_ID
+            if schema == CLASS20_ACQUISITION_AUTHORITY_SCHEMA_VERSION
+            else STUDY_ID
+        )
     ):
         raise ValueError("class acquisition authority schema or study is invalid")
     evidence = payload.get("evidence")
@@ -436,6 +469,7 @@ def validate_class_acquisition_authority(
         runtime_role=runtime_role,
         recorded_study_contract=payload.get("study_contract"),
         allow_historical=allow_historical,
+        study_id=payload["study_id"],
     )
     if (
         context.get("historical_v127") is True
@@ -517,6 +551,23 @@ def validate_current_acquisition_completion_authority(
             f"{ACQUISITION_SCHEMA_VERSION}"
         )
 
+    prospective = (
+        completion_payload.get("study_id") == CLASS20_STUDY_ID
+        or provenance.get("study_id") == CLASS20_STUDY_ID
+    )
+    if prospective and (
+        completion_payload.get("study_id") != CLASS20_STUDY_ID
+        or provenance.get("study_id") != CLASS20_STUDY_ID
+        or provenance.get("study_profile_sha256") != _CLASS20_OVERLAY_SHA256
+    ):
+        raise ValueError("20-site acquisition completion study profile is not exact")
+    if (
+        completion_payload.get("study_id") is not None
+        and provenance.get("study_id") is not None
+        and completion_payload["study_id"] != provenance["study_id"]
+    ):
+        raise ValueError("acquisition completion and provenance study differ")
+
     binding = provenance.get("acquisition_authority")
     authority_path = _path_from_binding(
         binding,
@@ -542,6 +593,14 @@ def validate_current_acquisition_completion_authority(
         )
     else:
         raise ValueError("current acquisition completion authority type is invalid")
+    if prospective and (
+        receipt_type != ACQUISITION_AUTHORITY_RECEIPT_TYPE
+        or validated.get("attestation_schema_version")
+        != CLASS20_ACQUISITION_AUTHORITY_SCHEMA_VERSION
+        or validated.get("study_id") != CLASS20_STUDY_ID
+        or validated.get("study_profile_sha256") != _CLASS20_OVERLAY_SHA256
+    ):
+        raise ValueError("20-site completion lacks its prospective acquisition authority")
 
     expected_binding = {
         "path": str(authority_path),
@@ -567,11 +626,16 @@ def _acquisition_authority_context(
     runtime_role: str | None,
     recorded_study_contract: object | None = None,
     allow_historical: bool = False,
+    study_id: str = STUDY_ID,
 ) -> dict[str, Any]:
     if type(cohort_version) is not int or cohort_version < 1:
         raise ValueError("class acquisition authority cohort must be a positive integer")
     if runtime_role not in {None, "collection", "prepare"}:
         raise ValueError("class acquisition authority runtime role is invalid")
+    if study_id not in {STUDY_ID, CLASS20_STUDY_ID}:
+        raise ValueError("class acquisition authority study is invalid")
+    if study_id == CLASS20_STUDY_ID and browser_egress_qualification_root is not None:
+        raise ValueError("20-site acquisition authority defers browser evidence to foundation")
     _validate_immutable_source(evidence_source, label="class acquisition authority source")
     source = dict(evidence_source)
     # V96 retired only its acquisition/pinned-CDP contract.  Its completed
@@ -643,15 +707,21 @@ def _acquisition_authority_context(
         raise ValueError("historical acquisition authority requires browser evidence")
     if historical_v127 and browser["sha256"] != _V127_BROWSER_EGRESS_SHA256:
         raise ValueError("historical v127 browser qualification binding differs")
-    study_contract = (
-        _V96_STUDY_CONTRACT
-        if historical_v96
-        else (
-            _V127_STUDY_CONTRACT
-            if historical_v127
-            else _file_binding(LAB_ROOT / "config/class-study/v1/study.json")
+    study_profile_inputs = None
+    if study_id == CLASS20_STUDY_ID:
+        if historical:
+            raise ValueError("20-site acquisition cannot use historical authority")
+        study_contract, study_profile_inputs = _class20_study_bindings()
+    else:
+        study_contract = (
+            _V96_STUDY_CONTRACT
+            if historical_v96
+            else (
+                _V127_STUDY_CONTRACT
+                if historical_v127
+                else _file_binding(LAB_ROOT / "config/class-study/v1/study.json")
+            )
         )
-    )
     if historical_v96 and recorded_study_contract != _V96_STUDY_CONTRACT:
         raise ValueError("historical class acquisition authority study contract is invalid")
     evidence = {
@@ -664,9 +734,18 @@ def _acquisition_authority_context(
         )
     return {
         "authority_schema_version": (
-            ACQUISITION_AUTHORITY_SCHEMA_VERSION
-            if browser is not None else FAST_ACQUISITION_AUTHORITY_SCHEMA_VERSION
+            CLASS20_ACQUISITION_AUTHORITY_SCHEMA_VERSION
+            if study_id == CLASS20_STUDY_ID
+            else (
+                ACQUISITION_AUTHORITY_SCHEMA_VERSION
+                if browser is not None else FAST_ACQUISITION_AUTHORITY_SCHEMA_VERSION
+            )
         ),
+        "study_id": study_id,
+        "study_profile_sha256": (
+            study_contract["sha256"] if study_id == CLASS20_STUDY_ID else None
+        ),
+        "study_profile_inputs": study_profile_inputs,
         "cohort_version": cohort_version,
         "source": source,
         "prepare_source": prepare_source,
@@ -680,13 +759,41 @@ def _acquisition_authority_context(
     }
 
 
-def _acquisition_correctness_spec() -> dict[str, Any]:
-    paths = (*ACQUISITION_CORRECTNESS_TESTS, "pyproject.toml", "uv.lock")
+def _class20_study_bindings() -> tuple[dict[str, str], dict[str, dict[str, str]]]:
+    """Reconstruct the exact overlay and both inherited source-pinned inputs."""
+
+    if load_class20_profile_contract() != CLASS20_PROFILE:
+        raise ValueError("20-site study profile differs from its source contract")
+    study_contract = _file_binding(LAB_ROOT / "config/class-study/v2/study.json")
+    inherited = {
+        "base_study": _file_binding(LAB_ROOT / "config/class-study/v1/study.json"),
+        "candidate_catalogue": _file_binding(
+            LAB_ROOT / "config/class-study/v1/classifier-multiorigin100-v1-candidates.json"
+        ),
+    }
+    for binding, expected in (
+        (study_contract, _CLASS20_OVERLAY_SHA256),
+        (inherited["base_study"], _CLASS20_BASE_STUDY_SHA256),
+        (inherited["candidate_catalogue"], _CLASS20_CATALOGUE_SHA256),
+    ):
+        if binding["sha256"] != expected:
+            raise ValueError("20-site study profile input differs from source pin")
+    return study_contract, inherited
+
+
+def _acquisition_correctness_spec(study_id: str = STUDY_ID) -> dict[str, Any]:
+    if study_id not in {STUDY_ID, CLASS20_STUDY_ID}:
+        raise ValueError("acquisition correctness study is invalid")
+    tests = (
+        CLASS20_ACQUISITION_CORRECTNESS_TESTS
+        if study_id == CLASS20_STUDY_ID else ACQUISITION_CORRECTNESS_TESTS
+    )
+    paths = (*tests, "pyproject.toml", "uv.lock")
     return {
         "gate": "acquisition-focused-correctness",
         "argv": [
             "/opt/qcsd-venv/bin/python", "-m", "pytest", "-p", "no:cacheprovider",
-            *ACQUISITION_CORRECTNESS_TESTS,
+            *tests,
         ],
         "cwd": str(LAB_ROOT),
         "input_sha256": {
@@ -697,7 +804,7 @@ def _acquisition_correctness_spec() -> dict[str, Any]:
 
 
 def _run_acquisition_correctness(context: Mapping[str, Any]) -> dict[str, Any]:
-    spec = _acquisition_correctness_spec()
+    spec = _acquisition_correctness_spec(context.get("study_id", STUDY_ID))
     started = datetime.now(UTC).isoformat()
     completed = subprocess.run(
         spec["argv"], cwd=LAB_ROOT, text=True, stdout=subprocess.PIPE,
@@ -729,6 +836,7 @@ def _acquisition_authority_value(
     if schema not in {
         ACQUISITION_AUTHORITY_SCHEMA_VERSION,
         FAST_ACQUISITION_AUTHORITY_SCHEMA_VERSION,
+        CLASS20_ACQUISITION_AUTHORITY_SCHEMA_VERSION,
     }:
         raise ValueError("class acquisition authority schema is invalid")
     spec = (
@@ -737,7 +845,7 @@ def _acquisition_authority_value(
         else (
             _V127_ACQUISITION_CORRECTNESS_SPEC
             if context.get("historical_v127") is True
-            else _acquisition_correctness_spec()
+            else _acquisition_correctness_spec(context.get("study_id", STUDY_ID))
         )
     )
     if not isinstance(correctness, Mapping) or set(correctness) != {
@@ -798,10 +906,10 @@ def _acquisition_authority_value(
         gate_evidence[_BROWSER_EGRESS_GATE] = [
             browser["sha256"], browser["payload_sha256"], browser["expanded_vectors_sha256"]
         ]
-    return {
+    result = {
         "attestation_schema_version": schema,
         "artifact_type": ACQUISITION_AUTHORITY_RECEIPT_TYPE,
-        "study_id": STUDY_ID,
+        "study_id": context.get("study_id", STUDY_ID),
         "cohort_version": context["cohort_version"],
         "recorded_at": recorded.isoformat(),
         "implementation_status": "acquisition-ready",
@@ -824,6 +932,10 @@ def _acquisition_authority_value(
         ),
         "all_acquisition_gates_passed": True,
     }
+    if schema == CLASS20_ACQUISITION_AUTHORITY_SCHEMA_VERSION:
+        result["study_profile_sha256"] = context["study_profile_sha256"]
+        result["study_profile_inputs"] = dict(context["study_profile_inputs"])
+    return result
 
 
 def create_class_foundation_attestation(destination: Path, **inputs: Any) -> Path:
@@ -874,6 +986,7 @@ def validate_class_foundation_attestation(
     if not isinstance(evidence, Mapping):
         raise TypeError("class foundation typed evidence is missing")
     expected = _foundation_value(
+        study_id=payload.get("study_id"),
         cohort_version=payload.get("cohort_version"),
         build_execution_receipt=_path_from_binding(
             evidence.get("build_execution"), label="build execution"
@@ -1079,6 +1192,13 @@ def validate_class_qualification_authority(
 def create_class_readiness_attestation(destination: Path, **inputs: Any) -> Path:
     """Create readiness authority only after every pre-formal gate re-runs."""
 
+    study_id = inputs.pop("study_id", STUDY_ID)
+    if study_id == CLASS20_STUDY_ID:
+        from .class_readiness20 import create_profile_readiness_attestation
+
+        return create_profile_readiness_attestation(destination, **inputs)
+    if study_id != STUDY_ID:
+        raise ValueError("class readiness creation has an unsupported study identity")
     destination = require_disjoint_path(
         destination,
         _protected_readiness_inputs(inputs),
@@ -1102,6 +1222,20 @@ def validate_class_readiness_attestation(
     """Independently reconstruct one readiness receipt from its evidence."""
 
     receipt_path, value, payload = _load_bound_receipt(path, expected_type=READINESS_RECEIPT_TYPE)
+    if (
+        payload.get("study_id") == CLASS20_STUDY_ID
+        or payload.get("attestation_schema_version") == CLASS20_READINESS_SCHEMA_VERSION
+    ):
+        if (
+            payload.get("study_id") != CLASS20_STUDY_ID
+            or payload.get("attestation_schema_version") != CLASS20_READINESS_SCHEMA_VERSION
+        ):
+            raise ValueError("20-site readiness study identity and schema must match exactly")
+        from .class_readiness20 import validate_profile_readiness_attestation
+
+        return validate_profile_readiness_attestation(
+            receipt_path, deep_code_gate=deep_code_gate
+        )
     if is_successor_study_id(payload.get("study_id")):
         from .class_successor import validate_successor_readiness
 
@@ -1135,6 +1269,28 @@ def create_class_historical_snapshot(
     pre_snapshot: Path | None = None,
 ) -> Path:
     """Freeze a deep historical-corpus identity before or after formal capture."""
+
+    readiness_path, _, readiness_payload = _load_bound_receipt(
+        readiness_attestation, expected_type=READINESS_RECEIPT_TYPE
+    )
+    if (
+        readiness_payload.get("study_id") == CLASS20_STUDY_ID
+        or readiness_payload.get("attestation_schema_version") == CLASS20_READINESS_SCHEMA_VERSION
+    ):
+        if (
+            readiness_payload.get("study_id") != CLASS20_STUDY_ID
+            or readiness_payload.get("attestation_schema_version") != CLASS20_READINESS_SCHEMA_VERSION
+        ):
+            raise ValueError("20-site historical snapshot requires exact v2 readiness identity")
+        from .class_history20 import create_profile_historical_snapshot
+
+        return create_profile_historical_snapshot(
+            destination,
+            phase=phase,
+            readiness_attestation=readiness_path,
+            formal_result_roots=formal_result_roots,
+            pre_snapshot=pre_snapshot,
+        )
 
     protected = [
         LAB_ROOT / "handoffs/classifier-multiorigin5-v2",
@@ -1173,6 +1329,18 @@ def validate_class_historical_snapshot(
     receipt_path, value, payload = _load_bound_receipt(
         path, expected_type=HISTORICAL_SNAPSHOT_RECEIPT_TYPE
     )
+    if (
+        payload.get("study_id") == CLASS20_STUDY_ID
+        or payload.get("snapshot_schema_version") == CLASS20_HISTORICAL_SNAPSHOT_SCHEMA_VERSION
+    ):
+        if (
+            payload.get("study_id") != CLASS20_STUDY_ID
+            or payload.get("snapshot_schema_version") != CLASS20_HISTORICAL_SNAPSHOT_SCHEMA_VERSION
+        ):
+            raise ValueError("20-site historical snapshot study identity and schema must match exactly")
+        from .class_history20 import validate_profile_historical_snapshot
+
+        return validate_profile_historical_snapshot(receipt_path, expected_phase=expected_phase)
     phase = payload.get("phase")
     if phase not in {"pre-formal", "post-formal"}:
         raise ValueError("class historical snapshot phase is invalid")
@@ -1254,13 +1422,17 @@ def build_class_comparison_review_template(
         replay_attacks=False,
     )
     _require_evaluation_completion(evaluation, require_full_replay=False)
+    study_id, profile_sha256 = _comparison_study_binding(handoff_root, evaluation)
     historical_rows = list(original_study_comparison_rows())
     inventory = list(historical_anchor_metric_inventory(historical_rows))
     pairs = _comparison_pairs(historical_rows, inventory, evaluation)
-    return {
-        "template_schema_version": 1,
+    template = {
+        "template_schema_version": (
+            CLASS20_COMPARISON_REVIEW_SCHEMA_VERSION
+            if profile_sha256 is not None else SCHEMA_VERSION
+        ),
         "artifact_type": "qcsd-class-study-comparison-review-template",
-        "study_id": evaluation.get("study_id", STUDY_ID),
+        "study_id": study_id,
         "handoff": _handoff_binding(handoff_root),
         "evaluation": _file_binding(evaluation_receipt),
         "comparison_rows_sha256": canonical_json_sha256(pairs),
@@ -1278,6 +1450,9 @@ def build_class_comparison_review_template(
             for pair in pairs
         ],
     }
+    if profile_sha256 is not None:
+        template["study_profile_sha256"] = profile_sha256
+    return template
 
 
 def validate_class_comparison_review(
@@ -1291,6 +1466,15 @@ def validate_class_comparison_review(
     receipt_path, value, payload = _load_bound_receipt(
         path, expected_type=COMPARISON_REVIEW_RECEIPT_TYPE
     )
+    study_id = payload.get("study_id")
+    profile20 = study_id == CLASS20_STUDY_ID
+    if (
+        payload.get("review_schema_version")
+        != (CLASS20_COMPARISON_REVIEW_SCHEMA_VERSION if profile20 else SCHEMA_VERSION)
+        or (profile20 and payload.get("study_profile_sha256") != _CLASS20_OVERLAY_SHA256)
+        or (not profile20 and "study_profile_sha256" in payload)
+    ):
+        raise ValueError("class comparison review study profile or schema is invalid")
     bound_handoff = payload.get("handoff")
     if not isinstance(bound_handoff, Mapping) or not isinstance(bound_handoff.get("root"), str):
         raise TypeError("class comparison review has no handoff binding")
@@ -1317,6 +1501,33 @@ def validate_class_comparison_review(
     }
 
 
+def _comparison_study_binding(
+    handoff_root: Path, evaluation: Mapping[str, Any]
+) -> tuple[str, str | None]:
+    """Separate the prospective comparison contract from historical v1 reviews."""
+
+    study_id = evaluation.get("study_id", STUDY_ID)
+    if study_id != CLASS20_STUDY_ID and not is_class_study_id(study_id):
+        raise ValueError("class comparison evaluation study identity is invalid")
+    if study_id != CLASS20_STUDY_ID:
+        if "study_profile_sha256" in evaluation:
+            raise ValueError("v1 comparison evaluation has unexpected study profile")
+        return str(study_id), None
+    dataset = _load_regular_json(
+        Path(handoff_root) / "dataset.json", "20-site comparison handoff dataset"
+    )
+    if (
+        evaluation.get("study_profile_sha256") != _CLASS20_OVERLAY_SHA256
+        or dataset.get("study_id") != CLASS20_STUDY_ID
+        or dataset.get("study_profile_sha256") != _CLASS20_OVERLAY_SHA256
+        or dataset.get("sample_count") != CLASS20_PROFILE.formal_sample_count
+        or dataset.get("class_count") != CLASS20_PROFILE.final_count
+        or dataset.get("modes") != list(CLASS20_PROFILE.formal_modes)
+    ):
+        raise ValueError("20-site comparison uses another handoff or evaluation profile")
+    return CLASS20_STUDY_ID, _CLASS20_OVERLAY_SHA256
+
+
 def create_class_validation_attestation(
     destination: Path,
     *,
@@ -1332,7 +1543,36 @@ def create_class_validation_attestation(
         _protected_final_inputs(inputs),
         label="class validation attestation destination",
     )
-    payload = _validation_value(**inputs, deep_code_gate=True)
+    readiness_path = inputs.get("readiness_attestation")
+    prospective = False
+    if readiness_path is not None:
+        try:
+            _, _, readiness_payload = _load_bound_receipt(
+                readiness_path, expected_type=READINESS_RECEIPT_TYPE
+            )
+        except (TypeError, ValueError):
+            # A malformed envelope cannot select a route without independent
+            # readiness reconstruction, which normally rejects that evidence.
+            readiness_payload = validate_class_readiness_attestation(
+                readiness_path, deep_code_gate=True
+            )
+        prospective = (
+            readiness_payload.get("study_id") == CLASS20_STUDY_ID
+            or readiness_payload.get("attestation_schema_version")
+            == CLASS20_READINESS_SCHEMA_VERSION
+        )
+        if prospective and (
+            readiness_payload.get("study_id") != CLASS20_STUDY_ID
+            or readiness_payload.get("attestation_schema_version")
+            != CLASS20_READINESS_SCHEMA_VERSION
+        ):
+            raise ValueError("20-site final validation requires exact v2 readiness identity")
+    if prospective:
+        from .class_validation20 import profile_validation_value
+
+        payload = profile_validation_value(**inputs, deep_code_gate=True)
+    else:
+        payload = _validation_value(**inputs, deep_code_gate=True)
     output = write_create_only_json(
         destination,
         bind_receipt(payload, receipt_type=VALIDATION_RECEIPT_TYPE),
@@ -1351,10 +1591,16 @@ def validate_class_validation_attestation(
 
     receipt_path, value, payload = _load_bound_receipt(path, expected_type=VALIDATION_RECEIPT_TYPE)
     _validate_validation_envelope(payload)
-    expected = _validation_value(
-        **_validation_kwargs(payload),
-        deep_code_gate=deep_code_gate,
-    )
+    if payload.get("study_id") == CLASS20_STUDY_ID:
+        from .class_validation20 import profile_validation_value
+
+        expected = profile_validation_value(
+            **_validation_kwargs(payload), deep_code_gate=deep_code_gate,
+        )
+    else:
+        expected = _validation_value(
+            **_validation_kwargs(payload), deep_code_gate=deep_code_gate,
+        )
     if payload != expected:
         raise ValueError("class validation attestation differs from reconstructed evidence")
     return {
@@ -1367,6 +1613,7 @@ def validate_class_validation_attestation(
 
 def _foundation_value(
     *,
+    study_id: str = STUDY_ID,
     cohort_version: int,
     build_execution_receipt: Path,
     reference_receipt: Path,
@@ -1380,19 +1627,37 @@ def _foundation_value(
     deep_code_gate: bool,
     evidence_source: object,
     pinned_runtime_role: str | None,
-    attestation_schema_version: int = FOUNDATION_SCHEMA_VERSION,
+    attestation_schema_version: int | None = None,
     allow_historical: bool = False,
 ) -> dict[str, Any]:
     if type(cohort_version) is not int or cohort_version < 1:
         raise ValueError("class foundation cohort version must be a positive integer")
     if type(deep_code_gate) is not bool:
         raise ValueError("class foundation deep-code flag must be a boolean")
+    if study_id not in {STUDY_ID, CLASS20_STUDY_ID}:
+        raise ValueError("class foundation study is invalid")
+    if attestation_schema_version is None:
+        attestation_schema_version = (
+            CLASS20_FOUNDATION_SCHEMA_VERSION
+            if study_id == CLASS20_STUDY_ID else FOUNDATION_SCHEMA_VERSION
+        )
     historical = (
         attestation_schema_version == HISTORICAL_FOUNDATION_SCHEMA_VERSION
         and allow_historical
     )
-    if attestation_schema_version != FOUNDATION_SCHEMA_VERSION and not historical:
+    admitted = (
+        attestation_schema_version
+        == (
+            CLASS20_FOUNDATION_SCHEMA_VERSION
+            if study_id == CLASS20_STUDY_ID else FOUNDATION_SCHEMA_VERSION
+        )
+    )
+    if (not admitted and not historical) or (historical and study_id != STUDY_ID):
         raise ValueError("class foundation schema is not admitted")
+    study_contract = None
+    study_profile_inputs = None
+    if study_id == CLASS20_STUDY_ID:
+        study_contract, study_profile_inputs = _class20_study_bindings()
     current_source = source_metadata() if evidence_source is None else evidence_source
     _validate_immutable_source(current_source, label="current class-study source")
     if not isinstance(current_source, Mapping):
@@ -1549,10 +1814,16 @@ def _foundation_value(
             browser_egress["expanded_vectors_sha256"],
         ],
     }
-    return {
+    if study_id == CLASS20_STUDY_ID:
+        gate_evidence["source-pinned-20-site-study-profile"] = [
+            study_contract["sha256"],
+            study_profile_inputs["base_study"]["sha256"],
+            study_profile_inputs["candidate_catalogue"]["sha256"],
+        ]
+    result = {
         "attestation_schema_version": attestation_schema_version,
         "artifact_type": FOUNDATION_RECEIPT_TYPE,
-        "study_id": STUDY_ID,
+        "study_id": study_id,
         "cohort_version": cohort_version,
         "recorded_at": timestamp.isoformat(),
         "implementation_status": "foundation-ready-for-class-acquisition",
@@ -1571,9 +1842,17 @@ def _foundation_value(
             "browser_egress_packet_qualification": "pass",
             "browser_egress_vectors": BROWSER_EGRESS_VECTOR_COUNT,
         },
-        "hard_gates": _hard_gate_records(_FOUNDATION_GATES, gate_evidence),
+        "hard_gates": _hard_gate_records(
+            _CLASS20_FOUNDATION_GATES if study_id == CLASS20_STUDY_ID else _FOUNDATION_GATES,
+            gate_evidence,
+        ),
         "all_foundation_gates_passed": True,
     }
+    if study_id == CLASS20_STUDY_ID:
+        result["study_contract"] = study_contract
+        result["study_profile_sha256"] = study_contract["sha256"]
+        result["study_profile_inputs"] = study_profile_inputs
+    return result
 
 
 def _validated_runtime_inputs(
@@ -2721,6 +3000,7 @@ def _comparison_review_value(
         replay_attacks=False,
     )
     _require_evaluation_completion(evaluation, require_full_replay=False)
+    study_id, profile_sha256 = _comparison_study_binding(handoff_root, evaluation)
 
     historical_rows = list(original_study_comparison_rows())
     inventory = list(historical_anchor_metric_inventory(historical_rows))
@@ -2805,10 +3085,13 @@ def _comparison_review_value(
         row["absolute_discrepancy"] not in {None, 0.0} for row in comparison_rows
     )
     unavailable_count = sum(row["qcsd_value"] is None for row in comparison_rows)
-    return {
-        "review_schema_version": SCHEMA_VERSION,
+    review = {
+        "review_schema_version": (
+            CLASS20_COMPARISON_REVIEW_SCHEMA_VERSION
+            if profile_sha256 is not None else SCHEMA_VERSION
+        ),
         "artifact_type": COMPARISON_REVIEW_RECEIPT_TYPE,
-        "study_id": evaluation.get("study_id", STUDY_ID),
+        "study_id": study_id,
         "implementation_scope": IMPLEMENTATION_SCOPE,
         "paper_equivalent": False,
         "reviewer": reviewer.strip(),
@@ -2826,6 +3109,9 @@ def _comparison_review_value(
         "unexplained_discrepancies": 0,
         "passed": True,
     }
+    if profile_sha256 is not None:
+        review["study_profile_sha256"] = profile_sha256
+    return review
 
 
 _COMPARISON_CONTEXT_FIELDS = (
@@ -3071,13 +3357,21 @@ def _published_metric_formula(historical: Mapping[str, Any], metric: str) -> str
 
 
 def _qcsd_comparison_context(defense: str, *, study_id: str = STUDY_ID) -> dict[str, str]:
+    profile20 = study_id == CLASS20_STUDY_ID
     return {
         "transport": "client-only QUIC/HTTP/3 QCSD adaptation over UDP",
         "endpoint_cooperation": (
             "ordinary unmodified HTTP/3 servers; client-only shaping and standard QUIC chaff/credit"
         ),
-        "dataset_size": (f"closed-world 100-class {study_id} formal corpus with 16,000 samples"),
-        "visits": "two paired visits per class and mode in each of ten acquisition blocks",
+        "dataset_size": (
+            f"closed-world {20 if profile20 else 100}-class {study_id} "
+            "formal corpus with 16,000 samples"
+        ),
+        "visits": (
+            "ten paired visits per class and mode in each of ten acquisition blocks"
+            if profile20 else
+            "two paired visits per class and mode in each of ten acquisition blocks"
+        ),
         "observation_layer": (
             "capture-interface Ethernet observer-frame timestamp, direction, and length"
         ),
@@ -3118,11 +3412,14 @@ def _require_candidate_algorithm_completion(
     *,
     classes: Sequence[str],
     classes_sha256: str,
+    study_id: str = STUDY_ID,
 ) -> dict[str, Any]:
     """Require complete candidate diagnostics over every formal class stratum."""
 
     candidate_modes = ("buflo", "cs-buflo")
-    expected_blocks = tuple(range(1, FORMAL_BLOCK_COUNT + 1))
+    dimensions = class_evaluation._formal_dimensions_for_study(study_id)
+    expected_blocks = tuple(range(1, dimensions.blocks + 1))
+    expected_samples = dimensions.classes * len(candidate_modes) * dimensions.blocks * dimensions.visits_per_block
     expected_directions = ("outgoing", "incoming")
     coverage = value.get("coverage") if isinstance(value, Mapping) else None
     checks = value.get("checks") if isinstance(value, Mapping) else None
@@ -3131,13 +3428,13 @@ def _require_candidate_algorithm_completion(
         not isinstance(value, Mapping)
         or value.get("schema_version") != 1
         or value.get("passed") is not True
-        or value.get("sample_count") != 4_000
+        or value.get("sample_count") != expected_samples
         or not isinstance(coverage, Mapping)
-        or coverage.get("class_count") != FINAL_CLASS_COUNT
+        or coverage.get("class_count") != dimensions.classes
         or coverage.get("classes_sha256") != classes_sha256
         or coverage.get("modes") != list(candidate_modes)
         or coverage.get("acquisition_blocks") != list(expected_blocks)
-        or coverage.get("visits_per_class_mode_block") != FORMAL_VISITS_PER_BLOCK
+        or coverage.get("visits_per_class_mode_block") != dimensions.visits_per_block
         or coverage.get("directions") != list(expected_directions)
         or coverage.get("diagnostic_schema_versions") != [4]
         or checks
@@ -3184,7 +3481,7 @@ def _require_candidate_algorithm_completion(
     for row in strata:
         if (
             not isinstance(row, Mapping)
-            or row.get("samples") != FORMAL_VISITS_PER_BLOCK
+            or row.get("samples") != dimensions.visits_per_block
             or not required_directional <= set(row)
             or not isinstance(row.get("target_size_histogram"), Mapping)
             or not isinstance(row.get("satisfaction_counts"), Mapping)
@@ -3228,7 +3525,7 @@ def _require_candidate_algorithm_completion(
                     row.get("acquisition_block_index"),
                 )
                 for row in rows
-                if isinstance(row, Mapping) and row.get("samples") == FORMAL_VISITS_PER_BLOCK
+                if isinstance(row, Mapping) and row.get("samples") == dimensions.visits_per_block
             }
             != expected
         ):
@@ -3243,31 +3540,38 @@ def _require_evaluation_completion(
 
     if not isinstance(value, Mapping):
         raise TypeError("class evaluation verification did not return an object")
+    study_id = value.get("study_id", STUDY_ID)
+    dimensions = class_evaluation._formal_dimensions_for_study(study_id)
+    if study_id == CLASS20_STUDY_ID:
+        if value.get("study_profile_sha256") != _CLASS20_OVERLAY_SHA256:
+            raise ValueError("20-site evaluation has another study profile")
+    elif "study_profile_sha256" in value:
+        raise ValueError("v1 evaluation unexpectedly claims a prospective study profile")
     correctness = value.get("correctness")
     performance = value.get("performance")
     classes = value.get("classes")
     if (
         not isinstance(classes, list)
-        or len(classes) != FINAL_CLASS_COUNT
-        or len(set(classes)) != FINAL_CLASS_COUNT
+        or len(classes) != dimensions.classes
+        or len(set(classes)) != dimensions.classes
         or any(not isinstance(item, str) or not item for item in classes)
     ):
         raise ValueError("class evaluation class inventory is incomplete")
     correctness_coverage = correctness.get("coverage") if isinstance(correctness, Mapping) else None
     correctness_checks = correctness.get("checks") if isinstance(correctness, Mapping) else None
-    expected_blocks = list(range(1, FORMAL_BLOCK_COUNT + 1))
+    expected_blocks = list(range(1, dimensions.blocks + 1))
     if (
         not isinstance(correctness, Mapping)
         or correctness.get("schema_version") != 1
         or correctness.get("passed") is not True
-        or correctness.get("sample_count") != FORMAL_SAMPLE_COUNT
-        or correctness.get("passed_samples") != FORMAL_SAMPLE_COUNT
+        or correctness.get("sample_count") != dimensions.sample_count
+        or correctness.get("passed_samples") != dimensions.sample_count
         or not isinstance(correctness_coverage, Mapping)
-        or correctness_coverage.get("class_count") != FINAL_CLASS_COUNT
+        or correctness_coverage.get("class_count") != dimensions.classes
         or _DIGEST.fullmatch(str(correctness_coverage.get("classes_sha256"))) is None
-        or correctness_coverage.get("modes") != list(FORMAL_MODES)
+        or correctness_coverage.get("modes") != list(dimensions.modes)
         or correctness_coverage.get("acquisition_blocks") != expected_blocks
-        or correctness_coverage.get("visits_per_class_mode_block") != 2
+        or correctness_coverage.get("visits_per_class_mode_block") != dimensions.visits_per_block
         or correctness_checks
         != {
             "prepared_response_identity": "exact",
@@ -3291,21 +3595,23 @@ def _require_evaluation_completion(
     rapl = performance.get("rapl") if isinstance(performance, Mapping) else None
     paired = performance.get("paired_by_mode") if isinstance(performance, Mapping) else None
     breakdowns = performance.get("breakdowns") if isinstance(performance, Mapping) else None
-    defended_modes = set(FORMAL_MODES) - {"undefended"}
+    defended_modes = set(dimensions.modes) - {"undefended"}
+    paired_visits = dimensions.classes * dimensions.blocks * dimensions.visits_per_block
     rapl_available = rapl.get("available_samples") if isinstance(rapl, Mapping) else None
     rapl_unavailable = rapl.get("unavailable_samples") if isinstance(rapl, Mapping) else None
     if (
         not isinstance(performance, Mapping)
         or performance.get("schema_version") != 1
         or performance.get("passed") is not True
-        or performance.get("sample_count") != FORMAL_SAMPLE_COUNT
-        or performance.get("complete_samples") != FORMAL_SAMPLE_COUNT
+        or performance.get("sample_count") != dimensions.sample_count
+        or performance.get("complete_samples") != dimensions.sample_count
         or not isinstance(performance_coverage, Mapping)
-        or performance_coverage.get("class_count") != FINAL_CLASS_COUNT
-        or performance_coverage.get("modes") != list(FORMAL_MODES)
+        or performance_coverage.get("class_count") != dimensions.classes
+        or performance_coverage.get("modes") != list(dimensions.modes)
         or performance_coverage.get("acquisition_blocks") != expected_blocks
-        or performance_coverage.get("paired_visits") != 2_000
-        or performance_coverage.get("defended_baseline_pairs") != 14_000
+        or performance_coverage.get("paired_visits") != paired_visits
+        or performance_coverage.get("defended_baseline_pairs")
+        != paired_visits * (len(dimensions.modes) - 1)
         or bootstrap
         != {
             "draws": 10_000,
@@ -3318,7 +3624,7 @@ def _require_evaluation_completion(
         or rapl.get("nullable") is not True
         or type(rapl_available) is not int
         or type(rapl_unavailable) is not int
-        or rapl_available + rapl_unavailable != FORMAL_SAMPLE_COUNT
+        or rapl_available + rapl_unavailable != dimensions.sample_count
         or not isinstance(rapl.get("unavailable_reasons"), list)
         or not isinstance(paired, Mapping)
         or set(paired) != defended_modes
@@ -3338,6 +3644,7 @@ def _require_evaluation_completion(
         value.get("candidate_algorithm"),
         classes=classes,
         classes_sha256=str(correctness_coverage["classes_sha256"]),
+        study_id=study_id,
     )
     preflight = value.get("dlsvm_capacity_preflight")
     if (
@@ -3372,9 +3679,9 @@ def _require_evaluation_completion(
     ):
         raise ValueError("class evaluation lacks an admitted DLSVM capacity preflight")
     if (
-        value.get("sample_count") != FORMAL_SAMPLE_COUNT
-        or value.get("class_count") != FINAL_CLASS_COUNT
-        or value.get("modes") != list(FORMAL_MODES)
+        value.get("sample_count") != dimensions.sample_count
+        or value.get("class_count") != dimensions.classes
+        or value.get("modes") != list(dimensions.modes)
         or not isinstance(value.get("result_count"), int)
         or value["result_count"] <= 0
     ):
@@ -3572,15 +3879,24 @@ def _validate_foundation_envelope(
     payload: Mapping[str, Any], *, allow_historical: bool = False
 ) -> None:
     schema_version = payload.get("attestation_schema_version")
+    study_id = payload.get("study_id")
+    expected_study = (
+        CLASS20_STUDY_ID
+        if schema_version == CLASS20_FOUNDATION_SCHEMA_VERSION else STUDY_ID
+    )
     if (
-        schema_version
-        not in {HISTORICAL_FOUNDATION_SCHEMA_VERSION, FOUNDATION_SCHEMA_VERSION}
+        type(schema_version) is not int
+        or schema_version not in {
+            HISTORICAL_FOUNDATION_SCHEMA_VERSION,
+            FOUNDATION_SCHEMA_VERSION,
+            CLASS20_FOUNDATION_SCHEMA_VERSION,
+        }
         or (
             schema_version == HISTORICAL_FOUNDATION_SCHEMA_VERSION
             and not allow_historical
         )
         or payload.get("artifact_type") != FOUNDATION_RECEIPT_TYPE
-        or payload.get("study_id") != STUDY_ID
+        or study_id != expected_study
         or payload.get("implementation_status") != "foundation-ready-for-class-acquisition"
         or payload.get("promotion_authority") is not False
         or payload.get("implementation_scope") != IMPLEMENTATION_SCOPE
@@ -3590,15 +3906,23 @@ def _validate_foundation_envelope(
     ):
         raise ValueError("class foundation promotion envelope is invalid")
     _aware_timestamp(payload.get("recorded_at"), label="foundation attestation")
-    _validate_hard_gates(payload.get("hard_gates"), _FOUNDATION_GATES)
+    _validate_hard_gates(
+        payload.get("hard_gates"),
+        _CLASS20_FOUNDATION_GATES
+        if schema_version == CLASS20_FOUNDATION_SCHEMA_VERSION else _FOUNDATION_GATES,
+    )
 
 
 def _validate_validation_envelope(payload: Mapping[str, Any]) -> None:
     study_id = payload.get("study_id")
+    prospective = study_id == CLASS20_STUDY_ID
     if (
-        payload.get("attestation_schema_version") != SCHEMA_VERSION
+        payload.get("attestation_schema_version")
+        != (CLASS20_VALIDATION_SCHEMA_VERSION if prospective else SCHEMA_VERSION)
         or payload.get("artifact_type") != VALIDATION_RECEIPT_TYPE
-        or not is_class_study_id(study_id)
+        or (not prospective and not is_class_study_id(study_id))
+        or (prospective and payload.get("study_profile_sha256") != _CLASS20_OVERLAY_SHA256)
+        or (not prospective and "study_profile_sha256" in payload)
         or payload.get("implementation_status") != VALIDATED_STATUS
         or payload.get("implementation_status_description") != VALIDATED_DESCRIPTION
         or payload.get("promotion_authority") is not True
@@ -3608,7 +3932,9 @@ def _validate_validation_envelope(payload: Mapping[str, Any]) -> None:
         or payload.get("all_validation_gates_passed") is not True
     ):
         raise ValueError("class validation promotion envelope is invalid")
-    _validate_hard_gates(payload.get("hard_gates"), _FINAL_GATES)
+    _validate_hard_gates(
+        payload.get("hard_gates"), _CLASS20_FINAL_GATES if prospective else _FINAL_GATES
+    )
 
 
 def _hard_gate_records(
@@ -3733,7 +4059,22 @@ def _validate_acquisition_foundation_join(
     """
 
     foundation_binding = _file_binding(foundation_attestation)
+    prospective = foundation.get("study_id") == CLASS20_STUDY_ID
+    if prospective:
+        contract, inherited = _class20_study_bindings()
+        if (
+            foundation.get("attestation_schema_version")
+            != CLASS20_FOUNDATION_SCHEMA_VERSION
+            or foundation.get("study_contract") != contract
+            or foundation.get("study_profile_sha256") != contract["sha256"]
+            or foundation.get("study_profile_inputs") != inherited
+            or provenance.get("study_id") != CLASS20_STUDY_ID
+            or provenance.get("study_profile_sha256") != contract["sha256"]
+        ):
+            raise ValueError("20-site acquisition and foundation study profile differ")
     if "acquisition_authority" not in provenance:
+        if prospective:
+            raise ValueError("20-site foundation requires its acquisition-only authority")
         if provenance.get("foundation_attestation") != foundation_binding:
             raise ValueError("class acquisition provenance is not foundation-bound")
         authority = foundation
@@ -3749,6 +4090,8 @@ def _validate_acquisition_foundation_join(
         )
         envelope = _load_regular_json(authority_path, "acquisition authority")
         if envelope.get("receipt_type") == FOUNDATION_RECEIPT_TYPE:
+            if prospective:
+                raise ValueError("20-site foundation cannot replace acquisition-only authority")
             if provenance["acquisition_authority"] != foundation_binding:
                 raise ValueError("class acquisition full-foundation fallback differs")
             authority = foundation
@@ -3760,12 +4103,25 @@ def _validate_acquisition_foundation_join(
             shared_evidence_keys = ("build_execution", "pinned_cdp_probe")
             if authority["attestation_schema_version"] == ACQUISITION_AUTHORITY_SCHEMA_VERSION:
                 shared_evidence_keys += ("browser_egress_qualification",)
+            expected_contract = (
+                contract if prospective
+                else _file_binding(LAB_ROOT / "config/class-study/v1/study.json")
+            )
             if (
-                authority["source"] != foundation.get("source")
+                authority["study_id"] != foundation.get("study_id", STUDY_ID)
+                or (
+                    prospective
+                    and (
+                        authority["attestation_schema_version"]
+                        != CLASS20_ACQUISITION_AUTHORITY_SCHEMA_VERSION
+                        or authority.get("study_profile_sha256") != contract["sha256"]
+                        or authority.get("study_profile_inputs") != inherited
+                    )
+                )
+                or authority["source"] != foundation.get("source")
                 or authority["build_execution_identity"]
                 != foundation.get("build_execution_identity")
-                or authority["study_contract"]
-                != _file_binding(LAB_ROOT / "config/class-study/v1/study.json")
+                or authority["study_contract"] != expected_contract
                 or authority["evidence"] != {
                     key: foundation_evidence.get(key) for key in shared_evidence_keys
                 }
@@ -4257,8 +4613,13 @@ def _class_result_binding(path: Path) -> dict[str, str]:
     study_id = configuration.get("class_study_id", STUDY_ID)
     successor_input = root / successor_relative
     if successor_digest is None:
-        if study_id != STUDY_ID or successor_input.exists() or successor_input.is_symlink():
+        if study_id not in {STUDY_ID, CLASS20_STUDY_ID} or successor_input.exists() or successor_input.is_symlink():
             raise ValueError("class-study result has an unbound successor identity")
+        if study_id == CLASS20_STUDY_ID:
+            if configuration.get("class_study_profile_sha256") != _CLASS20_OVERLAY_SHA256:
+                raise ValueError("20-site result has another study profile")
+            binding["class_study_id"] = CLASS20_STUDY_ID
+            binding["class_study_profile_sha256"] = _CLASS20_OVERLAY_SHA256
     else:
         if (
             not is_successor_study_id(study_id)
@@ -4378,7 +4739,20 @@ def _root_from_result_binding(value: object, *, label: str) -> Path:
         raise ValueError(f"class attestation {label} evidence digest changed")
     if set(value) != {"root", "evidence_sha256"}:
         expected = _class_result_binding(root)
-        if expected != dict(value):
+        historical_profile_keys = {
+            "root",
+            "evidence_sha256",
+            "class_study_launch_sha256",
+            "class_study_foundation_sha256",
+            "class_study_readiness_sha256",
+            "class_study_historical_pre_snapshot_sha256",
+        }
+        profile_snapshot = (
+            expected.get("class_study_id") == CLASS20_STUDY_ID
+            and set(value) == historical_profile_keys
+            and dict(value) == {key: expected[key] for key in historical_profile_keys}
+        )
+        if expected != dict(value) and not profile_snapshot:
             raise ValueError(f"class attestation {label} authority binding changed")
     return root
 
@@ -4456,6 +4830,14 @@ def _protected_readiness_inputs(inputs: Mapping[str, Any]) -> tuple[Path, ...]:
 
 def _protected_foundation_inputs(inputs: Mapping[str, Any]) -> tuple[Path, ...]:
     protected: list[Path] = []
+    if inputs.get("study_id", STUDY_ID) == CLASS20_STUDY_ID:
+        protected.extend(
+            (
+                LAB_ROOT / "config/class-study/v2/study.json",
+                LAB_ROOT / "config/class-study/v1/study.json",
+                LAB_ROOT / "config/class-study/v1/classifier-multiorigin100-v1-candidates.json",
+            )
+        )
     for key in ("regression_result_roots", "controlled_result_roots"):
         protected.extend(Path(path) for path in inputs.get(key, ()))
     for key in (

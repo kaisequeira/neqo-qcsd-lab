@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+from collections import Counter
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,9 +14,15 @@ from qcsd_lab import buflo_handoff, orchestrator, util
 from qcsd_lab.capture_session import Defense, Limits
 from qcsd_lab.class_study import (
     CANDIDATE_COUNT,
+    CANDIDATES_PER_STRATUM,
+    CLASS20_PROFILE,
     COMPATIBILITY_MODES,
     FORMAL_MODES,
     STUDY_ID,
+    TRANCO_RANK_STRATA,
+    ClassCandidate,
+    deterministic_candidate_order,
+    select_profile_pilot,
 )
 from qcsd_lab.fidelity import BUFLO_SCHEDULE_STOP_V4_KEYS, SCHEDULE_QCSD_FIELDS
 from qcsd_lab.verification import VerifiedResult
@@ -24,6 +31,181 @@ from qcsd_lab.verification import VerifiedResult
 @dataclass(frozen=True)
 class _Candidate:
     candidate_id: str
+
+
+_CLASS20_LIST_SHA = "a" * 64
+
+
+def _class20_catalogue() -> tuple[ClassCandidate, ...]:
+    return tuple(
+        ClassCandidate(
+            candidate_id=f"site-{group_index:01d}-{offset:03d}",
+            domain=f"site-{group_index:01d}-{offset:03d}.example",
+            rank=stratum.minimum_rank + offset,
+            eligible=True,
+        )
+        for group_index, stratum in enumerate(TRANCO_RANK_STRATA)
+        for offset in range(CANDIDATES_PER_STRATUM)
+    )
+
+
+def _class20_planned_pairs(
+    catalogue: tuple[ClassCandidate, ...],
+) -> tuple[tuple[str, str], ...]:
+    pilot = select_profile_pilot(
+        catalogue, tranco_list_sha256=_CLASS20_LIST_SHA, profile=CLASS20_PROFILE
+    )
+    return tuple(
+        (pilot[index].candidate_id, pilot[index + 1].candidate_id)
+        for index in range(0, len(pilot), 2)
+    )
+
+
+def test_class20_selects_ten_qualified_pairs_and_retains_five_failures() -> None:
+    catalogue = _class20_catalogue()
+    pairs = _class20_planned_pairs(catalogue)
+    outcomes = tuple(
+        pipeline.PairQualificationOutcome(
+            pair=pair,
+            qualified=index >= 5,
+            evidence_sha256=f"{index + 1:064x}",
+            failure_reason="insufficient endpoint capacity" if index < 5 else None,
+        )
+        for index, pair in enumerate(pairs)
+    )
+    selected = pipeline.select_profile_final(
+        reversed(catalogue),
+        tranco_list_sha256=_CLASS20_LIST_SHA,
+        planned_pairs=reversed(pairs),
+        pair_outcomes=reversed(outcomes),
+        profile=CLASS20_PROFILE,
+    )
+    assert selected.inventories()["pilot"] == [
+        candidate.candidate_id for candidate in select_profile_pilot(
+            catalogue, tranco_list_sha256=_CLASS20_LIST_SHA, profile=CLASS20_PROFILE
+        )
+    ]
+    assert len(selected.final) == 20
+    assert len(selected.reserves) == 10
+    assert len(selected.matching) == 10
+    assert len(selected.failed_pairs) == 5
+    assert {tuple(pair) for pair in selected.matching} == set(pairs[5:])
+    assert {candidate.candidate_id for candidate in selected.final}.isdisjoint(
+        {candidate.candidate_id for candidate in selected.reserves}
+    )
+    assert selected == pipeline.select_profile_final(
+        catalogue,
+        tranco_list_sha256=_CLASS20_LIST_SHA,
+        planned_pairs=pairs,
+        pair_outcomes=outcomes,
+        profile=CLASS20_PROFILE,
+    )
+    with pytest.raises(ValueError, match="9 qualified pilot pairs; 10 required"):
+        pipeline.select_profile_final(
+            catalogue,
+            tranco_list_sha256=_CLASS20_LIST_SHA,
+            planned_pairs=pairs,
+            pair_outcomes=(
+                *(
+                    pipeline.PairQualificationOutcome(
+                        pair=pair,
+                        qualified=False,
+                        evidence_sha256=f"{index + 1:064x}",
+                        failure_reason="insufficient endpoint capacity",
+                    )
+                    for index, pair in enumerate(pairs[:6])
+                ),
+                *outcomes[6:],
+            ),
+            profile=CLASS20_PROFILE,
+        )
+
+
+def test_class20_pair_selection_obeys_rank_cap_without_rank_minima() -> None:
+    catalogue = _class20_catalogue()
+    frozen = deterministic_candidate_order(catalogue, tranco_list_sha256=_CLASS20_LIST_SHA)
+    group_four = tuple(
+        candidate for candidate in frozen if candidate.stratum == TRANCO_RANK_STRATA[3]
+    )
+    group_five = tuple(
+        candidate for candidate in frozen if candidate.stratum == TRANCO_RANK_STRATA[4]
+    )
+    eligible_ids = {
+        candidate.candidate_id for candidate in (*group_four[40:50], *group_five[:20])
+    }
+    assessed = tuple(
+        replace(candidate, eligible=candidate.candidate_id in eligible_ids)
+        for candidate in catalogue
+    )
+    pairs = _class20_planned_pairs(assessed)
+    outcomes = tuple(
+        pipeline.PairQualificationOutcome(pair, True, f"{index + 1:064x}")
+        for index, pair in enumerate(pairs)
+    )
+    selected = pipeline.select_profile_final(
+        assessed,
+        tranco_list_sha256=_CLASS20_LIST_SHA,
+        planned_pairs=pairs,
+        pair_outcomes=outcomes,
+        profile=CLASS20_PROFILE,
+    )
+    assert Counter(candidate.stratum.id for candidate in selected.final) == {
+        TRANCO_RANK_STRATA[3].id: 10,
+        TRANCO_RANK_STRATA[4].id: 10,
+    }
+    assert len(selected.matching) == 10
+    assert len(selected.failed_pairs) == 0
+
+    last_group_four_pair = next(
+        pair for pair in reversed(pairs)
+        if all(candidate_id in {item.candidate_id for item in group_four} for candidate_id in pair)
+    )
+    one_failure = tuple(
+        pipeline.PairQualificationOutcome(
+            pair,
+            pair != last_group_four_pair,
+            f"{index + 1:064x}",
+            "insufficient endpoint capacity" if pair == last_group_four_pair else None,
+        )
+        for index, pair in enumerate(pairs)
+    )
+    with pytest.raises(ValueError, match="cannot meet the final rank-group cap"):
+        pipeline.select_profile_final(
+            assessed,
+            tranco_list_sha256=_CLASS20_LIST_SHA,
+            planned_pairs=pairs,
+            pair_outcomes=one_failure,
+            profile=CLASS20_PROFILE,
+        )
+
+
+def test_class20_pair_selection_requires_complete_evidence_and_pilot_coverage() -> None:
+    catalogue = _class20_catalogue()
+    pairs = _class20_planned_pairs(catalogue)
+    outcomes = tuple(
+        pipeline.PairQualificationOutcome(pair, True, f"{index + 1:064x}")
+        for index, pair in enumerate(pairs)
+    )
+    with pytest.raises(ValueError, match="planned pairs must form an exact pilot"):
+        pipeline.select_profile_final(
+            catalogue,
+            tranco_list_sha256=_CLASS20_LIST_SHA,
+            planned_pairs=pairs[:-1],
+            pair_outcomes=outcomes,
+            profile=CLASS20_PROFILE,
+        )
+    with pytest.raises(ValueError, match="pair outcomes must cover each planned pair once"):
+        pipeline.select_profile_final(
+            catalogue,
+            tranco_list_sha256=_CLASS20_LIST_SHA,
+            planned_pairs=pairs,
+            pair_outcomes=outcomes[:-1],
+            profile=CLASS20_PROFILE,
+        )
+    with pytest.raises(ValueError, match="failed pair requires"):
+        pipeline.PairQualificationOutcome(pairs[0], False, "a" * 64)
+    with pytest.raises(ValueError, match="malformed"):
+        pipeline.PairQualificationOutcome(pairs[0], True, "not-a-digest")
 
 
 def _class_campaign_name(role: str, *, block: int | None = None) -> str:
@@ -977,7 +1159,8 @@ def test_status_labels_historical_acquisition_authority_without_using_it_as_gate
 @pytest.mark.parametrize(
     ("acquisition_schema", "completion_schema", "checkpoint_schema", "current"),
     (
-        (12, 4, 3, True),
+        (13, 5, 3, True),
+        (12, 4, 3, False),
         (11, 4, 3, False),
         (10, 4, 3, False),
         (9, 4, 3, False),
@@ -5243,6 +5426,292 @@ def test_acquisition_and_stability_use_allowed_roots(
             pipeline._validate_fresh_layout_arguments(**kwargs)
     else:
         pipeline._validate_fresh_layout_arguments(**kwargs)
+
+
+def test_profile20_acquisition_requires_its_own_versioned_roots(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(util, "LAB_ROOT", tmp_path)
+    profile = pipeline.CLASS20_PROFILE
+    layout = pipeline.class_study_layout(profile=profile)
+    runner = layout.acquisition_root.with_name(layout.acquisition_root.name + "-v140")
+    stability, workloads = pipeline.publication_roots_for_acquisition_root(
+        runner, profile=profile
+    )
+    catalogue = (
+        pipeline.class_study_layout().study_config_root
+        / f"{pipeline.STUDY_ID}-candidates.json"
+    )
+    kwargs = dict(
+        action="acquisition-run", profile=profile, stage=None,
+        candidate_catalogue_path=catalogue, acquisition_root=runner,
+        stability_root=stability, workload_root=workloads,
+        pilot_cohort_receipt_path=None, pilot_cohort_assembly_path=None,
+        final_cohort_receipt_path=None, final_cohort_assembly_path=None,
+        cohort_receipt_path=None, cohort_assembly_path=None,
+        final_selection_path=None, campaign_root=None, campaign=None,
+        artifacts_root=None, numeric_bundle_root=None, prefix_spec_root=None,
+        qualification_sidecar_root=None, qualification_publication_root=None,
+        qualification_manifest=None, final_bundle_root=None, destination=None,
+    )
+    pipeline._validate_fresh_layout_arguments(**kwargs)
+
+    old_layout = pipeline.class_study_layout()
+    with pytest.raises(ValueError, match="20-site workload root differs"):
+        pipeline._validate_fresh_layout_arguments(
+            **{**kwargs, "workload_root": old_layout.workload_root.with_name("workloads-v140")}
+        )
+    with pytest.raises(ValueError, match="acquisition root.*canonical"):
+        pipeline._validate_fresh_layout_arguments(
+            **{**kwargs, "acquisition_root": old_layout.acquisition_root.with_name(
+                old_layout.acquisition_root.name + "-v140"
+            )}
+        )
+
+
+def test_profile20_authority_and_init_require_new_study_identity_before_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(util, "LAB_ROOT", tmp_path)
+    profile = pipeline.CLASS20_PROFILE
+    layout = pipeline.class_study_layout(profile=profile)
+    build = tmp_path / "artifacts/buflo-study/build-execution-v140.json"
+    pinned = build.parent / "pinned-cdp-execution-v140.json"
+    old_name = layout.artifacts_root / "class-study-acquisition-authority-v140.json"
+    with pytest.raises(ValueError, match="wrong canonical filename"):
+        pipeline.run_class_study_action(
+            "acquisition-authority", study_id=profile.study_id,
+            cohort_version=140, build_execution_receipt=build,
+            pinned_cdp_receipt=pinned, destination=old_name,
+        )
+    assert not old_name.exists()
+
+    runner = layout.acquisition_root.with_name(layout.acquisition_root.name + "-v140")
+    catalogue = (
+        pipeline.class_study_layout().study_config_root
+        / f"{pipeline.STUDY_ID}-candidates.json"
+    )
+    with pytest.raises(ValueError, match="requires its own acquisition authority"):
+        pipeline.run_class_study_action(
+            "acquisition-init", study_id=profile.study_id,
+            acquisition_root=runner, candidate_catalogue_path=catalogue,
+            acquisition_started_at="2026-10-02T00:00:00+00:00",
+        )
+    assert not runner.exists()
+
+
+def test_profile20_foundation_requires_separate_destination_and_full_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import qcsd_lab.class_attestation as attestation
+
+    monkeypatch.setattr(util, "LAB_ROOT", tmp_path)
+    profile = pipeline.CLASS20_PROFILE
+    layout = pipeline.class_study_layout(profile=profile)
+    build = layout.artifacts_root / "buflo-study/build-execution-v140.json"
+    pinned = build.parent / "pinned-cdp-execution-v140.json"
+    browser = build.parent / "browser-egress-qualification-v140"
+    destination = layout.artifacts_root / f"{profile.study_id}-foundation-v140.json"
+    other_evidence = layout.artifacts_root / "other-evidence.json"
+    regression = (layout.artifacts_root / "regression",)
+    controlled = (layout.artifacts_root / "controlled",)
+    kwargs = dict(
+        study_id=profile.study_id,
+        cohort_version=140,
+        build_execution_receipt=build,
+        pinned_cdp_receipt=pinned,
+        browser_egress_qualification_root=browser,
+        reference_receipt=other_evidence,
+        code_gate_receipt=other_evidence,
+        controlled_qualification_receipt=other_evidence,
+        regression_result_roots=regression,
+        controlled_result_roots=controlled,
+        destination=destination,
+    )
+    observed: dict[str, object] = {}
+
+    def create(path: Path, **inputs: object) -> Path:
+        observed["destination"] = path
+        observed.update(inputs)
+        return path
+
+    monkeypatch.setattr(attestation, "create_class_foundation_attestation", create)
+    monkeypatch.setattr(
+        attestation,
+        "validate_class_foundation_attestation",
+        lambda path, **_kwargs: {"path": str(path), "study_id": profile.study_id},
+    )
+    for overrides, error in (
+        ({"destination": layout.artifacts_root / "class-study-foundation-v140.json"},
+         "wrong canonical filename"),
+        ({"build_execution_receipt": layout.artifacts_root / "copied-build.json"},
+         "build receipt has the wrong canonical path"),
+        ({"pinned_cdp_receipt": build.parent / "copied-probe.json"},
+         "pinned CDP receipt has the wrong canonical filename"),
+        ({"browser_egress_qualification_root": None},
+         "--browser-egress-qualification-root"),
+    ):
+        with pytest.raises(ValueError, match=error):
+            pipeline.run_class_study_action("foundation", **{**kwargs, **overrides})
+        assert observed == {}
+
+    result = pipeline.run_class_study_action("foundation", **kwargs)
+    assert result.status == "complete"
+    assert observed == {
+        "destination": destination,
+        "study_id": profile.study_id,
+        "cohort_version": 140,
+        "build_execution_receipt": build,
+        "pinned_cdp_receipt": pinned,
+        "browser_egress_qualification_root": browser,
+        "reference_receipt": other_evidence,
+        "code_gate_receipt": other_evidence,
+        "controlled_qualification_receipt": other_evidence,
+        "regression_result_roots": regression,
+        "controlled_result_roots": controlled,
+    }
+
+
+def test_profile20_pilot_cohort_rejects_base_study_output_before_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(util, "LAB_ROOT", tmp_path)
+    profile = pipeline.CLASS20_PROFILE
+    layout = pipeline.class_study_layout(profile=profile)
+    runner = layout.acquisition_root.with_name(layout.acquisition_root.name + "-v140")
+    stability, workloads = pipeline.publication_roots_for_acquisition_root(
+        runner, profile=profile
+    )
+    old_layout = pipeline.class_study_layout()
+    old_cohort = old_layout.study_config_root / f"{pipeline.STUDY_ID}-pilot-cohort.json"
+    with pytest.raises(ValueError, match="pilot cohort.*canonical"):
+        pipeline.run_class_study_action(
+            "cohort", study_id=profile.study_id, stage="pilot",
+            candidate_catalogue_path=(
+                old_layout.study_config_root / f"{pipeline.STUDY_ID}-candidates.json"
+            ),
+            acquisition_completion_path=runner / "completion.json",
+            stability_root=stability, workload_root=workloads,
+            cohort_receipt_path=old_cohort,
+            cohort_assembly_path=(
+                layout.study_config_root / f"{profile.study_id}-pilot-cohort-assembly.json"
+            ),
+        )
+    assert not old_cohort.exists()
+
+
+def test_profile20_pilot_campaigns_wait_for_evidenced_cohort(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(util, "LAB_ROOT", tmp_path)
+    profile = pipeline.CLASS20_PROFILE
+    layout = pipeline.class_study_layout(profile=profile)
+    layout.campaign_root.mkdir(parents=True)
+    with pytest.raises(ValueError, match="regular file"):
+        pipeline.run_class_study_action(
+            "campaigns", study_id=profile.study_id, stage="pilot",
+            pilot_cohort_receipt_path=(
+                layout.study_config_root / f"{profile.study_id}-pilot-cohort.json"
+            ),
+            pilot_cohort_assembly_path=(
+                layout.study_config_root / f"{profile.study_id}-pilot-cohort-assembly.json"
+            ),
+            campaign_root=layout.campaign_root,
+        )
+    assert list(layout.campaign_root.iterdir()) == []
+
+
+def test_profile20_readiness_rejects_pilot_numeric_bundle_before_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(util, "LAB_ROOT", tmp_path)
+    profile = pipeline.CLASS20_PROFILE
+    layout = pipeline.class_study_layout(profile=profile)
+    target = layout.artifacts_root / f"{profile.study_id}-readiness-v1.json"
+    with pytest.raises(ValueError, match="numeric bundle.*canonical"):
+        pipeline.run_class_study_action(
+            "readiness", study_id=profile.study_id,
+            destination=target,
+            numeric_bundle_root=layout.pilot_numeric_root,
+        )
+    assert not target.exists()
+
+
+def test_profile20_qualification_never_runs_a_capacity_failed_endpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from qcsd_lab import chaff_qualification, class_attestation, class_pair_screening20
+
+    monkeypatch.setattr(util, "LAB_ROOT", tmp_path)
+    profile = pipeline.CLASS20_PROFILE
+    layout = pipeline.class_study_layout(profile=profile)
+    layout.pilot_qualification_set_root.mkdir(parents=True)
+    publication = class_pair_screening20.PrefixSpecPublication(
+        published_paths=(layout.pilot_prefix_root / "feasible.json",),
+        capacity_failures=(class_pair_screening20.PrefixCapacityFailure(
+            workload_id="failed", reason="capacity", workload_sha256="a" * 64,
+            walkie_talkie_sha256="b" * 64,
+        ),),
+        profile_sha256="c" * 64,
+        pilot_cohort_sha256="d" * 64,
+        numeric_provenance_sha256="e" * 64,
+    )
+    monkeypatch.setattr(
+        class_pair_screening20, "verify_feasible_pilot_prefix_specs",
+        lambda **_kwargs: publication,
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(pipeline, "qualify_chaff", lambda workload_id, **_kwargs: calls.append(workload_id))
+    common = {
+        "study_id": profile.study_id,
+        "stage": "pilot",
+        "pilot_cohort_receipt_path": layout.study_config_root / f"{profile.study_id}-pilot-cohort.json",
+        "pilot_cohort_assembly_path": layout.study_config_root / f"{profile.study_id}-pilot-cohort-assembly.json",
+        "numeric_bundle_root": layout.pilot_numeric_root,
+        "pilot_fitting_result": tmp_path / "results/pilot",
+        "workload_root": layout.workload_root,
+        "prefix_spec_root": layout.pilot_prefix_root,
+        "qualification_sidecar_root": layout.pilot_qualification_set_root,
+        "foundation_attestation": layout.artifacts_root / "foundation.json",
+    }
+    with pytest.raises(ValueError, match="no feasible verified pilot prefix"):
+        pipeline.run_class_study_action(
+            "qualify-prefix", qualification_workload="failed", **common,
+        )
+    assert calls == []
+
+    monkeypatch.setattr(
+        class_attestation, "class_qualification_authority",
+        lambda *_args, **_kwargs: {
+            "prepare_source": {"id": "prepare"},
+            "prepare_image_digest": "sha256:prepare",
+        },
+    )
+    monkeypatch.setattr(
+        pipeline, "_qualification_execution_context",
+        lambda: ({}, {"id": "prepare"}, "sha256:prepare"),
+    )
+    monkeypatch.setattr(
+        chaff_qualification, "load_qualified_chaff",
+        lambda *_args, **_kwargs: object(),
+    )
+    def qualified(workload_id: str, **kwargs: object) -> None:
+        calls.append(workload_id)
+        (layout.pilot_qualification_set_root / f"{workload_id}.json").write_text("{}")
+    monkeypatch.setattr(pipeline, "qualify_chaff", qualified)
+    result = pipeline.run_class_study_action(
+        "qualify-prefix", qualification_workload="feasible", **common,
+    )
+    assert calls == ["feasible"]
+    assert result.status == "complete"
+    assert result.details["capacity_failures"][0]["workload_id"] == "failed"
 
 
 def test_authoritative_selection_uses_pilot_numeric_canonical_lineage(

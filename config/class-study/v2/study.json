@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "artifact_type": "qcsd-class-study-prospective-profile",
+  "study_id": "classifier-multiorigin20-v1",
+  "registered_at": "2026-10-02",
+  "scope": "new-source-bound-acquisition-and-capture-only",
+  "base_study_contract": {
+    "path": "../v1/study.json",
+    "sha256": "ab8d898836cb172338303ded7d0adda984fbfab720c5bcd219e08f90efbee7bc",
+    "inheritance": "unchanged-browser-safety-request-replay-defence-and-primary-origin-prefix-qualification-rules-only"
+  },
+  "catalogue": {
+    "path": "../v1/classifier-multiorigin100-v1-candidates.json",
+    "sha256": "9d2ec1d755648292526ff623700b07a9bab3988a67444c262aea9f4a855e5146",
+    "candidate_count": 600,
+    "catalogue_order_seed": "classifier-multiorigin100-v1",
+    "priority_order": "round-robin-five-frozen-within-stratum-orders"
+  },
+  "selection": {
+    "eligible_pilot_sites": 30,
+    "final_sites": 20,
+    "reserve_sites": 10,
+    "fixed_per_stratum_minimum": 0,
+    "max_final_sites_per_stratum": 10,
+    "scientific_eligibility": "unchanged-deep-verified-site-evidence-only",
+    "operationally_censored_candidates": "separate-from-scientific-rejection-and-never-eligible",
+    "selection_inputs": "technical-eligibility-and-qualified-pairs-only-no-classifier-or-formal-traffic-outcomes"
+  },
+  "walkie_talkie_pairs": {
+    "planned_pilot_pairs": 15,
+    "qualified_final_pairs": 10,
+    "planned_pairs_cover_all_pilot_sites_once": true,
+    "screening_evidence": "separate-deep-verified-15-pair-receipt-not-a-pilot-compatibility-campaign",
+    "failed_pair_outcomes": "preserve-with-evidence-and-do-not-select",
+    "final_choice": "first-qualified-disjoint-ten-pair-subset-in-registered-pilot-order-satisfying-rank-cap",
+    "infeasible_choice": "stop-and-record-no-silent-substitution"
+  },
+  "walkie_talkie_prefix_qualification": {
+    "inherited_amendment": "prospective_walkie_talkie_prefix_amendment",
+    "qualification_scope": "primary-origin-capacity-v1",
+    "prefix_spec_schema_version": 4,
+    "prefix_qualification_receipt_schema_version": 4,
+    "capacity_connection": "one-primary-origin-quic-connection",
+    "proof_boundary": "primary-origin-staged-capacity-only;full-page-and-secondary-origin-behaviour-require-separate-end-to-end-verification"
+  },
+  "preparation_counts": {
+    "pilot_fitting_visits": 120,
+    "pilot_full_qualification_checks": 180,
+    "pilot_full_qualification_check_range": [120, 180],
+    "pilot_nine_mode_compatibility_visits": 0,
+    "final_fitting_visits": 400,
+    "final_full_qualification_checks": 120,
+    "final_nine_mode_certification_visits": 180,
+    "total_before_formal_capture": 1000
+  },
+  "formal_capture": {
+    "blocks": 10,
+    "formal_modes": 8,
+    "visits_per_site_mode_per_block": 10,
+    "formal_samples": 16000,
+    "canary_visits_per_block": 20,
+    "total_canary_visits": 200,
+    "total_accepted_visits": 16200,
+    "train_visits_per_site_mode": 80,
+    "validation_visits_per_site_mode": 10,
+    "heldout_visits_per_site_mode": 10,
+    "closed_world_random_chance": 0.05
+  },
+  "historical_evidence": {
+    "classifier-multiorigin100-v1": "verify-only-no-retroactive-promotion",
+    "new_profile_requires": "new-source-build-browser-acquisition-foundation-fitting-certification-and-capture-evidence"
+  },
+  "claim_boundary": "closed-world-longitudinal-comparison-on-20-measurable-sites-no-100-site-or-representative-rank-claim"
+}

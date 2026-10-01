@@ -31,6 +31,7 @@ from qcsd_lab.cdp_targets import (
     CdpTargetSource,
     RecursiveCdpTargetRouter,
     _RootLateNetworkInvalidInterception,
+    _RootRequestStageFailedInterception,
     _RootRequestStageInvalidInterception,
     _RootUnpairedFetchInvalidInterception,
     _RootCanceledNetworkInvalidInterception,
@@ -804,6 +805,13 @@ def _invalid_interception_error(
     name: str = "Error",
 ) -> _PinnedPlaywrightError:
     return _PinnedPlaywrightError(message, name=name)
+
+
+def _invalid_fail_interception_error(*, name: str = "Error") -> _PinnedPlaywrightError:
+    return _invalid_interception_error(
+        "CDPSession.send: Protocol error (Fetch.failRequest): Invalid InterceptionId.",
+        name=name,
+    )
 
 
 def _invalid_interception_with_changed_message_attribute() -> _PinnedPlaywrightError:
@@ -5451,7 +5459,7 @@ def test_provisional_invalid_interception_rejects_loading_failed_terminal(
     assert router.root_invalid_interception_summary["pending"] == 1
 
 
-def test_exact_invalid_interception_is_never_accepted_for_fail_request(
+def test_continue_shaped_invalid_interception_is_never_accepted_for_fail_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = _FakeNonFlatSession()
@@ -5462,7 +5470,11 @@ def test_exact_invalid_interception_is_never_accepted_for_fail_request(
             "errorReason": "BlockedByClient",
         }
 
-    router, _observed = _router(session, fetch_policy=deny)
+    router, _observed = _router(
+        session,
+        fetch_policy=deny,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.failRequest",
+    )
     network_event, fetch_event = _root_request_events(
         network_id="denied-network",
         fetch_id="denied-fetch",
@@ -5481,6 +5493,261 @@ def test_exact_invalid_interception_is_never_accepted_for_fail_request(
     with pytest.raises(CdpTargetIntegrityError, match="exception_sha256"):
         router.raise_if_failed()
     assert router.root_invalid_interception_summary["total"] == 0
+
+
+@pytest.mark.parametrize(
+    ("request_method", "resource_type", "url"),
+    (
+        ("GET", "Image", "https://root.test/pixel.png"),
+        ("POST", "XHR", "https://root.test/api"),
+        ("POST", "XHR", "http://root.test/api"),
+        ("OPTIONS", "XHR", "https://root.test/api"),
+        ("PATCH", "XHR", "https://root.test/api"),
+        ("GET", "Other", "data:text/plain,blocked"),
+    ),
+)
+def test_exact_root_catalogue_failed_denial_discards_without_ack_or_network_success(
+    monkeypatch: pytest.MonkeyPatch,
+    request_method: str,
+    resource_type: str,
+    url: str,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(
+        session,
+        fetch_policy=_deny_blocked_by_client,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.failRequest",
+    )
+    network_event, fetch_event = _root_request_events(
+        network_id="failed-denial-network",
+        fetch_id="failed-denial-fetch",
+        resource_type=resource_type,
+        url=url,
+    )
+    network_event["request"]["method"] = request_method
+    fetch_event["request"]["method"] = request_method
+    if not url.startswith("data:"):
+        session.emit((), "Network.requestWillBeSent", network_event)
+    original_send = session.send
+
+    def stale_denial(method: str, params=None):
+        if method == "Fetch.failRequest":
+            raise _invalid_fail_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", stale_denial)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+
+    with pytest.raises(
+        _RootRequestStageFailedInterception, match="must be discarded"
+    ) as caught:
+        router.raise_if_failed()
+    assert caught.value.cleanup_verified is False
+    assert router.root_invalid_interception_summary["total"] == 0
+    assert router._pending_blocked_documents == {}
+    assert not any(
+        method in {"Network.loadingFinished", "Network.loadingFailed"}
+        for _source, method, _event in observed
+    )
+    _clean_abort(router)
+
+
+@pytest.mark.parametrize(
+    "variant",
+    (
+        "wrong-label",
+        "wrong-params",
+        "wrong-name",
+        "wrong-type",
+        "wrong-message",
+        "response-stage",
+        "malformed-url",
+        "malformed-method",
+        "wrong-request-id",
+    ),
+)
+def test_failed_denial_discard_rejects_inexact_root_policy(
+    monkeypatch: pytest.MonkeyPatch, variant: str,
+) -> None:
+    session = _FakeNonFlatSession()
+
+    def policy(_source: CdpTargetSource, event: Mapping[str, Any]):
+        return "Fetch.failRequest", {
+            "requestId": "wrong-fetch" if variant == "wrong-request-id" else event["requestId"],
+            "errorReason": "Aborted" if variant == "wrong-params" else "BlockedByClient",
+        }
+
+    router, _observed = _router(
+        session,
+        fetch_policy=policy,
+        fetch_policy_label=(
+            "test-policy:Fetch.failRequest"
+            if variant == "wrong-label"
+            else "catalogue-navigation-policy:Fetch.failRequest"
+        ),
+    )
+    _network_event, fetch_event = _root_request_events(
+        network_id="inexact-denial-network",
+        fetch_id="inexact-denial-fetch",
+        resource_type="XHR",
+        url=(
+            "https://[::1"
+            if variant == "malformed-url" else "https://root.test/api"
+        ),
+    )
+    fetch_event["request"]["method"] = (
+        "PO ST" if variant == "malformed-method" else "POST"
+    )
+    if variant == "response-stage":
+        fetch_event["responseStatusCode"] = 200
+    original_send = session.send
+
+    def stale_denial(method: str, params=None):
+        if method == "Fetch.failRequest":
+            raise (
+                _invalid_fail_interception_error(name="ChangedError")
+                if variant == "wrong-name"
+                else _PinnedPlaywrightErrorSubclass(
+                    "CDPSession.send: Protocol error (Fetch.failRequest): Invalid InterceptionId."
+                )
+                if variant == "wrong-type"
+                else _invalid_interception_error("different protocol error")
+                if variant == "wrong-message"
+                else _invalid_fail_interception_error()
+            )
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", stale_denial)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+    with pytest.raises(CdpTargetIntegrityError) as caught:
+        router.raise_if_failed()
+    assert not isinstance(caught.value, _RootRequestStageFailedInterception)
+    assert router.root_invalid_interception_summary["total"] == 0
+
+
+def test_failed_denial_discard_rejects_reused_fetch_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy=_deny_blocked_by_client,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.failRequest",
+    )
+    _network_event, fetch_event = _root_request_events(
+        network_id="reused-denial-network",
+        fetch_id="reused-denial-fetch",
+        resource_type="XHR",
+        url="https://root.test/api",
+    )
+    fetch_event["request"]["method"] = "POST"
+    session.emit((), "Fetch.requestPaused", fetch_event)
+    router.raise_if_failed()
+    original_send = session.send
+
+    def stale_denial(method: str, params=None):
+        if method == "Fetch.failRequest":
+            raise _invalid_fail_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", stale_denial)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+    with pytest.raises(CdpTargetIntegrityError) as caught:
+        router.raise_if_failed()
+    assert not isinstance(caught.value, _RootRequestStageFailedInterception)
+
+
+def test_exact_failed_denial_with_correlated_root_fetch_discards_only_current_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy=_deny_blocked_by_client,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.failRequest",
+    )
+    network_event, fetch_event = _root_request_events(
+        network_id="correlated-denial-network",
+        fetch_id="correlated-denial-fetch",
+        resource_type="Script",
+        url="https://root.test/script.js",
+    )
+    session.emit((), "Network.requestWillBeSent", network_event)
+    original_send = session.send
+
+    def stale_denial(method: str, params=None):
+        if method == "Fetch.failRequest":
+            raise _invalid_fail_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", stale_denial)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+    with pytest.raises(_RootRequestStageFailedInterception) as caught:
+        router.raise_if_failed()
+    assert caught.value.cleanup_verified is False
+    assert router.root_invalid_interception_summary["total"] == 0
+    _clean_abort(router)
+
+
+def test_correlated_failed_denial_discard_requires_current_fetch_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+
+    def wrong_id(_source: CdpTargetSource, _event: Mapping[str, Any]):
+        return "Fetch.failRequest", {
+            "requestId": "unrelated-fetch",
+            "errorReason": "BlockedByClient",
+        }
+
+    router, _observed = _router(
+        session,
+        fetch_policy=wrong_id,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.failRequest",
+    )
+    network_event, fetch_event = _root_request_events(
+        network_id="correlated-wrong-id-network",
+        fetch_id="correlated-wrong-id-fetch",
+        resource_type="Script",
+        url="https://root.test/script.js",
+    )
+    session.emit((), "Network.requestWillBeSent", network_event)
+    original_send = session.send
+
+    def stale_denial(method: str, params=None):
+        if method == "Fetch.failRequest":
+            raise _invalid_fail_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", stale_denial)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+    with pytest.raises(CdpTargetIntegrityError) as caught:
+        router.raise_if_failed()
+    assert not isinstance(caught.value, _RootRequestStageFailedInterception)
+
+
+def test_failed_document_denial_does_not_acknowledge_an_error_document(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy=_deny_blocked_by_client,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.failRequest",
+    )
+    original_send = session.send
+
+    def stale_denial(method: str, params=None):
+        if method == "Fetch.failRequest":
+            raise _invalid_fail_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", stale_denial)
+    _begin_blocked_document(session)
+    with pytest.raises(CdpTargetIntegrityError) as caught:
+        router.raise_if_failed()
+    assert not isinstance(caught.value, _RootRequestStageFailedInterception)
+    assert router._pending_blocked_documents == {}
 
 
 def test_document_denial_lifecycle_never_enters_root_continue_recovery() -> None:

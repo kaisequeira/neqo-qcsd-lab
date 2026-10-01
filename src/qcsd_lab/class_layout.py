@@ -14,7 +14,13 @@ from dataclasses import dataclass, fields
 from pathlib import Path, PurePosixPath
 
 from . import util
-from .class_study import STUDY_ID
+from .class_study import (
+    CLASS20_PROFILE,
+    FINAL_CLASS_COUNT,
+    PILOT_COUNT,
+    STUDY_ID,
+    ClassStudyProfile,
+)
 
 CAMPAIGN_DIRECTORY = f"{STUDY_ID}-campaigns"
 ACQUISITION_DIRECTORY = f"{STUDY_ID}-acquisition"
@@ -68,9 +74,15 @@ class ClassStudyLayout:
     final_qualification_set_root: Path
 
 
-def class_study_layout() -> ClassStudyLayout:
+def class_study_layout(*, profile: ClassStudyProfile | None = None) -> ClassStudyLayout:
     """Return the canonical graph beneath the currently active dynamic Lab root."""
 
+    if profile is not None and profile != CLASS20_PROFILE:
+        raise ValueError("unsupported class-study layout profile")
+    study_id = STUDY_ID if profile is None else profile.study_id
+    pilot_count = PILOT_COUNT if profile is None else profile.pilot_count
+    final_count = FINAL_CLASS_COUNT if profile is None else profile.final_count
+    study_config_version = "v1" if profile is None else "v2"
     lab_root = _absolute(util.LAB_ROOT)
     config_root = lab_root / "config"
     artifacts_root = lab_root / "artifacts"
@@ -79,22 +91,30 @@ def class_study_layout() -> ClassStudyLayout:
         lab_root=lab_root,
         results_root=lab_root / "results",
         config_root=config_root,
-        campaign_root=config_root / CAMPAIGN_DIRECTORY,
-        workload_root=config_root / "workloads",
-        study_config_root=config_root / "class-study/v1",
+        campaign_root=config_root / f"{study_id}-campaigns",
+        workload_root=(
+            config_root / "workloads"
+            if profile is None
+            else config_root / f"{study_id}-workloads"
+        ),
+        study_config_root=config_root / "class-study" / study_config_version,
         defense_params_root=config_root / "defense-params",
         artifacts_root=artifacts_root,
-        acquisition_root=artifacts_root / ACQUISITION_DIRECTORY,
-        stability_root=artifacts_root / STABILITY_DIRECTORY,
-        pilot_numeric_root=artifacts_root / PILOT_NUMERIC_DIRECTORY,
-        pilot_final_root=artifacts_root / PILOT_FINAL_DIRECTORY,
-        pilot_prefix_root=artifacts_root / PILOT_PREFIX_DIRECTORY,
-        authoritative_numeric_root=artifacts_root / AUTHORITATIVE_NUMERIC_DIRECTORY,
-        authoritative_final_root=artifacts_root / AUTHORITATIVE_FINAL_DIRECTORY,
-        authoritative_prefix_root=artifacts_root / AUTHORITATIVE_PREFIX_DIRECTORY,
+        acquisition_root=artifacts_root / f"{study_id}-acquisition",
+        stability_root=artifacts_root / f"{study_id}-stability",
+        pilot_numeric_root=artifacts_root / f"{study_id}-pilot-fitting-numeric",
+        pilot_final_root=artifacts_root / f"{study_id}-pilot-fitting",
+        pilot_prefix_root=artifacts_root / f"{study_id}-pilot-fitting-prefix-specs",
+        authoritative_numeric_root=artifacts_root / f"{study_id}-authoritative-fitting-numeric",
+        authoritative_final_root=artifacts_root / f"{study_id}-authoritative-fitting",
+        authoritative_prefix_root=artifacts_root / f"{study_id}-authoritative-fitting-prefix-specs",
         qualification_sets_root=qualification_sets_root,
-        pilot_qualification_set_root=qualification_sets_root / PILOT_QUALIFICATION_SET,
-        final_qualification_set_root=qualification_sets_root / FINAL_QUALIFICATION_SET,
+        pilot_qualification_set_root=(
+            qualification_sets_root / f"{study_id}-pilot{pilot_count}-full-v1"
+        ),
+        final_qualification_set_root=(
+            qualification_sets_root / f"{study_id}-final{final_count}-full-v1"
+        ),
     )
 
 
@@ -103,6 +123,7 @@ def require_canonical_fresh_path(
     *,
     field: str,
     label: str | None = None,
+    profile: ClassStudyProfile | None = None,
 ) -> Path:
     """Require one exact fresh-layout path without requiring it to exist.
 
@@ -110,7 +131,7 @@ def require_canonical_fresh_path(
     verification callers must resolve sealed result inputs on their own path.
     """
 
-    layout = class_study_layout()
+    layout = class_study_layout(profile=profile)
     expected = _layout_field(layout, field)
     candidate = _absolute(path)
     description = label or field.replace("_", " ")
@@ -127,10 +148,11 @@ def require_canonical_acquisition_root(
     path: Path,
     *,
     label: str = "acquisition root",
+    profile: ClassStudyProfile | None = None,
 ) -> Path:
     """Require the canonical root or an exact versioned sibling beneath artifacts."""
 
-    layout = class_study_layout()
+    layout = class_study_layout(profile=profile)
     canonical = layout.acquisition_root
     candidate = _absolute(path)
     prefix = f"{canonical.name}-v"
@@ -151,15 +173,17 @@ def require_canonical_acquisition_root(
     return candidate
 
 
-def publication_roots_for_acquisition_root(acquisition_root: Path) -> tuple[Path, Path]:
+def publication_roots_for_acquisition_root(
+    acquisition_root: Path, *, profile: ClassStudyProfile | None = None
+) -> tuple[Path, Path]:
     """Return the one stability/workload pair owned by an acquisition root.
 
     The unsuffixed pair remains available for historical verification. New
     allocations use the same ``-vN`` suffix on all three publication roots.
     """
 
-    layout = class_study_layout()
-    runner = require_canonical_acquisition_root(acquisition_root)
+    layout = class_study_layout(profile=profile)
+    runner = require_canonical_acquisition_root(acquisition_root, profile=profile)
     if runner == layout.acquisition_root:
         return layout.stability_root, layout.workload_root
     suffix = runner.name.removeprefix(layout.acquisition_root.name)
@@ -174,12 +198,13 @@ def require_canonical_publication_root(
     *,
     field: str,
     label: str | None = None,
+    profile: ClassStudyProfile | None = None,
 ) -> Path:
     """Require the historical root or one exact versioned sibling."""
 
     if field not in {"stability_root", "workload_root"}:
         raise ValueError(f"unknown class-study publication root field: {field}")
-    layout = class_study_layout()
+    layout = class_study_layout(profile=profile)
     canonical = _layout_field(layout, field)
     candidate = _absolute(path)
     description = label or field.replace("_", " ")
@@ -207,19 +232,22 @@ def require_cohort_publication_roots(
     workload_root: Path,
     *,
     require_versioned: bool = False,
+    profile: ClassStudyProfile | None = None,
 ) -> tuple[Path, Path]:
     """Require publication roots to share the acquisition allocation number."""
 
-    layout = class_study_layout()
-    runner = require_canonical_acquisition_root(acquisition_root)
+    layout = class_study_layout(profile=profile)
+    runner = require_canonical_acquisition_root(acquisition_root, profile=profile)
     if require_versioned and runner == layout.acquisition_root:
         raise ValueError("new class-study acquisition requires a versioned -vN root")
-    expected_stability, expected_workloads = publication_roots_for_acquisition_root(runner)
+    expected_stability, expected_workloads = publication_roots_for_acquisition_root(
+        runner, profile=profile
+    )
     stability = require_canonical_publication_root(
-        stability_root, field="stability_root", label="stability root"
+        stability_root, field="stability_root", label="stability root", profile=profile
     )
     workloads = require_canonical_publication_root(
-        workload_root, field="workload_root", label="workload root"
+        workload_root, field="workload_root", label="workload root", profile=profile
     )
     if (stability, workloads) != (expected_stability, expected_workloads):
         raise ValueError(
@@ -234,6 +262,7 @@ def require_canonical_fresh_child(
     field: str,
     filename: str | None = None,
     label: str | None = None,
+    profile: ClassStudyProfile | None = None,
 ) -> Path:
     """Require one direct child of a canonical fresh-layout directory.
 
@@ -242,7 +271,7 @@ def require_canonical_fresh_child(
     symbolic-link component.
     """
 
-    layout = class_study_layout()
+    layout = class_study_layout(profile=profile)
     parent = _layout_field(layout, field)
     candidate = _absolute(path)
     description = label or f"child of {field.replace('_', ' ')}"
@@ -261,10 +290,12 @@ def require_canonical_fresh_child(
     return candidate
 
 
-def canonical_campaign_reference(*, field: str, filename: str | None = None) -> str:
+def canonical_campaign_reference(
+    *, field: str, filename: str | None = None, profile: ClassStudyProfile | None = None
+) -> str:
     """Build a canonical POSIX reference from the dedicated campaign root."""
 
-    layout = class_study_layout()
+    layout = class_study_layout(profile=profile)
     target = _layout_field(layout, field)
     if filename is not None:
         target /= _filename(filename)
@@ -273,6 +304,7 @@ def canonical_campaign_reference(*, field: str, filename: str | None = None) -> 
         relative,
         field=field,
         filename=filename,
+        profile=profile,
     )
 
 
@@ -282,12 +314,13 @@ def require_canonical_campaign_reference(
     field: str,
     filename: str | None = None,
     label: str | None = None,
+    profile: ClassStudyProfile | None = None,
 ) -> str:
     """Require a relative reference to resolve to one exact canonical target."""
 
     description = label or f"campaign reference to {field.replace('_', ' ')}"
     relative = _relative_reference(reference, label=description)
-    layout = class_study_layout()
+    layout = class_study_layout(profile=profile)
     target = _layout_field(layout, field)
     if filename is not None:
         target /= _filename(filename)
@@ -306,12 +339,13 @@ def require_canonical_campaign_child_reference(
     *,
     field: str,
     label: str | None = None,
+    profile: ClassStudyProfile | None = None,
 ) -> str:
     """Require a campaign reference to one direct canonical-directory child."""
 
     description = label or f"campaign reference below {field.replace('_', ' ')}"
     relative = _relative_reference(reference, label=description)
-    layout = class_study_layout()
+    layout = class_study_layout(profile=profile)
     parent = _layout_field(layout, field)
     candidate = _absolute(layout.campaign_root / Path(*relative.parts))
     if candidate.parent != parent:
@@ -324,11 +358,13 @@ def require_canonical_campaign_child_reference(
     return reference
 
 
-def require_safe_campaign_reference(reference: str, *, label: str) -> str:
+def require_safe_campaign_reference(
+    reference: str, *, label: str, profile: ClassStudyProfile | None = None
+) -> str:
     """Reject malformed references and lexical escapes from the active Lab root."""
 
     relative = _relative_reference(reference, label=label)
-    layout = class_study_layout()
+    layout = class_study_layout(profile=profile)
     candidate = _absolute(layout.campaign_root / Path(*relative.parts))
     if candidate != layout.lab_root and not candidate.is_relative_to(layout.lab_root):
         raise ValueError(f"{label} escapes the canonical Lab root: {reference}")

@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 STUDY_ID = "classifier-multiorigin100-v1"
+CLASS20_STUDY_ID = "classifier-multiorigin20-v1"
 SUCCESSOR_STUDY_PREFIX = "classifier-multiorigin100-v2"
 SUCCESSOR_GENERATION_MIN = 1
 SUCCESSOR_GENERATION_MAX = 99
@@ -127,6 +128,17 @@ _CLASS_STUDY_CAMPAIGN_RE = re.compile(
     r"authoritative-fitting-(?:1200|2000-1200)|certification-900-1200|"
     r"(?:canary|formal)-(?:0[1-9]|10)-1200))\Z"
 )
+_CLASS20_CAMPAIGN_RE = re.compile(
+    rf"{re.escape(CLASS20_STUDY_ID)}-"
+    r"(?:(?P<stage>pilot-fitting-120-1200|"
+    r"authoritative-fitting-400-1200|certification-180-1200)|"
+    r"(?P<block_role>canary|formal)-(?P<block>0[1-9]|10)-1200)\Z"
+)
+_CLASS20_STAGE_ROLES = {
+    "pilot-fitting-120-1200": "pilot-fitting",
+    "authoritative-fitting-400-1200": "authoritative-fitting",
+    "certification-180-1200": "certification",
+}
 
 
 @dataclass(frozen=True)
@@ -153,7 +165,7 @@ class ClassStudyCampaignIdentity:
 
 
 def parse_class_study_id(value: object) -> ClassStudyIdentity:
-    """Parse the complete anchored class-study identity grammar.
+    """Parse the anchored 100-site study and successor identity grammar.
 
     The only admitted identities are the frozen v1 identifier and generated
     v2 identifiers of the form ``v2-gNN-<12 lowercase hex>``.  The two-digit
@@ -175,7 +187,7 @@ def parse_class_study_id(value: object) -> ClassStudyIdentity:
 
 
 def is_class_study_id(value: object) -> bool:
-    """Return whether ``value`` is one complete admitted study identity."""
+    """Return whether ``value`` is an older 100-site or successor identity."""
 
     try:
         parse_class_study_id(value)
@@ -220,10 +232,25 @@ def successor_study_id(*, generation: int, identity_sha256: str) -> str:
 
 
 def parse_class_study_campaign_name(value: object) -> ClassStudyCampaignIdentity:
-    """Parse one exact generated class-study campaign name."""
+    """Parse one exact v1, successor, or separately registered 20-site name.
+
+    The 20-site campaign namespace is intentionally separate from
+    ``parse_class_study_id``.  That function gates the older 100-site receipt
+    and downstream validation paths, which must not gain authority over a new
+    profile merely because its campaign name has a valid shape.
+    """
 
     if not isinstance(value, str):
         raise ValueError("class-study campaign name is invalid")
+    class20_match = _CLASS20_CAMPAIGN_RE.fullmatch(value)
+    if class20_match is not None:
+        stage = class20_match.group("stage")
+        if stage is not None:
+            role, block = _CLASS20_STAGE_ROLES[stage], None
+        else:
+            role = class20_match.group("block_role")
+            block = int(class20_match.group("block"))
+        return ClassStudyCampaignIdentity(value, CLASS20_STUDY_ID, role, block)
     match = _CLASS_STUDY_CAMPAIGN_RE.fullmatch(value)
     if match is None:
         raise ValueError("class-study campaign name is invalid")
@@ -339,6 +366,221 @@ class CohortSelection:
         }
 
 
+@dataclass(frozen=True)
+class ClassStudyProfile:
+    """The independently registered dimensions of the prospective 20-site study.
+
+    This profile does not change the frozen 100-site study or its receipts.  The
+    catalogue order seed names the existing 600-site hash order; the new pilot
+    priority interleaves those five within-stratum orders without using probe,
+    classifier, or capture outcomes.
+    """
+
+    study_id: str
+    catalogue_order_seed: str
+    candidate_count: int
+    pilot_count: int
+    final_count: int
+    reserve_count: int
+    max_final_per_stratum: int
+    formal_block_count: int
+    formal_modes: tuple[str, ...]
+    formal_visits_per_block: int
+
+    def __post_init__(self) -> None:
+        integer_fields = (
+            self.candidate_count,
+            self.pilot_count,
+            self.final_count,
+            self.reserve_count,
+            self.max_final_per_stratum,
+            self.formal_block_count,
+            self.formal_visits_per_block,
+        )
+        if any(type(value) is not int for value in integer_fields):
+            raise ValueError("20-site profile dimensions must be integers")
+        if (
+            self.study_id != CLASS20_STUDY_ID
+            or self.catalogue_order_seed != STUDY_ID
+            or integer_fields != (600, 30, 20, 10, 10, 10, 10)
+            or type(self.formal_modes) is not tuple
+            or self.formal_modes != FORMAL_MODES
+            or self.pilot_count != self.final_count + self.reserve_count
+            or self.formal_sample_count != 16_000
+        ):
+            raise ValueError("20-site profile differs from the registered dimensions")
+
+    @property
+    def formal_sample_count(self) -> int:
+        return (
+            self.final_count
+            * len(self.formal_modes)
+            * self.formal_block_count
+            * self.formal_visits_per_block
+        )
+
+
+CLASS20_PROFILE = ClassStudyProfile(
+    study_id=CLASS20_STUDY_ID,
+    catalogue_order_seed=STUDY_ID,
+    candidate_count=CANDIDATE_COUNT,
+    pilot_count=30,
+    final_count=20,
+    reserve_count=10,
+    max_final_per_stratum=10,
+    formal_block_count=10,
+    formal_modes=FORMAL_MODES,
+    formal_visits_per_block=10,
+)
+
+_CLASS20_OVERLAY_SHA256 = "386a173a97dd26989c2b6b35d039efa06db9825e960985568ff49c0a9ae327a7"
+_CLASS20_BASE_STUDY_SHA256 = "ab8d898836cb172338303ded7d0adda984fbfab720c5bcd219e08f90efbee7bc"
+_CLASS20_CATALOGUE_SHA256 = "9d2ec1d755648292526ff623700b07a9bab3988a67444c262aea9f4a855e5146"
+_CLASS20_PREFIX_QUALIFICATION = {
+    "inherited_amendment": "prospective_walkie_talkie_prefix_amendment",
+    "qualification_scope": "primary-origin-capacity-v1",
+    "prefix_spec_schema_version": 4,
+    "prefix_qualification_receipt_schema_version": 4,
+    "capacity_connection": "one-primary-origin-quic-connection",
+    "proof_boundary": (
+        "primary-origin-staged-capacity-only;full-page-and-secondary-origin-behaviour-"
+        "require-separate-end-to-end-verification"
+    ),
+}
+
+
+def load_class20_profile_contract(profile_path: Path | None = None) -> ClassStudyProfile:
+    """Load the exact source-pinned v2 overlay and its frozen v1 inputs.
+
+    The overlay is a new prospective profile.  It does not change v1 receipt
+    validation or grant authority to any historical acquisition evidence.
+    """
+
+    lab_root = Path(__file__).resolve().parents[2]
+    expected = lab_root / "config/class-study/v2/study.json"
+    path = expected if profile_path is None else Path(os.path.abspath(profile_path))
+    if path != expected:
+        raise ValueError("20-site profile path is not the registered overlay")
+    for item in (
+        lab_root / "config",
+        lab_root / "config/class-study",
+        lab_root / "config/class-study/v1",
+        lab_root / "config/class-study/v2",
+        path,
+    ):
+        if item.is_symlink():
+            raise ValueError("20-site profile path contains a symbolic link")
+    if not path.is_file():
+        raise ValueError("20-site profile overlay is missing")
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != _CLASS20_OVERLAY_SHA256:
+        raise ValueError("20-site profile overlay differs from the source-pinned bytes")
+    value = json.loads(raw)
+    if not isinstance(value, Mapping):
+        raise ValueError("20-site profile overlay is malformed")
+    base = value.get("base_study_contract")
+    catalogue = value.get("catalogue")
+    selection = value.get("selection")
+    pairs = value.get("walkie_talkie_pairs")
+    preparation = value.get("preparation_counts")
+    formal = value.get("formal_capture")
+    if not all(
+        isinstance(item, Mapping)
+        for item in (base, catalogue, selection, pairs, preparation, formal)
+    ):
+        raise ValueError("20-site profile contract sections are malformed")
+    if (
+        value.get("schema_version") != 1
+        or value.get("artifact_type") != "qcsd-class-study-prospective-profile"
+        or value.get("study_id") != CLASS20_STUDY_ID
+        or base.get("path") != "../v1/study.json"
+        or base.get("sha256") != _CLASS20_BASE_STUDY_SHA256
+        or base.get("inheritance")
+        != "unchanged-browser-safety-request-replay-defence-and-primary-origin-prefix-qualification-rules-only"
+        or value.get("walkie_talkie_prefix_qualification")
+        != _CLASS20_PREFIX_QUALIFICATION
+        or catalogue.get("path") != "../v1/classifier-multiorigin100-v1-candidates.json"
+        or catalogue.get("sha256") != _CLASS20_CATALOGUE_SHA256
+        or catalogue.get("priority_order") != "round-robin-five-frozen-within-stratum-orders"
+        or selection.get("fixed_per_stratum_minimum") != 0
+        or pairs.get("planned_pilot_pairs") != 15
+        or pairs.get("qualified_final_pairs") != 10
+        or pairs.get("planned_pairs_cover_all_pilot_sites_once") is not True
+        or pairs.get("screening_evidence")
+        != "separate-deep-verified-15-pair-receipt-not-a-pilot-compatibility-campaign"
+        or pairs.get("final_choice")
+        != "first-qualified-disjoint-ten-pair-subset-in-registered-pilot-order-satisfying-rank-cap"
+        or preparation.get("pilot_nine_mode_compatibility_visits") != 0
+        or formal.get("formal_samples") != 16_000
+        or formal.get("canary_visits_per_block") != 20
+        or formal.get("total_accepted_visits") != 16_200
+        or formal.get("closed_world_random_chance") != 0.05
+    ):
+        raise ValueError("20-site profile overlay has an invalid registered contract")
+    profile = ClassStudyProfile(
+        study_id=value["study_id"],
+        catalogue_order_seed=catalogue["catalogue_order_seed"],
+        candidate_count=catalogue["candidate_count"],
+        pilot_count=selection["eligible_pilot_sites"],
+        final_count=selection["final_sites"],
+        reserve_count=selection["reserve_sites"],
+        max_final_per_stratum=selection["max_final_sites_per_stratum"],
+        formal_block_count=formal["blocks"],
+        formal_modes=FORMAL_MODES if formal["formal_modes"] == len(FORMAL_MODES) else (),
+        formal_visits_per_block=formal["visits_per_site_mode_per_block"],
+    )
+    if profile != CLASS20_PROFILE:
+        raise ValueError("20-site profile overlay differs from the registered dimensions")
+    stage_keys = (
+        "pilot_fitting_visits",
+        "pilot_full_qualification_checks",
+        "pilot_nine_mode_compatibility_visits",
+        "final_fitting_visits",
+        "final_full_qualification_checks",
+        "final_nine_mode_certification_visits",
+    )
+    stage_counts = [preparation.get(key) for key in stage_keys]
+    qualification_range = preparation.get("pilot_full_qualification_check_range")
+    if (
+        any(type(count) is not int or count < 0 for count in stage_counts)
+        or stage_counts[0] != profile.pilot_count * 2 * 2
+        or stage_counts[1] != profile.pilot_count * 6
+        or stage_counts[3] != profile.final_count * 10 * 2
+        or stage_counts[4] != profile.final_count * 6
+        or stage_counts[5] != profile.final_count * 9
+        or not isinstance(qualification_range, list)
+        or len(qualification_range) != 2
+        or any(type(count) is not int or count < 0 for count in qualification_range)
+        or qualification_range[0] > qualification_range[1]
+        or qualification_range[0] != profile.final_count * 6
+        or qualification_range[1] != stage_counts[1]
+        or type(preparation.get("total_before_formal_capture")) is not int
+        or preparation["total_before_formal_capture"] != sum(stage_counts)
+    ):
+        raise ValueError("20-site profile preparation counts are inconsistent")
+    for relative, expected_sha256 in (
+        ("config/class-study/v1/study.json", _CLASS20_BASE_STUDY_SHA256),
+        (
+            "config/class-study/v1/classifier-multiorigin100-v1-candidates.json",
+            _CLASS20_CATALOGUE_SHA256,
+        ),
+    ):
+        input_path = lab_root / relative
+        if input_path.is_symlink() or not input_path.is_file():
+            raise ValueError("20-site profile inherited input is missing or a symbolic link")
+        if hashlib.sha256(input_path.read_bytes()).hexdigest() != expected_sha256:
+            raise ValueError("20-site profile inherited input differs from its bound hash")
+    base_study = json.loads((lab_root / "config/class-study/v1/study.json").read_bytes())
+    amendment = base_study.get("prospective_walkie_talkie_prefix_amendment")
+    if not isinstance(amendment, Mapping) or any(
+        amendment.get(key) != expected_value
+        for key, expected_value in _CLASS20_PREFIX_QUALIFICATION.items()
+        if key != "inherited_amendment"
+    ):
+        raise ValueError("20-site prefix qualification differs from its inherited amendment")
+    return profile
+
+
 def rank_stratum(rank: int) -> TrancoRankStratum:
     """Return the fixed study stratum containing one Tranco rank."""
 
@@ -382,17 +624,22 @@ def deterministic_candidate_order(
     candidates: Iterable[ClassCandidate],
     *,
     tranco_list_sha256: str,
+    order_seed_study_id: str = STUDY_ID,
 ) -> tuple[ClassCandidate, ...]:
     """Order candidates by stratum and the preregistered Tranco-bound hash."""
 
     list_sha256 = _validate_sha256(tranco_list_sha256, label="Tranco list SHA-256")
+    if not isinstance(order_seed_study_id, str) or not _IDENTIFIER_RE.fullmatch(
+        order_seed_study_id
+    ):
+        raise ValueError("catalogue order seed study ID is invalid")
     values = tuple(candidates)
     _validate_candidate_identities(values)
     stratum_position = {stratum.id: index for index, stratum in enumerate(TRANCO_RANK_STRATA)}
 
     def key(candidate: ClassCandidate) -> tuple[int, str, str, str]:
         digest = hashlib.sha256(
-            f"{list_sha256}{STUDY_ID}{candidate.domain}".encode()
+            f"{list_sha256}{order_seed_study_id}{candidate.domain}".encode()
         ).hexdigest()
         return (
             stratum_position[candidate.stratum.id],
@@ -402,6 +649,64 @@ def deterministic_candidate_order(
         )
 
     return tuple(sorted(values, key=key))
+
+
+def deterministic_profile_candidate_order(
+    candidates: Iterable[ClassCandidate],
+    *,
+    tranco_list_sha256: str,
+    profile: ClassStudyProfile,
+) -> tuple[ClassCandidate, ...]:
+    """Interleave the frozen per-stratum catalogue orders for the new profile."""
+
+    if profile != CLASS20_PROFILE:
+        raise ValueError("the 20-site study requires its registered profile")
+    ordered = deterministic_candidate_order(
+        candidates,
+        tranco_list_sha256=tranco_list_sha256,
+        order_seed_study_id=profile.catalogue_order_seed,
+    )
+    if len(ordered) != profile.candidate_count:
+        raise ValueError(
+            f"candidate inventory must contain exactly {profile.candidate_count} records"
+        )
+    strata = tuple(
+        tuple(candidate for candidate in ordered if candidate.stratum == stratum)
+        for stratum in TRANCO_RANK_STRATA
+    )
+    if any(len(members) != CANDIDATES_PER_STRATUM for members in strata):
+        raise ValueError("20-site candidate inventory has an incomplete rank group")
+    return tuple(
+        members[index]
+        for index in range(CANDIDATES_PER_STRATUM)
+        for members in strata
+    )
+
+
+def select_profile_pilot(
+    candidates: Iterable[ClassCandidate],
+    *,
+    tranco_list_sha256: str,
+    profile: ClassStudyProfile,
+) -> tuple[ClassCandidate, ...]:
+    """Take the first 30 confirmed eligible sites in the registered priority.
+
+    Callers must first establish scientific terminal eligibility for the whole
+    priority prefix.  A catalogue's prospective ``eligible=False`` placeholder
+    alone cannot prove rejection or close that prefix.
+    """
+
+    ordered = deterministic_profile_candidate_order(
+        candidates, tranco_list_sha256=tranco_list_sha256, profile=profile
+    )
+    pilot = tuple(candidate for candidate in ordered if candidate.eligible)[
+        : profile.pilot_count
+    ]
+    if len(pilot) != profile.pilot_count:
+        raise ValueError(
+            f"20-site pilot needs {profile.pilot_count} confirmed eligible candidates"
+        )
+    return pilot
 
 
 def select_cohort(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import hashlib
 import json
 import shutil
@@ -11,6 +12,8 @@ from typing import Any
 import pytest
 
 import qcsd_lab.class_fitting as class_fitting
+from qcsd_lab.acquisition_selection import derive_global_operational_censor_selection
+from qcsd_lab.class_catalogue import load_candidate_catalogue_receipt
 import qcsd_lab.class_pipeline as class_pipeline
 import qcsd_lab.experiment as experiment_module
 import qcsd_lab.verification as verification_module
@@ -46,6 +49,7 @@ from qcsd_lab.class_fitting import (
     verify_numeric_fitting_bundle,
 )
 from qcsd_lab.class_study import (
+    CLASS20_PROFILE,
     CANDIDATE_COUNT,
     CANDIDATES_PER_STRATUM,
     TRANCO_RANK_STRATA,
@@ -54,7 +58,12 @@ from qcsd_lab.class_study import (
     build_study_receipt,
     canonical_json_bytes,
     canonical_json_sha256,
+    deterministic_profile_candidate_order,
     validate_study_receipt,
+)
+from qcsd_lab.class_cohort20 import (
+    ASSEMBLY_RECEIPT_TYPE as PROFILE_ASSEMBLY_RECEIPT_TYPE,
+    COHORT_RECEIPT_TYPE as PROFILE_COHORT_RECEIPT_TYPE,
 )
 from qcsd_lab.class_run_binding import resolve_class_sample_run_binding
 from qcsd_lab.fitting_morphing import minimum_cost_derangement
@@ -296,6 +305,141 @@ def _inputs(stage: str, receipt: Mapping[str, Any]) -> ClassFittingInputs:
     )
 
 
+def _profile_pilot_inputs() -> ClassFittingInputs:
+    catalogue_path = (
+        Path(__file__).resolve().parents[1]
+        / "config/class-study/v1/classifier-multiorigin100-v1-candidates.json"
+    )
+    profile_path = Path(__file__).resolve().parents[1] / "config/class-study/v2/study.json"
+    catalogue, candidates = load_candidate_catalogue_receipt(catalogue_path)
+    tranco = catalogue["payload"]["tranco"]
+    ordered = deterministic_profile_candidate_order(
+        candidates, tranco_list_sha256=tranco["list_sha256"], profile=CLASS20_PROFILE
+    )
+    resolved = tuple(
+        replace(candidate, eligible=index < CLASS20_PROFILE.pilot_count)
+        for index, candidate in enumerate(ordered)
+    )
+    pilot_ids = tuple(item.candidate_id for item in resolved[:CLASS20_PROFILE.pilot_count])
+    cohort = bind_receipt(
+        {
+            "study_id": CLASS20_PROFILE.study_id,
+            "cohort_schema_version": 1,
+            "profile_sha256": sha256_file(profile_path),
+            "stage": "pilot",
+            "tranco": {
+                "list_id": tranco["list_id"],
+                "list_sha256": tranco["list_sha256"],
+            },
+            "candidates": [item.as_dict() for item in resolved],
+            "pilot_ids": list(pilot_ids),
+            "final_ids": [],
+            "reserve_ids": [],
+            "matching": [],
+            "final_selection": None,
+        },
+        receipt_type=PROFILE_COHORT_RECEIPT_TYPE,
+    )
+    records = []
+    for item in resolved:
+        selected = item.eligible
+        records.append({
+            "candidate_id": item.candidate_id,
+            "eligible": selected,
+            "selected_page": (
+                {
+                    "candidate_domain": item.domain,
+                    "registrable_domain": item.domain,
+                    "url": f"https://{item.domain}/",
+                    "source": "canonical-homepage",
+                    "ordinal": 0,
+                    "discovery_content_type": None,
+                } if selected else None
+            ),
+            "stability_receipt": (
+                {"path": f"{item.candidate_id}/page-00.json", "sha256": "a" * 64,
+                 "payload_sha256": "b" * 64} if selected else None
+            ),
+            "prepared_workload": (
+                {"path": f"{item.candidate_id}.json", "sha256": "c" * 64}
+                if selected else None
+            ),
+            "reasons": [] if selected else ["unassessed-deterministic-prefix-tail"],
+            "disposition": "eligible" if selected else "unassessed",
+        })
+    selection = derive_global_operational_censor_selection(
+        candidates,
+        tranco_list_sha256=tranco["list_sha256"],
+        ordered_candidate_ids=[item.candidate_id for item in resolved],
+        order_policy="round-robin-five-frozen-within-stratum-orders",
+        eligible_quota=CLASS20_PROFILE.pilot_count,
+        terminal_disposition={workload_id: "eligible" for workload_id in pilot_ids},
+    )
+    assembly = bind_receipt(
+        {
+            "study_id": CLASS20_PROFILE.study_id,
+            "assembly_schema_version": 1,
+            "profile": {"path": "config/class-study/v2/study.json", "sha256": sha256_file(profile_path)},
+            "candidate_catalogue": {
+                "path": "config/class-study/v1/classifier-multiorigin100-v1-candidates.json",
+                "sha256": sha256_file(catalogue_path),
+                "payload_sha256": catalogue["payload_sha256"],
+            },
+            "acquisition_completion": {
+                "path": f"artifacts/{CLASS20_PROFILE.study_id}-acquisition-v999/completion.json",
+                "sha256": "d" * 64,
+                "payload_sha256": "e" * 64,
+                "provenance_sha256": "f" * 64,
+                "selection_payload_sha256": sha256_bytes(canonical_json_bytes(selection)),
+            },
+            "acquisition_selection": selection,
+            "stability_root": f"artifacts/{CLASS20_PROFILE.study_id}-stability-v999",
+            "workload_root": f"config/{CLASS20_PROFILE.study_id}-workloads-v999",
+            "candidates": records,
+            "eligible_count": CLASS20_PROFILE.pilot_count,
+            "selected_evidence_count": CLASS20_PROFILE.pilot_count,
+            "cohort": {
+                "receipt_type": cohort["receipt_type"],
+                "payload_sha256": cohort["payload_sha256"],
+                "canonical_file_sha256": sha256_bytes(canonical_json_bytes(cohort)),
+            },
+        },
+        receipt_type=PROFILE_ASSEMBLY_RECEIPT_TYPE,
+    )
+    visits = 2
+    by_policy = {
+        policy: {
+            workload_id: tuple(_trace(workload_id, policy, visit) for visit in range(visits))
+            for workload_id in pilot_ids
+        }
+        for policy in ("as-defined", "half-duplex")
+    }
+    source_result = {
+        "campaign": f"{CLASS20_PROFILE.study_id}-pilot-fitting-120-1200",
+        "evidence_sha256": _digest("profile20 evidence"),
+        "experiment_sha256": _digest("profile20 experiment"),
+        "input_digest": _digest("profile20 input"),
+        "campaign_sha256": _digest("profile20 campaign"),
+        "source_fingerprints": _source(),
+        "study_id": CLASS20_PROFILE.study_id,
+        "class_study_profile_sha256": sha256_file(profile_path),
+    }
+    return ClassFittingInputs(
+        verified=VerifiedResult(Path("."), {}, {}, {}),
+        stage=PILOT_STAGE,
+        workload_ids=pilot_ids,
+        visits_per_policy=visits,
+        as_defined=by_policy["as-defined"],
+        half_duplex=by_policy["half-duplex"],
+        cohort_receipt=cohort,
+        cohort_receipt_sha256=sha256_bytes(canonical_json_bytes(cohort)),
+        cohort_assembly_receipt=assembly,
+        cohort_assembly_receipt_sha256=sha256_bytes(canonical_json_bytes(assembly)),
+        source_result=source_result,
+        study_profile=CLASS20_PROFILE,
+    )
+
+
 def _fitters() -> ClassFitters:
     def traffic(
         traces: Mapping[str, Sequence[FittingTrace]],
@@ -335,7 +479,7 @@ def _fitters() -> ClassFitters:
     def wtf(
         traces: Sequence[FittingTrace], *, fitted_from: str
     ) -> tuple[dict[str, object], dict[str, object]]:
-        assert len(traces) in {240, 1000}
+        assert len(traces) in {60, 200, 240, 1000}
         return (
             {
                 "schema_version": 2,
@@ -348,9 +492,16 @@ def _fitters() -> ClassFitters:
 
     def walkie(
         traces: Mapping[str, Sequence[FittingTrace]],
+        *,
+        feasible_pairs: Sequence[tuple[str, str]] | None = None,
     ) -> tuple[dict[str, object], dict[str, object]]:
         names = tuple(sorted(traces))
         zero_pairs = {(names[index], names[index + 1]) for index in range(0, len(names), 2)}
+        chosen_pairs = sorted(
+            zero_pairs if feasible_pairs is None else {
+                tuple(sorted(pair)) for pair in feasible_pairs
+            }
+        )
         candidates = [
             {
                 "left": left,
@@ -365,10 +516,10 @@ def _fitters() -> ClassFitters:
             {
                 "real": left,
                 "decoy": right,
-                "base_matching_cost_packets": 0,
-                "matching_cost_packets": 2,
+                "base_matching_cost_packets": 0 if (left, right) in zero_pairs else 1,
+                "matching_cost_packets": 2 if (left, right) in zero_pairs else 3,
             }
-            for left, right in sorted(zero_pairs)
+            for left, right in chosen_pairs
         ]
         return (
             {
@@ -382,10 +533,21 @@ def _fitters() -> ClassFitters:
                         "decoy": right,
                         "bursts": [{"outgoing": 3, "incoming": 2}],
                     }
-                    for left, right in sorted(zero_pairs)
+                    for left, right in chosen_pairs
                 ],
             },
-            {"candidate_pair_costs": candidates, "selected_pairs": selected},
+            {
+                "algorithm": (
+                    "full-cohort-minimum-weight-perfect-matching"
+                    if feasible_pairs is None else class_fitting.PROFILE_FIXED_PAIR_ALGORITHM
+                ),
+                "pairing_objective": (
+                    "minimum-base-symmetric-mold-padding-cost"
+                    if feasible_pairs is None else class_fitting.PROFILE_FIXED_PAIR_OBJECTIVE
+                ),
+                "candidate_pair_costs": candidates,
+                "selected_pairs": selected,
+            },
         )
 
     return ClassFitters(traffic_morphing=traffic, wtf_pad=wtf, walkie_talkie=walkie)
@@ -466,6 +628,332 @@ def test_numeric_bundles_bind_exact_120_and_100_class_arithmetic(
         == expected_samples
     )
     assert verified.provenance["nontraining_inputs"]["qualification_bytes_excluded"] is True
+
+
+def test_profile20_numeric_fitting_binds_30_pilot_sites_and_source_profile(
+    tmp_path: Path,
+) -> None:
+    inputs = _profile_pilot_inputs()
+    artifacts = tmp_path / "profile20-artifacts"
+    artifacts.mkdir()
+    bundle = create_numeric_fitting_bundle(
+        tmp_path,
+        artifacts_root=artifacts,
+        stage=PILOT_STAGE,
+        study_profile=CLASS20_PROFILE,
+        fitting_inputs_loader=lambda *_args, **_kwargs: inputs,
+        fitters=_fitters(),
+    )
+    verified = verify_numeric_fitting_bundle(bundle)
+    provenance = verified.provenance
+    assert bundle.name == f"{CLASS20_PROFILE.study_id}-pilot-fitting-numeric"
+    assert provenance["schema_version"] == 2
+    assert provenance["study_id"] == CLASS20_PROFILE.study_id
+    assert provenance["study_profile_sha256"] == inputs.source_result[
+        "class_study_profile_sha256"
+    ]
+    assert provenance["fitting_contract"]["samples_consumed"] == 120
+    assert provenance["fitting_contract"]["study_id"] == CLASS20_PROFILE.study_id
+    assert len(provenance["fitting_contract"]["workload_order"]) == 30
+    assert class_fitting._prefix_directory(PILOT_STAGE, CLASS20_PROFILE) == (
+        f"{CLASS20_PROFILE.study_id}-pilot-fitting-prefix-specs"
+    )
+
+    altered = dict(provenance)
+    altered["study_profile_sha256"] = "0" * 64
+    (bundle / class_fitting.NUMERIC_PROVENANCE_FILE).write_bytes(canonical_json_bytes(altered))
+    with pytest.raises(ValueError, match="another study profile"):
+        verify_numeric_fitting_bundle(bundle)
+
+
+def test_profile20_fitting_rejects_mixed_cohort_and_qualification_set(
+    tmp_path: Path,
+) -> None:
+    inputs = _profile_pilot_inputs()
+    with pytest.raises(ValueError, match="cohort|profile"):
+        class_fitting._validate_injected_inputs(
+            replace(inputs, cohort_receipt=_cohort_receipt()), PILOT_STAGE
+        )
+    with pytest.raises(ValueError, match="profile identity"):
+        class_fitting._validate_source_result(
+            {**inputs.source_result, "class_study_profile_sha256": "0" * 64},
+            PILOT_STAGE,
+            CLASS20_PROFILE,
+        )
+    sidecars = tmp_path / "sidecars"
+    sidecars.mkdir()
+    manifest = sidecars / "_qualification-set.json"
+    manifest.write_bytes(canonical_json_bytes({key: None for key in class_fitting._NAMED_SET_KEYS}))
+    context = QualificationContext(
+        workload_root=tmp_path,
+        sidecar_root=sidecars,
+        prefix_spec_root=tmp_path,
+        expected_qualification_set=AUTHORITATIVE_QUALIFICATION_SET,
+    )
+    with pytest.raises(ValueError, match="another study profile"):
+        class_fitting._verify_qualification(
+            manifest,
+            stage=PILOT_STAGE,
+            profile=CLASS20_PROFILE,
+            workload_ids=inputs.workload_ids,
+            walkie_talkie_path=tmp_path / "unused.json",
+            context=context,
+        )
+
+
+def _profile_final_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> ClassFittingInputs:
+    """Build a frozen 20-site fit whose pairs agree with its numeric optimum."""
+
+    import qcsd_lab.class_cohort20 as class_cohort20
+
+    pilot = _profile_pilot_inputs()
+    study_id = CLASS20_PROFILE.study_id
+    cohort_payload = json.loads(json.dumps(pilot.cohort_receipt["payload"]))
+    pilot_ids = cohort_payload["pilot_ids"]
+    ids = tuple(pilot_ids[:20])
+    visits = 10
+    half_duplex = {
+        workload_id: tuple(_trace(workload_id, "half-duplex", visit) for visit in range(visits))
+        for workload_id in ids
+    }
+    fitted_walkie, _receipt = _fitters().walkie_talkie(half_duplex)
+    pilot_order = {workload_id: index for index, workload_id in enumerate(pilot_ids)}
+    matching = [
+        sorted((row["real"], row["decoy"]), key=pilot_order.__getitem__)
+        for row in fitted_walkie["profiles"]
+    ]
+    matching.sort(key=lambda pair: pilot_order[pair[0]])
+    cohort_payload.update({
+        "stage": "final",
+        "final_ids": list(ids),
+        "reserve_ids": pilot_ids[20:],
+        "matching": matching,
+        "final_selection": {
+            "path": f"config/class-study/v2/{study_id}-final-selection.json",
+            "sha256": "a" * 64,
+            "pilot_cohort": {
+                "path": f"config/class-study/v2/{study_id}-pilot-cohort.json",
+                "sha256": "b" * 64,
+            },
+            "pilot_assembly": {
+                "path": f"config/class-study/v2/{study_id}-pilot-cohort-assembly.json",
+                "sha256": "c" * 64,
+            },
+        },
+    })
+    cohort = bind_receipt(cohort_payload, receipt_type=PROFILE_COHORT_RECEIPT_TYPE)
+    assembly_payload = json.loads(json.dumps(pilot.cohort_assembly_receipt["payload"]))
+    assembly_payload["cohort"] = {
+        "receipt_type": cohort["receipt_type"],
+        "payload_sha256": cohort["payload_sha256"],
+        "canonical_file_sha256": sha256_bytes(canonical_json_bytes(cohort)),
+    }
+    assembly = bind_receipt(assembly_payload, receipt_type=PROFILE_ASSEMBLY_RECEIPT_TYPE)
+    inputs = replace(
+        pilot,
+        stage=AUTHORITATIVE_STAGE,
+        workload_ids=ids,
+        visits_per_policy=visits,
+        as_defined={
+            workload_id: tuple(_trace(workload_id, "as-defined", visit) for visit in range(visits))
+            for workload_id in ids
+        },
+        half_duplex=half_duplex,
+        cohort_receipt=cohort,
+        cohort_receipt_sha256=sha256_bytes(canonical_json_bytes(cohort)),
+        cohort_assembly_receipt=assembly,
+        cohort_assembly_receipt_sha256=sha256_bytes(canonical_json_bytes(assembly)),
+        source_result={
+            **pilot.source_result,
+            "campaign": f"{study_id}-authoritative-fitting-400-1200",
+        },
+    )
+
+    # Intrinsic replay still checks the registered source profile/catalogue.
+    # No fresh final-selection, pilot receipt, sidecars, or acquisition roots
+    # exist under this temporary Lab root.
+    source_root = Path(__file__).resolve().parents[1]
+    for relative in (
+        Path("config/class-study/v2/study.json"),
+        Path("config/class-study/v1/classifier-multiorigin100-v1-candidates.json"),
+    ):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source_root / relative, destination)
+    monkeypatch.setattr(class_cohort20.util, "LAB_ROOT", tmp_path)
+    assert not (tmp_path / cohort_payload["final_selection"]["path"]).exists()
+    return inputs
+
+
+def test_frozen_profile_final_numeric_bundle_survives_missing_selection_and_rejects_tamper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A sealed fit replays its own cohort after fresh pair evidence is gone."""
+
+    inputs = _profile_final_inputs(tmp_path, monkeypatch)
+    cohort_payload = inputs.cohort_receipt["payload"]
+    pilot_ids = cohort_payload["pilot_ids"]
+
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    bundle = create_numeric_fitting_bundle(
+        tmp_path,
+        artifacts_root=artifacts,
+        stage=AUTHORITATIVE_STAGE,
+        study_profile=CLASS20_PROFILE,
+        fitting_inputs_loader=lambda *_args, **_kwargs: inputs,
+        fitters=_fitters(),
+    )
+    assert verify_numeric_fitting_bundle(bundle).stage == AUTHORITATIVE_STAGE
+
+    provenance_path = bundle / class_fitting.NUMERIC_PROVENANCE_FILE
+    provenance = json.loads(provenance_path.read_text())
+    malformed = json.loads(json.dumps(cohort_payload))
+    malformed["matching"][0] = [pilot_ids[0], pilot_ids[20]]
+    changed = bind_receipt(malformed, receipt_type=PROFILE_COHORT_RECEIPT_TYPE)
+    provenance["cohort"]["receipt"] = changed
+    provenance["cohort"]["receipt_sha256"] = sha256_bytes(canonical_json_bytes(changed))
+    provenance_path.write_bytes(canonical_json_bytes(provenance))
+    with pytest.raises(ValueError, match="matching differs from final sites"):
+        verify_numeric_fitting_bundle(bundle)
+
+
+def test_profile20_final_numeric_fits_selected_pairs_despite_cheaper_global_matching(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inputs = _profile_final_inputs(tmp_path, monkeypatch)
+    changed_payload = json.loads(json.dumps(inputs.cohort_receipt["payload"]))
+    first, second = changed_payload["matching"][:2]
+    pilot_order = {
+        workload_id: index
+        for index, workload_id in enumerate(changed_payload["pilot_ids"])
+    }
+    competing = [
+        sorted((first[0], second[0]), key=pilot_order.__getitem__),
+        sorted((first[1], second[1]), key=pilot_order.__getitem__),
+    ]
+    changed_payload["matching"][:2] = competing
+    changed_payload["matching"].sort(key=lambda pair: pilot_order[pair[0]])
+    changed_cohort = bind_receipt(
+        changed_payload, receipt_type=PROFILE_COHORT_RECEIPT_TYPE,
+    )
+    assembly_payload = json.loads(json.dumps(inputs.cohort_assembly_receipt["payload"]))
+    assembly_payload["cohort"] = {
+        "receipt_type": changed_cohort["receipt_type"],
+        "payload_sha256": changed_cohort["payload_sha256"],
+        "canonical_file_sha256": sha256_bytes(canonical_json_bytes(changed_cohort)),
+    }
+    changed_assembly = bind_receipt(
+        assembly_payload, receipt_type=PROFILE_ASSEMBLY_RECEIPT_TYPE,
+    )
+    competing_inputs = replace(
+        inputs,
+        cohort_receipt=changed_cohort,
+        cohort_receipt_sha256=sha256_bytes(canonical_json_bytes(changed_cohort)),
+        cohort_assembly_receipt=changed_assembly,
+        cohort_assembly_receipt_sha256=sha256_bytes(canonical_json_bytes(changed_assembly)),
+    )
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    bundle = create_numeric_fitting_bundle(
+        tmp_path,
+        artifacts_root=artifacts,
+        stage=AUTHORITATIVE_STAGE,
+        study_profile=CLASS20_PROFILE,
+        fitting_inputs_loader=lambda *_args, **_kwargs: competing_inputs,
+        fitters=_fitters(),
+    )
+    verified = verify_numeric_fitting_bundle(
+        bundle,
+        source_result_root=tmp_path,
+        fitting_inputs_loader=lambda *_args, **_kwargs: competing_inputs,
+        fitters=_fitters(),
+    )
+    walkie = verified.provenance["algorithms"]["walkie_talkie"]
+    assert walkie["algorithm"] == class_fitting.PROFILE_FIXED_PAIR_ALGORITHM
+    assert walkie["pairing_objective"] == class_fitting.PROFILE_FIXED_PAIR_OBJECTIVE
+    candidate_costs = {
+        (row["left"], row["right"]): row["base_matching_cost_packets"]
+        for row in walkie["candidate_pair_costs"]
+    }
+    unconstrained = minimum_weight_perfect_matching_from_costs(
+        competing_inputs.workload_ids, candidate_costs,
+    )
+    observed = tuple(
+        (row["real"], row["decoy"], row["base_matching_cost_packets"])
+        for row in walkie["selected_pairs"]
+    )
+    assert observed != unconstrained
+    assert {(left, right) for left, right, _cost in observed} == {
+        tuple(sorted(pair)) for pair in changed_payload["matching"]
+    }
+    fitted = json.loads((bundle / BUNDLE_FILES["walkie_talkie"]).read_text())
+    assert {(row["real"], row["decoy"]) for row in fitted["profiles"]} == {
+        tuple(sorted(pair)) for pair in changed_payload["matching"]
+    }
+
+    forged = json.loads(json.dumps(verified.provenance))
+    by_pair = {
+        (row["left"], row["right"]): row
+        for row in walkie["candidate_pair_costs"]
+    }
+    forged["algorithms"]["walkie_talkie"]["selected_pairs"] = [
+        {
+            "real": left,
+            "decoy": right,
+            "base_matching_cost_packets": by_pair[left, right]["base_matching_cost_packets"],
+            "matching_cost_packets": by_pair[left, right]["matching_cost_packets"],
+        }
+        for left, right, _cost in unconstrained
+    ]
+    (bundle / class_fitting.NUMERIC_PROVENANCE_FILE).write_bytes(canonical_json_bytes(forged))
+    with pytest.raises(ValueError, match="exact constrained optimum"):
+        verify_numeric_fitting_bundle(bundle)
+
+
+def test_profile20_final_bundle_requires_20_qualified_sites_and_selected_pairs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inputs = _profile_final_inputs(tmp_path, monkeypatch)
+    numeric_parent = tmp_path / "numeric-artifacts"
+    numeric_parent.mkdir()
+    numeric = create_numeric_fitting_bundle(
+        tmp_path,
+        artifacts_root=numeric_parent,
+        stage=AUTHORITATIVE_STAGE,
+        study_profile=CLASS20_PROFILE,
+        fitting_inputs_loader=lambda *_args, **_kwargs: inputs,
+        fitters=_fitters(),
+    )
+    source_result_root, _calls = _bind_numeric_publication_source(
+        monkeypatch, tmp_path, inputs,
+    )
+    context = _qualification_context(
+        tmp_path,
+        stage=AUTHORITATIVE_STAGE,
+        workload_ids=inputs.workload_ids,
+        profile20=True,
+    )
+    final_parent = tmp_path / "final-artifacts"
+    final_parent.mkdir()
+    final = finalize_fitting_bundle(
+        numeric,
+        source_result_root=source_result_root,
+        qualification_manifest_path=context.sidecar_root / "_qualification-set.json",
+        qualification_context=context,
+        artifacts_root=final_parent,
+    )
+    verified = verify_class_fitting_bundle(final, qualification_context=context)
+    assert verified.root.name == f"{CLASS20_PROFILE.study_id}-authoritative-fitting"
+    assert verified.stage == AUTHORITATIVE_STAGE
+    assert verified.provenance["schema_version"] == 3
+    assert verified.provenance["runtime_authorized"] is True
+    assert verified.provenance["qualification_inputs"]["qualification_set"] == (
+        f"{CLASS20_PROFILE.study_id}-final20-full-v1"
+    )
+    assert len(verified.provenance["qualification_inputs"]["qualification_bindings"]) == 20
 
 
 def test_verified_result_loader_rejects_cross_product_and_source_tampering(tmp_path: Path) -> None:
@@ -812,6 +1300,7 @@ def _qualification_context(
     *,
     stage: str,
     workload_ids: Sequence[str],
+    profile20: bool = False,
 ) -> QualificationContext:
     workload_root = tmp_path / "qualification-workloads"
     sidecar_root = tmp_path / "qualification-sidecars"
@@ -863,9 +1352,14 @@ def _qualification_context(
                 },
             }
         )
-    qualification_set = (
-        PILOT_QUALIFICATION_SET if stage == PILOT_STAGE else AUTHORITATIVE_QUALIFICATION_SET
-    )
+    if profile20:
+        count = CLASS20_PROFILE.pilot_count if stage == PILOT_STAGE else CLASS20_PROFILE.final_count
+        cohort = "pilot" if stage == PILOT_STAGE else "final"
+        qualification_set = f"{CLASS20_PROFILE.study_id}-{cohort}{count}-full-v1"
+    else:
+        qualification_set = (
+            PILOT_QUALIFICATION_SET if stage == PILOT_STAGE else AUTHORITATIVE_QUALIFICATION_SET
+        )
     named: dict[str, Any] = {
         "schema_version": 3,
         "artifact_type": "qcsd-named-chaff-qualification-set",

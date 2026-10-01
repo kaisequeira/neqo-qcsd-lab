@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,7 +13,7 @@ from qcsd_lab import class_attestation as attestation_producer
 from qcsd_lab import class_build_admission as admission
 from qcsd_lab import pinned_cdp as pinned_cdp_producer
 from qcsd_lab.class_build_admission import _parser, resolve_action_admission
-from qcsd_lab.class_study import canonical_json_bytes
+from qcsd_lab.class_study import bind_receipt, canonical_json_bytes
 from qcsd_lab.util import sha256_file
 from tests.test_class_build_admission_successor import _binding, _publish
 from tests.test_cli import _class_build_admission_fixture, _class_build_pinned_cdp_receipt
@@ -158,7 +159,7 @@ def test_standalone_browser_schema_constants_match_the_producer() -> None:
         browser_producer.HISTORICAL_FOUNDATION_SCHEMA_VERSIONS
     )
     assert admission._BROWSER_EGRESS_FINAL_SCHEMA == browser_producer.FINAL_SCHEMA_VERSION
-    assert admission._ACQUISITION_SCHEMA == acquisition_producer.SCHEMA_VERSION == 12
+    assert admission._ACQUISITION_SCHEMA == acquisition_producer.SCHEMA_VERSION == 13
     assert admission._V127_ACQUISITION_AUTHORITY_COHORT == (
         attestation_producer._V127_ACQUISITION_AUTHORITY_COHORT_VERSION
     )
@@ -168,7 +169,7 @@ def test_standalone_browser_schema_constants_match_the_producer() -> None:
     assert (
         admission._ACQUISITION_COMPLETION_SCHEMA
         == acquisition_producer.COMPLETION_SCHEMA_VERSION
-        == 4
+        == 5
     )
     assert (
         admission._ACQUISITION_CHECKPOINT_SCHEMA
@@ -320,7 +321,7 @@ def test_v2_authority_rejects_browser_or_unknown_evidence(authority_fixture, ext
             payload["evidence"]["unknown"] = "unexpected"
 
     _rewrite(fixture.authority, make_v2_with_extra)
-    with pytest.raises(ValueError, match="v2 evidence inventory"):
+    with pytest.raises(ValueError, match="evidence inventory"):
         _resolve(fixture, "acquisition-init", acquisition_authority=fixture.authority)
 
 
@@ -391,7 +392,7 @@ def test_current_completion_uses_bound_provenance_and_authority(authority_fixtur
     ) == fixture.admitted
 
 
-@pytest.mark.parametrize("schema", (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11))
+@pytest.mark.parametrize("schema", (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12))
 def test_legacy_acquisition_is_inspectable_but_not_current_launch_authority(
     authority_fixture, schema: int
 ) -> None:
@@ -405,7 +406,7 @@ def test_legacy_acquisition_is_inspectable_but_not_current_launch_authority(
         _resolve(fixture, "acquisition-run", acquisition_root=fixture.acquisition)
 
 
-@pytest.mark.parametrize("schema", (9, 10, 11))
+@pytest.mark.parametrize("schema", (9, 10, 11, 12))
 def test_historical_completion_is_verify_only_and_cannot_publish_cohort(
     authority_fixture, schema: int,
 ) -> None:
@@ -451,7 +452,7 @@ def test_resealed_authority_cannot_drift_from_its_build(authority_fixture, field
 def test_authority_requires_both_linked_proofs(authority_fixture, missing: str) -> None:
     fixture = authority_fixture
     _rewrite(fixture.authority, lambda payload: payload["evidence"].pop(missing))
-    with pytest.raises((TypeError, ValueError), match="binding"):
+    with pytest.raises((TypeError, ValueError), match="binding|evidence inventory"):
         _resolve(fixture, "verify", target=fixture.authority)
 
 
@@ -586,3 +587,277 @@ def test_host_parser_accepts_explicit_acquisition_authority_flag() -> None:
         ]
     )
     assert parsed.acquisition_authority == "proof.json"
+    selected = _parser().parse_args(
+        ["--lab-root", "/lab", "--action", "acquisition-init",
+         "--study-id", admission._CLASS20_STUDY_ID]
+    )
+    assert selected.study_id == admission._CLASS20_STUDY_ID
+
+
+def _class20_fixture(fixture):
+    source = Path(__file__).parents[1]
+    for relative in (
+        "config/class-study/v1/study.json",
+        "config/class-study/v1/classifier-multiorigin100-v1-candidates.json",
+        "config/class-study/v2/study.json",
+    ):
+        destination = fixture.root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source / relative, destination)
+    profile = fixture.root / "config/class-study/v2/study.json"
+    base = fixture.root / "config/class-study/v1/study.json"
+    catalogue = fixture.root / "config/class-study/v1/classifier-multiorigin100-v1-candidates.json"
+    payload = json.loads(fixture.authority.read_bytes())["payload"]
+    payload["attestation_schema_version"] = 3
+    payload["study_id"] = admission._CLASS20_STUDY_ID
+    payload["study_contract"] = _binding(profile)
+    payload["study_profile_sha256"] = sha256_file(profile)
+    payload["study_profile_inputs"] = {
+        "base_study": _binding(base),
+        "candidate_catalogue": _binding(catalogue),
+    }
+    payload["evidence"].pop("browser_egress_qualification")
+    payload["acquisition_correctness"]["study_contract"] = _binding(profile)
+    fixture.authority = _publish(
+        fixture.root / "artifacts/classifier-multiorigin20-v1-acquisition-authority-v62.json",
+        AUTHORITY, payload,
+    )
+    v2_root = fixture.root / "artifacts/classifier-multiorigin20-v1-acquisition-v62"
+    fixture.acquisition.rename(v2_root)
+    fixture.acquisition = v2_root
+    fixture.acquisition_completion = v2_root / "completion.json"
+    _rewrite(
+        v2_root / "provenance.json",
+        lambda value: value.update(
+            study_id=admission._CLASS20_STUDY_ID,
+            study_profile_sha256=sha256_file(profile),
+            candidate_catalogue_sha256=sha256_file(catalogue),
+            acquisition_authority=_binding(fixture.authority),
+        ),
+    )
+    selection = bind_receipt(
+        {"study_id": admission._CLASS20_STUDY_ID, "complete": True},
+        receipt_type="qcsd-class-study-acquisition-selection",
+    )
+    _rewrite(
+        fixture.acquisition_completion,
+        lambda value: value.update(
+            study_id=admission._CLASS20_STUDY_ID,
+            candidate_catalogue_sha256=sha256_file(catalogue),
+            provenance_sha256=sha256_file(v2_root / "provenance.json"),
+            selection=selection,
+            operational_censor_summary={},
+        ),
+    )
+    return fixture
+
+
+def test_class20_host_admits_exact_profile_authority_and_current_acquisition(authority_fixture) -> None:
+    fixture = _class20_fixture(authority_fixture)
+    selected = admission._CLASS20_STUDY_ID
+    assert _resolve(
+        fixture, "acquisition-authority", study_id=selected,
+        build=fixture.build, pinned_cdp=fixture.pinned,
+    ) == fixture.admitted
+    assert _resolve(
+        fixture, "acquisition-init", study_id=selected,
+        acquisition_authority=fixture.authority,
+    ) == fixture.admitted
+    assert _resolve(
+        fixture, "acquisition-run", study_id=selected,
+        acquisition_root=fixture.acquisition,
+    ) == fixture.admitted
+    assert _resolve(
+        fixture, "cohort", study_id=selected,
+        acquisition_completion=fixture.acquisition_completion,
+    ) == fixture.admitted
+
+
+def test_class20_host_rejects_changed_prefix_scope_even_with_matching_hash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = Path(__file__).resolve().parents[1]
+    for relative in (
+        "config/class-study/v2/study.json",
+        "config/class-study/v1/study.json",
+        "config/class-study/v1/classifier-multiorigin100-v1-candidates.json",
+    ):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source_root / relative, destination)
+    profile_path = tmp_path / "config/class-study/v2/study.json"
+    profile = json.loads(profile_path.read_bytes())
+    profile["walkie_talkie_prefix_qualification"]["qualification_scope"] = "whole-page-capacity"
+    profile_path.write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
+    monkeypatch.setattr(admission, "_CLASS20_OVERLAY_SHA256", sha256_file(profile_path))
+    with pytest.raises(ValueError, match="overlay contract is invalid"):
+        admission._class20_profile_bindings(tmp_path)
+
+
+def test_class20_host_rejects_mixed_authority_or_completion(authority_fixture) -> None:
+    fixture = _class20_fixture(authority_fixture)
+    with pytest.raises(ValueError, match="another study profile"):
+        _resolve(fixture, "acquisition-init", acquisition_authority=fixture.authority)
+    with pytest.raises(ValueError, match="profile-specific authority"):
+        _resolve(fixture, "acquisition-init", study_id=admission._CLASS20_STUDY_ID,
+                 foundation=fixture.foundation)
+    with pytest.raises(ValueError, match="another study profile"):
+        _resolve(fixture, "cohort", acquisition_completion=fixture.acquisition_completion)
+
+
+@pytest.mark.parametrize("field", ("study_profile_sha256", "candidate_catalogue_sha256"))
+def test_class20_host_rejects_profile_or_catalogue_drift(authority_fixture, field: str) -> None:
+    fixture = _class20_fixture(authority_fixture)
+    if field == "study_profile_sha256":
+        _rewrite(fixture.authority, lambda value: value.update({field: "0" * 64}))
+        with pytest.raises(ValueError, match="profile inputs"):
+            _resolve(fixture, "acquisition-init", study_id=admission._CLASS20_STUDY_ID,
+                     acquisition_authority=fixture.authority)
+    else:
+        _rewrite(fixture.acquisition_completion, lambda value: value.update({field: "0" * 64}))
+        with pytest.raises(ValueError, match="catalogue differs"):
+            _resolve(fixture, "cohort", study_id=admission._CLASS20_STUDY_ID,
+                     acquisition_completion=fixture.acquisition_completion)
+
+
+def test_class20_host_rejects_mixed_100_site_cohort_carrier(authority_fixture) -> None:
+    fixture = _class20_fixture(authority_fixture)
+    mixed = _publish(
+        fixture.root / "config/class-study/v2/mixed-cohort-assembly.json",
+        "qcsd-class-study-cohort-assembly",
+        {"study_id": admission._BASE_STUDY_ID},
+    )
+    with pytest.raises(ValueError, match="100-site study"):
+        _resolve(fixture, "campaigns", study_id=admission._CLASS20_STUDY_ID,
+                 acquisition_completion=fixture.acquisition_completion,
+                 final_cohort_assembly=mixed)
+
+
+def _class20_pilot_cohort_pair(fixture) -> tuple[Path, Path]:
+    study_id = admission._CLASS20_STUDY_ID
+    root = fixture.root / "config/class-study/v2"
+    profile = root / "study.json"
+    catalogue = fixture.root / "config/class-study/v1/classifier-multiorigin100-v1-candidates.json"
+    candidate_ids = [f"candidate-{index:04d}" for index in range(600)]
+    cohort = _publish(
+        root / f"{study_id}-pilot-cohort.json",
+        admission._CLASS20_COHORT,
+        {
+            "study_id": study_id,
+            "cohort_schema_version": 1,
+            "profile_sha256": sha256_file(profile),
+            "stage": "pilot",
+            "candidates": [{"candidate_id": item} for item in candidate_ids],
+            "pilot_ids": candidate_ids[:30],
+            "final_ids": [],
+            "reserve_ids": [],
+        },
+    )
+    completion = json.loads(fixture.acquisition_completion.read_bytes())
+    catalogue_envelope = json.loads(catalogue.read_bytes())
+    cohort_envelope = json.loads(cohort.read_bytes())
+    assembly = _publish(
+        root / f"{study_id}-pilot-cohort-assembly.json",
+        admission._CLASS20_COHORT_ASSEMBLY,
+        {
+            "study_id": study_id,
+            "assembly_schema_version": 1,
+            "profile": {"path": admission._CLASS20_OVERLAY, "sha256": sha256_file(profile)},
+            "candidate_catalogue": {
+                "path": admission._BASE_CATALOGUE,
+                "sha256": sha256_file(catalogue),
+                "payload_sha256": catalogue_envelope["payload_sha256"],
+            },
+            "acquisition_completion": {
+                "path": fixture.acquisition_completion.relative_to(fixture.root).as_posix(),
+                "sha256": sha256_file(fixture.acquisition_completion),
+                "payload_sha256": completion["payload_sha256"],
+                "provenance_sha256": completion["payload"]["provenance_sha256"],
+                "selection_payload_sha256": completion["payload"]["selection"]["payload_sha256"],
+            },
+            "selected_evidence_count": 30,
+            "cohort": {
+                "receipt_type": admission._CLASS20_COHORT,
+                "payload_sha256": cohort_envelope["payload_sha256"],
+                "canonical_file_sha256": sha256_file(cohort),
+            },
+        },
+    )
+    return cohort, assembly
+
+
+def test_class20_host_admits_exact_30_site_pilot_cohort_before_campaigns(authority_fixture) -> None:
+    fixture = _class20_fixture(authority_fixture)
+    _cohort, assembly = _class20_pilot_cohort_pair(fixture)
+    assert _resolve(
+        fixture, "campaigns", study_id=admission._CLASS20_STUDY_ID,
+        acquisition_completion=fixture.acquisition_completion,
+        final_cohort_assembly=assembly,
+    ) == fixture.admitted
+
+
+def test_class20_host_rejects_100_site_count_in_20_site_cohort(authority_fixture) -> None:
+    fixture = _class20_fixture(authority_fixture)
+    cohort, assembly = _class20_pilot_cohort_pair(fixture)
+    _rewrite(
+        cohort,
+        lambda value: value.update(pilot_ids=[f"candidate-{index:04d}" for index in range(120)]),
+    )
+    with pytest.raises(ValueError, match="20-site profile, cohort, or counts differ"):
+        _resolve(
+            fixture, "campaigns", study_id=admission._CLASS20_STUDY_ID,
+            acquisition_completion=fixture.acquisition_completion,
+            final_cohort_assembly=assembly,
+        )
+
+
+def test_class20_host_rejects_mixed_pilot_campaign_count_before_capture(authority_fixture) -> None:
+    fixture = _class20_fixture(authority_fixture)
+    _cohort, assembly = _class20_pilot_cohort_pair(fixture)
+    study_id = admission._CLASS20_STUDY_ID
+    root = fixture.root / f"config/{study_id}-campaigns"
+    root.mkdir(parents=True)
+    name = f"{study_id}-pilot-fitting-120-1200"
+    campaign = root / f"{name}.yml"
+    def write_campaign(count: int) -> None:
+        workload_lines = "\n".join(
+            f"  candidate-{index:04d}: {{}}" for index in range(count)
+        )
+        campaign.write_text(
+            f"name: {name}\n"
+            "evidence_role: pilot-fitting\n"
+            f"class_study_cohort_assembly: ../class-study/v2/{assembly.name}\n"
+            f"workloads:\n{workload_lines}\n",
+            encoding="utf-8",
+        )
+    write_campaign(30)
+    resolver = admission._Resolver(fixture.root, study_id=study_id, build_loader=fixture.load)
+    assert admission._campaign_authorities(resolver, campaign) == (
+        "pilot-fitting", [fixture.admitted]
+    )
+    write_campaign(120)
+    with pytest.raises(ValueError, match="workload count differs"):
+        admission._campaign_authorities(resolver, campaign)
+
+
+def test_class20_host_rejects_forged_pilot_compatibility_campaign(authority_fixture) -> None:
+    fixture = _class20_fixture(authority_fixture)
+    _cohort, assembly = _class20_pilot_cohort_pair(fixture)
+    study_id = admission._CLASS20_STUDY_ID
+    root = fixture.root / f"config/{study_id}-campaigns"
+    root.mkdir(parents=True)
+    name = f"{study_id}-pilot-compatibility-270-1200"
+    campaign = root / f"{name}.yml"
+    workload_lines = "\n".join(
+        f"  candidate-{index:04d}: {{}}" for index in range(30)
+    )
+    campaign.write_text(
+        f"name: {name}\n"
+        "evidence_role: pilot-compatibility\n"
+        f"class_study_cohort_assembly: ../class-study/v2/{assembly.name}\n"
+        f"workloads:\n{workload_lines}\n",
+        encoding="utf-8",
+    )
+    resolver = admission._Resolver(fixture.root, study_id=study_id, build_loader=fixture.load)
+    with pytest.raises(ValueError, match="campaign name is not canonical"):
+        admission._campaign_authorities(resolver, campaign)

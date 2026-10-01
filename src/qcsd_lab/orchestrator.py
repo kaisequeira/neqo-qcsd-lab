@@ -25,9 +25,13 @@ import yaml
 from . import capture_session as capture_engine
 from .class_acquisition import validate_class_study_preparation
 from .class_study import (
+    _CLASS20_OVERLAY_SHA256,
+    CLASS20_STUDY_ID,
     STUDY_ID,
+    ClassStudyProfile,
     is_class_study_campaign_name,
     is_successor_study_id,
+    load_class20_profile_contract,
     parse_class_study_campaign_name,
 )
 from .defenses import defense_from_runtime_identity
@@ -176,6 +180,13 @@ FITTING_LIMITS = capture_engine.Limits(
     per_origin_cooldown_seconds=30.0,
     settle_seconds=1.0,
 )
+
+
+def _registered_class20_profile_sha256() -> str:
+    """Bind a 20-site campaign to the exact registered source overlay."""
+
+    load_class20_profile_contract()
+    return _CLASS20_OVERLAY_SHA256
 
 
 class CampaignIncomplete(RuntimeError):
@@ -545,6 +556,16 @@ def _load_campaign(
     if type(schema_version) is not int or schema_version not in SUPPORTED_SCHEMA_VERSIONS:
         choices = ", ".join(str(item) for item in sorted(SUPPORTED_SCHEMA_VERSIONS))
         raise ValueError(f"campaign schema must be one of: {choices}")
+    raw_name = value.get("name")
+    profile20: ClassStudyProfile | None = None
+    if isinstance(raw_name, str) and raw_name.startswith(f"{CLASS20_STUDY_ID}-"):
+        if schema_version != CLASS_STUDY_SCHEMA_VERSION:
+            raise ValueError("20-site campaigns require schema two")
+        if parse_class_study_campaign_name(raw_name).study_id != CLASS20_STUDY_ID:
+            raise ValueError("20-site campaign name is not canonical")
+        if value.get("class_study_successor") is not None:
+            raise ValueError("20-site campaign cannot use a 100-site successor restart")
+        profile20 = load_class20_profile_contract()
     successor_context = _load_successor_campaign_context(
         path,
         source_bytes=source_bytes,
@@ -563,6 +584,7 @@ def _load_campaign(
             path,
             field="campaign_root",
             label="fresh schema-two class-study campaign",
+            profile=profile20,
         )
         if path.suffix != ".yml":
             raise ValueError("fresh schema-two class-study campaign must use a .yml filename")
@@ -646,6 +668,7 @@ def _load_campaign(
         config_root=config_root,
         cohort_trust_root=cohort_trust_root,
         frozen_inputs=frozen_inputs,
+        profile=profile20,
     )
     workloads = _load_workloads(
         path,
@@ -672,6 +695,7 @@ def _load_campaign(
         frozen_inputs=frozen_inputs,
         workload_ids=tuple(workload.id for workload in workloads),
         workload_hashes={workload.id: workload.sha256 for workload in workloads},
+        profile=profile20,
     )
     qualification_authority = _class_fitted_qualification_authority(
         evidence_role=evidence_role,
@@ -717,6 +741,7 @@ def _load_campaign(
         expected_successor_restart_sha256=(
             str(successor_context["restart_sha256"]) if successor_context is not None else None
         ),
+        expected_study_profile=profile20,
     )
     has_defended_run = any(not defense.baseline for defense in defenses)
     qualification_scope = _required_chaff_qualification_scope(defenses)
@@ -793,6 +818,7 @@ def _load_campaign(
             field="campaign_root",
             filename=f"{name}.yml",
             label="fresh schema-two class-study campaign",
+            profile=profile20,
         )
     campaign = Campaign(
         path=path,
@@ -820,6 +846,8 @@ def _load_campaign(
         class_study_id=(
             str(successor_context["study_id"])
             if successor_context is not None
+            else profile20.study_id
+            if profile20 is not None
             else STUDY_ID
             if schema_version == CLASS_STUDY_SCHEMA_VERSION
             else None
@@ -833,6 +861,8 @@ def _load_campaign(
         class_study_launch_namespace=(
             str(successor_context["launch_namespace"])
             if successor_context is not None
+            else f".{profile20.study_id}-launches"
+            if profile20 is not None
             else f".{STUDY_ID}-launches"
             if schema_version == CLASS_STUDY_SCHEMA_VERSION
             else None
@@ -852,6 +882,7 @@ def _load_campaign(
                 cohort_receipt=class_study_cohort_path,
                 cohort_assembly_receipt=class_study_cohort_assembly_path,
                 enforce_fresh_layout=frozen_inputs is None,
+                profile=profile20,
             )
     return campaign
 
@@ -905,6 +936,7 @@ def _class_study_admitted_workload_root(
     config_root: Path,
     cohort_trust_root: Path | None,
     frozen_inputs: Path | None,
+    profile: ClassStudyProfile | None = None,
 ) -> Path | None:
     """Resolve fresh workloads from the cohort's validated assembly identity."""
 
@@ -918,12 +950,39 @@ def _class_study_admitted_workload_root(
         frozen_inputs=frozen_inputs,
         cohort_trust_root=cohort_trust_root,
     )
-    from .class_cohort import validate_cohort_assembly_receipt
     from .class_layout import (
         class_study_layout,
         publication_roots_for_acquisition_root,
         require_canonical_publication_root,
     )
+    if profile is not None:
+        from .class_cohort20 import load_validated_profile_cohort
+
+        load_validated_profile_cohort(
+            cohort_path, assembly_path, profile=profile, require_deep=True
+        )
+        payload = load_json(assembly_path)["payload"]
+        lab_root = class_study_layout(profile=profile).lab_root
+        root = require_canonical_publication_root(
+            lab_root / payload["workload_root"],
+            field="workload_root",
+            label="cohort admitted workload root",
+            profile=profile,
+        )
+        acquisition_root = lab_root / payload["acquisition_completion"]["path"]
+        expected_stability, expected_workloads = publication_roots_for_acquisition_root(
+            acquisition_root.parent, profile=profile
+        )
+        if (
+            root != expected_workloads
+            or lab_root / payload["stability_root"] != expected_stability
+        ):
+            raise ValueError("20-site cohort publication roots differ from acquisition")
+        return _trusted_regular_directory(
+            root, root=config_root, label="cohort admitted workload root"
+        )
+
+    from .class_cohort import validate_cohort_assembly_receipt
     from .class_study import load_study_receipt
 
     cohort, _ = load_study_receipt(cohort_path)
@@ -972,6 +1031,7 @@ def _load_class_study_cohort_binding(
     workload_ids: tuple[str, ...],
     workload_hashes: Mapping[str, str],
     cohort_trust_root: Path | None = None,
+    profile: ClassStudyProfile | None = None,
 ) -> tuple[Path | None, str | None, Path | None, str | None]:
     """Resolve the final cohort receipt without affecting historical campaigns."""
 
@@ -993,6 +1053,36 @@ def _load_class_study_cohort_binding(
         frozen_inputs=frozen_inputs,
         cohort_trust_root=cohort_trust_root,
     )
+    if profile is not None:
+        from .class_cohort20 import load_validated_profile_cohort
+
+        pilot_ids, final_ids = load_validated_profile_cohort(
+            receipt_path,
+            assembly_path,
+            profile=profile,
+            require_deep=frozen_inputs is None,
+        )
+        expected_ids = final_ids if requires_final else pilot_ids
+        if not expected_ids or workload_ids != expected_ids:
+            cohort = "final" if requires_final else "pilot"
+            raise ValueError(f"{evidence_role} workload order differs from the {cohort} cohort")
+        assembly = load_json(assembly_path)["payload"]
+        records = {record["candidate_id"]: record for record in assembly["candidates"]}
+        expected_hashes = {
+            candidate_id: records[candidate_id]["prepared_workload"]["sha256"]
+            for candidate_id in expected_ids
+        }
+        if dict(workload_hashes) != expected_hashes:
+            raise ValueError(
+                f"{evidence_role} prepared workload bytes differ from cohort admission"
+            )
+        return (
+            receipt_path,
+            sha256_file(receipt_path),
+            assembly_path,
+            sha256_file(assembly_path),
+        )
+
     from .class_cohort import cohort_workload_hashes, validate_cohort_assembly_receipt
     from .class_study import load_study_receipt
 
@@ -1085,12 +1175,28 @@ def _validate_class_study_campaign_contract(campaign: Campaign) -> None:
         PILOT_COUNT,
         STUDY_ID,
     )
+    from .class_layout import class_study_layout
 
     role = str(campaign.evidence_role)
     study_id = campaign.class_study_id or STUDY_ID
     successor = campaign.class_study_successor_sha256 is not None
+    profile20 = load_class20_profile_contract() if study_id == CLASS20_STUDY_ID else None
+    if profile20 is not None and successor:
+        raise ValueError("20-site campaign cannot use a 100-site successor restart")
+    if profile20 is not None and role == "pilot-compatibility":
+        raise ValueError("20-site pilot pair screening requires a separate deep receipt")
+    try:
+        campaign_identity = parse_class_study_campaign_name(campaign.name)
+    except ValueError as error:
+        raise ValueError(f"{role} campaign name is not canonical") from error
+    if campaign_identity.study_id != study_id or campaign_identity.evidence_role != role:
+        raise ValueError(f"{role} campaign name is not canonical")
+    if campaign.profile != "research-1200":
+        raise ValueError(f"{role} evidence requires profile research-1200")
     expected_workloads = (
-        PILOT_COUNT if role in {"pilot-fitting", "pilot-compatibility"} else FINAL_CLASS_COUNT
+        (profile20.pilot_count if profile20 is not None else PILOT_COUNT)
+        if role in {"pilot-fitting", "pilot-compatibility"}
+        else (profile20.final_count if profile20 is not None else FINAL_CLASS_COUNT)
     )
     expected_visits = {
         "pilot-fitting": 2,
@@ -1098,7 +1204,7 @@ def _validate_class_study_campaign_contract(campaign: Campaign) -> None:
         "authoritative-fitting": 10,
         "certification": 1,
         "canary": 1,
-        "formal": 2,
+        "formal": profile20.formal_visits_per_block if profile20 is not None else 2,
     }[role]
     if len(campaign.workloads) != expected_workloads or any(
         workload.visits != expected_visits for workload in campaign.workloads
@@ -1114,10 +1220,11 @@ def _validate_class_study_campaign_contract(campaign: Campaign) -> None:
     )
     if campaign.request_policies != expected_policies:
         raise ValueError(f"{role} evidence has the wrong request-policy matrix")
+    formal_modes = profile20.formal_modes if profile20 is not None else FORMAL_MODES
     expected_modes = (
         ("undefended",)
         if role in {"pilot-fitting", "authoritative-fitting", "canary"}
-        else FORMAL_MODES
+        else formal_modes
         if role == "formal"
         else COMPATIBILITY_MODES
     )
@@ -1148,21 +1255,19 @@ def _validate_class_study_campaign_contract(campaign: Campaign) -> None:
         "authoritative-fitting": f"{STUDY_ID}-authoritative-fitting-1200",
         "certification": "classifier-multiorigin100-v1-certification-900-1200",
     }.get(role)
+    if profile20 is not None:
+        expected_name = {
+            "pilot-fitting": f"{study_id}-pilot-fitting-120-1200",
+            "authoritative-fitting": f"{study_id}-authoritative-fitting-400-1200",
+            "certification": f"{study_id}-certification-180-1200",
+        }.get(role)
     if successor:
         expected_name = {
             "authoritative-fitting": f"{study_id}-authoritative-fitting-2000-1200",
             "certification": f"{study_id}-certification-900-1200",
         }.get(role)
     if role in {"canary", "formal"}:
-        try:
-            campaign_identity = parse_class_study_campaign_name(campaign.name)
-        except ValueError as error:
-            raise ValueError(f"{role} campaign name is not canonical") from error
-        if (
-            campaign_identity.study_id != study_id
-            or campaign_identity.evidence_role != role
-            or campaign_identity.block is None
-        ):
+        if campaign_identity.block is None:
             raise ValueError(f"{role} campaign name is not canonical")
     elif expected_name is not None and campaign.name != expected_name:
         raise ValueError(f"{role} campaign name is not canonical")
@@ -1181,6 +1286,13 @@ def _validate_class_study_campaign_contract(campaign: Campaign) -> None:
         "certification": FINAL_QUALIFICATION_SET,
         "formal": FINAL_QUALIFICATION_SET,
     }.get(role)
+    if profile20 is not None:
+        layout = class_study_layout(profile=profile20)
+        expected_qualification = {
+            "pilot-compatibility": layout.pilot_qualification_set_root.name,
+            "certification": layout.final_qualification_set_root.name,
+            "formal": layout.final_qualification_set_root.name,
+        }.get(role)
     if successor and role in {"certification", "formal"}:
         expected_qualification = f"{study_id}-final-full"
     if campaign.chaff_qualification_set != expected_qualification:
@@ -1194,11 +1306,13 @@ def _validate_class_study_campaign_contract(campaign: Campaign) -> None:
     ):
         raise ValueError(f"{role} fitting order differs from the fixed study contract")
     if role in {"canary", "formal"}:
-        match = re.search(r"-([0-9]{2})-1200$", campaign.name)
-        if match is None:
-            raise ValueError(f"{role} campaign has no acquisition block")
-        block = int(match.group(1))
-        if not 1 <= block <= 10 or campaign.defense_order_block != block - 1:
+        block = campaign_identity.block
+        block_count = profile20.formal_block_count if profile20 is not None else 10
+        if (
+            block is None
+            or not 1 <= block <= block_count
+            or campaign.defense_order_block != block - 1
+        ):
             raise ValueError(f"{role} defense-order block differs from its campaign name")
     elif role in {"pilot-compatibility", "certification"} and (campaign.defense_order_block != 0):
         raise ValueError(f"{role} defense-order block must be zero")
@@ -1704,14 +1818,24 @@ def _validate_fitting_campaign(campaign: Campaign, *, raw_limits: Any) -> None:
 
     if campaign.schema_version == CLASS_STUDY_SCHEMA_VERSION:
         prefix = "class-study fitting campaigns require"
-        expected_count = 120 if campaign.evidence_role == "pilot-fitting" else 100
+        profile20 = (
+            load_class20_profile_contract()
+            if campaign.class_study_id == CLASS20_STUDY_ID
+            else None
+        )
+        if campaign.evidence_role == "pilot-fitting":
+            expected_count = profile20.pilot_count if profile20 is not None else 120
+        else:
+            expected_count = profile20.final_count if profile20 is not None else 100
         expected_visits = 2 if campaign.evidence_role == "pilot-fitting" else 10
         expected_stage = "pilot" if campaign.evidence_role == "pilot-fitting" else "authoritative"
-        expected_name = (
-            f"{campaign.class_study_id}-authoritative-fitting-2000-1200"
-            if campaign.class_study_successor_sha256 is not None
-            else f"{STUDY_ID}-{expected_stage}-fitting-1200"
-        )
+        if campaign.class_study_successor_sha256 is not None:
+            expected_name = f"{campaign.class_study_id}-authoritative-fitting-2000-1200"
+        elif profile20 is not None:
+            sample_count = expected_count * expected_visits * 2
+            expected_name = f"{profile20.study_id}-{expected_stage}-fitting-{sample_count}-1200"
+        else:
+            expected_name = f"{STUDY_ID}-{expected_stage}-fitting-1200"
         if campaign.name != expected_name:
             raise ValueError(f"{prefix} the canonical {expected_stage} name")
         if campaign.profile != "research-1200":
@@ -1982,6 +2106,7 @@ def _load_defenses(
     qualification_set: str | None = None,
     expected_successor_study_id: str | None = None,
     expected_successor_restart_sha256: str | None = None,
+    expected_study_profile: ClassStudyProfile | None = None,
 ) -> tuple[capture_engine.Defense, ...]:
     if not isinstance(raw, list) or not raw:
         raise ValueError("defenses must be a non-empty list")
@@ -2099,6 +2224,14 @@ def _load_defenses(
                 raise ValueError(
                     "successor data-driven defenses require their exact class fitting bundle"
                 )
+            if (
+                expected_study_profile is not None
+                and kind in SEALED_RESEARCH_PARAMETER_KINDS
+                and not is_class_bundle
+            ):
+                raise ValueError(
+                    "20-site data-driven defenses require their exact class fitting bundle"
+                )
             if is_class_bundle:
                 from .class_fitting import BUNDLE_FILES as CLASS_BUNDLE_FILES
 
@@ -2177,6 +2310,7 @@ def _load_defenses(
                     campaign_evidence_role=evidence_role,
                     expected_successor_study_id=expected_successor_study_id,
                     expected_successor_restart_sha256=(expected_successor_restart_sha256),
+                    expected_study_profile=expected_study_profile,
                 )
             else:
                 artifact = validate_frozen_parameter_artifact(
@@ -2199,6 +2333,7 @@ def _load_defenses(
                     campaign_evidence_role=evidence_role,
                     expected_successor_study_id=expected_successor_study_id,
                     expected_successor_restart_sha256=(expected_successor_restart_sha256),
+                    expected_study_profile=expected_study_profile,
                 )
             defenses.append(
                 capture_engine.Defense(
@@ -2466,6 +2601,8 @@ def preflight_campaign(path: Path) -> dict[str, Any]:
         result["class_study_cohort_assembly_sha256"] = campaign.class_study_cohort_assembly_sha256
     if campaign.class_study_id is not None:
         result["class_study_id"] = campaign.class_study_id
+    if campaign.class_study_id == CLASS20_STUDY_ID:
+        result["class_study_profile_sha256"] = _registered_class20_profile_sha256()
     if campaign.class_study_successor_sha256 is not None:
         result[CLASS_STUDY_SUCCESSOR_CONFIGURATION_KEY] = campaign.class_study_successor_sha256
     if campaign.defense_order_scheme != "seeded-shuffle":
@@ -2954,6 +3091,14 @@ def _class_study_coordinator_campaign_identity(
         cohort_sha256 = campaign_or_configuration.get("class_study_cohort_sha256")
         assembly_sha256 = campaign_or_configuration.get("class_study_cohort_assembly_sha256")
         successor_sha256 = campaign_or_configuration.get(CLASS_STUDY_SUCCESSOR_CONFIGURATION_KEY)
+        if study_id == CLASS20_STUDY_ID:
+            if (
+                campaign_or_configuration.get("class_study_profile_sha256")
+                != _registered_class20_profile_sha256()
+            ):
+                raise ValueError("20-site capture configuration has another study profile")
+        elif "class_study_profile_sha256" in campaign_or_configuration:
+            raise ValueError("100-site capture configuration contains a 20-site profile")
     try:
         name_identity = parse_class_study_campaign_name(name)
     except ValueError:
@@ -3407,6 +3552,11 @@ def _validate_class_study_authority_files(
     )
     if foundation.get("source") != dict(source):
         raise ValueError("class-study foundation uses a different source identity")
+    if (
+        campaign.class_study_id == CLASS20_STUDY_ID
+        and foundation.get("study_id") != CLASS20_STUDY_ID
+    ):
+        raise ValueError("20-site campaign foundation uses another study identity")
     if campaign.class_study_successor_path is not None:
         from .class_study import canonical_json_sha256, validate_hash_bound_receipt
         from .class_successor import RESTART_RECEIPT_TYPE
@@ -3458,6 +3608,13 @@ def _validate_class_study_authority_files(
         or final_cohort.get("sha256") != campaign.class_study_cohort_sha256
         or not isinstance(final_assembly, Mapping)
         or final_assembly.get("sha256") != campaign.class_study_cohort_assembly_sha256
+        or (
+            campaign.class_study_id == CLASS20_STUDY_ID
+            and (
+                readiness.get("study_id") != CLASS20_STUDY_ID
+                or snapshot.get("study_id") != CLASS20_STUDY_ID
+            )
+        )
         or (
             campaign.class_study_successor_sha256 is not None
             and (
@@ -3519,6 +3676,36 @@ def _validate_class_study_preclaim_authority(
 
     if started_at.tzinfo is None or started_at.utcoffset() is None:
         raise ValueError("class-study launch timestamp must be timezone-aware")
+    if campaign.class_study_id == CLASS20_STUDY_ID:
+        # A changed file must fail before creating the irreversible launch
+        # claim.  The prospective profile and its selected input bytes were
+        # admitted at load time; close that race at the claim boundary.
+        load_class20_profile_contract()
+        _validate_class_study_campaign_contract(campaign)
+        bound_inputs = (
+            (campaign.path, sha256_bytes(campaign.source_bytes), "campaign"),
+            (
+                campaign.class_study_cohort_path,
+                campaign.class_study_cohort_sha256,
+                "cohort receipt",
+            ),
+            (
+                campaign.class_study_cohort_assembly_path,
+                campaign.class_study_cohort_assembly_sha256,
+                "cohort assembly",
+            ),
+            *((workload.path, workload.sha256, workload.id) for workload in campaign.workloads),
+        )
+        for path, digest, label in bound_inputs:
+            if (
+                path is None
+                or path.is_symlink()
+                or not path.is_file()
+                or not isinstance(digest, str)
+                or _SHA256.fullmatch(digest) is None
+                or sha256_file(path) != digest
+            ):
+                raise ValueError(f"20-site {label} changed after campaign loading")
     authority = _validate_class_study_authority_files(
         campaign,
         source=source,
@@ -3635,7 +3822,9 @@ def _revalidate_loaded_class_study_runtime_files(campaign: Campaign) -> None:
     successor_study_id = campaign.class_study_id
     successor_restart_sha256 = campaign.class_study_successor_sha256
     if successor_restart_sha256 is None:
-        if successor_study_id not in {None, STUDY_ID}:
+        if successor_study_id == CLASS20_STUDY_ID:
+            load_class20_profile_contract()
+        elif successor_study_id not in {None, STUDY_ID}:
             raise ValueError("class-study runtime has an unbound alternate study identity")
     elif (
         not is_successor_study_id(successor_study_id)
@@ -4033,14 +4222,24 @@ def _materialize_inputs(
             != campaign.class_study_cohort_assembly_sha256
         ):
             raise ValueError("class-study cohort assembly changed during materialization")
-        from .class_cohort import validate_cohort_assembly_receipt
-        from .class_study import load_study_receipt
+        if campaign.class_study_id == CLASS20_STUDY_ID:
+            from .class_cohort20 import load_validated_profile_cohort
 
-        frozen_cohort, _selection = load_study_receipt(class_study_cohort_destination)
-        validate_cohort_assembly_receipt(
-            load_json(class_study_cohort_assembly_destination),
-            cohort=frozen_cohort,
-        )
+            load_validated_profile_cohort(
+                class_study_cohort_destination,
+                class_study_cohort_assembly_destination,
+                profile=load_class20_profile_contract(),
+                require_deep=False,
+            )
+        else:
+            from .class_cohort import validate_cohort_assembly_receipt
+            from .class_study import load_study_receipt
+
+            frozen_cohort, _selection = load_study_receipt(class_study_cohort_destination)
+            validate_cohort_assembly_receipt(
+                load_json(class_study_cohort_assembly_destination),
+                cohort=frozen_cohort,
+            )
     qualification_set_manifest_destination: Path | None = None
     qualification_set_manifest_paths = {
         workload.qualification_set_manifest_path
@@ -4279,6 +4478,11 @@ def _materialize_inputs(
                     else None
                 ),
                 expected_successor_restart_sha256=(campaign.class_study_successor_sha256),
+                expected_study_profile=(
+                    load_class20_profile_contract()
+                    if campaign.class_study_id == CLASS20_STUDY_ID
+                    else None
+                ),
             )
             if (
                 frozen_artifact.sha256 != defense.parameters_sha256
@@ -5955,6 +6159,8 @@ def _frozen_configuration(
             root,
             campaign,
         )
+    if campaign.class_study_id == CLASS20_STUDY_ID:
+        configuration["class_study_profile_sha256"] = _registered_class20_profile_sha256()
     if campaign.sample_order_scheme != "grouped":
         configuration["sample_order"] = {
             "scheme": campaign.sample_order_scheme,

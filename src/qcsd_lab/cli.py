@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from .acquisition_timing import MAX_CANDIDATES_PER_ACTION
+from .class_study import CLASS20_STUDY_ID, STUDY_ID
 from .orchestrator import (
     CampaignIncomplete,
     preflight_campaign,
@@ -175,8 +176,9 @@ def parser() -> argparse.ArgumentParser:
 
     class_study = commands.add_parser(
         "class-study",
-        help="coordinate the evidence-ordered 100-class classifier study",
+        help="coordinate an evidence-ordered classifier study",
     )
+    class_study.add_argument("--study-id", choices=(STUDY_ID, CLASS20_STUDY_ID), default=STUDY_ID)
     class_study.add_argument(
         "action",
         choices=(
@@ -191,7 +193,9 @@ def parser() -> argparse.ArgumentParser:
             "campaigns",
             "fit-numeric",
             "prefix-specs",
+            "pair-screen",
             "qualify-prefix",
+            "final-select",
             "finalize-fitting",
             "capture",
             "resume",
@@ -234,6 +238,7 @@ def parser() -> argparse.ArgumentParser:
     class_study.add_argument("--cohort", type=Path)
     class_study.add_argument("--cohort-assembly", type=Path)
     class_study.add_argument("--final-selection", type=Path)
+    class_study.add_argument("--pair-screening", type=Path)
     class_study.add_argument("--campaign-root", type=Path)
     class_study.add_argument("--campaign", type=Path)
     class_study.add_argument("--results-root", type=Path)
@@ -708,6 +713,7 @@ def main(argv: list[str] | None = None) -> None:
 
             result = run_class_study_action(
                 args.action,
+                study_id=args.study_id,
                 stage=args.stage,
                 candidate_catalogue_path=absolute(args.candidate_catalogue),
                 acquisition_root=absolute(args.acquisition_root),
@@ -726,6 +732,7 @@ def main(argv: list[str] | None = None) -> None:
                 cohort_receipt_path=absolute(args.cohort),
                 cohort_assembly_path=absolute(args.cohort_assembly),
                 final_selection_path=absolute(args.final_selection),
+                pair_screening_path=absolute(args.pair_screening),
                 campaign_root=absolute(args.campaign_root),
                 campaign=absolute(args.campaign),
                 results_root=absolute(args.results_root),

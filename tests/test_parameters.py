@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 import qcsd_lab.parameters as parameters
+from qcsd_lab.class_study import CLASS20_PROFILE
 from qcsd_lab.parameters import (
     REVIEWED_PARAMETER_INPUT_POLICY,
     parameter_provenance_path,
@@ -447,6 +448,84 @@ def test_named_profiles_can_be_bound_to_campaign_workloads():
             expected_kind="traffic_morphing",
             allow_reviewed_fixture=True,
             expected_workloads={"not-in-the-fixture"},
+        )
+
+
+@pytest.mark.parametrize("frozen", (False, True))
+def test_class20_parameter_profile_is_explicit_for_fresh_and_frozen_copies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, frozen: bool
+) -> None:
+    from qcsd_lab import class_attestation, class_fitting
+
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    parameter = bundle / "traffic-morphing.json"
+    provenance = bundle / "provenance.json"
+    parameter.write_text("{}\n", encoding="utf-8")
+    provenance.write_text(
+        json.dumps(
+            {
+                "artifact_type": "qcsd-class-study-research-defense-bundle",
+                "qualification_inputs": {"qualification_set": "qualified-v1"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        class_attestation,
+        "validate_class_qualification_authority",
+        lambda value: value,
+    )
+    observed: list[dict[str, object]] = []
+
+    def record(_parameter: Path, _provenance: Path, **kwargs: object):
+        observed.append(kwargs)
+        return sha256_file(parameter), sha256_file(provenance), "sealed-class-study-fitting-v1"
+
+    monkeypatch.setattr(class_fitting, "class_research_parameter_record", record)
+    common = {
+        "provenance_path": provenance,
+        "expected_kind": "traffic_morphing",
+        "expected_qcsd_profile": "research-1200",
+        "expected_udp_payload_ceiling": 1_200,
+        "expected_workloads": ("site-00",),
+        "qualification_inputs_root": tmp_path,
+        "qualification_authority": {"trusted": True},
+        "expected_qualification_set": "qualified-v1",
+        "campaign_evidence_role": "certification",
+    }
+    if frozen:
+        validate = parameters.validate_frozen_parameter_artifact
+        common.update(
+            original_parameter_name="traffic-morphing.json",
+            allow_reviewed_fixture=False,
+        )
+    else:
+        validate = parameters.validate_parameter_artifact
+    validate(parameter, **common)
+    assert "expected_study_profile" not in observed[-1]
+    validate(parameter, **common, expected_study_profile=CLASS20_PROFILE)
+    assert observed[-1]["expected_study_profile"] == CLASS20_PROFILE
+
+
+def test_class20_parameter_rejects_nonclass_bundle_before_receipt_validation(
+    tmp_path: Path,
+) -> None:
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    parameter = bundle / "traffic-morphing.json"
+    provenance = bundle / "provenance.json"
+    parameter.write_text("{}\n", encoding="utf-8")
+    provenance.write_text(
+        json.dumps({"artifact_type": "qcsd-research-defense-bundle"}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="require a class fitting bundle"):
+        validate_parameter_artifact(
+            parameter,
+            provenance_path=provenance,
+            expected_kind="traffic_morphing",
+            expected_study_profile=CLASS20_PROFILE,
         )
 
 

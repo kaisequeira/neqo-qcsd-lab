@@ -1,4 +1,4 @@
-"""Independent fitting artifacts for ``classifier-multiorigin100-v1``.
+"""Independent, study-bound class fitting artifacts.
 
 The historical six-workload ``research-1200`` fitter is intentionally not
 extended here.  This module owns a separate, hash-bound contract for the 120
@@ -35,18 +35,25 @@ from .class_run_binding import (
     resolve_class_sample_run_binding,
 )
 from .class_study import (
+    CLASS20_PROFILE,
+    CLASS20_STUDY_ID,
     FINAL_CLASS_COUNT,
     PILOT_COUNT,
     STUDY_ID,
+    ClassStudyProfile,
     canonical_json_bytes,
     canonical_json_sha256,
     is_successor_study_id,
+    load_class20_profile_contract,
+    validate_hash_bound_receipt,
     validate_study_receipt,
 )
 from .experiment import resolved_sample_directory
 from .fitting_morphing import fit_traffic_morphing, minimum_cost_derangement
 from .fitting_trace import FittingTrace, load_fitting_trace
 from .fitting_walkie_talkie import (
+    FIXED_PAIR_ALGORITHM as PROFILE_FIXED_PAIR_ALGORITHM,
+    FIXED_PAIR_OBJECTIVE as PROFILE_FIXED_PAIR_OBJECTIVE,
     fit_walkie_talkie,
     minimum_weight_perfect_matching_from_costs,
 )
@@ -56,6 +63,8 @@ from .verification import VerifiedResult, verify_result
 
 SCHEMA_VERSION = 1
 FINAL_PROVENANCE_SCHEMA_VERSION = 2
+PROFILE_NUMERIC_PROVENANCE_SCHEMA_VERSION = 2
+PROFILE_FINAL_PROVENANCE_SCHEMA_VERSION = 3
 FITTER_VERSION = "qcsd_lab.class_fitting 1.0.0"
 NUMERIC_ARTIFACT_TYPE = "qcsd-class-study-numeric-fitting-bundle"
 FINAL_ARTIFACT_TYPE = "qcsd-class-study-research-defense-bundle"
@@ -84,7 +93,6 @@ PILOT_QUALIFICATION_SET = f"{STUDY_ID}-pilot120-full-v1"
 AUTHORITATIVE_QUALIFICATION_SET = f"{STUDY_ID}-final100-full-v1"
 PILOT_PARAMETER_INPUT_POLICY = "sealed-class-study-pilot-fitting-v1"
 AUTHORITATIVE_PARAMETER_INPUT_POLICY = "sealed-class-study-fitting-v1"
-
 EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _COMMIT = re.compile(r"[0-9a-f]{40}\Z")
@@ -163,9 +171,7 @@ class ClassFitters:
         [Mapping[str, Sequence[FittingTrace]]], tuple[dict[str, object], dict[str, object]]
     ] = fit_traffic_morphing
     wtf_pad: Callable[..., tuple[dict[str, object], dict[str, object]]] = fit_wtf_pad
-    walkie_talkie: Callable[
-        [Mapping[str, Sequence[FittingTrace]]], tuple[dict[str, object], dict[str, object]]
-    ] = fit_walkie_talkie
+    walkie_talkie: Callable[..., tuple[dict[str, object], dict[str, object]]] = fit_walkie_talkie
 
 
 DEFAULT_FITTERS = ClassFitters()
@@ -184,6 +190,7 @@ class ClassFittingInputs:
     cohort_assembly_receipt: dict[str, Any]
     cohort_assembly_receipt_sha256: str
     source_result: dict[str, Any]
+    study_profile: ClassStudyProfile | None = None
 
 
 @dataclass(frozen=True)
@@ -247,6 +254,7 @@ def validate_class_fitting_result(
     root: Path,
     *,
     expected_stage: str | None = None,
+    study_profile: ClassStudyProfile | None = None,
     expected_cohort_receipt_path: Path | None = None,
     expected_cohort_assembly_receipt_path: Path | None = None,
     result_verifier: ResultVerifier = verify_result,
@@ -268,8 +276,17 @@ def validate_class_fitting_result(
     }.get(role)
     if stage is None or (expected_stage is not None and stage != _stage(expected_stage)):
         raise ValueError("class-study fitting result has the wrong evidence role")
-    count, visits, campaign = _stage_contract(stage)
     study_id = configuration.get("class_study_id", STUDY_ID)
+    if study_id == CLASS20_STUDY_ID:
+        profile = _checked_profile(study_profile or CLASS20_PROFILE)
+        assert profile is not None
+        if configuration.get("class_study_profile_sha256") != _profile_sha256(profile):
+            raise ValueError("class-study fitting result has an unbound 20-site profile")
+    else:
+        if study_profile is not None:
+            raise ValueError("class-study fitting result uses another study profile")
+        profile = None
+    count, visits, campaign = _stage_contract(stage, profile)
     successor_sha256 = configuration.get("class_study_successor_sha256")
     if successor_sha256 is not None:
         if (
@@ -287,7 +304,7 @@ def validate_class_fitting_result(
         ):
             raise ValueError("class-study fitting successor authority is not sealed")
         campaign = f"{study_id}-authoritative-fitting-2000-1200"
-    elif study_id != STUDY_ID:
+    elif study_id not in {STUDY_ID, CLASS20_STUDY_ID}:
         raise ValueError("class-study fitting has an unbound alternate study identity")
     if (
         experiment.get("name") != campaign
@@ -309,7 +326,7 @@ def validate_class_fitting_result(
 
     frozen_receipt_path = verified.root / "inputs/class-study-cohort.json"
     frozen_receipt = _load_regular_json(frozen_receipt_path, "frozen class-study cohort")
-    selection = validate_study_receipt(frozen_receipt)
+    selection = validate_study_receipt(frozen_receipt) if profile is None else None
     cohort_sha256 = sha256_file(frozen_receipt_path)
     if configuration.get("class_study_cohort_sha256") != cohort_sha256:
         raise ValueError("class-study fitting cohort hash differs from its frozen input")
@@ -318,7 +335,15 @@ def validate_class_fitting_result(
         frozen_assembly_path,
         "frozen class-study cohort assembly",
     )
-    validate_cohort_assembly_receipt(frozen_assembly, cohort=frozen_receipt)
+    if profile is None:
+        validate_cohort_assembly_receipt(frozen_assembly, cohort=frozen_receipt)
+    else:
+        from .class_cohort20 import validate_profile_cohort_assembly_receipt
+
+        validate_profile_cohort_assembly_receipt(
+            frozen_assembly, cohort=frozen_receipt, profile=profile,
+            require_deep=False,
+        )
     assembly_sha256 = sha256_file(frozen_assembly_path)
     if configuration.get("class_study_cohort_assembly_sha256") != assembly_sha256:
         raise ValueError("class-study fitting cohort-assembly hash differs from its frozen input")
@@ -326,7 +351,8 @@ def validate_class_fitting_result(
         expected_path = _regular_file(expected_cohort_receipt_path, "expected cohort receipt")
         if sha256_file(expected_path) != cohort_sha256:
             raise ValueError("class-study fitting uses an unexpected cohort receipt")
-        validate_study_receipt(load_json(expected_path))
+        if profile is None:
+            validate_study_receipt(load_json(expected_path))
     if expected_cohort_assembly_receipt_path is not None:
         expected_assembly_path = _regular_file(
             expected_cohort_assembly_receipt_path,
@@ -334,12 +360,25 @@ def validate_class_fitting_result(
         )
         if sha256_file(expected_assembly_path) != assembly_sha256:
             raise ValueError("class-study fitting uses an unexpected cohort-assembly receipt")
-        validate_cohort_assembly_receipt(
-            load_json(expected_assembly_path),
-            cohort=frozen_receipt,
+        if profile is None:
+            validate_cohort_assembly_receipt(
+                load_json(expected_assembly_path), cohort=frozen_receipt,
+            )
+        else:
+            validate_profile_cohort_assembly_receipt(
+                load_json(expected_assembly_path), cohort=frozen_receipt, profile=profile,
+            )
+    if profile is None:
+        assert selection is not None
+        selected = selection.pilot if stage == PILOT_STAGE else selection.final
+        cohort_ids = tuple(candidate.candidate_id for candidate in selected)
+    else:
+        from .class_cohort20 import validate_profile_cohort_receipt
+
+        pilot_ids, final_ids = validate_profile_cohort_receipt(
+            frozen_receipt, profile=profile, require_deep=False,
         )
-    selected = selection.pilot if stage == PILOT_STAGE else selection.final
-    cohort_ids = tuple(candidate.candidate_id for candidate in selected)
+        cohort_ids = pilot_ids if stage == PILOT_STAGE else final_ids
     if len(cohort_ids) != count:
         raise ValueError("class-study fitting cohort cardinality is invalid")
 
@@ -348,10 +387,12 @@ def validate_class_fitting_result(
         raise ValueError("class-study fitting workload inventory has the wrong cardinality")
     workload_ids: list[str] = []
     run_bindings: dict[str, ClassSampleRunBinding] = {}
-    admitted_hashes = cohort_workload_hashes(
-        frozen_assembly,
-        cohort=frozen_receipt,
-        workload_ids=cohort_ids,
+    admitted_hashes = (
+        cohort_workload_hashes(
+            frozen_assembly, cohort=frozen_receipt, workload_ids=cohort_ids,
+        )
+        if profile is None
+        else _profile_cohort_workload_hashes(frozen_assembly, cohort_ids)
     )
     for expected_id, raw_record in zip(cohort_ids, workload_records, strict=True):
         if not isinstance(raw_record, Mapping):
@@ -457,6 +498,7 @@ def validate_class_fitting_result(
         cohort_assembly_receipt=dict(frozen_assembly),
         cohort_assembly_receipt_sha256=assembly_sha256,
         source_result=source_result,
+        study_profile=profile,
     )
 
 
@@ -465,6 +507,7 @@ def create_numeric_fitting_bundle(
     *,
     artifacts_root: Path,
     stage: str,
+    study_profile: ClassStudyProfile | None = None,
     expected_cohort_receipt_path: Path | None = None,
     expected_cohort_assembly_receipt_path: Path | None = None,
     fitting_inputs_loader: Callable[..., ClassFittingInputs] = validate_class_fitting_result,
@@ -480,36 +523,31 @@ def create_numeric_fitting_bundle(
         expected_cohort_assembly_receipt_path=expected_cohort_assembly_receipt_path,
     )
     _validate_injected_inputs(fitting, stage)
-    traffic, traffic_receipt = fitters.traffic_morphing(fitting.as_defined)
-    ordered_as_defined = tuple(
-        trace for workload_id in fitting.workload_ids for trace in fitting.as_defined[workload_id]
-    )
-    wtf, wtf_receipt = fitters.wtf_pad(
-        ordered_as_defined,
-        fitted_from=_consumed_corpus_digest(fitting.as_defined, fitting.workload_ids),
-    )
-    walkie, walkie_receipt = fitters.walkie_talkie(fitting.half_duplex)
-    artifacts = {
-        "traffic_morphing": traffic,
-        "wtf_pad": wtf,
-        "walkie_talkie": walkie,
-    }
-    diagnostics = {
-        "traffic_morphing": traffic_receipt,
-        "wtf_pad": wtf_receipt,
-        "walkie_talkie": walkie_receipt,
-    }
+    if study_profile is not None and fitting.study_profile != _checked_profile(study_profile):
+        raise ValueError("fitting input loader returned another study profile")
+    fitted = _run_fitters(fitting, fitters)
+    artifacts = {kind: parameter for kind, (parameter, _receipt) in fitted.items()}
+    diagnostics = {kind: receipt for kind, (_parameter, receipt) in fitted.items()}
     _validate_numeric_parameters(artifacts, fitting.workload_ids)
-    _validate_selected_optima(diagnostics, fitting.workload_ids)
+    _validate_selected_optima(
+        diagnostics, fitting.workload_ids,
+        fixed_pairs=_profile_final_matching(fitting.cohort_receipt, stage, fitting.study_profile),
+    )
     _validate_artifact_algorithm_bindings(
         artifacts,
         diagnostics,
         _sample_contributions(fitting),
         fitting.workload_ids,
     )
+    _validate_profile_final_pairing(
+        artifacts["walkie_talkie"],
+        cohort_receipt=fitting.cohort_receipt,
+        stage=stage,
+        profile=fitting.study_profile,
+    )
 
     parent = _regular_directory(artifacts_root, "class fitting artifact root")
-    destination = parent / _numeric_directory(stage)
+    destination = parent / _numeric_directory(stage, fitting.study_profile)
     candidate = Path(tempfile.mkdtemp(prefix=f".{destination.name}.qcsd-tmp-", dir=parent))
     try:
         for kind, filename in BUNDLE_FILES.items():
@@ -537,20 +575,32 @@ def verify_numeric_fitting_bundle(
     root = _bundle_root(root, NUMERIC_FILES, "numeric fitting bundle")
     provenance = _verify_numeric_files(root)
     stage = _stage(provenance["stage"])
+    profile = _provenance_profile(provenance)
     hashes = _verify_artifact_hashes(root, provenance)
     workload_ids = tuple(provenance["fitting_contract"]["workload_order"])
     artifacts = {kind: load_json(root / filename) for kind, filename in BUNDLE_FILES.items()}
     _validate_numeric_parameters(artifacts, workload_ids)
-    _validate_selected_optima(provenance["algorithms"], workload_ids)
+    _validate_selected_optima(
+        provenance["algorithms"], workload_ids,
+        fixed_pairs=_profile_final_matching(provenance["cohort"]["receipt"], stage, profile),
+    )
     _validate_artifact_algorithm_bindings(
         artifacts,
         provenance["algorithms"],
         provenance["sample_contributions"],
         workload_ids,
     )
+    _validate_profile_final_pairing(
+        artifacts["walkie_talkie"],
+        cohort_receipt=provenance["cohort"]["receipt"],
+        stage=stage,
+        profile=profile,
+    )
     if source_result_root is not None:
         fitting = fitting_inputs_loader(source_result_root, expected_stage=stage)
         _validate_injected_inputs(fitting, stage)
+        if fitting.study_profile != profile:
+            raise ValueError("numeric bundle differs from the sealed study profile")
         _require_embedded_fitting_identity(provenance, fitting)
         recomputed = _run_fitters(fitting, fitters)
         for kind, (parameter, receipt) in recomputed.items():
@@ -855,7 +905,9 @@ def derive_schema_six_prefix_specs(
     )
     workloads = _regular_directory(workload_root, "class-study workload root")
     parent = _regular_directory(artifacts_root, "class fitting artifact root")
-    destination = parent / _prefix_directory(verified.stage)
+    destination = parent / _prefix_directory(
+        verified.stage, _provenance_profile(verified.provenance)
+    )
     candidate = Path(tempfile.mkdtemp(prefix=f".{destination.name}.qcsd-tmp-", dir=parent))
     walkie_path = verified.root / BUNDLE_FILES["walkie_talkie"]
     walkie = load_json(walkie_path)
@@ -902,12 +954,14 @@ def finalize_fitting_bundle(
     qualification, bindings = _verify_qualification(
         qualification_manifest_path,
         stage=numeric.stage,
+        profile=_provenance_profile(numeric.provenance),
         workload_ids=tuple(numeric.provenance["fitting_contract"]["workload_order"]),
         walkie_talkie_path=numeric.root / BUNDLE_FILES["walkie_talkie"],
         context=context,
     )
     parent = _regular_directory(artifacts_root, "class fitting artifact root")
-    destination = parent / _final_directory(numeric.stage)
+    profile = _provenance_profile(numeric.provenance)
+    destination = parent / _final_directory(numeric.stage, profile)
     candidate = Path(tempfile.mkdtemp(prefix=f".{destination.name}.qcsd-tmp-", dir=parent))
     try:
         for kind in ("traffic_morphing", "wtf_pad"):
@@ -943,6 +997,7 @@ def verify_class_fitting_bundle(
     root = _bundle_root(root, FINAL_FILES, "class-study fitting bundle")
     provenance = _load_regular_json(root / PROVENANCE_FILE, "fitting provenance")
     stage = _validate_final_provenance(provenance)
+    profile = _provenance_profile(provenance)
     hashes = _verify_artifact_hashes(root, provenance)
     workload_ids = tuple(provenance["fitting_contract"]["workload_order"])
     artifacts = {kind: load_json(root / filename) for kind, filename in BUNDLE_FILES.items()}
@@ -953,12 +1008,21 @@ def verify_class_fitting_bundle(
     numeric_artifacts["walkie_talkie"].pop("qualification_bindings")
     _validate_numeric_parameters(numeric_artifacts, workload_ids)
     _validate_runtime_bindings(bindings, workload_ids)
-    _validate_selected_optima(provenance["algorithms"], workload_ids)
+    _validate_selected_optima(
+        provenance["algorithms"], workload_ids,
+        fixed_pairs=_profile_final_matching(provenance["cohort"]["receipt"], stage, profile),
+    )
     _validate_artifact_algorithm_bindings(
         numeric_artifacts,
         provenance["algorithms"],
         provenance["sample_contributions"],
         workload_ids,
+    )
+    _validate_profile_final_pairing(
+        numeric_artifacts["walkie_talkie"],
+        cohort_receipt=provenance["cohort"]["receipt"],
+        stage=stage,
+        profile=profile,
     )
 
     context = _normalise_qualification_context(qualification_context)
@@ -969,6 +1033,7 @@ def verify_class_fitting_bundle(
     qualification, observed_bindings = _verify_qualification(
         manifest_path,
         stage=stage,
+        profile=profile,
         workload_ids=workload_ids,
         walkie_talkie_path=root / BUNDLE_FILES["walkie_talkie"],
         context=context,
@@ -986,6 +1051,8 @@ def verify_class_fitting_bundle(
     if source_result_root is not None:
         fitting = fitting_inputs_loader(source_result_root, expected_stage=stage)
         _validate_injected_inputs(fitting, stage)
+        if fitting.study_profile != profile:
+            raise ValueError("final bundle differs from the sealed study profile")
         _require_embedded_fitting_identity(provenance, fitting)
         recomputed = _run_fitters(fitting, fitters)
         for kind, (parameter, receipt) in recomputed.items():
@@ -1002,7 +1069,7 @@ def verify_class_fitting_bundle(
         provenance=provenance,
         artifact_hashes=hashes,
         stage=stage,
-        parameter_input_policy=_parameter_policy(stage),
+        parameter_input_policy=_parameter_policy(stage, profile),
     )
 
 
@@ -1014,6 +1081,10 @@ def is_class_fitting_artifact_candidate(path: Path) -> bool:
         AUTHORITATIVE_NUMERIC_DIRECTORY,
         PILOT_BUNDLE_DIRECTORY,
         AUTHORITATIVE_BUNDLE_DIRECTORY,
+        f"{CLASS20_STUDY_ID}-pilot-fitting-numeric",
+        f"{CLASS20_STUDY_ID}-authoritative-fitting-numeric",
+        f"{CLASS20_STUDY_ID}-pilot-fitting",
+        f"{CLASS20_STUDY_ID}-authoritative-fitting",
     }:
         return True
     if not path.is_dir():
@@ -1076,6 +1147,7 @@ def class_research_parameter_record(
     expected_workloads: Sequence[str],
     campaign_evidence_role: str,
     qualification_context: QualificationContext,
+    expected_study_profile: ClassStudyProfile | None = None,
     expected_successor_study_id: str | None = None,
     expected_successor_restart_sha256: str | None = None,
 ) -> tuple[str, str, str]:
@@ -1093,6 +1165,8 @@ def class_research_parameter_record(
         parameter.parent,
         qualification_context=qualification_context,
     )
+    if _provenance_profile(verified.provenance) != _checked_profile(expected_study_profile):
+        raise ValueError("class fitting parameter uses another study profile")
     if (expected_successor_study_id is None) != (expected_successor_restart_sha256 is None):
         raise ValueError("successor fitting identity requires both study and restart")
     if expected_successor_study_id is not None:
@@ -1142,8 +1216,65 @@ def _run_fitters(
             ordered,
             fitted_from=_consumed_corpus_digest(fitting.as_defined, fitting.workload_ids),
         ),
-        "walkie_talkie": fitters.walkie_talkie(fitting.half_duplex),
+        "walkie_talkie": _fit_profile_walkie_talkie(fitting, fitters),
     }
+
+
+def _profile_final_matching(
+    cohort_receipt: Mapping[str, Any],
+    stage: str,
+    profile: ClassStudyProfile | None,
+) -> tuple[tuple[str, str], ...] | None:
+    """Return the selected undirected final pairs in canonical lexical order."""
+
+    profile = _checked_profile(profile)
+    if profile is None or stage == PILOT_STAGE:
+        return None
+    if stage != AUTHORITATIVE_STAGE:
+        raise ValueError("20-site final Walkie-Talkie has an invalid fitting stage")
+    from .class_cohort20 import COHORT_RECEIPT_TYPE, validate_profile_cohort_receipt
+
+    _pilot_ids, final_ids = validate_profile_cohort_receipt(
+        cohort_receipt, profile=profile, require_deep=False,
+    )
+    payload = validate_hash_bound_receipt(
+        cohort_receipt, expected_type=COHORT_RECEIPT_TYPE,
+    )
+    raw_pairs = payload.get("matching")
+    if not isinstance(raw_pairs, list) or len(raw_pairs) != profile.final_count // 2:
+        raise ValueError("20-site final Walkie-Talkie matching is incomplete")
+    pairs: list[tuple[str, str]] = []
+    for raw in raw_pairs:
+        if (
+            not isinstance(raw, list) or len(raw) != 2
+            or not all(isinstance(name, str) for name in raw)
+            or raw[0] == raw[1]
+        ):
+            raise ValueError("20-site final Walkie-Talkie matching has an invalid pair")
+        pairs.append(tuple(sorted(raw)))
+    if (
+        len(final_ids) != profile.final_count
+        or len(set(pairs)) != len(pairs)
+        or sorted(name for pair in pairs for name in pair) != sorted(final_ids)
+    ):
+        raise ValueError("20-site final Walkie-Talkie matching differs from final sites")
+    return tuple(sorted(pairs))
+
+
+def _fit_profile_walkie_talkie(
+    fitting: ClassFittingInputs,
+    fitters: ClassFitters,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Fit final-trace moulds while keeping the qualified pilot pairs fixed."""
+
+    fixed_pairs = _profile_final_matching(
+        fitting.cohort_receipt, fitting.stage, fitting.study_profile,
+    )
+    if fixed_pairs is None:
+        return fitters.walkie_talkie(fitting.half_duplex)
+    return fitters.walkie_talkie(
+        fitting.half_duplex, feasible_pairs=fixed_pairs,
+    )
 
 
 def _numeric_provenance(
@@ -1151,13 +1282,16 @@ def _numeric_provenance(
     algorithms: Mapping[str, object],
     artifact_hashes: Mapping[str, str],
 ) -> dict[str, Any]:
-    return {
-        "schema_version": SCHEMA_VERSION,
+    profile = _checked_profile(fitting.study_profile)
+    result = {
+        "schema_version": (
+            PROFILE_NUMERIC_PROVENANCE_SCHEMA_VERSION if profile is not None else SCHEMA_VERSION
+        ),
         "artifact_type": NUMERIC_ARTIFACT_TYPE,
         "status": "numeric-staging-only",
         "runtime_authorized": False,
         "stage": fitting.stage,
-        "bundle_name": _numeric_directory(fitting.stage),
+        "bundle_name": _numeric_directory(fitting.stage, profile),
         "qcsd_profile": "research-1200",
         "udp_payload_ceiling": 1_200,
         "parameter_input_policy": None,
@@ -1179,6 +1313,9 @@ def _numeric_provenance(
         "algorithms": dict(algorithms),
         "artifacts": _artifact_receipts(artifact_hashes),
     }
+    if profile is not None:
+        result.update(study_id=profile.study_id, study_profile_sha256=_profile_sha256(profile))
+    return result
 
 
 def _final_provenance(
@@ -1188,16 +1325,20 @@ def _final_provenance(
     artifact_hashes: Mapping[str, str],
 ) -> dict[str, Any]:
     stage = _stage(numeric["stage"])
-    return {
-        "schema_version": FINAL_PROVENANCE_SCHEMA_VERSION,
+    profile = _provenance_profile(numeric)
+    result = {
+        "schema_version": (
+            PROFILE_FINAL_PROVENANCE_SCHEMA_VERSION
+            if profile is not None else FINAL_PROVENANCE_SCHEMA_VERSION
+        ),
         "artifact_type": FINAL_ARTIFACT_TYPE,
         "status": ("pilot-test-only" if stage == PILOT_STAGE else "authoritative-fitted-artifact"),
         "runtime_authorized": stage == AUTHORITATIVE_STAGE,
         "stage": stage,
-        "bundle_name": _final_directory(stage),
+        "bundle_name": _final_directory(stage, profile),
         "qcsd_profile": "research-1200",
         "udp_payload_ceiling": 1_200,
-        "parameter_input_policy": _parameter_policy(stage),
+        "parameter_input_policy": _parameter_policy(stage, profile),
         "source_result": numeric["source_result"],
         "cohort": numeric["cohort"],
         "fitting_contract": numeric["fitting_contract"],
@@ -1206,10 +1347,27 @@ def _final_provenance(
         "algorithms": numeric["algorithms"],
         "artifacts": _artifact_receipts(artifact_hashes),
     }
+    if profile is not None:
+        result.update(study_id=profile.study_id, study_profile_sha256=_profile_sha256(profile))
+    return result
+
+
+def _provenance_profile(value: Mapping[str, Any]) -> ClassStudyProfile | None:
+    study_id = value.get("study_id")
+    if study_id is None:
+        if "study_profile_sha256" in value:
+            raise ValueError("class fitting provenance profile binding is incomplete")
+        return None
+    profile = _checked_profile(CLASS20_PROFILE)
+    assert profile is not None
+    if study_id != profile.study_id or value.get("study_profile_sha256") != _profile_sha256(profile):
+        raise ValueError("class fitting provenance uses another study profile")
+    return profile
 
 
 def _verify_numeric_files(root: Path) -> dict[str, Any]:
     provenance = _load_regular_json(root / NUMERIC_PROVENANCE_FILE, "numeric provenance")
+    profile = _provenance_profile(provenance)
     expected = {
         "schema_version",
         "artifact_type",
@@ -1228,15 +1386,19 @@ def _verify_numeric_files(root: Path) -> dict[str, Any]:
         "algorithms",
         "artifacts",
     }
-    if set(provenance) != expected:
+    if set(provenance) != (
+        expected | {"study_id", "study_profile_sha256"} if profile is not None else expected
+    ):
         raise ValueError("numeric fitting provenance has an invalid exact schema")
     stage = _stage(provenance["stage"])
     if (
-        provenance["schema_version"] != SCHEMA_VERSION
+        provenance["schema_version"] != (
+            PROFILE_NUMERIC_PROVENANCE_SCHEMA_VERSION if profile is not None else SCHEMA_VERSION
+        )
         or provenance["artifact_type"] != NUMERIC_ARTIFACT_TYPE
         or provenance["status"] != "numeric-staging-only"
         or provenance["runtime_authorized"] is not False
-        or provenance["bundle_name"] != _numeric_directory(stage)
+        or provenance["bundle_name"] != _numeric_directory(stage, profile)
         or provenance["qcsd_profile"] != "research-1200"
         or provenance["udp_payload_ceiling"] != 1_200
         or provenance["parameter_input_policy"] is not None
@@ -1248,12 +1410,13 @@ def _verify_numeric_files(root: Path) -> dict[str, Any]:
         }
     ):
         raise ValueError("numeric fitting provenance makes an invalid authority claim")
-    _validate_common_provenance(provenance, stage)
+    _validate_common_provenance(provenance, stage, profile)
     _verify_artifact_hashes(root, provenance)
     return provenance
 
 
 def _validate_final_provenance(provenance: Mapping[str, Any]) -> str:
+    profile = _provenance_profile(provenance)
     expected = {
         "schema_version",
         "artifact_type",
@@ -1272,7 +1435,9 @@ def _validate_final_provenance(provenance: Mapping[str, Any]) -> str:
         "algorithms",
         "artifacts",
     }
-    if set(provenance) != expected:
+    if set(provenance) != (
+        expected | {"study_id", "study_profile_sha256"} if profile is not None else expected
+    ):
         raise ValueError("final fitting provenance has an invalid exact schema")
     final_schema_version = provenance.get("schema_version")
     if type(final_schema_version) is int and final_schema_version == 1:
@@ -1281,7 +1446,10 @@ def _validate_final_provenance(provenance: Mapping[str, Any]) -> str:
         )
     if (
         type(final_schema_version) is not int
-        or final_schema_version != FINAL_PROVENANCE_SCHEMA_VERSION
+        or final_schema_version != (
+            PROFILE_FINAL_PROVENANCE_SCHEMA_VERSION
+            if profile is not None else FINAL_PROVENANCE_SCHEMA_VERSION
+        )
     ):
         raise ValueError("final fitting provenance schema version is invalid")
     stage = _stage(provenance["stage"])
@@ -1290,13 +1458,13 @@ def _validate_final_provenance(provenance: Mapping[str, Any]) -> str:
         or provenance["status"]
         != ("pilot-test-only" if stage == PILOT_STAGE else "authoritative-fitted-artifact")
         or provenance["runtime_authorized"] is not (stage == AUTHORITATIVE_STAGE)
-        or provenance["bundle_name"] != _final_directory(stage)
+        or provenance["bundle_name"] != _final_directory(stage, profile)
         or provenance["qcsd_profile"] != "research-1200"
         or provenance["udp_payload_ceiling"] != 1_200
-        or provenance["parameter_input_policy"] != _parameter_policy(stage)
+        or provenance["parameter_input_policy"] != _parameter_policy(stage, profile)
     ):
         raise ValueError("final fitting provenance authority binding is invalid")
-    _validate_common_provenance(provenance, stage)
+    _validate_common_provenance(provenance, stage, profile)
     qualification = provenance["qualification_inputs"]
     if not isinstance(qualification, Mapping):
         raise TypeError("final fitting provenance has no qualification receipt")
@@ -1312,8 +1480,10 @@ def _validate_final_provenance(provenance: Mapping[str, Any]) -> str:
     return stage
 
 
-def _validate_common_provenance(provenance: Mapping[str, Any], stage: str) -> None:
-    _validate_source_result(provenance.get("source_result"), stage)
+def _validate_common_provenance(
+    provenance: Mapping[str, Any], stage: str, profile: ClassStudyProfile | None = None
+) -> None:
+    _validate_source_result(provenance.get("source_result"), stage, profile)
     cohort = provenance.get("cohort")
     if not isinstance(cohort, Mapping) or set(cohort) != {
         "role",
@@ -1332,40 +1502,63 @@ def _validate_common_provenance(provenance: Mapping[str, Any], stage: str) -> No
     receipt = cohort.get("receipt")
     if not isinstance(receipt, Mapping):
         raise TypeError("class fitting cohort receipt is missing")
-    selection = validate_study_receipt(receipt)
+    selection = validate_study_receipt(receipt) if profile is None else None
     if sha256_bytes(canonical_json_bytes(receipt)) != cohort["receipt_sha256"]:
         raise ValueError("embedded class fitting cohort hash is invalid")
     assembly = cohort.get("assembly_receipt")
     if not isinstance(assembly, Mapping):
         raise TypeError("class fitting cohort-assembly receipt is missing")
-    validate_cohort_assembly_receipt(assembly, cohort=receipt)
+    if profile is None:
+        validate_cohort_assembly_receipt(assembly, cohort=receipt)
+    else:
+        from .class_cohort20 import (
+            validate_profile_cohort_assembly_receipt,
+            validate_profile_cohort_receipt,
+        )
+
+        validate_profile_cohort_assembly_receipt(
+            assembly, cohort=receipt, profile=profile, require_deep=False,
+        )
     if sha256_bytes(canonical_json_bytes(assembly)) != cohort["assembly_receipt_sha256"]:
         raise ValueError("embedded class fitting cohort-assembly hash is invalid")
-    expected_ids = tuple(
-        item.candidate_id for item in (selection.pilot if stage == PILOT_STAGE else selection.final)
-    )
+    if profile is None:
+        assert selection is not None
+        expected_ids = tuple(
+            item.candidate_id
+            for item in (selection.pilot if stage == PILOT_STAGE else selection.final)
+        )
+    else:
+        pilot_ids, final_ids = validate_profile_cohort_receipt(
+            receipt, profile=profile, require_deep=False,
+        )
+        expected_ids = pilot_ids if stage == PILOT_STAGE else final_ids
     contract = provenance.get("fitting_contract")
-    if not isinstance(contract, Mapping) or contract != _contract_from_values(stage, expected_ids):
+    if not isinstance(contract, Mapping) or contract != _contract_from_values(
+        stage, expected_ids, profile
+    ):
         raise ValueError("class fitting contract differs from the cohort contract")
     contributions = provenance.get("sample_contributions")
-    _validate_sample_contributions(contributions, stage, expected_ids)
+    _validate_sample_contributions(contributions, stage, expected_ids, profile)
     algorithms = provenance.get("algorithms")
     if not isinstance(algorithms, Mapping) or set(algorithms) != set(BUNDLE_FILES):
         raise ValueError("class fitting algorithm receipts are incomplete")
 
 
 def _fitting_contract(fitting: ClassFittingInputs) -> dict[str, Any]:
-    return _contract_from_values(fitting.stage, fitting.workload_ids)
+    return _contract_from_values(fitting.stage, fitting.workload_ids, fitting.study_profile)
 
 
-def _contract_from_values(stage: str, workload_ids: Sequence[str]) -> dict[str, Any]:
-    count, visits, _campaign = _stage_contract(stage)
+def _contract_from_values(
+    stage: str, workload_ids: Sequence[str], profile: ClassStudyProfile | None = None
+) -> dict[str, Any]:
+    profile = _checked_profile(profile)
+    count, visits, _campaign = _stage_contract(stage, profile)
     if len(workload_ids) != count:
         raise ValueError("class fitting workload count differs from its stage")
-    return {
+    result = {
         "contract_version": SCHEMA_VERSION,
         "fitter_version": FITTER_VERSION,
-        "study_id": STUDY_ID,
+        "study_id": profile.study_id if profile is not None else STUDY_ID,
         "stage": stage,
         "profile": "research-1200",
         "request_policies": ["as-defined", "half-duplex"],
@@ -1381,6 +1574,9 @@ def _contract_from_values(stage: str, workload_ids: Sequence[str]) -> dict[str, 
         "qualification_bytes_excluded": True,
         "prefix_specification_bytes_excluded": True,
     }
+    if profile is not None:
+        result["study_profile_sha256"] = _profile_sha256(profile)
+    return result
 
 
 def _sample_contributions(fitting: ClassFittingInputs) -> list[dict[str, Any]]:
@@ -1408,8 +1604,9 @@ def _validate_sample_contributions(
     value: object,
     stage: str,
     workload_ids: Sequence[str],
+    profile: ClassStudyProfile | None = None,
 ) -> None:
-    _count, visits, _campaign = _stage_contract(stage)
+    _count, visits, _campaign = _stage_contract(stage, profile)
     if not isinstance(value, list) or len(value) != len(workload_ids):
         raise ValueError("class fitting sample contributions have the wrong count")
     training_hashes: set[str] = set()
@@ -1487,7 +1684,64 @@ def _validate_numeric_parameters(
         raise ValueError("WTF-PAD runtime parameter adaptation binding is invalid")
 
 
-def _validate_selected_optima(value: object, workload_ids: Sequence[str]) -> None:
+def _validate_profile_final_pairing(
+    walkie_talkie: Mapping[str, Any],
+    *,
+    cohort_receipt: Mapping[str, Any],
+    stage: str,
+    profile: ClassStudyProfile | None,
+) -> None:
+    """Keep the final numeric WT6 pairing bound to the screened pilot pairs."""
+
+    profile = _checked_profile(profile)
+    if profile is None or stage == PILOT_STAGE:
+        return
+    if stage != AUTHORITATIVE_STAGE:
+        raise ValueError("20-site final Walkie-Talkie has an invalid fitting stage")
+    from .class_cohort20 import COHORT_RECEIPT_TYPE, validate_profile_cohort_receipt
+
+    _pilot_ids, final_ids = validate_profile_cohort_receipt(
+        cohort_receipt, profile=profile, require_deep=False,
+    )
+    payload = validate_hash_bound_receipt(
+        cohort_receipt, expected_type=COHORT_RECEIPT_TYPE,
+    )
+    selected_pairs = payload.get("matching")
+    fitted_pairs = walkie_talkie.get("profiles")
+    if (
+        len(final_ids) != profile.final_count
+        or not isinstance(selected_pairs, list)
+        or len(selected_pairs) != profile.final_count // 2
+        or not isinstance(fitted_pairs, list)
+        or len(fitted_pairs) != profile.final_count // 2
+    ):
+        raise ValueError("20-site final Walkie-Talkie matching is incomplete")
+    expected = {
+        frozenset(pair)
+        for pair in selected_pairs
+        if isinstance(pair, list) and len(pair) == 2
+    }
+    observed = {
+        frozenset((row.get("real"), row.get("decoy")))
+        for row in fitted_pairs
+        if isinstance(row, Mapping)
+    }
+    if (
+        len(expected) != len(selected_pairs)
+        or len(observed) != len(fitted_pairs)
+        or expected != observed
+    ):
+        raise ValueError(
+            "20-site final Walkie-Talkie matching differs from the ten qualified selected pairs"
+        )
+
+
+def _validate_selected_optima(
+    value: object,
+    workload_ids: Sequence[str],
+    *,
+    fixed_pairs: tuple[tuple[str, str], ...] | None = None,
+) -> None:
     if not isinstance(value, Mapping):
         raise TypeError("class fitting algorithm receipt must be an object")
     morphing = value.get("traffic_morphing")
@@ -1555,7 +1809,14 @@ def _validate_selected_optima(value: object, workload_ids: Sequence[str]) -> Non
         if pair in pair_costs or type(cost) is not int or cost < 0:
             raise ValueError("Walkie-Talkie candidate-pair cost is invalid")
         pair_costs[pair] = cost
-    optimum_pairs = minimum_weight_perfect_matching_from_costs(workload_ids, pair_costs)
+    if fixed_pairs is not None and (
+        walkie.get("algorithm") != PROFILE_FIXED_PAIR_ALGORITHM
+        or walkie.get("pairing_objective") != PROFILE_FIXED_PAIR_OBJECTIVE
+    ):
+        raise ValueError("20-site final Walkie-Talkie receipt omits its fixed-pair constraint")
+    optimum_pairs = minimum_weight_perfect_matching_from_costs(
+        workload_ids, pair_costs, feasible_pairs=fixed_pairs,
+    )
     if not isinstance(selected_pairs_raw, list) or len(selected_pairs_raw) != (
         len(workload_ids) // 2
     ):
@@ -1581,7 +1842,8 @@ def _validate_selected_optima(value: object, workload_ids: Sequence[str]) -> Non
         observed_pairs_list.append((row["real"], row["decoy"], row["base_matching_cost_packets"]))
     observed_pairs = tuple(observed_pairs_list)
     if observed_pairs != optimum_pairs:
-        raise ValueError("Walkie-Talkie selected pairs are not the exact scalable optimum")
+        qualifier = "constrained" if fixed_pairs is not None else "scalable"
+        raise ValueError(f"Walkie-Talkie selected pairs are not the exact {qualifier} optimum")
 
 
 def _validate_artifact_algorithm_bindings(
@@ -1627,6 +1889,7 @@ def _verify_qualification(
     manifest_path: Path,
     *,
     stage: str,
+    profile: ClassStudyProfile | None = None,
     workload_ids: tuple[str, ...],
     walkie_talkie_path: Path,
     context: QualificationContext,
@@ -1635,9 +1898,20 @@ def _verify_qualification(
     manifest = load_json(manifest_path)
     if not isinstance(manifest, Mapping) or set(manifest) != _NAMED_SET_KEYS:
         raise ValueError("named qualification-set manifest has an invalid exact schema")
-    expected_set = context.expected_qualification_set or (
-        PILOT_QUALIFICATION_SET if stage == PILOT_STAGE else AUTHORITATIVE_QUALIFICATION_SET
-    )
+    if profile is not None:
+        profile = _checked_profile(profile)
+        assert profile is not None
+        expected_set = (
+            f"{profile.study_id}-pilot{profile.pilot_count}-full-v1"
+            if stage == PILOT_STAGE
+            else f"{profile.study_id}-final{profile.final_count}-full-v1"
+        )
+        if context.expected_qualification_set not in {None, expected_set}:
+            raise ValueError("qualification set belongs to another study profile")
+    else:
+        expected_set = context.expected_qualification_set or (
+            PILOT_QUALIFICATION_SET if stage == PILOT_STAGE else AUTHORITATIVE_QUALIFICATION_SET
+        )
     if (
         manifest.get("schema_version") != NAMED_QUALIFICATION_SET_SCHEMA_VERSION
         or manifest.get("artifact_type") != "qcsd-named-chaff-qualification-set"
@@ -1845,10 +2119,45 @@ def _source_result_receipt(verified: VerifiedResult) -> dict[str, Any]:
             study_id=configuration.get("class_study_id"),
             class_study_successor_sha256=successor_sha256,
         )
+    if configuration.get("class_study_id") == CLASS20_STUDY_ID:
+        profile = _checked_profile(CLASS20_PROFILE)
+        assert profile is not None
+        profile_hash = _profile_sha256(profile)
+        if configuration.get("class_study_profile_sha256") != profile_hash:
+            raise ValueError("20-site fitting source result has an unbound profile")
+        receipt.update(
+            study_id=profile.study_id,
+            class_study_profile_sha256=profile_hash,
+        )
     return receipt
 
 
-def _validate_source_result(value: object, stage: str) -> None:
+def _profile_cohort_workload_hashes(
+    assembly: Mapping[str, Any], workload_ids: Sequence[str]
+) -> dict[str, str]:
+    """Read admitted hashes only after the profile assembly was validated."""
+
+    payload = assembly.get("payload")
+    if not isinstance(payload, Mapping) or not isinstance(payload.get("candidates"), list):
+        raise ValueError("20-site fitting cohort assembly has no candidate inventory")
+    records = {
+        record.get("candidate_id"): record
+        for record in payload["candidates"]
+        if isinstance(record, Mapping)
+    }
+    result: dict[str, str] = {}
+    for workload_id in workload_ids:
+        record = records.get(workload_id)
+        prepared = record.get("prepared_workload") if isinstance(record, Mapping) else None
+        if not isinstance(prepared, Mapping) or not _digest(prepared.get("sha256")):
+            raise ValueError(f"20-site assembly has no admitted workload hash for {workload_id}")
+        result[workload_id] = str(prepared["sha256"])
+    return result
+
+
+def _validate_source_result(
+    value: object, stage: str, profile: ClassStudyProfile | None = None
+) -> None:
     expected_keys = {
         "campaign",
         "evidence_sha256",
@@ -1857,7 +2166,8 @@ def _validate_source_result(value: object, stage: str) -> None:
         "campaign_sha256",
         "source_fingerprints",
     }
-    _count, _visits, campaign = _stage_contract(stage)
+    profile = _checked_profile(profile)
+    _count, _visits, campaign = _stage_contract(stage, profile)
     if not isinstance(value, Mapping):
         raise ValueError("class fitting source-result receipt has an invalid schema")
     successor_keys = {
@@ -1865,7 +2175,15 @@ def _validate_source_result(value: object, stage: str) -> None:
         "study_id",
         "class_study_successor_sha256",
     }
-    if set(value) == successor_keys:
+    profile_keys = {*expected_keys, "study_id", "class_study_profile_sha256"}
+    if profile is not None:
+        if (
+            set(value) != profile_keys
+            or value.get("study_id") != profile.study_id
+            or value.get("class_study_profile_sha256") != _profile_sha256(profile)
+        ):
+            raise ValueError("class fitting source-result profile identity is invalid")
+    elif set(value) == successor_keys:
         study_id = value.get("study_id")
         successor_sha256 = value.get("class_study_successor_sha256")
         if (
@@ -1909,7 +2227,8 @@ def _validate_clean_source(value: object) -> None:
 def _validate_injected_inputs(fitting: ClassFittingInputs, stage: str) -> None:
     if not isinstance(fitting, ClassFittingInputs) or fitting.stage != stage:
         raise ValueError("fitting input loader returned the wrong class-study stage")
-    count, visits, _campaign = _stage_contract(stage)
+    profile = _checked_profile(fitting.study_profile)
+    count, visits, _campaign = _stage_contract(stage, profile)
     if len(fitting.workload_ids) != count or fitting.visits_per_policy != visits:
         raise ValueError("fitting input loader returned the wrong cohort dimensions")
     if set(fitting.as_defined) != set(fitting.workload_ids) or set(fitting.half_duplex) != set(
@@ -1922,19 +2241,39 @@ def _validate_injected_inputs(fitting: ClassFittingInputs, stage: str) -> None:
         for workload_id in fitting.workload_ids
     ):
         raise ValueError("fitting input loader returned incomplete visits")
-    validate_study_receipt(fitting.cohort_receipt)
+    if profile is None:
+        validate_study_receipt(fitting.cohort_receipt)
+    else:
+        from .class_cohort20 import (
+            validate_profile_cohort_assembly_receipt,
+            validate_profile_cohort_receipt,
+        )
+
+        pilot_ids, final_ids = validate_profile_cohort_receipt(
+            fitting.cohort_receipt, profile=profile, require_deep=False,
+        )
+        selected_ids = pilot_ids if stage == PILOT_STAGE else final_ids
+        if selected_ids != fitting.workload_ids:
+            raise ValueError("fitting input loader returned a different profile cohort")
     if sha256_bytes(canonical_json_bytes(fitting.cohort_receipt)) != fitting.cohort_receipt_sha256:
         raise ValueError("fitting input loader returned a mismatched cohort receipt hash")
-    validate_cohort_assembly_receipt(
-        fitting.cohort_assembly_receipt,
-        cohort=fitting.cohort_receipt,
-    )
+    if profile is None:
+        validate_cohort_assembly_receipt(
+            fitting.cohort_assembly_receipt, cohort=fitting.cohort_receipt,
+        )
+    else:
+        validate_profile_cohort_assembly_receipt(
+            fitting.cohort_assembly_receipt,
+            cohort=fitting.cohort_receipt,
+            profile=profile,
+            require_deep=False,
+        )
     if (
         sha256_bytes(canonical_json_bytes(fitting.cohort_assembly_receipt))
         != fitting.cohort_assembly_receipt_sha256
     ):
         raise ValueError("fitting input loader returned a mismatched cohort-assembly hash")
-    _validate_source_result(fitting.source_result, stage)
+    _validate_source_result(fitting.source_result, stage, profile)
 
 
 def _require_embedded_fitting_identity(
@@ -2115,32 +2454,70 @@ def _stage(value: object) -> str:
     return value
 
 
-def _stage_contract(stage: str) -> tuple[int, int, str]:
+def _checked_profile(profile: ClassStudyProfile | None) -> ClassStudyProfile | None:
+    if profile is None:
+        return None
+    if profile != CLASS20_PROFILE or load_class20_profile_contract() != profile:
+        raise ValueError("class fitting requires the registered 20-site study profile")
+    return profile
+
+
+def _profile_sha256(profile: ClassStudyProfile) -> str:
+    _checked_profile(profile)
+    return sha256_file(
+        Path(__file__).resolve().parents[2] / "config/class-study/v2/study.json"
+    )
+
+
+def _stage_contract(
+    stage: str, profile: ClassStudyProfile | None = None
+) -> tuple[int, int, str]:
     stage = _stage(stage)
+    profile = _checked_profile(profile)
+    if profile is not None:
+        if stage == PILOT_STAGE:
+            return profile.pilot_count, 2, f"{profile.study_id}-pilot-fitting-120-1200"
+        return profile.final_count, 10, f"{profile.study_id}-authoritative-fitting-400-1200"
     if stage == PILOT_STAGE:
         return PILOT_COUNT, 2, f"{STUDY_ID}-pilot-fitting-1200"
     return FINAL_CLASS_COUNT, 10, f"{STUDY_ID}-authoritative-fitting-1200"
 
 
-def _numeric_directory(stage: str) -> str:
+def _numeric_directory(stage: str, profile: ClassStudyProfile | None = None) -> str:
+    profile = _checked_profile(profile)
+    if profile is not None:
+        return f"{profile.study_id}-{_stage(stage)}-fitting-numeric"
     return (
         PILOT_NUMERIC_DIRECTORY if _stage(stage) == PILOT_STAGE else AUTHORITATIVE_NUMERIC_DIRECTORY
     )
 
 
-def _final_directory(stage: str) -> str:
+def _final_directory(stage: str, profile: ClassStudyProfile | None = None) -> str:
+    profile = _checked_profile(profile)
+    if profile is not None:
+        return f"{profile.study_id}-{_stage(stage)}-fitting"
     return (
         PILOT_BUNDLE_DIRECTORY if _stage(stage) == PILOT_STAGE else AUTHORITATIVE_BUNDLE_DIRECTORY
     )
 
 
-def _prefix_directory(stage: str) -> str:
+def _prefix_directory(stage: str, profile: ClassStudyProfile | None = None) -> str:
+    profile = _checked_profile(profile)
+    if profile is not None:
+        return f"{profile.study_id}-{_stage(stage)}-fitting-prefix-specs"
     return (
         PILOT_PREFIX_DIRECTORY if _stage(stage) == PILOT_STAGE else AUTHORITATIVE_PREFIX_DIRECTORY
     )
 
 
-def _parameter_policy(stage: str) -> str:
+def _parameter_policy(stage: str, profile: ClassStudyProfile | None = None) -> str:
+    profile = _checked_profile(profile)
+    if profile is not None:
+        return (
+            "sealed-class-study20-pilot-fitting-v1"
+            if _stage(stage) == PILOT_STAGE
+            else "sealed-class-study20-fitting-v1"
+        )
     return (
         PILOT_PARAMETER_INPUT_POLICY
         if _stage(stage) == PILOT_STAGE

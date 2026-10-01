@@ -5836,6 +5836,7 @@ class_final_bundle_hosts=()
 class_guarded_rw_dirs=()
 class_direct_rw_dirs=()
 class_rw_files=()
+class_atomic_rw_files=()
 declare -A class_path_hosts=()
 
 class_host_path() {
@@ -6036,8 +6037,38 @@ if [[ "${1:-}" == "class-study" ]]; then
     echo "class-study requires python3 on the host for path validation" >&2
     exit 1
   }
+  class_requested_study_id=""
+  class_study_id_prescan_seen=0
+  for (( class_scan_index=3; class_scan_index<=$#; class_scan_index++ )); do
+    class_scan_argument="${!class_scan_index}"
+    if [[ "${class_scan_argument}" == "--study-id" ]]; then
+      if (( class_study_id_prescan_seen )); then
+        echo "class-study accepts --study-id at most once" >&2
+        exit 2
+      fi
+      class_study_id_prescan_seen=1
+      class_scan_value_index=$((class_scan_index + 1))
+      if (( class_scan_value_index > $# )); then
+        echo "class-study --study-id requires a value" >&2
+        exit 2
+      fi
+      class_requested_study_id="${!class_scan_value_index}"
+      class_scan_index="${class_scan_value_index}"
+    elif [[ "${class_scan_argument}" == --study-id=* ]]; then
+      if (( class_study_id_prescan_seen )); then
+        echo "class-study accepts --study-id at most once" >&2
+        exit 2
+      fi
+      class_study_id_prescan_seen=1
+      class_requested_study_id="${class_scan_argument#*=}"
+    fi
+  done
+  if (( class_study_id_prescan_seen )) && [[ -z "${class_requested_study_id}" ]]; then
+    echo "class-study --study-id requires a value" >&2
+    exit 2
+  fi
   mapfile -t class_layout_fields < <(
-    QCSD_LAB_ROOT="${ROOT}" python3 -I -c '
+    QCSD_LAB_ROOT="${ROOT}" QCSD_CLASS_STUDY_ID="${class_requested_study_id}" python3 -I -c '
 import os
 import sys
 from pathlib import Path
@@ -6051,12 +6082,24 @@ from qcsd_lab.class_layout import (
     PILOT_COHORT_FILENAME,
     class_study_layout,
 )
+from qcsd_lab.class_study import (
+    CLASS20_STUDY_ID,
+    STUDY_ID,
+    load_class20_profile_contract,
+)
 from qcsd_lab.acquisition_timing import (
     GLOBAL_LIVE_PAGE_CAP,
     MAX_CANDIDATES_PER_ACTION,
 )
 
-layout = class_study_layout()
+study_id = os.environ["QCSD_CLASS_STUDY_ID"] or STUDY_ID
+if study_id == STUDY_ID:
+    profile = None
+elif study_id == CLASS20_STUDY_ID:
+    profile = load_class20_profile_contract()
+else:
+    raise SystemExit("class-study --study-id is unsupported")
+layout = class_study_layout(profile=profile)
 for field in (
     "config_root",
     "campaign_root",
@@ -6077,19 +6120,31 @@ for field in (
     "final_qualification_set_root",
 ):
     print(getattr(layout, field))
-for filename in (
-    PILOT_COHORT_FILENAME,
-    PILOT_COHORT_ASSEMBLY_FILENAME,
-    AUTHORITATIVE_COHORT_FILENAME,
-    AUTHORITATIVE_COHORT_ASSEMBLY_FILENAME,
-    FINAL_SELECTION_FILENAME,
-):
+filenames = (
+    (
+        PILOT_COHORT_FILENAME,
+        PILOT_COHORT_ASSEMBLY_FILENAME,
+        AUTHORITATIVE_COHORT_FILENAME,
+        AUTHORITATIVE_COHORT_ASSEMBLY_FILENAME,
+        FINAL_SELECTION_FILENAME,
+    )
+    if profile is None else (
+        f"{study_id}-pilot-cohort.json",
+        f"{study_id}-pilot-cohort-assembly.json",
+        f"{study_id}-cohort.json",
+        f"{study_id}-cohort-assembly.json",
+        f"{study_id}-final-selection.json",
+    )
+)
+for filename in filenames:
     print(filename)
 print(MAX_CANDIDATES_PER_ACTION)
 print(GLOBAL_LIVE_PAGE_CAP)
+print(class_study_layout().study_config_root / f"{STUDY_ID}-candidates.json")
+print(study_id)
 '
   )
-  if (( ${#class_layout_fields[@]} != 24 )); then
+  if (( ${#class_layout_fields[@]} != 26 )); then
     echo "class-study could not derive the canonical Lab layout" >&2
     exit 1
   fi
@@ -6117,12 +6172,17 @@ print(GLOBAL_LIVE_PAGE_CAP)
   class_final_selection="${class_study_config_root}/${class_layout_fields[21]}"
   class_acquisition_canonical_max_candidates="${class_layout_fields[22]}"
   class_acquisition_global_live_page_cap="${class_layout_fields[23]}"
-  class_candidate_catalogue="${class_study_config_root}/classifier-multiorigin100-v1-candidates.json"
+  class_candidate_catalogue="${class_layout_fields[24]}"
+  class_selected_study_id="${class_layout_fields[25]}"
+  class_pair_screening="${class_study_config_root}/${class_selected_study_id}-pair-screening.json"
   class_pilot_qualification_manifest="${class_pilot_qualification_root}/_qualification-set.json"
   class_final_qualification_manifest="${class_final_qualification_root}/_qualification-set.json"
+  class_final_qualification_prefix_root="${class_final_qualification_root}/_prefix-specs"
+  class_final_qualification_work_root="${class_artifacts_root}/${class_selected_study_id}-final-qualification-work"
+  class_final_qualification_checkpoint="${class_final_qualification_work_root}/_checkpoint.json"
   class_study_action="${2:-}"
   case "${class_study_action}" in
-    status|acquisition-authority|acquisition-init|acquisition-run|acquisition-status|acquisition-admission|acquisition-complete|stability|cohort|campaigns|fit-numeric|prefix-specs|qualify-prefix|finalize-fitting|capture|resume|export|evaluate|foundation|readiness|historical-snapshot|comparison-review|attest|successor-policy|successor-decision|successor-restart|successor-verify|verify) ;;
+    status|acquisition-authority|acquisition-init|acquisition-run|acquisition-status|acquisition-admission|acquisition-complete|stability|cohort|campaigns|pair-screen|final-select|fit-numeric|prefix-specs|qualify-prefix|finalize-fitting|capture|resume|export|evaluate|foundation|readiness|historical-snapshot|comparison-review|attest|successor-policy|successor-decision|successor-restart|successor-verify|verify) ;;
     *)
       echo "class-study requires one recognised action" >&2
       exit 2
@@ -6153,7 +6213,7 @@ print(GLOBAL_LIVE_PAGE_CAP)
         class_index=$((class_index + 1))
         continue
         ;;
-      --stage|--qualification-workload|--acquisition-started-at|--acquisition-browser-tool|--acquisition-max-candidates|--acquisition-timeout-ms|--cohort-version|--snapshot-phase|--reviewer|--reviewed-at)
+      --study-id|--stage|--qualification-workload|--acquisition-started-at|--acquisition-browser-tool|--acquisition-max-candidates|--acquisition-timeout-ms|--cohort-version|--snapshot-phase|--reviewer|--reviewed-at)
         if (( ! class_inline )); then
           class_next=$((class_index + 1))
           if (( class_next > $# )); then
@@ -6164,7 +6224,13 @@ print(GLOBAL_LIVE_PAGE_CAP)
           class_index=$((class_index + 1))
         fi
         class_container_args+=("${class_flag}" "${class_value}")
-        if [[ "${class_flag}" == "--stage" ]]; then
+        if [[ "${class_flag}" == "--study-id" ]]; then
+          if [[ -n "${class_study_id_seen:-}" ]]; then
+            echo "class-study accepts --study-id at most once" >&2
+            exit 2
+          fi
+          class_study_id_seen=1
+        elif [[ "${class_flag}" == "--stage" ]]; then
           if [[ -n "${class_study_stage}" ]]; then
             echo "class-study accepts --stage at most once" >&2
             exit 2
@@ -6190,7 +6256,7 @@ print(GLOBAL_LIVE_PAGE_CAP)
         class_index=$((class_index + 1))
         continue
         ;;
-      --candidate-catalogue|--acquisition-root|--stability-root|--stability-input|--workload-root|--acquisition-completion|--pilot-cohort|--pilot-cohort-assembly|--final-cohort|--final-cohort-assembly|--cohort|--cohort-assembly|--final-selection|--campaign-root|--campaign|--results-root|--capture-result|--result|--regression-result|--controlled-result|--canary-result|--formal-result|--artifacts-root|--numeric-bundle|--prefix-spec-root|--qualification-checkpoint|--qualification-sidecar-root|--qualification-publication-root|--qualification-manifest|--final-bundle|--handoff|--evaluation-receipt|--build-execution-receipt|--pinned-cdp-receipt|--browser-egress-qualification-root|--reference-receipt|--code-gate-receipt|--controlled-qualification-receipt|--pilot-fitting-result|--pilot-compatibility-result|--authoritative-fitting-result|--certification-result|--acquisition-authority|--foundation-attestation|--readiness-attestation|--historical-pre-snapshot|--historical-post-snapshot|--comparison-review|--comparison-review-input|--validation-attestation|--successor-policy|--successor-decision|--successor-restart|--destination|--target|--dlsvm-cache-directory)
+      --candidate-catalogue|--acquisition-root|--stability-root|--stability-input|--workload-root|--acquisition-completion|--pilot-cohort|--pilot-cohort-assembly|--final-cohort|--final-cohort-assembly|--cohort|--cohort-assembly|--final-selection|--pair-screening|--campaign-root|--campaign|--results-root|--capture-result|--result|--regression-result|--controlled-result|--canary-result|--formal-result|--artifacts-root|--numeric-bundle|--prefix-spec-root|--qualification-checkpoint|--qualification-sidecar-root|--qualification-publication-root|--qualification-manifest|--final-bundle|--handoff|--evaluation-receipt|--build-execution-receipt|--pinned-cdp-receipt|--browser-egress-qualification-root|--reference-receipt|--code-gate-receipt|--controlled-qualification-receipt|--pilot-fitting-result|--pilot-compatibility-result|--authoritative-fitting-result|--certification-result|--acquisition-authority|--foundation-attestation|--readiness-attestation|--historical-pre-snapshot|--historical-post-snapshot|--comparison-review|--comparison-review-input|--validation-attestation|--successor-policy|--successor-decision|--successor-restart|--destination|--target|--dlsvm-cache-directory)
         if (( ! class_inline )); then
           class_next=$((class_index + 1))
           if (( class_next > $# )); then
@@ -6258,7 +6324,7 @@ print(GLOBAL_LIVE_PAGE_CAP)
 
   class_fresh_layout=0
   case "${class_study_action}" in
-    acquisition-authority|acquisition-init|acquisition-run|acquisition-status|acquisition-complete|stability|cohort|campaigns|fit-numeric|prefix-specs|qualify-prefix|finalize-fitting|capture|foundation|readiness|historical-snapshot|comparison-review|attest)
+    acquisition-authority|acquisition-init|acquisition-run|acquisition-status|acquisition-complete|stability|cohort|campaigns|pair-screen|final-select|fit-numeric|prefix-specs|qualify-prefix|finalize-fitting|capture|foundation|readiness|historical-snapshot|comparison-review|attest)
       class_fresh_layout=1
       ;;
   esac
@@ -6468,6 +6534,10 @@ PY
       "${class_path_hosts[--final-selection]:-}" \
       "${class_final_selection}" \
       "final-selection"
+    class_require_canonical_path \
+      "${class_path_hosts[--pair-screening]:-}" \
+      "${class_pair_screening}" \
+      "pair-screening"
 
     class_require_canonical_parent \
       "${class_path_hosts[--campaign]:-}" \
@@ -6510,11 +6580,20 @@ PY
       "${class_pilot_numeric_root}" \
       "${class_authoritative_numeric_root}" \
       "numeric bundle"
-    class_require_canonical_choice \
-      "${class_path_hosts[--prefix-spec-root]:-}" \
-      "${class_pilot_prefix_root}" \
-      "${class_authoritative_prefix_root}" \
-      "prefix-spec root"
+    if [[ "${class_study_config_root}" == "${class_config_root}/class-study/v2" &&
+          ( "${class_study_action}" == "capture" ||
+            "${class_study_action}" == "resume" ||
+            "${class_study_action}" == "readiness" ||
+            "${class_study_action}" == "finalize-fitting" ) &&
+          "${class_path_hosts[--prefix-spec-root]:-}" == "${class_final_qualification_prefix_root}" ]]; then
+      :
+    else
+      class_require_canonical_choice \
+        "${class_path_hosts[--prefix-spec-root]:-}" \
+        "${class_pilot_prefix_root}" \
+        "${class_authoritative_prefix_root}" \
+        "prefix-spec root"
+    fi
     class_require_canonical_choice \
       "${class_path_hosts[--final-bundle]:-}" \
       "${class_pilot_final_root}" \
@@ -6527,13 +6606,27 @@ PY
       "qualification manifest"
 
     case "${class_study_action}" in
-      cohort|campaigns)
+      cohort|campaigns|final-select)
         if [[ "${class_study_stage}" == "authoritative" ]]; then
           class_require_canonical_path \
             "${class_path_hosts[--numeric-bundle]:-}" \
             "${class_pilot_numeric_root}" \
             "numeric bundle"
         fi
+        ;;
+      pair-screen)
+        class_require_canonical_path \
+          "${class_path_hosts[--numeric-bundle]:-}" \
+          "${class_pilot_numeric_root}" \
+          "numeric bundle"
+        class_require_canonical_path \
+          "${class_path_hosts[--prefix-spec-root]:-}" \
+          "${class_pilot_prefix_root}" \
+          "prefix-spec root"
+        class_require_canonical_path \
+          "${class_path_hosts[--qualification-sidecar-root]:-}" \
+          "${class_pilot_qualification_root}" \
+          "qualification sidecar root"
         ;;
       prefix-specs|qualify-prefix|finalize-fitting)
         if [[ "${class_study_stage}" == "pilot" ]]; then
@@ -6558,9 +6651,14 @@ PY
             "${class_path_hosts[--numeric-bundle]:-}" \
             "${class_authoritative_numeric_root}" \
             "numeric bundle"
+          class_authoritative_action_prefix_root="${class_authoritative_prefix_root}"
+          if [[ "${class_study_config_root}" == "${class_config_root}/class-study/v2" &&
+                "${class_study_action}" == "finalize-fitting" ]]; then
+            class_authoritative_action_prefix_root="${class_final_qualification_prefix_root}"
+          fi
           class_require_canonical_path \
             "${class_path_hosts[--prefix-spec-root]:-}" \
-            "${class_authoritative_prefix_root}" \
+            "${class_authoritative_action_prefix_root}" \
             "prefix-spec root"
           class_require_canonical_path \
             "${class_path_hosts[--final-bundle]:-}" \
@@ -6573,13 +6671,19 @@ PY
         fi
         ;;
       readiness)
+        class_readiness_numeric_root="${class_pilot_numeric_root}"
+        class_readiness_prefix_root="${class_authoritative_prefix_root}"
+        if [[ "${class_study_config_root}" == "${class_config_root}/class-study/v2" ]]; then
+          class_readiness_numeric_root="${class_authoritative_numeric_root}"
+          class_readiness_prefix_root="${class_final_qualification_prefix_root}"
+        fi
         class_require_canonical_path \
           "${class_path_hosts[--numeric-bundle]:-}" \
-          "${class_pilot_numeric_root}" \
+          "${class_readiness_numeric_root}" \
           "numeric bundle"
         class_require_canonical_path \
           "${class_path_hosts[--prefix-spec-root]:-}" \
-          "${class_authoritative_prefix_root}" \
+          "${class_readiness_prefix_root}" \
           "prefix-spec root"
         class_require_canonical_path \
           "${class_path_hosts[--final-bundle]:-}" \
@@ -6642,10 +6746,19 @@ PY
       class_require_output_parent "${class_path_hosts[--cohort-assembly]:-}" "cohort assembly"
       class_add_unique class_guarded_rw_dirs "$(dirname "${class_path_hosts[--cohort]}")"
       class_add_unique class_guarded_rw_dirs "$(dirname "${class_path_hosts[--cohort-assembly]}")"
-      if [[ -n "${class_path_hosts[--final-selection]:-}" ]]; then
+      if [[ -n "${class_path_hosts[--final-selection]:-}" &&
+            "${class_selected_study_id}" != "classifier-multiorigin20-v1" ]]; then
         class_require_output_parent "${class_path_hosts[--final-selection]}" "final-selection receipt"
         class_add_unique class_guarded_rw_dirs "$(dirname "${class_path_hosts[--final-selection]}")"
       fi
+      ;;
+    pair-screen)
+      class_require_output_parent "${class_path_hosts[--pair-screening]:-}" "pair-screening receipt"
+      class_add_unique class_guarded_rw_dirs "$(dirname "${class_path_hosts[--pair-screening]}")"
+      ;;
+    final-select)
+      class_require_output_parent "${class_path_hosts[--final-selection]:-}" "final-selection receipt"
+      class_add_unique class_guarded_rw_dirs "$(dirname "${class_path_hosts[--final-selection]}")"
       ;;
     campaigns)
       class_require_directory "${class_path_hosts[--campaign-root]:-}" "campaign root"
@@ -6662,15 +6775,78 @@ PY
         echo "class-study qualify-prefix requires --foundation-attestation as a regular file" >&2
         exit 2
       fi
-      class_require_directory "${class_path_hosts[--qualification-sidecar-root]:-}" "qualification sidecar root"
-      class_require_directory "${class_path_hosts[--qualification-publication-root]:-}" "qualification publication root"
-      class_require_output_parent "${class_path_hosts[--qualification-checkpoint]:-}" "qualification checkpoint"
-      class_add_unique class_guarded_rw_dirs "${class_path_hosts[--qualification-sidecar-root]}"
-      class_add_unique class_guarded_rw_dirs "${class_path_hosts[--qualification-publication-root]}"
-      class_add_unique class_guarded_rw_dirs "$(dirname "${class_path_hosts[--qualification-checkpoint]}")"
-      if [[ -f "${class_path_hosts[--qualification-checkpoint]}" &&
-            ! -L "${class_path_hosts[--qualification-checkpoint]}" ]]; then
-        class_add_unique class_rw_files "${class_path_hosts[--qualification-checkpoint]}"
+      if [[ "${class_study_config_root}" == "${class_config_root}/class-study/v2" ]]; then
+        if [[ "${class_study_stage}" == "pilot" ]]; then
+          class_require_canonical_path \
+            "${class_path_hosts[--qualification-sidecar-root]:-}" \
+            "${class_pilot_qualification_root}" \
+            "qualification sidecar root"
+          if [[ -n "${class_path_hosts[--qualification-checkpoint]:-}" ||
+                -n "${class_path_hosts[--qualification-publication-root]:-}" ]]; then
+            echo "20-site pilot qualification does not use a named-set checkpoint" >&2
+            exit 2
+          fi
+          if [[ ! -e "${class_qualification_sets_root}" &&
+                ! -L "${class_qualification_sets_root}" ]]; then
+            mkdir -- "${class_qualification_sets_root}"
+          fi
+          class_require_directory "${class_qualification_sets_root}" "qualification sets root"
+          if [[ ! -e "${class_pilot_qualification_root}" &&
+                ! -L "${class_pilot_qualification_root}" ]]; then
+            mkdir -- "${class_pilot_qualification_root}"
+          fi
+          class_require_directory "${class_path_hosts[--qualification-sidecar-root]}" "qualification sidecar root"
+          class_add_unique class_guarded_rw_dirs "${class_path_hosts[--qualification-sidecar-root]}"
+        elif [[ "${class_study_stage}" == "authoritative" ]]; then
+          class_require_canonical_path \
+            "${class_path_hosts[--qualification-sidecar-root]:-}" \
+            "${class_final_qualification_work_root}" \
+            "qualification sidecar root"
+          class_require_canonical_path \
+            "${class_path_hosts[--qualification-checkpoint]:-}" \
+            "${class_final_qualification_checkpoint}" \
+            "qualification checkpoint"
+          class_require_canonical_path \
+            "${class_path_hosts[--qualification-publication-root]:-}" \
+            "${class_qualification_sets_root}" \
+            "qualification publication root"
+          if [[ ! -e "${class_final_qualification_work_root}" &&
+                ! -L "${class_final_qualification_work_root}" ]]; then
+            mkdir -- "${class_final_qualification_work_root}"
+          fi
+          if [[ ! -e "${class_qualification_sets_root}" &&
+                ! -L "${class_qualification_sets_root}" ]]; then
+            mkdir -- "${class_qualification_sets_root}"
+          fi
+          class_require_directory "${class_path_hosts[--qualification-sidecar-root]}" "qualification sidecar root"
+          class_add_unique class_guarded_rw_dirs "${class_path_hosts[--qualification-sidecar-root]}"
+          class_require_directory "${class_path_hosts[--qualification-publication-root]}" "qualification publication root"
+          class_require_output_parent "${class_path_hosts[--qualification-checkpoint]}" "qualification checkpoint"
+          class_add_unique class_guarded_rw_dirs "${class_path_hosts[--qualification-publication-root]}"
+          if [[ -e "${class_path_hosts[--qualification-checkpoint]}" &&
+                ! -f "${class_path_hosts[--qualification-checkpoint]}" ]]; then
+            echo "20-site final qualification checkpoint must be a regular file" >&2
+            exit 1
+          fi
+          if [[ -f "${class_path_hosts[--qualification-checkpoint]}" &&
+                ! -L "${class_path_hosts[--qualification-checkpoint]}" ]]; then
+            class_add_unique class_atomic_rw_files "${class_path_hosts[--qualification-checkpoint]}"
+          fi
+        else
+          echo "20-site qualification requires --stage pilot or authoritative" >&2
+          exit 2
+        fi
+      else
+        class_require_directory "${class_path_hosts[--qualification-sidecar-root]:-}" "qualification sidecar root"
+        class_add_unique class_guarded_rw_dirs "${class_path_hosts[--qualification-sidecar-root]}"
+        class_require_directory "${class_path_hosts[--qualification-publication-root]:-}" "qualification publication root"
+        class_require_output_parent "${class_path_hosts[--qualification-checkpoint]:-}" "qualification checkpoint"
+        class_add_unique class_guarded_rw_dirs "${class_path_hosts[--qualification-publication-root]}"
+        class_add_unique class_guarded_rw_dirs "$(dirname "${class_path_hosts[--qualification-checkpoint]}")"
+        if [[ -f "${class_path_hosts[--qualification-checkpoint]}" &&
+              ! -L "${class_path_hosts[--qualification-checkpoint]}" ]]; then
+          class_add_unique class_rw_files "${class_path_hosts[--qualification-checkpoint]}"
+        fi
       fi
       ;;
     capture)
@@ -7040,6 +7216,7 @@ if [[ "${1:-}" == "class-study" ]]; then
   class_build_admission_args=(
     --lab-root "${ROOT}"
     --action "${class_study_action}"
+    --study-id "${class_selected_study_id}"
   )
   if [[ -n "${class_study_stage}" ]]; then
     class_build_admission_args+=(--stage "${class_study_stage}")
@@ -7067,6 +7244,7 @@ if [[ "${1:-}" == "class-study" ]]; then
     successor-restart:--successor-restart \
     target:--target \
     final-selection:--final-selection \
+    pair-screening:--pair-screening \
     pinned-cdp:--pinned-cdp-receipt \
     browser-egress:--browser-egress-qualification-root \
     reference:--reference-receipt \
@@ -7080,6 +7258,9 @@ if [[ "${1:-}" == "class-study" ]]; then
     qualification-checkpoint:--qualification-checkpoint \
     qualification-sidecar-root:--qualification-sidecar-root \
     qualification-publication-root:--qualification-publication-root \
+    workload-root:--workload-root \
+    pilot-cohort:--pilot-cohort \
+    final-cohort:--final-cohort \
     final-cohort-assembly:--final-cohort-assembly \
     pilot-cohort-assembly:--pilot-cohort-assembly \
     campaign-root:--campaign-root \
@@ -8489,6 +8670,16 @@ if [[ "${1:-}" == "class-study" &&
   )
 fi
 if [[ "${1:-}" == "class-study" ]]; then
+  if [[ "${class_study_config_root}" == "${class_config_root}/class-study/v2" &&
+        "${class_study_action}" == "qualify-prefix" &&
+        "${class_study_stage}" == "authoritative" ]]; then
+    for class_write_root in "${class_guarded_rw_dirs[@]:-}"; do
+      if [[ "${class_final_qualification_work_root}" == "${class_write_root}/"* ]]; then
+        echo "20-site final qualification work root is below another guarded mount" >&2
+        exit 2
+      fi
+    done
+  fi
   for class_write_root in "${class_guarded_rw_dirs[@]:-}"; do
     [[ -n "${class_write_root}" ]] || continue
     class_require_directory "${class_write_root}" "writable output root"
@@ -8507,6 +8698,16 @@ if [[ "${1:-}" == "class-study" ]]; then
       if [[ ! "${class_existing_name}" =~ ^[A-Za-z0-9._-]+$ ]]; then
         echo "class-study rejects unsafe existing output name: ${class_existing_name}" >&2
         exit 1
+      fi
+      class_existing_rw_file=0
+      for class_write_file in "${class_rw_files[@]:-}" "${class_atomic_rw_files[@]:-}"; do
+        if [[ "${class_write_file}" == "${class_existing_child}" ]]; then
+          class_existing_rw_file=1
+          break
+        fi
+      done
+      if (( class_existing_rw_file )); then
+        continue
       fi
       class_existing_container="$(class_container_path "${class_existing_child}")"
       container+=(--volume "${class_existing_child}:${class_existing_container}:ro")

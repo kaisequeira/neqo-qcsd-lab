@@ -52,9 +52,9 @@ from .buflo_evaluation import (
     vngpp_backend_receipt,
     write_dlsvm_preflight,
 )
-from .class_cohort import validate_cohort_assembly_receipt
 from .class_handoff import (
     _CORRECTNESS_RECEIPT,
+    _cohort_validators_for_study,
     CLASS_STUDY_LAUNCH_INPUT,
     CLASS_STUDY_LAUNCHES_PATH,
     CLASSIFIER_FIELDS,
@@ -62,12 +62,15 @@ from .class_handoff import (
     FORBIDDEN_CLASSIFIER_FIELDS,
     RUNTIME_KINDS,
     SCHEMA_VERSION as HANDOFF_SCHEMA_VERSION,
+    PROFILE_SCHEMA_VERSION as PROFILE_HANDOFF_SCHEMA_VERSION,
+    PROFILE_ARTIFACT_TYPE as PROFILE_HANDOFF_ARTIFACT_TYPE,
     verify_class_handoff,
 )
 from .class_handoff import (
     ARTIFACT_TYPE as HANDOFF_ARTIFACT_TYPE,
 )
 from .class_study import (
+    CLASS20_STUDY_ID,
     FINAL_CLASS_COUNT,
     FORMAL_BLOCK_COUNT,
     FORMAL_MODES,
@@ -76,7 +79,8 @@ from .class_study import (
     bind_receipt,
     canonical_json_bytes,
     is_class_study_id,
-    load_study_receipt,
+    load_class20_profile_contract,
+    _CLASS20_OVERLAY_SHA256,
     validate_hash_bound_receipt,
     write_create_only_json,
 )
@@ -86,6 +90,7 @@ FORMAL_SAMPLE_COUNT = 16_000
 FORMAL_BOOTSTRAP_DRAWS = 10_000
 FORMAL_BOOTSTRAP_SEED = 20260828
 CLOSED_WORLD_RANDOM_CHANCE = 0.01
+PROFILE_CLOSED_WORLD_RANDOM_CHANCE = 0.05
 TEMPORAL_PROTOCOL = "primary-leakage-resistant-temporal"
 ADAPTIVE_PROTOCOL = "adaptive-per-defense"
 TRANSFER_PROTOCOL = "undefended-trained-transfer"
@@ -94,7 +99,9 @@ CLASSIFIER_INPUT_FIELDS = CLASSIFIER_FIELDS
 CLASSIFIER_ATTACKS = ("panchenko", "vngpp", "dlsvm")
 EVALUATION_RECEIPT_TYPE = "qcsd-class-study-evaluation"
 EVALUATION_ARTIFACT_TYPE = "qcsd-classifier-multiorigin100-evaluation"
+PROFILE_EVALUATION_ARTIFACT_TYPE = "qcsd-classifier-multiorigin20-evaluation"
 EVALUATION_SCHEMA_VERSION = 2
+PROFILE_EVALUATION_SCHEMA_VERSION = 3
 CLASS_DLSVM_EXECUTION_MODEL = {
     "schema_version": 2,
     "name": "class-study-evaluate-fresh-build-plus-mandatory-full-replay-v2",
@@ -180,6 +187,15 @@ _FORMAL_DIMENSIONS = _Dimensions(
 
 
 def _formal_dimensions_for_study(study_id: str) -> _Dimensions:
+    if study_id == CLASS20_STUDY_ID:
+        profile = load_class20_profile_contract()
+        return _Dimensions(
+            study_id=study_id,
+            classes=profile.final_count,
+            modes=profile.formal_modes,
+            blocks=profile.formal_block_count,
+            visits_per_block=profile.formal_visits_per_block,
+        )
     if not is_class_study_id(study_id):
         raise ValueError("formal class evaluation study identity is invalid")
     return _Dimensions(
@@ -192,12 +208,28 @@ def _formal_dimensions_for_study(study_id: str) -> _Dimensions:
 
 
 def _is_formal_dimensions(dimensions: _Dimensions) -> bool:
+    if dimensions.study_id == CLASS20_STUDY_ID:
+        return dimensions == _formal_dimensions_for_study(CLASS20_STUDY_ID)
     return (
         dimensions.classes == FINAL_CLASS_COUNT
         and dimensions.modes == FORMAL_MODES
         and dimensions.blocks == FORMAL_BLOCK_COUNT
         and dimensions.visits_per_block == FORMAL_VISITS_PER_BLOCK
         and is_class_study_id(dimensions.study_id)
+    )
+
+
+def _formal_random_chance(study_id: str) -> float:
+    return (
+        PROFILE_CLOSED_WORLD_RANDOM_CHANCE
+        if study_id == CLASS20_STUDY_ID else CLOSED_WORLD_RANDOM_CHANCE
+    )
+
+
+def _evaluation_artifact_type(study_id: str) -> str:
+    return (
+        PROFILE_EVALUATION_ARTIFACT_TYPE
+        if study_id == CLASS20_STUDY_ID else EVALUATION_ARTIFACT_TYPE
     )
 
 
@@ -362,12 +394,13 @@ def load_class_handoff(root: Path, *, deep_verify: bool = True) -> ClassStudyDat
     study_id = dataset.get("study_id")
     if not isinstance(study_id, str):
         raise ValueError("formal class evaluation dataset has no study identity")
+    cohort_loader, assembly_validator = _cohort_validators_for_study(study_id)
     return _load_class_handoff(
         root,
         dimensions=_formal_dimensions_for_study(study_id),
         handoff_verifier=_verify_handoff,
-        cohort_loader=load_study_receipt,
-        assembly_validator=validate_cohort_assembly_receipt,
+        cohort_loader=cohort_loader,
+        assembly_validator=assembly_validator,
         deep_verify=deep_verify,
     )
 
@@ -1247,12 +1280,14 @@ def _validate_attack_configuration(
         raise ValueError("class attack selection must be a non-empty canonical subset")
     if type(include_secondary) is not bool or type(formal) is not bool:
         raise ValueError("class attack protocol flags must be booleans")
+    dimensions = _formal_dimensions_for_study(dataset.study_id) if formal else None
     if formal and (
-        not is_class_study_id(dataset.study_id)
-        or len(dataset.classes) != FINAL_CLASS_COUNT
-        or dataset.modes != FORMAL_MODES
-        or len(dataset.samples) != FORMAL_SAMPLE_COUNT
-        or dataset.random_chance != CLOSED_WORLD_RANDOM_CHANCE
+        dimensions is None
+        or not _is_formal_dimensions(dimensions)
+        or len(dataset.classes) != dimensions.classes
+        or dataset.modes != dimensions.modes
+        or len(dataset.samples) != dimensions.sample_count
+        or dataset.random_chance != _formal_random_chance(dataset.study_id)
         or attack_order != CLASSIFIER_ATTACKS
         or not include_secondary
     ):
@@ -1659,15 +1694,16 @@ def _candidate_algorithm_evidence(
         len(dataset.classes)
         * len(candidate_modes)
         * len({sample.acquisition_block for sample in dataset.samples})
-        * FORMAL_VISITS_PER_BLOCK
+        * (_formal_dimensions_for_study(dataset.study_id).visits_per_block if formal else FORMAL_VISITS_PER_BLOCK)
     )
+    dimensions = _formal_dimensions_for_study(dataset.study_id) if formal else None
     if formal and (
         candidate_modes != ("buflo", "cs-buflo")
         or len(selected) != expected_count
-        or len(classes) != FINAL_CLASS_COUNT
+        or len(classes) != dimensions.classes
         or observed_classes != set(classes)
-        or blocks != list(range(1, FORMAL_BLOCK_COUNT + 1))
-        or visits != FORMAL_VISITS_PER_BLOCK
+        or blocks != list(range(1, dimensions.blocks + 1))
+        or visits != dimensions.visits_per_block
         or versions != [4]
         or not complete
     ):
@@ -1713,8 +1749,11 @@ def _build_evaluation_envelope(
     _validate_attack_run(run, dataset=dataset, formal=formal)
     records = _result_records(run.results, dataset.classes)
     payload = {
-        "schema_version": EVALUATION_SCHEMA_VERSION,
-        "artifact_type": EVALUATION_ARTIFACT_TYPE,
+        "schema_version": (
+            PROFILE_EVALUATION_SCHEMA_VERSION
+            if dataset.study_id == CLASS20_STUDY_ID else EVALUATION_SCHEMA_VERSION
+        ),
+        "artifact_type": _evaluation_artifact_type(dataset.study_id),
         "study_id": dataset.study_id,
         "formal": formal,
         "sample_count": len(dataset.samples),
@@ -1761,6 +1800,8 @@ def _build_evaluation_envelope(
         "results_sha256": _compact_json_sha256(records),
         "results": records,
     }
+    if dataset.study_id == CLASS20_STUDY_ID:
+        payload["study_profile_sha256"] = _CLASS20_OVERLAY_SHA256
     return bind_receipt(payload, receipt_type=EVALUATION_RECEIPT_TYPE)
 
 
@@ -1802,6 +1843,8 @@ def _validate_evaluation_envelope(
         "results_sha256",
         "results",
     }
+    if dataset.study_id == CLASS20_STUDY_ID:
+        expected_keys.add("study_profile_sha256")
     configuration = payload.get("configuration")
     if not isinstance(configuration, Mapping):
         raise ValueError("class evaluation receipt configuration is invalid")
@@ -1816,8 +1859,16 @@ def _validate_evaluation_envelope(
     )
     if (
         set(payload) != expected_keys
-        or payload.get("schema_version") != EVALUATION_SCHEMA_VERSION
-        or payload.get("artifact_type") != EVALUATION_ARTIFACT_TYPE
+        or payload.get("schema_version")
+        != (
+            PROFILE_EVALUATION_SCHEMA_VERSION
+            if dataset.study_id == CLASS20_STUDY_ID else EVALUATION_SCHEMA_VERSION
+        )
+        or payload.get("artifact_type") != _evaluation_artifact_type(dataset.study_id)
+        or (
+            dataset.study_id == CLASS20_STUDY_ID
+            and payload.get("study_profile_sha256") != _CLASS20_OVERLAY_SHA256
+        )
         or payload.get("study_id") != dataset.study_id
         or payload.get("formal") is not formal
         or payload.get("sample_count") != len(dataset.samples)
@@ -2451,8 +2502,14 @@ def _load_class_handoff(
         raise ValueError("formal class handoff verifier returned a different root")
     dataset = _load_json_object(source / "dataset.json", "formal class dataset")
     if (
-        dataset.get("schema_version") != HANDOFF_SCHEMA_VERSION
-        or dataset.get("artifact_type") != HANDOFF_ARTIFACT_TYPE
+        dataset.get("schema_version")
+        != (PROFILE_HANDOFF_SCHEMA_VERSION if dimensions.study_id == CLASS20_STUDY_ID else HANDOFF_SCHEMA_VERSION)
+        or dataset.get("artifact_type")
+        != (PROFILE_HANDOFF_ARTIFACT_TYPE if dimensions.study_id == CLASS20_STUDY_ID else HANDOFF_ARTIFACT_TYPE)
+        or (
+            dimensions.study_id == CLASS20_STUDY_ID
+            and dataset.get("study_profile_sha256") != _CLASS20_OVERLAY_SHA256
+        )
         or dataset.get("study_id") != dimensions.study_id
         or dataset.get("evidence_role") != "formal"
         or dataset.get("closed_world") is not True
@@ -2537,8 +2594,10 @@ def _load_class_handoff(
         modes=dimensions.modes,
         samples=samples,
     )
-    if _is_formal_dimensions(dimensions) and (result.random_chance != CLOSED_WORLD_RANDOM_CHANCE):
-        raise ValueError("formal class random-chance baseline is not one percent")
+    if _is_formal_dimensions(dimensions) and (
+        result.random_chance != _formal_random_chance(dimensions.study_id)
+    ):
+        raise ValueError("formal class random-chance baseline differs from its cohort size")
     return result
 
 

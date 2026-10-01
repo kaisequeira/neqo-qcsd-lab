@@ -13,7 +13,9 @@ from qcsd_lab.capture_session import Defense
 from qcsd_lab.class_campaigns import (
     FINAL_QUALIFICATION_SET,
     PILOT_QUALIFICATION_SET,
+    _campaign_documents_for_ids,
     campaign_documents,
+    validate_campaign_documents,
     validate_campaign_document,
     write_campaign_documents,
 )
@@ -23,8 +25,10 @@ from qcsd_lab.class_layout import (
     AUTHORITATIVE_COHORT_FILENAME,
     PILOT_COHORT_ASSEMBLY_FILENAME,
     PILOT_COHORT_FILENAME,
+    canonical_campaign_reference,
 )
 from qcsd_lab.class_study import (
+    CLASS20_PROFILE,
     CANDIDATE_COUNT,
     CANDIDATES_PER_STRATUM,
     COMPATIBILITY_MODES,
@@ -172,6 +176,123 @@ def test_campaign_set_has_exact_excluded_and_formal_matrices(tmp_path: Path) -> 
         assert formal["limits"]["max_attempts"] == 3
         assert canary["limits"]["max_attempts"] == 3
         assert len(formal["workloads"]) * 2 * len(formal["defenses"]) == 1_600
+
+
+def test_20_site_campaign_inventory_keeps_16000_formal_samples(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(util, "LAB_ROOT", tmp_path / "lab")
+    study_id = CLASS20_PROFILE.study_id
+    pilot_ids = tuple(f"site-{index:02d}" for index in range(30))
+    final_ids = pilot_ids[:20]
+    references = {
+        "cohort_reference": canonical_campaign_reference(
+            field="study_config_root",
+            filename=f"{study_id}-cohort.json",
+            profile=CLASS20_PROFILE,
+        ),
+        "cohort_assembly_reference": canonical_campaign_reference(
+            field="study_config_root",
+            filename=f"{study_id}-cohort-assembly.json",
+            profile=CLASS20_PROFILE,
+        ),
+        "pilot_bundle_reference": canonical_campaign_reference(
+            field="pilot_final_root", profile=CLASS20_PROFILE
+        ),
+        "authoritative_bundle_reference": canonical_campaign_reference(
+            field="authoritative_final_root", profile=CLASS20_PROFILE
+        ),
+    }
+    pilot_references = {
+        **references,
+        "cohort_reference": canonical_campaign_reference(
+            field="study_config_root",
+            filename=f"{study_id}-pilot-cohort.json",
+            profile=CLASS20_PROFILE,
+        ),
+        "cohort_assembly_reference": canonical_campaign_reference(
+            field="study_config_root",
+            filename=f"{study_id}-pilot-cohort-assembly.json",
+            profile=CLASS20_PROFILE,
+        ),
+    }
+    pilot_documents = _campaign_documents_for_ids(
+        pilot_ids=pilot_ids,
+        final_ids=(),
+        profile=CLASS20_PROFILE,
+        enforce_fresh_layout=True,
+        stage="pilot",
+        **pilot_references,
+    )
+    final_documents = _campaign_documents_for_ids(
+        pilot_ids=pilot_ids,
+        final_ids=final_ids,
+        profile=CLASS20_PROFILE,
+        enforce_fresh_layout=True,
+        stage="final",
+        **references,
+    )
+    documents = {**pilot_documents, **final_documents}
+    validate_campaign_documents(
+        documents, pilot_ids=pilot_ids, final_ids=final_ids, profile=CLASS20_PROFILE
+    )
+
+    assert len(documents) == 23
+    assert len(pilot_documents) == 1
+    assert len(final_documents) == 22
+    assert set(documents) >= {
+        f"{study_id}-pilot-fitting-120-1200.yml",
+        f"{study_id}-authoritative-fitting-400-1200.yml",
+        f"{study_id}-certification-180-1200.yml",
+    }
+    assert f"{study_id}-pilot-compatibility-270-1200.yml" not in documents
+    forged = dict(documents)
+    fitting_name = f"{study_id}-pilot-fitting-120-1200.yml"
+    forged.pop(fitting_name)
+    forged_name = f"{study_id}-pilot-compatibility-270-1200"
+    forged[f"{forged_name}.yml"] = {
+        **pilot_documents[fitting_name],
+        "name": forged_name,
+        "evidence_role": "pilot-compatibility",
+    }
+    with pytest.raises(ValueError, match="role inventory"):
+        validate_campaign_documents(
+            forged, pilot_ids=pilot_ids, final_ids=final_ids, profile=CLASS20_PROFILE
+        )
+    assert documents[f"{study_id}-certification-180-1200.yml"]["chaff_qualification_set"] == (
+        f"{study_id}-final20-full-v1"
+    )
+    assert sum(
+        sum(document["workloads"].values())
+        * len(document["request_policies"])
+        * len(document["defenses"])
+        for document in documents.values()
+        if document["evidence_role"] == "formal"
+    ) == 16_000
+    assert all(
+        set(documents[f"{study_id}-formal-{block:02d}-1200.yml"]["workloads"].values())
+        == {10}
+        for block in range(1, 11)
+    )
+    with pytest.raises(ValueError, match="cohort cardinality"):
+        _campaign_documents_for_ids(
+            pilot_ids=pilot_ids[:-1],
+            final_ids=final_ids,
+            profile=CLASS20_PROFILE,
+            enforce_fresh_layout=True,
+            stage="final",
+            **references,
+        )
+    with pytest.raises(ValueError, match="alternate class-study path"):
+        _campaign_documents_for_ids(
+            pilot_ids=pilot_ids,
+            final_ids=final_ids,
+            profile=CLASS20_PROFILE,
+            enforce_fresh_layout=True,
+            stage="final",
+            **{**references, "cohort_reference": "../class-study/v1/cohort.json"},
+        )
 
 
 def test_generated_pilot_compatibility_preflight_uses_copublished_prefix_set(

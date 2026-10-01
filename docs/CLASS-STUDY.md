@@ -1,6 +1,6 @@
 # Extended-class study: acquisition and continuation
 
-Current protocol summary: 1 October 2026, Australia/Sydney. The
+Current protocol summary: 2 October 2026, Australia/Sydney. The
 [project ledger](../PROJECT.md) records progress; this document records the
 next work and its purpose. The checked-in
 [study contract](../config/class-study/v1/study.json), implemented validators
@@ -28,24 +28,24 @@ selectable modes**. Qualification on the new classes remains pending for all
 modes. BuFLO/CS-BuFLO validation requires the final attestation, and describes
 client-only QUIC adaptations rather than bilateral paper implementations.
 
-At this checkpoint, v138 passed its clean no-cache build, pinned CDP and independently verified
-schema-2 acquisition-only authority on its exact source. Two bounded watcher
-actions created four candidate terminal records: three site-policy rejections
-(two HTTP/3 screens and one non-replayable WebRTC egress), plus
-`tranco-0000837` (`msftauth.net`) after three recoverable DNS failures. The
-DNS outcome is an immutable pre-probe infrastructure blocker in the first
-stratum under v138's rules, so its 120-site selection cannot complete. No
-baseline or prepared observation has been accepted. A prospective source
-change classifies only repeated target `EAI_NONAME`/DNS NODATA with a
-distinct healthy public DNS control as site unavailable; transient and
-ambiguous resolver failures remain blockers. Its focused tests pass but it has
-no source-bound acquisition authority yet. V138 cannot be reclassified.
-The long watcher stays held until a clean source, next unused cohort and fresh
-authority pass bounded validation through real preparation and observation.
+At this checkpoint, v139 is the latest source-bound attempt. Its no-cache
+build, pinned CDP and acquisition-only authority allowed public-page
+acquisition on its exact source. The checkpoint has eight site-rejection
+terminals, an inconclusive pending HTTP/3 screen on `tranco-0000709`, and a
+durable internal browser-control error on `tranco-0000280`. The read-only
+checkpoint validator refuses completion. No baseline or prepared observation
+has been accepted. A zero-credit rehearsal exercised a proposed discard of
+the exact browser fault; it did not alter v139 or authorize changed source.
+The long watcher stays held until the repair and prospective study profile are
+integrated, clean source is frozen, and the next unused cohort has fresh
+authority and bounded validation through real preparation and observation.
 The [project ledger](../PROJECT.md) and [evidence index](EVIDENCE-INDEX.md)
-give the v138 receipt and checkpoint paths.
-Accepted progress remains pilot 0/120, final classes 0/100, certification
-0/900 and formal 0/16,000. V126 through v133 failures and earlier gates are
+give the v139 receipt and checkpoint paths. V138 remains preserved under its
+original DNS rule and cannot be reclassified.
+Under this registered v1 contract, accepted progress remains pilot 0/120,
+final classes 0/100, certification 0/900 and formal 0/16,000. The proposed
+20-site profile also has zero accepted sites and samples. V126 through v133
+failures and earlier gates are
 preserved in the [history](PROJECT-HISTORY.md); their receipts cannot authorise
 changed source.
 
@@ -55,9 +55,10 @@ page completed a real two-origin, 63-resource preparation rehearsal, so the
 path is executable, but the registered 24-eligible-per-stratum target is not
 established by the current root-valid snapshot. Root probes do not classify
 different browser-selected page URLs. The sequence below describes
-the registered v1 contract; do not launch its long watcher before the next
-source-bound authority and bounded acquisition validation. See the
-[rehearsal](ACQUISITION-REHEARSAL.md) for the diagnostic limits.
+the registered v1 contract. The separate prospective 20-site protocol is in
+`docs/CLASS-STUDY-20.md`; its acquisition and capture matrix needs a new
+source-bound authority and bounded validation. See the
+[rehearsal](ACQUISITION-REHEARSAL.md) for diagnostic limits.
 
 ## Cost-escalating sequence
 

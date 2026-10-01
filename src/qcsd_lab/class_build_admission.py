@@ -66,6 +66,8 @@ _CONTROLLED_QUALIFICATION = "qcsd-buflo-study-qualification"
 _QUALIFICATION_AUTHORITY = "qcsd-class-study-qualification-authority"
 _COHORT = "qcsd-class-study-cohort"
 _COHORT_ASSEMBLY = "qcsd-class-study-cohort-assembly"
+_CLASS20_COHORT = "qcsd-class-study-profile-cohort"
+_CLASS20_COHORT_ASSEMBLY = "qcsd-class-study-profile-cohort-assembly"
 _CLASS_ROLES = frozenset(
     {
         "pilot-fitting",
@@ -107,8 +109,11 @@ _WORKLOAD_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 
 _FOUNDATION_SCHEMA = 4
 _READINESS_SCHEMA = 3
-_ACQUISITION_SCHEMA = 12
-_ACQUISITION_COMPLETION_SCHEMA = 4
+_CLASS20_FOUNDATION_SCHEMA = 5
+_CLASS20_READINESS_SCHEMA = 4
+_CLASS20_HISTORICAL_SCHEMA = 2
+_ACQUISITION_SCHEMA = 13
+_ACQUISITION_COMPLETION_SCHEMA = 5
 _ACQUISITION_CHECKPOINT_SCHEMA = 3
 # The exact pre-amendment v127 authority is inspection-only.  The host gate
 # must recognise it before comparing its frozen study binding to the new file.
@@ -117,6 +122,11 @@ _V127_ACQUISITION_AUTHORITY_SHA256 = (
     "081dd3d0f11e656079e9988883b2f2cc36d99b3c363559f66560a9f5a163f60f"
 )
 _EVALUATION_SCHEMA = 2
+_CLASS20_EVALUATION_SCHEMA = 3
+_CLASS20_COMPARISON_SCHEMA = 2
+_CLASS20_VALIDATION_SCHEMA = 2
+_BASE_EVALUATION_ARTIFACT = "qcsd-classifier-multiorigin100-evaluation"
+_CLASS20_EVALUATION_ARTIFACT = "qcsd-classifier-multiorigin20-evaluation"
 _SUCCESSOR_DECISION_SCHEMA = 3
 _SUCCESSOR_RESTART_SCHEMA = 2
 _PINNED_CDP_SCHEMA = 18
@@ -128,6 +138,13 @@ _HISTORICAL_BROWSER_EGRESS_FOUNDATION_SCHEMAS = frozenset({2, 3, 4, 5})
 _BROWSER_EGRESS_FINAL_SCHEMA = 1
 _HANDOFF_HISTORICAL_POST = "inputs/class-study-historical-post-snapshot.json"
 _BASE_STUDY_ID = "classifier-multiorigin100-v1"
+_CLASS20_STUDY_ID = "classifier-multiorigin20-v1"
+_CLASS20_OVERLAY_SHA256 = "386a173a97dd26989c2b6b35d039efa06db9825e960985568ff49c0a9ae327a7"
+_CLASS20_BASE_STUDY_SHA256 = "ab8d898836cb172338303ded7d0adda984fbfab720c5bcd219e08f90efbee7bc"
+_CLASS20_CATALOGUE_SHA256 = "9d2ec1d755648292526ff623700b07a9bab3988a67444c262aea9f4a855e5146"
+_CLASS20_OVERLAY = "config/class-study/v2/study.json"
+_BASE_STUDY_CONTRACT = "config/class-study/v1/study.json"
+_BASE_CATALOGUE = "config/class-study/v1/classifier-multiorigin100-v1-candidates.json"
 _SUCCESSOR_STUDY_ID = re.compile(
     r"classifier-multiorigin100-v2-g(?:0[1-9]|[1-9][0-9])-[0-9a-f]{12}\Z"
 )
@@ -464,12 +481,70 @@ def _envelope(
     return path, value, value["payload"]
 
 
+def _class20_profile_bindings(root: Path) -> tuple[dict[str, str], dict[str, dict[str, str]]]:
+    """Pin the prospective overlay and both unchanged inherited inputs on the host."""
+
+    paths = {
+        "profile": (root / _CLASS20_OVERLAY, _CLASS20_OVERLAY_SHA256),
+        "base_study": (root / _BASE_STUDY_CONTRACT, _CLASS20_BASE_STUDY_SHA256),
+        "candidate_catalogue": (root / _BASE_CATALOGUE, _CLASS20_CATALOGUE_SHA256),
+    }
+    bindings: dict[str, dict[str, str]] = {}
+    for label, (candidate, expected_sha256) in paths.items():
+        path = _regular_file(root, candidate, label=f"20-site {label.replace('_', ' ')}")
+        if _sha256(path) != expected_sha256:
+            raise ValueError(f"20-site {label.replace('_', ' ')} differs from the frozen profile")
+        bindings[label] = {"path": str(path), "sha256": expected_sha256}
+    _path, overlay = _load_json_file(
+        root, paths["profile"][0], label="20-site profile overlay"
+    )
+    if (
+        not isinstance(overlay, Mapping)
+        or overlay.get("study_id") != _CLASS20_STUDY_ID
+        or overlay.get("base_study_contract")
+        != {
+            "path": "../v1/study.json",
+            "sha256": _CLASS20_BASE_STUDY_SHA256,
+            "inheritance": (
+                "unchanged-browser-safety-request-replay-defence-and-primary-origin-"
+                "prefix-qualification-rules-only"
+            ),
+        }
+        or overlay.get("walkie_talkie_prefix_qualification")
+        != {
+            "inherited_amendment": "prospective_walkie_talkie_prefix_amendment",
+            "qualification_scope": "primary-origin-capacity-v1",
+            "prefix_spec_schema_version": 4,
+            "prefix_qualification_receipt_schema_version": 4,
+            "capacity_connection": "one-primary-origin-quic-connection",
+            "proof_boundary": (
+                "primary-origin-staged-capacity-only;full-page-and-secondary-origin-behaviour-"
+                "require-separate-end-to-end-verification"
+            ),
+        }
+        or not isinstance(overlay.get("catalogue"), Mapping)
+        or overlay["catalogue"].get("path")
+        != "../v1/classifier-multiorigin100-v1-candidates.json"
+        or overlay["catalogue"].get("sha256") != _CLASS20_CATALOGUE_SHA256
+        or overlay["catalogue"].get("candidate_count") != 600
+        or overlay.get("selection", {}).get("eligible_pilot_sites") != 30
+        or overlay.get("selection", {}).get("final_sites") != 20
+    ):
+        raise ValueError("20-site profile overlay contract is invalid")
+    return bindings["profile"], {
+        name: bindings[name] for name in ("base_study", "candidate_catalogue")
+    }
+
+
 def _class_campaign_identity(name: object, role: object) -> tuple[str, bool]:
     """Return the exact study identity encoded by one generated campaign name."""
 
     if not isinstance(name, str) or role not in _CLASS_ROLES:
         raise ValueError("class frozen campaign identity is invalid")
-    if name.startswith(f"{_BASE_STUDY_ID}-"):
+    if name.startswith(f"{_CLASS20_STUDY_ID}-"):
+        study_id = _CLASS20_STUDY_ID
+        successor = False
+    elif name.startswith(f"{_BASE_STUDY_ID}-"):
         study_id = _BASE_STUDY_ID
         successor = False
     else:
@@ -482,14 +557,22 @@ def _class_campaign_identity(name: object, role: object) -> tuple[str, bool]:
             raise ValueError("class frozen campaign name is not canonical")
         study_id = match.group("study")
         successor = True
-    expected_suffix = {
-        "pilot-fitting": "pilot-fitting-1200",
-        "pilot-compatibility": "pilot-compatibility-1080-1200",
-        "authoritative-fitting": (
-            "authoritative-fitting-2000-1200" if successor else "authoritative-fitting-1200"
-        ),
-        "certification": "certification-900-1200",
-    }.get(role)
+    expected_suffix = (
+        {
+            "pilot-fitting": "pilot-fitting-120-1200",
+            "authoritative-fitting": "authoritative-fitting-400-1200",
+            "certification": "certification-180-1200",
+        }
+        if study_id == _CLASS20_STUDY_ID
+        else {
+            "pilot-fitting": "pilot-fitting-1200",
+            "pilot-compatibility": "pilot-compatibility-1080-1200",
+            "authoritative-fitting": (
+                "authoritative-fitting-2000-1200" if successor else "authoritative-fitting-1200"
+            ),
+            "certification": "certification-900-1200",
+        }
+    ).get(role)
     suffix = name.removeprefix(f"{study_id}-")
     if role in _PROMOTED_ROLES:
         if re.fullmatch(rf"{role}-(?:0[1-9]|10)-1200", suffix) is None:
@@ -647,8 +730,17 @@ def _current_build(
 
 
 class _Resolver:
-    def __init__(self, root: Path, *, build_loader: Callable[..., BuildAdmission] | None = None):
+    def __init__(
+        self,
+        root: Path,
+        *,
+        study_id: str = _BASE_STUDY_ID,
+        build_loader: Callable[..., BuildAdmission] | None = None,
+    ):
+        if study_id not in {_BASE_STUDY_ID, _CLASS20_STUDY_ID}:
+            raise ValueError("class-study host admission study identity is invalid")
         self.root = root
+        self.study_id = study_id
         self._storage = None
         self._build_loader = build_loader
         self._seen: dict[tuple[str, Path], BuildAdmission] = {}
@@ -684,17 +776,28 @@ class _Resolver:
         evidence = payload.get("evidence")
         identity = payload.get("build_execution_identity")
         schema = payload.get("attestation_schema_version")
+        expected_schema = (
+            _CLASS20_FOUNDATION_SCHEMA
+            if self.study_id == _CLASS20_STUDY_ID else _FOUNDATION_SCHEMA
+        )
         if type(schema) is int and schema < _FOUNDATION_SCHEMA:
             raise _HistoricalAuthority(
                 "class foundation is historical, not current build authority"
             )
         if (
             payload.get("artifact_type") != _FOUNDATION
-            or schema != _FOUNDATION_SCHEMA
+            or schema != expected_schema
             or not isinstance(evidence, Mapping)
             or not isinstance(identity, Mapping)
         ):
             raise ValueError("class foundation is not current build authority")
+        if (
+            (self.study_id == _CLASS20_STUDY_ID and payload.get("study_id") != self.study_id)
+            or (self.study_id == _BASE_STUDY_ID and payload.get("study_id") == _CLASS20_STUDY_ID)
+        ):
+            raise ValueError("class foundation belongs to another study profile")
+        if self.study_id == _CLASS20_STUDY_ID and payload.get("study_profile_sha256") != _CLASS20_OVERLAY_SHA256:
+            raise ValueError("20-site foundation belongs to another study profile")
         build_path = _bound_file(
             self.root, evidence.get("build_execution"), label="foundation build execution"
         )
@@ -743,11 +846,15 @@ class _Resolver:
         )
         evidence = payload.get("evidence")
         schema = payload.get("attestation_schema_version")
+        expected_schema = (
+            _CLASS20_READINESS_SCHEMA
+            if self.study_id == _CLASS20_STUDY_ID else _READINESS_SCHEMA
+        )
         if type(schema) is int and schema < _READINESS_SCHEMA:
             raise _HistoricalAuthority("class readiness is historical")
         if (
             payload.get("artifact_type") != _READINESS
-            or schema != _READINESS_SCHEMA
+            or schema != expected_schema
             or not isinstance(evidence, Mapping)
         ):
             raise ValueError("class readiness is not current build authority")
@@ -841,8 +948,14 @@ class _Resolver:
         restart = evidence.get("successor_restart")
         study_id = payload.get("study_id")
         successor_study = isinstance(study_id, str) and _SUCCESSOR_STUDY_ID.fullmatch(study_id)
-        if study_id != _BASE_STUDY_ID and not successor_study:
+        if study_id not in {_BASE_STUDY_ID, _CLASS20_STUDY_ID} and not successor_study:
             raise ValueError("class readiness has an invalid study identity")
+        if self.study_id == _CLASS20_STUDY_ID and study_id != self.study_id:
+            raise ValueError("class readiness belongs to another study profile")
+        if self.study_id == _BASE_STUDY_ID and study_id == _CLASS20_STUDY_ID:
+            raise ValueError("class readiness belongs to another study profile")
+        if self.study_id == _CLASS20_STUDY_ID and payload.get("study_profile_sha256") != _CLASS20_OVERLAY_SHA256:
+            raise ValueError("20-site readiness belongs to another study profile")
         if bool(successor_study) != (restart is not None):
             raise ValueError("class readiness successor authority is incomplete")
         if restart is not None:
@@ -857,9 +970,21 @@ class _Resolver:
         _path, _value, payload = _envelope(
             self.root, raw, label="class historical snapshot", expected_type=_HISTORICAL
         )
+        expected_schema = (
+            _CLASS20_HISTORICAL_SCHEMA
+            if self.study_id == _CLASS20_STUDY_ID else 1
+        )
         if (
             payload.get("artifact_type") != _HISTORICAL
-            or payload.get("snapshot_schema_version") != 1
+            or payload.get("snapshot_schema_version") != expected_schema
+            or (
+                self.study_id == _CLASS20_STUDY_ID
+                and (
+                    payload.get("study_id") != self.study_id
+                    or payload.get("study_profile_sha256") != _CLASS20_OVERLAY_SHA256
+                )
+            )
+            or (self.study_id == _BASE_STUDY_ID and payload.get("study_id") == _CLASS20_STUDY_ID)
         ):
             raise ValueError("class historical snapshot schema is invalid")
         readiness_path = _bound_file(
@@ -900,7 +1025,7 @@ class _Resolver:
         if (
             payload.get("artifact_type") != _ACQUISITION_AUTHORITY
             or type(schema) is not int
-            or schema not in {1, 2}
+            or schema not in {1, 2, 3}
             or payload.get("authority_scope") != "public-page-acquisition-only"
             or payload.get("promotion_authority") is not False
             or payload.get("no_waivers") is not True
@@ -909,8 +1034,30 @@ class _Resolver:
             or not isinstance(evidence, Mapping)
         ):
             raise ValueError("class acquisition authority is not current acquisition-only proof")
-        if schema == 2 and set(evidence) != {"build_execution", "pinned_cdp_probe"}:
-            raise ValueError("class acquisition authority v2 evidence inventory is invalid")
+        expected_evidence = {"build_execution", "pinned_cdp_probe"}
+        if schema == 1:
+            expected_evidence.add("browser_egress_qualification")
+        if set(evidence) != expected_evidence:
+            raise ValueError("class acquisition authority evidence inventory is invalid")
+        if schema == 3:
+            if self.study_id != _CLASS20_STUDY_ID or payload.get("study_id") != self.study_id:
+                raise ValueError("20-site acquisition authority belongs to another study profile")
+            if (
+                path.parent != self.root / "artifacts"
+                or path.name
+                != f"{self.study_id}-acquisition-authority-v{cohort}.json"
+            ):
+                raise ValueError("20-site acquisition authority path is not canonical")
+            profile_binding, inherited_bindings = _class20_profile_bindings(self.root)
+            if (
+                payload.get("study_profile_sha256") != profile_binding["sha256"]
+                or payload.get("study_profile_inputs") != inherited_bindings
+            ):
+                raise ValueError("20-site acquisition authority profile inputs differ")
+        elif self.study_id == _CLASS20_STUDY_ID or payload.get("study_id") not in {
+            None, _BASE_STUDY_ID
+        }:
+            raise ValueError("class acquisition authority belongs to another study profile")
         build = self.build(
             _bound_file(self.root, evidence.get("build_execution"), label="acquisition build"),
             expected_cohort=cohort,
@@ -925,8 +1072,14 @@ class _Resolver:
         study = _bound_file(
             self.root, payload.get("study_contract"), label="acquisition study contract"
         )
-        if study != self.root / "config/class-study/v1/study.json":
+        expected_study = (
+            self.root / _CLASS20_OVERLAY
+            if schema == 3 else self.root / _BASE_STUDY_CONTRACT
+        )
+        if study != expected_study:
             raise ValueError("class acquisition authority binds another study contract")
+        if schema == 3 and payload.get("study_contract") != profile_binding:
+            raise ValueError("20-site acquisition authority overlay binding differs")
         correctness = payload.get("acquisition_correctness")
         if (
             not isinstance(correctness, Mapping)
@@ -984,6 +1137,22 @@ class _Resolver:
             raise _HistoricalAuthority("class acquisition provenance is historical")
         if type(schema) is not int or schema != _ACQUISITION_SCHEMA:
             raise ValueError("class acquisition provenance schema is invalid")
+        if self.study_id == _CLASS20_STUDY_ID:
+            profile_binding, inherited_bindings = _class20_profile_bindings(self.root)
+            if (
+                payload.get("study_id") != self.study_id
+                or payload.get("study_profile_sha256") != profile_binding["sha256"]
+                or payload.get("candidate_catalogue_sha256")
+                != inherited_bindings["candidate_catalogue"]["sha256"]
+                or runner.parent != self.root / "artifacts"
+                or re.fullmatch(
+                    rf"{re.escape(_CLASS20_STUDY_ID)}-acquisition-v[1-9][0-9]*",
+                    runner.name,
+                ) is None
+            ):
+                raise ValueError("20-site acquisition root or profile differs")
+        elif payload.get("study_id") not in {None, _BASE_STUDY_ID}:
+            raise ValueError("class acquisition provenance belongs to another study profile")
         if "foundation_attestation" in payload:
             raise ValueError("current acquisition provenance contains a legacy foundation binding")
         authority_path = _bound_file(
@@ -992,6 +1161,18 @@ class _Resolver:
             label="acquisition authority",
         )
         build = self.acquisition_authority_or_foundation(authority_path)
+        if self.study_id == _CLASS20_STUDY_ID:
+            _authority_path, _authority_value, authority = _envelope(
+                self.root,
+                authority_path,
+                label="20-site acquisition authority",
+                expected_type=_ACQUISITION_AUTHORITY,
+            )
+            if (
+                authority.get("attestation_schema_version") != 3
+                or authority.get("study_id") != self.study_id
+            ):
+                raise ValueError("20-site acquisition requires its profile-specific authority")
         expected_source = {**dict(build.source), "image_digest": build.prepare_image}
         if (
             payload.get("image_digest") != build.prepare_image
@@ -1006,6 +1187,17 @@ class _Resolver:
         )
         if payload.get("artifact_type") != _COMPARISON:
             raise ValueError("class comparison review schema is invalid")
+        if self.study_id == _CLASS20_STUDY_ID:
+            profile, _inherited = _class20_profile_bindings(self.root)
+            if (
+                payload.get("study_id") != self.study_id
+                or payload.get("study_profile_sha256") != profile["sha256"]
+                or payload.get("review_schema_version") != _CLASS20_COMPARISON_SCHEMA
+                or payload.get("passed") is not True
+            ):
+                raise ValueError("20-site comparison review profile or schema is invalid")
+        elif payload.get("study_id") == _CLASS20_STUDY_ID or "study_profile_sha256" in payload:
+            raise ValueError("class comparison review belongs to another study profile")
         linked = [
             self.handoff(
                 _bound_directory(self.root, payload.get("handoff"), label="review handoff")
@@ -1029,7 +1221,22 @@ class _Resolver:
         schema = payload.get("schema_version")
         if schema == 1:
             raise _HistoricalAuthority("class evaluation is historical")
-        if payload.get("artifact_type") != _EVALUATION or schema != _EVALUATION_SCHEMA:
+        if self.study_id == _CLASS20_STUDY_ID:
+            profile, _inherited = _class20_profile_bindings(self.root)
+            valid = (
+                payload.get("artifact_type") == _CLASS20_EVALUATION_ARTIFACT
+                and schema == _CLASS20_EVALUATION_SCHEMA
+                and payload.get("study_id") == self.study_id
+                and payload.get("study_profile_sha256") == profile["sha256"]
+            )
+        else:
+            valid = (
+                payload.get("artifact_type") in {_EVALUATION, _BASE_EVALUATION_ARTIFACT}
+                and schema == _EVALUATION_SCHEMA
+                and payload.get("study_id") != _CLASS20_STUDY_ID
+                and "study_profile_sha256" not in payload
+            )
+        if not valid:
             raise ValueError("class evaluation schema is invalid")
         return self.handoff(
             _bound_directory(self.root, payload.get("handoff"), label="evaluation handoff")
@@ -1040,10 +1247,35 @@ class _Resolver:
             self.root, raw, label="class validation attestation", expected_type=_VALIDATION
         )
         evidence = payload.get("evidence")
+        profile20 = self.study_id == _CLASS20_STUDY_ID
+        if profile20:
+            profile, _inherited = _class20_profile_bindings(self.root)
+            expected_evidence = {
+                "readiness", "canary_results", "formal_results",
+                "historical_pre_snapshot", "historical_post_snapshot",
+                "handoff", "evaluation", "comparison_review",
+            }
+            profile_valid = (
+                payload.get("study_id") == self.study_id
+                and payload.get("study_profile_sha256") == profile["sha256"]
+                and isinstance(evidence, Mapping)
+                and set(evidence) == expected_evidence
+                and isinstance(evidence.get("canary_results"), list)
+                and len(evidence["canary_results"]) == 10
+                and isinstance(evidence.get("formal_results"), list)
+                and len(evidence["formal_results"]) == 10
+            )
+        else:
+            profile_valid = (
+                payload.get("study_id") != _CLASS20_STUDY_ID
+                and "study_profile_sha256" not in payload
+            )
         if (
             payload.get("artifact_type") != _VALIDATION
-            or payload.get("attestation_schema_version") != 1
+            or payload.get("attestation_schema_version")
+            != (_CLASS20_VALIDATION_SCHEMA if profile20 else 1)
             or not isinstance(evidence, Mapping)
+            or not profile_valid
         ):
             raise ValueError("class validation attestation schema is invalid")
         readiness_path = _bound_file(
@@ -1621,7 +1853,7 @@ class _Resolver:
             "authoritative-fitting": 10,
             "certification": 1,
             "canary": 1,
-            "formal": 2,
+            "formal": 10 if self.study_id == _CLASS20_STUDY_ID else 2,
         }[role]
         inventory: dict[str, set[str]] = {
             "workloads": set(),
@@ -1756,9 +1988,149 @@ class _Resolver:
                 raise ValueError(f"{label} source fingerprints differ from the resolved build")
 
     def carrier_file(self, raw: str | os.PathLike[str], *, label: str) -> list[BuildAdmission]:
-        _path, value = _load_json_file(self.root, raw, label=label)
+        path, value = _load_json_file(self.root, raw, label=label)
+        receipt_type = value.get("receipt_type") if isinstance(value, Mapping) else None
+        if receipt_type == _CLASS20_COHORT_ASSEMBLY:
+            build = self.profile20_cohort_assembly(path, label=label)
+            assert build is not None
+            return [build]
+        if self.study_id == _CLASS20_STUDY_ID and receipt_type in {
+            _COHORT, _COHORT_ASSEMBLY
+        }:
+            raise ValueError(f"{label} belongs to the 100-site study")
         self._record_fitting_source(value, label=label)
         return self.carrier_value(value, label=label)
+
+    def profile20_cohort_assembly(
+        self,
+        raw: str | os.PathLike[str],
+        *,
+        label: str,
+        cohort_path: Path | None = None,
+        require_completion: bool = True,
+    ) -> BuildAdmission | None:
+        """Check a 20-site cohort pair before a fresh Docker action.
+
+        Frozen result copies can outlive the original acquisition tree. In that
+        case the frozen environment and foundation supply build authority.
+        """
+
+        if self.study_id != _CLASS20_STUDY_ID:
+            raise ValueError(f"{label} belongs to another study profile")
+        profile, inherited = _class20_profile_bindings(self.root)
+        path, assembly_envelope, assembly = _envelope(
+            self.root, raw, label=label, expected_type=_CLASS20_COHORT_ASSEMBLY
+        )
+        if cohort_path is None:
+            names = {
+                f"{_CLASS20_STUDY_ID}-pilot-cohort-assembly.json":
+                    f"{_CLASS20_STUDY_ID}-pilot-cohort.json",
+                f"{_CLASS20_STUDY_ID}-cohort-assembly.json":
+                    f"{_CLASS20_STUDY_ID}-cohort.json",
+                "class-study-cohort-assembly.json": "class-study-cohort.json",
+            }
+            cohort_name = names.get(path.name)
+            if cohort_name is None:
+                raise ValueError(f"{label} filename is not canonical")
+            cohort_path = path.with_name(cohort_name)
+        cohort_file, cohort_envelope, cohort = _envelope(
+            self.root, cohort_path, label=f"{label} cohort", expected_type=_CLASS20_COHORT
+        )
+        pilot_ids = cohort.get("pilot_ids")
+        final_ids = cohort.get("final_ids")
+        reserve_ids = cohort.get("reserve_ids")
+        candidates = cohort.get("candidates")
+        stage = cohort.get("stage")
+        expected_cohort_binding = {
+            "receipt_type": _CLASS20_COHORT,
+            "payload_sha256": cohort_envelope["payload_sha256"],
+            "canonical_file_sha256": hashlib.sha256(
+                _canonical_json_bytes(cohort_envelope)
+            ).hexdigest(),
+        }
+        catalogue = assembly.get("candidate_catalogue")
+        completion = assembly.get("acquisition_completion")
+        if (
+            assembly_envelope["schema_version"] != 1
+            or assembly.get("study_id") != self.study_id
+            or assembly.get("assembly_schema_version") != 1
+            or assembly.get("profile")
+            != {"path": _CLASS20_OVERLAY, "sha256": profile["sha256"]}
+            or not isinstance(catalogue, Mapping)
+            or catalogue.get("path") != _BASE_CATALOGUE
+            or catalogue.get("sha256") != inherited["candidate_catalogue"]["sha256"]
+            or cohort.get("study_id") != self.study_id
+            or cohort.get("cohort_schema_version") != 1
+            or cohort.get("profile_sha256") != profile["sha256"]
+            or not isinstance(candidates, list)
+            or len(candidates) != 600
+            or not isinstance(pilot_ids, list)
+            or len(pilot_ids) != 30
+            or len(set(pilot_ids)) != 30
+            or not isinstance(final_ids, list)
+            or not isinstance(reserve_ids, list)
+            or not all(isinstance(item, str) for item in pilot_ids + final_ids + reserve_ids)
+            or len(set(final_ids)) != len(final_ids)
+            or len(set(reserve_ids)) != len(reserve_ids)
+            or not set(final_ids + reserve_ids).issubset(set(pilot_ids))
+            or set(final_ids).intersection(reserve_ids)
+            or (
+                stage == "pilot" and (final_ids != [] or reserve_ids != [])
+            )
+            or (
+                stage == "final" and (len(final_ids) != 20 or len(reserve_ids) != 10)
+            )
+            or stage not in {"pilot", "final"}
+            or assembly.get("cohort") != expected_cohort_binding
+            or _sha256(cohort_file) != expected_cohort_binding["canonical_file_sha256"]
+            or assembly.get("selected_evidence_count") != 30
+            or not isinstance(completion, Mapping)
+            or not isinstance(completion.get("path"), str)
+            or not isinstance(completion.get("sha256"), str)
+            or _DIGEST.fullmatch(completion["sha256"]) is None
+        ):
+            raise ValueError(f"{label} 20-site profile, cohort, or counts differ")
+        _catalogue_path, catalogue_envelope = _load_json_file(
+            self.root, inherited["candidate_catalogue"]["path"],
+            label="20-site inherited candidate catalogue",
+        )
+        if catalogue.get("payload_sha256") != catalogue_envelope.get("payload_sha256"):
+            raise ValueError(f"{label} inherited catalogue payload differs")
+        completion_match = re.fullmatch(
+            rf"artifacts/{re.escape(self.study_id)}-acquisition-v[1-9][0-9]*/completion[.]json",
+            completion["path"],
+        )
+        if completion_match is None:
+            raise ValueError(f"{label} acquisition completion path is not canonical")
+        if not require_completion:
+            return None
+        expected_name = (
+            f"{self.study_id}-pilot-cohort-assembly.json"
+            if stage == "pilot" else f"{self.study_id}-cohort-assembly.json"
+        )
+        if path.parent != self.root / "config/class-study/v2" or path.name != expected_name:
+            raise ValueError(f"{label} fresh cohort path is not canonical")
+        completion_path = _regular_file(
+            self.root, self.root / completion["path"], label=f"{label} completion"
+        )
+        if _sha256(completion_path) != completion["sha256"]:
+            raise ValueError(f"{label} acquisition completion changed")
+        _completion_path, completion_envelope, completion_payload = _envelope(
+            self.root, completion_path, label=f"{label} completion",
+            expected_type=_ACQUISITION_COMPLETION,
+        )
+        if (
+            completion.get("payload_sha256") != completion_envelope["payload_sha256"]
+            or completion.get("provenance_sha256")
+            != completion_payload.get("provenance_sha256")
+            or completion.get("selection_payload_sha256")
+            != (
+                completion_payload.get("selection", {}).get("payload_sha256")
+                if isinstance(completion_payload.get("selection"), Mapping) else None
+            )
+        ):
+            raise ValueError(f"{label} acquisition completion binding differs")
+        return self.acquisition_completion(completion_path)
 
     def carrier_directory(
         self,
@@ -1802,6 +2174,31 @@ class _Resolver:
             or _DIGEST.fullmatch(provenance_sha256) is None
         ):
             raise ValueError("class acquisition completion is not current build authority")
+        if self.study_id == _CLASS20_STUDY_ID:
+            _profile, inherited = _class20_profile_bindings(self.root)
+            selection = completion.get("selection")
+            if (
+                completion.get("study_id") != self.study_id
+                or completion.get("candidate_catalogue_sha256")
+                != inherited["candidate_catalogue"]["sha256"]
+                or path.name != "completion.json"
+                or path.parent.parent != self.root / "artifacts"
+                or re.fullmatch(
+                    rf"{re.escape(_CLASS20_STUDY_ID)}-acquisition-v[1-9][0-9]*",
+                    path.parent.name,
+                ) is None
+                or not isinstance(selection, Mapping)
+                or set(selection) != {"schema_version", "receipt_type", "payload_sha256", "payload"}
+                or selection.get("schema_version") != 1
+                or selection.get("receipt_type") != "qcsd-class-study-acquisition-selection"
+                or not isinstance(selection.get("payload"), Mapping)
+                or selection.get("payload_sha256")
+                != hashlib.sha256(_canonical_json_bytes(selection["payload"])).hexdigest()
+                or not isinstance(completion.get("operational_censor_summary"), Mapping)
+            ):
+                raise ValueError("20-site acquisition completion path or catalogue differs")
+        elif completion.get("study_id") not in {None, _BASE_STUDY_ID}:
+            raise ValueError("class acquisition completion belongs to another study profile")
         provenance = _regular_file(
             self.root,
             path.parent / "provenance.json",
@@ -2111,6 +2508,20 @@ class _Resolver:
 
     def frozen_environment(self, raw: str | os.PathLike[str]) -> BuildAdmission:
         result = _regular_directory(self.root, raw, label="class capture result")
+        if self.study_id == _CLASS20_STUDY_ID:
+            _experiment_path, experiment = _load_json_file(
+                self.root, result / "experiment.json", label="20-site frozen experiment",
+                max_bytes=_MAX_EXPERIMENT_BYTES,
+            )
+            configuration = experiment.get("configuration") if isinstance(experiment, Mapping) else None
+            if (
+                not isinstance(configuration, Mapping)
+                or configuration.get("class_study_id") != self.study_id
+                or configuration.get("class_study_profile_sha256") != _CLASS20_OVERLAY_SHA256
+                or not isinstance(experiment.get("name"), str)
+                or not experiment["name"].startswith(f"{self.study_id}-")
+            ):
+                raise ValueError("class frozen result belongs to another study profile")
         _path, environment = _load_json_file(
             self.root,
             result / "inputs/study-environment.json",
@@ -2225,6 +2636,10 @@ class _Resolver:
         if role not in _CLASS_ROLES or not isinstance(configuration, Mapping):
             raise ValueError("class frozen experiment has an invalid evidence role")
         study_id, successor_campaign = _class_campaign_identity(campaign_name, role)
+        if self.study_id == _CLASS20_STUDY_ID and study_id != self.study_id:
+            raise ValueError("class frozen campaign belongs to another study profile")
+        if self.study_id == _BASE_STUDY_ID and study_id == _CLASS20_STUDY_ID:
+            raise ValueError("class frozen campaign belongs to another study profile")
         expected_configuration_keys = {
             "campaign_sha256",
             "profile",
@@ -2242,6 +2657,8 @@ class _Resolver:
             "sample_order",
             "study_environment_sha256",
         }
+        if study_id == _CLASS20_STUDY_ID:
+            expected_configuration_keys.add("class_study_profile_sha256")
         if role not in {"pilot-fitting", "authoritative-fitting"}:
             expected_configuration_keys.add("defense_order")
         if role in _CLASS_FITTED_ROLES:
@@ -2340,7 +2757,11 @@ class _Resolver:
         campaign_scalars = _campaign_carrier_scalars(campaign_text)
         campaign_workloads = campaign_document.get("workloads")
         configured_workloads = configuration.get("workloads")
-        expected_workload_count = 120 if role in {"pilot-fitting", "pilot-compatibility"} else 100
+        expected_workload_count = (
+            30 if role == "pilot-fitting" else 20
+        ) if study_id == _CLASS20_STUDY_ID else (
+            120 if role in {"pilot-fitting", "pilot-compatibility"} else 100
+        )
         campaign_workload_ids = (
             list(campaign_workloads) if isinstance(campaign_workloads, Mapping) else None
         )
@@ -2399,17 +2820,18 @@ class _Resolver:
             )
         )
 
+        profile20 = study_id == _CLASS20_STUDY_ID
         cohort_path, cohort_envelope, cohort_payload = _envelope(
             self.root,
             inputs / "class-study-cohort.json",
             label="class frozen cohort",
-            expected_type=_COHORT,
+            expected_type=_CLASS20_COHORT if profile20 else _COHORT,
         )
         assembly_path, assembly_envelope, assembly = _envelope(
             self.root,
             inputs / "class-study-cohort-assembly.json",
             label="class frozen cohort assembly",
-            expected_type=_COHORT_ASSEMBLY,
+            expected_type=_CLASS20_COHORT_ASSEMBLY if profile20 else _COHORT_ASSEMBLY,
         )
         cohort_sha256 = _sha256(cohort_path)
         assembly_sha256 = _sha256(assembly_path)
@@ -2421,34 +2843,50 @@ class _Resolver:
             ).hexdigest(),
         }
         pilot_role = role in {"pilot-fitting", "pilot-compatibility"}
-        cohort_inventories = cohort_payload.get("inventories")
-        cohort_workload_ids = (
-            cohort_inventories.get("pilot" if pilot_role else "final")
-            if isinstance(cohort_inventories, Mapping)
-            else None
-        )
+        if profile20:
+            self.profile20_cohort_assembly(
+                assembly_path,
+                label="class frozen 20-site cohort assembly",
+                cohort_path=cohort_path,
+                require_completion=False,
+            )
+            cohort_workload_ids = cohort_payload.get("pilot_ids" if pilot_role else "final_ids")
+            if cohort_payload.get("stage") != ("pilot" if pilot_role else "final"):
+                raise ValueError("class frozen 20-site cohort stage differs from campaign")
+        else:
+            cohort_inventories = cohort_payload.get("inventories")
+            cohort_workload_ids = (
+                cohort_inventories.get("pilot" if pilot_role else "final")
+                if isinstance(cohort_inventories, Mapping)
+                else None
+            )
         if (
-            cohort_payload.get("study_id") != _BASE_STUDY_ID
+            cohort_payload.get("study_id") != (
+                study_id if profile20 else _BASE_STUDY_ID
+            )
             or cohort_workload_ids != campaign_workload_ids
-            or set(assembly) != _COHORT_ASSEMBLY_KEYS
-            or assembly.get("study_id") != _BASE_STUDY_ID
-            or assembly.get("assembly_schema_version") != 3
+            or (not profile20 and set(assembly) != _COHORT_ASSEMBLY_KEYS)
+            or assembly.get("study_id") != (
+                study_id if profile20 else _BASE_STUDY_ID
+            )
+            or assembly.get("assembly_schema_version") != (1 if profile20 else 3)
             or assembly.get("cohort") != expected_cohort_binding
-            or (assembly.get("final_selection") is None) is not pilot_role
+            or (not profile20 and (assembly.get("final_selection") is None) is not pilot_role)
             or configuration.get("class_study_cohort_sha256") != cohort_sha256
             or configuration.get("class_study_cohort_assembly_sha256") != assembly_sha256
         ):
             raise ValueError("class frozen cohort and assembly binding is invalid")
-        assembly_authorities = self.carrier_value(
-            assembly,
-            label="class frozen cohort assembly",
-            frozen_foundation=foundation_path,
-        )
-        if pilot_role and assembly_authorities:
-            raise ValueError("class frozen pilot assembly unexpectedly has build authority")
-        if not pilot_role and not assembly_authorities:
-            raise ValueError("class frozen final assembly has no build authority")
-        linked.extend(assembly_authorities)
+        if not profile20:
+            assembly_authorities = self.carrier_value(
+                assembly,
+                label="class frozen cohort assembly",
+                frozen_foundation=foundation_path,
+            )
+            if pilot_role and assembly_authorities:
+                raise ValueError("class frozen pilot assembly unexpectedly has build authority")
+            if not pilot_role and not assembly_authorities:
+                raise ValueError("class frozen final assembly has no build authority")
+            linked.extend(assembly_authorities)
 
         promotion_paths: dict[str, tuple[Path, Mapping[str, Any]]] = {}
         promotion_specs = (
@@ -2702,10 +3140,15 @@ class _Resolver:
 
         expected_qualification = None
         if role == "pilot-compatibility":
-            expected_qualification = _PILOT_QUALIFICATION_SET
+            expected_qualification = (
+                f"{_CLASS20_STUDY_ID}-pilot30-full-v1"
+                if profile20 else _PILOT_QUALIFICATION_SET
+            )
         elif role in {"certification", "formal"}:
             expected_qualification = (
-                f"{study_id}-final-full" if successor_campaign else _AUTHORITATIVE_QUALIFICATION_SET
+                f"{study_id}-final-full" if successor_campaign else
+                f"{_CLASS20_STUDY_ID}-final20-full-v1" if profile20 else
+                _AUTHORITATIVE_QUALIFICATION_SET
             )
         qualification_values = campaign_scalars["chaff_qualification_set"]
         if qualification_values != ([expected_qualification] if expected_qualification else []):
@@ -2764,19 +3207,26 @@ class _Resolver:
         }
         if successor_campaign:
             source_keys.update({"study_id", "class_study_successor_sha256"})
+        elif profile20:
+            source_keys.update({"study_id", "class_study_profile_sha256"})
         expected_fitting_campaign = (
+            f"{study_id}-pilot-fitting-120-1200"
+            if profile20 and expected_stage == "pilot" else
+            f"{study_id}-authoritative-fitting-400-1200"
+            if profile20 else
             f"{_BASE_STUDY_ID}-pilot-fitting-1200"
-            if expected_stage == "pilot"
-            else (
-                f"{study_id}-authoritative-fitting-2000-1200"
-                if successor_campaign
-                else f"{_BASE_STUDY_ID}-authoritative-fitting-1200"
-            )
+            if expected_stage == "pilot" else
+            f"{study_id}-authoritative-fitting-2000-1200"
+            if successor_campaign else
+            f"{_BASE_STUDY_ID}-authoritative-fitting-1200"
         )
         if (
             not isinstance(provenance, Mapping)
-            or set(provenance) != _FINAL_PROVENANCE_KEYS
-            or provenance.get("schema_version") != 2
+            or set(provenance) != (
+                _FINAL_PROVENANCE_KEYS | {"study_id", "study_profile_sha256"}
+                if profile20 else _FINAL_PROVENANCE_KEYS
+            )
+            or provenance.get("schema_version") != (3 if profile20 else 2)
             or provenance.get("artifact_type") != "qcsd-class-study-research-defense-bundle"
             or provenance.get("stage") != expected_stage
             or provenance.get("status") != expected_status
@@ -2784,6 +3234,10 @@ class _Resolver:
             or not isinstance(source_result, Mapping)
             or set(source_result) != source_keys
             or source_result.get("campaign") != expected_fitting_campaign
+            or (profile20 and source_result.get("study_id") != study_id)
+            or (profile20 and source_result.get("class_study_profile_sha256") != _CLASS20_OVERLAY_SHA256)
+            or (profile20 and provenance.get("study_id") != study_id)
+            or (profile20 and provenance.get("study_profile_sha256") != _CLASS20_OVERLAY_SHA256)
             or source_result.get("source_fingerprints") != build.source
             or any(
                 _DIGEST.fullmatch(str(source_result.get(key))) is None
@@ -2866,7 +3320,9 @@ class _Resolver:
             label="class frozen qualification manifest",
             max_bytes=_MAX_FROZEN_INPUT_BYTES,
         )
-        expected_count = 120 if expected_stage == "pilot" else 100
+        expected_count = (
+            30 if expected_stage == "pilot" else 20
+        ) if profile20 else (120 if expected_stage == "pilot" else 100)
         workload_ids = manifest.get("workload_ids") if isinstance(manifest, Mapping) else None
         entries = manifest.get("workloads") if isinstance(manifest, Mapping) else None
         manifest_authority = (
@@ -3562,6 +4018,21 @@ def _campaign_authorities(
     role = selected["evidence_role"][0]
     if re.fullmatch(r"[a-z-]+", role) is None:
         raise ValueError("class campaign has an invalid evidence role")
+    if resolver.study_id == _CLASS20_STUDY_ID or _CLASS20_STUDY_ID in path.name:
+        campaign = _CampaignSubsetParser(text).parse()
+        campaign_name = campaign.get("name")
+        campaign_study, _successor = _class_campaign_identity(campaign_name, role)
+        workload_ids = campaign.get("workloads")
+        expected_count = 30 if role == "pilot-fitting" else 20
+        if (
+            campaign_study != resolver.study_id
+            or campaign_name != path.stem
+            or path.parent != resolver.root / "config" / f"{resolver.study_id}-campaigns"
+            or not isinstance(workload_ids, Mapping)
+            or len(workload_ids) != expected_count
+            or len(selected["class_study_cohort_assembly"]) != 1
+        ):
+            raise ValueError("20-site campaign path, profile, or workload count differs")
     authorities: list[BuildAdmission] = []
     parameters = selected["parameters"]
     fitted_roots = {
@@ -3641,6 +4112,90 @@ def _campaign_authorities(
     return role, authorities
 
 
+def _require_class20_capture_ledger(
+    resolver: _Resolver,
+    *,
+    campaign_name: str,
+    role: str,
+    roots: Sequence[str],
+    final_cohort: str = "",
+    final_assembly: str = "",
+    pilot_cohort: str = "",
+    pilot_assembly: str = "",
+) -> None:
+    """Reject missing or reordered v2 predecessors before Docker is consulted.
+
+    The in-image verifier still replays every sealed sample.  This host check
+    is deliberately cheap: it admits only the exact immutable result sequence
+    and canonical final-cohort paths for a canary or formal block.
+    """
+
+    study_id, successor = _class_campaign_identity(campaign_name, role)
+    if study_id != _CLASS20_STUDY_ID or successor:
+        raise ValueError("20-site capture requires one canonical profile campaign")
+    if role == "pilot-fitting":
+        expected = []
+    elif role == "authoritative-fitting":
+        expected = [f"{study_id}-pilot-fitting-120-1200"]
+    elif role == "certification":
+        expected = [f"{study_id}-authoritative-fitting-400-1200"]
+    elif role in {"canary", "formal"}:
+        match = re.fullmatch(
+            rf"{re.escape(_CLASS20_STUDY_ID)}-(canary|formal)-(0[1-9]|10)-1200",
+            campaign_name,
+        )
+        if match is None:
+            raise ValueError("20-site capture requires one canonical formal block")
+        block = int(match.group(2))
+        expected = [
+            f"{study_id}-authoritative-fitting-400-1200",
+            f"{study_id}-certification-180-1200",
+        ]
+        for prior in range(1, block):
+            expected.extend(
+                (f"{study_id}-canary-{prior:02d}-1200", f"{study_id}-formal-{prior:02d}-1200")
+            )
+        if role == "formal":
+            expected.append(f"{study_id}-canary-{block:02d}-1200")
+    else:
+        raise ValueError("20-site capture role is unsupported")
+    if len(roots) != len(expected):
+        raise ValueError("20-site capture requires the exact preceding result ledger")
+    observed = []
+    seen: set[Path] = set()
+    for raw in roots:
+        root = _regular_directory(resolver.root, raw, label="20-site preceding result")
+        if root in seen:
+            raise ValueError("20-site capture repeats a preceding result")
+        seen.add(root)
+        _path, experiment = _load_json_file(
+            resolver.root, root / "experiment.json", label="20-site preceding experiment",
+            max_bytes=_MAX_EXPERIMENT_BYTES,
+        )
+        if not isinstance(experiment, Mapping):
+            raise ValueError("20-site preceding experiment is invalid")
+        observed.append(experiment.get("name"))
+    if observed != expected:
+        raise ValueError("20-site capture preceding result order differs")
+    cohort = _regular_file(
+        resolver.root, pilot_cohort if role == "pilot-fitting" else final_cohort,
+        label="20-site capture cohort",
+    )
+    assembly = _regular_file(
+        resolver.root, pilot_assembly if role == "pilot-fitting" else final_assembly,
+        label="20-site capture assembly",
+    )
+    expected_root = resolver.root / "config/class-study/v2"
+    suffix = "-pilot-cohort" if role == "pilot-fitting" else "-cohort"
+    expected_cohort = expected_root / f"{study_id}{suffix}.json"
+    expected_assembly = expected_root / f"{study_id}{suffix}-assembly.json"
+    if (
+        cohort != expected_cohort
+        or assembly != expected_assembly
+    ):
+        raise ValueError("20-site capture cohort paths are not canonical")
+
+
 def resolve_action_admission(
     root: Path,
     *,
@@ -3654,7 +4209,10 @@ def resolve_action_admission(
     """Resolve the build consumed by one class-study action, if any."""
 
     values = dict(options or {})
-    resolver = _Resolver(Path(root).resolve(), build_loader=build_loader)
+    study_id = _single(values, "study_id") or _BASE_STUDY_ID
+    resolver = _Resolver(Path(root).resolve(), study_id=study_id, build_loader=build_loader)
+    if study_id == _CLASS20_STUDY_ID:
+        _class20_profile_bindings(resolver.root)
     admissions: list[BuildAdmission] = []
 
     def add_foundation(required: bool = True) -> None:
@@ -3718,11 +4276,19 @@ def resolve_action_admission(
                 if successor:
                     manifest = successor_paths["qualification_manifest"]
                 elif stage == "pilot":
-                    manifest = publication / _PILOT_QUALIFICATION_SET / "_qualification-set.json"
-                elif stage == "authoritative":
-                    manifest = (
-                        publication / _AUTHORITATIVE_QUALIFICATION_SET / "_qualification-set.json"
+                    name = (
+                        f"{_CLASS20_STUDY_ID}-pilot30-full-v1"
+                        if study_id == _CLASS20_STUDY_ID
+                        else _PILOT_QUALIFICATION_SET
                     )
+                    manifest = publication / name / "_qualification-set.json"
+                elif stage == "authoritative":
+                    name = (
+                        f"{_CLASS20_STUDY_ID}-final20-full-v1"
+                        if study_id == _CLASS20_STUDY_ID
+                        else _AUTHORITATIVE_QUALIFICATION_SET
+                    )
+                    manifest = publication / name / "_qualification-set.json"
                 else:
                     raise ValueError(
                         "class qualification publication requires stage pilot or authoritative"
@@ -3892,13 +4458,20 @@ def resolve_action_admission(
         "resume",
         "export",
     }:
-        if action in {"cohort", "campaigns"}:
+        if action == "cohort" or (
+            action == "campaigns" and study_id != _CLASS20_STUDY_ID
+        ):
             acquisition_completion = _required(
                 values,
                 "acquisition_completion",
                 f"class-study {action} requires --acquisition-completion before Docker",
             )
             admissions.append(resolver.acquisition_completion(acquisition_completion))
+        elif action == "campaigns" and study_id == _CLASS20_STUDY_ID:
+            add_carrier_files(
+                "pilot_cohort_assembly" if stage == "pilot"
+                else "final_cohort_assembly"
+            )
         else:
             add_single("acquisition_completion", resolver.acquisition_completion)
 
@@ -3927,6 +4500,7 @@ def resolve_action_admission(
     if not successor and (
         action in {"prefix-specs", "qualify-prefix", "finalize-fitting", "readiness", "status"}
         or (action in {"cohort", "campaigns"} and stage == "authoritative")
+        or (study_id == _CLASS20_STUDY_ID and action == "pair-screen")
     ):
         add_carrier_directories("numeric_bundle", filenames=("numeric-provenance.json",))
 
@@ -3939,6 +4513,8 @@ def resolve_action_admission(
         add_carrier_directories("prefix_spec_root")
 
     if action == "acquisition-authority":
+        if study_id == _CLASS20_STUDY_ID and _single(values, "browser_egress"):
+            raise ValueError("20-site acquisition authority defers browser qualification")
         build = _required(
             values,
             "build",
@@ -4038,12 +4614,35 @@ def resolve_action_admission(
         )
         add_results("capture_result", "results")
     elif action == "prefix-specs":
-        _required(
-            values,
-            "capture_result",
-            "class-study prefix-specs requires --capture-result before Docker",
-        )
-        add_results("capture_result")
+        if study_id == _CLASS20_STUDY_ID:
+            add_foundation()
+            _required(
+                values,
+                "pilot_fitting_result",
+                "20-site prefix-specs requires --pilot-fitting-result before Docker",
+            )
+            add_results("pilot_fitting_result")
+            add_carrier_files("pilot_cohort_assembly")
+        else:
+            _required(
+                values,
+                "capture_result",
+                "class-study prefix-specs requires --capture-result before Docker",
+            )
+            add_results("capture_result")
+    elif action == "pair-screen":
+        if study_id != _CLASS20_STUDY_ID:
+            raise ValueError("pair-screen requires the 20-site study")
+        add_foundation()
+        add_carrier_files("pilot_cohort_assembly")
+        add_results("pilot_fitting_result")
+        add_carrier_directories("prefix_spec_root")
+        add_carrier_directories("qualification_sidecar_root")
+    elif action == "final-select":
+        if study_id != _CLASS20_STUDY_ID:
+            raise ValueError("final-select requires the 20-site study")
+        add_foundation()
+        add_carrier_files("pilot_cohort_assembly", "pair_screening")
     elif action == "acquisition-init":
         authority = _single(values, "acquisition_authority")
         if authority and _single(values, "foundation"):
@@ -4053,6 +4652,8 @@ def resolve_action_admission(
         if authority:
             admissions.append(resolver.acquisition_authority(authority))
         else:
+            if study_id == _CLASS20_STUDY_ID:
+                raise ValueError("20-site acquisition-init requires its profile-specific authority")
             add_foundation()
     elif action in {"acquisition-run", "acquisition-status", "acquisition-complete"}:
         acquisition = _required(
@@ -4071,21 +4672,52 @@ def resolve_action_admission(
         if action in {"cohort", "campaigns", "finalize-fitting"}:
             add_results("results")
         if action == "qualify-prefix":
-            add_results("capture_result")
-            add_existing_carrier_files("qualification_checkpoint")
-            add_carrier_directories("qualification_sidecar_root")
-            add_qualification_publications("qualification_publication_root")
+            if study_id == _CLASS20_STUDY_ID:
+                add_results("pilot_fitting_result")
+                add_carrier_files("pilot_cohort_assembly")
+                add_carrier_directories("qualification_sidecar_root")
+            else:
+                add_results("capture_result")
+                add_existing_carrier_files("qualification_checkpoint")
+                add_carrier_directories("qualification_sidecar_root")
+                add_qualification_publications("qualification_publication_root")
         if action == "finalize-fitting":
             add_carrier_files("qualification_manifest")
     elif action == "capture":
         add_foundation()
         add_single("readiness", resolver.readiness)
         add_single("historical_pre", resolver.historical)
-        add_results("results")
-        role, campaign_admissions = _campaign_authorities(
-            resolver,
-            _required(values, "campaign", "class-study capture requires --campaign before Docker"),
+        campaign_raw = _required(
+            values, "campaign", "class-study capture requires --campaign before Docker"
         )
+        role, campaign_admissions = _campaign_authorities(
+            resolver, campaign_raw,
+        )
+        if study_id == _CLASS20_STUDY_ID:
+            pilot_role = role == "pilot-fitting"
+            _require_class20_capture_ledger(
+                resolver,
+                campaign_name=Path(campaign_raw).stem,
+                role=role,
+                roots=_many(values, "results"),
+                pilot_cohort=_required(values, "pilot_cohort", "20-site pilot capture requires --pilot-cohort before Docker") if pilot_role else "",
+                pilot_assembly=_required(values, "pilot_cohort_assembly", "20-site pilot capture requires --pilot-cohort-assembly before Docker") if pilot_role else "",
+                final_cohort="" if pilot_role else _required(values, "final_cohort", "20-site capture requires --final-cohort before Docker"),
+                final_assembly="" if pilot_role else _required(values, "final_cohort_assembly", "20-site capture requires --final-cohort-assembly before Docker"),
+            )
+            if role not in _PROMOTED_ROLES and (
+                _single(values, "readiness") or _single(values, "historical_pre")
+            ):
+                raise ValueError("20-site fitting/certification cannot use later promotion authority")
+            if role == "certification" and (
+                not _many(values, "numeric_bundle")
+                or not _many(values, "final_bundle")
+                or not _single(values, "workload_root")
+                or not _single(values, "qualification_sidecar_root")
+                or not _many(values, "prefix_spec_root")
+            ):
+                raise ValueError("20-site certification requires fitting and qualification paths before Docker")
+        add_results("results")
         admissions.extend(campaign_admissions)
         if role in {"canary", "formal"} and (
             not _single(values, "readiness") or not _single(values, "historical_pre")
@@ -4106,12 +4738,49 @@ def resolve_action_admission(
         add_foundation()
         add_single("readiness", resolver.readiness)
         add_single("historical_pre", resolver.historical)
-        add_results("results")
         capture_result = _required(
             values,
             "capture_result",
             "class-study resume requires --capture-result before Docker",
         )
+        if study_id == _CLASS20_STUDY_ID:
+            result_root = _regular_directory(
+                resolver.root, capture_result, label="20-site resume result"
+            )
+            _experiment_path, experiment = _load_json_file(
+                resolver.root, result_root / "experiment.json",
+                label="20-site resume experiment", max_bytes=_MAX_EXPERIMENT_BYTES,
+            )
+            configuration = (
+                experiment.get("configuration") if isinstance(experiment, Mapping) else None
+            )
+            role = (
+                configuration.get("evidence_role") if isinstance(configuration, Mapping) else None
+            )
+            if not isinstance(role, str) or not isinstance(experiment.get("name"), str):
+                raise ValueError("20-site resume has no canary/formal identity")
+            _require_class20_capture_ledger(
+                resolver,
+                campaign_name=experiment["name"], role=role,
+                roots=_many(values, "results"),
+                pilot_cohort=_required(values, "pilot_cohort", "20-site pilot resume requires --pilot-cohort before Docker") if role == "pilot-fitting" else "",
+                pilot_assembly=_required(values, "pilot_cohort_assembly", "20-site pilot resume requires --pilot-cohort-assembly before Docker") if role == "pilot-fitting" else "",
+                final_cohort="" if role == "pilot-fitting" else _required(values, "final_cohort", "20-site resume requires --final-cohort before Docker"),
+                final_assembly="" if role == "pilot-fitting" else _required(values, "final_cohort_assembly", "20-site resume requires --final-cohort-assembly before Docker"),
+            )
+            if role not in _PROMOTED_ROLES and (
+                _single(values, "readiness") or _single(values, "historical_pre")
+            ):
+                raise ValueError("20-site fitting/certification cannot use later promotion authority")
+            if role == "certification" and (
+                not _many(values, "numeric_bundle")
+                or not _many(values, "final_bundle")
+                or not _single(values, "workload_root")
+                or not _single(values, "qualification_sidecar_root")
+                or not _many(values, "prefix_spec_root")
+            ):
+                raise ValueError("20-site certification requires fitting and qualification paths before Docker")
+        add_results("results")
         role, frozen_admission = resolver.frozen_resume_authority(
             capture_result,
             canonical_successor=successor or None,
@@ -4319,6 +4988,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--lab-root", type=Path, required=True)
     parser.add_argument("--action", required=True)
     parser.add_argument("--stage", default="")
+    parser.add_argument("--study-id", default=_BASE_STUDY_ID)
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--cohort-version", type=int)
     for name in (
@@ -4338,6 +5008,7 @@ def _parser() -> argparse.ArgumentParser:
         "successor-restart",
         "target",
         "final-selection",
+        "pair-screening",
         "pinned-cdp",
         "browser-egress",
         "reference",
@@ -4350,6 +5021,9 @@ def _parser() -> argparse.ArgumentParser:
         "acquisition-completion",
         "qualification-checkpoint",
         "qualification-sidecar-root",
+        "workload-root",
+        "pilot-cohort",
+        "final-cohort",
         "final-cohort-assembly",
         "pilot-cohort-assembly",
         "campaign",
@@ -4381,6 +5055,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
         name: getattr(parsed, name)
         for name in (
             "build",
+            "study_id",
             "foundation",
             "acquisition_authority",
             "readiness",
@@ -4396,6 +5071,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             "successor_restart",
             "target",
             "final_selection",
+            "pair_screening",
             "pinned_cdp",
             "browser_egress",
             "reference",
@@ -4408,6 +5084,9 @@ def main(arguments: Sequence[str] | None = None) -> int:
             "acquisition_completion",
             "qualification_checkpoint",
             "qualification_sidecar_root",
+            "workload_root",
+            "pilot_cohort",
+            "final_cohort",
             "final_cohort_assembly",
             "pilot_cohort_assembly",
             "campaign",

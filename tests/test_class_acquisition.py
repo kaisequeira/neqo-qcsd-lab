@@ -33,6 +33,7 @@ from qcsd_lab.cdp_targets import (
     CdpTargetIntegrityError,
     _RootCanceledNetworkInvalidInterception,
     _RootLateNetworkInvalidInterception,
+    _RootRequestStageFailedInterception,
     _RootRequestStageInvalidInterception,
     _RootUnpairedFetchInvalidInterception,
 )
@@ -338,6 +339,7 @@ def test_current_h3_specific_navigation_reason_requires_receipt(
             "reason": reason,
             "policy_evidence": None,
             "h3_screen_evidence": None,
+            "operational_discard": None,
         }],
     }
     with pytest.raises(ValueError, match="H3 screen"):
@@ -433,6 +435,8 @@ def test_schema_eleven_h3_receipts_remain_verifiable_but_not_resumable(tmp_path:
     provenance = load_json(runner / "provenance.json")["payload"]
     historical = copy.deepcopy(provenance)
     historical["acquisition_schema_version"] = 11
+    historical.pop("study_profile_sha256")
+    historical["acquisition_selection_policy"] = acquisition_module.ACQUISITION_SELECTION_POLICY
     historical["prebaseline_h3_screen_contract"] = (
         h3_prebaseline.PREBASELINE_H3_SCREEN_CONTRACT
     )
@@ -487,6 +491,7 @@ def test_schema_eleven_h3_receipts_remain_verifiable_but_not_resumable(tmp_path:
         candidate=SimpleNamespace(candidate_id=candidate_id, domain=domain),
         acquisition_schema_version=11,
     )
+    state["navigation_attempts"][0]["operational_discard"] = None
     with pytest.raises(ValueError, match="version differs"):
         acquisition_module._validate_navigation_attempts(
             state,
@@ -634,6 +639,8 @@ def test_schema_ten_short_window_checkpoint_remains_readable_but_verify_only(
     provenance_path = runner / "provenance.json"
     provenance = copy.deepcopy(load_json(provenance_path)["payload"])
     provenance["acquisition_schema_version"] = 10
+    provenance.pop("study_profile_sha256")
+    provenance["acquisition_selection_policy"] = acquisition_module.ACQUISITION_SELECTION_POLICY
     provenance.pop("prebaseline_h3_screen_contract")
     provenance["eligibility_inputs"] = acquisition_module.SCHEMA_TEN_ELIGIBILITY_INPUTS
     _replace_receipt_payload(provenance_path, provenance)
@@ -643,6 +650,7 @@ def test_schema_ten_short_window_checkpoint_remains_readable_but_verify_only(
     for state in checkpoint["candidates"].values():
         for attempt in state.get("navigation_attempts", []):
             attempt.pop("h3_screen_evidence")
+            attempt.pop("operational_discard")
     _replace_receipt_payload(checkpoint_path, checkpoint)
     before = checkpoint_path.read_bytes()
 
@@ -713,6 +721,7 @@ def _replace_with_frozen_schema_six_provenance(path: Path) -> dict:
     provenance = copy.deepcopy(load_json(path)["payload"])
     provenance.update(_schema_six_fixed_projection(variant))
     provenance["acquisition_schema_version"] = 6
+    provenance.pop("study_profile_sha256")
     provenance.pop("prebaseline_h3_screen_contract")
     provenance["source"]["lab_commit"] = variant["source_lab_commit"]
     _replace_receipt_payload(path, provenance)
@@ -767,14 +776,19 @@ def _miniature_ledger_selection_policy(monkeypatch: pytest.MonkeyPatch):
     """
     original = acquisition_module._derive_checkpoint_selection
 
-    def derive(candidates, catalogue, states, terminal_payloads):
+    def derive(candidates, catalogue, states, terminal_payloads, *, acquisition_schema_version=acquisition_module.SCHEMA_VERSION, study_id=STUDY_ID):
         if len(candidates) == CANDIDATE_COUNT:
-            return original(candidates, catalogue, states, terminal_payloads)
+            return original(
+                candidates, catalogue, states, terminal_payloads,
+                acquisition_schema_version=acquisition_schema_version,
+                study_id=study_id,
+            )
         ids = [candidate.candidate_id for candidate in candidates]
         terminals = [candidate_id for candidate_id in ids if candidate_id in terminal_payloads]
         remaining = [candidate_id for candidate_id in ids if candidate_id not in terminal_payloads]
-        return (
-            {
+        operational = [candidate_id for candidate_id in terminals
+                       if terminal_payloads[candidate_id].get("kind") == "operational-censor"]
+        miniature = {
                 "fixture_only": "miniature-ledger",
                 "candidate_ids": ids,
                 "terminal_ids": terminals,
@@ -786,9 +800,10 @@ def _miniature_ledger_selection_policy(monkeypatch: pytest.MonkeyPatch):
                 "pilot_ids": terminals if not remaining else [],
                 "quota_unmet_strata": [],
                 "complete": not remaining,
-            },
-            [],
-        )
+            }
+        if acquisition_schema_version == acquisition_module.SCHEMA_VERSION:
+            miniature.update(operational_censor_ids=operational, site_rejected_ids=[])
+        return miniature, []
 
     monkeypatch.setattr(acquisition_module, "_derive_checkpoint_selection", derive)
 
@@ -903,6 +918,37 @@ def _foundation(path: Path) -> Path:
             )
         )
     )
+    return path
+
+
+def _class20_authority(path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Unit fixture for runner plumbing; authority reconstruction has its own tests."""
+
+    profile_sha256 = acquisition_module._study_profile_sha256(
+        "classifier-multiorigin20-v1"
+    )
+    path.write_bytes(canonical_json_bytes(bind_receipt(
+        {
+            "attestation_schema_version": 3,
+            "study_id": "classifier-multiorigin20-v1",
+            "study_profile_sha256": profile_sha256,
+        },
+        receipt_type=class_attestation.ACQUISITION_AUTHORITY_RECEIPT_TYPE,
+    )))
+
+    def validate(source: Path, *, runtime_role: str) -> dict:
+        assert runtime_role == "prepare"
+        payload = acquisition_module.validate_hash_bound_receipt(
+            load_json(source),
+            expected_type=class_attestation.ACQUISITION_AUTHORITY_RECEIPT_TYPE,
+        )
+        return {
+            **payload,
+            "path": str(source),
+            "sha256": acquisition_module.sha256_file(source),
+        }
+
+    monkeypatch.setattr(class_attestation, "validate_class_acquisition_authority", validate)
     return path
 
 
@@ -1359,6 +1405,7 @@ def _strip_schema_five_policy_evidence(value: dict) -> None:
         for attempt in state.get("navigation_attempts", []):
             attempt.pop("policy_evidence", None)
             attempt.pop("h3_screen_evidence", None)
+            attempt.pop("operational_discard", None)
         for page in state.get("pages", []):
             for attempt in page.get("probe_attempts", []):
                 attempt.pop("policy_evidence", None)
@@ -2940,7 +2987,7 @@ def test_navigation_pair_is_prepublished_and_coordinator_merged(
     )
     for candidate_id in expected_ids:
         [attempt] = checkpoint["candidates"][candidate_id]["navigation_attempts"]
-        assert {key: value for key, value in attempt.items() if key != "h3_screen_evidence"} == {
+        assert {key: value for key, value in attempt.items() if key not in {"h3_screen_evidence", "operational_discard"}} == {
             "attempt": 1,
             "started_at": acquisition_module._format_time(now),
             "completed_at": acquisition_module._format_time(now),
@@ -4365,6 +4412,7 @@ def test_historical_modern_schemas_keep_their_exact_read_only_checkpoint_shape(
     provenance_path = runner / "provenance.json"
     provenance = copy.deepcopy(load_json(provenance_path)["payload"])
     provenance["acquisition_schema_version"] = legacy_schema
+    provenance.pop("study_profile_sha256")
     provenance.pop("prebaseline_h3_screen_contract")
     _replace_receipt_payload(provenance_path, provenance)
     checkpoint_path = runner / "checkpoint.json"
@@ -4581,8 +4629,8 @@ def test_historical_schema_policy_map_and_render_contract_are_frozen() -> None:
 
 
 def test_schema_seven_audit_five_projects_read_only_but_cannot_alias_later_schemas() -> None:
-    assert acquisition_module.SCHEMA_VERSION == 12
-    assert 11 in acquisition_module.HISTORICAL_SCHEMA_VERSIONS
+    assert acquisition_module.SCHEMA_VERSION == 13
+    assert 12 in acquisition_module.HISTORICAL_SCHEMA_VERSIONS
     manifest = _prepared_manifest("https://example.com/", ["https://example.com"])
     preparation = manifest["preparation"]
     render = copy.deepcopy(preparation["render_observation"])
@@ -5236,6 +5284,7 @@ def test_historical_orphan_terminals_are_verify_only(tmp_path: Path) -> None:
     provenance_path = runner / "provenance.json"
     provenance_payload = copy.deepcopy(load_json(provenance_path)["payload"])
     provenance_payload["acquisition_schema_version"] = 3
+    provenance_payload.pop("study_profile_sha256")
     provenance_payload.pop("prebaseline_h3_screen_contract")
     _replace_receipt_payload(provenance_path, provenance_payload)
     provenance_sha256 = hashlib.sha256(provenance_path.read_bytes()).hexdigest()
@@ -5320,6 +5369,7 @@ def test_completion_validation_accepts_each_legacy_schema_shape(
     provenance_path = runner / "provenance.json"
     provenance_payload = copy.deepcopy(load_json(provenance_path)["payload"])
     provenance_payload["acquisition_schema_version"] = legacy_schema
+    provenance_payload.pop("study_profile_sha256")
     provenance_payload.pop("prebaseline_h3_screen_contract")
     _replace_receipt_payload(provenance_path, provenance_payload)
     provenance_sha256 = hashlib.sha256(provenance_path.read_bytes()).hexdigest()
@@ -5364,6 +5414,7 @@ def test_completion_validation_accepts_each_legacy_schema_shape(
             "baseline_batches",
             "baseline_batches_sha256",
             "selection",
+            "operational_censor_summary",
         }
     }
     legacy_completion_payload.update(
@@ -5426,6 +5477,7 @@ def test_schema_one_rejects_short_profile_eligible_downgrade(
     provenance_path = runner / "provenance.json"
     provenance_payload = copy.deepcopy(load_json(provenance_path)["payload"])
     provenance_payload["acquisition_schema_version"] = 1
+    provenance_payload.pop("study_profile_sha256")
     provenance_payload.pop("prebaseline_h3_screen_contract")
     _replace_receipt_payload(provenance_path, provenance_payload)
     provenance_sha256 = hashlib.sha256(provenance_path.read_bytes()).hexdigest()
@@ -5476,6 +5528,7 @@ def test_schema_one_rejects_short_profile_eligible_downgrade(
             "baseline_batches",
             "baseline_batches_sha256",
             "selection",
+            "operational_censor_summary",
         }
     }
     legacy_completion_payload.update(
@@ -5920,6 +5973,7 @@ def test_interrupted_navigation_duration_is_not_fabricated_as_success(
             "reason": "externally bounded action ended before an outcome",
             "policy_evidence": None,
             "h3_screen_evidence": None,
+            "operational_discard": None,
         }
     ]
     _replace_receipt_payload(runner / "checkpoint.json", payload)
@@ -7485,7 +7539,9 @@ def test_navigation_pass_retained_router_failure_outranks_retryable_pin_expansio
         )
 
 
-@pytest.mark.parametrize("race_type", ("late", "unpaired", "canceled", "request-stage"))
+@pytest.mark.parametrize(
+    "race_type", ("late", "unpaired", "canceled", "request-stage", "failed-denial")
+)
 @pytest.mark.parametrize(
     "cleanup_failure",
     (None, "context-close", "guard-finish-abort", "router-finish-abort", "browser-close", "secondary-router-error"),
@@ -7503,6 +7559,9 @@ def test_late_network_root_continue_is_retryable_only_after_complete_abort(
             _RootCanceledNetworkInvalidInterception(
                 fingerprint="synthetic", resource_type="Script"
             ) if race_type == "canceled" else
+            _RootRequestStageFailedInterception(
+                fingerprint="synthetic", resource_type="XHR"
+            ) if race_type == "failed-denial" else
             _RootRequestStageInvalidInterception(
                 fingerprint="synthetic", resource_type="Image"
             )
@@ -7524,13 +7583,15 @@ def test_late_network_root_continue_is_retryable_only_after_complete_abort(
         assert late.cleanup_verified is False
 
 
-@pytest.mark.parametrize("race_type", ("late", "request-stage"))
+@pytest.mark.parametrize("race_type", ("late", "request-stage", "failed-denial"))
 def test_root_continue_discard_never_demotes_retained_egress(
     monkeypatch: pytest.MonkeyPatch, race_type: str,
 ) -> None:
     late = (
         _RootLateNetworkInvalidInterception(fingerprint="synthetic", resource_type="Font")
         if race_type == "late" else
+        _RootRequestStageFailedInterception(fingerprint="synthetic", resource_type="XHR")
+        if race_type == "failed-denial" else
         _RootRequestStageInvalidInterception(fingerprint="synthetic", resource_type="Image")
     )
     with pytest.raises(NonReplayableEgressPolicyError, match="retained egress"):
@@ -9266,15 +9327,30 @@ def test_replay_identity_excludes_per_run_preparation_evidence(
         assert _prepared_replay_identity_sha256(first) != _prepared_replay_identity_sha256(changed)
 
 
-def _prefix_selection_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def _prefix_selection_runner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    study_id: str = "classifier-multiorigin100-v1",
+):
     """Full catalogue/selection/closure fixture; terminal science is a separate unit."""
     catalogue = _catalogue(tmp_path / "catalogue.json")
+    authority = (
+        _class20_authority(tmp_path / "authority.json", monkeypatch)
+        if study_id == "classifier-multiorigin20-v1"
+        else _foundation(tmp_path / "foundation.json")
+    )
     runner = initialise_runner(
         tmp_path / "runner",
         candidate_catalogue_path=catalogue,
-        foundation_attestation=_foundation(tmp_path / "foundation.json"),
+        **(
+            {"acquisition_authority": authority}
+            if study_id == "classifier-multiorigin20-v1"
+            else {"foundation_attestation": authority}
+        ),
         started_at="2026-08-28T00:00:00Z",
         browser_tool="ignored",
+        study_id=study_id,
     )
     checkpoint = load_json(runner / "checkpoint.json")["payload"]
     selection = acquisition_status(runner, candidate_catalogue_path=catalogue)["selection"]
@@ -9319,6 +9395,50 @@ def _prefix_selection_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         acquisition_module, "_validated_terminal_binding", admitted_terminal_binding
     )
     return runner, catalogue
+
+
+def test_twenty_site_completion_seals_global_prefix_and_censor_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner, catalogue = _prefix_selection_runner(
+        tmp_path, monkeypatch, study_id="classifier-multiorigin20-v1"
+    )
+    status = acquisition_status(runner, candidate_catalogue_path=catalogue)
+    selection = status["selection"]
+    assert selection["complete"] is True
+    assert len(selection["pilot_ids"]) == 30
+    assert selection["pilot_ids"] == selection["ordered_candidate_ids"][:30]
+    assert status["operational_censor_summary"] == {
+        "cause": acquisition_module.OPERATIONAL_CENSOR_CAUSE,
+        "count": 0,
+        "candidate_ids": [],
+    }
+    completion = load_json(write_acquisition_completion(runner, candidate_catalogue_path=catalogue))
+    payload = validate_acquisition_completion(
+        completion, candidate_catalogue_path=catalogue, runner_root=runner
+    )
+    assert payload["study_id"] == "classifier-multiorigin20-v1"
+    assert payload["operational_censor_summary"] == status["operational_censor_summary"]
+    for mutate in ("pilot", "order", "censor-count"):
+        changed = copy.deepcopy(payload)
+        if mutate == "censor-count":
+            changed["operational_censor_summary"]["count"] = 1
+        else:
+            selected = copy.deepcopy(selection)
+            if mutate == "pilot":
+                selected["pilot_ids"] = selected["pilot_ids"][1:]
+            else:
+                selected["ordered_candidate_ids"][:2] = reversed(
+                    selected["ordered_candidate_ids"][:2]
+                )
+            changed["selection"] = bind_receipt(
+                selected, receipt_type=acquisition_module.SELECTION_TYPE
+            )
+        with pytest.raises(ValueError):
+            validate_acquisition_completion(
+                bind_receipt(changed, receipt_type=COMPLETION_TYPE),
+                candidate_catalogue_path=catalogue, runner_root=runner,
+            )
 
 
 def test_schema_seven_completion_preserves_unassessed_tail_and_seals_exact_prefix(
@@ -9399,6 +9519,7 @@ def test_schema_seven_started_tail_must_drain_before_completion(tmp_path, monkey
             "reason": "fixture interruption",
             "policy_evidence": None,
             "h3_screen_evidence": None,
+            "operational_discard": None,
         }
     ]
     _replace_receipt_payload(runner / "checkpoint.json", checkpoint)
@@ -9546,6 +9667,7 @@ def test_schema_five_fixed_contract_and_policy_ledgers_remain_verification_only(
     provenance_path = runner / "provenance.json"
     provenance = load_json(provenance_path)["payload"]
     provenance["acquisition_schema_version"] = 5
+    provenance.pop("study_profile_sha256")
     provenance.pop("prebaseline_h3_screen_contract")
     _replace_receipt_payload(provenance_path, provenance)
     provenance = load_json(provenance_path)["payload"]
@@ -9557,6 +9679,7 @@ def test_schema_five_fixed_contract_and_policy_ledgers_remain_verification_only(
     for state in checkpoint["candidates"].values():
         for attempt in state.get("navigation_attempts", []):
             attempt.pop("h3_screen_evidence")
+            attempt.pop("operational_discard")
         if state["terminal"] is None:
             continue
         terminal_path = runner / state["terminal"]["path"]
@@ -9619,6 +9742,7 @@ def test_schema_six_exact_contract_is_readable_but_cannot_resume_or_publish(
     provenance_path = runner / "provenance.json"
     relabelled_current = copy.deepcopy(load_json(provenance_path)["payload"])
     relabelled_current["acquisition_schema_version"] = 6
+    relabelled_current.pop("study_profile_sha256")
     relabelled_current.pop("prebaseline_h3_screen_contract")
     with pytest.raises(ValueError, match="provenance policy"):
         acquisition_module._validate_current_provenance_contract(relabelled_current)
@@ -9742,6 +9866,7 @@ def test_schema_six_completion_receipt_tuple_remains_exactly_verifiable(
     for candidate_id, state in checkpoint["candidates"].items():
         for attempt in state["navigation_attempts"]:
             attempt.pop("h3_screen_evidence")
+            attempt.pop("operational_discard")
         terminal_path = runner / state["terminal"]["path"]
         terminal = copy.deepcopy(load_json(terminal_path)["payload"])
         terminal["terminal_schema_version"] = acquisition_module.SCHEMA_SIX_TERMINAL_SCHEMA_VERSION
@@ -9759,6 +9884,10 @@ def test_schema_six_completion_receipt_tuple_remains_exactly_verifiable(
         terminal_receipts[candidate_id] = copy.deepcopy(state["terminal"])
     _replace_receipt_payload(checkpoint_path, checkpoint)
     sealed_checkpoint = load_json(checkpoint_path)
+    completion["selection"] = bind_receipt(
+        acquisition_status(runner, candidate_catalogue_path=catalogue)["selection"],
+        receipt_type=acquisition_module.SELECTION_TYPE,
+    )
     completion.update(
         acquisition_schema_version=6,
         completion_schema_version=(acquisition_module.SCHEMA_SIX_COMPLETION_SCHEMA_VERSION),
@@ -9767,6 +9896,7 @@ def test_schema_six_completion_receipt_tuple_remains_exactly_verifiable(
         checkpoint_payload_sha256=sealed_checkpoint["payload_sha256"],
         terminal_receipts=terminal_receipts,
     )
+    completion.pop("operational_censor_summary")
     schema_six_completion = bind_receipt(completion, receipt_type=COMPLETION_TYPE)
     assert (
         validate_acquisition_completion(
@@ -9784,4 +9914,195 @@ def test_schema_six_completion_receipt_tuple_remains_exactly_verifiable(
             bind_receipt(colliding, receipt_type=COMPLETION_TYPE),
             candidate_catalogue_path=catalogue,
             runner_root=runner,
+        )
+
+
+def _exact_root_denial_reason() -> str:
+    return (
+        acquisition_module.OPERATIONAL_CENSOR_DISCARD_PREFIX
+        + "root CDP Fetch.failRequest failed for a bound catalogue request-stage XHR; "
+        + "the navigation must be discarded (exception_sha256=" + "a" * 64 + ")"
+    )
+
+
+def test_exact_root_denial_three_times_is_censored_without_site_rejection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalogue = _catalogue(tmp_path / "catalogue.json")
+    catalogue_value, candidates = acquisition_module.load_candidate_catalogue_receipt(catalogue)
+    monkeypatch.setattr(
+        acquisition_module, "load_candidate_catalogue_receipt",
+        lambda _path: (catalogue_value, candidates[:1]),
+    )
+    runner = initialise_runner(
+        tmp_path / "runner", candidate_catalogue_path=catalogue,
+        foundation_attestation=_foundation(tmp_path / "foundation.json"),
+        started_at="2026-08-28T00:00:00Z", browser_tool="ignored",
+    )
+
+    class ExactDiscardBackend:
+        def discover_navigation(self, _domain: str):
+            raise acquisition_module.OperationalCensorAcquisitionError(
+                _exact_root_denial_reason()
+            )
+
+    status = run_due_acquisition(
+        runner, candidate_catalogue_path=catalogue,
+        stability_root=tmp_path / "stability", workload_root=tmp_path / "workloads",
+        backend=ExactDiscardBackend(), max_candidates=1,
+    )
+    candidate_id = candidates[0].candidate_id
+    state = load_json(runner / "checkpoint.json")["payload"]["candidates"][candidate_id]
+    terminal = load_json(runner / state["terminal"]["path"])["payload"]
+    assert terminal["kind"] == "operational-censor"
+    assert terminal["reason"] == acquisition_module.OPERATIONAL_CENSOR_REASON
+    assert len(state["navigation_attempts"]) == 3
+    assert all(acquisition_module._is_operational_discard_attempt(attempt)
+               for attempt in state["navigation_attempts"])
+    assert status["operational_censor_summary"] == {
+        "cause": acquisition_module.OPERATIONAL_CENSOR_CAUSE,
+        "count": 1, "candidate_ids": [candidate_id],
+    }
+    assert candidate_id not in status["selection_blocked_candidate_ids"]
+
+    historical_state = copy.deepcopy(state)
+    for attempt in historical_state["navigation_attempts"]:
+        attempt.pop("operational_discard")
+    terminal_time = acquisition_module._timestamp(terminal["terminalised_at"])
+    with pytest.raises(ValueError, match="historical acquisition"):
+        acquisition_module._validate_current_terminal_state(
+            historical_state, candidate=candidates[0], acquisition_schema_version=12,
+            kind="operational-censor", reason=terminal["reason"],
+            terminalised_at=terminal_time, enforce_duration_limit=True,
+        )
+    historical_reason = (
+        "recoverable navigation failures exhausted 3 attempts: "
+        + historical_state["navigation_attempts"][-1]["reason"]
+    )
+    assert acquisition_module._validate_current_terminal_state(
+        historical_state, candidate=candidates[0], acquisition_schema_version=12,
+        kind="pre-probe-rejection", reason=historical_reason,
+        terminalised_at=terminal_time, enforce_duration_limit=True,
+    ) is None
+
+
+def test_operational_discard_marker_requires_exact_typed_outcome() -> None:
+    base = {
+        "attempt": 1, "started_at": "2026-08-28T00:00:00Z",
+        "completed_at": "2026-08-28T00:00:01Z",
+        "outcome": "recoverable-failure", "reason": _exact_root_denial_reason(),
+        "policy_evidence": None, "h3_screen_evidence": None,
+        "operational_discard": None,
+    }
+    state = {"state": "pending", "pages": [], "terminal": None,
+             "navigation_attempts": [base]}
+    acquisition_module._validate_navigation_attempts(state)
+    assert not acquisition_module._is_operational_discard_attempt(base)
+    for forged in (
+        {**base, "operational_discard": {**acquisition_module.OPERATIONAL_CENSOR_DISCARD_EVIDENCE,
+                                         "whole_browser_abort_verified": False}},
+        {**base, "operational_discard": dict(acquisition_module.OPERATIONAL_CENSOR_DISCARD_EVIDENCE),
+         "reason": "unrelated recoverable failure"},
+        {**base, "operational_discard": dict(acquisition_module.OPERATIONAL_CENSOR_DISCARD_EVIDENCE),
+         "outcome": "terminal-policy-rejection"},
+    ):
+        with pytest.raises(ValueError, match="operational discard"):
+            acquisition_module._validate_navigation_attempts(
+                {**state, "navigation_attempts": [forged]}
+            )
+
+
+def test_exact_root_denial_circuit_breaks_across_candidates() -> None:
+    def attempt(outcome: str, when: str, marker: bool = True):
+        return {
+            "attempt": 1, "started_at": "2026-08-28T00:00:00Z",
+            "completed_at": when, "outcome": outcome,
+            "reason": None if outcome == "completed" else _exact_root_denial_reason(),
+            "policy_evidence": None, "h3_screen_evidence": None,
+            "operational_discard": dict(acquisition_module.OPERATIONAL_CENSOR_DISCARD_EVIDENCE)
+            if marker else None,
+        }
+    first = {"navigation_attempts": [attempt("recoverable-failure", "2026-08-28T00:00:01Z")]}
+    second = {"navigation_attempts": [attempt("recoverable-failure", "2026-08-28T00:00:02Z")]}
+    assert acquisition_module._operational_censor_circuit_candidate({"a": first}) is None
+    assert acquisition_module._operational_censor_circuit_candidate({"a": first, "b": second}) == "b"
+    healthy = {"navigation_attempts": [attempt("completed", "2026-08-28T00:00:01.500000Z", False)]}
+    assert acquisition_module._operational_censor_circuit_candidate(
+        {"a": first, "healthy": healthy, "b": second}
+    ) is None
+
+
+def test_twenty_site_runner_binds_overlay_and_uses_round_robin_priority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from qcsd_lab.class_study import (
+        CLASS20_PROFILE, CLASS20_STUDY_ID, deterministic_profile_candidate_order,
+    )
+
+    catalogue = _catalogue(tmp_path / "catalogue.json")
+    catalogue_value, candidates = acquisition_module.load_candidate_catalogue_receipt(catalogue)
+    priority = deterministic_profile_candidate_order(
+        candidates,
+        tranco_list_sha256=catalogue_value["payload"]["tranco"]["list_sha256"],
+        profile=CLASS20_PROFILE,
+    )
+    runner = initialise_runner(
+        tmp_path / "runner", candidate_catalogue_path=catalogue,
+        acquisition_authority=_class20_authority(
+            tmp_path / "authority.json", monkeypatch
+        ),
+        started_at="2026-08-28T00:00:00Z", browser_tool="ignored",
+        study_id=CLASS20_STUDY_ID,
+    )
+    provenance = load_json(runner / "provenance.json")["payload"]
+    assert provenance["study_id"] == CLASS20_STUDY_ID
+    assert provenance["study_profile_sha256"] == acquisition_module._study_profile_sha256(
+        CLASS20_STUDY_ID
+    )
+    status = acquisition_status(runner, candidate_catalogue_path=catalogue)
+    assert status["selection"]["policy"] == (
+        acquisition_module.GLOBAL_OPERATIONAL_CENSOR_SELECTION_POLICY
+    )
+    assert status["selection"]["eligible_quota"] == 30
+    assert status["selection"]["ordered_candidate_ids"] == [
+        candidate.candidate_id for candidate in priority
+    ]
+    assert status["selection"]["admission_ids"] == [
+        candidate.candidate_id for candidate in priority[:30]
+    ]
+    after = run_due_acquisition(
+        runner, candidate_catalogue_path=catalogue,
+        stability_root=tmp_path / "stability", workload_root=tmp_path / "workloads",
+        backend=RejectingBackend(), max_candidates=1,
+    )
+    assert after["terminal_count"] == 1
+    assert after["selection"]["terminal_ids"] == [priority[0].candidate_id]
+    assert after["selection"]["admission_ids"][0] == priority[1].candidate_id
+
+
+def test_twenty_site_runner_rejects_base_study_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalogue = _catalogue(tmp_path / "catalogue.json")
+    with pytest.raises(ValueError, match="requires its own acquisition authority"):
+        initialise_runner(
+            tmp_path / "runner", candidate_catalogue_path=catalogue,
+            foundation_attestation=_foundation(tmp_path / "foundation.json"),
+            started_at="2026-08-28T00:00:00Z", browser_tool="ignored",
+            study_id="classifier-multiorigin20-v1",
+        )
+    authority = _class20_authority(tmp_path / "authority.json", monkeypatch)
+    authority.write_bytes(canonical_json_bytes(bind_receipt(
+        {
+            "attestation_schema_version": 2,
+            "study_id": STUDY_ID,
+        },
+        receipt_type=class_attestation.ACQUISITION_AUTHORITY_RECEIPT_TYPE,
+    )))
+    with pytest.raises(ValueError, match="authority study or profile"):
+        initialise_runner(
+            tmp_path / "runner", candidate_catalogue_path=catalogue,
+            acquisition_authority=authority,
+            started_at="2026-08-28T00:00:00Z", browser_tool="ignored",
+            study_id="classifier-multiorigin20-v1",
         )

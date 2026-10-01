@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from collections import Counter
 from dataclasses import replace
@@ -35,6 +36,8 @@ from qcsd_lab.h3_prebaseline import PREBASELINE_H3_SCREEN_V2_CONTRACT
 from qcsd_lab.class_study import (
     CANDIDATE_COUNT,
     CANDIDATES_PER_STRATUM,
+    CLASS20_PROFILE,
+    CLASS20_STUDY_ID,
     COMPATIBILITY_MODES,
     EVIDENCE_ROLES,
     FINAL_CLASS_COUNT,
@@ -46,6 +49,7 @@ from qcsd_lab.class_study import (
     SUCCESSOR_GENERATION_MAX,
     TRANCO_RANK_STRATA,
     ClassCandidate,
+    ClassStudyProfile,
     bind_receipt,
     build_study_receipt,
     campaign_sample_counts,
@@ -53,14 +57,17 @@ from qcsd_lab.class_study import (
     canonical_json_sha256,
     class_study_id_from_campaign_name,
     deterministic_candidate_order,
+    deterministic_profile_candidate_order,
     formal_split_counts,
     is_class_study_campaign_name,
     is_class_study_id,
     is_successor_study_id,
     load_study_receipt,
+    load_class20_profile_contract,
     parse_class_study_id,
     parse_class_study_campaign_name,
     select_cohort,
+    select_profile_pilot,
     successor_study_id,
     validate_evidence_role,
     validate_hash_bound_receipt,
@@ -192,10 +199,13 @@ def test_checked_in_handoff_contract_matches_current_exporter_and_kernel_sidecar
     assert page_admission["outgoing_udp_payload_ceiling_bytes"] == 1200
     assert page_admission["incoming_udp_payload_limit_bytes"] == 65527
     assert "udp_payload_ceiling_bytes" not in page_admission
-    assert amendment["acquisition_schema_version"] == ACQUISITION_SCHEMA_VERSION == 12
+    assert amendment["acquisition_schema_version"] == 12
+    assert ACQUISITION_SCHEMA_VERSION == 13
     assert amendment["checkpoint_schema_version"] == ACQUISITION_CHECKPOINT_SCHEMA_VERSION == 3
-    assert amendment["terminal_schema_version"] == ACQUISITION_TERMINAL_SCHEMA_VERSION == 4
-    assert amendment["completion_schema_version"] == ACQUISITION_COMPLETION_SCHEMA_VERSION == 4
+    assert amendment["terminal_schema_version"] == 4
+    assert ACQUISITION_TERMINAL_SCHEMA_VERSION == 5
+    assert amendment["completion_schema_version"] == 4
+    assert ACQUISITION_COMPLETION_SCHEMA_VERSION == 5
     assert amendment["document_response_schema_version"] == DOCUMENT_RESPONSE_SCHEMA_VERSION == 2
     assert amendment["pinned_cdp_probe_schema_version"] == PINNED_CDP_PROBE_SCHEMA_VERSION == 18
     assert amendment["render_observation_schema_version"] == RENDER_OBSERVATION_SCHEMA_VERSION
@@ -503,6 +513,57 @@ def test_class_study_campaign_name_grammar_binds_the_complete_study_id() -> None
             class_study_id_from_campaign_name(name)
 
 
+def test_class20_campaign_names_are_exact_and_do_not_extend_v1_receipt_identity() -> None:
+    stage_roles = {
+        "pilot-fitting-120-1200": "pilot-fitting",
+        "authoritative-fitting-400-1200": "authoritative-fitting",
+        "certification-180-1200": "certification",
+    }
+    for suffix, role in stage_roles.items():
+        name = f"{CLASS20_STUDY_ID}-{suffix}"
+        parsed = parse_class_study_campaign_name(name)
+        assert (parsed.study_id, parsed.evidence_role, parsed.block) == (
+            CLASS20_STUDY_ID,
+            role,
+            None,
+        )
+        assert class_study_id_from_campaign_name(name) == CLASS20_STUDY_ID
+        assert is_class_study_campaign_name(name)
+    for role in ("canary", "formal"):
+        for block in range(1, 11):
+            name = f"{CLASS20_STUDY_ID}-{role}-{block:02d}-1200"
+            parsed = parse_class_study_campaign_name(name)
+            assert (parsed.study_id, parsed.evidence_role, parsed.block) == (
+                CLASS20_STUDY_ID,
+                role,
+                block,
+            )
+
+    # The old receipt/experiment/evaluation validators are explicitly scoped
+    # to v1 and its hash-derived successors until they receive a v2 branch.
+    assert not is_class_study_id(CLASS20_STUDY_ID)
+    with pytest.raises(ValueError, match="identity"):
+        parse_class_study_id(CLASS20_STUDY_ID)
+
+    invalid = (
+        f"{CLASS20_STUDY_ID}-pilot-fitting-1200",
+        f"{CLASS20_STUDY_ID}-pilot-fitting-121-1200",
+        f"{CLASS20_STUDY_ID}-pilot-compatibility-270-1200",
+        f"{CLASS20_STUDY_ID}-pilot-compatibility-1080-1200",
+        f"{CLASS20_STUDY_ID}-authoritative-fitting-2000-1200",
+        f"{CLASS20_STUDY_ID}-certification-900-1200",
+        f"{CLASS20_STUDY_ID}-canary-00-1200",
+        f"{CLASS20_STUDY_ID}-canary-11-1200",
+        f"{CLASS20_STUDY_ID}-formal-1-1200",
+        f"{CLASS20_STUDY_ID}-formal-01-1200-extra",
+        f"prefix-{CLASS20_STUDY_ID}-formal-01-1200",
+    )
+    for name in invalid:
+        assert not is_class_study_campaign_name(name)
+        with pytest.raises(ValueError, match="campaign name"):
+            parse_class_study_campaign_name(name)
+
+
 def test_hash_order_and_unconstrained_selection_are_deterministic() -> None:
     candidates = _candidates()
     first = deterministic_candidate_order(candidates, tranco_list_sha256=LIST_SHA)
@@ -529,6 +590,131 @@ def test_hash_order_and_unconstrained_selection_are_deterministic() -> None:
     assert Counter(candidate.stratum.id for candidate in selection.reserves) == {
         stratum.id: 4 for stratum in TRANCO_RANK_STRATA
     }
+
+
+def test_class20_profile_is_source_bound_and_keeps_v1_order_unchanged(monkeypatch) -> None:
+    import qcsd_lab.class_study as study
+
+    profile = load_class20_profile_contract()
+    assert profile == CLASS20_PROFILE
+    assert profile.formal_sample_count == 16_000
+    assert profile.final_count * len(profile.formal_modes) * 10 * 10 == 16_000
+    with pytest.raises(ValueError, match="registered dimensions"):
+        ClassStudyProfile(**{**vars(profile), "pilot_count": 31})
+
+    catalogue = _candidates()
+    frozen = deterministic_candidate_order(catalogue, tranco_list_sha256=LIST_SHA)
+    interleaved = deterministic_profile_candidate_order(
+        reversed(catalogue), tranco_list_sha256=LIST_SHA, profile=profile
+    )
+    assert frozen == deterministic_candidate_order(
+        catalogue, tranco_list_sha256=LIST_SHA,
+        order_seed_study_id=profile.catalogue_order_seed,
+    )
+    assert len(interleaved) == 600
+    assert [candidate.stratum.id for candidate in interleaved[:5]] == [
+        stratum.id for stratum in TRANCO_RANK_STRATA
+    ]
+    assert interleaved == deterministic_profile_candidate_order(
+        catalogue, tranco_list_sha256=LIST_SHA, profile=profile
+    )
+    for stratum in TRANCO_RANK_STRATA:
+        assert tuple(candidate for candidate in interleaved if candidate.stratum == stratum) == (
+            tuple(candidate for candidate in frozen if candidate.stratum == stratum)
+        )
+
+    monkeypatch.setattr(study, "_CLASS20_OVERLAY_SHA256", "0" * 64)
+    with pytest.raises(ValueError, match="source-pinned bytes"):
+        load_class20_profile_contract()
+
+
+def test_class20_profile_inherits_exact_primary_origin_prefix_scope() -> None:
+    root = Path(__file__).resolve().parents[1]
+    overlay = json.loads((root / "config/class-study/v2/study.json").read_bytes())
+    base = json.loads((root / "config/class-study/v1/study.json").read_bytes())
+    prefix = overlay["walkie_talkie_prefix_qualification"]
+    assert overlay["base_study_contract"]["inheritance"] == (
+        "unchanged-browser-safety-request-replay-defence-and-primary-origin-"
+        "prefix-qualification-rules-only"
+    )
+    assert prefix == {
+        "inherited_amendment": "prospective_walkie_talkie_prefix_amendment",
+        "qualification_scope": PRIMARY_ORIGIN_CAPACITY_SCOPE,
+        "prefix_spec_schema_version": PRIMARY_ORIGIN_PREFIX_SCHEMA_VERSION,
+        "prefix_qualification_receipt_schema_version": (
+            PRIMARY_ORIGIN_PREFIX_RECEIPT_SCHEMA_VERSION
+        ),
+        "capacity_connection": "one-primary-origin-quic-connection",
+        "proof_boundary": (
+            "primary-origin-staged-capacity-only;full-page-and-secondary-origin-behaviour-"
+            "require-separate-end-to-end-verification"
+        ),
+    }
+    amendment = base[prefix["inherited_amendment"]]
+    for key, value in prefix.items():
+        if key != "inherited_amendment":
+            assert amendment[key] == value
+
+
+@pytest.mark.parametrize(
+    "field,invalid",
+    (
+        ("inherited_amendment", "other_amendment"),
+        ("qualification_scope", "whole-page-capacity"),
+        ("prefix_spec_schema_version", 3),
+        ("prefix_qualification_receipt_schema_version", 3),
+        ("capacity_connection", "multiple-quic-connections"),
+        ("proof_boundary", "full-page-capacity"),
+    ),
+)
+def test_class20_profile_rejects_changed_prefix_scope_even_with_matching_hash(
+    tmp_path: Path, monkeypatch, field: str, invalid: object,
+) -> None:
+    import qcsd_lab.class_study as study
+
+    source = Path(__file__).resolve().parents[1] / "config/class-study/v2/study.json"
+    profile = tmp_path / "config/class-study/v2/study.json"
+    profile.parent.mkdir(parents=True)
+    payload = json.loads(source.read_bytes())
+    payload["walkie_talkie_prefix_qualification"][field] = invalid
+    profile.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    monkeypatch.setattr(study, "__file__", str(tmp_path / "src/qcsd_lab/class_study.py"))
+    monkeypatch.setattr(
+        study, "_CLASS20_OVERLAY_SHA256", hashlib.sha256(profile.read_bytes()).hexdigest()
+    )
+    with pytest.raises(ValueError, match="invalid registered contract"):
+        load_class20_profile_contract()
+
+
+def test_class20_pilot_uses_30_confirmed_eligible_sites_without_rank_minima() -> None:
+    catalogue = _candidates()
+    frozen = deterministic_candidate_order(catalogue, tranco_list_sha256=LIST_SHA)
+    allowed: set[str] = set()
+    for stratum, take in zip(TRANCO_RANK_STRATA, (2, 0, 0, 10, 18), strict=True):
+        group = tuple(candidate for candidate in frozen if candidate.stratum == stratum)
+        allowed.update(candidate.candidate_id for candidate in group[:take])
+    assessed = tuple(
+        replace(candidate, eligible=candidate.candidate_id in allowed)
+        for candidate in catalogue
+    )
+    pilot = select_profile_pilot(
+        assessed, tranco_list_sha256=LIST_SHA, profile=CLASS20_PROFILE
+    )
+    assert len(pilot) == 30
+    assert Counter(candidate.stratum.id for candidate in pilot) == {
+        TRANCO_RANK_STRATA[0].id: 2,
+        TRANCO_RANK_STRATA[3].id: 10,
+        TRANCO_RANK_STRATA[4].id: 18,
+    }
+    assert pilot == select_profile_pilot(
+        reversed(assessed), tranco_list_sha256=LIST_SHA, profile=CLASS20_PROFILE
+    )
+    with pytest.raises(ValueError, match="needs 30 confirmed eligible"):
+        select_profile_pilot(
+            tuple(replace(candidate, eligible=False) for candidate in catalogue),
+            tranco_list_sha256=LIST_SHA,
+            profile=CLASS20_PROFILE,
+        )
 
 
 def test_boolean_eligibility_is_the_only_unconstrained_selection_input() -> None:

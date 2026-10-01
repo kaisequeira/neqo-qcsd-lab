@@ -18,10 +18,11 @@ import re
 import shutil
 import tempfile
 from collections import Counter
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime
+from itertools import combinations
 from pathlib import Path
 from typing import Any
 
@@ -115,20 +116,27 @@ from .class_run_binding import (
     validate_class_sample_run_binding,
 )
 from .class_study import (
+    CLASS20_PROFILE,
+    CLASS20_STUDY_ID,
     COMPATIBILITY_MODES,
     FINAL_CLASS_COUNT,
     FORMAL_BLOCK_COUNT,
     FORMAL_MODES,
     PILOT_COUNT,
     STUDY_ID,
+    TRANCO_RANK_STRATA,
+    ClassCandidate,
+    ClassStudyProfile,
     CohortSelection,
     bind_receipt,
     canonical_json_bytes,
     canonical_json_sha256,
     is_successor_study_id,
+    load_class20_profile_contract,
     load_study_receipt,
     parse_class_study_campaign_name,
     select_cohort,
+    select_profile_pilot,
 )
 from .class_study import (
     RECEIPT_TYPE as COHORT_RECEIPT_TYPE,
@@ -185,6 +193,8 @@ STUDY_ACTIONS = (
     "stability",
     "cohort",
     "campaigns",
+    "pair-screen",
+    "final-select",
     "fit-numeric",
     "prefix-specs",
     "qualify-prefix",
@@ -992,6 +1002,164 @@ def _qualified_final_pair_selection(
     ):
         raise ValueError("qualified pilot pair graph produced an invalid final perfect matching")
     return selection
+
+
+@dataclass(frozen=True)
+class PairQualificationOutcome:
+    """One evidence-bound pass or failure for a planned pilot pair."""
+
+    pair: tuple[str, str]
+    qualified: bool
+    evidence_sha256: str
+    failure_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.pair) is not tuple
+            or len(self.pair) != 2
+            or not all(isinstance(item, str) and item for item in self.pair)
+            or self.pair[0] == self.pair[1]
+            or type(self.qualified) is not bool
+            or not isinstance(self.evidence_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", self.evidence_sha256) is None
+        ):
+            raise ValueError("planned pair qualification outcome is malformed")
+        if self.qualified:
+            if self.failure_reason is not None:
+                raise ValueError("qualified pair cannot carry a failure reason")
+        elif not isinstance(self.failure_reason, str) or not self.failure_reason.strip():
+            raise ValueError("failed pair requires an evidence-backed failure reason")
+
+
+@dataclass(frozen=True)
+class ProfileFinalSelection:
+    """Prospective 20-site selection with every planned pair outcome retained."""
+
+    profile: ClassStudyProfile
+    pilot: tuple[ClassCandidate, ...]
+    final: tuple[ClassCandidate, ...]
+    reserves: tuple[ClassCandidate, ...]
+    planned_pairs: tuple[tuple[str, str], ...]
+    pair_outcomes: tuple[PairQualificationOutcome, ...]
+    matching: tuple[tuple[str, str], ...]
+
+    @property
+    def failed_pairs(self) -> tuple[PairQualificationOutcome, ...]:
+        return tuple(outcome for outcome in self.pair_outcomes if not outcome.qualified)
+
+    def inventories(self) -> dict[str, list[str]]:
+        return {
+            "pilot": [candidate.candidate_id for candidate in self.pilot],
+            "final": [candidate.candidate_id for candidate in self.final],
+            "reserve": [candidate.candidate_id for candidate in self.reserves],
+        }
+
+
+def select_profile_final(
+    candidates: Iterable[ClassCandidate],
+    *,
+    tranco_list_sha256: str,
+    planned_pairs: Iterable[Sequence[str]],
+    pair_outcomes: Iterable[PairQualificationOutcome],
+    profile: ClassStudyProfile,
+) -> ProfileFinalSelection:
+    """Select the first cap-feasible 10 qualified pairs from 15 pilot pairs.
+
+    The frozen catalogue, Tranco digest, and profile reconstruct pilot order.
+    Fitting must plan exactly one pair for each pilot site.  Every pair then
+    needs a pass or retained failure with an evidence digest.  Selection sees
+    only those binary qualification outcomes, never classifier accuracy or
+    formal capture measurements.  Among valid 10-pair subsets, the first in
+    canonical pilot-pair order wins; rank groups have a maximum, not a quota.
+    """
+
+    if profile != CLASS20_PROFILE:
+        raise ValueError("the 20-site study requires its registered profile")
+    pilot = select_profile_pilot(
+        candidates, tranco_list_sha256=tranco_list_sha256, profile=profile
+    )
+    pilot_order = {candidate.candidate_id: index for index, candidate in enumerate(pilot)}
+    planned: list[tuple[str, str]] = []
+    covered: set[str] = set()
+    for raw_pair in planned_pairs:
+        if isinstance(raw_pair, (str, bytes)) or not isinstance(raw_pair, Sequence):
+            raise ValueError("planned pair must contain two pilot candidate IDs")
+        values = tuple(raw_pair)
+        if (
+            len(values) != 2
+            or any(not isinstance(item, str) or item not in pilot_order for item in values)
+            or values[0] == values[1]
+            or any(item in covered for item in values)
+        ):
+            raise ValueError("planned pairs must cover pilot sites once each")
+        left, right = sorted(values, key=pilot_order.__getitem__)
+        planned.append((left, right))
+        covered.update(values)
+    if len(planned) != profile.pilot_count // 2 or covered != set(pilot_order):
+        raise ValueError("planned pairs must form an exact pilot perfect matching")
+    planned.sort(key=lambda pair: (pilot_order[pair[0]], pilot_order[pair[1]]))
+    planned_tuple = tuple(planned)
+    planned_set = set(planned_tuple)
+
+    indexed_outcomes: dict[tuple[str, str], PairQualificationOutcome] = {}
+    for outcome in pair_outcomes:
+        if not isinstance(outcome, PairQualificationOutcome):
+            raise ValueError("pair outcome has the wrong type")
+        if any(item not in pilot_order for item in outcome.pair):
+            raise ValueError("pair outcome references a non-pilot site")
+        left, right = sorted(outcome.pair, key=pilot_order.__getitem__)
+        pair = (left, right)
+        if pair not in planned_set or pair in indexed_outcomes:
+            raise ValueError("pair outcomes must cover each planned pair once")
+        indexed_outcomes[pair] = PairQualificationOutcome(
+            pair=pair,
+            qualified=outcome.qualified,
+            evidence_sha256=outcome.evidence_sha256,
+            failure_reason=outcome.failure_reason,
+        )
+    if set(indexed_outcomes) != planned_set:
+        raise ValueError("pair outcomes must cover each planned pair once")
+    ordered_outcomes = tuple(indexed_outcomes[pair] for pair in planned_tuple)
+    qualified = tuple(
+        outcome.pair for outcome in ordered_outcomes if outcome.qualified
+    )
+    required_pairs = profile.final_count // 2
+    if len(qualified) < required_pairs:
+        raise ValueError(
+            f"only {len(qualified)} qualified pilot pairs; {required_pairs} required"
+        )
+
+    pilot_by_id = {candidate.candidate_id: candidate for candidate in pilot}
+    matching: tuple[tuple[str, str], ...] | None = None
+    for proposed in combinations(qualified, required_pairs):
+        counts = Counter(
+            pilot_by_id[candidate_id].stratum.id
+            for pair in proposed
+            for candidate_id in pair
+        )
+        if all(
+            counts[stratum.id] <= profile.max_final_per_stratum
+            for stratum in TRANCO_RANK_STRATA
+        ):
+            matching = proposed
+            break
+    if matching is None:
+        raise ValueError("qualified pilot pairs cannot meet the final rank-group cap")
+
+    final_ids = {candidate_id for pair in matching for candidate_id in pair}
+    final = tuple(candidate for candidate in pilot if candidate.candidate_id in final_ids)
+    reserves = tuple(candidate for candidate in pilot if candidate.candidate_id not in final_ids)
+    if len(final) != profile.final_count or len(reserves) != profile.reserve_count:
+        raise AssertionError("20-site pair selection did not partition the pilot")
+    return ProfileFinalSelection(
+        profile=profile,
+        pilot=pilot,
+        final=final,
+        reserves=reserves,
+        planned_pairs=planned_tuple,
+        pair_outcomes=ordered_outcomes,
+        matching=matching,
+    )
 
 
 def validate_final_selection_input(
@@ -1923,6 +2091,7 @@ def class_study_status(
 def run_class_study_action(
     action: str,
     *,
+    study_id: str = STUDY_ID,
     stage: str | None = None,
     candidate_catalogue_path: Path | None = None,
     stability_root: Path | None = None,
@@ -1941,6 +2110,7 @@ def run_class_study_action(
     cohort_receipt_path: Path | None = None,
     cohort_assembly_path: Path | None = None,
     final_selection_path: Path | None = None,
+    pair_screening_path: Path | None = None,
     campaign_root: Path | None = None,
     campaign: Path | None = None,
     results_root: Path | None = None,
@@ -2006,6 +2176,583 @@ def run_class_study_action(
 
     if action not in STUDY_ACTIONS:
         raise ValueError(f"class-study action must be one of: {', '.join(STUDY_ACTIONS)}")
+    if study_id == STUDY_ID:
+        profile = None
+    elif study_id == CLASS20_STUDY_ID:
+        profile = load_class20_profile_contract()
+        if action not in {
+            "acquisition-authority",
+            "acquisition-init",
+            "acquisition-run",
+            "acquisition-status",
+            "acquisition-complete",
+            "cohort",
+            "campaigns",
+            "foundation",
+            "prefix-specs",
+            "fit-numeric",
+            "qualify-prefix",
+            "finalize-fitting",
+            "pair-screen",
+            "final-select",
+            "readiness",
+            "historical-snapshot",
+            "capture",
+            "resume",
+            "export",
+            "evaluate",
+            "comparison-review",
+            "attest",
+            "verify",
+        }:
+            raise ValueError("20-site study action is not yet implemented")
+    else:
+        raise ValueError("class-study action has an unsupported study ID")
+    if profile is not None and successor_restart is not None:
+        raise ValueError("20-site study cannot inherit a 100-site successor restart")
+    if action in {"pair-screen", "final-select"}:
+        if profile is None:
+            raise ValueError("pair screening and profile selection require the 20-site study")
+        if stage not in {None, PILOT_STAGE}:
+            raise ValueError("20-site pair screening and selection use the pilot cohort")
+        pilot_path = _required(pilot_cohort_receipt_path, "--pilot-cohort")
+        pilot_assembly = _required(pilot_cohort_assembly_path, "--pilot-cohort-assembly")
+        pair_path = _required(pair_screening_path, "--pair-screening")
+        if action == "pair-screen":
+            from .class_pair_screening20 import (
+                publish_pair_screening_receipt,
+                validate_pair_screening_receipt,
+            )
+
+            inputs = {
+                "pilot_cohort_path": pilot_path,
+                "pilot_assembly_path": pilot_assembly,
+                "numeric_bundle_root": _required(numeric_bundle_root, "--numeric-bundle"),
+                "fitting_result_root": _required(pilot_fitting_result, "--pilot-fitting-result"),
+                "workload_root": _required(workload_root, "--workload-root"),
+                "prefix_spec_root": _required(prefix_spec_root, "--prefix-spec-root"),
+                "sidecar_root": _required(qualification_sidecar_root, "--qualification-sidecar-root"),
+                "foundation_attestation_path": _required(
+                    foundation_attestation, "--foundation-attestation"
+                ),
+                "profile": profile,
+            }
+            published = publish_pair_screening_receipt(pair_path, **inputs)
+            receipt = validate_pair_screening_receipt(
+                _load_json_object(published, "20-site pair-screening receipt"), **inputs
+            )
+            return ClassStudyActionResult(
+                action, "complete",
+                {
+                    "valid": True, "study_id": profile.study_id,
+                    "receipt": str(published),
+                    "receipt_sha256": sha256_file(published),
+                    "planned_pairs": len(receipt["payload"]["pair_outcomes"]),
+                    "qualified_pairs": receipt["payload"]["qualified_pair_count"],
+                },
+            )
+        from .class_final_selection20 import (
+            publish_profile_final_selection_receipt,
+            validate_profile_final_selection_receipt,
+        )
+
+        selection_path = publish_profile_final_selection_receipt(
+            _required(final_selection_path, "--final-selection"),
+            pair_screening_path=pair_path,
+            pilot_cohort_path=pilot_path,
+            pilot_assembly_path=pilot_assembly,
+            profile=profile,
+        )
+        selection = validate_profile_final_selection_receipt(
+            selection_path,
+            pilot_cohort_path=pilot_path,
+            pilot_assembly_path=pilot_assembly,
+            profile=profile,
+        )
+        return ClassStudyActionResult(
+            action, "complete",
+            {
+                "valid": True, "study_id": profile.study_id,
+                "receipt": str(selection_path),
+                "receipt_sha256": sha256_file(selection_path),
+                "pilot_ids": [item.candidate_id for item in selection.pilot],
+                "final_ids": [item.candidate_id for item in selection.final],
+                "reserve_ids": [item.candidate_id for item in selection.reserves],
+                "matching": [list(pair) for pair in selection.matching],
+            },
+        )
+    if pair_screening_path is not None:
+        raise ValueError("--pair-screening is accepted only by pair-screen and final-select")
+    if action == "fit-numeric" and profile is not None:
+        from .class_cohort20 import load_validated_profile_cohort
+        from .class_profile_result import verify_profile_class_result
+
+        if stage not in {PILOT_STAGE, AUTHORITATIVE_STAGE}:
+            raise ValueError("20-site numeric fitting requires --stage pilot or authoritative")
+        cohort_path = _required(
+            pilot_cohort_receipt_path if stage == PILOT_STAGE else final_cohort_receipt_path,
+            "--pilot-cohort" if stage == PILOT_STAGE else "--final-cohort",
+        )
+        assembly_path = _required(
+            pilot_cohort_assembly_path if stage == PILOT_STAGE else final_cohort_assembly_path,
+            "--pilot-cohort-assembly" if stage == PILOT_STAGE else "--final-cohort-assembly",
+        )
+        pilot_ids, final_ids = load_validated_profile_cohort(
+            cohort_path, assembly_path, profile=profile, require_deep=True,
+        )
+        if len(pilot_ids) != profile.pilot_count or len(final_ids) != (
+            profile.final_count if stage == AUTHORITATIVE_STAGE else 0
+        ):
+            raise ValueError("20-site numeric fitting uses another cohort stage")
+        source = _required(capture_result, "--capture-result")
+        verified_source = verify_profile_class_result(
+            source, profile=profile,
+            cohort_receipt=cohort_path, cohort_assembly=assembly_path,
+            expected_role=(
+                "pilot-fitting" if stage == PILOT_STAGE else "authoritative-fitting"
+            ),
+        )
+        root = require_canonical_fresh_path(
+            _required(artifacts_root, "--artifacts-root"),
+            field="artifacts_root", profile=profile,
+        )
+        output = create_numeric_fitting_bundle(
+            source, artifacts_root=root, stage=stage,
+            study_profile=profile,
+            expected_cohort_receipt_path=cohort_path,
+            expected_cohort_assembly_receipt_path=assembly_path,
+        )
+        verified = verify_numeric_fitting_bundle(output, source_result_root=source)
+        if (
+            verified.stage != stage
+            or verified.provenance.get("study_id") != profile.study_id
+            or verified.provenance.get("study_profile_sha256")
+            != sha256_file(class_study_layout(profile=profile).study_config_root / "study.json")
+            or verified_source["accepted"] != (
+                profile.pilot_count * 2 * 2
+                if stage == PILOT_STAGE else profile.final_count * 10 * 2
+            )
+        ):
+            raise ValueError("20-site numeric fitting output differs from its sealed source")
+        return ClassStudyActionResult(action, "complete", verified.as_dict())
+    if action == "prefix-specs" and profile is not None:
+        from .class_pair_screening20 import publish_feasible_pilot_prefix_specs
+
+        if stage == AUTHORITATIVE_STAGE:
+            final_ids, source, numeric, workloads = _profile_authoritative_fitting_inputs(
+                profile=profile,
+                final_cohort_receipt=final_cohort_receipt_path,
+                final_cohort_assembly=final_cohort_assembly_path,
+                fitting_result=capture_result,
+                numeric_bundle_root=numeric_bundle_root,
+                workload_root=workload_root,
+            )
+            layout = class_study_layout(profile=profile)
+            expected = require_canonical_fresh_path(
+                _required(prefix_spec_root, "--prefix-spec-root"),
+                field="authoritative_prefix_root", profile=profile,
+            )
+            root = require_canonical_fresh_path(
+                _required(artifacts_root, "--artifacts-root"),
+                field="artifacts_root", profile=profile,
+            )
+            if expected != layout.authoritative_prefix_root:
+                raise ValueError("20-site final prefix root differs from the canonical layout")
+            output = derive_schema_six_prefix_specs(
+                numeric, source_result_root=source, workload_root=workloads,
+                artifacts_root=root,
+            )
+            details = _verify_prefix_spec_root(
+                output, numeric_bundle_root=numeric, workload_root=workloads,
+            )
+            if Path(details["root"]) != expected or details["workloads"] != len(final_ids):
+                raise ValueError("20-site final prefix publication differs from its cohort")
+            return ClassStudyActionResult(action, "complete", details)
+        if stage != PILOT_STAGE:
+            raise ValueError("20-site prefix publication requires --stage pilot")
+        publication = publish_feasible_pilot_prefix_specs(
+            pilot_cohort_path=_required(pilot_cohort_receipt_path, "--pilot-cohort"),
+            pilot_assembly_path=_required(
+                pilot_cohort_assembly_path, "--pilot-cohort-assembly"
+            ),
+            numeric_bundle_root=_required(numeric_bundle_root, "--numeric-bundle"),
+            fitting_result_root=_required(
+                pilot_fitting_result, "--pilot-fitting-result"
+            ),
+            workload_root=_required(workload_root, "--workload-root"),
+            prefix_spec_root=_required(prefix_spec_root, "--prefix-spec-root"),
+            profile=profile,
+        )
+        return ClassStudyActionResult(
+            action, "complete",
+            {
+                "valid": True, "study_id": profile.study_id,
+                "published_specs": [str(path) for path in publication.published_paths],
+                "capacity_failures": [
+                    {"workload_id": failure.workload_id, "reason": failure.reason,
+                     "workload_sha256": failure.workload_sha256,
+                     "walkie_talkie_sha256": failure.walkie_talkie_sha256}
+                    for failure in publication.capacity_failures
+                ],
+                "profile_sha256": publication.profile_sha256,
+                "pilot_cohort_sha256": publication.pilot_cohort_sha256,
+                "numeric_provenance_sha256": publication.numeric_provenance_sha256,
+            },
+        )
+    if action == "qualify-prefix" and profile is not None:
+        from .chaff_qualification import load_qualified_chaff
+        from .class_attestation import class_qualification_authority
+        from .class_pair_screening20 import verify_feasible_pilot_prefix_specs
+
+        if stage == AUTHORITATIVE_STAGE:
+            final_ids, source, numeric, workloads = _profile_authoritative_fitting_inputs(
+                profile=profile,
+                final_cohort_receipt=final_cohort_receipt_path,
+                final_cohort_assembly=final_cohort_assembly_path,
+                fitting_result=capture_result,
+                numeric_bundle_root=numeric_bundle_root,
+                workload_root=workload_root,
+            )
+            layout = class_study_layout(profile=profile)
+            specs = require_canonical_fresh_path(
+                _required(prefix_spec_root, "--prefix-spec-root"),
+                field="authoritative_prefix_root", profile=profile,
+            )
+            work = _profile_final_qualification_work_root(layout)
+            checkpoint = _profile_final_qualification_checkpoint(layout)
+            if Path(os.path.abspath(_required(qualification_sidecar_root, "--qualification-sidecar-root"))) != work:
+                raise ValueError("20-site final qualification work root is not canonical")
+            if Path(os.path.abspath(_required(qualification_checkpoint, "--qualification-checkpoint"))) != checkpoint:
+                raise ValueError("20-site final qualification checkpoint is not canonical")
+            publications = require_canonical_fresh_path(
+                _required(qualification_publication_root, "--qualification-publication-root"),
+                field="qualification_sets_root", profile=profile,
+            )
+            authority = class_qualification_authority(
+                _required(foundation_attestation, "--foundation-attestation"),
+                deep_code_gate=deep, runtime_role="collection",
+            )
+            return _coordinate_qualification(
+                AUTHORITATIVE_STAGE,
+                admission=None, workload_ids=final_ids,
+                source_result_root=source, numeric_bundle_root=numeric,
+                prefix_spec_root=specs, workload_root=workloads,
+                checkpoint_path=checkpoint, sidecar_root=work,
+                publication_root=publications,
+                workload_id=qualification_workload,
+                qualify_all_pending=qualify_all_pending,
+                qualification_authority=authority,
+                qualification_set_name=layout.final_qualification_set_root.name,
+            )
+        if stage != PILOT_STAGE:
+            raise ValueError("20-site pilot qualification requires --stage pilot")
+        if qualification_workload is not None and qualify_all_pending:
+            raise ValueError("select one pilot workload or all pending workloads")
+        pilot_path = _required(pilot_cohort_receipt_path, "--pilot-cohort")
+        assembly_path = _required(
+            pilot_cohort_assembly_path, "--pilot-cohort-assembly"
+        )
+        workloads = _required(workload_root, "--workload-root")
+        specs = require_canonical_fresh_path(
+            _required(prefix_spec_root, "--prefix-spec-root"),
+            field="pilot_prefix_root", label="pilot prefix specs", profile=profile,
+        )
+        sidecars = _regular_directory(
+            require_canonical_fresh_path(
+                _required(qualification_sidecar_root, "--qualification-sidecar-root"),
+                field="pilot_qualification_set_root",
+                label="pilot qualification sidecars", profile=profile,
+            ),
+            "pilot qualification sidecar root",
+        )
+        publication = verify_feasible_pilot_prefix_specs(
+            pilot_cohort_path=pilot_path,
+            pilot_assembly_path=assembly_path,
+            numeric_bundle_root=_required(numeric_bundle_root, "--numeric-bundle"),
+            fitting_result_root=_required(
+                pilot_fitting_result, "--pilot-fitting-result"
+            ),
+            workload_root=workloads,
+            prefix_spec_root=specs,
+            profile=profile,
+        )
+        feasible = tuple(path.stem for path in publication.published_paths)
+        if qualification_workload is not None and qualification_workload not in feasible:
+            raise ValueError("requested workload has no feasible verified pilot prefix")
+        allowed = {f"{workload_id}.json" for workload_id in feasible}
+        unexpected = sorted(path.name for path in sidecars.iterdir() if path.name not in allowed)
+        if unexpected:
+            raise ValueError("pilot qualification sidecars contain unknown entries: " + ", ".join(unexpected))
+        authority = class_qualification_authority(
+            _required(foundation_attestation, "--foundation-attestation"),
+            deep_code_gate=deep, runtime_role="collection",
+        )
+        execution_context = _qualification_execution_context()
+        if (
+            execution_context[1] != authority["prepare_source"]
+            or execution_context[2] != authority["prepare_image_digest"]
+        ):
+            raise ValueError("pilot qualification runtime differs from the foundation")
+
+        def verified_sidecar(workload_id: str) -> bool:
+            sidecar = sidecars / f"{workload_id}.json"
+            if not sidecar.exists() and not sidecar.is_symlink():
+                return False
+            load_qualified_chaff(
+                sidecar, workload_id=workload_id,
+                base_manifest_path=workloads / f"{workload_id}.json",
+                prefix_spec_path=specs / f"{workload_id}.json",
+                require_current_implementation=True,
+                expected_sidecar_schema_version=CLASS_STUDY_QUALIFICATION_SCHEMA_VERSION,
+                expected_qualification_authority=authority,
+            )
+            return True
+
+        pending = tuple(workload_id for workload_id in feasible if not verified_sidecar(workload_id))
+        requested = (
+            (qualification_workload,) if qualification_workload in pending else ()
+        ) if qualification_workload is not None else (
+            pending if qualify_all_pending else ()
+        )
+        for workload_id in requested:
+            qualify_chaff(
+                workload_id,
+                qualification_root=sidecars,
+                workload_root=workloads,
+                prefix_spec_root=specs,
+                _execution_context=execution_context,
+                qualification_authority=authority,
+            )
+            verified_sidecar(workload_id)
+        pending = tuple(workload_id for workload_id in feasible if not verified_sidecar(workload_id))
+        return ClassStudyActionResult(
+            action, "complete" if not pending else "pending",
+            {
+                "valid": True,
+                "study_id": profile.study_id,
+                "feasible_workloads": len(feasible),
+                "qualified_workloads": len(feasible) - len(pending),
+                "pending_workloads": list(pending),
+                "capacity_failures": [
+                    {"workload_id": failure.workload_id, "reason": failure.reason}
+                    for failure in publication.capacity_failures
+                ],
+            },
+            () if not pending else (
+                "run a pending workload with --qualification-workload, or use --qualify-all-pending",
+            ),
+        )
+    if action == "finalize-fitting" and profile is not None:
+        from .class_attestation import class_qualification_authority
+
+        if stage != AUTHORITATIVE_STAGE:
+            raise ValueError("20-site final fitting requires --stage authoritative")
+        if capture_result is not None and authoritative_fitting_result is not None:
+            if Path(os.path.abspath(capture_result)) != Path(os.path.abspath(authoritative_fitting_result)):
+                raise ValueError("20-site final fitting received two different source results")
+        final_ids, source, numeric, workloads = _profile_authoritative_fitting_inputs(
+            profile=profile,
+            final_cohort_receipt=final_cohort_receipt_path,
+            final_cohort_assembly=final_cohort_assembly_path,
+            fitting_result=authoritative_fitting_result or capture_result,
+            numeric_bundle_root=numeric_bundle_root,
+            workload_root=workload_root,
+        )
+        layout = class_study_layout(profile=profile)
+        published = require_canonical_fresh_path(
+            _required(qualification_sidecar_root, "--qualification-sidecar-root"),
+            field="final_qualification_set_root", profile=profile,
+        )
+        manifest = require_canonical_fresh_child(
+            _required(qualification_manifest, "--qualification-manifest"),
+            field="final_qualification_set_root",
+            filename=NAMED_QUALIFICATION_SET_MANIFEST, profile=profile,
+        )
+        prefix = require_canonical_fresh_child(
+            _required(prefix_spec_root, "--prefix-spec-root"),
+            field="final_qualification_set_root",
+            filename=NAMED_QUALIFICATION_PREFIX_DIRECTORY, profile=profile,
+        )
+        if manifest.parent != published or prefix.parent != published:
+            raise ValueError("20-site final fitting needs one published qualification set")
+        root = require_canonical_fresh_path(
+            _required(artifacts_root, "--artifacts-root"),
+            field="artifacts_root", profile=profile,
+        )
+        expected_final = require_canonical_fresh_path(
+            _required(final_bundle_root, "--final-bundle"),
+            field="authoritative_final_root", profile=profile,
+        )
+        context = QualificationContext(
+            workload_root=workloads, sidecar_root=published,
+            prefix_spec_root=prefix,
+            qualification_authority=class_qualification_authority(
+                _required(foundation_attestation, "--foundation-attestation"),
+                deep_code_gate=deep, runtime_role="collection",
+            ),
+            expected_qualification_set=layout.final_qualification_set_root.name,
+        )
+        output = finalize_fitting_bundle(
+            numeric, source_result_root=source,
+            qualification_manifest_path=manifest,
+            qualification_context=context, artifacts_root=root,
+        )
+        if output != expected_final:
+            raise ValueError("20-site final fitting published outside its canonical root")
+        verified = verify_class_fitting_bundle(
+            output, qualification_context=context, source_result_root=source,
+        )
+        if verified.stage != AUTHORITATIVE_STAGE or len(final_ids) != profile.final_count:
+            raise ValueError("20-site final fitting differs from its final cohort")
+        return ClassStudyActionResult(action, "complete", verified.as_dict())
+    if action == "readiness" and profile is not None:
+        from .class_attestation import (
+            create_class_readiness_attestation,
+            validate_class_readiness_attestation,
+        )
+
+        if stage is not None:
+            raise ValueError("20-site readiness uses the completed final cohort")
+        target = _required(destination, "--destination")
+        require_canonical_fresh_child(
+            target, field="artifacts_root", filename=target.name,
+            label="20-site readiness destination", profile=profile,
+        )
+        numeric = require_canonical_fresh_path(
+            _required(numeric_bundle_root, "--numeric-bundle"),
+            field="authoritative_numeric_root", label="numeric bundle", profile=profile,
+        )
+        final_bundle = require_canonical_fresh_path(
+            _required(final_bundle_root, "--final-bundle"),
+            field="authoritative_final_root", profile=profile,
+        )
+        qualification_root = require_canonical_fresh_path(
+            _required(qualification_sidecar_root, "--qualification-sidecar-root"),
+            field="final_qualification_set_root", profile=profile,
+        )
+        prefix_root = require_canonical_fresh_child(
+            _required(prefix_spec_root, "--prefix-spec-root"),
+            field="final_qualification_set_root", filename="_prefix-specs",
+            label="qualification prefix root", profile=profile,
+        )
+        output = create_class_readiness_attestation(
+            target,
+            study_id=profile.study_id,
+            foundation_attestation=_required(
+                foundation_attestation, "--foundation-attestation"
+            ),
+            cohort_version=_required(cohort_version, "--cohort-version"),
+            candidate_catalogue=_required(
+                candidate_catalogue_path, "--candidate-catalogue"
+            ),
+            stability_root=_required(stability_root, "--stability-root"),
+            workload_root=_required(workload_root, "--workload-root"),
+            acquisition_completion=_required(
+                acquisition_completion_path, "--acquisition-completion"
+            ),
+            pilot_cohort_receipt=_required(
+                pilot_cohort_receipt_path, "--pilot-cohort"
+            ),
+            pilot_cohort_assembly=_required(
+                pilot_cohort_assembly_path, "--pilot-cohort-assembly"
+            ),
+            final_selection_receipt=_required(
+                final_selection_path, "--final-selection"
+            ),
+            final_cohort_receipt=_required(final_cohort_receipt_path, "--final-cohort"),
+            final_cohort_assembly=_required(
+                final_cohort_assembly_path, "--final-cohort-assembly"
+            ),
+            authoritative_fitting_result_root=_required(
+                authoritative_fitting_result, "--authoritative-fitting-result"
+            ),
+            authoritative_numeric_bundle_root=numeric,
+            authoritative_fitting_bundle_root=final_bundle,
+            qualification_workload_root=_required(workload_root, "--workload-root"),
+            qualification_sidecar_root=qualification_root,
+            qualification_prefix_root=prefix_root,
+            certification_result_root=_required(
+                certification_result, "--certification-result"
+            ),
+        )
+        verified = validate_class_readiness_attestation(output, deep_code_gate=False)
+        return ClassStudyActionResult(action, "complete", verified)
+    if action == "historical-snapshot" and profile is not None:
+        from .class_attestation import (
+            create_class_historical_snapshot,
+            validate_class_historical_snapshot,
+        )
+
+        if stage is not None or snapshot_phase not in {"pre-formal", "post-formal"}:
+            raise ValueError("20-site historical snapshot requires pre-formal or post-formal phase")
+        target = _required(destination, "--destination")
+        require_canonical_fresh_child(
+            target, field="artifacts_root", filename=target.name,
+            label="20-site historical snapshot destination", profile=profile,
+        )
+        output = create_class_historical_snapshot(
+            target,
+            phase=snapshot_phase,
+            readiness_attestation=_required(readiness_attestation, "--readiness-attestation"),
+            formal_result_roots=formal_result_roots,
+            pre_snapshot=historical_pre_snapshot,
+        )
+        return ClassStudyActionResult(
+            action, "complete",
+            validate_class_historical_snapshot(output, expected_phase=snapshot_phase),
+        )
+    if action in {"capture", "resume"} and profile is not None:
+        if stage is not None:
+            raise ValueError("20-site canary/formal capture does not use a fitting stage")
+        return _coordinate_profile_capture(
+            action,
+            profile=profile,
+            campaign=campaign,
+            results_root=results_root,
+            capture_result=capture_result,
+            prerequisite_roots=result_roots,
+            pilot_cohort_receipt=pilot_cohort_receipt_path,
+            pilot_cohort_assembly=pilot_cohort_assembly_path,
+            final_cohort_receipt=final_cohort_receipt_path,
+            final_cohort_assembly=final_cohort_assembly_path,
+            foundation_attestation=foundation_attestation,
+            readiness_attestation=readiness_attestation,
+            historical_pre_snapshot=historical_pre_snapshot,
+            numeric_bundle_root=numeric_bundle_root,
+            final_bundle_root=final_bundle_root,
+            qualification_workload_root=workload_root,
+            qualification_sidecar_root=qualification_sidecar_root,
+            qualification_prefix_root=prefix_spec_root,
+            execute=execute,
+        )
+    if action in {"export", "evaluate", "comparison-review", "attest", "verify"} and profile is not None:
+        from .class_public20 import run_profile_public_stage
+
+        if stage is not None:
+            raise ValueError("20-site public actions do not use a fitting stage")
+        outcome = run_profile_public_stage(
+            action,
+            destination=destination,
+            final_cohort_receipt=final_cohort_receipt_path,
+            final_cohort_assembly=final_cohort_assembly_path,
+            readiness_attestation=readiness_attestation,
+            historical_pre_snapshot=historical_pre_snapshot,
+            historical_post_snapshot=historical_post_snapshot,
+            canary_result_roots=canary_result_roots,
+            formal_result_roots=formal_result_roots,
+            handoff=handoff,
+            evaluation_receipt=evaluation_receipt,
+            comparison_review_input=comparison_review_input,
+            reviewer=reviewer,
+            reviewed_at=reviewed_at,
+            comparison_review=comparison_review,
+            dlsvm_cache_directory=dlsvm_cache_directory,
+            target=target,
+            deep=deep,
+        )
+        return ClassStudyActionResult(
+            action, outcome["state"], outcome["details"], tuple(outcome["messages"]),
+        )
     status_numeric_bundle_roots = _status_artifact_inputs(
         action,
         numeric_bundle_roots,
@@ -2059,6 +2806,7 @@ def run_class_study_action(
     else:
         _validate_fresh_layout_arguments(
             action=action,
+            profile=profile,
             stage=stage,
             candidate_catalogue_path=candidate_catalogue_path,
             acquisition_root=acquisition_root,
@@ -2111,6 +2859,8 @@ def run_class_study_action(
 
             if acquisition_authority is not None and foundation_attestation is not None:
                 raise ValueError("acquisition initialisation accepts one authority, not both")
+            if profile is not None and acquisition_authority is None:
+                raise ValueError("20-site acquisition requires its own acquisition authority")
             if acquisition_authority is not None:
                 foundation_path = acquisition_authority
                 foundation = validate_class_acquisition_authority(
@@ -2124,19 +2874,29 @@ def run_class_study_action(
                 foundation = validate_class_foundation_attestation(
                     foundation_path, deep_code_gate=True, runtime_role="prepare"
                 )
+            if profile is not None and (
+                foundation.get("study_id") != profile.study_id
+                or foundation.get("study_profile_sha256")
+                != sha256_file(class_study_layout(profile=profile).study_config_root / "study.json")
+            ):
+                raise ValueError("20-site acquisition authority does not bind this profile")
             if _class_aware_timestamp(
                 foundation.get("recorded_at"), label="foundation attestation"
             ) > _class_aware_timestamp(acquisition_started_at, label="acquisition start"):
                 raise ValueError("class acquisition starts before its foundation gate")
             version = foundation.get("cohort_version")
-            expected_runner = class_study_layout().acquisition_root.with_name(
-                f"{class_study_layout().acquisition_root.name}-v{version}"
+            acquisition_base = class_study_layout(profile=profile).acquisition_root
+            expected_runner = acquisition_base.with_name(
+                f"{acquisition_base.name}-v{version}"
             )
             if type(version) is not int or version < 1 or Path(os.path.abspath(runner)) != expected_runner:
                 raise ValueError("class acquisition root differs from the allocated cohort version")
-            scoped_stability, scoped_workloads = publication_roots_for_acquisition_root(runner)
+            scoped_stability, scoped_workloads = publication_roots_for_acquisition_root(
+                runner, profile=profile
+            )
             require_cohort_publication_roots(
-                runner, scoped_stability, scoped_workloads, require_versioned=True
+                runner, scoped_stability, scoped_workloads,
+                require_versioned=True, profile=profile,
             )
             _require_absent_cohort_publication_root(scoped_stability, label="stability root")
             _require_absent_cohort_publication_root(scoped_workloads, label="workload root")
@@ -2153,6 +2913,7 @@ def run_class_study_action(
                 **authority_argument,
                 started_at=acquisition_started_at,
                 browser_tool=acquisition_browser_tool,
+                study_id=study_id,
             )
             details = acquisition_status(output, candidate_catalogue_path=catalogue)
             details.update({"valid": True, "runner_root": str(output.resolve())})
@@ -2351,6 +3112,63 @@ def run_class_study_action(
         )
 
     if action == "cohort":
+        if profile is not None:
+            from .class_cohort20 import (
+                load_validated_profile_cohort,
+                publish_evidenced_profile_cohort,
+            )
+
+            if stage not in {PILOT_STAGE, AUTHORITATIVE_STAGE}:
+                raise ValueError("20-site cohort requires a pilot or authoritative stage")
+            catalogue = _required(candidate_catalogue_path, "--candidate-catalogue")
+            stability = _required(stability_root, "--stability-root")
+            workloads = _required(workload_root, "--workload-root")
+            cohort = _required(cohort_receipt_path, "--cohort")
+            assembly = _required(cohort_assembly_path, "--cohort-assembly")
+            completion = _required(acquisition_completion_path, "--acquisition-completion")
+            final_args: dict[str, Path] = {}
+            if stage == AUTHORITATIVE_STAGE:
+                final_args = {
+                    "final_selection_receipt_path": _required(
+                        final_selection_path, "--final-selection"
+                    ),
+                    "pilot_cohort_path": _required(
+                        pilot_cohort_receipt_path, "--pilot-cohort"
+                    ),
+                    "pilot_assembly_path": _required(
+                        pilot_cohort_assembly_path, "--pilot-cohort-assembly"
+                    ),
+                }
+            cohort_path, assembly_path = publish_evidenced_profile_cohort(
+                cohort, assembly,
+                candidate_catalogue_path=catalogue,
+                stability_root=stability,
+                workload_root=workloads,
+                acquisition_completion_path=completion,
+                profile=profile,
+                **final_args,
+            )
+            pilot_ids, final_ids = load_validated_profile_cohort(
+                cohort_path, assembly_path, profile=profile, require_deep=True,
+            )
+            if len(pilot_ids) != profile.pilot_count or len(final_ids) != (
+                profile.final_count if stage == AUTHORITATIVE_STAGE else 0
+            ):
+                raise ValueError("20-site cohort publication claims another stage")
+            return ClassStudyActionResult(
+                action, "complete",
+                {
+                    "valid": True,
+                    "study_id": profile.study_id,
+                    "stage": stage,
+                    "cohort_path": str(cohort_path),
+                    "cohort_sha256": sha256_file(cohort_path),
+                    "assembly_path": str(assembly_path),
+                    "assembly_sha256": sha256_file(assembly_path),
+                    "pilot_ids": list(pilot_ids),
+                    "final_ids": list(final_ids),
+                },
+            )
         # Cohort outputs do not exist yet, so validate their source inputs via
         # the publisher and then independently rebuild the published bridge.
         catalogue = _required(candidate_catalogue_path, "--candidate-catalogue")
@@ -2508,6 +3326,14 @@ def run_class_study_action(
         if type(cohort_version) is not int or cohort_version < 1:
             raise ValueError("class-study foundation requires --cohort-version")
         build_path = _required(build_execution_receipt, "--build-execution-receipt")
+        if profile is not None:
+            expected_build_path = (
+                class_study_layout(profile=profile).artifacts_root
+                / "buflo-study"
+                / f"build-execution-v{cohort_version}.json"
+            )
+            if Path(build_path).absolute() != expected_build_path:
+                raise ValueError("20-site foundation build receipt has the wrong canonical path")
         pinned_path = _required(pinned_cdp_receipt, "--pinned-cdp-receipt")
         browser_egress_root = (
             _required(
@@ -2537,10 +3363,19 @@ def run_class_study_action(
                 f"class-study {action} browser-egress qualification root has the "
                 "wrong canonical path"
             )
+        if profile is not None and action == "acquisition-authority" and browser_egress_root is not None:
+            raise ValueError("20-site acquisition authority does not accept browser-egress evidence")
         foundation_destination = _required(destination, "--destination")
         expected_foundation_destination = (
-            Path(build_path).absolute().parent.parent
-            / f"class-study-{action}-v{cohort_version}.json"
+            (
+                class_study_layout(profile=profile).artifacts_root
+                if profile is not None else Path(build_path).absolute().parent.parent
+            )
+            / (
+                f"{profile.study_id}-{action}-v{cohort_version}.json"
+                if profile is not None
+                else f"class-study-{action}-v{cohort_version}.json"
+            )
         )
         if Path(foundation_destination).absolute() != expected_foundation_destination:
             raise ValueError(
@@ -2554,13 +3389,14 @@ def run_class_study_action(
         )
         if action == "acquisition-authority":
             output = create_class_acquisition_authority(
-                foundation_destination, **common_inputs
+                foundation_destination, study_id=study_id, **common_inputs
             )
             return ClassStudyActionResult(
                 action, "complete", validate_class_acquisition_authority(output)
             )
         output = create_class_foundation_attestation(
             foundation_destination,
+            **({"study_id": study_id} if profile is not None else {}),
             **common_inputs,
             reference_receipt=_required(reference_receipt, "--reference-receipt"),
             code_gate_receipt=_required(code_gate_receipt, "--code-gate-receipt"),
@@ -2805,6 +3641,122 @@ def run_class_study_action(
                     require_restart=True,
                 )
             return ClassStudyActionResult(action, "complete", promotion)
+
+    if action == "campaigns" and profile is not None:
+        from .class_cohort20 import load_validated_profile_cohort
+
+        if stage not in {PILOT_STAGE, AUTHORITATIVE_STAGE}:
+            raise ValueError("20-site campaigns require a pilot or authoritative stage")
+        layout = class_study_layout(profile=profile)
+        cohort_path = _required(
+            pilot_cohort_receipt_path if stage == PILOT_STAGE else final_cohort_receipt_path,
+            "--pilot-cohort" if stage == PILOT_STAGE else "--final-cohort",
+        )
+        assembly_path = _required(
+            pilot_cohort_assembly_path if stage == PILOT_STAGE else final_cohort_assembly_path,
+            "--pilot-cohort-assembly" if stage == PILOT_STAGE else "--final-cohort-assembly",
+        )
+        root = _regular_directory(
+            require_canonical_fresh_path(
+                _required(campaign_root, "--campaign-root"),
+                field="campaign_root", profile=profile,
+            ),
+            "20-site campaign destination",
+        )
+        pilot_ids, final_ids = load_validated_profile_cohort(
+            cohort_path, assembly_path, profile=profile, require_deep=True,
+        )
+        documents = campaign_documents(
+            cohort_path, cohort_assembly_receipt=assembly_path, profile=profile,
+        )
+        validate_campaign_documents(
+            documents, pilot_ids=pilot_ids, final_ids=final_ids,
+            profile=profile,
+            stage="pilot" if stage == PILOT_STAGE else "final",
+        )
+        # Pilot fitting must be published before a final cohort can be selected.
+        # Both stages share this one canonical campaign directory, so replay
+        # and verify the other stage instead of treating its files as debris.
+        other_cohort = layout.study_config_root / (
+            f"{profile.study_id}-pilot-cohort.json"
+            if stage == AUTHORITATIVE_STAGE
+            else f"{profile.study_id}-cohort.json"
+        )
+        other_assembly = layout.study_config_root / (
+            f"{profile.study_id}-pilot-cohort-assembly.json"
+            if stage == AUTHORITATIVE_STAGE
+            else f"{profile.study_id}-cohort-assembly.json"
+        )
+        other_documents: dict[str, dict[str, Any]] = {}
+        if stage == AUTHORITATIVE_STAGE or other_cohort.exists() or other_assembly.exists():
+            other_pilot_ids, other_final_ids = load_validated_profile_cohort(
+                other_cohort, other_assembly, profile=profile, require_deep=True,
+            )
+            if other_pilot_ids != pilot_ids or (
+                bool(other_final_ids) != (stage == PILOT_STAGE)
+            ):
+                raise ValueError("20-site campaign stages use different pilot cohorts")
+            other_documents = campaign_documents(
+                other_cohort, cohort_assembly_receipt=other_assembly,
+                profile=profile,
+            )
+            validate_campaign_documents(
+                other_documents,
+                pilot_ids=other_pilot_ids,
+                final_ids=other_final_ids,
+                profile=profile,
+                stage="pilot" if stage == AUTHORITATIVE_STAGE else "final",
+            )
+        unexpected = sorted(
+            path.name for path in root.iterdir()
+            if path.name not in documents and path.name not in other_documents
+        )
+        if unexpected:
+            raise ValueError(
+                "20-site campaign destination contains unexpected entries: "
+                + ", ".join(unexpected)
+            )
+        for name, document in other_documents.items():
+            path = root / name
+            if not path.exists() and not path.is_symlink():
+                if stage == AUTHORITATIVE_STAGE:
+                    raise ValueError("20-site pilot campaign must be published before final campaigns")
+                continue
+            if (
+                path.is_symlink()
+                or not path.is_file()
+                or path.read_bytes()
+                != yaml.safe_dump(document, sort_keys=False, width=100).encode("utf-8")
+            ):
+                raise ValueError(f"20-site existing campaign differs from its cohort: {name}")
+        paths = tuple(
+            _write_or_verify_bytes(
+                root / name,
+                yaml.safe_dump(document, sort_keys=False, width=100).encode("utf-8"),
+                label="20-site campaign",
+            )
+            for name, document in documents.items()
+        )
+        _fsync_directory(root)
+        published = {
+            path.name: yaml.safe_load(path.read_text(encoding="utf-8"))
+            for path in paths
+        }
+        if published != documents:
+            raise ValueError("20-site pilot campaigns differ after publication")
+        validate_campaign_documents(
+            published, pilot_ids=pilot_ids, final_ids=final_ids,
+            profile=profile,
+            stage="pilot" if stage == PILOT_STAGE else "final",
+        )
+        return ClassStudyActionResult(
+            action, "complete",
+            {
+                "valid": True, "study_id": profile.study_id, "stage": stage,
+                "campaign_root": str(root),
+                "created_or_verified": [str(path) for path in paths],
+            },
+        )
 
     if successor_context is not None:
         # A successor is admitted only through the immutable restart receipt.
@@ -3197,10 +4149,96 @@ def run_class_study_action(
     raise AssertionError(f"unhandled class-study action: {action}")
 
 
+def _profile_final_qualification_work_root(layout: Any) -> Path:
+    return require_canonical_fresh_child(
+        layout.artifacts_root / f"{CLASS20_STUDY_ID}-final-qualification-work",
+        field="artifacts_root",
+        filename=f"{CLASS20_STUDY_ID}-final-qualification-work",
+        profile=CLASS20_PROFILE,
+    )
+
+
+def _profile_final_qualification_checkpoint(layout: Any) -> Path:
+    path = _profile_final_qualification_work_root(layout) / "_checkpoint.json"
+    if path.is_symlink():
+        raise ValueError("20-site final qualification checkpoint cannot be a symlink")
+    return path
+
+
+def _profile_authoritative_fitting_inputs(
+    *,
+    profile: ClassStudyProfile,
+    final_cohort_receipt: Path | None,
+    final_cohort_assembly: Path | None,
+    fitting_result: Path | None,
+    numeric_bundle_root: Path | None,
+    workload_root: Path | None,
+) -> tuple[tuple[str, ...], Path, Path, Path]:
+    """Bind all final fitting actions to one deep v2 cohort and sealed result."""
+
+    from .class_cohort20 import (
+        ASSEMBLY_RECEIPT_TYPE as PROFILE_ASSEMBLY_RECEIPT_TYPE,
+        load_validated_profile_cohort,
+    )
+    from .class_profile_result import verify_profile_class_result
+
+    layout = class_study_layout(profile=profile)
+    cohort = _regular_file(require_canonical_fresh_child(
+        _required(final_cohort_receipt, "--final-cohort"),
+        field="study_config_root", filename=f"{profile.study_id}-cohort.json",
+        profile=profile,
+    ), "20-site final cohort")
+    assembly = _regular_file(require_canonical_fresh_child(
+        _required(final_cohort_assembly, "--final-cohort-assembly"),
+        field="study_config_root", filename=f"{profile.study_id}-cohort-assembly.json",
+        profile=profile,
+    ), "20-site final cohort assembly")
+    pilot_ids, final_ids = load_validated_profile_cohort(
+        cohort, assembly, profile=profile, require_deep=True,
+    )
+    if len(pilot_ids) != profile.pilot_count or len(final_ids) != profile.final_count:
+        raise ValueError("20-site authoritative fitting needs the selected final cohort")
+    assembly_payload = validate_study_bound_receipt(
+        _load_json_object(assembly, "20-site final cohort assembly"),
+        expected_type=PROFILE_ASSEMBLY_RECEIPT_TYPE,
+    )
+    expected_workloads = layout.lab_root / assembly_payload["workload_root"]
+    workloads = _regular_directory(
+        _required(workload_root, "--workload-root"), "20-site prepared workloads",
+    )
+    if Path(os.path.abspath(workloads)) != expected_workloads:
+        raise ValueError("20-site final fitting workloads differ from the sealed cohort")
+    source = _regular_directory(
+        _required(fitting_result, "--capture-result or --authoritative-fitting-result"),
+        "20-site authoritative fitting result",
+    )
+    record = verify_profile_class_result(
+        source, profile=profile, cohort_receipt=cohort,
+        cohort_assembly=assembly, expected_role="authoritative-fitting",
+    )
+    if record.get("samples") != profile.final_count * 10 * 2 or record.get("accepted") != profile.final_count * 10 * 2:
+        raise ValueError("20-site authoritative fitting source is not 400/400")
+    numeric = require_canonical_fresh_path(
+        _required(numeric_bundle_root, "--numeric-bundle"),
+        field="authoritative_numeric_root", profile=profile,
+    )
+    verified = verify_numeric_fitting_bundle(numeric, source_result_root=source)
+    if (
+        verified.stage != AUTHORITATIVE_STAGE
+        or verified.provenance.get("study_id") != profile.study_id
+        or verified.provenance.get("study_profile_sha256")
+        != sha256_file(layout.study_config_root / "study.json")
+        or tuple(verified.provenance["fitting_contract"]["workload_order"])
+        != final_ids
+    ):
+        raise ValueError("20-site authoritative numeric fitting differs from final cohort")
+    return final_ids, source, numeric, workloads
+
+
 def _coordinate_qualification(
     stage: str,
     *,
-    admission: CohortAdmission,
+    admission: CohortAdmission | None,
     source_result_root: Path,
     numeric_bundle_root: Path,
     prefix_spec_root: Path,
@@ -3212,6 +4250,7 @@ def _coordinate_qualification(
     qualify_all_pending: bool,
     qualification_authority: Mapping[str, Any],
     qualification_set_name: str | None = None,
+    workload_ids: tuple[str, ...] | None = None,
     expected_successor_study_id: str | None = None,
     expected_successor_restart_sha256: str | None = None,
 ) -> ClassStudyActionResult:
@@ -3221,7 +4260,10 @@ def _coordinate_qualification(
     )
     if numeric.stage != stage:
         raise ValueError("numeric fitting bundle has the wrong qualification stage")
-    _require_numeric_admission(numeric, admission)
+    if admission is not None:
+        _require_numeric_admission(numeric, admission)
+    elif workload_ids is None:
+        raise ValueError("qualification requires a verified cohort or exact workload IDs")
     if (expected_successor_study_id is None) != (expected_successor_restart_sha256 is None):
         raise ValueError("successor qualification identity requires study and restart")
     if expected_successor_study_id is not None:
@@ -3236,7 +4278,13 @@ def _coordinate_qualification(
         numeric_bundle_root=numeric_bundle_root,
         workload_root=workload_root,
     )
-    workloads = _stage_workloads(admission, stage)
+    workloads = (
+        _stage_workloads(admission, stage)
+        if admission is not None else workload_ids
+    )
+    assert workloads is not None
+    if admission is None and tuple(numeric.provenance["fitting_contract"]["workload_order"]) != tuple(workloads):
+        raise ValueError("qualification workloads differ from the verified fitting cohort")
     name = qualification_set_name or _qualification_set(stage)
     sidecars = _regular_directory(sidecar_root, "qualification sidecar root")
     publications = _regular_directory(publication_root, "qualification publication root")
@@ -3465,6 +4513,221 @@ def _verify_class_promotion_target(
     if receipt_type == VALIDATION_RECEIPT_TYPE:
         return validate_class_validation_attestation(path, deep_code_gate=deep)
     return None
+
+
+def _coordinate_profile_capture(
+    action: str,
+    *,
+    profile: ClassStudyProfile,
+    campaign: Path | None,
+    results_root: Path | None,
+    capture_result: Path | None,
+    prerequisite_roots: Sequence[Path],
+    pilot_cohort_receipt: Path | None,
+    pilot_cohort_assembly: Path | None,
+    final_cohort_receipt: Path | None,
+    final_cohort_assembly: Path | None,
+    foundation_attestation: Path | None,
+    readiness_attestation: Path | None,
+    historical_pre_snapshot: Path | None,
+    numeric_bundle_root: Path | None,
+    final_bundle_root: Path | None,
+    qualification_workload_root: Path | None,
+    qualification_sidecar_root: Path | None,
+    qualification_prefix_root: Path | None,
+    execute: bool,
+) -> ClassStudyActionResult:
+    """Admit each v2 role through its exact deep predecessor boundary."""
+
+    from .class_capture20 import (
+        verify_profile_capture_prerequisites,
+        verify_profile_initial_capture_prerequisites,
+    )
+    from .class_profile_result import verify_profile_class_result
+
+    layout = class_study_layout(profile=profile)
+    source: Path | None = None
+    frozen: Mapping[str, Any] | None = None
+    if action == "capture":
+        campaign_path = _required(campaign, "--campaign")
+        identity = parse_class_study_campaign_name(Path(campaign_path).stem)
+        if capture_result is not None:
+            raise ValueError("20-site fresh capture cannot supply --capture-result")
+    elif action == "resume":
+        source = _regular_directory(_required(capture_result, "--capture-result"), "20-site result")
+        if not source.is_relative_to(layout.results_root) or source == layout.results_root:
+            raise ValueError("20-site resume result is outside the canonical results root")
+        experiment = _load_json_object(source / "experiment.json", "20-site resume experiment")
+        configuration = experiment.get("configuration")
+        if not isinstance(configuration, Mapping):
+            raise ValueError("20-site resume has no frozen configuration")
+        identity = parse_class_study_campaign_name(experiment.get("name"))
+        if (
+            identity.study_id != profile.study_id
+            or identity.evidence_role not in {
+                "pilot-fitting", "authoritative-fitting", "certification", "canary", "formal"
+            }
+            or (identity.block is None) != (
+                identity.evidence_role in {"pilot-fitting", "authoritative-fitting", "certification"}
+            )
+        ):
+            raise ValueError("20-site resume has an unsupported role or block")
+        campaign_path = layout.campaign_root / f"{identity.name}.yml"
+        if campaign is not None and Path(campaign).absolute() != campaign_path:
+            raise ValueError("20-site resume campaign differs from its canonical source")
+        frozen = experiment
+    else:
+        raise ValueError("20-site capture action is invalid")
+
+    role = identity.evidence_role
+    pilot_role = role == "pilot-fitting"
+    cohort_path = _required(
+        pilot_cohort_receipt if pilot_role else final_cohort_receipt,
+        "--pilot-cohort" if pilot_role else "--final-cohort",
+    )
+    assembly_path = _required(
+        pilot_cohort_assembly if pilot_role else final_cohort_assembly,
+        "--pilot-cohort-assembly" if pilot_role else "--final-cohort-assembly",
+    )
+    foundation_path = _required(foundation_attestation, "--foundation-attestation")
+    if role in {"canary", "formal"}:
+        proof = verify_profile_capture_prerequisites(
+            campaign_path=campaign_path,
+            final_cohort_receipt=cohort_path,
+            final_cohort_assembly=assembly_path,
+            prerequisite_roots=prerequisite_roots,
+            foundation_attestation=foundation_path,
+            readiness_attestation=_required(readiness_attestation, "--readiness-attestation"),
+            historical_pre_snapshot=_required(historical_pre_snapshot, "--historical-pre-snapshot"),
+            profile=profile,
+        )
+    elif role in {"pilot-fitting", "authoritative-fitting", "certification"}:
+        if readiness_attestation is not None or historical_pre_snapshot is not None:
+            raise ValueError("20-site fitting/certification cannot use later promotion authority")
+        proof = verify_profile_initial_capture_prerequisites(
+            campaign_path=campaign_path,
+            cohort_receipt=cohort_path,
+            cohort_assembly=assembly_path,
+            prerequisite_roots=prerequisite_roots,
+            foundation_attestation=foundation_path,
+            pilot_cohort_receipt=pilot_cohort_receipt,
+            pilot_cohort_assembly=pilot_cohort_assembly,
+            numeric_bundle_root=numeric_bundle_root,
+            final_bundle_root=final_bundle_root,
+            qualification_workload_root=qualification_workload_root,
+            qualification_sidecar_root=qualification_sidecar_root,
+            qualification_prefix_root=qualification_prefix_root,
+            profile=profile,
+        )
+    else:
+        raise ValueError("20-site capture campaign role is unsupported")
+    if proof.get("valid") is not True or proof.get("evidence_role") != role:
+        raise ValueError("20-site capture prerequisite verifier did not grant launch authority")
+    with _capture_authority_environment(proof):
+        preflight = preflight_campaign(campaign_path)
+    if (
+        preflight.get("name") != proof["campaign_name"]
+        or preflight.get("evidence_role") != proof["evidence_role"]
+        or preflight.get("class_study_id") != profile.study_id
+        or preflight.get("class_study_profile_sha256")
+        != sha256_file(layout.study_config_root / "study.json")
+        or preflight.get("class_study_cohort_sha256") != proof["cohort_sha256"]
+        or preflight.get("class_study_cohort_assembly_sha256")
+        != proof["cohort_assembly_sha256"]
+        or preflight.get("sample_count") != proof["planned_samples"]
+        or preflight.get("defense_runtime_inputs")
+        != proof["expected_defense_runtime_inputs"]
+        or (
+            role == "certification"
+            and preflight.get("chaff_qualification_set_manifest_sha256")
+            != proof["qualification_manifest_sha256"]
+        )
+        or sha256_file(campaign_path) != proof["campaign_sha256"]
+    ):
+        raise ValueError("20-site preflight differs from deep capture prerequisites")
+
+    if frozen is not None:
+        assert source is not None
+        configuration = frozen["configuration"]
+        frozen_campaign = _regular_file(source / "inputs/campaign.yml", "20-site frozen campaign")
+        expected = {
+            "campaign_sha256": proof["campaign_sha256"],
+            "class_study_id": profile.study_id,
+            "class_study_profile_sha256": preflight["class_study_profile_sha256"],
+            "evidence_role": proof["evidence_role"],
+            "class_study_cohort_sha256": proof["cohort_sha256"],
+            "class_study_cohort_assembly_sha256": proof["cohort_assembly_sha256"],
+            CLASS_STUDY_FOUNDATION_CONFIGURATION_KEY: proof["foundation_sha256"],
+        }
+        if role in {"canary", "formal"}:
+            expected[CLASS_STUDY_READINESS_CONFIGURATION_KEY] = proof["readiness_sha256"]
+            expected[CLASS_STUDY_HISTORICAL_PRE_CONFIGURATION_KEY] = proof["historical_pre_snapshot_sha256"]
+        elif any(key in configuration for key in (
+            CLASS_STUDY_READINESS_CONFIGURATION_KEY,
+            CLASS_STUDY_HISTORICAL_PRE_CONFIGURATION_KEY,
+        )):
+            raise ValueError("20-site early capture contains premature promotion authority")
+        if (
+            any(configuration.get(key) != value for key, value in expected.items())
+            or sha256_file(frozen_campaign) != proof["campaign_sha256"]
+            or frozen.get("source") != proof["source"]
+            or _class_aware_timestamp(
+                frozen.get("started_at"), label="20-site resume start"
+            ) < _class_aware_timestamp(
+                proof[
+                    "historical_pre_recorded_at" if role in {"canary", "formal"}
+                    else "foundation_recorded_at"
+                ], label="20-site prerequisite authority"
+            )
+        ):
+            raise ValueError("20-site resume differs from frozen profile capture authority")
+
+    if results_root is not None:
+        require_canonical_fresh_path(
+            results_root, field="results_root", label="20-site results root", profile=profile
+        )
+    if not execute:
+        return ClassStudyActionResult(
+            action, "ready",
+            {
+                "preflight": preflight,
+                "capture_prerequisites": proof,
+                "will_create_result": False,
+                "will_resume": False,
+            },
+            ("repeat with --execute after reviewing the verified prerequisites",),
+        )
+    ledger = tuple(proof["prerequisite_ledger"])
+    with (
+        _class_study_coordinator_capture_authority(
+            {**dict(preflight), "campaign_sha256": proof["campaign_sha256"]},
+            ledger,
+            proof.get("fitting_generation"),
+        ),
+        _capture_authority_environment(proof),
+    ):
+        output = (
+            run_campaign(
+                campaign_path,
+                _required(results_root, "--results-root"),
+            )
+            if action == "capture" else resume_campaign(source)
+        )
+    record = verify_profile_class_result(
+        output,
+        profile=profile,
+        cohort_receipt=cohort_path,
+        cohort_assembly=assembly_path,
+        expected_role=proof["evidence_role"],
+        expected_block=proof["block"],
+    )
+    if (
+        record.get("valid") is not True
+        or record.get("samples") != proof["planned_samples"]
+        or record.get("accepted") != proof["planned_samples"]
+    ):
+        raise ValueError("20-site capture did not complete its exact sealed block")
+    return ClassStudyActionResult(action, "complete", record)
 
 
 def _coordinate_capture(
@@ -5431,6 +6694,7 @@ def _qualification_set(stage: str) -> str:
 def _validate_fresh_layout_arguments(
     *,
     action: str,
+    profile: ClassStudyProfile | None = None,
     stage: str | None,
     candidate_catalogue_path: Path | None,
     acquisition_root: Path | None,
@@ -5463,6 +6727,177 @@ def _validate_fresh_layout_arguments(
     """
 
     if action not in _FRESH_LAYOUT_ACTIONS:
+        return
+    if profile is not None:
+        if profile != CLASS20_PROFILE or action not in {
+            "acquisition-authority", "acquisition-init", "acquisition-run",
+            "acquisition-status", "acquisition-complete", "cohort", "campaigns",
+            "foundation",
+        }:
+            raise ValueError("20-site layout is not implemented for this action")
+        if any(
+            value is not None
+            for value in (
+                campaign, numeric_bundle_root, prefix_spec_root,
+                qualification_sidecar_root, qualification_publication_root,
+                qualification_manifest, final_bundle_root,
+            )
+        ):
+            raise ValueError("20-site acquisition received an unrelated study path")
+        if action == "cohort":
+            if stage not in {PILOT_STAGE, AUTHORITATIVE_STAGE}:
+                raise ValueError("20-site cohort requires a pilot or authoritative stage")
+            output_name = (
+                f"{profile.study_id}-pilot-cohort.json"
+                if stage == PILOT_STAGE else f"{profile.study_id}-cohort.json"
+            )
+            assembly_name = (
+                f"{profile.study_id}-pilot-cohort-assembly.json"
+                if stage == PILOT_STAGE else f"{profile.study_id}-cohort-assembly.json"
+            )
+            for path, name, label in (
+                (cohort_receipt_path, output_name,
+                 "pilot cohort" if stage == PILOT_STAGE else "final cohort"),
+                (cohort_assembly_path, assembly_name,
+                 "pilot cohort assembly" if stage == PILOT_STAGE else "final cohort assembly"),
+            ):
+                if path is not None:
+                    require_canonical_fresh_child(
+                        path, field="study_config_root", filename=name,
+                        label=label, profile=profile,
+                    )
+            if acquisition_completion_path is not None and acquisition_completion_path.name != "completion.json":
+                raise ValueError("20-site cohort requires the acquisition completion filename")
+            if stage == PILOT_STAGE:
+                if any(value is not None for value in (
+                    pilot_cohort_receipt_path, pilot_cohort_assembly_path,
+                    final_selection_path,
+                )):
+                    raise ValueError("20-site pilot cohort received premature final selection")
+            else:
+                for path, name, label in (
+                    (
+                        pilot_cohort_receipt_path,
+                        f"{profile.study_id}-pilot-cohort.json", "pilot cohort",
+                    ),
+                    (
+                        pilot_cohort_assembly_path,
+                        f"{profile.study_id}-pilot-cohort-assembly.json", "pilot assembly",
+                    ),
+                    (
+                        final_selection_path,
+                        f"{profile.study_id}-final-selection.json", "final selection",
+                    ),
+                ):
+                    if path is not None:
+                        require_canonical_fresh_child(
+                            path, field="study_config_root", filename=name,
+                            label=label, profile=profile,
+                        )
+            if any(value is not None for value in (
+                final_cohort_receipt_path, final_cohort_assembly_path,
+                campaign_root,
+            )):
+                raise ValueError("20-site cohort received an unrelated campaign path")
+        elif action == "campaigns":
+            if stage not in {PILOT_STAGE, AUTHORITATIVE_STAGE}:
+                raise ValueError("20-site campaigns require a pilot or authoritative stage")
+            if any(value is not None for value in (
+                acquisition_completion_path, cohort_receipt_path, cohort_assembly_path,
+                final_selection_path,
+            )):
+                raise ValueError("20-site campaign received an unrelated acquisition input")
+            active_cohort, active_assembly = (
+                (pilot_cohort_receipt_path, pilot_cohort_assembly_path)
+                if stage == PILOT_STAGE else
+                (final_cohort_receipt_path, final_cohort_assembly_path)
+            )
+            inactive_cohort, inactive_assembly = (
+                (final_cohort_receipt_path, final_cohort_assembly_path)
+                if stage == PILOT_STAGE else
+                (pilot_cohort_receipt_path, pilot_cohort_assembly_path)
+            )
+            if inactive_cohort is not None or inactive_assembly is not None:
+                raise ValueError("20-site campaign received a cohort from another stage")
+            for path, name, label in (
+                (active_cohort,
+                 f"{profile.study_id}-{'pilot-cohort' if stage == PILOT_STAGE else 'cohort'}.json",
+                 "campaign cohort"),
+                (active_assembly,
+                 f"{profile.study_id}-{'pilot-cohort-assembly' if stage == PILOT_STAGE else 'cohort-assembly'}.json",
+                 "campaign cohort assembly"),
+            ):
+                if path is not None:
+                    require_canonical_fresh_child(
+                        path, field="study_config_root", filename=name,
+                        label=label, profile=profile,
+                    )
+            if campaign_root is not None:
+                require_canonical_fresh_path(
+                    campaign_root, field="campaign_root", profile=profile,
+                )
+        elif any(
+            value is not None
+            for value in (
+                stage, acquisition_completion_path, cohort_receipt_path,
+                cohort_assembly_path, pilot_cohort_receipt_path,
+                pilot_cohort_assembly_path, final_cohort_receipt_path,
+                final_cohort_assembly_path, final_selection_path, campaign_root,
+            )
+        ):
+            raise ValueError("20-site acquisition received an unrelated cohort input")
+        if action not in {"acquisition-authority", "foundation"} and destination is not None:
+            raise ValueError("20-site acquisition received an unrelated destination")
+        if action in {"acquisition-authority", "foundation"} and destination is not None:
+            require_canonical_fresh_child(
+                destination, field="artifacts_root", filename=destination.name,
+                label=f"20-site {action} destination", profile=profile,
+            )
+        if candidate_catalogue_path is not None:
+            # The new profile inherits the frozen v1 candidate catalogue.
+            require_canonical_fresh_child(
+                candidate_catalogue_path,
+                field="study_config_root",
+                filename=f"{STUDY_ID}-candidates.json",
+                label="candidate catalogue",
+            )
+        owned_runner = (
+            acquisition_root
+            if acquisition_root is not None else
+            acquisition_completion_path.parent
+            if action == "cohort" and acquisition_completion_path is not None else None
+        )
+        if owned_runner is not None:
+            runner = require_canonical_acquisition_root(
+                owned_runner, profile=profile
+            )
+            if (
+                action == "cohort" and acquisition_root is not None
+                and acquisition_completion_path is not None
+                and Path(os.path.abspath(acquisition_completion_path.parent)) != runner
+            ):
+                raise ValueError("20-site cohort completion differs from acquisition root")
+            layout = class_study_layout(profile=profile)
+            if runner == layout.acquisition_root:
+                raise ValueError("20-site acquisition requires a versioned -vN root")
+            expected_stability, expected_workload = (
+                publication_roots_for_acquisition_root(runner, profile=profile)
+            )
+            if stability_root is not None and Path(os.path.abspath(stability_root)) != expected_stability:
+                raise ValueError("20-site stability root differs from acquisition cohort")
+            if workload_root is not None and Path(os.path.abspath(workload_root)) != expected_workload:
+                raise ValueError("20-site workload root differs from acquisition cohort")
+        if action in {"acquisition-run", "cohort"}:
+            if owned_runner is None or stability_root is None or workload_root is None:
+                raise ValueError("20-site acquisition requires its three cohort roots")
+            require_cohort_publication_roots(
+                owned_runner, stability_root, workload_root,
+                require_versioned=True, profile=profile,
+            )
+        if artifacts_root is not None:
+            require_canonical_fresh_path(
+                artifacts_root, field="artifacts_root", profile=profile
+            )
         return
     if candidate_catalogue_path is not None:
         require_canonical_fresh_child(

@@ -818,6 +818,27 @@ def test_walkie_talkie_receipt_rejects_a_nonminimum_lexical_matching() -> None:
     }
     artifact, receipt = fit_walkie_talkie(traces)
     assert artifact["schema_version"] == 6
+    fixed_pairs = {("alpha", "charlie"), ("bravo", "delta")}
+    fixed_artifact, fixed_receipt = fit_walkie_talkie(
+        traces, feasible_pairs=fixed_pairs,
+    )
+    assert fixed_receipt["algorithm"] == walkie_module.FIXED_PAIR_ALGORITHM
+    assert fixed_receipt["pairing_objective"] == walkie_module.FIXED_PAIR_OBJECTIVE
+    assert fixed_receipt["candidate_pair_costs"] == receipt["candidate_pair_costs"]
+    assert fixed_receipt["training_visits"] == receipt["training_visits"]
+    assert [(row["real"], row["decoy"]) for row in fixed_artifact["profiles"]] == [
+        ("alpha", "charlie"), ("bravo", "delta"),
+    ]
+    assert [(row["real"], row["decoy"]) for row in fixed_receipt["selected_pairs"]] == [
+        ("alpha", "charlie"), ("bravo", "delta"),
+    ]
+    for profile in fixed_artifact["profiles"]:
+        assert profile["training_inputs"]["real"] == [
+            trace.training_input_sha256 for trace in traces[profile["real"]]
+        ]
+        assert profile["training_inputs"]["decoy"] == [
+            trace.training_input_sha256 for trace in traces[profile["decoy"]]
+        ]
     assert all(
         candidate["matching_cost_packets"] == candidate["base_matching_cost_packets"] + 4
         for candidate in receipt["candidate_pair_costs"]

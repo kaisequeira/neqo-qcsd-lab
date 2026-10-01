@@ -71,7 +71,7 @@ def _base_campaigns(
     monkeypatch.setattr(
         class_campaigns,
         "load_study_receipt",
-        lambda _path: ({}, selection),
+        lambda _path: ({"payload": {"study_id": class_campaigns.STUDY_ID}}, selection),
     )
     monkeypatch.setattr(
         class_campaigns,

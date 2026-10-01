@@ -1,6 +1,6 @@
 # QCSD thesis project ledger
 
-Checkpoint: **1 October 2026, Australia/Sydney (AEST, UTC+10)**.
+Checkpoint: **2 October 2026, Australia/Sydney (AEST, UTC+10)**.
 This is the current research ledger. The [history](docs/PROJECT-HISTORY.md)
 preserves the development record, the [class-study runbook](docs/CLASS-STUDY.md)
 defines continuation, and the [capture-readiness guide](docs/CAPTURE-READINESS.md)
@@ -31,38 +31,33 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-As of this checkpoint, v138 is the latest completed source-bound acquisition
-attempt. On clean Lab source
-`6f77041680ac37708be2c2174989f127db285c09` and pinned Rust Gitlink
-`a8d8664cd31cbc4cc1ecb4fd5abc5a1d3ee153ae`, its fresh no-cache
-collection, prepare and reference build independently verified. Pinned CDP
-passed, and the acquisition-focused correctness suite produced an independently
-verified, no-waiver acquisition-only authority. This authorises public-page
-acquisition on that exact source; it does not authorise fitting, defence capture
-or the 16,000-sample run. The same-source 110-vector browser gate and full
-defence foundation have not run for v138.
+The latest source-bound acquisition attempt is **v139** on clean Lab source
+`34088bb687ec683f16597da41e2c02a11f201447` and pinned Rust Gitlink
+`a8d8664cd31cbc4cc1ecb4fd5abc5a1d3ee153ae`. Its no-cache build,
+pinned-CDP check and acquisition-only authority were recorded. This authority
+permitted public-page acquisition on that exact source; it did not permit
+fitting, defended capture or the 16,000-sample run. The same-source 110-vector
+browser gate and full defence foundation did not run for v139.
 
-The v138 acquisition checkpoint was initialized from the frozen 600-candidate
-catalogue. Two supervised watcher actions reached four candidate terminal
-records. `tranco-0000697` and `tranco-0000984` were rejected after their
-selected pages failed the HTTP/3 screen. `tranco-0000553` was rejected for
-non-replayable `RTCPeerConnection` egress. `tranco-0000837` (`msftauth.net`)
-exhausted three recoverable DNS navigation attempts and ended as an immutable
-pre-probe terminal. Under v138's registered rule, that last outcome is an
-infrastructure blocker in the first stratum, so the 120-site selection cannot
-complete on this checkpoint. Independent DNS checks found no A or AAAA address
-for the target while public control domains resolved, but they cannot
-retroactively reclassify v138. Accepted progress remains **0/120 pilot classes
-and 0/16,000 formal samples**. Preserve every v138 attempt and receipt.
+The v139 checkpoint contains **eight site-rejection terminals** from the frozen
+600-candidate catalogue. `tranco-0000709` has an inconclusive HTTP/3 screen
+and remains pending. The next navigation of `tranco-0000280` (`amplitude.com`)
+recorded a durable internal error when the root browser connection's
+`Fetch.failRequest` command failed. The current read-only checkpoint validator
+refuses completion because of that error. No candidate was accepted:
+**0/120 pilot classes and 0/16,000 formal samples**. Preserve the v139
+checkpoint, all terminal receipts and both pending attempts.
 
-A prospective source change treats only repeated
-`EAI_NONAME`/DNS NODATA for a target, accompanied by a distinct healthy public
-DNS control, as a site-availability rejection. Transient or ambiguous DNS
-failures continue to block selection. Its focused tests pass, but it has no
-official authority from v138. It requires a new source freeze, next unused cohort and
-fresh downstream proof; v138 remains verifiable only under its original rule.
-See the [evidence index](docs/EVIDENCE-INDEX.md) for local v138 receipt and
-checkpoint paths.
+A subsequent zero-credit navigation rehearsal reproduced the exact browser
+fault and classified a proposed full-attempt discard as recoverable. It did
+not modify v139 or grant acquisition authority to changed source. The
+prospective 20-site study profile and browser repair are present in this
+source tree. Before they can produce official evidence, they need checked
+integration, a clean source commit, a fresh build and a new acquisition
+cohort. The 20-site protocol retains the 16,000-sample
+target and has no accepted evidence yet. The [evidence index](docs/EVIDENCE-INDEX.md)
+contains the v139 receipt and checkpoint paths. The v138 DNS-blocked checkpoint
+remains historical evidence under its original rules.
 
 ### Retained development history
 
@@ -326,7 +321,7 @@ scientific credit.
 
 | Checkpoint identity | Historical qualification and current acquisition state |
 |---|---|
-| Latest source-bound attempt (v138) | Lab `6f77041680ac37708be2c2174989f127db285c09` and Rust Gitlink `a8d8664cd31cbc4cc1ecb4fd5abc5a1d3ee153ae`; its DNS blocker requires a prospective source change and fresh cohort |
+| Latest source-bound attempt (v139) | Lab `34088bb687ec683f16597da41e2c02a11f201447` and Rust Gitlink `a8d8664cd31cbc4cc1ecb4fd5abc5a1d3ee153ae`; its durable browser-control error requires a prospective source change and fresh cohort |
 | Historical v130 Lab branch and source commit | `desktop-portability-2026-09-26`; `5fe0da7a8a8dc92713d91fb67b65f265325e4d51` |
 | Historical v130 Rust commit and Lab Gitlink | `e8575fd8e54921ed6ff867de475b4a734064866e` |
 | Build and pinned CDP | `artifacts/buflo-study/build-execution-v130.json` and `artifacts/buflo-study/pinned-cdp-execution-v130.json`: independently verified on their bound source |
@@ -339,8 +334,9 @@ scientific credit.
 | v135 failed build | Collection code gate stopped on one timing-sensitive synthetic Rust test, 284/285 passed; `artifacts/buflo-study/build-failure-v135/` preserves the exact diagnostic and archived transaction. No build receipt or acquisition authority; v135 consumed |
 | v136 failed build | Collection code gate stopped on the same test because a five-second synthetic deadline violated its nominal strict window, 284/285 passed; `artifacts/buflo-study/build-failure-v136/` preserves the failed diagnostic and archived transaction. No build receipt or acquisition authority; v136 consumed |
 | v138 build, pinned CDP and acquisition authority | `artifacts/buflo-study/build-execution-v138.json`, `artifacts/buflo-study/build-completion-v138.json`, `artifacts/buflo-study/pinned-cdp-execution-v138.json` and `artifacts/class-study-acquisition-authority-v138.json` independently verified on the v138 source; public acquisition only |
-| Acquisition checkpoint | `artifacts/classifier-multiorigin100-v1-acquisition-v138/` is the latest initialized root; four terminal candidate records include three site rejections and one DNS pre-probe infrastructure blocker, with 0/120 accepted |
-| Next execution | Test and freeze the prospective DNS availability rule, allocate the next unused cohort, reprove the no-cache build, pinned CDP and acquisition-only authority, then supervise bounded actions through real preparation and observation. Complete same-source browser and full defence foundation before fitting or capture |
+| v139 build, pinned CDP and acquisition authority | `artifacts/buflo-study/build-execution-v139.json`, `artifacts/buflo-study/build-completion-v139.json`, `artifacts/buflo-study/pinned-cdp-execution-v139.json` and `artifacts/class-study-acquisition-authority-v139.json` are bound to v139 only; public acquisition only |
+| Acquisition checkpoint | `artifacts/classifier-multiorigin100-v1-acquisition-v139/` is the latest initialized root; eight site-rejection terminals, one inconclusive pending screen and one durable internal browser-control error, with 0/120 accepted |
+| Next execution | Finish and test the prospective browser repair and 20-site protocol, freeze clean source, allocate the next unused cohort, then reprove the no-cache build, pinned CDP and acquisition-only authority. Supervise bounded 20-site acquisition actions; complete same-source browser and full defence foundation before fitting or capture |
 
 Preserve the v130 qualification evidence and failed authority attempt, the v129
 checkpoint and failed attempts, v128 failed build, v127
@@ -358,6 +354,10 @@ evidence cannot authorise changed source or supply a scientific numerator.
 | Pre-block canaries | 0/1,000 |
 | Formal matched capture | 0/16,000 |
 | Final handoff, evaluation, comparison and attestation | Not produced |
+
+The table above retains the registered 100-site milestones. The separate
+prospective 20-site profile would seek 30 pilot and 20 final sites; its accepted
+counts are also zero. It does not inherit any v139 execution authority.
 
 Attempted acquisitions, local test passes and historical browser gates are
 engineering progress. None supplies an accepted numerator for this table.
@@ -429,16 +429,16 @@ historical schema descriptions remain in the history and methodology.
 
 ## Next actions and cheapest-first execution
 
-V138's acquisition-only authority passed and its versioned checkpoint
-initialized, but the fourth candidate is an immutable DNS pre-probe blocker.
-Preserve that checkpoint and its original classification. The prospective DNS
-availability rule needs focused positive and negative tests and a frozen source
-commit before the allocator can assign a fresh cohort. Rebuild without cache,
-verify pinned CDP and acquisition-only authority, then supervise small watcher
-actions through real preparation and both observation windows. A new blocker
-must be diagnosed at once, before the long watcher. The same-source 110-vector
-browser gate and full defence foundation remain mandatory before fitting or
-defence capture.
+V139's acquisition-only authority passed and its versioned checkpoint
+initialized, but a durable root browser-control error stopped the watcher
+after eight site rejections and one inconclusive pending screen. Preserve that
+checkpoint and its original classifications. Finish the prospective browser
+repair and 20-site source revision, freeze a clean commit, then let the
+allocator assign a fresh cohort. Rebuild without cache, verify pinned CDP and
+profile-bound acquisition-only authority, and supervise small watcher actions
+through real preparation and both observation windows. Diagnose a new blocker
+at once before a long watcher. The same-source 110-vector browser gate and
+full defence foundation remain mandatory before fitting or defended capture.
 
 The existing schema-12 pre-baseline HTTP/3 screen runs two attempts per exact
 canonical selected-page URL bracketed by controls. A page enters the timed
@@ -456,35 +456,39 @@ domains match the existing pre-browser safety policy. This source receipt
 assigns no eligibility and supplies no live workload. On 28 September the
 user chose to retain the existing frozen catalogue for formal acquisition;
 the curated receipt is excluded from that run. The registered 600-candidate,
-120-pilot, 100-final-class contract remains in force.
+120-pilot, 100-final-class contract remains the current contract for existing
+evidence; the separate `docs/CLASS-STUDY-20.md` profile is prospective
+until its source and evidence chain pass.
 
 1. Preserve the verified migration manifests, historical handoff, v126 through
-   v138 receipts and checkpoints, and all failed watcher evidence.
+   v139 receipts and checkpoints, and all failed watcher evidence.
 2. Retain the registered Tranco candidate catalogue for this formal run.
-3. V138's verified build, pinned CDP and acquisition authority allowed bounded
-   public-page acquisition; its immutable DNS pre-probe blocker prevents
-   selection completion. Test the proposed DNS rule, freeze the source, obtain
-   the allocator's next unused cohort, build fresh no-cache images, pass pinned
-   CDP and independently verify schema-2 acquisition authority. The v138 root
+3. Finish the v139 browser-control repair and the prospective 20-site protocol
+   as one tested, portable source revision. Freeze it, obtain the allocator's
+   next unused cohort, build fresh no-cache images, pass pinned CDP and
+   independently verify profile-bound acquisition authority. The v139 root
    remains bound to its original source and rule.
 4. Initialize a new versioned acquisition root, run monitored actions through
    an actual baseline and both short-horizon observations, then acquire the
-   120-class pilot
-   with two genuine short-horizon prepared observations per admitted page.
+   profile's 30-site pilot with genuine short-horizon prepared observations
+   per admitted page.
    The prospective watcher can admit a later batch 60 seconds after all
    members of the prior batch are scientifically terminal and its Docker scope
    is empty; unresolved batches retain the 40-minute collision envelope.
    Complete the deferred 110-vector browser gate and full defence foundation
    on the same source/build before any class-study fitting or capture.
-5. Follow pilot fit/qualification/compatibility, final selection, authoritative
-   fitting, final qualification and 900-cell certification.
+5. Follow pilot fitting and qualification, 15-pair screening, final 20-site
+   selection, authoritative fitting, final qualification and 180 nine-mode
+   certification visits. Do not count any as final classifier samples.
 6. Freeze readiness and historical pre-snapshot; interleave ten canary blocks
    with ten formal blocks; seal, export, evaluate, compare and attest.
 
-The [runbook](docs/CLASS-STUDY.md) gives stage purposes, exact matrices,
-prerequisites, retry rules and commands. Diagnostic passes cannot replace
+The [registered runbook](docs/CLASS-STUDY.md) and prospective
+`docs/CLASS-STUDY-20.md` protocol give stage purposes, matrices and acceptance
+rules. The prospective path must pass integration and source-bound checks
+before it replaces the registered counts. Diagnostic passes cannot replace
 mandatory evidence. New host/source identities require fresh authority; an
-ordinary unchanged-source interruption may resume under the existing contract.
+ordinary unchanged-source interruption may resume under its existing contract.
 
 ## Interpretation and maintenance
 

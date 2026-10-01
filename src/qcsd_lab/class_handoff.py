@@ -1,4 +1,4 @@
-"""Create-only handoff for the 100-class QCSD formal classifier study.
+"""Create-only handoff for the registered QCSD formal classifier studies.
 
 This exporter is deliberately disjoint from the historical classifier and
 BuFLO-study handoffs.  It accepts only the ten sealed schema-two ``formal``
@@ -22,6 +22,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import yaml
@@ -46,6 +47,7 @@ from .class_run_binding import (
     validate_class_sample_run_binding,
 )
 from .class_study import (
+    CLASS20_STUDY_ID,
     EVIDENCE_ROLES,
     FINAL_CLASS_COUNT,
     FORMAL_BLOCK_COUNT,
@@ -56,7 +58,10 @@ from .class_study import (
     class_study_launch_key,
     is_class_study_id,
     is_successor_study_id,
+    load_class20_profile_contract,
     load_study_receipt,
+    validate_hash_bound_receipt,
+    _CLASS20_OVERLAY_SHA256,
 )
 from .discover import origin
 from .experiment import (
@@ -73,7 +78,9 @@ from .util import LAB_ROOT, load_json, require_disjoint_path, sha256_file, sourc
 from .verification import VerifiedResult, verify_result
 
 SCHEMA_VERSION = 3
+PROFILE_SCHEMA_VERSION = 4
 ARTIFACT_TYPE = "qcsd-classifier-multiorigin100-formal-handoff"
+PROFILE_ARTIFACT_TYPE = "qcsd-classifier-multiorigin20-formal-handoff"
 PURPOSE = "closed-world-website-traffic-classification"
 COHORT_INPUT = "inputs/class-study-cohort.json"
 COHORT_ASSEMBLY_INPUT = "inputs/class-study-cohort-assembly.json"
@@ -252,6 +259,19 @@ _DIMENSIONS = _StudyDimensions(
 
 
 def _dimensions_for_study(study_id: str) -> _StudyDimensions:
+    if study_id == CLASS20_STUDY_ID:
+        profile = load_class20_profile_contract()
+        return _StudyDimensions(
+            study_id=study_id,
+            result_names=tuple(
+                f"{study_id}-formal-{block:02d}-1200"
+                for block in range(1, profile.formal_block_count + 1)
+            ),
+            modes=profile.formal_modes,
+            runtime_kinds=RUNTIME_KINDS,
+            class_count=profile.final_count,
+            visits_per_block=profile.formal_visits_per_block,
+        )
     if not is_class_study_id(study_id):
         raise ValueError("formal class handoff study identity is invalid")
     return _StudyDimensions(
@@ -264,6 +284,14 @@ def _dimensions_for_study(study_id: str) -> _StudyDimensions:
         class_count=FINAL_CLASS_COUNT,
         visits_per_block=FORMAL_VISITS_PER_BLOCK,
     )
+
+
+def _excluded_evidence_roles(dimensions: _StudyDimensions) -> list[str]:
+    return [
+        role for role in EVIDENCE_ROLES
+        if role != "formal"
+        and not (dimensions.study_id == CLASS20_STUDY_ID and role == "pilot-compatibility")
+    ]
 
 
 @dataclass(frozen=True)
@@ -320,6 +348,7 @@ def export_class_handoff(
 
     if not result_roots:
         raise ValueError("formal class handoff requires source results")
+    _preflight_profile_post_snapshot(result_roots[0], historical_post_snapshot)
     first = source_verifier(Path(result_roots[0]))
     configuration = first.experiment.get("configuration")
     study_id = (
@@ -329,6 +358,7 @@ def export_class_handoff(
     )
     if not isinstance(study_id, str):
         raise ValueError("formal class handoff source has no study identity")
+    cohort_loader, assembly_validator = _cohort_validators_for_study(study_id)
     return _export_class_handoff(
         result_roots,
         destination,
@@ -339,9 +369,50 @@ def export_class_handoff(
         classic_pcap_writer=classic_pcap_writer,
         correctness_validator=correctness_validator,
         performance_extractor=performance_extractor,
-        cohort_loader=load_study_receipt,
-        assembly_validator=validate_cohort_assembly_receipt,
+        cohort_loader=cohort_loader,
+        assembly_validator=assembly_validator,
     )
+
+
+def _preflight_profile_post_snapshot(result_root: Path, snapshot: Path) -> None:
+    """Reject an obviously wrong v2 snapshot before replaying source captures.
+
+    This is only an identity check.  The authoritative check in
+    ``_bind_historical_post_snapshot`` deep-reconstructs the snapshot after
+    independently verifying every formal result.
+    """
+
+    experiment = _read_json_object(
+        Path(result_root) / "experiment.json", "formal class source experiment"
+    )
+    configuration = experiment.get("configuration")
+    if (
+        not isinstance(configuration, Mapping)
+        or configuration.get("class_study_id") != CLASS20_STUDY_ID
+    ):
+        return
+    from .class_attestation import (
+        CLASS20_HISTORICAL_SNAPSHOT_SCHEMA_VERSION,
+        HISTORICAL_SNAPSHOT_RECEIPT_TYPE,
+    )
+
+    candidate = Path(snapshot)
+    value = _read_json_object(candidate, "20-site historical-post snapshot")
+    try:
+        payload = validate_hash_bound_receipt(
+            value, expected_type=HISTORICAL_SNAPSHOT_RECEIPT_TYPE
+        )
+    except (TypeError, ValueError) as error:
+        raise ValueError("20-site historical-post snapshot envelope is invalid") from error
+    if (
+        candidate.read_bytes() != _canonical_json_bytes(value)
+        or payload.get("study_id") != CLASS20_STUDY_ID
+        or payload.get("study_profile_sha256") != _CLASS20_OVERLAY_SHA256
+        or payload.get("snapshot_schema_version")
+        != CLASS20_HISTORICAL_SNAPSHOT_SCHEMA_VERSION
+        or payload.get("phase") != "post-formal"
+    ):
+        raise ValueError("20-site historical-post snapshot identity is invalid")
 
 
 def verify_class_handoff(
@@ -366,6 +437,7 @@ def verify_class_handoff(
     study_id = dataset.get("study_id")
     if not isinstance(study_id, str):
         raise ValueError("formal class handoff has no study identity")
+    cohort_loader, assembly_validator = _cohort_validators_for_study(study_id)
     return _verify_class_handoff(
         path,
         dimensions=_dimensions_for_study(study_id),
@@ -375,9 +447,39 @@ def verify_class_handoff(
         classic_pcap_writer=classic_pcap_writer,
         correctness_validator=correctness_validator,
         performance_extractor=performance_extractor,
-        cohort_loader=load_study_receipt,
-        assembly_validator=validate_cohort_assembly_receipt,
+        cohort_loader=cohort_loader,
+        assembly_validator=assembly_validator,
     )
+
+
+def _cohort_validators_for_study(
+    study_id: str,
+) -> tuple[CohortLoader, AssemblyValidator]:
+    if study_id != CLASS20_STUDY_ID:
+        return load_study_receipt, validate_cohort_assembly_receipt
+    profile = load_class20_profile_contract()
+
+    def load_profile_cohort(path: Path) -> tuple[dict[str, Any], Any]:
+        from .class_cohort20 import load_validated_profile_cohort
+
+        assembly = path.with_name("class-study-cohort-assembly.json")
+        _pilot, final = load_validated_profile_cohort(
+            path, assembly, profile=profile, require_deep=False
+        )
+        if len(final) != profile.final_count:
+            raise ValueError("20-site handoff has no complete final cohort")
+        return load_json(path), SimpleNamespace(
+            final=tuple(SimpleNamespace(candidate_id=value) for value in final)
+        )
+
+    def validate_profile_assembly(
+        value: Mapping[str, Any], *, cohort: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        from .class_cohort20 import validate_profile_cohort_assembly_receipt
+
+        return validate_profile_cohort_assembly_receipt(value, cohort=cohort, profile=profile)
+
+    return load_profile_cohort, validate_profile_assembly
 
 
 def _export_class_handoff(
@@ -641,6 +743,24 @@ def _validate_source_results(
             dimensions=dimensions,
             block_index=block_index,
         )
+        if dimensions.study_id == CLASS20_STUDY_ID:
+            from .class_profile_result import verify_profile_class_result
+
+            proof = verify_profile_class_result(
+                receipt.root,
+                profile=load_class20_profile_contract(),
+                cohort_receipt=receipt.root / COHORT_INPUT,
+                cohort_assembly=receipt.root / COHORT_ASSEMBLY_INPUT,
+                expected_role="formal",
+                expected_block=block_index,
+            )
+            if (
+                proof.get("root") != str(receipt.root)
+                or proof.get("evidence_sha256") != sha256_file(receipt.root / "evidence.sha256")
+                or proof.get("samples") != dimensions.samples_per_block
+                or proof.get("accepted") != dimensions.samples_per_block
+            ):
+                raise ValueError("20-site handoff lacks exact deep sealed-result proof")
         current_foundation_sha256 = _sealed_configuration_input(
             receipt,
             configuration=configuration,
@@ -875,6 +995,10 @@ def _bind_historical_post_snapshot(
     if (
         post.get("phase") != "post-formal"
         or post.get("study_id") != dimensions.study_id
+        or (
+            dimensions.study_id == CLASS20_STUDY_ID
+            and post.get("study_profile_sha256") != _CLASS20_OVERLAY_SHA256
+        )
         or post.get("source") != context.execution_source
         or not isinstance(readiness, Mapping)
         or readiness.get("sha256") != context.class_study_readiness_sha256
@@ -1164,6 +1288,12 @@ def _validate_formal_configuration(
         or defense_order != {"scheme": "cyclic-latin-square", "block": block_index - 1}
     ):
         raise ValueError("formal class source configuration differs from the protocol")
+    if dimensions.study_id == CLASS20_STUDY_ID and (
+        configuration.get("class_study_id") != CLASS20_STUDY_ID
+        or configuration.get("class_study_profile_sha256") != _CLASS20_OVERLAY_SHA256
+        or configuration.get("class_study_successor_sha256") is not None
+    ):
+        raise ValueError("20-site formal source has another study profile")
 
 
 def _normalise_workload_records(
@@ -1606,9 +1736,10 @@ def _dataset_receipt(
 ) -> dict[str, Any]:
     split_counts = Counter(str(row["split"]) for row in rows)
     mode_counts = Counter(str(row["mode"]) for row in rows)
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "artifact_type": ARTIFACT_TYPE,
+    profile20 = dimensions.study_id == CLASS20_STUDY_ID
+    dataset = {
+        "schema_version": PROFILE_SCHEMA_VERSION if profile20 else SCHEMA_VERSION,
+        "artifact_type": PROFILE_ARTIFACT_TYPE if profile20 else ARTIFACT_TYPE,
         "purpose": PURPOSE,
         "study_id": dimensions.study_id,
         "evidence_role": "formal",
@@ -1645,7 +1776,7 @@ def _dataset_receipt(
         },
         "role_exclusion": {
             "included_evidence_roles": ["formal"],
-            "excluded_evidence_roles": [role for role in EVIDENCE_ROLES if role != "formal"],
+            "excluded_evidence_roles": _excluded_evidence_roles(dimensions),
             "excluded_modes": ["static"],
         },
         "class_cohort": {
@@ -1722,6 +1853,9 @@ def _dataset_receipt(
         "blocks": list(blocks),
         "exporter_source": source_metadata(),
     }
+    if profile20:
+        dataset["study_profile_sha256"] = _CLASS20_OVERLAY_SHA256
+    return dataset
 
 
 def _validate_published_tree(
@@ -1774,10 +1908,15 @@ def _validate_dataset(
     root: Path,
 ) -> None:
     blocks = dataset.get("blocks")
+    profile20 = dimensions.study_id == CLASS20_STUDY_ID
+    expected_keys = _DATASET_KEYS | ({"study_profile_sha256"} if profile20 else set())
     if (
-        set(dataset) != _DATASET_KEYS
-        or dataset.get("schema_version") != SCHEMA_VERSION
-        or dataset.get("artifact_type") != ARTIFACT_TYPE
+        set(dataset) != expected_keys
+        or dataset.get("schema_version")
+        != (PROFILE_SCHEMA_VERSION if profile20 else SCHEMA_VERSION)
+        or dataset.get("artifact_type")
+        != (PROFILE_ARTIFACT_TYPE if profile20 else ARTIFACT_TYPE)
+        or (profile20 and dataset.get("study_profile_sha256") != _CLASS20_OVERLAY_SHA256)
         or dataset.get("purpose") != PURPOSE
         or dataset.get("study_id") != dimensions.study_id
         or dataset.get("evidence_role") != "formal"
@@ -1887,7 +2026,7 @@ def _validate_dataset(
         raise ValueError("formal class classifier feature restriction is invalid")
     if dataset.get("role_exclusion") != {
         "included_evidence_roles": ["formal"],
-        "excluded_evidence_roles": [role for role in EVIDENCE_ROLES if role != "formal"],
+        "excluded_evidence_roles": _excluded_evidence_roles(dimensions),
         "excluded_modes": ["static"],
     }:
         raise ValueError("formal class evidence-role exclusion is invalid")
@@ -2574,6 +2713,10 @@ def _existing_handoffs_except(destination: Path) -> tuple[Path, ...]:
 
 
 def _handoff_readme(dimensions: _StudyDimensions) -> str:
+    dataset_schema = (
+        PROFILE_SCHEMA_VERSION
+        if dimensions.study_id == CLASS20_STUDY_ID else SCHEMA_VERSION
+    )
     return f"""# {dimensions.study_id} formal classifier handoff
 
 This create-only artifact contains {dimensions.sample_count:,} accepted formal
@@ -2591,7 +2734,7 @@ observer-frame length. The fixed addresses and ports in shape PCAPs are
 synthetic framing and never copied from source traffic. All non-formal campaign
 roles and the `static` compatibility mode are excluded.
 
-Schema 3 `dataset.json` and `samples.jsonl` bind class labels, paired visits,
+Schema {dataset_schema} `dataset.json` and `samples.jsonl` bind class labels, paired visits,
 source result seals, cohort/class hashes, modes, blocks, and splits. Every
 handoff also copies and hash-binds the independently reconstructed post-formal
 historical snapshot for those exact ordered blocks. Every
@@ -2601,6 +2744,6 @@ BuFLO rows additionally bind the source sidecar receipt and every copied
 kernel-TX artifact by canonical path and SHA-256; all other rows carry `null`.
 The semantic verifier checks those receipts against copied evidence.
 `SHA256SUMS` is a closed inventory. Run the semantic verifier as well as
-`sha256sum -c` before analysis. This is a paper-informed, 100-class closed-world QUIC
+`sha256sum -c` before analysis. This is a paper-informed, {dimensions.class_count}-class closed-world QUIC
 study; it is not a reproduction of a bilateral defense or any paper dataset.
 """

@@ -10,6 +10,8 @@ from qcsd_lab.class_acquisition import _unblocked_admission_ids
 from qcsd_lab.acquisition_selection import (
     ACQUISITION_SELECTION_POLICY,
     derive_acquisition_selection,
+    derive_global_operational_censor_selection,
+    derive_operational_censor_selection,
 )
 from qcsd_lab.class_study import (
     CANDIDATE_COUNT,
@@ -259,3 +261,54 @@ def test_prefix_matches_existing_cohort_selection_and_preserves_pairing(candidat
     assert [candidate.candidate_id for candidate in paired.pilot] == plan["pilot_ids"]
     assert [candidate.candidate_id for candidate in paired.final] == paired_ids
     assert len(paired.final) == 100 and len(paired.reserves) == 20 and len(paired.matching) == 50
+
+
+def test_operational_censor_is_visible_and_opens_an_ordered_slot(candidates):
+    groups = _groups(candidates)
+    dispositions = {
+        candidate_id: "eligible"
+        for group in groups for candidate_id in group[:24]
+    }
+    dispositions[groups[0][0]] = "operational-censor"
+    dispositions[groups[0][1]] = "site-rejected"
+    dispositions[groups[0][24]] = "eligible"
+    dispositions[groups[0][25]] = "eligible"
+    plan = derive_operational_censor_selection(
+        candidates, tranco_list_sha256=LIST_SHA,
+        terminal_disposition=dispositions,
+    )
+    assert plan["complete"] is True
+    assert plan["operational_censor_ids"] == [groups[0][0]]
+    assert plan["site_rejected_ids"] == [groups[0][1]]
+    assert plan["strata"][0]["prefix_ids"] == groups[0][:26]
+    assert plan["strata"][0]["eligible_ids"] == groups[0][2:26]
+    assert plan["pilot_ids"][:24] == groups[0][2:26]
+    assert plan["admission_ids"][:24] == groups[0][2:26]
+
+
+def test_global_operational_censor_uses_explicit_order_and_global_quota(candidates):
+    groups = _groups(candidates)
+    order = [candidate_id for row in zip(*groups, strict=True) for candidate_id in row]
+    dispositions = {candidate_id: "eligible" for candidate_id in order[2:32]}
+    dispositions[order[0]] = "operational-censor"
+    dispositions[order[1]] = "site-rejected"
+    plan = derive_global_operational_censor_selection(
+        candidates, tranco_list_sha256=LIST_SHA,
+        ordered_candidate_ids=order, order_policy="round-robin-frozen-strata-v1",
+        eligible_quota=30, terminal_disposition=dispositions,
+    )
+    assert plan["complete"] is True
+    assert len(plan["pilot_ids"]) == 30
+    assert plan["pilot_ids"] == order[2:32]
+    assert plan["prefix_ids"] == order[:32]
+    assert plan["operational_censor_ids"] == [order[0]]
+    assert plan["site_rejected_ids"] == [order[1]]
+    assert plan["admission_ids"] == order[2:32]
+    assert plan["order_policy"] == "round-robin-frozen-strata-v1"
+    with pytest.raises(ValueError, match="exact catalogue permutation"):
+        derive_global_operational_censor_selection(
+            candidates, tranco_list_sha256=LIST_SHA,
+            ordered_candidate_ids=order[:-1] + [order[0]],
+            order_policy="round-robin-frozen-strata-v1", eligible_quota=30,
+            terminal_disposition=dispositions,
+        )

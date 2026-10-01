@@ -9,6 +9,7 @@ import pytest
 
 from qcsd_lab import class_attestation, class_layout
 from qcsd_lab.class_layout import class_study_layout
+from qcsd_lab.class_study import CLASS20_PROFILE, CLASS20_STUDY_ID
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,6 +53,113 @@ def _lock_function_source() -> str:
         return f"{name}() {{{body}\n}}\n"
 
     return function("class_require_directory") + function("class_acquire_acquisition_lock")
+
+
+def test_profile_final_qualification_mount_guard_rejects_parent_overlay(
+    tmp_path: Path,
+) -> None:
+    """A later RO parent overlay must not disable final sidecar writes."""
+
+    source = LAUNCHER.read_text(encoding="utf-8")
+    marker = 'if [[ "${1:-}" == "class-study" ]]; then\n  if [[ "${class_study_config_root}"'
+    guard = source.split(marker, maxsplit=1)[1].split(
+        '  for class_write_root in "${class_guarded_rw_dirs[@]:-}"; do\n'
+        '    [[ -n "${class_write_root}" ]] || continue',
+        maxsplit=1,
+    )[0]
+    work = tmp_path / "artifacts/final-work"
+    prefix = f'''class_study_config_root=/lab/config/class-study/v2
+class_config_root=/lab/config
+class_study_action=qualify-prefix
+class_study_stage=authoritative
+class_final_qualification_work_root="{work}"
+'''
+    good = subprocess.run(
+        ["bash", "-c", prefix + f'class_guarded_rw_dirs=("{work}" "{tmp_path}/sets")\n'
+         + marker + guard + "fi\n", "wrapper-test", "class-study"],
+        check=False, capture_output=True, text=True,
+    )
+    assert good.returncode == 0, good.stderr
+    nested = subprocess.run(
+        ["bash", "-c", prefix + f'class_guarded_rw_dirs=("{work}" "{tmp_path}/artifacts")\n'
+         + marker + guard + "fi\n", "wrapper-test", "class-study"],
+        check=False, capture_output=True, text=True,
+    )
+    assert nested.returncode == 2
+    assert "below another guarded mount" in nested.stderr
+
+
+def test_profile_final_qualification_resume_keeps_checkpoint_replaceable(
+    tmp_path: Path,
+) -> None:
+    """Existing sidecars remain RO while the resumable checkpoint stays RW."""
+
+    work = tmp_path / "artifacts/final-work"
+    sets = tmp_path / "config/sets"
+    work.mkdir(parents=True)
+    sets.mkdir(parents=True)
+    checkpoint = work / "_checkpoint.json"
+    checkpoint.write_text("{}\n", encoding="utf-8")
+    (work / "site-01.json").write_text("{}\n", encoding="utf-8")
+    source = LAUNCHER.read_text(encoding="utf-8")
+    start = source.index(
+        'if [[ "${1:-}" == "class-study" ]]; then\n'
+        '  if [[ "${class_study_config_root}"',
+    )
+    end = source.index('\nif [[ -n "${study_capture_scheduler_contract}" ]]; then', start)
+    mount_code = source[start:end]
+    script = (
+        'ROOT="__ROOT__"\n'
+        'class_study_config_root=/lab/config/class-study/v2\n'
+        'class_config_root=/lab/config\n'
+        'class_study_action=qualify-prefix\n'
+        'class_study_stage=authoritative\n'
+        'class_final_qualification_work_root="__WORK__"\n'
+        'class_guarded_rw_dirs=("__WORK__" "__SETS__")\n'
+        'class_direct_rw_dirs=()\n'
+        'class_rw_files=()\n'
+        'class_atomic_rw_files=("__CHECKPOINT__")\n'
+        'container=()\n'
+        'class_require_directory() { [[ -d "$1" ]]; }\n'
+        'class_container_path() { printf "/lab/%s\\n" "${1#${ROOT}/}"; }\n'
+        + mount_code + '\nprintf "%s\\n" "${container[@]}"\n'
+    )
+    for old, new in (
+        ("__ROOT__", str(tmp_path)), ("__WORK__", str(work)),
+        ("__SETS__", str(sets)), ("__CHECKPOINT__", str(checkpoint)),
+    ):
+        script = script.replace(old, new)
+    result = subprocess.run(
+        ["bash", "-c", script, "wrapper-test", "class-study"],
+        check=False, capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    mounts = result.stdout.splitlines()
+    assert f"{checkpoint}:/lab/artifacts/final-work/_checkpoint.json:rw" not in mounts
+    assert f"{checkpoint}:/lab/artifacts/final-work/_checkpoint.json:ro" not in mounts
+    assert f"{work}:/lab/artifacts/final-work:rw" in mounts
+    assert f"{work / 'site-01.json'}:/lab/artifacts/final-work/site-01.json:ro" in mounts
+
+
+@pytest.mark.parametrize("relative", (
+    "config/classifier-multiorigin20-v1-campaigns/example.yml",
+    "config/classifier-multiorigin20-v1-workloads-v140/site-01.json",
+    "config/chaff-qualification-store/sets/classifier-multiorigin20-v1-pilot30-full-v1/site-01.json",
+    "config/chaff-qualification-store/sets/classifier-multiorigin20-v1-final20-full-v1/_qualification-set.json",
+    "config/class-study/v2/classifier-multiorigin20-v1-pilot-cohort.json",
+    "config/class-study/v2/classifier-multiorigin20-v1-final-selection.json",
+    "config/class-study/v2/classifier-multiorigin20-v1-pair-screening.json",
+))
+def test_profile_generated_evidence_does_not_dirty_source_checkout(relative: str) -> None:
+    ignored = subprocess.run(
+        ["git", "check-ignore", "-q", relative], cwd=ROOT, check=False,
+    )
+    assert ignored.returncode == 0
+    profile = subprocess.run(
+        ["git", "check-ignore", "-q", "config/class-study/v2/study.json"],
+        cwd=ROOT, check=False,
+    )
+    assert profile.returncode == 1
 
 
 @pytest.mark.parametrize(
@@ -111,12 +219,43 @@ def _lock_function_source() -> str:
         ),
         (
             (
+                "pair-screen", "--study-id", CLASS20_STUDY_ID,
+                "--pair-screening", "config/class-study/v1/alternate.json",
+            ),
+            "pair-screening must use the canonical path",
+        ),
+        (
+            (
+                "final-select", "--study-id", CLASS20_STUDY_ID,
+                "--final-selection", "config/class-study/v1/alternate.json",
+            ),
+            "final-selection must use the canonical path",
+        ),
+        (
+            (
                 "readiness",
                 "--qualification-sidecar-root",
                 "config/chaff-qualification-store/sets/"
                 "classifier-multiorigin100-v1-pilot120-full-v1",
             ),
             "qualification sidecar root must use the canonical path",
+        ),
+        (
+            (
+                "prefix-specs", "--study-id", CLASS20_STUDY_ID,
+                "--stage", "authoritative", "--prefix-spec-root",
+                str(class_study_layout(profile=CLASS20_PROFILE).final_qualification_set_root
+                    / "_prefix-specs"),
+            ),
+            "prefix-spec root must use one canonical class-study path",
+        ),
+        (
+            (
+                "readiness", "--study-id", CLASS20_STUDY_ID,
+                "--prefix-spec-root",
+                str(class_study_layout(profile=CLASS20_PROFILE).authoritative_prefix_root),
+            ),
+            "prefix-spec root must use the canonical path",
         ),
         (
             ("acquisition-init", "--acquisition-root", "artifacts/alternate-acquisition"),
@@ -176,6 +315,30 @@ def test_wrapper_rejects_mismatched_versioned_publication_pair_before_docker() -
     assert result.returncode == 2
     assert "workload root differs from the acquisition cohort" in result.stderr
     assert "Missing image" not in result.stderr
+
+
+def test_profile20_wrapper_rejects_base_study_roots_before_docker() -> None:
+    profile_layout = class_study_layout(profile=CLASS20_PROFILE)
+    base_layout = class_study_layout()
+    base_runner = f"{base_layout.acquisition_root}-v99999999"
+    profile_runner = f"{profile_layout.acquisition_root}-v99999999"
+
+    wrong_runner = _run(
+        "acquisition-init", "--study-id", CLASS20_STUDY_ID,
+        "--acquisition-root", base_runner,
+    )
+    assert wrong_runner.returncode == 2
+    assert "acquisition root must use the canonical path" in wrong_runner.stderr
+    assert "Missing image" not in wrong_runner.stderr
+
+    wrong_workloads = _run(
+        "acquisition-init", "--study-id", CLASS20_STUDY_ID,
+        "--acquisition-root", profile_runner,
+        "--workload-root", f"{base_layout.workload_root}-v99999999",
+    )
+    assert wrong_workloads.returncode == 2
+    assert "workload root must use the canonical path" in wrong_workloads.stderr
+    assert "Missing image" not in wrong_workloads.stderr
 
 
 def test_wrapper_rejects_symlinked_versioned_workload_before_docker(
@@ -401,7 +564,8 @@ def test_acquisition_watch_help_is_host_only_and_bypasses_docker() -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    assert "Supervise an initialized classifier-multiorigin100-v1 acquisition" in result.stdout
+    assert "Supervise an initialized class-study acquisition" in result.stdout
+    assert "--study-id" in result.stdout
     assert "--heartbeat-seconds" in result.stdout
     assert "--acquisition-root" in result.stdout
     assert "Missing image" not in result.stderr

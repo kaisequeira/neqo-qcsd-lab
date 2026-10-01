@@ -151,7 +151,9 @@ def acquisition_evidence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dic
     monkeypatch.setattr(authority, "verify_browser_egress_qualification", verify_browser)
 
     def run(argv: list[str], **kwargs: Any) -> SimpleNamespace:
-        assert argv == authority._acquisition_correctness_spec()["argv"]
+        assert argv == authority._acquisition_correctness_spec(
+            state["inputs"].get("study_id", authority.STUDY_ID)
+        )["argv"]
         assert kwargs["cwd"] == tmp_path
         assert kwargs["check"] is False
         state["calls"].append("tests")
@@ -186,6 +188,28 @@ def acquisition_evidence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dic
 
 def _create(state: dict[str, Any]) -> Path:
     return authority.create_class_acquisition_authority(state["destination"], **state["inputs"])
+
+
+def _select_class20_profile(state: dict[str, Any]) -> None:
+    """Supply the exact new contract while retaining isolated build/CDP proofs."""
+
+    source_root = Path(__file__).resolve().parents[1]
+    for relative in (
+        "config/class-study/v1/study.json",
+        "config/class-study/v1/classifier-multiorigin100-v1-candidates.json",
+        "config/class-study/v2/study.json",
+    ):
+        destination = authority.LAB_ROOT / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes((source_root / relative).read_bytes())
+    for relative in set(authority.CLASS20_ACQUISITION_CORRECTNESS_TESTS) - set(
+        authority.ACQUISITION_CORRECTNESS_TESTS
+    ):
+        destination = authority.LAB_ROOT / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(f"fixture: {relative}\n", encoding="utf-8")
+    state["inputs"].pop("browser_egress_qualification_root")
+    state["inputs"]["study_id"] = authority.CLASS20_STUDY_ID
 
 
 def _reseal(path: Path, payload: dict[str, Any]) -> None:
@@ -336,6 +360,171 @@ def test_fast_authority_defers_browser_until_full_foundation(
     )
     assert result["summary"]["browser_egress_packet_qualification"] == "deferred-to-foundation"
     assert result["promotion_authority"] is False
+
+
+def test_class20_authority_seals_exact_new_profile_and_inherited_inputs(
+    acquisition_evidence: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = acquisition_evidence
+    _select_class20_profile(state)
+    path = _create(state)
+    assert state["calls"] == ["build", "pinned", "tests", "build", "pinned"]
+    monkeypatch.setattr(
+        authority.subprocess, "run",
+        lambda *_args, **_kwargs: pytest.fail("verification executed correctness tests"),
+    )
+    result = authority.validate_class_acquisition_authority(path)
+    assert result["attestation_schema_version"] == (
+        authority.CLASS20_ACQUISITION_AUTHORITY_SCHEMA_VERSION
+    )
+    assert result["study_id"] == authority.CLASS20_STUDY_ID
+    assert result["study_profile_sha256"] == authority._CLASS20_OVERLAY_SHA256
+    assert result["study_contract"] == authority._file_binding(
+        authority.LAB_ROOT / "config/class-study/v2/study.json"
+    )
+    assert result["study_profile_inputs"] == {
+        "base_study": authority._file_binding(
+            authority.LAB_ROOT / "config/class-study/v1/study.json"
+        ),
+        "candidate_catalogue": authority._file_binding(
+            authority.LAB_ROOT
+            / "config/class-study/v1/classifier-multiorigin100-v1-candidates.json"
+        ),
+    }
+    assert set(result["evidence"]) == {"build_execution", "pinned_cdp_probe"}
+    assert "tests/test_class_cohort20.py" in result["acquisition_correctness"]["argv"]
+    assert result["promotion_authority"] is False
+
+
+def test_class20_creation_requires_narrow_authority_and_no_browser_gate(
+    acquisition_evidence: dict[str, Any],
+) -> None:
+    state = acquisition_evidence
+    _select_class20_profile(state)
+    state["inputs"]["browser_egress_qualification_root"] = Path(
+        state["browser"]["path"]
+    ).parent
+    with pytest.raises(ValueError, match="defers browser evidence"):
+        _create(state)
+    assert "tests" not in state["calls"]
+    assert not state["destination"].exists()
+
+
+@pytest.mark.parametrize("relative", (
+    "config/class-study/v2/study.json",
+    "config/class-study/v1/study.json",
+    "config/class-study/v1/classifier-multiorigin100-v1-candidates.json",
+))
+def test_class20_authority_rejects_changed_profile_inputs(
+    acquisition_evidence: dict[str, Any], relative: str,
+) -> None:
+    state = acquisition_evidence
+    _select_class20_profile(state)
+    path = _create(state)
+    (authority.LAB_ROOT / relative).write_text("changed\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="source pin"):
+        authority.validate_class_acquisition_authority(path)
+
+
+@pytest.mark.parametrize("mutation", (
+    lambda payload: payload.update(study_profile_sha256="e" * 64),
+    lambda payload: payload["study_profile_inputs"]["base_study"].update(sha256="e" * 64),
+    lambda payload: payload["study_profile_inputs"]["candidate_catalogue"].update(
+        sha256="e" * 64
+    ),
+    lambda payload: payload.update(study_id=authority.STUDY_ID),
+    lambda payload: payload.update(attestation_schema_version=2),
+))
+def test_class20_authority_rejects_resealed_study_or_profile_tampering(
+    acquisition_evidence: dict[str, Any], mutation: Any,
+) -> None:
+    state = acquisition_evidence
+    _select_class20_profile(state)
+    path = _create(state)
+    payload = load_json(path)["payload"]
+    mutation(payload)
+    _reseal(path, payload)
+    with pytest.raises(ValueError):
+        authority.validate_class_acquisition_authority(path)
+
+
+def test_v1_fast_authority_does_not_become_class20_by_resealing(
+    acquisition_evidence: dict[str, Any],
+) -> None:
+    state = acquisition_evidence
+    state["inputs"].pop("browser_egress_qualification_root")
+    path = _create(state)
+    assert authority.validate_class_acquisition_authority(path)["study_id"] == authority.STUDY_ID
+    payload = load_json(path)["payload"]
+    payload["attestation_schema_version"] = authority.CLASS20_ACQUISITION_AUTHORITY_SCHEMA_VERSION
+    payload["study_id"] = authority.CLASS20_STUDY_ID
+    payload["study_profile_sha256"] = authority._CLASS20_OVERLAY_SHA256
+    _reseal(path, payload)
+    with pytest.raises(ValueError):
+        authority.validate_class_acquisition_authority(path)
+
+
+def test_class20_completion_rechecks_exact_authority_and_profile(
+    acquisition_evidence: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = acquisition_evidence
+    _select_class20_profile(state)
+    authority_path = _create(state)
+    binding = {"path": str(authority_path), "sha256": sha256_file(authority_path)}
+    provenance_path = authority.LAB_ROOT / "provenance.json"
+    provenance = {
+        "study_id": authority.CLASS20_STUDY_ID,
+        "study_profile_sha256": authority._CLASS20_OVERLAY_SHA256,
+        "acquisition_schema_version": authority.ACQUISITION_SCHEMA_VERSION,
+        "acquisition_authority": binding,
+    }
+
+    def write_provenance() -> None:
+        provenance_path.write_bytes(canonical_json_bytes(bind_receipt(
+            provenance, receipt_type=authority.ACQUISITION_PROVENANCE_TYPE
+        )))
+
+    write_provenance()
+    state["role"] = None
+    completion = {
+        "study_id": authority.CLASS20_STUDY_ID,
+        "acquisition_schema_version": authority.ACQUISITION_SCHEMA_VERSION,
+        "completion_schema_version": authority.ACQUISITION_COMPLETION_SCHEMA_VERSION,
+        "checkpoint_schema_version": authority.ACQUISITION_CHECKPOINT_SCHEMA_VERSION,
+        "provenance_sha256": sha256_file(provenance_path),
+    }
+    assert authority.validate_current_acquisition_completion_authority(
+        completion, runner_root=authority.LAB_ROOT
+    ) == {"receipt_type": authority.ACQUISITION_AUTHORITY_RECEIPT_TYPE, **binding}
+
+    provenance["study_profile_sha256"] = "e" * 64
+    write_provenance()
+    completion["provenance_sha256"] = sha256_file(provenance_path)
+    with pytest.raises(ValueError, match="study profile"):
+        authority.validate_current_acquisition_completion_authority(
+            completion, runner_root=authority.LAB_ROOT
+        )
+
+    provenance["study_profile_sha256"] = authority._CLASS20_OVERLAY_SHA256
+    foundation_path = authority.LAB_ROOT / "foundation.json"
+    foundation_path.write_bytes(canonical_json_bytes(bind_receipt(
+        {"fixture": "foundation"}, receipt_type=authority.FOUNDATION_RECEIPT_TYPE
+    )))
+    foundation_binding = {
+        "path": str(foundation_path), "sha256": sha256_file(foundation_path)
+    }
+    provenance["acquisition_authority"] = foundation_binding
+    write_provenance()
+    completion["provenance_sha256"] = sha256_file(provenance_path)
+    monkeypatch.setattr(
+        authority,
+        "validate_class_foundation_attestation",
+        lambda *_args, **_kwargs: dict(foundation_binding),
+    )
+    with pytest.raises(ValueError, match="lacks its prospective acquisition authority"):
+        authority.validate_current_acquisition_completion_authority(
+            completion, runner_root=authority.LAB_ROOT
+        )
 
 
 def test_v96_authority_reconstructs_only_in_explicit_historical_verification(
@@ -784,6 +973,73 @@ def test_fast_acquisition_join_requires_same_build_and_pinned_proof(
     with pytest.raises(ValueError, match="differs from full foundation"):
         authority._validate_acquisition_foundation_join(
             provenance, foundation=foundation, foundation_attestation=foundation_path
+        )
+
+
+def test_class20_acquisition_joins_only_matching_full_foundation(
+    acquisition_evidence: dict[str, Any]
+) -> None:
+    state = acquisition_evidence
+    _select_class20_profile(state)
+    path = _create(state)
+    result = authority.validate_class_acquisition_authority(path)
+    foundation_path = authority.LAB_ROOT / "foundation-class20.json"
+    foundation_path.write_bytes(b"separately verified prospective full foundation\n")
+    foundation = {
+        "study_id": authority.CLASS20_STUDY_ID,
+        "attestation_schema_version": authority.CLASS20_FOUNDATION_SCHEMA_VERSION,
+        "study_contract": result["study_contract"],
+        "study_profile_sha256": result["study_profile_sha256"],
+        "study_profile_inputs": result["study_profile_inputs"],
+        "source": result["source"],
+        "build_execution_identity": result["build_execution_identity"],
+        "evidence": {
+            **result["evidence"],
+            "browser_egress_qualification": {"sha256": "a" * 64},
+        },
+    }
+    provenance = {
+        "study_id": authority.CLASS20_STUDY_ID,
+        "study_profile_sha256": result["study_profile_sha256"],
+        "acquisition_schema_version": authority.ACQUISITION_SCHEMA_VERSION,
+        "acquisition_authority": {"path": str(path), "sha256": sha256_file(path)},
+        "started_at": result["recorded_at"],
+    }
+    authority._validate_acquisition_foundation_join(
+        provenance, foundation=foundation, foundation_attestation=foundation_path
+    )
+    for field, replacement in (
+        ("source", {**foundation["source"], "lab_commit": "e" * 40}),
+        ("build_execution_identity", {"sha256": "e" * 64}),
+        ("study_profile_sha256", "e" * 64),
+        (
+            "study_profile_inputs",
+            {**foundation["study_profile_inputs"], "base_study": {"sha256": "e" * 64}},
+        ),
+        ("study_contract", {"sha256": "e" * 64}),
+    ):
+        changed = copy.deepcopy(foundation)
+        changed[field] = replacement
+        with pytest.raises(ValueError, match="differs|profile"):
+            authority._validate_acquisition_foundation_join(
+                provenance, foundation=changed, foundation_attestation=foundation_path
+            )
+    changed_provenance = {**provenance, "study_profile_sha256": "e" * 64}
+    with pytest.raises(ValueError, match="profile"):
+        authority._validate_acquisition_foundation_join(
+            changed_provenance, foundation=foundation,
+            foundation_attestation=foundation_path,
+        )
+    legacy_provenance = {
+        key: value for key, value in provenance.items()
+        if key != "acquisition_authority"
+    }
+    legacy_provenance["foundation_attestation"] = authority._file_binding(foundation_path)
+    with pytest.raises(ValueError, match="requires its acquisition-only authority"):
+        authority._validate_acquisition_foundation_join(
+            legacy_provenance,
+            foundation=foundation,
+            foundation_attestation=foundation_path,
         )
 
 
