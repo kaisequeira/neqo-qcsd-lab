@@ -191,9 +191,10 @@ def _natural_datagrams(
         if observation.connection is not None and observation.connection != endpoint:
             raise ValueError(f"classified datagram endpoint binding is inconsistent: {path}")
         length = _integer(details.get("length"), "classified datagram length", path)
-        if not 1 <= length <= udp_payload_ceiling:
+        direction_limit = udp_payload_ceiling if direction == "outgoing" else 65_527
+        if not 1 <= length <= direction_limit:
             raise ValueError(
-                f"classified datagram length is outside [1, {udp_payload_ceiling}]: {path}"
+                f"classified {direction} datagram length is outside [1, {direction_limit}]: {path}"
             )
         if (
             datagram_class == "natural"

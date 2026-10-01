@@ -515,8 +515,15 @@ def _blocked_by_client_failure(blocked_reason: str) -> dict:
 
 def _blocked_preflight_audit(
     request_order: str,
+    *,
+    actual_method: str = "POST",
+    actual_resource_type: str = "Fetch",
 ) -> tuple[dict, list[dict], list[dict]]:
-    url = "https://page.test/api"
+    url = (
+        "https://unapproved.test/api"
+        if actual_method == "GET"
+        else "https://page.test/api"
+    )
     actual_occurrence = "actual-post-request"
     preflight_occurrence = "preflight-request"
     actual_first = request_order == "actual-first"
@@ -531,11 +538,13 @@ def _blocked_preflight_audit(
         occurrence_id=actual_occurrence,
         resource_id=None,
         url=url,
-        method="POST",
-        resource_type="Fetch",
+        method=actual_method,
+        resource_type=actual_resource_type,
         initiator_type="script",
         exclusion_id=exclusion_ids["actual"],
-        reason="unsafe method: POST",
+        reason=(
+            "origin not approved" if actual_method == "GET" else "unsafe method: POST"
+        ),
         interception_exception={
             "kind": "blocked-after-failed-cors-preflight-v1",
             "preflight_occurrence_id": preflight_occurrence,
@@ -580,7 +589,12 @@ def _blocked_preflight_audit(
     ]
     audit, resources = _root_resource_audit(*pair_events)
     exclusions = [
-        {"url": url, "reason": "unsafe method: POST"},
+        {
+            "url": url,
+            "reason": (
+                "origin not approved" if actual_method == "GET" else "unsafe method: POST"
+            ),
+        },
         {"url": url, "reason": "unsafe method: OPTIONS"},
     ]
     return audit, resources, exclusions
@@ -625,6 +639,92 @@ def test_verifier_accepts_exact_blocked_preflight_exception_in_either_request_or
         "exclusion_occurrence_count": 2,
         "blocked_preflight_dependent_count": 1,
     }
+
+
+@pytest.mark.parametrize("request_order", ["actual-first", "preflight-first"])
+@pytest.mark.parametrize("resource_type", ["XHR", "Fetch"])
+def test_verifier_accepts_failed_preflight_for_excluded_get_xhr_or_fetch(
+    request_order: str,
+    resource_type: str,
+) -> None:
+    audit, resources, exclusions = _blocked_preflight_audit(
+        request_order,
+        actual_method="GET",
+        actual_resource_type=resource_type,
+    )
+
+    assert _verify(audit, resources, exclusions)["blocked_preflight_dependent_count"] == 1
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "wrong-url",
+        "wrong-source",
+        "wrong-causal-id",
+        "wrong-method",
+        "wrong-resource",
+        "wrong-initiator",
+        "wrong-exclusion",
+        "actual-response",
+        "continued-preflight",
+        "preflight-response",
+        "preflight-finished",
+    ],
+)
+def test_verifier_rejects_forged_get_failed_preflight_exception(mutation: str) -> None:
+    audit, resources, exclusions = _blocked_preflight_audit(
+        "actual-first",
+        actual_method="GET",
+        actual_resource_type="XHR",
+    )
+    events = audit["events"]
+    actual = next(
+        event for event in events if event.get("occurrence_id") == "actual-post-request"
+    )
+    preflight = next(
+        event for event in events if event.get("occurrence_id") == "preflight-request"
+    )
+    preflight_fetch = next(
+        event for event in events if event.get("fetch_id") == "preflight-fetch"
+    )
+    preflight_terminal = next(
+        event
+        for event in events
+        if event["kind"] == "network-terminal" and event["network_id"] == "preflight-network"
+    )
+    if mutation == "wrong-url":
+        preflight["url"] = "https://page.test/different"
+        preflight_fetch["url"] = preflight["url"]
+        exclusions[1]["url"] = preflight["url"]
+    elif mutation == "wrong-source":
+        preflight["source"] = {**ROOT, "target_id": "other-page"}
+    elif mutation == "wrong-causal-id":
+        preflight["initiator_request_id"] = "unrelated-network"
+    elif mutation == "wrong-method":
+        actual["method"] = "HEAD"
+    elif mutation == "wrong-resource":
+        actual["resource_type"] = "Document"
+    elif mutation == "wrong-initiator":
+        actual["initiator_type"] = "other"
+    elif mutation == "wrong-exclusion":
+        actual["mapping"]["reason"] = "unsafe method: GET"
+        exclusions[0]["reason"] = "unsafe method: GET"
+    elif mutation == "actual-response":
+        actual["response_observed"] = True
+    elif mutation == "continued-preflight":
+        preflight_fetch["policy_decision"] = "continue"
+        preflight_fetch["policy_reason"] = None
+    elif mutation == "preflight-response":
+        preflight["response_observed"] = True
+    elif mutation == "preflight-finished":
+        preflight_terminal["outcome"] = "finished"
+        preflight_terminal["failure"] = None
+    else:  # pragma: no cover - the parameter table is exhaustive.
+        raise AssertionError(f"unknown mutation: {mutation}")
+
+    with pytest.raises(ValueError):
+        _verify(audit, resources, exclusions)
 
 
 @pytest.mark.parametrize(

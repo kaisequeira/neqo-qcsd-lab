@@ -1,12 +1,15 @@
 # Extended-class study: acquisition and continuation
 
-Current protocol summary: 30 September 2026, Australia/Sydney. The
+Current protocol summary: 1 October 2026, Australia/Sydney. The
 [project ledger](../PROJECT.md) records progress; this document records the
 next work and its purpose. The checked-in
 [study contract](../config/class-study/v1/study.json), implemented validators
 and `./qcsd-lab class-study --help` are authoritative for typed inputs.
 The [capture-readiness guide](CAPTURE-READINESS.md) details the evidence
 required before public acquisition, fitting, certification and formal capture.
+The [acquisition rehearsal](ACQUISITION-REHEARSAL.md) is the cheapest-first
+engineering release gate before another no-cache build; it supplies no formal
+credit.
 Older runbooks remain in the [history](PROJECT-HISTORY.md) for thesis auditing;
 their superseded order and schema descriptions do not authorise execution.
 
@@ -34,7 +37,7 @@ redirect-dependency error. Preserve v129 and its attempts. A standalone v129
 image diagnostic, without a formal receipt, passed a Neqo control probe to
 `cloudflare-quic.com` and saw `Error: Timeout(12)` for `consultant.ru` and
 `www.consultant.ru` on the default Docker bridge. It cannot reclassify v129.
-The source fix and prospective schema-11 pre-baseline screen require the next
+The source fix and historical schema-11 pre-baseline screen required the next
 unused cohort and fresh source-bound proof. V130 passed its no-cache build,
 pinned CDP probe and 110-vector browser gate, but acquisition authority failed
 its correctness suite (1,885 passed, 93 failed, 6 skipped); it issued no
@@ -47,6 +50,20 @@ either historical cohort. Earlier v127 and v126 initialization failures also
 remain historical evidence.
 Accepted extended-study progress remains pilot 0/120, final classes 0/100,
 certification 0/900 and formal 0/16,000.
+The v131 claim was published on corrected source, but its build was
+user-interrupted (exit 130) with no verified build receipt. Preserve that
+consumed claim. Run the non-evidentiary acquisition rehearsal, including a
+bounded live path through replay and later-consumer tests, before claiming a
+fresh cohort.
+The completed zero-credit 600-root H3 survey found only 63 known-valid roots,
+distributed 2, 6, 17, 14 and 24 across the five frozen strata. One catalogue
+page completed a real two-origin, 63-resource preparation rehearsal, so the
+path is executable, but the registered 24-eligible-per-stratum target is not
+established by the current root-valid snapshot. Root probes do not classify
+different browser-selected page URLs. The sequence below describes
+the registered v1 contract; do not launch its long watcher before a prospective
+cohort decision and fresh source-bound validation. See the
+[rehearsal](ACQUISITION-REHEARSAL.md) for the diagnostic limits.
 
 ## Cost-escalating sequence
 
@@ -55,7 +72,7 @@ repeating expensive qualification. They do not replace mandatory gates.
 
 | Order | Stage | Purpose and exit condition |
 |---:|---|---|
-| 1 | Focused host-only checks and synthetic receipt/consumer replay | Check architecture selection, schemas, acquisition rules, lifecycle handling and host prerequisites cheaply |
+| 1 | [Acquisition rehearsal](ACQUISITION-REHEARSAL.md): host tests, old-image parity and bounded live path | Check acquisition and later consumers cheaply before another cohort claim; retain zero-credit diagnostics |
 | 2 | Clean source freeze, allocator, unused cohort and registered no-cache build | Bind exact source and collection image through `./qcsd-lab build --cohort-version N` |
 | 3 | ETF/veth diagnostics, pinned CDP and focused browser/teardown checks using the registered image | Verify timing/network support, browser identity and known late-failing behaviour |
 | 4 | Acquisition correctness and schema-2 acquisition authority | Clean build, acquisition correctness and pinned CDP authorise public acquisition after the authority independently verifies |
@@ -76,6 +93,18 @@ defense capture. The existing schema-1 route remains available: complete and
 verify browser qualification first, then supply its root when creating the
 four-gate acquisition authority. No historical or diagnostic receipt gains
 credit from this revised order.
+
+Fresh acquisition publication uses one allocator-authorised positive cohort
+version `N` across three create-only roots at their respective canonical
+parents:
+`artifacts/classifier-multiorigin100-v1-acquisition-vN`,
+`artifacts/classifier-multiorigin100-v1-stability-vN`, and
+`config/workloads-vN`. The same `N` is required for all three; symlink
+components are forbidden. The unsuffixed acquisition, stability and workload
+roots describe historical inputs and remain verify-only. A new source cannot
+continue publishing into those roots or reuse a prior cohort's versioned
+roots. The checked-in study contract records this prospective publication
+namespace separately from the scientific acquisition schema.
 
 Run source-bound Docker jobs serially. During a live job all agents only poll
 its existing process/session. Investigations, changes and documentation work
@@ -160,7 +189,7 @@ browser commands below before authority creation and supplies
 Use a fresh create-only authority destination for either route.
 
 For later actions, obtain exact input paths from the preceding verified
-receipts and the coordinator's help. After the schema-11 source has fresh
+receipts and the coordinator's help. After the schema-12 source has fresh
 verified acquisition authority, choose a create-only versioned root such as
 `artifacts/classifier-multiorigin100-v1-acquisition-v${COHORT_VERSION}`.
 Pass that same path as `--acquisition-root` to `acquisition-init` with
@@ -185,11 +214,13 @@ before invoking the watcher again. The registered action still covers up to
 two candidates; this limit changes only how many actions one watcher invocation
 performs. Omit `--max-actions` after the early batches are healthy to let the
 watcher supervise the remaining acquisition.
-The stability-receipt and admitted-workload roots remain canonical and
-create-only across cohorts. After a first such publication, a new source
-cohort can collide on the same candidate. Verify the first live batches before
-scaling the watcher, and preserve all published evidence if a later fix needs
-a new cohort; a complete namespace migration is required for that restart.
+`acquisition-init` requires both stability and workload roots to be absent,
+then creates them with the same `-vN` suffix as the acquisition root. A later
+source fix must use the allocator's next unused `N` and its own three roots;
+preserve all earlier
+publications. Verify the first live batches before scaling the watcher, and
+check that their checkpoint, stability receipts and prepared workloads agree
+on the cohort version and source binding.
 Complete acquisition with `acquisition-complete`; freeze pilot/final cohorts
 with `cohort` and campaigns with `campaigns --stage pilot|authoritative`.
 Before the full foundation or any fitting/capture role, run and verify the
@@ -251,27 +282,25 @@ Stability compares final URL, status, content type, body length, body SHA-256
 and semantic `resource_graph_sha256`. Per-run provenance differs, so raw
 prepared-manifest hashes are recorded but not used as longitudinal identity.
 
-Before arming a stability baseline, the prospective schema-11 screen probes a
+Before arming a stability baseline, the prospective schema-12 screen probes a
 known-good HTTP/3 control at `https://cloudflare-quic.com/`. If it fails, the
 screen blocks without candidate or second-control probes. If it passes, the
-screen performs two 12-second Neqo attempts per distinct selected-page URL
-request origin, then probes the control again. An origin passes only with two
-`known_valid=true` results and fails only with two classified connectivity
-timeouts or `IdleTimeout` results. With both controls passing, a candidate is
-technically rejected if **at least one** origin fails and every other origin
-has a definite pass or fail: the fixed timed batch would otherwise still
-probe the dead page. If all origins pass, full page preparation follows. Any
-mixed or ambiguous origin blocks, even if another origin fails; a failed
-second control also blocks. The screen is bound as diagnostic
-evidence in the candidate's navigation attempt. It covers selected-page
-request origins only; third-party resource origins discovered during timed
-preparation can still cause a missed-window blocker. It does not establish
+screen performs two 12-second Neqo attempts for **each exact canonical
+selected-page URL**, then probes the control again. Only a page with two
+`known_valid=true` results enters the timed baseline; its original page ordinal
+is retained. With both controls passing, the candidate is technically rejected
+only if **every** selected page has two classified connectivity timeouts or
+`IdleTimeout` results. If no page passes and any result is ambiguous, the
+screen blocks. A failed second control also blocks. The hash-bound navigation
+attempt retains every selected page and probe, including pages excluded from
+timed preparation. Third-party resource origins discovered during preparation
+can still cause a missed-window blocker. The screen does not establish
 that subresources or the full page graph are replayable. Resolved addresses are
 diagnostic observations only; this screen does not claim that Neqo connected to
 a pinned address. The registered candidate order and later complete-coverage
 requirements remain in force.
 
-| Schema-11 observation | Allowed batch publication after baseline |
+| Schema-12 observation | Allowed batch publication after baseline |
 |---|---|
 | `t+30s` | 25–35 seconds |
 | `t+5m` | 4 min 30 sec–35 min |
@@ -282,10 +311,11 @@ both pass, admit the first `t+30s` manifest unchanged. Retries must start
 within the same registered window with their own durable attempt ID; they
 cannot inherit a previous timestamp or relabel an orphaned manifest. Missed
 windows and infrastructure errors block completion rather than count as
-selective site rejections. This prospective schema-11 rule establishes
+selective site rejections. This prospective schema-12 rule establishes
 short-horizon reproducibility at durably published dispatch windows; the
 individual concurrent page workers' network starts are not separately
-timestamped. Historical schema-10 receipts retain their two-observation rule
+timestamped. Historical schema-11 receipts retain their selected-origin H3
+screen and remain verify-only. Historical schema-10 receipts retain their two-observation rule
 without a pre-baseline HTTP/3 screen. Historical schema-9 receipts retain their
 genuine 30-second, 24-hour and 72-hour rule and three-day claim boundary.
 
@@ -294,7 +324,7 @@ five live pages. Unresolved batches keep a 40-minute collision envelope; once
 all members have verified scientific terminals, the next batch may begin
 60 seconds after the latest terminal, subject to the watcher's proof that the
 previous Docker scope is empty. The paired, all-survivor 120-candidate
-schema-11 lower bound is 5 hours 29 minutes from first baseline to last
+schema-12 lower bound is 5 hours 29 minutes from first baseline to last
 earliest repeat with zero-duration page work. A five-minute terminal per
 batch gives 5 hours 59 minutes before real navigation, HTTP/3 screening,
 status and recovery overhead. Preserve the true dispatch windows;
@@ -315,6 +345,24 @@ Each numeric and final bundle binds cohort selection and assembly. Prefix
 qualification is separate from fitting traffic; the final bundle closes
 numeric parameters, prefixes, workload manifests and qualification evidence.
 The historic six-workload bundle remains valid for its own cohort only.
+
+The prospective Walkie-Talkie prefix specification and qualification receipt
+use schema 4 with scope `primary-origin-capacity-v1`. The complete frozen
+prepared multi-origin graph remains validated and hash-bound. Dependency
+batches are derived from that full graph; each stage is then filtered to the
+navigation root's HTTPS origin without changing stage numbers or collapsing
+empty stages. The capacity calculation counts only the projected primary-origin
+response bodies on the one qualified QUIC connection. Every resource not
+proved in those components stays in the spec's
+`unproven_application_resources` ledger, ordered by resource ID with its URL,
+status, byte length, body SHA-256 and reason (`secondary-origin` takes
+precedence over `outside-prefix-components`). Schema 4 therefore proves the
+staged primary-origin chaff capacity for that frozen input. It does not prove
+capacity or defence behaviour for secondary origins, later components, or the
+complete page. Those require the separate full-graph replay, capture and
+certification checks. Historical prefix spec and receipt schemas 2 and 3
+remain verifiable on their own contracts but gain no schema 4 credit or
+current-source authority.
 
 | Stage | Matrix | Count | Formal classifier input |
 |---|---|---:|:---:|
@@ -396,13 +444,15 @@ before each corresponding 1,600-sample formal block. Counterbalance modes with
 the deterministic cyclic Latin square. Origin-aware scheduling interleaves
 unrelated classes without changing membership or the 30-second per-origin
 cooldown. Use 120-second client timeout, 180-second capture, 1 MiB response
-ceiling, 64 MiB capture ceiling, 1,200-byte UDP ceiling and one-second settle.
+ceiling, 64 MiB capture ceiling, 1,200-byte outgoing UDP payload ceiling,
+65,527-byte incoming UDP payload limit and one-second settle.
 
 Preflight derives storage/time projections from the sealed 900-cell
 certification, requiring three times remaining projected evidence space.
-Report expected wall time before launch. This study has no separate rehearsal
-stage: old focused-study smoke/rehearsal matrices cannot substitute for its
-certification-derived preflight.
+Report expected wall time before launch. The pre-build acquisition rehearsal
+is diagnostic only. This study has no separate **evidentiary capture**
+rehearsal stage: old focused-study smoke/rehearsal matrices cannot substitute
+for its certification-derived preflight.
 
 Each accepted sample retains exactly:
 

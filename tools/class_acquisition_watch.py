@@ -44,8 +44,8 @@ CANDIDATE_COUNT = 600
 SCHEMA_VERSION = 1
 SOURCE_BINDING_PREIMAGE_SCHEMA_VERSION = 3
 BROWSER_DEFERRED_SOURCE_BINDING_PREIMAGE_SCHEMA_VERSION = 4
-ACQUISITION_SCHEMA_VERSION = 11
-HISTORICAL_ACQUISITION_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
+ACQUISITION_SCHEMA_VERSION = 12
+HISTORICAL_ACQUISITION_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11})
 CHECKPOINT_SCHEMA_VERSION = 3
 TERMINAL_SCHEMA_VERSION = 4
 COMPLETION_SCHEMA_VERSION = 4
@@ -1442,6 +1442,23 @@ _PREBASELINE_H3_SCREEN_CONTRACT = {
     "uncertain_outcome": "mixed-ambiguous-or-control-failure-blocks",
     "resolver_addresses": "diagnostic-only-no-neqo-pin-claim",
 }
+_PREBASELINE_H3_SCREEN_V2_CONTRACT = {
+    "schema_version": 2,
+    "policy": "prebaseline-exact-selected-page-neqo-h3-reachability-v2",
+    "control_url": "https://cloudflare-quic.com/",
+    "timeout_seconds": 12,
+    "control_probe_order": "before-and-after-selected-page-attempts",
+    "control_success": "both-known_valid-true",
+    "candidate_attempts_per_selected_page": 2,
+    "maximum_selected_pages": 5,
+    "pass": "at-least-one-exact-selected-page-known_valid-on-both-attempts",
+    "site_rejection": (
+        "all-exact-selected-pages-fail-both-attempts-with-classified-"
+        "http3-connectivity-timeout-or-idle-timeout"
+    ),
+    "uncertain_outcome": "mixed-ambiguous-or-control-failure-blocks",
+    "resolver_addresses": "diagnostic-only-no-neqo-pin-claim",
+}
 _ELIGIBILITY_INPUTS = [
     "page-safety", "prebaseline-h3-reachability", "short-window-technical-replay"
 ]
@@ -1663,19 +1680,33 @@ class WatchPaths:
         state_base: Path | None = None,
     ) -> WatchPaths:
         lab_root = Path(os.path.abspath(root))
+        canonical_acquisition = lab_root / "artifacts" / f"{STUDY_ID}-acquisition"
+        selected_acquisition = (
+            Path(os.path.abspath(acquisition_root))
+            if acquisition_root is not None
+            else canonical_acquisition
+        )
+        versioned_prefix = f"{canonical_acquisition.name}-v"
+        version = (
+            selected_acquisition.name[len(versioned_prefix) :]
+            if selected_acquisition.parent == canonical_acquisition.parent
+            and selected_acquisition.name.startswith(versioned_prefix)
+            else ""
+        )
+        publication_suffix = (
+            f"-v{version}"
+            if version and re.fullmatch(r"[1-9][0-9]*", version)
+            else ""
+        )
         return cls(
             lab_root=lab_root,
             launcher=lab_root / "qcsd-lab",
             candidate_catalogue=(
                 lab_root / "config/class-study/v1" / f"{STUDY_ID}-candidates.json"
             ),
-            acquisition_root=(
-                Path(os.path.abspath(acquisition_root))
-                if acquisition_root is not None
-                else lab_root / "artifacts" / f"{STUDY_ID}-acquisition"
-            ),
-            stability_root=lab_root / "artifacts" / f"{STUDY_ID}-stability",
-            workload_root=lab_root / "config/workloads",
+            acquisition_root=selected_acquisition,
+            stability_root=lab_root / "artifacts" / f"{STUDY_ID}-stability{publication_suffix}",
+            workload_root=lab_root / "config" / f"workloads{publication_suffix}",
             state_base=Path(
                 os.path.abspath(
                     state_base or Path("/var/tmp") / f"qcsd-class-watch-lifecycle-{os.getuid()}"
@@ -4829,10 +4860,10 @@ def _validate_normal_shutdown_disposal_summary(value: Any) -> None:
         or network_total > _NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT
         or fetch_total > _NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT
         or matched_total + fetch_only_context_disposal > fetch_total
-        or fetch_only_context_disposal > 1
+        or fetch_only_context_disposal > 2
         or (
-            fetch_only_context_disposal == 1
-            and (fetch_total != 1 or matched_total != 0)
+            fetch_only_context_disposal > 0
+            and (fetch_total != fetch_only_context_disposal or matched_total != 0)
         )
         or pending_fetch
         != fetch_total - matched_total - fetch_only_context_disposal
@@ -5909,7 +5940,7 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
     if acquisition_schema_version != ACQUISITION_SCHEMA_VERSION:
         raise WatchError("acquisition provenance uses an unsupported schema")
     if set(payload) != _PROVENANCE_PAYLOAD_KEYS:
-        raise WatchError("acquisition provenance payload fields differ from the v11 contract")
+        raise WatchError("acquisition provenance payload fields differ from the v12 contract")
     browser_tool = payload.get("browser_tool")
     if not any(
         _matches_json_contract(browser_tool, expected)
@@ -5935,7 +5966,7 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
         "domain_safety_policy": _DOMAIN_SAFETY_POLICY,
         "domain_safety_policy_sha256": _DOMAIN_SAFETY_POLICY_SHA256,
         "origin_policy": _ORIGIN_POLICY,
-        "prebaseline_h3_screen_contract": _PREBASELINE_H3_SCREEN_CONTRACT,
+        "prebaseline_h3_screen_contract": _PREBASELINE_H3_SCREEN_V2_CONTRACT,
         "eligibility_inputs": _ELIGIBILITY_INPUTS,
         "prohibited_inputs": _PROHIBITED_INPUTS,
     }
@@ -6009,6 +6040,7 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
         candidate_order=candidate_order,
         source=dict(source),
     )
+    _require_cohort_publication_paths(paths, binding)
     return binding
 
 
@@ -6016,6 +6048,24 @@ def _validate_acquisition_binding(paths: WatchPaths) -> AcquisitionBinding:
     binding = _validate_immutable_binding(paths)
     _validate_checkpoint(paths, binding)
     return binding
+
+
+def _require_cohort_publication_paths(
+    paths: WatchPaths, binding: AcquisitionBinding
+) -> None:
+    """Bind the prospective publication pair to the allocated cohort."""
+
+    version = binding.cohort_version
+    expected = (
+        paths.lab_root / "artifacts" / f"{STUDY_ID}-acquisition-v{version}",
+        paths.lab_root / "artifacts" / f"{STUDY_ID}-stability-v{version}",
+        paths.lab_root / "config" / f"workloads-v{version}",
+    )
+    observed = (paths.acquisition_root, paths.stability_root, paths.workload_root)
+    if observed != expected:
+        raise WatchError(
+            "acquisition, stability and workload roots differ from the allocated cohort"
+        )
 
 
 def _validate_checkpoint(paths: WatchPaths, binding: AcquisitionBinding) -> ReceiptSnapshot:
@@ -6060,6 +6110,37 @@ def _validate_checkpoint(paths: WatchPaths, binding: AcquisitionBinding) -> Rece
         baseline_by_candidate=baseline_by_candidate,
     )
     return snapshot
+
+
+def _reject_preexisting_unstarted_publications(
+    paths: WatchPaths,
+    checkpoint: ReceiptSnapshot,
+    binding: AcquisitionBinding,
+) -> None:
+    """Catch a previous cohort's canonical outputs before scheduling work.
+
+    Publication may have begun for a probing candidate before an interrupted
+    terminalisation, so leave those paths to the runner's idempotent recovery.
+    An unstarted candidate cannot have published stability or workload output
+    in this checkpoint.
+    """
+
+    states = checkpoint.value["payload"]["candidates"]
+    for candidate_id in binding.candidate_order:
+        state = states[candidate_id]
+        if state.get("terminal") is not None or state.get("state") not in {
+            "pending", "baseline-ready"
+        }:
+            continue
+        for destination in (
+            paths.stability_root / candidate_id,
+            paths.workload_root / f"{candidate_id}.json",
+        ):
+            if destination.exists() or destination.is_symlink():
+                raise WatchError(
+                    "canonical acquisition publication already exists for "
+                    f"unstarted candidate {candidate_id}: {destination}"
+                )
 
 
 def _candidate_id_list(
@@ -10152,7 +10233,8 @@ def watch_acquisition(
                 )
             _validate_lock_identity(active_paths.mutation_lock, descriptor)
             _revalidate_immutable_and_source(active_paths, binding, validate_source)
-            _validate_checkpoint(active_paths, binding)
+            checkpoint = _validate_checkpoint(active_paths, binding)
+            _reject_preexisting_unstarted_publications(active_paths, checkpoint, binding)
             last_source_check = monotonic()
             completed_actions = 0
 
@@ -10279,7 +10361,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--acquisition-root",
         type=Path,
-        help="initialized acquisition root (default: canonical study artifacts path)",
+        help="required initialized acquisition-vN root for the allocated cohort",
     )
     parser.add_argument(
         "--max-actions",
@@ -10388,6 +10470,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     ):
         print(
             "class acquisition watch failed: current scope root is internal-only",
+            file=sys.stderr,
+        )
+        return 2
+    if arguments.acquisition_root is None:
+        print(
+            "class acquisition watch requires --acquisition-root with an allocated -vN root",
             file=sys.stderr,
         )
         return 2

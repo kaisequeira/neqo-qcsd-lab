@@ -299,8 +299,10 @@ def extract_trace(
 def udp_ceiling_evidence(
     trace: list[ObserverPacket],
     expected_ceiling: int,
+    *,
+    incoming_limit: int | None = None,
 ) -> dict[str, int | bool | None]:
-    """Summarize whether direct packets satisfy one UDP-payload ceiling.
+    """Summarize direct UDP lengths under legacy or directional limits.
 
     A missing UDP length normally means IP fragmentation.  Such a capture
     cannot prove packet-unit integrity and therefore fails this evidence gate.
@@ -308,10 +310,24 @@ def udp_ceiling_evidence(
 
     if not 1_200 <= expected_ceiling <= 65_527:
         raise ValueError("expected UDP-payload ceiling is outside the QUIC range")
+    if incoming_limit is not None and not 1_200 <= incoming_limit <= 65_527:
+        raise ValueError("incoming UDP-payload limit is outside the QUIC range")
     observed = [packet.udp_payload_len for packet in trace if packet.udp_payload_len is not None]
     missing = len(trace) - len(observed)
-    oversized = sum(length > expected_ceiling for length in observed)
-    return {
+    outgoing = [
+        packet.udp_payload_len
+        for packet in trace
+        if packet.direction == "outgoing" and packet.udp_payload_len is not None
+    ]
+    incoming = [
+        packet.udp_payload_len
+        for packet in trace
+        if packet.direction == "incoming" and packet.udp_payload_len is not None
+    ]
+    outgoing_oversized = sum(length > expected_ceiling for length in outgoing)
+    incoming_oversized = sum(length > (incoming_limit or expected_ceiling) for length in incoming)
+    oversized = outgoing_oversized + incoming_oversized
+    evidence: dict[str, int | bool | None] = {
         "configured_udp_payload_ceiling": expected_ceiling,
         "observed_udp_payload_max": max(observed, default=None),
         "packets_with_udp_payload_length": len(observed),
@@ -319,6 +335,18 @@ def udp_ceiling_evidence(
         "oversized_udp_payload_packets": oversized,
         "valid": bool(trace) and missing == 0 and oversized == 0,
     }
+    if incoming_limit is not None:
+        evidence.update(
+            {
+                "incoming_udp_payload_limit": incoming_limit,
+                "outgoing_udp_payload_ceiling": expected_ceiling,
+                "incoming_observed_udp_payload_max": max(incoming, default=None),
+                "outgoing_observed_udp_payload_max": max(outgoing, default=None),
+                "incoming_oversized_udp_payload_packets": incoming_oversized,
+                "outgoing_oversized_udp_payload_packets": outgoing_oversized,
+            }
+        )
+    return evidence
 
 
 def write_normalized_trace(path: Path, trace: list[ObserverPacket]) -> None:

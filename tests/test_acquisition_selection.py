@@ -6,6 +6,7 @@ from dataclasses import replace
 
 import pytest
 
+from qcsd_lab.class_acquisition import _unblocked_admission_ids
 from qcsd_lab.acquisition_selection import (
     ACQUISITION_SELECTION_POLICY,
     derive_acquisition_selection,
@@ -73,6 +74,32 @@ def test_empty_terminal_inventory_does_not_use_catalogue_eligibility(candidates)
     assert plan["quota_unmet_strata"] == []
     assert _derive(tuple(replace(candidate, eligible=True) for candidate in candidates), {}) == plan
     _partition(plan)
+
+
+def test_infrastructure_blocker_pauses_only_its_stratum_new_admissions(candidates):
+    groups = _groups(candidates)
+    plan = _derive(candidates, {})
+    frozen_plan = deepcopy(plan)
+    blocked = [groups[0][0], groups[0][20], groups[2][-1]]
+
+    schedulable = _unblocked_admission_ids(candidates, plan, blocked)
+
+    assert schedulable == {
+        candidate_id
+        for index in (1, 3, 4)
+        for candidate_id in groups[index][:PILOT_CLASSES_PER_STRATUM]
+    }
+    assert plan == frozen_plan
+    assert plan["admission_ids"] == [
+        candidate_id for group in groups for candidate_id in group[:PILOT_CLASSES_PER_STRATUM]
+    ]
+    assert plan["complete"] is False
+
+
+def test_unknown_blocker_cannot_be_ignored_when_filtering_admission(candidates):
+    plan = _derive(candidates, {})
+    with pytest.raises(ValueError, match="unknown candidate"):
+        _unblocked_admission_ids(candidates, plan, ["unknown-candidate"])
 
 
 def test_exact_prefix_stops_at_24_eligible_preserving_unassessed_tail(candidates):

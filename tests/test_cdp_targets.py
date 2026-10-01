@@ -6569,6 +6569,118 @@ def test_exact_three_error_document_resources_are_suppressed_and_complete(
     _clean_shutdown(router)
 
 
+@pytest.mark.parametrize(
+    "column_pattern",
+    ((599, 599, 600), (632, 632, 633), (4068, 6408, 230), (0, 16_383, 1)),
+)
+@pytest.mark.parametrize(
+    "line_pattern", ((1504, 1504, 1504), (1494, 1495, 1496), (0, 4095, 2048))
+)
+def test_error_document_parser_positions_allow_render_variants(
+    pinned_error_resource_urls: tuple[str, str, str],
+    column_pattern: tuple[int, int, int],
+    line_pattern: tuple[int, int, int],
+) -> None:
+    # The third-image and boundary combinations are synthetic guard checks;
+    # they do not stand in for a complete live Chromium trace.
+    session = _FakeNonFlatSession()
+    router, observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _arm_error_document_resources(session)
+    observed_before = tuple(observed)
+    for index, url in enumerate(pinned_error_resource_urls):
+        session.emit(
+            (),
+            "Network.requestWillBeSent",
+            _error_resource_request(
+                url,
+                index,
+                initiator_changes={
+                    "columnNumber": column_pattern[index],
+                    "lineNumber": line_pattern[index],
+                },
+            ),
+        )
+        session.emit(
+            (), "Network.requestServedFromCache",
+            {"requestId": f"error-resource-{index}"},
+        )
+        session.emit((), "Network.responseReceived", _error_resource_response(url, index))
+        session.emit((), "Network.loadingFinished", _error_resource_terminal(index))
+        router.raise_if_failed()
+    assert tuple(observed) == observed_before
+    assert router.shutdown_ready is True
+    _clean_shutdown(router)
+
+
+def test_error_document_parser_lines_reject_out_of_bounds_value(
+    pinned_error_resource_urls: tuple[str, str, str],
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _arm_error_document_resources(session)
+    first_url = pinned_error_resource_urls[0]
+    session.emit(
+        (), "Network.requestWillBeSent",
+        _error_resource_request(
+            first_url, 0, initiator_changes={"lineNumber": 1494}
+        ),
+    )
+    session.emit(
+        (), "Network.requestServedFromCache",
+        {"requestId": "error-resource-0"},
+    )
+    session.emit((), "Network.responseReceived", _error_resource_response(first_url, 0))
+    session.emit((), "Network.loadingFinished", _error_resource_terminal(0))
+    router.raise_if_failed()
+    session.emit(
+        (), "Network.requestWillBeSent",
+        _error_resource_request(
+            pinned_error_resource_urls[1], 1,
+            initiator_changes={"lineNumber": 4096},
+        ),
+    )
+    with pytest.raises(CdpTargetIntegrityError, match="request signature was invalid"):
+        router.raise_if_failed()
+
+
+@pytest.mark.parametrize(
+    ("bad_index", "bad_column"),
+    ((1, -1), (1, 16_384), (2, True), (2, "6408")),
+)
+def test_error_document_parser_columns_reject_malformed_or_out_of_bounds_values(
+    pinned_error_resource_urls: tuple[str, str, str],
+    bad_index: int,
+    bad_column: object,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _arm_error_document_resources(session)
+    for index in range(bad_index):
+        url = pinned_error_resource_urls[index]
+        session.emit(
+            (), "Network.requestWillBeSent",
+            _error_resource_request(
+                url, index, initiator_changes={"columnNumber": 632}
+            ),
+        )
+        session.emit(
+            (), "Network.requestServedFromCache",
+            {"requestId": f"error-resource-{index}"},
+        )
+        session.emit((), "Network.responseReceived", _error_resource_response(url, index))
+        session.emit((), "Network.loadingFinished", _error_resource_terminal(index))
+        router.raise_if_failed()
+    session.emit(
+        (), "Network.requestWillBeSent",
+        _error_resource_request(
+            pinned_error_resource_urls[bad_index], bad_index,
+            initiator_changes={"columnNumber": bad_column},
+        ),
+    )
+    with pytest.raises(CdpTargetIntegrityError, match="request signature was invalid"):
+        router.raise_if_failed()
+
+
 def test_error_resource_exception_does_not_weaken_ordinary_cache_rejection() -> None:
     session = _FakeNonFlatSession()
     router, _observed = _router(session)
@@ -6645,9 +6757,14 @@ def test_error_resource_request_requires_consumed_denied_document_owner(
         ("initiator", "type", "script"),
         ("initiator", "url", _REMOVE_FIELD),
         ("initiator", "url", "chrome-error://different/"),
-        ("initiator", "lineNumber", 1505),
+        ("initiator", "lineNumber", True),
+        ("initiator", "lineNumber", -1),
+        ("initiator", "lineNumber", 4096),
         ("initiator", "columnNumber", True),
-        ("initiator", "columnNumber", 999),
+        ("initiator", "columnNumber", 1.5),
+        ("initiator", "columnNumber", "632"),
+        ("initiator", "columnNumber", -1),
+        ("initiator", "columnNumber", 16_384),
         ("initiator", "unexpected", True),
     ),
 )
@@ -9719,6 +9836,19 @@ def _normal_shutdown_fetch_only_ping(**changes: Any) -> dict[str, Any]:
     return event
 
 
+def _normal_shutdown_fetch_only_post_pair() -> tuple[dict[str, Any], dict[str, Any]]:
+    ping = _normal_shutdown_fetch_only_ping(
+        request={"method": "POST", "url": "https://dropbox.test/ping"}
+    )
+    xhr = _normal_shutdown_fetch_only_ping(
+        requestId="shutdown-xhr-fetch",
+        networkId="shutdown-xhr-network",
+        resourceType="XHR",
+        request={"method": "POST", "url": "https://dropbox.test/xhr"},
+    )
+    return ping, xhr
+
+
 def _valid_normal_shutdown_disposal_summary() -> dict[str, Any]:
     return {
         "schema_version": NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
@@ -9919,6 +10049,120 @@ def test_normal_shutdown_fetch_is_held_and_exactly_reconciled(
     }
 
 
+@pytest.mark.parametrize("order", ["network-fetch", "fetch-network"])
+def test_normal_shutdown_reconciles_root_post_fetch_xhr_type_alias(order: str) -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    network = _normal_shutdown_network(
+        requestId="shutdown-post-network",
+        type="Fetch",
+        request={"method": "POST", "url": "https://root.test/telemetry"},
+    )
+    fetch = _abort_fetch_pause(
+        requestId="shutdown-post-pause",
+        networkId="shutdown-post-network",
+        resourceType="XHR",
+        request={"method": "POST", "url": "https://root.test/telemetry"},
+    )
+    _begin_shutdown(router)
+    commands_before = list(session.commands)
+    observed_before = list(observed)
+    events = (
+        (("Network.requestWillBeSent", network), ("Fetch.requestPaused", fetch))
+        if order == "network-fetch"
+        else (("Fetch.requestPaused", fetch), ("Network.requestWillBeSent", network))
+    )
+    for method, event in events:
+        session.emit((), method, event)
+        router.raise_if_failed()
+    _finish(router)
+
+    assert session.commands == commands_before
+    assert observed == observed_before
+    assert router.normal_shutdown_disposal_summary["matched_total"] == 1
+    assert router.normal_shutdown_disposal_summary["pending_fetch_total"] == 0
+
+
+@pytest.mark.parametrize(
+    ("network_type", "fetch_type", "method"),
+    [
+        ("XHR", "Fetch", "POST"),
+        ("Fetch", "XHR", "GET"),
+        ("Fetch", "Image", "POST"),
+    ],
+)
+def test_normal_shutdown_post_type_alias_rejects_other_shapes(
+    network_type: str,
+    fetch_type: str,
+    method: str,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    _begin_shutdown(router)
+    request = {"method": method, "url": "https://root.test/telemetry"}
+    session.emit(
+        (),
+        "Network.requestWillBeSent",
+        _normal_shutdown_network(type=network_type, request=request),
+    )
+    session.emit(
+        (),
+        "Fetch.requestPaused",
+        _abort_fetch_pause(resourceType=fetch_type, request=request),
+    )
+    router.raise_if_failed()
+    with pytest.raises(CdpTargetIntegrityError, match="no exact Network occurrence"):
+        _finish(router)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["network-id", "url", "frame", "method", "real-terminal", "real-failure-terminal"],
+)
+def test_normal_shutdown_post_type_alias_requires_exact_identity_and_local_cancellation(
+    mutation: str,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    _begin_shutdown(router)
+    network = _normal_shutdown_network(
+        type="Fetch",
+        request={"method": "POST", "url": "https://root.test/telemetry"},
+    )
+    fetch = _abort_fetch_pause(
+        resourceType="XHR",
+        request={"method": "POST", "url": "https://root.test/telemetry"},
+    )
+    if mutation == "network-id":
+        fetch["networkId"] = "different-network"
+    elif mutation == "url":
+        fetch["request"] = {"method": "POST", "url": "https://root.test/other"}
+    elif mutation == "frame":
+        fetch["frameId"] = "different-frame"
+    elif mutation == "method":
+        fetch["request"] = {"method": "GET", "url": "https://root.test/telemetry"}
+    session.emit((), "Network.requestWillBeSent", network)
+    session.emit((), "Fetch.requestPaused", fetch)
+    router.raise_if_failed()
+    if mutation in {"real-terminal", "real-failure-terminal"}:
+        session.emit(
+            (),
+            (
+                "Network.loadingFinished"
+                if mutation == "real-terminal" else "Network.loadingFailed"
+            ),
+            (
+                {"requestId": network["requestId"], "timestamp": 1.0, "encodedDataLength": 0}
+                if mutation == "real-terminal"
+                else {"requestId": network["requestId"], "timestamp": 1.0,
+                      "type": "Fetch", "errorText": "net::ERR_ABORTED", "canceled": True}
+            ),
+        )
+        router.raise_if_failed()
+    with pytest.raises(CdpTargetIntegrityError, match="no exact Network occurrence"):
+        _finish(router)
+
+
 def test_normal_shutdown_holds_one_exact_fetch_only_root_ping_until_context_disposal(
 ) -> None:
     session = _FakeNonFlatSession()
@@ -9978,6 +10222,267 @@ def test_normal_shutdown_holds_one_exact_fetch_only_root_ping_until_context_disp
     }
 
 
+def test_normal_shutdown_holds_one_exact_fetch_only_root_post_ping_until_context_disposal(
+) -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    fetch = _normal_shutdown_fetch_only_ping(
+        request={"method": "POST", "url": "https://dropbox.test/telemetry"}
+    )
+    _begin_shutdown(router)
+    commands_before = list(session.commands)
+    observed_before = list(observed)
+
+    session.emit((), "Fetch.requestPaused", fetch)
+    router.raise_if_failed()
+    pending = router.normal_shutdown_disposal_summary
+    assert pending["terminal"] is False
+    assert pending["pending_fetch_total"] == 1
+    assert pending["fetch_only_context_disposal_total"] == 0
+    assert session.commands == commands_before
+    assert observed == observed_before
+
+    _finish(router)
+
+    summary = router.normal_shutdown_disposal_summary
+    assert summary["terminal"] is True
+    assert summary["network_total"] == 0
+    assert summary["fetch_total"] == 1
+    assert summary["matched_total"] == 0
+    assert summary["fetch_only_context_disposal_total"] == 1
+    assert summary["pending_fetch_total"] == 0
+    assert summary["terminal_outcomes"]["qcsd-shutdown"] == 0
+    assert session.commands == commands_before
+    assert observed == observed_before
+
+
+@pytest.mark.parametrize("order", ("ping-xhr", "xhr-ping"))
+def test_normal_shutdown_holds_exact_post_ping_xhr_pair_until_context_disposal(
+    order: str,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    ping, xhr = _normal_shutdown_fetch_only_post_pair()
+    _begin_shutdown(router)
+    commands_before = list(session.commands)
+    observed_before = list(observed)
+
+    for fetch in ((ping, xhr) if order == "ping-xhr" else (xhr, ping)):
+        session.emit((), "Fetch.requestPaused", fetch)
+        router.raise_if_failed()
+    pending = router.normal_shutdown_disposal_summary
+    assert pending["terminal"] is False
+    assert pending["network_total"] == 0
+    assert pending["pending_fetch_total"] == 2
+    assert pending["fetch_only_context_disposal_total"] == 0
+    assert session.commands == commands_before
+    assert observed == observed_before
+
+    _finish(router)
+
+    summary = router.normal_shutdown_disposal_summary
+    assert summary["terminal"] is True
+    assert summary["network_total"] == 0
+    assert summary["fetch_total"] == 2
+    assert summary["matched_total"] == 0
+    assert summary["fetch_only_context_disposal_total"] == 2
+    assert summary["pending_fetch_total"] == 0
+    assert summary["terminal_outcomes"]["qcsd-shutdown"] == 0
+    assert validate_normal_shutdown_disposal_summary(summary, require_terminal=True) == summary
+    assert session.commands == commands_before
+    assert observed == observed_before
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "prior-network-ping",
+        "prior-network-xhr",
+        "network-ping",
+        "unrelated-network",
+        "duplicate-network-id",
+        "duplicate-ping",
+        "xhr-get",
+        "ping-get",
+        "xhr-child-target",
+        "xhr-wrong-frame",
+        "xhr-http-url",
+        "xhr-redirect",
+        "third-fetch",
+    ),
+)
+def test_normal_shutdown_post_ping_xhr_pair_rejects_near_misses(
+    mutation: str,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    ping, xhr = _normal_shutdown_fetch_only_post_pair()
+    child: tuple[str, ...] = ()
+    if mutation in {"prior-network-ping", "prior-network-xhr"}:
+        target = ping if mutation == "prior-network-ping" else xhr
+        network = _normal_shutdown_network(
+            requestId=target["networkId"],
+            frameId=target["frameId"],
+            type=target["resourceType"],
+            request=target["request"],
+        )
+        session.emit((), "Network.requestWillBeSent", network)
+        session.emit(
+            (),
+            "Network.loadingFinished",
+            {"requestId": network["requestId"], "timestamp": 1.0, "encodedDataLength": 0},
+        )
+        router.raise_if_failed()
+    elif mutation == "duplicate-network-id":
+        xhr["networkId"] = ping["networkId"]
+    elif mutation == "duplicate-ping":
+        xhr["resourceType"] = "Ping"
+    elif mutation == "xhr-get":
+        xhr["request"] = {"method": "GET", "url": xhr["request"]["url"]}
+    elif mutation == "ping-get":
+        ping["request"] = {"method": "GET", "url": ping["request"]["url"]}
+    elif mutation == "xhr-child-target":
+        child = session.attach(
+            (),
+            session_id="post-xhr-child-session",
+            target_id="post-xhr-child-frame",
+            target_type="iframe",
+            parent_frame_id=session.root_frame_id,
+        )
+        xhr["frameId"] = "post-xhr-child-frame"
+    elif mutation == "xhr-wrong-frame":
+        xhr["frameId"] = "other-frame"
+    elif mutation == "xhr-http-url":
+        xhr["request"] = {"method": "POST", "url": "http://dropbox.test/xhr"}
+    elif mutation == "xhr-redirect":
+        xhr["networkId"] = ping["networkId"]
+        xhr["redirectedRequestId"] = ping["requestId"]
+    _begin_shutdown(router)
+    commands_before = list(session.commands)
+    observed_before = list(observed)
+    if mutation == "network-ping":
+        session.emit(
+            (),
+            "Network.requestWillBeSent",
+            _normal_shutdown_network(
+                requestId=ping["networkId"],
+                frameId=ping["frameId"],
+                type=ping["resourceType"],
+                request=ping["request"],
+            ),
+        )
+    elif mutation == "unrelated-network":
+        session.emit((), "Network.requestWillBeSent", _normal_shutdown_network())
+    session.emit((), "Fetch.requestPaused", ping)
+    session.emit(child, "Fetch.requestPaused", xhr)
+    if mutation == "third-fetch":
+        session.emit(
+            (),
+            "Fetch.requestPaused",
+            _normal_shutdown_fetch_only_ping(
+                requestId="extra-fetch",
+                networkId="extra-network",
+            ),
+        )
+    router.raise_if_failed()
+
+    with pytest.raises(CdpTargetIntegrityError, match="no exact Network occurrence"):
+        _finish(router)
+    assert session.commands == commands_before
+    assert observed == observed_before
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "pre-shutdown-network-id",
+        "same-id-network",
+        "wrong-resource-type",
+        "wrong-method",
+        "wrong-root-frame",
+        "child-target",
+        "redirect",
+        "second-fetch",
+        "non-https-url",
+    ),
+)
+def test_normal_shutdown_fetch_only_post_ping_rejects_non_disposal_shapes(
+    mutation: str,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    fetch = _normal_shutdown_fetch_only_ping(
+        request={"method": "POST", "url": "https://dropbox.test/telemetry"}
+    )
+    child: tuple[str, ...] = ()
+    if mutation == "pre-shutdown-network-id":
+        network = _normal_shutdown_network(
+            requestId=fetch["networkId"],
+            frameId=fetch["frameId"],
+            type=fetch["resourceType"],
+            request=fetch["request"],
+        )
+        session.emit((), "Network.requestWillBeSent", network)
+        session.emit(
+            (),
+            "Network.loadingFinished",
+            {"requestId": network["requestId"], "timestamp": 1.0, "encodedDataLength": 0},
+        )
+        router.raise_if_failed()
+    elif mutation == "wrong-resource-type":
+        fetch["resourceType"] = "Fetch"
+    elif mutation == "wrong-method":
+        fetch["request"] = {"method": "PUT", "url": fetch["request"]["url"]}
+    elif mutation == "wrong-root-frame":
+        fetch["frameId"] = "other-frame"
+    elif mutation == "child-target":
+        child = session.attach(
+            (),
+            session_id="post-ping-child-session",
+            target_id="post-ping-child-frame",
+            target_type="iframe",
+            parent_frame_id=session.root_frame_id,
+        )
+        fetch["frameId"] = "post-ping-child-frame"
+    elif mutation == "non-https-url":
+        fetch["request"] = {"method": "POST", "url": "http://dropbox.test/telemetry"}
+    _begin_shutdown(router)
+    commands_before = list(session.commands)
+    observed_before = list(observed)
+    if mutation == "same-id-network":
+        session.emit(
+            (),
+            "Network.requestWillBeSent",
+            _normal_shutdown_network(requestId=fetch["networkId"]),
+        )
+    session.emit(child, "Fetch.requestPaused", fetch)
+    if mutation == "redirect":
+        session.emit(
+            child,
+            "Fetch.requestPaused",
+            _normal_shutdown_fetch_only_ping(
+                requestId="post-ping-redirect",
+                redirectedRequestId=fetch["requestId"],
+                request={"method": "POST", "url": "https://dropbox.test/final"},
+            ),
+        )
+    elif mutation == "second-fetch":
+        session.emit(
+            (),
+            "Fetch.requestPaused",
+            _normal_shutdown_fetch_only_ping(
+                requestId="second-ping-fetch",
+                networkId="second-ping-network",
+            ),
+        )
+    router.raise_if_failed()
+
+    with pytest.raises(CdpTargetIntegrityError, match="no exact Network occurrence"):
+        _finish(router)
+    assert session.commands == commands_before
+    assert observed == observed_before
+
+
 @pytest.mark.parametrize(
     "changes",
     [
@@ -9985,11 +10490,11 @@ def test_normal_shutdown_holds_one_exact_fetch_only_root_ping_until_context_disp
         pytest.param(
             {
                 "request": {
-                    "method": "POST",
+                    "method": "PUT",
                     "url": "https://tracker.test/ping",
                 }
             },
-            id="non-get-method",
+            id="non-get-or-post-method",
         ),
         pytest.param(
             {

@@ -1237,7 +1237,7 @@ def test_typed_runner_failure_preserves_invalid_wakeup_receipt_but_complete_run_
     monkeypatch.setattr(
         capture_session,
         "udp_ceiling_evidence",
-        lambda *_a: {"valid": True},
+        lambda *_a, **_k: {"valid": True},
     )
 
     defense = capture_session.Defense(

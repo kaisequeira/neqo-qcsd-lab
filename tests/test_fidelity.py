@@ -267,11 +267,52 @@ def test_direct_runner_reconciliation_preserves_packet_and_tail_evidence(tmp_pat
     assert result.metrics["direct_unmatched_tail_packets"] == 1
     assert result.metrics["direct_unmatched_tail_bytes"] == 100
     assert result.metrics["direct_timestamp_error_max_ns"] == 0
+    assert result.metrics["direct_timestamp_basis"] == "outgoing-socket-handoff-vs-wire-v1"
+    assert result.metrics["direct_outgoing_clock_packets"] == 1
+    assert result.metrics["direct_incoming_causality_packets"] == 1
+    assert result.metrics["direct_incoming_ingress_to_drain_lag_max_ns"] == 0
     assert result.metrics["direct_clock_model"] == "constant-offset"
     assert result.metrics["direct_clock_segment_count"] == 1
     assert result.metrics["direct_clock_step_count"] == 0
     assert result.metrics["direct_trace_sha256"]
     assert result.metrics["direct_runner_packets_sha256"]
+
+
+def test_direct_runner_reconciliation_accepts_delayed_incoming_socket_drain(tmp_path):
+    run, packets, trace = _reconciliation_artifacts(tmp_path, tail_direction="incoming")
+    packets.write_text(
+        packets.read_text(encoding="utf-8").replace(
+            "incoming,2000,0,1200,,observed,",
+            "incoming,32000,0,1200,,observed,",
+        ),
+        encoding="utf-8",
+    )
+
+    result = reconcile_direct_runner_artifacts(run, packets, trace)
+
+    assert result.evidence_eligible is True
+    assert result.metrics["direct_matched_packets"] == 2
+    assert result.metrics["direct_timestamp_error_max_ns"] == 0
+    assert result.metrics["direct_incoming_ingress_to_drain_lag_max_ns"] == 30_000_000
+    assert result.metrics["direct_incoming_ingress_to_drain_lag_p95_ns"] == 30_000_000
+    assert result.metrics["direct_incoming_causality_slack_max_ns"] == 0
+
+
+def test_direct_runner_reconciliation_rejects_incoming_after_reported_drain(tmp_path):
+    run, packets, trace = _reconciliation_artifacts(tmp_path, tail_direction="incoming")
+    trace.write_text(
+        trace.read_text(encoding="utf-8").replace(
+            "1000000,incoming,1242,-1242",
+            "15000000,incoming,1242,-1242",
+        ).replace(
+            "2000000,incoming,100,-100",
+            "16000000,incoming,100,-100",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="incoming packet appears after its user-space drain"):
+        reconcile_direct_runner_artifacts(run, packets, trace)
 
 
 def test_direct_runner_reconciliation_rejects_contradictory_error_class(tmp_path):

@@ -68,6 +68,7 @@ def fit_traffic_morphing(
     edges = _validated_buckets(buckets)
     distributions: dict[tuple[str, str], tuple[np.ndarray, int]] = {}
     corpus_bucket_counts: list[dict[str, object]] = []
+    incoming_overflow: list[dict[str, object]] = []
     for name in names:
         workload_counts: dict[str, object] = {"workload_id": name}
         for direction in ("outgoing", "incoming"):
@@ -77,6 +78,19 @@ def fit_traffic_morphing(
             distributions[(name, direction)] = (distribution, total)
             workload_counts[direction] = [int(value) for value in counts]
         corpus_bucket_counts.append(workload_counts)
+        overflow_lengths = [
+            packet.length_bytes
+            for trace in traces[name]
+            for packet in trace.packets
+            if packet.direction == "incoming" and packet.length_bytes > edges[-1]
+        ]
+        incoming_overflow.append(
+            {
+                "workload_id": name,
+                "packet_count": len(overflow_lengths),
+                "maximum_udp_payload_bytes": max(overflow_lengths, default=None),
+            }
+        )
 
     candidates: dict[tuple[str, str], DirectedFit] = {}
     for source in names:
@@ -108,8 +122,10 @@ def fit_traffic_morphing(
         "udp_payload_ceiling": edges[-1],
     }
     diagnostics: dict[str, object] = {
-        "algorithm": "all-directed-padding-only-lp-then-minimum-cost-derangement",
+        "algorithm": "all-directed-padding-only-lp-then-minimum-cost-derangement-incoming-topcode-v1",
         "corpus_bucket_counts": corpus_bucket_counts,
+        "incoming_projection": "top-code-to-terminal-bucket-1200-v1",
+        "incoming_overflow": incoming_overflow,
         "candidate_costs": [
             {
                 "source": source,
@@ -152,6 +168,12 @@ def _size_distribution_with_counts(
         for packet in trace.packets:
             if packet.direction != direction:
                 continue
+            if (
+                type(packet.length_bytes) is not int
+                or not 1 <= packet.length_bytes <= 65_527
+                or (direction == "outgoing" and packet.length_bytes > edges[-1])
+            ):
+                raise ValueError(f"fitting traces contain an invalid {direction} UDP length")
             index = min(
                 int(np.searchsorted(edges, packet.length_bytes, side="left")), len(edges) - 1
             )

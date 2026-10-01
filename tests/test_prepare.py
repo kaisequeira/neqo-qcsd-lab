@@ -317,6 +317,8 @@ def install_fake_preparation(
     changing_resource: int | None = None,
     packet_rows: list[tuple[str, str, str]] | None = None,
     resolved_ceiling: object = 1_200,
+    outgoing_ceiling: object = 1_200,
+    incoming_limit: object = 65_527,
     probe_lengths: dict[int, tuple[int, int]] | None = None,
     stable_bytes: dict[int, int] | None = None,
 ) -> list[list[str]]:
@@ -391,6 +393,8 @@ def install_fake_preparation(
                         "published_qcsd_commit": "published",
                         "migration_commit": "migration",
                         "completion_status": "complete",
+                        "outgoing_udp_payload_ceiling": outgoing_ceiling,
+                        "incoming_udp_payload_limit": incoming_limit,
                         "resolved_configuration": {
                             "max_udp_payload_size": resolved_ceiling,
                         },
@@ -493,8 +497,9 @@ def test_prepare_writes_one_policy_free_frozen_workload(tmp_path, monkeypatch):
     assert "coverage_admission" not in value["preparation"]
     qualification = value["preparation"]["udp_payload_qualification"]
     assert qualification == {
-        "schema_version": 1,
-        "configured_udp_payload_ceiling": 1_200,
+        "schema_version": 2,
+        "outgoing_udp_payload_ceiling": 1_200,
+        "incoming_udp_payload_limit": 65_527,
         "runs": [
             {
                 "run_index": index,
@@ -778,17 +783,47 @@ def test_prepare_rejects_changing_response_identity_without_output(tmp_path, mon
     assert not (tmp_path / "changing.json").exists()
 
 
-@pytest.mark.parametrize("direction", ["incoming", "outgoing"])
-def test_prepare_rejects_any_absolute_udp_ceiling_violation(direction, tmp_path, monkeypatch):
+@pytest.mark.parametrize("incoming_length", [1_452, 65_527])
+def test_prepare_accepts_standard_large_incoming_udp_payloads(
+    incoming_length, tmp_path, monkeypatch
+):
+    install_fake_preparation(
+        monkeypatch,
+        packet_rows=[("incoming", "0", str(incoming_length)), ("outgoing", "1", "1200")],
+    )
+
+    prepared = prepare.prepare_workload(
+        "large-incoming",
+        "https://page.test/",
+        ["https://page.test", "https://cdn.test"],
+        output_root=tmp_path,
+        stability_interval_seconds=0,
+    )
+    receipt = json.loads(prepared.path.read_text())["preparation"]["udp_payload_qualification"]
+    assert receipt["schema_version"] == 2
+    for run in receipt["runs"]:
+        assert run["total"]["observed_udp_payload_max"] == incoming_length
+        assert run["incoming"]["observed_udp_payload_max"] == incoming_length
+        assert run["incoming"]["oversized_packet_count"] == 0
+        assert run["outgoing"]["oversized_packet_count"] == 0
+
+
+@pytest.mark.parametrize(
+    ("direction", "length"),
+    [("outgoing", 1_201), ("incoming", 65_528)],
+)
+def test_prepare_rejects_directional_udp_limit_violation(
+    direction, length, tmp_path, monkeypatch
+):
     other = "outgoing" if direction == "incoming" else "incoming"
     install_fake_preparation(
         monkeypatch,
-        packet_rows=[(direction, "0", "1280"), (other, "1", "1200")],
+        packet_rows=[(direction, "0", str(length)), (other, "1", "1200")],
     )
 
     with pytest.raises(
         prepare.PreparationError,
-        match=r"stability run 1 observed 1 UDP payload.*above the 1200-byte ceiling",
+        match=rf"stability run 1 observed 1 UDP payload.*above the directional limits.*{direction} 1 above",
     ):
         prepare.prepare_workload(
             "oversized",
@@ -807,6 +842,30 @@ def test_prepare_rejects_a_runner_ceiling_mismatch(tmp_path, monkeypatch):
     with pytest.raises(prepare.PreparationError, match="did not resolve the 1200-byte"):
         prepare.prepare_workload(
             "wrong-ceiling",
+            "https://page.test/",
+            ["https://page.test", "https://cdn.test"],
+            output_root=tmp_path,
+            stability_interval_seconds=0,
+        )
+
+
+@pytest.mark.parametrize(
+    ("directional_field", "wrong_value"),
+    [
+        ("outgoing_ceiling", 1_201),
+        ("incoming_limit", 1_200),
+        ("outgoing_ceiling", 1_200.0),
+        ("incoming_limit", 65_527.0),
+    ],
+)
+def test_prepare_rejects_a_runner_directional_limit_mismatch(
+    directional_field, wrong_value, tmp_path, monkeypatch
+):
+    install_fake_preparation(monkeypatch, **{directional_field: wrong_value})
+
+    with pytest.raises(prepare.PreparationError, match="directional UDP-payload limits"):
+        prepare.prepare_workload(
+            "wrong-directional-limit",
             "https://page.test/",
             ["https://page.test", "https://cdn.test"],
             output_root=tmp_path,
@@ -838,7 +897,11 @@ def test_udp_qualification_rejects_malformed_semantic_packet_fields(row, message
 
     with pytest.raises(prepare.PreparationError, match=message):
         prepare._qualify_udp_payloads(
-            {"resolved_configuration": {"max_udp_payload_size": 1_200}},
+            {
+                "resolved_configuration": {"max_udp_payload_size": 1_200},
+                "outgoing_udp_payload_ceiling": 1_200,
+                "incoming_udp_payload_limit": 65_527,
+            },
             path,
             run_index=0,
             expected_ceiling=1_200,
@@ -853,7 +916,11 @@ def test_udp_qualification_requires_both_directions_and_required_columns(tmp_pat
     )
     with pytest.raises(prepare.PreparationError, match="no incoming packets"):
         prepare._qualify_udp_payloads(
-            {"resolved_configuration": {"max_udp_payload_size": 1_200}},
+            {
+                "resolved_configuration": {"max_udp_payload_size": 1_200},
+                "outgoing_udp_payload_ceiling": 1_200,
+                "incoming_udp_payload_limit": 65_527,
+            },
             path,
             run_index=0,
             expected_ceiling=1_200,
@@ -862,7 +929,11 @@ def test_udp_qualification_requires_both_directions_and_required_columns(tmp_pat
     path.write_text("direction,connection\nincoming,0\n", encoding="utf-8")
     with pytest.raises(prepare.PreparationError, match="missing required columns"):
         prepare._qualify_udp_payloads(
-            {"resolved_configuration": {"max_udp_payload_size": 1_200}},
+            {
+                "resolved_configuration": {"max_udp_payload_size": 1_200},
+                "outgoing_udp_payload_ceiling": 1_200,
+                "incoming_udp_payload_limit": 65_527,
+            },
             path,
             run_index=0,
             expected_ceiling=1_200,

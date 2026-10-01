@@ -232,6 +232,19 @@ def prepared_manifest():
     }
 
 
+def directionally_qualified_manifest():
+    value = prepared_manifest()
+    receipt = value["preparation"]["udp_payload_qualification"]
+    receipt["schema_version"] = 2
+    del receipt["configured_udp_payload_ceiling"]
+    receipt["outgoing_udp_payload_ceiling"] = 1_200
+    receipt["incoming_udp_payload_limit"] = 65_527
+    for run in receipt["runs"]:
+        run["incoming"]["observed_udp_payload_max"] = 1_452
+        run["total"]["observed_udp_payload_max"] = 1_452
+    return value
+
+
 def class_study_prepared_manifest():
     value = prepared_manifest()
     value["resources"][1]["type"] = "Script"
@@ -650,7 +663,7 @@ def test_checked_in_r2_workloads_are_navigation_valid_but_predate_ceiling_qualif
     value = json.loads((root / f"config/workloads/{workload_id}.json").read_text())
 
     validate_manifest(value)
-    with pytest.raises(ValueError, match="absolute-1200 UDP-payload qualification"):
+    with pytest.raises(ValueError, match="versioned UDP-payload qualification"):
         validate_research_preparation(value, workload_id=workload_id)
 
 
@@ -920,7 +933,7 @@ def test_research_preparation_rejects_a_legacy_unqualified_receipt():
 
     # General validation retains historical preparation evidence. Research use does not.
     validate_manifest(value)
-    with pytest.raises(ValueError, match="absolute-1200 UDP-payload qualification"):
+    with pytest.raises(ValueError, match="versioned UDP-payload qualification"):
         validate_research_preparation(value, workload_id="prepared-site")
 
 
@@ -956,6 +969,70 @@ def test_udp_payload_qualification_receipt_is_exact_and_tamper_evident(mutation,
         receipt["runs"][0]["total"]["packet_count"] = 4
     else:
         receipt["runs"][0]["total"]["observed_udp_payload_max"] = 1_199
+
+    with pytest.raises(ValueError, match=message):
+        validate_manifest(value)
+
+
+def test_directional_udp_qualification_accepts_large_incoming_and_historical_v1():
+    version_one = prepared_manifest()
+    version_two = directionally_qualified_manifest()
+
+    for value in (version_one, version_two):
+        validate_manifest(value)
+        validate_research_preparation(value, workload_id="prepared-site")
+    assert version_one["preparation"]["udp_payload_qualification"]["schema_version"] == 1
+    assert version_two["preparation"]["udp_payload_qualification"]["runs"][0]["total"][
+        "observed_udp_payload_max"
+    ] == 1_452
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("extra-field", "exact directional schema"),
+        ("wrong-outgoing-ceiling", "outgoing ceiling must be exactly 1200"),
+        ("wrong-incoming-limit", "incoming limit must be exactly 65527"),
+        ("missing-run", "cover every stability run"),
+        ("unordered-run", "runs must be ordered"),
+        ("invalid-hash", "packets hash is invalid"),
+        ("incoming-over-limit", "oversized incoming packet"),
+        ("outgoing-over-limit", "oversized outgoing packet"),
+        ("oversized", "recorded an oversized packet"),
+        ("count-mismatch", "packet counts disagree"),
+        ("max-mismatch", "maxima disagree"),
+        ("oversized-count-mismatch", "oversized packet counts disagree"),
+    ],
+)
+def test_directional_udp_qualification_rejects_tampering(mutation, message):
+    value = directionally_qualified_manifest()
+    receipt = value["preparation"]["udp_payload_qualification"]
+    run = receipt["runs"][0]
+    if mutation == "extra-field":
+        receipt["unexpected"] = True
+    elif mutation == "wrong-outgoing-ceiling":
+        receipt["outgoing_udp_payload_ceiling"] = 1_201
+    elif mutation == "wrong-incoming-limit":
+        receipt["incoming_udp_payload_limit"] = 1_200
+    elif mutation == "missing-run":
+        receipt["runs"].pop()
+    elif mutation == "unordered-run":
+        receipt["runs"][1]["run_index"] = 0
+    elif mutation == "invalid-hash":
+        run["packets_sha256"] = "not-a-hash"
+    elif mutation == "incoming-over-limit":
+        run["incoming"]["observed_udp_payload_max"] = 65_528
+    elif mutation == "outgoing-over-limit":
+        run["outgoing"]["observed_udp_payload_max"] = 1_201
+    elif mutation == "oversized":
+        run["incoming"]["oversized_packet_count"] = 1
+        run["total"]["oversized_packet_count"] = 1
+    elif mutation == "count-mismatch":
+        run["total"]["packet_count"] += 1
+    elif mutation == "max-mismatch":
+        run["total"]["observed_udp_payload_max"] = 1_451
+    else:
+        run["total"]["oversized_packet_count"] = 1
 
     with pytest.raises(ValueError, match=message):
         validate_manifest(value)

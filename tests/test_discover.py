@@ -311,6 +311,8 @@ def _failed_cors_terminal(blocked_reason: str) -> dict[str, object]:
 def _exercise_failed_cors_preflight_exception(
     *,
     order: str = "options-first",
+    dependent_method: str = "POST",
+    dependent_resource: str = "Fetch",
     mutation: str | None = None,
 ) -> tuple[dict, dict, dict]:
     """Construct the one narrowly receipted Network-without-Fetch exception."""
@@ -328,7 +330,8 @@ def _exercise_failed_cors_preflight_exception(
     preflight_cause: str | None = post_id
     preflight_redirected = False
     preflight_response = False
-    post_resource = "Fetch"
+    post_method = dependent_method
+    post_resource = dependent_resource
     post_initiator = "script"
     post_cause: str | None = None
     post_redirected = False
@@ -336,7 +339,9 @@ def _exercise_failed_cors_preflight_exception(
     policy_decision = "fail"
     policy_reason = "unsafe method: OPTIONS"
     preflight_audit_reason = "unsafe method: OPTIONS"
-    post_audit_reason = "unsafe method: POST"
+    post_audit_reason = (
+        "origin not approved" if dependent_method == "GET" else "unsafe method: POST"
+    )
     preflight_outcome = "failed"
     post_outcome = "failed"
     preflight_terminal = _failed_cors_terminal("inspector")
@@ -364,7 +369,9 @@ def _exercise_failed_cors_preflight_exception(
     elif mutation == "preflight-resource":
         preflight_resource = "Fetch"
     elif mutation == "dependent-resource":
-        post_resource = "XHR"
+        post_resource = "Document" if dependent_method == "GET" else "XHR"
+    elif mutation == "dependent-method":
+        post_method = "HEAD"
     elif mutation == "preflight-initiator":
         preflight_initiator = "script"
     elif mutation == "dependent-initiator":
@@ -386,7 +393,9 @@ def _exercise_failed_cors_preflight_exception(
     elif mutation == "preflight-audit-reason":
         preflight_audit_reason = "origin not approved"
     elif mutation == "dependent-audit-reason":
-        post_audit_reason = "origin not approved"
+        post_audit_reason = (
+            "unsafe method: GET" if dependent_method == "GET" else "origin not approved"
+        )
     elif mutation == "preflight-finished":
         preflight_outcome = "finished"
     elif mutation == "dependent-finished":
@@ -481,7 +490,7 @@ def _exercise_failed_cors_preflight_exception(
         ledger.add_network(
             source,
             request_id=post_id,
-            method="POST",
+            method=post_method,
             url=_FAILED_CORS_URL,
             resource_type=post_resource,
             initiator_type=post_initiator,
@@ -494,7 +503,7 @@ def _exercise_failed_cors_preflight_exception(
             ledger.add_network(
                 source,
                 request_id=post_id,
-                method="POST",
+                method=post_method,
                 url=_FAILED_CORS_URL,
                 resource_type=post_resource,
                 initiator_type=post_initiator,
@@ -576,6 +585,79 @@ def test_failed_cors_preflight_exception_accepts_both_request_orders_and_claims_
             "preflight_occurrence_id": "preflight-occurrence",
         },
     }
+
+
+@pytest.mark.parametrize("order", ["options-first", "post-first"])
+@pytest.mark.parametrize("resource", ["XHR", "Fetch"])
+def test_failed_cors_preflight_exception_accepts_only_excluded_get_xhr_or_fetch(
+    order: str,
+    resource: str,
+) -> None:
+    preflight_audit, fetch_audit, get_audit = _exercise_failed_cors_preflight_exception(
+        order=order,
+        dependent_method="GET",
+        dependent_resource=resource,
+    )
+
+    assert preflight_audit["mapping"]["reason"] == "unsafe method: OPTIONS"
+    assert fetch_audit["network_occurrence_id"] == "preflight-occurrence"
+    assert get_audit == {
+        "mapping": {"kind": "exclusion", "reason": "origin not approved"},
+        "interception_exception": {
+            "kind": "blocked-after-failed-cors-preflight-v1",
+            "preflight_occurrence_id": "preflight-occurrence",
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing-causal-id",
+        "wrong-causal-id",
+        "wrong-source",
+        "wrong-url",
+        "duplicate-preflight",
+        "duplicate-dependent",
+        "preflight-resource",
+        "dependent-resource",
+        "dependent-method",
+        "preflight-initiator",
+        "dependent-initiator",
+        "dependent-causal-id",
+        "preflight-redirect",
+        "dependent-redirect",
+        "preflight-response",
+        "dependent-response",
+        "fetch-decision",
+        "fetch-reason",
+        "preflight-audit-reason",
+        "dependent-audit-reason",
+        "preflight-finished",
+        "dependent-finished",
+        "preflight-error-text",
+        "dependent-error-text",
+        "preflight-canceled",
+        "dependent-canceled",
+        "preflight-blocked-reason",
+        "dependent-blocked-reason",
+        "preflight-cors-status",
+        "dependent-cors-status",
+        "dependent-terminal-before-preflight",
+    ],
+)
+def test_failed_cors_preflight_get_exception_rejects_mutated_proof(mutation: str) -> None:
+    with pytest.raises(DiscoveryIntegrityError, match="ledgers differ"):
+        _exercise_failed_cors_preflight_exception(
+            dependent_method="GET",
+            dependent_resource="XHR",
+            mutation=mutation,
+            order=(
+                "post-first"
+                if mutation == "dependent-terminal-before-preflight"
+                else "options-first"
+            ),
+        )
 
 
 @pytest.mark.parametrize(

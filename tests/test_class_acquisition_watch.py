@@ -11,7 +11,7 @@ import signal
 import stat
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -21,7 +21,7 @@ import pytest
 from tools import class_acquisition_watch as watch
 
 _REAL_VALIDATE_HOST_SOURCE = watch._validate_host_source
-_CANONICAL_RUNNER_ROOT = f"/lab/artifacts/{watch.STUDY_ID}-acquisition"
+_CANONICAL_RUNNER_ROOT = f"/lab/artifacts/{watch.STUDY_ID}-acquisition-v23"
 
 
 def _mock_safe_user_runtime_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -868,6 +868,7 @@ class Fixture:
 def acquisition(tmp_path: Path) -> Fixture:
     paths = watch.WatchPaths.from_lab_root(
         tmp_path,
+        acquisition_root=tmp_path / "artifacts" / f"{watch.STUDY_ID}-acquisition-v23",
         state_base=tmp_path / "host-watch-state",
     )
     paths.candidate_catalogue.parent.mkdir(parents=True)
@@ -1365,7 +1366,7 @@ def acquisition(tmp_path: Path) -> Fixture:
         "domain_safety_policy_sha256": watch._DOMAIN_SAFETY_POLICY_SHA256,
         "origin_policy": copy.deepcopy(watch._ORIGIN_POLICY),
         "prebaseline_h3_screen_contract": copy.deepcopy(
-            watch._PREBASELINE_H3_SCREEN_CONTRACT
+            watch._PREBASELINE_H3_SCREEN_V2_CONTRACT
         ),
         "eligibility_inputs": copy.deepcopy(watch._ELIGIBILITY_INPUTS),
         "prohibited_inputs": copy.deepcopy(watch._PROHIBITED_INPUTS),
@@ -2203,7 +2204,10 @@ class FakeRunner:
     @staticmethod
     def _paths(command: tuple[str, ...] | list[str]) -> watch.WatchPaths:
         launcher = Path(command[0])
-        return watch.WatchPaths.from_lab_root(launcher.parent)
+        return watch.WatchPaths.from_lab_root(
+            launcher.parent,
+            acquisition_root=launcher.parent / "artifacts" / f"{watch.STUDY_ID}-acquisition-v23",
+        )
 
 
 class FakeClock:
@@ -2228,7 +2232,8 @@ class FakeMonotonic:
 
 
 def test_due_work_uses_exact_command_environment_and_paths(acquisition: Fixture) -> None:
-    assert watch.ACQUISITION_SCHEMA_VERSION == 11
+    assert watch.ACQUISITION_SCHEMA_VERSION == 12
+    assert 11 in watch.HISTORICAL_ACQUISITION_SCHEMA_VERSIONS
     assert watch.CHECKPOINT_SCHEMA_VERSION == 3
     assert watch.TERMINAL_SCHEMA_VERSION == 4
     assert watch.COMPLETION_SCHEMA_VERSION == 4
@@ -2629,6 +2634,79 @@ def test_complete_exits_without_creating_completion_receipt(acquisition: Fixture
 
     assert not (acquisition.paths.acquisition_root / "completion.json").exists()
     assert len(runner.calls) == 3
+
+
+@pytest.mark.parametrize("publication", ("stability", "workload"))
+def test_watcher_rejects_prior_cohort_publication_before_acquisition_action(
+    acquisition: Fixture, publication: str
+) -> None:
+    candidate_id = acquisition.candidate_ids[0]
+    if publication == "stability":
+        destination = acquisition.paths.stability_root / candidate_id / "page-00.json"
+        destination.parent.mkdir()
+    else:
+        destination = acquisition.paths.workload_root / f"{candidate_id}.json"
+    destination.write_text("old cohort evidence\n", encoding="utf-8")
+    runner = FakeRunner([])
+
+    with pytest.raises(watch.WatchError, match="canonical acquisition publication already exists"):
+        watch.watch_acquisition(paths=acquisition.paths, runner=runner)
+
+    assert destination.read_text(encoding="utf-8") == "old cohort evidence\n"
+    assert [call[0] for call in runner.calls] == [
+        watch._admission_command(acquisition.paths),
+        watch._browser_egress_verify_command(
+            acquisition.paths, watch._validate_immutable_binding(acquisition.paths)
+        ),
+    ]
+
+
+def test_watcher_rejects_publication_root_from_another_allocation(
+    acquisition: Fixture,
+) -> None:
+    wrong_stability = (
+        acquisition.paths.lab_root / "artifacts" / f"{watch.STUDY_ID}-stability-v24"
+    )
+    wrong_stability.mkdir()
+    wrong_paths = replace(acquisition.paths, stability_root=wrong_stability)
+
+    with pytest.raises(watch.WatchError, match="roots differ from the allocated cohort"):
+        watch._validate_immutable_binding(wrong_paths)
+
+
+def test_watcher_preserves_same_cohort_published_terminal_on_resume(
+    acquisition: Fixture,
+) -> None:
+    complete = _details(terminal=watch.CANDIDATE_COUNT)
+    _materialise_selection(acquisition, complete["selection"])
+    candidate_id = acquisition.candidate_ids[0]
+    stability = acquisition.paths.stability_root / candidate_id / "page-00.json"
+    stability.parent.mkdir()
+    stability.write_text("same cohort stability\n", encoding="utf-8")
+    workload = acquisition.paths.workload_root / f"{candidate_id}.json"
+    workload.write_text("same cohort workload\n", encoding="utf-8")
+
+    terminal_path = acquisition.paths.acquisition_root / "terminals" / f"{candidate_id}.json"
+    terminal = json.loads(terminal_path.read_text(encoding="utf-8"))["payload"]
+    terminal["stability_receipt"] = {
+        "path": str(stability.resolve()),
+        "sha256": hashlib.sha256(stability.read_bytes()).hexdigest(),
+    }
+    terminal["admitted_workload"] = {
+        "path": str(workload.resolve()),
+        "sha256": hashlib.sha256(workload.read_bytes()).hexdigest(),
+    }
+    _write_receipt(terminal_path, "qcsd-class-study-acquisition-terminal", terminal)
+    checkpoint = _checkpoint_payload(acquisition)
+    checkpoint["candidates"][candidate_id]["terminal"]["sha256"] = hashlib.sha256(
+        terminal_path.read_bytes()
+    ).hexdigest()
+    _replace_checkpoint(acquisition, checkpoint)
+    runner = FakeRunner([_completed(_result("acquisition-status", complete))])
+
+    assert watch.watch_acquisition(paths=acquisition.paths, runner=runner)["details"]["complete"]
+    assert stability.read_text(encoding="utf-8") == "same cohort stability\n"
+    assert workload.read_text(encoding="utf-8") == "same cohort workload\n"
 
 
 def test_browser_egress_deep_verify_is_exactly_once_before_status(
@@ -4450,13 +4528,16 @@ def test_watcher_pinned_cdp_contract_matches_runtime_contract() -> None:
     assert watch._PREBASELINE_H3_SCREEN_CONTRACT == (
         class_acquisition.PREBASELINE_H3_SCREEN_CONTRACT
     )
+    assert watch._PREBASELINE_H3_SCREEN_V2_CONTRACT == (
+        class_acquisition.PREBASELINE_H3_SCREEN_V2_CONTRACT
+    )
     assert watch._ELIGIBILITY_INPUTS == class_acquisition.ELIGIBILITY_INPUTS
     assert watch._PROHIBITED_INPUTS == class_acquisition.PROHIBITED_INPUTS
     assert watch._ACQUISITION_ACTION_TIMING_CONTRACT == (class_acquisition.ACTION_TIMING_CONTRACT)
     assert watch._BASELINE_SCHEDULING_CONTRACT == (class_acquisition.BASELINE_SCHEDULING_CONTRACT)
 
 
-@pytest.mark.parametrize("historical_schema", (1, 2, 3, 4, 5, 6, 7, 8, 9, 10))
+@pytest.mark.parametrize("historical_schema", (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11))
 def test_watcher_treats_historical_provenance_as_verify_only(
     acquisition: Fixture,
     historical_schema: int,
@@ -4509,6 +4590,45 @@ def test_watcher_accepts_one_fetch_only_context_disposal(
     )
 
     watch._validate_pinned_cdp_observation(copy.deepcopy(observation))
+
+
+def test_watcher_accepts_two_fetch_only_context_disposals(
+    acquisition: Fixture,
+) -> None:
+    receipt = json.loads(acquisition.pinned_cdp_path.read_text(encoding="utf-8"))
+    observation = receipt["payload"]["observation"]
+    observation["topology"]["normal_shutdown_disposal_summary"] = (
+        _normal_shutdown_disposal_summary(
+            fetch_total=2,
+            fetch_only_context_disposal_total=2,
+        )
+    )
+
+    watch._validate_pinned_cdp_observation(copy.deepcopy(observation))
+
+
+@pytest.mark.parametrize(
+    ("fetch_total", "held_total"),
+    ((3, 3), (3, 2)),
+)
+def test_watcher_rejects_excess_or_mixed_fetch_only_context_disposal(
+    acquisition: Fixture,
+    fetch_total: int,
+    held_total: int,
+) -> None:
+    receipt = json.loads(acquisition.pinned_cdp_path.read_text(encoding="utf-8"))
+    observation = receipt["payload"]["observation"]
+    summary = _normal_shutdown_disposal_summary(
+        fetch_total=fetch_total,
+        fetch_only_context_disposal_total=held_total,
+    )
+    if fetch_total != held_total:
+        summary["network_total"] = 1
+        summary["terminal_outcomes"]["Network.loadingFailed"] = 1
+    observation["topology"]["normal_shutdown_disposal_summary"] = summary
+
+    with pytest.raises(watch.WatchError, match="not terminal and consistent"):
+        watch._validate_pinned_cdp_observation(copy.deepcopy(observation))
 
 
 def test_watcher_rejects_resealed_pinned_cdp_topology_tamper(
@@ -5548,7 +5668,8 @@ def test_main_maps_latched_terminal_signals_to_resume_status(
         "watch_acquisition",
         lambda **_kwargs: (_ for _ in ()).throw(watch.WatchSignalInterrupt(signum)),
     )
-    assert watch.main([]) == status
+    root = Path.cwd() / "artifacts" / f"{watch.STUDY_ID}-acquisition-v1"
+    assert watch.main(["--acquisition-root", str(root)]) == status
     assert "resume from checkpoint" in capsys.readouterr().err
 
 

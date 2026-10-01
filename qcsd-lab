@@ -5938,6 +5938,46 @@ class_require_acquisition_path() {
   fi
 }
 
+class_require_publication_path() {
+  local value="$1"
+  local expected="$2"
+  local label="$3"
+  if [[ -z "${value}" || "${value}" == "${expected}" ]]; then
+    return
+  fi
+  local prefix="${expected}-v"
+  local version="${value:${#prefix}}"
+  if [[ "${value:0:${#prefix}}" != "${prefix}" ||
+        ! "${version}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "class-study ${label} must use the canonical path or a versioned sibling" >&2
+    exit 2
+  fi
+}
+
+class_require_paired_publications() {
+  local runner="$1"
+  local stability="$2"
+  local workload="$3"
+  local require_versioned="$4"
+  [[ -n "${runner}" ]] || return 0
+  class_require_acquisition_path "${runner}" "${class_acquisition_root}"
+  local suffix="${runner#${class_acquisition_root}}"
+  if [[ "${require_versioned}" == "1" && -z "${suffix}" ]]; then
+    echo "class-study fresh acquisition requires a versioned -vN root" >&2
+    exit 2
+  fi
+  if [[ -n "${stability}" &&
+        "${stability}" != "${class_stability_root}${suffix}" ]]; then
+    echo "class-study stability root differs from the acquisition cohort" >&2
+    exit 2
+  fi
+  if [[ -n "${workload}" &&
+        "${workload}" != "${class_workload_root}${suffix}" ]]; then
+    echo "class-study workload root differs from the acquisition cohort" >&2
+    exit 2
+  fi
+}
+
 class_require_canonical_parent() {
   local value="$1"
   local expected="$2"
@@ -6326,7 +6366,7 @@ PY
       "${class_path_hosts[--candidate-catalogue]:-}" \
       "${class_candidate_catalogue}" \
       "candidate catalogue"
-    class_require_canonical_path \
+    class_require_publication_path \
       "${class_path_hosts[--workload-root]:-}" \
       "${class_workload_root}" \
       "workload root"
@@ -6341,10 +6381,37 @@ PY
     class_require_acquisition_path \
       "${class_path_hosts[--acquisition-root]:-}" \
       "${class_acquisition_root}"
-    class_require_canonical_path \
+    class_require_publication_path \
       "${class_path_hosts[--stability-root]:-}" \
       "${class_stability_root}" \
       "stability root"
+    class_publication_owner="${class_path_hosts[--acquisition-root]:-}"
+    if [[ -z "${class_publication_owner}" &&
+          -n "${class_path_hosts[--acquisition-completion]:-}" ]]; then
+      class_publication_owner="$(dirname "${class_path_hosts[--acquisition-completion]}")"
+    fi
+    class_require_paired_publications \
+      "${class_publication_owner}" \
+      "${class_path_hosts[--stability-root]:-}" \
+      "${class_path_hosts[--workload-root]:-}" \
+      "$([[ "${class_study_action}" == "acquisition-init" ||
+             "${class_study_action}" == "acquisition-run" ||
+             "${class_study_action}" == "acquisition-complete" ||
+             "${class_study_action}" == "cohort" ]] && echo 1 || echo 0)"
+    if [[ "${class_study_action}" == "acquisition-init" &&
+          -n "${class_publication_owner}" ]]; then
+      class_publication_suffix="${class_publication_owner#${class_acquisition_root}}"
+      class_require_directory "${class_artifacts_root}" "stability publication parent"
+      class_require_directory "${class_config_root}" "workload publication parent"
+      for class_new_publication in \
+        "${class_stability_root}${class_publication_suffix}" \
+        "${class_workload_root}${class_publication_suffix}"; do
+        if [[ -e "${class_new_publication}" || -L "${class_new_publication}" ]]; then
+          echo "class-study acquisition-init publication already exists: ${class_new_publication}" >&2
+          exit 2
+        fi
+      done
+    fi
     class_require_canonical_path \
       "${class_path_hosts[--qualification-publication-root]:-}" \
       "${class_qualification_sets_root}" \
@@ -6516,6 +6583,7 @@ PY
     acquisition-init)
       class_require_output_parent "${class_path_hosts[--acquisition-root]:-}" "acquisition runner"
       class_add_unique class_guarded_rw_dirs "$(dirname "${class_path_hosts[--acquisition-root]}")"
+      class_add_unique class_guarded_rw_dirs "$(dirname "${class_workload_root}")"
       ;;
     acquisition-run)
       class_require_directory "${class_path_hosts[--acquisition-root]:-}" "acquisition runner"

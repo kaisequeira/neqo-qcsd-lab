@@ -977,7 +977,8 @@ def test_status_labels_historical_acquisition_authority_without_using_it_as_gate
 @pytest.mark.parametrize(
     ("acquisition_schema", "completion_schema", "checkpoint_schema", "current"),
     (
-        (11, 4, 3, True),
+        (12, 4, 3, True),
+        (11, 4, 3, False),
         (10, 4, 3, False),
         (9, 4, 3, False),
         (8, 4, 3, False),
@@ -1450,11 +1451,16 @@ def test_acquisition_init_passes_versioned_root_to_runner(
     catalogue = layout.study_config_root / f"{STUDY_ID}-candidates.json"
     runner = Path(f"{layout.acquisition_root}-v127")
     authority = layout.artifacts_root / "class-study-acquisition-authority-v127.json"
+    layout.artifacts_root.mkdir()
+    layout.config_root.mkdir()
     observed: dict[str, object] = {}
     monkeypatch.setattr(
         attestation,
         "validate_class_acquisition_authority",
-        lambda *_args, **_kwargs: {"recorded_at": "2026-09-29T11:05:10Z"},
+        lambda *_args, **_kwargs: {
+            "recorded_at": "2026-09-29T11:05:10Z",
+            "cohort_version": 127,
+        },
     )
 
     def initialise(root: Path, **kwargs: object) -> Path:
@@ -1482,6 +1488,76 @@ def test_acquisition_init_passes_versioned_root_to_runner(
     assert observed["candidate_catalogue_path"] == catalogue
     assert observed["acquisition_authority"] == authority
     assert not runner.exists()
+    assert pipeline.publication_roots_for_acquisition_root(runner)[0].is_dir()
+    assert pipeline.publication_roots_for_acquisition_root(runner)[1].is_dir()
+
+
+@pytest.mark.parametrize("blocked_root", ("stability", "workload"))
+@pytest.mark.parametrize("blocker", ("symlink", "nonempty"))
+def test_acquisition_init_refuses_unsafe_scoped_publication_before_runner(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    blocked_root: str,
+    blocker: str,
+) -> None:
+    import qcsd_lab.class_acquisition as acquisition
+    import qcsd_lab.class_attestation as attestation
+
+    monkeypatch.setattr(util, "LAB_ROOT", tmp_path / "lab")
+    layout = pipeline.class_study_layout()
+    layout.artifacts_root.mkdir(parents=True)
+    layout.config_root.mkdir()
+    runner = Path(f"{layout.acquisition_root}-v127")
+    stability, workloads = pipeline.publication_roots_for_acquisition_root(runner)
+    blocked = stability if blocked_root == "stability" else workloads
+    if blocker == "symlink":
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        blocked.symlink_to(outside, target_is_directory=True)
+    else:
+        blocked.mkdir()
+        (blocked / "previous.json").write_text("previous cohort\n", encoding="utf-8")
+    monkeypatch.setattr(
+        attestation,
+        "validate_class_acquisition_authority",
+        lambda *_args, **_kwargs: {
+            "recorded_at": "2026-09-29T11:05:10Z",
+            "cohort_version": 127,
+        },
+    )
+    monkeypatch.setattr(
+        acquisition,
+        "initialise_runner",
+        lambda *_args, **_kwargs: pytest.fail("unsafe publication reached runner mutation"),
+    )
+
+    with pytest.raises(ValueError, match="symbolic-link component|publication already exists"):
+        pipeline.run_class_study_action(
+            "acquisition-init",
+            candidate_catalogue_path=layout.study_config_root / f"{STUDY_ID}-candidates.json",
+            acquisition_root=runner,
+            acquisition_started_at="2026-09-29T11:14:36Z",
+            acquisition_authority=layout.artifacts_root / "authority-v127.json",
+        )
+    assert not runner.exists()
+
+
+def test_acquisition_run_rejects_cross_cohort_publication_pair_before_backend(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(util, "LAB_ROOT", tmp_path)
+    layout = pipeline.class_study_layout()
+    runner = Path(f"{layout.acquisition_root}-v127")
+    stability, _workloads = pipeline.publication_roots_for_acquisition_root(runner)
+
+    with pytest.raises(ValueError, match="workload root differs from acquisition cohort"):
+        pipeline.run_class_study_action(
+            "acquisition-run",
+            acquisition_root=runner,
+            stability_root=stability,
+            workload_root=Path(f"{layout.workload_root}-v128"),
+        )
 
 
 def test_status_refits_numeric_and_final_bundles_against_unique_stage_result(
@@ -4908,9 +4984,8 @@ def test_acquisition_run_is_canonically_bounded_and_reports_wait_policy(
     catalogue = layout.study_config_root / f"{STUDY_ID}-candidates.json"
     catalogue.parent.mkdir(parents=True)
     catalogue.write_text("{}\n", encoding="utf-8")
-    runner = layout.acquisition_root
-    stability = layout.stability_root
-    workloads = layout.workload_root
+    runner = Path(f"{layout.acquisition_root}-v127")
+    stability, workloads = pipeline.publication_roots_for_acquisition_root(runner)
     for path in (runner, stability, workloads):
         path.mkdir(parents=True)
     seen = {}
@@ -5133,15 +5208,16 @@ def test_acquisition_and_stability_use_allowed_roots(
             stability_root=tmp_path / "artifacts/alternate-stability",
         )
 
-    # The acquisition boundary accepts the canonical root or one exact
-    # versioned sibling, while the stability root remains canonical.
-    pipeline._validate_fresh_layout_arguments(
+    # Fresh mutations use the same allocation number on all three roots.
+    runner = Path(f"{layout.acquisition_root}{version_suffix}")
+    stability, workloads = pipeline.publication_roots_for_acquisition_root(runner)
+    kwargs = dict(
         action=action,
         stage=None,
         candidate_catalogue_path=None,
-        acquisition_root=Path(f"{layout.acquisition_root}{version_suffix}"),
-        stability_root=layout.stability_root,
-        workload_root=None,
+        acquisition_root=runner,
+        stability_root=stability,
+        workload_root=workloads,
         pilot_cohort_receipt_path=None,
         pilot_cohort_assembly_path=None,
         final_cohort_receipt_path=None,
@@ -5160,6 +5236,13 @@ def test_acquisition_and_stability_use_allowed_roots(
         final_bundle_root=None,
         destination=None,
     )
+    if not version_suffix and action in {
+        "acquisition-init", "acquisition-run", "acquisition-complete"
+    }:
+        with pytest.raises(ValueError, match="requires a versioned"):
+            pipeline._validate_fresh_layout_arguments(**kwargs)
+    else:
+        pipeline._validate_fresh_layout_arguments(**kwargs)
 
 
 def test_authoritative_selection_uses_pilot_numeric_canonical_lineage(

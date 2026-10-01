@@ -33,6 +33,7 @@ from .class_catalogue import (
     validate_page_candidate,
     validate_stability_receipt,
 )
+from .class_layout import require_cohort_publication_roots
 from .class_study import (
     STUDY_ID,
     ClassCandidate,
@@ -50,6 +51,10 @@ FINAL_SELECTION_RECEIPT_TYPE = "qcsd-class-study-final-selection-input"
 FINAL_SELECTION_SCHEMA_VERSION = 2
 _PAGE_FILE = re.compile(r"page-([0-4][0-9])[.]json\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_VERSIONED_STABILITY_ROOT = re.compile(
+    rf"{re.escape(STUDY_ID)}-stability-v([1-9][0-9]*)\Z"
+)
+_VERSIONED_WORKLOAD_ROOT = re.compile(r"workloads-v([1-9][0-9]*)\Z")
 
 
 def build_evidenced_cohort(
@@ -89,6 +94,9 @@ def build_evidenced_cohort(
     completion_payload = _require_current_acquisition_completion(
         completion_payload,
         runner_root=completion_path.parent,
+    )
+    require_cohort_publication_roots(
+        completion_path.parent, stability, workloads, require_versioned=True
     )
     known_ids = {candidate.candidate_id for candidate in candidates}
     unexpected = sorted(
@@ -353,6 +361,20 @@ def validate_cohort_assembly_receipt(
             or root_name in {".", ".."}
         ):
             raise ValueError(f"cohort assembly {key} identity is invalid")
+    if schema_version == SCHEMA_VERSION:
+        stability_version = _VERSIONED_STABILITY_ROOT.fullmatch(payload["stability_root"])
+        workload_version = _VERSIONED_WORKLOAD_ROOT.fullmatch(payload["workload_root"])
+        claims_version = (
+            payload["stability_root"].startswith(f"{STUDY_ID}-stability-v")
+            or payload["workload_root"].startswith("workloads-v")
+        )
+        if claims_version and (stability_version is None or workload_version is None):
+            raise ValueError("cohort assembly publication root versions differ")
+        if (
+            stability_version is not None
+            and stability_version.group(1) != workload_version.group(1)
+        ):
+            raise ValueError("cohort assembly publication root versions differ")
 
     records = payload["candidates"]
     if not isinstance(records, list) or len(records) != len(selection.candidates):
@@ -493,6 +515,9 @@ def _build_evidenced_cohort(
     completion_payload = _require_current_acquisition_completion(
         completion_payload,
         runner_root=completion_path.parent,
+    )
+    require_cohort_publication_roots(
+        completion_path.parent, stability, workloads
     )
     known_ids = {candidate.candidate_id for candidate in candidates}
     unexpected = sorted(

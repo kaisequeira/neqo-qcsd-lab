@@ -752,6 +752,27 @@ def _persist_kernel_qdisc_observation(
     return destination
 
 
+def _runner_directional_udp_policy(
+    run_data: Mapping[str, Any], expected_outgoing: int
+) -> tuple[bool, Any, Any, bool]:
+    """Dispatch historical single-ceiling and new directional runner receipts."""
+
+    incoming_key = "incoming_udp_payload_limit"
+    outgoing_key = "outgoing_udp_payload_ceiling"
+    present = incoming_key in run_data or outgoing_key in run_data
+    incoming = run_data.get(incoming_key)
+    outgoing = run_data.get(outgoing_key)
+    valid = not present or (
+        incoming_key in run_data
+        and outgoing_key in run_data
+        and type(incoming) is int
+        and incoming == 65_527
+        and type(outgoing) is int
+        and outgoing == expected_outgoing
+    )
+    return present, incoming, outgoing, valid
+
+
 def _collect_attempt(
     attempt: Path,
     manifest: Path,
@@ -1186,11 +1207,27 @@ def _collect_attempt(
         if isinstance(resolved_configuration, dict)
         else None
     )
-    ceiling_evidence = udp_ceiling_evidence(trace, context.udp_payload_ceiling)
-    runner_ceiling_valid = resolved_udp_payload_ceiling == context.udp_payload_ceiling
+    (
+        directional_policy_present,
+        runner_incoming_limit,
+        runner_outgoing_ceiling,
+        runner_directional_policy_valid,
+    ) = _runner_directional_udp_policy(run_data, context.udp_payload_ceiling)
+    ceiling_evidence = udp_ceiling_evidence(
+        trace,
+        context.udp_payload_ceiling,
+        incoming_limit=65_527 if directional_policy_present else None,
+    )
+    runner_ceiling_valid = (
+        resolved_udp_payload_ceiling == context.udp_payload_ceiling
+        and runner_directional_policy_valid
+    )
     ceiling_evidence.update(
         {
             "runner_resolved_udp_payload_ceiling": resolved_udp_payload_ceiling,
+            "runner_incoming_udp_payload_limit": runner_incoming_limit,
+            "runner_outgoing_udp_payload_ceiling": runner_outgoing_ceiling,
+            "runner_directional_policy_present": directional_policy_present,
             "runner_binding_valid": runner_ceiling_valid,
             "valid": bool(ceiling_evidence["valid"] and runner_ceiling_valid),
         }

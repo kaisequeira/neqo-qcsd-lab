@@ -12,6 +12,9 @@ import pytest
 
 import qcsd_lab.class_fitting as class_fitting
 import qcsd_lab.class_pipeline as class_pipeline
+import qcsd_lab.experiment as experiment_module
+import qcsd_lab.verification as verification_module
+from qcsd_lab import orchestrator
 from qcsd_lab.class_cohort import ASSEMBLY_RECEIPT_TYPE
 from qcsd_lab.class_fitting import (
     AUTHORITATIVE_PARAMETER_INPUT_POLICY,
@@ -53,11 +56,14 @@ from qcsd_lab.class_study import (
     canonical_json_sha256,
     validate_study_receipt,
 )
+from qcsd_lab.class_run_binding import resolve_class_sample_run_binding
 from qcsd_lab.fitting_morphing import minimum_cost_derangement
 from qcsd_lab.fitting_trace import FittingTrace
 from qcsd_lab.fitting_walkie_talkie import minimum_weight_perfect_matching_from_costs
 from qcsd_lab.util import sha256_bytes, sha256_file
 from qcsd_lab.verification import VerifiedResult
+from tests.test_class_cohort import _synthetic_acquisition_prefix_loaded_pilot_campaign
+from tests.test_fitting_bundle import _event_csv
 
 EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
@@ -640,6 +646,165 @@ def test_verified_result_loader_rejects_cross_product_and_source_tampering(tmp_p
             trace_loader=trace_loader,
             run_binding_resolver=run_binding_resolver,
         )
+
+
+def test_sealed_synthetic_pilot_result_reaches_default_numeric_refit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bridge admitted 120-class inputs into the default fitter with zero credit.
+
+    The fixture substitutes only the external foundation/frozen-campaign and
+    kernel scheduler receipts. It still creates and verifies a real local seal
+    and loads all 480 typed traces. Compact deterministic fitters keep the
+    120-class matching calculation bounded; algorithm tests cover their solver.
+    """
+    campaign, admission, cohort_path, assembly_path, _workload_root = (
+        _synthetic_acquisition_prefix_loaded_pilot_campaign(tmp_path, monkeypatch)
+    )
+    root = tmp_path / "diagnostic-fitting-result"
+    inputs = root / "inputs"
+    workload_inputs = inputs / "workloads"
+    workload_inputs.mkdir(parents=True)
+    (inputs / "campaign.yml").write_bytes(campaign.source_bytes)
+    (inputs / "class-study-cohort.json").write_bytes(cohort_path.read_bytes())
+    (inputs / "class-study-cohort-assembly.json").write_bytes(assembly_path.read_bytes())
+    workload_records = []
+    for workload in campaign.workloads:
+        relative = f"inputs/workloads/{workload.id}.json"
+        (root / relative).write_bytes(workload.source_bytes)
+        workload_records.append(
+            {
+                "id": workload.id,
+                "visits": workload.visits,
+                "manifest": relative,
+                "sha256": workload.sha256,
+                "resource_count": workload.resource_count,
+                "origin_count": workload.origin_count,
+            }
+        )
+    configuration = {
+        "campaign_sha256": sha256_file(inputs / "campaign.yml"),
+        "profile": campaign.profile,
+        "request_policies": list(campaign.request_policies),
+        "workloads": workload_records,
+        "defenses": [
+            {"name": defense.name, "kind": defense.kind, "baseline": defense.baseline}
+            for defense in campaign.defenses
+        ],
+        "limits": campaign.limits.as_dict(),
+        "evidence_role": campaign.evidence_role,
+        "class_study_cohort_sha256": admission.cohort_sha256,
+        "class_study_cohort_assembly_sha256": admission.assembly_sha256,
+        "class_study_id": "classifier-multiorigin100-v1",
+        "class_study_launch_sha256": "e" * 64,
+        "class_study_foundation_sha256": "f" * 64,
+        "public_origin_policy": {
+            "environment": "QCSD_PUBLIC_ORIGIN_ONLY",
+            "required_value": "1",
+            "resolution": "resolve-once-reject-any-non-public-connect-exact-address",
+        },
+    }
+    plan = orchestrator.plan_campaign(campaign)
+    assert len(plan) == 480
+    experiment = experiment_module.initialize_experiment(
+        root,
+        name=campaign.name,
+        purpose=campaign.purpose,
+        run_id="diagnostic-001",
+        source=_source(),
+        configuration=configuration,
+        samples=plan,
+        started_at="2026-10-01T00:00:00+00:00",
+    )
+    # These are independent live authority contracts; synthetic test receipts
+    # are deliberately not presented as a foundation or scheduler attestation.
+    monkeypatch.setattr(verification_module, "_validate_frozen_contract", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        experiment_module, "validate_accepted_scheduler_runtime_receipt", lambda *_a: None
+    )
+    workload_index = {workload.id: index for index, workload in enumerate(campaign.workloads)}
+    for sample in plan:
+        experiment_module.transition_sample(
+            experiment, sample["sample_id"], "running", increment_attempt=True
+        )
+        binding = resolve_class_sample_run_binding(
+            root,
+            configuration,
+            sample,
+            allow_derived_runtime_without_frozen_copy=True,
+        )
+        sample_root = root / sample["path"]
+        neqo = sample_root / "neqo"
+        neqo.mkdir(parents=True)
+        run = {
+            "completion_status": "complete",
+            "terminal_evidence_render_errors": [],
+            "seed": sample["seed"],
+            "request_policy": sample["request_policy"],
+            "workload_hash_sha256": binding.input_bindings["runtime_workload_sha256"],
+            "max_response_bytes": configuration["limits"]["max_response_bytes"],
+            "resolved_configuration": {
+                "max_udp_payload_size": 1_200,
+                "defense": {"kind": "none"},
+            },
+            "responses": [
+                {
+                    "resource_id": resource_id,
+                    "status": status,
+                    "bytes": size,
+                    "body_sha256": body_sha256,
+                    "outcome": outcome,
+                    "complete": True,
+                }
+                for resource_id, status, size, body_sha256, outcome in binding.expected_responses
+            ],
+            "endpoints": [{"origin": origin} for origin in binding.expected_origins],
+            "defense_start_monotonic_ns": 0,
+            "application_completion_monotonic_ns": 75_000_000,
+        }
+        (neqo / "run.json").write_bytes(canonical_json_bytes(run))
+        (neqo / "events.csv").write_text(
+            _event_csv(
+                workload_index[sample["workload_id"]] % 12,
+                sample["visit"],
+                half_duplex=sample["request_policy"] == "half-duplex",
+            ),
+            encoding="utf-8",
+        )
+        (neqo / "packets.csv").write_text("direction,monotonic_us\n", encoding="utf-8")
+        (neqo / "schedule.csv").write_text("target_time_us,direction,size\n", encoding="utf-8")
+        (sample_root / "capture.pcapng").write_bytes(b"synthetic-zero-credit\n")
+        experiment_module.accept_sample(root, experiment, sample["sample_id"], eligible=True)
+    experiment_module.finalize_experiment(
+        root,
+        experiment,
+        status="complete",
+        completed_at="2026-10-01T00:10:00+00:00",
+    )
+    verification_module.seal_result(root)
+    assert verification_module.verify_result(root).experiment["summary"]["accepted"] == 480
+
+    artifacts_root = tmp_path / "diagnostic-numeric-artifacts"
+    artifacts_root.mkdir()
+    numeric_root = create_numeric_fitting_bundle(
+        root,
+        artifacts_root=artifacts_root,
+        stage=PILOT_STAGE,
+        expected_cohort_receipt_path=cohort_path,
+        expected_cohort_assembly_receipt_path=assembly_path,
+        fitters=_fitters(),
+    )
+    refitted = verify_numeric_fitting_bundle(
+        numeric_root, source_result_root=root, fitters=_fitters()
+    )
+    assert refitted.stage == PILOT_STAGE
+    assert refitted.provenance["fitting_contract"]["samples_consumed"] == 480
+    assert refitted.provenance["cohort"]["receipt_sha256"] == admission.cohort_sha256
+
+    first_events = root / plan[0]["path"] / "neqo/events.csv"
+    first_events.write_text(first_events.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="modified authoritative evidence"):
+        verify_numeric_fitting_bundle(numeric_root, source_result_root=root, fitters=_fitters())
 
 
 def _qualification_context(
@@ -1313,6 +1478,11 @@ def test_schema_six_prefix_projection_does_not_double_sender_framing(
         "selected_chaff_resource",
         lambda _manifest, _workload: ({"id": 9}, {"bytes": 48_000}),
     )
+    monkeypatch.setattr(
+        qualification,
+        "_primary_origin_prefix_projection",
+        lambda _manifest, *, workload_id, component_count: ("https://class-a.test", [[0]], []),
+    )
 
     def capacity_plan(*, bursts: Sequence[Mapping[str, int]], **_kwargs: Any):
         captured["bursts"] = list(bursts)
@@ -1334,6 +1504,8 @@ def test_schema_six_prefix_projection_does_not_double_sender_framing(
     )
 
     assert captured["bursts"] == [{"outgoing": 7, "incoming": 4}]
+    assert spec["schema_version"] == 4
+    assert spec["qualification_scope"] == "primary-origin-capacity-v1"
     assert spec["numeric_profile"]["bursts"][0]["outgoing"] == 7
     assert spec["numeric_profile_derivation"].endswith("no-additional-sender-framing")
     assert (
@@ -1351,6 +1523,145 @@ def test_schema_six_prefix_projection_does_not_double_sender_framing(
             tampered,
             workload_id="class-a",
             application_manifest={},
+        )
+
+
+def _multiorigin_schema_six_prefix_inputs(
+    bursts: list[dict[str, int]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    from tests.test_capture_acceptance import _controlled_complex_manifest
+
+    manifest = _controlled_complex_manifest("127.0.0.1", 4433, "127.0.0.2", 4434)
+    walkie = {
+        "schema_version": 6,
+        "packet_size": 1200,
+        "profiles": [{"real": "complex", "decoy": "other", "bursts": bursts}],
+    }
+    return manifest, walkie
+
+
+def test_schema_four_prefix_preserves_graph_depth_and_primary_origin_capacity() -> None:
+    manifest, walkie = _multiorigin_schema_six_prefix_inputs(
+        [
+            {"outgoing": 4, "incoming": 129},
+            {"outgoing": 1, "incoming": 0},
+            {"outgoing": 1, "incoming": 0},
+        ]
+    )
+    spec = build_schema_six_prefix_spec(
+        "complex",
+        walkie,
+        source_walkie_talkie_artifact_sha256="a" * 64,
+        application_manifest=manifest,
+    )
+
+    assert spec["schema_version"] == 4
+    assert spec["qualification_scope"] == "primary-origin-capacity-v1"
+    assert spec["primary_origin"] == "https://127.0.0.1:4433"
+    assert [stage["application_resource_ids"] for stage in spec["stream_activation_stages"]] == [
+        [0], [1], [],
+    ]
+    assert [stage["application_body_floor_bytes"] for stage in spec["stream_activation_stages"]] == [
+        131_072, 1_024, 0,
+    ]
+    expected = {row["resource_id"]: row for row in manifest["preparation"]["expected_responses"]}
+    assert spec["unproven_application_resources"] == [
+        {
+            "resource_id": resource["id"],
+            "url": resource["url"],
+            "status": expected[resource["id"]]["status"],
+            "bytes": expected[resource["id"]]["bytes"],
+            "body_sha256": expected[resource["id"]]["body_sha256"],
+            "reason": "secondary-origin",
+        }
+        for resource in manifest["resources"][2:]
+    ]
+    assert class_fitting.validate_schema_six_prefix_spec(
+        spec,
+        workload_id="complex",
+        walkie_talkie=walkie,
+        source_walkie_talkie_artifact_sha256="a" * 64,
+        application_manifest=manifest,
+    ) == spec
+
+
+def test_schema_four_prefix_ledger_covers_all_unrequested_resources() -> None:
+    manifest, walkie = _multiorigin_schema_six_prefix_inputs(
+        [{"outgoing": 4, "incoming": 1}]
+    )
+    spec = build_schema_six_prefix_spec(
+        "complex",
+        walkie,
+        source_walkie_talkie_artifact_sha256="a" * 64,
+        application_manifest=manifest,
+    )
+    assert [row["resource_id"] for row in spec["unproven_application_resources"]] == [1, 2, 3]
+    assert [row["reason"] for row in spec["unproven_application_resources"]] == [
+        "outside-prefix-components", "secondary-origin", "secondary-origin",
+    ]
+    assert [row["application_resource_ids"] for row in spec["stream_activation_stages"]] == [[0]]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        lambda spec: spec.update(qualification_scope="full-graph"),
+        lambda spec: spec.update(primary_origin="https://127.0.0.2:4434"),
+        lambda spec: spec["unproven_application_resources"].pop(),
+        lambda spec: spec["unproven_application_resources"].reverse(),
+        lambda spec: spec["unproven_application_resources"][0].update(bytes=1),
+        lambda spec: spec["unproven_application_resources"][1].update(reason="outside-prefix-components"),
+    ),
+)
+def test_schema_four_prefix_rejects_projection_tampering(mutation: Any) -> None:
+    manifest, walkie = _multiorigin_schema_six_prefix_inputs(
+        [{"outgoing": 4, "incoming": 1}]
+    )
+    spec = build_schema_six_prefix_spec(
+        "complex",
+        walkie,
+        source_walkie_talkie_artifact_sha256="a" * 64,
+        application_manifest=manifest,
+    )
+    tampered = json.loads(json.dumps(spec))
+    mutation(tampered)
+    with pytest.raises(ValueError, match="primary-origin projection"):
+        validate_schema_six_prefix_spec_shape(
+            tampered, workload_id="complex", application_manifest=manifest
+        )
+
+
+def test_historical_schema_three_prefix_is_verifiable_but_new_spec_is_scoped() -> None:
+    manifest, walkie = _multiorigin_schema_six_prefix_inputs(
+        [
+            {"outgoing": 4, "incoming": 129},
+            {"outgoing": 1, "incoming": 0},
+            {"outgoing": 1, "incoming": 0},
+        ]
+    )
+    historical = build_schema_six_prefix_spec(
+        "complex",
+        walkie,
+        source_walkie_talkie_artifact_sha256="a" * 64,
+        application_manifest=manifest,
+        _historical_schema_three=True,
+    )
+    assert historical["schema_version"] == 3
+    assert "qualification_scope" not in historical
+    assert [stage["application_resource_ids"] for stage in historical["stream_activation_stages"]] == [
+        [0], [1, 2], [3],
+    ]
+    assert class_fitting.validate_schema_six_prefix_spec(
+        historical,
+        workload_id="complex",
+        walkie_talkie=walkie,
+        source_walkie_talkie_artifact_sha256="a" * 64,
+        application_manifest=manifest,
+    ) == historical
+    polluted = {**historical, "qualification_scope": "primary-origin-capacity-v1"}
+    with pytest.raises(ValueError, match="exact schema"):
+        validate_schema_six_prefix_spec_shape(
+            polluted, workload_id="complex", application_manifest=manifest
         )
 
 

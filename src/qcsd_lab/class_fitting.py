@@ -60,6 +60,7 @@ FITTER_VERSION = "qcsd_lab.class_fitting 1.0.0"
 NUMERIC_ARTIFACT_TYPE = "qcsd-class-study-numeric-fitting-bundle"
 FINAL_ARTIFACT_TYPE = "qcsd-class-study-research-defense-bundle"
 PREFIX_ARTIFACT_TYPE = "qcsd-class-study-walkie-talkie-prefix-pack-spec"
+PRIMARY_ORIGIN_PREFIX_SCHEMA_VERSION = 4
 NUMERIC_PROVENANCE_FILE = "numeric-provenance.json"
 PROVENANCE_FILE = "provenance.json"
 BUNDLE_FILES = {
@@ -568,21 +569,20 @@ def build_schema_six_prefix_spec(
     *,
     source_walkie_talkie_artifact_sha256: str,
     application_manifest: Mapping[str, Any],
+    _historical_schema_three: bool = False,
 ) -> dict[str, Any]:
-    """Project one schema-six runtime mould without adding framing a second time."""
+    """Project one schema-six mould onto the primary chaff connection."""
 
     from .chaff_qualification import (
         MAX_STREAM_DATA_EXCESS,
+        PRIMARY_ORIGIN_CAPACITY_SCOPE,
         UDP_PAYLOAD_CEILING,
         _capacity_plan,
         _maximum_receiver_continuation_reserve_horizon,
+        _primary_origin_prefix_projection,
         selected_chaff_resource,
         selected_navigation_root,
     )
-    from .chaff_qualification import (
-        SCHEMA_VERSION as LEGACY_PREFIX_SCHEMA_VERSION,
-    )
-
     if walkie_talkie.get("schema_version") != 6 or walkie_talkie.get("packet_size") != 1_200:
         raise ValueError("class-study prefix specs require a schema-six Walkie-Talkie artifact")
     if not _digest(source_walkie_talkie_artifact_sha256):
@@ -621,15 +621,30 @@ def build_schema_six_prefix_spec(
     )
     application = selected_navigation_root(application_manifest, workload_id)
     selected, selected_response = selected_chaff_resource(application_manifest, workload_id)
+    scoped_fields: dict[str, Any] = {}
+    batches = None
+    if not _historical_schema_three:
+        primary_origin, batches, unproven = _primary_origin_prefix_projection(
+            application_manifest,
+            workload_id=workload_id,
+            component_count=len(bursts),
+        )
+        scoped_fields = {
+            "qualification_scope": PRIMARY_ORIGIN_CAPACITY_SCOPE,
+            "primary_origin": primary_origin,
+            "unproven_application_resources": unproven,
+        }
     required, stages = _capacity_plan(
         bursts=bursts,
         manifest=application_manifest,
         selected_chaff_body_bytes=selected_response["bytes"],
+        application_batches=batches,
     )
     horizon = _maximum_receiver_continuation_reserve_horizon(bursts)
     return {
-        "schema_version": LEGACY_PREFIX_SCHEMA_VERSION + 1,
+        "schema_version": 3 if _historical_schema_three else PRIMARY_ORIGIN_PREFIX_SCHEMA_VERSION,
         "artifact_type": PREFIX_ARTIFACT_TYPE,
+        **scoped_fields,
         "workload_id": workload_id,
         "packet_size": UDP_PAYLOAD_CEILING,
         "source_walkie_talkie_schema_version": 6,
@@ -670,6 +685,7 @@ def validate_schema_six_prefix_spec(
         walkie_talkie,
         source_walkie_talkie_artifact_sha256=source_walkie_talkie_artifact_sha256,
         application_manifest=application_manifest,
+        _historical_schema_three=observed["schema_version"] == 3,
     )
     if canonical_json_bytes(observed) != canonical_json_bytes(expected):
         raise ValueError("class-study prefix specification differs from its WT6 source")
@@ -692,9 +708,11 @@ def validate_schema_six_prefix_spec_shape(
     from .chaff_qualification import (
         MAX_QUALIFIED_CHAFF_STREAMS,
         MAX_STREAM_DATA_EXCESS,
+        PRIMARY_ORIGIN_CAPACITY_SCOPE,
         UDP_PAYLOAD_CEILING,
         _capacity_plan,
         _maximum_receiver_continuation_reserve_horizon,
+        _primary_origin_prefix_projection,
         selected_chaff_resource,
         selected_navigation_root,
     )
@@ -702,7 +720,7 @@ def validate_schema_six_prefix_spec_shape(
         SCHEMA_VERSION as LEGACY_PREFIX_SCHEMA_VERSION,
     )
 
-    keys = {
+    historical_keys = {
         "schema_version",
         "artifact_type",
         "workload_id",
@@ -721,12 +739,23 @@ def validate_schema_six_prefix_spec_shape(
         "stream_activation_stages",
         "numeric_profile",
     }
-    if not isinstance(value, Mapping) or set(value) != keys:
+    scoped_keys = historical_keys | {
+        "qualification_scope",
+        "primary_origin",
+        "unproven_application_resources",
+    }
+    if not isinstance(value, Mapping):
         raise ValueError("class-study prefix specification has an invalid exact schema")
     spec = dict(value)
+    schema = spec.get("schema_version")
     if (
-        spec["schema_version"] != LEGACY_PREFIX_SCHEMA_VERSION + 1
-        or spec["artifact_type"] != PREFIX_ARTIFACT_TYPE
+        type(schema) is not int
+        or schema not in {LEGACY_PREFIX_SCHEMA_VERSION + 1, PRIMARY_ORIGIN_PREFIX_SCHEMA_VERSION}
+        or set(spec) != (scoped_keys if schema == PRIMARY_ORIGIN_PREFIX_SCHEMA_VERSION else historical_keys)
+    ):
+        raise ValueError("class-study prefix specification has an invalid exact schema")
+    if (
+        spec["artifact_type"] != PREFIX_ARTIFACT_TYPE
         or spec["workload_id"] != workload_id
         or spec["packet_size"] != UDP_PAYLOAD_CEILING
         or spec["source_walkie_talkie_schema_version"] != 6
@@ -785,10 +814,26 @@ def validate_schema_six_prefix_spec_shape(
         or spec["selected_chaff_body_bytes"] != selected_response["bytes"]
     ):
         raise ValueError("class-study prefix prepared-resource identity is invalid")
+    if schema == PRIMARY_ORIGIN_PREFIX_SCHEMA_VERSION:
+        primary_origin, batches, unproven = _primary_origin_prefix_projection(
+            application_manifest,
+            workload_id=workload_id,
+            component_count=len(bursts),
+        )
+        if (
+            spec["qualification_scope"] != PRIMARY_ORIGIN_CAPACITY_SCOPE
+            or spec["primary_origin"] != primary_origin
+            or canonical_json_bytes(spec["unproven_application_resources"])
+            != canonical_json_bytes(unproven)
+        ):
+            raise ValueError("class-study prefix primary-origin projection is invalid")
+    else:
+        batches = None
     required, stages = _capacity_plan(
         bursts=bursts,
         manifest=application_manifest,
         selected_chaff_body_bytes=selected_response["bytes"],
+        application_batches=batches,
     )
     if spec["required_chaff_streams"] != required or spec["stream_activation_stages"] != stages:
         raise ValueError("class-study prefix capacity-plan recurrence is invalid")

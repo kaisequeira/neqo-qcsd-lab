@@ -353,16 +353,30 @@ class _RequestObservationLedger:
         *,
         used_preflights: set[str],
     ) -> _NetworkObservation | None:
+        if network.request.method == "POST":
+            dependent_allowed = (
+                network.resource_type == "Fetch"
+                and self._audit_exclusion_reason(network) == "unsafe method: POST"
+            )
+        elif network.request.method == "GET":
+            # Chromium can report a script XHR/Fetch GET in Network without a
+            # Fetch pause when our policy has already failed its OPTIONS
+            # preflight. Only a separately excluded, unapproved origin can
+            # use this exception; a replay resource still requires Fetch.
+            dependent_allowed = (
+                network.resource_type in {"XHR", "Fetch"}
+                and self._audit_exclusion_reason(network) == "origin not approved"
+            )
+        else:
+            return None
         if (
-            network.request.method != "POST"
+            not dependent_allowed
             or origin(network.request.url) is None
-            or network.resource_type != "Fetch"
             or network.initiator_type != "script"
             or network.initiator_request_id is not None
             or network.redirected
             or network.response_observed
             or not self._has_terminal_signature(network, blocked_reason="other")
-            or self._audit_exclusion_reason(network) != "unsafe method: POST"
             or len(
                 [
                     item

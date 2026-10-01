@@ -3,11 +3,11 @@
   "artifact_type": "qcsd-class-study-prospective-contract",
   "study_id": "classifier-multiorigin100-v1",
   "prospective_acquisition_amendment": {
-    "schema_version": 7,
-    "date": "2026-09-30",
+    "schema_version": 8,
+    "date": "2026-10-01",
     "scope": "new-source-bound-acquisition-only-no-historical-evidence-promotion",
-    "reason": "prospectively-screen-selected-page-request-origin-http3-reachability-before-arming-short-window-stability;reject-a-candidate-after-two-classified-failures-for-any-selected-page-request-origin-and-two-passing-bracketing-controls;preserve-all-previous-acquisition-evidence-as-historical-verify-only",
-    "acquisition_schema_version": 11,
+    "reason": "prospectively-screen-each-exact-selected-page-url-before-arming-short-window-stability;admit-known-valid-pages-only;reject-a-candidate-only-after-two-classified-failures-for-every-selected-page-and-two-passing-bracketing-controls;preserve-all-previous-acquisition-evidence-as-historical-verify-only",
+    "acquisition_schema_version": 12,
     "checkpoint_schema_version": 3,
     "terminal_schema_version": 4,
     "completion_schema_version": 4,
@@ -75,11 +75,21 @@
       "discovery_event_audit_schema_version": 8,
       "stability_probe_profile": "two-prepared-observations-at-t+30s-and-t+5m-without-prebaseline-http3-screen",
       "authority": "historical-verify-only-never-current-admission"
+    },
+    "retired_v130_contract": {
+      "acquisition_schema_version": 11,
+      "checkpoint_schema_version": 3,
+      "terminal_schema_version": 4,
+      "completion_schema_version": 4,
+      "pinned_cdp_probe_schema_version": 18,
+      "discovery_event_audit_schema_version": 8,
+      "prebaseline_h3_screen_schema_version": 1,
+      "authority": "historical-verify-only-never-current-admission"
     }
   },
   "prospective_acquisition_authority_amendment": {
-    "schema_version": 1,
-    "date": "2026-09-30",
+    "schema_version": 2,
+    "date": "2026-10-01",
     "scope": "new-source-bound-public-page-acquisition-only",
     "reason": "start and diagnose real public-page acquisition before the costly full browser qualification while preserving exact source, build, pinned CDP, study contract and acquisition correctness evidence",
     "fast_authority_schema_version": 2,
@@ -89,7 +99,66 @@
       "pinned-cdp-integration-probe"
     ],
     "browser_egress_qualification": "deferred-to-same-source-full-foundation-before-any-fitting-or-defence-capture",
-    "acquisition_terminal_policy": "unchanged-schema-11-deep-verified-evidence-and-first-24-eligible-prefix-per-stratum",
+    "acquisition_terminal_policy": "schema-12-deep-verified-evidence-and-first-24-eligible-prefix-per-stratum",
+    "historical_evidence_policy": "no-retroactive-promotion-or-relabeling"
+  },
+  "prospective_udp_direction_amendment": {
+    "schema_version": 1,
+    "date": "2026-10-01",
+    "scope": "fresh-source-bound-acquisition-fitting-qualification-and-capture-only",
+    "reason": "ordinary-public-http3-servers-can-send-udp-payloads-above-the-client-outgoing-defense-ceiling;retain-the-1200-byte-client-send-target-and-observe-complete-incoming-datagrams-up-to-the-standard-advertised-receive-limit",
+    "outgoing_udp_payload_ceiling_bytes": 1200,
+    "incoming_udp_payload_limit_bytes": 65527,
+    "preparation_udp_payload_qualification_schema_version": 2,
+    "historical_udp_payload_qualification_schema_1": "verify-only-absolute-1200-byte-ceiling-never-retroactively-admit",
+    "packet_fragment_policy": "missing-complete-udp-payload-length-fails-capture-integrity",
+    "formal_evidence_policy": "new-source-build-and-cohort-required-no-historical-promotion"
+  },
+  "prospective_walkie_talkie_prefix_amendment": {
+    "schema_version": 1,
+    "date": "2026-10-01",
+    "scope": "fresh-source-bound-class-study-walkie-talkie-prefix-qualification",
+    "qualification_scope": "primary-origin-capacity-v1",
+    "prefix_spec_schema_version": 4,
+    "prefix_qualification_receipt_schema_version": 4,
+    "frozen_application_graph": "validate-complete-prepared-resource-graph-and-bind-exact-manifest-hash;never-prune-secondary-or-outside-prefix-resources",
+    "capacity_connection": "one-primary-origin-quic-connection",
+    "stage_projection": "compute-full-graph-dependency-batches-then-filter-each-stage-to-primary-origin-without-renumbering-or-collapsing-empty-stages",
+    "unproven_application_resources": {
+      "fields": [
+        "resource_id",
+        "url",
+        "status",
+        "bytes",
+        "body_sha256",
+        "reason"
+      ],
+      "order": "resource_id-ascending",
+      "reason_precedence": "secondary-origin-before-outside-prefix-components",
+      "qualification_credit": "none-for-ledger-resources"
+    },
+    "proof_boundary": "primary-origin-staged-capacity-only;full-page-and-secondary-origin-behaviour-require-separate-end-to-end-verification",
+    "historical_prefix_spec_schema_versions": [
+      2,
+      3
+    ],
+    "historical_prefix_receipt_schema_versions": [
+      2,
+      3
+    ],
+    "historical_policy": "verify-only-no-retroactive-capacity-credit-or-current-source-authority",
+    "formal_evidence_policy": "new-source-build-and-cohort-required-no-historical-promotion"
+  },
+  "prospective_acquisition_publication_namespace_amendment": {
+    "schema_version": 1,
+    "date": "2026-10-01",
+    "scope": "fresh-source-bound-acquisition-publication-only",
+    "version_source": "allocator-authorised-positive-acquisition-cohort-version-N",
+    "acquisition_root": "artifacts/classifier-multiorigin100-v1-acquisition-vN",
+    "stability_root": "artifacts/classifier-multiorigin100-v1-stability-vN",
+    "workload_root": "config/workloads-vN",
+    "pairing_policy": "same-N-create-only-direct-sibling-of-each-unsuffixed-root-no-symlink-component",
+    "historical_unsuffixed_roots": "verify-only-never-fresh-source-publication",
     "historical_evidence_policy": "no-retroactive-promotion-or-relabeling"
   },
   "status": {
@@ -110,7 +179,7 @@
     "promotion_prohibition": "do-not-claim-seven-validated-defenses-without-a-verifying-validation-attestation"
   },
   "canonical_workspace_layout": {
-    "scope": "fresh-prospective-publication-only",
+    "scope": "prospective-versioned-publication-and-historical-unsuffixed-path-map",
     "source": "qcsd_lab.class_layout",
     "config_root": "config",
     "campaign_root": "config/classifier-multiorigin100-v1-campaigns",
@@ -134,8 +203,11 @@
     "qualification_sets_root": "config/chaff-qualification-store/sets",
     "pilot_qualification_set_root": "config/chaff-qualification-store/sets/classifier-multiorigin100-v1-pilot120-full-v1",
     "final_qualification_set_root": "config/chaff-qualification-store/sets/classifier-multiorigin100-v1-final100-full-v1",
-    "fresh_path_policy": "exact-except-acquisition-direct-vN-sibling-no-symlink-component",
+    "fresh_path_policy": "paired-direct-vN-siblings-no-symlink-component",
     "acquisition_root_versioned_sibling": "artifacts/classifier-multiorigin100-v1-acquisition-v[1-9][0-9]*",
+    "stability_root_versioned_sibling": "artifacts/classifier-multiorigin100-v1-stability-v[1-9][0-9]*",
+    "workload_root_versioned_sibling": "config/workloads-v[1-9][0-9]*",
+    "unsuffixed_publication_roots": "historical-verify-only-never-fresh-write",
     "campaign_to_study_reference_root": "../class-study/v1",
     "campaign_to_artifacts_reference_root": "../../artifacts",
     "frozen_result_policy": "sealed-result-inputs-are-validated-in-place-and-never-remapped-as-fresh-workspace-inputs"
@@ -227,14 +299,16 @@
     "cross-domain-redirect-alias": "forbidden",
     "approved_origins": "explicit-and-frozen",
     "prebaseline_h3_screen_contract": {
-      "schema_version": 1,
-      "policy": "prebaseline-primary-origin-neqo-h3-reachability-v1",
+      "schema_version": 2,
+      "policy": "prebaseline-exact-selected-page-neqo-h3-reachability-v2",
       "control_url": "https://cloudflare-quic.com/",
       "timeout_seconds": 12,
-      "control_probe_order": "before-and-after-candidate-origin-attempts",
+      "control_probe_order": "before-and-after-selected-page-attempts",
       "control_success": "both-known_valid-true",
-      "candidate_attempts_per_distinct_primary_origin": 2,
-      "site_rejection": "any-selected-page-request-origin-fails-both-attempts-with-classified-http3-connectivity-timeout-or-idle-timeout",
+      "candidate_attempts_per_selected_page": 2,
+      "maximum_selected_pages": 5,
+      "pass": "at-least-one-exact-selected-page-known_valid-on-both-attempts",
+      "site_rejection": "all-exact-selected-pages-fail-both-attempts-with-classified-http3-connectivity-timeout-or-idle-timeout",
       "uncertain_outcome": "mixed-ambiguous-or-control-failure-blocks",
       "resolver_addresses": "diagnostic-only-no-neqo-pin-claim"
     },
@@ -412,7 +486,8 @@
       "formal_handoff_report": "dataset.json.resource_origin_profile"
     },
     "resource_response_ceiling_bytes": 1048576,
-    "udp_payload_ceiling_bytes": 1200,
+    "outgoing_udp_payload_ceiling_bytes": 1200,
+    "incoming_udp_payload_limit_bytes": 65527,
     "stability_probe_schedule": [
       {
         "id": "t+30s",

@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from .manifest import canonical_bytes, runtime_manifest, validate_research_preparation
+from .manifest import canonical_bytes, https_origin, runtime_manifest, validate_research_preparation
 from .prepare import NEQO_PROVENANCE_KEYS, PreparationError, _run_neqo
 from .util import (
     LAB_ROOT,
@@ -52,6 +52,7 @@ SIDECAR_ARTIFACT_TYPE = "qcsd-chaff-qualification"
 CORE_ARTIFACT_TYPE = "qcsd-qualified-chaff-core"
 MANIFEST_ARTIFACT_TYPE = "qcsd-qualified-chaff-manifest"
 PREFIX_SPEC_ARTIFACT_TYPE = "qcsd-walkie-talkie-prefix-pack-spec"
+CLASS_STUDY_PREFIX_SPEC_ARTIFACT_TYPE = "qcsd-class-study-walkie-talkie-prefix-pack-spec"
 RESPONSE_ARTIFACT_TYPE = "qcsd-chaff-response-qualification"
 RESPONSE_ONLY_SIDECAR_ARTIFACT_TYPE = "qcsd-chaff-response-only-qualification"
 RESPONSE_ONLY_QUALIFICATION_SCOPE = "response-only"
@@ -87,6 +88,12 @@ RESPONSE_ONLY_COMPLETIONS_PER_CANDIDATE = QUALIFICATION_RUNS * RESPONSE_ONLY_REQ
 RESPONSE_ONLY_EPOCH_SPACING_SECONDS = 30
 RESPONSE_ONLY_WAVE_SPACING_MILLISECONDS = 0
 UDP_PAYLOAD_CEILING = 1_200
+INCOMING_UDP_PAYLOAD_LIMIT = 65_527
+RESPONSE_DIRECTIONAL_RECEIPT_SCHEMA_VERSION = 4
+RESPONSE_V2_DIRECTIONAL_RECEIPT_SCHEMA_VERSION = 5
+PREFIX_DIRECTIONAL_RECEIPT_SCHEMA_VERSION = 3
+PRIMARY_ORIGIN_PREFIX_RECEIPT_SCHEMA_VERSION = 4
+PRIMARY_ORIGIN_CAPACITY_SCOPE = "primary-origin-capacity-v1"
 QUALIFICATION_SET_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 MAX_STREAM_DATA_EXCESS = 1_000
 MAX_WALKIE_TALKIE_COMPONENT_CELLS = 2**32 - 1
@@ -472,6 +479,10 @@ RESPONSE_V2_RECEIPT_KEYS = RESPONSE_RECEIPT_KEYS | {
     "max_concurrent_requests",
     "request_header_mode",
     "failure_class",
+}
+DIRECTIONAL_UDP_RECEIPT_KEYS = {
+    "incoming_udp_payload_limit",
+    "outgoing_udp_payload_ceiling",
 }
 RESPONSE_REQUEST_KEYS = {
     "request_index",
@@ -980,16 +991,86 @@ def _application_resource_batches(manifest: Mapping[str, Any]) -> list[list[int]
     return batches
 
 
+def _primary_origin_prefix_projection(
+    manifest: Mapping[str, Any],
+    *,
+    workload_id: str,
+    component_count: int,
+) -> tuple[str, list[list[int]], list[dict[str, Any]]]:
+    """Bind a one-connection capacity proof to the complete prepared graph.
+
+    Dependency depths are computed over every resource before each stage is
+    filtered to the primary origin.  Secondary resources are never rewritten
+    or credited as capacity on the primary QUIC connection.
+    """
+
+    if type(component_count) is not int or component_count <= 0:
+        raise ValueError("prefix projection requires a positive component count")
+    application = selected_navigation_root(manifest, workload_id)
+    primary_origin = https_origin(application["url"])
+    if primary_origin is None:
+        raise ValueError("prefix projection requires a canonical HTTPS primary origin")
+    resources = manifest.get("resources")
+    if not isinstance(resources, list):
+        raise ValueError("prefix projection requires prepared resources")
+    by_id = {resource["id"]: resource for resource in resources}
+    if len(by_id) != len(resources):
+        raise ValueError("prefix projection resource IDs are not unique")
+    responses = _prepared_expected_responses(manifest)
+    complete_batches = _application_resource_batches(manifest)
+    projected_batches = [
+        [
+            resource_id
+            for resource_id in batch
+            if https_origin(by_id[resource_id]["url"]) == primary_origin
+        ]
+        for batch in complete_batches
+    ]
+    requested = {
+        resource_id
+        for batch in projected_batches[:component_count]
+        for resource_id in batch
+    }
+    unproven: list[dict[str, Any]] = []
+    for resource_id in sorted(by_id):
+        if resource_id in requested:
+            continue
+        resource = by_id[resource_id]
+        response = responses.get(resource_id)
+        if response is None:
+            raise ValueError("prefix projection lacks a prepared response identity")
+        unproven.append(
+            {
+                "resource_id": resource_id,
+                "url": resource["url"],
+                "status": response["status"],
+                "bytes": response["bytes"],
+                "body_sha256": response["body_sha256"],
+                "reason": (
+                    "secondary-origin"
+                    if https_origin(resource["url"]) != primary_origin
+                    else "outside-prefix-components"
+                ),
+            }
+        )
+    return primary_origin, projected_batches, unproven
+
+
 def _capacity_plan(
     *,
     bursts: Sequence[Mapping[str, int]],
     manifest: Mapping[str, Any],
     selected_chaff_body_bytes: int,
+    application_batches: Sequence[Sequence[int]] | None = None,
 ) -> tuple[int, list[dict[str, Any]]]:
     """Derive the minimal one-shot cohort and its exact component recurrence."""
 
     expected = _prepared_expected_responses(manifest)
-    batches = _application_resource_batches(manifest)
+    batches = (
+        _application_resource_batches(manifest)
+        if application_batches is None
+        else application_batches
+    )
     horizon = _maximum_receiver_continuation_reserve_horizon(bursts)
     initial = horizon + 1
     if initial > MAX_QUALIFIED_CHAFF_STREAMS:
@@ -1389,17 +1470,17 @@ def validate_prefix_spec_for_qualification(
 ) -> dict[str, Any]:
     """Validate either immutable prefix-spec generation at qualification time.
 
-    Historical schema two remains on its original validator.  The expanded
-    class study uses a distinct schema-three artifact because its schema-six
-    mould already contains sender framing; accepting it through the historical
-    projector would add that framing twice.  The stronger source-WT6 binding is
-    repeated when the final fitting bundle is authorised.
+    Historical schema two remains on its original validator.  Class-study
+    schemas three and four use the WT6 shape validator because their numeric
+    moulds already contain sender framing.  Prospective qualification requires
+    schema four's primary-origin scope; schema three remains verify-only.
+    The source-WT6 binding is repeated when the fitting bundle is authorised.
     """
 
     if (
         isinstance(value, Mapping)
         and value.get("artifact_type")
-        == "qcsd-class-study-walkie-talkie-prefix-pack-spec"
+        == CLASS_STUDY_PREFIX_SPEC_ARTIFACT_TYPE
     ):
         from .class_fitting import validate_schema_six_prefix_spec_shape
 
@@ -3831,6 +3912,11 @@ def qualify_chaff(
     prefix_spec = validate_prefix_spec_for_qualification(
         load_json(spec_path), workload_id=workload_id, application_manifest=base
     )
+    if (
+        prefix_spec["artifact_type"] == CLASS_STUDY_PREFIX_SPEC_ARTIFACT_TYPE
+        and prefix_spec["schema_version"] != 4
+    ):
+        raise ValueError("new class-study qualification requires scoped prefix schema four")
     required = prefix_spec["required_chaff_streams"]
     qualified_parallel = max(MIN_CROSS_MODE_PARALLEL_CHAFF_STREAMS, required)
     base_sha = sha256_file(base_path)
@@ -4478,6 +4564,33 @@ def _response_run_record(index: int, run: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _receipt_udp_policy(
+    value: object,
+    *,
+    legacy_keys: set[str],
+    legacy_schema: int,
+    directional_schema: int,
+    outgoing_ceiling: int,
+    label: str,
+) -> tuple[dict[str, Any], int]:
+    if not isinstance(value, Mapping) or type(value.get("schema_version")) is not int:
+        raise ValueError(f"{label} schema is invalid")
+    schema = value["schema_version"]
+    if schema == legacy_schema:
+        return _exact_mapping(value, legacy_keys, label), outgoing_ceiling
+    if schema != directional_schema:
+        raise ValueError(f"{label} schema is invalid")
+    receipt = _exact_mapping(value, legacy_keys | DIRECTIONAL_UDP_RECEIPT_KEYS, label)
+    if (
+        type(receipt["incoming_udp_payload_limit"]) is not int
+        or receipt["incoming_udp_payload_limit"] != INCOMING_UDP_PAYLOAD_LIMIT
+        or type(receipt["outgoing_udp_payload_ceiling"]) is not int
+        or receipt["outgoing_udp_payload_ceiling"] != outgoing_ceiling
+    ):
+        raise ValueError(f"{label} directional UDP policy is invalid")
+    return receipt, INCOMING_UDP_PAYLOAD_LIMIT
+
+
 def _validate_response_receipt(
     value: object,
     *,
@@ -4488,13 +4601,21 @@ def _validate_response_receipt(
     url: str,
     headers: list[list[str]],
 ) -> tuple[tuple[int, str, int, str], int, int, int, str]:
-    receipt = _exact_mapping(value, RESPONSE_RECEIPT_KEYS, "response qualification receipt")
+    receipt, incoming_limit = _receipt_udp_policy(
+        value,
+        legacy_keys=RESPONSE_RECEIPT_KEYS,
+        legacy_schema=QUALIFICATION_SCHEMA_VERSION,
+        directional_schema=RESPONSE_DIRECTIONAL_RECEIPT_SCHEMA_VERSION,
+        outgoing_ceiling=UDP_PAYLOAD_CEILING,
+        label="response qualification receipt",
+    )
     started = receipt["started_unix_ns"]
     ended = receipt["ended_unix_ns"]
     invocation_id = receipt["invocation_id"]
     if (
         type(receipt["schema_version"]) is not int
-        or receipt["schema_version"] != QUALIFICATION_SCHEMA_VERSION
+        or receipt["schema_version"]
+        not in {QUALIFICATION_SCHEMA_VERSION, RESPONSE_DIRECTIONAL_RECEIPT_SCHEMA_VERSION}
         or receipt["artifact_type"] != RESPONSE_ARTIFACT_TYPE
         or receipt["application_workload_sha256"] != application_manifest_sha256
         or type(receipt["application_resource_id"]) is not int
@@ -4588,7 +4709,11 @@ def _validate_response_receipt(
             or observation["phase"] not in {"handshake", "qualification"}
             or observation["direction"] not in {"incoming", "outgoing"}
             or type(observation["udp_payload_bytes"]) is not int
-            or not 1 <= observation["udp_payload_bytes"] <= UDP_PAYLOAD_CEILING
+            or not 1 <= observation["udp_payload_bytes"] <= (
+                incoming_limit
+                if observation["direction"] == "incoming"
+                else UDP_PAYLOAD_CEILING
+            )
         ):
             raise ValueError("response qualification packet transcript is invalid")
         if observation["phase"] == "qualification":
@@ -4609,7 +4734,9 @@ def _validate_response_receipt(
         "outgoing",
     }:
         raise ValueError("response qualification packet transcript hash is invalid")
-    _validate_udp_statistics(receipt["packets"], observations=rust_ordered)
+    _validate_udp_statistics(
+        receipt["packets"], observations=rust_ordered, incoming_limit=incoming_limit
+    )
     return identities[0], sizes[0], started, ended, invocation_id
 
 
@@ -4624,8 +4751,13 @@ def _validate_response_receipt_v2(
 ) -> tuple[list[tuple[int, str, int, str]], int, int, int, str, str | None]:
     """Validate one sustained 8x5 response epoch without hiding a rejection."""
 
-    receipt = _exact_mapping(
-        value, RESPONSE_V2_RECEIPT_KEYS, "sustained response qualification receipt"
+    receipt, incoming_limit = _receipt_udp_policy(
+        value,
+        legacy_keys=RESPONSE_V2_RECEIPT_KEYS,
+        legacy_schema=RESPONSE_QUALIFICATION_V2_RECEIPT_SCHEMA_VERSION,
+        directional_schema=RESPONSE_V2_DIRECTIONAL_RECEIPT_SCHEMA_VERSION,
+        outgoing_ceiling=UDP_PAYLOAD_CEILING,
+        label="sustained response qualification receipt",
     )
     started = receipt["started_unix_ns"]
     ended = receipt["ended_unix_ns"]
@@ -4633,7 +4765,11 @@ def _validate_response_receipt_v2(
     failure_class = receipt["failure_class"]
     if (
         type(receipt["schema_version"]) is not int
-        or receipt["schema_version"] != RESPONSE_QUALIFICATION_V2_RECEIPT_SCHEMA_VERSION
+        or receipt["schema_version"]
+        not in {
+            RESPONSE_QUALIFICATION_V2_RECEIPT_SCHEMA_VERSION,
+            RESPONSE_V2_DIRECTIONAL_RECEIPT_SCHEMA_VERSION,
+        }
         or receipt["artifact_type"] != RESPONSE_ARTIFACT_TYPE
         or receipt["application_workload_sha256"] != application_manifest_sha256
         or type(receipt["application_resource_id"]) is not int
@@ -4757,7 +4893,11 @@ def _validate_response_receipt_v2(
             or observation["phase"] not in {"handshake", "qualification"}
             or observation["direction"] not in {"incoming", "outgoing"}
             or type(observation["udp_payload_bytes"]) is not int
-            or not 1 <= observation["udp_payload_bytes"] <= UDP_PAYLOAD_CEILING
+            or not 1 <= observation["udp_payload_bytes"] <= (
+                incoming_limit
+                if observation["direction"] == "incoming"
+                else UDP_PAYLOAD_CEILING
+            )
         ):
             raise ValueError("sustained response qualification packet transcript is invalid")
         if observation["phase"] == "qualification":
@@ -4778,7 +4918,9 @@ def _validate_response_receipt_v2(
         "outgoing",
     }:
         raise ValueError("sustained response qualification packet transcript hash is invalid")
-    _validate_udp_statistics(receipt["packets"], observations=rust_ordered)
+    _validate_udp_statistics(
+        receipt["packets"], observations=rust_ordered, incoming_limit=incoming_limit
+    )
     return identities, sizes[0], started, ended, invocation_id, failure_class
 
 
@@ -5293,9 +5435,40 @@ def _validate_prefix_receipt(
     prefix_spec: Mapping[str, Any],
     prefix_spec_sha256: str,
 ) -> tuple[int, int, str]:
-    """Validate one every-component staged schema-two prefix proof."""
+    """Validate one every-component staged prefix proof."""
 
-    receipt = _exact_mapping(value, PREFIX_RECEIPT_KEYS, "prefix-pack qualification receipt")
+    if (
+        prefix_spec.get("artifact_type") == CLASS_STUDY_PREFIX_SPEC_ARTIFACT_TYPE
+        and prefix_spec.get("schema_version") == 4
+    ):
+        receipt = _exact_mapping(
+            value,
+            PREFIX_RECEIPT_KEYS
+            | DIRECTIONAL_UDP_RECEIPT_KEYS
+            | {"qualification_scope"},
+            "prefix-pack qualification receipt",
+        )
+        if (
+            type(receipt["schema_version"]) is not int
+            or receipt["schema_version"] != PRIMARY_ORIGIN_PREFIX_RECEIPT_SCHEMA_VERSION
+            or receipt["qualification_scope"] != PRIMARY_ORIGIN_CAPACITY_SCOPE
+            or prefix_spec.get("qualification_scope") != PRIMARY_ORIGIN_CAPACITY_SCOPE
+            or type(receipt["incoming_udp_payload_limit"]) is not int
+            or receipt["incoming_udp_payload_limit"] != INCOMING_UDP_PAYLOAD_LIMIT
+            or type(receipt["outgoing_udp_payload_ceiling"]) is not int
+            or receipt["outgoing_udp_payload_ceiling"] != prefix_spec["packet_size"]
+        ):
+            raise ValueError("scoped prefix-pack qualification receipt policy is invalid")
+        incoming_limit = INCOMING_UDP_PAYLOAD_LIMIT
+    else:
+        receipt, incoming_limit = _receipt_udp_policy(
+            value,
+            legacy_keys=PREFIX_RECEIPT_KEYS,
+            legacy_schema=QUALIFICATION_SCHEMA_VERSION,
+            directional_schema=PREFIX_DIRECTIONAL_RECEIPT_SCHEMA_VERSION,
+            outgoing_ceiling=prefix_spec["packet_size"],
+            label="prefix-pack qualification receipt",
+        )
     scalar_bindings = {
         "application_resource_id": prefix_spec["application_resource_id"],
         "selected_chaff_resource_id": prefix_spec["selected_chaff_resource_id"],
@@ -5309,7 +5482,12 @@ def _validate_prefix_receipt(
         "required_chaff_survivors": prefix_spec["required_chaff_survivors"],
     }
     if (
-        receipt["schema_version"] != QUALIFICATION_SCHEMA_VERSION
+        receipt["schema_version"]
+        not in {
+            QUALIFICATION_SCHEMA_VERSION,
+            PREFIX_DIRECTIONAL_RECEIPT_SCHEMA_VERSION,
+            PRIMARY_ORIGIN_PREFIX_RECEIPT_SCHEMA_VERSION,
+        }
         or receipt["artifact_type"] != PREFIX_ARTIFACT_TYPE
         or receipt["application_workload_source_sha256"] != application_manifest_sha256
         or receipt["runtime_workload_sha256"] != runtime_manifest_sha256
@@ -5565,7 +5743,11 @@ def _validate_prefix_receipt(
             or observation["phase"] not in {"warmup", "qualification"}
             or observation["direction"] not in {"incoming", "outgoing"}
             or type(observation["udp_payload_bytes"]) is not int
-            or not 1 <= observation["udp_payload_bytes"] <= UDP_PAYLOAD_CEILING
+            or not 1 <= observation["udp_payload_bytes"] <= (
+                incoming_limit
+                if observation["direction"] == "incoming"
+                else prefix_spec["packet_size"]
+            )
         ):
             raise ValueError("prefix-pack packet transcript is invalid")
         ordered.append(
@@ -5595,7 +5777,12 @@ def _validate_prefix_receipt(
         )
     ):
         raise ValueError("prefix-pack packet target/cutoff evidence is invalid")
-    _validate_udp_statistics(receipt["packets"], observations=ordered)
+    _validate_udp_statistics(
+        receipt["packets"],
+        observations=ordered,
+        incoming_limit=incoming_limit,
+        outgoing_ceiling=prefix_spec["packet_size"],
+    )
     return receipt["started_unix_ns"], receipt["ended_unix_ns"], receipt["invocation_id"]
 
 
@@ -6117,17 +6304,28 @@ def _validate_schema_two_sender_framing_falsification_diagnostic_receipt(
 
 
 def _validate_udp_statistics(
-    value: object, *, observations: Sequence[Mapping[str, Any]] | None = None
+    value: object,
+    *,
+    observations: Sequence[Mapping[str, Any]] | None = None,
+    incoming_limit: int = UDP_PAYLOAD_CEILING,
+    outgoing_ceiling: int = UDP_PAYLOAD_CEILING,
 ) -> None:
     statistics = _exact_mapping(value, {"incoming", "outgoing", "total"}, "UDP statistics")
     parsed: dict[str, Mapping[str, Any]] = {}
     keys = {"packet_count", "observed_udp_payload_max", "oversized_packet_count"}
     for direction in ("incoming", "outgoing", "total"):
         record = _exact_mapping(statistics[direction], keys, "UDP statistic")
+        limit = (
+            incoming_limit
+            if direction == "incoming"
+            else outgoing_ceiling
+            if direction == "outgoing"
+            else max(incoming_limit, outgoing_ceiling)
+        )
         if (
             any(type(record[key]) is not int or record[key] < 0 for key in keys)
             or record["packet_count"] < 1
-            or not 1 <= record["observed_udp_payload_max"] <= UDP_PAYLOAD_CEILING
+            or not 1 <= record["observed_udp_payload_max"] <= limit
             or record["oversized_packet_count"] != 0
         ):
             raise ValueError("UDP qualification statistic is invalid")
@@ -6142,8 +6340,14 @@ def _validate_udp_statistics(
         parsed["outgoing"]["observed_udp_payload_max"],
     ):
         raise ValueError("UDP qualification maxima disagree")
+    if parsed["total"]["oversized_packet_count"] != (
+        parsed["incoming"]["oversized_packet_count"]
+        + parsed["outgoing"]["oversized_packet_count"]
+    ):
+        raise ValueError("UDP qualification oversized counts disagree")
     if observations is not None:
         for direction in ("incoming", "outgoing"):
+            limit = incoming_limit if direction == "incoming" else outgoing_ceiling
             sizes = [
                 item["udp_payload_bytes"] for item in observations if item["direction"] == direction
             ]
@@ -6151,7 +6355,7 @@ def _validate_udp_statistics(
                 parsed[direction]["packet_count"] != len(sizes)
                 or parsed[direction]["observed_udp_payload_max"] != max(sizes, default=0)
                 or parsed[direction]["oversized_packet_count"]
-                != sum(size > UDP_PAYLOAD_CEILING for size in sizes)
+                != sum(size > limit for size in sizes)
             ):
                 raise ValueError("UDP qualification statistics disagree with packet evidence")
 

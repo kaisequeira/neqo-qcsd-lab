@@ -142,6 +142,62 @@ def test_acquisition_root_accepts_only_canonical_or_versioned_sibling(
         class_layout.require_canonical_acquisition_root(versioned)
 
 
+def test_versioned_acquisition_owns_one_paired_publication_namespace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "lab"
+    _use_lab_root(monkeypatch, root)
+    layout = class_layout.class_study_layout()
+    runner = layout.acquisition_root.with_name(f"{layout.acquisition_root.name}-v127")
+    stability = layout.stability_root.with_name(f"{layout.stability_root.name}-v127")
+    workloads = layout.workload_root.with_name(f"{layout.workload_root.name}-v127")
+
+    assert class_layout.publication_roots_for_acquisition_root(runner) == (
+        stability, workloads
+    )
+    assert class_layout.require_cohort_publication_roots(
+        runner, stability, workloads, require_versioned=True
+    ) == (stability, workloads)
+    assert class_layout.publication_roots_for_acquisition_root(layout.acquisition_root) == (
+        layout.stability_root, layout.workload_root
+    )
+    with pytest.raises(ValueError, match="requires a versioned"):
+        class_layout.require_cohort_publication_roots(
+            layout.acquisition_root,
+            layout.stability_root,
+            layout.workload_root,
+            require_versioned=True,
+        )
+    for wrong in (
+        layout.workload_root,
+        workloads.with_name(f"{layout.workload_root.name}-v128"),
+    ):
+        with pytest.raises(ValueError, match="do not match the acquisition cohort"):
+            class_layout.require_cohort_publication_roots(
+                runner, stability, wrong, require_versioned=True
+            )
+    for wrong in (
+        workloads.with_name(f"{layout.workload_root.name}-v0"),
+        workloads.with_name(f"{layout.workload_root.name}-v0127"),
+        workloads / "child",
+    ):
+        with pytest.raises(ValueError, match="outside the canonical class-study layout"):
+            class_layout.require_canonical_publication_root(
+                wrong, field="workload_root"
+            )
+
+    root.mkdir()
+    layout.config_root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    workloads.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="symbolic-link component"):
+        class_layout.require_canonical_publication_root(
+            workloads, field="workload_root"
+        )
+
+
 def test_fresh_helpers_reject_existing_symlink_components(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

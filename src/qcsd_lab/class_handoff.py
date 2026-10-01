@@ -662,8 +662,8 @@ def _validate_source_results(
             configuration_key="class_study_historical_pre_snapshot_sha256",
             label="historical-pre",
         )
-        current_runtime_inputs = _formal_runtime_inputs(
-            configuration.get("defense_runtime_inputs"),
+        current_runtime_inputs = _formal_runtime_inputs_from_configuration(
+            configuration,
             dimensions=dimensions,
         )
         current_qualification_set = configuration.get("chaff_qualification_set")
@@ -978,6 +978,73 @@ def _formal_runtime_inputs(
             raise ValueError(f"formal class {mode} runtime identity is invalid")
         result[mode] = identity
     return result
+
+
+def _formal_runtime_inputs_from_configuration(
+    configuration: Mapping[str, Any],
+    *,
+    dimensions: _StudyDimensions,
+) -> dict[str, dict[str, Any]]:
+    """Recover runtime identities from the sealed experiment defense records.
+
+    The campaign launch projection has ``defense_runtime_inputs``, but the
+    persisted experiment configuration does not: its schema and frozen-input
+    verifier bind the individual defense records instead.  Synthetic older
+    receipts may retain the redundant projection; verify it if present.
+    """
+
+    records = configuration.get("defenses")
+    if not isinstance(records, list) or len(records) != len(dimensions.modes):
+        raise ValueError("formal class runtime-input defense inventory is incomplete")
+    derived: dict[str, dict[str, Any]] = {}
+    external_keys = {
+        "parameters",
+        "parameters_sha256",
+        "provenance",
+        "provenance_sha256",
+        "input_policy",
+    }
+    for mode, record in zip(dimensions.modes, records, strict=True):
+        kind = dimensions.runtime_kinds[mode]
+        if not isinstance(record, Mapping) or (
+            record.get("name"), record.get("kind")
+        ) != (mode, kind):
+            raise ValueError(f"formal class {mode} frozen runtime record is invalid")
+        if kind in {"none", "front", "tamaraw"}:
+            if external_keys.intersection(record) or {
+                "schedule",
+                "schedule_sha256",
+                "mode",
+            }.intersection(record):
+                raise ValueError(f"formal class {mode} has unexpected runtime input")
+            derived[mode] = {
+                "identity_type": (
+                    "source-bound-no-defense" if kind == "none" else "source-bound-built-in"
+                ),
+                "runtime_kind": kind,
+            }
+        else:
+            if (
+                not isinstance(record.get("parameters"), str)
+                or not isinstance(record.get("provenance"), str)
+                or {"schedule", "schedule_sha256", "mode"}.intersection(record)
+            ):
+                raise ValueError(f"formal class {mode} frozen parameter record is incomplete")
+            derived[mode] = {
+                "identity_type": "hash-bound-parameter-artifact",
+                "runtime_kind": kind,
+                "parameters_sha256": record.get("parameters_sha256"),
+                "provenance_sha256": record.get("provenance_sha256"),
+                "input_policy": record.get("input_policy"),
+            }
+    derived = _formal_runtime_inputs(derived, dimensions=dimensions)
+    if "defense_runtime_inputs" in configuration:
+        retained = _formal_runtime_inputs(
+            configuration["defense_runtime_inputs"], dimensions=dimensions
+        )
+        if retained != derived:
+            raise ValueError("formal class runtime-input projection differs from frozen defenses")
+    return derived
 
 
 def _require_schema_two_campaign(receipt: VerifiedResult) -> None:

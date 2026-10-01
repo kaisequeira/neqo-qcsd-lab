@@ -102,10 +102,13 @@ from .class_layout import (
     PILOT_COHORT_FILENAME,
     canonical_campaign_reference,
     class_study_layout,
+    publication_roots_for_acquisition_root,
     require_canonical_acquisition_root,
     require_canonical_campaign_reference,
     require_canonical_fresh_child,
     require_canonical_fresh_path,
+    require_canonical_publication_root,
+    require_cohort_publication_roots,
 )
 from .class_run_binding import (
     resolve_class_sample_run_binding,
@@ -2061,6 +2064,7 @@ def run_class_study_action(
             acquisition_root=acquisition_root,
             stability_root=stability_root,
             workload_root=workload_root,
+            acquisition_completion_path=acquisition_completion_path,
             pilot_cohort_receipt_path=pilot_cohort_receipt_path,
             pilot_cohort_assembly_path=pilot_cohort_assembly_path,
             final_cohort_receipt_path=final_cohort_receipt_path,
@@ -2124,6 +2128,20 @@ def run_class_study_action(
                 foundation.get("recorded_at"), label="foundation attestation"
             ) > _class_aware_timestamp(acquisition_started_at, label="acquisition start"):
                 raise ValueError("class acquisition starts before its foundation gate")
+            version = foundation.get("cohort_version")
+            expected_runner = class_study_layout().acquisition_root.with_name(
+                f"{class_study_layout().acquisition_root.name}-v{version}"
+            )
+            if type(version) is not int or version < 1 or Path(os.path.abspath(runner)) != expected_runner:
+                raise ValueError("class acquisition root differs from the allocated cohort version")
+            scoped_stability, scoped_workloads = publication_roots_for_acquisition_root(runner)
+            require_cohort_publication_roots(
+                runner, scoped_stability, scoped_workloads, require_versioned=True
+            )
+            _require_absent_cohort_publication_root(scoped_stability, label="stability root")
+            _require_absent_cohort_publication_root(scoped_workloads, label="workload root")
+            _create_cohort_publication_root(scoped_stability)
+            _create_cohort_publication_root(scoped_workloads)
             authority_argument = (
                 {"acquisition_authority": foundation_path}
                 if acquisition_authority is not None
@@ -5435,6 +5453,7 @@ def _validate_fresh_layout_arguments(
     qualification_manifest: Path | None,
     final_bundle_root: Path | None,
     destination: Path | None,
+    acquisition_completion_path: Path | None = None,
 ) -> None:
     """Fail closed on alternate prospective paths before an action mutates.
 
@@ -5458,17 +5477,45 @@ def _validate_fresh_layout_arguments(
             label="acquisition root",
         )
     if stability_root is not None:
-        require_canonical_fresh_path(
+        require_canonical_publication_root(
             stability_root,
             field="stability_root",
             label="stability root",
         )
     if workload_root is not None:
-        require_canonical_fresh_path(
+        require_canonical_publication_root(
             workload_root,
             field="workload_root",
             label="workload root",
         )
+    owned_runner = (
+        acquisition_root
+        if acquisition_root is not None
+        else acquisition_completion_path.parent
+        if acquisition_completion_path is not None
+        else None
+    )
+    if owned_runner is not None:
+        runner = require_canonical_acquisition_root(owned_runner)
+        if action in {"acquisition-init", "acquisition-run", "acquisition-complete", "cohort"}:
+            if runner == class_study_layout().acquisition_root:
+                raise ValueError("fresh class-study acquisition requires a versioned -vN root")
+        expected_stability, expected_workload = (
+            publication_roots_for_acquisition_root(runner)
+        )
+        if stability_root is not None and Path(os.path.abspath(stability_root)) != expected_stability:
+            raise ValueError("stability root differs from acquisition cohort publication root")
+        if workload_root is not None and Path(os.path.abspath(workload_root)) != expected_workload:
+            raise ValueError("workload root differs from acquisition cohort publication root")
+        if stability_root is not None and workload_root is not None:
+            require_cohort_publication_roots(
+                runner,
+                stability_root,
+                workload_root,
+                require_versioned=action in {"acquisition-run", "cohort"},
+            )
+    if action == "acquisition-run" and (stability_root is None or workload_root is None):
+        raise ValueError("acquisition-run requires both cohort publication roots")
     for path, filename, label in (
         (
             pilot_cohort_receipt_path,
@@ -5674,6 +5721,22 @@ def _validate_fresh_layout_arguments(
             field="artifacts_root",
             label=f"{action} destination",
         )
+
+
+def _require_absent_cohort_publication_root(root: Path, *, label: str) -> None:
+    """Reject even an empty prior destination before claiming the new cohort."""
+
+    path = Path(os.path.abspath(root))
+    if path.is_symlink() or path.exists():
+        raise ValueError(f"class-study {label} publication already exists")
+    if path.parent.is_symlink() or not path.parent.is_dir():
+        raise ValueError(f"class-study {label} parent is not a regular directory")
+
+
+def _create_cohort_publication_root(root: Path) -> None:
+    path = Path(os.path.abspath(root))
+    path.mkdir(mode=0o700)
+    _fsync_directory(path.parent)
 
 
 def _successor_action_context(

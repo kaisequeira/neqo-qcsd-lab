@@ -207,6 +207,7 @@ _ERROR_DOCUMENT_RESOURCE_INNER_REQUEST_FIELDS = frozenset(
     }
 )
 _ERROR_DOCUMENT_RESOURCE_INITIATOR_FIELDS = frozenset({"type", "url", "lineNumber", "columnNumber"})
+_ERROR_DOCUMENT_PARSER_LINE_MAX = 4_095
 _ERROR_DOCUMENT_RESOURCE_RESPONSE_FIELDS = frozenset(
     {"requestId", "loaderId", "timestamp", "type", "response", "hasExtraInfo", "frameId"}
 )
@@ -234,13 +235,16 @@ _PINNED_ERROR_DOCUMENT_USER_AGENT = (
     "HeadlessChrome/143.0.0.0 Safari/537.36"
 )
 # Chromium 143's built-in error document references exactly these three PNG
-# data URLs, in this order. Store only immutable signatures: copying the large
-# browser-owned URLs into QCSD would add no evidence and would obscure review.
+# data URLs, in this order. The third values record the originally observed
+# parser columns. These parser positions vary with the rendered error document;
+# the pinned image URL hashes, owner, order, and lifecycle establish identity.
+# Copying the large browser-owned URLs into QCSD would add no evidence.
 _ERROR_DOCUMENT_RESOURCE_SIGNATURES = (
     (4026, "98da97a017b2bd58cb9851bda86d9634cee3a573f4e210a384926eddaf3cb692", 624),
     (6366, "ea2294b4439707e90c81be91f46f2e4399d1f0f9ef67a0abbb2e513acf0e9632", 624),
     (230, "3b99d5fc9d5cbfc903dc91de38fe13a68a643a816014921c83c9dcffcbffc642", 625),
 )
+_ERROR_DOCUMENT_PARSER_COLUMN_MAX = 16_383
 
 
 def _egress_evaluate_command(target_type: str) -> tuple[str, dict[str, Any]]:
@@ -556,11 +560,15 @@ def validate_normal_shutdown_disposal_summary(
         or network_total > _NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT
         or fetch_total > _NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT
         or matched_total + fetch_only_context_disposal > fetch_total
-        or fetch_only_context_disposal > 1
+        or fetch_only_context_disposal > 2
         or (not value["terminal"] and fetch_only_context_disposal)
         or (
             fetch_only_context_disposal == 1
             and (fetch_total != 1 or matched_total != 0)
+        )
+        or (
+            fetch_only_context_disposal == 2
+            and (fetch_total != 2 or matched_total != 0 or network_total != 0)
         )
         or pending_fetch
         != fetch_total - matched_total - fetch_only_context_disposal
@@ -1242,6 +1250,8 @@ class _ErrorDocumentResources:
     frame_id: str
     latest_timestamp: float
     next_signature_index: int = 0
+    initiator_line_base: int | None = None
+    initiator_column_base: int | None = None
     active: _ErrorDocumentResource | None = None
     started: bool = False
 
@@ -1302,10 +1312,12 @@ class _NormalShutdownDisposalLedger:
     deliberately separate from accepted render evidence.  It permits a
     missing Fetch pause only when the still-live Network occurrence is retired
     by the router's exact local shutdown cancellation.  Conversely, Chromium
-    143 can expose a root-page GET ``Ping`` pause during context disposal
+    143 can expose a root-page GET or POST ``Ping`` pause during context disposal
     without exposing a corresponding Network occurrence before destruction.
-    That exact singleton remains held, is never continued, and becomes
-    terminal only after the caller's successful context-close barrier.
+    It can also expose exactly one POST ``Ping`` and one POST ``XHR`` pause
+    from the root page in the same drain, with no Network occurrence. Those
+    bounded pauses remain held, are never continued, and become terminal only
+    after the caller's successful context-close barrier.
     """
 
     def __init__(self) -> None:
@@ -1368,6 +1380,24 @@ class _NormalShutdownDisposalLedger:
         fetch_leg: _NormalShutdownFetch | None = fetch
         while network_leg is not None and fetch_leg is not None:
             active = network_leg.active
+            # Chromium 143 can label one root POST as Network Fetch and
+            # Fetch XHR while the page context is being disposed. Both
+            # callbacks are held past the quiescence boundary; this alias
+            # applies only to the exact single-leg root shutdown occurrence.
+            root_post_type_alias = (
+                active.resource_type == "Fetch"
+                and fetch_leg.resource_type == "XHR"
+                and active.method == "POST"
+                and active.source == fetch_leg.source
+                and active.source.target_type == "page"
+                and network_leg.predecessor is None
+                and network_leg.successor is None
+                and network_leg.terminal_outcome == "qcsd-shutdown"
+                and fetch_leg.predecessor is None
+                and fetch_leg.successor is None
+                and not fetch_leg.pre_shutdown_network_id_seen
+                and fetch_leg.root_page_context_disposal_candidate
+            )
             frames_match = active.frame_id == fetch_leg.frame_id or (
                 active.source.target_type in {"worker", "shared_worker"}
                 and fetch_leg.source.target_type in {"page", "iframe"}
@@ -1378,7 +1408,7 @@ class _NormalShutdownDisposalLedger:
             if not (
                 active.request_id == fetch_leg.network_id
                 and frames_match
-                and active.resource_type == fetch_leg.resource_type
+                and (active.resource_type == fetch_leg.resource_type or root_post_type_alias)
                 and active.method == fetch_leg.method
                 and active.url == fetch_leg.url
                 and cls._sources_compatible(
@@ -1765,12 +1795,13 @@ class _NormalShutdownDisposalLedger:
         self,
         fetch: _NormalShutdownFetch,
     ) -> bool:
-        """Whether one held root beacon is terminal at context disposal.
+        """Whether a held root beacon is terminal at context disposal.
 
         This deliberately recognises only the event shape reproduced from the
         pinned Chromium 143 acquisition image.  Any redirect, target/source
         variation, prior scientific identity, same-ID Network occurrence, or
-        additional Fetch occurrence remains a hard integrity failure.
+        unrecognised additional Fetch occurrence remains a hard integrity
+        failure.
         """
 
         try:
@@ -1795,9 +1826,24 @@ class _NormalShutdownDisposalLedger:
         except ValueError:
             absolute_https_url = False
         same_id_fetches = self._fetches.get(fetch.network_id, ())
+        fetch_count = len(self._fetch_identities)
+        singleton_ping = (
+            fetch_count == 1
+            and fetch.resource_type == "Ping"
+            and fetch.method in {"GET", "POST"}
+        )
+        exact_post_pair = (
+            fetch_count == 2
+            and self._network_total == 0
+            and {
+                (item.resource_type, item.method)
+                for values in self._fetches.values()
+                for item in values
+            }
+            == {("Ping", "POST"), ("XHR", "POST")}
+        )
         return (
-            len(self._fetch_identities) == 1
-            and len(same_id_fetches) == 1
+            len(same_id_fetches) == 1
             and same_id_fetches[0] is fetch
             and not self._networks.get(fetch.network_id)
             and fetch.predecessor is None
@@ -1806,8 +1852,7 @@ class _NormalShutdownDisposalLedger:
             and fetch.matched_network is None
             and not fetch.pre_shutdown_network_id_seen
             and fetch.root_page_context_disposal_candidate
-            and fetch.resource_type == "Ping"
-            and fetch.method == "GET"
+            and (singleton_ping or exact_post_pair)
             and absolute_https_url
         )
 
@@ -3930,8 +3975,10 @@ class RecursiveCdpTargetRouter:
             or frozenset(initiator) != _ERROR_DOCUMENT_RESOURCE_INITIATOR_FIELDS
             or initiator.get("type") != "parser"
             or initiator.get("url") != _ERROR_DOCUMENT_URL
-            or initiator.get("lineNumber") != 1504
+            or type(initiator.get("lineNumber")) is not int
+            or not 0 <= initiator.get("lineNumber") <= _ERROR_DOCUMENT_PARSER_LINE_MAX
             or type(initiator.get("columnNumber")) is not int
+            or not 0 <= initiator.get("columnNumber") <= _ERROR_DOCUMENT_PARSER_COLUMN_MAX
         ):
             raise CdpTargetIntegrityError(
                 "Chromium error-document resource request signature was invalid"
@@ -3943,15 +3990,30 @@ class RecursiveCdpTargetRouter:
         if signature is None:
             raise CdpTargetIntegrityError("Chromium error-document resource URL was not pinned")
         signature_index, _length = signature
+        parser_line = initiator["lineNumber"]
+        parser_column = initiator["columnNumber"]
         if (
             lifecycle.active is not None
             or lifecycle.complete
             or signature_index != lifecycle.next_signature_index
-            or initiator.get("columnNumber")
-            != _ERROR_DOCUMENT_RESOURCE_SIGNATURES[signature_index][2]
         ):
             raise CdpTargetIntegrityError(
                 "Chromium error-document resources were duplicated or reordered"
+            )
+        if signature_index == 0:
+            if (
+                lifecycle.initiator_line_base is not None
+                or lifecycle.initiator_column_base is not None
+            ):
+                raise CdpTargetIntegrityError(
+                    "Chromium error-document resource parser position state was invalid"
+                )
+        elif (
+            lifecycle.initiator_line_base is None
+            or lifecycle.initiator_column_base is None
+        ):
+            raise CdpTargetIntegrityError(
+                "Chromium error-document resource parser position state was invalid"
             )
         resource_key = source.request_chain_key(request_id)
         if (
@@ -3975,6 +4037,9 @@ class RecursiveCdpTargetRouter:
         lifecycle.started = True
         lifecycle.latest_timestamp = float(timestamp)
         self._error_resource_by_request_id[resource_key] = lifecycle
+        if signature_index == 0:
+            lifecycle.initiator_line_base = parser_line
+            lifecycle.initiator_column_base = parser_column
 
     @staticmethod
     def _validate_error_document_resource_response(

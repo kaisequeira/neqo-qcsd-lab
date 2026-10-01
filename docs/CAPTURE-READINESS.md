@@ -1,14 +1,15 @@
 # Evidence required to begin class-study capture
 
-Status: 30 September 2026, Australia/Sydney. This is an evidence map and
+Status: 1 October 2026, Australia/Sydney. This is an evidence map and
 decision record for the extended class study. The executable rules are the
 checked-in [study contract](../config/class-study/v1/study.json), the validators
 in [class attestation](../src/qcsd_lab/class_attestation.py) and
 [class pipeline](../src/qcsd_lab/class_pipeline.py), and the coordinator's
 `./qcsd-lab class-study --help`. The [project ledger](../PROJECT.md) records the
 latest accepted counts. The [continuation runbook](CLASS-STUDY.md) gives the
-operator sequence. A proposed faster protocol below has no authority until it
-is versioned, implemented, tested and bound to fresh execution receipts.
+operator sequence. The faster schema-12 protocol is implemented prospectively
+in the working source; it has no formal authority until that source is frozen,
+built and bound to fresh verified execution receipts.
 
 ## Define the start line
 
@@ -92,7 +93,8 @@ The acquisition runner's `checkpoint.json`, `provenance.json`, individual
 attempts and terminal receipts must match the frozen catalogue, authority and
 study contract. The coordinator publishes active attempts before work, merges
 results in catalogue order, and can recover only under unchanged inputs.
-`acquisition-init` creates a runner; it does not itself collect a page. The
+`acquisition-init` creates a runner and its empty, paired stability and workload
+roots; it does not itself collect a page. The
 first accepted observation requires a real network visit, prepared resource
 manifest, successful technical admission and all registered stability checks.
 
@@ -106,18 +108,17 @@ non-replayable actions are outside the admitted workload. Every later mode
 must use the same complete prepared graph. Neither origin count nor later
 classifier/privacy performance is a selection quota.
 
-The **prospective schema-11 rule** first runs a pre-baseline Neqo HTTP/3
+The **prospective schema-12 rule** first runs a pre-baseline Neqo HTTP/3
 reachability screen. If the first `https://cloudflare-quic.com/` control fails,
 the screen blocks without candidate or second-control probes. Otherwise it
-runs two 12-second attempts for every distinct selected-page URL request
-origin, then a second control. An origin passes only with two
-`known_valid=true` results and fails only with two classified connectivity
-timeouts or `IdleTimeout` results. With both controls passing, at least one
-failed origin technically rejects the whole candidate only when every other
-origin has a definite pass or fail. Any mixed or ambiguous origin blocks,
-even if another fails; a failed second control also blocks. This screen's
-results are embedded in the
-hash-bound navigation-attempt ledger. It does not prove complete page-graph
+runs two 12-second attempts for every exact canonical selected-page URL, then
+a second control. Only pages with two `known_valid=true` results enter the
+timed baseline, keeping their original ordinals. With both controls passing,
+the candidate is rejected only if every page has two classified connectivity
+timeouts or `IdleTimeout` results. If none passes and any result is ambiguous,
+the screen blocks; a failed second control also blocks. Every selected page
+and its probe results remain in the hash-bound navigation-attempt ledger.
+This screen does not prove complete page-graph
 replay, and resolved addresses are diagnostics rather than a claim of pinned
 Neqo connections.
 
@@ -157,7 +158,8 @@ for 16,000 samples.
 The historical schema-9 rule required `t+30s`, `t+24h` and `t+72h` probes.
 Its corresponding all-survivor projection was **7 days 14 hours 50 minutes**.
 Schema-10 receipts also remain historical under their two-observation rule
-without a pre-baseline screen. None is promoted into schema 11 or implies
+without a pre-baseline screen. Schema-11 receipts retain their historical
+selected-origin H3 rule. None is promoted into schema 12 or implies
 three-day stability for newly admitted classes. The new claim is
 short-horizon replay agreement, with later final certification and canaries
 providing separate drift observations.
@@ -305,16 +307,51 @@ advanced no pilot, certification or formal count. Local evidence paths in
 this section are intentionally code paths; local artifacts are not guaranteed
 to exist in another clone.
 
-The versioned acquisition checkpoint alone does not isolate every publication
-path. Stability receipts under `artifacts/<study>-stability/` and admitted
-workloads under `config/workloads/` are still canonical and create-only. If a
-new source cohort is required after an earlier cohort publishes either output,
-the same candidate can collide there. Historical outputs cannot be silently
-reused under a new source. A complete cohort-specific namespace would require
-coordinated watcher, layout, receipt and downstream admission changes. Verify
-the first live batches and their published outputs before scaling the watcher;
-record any source failure and plan that broader namespace change if a restart
-becomes necessary.
+For a new source cohort, the acquisition root, stability receipts and admitted
+workloads use one allocator-approved `-vN` suffix:
+`artifacts/<study>-acquisition-vN`, `artifacts/<study>-stability-vN` and
+`config/workloads-vN`. Initialization requires both publication destinations
+to be absent, then creates them safely before the first acquisition action.
+The watcher, cohort assembly
+and later campaign readers must preserve the same `N`; a different cohort's
+workload or a rehashed assembly pointing to one must fail admission. The
+unsuffixed roots remain historical verification inputs only. New cohort
+namespaces prevent a source fix from colliding with an earlier cohort's
+create-only files, while earlier attempts and receipts remain preserved.
+
+## Verification boundary before an unattended acquisition watcher
+
+The next long watcher stays held until the following evidence is checked on
+the final proposed source. A test failure or later source change reopens the
+affected checks.
+
+1. Exercise acquisition, namespace, schema, resume and later-consumer tests.
+   Include a synthetic 120-class prefix through pilot/final campaign loading,
+   fitted-bundle checks, 900-cell certification and 16,000-sample block
+   planning. Reject wrong-source, wrong-image and wrong-cohort inputs. These
+   fixtures test deterministic wiring; they do not stand in for real pages or
+   the full foundation.
+2. Run a bounded local two-origin response and scoped prefix qualification,
+   then a defended capture, seal and deep verification with the current Neqo
+   client. Record source-provenance substitutions and the container user and
+   filesystem profile. This checks the wire path without admitting a class.
+3. Freeze a clean Lab commit and clean Rust Gitlink, build the new collection
+   image, and let its registered acquisition correctness suite and pinned CDP
+   probe produce independently verified receipts. Verify schema-2 acquisition
+   authority before creating the new runner.
+4. Run `acquisition-watch --max-actions 1` under supervision. Inspect its
+   checkpoint, action result, failure class and immutable inventory. Continue
+   in bounded actions through the baseline and both scheduled prepared
+   observations, requiring a deep-verified scientific terminal or an honest
+   blocker before leaving the watcher unattended.
+
+This sequence can expose deterministic later-path errors and an early live
+acquisition failure. It cannot prove that 120 public sites will remain stable,
+that every final class/mode will qualify, or that all later captures will pass.
+The full browser and foundation gates, real fitting, 900 certification cells
+and 16,000 formal samples depend on the acquired cohort and must verify as
+their own evidence is produced. Preserve a monitored stop point after each
+gate instead of treating a green synthetic test as that gate's receipt.
 
 ## Fastest scientifically honest route to substantial three-week progress
 
@@ -356,7 +393,7 @@ new source/contract identity. The short-horizon acquisition amendment is the
 immediate change being implemented. The other options require their own
 implementation and evidence; none is an implicit waiver:
 
-1. **Use the prospective short-horizon gate.** Schema 11 retains two actual
+1. **Use the prospective short-horizon gate.** Schema 12 retains two actual
    prepared observations at `t+30s` and `t+5m` windows after its pre-baseline
    HTTP/3 screen, preserving the semantic response/graph comparison. Relative
    to schema 9, the short windows reduce the ideal first-120 acquisition

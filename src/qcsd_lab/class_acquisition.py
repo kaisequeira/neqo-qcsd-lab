@@ -105,9 +105,11 @@ from .manifest import (
 from .h3_prebaseline import (
     H3_BLOCK_REASON,
     H3_SITE_REASON,
+    H3_SITE_V2_REASON,
     H3ScreenBlocked,
     H3SiteUnavailable,
     PREBASELINE_H3_SCREEN_CONTRACT,
+    PREBASELINE_H3_SCREEN_V2_CONTRACT,
     screen_prebaseline_h3,
     validate_h3_screen_receipt,
 )
@@ -129,8 +131,8 @@ from .util import (
     source_metadata,
 )
 
-SCHEMA_VERSION = 11
-HISTORICAL_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
+SCHEMA_VERSION = 12
+HISTORICAL_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11})
 SUPPORTED_SCHEMA_VERSIONS = HISTORICAL_SCHEMA_VERSIONS | {SCHEMA_VERSION}
 PROVENANCE_TYPE = "qcsd-class-study-acquisition-provenance"
 TERMINAL_TYPE = "qcsd-class-study-acquisition-terminal"
@@ -147,16 +149,16 @@ SCHEMA_SIX_CHECKPOINT_SCHEMA_VERSION = 2
 SCHEMA_SIX_TERMINAL_SCHEMA_VERSION = 3
 SCHEMA_SIX_COMPLETION_SCHEMA_VERSION = 3
 SCHEMA_SIX_DOCUMENT_RESPONSE_SCHEMA_VERSION = 1
-_MODERN_CHECKPOINT_SCHEMA_VERSIONS = frozenset({4, 5, 6, 7, 8, 9, 10, SCHEMA_VERSION})
-_FIXED_PROVENANCE_SCHEMA_VERSIONS = frozenset({5, 6, 7, 8, 9, 10, SCHEMA_VERSION})
-_POLICY_EVIDENCE_SCHEMA_VERSIONS = frozenset({5, 6, 7, 8, 9, 10, SCHEMA_VERSION})
-_SELECTION_SCHEMA_VERSIONS = frozenset({6, 7, 8, 9, 10, SCHEMA_VERSION})
+_MODERN_CHECKPOINT_SCHEMA_VERSIONS = frozenset({4, 5, 6, 7, 8, 9, 10, 11, SCHEMA_VERSION})
+_FIXED_PROVENANCE_SCHEMA_VERSIONS = frozenset({5, 6, 7, 8, 9, 10, 11, SCHEMA_VERSION})
+_POLICY_EVIDENCE_SCHEMA_VERSIONS = frozenset({5, 6, 7, 8, 9, 10, 11, SCHEMA_VERSION})
+_SELECTION_SCHEMA_VERSIONS = frozenset({6, 7, 8, 9, 10, 11, SCHEMA_VERSION})
 _INSTRUMENTATION_EVIDENCE_SCHEMA_VERSIONS = frozenset(
-    {2, 3, 4, 5, 6, 7, 8, 9, 10, SCHEMA_VERSION}
+    {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, SCHEMA_VERSION}
 )
-_RENDER_EVIDENCE_SCHEMA_VERSIONS = frozenset({3, 4, 5, 6, 7, 8, 9, 10, SCHEMA_VERSION})
-_TERMINAL_STATE_SCHEMA_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, SCHEMA_VERSION})
-_DURATION_LIMIT_SCHEMA_VERSIONS = frozenset({3, 4, 5, 6, 7, 8, 9, 10, SCHEMA_VERSION})
+_RENDER_EVIDENCE_SCHEMA_VERSIONS = frozenset({3, 4, 5, 6, 7, 8, 9, 10, 11, SCHEMA_VERSION})
+_TERMINAL_STATE_SCHEMA_VERSIONS = frozenset({2, 3, 4, 5, 6, 7, 8, 9, 10, 11, SCHEMA_VERSION})
+_DURATION_LIMIT_SCHEMA_VERSIONS = frozenset({3, 4, 5, 6, 7, 8, 9, 10, 11, SCHEMA_VERSION})
 MAX_ORIGIN_PASSES = 8
 MAX_APPROVED_ORIGINS = 32
 MAX_OBSERVED_AUDIT_ORIGINS = 512
@@ -884,7 +886,7 @@ _EMPTY_SHA256 = sha256_bytes(b"")
 
 
 def _probe_windows_for(acquisition_schema_version: int) -> tuple[Any, ...]:
-    if acquisition_schema_version in {10, SCHEMA_VERSION}:
+    if acquisition_schema_version in {10, 11, SCHEMA_VERSION}:
         return SHORT_STABILITY_PROBE_WINDOWS
     if acquisition_schema_version in HISTORICAL_SCHEMA_VERSIONS:
         return STABILITY_PROBE_WINDOWS
@@ -892,7 +894,7 @@ def _probe_windows_for(acquisition_schema_version: int) -> tuple[Any, ...]:
 
 
 def _short_window_for(acquisition_schema_version: int) -> bool:
-    return acquisition_schema_version in {10, SCHEMA_VERSION}
+    return acquisition_schema_version in {10, 11, SCHEMA_VERSION}
 
 
 def _matches_json_contract(value: object, expected: object) -> bool:
@@ -905,7 +907,7 @@ def _matches_json_contract(value: object, expected: object) -> bool:
 
 
 def _checkpoint_schema_for(acquisition_schema_version: int) -> int:
-    if acquisition_schema_version in {7, 8, 9, 10, SCHEMA_VERSION}:
+    if acquisition_schema_version in {7, 8, 9, 10, 11, SCHEMA_VERSION}:
         return CHECKPOINT_SCHEMA_VERSION
     if acquisition_schema_version in {4, 5, 6}:
         return SCHEMA_SIX_CHECKPOINT_SCHEMA_VERSION
@@ -913,7 +915,7 @@ def _checkpoint_schema_for(acquisition_schema_version: int) -> int:
 
 
 def _terminal_schema_for(acquisition_schema_version: int) -> int:
-    if acquisition_schema_version in {7, 8, 9, 10, SCHEMA_VERSION}:
+    if acquisition_schema_version in {7, 8, 9, 10, 11, SCHEMA_VERSION}:
         return TERMINAL_SCHEMA_VERSION
     if acquisition_schema_version in {4, 5, 6}:
         return SCHEMA_SIX_TERMINAL_SCHEMA_VERSION
@@ -923,7 +925,7 @@ def _terminal_schema_for(acquisition_schema_version: int) -> int:
 
 
 def _completion_schema_for(acquisition_schema_version: int) -> int:
-    if acquisition_schema_version in {7, 8, 9, 10, SCHEMA_VERSION}:
+    if acquisition_schema_version in {7, 8, 9, 10, 11, SCHEMA_VERSION}:
         return COMPLETION_SCHEMA_VERSION
     if acquisition_schema_version == 6:
         return SCHEMA_SIX_COMPLETION_SCHEMA_VERSION
@@ -975,7 +977,7 @@ def _document_response_schema_for(
     *,
     instrumentation_policy: object = None,
 ) -> int:
-    if acquisition_schema_version in {9, 10, SCHEMA_VERSION}:
+    if acquisition_schema_version in {9, 10, 11, SCHEMA_VERSION}:
         return DOCUMENT_RESPONSE_SCHEMA_VERSION
     if acquisition_schema_version in HISTORICAL_SCHEMA_VERSIONS:
         if instrumentation_policy is None:
@@ -999,7 +1001,7 @@ def _instrumentation_policy_for(
     *,
     recorded_policy: object = None,
 ) -> str:
-    if acquisition_schema_version in {9, 10, SCHEMA_VERSION}:
+    if acquisition_schema_version in {9, 10, 11, SCHEMA_VERSION}:
         if recorded_policy is not None and recorded_policy != CDP_TARGET_INSTRUMENTATION_POLICY:
             raise ValueError("schema-9-or-10 acquisition instrumentation policy is invalid")
         return CDP_TARGET_INSTRUMENTATION_POLICY
@@ -1016,7 +1018,7 @@ def _instrumentation_policy_for(
 
 
 def _passive_render_contract_for(acquisition_schema_version: int) -> Mapping[str, Any]:
-    if acquisition_schema_version in {9, 10, SCHEMA_VERSION}:
+    if acquisition_schema_version in {9, 10, 11, SCHEMA_VERSION}:
         return PASSIVE_RENDER_CONTRACT
     if acquisition_schema_version in HISTORICAL_SCHEMA_VERSIONS:
         value = _shared_historical_contract_value(
@@ -1030,7 +1032,7 @@ def _passive_render_contract_for(acquisition_schema_version: int) -> Mapping[str
 
 
 def _passive_render_contract_sha256_for(acquisition_schema_version: int) -> str:
-    if acquisition_schema_version in {9, 10, SCHEMA_VERSION}:
+    if acquisition_schema_version in {9, 10, 11, SCHEMA_VERSION}:
         return PASSIVE_RENDER_CONTRACT_SHA256
     if acquisition_schema_version in HISTORICAL_SCHEMA_VERSIONS:
         value = _shared_historical_contract_value(
@@ -1226,7 +1228,7 @@ def _validate_versioned_render_observation(
     acquisition_schema_version: int,
     allow_failure: bool = False,
 ) -> None:
-    if acquisition_schema_version in {7, 8, 9, 10, SCHEMA_VERSION}:
+    if acquisition_schema_version in {7, 8, 9, 10, 11, SCHEMA_VERSION}:
         validate_render_observation(value, allow_failure=allow_failure)
         return
     if acquisition_schema_version in {3, 4}:
@@ -1392,7 +1394,7 @@ def _validate_versioned_class_study_preparation(
     validators can then replay the otherwise unchanged resource/audit graph.
     """
 
-    if acquisition_schema_version in {9, 10, SCHEMA_VERSION}:
+    if acquisition_schema_version in {9, 10, 11, SCHEMA_VERSION}:
         validate_class_study_preparation(manifest, workload_id=workload_id)
         return
     if acquisition_schema_version not in HISTORICAL_SCHEMA_VERSIONS:
@@ -1858,7 +1860,7 @@ def _prepared_replay_identity_sha256(
         raise ValueError("prepared replay identity is incomplete")
     runtime = (
         runtime_manifest(dict(manifest))
-        if acquisition_schema_version in {9, 10, SCHEMA_VERSION}
+        if acquisition_schema_version in {9, 10, 11, SCHEMA_VERSION}
         else {
             "resources": project_stable_response_lengths(
                 deepcopy(list(manifest.get("resources", []))),
@@ -2562,7 +2564,7 @@ def initialise_runner(
             "domain_safety_policy": DOMAIN_SAFETY_POLICY,
             "domain_safety_policy_sha256": sha256_bytes(canonical_json_bytes(DOMAIN_SAFETY_POLICY)),
             "origin_policy": ORIGIN_POLICY,
-            "prebaseline_h3_screen_contract": PREBASELINE_H3_SCREEN_CONTRACT,
+            "prebaseline_h3_screen_contract": PREBASELINE_H3_SCREEN_V2_CONTRACT,
             "eligibility_inputs": ELIGIBILITY_INPUTS,
             "prohibited_inputs": PROHIBITED_INPUTS,
         },
@@ -2706,7 +2708,7 @@ def run_due_acquisition(
     selection, selection_blocked = _derive_checkpoint_selection(
         candidates, _catalogue, states, terminal_payloads
     )
-    admission_ids = set(selection["admission_ids"]) if not selection_blocked else set()
+    admission_ids = _unblocked_admission_ids(candidates, selection, selection_blocked)
     reservations = _baseline_batch_reservations(
         baseline_batches, states, terminal_payloads, short_window=True
     )
@@ -3176,10 +3178,13 @@ def _run_navigation_batch(
                 )
                 if screen_payload["decision"] != "pass":
                     raise ValueError("H3 screen backend returned a non-passing receipt")
+                eligible_urls = _h3_eligible_page_urls(screen_payload)
+                if not eligible_urls or not eligible_urls.issubset({page.url for page in pages}):
+                    raise ValueError("passing H3 screen has no eligible selected page")
             except H3SiteUnavailable as error:
                 result = {
                     "outcome": "terminal-policy-rejection",
-                    "reason": H3_SITE_REASON,
+                    "reason": H3_SITE_V2_REASON,
                     "policy_evidence": None,
                     "h3_screen_evidence": error.receipt,
                 }
@@ -3225,6 +3230,7 @@ def _run_navigation_batch(
                     "h3_screen_evidence": h3_screen,
                     "navigation": navigation,
                     "pages": pages,
+                    "eligible_urls": eligible_urls,
                     "origins_by_page": origins_by_page,
                 }
             if result["h3_screen_evidence"] is not None:
@@ -3274,7 +3280,11 @@ def _run_navigation_batch(
             )
             if outcome["outcome"] == "completed":
                 navigation = outcome["navigation"]
-                pages = outcome["pages"]
+                pages = [
+                    page
+                    for page in outcome["pages"]
+                    if page.url in outcome["eligible_urls"]
+                ]
                 origins_by_page = outcome["origins_by_page"]
                 state.update(
                     {
@@ -3931,6 +3941,34 @@ def _derive_checkpoint_selection(
     return selection, blocked
 
 
+def _unblocked_admission_ids(
+    candidates: Sequence[Any],
+    selection: Mapping[str, Any],
+    blocked_candidate_ids: Sequence[str],
+) -> set[str]:
+    """Continue other strata without advancing past an infrastructure blocker.
+
+    This filters only *new* admission. Already-started candidate work may still
+    drain or recover, while every blocker remains fatal to global completion.
+    The frozen selection, its order, and its scientific terminal projection are
+    unchanged.
+    """
+
+    stratum_by_id = {candidate.candidate_id: candidate.stratum.id for candidate in candidates}
+    blocked_ids = set(blocked_candidate_ids)
+    if len(stratum_by_id) != len(candidates) or blocked_ids - stratum_by_id.keys():
+        raise ValueError("acquisition blocker references an unknown candidate")
+    blocked_strata = {stratum_by_id[candidate_id] for candidate_id in blocked_ids}
+    admission_ids = set(selection["admission_ids"])
+    if admission_ids - stratum_by_id.keys():
+        raise ValueError("acquisition admission references an unknown candidate")
+    return {
+        candidate_id
+        for candidate_id in admission_ids
+        if stratum_by_id[candidate_id] not in blocked_strata
+    }
+
+
 def _baseline_batch_reservations(
     batches: Sequence[Mapping[str, Any]],
     states: Mapping[str, Any],
@@ -4017,7 +4055,7 @@ def acquisition_status(
         selection, selection_blocked = _derive_checkpoint_selection(
             candidates, catalogue, states, terminal_payloads
         )
-        admission_ids = set(selection["admission_ids"]) if not selection_blocked else set()
+        admission_ids = _unblocked_admission_ids(candidates, selection, selection_blocked)
         scheduling_states = {
             candidate_id: state
             for candidate_id, state in states.items()
@@ -4826,6 +4864,18 @@ def _navigation_link_policy_rejection(
     return None
 
 
+def _h3_eligible_page_urls(screen: Mapping[str, Any]) -> frozenset[str]:
+    """Derive the v2 baseline subset from exact-page H3 proof, after validation."""
+
+    if screen.get("screen_schema_version") != 2:
+        raise ValueError("current acquisition requires a v2 exact-page H3 screen")
+    return frozenset(
+        item["url"]
+        for item in screen["page_attempts"]
+        if all(attempt["outcome"] == "known-valid" for attempt in item["attempts"])
+    )
+
+
 def _navigation_origins_by_page(
     navigation: NavigationDiscovery,
     pages: Sequence[PageCandidate],
@@ -5067,6 +5117,7 @@ def _validate_probing_terminal_state(
         ]
     ] = []
     seen_urls: set[str] = set()
+    previous_ordinal = -1
     for ordinal, page_state in enumerate(raw_pages):
         base_fields = {
             "page",
@@ -5090,10 +5141,15 @@ def _validate_probing_terminal_state(
         if (
             page.candidate_domain != candidate.domain
             or page.registrable_domain != candidate.domain
-            or page.ordinal != ordinal
+            or (
+                page.ordinal != ordinal
+                if acquisition_schema_version != SCHEMA_VERSION
+                else not previous_ordinal < page.ordinal < 5
+            )
             or page.url in seen_urls
         ):
             raise ValueError("terminal checkpoint page sequence differs from its candidate")
+        previous_ordinal = page.ordinal
         seen_urls.add(page.url)
         navigation_origins = _canonical_navigation_origins(
             page_state["navigation_observed_origins"],
@@ -5420,7 +5476,7 @@ def _validated_terminal_binding(
         if (
             not decision.eligible
             or (
-                acquisition_schema_version in {10, SCHEMA_VERSION}
+                acquisition_schema_version in {10, 11, SCHEMA_VERSION}
                 and stability_payload.get("acquisition_evidence_schema_version")
                 != SHORT_STABILITY_ACQUISITION_EVIDENCE_SCHEMA_VERSION
             )
@@ -5519,7 +5575,7 @@ def _validate_current_provenance_contract(
     *,
     candidate_catalogue_path: Path | None = None,
 ) -> dict[str, Any]:
-    """Reconstruct schema-five-through-nine provenance without schema collision.
+    """Reconstruct versioned provenance without schema collision.
 
     Historical acquisition schemas remain readable under their original
     contracts.  Current evidence, however, must retain every fixed acquisition
@@ -5570,7 +5626,7 @@ def _validate_current_provenance_contract(
     ):
         raise ValueError("versioned acquisition provenance identity is invalid")
     fixed_fields = set(_FIXED_PROVENANCE_FIELDS)
-    if schema != SCHEMA_VERSION:
+    if schema not in {11, SCHEMA_VERSION}:
         fixed_fields.remove("prebaseline_h3_screen_contract")
     if schema in _SELECTION_SCHEMA_VERSIONS:
         fixed_fields.add("acquisition_selection_policy")
@@ -5612,7 +5668,7 @@ def _validate_current_provenance_contract(
             "acquisition_action_timing_contract": ACTION_TIMING_CONTRACT,
             "baseline_scheduling_contract": (
                 SHORT_TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT
-                if schema in {10, SCHEMA_VERSION}
+                if schema in {10, 11, SCHEMA_VERSION}
                 else TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT
             ),
             "acquisition_selection_policy": ACQUISITION_SELECTION_POLICY,
@@ -5621,11 +5677,17 @@ def _validate_current_provenance_contract(
             "domain_safety_policy_sha256": sha256_bytes(canonical_json_bytes(DOMAIN_SAFETY_POLICY)),
             "origin_policy": ORIGIN_POLICY,
             **(
-                {"prebaseline_h3_screen_contract": PREBASELINE_H3_SCREEN_CONTRACT}
-                if schema == SCHEMA_VERSION else {}
+                {
+                    "prebaseline_h3_screen_contract": (
+                        PREBASELINE_H3_SCREEN_V2_CONTRACT
+                        if schema == SCHEMA_VERSION
+                        else PREBASELINE_H3_SCREEN_CONTRACT
+                    )
+                }
+                if schema in {11, SCHEMA_VERSION} else {}
             ),
             "eligibility_inputs": (
-                ELIGIBILITY_INPUTS if schema == SCHEMA_VERSION
+                ELIGIBILITY_INPUTS if schema in {11, SCHEMA_VERSION}
                 else SCHEMA_TEN_ELIGIBILITY_INPUTS if schema == 10
                 else SCHEMA_NINE_ELIGIBILITY_INPUTS
             ),
@@ -6115,7 +6177,7 @@ def _validate_navigation_attempts(
         }
         if acquisition_schema_version in _POLICY_EVIDENCE_SCHEMA_VERSIONS:
             expected_fields.add("policy_evidence")
-        if acquisition_schema_version == SCHEMA_VERSION:
+        if acquisition_schema_version in {11, SCHEMA_VERSION}:
             expected_fields.add("h3_screen_evidence")
         if not isinstance(item, Mapping) or set(item) != expected_fields:
             raise ValueError("acquisition navigation-attempt ledger is malformed")
@@ -6125,7 +6187,7 @@ def _validate_navigation_attempts(
                 raise ValueError("acquisition navigation policy evidence is misplaced")
             validate_non_replayable_egress_failure_evidence(policy_evidence)
         h3_evidence = item.get("h3_screen_evidence")
-        if acquisition_schema_version == SCHEMA_VERSION:
+        if acquisition_schema_version in {11, SCHEMA_VERSION}:
             if h3_evidence is not None:
                 screen = validate_h3_screen_receipt(
                     h3_evidence,
@@ -6134,6 +6196,10 @@ def _validate_navigation_attempts(
                     image_digest=image_digest,
                     source=source,
                 )
+                if screen["screen_schema_version"] != (
+                    2 if acquisition_schema_version == SCHEMA_VERSION else 1
+                ):
+                    raise ValueError("navigation H3 screen version differs from acquisition")
                 first_screen_at = _timestamp(screen["control_before"]["started_at"])
                 last_screen = screen["control_after"] or screen["control_before"]
                 last_screen_at = _timestamp(last_screen["completed_at"])
@@ -6147,7 +6213,11 @@ def _validate_navigation_attempts(
                     or (
                         item["outcome"] == "terminal-policy-rejection"
                         and (screen["decision"] != "site-rejection"
-                             or item["reason"] != H3_SITE_REASON
+                             or item["reason"] != (
+                                 H3_SITE_V2_REASON
+                                 if acquisition_schema_version == SCHEMA_VERSION
+                                 else H3_SITE_REASON
+                             )
                              or policy_evidence is not None)
                     )
                     or (
@@ -6161,14 +6231,22 @@ def _validate_navigation_attempts(
                 ):
                     raise ValueError("navigation H3 screen evidence differs from its outcome")
                 if item["outcome"] == "completed" and state.get("pages"):
-                    if [page["url"] for page in screen["selected_pages"]] != [
-                        page["page"]["url"] for page in state["pages"]
+                    selected = [
+                        (page["url"], ordinal)
+                        for ordinal, page in enumerate(screen["selected_pages"])
+                    ]
+                    if acquisition_schema_version == SCHEMA_VERSION:
+                        eligible = _h3_eligible_page_urls(screen)
+                        selected = [pair for pair in selected if pair[0] in eligible]
+                    if selected != [
+                        (page["page"]["url"], page["page"]["ordinal"])
+                        for page in state["pages"]
                     ]:
                         raise ValueError("navigation H3 screen pages differ from checkpoint")
             elif (
                 item.get("outcome") == "completed"
                 or item.get("outcome") == "terminal-policy-rejection"
-                and item.get("reason") == H3_SITE_REASON
+                and item.get("reason") in {H3_SITE_REASON, H3_SITE_V2_REASON}
                 or item.get("outcome") == "recoverable-failure"
                 and item.get("reason") == H3_BLOCK_REASON
             ):
@@ -6347,7 +6425,7 @@ def _validate_probe_attempts(
             _timestamp(item["completed_at"]) if isinstance(item.get("completed_at"), str) else None
         )
         short_repeat_before_first_completed = (
-            acquisition_schema_version in {10, SCHEMA_VERSION}
+            acquisition_schema_version in {10, 11, SCHEMA_VERSION}
             and probe_index == 1
             and (
                 latest_first_completion is None
@@ -6406,7 +6484,7 @@ def _validate_probe_attempts(
         ):
             raise ValueError("acquisition probe-attempt ledger is malformed")
         seen.add((probe_id, attempt))
-        if acquisition_schema_version in {10, SCHEMA_VERSION} and probe_index == 0:
+        if acquisition_schema_version in {10, 11, SCHEMA_VERSION} and probe_index == 0:
             latest_first_completion = (
                 completed_at if latest_first_completion is None
                 else max(latest_first_completion, completed_at)
@@ -6502,7 +6580,9 @@ def _validate_short_probe_batch_order(
             raise ValueError("short acquisition repeat predates first batch completion")
 
 
-def _validate_baseline_ready_state(state: Mapping[str, Any], *, candidate: Any) -> None:
+def _validate_baseline_ready_state(
+    state: Mapping[str, Any], *, candidate: Any, acquisition_schema_version: int
+) -> None:
     expected_fields = {
         "state",
         "pages",
@@ -6532,6 +6612,7 @@ def _validate_baseline_ready_state(state: Mapping[str, Any], *, candidate: Any) 
     if not isinstance(pages, list) or not 1 <= len(pages) <= 5:
         raise ValueError("baseline-ready checkpoint page sequence is invalid")
     seen_urls: set[str] = set()
+    previous_ordinal = -1
     expected_page_fields = {
         "page",
         "observations",
@@ -6552,10 +6633,15 @@ def _validate_baseline_ready_state(state: Mapping[str, Any], *, candidate: Any) 
         if (
             page.candidate_domain != candidate.domain
             or page.registrable_domain != candidate.domain
-            or page.ordinal != ordinal
+            or (
+                page.ordinal != ordinal
+                if acquisition_schema_version != SCHEMA_VERSION
+                else not previous_ordinal < page.ordinal < 5
+            )
             or page.url in seen_urls
         ):
             raise ValueError("baseline-ready checkpoint page sequence differs")
+        previous_ordinal = page.ordinal
         seen_urls.add(page.url)
         page_origins = set(
             _canonical_navigation_origins(
@@ -7530,7 +7616,11 @@ def _load_checkpoint_state(
                 acquisition_schema_version=acquisition_schema_version,
             )
         if state["state"] == "baseline-ready":
-            _validate_baseline_ready_state(state, candidate=candidate)
+            _validate_baseline_ready_state(
+                state,
+                candidate=candidate,
+                acquisition_schema_version=acquisition_schema_version,
+            )
         if _validate_internal_acquisition_error(state) is not None:
             internal_failures.append(candidate.candidate_id)
         binding = state.get("terminal")

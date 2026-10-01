@@ -135,6 +135,12 @@ UDP_PAYLOAD_QUALIFICATION_KEYS = {
     "configured_udp_payload_ceiling",
     "runs",
 }
+UDP_PAYLOAD_QUALIFICATION_V2_KEYS = {
+    "schema_version",
+    "outgoing_udp_payload_ceiling",
+    "incoming_udp_payload_limit",
+    "runs",
+}
 UDP_PAYLOAD_RUN_KEYS = {"run_index", "packets_sha256", "total", "incoming", "outgoing"}
 UDP_PAYLOAD_STATISTIC_KEYS = {
     "packet_count",
@@ -340,7 +346,7 @@ def validate_research_preparation(manifest: dict[str, Any], *, workload_id: str)
     if "udp_payload_qualification" not in preparation:
         raise ValueError(
             f"research workload {workload_id!r} preparation requires the exact "
-            "absolute-1200 UDP-payload qualification receipt"
+            "versioned UDP-payload qualification receipt"
         )
 
     source = preparation["lab_source"]
@@ -849,6 +855,9 @@ def _validate_browser_request_headers(
 
 
 def _validate_udp_payload_qualification(value: Any, *, stability_runs: int) -> None:
+    if isinstance(value, dict) and value.get("schema_version") == 2:
+        _validate_udp_payload_qualification_v2(value, stability_runs=stability_runs)
+        return
     if not isinstance(value, dict) or set(value) != UDP_PAYLOAD_QUALIFICATION_KEYS:
         raise ValueError(
             "manifest preparation UDP-payload qualification requires exact schema, ceiling, "
@@ -913,6 +922,62 @@ def _validate_udp_payload_qualification(value: Any, *, stability_runs: int) -> N
             statistics["outgoing"]["observed_udp_payload_max"],
         ):
             raise ValueError("manifest preparation UDP-payload qualification maxima disagree")
+
+
+def _validate_udp_payload_qualification_v2(value: dict[str, Any], *, stability_runs: int) -> None:
+    label = "manifest preparation UDP-payload qualification"
+    if set(value) != UDP_PAYLOAD_QUALIFICATION_V2_KEYS:
+        raise ValueError(f"{label} requires exact directional schema and runs fields")
+    if type(value["schema_version"]) is not int or value["schema_version"] != 2:
+        raise ValueError(f"{label} schema is invalid")
+    outgoing_limit = value["outgoing_udp_payload_ceiling"]
+    incoming_limit = value["incoming_udp_payload_limit"]
+    if type(outgoing_limit) is not int or outgoing_limit != 1_200:
+        raise ValueError(f"{label} outgoing ceiling must be exactly 1200")
+    if type(incoming_limit) is not int or incoming_limit != 65_527:
+        raise ValueError(f"{label} incoming limit must be exactly 65527")
+    runs = value["runs"]
+    if not isinstance(runs, list) or len(runs) != stability_runs:
+        raise ValueError(f"{label} must cover every stability run")
+    for expected_index, run in enumerate(runs):
+        if not isinstance(run, dict) or set(run) != UDP_PAYLOAD_RUN_KEYS:
+            raise ValueError(f"{label} run receipt is invalid")
+        if type(run["run_index"]) is not int or run["run_index"] != expected_index:
+            raise ValueError(f"{label} runs must be ordered")
+        digest = run["packets_sha256"]
+        if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            raise ValueError(f"{label} packets hash is invalid")
+        statistics: dict[str, dict[str, int]] = {}
+        for direction in ("total", "incoming", "outgoing"):
+            statistic = run[direction]
+            if not isinstance(statistic, dict) or set(statistic) != UDP_PAYLOAD_STATISTIC_KEYS:
+                raise ValueError(f"{label} statistics are invalid")
+            if any(
+                type(statistic[field]) is not int
+                or statistic[field] < (0 if field == "oversized_packet_count" else 1)
+                for field in UDP_PAYLOAD_STATISTIC_KEYS
+            ):
+                raise ValueError(f"{label} statistics are invalid")
+            statistics[direction] = statistic
+        for direction, limit in (("incoming", incoming_limit), ("outgoing", outgoing_limit)):
+            if statistics[direction]["observed_udp_payload_max"] > limit:
+                raise ValueError(f"{label} recorded an oversized {direction} packet")
+        if statistics["total"]["packet_count"] != (
+            statistics["incoming"]["packet_count"] + statistics["outgoing"]["packet_count"]
+        ):
+            raise ValueError(f"{label} packet counts disagree")
+        if statistics["total"]["observed_udp_payload_max"] != max(
+            statistics["incoming"]["observed_udp_payload_max"],
+            statistics["outgoing"]["observed_udp_payload_max"],
+        ):
+            raise ValueError(f"{label} maxima disagree")
+        if statistics["total"]["oversized_packet_count"] != (
+            statistics["incoming"]["oversized_packet_count"]
+            + statistics["outgoing"]["oversized_packet_count"]
+        ):
+            raise ValueError(f"{label} oversized packet counts disagree")
+        if any(statistics[direction]["oversized_packet_count"] for direction in statistics):
+            raise ValueError(f"{label} recorded an oversized packet")
 
 
 def _validate_replay(value: Any) -> None:

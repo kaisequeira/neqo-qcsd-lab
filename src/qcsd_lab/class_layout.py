@@ -151,6 +151,83 @@ def require_canonical_acquisition_root(
     return candidate
 
 
+def publication_roots_for_acquisition_root(acquisition_root: Path) -> tuple[Path, Path]:
+    """Return the one stability/workload pair owned by an acquisition root.
+
+    The unsuffixed pair remains available for historical verification. New
+    allocations use the same ``-vN`` suffix on all three publication roots.
+    """
+
+    layout = class_study_layout()
+    runner = require_canonical_acquisition_root(acquisition_root)
+    if runner == layout.acquisition_root:
+        return layout.stability_root, layout.workload_root
+    suffix = runner.name.removeprefix(layout.acquisition_root.name)
+    return (
+        layout.stability_root.with_name(layout.stability_root.name + suffix),
+        layout.workload_root.with_name(layout.workload_root.name + suffix),
+    )
+
+
+def require_canonical_publication_root(
+    path: Path,
+    *,
+    field: str,
+    label: str | None = None,
+) -> Path:
+    """Require the historical root or one exact versioned sibling."""
+
+    if field not in {"stability_root", "workload_root"}:
+        raise ValueError(f"unknown class-study publication root field: {field}")
+    layout = class_study_layout()
+    canonical = _layout_field(layout, field)
+    candidate = _absolute(path)
+    description = label or field.replace("_", " ")
+    suffix = candidate.name.removeprefix(canonical.name + "-v")
+    versioned_sibling = (
+        candidate.parent == canonical.parent
+        and candidate.name.startswith(canonical.name + "-v")
+        and bool(suffix)
+        and suffix.isascii()
+        and suffix.isdecimal()
+        and suffix[0] != "0"
+    )
+    if candidate != canonical and not versioned_sibling:
+        raise ValueError(
+            f"{description} is outside the canonical class-study layout: "
+            f"expected {canonical} or a versioned -vN sibling, got {candidate}"
+        )
+    _reject_existing_symlinks(candidate, root=layout.lab_root, label=description)
+    return candidate
+
+
+def require_cohort_publication_roots(
+    acquisition_root: Path,
+    stability_root: Path,
+    workload_root: Path,
+    *,
+    require_versioned: bool = False,
+) -> tuple[Path, Path]:
+    """Require publication roots to share the acquisition allocation number."""
+
+    layout = class_study_layout()
+    runner = require_canonical_acquisition_root(acquisition_root)
+    if require_versioned and runner == layout.acquisition_root:
+        raise ValueError("new class-study acquisition requires a versioned -vN root")
+    expected_stability, expected_workloads = publication_roots_for_acquisition_root(runner)
+    stability = require_canonical_publication_root(
+        stability_root, field="stability_root", label="stability root"
+    )
+    workloads = require_canonical_publication_root(
+        workload_root, field="workload_root", label="workload root"
+    )
+    if (stability, workloads) != (expected_stability, expected_workloads):
+        raise ValueError(
+            "class-study stability and workload roots do not match the acquisition cohort"
+        )
+    return stability, workloads
+
+
 def require_canonical_fresh_child(
     path: Path,
     *,

@@ -1958,6 +1958,81 @@ def test_prefix_receipt_allows_sub_ceiling_ack_or_control_datagram(tmp_path: Pat
     )
 
 
+def test_schema_four_prefix_receipt_requires_matching_scope_and_directional_udp() -> None:
+    from qcsd_lab.class_fitting import build_schema_six_prefix_spec
+    from tests.test_capture_acceptance import _controlled_complex_manifest
+
+    manifest = _controlled_complex_manifest("127.0.0.1", 4433, "127.0.0.2", 4434)
+    walkie = {
+        "schema_version": 6,
+        "packet_size": 1_200,
+        "profiles": [
+            {
+                "real": "complex",
+                "decoy": "other",
+                "bursts": [{"outgoing": 4, "incoming": 1}],
+            }
+        ],
+    }
+    spec = build_schema_six_prefix_spec(
+        "complex",
+        walkie,
+        source_walkie_talkie_artifact_sha256="a" * 64,
+        application_manifest=manifest,
+    )
+    receipt = _prefix_receipt(
+        run_index=0,
+        application_sha256="b" * 64,
+        runtime_sha256="c" * 64,
+        core_sha256="d" * 64,
+        spec=spec,
+        spec_sha256="e" * 64,
+        source={
+            "neqo_base_commit": "1" * 40,
+            "published_qcsd_commit": "2" * 40,
+            "migration_commit": "3" * 40,
+        },
+    )
+    receipt.update(
+        schema_version=4,
+        qualification_scope="primary-origin-capacity-v1",
+        incoming_udp_payload_limit=65_527,
+        outgoing_udp_payload_ceiling=1_200,
+        selected_chaff_body_bytes=spec["selected_chaff_body_bytes"],
+    )
+
+    def validate(value: dict[str, object], prefix_spec: dict[str, object] = spec) -> None:
+        qualification._validate_prefix_receipt(
+            value,
+            application_manifest_sha256="b" * 64,
+            runtime_manifest_sha256="c" * 64,
+            chaff_core_sha256="d" * 64,
+            resource_id=0,
+            request_stream_bytes=163,
+            prefix_spec=prefix_spec,
+            prefix_spec_sha256="e" * 64,
+        )
+
+    validate(receipt)
+    for field, wrong in (
+        ("qualification_scope", "full-graph"),
+        ("incoming_udp_payload_limit", 1_200),
+        ("outgoing_udp_payload_ceiling", 65_527),
+        ("schema_version", 3),
+    ):
+        tampered = copy.deepcopy(receipt)
+        tampered[field] = wrong
+        with pytest.raises(ValueError):
+            validate(tampered)
+    missing_scope = copy.deepcopy(receipt)
+    del missing_scope["qualification_scope"]
+    with pytest.raises(ValueError, match="exact schema"):
+        validate(missing_scope)
+    historical_spec = {**spec, "schema_version": 3}
+    with pytest.raises(ValueError):
+        validate(receipt, historical_spec)
+
+
 def test_sidecar_rejects_base_manifest_hash_mismatch(tmp_path: Path) -> None:
     changed = tmp_path / WORKLOAD.name
     changed.write_bytes(WORKLOAD.read_bytes() + b"\n")

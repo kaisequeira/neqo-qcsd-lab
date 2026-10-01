@@ -26,7 +26,9 @@ def _run(*arguments: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _run_class_host_path(value: str) -> subprocess.CompletedProcess[str]:
+def _run_class_host_path(
+    value: str, *, root: Path = ROOT
+) -> subprocess.CompletedProcess[str]:
     source = LAUNCHER.read_text(encoding="utf-8")
     function = source.split("class_host_path() {", maxsplit=1)[1].split(
         "\n}\n\nclass_container_path()", maxsplit=1
@@ -35,7 +37,7 @@ def _run_class_host_path(value: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["bash", "-c", script, "wrapper-test", value],
         cwd=ROOT,
-        env={"ROOT": str(ROOT)},
+        env={"ROOT": str(root)},
         check=False,
         capture_output=True,
         text=True,
@@ -157,6 +159,38 @@ def test_acquisition_init_accepts_versioned_root_before_authority_gate() -> None
     assert "requires --foundation-attestation before Docker" in result.stderr
     assert "canonical path or a versioned sibling" not in result.stderr
     assert not versioned_root.exists()
+
+
+def test_wrapper_rejects_mismatched_versioned_publication_pair_before_docker() -> None:
+    layout = class_study_layout()
+    runner = f"{layout.acquisition_root}-v127"
+    wrong_workloads = f"{layout.workload_root}-v128"
+    result = _run(
+        "acquisition-init",
+        "--acquisition-root",
+        runner,
+        "--workload-root",
+        wrong_workloads,
+    )
+
+    assert result.returncode == 2
+    assert "workload root differs from the acquisition cohort" in result.stderr
+    assert "Missing image" not in result.stderr
+
+
+def test_wrapper_rejects_symlinked_versioned_workload_before_docker(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "lab"
+    (root / "config").mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (root / "config/workloads-v127").symlink_to(outside, target_is_directory=True)
+
+    result = _run_class_host_path("config/workloads-v127", root=root)
+
+    assert result.returncode != 0
+    assert "path traverses a symlink" in result.stderr
 
 
 def test_exact_v127_historical_verify_uses_clean_current_source_in_read_only_mount() -> None:
@@ -386,6 +420,8 @@ def test_acquisition_watch_delegates_only_its_supported_host_arguments() -> None
             "acquisition-watch",
             "--heartbeat-seconds",
             "0",
+            "--acquisition-root",
+            str(class_study_layout().acquisition_root) + "-v99999999",
         ],
         cwd=ROOT,
         env=environment,
@@ -401,6 +437,14 @@ def test_acquisition_watch_delegates_only_its_supported_host_arguments() -> None
         capture_output=True,
         text=True,
     )
+    omitted_root = subprocess.run(
+        [str(LAUNCHER), "class-study", "acquisition-watch"],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
 
     assert invalid_heartbeat.returncode == 1
     assert "heartbeat must be a finite number in [1, 5]" in invalid_heartbeat.stderr
@@ -409,6 +453,8 @@ def test_acquisition_watch_delegates_only_its_supported_host_arguments() -> None
     assert "acquisition root is not an existing directory" in missing_root.stderr
     assert "unrecognized arguments" not in missing_root.stderr
     assert "Docker" not in missing_root.stderr
+    assert omitted_root.returncode == 2
+    assert "requires --acquisition-root" in omitted_root.stderr
 
 
 def test_wrapper_derives_layout_from_python_and_exempts_frozen_actions() -> None:
@@ -470,10 +516,19 @@ def test_prospective_contract_paths_match_the_canonical_layout() -> None:
         "config/class-study/v1/" + class_layout.FINAL_SELECTION_FILENAME
     )
     assert contract["fresh_path_policy"] == (
-        "exact-except-acquisition-direct-vN-sibling-no-symlink-component"
+        "paired-direct-vN-siblings-no-symlink-component"
     )
     assert contract["acquisition_root_versioned_sibling"] == (
         "artifacts/" + class_layout.ACQUISITION_DIRECTORY + "-v[1-9][0-9]*"
+    )
+    assert contract["stability_root_versioned_sibling"] == (
+        "artifacts/" + class_layout.STABILITY_DIRECTORY + "-v[1-9][0-9]*"
+    )
+    assert contract["workload_root_versioned_sibling"] == (
+        "config/workloads-v[1-9][0-9]*"
+    )
+    assert contract["unsuffixed_publication_roots"] == (
+        "historical-verify-only-never-fresh-write"
     )
 
 

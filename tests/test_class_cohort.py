@@ -2,12 +2,22 @@ from __future__ import annotations
 
 import copy
 import json
+import shutil
+from collections import Counter
 from pathlib import Path
 
 import pytest
+import yaml
 
 from qcsd_lab import class_attestation as attestation
 import qcsd_lab.class_cohort as cohort_module
+from qcsd_lab import orchestrator, util
+from qcsd_lab.experiment import (
+    initialize_experiment,
+    load_experiment,
+    validate_planned_sample_identity,
+    validate_resume_fingerprints,
+)
 from qcsd_lab.acquisition_selection import derive_acquisition_selection
 from qcsd_lab.class_acquisition import (
     CHECKPOINT_SCHEMA_VERSION,
@@ -24,6 +34,8 @@ from qcsd_lab.class_catalogue import (
     StabilityObservation,
     build_stability_receipt,
 )
+from qcsd_lab.class_campaigns import campaign_documents, validate_campaign_document
+from qcsd_lab.class_layout import require_cohort_publication_roots
 from qcsd_lab.class_cohort import (
     ASSEMBLY_RECEIPT_TYPE,
     FINAL_SELECTION_RECEIPT_TYPE,
@@ -34,7 +46,9 @@ from qcsd_lab.class_cohort import (
     build_evidenced_cohort,
     publish_evidenced_cohort,
     validate_cohort_assembly,
+    validate_cohort_assembly_receipt,
 )
+from qcsd_lab.class_pipeline import verify_cohort_admission
 from qcsd_lab.class_study import (
     CANDIDATE_COUNT,
     CANDIDATES_PER_STRATUM,
@@ -48,6 +62,7 @@ from qcsd_lab.class_study import (
     validate_hash_bound_receipt,
 )
 from qcsd_lab.util import sha256_file
+from tests.test_class_campaign_execution import _complete_two_origin_workload
 
 LIST_SHA = "a" * 64
 
@@ -168,6 +183,13 @@ def _completion(
         cohort_module,
         "_validate_current_completion_authority",
         lambda *_args, **_kwargs: None,
+    )
+    # These synthetic bridge fixtures use arbitrary temporary directories.
+    # The production layout check is exercised independently below.
+    monkeypatch.setattr(
+        cohort_module,
+        "require_cohort_publication_roots",
+        lambda *_args, **_kwargs: (None, None),
     )
     return path
 
@@ -436,6 +458,47 @@ def test_completed_prefix_builds_120_class_pilot_without_failing_unused_tail(
         stability_root=stability, workload_root=workloads,
         acquisition_completion_path=completion,
     )
+    # Continue the synthetic completion into the real downstream admission
+    # and deterministic campaign planners.  The fixture stubs live acquisition
+    # and prepared workloads above, so this grants no scientific credit.
+    cohort_path = tmp_path / "pilot-cohort.json"
+    assembly_path = tmp_path / "pilot-assembly.json"
+    cohort_path.write_bytes(canonical_json_bytes(cohort))
+    assembly_path.write_bytes(canonical_json_bytes(assembly))
+    admission = verify_cohort_admission(
+        cohort_path,
+        assembly_path,
+        candidate_catalogue_path=catalogue,
+        stability_root=stability,
+        workload_root=workloads,
+        acquisition_completion_path=completion,
+    )
+    assert len(admission.selection.pilot) == 120
+    assert len(admission.prepared_workload_sha256) == 120
+    assert admission.acquisition_completion_sha256 == sha256_file(completion)
+    documents = campaign_documents(
+        cohort_path,
+        cohort_assembly_receipt=assembly_path,
+        cohort_reference="pilot-cohort.json",
+        cohort_assembly_reference="pilot-assembly.json",
+        _enforce_fresh_layout=False,
+    )
+    for role, samples in (("pilot-fitting", 480), ("pilot-compatibility", 1080)):
+        document = next(item for item in documents.values() if item["evidence_role"] == role)
+        assert validate_campaign_document(
+            document,
+            cohort_receipt=cohort_path,
+            cohort_assembly_receipt=assembly_path,
+            enforce_fresh_layout=False,
+        ) == f"{document['name']}.yml"
+        assert tuple(document["workloads"]) == tuple(
+            candidate.candidate_id for candidate in admission.selection.pilot
+        )
+        assert (
+            sum(document["workloads"].values())
+            * len(document["request_policies"])
+            * len(document["defenses"])
+        ) == samples
     # A new publication in an explicitly unassessed tail cannot be silently
     # ignored, even when candidate evidence lookup is stubbed for this test.
     (workloads / f"{tail[0]['candidate_id']}.json").write_text("{}")
@@ -444,6 +507,237 @@ def test_completed_prefix_builds_120_class_pilot_without_failing_unused_tail(
             catalogue, stability_root=stability, workload_root=workloads,
             acquisition_completion_path=completion,
         )
+
+
+def _synthetic_acquisition_prefix_loaded_pilot_campaign(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Construct a zero-credit pilot from synthetic terminal and workload inputs."""
+    monkeypatch.setattr(util, "LAB_ROOT", tmp_path)
+    catalogue = _catalogue(tmp_path / "candidates.json")
+    completion = _completion(tmp_path, monkeypatch, prefix=True)
+    acquisition_root = (
+        tmp_path / "artifacts" / f"{STUDY_ID}-acquisition-v130"
+    )
+    acquisition_root.mkdir(parents=True)
+    completion = completion.replace(acquisition_root / "completion.json")
+    monkeypatch.setattr(
+        cohort_module, "require_cohort_publication_roots", require_cohort_publication_roots
+    )
+    payload = json.loads(completion.read_text())["payload"]
+    pilot_ids = tuple(payload["selection"]["payload"]["pilot_ids"])
+    stability = tmp_path / "artifacts" / f"{STUDY_ID}-stability-v130"
+    stability.mkdir()
+    workload_root = tmp_path / "config" / "workloads-v130"
+    workload_root.mkdir(parents=True)
+    generated = tmp_path / "generated-workloads"
+    generated.mkdir()
+    workload_hashes = {}
+    for candidate_id in pilot_ids:
+        complete = _complete_two_origin_workload(
+            generated, visits=2, workload_id=candidate_id
+        )
+        workload_path = workload_root / f"{candidate_id}.json"
+        workload_path.write_bytes(complete.source_bytes)
+        workload_hashes[candidate_id] = sha256_file(workload_path)
+
+    terminals = completion.parent / "terminals"
+    terminals.mkdir()
+    for candidate_id in payload["selection"]["payload"]["terminal_ids"]:
+        terminal = bind_receipt(
+            {
+                "candidate_id": candidate_id,
+                "kind": "eligible",
+                "stability_receipt": {
+                    "path": str(stability / candidate_id / "page-00.json"),
+                    "sha256": "c" * 64,
+                },
+                "admitted_workload": {
+                    "path": str(workload_root / f"{candidate_id}.json"),
+                    "sha256": workload_hashes[candidate_id],
+                },
+            },
+            receipt_type="qcsd-class-study-acquisition-terminal",
+        )
+        path = terminals / f"{candidate_id}.json"
+        path.write_bytes(canonical_json_bytes(terminal))
+        payload["terminal_receipts"][candidate_id] = {
+            "path": f"terminals/{candidate_id}.json",
+            "sha256": sha256_file(path),
+        }
+    completion.write_bytes(canonical_json_bytes(bind_receipt(payload, receipt_type=COMPLETION_TYPE)))
+
+    def synthetic_evidence(candidate: ClassCandidate, **_kwargs: object):
+        eligible, evidence = _eligible_evidence(candidate)
+        evidence["prepared_workload"]["sha256"] = workload_hashes[candidate.candidate_id]
+        return eligible, evidence
+
+    monkeypatch.setattr(cohort_module, "_candidate_evidence", synthetic_evidence)
+    wrong_workload_root = tmp_path / "config" / "workloads-v131"
+    wrong_workload_root.mkdir()
+    with pytest.raises(ValueError, match="do not match the acquisition cohort"):
+        build_evidenced_cohort(
+            catalogue,
+            stability_root=stability,
+            workload_root=wrong_workload_root,
+            acquisition_completion_path=completion,
+        )
+    cohort, assembly = build_evidenced_cohort(
+        catalogue,
+        stability_root=stability,
+        workload_root=workload_root,
+        acquisition_completion_path=completion,
+    )
+    study_root = tmp_path / "config" / "class-study" / "v1"
+    study_root.mkdir(parents=True)
+    cohort_path = study_root / "classifier-multiorigin100-v1-pilot-cohort.json"
+    assembly_path = study_root / "classifier-multiorigin100-v1-pilot-cohort-assembly.json"
+    cohort_path.write_bytes(canonical_json_bytes(cohort))
+    assembly_path.write_bytes(canonical_json_bytes(assembly))
+    admission = verify_cohort_admission(
+        cohort_path,
+        assembly_path,
+        candidate_catalogue_path=catalogue,
+        stability_root=stability,
+        workload_root=workload_root,
+        acquisition_completion_path=completion,
+    )
+    assert tuple(candidate.candidate_id for candidate in admission.selection.pilot) == pilot_ids
+    assert admission.prepared_workload_sha256 == workload_hashes
+
+    documents = campaign_documents(
+        cohort_path,
+        cohort_assembly_receipt=assembly_path,
+        cohort_reference="../class-study/v1/" + cohort_path.name,
+        cohort_assembly_reference="../class-study/v1/" + assembly_path.name,
+    )
+    name = "classifier-multiorigin100-v1-pilot-fitting-1200.yml"
+    document = documents[name]
+    campaign_root = tmp_path / "config" / "classifier-multiorigin100-v1-campaigns"
+    campaign_root.mkdir()
+    campaign_path = campaign_root / name
+    campaign_path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+    campaign = orchestrator.load_campaign(campaign_path)
+    return campaign, admission, cohort_path, assembly_path, workload_root
+
+
+def test_synthetic_acquisition_prefix_reaches_loaded_pilot_capture_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exercise the downstream wiring without creating scientific evidence."""
+    campaign, admission, cohort_path, assembly_path, workload_root = (
+        _synthetic_acquisition_prefix_loaded_pilot_campaign(tmp_path, monkeypatch)
+    )
+    pilot_ids = tuple(candidate.candidate_id for candidate in admission.selection.pilot)
+    plan = orchestrator.plan_campaign(campaign)
+    assert len(plan) == 480
+    assert tuple(workload.id for workload in campaign.workloads) == pilot_ids
+    assert {workload.origin_count for workload in campaign.workloads} == {2}
+    assert Counter((item["workload_id"], item["request_policy"]) for item in plan) == Counter(
+        {(candidate_id, policy): 2 for candidate_id in pilot_ids for policy in ("as-defined", "half-duplex")}
+    )
+    original_assembly = json.loads(assembly_path.read_text(encoding="utf-8"))
+    swapped = copy.deepcopy(original_assembly["payload"])
+    swapped["workload_root"] = "workloads-v131"
+    with pytest.raises(ValueError, match="publication root versions differ"):
+        validate_cohort_assembly_receipt(
+            bind_receipt(swapped, receipt_type=ASSEMBLY_RECEIPT_TYPE),
+            cohort=json.loads(cohort_path.read_text(encoding="utf-8")),
+        )
+    swapped["stability_root"] = f"{STUDY_ID}-stability-v131"
+    wrong_assembly = assembly_path.with_name("wrong-version-assembly.json")
+    wrong_assembly.write_bytes(
+        canonical_json_bytes(bind_receipt(swapped, receipt_type=ASSEMBLY_RECEIPT_TYPE))
+    )
+    wrong_workload_root = workload_root.with_name("workloads-v131")
+    (tmp_path / "artifacts" / f"{STUDY_ID}-acquisition-v131").mkdir()
+    shutil.copy2(
+        workload_root / f"{pilot_ids[0]}.json",
+        wrong_workload_root / f"{pilot_ids[0]}.json",
+    )
+    document = yaml.safe_load(campaign.path.read_text(encoding="utf-8"))
+    document["class_study_cohort_assembly"] = (
+        "../class-study/v1/" + wrong_assembly.name
+    )
+    campaign.path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+    with pytest.raises(ValueError, match="cohort acquisition completion"):
+        orchestrator.load_campaign(campaign.path)
+
+
+def test_synthetic_pilot_plan_reaches_durable_checkpoint_and_resume_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Check the real checkpoint consumer without claiming a capture or fitting result."""
+    campaign, admission, cohort_path, assembly_path, _workload_root = (
+        _synthetic_acquisition_prefix_loaded_pilot_campaign(tmp_path, monkeypatch)
+    )
+    plan = orchestrator.plan_campaign(campaign)
+    root = tmp_path / "diagnostic-results" / campaign.name / "rehearsal-001"
+    inputs = root / "inputs"
+    frozen_workloads = inputs / "workloads"
+    frozen_workloads.mkdir(parents=True)
+    (inputs / "campaign.yml").write_bytes(campaign.source_bytes)
+    (inputs / "pilot-cohort.json").write_bytes(cohort_path.read_bytes())
+    (inputs / "pilot-assembly.json").write_bytes(assembly_path.read_bytes())
+    for workload in campaign.workloads:
+        (frozen_workloads / f"{workload.id}.json").write_bytes(workload.source_bytes)
+
+    configuration = {
+        "campaign_sha256": sha256_file(inputs / "campaign.yml"),
+        "profile": campaign.profile,
+        "request_policies": list(campaign.request_policies),
+        "workloads": [
+            {"id": workload.id, "sha256": workload.sha256}
+            for workload in campaign.workloads
+        ],
+        "defenses": [
+            {"name": defense.name, "kind": defense.kind, "baseline": defense.baseline}
+            for defense in campaign.defenses
+        ],
+        "limits": campaign.limits.as_dict(),
+        "evidence_role": campaign.evidence_role,
+        "class_study_cohort_sha256": admission.cohort_sha256,
+        "class_study_cohort_assembly_sha256": admission.assembly_sha256,
+        "class_study_id": STUDY_ID,
+        # Diagnostic placeholders satisfy checkpoint shape only; neither is
+        # a class launch claim or a verified foundation attestation.
+        "class_study_launch_sha256": "e" * 64,
+        "class_study_foundation_sha256": "f" * 64,
+        "public_origin_policy": {
+            "environment": "QCSD_PUBLIC_ORIGIN_ONLY",
+            "required_value": "1",
+            "resolution": "resolve-once-reject-any-non-public-connect-exact-address",
+        },
+    }
+    source = {"diagnostic": "synthetic-no-scientific-credit"}
+    checkpoint = initialize_experiment(
+        root,
+        name=campaign.name,
+        purpose=campaign.purpose,
+        run_id=root.name,
+        source=source,
+        configuration=configuration,
+        samples=plan,
+        started_at="2026-10-01T00:00:00+00:00",
+    )
+    loaded = load_experiment(root)
+    assert loaded == checkpoint
+    assert loaded["summary"] == {
+        "planned": 480,
+        "accepted": 0,
+        "failed": 0,
+        "eligible": 0,
+        "passed": False,
+    }
+    assert loaded["configuration"]["class_study_cohort_sha256"] == admission.cohort_sha256
+    assert loaded["configuration"]["class_study_cohort_assembly_sha256"] == admission.assembly_sha256
+    validate_planned_sample_identity(loaded, plan)
+    assert validate_resume_fingerprints(root, expected_source=source) == loaded["input_digest"]
+
+    frozen = frozen_workloads / f"{campaign.workloads[0].id}.json"
+    frozen.write_bytes(frozen.read_bytes() + b"\n")
+    with pytest.raises(ValueError, match="input fingerprint mismatch"):
+        validate_resume_fingerprints(root, expected_source=source)
 
 
 @pytest.mark.parametrize("mutation", ["terminal", "eligibility", "rejection", "stability"])

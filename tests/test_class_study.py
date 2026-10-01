@@ -26,7 +26,12 @@ from qcsd_lab.class_acquisition import (
     TERMINAL_SCHEMA_VERSION as ACQUISITION_TERMINAL_SCHEMA_VERSION,
 )
 from qcsd_lab.class_handoff import SCHEMA_VERSION as HANDOFF_SCHEMA_VERSION
-from qcsd_lab.h3_prebaseline import PREBASELINE_H3_SCREEN_CONTRACT
+from qcsd_lab.class_fitting import PRIMARY_ORIGIN_PREFIX_SCHEMA_VERSION
+from qcsd_lab.chaff_qualification import (
+    PRIMARY_ORIGIN_CAPACITY_SCOPE,
+    PRIMARY_ORIGIN_PREFIX_RECEIPT_SCHEMA_VERSION,
+)
+from qcsd_lab.h3_prebaseline import PREBASELINE_H3_SCREEN_V2_CONTRACT
 from qcsd_lab.class_study import (
     CANDIDATE_COUNT,
     CANDIDATES_PER_STRATUM,
@@ -79,6 +84,83 @@ LIST_SHA = "a" * 64
 OTHER_LIST_SHA = "b" * 64
 
 
+def test_prospective_walkie_talkie_prefix_scope_amendment_is_exact() -> None:
+    root = Path(__file__).resolve().parents[1]
+    study = json.loads((root / "config/class-study/v1/study.json").read_text())
+
+    assert PRIMARY_ORIGIN_PREFIX_SCHEMA_VERSION == 4
+    assert PRIMARY_ORIGIN_PREFIX_RECEIPT_SCHEMA_VERSION == 4
+    assert PRIMARY_ORIGIN_CAPACITY_SCOPE == "primary-origin-capacity-v1"
+    assert study["prospective_walkie_talkie_prefix_amendment"] == {
+        "schema_version": 1,
+        "date": "2026-10-01",
+        "scope": "fresh-source-bound-class-study-walkie-talkie-prefix-qualification",
+        "qualification_scope": PRIMARY_ORIGIN_CAPACITY_SCOPE,
+        "prefix_spec_schema_version": PRIMARY_ORIGIN_PREFIX_SCHEMA_VERSION,
+        "prefix_qualification_receipt_schema_version": (
+            PRIMARY_ORIGIN_PREFIX_RECEIPT_SCHEMA_VERSION
+        ),
+        "frozen_application_graph": (
+            "validate-complete-prepared-resource-graph-and-bind-exact-manifest-hash;"
+            "never-prune-secondary-or-outside-prefix-resources"
+        ),
+        "capacity_connection": "one-primary-origin-quic-connection",
+        "stage_projection": (
+            "compute-full-graph-dependency-batches-then-filter-each-stage-to-primary-origin-"
+            "without-renumbering-or-collapsing-empty-stages"
+        ),
+        "unproven_application_resources": {
+            "fields": ["resource_id", "url", "status", "bytes", "body_sha256", "reason"],
+            "order": "resource_id-ascending",
+            "reason_precedence": "secondary-origin-before-outside-prefix-components",
+            "qualification_credit": "none-for-ledger-resources",
+        },
+        "proof_boundary": (
+            "primary-origin-staged-capacity-only;full-page-and-secondary-origin-behaviour-"
+            "require-separate-end-to-end-verification"
+        ),
+        "historical_prefix_spec_schema_versions": [2, 3],
+        "historical_prefix_receipt_schema_versions": [2, 3],
+        "historical_policy": (
+            "verify-only-no-retroactive-capacity-credit-or-current-source-authority"
+        ),
+        "formal_evidence_policy": "new-source-build-and-cohort-required-no-historical-promotion",
+    }
+
+
+def test_prospective_acquisition_publication_namespace_is_version_paired() -> None:
+    root = Path(__file__).resolve().parents[1]
+    study = json.loads((root / "config/class-study/v1/study.json").read_text())
+    layout = study["canonical_workspace_layout"]
+
+    assert study["prospective_acquisition_publication_namespace_amendment"] == {
+        "schema_version": 1,
+        "date": "2026-10-01",
+        "scope": "fresh-source-bound-acquisition-publication-only",
+        "version_source": "allocator-authorised-positive-acquisition-cohort-version-N",
+        "acquisition_root": "artifacts/classifier-multiorigin100-v1-acquisition-vN",
+        "stability_root": "artifacts/classifier-multiorigin100-v1-stability-vN",
+        "workload_root": "config/workloads-vN",
+        "pairing_policy": (
+            "same-N-create-only-direct-sibling-of-each-unsuffixed-root-no-symlink-component"
+        ),
+        "historical_unsuffixed_roots": "verify-only-never-fresh-source-publication",
+        "historical_evidence_policy": "no-retroactive-promotion-or-relabeling",
+    }
+    assert layout["scope"] == (
+        "prospective-versioned-publication-and-historical-unsuffixed-path-map"
+    )
+    assert layout["fresh_path_policy"] == "paired-direct-vN-siblings-no-symlink-component"
+    assert layout["acquisition_root_versioned_sibling"] == (
+        "artifacts/classifier-multiorigin100-v1-acquisition-v[1-9][0-9]*"
+    )
+    assert layout["stability_root_versioned_sibling"] == (
+        "artifacts/classifier-multiorigin100-v1-stability-v[1-9][0-9]*"
+    )
+    assert layout["workload_root_versioned_sibling"] == "config/workloads-v[1-9][0-9]*"
+    assert layout["unsuffixed_publication_roots"] == "historical-verify-only-never-fresh-write"
+
+
 def test_checked_in_handoff_contract_matches_current_exporter_and_kernel_sidecar() -> None:
     root = Path(__file__).resolve().parents[1]
     study = json.loads((root / "config/class-study/v1/study.json").read_text())
@@ -87,9 +169,30 @@ def test_checked_in_handoff_contract_matches_current_exporter_and_kernel_sidecar
     amendment = study["prospective_acquisition_amendment"]
     page_admission = study["page_admission"]
 
-    assert amendment["schema_version"] == 7
-    assert amendment["date"] == "2026-09-30"
-    assert amendment["acquisition_schema_version"] == ACQUISITION_SCHEMA_VERSION == 11
+    assert amendment["schema_version"] == 8
+    assert amendment["date"] == "2026-10-01"
+    assert study["prospective_udp_direction_amendment"] == {
+        "schema_version": 1,
+        "date": "2026-10-01",
+        "scope": "fresh-source-bound-acquisition-fitting-qualification-and-capture-only",
+        "reason": (
+            "ordinary-public-http3-servers-can-send-udp-payloads-above-the-client-outgoing-"
+            "defense-ceiling;retain-the-1200-byte-client-send-target-and-observe-complete-"
+            "incoming-datagrams-up-to-the-standard-advertised-receive-limit"
+        ),
+        "outgoing_udp_payload_ceiling_bytes": 1200,
+        "incoming_udp_payload_limit_bytes": 65527,
+        "preparation_udp_payload_qualification_schema_version": 2,
+        "historical_udp_payload_qualification_schema_1": (
+            "verify-only-absolute-1200-byte-ceiling-never-retroactively-admit"
+        ),
+        "packet_fragment_policy": "missing-complete-udp-payload-length-fails-capture-integrity",
+        "formal_evidence_policy": "new-source-build-and-cohort-required-no-historical-promotion",
+    }
+    assert page_admission["outgoing_udp_payload_ceiling_bytes"] == 1200
+    assert page_admission["incoming_udp_payload_limit_bytes"] == 65527
+    assert "udp_payload_ceiling_bytes" not in page_admission
+    assert amendment["acquisition_schema_version"] == ACQUISITION_SCHEMA_VERSION == 12
     assert amendment["checkpoint_schema_version"] == ACQUISITION_CHECKPOINT_SCHEMA_VERSION == 3
     assert amendment["terminal_schema_version"] == ACQUISITION_TERMINAL_SCHEMA_VERSION == 4
     assert amendment["completion_schema_version"] == ACQUISITION_COMPLETION_SCHEMA_VERSION == 4
@@ -155,22 +258,34 @@ def test_checked_in_handoff_contract_matches_current_exporter_and_kernel_sidecar
         ),
         "authority": "historical-verify-only-never-current-admission",
     }
+    assert amendment["retired_v130_contract"] == {
+        "acquisition_schema_version": 11,
+        "checkpoint_schema_version": 3,
+        "terminal_schema_version": 4,
+        "completion_schema_version": 4,
+        "pinned_cdp_probe_schema_version": 18,
+        "discovery_event_audit_schema_version": 8,
+        "prebaseline_h3_screen_schema_version": 1,
+        "authority": "historical-verify-only-never-current-admission",
+    }
     assert page_admission["prebaseline_h3_screen_contract"] == {
-        "schema_version": 1,
-        "policy": "prebaseline-primary-origin-neqo-h3-reachability-v1",
+        "schema_version": 2,
+        "policy": "prebaseline-exact-selected-page-neqo-h3-reachability-v2",
         "control_url": "https://cloudflare-quic.com/",
         "timeout_seconds": 12,
-        "control_probe_order": "before-and-after-candidate-origin-attempts",
+        "control_probe_order": "before-and-after-selected-page-attempts",
         "control_success": "both-known_valid-true",
-        "candidate_attempts_per_distinct_primary_origin": 2,
+        "candidate_attempts_per_selected_page": 2,
+        "maximum_selected_pages": 5,
+        "pass": "at-least-one-exact-selected-page-known_valid-on-both-attempts",
         "site_rejection": (
-            "any-selected-page-request-origin-fails-both-attempts-with-classified-"
+            "all-exact-selected-pages-fail-both-attempts-with-classified-"
             "http3-connectivity-timeout-or-idle-timeout"
         ),
         "uncertain_outcome": "mixed-ambiguous-or-control-failure-blocks",
         "resolver_addresses": "diagnostic-only-no-neqo-pin-claim",
     }
-    assert page_admission["prebaseline_h3_screen_contract"] == PREBASELINE_H3_SCREEN_CONTRACT
+    assert page_admission["prebaseline_h3_screen_contract"] == PREBASELINE_H3_SCREEN_V2_CONTRACT
     assert page_admission["passive_render_contract"] == PASSIVE_RENDER_CONTRACT
     assert page_admission["passive_render_contract_sha256"] == PASSIVE_RENDER_CONTRACT_SHA256
     assert page_admission["cdp_target_instrumentation_policy"] == CDP_TARGET_INSTRUMENTATION_POLICY

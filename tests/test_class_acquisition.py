@@ -160,11 +160,17 @@ def _h3_screen_receipt(
     outcome: str = "pass",
     navigation: NavigationDiscovery | None = None,
     per_origin: dict[str, str] | None = None,
+    per_page: dict[str, str] | None = None,
     screen_at: datetime | None = None,
+    legacy: bool = False,
 ) -> dict:
     """Bind the same small screen shape returned by production backends."""
 
-    control_url = h3_prebaseline.PREBASELINE_H3_SCREEN_CONTRACT["control_url"]
+    contract = (
+        h3_prebaseline.PREBASELINE_H3_SCREEN_CONTRACT
+        if legacy else h3_prebaseline.PREBASELINE_H3_SCREEN_V2_CONTRACT
+    )
+    control_url = contract["control_url"]
     control_before = _h3_screen_attempt(
         control_url, "known-valid", sequence=0, at=screen_at
     )
@@ -179,34 +185,45 @@ def _h3_screen_receipt(
     default_origin_outcome = (
         "idle-timeout" if outcome == "site-rejection" else "known-valid"
     )
-    origin_attempts = []
-    for origin_index, value in enumerate(selected_origins):
-        origin_outcome = (per_origin or {}).get(value, default_origin_outcome)
-        origin_attempts.append({
-            "origin": value,
+    targets = (
+        [(value, value + "/") for value in selected_origins]
+        if legacy else [(page["url"], page["url"]) for page in selected_pages]
+    )
+    target_attempts = []
+    for target_index, (identity, url) in enumerate(targets):
+        target_outcome = (per_page or {}).get(
+            url,
+            (per_origin or {}).get(origin(url), default_origin_outcome),
+        )
+        target_attempts.append({
+            "origin" if legacy else "url": identity,
             "attempts": [
                 _h3_screen_attempt(
-                    value + "/", origin_outcome,
-                    sequence=1 + 2 * origin_index + attempt_index,
+                    url, target_outcome,
+                    sequence=1 + 2 * target_index + attempt_index,
                     at=screen_at,
                 )
                 for attempt_index in range(2)
             ],
         })
     control_after = _h3_screen_attempt(
-        control_url, "known-valid", sequence=1 + 2 * len(selected_origins), at=screen_at
+        control_url, "known-valid", sequence=1 + 2 * len(targets), at=screen_at
     )
     if outcome == "blocked":
         control_before = _h3_screen_attempt(
             control_url, "ambiguous", sequence=0, at=screen_at
         )
         control_after = None
-        origin_attempts = []
+        target_attempts = []
     runtime_image = acquisition_module.os.environ.get("QCSD_LAB_IMAGE_DIGEST", "native")
     runtime_source = dict(acquisition_module.source_metadata())
     if runtime_image == "native" and runtime_source.get("image_digest") is None:
         runtime_source["image_digest"] = "native"
-    return h3_prebaseline.build_h3_screen_receipt(
+    builder = (
+        h3_prebaseline.build_h3_screen_receipt
+        if legacy else h3_prebaseline.build_h3_screen_receipt_v2
+    )
+    return builder(
         candidate_id=candidate_id,
         domain=domain,
         selected_pages=selected_pages,
@@ -215,7 +232,7 @@ def _h3_screen_receipt(
             for link in navigation.links
         ] if navigation is not None else [],
         control_before=control_before,
-        origin_attempts=origin_attempts,
+        **({"origin_attempts": target_attempts} if legacy else {"page_attempts": target_attempts}),
         control_after=control_after,
         image_digest=runtime_image,
         source=runtime_source,
@@ -272,7 +289,7 @@ def test_prebaseline_h3_screen_failed_control_is_blocked_without_site_probes() -
 
     domain = "example.com"
     pages = select_page_candidates(domain, registrable_domain=domain, discovered_links=())
-    receipt = _h3_screen_receipt("tranco-0000001", domain, pages, outcome="blocked")
+    receipt = _h3_screen_receipt("tranco-0000001", domain, pages, outcome="blocked", legacy=True)
     payload = h3_prebaseline.validate_h3_screen_receipt(receipt)
     assert payload["decision"] == "blocked"
     assert payload["origin_attempts"] == []
@@ -297,11 +314,11 @@ def test_prebaseline_h3_screen_rejects_rehashed_false_site_decision() -> None:
 @pytest.mark.parametrize(
     ("outcome", "reason"),
     (
-        ("terminal-policy-rejection", h3_prebaseline.H3_SITE_REASON),
+        ("terminal-policy-rejection", h3_prebaseline.H3_SITE_V2_REASON),
         ("recoverable-failure", h3_prebaseline.H3_BLOCK_REASON),
     ),
 )
-def test_schema_eleven_h3_specific_navigation_reason_requires_receipt(
+def test_current_h3_specific_navigation_reason_requires_receipt(
     outcome: str, reason: str,
 ) -> None:
     state = {
@@ -353,6 +370,7 @@ def test_prebaseline_h3_screen_mixed_primary_origins_have_definite_outcomes() ->
     )
     definite = _h3_screen_receipt(
         "tranco-0000001", domain, pages, navigation=navigation,
+        legacy=True,
         per_origin={
             "https://example.com": "known-valid",
             "https://www.example.com": "idle-timeout",
@@ -361,6 +379,7 @@ def test_prebaseline_h3_screen_mixed_primary_origins_have_definite_outcomes() ->
     assert h3_prebaseline.validate_h3_screen_receipt(definite)["decision"] == "site-rejection"
     uncertain = _h3_screen_receipt(
         "tranco-0000001", domain, pages, navigation=navigation,
+        legacy=True,
         per_origin={
             "https://example.com": "known-valid",
             "https://www.example.com": "ambiguous",
@@ -374,7 +393,7 @@ def test_prebaseline_h3_screen_mixed_results_within_one_origin_block() -> None:
 
     domain = "example.com"
     pages = select_page_candidates(domain, registrable_domain=domain, discovered_links=())
-    passing = _h3_screen_receipt("tranco-0000001", domain, pages)
+    passing = _h3_screen_receipt("tranco-0000001", domain, pages, legacy=True)
     payload = copy.deepcopy(passing["payload"])
     payload["origin_attempts"][0]["attempts"][1] = _h3_screen_attempt(
         "https://example.com/", "idle-timeout", sequence=2
@@ -391,6 +410,95 @@ def test_prebaseline_h3_screen_mixed_results_within_one_origin_block() -> None:
         source=payload["source"],
     )
     assert screened["payload"]["decision"] == "blocked"
+
+
+def test_schema_eleven_h3_receipts_remain_verifiable_but_not_resumable(tmp_path: Path) -> None:
+    from qcsd_lab.class_catalogue import select_page_candidates
+
+    catalogue = _catalogue(tmp_path / "catalogue.json")
+    runner = initialise_runner(
+        tmp_path / "runner",
+        candidate_catalogue_path=catalogue,
+        foundation_attestation=_foundation(tmp_path / "foundation.json"),
+        started_at="2026-08-28T00:00:00Z",
+        browser_tool="test-browser@1",
+    )
+    provenance = load_json(runner / "provenance.json")["payload"]
+    historical = copy.deepcopy(provenance)
+    historical["acquisition_schema_version"] = 11
+    historical["prebaseline_h3_screen_contract"] = (
+        h3_prebaseline.PREBASELINE_H3_SCREEN_CONTRACT
+    )
+    acquisition_module._validate_current_provenance_contract(
+        historical, candidate_catalogue_path=catalogue
+    )
+
+    candidate_id, domain = _catalogue_candidate_identities(catalogue, 1)[0]
+    pages = select_page_candidates(domain, registrable_domain=domain, discovered_links=())
+    receipt = _h3_screen_receipt(
+        candidate_id,
+        domain,
+        pages,
+        screen_at=datetime(2026, 8, 28, 0, 0, 1, tzinfo=UTC),
+        legacy=True,
+    )
+    state = {
+        "state": "baseline-ready",
+        "pages": [
+            {
+                "page": page.as_dict(),
+                "observations": [],
+                "probe_attempts": [],
+                "approved_origins": [],
+                "navigation_observed_origins": [],
+            }
+            for page in pages
+        ],
+        "terminal": None,
+        "navigation_attempts": [{
+            "attempt": 1,
+            "started_at": "2026-08-28T00:00:00Z",
+            "completed_at": "2026-08-28T00:00:01Z",
+            "outcome": "completed",
+            "reason": None,
+            "policy_evidence": None,
+            "h3_screen_evidence": receipt,
+        }],
+        "navigation_observed_origins": [],
+        "navigation_rejections": [],
+    }
+    acquisition_module._validate_navigation_attempts(
+        state,
+        acquisition_schema_version=11,
+        candidate_id=candidate_id,
+        candidate_domain=domain,
+        image_digest=receipt["payload"]["image_digest"],
+        source=receipt["payload"]["source"],
+    )
+    acquisition_module._validate_baseline_ready_state(
+        state,
+        candidate=SimpleNamespace(candidate_id=candidate_id, domain=domain),
+        acquisition_schema_version=11,
+    )
+    with pytest.raises(ValueError, match="version differs"):
+        acquisition_module._validate_navigation_attempts(
+            state,
+            acquisition_schema_version=acquisition_module.SCHEMA_VERSION,
+            candidate_id=candidate_id,
+            candidate_domain=domain,
+            image_digest=receipt["payload"]["image_digest"],
+            source=receipt["payload"]["source"],
+        )
+    _replace_receipt_payload(runner / "provenance.json", historical)
+    with pytest.raises(ValueError, match="historical acquisition"):
+        run_due_acquisition(
+            runner,
+            candidate_catalogue_path=catalogue,
+            stability_root=tmp_path / "stability",
+            workload_root=tmp_path / "workloads",
+            backend=RejectingBackend(),
+            now=datetime(2026, 8, 28, tzinfo=UTC),
+        )
 
 
 @pytest.mark.parametrize(
@@ -2928,6 +3036,71 @@ def test_five_page_pair_uses_one_baseline_and_never_exceeds_global_cap(
     _replace_receipt_payload(runner / "checkpoint.json", original)
 
 
+def test_schema_twelve_mixed_page_screen_resumes_only_exact_h3_page(tmp_path: Path) -> None:
+    catalogue = _catalogue(tmp_path / "catalogue.json")
+    runner = initialise_runner(
+        tmp_path / "runner",
+        candidate_catalogue_path=catalogue,
+        foundation_attestation=_foundation(tmp_path / "foundation.json"),
+        started_at="2026-08-28T00:00:00Z",
+        browser_tool="test-browser@1",
+    )
+    candidate_id, domain = _catalogue_candidate_identities(catalogue, 1)[0]
+    baseline = datetime(2026, 8, 28, tzinfo=UTC)
+
+    class MixedScreenBackend(BatchBackend):
+        def screen_h3(self, candidate_id, domain, navigation, pages):
+            active = load_json(runner / "checkpoint.json")["payload"]["active_batch"]
+            return _h3_screen_receipt(
+                candidate_id,
+                domain,
+                pages,
+                navigation=navigation,
+                per_page={pages[0].url: "ambiguous", pages[1].url: "known-valid"},
+                screen_at=acquisition_module._timestamp(active["published_at"]),
+            )
+
+    backend = MixedScreenBackend(
+        baseline + timedelta(seconds=25),
+        page_counts={domain: 2},
+        runner=runner,
+    )
+    arguments = {
+        "candidate_catalogue_path": catalogue,
+        "stability_root": tmp_path / "stability",
+        "workload_root": tmp_path / "workloads",
+        "backend": backend,
+        "now": baseline,
+        "max_candidates": 1,
+    }
+    run_due_acquisition(runner, **arguments)
+    checkpoint = load_json(runner / "checkpoint.json")["payload"]
+    state = checkpoint["candidates"][candidate_id]
+    assert state["state"] == "baseline-ready"
+    assert [page["page"]["ordinal"] for page in state["pages"]] == [1]
+    screen = h3_prebaseline.validate_h3_screen_receipt(
+        state["navigation_attempts"][-1]["h3_screen_evidence"]
+    )
+    assert screen["decision"] == "pass"
+    assert len(screen["selected_pages"]) == len(screen["page_attempts"]) == 2
+    assert [item["attempts"][0]["outcome"] for item in screen["page_attempts"]] == [
+        "ambiguous", "known-valid"
+    ]
+    acquisition_status(runner, candidate_catalogue_path=catalogue, now=baseline)
+
+    changed = copy.deepcopy(checkpoint)
+    changed["candidates"][candidate_id]["pages"][0]["page"]["ordinal"] = 0
+    _replace_receipt_payload(runner / "checkpoint.json", changed)
+    with pytest.raises(ValueError, match="H3 screen pages differ"):
+        acquisition_status(runner, candidate_catalogue_path=catalogue, now=baseline)
+    _replace_receipt_payload(runner / "checkpoint.json", checkpoint)
+
+    run_due_acquisition(runner, **arguments)
+    assert backend.workload_ids
+    assert all("-p01-" in workload_id for workload_id in backend.workload_ids)
+    acquisition_status(runner, candidate_catalogue_path=catalogue, now=baseline)
+
+
 def test_schema4_live_probing_state_rejects_rebound_structure_and_observations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4400,8 +4573,9 @@ def test_historical_schema_policy_map_and_render_contract_are_frozen() -> None:
         )
 
 
-def test_schema_seven_audit_five_projects_read_only_but_cannot_alias_schema_eleven() -> None:
-    assert acquisition_module.SCHEMA_VERSION == 11
+def test_schema_seven_audit_five_projects_read_only_but_cannot_alias_later_schemas() -> None:
+    assert acquisition_module.SCHEMA_VERSION == 12
+    assert 11 in acquisition_module.HISTORICAL_SCHEMA_VERSIONS
     manifest = _prepared_manifest("https://example.com/", ["https://example.com"])
     preparation = manifest["preparation"]
     render = copy.deepcopy(preparation["render_observation"])
@@ -4454,13 +4628,14 @@ def test_schema_seven_audit_five_projects_read_only_but_cannot_alias_schema_elev
             acquisition_module._SCHEMA_SEVEN_CDP_TARGET_INSTRUMENTATION_POLICY
         ),
     )
-    with pytest.raises(ValueError, match="discovery event audit"):
-        acquisition_module._validate_versioned_class_study_preparation(
-            manifest,
-            workload_id="example",
-            acquisition_schema_version=acquisition_module.SCHEMA_VERSION,
-            instrumentation_policy=CDP_TARGET_INSTRUMENTATION_POLICY,
-        )
+    for schema_version in (11, acquisition_module.SCHEMA_VERSION):
+        with pytest.raises(ValueError, match="discovery event audit"):
+            acquisition_module._validate_versioned_class_study_preparation(
+                manifest,
+                workload_id="example",
+                acquisition_schema_version=schema_version,
+                instrumentation_policy=CDP_TARGET_INSTRUMENTATION_POLICY,
+            )
 
 
 def test_schema_eight_audit_seven_projects_without_losing_recorded_evidence(
@@ -6004,7 +6179,7 @@ def test_due_probe_at_latest_edge_outranks_an_already_missed_candidate(
     )
 
 
-def test_missed_window_is_retained_but_blocks_new_selection_work(
+def test_missed_window_blocks_own_stratum_but_allows_other_strata(
     tmp_path: Path,
 ):
     catalogue = _catalogue(tmp_path / "catalogue.json")
@@ -6063,6 +6238,17 @@ def test_missed_window_is_retained_but_blocks_new_selection_work(
     assert len(missed) == 1
     terminal = load_json(runner / missed[0]["terminal"]["path"])
     assert terminal["payload"]["kind"] == "probe-window-missed"
+    status = acquisition_status(runner, candidate_catalogue_path=catalogue, now=clock.value)
+    assert status["selection_blocked_candidate_ids"] == [armed_id]
+    assert armed_id in status["selection"]["admission_ids"]
+    assert status["pending_count"] == 4 * 24
+    assert status["pending_start_blocked"] is False
+    assert status["work_due_now"] is True
+    assert status["complete"] is False
+
+    # Navigation in another stratum can proceed immediately. Its later
+    # baseline still respects the unresolved 40-minute reservation.
+    next_id = status["selection"]["strata"][1]["admission_ids"][0]
     run_due_acquisition(
         runner,
         candidate_catalogue_path=catalogue,
@@ -6072,18 +6258,20 @@ def test_missed_window_is_retained_but_blocks_new_selection_work(
         clock=clock,
         max_candidates=1,
     )
-    checkpoint = load_json(runner / "checkpoint.json")
-    assert (
-        sum(
-            state["state"] == "baseline-ready"
-            for state in checkpoint["payload"]["candidates"].values()
-        )
-        == 0
+    checkpoint = load_json(runner / "checkpoint.json")["payload"]
+    assert checkpoint["candidates"][next_id]["state"] == "baseline-ready"
+    blocked_stratum = status["selection"]["strata"][0]["admission_ids"]
+    assert all(
+        checkpoint["candidates"][candidate_id]["state"] == "pending"
+        for candidate_id in blocked_stratum if candidate_id != armed_id
     )
     status = acquisition_status(runner, candidate_catalogue_path=catalogue, now=clock.value)
     assert status["selection_blocked_candidate_ids"] == [armed_id]
-    assert armed_id in status["selection"]["admission_ids"]
-    assert status["complete"] is False and status["work_due_now"] is False
+    assert status["selection"]["pilot_ids"] == []
+    assert status["next_due"] is not None
+    assert status["complete"] is False
+    with pytest.raises(ValueError, match="resolved deterministic prefix"):
+        write_acquisition_completion(runner, candidate_catalogue_path=catalogue)
 
 
 def test_orphan_terminal_is_validated_and_recovered_after_checkpoint_interruption(

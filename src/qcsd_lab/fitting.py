@@ -1403,6 +1403,11 @@ def _validate_algorithm_receipts(
 
 
 def _validate_traffic_morphing_receipt(value: object, workload_order: Sequence[str]) -> None:
+    legacy_algorithm = "all-directed-padding-only-lp-then-minimum-cost-derangement"
+    projected_algorithm = f"{legacy_algorithm}-incoming-topcode-v1"
+    if not isinstance(value, Mapping):
+        raise ValueError("Traffic Morphing algorithm receipt is invalid")
+    projected = value.get("algorithm") == projected_algorithm
     receipt = _exact_mapping(
         value,
         {
@@ -1410,10 +1415,11 @@ def _validate_traffic_morphing_receipt(value: object, workload_order: Sequence[s
             "candidate_costs",
             "corpus_bucket_counts",
             "selected_mapping",
-        },
+        }
+        | ({"incoming_projection", "incoming_overflow"} if projected else set()),
         "Traffic Morphing algorithm receipt",
     )
-    if receipt["algorithm"] != "all-directed-padding-only-lp-then-minimum-cost-derangement":
+    if receipt["algorithm"] not in {legacy_algorithm, projected_algorithm}:
         raise ValueError("Traffic Morphing algorithm receipt is invalid")
     expected_edges = [
         (source, target)
@@ -1441,6 +1447,31 @@ def _validate_traffic_morphing_receipt(value: object, workload_order: Sequence[s
                 or sum(counts) <= 0
             ):
                 raise ValueError("Traffic Morphing corpus bucket counts are invalid")
+    if projected:
+        if receipt["incoming_projection"] != "top-code-to-terminal-bucket-1200-v1":
+            raise ValueError("Traffic Morphing incoming projection is invalid")
+        overflow = receipt["incoming_overflow"]
+        if not isinstance(overflow, list) or len(overflow) != len(workload_order):
+            raise ValueError("Traffic Morphing incoming overflow is invalid")
+        for workload, value, counts in zip(workload_order, overflow, corpus, strict=True):
+            record = _exact_mapping(
+                value,
+                {"workload_id", "packet_count", "maximum_udp_payload_bytes"},
+                "Traffic Morphing incoming overflow",
+            )
+            count = record["packet_count"]
+            maximum = record["maximum_udp_payload_bytes"]
+            if (
+                record["workload_id"] != workload
+                or type(count) is not int
+                or not 0 <= count <= counts["incoming"][-1]
+                or (
+                    maximum is not None
+                    and (type(maximum) is not int or not 1_200 < maximum <= 65_527)
+                )
+                or (count == 0) != (maximum is None)
+            ):
+                raise ValueError("Traffic Morphing incoming overflow is invalid")
     candidates = _cost_records(
         receipt["candidate_costs"],
         identity_fields=("source", "target"),

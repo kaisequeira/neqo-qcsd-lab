@@ -1,6 +1,6 @@
 # QCSD thesis project ledger
 
-Checkpoint: **30 September 2026, Australia/Sydney (AEST, UTC+10)**.
+Checkpoint: **1 October 2026, Australia/Sydney (AEST, UTC+10)**.
 This is the current research ledger. The [history](docs/PROJECT-HISTORY.md)
 preserves the development record, the [class-study runbook](docs/CLASS-STUDY.md)
 defines continuation, and the [capture-readiness guide](docs/CAPTURE-READINESS.md)
@@ -71,15 +71,138 @@ the prospective HTTP/3 screen while both control probes passed. These are
 engineering observations outside any acquisition checkpoint and add no
 scientific numerator.
 
-| Checkpoint identity | v130 desktop qualification and current state |
+Prospective schema-2 acquisition authority and watcher fixes were committed
+after v130. The v131 cohort was claimed on Lab source
+`6f2861f4a316809cdd7b69be9fa3a13298d06ff9`, then its no-cache build was
+interrupted by the user (exit 130). No verified v131 build, acquisition
+authority, or acquisition checkpoint was issued. Preserve its claim and treat
+v131 as consumed. The prebuild engineering gate is defined by the
+[acquisition rehearsal](docs/ACQUISITION-REHEARSAL.md): synthetic terminal and
+recovery tests, collection-image parity, bounded live navigation through
+preparation and replay, and later-consumer tests. The v130 image is diagnostic
+only for the changed source. The rehearsal passed a collection-image
+acquisition suite (1,979 passed, 31 skipped) before the latest CDP and
+discovery fixes, a current host later-consumer matrix (388 passed, 3 skipped),
+three local live H3/capture acceptance tests, and a zero-credit sealed
+480-sample pilot fitting handoff. The `zoomlife.ir` frozen-catalogue diagnostic
+completed browser convergence, three-run Neqo preparation and deep manifest
+verification on a 63-resource, two-origin graph; a separate single-origin
+control also completed. An earlier proposed source subsequently passed a
+collection-image acquisition test matrix in two execution profiles: 2,145
+tests passed with 31 skipped; 12 wrapper tests failed only because the first
+invocation used root with `CAP_DAC_OVERRIDE`, then all 12 passed under the
+registered non-root, no-capability profile. This is not one single-profile
+full-suite run or a clean formal build; later source edits need their affected
+checks rerun. A complete zero-credit root H3 survey found 63
+known-valid roots among the frozen 600, distributed **2, 6, 17, 14, 24**
+across the five strata. The root-known-valid set alone is below the registered
+24 eligible classes per stratum; other candidates are not proven ineligible
+because selected final page URLs may differ from the probed root. The release
+gate has now passed its diagnostic criteria on the current source, including
+the later 2,112-pass collection-image run and a directly linked full-sidecar
+Walkie-Talkie diagnostic. The formal acquisition gate remains open and no new
+formal acquisition or capture has begun. See the
+[rehearsal](docs/ACQUISITION-REHEARSAL.md) for limits and the prospective
+study decision.
+
+The registered host acquisition correctness suite subsequently passed
+**2,082 tests with six skips**. A zero-credit integrated synthetic test
+carried acquisition admission through fitting, final selection, final cohort,
+and the 16,000-sample campaign plan. A second synthetic 100-class test loaded
+and preflighted generated certification and the first formal block with a
+finalized fitted bundle and named qualification set. A separate sealed-result
+bridge found and fixed a formal handoff consumer mismatch; its eight tests
+across all formal runtime kinds and the 50-test handoff suite passed. The
+production canary coordinator also passed a zero-credit 100-sample synthetic
+claim, interruption, resume, seal and deep-verification test. The updated CDP
+and independent watcher suites passed 770 and 395 tests. Exact
+selected-page H3 probes found reachable DeepL,
+Dropbox, and OpenStreetMap pages that the historical schema-11 root-based screen blocked,
+but DeepL's passive render and OpenStreetMap's analytics-origin Neqo timeout
+prevented complete preparation. A corrected CDP shutdown path let a fresh
+Dropbox replay reach preparation; that then hit the historical symmetric
+1,200-byte UDP ceiling on 850 incoming datagrams (maximum 1,452). Prospective
+schema-12 exact-page screening and a directional incoming/outgoing UDP policy
+are now implemented across preparation, capture, fitting and qualification.
+Host tests and a synthetic sealed-capture-to-evaluation/Panchenko join pass.
+The newly compiled Rust client screened exact selected pages and completed a
+fresh `zoomlife.ir` public-site preparation: 63 resources across two origins,
+three stable Neqo runs and deep schema-2 directional manifest validation.
+It also produced passing five-request and sustained 40-request response
+qualification receipts on a selected resource. Their Python consumers accepted
+response identities and packet evidence in a diagnostic run that bypassed only
+the clean-source provenance format, because the uncommitted binary records
+`migration_commit="unknown"`. No formal qualification or acquisition authority
+was issued. A one-visit public Zoomlife capture collected 1,106 valid packets
+and deep-verified a sealed incomplete result; its main document had changed
+from 22,596 to 22,695 bytes, so strict prepared-response identity correctly
+rejected the sample. A separate local two-origin new-client smoke accepted
+2/2 undefended samples, sealed and deep-verified under explicitly unknown
+diagnostic source provenance. New-client local FRONT/Tamaraw and Walkie-Talkie
+wire checks passed after the capture clock reconciliation was corrected to
+measure outgoing handoff against wire time and treat incoming user-space drain
+as a causal observation; its 10 ms outgoing and wrapper clock limits remain.
+A first zero-credit vertical slice passed three 40-request response
+qualification waves and sealed/deep-verified one two-origin FRONT sample,
+but full prefix qualification failed because the single-connection Rust
+qualifier rejected a second-origin application resource required by the
+Python prefix spec. A prospective schema-4 prefix contract now defines
+`primary-origin-capacity-v1` and records every unproven secondary-origin
+application resource without removing it from the frozen workload. A fresh
+local two-origin slice passed response and scoped prefix qualification and
+sealed/deep-verified one FRONT sample. A subsequent one-sample Walkie-Talkie
+diagnostic consumed that exact full prefix sidecar, accepted the sample, and
+sealed/deep-verified the result with diagnostic provenance handling. A fresh
+unpatched verifier correctly rejected its unknown/dirty source provenance.
+The registered 16-file acquisition suite subsequently passed 2,112 tests
+with 31 skips and no failures in the existing collection image against the
+current read-only Lab source. A shared Rust HTTPS-origin fix then made
+hostname case and explicit default port 443 compare consistently across
+qualification and endpoint routing. Focused Rust tests passed; the rebuilt
+client passed fresh `local-vertical-3` response/prefix qualification and a
+`local-wt-2` full-sidecar two-origin capture, both 1/1 accepted. These are
+zero-credit diagnostics, not new image authority.
+The downstream release gate remains open for clean source-bound checks;
+these diagnostics add no eligible class or formal sample.
+The prospective publication layout now pairs acquisition, stability and
+prepared-workload roots under the same allocator-approved `-vN` suffix. Fresh
+initialization creates the two publication roots only when both are absent;
+cohort assembly and campaign loading reject a different cohort's root. The
+unsuffixed roots remain historical verification inputs. Layout, launcher and
+watcher checks passed 86 focused host cases; cohort/campaign checks passed 72.
+A broader current-source downstream regression passed **456 tests**, including
+synthetic 120-class admission, fitting, qualification, campaign planning,
+capture recovery, handoff and evaluation. It found one stale schema-11 status
+test fixture, corrected to distinguish the current schema 12 from historical
+schema 11. These host passes establish deterministic wiring, not a formal
+source-bound gate or public-site viability. The next long watcher remains held
+until the new image correctness suite, authority and monitored live actions
+verify on the frozen source.
+The registered 16-file suite then passed **2,113 tests with 31 skips and zero
+failures** in the existing collection image with the current source mounted
+read-only and first on Python's import path. A stale watcher signal test was
+updated for the new mandatory `--acquisition-root` argument before that clean
+repeat; the full focused watcher suite passed 400/400. The image repeat is
+engineering parity only, not a new source-bound acquisition authority.
+A separate zero-credit local two-origin replay mirrored the production
+capture UID, read-only root and network capability profile. Live response and
+scoped prefix qualification passed. Its first FRONT attempt preserved a strict
+timing failure (one expired deadline among 69 schedule events). With the
+exact qualified inputs and no competing host regression, fresh FRONT and
+Walkie-Talkie captures each accepted and deep-verified 1/1 under that profile.
+The result checks container permissions and the defended wire path, while
+formal source, public-site and fitted-parameter evidence remains outstanding.
+
+| Checkpoint identity | v130 qualification, interrupted v131 claim and current state |
 |---|---|
 | Lab branch and v130 source commit | `desktop-portability-2026-09-26`; `5fe0da7a8a8dc92713d91fb67b65f265325e4d51` |
 | Rust commit and Lab Gitlink | `e8575fd8e54921ed6ff867de475b4a734064866e` |
 | Build and pinned CDP | `artifacts/buflo-study/build-execution-v130.json` and `artifacts/buflo-study/pinned-cdp-execution-v130.json`: independently verified on their bound source |
 | Browser execution | `artifacts/buflo-study/browser-egress-qualification-v130/final.json`: independently verified 110/110 |
 | Desktop authority | v130 creation failed its correctness suite; no authority receipt issued |
+| v131 attempt | Claim published on `6f2861f4a316809cdd7b69be9fa3a13298d06ff9`; user-interrupted build exited 130; no verified build or authority receipt |
 | Acquisition checkpoint | v129 remains the latest initialized checkpoint, with 0/120 accepted |
-| Next execution | Finish and preflight prospective schema-2 acquisition authority; allocate a fresh cohort, reprove build and pinned CDP, create authority, then start bounded acquisition. Defer the full 110-vector browser gate to the same-source full foundation before fitting or defence capture |
+| Next execution | The non-evidentiary prebuild rehearsal passed its diagnostic criteria. Freeze source, claim the allocator's next unused cohort, reprove build and pinned CDP, verify schema-2 authority, then start bounded acquisition actions. Defer the full 110-vector browser gate to the same-source full foundation before fitting or defence capture |
 
 Preserve the v130 qualification evidence and failed authority attempt, the v129
 checkpoint and failed attempts, v128 failed build, v127
@@ -170,18 +293,17 @@ historical schema descriptions remain in the history and methodology.
 
 The v129 acquisition-only gates passed and its versioned checkpoint initialized,
 but the watcher stopped before accepting a pilot class. The redirect dependency
-producer is corrected and the prospective schema-11 pre-baseline HTTP/3 screen
-is implemented in source. If the first known-good Neqo control fails, the screen blocks without
-running candidate or second-control probes. Otherwise it runs two attempts per
-distinct selected-page URL request origin, then the second control. An origin
-passes only with two `known_valid=true` results and fails only with two
-classified connectivity timeouts. With both controls passing, a candidate is
-technically rejected if at least one origin fails and every other origin has
-a definite pass or fail. Any mixed or ambiguous origin blocks, even when
-another origin fails. The screen covers
-selected-page request origins only; third-party resource origins discovered
-during timed preparation can still cause a missed-window blocker. It does not
-prove that a complete page graph can be prepared. Preserve v129 as failed
+producer is corrected and the prospective schema-12 pre-baseline HTTP/3 screen
+is implemented in source. If the first known-good Neqo control fails, the screen
+blocks without candidate or second-control probes. Otherwise it runs two attempts
+per exact canonical selected-page URL, then the second control. A page enters
+the timed baseline only when both probes are `known_valid=true`. With two
+passing controls, the candidate is rejected only if every selected page has
+two classified connectivity failures; ambiguous outcomes with no valid page
+block. The receipt retains every selected page and its original ordinal.
+Third-party resource origins discovered during preparation can still block a
+probe window. The screen does not prove that a complete page graph can be
+prepared. Preserve v129 as failed
 evidence. After source freeze, allocate a fresh source-bound
 cohort and repeat every downstream gate before initializing a new acquisition
 root. The v129 missed window remains an unresolved historical blocker, not a
@@ -199,16 +321,18 @@ the curated receipt is excluded from that run. The registered 600-candidate,
 1. Preserve the verified migration manifests, historical handoff, v126 through
    v129 receipts and checkpoints, and the failed watcher evidence.
 2. Retain the registered Tranco candidate catalogue for this formal run.
-3. Freeze the corrected schema-11 source; obtain the next unused cohort,
-   fresh no-cache images, pinned-CDP and
-   110/110 browser qualification. Publish new acquisition authority.
+3. The [acquisition rehearsal](docs/ACQUISITION-REHEARSAL.md) has passed its
+   non-evidentiary criteria. Freeze corrected source, obtain the next unused cohort,
+   fresh no-cache images and pinned CDP, and independently verify prospective
+   schema-2 acquisition authority. The v131 claim is consumed even though its
+   interrupted build issued no receipt.
 4. Initialize a new versioned acquisition root and acquire the 120-class pilot
    with two genuine short-horizon prepared observations per admitted page.
    The prospective watcher can admit a later batch 60 seconds after all
    members of the prior batch are scientifically terminal and its Docker scope
    is empty; unresolved batches retain the 40-minute collision envelope.
-   Complete the full defence foundation
-   before any class-study fitting or capture.
+   Complete the deferred 110-vector browser gate and full defence foundation
+   on the same source/build before any class-study fitting or capture.
 5. Follow pilot fit/qualification/compatibility, final selection, authoritative
    fitting, final qualification and 900-cell certification.
 6. Freeze readiness and historical pre-snapshot; interleave ten canary blocks

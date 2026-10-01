@@ -559,13 +559,14 @@ RECONCILIATION_LIMITATIONS = (
     ),
     (
         "The normalized tuple-union trace omits endpoint identifiers, so concurrent "
-        "equal-sized datagrams can only be correlated by their clock-aligned aggregate "
-        "sequence."
+        "equal-sized datagrams can only be correlated by their aggregate size/direction "
+        "sequence and incoming receive causality."
     ),
     (
         "The runner drains endpoint sockets serially, so aggregate ordering across "
         "connections is reconstructed from packet timestamps; near-simultaneous packets "
-        "are validated only through exact size multiplicity and the residual bound."
+        "are validated only through exact size multiplicity. Incoming runner timestamps "
+        "mark user-space socket drain, not wire ingress; the direct PCAP supplies wire timing."
     ),
     (
         "Normalization removes the capture's absolute timestamp; a uniform offset between "
@@ -949,10 +950,57 @@ def _reconcile_runner_packets(
         ],
         key=lambda item: (item[0].monotonic_us, item[0].connection, item[0].index),
     )
+    # Outgoing runner rows are recorded after socket handoff. Incoming rows
+    # instead share the caller's time at a user-space socket drain, which can
+    # follow PCAP ingress by many milliseconds under burst load. Fit the
+    # capture/runner clock using outgoing packets, then check that every
+    # matched incoming packet was on the wire before its user-space drain.
+    clock_matches = [
+        match for match in ordered_matches if match[0].direction == "outgoing"
+    ]
+    if not clock_matches:
+        raise ValueError("direct/runner clock reconciliation has no outgoing packet")
     residuals, clock_offset, clock_metrics = _reconcile_clock_epochs(
-        ordered_matches,
+        clock_matches,
         timestamp_tolerance_ns=timestamp_tolerance_ns,
         end_anchor_adjustment_ns=end_anchor_adjustment_ns,
+    )
+    incoming_lags: list[int] = []
+    clock_steps = clock_metrics["direct_clock_steps"]
+    current_offset = clock_offset
+    step_index = 0
+    for packet, _direct_index, observed_offset in ordered_matches:
+        runner_time_ns = packet.monotonic_us * 1_000
+        while (
+            step_index < len(clock_steps)
+            and runner_time_ns >= clock_steps[step_index]["runner_time_ns"]
+        ):
+            current_offset += clock_steps[step_index]["epoch_offset_delta_ns"]
+            step_index += 1
+        if packet.direction != "incoming":
+            continue
+        ingress_to_drain_ns = current_offset - observed_offset
+        if ingress_to_drain_ns < -timestamp_tolerance_ns:
+            raise ValueError(
+                "direct/runner incoming packet appears after its user-space drain: "
+                f"packet {packet.index}, {-ingress_to_drain_ns}ns exceeds "
+                f"{timestamp_tolerance_ns}ns clock uncertainty"
+            )
+        incoming_lags.append(ingress_to_drain_ns)
+    positive_lags = sorted(max(0, lag) for lag in incoming_lags)
+    clock_metrics.update(
+        {
+            "direct_timestamp_basis": "outgoing-socket-handoff-vs-wire-v1",
+            "direct_outgoing_clock_packets": len(clock_matches),
+            "direct_incoming_causality_packets": len(incoming_lags),
+            "direct_incoming_ingress_to_drain_lag_max_ns": max(
+                positive_lags, default=0
+            ),
+            "direct_incoming_ingress_to_drain_lag_p95_ns": _percentile_95(positive_lags),
+            "direct_incoming_causality_slack_max_ns": max(
+                (max(0, -lag) for lag in incoming_lags), default=0
+            ),
+        }
     )
     return matches, unmatched, residuals, clock_offset, clock_metrics
 

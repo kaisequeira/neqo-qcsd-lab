@@ -1378,17 +1378,27 @@ def verify_discovery_event_audit(
             and candidate_fetch["policy_reason"] == "unsafe method: OPTIONS"
             and candidate_fetch["redirected_fetch_id"] is None
         ]
+        dependent_allowed = (
+            (
+                occurrence["method"] == "POST"
+                and occurrence["resource_type"] == "Fetch"
+                and occurrence["mapping"].get("reason") == "unsafe method: POST"
+            )
+            or (
+                occurrence["method"] == "GET"
+                and occurrence["resource_type"] in {"XHR", "Fetch"}
+                and occurrence["mapping"].get("reason") == "origin not approved"
+            )
+        )
         if (
-            occurrence["method"] != "POST"
+            not dependent_allowed
             or _https_origin(occurrence["url"]) is None
-            or occurrence["resource_type"] != "Fetch"
             or occurrence["initiator_type"] != "script"
             or occurrence["initiator_request_id"] is not None
             or occurrence["redirected"]
             or occurrence["response_observed"]
             or len(actual_chain) != 1
             or occurrence["mapping"].get("kind") != "exclusion"
-            or occurrence["mapping"].get("reason") != "unsafe method: POST"
             or fetch_count_by_network[occurrence_id] != 0
             or not has_blocked_terminal(occurrence_id, reason="other")
             or len(candidates) != 1

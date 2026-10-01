@@ -15,6 +15,7 @@ config/class-study/v1/classifier-multiorigin100-v1-cohort.json
 config/class-study/v1/classifier-multiorigin100-v1-cohort-assembly.json
 config/class-study/v1/classifier-multiorigin100-v1-final-selection.json
 config/workloads/tranco-[0-9][0-9][0-9][0-9][0-9][0-9][0-9].json
+config/workloads-v[1-9]*/
 .cache
 .venv
 .pytest_cache

@@ -638,6 +638,15 @@ def _load_campaign(
         if successor_context is not None and frozen_inputs is None
         else config_root
     )
+    admitted_workload_root = _class_study_admitted_workload_root(
+        schema_version=schema_version,
+        raw_path=value.get("class_study_cohort"),
+        raw_assembly_path=value.get("class_study_cohort_assembly"),
+        campaign_path=path,
+        config_root=config_root,
+        cohort_trust_root=cohort_trust_root,
+        frozen_inputs=frozen_inputs,
+    )
     workloads = _load_workloads(
         path,
         value["workloads"],
@@ -645,6 +654,7 @@ def _load_campaign(
         schema_version=schema_version,
         frozen_inputs=frozen_inputs,
         config_root=config_root,
+        workload_root=admitted_workload_root,
     )
     (
         class_study_cohort_path,
@@ -677,7 +687,7 @@ def _load_campaign(
 
         restart_root = Path(successor_context["restart_root"])
         class_qualification_context = QualificationContext(
-            workload_root=config_root / "workloads",
+            workload_root=admitted_workload_root or config_root / "workloads",
             sidecar_root=Path(successor_context["qualification_set_root"]),
             prefix_spec_root=(
                 restart_root / "artifacts" / f"{STUDY_ID}-authoritative-fitting-prefix-specs"
@@ -747,6 +757,7 @@ def _load_campaign(
             qualification_scope=qualification_scope,
             qualification_set=qualification_set,
             config_root=config_root,
+            workload_root=admitted_workload_root,
             qualification_set_root_override=(
                 Path(successor_context["qualification_set_root"])
                 if successor_context is not None and frozen_inputs is None
@@ -845,6 +856,110 @@ def _load_campaign(
     return campaign
 
 
+def _class_study_cohort_paths(
+    *,
+    raw_path: object,
+    raw_assembly_path: object,
+    campaign_path: Path,
+    config_root: Path,
+    frozen_inputs: Path | None,
+    cohort_trust_root: Path | None,
+) -> tuple[Path, Path]:
+    if raw_path is None or raw_assembly_path is None:
+        raise ValueError("class-study evidence requires cohort and cohort-assembly receipts")
+    for field, raw in (
+        ("class_study_cohort", raw_path),
+        ("class_study_cohort_assembly", raw_assembly_path),
+    ):
+        if not isinstance(raw, str) or not raw or Path(raw).is_absolute():
+            raise ValueError(f"{field} must be a nonempty relative path")
+    cohort_candidate = (
+        frozen_inputs / "class-study-cohort.json"
+        if frozen_inputs is not None
+        else campaign_path.parent / raw_path
+    )
+    assembly_candidate = (
+        frozen_inputs / "class-study-cohort-assembly.json"
+        if frozen_inputs is not None
+        else campaign_path.parent / raw_assembly_path
+    )
+    trust_root = frozen_inputs if frozen_inputs is not None else (cohort_trust_root or config_root)
+    return (
+        _trusted_regular_input(
+            cohort_candidate, root=trust_root, label="class-study cohort receipt"
+        ),
+        _trusted_regular_input(
+            assembly_candidate,
+            root=trust_root,
+            label="class-study cohort-assembly receipt",
+        ),
+    )
+
+
+def _class_study_admitted_workload_root(
+    *,
+    schema_version: int,
+    raw_path: object,
+    raw_assembly_path: object,
+    campaign_path: Path,
+    config_root: Path,
+    cohort_trust_root: Path | None,
+    frozen_inputs: Path | None,
+) -> Path | None:
+    """Resolve fresh workloads from the cohort's validated assembly identity."""
+
+    if schema_version != CLASS_STUDY_SCHEMA_VERSION or frozen_inputs is not None:
+        return None
+    cohort_path, assembly_path = _class_study_cohort_paths(
+        raw_path=raw_path,
+        raw_assembly_path=raw_assembly_path,
+        campaign_path=campaign_path,
+        config_root=config_root,
+        frozen_inputs=frozen_inputs,
+        cohort_trust_root=cohort_trust_root,
+    )
+    from .class_cohort import validate_cohort_assembly_receipt
+    from .class_layout import (
+        class_study_layout,
+        publication_roots_for_acquisition_root,
+        require_canonical_publication_root,
+    )
+    from .class_study import load_study_receipt
+
+    cohort, _ = load_study_receipt(cohort_path)
+    payload = validate_cohort_assembly_receipt(load_json(assembly_path), cohort=cohort)
+    root = require_canonical_publication_root(
+        config_root / payload["workload_root"],
+        field="workload_root",
+        label="cohort admitted workload root",
+    )
+    layout = class_study_layout()
+    if root != layout.workload_root:
+        suffix = root.name.removeprefix(layout.workload_root.name)
+        acquisition_root = layout.acquisition_root.with_name(
+            layout.acquisition_root.name + suffix
+        )
+        expected_stability, expected_workloads = publication_roots_for_acquisition_root(
+            acquisition_root
+        )
+        if (
+            payload["stability_root"] != expected_stability.name
+            or root != expected_workloads
+        ):
+            raise ValueError("cohort assembly publication roots differ from acquisition")
+        completion_binding = payload["acquisition_completion"]
+        completion_path = _trusted_regular_input(
+            acquisition_root / completion_binding["path"],
+            root=acquisition_root,
+            label="cohort acquisition completion",
+        )
+        if sha256_file(completion_path) != completion_binding["sha256"]:
+            raise ValueError("cohort acquisition completion differs from assembly")
+    return _trusted_regular_directory(
+        root, root=config_root, label="cohort admitted workload root"
+    )
+
+
 def _load_class_study_cohort_binding(
     *,
     schema_version: int,
@@ -870,33 +985,13 @@ def _load_class_study_cohort_binding(
         "canary",
         "formal",
     }
-    if raw_path is None or raw_assembly_path is None:
-        raise ValueError(f"{evidence_role} evidence requires cohort and cohort-assembly receipts")
-    for field, raw in (
-        ("class_study_cohort", raw_path),
-        ("class_study_cohort_assembly", raw_assembly_path),
-    ):
-        if not isinstance(raw, str) or not raw or Path(raw).is_absolute():
-            raise ValueError(f"{field} must be a nonempty relative path")
-    cohort_candidate = (
-        frozen_inputs / "class-study-cohort.json"
-        if frozen_inputs is not None
-        else campaign_path.parent / raw_path
-    )
-    assembly_candidate = (
-        frozen_inputs / "class-study-cohort-assembly.json"
-        if frozen_inputs is not None
-        else campaign_path.parent / raw_assembly_path
-    )
-    receipt_path = _trusted_regular_input(
-        cohort_candidate,
-        root=(frozen_inputs if frozen_inputs is not None else (cohort_trust_root or config_root)),
-        label="class-study cohort receipt",
-    )
-    assembly_path = _trusted_regular_input(
-        assembly_candidate,
-        root=(frozen_inputs if frozen_inputs is not None else (cohort_trust_root or config_root)),
-        label="class-study cohort-assembly receipt",
+    receipt_path, assembly_path = _class_study_cohort_paths(
+        raw_path=raw_path,
+        raw_assembly_path=raw_assembly_path,
+        campaign_path=campaign_path,
+        config_root=config_root,
+        frozen_inputs=frozen_inputs,
+        cohort_trust_root=cohort_trust_root,
     )
     from .class_cohort import cohort_workload_hashes, validate_cohort_assembly_receipt
     from .class_study import load_study_receipt
@@ -1141,6 +1236,7 @@ def _load_qualified_chaff_inputs(
     qualification_scope: str = FULL_CHAFF_SCOPE,
     qualification_set: str | None = None,
     config_root: Path | None = None,
+    workload_root: Path | None = None,
     qualification_set_root_override: Path | None = None,
 ) -> tuple[Workload, ...]:
     """Bind the selected immutable sidecar contract and derived manifest."""
@@ -1228,7 +1324,7 @@ def _load_qualified_chaff_inputs(
     if candidate_set_manifest.exists() or candidate_set_manifest.is_symlink():
         named = load_named_qualification_set(
             candidate_set_manifest,
-            workload_root=config_root / "workloads",
+            workload_root=workload_root or config_root / "workloads",
             sidecar_root=qualification_root,
             prefix_spec_root=prefix_root,
             expected_qualification_set=qualification_set,
@@ -1704,12 +1800,6 @@ def _lower_hex_digest(value: object, *, length: int) -> bool:
     )
 
 
-def _workload_root(campaign_path: Path) -> Path:
-    # Campaign directories live directly below config/ and workloads below
-    # config/workloads. Keeping this one convention removes another path knob.
-    return campaign_path.parent.parent / "workloads"
-
-
 def _campaign_config_root(path: Path, *, frozen_inputs: Path | None) -> Path:
     if frozen_inputs is not None:
         return frozen_inputs
@@ -1739,6 +1829,7 @@ def _load_workloads(
     schema_version: int,
     frozen_inputs: Path | None = None,
     config_root: Path | None = None,
+    workload_root: Path | None = None,
 ) -> tuple[Workload, ...]:
     value = _object(raw, "workloads")
     if not value:
@@ -1746,7 +1837,7 @@ def _load_workloads(
     root = (
         frozen_inputs / "workloads"
         if frozen_inputs is not None
-        else (config_root or path.parent.parent) / "workloads"
+        else workload_root or (config_root or path.parent.parent) / "workloads"
     )
     result: list[Workload] = []
     seen: set[str] = set()

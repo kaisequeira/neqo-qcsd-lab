@@ -51,7 +51,8 @@ STABILITY_PROFILE = "live"
 STABILITY_DEFENSE = "none"
 STABILITY_SEED = 0
 STABILITY_UDP_PAYLOAD_CEILING = 1_200
-UDP_PAYLOAD_QUALIFICATION_SCHEMA_VERSION = 1
+STABILITY_INCOMING_UDP_PAYLOAD_LIMIT = 65_527
+UDP_PAYLOAD_QUALIFICATION_SCHEMA_VERSION = 2
 PACKET_REQUIRED_COLUMNS = frozenset({"direction", "connection", "observed_udp_length"})
 WORKLOAD_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 NEQO_PROVENANCE_KEYS = (
@@ -571,7 +572,8 @@ def _probe_response_stability(
         runs,
         {
             "schema_version": UDP_PAYLOAD_QUALIFICATION_SCHEMA_VERSION,
-            "configured_udp_payload_ceiling": STABILITY_UDP_PAYLOAD_CEILING,
+            "outgoing_udp_payload_ceiling": STABILITY_UDP_PAYLOAD_CEILING,
+            "incoming_udp_payload_limit": STABILITY_INCOMING_UDP_PAYLOAD_LIMIT,
             "runs": packet_runs,
         },
     )
@@ -584,7 +586,7 @@ def _qualify_udp_payloads(
     run_index: int,
     expected_ceiling: int,
 ) -> dict[str, Any]:
-    """Prove one preparation run respected the absolute UDP-payload ceiling."""
+    """Prove outgoing packetization and incoming QUIC receive bounds."""
 
     resolved = run_data.get("resolved_configuration")
     resolved_ceiling = resolved.get("max_udp_payload_size") if isinstance(resolved, dict) else None
@@ -596,6 +598,18 @@ def _qualify_udp_payloads(
         raise PreparationError(
             f"Neqo stability run {run_index + 1} did not resolve the "
             f"{expected_ceiling}-byte UDP-payload ceiling"
+        )
+    reported_outgoing = run_data.get("outgoing_udp_payload_ceiling")
+    reported_incoming = run_data.get("incoming_udp_payload_limit")
+    if (
+        type(reported_outgoing) is not int
+        or reported_outgoing != expected_ceiling
+        or type(reported_incoming) is not int
+        or reported_incoming != STABILITY_INCOMING_UDP_PAYLOAD_LIMIT
+    ):
+        raise PreparationError(
+            f"Neqo stability run {run_index + 1} did not report the expected "
+            "directional UDP-payload limits"
         )
 
     try:
@@ -661,24 +675,33 @@ def _qualify_udp_payloads(
             f"{', '.join(missing_directions)} packets"
         )
 
-    def statistics(values: list[int]) -> dict[str, int]:
+    def statistics(values: list[int], ceiling: int) -> dict[str, int]:
         return {
             "packet_count": len(values),
             "observed_udp_payload_max": max(values),
-            "oversized_packet_count": sum(value > expected_ceiling for value in values),
+            "oversized_packet_count": sum(value > ceiling for value in values),
         }
 
-    incoming = statistics(lengths["incoming"])
-    outgoing = statistics(lengths["outgoing"])
+    incoming = statistics(
+        lengths["incoming"], STABILITY_INCOMING_UDP_PAYLOAD_LIMIT
+    )
+    outgoing = statistics(lengths["outgoing"], expected_ceiling)
     total_values = lengths["incoming"] + lengths["outgoing"]
-    total = statistics(total_values)
+    total = {
+        "packet_count": len(total_values),
+        "observed_udp_payload_max": max(total_values),
+        "oversized_packet_count": (
+            incoming["oversized_packet_count"] + outgoing["oversized_packet_count"]
+        ),
+    }
     if total["oversized_packet_count"]:
         raise PreparationError(
             f"Neqo stability run {run_index + 1} observed "
             f"{total['oversized_packet_count']} UDP payload(s) above the "
-            f"{expected_ceiling}-byte ceiling (incoming "
-            f"{incoming['oversized_packet_count']}, outgoing "
-            f"{outgoing['oversized_packet_count']}, maximum "
+            "directional limits (incoming "
+            f"{incoming['oversized_packet_count']} above "
+            f"{STABILITY_INCOMING_UDP_PAYLOAD_LIMIT}, outgoing "
+            f"{outgoing['oversized_packet_count']} above {expected_ceiling}, maximum "
             f"{total['observed_udp_payload_max']})"
         )
     return {
