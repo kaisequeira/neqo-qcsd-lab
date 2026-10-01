@@ -575,6 +575,45 @@ def test_normal_shutdown_trace_explains_unmatched_pause_without_raw_ids(monkeypa
         class_acquisition.RecursiveCdpTargetRouter = original
 
 
+def test_normal_shutdown_trace_explains_unmatched_network_without_raw_ids(monkeypatch):
+    records = []
+    original, _traced, router = _fixture_router(
+        monkeypatch, lambda stage, **data: records.append((stage, data))
+    )
+    _shutdown_mismatch_fixture(router)
+
+    def mismatch(_self):
+        raise cdp_targets.CdpTargetIntegrityError(
+            "normal shutdown Network-only occurrence lacked exact local cancellation"
+        )
+
+    try:
+        monkeypatch.setattr(cdp_targets.RecursiveCdpTargetRouter, "finish", mismatch)
+        with pytest.raises(cdp_targets.CdpTargetIntegrityError, match="local cancellation"):
+            router.finish()
+        assert len(records) == 1
+        stage, context = records[0]
+        assert stage == "normal-shutdown-network-occurrence-trace"
+        ledger = context["ledger"]
+        assert ledger["unmatched_network_total"] == 1
+        network = ledger["unmatched_networks"][0]
+        assert network["network_id_sha256"] == sha256(b"secret-network").hexdigest()
+        assert network["resource_type"] == "Image"
+        assert network["same_id_fetch_total"] == 1
+        assert network["same_id_fetches"][0]["resource_type"] == "Image"
+        for secret in (
+            "secret-fetch",
+            "secret-network",
+            "secret-frame",
+            "secret-target",
+            "https://example.test/private-image",
+            "https://example.test/other-image",
+        ):
+            assert secret not in str(context)
+    finally:
+        class_acquisition.RecursiveCdpTargetRouter = original
+
+
 def test_normal_shutdown_trace_sink_failure_preserves_integrity_error(monkeypatch):
     def broken_emit(_stage, **_data):
         raise OSError("diagnostic sink failed")

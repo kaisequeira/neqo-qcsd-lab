@@ -39,8 +39,12 @@ CDP_TARGET_INSTRUMENTATION_POLICY = (
 )
 BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION = 1
 EGRESS_PREARM_SUMMARY_SCHEMA_VERSION = 2
-NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION = 3
-NORMAL_SHUTDOWN_DISPOSAL_POLICY = "chromium-143-post-quiescence-context-disposal-v2"
+NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION = 4
+NORMAL_SHUTDOWN_DISPOSAL_POLICY = "chromium-143-post-quiescence-context-disposal-v3"
+_PREVIOUS_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION = 3
+_PREVIOUS_NORMAL_SHUTDOWN_DISPOSAL_POLICY = (
+    "chromium-143-post-quiescence-context-disposal-v2"
+)
 _HISTORICAL_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION = 2
 _HISTORICAL_NORMAL_SHUTDOWN_DISPOSAL_POLICY = (
     "chromium-143-post-quiescence-context-disposal-v1"
@@ -449,10 +453,16 @@ class CdpTargetIntegrityError(RuntimeError):
 class _RootInvalidInterception(CdpTargetIntegrityError):
     """The one pinned Playwright/Chromium invalid-interception transport error."""
 
-    def __init__(self, *, fingerprint: str) -> None:
+    def __init__(
+        self,
+        *,
+        fingerprint: str,
+        policy_context: str | None = None,
+    ) -> None:
+        context = f", {policy_context}" if policy_context is not None else ""
         super().__init__(
             "root CDP Fetch.continueRequest encountered InvalidInterceptionId "
-            f"({fingerprint})"
+            f"({fingerprint}{context})"
         )
         self.fingerprint = fingerprint
 
@@ -513,12 +523,19 @@ def validate_normal_shutdown_disposal_summary(
 
     if type(allow_historical) is not bool:
         raise ValueError("normal shutdown historical switch is invalid")
-    historical = (
+    historical_v2 = (
         isinstance(value, Mapping)
         and value.get("schema_version")
         == _HISTORICAL_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
         and value.get("policy") == _HISTORICAL_NORMAL_SHUTDOWN_DISPOSAL_POLICY
     )
+    historical_v3 = (
+        isinstance(value, Mapping)
+        and value.get("schema_version")
+        == _PREVIOUS_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
+        and value.get("policy") == _PREVIOUS_NORMAL_SHUTDOWN_DISPOSAL_POLICY
+    )
+    historical = historical_v2 or historical_v3
     fields = {
         "schema_version",
         "policy",
@@ -533,19 +550,27 @@ def validate_normal_shutdown_disposal_summary(
         "pending_fetch_total",
         "terminal_outcomes",
     }
-    if historical:
+    if historical_v2:
         fields.remove("fetch_only_context_disposal_total")
     if not isinstance(value, Mapping) or set(value) != fields:
         raise ValueError("normal shutdown disposal summary fields are invalid")
     expected_schema_version = (
         _HISTORICAL_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
-        if historical
-        else NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
+        if historical_v2
+        else (
+            _PREVIOUS_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
+            if historical_v3
+            else NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
+        )
     )
     expected_policy = (
         _HISTORICAL_NORMAL_SHUTDOWN_DISPOSAL_POLICY
-        if historical
-        else NORMAL_SHUTDOWN_DISPOSAL_POLICY
+        if historical_v2
+        else (
+            _PREVIOUS_NORMAL_SHUTDOWN_DISPOSAL_POLICY
+            if historical_v3
+            else NORMAL_SHUTDOWN_DISPOSAL_POLICY
+        )
     )
     if (
         type(value.get("schema_version")) is not int
@@ -565,7 +590,7 @@ def validate_normal_shutdown_disposal_summary(
         "pending_network_total",
         "pending_fetch_total",
     )
-    if historical:
+    if historical_v2:
         count_fields = tuple(
             field
             for field in count_fields
@@ -598,7 +623,7 @@ def validate_normal_shutdown_disposal_summary(
     matched_total = value["matched_total"]
     network_only_synthetic = value["network_only_synthetic_total"]
     fetch_only_context_disposal = (
-        0 if historical else value["fetch_only_context_disposal_total"]
+        0 if historical_v2 else value["fetch_only_context_disposal_total"]
     )
     pending_network = value["pending_network_total"]
     pending_fetch = value["pending_fetch_total"]
@@ -612,7 +637,16 @@ def validate_normal_shutdown_disposal_summary(
         or (not value["terminal"] and fetch_only_context_disposal)
         or (
             fetch_only_context_disposal == 1
-            and (fetch_total != 1 or matched_total != 0)
+            and not (
+                (fetch_total == 1 and matched_total == 0)
+                or (
+                    not historical
+                    and network_total >= 1
+                    and matched_total == network_total
+                    and network_only_synthetic == 0
+                    and fetch_total == network_total + 1
+                )
+            )
         )
         or (
             fetch_only_context_disposal == 2
@@ -1364,9 +1398,10 @@ class _NormalShutdownDisposalLedger:
     143 can expose a root-page GET or POST ``Ping`` pause during context disposal
     without exposing a corresponding Network occurrence before destruction.
     It can also expose exactly one POST ``Ping`` and one POST ``XHR`` pause
-    from the root page in the same drain, with no Network occurrence. Those
-    bounded pauses remain held, are never continued, and become terminal only
-    after the caller's successful context-close barrier.
+    from the root page in the same drain, with no Network occurrence, or one
+    POST ``XHR`` pause beside otherwise exactly matched Network/Fetch pairs.
+    Those bounded pauses remain held, are never continued, and become terminal
+    only after the caller's successful context-close barrier.
     """
 
     def __init__(self) -> None:
@@ -1429,15 +1464,30 @@ class _NormalShutdownDisposalLedger:
         fetch_leg: _NormalShutdownFetch | None = fetch
         while network_leg is not None and fetch_leg is not None:
             active = network_leg.active
-            # Chromium 143 can label one root POST as Network Fetch and
-            # Fetch XHR while the page context is being disposed. Both
-            # callbacks are held past the quiescence boundary; this alias
-            # applies only to the exact single-leg root shutdown occurrence.
-            root_post_type_alias = (
-                active.resource_type == "Fetch"
-                and fetch_leg.resource_type == "XHR"
-                and active.method == "POST"
-                and active.source == fetch_leg.source
+            # Chromium 143 can use different Network and Fetch resource
+            # labels for an exact root request started during context close.
+            # The three observed aliases apply only to a single held leg
+            # with exact source, identity, method and URL, and local shutdown
+            # cancellation. A missing Network frame is observed only for
+            # root OPTIONS/XHR; no other alias accepts that omission.
+            root_shutdown_type_alias = (
+                (
+                    active.resource_type == "Fetch"
+                    and fetch_leg.resource_type == "XHR"
+                    and active.method == "POST"
+                )
+                or (
+                    active.resource_type == "Other"
+                    and fetch_leg.resource_type == "XHR"
+                    and active.method == "OPTIONS"
+                )
+                or (
+                    active.resource_type == "Other"
+                    and fetch_leg.resource_type == "Fetch"
+                    and active.method == "GET"
+                )
+            ) and (
+                active.source == fetch_leg.source
                 and active.source.target_type == "page"
                 and network_leg.predecessor is None
                 and network_leg.successor is None
@@ -1447,17 +1497,25 @@ class _NormalShutdownDisposalLedger:
                 and not fetch_leg.pre_shutdown_network_id_seen
                 and fetch_leg.root_page_context_disposal_candidate
             )
+            missing_root_options_network_frame = (
+                root_shutdown_type_alias
+                and active.resource_type == "Other"
+                and fetch_leg.resource_type == "XHR"
+                and active.method == "OPTIONS"
+                and active.frame_id is None
+                and fetch_leg.frame_id is not None
+            )
             frames_match = active.frame_id == fetch_leg.frame_id or (
                 active.source.target_type in {"worker", "shared_worker"}
                 and fetch_leg.source.target_type in {"page", "iframe"}
                 and active.frame_id is None
                 and fetch_leg.frame_id is not None
                 and active.source.parent_frame_id == fetch_leg.frame_id
-            )
+            ) or missing_root_options_network_frame
             if not (
                 active.request_id == fetch_leg.network_id
                 and frames_match
-                and (active.resource_type == fetch_leg.resource_type or root_post_type_alias)
+                and (active.resource_type == fetch_leg.resource_type or root_shutdown_type_alias)
                 and active.method == fetch_leg.method
                 and active.url == fetch_leg.url
                 and cls._sources_compatible(
@@ -1891,6 +1949,17 @@ class _NormalShutdownDisposalLedger:
             }
             == {("Ping", "POST"), ("XHR", "POST")}
         )
+        exact_post_xhr_beside_matched_pairs = (
+            fetch.resource_type == "XHR"
+            and fetch.method == "POST"
+            and self._network_total >= 1
+            and fetch_count == self._network_total + 1
+            and all(
+                network.matched_fetch is not None
+                for values in self._networks.values()
+                for network in values
+            )
+        )
         return (
             len(same_id_fetches) == 1
             and same_id_fetches[0] is fetch
@@ -1901,7 +1970,11 @@ class _NormalShutdownDisposalLedger:
             and fetch.matched_network is None
             and not fetch.pre_shutdown_network_id_seen
             and fetch.root_page_context_disposal_candidate
-            and (singleton_ping or exact_post_pair)
+            and (
+                singleton_ping
+                or exact_post_pair
+                or exact_post_xhr_beside_matched_pairs
+            )
             and absolute_https_url
         )
 
@@ -3414,7 +3487,27 @@ class RecursiveCdpTargetRouter:
                 result = self._root_send(method, params)
             except _RootInvalidInterception as error:
                 if not recoverable_root_continue:
-                    raise
+                    policy = (
+                        "catalogue-navigation"
+                        if label == _ROOT_CONTINUE_INVALID_INTERCEPTION_POLICY_LABEL
+                        else "worker-bootstrap-prearmed"
+                        if label == "worker-bootstrap-prearmed:Fetch.continueRequest"
+                        else "request-stage"
+                        if label == "request-stage-policy:Fetch.continueRequest"
+                        else "other"
+                    )
+                    resource_type = (
+                        root_fetch_decision.resource_type
+                        if root_fetch_decision is not None
+                        else "unregistered"
+                    )
+                    raise _RootInvalidInterception(
+                        fingerprint=error.fingerprint,
+                        policy_context=(
+                            f"policy={policy}, root_fetch_type={resource_type}, "
+                            f"callback={str(on_success is not None).lower()}"
+                        ),
+                    ) from error
                 assert root_fetch_decision is not None
                 self._provision_root_invalid_interception(
                     root_fetch_decision,

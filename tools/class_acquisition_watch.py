@@ -758,9 +758,9 @@ _PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_POLICY = (
 )
 _PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_LIMIT = 32
 _PINNED_CDP_SRCDOC_EVENT_ORDINAL_LIMIT = 20_480
-_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION = 3
+_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION = 4
 _NORMAL_SHUTDOWN_DISPOSAL_POLICY = (
-    "chromium-143-post-quiescence-context-disposal-v2"
+    "chromium-143-post-quiescence-context-disposal-v3"
 )
 _NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT = 4_096
 _NON_REPLAYABLE_EGRESS_POLICY = "blocked-non-urlloader-egress-v1"
@@ -1133,7 +1133,7 @@ _HISTORICAL_PINNED_CDP_CONTRACT_V17 = {
         "chromium-143-post-quiescence-context-disposal-v1"
     ),
 }
-_PINNED_CDP_CONTRACT = {
+_HISTORICAL_PINNED_CDP_CONTRACT_V18 = {
     **_HISTORICAL_PINNED_CDP_CONTRACT_V16,
     "schema_version": _PINNED_CDP_CONTRACT_SCHEMA_VERSION,
     "policy": "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v17",
@@ -1142,6 +1142,13 @@ _PINNED_CDP_CONTRACT = {
         *_HISTORICAL_PINNED_CDP_CONTRACT_V16["required_observations"],
         "terminal-normal-shutdown-disposal-network-fetch-or-singleton-ping-reconciliation",
     ],
+    "normal_shutdown_disposal_summary_schema_version": 3,
+    "normal_shutdown_disposal_policy": (
+        "chromium-143-post-quiescence-context-disposal-v2"
+    ),
+}
+_PINNED_CDP_CONTRACT = {
+    **_HISTORICAL_PINNED_CDP_CONTRACT_V18,
     "normal_shutdown_disposal_summary_schema_version": (
         _NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
     ),
@@ -4862,8 +4869,20 @@ def _validate_normal_shutdown_disposal_summary(value: Any) -> None:
         or matched_total + fetch_only_context_disposal > fetch_total
         or fetch_only_context_disposal > 2
         or (
-            fetch_only_context_disposal > 0
-            and (fetch_total != fetch_only_context_disposal or matched_total != 0)
+            fetch_only_context_disposal == 1
+            and not (
+                (fetch_total == 1 and matched_total == 0)
+                or (
+                    network_total >= 1
+                    and matched_total == network_total
+                    and network_only_synthetic == 0
+                    and fetch_total == network_total + 1
+                )
+            )
+        )
+        or (
+            fetch_only_context_disposal == 2
+            and (fetch_total != 2 or matched_total != 0 or network_total != 0)
         )
         or pending_fetch
         != fetch_total - matched_total - fetch_only_context_disposal

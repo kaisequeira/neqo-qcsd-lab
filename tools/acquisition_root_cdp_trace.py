@@ -29,6 +29,9 @@ _ERROR_DOCUMENT_REQUEST_SIGNATURE_ERROR = (
 _SHUTDOWN_FETCH_OCCURRENCE_ERROR = (
     "normal shutdown Fetch pause has no exact Network occurrence"
 )
+_SHUTDOWN_NETWORK_OCCURRENCE_ERROR = (
+    "normal shutdown Network-only occurrence lacked exact local cancellation"
+)
 _UNMATCHED_LOADING_TERMINAL_ERROR = (
     "CDP loading terminal event has no active request occurrence"
 )
@@ -204,12 +207,57 @@ def _error_document_request_signature_projection(
 
 
 def _shutdown_ledger_summary(ledger: object) -> dict[str, Any]:
-    """Explain unmatched disposal pauses without exporting CDP IDs or URLs."""
+    """Explain unmatched disposal occurrences without exporting CDP IDs or URLs."""
 
     fetches = getattr(ledger, "_fetches")
     networks = getattr(ledger, "_networks")
     all_fetches = [fetch for group in fetches.values() for fetch in group]
+    all_networks = [network for group in networks.values() for network in group]
     unmatched = [fetch for fetch in all_fetches if fetch.matched_network is None]
+    unmatched_networks = [
+        network for network in all_networks if network.matched_fetch is None
+    ]
+    network_details = []
+    for network in unmatched_networks[:16]:
+        active = network.active
+        same_id_fetches = fetches.get(active.request_id, ())
+        network_details.append(
+            {
+                "network_id_sha256": _digest(active.request_id),
+                "url_sha256": _digest(active.url),
+                "source_target_type": active.source.target_type,
+                "source_target_id_sha256": _digest(active.source.target_id),
+                "session_depth": len(active.source.session_path),
+                "frame_id_sha256": _digest(active.frame_id),
+                "resource_type": active.resource_type,
+                "request_method": active.method,
+                "leg_index": network.leg_index,
+                "has_predecessor": network.predecessor is not None,
+                "has_successor": network.successor is not None,
+                "terminal_outcome": network.terminal_outcome,
+                "same_id_fetch_total": len(same_id_fetches),
+                "same_id_fetches": [
+                    {
+                        "fetch_request_id_sha256": _digest(fetch.fetch_request_id),
+                        "url_sha256": _digest(fetch.url),
+                        "source_target_type": fetch.source.target_type,
+                        "source_target_id_sha256": _digest(fetch.source.target_id),
+                        "frame_id_sha256": _digest(fetch.frame_id),
+                        "resource_type": fetch.resource_type,
+                        "request_method": fetch.method,
+                        "leg_index": fetch.leg_index,
+                        "pre_shutdown_network_id_seen": (
+                            fetch.pre_shutdown_network_id_seen
+                        ),
+                        "root_page_context_disposal_candidate": (
+                            fetch.root_page_context_disposal_candidate
+                        ),
+                    }
+                    for fetch in same_id_fetches[:4]
+                ],
+                "same_id_fetches_truncated": len(same_id_fetches) > 4,
+            }
+        )
     details = []
     for fetch in unmatched[:16]:
         same_id_networks = networks.get(fetch.network_id, ())
@@ -252,8 +300,11 @@ def _shutdown_ledger_summary(ledger: object) -> dict[str, Any]:
             }
         )
     return {
-        "network_total": sum(len(group) for group in networks.values()),
+        "network_total": len(all_networks),
         "fetch_total": len(all_fetches),
+        "unmatched_network_total": len(unmatched_networks),
+        "unmatched_networks_truncated": len(unmatched_networks) > len(network_details),
+        "unmatched_networks": network_details,
         "unmatched_fetch_total": len(unmatched),
         "unmatched_fetches_truncated": len(unmatched) > len(details),
         "unmatched_fetches": details,
@@ -651,10 +702,17 @@ def install(emit: Callable[..., None]) -> type[RecursiveCdpTargetRouter]:
             try:
                 return super().finish()
             except CdpTargetIntegrityError as error:
-                if str(error) == _SHUTDOWN_FETCH_OCCURRENCE_ERROR:
+                if str(error) in {
+                    _SHUTDOWN_FETCH_OCCURRENCE_ERROR,
+                    _SHUTDOWN_NETWORK_OCCURRENCE_ERROR,
+                }:
                     try:
                         emit(
-                            "normal-shutdown-fetch-occurrence-trace",
+                            (
+                                "normal-shutdown-fetch-occurrence-trace"
+                                if str(error) == _SHUTDOWN_FETCH_OCCURRENCE_ERROR
+                                else "normal-shutdown-network-occurrence-trace"
+                            ),
                             error=str(error),
                             ledger=_shutdown_ledger_summary(
                                 self._normal_shutdown_disposal

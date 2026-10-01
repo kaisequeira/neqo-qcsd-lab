@@ -1563,9 +1563,9 @@ def test_policy_is_pinned_and_root_is_instrumented_before_navigation() -> None:
     assert CDP_TARGET_INSTRUMENTATION_POLICY == (
         "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v21"
     )
-    assert NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION == 3
+    assert NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION == 4
     assert NORMAL_SHUTDOWN_DISPOSAL_POLICY == (
-        "chromium-143-post-quiescence-context-disposal-v2"
+        "chromium-143-post-quiescence-context-disposal-v3"
     )
     assert [method for route, method, _params in session.commands if route == ()] == [
         "Target.getTargetInfo",
@@ -5184,8 +5184,14 @@ def test_exact_invalid_interception_recovery_has_a_narrow_policy_boundary(
     monkeypatch.setattr(session, "send", invalid_continue)
     session.emit((), "Fetch.requestPaused", fetch_event)
 
-    with pytest.raises(CdpTargetIntegrityError, match="InvalidInterceptionId"):
+    with pytest.raises(CdpTargetIntegrityError, match="InvalidInterceptionId") as failure:
         router.raise_if_failed()
+    assert (
+        "policy=request-stage, root_fetch_type=Font, callback=false"
+        if label == "request-stage-policy:Fetch.continueRequest"
+        else "policy=catalogue-navigation, root_fetch_type=unregistered, callback=false"
+    ) in str(failure.value)
+    assert "https://root.test/ineligible.bin" not in str(failure.value)
     assert router.root_invalid_interception_summary["total"] == 0
 
 
@@ -10325,6 +10331,71 @@ def _normal_shutdown_fetch_only_post_pair() -> tuple[dict[str, Any], dict[str, A
     return ping, xhr
 
 
+def _emit_normal_shutdown_matched_scripts(
+    session: _FakeNonFlatSession,
+    *,
+    count: int = 3,
+) -> None:
+    for index in range(count):
+        network_id = f"shutdown-script-network-{index}"
+        request = {"method": "GET", "url": f"https://root.test/script-{index}.js"}
+        session.emit(
+            (),
+            "Network.requestWillBeSent",
+            _normal_shutdown_network(
+                requestId=network_id,
+                type="Script",
+                request=request,
+            ),
+        )
+        session.emit(
+            (),
+            "Fetch.requestPaused",
+            _abort_fetch_pause(
+                requestId=f"shutdown-script-pause-{index}",
+                networkId=network_id,
+                resourceType="Script",
+                request=request,
+            ),
+        )
+
+
+def _normal_shutdown_held_post_xhr(**changes: Any) -> dict[str, Any]:
+    event = _normal_shutdown_fetch_only_ping(
+        requestId="shutdown-held-xhr-fetch",
+        networkId="shutdown-held-xhr-network",
+        resourceType="XHR",
+        request={"method": "POST", "url": "https://root.test/telemetry"},
+    )
+    event.update(changes)
+    return event
+
+
+def _normal_shutdown_root_type_alias(
+    kind: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if kind == "options-xhr":
+        method, fetch_type, network_frame = "OPTIONS", "XHR", None
+    elif kind == "get-fetch":
+        method, fetch_type, network_frame = "GET", "Fetch", "root-frame"
+    else:
+        raise AssertionError(f"unsupported shutdown alias: {kind}")
+    request = {"method": method, "url": f"https://root.test/{kind}"}
+    network = _normal_shutdown_network(
+        requestId=f"shutdown-{kind}-network",
+        frameId=network_frame,
+        type="Other",
+        request=request,
+    )
+    fetch = _abort_fetch_pause(
+        requestId=f"shutdown-{kind}-pause",
+        networkId=network["requestId"],
+        resourceType=fetch_type,
+        request=request,
+    )
+    return network, fetch
+
+
 def _valid_normal_shutdown_disposal_summary() -> dict[str, Any]:
     return {
         "schema_version": NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
@@ -10559,6 +10630,202 @@ def test_normal_shutdown_reconciles_root_post_fetch_xhr_type_alias(order: str) -
     assert router.normal_shutdown_disposal_summary["pending_fetch_total"] == 0
 
 
+@pytest.mark.parametrize("kind", ("options-xhr", "get-fetch"))
+@pytest.mark.parametrize("order", ("network-fetch", "fetch-network"))
+def test_normal_shutdown_reconciles_exact_root_type_alias(
+    kind: str,
+    order: str,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    network, fetch = _normal_shutdown_root_type_alias(kind)
+    _begin_shutdown(router)
+    commands_before = list(session.commands)
+    observed_before = list(observed)
+    events = (
+        (("Network.requestWillBeSent", network), ("Fetch.requestPaused", fetch))
+        if order == "network-fetch"
+        else (("Fetch.requestPaused", fetch), ("Network.requestWillBeSent", network))
+    )
+    for method, event in events:
+        session.emit((), method, event)
+        router.raise_if_failed()
+    _finish(router)
+
+    summary = router.normal_shutdown_disposal_summary
+    assert summary["network_total"] == 1
+    assert summary["fetch_total"] == 1
+    assert summary["matched_total"] == 1
+    assert summary["network_only_synthetic_total"] == 0
+    assert summary["pending_fetch_total"] == 0
+    assert summary["terminal_outcomes"]["qcsd-shutdown"] == 1
+    assert session.commands == commands_before
+    assert observed == observed_before
+
+
+def test_normal_shutdown_reconciles_five_exact_root_get_fetch_aliases() -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    _begin_shutdown(router)
+    commands_before = list(session.commands)
+    observed_before = list(observed)
+    for index in range(5):
+        network, fetch = _normal_shutdown_root_type_alias("get-fetch")
+        network["requestId"] = f"shutdown-get-fetch-network-{index}"
+        network["request"] = {
+            "method": "GET", "url": f"https://root.test/get-fetch-{index}"
+        }
+        fetch["requestId"] = f"shutdown-get-fetch-pause-{index}"
+        fetch["networkId"] = network["requestId"]
+        fetch["request"] = network["request"]
+        session.emit((), "Network.requestWillBeSent", network)
+        session.emit((), "Fetch.requestPaused", fetch)
+        router.raise_if_failed()
+    _finish(router)
+
+    summary = router.normal_shutdown_disposal_summary
+    assert summary["network_total"] == 5
+    assert summary["fetch_total"] == 5
+    assert summary["matched_total"] == 5
+    assert summary["network_only_synthetic_total"] == 0
+    assert summary["pending_fetch_total"] == 0
+    assert session.commands == commands_before
+    assert observed == observed_before
+
+
+@pytest.mark.parametrize("kind", ("options-xhr", "get-fetch"))
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "network-id",
+        "url",
+        "method",
+        "network-type",
+        "fetch-type",
+        "network-frame",
+        "fetch-frame",
+        "real-terminal",
+    ),
+)
+def test_normal_shutdown_root_type_alias_rejects_near_misses(
+    kind: str,
+    mutation: str,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    network, fetch = _normal_shutdown_root_type_alias(kind)
+    if mutation == "network-id":
+        fetch["networkId"] = "different-network"
+    elif mutation == "url":
+        fetch["request"] = {
+            "method": fetch["request"]["method"],
+            "url": "https://root.test/different",
+        }
+    elif mutation == "method":
+        fetch["request"] = {
+            "method": "POST", "url": fetch["request"]["url"]
+        }
+    elif mutation == "network-type":
+        network["type"] = "Script"
+    elif mutation == "fetch-type":
+        fetch["resourceType"] = "Image"
+    elif mutation == "network-frame":
+        network["frameId"] = (
+            "other-frame" if kind == "options-xhr" else None
+        )
+    elif mutation == "fetch-frame":
+        fetch["frameId"] = "other-frame"
+    _begin_shutdown(router)
+    commands_before = list(session.commands)
+    observed_before = list(observed)
+    session.emit((), "Network.requestWillBeSent", network)
+    session.emit((), "Fetch.requestPaused", fetch)
+    router.raise_if_failed()
+    if mutation == "real-terminal":
+        _finish_test_network(session, (), network["requestId"], timestamp=1.0)
+        router.raise_if_failed()
+    with pytest.raises(CdpTargetIntegrityError, match="no exact Network occurrence"):
+        _finish(router)
+    assert session.commands == commands_before
+    assert observed == observed_before
+
+
+@pytest.mark.parametrize("kind", ("options-xhr", "get-fetch"))
+def test_normal_shutdown_root_type_alias_rejects_a_child_network_source(
+    kind: str,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    child = session.attach(
+        (),
+        session_id=f"shutdown-{kind}-child-session",
+        target_id=f"shutdown-{kind}-child-frame",
+        target_type="iframe",
+        parent_frame_id=session.root_frame_id,
+    )
+    network, fetch = _normal_shutdown_root_type_alias(kind)
+    _begin_shutdown(router)
+    observed_before = list(observed)
+    session.emit(child, "Network.requestWillBeSent", network)
+    session.emit((), "Fetch.requestPaused", fetch)
+    router.raise_if_failed()
+
+    with pytest.raises(CdpTargetIntegrityError, match="no exact Network occurrence"):
+        _finish(router)
+    assert observed == observed_before
+
+
+@pytest.mark.parametrize("kind", ("options-xhr", "get-fetch"))
+def test_normal_shutdown_root_type_alias_rejects_a_pre_shutdown_network_id(
+    kind: str,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    network, fetch = _normal_shutdown_root_type_alias(kind)
+    session.emit((), "Network.requestWillBeSent", network)
+    _finish_test_network(session, (), network["requestId"], timestamp=1.0)
+    router.raise_if_failed()
+    _begin_shutdown(router)
+    session.emit((), "Fetch.requestPaused", fetch)
+    router.raise_if_failed()
+
+    with pytest.raises(CdpTargetIntegrityError, match="no exact Network occurrence"):
+        _finish(router)
+
+
+def test_normal_shutdown_root_get_fetch_alias_rejects_redirect_legs() -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    network, fetch = _normal_shutdown_root_type_alias("get-fetch")
+    next_network = _normal_shutdown_network(
+        requestId=network["requestId"],
+        type="Other",
+        request={"method": "GET", "url": "https://root.test/redirected"},
+        redirectResponse={"status": 302},
+    )
+    next_fetch = _abort_fetch_pause(
+        requestId="shutdown-get-fetch-redirect-pause",
+        networkId=network["requestId"],
+        resourceType="Fetch",
+        redirectedRequestId=fetch["requestId"],
+        request=next_network["request"],
+    )
+    _begin_shutdown(router)
+    observed_before = list(observed)
+    for method, event in (
+        ("Network.requestWillBeSent", network),
+        ("Fetch.requestPaused", fetch),
+        ("Network.requestWillBeSent", next_network),
+        ("Fetch.requestPaused", next_fetch),
+    ):
+        session.emit((), method, event)
+        router.raise_if_failed()
+
+    with pytest.raises(CdpTargetIntegrityError, match="no exact Network occurrence"):
+        _finish(router)
+    assert observed == observed_before
+
+
 @pytest.mark.parametrize(
     ("network_type", "fetch_type", "method"),
     [
@@ -10769,12 +11036,132 @@ def test_normal_shutdown_holds_exact_post_ping_xhr_pair_until_context_disposal(
     assert observed == observed_before
 
 
+def test_normal_shutdown_holds_one_post_xhr_beside_exact_matched_requests() -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    _begin_shutdown(router)
+    commands_before = list(session.commands)
+    observed_before = list(observed)
+    _emit_normal_shutdown_matched_scripts(session)
+    session.emit((), "Fetch.requestPaused", _normal_shutdown_held_post_xhr())
+    router.raise_if_failed()
+
+    pending = router.normal_shutdown_disposal_summary
+    assert pending["terminal"] is False
+    assert pending["matched_total"] == 3
+    assert pending["pending_fetch_total"] == 1
+    assert pending["fetch_only_context_disposal_total"] == 0
+    assert session.commands == commands_before
+    assert observed == observed_before
+
+    _finish(router)
+
+    summary = router.normal_shutdown_disposal_summary
+    assert summary["terminal"] is True
+    assert summary["network_total"] == 3
+    assert summary["fetch_total"] == 4
+    assert summary["matched_total"] == 3
+    assert summary["network_only_synthetic_total"] == 0
+    assert summary["fetch_only_context_disposal_total"] == 1
+    assert summary["pending_fetch_total"] == 0
+    assert summary["terminal_outcomes"]["qcsd-shutdown"] == 3
+    assert validate_normal_shutdown_disposal_summary(summary, require_terminal=True) == summary
+    assert session.commands == commands_before
+    assert observed == observed_before
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "second-held-xhr",
+        "unmatched-network",
+        "pre-shutdown-network-id",
+        "same-id-network",
+        "wrong-method",
+        "wrong-resource-type",
+        "wrong-frame",
+        "child-source",
+        "redirect",
+        "non-https-url",
+    ),
+)
+def test_normal_shutdown_matched_requests_plus_held_xhr_rejects_near_misses(
+    mutation: str,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    held = _normal_shutdown_held_post_xhr()
+    child: tuple[str, ...] = ()
+    if mutation == "pre-shutdown-network-id":
+        network = _normal_shutdown_network(
+            requestId=held["networkId"],
+            type="XHR",
+            request=held["request"],
+        )
+        session.emit((), "Network.requestWillBeSent", network)
+        _finish_test_network(session, (), held["networkId"], timestamp=1.0)
+        router.raise_if_failed()
+    elif mutation == "wrong-method":
+        held["request"] = {"method": "GET", "url": held["request"]["url"]}
+    elif mutation == "wrong-resource-type":
+        held["resourceType"] = "Ping"
+    elif mutation == "wrong-frame":
+        held["frameId"] = "other-frame"
+    elif mutation == "child-source":
+        child = session.attach(
+            (),
+            session_id="held-xhr-child-session",
+            target_id="held-xhr-child-frame",
+            target_type="iframe",
+            parent_frame_id=session.root_frame_id,
+        )
+        held["frameId"] = "held-xhr-child-frame"
+    elif mutation == "non-https-url":
+        held["request"] = {"method": "POST", "url": "http://root.test/telemetry"}
+    _begin_shutdown(router)
+    commands_before = list(session.commands)
+    observed_before = list(observed)
+    _emit_normal_shutdown_matched_scripts(session)
+    if mutation == "unmatched-network":
+        session.emit(
+            (), "Network.requestWillBeSent",
+            _normal_shutdown_network(requestId="unmatched-shutdown-network"),
+        )
+    elif mutation == "same-id-network":
+        session.emit(
+            (), "Network.requestWillBeSent",
+            _normal_shutdown_network(requestId=held["networkId"]),
+        )
+    session.emit(child, "Fetch.requestPaused", held)
+    if mutation == "second-held-xhr":
+        session.emit(
+            (), "Fetch.requestPaused",
+            _normal_shutdown_held_post_xhr(
+                requestId="second-held-xhr-fetch",
+                networkId="second-held-xhr-network",
+            ),
+        )
+    elif mutation == "redirect":
+        session.emit(
+            (), "Fetch.requestPaused",
+            _normal_shutdown_held_post_xhr(
+                requestId="held-xhr-redirect",
+                redirectedRequestId=held["requestId"],
+            ),
+        )
+    router.raise_if_failed()
+
+    with pytest.raises(CdpTargetIntegrityError, match="no exact Network occurrence"):
+        _finish(router)
+    assert session.commands == commands_before
+    assert observed == observed_before
+
+
 @pytest.mark.parametrize(
     "mutation",
     (
         "prior-network-ping",
         "prior-network-xhr",
-        "network-ping",
         "unrelated-network",
         "duplicate-network-id",
         "duplicate-ping",
@@ -10836,18 +11223,7 @@ def test_normal_shutdown_post_ping_xhr_pair_rejects_near_misses(
     _begin_shutdown(router)
     commands_before = list(session.commands)
     observed_before = list(observed)
-    if mutation == "network-ping":
-        session.emit(
-            (),
-            "Network.requestWillBeSent",
-            _normal_shutdown_network(
-                requestId=ping["networkId"],
-                frameId=ping["frameId"],
-                type=ping["resourceType"],
-                request=ping["request"],
-            ),
-        )
-    elif mutation == "unrelated-network":
+    if mutation == "unrelated-network":
         session.emit((), "Network.requestWillBeSent", _normal_shutdown_network())
     session.emit((), "Fetch.requestPaused", ping)
     session.emit(child, "Fetch.requestPaused", xhr)
@@ -12094,6 +12470,40 @@ def test_historical_normal_shutdown_disposal_summary_requires_explicit_opt_in() 
     )
     assert validated == historical
     assert validated is not historical
+
+
+def test_previous_shutdown_policy_verifies_only_as_historical_and_rejects_new_shape() -> None:
+    previous = _valid_normal_shutdown_disposal_summary()
+    previous["schema_version"] = 3
+    previous["policy"] = "chromium-143-post-quiescence-context-disposal-v2"
+
+    with pytest.raises(ValueError, match="contract is invalid"):
+        validate_normal_shutdown_disposal_summary(previous, require_terminal=True)
+    assert validate_normal_shutdown_disposal_summary(
+        previous, require_terminal=True, allow_historical=True
+    ) == previous
+
+    mixed = {
+        **previous,
+        "network_total": 3,
+        "fetch_total": 4,
+        "matched_total": 3,
+        "network_only_synthetic_total": 0,
+        "fetch_only_context_disposal_total": 1,
+        "terminal_outcomes": {
+            "Network.loadingFinished": 0,
+            "Network.loadingFailed": 0,
+            "Network.redirectResponse": 0,
+            "qcsd-shutdown": 3,
+        },
+    }
+    with pytest.raises(ValueError, match="counts are inconsistent"):
+        validate_normal_shutdown_disposal_summary(
+            mixed, require_terminal=True, allow_historical=True
+        )
+    mixed["schema_version"] = NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
+    mixed["policy"] = NORMAL_SHUTDOWN_DISPOSAL_POLICY
+    assert validate_normal_shutdown_disposal_summary(mixed, require_terminal=True) == mixed
 
 
 @pytest.mark.parametrize(

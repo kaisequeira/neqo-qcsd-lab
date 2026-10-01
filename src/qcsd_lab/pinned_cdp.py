@@ -21,6 +21,7 @@ import threading
 import time
 from collections import Counter
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -361,26 +362,38 @@ _HISTORICAL_PROBE_CONTRACT_V17_SHA256 = canonical_json_sha256(
     _HISTORICAL_PROBE_CONTRACT_V17
 )
 
-# Outer schema 18 binds the v21 router and its explicitly accounted singleton
-# Fetch-only context-disposal Ping contract.
-PROBE_CONTRACT: dict[str, Any] = _worker_webtransport_probe_contract(
+# The original outer schema 18 contract remains frozen for explicit historical
+# verification. The prospective contract retains outer schema 18 because the
+# study binds that outer identity, but changes its inner shutdown policy/hash.
+_HISTORICAL_PROBE_CONTRACT_V18: dict[str, Any] = _worker_webtransport_probe_contract(
     schema_version=17,
     policy="pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v17",
     instrumentation_policy=CDP_TARGET_INSTRUMENTATION_POLICY,
     playwright_driver_ownership_policy=OWNERSHIP_POLICY_RECEIPT,
     playwright_driver_binding=EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
 )
-PROBE_CONTRACT["required_observations"].append(
+_HISTORICAL_PROBE_CONTRACT_V18["required_observations"].append(
     "root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-lifecycle"
 )
-PROBE_CONTRACT["required_observations"].append(
+_HISTORICAL_PROBE_CONTRACT_V18["required_observations"].append(
     "terminal-normal-shutdown-disposal-network-fetch-or-singleton-ping-reconciliation"
 )
-PROBE_CONTRACT["srcdoc_pseudo_document_summary_schema_version"] = (
+_HISTORICAL_PROBE_CONTRACT_V18["srcdoc_pseudo_document_summary_schema_version"] = (
     SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION
 )
-PROBE_CONTRACT["srcdoc_pseudo_document_policy"] = SRCDOC_PSEUDO_DOCUMENT_POLICY
-PROBE_CONTRACT["required_srcdoc_pseudo_document_count"] = 1
+_HISTORICAL_PROBE_CONTRACT_V18["srcdoc_pseudo_document_policy"] = (
+    SRCDOC_PSEUDO_DOCUMENT_POLICY
+)
+_HISTORICAL_PROBE_CONTRACT_V18["required_srcdoc_pseudo_document_count"] = 1
+_HISTORICAL_PROBE_CONTRACT_V18["normal_shutdown_disposal_summary_schema_version"] = 3
+_HISTORICAL_PROBE_CONTRACT_V18["normal_shutdown_disposal_policy"] = (
+    "chromium-143-post-quiescence-context-disposal-v2"
+)
+_HISTORICAL_PROBE_CONTRACT_V18_SHA256 = canonical_json_sha256(
+    _HISTORICAL_PROBE_CONTRACT_V18
+)
+
+PROBE_CONTRACT: dict[str, Any] = deepcopy(_HISTORICAL_PROBE_CONTRACT_V18)
 PROBE_CONTRACT["normal_shutdown_disposal_summary_schema_version"] = (
     NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
 )
@@ -1581,7 +1594,18 @@ def _validate_payload(
         raise ValueError("pinned CDP probe payload fields differ from the contract")
     cohort_version = payload.get("cohort_version")
     probe_schema_version = payload.get("probe_schema_version")
-    historical_probe = (
+    historical_v18 = (
+        probe_schema_version == PROBE_SCHEMA_VERSION
+        and isinstance(payload.get("probe_contract"), Mapping)
+        and payload["probe_contract"].get(
+            "normal_shutdown_disposal_summary_schema_version"
+        ) == _HISTORICAL_PROBE_CONTRACT_V18[
+            "normal_shutdown_disposal_summary_schema_version"
+        ]
+        and payload["probe_contract"].get("normal_shutdown_disposal_policy")
+        == _HISTORICAL_PROBE_CONTRACT_V18["normal_shutdown_disposal_policy"]
+    )
+    historical_probe = historical_v18 or (
         type(probe_schema_version) is int
         and probe_schema_version in HISTORICAL_PROBE_SCHEMA_VERSIONS
     )
@@ -1650,6 +1674,15 @@ def _validate_payload(
     elif probe_schema_version == 17:
         expected_contract = _HISTORICAL_PROBE_CONTRACT_V17
         expected_contract_sha256 = _HISTORICAL_PROBE_CONTRACT_V17_SHA256
+    elif historical_v18:
+        machine = browser_profile(build_value["docker"]["server_architecture"])["architecture"]
+        expected_contract = deepcopy(_HISTORICAL_PROBE_CONTRACT_V18)
+        historical_binding = expected_playwright_driver_binding(machine)
+        expected_contract["playwright_driver_binding"] = historical_binding
+        expected_contract["chromium_executable_sha256"] = (
+            historical_binding["chromium_executable_sha256"]
+        )
+        expected_contract_sha256 = canonical_json_sha256(expected_contract)
     else:
         machine = browser_profile(build_value["docker"]["server_architecture"])["architecture"]
         expected_contract = probe_contract_for_machine(machine)
@@ -1683,7 +1716,11 @@ def _validate_payload(
             probe_schema_version in {17, PROBE_SCHEMA_VERSION}
         ),
         allow_historical_normal_shutdown_disposal_summary=(
-            probe_schema_version == 17
+            probe_schema_version == 17 or historical_v18
+        ),
+        expected_normal_shutdown_disposal_contract=(
+            expected_contract.get("normal_shutdown_disposal_summary_schema_version"),
+            expected_contract.get("normal_shutdown_disposal_policy"),
         ),
         expected_resolver_projection=(
             _HISTORICAL_PINNED_CDP_RESOLVER_PROJECTION
@@ -1721,6 +1758,7 @@ def _validate_observation(
     require_srcdoc_pseudo_document_summary: bool = True,
     require_normal_shutdown_disposal_summary: bool = True,
     allow_historical_normal_shutdown_disposal_summary: bool = False,
+    expected_normal_shutdown_disposal_contract: tuple[object, object] | None = None,
     expected_playwright_driver_binding: Mapping[str, Any] = (EXPECTED_PLAYWRIGHT_DRIVER_BINDING),
     expected_resolver_projection: Mapping[str, Any] = (_PINNED_CDP_RESOLVER_PROJECTION),
 ) -> dict[str, Any]:
@@ -1832,17 +1870,26 @@ def _validate_observation(
         _validate_required_srcdoc_summary(topology.get("srcdoc_pseudo_document_summary"))
     if require_normal_shutdown_disposal_summary:
         shutdown_summary = topology.get("normal_shutdown_disposal_summary")
-        if allow_historical_normal_shutdown_disposal_summary and (
+        expected_shutdown_contract = (
+            expected_normal_shutdown_disposal_contract
+            if expected_normal_shutdown_disposal_contract is not None
+            else (
+                NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
+                NORMAL_SHUTDOWN_DISPOSAL_POLICY,
+            )
+        )
+        if (
             not isinstance(shutdown_summary, Mapping)
-            or shutdown_summary.get("schema_version")
-            != _HISTORICAL_PROBE_CONTRACT_V17[
-                "normal_shutdown_disposal_summary_schema_version"
-            ]
-            or shutdown_summary.get("policy")
-            != _HISTORICAL_PROBE_CONTRACT_V17["normal_shutdown_disposal_policy"]
+            or (
+                shutdown_summary.get("schema_version"),
+                shutdown_summary.get("policy"),
+            )
+            != expected_shutdown_contract
         ):
             raise ValueError(
                 "historical pinned CDP shutdown disposal summary differs from its contract"
+                if allow_historical_normal_shutdown_disposal_summary
+                else "pinned CDP shutdown disposal summary differs from its contract"
             )
         validate_normal_shutdown_disposal_summary(
             shutdown_summary,

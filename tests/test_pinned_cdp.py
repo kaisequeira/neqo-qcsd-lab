@@ -955,6 +955,62 @@ def test_schema17_v20_receipt_rejects_shutdown_summary_contract_collisions(
         )
 
 
+def test_prior_inner_shutdown_contract_under_outer_18_is_historical_only(
+    tmp_path: Path,
+    fake_build: Path,
+) -> None:
+    current = _create(tmp_path, fake_build)
+    current_payload = json.loads(current.read_text(encoding="utf-8"))["payload"]
+    historical = copy.deepcopy(current_payload)
+    old_contract = historical["probe_contract"]
+    old_contract["normal_shutdown_disposal_summary_schema_version"] = 3
+    old_contract["normal_shutdown_disposal_policy"] = (
+        "chromium-143-post-quiescence-context-disposal-v2"
+    )
+    historical["probe_contract_sha256"] = pinned_cdp.canonical_json_sha256(old_contract)
+    old_summary = historical["observation"]["topology"][
+        "normal_shutdown_disposal_summary"
+    ]
+    old_summary["schema_version"] = 3
+    old_summary["policy"] = "chromium-143-post-quiescence-context-disposal-v2"
+    historical_path = tmp_path / "pinned-cdp-outer18-inner-v2.json"
+    historical_path.write_bytes(
+        canonical_json_bytes(
+            bind_receipt(historical, receipt_type=pinned_cdp.RECEIPT_TYPE)
+        )
+    )
+
+    with pytest.raises(ValueError, match="identity or result"):
+        pinned_cdp.validate_pinned_cdp_receipt(
+            historical_path,
+            build_execution_receipt=fake_build,
+            expected_cohort_version=59,
+        )
+    verified = pinned_cdp.validate_pinned_cdp_receipt(
+        historical_path,
+        build_execution_receipt=fake_build,
+        expected_cohort_version=59,
+        allow_historical=True,
+    )
+    assert verified["probe_schema_version"] == 18
+    assert verified["probe_contract_sha256"] == historical["probe_contract_sha256"]
+
+    collision = copy.deepcopy(historical)
+    collision["probe_contract"] = copy.deepcopy(current_payload["probe_contract"])
+    collision["probe_contract_sha256"] = current_payload["probe_contract_sha256"]
+    collision_path = tmp_path / "pinned-cdp-outer18-inner-collision.json"
+    collision_path.write_bytes(
+        canonical_json_bytes(bind_receipt(collision, receipt_type=pinned_cdp.RECEIPT_TYPE))
+    )
+    with pytest.raises(ValueError, match="shutdown disposal summary differs"):
+        pinned_cdp.validate_pinned_cdp_receipt(
+            collision_path,
+            build_execution_receipt=fake_build,
+            expected_cohort_version=59,
+            allow_historical=True,
+        )
+
+
 @pytest.mark.parametrize(
     ("cohort", "receipt_sha256", "payload_sha256"),
     (
@@ -1044,6 +1100,29 @@ def test_immutable_schema17_v20_receipt_verifies_only_under_the_frozen_contract(
         "chromium-143-post-quiescence-context-disposal-v1"
     )
     assert "fetch_only_context_disposal_total" not in shutdown_summary
+
+
+def test_immutable_outer18_prior_shutdown_receipt_verifies_as_historical_only() -> None:
+    root = Path(__file__).resolve().parents[1] / "artifacts/buflo-study"
+    receipt = root / "pinned-cdp-execution-v137.json"
+    build = root / "build-execution-v137.json"
+    if not receipt.is_file() or not build.is_file():
+        pytest.skip("immutable v137 pinned-CDP evidence is not present")
+    expected_sha256 = "db7cc64e7cb142933cda1520567980c59e34d6f5246a1d3d9cd0f7d1383cbd98"
+    assert hashlib.sha256(receipt.read_bytes()).hexdigest() == expected_sha256
+    with pytest.raises(ValueError, match="identity or result"):
+        pinned_cdp.validate_pinned_cdp_receipt(
+            receipt,
+            build_execution_receipt=build,
+            expected_cohort_version=137,
+        )
+    verified = pinned_cdp.validate_pinned_cdp_receipt(
+        receipt,
+        build_execution_receipt=build,
+        expected_cohort_version=137,
+        allow_historical=True,
+    )
+    assert verified["sha256"] == expected_sha256
 
 
 def test_current_receipt_rejects_frozen_historical_resolver_projection(
@@ -1312,12 +1391,12 @@ def test_prepare_role_revalidates_playwright_driver_binding(
             ].update(terminal=False),
             "counts are inconsistent",
         ),
-        (
-            lambda observation: observation["topology"][
-                "normal_shutdown_disposal_summary"
-            ].update(policy="unbound-disposal-policy"),
-            "contract is invalid",
-        ),
+            (
+                lambda observation: observation["topology"][
+                    "normal_shutdown_disposal_summary"
+                ].update(policy="unbound-disposal-policy"),
+                "summary differs from its contract",
+            ),
         (
             lambda observation: observation["topology"][
                 "srcdoc_pseudo_document_summary"
@@ -1640,6 +1719,9 @@ def test_required_topology_wait_condition_is_event_driven() -> None:
     assert pinned_cdp.PROBE_CONTRACT["instrumentation_policy"] == (
         "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v21"
     )
+    assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V18_SHA256 == (
+        "958ef7b56937cfcd7feb1159e07f016505001dc11c98ecd617f3217853f27a4e"
+    )
     assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V11["schema_version"] == 10
     assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V11["instrumentation_policy"].endswith("-v12")
     assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V12["schema_version"] == 11
@@ -1695,12 +1777,12 @@ def test_required_topology_wait_condition_is_event_driven() -> None:
     assert pinned_cdp.PROBE_CONTRACT[
         "normal_shutdown_disposal_summary_schema_version"
     ] == pinned_cdp.NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
-    assert pinned_cdp.NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION == 3
+    assert pinned_cdp.NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION == 4
     assert pinned_cdp.PROBE_CONTRACT["normal_shutdown_disposal_policy"] == (
         pinned_cdp.NORMAL_SHUTDOWN_DISPOSAL_POLICY
     )
     assert pinned_cdp.NORMAL_SHUTDOWN_DISPOSAL_POLICY == (
-        "chromium-143-post-quiescence-context-disposal-v2"
+        "chromium-143-post-quiescence-context-disposal-v3"
     )
     assert pinned_cdp.PROBE_CONTRACT["playwright_driver_binding"] == (
         pinned_cdp.EXPECTED_PLAYWRIGHT_DRIVER_BINDING

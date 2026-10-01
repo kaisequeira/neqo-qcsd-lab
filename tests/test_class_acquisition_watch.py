@@ -4402,6 +4402,9 @@ def test_watcher_pinned_cdp_contract_matches_runtime_contract() -> None:
     assert watch._PINNED_CDP_TARGET_ACTIVITY_EVENTS == (pinned_cdp._TARGET_ACTIVITY_EVENTS)
     assert watch._PINNED_CDP_TARGET_ACTIVITY_TYPES == (pinned_cdp._TARGET_ACTIVITY_TYPES)
     assert watch._PINNED_CDP_CONTRACT == pinned_cdp.PROBE_CONTRACT
+    assert watch._HISTORICAL_PINNED_CDP_CONTRACT_V18 == (
+        pinned_cdp._HISTORICAL_PROBE_CONTRACT_V18
+    )
     assert watch._HISTORICAL_PINNED_CDP_CONTRACT == (pinned_cdp._HISTORICAL_PROBE_CONTRACT)
     assert watch._HISTORICAL_PINNED_CDP_CONTRACT_V11 == (pinned_cdp._HISTORICAL_PROBE_CONTRACT_V11)
     assert watch._HISTORICAL_PINNED_CDP_CONTRACT_V12 == (pinned_cdp._HISTORICAL_PROBE_CONTRACT_V12)
@@ -4603,6 +4606,22 @@ def test_watcher_accepts_two_fetch_only_context_disposals(
             fetch_only_context_disposal_total=2,
         )
     )
+
+    watch._validate_pinned_cdp_observation(copy.deepcopy(observation))
+
+
+def test_watcher_accepts_one_held_post_xhr_beside_matched_requests(
+    acquisition: Fixture,
+) -> None:
+    receipt = json.loads(acquisition.pinned_cdp_path.read_text(encoding="utf-8"))
+    observation = receipt["payload"]["observation"]
+    summary = _normal_shutdown_disposal_summary(
+        fetch_total=4,
+        fetch_only_context_disposal_total=1,
+    )
+    summary["network_total"] = 3
+    summary["terminal_outcomes"]["qcsd-shutdown"] = 3
+    observation["topology"]["normal_shutdown_disposal_summary"] = summary
 
     watch._validate_pinned_cdp_observation(copy.deepcopy(observation))
 
