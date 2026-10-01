@@ -143,6 +143,7 @@ from .playwright_driver import (
 from .prepare import PreparedWorkload, prepare_workload
 from .util import (
     ATOMIC_TEMP_MARKER,
+    LAB_ROOT,
     atomic_json,
     durable_create,
     fsync_directory,
@@ -971,7 +972,7 @@ def _study_profile_sha256(study_id: str) -> str | None:
         raise ValueError("class acquisition study identity is unsupported")
     if load_class20_profile_contract() != CLASS20_PROFILE:
         raise ValueError("20-site acquisition profile differs from its frozen contract")
-    overlay = Path(__file__).resolve().parents[2] / "config/class-study/v2/study.json"
+    overlay = LAB_ROOT / "config/class-study/v2/study.json"
     return sha256_file(overlay)
 
 

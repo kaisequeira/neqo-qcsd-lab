@@ -10,6 +10,10 @@ estimate breakdown](docs/README.md) gives the planning arithmetic. The
 
 ## Goal and claim boundary
 
+The registered 100-site contract below remains the baseline for historical
+evidence. The prospective 20-site contract in the current milestone keeps the
+same 16,000-sample total but needs its own authority.
+
 Freeze 100 public-page classes with their complete admitted multi-origin
 resource graphs; fit the applicable defences on separate observations; verify
 every class against all nine selectable modes; then collect the same classes
@@ -31,7 +35,25 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-The latest source-bound acquisition attempt is **v139** on clean Lab source
+The prospective [20-site study](docs/CLASS-STUDY-20.md) keeps the 16,000-sample
+target with 30 eligible pilot sites and 20 final sites. It has **0/30 eligible
+pilots and 0/16,000 accepted formal samples**. It has no authority for final
+capture yet.
+
+On **v140**, clean Lab source `0535198a7af59039337b5760b6997e8192c3adb6`
+and pinned Rust Gitlink `a8d8664cd31cbc4cc1ecb4fd5abc5a1d3ee153ae`
+passed the no-cache build and pinned-CDP check. The 20-site
+`acquisition-authority` command then exited 1 before publishing a receipt:
+the installed Python module looked for the source-pinned study overlay under
+its virtual environment instead of the Lab checkout mounted at `/lab`.
+The v140 build and browser receipts remain valid for that source; v140 has no
+20-site acquisition authority or checkpoint. The repair uses the existing
+portable Lab-root resolver for every affected profile read. A local
+installed-module regression and 152 focused tests passed, but these grant no
+scientific credit. Changed source requires a fresh claimed cohort and full
+downstream reproof; preserve all v140 files.
+
+The latest completed public-page acquisition attempt is **v139** on clean Lab source
 `34088bb687ec683f16597da41e2c02a11f201447` and pinned Rust Gitlink
 `a8d8664cd31cbc4cc1ecb4fd5abc5a1d3ee153ae`. Its no-cache build,
 pinned-CDP check and acquisition-only authority were recorded. This authority
@@ -51,11 +73,7 @@ checkpoint, all terminal receipts and both pending attempts.
 A subsequent zero-credit navigation rehearsal reproduced the exact browser
 fault and classified a proposed full-attempt discard as recoverable. It did
 not modify v139 or grant acquisition authority to changed source. The
-prospective 20-site study profile and browser repair are present in this
-source tree. Before they can produce official evidence, they need checked
-integration, a clean source commit, a fresh build and a new acquisition
-cohort. The 20-site protocol retains the 16,000-sample
-target and has no accepted evidence yet. The [evidence index](docs/EVIDENCE-INDEX.md)
+[evidence index](docs/EVIDENCE-INDEX.md)
 contains the v139 receipt and checkpoint paths. The v138 DNS-blocked checkpoint
 remains historical evidence under its original rules.
 

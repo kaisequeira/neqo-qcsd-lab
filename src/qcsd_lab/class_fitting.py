@@ -58,7 +58,7 @@ from .fitting_walkie_talkie import (
     minimum_weight_perfect_matching_from_costs,
 )
 from .fitting_wtfpad import fit_wtf_pad
-from .util import SOURCE_METADATA_KEYS, load_json, sha256_bytes, sha256_file
+from .util import LAB_ROOT, SOURCE_METADATA_KEYS, load_json, sha256_bytes, sha256_file
 from .verification import VerifiedResult, verify_result
 
 SCHEMA_VERSION = 1
@@ -2465,7 +2465,7 @@ def _checked_profile(profile: ClassStudyProfile | None) -> ClassStudyProfile | N
 def _profile_sha256(profile: ClassStudyProfile) -> str:
     _checked_profile(profile)
     return sha256_file(
-        Path(__file__).resolve().parents[2] / "config/class-study/v2/study.json"
+        LAB_ROOT / "config/class-study/v2/study.json"
     )
 
 

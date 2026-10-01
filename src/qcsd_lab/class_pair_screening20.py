@@ -40,7 +40,7 @@ from .class_study import (
     validate_hash_bound_receipt,
     write_create_only_json,
 )
-from .util import load_json, sha256_file
+from .util import LAB_ROOT, load_json, sha256_file
 
 RECEIPT_TYPE = "qcsd-class-study-pilot-pair-screening"
 SCHEMA_VERSION = 1
@@ -89,7 +89,7 @@ def build_pair_screening_receipt(
         raise ValueError("pair screening requires the source-pinned 20-site profile")
     layout = class_study_layout(profile=profile)
     overlay_path = _file(layout.study_config_root / "study.json", layout.lab_root)
-    source_overlay = Path(__file__).resolve().parents[2] / "config/class-study/v2/study.json"
+    source_overlay = LAB_ROOT / "config/class-study/v2/study.json"
     if sha256_file(overlay_path) != sha256_file(source_overlay):
         raise ValueError("pair-screening profile differs from source-pinned overlay")
     cohort_path = require_canonical_fresh_child(
@@ -375,7 +375,7 @@ def _replay_feasible_pilot_prefix_specs(
         raise ValueError("pilot prefix publication requires the source-pinned 20-site profile")
     layout = class_study_layout(profile=profile)
     overlay_path = _file(layout.study_config_root / "study.json", layout.lab_root)
-    source_overlay = Path(__file__).resolve().parents[2] / "config/class-study/v2/study.json"
+    source_overlay = LAB_ROOT / "config/class-study/v2/study.json"
     if sha256_file(overlay_path) != sha256_file(source_overlay):
         raise ValueError("pilot prefix profile differs from source-pinned overlay")
     cohort_path = _file(require_canonical_fresh_child(

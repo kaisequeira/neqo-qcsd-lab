@@ -19,6 +19,8 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
+from .util import LAB_ROOT
+
 STUDY_ID = "classifier-multiorigin100-v1"
 CLASS20_STUDY_ID = "classifier-multiorigin20-v1"
 SUCCESSOR_STUDY_PREFIX = "classifier-multiorigin100-v2"
@@ -456,7 +458,7 @@ def load_class20_profile_contract(profile_path: Path | None = None) -> ClassStud
     validation or grant authority to any historical acquisition evidence.
     """
 
-    lab_root = Path(__file__).resolve().parents[2]
+    lab_root = LAB_ROOT
     expected = lab_root / "config/class-study/v2/study.json"
     path = expected if profile_path is None else Path(os.path.abspath(profile_path))
     if path != expected:

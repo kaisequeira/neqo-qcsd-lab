@@ -628,6 +628,20 @@ def test_class20_profile_is_source_bound_and_keeps_v1_order_unchanged(monkeypatc
         load_class20_profile_contract()
 
 
+def test_class20_profile_loads_from_lab_root_with_installed_module(monkeypatch) -> None:
+    import qcsd_lab.class_study as study
+
+    root = Path(__file__).resolve().parents[1]
+    monkeypatch.setattr(study, "LAB_ROOT", root, raising=False)
+    monkeypatch.setattr(
+        study,
+        "__file__",
+        "/opt/qcsd-venv/lib/python3.11/site-packages/qcsd_lab/class_study.py",
+    )
+
+    assert load_class20_profile_contract() == CLASS20_PROFILE
+
+
 def test_class20_profile_inherits_exact_primary_origin_prefix_scope() -> None:
     root = Path(__file__).resolve().parents[1]
     overlay = json.loads((root / "config/class-study/v2/study.json").read_bytes())
@@ -678,7 +692,7 @@ def test_class20_profile_rejects_changed_prefix_scope_even_with_matching_hash(
     payload = json.loads(source.read_bytes())
     payload["walkie_talkie_prefix_qualification"][field] = invalid
     profile.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    monkeypatch.setattr(study, "__file__", str(tmp_path / "src/qcsd_lab/class_study.py"))
+    monkeypatch.setattr(study, "LAB_ROOT", tmp_path, raising=False)
     monkeypatch.setattr(
         study, "_CLASS20_OVERLAY_SHA256", hashlib.sha256(profile.read_bytes()).hexdigest()
     )
