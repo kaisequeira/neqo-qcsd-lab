@@ -4205,6 +4205,11 @@ def test_all_rejected_candidates_fail_quota_and_completion_publication_detects_t
         "work_due_now": False,
         "complete": False,
         "next_due": None,
+        "operational_censor_summary": {
+            "cause": acquisition_module.OPERATIONAL_CENSOR_CAUSE,
+            "count": 0,
+            "candidate_ids": [],
+        },
     }
     with pytest.raises(ValueError, match="resolved deterministic prefix"):
         write_acquisition_completion(runner, candidate_catalogue_path=catalogue)
@@ -4213,8 +4218,8 @@ def test_all_rejected_candidates_fail_quota_and_completion_publication_detects_t
     # is asserted above; separate full-catalogue tests cover accepted prefixes.
     original_selection = acquisition_module._derive_checkpoint_selection
 
-    def publication_fixture_selection(*args):
-        selection, blocked = original_selection(*args)
+    def publication_fixture_selection(*args, **kwargs):
+        selection, blocked = original_selection(*args, **kwargs)
         return {**selection, "complete": True}, blocked
 
     monkeypatch.setattr(
@@ -7560,7 +7565,7 @@ def test_late_network_root_continue_is_retryable_only_after_complete_abort(
                 fingerprint="synthetic", resource_type="Script"
             ) if race_type == "canceled" else
             _RootRequestStageFailedInterception(
-                fingerprint="synthetic", resource_type="XHR"
+                fingerprint="exception_sha256=" + "a" * 64, resource_type="XHR"
             ) if race_type == "failed-denial" else
             _RootRequestStageInvalidInterception(
                 fingerprint="synthetic", resource_type="Image"
@@ -7590,7 +7595,9 @@ def test_root_continue_discard_never_demotes_retained_egress(
     late = (
         _RootLateNetworkInvalidInterception(fingerprint="synthetic", resource_type="Font")
         if race_type == "late" else
-        _RootRequestStageFailedInterception(fingerprint="synthetic", resource_type="XHR")
+        _RootRequestStageFailedInterception(
+            fingerprint="exception_sha256=" + "a" * 64, resource_type="XHR"
+        )
         if race_type == "failed-denial" else
         _RootRequestStageInvalidInterception(fingerprint="synthetic", resource_type="Image")
     )
@@ -9614,7 +9621,7 @@ def test_acquisition_authority_is_explicit_mutually_exclusive_and_prepare_valida
     authority.write_bytes(
         canonical_json_bytes(
             bind_receipt(
-                {"fixture": True},
+                {"fixture": True, "study_id": STUDY_ID},
                 receipt_type=class_attestation.ACQUISITION_AUTHORITY_RECEIPT_TYPE,
             )
         )

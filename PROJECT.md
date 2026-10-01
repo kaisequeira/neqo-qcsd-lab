@@ -63,7 +63,23 @@ paired build receipts, pinned-CDP result, 20-site authority or acquisition
 checkpoint. Its claim is consumed and none of its images grants scientific
 credit. A test-only fixed-clock repair is prepared for focused verification
 before the next claimed build; preserve the v141 claim and failed BuildKit
-history.
+history. The exact lifecycle records and full BuildKit logs were archived;
+`lifecycle-recover` passed before v142 was claimed.
+
+On **v142**, clean Lab source `f2f46716a76f0e8888420a3e57e0d551a341e65b`
+and Rust Gitlink `ca70e626275fb3dfb4520696568e7b2ad800174f`
+passed the no-cache three-image build and pinned-CDP check. The 20-site
+`acquisition-authority` command then failed its correctness suite with 2,522
+passed, three failed and 31 skipped tests; it issued no authority receipt and
+created no acquisition checkpoint. Focused reproduction traced the three
+failures to stale test fixtures: one expected status omitted the zero-censor
+summary, one simulated failed denial used an invalid evidence fingerprint,
+and one synthetic authority omitted its study ID. The strict production
+validators remain intact. The test-only repair passed the three formerly
+failing cases in host checks and a zero-credit rerun in the v142 collection
+image. The corrected source still requires a fresh build and cohort; v142's
+build and pinned-CDP receipts remain valid only for v142 source and grant no
+pilot or formal capture credit.
 
 The latest completed public-page acquisition attempt is **v139** on clean Lab source
 `34088bb687ec683f16597da41e2c02a11f201447` and pinned Rust Gitlink
