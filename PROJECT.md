@@ -100,8 +100,8 @@ across the five strata. The root-known-valid set alone is below the registered
 because selected final page URLs may differ from the probed root. The release
 gate has now passed its diagnostic criteria on the current source, including
 the later 2,112-pass collection-image run and a directly linked full-sidecar
-Walkie-Talkie diagnostic. The formal acquisition gate remains open and no new
-formal acquisition or capture has begun. See the
+Walkie-Talkie diagnostic. At that checkpoint, the formal acquisition gate was
+still open. See the
 [rehearsal](docs/ACQUISITION-REHEARSAL.md) for limits and the prospective
 study decision.
 
@@ -118,6 +118,53 @@ recovery passed. The image is diagnostic only; the next attempt must use the
 allocator's next unused version with the read-only binding check's timeout
 fix bound by a fresh verified build. Neither v132 nor v133 created
 an acquisition checkpoint or scientific credit.
+
+The post-export inspection fix was committed as Lab `2d872257f89bc86bc1129c485d16dfcc1412d252`
+with Rust Gitlink `2a9efa84ba0b81ca5d27d37fe2f8f73a08e2a91d`. V134's
+no-cache collection, prepare and reference build completed and its build and
+completion receipts independently verified. Pinned CDP passed on the v134
+collection image. Its schema-2 acquisition-only authority passed all three
+hard gates and independently verified. The versioned acquisition root then
+initialized with the frozen 600 candidates. A first bounded watcher action
+stopped on `tranco-0000697` during navigation: root CDP
+`Fetch.continueRequest` returned the pinned `InvalidInterceptionId` error.
+`tranco-0000984` separately recorded an exact-page HTTP/3 screen rejection
+with passing controls. Both remain pending; no baseline, terminal receipt,
+eligible pilot class or formal capture was produced. Preserve the v134 root.
+The v134-source downstream fitting, campaign, capture, handoff and pipeline
+dry runs passed 314/314 tests, but they use synthetic cohorts and do not grant
+real fitting or capture authority. A zero-credit two-worker diagnostic in the
+v134 prepare image reproduced the first error and showed two root Font
+`Fetch.requestPaused` events arriving before their matching
+`Network.requestWillBeSent` events. The router could not register its existing
+same-occurrence recovery decision at pause time. The repair must discard the
+whole navigation attempt, verify cleanup and egress, and retry only when the
+late Network occurrence is uniquely matched. A changed source needs the next
+unused cohort and fresh authority; v134 cannot be resumed under that change.
+A zero-credit two-worker live check of the proposed repair then exposed a
+distinct Fetch-only root Font ordering: the pinned continue failed before any
+matching Network start or terminal appeared. The strict late-Network guard
+failed closed, one other candidate navigated, and no scientific counter
+changed. The sanitized trace is indexed in
+[EVIDENCE-INDEX.md](docs/EVIDENCE-INDEX.md). A separate discard-only retry
+for this exact case requires complete abort, bounded attempts and negative
+tests before the next source freeze.
+The revised discard-only paths passed 836 router/rehearsal host tests. A second
+two-worker live diagnostic caught the late-Network Font race and classified
+the discarded navigation as recoverable after complete cleanup; its partner
+navigated. A single-worker rerun of the failed candidate navigated in 33
+seconds. The diagnostic has no coordinator retry or scientific credit. The
+formal coordinator's tested retry narrows to unresolved candidates, and a
+persistently exhausted operational candidate remains blocked from selection
+and completion. Fresh collection-image parity and source-bound bounded
+acquisition are still required before an unattended watcher.
+The proposed-source registered 16-file acquisition correctness suite then
+passed in the existing v134 collection image with **2,177 passed, 31 skipped,
+exit 0**. The trusted Java/OSAD/Weka receipt fixture and a pinned Weka
+prediction also passed in an ephemeral copy of that image after installing
+test-only compiler packages inside the container. These are zero-credit
+prebuild checks; the changed source still needs a clean commit, fresh build,
+pinned CDP, acquisition authority and bounded formal acquisition actions.
 
 The registered host acquisition correctness suite subsequently passed
 **2,082 tests with six skips**. A zero-credit integrated synthetic test
@@ -189,9 +236,9 @@ synthetic 120-class admission, fitting, qualification, campaign planning,
 capture recovery, handoff and evaluation. It found one stale schema-11 status
 test fixture, corrected to distinguish the current schema 12 from historical
 schema 11. These host passes establish deterministic wiring, not a formal
-source-bound gate or public-site viability. The next long watcher remains held
-until the new image correctness suite, authority and monitored live actions
-verify on the frozen source.
+source-bound gate or public-site viability. The long watcher remained held
+through the later v134 image and authority pass because its first monitored
+live action exposed the navigation race recorded above.
 The registered 16-file suite then passed **2,113 tests with 31 skips and zero
 failures** in the existing collection image with the current source mounted
 read-only and first on Python's import path. A stale watcher signal test was
@@ -207,9 +254,9 @@ Walkie-Talkie captures each accepted and deep-verified 1/1 under that profile.
 The result checks container permissions and the defended wire path, while
 formal source, public-site and fitted-parameter evidence remains outstanding.
 
-| Checkpoint identity | v130 qualification, consumed v131-v133 claims and current state |
+| Checkpoint identity | Historical qualification and current v134 acquisition state |
 |---|---|
-| Last attempted source (v133) | Lab `a28ea0c3b07be80870c4efdf411e655f591f4f76` and Rust Gitlink `2a9efa84ba0b81ca5d27d37fe2f8f73a08e2a91d`; the timeout fix requires a new source-bound build |
+| Last source-bound attempt (v134) | Lab `2d872257f89bc86bc1129c485d16dfcc1412d252` and Rust Gitlink `2a9efa84ba0b81ca5d27d37fe2f8f73a08e2a91d`; a navigation fix will require a new source-bound build |
 | Lab branch and v130 source commit | `desktop-portability-2026-09-26`; `5fe0da7a8a8dc92713d91fb67b65f265325e4d51` |
 | Rust commit and Lab Gitlink | `e8575fd8e54921ed6ff867de475b4a734064866e` |
 | Build and pinned CDP | `artifacts/buflo-study/build-execution-v130.json` and `artifacts/buflo-study/pinned-cdp-execution-v130.json`: independently verified on their bound source |
@@ -218,8 +265,9 @@ formal source, public-site and fitted-parameter evidence remains outstanding.
 | v131 attempt | Claim published on `6f2861f4a316809cdd7b69be9fa3a13298d06ff9`; user-interrupted build exited 130; no verified build or authority receipt |
 | v132 attempt | Claim consumed; lifecycle admission blocked on the retained v131 transaction before Docker build; no build receipt |
 | v133 attempt | Collection export completed 62/62 BuildKit steps with provisional image ID `sha256:a1036e8e1b291e80e787f6d911430e711b3c5d4828b987dc6c75ef984aa2279a`; the post-export three-second tag inspection timed out. No prepare/reference image, verified build receipt or acquisition authority |
-| Acquisition checkpoint | v129 remains the latest initialized checkpoint, with 0/120 accepted |
-| Next execution | After the bounded read-only tag-inspection fix and focused tests, freeze source, claim the allocator's next unused cohort, reprove build and pinned CDP, verify schema-2 authority, then start bounded acquisition actions. Defer the full 110-vector browser gate to the same-source full foundation before fitting or defence capture |
+| v134 build, pinned CDP and acquisition authority | `artifacts/buflo-study/build-execution-v134.json`, `artifacts/buflo-study/build-completion-v134.json`, `artifacts/buflo-study/pinned-cdp-execution-v134.json` and `artifacts/class-study-acquisition-authority-v134.json` independently verified on the v134 source |
+| Acquisition checkpoint | `artifacts/classifier-multiorigin100-v1-acquisition-v134/` is the latest initialized root; its first bounded action stopped on a durable root CDP navigation error, with 0/120 accepted |
+| Next execution | Freeze the reviewed discard-only root Fetch repair, allocate the next unused cohort, reprove build, pinned CDP and schema-2 authority, then repeat bounded acquisition actions through the first prepared observations before the long watcher. Defer the full 110-vector browser gate to the same-source foundation before fitting or defence capture |
 
 Preserve the v130 qualification evidence and failed authority attempt, the v129
 checkpoint and failed attempts, v128 failed build, v127
@@ -336,15 +384,18 @@ the curated receipt is excluded from that run. The registered 600-candidate,
 120-pilot, 100-final-class contract remains in force.
 
 1. Preserve the verified migration manifests, historical handoff, v126 through
-   v129 receipts and checkpoints, and the failed watcher evidence.
+   v134 receipts and checkpoints, and all failed watcher evidence.
 2. Retain the registered Tranco candidate catalogue for this formal run.
-3. The [acquisition rehearsal](docs/ACQUISITION-REHEARSAL.md) has passed its
-   non-evidentiary criteria. Freeze the post-export inspection fix after its
-   affected tests pass, obtain the allocator's next unused cohort, fresh
-   no-cache images and pinned CDP, and independently verify prospective
-   schema-2 acquisition authority. The v131-v133 claims are consumed despite
-   their absence of verified build receipts.
-4. Initialize a new versioned acquisition root and acquire the 120-class pilot
+3. The [acquisition rehearsal](docs/ACQUISITION-REHEARSAL.md) and v134 authority
+   passed their stated gates, but the first live v134 action exposed a root CDP
+   late-Network ordering race. Verify the exact fail-closed retry against the
+   two-worker trace and focused negative cases. Freeze the repair, obtain the
+   allocator's next unused cohort, build fresh no-cache images, pass pinned
+   CDP and independently verify schema-2 acquisition authority. The v131-v133
+   claims and failed v134 root are consumed on their recorded source.
+4. Initialize a new versioned acquisition root, run monitored actions through
+   an actual baseline and both short-horizon observations, then acquire the
+   120-class pilot
    with two genuine short-horizon prepared observations per admitted page.
    The prospective watcher can admit a later batch 60 seconds after all
    members of the prior batch are scientifically terminal and its Docker scope

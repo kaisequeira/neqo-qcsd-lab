@@ -835,6 +835,15 @@ def test_typed_trusted_runtime_fixture_binds_java_osad_and_weka_bytes(
     java = shutil.which("java")
     if compiler is None or java is None or shutil.which("dpkg-query") is None:
         pytest.skip("trusted runtime fixture requires cc, Java, and dpkg-query")
+    default_jre = subprocess.run(
+        ["dpkg-query", "-W", "-f=${Version}", "default-jre-headless"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if default_jre.returncode != 0 or not default_jre.stdout.strip():
+        pytest.skip("trusted runtime fixture requires default-jre-headless")
     for name in evaluation._FORMAL_RUNTIME_OVERRIDE_ENV:
         monkeypatch.delenv(name, raising=False)
 

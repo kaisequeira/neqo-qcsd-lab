@@ -28,41 +28,29 @@ selectable modes**. Qualification on the new classes remains pending for all
 modes. BuFLO/CS-BuFLO validation requires the final attestation, and describes
 client-only QUIC adaptations rather than bilateral paper implementations.
 
-The v129 desktop no-cache build, pinned CDP, 110-vector browser gate and
-acquisition-only authority passed on their bound source. A versioned
-acquisition checkpoint initialized, but its watcher stopped before accepting
-any pilot class. `tranco-0000697` missed its probe window after repeated
-recoverable Neqo HTTP/3 failures; `tranco-0000984` carries a durable internal
-redirect-dependency error. Preserve v129 and its attempts. A standalone v129
-image diagnostic, without a formal receipt, passed a Neqo control probe to
-`cloudflare-quic.com` and saw `Error: Timeout(12)` for `consultant.ru` and
-`www.consultant.ru` on the default Docker bridge. It cannot reclassify v129.
-The source fix and historical schema-11 pre-baseline screen required the next
-unused cohort and fresh source-bound proof. V130 passed its no-cache build,
-pinned CDP probe and 110-vector browser gate, but acquisition authority failed
-its correctness suite (1,885 passed, 93 failed, 6 skipped); it issued no
-authority. A bounded v130-image live diagnostic then observed a root CDP
-`InvalidInterceptionId` while navigating `consultant.ru`. It selected a page
-for `elmundo.es`, but the schema-11 HTTP/3 screen rejected both primary
-origins after two classified 12-second timeouts each, with passing controls.
-The diagnostic has no formal receipt or accepted credit and cannot reclassify
-either historical cohort. Earlier v127 and v126 initialization failures also
-remain historical evidence.
-Accepted extended-study progress remains pilot 0/120, final classes 0/100,
-certification 0/900 and formal 0/16,000.
-The v131 claim was published on corrected source, but its build was
-user-interrupted (exit 130) with no verified build receipt. Preserve that
-consumed claim. Run the non-evidentiary acquisition rehearsal, including a
-bounded live path through replay and later-consumer tests, before claiming a
-fresh cohort.
+V134 passed its no-cache build, pinned CDP check and schema-2 acquisition-only
+authority, then its first bounded watcher action stopped on a root CDP
+`InvalidInterceptionId` during navigation. That action yielded no accepted
+class, baseline or scientific terminal. Its checkpoint remains preserved. The
+trace-led repair must pass a zero-credit two-worker rehearsal, focused negative
+tests and fresh source-bound proof before another bounded watcher action. The
+long watcher stays held until a corrected-source action passes navigation,
+reaches a real baseline and completes both prepared observation windows, or
+reports an honest scientific terminal or blocker. The [project ledger](../PROJECT.md)
+and [evidence index](EVIDENCE-INDEX.md) give exact v134 receipt identities.
+Accepted progress remains pilot 0/120, final classes 0/100, certification
+0/900 and formal 0/16,000. V126 through v133 failures and earlier gates are
+preserved in the [history](PROJECT-HISTORY.md); their receipts cannot authorise
+changed source.
+
 The completed zero-credit 600-root H3 survey found only 63 known-valid roots,
 distributed 2, 6, 17, 14 and 24 across the five frozen strata. One catalogue
 page completed a real two-origin, 63-resource preparation rehearsal, so the
 path is executable, but the registered 24-eligible-per-stratum target is not
 established by the current root-valid snapshot. Root probes do not classify
 different browser-selected page URLs. The sequence below describes
-the registered v1 contract; do not launch its long watcher before a prospective
-cohort decision and fresh source-bound validation. See the
+the registered v1 contract; do not launch its long watcher before the next
+source-bound authority and bounded acquisition validation. See the
 [rehearsal](ACQUISITION-REHEARSAL.md) for the diagnostic limits.
 
 ## Cost-escalating sequence

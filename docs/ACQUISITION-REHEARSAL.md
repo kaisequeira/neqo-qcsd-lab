@@ -368,10 +368,10 @@ The following checks must be read together before the next long watcher:
 
 | Path | Current engineering check | Remaining live boundary |
 |---|---|---|
-| Exact-page H3 screen and acquisition resume | Dedicated v2, schema-11 compatibility, mixed-page ordinal and watcher tests pass; the new client probed both exact selected Zoomlife URLs twice under passing controls | First formal bounded checkpoint and both scheduled prepared observations on clean source |
+| Exact-page H3 screen and acquisition resume | Dedicated v2, schema-11 compatibility, mixed-page ordinal and watcher tests pass; v134 build, pinned CDP and acquisition authority verified, then its first bounded action exposed a root CDP navigation race | A corrected-source bounded checkpoint, real baseline and both scheduled prepared observations |
 | Preparation and complete graph | The new client deep-prepared 63 Zoomlife resources across two origins in three runs; incoming UDP reached 1,252 bytes under the schema-2 directional policy | Formal observation stability and enough balanced eligible classes |
 | Capture, fitting and qualification | The new client produced passing five-request schema-4 and sustained 40-request schema-5 response receipts. Python accepted both packet and identity transcripts with only diagnostic source provenance stubbed. A new-client public smoke captured 1,106 packets, passed directional UDP and deep-verified its sealed incomplete result after the page body changed. Local two-origin FRONT/Tamaraw and Walkie-Talkie wire checks passed. A scoped schema-4 prefix rehearsal passed three qualification waves, and a subsequent Walkie-Talkie sample consumed that exact full sidecar and sealed 1/1 accepted with diagnostic provenance handling. | Clean-source qualification, genuine acquired-workload fitting and defended capture, certification and measured formal sample rate |
-| Later campaign and recovery | Synthetic 120-class admission, 100-class final planning, 900/16,000 campaign loads, canary interruption/resume/seal, defended result handoff and evaluation-loader/Panchenko join pass | Genuine completed acquisition, same-source full foundation, real fitting/qualification, 900 final checks and measured sample rate |
+| Later campaign and recovery | Synthetic 120-class admission, 100-class final planning, 900/16,000 campaign loads, canary interruption/resume/seal, defended result handoff and evaluation-loader/Panchenko join pass; the v134-source fitting/campaign/capture/handoff/pipeline suite passed 314 tests | Genuine completed acquisition, same-source full foundation, real fitting/qualification, 900 final checks and measured sample rate |
 
 The host fixtures test wiring and rejection behavior; they use doubles for
 external source authority or cohort evidence where those stages cannot exist
@@ -469,6 +469,81 @@ directory profile can carry both later wire paths. They do not exercise the
 formal launcher, public-origin restriction, acquired workloads, real fitting,
 or source-bound authority. The first timing miss shows that a local replay
 cannot guarantee every future capture will pass.
+
+## V134 bounded acquisition and late Network trace
+
+The v134 no-cache build, pinned CDP and schema-2 acquisition authority passed
+on clean Lab `2d872257f89bc86bc1129c485d16dfcc1412d252` with Rust Gitlink
+`2a9efa84ba0b81ca5d27d37fe2f8f73a08e2a91d`. The authority's registered
+16-file acquisition suite passed in the collection image, and its receipt
+independently verified. The versioned root initialized with the frozen 600
+candidates. A supervised `acquisition-watch --max-actions 1` then stopped at
+the first two-candidate batch. `tranco-0000697` recorded a durable internal
+navigation error: the pinned root CDP `Fetch.continueRequest`
+`InvalidInterceptionId`. `tranco-0000984` recorded an H3 screen rejection
+with passing controls. Both are still pending, without baseline or terminal
+receipts. V134 has zero accepted pilot classes and zero formal samples. Its
+checkpoint and provenance remain intact as failed historical evidence.
+
+A zero-credit rehearsal in the v134 prepare image first navigated
+`consultant.ru` alone twice without the error. The two-worker navigation-only
+rehearsal then reproduced it while `elmundo.es` completed navigation. Its
+sanitized trace is retained at the host-local path indexed in
+[EVIDENCE-INDEX.md](EVIDENCE-INDEX.md). For two root-frame GET Font requests,
+the matching `Network.requestWillBeSent` arrived after `Fetch.requestPaused`
+and before the pinned continue error. The existing router registered no
+recovery decision because the Network occurrence was absent when the Fetch
+pause first arrived. Neither request had a proved successful terminal. A
+corrected attempt must be discarded and retried only after unique identity,
+cleanup and egress checks; the trace cannot be counted as a successful fetch
+or scientific site rejection. The diagnostic uses its own create-only output
+root and changes no formal checkpoint.
+
+The v134-source host downstream suite passed 314 tests across fitting,
+fitting algorithms, campaign execution, late campaign planning, capture
+coordinator interruption and resume, sealed handoff and pipeline consumers.
+It checks deterministic later control flow using synthetic cohorts. It cannot
+prove real 480/2,000 fitting observations, the deferred 110-vector browser
+qualification, 900 certification cells, public defended captures or a future
+16,000-sample result. Before an unattended watcher, commit and verify the
+narrow navigation repair, build and qualify a fresh cohort, then complete
+bounded live actions through a prepared baseline and both scheduled
+observations. Any changed source needs its own authority and root.
+
+A subsequent zero-credit two-worker rehearsal with the proposed late-Network
+retry mounted from an authoring clone exposed a second ordering. The pinned
+root Font continue failed while its exact Fetch pause was the only matching
+event; no Network start or terminal appeared during the recorded run. The
+late-Network guard rejected it as uncorrelated, and the rehearsal stopped with
+no accepted page or scientific credit. Its trace is indexed in
+[EVIDENCE-INDEX.md](EVIDENCE-INDEX.md). Any new operational retry for this
+Fetch-only case must remain a separate, bounded discard of the complete
+navigation after verified browser and egress cleanup. It cannot claim a
+Network occurrence or successful continuation. Repeat this live rehearsal and
+the negative tests before using a changed source for a new formal cohort.
+
+The revised source passed 836 router and rehearsal tests, including exact
+late-Network, Fetch-only and canceled-request negative cases. Its next
+two-worker zero-credit browser check encountered the late-Network Font case;
+the patched path discarded the navigation and reported a recoverable failure
+after cleanup, while the other candidate navigated. This diagnostic performs
+one navigation per candidate and therefore exits incomplete. A fresh
+single-worker navigation of the failed candidate completed in 33 seconds.
+The production coordinator's tested rule retries only unresolved candidates,
+which can make that retry serial after its partner completes. These observations
+support the bounded retry path but do not prove that a public candidate will
+pass the H3 screen, the prepared observation windows or later defense capture.
+The corresponding traces are indexed in [EVIDENCE-INDEX.md](EVIDENCE-INDEX.md).
+The full registered 16-file acquisition correctness suite passed against this
+mounted source in the existing collection image: **2,177 passed, 31 skipped,
+exit 0**. Two later evaluation runtime checks also passed inside an ephemeral
+collection-image container: the trusted Java/OSAD/Weka receipt fixture and a
+real pinned Weka prediction. Compiler packages were installed only in that
+throwaway container for the fixture; no host package or formal image changed.
+The host lacks `default-jre-headless`, so the revised host test skips that
+fixture explicitly rather than reporting a false product failure. The image
+checks are engineering parity, not receipts for changed-source acquisition
+authority or final evaluation.
 
 ## Source binding and later fitting
 

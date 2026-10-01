@@ -63,6 +63,9 @@ from .cdp_targets import (
     CdpTargetIntegrityError,
     CdpTargetSource,
     RecursiveCdpTargetRouter,
+    _RootCanceledNetworkInvalidInterception,
+    _RootLateNetworkInvalidInterception,
+    _RootUnpairedFetchInvalidInterception,
     validate_bootstrap_prearm_summary,
     validate_egress_prearm_summary,
     validate_normal_shutdown_disposal_summary,
@@ -2107,6 +2110,8 @@ def _catalogue_boundary_navigation_pass(
     page_observed_origins: list[tuple[str, tuple[str, ...]]] = []
     verified: list[DiscoveredLink] = []
     rejections: list[NavigationRejection] = []
+    abort_complete = False
+    browser_closed = False
 
     def remaining_timeout() -> int:
         return max(0, round((deadline - time.monotonic()) * 1_000))
@@ -2427,9 +2432,12 @@ def _catalogue_boundary_navigation_pass(
                     cleanup_primary = graph_primary or RuntimeError(
                         "catalogue navigation graph disposal"
                     )
-                    _abort_rejected_render(context, router, browser_guard, cleanup_primary)
+                    abort_complete = _abort_rejected_render(
+                        context, router, browser_guard, cleanup_primary
+                    )
                 try:
                     browser.close()
+                    browser_closed = True
                 except Exception as error:
                     if graph_primary is None:
                         graph_primary = error
@@ -2444,10 +2452,46 @@ def _catalogue_boundary_navigation_pass(
                         # failure and must outrank a retryable Playwright or
                         # navigation-expansion exception.
                         egress_guard.raise_if_failed()
+                    if isinstance(
+                        graph_primary,
+                        (
+                            _RootLateNetworkInvalidInterception,
+                            _RootUnpairedFetchInvalidInterception,
+                            _RootCanceledNetworkInvalidInterception,
+                        ),
+                    ):
+                        graph_primary.cleanup_verified = (
+                            abort_complete
+                            and browser_closed
+                            and not router.has_unapproved_secondary_integrity_failure
+                        )
                     if "router" in locals():
                         # Likewise, retained protocol-integrity evidence is
                         # never demoted to a cleanup note.
                         router.raise_if_failed()
+    except (
+        _RootLateNetworkInvalidInterception,
+        _RootUnpairedFetchInvalidInterception,
+        _RootCanceledNetworkInvalidInterception,
+    ) as error:
+        if not error.cleanup_verified:
+            raise CdpTargetIntegrityError(
+                f"{error}; complete browser abort and protocol integrity "
+                "could not be proved"
+            ) from error
+        race = (
+            "late Network start"
+            if isinstance(error, _RootLateNetworkInvalidInterception)
+            else (
+                "unpaired early Fetch"
+                if isinstance(error, _RootUnpairedFetchInvalidInterception)
+                else "canceled Network terminal"
+            )
+        )
+        raise RecoverableAcquisitionError(
+            f"catalogue navigation discarded after exact {race} "
+            f"during root Fetch continuation: {error}"
+        ) from error
     except _NavigationPinExpansion:
         raise
     except RecoverableAcquisitionError as error:

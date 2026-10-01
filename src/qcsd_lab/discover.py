@@ -1078,7 +1078,7 @@ def _abort_rejected_render(
     primary: BaseException,
     *,
     cleanup_label: str = "rejected-render",
-) -> None:
+) -> bool:
     """Dispose a failed, potentially unready target graph without masking it."""
 
     cleanup_errors: list[tuple[str, BaseException]] = []
@@ -1086,6 +1086,7 @@ def _abort_rejected_render(
     guard_started = False
     context_disposed = False
     guard_finished = False
+    router_finished = False
     try:
         router.begin_abort()
         router_started = True
@@ -1111,10 +1112,12 @@ def _abort_rejected_render(
     if router_started and guard_finished:
         try:
             router.finish_abort()
+            router_finished = True
         except BaseException as error:  # noqa: BLE001 - preserve the primary failure
             cleanup_errors.append(("router-finish-abort", error))
     for step, error in cleanup_errors:
         primary.add_note(f"{cleanup_label} cleanup {step} failed with {type(error).__name__}")
+    return router_finished and not cleanup_errors
 
 
 def _dispose_failed_context(

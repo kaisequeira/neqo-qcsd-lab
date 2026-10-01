@@ -549,6 +549,41 @@ short-horizon prepared observations, while retaining complete graph comparison
 and new source-bound authority. The v127 receipts remain historical evidence
 on their recorded contract; they cannot authorize the changed source.
 
+## 1 October desktop v134 authority and bounded acquisition failure
+
+Lab `2d872257f89bc86bc1129c485d16dfcc1412d252` and Rust/Gitlink
+`2a9efa84ba0b81ca5d27d37fe2f8f73a08e2a91d` executed v134 after the
+post-export image-inspection timeout fix. The no-cache collection, prepare
+and reference build completed. `artifacts/buflo-study/build-execution-v134.json`
+has SHA-256 `e168e0035c140edf70ffc76f41b912467aad5e4a62421ec6b2b39c547ee8b037`;
+its completion receipt has SHA-256
+`f0916e27394ec507644ea0a280644cac7c3b2b162943baeba1c52935d87d7a8f`.
+The pinned-CDP receipt SHA-256 is
+`48f2a5021e8c32b2cd82a95df65a63b64cc0a9343872368a8dc6b9df9ec6a526`.
+The schema-2 acquisition-only authority at
+`artifacts/class-study-acquisition-authority-v134.json` has SHA-256
+`cbf29a098eac6b09c76ed66af885057ac7837c3d26d6bd3c6aff2159693cf5c7`;
+its clean build, registered acquisition correctness and pinned-CDP gates
+passed, and the receipt independently verified. It did not include full
+defence foundation.
+
+The v134 versioned acquisition root initialized with 600 frozen candidates.
+Its first supervised two-candidate watcher action stopped when
+`tranco-0000697` hit root CDP `Fetch.continueRequest`
+`InvalidInterceptionId` during navigation. `tranco-0000984` separately
+recorded an exact-page H3 screen rejection with passing controls. The
+checkpoint at `artifacts/classifier-multiorigin100-v1-acquisition-v134/`
+has SHA-256 `e20d899f27a866a7828c1b065d2d4ca6936ea404be0b05e6ac89f72a4a044692`;
+its provenance has SHA-256
+`f625f46dc7f5cb044a177bdbdf521c3ba4e68656e25ee59e6df9fc30c46a409a`.
+All candidates remain pending with no baseline or terminal receipts: **0/120
+accepted pilot classes and 0/16,000 formal samples**. A zero-credit
+two-worker prepare-image diagnostic reproduced the root error and recorded
+two Font `Fetch.requestPaused` events before their matching
+`Network.requestWillBeSent` events. Its sanitized trace is indexed in
+[EVIDENCE-INDEX.md](EVIDENCE-INDEX.md). The v134 root and authority remain
+historical evidence; a source repair needs a fresh cohort and root.
+
 ## Maintenance contract
 
 Future maintainers should append a dated, evidence-backed outcome after each
@@ -558,7 +593,7 @@ attempts and operational failures. Never upgrade old evidence because current
 source contains a fix, and never report a partial browser prefix, timing probe
 or local test as a class/capture result.
 
-The portable appendices above are frozen after this migration. If a thesis
+The earlier migration appendices remain frozen. If a thesis
 audit needs an old ignored artifact, retrieve the complete object from the
 location described in the [evidence index](EVIDENCE-INDEX.md) and verify its
 closed inventory before use. The external migration bundle retains the exact

@@ -1953,7 +1953,7 @@ def test_generated_successor_certification_and_formal_load_freeze_and_reload(
     restart_root = restart_path.parent.parent
     campaign_root = restart_root / "plan/campaigns"
 
-    lab_root = tmp_path / "lab"
+    lab_root = tmp_path
     workload_root = lab_root / "config/workloads"
     workload_root.mkdir(parents=True)
     from tests.test_class_campaign_execution import _complete_origin_workload
@@ -1992,7 +1992,11 @@ def test_generated_successor_certification_and_formal_load_freeze_and_reload(
     monkeypatch.setattr(
         class_cohort,
         "validate_cohort_assembly_receipt",
-        lambda value, *, cohort: value,
+        lambda value, *, cohort: {
+            **value,
+            "stability_root": class_layout.class_study_layout().stability_root.name,
+            "workload_root": workload_root.name,
+        },
     )
     monkeypatch.setattr(
         class_cohort,

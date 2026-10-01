@@ -30,6 +30,9 @@ from qcsd_lab.cdp_targets import (
     CdpTargetIntegrityError,
     CdpTargetSource,
     RecursiveCdpTargetRouter,
+    _RootLateNetworkInvalidInterception,
+    _RootUnpairedFetchInvalidInterception,
+    _RootCanceledNetworkInvalidInterception,
     _sanitised_protocol_error,
     validate_bootstrap_prearm_summary,
     validate_normal_shutdown_disposal_summary,
@@ -4584,6 +4587,475 @@ def test_exact_root_invalid_interception_waits_for_matching_terminal(
     _clean_shutdown(router)
 
 
+@pytest.mark.parametrize("resource_type", ("Other", "Script"))
+@pytest.mark.parametrize("terminal_before_fetch", (False, True))
+def test_exact_canceled_root_interception_requires_discard_only_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    resource_type: str,
+    terminal_before_fetch: bool,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    network_id = f"canceled-{resource_type}-network"
+    network_event, fetch_event = _root_request_events(
+        network_id=network_id,
+        fetch_id=f"canceled-{resource_type}-fetch",
+        resource_type=resource_type,
+        url=f"https://root.test/{resource_type.lower()}.bin",
+    )
+    canceled = _root_terminal_event(
+        network_id, "Network.loadingFailed", resource_type=resource_type,
+    )
+    session.emit((), "Network.requestWillBeSent", network_event)
+    if terminal_before_fetch:
+        session.emit((), "Network.loadingFailed", canceled)
+    original_send = session.send
+
+    def canceled_then_invalid(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            if not terminal_before_fetch:
+                session.emit((), "Network.loadingFailed", canceled)
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", canceled_then_invalid)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+
+    with pytest.raises(
+        _RootCanceledNetworkInvalidInterception,
+        match=f"resource_type={resource_type}",
+    ) as caught:
+        router.raise_if_failed()
+    assert caught.value.cleanup_verified is False
+    assert router.root_invalid_interception_summary["total"] == 0
+    _clean_abort(router)
+
+
+@pytest.mark.parametrize(
+    "variant",
+    (
+        "uncanceled",
+        "wrong-error",
+        "malformed-terminal",
+        "wrong-resource-type",
+        "redirected-start",
+        "reused-network-id",
+        "changed-continue-parameters",
+        "wrong-policy-label",
+        "no-terminal",
+    ),
+)
+def test_canceled_root_interception_rejects_unproved_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    variant: str,
+) -> None:
+    session = _FakeNonFlatSession()
+
+    def changed_params(_source: CdpTargetSource, event: Mapping[str, Any]):
+        return "Fetch.continueRequest", {
+            "requestId": event["requestId"], "url": event["request"]["url"],
+        }
+
+    router, _observed = _router(
+        session,
+        fetch_policy=changed_params if variant == "changed-continue-parameters" else None,
+        fetch_policy_label=(
+            "request-stage-policy:Fetch.continueRequest"
+            if variant == "wrong-policy-label"
+            else "catalogue-navigation-policy:Fetch.continueRequest"
+        ),
+    )
+    network_event, fetch_event = _root_request_events(
+        network_id="negative-canceled-network",
+        fetch_id="negative-canceled-fetch",
+        resource_type="Other",
+        url="https://root.test/other.bin",
+    )
+    if variant == "redirected-start":
+        network_event["redirectResponse"] = {"status": 302}
+    if variant == "reused-network-id":
+        session.emit((), "Network.requestWillBeSent", network_event)
+        session.emit(
+            (), "Network.loadingFailed",
+            _root_terminal_event(
+                "negative-canceled-network", "Network.loadingFailed",
+                resource_type="Other",
+            ),
+        )
+    session.emit((), "Network.requestWillBeSent", network_event)
+    terminal = _root_terminal_event(
+        "negative-canceled-network", "Network.loadingFailed", resource_type="Other",
+    )
+    if variant == "uncanceled":
+        terminal["canceled"] = False
+    elif variant == "wrong-error":
+        terminal["errorText"] = "net::ERR_CONNECTION_RESET"
+    elif variant == "malformed-terminal":
+        terminal.pop("timestamp")
+    elif variant == "wrong-resource-type":
+        terminal["type"] = "Script"
+    if variant != "no-terminal":
+        session.emit((), "Network.loadingFailed", terminal)
+    original_send = session.send
+
+    def invalid_continue(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", invalid_continue)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+
+    with pytest.raises(CdpTargetIntegrityError) as caught:
+        router.raise_if_failed()
+    assert not isinstance(caught.value, _RootCanceledNetworkInvalidInterception)
+    assert router.root_invalid_interception_summary["total"] == 0
+
+
+def test_late_root_network_start_discards_reentrant_invalid_continue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    network_event, fetch_event = _root_request_events(
+        network_id="late-font-network", fetch_id="late-font-fetch",
+    )
+    _other_network, other_fetch = _root_request_events(
+        network_id="other-network", fetch_id="other-fetch",
+    )
+    original_send = session.send
+
+    def late_start_then_invalid(method: str, params=None):
+        if method == "Fetch.continueRequest" and params["requestId"] == "late-font-fetch":
+            session.emit((), "Network.requestWillBeSent", network_event)
+            # A different Fetch callback may be current when the first send
+            # fails. Correlation must use the first command's bound identity.
+            session.emit((), "Fetch.requestPaused", other_fetch)
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", late_start_then_invalid)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+
+    with pytest.raises(_RootLateNetworkInvalidInterception, match="late Network start"):
+        router.raise_if_failed()
+    assert router.root_invalid_interception_summary["total"] == 0
+    _clean_abort(router)
+
+
+@pytest.mark.parametrize("resource_type", ("Font", "Stylesheet"))
+def test_unpaired_early_root_fetch_discards_exact_invalid_continue(
+    monkeypatch: pytest.MonkeyPatch, resource_type: str,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    _network_event, fetch_event = _root_request_events(
+        network_id="unpaired-network", fetch_id="unpaired-fetch",
+        resource_type=resource_type,
+    )
+    original_send = session.send
+
+    def unpaired_invalid(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            assert params == {"requestId": "unpaired-fetch"}
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", unpaired_invalid)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+
+    with pytest.raises(_RootUnpairedFetchInvalidInterception, match="unpaired early"):
+        router.raise_if_failed()
+    assert router.root_invalid_interception_summary["total"] == 0
+    _clean_abort(router)
+
+
+@pytest.mark.parametrize(
+    "variant",
+    (
+        "wrong-label", "changed-parameters", "nonexact-error", "wrong-error-type",
+        "script", "other", "post", "child-frame", "response-stage",
+        "missing-network-id", "duplicate-fetch", "second-fetch-for-network",
+        "prior-network-identity", "saturated-network-history",
+        "saturated-fetch-history",
+    ),
+)
+def test_unpaired_early_root_fetch_rejects_ambiguous_retry(
+    monkeypatch: pytest.MonkeyPatch, variant: str,
+) -> None:
+    session = _FakeNonFlatSession()
+    policy = None
+    if variant == "changed-parameters":
+        policy = lambda _source, event: (
+            "Fetch.continueRequest",
+            {"requestId": event["requestId"], "url": event["request"]["url"]},
+        )
+    router, _observed = _router(
+        session,
+        fetch_policy=policy,
+        fetch_policy_label=(
+            "request-stage-policy:Fetch.continueRequest"
+            if variant == "wrong-label"
+            else "catalogue-navigation-policy:Fetch.continueRequest"
+        ),
+    )
+    network_event, fetch_event = _root_request_events(
+        network_id="unpaired-negative-network", fetch_id="unpaired-negative-fetch",
+    )
+    if variant in {"script", "other"}:
+        fetch_event["resourceType"] = variant.title()
+    if variant == "post":
+        fetch_event["request"]["method"] = "POST"
+    if variant == "child-frame":
+        fetch_event["frameId"] = "child-frame"
+    if variant == "response-stage":
+        fetch_event["responseStatusCode"] = 200
+    if variant == "missing-network-id":
+        fetch_event.pop("networkId")
+    if variant == "prior-network-identity":
+        # A Network occurrence of another type makes the ID ineligible even
+        # though no matching Font occurrence remains active.
+        network_event["type"] = "Image"
+        session.emit((), "Network.requestWillBeSent", network_event)
+        session.emit(
+            (), "Network.loadingFinished",
+            _root_terminal_event("unpaired-negative-network", "Network.loadingFinished"),
+        )
+    if variant == "saturated-network-history":
+        router._pre_shutdown_network_identity_saturated = True
+    if variant == "saturated-fetch-history":
+        router._root_fetch_identity_saturated = True
+    if variant == "duplicate-fetch":
+        session.emit((), "Fetch.requestPaused", fetch_event)
+    if variant == "second-fetch-for-network":
+        session.emit((), "Fetch.requestPaused", {
+            **fetch_event, "requestId": "first-fetch-for-network",
+        })
+    original_send = session.send
+
+    def unpaired_invalid(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            if variant == "wrong-error-type":
+                raise RuntimeError(
+                    "CDPSession.send: Protocol error (Fetch.continueRequest): "
+                    "Invalid InterceptionId."
+                )
+            raise _invalid_interception_error(
+                "different protocol error" if variant == "nonexact-error" else
+                "CDPSession.send: Protocol error (Fetch.continueRequest): Invalid InterceptionId."
+            )
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", unpaired_invalid)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+    with pytest.raises(CdpTargetIntegrityError) as captured:
+        router.raise_if_failed()
+    assert not isinstance(captured.value, _RootUnpairedFetchInvalidInterception)
+    assert router.root_invalid_interception_summary["total"] == 0
+
+
+@pytest.mark.parametrize("race_type", ("late", "unpaired"))
+def test_late_root_network_abort_retains_secondary_protocol_fault(
+    monkeypatch: pytest.MonkeyPatch, race_type: str,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    network_event, fetch_event = _root_request_events(
+        network_id="late-abort-network", fetch_id="late-abort-fetch",
+    )
+    original_send = session.send
+
+    def late_start_then_invalid(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            if race_type == "late":
+                session.emit((), "Network.requestWillBeSent", network_event)
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", late_start_then_invalid)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+    expected_error = (
+        _RootLateNetworkInvalidInterception if race_type == "late"
+        else _RootUnpairedFetchInvalidInterception
+    )
+    with pytest.raises(expected_error):
+        router.raise_if_failed()
+
+    _browser_session, guard = _guard_for(router)
+    router.begin_abort()
+    guard.begin_abort()
+    session.emit((), "Network.loadingFinished", {"requestId": "unknown-abort-request"})
+    assert router.has_unapproved_secondary_integrity_failure is True
+    guard.finish_abort()
+    router.finish_abort()
+    assert router.has_unapproved_secondary_integrity_failure is True
+
+
+@pytest.mark.parametrize("malformed_abort_event", (False, True))
+def test_two_independent_late_root_races_preserve_abort_fault_priority(
+    monkeypatch: pytest.MonkeyPatch, malformed_abort_event: bool,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    first_network, first_fetch = _root_request_events(
+        network_id="first-late-network", fetch_id="first-late-fetch",
+    )
+    second_network, second_fetch = _root_request_events(
+        network_id="second-late-network", fetch_id="second-late-fetch",
+        resource_type="Stylesheet", url="https://root.test/second.css",
+    )
+    original_send = session.send
+
+    def two_reentrant_invalid_continues(method: str, params=None):
+        if method == "Fetch.continueRequest" and params["requestId"] == "first-late-fetch":
+            session.emit((), "Network.requestWillBeSent", first_network)
+            session.emit((), "Fetch.requestPaused", second_fetch)
+            raise _invalid_interception_error()
+        if method == "Fetch.continueRequest" and params["requestId"] == "second-late-fetch":
+            session.emit((), "Network.requestWillBeSent", second_network)
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", two_reentrant_invalid_continues)
+    session.emit((), "Fetch.requestPaused", first_fetch)
+    with pytest.raises(_RootLateNetworkInvalidInterception):
+        router.raise_if_failed()
+    assert len(router._secondary_integrity_failures) == 1
+    assert isinstance(
+        router._secondary_integrity_failures[0], _RootLateNetworkInvalidInterception
+    )
+    assert router.has_unapproved_secondary_integrity_failure is False
+    _browser_session, guard = _guard_for(router)
+    router.begin_abort()
+    guard.begin_abort()
+    if malformed_abort_event:
+        session.emit((), "Network.loadingFinished", {"requestId": "unknown-abort"})
+        assert router.has_unapproved_secondary_integrity_failure is True
+    guard.finish_abort()
+    router.finish_abort()
+    assert router.has_unapproved_secondary_integrity_failure is malformed_abort_event
+
+
+def test_successful_early_fetch_does_not_block_later_redirect_leg() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    first_network, first_fetch = _root_request_events(
+        network_id="early-then-redirect-network", fetch_id="early-fetch",
+        resource_type="Stylesheet", url="https://root.test/first.css",
+    )
+    session.emit((), "Fetch.requestPaused", first_fetch)
+    session.emit((), "Network.requestWillBeSent", first_network)
+    redirect = dict(first_network)
+    redirect["redirectResponse"] = {"status": 302}
+    redirect["request"] = {"method": "GET", "url": "https://root.test/second.css"}
+    session.emit((), "Network.requestWillBeSent", redirect)
+    second_fetch = dict(first_fetch)
+    second_fetch["requestId"] = "redirect-fetch"
+    second_fetch["request"] = dict(redirect["request"])
+    session.emit((), "Fetch.requestPaused", second_fetch)
+
+    router.raise_if_failed()
+    assert router.root_invalid_interception_summary["total"] == 0
+    _clean_shutdown(router)
+
+
+@pytest.mark.parametrize("variant", (
+    "changed-url", "redirected-start", "reused-network",
+    "duplicate-early-fetch", "prior-other-network", "wrong-label",
+    "changed-parameters", "nonexact-error",
+))
+def test_late_root_network_retry_rejects_unproved_identity(
+    monkeypatch: pytest.MonkeyPatch, variant: str,
+) -> None:
+    session = _FakeNonFlatSession()
+    policy = None
+    if variant == "changed-parameters":
+        policy = lambda _source, event: (
+            "Fetch.continueRequest",
+            {"requestId": event["requestId"], "url": event["request"]["url"]},
+        )
+    router, _observed = _router(
+        session,
+        fetch_policy=policy,
+        fetch_policy_label=(
+            "request-stage-policy:Fetch.continueRequest"
+            if variant == "wrong-label"
+            else "catalogue-navigation-policy:Fetch.continueRequest"
+        ),
+    )
+    network_event, fetch_event = _root_request_events(
+        network_id="late-negative-network", fetch_id="late-negative-fetch",
+    )
+    if variant == "reused-network":
+        session.emit((), "Network.requestWillBeSent", network_event)
+        session.emit(
+            (), "Network.loadingFailed",
+            _root_terminal_event("late-negative-network", "Network.loadingFailed"),
+        )
+    if variant == "prior-other-network":
+        earlier = dict(network_event)
+        earlier["type"] = "Other"
+        earlier["request"] = {"method": "GET", "url": "https://root.test/other.bin"}
+        session.emit((), "Network.requestWillBeSent", earlier)
+        session.emit(
+            (), "Network.loadingFailed",
+            _root_terminal_event(
+                "late-negative-network", "Network.loadingFailed", resource_type="Other"
+            ),
+        )
+    if variant == "duplicate-early-fetch":
+        original_send = session.send
+        session.emit((), "Fetch.requestPaused", {
+            **fetch_event, "requestId": "other-early-fetch",
+        })
+        assert any(
+            command == "Fetch.continueRequest" and params["requestId"] == "other-early-fetch"
+            for _route, command, params in session.commands
+        )
+    original_send = session.send
+
+    def late_start_then_invalid(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            if variant != "missing-network":
+                emitted = dict(network_event)
+                if variant == "changed-url":
+                    emitted["request"] = {"method": "GET", "url": "https://root.test/other.woff2"}
+                if variant == "redirected-start":
+                    emitted["redirectResponse"] = {"status": 302}
+                session.emit((), "Network.requestWillBeSent", emitted)
+            raise _invalid_interception_error(
+                "different protocol error" if variant == "nonexact-error" else
+                "CDPSession.send: Protocol error (Fetch.continueRequest): Invalid InterceptionId."
+            )
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", late_start_then_invalid)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+
+    with pytest.raises(CdpTargetIntegrityError) as captured:
+        router.raise_if_failed()
+    assert not isinstance(captured.value, _RootLateNetworkInvalidInterception)
+    assert router.root_invalid_interception_summary["total"] == 0
+
+
 def test_exact_root_invalid_interception_accepts_terminal_before_fetch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4979,7 +5451,7 @@ def test_exact_error_recovery_rejects_changed_continue_parameters(
     assert router.root_invalid_interception_summary["total"] == 0
 
 
-def test_exact_invalid_interception_requires_matching_network_identity(
+def test_exact_invalid_interception_without_network_is_discard_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = _FakeNonFlatSession()
@@ -5001,9 +5473,13 @@ def test_exact_invalid_interception_requires_matching_network_identity(
     monkeypatch.setattr(session, "send", invalid_continue)
     session.emit((), "Fetch.requestPaused", fetch_event)
 
-    with pytest.raises(CdpTargetIntegrityError, match="InvalidInterceptionId"):
+    with pytest.raises(
+        _RootUnpairedFetchInvalidInterception, match="unpaired early"
+    ) as caught:
         router.raise_if_failed()
+    assert caught.value.cleanup_verified is False
     assert router.root_invalid_interception_summary["total"] == 0
+    _clean_abort(router)
 
 
 def test_root_fetch_rejects_mismatched_and_duplicate_policy_identities() -> None:

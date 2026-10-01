@@ -16,11 +16,13 @@ import sys
 import tempfile
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
+from threading import Lock
 from types import SimpleNamespace
 from typing import Any, Callable, Iterator, Sequence
 from unittest.mock import patch
@@ -272,6 +274,7 @@ class _EventLog:
         self.path = path
         self.started = time.monotonic()
         self._stream = path.open("x", encoding="utf-8", buffering=1)
+        self._lock = Lock()
 
     def emit(self, stage: str, **fields: Any) -> None:
         row = {
@@ -284,27 +287,28 @@ class _EventLog:
             **fields,
         }
         line = json.dumps(row, sort_keys=True, default=str)
-        self._stream.write(line + "\n")
-        self._stream.flush()
-        os.fsync(self._stream.fileno())
-        if len(line) > 4096:
-            # Keep the complete trace in the fsynced JSONL file without
-            # flooding an operator's terminal with bounded CDP event arrays.
-            display = json.dumps(
-                {
-                    "record_type": RECORD_TYPE,
-                    "scientific_credit": False,
-                    "stage": stage,
-                    "elapsed_seconds": row["elapsed_seconds"],
-                    "detail_path": str(self.path),
-                    "detail_sha256": sha256(line.encode("utf-8")).hexdigest(),
-                    "detail_chars": len(line),
-                },
-                sort_keys=True,
-            )
-            print(display, flush=True)
-        else:
-            print(line, flush=True)
+        with self._lock:
+            self._stream.write(line + "\n")
+            self._stream.flush()
+            os.fsync(self._stream.fileno())
+            if len(line) > 4096:
+                # Keep the complete trace in the fsynced JSONL file without
+                # flooding an operator's terminal with bounded CDP event arrays.
+                display = json.dumps(
+                    {
+                        "record_type": RECORD_TYPE,
+                        "scientific_credit": False,
+                        "stage": stage,
+                        "elapsed_seconds": row["elapsed_seconds"],
+                        "detail_path": str(self.path),
+                        "detail_sha256": sha256(line.encode("utf-8")).hexdigest(),
+                        "detail_chars": len(line),
+                    },
+                    sort_keys=True,
+                )
+                print(display, flush=True)
+            else:
+                print(line, flush=True)
 
     def close(self) -> None:
         self._stream.close()
@@ -618,6 +622,8 @@ def run_rehearsal(
     total_timeout_seconds: int = DEFAULT_TOTAL_SECONDS,
     backend_factory: Callable[..., Any] = ExistingAcquisitionBackend,
     trace_root_cdp: bool = False,
+    navigation_only: bool = False,
+    parallel_navigation: bool = False,
     continue_after_h3_screen: bool = False,
     probe_selected_page_h3: bool = False,
     probe_all_selected_pages_h3: bool = False,
@@ -634,6 +640,14 @@ def run_rehearsal(
         raise ValueError("rehearsal total timeout is out of bounds")
     if probe_selected_page_h3 and probe_all_selected_pages_h3:
         raise ValueError("choose one selected-page H3 diagnostic mode")
+    if navigation_only and (
+        continue_after_h3_screen
+        or probe_selected_page_h3
+        or probe_all_selected_pages_h3
+    ):
+        raise ValueError("navigation-only diagnostic cannot request an H3 stage")
+    if parallel_navigation and (not navigation_only or len(targets) != 2):
+        raise ValueError("parallel navigation requires exactly two navigation-only targets")
     root = Path(output_root)
     if root.is_symlink() or not root.is_dir():
         raise ValueError("diagnostic output root is not a regular directory")
@@ -643,6 +657,7 @@ def run_rehearsal(
     events = _EventLog(root / "events.jsonl")
     image, source = _runtime_source()
     attempts = 0
+    navigation_completed_targets = 0
     successful_pages = 0
     failed_targets = 0
     h3_override_prepared_pages = 0
@@ -662,6 +677,8 @@ def run_rehearsal(
             neqo_client=neqo_client,
             output_root=str(root),
             root_cdp_trace_enabled=trace_root_cdp,
+            navigation_only=navigation_only,
+            parallel_navigation=parallel_navigation,
             continue_after_h3_screen=continue_after_h3_screen,
             probe_selected_page_h3=probe_selected_page_h3,
             probe_all_selected_pages_h3=probe_all_selected_pages_h3,
@@ -672,7 +689,53 @@ def run_rehearsal(
                     from tools.acquisition_root_cdp_trace import install
 
                     install(events.emit)
-                for target in targets:
+                serial_targets = targets
+                if parallel_navigation:
+                    # Match the formal two-worker batch: one shared backend,
+                    # concurrent browser navigations, no later H3 work.
+                    shared_backend = backend_factory(timeout_ms=navigation_timeout_ms)
+
+                    def navigate(target: Target) -> bool:
+                        label = {
+                            "target_kind": target.kind,
+                            "domain": target.domain,
+                            (
+                                "catalogue_candidate_id"
+                                if target.kind == "catalogue-candidate" else "diagnostic_label"
+                            ): target.candidate_id,
+                        }
+                        events.emit("candidate-start", **label, requested_page_url=target.selected_url)
+                        try:
+                            navigation = shared_backend.discover_navigation(target.domain)
+                            pages = select_page_candidates(
+                                target.domain,
+                                registrable_domain=navigation.registrable_domain,
+                                discovered_links=navigation.links,
+                            )
+                            _navigation_origins_by_page(navigation, pages)
+                            events.emit(
+                                "navigation-complete", **label,
+                                selected_pages=[page.url for page in pages],
+                                observed_origins=list(navigation.observed_origins),
+                            )
+                            return True
+                        except RehearsalTimeout:
+                            raise
+                        except Exception as error:
+                            events.emit(
+                                "candidate-error", **label, failed_stage="navigation",
+                                classification=_error_classification(error),
+                                error_type=type(error).__name__, error=str(error),
+                            )
+                            return False
+
+                    with ThreadPoolExecutor(max_workers=2) as executor:
+                        results = tuple(executor.map(navigate, targets))
+                    attempts = len(results)
+                    navigation_completed_targets = sum(results)
+                    failed_targets = attempts - navigation_completed_targets
+                    serial_targets = ()
+                for target in serial_targets:
                     attempts += 1
                     label = {
                         "target_kind": target.kind,
@@ -699,6 +762,9 @@ def run_rehearsal(
                             selected_pages=[page.url for page in pages],
                             observed_origins=list(navigation.observed_origins),
                         )
+                        navigation_completed_targets += 1
+                        if navigation_only:
+                            continue
                         if probe_selected_page_h3 or probe_all_selected_pages_h3:
                             try:
                                 if probe_all_selected_pages_h3:
@@ -897,6 +963,7 @@ def run_rehearsal(
             raise ValueError("diagnostic Neqo client changed during the rehearsal")
         summary = {
             "attempted_targets": attempts,
+            "navigation_completed_targets": navigation_completed_targets,
             "successful_pages": successful_pages,
             "h3_pass_prepared_pages": successful_pages - h3_override_prepared_pages,
             "h3_override_prepared_pages": h3_override_prepared_pages,
@@ -908,6 +975,11 @@ def run_rehearsal(
             "scientific_credit": False,
         }
         summary["diagnostic_outcome"] = (
+            (
+                "navigation-only-complete"
+                if navigation_completed_targets == attempts and not timed_out
+                else "navigation-only-incomplete"
+            ) if navigation_only else
             "timed-out" if timed_out else
             "passing-screen-prepare" if summary["h3_pass_prepared_pages"] else
             "bypassed-screen-prepare-only" if h3_override_prepared_pages else
@@ -946,6 +1018,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--trace-root-cdp", action="store_true",
         help="emit extra diagnostic root CDP interception traces without changing production policy",
+    )
+    parser.add_argument(
+        "--navigation-only", action="store_true",
+        help="stop after real browser navigation; skip the H3 screen and preparation",
+    )
+    parser.add_argument(
+        "--parallel-navigation", action="store_true",
+        help="navigate exactly two targets concurrently using one shared backend",
     )
     parser.add_argument(
         "--continue-after-h3-screen", action="store_true",
@@ -997,6 +1077,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             navigation_timeout_ms=args.navigation_timeout_ms,
             total_timeout_seconds=args.total_timeout_seconds,
             trace_root_cdp=args.trace_root_cdp,
+            navigation_only=args.navigation_only,
+            parallel_navigation=args.parallel_navigation,
             continue_after_h3_screen=args.continue_after_h3_screen,
             probe_selected_page_h3=args.probe_selected_page_h3,
             probe_all_selected_pages_h3=args.probe_all_selected_pages_h3,
@@ -1006,6 +1088,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     if result["timed_out"]:
         return 1
+    if args.navigation_only:
+        return 0 if result["navigation_completed_targets"] == result["attempted_targets"] else 1
     if result["h3_pass_prepared_pages"] > 0:
         return 0
     return 3 if result["h3_override_prepared_pages"] > 0 else 1

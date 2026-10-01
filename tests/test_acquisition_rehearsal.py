@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from hashlib import sha256
 from pathlib import Path
+from threading import Barrier
 from types import SimpleNamespace
 
 import pytest
@@ -834,6 +835,93 @@ def test_each_navigation_failure_is_retained_with_its_real_class(monkeypatch, tm
     ]
     assert all(event["scientific_credit"] is False for event in errors)
     assert not list(root.rglob("*receipt*"))
+
+
+def test_navigation_only_rehearsal_skips_h3_and_preserves_navigation_failures(
+    monkeypatch, tmp_path
+):
+    root = rehearsal._new_output_root(tmp_path / "navigation-only")
+    monkeypatch.setattr(rehearsal, "_runtime_source", lambda: ("native", {}))
+
+    class Backend:
+        def __init__(self, *, timeout_ms):
+            assert timeout_ms == 60_000
+
+        def discover_navigation(self, domain):
+            if domain == "failed.example":
+                raise RuntimeError("root CDP interception integrity failed")
+            return _navigation(domain)
+
+        def screen_h3(self, *_args):
+            pytest.fail("navigation-only must not start the H3 screen")
+
+    result = rehearsal.run_rehearsal(
+        (
+            rehearsal.Target("tranco-0000001", "passed.example"),
+            rehearsal.Target("tranco-0000002", "failed.example"),
+        ),
+        output_root=root,
+        backend_factory=Backend,
+        navigation_only=True,
+        total_timeout_seconds=10,
+    )
+    assert result["attempted_targets"] == 2
+    assert result["navigation_completed_targets"] == 1
+    assert result["failed_targets"] == 1
+    assert result["successful_pages"] == 0
+    assert result["diagnostic_outcome"] == "navigation-only-incomplete"
+    stages = [event["stage"] for event in _events(root)]
+    assert stages == [
+        "run-start", "candidate-start", "navigation-complete",
+        "candidate-start", "candidate-error", "run-complete",
+    ]
+    assert _events(root)[-1]["scientific_credit"] is False
+    assert not list(root.rglob("*receipt*"))
+
+
+def test_parallel_navigation_uses_two_workers_and_one_backend(monkeypatch, tmp_path):
+    root = rehearsal._new_output_root(tmp_path / "parallel-navigation")
+    monkeypatch.setattr(rehearsal, "_runtime_source", lambda: ("native", {}))
+    barrier = Barrier(2, timeout=3)
+    created = []
+
+    class Backend:
+        def __init__(self, *, timeout_ms):
+            assert timeout_ms == 60_000
+            created.append(self)
+
+        def discover_navigation(self, domain):
+            barrier.wait()
+            return _navigation(domain)
+
+        def screen_h3(self, *_args):
+            pytest.fail("parallel navigation must not start the H3 screen")
+
+    targets = (
+        rehearsal.Target("tranco-0000001", "first.example"),
+        rehearsal.Target("tranco-0000002", "second.example"),
+    )
+    result = rehearsal.run_rehearsal(
+        targets,
+        output_root=root,
+        backend_factory=Backend,
+        navigation_only=True,
+        parallel_navigation=True,
+        total_timeout_seconds=10,
+    )
+    assert len(created) == 1
+    assert result["attempted_targets"] == 2
+    assert result["navigation_completed_targets"] == 2
+    assert result["failed_targets"] == 0
+    assert result["diagnostic_outcome"] == "navigation-only-complete"
+    assert [item["stage"] for item in _events(root)].count("navigation-complete") == 2
+    assert not list(root.rglob("*receipt*"))
+
+    with pytest.raises(ValueError, match="exactly two navigation-only targets"):
+        rehearsal.run_rehearsal(
+            targets[:1], output_root=root, backend_factory=Backend,
+            navigation_only=True, parallel_navigation=True,
+        )
 
 
 def test_deep_prepared_check_rejects_rebound_result(monkeypatch, tmp_path):

@@ -14,7 +14,10 @@ import pytest
 
 import qcsd_lab.class_acquisition as acquisition_module
 from qcsd_lab import buflo_study, class_attestation, pinned_cdp, playwright_driver
-from qcsd_lab.acquisition_errors import RecoverableAcquisitionError
+from qcsd_lab.acquisition_errors import (
+    NonReplayableEgressPolicyError,
+    RecoverableAcquisitionError,
+)
 from qcsd_lab.browser_egress import (
     NON_REPLAYABLE_EGRESS_POLICY,
     NonReplayableEgressGuard,
@@ -28,6 +31,9 @@ from qcsd_lab.cdp_targets import (
     SRCDOC_PSEUDO_DOCUMENT_POLICY,
     SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
     CdpTargetIntegrityError,
+    _RootCanceledNetworkInvalidInterception,
+    _RootLateNetworkInvalidInterception,
+    _RootUnpairedFetchInvalidInterception,
 )
 from qcsd_lab.class_acquisition import (
     CHECKPOINT_SCHEMA_VERSION,
@@ -5642,6 +5648,49 @@ def test_transient_navigation_failure_retries_and_preserves_each_attempt(
     assert [item["attempt"] for item in active["navigation_attempts"]] == [1, 2]
 
 
+def test_discarded_unpaired_fetch_attempts_stop_at_navigation_retry_limit(
+    tmp_path: Path,
+) -> None:
+    catalogue = _catalogue(tmp_path / "catalogue.json")
+    runner = initialise_runner(
+        tmp_path / "runner",
+        candidate_catalogue_path=catalogue,
+        foundation_attestation=_foundation(tmp_path / "foundation.json"),
+        started_at="2026-08-28T00:00:00Z",
+        browser_tool="test-browser@1",
+    )
+
+    class UnpairedFetchBackend(RejectingBackend):
+        navigation_calls = 0
+
+        def discover_navigation(self, domain: str):
+            self.navigation_calls += 1
+            raise RecoverableAcquisitionError(
+                "catalogue navigation discarded after exact unpaired early Fetch"
+            )
+
+    backend = UnpairedFetchBackend()
+    run_due_acquisition(
+        runner,
+        candidate_catalogue_path=catalogue,
+        stability_root=tmp_path / "stability",
+        workload_root=tmp_path / "workloads",
+        backend=backend,
+        clock=FakeClock(datetime(2026, 8, 28, tzinfo=UTC)),
+        max_candidates=1,
+    )
+
+    _candidate_id, state = _first_terminal_state(runner)
+    assert backend.navigation_calls == acquisition_module.MAX_PROBE_ATTEMPTS
+    assert [attempt["outcome"] for attempt in state["navigation_attempts"]] == [
+        "recoverable-failure"
+    ] * acquisition_module.MAX_PROBE_ATTEMPTS
+    assert state["state"] == "terminal"
+    terminal = load_json(runner / state["terminal"]["path"])["payload"]
+    assert terminal["kind"] == "pre-probe-rejection"
+    assert acquisition_module._scientific_terminal_eligibility(terminal, state) is None
+
+
 def test_unexpected_navigation_fault_is_durably_checkpointed_and_blocks_resume(
     tmp_path: Path,
 ):
@@ -7205,6 +7254,8 @@ def _run_navigation_pass_with_primary_redirect(
     monkeypatch: pytest.MonkeyPatch,
     *,
     retained_router_failure: Exception | None = None,
+    cleanup_failure: str | None = None,
+    egress_failure: bool = False,
 ):
     holder: dict[str, object] = {}
 
@@ -7285,6 +7336,8 @@ def _run_navigation_pass_with_primary_redirect(
             )
 
         def close(self):
+            if cleanup_failure == "context-close":
+                raise RuntimeError("synthetic context close failure")
             return None
 
     class FakeBrowser:
@@ -7295,6 +7348,8 @@ def _run_navigation_pass_with_primary_redirect(
             return object()
 
         def close(self):
+            if cleanup_failure == "browser-close":
+                raise RuntimeError("synthetic browser close failure")
             return None
 
     class FakePlaywright:
@@ -7319,6 +7374,7 @@ def _run_navigation_pass_with_primary_redirect(
         def __init__(self, _session, *, on_event, **_kwargs):
             self.on_event = on_event
             self.aborting = False
+            self.has_unapproved_secondary_integrity_failure = False
             holder["router"] = self
 
         def start(self):
@@ -7328,7 +7384,7 @@ def _run_navigation_pass_with_primary_redirect(
             return None
 
         def raise_if_failed(self):
-            if self.aborting and retained_router_failure is not None:
+            if retained_router_failure is not None:
                 raise retained_router_failure
             return None
 
@@ -7337,6 +7393,10 @@ def _run_navigation_pass_with_primary_redirect(
             return None
 
         def finish_abort(self):
+            if cleanup_failure == "router-finish-abort":
+                raise RuntimeError("synthetic router abort finish failure")
+            if cleanup_failure == "secondary-router-error":
+                self.has_unapproved_secondary_integrity_failure = True
             return None
 
     class FakeBrowserGuard:
@@ -7350,6 +7410,8 @@ def _run_navigation_pass_with_primary_redirect(
             return None
 
         def finish_abort(self):
+            if cleanup_failure == "guard-finish-abort":
+                raise RuntimeError("synthetic guard abort finish failure")
             return None
 
     monkeypatch.setattr(
@@ -7367,6 +7429,18 @@ def _run_navigation_pass_with_primary_redirect(
     )
     monkeypatch.setattr(acquisition_module, "RecursiveCdpTargetRouter", FakeRouter)
     monkeypatch.setattr(acquisition_module, "BrowserSharedWorkerGuard", FakeBrowserGuard)
+    if egress_failure:
+        class FakeEgressGuard:
+            def bind_root_page(self, _page):
+                return None
+
+            def raise_if_failed(self):
+                raise NonReplayableEgressPolicyError("synthetic retained egress failure")
+
+        monkeypatch.setattr(acquisition_module, "NonReplayableEgressGuard", FakeEgressGuard)
+        monkeypatch.setattr(
+            acquisition_module, "install_context_egress_guards", lambda _context, _guard: None
+        )
     return acquisition_module._catalogue_boundary_navigation_pass(
         "example.com",
         deadline=acquisition_module.time.monotonic() + 1,
@@ -7408,6 +7482,56 @@ def test_navigation_pass_retained_router_failure_outranks_retryable_pin_expansio
             monkeypatch,
             retained_router_failure=retained,
         )
+
+
+@pytest.mark.parametrize("race_type", ("late", "unpaired", "canceled"))
+@pytest.mark.parametrize(
+    "cleanup_failure",
+    (None, "context-close", "guard-finish-abort", "router-finish-abort", "browser-close", "secondary-router-error"),
+)
+def test_late_network_root_continue_is_retryable_only_after_complete_abort(
+    monkeypatch: pytest.MonkeyPatch, cleanup_failure: str | None, race_type: str,
+) -> None:
+    late = (
+        _RootLateNetworkInvalidInterception(fingerprint="synthetic", resource_type="Font")
+        if race_type == "late"
+        else (
+            _RootUnpairedFetchInvalidInterception(
+                fingerprint="synthetic", resource_type="Font"
+            ) if race_type == "unpaired" else
+            _RootCanceledNetworkInvalidInterception(
+                fingerprint="synthetic", resource_type="Script"
+            )
+        )
+    )
+    if cleanup_failure is None:
+        with pytest.raises(RecoverableAcquisitionError, match="discarded after exact"):
+            _run_navigation_pass_with_primary_redirect(
+                "https://example.com/article", monkeypatch,
+                retained_router_failure=late,
+            )
+        assert late.cleanup_verified is True
+    else:
+        with pytest.raises(CdpTargetIntegrityError, match="complete browser abort and protocol integrity could not be proved"):
+            _run_navigation_pass_with_primary_redirect(
+                "https://example.com/article", monkeypatch,
+                retained_router_failure=late, cleanup_failure=cleanup_failure,
+            )
+        assert late.cleanup_verified is False
+
+
+def test_late_network_root_continue_never_demotes_retained_egress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    late = _RootLateNetworkInvalidInterception(
+        fingerprint="synthetic", resource_type="Font"
+    )
+    with pytest.raises(NonReplayableEgressPolicyError, match="retained egress"):
+        _run_navigation_pass_with_primary_redirect(
+            "https://example.com/article", monkeypatch,
+            retained_router_failure=late, egress_failure=True,
+        )
+    assert late.cleanup_verified is False
 
 
 def test_navigation_completion_discards_resolved_root_continue_race() -> None:
