@@ -282,7 +282,11 @@ the static image tags remained at v134, the failed transaction was archived,
 and `lifecycle-recover` passed. A second prospective test-only correction
 restores the 50 ms window and freezes the test's monotonic clock on a single
 Tokio thread, as nearby exact-deadline tests already do. It requires focused
-verification before a fresh source-bound build. Neither v135 nor v136 adds
+verification before a fresh source-bound build. That focused check has now
+passed in a diagnostic image made from the pinned Rust/NSS toolchain: the
+formerly failing test passed once, followed by three consecutive full
+`neqo-bin` batches of 285/285 tests. The source was mounted read-only and the
+diagnostic did not create formal build authority. Neither v135 nor v136 adds
 scientific credit.
 
 | Checkpoint identity | Historical qualification and current acquisition state |
@@ -300,7 +304,7 @@ scientific credit.
 | v135 failed build | Collection code gate stopped on one timing-sensitive synthetic Rust test, 284/285 passed; `artifacts/buflo-study/build-failure-v135/` preserves the exact diagnostic and archived transaction. No build receipt or acquisition authority; v135 consumed |
 | v136 failed build | Collection code gate stopped on the same test because a five-second synthetic deadline violated its nominal strict window, 284/285 passed; `artifacts/buflo-study/build-failure-v136/` preserves the failed diagnostic and archived transaction. No build receipt or acquisition authority; v136 consumed |
 | Acquisition checkpoint | `artifacts/classifier-multiorigin100-v1-acquisition-v134/` is the latest initialized root; its first bounded action stopped on a durable root CDP navigation error, with 0/120 accepted |
-| Next execution | Verify and freeze the nominal-window test-only clock correction, allocate the next unused cohort, reprove build, pinned CDP and schema-2 authority, then repeat bounded acquisition actions through the first prepared observations before the long watcher. Complete the full 110-vector browser gate and same-source defence foundation before fitting or defence capture |
+| Next execution | Freeze the focused-pass nominal-window test-only clock correction, allocate the next unused cohort, reprove build, pinned CDP and schema-2 authority, then repeat bounded acquisition actions through the first prepared observations before the long watcher. Complete the full 110-vector browser gate and same-source defence foundation before fitting or defence capture |
 
 Preserve the v130 qualification evidence and failed authority attempt, the v129
 checkpoint and failed attempts, v128 failed build, v127
