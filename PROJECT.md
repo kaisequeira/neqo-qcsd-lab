@@ -270,6 +270,21 @@ test-only correction; it changes no production BuFLO timing, callback offsets
 or evidence acceptance rule. The correction requires focused verification and
 a fresh source-bound cohort before acquisition can continue.
 
+V136 bound that first test-only correction to Lab
+`c5e53ce38c6ca8ae7ad81977ff171de52bc9ebd8` and Rust
+`3ecf46224de71c9ad7f002e2456195285d8d4ac5`. Its collection Rust gate
+again passed 284/285 `neqo-bin` tests but rejected the same synthetic test:
+extending the deadline to five seconds violated the controller's nominal
+strict 50 ms window. The failure shows that lengthening the window is not a
+valid remedy. No v136 build receipt or acquisition authority was issued, and
+v136 is consumed. The exact failure log and lifecycle records are retained;
+the static image tags remained at v134, the failed transaction was archived,
+and `lifecycle-recover` passed. A second prospective test-only correction
+restores the 50 ms window and freezes the test's monotonic clock on a single
+Tokio thread, as nearby exact-deadline tests already do. It requires focused
+verification before a fresh source-bound build. Neither v135 nor v136 adds
+scientific credit.
+
 | Checkpoint identity | Historical qualification and current acquisition state |
 |---|---|
 | Last source-bound attempt (v134) | Lab `2d872257f89bc86bc1129c485d16dfcc1412d252` and Rust Gitlink `2a9efa84ba0b81ca5d27d37fe2f8f73a08e2a91d`; a navigation fix will require a new source-bound build |
@@ -283,8 +298,9 @@ a fresh source-bound cohort before acquisition can continue.
 | v133 attempt | Collection export completed 62/62 BuildKit steps with provisional image ID `sha256:a1036e8e1b291e80e787f6d911430e711b3c5d4828b987dc6c75ef984aa2279a`; the post-export three-second tag inspection timed out. No prepare/reference image, verified build receipt or acquisition authority |
 | v134 build, pinned CDP and acquisition authority | `artifacts/buflo-study/build-execution-v134.json`, `artifacts/buflo-study/build-completion-v134.json`, `artifacts/buflo-study/pinned-cdp-execution-v134.json` and `artifacts/class-study-acquisition-authority-v134.json` independently verified on the v134 source |
 | v135 failed build | Collection code gate stopped on one timing-sensitive synthetic Rust test, 284/285 passed; `artifacts/buflo-study/build-failure-v135/` preserves the exact diagnostic and archived transaction. No build receipt or acquisition authority; v135 consumed |
+| v136 failed build | Collection code gate stopped on the same test because a five-second synthetic deadline violated its nominal strict window, 284/285 passed; `artifacts/buflo-study/build-failure-v136/` preserves the failed diagnostic and archived transaction. No build receipt or acquisition authority; v136 consumed |
 | Acquisition checkpoint | `artifacts/classifier-multiorigin100-v1-acquisition-v134/` is the latest initialized root; its first bounded action stopped on a durable root CDP navigation error, with 0/120 accepted |
-| Next execution | Verify and freeze the test-only Rust timing correction, allocate the next unused cohort, reprove build, pinned CDP and schema-2 authority, then repeat bounded acquisition actions through the first prepared observations before the long watcher. Complete the full 110-vector browser gate and same-source defence foundation before fitting or defence capture |
+| Next execution | Verify and freeze the nominal-window test-only clock correction, allocate the next unused cohort, reprove build, pinned CDP and schema-2 authority, then repeat bounded acquisition actions through the first prepared observations before the long watcher. Complete the full 110-vector browser gate and same-source defence foundation before fitting or defence capture |
 
 Preserve the v130 qualification evidence and failed authority attempt, the v129
 checkpoint and failed attempts, v128 failed build, v127
