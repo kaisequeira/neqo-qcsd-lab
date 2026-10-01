@@ -4716,8 +4716,10 @@ def test_canceled_root_interception_rejects_unproved_retry(
     assert router.root_invalid_interception_summary["total"] == 0
 
 
+@pytest.mark.parametrize("resource_type", ("Font", "Script", "Other"))
 def test_late_root_network_start_discards_reentrant_invalid_continue(
     monkeypatch: pytest.MonkeyPatch,
+    resource_type: str,
 ) -> None:
     session = _FakeNonFlatSession()
     router, _observed = _router(
@@ -4725,15 +4727,23 @@ def test_late_root_network_start_discards_reentrant_invalid_continue(
         fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
     )
     network_event, fetch_event = _root_request_events(
-        network_id="late-font-network", fetch_id="late-font-fetch",
+        network_id="late-root-network",
+        fetch_id="late-root-fetch",
+        resource_type=resource_type,
+        url=f"https://root.test/{resource_type.lower()}.bin",
     )
     _other_network, other_fetch = _root_request_events(
         network_id="other-network", fetch_id="other-fetch",
     )
+    other_fetch["resourceType"] = "XHR"
+    other_fetch["request"] = {
+        "method": "POST",
+        "url": "https://root.test/telemetry",
+    }
     original_send = session.send
 
     def late_start_then_invalid(method: str, params=None):
-        if method == "Fetch.continueRequest" and params["requestId"] == "late-font-fetch":
+        if method == "Fetch.continueRequest" and params["requestId"] == "late-root-fetch":
             session.emit((), "Network.requestWillBeSent", network_event)
             # A different Fetch callback may be current when the first send
             # fails. Correlation must use the first command's bound identity.

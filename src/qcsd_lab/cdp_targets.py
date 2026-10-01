@@ -3792,35 +3792,15 @@ class RecursiveCdpTargetRouter:
             raise CdpTargetIntegrityError(
                 "InvalidInterceptionId matched both active and terminal Network occurrences"
             )
-        if decision.resource_type in _ROOT_CANCELED_INTERCEPTION_RETRY_RESOURCE_TYPES:
-            # A failed subresource is never a successful Fetch continuation.
-            # Its exact canceled Network terminal only permits discarding the
-            # complete browser attempt after verified exceptional disposal.
-            if (
+        if (
+            decision.active is None
+            and decision.terminal is None
+            and (
                 active is not None
-                or terminal is None
-                or terminal.terminal_method != "Network.loadingFailed"
-                or terminal.active.redirected
-                or not (
-                    decision.terminal is terminal
-                    or (decision.active is terminal.active and decision.continue_issued)
-                )
-                or not self._root_fetch_matches_active(decision, terminal.active)
-                or len(self._eligible_root_network_occurrences.get(network_key, ())) != 1
-                or self._eligible_root_network_occurrences[network_key][0]
-                is not terminal.active
-                or self._pre_shutdown_network_occurrence_counts.get(network_key) != 1
-                or network_key in self._pre_shutdown_reused_network_identities
-                or self._pre_shutdown_network_identity_saturated
-            ):
-                raise CdpTargetIntegrityError(
-                    "InvalidInterceptionId canceled root Network terminal was not uniquely correlated"
-                )
-            self._require_claimed_root_fetch_occurrence(terminal.active)
-            raise _RootCanceledNetworkInvalidInterception(
-                fingerprint=fingerprint, resource_type=decision.resource_type
+                or decision.resource_type
+                in _ROOT_CONTINUE_INVALID_INTERCEPTION_RESOURCE_TYPES
             )
-        if decision.active is None and decision.terminal is None:
+        ):
             # Fetch was observed before Network.requestWillBeSent. The latter
             # can arrive reentrantly while Playwright sends this exact continue.
             # Its identity can justify discarding this attempt, never treating
@@ -3869,6 +3849,34 @@ class RecursiveCdpTargetRouter:
                 )
             self._claim_root_fetch_occurrence(active)
             raise _RootLateNetworkInvalidInterception(
+                fingerprint=fingerprint, resource_type=decision.resource_type
+            )
+        if decision.resource_type in _ROOT_CANCELED_INTERCEPTION_RETRY_RESOURCE_TYPES:
+            # A failed subresource is never a successful Fetch continuation.
+            # Its exact canceled Network terminal only permits discarding the
+            # complete browser attempt after verified exceptional disposal.
+            if (
+                active is not None
+                or terminal is None
+                or terminal.terminal_method != "Network.loadingFailed"
+                or terminal.active.redirected
+                or not (
+                    decision.terminal is terminal
+                    or (decision.active is terminal.active and decision.continue_issued)
+                )
+                or not self._root_fetch_matches_active(decision, terminal.active)
+                or len(self._eligible_root_network_occurrences.get(network_key, ())) != 1
+                or self._eligible_root_network_occurrences[network_key][0]
+                is not terminal.active
+                or self._pre_shutdown_network_occurrence_counts.get(network_key) != 1
+                or network_key in self._pre_shutdown_reused_network_identities
+                or self._pre_shutdown_network_identity_saturated
+            ):
+                raise CdpTargetIntegrityError(
+                    "InvalidInterceptionId canceled root Network terminal was not uniquely correlated"
+                )
+            self._require_claimed_root_fetch_occurrence(terminal.active)
+            raise _RootCanceledNetworkInvalidInterception(
                 fingerprint=fingerprint, resource_type=decision.resource_type
             )
         if active is not None:
