@@ -33,6 +33,7 @@ from qcsd_lab.cdp_targets import (
     CdpTargetIntegrityError,
     _RootCanceledNetworkInvalidInterception,
     _RootLateNetworkInvalidInterception,
+    _RootRequestStageInvalidInterception,
     _RootUnpairedFetchInvalidInterception,
 )
 from qcsd_lab.class_acquisition import (
@@ -7484,7 +7485,7 @@ def test_navigation_pass_retained_router_failure_outranks_retryable_pin_expansio
         )
 
 
-@pytest.mark.parametrize("race_type", ("late", "unpaired", "canceled"))
+@pytest.mark.parametrize("race_type", ("late", "unpaired", "canceled", "request-stage"))
 @pytest.mark.parametrize(
     "cleanup_failure",
     (None, "context-close", "guard-finish-abort", "router-finish-abort", "browser-close", "secondary-router-error"),
@@ -7501,6 +7502,9 @@ def test_late_network_root_continue_is_retryable_only_after_complete_abort(
             ) if race_type == "unpaired" else
             _RootCanceledNetworkInvalidInterception(
                 fingerprint="synthetic", resource_type="Script"
+            ) if race_type == "canceled" else
+            _RootRequestStageInvalidInterception(
+                fingerprint="synthetic", resource_type="Image"
             )
         )
     )
@@ -7520,11 +7524,14 @@ def test_late_network_root_continue_is_retryable_only_after_complete_abort(
         assert late.cleanup_verified is False
 
 
-def test_late_network_root_continue_never_demotes_retained_egress(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("race_type", ("late", "request-stage"))
+def test_root_continue_discard_never_demotes_retained_egress(
+    monkeypatch: pytest.MonkeyPatch, race_type: str,
 ) -> None:
-    late = _RootLateNetworkInvalidInterception(
-        fingerprint="synthetic", resource_type="Font"
+    late = (
+        _RootLateNetworkInvalidInterception(fingerprint="synthetic", resource_type="Font")
+        if race_type == "late" else
+        _RootRequestStageInvalidInterception(fingerprint="synthetic", resource_type="Image")
     )
     with pytest.raises(NonReplayableEgressPolicyError, match="retained egress"):
         _run_navigation_pass_with_primary_redirect(

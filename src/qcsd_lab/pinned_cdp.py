@@ -393,7 +393,20 @@ _HISTORICAL_PROBE_CONTRACT_V18_SHA256 = canonical_json_sha256(
     _HISTORICAL_PROBE_CONTRACT_V18
 )
 
-PROBE_CONTRACT: dict[str, Any] = deepcopy(_HISTORICAL_PROBE_CONTRACT_V18)
+_HISTORICAL_PROBE_CONTRACT_V18_V3: dict[str, Any] = deepcopy(
+    _HISTORICAL_PROBE_CONTRACT_V18
+)
+_HISTORICAL_PROBE_CONTRACT_V18_V3[
+    "normal_shutdown_disposal_summary_schema_version"
+] = 4
+_HISTORICAL_PROBE_CONTRACT_V18_V3["normal_shutdown_disposal_policy"] = (
+    "chromium-143-post-quiescence-context-disposal-v3"
+)
+_HISTORICAL_PROBE_CONTRACT_V18_V3_SHA256 = canonical_json_sha256(
+    _HISTORICAL_PROBE_CONTRACT_V18_V3
+)
+
+PROBE_CONTRACT: dict[str, Any] = deepcopy(_HISTORICAL_PROBE_CONTRACT_V18_V3)
 PROBE_CONTRACT["normal_shutdown_disposal_summary_schema_version"] = (
     NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
 )
@@ -1594,7 +1607,7 @@ def _validate_payload(
         raise ValueError("pinned CDP probe payload fields differ from the contract")
     cohort_version = payload.get("cohort_version")
     probe_schema_version = payload.get("probe_schema_version")
-    historical_v18 = (
+    historical_v18_v2 = (
         probe_schema_version == PROBE_SCHEMA_VERSION
         and isinstance(payload.get("probe_contract"), Mapping)
         and payload["probe_contract"].get(
@@ -1605,6 +1618,18 @@ def _validate_payload(
         and payload["probe_contract"].get("normal_shutdown_disposal_policy")
         == _HISTORICAL_PROBE_CONTRACT_V18["normal_shutdown_disposal_policy"]
     )
+    historical_v18_v3 = (
+        probe_schema_version == PROBE_SCHEMA_VERSION
+        and isinstance(payload.get("probe_contract"), Mapping)
+        and payload["probe_contract"].get(
+            "normal_shutdown_disposal_summary_schema_version"
+        ) == _HISTORICAL_PROBE_CONTRACT_V18_V3[
+            "normal_shutdown_disposal_summary_schema_version"
+        ]
+        and payload["probe_contract"].get("normal_shutdown_disposal_policy")
+        == _HISTORICAL_PROBE_CONTRACT_V18_V3["normal_shutdown_disposal_policy"]
+    )
+    historical_v18 = historical_v18_v2 or historical_v18_v3
     historical_probe = historical_v18 or (
         type(probe_schema_version) is int
         and probe_schema_version in HISTORICAL_PROBE_SCHEMA_VERSIONS
@@ -1676,7 +1701,11 @@ def _validate_payload(
         expected_contract_sha256 = _HISTORICAL_PROBE_CONTRACT_V17_SHA256
     elif historical_v18:
         machine = browser_profile(build_value["docker"]["server_architecture"])["architecture"]
-        expected_contract = deepcopy(_HISTORICAL_PROBE_CONTRACT_V18)
+        expected_contract = deepcopy(
+            _HISTORICAL_PROBE_CONTRACT_V18
+            if historical_v18_v2
+            else _HISTORICAL_PROBE_CONTRACT_V18_V3
+        )
         historical_binding = expected_playwright_driver_binding(machine)
         expected_contract["playwright_driver_binding"] = historical_binding
         expected_contract["chromium_executable_sha256"] = (

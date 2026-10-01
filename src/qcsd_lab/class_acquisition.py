@@ -65,6 +65,7 @@ from .cdp_targets import (
     RecursiveCdpTargetRouter,
     _RootCanceledNetworkInvalidInterception,
     _RootLateNetworkInvalidInterception,
+    _RootRequestStageInvalidInterception,
     _RootUnpairedFetchInvalidInterception,
     validate_bootstrap_prearm_summary,
     validate_egress_prearm_summary,
@@ -2458,6 +2459,7 @@ def _catalogue_boundary_navigation_pass(
                             _RootLateNetworkInvalidInterception,
                             _RootUnpairedFetchInvalidInterception,
                             _RootCanceledNetworkInvalidInterception,
+                            _RootRequestStageInvalidInterception,
                         ),
                     ):
                         graph_primary.cleanup_verified = (
@@ -2473,6 +2475,7 @@ def _catalogue_boundary_navigation_pass(
         _RootLateNetworkInvalidInterception,
         _RootUnpairedFetchInvalidInterception,
         _RootCanceledNetworkInvalidInterception,
+        _RootRequestStageInvalidInterception,
     ) as error:
         if not error.cleanup_verified:
             raise CdpTargetIntegrityError(
@@ -2482,11 +2485,11 @@ def _catalogue_boundary_navigation_pass(
         race = (
             "late Network start"
             if isinstance(error, _RootLateNetworkInvalidInterception)
-            else (
-                "unpaired early Fetch"
-                if isinstance(error, _RootUnpairedFetchInvalidInterception)
-                else "canceled Network terminal"
-            )
+            else "unpaired early Fetch"
+            if isinstance(error, _RootUnpairedFetchInvalidInterception)
+            else "canceled Network terminal"
+            if isinstance(error, _RootCanceledNetworkInvalidInterception)
+            else "bound catalogue request-stage Fetch"
         )
         raise RecoverableAcquisitionError(
             f"catalogue navigation discarded after exact {race} "

@@ -39,10 +39,14 @@ CDP_TARGET_INSTRUMENTATION_POLICY = (
 )
 BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION = 1
 EGRESS_PREARM_SUMMARY_SCHEMA_VERSION = 2
-NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION = 4
-NORMAL_SHUTDOWN_DISPOSAL_POLICY = "chromium-143-post-quiescence-context-disposal-v3"
-_PREVIOUS_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION = 3
+NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION = 5
+NORMAL_SHUTDOWN_DISPOSAL_POLICY = "chromium-143-post-cutoff-held-fetch-disposal-v4"
+_PREVIOUS_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION = 4
 _PREVIOUS_NORMAL_SHUTDOWN_DISPOSAL_POLICY = (
+    "chromium-143-post-quiescence-context-disposal-v3"
+)
+_OLDER_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION = 3
+_OLDER_NORMAL_SHUTDOWN_DISPOSAL_POLICY = (
     "chromium-143-post-quiescence-context-disposal-v2"
 )
 _HISTORICAL_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION = 2
@@ -109,6 +113,7 @@ _ROOT_DISCARD_SECONDARY_LIMIT = 8
 _ROOT_FETCH_IDENTITY_LIMIT = 20_000
 _ROOT_NETWORK_IDENTITY_LIMIT = 20_000
 _PRE_SHUTDOWN_NETWORK_IDENTITY_LIMIT = 20_000
+_PRE_SHUTDOWN_FETCH_IDENTITY_LIMIT = 20_000
 _NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT = 4_096
 _SRCDOC_IDENTITY_HISTORY_LIMIT = 20_000
 _SRCDOC_PSEUDO_DOCUMENT_LIMIT = 32
@@ -513,6 +518,18 @@ class _RootCanceledNetworkInvalidInterception(CdpTargetIntegrityError):
         self.cleanup_verified = False
 
 
+class _RootRequestStageInvalidInterception(CdpTargetIntegrityError):
+    """A failed exact catalogue continue that permits only full-attempt discard."""
+
+    def __init__(self, *, fingerprint: str, resource_type: str) -> None:
+        super().__init__(
+            "root CDP Fetch.continueRequest failed for a bound catalogue "
+            f"request-stage {resource_type}; the navigation must be discarded "
+            f"({fingerprint})"
+        )
+        self.cleanup_verified = False
+
+
 def validate_normal_shutdown_disposal_summary(
     value: object,
     *,
@@ -532,10 +549,16 @@ def validate_normal_shutdown_disposal_summary(
     historical_v3 = (
         isinstance(value, Mapping)
         and value.get("schema_version")
+        == _OLDER_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
+        and value.get("policy") == _OLDER_NORMAL_SHUTDOWN_DISPOSAL_POLICY
+    )
+    historical_v4 = (
+        isinstance(value, Mapping)
+        and value.get("schema_version")
         == _PREVIOUS_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
         and value.get("policy") == _PREVIOUS_NORMAL_SHUTDOWN_DISPOSAL_POLICY
     )
-    historical = historical_v2 or historical_v3
+    historical = historical_v2 or historical_v3 or historical_v4
     fields = {
         "schema_version",
         "policy",
@@ -558,18 +581,26 @@ def validate_normal_shutdown_disposal_summary(
         _HISTORICAL_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
         if historical_v2
         else (
-            _PREVIOUS_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
+            _OLDER_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
             if historical_v3
-            else NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
+            else (
+                _PREVIOUS_NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
+                if historical_v4
+                else NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
+            )
         )
     )
     expected_policy = (
         _HISTORICAL_NORMAL_SHUTDOWN_DISPOSAL_POLICY
         if historical_v2
         else (
-            _PREVIOUS_NORMAL_SHUTDOWN_DISPOSAL_POLICY
+            _OLDER_NORMAL_SHUTDOWN_DISPOSAL_POLICY
             if historical_v3
-            else NORMAL_SHUTDOWN_DISPOSAL_POLICY
+            else (
+                _PREVIOUS_NORMAL_SHUTDOWN_DISPOSAL_POLICY
+                if historical_v4
+                else NORMAL_SHUTDOWN_DISPOSAL_POLICY
+            )
         )
     )
     if (
@@ -633,14 +664,18 @@ def validate_normal_shutdown_disposal_summary(
         or network_total > _NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT
         or fetch_total > _NORMAL_SHUTDOWN_DISPOSAL_IDENTITY_LIMIT
         or matched_total + fetch_only_context_disposal > fetch_total
-        or fetch_only_context_disposal > 2
         or (not value["terminal"] and fetch_only_context_disposal)
         or (
-            fetch_only_context_disposal == 1
+            historical
+            and fetch_only_context_disposal > 2
+        )
+        or (
+            historical
+            and fetch_only_context_disposal == 1
             and not (
                 (fetch_total == 1 and matched_total == 0)
                 or (
-                    not historical
+                    historical_v4
                     and network_total >= 1
                     and matched_total == network_total
                     and network_only_synthetic == 0
@@ -649,7 +684,8 @@ def validate_normal_shutdown_disposal_summary(
             )
         )
         or (
-            fetch_only_context_disposal == 2
+            historical
+            and fetch_only_context_disposal == 2
             and (fetch_total != 2 or matched_total != 0 or network_total != 0)
         )
         or pending_fetch
@@ -1232,6 +1268,16 @@ class _RootFetchDecision:
 
 
 @dataclass
+class _RootRequestStageFetch:
+    """One synchronous root Fetch callback, without a Network success claim."""
+
+    source: CdpTargetSource
+    fetch_request_id: str
+    resource_type: str
+    continue_issued: bool = False
+
+
+@dataclass
 class _NormalShutdownNetwork:
     """One Network occurrence created after the normal-disposal boundary."""
 
@@ -1259,6 +1305,7 @@ class _NormalShutdownFetch:
     leg_index: int = 0
     matched_network: _NormalShutdownNetwork | None = None
     pre_shutdown_network_id_seen: bool = False
+    pre_shutdown_fetch_request_id_seen: bool = False
     root_page_context_disposal_candidate: bool = False
     context_disposal_held: bool = False
 
@@ -1394,14 +1441,11 @@ class _NormalShutdownDisposalLedger:
     the closing root session can race with target destruction.  This ledger is
     deliberately separate from accepted render evidence.  It permits a
     missing Fetch pause only when the still-live Network occurrence is retired
-    by the router's exact local shutdown cancellation.  Conversely, Chromium
-    143 can expose a root-page GET or POST ``Ping`` pause during context disposal
-    without exposing a corresponding Network occurrence before destruction.
-    It can also expose exactly one POST ``Ping`` and one POST ``XHR`` pause
-    from the root page in the same drain, with no Network occurrence, or one
-    POST ``XHR`` pause beside otherwise exactly matched Network/Fetch pairs.
-    Those bounded pauses remain held, are never continued, and become terminal
-    only after the caller's successful context-close barrier.
+    by the router's exact local shutdown cancellation. Request-stage root-page
+    Fetch pauses without a Network occurrence stay held, receive no policy
+    callback or scientific credit, and become terminal only after the caller's
+    successful context-close barrier. Their individual provenance and a global
+    identity bound matter; their resource labels and count do not.
     """
 
     def __init__(self) -> None:
@@ -1416,6 +1460,7 @@ class _NormalShutdownDisposalLedger:
         self._network_total = 0
         self._fetch_identities: set[tuple[CdpTargetSource, str]] = set()
         self._fetches_by_request_id: dict[str, list[_NormalShutdownFetch]] = {}
+        self._worker_bootstrap_network_ids: frozenset[str] = frozenset()
 
     def begin(self) -> None:
         if self._started or self._terminal:
@@ -1452,9 +1497,8 @@ class _NormalShutdownDisposalLedger:
             and network.parent_frame_id == frame_id
         )
 
-    @classmethod
     def _matches(
-        cls,
+        self,
         network: _NormalShutdownNetwork,
         fetch: _NormalShutdownFetch,
     ) -> bool:
@@ -1464,30 +1508,17 @@ class _NormalShutdownDisposalLedger:
         fetch_leg: _NormalShutdownFetch | None = fetch
         while network_leg is not None and fetch_leg is not None:
             active = network_leg.active
-            # Chromium 143 can use different Network and Fetch resource
-            # labels for an exact root request started during context close.
-            # The three observed aliases apply only to a single held leg
-            # with exact source, identity, method and URL, and local shutdown
-            # cancellation. A missing Network frame is observed only for
-            # root OPTIONS/XHR; no other alias accepts that omission.
+            # Resource labels can differ between Network and Fetch for one
+            # root request that remains paused until context disposal. This
+            # applies only to a single exact root leg with a local synthetic
+            # cancellation. Chromium's observed root OPTIONS/XHR callback
+            # may omit the Network frame; all other aliases require equality.
             root_shutdown_type_alias = (
-                (
-                    active.resource_type == "Fetch"
-                    and fetch_leg.resource_type == "XHR"
-                    and active.method == "POST"
-                )
-                or (
-                    active.resource_type == "Other"
-                    and fetch_leg.resource_type == "XHR"
-                    and active.method == "OPTIONS"
-                )
-                or (
-                    active.resource_type == "Other"
-                    and fetch_leg.resource_type == "Fetch"
-                    and active.method == "GET"
-                )
-            ) and (
-                active.source == fetch_leg.source
+                active.resource_type != fetch_leg.resource_type
+                and active.resource_type != "Document"
+                and fetch_leg.resource_type != "Document"
+                and active.request_id not in self._worker_bootstrap_network_ids
+                and active.source == fetch_leg.source
                 and active.source.target_type == "page"
                 and network_leg.predecessor is None
                 and network_leg.successor is None
@@ -1495,6 +1526,7 @@ class _NormalShutdownDisposalLedger:
                 and fetch_leg.predecessor is None
                 and fetch_leg.successor is None
                 and not fetch_leg.pre_shutdown_network_id_seen
+                and not fetch_leg.pre_shutdown_fetch_request_id_seen
                 and fetch_leg.root_page_context_disposal_candidate
             )
             missing_root_options_network_frame = (
@@ -1518,7 +1550,7 @@ class _NormalShutdownDisposalLedger:
                 and (active.resource_type == fetch_leg.resource_type or root_shutdown_type_alias)
                 and active.method == fetch_leg.method
                 and active.url == fetch_leg.url
-                and cls._sources_compatible(
+                and self._sources_compatible(
                     active.source,
                     fetch_leg.source,
                     fetch_leg.frame_id,
@@ -1612,6 +1644,7 @@ class _NormalShutdownDisposalLedger:
         event: Mapping[str, Any],
         *,
         pre_shutdown_network_id_seen: bool,
+        pre_shutdown_fetch_request_id_seen: bool,
         root_page_context_disposal_candidate: bool,
     ) -> None:
         self._require_open()
@@ -1624,6 +1657,7 @@ class _NormalShutdownDisposalLedger:
         redirected_request_id = event.get("redirectedRequestId")
         if (
             type(pre_shutdown_network_id_seen) is not bool
+            or type(pre_shutdown_fetch_request_id_seen) is not bool
             or type(root_page_context_disposal_candidate) is not bool
             or not isinstance(fetch_request_id, str)
             or not fetch_request_id
@@ -1707,6 +1741,9 @@ class _NormalShutdownDisposalLedger:
             predecessor=predecessor,
             leg_index=0 if predecessor is None else predecessor.leg_index + 1,
             pre_shutdown_network_id_seen=pre_shutdown_network_id_seen,
+            pre_shutdown_fetch_request_id_seen=(
+                pre_shutdown_fetch_request_id_seen
+            ),
             root_page_context_disposal_candidate=(
                 root_page_context_disposal_candidate
             ),
@@ -1902,14 +1939,7 @@ class _NormalShutdownDisposalLedger:
         self,
         fetch: _NormalShutdownFetch,
     ) -> bool:
-        """Whether a held root beacon is terminal at context disposal.
-
-        This deliberately recognises only the event shape reproduced from the
-        pinned Chromium 143 acquisition image.  Any redirect, target/source
-        variation, prior scientific identity, same-ID Network occurrence, or
-        unrecognised additional Fetch occurrence remains a hard integrity
-        failure.
-        """
+        """Whether one held root pause is terminal at context disposal."""
 
         try:
             parsed_url = urlsplit(fetch.url)
@@ -1933,53 +1963,46 @@ class _NormalShutdownDisposalLedger:
         except ValueError:
             absolute_https_url = False
         same_id_fetches = self._fetches.get(fetch.network_id, ())
-        fetch_count = len(self._fetch_identities)
-        singleton_ping = (
-            fetch_count == 1
-            and fetch.resource_type == "Ping"
-            and fetch.method in {"GET", "POST"}
-        )
-        exact_post_pair = (
-            fetch_count == 2
-            and self._network_total == 0
-            and {
-                (item.resource_type, item.method)
-                for values in self._fetches.values()
-                for item in values
-            }
-            == {("Ping", "POST"), ("XHR", "POST")}
-        )
-        exact_post_xhr_beside_matched_pairs = (
-            fetch.resource_type == "XHR"
-            and fetch.method == "POST"
-            and self._network_total >= 1
-            and fetch_count == self._network_total + 1
-            and all(
-                network.matched_fetch is not None
-                for values in self._networks.values()
-                for network in values
-            )
+        near_match_network = any(
+            network.active.source == fetch.source
+            and network.active.method == fetch.method
+            and network.active.url == fetch.url
+            and network.active.frame_id in {None, fetch.frame_id}
+            for values in self._networks.values()
+            for network in values
         )
         return (
             len(same_id_fetches) == 1
             and same_id_fetches[0] is fetch
             and not self._networks.get(fetch.network_id)
+            and not near_match_network
             and fetch.predecessor is None
             and fetch.successor is None
             and fetch.leg_index == 0
             and fetch.matched_network is None
             and not fetch.pre_shutdown_network_id_seen
+            and not fetch.pre_shutdown_fetch_request_id_seen
             and fetch.root_page_context_disposal_candidate
-            and (
-                singleton_ping
-                or exact_post_pair
-                or exact_post_xhr_beside_matched_pairs
-            )
+            and fetch.source.target_type == "page"
+            and fetch.resource_type != "Document"
+            and fetch.network_id not in self._worker_bootstrap_network_ids
             and absolute_https_url
         )
 
-    def finish(self) -> None:
+    def finish(
+        self,
+        *,
+        worker_bootstrap_network_ids: frozenset[str] = frozenset(),
+    ) -> None:
         self._require_open()
+        if not isinstance(worker_bootstrap_network_ids, frozenset) or any(
+            not isinstance(request_id, str) or not request_id
+            for request_id in worker_bootstrap_network_ids
+        ):
+            raise CdpTargetIntegrityError(
+                "normal shutdown worker-bootstrap identity set is invalid"
+            )
+        self._worker_bootstrap_network_ids = worker_bootstrap_network_ids
         for request_id in set(self._networks) | set(self._fetches):
             self._reconcile(request_id)
         unmatched_fetches = [
@@ -2182,10 +2205,22 @@ class RecursiveCdpTargetRouter:
             tuple[CdpTargetSource, str], int
         ] = {}
         self._pre_shutdown_network_identity_saturated = False
+        self._pre_shutdown_fetch_identities: set[
+            tuple[CdpTargetSource, str]
+        ] = set()
+        self._pre_shutdown_reused_fetch_identities: set[
+            tuple[CdpTargetSource, str]
+        ] = set()
+        self._pre_shutdown_fetch_identity_saturated = False
         self._root_fetch_by_policy_identity: dict[
             tuple[CdpTargetSource, str], _RootFetchDecision
         ] = {}
         self._seen_root_fetch_policy_identities: set[tuple[CdpTargetSource, str]] = set()
+        self._root_fetch_callback_stack: list[_RootRequestStageFetch | None] = []
+        self._seen_root_request_stage_continues: set[
+            tuple[CdpTargetSource, str]
+        ] = set()
+        self._root_request_stage_continue_saturated = False
         self._early_root_fetch_by_network: dict[tuple[CdpTargetSource, str], str] = {}
         self._root_fetch_identity_saturated = False
         self._eligible_root_network_occurrences: dict[
@@ -2295,6 +2330,7 @@ class RecursiveCdpTargetRouter:
                     _RootLateNetworkInvalidInterception,
                     _RootUnpairedFetchInvalidInterception,
                     _RootCanceledNetworkInvalidInterception,
+                    _RootRequestStageInvalidInterception,
                 ),
             )
             for error in self._secondary_integrity_failures
@@ -3183,6 +3219,10 @@ class RecursiveCdpTargetRouter:
             raise CdpTargetIntegrityError(
                 "CDP target shutdown cannot prove Network identity separation"
             )
+        if self._pre_shutdown_fetch_identity_saturated:
+            raise CdpTargetIntegrityError(
+                "CDP target shutdown cannot prove Fetch identity separation"
+            )
         self._normal_shutdown_disposal.begin()
         self._shutting_down = True
 
@@ -3242,7 +3282,17 @@ class RecursiveCdpTargetRouter:
                     request_id,
                     synthetic_shutdown=True,
                 )
-        self._normal_shutdown_disposal.finish()
+        worker_bootstrap_network_ids = frozenset(
+            {*self._guarded_shared_workers}
+            | {
+                state.source.target_id
+                for state in self._states.values()
+                if state.source.target_type in {"worker", "shared_worker"}
+            }
+        )
+        self._normal_shutdown_disposal.finish(
+            worker_bootstrap_network_ids=worker_bootstrap_network_ids
+        )
         for route, state in self._states.items():
             if state.active_request_ids:
                 raise CdpTargetIntegrityError("CDP target finished with active requests")
@@ -3252,6 +3302,7 @@ class RecursiveCdpTargetRouter:
                 raise CdpTargetIntegrityError("root CDP target did not remain instrumented")
         if (
             self._root_fetch_by_policy_identity
+            or self._root_fetch_callback_stack
             or self._pending_root_invalid_interceptions
             or self._document_fetch_by_policy_identity
             or self._pending_blocked_documents
@@ -3317,6 +3368,10 @@ class RecursiveCdpTargetRouter:
             raise CdpTargetIntegrityError(
                 "CDP target abort finished without complete context disposal"
             )
+        if self._root_fetch_callback_stack:
+            raise CdpTargetIntegrityError(
+                "root Fetch callback remained active at abort disposal"
+            )
         for state in self._states.values():
             for request_id in tuple(state.active_request_ids):
                 self._terminalise_request(
@@ -3331,6 +3386,7 @@ class RecursiveCdpTargetRouter:
                 state.phase = "detached"
         self._pending.clear()
         self._root_fetch_by_policy_identity.clear()
+        self._seen_root_request_stage_continues.clear()
         if any(
             not decision.abort_owned
             for decision in self._pending_root_invalid_interceptions.values()
@@ -3474,6 +3530,28 @@ class RecursiveCdpTargetRouter:
                 and label == _ROOT_CONTINUE_INVALID_INTERCEPTION_POLICY_LABEL
                 and params == {"requestId": root_fetch_decision.fetch_request_id}
             )
+            callback_token = (
+                self._root_fetch_callback_stack[-1]
+                if self._root_fetch_callback_stack
+                else None
+            )
+            discardable_root_continue = (
+                not recoverable_root_continue
+                and root_fetch_decision is None
+                and self._root_continue_error_type is not None
+                and not self._shutting_down
+                and not self._aborting
+                and source == self.root_source
+                and on_success is None
+                and method == "Fetch.continueRequest"
+                and label == _ROOT_CONTINUE_INVALID_INTERCEPTION_POLICY_LABEL
+                and callback_token is not None
+                and callback_token.source == source
+                and params == {"requestId": callback_token.fetch_request_id}
+                and not self._pre_shutdown_fetch_identity_saturated
+                and (source, callback_token.fetch_request_id)
+                not in self._pre_shutdown_reused_fetch_identities
+            )
             if recoverable_root_continue:
                 if root_fetch_decision.continue_issued:
                     raise CdpTargetIntegrityError(
@@ -3483,10 +3561,37 @@ class RecursiveCdpTargetRouter:
                 # synchronous transport call. A re-entrant Network terminal
                 # can then be attributed to this exact issued command.
                 root_fetch_decision.continue_issued = True
+            if discardable_root_continue:
+                assert callback_token is not None
+                identity = (source, callback_token.fetch_request_id)
+                if (
+                    callback_token.continue_issued
+                    or identity in self._seen_root_fetch_policy_identities
+                    or identity in self._seen_root_request_stage_continues
+                ):
+                    raise CdpTargetIntegrityError(
+                        "root catalogue Fetch continuation was duplicated or reused"
+                    )
+                if (
+                    self._root_request_stage_continue_saturated
+                    or len(self._seen_root_request_stage_continues)
+                    >= _ROOT_FETCH_IDENTITY_LIMIT
+                ):
+                    self._root_request_stage_continue_saturated = True
+                    discardable_root_continue = False
+                else:
+                    callback_token.continue_issued = True
+                    self._seen_root_request_stage_continues.add(identity)
             try:
                 result = self._root_send(method, params)
             except _RootInvalidInterception as error:
                 if not recoverable_root_continue:
+                    if discardable_root_continue:
+                        assert callback_token is not None
+                        raise _RootRequestStageInvalidInterception(
+                            fingerprint=error.fingerprint,
+                            resource_type=callback_token.resource_type,
+                        ) from error
                     policy = (
                         "catalogue-navigation"
                         if label == _ROOT_CONTINUE_INVALID_INTERCEPTION_POLICY_LABEL
@@ -3871,6 +3976,69 @@ class RecursiveCdpTargetRouter:
     def _guarded_shared_bootstrap_for_target_id(self, target_id: str) -> _WorkerBootstrap | None:
         return self._guarded_shared_workers.get(target_id)
 
+    def _root_request_stage_fetch_token(
+        self,
+        source: CdpTargetSource,
+        event: Mapping[str, Any],
+    ) -> _RootRequestStageFetch | None:
+        """Bind a catalogue command to its current root Fetch callback only."""
+
+        request = event.get("request")
+        fetch_id = event.get("requestId")
+        resource_type = event.get("resourceType")
+        if (
+            source != self.root_source
+            or self._root_frame_id is None
+            or self._root_continue_error_type is None
+            or self._shutting_down
+            or self._aborting
+            or not isinstance(fetch_id, str)
+            or not fetch_id
+            or not isinstance(resource_type, str)
+            or not resource_type
+            or not isinstance(request, Mapping)
+            or request.get("method") != "GET"
+            or not isinstance(request.get("url"), str)
+            or not request["url"]
+            or any(
+                field in event
+                for field in (
+                    "responseStatusCode",
+                    "responseStatusText",
+                    "responseHeaders",
+                    "responseErrorReason",
+                )
+            )
+        ):
+            return None
+        try:
+            url_parts = urlsplit(request["url"])
+            hostname = url_parts.hostname
+        except ValueError:
+            return None
+        if url_parts.scheme.lower() != "https" or not hostname:
+            return None
+        network_id = event.get("networkId")
+        if network_id is not None and (
+            not isinstance(network_id, str)
+            or not network_id
+            or network_id == fetch_id
+        ):
+            return None
+        if (
+            event.get("frameId") == self._root_frame_id
+            and network_id is not None
+            and resource_type in (
+                _ROOT_CONTINUE_INVALID_INTERCEPTION_RESOURCE_TYPES
+                | _ROOT_CANCELED_INTERCEPTION_RETRY_RESOURCE_TYPES
+            )
+        ):
+            # Existing Network-correlated decisions own these callbacks. If
+            # their exact correlation was disabled by reuse or saturation,
+            # the broader discard path must not override that decision.
+            return None
+        return _RootRequestStageFetch(source, fetch_id, resource_type)
+
     def _register_root_fetch(
         self,
         source: CdpTargetSource,
@@ -3921,7 +4089,10 @@ class RecursiveCdpTargetRouter:
         ):
             return None
         identity = (source, fetch_request_id)
-        if identity in self._seen_root_fetch_policy_identities:
+        if (
+            identity in self._seen_root_fetch_policy_identities
+            or identity in self._seen_root_request_stage_continues
+        ):
             raise CdpTargetIntegrityError("root Fetch interception was duplicated or reused")
         if (
             self._root_fetch_identity_saturated
@@ -5254,6 +5425,22 @@ class RecursiveCdpTargetRouter:
         self._record_srcdoc_identity_history(method, event)
         if self._consume_error_document_resource_event(source, method, event):
             return
+        if method == "Fetch.requestPaused" and not self._shutting_down:
+            fetch_request_id = event.get("requestId")
+            if isinstance(fetch_request_id, str) and fetch_request_id:
+                identity = (source, fetch_request_id)
+                if identity in self._pre_shutdown_fetch_identities:
+                    # Fetch has no occurrence serial. A second pause with the
+                    # same ID cannot justify discarding an inexact command.
+                    self._pre_shutdown_reused_fetch_identities.add(identity)
+                else:
+                    if (
+                        len(self._pre_shutdown_fetch_identities)
+                        >= _PRE_SHUTDOWN_FETCH_IDENTITY_LIMIT
+                    ):
+                        self._pre_shutdown_fetch_identity_saturated = True
+                    else:
+                        self._pre_shutdown_fetch_identities.add(identity)
         if method == "Fetch.requestPaused" and self._shutting_down:
             if self._aborting:
                 self._hold_aborted_fetch(event)
@@ -5268,6 +5455,15 @@ class RecursiveCdpTargetRouter:
                             candidate_id == network_id
                             for _candidate_source, candidate_id in (
                                 self._pre_shutdown_network_identities
+                            )
+                        )
+                    ),
+                    pre_shutdown_fetch_request_id_seen=(
+                        isinstance(event.get("requestId"), str)
+                        and any(
+                            candidate_id == event["requestId"]
+                            for _candidate_source, candidate_id in (
+                                self._pre_shutdown_fetch_identities
                             )
                         )
                     ),
@@ -5602,7 +5798,18 @@ class RecursiveCdpTargetRouter:
             document_fetch = self._register_document_fetch(source, event)
         try:
             if not quarantine_event:
-                self._on_event(event_source, method, event)
+                callback_token = (
+                    self._root_request_stage_fetch_token(source, event)
+                    if method == "Fetch.requestPaused"
+                    else None
+                )
+                # A stack preserves the command's own callback under reentrant
+                # CDP events and hides an outer Fetch during a nested event.
+                self._root_fetch_callback_stack.append(callback_token)
+                try:
+                    self._on_event(event_source, method, event)
+                finally:
+                    self._root_fetch_callback_stack.pop()
         finally:
             if root_fetch is not None:
                 self._root_fetch_by_policy_identity.pop(

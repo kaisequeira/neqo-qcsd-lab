@@ -4405,6 +4405,9 @@ def test_watcher_pinned_cdp_contract_matches_runtime_contract() -> None:
     assert watch._HISTORICAL_PINNED_CDP_CONTRACT_V18 == (
         pinned_cdp._HISTORICAL_PROBE_CONTRACT_V18
     )
+    assert watch._HISTORICAL_PINNED_CDP_CONTRACT_V18_V3 == (
+        pinned_cdp._HISTORICAL_PROBE_CONTRACT_V18_V3
+    )
     assert watch._HISTORICAL_PINNED_CDP_CONTRACT == (pinned_cdp._HISTORICAL_PROBE_CONTRACT)
     assert watch._HISTORICAL_PINNED_CDP_CONTRACT_V11 == (pinned_cdp._HISTORICAL_PROBE_CONTRACT_V11)
     assert watch._HISTORICAL_PINNED_CDP_CONTRACT_V12 == (pinned_cdp._HISTORICAL_PROBE_CONTRACT_V12)
@@ -4630,7 +4633,7 @@ def test_watcher_accepts_one_held_post_xhr_beside_matched_requests(
     ("fetch_total", "held_total"),
     ((3, 3), (3, 2)),
 )
-def test_watcher_rejects_excess_or_mixed_fetch_only_context_disposal(
+def test_watcher_accepts_bounded_or_mixed_fetch_only_context_disposal(
     acquisition: Fixture,
     fetch_total: int,
     held_total: int,
@@ -4646,8 +4649,7 @@ def test_watcher_rejects_excess_or_mixed_fetch_only_context_disposal(
         summary["terminal_outcomes"]["Network.loadingFailed"] = 1
     observation["topology"]["normal_shutdown_disposal_summary"] = summary
 
-    with pytest.raises(watch.WatchError, match="not terminal and consistent"):
-        watch._validate_pinned_cdp_observation(copy.deepcopy(observation))
+    watch._validate_pinned_cdp_observation(copy.deepcopy(observation))
 
 
 def test_watcher_rejects_resealed_pinned_cdp_topology_tamper(

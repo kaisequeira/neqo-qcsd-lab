@@ -955,25 +955,32 @@ def test_schema17_v20_receipt_rejects_shutdown_summary_contract_collisions(
         )
 
 
+@pytest.mark.parametrize(
+    ("inner_schema", "policy"),
+    (
+        (3, "chromium-143-post-quiescence-context-disposal-v2"),
+        (4, "chromium-143-post-quiescence-context-disposal-v3"),
+    ),
+)
 def test_prior_inner_shutdown_contract_under_outer_18_is_historical_only(
     tmp_path: Path,
     fake_build: Path,
+    inner_schema: int,
+    policy: str,
 ) -> None:
     current = _create(tmp_path, fake_build)
     current_payload = json.loads(current.read_text(encoding="utf-8"))["payload"]
     historical = copy.deepcopy(current_payload)
     old_contract = historical["probe_contract"]
-    old_contract["normal_shutdown_disposal_summary_schema_version"] = 3
-    old_contract["normal_shutdown_disposal_policy"] = (
-        "chromium-143-post-quiescence-context-disposal-v2"
-    )
+    old_contract["normal_shutdown_disposal_summary_schema_version"] = inner_schema
+    old_contract["normal_shutdown_disposal_policy"] = policy
     historical["probe_contract_sha256"] = pinned_cdp.canonical_json_sha256(old_contract)
     old_summary = historical["observation"]["topology"][
         "normal_shutdown_disposal_summary"
     ]
-    old_summary["schema_version"] = 3
-    old_summary["policy"] = "chromium-143-post-quiescence-context-disposal-v2"
-    historical_path = tmp_path / "pinned-cdp-outer18-inner-v2.json"
+    old_summary["schema_version"] = inner_schema
+    old_summary["policy"] = policy
+    historical_path = tmp_path / f"pinned-cdp-outer18-inner-{inner_schema}.json"
     historical_path.write_bytes(
         canonical_json_bytes(
             bind_receipt(historical, receipt_type=pinned_cdp.RECEIPT_TYPE)
@@ -1777,12 +1784,12 @@ def test_required_topology_wait_condition_is_event_driven() -> None:
     assert pinned_cdp.PROBE_CONTRACT[
         "normal_shutdown_disposal_summary_schema_version"
     ] == pinned_cdp.NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
-    assert pinned_cdp.NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION == 4
+    assert pinned_cdp.NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION == 5
     assert pinned_cdp.PROBE_CONTRACT["normal_shutdown_disposal_policy"] == (
         pinned_cdp.NORMAL_SHUTDOWN_DISPOSAL_POLICY
     )
     assert pinned_cdp.NORMAL_SHUTDOWN_DISPOSAL_POLICY == (
-        "chromium-143-post-quiescence-context-disposal-v3"
+        "chromium-143-post-cutoff-held-fetch-disposal-v4"
     )
     assert pinned_cdp.PROBE_CONTRACT["playwright_driver_binding"] == (
         pinned_cdp.EXPECTED_PLAYWRIGHT_DRIVER_BINDING

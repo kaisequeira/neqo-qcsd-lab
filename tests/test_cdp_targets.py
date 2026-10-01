@@ -31,6 +31,7 @@ from qcsd_lab.cdp_targets import (
     CdpTargetSource,
     RecursiveCdpTargetRouter,
     _RootLateNetworkInvalidInterception,
+    _RootRequestStageInvalidInterception,
     _RootUnpairedFetchInvalidInterception,
     _RootCanceledNetworkInvalidInterception,
     _sanitised_protocol_error,
@@ -1563,9 +1564,9 @@ def test_policy_is_pinned_and_root_is_instrumented_before_navigation() -> None:
     assert CDP_TARGET_INSTRUMENTATION_POLICY == (
         "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v21"
     )
-    assert NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION == 4
+    assert NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION == 5
     assert NORMAL_SHUTDOWN_DISPOSAL_POLICY == (
-        "chromium-143-post-quiescence-context-disposal-v3"
+        "chromium-143-post-cutoff-held-fetch-disposal-v4"
     )
     assert [method for route, method, _params in session.commands if route == ()] == [
         "Target.getTargetInfo",
@@ -5144,16 +5145,6 @@ def test_exact_root_invalid_interception_accepts_terminal_dispatched_during_send
 @pytest.mark.parametrize(
     ("frame_id", "resource_type", "label"),
     (
-        (
-            "in-process-child-frame",
-            "Font",
-            "catalogue-navigation-policy:Fetch.continueRequest",
-        ),
-        (
-            "root-frame",
-            "Image",
-            "catalogue-navigation-policy:Fetch.continueRequest",
-        ),
         ("root-frame", "Font", "request-stage-policy:Fetch.continueRequest"),
     ),
 )
@@ -5186,13 +5177,199 @@ def test_exact_invalid_interception_recovery_has_a_narrow_policy_boundary(
 
     with pytest.raises(CdpTargetIntegrityError, match="InvalidInterceptionId") as failure:
         router.raise_if_failed()
-    assert (
-        "policy=request-stage, root_fetch_type=Font, callback=false"
-        if label == "request-stage-policy:Fetch.continueRequest"
-        else "policy=catalogue-navigation, root_fetch_type=unregistered, callback=false"
-    ) in str(failure.value)
+    assert "policy=request-stage, root_fetch_type=Font, callback=false" in str(failure.value)
     assert "https://root.test/ineligible.bin" not in str(failure.value)
     assert router.root_invalid_interception_summary["total"] == 0
+
+
+@pytest.mark.parametrize(
+    ("resource_type", "frame_id", "include_network_id"),
+    (
+        ("Image", "root-frame", True),
+        ("Document", "root-frame", False),
+        ("Font", "in-process-child-frame", True),
+    ),
+)
+def test_bound_root_catalogue_continue_discards_without_network_success_claim(
+    monkeypatch: pytest.MonkeyPatch,
+    resource_type: str,
+    frame_id: str,
+    include_network_id: bool,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    network_event, fetch_event = _root_request_events(
+        network_id="generic-discard-network",
+        fetch_id="generic-discard-fetch",
+        resource_type=resource_type,
+        url="https://root.test/resource",
+    )
+    network_event["frameId"] = frame_id
+    fetch_event["frameId"] = frame_id
+    if include_network_id:
+        session.emit((), "Network.requestWillBeSent", network_event)
+    else:
+        fetch_event.pop("networkId")
+    original_send = session.send
+
+    def invalid_continue(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", invalid_continue)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+
+    with pytest.raises(
+        _RootRequestStageInvalidInterception,
+        match=f"request-stage {resource_type}",
+    ) as caught:
+        router.raise_if_failed()
+    assert caught.value.cleanup_verified is False
+    assert router.root_invalid_interception_summary["total"] == 0
+    _clean_abort(router)
+
+
+@pytest.mark.parametrize(
+    "variant",
+    (
+        "wrong-label",
+        "changed-parameters",
+        "response-stage",
+        "non-https",
+        "malformed-url",
+        "unbound-command",
+        "shutdown",
+    ),
+)
+def test_root_catalogue_discard_rejects_unbound_or_inexact_continue(
+    monkeypatch: pytest.MonkeyPatch,
+    variant: str,
+) -> None:
+    session = _FakeNonFlatSession()
+
+    def changed_params(_source: CdpTargetSource, event: Mapping[str, Any]):
+        return "Fetch.continueRequest", {
+            "requestId": event["requestId"], "url": event["request"]["url"],
+        }
+
+    router, _observed = _router(
+        session,
+        fetch_policy=(changed_params if variant == "changed-parameters" else None),
+        fetch_policy_label=(
+            "request-stage-policy:Fetch.continueRequest"
+            if variant == "wrong-label"
+            else "catalogue-navigation-policy:Fetch.continueRequest"
+        ),
+    )
+    _network_event, fetch_event = _root_request_events(
+        network_id="generic-negative-network",
+        fetch_id="generic-negative-fetch",
+        resource_type="Image",
+        url=(
+            "http://root.test/resource" if variant == "non-https"
+            else "https://[::1" if variant == "malformed-url"
+            else "https://root.test/resource"
+        ),
+    )
+    if variant == "response-stage":
+        fetch_event["responseStatusCode"] = 200
+    if variant == "shutdown":
+        router._shutting_down = True
+    original_send = session.send
+
+    def invalid_continue(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", invalid_continue)
+    if variant == "unbound-command":
+        with pytest.raises(CdpTargetIntegrityError) as caught:
+            router.send(
+                router.root_source,
+                "Fetch.continueRequest",
+                {"requestId": fetch_event["requestId"]},
+                label="catalogue-navigation-policy:Fetch.continueRequest",
+            )
+    else:
+        session.emit((), "Fetch.requestPaused", fetch_event)
+        with pytest.raises(CdpTargetIntegrityError) as caught:
+            router.raise_if_failed()
+    assert not isinstance(caught.value, _RootRequestStageInvalidInterception)
+    assert router.root_invalid_interception_summary["total"] == 0
+
+
+def test_root_catalogue_discard_rejects_reused_fetch_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(
+        session,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    _network_event, fetch_event = _root_request_events(
+        network_id="generic-reused-network",
+        fetch_id="generic-reused-fetch",
+        resource_type="Image",
+        url="https://root.test/resource",
+    )
+    session.emit((), "Fetch.requestPaused", fetch_event)
+    original_send = session.send
+
+    def invalid_continue(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", invalid_continue)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+    with pytest.raises(CdpTargetIntegrityError) as caught:
+        router.raise_if_failed()
+    assert not isinstance(caught.value, _RootRequestStageInvalidInterception)
+
+
+def test_root_catalogue_discard_rejects_id_reused_after_failed_policy_pause(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+    decisions = iter(("Fetch.failRequest", "Fetch.continueRequest"))
+
+    def policy(_source: CdpTargetSource, event: Mapping[str, Any]):
+        command = next(decisions)
+        return command, (
+            {"requestId": event["requestId"], "errorReason": "BlockedByClient"}
+            if command == "Fetch.failRequest"
+            else {"requestId": event["requestId"]}
+        )
+
+    router, _observed = _router(
+        session,
+        fetch_policy=policy,
+        fetch_policy_label="catalogue-navigation-policy:Fetch.continueRequest",
+    )
+    _network_event, fetch_event = _root_request_events(
+        network_id="failed-then-reused-network",
+        fetch_id="failed-then-reused-fetch",
+        resource_type="Image",
+        url="https://root.test/resource",
+    )
+    session.emit((), "Fetch.requestPaused", fetch_event)
+    original_send = session.send
+
+    def invalid_continue(method: str, params=None):
+        if method == "Fetch.continueRequest":
+            raise _invalid_interception_error()
+        return original_send(method, params)
+
+    monkeypatch.setattr(session, "send", invalid_continue)
+    session.emit((), "Fetch.requestPaused", fetch_event)
+    with pytest.raises(CdpTargetIntegrityError) as caught:
+        router.raise_if_failed()
+    assert not isinstance(caught.value, _RootRequestStageInvalidInterception)
 
 
 def test_provisional_invalid_interception_rejects_a_malformed_terminal(
@@ -10693,6 +10870,29 @@ def test_normal_shutdown_reconciles_five_exact_root_get_fetch_aliases() -> None:
     assert observed == observed_before
 
 
+@pytest.mark.parametrize("document_leg", ("network", "fetch"))
+def test_normal_shutdown_root_type_alias_never_masks_document_navigation(
+    document_leg: str,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    request = {"method": "GET", "url": "https://root.test/navigation"}
+    network = _normal_shutdown_network(
+        type="Document" if document_leg == "network" else "Other",
+        request=request,
+    )
+    fetch = _abort_fetch_pause(
+        resourceType="Document" if document_leg == "fetch" else "Fetch",
+        request=request,
+    )
+    _begin_shutdown(router)
+    session.emit((), "Network.requestWillBeSent", network)
+    session.emit((), "Fetch.requestPaused", fetch)
+    router.raise_if_failed()
+    with pytest.raises(CdpTargetIntegrityError, match="no exact Network occurrence"):
+        _finish(router)
+
+
 @pytest.mark.parametrize("kind", ("options-xhr", "get-fetch"))
 @pytest.mark.parametrize(
     "mutation",
@@ -10700,8 +10900,6 @@ def test_normal_shutdown_reconciles_five_exact_root_get_fetch_aliases() -> None:
         "network-id",
         "url",
         "method",
-        "network-type",
-        "fetch-type",
         "network-frame",
         "fetch-frame",
         "real-terminal",
@@ -10725,10 +10923,6 @@ def test_normal_shutdown_root_type_alias_rejects_near_misses(
         fetch["request"] = {
             "method": "POST", "url": fetch["request"]["url"]
         }
-    elif mutation == "network-type":
-        network["type"] = "Script"
-    elif mutation == "fetch-type":
-        fetch["resourceType"] = "Image"
     elif mutation == "network-frame":
         network["frameId"] = (
             "other-frame" if kind == "options-xhr" else None
@@ -10834,7 +11028,7 @@ def test_normal_shutdown_root_get_fetch_alias_rejects_redirect_legs() -> None:
         ("Fetch", "Image", "POST"),
     ],
 )
-def test_normal_shutdown_post_type_alias_rejects_other_shapes(
+def test_normal_shutdown_accepts_bounded_root_type_alias_without_label_catalogue(
     network_type: str,
     fetch_type: str,
     method: str,
@@ -10854,8 +11048,9 @@ def test_normal_shutdown_post_type_alias_rejects_other_shapes(
         _abort_fetch_pause(resourceType=fetch_type, request=request),
     )
     router.raise_if_failed()
-    with pytest.raises(CdpTargetIntegrityError, match="no exact Network occurrence"):
-        _finish(router)
+    _finish(router)
+    assert router.normal_shutdown_disposal_summary["matched_total"] == 1
+    assert router.normal_shutdown_disposal_summary["pending_fetch_total"] == 0
 
 
 @pytest.mark.parametrize(
@@ -11070,15 +11265,124 @@ def test_normal_shutdown_holds_one_post_xhr_beside_exact_matched_requests() -> N
     assert observed == observed_before
 
 
+def test_normal_shutdown_holds_a_sole_root_post_xhr_without_network() -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    _begin_shutdown(router)
+    commands_before = list(session.commands)
+    observed_before = list(observed)
+    session.emit((), "Fetch.requestPaused", _normal_shutdown_held_post_xhr())
+    router.raise_if_failed()
+
+    assert router.normal_shutdown_disposal_summary["pending_fetch_total"] == 1
+    assert session.commands == commands_before
+    assert observed == observed_before
+    _finish(router)
+
+    summary = router.normal_shutdown_disposal_summary
+    assert summary["network_total"] == 0
+    assert summary["fetch_total"] == 1
+    assert summary["fetch_only_context_disposal_total"] == 1
+    assert summary["pending_fetch_total"] == 0
+    assert session.commands == commands_before
+    assert observed == observed_before
+
+
+def test_normal_shutdown_holds_multiple_root_types_without_scientific_callbacks() -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session)
+    _begin_shutdown(router)
+    commands_before = list(session.commands)
+    observed_before = list(observed)
+    for index, (resource_type, method) in enumerate(
+        (("Ping", "GET"), ("XHR", "POST"), ("Fetch", "PUT"), ("Other", "GET"))
+    ):
+        session.emit(
+            (),
+            "Fetch.requestPaused",
+            _abort_fetch_pause(
+                requestId=f"held-fetch-{index}",
+                networkId=f"held-network-{index}",
+                resourceType=resource_type,
+                request={
+                    "method": method,
+                    "url": f"https://root.test/held-{index}",
+                },
+            ),
+        )
+        router.raise_if_failed()
+
+    assert session.commands == commands_before
+    assert observed == observed_before
+    _finish(router)
+    summary = router.normal_shutdown_disposal_summary
+    assert summary["fetch_total"] == 4
+    assert summary["fetch_only_context_disposal_total"] == 4
+    assert summary["pending_fetch_total"] == 0
+    assert validate_normal_shutdown_disposal_summary(summary, require_terminal=True) == summary
+
+
+def test_normal_shutdown_fetch_only_document_remains_ineligible() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    _begin_shutdown(router)
+    session.emit(
+        (),
+        "Fetch.requestPaused",
+        _abort_fetch_pause(resourceType="Document"),
+    )
+    router.raise_if_failed()
+    with pytest.raises(CdpTargetIntegrityError, match="no exact Network occurrence"):
+        _finish(router)
+
+
+def test_normal_shutdown_fetch_only_rejects_reused_pre_cutoff_fetch_id() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    original = _abort_fetch_pause(requestId="reused-fetch-id")
+    session.emit((), "Fetch.requestPaused", original)
+    router.raise_if_failed()
+    _begin_shutdown(router)
+    session.emit(
+        (),
+        "Fetch.requestPaused",
+        _abort_fetch_pause(
+            requestId="reused-fetch-id",
+            networkId="new-held-network-id",
+        ),
+    )
+    router.raise_if_failed()
+    with pytest.raises(CdpTargetIntegrityError, match="no exact Network occurrence"):
+        _finish(router)
+
+
+def test_normal_shutdown_fetch_only_rejects_known_worker_bootstrap_id() -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session)
+    _route, worker_source = _ready_shutdown_worker(
+        session, router, stem="held-worker-bootstrap"
+    )
+    _begin_shutdown(router)
+    session.emit(
+        (),
+        "Fetch.requestPaused",
+        _abort_fetch_pause(
+            requestId="held-worker-bootstrap-pause",
+            networkId=worker_source.target_id,
+            resourceType="Script",
+            request={"method": "GET", "url": "https://worker.test/bootstrap.js"},
+        ),
+    )
+    router.raise_if_failed()
+    with pytest.raises(CdpTargetIntegrityError, match="no exact Network occurrence"):
+        _finish(router)
+
+
 @pytest.mark.parametrize(
     "mutation",
     (
-        "second-held-xhr",
-        "unmatched-network",
         "pre-shutdown-network-id",
         "same-id-network",
-        "wrong-method",
-        "wrong-resource-type",
         "wrong-frame",
         "child-source",
         "redirect",
@@ -11162,16 +11466,11 @@ def test_normal_shutdown_matched_requests_plus_held_xhr_rejects_near_misses(
     (
         "prior-network-ping",
         "prior-network-xhr",
-        "unrelated-network",
         "duplicate-network-id",
-        "duplicate-ping",
-        "xhr-get",
-        "ping-get",
         "xhr-child-target",
         "xhr-wrong-frame",
         "xhr-http-url",
         "xhr-redirect",
-        "third-fetch",
     ),
 )
 def test_normal_shutdown_post_ping_xhr_pair_rejects_near_misses(
@@ -11249,12 +11548,9 @@ def test_normal_shutdown_post_ping_xhr_pair_rejects_near_misses(
     (
         "pre-shutdown-network-id",
         "same-id-network",
-        "wrong-resource-type",
-        "wrong-method",
         "wrong-root-frame",
         "child-target",
         "redirect",
-        "second-fetch",
         "non-https-url",
     ),
 )
@@ -11338,16 +11634,6 @@ def test_normal_shutdown_fetch_only_post_ping_rejects_non_disposal_shapes(
 @pytest.mark.parametrize(
     "changes",
     [
-        pytest.param({"resourceType": "Other"}, id="non-ping-resource"),
-        pytest.param(
-            {
-                "request": {
-                    "method": "PUT",
-                    "url": "https://tracker.test/ping",
-                }
-            },
-            id="non-get-or-post-method",
-        ),
         pytest.param(
             {
                 "request": {
@@ -11446,7 +11732,7 @@ def test_normal_shutdown_fetch_only_ping_rejects_a_same_id_network_mismatch() ->
         _finish(router)
 
 
-def test_normal_shutdown_fetch_only_context_disposal_is_globally_singleton() -> None:
+def test_normal_shutdown_fetch_only_context_disposal_is_bounded_not_singleton() -> None:
     session = _FakeNonFlatSession()
     router, _observed = _router(session)
     _begin_shutdown(router)
@@ -11465,8 +11751,11 @@ def test_normal_shutdown_fetch_only_context_disposal_is_globally_singleton() -> 
         )
         router.raise_if_failed()
 
-    with pytest.raises(CdpTargetIntegrityError, match="no exact Network occurrence"):
-        _finish(router)
+    _finish(router)
+    summary = router.normal_shutdown_disposal_summary
+    assert summary["fetch_total"] == 2
+    assert summary["fetch_only_context_disposal_total"] == 2
+    assert summary["pending_fetch_total"] == 0
 
 
 def test_normal_shutdown_fetch_only_context_disposal_rejects_a_child_source() -> None:
@@ -12506,6 +12795,40 @@ def test_previous_shutdown_policy_verifies_only_as_historical_and_rejects_new_sh
     assert validate_normal_shutdown_disposal_summary(mixed, require_terminal=True) == mixed
 
 
+def test_schema_four_shutdown_policy_is_historical_and_retains_its_count_limit() -> None:
+    previous = _valid_normal_shutdown_disposal_summary()
+    previous["schema_version"] = 4
+    previous["policy"] = "chromium-143-post-quiescence-context-disposal-v3"
+    with pytest.raises(ValueError, match="contract is invalid"):
+        validate_normal_shutdown_disposal_summary(previous, require_terminal=True)
+    assert validate_normal_shutdown_disposal_summary(
+        previous, require_terminal=True, allow_historical=True
+    ) == previous
+
+    previous.update(
+        network_total=0,
+        fetch_total=3,
+        matched_total=0,
+        network_only_synthetic_total=0,
+        fetch_only_context_disposal_total=3,
+        terminal_outcomes={
+            "Network.loadingFinished": 0,
+            "Network.loadingFailed": 0,
+            "Network.redirectResponse": 0,
+            "qcsd-shutdown": 0,
+        },
+    )
+    with pytest.raises(ValueError, match="counts are inconsistent"):
+        validate_normal_shutdown_disposal_summary(
+            previous, require_terminal=True, allow_historical=True
+        )
+    previous["schema_version"] = NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
+    previous["policy"] = NORMAL_SHUTDOWN_DISPOSAL_POLICY
+    assert validate_normal_shutdown_disposal_summary(
+        previous, require_terminal=True
+    ) == previous
+
+
 @pytest.mark.parametrize(
     "mutate",
     [
@@ -12563,7 +12886,6 @@ def test_normal_shutdown_disposal_summary_validator_rejects_tampering(
             id="url",
         ),
         pytest.param(_abort_fetch_pause(frameId="other-frame"), id="frame"),
-        pytest.param(_abort_fetch_pause(resourceType="Image"), id="resource-type"),
     ],
 )
 def test_normal_shutdown_fetch_must_exactly_match_its_network(

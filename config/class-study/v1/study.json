@@ -321,8 +321,8 @@
       "policy": "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-v2"
     },
     "normal_shutdown_disposal_contract": {
-      "schema_version": 4,
-      "policy": "chromium-143-post-quiescence-context-disposal-v3",
+      "schema_version": 5,
+      "policy": "chromium-143-post-cutoff-held-fetch-disposal-v4",
       "required_state": "terminal"
     },
     "passive_render_contract": {
