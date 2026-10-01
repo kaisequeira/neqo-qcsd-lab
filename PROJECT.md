@@ -31,6 +31,41 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
+As of this checkpoint, v138 is the latest completed source-bound acquisition
+attempt. On clean Lab source
+`6f77041680ac37708be2c2174989f127db285c09` and pinned Rust Gitlink
+`a8d8664cd31cbc4cc1ecb4fd5abc5a1d3ee153ae`, its fresh no-cache
+collection, prepare and reference build independently verified. Pinned CDP
+passed, and the acquisition-focused correctness suite produced an independently
+verified, no-waiver acquisition-only authority. This authorises public-page
+acquisition on that exact source; it does not authorise fitting, defence capture
+or the 16,000-sample run. The same-source 110-vector browser gate and full
+defence foundation have not run for v138.
+
+The v138 acquisition checkpoint was initialized from the frozen 600-candidate
+catalogue. Two supervised watcher actions reached four candidate terminal
+records. `tranco-0000697` and `tranco-0000984` were rejected after their
+selected pages failed the HTTP/3 screen. `tranco-0000553` was rejected for
+non-replayable `RTCPeerConnection` egress. `tranco-0000837` (`msftauth.net`)
+exhausted three recoverable DNS navigation attempts and ended as an immutable
+pre-probe terminal. Under v138's registered rule, that last outcome is an
+infrastructure blocker in the first stratum, so the 120-site selection cannot
+complete on this checkpoint. Independent DNS checks found no A or AAAA address
+for the target while public control domains resolved, but they cannot
+retroactively reclassify v138. Accepted progress remains **0/120 pilot classes
+and 0/16,000 formal samples**. Preserve every v138 attempt and receipt.
+
+A prospective source change treats only repeated
+`EAI_NONAME`/DNS NODATA for a target, accompanied by a distinct healthy public
+DNS control, as a site-availability rejection. Transient or ambiguous DNS
+failures continue to block selection. Its focused tests pass, but it has no
+official authority from v138. It requires a new source freeze, next unused cohort and
+fresh downstream proof; v138 remains verifiable only under its original rule.
+See the [evidence index](docs/EVIDENCE-INDEX.md) for local v138 receipt and
+checkpoint paths.
+
+### Retained development history
+
 Desktop restoration and the protected historical handoff remain verified; see
 the [evidence index](docs/EVIDENCE-INDEX.md) for retention boundaries. Docker
 and WSL data reside on D:. The v127 browser and acquisition-only authority
@@ -291,9 +326,9 @@ scientific credit.
 
 | Checkpoint identity | Historical qualification and current acquisition state |
 |---|---|
-| Last source-bound attempt (v134) | Lab `2d872257f89bc86bc1129c485d16dfcc1412d252` and Rust Gitlink `2a9efa84ba0b81ca5d27d37fe2f8f73a08e2a91d`; a navigation fix will require a new source-bound build |
-| Lab branch and v130 source commit | `desktop-portability-2026-09-26`; `5fe0da7a8a8dc92713d91fb67b65f265325e4d51` |
-| Rust commit and Lab Gitlink | `e8575fd8e54921ed6ff867de475b4a734064866e` |
+| Latest source-bound attempt (v138) | Lab `6f77041680ac37708be2c2174989f127db285c09` and Rust Gitlink `a8d8664cd31cbc4cc1ecb4fd5abc5a1d3ee153ae`; its DNS blocker requires a prospective source change and fresh cohort |
+| Historical v130 Lab branch and source commit | `desktop-portability-2026-09-26`; `5fe0da7a8a8dc92713d91fb67b65f265325e4d51` |
+| Historical v130 Rust commit and Lab Gitlink | `e8575fd8e54921ed6ff867de475b4a734064866e` |
 | Build and pinned CDP | `artifacts/buflo-study/build-execution-v130.json` and `artifacts/buflo-study/pinned-cdp-execution-v130.json`: independently verified on their bound source |
 | Browser execution | `artifacts/buflo-study/browser-egress-qualification-v130/final.json`: independently verified 110/110 |
 | Desktop authority | v130 creation failed its correctness suite; no authority receipt issued |
@@ -303,8 +338,9 @@ scientific credit.
 | v134 build, pinned CDP and acquisition authority | `artifacts/buflo-study/build-execution-v134.json`, `artifacts/buflo-study/build-completion-v134.json`, `artifacts/buflo-study/pinned-cdp-execution-v134.json` and `artifacts/class-study-acquisition-authority-v134.json` independently verified on the v134 source |
 | v135 failed build | Collection code gate stopped on one timing-sensitive synthetic Rust test, 284/285 passed; `artifacts/buflo-study/build-failure-v135/` preserves the exact diagnostic and archived transaction. No build receipt or acquisition authority; v135 consumed |
 | v136 failed build | Collection code gate stopped on the same test because a five-second synthetic deadline violated its nominal strict window, 284/285 passed; `artifacts/buflo-study/build-failure-v136/` preserves the failed diagnostic and archived transaction. No build receipt or acquisition authority; v136 consumed |
-| Acquisition checkpoint | `artifacts/classifier-multiorigin100-v1-acquisition-v134/` is the latest initialized root; its first bounded action stopped on a durable root CDP navigation error, with 0/120 accepted |
-| Next execution | Freeze the focused-pass nominal-window test-only clock correction, allocate the next unused cohort, reprove build, pinned CDP and schema-2 authority, then repeat bounded acquisition actions through the first prepared observations before the long watcher. Complete the full 110-vector browser gate and same-source defence foundation before fitting or defence capture |
+| v138 build, pinned CDP and acquisition authority | `artifacts/buflo-study/build-execution-v138.json`, `artifacts/buflo-study/build-completion-v138.json`, `artifacts/buflo-study/pinned-cdp-execution-v138.json` and `artifacts/class-study-acquisition-authority-v138.json` independently verified on the v138 source; public acquisition only |
+| Acquisition checkpoint | `artifacts/classifier-multiorigin100-v1-acquisition-v138/` is the latest initialized root; four terminal candidate records include three site rejections and one DNS pre-probe infrastructure blocker, with 0/120 accepted |
+| Next execution | Test and freeze the prospective DNS availability rule, allocate the next unused cohort, reprove the no-cache build, pinned CDP and acquisition-only authority, then supervise bounded actions through real preparation and observation. Complete same-source browser and full defence foundation before fitting or capture |
 
 Preserve the v130 qualification evidence and failed authority attempt, the v129
 checkpoint and failed attempts, v128 failed build, v127
@@ -393,23 +429,25 @@ historical schema descriptions remain in the history and methodology.
 
 ## Next actions and cheapest-first execution
 
-The v129 acquisition-only gates passed and its versioned checkpoint initialized,
-but the watcher stopped before accepting a pilot class. The redirect dependency
-producer is corrected and the prospective schema-12 pre-baseline HTTP/3 screen
-is implemented in source. If the first known-good Neqo control fails, the screen
-blocks without candidate or second-control probes. Otherwise it runs two attempts
-per exact canonical selected-page URL, then the second control. A page enters
-the timed baseline only when both probes are `known_valid=true`. With two
-passing controls, the candidate is rejected only if every selected page has
-two classified connectivity failures; ambiguous outcomes with no valid page
-block. The receipt retains every selected page and its original ordinal.
-Third-party resource origins discovered during preparation can still block a
-probe window. The screen does not prove that a complete page graph can be
-prepared. Preserve v129 as failed
-evidence. After source freeze, allocate a fresh source-bound
-cohort and repeat every downstream gate before initializing a new acquisition
-root. The v129 missed window remains an unresolved historical blocker, not a
-selective site rejection.
+V138's acquisition-only authority passed and its versioned checkpoint
+initialized, but the fourth candidate is an immutable DNS pre-probe blocker.
+Preserve that checkpoint and its original classification. The prospective DNS
+availability rule needs focused positive and negative tests and a frozen source
+commit before the allocator can assign a fresh cohort. Rebuild without cache,
+verify pinned CDP and acquisition-only authority, then supervise small watcher
+actions through real preparation and both observation windows. A new blocker
+must be diagnosed at once, before the long watcher. The same-source 110-vector
+browser gate and full defence foundation remain mandatory before fitting or
+defence capture.
+
+The existing schema-12 pre-baseline HTTP/3 screen runs two attempts per exact
+canonical selected-page URL bracketed by controls. A page enters the timed
+baseline only when both probes are `known_valid=true`. With two passing
+controls, the candidate is rejected only if every selected page has two
+classified connectivity failures; ambiguous outcomes block. The receipt
+retains every selected page and its original ordinal. Third-party resource
+origins discovered during preparation can still block a probe window. The
+screen does not prove that a complete page graph can be prepared.
 The supplied curated domain list has been imported as a portable, hash-bound
 source receipt at
 [`config/curated-sources/crux-73-v1.source.json`](config/curated-sources/crux-73-v1.source.json).
@@ -421,15 +459,14 @@ the curated receipt is excluded from that run. The registered 600-candidate,
 120-pilot, 100-final-class contract remains in force.
 
 1. Preserve the verified migration manifests, historical handoff, v126 through
-   v134 receipts and checkpoints, and all failed watcher evidence.
+   v138 receipts and checkpoints, and all failed watcher evidence.
 2. Retain the registered Tranco candidate catalogue for this formal run.
-3. The [acquisition rehearsal](docs/ACQUISITION-REHEARSAL.md) and v134 authority
-   passed their stated gates, but the first live v134 action exposed a root CDP
-   late-Network ordering race. Verify the exact fail-closed retry against the
-   two-worker trace and focused negative cases. Freeze the repair, obtain the
-   allocator's next unused cohort, build fresh no-cache images, pass pinned
-   CDP and independently verify schema-2 acquisition authority. The v131-v133
-   claims and failed v134 root are consumed on their recorded source.
+3. V138's verified build, pinned CDP and acquisition authority allowed bounded
+   public-page acquisition; its immutable DNS pre-probe blocker prevents
+   selection completion. Test the proposed DNS rule, freeze the source, obtain
+   the allocator's next unused cohort, build fresh no-cache images, pass pinned
+   CDP and independently verify schema-2 acquisition authority. The v138 root
+   remains bound to its original source and rule.
 4. Initialize a new versioned acquisition root, run monitored actions through
    an actual baseline and both short-horizon observations, then acquire the
    120-class pilot

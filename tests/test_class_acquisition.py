@@ -7850,6 +7850,133 @@ def test_public_origin_policy_pins_public_dns_and_rejects_private_answers(
         public_origin_ip_pins(("https://example.com",))
 
 
+@pytest.mark.parametrize(
+    "first_code",
+    sorted({
+        acquisition_module.socket.EAI_NONAME,
+        getattr(acquisition_module.socket, "EAI_NODATA", acquisition_module.socket.EAI_NONAME),
+    }),
+)
+def test_public_origin_no_address_is_site_rejection_only_with_healthy_resolver(
+    monkeypatch: pytest.MonkeyPatch, first_code: int,
+) -> None:
+    calls = []
+
+    def resolve(hostname, port, **kwargs):
+        calls.append((hostname, port, kwargs))
+        if hostname == "msftauth.net":
+            raise acquisition_module.socket.gaierror(first_code, "no address")
+        assert hostname == "example.com"
+        return [(acquisition_module.socket.AF_INET, 1, 6, "", ("1.1.1.1", port))]
+
+    monkeypatch.setattr(acquisition_module.socket, "getaddrinfo", resolve)
+    with pytest.raises(
+        TerminalProbePolicyError,
+        match=r"no usable A/AAAA address for msftauth\.net in two lookups .*"
+        r"resolved public control example\.com",
+    ):
+        public_origin_ip_pins(("https://msftauth.net",))
+    assert [hostname for hostname, _port, _kwargs in calls] == [
+        "msftauth.net", "example.com", "msftauth.net",
+    ]
+    assert all(
+        kwargs == {
+            "family": acquisition_module.socket.AF_UNSPEC,
+            "type": acquisition_module.socket.SOCK_STREAM,
+        }
+        for _hostname, _port, kwargs in calls
+    )
+
+
+@pytest.mark.parametrize(
+    "control,second_code,expected_calls",
+    [
+        ("error", None, ["msftauth.net", "example.com"]),
+        ("empty", None, ["msftauth.net", "example.com"]),
+        ("private", None, ["msftauth.net", "example.com"]),
+        ("mixed", None, ["msftauth.net", "example.com"]),
+        (
+            "public", acquisition_module.socket.EAI_AGAIN,
+            ["msftauth.net", "example.com", "msftauth.net"],
+        ),
+        ("public", None, ["msftauth.net", "example.com", "msftauth.net"]),
+    ],
+)
+def test_public_origin_no_address_stays_recoverable_when_confirmation_is_ambiguous(
+    monkeypatch: pytest.MonkeyPatch,
+    control: str,
+    second_code: int | None,
+    expected_calls: list[str],
+) -> None:
+    calls = []
+
+    def resolve(hostname, port, **_kwargs):
+        calls.append(hostname)
+        if hostname == "msftauth.net":
+            if calls.count(hostname) == 1:
+                raise acquisition_module.socket.gaierror(
+                    acquisition_module.socket.EAI_NONAME, "no address"
+                )
+            if second_code is not None:
+                raise acquisition_module.socket.gaierror(second_code, "temporary failure")
+            return [(acquisition_module.socket.AF_INET, 1, 6, "", ("1.1.1.1", port))]
+        assert hostname == "example.com"
+        if control == "error":
+            raise acquisition_module.socket.gaierror(
+                acquisition_module.socket.EAI_AGAIN, "temporary failure"
+            )
+        if control == "empty":
+            return []
+        addresses = ["1.1.1.1"]
+        if control == "private":
+            addresses = ["127.0.0.1"]
+        elif control == "mixed":
+            addresses.append("127.0.0.1")
+        return [(acquisition_module.socket.AF_INET, 1, 6, "", (address, port))
+                for address in addresses]
+
+    monkeypatch.setattr(acquisition_module.socket, "getaddrinfo", resolve)
+    with pytest.raises(RecoverableAcquisitionError, match="DNS lookup failed"):
+        public_origin_ip_pins(("https://msftauth.net",))
+    assert calls == expected_calls
+
+
+def test_public_origin_dns_temporary_failure_never_runs_no_address_control(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+
+    def resolve(hostname, _port, **_kwargs):
+        calls.append(hostname)
+        raise acquisition_module.socket.gaierror(
+            acquisition_module.socket.EAI_AGAIN, "temporary failure"
+        )
+
+    monkeypatch.setattr(acquisition_module.socket, "getaddrinfo", resolve)
+    with pytest.raises(RecoverableAcquisitionError, match="DNS lookup failed"):
+        public_origin_ip_pins(("https://msftauth.net",))
+    assert calls == ["msftauth.net"]
+
+
+def test_public_origin_dns_control_uses_distinct_host_for_control_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+
+    def resolve(hostname, port, **_kwargs):
+        calls.append(hostname)
+        if hostname == "example.org":
+            return [(acquisition_module.socket.AF_INET, 1, 6, "", ("1.1.1.1", port))]
+        raise acquisition_module.socket.gaierror(
+            acquisition_module.socket.EAI_NONAME, "no address"
+        )
+
+    monkeypatch.setattr(acquisition_module.socket, "getaddrinfo", resolve)
+    with pytest.raises(TerminalProbePolicyError, match="resolved public control example.org"):
+        public_origin_ip_pins(("https://example.com",))
+    assert calls == ["example.com", "example.org", "example.com"]
+
+
 def test_public_origin_policy_resolves_one_pin_per_chromium_hostname(
     monkeypatch: pytest.MonkeyPatch,
 ):

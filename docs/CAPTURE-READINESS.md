@@ -268,7 +268,25 @@ evaluation, paper comparison and final attestation remain necessary for the
 thesis's validation claim. The temporal split is blocks 1–8 training, block 9
 validation and block 10 held-out test. No block-ten tuning is permitted.
 
-## Current blocker and what v129–v130 actually prove
+## Current blocker and earlier authority
+
+V138's clean no-cache build, pinned CDP and acquisition-focused correctness
+suite produced an independently verified schema-2 acquisition-only authority.
+Its checkpoint at `artifacts/classifier-multiorigin100-v1-acquisition-v138/`
+was exercised in two bounded watcher actions. Three candidates received
+site-policy rejections; `tranco-0000837` received an immutable pre-probe
+terminal after three recoverable DNS failures. Under v138's rule, that terminal
+blocks the first stratum's 24 eligible-site selection, leaving 0/120 pilot
+classes and 0/16,000 formal samples. The prospective source change rejects
+a non-addressable site only after repeated target `EAI_NONAME`/NODATA with a
+distinct healthy public DNS control; transient and ambiguous DNS failures
+remain infrastructure blockers. Focused tests pass, but this change gives v138
+no new authority or classification. The changed source needs a new cohort and
+repeat build, pinned CDP and acquisition-only authority before a replacement runner.
+The same-source 110-vector browser and full defence foundation remain later
+gates before any fitting or capture.
+
+### Earlier cohorts
 
 On source commit `cd5dd7d2a7c711f819a342046c191a3d80a5c3c9` with Rust
 Gitlink `e8575fd8e54921ed6ff867de475b4a734064866e`, v129's build, pinned
@@ -297,15 +315,13 @@ rejected both primary origins after two classified 12-second timeouts each,
 with passing controls. These diagnostic observations are non-evidentiary and
 cannot reclassify either cohort or count toward accepted acquisition.
 
-The source fix and prospective schema-2 authority need the allocator's next
-unused cohort, fresh no-cache build, pinned CDP and acquisition correctness
-before public acquisition. The 110-vector browser gate can follow acquisition
-on that **same source/build** but must verify before full foundation, fitting
-or capture. Schema 1 still requires browser qualification before its
-four-gate acquisition authority. V130's failed authority and diagnostic
-advanced no pilot, certification or formal count. Local evidence paths in
-this section are intentionally code paths; local artifacts are not guaranteed
-to exist in another clone.
+V130's failed authority and diagnostic advanced no pilot, certification or
+formal count. Schema 1 required browser qualification before its four-gate
+acquisition authority; the current schema-2 route permits that gate after
+acquisition, but only on the same source/build and before the full defence
+foundation, fitting or capture. Local evidence paths in this section are
+intentionally code paths; local artifacts are not guaranteed to exist in
+another clone.
 
 For a new source cohort, the acquisition root, stability receipts and admitted
 workloads use one allocator-approved `-vN` suffix:

@@ -28,16 +28,22 @@ selectable modes**. Qualification on the new classes remains pending for all
 modes. BuFLO/CS-BuFLO validation requires the final attestation, and describes
 client-only QUIC adaptations rather than bilateral paper implementations.
 
-V134 passed its no-cache build, pinned CDP check and schema-2 acquisition-only
-authority, then its first bounded watcher action stopped on a root CDP
-`InvalidInterceptionId` during navigation. That action yielded no accepted
-class, baseline or scientific terminal. Its checkpoint remains preserved. The
-trace-led repair must pass a zero-credit two-worker rehearsal, focused negative
-tests and fresh source-bound proof before another bounded watcher action. The
-long watcher stays held until a corrected-source action passes navigation,
-reaches a real baseline and completes both prepared observation windows, or
-reports an honest scientific terminal or blocker. The [project ledger](../PROJECT.md)
-and [evidence index](EVIDENCE-INDEX.md) give exact v134 receipt identities.
+At this checkpoint, v138 passed its clean no-cache build, pinned CDP and independently verified
+schema-2 acquisition-only authority on its exact source. Two bounded watcher
+actions created four candidate terminal records: three site-policy rejections
+(two HTTP/3 screens and one non-replayable WebRTC egress), plus
+`tranco-0000837` (`msftauth.net`) after three recoverable DNS failures. The
+DNS outcome is an immutable pre-probe infrastructure blocker in the first
+stratum under v138's rules, so its 120-site selection cannot complete. No
+baseline or prepared observation has been accepted. A prospective source
+change classifies only repeated target `EAI_NONAME`/DNS NODATA with a
+distinct healthy public DNS control as site unavailable; transient and
+ambiguous resolver failures remain blockers. Its focused tests pass but it has
+no source-bound acquisition authority yet. V138 cannot be reclassified.
+The long watcher stays held until a clean source, next unused cohort and fresh
+authority pass bounded validation through real preparation and observation.
+The [project ledger](../PROJECT.md) and [evidence index](EVIDENCE-INDEX.md)
+give the v138 receipt and checkpoint paths.
 Accepted progress remains pilot 0/120, final classes 0/100, certification
 0/900 and formal 0/16,000. V126 through v133 failures and earlier gates are
 preserved in the [history](PROJECT-HISTORY.md); their receipts cannot authorise

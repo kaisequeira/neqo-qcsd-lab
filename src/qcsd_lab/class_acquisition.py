@@ -4753,6 +4753,45 @@ def _is_public_network_address(
     return global_unicast and not ietf_special and not deprecated_6to4 and not documentation
 
 
+_DNS_NO_ADDRESS_ERRORS = frozenset(
+    {socket.EAI_NONAME, getattr(socket, "EAI_NODATA", socket.EAI_NONAME)}
+)
+_DNS_RESOLVER_CONTROL_HOSTS = ("example.com", "example.org")
+
+
+def _healthy_resolver_confirms_no_address(hostname: str, port: int) -> str | None:
+    """Confirm a site-specific negative lookup with the same acquisition resolver.
+
+    A healthy public control and a second negative lookup establish that the
+    candidate is unavailable from this environment. An ambiguous or unhealthy
+    resolver never turns a transient failure into a scientific site rejection.
+    """
+
+    control = next(value for value in _DNS_RESOLVER_CONTROL_HOSTS if value != hostname)
+    try:
+        control_records = socket.getaddrinfo(
+            control, 443, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM
+        )
+        control_addresses = {
+            ipaddress.ip_address(record[4][0]) for record in control_records
+        }
+    except (OSError, ValueError, TypeError, IndexError, KeyError):
+        return None
+    if not control_addresses or any(
+        not _is_public_network_address(address) for address in control_addresses
+    ):
+        return None
+    try:
+        socket.getaddrinfo(
+            hostname, port, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM
+        )
+    except socket.gaierror as error:
+        return control if error.errno in _DNS_NO_ADDRESS_ERRORS else None
+    except OSError:
+        return None
+    return None
+
+
 def public_origin_ip_pins(origins: Sequence[str]) -> dict[str, str]:
     """Resolve and pin public DNS answers, rejecting every non-public answer."""
 
@@ -4790,6 +4829,17 @@ def public_origin_ip_pins(origins: Sequence[str]) -> dict[str, str]:
                 type=socket.SOCK_STREAM,
             )
         except socket.gaierror as error:
+            control = (
+                _healthy_resolver_confirms_no_address(canonical, port)
+                if error.errno in _DNS_NO_ADDRESS_ERRORS
+                else None
+            )
+            if control is not None:
+                raise TerminalProbePolicyError(
+                    "public-origin DNS had no usable A/AAAA address for "
+                    f"{canonical} in two lookups while the acquisition resolver "
+                    f"resolved public control {control}"
+                ) from error
             raise RecoverableAcquisitionError(
                 f"public-origin DNS lookup failed for {canonical}: {error}"
             ) from error
