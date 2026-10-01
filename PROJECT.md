@@ -53,6 +53,18 @@ installed-module regression and 152 focused tests passed, but these grant no
 scientific credit. Changed source requires a fresh claimed cohort and full
 downstream reproof; preserve all v140 files.
 
+On **v141**, clean Lab source `35895d971c2d49e112b9f7748f5e985faf9430c4`
+and the same pinned Rust Gitlink began the fresh no-cache build. The
+collection image completed, but the preparation image's Rust code gate failed
+one exact-handoff test after 284 passed. Its synthetic 50 ms deadline used a
+moving test clock; the same test passed earlier in the collection image and
+failed under the preparation build's load. The v141 build exited 1 with no
+paired build receipts, pinned-CDP result, 20-site authority or acquisition
+checkpoint. Its claim is consumed and none of its images grants scientific
+credit. A test-only fixed-clock repair is prepared for focused verification
+before the next claimed build; preserve the v141 claim and failed BuildKit
+history.
+
 The latest completed public-page acquisition attempt is **v139** on clean Lab source
 `34088bb687ec683f16597da41e2c02a11f201447` and pinned Rust Gitlink
 `a8d8664cd31cbc4cc1ecb4fd5abc5a1d3ee153ae`. Its no-cache build,
