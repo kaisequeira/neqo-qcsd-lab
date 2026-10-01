@@ -105,6 +105,20 @@ formal acquisition or capture has begun. See the
 [rehearsal](docs/ACQUISITION-REHEARSAL.md) for limits and the prospective
 study decision.
 
+On the subsequently published portable source, v131's interrupted transaction
+was archived with a host-local maintenance receipt. The v132 claim was
+consumed when lifecycle admission found that unresolved v131 transaction;
+its build never started. Recovery then passed. The v133 no-cache build
+completed all 62/62 BuildKit steps for collection and produced a provisional
+collection image ID, but the immediate post-export tag inspection ran through the ordinary
+three-second Docker API service and timed out while the daemon was still busy.
+It stopped before the prepare build and issued no verified build receipt or
+acquisition authority. The v133 transaction was archived and lifecycle
+recovery passed. The image is diagnostic only; the next attempt must use the
+allocator's next unused version with the read-only binding check's timeout
+fix bound by a fresh verified build. Neither v132 nor v133 created
+an acquisition checkpoint or scientific credit.
+
 The registered host acquisition correctness suite subsequently passed
 **2,082 tests with six skips**. A zero-credit integrated synthetic test
 carried acquisition admission through fitting, final selection, final cohort,
@@ -193,16 +207,19 @@ Walkie-Talkie captures each accepted and deep-verified 1/1 under that profile.
 The result checks container permissions and the defended wire path, while
 formal source, public-site and fitted-parameter evidence remains outstanding.
 
-| Checkpoint identity | v130 qualification, interrupted v131 claim and current state |
+| Checkpoint identity | v130 qualification, consumed v131-v133 claims and current state |
 |---|---|
+| Last attempted source (v133) | Lab `a28ea0c3b07be80870c4efdf411e655f591f4f76` and Rust Gitlink `2a9efa84ba0b81ca5d27d37fe2f8f73a08e2a91d`; the timeout fix requires a new source-bound build |
 | Lab branch and v130 source commit | `desktop-portability-2026-09-26`; `5fe0da7a8a8dc92713d91fb67b65f265325e4d51` |
 | Rust commit and Lab Gitlink | `e8575fd8e54921ed6ff867de475b4a734064866e` |
 | Build and pinned CDP | `artifacts/buflo-study/build-execution-v130.json` and `artifacts/buflo-study/pinned-cdp-execution-v130.json`: independently verified on their bound source |
 | Browser execution | `artifacts/buflo-study/browser-egress-qualification-v130/final.json`: independently verified 110/110 |
 | Desktop authority | v130 creation failed its correctness suite; no authority receipt issued |
 | v131 attempt | Claim published on `6f2861f4a316809cdd7b69be9fa3a13298d06ff9`; user-interrupted build exited 130; no verified build or authority receipt |
+| v132 attempt | Claim consumed; lifecycle admission blocked on the retained v131 transaction before Docker build; no build receipt |
+| v133 attempt | Collection export completed 62/62 BuildKit steps with provisional image ID `sha256:a1036e8e1b291e80e787f6d911430e711b3c5d4828b987dc6c75ef984aa2279a`; the post-export three-second tag inspection timed out. No prepare/reference image, verified build receipt or acquisition authority |
 | Acquisition checkpoint | v129 remains the latest initialized checkpoint, with 0/120 accepted |
-| Next execution | The non-evidentiary prebuild rehearsal passed its diagnostic criteria. Freeze source, claim the allocator's next unused cohort, reprove build and pinned CDP, verify schema-2 authority, then start bounded acquisition actions. Defer the full 110-vector browser gate to the same-source full foundation before fitting or defence capture |
+| Next execution | After the bounded read-only tag-inspection fix and focused tests, freeze source, claim the allocator's next unused cohort, reprove build and pinned CDP, verify schema-2 authority, then start bounded acquisition actions. Defer the full 110-vector browser gate to the same-source full foundation before fitting or defence capture |
 
 Preserve the v130 qualification evidence and failed authority attempt, the v129
 checkpoint and failed attempts, v128 failed build, v127
@@ -322,10 +339,11 @@ the curated receipt is excluded from that run. The registered 600-candidate,
    v129 receipts and checkpoints, and the failed watcher evidence.
 2. Retain the registered Tranco candidate catalogue for this formal run.
 3. The [acquisition rehearsal](docs/ACQUISITION-REHEARSAL.md) has passed its
-   non-evidentiary criteria. Freeze corrected source, obtain the next unused cohort,
-   fresh no-cache images and pinned CDP, and independently verify prospective
-   schema-2 acquisition authority. The v131 claim is consumed even though its
-   interrupted build issued no receipt.
+   non-evidentiary criteria. Freeze the post-export inspection fix after its
+   affected tests pass, obtain the allocator's next unused cohort, fresh
+   no-cache images and pinned CDP, and independently verify prospective
+   schema-2 acquisition authority. The v131-v133 claims are consumed despite
+   their absence of verified build receipts.
 4. Initialize a new versioned acquisition root and acquire the 120-class pilot
    with two genuine short-horizon prepared observations per admitted page.
    The prospective watcher can admit a later batch 60 seconds after all

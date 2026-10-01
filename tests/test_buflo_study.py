@@ -10649,6 +10649,81 @@ def test_build_rejects_missing_malformed_or_mismatched_iid_evidence(
     assert not (tmp_path / "artifacts/buflo-study/build-execution-v81.json").exists()
 
 
+@pytest.mark.parametrize(
+    ("mode", "succeeds", "attempts", "diagnostic"),
+    (
+        ("empty-then-bound", True, ("10", "30"), "retrying once with a 30s bound"),
+        ("always-empty", False, ("10", "30"), "no result at the 30s Docker API boundary"),
+        ("different-id", False, ("10",), "tag no longer binds its build-produced ID"),
+        ("identity-error", False, ("10",), "Docker pinned daemon identity changed"),
+        ("empty-identity-error", False, ("10",), "status 125"),
+        ("empty-unexpected-error", False, ("10",), "status 99"),
+        ("nonempty-failure", False, ("10",), "Cannot connect to Docker"),
+    ),
+)
+def test_build_image_binding_retries_only_empty_transient_inspection(
+    tmp_path: Path,
+    mode: str,
+    succeeds: bool,
+    attempts: tuple[str, ...],
+    diagnostic: str,
+) -> None:
+    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
+    start = launcher.index("verify_built_image_binding() {")
+    function = launcher[start : launcher.index("\n}\n", start) + 2]
+    calls = tmp_path / "image-inspection-attempts"
+    expected_id = "sha256:" + "1" * 64
+    shell = f"""
+set -euo pipefail
+build_docker_context=default
+_QCSD_DOCKER_METADATA_TIMEOUT_SECONDS=10
+_qcsd_docker_api_with_timeout() {{
+  local duration="$1" count
+  shift
+  [[ "$*" == '--context default image inspect --format {{{{.Id}}}} collection-tag' ]] || return 99
+  printf '%s\\n' "$duration" >> "$QCSD_CALLS"
+  count="$(wc -l < "$QCSD_CALLS")"
+  case "$QCSD_MODE" in
+    empty-then-bound)
+      if (( count == 1 )); then return 1; fi
+      printf '%s\\n' "$QCSD_EXPECTED"
+      ;;
+    always-empty) return 1 ;;
+    different-id) printf 'sha256:%064d\\n' 2 ;;
+    identity-error)
+      printf '%s\\n' 'Docker pinned daemon identity changed' >&2
+      return 125
+      ;;
+    empty-identity-error) return 125 ;;
+    empty-unexpected-error) return 99 ;;
+    nonempty-failure)
+      printf '%s\\n' 'Cannot connect to Docker' >&2
+      return 1
+      ;;
+    *) return 99 ;;
+  esac
+}}
+{function}
+verify_built_image_binding collection collection-tag "$QCSD_EXPECTED"
+"""
+    result = subprocess.run(
+        ["bash", "-c", shell],
+        env={
+            **os.environ,
+            "QCSD_CALLS": str(calls),
+            "QCSD_MODE": mode,
+            "QCSD_EXPECTED": expected_id,
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert (result.returncode == 0) is succeeds, result.stderr
+    assert tuple(calls.read_text(encoding="utf-8").splitlines()) == attempts
+    assert diagnostic in result.stderr
+
+
 def test_build_validator_cannot_be_shadowed_from_the_caller_directory(
     tmp_path: Path,
 ) -> None:

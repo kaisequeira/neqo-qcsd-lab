@@ -8,10 +8,17 @@ position, the [study runbook](CLASS-STUDY.md) defines formal commands, and the
 accepted evidence.
 
 The v131 build was interrupted by the user (exit 130) after its cohort claim
-was published. It produced no verified build or acquisition authority receipt.
-Preserve the v131 claim and use the allocator's next unused version only after
-this release gate passes. The v130 collection image is useful for cheap
-diagnostics with development source mounted read-only. It cannot attest that
+was published. Its retained transaction was archived with a host-local
+maintenance receipt. The v132 claim was consumed when lifecycle admission
+blocked on that transaction, before a build began. After recovery, v133 built
+the collection image (62/62 BuildKit steps), but its post-export tag inspection timed
+out at the ordinary three-second Docker API service. The v133 transaction was
+archived and recovery passed. None of v131-v133 has a verified build or
+acquisition authority receipt, and none created an acquisition checkpoint.
+Preserve all three claims; use the allocator's next unused version after the
+bounded read-only inspection fix and its affected tests pass. The v130
+collection image is useful for cheap diagnostics with development source
+mounted read-only. It cannot attest that
 source, issue a formal receipt for it, or lend v130's 110/110 browser result to
 the next cohort.
 

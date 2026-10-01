@@ -2852,15 +2852,46 @@ verify_built_image_binding() {
   local target="$1"
   local tag="$2"
   local expected_id="$3"
-  local observed_id
-  observed_id="$(
-    _qcsd_docker_api --context "${build_docker_context}" image inspect \
-      --format '{{.Id}}' "${tag}"
-  )"
-  if [[ "${observed_id}" != "${expected_id}" ]]; then
-    echo "qcsd-lab ${target} image tag no longer binds its build-produced ID" >&2
-    return 1
-  fi
+  local observed_id inspect_status attempt inspect_timeout
+  for attempt in 1 2; do
+    inspect_timeout="${_QCSD_DOCKER_METADATA_TIMEOUT_SECONDS}"
+    (( attempt == 1 )) || inspect_timeout=30
+    # BuildKit export can briefly saturate the daemon after it has written the
+    # IID file. Keep this read-only proof in the pinned API service, and retry
+    # only an empty observation after its first bounded attempt has ended.
+    if observed_id="$(
+      _qcsd_docker_api_with_timeout "${inspect_timeout}" \
+        --context "${build_docker_context}" image inspect \
+        --format '{{.Id}}' "${tag}" 2>&1
+    )"; then
+      inspect_status=0
+    else
+      inspect_status=$?
+    fi
+    if (( inspect_status == 0 )) && [[ "${observed_id}" == "${expected_id}" ]]; then
+      return 0
+    fi
+    if (( inspect_status == 0 )) &&
+       [[ "${observed_id}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+      echo "qcsd-lab ${target} image tag no longer binds its build-produced ID" >&2
+      return 1
+    fi
+    # An expired leased service/transport can surface as 1, 124 or 137.
+    # Status 125 includes pinned-daemon identity and supervisor failures and
+    # must never be treated as a transient empty read.
+    if [[ -n "${observed_id}" ]] ||
+       [[ "${inspect_status}" != 0 && "${inspect_status}" != 1 &&
+          "${inspect_status}" != 124 && "${inspect_status}" != 137 ]]; then
+      echo "qcsd-lab ${target} image binding inspection failed at the ${inspect_timeout}s Docker API boundary (status ${inspect_status})${observed_id:+: ${observed_id}}" >&2
+      return 1
+    fi
+    if (( attempt == 1 )); then
+      echo "qcsd-lab ${target} image binding inspection returned no result at the ${inspect_timeout}s Docker API boundary (status ${inspect_status}); retrying once with a 30s bound" >&2
+    else
+      echo "qcsd-lab ${target} image binding inspection returned no result at the ${inspect_timeout}s Docker API boundary (status ${inspect_status})" >&2
+      return 1
+    fi
+  done
 }
 
 reject_docker_endpoint_overrides() {
