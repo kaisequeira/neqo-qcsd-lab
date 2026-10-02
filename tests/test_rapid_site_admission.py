@@ -277,6 +277,139 @@ def test_checkpoint_chain_preserves_old_attempt_bytes(context, tmp_path):
         admission.write_checkpoint(context)
 
 
+@pytest.fixture
+def checkpoint_context(tmp_path, monkeypatch):
+    root = tmp_path / "checkpoint-acquisition"
+    root.mkdir()
+    context = SimpleNamespace(root=root, provenance_sha256="a" * 64)
+    monkeypatch.setattr(admission, "acquisition_status", lambda _: {
+        "provenance_sha256": context.provenance_sha256, "attempts": {},
+    })
+    return context
+
+
+def _historical_checkpoints(context, inventories):
+    directory = context.root / "checkpoints"
+    directory.mkdir()
+    previous, paths = None, []
+    for sequence, inventory in enumerate(inventories, start=1):
+        payload = {
+            "sequence": sequence, "previous_sha256": previous, "recorded_at": admission._now(),
+            "status": {"provenance_sha256": context.provenance_sha256,
+                       "attempts": {"fixture": [{"inventory": inventory}]}},
+        }
+        path = directory / f"checkpoint-{sequence:06d}.json"
+        raw = admission._json(admission._bind(admission.CHECKPOINT_TYPE, payload))
+        path.write_bytes(raw)
+        previous = admission._sha(raw)
+        paths.append(path)
+    return paths
+
+
+def test_checkpoint_reopens_each_unique_reference_once_per_invocation(checkpoint_context, monkeypatch):
+    evidence = checkpoint_context.root / "evidence.bin"
+    evidence.write_bytes(b"retained evidence")
+    reference = admission.evidence_reference(checkpoint_context.root, evidence)
+    paths = _historical_checkpoints(checkpoint_context, [[reference] * 3, [reference] * 2, [reference]])
+    original_read, counts = admission._read, {}
+
+    def counted_read(path):
+        path = Path(path)
+        counts[path] = counts.get(path, 0) + 1
+        return original_read(path)
+
+    monkeypatch.setattr(admission, "_read", counted_read)
+    output = admission.write_checkpoint(checkpoint_context)
+    assert counts[evidence] == 1
+    assert all(counts[path] == 1 for path in paths)
+    payload = admission._unpack(original_read(output), admission.CHECKPOINT_TYPE)
+    assert payload["sequence"] == 4
+    assert payload["previous_sha256"] == admission._sha(original_read(paths[-1]))
+    counts.clear()
+    admission.write_checkpoint(checkpoint_context)
+    assert counts[evidence] == 1
+
+
+def test_checkpoint_dedup_still_reopens_changed_bytes_on_next_invocation(checkpoint_context):
+    evidence = checkpoint_context.root / "evidence.bin"
+    evidence.write_bytes(b"original bytes")
+    reference = admission.evidence_reference(checkpoint_context.root, evidence)
+    _historical_checkpoints(checkpoint_context, [[reference], [reference]])
+    admission.write_checkpoint(checkpoint_context)
+    evidence.write_bytes(b"changed bytes")
+    with pytest.raises(ValueError, match="bytes changed"):
+        admission.write_checkpoint(checkpoint_context)
+    assert not (checkpoint_context.root / "checkpoints/checkpoint-000004.json").exists()
+
+
+def test_checkpoint_rejects_conflicting_historical_hashes(checkpoint_context):
+    evidence = checkpoint_context.root / "evidence.bin"
+    evidence.write_bytes(b"retained evidence")
+    reference = admission.evidence_reference(checkpoint_context.root, evidence)
+    _historical_checkpoints(checkpoint_context, [[reference], [{**reference, "sha256": "b" * 64}]])
+    with pytest.raises(ValueError, match="conflicting evidence hashes"):
+        admission.write_checkpoint(checkpoint_context)
+    assert not (checkpoint_context.root / "checkpoints/checkpoint-000003.json").exists()
+
+
+@pytest.mark.parametrize("mutation", ["extra-field", "missing-hash", "non-string-hash", "non-string-path"])
+def test_checkpoint_dedup_rejects_malformed_repeated_references(checkpoint_context, mutation):
+    evidence = checkpoint_context.root / "evidence.bin"
+    evidence.write_bytes(b"retained evidence")
+    reference = admission.evidence_reference(checkpoint_context.root, evidence)
+    malformed = dict(reference)
+    if mutation == "extra-field":
+        malformed["extra"] = True
+    elif mutation == "missing-hash":
+        del malformed["sha256"]
+    elif mutation == "non-string-hash":
+        malformed["sha256"] = None
+    else:
+        malformed["path"] = [reference["path"]]
+    _historical_checkpoints(checkpoint_context, [[reference], [malformed, malformed]])
+    with pytest.raises(ValueError, match="reference is (malformed|unsafe)"):
+        admission.write_checkpoint(checkpoint_context)
+
+
+@pytest.mark.parametrize("kind", ["escape", "absolute", "symlink"])
+def test_checkpoint_rejects_unsafe_references_even_when_repeated(checkpoint_context, kind):
+    evidence = checkpoint_context.root / "evidence.bin"
+    evidence.write_bytes(b"retained evidence")
+    if kind == "escape":
+        name = "../evidence.bin"
+    elif kind == "absolute":
+        name = str(evidence)
+    else:
+        (checkpoint_context.root / "linked.bin").symlink_to(evidence)
+        name = "linked.bin"
+    reference = {"path": name, "sha256": admission._sha(evidence.read_bytes())}
+    _historical_checkpoints(checkpoint_context, [[reference, reference]])
+    with pytest.raises(ValueError, match="(reference is unsafe|contains a symlink)"):
+        admission.write_checkpoint(checkpoint_context)
+
+
+@pytest.mark.parametrize("mutation", ["gap", "sequence", "predecessor", "provenance", "envelope"])
+def test_checkpoint_dedup_preserves_chain_validation(checkpoint_context, mutation):
+    path = _historical_checkpoints(checkpoint_context, [[]])[0]
+    receipt = json.loads(path.read_bytes())
+    if mutation == "gap":
+        path.rename(path.with_name("checkpoint-000002.json"))
+    else:
+        if mutation == "sequence":
+            receipt["payload"]["sequence"] = 2
+        elif mutation == "predecessor":
+            receipt["payload"]["previous_sha256"] = "b" * 64
+        elif mutation == "provenance":
+            receipt["payload"]["status"]["provenance_sha256"] = "b" * 64
+        if mutation == "envelope":
+            receipt["payload_sha256"] = "b" * 64
+        else:
+            receipt = admission._bind(admission.CHECKPOINT_TYPE, receipt["payload"])
+        path.write_bytes(admission._json(receipt))
+    with pytest.raises(ValueError, match="(checkpoint chain|invalid .*checkpoint receipt)"):
+        admission.write_checkpoint(checkpoint_context)
+
+
 def test_cli_help_exposes_actual_navigation_probe_prepare_and_seal(capsys):
     with pytest.raises(SystemExit) as exit_info:
         rapid_acquire.main(["--help"])

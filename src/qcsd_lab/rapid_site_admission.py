@@ -1924,18 +1924,29 @@ def write_checkpoint(context: AdmissionContext) -> Path:
     directory.mkdir(exist_ok=True)
     paths = sorted(directory.glob("checkpoint-*.json"))
     previous = None
+    checked_references: dict[str, str] = {}
     for number, path in enumerate(paths, start=1):
         if path.name != f"checkpoint-{number:06d}.json":
             raise ValueError("checkpoint chain has gaps")
-        value = _unpack(_read(path), CHECKPOINT_TYPE)
+        raw = _read(path)
+        value = _unpack(raw, CHECKPOINT_TYPE)
         if (value.get("sequence") != number or value.get("previous_sha256") != previous
             or value.get("status", {}).get("provenance_sha256") != context.provenance_sha256):
             raise ValueError("checkpoint chain changed")
         for records in value["status"].get("attempts", {}).values():
             for record in records:
                 for reference in record.get("inventory", []):
+                    # Repeated snapshots must agree, while every unique file is
+                    # reopened and hashed anew during this invocation.
+                    if (isinstance(reference, Mapping) and set(reference) == {"path", "sha256"}
+                        and isinstance(reference["path"], str) and isinstance(reference["sha256"], str)
+                        and reference["path"] in checked_references):
+                        if checked_references[reference["path"]] != reference["sha256"]:
+                            raise ValueError("checkpoint inventories declare conflicting evidence hashes")
+                        continue
                     _child(context.root, reference)
-        previous = _sha(_read(path))
+                    checked_references[reference["path"]] = reference["sha256"]
+        previous = _sha(raw)
     output = directory / f"checkpoint-{len(paths) + 1:06d}.json"
     durable_create(output, _json(_bind(CHECKPOINT_TYPE, {
         "sequence": len(paths) + 1, "previous_sha256": previous, "recorded_at": _now(), "status": status,
