@@ -435,6 +435,8 @@ def _verify_public_target(target: Path, *, handoff: Path | None, deep: bool) -> 
     value = att._load_regular_json(path, "20-site public verification target")
     receipt_type = value.get("receipt_type")
     accepted_receipt_types = {
+        att.ACQUISITION_AUTHORITY_RECEIPT_TYPE,
+        att.FOUNDATION_RECEIPT_TYPE,
         class_evaluation.EVALUATION_RECEIPT_TYPE,
         att.READINESS_RECEIPT_TYPE,
         att.HISTORICAL_SNAPSHOT_RECEIPT_TYPE,
@@ -457,7 +459,15 @@ def _verify_public_target(target: Path, *, handoff: Path | None, deep: bool) -> 
         return _require_profile_evaluation(
             path, root, replay_attacks=deep, deep_verify_handoff=deep,
         )
-    if receipt_type == att.READINESS_RECEIPT_TYPE:
+    if receipt_type == att.ACQUISITION_AUTHORITY_RECEIPT_TYPE:
+        details = att.validate_class_acquisition_authority(
+            path, runtime_role="collection", allow_historical=False,
+        )
+    elif receipt_type == att.FOUNDATION_RECEIPT_TYPE:
+        details = att.validate_class_foundation_attestation(
+            path, deep_code_gate=deep, runtime_role="collection",
+        )
+    elif receipt_type == att.READINESS_RECEIPT_TYPE:
         details = att.validate_class_readiness_attestation(path, deep_code_gate=deep)
     elif receipt_type == att.HISTORICAL_SNAPSHOT_RECEIPT_TYPE:
         details = att.validate_class_historical_snapshot(path)

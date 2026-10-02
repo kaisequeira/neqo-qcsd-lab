@@ -267,6 +267,83 @@ def test_v2_verify_rejects_cross_profile_receipt(
         public.run_profile_public_stage("verify", target=target)
 
 
+@pytest.mark.parametrize(("receipt_type", "validator_name"), (
+    (public.att.ACQUISITION_AUTHORITY_RECEIPT_TYPE, "validate_class_acquisition_authority"),
+    (public.att.FOUNDATION_RECEIPT_TYPE, "validate_class_foundation_attestation"),
+))
+@pytest.mark.parametrize("deep", (True, False))
+def test_v2_verify_reconstructs_profile_promotion_receipts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    receipt_type: str, validator_name: str, deep: bool,
+) -> None:
+    target = _file(tmp_path / "promotion.json", canonical_json_bytes(bind_receipt({
+        "study_id": CLASS20_STUDY_ID,
+        "study_profile_sha256": _CLASS20_OVERLAY_SHA256,
+    }, receipt_type=receipt_type)))
+    expected = {
+        "study_id": CLASS20_STUDY_ID,
+        "study_profile_sha256": _CLASS20_OVERLAY_SHA256,
+        "path": str(target),
+    }
+    calls = []
+
+    def validate(path: Path, **kwargs):
+        calls.append((path, kwargs))
+        return expected
+
+    monkeypatch.setattr(public.att, validator_name, validate)
+    result = public.run_profile_public_stage("verify", target=target, deep=deep)
+    assert result["state"] == "complete"
+    assert result["details"] == expected
+    assert calls == [(target, (
+        {"runtime_role": "collection", "allow_historical": False}
+        if receipt_type == public.att.ACQUISITION_AUTHORITY_RECEIPT_TYPE
+        else {"deep_code_gate": deep, "runtime_role": "collection"}
+    ))]
+
+
+@pytest.mark.parametrize(("receipt_type", "validator_name"), (
+    (public.att.ACQUISITION_AUTHORITY_RECEIPT_TYPE, "validate_class_acquisition_authority"),
+    (public.att.FOUNDATION_RECEIPT_TYPE, "validate_class_foundation_attestation"),
+))
+def test_v2_verify_rejects_other_profile_promotion_before_reconstruction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    receipt_type: str, validator_name: str,
+) -> None:
+    target = _file(tmp_path / "promotion.json", canonical_json_bytes(bind_receipt({
+        "study_id": CLASS20_STUDY_ID,
+        "study_profile_sha256": "0" * 64,
+    }, receipt_type=receipt_type)))
+    monkeypatch.setattr(
+        public.att, validator_name,
+        lambda *_args, **_kwargs: pytest.fail("replayed another profile"),
+    )
+    with pytest.raises(ValueError, match="another study profile"):
+        public.run_profile_public_stage("verify", target=target)
+
+
+@pytest.mark.parametrize(("receipt_type", "validator_name"), (
+    (public.att.ACQUISITION_AUTHORITY_RECEIPT_TYPE, "validate_class_acquisition_authority"),
+    (public.att.FOUNDATION_RECEIPT_TYPE, "validate_class_foundation_attestation"),
+))
+def test_v2_verify_rejects_tampered_promotion_before_reconstruction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    receipt_type: str, validator_name: str,
+) -> None:
+    receipt = bind_receipt({
+        "study_id": CLASS20_STUDY_ID,
+        "study_profile_sha256": _CLASS20_OVERLAY_SHA256,
+    }, receipt_type=receipt_type)
+    receipt["payload"]["cohort_version"] = 999
+    target = _file(tmp_path / "promotion.json", canonical_json_bytes(receipt))
+    monkeypatch.setattr(
+        public.att, validator_name,
+        lambda *_args, **_kwargs: pytest.fail("replayed tampered receipt"),
+    )
+    with pytest.raises(ValueError, match="payload SHA-256"):
+        public.run_profile_public_stage("verify", target=target)
+
+
 def test_v2_comparison_template_and_final_attestation_route(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

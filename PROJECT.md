@@ -114,6 +114,23 @@ source mounted read-only. Its log is listed in the [evidence index](docs/EVIDENC
 This engineering check gives no build or acquisition authority. Any corrected
 source needs the next unused cohort and fresh downstream proof.
 
+On **v145**, clean Lab source `8309fa38bf711f80fdf88e6612fbcd8dade991bd`
+and Rust Gitlink `acc2c6ae8ef2a12be582dd7e1af0dc3817040fd5`
+passed the no-cache three-image build and pinned-CDP check. The 20-site
+acquisition correctness suite passed **2,528 tests with 31 skipped** and issued
+an acquisition-only authority receipt; its in-image creation check passed.
+The separate public `class-study verify` command then rejected that receipt
+with `20-site public verification target type is not registered`. The v145
+verification router omitted acquisition authority from its accepted target
+types, although the acquisition initializer has its own authority validator.
+The corrected router passed focused tests and a read-only check of the real
+v145 receipt inside the collection image; the initializer's authority
+validator and binding passed inside the preparation image. These engineering
+checks grant no v145 acquisition authority. No v145 acquisition root was
+initialized and no pilot or formal sample was accepted. Preserve the v145
+receipts and failed verification; the corrected source requires a fresh cohort
+before formal acquisition.
+
 The latest completed public-page acquisition attempt is **v139** on clean Lab source
 `34088bb687ec683f16597da41e2c02a11f201447` and pinned Rust Gitlink
 `a8d8664cd31cbc4cc1ecb4fd5abc5a1d3ee153ae`. Its no-cache build,
@@ -416,8 +433,9 @@ scientific credit.
 | v139 build, pinned CDP and acquisition authority | `artifacts/buflo-study/build-execution-v139.json`, `artifacts/buflo-study/build-completion-v139.json`, `artifacts/buflo-study/pinned-cdp-execution-v139.json` and `artifacts/class-study-acquisition-authority-v139.json` are bound to v139 only; public acquisition only |
 | v143 20-site build, pinned CDP and issued authority | `artifacts/buflo-study/build-execution-v143.json`, `artifacts/buflo-study/build-completion-v143.json`, `artifacts/buflo-study/pinned-cdp-execution-v143.json` and `artifacts/classifier-multiorigin20-v1-acquisition-authority-v143.json` are bound to clean Lab `032c5767f398aeec9e0d5c51bc3a12257ec9bff9`; correctness passed 2,525 tests, 31 skipped. Host verification and acquisition initialization stopped on the `/lab` versus host profile-path comparison; no 20-site root or capture credit |
 | v144 failed preparation build | Clean Lab `62d7dc66db65bc2f157d08a0e638a05f27c6e6b4` and Rust Gitlink `ca70e626275fb3dfb4520696568e7b2ad800174f`; collection image completed, then one exact-handoff Rust test failed after 284 passed in preparation. `artifacts/buflo-study/build-failure-v144/` preserves the exact failure and archived lifecycle roots; recovery passed. No paired build receipt, pinned CDP, 20-site authority, acquisition root or capture credit. V144 is consumed |
+| v145 20-site build, pinned CDP and issued authority | Clean Lab `8309fa38bf711f80fdf88e6612fbcd8dade991bd` and Rust Gitlink `acc2c6ae8ef2a12be582dd7e1af0dc3817040fd5`; no-cache build, pinned CDP and acquisition correctness passed (2,528 tests, 31 skipped). `artifacts/classifier-multiorigin20-v1-acquisition-authority-v145.json` was issued with acquisition-only scope, but public `verify` rejected its unregistered target type. No acquisition root or accepted credit |
 | Acquisition checkpoint | `artifacts/classifier-multiorigin100-v1-acquisition-v139/` is the latest initialized root; eight site-rejection terminals, one inconclusive pending screen and one durable internal browser-control error, with 0/120 accepted |
-| Next execution | Freeze the focused-tested portable host authority-path repair and test-only timing correction on clean source, allocate the next unused cohort and reprove the no-cache build, pinned CDP, host-verified 20-site acquisition authority and initialization. Supervise bounded 20-site search actions; complete same-source browser and full defence foundation before fitting or capture |
+| Next execution | Correct the 20-site public verification route, test its receipt-type handling, freeze clean source, then allocate the next unused cohort and reprove the no-cache build, pinned CDP, 20-site acquisition authority and initialization. Supervise bounded 20-site search actions; complete same-source browser and full defence foundation before fitting or capture |
 
 Preserve the v130 qualification evidence and failed authority attempt, the v129
 checkpoint and failed attempts, v128 failed build, v127
@@ -543,14 +561,14 @@ evidence; the separate `docs/CLASS-STUDY-20.md` profile is prospective
 until its source and evidence chain pass.
 
 1. Preserve the verified migration manifests, historical handoff, v126 through
-   v144 receipts, claims and checkpoints, and all failed watcher evidence.
+   v145 receipts, claims and checkpoints, and all failed watcher evidence.
 2. Retain the registered Tranco candidate catalogue for this formal run.
-3. Freeze the tested portable 20-site host authority-path repair and v144
-   test-timing correction as a clean source revision. Obtain the allocator's
-   next unused cohort, build fresh no-cache images, pass pinned CDP and
-   independently verify profile-bound acquisition authority on the host.
-   V143's issued receipt, v144's failed build and the v139 root remain bound
-   to their original sources and rules.
+3. Repair and test the 20-site public `verify` route for acquisition-only
+   authority, then freeze the corrected source. Obtain the allocator's next
+   unused cohort, build fresh no-cache images, pass pinned CDP and independently
+   verify profile-bound acquisition authority. V143 and v145 receipts, v144's
+   failed build and the v139 root remain bound to their original sources and
+   rules.
 4. Initialize a new versioned acquisition root, run monitored actions through
    an actual baseline and both short-horizon observations, then acquire the
    profile's 30-site pilot with genuine short-horizon prepared observations
