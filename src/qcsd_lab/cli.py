@@ -61,6 +61,11 @@ def parser() -> argparse.ArgumentParser:
             "HTTP/3 preparation"
         ),
     )
+    prepare.add_argument(
+        "--application-response-policy",
+        choices=("completed-terminal-http-errors-v1",),
+        help="retain completed auxiliary HTTP error responses under the explicit leaf policy",
+    )
 
     commands.add_parser(
         "qualify-chaff",
@@ -377,6 +382,7 @@ def main(argv: list[str] | None = None) -> None:
                     os.environ.get("QCSD_WORKLOAD_ROOT", str(LAB_ROOT / "config/workloads"))
                 ),
                 require_complete_coverage=args.require_complete_coverage,
+                application_response_policy=args.application_response_policy,
             )
         except (FileExistsError, OSError, PreparationError, RuntimeError, ValueError) as error:
             _fail(error)

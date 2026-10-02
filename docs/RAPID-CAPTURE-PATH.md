@@ -53,13 +53,26 @@ changes to the source-bound container images.
 
 ## Current checks and remaining blockers
 
-**Latest update:** the checkpoint I/O fix passed 16 focused tests and is
-published. Fresh context 007 initialized using the same image/client; its
-40-action batch stops at the first admitted site for an immediate qualification
-and capture check. The study and five traffic settings are unchanged. Context
-006 and all its attempts remain preserved. The [evidence index](EVIDENCE-INDEX.md#checkpoint-io-fix-and-context-007)
-records the source, runtime and new context identities. No image rebuild or
-defence requalification was needed; accepted study counters remain zero.
+**Latest update:** context 007's independently reopened checkpoint has
+**11 screening decisions and zero admitted sites** at
+`2026-10-02T20:53:46.146589Z`. Its second bounded batch subsequently completed
+normally at the 40-action limit on the unchanged old image/client. No further
+old-context batch has been launched. Context 006 and all its attempts remain
+preserved.
+
+The [new response policy](APPLICATION-RESPONSE-POLICY.md) addresses a concrete
+preparation failure: a full HTTP/3 error response from an auxiliary resource
+was treated as an incomplete workload. It keeps the graph and real response,
+and applies only to complete non-primary terminal leaves. The native change
+passed **16 focused tests and strict library Clippy**. Final Python integration
+passed **142 tests**, and all **24 new admission cases** pass. The new rule is
+frozen in [selection revision 5](../config/curated-sources/crux73-tranco600-rapid-v5-selection-v5.json)
+under the unchanged v5 profile. Installed-runtime checks and actual
+complete-site/five-setting captures remain pending; an incremental cached
+build will install the change. The
+[evidence index](EVIDENCE-INDEX.md#application-response-policy-repair) records
+the current proof. The target stays **50 × 5 × 64 = 16,000**; accepted study
+counters remain zero.
 
 The fresh three-setting successor on the same clean runtime independently
 deep-verifies as **valid but incomplete, 2/3**, with 31 authoritative files.

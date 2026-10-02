@@ -6,6 +6,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from .application_response_policy import (
+    LEGACY_APPLICATION_RESPONSE_POLICY,
+    application_response_policy,
+    validate_application_responses,
+)
 from .experiment import (
     EVIDENCE_FILE,
     EXPERIMENT_FILE,
@@ -18,7 +23,7 @@ from .experiment import (
     validate_durable_attempt_evidence,
     validate_resume_fingerprints,
 )
-from .util import atomic_text, sha256_file
+from .util import atomic_text, load_json, sha256_file
 
 
 AUTHORITATIVE_DIRECTORIES = ("inputs", "samples", "failures")
@@ -319,3 +324,34 @@ def _validate_frozen_contract(
         experiment,
         allow_historical_research_bundle=allow_historical_research_bundle,
     )
+    _validate_policy_application_responses(root, experiment)
+
+
+def _validate_policy_application_responses(root: Path, experiment: Mapping[str, Any]) -> None:
+    """Reopen actual responses for every accepted opt-in sample, including baseline."""
+
+    prepared_by_id: dict[str, dict[str, Any]] = {}
+    for workload in experiment["configuration"]["workloads"]:
+        relative = workload.get("manifest")
+        if relative is None:
+            continue
+        path = root / relative
+        if path.is_symlink() or not path.resolve().is_relative_to(root.resolve()):
+            raise ValueError("prepared application policy input escapes result")
+        prepared = load_json(path)
+        if application_response_policy(prepared) == LEGACY_APPLICATION_RESPONSE_POLICY:
+            continue
+        if sha256_file(path) != workload.get("sha256"):
+            raise ValueError("prepared application policy input hash differs from configuration")
+        prepared_by_id[workload["id"]] = prepared
+    if not prepared_by_id:
+        return
+    for sample in experiment["samples"]:
+        if sample["state"] != "accepted" or sample["workload_id"] not in prepared_by_id:
+            continue
+        run_path = resolved_sample_directory(root, sample) / "neqo/run.json"
+        if run_path.is_symlink() or not run_path.is_file():
+            raise ValueError("accepted policy sample lacks a regular runner receipt")
+        validate_application_responses(
+            prepared_by_id[sample["workload_id"]], load_json(run_path), require_identity=True
+        )

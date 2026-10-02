@@ -41,19 +41,35 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Latest operational update, 3 October:** the narrow checkpoint I/O fix is
-published as `2ac92edd1fcb43acfab7523f03aca79fadb481bc`. Sixteen focused tests
-passed. It checks each unique historical evidence reference once per call,
-while preserving file hashes and the complete checkpoint chain. Context 006's
-40-action batch completed normally with 27 terminal decisions and no admitted
-sites. Its attempts and checkpoints remain unchanged. Fresh context **007**
-initialized successfully at `2026-10-02T19:46:36.254257Z`, using the same image
-and client. Only preparation and attempt source groups changed. Its new root
-registry independently reopens 73 curated and 40 fallback observations; a
-40-action batch is running with a stop at the first admission for an immediate
-capture diagnostic. No image rebuild or defence requalification occurred.
-The target remains **50 × 5 × 64 = 16,000**; accepted study counts remain zero.
-See the [evidence index](docs/EVIDENCE-INDEX.md#checkpoint-io-fix-and-context-007).
+**Latest operational update, 3 October:** independent reopening of context
+**007** at `2026-10-02T20:53:46.146589Z` found **11 sealed screening decisions,
+zero admitted sites and candidate 12 next**. Its second bounded batch is
+running on the unchanged image/client and stops at the first admission.
+Context 006 and its 27 decisions remain preserved. The earlier checkpoint I/O
+fix is published and tested; the [evidence index](docs/EVIDENCE-INDEX.md#checkpoint-io-fix-and-context-007)
+records its source and runtime identities.
+
+A retained Poki request completed over HTTP/3 with a real **401 response**.
+The client treated that auxiliary response as a failed application download.
+The [prospective response policy](docs/APPLICATION-RESPONSE-POLICY.md) now
+permits complete error responses on eligible non-primary terminal leaves,
+while retaining their status, body and the complete resource graph. Primary
+pages and padding resources still require successful responses. The native
+implementation is published at `1cda2d2446b53d0bdee185e81755fb5115744eb1`;
+**16 focused tests and strict library Clippy passed**. Final Python integration
+passed **142 tests in 232 seconds**; all **24 new admission tests**, five
+cohort/legacy checks and eight planner/adapter checks also pass. The
+[revision-5 receipt](config/curated-sources/crux73-tranco600-rapid-v5-selection-v5.json)
+was frozen at `2026-10-02T21:06:26.442961Z`, SHA-256
+`45c0e5cbdb7b5388c72d9e23de63748d085c9f027c03c06b74b2809f06a3334f`.
+It keeps the v5 profile, candidate order, five conditions and 16,000 target.
+The new installed client and fresh site/capture checks remain pending. The
+cached build recipe reuses existing dependencies; it does not require another
+full qualification cycle. Context 007 does not run this new policy.
+The second 40-action context-007 batch has now completed normally at its
+action limit; it is not running. Its earlier independently reopened count
+above is a dated snapshot. The target remains **50 × 5 × 64 = 16,000**;
+all accepted study counters are zero.
 
 The user has authorised a prospective [rapid 50-class study](docs/RAPID-CLASS-STUDY.md)
 to reach capture sooner. Its [curated raw source](config/curated-sources/crux-73-v1.raw.json)

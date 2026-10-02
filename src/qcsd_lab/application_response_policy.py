@@ -1,0 +1,234 @@
+"""Prospective full-graph HTTP response policy, separate from 2xx qualification.
+
+Completed HTTP errors are real responses. This policy permits only auxiliary
+terminal leaves and never makes them known-valid navigation/chaff resources.
+"""
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from copy import deepcopy
+import re
+from typing import Any
+from urllib.parse import urlsplit
+
+HTTP_2XX_ONLY_POLICY = "http-2xx-only-v1"
+COMPLETED_TERMINAL_HTTP_ERRORS_POLICY = "completed-terminal-http-errors-v1"
+LEGACY_APPLICATION_RESPONSE_POLICY = HTTP_2XX_ONLY_POLICY
+TERMINAL_HTTP_ERROR_POLICY = COMPLETED_TERMINAL_HTTP_ERRORS_POLICY
+SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+
+
+def validate_application_response_policy(value: Any) -> str:
+    """Validate a prospective opt-in argument or optional prepared field."""
+    if value is None:
+        return HTTP_2XX_ONLY_POLICY
+    if not isinstance(value, str) or value not in {HTTP_2XX_ONLY_POLICY, COMPLETED_TERMINAL_HTTP_ERRORS_POLICY}:
+        raise ValueError("application response policy is unknown or malformed")
+    return value
+
+
+def application_response_policy(manifest: Mapping[str, Any]) -> str:
+    preparation = manifest.get("preparation")
+    if not isinstance(preparation, Mapping) or "application_response_policy" not in preparation:
+        return HTTP_2XX_ONLY_POLICY
+    value = preparation["application_response_policy"]
+    if value is None:
+        raise ValueError("explicit application response policy cannot be null")
+    return validate_application_response_policy(value)
+
+
+def terminal_http_error_resource_allowed(
+    resource: Mapping[str, Any], resources: Sequence[Mapping[str, Any]],
+) -> bool:
+    """The unique primary Document is id 0; negative auxiliary leaves stay False."""
+    identifier = resource.get("id")
+    return bool(type(identifier) is int and identifier != 0
+                and resource.get("known_valid") is False
+                and resource.get("chaff_priority") is False
+                and bool(resource.get("depends_on"))
+                and not any(identifier in row.get("depends_on", []) for row in resources))
+
+
+def validate_prepared_response_graph(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    policy = application_response_policy(manifest)
+    preparation = manifest.get("preparation")
+    resources = manifest.get("resources")
+    expected = preparation.get("expected_responses") if isinstance(preparation, Mapping) else None
+    if not isinstance(resources, list) or not isinstance(expected, list):
+        raise ValueError("prepared application graph or expected responses are missing")
+    by_id = {row.get("id"): row for row in resources if isinstance(row, Mapping)}
+    responses = {row.get("resource_id"): row for row in expected if isinstance(row, Mapping)}
+    if (not by_id or len(by_id) != len(resources) or len(responses) != len(expected)
+        or set(by_id) != set(responses)
+        or any(type(identifier) is not int for identifier in (*by_id, *responses))):
+        raise ValueError("prepared response identities must cover the full unique graph")
+    if any(not isinstance(row.get("depends_on"), list)
+           or any(type(identifier) is not int or identifier not in by_id for identifier in row["depends_on"])
+           for row in resources):
+        raise ValueError("prepared application graph contains invalid dependency identifiers")
+    negative = []
+    for identifier, response in responses.items():
+        status, size, digest = response.get("status"), response.get("bytes"), response.get("body_sha256")
+        if (type(status) is not int or not 100 <= status <= 599 or type(size) is not int or size < 0
+            or not isinstance(digest, str) or SHA256.fullmatch(digest) is None):
+            raise ValueError("prepared application response identity is malformed")
+        resource = by_id[identifier]
+        if 200 <= status < 300:
+            if policy == COMPLETED_TERMINAL_HTTP_ERRORS_POLICY and resource.get("known_valid") is not True:
+                raise ValueError("2xx resources must retain their actual known-valid qualification")
+            continue
+        if (policy != COMPLETED_TERMINAL_HTTP_ERRORS_POLICY or not 400 <= status <= 599
+            or not terminal_http_error_resource_allowed(resource, resources)):
+            raise ValueError("non-2xx response is not an authorized auxiliary terminal leaf")
+        negative.append(identifier)
+    if policy == COMPLETED_TERMINAL_HTTP_ERRORS_POLICY:
+        primary = by_id.get(0)
+        if (primary is None or primary.get("type") != "Document" or primary.get("depends_on") != []
+            or primary.get("url") not in {preparation.get("source_url"), preparation.get("final_url")}
+            or primary.get("known_valid") is not True or not 200 <= responses[0]["status"] < 300):
+            raise ValueError("application response policy requires a known-valid 2xx primary Document")
+    return {"policy": policy, "resource_ids": sorted(by_id),
+            "terminal_http_error_resource_ids": sorted(negative)}
+
+
+def validate_application_responses(
+    manifest: Mapping[str, Any], run: Mapping[str, Any], *, require_identity: bool = True,
+) -> dict[str, Any]:
+    """Reopen exact delivery without normalizing raw status or runner outcomes."""
+    graph = validate_prepared_response_graph(manifest)
+    policy = graph["policy"]
+    recorded_policy = run.get("application_response_policy", HTTP_2XX_ONLY_POLICY)
+    if recorded_policy != policy:
+        raise ValueError("runner application response policy differs from prepared policy")
+    if (run.get("completion_status") != "complete" or run.get("error") is not None
+        or run.get("error_class") is not None or run.get("terminal_evidence_render_errors", []) != []
+        or (policy == COMPLETED_TERMINAL_HTTP_ERRORS_POLICY and run.get("terminal_evidence_render_errors") != [])):
+        raise ValueError("application runner did not complete with intact terminal evidence")
+    resources = {row["id"]: row for row in manifest["resources"]}
+    expected = {row["resource_id"]: row for row in manifest["preparation"]["expected_responses"]}
+    rows = run.get("responses")
+    if not isinstance(rows, list):
+        raise ValueError("application runner has no response ledger")
+    seen = set()
+    signatures = []
+    for row in rows:
+        if (not isinstance(row, Mapping) or type(row.get("resource_id")) is not int
+            or row["resource_id"] in seen or row["resource_id"] not in resources):
+            raise ValueError("application response ledger changed unique full-graph resource IDs")
+        identifier = row["resource_id"]
+        target = expected[identifier]
+        if (row.get("url") != resources[identifier]["url"] or row.get("complete") is not True
+            or row.get("outcome") != "succeeded" or type(row.get("status")) is not int
+            or row["status"] != target["status"] or type(row.get("bytes")) is not int
+            or row["bytes"] < 0 or not isinstance(row.get("body_sha256"), str)
+            or SHA256.fullmatch(row["body_sha256"]) is None):
+            raise ValueError(f"application resource {identifier} was not delivered under its exact declared status")
+        if require_identity and (row["bytes"] != target["bytes"] or row["body_sha256"] != target["body_sha256"]):
+            raise ValueError(f"application resource {identifier} differs from prepared response identity")
+        if identifier in graph["terminal_http_error_resource_ids"] and row.get("content_length") is not None:
+            length = row["content_length"]
+            if type(length) is not int or length < 0 or length != row["bytes"]:
+                raise ValueError(f"application resource {identifier} did not retain its declared complete body")
+        seen.add(identifier)
+        signatures.append((identifier, row["status"], row["bytes"], row["body_sha256"], row["outcome"]))
+    if seen != set(resources):
+        raise ValueError("application response ledger omits a full-graph resource")
+    return {**graph, "response_signature": sorted(signatures)}
+
+
+validate_application_response_graph = validate_prepared_response_graph
+
+
+def validate_application_response_policy_evidence(
+    manifest: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Validate compact actual preflight facts and the three identity witnesses.
+
+    Production probe resolution independently reopens the raw child/run ledger;
+    these compact facts preserve the negative GET and hashes without embedding
+    bodies, packet CSVs or the whole probe graph in every prepared workload.
+    """
+    graph = validate_prepared_response_graph(manifest)
+    preparation = manifest["preparation"]
+    evidence = preparation.get("application_response_policy_evidence")
+    identifiers = graph["terminal_http_error_resource_ids"]
+    if not identifiers:
+        if evidence is not None:
+            raise ValueError("application response policy evidence has no declared terminal HTTP errors")
+        return None
+    if graph["policy"] != COMPLETED_TERMINAL_HTTP_ERRORS_POLICY or not isinstance(evidence, Mapping):
+        raise ValueError("declared terminal HTTP errors lack their retained preflight evidence")
+    keys = {"schema_version", "policy", "probe_input_sha256", "probe_output_sha256",
+            "child_execution_sha256", "get_run_sha256", "client_provenance", "get_responses",
+            "get_endpoints", "stability_run_sha256s", "stability_responses"}
+    if (set(evidence) != keys or type(evidence["schema_version"]) is not int or evidence["schema_version"] != 1
+        or evidence["policy"] != graph["policy"]):
+        raise ValueError("application response policy evidence fields changed")
+    for key in ("probe_input_sha256", "probe_output_sha256", "child_execution_sha256", "get_run_sha256"):
+        if not isinstance(evidence[key], str) or SHA256.fullmatch(evidence[key]) is None:
+            raise ValueError("application response policy evidence lacks actual raw hashes")
+    provenance = evidence["client_provenance"]
+    provenance_keys = {"neqo_version", "neqo_base_commit", "published_qcsd_commit", "migration_commit"}
+    if (not isinstance(provenance, Mapping) or set(provenance) != provenance_keys
+        or any(provenance[key] != preparation[key] for key in provenance_keys)):
+        raise ValueError("terminal HTTP error proof differs from the actual preparation client")
+    expected = {row["resource_id"]: row for row in preparation["expected_responses"]}
+    resources = {row["id"]: row for row in manifest["resources"]}
+    rows = evidence["get_responses"]
+    row_keys = {"resource_id", "url", "status", "bytes", "body_sha256", "complete", "outcome", "request_headers"}
+    if (not isinstance(rows, list) or len(rows) != len(identifiers)
+        or [row.get("resource_id") for row in rows if isinstance(row, Mapping)] != identifiers):
+        raise ValueError("terminal HTTP error proof changed the negative resource inventory")
+    for row in rows:
+        identifier = row["resource_id"]
+        target = expected[identifier]
+        if (set(row) != row_keys or row["url"] != resources[identifier]["url"]
+            or type(row["resource_id"]) is not int
+            or row["complete"] is not True or row["outcome"] != "failed"
+            or any(row[key] != target[key] for key in ("status", "bytes", "body_sha256"))
+            or type(row["status"]) is not int or type(row["bytes"]) is not int
+            or not isinstance(row["request_headers"], list)
+            or any(not isinstance(pair, list) or len(pair) != 2
+                   or any(not isinstance(part, str) for part in pair) for pair in row["request_headers"])):
+            raise ValueError("retained negative GET differs from the frozen completed response identity")
+    endpoints = evidence["get_endpoints"]
+    if (not isinstance(endpoints, list) or not endpoints
+        or any(not isinstance(row, Mapping) or set(row) != {"id", "origin", "negotiated_protocol"}
+               or type(row["id"]) is not int or row["id"] < 0
+               or not isinstance(row["origin"], str) or row["negotiated_protocol"] != "h3" for row in endpoints)):
+        raise ValueError("negative GET proof lacks actual HTTP/3 endpoint identities")
+    def origin(url: str) -> str:
+        parsed = urlsplit(url)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError("negative GET proof contains a non-public HTTPS origin")
+        host = parsed.hostname.lower()
+        if ":" in host:
+            host = f"[{host}]"
+        suffix = f":{parsed.port}" if parsed.port not in (None, 443) else ""
+        return f"https://{host}{suffix}"
+    if (len({row["id"] for row in endpoints}) != len(endpoints)
+        or len({origin(row["origin"]) for row in endpoints}) != len(endpoints)
+        or any(row["origin"] != origin(row["origin"]) + "/" for row in endpoints)
+        or {origin(row["origin"]) for row in endpoints} != {origin(row["url"]) for row in rows}):
+        raise ValueError("negative GET proof endpoints differ from exact terminal-resource origins")
+    witnesses = evidence["stability_responses"]
+    hashes = evidence["stability_run_sha256s"]
+    count = preparation.get("stability_runs")
+    if (type(count) is not int or count < 2 or not isinstance(hashes, list) or len(hashes) != count
+        or any(not isinstance(value, str) or SHA256.fullmatch(value) is None for value in hashes)
+        or not isinstance(witnesses, list) or len(witnesses) != count):
+        raise ValueError("terminal HTTP error proof requires every declared stability witness")
+    for witness in witnesses:
+        if (not isinstance(witness, list) or len(witness) != len(identifiers)
+            or [row.get("resource_id") for row in witness if isinstance(row, Mapping)] != identifiers):
+            raise ValueError("terminal HTTP error stability witness changed resource IDs")
+        for row in witness:
+            target = expected[row["resource_id"]]
+            if (set(row) != row_keys or row["url"] != resources[row["resource_id"]]["url"]
+                or row["complete"] is not True or row["outcome"] != "succeeded"
+                or type(row["resource_id"]) is not int or type(row["status"]) is not int
+                or type(row["bytes"]) is not int
+                or any(row[key] != target[key] for key in ("status", "bytes", "body_sha256"))
+                or row["request_headers"] != resources[row["resource_id"]]["headers"]):
+                raise ValueError("terminal HTTP error stability witness differs from frozen identity/headers")
+    return deepcopy(dict(evidence))

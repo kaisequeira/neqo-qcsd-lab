@@ -149,6 +149,7 @@ paths = [
 paths += [
     "src/qcsd_lab/__init__.py",
     "src/qcsd_lab/analysis.py",
+    "src/qcsd_lab/application_response_policy.py",
     "src/qcsd_lab/capture.py",
     "src/qcsd_lab/capture_session.py",
     "src/qcsd_lab/chaff_qualification.py",
@@ -594,7 +595,7 @@ import json
 import subprocess
 from pathlib import Path
 
-domain = "qcsd-chaff-qualification-implementation-v1"
+domain = "qcsd-chaff-qualification-implementation-v2"
 source_files = json.loads(Path("/tmp/qualification-source-files.json").read_text())
 source = json.loads(Path("/usr/share/qcsd-lab/source.json").read_text())
 package = Path(importlib.util.find_spec("qcsd_lab").submodule_search_locations[0])
@@ -616,7 +617,7 @@ def file_receipt(path):
     value = Path(path)
     return {"path": path, "sha256": hashlib.sha256(value.read_bytes()).hexdigest()}
 receipt = {
-    "schema_version": 1,
+    "schema_version": 2,
     "artifact_type": "qcsd-chaff-qualification-implementation",
     "domain": domain,
     "source": source,

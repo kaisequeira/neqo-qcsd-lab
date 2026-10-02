@@ -44,7 +44,8 @@ RESPONSE_ONLY_MANIFEST_SCHEMA_VERSION = 3
 RESPONSE_ONLY_SIDECAR_V2_SCHEMA_VERSION = 2
 RESPONSE_ONLY_MANIFEST_V2_SCHEMA_VERSION = 4
 RESPONSE_QUALIFICATION_V2_RECEIPT_SCHEMA_VERSION = 3
-IMPLEMENTATION_RECEIPT_SCHEMA_VERSION = 1
+IMPLEMENTATION_RECEIPT_SCHEMA_VERSION = 2
+IMPLEMENTATION_RECEIPT_DOMAIN = "qcsd-chaff-qualification-implementation-v2"
 # Public compatibility name: this refers to qualification artifacts, not the
 # separately versioned implementation receipt below.
 SCHEMA_VERSION = QUALIFICATION_SCHEMA_VERSION
@@ -139,6 +140,7 @@ IMPLEMENTATION_STATIC_FILES = (
 IMPLEMENTATION_PYTHON_FILES = (
     "src/qcsd_lab/__init__.py",
     "src/qcsd_lab/analysis.py",
+    "src/qcsd_lab/application_response_policy.py",
     "src/qcsd_lab/capture.py",
     "src/qcsd_lab/capture_session.py",
     "src/qcsd_lab/chaff_qualification.py",
@@ -163,6 +165,11 @@ IMPLEMENTATION_PYTHON_FILES = (
     "src/qcsd_lab/verification.py",
 )
 IMPLEMENTATION_FILES = IMPLEMENTATION_STATIC_FILES + IMPLEMENTATION_PYTHON_FILES
+LEGACY_IMPLEMENTATION_PYTHON_FILES = tuple(
+    path for path in IMPLEMENTATION_PYTHON_FILES
+    if path != "src/qcsd_lab/application_response_policy.py"
+)
+LEGACY_IMPLEMENTATION_FILES = IMPLEMENTATION_STATIC_FILES + LEGACY_IMPLEMENTATION_PYTHON_FILES
 
 SIDECAR_KEYS = {
     "schema_version",
@@ -659,6 +666,8 @@ def implementation_receipt(
                 "qualification image lacks its executed-source implementation receipt"
             ) from error
         _validate_implementation_receipt(value, require_current=False)
+        if value["schema_version"] != IMPLEMENTATION_RECEIPT_SCHEMA_VERSION:
+            raise ValueError("current qualification requires the response-policy implementation receipt")
         for record in [
             *value["installed_modules"].values(),
             value["installed_entrypoint"],
@@ -677,7 +686,7 @@ def implementation_receipt(
     receipt: dict[str, Any] = {
         "schema_version": IMPLEMENTATION_RECEIPT_SCHEMA_VERSION,
         "artifact_type": "qcsd-chaff-qualification-implementation",
-        "domain": "qcsd-chaff-qualification-implementation-v1",
+        "domain": IMPLEMENTATION_RECEIPT_DOMAIN,
         "source": source_metadata(),
         "source_files": files,
         "installed_modules": modules,
@@ -708,7 +717,7 @@ def _implementation_source_files(root: Path = LAB_ROOT) -> dict[str, str]:
 def _implementation_aggregate(receipt: Mapping[str, Any]) -> str:
     payload = {key: value for key, value in receipt.items() if key != "sha256"}
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    return sha256_bytes(b"qcsd-chaff-qualification-implementation-v1\0" + encoded)
+    return sha256_bytes(str(receipt["domain"]).encode() + b"\0" + encoded)
 
 
 def qualification_digest(domain: str, values: Sequence[Mapping[str, Any]]) -> str:
@@ -6042,19 +6051,27 @@ def _validate_neqo_provenance(value: object, *, qualification_source: Mapping[st
 
 def _validate_implementation_receipt(value: object, *, require_current: bool) -> None:
     receipt = _exact_mapping(value, IMPLEMENTATION_KEYS, "qualification implementation receipt")
+    version = receipt["schema_version"]
+    domain = {
+        1: "qcsd-chaff-qualification-implementation-v1",
+        2: IMPLEMENTATION_RECEIPT_DOMAIN,
+    }.get(version) if type(version) is int else None
     if (
-        type(receipt["schema_version"]) is not int
-        or receipt["schema_version"] != IMPLEMENTATION_RECEIPT_SCHEMA_VERSION
+        domain is None
         or receipt["artifact_type"] != "qcsd-chaff-qualification-implementation"
-        or receipt["domain"] != "qcsd-chaff-qualification-implementation-v1"
+        or receipt["domain"] != domain
         or not _digest(receipt["sha256"])
     ):
         raise ValueError("qualification implementation receipt is invalid")
     source = _exact_mapping(receipt["source"], SOURCE_METADATA_KEYS, "image source receipt")
     files = receipt["source_files"]
+    expected_files = LEGACY_IMPLEMENTATION_FILES if version == 1 else IMPLEMENTATION_FILES
+    expected_modules = (
+        LEGACY_IMPLEMENTATION_PYTHON_FILES if version == 1 else IMPLEMENTATION_PYTHON_FILES
+    )
     if (
         not isinstance(files, Mapping)
-        or set(files) != set(IMPLEMENTATION_FILES)
+        or set(files) != set(expected_files)
         or any(not _digest(item) for item in files.values())
     ):
         raise ValueError("qualification implementation file receipt is invalid")
@@ -6078,7 +6095,7 @@ def _validate_implementation_receipt(value: object, *, require_current: bool) ->
     ):
         raise ValueError("qualification image source receipt is not clean and pinned")
     modules = receipt["installed_modules"]
-    if not isinstance(modules, Mapping) or set(modules) != set(IMPLEMENTATION_PYTHON_FILES):
+    if not isinstance(modules, Mapping) or set(modules) != set(expected_modules):
         raise ValueError("qualification installed-module receipt is incomplete")
     for relative, value in modules.items():
         installed = _exact_mapping(value, {"path", "sha256"}, "installed module receipt")
@@ -6095,6 +6112,8 @@ def _validate_implementation_receipt(value: object, *, require_current: bool) ->
     if receipt["sha256"] != _implementation_aggregate(receipt):
         raise ValueError("qualification implementation aggregate SHA-256 mismatch")
     if require_current:
+        if version != IMPLEMENTATION_RECEIPT_SCHEMA_VERSION:
+            raise ValueError("historical qualification implementation cannot authorize changed source")
         if dict(files) != _implementation_source_files():
             raise ValueError("qualification source files have changed since qualification")
         current = implementation_receipt(executed_image=True)

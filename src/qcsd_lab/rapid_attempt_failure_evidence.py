@@ -37,6 +37,7 @@ _MODULE_NAMES = {
     "qcsd_lab.rapid_study_profile", "qcsd_lab.rapid_selection_amendment", "qcsd_lab.util",
 }
 _KEYS = _MODULE_NAMES | {"neqo-qcsd-client", "tools.rapid_acquire"}
+APPLICATION_RESPONSE_POLICY_MODULE = "qcsd_lab.application_response_policy"
 _LATER_WRAPPER = "attempt-failure.json"
 _EXCEPTION_KEYS = {"exception_type", "exception_module", "message", "frames", "cause", "context", "suppress_context"}
 _PAYLOAD_KEYS = {"policy", "execution_binding", "runtime", "implementation_hashes", "started_at",
@@ -46,18 +47,22 @@ _FACT_KEYS = (_PAYLOAD_KEYS - {"runtime", "artifacts"}) | {
 }
 
 
-def implementation_sources() -> dict[str, Path]:
-    return {**{name: Path(importlib.import_module(name).__file__) for name in sorted(_MODULE_NAMES)},
+def implementation_sources(*, application_response_policy: bool = False) -> dict[str, Path]:
+    if type(application_response_policy) is not bool:
+        raise ValueError("attempt policy source inventory opt-in must be boolean")
+    names = _MODULE_NAMES | ({APPLICATION_RESPONSE_POLICY_MODULE} if application_response_policy else set())
+    return {**{name: Path(importlib.import_module(name).__file__) for name in sorted(names)},
             "tools.rapid_acquire": Path(__file__).parents[2] / "tools" / "rapid_acquire.py",
             "neqo-qcsd-client": Path(os.environ.get("QCSD_NEQO_CLIENT", "/usr/local/bin/neqo-qcsd-client"))}
 
 
-def implementation_hashes() -> dict[str, str]:
-    return {name: page._sha(page._regular(path).read_bytes()) for name, path in implementation_sources().items()}
+def implementation_hashes(*, application_response_policy: bool = False) -> dict[str, str]:
+    return {name: page._sha(page._regular(path).read_bytes()) for name, path in
+            implementation_sources(application_response_policy=application_response_policy).items()}
 
 
 def _hashes(value: Any) -> dict[str, str]:
-    if (not isinstance(value, Mapping) or set(value) != _KEYS
+    if (not isinstance(value, Mapping) or set(value) not in (_KEYS, _KEYS | {APPLICATION_RESPONSE_POLICY_MODULE})
         or any(not isinstance(item, str) or page._SHA.fullmatch(item) is None for item in value.values())):
         raise ValueError("attempt observer implementation/client bindings are invalid")
     return dict(value)
@@ -98,7 +103,8 @@ def begin_attempt_action(execution_binding: Mapping[str, Any], expected_implemen
     """Validate the frozen runtime before entering only the backend call."""
     now = datetime.now(UTC).isoformat()
     page._freshness(now, now, not_before_utc)
-    if implementation_hashes() != _hashes(expected_implementation_hashes):
+    hashes = _hashes(expected_implementation_hashes)
+    if implementation_hashes(application_response_policy=APPLICATION_RESPONSE_POLICY_MODULE in hashes) != hashes:
         raise ValueError("attempt observer source/client changed after prospective freeze")
     return page._runtime_payload(page._binding(execution_binding))
 
@@ -210,7 +216,7 @@ def retain_attempt_failure(
     binding, hashes, action = page._binding(execution_binding), _hashes(expected_implementation_hashes), _action(action)
     if begin_attempt_action(binding, hashes, not_before_utc) != dict(runtime):
         raise ValueError("attempt runtime source/image changed during backend execution")
-    sources = implementation_sources()
+    sources = implementation_sources(application_response_policy=APPLICATION_RESPONSE_POLICY_MODULE in hashes)
     raw_error = _exception(error, hashes, sources)
     parts, seen = [], set()
     def retain_trace(current):
@@ -273,7 +279,7 @@ def verify_attempt_failure(
         raise ValueError("attempt closed inventory changed or gained unregistered files")
     artifacts = payload["artifacts"]
     if (not isinstance(artifacts, Mapping) or set(artifacts) != {"exception", "traceback", "sources"}
-        or not isinstance(artifacts["sources"], Mapping) or set(artifacts["sources"]) != _KEYS):
+        or not isinstance(artifacts["sources"], Mapping) or set(artifacts["sources"]) != set(hashes)):
         raise ValueError("attempt source/client artifact inventory is incomplete")
     if {name: page._sha(_artifact(root, ref)) for name, ref in artifacts["sources"].items()} != hashes:
         raise ValueError("attempt retained implementations/client differ from independent hashes")

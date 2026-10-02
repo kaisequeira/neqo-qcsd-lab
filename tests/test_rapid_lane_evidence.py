@@ -64,8 +64,8 @@ def setup(tmp_path, monkeypatch):
     actual_source = {**source, "image_digest": image}
     files = {relative: evidence._sha((runtime / relative).read_bytes()) for relative in qualification.IMPLEMENTATION_FILES}
     implementation = {
-        "schema_version": 1, "artifact_type": "qcsd-chaff-qualification-implementation",
-        "domain": "qcsd-chaff-qualification-implementation-v1", "source": source, "source_files": files,
+        "schema_version": 2, "artifact_type": "qcsd-chaff-qualification-implementation",
+        "domain": qualification.IMPLEMENTATION_RECEIPT_DOMAIN, "source": source, "source_files": files,
         "installed_modules": {relative: {"path": f"/installed/{relative}", "sha256": files[relative]}
                               for relative in qualification.IMPLEMENTATION_PYTHON_FILES},
         "installed_entrypoint": {"path": "/installed/qcsd-lab", "sha256": files["qcsd-lab"]},

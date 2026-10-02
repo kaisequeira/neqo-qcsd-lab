@@ -20,6 +20,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from functools import cached_property
 from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
 from typing import Any, Iterator
 
 from . import rapid_study_profile as profile
@@ -50,15 +51,20 @@ PREPARATION_MODULES = (
     "qcsd_lab.rapid_site_admission", "qcsd_lab.class_acquisition", "qcsd_lab.prepare",
     "qcsd_lab.manifest", "qcsd_lab.discover", "qcsd_lab.discovery_evidence", "qcsd_lab.util",
 )
+APPLICATION_RESPONSE_POLICY_MODULE = "qcsd_lab.application_response_policy"
 
 
-def preparation_implementation_sources() -> dict[str, Path]:
+def preparation_implementation_sources(*, application_response_policy: bool = False) -> dict[str, Path]:
     """Identify producer/verifier bytes independently of the reused image source."""
-    return {name: Path(importlib.import_module(name).__file__) for name in PREPARATION_MODULES}
+    if type(application_response_policy) is not bool:
+        raise ValueError("preparation policy source inventory opt-in must be boolean")
+    names = (*PREPARATION_MODULES, *((APPLICATION_RESPONSE_POLICY_MODULE,) if application_response_policy else ()))
+    return {name: Path(importlib.import_module(name).__file__) for name in names}
 
 
-def preparation_implementation_hashes() -> dict[str, str]:
-    return {name: _sha(_read(path)) for name, path in preparation_implementation_sources().items()}
+def preparation_implementation_hashes(*, application_response_policy: bool = False) -> dict[str, str]:
+    return {name: _sha(_read(path)) for name, path in
+            preparation_implementation_sources(application_response_policy=application_response_policy).items()}
 
 
 def _json(value: Any) -> bytes:
@@ -205,20 +211,26 @@ class AdmissionContext:
         return selection_amendment_revision(_load(self.selection_amendment_bytes))
 
     @property
+    def application_response_policy(self) -> str | None:
+        if self.selection_amendment_revision != 5:
+            return None
+        return _selection_amendment_payload(self.selection_amendment_bytes)["application_response_policy"]
+
+    @property
     def page_policy_not_before_utc(self) -> datetime:
-        if self.selection_amendment_revision not in {2, 3, 4}:
+        if self.selection_amendment_revision not in {2, 3, 4, 5}:
             raise ValueError("automated screen and typed page-policy deferral require selection amendment revision 2")
         return self.browser_policy_not_before_utc
 
     @property
     def collector_not_before_utc(self) -> datetime:
-        if self.selection_amendment_revision not in {3, 4}:
+        if self.selection_amendment_revision not in {3, 4, 5}:
             raise ValueError("operational collector deferral requires selection amendment revision 3")
         return self.browser_policy_not_before_utc
 
     @property
     def attempt_not_before_utc(self) -> datetime:
-        if self.selection_amendment_revision != 4:
+        if self.selection_amendment_revision not in {4, 5}:
             raise ValueError("unsuccessful live attempt deferral requires selection amendment revision 4")
         return self.browser_policy_not_before_utc
 
@@ -264,7 +276,7 @@ def initialize_acquisition(
         revision = selection_amendment_revision(_load(_read(selection_amendment)))
         if revision >= 3:
             required_groups |= {COLLECTOR_GROUP}
-        if revision == 4:
+        if revision >= 4:
             required_groups |= {ATTEMPT_GROUP}
     if set(module_sources) != required_groups:
         raise ValueError("all independent implementation snapshots are required")
@@ -342,7 +354,7 @@ def load_admission_context(root: Path) -> AdmissionContext:
         revision = selection_amendment_revision(_load(inputs["selection_amendment"]))
         if revision >= 3:
             required_groups |= {COLLECTOR_GROUP}
-        if revision == 4:
+        if revision >= 4:
             required_groups |= {ATTEMPT_GROUP}
     if not isinstance(groups, Mapping) or set(groups) != required_groups:
         raise ValueError("acquisition implementation inventory changed")
@@ -362,14 +374,20 @@ def load_admission_context(root: Path) -> AdmissionContext:
         _selection_amendment_payload(context.selection_amendment_bytes)
         if set(context.mounted_module_hashes[BROWSER_POLICY_GROUP]) != set(implementation_sources()):
             raise ValueError("browser policy implementation inventory changed")
-    if context.selection_amendment_revision in {3, 4}:
+    if context.selection_amendment_revision in {3, 4, 5}:
         from .rapid_collector_failure_evidence import implementation_sources
         if set(context.mounted_module_hashes[COLLECTOR_GROUP]) != set(implementation_sources()):
             raise ValueError("collector implementation inventory changed")
-    if context.selection_amendment_revision == 4:
+    if context.selection_amendment_revision in {4, 5}:
         from .rapid_attempt_failure_evidence import implementation_sources
-        if set(context.mounted_module_hashes[ATTEMPT_GROUP]) != set(implementation_sources()):
+        if set(context.mounted_module_hashes[ATTEMPT_GROUP]) != set(implementation_sources(
+            application_response_policy=context.application_response_policy is not None,
+        )):
             raise ValueError("unsuccessful attempt implementation inventory changed")
+    if set(context.mounted_module_hashes["preparation"]) != set(preparation_implementation_sources(
+        application_response_policy=context.application_response_policy is not None,
+    )):
+        raise ValueError("preparation implementation inventory changed")
     return context
 
 
@@ -533,7 +551,7 @@ def produce_automated_site_screen(
     page = _page_facts(context, candidate_id, navigation, page_h3)
     if type(selected_page_ordinal) is not int or selected_page_ordinal != page["selected_page_ordinal"]:
         raise ValueError("automated screen ordinal differs from the independently selected page")
-    if preparation_implementation_hashes() != context.mounted_module_hashes["preparation"]:
+    if preparation_implementation_hashes(application_response_policy=context.application_response_policy is not None) != context.mounted_module_hashes["preparation"]:
         raise ValueError("automated screen implementation changed since the prospective source freeze")
     candidate = context.candidate(candidate_id)
     if unsafe_catalogue_domain_reason(candidate["domain"]) is not None:
@@ -604,7 +622,7 @@ def begin_page_policy_action(context: AdmissionContext) -> dict[str, Any]:
     from .rapid_browser_policy_evidence import implementation_hashes
     from .rapid_page_evidence import _runtime_payload, _validate_runtime
     context.page_policy_not_before_utc
-    if (preparation_implementation_hashes() != context.mounted_module_hashes["preparation"]
+    if (preparation_implementation_hashes(application_response_policy=context.application_response_policy is not None) != context.mounted_module_hashes["preparation"]
         or implementation_hashes() != context.mounted_module_hashes[BROWSER_POLICY_GROUP]):
         raise ValueError("typed page-policy action implementation changed since prospective freeze")
     runtime = _runtime_payload(context.execution_binding)
@@ -697,7 +715,7 @@ def validate_page_policy_failure_facts(
         raise ValueError("typed graph/stability failure lacks actual preparer source and timestamps")
     hashes = value["implementation_hashes"]
     if (not isinstance(hashes, Mapping) or set(hashes) != {"preparation", BROWSER_POLICY_GROUP}
-        or set(hashes["preparation"]) != set(PREPARATION_MODULES)):
+        or set(hashes["preparation"]) not in (set(PREPARATION_MODULES), set(PREPARATION_MODULES) | {APPLICATION_RESPONSE_POLICY_MODULE})):
         raise ValueError("typed page-policy proof implementation source groups are invalid")
     from .rapid_browser_policy_evidence import implementation_sources
     if set(hashes[BROWSER_POLICY_GROUP]) != set(implementation_sources()) or any(
@@ -1226,13 +1244,21 @@ class ObservedLiveBackend:
         return self._call(self.backend.discover, url, approved)
 
     def prepare(self, workload_id: str, url: str, approved: Sequence[str], output_root: Path,
-                *, origin_ip_pins: Mapping[str, str]) -> Any:
+                *, origin_ip_pins: Mapping[str, str], application_response_policy: str | None = None) -> Any:
         from .class_acquisition import _validated_frozen_origin_ip_pins, _regular_directory
         _regular_directory(output_root.parent)
         if output_root.exists() or output_root.is_symlink():
             _regular_directory(output_root)
         _validated_frozen_origin_ip_pins(approved, origin_ip_pins)
-        return self._call(self.backend.prepare, workload_id, url, approved, output_root, origin_ip_pins=origin_ip_pins)
+        if application_response_policy is not None:
+            from .application_response_policy import validate_application_response_policy
+            validate_application_response_policy(application_response_policy)
+        if application_response_policy != self.context.application_response_policy:
+            raise ValueError("backend application response policy differs from prospective context")
+        policy_kwargs = ({"application_response_policy": application_response_policy}
+                         if application_response_policy is not None else {})
+        return self._call(self.backend.prepare, workload_id, url, approved, output_root,
+                          origin_ip_pins=origin_ip_pins, **policy_kwargs)
 
 
 def _full_graph(manifest: Mapping[str, Any]) -> dict[str, Any]:
@@ -1247,16 +1273,136 @@ def _full_graph(manifest: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _application_response_evidence(
+    path: Path, manifest: Mapping[str, Any], context: AdmissionContext,
+) -> str | None:
+    """Reopen the opt-in JSON ledgers; compact status/hash claims alone do not admit."""
+    from .application_response_policy import (
+        validate_application_response_policy_evidence, validate_application_responses,
+    )
+    from .rapid_page_evidence import _freshness
+    from .prepare import (
+        _failure_child_execution, _terminal_http_error_policy_evidence,
+        _terminal_http_error_probe_records,
+    )
+    proof = validate_application_response_policy_evidence(manifest)
+    if proof is None:
+        return None
+    path = Path(path)
+    root = path.parent / f"{path.stem}-application-response-evidence"
+    raw_inventory = _read(root / "inventory.json")
+    inventory = _load(raw_inventory)
+    fields = {"schema_version", "artifact_type", "workload_id", "original_directory",
+              "capture_source_before", "capture_source_after", "started_at", "completed_at",
+              "policy_evidence", "files", "scientific_credit"}
+    if (not isinstance(inventory, Mapping) or set(inventory) != fields
+        or type(inventory["schema_version"]) is not int or inventory["schema_version"] != 1
+        or inventory["artifact_type"] != "qcsd-application-response-preparation-evidence"
+        or inventory["workload_id"] != path.stem or inventory["scientific_credit"] is not False
+        or _json(inventory["policy_evidence"]) != _json(proof)
+        or any(_json(inventory[key]) != _json(context.expected_runtime_source)
+               for key in ("capture_source_before", "capture_source_after"))
+        or not isinstance(inventory["original_directory"], str)):
+        raise ValueError("application response retained evidence changed its workload, policy or runtime")
+    original = Path(inventory["original_directory"])
+    if (not original.is_absolute() or ".." in original.parts
+        or not original.name.startswith(f".{path.stem}-prepare-")):
+        raise ValueError("application response child directory differs from its actual preparation identity")
+    start, end = _freshness(inventory["started_at"], inventory["completed_at"], context.page_policy_not_before_utc)
+    preparation = manifest["preparation"]
+    count = preparation["stability_runs"]
+    names = {"probe-input.json", "probe-output.json", "probe.log.execution.json",
+             "probe-output.probe-head/run.json", "probe-output.probe-get/run.json", "stability-input.json",
+             *[name for index in range(count) for name in (
+                 f"stability-{index}/run.json", f"stability-{index}.log.execution.json") ]}
+    if not isinstance(inventory["files"], Mapping) or set(inventory["files"]) != names:
+        raise ValueError("application response retained evidence omits an actual probe or stability file")
+    observed = set()
+    for child in root.rglob("*"):
+        if child.is_symlink():
+            raise ValueError("application response retained inventory contains a symlink")
+        if child.is_file():
+            observed.add(child.relative_to(root).as_posix())
+    if observed != {"inventory.json", *[f"artifacts/{name}" for name in names]}:
+        raise ValueError("application response closed inventory changed its retained files")
+    artifacts = {}
+    for name in sorted(names):
+        raw = _read(root / "artifacts" / name)
+        record = inventory["files"][name]
+        if (not isinstance(record, Mapping) or set(record) != {"sha256", "size"}
+            or type(record["size"]) is not int or record != {"sha256": _sha(raw), "size": len(raw)}):
+            raise ValueError("application response retained raw file bytes changed")
+        artifacts[name] = raw
+    discovered, resolved = (_load(artifacts[name]) for name in ("probe-input.json", "probe-output.json"))
+    validate_manifest(discovered)
+    validate_manifest(resolved)
+    resources = manifest["resources"]
+    identity = lambda rows: [{key: row[key] for key in ("id", "url", "type", "depends_on")} for row in rows]
+    stability_input = _load(artifacts["stability-input.json"])
+    validate_manifest(stability_input)
+    if (identity(discovered["resources"]) != identity(resources)
+        or identity(resolved["resources"]) != identity(resources)
+        or identity(stability_input["resources"]) != identity(resources)
+        or [{"resource_id": row["id"], "headers": row["headers"]} for row in discovered["resources"]]
+        != preparation["browser_request_headers"]):
+        raise ValueError("application response probe changed the complete discovered graph")
+    negatives = _terminal_http_error_probe_records(
+        SimpleNamespace(resources=discovered["resources"]), resolved, root / "artifacts",
+        execution_directory=original,
+    )
+    if sorted(negatives) != [row["resource_id"] for row in proof["get_responses"]]:
+        raise ValueError("application response raw GET proof changed its exact negative leaves")
+    probe_execution = _failure_child_execution(artifacts, "probe.log.execution.json", "probe", returncode=0)
+    if not start <= _utc(probe_execution["started_at"]) <= _utc(probe_execution["completed_at"]) <= end:
+        raise ValueError("application response probe lies outside its actual preparation")
+    previous = _utc(probe_execution["completed_at"])
+    runs = []
+    for index in range(count):
+        execution = _failure_child_execution(artifacts, f"stability-{index}.log.execution.json", "run", returncode=0)
+        command = execution["command"]
+        expected_tail = ["run", "--application-response-policy", context.application_response_policy,
+                         "--workload", str(original / "stability-input.json"), "--profile", "live",
+                         "--defense", "none", "--seed", "0", "--output-dir", str(original / f"stability-{index}"),
+                         "--max-response-bytes", str(preparation["max_response_bytes"]),
+                         "--timeout-seconds", str(preparation["timeout_seconds"])]
+        if (command[command.index("run"):] != expected_tail
+            or execution["configured_timeout_seconds"] != preparation["timeout_seconds"]):
+            raise ValueError("application response stability child changed the prospective runtime arguments")
+        child_start, child_end = _utc(execution["started_at"]), _utc(execution["completed_at"])
+        if not previous <= child_start <= child_end <= end:
+            raise ValueError("application response stability executions are not fresh and ordered")
+        previous = child_end
+        run = _load(artifacts[f"stability-{index}/run.json"])
+        validate_application_responses(manifest, run)
+        run_start, run_end = run.get("started_unix_ns"), run.get("ended_unix_ns")
+        if (type(run_start) is not int or type(run_end) is not int
+            or run.get("time_anchor_unix_ns") != run_start
+            or not child_start.timestamp() * 1e9 - 1_000 <= run_start <= run_end <= child_end.timestamp() * 1e9 + 1_000):
+            raise ValueError("application response stability run timestamps differ from actual child execution")
+        if (run.get("workload_hash_sha256") != _sha(artifacts["stability-input.json"])
+            or any(run.get(key) != preparation[key] for key in (
+                "neqo_version", "neqo_base_commit", "published_qcsd_commit", "migration_commit"))):
+            raise ValueError("application response stability changed its actual input or client provenance")
+        runs.append(run)
+    if _json(_terminal_http_error_policy_evidence(root / "artifacts", resources, runs)) != _json(proof):
+        raise ValueError("application response compact proof differs from independently reopened raw ledgers")
+    return _sha(raw_inventory)
+
+
 def verify_prepared_workload(
     path: Path, graph: Path, context: AdmissionContext, *, selected_page_url: str,
 ) -> dict[str, Any]:
     raw, graph_raw = _read(path), _read(graph)
-    cache_key = (_sha(raw), _sha(graph_raw), selected_page_url, _sha(_json(context.expected_runtime_source)))
+    manifest = _load(raw)
+    policy_evidence_sha = (_application_response_evidence(path, manifest, context)
+                           if context.application_response_policy is not None else None)
+    cache_key = (_sha(raw), _sha(graph_raw), selected_page_url, _sha(_json(context.expected_runtime_source)),
+                 context.application_response_policy, policy_evidence_sha)
     if cache_key in context.proof_cache["prepared"]:
         return deepcopy(context.proof_cache["prepared"][cache_key])
-    manifest = _load(raw)
     validate_manifest(manifest)
-    validate_class_study_preparation(manifest, workload_id=Path(path).stem)
+    validate_class_study_preparation(manifest, workload_id=Path(path).stem,
+                                     application_response_policy=context.application_response_policy)
     preparation = manifest["preparation"]
     if (preparation["source_url"] != selected_page_url
         or preparation["lab_source"] != dict(context.expected_runtime_source)
@@ -1270,6 +1416,12 @@ def verify_prepared_workload(
         "selected_page_url": selected_page_url, "prepared_workload_sha256": _sha(raw),
         "cross_origin_resource_count": count, "full_resource_graph_sha256": _sha(graph_raw),
     }
+    if context.application_response_policy is not None:
+        from .application_response_policy import validate_application_response_graph
+        policy_facts = validate_application_response_graph(manifest)
+        facts.update(application_response_policy=policy_facts["policy"],
+                     terminal_http_error_resource_ids=policy_facts["terminal_http_error_resource_ids"],
+                     application_response_evidence_sha256=policy_evidence_sha)
     context.proof_cache["prepared"][cache_key] = facts
     return deepcopy(facts)
 
@@ -1300,7 +1452,7 @@ def prepare_site(
 ) -> Path:
     """Run the existing live full-graph preparer in one retained, retryable attempt."""
     page = _page_facts(context, candidate_id, navigation, page_h3)
-    if context.selection_amendment_revision in {2, 3, 4}:
+    if context.selection_amendment_revision in {2, 3, 4, 5}:
         if human_review is not None or automated_screen is None:
             raise ValueError("revision 2 preparation requires its distinct automated screen")
         screen = verify_automated_site_screen(automated_screen, context, candidate_id=candidate_id)
@@ -1317,7 +1469,8 @@ def prepare_site(
     # The default production adapter must run inside the independently frozen image.
     if backend is None and dict(source_metadata()) != dict(context.expected_runtime_source):
         raise ValueError("preparation runtime is outside the frozen clean admission image")
-    implementation_hashes = preparation_implementation_hashes()
+    implementation_hashes = preparation_implementation_hashes(
+        application_response_policy=context.application_response_policy is not None)
     if implementation_hashes != context.mounted_module_hashes["preparation"]:
         raise ValueError("preparation implementation changed since the prospective source freeze")
     attempt = _new_attempt(context, candidate_id, "prepare")
@@ -1327,7 +1480,7 @@ def prepare_site(
     }
     durable_create(attempt / "inputs.json", _json(references))
     backend = backend or ExistingAcquisitionBackend()
-    if context.selection_amendment_revision == 4:
+    if context.selection_amendment_revision in {4, 5}:
         backend = ObservedLiveBackend(backend, context, candidate_id, attempt,
             _attempt_action(context.candidate(candidate_id), page),
             {"navigation": navigation, "page_h3": page_h3, "automated_screen": automated_screen})
@@ -1335,19 +1488,22 @@ def prepare_site(
     action_runtime = None
     collector_runtime = None
     try:
-        if context.selection_amendment_revision in {2, 3, 4}:
+        if context.selection_amendment_revision in {2, 3, 4, 5}:
             action_runtime = begin_page_policy_action(context)
         if context.selection_amendment_revision == 3:
             collector_runtime = begin_operational_collector_action(context)
         approved, discovery = _converge_origins(backend, page["url"])
         durable_create(attempt / "origin-convergence.json", _json(asdict(discovery)))
         workload_id = f"rapid-v5-{candidate_id}-{attempt.name}"
+        policy_kwargs = ({"application_response_policy": context.application_response_policy}
+                         if context.application_response_policy is not None else {})
         probe = backend.prepare(workload_id, page["url"], approved, attempt / "workloads",
-                                origin_ip_pins=discovery.origin_ip_pins)
+                                origin_ip_pins=discovery.origin_ip_pins, **policy_kwargs)
         manifest_path = Path(probe.prepared.path)
         manifest = _load(_read(manifest_path))
         validate_manifest(manifest)
-        validate_class_study_preparation(manifest, workload_id=workload_id)
+        validate_class_study_preparation(manifest, workload_id=workload_id,
+                                         application_response_policy=context.application_response_policy)
         graph_path = attempt / "full-resource-graph.json"
         durable_create(graph_path, _json(_full_graph(manifest)))
         facts = verify_prepared_workload(manifest_path, graph_path, context, selected_page_url=page["url"])
@@ -1365,6 +1521,7 @@ def prepare_site(
                 "chromium_version": probe.chromium_version,
             },
             "completed_at": _now(), "facts": facts, "scientific_credit": False,
+            **({"started_at": action_started_at} if context.application_response_policy is not None else {}),
         })
         durable_create(attempt / "preparation.json", _json(receipt))
     except Exception as error:
@@ -1423,22 +1580,28 @@ def prepare_site(
 
 def _preparation_facts(path: Path, context: AdmissionContext, candidate_id: str) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     value = _unpack(_read(path), PREPARATION_TYPE)
-    if set(value) != {"candidate_id", "provenance_sha256", "inputs", "prepared_workload",
+    fields = {"candidate_id", "provenance_sha256", "inputs", "prepared_workload",
                       "full_resource_graph", "origin_convergence", "implementation_hashes", "document_response",
-                      "completed_at", "facts", "scientific_credit"}:
+                      "completed_at", "facts", "scientific_credit"}
+    if context.application_response_policy is not None:
+        fields |= {"started_at"}
+    if set(value) != fields:
         raise ValueError("preparation receipt fields changed")
-    safety_key = "automated_screen" if context.selection_amendment_revision in {2, 3, 4} else "human_review"
+    safety_key = "automated_screen" if context.selection_amendment_revision in {2, 3, 4, 5} else "human_review"
     if (value["candidate_id"] != candidate_id or value["provenance_sha256"] != context.provenance_sha256
         or value["scientific_credit"] is not False or _utc(value["completed_at"]) < context.not_before_utc
         or value["implementation_hashes"] != context.mounted_module_hashes["preparation"]
         or not isinstance(value["inputs"], Mapping)
         or set(value["inputs"]) != {"navigation", "page_h3", safety_key}):
         raise ValueError("preparation receipt belongs to another candidate or source")
+    if context.application_response_policy is not None:
+        from .rapid_page_evidence import _freshness
+        _freshness(value["started_at"], value["completed_at"], context.page_policy_not_before_utc)
     navigation, page_h3, review_path = (
         _child(context.root, value["inputs"][key]) for key in ("navigation", "page_h3", safety_key)
     )
     page = _page_facts(context, candidate_id, navigation, page_h3)
-    if context.selection_amendment_revision in {2, 3, 4}:
+    if context.selection_amendment_revision in {2, 3, 4, 5}:
         review = verify_automated_site_screen(review_path, context, candidate_id=candidate_id)
         if review["selected_page_h3_receipt_sha256"] != page["receipt_sha256"]:
             raise ValueError("prepared page automated screen differs from exact page")
@@ -1509,7 +1672,7 @@ def browser_policy_failure_facts(path: Path, context: AdmissionContext, candidat
 
 
 def _root_allows_policy_progression(context: AdmissionContext, screen: Mapping[str, Any]) -> bool:
-    if context.selection_amendment_revision not in {3, 4}:
+    if context.selection_amendment_revision not in {3, 4, 5}:
         return screen["outcome"] == "known-valid"
     from .rapid_selection_amendment import root_screen_allows_browser_progression
     return root_screen_allows_browser_progression(screen, revision=context.selection_amendment_revision)
@@ -1518,9 +1681,9 @@ def _root_allows_policy_progression(context: AdmissionContext, screen: Mapping[s
 def _terminal_facts(value: Mapping[str, Any], context: AdmissionContext) -> dict[str, Any]:
     fields = {"candidate_id", "provenance_sha256", "root_surveys", "human_review",
               "reviewed_url", "preparation", "defer_root", "facts", "completed_at", "scientific_credit"}
-    revision_two = context.selection_amendment_revision in {2, 3, 4}
-    revision_three = context.selection_amendment_revision in {3, 4}
-    revision_four = context.selection_amendment_revision == 4
+    revision_two = context.selection_amendment_revision in {2, 3, 4, 5}
+    revision_three = context.selection_amendment_revision in {3, 4, 5}
+    revision_four = context.selection_amendment_revision in {4, 5}
     if revision_two:
         fields |= {"automated_screen"}
     valid_fields = (fields, fields | {"browser_policy_failure"}, fields | {"page_policy_failure"}) if revision_two else (
@@ -1726,11 +1889,11 @@ def produce_site_terminal(
 ) -> Path:
     if browser_policy_failure is not None and context.selection_amendment_bytes is None:
         raise ValueError("browser policy deferral requires a prospective selection amendment")
-    if (automated_screen is not None or page_policy_failure is not None) and context.selection_amendment_revision not in {2, 3, 4}:
+    if (automated_screen is not None or page_policy_failure is not None) and context.selection_amendment_revision not in {2, 3, 4, 5}:
         raise ValueError("automated screen and typed page-policy deferral require selection amendment revision 2")
-    if collector_failure is not None and context.selection_amendment_revision not in {3, 4}:
+    if collector_failure is not None and context.selection_amendment_revision not in {3, 4, 5}:
         raise ValueError("collector deferral requires selection amendment revision 3")
-    if attempt_failure is not None and context.selection_amendment_revision != 4:
+    if attempt_failure is not None and context.selection_amendment_revision not in {4, 5}:
         raise ValueError("unsuccessful attempt deferral requires selection amendment revision 4")
     if sum(path is not None for path in (browser_policy_failure, page_policy_failure, collector_failure, attempt_failure)) > 1:
         raise ValueError("terminal cannot combine separate browser, page-policy and collector failures")
@@ -1745,7 +1908,7 @@ def produce_site_terminal(
     }
     if browser_policy_failure is not None:
         value["browser_policy_failure"] = import_evidence(context.root, browser_policy_failure)
-    if context.selection_amendment_revision in {2, 3, 4}:
+    if context.selection_amendment_revision in {2, 3, 4, 5}:
         value["automated_screen"] = import_evidence(context.root, automated_screen) if automated_screen else None
     if page_policy_failure is not None:
         value["page_policy_failure"] = import_evidence(context.root, page_policy_failure)
@@ -1910,7 +2073,7 @@ def acquisition_status(context: AdmissionContext) -> dict[str, Any]:
         "terminal_count": len(terminals), "admitted_site_count": admitted,
         "next_candidate": next_candidate, "attempts": records,
         "pending_requirement": (("root-survey-or-navigation-exact-page-h3-automated-url-domain-screen-and-full-graph-preparation"
-                                  if context.selection_amendment_revision in {2, 3, 4} else
+                                  if context.selection_amendment_revision in {2, 3, 4, 5} else
                                   "root-survey-or-human-review-navigation-exact-page-h3-and-full-graph-preparation") if next_candidate else None),
         "formal_accepted_trace_count": 0, "formal_trace_target": 16_000,
         "capture_authority": "none-site-acquisition-only",

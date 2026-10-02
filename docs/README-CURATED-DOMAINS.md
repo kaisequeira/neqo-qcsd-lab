@@ -68,12 +68,30 @@ timeouts, three DNS-name-not-found deferrals and one known-invalid response.
 None was a clear homepage success or an accepted class.
 
 The later browser checks show why even a promising site cannot be accepted
-from the homepage test alone. `poki.com` produced a 268-resource browser
-graph with no unapproved GET requests on its second pass, but Neqo could not
-fetch one required authentication resource over HTTP/3 during preparation.
-No replayable workload or accepted class resulted. The
+from the homepage test alone. An earlier `poki.com` pass produced a
+268-resource browser graph with no unapproved GET requests. Preparation then
+stopped at an authentication resource under the complete-resource acceptance
+rule. No replayable workload or accepted class resulted. The
 [dated report](CURATED-H3-SCREEN-2026-10-02.md#first-browser-follow-ups)
 records that attempt and the other site-specific failures.
+
+A fresh frozen-context attempt provides a more precise explanation of that
+kind of failure. Its 260-resource input retained
+`https://poki-auth.poki.com/sessions/whoami` as resource 253. Neqo completed an
+HTTP/3 GET and received **HTTP 401 with a complete 157-byte body**. The saved
+HEAD request also completed with status 401. The client marked those responses
+failed and the overall probe partial because the legacy acceptance rule
+required an acceptable application status. The observed transport exchange
+itself completed; calling this result simply “HTTP/3 unavailable” would hide
+the actual reason for the stop. No class is admitted by this observation.
+
+The proposed [application response policy](APPLICATION-RESPONSE-POLICY.md)
+addresses this case prospectively. It retains complete HTTP 4xx/5xx responses
+only for a non-primary resource that no later request depends on. The resource,
+origin, status and body remain in the graph, and `known_valid` remains false.
+Primary HTML, resources needed by later requests and padding resources keep
+their successful-response requirements. This policy is pending implementation
+and fresh end-to-end evidence; the old failed attempts stay failed.
 
 Fresh attempts on **3 October 2026** exposed these further concrete problems:
 
@@ -103,12 +121,24 @@ not establish that every page on these domains is permanently unusable. The
 [evidence index](EVIDENCE-INDEX.md#rapid-selection-revision-2-3-october-2026)
 records the frozen source and receipts.
 
+The fallback catalogue has similar operational limits. A later 40-root survey
+for fallback positions 40–79 exited normally, but the frozen verifier rejected
+the retained `outlook.com` peer-close code 11 because its existing error grammar
+did not classify that code. The new slice therefore received no verified
+first-screen credit and was not appended to the acquisition registry. The
+earlier verified 0–39 prefix remains intact. Any later rule for such a bounded
+operation must record an operational deferral with zero site credit, rather
+than declaring that the entire domain cannot use HTTP/3 or retrospectively
+promoting this log.
+
 The final study still targets **50 eligible websites**. To reach that target,
 the plan screens the usable supplied candidates first, then draws additional
 candidates from the separately recorded [600-domain catalogue](../config/class-study/v1/classifier-multiorigin100-v1-candidates.json).
-Every selected site, regardless of source, must pass the same live browser,
-controlled exact-page HTTP/3, complete cross-origin-resource, stable replay,
-and safety checks. The final cohort
+Every selected site, regardless of source, must pass the same prospectively
+declared live browser, controlled exact-page HTTP/3, complete
+cross-origin-resource, stable replay and safety checks. The proposed leaf
+response rule would change the interpretation of retained application errors;
+it would not remove a resource or origin. The final cohort
 record will show which sites came from the supplied file and which came from
 the additional catalogue. Whether these two sources can yield 50 eligible
 sites is still unproven. See the [rapid study plan](RAPID-CLASS-STUDY.md) for

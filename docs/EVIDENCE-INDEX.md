@@ -7,6 +7,49 @@ not present in every clone. The [project ledger](../PROJECT.md),
 [runbook](CLASS-STUDY.md), [history](PROJECT-HISTORY.md) and
 [historical source map](HISTORY-SOURCE-MAP.md) are tracked and portable.
 
+## Application response policy repair
+
+The [response policy explanation](APPLICATION-RESPONSE-POLICY.md) records the
+Poki HTTP/3 401 observation and the prospective completion rule. The complete
+graph is preserved, including error responses; primary pages and padding
+resources retain successful-response requirements. Rust commit
+`1cda2d2446b53d0bdee185e81755fb5115744eb1` contains the native change.
+
+Actual focused unit and lint executions are retained under the host-local
+`../diagnostic-rehearsals/application-response-policy-native-20261003-004/`.
+`source-binding.json` records native source SHA-256
+`f00f7bd9ae9ade6d765ec2c6494c7e8fc44aa6329319e8613765e0f53d351d3e`.
+The two `*-execution.json` files retain exact Docker argv, actual start/end
+times, exit codes and stdout/stderr hashes. Independent reopening confirmed
+**16/16 focused tests** and **strict library Clippy exit 0**, completed at
+`2026-10-02T20:44:32.576096Z` and `2026-10-02T20:44:51.443786Z` respectively.
+Earlier failed attempts 001–003 remain available. These checks award zero site
+or trace credit. Final Python policy/preparation/capture/run-binding/deep
+verification and implementation/image/runtime checks passed **142 tests in
+232.29 seconds**. The additional prospective admission suite passed all
+**24 new cases**, plus five cohort/legacy and eight planner/adapter checks.
+Their tracked test sources include
+[the admission tests](../tests/test_rapid_application_response_admission.py),
+[cohort compatibility](../tests/test_rapid_selection_amendment.py) and
+[implementation receipt compatibility](../tests/test_application_policy_implementation.py).
+
+The [revision-5 selection receipt](../config/curated-sources/crux73-tranco600-rapid-v5-selection-v5.json)
+was frozen at `2026-10-02T21:06:26.442961Z`, raw/canonical SHA-256
+`45c0e5cbdb7b5388c72d9e23de63748d085c9f027c03c06b74b2809f06a3334f`.
+It preserves the v5 profile and **50 × 5 × 64 = 16,000** target. New policy
+preparations must begin after this publication barrier and use the new actual
+source/client bindings; no earlier failed attempt acquires admission credit.
+
+The cached release and derivative-image recipe is staged separately under
+`../diagnostic-rehearsals/application-response-policy-runtime-20261003-001/`.
+It requires a clean published Lab source with its actual Rust Gitlink and
+generates fresh qualification implementation receipts with schema 2, including
+the shared response-policy helper. No new image, live preparation or capture
+pass is asserted by the staged recipe. The live context 007 retains its old
+acceptance rule and unchanged source/image identities. Its second bounded
+40-action batch has now finished normally; no further old-context batch has
+been launched.
+
 ## Desktop working set
 
 | Evidence | Relative location | Why it travels |

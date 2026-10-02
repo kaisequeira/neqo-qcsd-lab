@@ -21,6 +21,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping, Protocol
 
+from .application_response_policy import (
+    LEGACY_APPLICATION_RESPONSE_POLICY,
+    TERMINAL_HTTP_ERROR_POLICY,
+    application_response_policy as prepared_application_response_policy,
+)
 from .capture import (
     OFFLOAD_DISABLED,
     REQUIRED_OFFLOAD_FEATURES,
@@ -783,6 +788,7 @@ def _collect_attempt(
     context: CaptureContext | None = None,
     *,
     application_workload_source: Path | None = None,
+    application_response_policy: str | None = None,
 ) -> dict[str, Any]:
     """Capture and validate one Neqo run without promoting or sealing it."""
 
@@ -810,6 +816,10 @@ def _collect_attempt(
             raise ValueError("baseline capture forbids qualified chaff inputs")
     elif chaff_manifest is None or application_workload_source is None:
         raise ValueError("every defended capture requires prepared source and qualified chaff")
+
+    response_policy = _launch_application_response_policy(
+        application_workload_source, application_response_policy
+    )
 
     selected_scheduler_contract = _capture_scheduler_contract()
     if (
@@ -974,6 +984,10 @@ def _collect_attempt(
                 context,
                 neqo,
                 application_workload_source=application_workload_source,
+                **(
+                    {"application_response_policy": response_policy}
+                    if response_policy != LEGACY_APPLICATION_RESPONSE_POLICY else {}
+                ),
             ),
             log=diagnostics / "neqo-client.log",
             configured_timeout_seconds=context.limits.timeout_seconds,
@@ -1125,6 +1139,10 @@ def _collect_attempt(
             manifest=manifest,
             chaff_manifest=chaff_manifest,
             application_workload_source=application_workload_source,
+            **(
+                {"application_response_policy": response_policy}
+                if response_policy != LEGACY_APPLICATION_RESPONSE_POLICY else {}
+            ),
             workload_id=workload_id,
             defense=defense,
             seed=seed,
@@ -1906,6 +1924,7 @@ def _validate_run_binding(
     manifest: Path,
     chaff_manifest: Path | None = None,
     application_workload_source: Path | None = None,
+    application_response_policy: str | None = None,
     workload_id: str,
     defense: Defense,
     seed: int,
@@ -1915,6 +1934,11 @@ def _validate_run_binding(
     """Bind the runner receipt to every immutable launch input."""
 
     historical_candidate = historical_candidate_source is not None
+    response_policy = _launch_application_response_policy(
+        application_workload_source, application_response_policy
+    )
+    if run_data.get("application_response_policy", LEGACY_APPLICATION_RESPONSE_POLICY) != response_policy:
+        raise ValueError("runner application response policy differs from its frozen inputs")
     if historical_candidate and (
         _capture_scheduler_contract() is not None
         or not _historical_candidate_source_valid(historical_candidate_source)
@@ -2297,6 +2321,7 @@ def _client_command(
     output: Path | None = None,
     *,
     application_workload_source: Path | None = None,
+    application_response_policy: str | None = None,
 ) -> list[str]:
     if output is None:
         chaff_manifest: Path | None = None
@@ -2338,6 +2363,11 @@ def _client_command(
         "--request-policy",
         context.request_policy,
     ]
+    response_policy = _launch_application_response_policy(
+        application_workload_source, application_response_policy
+    )
+    if response_policy != LEGACY_APPLICATION_RESPONSE_POLICY:
+        command += ["--application-response-policy", response_policy]
     if not defense.baseline:
         if chaff_manifest is None or application_workload_source is None:
             raise ValueError("every defended run requires prepared source and qualified chaff")
@@ -2366,3 +2396,21 @@ def _client_command(
         if defense.kind in {"traffic_morphing", "walkie_talkie"}:
             command += ["--workload-id", workload_id]
     return command
+
+
+def _launch_application_response_policy(
+    prepared_source: Path | None, explicit_policy: str | None
+) -> str:
+    """Bind baseline opt-in and defended policy to their original prepared inputs."""
+
+    policy = (
+        prepared_application_response_policy(load_json(prepared_source))
+        if prepared_source is not None else LEGACY_APPLICATION_RESPONSE_POLICY
+    )
+    if explicit_policy is not None:
+        if explicit_policy not in {LEGACY_APPLICATION_RESPONSE_POLICY, TERMINAL_HTTP_ERROR_POLICY}:
+            raise ValueError("unknown application response policy")
+        if prepared_source is not None and explicit_policy != policy:
+            raise ValueError("explicit application response policy differs from prepared source")
+        policy = explicit_policy
+    return policy

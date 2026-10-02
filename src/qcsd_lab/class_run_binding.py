@@ -15,6 +15,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .application_response_policy import (
+    LEGACY_APPLICATION_RESPONSE_POLICY,
+    application_response_policy,
+    validate_application_response_graph,
+)
 from .fidelity import terminal_evidence_render_receipt_valid
 from .manifest import canonical_bytes, https_origin, runtime_manifest
 from .util import load_json, sha256_bytes, sha256_file
@@ -62,6 +67,7 @@ class ClassSampleRunBinding:
     baseline: bool
     expected_origins: tuple[str, ...]
     expected_responses: tuple[tuple[Any, ...], ...]
+    application_response_policy: str = LEGACY_APPLICATION_RESPONSE_POLICY
 
     def receipt(self) -> dict[str, Any]:
         """Return the portable JSON receipt embedded in downstream evidence."""
@@ -161,6 +167,9 @@ def resolve_class_sample_run_binding(
 
     resources = runtime.get("resources")
     preparation = prepared.get("preparation")
+    response_policy = application_response_policy(prepared)
+    if response_policy != LEGACY_APPLICATION_RESPONSE_POLICY:
+        validate_application_response_graph(prepared)
     expected_values = (
         preparation.get("expected_responses") if isinstance(preparation, Mapping) else None
     )
@@ -251,6 +260,7 @@ def resolve_class_sample_run_binding(
         baseline=baseline,
         expected_origins=unique_origins,
         expected_responses=expected_responses,
+        application_response_policy=response_policy,
     )
 
 
@@ -277,6 +287,8 @@ def validate_class_sample_run_binding(
         or sample.get("runtime_kind") != binding.runtime_kind
         or sample.get("baseline") is not binding.baseline
         or run.get("completion_status") != "complete"
+        or run.get("application_response_policy", LEGACY_APPLICATION_RESPONSE_POLICY)
+        != binding.application_response_policy
         or run.get("error") is not None
         or run.get("error_class") is not None
         or not terminal_evidence_render_receipt_valid(run, require_empty=True)

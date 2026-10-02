@@ -41,7 +41,7 @@ def _parser() -> argparse.ArgumentParser:
     initialize.add_argument("--collector-module", action="append", type=_module, default=[],
                             help="independent revision 3 collector and executable snapshot NAME=PATH")
     initialize.add_argument("--attempt-module", action="append", type=_module, default=[],
-                            help="independent revision 4 unsuccessful live-attempt snapshot NAME=PATH")
+                            help="independent revision 4/5 unsuccessful live-attempt snapshot NAME=PATH (revision 5 includes application response policy)")
     for group in sorted(admission.IMPLEMENTATION_GROUPS):
         initialize.add_argument(f"--{group}-module", action="append", type=_module, required=True)
     for name, help_text in (
@@ -63,7 +63,7 @@ def _parser() -> argparse.ArgumentParser:
         if name in {"prepare", "seal"}:
             command.add_argument("--human-review", type=Path)
             command.add_argument("--automated-screen", type=Path,
-                                 help="distinct automatic URL/domain screen; requires selection amendment revision 2 or 3")
+                                 help="distinct automatic URL/domain screen; requires selection amendment revision 2 or later")
         if name == "review":
             command.add_argument("--reviewed-url", required=True)
             command.add_argument("--reviewer", required=True)
@@ -219,7 +219,7 @@ def _page_action(context: admission.AdmissionContext, candidate_id: str, args: a
         if args.command == "navigate" and context.selection_amendment_revision == 3:
             collector_runtime = admission.begin_operational_collector_action(context)
         if args.command == "navigate":
-            if context.selection_amendment_revision == 4:
+            if context.selection_amendment_revision in {4, 5}:
                 backend = admission.ObservedLiveBackend(admission.ExistingAcquisitionBackend(), context,
                     candidate_id, attempt, admission._attempt_action(context.candidate(candidate_id)))
                 produce_navigation_receipt(backend=backend, **kwargs)
@@ -247,7 +247,7 @@ def _page_action(context: admission.AdmissionContext, candidate_id: str, args: a
             navigation_reference = admission.import_evidence(context.root, args.navigation)
             navigation = admission._child(context.root, navigation_reference)
             admission.durable_create(attempt / "inputs.json", admission._json({"navigation": navigation_reference}))
-            if context.selection_amendment_revision == 4:
+            if context.selection_amendment_revision in {4, 5}:
                 return _v4_probe_page(context, candidate_id, attempt, navigation, args.selected_page_ordinal, kwargs)
             produce_selected_page_h3_receipt(navigation_receipt=navigation,
                 selected_page_ordinal=args.selected_page_ordinal,

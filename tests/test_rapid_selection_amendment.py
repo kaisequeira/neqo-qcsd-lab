@@ -579,6 +579,36 @@ def test_v4_normal_cohort_still_requires_fifty_full_graph_sites(context_v3):
         _build(context_v3)
 
 
+def test_v5_application_policy_cohort_keeps_50_complete_sites_and_bound_capture_grid(context_v3, tmp_path):
+    from qcsd_lab import rapid_capture_plan as capture
+    from qcsd_lab.application_response_policy import TERMINAL_HTTP_ERROR_POLICY
+    context_v3["amendment"] = _receipt(revision=5)
+    digest = amendment.selection_amendment_sha256(context_v3["amendment"])
+    for row in context_v3["records"].values():
+        if row["automated_site_screen"] is not None:
+            row["automated_site_screen"]["selection_amendment_sha256"] = digest
+        if row["admission"] is not None:
+            row["admission"].update(application_response_policy=TERMINAL_HTTP_ERROR_POLICY,
+                terminal_http_error_resource_ids=[], application_response_evidence_sha256=None)
+    value = _build(context_v3)
+    assert value["payload"]["application_response_policy"] == TERMINAL_HTTP_ERROR_POLICY
+    assert len(value["payload"]["selected_candidate_ids"]) == 50
+    assert value["payload"]["formal_sample_target"] == 16000
+    cohort_path, amendment_path = tmp_path / "cohort.json", tmp_path / "amendment.json"
+    cohort_path.write_bytes(rapid._canonical_json(value))
+    amendment_path.write_bytes(rapid._canonical_json(context_v3["amendment"]))
+    capture._check_bindings(capture.FrozenBindings(PROFILE_PATH, rapid.FROZEN_V5_PROFILE_SHA256,
+        cohort_path, _sha(cohort_path.read_bytes()), 5, amendment_path, digest))
+    sites = tuple(capture.Site(candidate["candidate_id"], f"workload-{index}", "b" * 64,
+        f"https://{candidate['domain']}", f"qualification-{index // 5}", f"{index // 5 + 1:064x}")
+        for index, candidate in enumerate(value["payload"]["selected_candidates"]))
+    assert sum(lane.sample_count for lane in capture.plan_lanes(sites, final=True, study_version=5)) == 16000
+    first = next(row for row in context_v3["records"].values() if row["admission"] is not None)
+    first["admission"]["application_response_policy"] = "http-2xx-only-v1"
+    with pytest.raises(ValueError, match="prospective contract"):
+        _build(context_v3)
+
+
 def test_v4_actual_unsuccessful_operation_does_not_replace_fiftieth_site(context_v3, tmp_path, monkeypatch):
     from qcsd_lab import rapid_attempt_failure_evidence as observer
     digest = _v4_rebind(context_v3)

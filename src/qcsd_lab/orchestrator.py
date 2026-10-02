@@ -70,6 +70,10 @@ from .manifest import (
     validate_manifest,
     validate_research_preparation,
 )
+from .application_response_policy import (
+    LEGACY_APPLICATION_RESPONSE_POLICY,
+    application_response_policy,
+)
 from .parameters import (
     BUFLO_STUDY_PARAMETER_KINDS,
     CONTROLLED_REGRESSION_ARTIFACT_TYPE,
@@ -4869,6 +4873,11 @@ def _execute(root: Path, campaign: Campaign, experiment: dict[str, Any]) -> Path
                                 defense,
                                 sample["seed"],
                                 context,
+                                **(
+                                    {"application_response_policy": application_response_policy(workload.data)}
+                                    if application_response_policy(workload.data) != LEGACY_APPLICATION_RESPONSE_POLICY
+                                    else {}
+                                ),
                             )
                     finally:
                         if workload.runtime_path is None:

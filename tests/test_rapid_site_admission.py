@@ -432,9 +432,11 @@ def _amended_context(context, tmp_path, *, revision=1):
     if revision >= 3:
         from qcsd_lab import rapid_collector_failure_evidence as collector
         modules[admission.COLLECTOR_GROUP] = collector.implementation_sources()
-    if revision == 4:
+    if revision >= 4:
         from qcsd_lab import rapid_attempt_failure_evidence as observer
-        modules[admission.ATTEMPT_GROUP] = observer.implementation_sources()
+        modules[admission.ATTEMPT_GROUP] = observer.implementation_sources(application_response_policy=revision == 5)
+    if revision == 5:
+        modules["preparation"] = admission.preparation_implementation_sources(application_response_policy=True)
     return admission.initialize_acquisition(
         tmp_path / "amended-acquisition", profile_path=paths["profile"], source=paths["source"],
         source_receipt=paths["source_receipt"], catalogue=paths["catalogue"],

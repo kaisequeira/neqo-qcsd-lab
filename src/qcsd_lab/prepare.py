@@ -21,6 +21,14 @@ from .acquisition_errors import (
     FullGraphH3PolicyError, PassiveRenderPolicyError, PreparationError,
     RecoverablePreparationError, ResponseStabilityPolicyError,
 )
+from .application_response_policy import (
+    COMPLETED_TERMINAL_HTTP_ERRORS_POLICY,
+    HTTP_2XX_ONLY_POLICY,
+    terminal_http_error_resource_allowed,
+    validate_application_response_policy,
+    validate_application_response_policy_evidence,
+    validate_application_responses,
+)
 from .discover import DiscoveryResult, discover_page, origin
 from .discovery_evidence import (
     evidence_sha256,
@@ -145,6 +153,49 @@ def _retain_preparation_diagnostics(
         "message": str(error), "files": files,
         "scientific_credit": False, "failure_classification": "none-diagnostic-only",
     }))
+
+
+def _retain_application_response_evidence(
+    directory: Path, destination: Path, *, workload_id: str,
+    capture_source: dict[str, Any], started_at: str, stability_runs: int,
+    policy_evidence: dict[str, Any],
+) -> Path:
+    """Keep only actual JSON ledgers required to reopen the opt-in proof."""
+    names = [
+        "probe-input.json", "probe-output.json", "probe.log.execution.json",
+        "probe-output.probe-head/run.json", "probe-output.probe-get/run.json",
+        "stability-input.json",
+        *[name for index in range(stability_runs) for name in (
+            f"stability-{index}/run.json", f"stability-{index}.log.execution.json",
+        )],
+    ]
+    source_after = _failure_capture_source()
+    if source_after != capture_source:
+        raise PreparationError("preparation runtime source changed before retaining its response proof")
+    destination.mkdir()
+    fsync_directory(destination.parent)
+    files = {}
+    for relative in names:
+        path = directory / relative
+        if path.is_symlink() or not path.is_file():
+            raise PreparationError(f"application response raw evidence is missing or linked: {relative}")
+        raw = path.read_bytes()
+        durable_create(destination / "artifacts" / relative, raw)
+        files[relative] = {"sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw)}
+    durable_create(destination / "inventory.json", canonical_bytes({
+        "schema_version": 1,
+        "artifact_type": "qcsd-application-response-preparation-evidence",
+        "workload_id": workload_id,
+        "original_directory": str(directory),
+        "capture_source_before": capture_source,
+        "capture_source_after": source_after,
+        "started_at": started_at,
+        "completed_at": datetime.now(UTC).isoformat(),
+        "policy_evidence": policy_evidence,
+        "files": files,
+        "scientific_credit": False,
+    }))
+    return destination
 
 
 @contextmanager
@@ -584,6 +635,7 @@ class PreparedWorkload:
     sha256: str
     resource_count: int
     origin_count: int
+    application_response_evidence_path: Path | None = None
 
 
 def prepare_workload(
@@ -599,6 +651,7 @@ def prepare_workload(
     stability_interval_seconds: int = DEFAULT_STABILITY_INTERVAL_SECONDS,
     require_complete_coverage: bool = False,
     origin_ip_pins: Mapping[str, str] | None = None,
+    application_response_policy: str | None = None,
 ) -> PreparedWorkload:
     """Discover, probe, stability-check, and freeze one replay workload.
 
@@ -607,6 +660,9 @@ def prepare_workload(
     must receive a new ID.
     """
 
+    selected_response_policy = validate_application_response_policy(application_response_policy)
+    if selected_response_policy == COMPLETED_TERMINAL_HTTP_ERRORS_POLICY and not require_complete_coverage:
+        raise ValueError("terminal HTTP error policy requires unchanged complete graph coverage")
     _validate_arguments(
         workload_id,
         source_url,
@@ -644,6 +700,7 @@ def prepare_workload(
         for resource in discovery.resources
     ]
     root.mkdir(parents=True, exist_ok=True)
+    application_response_evidence_path = None
     with _retained_preparation_directory(
         root, workload_id=workload_id, source_url=source_url, discovery=discovery,
         capture_source=capture_source, started_at=capture_started_at,
@@ -689,6 +746,8 @@ def prepare_workload(
                 discovery,
                 probe_output,
                 require_complete_coverage=require_complete_coverage,
+                **({"application_response_policy": application_response_policy,
+                    "probe_directory": directory} if application_response_policy is not None else {}),
             )
         except FullGraphH3PolicyError as error:
             error.evidence["artifacts"] = _snapshot_failure_artifacts(directory)
@@ -702,6 +761,9 @@ def prepare_workload(
             timeout_seconds=timeout_seconds,
             stability_runs=stability_runs,
             stability_interval_seconds=stability_interval_seconds,
+            **({"application_response_policy": application_response_policy,
+                "source_url": discovery.source_url, "final_url": discovery.final_url}
+               if application_response_policy is not None else {}),
         )
         required = {resource["id"] for resource in resources}
         stable = set(evidence["stable_resource_ids"])
@@ -723,6 +785,33 @@ def prepare_workload(
             )
             _stamp_policy_failure(error, capture_source, capture_started_at)
             raise error
+        policy_evidence = (
+            _terminal_http_error_policy_evidence(directory, resources, runs)
+            if application_response_policy is not None and any(resource["known_valid"] is False for resource in resources)
+            else None
+        )
+        if policy_evidence is not None:
+            provisional_resources = json.loads(json.dumps(resources))
+            _freeze_request_headers(provisional_resources, runs)
+            provisional = {"resources": provisional_resources, "preparation": {
+                "application_response_policy": application_response_policy,
+                "application_response_policy_evidence": policy_evidence,
+                "expected_responses": evidence["expected_responses"],
+                "source_url": discovery.source_url, "final_url": discovery.final_url,
+                "stability_runs": stability_runs, **_neqo_provenance(runs),
+            }}
+            try:
+                validate_application_response_policy_evidence(provisional)
+            except (KeyError, TypeError, ValueError) as error:
+                raise RecoverablePreparationError(
+                    f"terminal HTTP error preflight/stability identities differ: {error}"
+                ) from error
+            application_response_evidence_path = _retain_application_response_evidence(
+                directory, root / f"{workload_id}-application-response-evidence",
+                workload_id=workload_id, capture_source=capture_source,
+                started_at=capture_started_at, stability_runs=stability_runs,
+                policy_evidence=policy_evidence,
+            )
     try:
         resources = project_stable_response_lengths(resources, evidence["expected_responses"])
     except (KeyError, TypeError, ValueError) as error:
@@ -774,6 +863,10 @@ def prepare_workload(
             "stability_profile": STABILITY_PROFILE,
             "stability_defense": STABILITY_DEFENSE,
             "stability_seed": STABILITY_SEED,
+            **({"application_response_policy": application_response_policy}
+               if application_response_policy is not None else {}),
+            **({"application_response_policy_evidence": policy_evidence}
+               if policy_evidence is not None else {}),
             "udp_payload_qualification": udp_payload_qualification,
             **(
                 {"coverage_admission": coverage_admission} if coverage_admission is not None else {}
@@ -789,6 +882,7 @@ def prepare_workload(
         sha256=digest,
         resource_count=len(resources),
         origin_count=len({origin(resource["url"]) for resource in resources}),
+        application_response_evidence_path=application_response_evidence_path,
     )
 
 
@@ -876,11 +970,16 @@ def resolve_probe_output(
     resolved: dict[str, Any],
     *,
     require_complete_coverage: bool = False,
+    application_response_policy: str | None = None,
+    probe_directory: Path | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     """Retain the fetchable dependency closure without rewriting graph edges."""
 
     if not isinstance(require_complete_coverage, bool):
         raise ValueError("complete coverage admission must be boolean")
+    selected_response_policy = validate_application_response_policy(application_response_policy)
+    if selected_response_policy == COMPLETED_TERMINAL_HTTP_ERRORS_POLICY and not require_complete_coverage:
+        raise ValueError("terminal HTTP error policy requires complete graph coverage")
     source_by_id = {resource["id"]: resource for resource in discovery.resources}
     resolved_by_id = {resource["id"]: resource for resource in resolved["resources"]}
     if set(source_by_id) != set(resolved_by_id):
@@ -893,9 +992,13 @@ def resolve_probe_output(
                 f"Neqo probe changed discovered request data for resource {resource_id}"
             )
 
-    unavailable = [
-        resource for resource in resolved["resources"] if resource.get("known_valid") is not True
-    ]
+    permitted_negative_ids = set()
+    if selected_response_policy == COMPLETED_TERMINAL_HTTP_ERRORS_POLICY:
+        permitted_negative_ids = set(_terminal_http_error_probe_records(
+            discovery, resolved, probe_directory,
+        ))
+    unavailable = [resource for resource in resolved["resources"]
+                   if resource.get("known_valid") is not True and resource["id"] not in permitted_negative_ids]
     if require_complete_coverage and unavailable:
         details = ", ".join(
             f"{resource['id']} ({resource['url']})"
@@ -910,7 +1013,8 @@ def resolve_probe_output(
             ),
         )
     retained_ids = {
-        resource["id"] for resource in resolved["resources"] if resource.get("known_valid") is True
+        resource["id"] for resource in resolved["resources"]
+        if resource.get("known_valid") is True or resource["id"] in permitted_negative_ids
     }
     while True:
         orphaned = {
@@ -956,6 +1060,156 @@ def resolve_probe_output(
     prepared = {"resources": resources}
     validate_manifest(prepared)
     return resources, exclusions
+
+
+def _terminal_http_error_probe_records(
+    discovery: DiscoveryResult, resolved: dict[str, Any], directory: Path | None,
+    *, execution_directory: Path | None = None,
+) -> dict[int, dict[str, Any]]:
+    """Reopen actual probe child and HEAD/GET ledgers; False alone grants nothing."""
+    unavailable = [resource for resource in resolved["resources"] if resource.get("known_valid") is not True]
+    if not unavailable:
+        return {}
+    if directory is None:
+        raise PreparationError("terminal HTTP errors require the actual retained probe directory")
+    directory = Path(directory)
+    command_directory = directory if execution_directory is None else Path(execution_directory)
+    required = ("probe-input.json", "probe-output.json", "probe.log.execution.json",
+                "probe-output.probe-head/run.json", "probe-output.probe-get/run.json")
+    raw = {}
+    try:
+        for name in required:
+            path = directory / name
+            if path.is_symlink() or not path.is_file():
+                raise ValueError("terminal HTTP error probe evidence is missing or linked")
+            raw[name] = path.read_bytes()
+        original = _strict_failure_json(raw["probe-input.json"])
+        output = _strict_failure_json(raw["probe-output.json"])
+        if original != {"resources": discovery.resources} or output != resolved:
+            raise ValueError("terminal HTTP error probe input/output differs from the retained complete graph")
+        execution = _failure_child_execution(raw, "probe.log.execution.json", "probe", returncode=0)
+        command = execution["command"]
+        if (command[command.index("--input-manifest") + 1] != str(command_directory / "probe-input.json")
+            or command[command.index("--output") + 1] != str(command_directory / "probe-output.json")):
+            raise ValueError("terminal HTTP error child command does not bind the actual graph files")
+        max_bytes = int(command[command.index("--max-bytes") + 1])
+        if max_bytes < 1:
+            raise ValueError("terminal HTTP error probe did not retain response bodies")
+        head = _strict_failure_json(raw["probe-output.probe-head/run.json"])
+        get = _strict_failure_json(raw["probe-output.probe-get/run.json"])
+        expected = {resource["id"]: resource for resource in discovery.resources}
+
+        def verify_stage(value: Any, method: str, resources: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
+            stage_resources = {resource["id"]: resource for resource in resources}
+            if (not isinstance(value, dict) or value.get("method") != method
+                or value.get("request_policy") != "as-defined" or type(value.get("seed")) is not int
+                or value["seed"] != 0 or value.get("completion_status") not in {"complete", "partial"}
+                or value.get("error") is not None or value.get("error_class") is not None
+                or value.get("terminal_evidence_render_errors") != []
+                or value.get("application_response_policy", HTTP_2XX_ONLY_POLICY) != HTTP_2XX_ONLY_POLICY
+                or value.get("workload_hash_sha256") != _probe_runtime_manifest_hash(resources)
+                or value.get("application_workload_source_hash_sha256") is not None
+                or value.get("chaff_manifest_hash_sha256") is not None
+                or value.get("defense_parameters") is not None
+                or value.get("max_response_bytes") != (0 if method == "HEAD" else max_bytes)
+                or not isinstance(value.get("resolved_configuration"), dict)
+                or value["resolved_configuration"].get("defense") != {"kind": "none"}
+                or any(not isinstance(value.get(key), str) or not value[key] for key in NEQO_PROVENANCE_KEYS)):
+                raise ValueError("terminal HTTP error probe run changed its actual request/source contract")
+            started, ended = value.get("started_unix_ns"), value.get("ended_unix_ns")
+            bounds = [datetime.fromisoformat(execution[key]).timestamp() * 1e9
+                      for key in ("started_at", "completed_at")]
+            if (type(started) is not int or type(ended) is not int
+                or value.get("time_anchor_unix_ns") != started
+                or not bounds[0] - 1_000 <= started <= ended <= bounds[1] + 1_000):
+                raise ValueError("terminal HTTP error probe timestamps are outside actual child execution")
+            origins = sorted({origin(row["url"]) for row in resources}, key=lambda url: (
+                urlsplit(url).hostname, urlsplit(url).port or 443,
+            ))
+            endpoints = value.get("endpoints")
+            if (not isinstance(endpoints, list) or len(endpoints) != len(origins)
+                or any(not isinstance(row, dict) or type(row.get("id")) is not int
+                       or row["id"] != index or row.get("origin") != f"{origins[index]}/"
+                       or row.get("negotiated_protocol") != "h3" for index, row in enumerate(endpoints))):
+                raise ValueError("terminal HTTP error probe lacks its actual HTTP/3 origin endpoints")
+            rows = value.get("responses")
+            if not isinstance(rows, list):
+                raise ValueError("terminal HTTP error probe has no response ledger")
+            by_id = {}
+            for row in rows:
+                identifier = row.get("resource_id") if isinstance(row, dict) else None
+                if (type(identifier) is not int or identifier in by_id or identifier not in stage_resources
+                    or row.get("url") != stage_resources[identifier]["url"]):
+                    raise ValueError("terminal HTTP error probe changed response identifiers/URLs")
+                if method == "GET" and (row.get("complete") is not True
+                    or type(row.get("status")) is not int or not 100 <= row["status"] <= 599
+                    or type(row.get("bytes")) is not int or not 0 <= row["bytes"] <= max_bytes
+                    or not isinstance(row.get("body_sha256"), str)
+                    or re.fullmatch(r"[0-9a-f]{64}", row["body_sha256"]) is None
+                    or row.get("outcome") != ("succeeded" if 200 <= row["status"] < 300 else "failed")
+                    or not isinstance(row.get("request_headers"), list)
+                    or any(not isinstance(pair, list) or len(pair) != 2
+                           or any(not isinstance(part, str) for part in pair) for pair in row["request_headers"])):
+                    raise ValueError("terminal HTTP error GET was incomplete, malformed or unretained")
+                by_id[identifier] = row
+            if set(by_id) != set(stage_resources):
+                raise ValueError("terminal HTTP error probe response ledger omitted its actual stage resource")
+            return by_id
+
+        head_rows = verify_stage(head, "HEAD", discovery.resources)
+        missing = {identifier for identifier, row in head_rows.items()
+                   if type(row.get("status")) is not int or not 200 <= row["status"] < 300
+                   or row.get("content_length") is None}
+        fallback = [resource for resource in discovery.resources if resource["id"] in missing]
+        get_rows = verify_stage(get, "GET", fallback)
+        if any(head[key] != get[key] for key in NEQO_PROVENANCE_KEYS):
+            raise ValueError("terminal HTTP error probe phases used different clients")
+        permitted = {}
+        for resource in unavailable:
+            row = get_rows.get(resource["id"])
+            if row is None or not 400 <= row["status"] <= 599:
+                continue
+            if not terminal_http_error_resource_allowed(resource, resolved["resources"]):
+                continue
+            if row.get("content_length") is not None and (
+                type(row["content_length"]) is not int or row["content_length"] != row["bytes"]
+            ):
+                raise ValueError("terminal HTTP error GET did not retain its declared complete body")
+            if resource.get("data_length") != row["bytes"]:
+                raise ValueError("terminal HTTP error resolved response length differs from actual GET")
+            permitted[resource["id"]] = row
+        return permitted
+    except (KeyError, IndexError, OSError, TypeError, ValueError) as error:
+        raise PreparationError(f"terminal HTTP error preflight evidence is invalid: {error}") from error
+
+
+def _terminal_http_error_policy_evidence(
+    directory: Path, resources: list[dict[str, Any]], runs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    identifiers = sorted(resource["id"] for resource in resources if resource.get("known_valid") is False)
+    get_raw = (directory / "probe-output.probe-get/run.json").read_bytes()
+    get = _strict_failure_json(get_raw)
+    fields = ("resource_id", "url", "status", "bytes", "body_sha256", "complete", "outcome", "request_headers")
+    select = lambda rows: [{key: row[key] for key in fields} for row in sorted(rows, key=lambda row: row["resource_id"])
+                           if row["resource_id"] in identifiers]
+    # The compact proof preserves the original failed HTTP status semantics;
+    # the fresh opt-in runs are separate scheduling-success witnesses.
+    return {
+        "schema_version": 1, "policy": COMPLETED_TERMINAL_HTTP_ERRORS_POLICY,
+        "probe_input_sha256": sha256_file(directory / "probe-input.json"),
+        "probe_output_sha256": sha256_file(directory / "probe-output.json"),
+        "child_execution_sha256": sha256_file(directory / "probe.log.execution.json"),
+        "get_run_sha256": hashlib.sha256(get_raw).hexdigest(),
+        "client_provenance": {key: get[key] for key in NEQO_PROVENANCE_KEYS},
+        "get_responses": select(get["responses"]),
+        "get_endpoints": [{key: endpoint[key] for key in ("id", "origin", "negotiated_protocol")}
+                          for endpoint in get["endpoints"]
+                          if origin(endpoint["origin"]) in {origin(row["url"]) for row in get["responses"]
+                                                             if row["resource_id"] in identifiers}],
+        "stability_run_sha256s": [sha256_file(directory / f"stability-{index}/run.json")
+                                 for index in range(len(runs))],
+        "stability_responses": [select(run["responses"]) for run in runs],
+    }
 
 
 def _complete_coverage_admission(discovery: DiscoveryResult) -> dict[str, Any]:
@@ -1083,7 +1337,11 @@ def _probe_response_stability(
     timeout_seconds: int,
     stability_runs: int,
     stability_interval_seconds: int,
+    application_response_policy: str | None = None,
+    source_url: str | None = None,
+    final_url: str | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    selected_response_policy = validate_application_response_policy(application_response_policy)
     runtime_input = directory / "stability-input.json"
     runtime_input.write_bytes(canonical_bytes(runtime_manifest(manifest)))
     runs: list[dict[str, Any]] = []
@@ -1096,6 +1354,8 @@ def _probe_response_stability(
             [
                 NEQO_CLIENT,
                 "run",
+                *(["--application-response-policy", application_response_policy]
+                  if application_response_policy is not None else []),
                 "--workload",
                 str(runtime_input),
                 "--profile",
@@ -1132,8 +1392,26 @@ def _probe_response_stability(
             )
         )
         runs.append(run_data)
+    stability = response_stability_evidence(runs)
+    if selected_response_policy == COMPLETED_TERMINAL_HTTP_ERRORS_POLICY:
+        # Every run must actually opt into the native semantics and retain all
+        # completed graph resources. Identity changes still reach the ordinary
+        # three-run stability failure rather than being silently discarded.
+        by_id = {resource["id"]: resource for resource in manifest["resources"]}
+        for run_data in runs:
+            candidate_expected = [{key: response[key] for key in ("resource_id", "status", "bytes", "body_sha256")}
+                                  for response in run_data.get("responses", [])]
+            candidate = {"resources": list(by_id.values()), "preparation": {
+                "application_response_policy": application_response_policy,
+                "source_url": source_url, "final_url": final_url,
+                "expected_responses": candidate_expected,
+            }}
+            try:
+                validate_application_responses(candidate, run_data)
+            except (KeyError, TypeError, ValueError) as error:
+                raise RecoverablePreparationError(f"terminal HTTP error stability run is invalid: {error}") from error
     return (
-        response_stability_evidence(runs),
+        stability,
         runs,
         {
             "schema_version": UDP_PAYLOAD_QUALIFICATION_SCHEMA_VERSION,

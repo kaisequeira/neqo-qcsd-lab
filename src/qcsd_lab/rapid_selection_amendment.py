@@ -26,6 +26,7 @@ AMENDED_V2_SELECTION_POLICY = "first-N-automatic-public-url-screened-with-typed-
 AMENDED_V2_ADMISSION_POLICY = "root-and-exact-page-h3-automatic-public-url-screen-complete-live-graph-and-cross-origin-v2"
 AMENDED_V3_SELECTION_POLICY = "first-N-automatic-public-url-screened-with-bounded-operational-collector-deferrals-v3"
 AMENDED_V4_SELECTION_POLICY = "first-N-admitted-with-source-bound-unsuccessful-live-attempt-deferrals-v4"
+AMENDED_V5_ADMISSION_POLICY = "root-and-exact-page-h3-complete-live-graph-with-completed-terminal-http-errors-v5"
 ATTEMPT_FAILURE_DEFERRAL_POLICY = "prospective-unsuccessful-live-attempt-deferral-v4"
 ATTEMPT_FAILURE_DEFERRAL_REASON = "unsuccessful-live-attempt-screen-deferred"
 BROWSER_POLICY_DEFERRAL_POLICY = "prospective-nonreplayable-browser-navigation-deferral-v1"
@@ -42,6 +43,8 @@ FROZEN_V2_AMENDMENT_PUBLICATION_UTC = "2026-10-02T15:19:12.576895Z"
 FROZEN_V2_AMENDMENT_SHA256 = "32cd9eb8440c86f204919bde64a5f27cdcf1efcf28e7becf127d8e3798266457"
 FROZEN_V3_AMENDMENT_PUBLICATION_UTC = "2026-10-02T17:00:14.866744Z"
 FROZEN_V3_AMENDMENT_SHA256 = "e175fa86345946999af391ec3a98115abd2b84c4cfffdce075dab10b09e3ad3e"
+FROZEN_V4_AMENDMENT_PUBLICATION_UTC = "2026-10-02T18:13:34.038260Z"
+FROZEN_V4_AMENDMENT_SHA256 = "0808c27b60b229de938bd8a3ae26aca615455c3c4978130b4792041787420a28"
 AUTOMATED_SITE_SCREEN_POLICY = "frozen-public-url-and-domain-screen-v1"
 AUTOMATED_SITE_SCREEN_DECISION = "automatic-policy-pass"
 
@@ -86,7 +89,7 @@ def _utc(value: Any) -> datetime:
 def _amendment_payload(
     published_at_utc: str, parent_profile_sha256: str, *, revision: int = 1,
 ) -> dict[str, Any]:
-    if type(revision) is not int or revision not in (1, 2, 3, 4):
+    if type(revision) is not int or revision not in (1, 2, 3, 4, 5):
         raise ValueError("selection amendment revision is unregistered")
     published = _utc(published_at_utc)
     if published < _utc(PARENT_PROFILE_PUBLICATION_UTC) or published > datetime.now(UTC):
@@ -250,7 +253,7 @@ def _amendment_payload(
             "new_operational_collector_failure": "started-at-or-after-published-at-utc",
             "v2_failed_attempts": "retain-v2-only-authority-no-v3-relabel-or-promotion",
         }
-    if revision == 4:
+    if revision >= 4:
         if published < _utc(FROZEN_V3_AMENDMENT_PUBLICATION_UTC):
             raise ValueError("selection amendment v4 publication is before its v3 parent")
         parent = profile._bind(_amendment_payload(
@@ -281,6 +284,39 @@ def _amendment_payload(
         result["freshness_policy"] = {**result["freshness_policy"],
             "new_unsuccessful_live_attempt": "started-at-or-after-published-at-utc",
             "v3_failed_attempts": "retain-v3-only-authority-no-v4-relabel-or-promotion"}
+    if revision == 5:
+        from .application_response_policy import TERMINAL_HTTP_ERROR_POLICY
+        if published < _utc(FROZEN_V4_AMENDMENT_PUBLICATION_UTC):
+            raise ValueError("selection amendment v5 publication is before its v4 parent")
+        parent = profile._bind(_amendment_payload(
+            FROZEN_V4_AMENDMENT_PUBLICATION_UTC, parent_profile_sha256, revision=4,
+        ), SELECTION_AMENDMENT_RECEIPT_TYPE, schema_version=5)
+        parent_sha = profile._sha(profile._canonical_json(parent))
+        if parent_sha != FROZEN_V4_AMENDMENT_SHA256:
+            raise ValueError("frozen v4 selection amendment declaration no longer verifies")
+        result.update({
+            "amendment_id": "crux73-tranco600-rapid-v5-selection-v5", "revision": 5,
+            "parent_selection_amendment_sha256": parent_sha,
+            "parent_selection_policy": AMENDED_V4_SELECTION_POLICY,
+            "parent_admission_policy": AMENDED_V2_ADMISSION_POLICY,
+            "admission_policy": AMENDED_V5_ADMISSION_POLICY,
+            "application_response_policy": TERMINAL_HTTP_ERROR_POLICY,
+            "application_response_acceptance": {
+                "full_resource_graph": "unchanged-no-resource-or-origin-pruning",
+                "allowed_errors": "complete-4xx-or-5xx-non-primary-terminal-leaves-only",
+                "error_qualification": "known-valid-false-and-not-chaff",
+                "dependency_parents": "must-remain-known-valid-2xx",
+                "primary_document": "known-valid-complete-2xx-html-with-exact-page-proof",
+                "transport": "actual-negotiated-http3-and-complete-response-required",
+                "response_identity": "retain-exact-status-body-bytes-hash-and-headers",
+                "stability": "three-fresh-complete-full-graph-policy-matching-replays",
+                "required_proof": "independently-reopened-original-get-and-stability-policy-evidence",
+                "chaff": "unchanged-qualified-known-valid-2xx-only",
+            },
+        })
+        result["freshness_policy"] = {**result["freshness_policy"],
+            "new_policy_preparation": "started-at-or-after-published-at-utc",
+            "v4_failed_attempts": "retain-v4-only-authority-no-v5-relabel-or-promotion"}
     return result
 
 
@@ -305,6 +341,7 @@ def validate_selection_amendment(
         "crux73-tranco600-rapid-v5-selection-v2": 2,
         "crux73-tranco600-rapid-v5-selection-v3": 3,
         "crux73-tranco600-rapid-v5-selection-v4": 4,
+        "crux73-tranco600-rapid-v5-selection-v5": 5,
     }
     amendment_id = payload.get("amendment_id")
     revision = ids.get(amendment_id) if isinstance(amendment_id, str) else None
@@ -339,7 +376,7 @@ def root_screen_allows_browser_progression(root: Mapping[str, Any] | None, *, re
         return False
     identity = (root.get("outcome"), root.get("detail"))
     return identity == ("known-valid", "known-valid") or (
-        type(revision) is int and revision in {3, 4}
+        type(revision) is int and revision in {3, 4, 5}
         and identity == ("ambiguous", "response-known-invalid")
     )
 
@@ -523,6 +560,10 @@ def _unsuccessful_attempt_deferral(
         selection_amendment_sha256=selection_amendment_sha256(selection_amendment),
         not_before_utc=selection_amendment_not_before_utc(selection_amendment),
         selected_page_h3_proof=page_proof, automated_site_screen=automated_screen)
+    from .rapid_attempt_failure_evidence import APPLICATION_RESPONSE_POLICY_MODULE
+    has_policy_source = APPLICATION_RESPONSE_POLICY_MODULE in failure["implementation_hashes"]
+    if has_policy_source != (selection_amendment_revision(selection_amendment) == 5):
+        raise ValueError("unsuccessful attempt source inventory differs from its prospective application policy")
     if failure["action"]["kind"] == "complete-graph-preparation":
         if page_proof is None or automated_screen is None:
             raise ValueError("unsuccessful preparation lacks its exact page and automatic screen")
@@ -622,7 +663,7 @@ def _selection_payload(
             allowed_fields += (fields | {"triage", "page_policy_failure"},)
         if revision >= 3:
             allowed_fields += (fields | {"triage", "operational_collector_failure"},)
-        if revision == 4:
+        if revision >= 4:
             allowed_fields += (fields | {"triage", "unsuccessful_attempt_failure"},)
         if not isinstance(facts, Mapping) or set(facts) not in allowed_fields:
             raise ValueError("v5 terminal verifier returned invalid facts")
@@ -658,7 +699,7 @@ def _selection_payload(
                 selection_amendment,
             ) if revision >= 2 else None
         )
-        if revision == 4 and "unsuccessful_attempt_failure" in facts:
+        if revision >= 4 and "unsuccessful_attempt_failure" in facts:
             attempt_failure = _unsuccessful_attempt_deferral(
                 facts, candidate, binding, selection_amendment, screen, page_proof,
                 automatic_screen, review)
@@ -679,12 +720,27 @@ def _selection_payload(
                 automatic_screen, review,
             )
         elif outcome == "admitted":
-            if "triage" in facts or not isinstance(admission, Mapping) or set(admission) != {
+            admission_fields = {
                 "selected_page_url", "prepared_workload_sha256",
                 "cross_origin_resource_count", "full_resource_graph_sha256",
                 "h3_proof_sha256",
-            }:
+            }
+            if revision == 5:
+                admission_fields |= {"application_response_policy", "terminal_http_error_resource_ids",
+                                     "application_response_evidence_sha256"}
+            if "triage" in facts or not isinstance(admission, Mapping) or set(admission) != admission_fields:
                 raise ValueError("v5 admitted site lacks exact page and complete graph proof")
+            if revision == 5:
+                error_ids = admission["terminal_http_error_resource_ids"]
+                if (admission["application_response_policy"] != amendment_payload["application_response_policy"]
+                    or not isinstance(error_ids, list)
+                    or any(type(identifier) is not int or identifier <= 0 for identifier in error_ids)
+                    or error_ids != sorted(set(error_ids))):
+                    raise ValueError("admitted application response policy differs from its prospective contract")
+                proof_sha = admission["application_response_evidence_sha256"]
+                if (error_ids and (not isinstance(proof_sha, str) or profile._SHA_RE.fullmatch(proof_sha) is None)
+                    or not error_ids and proof_sha is not None):
+                    raise ValueError("admitted application response errors lack their independently reopened raw proof")
             if profile.unsafe_catalogue_domain_reason(candidate["domain"]) is not None:
                 raise ValueError("v5 automatically unsafe site cannot be admitted")
             if screen is None or page_proof is None:
@@ -767,6 +823,7 @@ def _selection_payload(
         "execution_binding": binding,
         "selection_policy": amendment_payload["selection_policy"],
         "selection_amendment_sha256": selection_amendment_sha256(selection_amendment),
+        **({"application_response_policy": amendment_payload["application_response_policy"]} if revision == 5 else {}),
         **({"automated_screen_policy_sha256": automated_screen_policy_sha256()} if revision >= 2 else {}),
         "terminal_decisions": decisions,
         "selected_candidate_ids": [candidate["candidate_id"] for candidate in selected],

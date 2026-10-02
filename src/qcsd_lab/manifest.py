@@ -10,6 +10,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from .application_response_policy import (
+    application_response_policy,
+    validate_application_response_policy_evidence,
+)
+
 from .discovery_evidence import (
     PASSIVE_RENDER_CONTRACT_SHA256,
     evidence_sha256,
@@ -60,6 +65,8 @@ REPLAY_KEYS = {
     "response_stability",
 }
 PREPARATION_KEYS = {
+    "application_response_policy",
+    "application_response_policy_evidence",
     "source_url",
     "final_url",
     "chromium_version",
@@ -102,6 +109,8 @@ DISCOVERY_EVIDENCE_PREPARATION_KEYS = {
     "discovery_event_audit_sha256",
 }
 LEGACY_OPTIONAL_PREPARATION_KEYS = {
+    "application_response_policy",
+    "application_response_policy_evidence",
     "udp_payload_qualification",
     "coverage_admission",
     "origin_ip_pins",
@@ -647,6 +656,10 @@ def _validate_preparation(
         response_ids.add(resource_id)
     if response_ids != resource_ids or len(response_ids) != len(responses):
         raise ValueError("manifest preparation expected response IDs must match resources")
+    if "application_response_policy" in value or "application_response_policy_evidence" in value:
+        policy_manifest = {"preparation": value, "resources": resources}
+        application_response_policy(policy_manifest)
+        validate_application_response_policy_evidence(policy_manifest)
 
 
 def _validate_coverage_admission(
