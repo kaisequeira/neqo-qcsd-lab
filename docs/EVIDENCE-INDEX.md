@@ -411,6 +411,37 @@ cross-image receipt loading and a bounded collection canary. The historical
 workload's passing bridge proves runtime placement, not success for that new
 graph. No new first-site qualification or canary result is claimed here.
 
+### Short Bing collector diagnostic, 3 October 2026
+
+The separate zero-credit diagnostic at host-local
+`../diagnostic-rehearsals/rapid-v5-bing-passive-render-20261003-001/`
+ran the exact frozen context-006 `ExistingAcquisitionBackend.discover` once,
+with only `https://www.bing.com` approved. Docker exited 0 with empty stderr at
+`2026-10-02T19:19:25.336620Z`; the backend call itself completed successfully
+at `19:19:22.863261Z`. The retained inventory independently reopened **22 files,
+9,533,356 bytes and all 18 source/client bindings**, with the clean runtime
+unchanged. The frozen render and discovery-event validators passed.
+
+All 78 Network request occurrences had terminal events: 72 failed and six
+finished. The 72 blocked Fetch requests comprised 70 unapproved-origin GETs
+and two POSTs. At the render cutoff there were zero active requests, the router
+was ready and no worker, egress or internal-document setup was pending. The
+required quiet window lasted 3,001 ms; the cutoff was 13,001 ms after load.
+This disproves an inevitable blocked-request leak in this one frozen path.
+It does not diagnose the earlier timeout, whose failed cutoff snapshot was
+not retained.
+
+This was only the first discovery pass: four primary-origin resources and
+`r.bing.com` identified for later origin expansion. It did not perform full
+preparation, resource HTTP/3 checks, stable replays, site admission or capture.
+The earlier sealed Bing failure is unchanged; **no scientific counter advances**.
+`output/discovery-result.json` SHA-256 is
+`a90f0ecd881ea12ed257d9e50fdb5533bd3b99cce935552948ad665c1910ac88`;
+`output/evidence-index.json` SHA-256 is
+`cdd799a9181d1a2ad8d4c9e8485b3800a1afb62ec6e5689a5048cc789d5f1ea1`;
+`execution.json` SHA-256 is
+`f8f338457b5a6219a062a53bcc214d8af13384e92d52abd3b2bf76858bb3f593`.
+
 ### Clean fallback first screen, 3 October 2026
 
 The fresh clean-image survey at host-local

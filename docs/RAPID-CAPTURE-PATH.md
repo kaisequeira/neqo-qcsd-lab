@@ -304,6 +304,15 @@ cleanup. No missing file or page observation is invented. The image and
 client are unchanged, and admitted sites still need complete cross-origin
 graphs and stable replay: **50 × five × 64 = 16,000** remains fixed.
 
+A separate short Bing discovery diagnostic passed on the exact frozen
+preparation software at `2026-10-02T19:19:22.863261Z`. All 78 observed request
+occurrences reached terminal events, with no active requests or pending target
+setup at the render cutoff. This shows that the earlier 30-second failure is
+not inevitable in that path. It does not explain that earlier timeout or prove
+full-page preparation. The prior failure remains sealed; the diagnostic grants
+no site or trace credit. Its scope, inventory and hashes are recorded in the
+[evidence index](EVIDENCE-INDEX.md#short-bing-collector-diagnostic-3-october-2026).
+
 The actual runtime, screen logs, failed attempts and sealed diagnostic
 results are host-local evidence described through the
 [evidence index](EVIDENCE-INDEX.md). None grants formal capture credit:
@@ -333,6 +342,32 @@ prepare image is compatible with the collection image; copy its bytes unchanged.
 The qualified sidecar can later join a five-workload named set without repeating
 qualification when its workload, client, image and implementation bindings remain
 unchanged. Neither fitting nor a rebuild is needed for this early check.
+
+### Page changes during a multi-day run
+
+Capture currently requires **every resource's status, byte count and body
+SHA-256 to match its prepared identity under all five settings**, including
+undefended traffic. Even a body change that keeps the same length fails the
+[application-response check](../src/qcsd_lab/orchestrator.py#L5286).
+Preparation's three nearby repeats test short-term stability; they do not
+establish stability over several days.
+
+Existing lane generations retry an unchanged frozen workload. They cannot
+refresh one class's manifest and qualifier within the existing cohort and
+formal manifest: [planning requires the admitted bytes](../src/qcsd_lab/rapid_site_admission.py#L2047),
+and [formal closure derives the workload from its original terminal](../src/qcsd_lab/rapid_capture_plan.py#L731).
+If refresh is allowed, a prospective class-version/epoch procedure must be
+defined before formal capture. That procedure is **not implemented**. It must
+retain accepted evidence, independently validate each new complete graph and
+qualification, and preserve **50 × five × 64 = 16,000** without relabelling old
+failures or accepting changed bytes against an old identity.
+
+The earliest cheap check is first-site qualification followed by an immediate
+baseline capture, then a repeat of the **same frozen workload** later while
+site discovery continues. This can expose drift without a blocking long test
+cycle. If it fails, inspect `differing_resource_ids` in the saved
+`StrictPreparedResponseIdentityFailure` diagnostic. These checks give zero
+study credit and do not prove stability for the entire acquisition period.
 
 ### Historical failures kept for review
 
