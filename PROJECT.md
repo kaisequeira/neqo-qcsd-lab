@@ -50,10 +50,12 @@ registers the 73 supplied candidates followed by the frozen 600-domain
 fallback, a ten-site zero-credit shakedown, and a separate 50-site formal target.
 It records the first controlled homepage result and permits an ambiguous one
 to proceed to a separately controlled HTTP/3 pass on the exact selected page.
-The published [selection revision 2](config/curated-sources/crux73-tranco600-rapid-v5-selection-v2.json)
-requires a recorded automatic public URL/domain screen, a complete replayable
-browser graph and a live cross-origin resource. It makes no content-classifier
-claim. Fifty-site yield is unproven.
+The published [selection revision 3](config/curated-sources/crux73-tranco600-rapid-v5-selection-v3.json)
+retains the recorded automatic public URL/domain screen, complete replayable
+browser graph and live cross-origin resource. It adds bounded, zero-credit
+collector deferrals and routes completed ambiguous homepage responses to
+separate exact-page checks. It makes no content-classifier claim. Fifty-site
+yield is unproven.
 The 20-site proposal remains a historical alternative, with **0/30 eligible
 pilots and 0/16,000 accepted formal samples**. The rapid proposal also has
 **0/50 eligible final classes and 0/16,000 accepted formal samples**.
@@ -100,9 +102,23 @@ verified screening decisions and no admitted sites. Alibaba passed catalogue
 navigation, the controlled exact-page H3 check and automatic URL/domain screen.
 Its full preparation then exceeded the 30-second passive-render limit and
 reported `CdpTargetIntegrityError` for an unknown frame detachment during
-cleanup. That attempt remains an unsealed operational failure. The next
-selection revision will explicitly record such observed collector limitations
-as bounded operational deferrals; it will not grant site or trace credit.
+cleanup. That attempt remains an unsealed operational failure under revision 2.
+Selection revision 3 was published at `2026-10-02T17:00:14.866744Z`, SHA-256
+`e175fa86345946999af391ec3a98115abd2b84c4cfffdce075dab10b09e3ad3e`.
+It prospectively permits fresh, independently verified direct CDP event
+failures to advance screening as bounded collector deferrals, with zero
+credit and no whole-domain verdict. Preparation deferrals still require the
+exact-page H3 pass and automatic screen. Generic infrastructure errors remain
+unsealed; context 004's Alibaba attempt gains no new authority. Focused checks
+passed for the observer (16 cases), selection compatibility (111 cases),
+admission/CLI boundaries and unchanged capture-planner/adapter integration.
+
+A fresh clean-image fallback root survey independently verifies the first
+40 fallback observations: one known-valid homepage (`bandcamp.com`), 15
+ambiguous results, 19 timeouts, four peer TLS failures and one automatic skip.
+Seven ambiguous results are completed responses and can proceed to separate
+exact-page checks; the other eight are exact DNS name misses. These are leads
+and operational observations, with no site admission or formal trace credit.
 
 A new adapter snapshot also passed the actual installed-runtime preflight in
 the immutable collection image. It checked the retained clean source, client,
@@ -113,6 +129,14 @@ shakedown and final capture are still outstanding. The completed adapter passed
 and an inherited lock that prevents overlap while the host continues. Real
 bound-lane launches and Docker retirement remain unproven. The original
 contexts and policies remain verifiable on their frozen snapshots.
+
+The portable rapid acquisition and capture baseline is published on Lab
+`main` as `1747fc16b427ebfcc492c159ddc6dfaedb03b5a8`, with Rust
+`23b854e1a25e0af7834c7691cbfe53a84e6ae98c` also published on its `main`.
+A separate six-second installed-image check subsequently passed for the final
+capture adapter from that committed source. Its scope remains runtime
+placement; site yield, real study lanes and **16,000 accepted formal traces**
+are still outstanding.
 
 A clean cached runtime successor rebuilt the patched release client in about
 two minutes and passed a fresh response qualifier. Its routed CS-BuFLO diagnostic

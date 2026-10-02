@@ -21,9 +21,10 @@ The [current v5 profile](../config/curated-sources/crux73-tranco600-rapid-v5.pro
 keeps the 50-site target and the same ordered candidate sources. It permits a
 recorded ambiguous homepage result to proceed to a separately controlled
 HTTP/3 test of the exact page chosen for capture. The published
-[selection revision 2](../config/curated-sources/crux73-tranco600-rapid-v5-selection-v2.json)
-uses a recorded automatic public URL/domain screen rather than mandatory
-named approval; this screen makes no claim to classify a site's content. A
+[selection revision 3](../config/curated-sources/crux73-tranco600-rapid-v5-selection-v3.json)
+uses a recorded automatic public URL/domain screen; this screen makes no
+claim to classify a site's content. It also records fresh collector limitations
+as zero-credit screening deferrals. A
 clear homepage response is therefore a useful lead, **not a requirement that
 all 50 sites have clear homepages**. No selected page has yet met the complete
 v5 admission checks.
@@ -73,7 +74,7 @@ No replayable workload or accepted class resulted. The
 [dated report](CURATED-H3-SCREEN-2026-10-02.md#first-browser-follow-ups)
 records that attempt and the other site-specific failures.
 
-Fresh attempts on **3 October 2026** exposed two further concrete problems:
+Fresh attempts on **3 October 2026** exposed these further concrete problems:
 
 - **Weerplaza:** catalogue navigation attempted a WebSocket to
   `wss://onweeralarm.nl`. This traffic cannot be replayed by the current
@@ -84,9 +85,15 @@ Fresh attempts on **3 October 2026** exposed two further concrete problems:
   two font resources (IDs 5, 23 and 25). The endpoint closed during TLS with
   peer code 296. The failed probe and packet evidence were independently
   reopened; the site was not admitted on its homepage result alone.
+- **Alibaba:** catalogue navigation and the exact-page HTTP/3 check passed.
+  Full preparation did not reach a settled page within 30 seconds; cleanup
+  also triggered the browser collector's frame-tracking check for an unknown
+  frame detachment. The failed attempt remains preserved without site credit.
+  The result describes this page's interaction with the collector at the time
+  of testing.
 
 These decisions concern the observed pages and current collector. They do
-not establish that every page on either domain is permanently unusable. The
+not establish that every page on these domains is permanently unusable. The
 [evidence index](EVIDENCE-INDEX.md#rapid-selection-revision-2-3-october-2026)
 records the frozen source and receipts.
 

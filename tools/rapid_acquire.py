@@ -38,6 +38,8 @@ def _parser() -> argparse.ArgumentParser:
                             help="create a separate acquisition under a prospective selection amendment")
     initialize.add_argument("--browser-policy-module", action="append", type=_module, default=[],
                             help="independent amended browser policy implementation snapshot NAME=PATH")
+    initialize.add_argument("--collector-module", action="append", type=_module, default=[],
+                            help="independent revision 3 collector and executable snapshot NAME=PATH")
     for group in sorted(admission.IMPLEMENTATION_GROUPS):
         initialize.add_argument(f"--{group}-module", action="append", type=_module, required=True)
     for name, help_text in (
@@ -59,7 +61,7 @@ def _parser() -> argparse.ArgumentParser:
         if name in {"prepare", "seal"}:
             command.add_argument("--human-review", type=Path)
             command.add_argument("--automated-screen", type=Path,
-                                 help="distinct automatic URL/domain screen; requires selection amendment revision 2")
+                                 help="distinct automatic URL/domain screen; requires selection amendment revision 2 or 3")
         if name == "review":
             command.add_argument("--reviewed-url", required=True)
             command.add_argument("--reviewer", required=True)
@@ -81,6 +83,8 @@ def _parser() -> argparse.ArgumentParser:
                                  help="explicitly seal a fresh typed browser policy deferral under an amended context")
             command.add_argument("--page-policy-failure", type=Path,
                                  help="explicitly seal an independently proved typed navigation/preparation policy deferral")
+            command.add_argument("--collector-failure", type=Path,
+                                 help="explicit revision 3 zero-credit deferral from one fresh exact collector failure")
             command.add_argument("--defer-root", action="store_true",
                                  help="record an exact policy-authorized zero-credit root deferral, including visibly operational DNS misses")
         elif name == "cohort":
@@ -121,9 +125,12 @@ def _page_action(context: admission.AdmissionContext, candidate_id: str, args: a
                            not_before_utc=context.not_before_utc)
     action_started_at = admission._now()
     action_runtime = None
+    collector_runtime = None
     try:
-        if args.command == "navigate" and context.selection_amendment_revision == 2:
+        if args.command == "navigate" and context.selection_amendment_revision in {2, 3}:
             action_runtime = admission.begin_page_policy_action(context)
+        if args.command == "navigate" and context.selection_amendment_revision == 3:
+            collector_runtime = admission.begin_operational_collector_action(context)
         if args.command == "navigate":
             if context.selection_amendment_bytes is not None:
                 from qcsd_lab.rapid_browser_policy_evidence import (
@@ -158,6 +165,24 @@ def _page_action(context: admission.AdmissionContext, candidate_id: str, args: a
                 expected_implementation_hashes=context.mounted_module_hashes["page"], **verifier_kwargs,
             )
     except Exception as error:
+        if collector_runtime is not None:
+            from qcsd_lab.rapid_collector_failure_evidence import is_collector_failure
+            if is_collector_failure(error):
+                try:
+                    failure_output = admission.retain_operational_collector_failure(
+                        attempt / "collector-failure.json", context, candidate_id=candidate_id, error=error,
+                        action_kind="catalogue-boundary-navigation", started_at=action_started_at, runtime=collector_runtime,
+                    )
+                except Exception as validation_error:
+                    admission.durable_create(attempt / "operational-error.json", admission._json({
+                        "stage": "navigation-collector-proof-validation", "exception_type": type(validation_error).__name__,
+                        "message": str(validation_error), "completed_at": admission._now(),
+                        "retryable": True, "scientific_credit": False,
+                    }))
+                    admission.write_checkpoint(context)
+                    raise
+                admission.write_checkpoint(context)
+                return failure_output
         if action_runtime is not None and admission.is_page_policy_failure(error, action_kind="catalogue-boundary-navigation"):
             try:
                 failure_output = admission.retain_page_policy_failure(
@@ -196,6 +221,10 @@ def run(args: argparse.Namespace) -> Any:
             if len(dict(args.browser_policy_module)) != len(args.browser_policy_module):
                 raise ValueError("browser policy implementation snapshot name repeats")
             module_sources[admission.BROWSER_POLICY_GROUP] = dict(args.browser_policy_module)
+        if args.collector_module:
+            if len(dict(args.collector_module)) != len(args.collector_module):
+                raise ValueError("collector implementation snapshot name repeats")
+            module_sources[admission.COLLECTOR_GROUP] = dict(args.collector_module)
         context = admission.initialize_acquisition(
             args.root, profile_path=args.profile, source=args.source, source_receipt=args.source_receipt,
             catalogue=args.catalogue, source_manifest=args.source_manifest,
@@ -253,6 +282,7 @@ def run(args: argparse.Namespace) -> Any:
                 preparation=args.preparation, defer_root=args.defer_root,
                 browser_policy_failure=args.browser_policy_failure,
                 automated_screen=args.automated_screen, page_policy_failure=args.page_policy_failure,
+                collector_failure=args.collector_failure,
             )
         else:
             raise AssertionError("unsupported acquisition action")

@@ -2,6 +2,7 @@
 
 V1 records fresh typed browser-navigation deferrals. V2 adds an explicit
 automatic URL/domain screen and narrow typed navigation/preparation deferrals.
+V3 adds a bounded, explicitly operational collector limitation disposition.
 Deferrals give no admission or trace credit and make no whole-domain claim.
 Complete admitted graphs, controlled page H3 proof and the 16,000-visit grid
 remain required; the original v1 declaration stays independently verifiable.
@@ -23,13 +24,19 @@ AMENDED_COHORT_RECEIPT_TYPE = "qcsd-rapid-v5-amended-class-cohort"
 AMENDED_SELECTION_POLICY = "first-N-admitted-with-prospective-browser-policy-screen-deferrals-v1"
 AMENDED_V2_SELECTION_POLICY = "first-N-automatic-public-url-screened-with-typed-page-policy-deferrals-v2"
 AMENDED_V2_ADMISSION_POLICY = "root-and-exact-page-h3-automatic-public-url-screen-complete-live-graph-and-cross-origin-v2"
+AMENDED_V3_SELECTION_POLICY = "first-N-automatic-public-url-screened-with-bounded-operational-collector-deferrals-v3"
 BROWSER_POLICY_DEFERRAL_POLICY = "prospective-nonreplayable-browser-navigation-deferral-v1"
 BROWSER_POLICY_DEFERRAL_REASON = "browser-navigation-policy-deferred"
 PAGE_POLICY_DEFERRAL_POLICY = "prospective-typed-page-policy-screen-deferral-v2"
 PAGE_POLICY_DEFERRAL_REASON = "page-policy-screen-deferred"
+OPERATIONAL_COLLECTOR_DEFERRAL_POLICY = "prospective-bounded-operational-collector-screen-deferral-v3"
+OPERATIONAL_COLLECTOR_DEFERRAL_REASON = "operational-collector-screen-deferred"
+V3_BROWSER_ROOT_REQUIREMENT = "known-valid-or-completed-response-known-invalid-with-passing-controls"
 PARENT_PROFILE_PUBLICATION_UTC = "2026-10-02T12:58:17Z"
 FROZEN_V1_AMENDMENT_PUBLICATION_UTC = "2026-10-02T14:30:27.785695Z"
 FROZEN_V1_AMENDMENT_SHA256 = "ffc91c4a4fafe39ae9ec3875c982d8a5537fcaae6a253ee58e33c7f492bc8486"
+FROZEN_V2_AMENDMENT_PUBLICATION_UTC = "2026-10-02T15:19:12.576895Z"
+FROZEN_V2_AMENDMENT_SHA256 = "32cd9eb8440c86f204919bde64a5f27cdcf1efcf28e7becf127d8e3798266457"
 AUTOMATED_SITE_SCREEN_POLICY = "frozen-public-url-and-domain-screen-v1"
 AUTOMATED_SITE_SCREEN_DECISION = "automatic-policy-pass"
 
@@ -74,7 +81,7 @@ def _utc(value: Any) -> datetime:
 def _amendment_payload(
     published_at_utc: str, parent_profile_sha256: str, *, revision: int = 1,
 ) -> dict[str, Any]:
-    if type(revision) is not int or revision not in (1, 2):
+    if type(revision) is not int or revision not in (1, 2, 3):
         raise ValueError("selection amendment revision is unregistered")
     published = _utc(published_at_utc)
     if published < _utc(PARENT_PROFILE_PUBLICATION_UTC) or published > datetime.now(UTC):
@@ -118,7 +125,7 @@ def _amendment_payload(
         ],
         "capture_authority": "none-requires-separate-live-capture-readiness",
     }
-    if revision == 2:
+    if revision >= 2:
         if published < _utc(FROZEN_V1_AMENDMENT_PUBLICATION_UTC):
             raise ValueError("selection amendment v2 publication is before its v1 parent")
         # Reconstruct the frozen v1 envelope independently. A change to its
@@ -172,6 +179,72 @@ def _amendment_payload(
             "new_automated_screen_and_page_policy_failure": "at-or-after-published-at-utc",
             "v1_browser_failure_receipts": "retain-v1-only-authority-no-v2-relabel-or-promotion",
         }
+    if revision == 3:
+        if published < _utc(FROZEN_V2_AMENDMENT_PUBLICATION_UTC):
+            raise ValueError("selection amendment v3 publication is before its v2 parent")
+        parent = profile._bind(
+            _amendment_payload(FROZEN_V2_AMENDMENT_PUBLICATION_UTC, parent_profile_sha256, revision=2),
+            SELECTION_AMENDMENT_RECEIPT_TYPE, schema_version=5,
+        )
+        parent_sha = profile._sha(profile._canonical_json(parent))
+        if parent_sha != FROZEN_V2_AMENDMENT_SHA256:
+            raise ValueError("frozen v2 selection amendment declaration no longer verifies")
+        result.update({
+            "amendment_id": "crux73-tranco600-rapid-v5-selection-v3",
+            "revision": 3,
+            "parent_selection_amendment_sha256": parent_sha,
+            "parent_selection_policy": AMENDED_V2_SELECTION_POLICY,
+            "selection_policy": AMENDED_V3_SELECTION_POLICY,
+            "parent_admission_policy": AMENDED_V2_ADMISSION_POLICY,
+            "browser_root_progression": {
+                "policy": "controlled-known-valid-or-completed-response-known-invalid-ambiguity-v3",
+                "controls_passed": True,
+                "allowed_outcome_details": [
+                    ["known-valid", "known-valid"], ["ambiguous", "response-known-invalid"],
+                ],
+                "response_ambiguity": "completed-root-response-only-not-known-valid-or-site-admission",
+                "other_root_failures": "retain-separate-bounded-root-screen-disposition",
+                "exact_selected_page_h3_and_complete_graph_acceptance": "unchanged-required",
+            },
+            "operational_collector_deferral": {
+                "policy": OPERATIONAL_COLLECTOR_DEFERRAL_POLICY,
+                "triage_reason": OPERATIONAL_COLLECTOR_DEFERRAL_REASON,
+                "outcome": OPERATIONAL_COLLECTOR_DEFERRAL_REASON,
+                "exception_type": "CdpTargetIntegrityError",
+                "exception_module": "qcsd_lab.cdp_targets",
+                "proof_policy": "prospective-exact-cdp-event-collector-limitation-v1",
+                "actual_attempt_count": 1,
+                "required_root_screen": V3_BROWSER_ROOT_REQUIREMENT,
+                "navigation_action": {
+                    "kind": "catalogue-boundary-navigation",
+                    "scope": "catalogue-root-and-optional-link-navigation",
+                    "selected_page_h3_and_automated_screen": "absent-before-page-selection",
+                },
+                "preparation_action": {
+                    "kind": "complete-graph-preparation",
+                    "scope": "exact-selected-page-complete-resource-graph-preparation",
+                    "required_proof": "exact-navigation-selected-page-h3-and-automated-screen",
+                },
+                "required_failure_proof": "independently-reopened-exact-candidate-runtime-source-modules-actual-class-traceback-action-and-closed-attempt-inventory",
+                "failure_scope": "collector-limitation",
+                "event_parameters": "unavailable-not-reconstructed",
+                "retryable": True,
+                "whole_domain_ineligible": False,
+                "scientific_credit": False,
+                "site_credit": 0,
+                "formal_accepted_trace_count": 0,
+                "new_failure_freshness": "started-at-or-after-published-at-utc",
+                "other_errors": "blocking-operational-no-terminal-authority",
+                "acceptance_policy": "unchanged-v2-complete-live-graph-and-cross-origin",
+            },
+        })
+        result["browser_policy_deferral"]["required_root_screen"] = V3_BROWSER_ROOT_REQUIREMENT
+        result["page_policy_deferral"]["required_root_screen"] = V3_BROWSER_ROOT_REQUIREMENT
+        result["freshness_policy"] = {
+            **result["freshness_policy"],
+            "new_operational_collector_failure": "started-at-or-after-published-at-utc",
+            "v2_failed_attempts": "retain-v2-only-authority-no-v3-relabel-or-promotion",
+        }
     return result
 
 
@@ -194,13 +267,14 @@ def validate_selection_amendment(
     ids = {
         "crux73-tranco600-rapid-v5-selection-v1": 1,
         "crux73-tranco600-rapid-v5-selection-v2": 2,
+        "crux73-tranco600-rapid-v5-selection-v3": 3,
     }
     amendment_id = payload.get("amendment_id")
     revision = ids.get(amendment_id) if isinstance(amendment_id, str) else None
     expected = _amendment_payload(
         payload.get("published_at_utc"), parent_profile_sha256, revision=revision,
     )
-    if payload != expected:
+    if payload != expected or (revision == 3 and profile._canonical_json(payload) != profile._canonical_json(expected)):
         raise ValueError("selection amendment differs from its prospective fixed contract")
     return payload
 
@@ -216,6 +290,21 @@ def selection_amendment_not_before_utc(value: Mapping[str, Any]) -> datetime:
 def selection_amendment_sha256(value: Mapping[str, Any]) -> str:
     validate_selection_amendment(value)
     return profile._sha(profile._canonical_json(value))
+
+
+def root_screen_allows_browser_progression(root: Mapping[str, Any] | None, *, revision: int) -> bool:
+    """Apply the narrow root rule after independent v5 root validation.
+
+    A completed response ambiguity can proceed to an exact page test only in
+    v3. It gains neither known-valid status nor admission from this predicate.
+    """
+    if root is None or root.get("controls_passed") is not True:
+        return False
+    identity = (root.get("outcome"), root.get("detail"))
+    return identity == ("known-valid", "known-valid") or (
+        type(revision) is int and revision == 3
+        and identity == ("ambiguous", "response-known-invalid")
+    )
 
 
 def write_receipt_create_only(path: Path, receipt: Mapping[str, Any]) -> Path:
@@ -238,8 +327,10 @@ def _browser_deferral(
 ) -> dict[str, Any]:
     if (
         facts["outcome"] != "screen-deferred" or facts["admission"] is not None
-        or facts["selected_page_h3_proof"] is not None or screen is None
-        or screen["outcome"] != "known-valid"
+        or facts["selected_page_h3_proof"] is not None
+        or not root_screen_allows_browser_progression(
+            screen, revision=selection_amendment_revision(selection_amendment),
+        )
         or profile.unsafe_catalogue_domain_reason(candidate["domain"]) is not None
         or review is not None
         or facts["triage"] != {
@@ -296,7 +387,9 @@ def _page_policy_deferral(
 ) -> dict[str, Any]:
     if (
         facts["outcome"] != PAGE_POLICY_DEFERRAL_REASON or facts["admission"] is not None
-        or root is None or root["outcome"] != "known-valid" or review is not None
+        or not root_screen_allows_browser_progression(
+            root, revision=selection_amendment_revision(selection_amendment),
+        ) or review is not None
         or profile.unsafe_catalogue_domain_reason(candidate["domain"]) is not None
         or facts["triage"] != {
             "policy": PAGE_POLICY_DEFERRAL_POLICY,
@@ -321,6 +414,58 @@ def _page_policy_deferral(
             raise ValueError("preparation policy deferral lacks exact page and automated screen proofs")
     else:
         raise ValueError("page-policy deferral action is unregistered")
+    return dict(failure)
+
+
+def _operational_collector_deferral(
+    facts: Mapping[str, Any], candidate: Mapping[str, Any], binding: Mapping[str, str],
+    selection_amendment: Mapping[str, Any], root: Mapping[str, Any] | None,
+    page_proof: Mapping[str, Any] | None, automated_screen: Mapping[str, Any] | None,
+    review: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if (
+        facts["outcome"] != OPERATIONAL_COLLECTOR_DEFERRAL_REASON
+        or facts["admission"] is not None or review is not None
+        or not root_screen_allows_browser_progression(
+            root, revision=selection_amendment_revision(selection_amendment),
+        )
+        or profile.unsafe_catalogue_domain_reason(candidate["domain"]) is not None
+        or facts["triage"] != {
+            "policy": OPERATIONAL_COLLECTOR_DEFERRAL_POLICY,
+            "reason": OPERATIONAL_COLLECTOR_DEFERRAL_REASON, "safety_reason": None,
+        }
+    ):
+        raise ValueError("operational collector deferral lacks its controlled screening context")
+    from .rapid_site_admission import validate_operational_collector_failure_facts
+
+    failure = validate_operational_collector_failure_facts(
+        facts["operational_collector_failure"], candidate=candidate,
+        execution_binding=binding,
+        selection_amendment_sha256=selection_amendment_sha256(selection_amendment),
+        not_before_utc=selection_amendment_not_before_utc(selection_amendment),
+        selected_page_h3_proof=page_proof, automated_site_screen=automated_screen,
+    )
+    if (
+        failure["failure_scope"] != "collector-limitation"
+        or failure["event_parameters"] != "unavailable-not-reconstructed"
+        or failure["retryable"] is not True
+        or failure["whole_domain_ineligible"] is not False
+        or failure["scientific_credit"] is not False
+        or any(type(failure[key]) is not int or failure[key] != 0
+               for key in ("site_credit", "formal_accepted_trace_count"))
+        or type(failure["actual_attempt_count"]) is not int
+        or failure["actual_attempt_count"] != 1
+    ):
+        raise ValueError("collector deferral must retain one actual retryable zero-credit limitation")
+    action = failure["action"]["kind"]
+    if action == "catalogue-boundary-navigation":
+        if page_proof is not None or automated_screen is not None:
+            raise ValueError("navigation collector deferral cannot carry later preparation proofs")
+    elif action == "complete-graph-preparation":
+        if page_proof is None or automated_screen is None:
+            raise ValueError("preparation collector deferral lacks exact page and automated screen proofs")
+    else:
+        raise ValueError("operational collector deferral action is unregistered")
     return dict(failure)
 
 
@@ -406,13 +551,15 @@ def _selection_payload(
             "execution_binding", "root_screen", "site_safety_review",
             "selected_page_h3_proof",
         }
-        if revision == 2:
+        if revision >= 2:
             fields |= {"automated_site_screen"}
         allowed_fields = (
             fields, fields | {"triage"}, fields | {"triage", "browser_policy_failure"},
         )
-        if revision == 2:
+        if revision >= 2:
             allowed_fields += (fields | {"triage", "page_policy_failure"},)
+        if revision == 3:
+            allowed_fields += (fields | {"triage", "operational_collector_failure"},)
         if not isinstance(facts, Mapping) or set(facts) not in allowed_fields:
             raise ValueError("v5 terminal verifier returned invalid facts")
         if profile._execution_binding(facts["execution_binding"]) != binding:
@@ -439,11 +586,12 @@ def _selection_payload(
         triage = facts.get("triage")
         browser_failure = None
         page_failure = None
+        collector_failure = None
         automatic_screen = (
             _automated_screen(
                 facts["automated_site_screen"], candidate, page_proof, binding,
                 selection_amendment,
-            ) if revision == 2 else None
+            ) if revision >= 2 else None
         )
         if "browser_policy_failure" in facts:
             if automatic_screen is not None:
@@ -451,8 +599,13 @@ def _selection_payload(
             browser_failure = _browser_deferral(
                 facts, candidate, binding, selection_amendment, screen, review,
             )
-        elif revision == 2 and "page_policy_failure" in facts:
+        elif revision >= 2 and "page_policy_failure" in facts:
             page_failure = _page_policy_deferral(
+                facts, candidate, binding, selection_amendment, screen, page_proof,
+                automatic_screen, review,
+            )
+        elif revision == 3 and "operational_collector_failure" in facts:
+            collector_failure = _operational_collector_deferral(
                 facts, candidate, binding, selection_amendment, screen, page_proof,
                 automatic_screen, review,
             )
@@ -473,7 +626,7 @@ def _selection_payload(
                 review is None or review["decision"] != profile.SITE_SAFETY_REVIEW_POLICY["admission_decision"]
             ):
                 raise ValueError("v5 admitted site lacks approved human safety review")
-            if revision == 2 and (
+            if revision >= 2 and (
                 automatic_screen is None
                 or (review is not None and review["decision"] != profile.SITE_SAFETY_REVIEW_POLICY["admission_decision"])
             ):
@@ -498,7 +651,7 @@ def _selection_payload(
                 or (revision == 1 and (
                     review is None or review["decision"] != profile.SITE_SAFETY_REVIEW_POLICY["admission_decision"]
                 ))
-                or (revision == 2 and (
+                or (revision >= 2 and (
                     automatic_screen is None
                     or (review is not None and review["decision"] != profile.SITE_SAFETY_REVIEW_POLICY["admission_decision"])
                 ))
@@ -520,10 +673,14 @@ def _selection_payload(
             "root_screen": screen,
             "site_safety_review": review,
             "selected_page_h3_proof": page_proof,
-            **({"triage": triage} if outcome in {"screen-deferred", PAGE_POLICY_DEFERRAL_REASON} else {}),
+            **({"triage": triage} if outcome in {
+                "screen-deferred", PAGE_POLICY_DEFERRAL_REASON,
+                OPERATIONAL_COLLECTOR_DEFERRAL_REASON,
+            } else {}),
             **({"browser_policy_failure": browser_failure} if browser_failure is not None else {}),
-            **({"automated_site_screen": automatic_screen} if revision == 2 else {}),
+            **({"automated_site_screen": automatic_screen} if revision >= 2 else {}),
             **({"page_policy_failure": page_failure} if page_failure is not None else {}),
+            **({"operational_collector_failure": collector_failure} if collector_failure is not None else {}),
         })
         if len(selected) == contract["class_count"] and len(decisions) != len(terminal_sha256s):
             raise ValueError("v5 terminal prefix continues past the first N admitted sites")
@@ -539,7 +696,7 @@ def _selection_payload(
         "execution_binding": binding,
         "selection_policy": amendment_payload["selection_policy"],
         "selection_amendment_sha256": selection_amendment_sha256(selection_amendment),
-        **({"automated_screen_policy_sha256": automated_screen_policy_sha256()} if revision == 2 else {}),
+        **({"automated_screen_policy_sha256": automated_screen_policy_sha256()} if revision >= 2 else {}),
         "terminal_decisions": decisions,
         "selected_candidate_ids": [candidate["candidate_id"] for candidate in selected],
         "selected_candidates": [

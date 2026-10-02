@@ -13,8 +13,8 @@ sequence does not gate this prospective five-setting study.
 
 | Step | Action | Evidence needed to advance | Current state |
 |---:|---|---|---|
-| 1 | Freeze the candidate sources and runtime. | Exact source hashes, ordered [v5 rapid profile receipt](../config/curated-sources/crux73-tranco600-rapid-v5.profile.json), image digests, fixed defense parameters and launcher-source hashes. | V5 is frozen (SHA-256 `f7eb0228a06429cc2ae91d0f9d52577399e15b68f4915d41cb60291445542b60`), preserving 73 supplied candidates, 600 fallback candidates and 50 × 5 × 64. Clean matching collection and prepare images exist. Selection revision 2 is published. A real installed-runtime preflight passed inside the collection image with the saved client, clean source, fixed traffic files and new host launcher; it grants no lane or trace credit. |
-| 2 | Find usable pages. | Record verified decisions in frozen order. Revision 2 replaces mandatory named human approval with a recorded automatic public URL/domain screen. It keeps the controlled homepage observation, a separate controlled HTTP/3 pass on the exact selected page, the complete browser-observed graph, stable replay and at least one live cross-origin resource. An ambiguous homepage observation can proceed to selected-page checks. | All **73 fresh v5 curated first-screen decisions** independently verify: **31 known-valid, 27 ambiguous, six peer TLS failures, two timeouts and seven automatic safety skips**. Fresh context 004 now has **four terminal zero-credit screening decisions**. Albumaty's complete-resource HEAD probe failed at `https://use.fontawesome.com`; its independently proved fresh failure was explicitly sealed. Both generic failures in context 003 remain unpromoted. Alibaba is next. **0/50 final sites admitted.** |
+| 1 | Freeze the candidate sources and runtime. | Exact source hashes, ordered [v5 rapid profile receipt](../config/curated-sources/crux73-tranco600-rapid-v5.profile.json), image digests, fixed defense parameters and launcher-source hashes. | V5 is frozen (SHA-256 `f7eb0228a06429cc2ae91d0f9d52577399e15b68f4915d41cb60291445542b60`), preserving 73 supplied candidates, 600 fallback candidates and 50 × 5 × 64. Clean matching collection and prepare images exist. Selection revision 3 is published. The real installed-runtime preflight 002 passed inside the collection image with the saved client, clean source, fixed traffic files and final capture adapter snapshot; it grants no lane or trace credit. |
+| 2 | Find usable pages. | Record verified decisions in frozen order. Revision 3 inherits the automatic public URL/domain screen, controlled homepage observation, separate controlled HTTP/3 pass on the exact selected page, complete browser-observed graph, stable replay and live cross-origin resource. Only a controlled completed-response ambiguity can proceed alongside a known-valid homepage. | All **73 fresh v5 curated first-screen decisions** independently verify: **31 known-valid, 27 ambiguous, six peer TLS failures, two timeouts and seven automatic safety skips**. A fresh 40-candidate fallback batch also verifies, with one known-valid homepage and seven completed-response leads. Context 004 has **four terminal zero-credit decisions**; Alibaba passed navigation, exact-page H3 and automatic screening, then preparation stopped at a collector error. That old error remains unsealed. Revision 3 permits only a fresh independently proved collector disposition. **0/50 final sites admitted.** |
 | 3 | Prepare and qualify the first ten sites. | Ten verified prepared workloads, with five-site response-qualification sets matching the exact workload and source bytes. | A fresh one-workload qualifier matches the clean repaired client. Its response-only receipt independently reloads through the collection-image qualification bridge. This proves the runtime route; the workload is historical and does not supply ten admitted study sites. |
 | 4 | Run the ten-site shakedown across all five settings. | 50 complete, individually deep-verified diagnostic traces, including both BuFLO modes, with failures preserved and repaired before formal capture. | All five settings now have individual clean-runtime diagnostic passes on one historical workload: CS-BuFLO **1/1**, BuFLO retry 004 **1/1**, FRONT and Tamaraw accepted, and a fresh undefended two-second-settle successor **1/1**. The previous undefended attempt lacked 45 tail packets and remains failed. These separate passes do not supply the ten-site shakedown. **0/50 study shakedown traces accepted.** |
 | 5 | Admit 50 sites and freeze formal inputs. | A verified 50-site cohort receipt, exact workloads and qualification sets, fixed parameters, complete lane plan and launch manifest. | 50-site live yield is unproven; the 600-domain catalogue supplies further candidates under the same checks. |
@@ -32,7 +32,7 @@ systematically favor one setting.
 
 | Work | Planning estimate | What can change it |
 |---|---|---|
-| Root HTTP/3 screen | Minutes for the supplied 73-site batch; all 73 fresh v5 decisions are verified. | Public network and control failures cause a fresh, preserved attempt. |
+| Root HTTP/3 screen | All 73 fresh supplied-site decisions are verified. A further 40-candidate clean fallback batch took about **4 minutes 10 seconds**. | Public network and control failures cause a fresh, preserved attempt. Root decisions grant no site credit. |
 | Browser discovery, replay and 50-site admission | **Unknown.** One recent direct discovery finished in 25 seconds, while other pages failed around the 30-second quiescence limit. | Live page behavior and the number of fallback candidates dominate this stage. A root success is not a prepared site. |
 | First ten-site, five-setting shakedown | About **53–109 minutes of recording time** for 50 visits at older 63–131 second per-visit rates, plus site preparation, response qualification and verification. | A complete five-setting shakedown on admitted study sites has not run. Short historical-workload tests diagnose individual capture failures first. |
 | Full formal grid | About **12–25 days of serial recording time** for 16,000 visits at those older rates, before retries and verification. | Parallel speedup is unmeasured and requires a separate fidelity/throughput trial. |
@@ -173,6 +173,51 @@ scientifically ineligible. The next controlled-root deferral was subsequently
 explicitly sealed and independently reopened, bringing context 004 to
 **four terminal decisions, zero admitted sites and zero formal traces**.
 Alibaba is the next candidate in the frozen order.
+
+### Revision 3: record a collector limitation without blocking every later site
+
+Alibaba's actual context-004 navigation, exact-page HTTP/3 test and automatic
+URL/domain screen passed. Complete preparation then reached the 30-second
+passive-render limit. During cleanup, the CDP collector raised
+`CdpTargetIntegrityError` at its root frame-detachment handler. The retained
+traceback records this sequence; it does not reconstruct the missing CDP
+event parameters. This is a collector limitation, not a scientific verdict
+that Alibaba's page or domain is unusable. The context-004 error remains
+unsealed under its original revision-2 rules.
+
+The [third selection amendment](../config/curated-sources/crux73-tranco600-rapid-v5-selection-v3.json)
+was published once at **2026-10-02T17:00:14.866744Z** (3 October in Sydney),
+after focused collector, admission, cohort and capture-compatibility checks.
+Its raw/canonical SHA-256 is
+`e175fa86345946999af391ec3a98115abd2b84c4cfffdce075dab10b09e3ad3e`;
+its explicit parent is the unchanged revision-2 receipt.
+
+A **fresh** navigation or complete-preparation attempt can receive
+`operational-collector-screen-deferred` only after one actual exact
+`CdpTargetIntegrityError` is independently reopened from the frozen event
+handler source, actual traceback, client/runtime identities and closed
+attempt inventory. It is retryable and earns **zero site and trace credit**.
+Preparation still requires the exact navigation, passing selected-page H3
+and fresh automatic-screen receipts. Generic errors, missing runtime,
+dependencies, permissions and Docker failures remain blocking. Old errors
+are never relabelled under the new rule.
+
+Revision 3 also makes browser progression explicit for a controlled
+`response-known-invalid` homepage result: it is a completed but ambiguous
+response, whose exact selected page still needs its own H3 proof. DNS misses,
+timeouts and peer failures retain their separate bounded-root dispositions.
+The same narrow root rule applies to the inherited browser and page-policy
+failure branches. It does not turn ambiguity into `known-valid`, prune
+resources or weaken complete-graph admission. The final target remains
+**50 × five × 64 = 16,000**, with the separate **50-trace zero-credit shakedown**.
+
+A fresh clean fallback survey independently reopened **40 decisions**:
+one known-valid homepage (`bandcamp.com`), 15 ambiguous results, 19 timeouts,
+four peer TLS failures and one automatic safety skip. Of the 15 ambiguous
+results, **seven are completed-response leads and eight are DNS misses**.
+This supplies homepage observations only; it demonstrates neither 50-site
+yield nor a prepared site. Runtime 002, fallback observations and the old
+Alibaba error are recorded through the [evidence index](EVIDENCE-INDEX.md).
 
 The actual runtime, screen logs, failed attempts and sealed diagnostic
 results are host-local evidence described through the
@@ -349,26 +394,28 @@ The retirement and successor tests passed; the query boundary test replaces
 only Docker actuation. Real daemon retirement has not been exercised here.
 Interruption **before durable host-start publication** remains a quarantined
 window; the adapter will not invent a process receipt to recover it. The
-installed-runtime preflight below used an earlier frozen helper and does not
-claim verification of this new supervisor inside that image.
+installed-runtime preflight 002 below uses the final frozen capture-helper
+snapshot. It checks runtime agreement; the actual parent-interruption tests
+use a local test host and do not claim a public-study lane inside that image.
 
 ### Site admission and campaign planning commands
 
 `tools/rapid_acquire.py` is the prospective v5 site driver. `init` freezes the
 profile, source catalogue, runtime source metadata and separate implementation
-snapshots. For revision 2, bind the new receipt with `--selection-amendment`
-and its separate `--browser-policy-module` snapshots. `status` reopens the
+snapshots. For revision 3, bind the published receipt with `--selection-amendment`
+and its separate `--browser-policy-module` and `--collector-module` snapshots.
+`status` reopens the
 retained attempts and identifies the next candidate in the fixed order. The
 remaining actions are:
 
 | Action | What it records |
 |---|---|
-| `navigate` | Raw browser navigation and independently rederived page choices; an amended context may retain a fresh exact typed browser or passive-render policy failure with zero credit |
+| `navigate` | Raw browser navigation and independently rederived page choices; an amended context may retain a fresh exact typed browser, passive-render or revision-3 collector failure with zero credit |
 | `probe-page` | A passing-control probe, the exact selected page's H3 result, then another control |
 | `screen-page` | Revision 2's distinct automatic public URL/domain screen, bound to the selected navigation ordinal and exact-page H3 receipt |
 | `review` | A named human's explicit decision for contexts whose frozen rules require it; revision 2 uses the automatic screen |
 | `prepare` | Full browser resource graph, complete-origin preparation and three immediate replay checks; revision 2 passes the actual `--automated-screen` receipt |
-| `seal` | A site decision independently derived from the retained evidence; unexpected errors remain retryable |
+| `seal` | A site decision independently derived from the retained evidence; only the declared exact collector failure receives the new retryable zero-credit disposition; other unexpected errors still block |
 | `cohort` | The first ten or fifty eligible sites, with all earlier candidates accounted for |
 
 Navigation, H3 probes and preparation run inside the bound prepare image with
@@ -420,7 +467,7 @@ catalogued through the [evidence index](EVIDENCE-INDEX.md).
 
 A separate **real installed-runtime preflight passed with exit 0 and empty
 stderr** at
-`diagnostic-rehearsals/rapid-v5-capture-runtime-20261003-001/output.json`.
+`diagnostic-rehearsals/rapid-v5-capture-runtime-20261003-002/output.json`.
 Its raw SHA-256 is
 `f7b8f22da2880e444bc1ce312ad26ebb56ecf3a5947ca1c088da3c4aafec6355`.
 It reopened the installed collection-image implementation, clean Lab source
@@ -429,13 +476,16 @@ It reopened the installed collection-image implementation, clean Lab source
 client `a21eb5fa8654e90c9ed18ecfa4280f5fdb311c592a6c89d5b963c3cd03a17380`,
 host launcher `7216d6a689d858962d982b5bd01cfc9652f1cbb20d7c5b6fbb4a664d4d27751a`,
 the frozen v5 profile and all three fixed traffic files. The separately frozen
-101-file Python snapshot used helper
-`0e01439b4b505f8bd4a327005c6221e9b07ff09b3f1579f8aa2aef6194b312e5`
+101-file Python snapshot has aggregate SHA-256
+`033314652aba4bc5cb6e480b3e9c06d6ba93996fc4a4ba2339547dbcd02ba96d`;
+it used helper
+`ac730c551b6783fb21c556017e8b11212713566d1b86ee0a145a4adf25c03fcd`
 and capture CLI
-`09a629b1711e88cb46bb403d692c5639025458771aefa7accb9f8ae6504bbb89`.
+`48ce673eb61ef189bcbd696ef08a765cd53de01d759ae9bd91f9f79a70bc139e`.
 This is a runtime check before cohort availability; it is **not** a verified
-study lane, ten-site shakedown or formal capture. Later supervisor edits need
-their own frozen check.
+study lane, ten-site shakedown or formal capture. The later revision-3 site
+modules have separate prospective bindings; this receipt covers its saved
+snapshot and is never rewritten to claim that later source was executed.
 
 Mount the **complete frozen clean runtime** at `/runtime-src` and the
 separately frozen study modules at `/rapid-src`. Set

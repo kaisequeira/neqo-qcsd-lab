@@ -167,7 +167,73 @@ evidence and exact peer-296 failure. There is no fabricated successful probe
 manifest or `known_valid` result. It grants a zero-credit screening deferral,
 preserving context 003's two generic failures unchanged. Context 004 has four
 verified screening decisions and no admitted sites; Alibaba's catalogue
-navigation subsequently passed.
+navigation subsequently passed. Alibaba also passed its controlled exact-page
+H3 check and automatic URL/domain screen. Full preparation stopped after a
+30-second passive-render limit; cleanup reported `CdpTargetIntegrityError`
+(`root Page frame detachment identity is invalid`). Its retained operational
+receipt at `acquisition/attempts/curated-30f778352dfbe9e2e48c/attempt-000004/operational-error.json`
+has SHA-256 `f455937829c5a33d795892ee69124900d7c45d10c777b6a5df770b687ddb825d`.
+The traceback in `operation-plans/plan-000006/prepare-stderr.log` retains both
+errors. No raw frame-detachment event parameters were retained, so the exact
+event sequence is not established. This remains an unsealed operational failure
+under revision 2, with no site or trace credit.
+
+### Rapid selection revision 3, 3 October 2026
+
+The create-only [revision 3 receipt](../config/curated-sources/crux73-tranco600-rapid-v5-selection-v3.json)
+was published at `2026-10-02T17:00:14.866744Z`, SHA-256
+`e175fa86345946999af391ec3a98115abd2b84c4cfffdce075dab10b09e3ad3e`.
+It binds the actual revision 2 parent above and preserves the **16,000** target,
+five traffic settings and complete admitted resource graphs. It permits a
+newly observed direct `CdpTargetIntegrityError` from a frozen event handler to
+advance screening as an operational collector deferral, never as an eligible
+site or a finding that an entire domain is unusable. Raw exception chains,
+tracebacks, source/client bytes and the closed attempt inventory must reopen.
+Preparation observations also bind the exact-page H3 pass and automatic
+screen. Missing CDP event parameters are explicitly unavailable, not inferred.
+Generic setup, infrastructure and wrapped generic errors remain blockers.
+
+The observer source SHA-256 is
+`2fa4b8082ec9ec095e76804bf0234929eaa482025d7a8aadd6c4e857e258745b`;
+all 16 focused observer cases passed. Amendment source SHA-256 is
+`60151f1f7dca6cde49640840880b695915687a7319e67fa883b20c289f9d688c`;
+111 compatibility and policy cases passed, including byte-identical historical
+v1/v2 receipts. Admission source SHA-256 is
+`98cca9044be68a61d5e9e10837a164e53dce0e1685a9dc60e69bdb7f729610c6`;
+CLI SHA-256 is
+`3c7dadfd2bb5c6d978c469e41212f23f482d62e7896d8f068e40edfa1879f0f2`.
+Focused admission/CLI and capture-planner/adapter integration checks passed.
+These are engineering checks, not fresh live collector-failure evidence or
+capture credit. No old context 004 attempt is promoted by this policy.
+
+Revision 3 also permits a controlled completed `response-known-invalid`
+homepage observation to proceed to browser and exact-page checks, retaining
+its actual ambiguous outcome. DNS ambiguity, timeouts, peer closes and missing
+controls cannot enter this branch. Historical v1/v2 rules remain unchanged.
+
+### Clean fallback first screen, 3 October 2026
+
+The fresh clean-image survey at host-local
+`../diagnostic-rehearsals/rapid-v5-fallback-h3-clean-20261003-002/`
+completed fallback indices 0–39 (global candidate orders 74–113) in about four
+minutes ten seconds, with eight passing controls. The independently reopened
+40 decisions comprise one known-valid homepage (`bandcamp.com`), 15 ambiguous
+observations, 19 timeouts, four peer TLS failures and one automatic safety skip.
+The ambiguous observations comprise seven completed responses with
+`known_valid=false` and eight exact DNS name misses. A completed ambiguous
+response can proceed to browser navigation and the separate exact-page H3
+check; it is not a confirmed eligible page or an automatic site rejection.
+DNS misses remain visibly operational deferrals.
+
+Raw log SHA-256 is
+`06cc2f05d568c518ab8706bb08890e8df2e14400d4b81553f36bf8c759fa30eb`;
+the independent verification record SHA-256 is
+`771e99e392c69298daf531b583394d065a517491f694d00286276dd526d0dbc2`.
+The verifier uses context 004's independently frozen fallback module and clean
+runtime bindings. This supplies root observations only, with **zero admitted
+sites and zero trace credit**. The preceding invocation in sibling directory
+001 failed CLI argument parsing before any probe; it remains preserved without
+screening authority.
 
 ### Installed rapid capture runtime check, 3 October 2026
 
@@ -193,6 +259,23 @@ execution paths. This is an installed-runtime check only: it supplies no
 cohort, bound lane launch, shakedown trace or formal credit. Later adapter
 changes require their own frozen snapshot; this proof is not a blanket pass
 for unfinished recovery code.
+
+The separate final-adapter invocation at host-local
+`../diagnostic-rehearsals/rapid-v5-capture-runtime-20261003-002/` exited 0 with
+empty stderr between `2026-10-02T16:42:01.998284Z` and
+`2026-10-02T16:42:07.661391Z`. It uses the published portable Lab source
+`1747fc16b427ebfcc492c159ddc6dfaedb03b5a8`, with final adapter SHA-256
+`ac730c551b6783fb21c556017e8b11212713566d1b86ee0a145a4adf25c03fcd`
+and CLI SHA-256
+`48ce673eb61ef189bcbd696ef08a765cd53de01d759ae9bd91f9f79a70bc139e`.
+Its 101-file module snapshot SHA-256 is
+`033314652aba4bc5cb6e480b3e9c06d6ba93996fc4a4ba2339547dbcd02ba96d`;
+command SHA-256 is
+`2d4cdc6e526c0a2be1e0bbba1342bc19f970722e38e2d6eb4119a6d13b7ca731`.
+Runtime output matches the earlier output SHA-256 above because these runtime
+inputs are unchanged. This advances the final adapter's installed-runtime
+check only; real bound launches, Docker retirement and formal credit remain
+outstanding.
 
 ### Clean recorder tail fix, 3 October 2026
 

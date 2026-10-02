@@ -419,7 +419,7 @@ def test_v2_rehashed_rule_or_typed_failure_contract_changes_fail(change: str):
         ))
 
 
-@pytest.mark.parametrize("revision", [0, 3, True, "2"])
+@pytest.mark.parametrize("revision", [0, 4, True, "2"])
 def test_unknown_or_loosely_typed_amendment_revision_fails(revision):
     with pytest.raises(ValueError, match="revision"):
         amendment.build_selection_amendment(
@@ -431,6 +431,290 @@ def test_unknown_or_loosely_typed_amendment_revision_fails(revision):
 def test_v2_cannot_predate_its_frozen_v1_parent():
     with pytest.raises(ValueError, match="before its v1 parent"):
         amendment.build_selection_amendment(published_at_utc="2026-10-02T14:00:00Z", revision=2)
+
+
+def test_v3_rederives_actual_v2_parent_and_preserves_all_acceptance_rules():
+    for revision, published, digest in (
+        (1, amendment.FROZEN_V1_AMENDMENT_PUBLICATION_UTC, amendment.FROZEN_V1_AMENDMENT_SHA256),
+        (2, amendment.FROZEN_V2_AMENDMENT_PUBLICATION_UTC, amendment.FROZEN_V2_AMENDMENT_SHA256),
+    ):
+        receipt = amendment.build_selection_amendment(published_at_utc=published, revision=revision)
+        raw = rapid._canonical_json(receipt)
+        assert _sha(raw) == digest
+        assert raw == (ROOT / f"config/curated-sources/crux73-tranco600-rapid-v5-selection-v{revision}.json").read_bytes()
+    parent = json.loads((ROOT / "config/curated-sources/crux73-tranco600-rapid-v5-selection-v2.json").read_bytes())["payload"]
+    receipt = _receipt(revision=3)
+    payload = amendment.validate_selection_amendment(receipt)
+    assert amendment.selection_amendment_revision(receipt) == 3
+    assert payload["parent_selection_amendment_sha256"] == amendment.FROZEN_V2_AMENDMENT_SHA256
+    assert payload["selection_policy"] == amendment.AMENDED_V3_SELECTION_POLICY
+    for key in ("admission_policy", "admitted_resource_graph", "formal_modes", "cohort_contracts",
+                "automated_site_screen_policy", "automated_screen_policy_sha256",
+                "non_replayable_egress_guard", "candidate_order_policy"):
+        assert payload[key] == parent[key]
+    for branch in ("browser_policy_deferral", "page_policy_deferral"):
+        assert {key: value for key, value in payload[branch].items() if key != "required_root_screen"} == {
+            key: value for key, value in parent[branch].items() if key != "required_root_screen"
+        }
+        assert payload[branch]["required_root_screen"] == amendment.V3_BROWSER_ROOT_REQUIREMENT
+    assert payload["browser_root_progression"]["allowed_outcome_details"] == [
+        ["known-valid", "known-valid"], ["ambiguous", "response-known-invalid"],
+    ]
+    disposition = payload["operational_collector_deferral"]
+    assert disposition["exception_type"] == "CdpTargetIntegrityError"
+    assert disposition["exception_module"] == "qcsd_lab.cdp_targets"
+    assert type(disposition["actual_attempt_count"]) is int and disposition["actual_attempt_count"] == 1
+    assert disposition["retryable"] is True and disposition["whole_domain_ineligible"] is False
+    assert disposition["site_credit"] == disposition["formal_accepted_trace_count"] == 0
+    assert "no-v3-relabel" in payload["freshness_policy"]["v2_failed_attempts"]
+
+
+def test_v3_cannot_predate_actual_v2_parent():
+    with pytest.raises(ValueError, match="before its v2 parent"):
+        amendment.build_selection_amendment(published_at_utc="2026-10-02T15:19:12Z", revision=3)
+
+
+@pytest.mark.parametrize("revision,outcome,detail,controls,allowed", [
+    (1, "known-valid", "known-valid", True, True),
+    (2, "ambiguous", "response-known-invalid", True, False),
+    (3, "ambiguous", "response-known-invalid", True, True),
+    (3, "ambiguous", "response-known-invalid", False, False),
+    (3, "ambiguous", "dns-name-not-found", True, False),
+    (3, "ambiguous", "peer-close-336", True, False),
+    (3, "timeout", "timeout", True, False),
+    (3, "peer-tls-handshake-failure", "peer-close-296", True, False),
+])
+def test_v3_root_progression_retains_completed_response_ambiguity_without_promoting_it(revision, outcome, detail, controls, allowed):
+    root = {"outcome": outcome, "detail": detail, "controls_passed": controls}
+    original = copy.deepcopy(root)
+    assert amendment.root_screen_allows_browser_progression(root, revision=revision) is allowed
+    assert root == original
+
+
+@pytest.mark.parametrize("change", ["parent", "exception", "module", "attempts", "boolean-count", "boolean-credit", "scientific", "retryable", "domain-verdict", "action", "freshness", "acceptance", "root-progression"])
+def test_v3_rehashed_deferral_and_acceptance_changes_are_rejected(change):
+    payload = copy.deepcopy(_receipt(revision=3)["payload"])
+    disposition = payload["operational_collector_deferral"]
+    if change == "parent":
+        payload["parent_selection_amendment_sha256"] = amendment.FROZEN_V1_AMENDMENT_SHA256
+    elif change == "exception":
+        disposition["exception_type"] = "RuntimeError"
+    elif change == "module":
+        disposition["exception_module"] = "operator_supplied"
+    elif change == "attempts":
+        disposition["actual_attempt_count"] = 2
+    elif change == "boolean-count":
+        disposition["actual_attempt_count"] = True
+    elif change == "boolean-credit":
+        disposition["site_credit"] = False
+    elif change == "scientific":
+        disposition["scientific_credit"] = True
+    elif change == "retryable":
+        disposition["retryable"] = False
+    elif change == "domain-verdict":
+        disposition["whole_domain_ineligible"] = True
+    elif change == "action":
+        disposition["preparation_action"]["required_proof"] = "none"
+    elif change == "freshness":
+        payload["freshness_policy"]["new_operational_collector_failure"] = "old-attempts-allowed"
+    elif change == "root-progression":
+        payload["browser_root_progression"]["allowed_outcome_details"].append(["ambiguous", "dns-name-not-found"])
+    else:
+        payload["admitted_resource_graph"] = "trim-unavailable-resources"
+    resealed = rapid._bind(payload, amendment.SELECTION_AMENDMENT_RECEIPT_TYPE, schema_version=5)
+    with pytest.raises(ValueError, match="prospective fixed contract"):
+        amendment.validate_selection_amendment(resealed)
+
+
+@pytest.fixture
+def context_v3(context_v2):
+    result = dict(context_v2)
+    result["amendment"] = _receipt(revision=3)
+    result["records"] = copy.deepcopy(context_v2["records"])
+    result["digests"] = list(context_v2["digests"])
+    digest = amendment.selection_amendment_sha256(result["amendment"])
+    now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    for facts in result["records"].values():
+        if facts["automated_site_screen"] is not None:
+            facts["automated_site_screen"].update(selection_amendment_sha256=digest, screened_at=now)
+    result["verify"] = lambda sha: copy.deepcopy(result["records"][sha])
+    return result
+
+
+def test_v3_normal_admissions_still_require_exact_fifty_and_full_graph(context_v3):
+    cohort = _build(context_v3)
+    assert cohort["payload"]["selection_policy"] == amendment.AMENDED_V3_SELECTION_POLICY
+    assert len(cohort["payload"]["selected_candidate_ids"]) == 50
+    assert cohort["payload"]["formal_sample_target"] == 16_000
+    assert all("operational_collector_failure" not in row for row in cohort["payload"]["terminal_decisions"])
+    first = context_v3["records"][context_v3["digests"][0]]
+    first["admission"]["cross_origin_resource_count"] = 0
+    with pytest.raises(ValueError, match="multi-origin proof"):
+        _build(context_v3)
+
+
+def test_v3_actual_cohort_opens_existing_capture_planner_binding(context_v3, tmp_path):
+    from dataclasses import replace
+    from qcsd_lab import rapid_capture_plan as plan
+
+    cohort = _build(context_v3)
+    cohort_path = tmp_path / "v3-cohort.json"
+    policy_path = tmp_path / "v3-selection.json"
+    cohort_path.write_bytes(rapid._canonical_json(cohort))
+    policy_path.write_bytes(rapid._canonical_json(context_v3["amendment"]))
+    bindings = plan.FrozenBindings(
+        PROFILE_PATH, rapid.FROZEN_V5_PROFILE_SHA256, cohort_path, _sha(cohort_path.read_bytes()), 5,
+        policy_path, _sha(policy_path.read_bytes()),
+    )
+    plan._check_bindings(bindings)
+    assert bindings.digests()["selection_amendment_sha256"] == amendment.selection_amendment_sha256(context_v3["amendment"])
+    wrong = _receipt(revision=2)
+    wrong_path = tmp_path / "wrong-selection.json"
+    wrong_path.write_bytes(rapid._canonical_json(wrong))
+    with pytest.raises(ValueError, match="identities differ"):
+        plan._check_bindings(replace(
+            bindings, selection_amendment_receipt=wrong_path,
+            selection_amendment_sha256=_sha(wrong_path.read_bytes()),
+        ))
+
+
+def _collector_deferral(context, tmp_path, monkeypatch, *, preparation):
+    from qcsd_lab import rapid_collector_failure_evidence as collector
+    from tests.test_rapid_collector_failure_evidence import collector_failure_fixture
+
+    first = context["records"][context["digests"][0]]
+    page = first["selected_page_h3_proof"]
+    automatic = copy.deepcopy(first["automated_site_screen"])
+    proof = collector_failure_fixture(
+        tmp_path, monkeypatch,
+        action_kind="complete-graph-preparation" if preparation else "catalogue-boundary-navigation",
+        selection_amendment_sha256=amendment.selection_amendment_sha256(context["amendment"]),
+        not_before_utc=amendment.selection_amendment_not_before_utc(context["amendment"]),
+        candidate_id=context["candidates"][0]["candidate_id"], primary=preparation,
+    )
+    context["binding"] = proof["binding"]
+    for facts in context["records"].values():
+        facts["execution_binding"] = proof["binding"]
+        if facts["automated_site_screen"] is not None:
+            facts["automated_site_screen"]["execution_binding"] = proof["binding"]
+    automatic["execution_binding"] = proof["binding"]
+    support = {
+        "navigation_receipt_sha256": page["navigation_receipt_sha256"] if preparation else None,
+        "selected_page_h3_receipt_sha256": page["receipt_sha256"] if preparation else None,
+        "automated_site_screen_receipt_sha256": automatic["receipt_sha256"] if preparation else None,
+    }
+    failure = {**proof["facts"], **support}
+    first.update(outcome=amendment.OPERATIONAL_COLLECTOR_DEFERRAL_REASON, admission=None,
+                 operational_collector_failure=failure,
+                 triage={"policy": amendment.OPERATIONAL_COLLECTOR_DEFERRAL_POLICY,
+                         "reason": amendment.OPERATIONAL_COLLECTOR_DEFERRAL_REASON, "safety_reason": None})
+    if not preparation:
+        first.update(selected_page_h3_proof=None, automated_site_screen=None)
+    # Continue the immutable order to replace the deferred candidate's lost
+    # admission; a collector limitation never reduces the target to 49 sites.
+    for index in range(len(context["digests"]), len(context["candidates"])):
+        candidate = context["candidates"][index]
+        facts = _terminal(candidate, context["binding"])
+        facts["automated_site_screen"] = None
+        if facts["outcome"] == "admitted":
+            facts["site_safety_review"] = None
+            facts["automated_site_screen"] = {
+                **automatic, "selected_page_url": facts["selected_page_h3_proof"]["url"],
+                "receipt_sha256": f"{index + 100:064x}",
+            }
+        digest = f"{index + 1:064x}"
+        context["records"][digest] = facts
+        context["digests"].append(digest)
+        if facts["outcome"] == "admitted":
+            break
+
+    def reopen(digest):
+        facts = copy.deepcopy(context["records"][digest])
+        if digest == context["digests"][0]:
+            actual = collector.verify_collector_failure(proof["path"], **proof["verify"])
+            retained = facts["operational_collector_failure"]
+            if {key: value for key, value in retained.items() if key not in support} != actual:
+                raise ValueError("terminal collector facts differ from independently reopened raw proof")
+        return facts
+
+    context["verify"] = reopen
+    return proof, failure
+
+
+@pytest.mark.parametrize("preparation", [False, True])
+def test_v3_actual_collector_deferral_reopens_proof_and_preserves_fifty(context_v3, tmp_path, monkeypatch, preparation):
+    proof, failure = _collector_deferral(context_v3, tmp_path, monkeypatch, preparation=preparation)
+    cohort = _build(context_v3)
+    first = cohort["payload"]["terminal_decisions"][0]
+    assert first["operational_collector_failure"] == failure
+    assert first["admission"] is None
+    assert first["outcome"] == amendment.OPERATIONAL_COLLECTOR_DEFERRAL_REASON
+    assert failure["retryable"] is True and failure["whole_domain_ineligible"] is False
+    assert failure["scientific_credit"] is False
+    assert failure["site_credit"] == failure["formal_accepted_trace_count"] == 0
+    assert (first["selected_page_h3_proof"] is not None) == preparation
+    assert (first["automated_site_screen"] is not None) == preparation
+    assert len(cohort["payload"]["selected_candidate_ids"]) == 50
+    assert cohort["payload"]["formal_sample_target"] == 16_000
+    assert context_v3["candidates"][0]["candidate_id"] not in cohort["payload"]["selected_candidate_ids"]
+    assert amendment.validate_amended_cohort_receipt(
+        cohort, PROFILE, SOURCE, CATALOGUE, selection_amendment=context_v3["amendment"],
+        execution_binding=context_v3["binding"], deep_verify_terminal=context_v3["verify"],
+    ) == tuple(cohort["payload"]["selected_candidate_ids"])
+    if not preparation:
+        count, prefix = 0, []
+        for digest in context_v3["digests"]:
+            prefix.append(digest)
+            count += context_v3["records"][digest]["outcome"] == "admitted"
+            if count == 10:
+                break
+        shakedown = _build(context_v3, generation="launch-10", terminal_sha256s=prefix)
+        assert len(shakedown["payload"]["selected_candidate_ids"]) == 10
+        assert shakedown["payload"]["planned_visit_count"] == 50
+        assert shakedown["payload"]["formal_sample_target"] == 0
+    (proof["attempt"] / "inputs.json").write_bytes(b"changed retained attempt bytes\n")
+    with pytest.raises(ValueError):
+        _build(context_v3)
+
+
+@pytest.mark.parametrize("preparation", [False, True])
+def test_v3_actual_collector_deferral_accepts_only_controlled_response_ambiguity(context_v3, tmp_path, monkeypatch, preparation):
+    _collector_deferral(context_v3, tmp_path, monkeypatch, preparation=preparation)
+    root = context_v3["records"][context_v3["digests"][0]]["root_screen"]
+    root.update(outcome="ambiguous", detail="response-known-invalid")
+    cohort = _build(context_v3)
+    retained = cohort["payload"]["terminal_decisions"][0]["root_screen"]
+    assert retained["outcome"] == "ambiguous" and retained["detail"] == "response-known-invalid"
+    root.update(detail="dns-name-not-found")
+    with pytest.raises(ValueError, match="controlled screening context"):
+        _build(context_v3)
+
+
+@pytest.mark.parametrize("change", ["v2-authority", "missing-page", "missing-auto", "navigation-hash",
+                                     "wrong-root", "human-verdict", "mixed-failure", "attempt-count", "credit"])
+def test_v3_collector_branch_rejects_unproved_context_or_promoted_facts(context_v3, tmp_path, monkeypatch, change):
+    _, failure = _collector_deferral(context_v3, tmp_path, monkeypatch, preparation=True)
+    first = context_v3["records"][context_v3["digests"][0]]
+    if change == "v2-authority":
+        context_v3["amendment"] = _receipt(revision=2)
+    elif change == "missing-page":
+        first["selected_page_h3_proof"] = None
+    elif change == "missing-auto":
+        first["automated_site_screen"] = None
+    elif change == "navigation-hash":
+        failure["navigation_receipt_sha256"] = "0" * 64
+    elif change == "wrong-root":
+        first["root_screen"].update(outcome="ambiguous", detail="dns-name-not-found")
+    elif change == "human-verdict":
+        first["site_safety_review"] = _terminal(context_v3["candidates"][0], context_v3["binding"])["site_safety_review"]
+    elif change == "mixed-failure":
+        first["page_policy_failure"] = {}
+    elif change == "attempt-count":
+        failure["actual_attempt_count"] = 2
+    else:
+        failure["site_credit"] = 1
+    with pytest.raises(ValueError):
+        _build(context_v3)
 
 
 def test_v2_fifty_site_admission_uses_automatic_proof_without_human_fact(context_v2: dict):
@@ -552,6 +836,67 @@ def _typed_page_failure(context: dict, *, preparation: bool) -> dict:
         if facts["outcome"] == "admitted":
             break
     return failure
+
+
+def test_v3_inherited_browser_branch_reopens_exact_guard_proof_on_controlled_response_ambiguity(context_v3, tmp_path):
+    _typed_page_failure(context_v3, preparation=False)
+    first = context_v3["records"][context_v3["digests"][0]]
+    del first["page_policy_failure"]
+    first.update(outcome="screen-deferred", triage={
+        "policy": amendment.BROWSER_POLICY_DEFERRAL_POLICY,
+        "reason": amendment.BROWSER_POLICY_DEFERRAL_REASON, "safety_reason": None,
+    })
+    first["root_screen"].update(outcome="ambiguous", detail="response-known-invalid")
+
+    def navigation(domain):
+        guard = browser_egress.NonReplayableEgressGuard()
+        guard.mark_context_guards_installed()
+        guard.bind_root_page(object())
+        guard.record(api="WebSocket", mechanism="playwright-websocket-route", url=f"wss://{domain}/socket")
+        guard.raise_if_failed()
+
+    proof_args = {
+        "candidate_id": context_v3["candidates"][0]["candidate_id"],
+        "execution_binding": context_v3["binding"],
+        "policy_amendment_sha256": amendment.selection_amendment_sha256(context_v3["amendment"]),
+        "expected_implementation_hashes": policy.implementation_hashes(),
+        "not_before_utc": amendment.selection_amendment_not_before_utc(context_v3["amendment"]),
+    }
+    path = tmp_path / "v3-navigation-policy-failure.json"
+    policy.produce_navigation_policy_observation(
+        output=path, backend=ExistingAcquisitionBackend(navigation=navigation),
+        profile=PROFILE_PATH, source=SOURCE_PATH, catalogue=CATALOGUE_PATH, **proof_args,
+    )
+
+    def reopen(digest):
+        facts = copy.deepcopy(context_v3["records"][digest])
+        if digest == context_v3["digests"][0]:
+            facts["browser_policy_failure"] = policy.verify_browser_policy_failure(
+                path, profile_receipt=PROFILE, source_bytes=SOURCE, catalogue_bytes=CATALOGUE, **proof_args,
+            )
+        return facts
+
+    context_v3["verify"] = reopen
+    cohort = _build(context_v3)
+    assert cohort["payload"]["terminal_decisions"][0]["root_screen"]["outcome"] == "ambiguous"
+    first["root_screen"].update(detail="dns-name-not-found")
+    with pytest.raises(ValueError, match="browser-policy deferral"):
+        _build(context_v3)
+
+
+@pytest.mark.parametrize("preparation", [False, True])
+def test_v3_inherited_page_branch_keeps_exact_page_requirements_on_response_ambiguity(context_v3, preparation):
+    _typed_page_failure(context_v3, preparation=preparation)
+    root = context_v3["records"][context_v3["digests"][0]]["root_screen"]
+    root.update(outcome="ambiguous", detail="response-known-invalid")
+    cohort = _build(context_v3)
+    first = cohort["payload"]["terminal_decisions"][0]
+    assert first["root_screen"]["outcome"] == "ambiguous"
+    assert (first["selected_page_h3_proof"] is not None) == preparation
+    assert (first["automated_site_screen"] is not None) == preparation
+    root.update(detail="peer-close-336")
+    with pytest.raises(ValueError, match="controlled screening context"):
+        _build(context_v3)
 
 
 @pytest.mark.parametrize("preparation", [False, True])

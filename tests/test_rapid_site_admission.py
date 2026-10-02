@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -124,7 +125,7 @@ class Backend:
                                body_sha256=f"{1:064x}", chromium_version="test-chromium")
 
 
-def _root_logs(context, tmp_path, *, dns_missing=False):
+def _root_logs(context, tmp_path, *, dns_missing=False, response_invalid=False):
     logs = []
     first_domain = context.candidates[0]["domain"]
     def probe(url):
@@ -132,6 +133,13 @@ def _root_logs(context, tmp_path, *, dns_missing=False):
             return {**_probe(url), "resolver_addresses": [], "resolver_error": "gaierror: [Errno -2] Name or service not known",
                     "exit_code": None, "stdout_sha256": admission._sha(b""), "stdout_excerpt": "",
                     "output_sha256": None, "output_text": None, "known_valid": None, "outcome": "ambiguous"}
+        if response_invalid and url == f"https://{first_domain}/":
+            value = _probe(url)
+            output = json.loads(value["output_text"])
+            output["resources"][0]["known_valid"] = False
+            raw = json.dumps(output)
+            return {**value, "output_sha256": admission._sha(raw.encode()), "output_text": raw,
+                    "known_valid": False, "outcome": "ambiguous"}
         return _probe(url)
     for start, count in ((0, 30), (30, 30), (60, 13)):
         path = tmp_path / f"roots-{start:03d}.jsonl"
@@ -288,6 +296,9 @@ def _amended_context(context, tmp_path, *, revision=1):
     paths = {key: admission._child(context.root, ref) for key, ref in provenance["inputs"].items()}
     modules = {group: {name: admission._child(context.root, ref) for name, ref in sources.items()}
                for group, sources in provenance["module_sources"].items()}
+    if revision == 3:
+        from qcsd_lab import rapid_collector_failure_evidence as collector
+        modules[admission.COLLECTOR_GROUP] = collector.implementation_sources()
     return admission.initialize_acquisition(
         tmp_path / "amended-acquisition", profile_path=paths["profile"], source=paths["source"],
         source_receipt=paths["source_receipt"], catalogue=paths["catalogue"],
@@ -602,3 +613,125 @@ def test_v2_preparation_operational_failures_remain_retryable(context, tmp_path,
     assert status["next_candidate"] == candidate
     assert status["attempts"][candidate["candidate_id"]][0]["state"] == "retryable-operational-error"
     assert not any(amended.root.rglob("page-policy-failure.json"))
+
+
+def _actual_collector_failure():
+    from qcsd_lab.cdp_targets import CdpTargetIntegrityError, RecursiveCdpTargetRouter
+    router = object.__new__(RecursiveCdpTargetRouter)
+    router._track_root_srcdoc_lifecycle = True
+    router._root_source = object()
+    router._root_frame_id = "root-frame"
+    try:
+        router._handle_root_page_lifecycle("Page.frameDetached", {"frameId": "root-frame", "reason": "remove"})
+    except CdpTargetIntegrityError as error:
+        return error
+    raise AssertionError("actual collector guard failed to reject an invalid root detachment")
+
+
+@pytest.mark.parametrize("response_invalid", [False, True])
+def test_v3_navigation_collector_observation_requires_explicit_cli_seal_and_gives_zero_credit(context, tmp_path, monkeypatch, response_invalid):
+    from qcsd_lab import rapid_browser_policy_evidence as browser
+    roots = _root_logs(context, tmp_path, response_invalid=response_invalid)
+    amended = _amended_context(context, tmp_path, revision=3)
+    candidate = amended.candidates[0]
+    def fail(_):
+        raise _actual_collector_failure()
+    monkeypatch.setattr(browser, "ExistingAcquisitionBackend", lambda: ExistingAcquisitionBackend(navigation=fail))
+    proof = rapid_acquire._page_action(amended, candidate["candidate_id"], SimpleNamespace(command="navigate"))
+    facts = admission.operational_collector_failure_facts(proof, amended, candidate["candidate_id"])
+    assert facts["action"]["kind"] == "catalogue-boundary-navigation"
+    assert facts["event_parameters"] == "unavailable-not-reconstructed"
+    assert facts["retryable"] is True and facts["whole_domain_ineligible"] is False
+    assert facts["actual_attempt_count"] == 1
+    assert facts["navigation_receipt_sha256"] is facts["selected_page_h3_receipt_sha256"] is None
+    status = admission.acquisition_status(amended)
+    assert status["terminal_count"] == 0
+    assert status["attempts"][candidate["candidate_id"]][0]["state"] == "collector-failure-needs-explicit-terminal"
+    args = ["seal", str(amended.root), "--candidate", candidate["candidate_id"], "--collector-failure", str(proof)]
+    for root in roots:
+        args += ["--root-log", str(root)]
+    result = rapid_acquire.run(rapid_acquire._parser().parse_args(args))
+    terminal = admission.verify_site_terminal(Path(result["evidence"]), amended)
+    assert terminal["outcome"] == "operational-collector-screen-deferred"
+    assert terminal["admission"] is terminal["site_safety_review"] is terminal["selected_page_h3_proof"] is None
+    assert terminal["automated_site_screen"] is None
+    assert terminal["root_screen"]["outcome"] == ("ambiguous" if response_invalid else "known-valid")
+    assert result["status"]["next_candidate"] == amended.candidates[1]
+    assert result["status"]["admitted_site_count"] == result["status"]["formal_accepted_trace_count"] == 0
+
+
+def test_v3_prepare_collector_limitation_reopens_exact_supports_without_shrinking_graph(context, tmp_path):
+    amended = _amended_context(context, tmp_path, revision=3)
+    candidate, navigation, h3, screen = _auto_page(amended, tmp_path)
+    class CollectorBackend(Backend):
+        def discover(self, url, approved):
+            raise _actual_collector_failure()
+    proof = admission.prepare_site(amended, candidate_id=candidate["candidate_id"], navigation=navigation,
+                                   page_h3=h3, automated_screen=screen, backend=CollectorBackend(amended))
+    assert proof.name == "collector-failure.json"
+    failure = admission.operational_collector_failure_facts(proof, amended, candidate["candidate_id"])
+    assert failure["action"]["kind"] == "complete-graph-preparation"
+    assert failure["selected_page_h3_receipt_sha256"] == admission._sha(h3.read_bytes())
+    terminal = admission.produce_site_terminal(amended, candidate_id=candidate["candidate_id"],
+                                               root_surveys=_root_logs(amended, tmp_path),
+                                               collector_failure=proof, automated_screen=screen)
+    facts = admission.verify_site_terminal(terminal, amended)
+    assert facts["outcome"] == "operational-collector-screen-deferred" and facts["admission"] is None
+    assert facts["selected_page_h3_proof"]["url"] == f"https://{candidate['domain']}/"
+    assert facts["automated_site_screen"]["receipt_sha256"] == admission._sha(screen.read_bytes())
+    invalid = deepcopy(failure)
+    invalid["selected_page_h3_receipt_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="exact page support"):
+        admission.validate_operational_collector_failure_facts(
+            invalid, candidate=candidate, execution_binding=amended.execution_binding,
+            selection_amendment_sha256=amended.selection_amendment_sha256,
+            not_before_utc=amended.collector_not_before_utc,
+            selected_page_h3_proof=facts["selected_page_h3_proof"], automated_site_screen=facts["automated_site_screen"],
+        )
+
+
+def test_v2_collector_error_remains_unsealed_retryable_and_cannot_accept_v3_flag(context, tmp_path):
+    amended = _amended_context(context, tmp_path, revision=2)
+    candidate, navigation, h3, screen = _auto_page(amended, tmp_path)
+    class CollectorBackend(Backend):
+        def discover(self, url, approved):
+            raise _actual_collector_failure()
+    with pytest.raises(Exception, match="frame detachment identity is invalid"):
+        admission.prepare_site(amended, candidate_id=candidate["candidate_id"], navigation=navigation,
+                                page_h3=h3, automated_screen=screen, backend=CollectorBackend(amended))
+    assert not any(amended.root.rglob("collector-failure.json"))
+    assert admission.acquisition_status(amended)["attempts"][candidate["candidate_id"]][0]["state"] == "retryable-operational-error"
+    with pytest.raises(ValueError, match="revision 3"):
+        admission.produce_site_terminal(amended, candidate_id=candidate["candidate_id"], collector_failure=tmp_path / "fake.json")
+
+
+@pytest.mark.parametrize("error", [RuntimeError("CdpTargetIntegrityError: simulated"), TimeoutError("transport timeout")])
+def test_v3_generic_infrastructure_errors_cannot_gain_collector_deferral(context, tmp_path, error):
+    amended = _amended_context(context, tmp_path, revision=3)
+    candidate, navigation, h3, screen = _auto_page(amended, tmp_path)
+    class ErrorBackend(Backend):
+        def discover(self, *args):
+            raise error
+    with pytest.raises(type(error)):
+        admission.prepare_site(amended, candidate_id=candidate["candidate_id"], navigation=navigation,
+                                page_h3=h3, automated_screen=screen, backend=ErrorBackend(amended))
+    assert not any(amended.root.rglob("collector-failure.json"))
+    status = admission.acquisition_status(amended)
+    assert status["next_candidate"] == candidate and status["terminal_count"] == 0
+    assert status["attempts"][candidate["candidate_id"]][0]["state"] == "retryable-operational-error"
+
+
+def test_v3_full_graph_admission_keeps_16000_target_and_original_support_reopening(context, tmp_path):
+    prior = _page_files(context, tmp_path)
+    roots = _root_logs(context, tmp_path)
+    amended = _amended_context(context, tmp_path, revision=3)
+    candidate, navigation, h3, screen = _auto_page(amended, tmp_path, prior=prior)
+    prepared = admission.prepare_site(amended, candidate_id=candidate["candidate_id"], navigation=navigation,
+                                      page_h3=h3, automated_screen=screen, backend=Backend(amended))
+    terminal = admission.produce_site_terminal(amended, candidate_id=candidate["candidate_id"],
+                                               root_surveys=roots, preparation=prepared, automated_screen=screen)
+    facts = admission.verify_site_terminal(terminal, amended)
+    assert facts["outcome"] == "admitted" and facts["admission"]["cross_origin_resource_count"] == 1
+    assert facts["admission"]["full_resource_graph_sha256"]
+    assert "operational_collector_failure" not in facts
+    assert admission.acquisition_status(amended)["formal_trace_target"] == 16_000
