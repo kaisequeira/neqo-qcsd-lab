@@ -211,6 +211,44 @@ homepage observation to proceed to browser and exact-page checks, retaining
 its actual ambiguous outcome. DNS ambiguity, timeouts, peer closes and missing
 controls cannot enter this branch. Historical v1/v2 rules remain unchanged.
 
+Fresh host-local context
+`../diagnostic-rehearsals/rapid-v5-site-acquisition-20261003-005/`
+has provenance SHA-256
+`03f28e58613c18c086f24473933473642e9c757f992df41d9a04431f062f5164`
+and launch-manifest SHA-256
+`29999ddd146f181ed433d333f3f44bd53b07f04912bf7350a135dde30ffeb5a9`.
+Its controlled root deferral and fresh Weerplaza observation were independently
+sealed, giving a terminal prefix of two with zero admitted sites or formal
+traces. The real navigation invocation completed in 26 seconds at
+`2026-10-02T17:07:40.335752Z`; its observation SHA-256 is
+`053a59559784d2e00a060c7e59a0f5de6bf4148b1e4707855c4376a9dbf9b4a1`.
+Albumaty's separately executed fresh automatic screen has SHA-256
+`2fd1b9c2bfdccdc6bb9003ba40c6dfa3642d94b2483243a1579efddd803f679b`.
+Its new full preparation completed in 73 seconds at
+`2026-10-02T17:13:43.445309Z`, retaining the actual FontAwesome peer-close
+failure (resources 5, 23 and 25). Typed failure receipt SHA-256 is
+`821e2a9974e960f559205d0ffa859517395ca082f028dd4fa8cd8eac0527c747`.
+That failure was independently reopened and sealed, then the fourth candidate's
+controlled root deferral was sealed. Context 005's prefix is now four, with
+zero admitted sites or traces. Alibaba's fresh automatic screen has SHA-256
+`9f6a0752fcac5ea214c4ae6210764f47edef816c1bf982cf7eb08697ec4d2977`;
+its new full preparation completed in 65 seconds at
+`2026-10-02T17:19:49.103453Z`, with the fresh collector observation already
+retained and verified by the producer. Observation SHA-256 is
+`1b6461ec334d1a852aad3513cb93e46c86d78a855fefb0030b668a17e62eb0b5`;
+outer wrapper SHA-256 is
+`a66a32e946ae72126a6d7711c71cff482aae82521a37f087404d0930295bf3f2`.
+The actual traceback ends at `cdp_targets.py:5070`,
+`_handle_root_page_lifecycle`, with exact `CdpTargetIntegrityError` and a
+retained primary `PassiveRenderPolicyError`. The source/client inventory has
+all 13 bindings, including the final observer. This is the fresh revision 3
+path, not a promotion of context 004's error. A separate audit reopened all
+18 closed files (9,009,835 bytes), the source/client bindings, retained
+exception context and all three page-support receipts. The explicit collector
+terminal then sealed successfully with empty stderr. Context 005 now has five
+verified screening decisions; Pinterest navigation is next. Site and trace
+credit remain zero.
+
 ### Clean fallback first screen, 3 October 2026
 
 The fresh clean-image survey at host-local

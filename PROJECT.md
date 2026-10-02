@@ -113,6 +113,19 @@ unsealed; context 004's Alibaba attempt gains no new authority. Focused checks
 passed for the observer (16 cases), selection compatibility (111 cases),
 admission/CLI boundaries and unchanged capture-planner/adapter integration.
 
+Fresh context 005 is now executing revision 3 with seven independently frozen
+implementation groups. It has five verified zero-credit screening decisions,
+including a new Weerplaza WebSocket policy failure and a fresh Albumaty
+FontAwesome probe failure. Albumaty's full preparation finished in 73 seconds;
+its raw failure and explicit terminal independently verify. Alibaba's unchanged
+navigation and exact-page H3 proofs were reopened, a new automatic screen
+passed, and fresh complete-graph preparation reproduced the collector failure
+in 65 seconds. The new observer retained the actual direct CDP raise, earlier
+passive-render error, 13 source/client bindings and closed attempt inventory.
+All 18 retained files (9,009,835 bytes) independently reopened and the explicit
+collector terminal was sealed. Pinterest navigation is next. It has
+**0/50 admitted sites and 0/16,000 formal traces**. Context 004 remains unchanged.
+
 A fresh clean-image fallback root survey independently verifies the first
 40 fallback observations: one known-valid homepage (`bandcamp.com`), 15
 ambiguous results, 19 timeouts, four peer TLS failures and one automatic skip.

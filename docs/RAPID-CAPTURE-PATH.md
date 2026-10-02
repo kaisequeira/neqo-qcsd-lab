@@ -14,7 +14,7 @@ sequence does not gate this prospective five-setting study.
 | Step | Action | Evidence needed to advance | Current state |
 |---:|---|---|---|
 | 1 | Freeze the candidate sources and runtime. | Exact source hashes, ordered [v5 rapid profile receipt](../config/curated-sources/crux73-tranco600-rapid-v5.profile.json), image digests, fixed defense parameters and launcher-source hashes. | V5 is frozen (SHA-256 `f7eb0228a06429cc2ae91d0f9d52577399e15b68f4915d41cb60291445542b60`), preserving 73 supplied candidates, 600 fallback candidates and 50 × 5 × 64. Clean matching collection and prepare images exist. Selection revision 3 is published. The real installed-runtime preflight 002 passed inside the collection image with the saved client, clean source, fixed traffic files and final capture adapter snapshot; it grants no lane or trace credit. |
-| 2 | Find usable pages. | Record verified decisions in frozen order. Revision 3 inherits the automatic public URL/domain screen, controlled homepage observation, separate controlled HTTP/3 pass on the exact selected page, complete browser-observed graph, stable replay and live cross-origin resource. Only a controlled completed-response ambiguity can proceed alongside a known-valid homepage. | All **73 fresh v5 curated first-screen decisions** independently verify: **31 known-valid, 27 ambiguous, six peer TLS failures, two timeouts and seven automatic safety skips**. A fresh 40-candidate fallback batch also verifies, with one known-valid homepage and seven completed-response leads. Context 004 has **four terminal zero-credit decisions**; Alibaba passed navigation, exact-page H3 and automatic screening, then preparation stopped at a collector error. That old error remains unsealed. Revision 3 permits only a fresh independently proved collector disposition. **0/50 final sites admitted.** |
+| 2 | Find usable pages. | Record verified decisions in frozen order. Revision 3 inherits the automatic public URL/domain screen, controlled homepage observation, separate controlled HTTP/3 pass on the exact selected page, complete browser-observed graph, stable replay and live cross-origin resource. Only a controlled completed-response ambiguity can proceed alongside a known-valid homepage. | All **73 fresh v5 curated first-screen decisions** independently verify: **31 known-valid, 27 ambiguous, six peer TLS failures, two timeouts and seven automatic safety skips**. A fresh 40-candidate fallback batch adds one known-valid homepage and seven completed-response leads. **Context 005 has five independently sealed zero-credit decisions.** Albumaty's fresh 73-second page failure and Alibaba's fresh 65-second collector failure are sealed; all 18 Alibaba raw files and 13 source/client bindings were independently reopened. Pinterest is next. Old context-004 errors remain unpromoted. **0/50 final sites admitted.** |
 | 3 | Prepare and qualify the first ten sites. | Ten verified prepared workloads, with five-site response-qualification sets matching the exact workload and source bytes. | A fresh one-workload qualifier matches the clean repaired client. Its response-only receipt independently reloads through the collection-image qualification bridge. This proves the runtime route; the workload is historical and does not supply ten admitted study sites. |
 | 4 | Run the ten-site shakedown across all five settings. | 50 complete, individually deep-verified diagnostic traces, including both BuFLO modes, with failures preserved and repaired before formal capture. | All five settings now have individual clean-runtime diagnostic passes on one historical workload: CS-BuFLO **1/1**, BuFLO retry 004 **1/1**, FRONT and Tamaraw accepted, and a fresh undefended two-second-settle successor **1/1**. The previous undefended attempt lacked 45 tail packets and remains failed. These separate passes do not supply the ten-site shakedown. **0/50 study shakedown traces accepted.** |
 | 5 | Admit 50 sites and freeze formal inputs. | A verified 50-site cohort receipt, exact workloads and qualification sets, fixed parameters, complete lane plan and launch manifest. | 50-site live yield is unproven; the 600-domain catalogue supplies further candidates under the same checks. |
@@ -172,7 +172,7 @@ allows screening to continue without claiming every page on the domain is
 scientifically ineligible. The next controlled-root deferral was subsequently
 explicitly sealed and independently reopened, bringing context 004 to
 **four terminal decisions, zero admitted sites and zero formal traces**.
-Alibaba is the next candidate in the frozen order.
+Alibaba was the next candidate in that context's frozen order.
 
 ### Revision 3: record a collector limitation without blocking every later site
 
@@ -218,6 +218,31 @@ results, **seven are completed-response leads and eight are DNS misses**.
 This supplies homepage observations only; it demonstrates neither 50-site
 yield nor a prepared site. Runtime 002, fallback observations and the old
 Alibaba error are recorded through the [evidence index](EVIDENCE-INDEX.md).
+
+### Current milestone: fresh revision-3 context 005
+
+Context 005 is now running with the published revision-3 receipt and frozen
+implementation groups. Its first two zero-credit terminal decisions were
+independently sealed: the controlled root-screen decision and a fresh
+Weerplaza navigation failure recorded in about **26 seconds**. No earlier
+failed attempt was promoted into these new decisions.
+
+Albumaty's fresh full preparation then completed in about **73 seconds**,
+with driver exit 0 and a retained typed page-policy failure, SHA-256
+`821e2a9974e960f559205d0ffa859517395ca082f028dd4fa8cd8eac0527c747`.
+Exit 0 means that failure evidence was recorded; it is not a successful
+prepared workload or admitted site. Its explicit seal then produced terminal
+`2690b4ffeec614efb76d748a1d1a959444ff65e265e8bfbabb3e82ed76faf006`.
+The next controlled-root deferral was also sealed. Independent reopening
+confirms **four terminal decisions**. Alibaba's unchanged positive navigation
+and exact-page H3 proofs were independently reopened, and its fresh
+context-005 automatic screen passed. Its full preparation then reproduced the
+collector failure in **65 seconds**. All 18 retained files, 13 source/client
+bindings, traceback and exact-page support independently reopened; the new
+collector terminal was explicitly sealed. Context 005 now has **five terminal
+decisions**, with Pinterest navigation next. Counts remain **0/50 admitted sites,
+0/50 study shakedown traces and 0/16,000 formal traces**. The latest closure
+records are collected through the [evidence index](EVIDENCE-INDEX.md).
 
 The actual runtime, screen logs, failed attempts and sealed diagnostic
 results are host-local evidence described through the
