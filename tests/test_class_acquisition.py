@@ -4910,13 +4910,24 @@ def test_schema_seven_audit_five_projects_read_only_but_cannot_alias_later_schem
             acquisition_module._SCHEMA_SEVEN_CDP_TARGET_INSTRUMENTATION_POLICY
         ),
     )
-    for schema_version in (11, acquisition_module.SCHEMA_VERSION):
-        with pytest.raises(ValueError, match="discovery event audit"):
+    for schema_version, policy, expected_error in (
+        (
+            11,
+            acquisition_module._SCHEMA_THIRTEEN_CDP_TARGET_INSTRUMENTATION_POLICY,
+            "schema-thirteen discovery evidence",
+        ),
+        (
+            acquisition_module.SCHEMA_VERSION,
+            CDP_TARGET_INSTRUMENTATION_POLICY,
+            "passive-render contract differs",
+        ),
+    ):
+        with pytest.raises(ValueError, match=expected_error):
             acquisition_module._validate_versioned_class_study_preparation(
                 manifest,
                 workload_id="example",
                 acquisition_schema_version=schema_version,
-                instrumentation_policy=CDP_TARGET_INSTRUMENTATION_POLICY,
+                instrumentation_policy=policy,
             )
 
 
@@ -4931,6 +4942,18 @@ def test_schema_eight_audit_seven_projects_without_losing_recorded_evidence(
     )
     audit["instrumentation_policy"] = (
         acquisition_module._SCHEMA_EIGHT_CDP_TARGET_INSTRUMENTATION_POLICY
+    )
+    preparation["passive_render_contract"] = copy.deepcopy(
+        acquisition_module._SCHEMA_SEVEN_PASSIVE_RENDER_CONTRACT
+    )
+    preparation["passive_render_contract_sha256"] = (
+        acquisition_module._SCHEMA_SEVEN_PASSIVE_RENDER_CONTRACT_SHA256
+    )
+    audit["passive_render_contract_sha256"] = (
+        acquisition_module._SCHEMA_SEVEN_PASSIVE_RENDER_CONTRACT_SHA256
+    )
+    preparation["coverage_admission"]["passive_render_contract_sha256"] = (
+        acquisition_module._SCHEMA_SEVEN_PASSIVE_RENDER_CONTRACT_SHA256
     )
     shutdown = audit["normal_shutdown_disposal_summary"]
     shutdown.update(

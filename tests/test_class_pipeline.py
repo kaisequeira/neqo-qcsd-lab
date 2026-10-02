@@ -1159,7 +1159,8 @@ def test_status_labels_historical_acquisition_authority_without_using_it_as_gate
 @pytest.mark.parametrize(
     ("acquisition_schema", "completion_schema", "checkpoint_schema", "current"),
     (
-        (13, 5, 3, True),
+        (14, 5, 3, True),
+        (13, 5, 3, False),
         (12, 4, 3, False),
         (11, 4, 3, False),
         (10, 4, 3, False),

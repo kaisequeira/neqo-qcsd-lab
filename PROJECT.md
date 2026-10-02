@@ -155,6 +155,19 @@ v146 acquisition authority verified as historical-only in the container.
 These diagnostics do not repair or promote v146; a new clean cohort must pass
 its own build, browser check and acquisition authority.
 
+On **v147**, clean Lab source `610db9cc04082bbc952148ff1d87e25636a6e75a`
+and the same Rust Gitlink passed the no-cache three-image build and pinned-CDP
+browser check. The 20-site acquisition-authority run then failed its
+correctness suite: **2,537 passed, three failed, 31 skipped**. It issued no
+authority receipt and opened no acquisition root. The three failures were
+historical test fixtures left with current schema/policy values after the
+prospective schema-14 repair; production checks were not relaxed. The corrected
+fixtures passed focused tests. A host run of the exact 20-site correctness
+list passed **2,565 tests**, skipped six host-specific cases, and deselected
+one disk-stalled case that had passed in the v147 container. This is a
+zero-credit prebuild check, not a replacement for in-image authority. A fresh
+cohort and full downstream reproof are required before acquisition resumes.
+
 The earlier 100-site public-page acquisition attempt is **v139** on clean Lab source
 `34088bb687ec683f16597da41e2c02a11f201447` and pinned Rust Gitlink
 `a8d8664cd31cbc4cc1ecb4fd5abc5a1d3ee153ae`. Its no-cache build,
