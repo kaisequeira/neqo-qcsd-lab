@@ -1,5 +1,14 @@
 # Class-study timeline and estimate assumptions
 
+For a short explanation of why only some of the supplied site domains can be
+considered for the new 50-site study, read [Why the supplied domains are only
+part of the 50-site study](README-CURATED-DOMAINS.md).
+The [rapid capture path](RAPID-CAPTURE-PATH.md) lists the steps, proof needed
+at each step, and the current milestone.
+
+The estimates below describe the earlier 100-site study. The current 50-site
+route and its live status are in the rapid capture path above.
+
 Planning snapshot: **30 September 2026, Australia/Sydney**. This page explains
 the time estimates for reaching and completing the 16,000-sample defense study.
 It is a planning model, not evidence that a gate has passed. Read the

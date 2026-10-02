@@ -5633,6 +5633,14 @@ study_admission_completion_sha256=""
 study_admission_collection_image=""
 study_resume_public=0
 study_resume_root=""
+rapid_capture=0
+rapid_capture_name=""
+rapid_capture_target=""
+rapid_capture_args=()
+rapid_capture_role=""
+rapid_capture_mode=""
+rapid_capture_version=""
+rapid_public_hosts=()
 
 if [[ "${1:-}" == "buflo-study" ]]; then
   study_cohort_version=1
@@ -5764,11 +5772,104 @@ if [[ "${1:-}" == "resume" ]]; then
   fi
 fi
 
+# A prospective rapid campaign uses the existing ETF-capable collection image
+# without claiming the historical BuFLO/class-study build authority. Bind the
+# selector to the canonical campaign path. The installed runtime validates the
+# parsed campaign name and schema before creating any public capture topology.
+# Historical v2 diagnostic names remain runnable for zero-credit verification.
+# V5 shakedown lanes cover one block, two five-site shards, and five modes.
+# V5 diagnostics and formal lanes use their own frozen profile and namespace.
+rapid_v2_diagnostic_pattern='^rapid-curated-tranco50-v2-diagnostic-[a-z0-9]+(-[a-z0-9]+)*$'
+rapid_v5_diagnostic_pattern='^rapid-curated-tranco50-v5-diagnostic-b(01)-s(0[12])-(undefended|front|tamaraw|buflo|cs-buflo)-1200(-g(0[2-9]|[1-9][0-9]))?$'
+rapid_v4_formal_pattern='^rapid-curated-tranco50-v4-formal-b(0[1-9]|1[0-6])-s(0[1-9]|10)-(undefended|front|tamaraw|buflo|cs-buflo)-1200(-g(0[2-9]|[1-9][0-9]))?$'
+rapid_v5_formal_pattern='^rapid-curated-tranco50-v5-formal-b(0[1-9]|1[0-6])-s(0[1-9]|10)-(undefended|front|tamaraw|buflo|cs-buflo)-1200(-g(0[2-9]|[1-9][0-9]))?$'
+if [[ "${1:-}" == "run" &&
+      ( "${study_campaign_name%.yml}" =~ ${rapid_v2_diagnostic_pattern} ||
+        "${study_campaign_name%.yml}" =~ ${rapid_v5_diagnostic_pattern} ||
+        "${study_campaign_name%.yml}" =~ ${rapid_v4_formal_pattern} ||
+        "${study_campaign_name%.yml}" =~ ${rapid_v5_formal_pattern} ) &&
+      "${study_campaign_name}" == *.yml ]]; then
+  if (( $# != 2 )); then
+    echo "rapid capture run requires exactly one campaign" >&2
+    exit 2
+  fi
+  rapid_campaign_host="$(realpath -e -- "$2")" || exit 1
+  if [[ -L "$2" || ! -f "${rapid_campaign_host}" ||
+        "${rapid_campaign_host}" != "${ROOT}/"* ]]; then
+    echo "rapid capture campaign must be a regular file inside the Lab root" >&2
+    exit 1
+  fi
+  rapid_capture_name="${study_campaign_name%.yml}"
+  if [[ "${rapid_capture_name}" =~ ${rapid_v4_formal_pattern} ]]; then
+    rapid_capture_role="formal"
+    rapid_capture_mode="${BASH_REMATCH[3]}"
+    rapid_capture_version="v4"
+  elif [[ "${rapid_capture_name}" =~ ${rapid_v5_formal_pattern} ]]; then
+    rapid_capture_role="formal"
+    rapid_capture_mode="${BASH_REMATCH[3]}"
+    rapid_capture_version="v5"
+  elif [[ "${rapid_capture_name}" =~ ${rapid_v5_diagnostic_pattern} ]]; then
+    rapid_capture_role="diagnostic"
+    rapid_capture_mode="${BASH_REMATCH[3]}"
+    rapid_capture_version="v5"
+  else
+    rapid_capture_role="diagnostic"
+  fi
+  rapid_capture=1
+  rapid_capture_target="/lab/${rapid_campaign_host#${ROOT}/}"
+  rapid_capture_args=(run "${rapid_capture_target}")
+elif [[ "${1:-}" == "resume" &&
+        ( "${study_resume_name:-}" =~ ${rapid_v2_diagnostic_pattern} ||
+          "${study_resume_name:-}" =~ ${rapid_v5_diagnostic_pattern} ||
+          "${study_resume_name:-}" =~ ${rapid_v4_formal_pattern} ||
+          "${study_resume_name:-}" =~ ${rapid_v5_formal_pattern} ) ]]; then
+  if (( $# != 2 )); then
+    echo "rapid capture resume requires exactly one result root" >&2
+    exit 2
+  fi
+  rapid_frozen_campaign="${study_resume_root}/inputs/campaign.yml"
+  if [[ -L "${rapid_frozen_campaign}" || ! -f "${rapid_frozen_campaign}" ]]; then
+    echo "rapid capture resume requires a regular frozen campaign" >&2
+    exit 1
+  fi
+  rapid_capture_name="${study_resume_name}"
+  if [[ "${rapid_capture_name}" =~ ${rapid_v4_formal_pattern} ]]; then
+    rapid_capture_role="formal"
+    rapid_capture_mode="${BASH_REMATCH[3]}"
+    rapid_capture_version="v4"
+  elif [[ "${rapid_capture_name}" =~ ${rapid_v5_formal_pattern} ]]; then
+    rapid_capture_role="formal"
+    rapid_capture_mode="${BASH_REMATCH[3]}"
+    rapid_capture_version="v5"
+  elif [[ "${rapid_capture_name}" =~ ${rapid_v5_diagnostic_pattern} ]]; then
+    rapid_capture_role="diagnostic"
+    rapid_capture_mode="${BASH_REMATCH[3]}"
+    rapid_capture_version="v5"
+  else
+    rapid_capture_role="diagnostic"
+  fi
+  if [[ "${study_resume_root}" != "${ROOT}/results/${rapid_capture_name}/"* ]]; then
+    echo "rapid capture result and frozen campaign identities differ" >&2
+    exit 1
+  fi
+  rapid_capture=1
+  rapid_capture_target="/lab/results/${study_resume_root#${ROOT}/results/}"
+  rapid_capture_args=(resume "${rapid_capture_target}")
+fi
+
 study_build_execution_path=""
 study_build_execution_sha256=""
 study_build_completion_path=""
 study_build_completion_sha256=""
 study_build_completion_payload_sha256=""
+# Preserve rapid attempt evidence before any Docker preflight. The installed
+# generic resume removes partial attempts and rewinds checkpoint counters.
+if [[ "${1:-}" == "resume" ]] && (( rapid_capture )); then
+  echo "direct rapid capture resume is disabled because generic resume can delete partial attempt evidence and decrement checkpoint counters" >&2
+  echo "retain the original result root unchanged: ${study_resume_root}" >&2
+  echo "create a successor lane through the bound rapid adapter, with a new create-only result destination and the original lane as its predecessor" >&2
+  exit 2
+fi
 if [[ -n "${study_cohort_version}" ]]; then
   study_build_execution_path="${ROOT}/artifacts/buflo-study/build-execution-v${study_cohort_version}.json"
   if [[ -L "${study_build_execution_path}" || ! -f "${study_build_execution_path}" ]]; then
@@ -7568,6 +7669,276 @@ else
   mkdir -p "${ROOT}/results" "${ROOT}/artifacts" "${ROOT}/config/workloads"
 fi
 image_id="$(_qcsd_docker_api image inspect --format '{{.Id}}' "${image}")"
+if (( rapid_capture )); then
+  rapid_image_shell_host="${QCSD_RAPID_IMAGE_SOURCE_QCSD:-}"
+  if [[ -z "${rapid_image_shell_host}" || -L "${rapid_image_shell_host}" ||
+        ! -f "${rapid_image_shell_host}" ]]; then
+    echo "rapid capture requires an immutable regular image-source qcsd-lab file" >&2
+    exit 1
+  fi
+  rapid_image_shell_host="$(realpath -e -- "${rapid_image_shell_host}")" || exit 1
+  if [[ "${rapid_capture_role}" == "formal" &&
+        "${rapid_capture_version}" == "v4" ]]; then
+    rapid_v4_profile_host="${QCSD_RAPID_V4_PROFILE_PATH:-${ROOT}/config/curated-sources/crux73-tranco600-rapid-v4.profile.json}"
+    if [[ -L "${rapid_v4_profile_host}" || ! -f "${rapid_v4_profile_host}" ]]; then
+      echo "rapid v4 formal capture requires the frozen profile receipt" >&2
+      exit 1
+    fi
+    rapid_v4_profile_sha256="$(sha256sum -- "${rapid_v4_profile_host}")" || exit 1
+    rapid_v4_profile_sha256="${rapid_v4_profile_sha256%% *}"
+    if [[ "${rapid_v4_profile_sha256}" != \
+          "ac40a338bf72c9062b4ece0d1f16de6476763c522295f668e2f5fe931f8c6a92" ]]; then
+      echo "rapid v4 formal profile differs from the frozen receipt" >&2
+      exit 1
+    fi
+    echo "rapid v4 formal profile SHA-256: ${rapid_v4_profile_sha256}" >&2
+  elif [[ "${rapid_capture_version}" == "v5" ]]; then
+    rapid_v5_profile_host="${QCSD_RAPID_V5_PROFILE_PATH:-${ROOT}/config/curated-sources/crux73-tranco600-rapid-v5.profile.json}"
+    if [[ -L "${rapid_v5_profile_host}" || ! -f "${rapid_v5_profile_host}" ]]; then
+      echo "rapid v5 capture requires the frozen profile receipt" >&2
+      exit 1
+    fi
+    rapid_v5_profile_sha256="$(sha256sum -- "${rapid_v5_profile_host}")" || exit 1
+    rapid_v5_profile_sha256="${rapid_v5_profile_sha256%% *}"
+    if [[ "${rapid_v5_profile_sha256}" != \
+          "f7eb0228a06429cc2ae91d0f9d52577399e15b68f4915d41cb60291445542b60" ]]; then
+      echo "rapid v5 profile differs from the frozen receipt" >&2
+      exit 1
+    fi
+    echo "rapid v5 profile SHA-256: ${rapid_v5_profile_sha256}" >&2
+  fi
+  # Check the frozen contract with the installed runtime before creating the
+  # public ETF topology. The host selector above is only an early routing
+  # decision; it cannot grant capture authority by trusting a filename or an
+  # editable experiment name alone.
+  qcsd_run_attached_docker docker run --network none --read-only \
+    --security-opt no-new-privileges --cap-drop ALL \
+    --label "org.qcsd.owner=qcsd-lab" \
+    --label "org.qcsd.role=rapid-capture-preflight" \
+    --user "${qcsd_invoking_uid}:${qcsd_invoking_gid}" \
+    --env "QCSD_LAB_IMAGE_DIGEST=${image_id}" \
+    --volume "${ROOT}:/lab:ro" \
+    --volume "${rapid_image_shell_host}:/lab/qcsd-lab:ro" --workdir /lab \
+    --entrypoint /opt/qcsd-venv/bin/python3 "${image_id}" -I -c '
+import re
+import sys
+from pathlib import Path
+from qcsd_lab.experiment import (
+    load_experiment, validate_accepted_samples, validate_resume_fingerprints,
+)
+from qcsd_lab.orchestrator import load_campaign, validate_frozen_experiment_contract
+from qcsd_lab.util import source_metadata
+from qcsd_lab.verification import verify_result
+
+action, target_text, expected_name, role, expected_mode, study_version = sys.argv[1:]
+target = Path(target_text)
+if action == "run":
+    campaign = load_campaign(target)
+else:
+    seal = target / "evidence.sha256"
+    if seal.exists():
+        experiment = verify_result(target).experiment
+        if experiment["status"] != "incomplete":
+            raise SystemExit("rapid capture resume requires an incomplete result")
+    else:
+        experiment = load_experiment(target)
+        if experiment["status"] != "running":
+            raise SystemExit("rapid capture resume requires a running result")
+        validate_accepted_samples(target, experiment, allow_running_artifacts=True)
+    validate_resume_fingerprints(
+        target, expected_source=source_metadata(), experiment=experiment,
+    )
+    campaign = validate_frozen_experiment_contract(target, experiment)
+if campaign.name != expected_name or campaign.schema_version != 1:
+    raise SystemExit("rapid capture frozen campaign identity is invalid")
+if role == "formal":
+    if study_version not in {"v4", "v5"} or not campaign.name.startswith(
+        f"rapid-curated-tranco50-{study_version}-formal-"
+    ):
+        raise SystemExit("rapid formal lane has another study version")
+    if (
+        campaign.purpose != "evaluation"
+        or campaign.profile != "research-1200"
+        or campaign.request_policies != ("as-defined",)
+        or len(campaign.workloads) != 5
+        or any(workload.visits != 4 for workload in campaign.workloads)
+        or len(campaign.defenses) != 1
+        or campaign.defenses[0].name != expected_mode
+        or (campaign.chaff_qualification_set is None) == (expected_mode != "undefended")
+    ):
+        if study_version == "v4":
+            raise SystemExit("rapid v4 formal lane differs from the frozen five-site plan")
+        raise SystemExit("rapid v5 formal lane differs from the frozen five-site plan")
+    if study_version == "v5" and expected_mode != "undefended":
+        qualification_digests = {
+            workload.qualification_set_manifest_sha256
+            for workload in campaign.workloads
+        }
+        if None in qualification_digests or len(qualification_digests) != 1:
+            raise SystemExit("rapid v5 formal lane needs one named qualification manifest")
+elif role == "diagnostic" and study_version == "v5":
+    if re.fullmatch(
+        r"rapid-curated-tranco50-v5-diagnostic-b01-s0[12]-"
+        r"(undefended|front|tamaraw|buflo|cs-buflo)-1200"
+        r"(-g(0[2-9]|[1-9][0-9]))?", campaign.name,
+    ) is None:
+        raise SystemExit("rapid v5 diagnostic lane is outside the ten-site shakedown")
+    if (
+        campaign.purpose != "smoke"
+        or campaign.profile != "research-1200"
+        or campaign.request_policies != ("as-defined",)
+        or len(campaign.workloads) != 5
+        or any(workload.visits != 1 for workload in campaign.workloads)
+        or len(campaign.defenses) != 1
+        or campaign.defenses[0].name != expected_mode
+        or (campaign.chaff_qualification_set is None) == (expected_mode != "undefended")
+    ):
+        raise SystemExit("rapid v5 diagnostic lane differs from the zero-credit five-site plan")
+    if expected_mode != "undefended":
+        qualification_digests = {
+            workload.qualification_set_manifest_sha256
+            for workload in campaign.workloads
+        }
+        if (
+            len(qualification_digests) != 1
+            or any(not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+                   for digest in qualification_digests)
+        ):
+            raise SystemExit("rapid v5 diagnostic lane needs one named qualification manifest")
+elif role != "diagnostic" or campaign.purpose != "smoke":
+    raise SystemExit("rapid diagnostic campaign identity is invalid")
+' "${1}" "${rapid_capture_target}" "${rapid_capture_name}" \
+  "${rapid_capture_role}" "${rapid_capture_mode}" "${rapid_capture_version}"
+  # Docker's isolated client bridge cannot forward public DNS through its
+  # embedded resolver. Resolve every approved origin on a disposable ordinary
+  # bridge before creating the ETF topology, then pin the exact public IPv4
+  # answers in the capture container's /etc/hosts.
+  QCSD_DOCKER_OUTPUT_RAPID_DNS_PINS=""
+  qcsd_capture_attached_docker_output QCSD_DOCKER_OUTPUT_RAPID_DNS_PINS \
+    docker run --network bridge --read-only \
+    --security-opt no-new-privileges --cap-drop ALL \
+    --label "org.qcsd.owner=qcsd-lab" \
+    --label "org.qcsd.role=rapid-dns-preflight" \
+    --user "${qcsd_invoking_uid}:${qcsd_invoking_gid}" \
+    --env "QCSD_LAB_IMAGE_DIGEST=${image_id}" \
+    --volume "${ROOT}:/lab:ro" \
+    --volume "${rapid_image_shell_host}:/lab/qcsd-lab:ro" --workdir /lab \
+    --entrypoint /opt/qcsd-venv/bin/python3 "${image_id}" -I -c '
+import ipaddress
+import json
+import sys
+from pathlib import Path
+from urllib.parse import urlsplit
+from qcsd_lab.class_acquisition import public_origin_ip_pins
+from qcsd_lab.experiment import load_experiment
+from qcsd_lab.orchestrator import load_campaign, validate_frozen_experiment_contract
+
+action, target_text, expected_name = sys.argv[1:]
+target = Path(target_text)
+campaign = (
+    load_campaign(target) if action == "run"
+    else validate_frozen_experiment_contract(target, load_experiment(target))
+)
+if campaign.name != expected_name:
+    raise SystemExit("rapid DNS preflight campaign identity differs")
+origins = set()
+for workload in campaign.workloads:
+    preparation = workload.data.get("preparation", {})
+    approved = preparation.get("approved_origins")
+    if not isinstance(approved, list) or not approved:
+        raise SystemExit("rapid DNS preflight requires prepared approved origins")
+    origins.update(approved)
+pins = public_origin_ip_pins(tuple(origins))
+hosts = {}
+for origin, address in pins.items():
+    host = urlsplit(origin).hostname
+    if host is None or ipaddress.ip_address(address).version != 4:
+        raise SystemExit("rapid routed capture requires a public IPv4 pin per origin")
+    if host in hosts and hosts[host] != address:
+        raise SystemExit("rapid DNS pins disagree for one hostname")
+    hosts[host] = address
+if not hosts:
+    raise SystemExit("rapid DNS preflight found no hostnames")
+print(json.dumps({"schema_version": 1, "campaign": campaign.name,
+                  "hosts": [[host, hosts[host]] for host in sorted(hosts)]},
+                 sort_keys=True, separators=(",", ":")))
+' "${1}" "${rapid_capture_target}" "${rapid_capture_name}"
+  rapid_pin_rows_text="$(/usr/bin/python3 -I -c '
+import ipaddress
+import json
+import re
+import sys
+
+value = json.loads(sys.argv[1])
+if (not isinstance(value, dict) or set(value) != {"schema_version", "campaign", "hosts"}
+        or value["schema_version"] != 1 or value["campaign"] != sys.argv[2]
+        or not isinstance(value["hosts"], list) or not value["hosts"]):
+    raise SystemExit("rapid DNS pin receipt is invalid")
+previous = ""
+for row in value["hosts"]:
+    if not isinstance(row, list) or len(row) != 2:
+        raise SystemExit("rapid DNS pin row is invalid")
+    host, address = row
+    if (not isinstance(host, str) or re.fullmatch(r"[a-z0-9]+(?:[.-][a-z0-9]+)*", host) is None
+            or host <= previous or not isinstance(address, str)
+            or ipaddress.ip_address(address).version != 4):
+        raise SystemExit("rapid DNS pin hostname or public IPv4 is invalid")
+    previous = host
+    print(host, address)
+' "${QCSD_DOCKER_OUTPUT_RAPID_DNS_PINS}" "${rapid_capture_name}")" || exit 1
+  # A bound rapid launch persists the exact DNS input before starting capture.
+  if [[ -n "${QCSD_RAPID_DNS_RECEIPT_PATH:-}" ]]; then
+    /usr/bin/python3 -I -c '
+import ipaddress
+import json
+import os
+import pathlib
+import sys
+
+def unique_pairs(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("rapid DNS receipt repeats a JSON key")
+        value[key] = item
+    return value
+
+raw = sys.argv[2].encode("utf-8") + b"\n"
+value = json.loads(raw, object_pairs_hook=unique_pairs)
+if (set(value) != {"schema_version", "campaign", "hosts"}
+        or type(value["schema_version"]) is not int or value["schema_version"] != 1
+        or value["campaign"] != sys.argv[3] or not isinstance(value["hosts"], list)
+        or not value["hosts"]):
+    raise ValueError("rapid DNS receipt has another campaign or schema")
+previous = ""
+for row in value["hosts"]:
+    if not isinstance(row, list) or len(row) != 2:
+        raise ValueError("rapid DNS receipt contains a malformed host row")
+    host, address = row
+    ip = ipaddress.ip_address(address)
+    if not isinstance(host, str) or host <= previous or ip.version != 4 or not ip.is_global:
+        raise ValueError("rapid DNS receipt requires unique public IPv4 pins")
+    previous = host
+path = pathlib.Path(sys.argv[1]).absolute()
+if (not path.parent.is_dir()
+        or any(part.is_symlink() for part in (path, *path.parents))):
+    raise ValueError("rapid DNS receipt requires a regular existing parent")
+with path.open("xb") as stream:
+    stream.write(raw)
+    stream.flush()
+    os.fsync(stream.fileno())
+path.chmod(0o444)
+parent_descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+try:
+    os.fsync(parent_descriptor)
+finally:
+    os.close(parent_descriptor)
+' "${QCSD_RAPID_DNS_RECEIPT_PATH}" "${QCSD_DOCKER_OUTPUT_RAPID_DNS_PINS}" \
+      "${rapid_capture_name}" || exit 1
+  fi
+  mapfile -t rapid_public_hosts <<< "${rapid_pin_rows_text}"
+  echo "rapid DNS pins: ${QCSD_DOCKER_OUTPUT_RAPID_DNS_PINS}" >&2
+fi
 buflo_host_lock_fd=""
 class_host_lock_fd=""
 class_acquisition_lock_fd=""
@@ -7613,6 +7984,9 @@ if [[ "${1:-}" == "class-study" &&
   class_acquire_acquisition_lock "${class_acquisition_lock_root}" || exit 1
 fi
 study_capture_scheduler_contract=""
+if (( rapid_capture )); then
+  study_capture_scheduler_contract="qcsd-client-rr1-portable-etf-helper-v4"
+fi
 if [[ "${1:-}" == "class-study" && "${class_study_execute}" == "1" &&
       ( "${class_study_action}" == "capture" ||
         "${class_study_action}" == "resume" ) ]]; then
@@ -8616,6 +8990,13 @@ container=(
   --env "QCSD_LAB_IMAGE_DIGEST=${image_id}"
   --volume "${ROOT}:/lab:ro"
 )
+if (( rapid_capture )); then
+  container+=(--volume "${rapid_image_shell_host}:/lab/qcsd-lab:ro")
+  for rapid_pin_row in "${rapid_public_hosts[@]}"; do
+    read -r rapid_pin_host rapid_pin_address <<< "${rapid_pin_row}"
+    container+=(--add-host "${rapid_pin_host}=${rapid_pin_address}")
+  done
+fi
 if [[ "${1:-}" == "test" && "${2:-}" == "pinned-cdp" ]]; then
   if [[ -L "${pinned_cdp_destination_parent}" ||
         ! -d "${pinned_cdp_destination_parent}" ||
@@ -8784,7 +9165,8 @@ if [[ "${1:-}" == "class-study" &&
       ( "${class_study_action}" == "acquisition-run" ||
         "${class_study_action}" == "qualify-prefix" ||
         "${class_study_action}" == "capture" ||
-        "${class_study_action}" == "resume" ) ]]; then
+        "${class_study_action}" == "resume" ) ]] ||
+   (( rapid_capture )); then
   # The Rust runner resolves once and connects to that exact address; this
   # policy rejects any private/reserved answer before a public-study socket is
   # created.  Chromium additionally receives per-origin resolver pins.
@@ -8804,6 +9186,9 @@ if [[ -n "${QCSD_OSAD_WORKERS:-}" ]]; then
 fi
 if [[ "${1:-}" == "run" &&
       "${study_campaign_name}" =~ ^buflo-study-v1-(smoke|rehearsal|formal-[0-9]{2})\.yml$ ]]; then
+  container+=(--env "QCSD_STUDY_NETWORK_CONDITION=public-docker-bridge-no-netem")
+fi
+if (( rapid_capture )); then
   container+=(--env "QCSD_STUDY_NETWORK_CONDITION=public-docker-bridge-no-netem")
 fi
 if [[ ( "${1:-}" == "buflo-study" && "${2:-}" == "capture" ) ||
@@ -10523,8 +10908,12 @@ if [[ "${study_capture_scheduler_contract}" == \
     echo "public kernel-TX topology name already exists; remove stale PID $$ state" >&2
     exit 1
   fi
+  kernel_tx_public_network_options=(--driver bridge)
+  if (( ! rapid_capture )); then
+    kernel_tx_public_network_options+=(--internal)
+  fi
   qcsd_create_docker_network QCSD_DOCKER_IDS_PUBLIC_NETWORKS \
-    docker network create --driver bridge --internal \
+    docker network create "${kernel_tx_public_network_options[@]}" \
     --label "org.qcsd.owner=qcsd-lab" \
     --label "org.qcsd.study=kernel-tx-public-observer" \
     "${kernel_tx_public_client_network}" >/dev/null
@@ -10590,6 +10979,16 @@ iptables -t nat -C POSTROUTING -s "$2" -o eth1 -j MASQUERADE
   if [[ "${1:-}" == "class-study" ]]; then
     qcsd_run_attached_docker "${container[@]}" "${image_id}" \
       "${class_image_command[@]}" "${class_container_args[@]}"
+  elif (( rapid_capture )); then
+    # The image's tini PID 1 otherwise keeps the two-CPU container affinity
+    # while the scheduler monitor expects every non-client task on the helper.
+    # Narrow only PID 1; the child retains both CPUs for the immutable
+    # collection-entrypoint check, then the Rust client is moved to its CPU.
+    qcsd_run_attached_docker "${container[@]}" \
+      --entrypoint /usr/bin/tini "${image_id}" -- /bin/sh -eu -c '
+/usr/bin/taskset --pid --cpu-list "${QCSD_CAPTURE_ORCHESTRATOR_CPU:?}" 1 >/dev/null
+exec /usr/local/bin/collection-entrypoint "$@"
+' qcsd-rapid-affinity "${rapid_capture_args[@]}"
   else
     qcsd_run_attached_docker "${container[@]}" "${image_id}" "$@"
   fi

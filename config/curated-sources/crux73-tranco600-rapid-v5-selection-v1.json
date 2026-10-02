@@ -1,0 +1,64 @@
+{
+  "payload": {
+    "admission_policy": "human-reviewed-exact-page-h3-complete-live-graph-and-cross-origin-v4",
+    "admitted_resource_graph": "unchanged-complete-live-resource-graph-with-cross-origin-proof",
+    "amendment_id": "crux73-tranco600-rapid-v5-selection-v1",
+    "browser_policy_deferral": {
+      "action_kind": "catalogue-boundary-navigation",
+      "action_scope": "catalogue-root-and-optional-link-navigation",
+      "exception_type": "NonReplayableEgressPolicyError",
+      "failure_page_attribution": "unavailable",
+      "human_review": "none-at-this-navigation-screen-branch",
+      "outcome": "screen-deferred",
+      "policy": "prospective-nonreplayable-browser-navigation-deferral-v1",
+      "required_proof": "independently-reopened-exact-candidate-image-source-module-and-raw-guard-evidence",
+      "required_root_screen": "known-valid-with-passing-controls",
+      "scientific_credit": false,
+      "scope": "candidate-navigation-screen-only-not-whole-domain-ineligibility",
+      "triage_reason": "browser-navigation-policy-deferred"
+    },
+    "candidate_order_policy": "curated-v1-sha256-order-then-frozen-tranco-catalogue-order-dedup-domain-v2",
+    "capture_authority": "none-requires-separate-live-capture-readiness",
+    "cohort_contracts": [
+      {
+        "class_count": 10,
+        "formal_sample_target": 0,
+        "generation": "launch-10",
+        "planned_visit_count": 50,
+        "role": "shakedown",
+        "study_id": "classifier-curated10-rapid-v5",
+        "visits_per_class_mode": 1
+      },
+      {
+        "class_count": 50,
+        "formal_sample_target": 16000,
+        "generation": "final-50",
+        "planned_visit_count": 16000,
+        "role": "final",
+        "study_id": "classifier-curated50-rapid-v5",
+        "visits_per_class_mode": 64
+      }
+    ],
+    "formal_modes": [
+      "undefended",
+      "front",
+      "tamaraw",
+      "buflo",
+      "cs-buflo"
+    ],
+    "freshness_policy": {
+      "new_typed_browser_policy_failure": "started-at-or-after-published-at-utc",
+      "old_failed_attempts": "preserved-zero-credit-no-promotion-relabel-or-retroactive-terminal-authority",
+      "parent_profile_not_before_utc": "2026-10-02T12:58:17Z",
+      "supporting_root_observations": "may-reopen-unchanged-parent-v5-profile-source-image-and-module-bound-observations"
+    },
+    "non_replayable_egress_guard": "unchanged-fail-closed-no-api-suppression-or-transport-waiver",
+    "parent_profile_sha256": "f7eb0228a06429cc2ae91d0f9d52577399e15b68f4915d41cb60291445542b60",
+    "parent_selection_policy": "first-N-admitted-with-root-selected-page-and-safety-decisions-v4",
+    "published_at_utc": "2026-10-02T14:30:27.785695Z",
+    "selection_policy": "first-N-admitted-with-prospective-browser-policy-screen-deferrals-v1"
+  },
+  "payload_sha256": "35422737fa1d21aaf7ad1569a9d6df7a02f58e9279e3fcb5f06f64cb54a89fac",
+  "receipt_type": "qcsd-rapid-v5-selection-amendment",
+  "schema_version": 5
+}

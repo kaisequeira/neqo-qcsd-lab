@@ -20,17 +20,20 @@ These repository-local rules apply throughout `neqo-qcsd-lab/`.
 
 ## Live source-bound operations
 
-- Before launch, require the exact clean Lab checkout, clean pinned Rust
-  submodule/Gitlink, allocator authority, and create-only destinations.
-- Run source-bound Docker campaigns serially. This includes builds, pinned-CDP,
-  browser-egress, reference, timing, regression, code, controlled, and class
-  capture stages.
-- While such a process is live, every agent must perform **only polling of that
-  existing process/session**. Do not read or edit repository files, run Git or
-  graph commands, start parallel agents, launch tests, or issue unrelated
-  Docker commands. Resume ordinary work only after the process exits.
-- Keep the user informed during long operations without disturbing the live
-  source boundary.
+- For the historical class-study launcher, keep its exact clean Lab checkout,
+  pinned Rust Gitlink, allocator authority, and create-only destinations. A
+  prospective study may reuse a previously verified immutable image with a
+  matching clean execution checkout and a separately versioned, hash-bound
+  study plan; it need not run a fresh no-cache build solely because the study
+  plan or external verifier changed. Record both identities without claiming
+  that new authoring code was installed in the old image.
+- Keep jobs that share mutable image tags, lifecycle locks, or evidence roots
+  serial. Independent inspection, documentation, tests, and authoring in a
+  separate checkout may continue while a source-bound Docker job runs. Keep
+  the execution checkout and its pinned Gitlink unchanged until that job exits.
+- If the user changes the study scope during a long job, stop the obsolete job,
+  preserve its attempted evidence and lifecycle records, and recover its locks
+  before starting a replacement. Keep the user informed during long jobs.
 - Keep the execution checkout pinned throughout its campaign. Publish research
   progress from a separate authoring clone between live operations; a
   documentation commit must not move the running checkout's source identity.
@@ -47,9 +50,11 @@ These repository-local rules apply throughout `neqo-qcsd-lab/`.
   change requires the next unused cohort and complete downstream reproof.
 - Preserve failed attempts, logs, captures, checkpoints, and receipts. Never
   delete, overwrite, substitute, relabel, or post-hoc promote evidence.
-- Acquisition-only authority cannot replace the full defence foundation for
-  any capture role, including fitting. The later foundation must bind the same
-  source, build, acquisition contract, pinned-CDP and browser-egress evidence.
+- Under the historical 100-site and 20-site contracts, acquisition-only
+  authority cannot replace the full defence foundation for a capture role.
+  A new prospective study may define smaller, focused launch checks, with its
+  own versioned profile, source and runtime bindings, independently verified
+  complete traces, and explicit limits on the scientific claim.
 - Complete acquisition under its bound study profile: the registered 100-site
   contract requires the first 24 eligible candidates per stratum and every
   earlier candidate to have scientific terminal evidence; the prospective

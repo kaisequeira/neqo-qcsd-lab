@@ -1,6 +1,6 @@
 # QCSD thesis project ledger
 
-Checkpoint: **2 October 2026, Australia/Sydney (AEST, UTC+10)**.
+Checkpoint: **3 October 2026, Australia/Sydney (AEST, UTC+10)**.
 This is the current research ledger. The [history](docs/PROJECT-HISTORY.md)
 preserves the development record, the [class-study runbook](docs/CLASS-STUDY.md)
 defines continuation, and the [capture-readiness guide](docs/CAPTURE-READINESS.md)
@@ -11,13 +11,19 @@ estimate breakdown](docs/README.md) gives the planning arithmetic. The
 ## Goal and claim boundary
 
 The registered 100-site contract below remains the baseline for historical
-evidence. The prospective 20-site contract in the current milestone keeps the
-same 16,000-sample total but needs its own authority.
+evidence. The 20-site proposal was an attempt to keep the same 16,000-sample
+total with fewer sites, but its launch sequence has been superseded. The
+current [rapid 50-class proposal](docs/RAPID-CLASS-STUDY.md) fixes five
+settings and aims for **50 × 5 × 64 = 16,000 accepted formal samples** after a
+separate 50-visit, zero-credit ten-site shakedown. Its live site yield and
+formal capture authority remain unproven.
 
-Freeze 100 public-page classes with their complete admitted multi-origin
-resource graphs; fit the applicable defences on separate observations; verify
-every class against all nine selectable modes; then collect the same classes
-and visit counts under all eight formal conditions:
+### Historical 100-site contract
+
+That contract calls for 100 public-page classes with their complete admitted
+multi-origin resource graphs, separate defence fitting observations,
+verification against all nine selectable modes and the same classes and visit
+counts under all eight formal conditions:
 
 **100 classes × 20 visits × 8 conditions = 16,000 accepted formal samples.**
 
@@ -35,10 +41,203 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-The prospective [20-site study](docs/CLASS-STUDY-20.md) keeps the 16,000-sample
-target with 30 eligible pilot sites and 20 final sites. It has **0/30 eligible
-pilots and 0/16,000 accepted formal samples**. It has no authority for final
-capture yet.
+The user has authorised a prospective [rapid 50-class study](docs/RAPID-CLASS-STUDY.md)
+to reach capture sooner. Its [curated raw source](config/curated-sources/crux-73-v1.raw.json)
+has 73 distinct domain entries and 5,507 listed resource URLs; these are
+hints, not 50 eligible classes. The [frozen prospective v5 rapid profile](config/curated-sources/crux73-tranco600-rapid-v5.profile.json)
+(SHA-256 `f7eb0228a06429cc2ae91d0f9d52577399e15b68f4915d41cb60291445542b60`)
+registers the 73 supplied candidates followed by the frozen 600-domain
+fallback, a ten-site zero-credit shakedown, and a separate 50-site formal target.
+It records the first controlled homepage result and permits an ambiguous one
+to proceed to a separately controlled HTTP/3 pass on the exact selected page.
+The published [selection revision 2](config/curated-sources/crux73-tranco600-rapid-v5-selection-v2.json)
+requires a recorded automatic public URL/domain screen, a complete replayable
+browser graph and a live cross-origin resource. It makes no content-classifier
+claim. Fifty-site yield is unproven.
+The 20-site proposal remains a historical alternative, with **0/30 eligible
+pilots and 0/16,000 accepted formal samples**. The rapid proposal also has
+**0/50 eligible final classes and 0/16,000 accepted formal samples**.
+
+The rapid driver now has create-only navigation, exact-page H3, automatic
+URL/domain screening, full-graph preparation, terminal and cohort commands. Its lane planner
+publishes ten diagnostic lanes or 800 formal lanes after reopening the admitted
+cohort, immutable workloads and each five-site response qualifier. These source
+changes grant no site or trace credit.
+
+The latest controlled v5 root screen independently reopens all 73 supplied
+candidates: 31 known-valid homepage results, 27 ambiguous results, six peer TLS
+failures, two timeouts and seven automatic safety skips. Acquisition context
+001 has one sealed zero-credit root deferral and no admitted sites. Its next
+candidate, Weerplaza, triggered the browser egress guard on a WebSocket to
+`wss://onweeralarm.nl` during catalogue navigation. The newly published
+[selection amendment](config/curated-sources/crux73-tranco600-rapid-v5-selection-v1.json)
+allows a fresh, independently verified failure of this exact kind to be
+recorded as a navigation screening deferral. It does not admit a site or
+establish that the entire domain is unusable. The separate amended acquisition
+context 002 has since independently verified and sealed that fresh WebSocket
+failure, advancing its terminal prefix to two zero-credit decisions. Albumaty
+then passed catalogue navigation and a separate control-bracketed H3 test for
+its exact homepage. Its complete resource preparation and admission are still
+outstanding. Selection revision 2 was published at
+`2026-10-02T15:19:12.576895Z`, SHA-256
+`32cd9eb8440c86f204919bde64a5f27cdcf1efcf28e7becf127d8e3798266457`.
+It replaces per-page manual approval with the recorded URL/domain screen and
+permits narrowly typed, independently verified page-policy failures to advance
+screening with zero credit. New acquisition context 003 has two independently
+sealed screening deferrals, including a fresh Weerplaza browser-policy failure.
+Albumaty's exact-page navigation and controlled H3 proofs were independently
+reopened, and its new automatic screen passed at `2026-10-02T15:28:20.116708Z`.
+Full preparation and one unchanged-source retry both failed at the Neqo
+resource probe: endpoint 2 closed with `Transport(Peer(296))`. Both attempts
+retain generic operational-error receipts; neither is an admitted site or a
+typed screening decision. The new resource-probe handler passed 95 focused
+preparation tests and now retains the actual child run and packet evidence.
+Fresh context 004 independently verified Albumaty's complete-graph failure:
+the HEAD probe's endpoint 2 is `https://use.fontawesome.com`, resource IDs 5,
+23 and 25. Its typed receipt and explicit terminal have zero credit, while the
+two earlier generic failures remain unchanged. The new context has four
+verified screening decisions and no admitted sites. Alibaba passed catalogue
+navigation, the controlled exact-page H3 check and automatic URL/domain screen.
+Its full preparation then exceeded the 30-second passive-render limit and
+reported `CdpTargetIntegrityError` for an unknown frame detachment during
+cleanup. That attempt remains an unsealed operational failure. The next
+selection revision will explicitly record such observed collector limitations
+as bounded operational deferrals; it will not grant site or trace credit.
+
+A new adapter snapshot also passed the actual installed-runtime preflight in
+the immutable collection image. It checked the retained clean source, client,
+base launcher, separately bound host launcher, v5 profile and fixed traffic
+files. This proves runtime placement, not a study lane launch: the ten-site
+shakedown and final capture are still outstanding. The completed adapter passed
+50 focused tests, including real parent SIGTERM/SIGKILL, retained capture bytes
+and an inherited lock that prevents overlap while the host continues. Real
+bound-lane launches and Docker retirement remain unproven. The original
+contexts and policies remain verifiable on their frozen snapshots.
+
+A clean cached runtime successor rebuilt the patched release client in about
+two minutes and passed a fresh response qualifier. Its routed CS-BuFLO diagnostic
+passed independent deep verification **1/1 on the historical three-origin
+workload**. BuFLO successor 003 stopped after about 1.42 seconds at a Rust
+selection deadline and deep-verifies as valid but incomplete **0/1**. The
+unchanged-source BuFLO retry 004 passed independent deep verification **1/1**,
+with 939 outgoing cells and no ETF timing errors. Both repaired modes now have
+complete host diagnostics on the historical workload. The
+[evidence index](docs/EVIDENCE-INDEX.md) records both seals and clean source/image
+identities. Final-site compatibility and the ten-site shakedown remain unproven.
+
+A fresh clean-runtime diagnostic accepted FRONT and Tamaraw but rejected the
+baseline because its last 45 runner packets were absent from the capture.
+The recorder stopped about 156 ms after that burst with zero settle time.
+A new one-visit baseline campaign with two seconds of settling then passed
+independent deep verification **complete, 1/1**, with nine authoritative
+files. Prospective v5 lane rendering now uses that two-second recorder pause;
+historical v4 rendering is preserved. All five selected settings have separate
+complete clean-runtime diagnostics on the historical workload, while the
+ten-site shakedown and **16,000 formal traces remain outstanding**.
+
+The v148 no-cache build on clean Lab commit
+`63bb7cae7f88774b3da2a282f25ebd507caf36f3` was interrupted at the
+user's direction because its planned 20-site chain would be superseded. It
+had no completed build receipt or scientific authority. Its exact lifecycle
+roots and claim were preserved in `artifacts/buflo-study/build-failure-v148/`;
+the archive receipt SHA-256 is
+`bb676c8fe2a0119393697f5ca2f6c94b1aa1eadb22453b9c8e7da775acc46f94`,
+and `lifecycle-recover` passed. The completed v147 images remain available.
+Using the v147 collection image and its clean source worktree, a one-visit
+multi-origin baseline campaign completed and passed deep `qcsd-lab verify`:
+**one diagnostic trace, zero formal credit**. The bounded curated-domain
+HTTP/3 [root screen](docs/CURATED-H3-SCREEN-2026-10-02.md) completed with
+eight passing control pairs: 30/66 unflagged homepages clearly returned a
+valid H3 result, 28 were ambiguous, six ended with a peer `296` close and two
+timed out. Only 14 clear successes had two or more resource-host groups in
+the supplied file. These are hints, not live multi-origin eligibility.
+The [rapid capture path](docs/RAPID-CAPTURE-PATH.md) tracks the shorter launch
+sequence. A v147 direct browser check reached `www.idrlabs.com` but failed
+passive-render quiescence; a separate catalogue-navigation probe encountered
+a recoverable root CDP `InvalidInterceptionId`. Direct checks of
+`www.weerplaza.nl` and a full-origin retry of `www.sacnilk.com` also stopped
+before workload admission. The v147 response-only qualification finished for
+five historical workloads and all five selected traffic settings, but those
+workloads are not the prospective ten-site cohort. The first 25-visit,
+five-mode zero-credit capture diagnostic sealed **0 accepted, 25 failed**:
+the isolated client network could not resolve the approved public origins.
+That failure is preserved and independently deep-verified. A separate
+one-visit DNS-pinned diagnostic resolved all three origins, then sealed
+**0 accepted, 1 failed** after a QUIC idle timeout; its client packet capture
+showed outbound traffic but no inbound UDP payload. It too passed the deep
+verifier as an incomplete zero-credit result. A paired network probe isolated
+the blocked return path to Docker's `--internal` client bridge; the same router
+forwarded TCP and UDP on an ordinary dedicated bridge. A new one-visit capture
+then completed six downloads across three HTTP/3 endpoints, but it sealed
+**0/1** after an extra `tini` task violated scheduler isolation and 39
+runner-recorded packets from one endpoint were absent from the direct pcap.
+Its incomplete inventory passed independent v147 deep verification. A second
+observer run reconciled every runner packet and showed that the gap did not
+recur; it failed only the `tini` CPU-affinity rule. A host-only affinity fix
+then produced a **complete, independently deep-verified 1/1** rapid-launcher
+diagnostic on the same historical three-origin workload. It has zero rapid
+study credit. A fresh post-profile-freeze HTTP/3 root screen independently
+verified all 73 supplied candidate decisions with eight passing control
+pairs: 30 clear H3, 28 ambiguous, six peer TLS failures, two timeouts and
+seven automatic safety skips. Root results do not admit sites. Live site
+admission and 50-site yield still need proof. A second pinned-browser pass for
+`poki.com` completed with 268 resources and no unapproved GET; its single
+excluded request was an unsafe analytics POST. Preparation, replay and safety
+review remained outstanding; a subsequent zero-credit preparation attempt
+failed in 20 seconds because one browser-observed `poki-auth.poki.com`
+resource was unavailable over HTTP/3. It produced no workload. A
+separate zero-credit relaxed-coverage attempt also failed two-run stability
+for the main document and 52 other resources. A direct `www.haberler.com`
+browser check failed quiescence. Neither site was admitted. A
+five-setting one-site capture diagnostic on a
+historical three-origin workload then sealed **3/5 accepted**, independently
+deep-verified as incomplete. Undefended, FRONT and Tamaraw passed; BuFLO
+failed on first timed send with `ENOBUFS`, and CS-BuFLO later hit an endpoint
+`IdleTimeout`. This is zero rapid-study credit. The two defense paths need
+single-mode diagnosis before the planned five-setting shakedown. A bounded
+full-ancillary ETF probe then accepted all 13 timed sends with zero ETF drops.
+The first BuFLO-only retry stopped before capture because its relative
+parameter path resolved outside the mounted bundle. The corrected retry
+sealed and independently deep-verified **valid but incomplete, 0/1**, with
+three failed attempts preserved. Its first attempt scheduled all 940 outgoing
+cells and reconciled all 1,527 kernel-TX items without drops, but a strict
+incoming-credit delay predicate failed at 6,386 µs against `<5,000 µs`.
+The recorded delay starts at an action deliberately prearmed about 5 ms before
+nominal release. A proposed source gate instead measures the strict 5 ms
+window from nominal release. Four direct focused tests and 51 related host
+tests passed; the sealed result still deep-verifies as incomplete, 0/1 under
+the proposed checker and gains no retro-credit. The other two attempts hit a
+transmit enqueue cutoff and a missed kernel TXTIME. A CS-BuFLO source-level
+repair hypothesis addresses the final parser-credit deadlock; three focused
+offline Rust tests and all 406 `neqo-csdef` crate tests passed. A direct debug
+client attempt hit `AdapterDeadlineLateHandoff` before reaching the parser
+tail. An incremental release binary was built, and a direct run on the
+historical Cloudflare workload completed with 876 incoming cells and exactly
+525,600 scheduled receive-credit bytes requested, advertised and consumed,
+with zero retired or unresolved. This is a zero-credit client result without
+an independent host pcap or sealed capture lane. The proposed host response
+qualification did not run: the patched binary came from an uncommitted Rust
+change, while its existing sidecar and image identity bind the old clean Rust
+commit. The create-only host-local
+`../diagnostic-rehearsals/csbuflo-release-host-20261002/STATUS.md`
+(SHA-256 `a0442ffcbb6acfc2115d61b49eccb7c2939fb5b9d807185ad36d3a399b1e23a0`)
+records this historical stop. The later clean CS-BuFLO successor above passed
+its independently verified single-mode host capture; BuFLO remains unresolved.
+The first ten frozen
+Tranco fallback candidates (global positions 74–83) were then probed between
+passing H3 controls: six timed out and four were ambiguous, including three
+generic local DNS resolver errors. The v4 verifier rejects complete
+first-screen credit at the first such resolver error because v4 lacks a
+terminal class for it. This remains diagnostic; v5 now classifies an exact
+name-not-found result as an operational deferral without retro-crediting the
+v4 log. A fresh post-freeze v5 screen of those ten positions independently
+verified six timeouts, three exact DNS-name-not-found operational deferrals
+and one known-invalid response between passing controls. Those are ten
+verified v5 first-screen decisions, with zero clear homepage roots and no
+selected-page proof or admission. **0/50 rapid sites, 0/50 study shakedown traces and
+0/16,000 formal traces are accepted.**
+
+### Historical 20-site attempt
 
 On **v140**, clean Lab source `0535198a7af59039337b5760b6997e8192c3adb6`
 and pinned Rust Gitlink `a8d8664cd31cbc4cc1ecb4fd5abc5a1d3ee153ae`

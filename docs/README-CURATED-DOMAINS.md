@@ -1,0 +1,102 @@
+# Why the supplied domains are only part of the 50-site study
+
+The supplied `url-resource-urls 1.json` is a useful **candidate list**, not a
+list of 50 capture-ready websites. Its exact
+[repository copy](../config/curated-sources/crux-73-v1.raw.json) contains **73
+distinct site names**. The listed resource URLs describe earlier observations;
+they do not show that those resources still load, that the current page uses
+HTTP/3, or that it loads resources from another origin. I could not reproduce
+the earlier claim of **58 unique classes** from a documented rule: the file has
+73 distinct site names, 63 with at least one listed resource, and 57 with a
+listed resource and no automatic safety flag.
+
+On **2 October 2026**, each supplied site's homepage received a short HTTP/3
+screen using the same Neqo client intended for collection. Working control
+sites passed before and after each batch. This was a quick diagnostic, **not
+formal acquisition** or proof that a whole page can be captured.
+The same ordered screen was repeated after the historical rapid v4 rules were frozen;
+the [independently checked retest](CURATED-H3-SCREEN-2026-10-02.md#post-freeze-v4-screen)
+had the same group totals, though two individual homepage results changed.
+The [current v5 profile](../config/curated-sources/crux73-tranco600-rapid-v5.profile.json)
+keeps the 50-site target and the same ordered candidate sources. It permits a
+recorded ambiguous homepage result to proceed to a separately controlled
+HTTP/3 test of the exact page chosen for capture. The published
+[selection revision 2](../config/curated-sources/crux73-tranco600-rapid-v5-selection-v2.json)
+uses a recorded automatic public URL/domain screen rather than mandatory
+named approval; this screen makes no claim to classify a site's content. A
+clear homepage response is therefore a useful lead, **not a requirement that
+all 50 sites have clear homepages**. No selected page has yet met the complete
+v5 admission checks.
+
+The table below records the earlier v4 screen. A later screen using the clean,
+repaired v5 runtime found **31 clear homepage responses, 27 inconclusive
+results, six peer TLS failures, two timeouts and seven automatic skips**.
+Neither screen admits a site by itself.
+
+| Earlier outcome among 73 sites | Count | Reason for the decision |
+|---|---:|---|
+| Clear homepage HTTP/3 response | 30 | Keep as candidates for browser and resource checks; a successful homepage alone is insufficient. |
+| Inconclusive response or connection close | 28 | The client did not obtain an accepted homepage response. V5 can still test an exact selected page; this is not a permanent site rejection. |
+| Connection closed before an accepted run | 6 | A selected page or later attempt may behave differently; no site is admitted by this result. |
+| Timed out after 12 seconds | 2 | The bounded homepage attempt ended; the site is not declared permanently incompatible. |
+| Excluded by the automatic site-safety screen | 7 | Outside this public-page candidate screen. |
+
+The [dated screen report](CURATED-H3-SCREEN-2026-10-02.md#exact-domains-and-observed-problem)
+names **every domain** in the unsuccessful and excluded groups and records its
+specific observed result. For example, `weather.com` ended with a peer `336`
+close, `www.diretta.it` timed out, and `variety.com` returned a DNS answer
+rejected by the public-origin policy. These are observations of this bounded
+test, not general claims that the sites can never work.
+
+The clear-response group also needs filtering. Only **14 of its 30 sites**
+have at least two resource-host groups in the supplied file, and even those
+groups are only hints. Technically successful sites still need the selected
+page's public URL/domain screen and complete live resource checks. The initial
+diagnostic browser subset used clear-response candidates such
+as `poki.com`, `www.alibaba.com`, `www.bing.com`, `www.euronews.com`, and
+`www.idrlabs.com`. **No site has yet been counted as an accepted class** on
+the strength of this screen. The first ten fallback homepage probes were
+also diagnostic only: none returned a clear result, and three local DNS
+name-not-found errors prevented their v4 log from receiving verified
+first-screen credit. The v5 rule classifies that exact DNS result as an
+operational deferral, but it does not retroactively count the old log. A fresh
+[v5 screen](CURATED-H3-SCREEN-2026-10-02.md#fresh-v5-fallback-screen-ten-verified-first-decisions)
+independently verified ten first results for those fallback positions: six
+timeouts, three DNS-name-not-found deferrals and one known-invalid response.
+None was a clear homepage success or an accepted class.
+
+The later browser checks show why even a promising site cannot be accepted
+from the homepage test alone. `poki.com` produced a 268-resource browser
+graph with no unapproved GET requests on its second pass, but Neqo could not
+fetch one required authentication resource over HTTP/3 during preparation.
+No replayable workload or accepted class resulted. The
+[dated report](CURATED-H3-SCREEN-2026-10-02.md#first-browser-follow-ups)
+records that attempt and the other site-specific failures.
+
+Fresh attempts on **3 October 2026** exposed two further concrete problems:
+
+- **Weerplaza:** catalogue navigation attempted a WebSocket to
+  `wss://onweeralarm.nl`. This traffic cannot be replayed by the current
+  HTTP/3 request-graph collector, so the attempt was recorded as a screening
+  deferral.
+- **Albumaty:** its exact homepage passed HTTP/3, but its complete resource
+  probe failed at `https://use.fontawesome.com`, covering a stylesheet and
+  two font resources (IDs 5, 23 and 25). The endpoint closed during TLS with
+  peer code 296. The failed probe and packet evidence were independently
+  reopened; the site was not admitted on its homepage result alone.
+
+These decisions concern the observed pages and current collector. They do
+not establish that every page on either domain is permanently unusable. The
+[evidence index](EVIDENCE-INDEX.md#rapid-selection-revision-2-3-october-2026)
+records the frozen source and receipts.
+
+The final study still targets **50 eligible websites**. To reach that target,
+the plan screens the usable supplied candidates first, then draws additional
+candidates from the separately recorded [600-domain catalogue](../config/class-study/v1/classifier-multiorigin100-v1-candidates.json).
+Every selected site, regardless of source, must pass the same live browser,
+controlled exact-page HTTP/3, complete cross-origin-resource, stable replay,
+and safety checks. The final cohort
+record will show which sites came from the supplied file and which came from
+the additional catalogue. Whether these two sources can yield 50 eligible
+sites is still unproven. See the [rapid study plan](RAPID-CLASS-STUDY.md) for
+the 50-site capture design.

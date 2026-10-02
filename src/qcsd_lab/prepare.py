@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import csv
+import hashlib
 import json
 import os
 import re
@@ -8,11 +10,16 @@ import subprocess
 import tempfile
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
-from .acquisition_errors import RecoverableAcquisitionError
+from .acquisition_errors import (
+    FullGraphH3PolicyError, PassiveRenderPolicyError, PreparationError,
+    RecoverablePreparationError, ResponseStabilityPolicyError,
+)
 from .discover import DiscoveryResult, discover_page, origin
 from .discovery_evidence import (
     evidence_sha256,
@@ -37,6 +44,7 @@ from .util import (
     load_json,
     neqo_host_timeout,
     run,
+    durable_create,
     sha256_file,
     source_metadata,
 )
@@ -61,14 +69,425 @@ NEQO_PROVENANCE_KEYS = (
     "published_qcsd_commit",
     "migration_commit",
 )
+FULL_GRAPH_H3_FAILURE_POLICY = "complete-discovered-graph-http3-unavailable-v1"
+RESPONSE_STABILITY_FAILURE_POLICY = "complete-graph-repeated-response-identity-unavailable-v1"
+PROBE_PEER_TRANSPORT_FAILURE_KIND = "exact-resource-origin-peer-transport-close-v1"
+PROBE_UDP_PAYLOAD_CEILING = 1_450
 
 
-class PreparationError(RuntimeError):
-    """A malformed or internally inconsistent preparation result."""
+def _failure_capture_source() -> dict[str, Any]:
+    result = dict(source_metadata())
+    if image := os.environ.get("QCSD_LAB_IMAGE_DIGEST"):
+        result["image_digest"] = image
+    return result
 
 
-class RecoverablePreparationError(PreparationError, RecoverableAcquisitionError):
-    """A transient live HTTP/3 preparation failure that may be retried."""
+def _stamp_policy_failure(error: Exception, source: dict[str, Any], started_at: str) -> None:
+    if _failure_capture_source() != source:
+        raise PreparationError("preparation runtime source changed during its policy observation") from error
+    error.capture_source = json.loads(json.dumps(source, allow_nan=False))
+    error.capture_started_at = started_at
+    error.capture_completed_at = datetime.now(UTC).isoformat()
+
+
+def _snapshot_failure_artifacts(directory: Path) -> dict[str, dict[str, str]]:
+    """Copy every actual preparation file into the exception before cleanup."""
+    retained = {}
+    for path in sorted(directory.rglob("*")):
+        if path.is_symlink():
+            raise PreparationError("preparation failure artifact is linked")
+        if path.is_file():
+            raw = path.read_bytes()
+            retained[path.relative_to(directory).as_posix()] = {
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "content_base64": base64.b64encode(raw).decode("ascii"),
+            }
+    return retained
+
+
+def _preparation_failure_evidence(
+    stage: str, discovery: DiscoveryResult, resolved_probe: dict[str, Any] | None,
+    replay_manifest: dict[str, Any] | None, response_runs: list[dict[str, Any]], *,
+    require_complete_coverage: bool, artifacts: dict[str, dict[str, str]],
+) -> dict[str, Any]:
+    return json.loads(json.dumps({
+        "schema_version": 1,
+        "policy": FULL_GRAPH_H3_FAILURE_POLICY if stage == "full-graph-h3" else RESPONSE_STABILITY_FAILURE_POLICY,
+        "stage": stage, "require_complete_coverage": require_complete_coverage,
+        "discovery": asdict(discovery), "resolved_probe": resolved_probe,
+        "replay_manifest": replay_manifest, "response_runs": response_runs, "artifacts": artifacts,
+    }, allow_nan=False))
+
+
+def _failure_artifact_bytes(value: Any) -> dict[str, bytes]:
+    if not isinstance(value, dict) or not value:
+        raise ValueError("preparation policy failure lacks retained raw artifacts")
+    result = {}
+    for relative, record in value.items():
+        if (not isinstance(relative, str) or not relative or Path(relative).is_absolute()
+            or ".." in Path(relative).parts or Path(relative).as_posix() != relative
+            or not isinstance(record, dict) or set(record) != {"sha256", "content_base64"}
+            or not isinstance(record["sha256"], str) or re.fullmatch(r"[0-9a-f]{64}", record["sha256"]) is None
+            or not isinstance(record["content_base64"], str)):
+            raise ValueError("preparation policy raw artifact reference is invalid")
+        try:
+            raw = base64.b64decode(record["content_base64"], validate=True)
+        except ValueError as error:
+            raise ValueError("preparation policy raw artifact encoding is invalid") from error
+        if hashlib.sha256(raw).hexdigest() != record["sha256"]:
+            raise ValueError("preparation policy raw artifact bytes do not verify")
+        result[relative] = raw
+    return result
+
+
+def _strict_failure_json(raw: bytes) -> Any:
+    def pairs(values):
+        result = {}
+        for key, value in values:
+            if key in result:
+                raise ValueError("preparation failure raw JSON repeats a key")
+            result[key] = value
+        return result
+
+    def constant(_):
+        raise ValueError("preparation failure raw JSON contains a nonfinite constant")
+
+    try:
+        return json.loads(raw, object_pairs_hook=pairs, parse_constant=constant)
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError("preparation failure artifact is not strict UTF-8 JSON") from error
+
+
+def _require_failure_artifact_json(artifacts: dict[str, bytes], name: str, expected: Any) -> None:
+    if name not in artifacts or canonical_bytes(_strict_failure_json(artifacts[name])) != canonical_bytes(expected):
+        raise ValueError(f"preparation policy retained {name} differs from its raw stage facts")
+
+
+def _failure_child_execution(
+    artifacts: dict[str, bytes], name: str, operation: str, *, returncode: int,
+) -> dict[str, Any]:
+    if name not in artifacts:
+        raise ValueError("preparation policy lacks actual child execution evidence")
+    value = _strict_failure_json(artifacts[name])
+    if (not isinstance(value, dict) or set(value) != {
+        "schema_version", "command", "returncode", "configured_timeout_seconds", "host_timeout_seconds",
+        "started_at", "completed_at", "stdout", "stdout_sha256",
+    } or type(value["schema_version"]) is not int or value["schema_version"] != 1
+        or type(value["returncode"]) is not int or value["returncode"] != returncode
+        or not isinstance(value["command"], list) or any(not isinstance(x, str) for x in value["command"])
+        or operation not in value["command"] or not isinstance(value["stdout"], str)
+        or hashlib.sha256(value["stdout"].encode()).hexdigest() != value["stdout_sha256"]
+        or type(value["configured_timeout_seconds"]) is not int or value["configured_timeout_seconds"] < 1
+        or type(value["host_timeout_seconds"]) not in (int, float)
+        or value["host_timeout_seconds"] != neqo_host_timeout(value["configured_timeout_seconds"])):
+        raise ValueError("preparation policy child execution was nonzero or malformed")
+    try:
+        started, completed = [datetime.fromisoformat(value[key]) for key in ("started_at", "completed_at")]
+    except (TypeError, ValueError) as error:
+        raise ValueError("preparation policy child execution timestamps are invalid") from error
+    if started.tzinfo is None or completed.tzinfo is None or started > completed or completed > datetime.now(UTC):
+        raise ValueError("preparation policy child execution timestamps are invalid")
+    return value
+
+
+def _require_successful_failure_stage(artifacts: dict[str, bytes], name: str, operation: str) -> None:
+    _failure_child_execution(artifacts, name, operation, returncode=0)
+
+
+def _probe_runtime_manifest_hash(resources: list[dict[str, Any]]) -> str:
+    """Match ResourceManifest's declared Serde field order and pretty JSON.
+
+    Probe HEAD/GET runs clear dependency edges only for independent preflight;
+    the original complete discovered graph remains in the retained input.
+    """
+    fields = ("id", "url", "type", "content_length", "data_length",
+              "chaff_priority", "known_valid", "depends_on", "headers")
+    manifest = {"resources": [
+        {key: [] if key == "depends_on" else row[key] for key in fields}
+        for row in resources
+    ]}
+    raw = json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _probe_run_proof(
+    artifacts: dict[str, bytes], stage: str, resources: list[dict[str, Any]],
+    execution: dict[str, Any], *, failed: bool,
+) -> dict[str, Any]:
+    name = f"probe-output.probe-{stage}"
+    if f"{name}/run.json" not in artifacts or f"{name}/packets.csv" not in artifacts:
+        raise ValueError("peer transport probe lacks actual raw run and packet evidence")
+    value = _strict_failure_json(artifacts[f"{name}/run.json"])
+    if (not isinstance(value, dict)
+        or value.get("method") != ("HEAD" if stage == "head" else "GET")
+        or value.get("request_policy") != "as-defined"
+        or type(value.get("seed")) is not int or value["seed"] != 0
+        or value.get("workload_hash_sha256") != _probe_runtime_manifest_hash(resources)
+        or value.get("application_workload_source_hash_sha256") is not None
+        or value.get("chaff_manifest_hash_sha256") is not None
+        or value.get("defense_parameters") is not None
+        or value.get("terminal_evidence_render_errors") != []
+        or not isinstance(value.get("resolved_configuration"), dict)
+        or value["resolved_configuration"].get("defense") != {"kind": "none"}
+        or type(value.get("max_response_bytes")) is not int
+        or value["max_response_bytes"] != (0 if stage == "head" else int(execution["command"][-3]))):
+        raise ValueError("peer transport probe run changed its actual request contract")
+    if failed:
+        if value.get("completion_status") != "error" or value.get("error_class") != "runner-execution-v1":
+            raise ValueError("peer transport probe is not a retained operational endpoint close")
+    elif (value.get("completion_status") != "complete" or value.get("error") is not None
+          or value.get("error_class") is not None):
+        raise ValueError("GET fallback lacks a complete successful full-graph HEAD observation")
+    if any(not isinstance(value.get(key), str) or not value[key] for key in NEQO_PROVENANCE_KEYS):
+        raise ValueError("peer transport probe lacks actual client provenance")
+    if re.fullmatch(r"[0-9a-f]{40,64}", value["migration_commit"]) is None:
+        raise ValueError("peer transport probe client is not bound to a clean commit")
+    if (type(value.get("started_unix_ns")) is not int or type(value.get("ended_unix_ns")) is not int
+        or value.get("time_anchor_unix_ns") != value["started_unix_ns"]
+        or not datetime.fromisoformat(execution["started_at"]).timestamp() * 1e9 - 1_000 <=
+        value["started_unix_ns"] <= value["ended_unix_ns"] <=
+        datetime.fromisoformat(execution["completed_at"]).timestamp() * 1e9 + 1_000):
+        raise ValueError("peer transport probe run timestamps lie outside actual child execution")
+    endpoints = value.get("endpoints")
+    origins = sorted({origin(row["url"]) for row in resources}, key=lambda url: (
+        urlsplit(url).hostname, urlsplit(url).port or 443,
+    ))
+    if (not isinstance(endpoints, list) or len(endpoints) != len(origins)
+        or any(not isinstance(row, dict) or type(row.get("id")) is not int
+               or row["id"] != index or row.get("origin") != f"{origins[index]}/"
+               for index, row in enumerate(endpoints))):
+        raise ValueError("peer transport probe endpoint IDs do not map to the retained request origins")
+    by_id = {row["id"]: row for row in resources}
+    responses = value.get("responses")
+    if not isinstance(responses, list):
+        raise ValueError("peer transport probe lacks a retained request ledger")
+    seen = set()
+    for row in responses:
+        if (not isinstance(row, dict) or type(row.get("resource_id")) is not int
+            or row["resource_id"] not in by_id or row["resource_id"] in seen
+            or row.get("url") != by_id[row["resource_id"]]["url"]
+            or type(row.get("complete")) is not bool or not isinstance(row.get("outcome"), str)
+            or type(row.get("bytes")) is not int or row["bytes"] < 0
+            or not isinstance(row.get("body_sha256"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", row["body_sha256"]) is None):
+            raise ValueError("peer transport probe request ledger does not bind actual resource IDs/URLs")
+        seen.add(row["resource_id"])
+    if not failed and (seen != set(by_id) or any(
+        row["complete"] is not True or row["outcome"] != "succeeded" for row in responses
+    )):
+        raise ValueError("GET fallback HEAD ledger is incomplete or unsuccessful")
+    with tempfile.TemporaryDirectory(prefix="qcsd-peer-probe-packets-") as temporary:
+        packets = Path(temporary) / "packets.csv"
+        packets.write_bytes(artifacts[f"{name}/packets.csv"])
+        try:
+            _qualify_udp_payloads(value, packets, run_index=0, expected_ceiling=PROBE_UDP_PAYLOAD_CEILING)
+        except PreparationError as error:
+            raise ValueError("peer transport probe packet evidence is invalid") from error
+    return value
+
+
+def _peer_transport_probe_failure(
+    artifacts: dict[str, bytes], resources: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Rederive only the exact peer-296 close from raw client stage evidence."""
+    if "probe-output.json" in artifacts:
+        raise ValueError("peer transport probe unexpectedly produced a resolved manifest")
+    execution = _failure_child_execution(artifacts, "probe.log.execution.json", "probe", returncode=1)
+    if artifacts.get("probe.log") != execution["stdout"].encode("utf-8"):
+        raise ValueError("peer transport probe raw log differs from its actual child execution")
+    command = execution["command"]
+    index = command.index("probe")
+    arguments = command[index + 1:]
+    if (index == 0 or Path(command[index - 1]).name != "neqo-qcsd-client"
+        or len(arguments) != 8 or arguments[::2] != [
+            "--input-manifest", "--output", "--max-bytes", "--timeout-seconds",
+        ] or Path(arguments[1]).name != "probe-input.json"
+        or Path(arguments[3]).name != "probe-output.json"
+        or Path(arguments[1]).parent != Path(arguments[3]).parent
+        or not arguments[5].isdecimal() or int(arguments[5]) < 1
+        or arguments[7] != str(execution["configured_timeout_seconds"])):
+        raise ValueError("peer transport probe child command differs from its exact retained input")
+    stage = "get" if "probe-output.probe-get/run.json" in artifacts else "head"
+    selected = resources
+    if stage == "get":
+        head = _probe_run_proof(artifacts, "head", resources, execution, failed=False)
+        missing = {row["resource_id"] for row in head["responses"] if (
+            type(row.get("status")) is not int or not 200 <= row["status"] < 300
+            or row.get("content_length") is None
+        )}
+        selected = [row for row in resources if row["id"] in missing]
+        if not selected:
+            raise ValueError("peer transport GET fallback is not derived from actual HEAD responses")
+    run_data = _probe_run_proof(artifacts, stage, selected, execution, failed=True)
+    match = re.fullmatch(
+        r"run aborted: HTTP/3 endpoint (0|[1-9][0-9]*) closed before accepted run completion: Transport\(Peer\(296\)\)",
+        str(run_data.get("error")),
+    )
+    if match is None:
+        raise ValueError("peer transport probe lacks the exact supported peer-296 terminal error")
+    endpoint_id = int(match[1])
+    endpoints = run_data["endpoints"]
+    if endpoint_id >= len(endpoints):
+        raise ValueError("peer transport error identifies an absent request endpoint")
+    failed_origin = origin(endpoints[endpoint_id]["origin"])
+    resource_ids = sorted(row["id"] for row in selected if origin(row["url"]) == failed_origin)
+    closed = [row for row in run_data["responses"] if row["resource_id"] in resource_ids]
+    if (len(closed) != len(resource_ids) or any(
+        row["complete"] is not False or row["outcome"] != "endpoint_closed"
+        or row.get("status") is not None for row in closed
+    )):
+        raise ValueError("peer transport endpoint close does not identify its actual failed resources")
+    expected_stdout = f'Error: RunAborted("{run_data["error"].removeprefix("run aborted: ")}")'
+    if execution["stdout"].strip() != expected_stdout:
+        raise ValueError("peer transport raw child error differs from its retained terminal run")
+    packet_text = artifacts[f"probe-output.probe-{stage}/packets.csv"].decode("utf-8")
+    directions = {row["direction"] for row in csv.DictReader(packet_text.splitlines())
+                  if row["connection"] == str(endpoint_id)}
+    if directions != {"incoming", "outgoing"}:
+        raise ValueError("peer transport failed endpoint lacks bidirectional packet observations")
+    return {"kind": PROBE_PEER_TRANSPORT_FAILURE_KIND, "probe_stage": stage,
+            "endpoint_id": endpoint_id, "origin": failed_origin, "resource_ids": resource_ids,
+            "peer_transport_code": 296,
+            "client_provenance": {key: run_data[key] for key in NEQO_PROVENANCE_KEYS}}
+
+
+def _validate_successful_policy_response_runs(
+    runs: list[dict[str, Any]], resources: list[dict[str, Any]],
+) -> None:
+    """Separate actual response drift from missing or malformed runner output."""
+    resolved = {row["id"]: row for row in resources}
+    for run_data in runs:
+        if (not isinstance(run_data, dict) or run_data.get("completion_status") != "complete"
+            or run_data.get("error") is not None or run_data.get("error_class") is not None
+            or not isinstance(run_data.get("responses"), list)):
+            raise ValueError("response stability policy retained an incomplete or errored run")
+        seen = set()
+        for response in run_data["responses"]:
+            if (not isinstance(response, dict) or type(response.get("resource_id")) is not int
+                or response["resource_id"] in seen or response["resource_id"] not in resolved
+                or response.get("url") != resolved[response["resource_id"]]["url"]
+                or response.get("complete") is not True or response.get("outcome") != "succeeded"
+                or type(response.get("status")) is not int or not 100 <= response["status"] <= 599
+                or type(response.get("bytes")) is not int or response["bytes"] < 0
+                or not isinstance(response.get("body_sha256"), str)
+                or re.fullmatch(r"[0-9a-f]{64}", response["body_sha256"]) is None
+                or not isinstance(response.get("request_headers"), list)
+                or any(not isinstance(pair, list) or len(pair) != 2
+                       or any(not isinstance(part, str) for part in pair)
+                       for pair in response["request_headers"])):
+                raise ValueError("response stability policy response ledger is malformed or unsuccessful")
+            seen.add(response["resource_id"])
+        if seen != set(resolved):
+            raise ValueError("response stability policy response ledger omits a complete-graph resource")
+    try:
+        _neqo_provenance(runs)
+    except PreparationError as error:
+        raise ValueError("response stability policy client provenance is invalid") from error
+
+
+def validate_preparation_policy_failure_evidence(
+    value: Any, *, source_url: str | None = None,
+) -> dict[str, Any]:
+    """Rederive a narrowly typed failure from complete retained raw stage data.
+
+    The outer prospective receipt additionally binds candidate, runtime source,
+    image, implementation bytes, amendment and observation freshness.
+    """
+    fields = {"schema_version", "policy", "stage", "require_complete_coverage", "discovery",
+              "resolved_probe", "replay_manifest", "response_runs", "artifacts"}
+    peer_failure = isinstance(value, dict) and type(value.get("schema_version")) is int and value["schema_version"] == 2
+    if peer_failure:
+        fields = fields | {"probe_failure"}
+    policies = {"full-graph-h3": FULL_GRAPH_H3_FAILURE_POLICY,
+                "response-stability": RESPONSE_STABILITY_FAILURE_POLICY}
+    if (not isinstance(value, dict) or set(value) != fields or type(value["schema_version"]) is not int
+        or value["schema_version"] not in (1, 2) or not isinstance(value["stage"], str)
+        or value["stage"] not in policies or value["policy"] != policies[value["stage"]]
+        or value["require_complete_coverage"] is not True
+        or not isinstance(value["discovery"], dict)
+        or set(value["discovery"]) != set(DiscoveryResult.__dataclass_fields__)):
+        raise ValueError("preparation policy failure fields or stage are invalid")
+    discovery = DiscoveryResult(**value["discovery"])
+    if source_url is not None and discovery.source_url != source_url:
+        raise ValueError("preparation policy failure is for another exact selected page")
+    try:
+        validate_manifest({"resources": discovery.resources})
+        _complete_coverage_admission(discovery)
+        if peer_failure:
+            if (value["stage"] != "full-graph-h3" or value["resolved_probe"] is not None
+                or value["replay_manifest"] is not None or value["response_runs"] != []):
+                raise ValueError("peer transport probe cannot claim a resolved manifest or replay")
+            artifacts = _failure_artifact_bytes(value["artifacts"])
+            _require_failure_artifact_json(artifacts, "probe-input.json", {"resources": discovery.resources})
+            failure = _peer_transport_probe_failure(artifacts, discovery.resources)
+            if canonical_bytes(value["probe_failure"]) != canonical_bytes(failure):
+                raise ValueError("peer transport probe descriptor differs from its independently reopened raw evidence")
+            return json.loads(json.dumps(value, allow_nan=False))
+        probe = value["resolved_probe"]
+        validate_manifest(probe)
+    except (ValueError, PreparationError) as error:
+        raise ValueError("preparation policy discovered/probed complete graph is invalid") from error
+    original = {row["id"]: row for row in discovery.resources}
+    resolved = {row["id"]: row for row in probe["resources"]}
+    immutable = ("url", "type", "chaff_priority", "depends_on", "headers")
+    if set(original) != set(resolved) or any(
+        canonical_bytes(original[ident].get(key)) != canonical_bytes(resolved[ident].get(key))
+        for ident in original for key in immutable
+    ):
+        raise ValueError("preparation policy probe changed the complete request graph")
+    artifacts = _failure_artifact_bytes(value["artifacts"])
+    _require_failure_artifact_json(artifacts, "probe-input.json", {"resources": discovery.resources})
+    _require_failure_artifact_json(artifacts, "probe-output.json", probe)
+    _require_successful_failure_stage(artifacts, "probe.log.execution.json", "probe")
+    if value["stage"] == "full-graph-h3":
+        if value["replay_manifest"] is not None or value["response_runs"] != [] or not any(
+            resource["known_valid"] is not True for resource in resolved.values()
+        ):
+            raise ValueError("preparation policy raw probe does not prove unavailable resources")
+    else:
+        replay = value["replay_manifest"]
+        if canonical_bytes(replay) != canonical_bytes({"resources": probe["resources"]}) or any(
+            resource["known_valid"] is not True for resource in resolved.values()
+        ):
+            raise ValueError("response stability policy pruned or changed its complete graph")
+        _require_failure_artifact_json(artifacts, "stability-input.json", replay)
+        runs = value["response_runs"]
+        if not isinstance(runs, list) or len(runs) != DEFAULT_STABILITY_RUNS:
+            raise ValueError("response stability policy lacks all required live runs")
+        _validate_successful_policy_response_runs(runs, probe["resources"])
+        with tempfile.TemporaryDirectory(prefix="qcsd-failure-packets-") as temporary:
+            for index, run_data in enumerate(runs):
+                _require_failure_artifact_json(artifacts, f"stability-{index}/run.json", run_data)
+                _require_successful_failure_stage(artifacts, f"stability-{index}.log.execution.json", "run")
+                packet_name = f"stability-{index}/packets.csv"
+                if packet_name not in artifacts:
+                    raise ValueError("response stability policy lacks raw packet evidence")
+                packet_path = Path(temporary) / f"packets-{index}.csv"
+                packet_path.write_bytes(artifacts[packet_name])
+                try:
+                    _qualify_udp_payloads(run_data, packet_path, run_index=index,
+                                          expected_ceiling=STABILITY_UDP_PAYLOAD_CEILING)
+                except PreparationError as error:
+                    raise ValueError("response stability policy packet evidence is invalid") from error
+        stable = set(response_stability_evidence(runs)["stable_resource_ids"])
+        if not set(resolved) - stable:
+            raise ValueError("response stability policy raw runs do not prove response drift")
+    return json.loads(json.dumps(value, allow_nan=False))
+
+
+def validate_passive_render_policy_failure_evidence(value: Any) -> dict[str, Any]:
+    fields = {"passive_render_contract", "passive_render_contract_sha256",
+              "render_observation", "render_observation_sha256"}
+    if not isinstance(value, dict) or set(value) != fields:
+        raise ValueError("passive render policy failure fields are invalid")
+    validate_passive_render_contract(value["passive_render_contract"], digest=value["passive_render_contract_sha256"])
+    if evidence_sha256(value["render_observation"]) != value["render_observation_sha256"]:
+        raise ValueError("passive render policy failure observation hash differs")
+    validate_render_observation(value["render_observation"], allow_failure=True)
+    if (type(value["render_observation"]["active_request_count"]) is not int
+        or value["render_observation"]["cutoff_reason"] != "hard-cap-non-quiescent"):
+        raise ValueError("passive render policy failure did not reach the typed hard cap")
+    return json.loads(json.dumps(value, allow_nan=False))
 
 
 @dataclass(frozen=True)
@@ -116,12 +535,19 @@ def prepare_workload(
     if output.exists() or output.is_symlink():
         raise FileExistsError(f"{output} already exists; choose a new workload ID")
 
-    discovery = discover_page(
-        source_url,
-        allow_origins=approved_origins,
-        timeout_ms=timeout_ms,
-        origin_ip_pins=origin_ip_pins,
-    )
+    capture_source = _failure_capture_source()
+    capture_started_at = datetime.now(UTC).isoformat()
+    try:
+        discovery = discover_page(
+            source_url,
+            allow_origins=approved_origins,
+            timeout_ms=timeout_ms,
+            origin_ip_pins=origin_ip_pins,
+        )
+    except PassiveRenderPolicyError as error:
+        if type(error) is PassiveRenderPolicyError:
+            _stamp_policy_failure(error, capture_source, capture_started_at)
+        raise
     coverage_admission = (
         _complete_coverage_admission(discovery) if require_complete_coverage else None
     )
@@ -134,17 +560,50 @@ def prepare_workload(
         directory = Path(temporary)
         probe_input = {"resources": discovery.resources}
         validate_manifest(probe_input)
-        probe_output = _probe(
-            probe_input,
-            directory,
-            max_response_bytes=max_response_bytes,
-            timeout_seconds=timeout_seconds,
-        )
-        resources, exclusions = resolve_probe_output(
-            discovery,
-            probe_output,
-            require_complete_coverage=require_complete_coverage,
-        )
+        try:
+            probe_output = _probe(
+                probe_input,
+                directory,
+                max_response_bytes=max_response_bytes,
+                timeout_seconds=timeout_seconds,
+            )
+        except RecoverablePreparationError as error:
+            if type(error) is RecoverablePreparationError and require_complete_coverage:
+                artifacts = _snapshot_failure_artifacts(directory)
+                try:
+                    raw = _failure_artifact_bytes(artifacts)
+                    failure = _peer_transport_probe_failure(raw, discovery.resources)
+                    if failure["client_provenance"]["migration_commit"] != capture_source.get("neqo_commit"):
+                        raise ValueError("peer transport probe client differs from the actual preparation source")
+                    evidence = _preparation_failure_evidence(
+                        "full-graph-h3", discovery, None, None, [],
+                        require_complete_coverage=True, artifacts=artifacts,
+                    )
+                    evidence.update({"schema_version": 2, "probe_failure": failure})
+                    validate_preparation_policy_failure_evidence(evidence, source_url=source_url)
+                except (ValueError, TypeError, KeyError, UnicodeError):
+                    # Missing/malformed artifacts and every other child failure
+                    # remain operational; an exception string supplies no proof.
+                    pass
+                else:
+                    policy_error = FullGraphH3PolicyError(
+                        "complete coverage HTTP/3 probe recorded a peer transport close "
+                        f"for origin {failure['origin']}, resource IDs {failure['resource_ids']}",
+                        evidence=evidence,
+                    )
+                    _stamp_policy_failure(policy_error, capture_source, capture_started_at)
+                    raise policy_error from error
+            raise
+        try:
+            resources, exclusions = resolve_probe_output(
+                discovery,
+                probe_output,
+                require_complete_coverage=require_complete_coverage,
+            )
+        except FullGraphH3PolicyError as error:
+            error.evidence["artifacts"] = _snapshot_failure_artifacts(directory)
+            _stamp_policy_failure(error, capture_source, capture_started_at)
+            raise
         resolved = {"resources": resources}
         evidence, runs, udp_payload_qualification = _probe_response_stability(
             resolved,
@@ -154,14 +613,26 @@ def prepare_workload(
             stability_runs=stability_runs,
             stability_interval_seconds=stability_interval_seconds,
         )
-
-    required = {resource["id"] for resource in resources}
-    stable = set(evidence["stable_resource_ids"])
-    if unstable := required - stable:
-        identifiers = ", ".join(map(str, sorted(unstable)))
-        raise RecoverablePreparationError(
-            f"repeated Neqo fetches changed or failed for resource IDs: {identifiers}"
-        )
+        required = {resource["id"] for resource in resources}
+        stable = set(evidence["stable_resource_ids"])
+        if unstable := required - stable:
+            try:
+                _validate_successful_policy_response_runs(runs, resources)
+            except ValueError as error:
+                raise RecoverablePreparationError(
+                    f"response stability retained operationally invalid runner evidence: {error}"
+                ) from error
+            identifiers = ", ".join(map(str, sorted(unstable)))
+            error = ResponseStabilityPolicyError(
+                f"repeated Neqo fetches changed or failed for resource IDs: {identifiers}",
+                evidence=_preparation_failure_evidence(
+                    "response-stability", discovery, probe_output, resolved, runs,
+                    require_complete_coverage=require_complete_coverage,
+                    artifacts=_snapshot_failure_artifacts(directory),
+                ),
+            )
+            _stamp_policy_failure(error, capture_source, capture_started_at)
+            raise error
     try:
         resources = project_stable_response_lengths(resources, evidence["expected_responses"])
     except (KeyError, TypeError, ValueError) as error:
@@ -340,9 +811,13 @@ def resolve_probe_output(
             f"{resource['id']} ({resource['url']})"
             for resource in sorted(unavailable, key=lambda item: item["id"])
         )
-        raise RecoverablePreparationError(
+        raise FullGraphH3PolicyError(
             "complete coverage requires every browser-rendered resource to pass the HTTP/3 "
-            f"preflight; unavailable resource IDs/URLs: {details}"
+            f"preflight; unavailable resource IDs/URLs: {details}",
+            evidence=_preparation_failure_evidence(
+                "full-graph-h3", discovery, resolved, None, [],
+                require_complete_coverage=True, artifacts={},
+            ),
         )
     retained_ids = {
         resource["id"] for resource in resolved["resources"] if resource.get("known_valid") is True
@@ -724,13 +1199,22 @@ def _run_neqo(
 
     host_timeout = neqo_host_timeout(configured_timeout_seconds)
     measured_command = [*capture_scheduler_launch_prefix(), *command]
+    started_at = datetime.now(UTC).isoformat()
     try:
-        return run(measured_command, log=log, check=False, timeout=host_timeout)
+        result = run(measured_command, log=log, check=False, timeout=host_timeout)
     except ProcessTimeoutError as error:
         detail = error.result.stdout.strip() or "no client output"
         raise RecoverablePreparationError(
             f"{label} exceeded its enforced {host_timeout:g}s host timeout: {detail}"
         ) from error
+    stdout = result.stdout or ""
+    durable_create(Path(str(log) + ".execution.json"), canonical_bytes({
+        "schema_version": 1, "command": measured_command, "returncode": result.returncode,
+        "configured_timeout_seconds": configured_timeout_seconds, "host_timeout_seconds": host_timeout,
+        "started_at": started_at, "completed_at": datetime.now(UTC).isoformat(),
+        "stdout": stdout, "stdout_sha256": hashlib.sha256(stdout.encode()).hexdigest(),
+    }))
+    return result
 
 
 def _raise_neqo_execution_failure(

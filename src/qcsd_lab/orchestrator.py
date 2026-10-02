@@ -55,7 +55,7 @@ from .experiment import (
     validate_planned_sample_identity,
 )
 from .fidelity import (
-    BUFLO_INCOMING_CREDIT_ADVERTISEMENT_DELAY_LIMIT_US,
+    BUFLO_INCOMING_CREDIT_RELEASE_WINDOW_US,
     _runner_csv_u64,
     _runner_wakeup_metrics_valid,
     _schedule_realization_metrics,
@@ -5133,24 +5133,33 @@ def _primary_capture_view(result: Mapping[str, Any]) -> Mapping[str, Any]:
 def _buflo_incoming_credit_delay_failure(
     attempt: Path, schedule: Mapping[str, Any]
 ) -> dict[str, Any] | None:
-    """Describe the exact late incoming-credit slots behind the BuFLO gate."""
+    """Describe credit handoffs outside the nominal release window."""
 
-    observed_max = schedule.get("incoming_credit_advertisement_delay_us_max")
+    observed_max = schedule.get("incoming_credit_release_lateness_upper_bound_us_max")
+    violation_count = schedule.get("incoming_credit_release_window_violations")
+    timing_events = schedule.get("incoming_credit_release_timing_events")
     if (
-        type(observed_max) is not int
-        or observed_max < BUFLO_INCOMING_CREDIT_ADVERTISEMENT_DELAY_LIMIT_US
+        type(observed_max) is int
+        and observed_max < BUFLO_INCOMING_CREDIT_RELEASE_WINDOW_US
+        and violation_count == 0
+        and timing_events == schedule.get("scheduled_incoming_events")
     ):
         return None
 
     violations: list[dict[str, int]] = []
     path = attempt / "neqo/schedule.csv"
     try:
+        run = load_json(attempt / "neqo/run.json")
+        start_ns = run.get("defense_start_monotonic_ns") if isinstance(run, Mapping) else None
+        if type(start_ns) is not int or start_ns < 0:
+            start_ns = None
         with path.open(newline="", encoding="utf-8") as source:
             rows = list(csv.DictReader(source))
-    except (OSError, UnicodeError, csv.Error):
+    except (OSError, UnicodeError, ValueError, csv.Error):
+        start_ns = None
         rows = []
     for row in rows:
-        if row.get("direction") != "incoming":
+        if row.get("direction") != "incoming" or row.get("satisfaction") == "missed":
             continue
         try:
             delay_us = _runner_csv_u64(
@@ -5165,33 +5174,45 @@ def _buflo_incoming_credit_delay_failure(
                 row["credit_advertised_at_us"],
                 label="credit_advertised_at_us",
             )
+            target_us = _runner_csv_u64(row["target_time_us"], label="target_time_us")
             violation = {
                 "slot_id": _runner_csv_u64(row["slot_id"], label="slot_id"),
                 "connection": _runner_csv_u64(row["connection"], label="connection"),
-                "target_time_us": _runner_csv_u64(
-                    row["target_time_us"],
-                    label="target_time_us",
-                ),
+                "target_time_us": target_us,
                 "action_time_us": action_time_us,
                 "credit_advertised_at_us": advertised_at_us,
                 "credit_advertisement_delay_us": delay_us,
             }
         except (KeyError, TypeError, ValueError):
             continue
+        if start_ns is None or advertised_at_us - action_time_us != delay_us:
+            violations.append(violation)
+            continue
+        release_ns = start_ns + target_us * 1_000
+        advertised_lower_ns = advertised_at_us * 1_000
+        advertised_upper_ns = advertised_lower_ns + 1_000
+        violation["nominal_release_ns"] = release_ns
+        violation["release_lateness_upper_bound_us"] = max(
+            0, (advertised_upper_ns - release_ns - 1) // 1_000
+        )
         if (
-            delay_us >= BUFLO_INCOMING_CREDIT_ADVERTISEMENT_DELAY_LIMIT_US
-            and advertised_at_us - action_time_us == delay_us
+            advertised_lower_ns < release_ns
+            or advertised_upper_ns > release_ns
+            + BUFLO_INCOMING_CREDIT_RELEASE_WINDOW_US * 1_000
         ):
             violations.append(violation)
 
     return {
-        "name": "buflo_incoming_credit_advertisement_delay_window",
+        "name": "buflo_incoming_credit_release_window",
         "predicate": (
-            "incoming_credit_advertisement_delay_us_max "
-            f"< {BUFLO_INCOMING_CREDIT_ADVERTISEMENT_DELAY_LIMIT_US}"
+            "incoming_credit_release_lateness_upper_bound_us_max "
+            f"< {BUFLO_INCOMING_CREDIT_RELEASE_WINDOW_US}"
         ),
-        "limit_us": BUFLO_INCOMING_CREDIT_ADVERTISEMENT_DELAY_LIMIT_US,
+        "limit_us": BUFLO_INCOMING_CREDIT_RELEASE_WINDOW_US,
         "observed_max_us": observed_max,
+        "timing_events": timing_events,
+        "expected_events": schedule.get("scheduled_incoming_events"),
+        "window_violations": violation_count,
         "violating_slots": violations,
     }
 

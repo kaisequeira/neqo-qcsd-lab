@@ -1,0 +1,136 @@
+{
+  "payload": {
+    "admission_policy": "root-and-exact-page-h3-automatic-public-url-screen-complete-live-graph-and-cross-origin-v2",
+    "admitted_resource_graph": "unchanged-complete-live-resource-graph-with-cross-origin-proof",
+    "amendment_id": "crux73-tranco600-rapid-v5-selection-v2",
+    "automated_screen_policy_sha256": "cf28b92f80ee5b9da982fa7b326fdc24ca5cb0a713bbea9c8c5a5b1115a9fb3b",
+    "automated_site_screen_policy": {
+      "content_classification_claimed": false,
+      "decision": "automatic-policy-pass",
+      "domain_safety_policy": {
+        "denied_exact_domains": [
+          "deep-nudes.com",
+          "ebonyfacial.net",
+          "greenxh.live",
+          "hanime.tv",
+          "joyclub.de",
+          "mygirls.me",
+          "xvideos.tube",
+          "xnxx.com"
+        ],
+        "denied_substrings": [
+          "adult",
+          "bet",
+          "casino",
+          "escort",
+          "gambl",
+          "hentai",
+          "malware",
+          "phishing",
+          "porn",
+          "sex",
+          "xxx"
+        ],
+        "policy": "frozen-domain-safety-deny-v2"
+      },
+      "named_human_review": "not-required",
+      "policy": "frozen-public-url-and-domain-screen-v1",
+      "scientific_credit": false,
+      "selected_page_choice": "independently-rederived-navigation-ordinal-zero-through-four",
+      "selected_page_h3": "separate-passing-control-known-valid-exact-url-receipt",
+      "selected_page_url_policy": "canonical-query-free-html-https-default-port-exact-candidate-or-subdomain-v1"
+    },
+    "browser_policy_deferral": {
+      "action_kind": "catalogue-boundary-navigation",
+      "action_scope": "catalogue-root-and-optional-link-navigation",
+      "exception_type": "NonReplayableEgressPolicyError",
+      "failure_page_attribution": "unavailable",
+      "human_review": "none-at-this-navigation-screen-branch",
+      "outcome": "screen-deferred",
+      "policy": "prospective-nonreplayable-browser-navigation-deferral-v1",
+      "required_proof": "independently-reopened-exact-candidate-image-source-module-and-raw-guard-evidence",
+      "required_root_screen": "known-valid-with-passing-controls",
+      "scientific_credit": false,
+      "scope": "candidate-navigation-screen-only-not-whole-domain-ineligibility",
+      "triage_reason": "browser-navigation-policy-deferred"
+    },
+    "candidate_order_policy": "curated-v1-sha256-order-then-frozen-tranco-catalogue-order-dedup-domain-v2",
+    "capture_authority": "none-requires-separate-live-capture-readiness",
+    "cohort_contracts": [
+      {
+        "class_count": 10,
+        "formal_sample_target": 0,
+        "generation": "launch-10",
+        "planned_visit_count": 50,
+        "role": "shakedown",
+        "study_id": "classifier-curated10-rapid-v5",
+        "visits_per_class_mode": 1
+      },
+      {
+        "class_count": 50,
+        "formal_sample_target": 16000,
+        "generation": "final-50",
+        "planned_visit_count": 16000,
+        "role": "final",
+        "study_id": "classifier-curated50-rapid-v5",
+        "visits_per_class_mode": 64
+      }
+    ],
+    "formal_modes": [
+      "undefended",
+      "front",
+      "tamaraw",
+      "buflo",
+      "cs-buflo"
+    ],
+    "freshness_policy": {
+      "new_automated_screen_and_page_policy_failure": "at-or-after-published-at-utc",
+      "new_typed_browser_policy_failure": "started-at-or-after-published-at-utc",
+      "old_failed_attempts": "preserved-zero-credit-no-promotion-relabel-or-retroactive-terminal-authority",
+      "parent_profile_not_before_utc": "2026-10-02T12:58:17Z",
+      "supporting_navigation_and_exact_page_h3": "may-reopen-unchanged-parent-v5-profile-source-image-and-independent-module-bound-observations",
+      "supporting_root_observations": "may-reopen-unchanged-parent-v5-profile-source-image-and-module-bound-observations",
+      "v1_browser_failure_receipts": "retain-v1-only-authority-no-v2-relabel-or-promotion"
+    },
+    "non_replayable_egress_guard": "unchanged-fail-closed-no-api-suppression-or-transport-waiver",
+    "page_policy_deferral": {
+      "navigation_action": {
+        "exception_types": [
+          "PassiveRenderPolicyError"
+        ],
+        "failure_page_attribution": "unavailable",
+        "kind": "catalogue-boundary-navigation",
+        "scope": "catalogue-root-and-optional-link-navigation",
+        "selected_page_h3_and_automated_screen": "absent-before-page-selection"
+      },
+      "new_failure_freshness": "started-at-or-after-published-at-utc",
+      "other_errors": "operational-no-policy-screen-terminal-authority",
+      "outcome": "page-policy-screen-deferred",
+      "policy": "prospective-typed-page-policy-screen-deferral-v2",
+      "preparation_action": {
+        "exception_types": [
+          "PassiveRenderPolicyError",
+          "FullGraphH3PolicyError",
+          "ResponseStabilityPolicyError"
+        ],
+        "kind": "complete-graph-preparation",
+        "required_proof": "exact-navigation-selected-page-h3-and-automated-screen"
+      },
+      "required_failure_proof": "independently-reopened-exact-candidate-image-source-modules-and-raw-typed-stage-evidence",
+      "required_root_screen": "known-valid-with-passing-controls",
+      "scientific_credit": false,
+      "scope": "candidate-action-screen-only-not-whole-domain-ineligibility",
+      "triage_reason": "page-policy-screen-deferred"
+    },
+    "parent_admission_policy": "human-reviewed-exact-page-h3-complete-live-graph-and-cross-origin-v4",
+    "parent_profile_sha256": "f7eb0228a06429cc2ae91d0f9d52577399e15b68f4915d41cb60291445542b60",
+    "parent_selection_amendment_sha256": "ffc91c4a4fafe39ae9ec3875c982d8a5537fcaae6a253ee58e33c7f492bc8486",
+    "parent_selection_policy": "first-N-admitted-with-root-selected-page-and-safety-decisions-v4",
+    "published_at_utc": "2026-10-02T15:19:12.576895Z",
+    "revision": 2,
+    "selection_policy": "first-N-automatic-public-url-screened-with-typed-page-policy-deferrals-v2"
+  },
+  "payload_sha256": "dea551617fbad67e7a0a07104deb0e6e061a6961405084c952e1f5680f21c6f3",
+  "receipt_type": "qcsd-rapid-v5-selection-amendment",
+  "schema_version": 5
+}
