@@ -419,7 +419,7 @@ def test_v2_rehashed_rule_or_typed_failure_contract_changes_fail(change: str):
         ))
 
 
-@pytest.mark.parametrize("revision", [0, 4, True, "2"])
+@pytest.mark.parametrize("revision", [0, 5, True, "2"])
 def test_unknown_or_loosely_typed_amendment_revision_fails(revision):
     with pytest.raises(ValueError, match="revision"):
         amendment.build_selection_amendment(
@@ -539,6 +539,108 @@ def context_v3(context_v2):
             facts["automated_site_screen"].update(selection_amendment_sha256=digest, screened_at=now)
     result["verify"] = lambda sha: copy.deepcopy(result["records"][sha])
     return result
+
+
+def test_v4_contract_preserves_three_published_parents_and_fixed_acceptance():
+    for revision, stamp, digest in (
+        (1, amendment.FROZEN_V1_AMENDMENT_PUBLICATION_UTC, amendment.FROZEN_V1_AMENDMENT_SHA256),
+        (2, amendment.FROZEN_V2_AMENDMENT_PUBLICATION_UTC, amendment.FROZEN_V2_AMENDMENT_SHA256),
+        (3, amendment.FROZEN_V3_AMENDMENT_PUBLICATION_UTC, amendment.FROZEN_V3_AMENDMENT_SHA256),
+    ):
+        assert amendment.selection_amendment_sha256(amendment.build_selection_amendment(
+            published_at_utc=stamp, revision=revision)) == digest
+    payload = amendment.validate_selection_amendment(_receipt(revision=4))
+    assert payload["parent_selection_amendment_sha256"] == amendment.FROZEN_V3_AMENDMENT_SHA256
+    assert payload["admission_policy"] == amendment.AMENDED_V2_ADMISSION_POLICY
+    assert payload["unsuccessful_live_attempt_deferral"]["whole_domain_ineligible"] is False
+    assert payload["cohort_contracts"][-1]["formal_sample_target"] == 16000
+    changed = copy.deepcopy(payload)
+    changed["unsuccessful_live_attempt_deferral"]["blocking_failures"] = "none"
+    with pytest.raises(ValueError, match="fixed contract"):
+        amendment.validate_selection_amendment(rapid._bind(changed, amendment.SELECTION_AMENDMENT_RECEIPT_TYPE, schema_version=5))
+
+
+def _v4_rebind(context):
+    context["amendment"] = _receipt(revision=4)
+    digest = amendment.selection_amendment_sha256(context["amendment"])
+    for row in context["records"].values():
+        if row["automated_site_screen"] is not None:
+            row["automated_site_screen"]["selection_amendment_sha256"] = digest
+    return digest
+
+
+def test_v4_normal_cohort_still_requires_fifty_full_graph_sites(context_v3):
+    _v4_rebind(context_v3)
+    value = _build(context_v3)
+    assert len(value["payload"]["selected_candidate_ids"]) == 50
+    assert value["payload"]["formal_sample_target"] == 16000
+    context_v3["records"][context_v3["digests"][0]]["admission"]["cross_origin_resource_count"] = 0
+    with pytest.raises(ValueError, match="multi-origin"):
+        _build(context_v3)
+
+
+def test_v4_actual_unsuccessful_operation_does_not_replace_fiftieth_site(context_v3, tmp_path, monkeypatch):
+    from qcsd_lab import rapid_attempt_failure_evidence as observer
+    digest = _v4_rebind(context_v3)
+    client = tmp_path / "v4-client"
+    client.write_bytes(b"immutable unit client")
+    monkeypatch.setenv("QCSD_NEQO_CLIENT", str(client))
+    candidate = context_v3["candidates"][0]
+    action = {"kind": "catalogue-boundary-navigation", "url": f"https://{candidate['domain']}/",
+              "scope": "catalogue-root-and-optional-link-navigation", "selected_page_ordinal": None}
+    barrier = amendment.selection_amendment_not_before_utc(context_v3["amendment"])
+    hashes = observer.implementation_hashes()
+    runtime = observer.begin_attempt_action(context_v3["binding"], hashes, barrier)
+    attempt = tmp_path / "v4-actual-attempt"
+    attempt.mkdir()
+    proof = attempt / "attempt-observation.json"
+    started = datetime.now(UTC).isoformat()
+    def failed_call(_domain):
+        raise RuntimeError("actual unsuccessful live unit backend operation")
+    try:
+        ExistingAcquisitionBackend(navigation=failed_call).discover_navigation(candidate["domain"])
+    except RuntimeError as error:
+        observer.retain_attempt_failure(proof, error=error, action=action, started_at=started,
+            runtime=runtime, execution_binding=context_v3["binding"], expected_implementation_hashes=hashes,
+            not_before_utc=barrier, attempt_root=attempt)
+    kwargs = {"execution_binding": context_v3["binding"], "expected_implementation_hashes": hashes,
+              "not_before_utc": barrier, "expected_action": action}
+    raw = observer.verify_attempt_failure(proof, **kwargs)
+    failure = {**raw, "profile_sha256": rapid.FROZEN_V5_PROFILE_SHA256, "candidate": candidate,
+               "selection_amendment_sha256": digest, "navigation_receipt_sha256": None,
+               "selected_page_h3_receipt_sha256": None, "automated_site_screen_receipt_sha256": None,
+               "controlled_page_probe": None}
+    first = context_v3["records"][context_v3["digests"][0]]
+    first.update(outcome=amendment.ATTEMPT_FAILURE_DEFERRAL_REASON, admission=None,
+                 selected_page_h3_proof=None, automated_site_screen=None, unsuccessful_attempt_failure=failure,
+                 triage={"policy": amendment.ATTEMPT_FAILURE_DEFERRAL_POLICY,
+                         "reason": amendment.ATTEMPT_FAILURE_DEFERRAL_REASON, "safety_reason": None})
+    index = len(context_v3["digests"])
+    while True:
+        item = context_v3["candidates"][index]
+        row = _terminal(item, context_v3["binding"])
+        row["site_safety_review"], row["automated_site_screen"] = None, None
+        if row["outcome"] == "admitted":
+            template = next(record["automated_site_screen"] for record in context_v3["records"].values()
+                            if record["automated_site_screen"] is not None)
+            row["automated_site_screen"] = {**template, "selected_page_url": row["selected_page_h3_proof"]["url"]}
+        leaf = f"{index + 1:064x}"
+        context_v3["digests"].append(leaf)
+        context_v3["records"][leaf] = row
+        index += 1
+        if row["outcome"] == "admitted":
+            break
+    def reopen(sha):
+        facts = copy.deepcopy(context_v3["records"][sha])
+        if sha == context_v3["digests"][0]:
+            assert observer.verify_attempt_failure(proof, **kwargs) == raw
+        return facts
+    context_v3["verify"] = reopen
+    value = _build(context_v3)
+    assert len(value["payload"]["selected_candidate_ids"]) == 50
+    assert value["payload"]["terminal_decisions"][0]["unsuccessful_attempt_failure"]["site_credit"] == 0
+    with pytest.raises(ValueError, match="incomplete"):
+        _build(context_v3, terminal_sha256s=context_v3["digests"][:-1])
 
 
 def test_v3_normal_admissions_still_require_exact_fifty_and_full_graph(context_v3):

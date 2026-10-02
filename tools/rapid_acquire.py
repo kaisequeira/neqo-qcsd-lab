@@ -40,6 +40,8 @@ def _parser() -> argparse.ArgumentParser:
                             help="independent amended browser policy implementation snapshot NAME=PATH")
     initialize.add_argument("--collector-module", action="append", type=_module, default=[],
                             help="independent revision 3 collector and executable snapshot NAME=PATH")
+    initialize.add_argument("--attempt-module", action="append", type=_module, default=[],
+                            help="independent revision 4 unsuccessful live-attempt snapshot NAME=PATH")
     for group in sorted(admission.IMPLEMENTATION_GROUPS):
         initialize.add_argument(f"--{group}-module", action="append", type=_module, required=True)
     for name, help_text in (
@@ -85,6 +87,8 @@ def _parser() -> argparse.ArgumentParser:
                                  help="explicitly seal an independently proved typed navigation/preparation policy deferral")
             command.add_argument("--collector-failure", type=Path,
                                  help="explicit revision 3 zero-credit deferral from one fresh exact collector failure")
+            command.add_argument("--attempt-failure", type=Path,
+                                 help="explicit revision 4 zero-credit deferral from one source-bound unsuccessful live call")
             command.add_argument("--defer-root", action="store_true",
                                  help="record an exact policy-authorized zero-credit root deferral, including visibly operational DNS misses")
         elif name == "cohort":
@@ -105,6 +109,89 @@ def _next_candidate(context: admission.AdmissionContext, requested: str | None) 
 def _frozen_paths(context: admission.AdmissionContext) -> dict[str, Path]:
     payload = admission._unpack(admission._read(context.root / "provenance.json"), admission.PROVENANCE_TYPE)
     return {key: admission._child(context.root, reference) for key, reference in payload["inputs"].items()}
+
+
+def _v4_probe_page(context, candidate_id, attempt, navigation, ordinal, kwargs):
+    """Observe the actual page call; independently failed controls always stop."""
+    from qcsd_lab import h3_prebaseline
+    from qcsd_lab.rapid_page_evidence import (
+        produce_selected_page_h3_receipt, verify_selected_page_h3_receipt,
+        verify_navigation_receipt, _probe_class, _time,
+    )
+    from qcsd_lab.rapid_attempt_failure_evidence import begin_attempt_action
+    from qcsd_lab.rapid_page_evidence import _validate_runtime
+    nav = verify_navigation_receipt(navigation,
+        profile_receipt=admission._load(context.profile_bytes), source_bytes=context.source_bytes,
+        catalogue_bytes=context.catalogue_bytes, candidate_id=candidate_id,
+        execution_binding=context.execution_binding,
+        expected_implementation_hashes=context.mounted_module_hashes["navigation"],
+        not_before_utc=context.not_before_utc)
+    if type(ordinal) is not int or not 0 <= ordinal < len(nav["pages"]):
+        raise ValueError("selected-page ordinal is outside deterministic navigation")
+    action = admission._attempt_action(context.candidate(candidate_id),
+        probe_page={"url": nav["pages"][ordinal].url, "selected_page_ordinal": ordinal})
+    runtime = begin_attempt_action(context.execution_binding, context.mounted_module_hashes[admission.ATTEMPT_GROUP],
+                                   context.attempt_not_before_utc)
+    if _validate_runtime(runtime, context.execution_binding) != dict(context.expected_runtime_source):
+        raise ValueError("page probe runtime differs from independent admission source")
+    if h3_prebaseline.os.environ.get("QCSD_PUBLIC_ORIGIN_ONLY") != "1":
+        raise ValueError("live page probe requires public-origin-only policy")
+    observations, caught = [], []
+    page_started = None
+    def probe(url):
+        nonlocal page_started
+        if len(observations) != 1:
+            result = h3_prebaseline._run_one(url)  # Control failures are outside the observer.
+        else:
+            begin_attempt_action(context.execution_binding, context.mounted_module_hashes[admission.ATTEMPT_GROUP],
+                                 context.attempt_not_before_utc)
+            page_started = admission._now()
+            try:
+                result = h3_prebaseline._run_one(url)
+            except Exception as error:
+                if admission.blocking_backend_failure(error):
+                    raise
+                caught.append(error)
+                result = None
+        observations.append(result)
+        return result
+    produce_selected_page_h3_receipt(navigation_receipt=navigation, selected_page_ordinal=ordinal,
+        expected_navigation_implementation_hashes=context.mounted_module_hashes["navigation"],
+        not_before_utc=context.not_before_utc, probe=probe, **kwargs)
+    payload = admission._load(admission._read(kwargs["output"]))["payload"]
+    start, end = _time(payload["started_at"]), _time(payload["completed_at"])
+    control = admission.profile.V5_TRIAGE_POLICY["control_url"]
+    if (_probe_class(payload["control_before"], control, start, end)[0] != "known-valid"
+        or _probe_class(payload["control_after"], control, start, end)[0] != "known-valid"):
+        raise ValueError("selected-page H3 controls did not pass; no unsuccessful-attempt terminal")
+    selected = (_probe_class(payload["exact_page_probe"], action["url"], start, end)
+                if payload["exact_page_probe"] is not None else None)
+    if selected is not None and selected[0] == "known-valid":
+        if begin_attempt_action(context.execution_binding, context.mounted_module_hashes[admission.ATTEMPT_GROUP],
+                                context.attempt_not_before_utc) != runtime:
+            raise ValueError("page probe runtime changed during successful operation")
+        verify_selected_page_h3_receipt(kwargs["output"], navigation_receipt=navigation,
+            profile_receipt=admission._load(context.profile_bytes), source_bytes=context.source_bytes,
+            catalogue_bytes=context.catalogue_bytes, candidate_id=candidate_id,
+            execution_binding=context.execution_binding,
+            expected_navigation_implementation_hashes=context.mounted_module_hashes["navigation"],
+            expected_implementation_hashes=context.mounted_module_hashes["page"],
+            not_before_utc=context.not_before_utc)
+        admission.write_checkpoint(context)
+        return kwargs["output"]
+    raw = {key: payload[key] for key in ("started_at", "completed_at", "control_before", "exact_page_probe", "control_after")}
+    raw_path = attempt / "controlled-unsuccessful-page-probe.json"
+    admission.durable_create(raw_path, admission._json(raw))
+    if not caught:
+        try:
+            raise admission.UnsuccessfulControlledPageProbe("controlled exact-page backend observation did not succeed")
+        except admission.UnsuccessfulControlledPageProbe as error:
+            caught.append(error)
+    output = admission.retain_unsuccessful_attempt_failure(attempt / "attempt-failure.json", context,
+        candidate_id=candidate_id, error=caught[0], action=action, started_at=page_started,
+        runtime=runtime, inputs={"navigation": navigation, "controlled_probe": raw_path})
+    admission.write_checkpoint(context)
+    return output
 
 
 def _page_action(context: admission.AdmissionContext, candidate_id: str, args: argparse.Namespace) -> Path:
@@ -132,7 +219,13 @@ def _page_action(context: admission.AdmissionContext, candidate_id: str, args: a
         if args.command == "navigate" and context.selection_amendment_revision == 3:
             collector_runtime = admission.begin_operational_collector_action(context)
         if args.command == "navigate":
-            if context.selection_amendment_bytes is not None:
+            if context.selection_amendment_revision == 4:
+                backend = admission.ObservedLiveBackend(admission.ExistingAcquisitionBackend(), context,
+                    candidate_id, attempt, admission._attempt_action(context.candidate(candidate_id)))
+                produce_navigation_receipt(backend=backend, **kwargs)
+                verify_navigation_receipt(output, expected_implementation_hashes=context.mounted_module_hashes["navigation"],
+                                          **verifier_kwargs)
+            elif context.selection_amendment_bytes is not None:
                 from qcsd_lab.rapid_browser_policy_evidence import (
                     BROWSER_POLICY_FAILURE_RECEIPT_TYPE, produce_navigation_policy_observation,
                 )
@@ -154,17 +247,21 @@ def _page_action(context: admission.AdmissionContext, candidate_id: str, args: a
             navigation_reference = admission.import_evidence(context.root, args.navigation)
             navigation = admission._child(context.root, navigation_reference)
             admission.durable_create(attempt / "inputs.json", admission._json({"navigation": navigation_reference}))
-            produce_selected_page_h3_receipt(
-                navigation_receipt=navigation, selected_page_ordinal=args.selected_page_ordinal,
+            if context.selection_amendment_revision == 4:
+                return _v4_probe_page(context, candidate_id, attempt, navigation, args.selected_page_ordinal, kwargs)
+            produce_selected_page_h3_receipt(navigation_receipt=navigation,
+                selected_page_ordinal=args.selected_page_ordinal,
                 expected_navigation_implementation_hashes=context.mounted_module_hashes["navigation"],
-                not_before_utc=context.not_before_utc, **kwargs,
-            )
+                not_before_utc=context.not_before_utc, **kwargs)
             verify_selected_page_h3_receipt(
                 output, navigation_receipt=navigation,
                 expected_navigation_implementation_hashes=context.mounted_module_hashes["navigation"],
                 expected_implementation_hashes=context.mounted_module_hashes["page"], **verifier_kwargs,
             )
     except Exception as error:
+        if isinstance(error, admission.ObservedUnsuccessfulLiveAttempt):
+            admission.write_checkpoint(context)
+            return error.proof
         if collector_runtime is not None:
             from qcsd_lab.rapid_collector_failure_evidence import is_collector_failure
             if is_collector_failure(error):
@@ -225,6 +322,10 @@ def run(args: argparse.Namespace) -> Any:
             if len(dict(args.collector_module)) != len(args.collector_module):
                 raise ValueError("collector implementation snapshot name repeats")
             module_sources[admission.COLLECTOR_GROUP] = dict(args.collector_module)
+        if args.attempt_module:
+            if len(dict(args.attempt_module)) != len(args.attempt_module):
+                raise ValueError("attempt observer implementation snapshot name repeats")
+            module_sources[admission.ATTEMPT_GROUP] = dict(args.attempt_module)
         context = admission.initialize_acquisition(
             args.root, profile_path=args.profile, source=args.source, source_receipt=args.source_receipt,
             catalogue=args.catalogue, source_manifest=args.source_manifest,
@@ -283,6 +384,7 @@ def run(args: argparse.Namespace) -> Any:
                 browser_policy_failure=args.browser_policy_failure,
                 automated_screen=args.automated_screen, page_policy_failure=args.page_policy_failure,
                 collector_failure=args.collector_failure,
+                attempt_failure=args.attempt_failure,
             )
         else:
             raise AssertionError("unsupported acquisition action")

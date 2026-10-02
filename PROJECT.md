@@ -48,14 +48,15 @@ hints, not 50 eligible classes. The [frozen prospective v5 rapid profile](config
 (SHA-256 `f7eb0228a06429cc2ae91d0f9d52577399e15b68f4915d41cb60291445542b60`)
 registers the 73 supplied candidates followed by the frozen 600-domain
 fallback, a ten-site zero-credit shakedown, and a separate 50-site formal target.
-It records the first controlled homepage result and permits an ambiguous one
-to proceed to a separately controlled HTTP/3 pass on the exact selected page.
-The published [selection revision 3](config/curated-sources/crux73-tranco600-rapid-v5-selection-v3.json)
+It records the first controlled homepage result and permits a completed ambiguous
+response to proceed to a separately controlled HTTP/3 pass on the exact selected page.
+The published [selection revision 4](config/curated-sources/crux73-tranco600-rapid-v5-selection-v4.json)
 retains the recorded automatic public URL/domain screen, complete replayable
-browser graph and live cross-origin resource. It adds bounded, zero-credit
-collector deferrals and routes completed ambiguous homepage responses to
-separate exact-page checks. It makes no content-classifier claim. Fifty-site
-yield is unproven.
+browser graph and live cross-origin resource. It records an actual unsuccessful
+live operation with zero credit so later candidates can be tried, while source,
+configuration, control and evidence failures remain blocking. Completed ambiguous
+homepage responses can still reach separate exact-page checks. A saved exception
+is not a page-content or whole-domain verdict. Fifty-site yield is unproven.
 The 20-site proposal remains a historical alternative, with **0/30 eligible
 pilots and 0/16,000 accepted formal samples**. The rapid proposal also has
 **0/50 eligible final classes and 0/16,000 accepted formal samples**.
@@ -113,7 +114,7 @@ unsealed; context 004's Alibaba attempt gains no new authority. Focused checks
 passed for the observer (16 cases), selection compatibility (111 cases),
 admission/CLI boundaries and unchanged capture-planner/adapter integration.
 
-Fresh context 005 is now executing revision 3 with seven independently frozen
+Context 005 used revision 3 with seven independently frozen
 implementation groups. It has five verified zero-credit screening decisions,
 including a new Weerplaza WebSocket policy failure and a fresh Albumaty
 FontAwesome probe failure. Albumaty's full preparation finished in 73 seconds;
@@ -123,8 +124,53 @@ passed, and fresh complete-graph preparation reproduced the collector failure
 in 65 seconds. The new observer retained the actual direct CDP raise, earlier
 passive-render error, 13 source/client bindings and closed attempt inventory.
 All 18 retained files (9,009,835 bytes) independently reopened and the explicit
-collector terminal was sealed. Pinterest navigation is next. It has
+collector terminal was sealed. Pinterest navigation then stopped after about
+13 seconds with `TerminalProbePolicyError` from the challenge detector. Its
+attempt retains only intent and an operational error; it is not a proved
+visible CAPTCHA or a terminal site decision. Context 005 is stopped with
+these bytes preserved. Its old Pinterest error gains no authority from the
+published revision 4 described below. Context 005 has
 **0/50 admitted sites and 0/16,000 formal traces**. Context 004 remains unchanged.
+
+Selection revision 4 was published at `2026-10-02T18:13:34.038260Z`, SHA-256
+`0808c27b60b229de938bd8a3ae26aca615455c3c4978130b4792041787420a28`.
+It prospectively records one actual unsuccessful navigation, controlled
+selected-page HTTP/3 probe or complete-preparation operation, with its exception,
+retained files and frozen runtime/source bindings independently reopened.
+This earns zero site and trace credit; it does not infer a visible challenge,
+particular site defect or whole-domain ineligibility. Passing controls, runtime,
+dependencies, configuration and post-operation validation remain required.
+Failed preparation now retains its raw diagnostic files before cleanup.
+The complete admitted graphs, ten-site shakedown and **50 × 5 × 64 = 16,000**
+formal target are unchanged. No image or client rebuild was needed.
+
+Fresh context **006** initialized successfully at `2026-10-02T18:15:00.045215Z`,
+exit 0 with empty stderr. Its eight implementation groups include 18 bindings
+for the new attempt observer, including the actual client. Provenance SHA-256 is
+`a2d728946642e8706b701f08d4ae8a08d550a3e3bfbbca42b7014b1cce1516af`;
+launch-manifest SHA-256 is
+`a9629ef6c000132a431de2260504308b0042263d4f26dd145db0a1e1e05dd986`.
+The first bounded **20-action batch** returned exit 0 after reaching its action
+limit. These were operations, not 20 completed candidates. Independent status
+reopening at **2026-10-02T18:25:41.002979Z** confirmed **eight sealed zero-credit
+decisions, zero admitted sites and zero formal traces**. A later independent
+reopening at **2026-10-02T18:29:53.888910Z** confirmed **nine sealed zero-credit
+decisions and zero admitted sites**. Futura passed navigation, exact-page H3
+and its automatic screen, then failed passive-render quiescence during
+preparation; its fresh failure was explicitly sealed. Candidate 10, `poki.com`,
+was next in the continuing bounded batch. Counts exclude later activity.
+
+The new Weerplaza attempt independently reopened all 18 source/client bindings
+and 22 retained files (9,279,748 bytes), including its actual
+`NonReplayableEgressPolicyError`. Its fresh failure and explicit zero-credit
+terminal verify under revision 4; no old failure was promoted. Matching earlier
+positive observations can be reopened only under unchanged source groups.
+Alibaba's fresh collector failure and Pinterest's fresh detector error also
+independently verify as zero-credit decisions. The Pinterest proof records the
+actual error, not a finding that a visible challenge was present.
+Focused observer and preparation-retention checks passed; the exact live files,
+source checks and claim boundaries are recorded in the
+[evidence index](docs/EVIDENCE-INDEX.md#rapid-selection-revision-4-3-october-2026).
 
 A fresh clean-image fallback root survey independently verifies the first
 40 fallback observations: one known-valid homepage (`bandcamp.com`), 15

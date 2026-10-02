@@ -37,6 +37,7 @@ PREPARATION_TYPE = "qcsd-rapid-v5-site-preparation"
 AUTOMATED_SCREEN_TYPE = "qcsd-rapid-v5-automated-public-page-screen-v1"
 PAGE_POLICY_FAILURE_TYPE = "qcsd-rapid-v5-typed-page-policy-failure-v2"
 COLLECTOR_FAILURE_TYPE = "qcsd-rapid-v5-bound-operational-collector-failure-v3"
+ATTEMPT_FAILURE_TYPE = "qcsd-rapid-v5-bound-unsuccessful-live-attempt-v4"
 PROVENANCE_TYPE = "qcsd-rapid-v5-acquisition-provenance"
 CHECKPOINT_TYPE = "qcsd-rapid-v5-acquisition-checkpoint"
 SHA_RE = re.compile(r"[0-9a-f]{64}\Z")
@@ -44,6 +45,7 @@ ID_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 IMPLEMENTATION_GROUPS = {"curated", "fallback", "navigation", "page", "preparation"}
 BROWSER_POLICY_GROUP = "browser_policy"
 COLLECTOR_GROUP = "collector"
+ATTEMPT_GROUP = "attempt"
 PREPARATION_MODULES = (
     "qcsd_lab.rapid_site_admission", "qcsd_lab.class_acquisition", "qcsd_lab.prepare",
     "qcsd_lab.manifest", "qcsd_lab.discover", "qcsd_lab.discovery_evidence", "qcsd_lab.util",
@@ -204,14 +206,20 @@ class AdmissionContext:
 
     @property
     def page_policy_not_before_utc(self) -> datetime:
-        if self.selection_amendment_revision not in {2, 3}:
+        if self.selection_amendment_revision not in {2, 3, 4}:
             raise ValueError("automated screen and typed page-policy deferral require selection amendment revision 2")
         return self.browser_policy_not_before_utc
 
     @property
     def collector_not_before_utc(self) -> datetime:
-        if self.selection_amendment_revision != 3:
+        if self.selection_amendment_revision not in {3, 4}:
             raise ValueError("operational collector deferral requires selection amendment revision 3")
+        return self.browser_policy_not_before_utc
+
+    @property
+    def attempt_not_before_utc(self) -> datetime:
+        if self.selection_amendment_revision != 4:
+            raise ValueError("unsuccessful live attempt deferral requires selection amendment revision 4")
         return self.browser_policy_not_before_utc
 
     @cached_property
@@ -253,8 +261,11 @@ def initialize_acquisition(
     required_groups = IMPLEMENTATION_GROUPS | ({BROWSER_POLICY_GROUP} if selection_amendment is not None else set())
     if selection_amendment is not None:
         from .rapid_selection_amendment import selection_amendment_revision
-        if selection_amendment_revision(_load(_read(selection_amendment))) == 3:
+        revision = selection_amendment_revision(_load(_read(selection_amendment)))
+        if revision >= 3:
             required_groups |= {COLLECTOR_GROUP}
+        if revision == 4:
+            required_groups |= {ATTEMPT_GROUP}
     if set(module_sources) != required_groups:
         raise ValueError("all independent implementation snapshots are required")
     profile_raw, source_raw, catalogue_raw = _read(profile_path), _read(source), _read(catalogue)
@@ -328,8 +339,11 @@ def load_admission_context(root: Path) -> AdmissionContext:
     required_groups = IMPLEMENTATION_GROUPS | ({BROWSER_POLICY_GROUP} if "selection_amendment" in inputs else set())
     if "selection_amendment" in inputs:
         from .rapid_selection_amendment import selection_amendment_revision
-        if selection_amendment_revision(_load(inputs["selection_amendment"])) == 3:
+        revision = selection_amendment_revision(_load(inputs["selection_amendment"]))
+        if revision >= 3:
             required_groups |= {COLLECTOR_GROUP}
+        if revision == 4:
+            required_groups |= {ATTEMPT_GROUP}
     if not isinstance(groups, Mapping) or set(groups) != required_groups:
         raise ValueError("acquisition implementation inventory changed")
     hashes = {}
@@ -348,10 +362,14 @@ def load_admission_context(root: Path) -> AdmissionContext:
         _selection_amendment_payload(context.selection_amendment_bytes)
         if set(context.mounted_module_hashes[BROWSER_POLICY_GROUP]) != set(implementation_sources()):
             raise ValueError("browser policy implementation inventory changed")
-    if context.selection_amendment_revision == 3:
+    if context.selection_amendment_revision in {3, 4}:
         from .rapid_collector_failure_evidence import implementation_sources
         if set(context.mounted_module_hashes[COLLECTOR_GROUP]) != set(implementation_sources()):
             raise ValueError("collector implementation inventory changed")
+    if context.selection_amendment_revision == 4:
+        from .rapid_attempt_failure_evidence import implementation_sources
+        if set(context.mounted_module_hashes[ATTEMPT_GROUP]) != set(implementation_sources()):
+            raise ValueError("unsuccessful attempt implementation inventory changed")
     return context
 
 
@@ -925,6 +943,298 @@ def operational_collector_failure_facts(path: Path, context: AdmissionContext, c
     )
 
 
+class ObservedUnsuccessfulLiveAttempt(Exception):
+    """An actual backend failure was retained; no policy meaning is inferred."""
+
+    def __init__(self, proof: Path) -> None:
+        super().__init__("source-bound live backend operation did not succeed")
+        self.proof = proof
+
+
+class UnsuccessfulControlledPageProbe(Exception):
+    """Both controls passed but the retained exact page probe did not."""
+
+
+_BLOCKING_BACKEND_TYPES = {
+    "ValueError", "TypeError", "KeyError", "AssertionError", "ImportError", "ModuleNotFoundError",
+    "FileExistsError", "FileNotFoundError", "PermissionError", "PreparationError",
+}
+_BLOCKING_BACKEND_MESSAGES = {
+    "prepared-probe output root is not an owned regular directory",
+    "prepared workload source/image differs from acquisition runtime",
+    "prepared primary response identity is invalid",
+    "preparation runtime source changed during its policy observation",
+}
+
+
+def _blocking_backend_node(kind: str, message: str, functions: Sequence[str]) -> bool:
+    return (kind in _BLOCKING_BACKEND_TYPES or message in _BLOCKING_BACKEND_MESSAGES
+            or any(name.startswith(("validate_", "_validate")) or name in {
+                "source_metadata", "_regular_directory", "_new_directory", "_runtime_payload",
+                "_prepared_primary_response", "_failure_capture_source", "_stamp_policy_failure",
+            } for name in functions))
+
+
+def blocking_backend_failure(error: Exception) -> bool:
+    """Validation/configuration exceptions cannot become candidate deferrals."""
+    seen = set()
+    def check(value: BaseException | None) -> bool:
+        if value is None or id(value) in seen:
+            return False
+        seen.add(id(value))
+        functions = []
+        trace = value.__traceback__
+        while trace is not None:
+            functions.append(trace.tb_frame.f_code.co_name)
+            trace = trace.tb_next
+        return (_blocking_backend_node(type(value).__name__, str(value), functions)
+                or check(value.__cause__) or check(value.__context__))
+    return check(error)
+
+
+def _attempt_action(candidate: Mapping[str, Any], page: Mapping[str, Any] | None = None,
+                    *, probe_page: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    if probe_page is not None:
+        return {"kind": "selected-page-h3-probe", "url": probe_page["url"],
+                "scope": "exact-selected-page-controlled-h3-probe",
+                "selected_page_ordinal": probe_page["selected_page_ordinal"]}
+    return _collector_action(candidate, page)
+
+
+def _attempt_supports(context: AdmissionContext, candidate_id: str, refs: Mapping[str, Any],
+                      action: Mapping[str, Any]) -> tuple[Any, Any, Any]:
+    if action["kind"] == "catalogue-boundary-navigation":
+        if refs:
+            raise ValueError("unsuccessful navigation cannot claim later page inputs")
+        return None, None, None
+    if action["kind"] == "complete-graph-preparation":
+        page, screen = _collector_supports(context, candidate_id, refs)
+        if page is None or _attempt_action(context.candidate(candidate_id), page) != action:
+            raise ValueError("unsuccessful preparation changed its exact selected page")
+        return page, screen, None
+    if action["kind"] != "selected-page-h3-probe" or set(refs) != {"navigation", "controlled_probe"}:
+        raise ValueError("unsuccessful attempt support scope is unregistered")
+    from .rapid_page_evidence import verify_navigation_receipt, _probe_class
+    navigation = verify_navigation_receipt(
+        _child(context.root, refs["navigation"]), profile_receipt=_load(context.profile_bytes),
+        source_bytes=context.source_bytes, catalogue_bytes=context.catalogue_bytes,
+        candidate_id=candidate_id, execution_binding=context.execution_binding,
+        expected_implementation_hashes=context.mounted_module_hashes["navigation"],
+        not_before_utc=context.not_before_utc,
+    )
+    ordinal = action["selected_page_ordinal"]
+    if type(ordinal) is not int or not 0 <= ordinal < len(navigation["pages"]):
+        raise ValueError("unsuccessful exact page probe ordinal is invalid")
+    selected = navigation["pages"][ordinal]
+    if _attempt_action(context.candidate(candidate_id), probe_page={
+        "url": selected.url, "selected_page_ordinal": ordinal}) != action:
+        raise ValueError("unsuccessful exact page differs from deterministic navigation")
+    raw = _load(_read(_child(context.root, refs["controlled_probe"])))
+    if set(raw) != {"started_at", "completed_at", "control_before", "exact_page_probe", "control_after"}:
+        raise ValueError("unsuccessful exact page lacks its raw controlled observation")
+    from .rapid_page_evidence import _freshness
+    start, end = _freshness(raw["started_at"], raw["completed_at"], context.attempt_not_before_utc)
+    _validate_controlled_unsuccessful_probe(raw, action["url"], start, end)
+    proof = {"receipt_sha256": refs["controlled_probe"]["sha256"],
+             "navigation_receipt_sha256": navigation["navigation_receipt_sha256"],
+             "selected_page_url": selected.url, "selected_page_ordinal": ordinal, "raw_probe": raw}
+    return None, None, proof
+
+
+def _validate_controlled_unsuccessful_probe(raw: Mapping[str, Any], url: str,
+                                           start: datetime, end: datetime) -> None:
+    from .rapid_page_evidence import _probe_class
+    control = profile.V5_TRIAGE_POLICY["control_url"]
+    before = _probe_class(raw["control_before"], control, start, end)
+    after = _probe_class(raw["control_after"], control, start, end)
+    selected = _probe_class(raw["exact_page_probe"], url, start, end) if raw["exact_page_probe"] is not None else None
+    if before[0] != "known-valid" or after[0] != "known-valid":
+        raise ValueError("unsuccessful exact page controls did not pass")
+    if selected is not None and selected[0] == "known-valid":
+        raise ValueError("unsuccessful exact page proof actually passed")
+    if raw["exact_page_probe"] is None:
+        ordered = _utc(raw["control_before"]["completed_at"]) <= _utc(raw["control_after"]["started_at"])
+    else:
+        ordered = (_utc(raw["control_before"]["completed_at"]) <= _utc(raw["exact_page_probe"]["started_at"])
+                   <= _utc(raw["exact_page_probe"]["completed_at"]) <= _utc(raw["control_after"]["started_at"]))
+    if not ordered:
+        raise ValueError("unsuccessful page probe raw control order differs")
+
+
+def validate_unsuccessful_attempt_failure_facts(
+    value: Any, *, candidate: Mapping[str, Any], execution_binding: Mapping[str, Any],
+    selection_amendment_sha256: str, not_before_utc: datetime,
+    selected_page_h3_proof: Mapping[str, Any] | None = None,
+    automated_site_screen: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    from .rapid_attempt_failure_evidence import validate_attempt_failure_facts
+    extras = {"profile_sha256", "selection_amendment_sha256", "candidate", "navigation_receipt_sha256",
+              "selected_page_h3_receipt_sha256", "automated_site_screen_receipt_sha256", "controlled_page_probe"}
+    if (not isinstance(value, Mapping) or not extras.issubset(value)
+        or value["profile_sha256"] != profile.FROZEN_V5_PROFILE_SHA256
+        or value["selection_amendment_sha256"] != selection_amendment_sha256
+        or _json(value["candidate"]) != _json(candidate)
+        or unsafe_catalogue_domain_reason(candidate["domain"]) is not None):
+        raise ValueError("unsuccessful attempt changed its candidate or prospective policy")
+    raw = {key: deepcopy(item) for key, item in value.items() if key not in extras}
+    action, page, screen = raw["action"], selected_page_h3_proof, automated_site_screen
+    controlled = value["controlled_page_probe"]
+    if action["kind"] == "selected-page-h3-probe":
+        if (page is not None or screen is not None or not isinstance(controlled, Mapping)
+            or set(controlled) != {"receipt_sha256", "navigation_receipt_sha256", "selected_page_url",
+                                   "selected_page_ordinal", "raw_probe"}
+            or action != _attempt_action(candidate, probe_page={"url": controlled["selected_page_url"],
+                "selected_page_ordinal": controlled["selected_page_ordinal"]})
+            or profile.canonical_query_free_html_url(action["url"], registrable_domain=candidate["domain"]) != action["url"]):
+            raise ValueError("unsuccessful page probe lacks its exact raw controlled input")
+        probe = controlled["raw_probe"]
+        if (controlled["receipt_sha256"] != _sha(_json(probe))
+            or not isinstance(controlled["navigation_receipt_sha256"], str)
+            or SHA_RE.fullmatch(controlled["navigation_receipt_sha256"]) is None):
+            raise ValueError("unsuccessful page raw probe/navigation bytes differ from their bindings")
+        from .rapid_page_evidence import _freshness
+        start, end = _freshness(probe["started_at"], probe["completed_at"], not_before_utc)
+        _validate_controlled_unsuccessful_probe(probe, action["url"], start, end)
+        expected = (controlled["navigation_receipt_sha256"], None, None)
+    else:
+        if controlled is not None or (page is None) != (screen is None) or action != _attempt_action(candidate, page):
+            raise ValueError("unsuccessful attempt action differs from its exact page support")
+        expected = (page["navigation_receipt_sha256"] if page else None,
+                    page["receipt_sha256"] if page else None, screen["receipt_sha256"] if screen else None)
+        if page is not None and (screen["selected_page_h3_receipt_sha256"] != page["receipt_sha256"]
+            or screen["navigation_receipt_sha256"] != page["navigation_receipt_sha256"]
+            or screen["selected_page_url"] != page["url"]
+            or screen["selected_page_ordinal"] != page["selected_page_ordinal"]):
+            raise ValueError("unsuccessful preparation automatic screen differs from its exact page")
+    if tuple(value[key] for key in ("navigation_receipt_sha256", "selected_page_h3_receipt_sha256",
+                                    "automated_site_screen_receipt_sha256")) != expected:
+        raise ValueError("unsuccessful attempt changed its navigation/page/screen bindings")
+    validate_attempt_failure_facts(raw, execution_binding=execution_binding,
+                                  not_before_utc=not_before_utc, expected_action=action)
+    def blocked(node: Mapping[str, Any] | None) -> bool:
+        return node is not None and (
+            _blocking_backend_node(node["exception_type"], node["message"],
+                                   [frame["function"] for frame in node["frames"]])
+            or blocked(node["cause"]) or blocked(node["context"]))
+    if blocked(raw["raw_failure"]["exception"]):
+        raise ValueError("retained validation/configuration error has no attempt deferral authority")
+    return deepcopy(dict(value))
+
+
+def retain_unsuccessful_attempt_failure(
+    output: Path, context: AdmissionContext, *, candidate_id: str, error: Exception,
+    action: Mapping[str, Any], started_at: str, runtime: Mapping[str, Any],
+    inputs: Mapping[str, Path] | None = None,
+) -> Path:
+    from .rapid_attempt_failure_evidence import retain_attempt_failure
+    context.attempt_not_before_utc
+    if blocking_backend_failure(error):
+        raise ValueError("validation/configuration errors cannot become unsuccessful attempt deferrals")
+    refs = {key: import_evidence(context.root, path) for key, path in (inputs or {}).items()}
+    _attempt_supports(context, candidate_id, refs, action)
+    output = Path(output)
+    durable_create(output.with_name("attempt-inputs.json"), _json({
+        "candidate_id": candidate_id, "provenance_sha256": context.provenance_sha256,
+        "action": action, "inputs": refs,
+    }))
+    observation = output.with_name("attempt-observation.json")
+    retain_attempt_failure(observation, error=error, action=action, started_at=started_at,
+        runtime=runtime, execution_binding=context.execution_binding,
+        expected_implementation_hashes=context.mounted_module_hashes[ATTEMPT_GROUP],
+        not_before_utc=context.attempt_not_before_utc, attempt_root=output.parent)
+    durable_create(output, _json(_bind(ATTEMPT_FAILURE_TYPE, {
+        "candidate_id": candidate_id, "provenance_sha256": context.provenance_sha256,
+        "selection_amendment_sha256": context.selection_amendment_sha256,
+        "action": action, "inputs": refs, "attempt_observation": evidence_reference(context.root, observation),
+        "completed_at": _now(), "scientific_credit": False,
+    })))
+    unsuccessful_attempt_failure_facts(output, context, candidate_id)
+    return output
+
+
+def unsuccessful_attempt_failure_facts(path: Path, context: AdmissionContext, candidate_id: str) -> dict[str, Any]:
+    from .rapid_attempt_failure_evidence import verify_attempt_failure
+    value = _unpack(_read(path), ATTEMPT_FAILURE_TYPE)
+    if (set(value) != {"candidate_id", "provenance_sha256", "selection_amendment_sha256", "action", "inputs",
+                       "attempt_observation", "completed_at", "scientific_credit"}
+        or value["candidate_id"] != candidate_id or value["provenance_sha256"] != context.provenance_sha256
+        or value["selection_amendment_sha256"] != context.selection_amendment_sha256
+        or value["scientific_credit"] is not False):
+        raise ValueError("unsuccessful attempt wrapper changed its independent context")
+    page, screen, probe = _attempt_supports(context, candidate_id, value["inputs"], value["action"])
+    observation = _child(context.root, value["attempt_observation"])
+    facts = verify_attempt_failure(observation,
+        execution_binding=context.execution_binding,
+        expected_implementation_hashes=context.mounted_module_hashes[ATTEMPT_GROUP],
+        not_before_utc=context.attempt_not_before_utc, expected_action=value["action"])
+    retained_inputs = _load(_read(observation.with_name("attempt-inputs.json")))
+    if _json(retained_inputs) != _json({
+        "candidate_id": candidate_id, "provenance_sha256": context.provenance_sha256,
+        "action": value["action"], "inputs": value["inputs"],
+    }):
+        raise ValueError("unsuccessful attempt wrapper inputs differ from the actual retained operation")
+    if (_json(facts["runtime_source"]) != _json(context.expected_runtime_source)
+        or not _utc(facts["completed_at"]) <= _utc(value["completed_at"]) <= datetime.now(UTC)):
+        raise ValueError("unsuccessful attempt wrapper changed runtime or actual completion")
+    facts.update({"profile_sha256": profile.FROZEN_V5_PROFILE_SHA256,
+        "selection_amendment_sha256": context.selection_amendment_sha256,
+        "candidate": context.candidate(candidate_id),
+        "navigation_receipt_sha256": page["navigation_receipt_sha256"] if page else (
+            probe["navigation_receipt_sha256"] if probe else None),
+        "selected_page_h3_receipt_sha256": page["receipt_sha256"] if page else None,
+        "automated_site_screen_receipt_sha256": screen["receipt_sha256"] if screen else None,
+        "controlled_page_probe": probe})
+    return validate_unsuccessful_attempt_failure_facts(facts, candidate=context.candidate(candidate_id),
+        execution_binding=context.execution_binding, selection_amendment_sha256=context.selection_amendment_sha256,
+        not_before_utc=context.attempt_not_before_utc, selected_page_h3_proof=page, automated_site_screen=screen)
+
+
+class ObservedLiveBackend:
+    """Observe only backend calls; input and post-call proof checks stay outside."""
+
+    def __init__(self, backend: Any, context: AdmissionContext, candidate_id: str, attempt: Path,
+                 action: Mapping[str, Any], inputs: Mapping[str, Path] | None = None) -> None:
+        self.backend, self.context, self.candidate_id = backend, context, candidate_id
+        self.attempt, self.action, self.inputs = attempt, action, inputs
+
+    def _call(self, callback: Any, *args: Any, **kwargs: Any) -> Any:
+        from .rapid_attempt_failure_evidence import begin_attempt_action
+        runtime = begin_attempt_action(self.context.execution_binding,
+            self.context.mounted_module_hashes[ATTEMPT_GROUP], self.context.attempt_not_before_utc)
+        from .rapid_page_evidence import _validate_runtime
+        if _json(_validate_runtime(runtime, self.context.execution_binding)) != _json(self.context.expected_runtime_source):
+            raise ValueError("live backend runtime differs from independent context")
+        started = _now()
+        try:
+            result = callback(*args, **kwargs)
+        except Exception as error:
+            if blocking_backend_failure(error):
+                raise
+            proof = retain_unsuccessful_attempt_failure(self.attempt / "attempt-failure.json", self.context,
+                candidate_id=self.candidate_id, error=error, action=self.action,
+                started_at=started, runtime=runtime, inputs=self.inputs)
+            raise ObservedUnsuccessfulLiveAttempt(proof) from error
+        if begin_attempt_action(self.context.execution_binding,
+            self.context.mounted_module_hashes[ATTEMPT_GROUP], self.context.attempt_not_before_utc) != runtime:
+            raise ValueError("live backend runtime changed after successful operation")
+        return result
+
+    def discover_navigation(self, domain: str) -> Any:
+        return self._call(self.backend.discover_navigation, domain)
+
+    def discover(self, url: str, approved: Sequence[str]) -> Any:
+        return self._call(self.backend.discover, url, approved)
+
+    def prepare(self, workload_id: str, url: str, approved: Sequence[str], output_root: Path,
+                *, origin_ip_pins: Mapping[str, str]) -> Any:
+        from .class_acquisition import _validated_frozen_origin_ip_pins, _regular_directory
+        _regular_directory(output_root.parent)
+        if output_root.exists() or output_root.is_symlink():
+            _regular_directory(output_root)
+        _validated_frozen_origin_ip_pins(approved, origin_ip_pins)
+        return self._call(self.backend.prepare, workload_id, url, approved, output_root, origin_ip_pins=origin_ip_pins)
+
+
 def _full_graph(manifest: Mapping[str, Any]) -> dict[str, Any]:
     preparation = manifest["preparation"]
     return {
@@ -990,7 +1300,7 @@ def prepare_site(
 ) -> Path:
     """Run the existing live full-graph preparer in one retained, retryable attempt."""
     page = _page_facts(context, candidate_id, navigation, page_h3)
-    if context.selection_amendment_revision in {2, 3}:
+    if context.selection_amendment_revision in {2, 3, 4}:
         if human_review is not None or automated_screen is None:
             raise ValueError("revision 2 preparation requires its distinct automated screen")
         screen = verify_automated_site_screen(automated_screen, context, candidate_id=candidate_id)
@@ -1017,11 +1327,15 @@ def prepare_site(
     }
     durable_create(attempt / "inputs.json", _json(references))
     backend = backend or ExistingAcquisitionBackend()
+    if context.selection_amendment_revision == 4:
+        backend = ObservedLiveBackend(backend, context, candidate_id, attempt,
+            _attempt_action(context.candidate(candidate_id), page),
+            {"navigation": navigation, "page_h3": page_h3, "automated_screen": automated_screen})
     action_started_at = _now()
     action_runtime = None
     collector_runtime = None
     try:
-        if context.selection_amendment_revision in {2, 3}:
+        if context.selection_amendment_revision in {2, 3, 4}:
             action_runtime = begin_page_policy_action(context)
         if context.selection_amendment_revision == 3:
             collector_runtime = begin_operational_collector_action(context)
@@ -1054,6 +1368,9 @@ def prepare_site(
         })
         durable_create(attempt / "preparation.json", _json(receipt))
     except Exception as error:
+        if isinstance(error, ObservedUnsuccessfulLiveAttempt):
+            write_checkpoint(context)
+            return error.proof
         if collector_runtime is not None:
             from .rapid_collector_failure_evidence import is_collector_failure
             if is_collector_failure(error):
@@ -1074,7 +1391,8 @@ def prepare_site(
                     raise
                 write_checkpoint(context)
                 return output
-        if action_runtime is not None and is_page_policy_failure(error, action_kind="complete-graph-preparation"):
+        if (context.selection_amendment_revision in {2, 3} and action_runtime is not None
+            and is_page_policy_failure(error, action_kind="complete-graph-preparation")):
             try:
                 output = retain_page_policy_failure(
                     attempt / "page-policy-failure.json", context, candidate_id=candidate_id, error=error,
@@ -1109,7 +1427,7 @@ def _preparation_facts(path: Path, context: AdmissionContext, candidate_id: str)
                       "full_resource_graph", "origin_convergence", "implementation_hashes", "document_response",
                       "completed_at", "facts", "scientific_credit"}:
         raise ValueError("preparation receipt fields changed")
-    safety_key = "automated_screen" if context.selection_amendment_revision in {2, 3} else "human_review"
+    safety_key = "automated_screen" if context.selection_amendment_revision in {2, 3, 4} else "human_review"
     if (value["candidate_id"] != candidate_id or value["provenance_sha256"] != context.provenance_sha256
         or value["scientific_credit"] is not False or _utc(value["completed_at"]) < context.not_before_utc
         or value["implementation_hashes"] != context.mounted_module_hashes["preparation"]
@@ -1120,7 +1438,7 @@ def _preparation_facts(path: Path, context: AdmissionContext, candidate_id: str)
         _child(context.root, value["inputs"][key]) for key in ("navigation", "page_h3", safety_key)
     )
     page = _page_facts(context, candidate_id, navigation, page_h3)
-    if context.selection_amendment_revision in {2, 3}:
+    if context.selection_amendment_revision in {2, 3, 4}:
         review = verify_automated_site_screen(review_path, context, candidate_id=candidate_id)
         if review["selected_page_h3_receipt_sha256"] != page["receipt_sha256"]:
             raise ValueError("prepared page automated screen differs from exact page")
@@ -1191,17 +1509,18 @@ def browser_policy_failure_facts(path: Path, context: AdmissionContext, candidat
 
 
 def _root_allows_policy_progression(context: AdmissionContext, screen: Mapping[str, Any]) -> bool:
-    if context.selection_amendment_revision != 3:
+    if context.selection_amendment_revision not in {3, 4}:
         return screen["outcome"] == "known-valid"
     from .rapid_selection_amendment import root_screen_allows_browser_progression
-    return root_screen_allows_browser_progression(screen, revision=3)
+    return root_screen_allows_browser_progression(screen, revision=context.selection_amendment_revision)
 
 
 def _terminal_facts(value: Mapping[str, Any], context: AdmissionContext) -> dict[str, Any]:
     fields = {"candidate_id", "provenance_sha256", "root_surveys", "human_review",
               "reviewed_url", "preparation", "defer_root", "facts", "completed_at", "scientific_credit"}
-    revision_two = context.selection_amendment_revision in {2, 3}
-    revision_three = context.selection_amendment_revision == 3
+    revision_two = context.selection_amendment_revision in {2, 3, 4}
+    revision_three = context.selection_amendment_revision in {3, 4}
+    revision_four = context.selection_amendment_revision == 4
     if revision_two:
         fields |= {"automated_screen"}
     valid_fields = (fields, fields | {"browser_policy_failure"}, fields | {"page_policy_failure"}) if revision_two else (
@@ -1209,6 +1528,8 @@ def _terminal_facts(value: Mapping[str, Any], context: AdmissionContext) -> dict
     )
     if revision_three:
         valid_fields += (fields | {"collector_failure"},)
+    if revision_four:
+        valid_fields += (fields | {"attempt_failure"},)
     if set(value) not in valid_fields:
         raise ValueError("site terminal fields changed")
     candidate = context.candidate(value["candidate_id"])
@@ -1222,6 +1543,8 @@ def _terminal_facts(value: Mapping[str, Any], context: AdmissionContext) -> dict
     browser_reference = value.get("browser_policy_failure")
     page_failure_reference = value.get("page_policy_failure")
     collector_reference = value.get("collector_failure")
+    attempt_reference = value.get("attempt_failure")
+    attempt_failure = None
     auto_reference = value.get("automated_screen")
     if revision_two and (value["human_review"] is not None or value["reviewed_url"] is not None):
         raise ValueError("revision 2 terminal must retain automated screen separately from human review")
@@ -1231,10 +1554,13 @@ def _terminal_facts(value: Mapping[str, Any], context: AdmissionContext) -> dict
         raise ValueError("browser policy terminal lacks its exact retained failure proof")
     if "collector_failure" in value and collector_reference is None:
         raise ValueError("collector terminal lacks its exact fresh operational proof")
+    if "attempt_failure" in value and attempt_reference is None:
+        raise ValueError("unsuccessful attempt terminal lacks its fresh observation")
     if browser_reference is not None and context.selection_amendment_bytes is None:
         raise ValueError("browser policy deferral requires a prospective selection amendment")
     if automatic is not None:
         if (browser_reference is not None or page_failure_reference is not None or collector_reference is not None
+            or attempt_reference is not None
             or auto_reference is not None
             or value["root_surveys"] or any(value[key] is not None for key in ("human_review", "reviewed_url", "preparation"))):
             raise ValueError("automatic safety exclusion must precede live page work")
@@ -1251,7 +1577,31 @@ def _terminal_facts(value: Mapping[str, Any], context: AdmissionContext) -> dict
                                          candidate_id=candidate["candidate_id"], reviewed_url=value["reviewed_url"])
         elif value["reviewed_url"] is not None:
             raise ValueError("review URL lacks its explicit human receipt")
-        if browser_reference is not None:
+        if attempt_reference is not None:
+            if (not revision_four or not _root_allows_policy_progression(context, screen)
+                or value["preparation"] is not None or review is not None or value["defer_root"]):
+                raise ValueError("unsuccessful attempt lacks its independently controlled search context")
+            failure_path = _child(context.root, attempt_reference)
+            attempt_failure = unsuccessful_attempt_failure_facts(failure_path, context, candidate["candidate_id"])
+            wrapper = _unpack(_read(failure_path), ATTEMPT_FAILURE_TYPE)
+            if attempt_failure["action"]["kind"] == "complete-graph-preparation":
+                if auto_reference is None:
+                    raise ValueError("unsuccessful preparation terminal lacks its separate automatic screen")
+                automatic_screen = verify_automated_site_screen(_child(context.root, auto_reference), context,
+                    candidate_id=candidate["candidate_id"])
+                page = _page_facts(context, candidate["candidate_id"], *(
+                    _child(context.root, wrapper["inputs"][key]) for key in ("navigation", "page_h3")))
+                if automatic_screen["receipt_sha256"] != attempt_failure["automated_site_screen_receipt_sha256"]:
+                    raise ValueError("unsuccessful preparation terminal changed its automatic screen")
+            elif auto_reference is not None:
+                raise ValueError("unsuccessful navigation/page probe cannot claim a later safety screen")
+            if not _utc(attempt_failure["completed_at"]) <= _utc(value["completed_at"]) <= datetime.now(UTC):
+                raise ValueError("unsuccessful attempt terminal predates its actual observation")
+            from .rapid_selection_amendment import ATTEMPT_FAILURE_DEFERRAL_POLICY, ATTEMPT_FAILURE_DEFERRAL_REASON
+            outcome = ATTEMPT_FAILURE_DEFERRAL_REASON
+            triage = {"policy": ATTEMPT_FAILURE_DEFERRAL_POLICY,
+                      "reason": ATTEMPT_FAILURE_DEFERRAL_REASON, "safety_reason": None}
+        elif browser_reference is not None:
             if (not _root_allows_policy_progression(context, screen) or value["preparation"] is not None
                 or review is not None or value["defer_root"] or auto_reference is not None):
                 raise ValueError("browser policy deferral must retain its controlled root and separate failure proof")
@@ -1356,8 +1706,9 @@ def _terminal_facts(value: Mapping[str, Any], context: AdmissionContext) -> dict
         **({"automated_site_screen": automatic_screen} if revision_two else {}),
         **({"page_policy_failure": page_failure} if page_failure is not None else {}),
         **({"operational_collector_failure": collector_failure} if collector_failure is not None else {}),
+        **({"unsuccessful_attempt_failure": attempt_failure} if attempt_failure is not None else {}),
     }
-    if triage is not None and browser_failure is None and page_failure is None and collector_failure is None:
+    if triage is not None and browser_failure is None and page_failure is None and collector_failure is None and attempt_failure is None:
         profile._validated_v5_triage(triage, candidate, screen, review)
     if page is not None:
         profile._validated_v5_selected_page_h3_proof(page, candidate)
@@ -1371,14 +1722,17 @@ def produce_site_terminal(
     browser_policy_failure: Path | None = None,
     automated_screen: Path | None = None, page_policy_failure: Path | None = None,
     collector_failure: Path | None = None,
+    attempt_failure: Path | None = None,
 ) -> Path:
     if browser_policy_failure is not None and context.selection_amendment_bytes is None:
         raise ValueError("browser policy deferral requires a prospective selection amendment")
-    if (automated_screen is not None or page_policy_failure is not None) and context.selection_amendment_revision not in {2, 3}:
+    if (automated_screen is not None or page_policy_failure is not None) and context.selection_amendment_revision not in {2, 3, 4}:
         raise ValueError("automated screen and typed page-policy deferral require selection amendment revision 2")
-    if collector_failure is not None and context.selection_amendment_revision != 3:
+    if collector_failure is not None and context.selection_amendment_revision not in {3, 4}:
         raise ValueError("collector deferral requires selection amendment revision 3")
-    if sum(path is not None for path in (browser_policy_failure, page_policy_failure, collector_failure)) > 1:
+    if attempt_failure is not None and context.selection_amendment_revision != 4:
+        raise ValueError("unsuccessful attempt deferral requires selection amendment revision 4")
+    if sum(path is not None for path in (browser_policy_failure, page_policy_failure, collector_failure, attempt_failure)) > 1:
         raise ValueError("terminal cannot combine separate browser, page-policy and collector failures")
     attempt = _new_attempt(context, candidate_id, "seal-terminal")
     value = {
@@ -1391,12 +1745,14 @@ def produce_site_terminal(
     }
     if browser_policy_failure is not None:
         value["browser_policy_failure"] = import_evidence(context.root, browser_policy_failure)
-    if context.selection_amendment_revision in {2, 3}:
+    if context.selection_amendment_revision in {2, 3, 4}:
         value["automated_screen"] = import_evidence(context.root, automated_screen) if automated_screen else None
     if page_policy_failure is not None:
         value["page_policy_failure"] = import_evidence(context.root, page_policy_failure)
     if collector_failure is not None:
         value["collector_failure"] = import_evidence(context.root, collector_failure)
+    if attempt_failure is not None:
+        value["attempt_failure"] = import_evidence(context.root, attempt_failure)
     try:
         value["facts"] = _terminal_facts(value, context)
         output = attempt / "terminal.json"
@@ -1448,6 +1804,7 @@ def acquisition_status(context: AdmissionContext) -> dict[str, Any]:
                 automated_screen = attempt / "automated-screen.json"
                 policy_failure = attempt / "page-policy-failure.json"
                 collector_failure = attempt / "collector-failure.json"
+                attempt_failure = attempt / "attempt-failure.json"
                 state = "interrupted-or-pending"
                 if terminal.exists():
                     facts = verify_site_terminal(terminal, context)
@@ -1463,6 +1820,8 @@ def acquisition_status(context: AdmissionContext) -> dict[str, Any]:
                         state = "zero-credit-page-policy-screen-deferred"
                     elif facts.get("triage", {}).get("reason") == "operational-collector-screen-deferred":
                         state = "zero-credit-retryable-operational-collector-screen-deferred"
+                    elif facts.get("triage", {}).get("reason") == "unsuccessful-live-attempt-screen-deferred":
+                        state = "zero-credit-retryable-unsuccessful-live-attempt-screen-deferred"
                 elif preparation.exists():
                     _preparation_facts(preparation, context, directory.name)
                     state = "prepared-needs-terminal"
@@ -1471,6 +1830,9 @@ def acquisition_status(context: AdmissionContext) -> dict[str, Any]:
                     if error_value.get("retryable") is not True or error_value.get("scientific_credit") is not False:
                         raise ValueError("operational error has gained scientific credit")
                     state = "retryable-operational-error"
+                elif attempt_failure.exists():
+                    unsuccessful_attempt_failure_facts(attempt_failure, context, directory.name)
+                    state = "failed-attempt-needs-explicit-terminal"
                 elif collector_failure.exists():
                     operational_collector_failure_facts(collector_failure, context, directory.name)
                     state = "collector-failure-needs-explicit-terminal"
@@ -1534,6 +1896,7 @@ def acquisition_status(context: AdmissionContext) -> dict[str, Any]:
                     **({"automated_screen": evidence_reference(context.root, automated_screen)} if automated_screen.exists() else {}),
                     **({"page_policy_failure": evidence_reference(context.root, policy_failure)} if policy_failure.exists() else {}),
                     **({"collector_failure": evidence_reference(context.root, collector_failure)} if collector_failure.exists() else {}),
+                    **({"attempt_failure": evidence_reference(context.root, attempt_failure)} if attempt_failure.exists() else {}),
                 })
     prefix = []
     for candidate in candidates:
@@ -1547,7 +1910,7 @@ def acquisition_status(context: AdmissionContext) -> dict[str, Any]:
         "terminal_count": len(terminals), "admitted_site_count": admitted,
         "next_candidate": next_candidate, "attempts": records,
         "pending_requirement": (("root-survey-or-navigation-exact-page-h3-automated-url-domain-screen-and-full-graph-preparation"
-                                  if context.selection_amendment_revision in {2, 3} else
+                                  if context.selection_amendment_revision in {2, 3, 4} else
                                   "root-survey-or-human-review-navigation-exact-page-h3-and-full-graph-preparation") if next_candidate else None),
         "formal_accepted_trace_count": 0, "formal_trace_target": 16_000,
         "capture_authority": "none-site-acquisition-only",

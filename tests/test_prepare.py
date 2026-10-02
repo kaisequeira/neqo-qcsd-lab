@@ -1388,6 +1388,87 @@ def test_actual_operational_failure_never_becomes_typed_policy_deferral(operatio
     assert type(raised.value) is (prepare.PreparationError if operational == "panic" else prepare.RecoverablePreparationError)
 
 
+def test_unexpected_live_failure_retains_actual_bytes_and_original_error(tmp_path, monkeypatch):
+    install_fake_preparation(monkeypatch)
+    actual_run = prepare.run
+    source = prepare.source_metadata()
+    raw_source = json.dumps(source, indent=2).encode()
+    source_path = tmp_path / "runtime-source.json"
+    source_path.write_bytes(raw_source)
+    monkeypatch.setenv("QCSD_LAB_SOURCE_METADATA", str(source_path))
+    error = OSError("unexpected external runner failure")
+    original_directory = None
+    actual_bytes = {}
+
+    def fail_live_run(command, **options):
+        nonlocal original_directory, actual_bytes
+        if command[1] != "run":
+            return actual_run(command, **options)
+        output = Path(command[command.index("--output-dir") + 1])
+        output.mkdir()
+        (output / "run.json").write_bytes(b'{"actual":"incomplete"}\n')
+        (output / "packets.csv").write_bytes(b"actual partial packet bytes\x00\xff\n")
+        (output / "schedule.csv").write_bytes(b"actual partial schedule\n")
+        options["log"].write_bytes(b"actual child log before failure\n")
+        original_directory = output.parent
+        actual_bytes = {path.relative_to(original_directory).as_posix(): path.read_bytes()
+                        for path in original_directory.rglob("*") if path.is_file()}
+        raise error
+
+    monkeypatch.setattr(prepare, "run", fail_live_run)
+    with pytest.raises(OSError) as raised:
+        prepare.prepare_workload(
+            "unexpected-live-failure", "https://page.test/", ["https://page.test", "https://cdn.test"],
+            output_root=tmp_path, stability_interval_seconds=0, require_complete_coverage=True,
+        )
+    assert raised.value is error
+    destination = tmp_path / "unexpected-live-failure-failure-evidence"
+    assert error.preparation_failure_diagnostics == {"state": "retained", "path": str(destination)}
+    assert original_directory is not None and not original_directory.exists()
+    for relative, raw in actual_bytes.items():
+        assert (destination / "artifacts" / relative).read_bytes() == raw
+    metadata = json.loads((destination / "diagnostics.json").read_bytes())
+    assert metadata["files"] == {relative: {"sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw)}
+                                 for relative, raw in actual_bytes.items()}
+    assert metadata["capture_source_before"] == metadata["capture_source_after"] == source
+    assert metadata["runtime_source_raw_sha256"] == hashlib.sha256(raw_source).hexdigest()
+    assert (destination / "runtime-source.json").read_bytes() == raw_source
+    assert (destination / "producer-prepare.py").read_bytes() == Path(prepare.__file__).read_bytes()
+    assert json.loads((destination / "discovery.json").read_bytes())["source_url"] == "https://page.test/"
+    assert datetime.fromisoformat(metadata["started_at"]) <= datetime.fromisoformat(metadata["completed_at"])
+    assert metadata["scientific_credit"] is False and metadata["failure_classification"] == "none-diagnostic-only"
+    assert not hasattr(error, "evidence") and not (tmp_path / "unexpected-live-failure.json").exists()
+
+
+def test_diagnostic_storage_failure_preserves_original_directory_and_exception(tmp_path, monkeypatch):
+    original = RuntimeError("original live action failed")
+
+    def cannot_retain(*args, **kwargs):
+        raise OSError("diagnostic storage unavailable")
+
+    monkeypatch.setattr(prepare, "_retain_preparation_diagnostics", cannot_retain)
+    with pytest.raises(RuntimeError) as raised:
+        with prepare._retained_preparation_directory(
+            tmp_path, workload_id="storage-failure", source_url="https://page.test/", discovery=discovered(),
+            capture_source={"actual": "source"}, started_at=datetime.now().isoformat(),
+        ) as directory:
+            (directory / "actual.log").write_bytes(b"retained original runner bytes\n")
+            raise original
+    assert raised.value is original
+    state = original.preparation_failure_diagnostics
+    assert state["state"] == "original-directory-preserved-retention-incomplete"
+    assert (Path(state["path"]) / "actual.log").read_bytes() == b"retained original runner bytes\n"
+    assert state["retention_exception_type"] == "OSError"
+    assert state["retention_message"] == "diagnostic storage unavailable"
+    assert any("raw directory preserved" in note for note in original.__notes__)
+
+
+def test_preflight_argument_failure_produces_no_live_diagnostic_authority(tmp_path):
+    with pytest.raises(ValueError, match="source URL is not absolute HTTPS"):
+        prepare.prepare_workload("invalid-workload", "http://page.test/", ["https://page.test"], output_root=tmp_path)
+    assert not list(tmp_path.iterdir())
+
+
 def _actual_render_failure_evidence():
     discovery = discovered()
     render = deepcopy(discovery.render_observation)

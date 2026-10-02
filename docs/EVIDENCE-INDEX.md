@@ -246,8 +246,134 @@ path, not a promotion of context 004's error. A separate audit reopened all
 18 closed files (9,009,835 bytes), the source/client bindings, retained
 exception context and all three page-support receipts. The explicit collector
 terminal then sealed successfully with empty stderr. Context 005 now has five
-verified screening decisions; Pinterest navigation is next. Site and trace
+verified screening decisions. Pinterest navigation subsequently stopped with
+an unsealed operational error. Site and trace
 credit remain zero.
+
+### Pinterest navigation operational failure, 3 October 2026
+
+Context 005, candidate order 6 (`ca.pinterest.com`), actually ran plan
+`operation-plans/plan-000008/navigate.json` inside the bound prepare image.
+The Docker action started at `2026-10-02T17:39:50.760859+00:00` and ended at
+`17:40:04.099910+00:00`, exit 2. Its empty stdout and retained stderr show
+`TerminalProbePolicyError: page-safety-rejected:captcha-or-challenge-widget`.
+The host-local context is
+`../diagnostic-rehearsals/rapid-v5-site-acquisition-20261003-005/`.
+Execution-record SHA-256 is
+`a9b18378b70c1a2328bbd7c1e8ac25aa54ac290e98c9e9bd067404be8f15a488`;
+the attempt's `operational-error.json` SHA-256 is
+`790c5e73c90dae9a33c41012ebb1a22ccab9ae1305476c06a3a0f2687cad2b24`.
+
+The attempt retains only intent and that operational error. No rendered page,
+selector matches or challenge visibility evidence survived. The existing
+detector includes mere script presence, so no active CAPTCHA claim is made.
+Revision 3 has no seal route for this error. It remains unsealed, retryable
+operational history with **zero site and trace credit**, and context 005 is
+stopped. A new observer must collect a fresh attempt under prospective rules;
+this old message cannot gain their authority.
+
+### Rapid selection revision 4, 3 October 2026
+
+The create-only [revision 4 receipt](../config/curated-sources/crux73-tranco600-rapid-v5-selection-v4.json)
+was published at `2026-10-02T18:13:34.038260Z`, raw/canonical SHA-256
+`0808c27b60b229de938bd8a3ae26aca615455c3c4978130b4792041787420a28`.
+It binds the actual revision 3 parent and keeps **50 × 5 × 64 = 16,000**,
+complete admitted graphs and the separate 50-trace shakedown unchanged.
+One actual unsuccessful navigation, selected-page HTTP/3 probe or complete
+preparation call can now finish screening with **zero site and trace credit**.
+The proof retains the actual exception and a closed inventory of available
+attempt files, under independently checked source and runtime bindings.
+It records an unsuccessful operation, not a visible challenge, particular
+page-content defect or whole-domain verdict. A negative selected-page probe
+also needs passing before/after controls. Input, runtime, source, configuration,
+dependencies, permission and post-call verification failures remain blocking.
+
+Failed preparation now retains actual raw logs, probe inputs, schedules,
+manifests and available packet data before temporary cleanup. The diagnostic
+copy does not classify the failure or grant authority by itself. Its source
+SHA-256 is `ca490f2a160f186baeff8e153906f83ff5d64577823475f0a06c7e78495c8fd4`;
+11 focused retention and compatibility cases passed. The final observer source
+SHA-256 is `84ef4c6f1bfae747674208b6ac6d0ab4d7e85d95222a6fb401865b759a364aba`;
+21 focused cases passed in 79 seconds. No image or client rebuild was needed.
+
+The integrated admission/CLI checks passed nine distinct critical v4 cases,
+including real explicit sealing, blocking validation causes and retained
+typed primary errors. Sixteen distinct amendment gates passed, including
+historical v1/v2/v3 receipt rederivation and preservation of the full target.
+The frozen admission SHA-256 is
+`96b7f4f71af3ad1d6753be6e742ee222d718521be0b26d04e2de3bebd309a4c6`;
+CLI SHA-256 is
+`df74636216dfe8367dfa25d3c29fe871cac85b60fbc464086e8db27d3b0157f0`;
+amendment source SHA-256 is
+`e1320b84048350524fbbe2f14212a24e87ec6734934a76253b0baaeecad291ab`.
+These focused engineering checks add no live site or capture credit.
+
+Fresh host-local context
+`../diagnostic-rehearsals/rapid-v5-site-acquisition-20261003-006/`
+has provenance SHA-256
+`a2d728946642e8706b701f08d4ae8a08d550a3e3bfbbca42b7014b1cce1516af`
+and launch-manifest SHA-256
+`a9629ef6c000132a431de2260504308b0042263d4f26dd145db0a1e1e05dd986`.
+Initialization completed at `2026-10-02T18:15:00.045215Z`, exit 0 with empty
+stderr; `init-execution.json` SHA-256 is
+`29f12053911a42aa353d806805cf3f521b6feb3f700ea04c4d1a7f99869814e6`.
+Its eight frozen groups include 18 bindings for the unsuccessful-attempt
+observer, including the actual client. Positive root, navigation and exact-page
+observations may reopen only under unchanged groups. Fresh failure observations
+must postdate publication; context 005's Pinterest error remains unsealed.
+
+The first bounded runner completed **20 operations**, exit 0 at its maximum
+action count. Its 19 additional planning records are saved in
+`private-runner-executions/20261002T181623.143397Z/`; actual action outputs,
+stderr and execution records are in `operation-plans/plan-000001/` through
+`plan-000020/`. Twenty actions are not twenty completed candidates. Independent
+status reopening at **2026-10-02T18:25:41.002979Z** confirmed **eight sealed
+zero-credit decisions and zero admitted sites**. Candidate 9,
+`www.futura-sciences.com`, had passed navigation and still needed its exact-page
+HTTP/3 check. This timestamp does not claim later activity. Study shakedown and
+formal counts remain **0/50** and **0/16,000**.
+
+The fresh Weerplaza observation ran from `2026-10-02T18:16:31.668002Z` to
+`18:16:51.396892Z`. Independent native reopening passed for all 18 source/client
+bindings and 22 retained files (9,279,748 bytes), including the actual
+`NonReplayableEgressPolicyError`. No DOM reason or failing document is inferred.
+The files are under
+`acquisition/attempts/curated-d4293e19645b22a65d58/attempt-000001/`:
+`attempt-observation.json` SHA-256
+`451f1aa2b14769c2c0a3cd16ef520835c23361a085de0aa4b6d9f6a898922c85`;
+`attempt-failure.json` SHA-256
+`ebb22eaa04a62ac82dc0716d95004525970c60cbc45ccd4d94190beba276970a`.
+The independently reopened explicit terminal at
+`attempt-000002/terminal.json`, completed at `2026-10-02T18:16:57.668393Z`,
+has SHA-256 `2aa438a6004911946f7ebf617cb44696860349fc807154d7cc84742306b40b2a`.
+This is a fresh zero-credit decision; all earlier contexts and failures retain
+their original rules and bytes. No separate audit-report file was created.
+
+Additional independent reopening confirmed these fresh revision-4 failures:
+
+- **Alibaba preparation**, `2026-10-02T18:20:23.184438Z`–`18:20:31.878195Z`:
+  actual `CdpTargetIntegrityError` during origin convergence, with 18 source/client
+  bindings and 23 closed files. The explicit terminal SHA-256 is
+  `ff5e967163b58923109b84e13c529aaf297d6a5ce261c5227dd268edb360bf49`.
+  This attempt failed before full-graph preparation; no site was made ineligible.
+- **Pinterest navigation**, `2026-10-02T18:20:58.017935Z`–`18:21:06.730945Z`:
+  actual `TerminalProbePolicyError` with the challenge-widget detector message,
+  18 source/client bindings and 22 closed files. The explicit terminal SHA-256
+  is `9b23cd7f0adfccf67449f2aa7ca4fb87327faa8787a3d192e50ab72bbabff973`.
+  The saved error supplies no inferred DOM evidence or visible-challenge verdict.
+- **Futura preparation**, `2026-10-02T18:26:58.191705Z`–`18:27:34.404881Z`:
+  actual `PassiveRenderPolicyError`, reporting that passive render did not quiesce
+  within 30,000 ms after load. Its navigation, controlled exact-page H3 and new
+  automatic screen had passed. All 18 source/client bindings and 23 closed files
+  reopened. Wrapper SHA-256 is
+  `b10949e1b9c4bd64792d525d41aad251dfed0b1f0b9748d2f9239770f99358b3`;
+  explicit terminal SHA-256 is
+  `d8a4b1ad2192ef87fa5f24680986c9cb76d838530470f5852b9b277948be72cc`.
+
+Independent current-status reopening at **2026-10-02T18:29:53.888910Z** confirmed
+**nine sealed zero-credit decisions and zero admitted sites**, with candidate
+10, `poki.com`, next. The bounded second batch was continuing. These dated
+counts exclude later activity; study shakedown and formal credit remain zero.
 
 ### Clean fallback first screen, 3 October 2026
 

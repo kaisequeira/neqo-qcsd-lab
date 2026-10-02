@@ -296,9 +296,12 @@ def _amended_context(context, tmp_path, *, revision=1):
     paths = {key: admission._child(context.root, ref) for key, ref in provenance["inputs"].items()}
     modules = {group: {name: admission._child(context.root, ref) for name, ref in sources.items()}
                for group, sources in provenance["module_sources"].items()}
-    if revision == 3:
+    if revision >= 3:
         from qcsd_lab import rapid_collector_failure_evidence as collector
         modules[admission.COLLECTOR_GROUP] = collector.implementation_sources()
+    if revision == 4:
+        from qcsd_lab import rapid_attempt_failure_evidence as observer
+        modules[admission.ATTEMPT_GROUP] = observer.implementation_sources()
     return admission.initialize_acquisition(
         tmp_path / "amended-acquisition", profile_path=paths["profile"], source=paths["source"],
         source_receipt=paths["source_receipt"], catalogue=paths["catalogue"],
@@ -734,4 +737,147 @@ def test_v3_full_graph_admission_keeps_16000_target_and_original_support_reopeni
     assert facts["outcome"] == "admitted" and facts["admission"]["cross_origin_resource_count"] == 1
     assert facts["admission"]["full_resource_graph_sha256"]
     assert "operational_collector_failure" not in facts
+
+
+def test_v4_navigation_actual_failure_requires_seal_and_never_claims_challenge(context, tmp_path, monkeypatch):
+    roots = _root_logs(context, tmp_path)
+    amended = _amended_context(context, tmp_path, revision=4)
+    def fail(_self, _domain):
+        from qcsd_lab.class_acquisition import TerminalProbePolicyError
+        raise TerminalProbePolicyError("page-safety-rejected:captcha-or-challenge-widget")
+    monkeypatch.setattr(admission.ExistingAcquisitionBackend, "discover_navigation", fail)
+    proof = rapid_acquire._page_action(amended, amended.candidates[0]["candidate_id"], SimpleNamespace(command="navigate"))
+    assert proof.name == "attempt-failure.json"
+    facts = admission.unsuccessful_attempt_failure_facts(proof, amended, amended.candidates[0]["candidate_id"])
+    assert facts["failure_scope"] == "unsuccessful-live-backend-attempt"
+    assert facts["whole_domain_ineligible"] is False and facts["site_credit"] == 0
+    assert "challenge" not in facts["failure_scope"]
+    status = admission.acquisition_status(amended)
+    assert len(status["terminal_prefix"]) == 0
+    assert status["attempts"][amended.candidates[0]["candidate_id"]][0]["state"] == "failed-attempt-needs-explicit-terminal"
+    terminal = admission.produce_site_terminal(amended, candidate_id=amended.candidates[0]["candidate_id"],
+                                               root_surveys=roots, attempt_failure=proof)
+    actual = admission.verify_site_terminal(terminal, amended)
+    assert actual["outcome"] == "unsuccessful-live-attempt-screen-deferred" and actual["admission"] is None
+    assert admission.acquisition_status(amended)["formal_trace_target"] == 16000
+    raw = admission._unpack(proof.read_bytes(), admission.ATTEMPT_FAILURE_TYPE)
+    observation = admission._child(amended.root, raw["attempt_observation"])
+    retained = admission._load(observation.read_bytes())["payload"]
+    path = observation.parent / retained["artifacts"]["traceback"]["path"]
+    path.chmod(0o644)
+    path.write_bytes(path.read_bytes() + b"changed")
+    with pytest.raises(ValueError):
+        admission.verify_site_terminal(terminal, amended)
+
+
+@pytest.mark.parametrize("mode", ["invalid-return", "internal-source-guard"])
+def test_v4_post_call_navigation_or_internal_binding_validation_stays_blocking(context, tmp_path, monkeypatch, mode):
+    amended = _amended_context(context, tmp_path, revision=4)
+    def invalid(_self, _domain):
+        if mode == "invalid-return":
+            return "not NavigationDiscovery"
+        from qcsd_lab.class_acquisition import TerminalProbePolicyError
+        raise TerminalProbePolicyError("prepared workload source/image differs from acquisition runtime")
+    monkeypatch.setattr(admission.ExistingAcquisitionBackend, "discover_navigation", invalid)
+    with pytest.raises(ValueError):
+        rapid_acquire._page_action(amended, amended.candidates[0]["candidate_id"], SimpleNamespace(command="navigate"))
+    assert not any(amended.root.rglob("attempt-failure.json"))
+    assert admission.acquisition_status(amended)["attempts"][amended.candidates[0]["candidate_id"]][0]["state"] == "retryable-operational-error"
+
+
+def test_v4_preparation_backend_failure_keeps_exact_supports_and_postvalidation_blocks(context, tmp_path):
+    roots = _root_logs(context, tmp_path)
+    amended = _amended_context(context, tmp_path, revision=4)
+    candidate, navigation, h3, screen = _auto_page(amended, tmp_path)
+    proof = admission.prepare_site(amended, candidate_id=candidate["candidate_id"], navigation=navigation,
+        page_h3=h3, automated_screen=screen, backend=Backend(amended, error=True))
+    failure = admission.unsuccessful_attempt_failure_facts(proof, amended, candidate["candidate_id"])
+    assert failure["selected_page_h3_receipt_sha256"] == admission._sha(h3.read_bytes())
+    # A different valid screen observation cannot replace the actual
+    # failure's closed, hash-bound operation inputs in a resealed wrapper.
+    alternate = tmp_path / "alternate-automatic-screen.json"
+    admission.produce_automated_site_screen(alternate, amended, candidate_id=candidate["candidate_id"],
+        navigation=navigation, page_h3=h3, selected_page_ordinal=0)
+    changed = admission._unpack(proof.read_bytes(), admission.ATTEMPT_FAILURE_TYPE)
+    changed["inputs"]["automated_screen"] = admission.import_evidence(amended.root, alternate)
+    changed_proof = tmp_path / "resealed-operation.json"
+    changed_proof.write_bytes(admission._json(admission._bind(admission.ATTEMPT_FAILURE_TYPE, changed)))
+    with pytest.raises(ValueError, match="actual retained operation"):
+        admission.unsuccessful_attempt_failure_facts(changed_proof, amended, candidate["candidate_id"])
+    terminal = admission.produce_site_terminal(amended, candidate_id=candidate["candidate_id"],
+        root_surveys=roots, attempt_failure=proof, automated_screen=screen)
+    assert admission.verify_site_terminal(terminal, amended)["selected_page_h3_proof"]["outcome"] == "known-valid"
+    class InvalidManifest(Backend):
+        def prepare(self, *args, **kwargs):
+            result = super().prepare(*args, **kwargs)
+            result.prepared.path.write_bytes(admission._json({"schema_version": 999}))
+            return result
+    with pytest.raises(ValueError):
+        admission.prepare_site(amended, candidate_id=candidate["candidate_id"], navigation=navigation,
+            page_h3=h3, automated_screen=screen, backend=InvalidManifest(amended))
+    failed = sorted((amended.root / "attempts" / candidate["candidate_id"]).iterdir())[-1]
+    assert (failed / "operational-error.json").exists() and not (failed / "attempt-failure.json").exists()
+
+
+@pytest.mark.parametrize("bad_control", [False, True])
+def test_v4_exact_page_negative_requires_independent_passing_controls(context, tmp_path, monkeypatch, bad_control):
+    candidate, navigation, _h3, _ = _page_files(context, tmp_path)
+    roots = _root_logs(context, tmp_path)
+    amended = _amended_context(context, tmp_path, revision=4)
+    from qcsd_lab import h3_prebaseline
+    monkeypatch.setenv("QCSD_PUBLIC_ORIGIN_ONLY", "1")
+    def negative(url):
+        value = _probe(url)
+        if url == f"https://{candidate['domain']}/" or bad_control:
+            output = json.loads(value["output_text"])
+            output["resources"][0]["known_valid"] = False
+            raw = json.dumps(output)
+            value.update(output_text=raw, output_sha256=admission._sha(raw.encode()), known_valid=False, outcome="ambiguous")
+        return value
+    monkeypatch.setattr(h3_prebaseline, "_run_one", negative)
+    args = SimpleNamespace(command="probe-page", navigation=navigation, selected_page_ordinal=0)
+    if bad_control:
+        with pytest.raises(ValueError, match="controls"):
+            rapid_acquire._page_action(amended, candidate["candidate_id"], args)
+        assert not any(amended.root.rglob("attempt-failure.json"))
+    else:
+        proof = rapid_acquire._page_action(amended, candidate["candidate_id"], args)
+        facts = admission.unsuccessful_attempt_failure_facts(proof, amended, candidate["candidate_id"])
+        assert facts["controlled_page_probe"]["selected_page_ordinal"] == 0
+        assert facts["selected_page_h3_receipt_sha256"] is None
+        terminal = admission.produce_site_terminal(amended, candidate_id=candidate["candidate_id"],
+                                                   root_surveys=roots, attempt_failure=proof)
+        assert admission.verify_site_terminal(terminal, amended)["selected_page_h3_proof"] is None
+
+
+def test_v3_cannot_promote_v4_live_attempt_receipt(context, tmp_path):
+    amended = _amended_context(context, tmp_path, revision=3)
+    with pytest.raises(ValueError, match="revision 4"):
+        admission.produce_site_terminal(amended, candidate_id=amended.candidates[0]["candidate_id"],
+                                       attempt_failure=tmp_path / "old-error.json")
+
+
+@pytest.mark.parametrize("preparation", [False, True])
+def test_v4_typed_primary_with_validation_cause_cannot_escape_through_legacy_catches(context, tmp_path, monkeypatch, preparation):
+    amended = _amended_context(context, tmp_path, revision=4)
+    def invalid(*_args, **_kwargs):
+        try:
+            raise ValueError("actual configuration guard failure")
+        except ValueError as cause:
+            raise _render_failure() from cause
+    if preparation:
+        candidate, navigation, h3, screen = _auto_page(amended, tmp_path)
+        backend = Backend(amended)
+        backend.prepare = invalid
+        with pytest.raises(Exception, match="actual typed hard cap"):
+            admission.prepare_site(amended, candidate_id=candidate["candidate_id"], navigation=navigation,
+                page_h3=h3, automated_screen=screen, backend=backend)
+    else:
+        monkeypatch.setattr(admission.ExistingAcquisitionBackend, "discover_navigation", invalid)
+        with pytest.raises(Exception, match="actual typed hard cap"):
+            rapid_acquire._page_action(amended, amended.candidates[0]["candidate_id"], SimpleNamespace(command="navigate"))
+    assert not any(amended.root.rglob("attempt-failure.json"))
+    assert not any(amended.root.rglob("page-policy-failure.json"))
+    assert not any(amended.root.rglob("collector-failure.json"))
+    assert any(amended.root.rglob("operational-error.json"))
     assert admission.acquisition_status(amended)["formal_trace_target"] == 16_000

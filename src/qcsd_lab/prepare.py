@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import time
 from collections.abc import Mapping
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -40,11 +41,13 @@ from .manifest import (
 from .process_scheduler import capture_scheduler_launch_prefix
 from .util import (
     LAB_ROOT,
+    DEFAULT_SOURCE_METADATA,
     ProcessTimeoutError,
     load_json,
     neqo_host_timeout,
     run,
     durable_create,
+    fsync_directory,
     sha256_file,
     source_metadata,
 )
@@ -103,6 +106,91 @@ def _snapshot_failure_artifacts(directory: Path) -> dict[str, dict[str, str]]:
                 "content_base64": base64.b64encode(raw).decode("ascii"),
             }
     return retained
+
+
+def _retain_preparation_diagnostics(
+    directory: Path, destination: Path, *, workload_id: str, source_url: str,
+    discovery: DiscoveryResult, capture_source: dict[str, Any], started_at: str,
+    error: BaseException,
+) -> None:
+    """Retain actual failed-stage bytes without classifying the failure."""
+    destination.mkdir()
+    fsync_directory(destination.parent)
+    files = {}
+    for path in sorted(directory.rglob("*")):
+        if path.is_symlink():
+            raise PreparationError("preparation diagnostic artifact is linked")
+        if path.is_file():
+            relative = path.relative_to(directory).as_posix()
+            raw = path.read_bytes()
+            durable_create(destination / "artifacts" / relative, raw)
+            files[relative] = {"sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw)}
+    producer = Path(__file__).read_bytes()
+    durable_create(destination / "producer-prepare.py", producer)
+    durable_create(destination / "discovery.json", canonical_bytes(asdict(discovery)))
+    metadata_path = Path(os.environ.get("QCSD_LAB_SOURCE_METADATA", DEFAULT_SOURCE_METADATA))
+    raw_source_sha256 = None
+    if metadata_path.is_file() and not metadata_path.is_symlink():
+        raw_source = metadata_path.read_bytes()
+        durable_create(destination / "runtime-source.json", raw_source)
+        raw_source_sha256 = hashlib.sha256(raw_source).hexdigest()
+    durable_create(destination / "diagnostics.json", canonical_bytes({
+        "schema_version": 1, "artifact_type": "qcsd-preparation-failure-diagnostics",
+        "workload_id": workload_id, "source_url": source_url,
+        "capture_source_before": capture_source, "capture_source_after": _failure_capture_source(),
+        "runtime_source_raw_sha256": raw_source_sha256,
+        "producer_source_sha256": hashlib.sha256(producer).hexdigest(),
+        "started_at": started_at, "completed_at": datetime.now(UTC).isoformat(),
+        "exception_type": f"{type(error).__module__}.{type(error).__qualname__}",
+        "message": str(error), "files": files,
+        "scientific_credit": False, "failure_classification": "none-diagnostic-only",
+    }))
+
+
+@contextmanager
+def _retained_preparation_directory(
+    root: Path, *, workload_id: str, source_url: str, discovery: DiscoveryResult,
+    capture_source: dict[str, Any], started_at: str,
+):
+    temporary = tempfile.TemporaryDirectory(prefix=f".{workload_id}-prepare-", dir=root)
+    directory = Path(temporary.name)
+    try:
+        yield directory
+    except BaseException as error:
+        destination = root / f"{workload_id}-failure-evidence"
+        try:
+            _retain_preparation_diagnostics(
+                directory, destination, workload_id=workload_id, source_url=source_url,
+                discovery=discovery, capture_source=capture_source, started_at=started_at, error=error,
+            )
+        except BaseException as retention_error:
+            # Storage/copy failure must neither erase the original bytes nor
+            # replace the error that the caller must diagnose. The outer
+            # attempt can retain this note, path and actual remaining bytes.
+            temporary._finalizer.detach()
+            error.preparation_failure_diagnostics = {
+                "state": "original-directory-preserved-retention-incomplete",
+                "path": str(directory), "partial_destination": str(destination),
+                "retention_exception_type": type(retention_error).__name__,
+                "retention_message": str(retention_error),
+            }
+            error.add_note(
+                f"Preparation diagnostics could not be copied; raw directory preserved: {directory}; "
+                f"{type(retention_error).__name__}: {retention_error}"
+            )
+        else:
+            error.preparation_failure_diagnostics = {"state": "retained", "path": str(destination)}
+            try:
+                temporary.cleanup()
+            except BaseException as cleanup_error:
+                temporary._finalizer.detach()
+                error.add_note(
+                    f"Preparation diagnostic copy is complete; temporary cleanup failed: {directory}; "
+                    f"{type(cleanup_error).__name__}: {cleanup_error}"
+                )
+        raise
+    else:
+        temporary.cleanup()
 
 
 def _preparation_failure_evidence(
@@ -556,8 +644,10 @@ def prepare_workload(
         for resource in discovery.resources
     ]
     root.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=f".{workload_id}-prepare-", dir=root) as temporary:
-        directory = Path(temporary)
+    with _retained_preparation_directory(
+        root, workload_id=workload_id, source_url=source_url, discovery=discovery,
+        capture_source=capture_source, started_at=capture_started_at,
+    ) as directory:
         probe_input = {"resources": discovery.resources}
         validate_manifest(probe_input)
         try:
