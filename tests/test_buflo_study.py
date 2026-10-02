@@ -12097,6 +12097,56 @@ def test_extended_schedule_reconciles_typed_partial_composition(tmp_path: Path) 
     assert invalid["invalid_credit_consumption_events"] == 1
 
 
+def test_buflo_credit_release_window_uses_nominal_tick_and_fails_closed(
+    tmp_path: Path,
+) -> None:
+    neqo = tmp_path / "neqo"
+    neqo.mkdir()
+    schedule = neqo / "schedule.csv"
+    fields = (
+        "target_time_us,direction,size,connection,action_time_us,satisfaction,"
+        "observed_size,miss_reason,slot_id,credit_advertised_at_us,"
+        "credit_advertisement_delay_us\n"
+    )
+    row = "20000,incoming,1200,2,391768,satisfied,,,3,397056,5288\n"
+    schedule.write_text(fields + row, encoding="utf-8")
+    assert "incoming_credit_release_timing_events" not in _schedule_realization_metrics(
+        tmp_path
+    )
+    (neqo / "run.json").write_text(
+        json.dumps({"defense_start_monotonic_ns": 376_743_291}), encoding="utf-8"
+    )
+
+    metrics = _schedule_realization_metrics(tmp_path)
+    assert metrics["incoming_credit_release_timing_events"] == 1
+    assert metrics["incoming_credit_release_window_violations"] == 0
+    assert metrics["incoming_credit_release_lateness_upper_bound_us_max"] == 313
+
+    # The CSV stamp is floored to microseconds. At the half-open boundary
+    # 4999 us is provably inside, while 5000 us is not.
+    schedule.write_text(
+        fields + "20000,incoming,1200,2,391768,satisfied,,,3,401742,9974\n",
+        encoding="utf-8",
+    )
+    inside = _schedule_realization_metrics(tmp_path)
+    assert inside["incoming_credit_release_lateness_upper_bound_us_max"] == 4_999
+    assert inside["incoming_credit_release_window_violations"] == 0
+    schedule.write_text(
+        fields + "20000,incoming,1200,2,391768,satisfied,,,3,401743,9975\n",
+        encoding="utf-8",
+    )
+    at_limit = _schedule_realization_metrics(tmp_path)
+    assert at_limit["incoming_credit_release_lateness_upper_bound_us_max"] == 5_000
+    assert at_limit["incoming_credit_release_window_violations"] == 1
+    schedule.write_text(
+        fields + "20000,incoming,1200,2,391768,satisfied,,,3,396742,4974\n",
+        encoding="utf-8",
+    )
+    assert _schedule_realization_metrics(tmp_path)[
+        "incoming_credit_release_window_violations"
+    ] == 1
+
+
 def test_buflo_fidelity_requires_every_zero_error_and_typed_terminal_once() -> None:
     diagnostics = {
         **_incoming_credit(501 * 1_200),
@@ -12198,9 +12248,10 @@ def test_buflo_fidelity_requires_every_zero_error_and_typed_terminal_once() -> N
         outgoing_size_mismatches=0,
         schedule_metrics=missing_cadence_target,
     )
-    inside_advertisement_limit = {
+    prearmed_action_inside_release_window = {
         **schedule,
-        "incoming_credit_advertisement_delay_us_max": 4_999,
+        "incoming_credit_advertisement_delay_us_max": 6_000,
+        "incoming_credit_release_lateness_upper_bound_us_max": 4_999,
     }
     assert fidelity_eligible(
         "buflo",
@@ -12208,11 +12259,11 @@ def test_buflo_fidelity_requires_every_zero_error_and_typed_terminal_once() -> N
         sample_eligible=True,
         missed_events=0,
         outgoing_size_mismatches=0,
-        schedule_metrics=inside_advertisement_limit,
+        schedule_metrics=prearmed_action_inside_release_window,
     )
-    at_advertisement_limit = {
+    at_release_limit = {
         **schedule,
-        "incoming_credit_advertisement_delay_us_max": 5_000,
+        "incoming_credit_release_lateness_upper_bound_us_max": 5_000,
     }
     assert not fidelity_eligible(
         "buflo",
@@ -12220,7 +12271,15 @@ def test_buflo_fidelity_requires_every_zero_error_and_typed_terminal_once() -> N
         sample_eligible=True,
         missed_events=0,
         outgoing_size_mismatches=0,
-        schedule_metrics=at_advertisement_limit,
+        schedule_metrics=at_release_limit,
+    )
+    assert not fidelity_eligible(
+        "buflo",
+        diagnostics,
+        sample_eligible=True,
+        missed_events=0,
+        outgoing_size_mismatches=0,
+        schedule_metrics={**schedule, "incoming_credit_release_window_violations": 1},
     )
     run = {
         "completion_status": "complete",
@@ -13051,6 +13110,9 @@ def _schedule_metrics(*, outgoing: int, incoming: int) -> dict[str, object]:
         "incoming_credit_advertisement_delay_us_total": incoming * 100,
         "incoming_credit_advertisement_delay_us_max": 100 if incoming else 0,
         "incoming_credit_advertisement_delay_us_values": [100] * incoming,
+        "incoming_credit_release_timing_events": incoming,
+        "incoming_credit_release_window_violations": 0,
+        "incoming_credit_release_lateness_upper_bound_us_max": 100 if incoming else 0,
         "incoming_credit_consumption_delay_us_total": incoming * 500,
         "incoming_credit_consumption_delay_us_max": 500 if incoming else 0,
         "incoming_credit_consumption_delay_us_values": [500] * incoming,

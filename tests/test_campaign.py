@@ -3021,10 +3021,18 @@ def test_buflo_fidelity_failure_names_late_incoming_credit_slot(
         "6260000,incoming,1200,0,6310336,satisfied,,,627,6319486,9150\n",
         encoding="utf-8",
     )
+    (attempt / "neqo/run.json").write_text(
+        json.dumps({"defense_start_monotonic_ns": 54_000_000}), encoding="utf-8"
+    )
     monkeypatch.setattr(
         orchestrator,
         "_schedule_realization_metrics",
-        lambda _attempt: {"incoming_credit_advertisement_delay_us_max": 9_150},
+        lambda _attempt: {
+            "scheduled_incoming_events": 1,
+            "incoming_credit_release_timing_events": 1,
+            "incoming_credit_release_window_violations": 1,
+            "incoming_credit_release_lateness_upper_bound_us_max": 5_486,
+        },
     )
     monkeypatch.setattr(orchestrator, "fidelity_eligible", lambda *_args, **_kwargs: False)
 
@@ -3038,10 +3046,13 @@ def test_buflo_fidelity_failure_names_late_incoming_credit_slot(
     assert failure["type"] == "StrictDefenseFidelityFailure"
     [predicate] = failure["details"][0]["failed_predicates"]
     assert predicate == {
-        "name": "buflo_incoming_credit_advertisement_delay_window",
-        "predicate": "incoming_credit_advertisement_delay_us_max < 5000",
+        "name": "buflo_incoming_credit_release_window",
+        "predicate": "incoming_credit_release_lateness_upper_bound_us_max < 5000",
         "limit_us": 5_000,
-        "observed_max_us": 9_150,
+        "observed_max_us": 5_486,
+        "timing_events": 1,
+        "expected_events": 1,
+        "window_violations": 1,
         "violating_slots": [
             {
                 "slot_id": 627,
@@ -3050,6 +3061,8 @@ def test_buflo_fidelity_failure_names_late_incoming_credit_slot(
                 "action_time_us": 6_310_336,
                 "credit_advertised_at_us": 6_319_486,
                 "credit_advertisement_delay_us": 9_150,
+                "nominal_release_ns": 6_314_000_000,
+                "release_lateness_upper_bound_us": 5_486,
             }
         ],
     }

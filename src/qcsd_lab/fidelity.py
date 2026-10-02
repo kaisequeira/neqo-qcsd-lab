@@ -78,7 +78,7 @@ CONSUMPTION_SCHEDULE_QCSD_FIELDS = ADVERTISEMENT_SCHEDULE_QCSD_FIELDS + (
 SCHEDULE_QCSD_FIELDS = CONSUMPTION_SCHEDULE_QCSD_FIELDS + ("terminal_defense_elapsed_us",)
 DEFAULT_TIMESTAMP_TOLERANCE_NS = 10_000_000
 CLOCK_STEP_MIN_NS = 50_000_000
-BUFLO_INCOMING_CREDIT_ADVERTISEMENT_DELAY_LIMIT_US = 5_000
+BUFLO_INCOMING_CREDIT_RELEASE_WINDOW_US = 5_000
 BUFLO_TERMINAL_SUBCELL_POLICY = (
     "drain_whole_cells_then_client_local_http3_cancel_unallocatable_reviewed_chaff_tail"
 )
@@ -1732,6 +1732,63 @@ def _schedule_realization_metrics_from_path(path: Path) -> dict[str, Any]:
         "terminal_defense_elapsed_us_values": terminal_defense_elapsed_values,
         "target_times_us_by_direction": target_times,
         "scheduled_sizes_by_direction": scheduled_sizes,
+        **_incoming_credit_release_metrics(path, rows),
+    }
+
+
+def _incoming_credit_release_metrics(
+    schedule_path: Path, rows: list[dict[str, str]]
+) -> dict[str, Any]:
+    """Bound receive-credit handoff against the scheduled defense tick.
+
+    The raw CSV delay starts at action registration, which may intentionally
+    prearm an incoming opportunity. Both CSV stamps are floored process-clock
+    microseconds; run.json gives the defense start on that same clock in exact
+    nanoseconds. Compare the full possible advertisement interval with the
+    nominal tick's half-open 5 ms window, never rounding a boundary inward.
+    """
+
+    run_path = schedule_path.with_name("run.json")
+    try:
+        run = load_json(run_path)
+    except (OSError, ValueError):
+        return {}
+    start_ns = run.get("defense_start_monotonic_ns") if isinstance(run, Mapping) else None
+    if type(start_ns) is not int or start_ns < 0:
+        return {}
+
+    timing_events = 0
+    window_violations = 0
+    lateness_upper_bounds_us: list[int] = []
+    for row in rows:
+        if row.get("direction") != "incoming" or row.get("satisfaction") == "missed":
+            continue
+        try:
+            target_us = _csv_uint(row, "target_time_us")
+            advertised_us = _csv_uint(row, "credit_advertised_at_us")
+        except (KeyError, TypeError, ValueError):
+            window_violations += 1
+            continue
+        timing_events += 1
+        release_ns = start_ns + target_us * 1_000
+        advertised_lower_ns = advertised_us * 1_000
+        advertised_upper_ns = advertised_lower_ns + 1_000
+        # The upper edge is exclusive, as is the 5 ms release window.
+        if (
+            advertised_lower_ns < release_ns
+            or advertised_upper_ns > release_ns
+            + BUFLO_INCOMING_CREDIT_RELEASE_WINDOW_US * 1_000
+        ):
+            window_violations += 1
+        lateness_upper_bounds_us.append(
+            max(0, (advertised_upper_ns - release_ns - 1) // 1_000)
+        )
+    return {
+        "incoming_credit_release_timing_events": timing_events,
+        "incoming_credit_release_window_violations": window_violations,
+        "incoming_credit_release_lateness_upper_bound_us_max": max(
+            lateness_upper_bounds_us, default=0
+        ),
     }
 
 
@@ -6361,11 +6418,15 @@ def fidelity_eligible(
             == schedule_metrics.get("incoming_credit_advertised_events")
             and diagnostics["buflo_scheduled_incoming_cells"]
             == schedule_metrics.get("incoming_credit_consumed_events")
-            and schedule_metrics.get(
-                "incoming_credit_advertisement_delay_us_max",
-                BUFLO_INCOMING_CREDIT_ADVERTISEMENT_DELAY_LIMIT_US,
-            )
-            < BUFLO_INCOMING_CREDIT_ADVERTISEMENT_DELAY_LIMIT_US
+            and schedule_metrics.get("incoming_credit_release_timing_events")
+            == diagnostics["buflo_scheduled_incoming_cells"]
+            and schedule_metrics.get("incoming_credit_release_window_violations") == 0
+            and type(
+                schedule_metrics.get("incoming_credit_release_lateness_upper_bound_us_max")
+            ) is int
+            and 0
+            <= schedule_metrics["incoming_credit_release_lateness_upper_bound_us_max"]
+            < BUFLO_INCOMING_CREDIT_RELEASE_WINDOW_US
             and diagnostics["scheduled_incoming_requested_bytes"]
             == diagnostics["buflo_scheduled_incoming_cells"] * 1_200
             and diagnostics.get("scheduled_incoming_advertised_bytes")
