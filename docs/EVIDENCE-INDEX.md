@@ -375,6 +375,42 @@ Independent current-status reopening at **2026-10-02T18:29:53.888910Z** confirme
 10, `poki.com`, next. The bounded second batch was continuing. These dated
 counts exclude later activity; study shakedown and formal credit remain zero.
 
+#### Later bounded operations and alternative-page routing
+
+Two separate 20-action batches returned exit 0 at their action limits:
+**40 actual operations accounted for 16 candidates, with zero admitted sites**.
+The 14-file source update is committed as
+`905776a8876894e9db690b3a775dfe2006635c2b` and published to Lab `main` and
+`desktop`. Immutable execution source, client, image and earlier receipt
+identities remain unchanged.
+
+The private `stage_next_candidate_v2.py` helper and
+`run_private_operations_v2.py` controller were frozen separately in context 006,
+with respective SHA-256 values
+`24485db7a04daf374c4fb80f54427b1b6326569f08fb14aed776d81ebde69ffd` and
+`6546c949bdfbc0fc26248df7923cbfaa29bdd91963789e4650afe4f3835d2e51`.
+Eleven routing checks passed in 0.38 seconds. This operational route tries each
+existing deterministic ordinal 0–4 at most once, binds the automatic screen to
+the latest passing exact-page proof, and can try another page after a prepared
+graph lacks a cross-origin resource. It does not reopen a sealed candidate or
+change scientific acceptance, study rules, producer source, image or client.
+
+The first v2 plan, `operation-plans/plan-000041/plan.json`, has SHA-256
+`bd13508e2e9d4676465447ac37b47e4af999646179290b530e9f0793ffa919c9`.
+Its staging invocation ran at `2026-10-02T18:43:02.830772Z`–`18:43:08.220864Z`,
+exit 0; `next-stage-v2-001-execution.json` SHA-256 is
+`13ef5e364d860a6acd0cfc278b0ddf09462ffbb0df25474d2551b0760d2e75b0`.
+The next bounded **40-action** batch was running. Independent native status
+reopening at **2026-10-02T18:50:47.549609Z** confirmed **21 sealed zero-credit
+decisions, zero admitted sites and candidate 22 next**. These dated counts
+exclude later activity. There is still no first admitted study graph, completed
+study shakedown or formal capture credit.
+
+The first new prepared workload must still exercise its response qualification,
+cross-image receipt loading and a bounded collection canary. The historical
+workload's passing bridge proves runtime placement, not success for that new
+graph. No new first-site qualification or canary result is claimed here.
+
 ### Clean fallback first screen, 3 October 2026
 
 The fresh clean-image survey at host-local

@@ -172,6 +172,27 @@ Focused observer and preparation-retention checks passed; the exact live files,
 source checks and claim boundaries are recorded in the
 [evidence index](docs/EVIDENCE-INDEX.md#rapid-selection-revision-4-3-october-2026).
 
+**Later operations checkpoint:** both bounded 20-action batches finished with
+exit 0. Their **40 actual operations accounted for 16 candidates**, with zero
+admitted sites. A separately frozen private helper/controller now tries each
+of the existing deterministic page ordinals 0–4 at most once for an unresolved
+candidate. It uses the latest passing exact-page proof for the automatic screen,
+and can try another page when a prepared graph lacks a cross-origin resource.
+It does not rewind sealed decisions or change the study, scientific validators,
+image or client. Eleven focused routing checks passed. The next bounded
+40-action batch is running. Independent frozen-status reopening at
+**2026-10-02T18:50:47.549609Z** confirmed **21 sealed zero-credit decisions,
+zero admitted sites and candidate 22 next**. Shakedown and formal counts remain
+**0/50** and **0/16,000**; these counts exclude later activity.
+
+The 14-file v4 source update is committed as
+`905776a8876894e9db690b3a775dfe2006635c2b` and published to Lab `main` and
+`desktop`. The frozen execution source, client and images retain their original
+identities; the published authoring commit does not rewrite completed receipts.
+The first new prepared site's response qualification and collection-image
+canary remain to be exercised. The earlier historical-workload bridge does not
+establish that a new study graph will pass those paths.
+
 A fresh clean-image fallback root survey independently verifies the first
 40 fallback observations: one known-valid homepage (`bandcamp.com`), 15
 ambiguous results, 19 timeouts, four peer TLS failures and one automatic skip.

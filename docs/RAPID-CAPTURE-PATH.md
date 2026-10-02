@@ -14,7 +14,7 @@ sequence does not gate this prospective five-setting study.
 | Step | Action | Evidence needed to advance | Current state |
 |---:|---|---|---|
 | 1 | Freeze the candidate sources and runtime. | Exact source hashes, ordered [v5 rapid profile receipt](../config/curated-sources/crux73-tranco600-rapid-v5.profile.json), image digests, fixed defense parameters and launcher-source hashes. | V5 is frozen (SHA-256 `f7eb0228a06429cc2ae91d0f9d52577399e15b68f4915d41cb60291445542b60`), preserving 73 supplied candidates, 600 fallback candidates and 50 × 5 × 64. Clean matching collection and prepare images exist. **Selection revision 4 is published and context 006 initialized successfully, without an image rebuild.** Installed-runtime preflight 002 passed; it grants no lane or trace credit. |
-| 2 | Find usable pages. | Record verified decisions in frozen order. Revision 4 keeps the automatic public URL/domain screen, controlled homepage observation, separate controlled HTTP/3 pass on the exact selected page, complete browser-observed graph, stable replay and live cross-origin resource. Only a controlled completed-response ambiguity can proceed alongside a known-valid homepage. | All **73 fresh v5 curated first-screen decisions** independently verify: **31 known-valid, 27 ambiguous, six peer TLS failures, two timeouts and seven automatic safety skips**. A fresh 40-candidate fallback batch adds one known-valid homepage and seven completed-response leads. Context 005 stopped with **five independently sealed zero-credit decisions** and an unsealed Pinterest detector error. **Context 006's first 20-action batch completed normally with eight decisions and no admitted sites. A second batch is running.** Fresh failure inventories have been independently reopened. **0/50 final sites admitted at this update.** |
+| 2 | Find usable pages. | Record verified decisions in frozen order. Revision 4 keeps the automatic public URL/domain screen, controlled homepage observation, separate controlled HTTP/3 pass on the exact selected page, complete browser-observed graph, stable replay and live cross-origin resource. Try each deterministic selected page at most once. | All **73 fresh v5 curated first-screen decisions** independently verify: **31 known-valid, 27 ambiguous, six peer TLS failures, two timeouts and seven automatic safety skips**. A fresh 40-candidate fallback batch adds one known-valid homepage and seven completed-response leads. Context 006's first **two 20-action batches completed normally**, with **16 candidate decisions and zero admissions**. A new **40-action** batch uses the revised page-selection helper. Its first action brought the count to **17 decisions, zero admissions**, observed at 18:46 UTC. Fresh failure inventories have been independently reopened. **0/50 final sites admitted at this update.** |
 | 3 | Prepare and qualify the first ten sites. | Ten verified prepared workloads, with five-site response-qualification sets matching the exact workload and source bytes. | The historical one-workload qualifier independently reloads through the collection-image bridge. As soon as the first study site is prepared, check locally for a main-origin response of at least **1,200 bytes**, then use one-site qualification and a five-setting diagnostic to find capture problems before the ten-site milestone. These early checks give zero study credit. |
 | 4 | Run the ten-site shakedown across all five settings. | 50 complete, individually deep-verified diagnostic traces, including both BuFLO modes, with failures preserved and repaired before formal capture. | All five settings now have individual clean-runtime diagnostic passes on one historical workload: CS-BuFLO **1/1**, BuFLO retry 004 **1/1**, FRONT and Tamaraw accepted, and a fresh undefended two-second-settle successor **1/1**. The previous undefended attempt lacked 45 tail packets and remains failed. These separate passes do not supply the ten-site shakedown. **0/50 study shakedown traces accepted.** |
 | 5 | Admit 50 sites and freeze formal inputs. | A verified 50-site cohort receipt, exact workloads and qualification sets, fixed parameters, complete lane plan and launch manifest. | 50-site live yield is unproven; the 600-domain catalogue supplies further candidates under the same checks. |
@@ -275,12 +275,25 @@ its launch snapshot SHA-256 is
 Eight implementation groups are frozen, including **18 source/client
 bindings** for the new attempt observer. The first bounded **20-action** batch
 completed normally at its action limit with **eight screening decisions and
-zero admitted sites**. The second batch has moved past Futura to Poki. Fresh
+zero admitted sites**. The second 20-action batch also completed normally,
+bringing the count to **16 decisions and zero admissions**. Fresh
 Weerplaza, Alibaba and Pinterest failure proofs independently reopened all
 18 source/client artifacts and their complete retained inventories. Futura
 passed navigation, exact-page HTTP/3 and the automatic screen; its preparation
 then failed to settle within 30 seconds. That failure proof also independently
 reopened. These recorded failures grant no site or capture credit.
+
+A private operational helper revision passed **11 routing checks** and started
+a fresh **40-action** batch on the unchanged context. Its first action brought
+the count to **17 decisions and zero admitted sites**, observed at
+`2026-10-02T18:46Z`. It independently reopens failed-operation proofs, then tries
+the smallest unattempted page ordinal from the existing navigation receipt.
+A prepared page with no cross-origin resource can also lead to the next page.
+Every page still needs its own controlled HTTP/3 pass, matching automatic screen
+and complete preparation. Old screen records cannot be reused for a different
+page. Each failed page is tried once; its retained evidence remains unchanged.
+Already sealed candidates are not reopened.
+The source modules, profile, amendment and images are unchanged.
 
 Old matching positive root, navigation and exact-page H3 observations may be
 independently reopened only under unchanged source groups. New failure
@@ -311,6 +324,15 @@ The existing one-workload qualifier and one diagnostic visit under each of
 the five settings then check the full capture path early. They give zero
 study credit and do not replace the ten admitted sites, five-site qualification
 sets or 50-trace shakedown.
+
+Run this one-workload response qualification through the **installed collection
+runtime and its complete matching clean source bridge**. The new acquisition
+overlay has different preparation/error-observer code and cannot impersonate
+that installed source. An internally consistent prepared manifest from the
+prepare image is compatible with the collection image; copy its bytes unchanged.
+The qualified sidecar can later join a five-workload named set without repeating
+qualification when its workload, client, image and implementation bindings remain
+unchanged. Neither fitting nor a rebuild is needed for this early check.
 
 ### Historical failures kept for review
 
