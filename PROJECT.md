@@ -41,6 +41,20 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
+**Latest operational update, 3 October:** the narrow checkpoint I/O fix is
+published as `2ac92edd1fcb43acfab7523f03aca79fadb481bc`. Sixteen focused tests
+passed. It checks each unique historical evidence reference once per call,
+while preserving file hashes and the complete checkpoint chain. Context 006's
+40-action batch completed normally with 27 terminal decisions and no admitted
+sites. Its attempts and checkpoints remain unchanged. Fresh context **007**
+initialized successfully at `2026-10-02T19:46:36.254257Z`, using the same image
+and client. Only preparation and attempt source groups changed. Its new root
+registry independently reopens 73 curated and 40 fallback observations; a
+40-action batch is running with a stop at the first admission for an immediate
+capture diagnostic. No image rebuild or defence requalification occurred.
+The target remains **50 × 5 × 64 = 16,000**; accepted study counts remain zero.
+See the [evidence index](docs/EVIDENCE-INDEX.md#checkpoint-io-fix-and-context-007).
+
 The user has authorised a prospective [rapid 50-class study](docs/RAPID-CLASS-STUDY.md)
 to reach capture sooner. Its [curated raw source](config/curated-sources/crux-73-v1.raw.json)
 has 73 distinct domain entries and 5,507 listed resource URLs; these are

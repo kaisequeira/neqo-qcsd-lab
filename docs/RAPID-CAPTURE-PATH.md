@@ -53,6 +53,14 @@ changes to the source-bound container images.
 
 ## Current checks and remaining blockers
 
+**Latest update:** the checkpoint I/O fix passed 16 focused tests and is
+published. Fresh context 007 initialized using the same image/client; its
+40-action batch stops at the first admitted site for an immediate qualification
+and capture check. The study and five traffic settings are unchanged. Context
+006 and all its attempts remain preserved. The [evidence index](EVIDENCE-INDEX.md#checkpoint-io-fix-and-context-007)
+records the source, runtime and new context identities. No image rebuild or
+defence requalification was needed; accepted study counters remain zero.
+
 The fresh three-setting successor on the same clean runtime independently
 deep-verifies as **valid but incomplete, 2/3**, with 31 authoritative files.
 FRONT and Tamaraw are accepted. The undefended attempt completed application

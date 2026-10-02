@@ -442,6 +442,50 @@ The earlier sealed Bing failure is unchanged; **no scientific counter advances**
 `execution.json` SHA-256 is
 `f8f338457b5a6219a062a53bcc214d8af13384e92d52abd3b2bf76858bb3f593`.
 
+### Checkpoint I/O fix and context 007
+
+At 81 context-006 checkpoints, historical inventories contained 29,195
+reference visits for 746 unique files: about 8.86 GB of repeated reads versus
+231 MB of unique bytes. The source fix reopens each unique reference once per
+invocation, rejects conflicting declared hashes and preserves all checkpoint
+envelope, sequence, predecessor and provenance checks. This is the size of
+that checkpoint pass, not a measured speedup of the entire acquisition.
+Sixteen focused tests passed, including corruption, unsafe paths, malformed
+duplicate references and changed bytes on a later invocation. Source commit
+`2ac92edd1fcb43acfab7523f03aca79fadb481bc` is published on Lab `main` and
+`desktop`; admission source SHA-256 is
+`eccae20376bbda9b75be422bead2de31d78cda7a080d14ba0f73c0d32f882be6`.
+
+Context 006's 40-action batch completed normally with 27 terminal decisions
+and no admitted sites. The next site's unsuccessful preparation remains
+unsealed there. All source snapshots, attempts, checkpoints and failures are
+preserved unchanged. Neither isolated successful discovery diagnostic promotes
+an earlier failure or admits a site.
+
+Fresh host-local context
+`../diagnostic-rehearsals/rapid-v5-site-acquisition-20261003-007/`
+initialized with the actual native CLI at
+`2026-10-02T19:46:30.303126Z`–`19:46:36.254257Z`, exit 0. Its launch manifest
+SHA-256 is `1da0c479f77798526a74eff620108d82ae8d88f2938363a4bf929e2ce2da8a68`;
+source-freeze map SHA-256 is
+`f71dfd3d66028fbb953e9846224ac2cd9089baf7a66f161b4e8b2b0eda847fd9`;
+provenance SHA-256 is
+`5b89736c206200e56706734516d68a16293b51366dfa30464febd7022bce48ed`.
+Exactly the preparation and attempt groups changed. The frozen study, selection
+policy, image, client and all other active source groups remain identical.
+No image rebuild or defence requalification was required.
+
+Its new `root-log-registries/registry-000001.json` independently reopens all
+73 curated and the first 40 gap-free fallback observations, with SHA-256
+`e65e35ce839f819dc1f80a091ebe62e2693686d35192a812e38d87bfc2c059cd`.
+The registry has new context-007 provenance and no predecessor link to 006.
+Positive navigation/page receipts can be reused only after their unchanged
+source and runtime bindings independently verify. Automatic screens,
+preparations, failures, terminals and checkpoints are produced freshly.
+The next bounded 40-action run stops at the first admitted site so that its
+qualification and capture canary can start immediately. **No eligible site,
+study shakedown or formal trace credit is claimed by this setup.**
+
 ### Clean fallback first screen, 3 October 2026
 
 The fresh clean-image survey at host-local
