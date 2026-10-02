@@ -536,6 +536,23 @@ def _class20_profile_bindings(root: Path) -> tuple[dict[str, str], dict[str, dic
     }
 
 
+def _class20_bound_file_matches(
+    root: Path, recorded: object, expected: Mapping[str, str], *, label: str
+) -> bool:
+    """Compare a receipt binding after mapping its /lab path to the host root."""
+
+    if (
+        not isinstance(recorded, Mapping)
+        or set(recorded) != {"path", "sha256"}
+        or recorded.get("sha256") != expected["sha256"]
+    ):
+        return False
+    try:
+        return _bound_file(root, recorded, label=label) == Path(expected["path"])
+    except ValueError:
+        return False
+
+
 def _class_campaign_identity(name: object, role: object) -> tuple[str, bool]:
     """Return the exact study identity encoded by one generated campaign name."""
 
@@ -1049,9 +1066,20 @@ class _Resolver:
             ):
                 raise ValueError("20-site acquisition authority path is not canonical")
             profile_binding, inherited_bindings = _class20_profile_bindings(self.root)
+            recorded_inputs = payload.get("study_profile_inputs")
             if (
                 payload.get("study_profile_sha256") != profile_binding["sha256"]
-                or payload.get("study_profile_inputs") != inherited_bindings
+                or not isinstance(recorded_inputs, Mapping)
+                or set(recorded_inputs) != set(inherited_bindings)
+                or any(
+                    not _class20_bound_file_matches(
+                        self.root,
+                        recorded_inputs[name],
+                        expected,
+                        label=f"20-site {name.replace('_', ' ')}",
+                    )
+                    for name, expected in inherited_bindings.items()
+                )
             ):
                 raise ValueError("20-site acquisition authority profile inputs differ")
         elif self.study_id == _CLASS20_STUDY_ID or payload.get("study_id") not in {
@@ -1078,7 +1106,12 @@ class _Resolver:
         )
         if study != expected_study:
             raise ValueError("class acquisition authority binds another study contract")
-        if schema == 3 and payload.get("study_contract") != profile_binding:
+        if schema == 3 and not _class20_bound_file_matches(
+            self.root,
+            payload.get("study_contract"),
+            profile_binding,
+            label="20-site profile overlay",
+        ):
             raise ValueError("20-site acquisition authority overlay binding differs")
         correctness = payload.get("acquisition_correctness")
         if (

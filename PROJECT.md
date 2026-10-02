@@ -81,6 +81,21 @@ image. The corrected source still requires a fresh build and cohort; v142's
 build and pinned-CDP receipts remain valid only for v142 source and grant no
 pilot or formal capture credit.
 
+On **v143**, clean Lab source `032c5767f398aeec9e0d5c51bc3a12257ec9bff9`
+and Rust Gitlink `ca70e626275fb3dfb4520696568e7b2ad800174f`
+passed the no-cache three-image build and pinned-CDP check. The 20-site
+acquisition correctness suite then passed **2,525 tests with 31 skipped** and
+issued a schema-3 acquisition-only authority receipt. Its in-image creation
+check passed, but the public host `class-study verify` stopped before Docker:
+the host admission code compared the receipt's `/lab/config/...` profile paths
+with host absolute paths as raw strings, despite matching file hashes. The
+same host admission is required by `acquisition-init`, so no 20-site search
+root was initialized and no pilot or formal sample was accepted. A portable
+path comparison with focused regression tests is prepared in this source
+revision; it has not yet passed a new clean-source build and authority chain. Preserve the
+v143 receipts as evidence for their original source, without using them to
+authorize changed source or final capture.
+
 The latest completed public-page acquisition attempt is **v139** on clean Lab source
 `34088bb687ec683f16597da41e2c02a11f201447` and pinned Rust Gitlink
 `a8d8664cd31cbc4cc1ecb4fd5abc5a1d3ee153ae`. Its no-cache build,
@@ -367,7 +382,7 @@ scientific credit.
 
 | Checkpoint identity | Historical qualification and current acquisition state |
 |---|---|
-| Latest source-bound attempt (v139) | Lab `34088bb687ec683f16597da41e2c02a11f201447` and Rust Gitlink `a8d8664cd31cbc4cc1ecb4fd5abc5a1d3ee153ae`; its durable browser-control error requires a prospective source change and fresh cohort |
+| Latest initialized public-page acquisition (v139) | Lab `34088bb687ec683f16597da41e2c02a11f201447` and Rust Gitlink `a8d8664cd31cbc4cc1ecb4fd5abc5a1d3ee153ae`; its durable browser-control error requires a prospective source change and fresh cohort |
 | Historical v130 Lab branch and source commit | `desktop-portability-2026-09-26`; `5fe0da7a8a8dc92713d91fb67b65f265325e4d51` |
 | Historical v130 Rust commit and Lab Gitlink | `e8575fd8e54921ed6ff867de475b4a734064866e` |
 | Build and pinned CDP | `artifacts/buflo-study/build-execution-v130.json` and `artifacts/buflo-study/pinned-cdp-execution-v130.json`: independently verified on their bound source |
@@ -381,8 +396,9 @@ scientific credit.
 | v136 failed build | Collection code gate stopped on the same test because a five-second synthetic deadline violated its nominal strict window, 284/285 passed; `artifacts/buflo-study/build-failure-v136/` preserves the failed diagnostic and archived transaction. No build receipt or acquisition authority; v136 consumed |
 | v138 build, pinned CDP and acquisition authority | `artifacts/buflo-study/build-execution-v138.json`, `artifacts/buflo-study/build-completion-v138.json`, `artifacts/buflo-study/pinned-cdp-execution-v138.json` and `artifacts/class-study-acquisition-authority-v138.json` independently verified on the v138 source; public acquisition only |
 | v139 build, pinned CDP and acquisition authority | `artifacts/buflo-study/build-execution-v139.json`, `artifacts/buflo-study/build-completion-v139.json`, `artifacts/buflo-study/pinned-cdp-execution-v139.json` and `artifacts/class-study-acquisition-authority-v139.json` are bound to v139 only; public acquisition only |
+| v143 20-site build, pinned CDP and issued authority | `artifacts/buflo-study/build-execution-v143.json`, `artifacts/buflo-study/build-completion-v143.json`, `artifacts/buflo-study/pinned-cdp-execution-v143.json` and `artifacts/classifier-multiorigin20-v1-acquisition-authority-v143.json` are bound to clean Lab `032c5767f398aeec9e0d5c51bc3a12257ec9bff9`; correctness passed 2,525 tests, 31 skipped. Host verification and acquisition initialization stopped on the `/lab` versus host profile-path comparison; no 20-site root or capture credit |
 | Acquisition checkpoint | `artifacts/classifier-multiorigin100-v1-acquisition-v139/` is the latest initialized root; eight site-rejection terminals, one inconclusive pending screen and one durable internal browser-control error, with 0/120 accepted |
-| Next execution | Finish and test the prospective browser repair and 20-site protocol, freeze clean source, allocate the next unused cohort, then reprove the no-cache build, pinned CDP and acquisition-only authority. Supervise bounded 20-site acquisition actions; complete same-source browser and full defence foundation before fitting or capture |
+| Next execution | Validate the portable host authority-path repair, freeze clean source, allocate the next unused cohort and reprove the no-cache build, pinned CDP, host-verified 20-site acquisition authority and initialization. Supervise bounded 20-site search actions; complete same-source browser and full defence foundation before fitting or capture |
 
 Preserve the v130 qualification evidence and failed authority attempt, the v129
 checkpoint and failed attempts, v128 failed build, v127
@@ -475,15 +491,15 @@ historical schema descriptions remain in the history and methodology.
 
 ## Next actions and cheapest-first execution
 
-V139's acquisition-only authority passed and its versioned checkpoint
-initialized, but a durable root browser-control error stopped the watcher
-after eight site rejections and one inconclusive pending screen. Preserve that
-checkpoint and its original classifications. Finish the prospective browser
-repair and 20-site source revision, freeze a clean commit, then let the
-allocator assign a fresh cohort. Rebuild without cache, verify pinned CDP and
-profile-bound acquisition-only authority, and supervise small watcher actions
-through real preparation and both observation windows. Diagnose a new blocker
-at once before a long watcher. The same-source 110-vector browser gate and
+V143 passed its build, pinned CDP and 20-site acquisition correctness suite,
+but host verification and initialization stopped on a portable path comparison.
+The focused host repair is prepared in this source revision. Validate it, freeze a
+clean commit, then let the allocator assign a fresh cohort. Rebuild without
+cache, verify pinned CDP, independently verify the profile-bound acquisition
+authority on the host, and initialize a new 20-site root. Supervise small
+watcher actions through real preparation and both observation windows; diagnose
+a new blocker at once before a long watcher. Preserve v139's stopped checkpoint
+and its original classifications. The same-source 110-vector browser gate and
 full defence foundation remain mandatory before fitting or defended capture.
 
 The existing schema-12 pre-baseline HTTP/3 screen runs two attempts per exact
@@ -507,13 +523,13 @@ evidence; the separate `docs/CLASS-STUDY-20.md` profile is prospective
 until its source and evidence chain pass.
 
 1. Preserve the verified migration manifests, historical handoff, v126 through
-   v139 receipts and checkpoints, and all failed watcher evidence.
+   v143 receipts and checkpoints, and all failed watcher evidence.
 2. Retain the registered Tranco candidate catalogue for this formal run.
-3. Finish the v139 browser-control repair and the prospective 20-site protocol
-   as one tested, portable source revision. Freeze it, obtain the allocator's
-   next unused cohort, build fresh no-cache images, pass pinned CDP and
-   independently verify profile-bound acquisition authority. The v139 root
-   remains bound to its original source and rule.
+3. Finish the portable 20-site host authority-path repair as a tested source
+   revision. Freeze it, obtain the allocator's next unused cohort, build fresh
+   no-cache images, pass pinned CDP and independently verify profile-bound
+   acquisition authority on the host. V143's issued receipt and the v139 root
+   remain bound to their original sources and rules.
 4. Initialize a new versioned acquisition root, run monitored actions through
    an actual baseline and both short-horizon observations, then acquire the
    profile's 30-site pilot with genuine short-horizon prepared observations

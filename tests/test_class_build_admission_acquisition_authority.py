@@ -652,6 +652,20 @@ def _class20_fixture(fixture):
     return fixture
 
 
+def _class20_container_profile_paths(fixture) -> None:
+    def use_container_paths(payload) -> None:
+        bindings = (
+            payload["study_contract"],
+            payload["acquisition_correctness"]["study_contract"],
+            *payload["study_profile_inputs"].values(),
+        )
+        for binding in bindings:
+            relative = Path(binding["path"]).relative_to(fixture.root)
+            binding["path"] = f"/lab/{relative.as_posix()}"
+
+    _rewrite(fixture.authority, use_container_paths)
+
+
 def test_class20_host_admits_exact_profile_authority_and_current_acquisition(authority_fixture) -> None:
     fixture = _class20_fixture(authority_fixture)
     selected = admission._CLASS20_STUDY_ID
@@ -671,6 +685,55 @@ def test_class20_host_admits_exact_profile_authority_and_current_acquisition(aut
         fixture, "cohort", study_id=selected,
         acquisition_completion=fixture.acquisition_completion,
     ) == fixture.admitted
+
+
+def test_class20_host_admits_container_profile_paths_across_acquisition_actions(
+    authority_fixture,
+) -> None:
+    fixture = _class20_fixture(authority_fixture)
+    _class20_container_profile_paths(fixture)
+    selected = admission._CLASS20_STUDY_ID
+    assert _resolve(
+        fixture, "verify", study_id=selected, target=fixture.authority,
+    ) == fixture.admitted
+    assert _resolve(
+        fixture, "acquisition-init", study_id=selected,
+        acquisition_authority=fixture.authority,
+    ) == fixture.admitted
+    _use_authority(fixture)
+    assert _resolve(
+        fixture, "acquisition-run", study_id=selected,
+        acquisition_root=fixture.acquisition,
+    ) == fixture.admitted
+
+
+@pytest.mark.parametrize("tampering", ("same_bytes_wrong_path", "wrong_sha256"))
+def test_class20_host_rejects_tampered_container_profile_binding(
+    authority_fixture, tampering: str,
+) -> None:
+    fixture = _class20_fixture(authority_fixture)
+    _class20_container_profile_paths(fixture)
+    if tampering == "same_bytes_wrong_path":
+        duplicate = fixture.root / "config/class-study/v1/study-copy.json"
+        shutil.copyfile(fixture.root / "config/class-study/v1/study.json", duplicate)
+        _rewrite(
+            fixture.authority,
+            lambda payload: payload["study_profile_inputs"]["base_study"].update(
+                path="/lab/config/class-study/v1/study-copy.json"
+            ),
+        )
+    else:
+        _rewrite(
+            fixture.authority,
+            lambda payload: payload["study_profile_inputs"]["base_study"].update(
+                sha256="e" * 64
+            ),
+        )
+    with pytest.raises(ValueError, match="profile inputs differ"):
+        _resolve(
+            fixture, "acquisition-init", study_id=admission._CLASS20_STUDY_ID,
+            acquisition_authority=fixture.authority,
+        )
 
 
 def test_class20_host_rejects_changed_prefix_scope_even_with_matching_hash(
