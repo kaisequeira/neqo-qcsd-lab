@@ -96,6 +96,24 @@ revision; it has not yet passed a new clean-source build and authority chain. Pr
 v143 receipts as evidence for their original source, without using them to
 authorize changed source or final capture.
 
+On **v144**, clean Lab source `62d7dc66db65bc2f157d08a0e638a05f27c6e6b4`
+and Rust Gitlink `ca70e626275fb3dfb4520696568e7b2ad800174f`
+completed the no-cache collection image, then failed the preparation image's
+Rust code gate: one exact-handoff test failed after 284 passed. The build
+exited without paired build receipts, pinned CDP, 20-site acquisition
+authority or a checkpoint. Its collection image is provisional and its claim
+is consumed; none grants pilot or formal capture credit. The exact failed-build
+lifecycle roots and BuildKit histories were preserved in the host-local
+`artifacts/buflo-study/build-failure-v144/` archive. Its
+`archive-receipt.json` has SHA-256
+`a29f61d0c052c3fc12def424c4ddcb752d50a1953c56f7bc54ca55e482588581`.
+The active lifecycle namespace is empty and public `lifecycle-recover` passed.
+A test-only fixed-clock correction then passed three focused cases and the full
+285/285 `neqo-bin` suite in the pinned Rust/NSS diagnostic image, with the
+source mounted read-only. Its log is listed in the [evidence index](docs/EVIDENCE-INDEX.md).
+This engineering check gives no build or acquisition authority. Any corrected
+source needs the next unused cohort and fresh downstream proof.
+
 The latest completed public-page acquisition attempt is **v139** on clean Lab source
 `34088bb687ec683f16597da41e2c02a11f201447` and pinned Rust Gitlink
 `a8d8664cd31cbc4cc1ecb4fd5abc5a1d3ee153ae`. Its no-cache build,
@@ -397,8 +415,9 @@ scientific credit.
 | v138 build, pinned CDP and acquisition authority | `artifacts/buflo-study/build-execution-v138.json`, `artifacts/buflo-study/build-completion-v138.json`, `artifacts/buflo-study/pinned-cdp-execution-v138.json` and `artifacts/class-study-acquisition-authority-v138.json` independently verified on the v138 source; public acquisition only |
 | v139 build, pinned CDP and acquisition authority | `artifacts/buflo-study/build-execution-v139.json`, `artifacts/buflo-study/build-completion-v139.json`, `artifacts/buflo-study/pinned-cdp-execution-v139.json` and `artifacts/class-study-acquisition-authority-v139.json` are bound to v139 only; public acquisition only |
 | v143 20-site build, pinned CDP and issued authority | `artifacts/buflo-study/build-execution-v143.json`, `artifacts/buflo-study/build-completion-v143.json`, `artifacts/buflo-study/pinned-cdp-execution-v143.json` and `artifacts/classifier-multiorigin20-v1-acquisition-authority-v143.json` are bound to clean Lab `032c5767f398aeec9e0d5c51bc3a12257ec9bff9`; correctness passed 2,525 tests, 31 skipped. Host verification and acquisition initialization stopped on the `/lab` versus host profile-path comparison; no 20-site root or capture credit |
+| v144 failed preparation build | Clean Lab `62d7dc66db65bc2f157d08a0e638a05f27c6e6b4` and Rust Gitlink `ca70e626275fb3dfb4520696568e7b2ad800174f`; collection image completed, then one exact-handoff Rust test failed after 284 passed in preparation. `artifacts/buflo-study/build-failure-v144/` preserves the exact failure and archived lifecycle roots; recovery passed. No paired build receipt, pinned CDP, 20-site authority, acquisition root or capture credit. V144 is consumed |
 | Acquisition checkpoint | `artifacts/classifier-multiorigin100-v1-acquisition-v139/` is the latest initialized root; eight site-rejection terminals, one inconclusive pending screen and one durable internal browser-control error, with 0/120 accepted |
-| Next execution | Validate the portable host authority-path repair, freeze clean source, allocate the next unused cohort and reprove the no-cache build, pinned CDP, host-verified 20-site acquisition authority and initialization. Supervise bounded 20-site search actions; complete same-source browser and full defence foundation before fitting or capture |
+| Next execution | Freeze the focused-tested portable host authority-path repair and test-only timing correction on clean source, allocate the next unused cohort and reprove the no-cache build, pinned CDP, host-verified 20-site acquisition authority and initialization. Supervise bounded 20-site search actions; complete same-source browser and full defence foundation before fitting or capture |
 
 Preserve the v130 qualification evidence and failed authority attempt, the v129
 checkpoint and failed attempts, v128 failed build, v127
@@ -493,8 +512,9 @@ historical schema descriptions remain in the history and methodology.
 
 V143 passed its build, pinned CDP and 20-site acquisition correctness suite,
 but host verification and initialization stopped on a portable path comparison.
-The focused host repair is prepared in this source revision. Validate it, freeze a
-clean commit, then let the allocator assign a fresh cohort. Rebuild without
+V144 then stopped during its build. The host-path repair and test-only timing
+correction passed focused engineering checks; freeze a clean commit, then let
+the allocator assign a fresh cohort. Rebuild without
 cache, verify pinned CDP, independently verify the profile-bound acquisition
 authority on the host, and initialize a new 20-site root. Supervise small
 watcher actions through real preparation and both observation windows; diagnose
@@ -523,13 +543,14 @@ evidence; the separate `docs/CLASS-STUDY-20.md` profile is prospective
 until its source and evidence chain pass.
 
 1. Preserve the verified migration manifests, historical handoff, v126 through
-   v143 receipts and checkpoints, and all failed watcher evidence.
+   v144 receipts, claims and checkpoints, and all failed watcher evidence.
 2. Retain the registered Tranco candidate catalogue for this formal run.
-3. Finish the portable 20-site host authority-path repair as a tested source
-   revision. Freeze it, obtain the allocator's next unused cohort, build fresh
-   no-cache images, pass pinned CDP and independently verify profile-bound
-   acquisition authority on the host. V143's issued receipt and the v139 root
-   remain bound to their original sources and rules.
+3. Freeze the tested portable 20-site host authority-path repair and v144
+   test-timing correction as a clean source revision. Obtain the allocator's
+   next unused cohort, build fresh no-cache images, pass pinned CDP and
+   independently verify profile-bound acquisition authority on the host.
+   V143's issued receipt, v144's failed build and the v139 root remain bound
+   to their original sources and rules.
 4. Initialize a new versioned acquisition root, run monitored actions through
    an actual baseline and both short-horizon observations, then acquire the
    profile's 30-site pilot with genuine short-horizon prepared observations
