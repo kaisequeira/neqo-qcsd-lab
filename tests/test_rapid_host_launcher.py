@@ -314,6 +314,45 @@ def test_v5_formal_preflight_uses_only_the_v5_frozen_profile() -> None:
     assert "rapid v5 formal lane needs one named qualification manifest" in source
 
 
+@pytest.mark.parametrize("generation", ["", "-g02"])
+def test_epoch_selector_requires_explicit_authority_and_disables_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, generation: str,
+) -> None:
+    name = f"rapid-curated-tranco50-v5-formal-b01-s01-front-1200{generation}-e0001"
+    campaign = tmp_path / f"{name}.yml"
+    campaign.write_text(f"schema: 1\nname: {name}\npurpose: evaluation\n")
+    monkeypatch.delenv("QCSD_RAPID_EPOCH_LAUNCH_INPUT", raising=False)
+    absent = _select(tmp_path, "run", campaign, include_binding=True)
+    assert absent.returncode == 1
+    assert "explicit hash-bound block launch authority" in absent.stderr
+    # Routing itself does not trust this value: a second, actual image check
+    # independently reopens the hash-bound intent before capture topology.
+    monkeypatch.setenv("QCSD_RAPID_EPOCH_LAUNCH_INPUT", "routing fixture only")
+    selected = _select(tmp_path, "run", campaign, include_binding=True)
+    assert selected.returncode == 0, selected.stderr
+    assert selected.stdout.splitlines()[:2] == ["1", name]
+    assert selected.stdout.splitlines()[-3:] == ["formal", "front", "v5"]
+    result = tmp_path / "results" / name / "run-001"
+    (result / "inputs").mkdir(parents=True)
+    (result / "experiment.json").write_text(json.dumps({"name": name}))
+    (result / "inputs/campaign.yml").write_bytes(campaign.read_bytes())
+    resumed = _select(tmp_path, "resume", result)
+    assert resumed.returncode == 2
+    assert "generic resume is disabled" in resumed.stderr
+
+
+def test_epoch_image_preflight_reopens_authority_before_public_dns() -> None:
+    source = LAUNCHER.read_text(encoding="utf-8")
+    preflight = source.split('if (( rapid_capture_epoch )); then', 1)[1].split(
+        "# Docker's isolated client bridge", 1)[0]
+    assert 'org.qcsd.role=rapid-epoch-preflight' in preflight
+    assert 'validate_host_epoch_launch(json.loads(sys.argv[1])' in preflight
+    assert '--network none --read-only' in preflight
+    assert 'PYTHONPATH=${rapid_epoch_module_host}/src' in preflight
+    assert '${rapid_epoch_mount_root}:${rapid_epoch_mount_root}:ro' in preflight
+    assert 'actual_image=sys.argv[3]' in preflight
+
+
 def _shakedown_sites() -> tuple[Site, ...]:
     return tuple(Site(
         candidate_id=f"site-{index:02d}", workload_id=f"workload-{index:02d}",

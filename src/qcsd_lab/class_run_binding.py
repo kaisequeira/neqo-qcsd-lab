@@ -16,9 +16,13 @@ from pathlib import Path
 from typing import Any
 
 from .application_response_policy import (
+    EXACT_RESPONSE_BODY_POLICY,
     LEGACY_APPLICATION_RESPONSE_POLICY,
+    VARIABLE_PRIMARY_DOCUMENT_BODY_POLICY,
     application_response_policy,
+    primary_document_identity_policy,
     validate_application_response_graph,
+    validate_application_responses,
 )
 from .fidelity import terminal_evidence_render_receipt_valid
 from .manifest import canonical_bytes, https_origin, runtime_manifest
@@ -68,6 +72,8 @@ class ClassSampleRunBinding:
     expected_origins: tuple[str, ...]
     expected_responses: tuple[tuple[Any, ...], ...]
     application_response_policy: str = LEGACY_APPLICATION_RESPONSE_POLICY
+    primary_document_identity_policy: str = EXACT_RESPONSE_BODY_POLICY
+    prepared_application: Mapping[str, Any] | None = None
 
     def receipt(self) -> dict[str, Any]:
         """Return the portable JSON receipt embedded in downstream evidence."""
@@ -261,6 +267,8 @@ def resolve_class_sample_run_binding(
         expected_origins=unique_origins,
         expected_responses=expected_responses,
         application_response_policy=response_policy,
+        primary_document_identity_policy=primary_document_identity_policy(prepared),
+        prepared_application=prepared,
     )
 
 
@@ -350,10 +358,12 @@ def validate_class_sample_run_binding(
             if isinstance(response, Mapping) and response.get("complete") is True
         )
     )
-    if (
-        len(observed_responses) != len(responses)
-        or observed_responses != binding.expected_responses
-    ):
+    if binding.primary_document_identity_policy == VARIABLE_PRIMARY_DOCUMENT_BODY_POLICY:
+        if binding.prepared_application is None:
+            raise ValueError("class-study primary policy lacks its frozen full application")
+        validate_application_responses(binding.prepared_application, run)
+    elif (len(observed_responses) != len(responses)
+          or observed_responses != binding.expected_responses):
         raise ValueError("class-study run responses differ from the prepared full graph")
 
     endpoints = run.get("endpoints")

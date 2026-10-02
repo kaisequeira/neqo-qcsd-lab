@@ -579,10 +579,11 @@ def test_v4_normal_cohort_still_requires_fifty_full_graph_sites(context_v3):
         _build(context_v3)
 
 
-def test_v5_application_policy_cohort_keeps_50_complete_sites_and_bound_capture_grid(context_v3, tmp_path):
+@pytest.mark.parametrize("revision", [5, 6])
+def test_v5_application_policy_cohort_keeps_50_complete_sites_and_bound_capture_grid(context_v3, tmp_path, revision):
     from qcsd_lab import rapid_capture_plan as capture
     from qcsd_lab.application_response_policy import TERMINAL_HTTP_ERROR_POLICY
-    context_v3["amendment"] = _receipt(revision=5)
+    context_v3["amendment"] = _receipt(revision=revision)
     digest = amendment.selection_amendment_sha256(context_v3["amendment"])
     for row in context_v3["records"].values():
         if row["automated_site_screen"] is not None:
@@ -590,8 +591,13 @@ def test_v5_application_policy_cohort_keeps_50_complete_sites_and_bound_capture_
         if row["admission"] is not None:
             row["admission"].update(application_response_policy=TERMINAL_HTTP_ERROR_POLICY,
                 terminal_http_error_resource_ids=[], application_response_evidence_sha256=None)
+            if revision == 6:
+                row["admission"].update(primary_document_identity_policy=amendment.VARIABLE_PRIMARY_DOCUMENT_POLICY,
+                    application_response_evidence_sha256="3" * 64)
     value = _build(context_v3)
     assert value["payload"]["application_response_policy"] == TERMINAL_HTTP_ERROR_POLICY
+    if revision == 6:
+        assert value["payload"]["primary_document_identity_policy"] == amendment.VARIABLE_PRIMARY_DOCUMENT_POLICY
     assert len(value["payload"]["selected_candidate_ids"]) == 50
     assert value["payload"]["formal_sample_target"] == 16000
     cohort_path, amendment_path = tmp_path / "cohort.json", tmp_path / "amendment.json"

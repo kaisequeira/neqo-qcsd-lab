@@ -21,10 +21,26 @@ also passed. The prospective rule is frozen in
 [selection revision 5](../config/curated-sources/crux73-tranco600-rapid-v5-selection-v5.json),
 published-at timestamp `2026-10-02T21:06:26.442961Z`, raw/canonical SHA-256
 `45c0e5cbdb7b5388c72d9e23de63748d085c9f027c03c06b74b2809f06a3334f`.
-This is engineering verification; fresh installed-client, site-preparation,
-qualification and five-condition capture checks remain outstanding. The
+That revision-5 client and its installed-image checks passed. Fresh Poki replay retained
+the complete 401 leaf under this rule, but 52 other requests hit a stream
+limit; complete-site preparation, qualification and the new five-condition
+capture checks remain outstanding. The
 [evidence index](EVIDENCE-INDEX.md#application-response-policy-repair)
 locates the retained commands and actual execution results.
+
+The current prospective authority is
+[selection revision 6](../config/curated-sources/crux73-tranco600-rapid-v5-selection-v6.json),
+published at `2026-10-02T22:01:23.089910Z`. It adds the primary-only body
+variation rule described below. The stream-limit scheduling repair is published
+at native commit `00d14c0999bf2657cacc2581e431f39bacab7281`; its **28 focused
+tests and strict library Clippy passed**, and a cached native-only build
+completed in **121 seconds**. A fresh native-only live replay then completed
+all **260 requests in 6.617 seconds**, including 259 HTTP 200 responses and the
+complete HTTP 401 leaf; the formerly blocked 52 requests completed. That
+diagnostic has no matching Python-image, admission or capture claim. The
+preceding 111-second build and 54-second
+failed Poki attempt remain separate preserved observations. Study counters
+remain **0/50 admitted sites, 0/50 shakedown traces and 0/16,000 formal traces**.
 
 ## The concrete problem: Poki replied, but the client rejected its status
 
@@ -114,6 +130,56 @@ facts. The resulting traffic is not a claim about every signed-in session,
 browser interaction or future visit to the same domain.
 
 ## Prospective rollout and historical evidence
+
+### Primary HTML body variation: prospective revision 6
+
+The three preserved Poki replay attempts completed the main HTML request with
+status 200, but its body varied: **58,396 / 58,281 / 58,413 bytes**, each with a
+different hash. The other 207 shared complete responses kept the same status,
+size and body hash. These runs still have incomplete requests and grant no
+admission credit. They identify a second expected blocker after the stream
+limit repair: the existing rule requires even the main HTML body to repeat
+exactly.
+
+A separate, prospective identity rule is implemented in the authoring source:
+
+```text
+preparation.primary_document_identity_policy = variable-primary-document-body-v1
+```
+
+It requires the existing `completed-terminal-http-errors-v1` application rule.
+Only the unique, known-valid primary `Document` with ID 0 may vary its complete
+body size and hash. The exact URL, prepared successful status, safe request
+headers and complete frozen resource graph still have to match. All other
+resource bodies, including HTTP error leaves, remain exact; padding response
+qualification stays exact as well.
+
+Revision-6 admission checks potential padding capacity before later
+qualification: the already verified graph must contain at least one known-valid
+auxiliary 2xx response on the primary origin with a stable body of **1,200
+bytes or more**. Resource 0 cannot satisfy this check. The graph is preserved
+when this check fails. A candidate body still needs the ordinary sustained
+header and identity qualification before it can supply padding traffic; this
+early check grants no chaff qualification.
+
+The first actual native response remains recorded in `expected_responses`.
+Three fresh, complete full-graph replay files retain the actual body facts for
+each visit and are independently reopened, including on graphs with no error
+leaf. The rule does not replace recorded body values with a wildcard or remove
+requests. Its scientific scope is a fixed public-page resource graph whose
+primary HTML response may vary across visits, rather than identical delivered
+HTML bytes on every visit.
+
+All **14 focused registration/admission cases**, two revision-5/6 cohort and
+800-lane compatibility cases, and five targeted legacy checks passed. The raw
+proof tests use controlled fixtures for native actuation, including complete
+all-2xx and HTTP-error-leaf graphs; they do not establish live site eligibility.
+The additional eight full-graph raw-proof/capacity/tamper cases and one legacy
+graph case passed after the early capacity check was added. Revision 6 is
+published create-only, with raw/canonical SHA-256
+`7017fe41d41b64673abd75a7f3e0a3fc083450fff9b3264b6abd33e1ad5c7045`.
+It has no live admission result yet. Revisions 1–5 keep their recorded rules,
+and the old failed replay attempts gain no new credit.
 
 The new preparation/native execution semantics must be source-bound and opted
 in under newly published authority. The runtime identity must match the actual

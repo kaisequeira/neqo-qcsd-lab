@@ -377,11 +377,17 @@ Existing lane generations retry an unchanged frozen workload. They cannot
 refresh one class's manifest and qualifier within the existing cohort and
 formal manifest: [planning requires the admitted bytes](../src/qcsd_lab/rapid_site_admission.py#L2047),
 and [formal closure derives the workload from its original terminal](../src/qcsd_lab/rapid_capture_plan.py#L731).
-If refresh is allowed, a prospective class-version/epoch procedure must be
-defined before formal capture. That procedure is **not implemented**. It must
-retain accepted evidence, independently validate each new complete graph and
-qualification, and preserve **50 × five × 64 = 16,000** without relabelling old
-failures or accepting changed bytes against an old identity.
+The separate [prospective class-epoch procedure](RAPID-CLASS-EPOCHS.md) now has
+an authoring implementation. It must be declared before its first affected
+capture and pass a bounded real capture/recovery trial before long-run use;
+local fixture tests are not live study evidence. It retains other committed
+blocks, independently reopens each fresh complete graph and qualifier, and
+requires all five conditions in an affected 100-slot block to share the same
+predeclared epoch vector. Final closure still requires **50 × five × 64 =
+16,000**, with no relabelling of old failures. Historical plans keep their
+original strict byte contracts. Epochs delegate response comparisons to the
+original cohort's registered policy; they do not themselves permit variable
+primary-document content or source/image changes.
 
 The earliest cheap check is first-site qualification followed by an immediate
 baseline capture, then a repeat of the **same frozen workload** later while

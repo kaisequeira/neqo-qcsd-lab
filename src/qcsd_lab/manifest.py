@@ -12,7 +12,9 @@ from urllib.parse import urlsplit
 
 from .application_response_policy import (
     application_response_policy,
+    primary_document_identity_policy,
     validate_application_response_policy_evidence,
+    validate_primary_document_identity_evidence,
 )
 
 from .discovery_evidence import (
@@ -67,6 +69,8 @@ REPLAY_KEYS = {
 PREPARATION_KEYS = {
     "application_response_policy",
     "application_response_policy_evidence",
+    "primary_document_identity_policy",
+    "primary_document_identity_evidence",
     "source_url",
     "final_url",
     "chromium_version",
@@ -111,6 +115,8 @@ DISCOVERY_EVIDENCE_PREPARATION_KEYS = {
 LEGACY_OPTIONAL_PREPARATION_KEYS = {
     "application_response_policy",
     "application_response_policy_evidence",
+    "primary_document_identity_policy",
+    "primary_document_identity_evidence",
     "udp_payload_qualification",
     "coverage_admission",
     "origin_ip_pins",
@@ -656,10 +662,15 @@ def _validate_preparation(
         response_ids.add(resource_id)
     if response_ids != resource_ids or len(response_ids) != len(responses):
         raise ValueError("manifest preparation expected response IDs must match resources")
-    if "application_response_policy" in value or "application_response_policy_evidence" in value:
+    if any(key in value for key in (
+        "application_response_policy", "application_response_policy_evidence",
+        "primary_document_identity_policy", "primary_document_identity_evidence",
+    )):
         policy_manifest = {"preparation": value, "resources": resources}
         application_response_policy(policy_manifest)
+        primary_document_identity_policy(policy_manifest)
         validate_application_response_policy_evidence(policy_manifest)
+        validate_primary_document_identity_evidence(policy_manifest)
 
 
 def _validate_coverage_admission(

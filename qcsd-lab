@@ -5783,11 +5783,14 @@ rapid_v2_diagnostic_pattern='^rapid-curated-tranco50-v2-diagnostic-[a-z0-9]+(-[a
 rapid_v5_diagnostic_pattern='^rapid-curated-tranco50-v5-diagnostic-b(01)-s(0[12])-(undefended|front|tamaraw|buflo|cs-buflo)-1200(-g(0[2-9]|[1-9][0-9]))?$'
 rapid_v4_formal_pattern='^rapid-curated-tranco50-v4-formal-b(0[1-9]|1[0-6])-s(0[1-9]|10)-(undefended|front|tamaraw|buflo|cs-buflo)-1200(-g(0[2-9]|[1-9][0-9]))?$'
 rapid_v5_formal_pattern='^rapid-curated-tranco50-v5-formal-b(0[1-9]|1[0-6])-s(0[1-9]|10)-(undefended|front|tamaraw|buflo|cs-buflo)-1200(-g(0[2-9]|[1-9][0-9]))?$'
+rapid_v5_epoch_pattern='^rapid-curated-tranco50-v5-formal-b(0[1-9]|1[0-6])-s(0[1-9]|10)-(undefended|front|tamaraw|buflo|cs-buflo)-1200(-g(0[2-9]|[1-9][0-9]))?-e[0-9]{4}$'
+rapid_capture_epoch=0
 if [[ "${1:-}" == "run" &&
       ( "${study_campaign_name%.yml}" =~ ${rapid_v2_diagnostic_pattern} ||
         "${study_campaign_name%.yml}" =~ ${rapid_v5_diagnostic_pattern} ||
         "${study_campaign_name%.yml}" =~ ${rapid_v4_formal_pattern} ||
-        "${study_campaign_name%.yml}" =~ ${rapid_v5_formal_pattern} ) &&
+        "${study_campaign_name%.yml}" =~ ${rapid_v5_formal_pattern} ||
+        "${study_campaign_name%.yml}" =~ ${rapid_v5_epoch_pattern} ) &&
       "${study_campaign_name}" == *.yml ]]; then
   if (( $# != 2 )); then
     echo "rapid capture run requires exactly one campaign" >&2
@@ -5808,6 +5811,15 @@ if [[ "${1:-}" == "run" &&
     rapid_capture_role="formal"
     rapid_capture_mode="${BASH_REMATCH[3]}"
     rapid_capture_version="v5"
+  elif [[ "${rapid_capture_name}" =~ ${rapid_v5_epoch_pattern} ]]; then
+    rapid_capture_role="formal"
+    rapid_capture_mode="${BASH_REMATCH[3]}"
+    rapid_capture_version="v5"
+    rapid_capture_epoch=1
+    if [[ -z "${QCSD_RAPID_EPOCH_LAUNCH_INPUT:-}" ]]; then
+      echo "rapid epoch capture requires explicit hash-bound block launch authority" >&2
+      exit 1
+    fi
   elif [[ "${rapid_capture_name}" =~ ${rapid_v5_diagnostic_pattern} ]]; then
     rapid_capture_role="diagnostic"
     rapid_capture_mode="${BASH_REMATCH[3]}"
@@ -5822,7 +5834,8 @@ elif [[ "${1:-}" == "resume" &&
         ( "${study_resume_name:-}" =~ ${rapid_v2_diagnostic_pattern} ||
           "${study_resume_name:-}" =~ ${rapid_v5_diagnostic_pattern} ||
           "${study_resume_name:-}" =~ ${rapid_v4_formal_pattern} ||
-          "${study_resume_name:-}" =~ ${rapid_v5_formal_pattern} ) ]]; then
+          "${study_resume_name:-}" =~ ${rapid_v5_formal_pattern} ||
+          "${study_resume_name:-}" =~ ${rapid_v5_epoch_pattern} ) ]]; then
   if (( $# != 2 )); then
     echo "rapid capture resume requires exactly one result root" >&2
     exit 2
@@ -5833,6 +5846,10 @@ elif [[ "${1:-}" == "resume" &&
     exit 1
   fi
   rapid_capture_name="${study_resume_name}"
+  if [[ "${rapid_capture_name}" =~ ${rapid_v5_epoch_pattern} ]]; then
+    echo "rapid epoch capture requires a fresh declared lane; generic resume is disabled" >&2
+    exit 2
+  fi
   if [[ "${rapid_capture_name}" =~ ${rapid_v4_formal_pattern} ]]; then
     rapid_capture_role="formal"
     rapid_capture_mode="${BASH_REMATCH[3]}"
@@ -7809,6 +7826,62 @@ elif role != "diagnostic" or campaign.purpose != "smoke":
     raise SystemExit("rapid diagnostic campaign identity is invalid")
 ' "${1}" "${rapid_capture_target}" "${rapid_capture_name}" \
   "${rapid_capture_role}" "${rapid_capture_mode}" "${rapid_capture_version}"
+  if (( rapid_capture_epoch )); then
+    # The namespace alone grants no epoch authority. Reopen its actual bound
+    # intent, full class vector and response qualifiers inside this image,
+    # using the separately frozen study source and its original source bridge.
+    rapid_epoch_input="${QCSD_RAPID_EPOCH_LAUNCH_INPUT:-}"
+    if [[ -z "${rapid_epoch_input}" ]]; then
+      echo "rapid epoch capture requires explicit hash-bound block launch authority" >&2
+      exit 1
+    fi
+    rapid_epoch_roots="$(/usr/bin/python3 -I -c '
+import json
+import sys
+from pathlib import Path
+
+value = json.loads(sys.argv[1])
+if not isinstance(value, dict) or set(value) != {"spec", "root", "intent", "intent_sha256"}:
+    raise SystemExit("rapid epoch launch authority fields differ")
+spec = value["spec"]
+roots = {spec[key] for key in ("data_root", "runtime_source_root", "module_root", "execution_root")}
+roots.update(str(Path(spec[key]).parent) for key in ("source_manifest", "client_binary", "base_launcher"))
+for root in roots:
+    path = Path(root)
+    if (not path.is_absolute() or ".." in path.parts or not path.is_dir()
+        or any(item.is_symlink() for item in (path, *path.parents))
+        or any(character in root for character in ("\n", "\r", "\0", ":"))):
+        raise SystemExit("rapid epoch mounts require explicit regular absolute directories")
+print(spec["module_root"])
+print(spec["runtime_source_root"])
+for root in sorted(roots):
+    print(root)
+' "${rapid_epoch_input}")" || exit 1
+    mapfile -t rapid_epoch_rows <<< "${rapid_epoch_roots}"
+    rapid_epoch_module_host="${rapid_epoch_rows[0]}"
+    rapid_epoch_runtime_host="${rapid_epoch_rows[1]}"
+    rapid_epoch_mount_args=()
+    for rapid_epoch_mount_root in "${rapid_epoch_rows[@]:2}"; do
+      rapid_epoch_mount_args+=(--volume "${rapid_epoch_mount_root}:${rapid_epoch_mount_root}:ro")
+    done
+    qcsd_run_attached_docker docker run --network none --read-only \
+      --security-opt no-new-privileges --cap-drop ALL \
+      --label "org.qcsd.owner=qcsd-lab" \
+      --label "org.qcsd.role=rapid-epoch-preflight" \
+      --user "${qcsd_invoking_uid}:${qcsd_invoking_gid}" \
+      --env "PYTHONDONTWRITEBYTECODE=1" \
+      --env "PYTHONPATH=${rapid_epoch_module_host}/src" \
+      --env "QCSD_LAB_ROOT=${rapid_epoch_runtime_host}" \
+      --env "QCSD_LAB_SOURCE_METADATA=/usr/share/qcsd-lab/source.json" \
+      --env "QCSD_LAB_IMAGE_DIGEST=${image_id}" \
+      "${rapid_epoch_mount_args[@]}" \
+      --entrypoint /opt/qcsd-venv/bin/python3 "${image_id}" -c '
+import json
+import sys
+from qcsd_lab.rapid_class_epochs import validate_host_epoch_launch
+validate_host_epoch_launch(json.loads(sys.argv[1]), expected_campaign=sys.argv[2], actual_image=sys.argv[3])
+' "${rapid_epoch_input}" "${rapid_capture_name}" "${image_id}"
+  fi
   # Docker's isolated client bridge cannot forward public DNS through its
   # embedded resolver. Resolve every approved origin on a disposable ordinary
   # bridge before creating the ETF topology, then pin the exact public IPv4

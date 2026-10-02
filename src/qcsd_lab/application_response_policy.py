@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
+import hashlib
 import re
 from typing import Any
 from urllib.parse import urlsplit
@@ -15,6 +16,10 @@ HTTP_2XX_ONLY_POLICY = "http-2xx-only-v1"
 COMPLETED_TERMINAL_HTTP_ERRORS_POLICY = "completed-terminal-http-errors-v1"
 LEGACY_APPLICATION_RESPONSE_POLICY = HTTP_2XX_ONLY_POLICY
 TERMINAL_HTTP_ERROR_POLICY = COMPLETED_TERMINAL_HTTP_ERRORS_POLICY
+EXACT_PRIMARY_DOCUMENT_IDENTITY_POLICY = "exact-response-body-v1"
+VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY = "variable-primary-document-body-v1"
+EXACT_RESPONSE_BODY_POLICY = EXACT_PRIMARY_DOCUMENT_IDENTITY_POLICY
+VARIABLE_PRIMARY_DOCUMENT_BODY_POLICY = VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
 
@@ -37,6 +42,25 @@ def application_response_policy(manifest: Mapping[str, Any]) -> str:
     return validate_application_response_policy(value)
 
 
+def validate_primary_document_identity_policy(value: Any) -> str:
+    if value is None:
+        return EXACT_PRIMARY_DOCUMENT_IDENTITY_POLICY
+    if not isinstance(value, str) or value not in {
+        EXACT_PRIMARY_DOCUMENT_IDENTITY_POLICY, VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY,
+    }:
+        raise ValueError("primary document identity policy is unknown or malformed")
+    return value
+
+
+def primary_document_identity_policy(manifest: Mapping[str, Any]) -> str:
+    preparation = manifest.get("preparation")
+    if not isinstance(preparation, Mapping) or "primary_document_identity_policy" not in preparation:
+        return EXACT_PRIMARY_DOCUMENT_IDENTITY_POLICY
+    if preparation["primary_document_identity_policy"] is None:
+        raise ValueError("explicit primary document identity policy cannot be null")
+    return validate_primary_document_identity_policy(preparation["primary_document_identity_policy"])
+
+
 def terminal_http_error_resource_allowed(
     resource: Mapping[str, Any], resources: Sequence[Mapping[str, Any]],
 ) -> bool:
@@ -51,6 +75,10 @@ def terminal_http_error_resource_allowed(
 
 def validate_prepared_response_graph(manifest: Mapping[str, Any]) -> dict[str, Any]:
     policy = application_response_policy(manifest)
+    primary_policy = primary_document_identity_policy(manifest)
+    if (primary_policy == VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY
+        and policy != COMPLETED_TERMINAL_HTTP_ERRORS_POLICY):
+        raise ValueError("variable primary document identity requires the terminal HTTP response policy")
     preparation = manifest.get("preparation")
     resources = manifest.get("resources")
     expected = preparation.get("expected_responses") if isinstance(preparation, Mapping) else None
@@ -87,8 +115,66 @@ def validate_prepared_response_graph(manifest: Mapping[str, Any]) -> dict[str, A
             or primary.get("url") not in {preparation.get("source_url"), preparation.get("final_url")}
             or primary.get("known_valid") is not True or not 200 <= responses[0]["status"] < 300):
             raise ValueError("application response policy requires a known-valid 2xx primary Document")
+    if primary_policy == VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY:
+        coverage = preparation.get("coverage_admission")
+        required = coverage.get("required_resources") if isinstance(coverage, Mapping) else None
+        if (policy != COMPLETED_TERMINAL_HTTP_ERRORS_POLICY
+            or not isinstance(coverage, Mapping)
+            or coverage.get("policy") != "all-approved-origins-and-rendered-resources"
+            or not isinstance(required, list) or len(required) != len(resources)
+            or any(not isinstance(row, Mapping) or type(row.get("id")) is not int
+                   or not isinstance(row.get("url"), str) for row in required)
+            or {(row["id"], row["url"]) for row in required}
+            != {(row["id"], row["url"]) for row in resources}
+            or type(preparation.get("max_response_bytes")) is not int
+            or preparation["max_response_bytes"] <= 0
+            or by_id[0].get("chaff_priority") is not False
+            or responses[0]["bytes"] <= 0
+            or responses[0]["bytes"] > preparation["max_response_bytes"]):
+            raise ValueError("variable primary document identity requires bounded unchanged complete graph coverage")
     return {"policy": policy, "resource_ids": sorted(by_id),
             "terminal_http_error_resource_ids": sorted(negative)}
+
+
+def _primary_content_type(row: Mapping[str, Any]) -> str:
+    headers = row.get("response_headers")
+    if (not isinstance(headers, list) or any(not isinstance(pair, list) or len(pair) != 2
+        or any(not isinstance(item, str) for item in pair) for pair in headers)):
+        raise ValueError("primary Document has no retained response headers")
+    values = [value for name, value in headers if name.lower() == "content-type"]
+    if len(values) != 1 or values[0].split(";", 1)[0].strip().lower() not in {
+        "text/html", "application/xhtml+xml",
+    }:
+        raise ValueError("primary Document is not an actual public HTML response")
+    return values[0]
+
+
+def validate_primary_document_response(
+    manifest: Mapping[str, Any], row: Mapping[str, Any], *,
+    expected_content_type: str | None = None,
+) -> dict[str, Any]:
+    """Validate actual primary delivery; retain its real size and hash unchanged."""
+    validate_prepared_response_graph(manifest)
+    resource = next(resource for resource in manifest["resources"] if resource["id"] == 0)
+    target = next(row for row in manifest["preparation"]["expected_responses"] if row["resource_id"] == 0)
+    cap = manifest["preparation"]["max_response_bytes"]
+    if (not isinstance(row, Mapping) or type(row.get("resource_id")) is not int or row["resource_id"] != 0
+        or row.get("url") != resource["url"] or row.get("complete") is not True
+        or row.get("outcome") != "succeeded" or type(row.get("status")) is not int
+        or row["status"] != target["status"] or not 200 <= row["status"] < 300
+        or type(row.get("bytes")) is not int or not 0 < row["bytes"] <= cap
+        or not isinstance(row.get("body_sha256"), str) or SHA256.fullmatch(row["body_sha256"]) is None
+        or row["body_sha256"] == hashlib.sha256(b"").hexdigest()
+        or row.get("request_headers") != resource["headers"]):
+        raise ValueError("primary Document was not delivered complete under its exact public identity")
+    if row.get("content_length") is not None and (
+        type(row["content_length"]) is not int or row["content_length"] != row["bytes"]
+    ):
+        raise ValueError("primary Document did not retain its declared complete body")
+    content_type = _primary_content_type(row)
+    if expected_content_type is not None and content_type != expected_content_type:
+        raise ValueError("primary Document changed its prepared HTML content type")
+    return {"content_type": content_type, "bytes": row["bytes"], "body_sha256": row["body_sha256"]}
 
 
 def validate_application_responses(
@@ -97,6 +183,9 @@ def validate_application_responses(
     """Reopen exact delivery without normalizing raw status or runner outcomes."""
     graph = validate_prepared_response_graph(manifest)
     policy = graph["policy"]
+    primary_policy = primary_document_identity_policy(manifest)
+    primary_evidence = (validate_primary_document_identity_evidence(manifest)
+                        if primary_policy == VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY else None)
     recorded_policy = run.get("application_response_policy", HTTP_2XX_ONLY_POLICY)
     if recorded_policy != policy:
         raise ValueError("runner application response policy differs from prepared policy")
@@ -123,7 +212,16 @@ def validate_application_responses(
             or row["bytes"] < 0 or not isinstance(row.get("body_sha256"), str)
             or SHA256.fullmatch(row["body_sha256"]) is None):
             raise ValueError(f"application resource {identifier} was not delivered under its exact declared status")
-        if require_identity and (row["bytes"] != target["bytes"] or row["body_sha256"] != target["body_sha256"]):
+        if (primary_policy == VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY
+            and row.get("request_headers") != resources[identifier]["headers"]):
+            raise ValueError(f"application resource {identifier} changed its frozen request headers")
+        variable_primary = identifier == 0 and primary_policy == VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY
+        if variable_primary:
+            validate_primary_document_response(manifest, row,
+                expected_content_type=_primary_content_type(primary_evidence["stability_primary_responses"][0]))
+        if require_identity and not variable_primary and (
+            row["bytes"] != target["bytes"] or row["body_sha256"] != target["body_sha256"]
+        ):
             raise ValueError(f"application resource {identifier} differs from prepared response identity")
         if identifier in graph["terminal_http_error_resource_ids"] and row.get("content_length") is not None:
             length = row["content_length"]
@@ -134,6 +232,92 @@ def validate_application_responses(
     if seen != set(resources):
         raise ValueError("application response ledger omits a full-graph resource")
     return {**graph, "response_signature": sorted(signatures)}
+
+
+def application_response_identity_signature(
+    manifest: Mapping[str, Any], signature: list[tuple[Any, ...]] | None,
+) -> list[tuple[Any, ...]] | None:
+    """Project comparison only, after the caller validates actual raw delivery."""
+    if signature is None:
+        return None
+    if primary_document_identity_policy(manifest) != VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY:
+        return deepcopy(signature)
+    validate_primary_document_identity_evidence(manifest)
+    identifiers = {row["id"] for row in manifest["resources"]}
+    if (not isinstance(signature, list) or len(signature) != len(identifiers)
+        or any(not isinstance(row, (tuple, list)) or len(row) != 5
+               or type(row[0]) is not int for row in signature)
+        or {row[0] for row in signature} != identifiers):
+        raise ValueError("application identity signature changed complete resource coverage")
+    return [(identifier, status, VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY,
+             VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY, outcome)
+            if identifier == 0 else (identifier, status, size, digest, outcome)
+            for identifier, status, size, digest, outcome in signature]
+
+
+_PRIMARY_RESPONSE_KEYS = {"resource_id", "url", "status", "bytes", "body_sha256", "content_length",
+                          "request_headers", "response_headers", "complete", "outcome"}
+
+
+def build_primary_document_identity_evidence(
+    manifest: Mapping[str, Any], runs: Sequence[Mapping[str, Any]], *, stability_run_sha256s: list[str],
+) -> dict[str, Any]:
+    if primary_document_identity_policy(manifest) != VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY:
+        raise ValueError("variable primary evidence requires its explicit prospective policy")
+    preparation = manifest["preparation"]
+    witnesses = []
+    for run in runs:
+        if (run.get("completion_status") != "complete" or run.get("error") is not None
+            or run.get("error_class") is not None or run.get("terminal_evidence_render_errors") != []
+            or run.get("application_response_policy") != application_response_policy(manifest)):
+            raise ValueError("variable primary evidence requires three complete nonerror full graph replays")
+        rows = [row for row in run.get("responses", []) if row.get("resource_id") == 0]
+        if len(rows) != 1:
+            raise ValueError("variable primary evidence requires one actual primary in each run")
+        witnesses.append({key: deepcopy(rows[0].get(key)) for key in _PRIMARY_RESPONSE_KEYS})
+    value = {"schema_version": 1, "policy": VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY,
+             "application_response_policy": application_response_policy(manifest), "primary_resource_id": 0,
+             "max_response_bytes": preparation["max_response_bytes"], "source_url": preparation["source_url"],
+             "final_url": preparation["final_url"], "stability_run_sha256s": stability_run_sha256s,
+             "stability_primary_responses": witnesses}
+    provisional = deepcopy(dict(manifest))
+    provisional["preparation"]["primary_document_identity_evidence"] = value
+    validate_primary_document_identity_evidence(provisional)
+    return value
+
+
+def validate_primary_document_identity_evidence(manifest: Mapping[str, Any]) -> dict[str, Any] | None:
+    graph = validate_prepared_response_graph(manifest)
+    preparation = manifest["preparation"]
+    evidence = preparation.get("primary_document_identity_evidence")
+    if primary_document_identity_policy(manifest) == EXACT_PRIMARY_DOCUMENT_IDENTITY_POLICY:
+        if evidence is not None:
+            raise ValueError("strict primary document identity cannot gain variable-body evidence")
+        return None
+    fields = {"schema_version", "policy", "application_response_policy", "primary_resource_id",
+              "max_response_bytes", "source_url", "final_url", "stability_run_sha256s", "stability_primary_responses"}
+    if (not isinstance(evidence, Mapping) or set(evidence) != fields
+        or type(evidence["schema_version"]) is not int or evidence["schema_version"] != 1
+        or evidence["policy"] != VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY
+        or evidence["application_response_policy"] != graph["policy"]
+        or type(evidence["primary_resource_id"]) is not int or evidence["primary_resource_id"] != 0
+        or any(evidence[key] != preparation[key] for key in ("max_response_bytes", "source_url", "final_url"))
+        or type(evidence["max_response_bytes"]) is not int or preparation.get("stability_runs") != 3
+        or type(preparation.get("stability_runs")) is not int):
+        raise ValueError("primary document identity evidence changed its declared policy or preparation")
+    hashes, rows = evidence["stability_run_sha256s"], evidence["stability_primary_responses"]
+    if (not isinstance(hashes, list) or len(hashes) != 3
+        or any(not isinstance(value, str) or SHA256.fullmatch(value) is None for value in hashes)
+        or not isinstance(rows, list) or len(rows) != 3
+        or any(not isinstance(row, Mapping) or set(row) != _PRIMARY_RESPONSE_KEYS for row in rows)):
+        raise ValueError("primary document identity evidence requires all three actual replay witnesses")
+    content_type = _primary_content_type(rows[0])
+    for row in rows:
+        validate_primary_document_response(manifest, row, expected_content_type=content_type)
+    first = next(row for row in preparation["expected_responses"] if row["resource_id"] == 0)
+    if any(first[key] != rows[0][key] for key in ("status", "bytes", "body_sha256")):
+        raise ValueError("primary prepared identity differs from its first actual replay snapshot")
+    return deepcopy(dict(evidence))
 
 
 validate_application_response_graph = validate_prepared_response_graph

@@ -136,6 +136,27 @@ def test_legacy_success_cleans_temporary_proof_and_returns_no_evidence_path(tmp_
     assert sorted(path.name for path in tmp_path.iterdir()) == ["legacy-cleanup.json"]
 
 
+def test_incomplete_native_replay_stops_before_repeat_and_retains_actual_failure(tmp_path, monkeypatch):
+    def mutate(_index, run):
+        run["completion_status"] = "partial"
+        run["responses"][1].update(status=None, complete=False, outcome="request_error")
+
+    commands = install_negative_preparation(monkeypatch, alter_stability=mutate)
+    with pytest.raises(prepare.RecoverablePreparationError, match="1 incomplete responses.*request_error"):
+        prepare.prepare_workload(
+            "partial-replay", "https://page.test/", ["https://page.test", "https://cdn.test"],
+            output_root=tmp_path, stability_interval_seconds=0, require_complete_coverage=True,
+            application_response_policy=POLICY,
+        )
+    assert len(commands) == 2  # One probe and one failed replay, no later replay.
+    assert not (tmp_path / "partial-replay.json").exists()
+    retained = tmp_path / "partial-replay-failure-evidence/artifacts"
+    actual = json.loads((retained / "stability-0/run.json").read_bytes())
+    assert actual["responses"][1]["outcome"] == "request_error"
+    assert not (retained / "stability-1").exists()
+    assert not (retained / "stability-2").exists()
+
+
 @pytest.mark.parametrize("change", ["incomplete", "wrong-url", "h2", "reset", "wrong-hash", "truncated-body", "bool-length", "string-length"])
 def test_opt_in_probe_resolution_requires_actual_retained_complete_http_error(tmp_path, monkeypatch, change):
     def mutate(stage, run):

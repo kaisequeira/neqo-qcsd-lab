@@ -161,6 +161,15 @@ def successor_lane(lane: Lane, generation: int) -> Lane:
     )
 
 
+def epoch_campaign_name(lane: Lane, epoch: int) -> str:
+    """Separate a prospective block epoch from unchanged-input lane retries."""
+    if type(epoch) is not int or not 1 <= epoch <= 9999 or lane.study_version != 5:
+        raise ValueError("rapid block epoch is outside the registered v5 namespace")
+    return _campaign_name(
+        lane.role, lane.block, lane.shard, lane.mode, lane.generation, 5,
+    ) + f"-e{epoch:04d}"
+
+
 def _check_sites(sites: Sequence[Site], *, final: bool) -> tuple[Site, ...]:
     selected = tuple(sites)
     expected = FINAL_CLASS_COUNT if final else 10
@@ -489,6 +498,7 @@ def verify_lane_result(
     campaign_sha256: str,
     workload_sha256s: Mapping[str, str],
     qualification_set_manifest_sha256: str | None = None,
+    block_epoch: int | None = None,
 ) -> dict[str, Any]:
     """Deep-verify an exact lane result and reject sealed incomplete runs.
 
@@ -496,10 +506,12 @@ def verify_lane_result(
     and ensure that its launch-intent/source-overlay record is also verified.
     """
 
-    if lane.role not in {"formal", "diagnostic"} or lane.campaign_name != _campaign_name(
-        lane.role, lane.block, lane.shard, lane.mode, lane.generation,
-        lane.study_version,
-    ):
+    expected_name = (
+        epoch_campaign_name(lane, block_epoch) if block_epoch is not None
+        else _campaign_name(lane.role, lane.block, lane.shard, lane.mode,
+                            lane.generation, lane.study_version)
+    )
+    if lane.role not in {"formal", "diagnostic"} or lane.campaign_name != expected_name:
         raise ValueError("rapid lane role and campaign identity differ")
 
     if IMAGE_RE.fullmatch(collection_image_digest) is None:

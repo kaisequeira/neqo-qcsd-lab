@@ -66,6 +66,11 @@ def parser() -> argparse.ArgumentParser:
         choices=("completed-terminal-http-errors-v1",),
         help="retain completed auxiliary HTTP error responses under the explicit leaf policy",
     )
+    prepare.add_argument(
+        "--primary-document-identity-policy",
+        choices=("variable-primary-document-body-v1",),
+        help="allow complete primary HTML body variation; requires the completed terminal HTTP error policy",
+    )
 
     commands.add_parser(
         "qualify-chaff",
@@ -383,6 +388,7 @@ def main(argv: list[str] | None = None) -> None:
                 ),
                 require_complete_coverage=args.require_complete_coverage,
                 application_response_policy=args.application_response_policy,
+                primary_document_identity_policy=args.primary_document_identity_policy,
             )
         except (FileExistsError, OSError, PreparationError, RuntimeError, ValueError) as error:
             _fail(error)

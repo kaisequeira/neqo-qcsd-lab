@@ -15,6 +15,53 @@ graph is preserved, including error responses; primary pages and padding
 resources retain successful-response requirements. Rust commit
 `1cda2d2446b53d0bdee185e81755fb5115744eb1` contains the native change.
 
+### Current revision-6 publication and native stream-credit repair
+
+The create-only [revision-6 receipt](../config/curated-sources/crux73-tranco600-rapid-v5-selection-v6.json)
+was published at `2026-10-02T22:01:23.089910Z`, raw/canonical SHA-256
+`7017fe41d41b64673abd75a7f3e0a3fc083450fff9b3264b6abd33e1ad5c7045`.
+It retains the v5 profile and **50 × 5 × 64 = 16,000** target. The new
+`variable-primary-document-body-v1` rule permits only primary Document 0's
+complete body size/hash to vary, retaining the first actual response and
+three independently reopened complete raw graph replays. Other response
+identities remain exact. The revision-6 admission verifier additionally checks
+for a known-valid, non-primary, same-origin 2xx response of at least 1,200
+bytes before granting admission. This screens potential padding capacity;
+it does not grant response-chaff qualification. Eight focused raw-proof,
+capacity and tamper cases passed in 132.36 seconds, and a separate legacy
+graph/source-binding case passed in 13.68 seconds. Admission source SHA-256:
+`5918f99f540a761896ed2e5732c72c0582a399518cbdb2dfb5c45fd91d52decf`.
+
+Native stream-credit commit `00d14c0999bf2657cacc2581e431f39bacab7281`
+is published on `main` and `desktop-portability-2026-09-26`. Actual checks are
+retained under `../diagnostic-rehearsals/application-stream-credit-native-20261003-003/`.
+The raw test output records **28 passed, zero failed**; `tests-completed.json`
+and `clippy-completed.json` record exit 0 at
+`2026-10-02T21:42:55.805522Z` and `2026-10-02T21:43:10.116858Z`.
+The Clippy execution is the strict library check.
+
+The cached native-only release is retained under
+`../diagnostic-rehearsals/application-stream-credit-release-20261003-001/`.
+`release-completed.json` records exit 0 in **121.109 seconds**, completed
+at `2026-10-02T22:11:17.528679Z`. `client-build.json` explicitly records scope
+`native-client-only-not-matched-Python-runtime`, zero scientific credit, and
+client SHA-256 `98d6f5552376782b4df99f74187e8a636be807bd22ed879a13c7984e94f0741f`.
+The fresh native-only live replay is retained under
+`../diagnostic-rehearsals/application-stream-credit-live-20261003-001/`.
+`native-replay-completed.json` records exit 0 with empty stdout/stderr in
+**6.617 seconds**, completed at `2026-10-02T22:16:50.673260Z`.
+`diagnostic-result.json` records all **260 responses complete and succeeded**,
+259 HTTP 200 responses, one HTTP 401 response, `completion_status: complete`
+and `error: null`. The previously blocked 52 resources completed; request
+stream-credit blocking and release events remain retained. The raw run
+SHA-256 is `813a098779dadf077c8bb686a7ceca94b051aede16d76f18272ad05293032d08`.
+Its explicit scope is `native-only-diagnostic-not-admitted-study-evidence`.
+No new matched Python images, admitted site, qualifier or capture result is
+claimed. Study counters remain **0/50 admitted, 0/50 shakedown traces and
+0/16,000 formal traces**.
+
+### Preserved revision-5 runtime and failed Poki preparation
+
 Actual focused unit and lint executions are retained under the host-local
 `../diagnostic-rehearsals/application-response-policy-native-20261003-004/`.
 `source-binding.json` records native source SHA-256
@@ -40,15 +87,55 @@ It preserves the v5 profile and **50 × 5 × 64 = 16,000** target. New policy
 preparations must begin after this publication barrier and use the new actual
 source/client bindings; no earlier failed attempt acquires admission credit.
 
-The cached release and derivative-image recipe is staged separately under
-`../diagnostic-rehearsals/application-response-policy-runtime-20261003-001/`.
-It requires a clean published Lab source with its actual Rust Gitlink and
-generates fresh qualification implementation receipts with schema 2, including
-the shared response-policy helper. No new image, live preparation or capture
-pass is asserted by the staged recipe. The live context 007 retains its old
-acceptance rule and unchanged source/image identities. Its second bounded
-40-action batch has now finished normally; no further old-context batch has
-been launched.
+The actual cached release and derivative-image build is retained under
+`../diagnostic-rehearsals/application-response-policy-runtime-build-20261003-001/`.
+`release-build-completed.json` records exit 0 in **111.389 seconds**, completed
+at `2026-10-02T21:11:31.374959Z`. `client-build.json` records clean Lab source
+`3730660b97a6c4f5e8869c963ba956fca0ce61bf`, pinned native source
+`1cda2d2446b53d0bdee185e81755fb5115744eb1` and client SHA-256
+`00f6410163a48a2ca960b103ae9177156d074013f7af10a4b94f1720336dd998`.
+`canonical-runtime.json` records collection image
+`sha256:1b6648a1862fd62f181b18a1956efd74277bc362da930ca36ef9686eef9cc42d`
+and preparation image
+`sha256:b5d43cd041c98493ed00b364b976988696fa3dcdff994dcdfd44a3e56d9b480b`.
+The canonical installed-source/client checks exited 0 with empty stderr at
+`2026-10-02T21:18:50.884350Z` and `2026-10-02T21:18:58.422438Z` respectively.
+Fresh qualification implementation receipts bind the shared response-policy
+helper under schema 2. These runtime checks grant no site or trace credit.
+
+The first fresh live preparation is preserved under
+`../diagnostic-rehearsals/application-response-policy-poki-diagnostic-20261003-001/`.
+`logs/prepare-image-completed.json` records exit 1 after **54.472 seconds**,
+completed at `2026-10-02T21:22:32.527924Z`; no qualification or capture ran.
+The raw failure directory is
+`execution-root/config/workloads/response-policy-poki-poki-001-failure-evidence/artifacts/`.
+Each of `stability-0/run.json`, `stability-1/run.json` and
+`stability-2/run.json` retains all **260 resource rows**, with 208 complete
+responses: 207 HTTP 200 responses and the complete 157-byte HTTP 401 response
+for resource 253, whose recorded outcome is `succeeded` under the explicit
+policy. IDs **194–245** are 52 incomplete `request_error` rows; the retained
+`stability-*/events.csv` records `Stream limit reached` on connection 1.
+The stderr ends in `RecoverablePreparationError`, wrapping the validator's
+`prepared application response identity is malformed` error. These runs
+precede the stream-credit repair and the implemented early stop on incomplete
+preparation replays. The newer source checks above do not establish a repaired
+live result; a fresh successful full-graph preparation remains required.
+No resource was pruned and no failed attempt was promoted. This diagnostic
+grants **zero admission, qualification or capture credit**.
+
+An independent comparison of those three raw replays found 208 shared complete
+responses. Only resource **0**, the primary HTML document, changed its recorded
+body identity: **58,396 / 58,281 / 58,413 bytes**, with three different hashes.
+The other 207 shared complete responses kept the same status, byte count and
+body hash. This is an additional blocker under that runtime's exact-identity
+rule. The now-published revision-6 primary variation policy applies only to
+fresh source-bound evidence; these partial runs retain zero credit.
+
+Context 007 retains its old acceptance rule and unchanged source/image
+identities. Its second bounded 40-action batch finished normally; no further
+old-context batch has been launched. The study remains **0/50 admitted sites,
+0/50 study shakedown traces and 0/16,000 formal traces**. Separate page-change
+recovery work is in progress and has not been verified in a live campaign.
 
 ## Desktop working set
 

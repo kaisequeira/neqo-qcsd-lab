@@ -41,10 +41,52 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Latest operational update, 3 October:** independent reopening of context
+**Latest operational update, 3 October:**
+[selection revision 6](config/curated-sources/crux73-tranco600-rapid-v5-selection-v6.json)
+is published at `2026-10-02T22:01:23.089910Z`. Its implemented rule permits
+body-size and hash variation only for the complete, successful primary HTML
+document; the full graph and other response identities stay exact. Before
+admission, it also requires a stable same-origin auxiliary response of at
+least **1,200 bytes** as a potential padding candidate. This early capacity
+check does not replace sustained padding qualification.
+
+The native stream-limit scheduling repair is published. **28 focused tests
+and strict library Clippy passed**, and its cached native-only client build
+completed in **121 seconds**. A fresh native-only live replay then completed
+all **260 requests in 6.617 seconds**: 259 HTTP 200 responses and one complete
+HTTP 401 response. The previously blocked 52 requests completed. Matching
+Python images, fresh complete-site admission and live capture proof have not
+been established for this source; the diagnostic grants no study credit.
+
+The preceding response-policy build took **111 seconds** and passed checks
+of its actual installed source and client bytes. Its fresh Poki preparation
+then failed in **54 seconds**, without qualification or capture.
+
+Each of its three replay attempts retained the full **260-resource graph**.
+They completed 208 responses: 207 HTTP 200 responses and the **157-byte HTTP
+401 response on auxiliary leaf 253**. The other 52 requests failed while the
+client reported `Stream limit reached`. The final preparation validator
+rejected the incomplete result. The completed 401 response was handled under
+the new policy; this earlier incomplete attempt admits no site
+and grants no capture credit. The
+[evidence index](docs/EVIDENCE-INDEX.md#application-response-policy-repair)
+records the exact runtime and retained failure.
+
+The same replay files reveal the next known check: the primary HTML body's
+size and hash changed between all three attempts, while the other 207 complete
+resources kept their status, size and body hash. The published revision-6
+rule addresses this primary-only variation prospectively, with three fresh
+complete raw replay witnesses required. It does not promote the old attempt.
+
+The current study counters remain **0/50 admitted sites, 0/50 study shakedown
+traces and 0/16,000 accepted formal traces**. The goal remains
+**50 sites × five conditions × 64 accepted visits**. Work on recovering from
+page changes during the long run is separate and has no live validation yet.
+
+The previous independent reopening of context
 **007** at `2026-10-02T20:53:46.146589Z` found **11 sealed screening decisions,
-zero admitted sites and candidate 12 next**. Its second bounded batch is
-running on the unchanged image/client and stops at the first admission.
+zero admitted sites and candidate 12 next**. Its second bounded batch later
+completed normally at its action limit on the unchanged image/client.
 Context 006 and its 27 decisions remain preserved. The earlier checkpoint I/O
 fix is published and tested; the [evidence index](docs/EVIDENCE-INDEX.md#checkpoint-io-fix-and-context-007)
 records its source and runtime identities.
@@ -55,21 +97,18 @@ The [prospective response policy](docs/APPLICATION-RESPONSE-POLICY.md) now
 permits complete error responses on eligible non-primary terminal leaves,
 while retaining their status, body and the complete resource graph. Primary
 pages and padding resources still require successful responses. The native
-implementation is published at `1cda2d2446b53d0bdee185e81755fb5115744eb1`;
+implementation is published;
 **16 focused tests and strict library Clippy passed**. Final Python integration
 passed **142 tests in 232 seconds**; all **24 new admission tests**, five
 cohort/legacy checks and eight planner/adapter checks also pass. The
 [revision-5 receipt](config/curated-sources/crux73-tranco600-rapid-v5-selection-v5.json)
-was frozen at `2026-10-02T21:06:26.442961Z`, SHA-256
-`45c0e5cbdb7b5388c72d9e23de63748d085c9f027c03c06b74b2809f06a3334f`.
+was frozen at `2026-10-02T21:06:26.442961Z`.
 It keeps the v5 profile, candidate order, five conditions and 16,000 target.
-The new installed client and fresh site/capture checks remain pending. The
-cached build recipe reuses existing dependencies; it does not require another
-full qualification cycle. Context 007 does not run this new policy.
-The second 40-action context-007 batch has now completed normally at its
-action limit; it is not running. Its earlier independently reopened count
-above is a dated snapshot. The target remains **50 × 5 × 64 = 16,000**;
-all accepted study counters are zero.
+That revision-5 runtime passed its installed-runtime checks; successful
+complete-site preparation and new study capture checks remain pending. Its
+cached build reused existing
+dependencies and did not restart the old qualification chain. Context 007
+does not run this new policy, and its earlier count above is a dated snapshot.
 
 The user has authorised a prospective [rapid 50-class study](docs/RAPID-CLASS-STUDY.md)
 to reach capture sooner. Its [curated raw source](config/curated-sources/crux-73-v1.raw.json)

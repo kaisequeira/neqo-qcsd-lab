@@ -72,7 +72,11 @@ from .manifest import (
 )
 from .application_response_policy import (
     LEGACY_APPLICATION_RESPONSE_POLICY,
+    VARIABLE_PRIMARY_DOCUMENT_BODY_POLICY,
     application_response_policy,
+    application_response_identity_signature,
+    primary_document_identity_policy,
+    validate_application_responses,
 )
 from .parameters import (
     BUFLO_STUDY_PARAMETER_KINDS,
@@ -5302,14 +5306,26 @@ def _prepared_response_identity_failure(
     if expected is None:
         return None
     observed = response_signature(attempt)
-    if observed == expected:
+    expected_comparison, observed_comparison = expected, observed
+    policy_error = None
+    variable_primary = (
+        primary_document_identity_policy(workload.data) == VARIABLE_PRIMARY_DOCUMENT_BODY_POLICY
+    )
+    if variable_primary:
+        try:
+            expected_comparison = application_response_identity_signature(workload.data, expected)
+            observed_comparison = application_response_identity_signature(workload.data, observed)
+            validate_application_responses(workload.data, load_json(attempt / "neqo/run.json"))
+        except (OSError, TypeError, ValueError) as error:
+            policy_error = str(error)
+    if policy_error is None and observed_comparison == expected_comparison:
         return None
 
     expected_by_id: dict[Any, list[tuple[Any, ...]]] = {}
     observed_by_id: dict[Any, list[tuple[Any, ...]]] = {}
-    for entry in expected:
+    for entry in expected_comparison:
         expected_by_id.setdefault(entry[0], []).append(entry)
-    for entry in observed or []:
+    for entry in observed_comparison or []:
         observed_by_id.setdefault(entry[0], []).append(entry)
     differing_resource_ids = sorted(
         (
@@ -5337,6 +5353,7 @@ def _prepared_response_identity_failure(
                     else None
                 ),
                 "differing_resource_ids": differing_resource_ids,
+                **({"response_policy_validation_error": policy_error} if variable_primary else {}),
             }
         ],
     }
@@ -5591,14 +5608,21 @@ def _compare_group(
         else None
     )
     prepared_signature = _prepared_response_signature(workload.data)
-    reference = prepared_signature if prepared_signature is not None else baseline_signature
+    prepared_comparison = application_response_identity_signature(workload.data, prepared_signature)
+    baseline_comparison = (
+        _policy_response_comparison(workload.data, resolved_sample_directory(root, baseline, require_directory=True),
+                                    baseline_signature)
+        if baseline else None
+    )
+    reference = prepared_comparison if prepared_comparison is not None else baseline_comparison
     for sample in accepted:
         validate_accepted_scheduler_runtime_receipt(root, experiment, sample)
         validate_accepted_observer_topology_receipt(root, experiment, sample)
         validate_accepted_kernel_tx_evidence(root, sample)
         sample_path = resolved_sample_directory(root, sample, require_directory=True)
         signature = response_signature(sample_path)
-        response_match = signature is not None and (reference is None or signature == reference)
+        comparison = _policy_response_comparison(workload.data, sample_path, signature)
+        response_match = comparison is not None and (reference is None or comparison == reference)
         diagnostics = sample["diagnostics"]
         if (root / "inputs/study-environment.json").is_file():
             diagnostics["redirect_attestation"] = _redirect_attestation(
@@ -5626,10 +5650,10 @@ def _compare_group(
         diagnostics.update(
             response_match=response_match,
             paired_baseline_response_match=(
-                signature == baseline_signature if baseline_signature is not None else None
+                comparison == baseline_comparison if baseline_comparison is not None else None
             ),
             prepared_response_match=(
-                signature == prepared_signature if prepared_signature is not None else None
+                comparison == prepared_comparison if prepared_comparison is not None else None
             ),
             response_signature_sha256=(
                 sha256_bytes(json.dumps(signature, sort_keys=True).encode())
@@ -5640,6 +5664,19 @@ def _compare_group(
             fidelity_eligible=eligible,
         )
         sample["eligible"] = eligible
+
+
+def _policy_response_comparison(
+    manifest: Mapping[str, Any], sample_path: Path, signature: list[tuple[Any, ...]] | None,
+) -> list[tuple[Any, ...]] | None:
+    """Validate actual delivery before applying the prospective body comparison."""
+    if primary_document_identity_policy(manifest) == VARIABLE_PRIMARY_DOCUMENT_BODY_POLICY:
+        try:
+            validate_application_responses(manifest, load_json(sample_path / "neqo/run.json"))
+            return application_response_identity_signature(manifest, signature)
+        except (OSError, TypeError, ValueError):
+            return None
+    return signature
 
 
 def _redirect_attestation(workload: Workload, sample_path: Path) -> dict[str, Any]:

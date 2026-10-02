@@ -21,6 +21,13 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from .application_response_policy import (
+    LEGACY_APPLICATION_RESPONSE_POLICY,
+    VARIABLE_PRIMARY_DOCUMENT_BODY_POLICY,
+    application_response_policy,
+    primary_document_identity_policy,
+    validate_application_response_graph,
+)
 from .manifest import canonical_bytes, https_origin, runtime_manifest, validate_research_preparation
 from .prepare import NEQO_PROVENANCE_KEYS, PreparationError, _run_neqo
 from .util import (
@@ -832,6 +839,10 @@ def _prepared_expected_responses(manifest: Mapping[str, Any]) -> dict[int, dict[
     values = preparation.get("expected_responses") if isinstance(preparation, Mapping) else None
     if not isinstance(values, list) or not values:
         raise ValueError("qualified workload requires frozen preparation.expected_responses")
+    negative_ids = (
+        set(validate_application_response_graph(manifest)["terminal_http_error_resource_ids"])
+        if application_response_policy(manifest) != LEGACY_APPLICATION_RESPONSE_POLICY else set()
+    )
     result: dict[int, dict[str, Any]] = {}
     for value in values:
         response = _exact_mapping(
@@ -845,7 +856,8 @@ def _prepared_expected_responses(manifest: Mapping[str, Any]) -> dict[int, dict[
             or resource_id < 0
             or resource_id in result
             or type(response["status"]) is not int
-            or not 200 <= response["status"] <= 299
+            or not (200 <= response["status"] <= 299
+                    or resource_id in negative_ids and 400 <= response["status"] <= 599)
             or type(response["bytes"]) is not int
             or response["bytes"] < 0
             or not _digest(response["body_sha256"])
@@ -923,6 +935,9 @@ def response_only_candidate_resources(
     preparation = manifest.get("preparation")
     assert isinstance(resources, list) and isinstance(preparation, Mapping)
     expected = _prepared_expected_responses(manifest)
+    variable_primary = (
+        primary_document_identity_policy(manifest) == VARIABLE_PRIMARY_DOCUMENT_BODY_POLICY
+    )
     application_origin = _https_origin(application["url"])
     approved = preparation.get("approved_origins")
     if (
@@ -939,6 +954,7 @@ def response_only_candidate_resources(
         response = expected.get(resource_id) if type(resource_id) is int else None
         if (
             response is None
+            or variable_primary and resource_id == 0
             or value.get("known_valid") is not True
             or _https_origin(value.get("url")) != application_origin
             or response["bytes"] < UDP_PAYLOAD_CEILING
