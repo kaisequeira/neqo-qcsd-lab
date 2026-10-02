@@ -1,10 +1,12 @@
 """Prospective authority and retained raw proof for primary-document variation."""
 
 from copy import deepcopy
+from dataclasses import asdict
 from datetime import UTC, datetime
 import json
 from pathlib import Path
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,7 +14,7 @@ from qcsd_lab import class_acquisition, prepare
 from qcsd_lab import rapid_selection_amendment as amendment
 from qcsd_lab import rapid_site_admission as admission
 from qcsd_lab.discovery_evidence import evidence_sha256
-from tests.test_rapid_site_admission import Backend, _amended_context, _auto_page, context
+from tests.test_rapid_site_admission import Backend, _amended_context, _auto_page, _root_logs, context
 from tests.test_prepare import discovered
 from tests.test_prepare_application_response_policy import install_negative_preparation
 
@@ -92,8 +94,10 @@ def test_revision6_live_boundary_receives_policy_and_preserves_failed_attempt(co
     assert facts["scientific_credit"] is False and facts["site_credit"] == 0
 
 
-def _prepared_variable_workload(context, tmp_path, monkeypatch, *, negative=True, capacity=True):
-    amended = _amended_context(context, tmp_path, revision=6)
+def _prepared_variable_workload(context, tmp_path, monkeypatch, *, negative=True, capacity=True,
+                                amended=None, source_url="https://page.test/", workload_id="variable-page",
+                                output_root=None):
+    amended = amended or _amended_context(context, tmp_path, revision=6)
     def vary(index, run):
         row = run["responses"][0]
         row.update(bytes=100 + index, body_sha256=f"{index + 1:064x}", content_length=100 + index,
@@ -104,9 +108,19 @@ def _prepared_variable_workload(context, tmp_path, monkeypatch, *, negative=True
             run["responses"][2].update(bytes=1200, body_sha256="c" * 64, content_length=1200)
     install_negative_preparation(monkeypatch, alter_stability=vary)
     discovery = discovered()
+    if source_url != discovery.source_url:
+        def rebind(value):
+            if isinstance(value, str):
+                return value.replace("https://page.test", source_url.rstrip("/"))
+            if isinstance(value, list):
+                return [rebind(item) for item in value]
+            if isinstance(value, dict):
+                return {rebind(key): rebind(item) for key, item in value.items()}
+            return value
+        discovery = type(discovery)(**rebind(asdict(discovery)))
     if capacity:
         resource = deepcopy(discovery.resources[1])
-        resource.update(id=2, url="https://page.test/static.js")
+        resource.update(id=2, url=source_url.rstrip("/") + "/static.js")
         discovery.resources.append(resource)
         audit = discovery.discovery_event_audit
         events = deepcopy(audit["events"][3:6])
@@ -124,7 +138,7 @@ def _prepared_variable_workload(context, tmp_path, monkeypatch, *, negative=True
         audit["summary"].update(event_count=9, network_request_count=3, fetch_request_count=3,
             terminal_event_count=3, resource_occurrence_count=3)
         discovery.observed_request_count = 3
-        discovery.discovery_event_audit_sha256 = evidence_sha256(audit)
+    discovery.discovery_event_audit_sha256 = evidence_sha256(discovery.discovery_event_audit)
     monkeypatch.setattr(prepare, "discover_page", lambda *_args, **_kwargs: discovery)
     monkeypatch.setattr(prepare, "source_metadata", lambda: dict(amended.expected_runtime_source))
     ordinary = prepare.run
@@ -161,8 +175,8 @@ def _prepared_variable_workload(context, tmp_path, monkeypatch, *, negative=True
                 path.write_bytes(admission._json(raw))
         return result
     monkeypatch.setattr(prepare, "run", retained_native)
-    result = prepare.prepare_workload("variable-page", "https://page.test/", ["https://page.test", "https://cdn.test"],
-        output_root=amended.root / "workloads", stability_interval_seconds=0, require_complete_coverage=True,
+    result = prepare.prepare_workload(workload_id, source_url, [source_url.rstrip("/"), "https://cdn.test"],
+        output_root=output_root or amended.root / "workloads", stability_interval_seconds=0, require_complete_coverage=True,
         application_response_policy=APPLICATION_POLICY, primary_document_identity_policy=PRIMARY_POLICY)
     manifest = admission._load(result.path.read_bytes())
     graph = result.path.parent / "full-graph.json"
@@ -200,6 +214,65 @@ def test_revision6_rejects_complete_graph_without_stable_same_origin_padding_cap
         admission.verify_prepared_workload(result.path, graph, amended, selected_page_url="https://page.test/")
     assert not amended.proof_cache["prepared"]
     assert admission._load(result.path.read_bytes()) == manifest
+
+
+@pytest.mark.parametrize("invalid_proof", [False, True])
+def test_revision6_observed_complete_preparation_capacity_failure_can_seal_and_advance_but_invalid_proof_blocks(
+    context, tmp_path, monkeypatch, invalid_proof,
+):
+    amended = _amended_context(context, tmp_path, revision=6)
+    candidate, navigation, h3, screen = _auto_page(amended, tmp_path)
+    roots = _root_logs(context, tmp_path)
+    retained = {}
+
+    class ProducingBackend(Backend):
+        def discover(self, url, approved):
+            result = super().discover(url, approved)
+            origins = sorted([url.rstrip("/"), "https://cdn.test"])
+            result.observed_origins = result.approved_origins = result.expandable_origins = origins
+            result.origin_ip_pins = {value: "1.1.1.1" for value in origins}
+            return result
+
+        def prepare(self, workload_id, url, approved, output_root, **kwargs):
+            assert kwargs["application_response_policy"] == APPLICATION_POLICY
+            assert kwargs["primary_document_identity_policy"] == PRIMARY_POLICY
+            _, result, _ = _prepared_variable_workload(context, tmp_path, monkeypatch,
+                amended=amended, source_url=url, workload_id=workload_id, output_root=output_root,
+                capacity=False)
+            retained["workload"] = result.path
+            retained["evidence"] = result.application_response_evidence_path
+            if invalid_proof:
+                inventory_path = result.application_response_evidence_path / "inventory.json"
+                inventory = admission._load(inventory_path.read_bytes())
+                inventory["capture_source_after"]["lab_commit"] = "f" * 40
+                inventory_path.write_bytes(admission._json(inventory))
+            return SimpleNamespace(prepared=result)
+
+    arguments = dict(candidate_id=candidate["candidate_id"], navigation=navigation,
+                     page_h3=h3, automated_screen=screen, backend=ProducingBackend(amended))
+    if invalid_proof:
+        with pytest.raises(ValueError, match="runtime"):
+            admission.prepare_site(amended, **arguments)
+        assert not any(amended.root.rglob("attempt-failure.json"))
+        status = admission.acquisition_status(amended)
+        assert status["next_candidate"] == candidate
+        assert status["attempts"][candidate["candidate_id"]][0]["state"] == "retryable-operational-error"
+    else:
+        proof = admission.prepare_site(amended, **arguments)
+        facts = admission.unsuccessful_attempt_failure_facts(proof, amended, candidate["candidate_id"])
+        assert facts["raw_failure"]["exception"]["exception_type"] == "InsufficientPaddingCapacityError"
+        assert facts["raw_failure"]["exception"]["exception_module"] == "qcsd_lab.rapid_site_admission"
+        assert facts["scientific_credit"] is False and facts["site_credit"] == 0
+        terminal = admission.produce_site_terminal(amended, candidate_id=candidate["candidate_id"],
+            root_surveys=roots, attempt_failure=proof, automated_screen=screen)
+        assert admission.verify_site_terminal(terminal, amended)["outcome"] == "unsuccessful-live-attempt-screen-deferred"
+        status = admission.acquisition_status(amended)
+        assert status["next_candidate"] == amended.candidates[1]
+        assert status["terminal_count"] == 1 and status["admitted_site_count"] == 0
+        assert status["formal_accepted_trace_count"] == 0
+    manifest = admission._load(retained["workload"].read_bytes())
+    assert len(manifest["resources"]) == 2 and retained["evidence"].is_dir()
+    assert not any(amended.root.rglob("preparation.json"))
 
 
 @pytest.mark.parametrize("change", ["other-body", "primary-status", "incomplete-primary", "source", "missing-run"])

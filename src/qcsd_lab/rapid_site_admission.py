@@ -1213,8 +1213,29 @@ def unsuccessful_attempt_failure_facts(path: Path, context: AdmissionContext, ca
         not_before_utc=context.attempt_not_before_utc, selected_page_h3_proof=page, automated_site_screen=screen)
 
 
+class InsufficientPaddingCapacityError(RuntimeError):
+    """A complete prepared graph cannot supply the registered padding capacity."""
+
+
+def _has_response_padding_capacity(manifest: Mapping[str, Any]) -> bool:
+    preparation = manifest["preparation"]
+    primary = origin(preparation["final_url"])
+    expected = {row["resource_id"]: row for row in preparation["expected_responses"]}
+    return any(
+        resource["id"] != 0
+        and resource["known_valid"] is True
+        and origin(resource["url"]) == primary
+        and 200 <= expected[resource["id"]]["status"] < 300
+        and expected[resource["id"]]["bytes"] >= 1200
+        for resource in manifest["resources"]
+    )
+
+
+_PADDING_CAPACITY_FAILURE = "revision 6 has no stable same-origin auxiliary response of at least 1200 bytes for potential padding capacity"
+
+
 class ObservedLiveBackend:
-    """Observe only backend calls; input and post-call proof checks stay outside."""
+    """Observe live operations; source, input and proof errors remain blocking."""
 
     def __init__(self, backend: Any, context: AdmissionContext, candidate_id: str, attempt: Path,
                  action: Mapping[str, Any], inputs: Mapping[str, Path] | None = None) -> None:
@@ -1271,8 +1292,29 @@ class ObservedLiveBackend:
                          if application_response_policy is not None else {})
         if primary_document_identity_policy is not None:
             policy_kwargs["primary_document_identity_policy"] = primary_document_identity_policy
-        return self._call(self.backend.prepare, workload_id, url, approved, output_root,
+        producer = (self._prepare_with_padding_capacity
+                    if self.context.selection_amendment_revision == 6 else self.backend.prepare)
+        return self._call(producer, workload_id, url, approved, output_root,
                           origin_ip_pins=origin_ip_pins, **policy_kwargs)
+
+    def _prepare_with_padding_capacity(self, workload_id: str, url: str, approved: Sequence[str],
+                                      output_root: Path, **kwargs: Any) -> Any:
+        result = self.backend.prepare(workload_id, url, approved, output_root, **kwargs)
+        manifest_path = Path(result.prepared.path)
+        manifest = _load(_read(manifest_path))
+        validate_manifest(manifest)
+        validate_class_study_preparation(manifest, workload_id=workload_id,
+            application_response_policy=self.context.application_response_policy,
+            primary_document_identity_policy=self.context.primary_document_identity_policy)
+        preparation = manifest["preparation"]
+        if (preparation["source_url"] != url
+            or preparation["lab_source"] != dict(self.context.expected_runtime_source)
+            or preparation["prepare_image_digest"] != self.context.execution_binding["admission_image_digest"]):
+            raise ValueError("prepared workload/page/source differs before its capacity screen")
+        _application_response_evidence(manifest_path, manifest, self.context)
+        if not _has_response_padding_capacity(manifest):
+            raise InsufficientPaddingCapacityError(_PADDING_CAPACITY_FAILURE)
+        return result
 
 
 def _full_graph(manifest: Mapping[str, Any]) -> dict[str, Any]:
@@ -1448,18 +1490,10 @@ def verify_prepared_workload(
     resources = manifest["resources"]
     primary = origin(preparation["final_url"])
     if context.selection_amendment_revision == 6:
-        expected = {row["resource_id"]: row for row in preparation["expected_responses"]}
         # Variable primary HTML cannot supply an exact-identity padding body.
         # This screens potential capacity; sustained chaff qualification remains separate.
-        if not any(
-            resource["id"] != 0
-            and resource["known_valid"] is True
-            and origin(resource["url"]) == primary
-            and 200 <= expected[resource["id"]]["status"] < 300
-            and expected[resource["id"]]["bytes"] >= 1200
-            for resource in resources
-        ):
-            raise ValueError("revision 6 has no stable same-origin auxiliary response of at least 1200 bytes for potential padding capacity")
+        if not _has_response_padding_capacity(manifest):
+            raise ValueError(_PADDING_CAPACITY_FAILURE)
     count = sum(origin(resource["url"]) != primary for resource in resources)
     facts = {
         "selected_page_url": selected_page_url, "prepared_workload_sha256": _sha(raw),
