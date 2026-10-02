@@ -13,11 +13,8 @@ from qcsd_lab.acquisition_timing import (
     SHORT_TERMINAL_RELEASE_BASELINE_SCHEDULING_CONTRACT,
 )
 from qcsd_lab.cdp_targets import (
-    CDP_TARGET_INSTRUMENTATION_POLICY,
     NORMAL_SHUTDOWN_DISPOSAL_POLICY,
     NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
-    SRCDOC_PSEUDO_DOCUMENT_POLICY,
-    SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
 )
 from qcsd_lab.class_acquisition import (
     CHECKPOINT_SCHEMA_VERSION as ACQUISITION_CHECKPOINT_SCHEMA_VERSION,
@@ -25,6 +22,9 @@ from qcsd_lab.class_acquisition import (
     DOCUMENT_RESPONSE_SCHEMA_VERSION,
     SCHEMA_VERSION as ACQUISITION_SCHEMA_VERSION,
     TERMINAL_SCHEMA_VERSION as ACQUISITION_TERMINAL_SCHEMA_VERSION,
+    _SCHEMA_THIRTEEN_CDP_TARGET_INSTRUMENTATION_POLICY,
+    _SCHEMA_THIRTEEN_PASSIVE_RENDER_CONTRACT,
+    _SCHEMA_THIRTEEN_PASSIVE_RENDER_CONTRACT_SHA256,
 )
 from qcsd_lab.class_handoff import SCHEMA_VERSION as HANDOFF_SCHEMA_VERSION
 from qcsd_lab.class_fitting import PRIMARY_ORIGIN_PREFIX_SCHEMA_VERSION
@@ -81,7 +81,6 @@ from qcsd_lab.experiment import (
 from qcsd_lab.discovery_evidence import (
     DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION,
     PASSIVE_RENDER_CONTRACT,
-    PASSIVE_RENDER_CONTRACT_SHA256,
     REQUEST_STAGE_OBSERVATION_POLICY,
     RENDER_OBSERVATION_SCHEMA_VERSION,
 )
@@ -200,7 +199,7 @@ def test_checked_in_handoff_contract_matches_current_exporter_and_kernel_sidecar
     assert page_admission["incoming_udp_payload_limit_bytes"] == 65527
     assert "udp_payload_ceiling_bytes" not in page_admission
     assert amendment["acquisition_schema_version"] == 12
-    assert ACQUISITION_SCHEMA_VERSION == 13
+    assert ACQUISITION_SCHEMA_VERSION == 14
     assert amendment["checkpoint_schema_version"] == ACQUISITION_CHECKPOINT_SCHEMA_VERSION == 3
     assert amendment["terminal_schema_version"] == 4
     assert ACQUISITION_TERMINAL_SCHEMA_VERSION == 5
@@ -296,9 +295,15 @@ def test_checked_in_handoff_contract_matches_current_exporter_and_kernel_sidecar
         "resolver_addresses": "diagnostic-only-no-neqo-pin-claim",
     }
     assert page_admission["prebaseline_h3_screen_contract"] == PREBASELINE_H3_SCREEN_V2_CONTRACT
-    assert page_admission["passive_render_contract"] == PASSIVE_RENDER_CONTRACT
-    assert page_admission["passive_render_contract_sha256"] == PASSIVE_RENDER_CONTRACT_SHA256
-    assert page_admission["cdp_target_instrumentation_policy"] == CDP_TARGET_INSTRUMENTATION_POLICY
+    assert page_admission["passive_render_contract"] == (
+        _SCHEMA_THIRTEEN_PASSIVE_RENDER_CONTRACT
+    )
+    assert page_admission["passive_render_contract_sha256"] == (
+        _SCHEMA_THIRTEEN_PASSIVE_RENDER_CONTRACT_SHA256
+    )
+    assert page_admission["cdp_target_instrumentation_policy"] == (
+        _SCHEMA_THIRTEEN_CDP_TARGET_INSTRUMENTATION_POLICY
+    )
     assert page_admission["render_observation_schema_version"] == RENDER_OBSERVATION_SCHEMA_VERSION
     assert (
         page_admission["discovery_event_audit_schema_version"]
@@ -309,8 +314,8 @@ def test_checked_in_handoff_contract_matches_current_exporter_and_kernel_sidecar
         == REQUEST_STAGE_OBSERVATION_POLICY
     )
     assert page_admission["srcdoc_pseudo_document_contract"] == {
-        "schema_version": SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
-        "policy": SRCDOC_PSEUDO_DOCUMENT_POLICY,
+        "schema_version": 3,
+        "policy": "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-v2",
     }
     assert page_admission["normal_shutdown_disposal_contract"] == {
         "schema_version": NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,

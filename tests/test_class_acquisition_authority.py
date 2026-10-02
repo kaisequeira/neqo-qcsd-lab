@@ -309,6 +309,62 @@ def _rewrite_as_v127_historical_authority(
     return path
 
 
+def _rewrite_as_v146_historical_class20_authority(
+    state: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> Path:
+    """Exercise the exact v146 branch with isolated, source-bound proofs."""
+
+    _select_class20_profile(state)
+    path = _create(state)
+    payload = load_json(path)["payload"]
+    state["historical"] = True
+    state["expected_cohort_version"] = 146
+    old_build = Path(state["build"]["path"])
+    new_build = old_build.with_name("build-execution-v146.json")
+    new_build.write_bytes(old_build.read_bytes())
+    old_completion = Path(state["build"]["completion_path"])
+    new_completion = old_completion.with_name("build-completion-v146.json")
+    new_completion.write_bytes(old_completion.read_bytes())
+    state["inputs"]["build_execution_receipt"] = new_build
+    state["build"]["path"] = str(new_build)
+    state["build"]["completion_path"] = str(new_completion)
+    state["build"]["cohort_version"] = 146
+    state["pinned"]["build_execution"]["path"] = str(new_build)
+    state["pinned"]["build_execution_identity"] = authority._build_identity(state["build"])
+    frozen_spec = authority._acquisition_correctness_spec(authority.CLASS20_STUDY_ID)
+    monkeypatch.setattr(authority, "_V146_SOURCE", copy.deepcopy(state["source"]))
+    monkeypatch.setattr(authority, "_V146_BUILD_EXECUTION_SHA256", state["build"]["sha256"])
+    monkeypatch.setattr(authority, "_V146_PINNED_CDP_SHA256", state["pinned"]["sha256"])
+    monkeypatch.setattr(authority, "_V146_STUDY_CONTRACT", payload["study_contract"])
+    monkeypatch.setattr(
+        authority, "_V146_STUDY_PROFILE_INPUTS", payload["study_profile_inputs"]
+    )
+    monkeypatch.setattr(authority, "_V146_ACQUISITION_CORRECTNESS_SPEC", frozen_spec)
+    payload["acquisition_correctness"]["build_execution_identity"] = (
+        authority._build_identity(state["build"])
+    )
+    context = authority._acquisition_authority_context(
+        cohort_version=146,
+        build_execution_receipt=state["inputs"]["build_execution_receipt"],
+        pinned_cdp_receipt=state["inputs"]["pinned_cdp_receipt"],
+        browser_egress_qualification_root=None,
+        evidence_source=payload["source"],
+        runtime_role=None,
+        recorded_study_contract=payload["study_contract"],
+        allow_historical=True,
+        study_id=authority.CLASS20_STUDY_ID,
+    )
+    assert context["historical_v146"] is True
+    historical = authority._acquisition_authority_value(
+        context,
+        correctness=payload["acquisition_correctness"],
+        recorded_at=payload["recorded_at"],
+    )
+    _reseal(path, historical)
+    monkeypatch.setattr(authority, "_V146_ACQUISITION_AUTHORITY_SHA256", sha256_file(path))
+    return path
+
+
 def test_creation_runs_only_focused_gate_once_and_verification_is_read_only(
     acquisition_evidence: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -618,6 +674,52 @@ def test_v127_historical_authority_rejects_resealed_tampering(
 
     with pytest.raises(ValueError):
         authority.validate_class_acquisition_authority(path, allow_historical=True)
+
+
+def test_v146_class20_authority_is_exact_read_only_verify_only(
+    acquisition_evidence: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = acquisition_evidence
+    path = _rewrite_as_v146_historical_class20_authority(state, monkeypatch)
+    (authority.LAB_ROOT / "tests/test_class_acquisition.py").write_text("later source\n")
+    monkeypatch.setattr(
+        authority.subprocess, "run",
+        lambda *_args, **_kwargs: pytest.fail("historical validation executed tests"),
+    )
+
+    result = authority.validate_class_acquisition_authority(
+        path, allow_historical=True, runtime_role=None
+    )
+    assert result["verification_status"] == "historical-verify-only"
+    assert result["cohort_version"] == 146
+    assert result["study_id"] == authority.CLASS20_STUDY_ID
+    assert result["promotion_authority"] is False
+
+    for allow_historical, runtime_role in (
+        (False, None), (True, "collection"), (True, "prepare")
+    ):
+        with pytest.raises(ValueError, match="verify-only"):
+            authority.validate_class_acquisition_authority(
+                path, allow_historical=allow_historical, runtime_role=runtime_role
+            )
+
+
+def test_v146_class20_authority_rejects_resealed_correctness_tampering(
+    acquisition_evidence: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = _rewrite_as_v146_historical_class20_authority(acquisition_evidence, monkeypatch)
+    payload = load_json(path)["payload"]
+    payload["acquisition_correctness"]["input_sha256"]["uv.lock"] = "e" * 64
+    _reseal(path, payload)
+    with pytest.raises(ValueError, match="exact frozen receipt"):
+        authority.validate_class_acquisition_authority(
+            path, allow_historical=True, runtime_role=None
+        )
+    monkeypatch.setattr(authority, "_V146_ACQUISITION_AUTHORITY_SHA256", sha256_file(path))
+    with pytest.raises(ValueError, match="correctness evidence differs"):
+        authority.validate_class_acquisition_authority(
+            path, allow_historical=True, runtime_role=None
+        )
 
 
 def test_offline_runtime_none_validates_current_authority_without_ambient_source(

@@ -131,7 +131,31 @@ initialized and no pilot or formal sample was accepted. Preserve the v145
 receipts and failed verification; the corrected source requires a fresh cohort
 before formal acquisition.
 
-The latest completed public-page acquisition attempt is **v139** on clean Lab source
+On **v146**, clean Lab source `2194a71055cb35c84514cebaf594b6d99241ebf4`
+and the same pinned Rust Gitlink passed the no-cache three-image build, pinned
+CDP, 2,528 acquisition correctness tests (31 skipped), and public verification
+of the 20-site acquisition-only authority. The 20-site acquisition root was
+initialized. Three bounded watcher actions attempted four candidates: two
+have valid site-rejection terminals; `tranco-0067760` exhausted three
+inconclusive HTTP/3 screens after all 30 selected-page probes returned the
+same peer TLS handshake-failure close while controls passed, leaving a
+selection blocker; and `tranco-0204878` reached its first timed baseline but
+all four page probes recorded a durable `CdpTargetIntegrityError` for a
+loading terminal event with no active request occurrence. The checkpoint's
+read-only status validator refuses that durable internal failure. Preserve
+the v146 root and receipts; unchanged v146 cannot complete acquisition.
+**0/30 20-site pilots and 0/16,000 formal samples are accepted.** Zero-credit
+follow-up reproduced the four browser faults under the v146 image. The proposed
+source then completed discovery for those same four pages and accepted 12 exact
+loader-bound 15-byte `about:srcdoc` terminals. A separate read-only replay of
+the retained HTTP/3 probe outputs kept each v146 v2 screen blocked and showed
+that the proposed v3 rule would reject that site after the same 30 failed
+exact-page probes and healthy controls. Focused source tests passed, and the
+v146 acquisition authority verified as historical-only in the container.
+These diagnostics do not repair or promote v146; a new clean cohort must pass
+its own build, browser check and acquisition authority.
+
+The earlier 100-site public-page acquisition attempt is **v139** on clean Lab source
 `34088bb687ec683f16597da41e2c02a11f201447` and pinned Rust Gitlink
 `a8d8664cd31cbc4cc1ecb4fd5abc5a1d3ee153ae`. Its no-cache build,
 pinned-CDP check and acquisition-only authority were recorded. This authority
@@ -434,8 +458,9 @@ scientific credit.
 | v143 20-site build, pinned CDP and issued authority | `artifacts/buflo-study/build-execution-v143.json`, `artifacts/buflo-study/build-completion-v143.json`, `artifacts/buflo-study/pinned-cdp-execution-v143.json` and `artifacts/classifier-multiorigin20-v1-acquisition-authority-v143.json` are bound to clean Lab `032c5767f398aeec9e0d5c51bc3a12257ec9bff9`; correctness passed 2,525 tests, 31 skipped. Host verification and acquisition initialization stopped on the `/lab` versus host profile-path comparison; no 20-site root or capture credit |
 | v144 failed preparation build | Clean Lab `62d7dc66db65bc2f157d08a0e638a05f27c6e6b4` and Rust Gitlink `ca70e626275fb3dfb4520696568e7b2ad800174f`; collection image completed, then one exact-handoff Rust test failed after 284 passed in preparation. `artifacts/buflo-study/build-failure-v144/` preserves the exact failure and archived lifecycle roots; recovery passed. No paired build receipt, pinned CDP, 20-site authority, acquisition root or capture credit. V144 is consumed |
 | v145 20-site build, pinned CDP and issued authority | Clean Lab `8309fa38bf711f80fdf88e6612fbcd8dade991bd` and Rust Gitlink `acc2c6ae8ef2a12be582dd7e1af0dc3817040fd5`; no-cache build, pinned CDP and acquisition correctness passed (2,528 tests, 31 skipped). `artifacts/classifier-multiorigin20-v1-acquisition-authority-v145.json` was issued with acquisition-only scope, but public `verify` rejected its unregistered target type. No acquisition root or accepted credit |
-| Acquisition checkpoint | `artifacts/classifier-multiorigin100-v1-acquisition-v139/` is the latest initialized root; eight site-rejection terminals, one inconclusive pending screen and one durable internal browser-control error, with 0/120 accepted |
-| Next execution | Correct the 20-site public verification route, test its receipt-type handling, freeze clean source, then allocate the next unused cohort and reprove the no-cache build, pinned CDP, 20-site acquisition authority and initialization. Supervise bounded 20-site search actions; complete same-source browser and full defence foundation before fitting or capture |
+| v146 20-site build and acquisition start | Clean Lab `2194a71055cb35c84514cebaf594b6d99241ebf4` and Rust Gitlink `acc2c6ae8ef2a12be582dd7e1af0dc3817040fd5`; no-cache build, pinned CDP, 2,528 acquisition tests (31 skipped), authority and public `verify` passed. `artifacts/classifier-multiorigin20-v1-acquisition-v146/` initialized, then three bounded actions attempted four candidates. Two valid site rejections, one inconclusive HTTP/3 terminal selection blocker and one durable internal CDP probe failure; 0/30 eligible and 0/16,000 accepted. V146 cannot complete unchanged |
+| Acquisition checkpoints | `artifacts/classifier-multiorigin20-v1-acquisition-v146/` is the latest initialized root and is blocked as above. Historical `artifacts/classifier-multiorigin100-v1-acquisition-v139/` has eight site-rejection terminals, one inconclusive pending screen and one durable internal browser-control error, with 0/120 accepted |
+| Next execution | Freeze the tested prospective HTTP/3 and CDP repairs as clean source, allocate the next unused cohort, then reprove build, pinned CDP, 20-site acquisition authority and public verification before a new root. Supervise bounded search actions; complete same-source browser and full defence foundation before fitting or capture |
 
 Preserve the v130 qualification evidence and failed authority attempt, the v129
 checkpoint and failed attempts, v128 failed build, v127

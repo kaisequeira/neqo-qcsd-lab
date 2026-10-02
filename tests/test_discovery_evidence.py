@@ -607,15 +607,15 @@ def test_internal_document_lifecycle_bumps_discovery_evidence_schemas() -> None:
     assert REQUEST_STAGE_OBSERVATION_POLICY == (
         "chromium-143-fetch-primary-or-failed-cors-preflight-v1"
     )
-    assert PASSIVE_RENDER_CONTRACT["policy"] == "bounded-passive-render-quiescence-v4"
+    assert PASSIVE_RENDER_CONTRACT["policy"] == "bounded-passive-render-quiescence-v5"
     assert (
-        "terminal-root-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-lifecycle"
+        "terminal-root-srcdoc-loader-bound-orphan-abort-or-15-or-33-byte-finish-lifecycle"
         in PASSIVE_RENDER_CONTRACT["quiescence_requires"]
     )
     assert "browser-internal-document" in PASSIVE_RENDER_CONTRACT["relevant_events"]
     assert SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION == 3
     assert SRCDOC_PSEUDO_DOCUMENT_POLICY == (
-        "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-v2"
+        "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-15-or-33-byte-finish-v3"
     )
 
 

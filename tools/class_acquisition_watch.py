@@ -47,9 +47,9 @@ SCHEMA_VERSION = 1
 SOURCE_BINDING_PREIMAGE_SCHEMA_VERSION = 3
 BROWSER_DEFERRED_SOURCE_BINDING_PREIMAGE_SCHEMA_VERSION = 4
 ACQUISITION_SCHEMA_VERSION = 12
-CURRENT_ACQUISITION_SCHEMA_VERSION = 13
+CURRENT_ACQUISITION_SCHEMA_VERSION = 14
 CLASS20_ACQUISITION_SCHEMA_VERSION = CURRENT_ACQUISITION_SCHEMA_VERSION
-HISTORICAL_ACQUISITION_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11})
+HISTORICAL_ACQUISITION_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13})
 CHECKPOINT_SCHEMA_VERSION = 3
 TERMINAL_SCHEMA_VERSION = 4
 COMPLETION_SCHEMA_VERSION = 4
@@ -774,7 +774,7 @@ _BUILD_STORAGE_PREFLIGHT_KEYS = {
     "passed",
 }
 _CDP_TARGET_INSTRUMENTATION_POLICY = (
-    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v21"
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v22"
 )
 _PLAYWRIGHT_VERSION = "1.57.0"
 _CHROMIUM_VERSION = "143.0.7499.4"
@@ -792,8 +792,11 @@ _EGRESS_PREARM_SUMMARY_SCHEMA_VERSION = 2
 _PINNED_CDP_TARGET_ACTIVITY_SCHEMA_VERSION = 1
 _PINNED_CDP_WORKER_WEBTRANSPORT_PROBE_SCHEMA_VERSION = 1
 _PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION = 3
-_PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_POLICY = (
+_HISTORICAL_PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_POLICY_V2 = (
     "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-v2"
+)
+_PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_POLICY = (
+    "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-15-or-33-byte-finish-v3"
 )
 _PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_LIMIT = 32
 _PINNED_CDP_SRCDOC_EVENT_ORDINAL_LIMIT = 20_480
@@ -1153,7 +1156,7 @@ _HISTORICAL_PINNED_CDP_CONTRACT_V16 = {
     "srcdoc_pseudo_document_summary_schema_version": (
         _PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION
     ),
-    "srcdoc_pseudo_document_policy": _PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_POLICY,
+    "srcdoc_pseudo_document_policy": _HISTORICAL_PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_POLICY_V2,
     "required_srcdoc_pseudo_document_count": 1,
 }
 _HISTORICAL_PINNED_CDP_CONTRACT_V17 = {
@@ -1176,7 +1179,9 @@ _HISTORICAL_PINNED_CDP_CONTRACT_V18 = {
     **_HISTORICAL_PINNED_CDP_CONTRACT_V16,
     "schema_version": _PINNED_CDP_CONTRACT_SCHEMA_VERSION,
     "policy": "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v17",
-    "instrumentation_policy": _CDP_TARGET_INSTRUMENTATION_POLICY,
+    "instrumentation_policy": (
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v21"
+    ),
     "required_observations": [
         *_HISTORICAL_PINNED_CDP_CONTRACT_V16["required_observations"],
         "terminal-normal-shutdown-disposal-network-fetch-or-singleton-ping-reconciliation",
@@ -1195,6 +1200,14 @@ _HISTORICAL_PINNED_CDP_CONTRACT_V18_V3 = {
 }
 _PINNED_CDP_CONTRACT = {
     **_HISTORICAL_PINNED_CDP_CONTRACT_V18_V3,
+    "instrumentation_policy": _CDP_TARGET_INSTRUMENTATION_POLICY,
+    "srcdoc_pseudo_document_policy": _PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_POLICY,
+    "required_observations": [
+        "root-about-srcdoc-loader-bound-orphan-abort-or-15-or-33-byte-finish-lifecycle"
+        if item == "root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-lifecycle"
+        else item
+        for item in _HISTORICAL_PINNED_CDP_CONTRACT_V18_V3["required_observations"]
+    ],
     "normal_shutdown_disposal_summary_schema_version": (
         _NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
     ),
@@ -1391,7 +1404,7 @@ _FOUNDATION_GATES = (
 )
 _PASSIVE_RENDER_CONTRACT = {
     "schema_version": 4,
-    "policy": "bounded-passive-render-quiescence-v4",
+    "policy": "bounded-passive-render-quiescence-v5",
     "viewport": {"width": 1365, "height": 768, "deviceScaleFactor": 1},
     "cache": "disabled",
     "service_workers": "bypassed-and-registration-blocked",
@@ -1407,7 +1420,7 @@ _PASSIVE_RENDER_CONTRACT = {
         "recursive-target-router-shutdown-ready",
         "no-pending-shared-worker-bootstrap-prearm",
         "all-observed-target-egress-shims-prearmed",
-        "terminal-root-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-lifecycle",
+        "terminal-root-srcdoc-loader-bound-orphan-abort-or-15-or-33-byte-finish-lifecycle",
         "zero-non-replayable-egress-attempts",
         "zero-browser-context-service-workers",
     ],
@@ -1511,6 +1524,19 @@ _PREBASELINE_H3_SCREEN_V2_CONTRACT = {
     ),
     "uncertain_outcome": "mixed-ambiguous-or-control-failure-blocks",
     "resolver_addresses": "diagnostic-only-no-neqo-pin-claim",
+}
+_PREBASELINE_H3_SCREEN_V3_CONTRACT = {
+    **_PREBASELINE_H3_SCREEN_V2_CONTRACT,
+    "schema_version": 3,
+    "policy": "prebaseline-exact-selected-page-neqo-h3-reachability-v3",
+    "site_rejection": (
+        "all-exact-selected-pages-fail-both-attempts-with-classified-"
+        "http3-connectivity-timeout-or-idle-timeout-or-peer-tls-handshake-failure-296"
+    ),
+    "peer_tls_handshake_failure_stdout": (
+        'Error: RunAborted("HTTP/3 endpoint 0 closed before accepted run completion: '
+        'Transport(Peer(296))")'
+    ),
 }
 _ELIGIBILITY_INPUTS = [
     "page-safety", "prebaseline-h3-reachability", "short-window-technical-replay"
@@ -4609,7 +4635,10 @@ def _validate_srcdoc_pseudo_document_summary(value: Any) -> None:
         or value["schema_version"]
         != _PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION
         or type(value.get("policy")) is not str
-        or value.get("policy") != _PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_POLICY
+        or value.get("policy") not in {
+            _PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_POLICY,
+            _HISTORICAL_PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_POLICY_V2,
+        }
         or type(value.get("enabled")) is not bool
     ):
         raise WatchError("pinned CDP srcdoc loader-bound summary identity is invalid")
@@ -4767,7 +4796,11 @@ def _validate_srcdoc_pseudo_document_summary(value: Any) -> None:
                 and diagnostic.get("error_text") is None
                 and diagnostic.get("canceled") is None
                 and type(diagnostic.get("encoded_data_length")) is int
-                and diagnostic.get("encoded_data_length") == 33
+                and diagnostic.get("encoded_data_length") in (
+                    {15, 33}
+                    if value["policy"] == _PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_POLICY
+                    else {33}
+                )
             )
         else:
             valid_terminal = False
@@ -5115,9 +5148,10 @@ def _validate_pinned_cdp_observation(
     prearm = topology.get("bootstrap_prearm_summary")
     _validate_bootstrap_prearm_summary(prearm, require_terminal=True)
     egress_prearm = _validate_egress_prearm_summary(topology.get("egress_prearm_summary"))
-    _validate_srcdoc_pseudo_document_summary(
-        topology.get("srcdoc_pseudo_document_summary")
-    )
+    srcdoc_summary = topology.get("srcdoc_pseudo_document_summary")
+    _validate_srcdoc_pseudo_document_summary(srcdoc_summary)
+    if srcdoc_summary["policy"] != _PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_POLICY:
+        raise WatchError("current pinned CDP srcdoc policy differs from its probe contract")
     _validate_normal_shutdown_disposal_summary(
         topology.get("normal_shutdown_disposal_summary")
     )
@@ -6112,7 +6146,7 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
         "domain_safety_policy": _DOMAIN_SAFETY_POLICY,
         "domain_safety_policy_sha256": _DOMAIN_SAFETY_POLICY_SHA256,
         "origin_policy": _ORIGIN_POLICY,
-        "prebaseline_h3_screen_contract": _PREBASELINE_H3_SCREEN_V2_CONTRACT,
+        "prebaseline_h3_screen_contract": _PREBASELINE_H3_SCREEN_V3_CONTRACT,
         "eligibility_inputs": _ELIGIBILITY_INPUTS,
         "prohibited_inputs": _PROHIBITED_INPUTS,
     }

@@ -57,6 +57,20 @@ PREBASELINE_H3_SCREEN_V2_CONTRACT: dict[str, Any] = {
     "uncertain_outcome": "mixed-ambiguous-or-control-failure-blocks",
     "resolver_addresses": "diagnostic-only-no-neqo-pin-claim",
 }
+_PEER_TLS_HANDSHAKE_FAILURE_STDOUT = (
+    'Error: RunAborted("HTTP/3 endpoint 0 closed before accepted run completion: '
+    'Transport(Peer(296))")'
+)
+PREBASELINE_H3_SCREEN_V3_CONTRACT: dict[str, Any] = {
+    **PREBASELINE_H3_SCREEN_V2_CONTRACT,
+    "schema_version": 3,
+    "policy": "prebaseline-exact-selected-page-neqo-h3-reachability-v3",
+    "site_rejection": (
+        "all-exact-selected-pages-fail-both-attempts-with-classified-"
+        "http3-connectivity-timeout-or-idle-timeout-or-peer-tls-handshake-failure-296"
+    ),
+    "peer_tls_handshake_failure_stdout": _PEER_TLS_HANDSHAKE_FAILURE_STDOUT,
+}
 
 H3_SCREEN_RECEIPT_TYPE = "qcsd-class-study-prebaseline-h3-screen"
 H3_SITE_REASON = "prebaseline HTTP/3 unavailable on a selected page request origin"
@@ -71,6 +85,10 @@ _CLASSIFIED_ERRORS = {
         'Transport(IdleTimeout)")'
     ): "idle-timeout",
 }
+_V2_CLASSIFIED_ERRORS = dict(_CLASSIFIED_ERRORS)
+_CLASSIFIED_ERRORS[_PEER_TLS_HANDSHAKE_FAILURE_STDOUT] = "peer-tls-handshake-failure"
+_V2_SITE_FAILURE_OUTCOMES = frozenset({"timeout", "idle-timeout"})
+_V3_SITE_FAILURE_OUTCOMES = _V2_SITE_FAILURE_OUTCOMES | {"peer-tls-handshake-failure"}
 _MAX_STDOUT_CHARS = 4096
 _MAX_OUTPUT_CHARS = 65536
 
@@ -80,7 +98,7 @@ class H3SiteUnavailable(RuntimeError):
         payload = receipt.get("payload")
         reason = (
             H3_SITE_V2_REASON
-            if isinstance(payload, Mapping) and payload.get("screen_schema_version") == 2
+            if isinstance(payload, Mapping) and payload.get("screen_schema_version") in {2, 3}
             else H3_SITE_REASON
         )
         super().__init__(reason)
@@ -112,7 +130,13 @@ def _decision(before: str, origin_attempts: Sequence[Mapping[str, Any]], after: 
     return "site-rejection" if "failed" in outcomes else "pass"
 
 
-def _decision_v2(before: str, page_attempts: Sequence[Mapping[str, Any]], after: str | None) -> str:
+def _decision_v2(
+    before: str,
+    page_attempts: Sequence[Mapping[str, Any]],
+    after: str | None,
+    *,
+    site_failure_outcomes: frozenset[str] = _V2_SITE_FAILURE_OUTCOMES,
+) -> str:
     if before != "known-valid" or after != "known-valid" or not page_attempts:
         return "blocked"
     page_outcomes = [
@@ -122,7 +146,7 @@ def _decision_v2(before: str, page_attempts: Sequence[Mapping[str, Any]], after:
     if any(outcomes == ("known-valid", "known-valid") for outcomes in page_outcomes):
         return "pass"
     if all(
-        all(outcome in {"timeout", "idle-timeout"} for outcome in outcomes)
+        all(outcome in site_failure_outcomes for outcome in outcomes)
         for outcomes in page_outcomes
     ):
         return "site-rejection"
@@ -329,6 +353,44 @@ def build_h3_screen_receipt_v2(
     return receipt
 
 
+def build_h3_screen_receipt_v3(
+    *,
+    candidate_id: str,
+    domain: str,
+    selected_pages: Sequence[Mapping[str, str]],
+    navigation_links: Sequence[Mapping[str, str]],
+    control_before: Mapping[str, Any],
+    page_attempts: Sequence[Mapping[str, Any]],
+    control_after: Mapping[str, Any] | None,
+    image_digest: str,
+    source: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Bind the prospective exact-page screen with one exact peer TLS failure."""
+
+    payload = {
+        "screen_schema_version": 3,
+        "contract": PREBASELINE_H3_SCREEN_V3_CONTRACT,
+        "candidate_id": candidate_id,
+        "domain": domain,
+        "selected_pages": [dict(item) for item in selected_pages],
+        "navigation_links": [dict(item) for item in navigation_links],
+        "control_before": dict(control_before),
+        "page_attempts": [dict(item) for item in page_attempts],
+        "control_after": dict(control_after) if control_after is not None else None,
+        "image_digest": image_digest,
+        "source": dict(source),
+    }
+    payload["decision"] = _decision_v2(
+        control_before.get("outcome", "ambiguous"),
+        page_attempts,
+        control_after.get("outcome", "ambiguous") if control_after is not None else None,
+        site_failure_outcomes=_V3_SITE_FAILURE_OUTCOMES,
+    )
+    receipt = bind_receipt(payload, receipt_type=H3_SCREEN_RECEIPT_TYPE)
+    validate_h3_screen_receipt(receipt)
+    return receipt
+
+
 def validate_h3_screen_receipt(
     value: object,
     *,
@@ -338,7 +400,7 @@ def validate_h3_screen_receipt(
     source: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = validate_hash_bound_receipt(value, expected_type=H3_SCREEN_RECEIPT_TYPE)
-    if isinstance(payload, Mapping) and payload.get("screen_schema_version") == 2:
+    if isinstance(payload, Mapping) and payload.get("screen_schema_version") in {2, 3}:
         return _validate_h3_screen_receipt_v2(
             payload,
             candidate_id=candidate_id,
@@ -518,7 +580,16 @@ def validate_h3_screen_receipt(
     return dict(payload)
 
 
-def _check_v2_probe_attempt(attempt: object, expected_url: str) -> str:
+def _check_v2_probe_attempt(
+    attempt: object, expected_url: str, *, screen_schema_version: int = 2
+) -> str:
+    classified_errors = (
+        _CLASSIFIED_ERRORS if screen_schema_version == 3 else _V2_CLASSIFIED_ERRORS
+    )
+    site_failure_outcomes = (
+        _V3_SITE_FAILURE_OUTCOMES
+        if screen_schema_version == 3 else _V2_SITE_FAILURE_OUTCOMES
+    )
     fields = {
         "url", "started_at", "completed_at", "resolver_addresses", "resolver_error",
         "exit_code", "stdout_sha256", "stdout_excerpt", "output_sha256",
@@ -549,7 +620,7 @@ def _check_v2_probe_attempt(attempt: object, expected_url: str) -> str:
             or len(attempt["output_text"]) > _MAX_OUTPUT_CHARS
         )
         or attempt["known_valid"] is not None and type(attempt["known_valid"]) is not bool
-        or attempt["outcome"] not in {"known-valid", "timeout", "idle-timeout", "ambiguous"}
+        or attempt["outcome"] not in {"known-valid", "ambiguous"} | site_failure_outcomes
     ):
         raise ValueError("H3 screen probe attempt is invalid")
     if attempt["output_text"] is not None:
@@ -572,17 +643,24 @@ def _check_v2_probe_attempt(attempt: object, expected_url: str) -> str:
         or attempt["output_text"] is None
     ):
         raise ValueError("H3 screen known-valid proof is inconsistent")
-    if attempt["outcome"] in {"timeout", "idle-timeout"} and attempt["output_text"] is not None:
-        raise ValueError("H3 screen timeout cannot have a completed output manifest")
-    if attempt["outcome"] in {"timeout", "idle-timeout"} and (
+    if attempt["outcome"] in site_failure_outcomes and attempt["output_text"] is not None:
+        raise ValueError("H3 screen site failure cannot have a completed output manifest")
+    if attempt["outcome"] in site_failure_outcomes and (
         attempt["exit_code"] != 1
         or attempt["known_valid"] is not None
         or attempt["resolver_error"] is not None
-        or attempt["stdout_excerpt"].strip() not in _CLASSIFIED_ERRORS
-        or _CLASSIFIED_ERRORS[attempt["stdout_excerpt"].strip()] != attempt["outcome"]
+        or attempt["stdout_excerpt"].strip() not in classified_errors
+        or classified_errors[attempt["stdout_excerpt"].strip()] != attempt["outcome"]
         or attempt["stdout_sha256"] != sha256_bytes(attempt["stdout_excerpt"].encode("utf-8"))
     ):
-        raise ValueError("H3 screen timeout classification is inconsistent")
+        raise ValueError("H3 screen site failure classification is inconsistent")
+    if (
+        screen_schema_version == 3
+        and attempt["outcome"] == "ambiguous"
+        and attempt["exit_code"] == 1
+        and attempt["stdout_excerpt"].strip() in classified_errors
+    ):
+        raise ValueError("H3 screen v3 ambiguous outcome hides a classified failure")
     return attempt["outcome"]
 
 
@@ -594,17 +672,22 @@ def _validate_h3_screen_receipt_v2(
     image_digest: str | None,
     source: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
+    screen_schema_version = payload.get("screen_schema_version")
+    contract = (
+        PREBASELINE_H3_SCREEN_V3_CONTRACT
+        if screen_schema_version == 3 else PREBASELINE_H3_SCREEN_V2_CONTRACT
+    )
     expected_fields = {
         "screen_schema_version", "contract", "candidate_id", "domain", "selected_pages",
         "navigation_links", "control_before", "page_attempts", "control_after",
         "image_digest", "source", "decision",
     }
     if set(payload) != expected_fields:
-        raise ValueError("H3 screen receipt fields differ from the v2 contract")
+        raise ValueError("H3 screen receipt fields differ from the exact-page contract")
     if (
         type(payload["screen_schema_version"]) is not int
-        or payload["screen_schema_version"] != 2
-        or payload["contract"] != PREBASELINE_H3_SCREEN_V2_CONTRACT
+        or screen_schema_version not in {2, 3}
+        or payload["contract"] != contract
         or not isinstance(payload["candidate_id"], str)
         or not payload["candidate_id"]
         or not isinstance(payload["domain"], str)
@@ -648,11 +731,15 @@ def _validate_h3_screen_receipt_v2(
         raise ValueError("H3 screen selected pages differ from retained navigation links")
 
     before = _check_v2_probe_attempt(
-        payload["control_before"], PREBASELINE_H3_SCREEN_V2_CONTRACT["control_url"]
+        payload["control_before"], contract["control_url"],
+        screen_schema_version=screen_schema_version,
     )
     after_raw = payload["control_after"]
     after = (
-        _check_v2_probe_attempt(after_raw, PREBASELINE_H3_SCREEN_V2_CONTRACT["control_url"])
+        _check_v2_probe_attempt(
+            after_raw, contract["control_url"],
+            screen_schema_version=screen_schema_version,
+        )
         if after_raw is not None
         else None
     )
@@ -673,7 +760,9 @@ def _validate_h3_screen_receipt_v2(
         if not isinstance(pair, list) or len(pair) != 2:
             raise ValueError("H3 screen requires two attempts per selected page")
         for attempt in pair:
-            _check_v2_probe_attempt(attempt, page["url"])
+            _check_v2_probe_attempt(
+                attempt, page["url"], screen_schema_version=screen_schema_version
+            )
     sequence = [payload["control_before"]]
     sequence.extend(attempt for item in attempts for attempt in item["attempts"])
     if after_raw is not None:
@@ -683,7 +772,13 @@ def _validate_h3_screen_receipt_v2(
         for first, second in zip(sequence, sequence[1:])
     ):
         raise ValueError("H3 screen control and candidate probes are out of order")
-    expected_decision = _decision_v2(before, attempts, after)
+    expected_decision = _decision_v2(
+        before, attempts, after,
+        site_failure_outcomes=(
+            _V3_SITE_FAILURE_OUTCOMES
+            if screen_schema_version == 3 else _V2_SITE_FAILURE_OUTCOMES
+        ),
+    )
     if payload["decision"] != expected_decision:
         raise ValueError("H3 screen decision differs from its exact probe evidence")
     return dict(payload)
@@ -698,7 +793,7 @@ def screen_prebaseline_h3(
 ) -> dict[str, Any]:
     """Run the control/candidate/control sequence before the baseline is armed."""
 
-    if not 1 <= len(selected_pages) <= PREBASELINE_H3_SCREEN_V2_CONTRACT["maximum_selected_pages"]:
+    if not 1 <= len(selected_pages) <= PREBASELINE_H3_SCREEN_V3_CONTRACT["maximum_selected_pages"]:
         raise ValueError("H3 screen selected page ledger is invalid")
     if any(
         not isinstance(page, Mapping)
@@ -732,7 +827,7 @@ def screen_prebaseline_h3(
     source = dict(source_metadata())
     if image_digest == "native" and source.get("image_digest") is None:
         source["image_digest"] = "native"
-    before = _run_one(PREBASELINE_H3_SCREEN_V2_CONTRACT["control_url"])
+    before = _run_one(PREBASELINE_H3_SCREEN_V3_CONTRACT["control_url"])
     page_attempts: list[dict[str, Any]] = []
     after: dict[str, Any] | None = None
     if before["outcome"] == "known-valid":
@@ -740,8 +835,8 @@ def screen_prebaseline_h3(
             page_attempts.append(
                 {"url": url, "attempts": [_run_one(url) for _ in range(2)]}
             )
-        after = _run_one(PREBASELINE_H3_SCREEN_V2_CONTRACT["control_url"])
-    receipt = build_h3_screen_receipt_v2(
+        after = _run_one(PREBASELINE_H3_SCREEN_V3_CONTRACT["control_url"])
+    receipt = build_h3_screen_receipt_v3(
         candidate_id=candidate_id,
         domain=domain,
         selected_pages=selected_pages,

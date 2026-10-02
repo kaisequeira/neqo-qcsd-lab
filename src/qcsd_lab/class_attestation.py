@@ -331,6 +331,79 @@ _V127_ACQUISITION_CORRECTNESS_SPEC = {
     },
 }
 
+# This one completed 20-site acquisition-only authority was issued before the
+# prospective v147 source change.  Retain its exact proof for inspection, while
+# requiring a fresh authority for every later acquisition or foundation.
+_V146_ACQUISITION_AUTHORITY_COHORT_VERSION = 146
+_V146_ACQUISITION_AUTHORITY_SHA256 = (
+    "1b264bea7c01f6a9550d6e422ac7198395a1b1fa8050ece30fd71ec6aece6fe1"
+)
+_V146_SOURCE = {
+    "image_digest": "sha256:2dea73274c49c9ed2e70c242c0fa1b83eb238167840d5cf374d1ce4afa789726",
+    "lab_commit": "2194a71055cb35c84514cebaf594b6d99241ebf4",
+    "lab_dirty": False,
+    "lab_patch_sha256": _EMPTY_SHA256,
+    "neqo_commit": "acc2c6ae8ef2a12be582dd7e1af0dc3817040fd5",
+    "neqo_pinned_commit": "acc2c6ae8ef2a12be582dd7e1af0dc3817040fd5",
+    "neqo_dirty": False,
+    "neqo_patch_sha256": _EMPTY_SHA256,
+}
+_V146_BUILD_EXECUTION_SHA256 = "1cf35afc2a0f88791371b51e8b2abb13a9a4afc49b6606fd38590e11ef546063"
+_V146_PINNED_CDP_SHA256 = "488f0da3bdfed05112acfbd8ae92dd99dc9564e9e9462fc476701889db1f4f42"
+_V146_STUDY_CONTRACT = {
+    "path": "/lab/config/class-study/v2/study.json",
+    "sha256": "386a173a97dd26989c2b6b35d039efa06db9825e960985568ff49c0a9ae327a7",
+}
+_V146_STUDY_PROFILE_INPUTS = {
+    "base_study": {
+        "path": "/lab/config/class-study/v1/study.json",
+        "sha256": "ab8d898836cb172338303ded7d0adda984fbfab720c5bcd219e08f90efbee7bc",
+    },
+    "candidate_catalogue": {
+        "path": "/lab/config/class-study/v1/classifier-multiorigin100-v1-candidates.json",
+        "sha256": "9d2ec1d755648292526ff623700b07a9bab3988a67444c262aea9f4a855e5146",
+    },
+}
+_V146_ACQUISITION_CORRECTNESS_SPEC = {
+    "gate": "acquisition-focused-correctness",
+    "argv": [
+        "/opt/qcsd-venv/bin/python", "-m", "pytest", "-p", "no:cacheprovider",
+        "tests/test_discover.py", "tests/test_discovery_evidence.py", "tests/test_prepare.py",
+        "tests/test_manifest.py", "tests/test_cdp_targets.py", "tests/test_playwright_driver.py",
+        "tests/test_browser_egress.py", "tests/test_class_acquisition.py",
+        "tests/test_acquisition_selection.py", "tests/test_acquisition_timing.py",
+        "tests/test_class_catalogue.py", "tests/test_class_cohort.py",
+        "tests/test_class_acquisition_authority.py",
+        "tests/test_class_build_admission_acquisition_authority.py",
+        "tests/test_class_acquisition_short_profile.py", "tests/test_class_acquisition_watch.py",
+        "tests/test_class_study.py", "tests/test_class_pipeline.py", "tests/test_class_cohort20.py",
+    ],
+    "cwd": "/lab",
+    "input_sha256": {
+        "pyproject.toml": "976e5c387654ec2e2899bb566f25424a496ddb6da3254c55073262c49cac25df",
+        "tests/test_acquisition_selection.py": "909736018a272962d752d256823dbdf81dd72322e2a6db930bfeba06e0b1212a",
+        "tests/test_acquisition_timing.py": "4445c0bcdfb9e0de384b67e7129e367d2ea9934dc20d3d869863a1f51fc2011e",
+        "tests/test_browser_egress.py": "485a373986ff18a5ac72b49130d9743ab6ff01cfb132f3f6a471b494b2dd7f3c",
+        "tests/test_cdp_targets.py": "47cea2b5fc0b87c5393340484ab039ac6ed4fa84057785cadd8c142b4fbbdf5d",
+        "tests/test_class_acquisition.py": "63c1c3eff891f57a2eb592671b4eee6360ab2fffe23ff16c025aded766d103bf",
+        "tests/test_class_acquisition_authority.py": "92ad6f591ccc86b975922fcae3a79190801110740e527a72d1c5c3cf92f92400",
+        "tests/test_class_acquisition_short_profile.py": "d109e727a729b7991548b745d2fccfdc147879f6ab8c7757bdfc745493fc2a94",
+        "tests/test_class_acquisition_watch.py": "c911583f43a8c02e01d64daff7b8689ed785b523256fecef18c2981f0000dfef",
+        "tests/test_class_build_admission_acquisition_authority.py": "d70800159ba13123607e4bc400678fad246eb9dc5e8ee43cb27fba993ffaa6d2",
+        "tests/test_class_catalogue.py": "481c29f4cbaef6f1838dfbbc714991aaefe6ca284b40b4ee952b46b1adfb4fcd",
+        "tests/test_class_cohort.py": "3859e13e6f61e0840e59d1eebdc4d10a76c68d8b08ec4348f5877b2c7416edd2",
+        "tests/test_class_cohort20.py": "311f0b32f7d9f922ad6a38a1614b0697d87fb5d0bb17e6173e7cbd6dbdf18d14",
+        "tests/test_class_pipeline.py": "4354d518a4c3e1bf8c0ca828b1d79538fbde0abbbdc04336a09b3d1d2c47c8e0",
+        "tests/test_class_study.py": "3a4c22ddb5979e325fefcba453a832fb46682cc2a2de7b5b4976b3db6431c1f0",
+        "tests/test_discover.py": "f5c228bb8cba09412f1be8116391d1389c75102b9f55e600e69dccc3ce46a74f",
+        "tests/test_discovery_evidence.py": "efbeaa5b7659d5dd45f4fe8c1121b352c85111608acf024f96f0abacc62bccbb",
+        "tests/test_manifest.py": "f708f32ac33ff1e4ebde3af284ef31255974177f7f6dfc26f1c54c42064b9e89",
+        "tests/test_playwright_driver.py": "9d59b1d4e4e114bf263d48cd7f3bd21470485303b83566b603d2e52ab0f366e5",
+        "tests/test_prepare.py": "28c3475ed881970e10ab8afd16d346fbd96e04d6b754aa16e32abfd7e8ef66fc",
+        "uv.lock": "eb9fbc7d641c821c597043b733575f1b2ccc519a13e6d025e9b6a1e19204cb1a",
+    },
+}
+
 _FINAL_GATES = (
     "class-readiness-attestation",
     "pre-block-canaries-1000-of-1000",
@@ -419,13 +492,13 @@ def validate_class_acquisition_authority(
 ) -> dict[str, Any]:
     """Reconstruct acquisition-only evidence without executing tests.
 
-    Historical validation is limited to the frozen v96 and v127 contracts and
-    is verification-only. Schemas 1 and 2 remain distinct current contracts;
-    schemas 2 and 3 defer browser qualification to the later foundation. There is
-    no full-foundation fallback.  A concrete role chooses which exact image
-    from the same pinned build must be running; ``None`` is reserved for
-    runtime-independent reconstruction of current evidence and does not enable
-    historical validation or change the receipt's acquisition-only scope.
+    Historical validation is limited to the frozen v96, v127, and v146
+    contracts and is verification-only. Schemas 1 and 2 remain distinct current
+    contracts; schemas 2 and 3 defer browser qualification to the later
+    foundation. There is no full-foundation fallback. A concrete role chooses
+    which exact image from the same pinned build must be running; ``None``
+    enables runtime-independent reconstruction, but historical v146 additionally
+    requires explicit ``allow_historical=True`` and has acquisition-only scope.
     """
 
     receipt_path, value, payload = _load_bound_receipt(
@@ -453,6 +526,15 @@ def validate_class_acquisition_authority(
         expected_evidence.add("browser_egress_qualification")
     if not isinstance(evidence, Mapping) or set(evidence) != expected_evidence:
         raise ValueError("class acquisition authority evidence inventory is invalid")
+    historical_v146 = (
+        schema == CLASS20_ACQUISITION_AUTHORITY_SCHEMA_VERSION
+        and payload.get("cohort_version") == _V146_ACQUISITION_AUTHORITY_COHORT_VERSION
+    )
+    if historical_v146:
+        if not allow_historical or runtime_role is not None:
+            raise ValueError("historical v146 acquisition authority is verify-only")
+        if sha256_file(receipt_path) != _V146_ACQUISITION_AUTHORITY_SHA256:
+            raise ValueError("historical v146 acquisition authority is not the exact frozen receipt")
     context = _acquisition_authority_context(
         cohort_version=payload.get("cohort_version"),
         build_execution_receipt=_path_from_binding(
@@ -668,9 +750,15 @@ def _acquisition_authority_context(
     pinned_schema = pinned.get("probe_schema_version")
     historical_v96 = pinned_schema == _V96_PINNED_CDP_PROBE_SCHEMA_VERSION
     historical_v127 = cohort_version == _V127_ACQUISITION_AUTHORITY_COHORT_VERSION
-    historical = historical_v96 or historical_v127
+    historical_v146 = (
+        cohort_version == _V146_ACQUISITION_AUTHORITY_COHORT_VERSION
+        and study_id == CLASS20_STUDY_ID
+    )
+    historical = historical_v96 or historical_v127 or historical_v146
     if historical and not allow_historical:
         raise ValueError("historical class acquisition authority is verify-only")
+    if historical_v146 and runtime_role is not None:
+        raise ValueError("historical v146 acquisition authority is verify-only")
     if historical_v96 and cohort_version != _V96_ACQUISITION_AUTHORITY_COHORT_VERSION:
         raise ValueError("historical class acquisition authority is not the exact v96 cohort")
     if historical_v127 and (
@@ -681,6 +769,14 @@ def _acquisition_authority_context(
         or recorded_study_contract != _V127_STUDY_CONTRACT
     ):
         raise ValueError("historical class acquisition authority is not the exact v127 cohort")
+    if historical_v146 and (
+        pinned_schema != PINNED_CDP_PROBE_SCHEMA_VERSION
+        or source != _V146_SOURCE
+        or build["sha256"] != _V146_BUILD_EXECUTION_SHA256
+        or pinned["sha256"] != _V146_PINNED_CDP_SHA256
+        or recorded_study_contract != _V146_STUDY_CONTRACT
+    ):
+        raise ValueError("historical class acquisition authority is not the exact v146 cohort")
     if pinned_schema not in {
         _V96_PINNED_CDP_PROBE_SCHEMA_VERSION,
         PINNED_CDP_PROBE_SCHEMA_VERSION,
@@ -703,15 +799,20 @@ def _acquisition_authority_context(
             allow_v96_historical_source_replay=historical_v96,
             allow_v127_historical_source_replay=historical_v127,
         )
-    if historical and browser is None:
+    if historical and not historical_v146 and browser is None:
         raise ValueError("historical acquisition authority requires browser evidence")
     if historical_v127 and browser["sha256"] != _V127_BROWSER_EGRESS_SHA256:
         raise ValueError("historical v127 browser qualification binding differs")
     study_profile_inputs = None
     if study_id == CLASS20_STUDY_ID:
-        if historical:
+        if historical and not historical_v146:
             raise ValueError("20-site acquisition cannot use historical authority")
         study_contract, study_profile_inputs = _class20_study_bindings()
+        if historical_v146 and (
+            study_contract != _V146_STUDY_CONTRACT
+            or study_profile_inputs != _V146_STUDY_PROFILE_INPUTS
+        ):
+            raise ValueError("historical v146 acquisition authority profile differs")
     else:
         study_contract = (
             _V96_STUDY_CONTRACT
@@ -756,6 +857,7 @@ def _acquisition_authority_context(
         "pinned_recorded_at": pinned["recorded_at"],
         "historical": historical,
         "historical_v127": historical_v127,
+        "historical_v146": historical_v146,
     }
 
 
@@ -839,15 +941,14 @@ def _acquisition_authority_value(
         CLASS20_ACQUISITION_AUTHORITY_SCHEMA_VERSION,
     }:
         raise ValueError("class acquisition authority schema is invalid")
-    spec = (
-        _V96_ACQUISITION_CORRECTNESS_SPEC
-        if context.get("historical") is True and context.get("historical_v127") is not True
-        else (
-            _V127_ACQUISITION_CORRECTNESS_SPEC
-            if context.get("historical_v127") is True
-            else _acquisition_correctness_spec(context.get("study_id", STUDY_ID))
-        )
-    )
+    if context.get("historical_v146") is True:
+        spec = _V146_ACQUISITION_CORRECTNESS_SPEC
+    elif context.get("historical_v127") is True:
+        spec = _V127_ACQUISITION_CORRECTNESS_SPEC
+    elif context.get("historical") is True:
+        spec = _V96_ACQUISITION_CORRECTNESS_SPEC
+    else:
+        spec = _acquisition_correctness_spec(context.get("study_id", STUDY_ID))
     if not isinstance(correctness, Mapping) or set(correctness) != {
         "schema_version", "gate", "argv", "cwd", "input_sha256", "source",
         "build_execution_identity", "study_contract", "started_at", "finished_at",

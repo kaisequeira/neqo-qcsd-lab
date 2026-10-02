@@ -34,6 +34,27 @@ Secondary-origin and later-component resources receive no prefix capacity
 credit; full-page replay and certification must establish their behaviour.
 Historical schema-2 and schema-3 prefix evidence receives no new-study credit.
 
+## Prospective acquisition repair after v146
+
+The v146 search stopped on two distinct problems; its checkpoint and outcomes
+remain unchanged. The next clean source uses acquisition schema 14. Its
+prebaseline HTTP/3 screen has a version-3 rule for one exact peer TLS
+handshake-failure result (`Transport(Peer(296))`). That result can reject a
+candidate only when both attempts on **every** selected page fail in a
+classified way and the HTTP/3 control succeeds before and after the candidate
+attempts. Other peer errors, mixed results and failed controls remain
+inconclusive. The version-2 screens saved by v146 retain their original
+classification and cannot be promoted under the version-3 rule.
+
+The same new source accepts a Chromium `about:srcdoc` finish of 15 or 33 bytes
+only when the request ID matches the observed root-page loader and the exact
+page lifecycle, event fields and no-network-request checks pass. An unmatched
+terminal remains an integrity error. The new CDP, srcdoc and render policies
+are bound in schema-14 acquisition evidence; schema-13 evidence remains
+verifiable under its original CDP v21, srcdoc v2 and render v4 policies. The
+source-pinned 20-site profile and its inherited input files keep their saved
+bytes. This is a prospective source and evidence change, not a repair of v146.
+
 ## What must pass before final collection?
 
 1. Freeze clean Lab and pinned Rust source, build fresh images, pass the early

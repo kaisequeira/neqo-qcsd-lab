@@ -159,7 +159,7 @@ def test_standalone_browser_schema_constants_match_the_producer() -> None:
         browser_producer.HISTORICAL_FOUNDATION_SCHEMA_VERSIONS
     )
     assert admission._BROWSER_EGRESS_FINAL_SCHEMA == browser_producer.FINAL_SCHEMA_VERSION
-    assert admission._ACQUISITION_SCHEMA == acquisition_producer.SCHEMA_VERSION == 13
+    assert admission._ACQUISITION_SCHEMA == acquisition_producer.SCHEMA_VERSION == 14
     assert admission._V127_ACQUISITION_AUTHORITY_COHORT == (
         attestation_producer._V127_ACQUISITION_AUTHORITY_COHORT_VERSION
     )

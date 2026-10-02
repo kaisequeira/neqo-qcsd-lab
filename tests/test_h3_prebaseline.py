@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -30,11 +31,12 @@ def _attempt(url: str, outcome: str, sequence: int) -> dict:
             separators=(",", ":"),
         )
         code, stdout, valid = 0, "", True
-    elif outcome in {"timeout", "idle-timeout"}:
+    elif outcome in {"timeout", "idle-timeout", "peer-tls-handshake-failure"}:
         output = None
         stdout = (
             "Error: Timeout(12)" if outcome == "timeout"
-            else "Error: Transport(IdleTimeout)"
+            else "Error: Transport(IdleTimeout)" if outcome == "idle-timeout"
+            else h3.PREBASELINE_H3_SCREEN_V3_CONTRACT["peer_tls_handshake_failure_stdout"]
         )
         code, valid = 1, None
     elif outcome == "ambiguous":
@@ -77,6 +79,7 @@ def _receipt(
     before: str = "known-valid",
     after: str | None = "known-valid",
     link_urls: tuple[str, ...] = ("https://example.com/guide",),
+    screen_version: int = 2,
 ) -> dict:
     selected, links = _selected_pages(link_urls)
     assert len(page_outcomes) == len(selected)
@@ -91,7 +94,11 @@ def _receipt(
                     for index, outcome in enumerate(outcomes)
                 ],
             })
-    return h3.build_h3_screen_receipt_v2(
+    builder = (
+        h3.build_h3_screen_receipt_v3
+        if screen_version == 3 else h3.build_h3_screen_receipt_v2
+    )
+    return builder(
         candidate_id="tranco-0000001",
         domain="example.com",
         selected_pages=selected,
@@ -137,6 +144,77 @@ def test_v2_passes_with_one_exact_page_pair_and_retains_all_selected_pages():
 )
 def test_v2_decision_uses_exact_page_pairs(page_outcomes, expected):
     assert h3.validate_h3_screen_receipt(_receipt(page_outcomes))["decision"] == expected
+
+
+def test_v3_exact_peer_tls_failure_rejects_only_with_full_healthy_bracket():
+    failures = (("peer-tls-handshake-failure", "peer-tls-handshake-failure"),
+                ("timeout", "idle-timeout"))
+    receipt = _receipt(failures, screen_version=3)
+    payload = h3.validate_h3_screen_receipt(receipt)
+    assert payload["screen_schema_version"] == 3
+    assert payload["contract"] == h3.PREBASELINE_H3_SCREEN_V3_CONTRACT
+    assert payload["decision"] == "site-rejection"
+    assert h3.validate_h3_screen_receipt(
+        _receipt(failures, screen_version=3, after="ambiguous")
+    )["decision"] == "blocked"
+    assert h3.validate_h3_screen_receipt(
+        _receipt(failures, screen_version=3, before="ambiguous", after=None)
+    )["decision"] == "blocked"
+
+
+def test_v3_peer_tls_failure_near_misses_remain_ambiguous_and_tampering_fails():
+    exact = h3.PREBASELINE_H3_SCREEN_V3_CONTRACT["peer_tls_handshake_failure_stdout"]
+    assert h3._CLASSIFIED_ERRORS.get(exact) == "peer-tls-handshake-failure"
+    assert h3._CLASSIFIED_ERRORS.get(exact.replace("Peer(296)", "Peer(297)")) is None
+    assert h3._CLASSIFIED_ERRORS.get(exact.replace("RunAborted", "Transport")) is None
+    receipt = _receipt((("peer-tls-handshake-failure", "peer-tls-handshake-failure"),
+                        ("peer-tls-handshake-failure", "peer-tls-handshake-failure")),
+                       screen_version=3)
+
+    def change(payload):
+        attempt = payload["page_attempts"][0]["attempts"][0]
+        attempt["stdout_excerpt"] = attempt["stdout_excerpt"].replace("Peer(296)", "Peer(297)")
+        attempt["stdout_sha256"] = sha256_bytes(attempt["stdout_excerpt"].encode())
+
+    with pytest.raises(ValueError, match="classification is inconsistent"):
+        h3.validate_h3_screen_receipt(_rebind(receipt, change))
+
+
+@pytest.mark.parametrize(
+    ("stdout", "expected"),
+    [
+        (h3.PREBASELINE_H3_SCREEN_V3_CONTRACT["peer_tls_handshake_failure_stdout"],
+         "peer-tls-handshake-failure"),
+        (h3.PREBASELINE_H3_SCREEN_V3_CONTRACT["peer_tls_handshake_failure_stdout"].replace(
+            "Peer(296)", "Peer(297)"), "ambiguous"),
+        ("Error: Transport(Peer(296))", "ambiguous"),
+    ],
+)
+def test_v3_producer_classifies_only_exact_peer_tls_failure(monkeypatch, stdout, expected):
+    monkeypatch.setattr(h3, "_resolver_addresses", lambda _url: (["1.1.1.1"], None))
+    monkeypatch.setattr(h3, "capture_scheduler_launch_prefix", lambda: [])
+    monkeypatch.setattr(
+        h3, "run", lambda *_args, **_kwargs: SimpleNamespace(returncode=1, stdout=stdout)
+    )
+    attempt = h3._run_one("https://example.com/")
+    assert attempt["outcome"] == expected
+    assert attempt["stdout_sha256"] == sha256_bytes(stdout.encode())
+
+
+def test_v2_peer_tls_failure_does_not_gain_v3_authority():
+    receipt = _receipt((("timeout", "timeout"), ("timeout", "timeout")))
+
+    def change(payload):
+        attempt = payload["page_attempts"][0]["attempts"][0]
+        attempt["outcome"] = "peer-tls-handshake-failure"
+        attempt["stdout_excerpt"] = (
+            h3.PREBASELINE_H3_SCREEN_V3_CONTRACT["peer_tls_handshake_failure_stdout"]
+        )
+        attempt["stdout_sha256"] = sha256_bytes(attempt["stdout_excerpt"].encode())
+
+    with pytest.raises(ValueError, match="probe attempt is invalid"):
+        h3.validate_h3_screen_receipt(_rebind(receipt, change))
+    assert h3.validate_h3_screen_receipt(receipt)["screen_schema_version"] == 2
 
 
 def test_v2_failed_control_skips_pages_and_later_control():

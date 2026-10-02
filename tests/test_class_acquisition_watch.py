@@ -94,11 +94,13 @@ def _target_activity() -> dict[str, Any]:
 def _srcdoc_pseudo_document_summary(
     *,
     terminal_method: str = "Network.loadingFailed",
+    encoded_data_length: int = 33,
+    policy: str | None = None,
 ) -> dict[str, Any]:
     loader_digest = hashlib.sha256(b"fixture-srcdoc-loader").hexdigest()
     summary: dict[str, Any] = {
         "schema_version": watch._PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
-        "policy": watch._PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_POLICY,
+        "policy": policy or watch._PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_POLICY,
         "enabled": True,
         "total": 1,
         "resolved": 1,
@@ -162,7 +164,7 @@ def _srcdoc_pseudo_document_summary(
                 "resource_type": None,
                 "error_text": None,
                 "canceled": None,
-                "encoded_data_length": 33,
+                "encoded_data_length": encoded_data_length,
             }
         )
     elif terminal_method != "Network.loadingFailed":
@@ -1366,7 +1368,7 @@ def acquisition(tmp_path: Path) -> Fixture:
         "domain_safety_policy_sha256": watch._DOMAIN_SAFETY_POLICY_SHA256,
         "origin_policy": copy.deepcopy(watch._ORIGIN_POLICY),
         "prebaseline_h3_screen_contract": copy.deepcopy(
-            watch._PREBASELINE_H3_SCREEN_V2_CONTRACT
+            watch._PREBASELINE_H3_SCREEN_V3_CONTRACT
         ),
         "eligibility_inputs": copy.deepcopy(watch._ELIGIBILITY_INPUTS),
         "prohibited_inputs": copy.deepcopy(watch._PROHIBITED_INPUTS),
@@ -4836,13 +4838,16 @@ def test_watcher_pinned_cdp_contract_matches_runtime_contract() -> None:
     assert watch._PREBASELINE_H3_SCREEN_V2_CONTRACT == (
         class_acquisition.PREBASELINE_H3_SCREEN_V2_CONTRACT
     )
+    assert watch._PREBASELINE_H3_SCREEN_V3_CONTRACT == (
+        class_acquisition.PREBASELINE_H3_SCREEN_V3_CONTRACT
+    )
     assert watch._ELIGIBILITY_INPUTS == class_acquisition.ELIGIBILITY_INPUTS
     assert watch._PROHIBITED_INPUTS == class_acquisition.PROHIBITED_INPUTS
     assert watch._ACQUISITION_ACTION_TIMING_CONTRACT == (class_acquisition.ACTION_TIMING_CONTRACT)
     assert watch._BASELINE_SCHEDULING_CONTRACT == (class_acquisition.BASELINE_SCHEDULING_CONTRACT)
 
 
-@pytest.mark.parametrize("historical_schema", (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11))
+@pytest.mark.parametrize("historical_schema", (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13))
 def test_watcher_treats_historical_provenance_as_verify_only(
     acquisition: Fixture,
     historical_schema: int,
@@ -4998,19 +5003,46 @@ def test_watcher_rejects_resealed_pinned_cdp_shutdown_disposal_tamper(
         watch._validate_immutable_binding(acquisition.paths)
 
 
+@pytest.mark.parametrize("encoded_data_length", [15, 33])
 def test_watcher_accepts_exact_loading_finished_srcdoc_evidence(
     acquisition: Fixture,
+    encoded_data_length: int,
 ) -> None:
     pinned = json.loads(acquisition.pinned_cdp_path.read_text(encoding="utf-8"))
     payload = copy.deepcopy(pinned["payload"])
     payload["observation"]["topology"]["srcdoc_pseudo_document_summary"] = (
         _srcdoc_pseudo_document_summary(
-            terminal_method="Network.loadingFinished"
+            terminal_method="Network.loadingFinished",
+            encoded_data_length=encoded_data_length,
         )
     )
     _replace_pinned_and_rebind_foundation(acquisition, payload)
 
     watch._validate_immutable_binding(acquisition.paths)
+
+
+def test_watcher_replays_historical_srcdoc_v2_without_accepting_15_bytes() -> None:
+    historical = _srcdoc_pseudo_document_summary(
+        terminal_method="Network.loadingFinished",
+        policy=watch._HISTORICAL_PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_POLICY_V2,
+    )
+    watch._validate_srcdoc_pseudo_document_summary(historical)
+    historical["diagnostics"][0]["encoded_data_length"] = 15
+    with pytest.raises(watch.WatchError, match="diagnostic is inconsistent"):
+        watch._validate_srcdoc_pseudo_document_summary(historical)
+
+
+def test_watcher_current_pinned_receipt_rejects_historical_srcdoc_policy(
+    acquisition: Fixture,
+) -> None:
+    pinned = json.loads(acquisition.pinned_cdp_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(pinned["payload"])
+    payload["observation"]["topology"]["srcdoc_pseudo_document_summary"]["policy"] = (
+        watch._HISTORICAL_PINNED_CDP_SRCDOC_PSEUDO_DOCUMENT_POLICY_V2
+    )
+    _replace_pinned_and_rebind_foundation(acquisition, payload)
+    with pytest.raises(watch.WatchError, match="current pinned CDP srcdoc policy"):
+        watch._validate_immutable_binding(acquisition.paths)
 
 
 @pytest.mark.parametrize(

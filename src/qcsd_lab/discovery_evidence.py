@@ -37,7 +37,7 @@ REQUEST_STAGE_OBSERVATION_POLICY = (
 
 PASSIVE_RENDER_CONTRACT: dict[str, Any] = {
     "schema_version": PASSIVE_RENDER_CONTRACT_SCHEMA_VERSION,
-    "policy": "bounded-passive-render-quiescence-v4",
+    "policy": "bounded-passive-render-quiescence-v5",
     "viewport": {"width": 1365, "height": 768, "deviceScaleFactor": 1},
     "cache": "disabled",
     "service_workers": "bypassed-and-registration-blocked",
@@ -60,7 +60,7 @@ PASSIVE_RENDER_CONTRACT: dict[str, Any] = {
         "recursive-target-router-shutdown-ready",
         "no-pending-shared-worker-bootstrap-prearm",
         "all-observed-target-egress-shims-prearmed",
-        "terminal-root-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-lifecycle",
+        "terminal-root-srcdoc-loader-bound-orphan-abort-or-15-or-33-byte-finish-lifecycle",
         "zero-non-replayable-egress-attempts",
         "zero-browser-context-service-workers",
     ],

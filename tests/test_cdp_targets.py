@@ -26,6 +26,7 @@ from qcsd_lab.cdp_targets import (
     CDP_TARGET_INSTRUMENTATION_POLICY,
     NORMAL_SHUTDOWN_DISPOSAL_POLICY,
     NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
+    SRCDOC_PSEUDO_DOCUMENT_POLICY,
     BrowserSharedWorkerGuard,
     CdpTargetIntegrityError,
     CdpTargetSource,
@@ -972,6 +973,7 @@ def _srcdoc_diagnostic(
     loader_id: str = _SRCDOC_REQUEST_ID,
     first_ordinal: int = 1,
     terminal_method: str = "Network.loadingFailed",
+    encoded_data_length: int = 33,
 ) -> dict[str, Any]:
     diagnostic = {
         "schema_version": 3,
@@ -1021,7 +1023,7 @@ def _srcdoc_diagnostic(
                 "resource_type": None,
                 "error_text": None,
                 "canceled": None,
-                "encoded_data_length": 33,
+                "encoded_data_length": encoded_data_length,
             }
         )
     else:
@@ -1029,7 +1031,10 @@ def _srcdoc_diagnostic(
     return diagnostic
 
 
-def _srcdoc_summary(*diagnostics: dict[str, Any]) -> dict[str, Any]:
+def _srcdoc_summary(
+    *diagnostics: dict[str, Any],
+    policy: str = SRCDOC_PSEUDO_DOCUMENT_POLICY,
+) -> dict[str, Any]:
     terminal_outcome_counts = {
         "Network.loadingFailed": 0,
         "Network.loadingFinished": 0,
@@ -1038,10 +1043,7 @@ def _srcdoc_summary(*diagnostics: dict[str, Any]) -> dict[str, Any]:
         terminal_outcome_counts[diagnostic["terminal_method"]] += 1
     return {
         "schema_version": 3,
-        "policy": (
-            "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-"
-            "finish-v2"
-        ),
+        "policy": policy,
         "enabled": True,
         "total": len(diagnostics),
         "resolved": len(diagnostics),
@@ -1570,7 +1572,7 @@ def test_policy_is_pinned_and_root_is_instrumented_before_navigation() -> None:
     router, _observed = _router(session)
 
     assert CDP_TARGET_INSTRUMENTATION_POLICY == (
-        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v21"
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v22"
     )
     assert NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION == 5
     assert NORMAL_SHUTDOWN_DISPOSAL_POLICY == (
@@ -1672,10 +1674,7 @@ def test_exact_root_srcdoc_pseudo_document_is_consumed_and_reported_once() -> No
     summary = router.srcdoc_pseudo_document_summary
     assert summary == {
         "schema_version": 3,
-        "policy": (
-            "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-"
-            "finish-v2"
-        ),
+        "policy": SRCDOC_PSEUDO_DOCUMENT_POLICY,
         "enabled": True,
         "total": 1,
         "resolved": 1,
@@ -1756,13 +1755,37 @@ def test_srcdoc_summary_validator_rejects_inexact_field_types(
         validate_srcdoc_pseudo_document_summary(summary, require_terminal=False)
 
 
-def test_srcdoc_summary_validator_accepts_the_exact_loading_finished_variant() -> None:
-    diagnostic = _srcdoc_diagnostic(terminal_method="Network.loadingFinished")
+@pytest.mark.parametrize("encoded_data_length", [15, 33])
+def test_srcdoc_summary_validator_accepts_the_exact_loading_finished_variant(
+    encoded_data_length: int,
+) -> None:
+    diagnostic = _srcdoc_diagnostic(
+        terminal_method="Network.loadingFinished",
+        encoded_data_length=encoded_data_length,
+    )
 
     assert validate_srcdoc_pseudo_document_summary(
         _srcdoc_summary(diagnostic),
         require_terminal=True,
     ) == _srcdoc_summary(diagnostic)
+
+
+def test_srcdoc_summary_validator_preserves_exact_historical_v2_length() -> None:
+    old_policy = cdp_targets_module._PREVIOUS_SRCDOC_PSEUDO_DOCUMENT_POLICY
+    old_diagnostic = _srcdoc_diagnostic(terminal_method="Network.loadingFinished")
+    assert validate_srcdoc_pseudo_document_summary(
+        _srcdoc_summary(old_diagnostic, policy=old_policy),
+        require_terminal=True,
+    ) == _srcdoc_summary(old_diagnostic, policy=old_policy)
+
+    new_diagnostic = _srcdoc_diagnostic(
+        terminal_method="Network.loadingFinished", encoded_data_length=15
+    )
+    with pytest.raises(ValueError, match="diagnostic is inconsistent"):
+        validate_srcdoc_pseudo_document_summary(
+            _srcdoc_summary(new_diagnostic, policy=old_policy),
+            require_terminal=True,
+        )
 
 
 @pytest.mark.parametrize(
@@ -1955,8 +1978,8 @@ def test_root_srcdoc_page_lifecycle_without_an_orphan_terminal_is_benign() -> No
     assert router.srcdoc_pseudo_document_summary == {
         "schema_version": 3,
         "policy": (
-            "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-"
-            "finish-v2"
+            "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-15-or-33-"
+            "byte-finish-v3"
         ),
         "enabled": True,
         "total": 0,
@@ -2091,7 +2114,10 @@ def test_root_srcdoc_terminal_requires_the_exact_orphan_signature(
     assert internal == []
 
 
-def test_exact_root_srcdoc_loading_finished_terminal_is_consumed_and_reported_once() -> None:
+@pytest.mark.parametrize("encoded_data_length", [15, 33])
+def test_exact_root_srcdoc_loading_finished_terminal_is_consumed_and_reported_once(
+    encoded_data_length: int,
+) -> None:
     session = _FakeNonFlatSession()
     internal: list[tuple[CdpTargetSource, Mapping[str, Any]]] = []
     router, observed = _router(
@@ -2102,7 +2128,11 @@ def test_exact_root_srcdoc_loading_finished_terminal_is_consumed_and_reported_on
         ),
     )
     _begin_srcdoc_loading(session)
-    session.emit((), "Network.loadingFinished", _srcdoc_finished_terminal())
+    session.emit(
+        (),
+        "Network.loadingFinished",
+        _srcdoc_finished_terminal(encodedDataLength=encoded_data_length),
+    )
 
     router.raise_if_failed()
     assert router.srcdoc_pseudo_document_summary["pending"] == 1
@@ -2112,7 +2142,10 @@ def test_exact_root_srcdoc_loading_finished_terminal_is_consumed_and_reported_on
 
     session.emit((), "Page.frameStoppedLoading", {"frameId": _SRCDOC_FRAME_ID})
     router.raise_if_failed()
-    diagnostic = _srcdoc_diagnostic(terminal_method="Network.loadingFinished")
+    diagnostic = _srcdoc_diagnostic(
+        terminal_method="Network.loadingFinished",
+        encoded_data_length=encoded_data_length,
+    )
     assert internal == [(router.root_source, diagnostic)]
     assert router.srcdoc_pseudo_document_summary == _srcdoc_summary(diagnostic)
     assert observed == []

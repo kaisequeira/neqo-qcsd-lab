@@ -171,12 +171,14 @@ def _h3_screen_receipt(
     per_page: dict[str, str] | None = None,
     screen_at: datetime | None = None,
     legacy: bool = False,
+    screen_version: int = 3,
 ) -> dict:
     """Bind the same small screen shape returned by production backends."""
 
     contract = (
         h3_prebaseline.PREBASELINE_H3_SCREEN_CONTRACT
         if legacy else h3_prebaseline.PREBASELINE_H3_SCREEN_V2_CONTRACT
+        if screen_version == 2 else h3_prebaseline.PREBASELINE_H3_SCREEN_V3_CONTRACT
     )
     control_url = contract["control_url"]
     control_before = _h3_screen_attempt(
@@ -230,6 +232,7 @@ def _h3_screen_receipt(
     builder = (
         h3_prebaseline.build_h3_screen_receipt
         if legacy else h3_prebaseline.build_h3_screen_receipt_v2
+        if screen_version == 2 else h3_prebaseline.build_h3_screen_receipt_v3
     )
     return builder(
         candidate_id=candidate_id,
@@ -440,6 +443,15 @@ def test_schema_eleven_h3_receipts_remain_verifiable_but_not_resumable(tmp_path:
     historical["prebaseline_h3_screen_contract"] = (
         h3_prebaseline.PREBASELINE_H3_SCREEN_CONTRACT
     )
+    historical["cdp_target_instrumentation_policy"] = (
+        acquisition_module._SCHEMA_THIRTEEN_CDP_TARGET_INSTRUMENTATION_POLICY
+    )
+    historical["passive_render_contract"] = (
+        acquisition_module._SCHEMA_THIRTEEN_PASSIVE_RENDER_CONTRACT
+    )
+    historical["passive_render_contract_sha256"] = (
+        acquisition_module._SCHEMA_THIRTEEN_PASSIVE_RENDER_CONTRACT_SHA256
+    )
     acquisition_module._validate_current_provenance_contract(
         historical, candidate_catalogue_path=catalogue
     )
@@ -510,6 +522,207 @@ def test_schema_eleven_h3_receipts_remain_verifiable_but_not_resumable(tmp_path:
             workload_root=tmp_path / "workloads",
             backend=RejectingBackend(),
             now=datetime(2026, 8, 28, tzinfo=UTC),
+        )
+
+
+def test_schema_thirteen_v2_screen_remains_readable_but_cannot_gain_v3_authority(
+    tmp_path: Path,
+) -> None:
+    from qcsd_lab.class_catalogue import select_page_candidates
+
+    catalogue = _catalogue(tmp_path / "catalogue.json")
+    runner = initialise_runner(
+        tmp_path / "runner",
+        candidate_catalogue_path=catalogue,
+        foundation_attestation=_foundation(tmp_path / "foundation.json"),
+        started_at="2026-08-28T00:00:00Z",
+        browser_tool="test-browser@1",
+    )
+    provenance_path = runner / "provenance.json"
+    provenance = copy.deepcopy(load_json(provenance_path)["payload"])
+    provenance["acquisition_schema_version"] = 13
+    provenance["prebaseline_h3_screen_contract"] = (
+        h3_prebaseline.PREBASELINE_H3_SCREEN_V2_CONTRACT
+    )
+    provenance["cdp_target_instrumentation_policy"] = (
+        acquisition_module._SCHEMA_THIRTEEN_CDP_TARGET_INSTRUMENTATION_POLICY
+    )
+    provenance["passive_render_contract"] = (
+        acquisition_module._SCHEMA_THIRTEEN_PASSIVE_RENDER_CONTRACT
+    )
+    provenance["passive_render_contract_sha256"] = (
+        acquisition_module._SCHEMA_THIRTEEN_PASSIVE_RENDER_CONTRACT_SHA256
+    )
+    forged_policy = copy.deepcopy(provenance)
+    forged_policy["cdp_target_instrumentation_policy"] = (
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v22"
+    )
+    with pytest.raises(ValueError, match="policy differs"):
+        acquisition_module._validate_current_provenance_contract(forged_policy)
+    _replace_receipt_payload(provenance_path, provenance)
+    checkpoint_path = runner / "checkpoint.json"
+    checkpoint = copy.deepcopy(load_json(checkpoint_path)["payload"])
+    checkpoint["provenance_sha256"] = acquisition_module.sha256_file(provenance_path)
+    _replace_receipt_payload(checkpoint_path, checkpoint)
+    assert acquisition_status(
+        runner, candidate_catalogue_path=catalogue,
+        now=datetime(2026, 8, 28, tzinfo=UTC),
+    )["acquisition_schema_version"] == 13
+    with pytest.raises(ValueError, match="historical acquisition"):
+        run_due_acquisition(
+            runner,
+            candidate_catalogue_path=catalogue,
+            stability_root=tmp_path / "stability",
+            workload_root=tmp_path / "workloads",
+            backend=RejectingBackend(),
+            now=datetime(2026, 8, 28, tzinfo=UTC),
+        )
+
+    candidate_id, domain = _catalogue_candidate_identities(catalogue, 1)[0]
+    pages = select_page_candidates(domain, registrable_domain=domain, discovered_links=())
+    v2 = _h3_screen_receipt(
+        candidate_id, domain, pages, outcome="site-rejection", screen_version=2,
+        screen_at=datetime(2026, 8, 28, 0, 0, 1, tzinfo=UTC),
+    )
+    v3 = _h3_screen_receipt(
+        candidate_id, domain, pages, outcome="site-rejection",
+        screen_at=datetime(2026, 8, 28, 0, 0, 1, tzinfo=UTC),
+    )
+    attempt = {
+        "attempt": 1,
+        "started_at": "2026-08-28T00:00:00Z",
+        "completed_at": "2026-08-28T00:00:02Z",
+        "outcome": "terminal-policy-rejection",
+        "reason": h3_prebaseline.H3_SITE_V2_REASON,
+        "policy_evidence": None,
+        "h3_screen_evidence": v2,
+        "operational_discard": None,
+    }
+    state = {"navigation_attempts": [attempt], "pages": []}
+    for schema, evidence in ((13, v2), (acquisition_module.SCHEMA_VERSION, v3)):
+        attempt["h3_screen_evidence"] = evidence
+        acquisition_module._validate_navigation_attempts(
+            state, acquisition_schema_version=schema,
+            candidate_id=candidate_id, candidate_domain=domain,
+            image_digest=evidence["payload"]["image_digest"],
+            source=evidence["payload"]["source"],
+        )
+    for schema, evidence in ((13, v3), (acquisition_module.SCHEMA_VERSION, v2)):
+        attempt["h3_screen_evidence"] = evidence
+        with pytest.raises(ValueError, match="version differs"):
+            acquisition_module._validate_navigation_attempts(
+                state, acquisition_schema_version=schema,
+                candidate_id=candidate_id, candidate_domain=domain,
+                image_digest=evidence["payload"]["image_digest"],
+                source=evidence["payload"]["source"],
+            )
+
+
+def test_schema_thirteen_preparation_replays_frozen_v21_v4_without_promotion() -> None:
+    manifest = _prepared_manifest("https://example.com/", ["https://example.com"])
+    preparation = manifest["preparation"]
+    historical_hash = (
+        acquisition_module._SCHEMA_THIRTEEN_PASSIVE_RENDER_CONTRACT_SHA256
+    )
+    preparation["passive_render_contract"] = copy.deepcopy(
+        acquisition_module._SCHEMA_THIRTEEN_PASSIVE_RENDER_CONTRACT
+    )
+    preparation["passive_render_contract_sha256"] = historical_hash
+    render = preparation["render_observation"]
+    render["internal_document_lifecycle_summary"]["policy"] = (
+        "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-v2"
+    )
+    render_hash = evidence_sha256(render)
+    preparation["render_observation_sha256"] = render_hash
+    audit = preparation["discovery_event_audit"]
+    audit["instrumentation_policy"] = (
+        acquisition_module._SCHEMA_THIRTEEN_CDP_TARGET_INSTRUMENTATION_POLICY
+    )
+    audit["passive_render_contract_sha256"] = historical_hash
+    audit["render_observation_sha256"] = render_hash
+    audit_hash = evidence_sha256(audit)
+    preparation["discovery_event_audit_sha256"] = audit_hash
+    coverage = preparation["coverage_admission"]
+    coverage["passive_render_contract_sha256"] = historical_hash
+    coverage["render_observation_sha256"] = render_hash
+    coverage["discovery_event_audit_sha256"] = audit_hash
+
+    acquisition_module._validate_versioned_class_study_preparation(
+        manifest, workload_id="schema-thirteen-fixture",
+        acquisition_schema_version=13,
+        instrumentation_policy=(
+            acquisition_module._SCHEMA_THIRTEEN_CDP_TARGET_INSTRUMENTATION_POLICY
+        ),
+    )
+    assert preparation["passive_render_contract_sha256"] == historical_hash
+    assert audit["instrumentation_policy"].endswith("v21")
+    tampered = copy.deepcopy(manifest)
+    tampered["preparation"]["discovery_event_audit"]["instrumentation_policy"] = (
+        acquisition_module.CDP_TARGET_INSTRUMENTATION_POLICY
+    )
+    tampered_audit = tampered["preparation"]["discovery_event_audit"]
+    tampered_hash = evidence_sha256(tampered_audit)
+    tampered["preparation"]["discovery_event_audit_sha256"] = tampered_hash
+    tampered["preparation"]["coverage_admission"]["discovery_event_audit_sha256"] = (
+        tampered_hash
+    )
+    with pytest.raises(ValueError, match="schema-thirteen discovery evidence"):
+        acquisition_module._validate_versioned_class_study_preparation(
+            tampered, workload_id="schema-thirteen-fixture",
+            acquisition_schema_version=13,
+            instrumentation_policy=(
+                acquisition_module._SCHEMA_THIRTEEN_CDP_TARGET_INSTRUMENTATION_POLICY
+            ),
+        )
+
+    newer_srcdoc = copy.deepcopy(manifest)
+    newer_preparation = newer_srcdoc["preparation"]
+    newer_render = newer_preparation["render_observation"]
+    newer_render["internal_document_lifecycle_summary"]["policy"] = (
+        acquisition_module.SRCDOC_PSEUDO_DOCUMENT_POLICY
+    )
+    newer_render_hash = evidence_sha256(newer_render)
+    newer_preparation["render_observation_sha256"] = newer_render_hash
+    newer_audit = newer_preparation["discovery_event_audit"]
+    newer_audit["render_observation_sha256"] = newer_render_hash
+    newer_preparation["discovery_event_audit_sha256"] = evidence_sha256(newer_audit)
+    newer_coverage = newer_preparation["coverage_admission"]
+    newer_coverage["render_observation_sha256"] = newer_render_hash
+    newer_coverage["discovery_event_audit_sha256"] = (
+        newer_preparation["discovery_event_audit_sha256"]
+    )
+    with pytest.raises(ValueError, match="render srcdoc policy differs"):
+        acquisition_module._validate_versioned_class_study_preparation(
+            newer_srcdoc, workload_id="schema-thirteen-fixture",
+            acquisition_schema_version=13,
+            instrumentation_policy=(
+                acquisition_module._SCHEMA_THIRTEEN_CDP_TARGET_INSTRUMENTATION_POLICY
+            ),
+        )
+
+
+def test_current_preparation_rejects_historical_srcdoc_policy() -> None:
+    manifest = _prepared_manifest("https://example.com/", ["https://example.com"])
+    preparation = manifest["preparation"]
+    render = preparation["render_observation"]
+    render["internal_document_lifecycle_summary"]["policy"] = (
+        acquisition_module._SCHEMA_THIRTEEN_SRCDOC_PSEUDO_DOCUMENT_POLICY
+    )
+    render_hash = evidence_sha256(render)
+    preparation["render_observation_sha256"] = render_hash
+    audit = preparation["discovery_event_audit"]
+    audit["render_observation_sha256"] = render_hash
+    preparation["discovery_event_audit_sha256"] = evidence_sha256(audit)
+    coverage = preparation["coverage_admission"]
+    coverage["render_observation_sha256"] = render_hash
+    coverage["discovery_event_audit_sha256"] = (
+        preparation["discovery_event_audit_sha256"]
+    )
+    with pytest.raises(ValueError, match="render srcdoc policy differs"):
+        acquisition_module._validate_versioned_class_study_preparation(
+            manifest, workload_id="current-fixture",
+            acquisition_schema_version=acquisition_module.SCHEMA_VERSION,
+            instrumentation_policy=acquisition_module.CDP_TARGET_INSTRUMENTATION_POLICY,
         )
 
 
@@ -643,6 +856,15 @@ def test_schema_ten_short_window_checkpoint_remains_readable_but_verify_only(
     provenance["acquisition_selection_policy"] = acquisition_module.ACQUISITION_SELECTION_POLICY
     provenance.pop("prebaseline_h3_screen_contract")
     provenance["eligibility_inputs"] = acquisition_module.SCHEMA_TEN_ELIGIBILITY_INPUTS
+    provenance["cdp_target_instrumentation_policy"] = (
+        acquisition_module._SCHEMA_THIRTEEN_CDP_TARGET_INSTRUMENTATION_POLICY
+    )
+    provenance["passive_render_contract"] = (
+        acquisition_module._SCHEMA_THIRTEEN_PASSIVE_RENDER_CONTRACT
+    )
+    provenance["passive_render_contract_sha256"] = (
+        acquisition_module._SCHEMA_THIRTEEN_PASSIVE_RENDER_CONTRACT_SHA256
+    )
     _replace_receipt_payload(provenance_path, provenance)
     checkpoint_path = runner / "checkpoint.json"
     checkpoint = copy.deepcopy(load_json(checkpoint_path)["payload"])
@@ -4634,7 +4856,7 @@ def test_historical_schema_policy_map_and_render_contract_are_frozen() -> None:
 
 
 def test_schema_seven_audit_five_projects_read_only_but_cannot_alias_later_schemas() -> None:
-    assert acquisition_module.SCHEMA_VERSION == 13
+    assert acquisition_module.SCHEMA_VERSION == 14
     assert 12 in acquisition_module.HISTORICAL_SCHEMA_VERSIONS
     manifest = _prepared_manifest("https://example.com/", ["https://example.com"])
     preparation = manifest["preparation"]

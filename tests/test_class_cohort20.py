@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from qcsd_lab.class_catalogue import load_candidate_catalogue_receipt
+from qcsd_lab.class_acquisition import SCHEMA_VERSION as ACQUISITION_SCHEMA_VERSION
 from qcsd_lab.acquisition_selection import derive_global_operational_censor_selection
 from qcsd_lab.class_cohort20 import (
     ASSEMBLY_RECEIPT_TYPE,
@@ -163,7 +164,7 @@ def test_global_selection_rejects_incomplete_prefix() -> None:
     )
     completion = {
         "study_id": CLASS20_PROFILE.study_id,
-        "acquisition_schema_version": 13,
+        "acquisition_schema_version": ACQUISITION_SCHEMA_VERSION,
         "completion_schema_version": 5,
         "selection": bind_receipt(
             {"complete": False, "needed_ids": [ordered[0].candidate_id], "terminal_ids": []},

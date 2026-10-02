@@ -91,6 +91,7 @@ def _target_activity() -> dict[str, object]:
 def _srcdoc_pseudo_document_summary(
     *,
     terminal_method: str = "Network.loadingFailed",
+    encoded_data_length: int = 33,
 ) -> dict[str, object]:
     loader_digest = hashlib.sha256(b"fixture-srcdoc-loader").hexdigest()
     summary: dict[str, object] = {
@@ -160,7 +161,7 @@ def _srcdoc_pseudo_document_summary(
                 "resource_type": None,
                 "error_text": None,
                 "canceled": None,
-                "encoded_data_length": 33,
+                "encoded_data_length": encoded_data_length,
             }
         )
     elif terminal_method != "Network.loadingFailed":
@@ -254,6 +255,7 @@ def _observation(
     gid: int = 1000,
     *,
     srcdoc_terminal_method: str = "Network.loadingFailed",
+    srcdoc_encoded_data_length: int = 33,
 ) -> dict[str, object]:
     return {
         "playwright_version": "1.57.0",
@@ -307,7 +309,8 @@ def _observation(
             ),
             "egress_prearm_summary": _egress_prearm_summary(),
             "srcdoc_pseudo_document_summary": _srcdoc_pseudo_document_summary(
-                terminal_method=srcdoc_terminal_method
+                terminal_method=srcdoc_terminal_method,
+                encoded_data_length=srcdoc_encoded_data_length,
             ),
             "normal_shutdown_disposal_summary": _normal_shutdown_disposal_summary(),
             "non_replayable_egress_summary": _non_replayable_egress_summary(),
@@ -471,16 +474,19 @@ def test_receipt_rejects_build_bytes_changed_after_validation(
         _create(tmp_path, fake_build)
 
 
+@pytest.mark.parametrize("encoded_data_length", [15, 33])
 def test_receipt_accepts_the_exact_loading_finished_srcdoc_variant(
     tmp_path: Path,
     fake_build: Path,
     monkeypatch: pytest.MonkeyPatch,
+    encoded_data_length: int,
 ) -> None:
     monkeypatch.setattr(
         pinned_cdp,
         "run_pinned_cdp_probe",
         lambda **_kwargs: _observation(
-            srcdoc_terminal_method="Network.loadingFinished"
+            srcdoc_terminal_method="Network.loadingFinished",
+            srcdoc_encoded_data_length=encoded_data_length,
         ),
     )
 
@@ -499,7 +505,7 @@ def test_receipt_accepts_the_exact_loading_finished_srcdoc_variant(
         "Network.loadingFinished": 1,
     }
     assert summary["diagnostics"][0]["terminal_variant"] == "loading-finished"
-    assert summary["diagnostics"][0]["encoded_data_length"] == 33
+    assert summary["diagnostics"][0]["encoded_data_length"] == encoded_data_length
 
 
 def test_schema8_receipt_is_historical_only_and_round_trips(
@@ -858,6 +864,9 @@ def test_schema16_v19_receipt_is_frozen_historical_only(
         pinned_cdp._HISTORICAL_PROBE_CONTRACT_V16_SHA256
     )
     payload["observation"]["topology"].pop("normal_shutdown_disposal_summary")
+    payload["observation"]["topology"]["srcdoc_pseudo_document_summary"][
+        "policy"
+    ] = pinned_cdp._HISTORICAL_SRCDOC_PSEUDO_DOCUMENT_POLICY_V2
     historical = tmp_path / "pinned-cdp-schema16.json"
     historical.write_bytes(
         canonical_json_bytes(bind_receipt(payload, receipt_type=pinned_cdp.RECEIPT_TYPE))
@@ -955,6 +964,46 @@ def test_schema17_v20_receipt_rejects_shutdown_summary_contract_collisions(
         )
 
 
+def test_v146_inner_shutdown_contract_is_frozen_historical_only(
+    tmp_path: Path,
+    fake_build: Path,
+) -> None:
+    current = _create(tmp_path, fake_build)
+    historical = copy.deepcopy(json.loads(current.read_text())["payload"])
+    historical_contract = historical["probe_contract"]
+    historical_contract["instrumentation_policy"] = (
+        pinned_cdp._HISTORICAL_CDP_TARGET_INSTRUMENTATION_POLICY_V21
+    )
+    historical_contract["srcdoc_pseudo_document_policy"] = (
+        pinned_cdp._HISTORICAL_SRCDOC_PSEUDO_DOCUMENT_POLICY_V2
+    )
+    historical_contract["required_observations"] = list(
+        pinned_cdp._HISTORICAL_PROBE_CONTRACT_V18_V4["required_observations"]
+    )
+    historical["probe_contract_sha256"] = pinned_cdp.canonical_json_sha256(
+        historical_contract
+    )
+    historical["observation"]["topology"]["srcdoc_pseudo_document_summary"][
+        "policy"
+    ] = pinned_cdp._HISTORICAL_SRCDOC_PSEUDO_DOCUMENT_POLICY_V2
+    path = tmp_path / "pinned-cdp-v146-contract.json"
+    path.write_bytes(
+        canonical_json_bytes(bind_receipt(historical, receipt_type=pinned_cdp.RECEIPT_TYPE))
+    )
+
+    with pytest.raises(ValueError, match="identity or result"):
+        pinned_cdp.validate_pinned_cdp_receipt(
+            path, build_execution_receipt=fake_build, expected_cohort_version=59
+        )
+    validated = pinned_cdp.validate_pinned_cdp_receipt(
+        path,
+        build_execution_receipt=fake_build,
+        expected_cohort_version=59,
+        allow_historical=True,
+    )
+    assert validated["probe_contract"] == historical_contract
+
+
 @pytest.mark.parametrize(
     ("inner_schema", "policy"),
     (
@@ -972,6 +1021,15 @@ def test_prior_inner_shutdown_contract_under_outer_18_is_historical_only(
     current_payload = json.loads(current.read_text(encoding="utf-8"))["payload"]
     historical = copy.deepcopy(current_payload)
     old_contract = historical["probe_contract"]
+    old_contract["instrumentation_policy"] = (
+        pinned_cdp._HISTORICAL_CDP_TARGET_INSTRUMENTATION_POLICY_V21
+    )
+    old_contract["srcdoc_pseudo_document_policy"] = (
+        pinned_cdp._HISTORICAL_SRCDOC_PSEUDO_DOCUMENT_POLICY_V2
+    )
+    old_contract["required_observations"] = list(
+        pinned_cdp._HISTORICAL_PROBE_CONTRACT_V18["required_observations"]
+    )
     old_contract["normal_shutdown_disposal_summary_schema_version"] = inner_schema
     old_contract["normal_shutdown_disposal_policy"] = policy
     historical["probe_contract_sha256"] = pinned_cdp.canonical_json_sha256(old_contract)
@@ -980,6 +1038,9 @@ def test_prior_inner_shutdown_contract_under_outer_18_is_historical_only(
     ]
     old_summary["schema_version"] = inner_schema
     old_summary["policy"] = policy
+    historical["observation"]["topology"]["srcdoc_pseudo_document_summary"][
+        "policy"
+    ] = pinned_cdp._HISTORICAL_SRCDOC_PSEUDO_DOCUMENT_POLICY_V2
     historical_path = tmp_path / f"pinned-cdp-outer18-inner-{inner_schema}.json"
     historical_path.write_bytes(
         canonical_json_bytes(
@@ -1724,7 +1785,7 @@ def test_required_topology_wait_condition_is_event_driven() -> None:
         "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v17"
     )
     assert pinned_cdp.PROBE_CONTRACT["instrumentation_policy"] == (
-        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v21"
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v22"
     )
     assert pinned_cdp._HISTORICAL_PROBE_CONTRACT_V18_SHA256 == (
         "958ef7b56937cfcd7feb1159e07f016505001dc11c98ecd617f3217853f27a4e"
@@ -1778,7 +1839,7 @@ def test_required_topology_wait_condition_is_event_driven() -> None:
         pinned_cdp.SRCDOC_PSEUDO_DOCUMENT_POLICY
     )
     assert pinned_cdp.SRCDOC_PSEUDO_DOCUMENT_POLICY == (
-        "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-v2"
+        "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-15-or-33-byte-finish-v3"
     )
     assert pinned_cdp.PROBE_CONTRACT["required_srcdoc_pseudo_document_count"] == 1
     assert pinned_cdp.PROBE_CONTRACT[
@@ -1819,7 +1880,7 @@ def test_required_topology_wait_condition_is_event_driven() -> None:
         in pinned_cdp.PROBE_CONTRACT["required_observations"]
     )
     assert (
-        "root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-lifecycle"
+        "root-about-srcdoc-loader-bound-orphan-abort-or-15-or-33-byte-finish-lifecycle"
         in pinned_cdp.PROBE_CONTRACT["required_observations"]
     )
     assert (

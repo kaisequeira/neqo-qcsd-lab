@@ -305,6 +305,12 @@ _HISTORICAL_PROBE_CONTRACT_V14_SHA256 = canonical_json_sha256(
 # one exact, identifier-minimised root ``about:srcdoc`` loader-bound orphan
 # terminal lifecycle.  Failed, unpublished outer schema 15 is deliberately not
 # a historical evidence format.
+_HISTORICAL_SRCDOC_PSEUDO_DOCUMENT_POLICY_V2 = (
+    "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-v2"
+)
+_HISTORICAL_CDP_TARGET_INSTRUMENTATION_POLICY_V21 = (
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v21"
+)
 _HISTORICAL_PROBE_CONTRACT_V16: dict[str, Any] = _worker_webtransport_probe_contract(
     schema_version=15,
     policy="pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v15",
@@ -321,7 +327,7 @@ _HISTORICAL_PROBE_CONTRACT_V16["srcdoc_pseudo_document_summary_schema_version"] 
     SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION
 )
 _HISTORICAL_PROBE_CONTRACT_V16["srcdoc_pseudo_document_policy"] = (
-    SRCDOC_PSEUDO_DOCUMENT_POLICY
+    _HISTORICAL_SRCDOC_PSEUDO_DOCUMENT_POLICY_V2
 )
 _HISTORICAL_PROBE_CONTRACT_V16["required_srcdoc_pseudo_document_count"] = 1
 _HISTORICAL_PROBE_CONTRACT_V16_SHA256 = canonical_json_sha256(
@@ -349,7 +355,7 @@ _HISTORICAL_PROBE_CONTRACT_V17["srcdoc_pseudo_document_summary_schema_version"] 
     SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION
 )
 _HISTORICAL_PROBE_CONTRACT_V17["srcdoc_pseudo_document_policy"] = (
-    SRCDOC_PSEUDO_DOCUMENT_POLICY
+    _HISTORICAL_SRCDOC_PSEUDO_DOCUMENT_POLICY_V2
 )
 _HISTORICAL_PROBE_CONTRACT_V17["required_srcdoc_pseudo_document_count"] = 1
 _HISTORICAL_PROBE_CONTRACT_V17[
@@ -368,7 +374,7 @@ _HISTORICAL_PROBE_CONTRACT_V17_SHA256 = canonical_json_sha256(
 _HISTORICAL_PROBE_CONTRACT_V18: dict[str, Any] = _worker_webtransport_probe_contract(
     schema_version=17,
     policy="pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v17",
-    instrumentation_policy=CDP_TARGET_INSTRUMENTATION_POLICY,
+    instrumentation_policy=_HISTORICAL_CDP_TARGET_INSTRUMENTATION_POLICY_V21,
     playwright_driver_ownership_policy=OWNERSHIP_POLICY_RECEIPT,
     playwright_driver_binding=EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
 )
@@ -382,7 +388,7 @@ _HISTORICAL_PROBE_CONTRACT_V18["srcdoc_pseudo_document_summary_schema_version"] 
     SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION
 )
 _HISTORICAL_PROBE_CONTRACT_V18["srcdoc_pseudo_document_policy"] = (
-    SRCDOC_PSEUDO_DOCUMENT_POLICY
+    _HISTORICAL_SRCDOC_PSEUDO_DOCUMENT_POLICY_V2
 )
 _HISTORICAL_PROBE_CONTRACT_V18["required_srcdoc_pseudo_document_count"] = 1
 _HISTORICAL_PROBE_CONTRACT_V18["normal_shutdown_disposal_summary_schema_version"] = 3
@@ -406,11 +412,28 @@ _HISTORICAL_PROBE_CONTRACT_V18_V3_SHA256 = canonical_json_sha256(
     _HISTORICAL_PROBE_CONTRACT_V18_V3
 )
 
-PROBE_CONTRACT: dict[str, Any] = deepcopy(_HISTORICAL_PROBE_CONTRACT_V18_V3)
-PROBE_CONTRACT["normal_shutdown_disposal_summary_schema_version"] = (
-    NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION
+_HISTORICAL_PROBE_CONTRACT_V18_V4: dict[str, Any] = deepcopy(
+    _HISTORICAL_PROBE_CONTRACT_V18_V3
 )
-PROBE_CONTRACT["normal_shutdown_disposal_policy"] = NORMAL_SHUTDOWN_DISPOSAL_POLICY
+_HISTORICAL_PROBE_CONTRACT_V18_V4[
+    "normal_shutdown_disposal_summary_schema_version"
+] = 5
+_HISTORICAL_PROBE_CONTRACT_V18_V4["normal_shutdown_disposal_policy"] = (
+    "chromium-143-post-cutoff-held-fetch-disposal-v4"
+)
+_HISTORICAL_PROBE_CONTRACT_V18_V4_SHA256 = canonical_json_sha256(
+    _HISTORICAL_PROBE_CONTRACT_V18_V4
+)
+
+PROBE_CONTRACT: dict[str, Any] = deepcopy(_HISTORICAL_PROBE_CONTRACT_V18_V4)
+PROBE_CONTRACT["instrumentation_policy"] = CDP_TARGET_INSTRUMENTATION_POLICY
+PROBE_CONTRACT["srcdoc_pseudo_document_policy"] = SRCDOC_PSEUDO_DOCUMENT_POLICY
+PROBE_CONTRACT["required_observations"] = [
+    "root-about-srcdoc-loader-bound-orphan-abort-or-15-or-33-byte-finish-lifecycle"
+    if item == "root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-lifecycle"
+    else item
+    for item in PROBE_CONTRACT["required_observations"]
+]
 PROBE_CONTRACT_SHA256 = canonical_json_sha256(PROBE_CONTRACT)
 
 
@@ -1629,7 +1652,22 @@ def _validate_payload(
         and payload["probe_contract"].get("normal_shutdown_disposal_policy")
         == _HISTORICAL_PROBE_CONTRACT_V18_V3["normal_shutdown_disposal_policy"]
     )
-    historical_v18 = historical_v18_v2 or historical_v18_v3
+    historical_v18_v4 = (
+        probe_schema_version == PROBE_SCHEMA_VERSION
+        and isinstance(payload.get("probe_contract"), Mapping)
+        and payload["probe_contract"].get("instrumentation_policy")
+        == _HISTORICAL_CDP_TARGET_INSTRUMENTATION_POLICY_V21
+        and payload["probe_contract"].get("srcdoc_pseudo_document_policy")
+        == _HISTORICAL_SRCDOC_PSEUDO_DOCUMENT_POLICY_V2
+        and payload["probe_contract"].get(
+            "normal_shutdown_disposal_summary_schema_version"
+        ) == _HISTORICAL_PROBE_CONTRACT_V18_V4[
+            "normal_shutdown_disposal_summary_schema_version"
+        ]
+        and payload["probe_contract"].get("normal_shutdown_disposal_policy")
+        == _HISTORICAL_PROBE_CONTRACT_V18_V4["normal_shutdown_disposal_policy"]
+    )
+    historical_v18 = historical_v18_v2 or historical_v18_v3 or historical_v18_v4
     historical_probe = historical_v18 or (
         type(probe_schema_version) is int
         and probe_schema_version in HISTORICAL_PROBE_SCHEMA_VERSIONS
@@ -1704,7 +1742,11 @@ def _validate_payload(
         expected_contract = deepcopy(
             _HISTORICAL_PROBE_CONTRACT_V18
             if historical_v18_v2
-            else _HISTORICAL_PROBE_CONTRACT_V18_V3
+            else (
+                _HISTORICAL_PROBE_CONTRACT_V18_V3
+                if historical_v18_v3
+                else _HISTORICAL_PROBE_CONTRACT_V18_V4
+            )
         )
         historical_binding = expected_playwright_driver_binding(machine)
         expected_contract["playwright_driver_binding"] = historical_binding
@@ -1766,6 +1808,11 @@ def _validate_payload(
             )
         ),
     )
+    if probe_schema_version in {16, 17, PROBE_SCHEMA_VERSION} and (
+        observation["topology"]["srcdoc_pseudo_document_summary"]["policy"]
+        != expected_contract["srcdoc_pseudo_document_policy"]
+    ):
+        raise ValueError("pinned CDP srcdoc summary differs from its probe contract")
     if runtime_role is not None:
         if runtime_role not in {"collection", "prepare"}:
             raise ValueError("pinned CDP probe runtime role is invalid")

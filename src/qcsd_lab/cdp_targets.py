@@ -35,7 +35,7 @@ from .browser_egress import (
 )
 
 CDP_TARGET_INSTRUMENTATION_POLICY = (
-    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v21"
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v22"
 )
 BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION = 1
 EGRESS_PREARM_SUMMARY_SCHEMA_VERSION = 2
@@ -55,6 +55,9 @@ _HISTORICAL_NORMAL_SHUTDOWN_DISPOSAL_POLICY = (
 )
 SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION = 3
 SRCDOC_PSEUDO_DOCUMENT_POLICY = (
+    "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-15-or-33-byte-finish-v3"
+)
+_PREVIOUS_SRCDOC_PSEUDO_DOCUMENT_POLICY = (
     "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-v2"
 )
 _BOOTSTRAP_WORKER_TYPES = ("worker", "shared_worker")
@@ -148,7 +151,7 @@ _SRCDOC_ABORT_TERMINAL_FIELDS = frozenset(
 _SRCDOC_FINISH_TERMINAL_FIELDS = frozenset(
     {"requestId", "timestamp", "encodedDataLength"}
 )
-_SRCDOC_FINISH_ENCODED_DATA_LENGTH = 33
+_SRCDOC_FINISH_ENCODED_DATA_LENGTHS = frozenset({15, 33})
 _SRCDOC_TERMINAL_METHODS = (
     "Network.loadingFailed",
     "Network.loadingFinished",
@@ -1005,7 +1008,8 @@ def validate_srcdoc_pseudo_document_summary(
         type(value["schema_version"]) is not int
         or value["schema_version"] != SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION
         or type(value["policy"]) is not str
-        or value["policy"] != SRCDOC_PSEUDO_DOCUMENT_POLICY
+        or value["policy"]
+        not in {SRCDOC_PSEUDO_DOCUMENT_POLICY, _PREVIOUS_SRCDOC_PSEUDO_DOCUMENT_POLICY}
         or type(value["enabled"]) is not bool
     ):
         raise ValueError("srcdoc pseudo-Document summary identity is invalid")
@@ -1148,7 +1152,12 @@ def validate_srcdoc_pseudo_document_summary(
                 and diagnostic["error_text"] is None
                 and diagnostic["canceled"] is None
                 and type(encoded_data_length) is int
-                and encoded_data_length == _SRCDOC_FINISH_ENCODED_DATA_LENGTH
+                and encoded_data_length
+                in (
+                    _SRCDOC_FINISH_ENCODED_DATA_LENGTHS
+                    if value["policy"] == SRCDOC_PSEUDO_DOCUMENT_POLICY
+                    else {33}
+                )
             )
         else:
             valid_terminal = False
@@ -5400,7 +5409,7 @@ class RecursiveCdpTargetRouter:
             if (
                 set(event) != _SRCDOC_FINISH_TERMINAL_FIELDS
                 or type(encoded_data_length) is not int
-                or encoded_data_length != _SRCDOC_FINISH_ENCODED_DATA_LENGTH
+                or encoded_data_length not in _SRCDOC_FINISH_ENCODED_DATA_LENGTHS
             ):
                 return False
             terminal_variant = "loading-finished"
