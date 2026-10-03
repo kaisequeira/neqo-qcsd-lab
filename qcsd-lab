@@ -162,7 +162,7 @@ WSL_HOST_BUILD_MIN_AVAILABLE_BYTES=1
 QCSD_LAUNCH_ACTION="${1:-}"
 
 usage() {
-  echo "Usage: qcsd-lab {lifecycle-recover|build|prepare|derive-chaff-prefix-specs|qualify-chaff|qualify-response-chaff|run|parallel-diagnostic-run|resume|verify|analyze|fit|buflo-study|class-study|etf-probe|etf-veth-probe|test} [arguments...]" >&2
+  echo "Usage: qcsd-lab {lifecycle-recover|build|prepare|derive-chaff-prefix-specs|qualify-chaff|qualify-response-chaff|run|parallel-diagnostic-run|parallel-formal-run|resume|verify|analyze|fit|buflo-study|class-study|etf-probe|etf-veth-probe|test} [arguments...]" >&2
 }
 
 _qcsd_trusted_git() {
@@ -5621,15 +5621,29 @@ PY
 fi
 
 parallel_diagnostic=0
+parallel_formal=0
 parallel_authority=""
 parallel_output=""
 parallel_authority_sha256=""
 parallel_python() {
   /usr/bin/python3 -I -c 'import sys; sys.path.insert(0,sys.argv.pop(1)+"/src"); from qcsd_lab.rapid_parallel_capture import main; main()' "${ROOT}" "$@"
 }
-if [[ "${1:-}" == "parallel-diagnostic-run" ]]; then
+parallel_environment_rows() {
+  /usr/bin/python3 -I -c '
+import base64,json,sys
+environment=json.loads(sys.argv[1]).get("environment",{})
+if (not isinstance(environment,dict) or set(environment)-{
+    "QCSD_RAPID_EPOCH_LAUNCH_INPUT","QCSD_RAPID_COLLECTION_COMPATIBILITY",
+    "QCSD_RAPID_CAPTURE_CONTROL_INSTALLATION"}
+    or any(not isinstance(value,str) or "\0" in value for value in environment.values())):
+    raise ValueError("formal worker environment contains an undeclared control input")
+for key,value in sorted(environment.items()):
+    print(key+"\t"+base64.b64encode(value.encode()).decode())
+' "$1"
+}
+if [[ "${1:-}" == "parallel-diagnostic-run" || "${1:-}" == "parallel-formal-run" ]]; then
   if (( $# != 3 )); then
-    echo "parallel-diagnostic-run requires AUTHORITY.json and a fresh operator output root" >&2
+    echo "${1} requires AUTHORITY.json and a fresh operator output root" >&2
     exit 2
   fi
   parallel_authority="$(realpath -e -- "$2")"
@@ -5648,7 +5662,21 @@ if [[ "${1:-}" == "parallel-diagnostic-run" ]]; then
     exit 2
   fi
   parallel_diagnostic=1
-  export QCSD_RAPID_DNS_RECEIPT_PATH="${parallel_output}/dns-pins.json"
+  if [[ "${1}" == "parallel-formal-run" ]]; then
+    parallel_formal=1
+    parallel_formal_first_inputs="$(parallel_python formal-inputs --authority "${parallel_authority}" --index 0)" || exit 1
+    parallel_formal_environment_text="$(parallel_environment_rows "${parallel_formal_first_inputs}")" || exit 1
+    while IFS=$'\t' read -r parallel_environment_key parallel_environment_b64; do
+      [[ -n "${parallel_environment_key}" ]] || continue
+      parallel_environment_value="$(/usr/bin/python3 -I -c 'import base64,sys; print(base64.b64decode(sys.argv[1],validate=True).decode(),end="")' "${parallel_environment_b64}")" || exit 1
+      export "${parallel_environment_key}=${parallel_environment_value}"
+    done <<< "${parallel_formal_environment_text}"
+    parallel_formal_dns_path="$(/usr/bin/python3 -I -c 'import json,sys; print(json.loads(sys.argv[1])["dns_path"])' \
+      "${parallel_formal_first_inputs}")" || exit 1
+    export QCSD_RAPID_DNS_RECEIPT_PATH="${parallel_formal_dns_path}"
+  else
+    export QCSD_RAPID_DNS_RECEIPT_PATH="${parallel_output}/dns-pins.json"
+  fi
   set -- run "${parallel_first_campaign}"
 fi
 
@@ -7761,24 +7789,62 @@ if (( rapid_capture )); then
   # decision; it cannot grant capture authority by trusting a filename or an
   # editable experiment name alone.
   rapid_compatibility_args=()
+  rapid_compatibility_runtime_epoch=0
   if [[ -n "${QCSD_RAPID_COLLECTION_COMPATIBILITY:-}" ]]; then
     rapid_compatibility_host="${QCSD_RAPID_COLLECTION_COMPATIBILITY}"
     rapid_compatibility_rows="$(/usr/bin/python3 -I -c '
 import json
 import sys
 from pathlib import Path
-path, execution = Path(sys.argv[1]), Path(sys.argv[2])
-if (not path.is_absolute() or not path.is_relative_to(execution / "config/rapid-runtime-epochs")
-    or not path.is_file() or any(p.is_symlink() for p in (path, *path.parents))):
-    raise SystemExit("collection compatibility requires a regular capsule under this execution config")
+path, execution, image, installation_text = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3], sys.argv[4]
+if (not path.is_absolute() or not path.is_file()
+    or any(p.is_symlink() for p in (path, *path.parents))):
+    raise SystemExit("collection compatibility requires a regular absolute capsule")
 value = json.loads(path.read_bytes())
-if value.get("receipt_type") != "qcsd-rapid-v5-collection-runtime-launch-capsule-v1":
-    raise SystemExit("unknown collection compatibility capsule")
 payload = value["payload"]
 roots = set()
-for spec in (payload["base_spec"], payload["runtime_spec"]):
-    if spec["execution_root"] != str(execution):
+kind = value.get("receipt_type")
+if kind == "qcsd-rapid-v5-collection-runtime-launch-capsule-v1":
+    if not path.is_relative_to(execution / "config/rapid-runtime-epochs"):
+        raise SystemExit("collection compatibility requires a regular capsule under this execution config")
+    if any(spec["execution_root"] != str(execution) for spec in (payload["base_spec"], payload["runtime_spec"])):
         raise SystemExit("collection capsule names another execution root")
+    print("runtime-epoch")
+    print("/lab/" + path.relative_to(execution).as_posix())
+    if installation_text:
+        installation = Path(installation_text)
+        if (not installation.is_absolute() or not installation.is_file()
+            or any(p.is_symlink() for p in (installation,*installation.parents))):
+            raise SystemExit("runtime qualification chain needs a regular installation capsule")
+        initial = json.loads(installation.read_bytes())
+        if initial.get("receipt_type") != "qcsd-rapid-v5-capture-control-installation-v2":
+            raise SystemExit("runtime qualification chain has another installation authority")
+        installed = initial["payload"]
+        if (installed["evidence_root"] != payload["evidence_root"]
+            or any(value != payload["base_spec"][key] for key,value in installed["runtime_spec"].items()
+                   if key != "plan_receipt")):
+            raise SystemExit("runtime qualification chain changes its installed intermediate source")
+        roots.add(installed["evidence_root"])
+        for role in (installed["base_spec"],installed["runtime_spec"]):
+            roots.update(role[key] for key in ("data_root","runtime_source_root","module_root","execution_root"))
+            roots.update(str(Path(role[key]).parent) for key in ("source_manifest","client_binary","base_launcher"))
+        print(str(installation))
+    else:
+        print("-")
+elif kind == "qcsd-rapid-v5-capture-control-installation-v2":
+    if (payload["runtime_spec"]["execution_root"] != str(execution)
+        or payload["runtime_spec"]["collection_image_digest"] != image
+        or payload["base_spec"]["data_root"] != payload["runtime_spec"]["data_root"]
+        or not path.is_relative_to(Path(payload["evidence_root"]))
+        or not Path(payload["evidence_root"]).is_relative_to(Path(payload["runtime_spec"]["data_root"]))):
+        raise SystemExit("capture-control capsule changes its actual execution, image or data authority")
+    roots.add(payload["evidence_root"])
+    print("capture-control-installation")
+    print(str(path))
+    print(str(path))
+else:
+    raise SystemExit("unknown collection compatibility capsule")
+for spec in (payload["base_spec"], payload["runtime_spec"]):
     roots.update(spec[key] for key in ("data_root", "runtime_source_root", "module_root", "execution_root"))
     roots.update(str(Path(spec[key]).parent) for key in ("source_manifest", "client_binary", "base_launcher"))
 for root in sorted(roots):
@@ -7788,12 +7854,41 @@ for root in sorted(roots):
         or any(c in root for c in ("\n", "\r", "\0", ":"))):
         raise SystemExit("collection capsule mounts require regular canonical absolute directories")
     print(root)
-' "${rapid_compatibility_host}" "${ROOT}")" || exit 1
+' "${rapid_compatibility_host}" "${ROOT}" "${image_id}" "${QCSD_RAPID_CAPTURE_CONTROL_INSTALLATION:-}")" || exit 1
     mapfile -t rapid_compatibility_mounts <<< "${rapid_compatibility_rows}"
-    rapid_compatibility_args+=(--env "QCSD_RAPID_COLLECTION_COMPATIBILITY=/lab/${rapid_compatibility_host#${ROOT}/}")
-    for rapid_compatibility_root in "${rapid_compatibility_mounts[@]}"; do
+    rapid_compatibility_kind="${rapid_compatibility_mounts[0]}"
+    rapid_compatibility_container="${rapid_compatibility_mounts[1]}"
+    rapid_compatibility_args+=(--env "QCSD_RAPID_COLLECTION_COMPATIBILITY=${rapid_compatibility_container}")
+    if [[ "${rapid_compatibility_mounts[2]}" != "-" ]]; then
+      rapid_compatibility_args+=(--env "QCSD_RAPID_CAPTURE_CONTROL_INSTALLATION=${rapid_compatibility_mounts[2]}")
+    fi
+    for rapid_compatibility_root in "${rapid_compatibility_mounts[@]:3}"; do
       rapid_compatibility_args+=(--volume "${rapid_compatibility_root}:${rapid_compatibility_root}:ro")
     done
+    if [[ "${rapid_compatibility_kind}" == "runtime-epoch" ]]; then
+      rapid_compatibility_runtime_epoch=1
+    else
+      qcsd_run_attached_docker docker run --network none --read-only \
+        --security-opt no-new-privileges --cap-drop ALL \
+        --label org.qcsd.owner=qcsd-lab --label org.qcsd.role=rapid-control-installation-preflight \
+        --user "${qcsd_invoking_uid}:${qcsd_invoking_gid}" \
+        --env "QCSD_LAB_IMAGE_DIGEST=${image_id}" \
+        "${rapid_compatibility_args[@]}" --entrypoint /opt/qcsd-venv/bin/python3 "${image_id}" -I -c '
+import json,os,sys
+from pathlib import Path
+from qcsd_lab.rapid_capture_control_installation import validate_capsule, executed_runtime_check
+from qcsd_lab.rapid_lane_evidence import executed_image_plan_check
+payload,_ = validate_capsule(Path(sys.argv[1]),actual_image=sys.argv[2])
+runtime=payload["runtime_spec"]
+if runtime["execution_root"] != sys.argv[3]:
+    raise SystemExit("capture-control installation names another execution root")
+os.environ["QCSD_LAB_ROOT"] = runtime["runtime_source_root"]
+os.environ["QCSD_LAB_SOURCE_METADATA"] = "/usr/share/qcsd-lab/source.json"
+if executed_runtime_check(runtime) != payload["new_runtime_check"]["proof"]:
+    raise SystemExit("actual installed capture-control source differs from its retained installation")
+executed_image_plan_check(runtime)
+' "${rapid_compatibility_container}" "${image_id}" "${ROOT}"
+    fi
   fi
   qcsd_run_attached_docker docker run --network none --read-only \
     --security-opt no-new-privileges --cap-drop ALL \
@@ -7894,7 +7989,7 @@ elif role != "diagnostic" or campaign.purpose != "smoke":
     raise SystemExit("rapid diagnostic campaign identity is invalid")
 ' "${1}" "${rapid_capture_target}" "${rapid_capture_name}" \
   "${rapid_capture_role}" "${rapid_capture_mode}" "${rapid_capture_version}"
-  if (( rapid_capture_epoch )) || [[ -n "${QCSD_RAPID_COLLECTION_COMPATIBILITY:-}" ]]; then
+  if (( rapid_capture_epoch || rapid_compatibility_runtime_epoch )); then
     # The namespace alone grants no epoch authority. Reopen its actual bound
     # intent, full class vector and response qualifiers inside this image,
     # using the separately frozen study source and its original source bridge.
@@ -11023,7 +11118,14 @@ fi
 # Two measured workers share one authenticated guardian. All Docker mutations
 # remain in this shell; neither gate starts traffic before both proofs close.
 if (( parallel_diagnostic )); then
-  if (( ! rapid_capture )) ||
+  if (( parallel_formal )); then
+    if (( ! rapid_capture )) ||
+       [[ "${rapid_capture_role}" != "formal" || "${rapid_capture_version}" != "v5" ||
+          "${study_capture_scheduler_contract}" != "qcsd-client-rr1-portable-etf-helper-v4" ]]; then
+      echo "parallel formal capture requires official rapid v5 formal lanes" >&2
+      exit 2
+    fi
+  elif (( ! rapid_capture )) ||
      [[ "${rapid_capture_role}" != "diagnostic" || -n "${rapid_capture_version}" ||
         "${study_capture_scheduler_contract}" != "qcsd-client-rr1-portable-etf-helper-v4" ]]; then
     echo "parallel pilot accepts paired zero-credit generic rapid diagnostics" >&2
@@ -11055,9 +11157,22 @@ roots.update(str(Path(r[k]).parent) for k in ("source_manifest","client_binary",
 for root in sorted(roots): print(root)
 ' "${parallel_authority}")
   parallel_mounts=(--volume "${parallel_authority}:/parallel-authority.json:ro")
+  declare -A parallel_mounted_roots=()
   for parallel_mount_root in "${parallel_runtime_rows[@]:1}"; do
     parallel_mounts+=(--volume "${parallel_mount_root}:${parallel_mount_root}:ro")
+    parallel_mounted_roots["${parallel_mount_root}"]=1
   done
+  if (( parallel_formal )); then
+    parallel_formal_mount_text="$(/usr/bin/python3 -I -c 'import json,sys; print("\n".join(json.loads(sys.argv[1])["mount_roots"]))' \
+      "${parallel_formal_first_inputs}")" || exit 1
+    mapfile -t parallel_formal_mount_rows <<< "${parallel_formal_mount_text}"
+    for parallel_mount_root in "${parallel_formal_mount_rows[@]}"; do
+      [[ -n "${parallel_mount_root}" ]] || continue
+      [[ "${parallel_mounted_roots["${parallel_mount_root}"]:-0}" == "0" ]] || continue
+      parallel_mounts+=(--volume "${parallel_mount_root}:${parallel_mount_root}:ro")
+      parallel_mounted_roots["${parallel_mount_root}"]=1
+    done
+  fi
   QCSD_DOCKER_OUTPUT_PARALLEL_PREFLIGHT=""
   qcsd_capture_attached_docker_output QCSD_DOCKER_OUTPUT_PARALLEL_PREFLIGHT \
     docker run --network none --read-only --cap-drop ALL \
@@ -11077,6 +11192,49 @@ from pathlib import Path
 from qcsd_lab.rapid_parallel_capture import put
 put(Path(sys.argv[2])/"image-preflight.json",json.loads(sys.argv[3]))
 ' "${ROOT}" "${parallel_output}" "${QCSD_DOCKER_OUTPUT_PARALLEL_PREFLIGHT}"
+  if (( parallel_formal )); then
+    parallel_formal_second_inputs="$(parallel_python formal-inputs --authority "${parallel_authority}" --index 1)" || exit 1
+    QCSD_DOCKER_OUTPUT_PARALLEL_DNS=""
+    qcsd_capture_attached_docker_output QCSD_DOCKER_OUTPUT_PARALLEL_DNS \
+      docker run --network bridge --read-only --cap-drop ALL \
+      --security-opt no-new-privileges \
+      --label org.qcsd.owner=qcsd-lab --label org.qcsd.role=parallel-formal-dns-preflight \
+      --user "${qcsd_invoking_uid}:${qcsd_invoking_gid}" \
+      --env "QCSD_LAB_ROOT=${parallel_runtime_rows[0]}" \
+      --env "QCSD_LAB_IMAGE_DIGEST=${image_id}" \
+      --env "QCSD_LAB_SOURCE_METADATA=/usr/share/qcsd-lab/source.json" \
+      "${parallel_mounts[@]}" --entrypoint /opt/qcsd-venv/bin/python3 \
+      "${image_id}" -I -m qcsd_lab.rapid_parallel_capture formal-dns \
+      --authority /parallel-authority.json --index 1
+    /usr/bin/python3 -I -c '
+import ipaddress,json,re,sys
+from pathlib import Path
+sys.path.insert(0,sys.argv[1]+"/src")
+from qcsd_lab.util import durable_create
+inputs=json.loads(sys.argv[2]); raw=sys.argv[3]+"\n"
+def unique_pairs(rows):
+    result={}
+    for key,item in rows:
+        if key in result: raise ValueError("formal DNS receipt repeats a key")
+        result[key]=item
+    return result
+value=json.loads(raw,object_pairs_hook=unique_pairs)
+if (set(value)!={"schema_version","campaign","hosts"} or type(value["schema_version"]) is not int
+    or value["schema_version"]!=1 or value["campaign"]!=inputs["campaign_name"]
+    or not isinstance(value["hosts"],list) or not value["hosts"]):
+    raise ValueError("formal DNS receipt differs from its lane")
+previous=""
+for row in value["hosts"]:
+    if not isinstance(row,list) or len(row)!=2: raise ValueError("formal DNS row is malformed")
+    host,address=row
+    if (not isinstance(host,str) or re.fullmatch(r"[a-z0-9]+(?:[.-][a-z0-9]+)*",host) is None
+        or host<=previous or not isinstance(address,str)
+        or ipaddress.ip_address(address).version!=4 or not ipaddress.ip_address(address).is_global):
+        raise ValueError("formal DNS row requires an ordered public IPv4 pin")
+    previous=host
+durable_create(Path(inputs["dns_path"]),raw.encode())
+' "${ROOT}" "${parallel_formal_second_inputs}" "${QCSD_DOCKER_OUTPUT_PARALLEL_DNS}"
+  fi
   parallel_cpu_json="$(parallel_python initialize --authority "${parallel_authority}" \
     --output "${parallel_output}" --sha256 "${parallel_authority_sha256}" \
     --cpus "${study_capture_available_cpus_json}")"
@@ -11153,9 +11311,42 @@ for pair in x["pairs"]:
     replace_container_option_value --cpuset-cpus "${parallel_cpu_rows[3 + parallel_index * 3]}"
     replace_container_environment QCSD_CAPTURE_CLIENT_CPU "${parallel_cpu_rows[1 + parallel_index * 3]}"
     replace_container_environment QCSD_CAPTURE_ORCHESTRATOR_CPU "${parallel_cpu_rows[2 + parallel_index * 3]}"
+    if (( parallel_formal )); then
+      parallel_formal_worker_inputs="$(parallel_python formal-inputs --authority "${parallel_authority}" --index "${parallel_index}")" || exit 1
+      parallel_formal_environment_text="$(parallel_environment_rows "${parallel_formal_worker_inputs}")" || exit 1
+      while IFS=$'\t' read -r parallel_environment_key parallel_environment_b64; do
+        [[ -n "${parallel_environment_key}" ]] || continue
+        parallel_environment_value="$(/usr/bin/python3 -I -c 'import base64,sys; print(base64.b64decode(sys.argv[1],validate=True).decode(),end="")' "${parallel_environment_b64}")" || exit 1
+        replace_container_environment "${parallel_environment_key}" "${parallel_environment_value}"
+      done <<< "${parallel_formal_environment_text}"
+      parallel_formal_worker_rows_text="$(/usr/bin/python3 -I -c '
+import json,sys
+from pathlib import Path
+inputs=json.loads(sys.argv[1]); dns=json.loads(Path(inputs["dns_path"]).read_bytes())
+if dns["campaign"]!=inputs["campaign_name"]: raise ValueError("formal worker DNS belongs to another lane")
+print(inputs["campaign_name"]); print(inputs["result_namespace"])
+for host,address in dns["hosts"]: print(host+"="+address)
+' "${parallel_formal_worker_inputs}")" || exit 1
+      mapfile -t parallel_formal_worker_rows <<< "${parallel_formal_worker_rows_text}"
+      parallel_formal_container=()
+      for (( parallel_arg_index=0; parallel_arg_index<${#container[@]}; parallel_arg_index++ )); do
+        if [[ "${container[parallel_arg_index]}" == "--add-host" ]]; then
+          parallel_arg_index=$((parallel_arg_index+1))
+          continue
+        fi
+        parallel_formal_container+=("${container[parallel_arg_index]}")
+      done
+      container=("${parallel_formal_container[@]}" \
+        --volume "${ROOT}/results:/lab/results:ro" \
+        --volume "${parallel_formal_worker_rows[1]}:/lab/results/${parallel_formal_worker_rows[0]}:rw")
+      for parallel_formal_pin in "${parallel_formal_worker_rows[@]:2}"; do
+        container+=(--add-host "${parallel_formal_pin}")
+      done
+    else
+      container+=(--volume "${parallel_lane}/results:/lab/results:rw")
+    fi
     container+=(--name "${parallel_worker_name}" \
       --label org.qcsd.role=parallel-diagnostic-worker \
-      --volume "${parallel_lane}/results:/lab/results:rw" \
       --volume "${parallel_lane}/gate:/parallel-gate:ro" \
       "${parallel_mounts[@]}" \
       --env "QCSD_CONTROLLED_ROUTER_CLIENT_IP=${kernel_tx_public_router_ip}" \

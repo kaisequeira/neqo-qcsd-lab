@@ -343,7 +343,7 @@ def test_epoch_selector_requires_explicit_authority_and_disables_resume(
 
 def test_epoch_image_preflight_reopens_authority_before_public_dns() -> None:
     source = LAUNCHER.read_text(encoding="utf-8")
-    preflight = source.split('if (( rapid_capture_epoch )); then', 1)[1].split(
+    preflight = source.split('if (( rapid_capture_epoch || rapid_compatibility_runtime_epoch )); then', 1)[1].split(
         "# Docker's isolated client bridge", 1)[0]
     assert 'org.qcsd.role=rapid-epoch-preflight' in preflight
     assert 'validate_host_epoch_launch(json.loads(sys.argv[1])' in preflight

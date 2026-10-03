@@ -153,8 +153,14 @@ def executed_candidate_check(value: Mapping[str, Any]) -> dict[str, Any]:
             raise ValueError("replacement image differs from its complete source snapshot")
     if admission._read(Path(__file__)) != admission._read(runtime.runtime_source_root / "src/qcsd_lab/rapid_runtime_epochs.py"):
         raise ValueError("runtime authority validator is not installed from the declared source")
-    bridge = compatibility.validate_compatibility(value["old_proof"], current,
-        _sources(base), _sources(runtime), value["review"])
+    if value["review"].get("repair_scope") == "parallel-capture-control-only":
+        from . import rapid_capture_control_compatibility as control
+        groups = admission.load_admission_context(base.acquisition_root).mounted_module_hashes
+        bridge = control.validate_compatibility(value["old_proof"], current,
+            _sources(base), _sources(runtime), value["review"], acquisition_source_groups=groups)
+    else:
+        bridge = compatibility.validate_compatibility(value["old_proof"], current,
+            _sources(base), _sources(runtime), value["review"])
     return {"runtime_proof": current, "compatibility_bridge": bridge}
 
 
@@ -260,7 +266,13 @@ def verify_proposal(spec: lanes.CaptureSpec, root: Path, path: Path) -> tuple[di
         raise ValueError("runtime proposal lacks an actual matching installed-image check")
     lanes._object(root, execution["stderr"])
     current = checked["proof"]["runtime_proof"]
-    bridge = compatibility.validate_compatibility(original, current, _sources(spec), _sources(runtime), value["review"])
+    if value["review"].get("repair_scope") == "parallel-capture-control-only":
+        from . import rapid_capture_control_compatibility as control
+        groups = admission.load_admission_context(spec.acquisition_root).mounted_module_hashes
+        bridge = control.validate_compatibility(original, current, _sources(spec), _sources(runtime),
+            value["review"], acquisition_source_groups=groups)
+    else:
+        bridge = compatibility.validate_compatibility(original, current, _sources(spec), _sources(runtime), value["review"])
     if checked["proof"]["compatibility_bridge"] != bridge:
         raise ValueError("runtime compatibility differs from independently reopened source roles")
     published = classes._time(value["proposed_at"])
@@ -312,6 +324,9 @@ def _launch_env(spec, root, intent, runtime) -> dict[str, str]:
     env[COMPATIBILITY_ENV] = str(capsule)
     env["QCSD_RAPID_EPOCH_LAUNCH_INPUT"] = json.dumps({"spec": runtime.serializable(),
         "root": str(root), "intent": str(intent), "intent_sha256": classes._sha(admission._read(intent))}, sort_keys=True)
+    reference = classes.verify_policy(spec, root)["image_check"]["execution"].get("capture_control_installation")
+    if reference is not None:
+        env["QCSD_RAPID_CAPTURE_CONTROL_INSTALLATION"] = reference["path"]
     return env
 
 
@@ -494,36 +509,47 @@ def verify_candidate_retirement(spec, root, path):
     return value
 
 
+def prepare_repaired_lane_intent(spec, root, activation_path, *, predecessor_intent: Path | None = None,
+                                 actuator: str = "run") -> Path:
+    """Claim an activated repair's immediate successor; the caller holds its lock."""
+    if actuator not in {"run", "parallel-formal-worker"}:
+        raise ValueError("runtime repair requires an explicit supported actuator")
+    activation, proposal, runtime = verify_activation(spec, root, activation_path)
+    previous_path = predecessor_intent or classes._child(root, proposal["failed_intent"])
+    previous, block, sites, old_lane = classes._intent(spec, root, previous_path)
+    if (previous_path != classes._child(root, proposal["failed_intent"])
+        and previous.get("runtime_epoch") != classes._reference(root, activation_path)):
+        raise ValueError("same-runtime retry must continue this activation's immediate failed lane")
+    if previous["epoch_declaration"] != proposal["declaration"] or old_lane.mode != proposal["mode"]:
+        raise ValueError("runtime retry changes its affected block or defense")
+    if (classes._child(root, proposal["declaration"]).parent / "commit.json").exists() or (classes._child(root, proposal["declaration"]).parent / "retirement.json").exists():
+        raise ValueError("committed or retired class block cannot consume a runtime repair")
+    classes._incomplete_predecessor(spec, root, previous_path, old_lane)
+    lane = classes._epoch_lane(block, sites, old_lane.mode, old_lane.generation + 1)
+    directory = previous_path.parent.parent / lane.campaign_name
+    campaign = spec.campaign_dir / f"{lane.campaign_name}.yml"
+    if directory.exists() or (spec.execution_root / "results" / lane.campaign_name).exists():
+        raise FileExistsError("repaired physical lane namespace was previously claimed")
+    raw = classes.render_epoch_lane(lane, sites, block["ordinal"])
+    durable_create(campaign, raw)
+    directory.mkdir()
+    identity = classes._runtime_identity(proposal["candidate_check"]["proof"]["runtime_proof"])
+    return classes._write(directory / "intent.json", INTENT_TYPE, {
+        "campaign_name": lane.campaign_name, "campaign_sha256": classes._sha(raw), "logical_lane": lane.logical_name,
+        "generation": lane.generation, "bindings": previous["bindings"], "runtime_identity": identity,
+        "lineage": proposal["declaration"], "started_at": admission._now(), "actuator": actuator, "scientific_credit": False,
+        "epoch_declaration": proposal["declaration"], "mode": lane.mode,
+        "runtime_epoch": classes._reference(root, activation_path),
+        "predecessor_intent": classes._reference(root, previous_path),
+        "predecessor_attempt": classes._attempt_inventory(spec, root, previous_path, old_lane)})
+
+
 def launch_repaired_lane(spec, root, activation_path, *, predecessor_intent: Path | None = None) -> Path:
     with lanes.capture_lock(spec.execution_root) as descriptor:
-        activation, proposal, runtime = verify_activation(spec, root, activation_path)
-        previous_path = predecessor_intent or classes._child(root, proposal["failed_intent"])
-        previous, block, sites, old_lane = classes._intent(spec, root, previous_path)
-        if (previous_path != classes._child(root, proposal["failed_intent"])
-            and previous.get("runtime_epoch") != classes._reference(root, activation_path)):
-            raise ValueError("same-runtime retry must continue this activation's immediate failed lane")
-        if previous["epoch_declaration"] != proposal["declaration"] or old_lane.mode != proposal["mode"]:
-            raise ValueError("runtime retry changes its affected block or defense")
-        if (classes._child(root, proposal["declaration"]).parent / "commit.json").exists() or (classes._child(root, proposal["declaration"]).parent / "retirement.json").exists():
-            raise ValueError("committed or retired class block cannot consume a runtime repair")
-        classes._incomplete_predecessor(spec, root, previous_path, old_lane)
-        lane = classes._epoch_lane(block, sites, old_lane.mode, old_lane.generation + 1)
-        directory = previous_path.parent.parent / lane.campaign_name
-        campaign = spec.campaign_dir / f"{lane.campaign_name}.yml"
-        if directory.exists() or (spec.execution_root / "results" / lane.campaign_name).exists():
-            raise FileExistsError("repaired physical lane namespace was previously claimed")
-        raw = classes.render_epoch_lane(lane, sites, block["ordinal"])
-        durable_create(campaign, raw)
-        directory.mkdir()
-        identity = classes._runtime_identity(proposal["candidate_check"]["proof"]["runtime_proof"])
-        output = classes._write(directory / "intent.json", INTENT_TYPE, {
-            "campaign_name": lane.campaign_name, "campaign_sha256": classes._sha(raw), "logical_lane": lane.logical_name,
-            "generation": lane.generation, "bindings": previous["bindings"], "runtime_identity": identity,
-            "lineage": proposal["declaration"], "started_at": admission._now(), "actuator": "run", "scientific_credit": False,
-            "epoch_declaration": proposal["declaration"], "mode": lane.mode,
-            "runtime_epoch": classes._reference(root, activation_path),
-            "predecessor_intent": classes._reference(root, previous_path),
-            "predecessor_attempt": classes._attempt_inventory(spec, root, previous_path, old_lane)})
+        output = prepare_repaired_lane_intent(spec, root, activation_path, predecessor_intent=predecessor_intent)
+        _, _, runtime = verify_activation(spec, root, activation_path)
+        directory = output.parent
+        campaign = spec.campaign_dir / f"{directory.name}.yml"
         lanes._actuate_host(runtime, root, directory, [str(runtime.host_launcher), "run", str(campaign)],
                             _launch_env(spec, root, output, runtime), descriptor)
         classes._clear_validation_cache()
@@ -556,7 +582,7 @@ def validate_intent(spec, root, path):
         or previous["epoch_declaration"] != proposal["declaration"] or prior_lane.mode != proposal["mode"]
         or (prior_path.parent / "complete.json").exists()
         or value["predecessor_attempt"] != classes._attempt_inventory(spec, root, prior_path, prior_lane)
-        or value["actuator"] != "run" or value["scientific_credit"] is not False
+        or value["actuator"] not in {"run", "parallel-formal-worker"} or value["scientific_credit"] is not False
         or classes._time(value["started_at"]) < classes._time(activation["activated_at"])):
         raise ValueError("runtime repair changes source, condition, slots, class vector or immediate predecessor")
     classes._incomplete_predecessor(spec, root, prior_path, prior_lane)
@@ -613,8 +639,36 @@ def validate_qualification_reuse(old_receipt, current_receipt) -> None:
         reference = os.environ.get(COMPATIBILITY_ENV)
         if not reference:
             raise ValueError("changed qualification inventory lacks collection runtime authority")
-        _, bridge = validate_capsule(Path(reference), actual_image=os.environ.get("QCSD_LAB_IMAGE_DIGEST"))
-    compatibility.validate_current_implementation(old_receipt, current_receipt, bridge)
+        path = Path(reference)
+        if path.is_file() and _kind(path) == "qcsd-rapid-v5-capture-control-installation-v2":
+            from .rapid_capture_control_installation import validate_capsule as validate_installation
+            _, bridge = validate_installation(path, actual_image=os.environ.get("QCSD_LAB_IMAGE_DIGEST"))
+        else:
+            _, bridge = validate_capsule(path, actual_image=os.environ.get("QCSD_LAB_IMAGE_DIGEST"))
+    if bridge.get("contract") == "response-only-v2-parallel-capture-control-v2":
+        from .rapid_capture_control_compatibility import validate_current_implementation
+        validate_current_implementation(old_receipt, current_receipt, bridge)
+    else:
+        if old_receipt["sha256"] != bridge["old_implementation_sha256"]:
+            reference = os.environ.get("QCSD_RAPID_CAPTURE_CONTROL_INSTALLATION")
+            if not reference:
+                raise ValueError("runtime repair lacks its original capture-control installation lineage")
+            from . import rapid_capture_control_installation as installation
+            from . import rapid_capture_control_compatibility as control
+            payload, initial_bridge = installation.validate_capsule(Path(reference))
+            intermediate = payload["new_runtime_check"]["proof"]["runtime_proof"]["qualification_implementation"]
+            runtime_reference = os.environ.get(COMPATIBILITY_ENV)
+            if not runtime_reference:
+                raise ValueError("qualification chain lacks its actual runtime launch capsule")
+            runtime_capsule = classes._open(Path(runtime_reference), CAPSULE_TYPE)
+            installation.check_current_spec(payload, _spec(runtime_capsule["base_spec"]))
+            if (payload["evidence_root"] != runtime_capsule["evidence_root"]
+                or intermediate["sha256"] != bridge["old_implementation_sha256"]):
+                raise ValueError("runtime repair changes its source-bound intermediate installation")
+            control.validate_current_implementation(old_receipt, intermediate, initial_bridge)
+            compatibility.validate_current_implementation(intermediate, current_receipt, bridge)
+            return
+        compatibility.validate_current_implementation(old_receipt, current_receipt, bridge)
 
 
 def validate_host_launch(value, *, expected_campaign: str, actual_image: str):

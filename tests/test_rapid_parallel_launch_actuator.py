@@ -4,6 +4,8 @@ import shlex
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from tests.test_rapid_parallel_capture import context
 from qcsd_lab import rapid_parallel_capture as parallel
 
@@ -56,7 +58,67 @@ save()
 '''
 
 
-def test_real_shell_retires_failed_lane_while_peer_continues(context, tmp_path):
+def _environment_helper(source):
+    # Execute the launcher's real decoder in the extracted shell fixture too.
+    return "parallel_environment_rows() {" + source.split("parallel_environment_rows() {", 1)[1].split(
+        '\nif [[ "${1:-}" == "parallel-diagnostic-run" ||', 1)[0]
+
+
+@pytest.mark.parametrize("formal", [False, True])
+def test_parallel_command_uses_official_formal_dns_sink_only_when_opted_in(context, formal):
+    project = Path(__file__).resolve().parents[1]
+    source = (project / "qcsd-lab").read_text()
+    setup = source.split('if [[ "${1:-}" == "parallel-diagnostic-run" ||', 1)[1]
+    setup = 'if [[ "${1:-}" == "parallel-diagnostic-run" ||' + setup.split('\nstudy_cohort_version=""', 1)[0]
+    execution = Path(context.authority["runtime"]["execution_root"])
+    output = execution / "results" / "batch-operator"
+    output.mkdir(parents=True)
+    official_dns = execution / "evidence" / "lanes" / "buflo" / "dns.json"
+    inputs = json.dumps(dict(dns_path=str(official_dns)))
+    campaign = context.authority["campaigns"][0]["path"]
+    prefix = "\n".join([
+        "set -euo pipefail", "ROOT=" + shlex.quote(str(execution)),
+        "parallel_diagnostic=0", "parallel_formal=0",
+        "QCSD_PARALLEL_AUTHORITY_SHA256=" + shlex.quote(context.digest),
+        _environment_helper(source),
+        "parallel_python() { if [[ \"$1\" == select ]]; then printf '%s\\n' " + shlex.quote(campaign) +
+        "; elif [[ \"$1\" == formal-inputs ]]; then printf '%s\\n' " + shlex.quote(inputs) + "; else return 99; fi; }",
+    ])
+    result = subprocess.run([
+        "bash", "-c", prefix + "\n" + setup +
+        '\nprintf "%s\\n" "$parallel_diagnostic" "$parallel_formal" "$QCSD_RAPID_DNS_RECEIPT_PATH" "$1" "$2"',
+        "parallel-command-test", "parallel-formal-run" if formal else "parallel-diagnostic-run",
+        str(context.path), str(output),
+    ], text=True, capture_output=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "1", str(int(formal)), str(official_dns if formal else output / "dns-pins.json"), "run", campaign,
+    ]
+    assert not official_dns.exists()
+
+
+@pytest.mark.parametrize("role,version,contract", [
+    ("diagnostic", "v5", parallel.NATIVE_CONTRACT),
+    ("formal", "v4", parallel.NATIVE_CONTRACT),
+    ("formal", "v5", "qcsd-client-rr1-etf-helper-v3"),
+])
+def test_formal_shell_guard_rejects_wrong_lane_or_native_contract(role, version, contract):
+    project = Path(__file__).resolve().parents[1]
+    source = (project / "qcsd-lab").read_text()
+    guard = source.split("# Two measured workers share one authenticated guardian.", 1)[1]
+    guard = guard.split("\n", 1)[1].split('  parallel_lock="', 1)[0] + "fi\n"
+    prefix = "\n".join([
+        "set -euo pipefail", "parallel_diagnostic=1", "parallel_formal=1", "rapid_capture=1",
+        "rapid_capture_role=" + shlex.quote(role), "rapid_capture_version=" + shlex.quote(version),
+        "study_capture_scheduler_contract=" + shlex.quote(contract),
+    ])
+    result = subprocess.run(["bash", "-c", prefix + "\n" + guard], text=True, capture_output=True, timeout=10)
+    assert result.returncode == 2
+    assert "official rapid v5 formal lanes" in result.stderr
+
+
+@pytest.mark.parametrize("formal", [False, True])
+def test_real_shell_retires_failed_lane_while_peer_continues(context, tmp_path, formal):
     project = Path(__file__).resolve().parents[1]
     source = (project / "qcsd-lab").read_text()
     block = source.split("# Two measured workers share one authenticated guardian.", 1)[1]
@@ -72,19 +134,60 @@ def test_real_shell_retires_failed_lane_while_peer_continues(context, tmp_path):
     preflight = (context.output / "image-preflight.json").read_text()
     (context.output / "image-preflight.json").unlink()
     quoting = shlex.quote
+    dns_second = json.dumps({"schema_version": 1, "campaign": "cs-buflo",
+                             "hosts": [["second.example", "1.0.0.1"]]})
+    inputs = []
+    evidence = context.output / "formal-evidence"
+    for index, row in enumerate(context.authority["campaigns"]):
+        name = Path(row["path"]).stem
+        dns = evidence / "lanes" / name / "dns.json"
+        if formal:
+            dns.parent.mkdir(parents=True)
+        inputs.append(dict(campaign_path=row["path"], campaign_name=name,
+                           result_namespace=str(Path(context.authority["runtime"]["execution_root"]) / "results" / name),
+                           dns_path=str(dns), mount_roots=[str(evidence), str(context.runtime)]))
+    if formal:
+        Path(inputs[0]["dns_path"]).write_text(json.dumps({
+            "schema_version": 1, "campaign": "buflo", "hosts": [["first.example", "1.1.1.1"]],
+        }) + "\n")
+    formal_inputs = tmp_path / "formal-inputs.json"
+    formal_inputs.write_text(json.dumps(inputs))
+    formal_helper = tmp_path / "formal_actuator_inputs.py"
+    formal_helper.write_text('''
+import json,sys
+from pathlib import Path
+sys.path.insert(0,sys.argv[1]+"/src")
+from qcsd_lab import rapid_parallel_capture as parallel
+rows=json.loads(Path(sys.argv[2]).read_text()); args=sys.argv[3:]
+if args[0]=="formal-inputs":
+    print(json.dumps(rows[int(args[args.index("--index")+1])]))
+else:
+    parallel.main(args)
+    if args[0]=="initialize":
+        for row in rows: Path(row["result_namespace"]).mkdir(parents=True)
+''')
+    capture_calls = tmp_path / "capture-preflight-calls.log"
+    completed_peer = Path(context.authority["runtime"]["execution_root"]) / "results" / "prior-completed-peer" / "complete.json"
+    completed_peer.parent.mkdir(parents=True)
+    completed_peer.write_bytes(b"preserved independently verified peer\n")
+    peer_before = (completed_peer.read_bytes(), completed_peer.stat().st_mtime_ns, completed_peer.stat().st_ino)
     prefix = "\n".join([
         "set -euo pipefail", "ROOT=" + quoting(str(project)),
         'source "${ROOT}/tools/docker_signal_supervisor.sh"',
-        "parallel_diagnostic=1", "rapid_capture=1", "rapid_capture_role=diagnostic", "rapid_capture_version=",
+        "parallel_diagnostic=1", "parallel_formal=" + str(int(formal)), "rapid_capture=1",
+        "rapid_capture_role=" + ("formal" if formal else "diagnostic"),
+        "rapid_capture_version=" + ("v5" if formal else ""),
+        "parallel_formal_first_inputs=" + quoting(json.dumps(inputs[0])),
         "study_capture_scheduler_contract=" + quoting(parallel.NATIVE_CONTRACT),
         "parallel_authority=" + quoting(str(context.path)), "parallel_output=" + quoting(str(context.output)),
         "parallel_authority_sha256=" + quoting(context.digest), "image_id=" + quoting(context.actual["workers"][0]["image_id"]),
         "study_capture_available_cpus_json='[0,2,4,7,9]'", "study_capture_docker_ncpu=16",
         "qcsd_invoking_uid=$(id -u)", "qcsd_invoking_gid=$(id -g)",
-        "container=(docker run --network bridge --cpuset-cpus 7,9 --env QCSD_CAPTURE_CLIENT_CPU=7 --env QCSD_CAPTURE_ORCHESTRATOR_CPU=9 --env QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_B64=)",
+        "container=(docker run --network bridge --cpuset-cpus 7,9 --env QCSD_CAPTURE_CLIENT_CPU=7 --env QCSD_CAPTURE_ORCHESTRATOR_CPU=9 --env QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_B64= --add-host inherited.example=8.8.8.8)",
         "fake() { /usr/bin/python3 " + quoting(str(fake)) + " " + quoting(str(state)) + " " + quoting(str(context.output)) + ' "$@"; }',
         "parallel_python() { /usr/bin/python3 -I -c 'import sys;sys.path.insert(0,sys.argv.pop(1)+\"/src\");from qcsd_lab.rapid_parallel_capture import main;main()' \"$ROOT\" \"$@\"; }",
-        "qcsd_capture_attached_docker_output() { local -n result=$1; result=" + quoting(preflight) + "; }",
+        "qcsd_capture_attached_docker_output() { local -n result=$1; shift; printf '%s\\n' \"$*\" >>" + quoting(str(capture_calls)) +
+        "; if [[ \" $* \" == *' formal-dns '* ]]; then result=" + quoting(dns_second) + "; else result=" + quoting(preflight) + "; fi; }",
         '_qcsd_docker_api() { fake "$@"; }',
         '_QCSD_LIFETIME_SIGNAL_STATUS=0',
         '_qcsd_docker_api_with_timeout() { local duration=$1; printf "%s %s\\n" "$1" "${*:2}" >>' + quoting(str(tmp_path / "removal-durations.log")) + '; shift; timeout "$duration" /usr/bin/python3 ' + quoting(str(fake)) + ' ' + quoting(str(state)) + ' ' + quoting(str(context.output)) + ' "$@"; }',
@@ -98,8 +201,11 @@ def test_real_shell_retires_failed_lane_while_peer_continues(context, tmp_path):
         'qcsd_run_detached_docker() { local -n result=$1; shift; result+=("$(fake create-worker "$@" --image-id "$image_id")"); }',
         'qcsd_retire_docker_handoff() { local -n values=$3; local value; local -a keep=(); for value in "${values[@]}"; do [[ "$value" == "$2" ]] || keep+=("$value"); done; values=("${keep[@]}"); }',
         '_qcsd_begin_latched_cleanup() { :; }', '_qcsd_finish_latched_cleanup() { exit "$cleanup_entry_status"; }',
+        _environment_helper(source),
         source.split('replace_container_option_value() {', 1)[1].split('_qcsd_latch_cleanup_signal()', 1)[0].join(['replace_container_option_value() {', '']),
     ])
+    if formal:
+        prefix += "\nparallel_python() { /usr/bin/python3 " + quoting(str(formal_helper)) + ' "$ROOT" ' + quoting(str(formal_inputs)) + ' "$@"; }'
     result = subprocess.run(["bash", "-c", prefix + "\n" + block], text=True, capture_output=True, timeout=30)
     assert result.returncode == 1, result.stderr
     assert (context.output / "lane-1/retirement.json").exists(), result.stderr
@@ -115,9 +221,27 @@ def test_real_shell_retires_failed_lane_while_peer_continues(context, tmp_path):
     removal_calls = (tmp_path / "removal-durations.log").read_text().splitlines()
     assert len(removal_calls) == 6
     assert all(row.startswith("30 ") for row in removal_calls)
+    assert (completed_peer.read_bytes(), completed_peer.stat().st_mtime_ns, completed_peer.stat().st_ino) == peer_before
+    preflight_calls = capture_calls.read_text().splitlines()
+    assert len(preflight_calls) == (2 if formal else 1)
+    if formal:
+        assert "--network bridge" in preflight_calls[1]
+        assert "-I -m qcsd_lab.rapid_parallel_capture formal-dns --authority /parallel-authority.json --index 1" in preflight_calls[1]
+        assert json.loads(Path(inputs[1]["dns_path"]).read_text()) == json.loads(dns_second)
     for index in range(2):
         gate = parallel.load(context.output / f"lane-{index+1}/gate/host-partition.json")
         assert gate["schema_version"] == 5
         argv = parallel.load(context.output / f"lane-{index+1}/worker-argv.json")
-        assert str(context.output / f"lane-{index+1}/results") + ":/lab/results:rw" in argv
+        if formal:
+            assert inputs[index]["result_namespace"] + ":/lab/results/" + inputs[index]["campaign_name"] + ":rw" in argv
+            assert str(project / "results") + ":/lab/results:ro" in argv
+            assert not any(value.endswith(":/lab/results:rw") for value in argv)
+            assert [argv[i+1] for i, value in enumerate(argv[:-1]) if value == "--add-host"] == [
+                "first.example=1.1.1.1" if index == 0 else "second.example=1.0.0.1",
+            ]
+            assert str(evidence) + ":" + str(evidence) + ":ro" in argv
+            assert argv.count(str(context.runtime) + ":" + str(context.runtime) + ":ro") == 1
+        else:
+            assert str(context.output / f"lane-{index+1}/results") + ":/lab/results:rw" in argv
+            assert "inherited.example=8.8.8.8" in argv
         assert argv[argv.index("--cpuset-cpus")+1] == ("2,4" if index == 0 else "7,9")

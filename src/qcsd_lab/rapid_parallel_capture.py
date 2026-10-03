@@ -73,6 +73,9 @@ def regular_dir(path: Path) -> Path:
 def authority(path: Path, *, execution_root: Path | None = None) -> dict[str, Any]:
     """Reopen immutable inputs without allocating outputs or using Docker."""
     value = load(path)
+    if isinstance(value, dict) and value.get("artifact_type") == "qcsd-two-worker-formal-lane-authority":
+        from .rapid_formal_parallel import authority as formal_authority
+        return formal_authority(path, execution_root=execution_root)
     if (not isinstance(value, dict)
         or set(value) != {"schema_version", "artifact_type", "runtime", "campaigns"}
         or type(value["schema_version"]) is not int or value["schema_version"] != 1
@@ -80,6 +83,15 @@ def authority(path: Path, *, execution_root: Path | None = None) -> dict[str, An
         or not isinstance(value["runtime"], dict) or set(value["runtime"]) != RUNTIME_KEYS
         or not isinstance(value["campaigns"], list) or len(value["campaigns"]) != 2):
         raise ValueError("parallel diagnostic authority fields differ")
+    return _runtime_authority(value, execution_root=execution_root)
+
+
+def _runtime_authority(value: dict[str, Any], *, execution_root: Path | None = None) -> dict[str, Any]:
+    """Shared immutable runtime/path binding; formal purpose is checked separately."""
+    if not isinstance(value.get("runtime"), dict) or set(value["runtime"]) != RUNTIME_KEYS:
+        raise ValueError("parallel runtime fields differ")
+    if not isinstance(value.get("campaigns"), list) or len(value["campaigns"]) != 2:
+        raise ValueError("parallel authority requires two campaigns")
     runtime = value["runtime"]
     if re.fullmatch(r"sha256:[0-9a-f]{64}", str(runtime["collection_image_digest"])) is None:
         raise ValueError("parallel collection image must be immutable")
@@ -182,6 +194,9 @@ def image_preflight(path: Path, expected_sha: str) -> dict[str, Any]:
     if sha(read(path)) != expected_sha:
         raise ValueError("parallel authority changed before image preflight")
     value = authority(path)
+    if value["artifact_type"] != AUTHORITY_TYPE:
+        from .rapid_formal_parallel import image_preflight as formal_preflight
+        return formal_preflight(path, expected_sha)
     proof = executed_image_runtime_check(value["runtime"])
     installed = validate_runtime_receipt(required_schema_version=2)
     source_root = Path(value["runtime"]["runtime_source_root"])
@@ -246,6 +261,9 @@ def select_pairs(available: list[int]) -> dict[str, Any]:
 
 def initialize(path: Path, output: Path, expected_sha: str, available: list[int]) -> dict[str, Any]:
     value = authority(path)
+    if value["artifact_type"] != AUTHORITY_TYPE:
+        from .rapid_formal_parallel import initialize as formal_initialize
+        return formal_initialize(path, output, expected_sha, available)
     if sha(read(path)) != expected_sha:
         raise ValueError("parallel authority changed before launch")
     output = regular_dir(output)
@@ -277,6 +295,9 @@ def release(path: Path, output: Path, actual: dict[str, Any]) -> None:
     """Close exact actual Docker identities before making either gate visible."""
     from .process_scheduler import build_peer_host_partition
     value = authority(path)
+    if value["artifact_type"] != AUTHORITY_TYPE:
+        from .rapid_formal_parallel import release as formal_release
+        return formal_release(path, output, actual)
     intent = load(output / "batch-intent.json")
     if intent["authority_sha256"] != sha(read(path)):
         raise ValueError("parallel authority changed before gate release")
@@ -335,6 +356,9 @@ def gate(path: Path, expected_sha: str, index: int, authority_path: Path) -> Non
     os.environ.pop("QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_B64", None)
     os.environ["QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_FILE"] = str(directory / "host-partition.json")
     os.environ["QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_SHA256"] = value["host_partition_sha256"]
+    if inputs["artifact_type"] != AUTHORITY_TYPE:
+        from .rapid_formal_parallel import worker_environment
+        os.environ.update(worker_environment(inputs, index))
     os.execv("/usr/local/bin/collection-entrypoint", ["collection-entrypoint", "run", value["campaign"]])
 
 
@@ -367,6 +391,9 @@ def _verify_retirement_actual(output: Path, index: int, actual: dict[str, Any]) 
 
 def retire_lane(output: Path, index: int, actual: dict[str, Any]) -> None:
     """Record actual lane absence; an unaffected running peer is permitted."""
+    if load(output / "batch-intent.json")["authority"]["artifact_type"] != AUTHORITY_TYPE:
+        from .rapid_formal_parallel import retire_lane as formal_retire
+        return formal_retire(output, index, actual)
     launch = _verify_retirement_actual(output, index, actual)
     put(output / f"lane-{index+1}" / "retirement.json", {"schema_version": 1,
         "retired_at": now(), "actual": actual, "authority_sha256": launch["authority_sha256"],
@@ -386,6 +413,9 @@ def _worker_identity(observed: dict[str, Any], expected: dict[str, Any]) -> None
 def verify_results(path: Path, output: Path) -> dict[str, Any]:
     from .verification import verify_result
     value = authority(path)
+    if value["artifact_type"] != AUTHORITY_TYPE:
+        from .rapid_formal_parallel import verify_results as formal_verify
+        return formal_verify(path, output)
     verify_operator_closure(path, output, value)
     reopen_launch(path, output, value)
     campaigns = _campaigns(value)
@@ -448,6 +478,9 @@ def verify_results(path: Path, output: Path) -> dict[str, Any]:
 def reopen_launch(path: Path, output: Path, value: dict[str, Any]) -> None:
     """Bind current gate and Docker observations to the same actual launch."""
     from .process_scheduler import build_peer_host_partition
+    if value["artifact_type"] != AUTHORITY_TYPE:
+        from .rapid_formal_parallel import reopen_launch as formal_reopen
+        return formal_reopen(path, output, value)
     intent = load(output / "batch-intent.json")
     launch = load(output / "batch-launch.json")
     actual = load(output / "actual-launch.json")
@@ -480,7 +513,7 @@ def retire_session(path: Path, output: Path) -> dict[str, Any]:
     inputs = authority(path)
     host_source(inputs)
     start = load(output / "host-start.json")
-    command = [inputs["runtime"]["host_launcher"], "parallel-diagnostic-run", str(path), str(output)]
+    command = [inputs["runtime"]["host_launcher"], launch_action(inputs), str(path), str(output)]
     if (start["command"] != command or start["authority_sha256"] != sha(read(path))
         or (output / "deep-verification.json").exists()):
         raise ValueError("parallel session retirement differs from the actual launch")
@@ -520,7 +553,7 @@ def verify_operator_closure(path: Path, output: Path, value: dict[str, Any]) -> 
     start = load(output / "host-start.json")
     process = load(output / "host-process.json")
     intent = load(output / "operator-intent.json")
-    command = [value["runtime"]["host_launcher"], "parallel-diagnostic-run", str(path), str(output)]
+    command = [value["runtime"]["host_launcher"], launch_action(value), str(path), str(output)]
     argv = start["host"]["argv"]
     if (intent["command"] != command or start["command"] != command or process["command"] != command
         or intent["authority_sha256"] != sha(read(path)) or start["authority_sha256"] != sha(read(path))
@@ -536,9 +569,13 @@ def verify_operator_closure(path: Path, output: Path, value: dict[str, Any]) -> 
         raise ValueError("parallel actual host process or raw outputs differ from the prospective launch")
 
 
+def launch_action(value: dict[str, Any]) -> str:
+    return "parallel-diagnostic-run" if value["artifact_type"] == AUTHORITY_TYPE else "parallel-formal-run"
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("select", "initialize", "preflight", "release", "gate", "retire", "verify"))
+    parser.add_argument("action", choices=("select", "initialize", "preflight", "release", "gate", "retire", "verify", "formal-inputs", "formal-dns"))
     parser.add_argument("--authority", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--sha256")
@@ -546,7 +583,11 @@ def main(argv=None):
     parser.add_argument("--cpus")
     parser.add_argument("--index", type=int)
     args = parser.parse_args(argv)
-    if args.action == "select":
+    if args.action in {"formal-inputs", "formal-dns"}:
+        from .rapid_formal_parallel import worker_inputs, resolve_dns
+        function = worker_inputs if args.action == "formal-inputs" else resolve_dns
+        print(json.dumps(function(args.authority, args.index), sort_keys=True))
+    elif args.action == "select":
         value = authority(args.authority, execution_root=args.output)
         host_source(value)
         print(value["campaigns"][0]["path"])

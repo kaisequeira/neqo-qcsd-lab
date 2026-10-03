@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run/reopen one opt-in two-worker diagnostic; never publish formal credit."""
+"""Run/reopen an opt-in two-worker batch with its explicitly typed authority."""
 from __future__ import annotations
 
 import argparse
@@ -27,7 +27,7 @@ def launch(authority_path: Path, output: Path) -> dict:
         raise ValueError("parallel output must be a fresh child beneath the execution results directory")
     parallel.regular_dir(output.parent)
     output.mkdir(mode=0o700)
-    command = [value["runtime"]["host_launcher"], "parallel-diagnostic-run", str(authority_path), str(output)]
+    command = [value["runtime"]["host_launcher"], parallel.launch_action(value), str(authority_path), str(output)]
     parallel.put(output / "operator-intent.json", {"schema_version": 1, "command": command,
         "authority_sha256": authority_digest, "created_at": parallel.now(),
         "operator_implementation_sha256": parallel.sha(parallel.read(Path(__file__))),
@@ -37,6 +37,9 @@ def launch(authority_path: Path, output: Path) -> dict:
         QCSD_RAPID_IMAGE_SOURCE_QCSD=value["runtime"]["base_launcher"],
         QCSD_PARALLEL_AUTHORITY_SHA256=authority_digest,
         QCSD_RAPID_DNS_RECEIPT_PATH=str(output / "dns-pins.json"), PYTHONDONTWRITEBYTECODE="1")
+    if value["artifact_type"] != parallel.AUTHORITY_TYPE:
+        from qcsd_lab.rapid_formal_parallel import worker_environment
+        env.update(worker_environment(value, 0))
     read_fd, write_fd = os.pipe()
     child = None
     started = parallel.now()
@@ -108,7 +111,7 @@ def main(argv=None):
             parallel.host_source(parallel.authority(args.authority))
             result = parallel.verify_results(args.authority, args.output)
     except (OSError, ValueError, TypeError, KeyError, RuntimeError, subprocess.SubprocessError) as error:
-        print(f"parallel diagnostic: {type(error).__name__}: {error}", file=sys.stderr)
+        print(f"parallel capture: {type(error).__name__}: {error}", file=sys.stderr)
         return 2
     print(json.dumps(result, sort_keys=True, indent=2))
     return 0 if result.get("valid", True) else 1

@@ -167,13 +167,35 @@ def _classes(spec: lanes.CaptureSpec, proof: Mapping[str, Any]) -> list[dict[str
 
 
 @_operation
-def initialize_study(spec: lanes.CaptureSpec, root: Path) -> Path:
+def initialize_study(spec: lanes.CaptureSpec, root: Path, *, installation: Path | None = None) -> Path:
     """Run the real image gate, then publish authority before any epoch capture."""
     root = lanes._regular_directory(root)
-    if not root.is_relative_to(spec.data_root) or any(root.iterdir()):
+    if not root.is_relative_to(spec.data_root) or installation is None and any(root.iterdir()):
         raise ValueError("epoch study requires an empty create-only directory in the data root")
     with lanes.capture_lock(spec.execution_root):
-        checked = lanes.check_bound_image(spec, root)
+        environment = {}
+        if installation is not None:
+            from . import rapid_capture_control_installation as control
+            installation = Path(installation).absolute()
+            installed, _ = control.validate_capsule(installation, actual_image=spec.collection_image_digest)
+            control.check_current_spec(installed, spec)
+            if (installed["evidence_root"] != str(root) or installation.parent != root
+                or installation.name in {"policy.json", "objects", "control-installation-checks"}
+                or {path.name for path in root.iterdir()} - {installation.name, "objects", "control-installation-checks"}
+                or any(root.rglob("intent.json"))):
+                raise ValueError("epoch installation bootstrap permits only its declared capsule/checks/objects")
+            environment = {"QCSD_RAPID_COLLECTION_COMPATIBILITY": str(installation),
+                           "QCSD_RAPID_CAPTURE_CONTROL_INSTALLATION": str(installation)}
+        saved = {key: os.environ.get(key) for key in environment}
+        os.environ.update(environment)
+        try:
+            checked = lanes.check_bound_image(spec, root)
+        finally:
+            for key, old in saved.items():
+                if old is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = old
         classes = _classes(spec, checked["proof"])
         published = admission._now()
         payload = {"base_spec": spec.serializable(), "image_check": checked,
@@ -205,9 +227,26 @@ def verify_policy(spec: lanes.CaptureSpec, root: Path) -> dict[str, Any]:
                        "refresh_rule", "comparison_rule", "selection_rule", "scientific_credit"}, "epoch policy")
     checked = value["image_check"]
     execution = checked["execution"]
+    reference = execution.get("capture_control_installation")
+    capsule_path = None
+    if reference is not None:
+        if (not isinstance(reference, dict) or set(reference) != {"path", "sha256"}
+            or not Path(reference["path"]).is_absolute()
+            or _sha(admission._read(Path(reference["path"]))) != reference["sha256"]):
+            raise ValueError("epoch policy changed its sealed capture-control installation")
+        capsule_path = Path(reference["path"])
+        from . import rapid_capture_control_installation as installation
+        from .rapid_runtime_epochs import _runtime_projection
+        installed, _ = installation.validate_capsule(capsule_path, actual_image=spec.collection_image_digest)
+        installation.check_current_spec(installed, spec)
+        if (installed["evidence_root"] != str(root)
+            or _runtime_projection(checked["proof"]) != installed["new_runtime_check"]["proof"]["runtime_proof"]
+            or _time(execution["started_at"]) < _time(installed["published_at"])):
+            raise ValueError("epoch policy differs from its prospectively installed current source")
     if (value["base_spec"] != spec.serializable() or value["scientific_credit"] is not False
         or type(execution["returncode"]) is not int or execution["returncode"] != 0
-        or execution["command"] != lanes.image_check_command(spec)
+        or execution["command"] != lanes.image_check_command(spec, capture_control_installation=capsule_path,
+                                                            inherit_environment=False)
         or execution["validator_script_sha256"] != _sha(lanes.IMAGE_CHECK_SCRIPT.encode())
         or admission._load(lanes._object(root, execution["stdout"])) != checked["proof"]):
         raise ValueError("epoch policy lacks the actual matching installed-image execution")
@@ -476,12 +515,31 @@ def _block_sites(spec: lanes.CaptureSpec, root: Path, value: Mapping[str, Any], 
         expected_qualification_scope=RESPONSE_ONLY_QUALIFICATION_SCOPE,
         require_current_implementation=require_current)
     proof = policy["image_check"]["proof"]
+    original_proof = None
     for site in effective:
         sidecar = admission._load(admission._read(manifest_path.parent / f"{site.workload_id}.json"))
         if (sidecar["qualification_image_digest"] != spec.collection_image_digest
             or sidecar["qualification_source"] != proof["runtime_source"]
             or sidecar["implementation_receipt"] != proof["qualification_implementation"]):
-            raise ValueError("epoch qualifier changes the exact installed image/client/source")
+            if original_proof is None:
+                reference = policy["image_check"]["execution"].get("capture_control_installation")
+                if (not isinstance(reference, dict) or set(reference) != {"path", "sha256"}
+                    or not Path(reference["path"]).is_absolute()
+                    or _sha(admission._read(Path(reference["path"]))) != reference["sha256"]):
+                    raise ValueError("epoch qualifier changes the exact installed image/client/source")
+                from . import rapid_capture_control_installation as installation
+                from .rapid_runtime_epochs import _runtime_projection
+                installed, _ = installation.validate_capsule(Path(reference["path"]), actual_image=spec.collection_image_digest)
+                installation.check_current_spec(installed, spec)
+                if (installed["evidence_root"] != str(root)
+                    or _runtime_projection(proof) != installed["new_runtime_check"]["proof"]["runtime_proof"]
+                    or _time(policy["image_check"]["execution"]["started_at"]) < _time(installed["published_at"])):
+                    raise ValueError("epoch qualifier lacks its exact prospectively installed current source")
+                original_proof = installed["old_image_check"]["proof"]
+            if (sidecar["qualification_image_digest"] != original_proof["collection_image_digest"]
+                or sidecar["qualification_source"] != original_proof["runtime_source"]
+                or sidecar["implementation_receipt"] != original_proof["qualification_implementation"]):
+                raise ValueError("epoch qualifier changes its preserved original image/client/source")
     effective = [replace(site, qualification_set=qualification["name"],
                          qualification_set_manifest_sha256=qualification["manifest_sha256"]) for site in effective]
     selected = [plan.Site(**row["initial_site"]) for row in policy["classes"]]
@@ -644,7 +702,16 @@ IMAGE_SCRIPT = (
 
 
 def image_check_command(spec: lanes.CaptureSpec, root: Path, declaration: Path) -> list[str]:
-    command = lanes.image_check_command(spec)
+    policy = _open(root / "policy.json", POLICY_TYPE)
+    reference = policy["image_check"]["execution"].get("capture_control_installation")
+    capsule_path = None
+    if reference is not None:
+        if (not isinstance(reference, dict) or set(reference) != {"path", "sha256"}
+            or not Path(reference["path"]).is_absolute()
+            or _sha(admission._read(Path(reference["path"]))) != reference["sha256"]):
+            raise ValueError("epoch image check changed its sealed capture-control installation")
+        capsule_path = Path(reference["path"])
+    command = lanes.image_check_command(spec, capture_control_installation=capsule_path, inherit_environment=False)
     command[-2:] = [IMAGE_SCRIPT, json.dumps({"spec": spec.serializable(), "root": str(root),
                                            "declaration": str(declaration)}, sort_keys=True)]
     return command
@@ -712,7 +779,7 @@ def _intent(spec: lanes.CaptureSpec, root: Path, path: Path) -> tuple[dict[str, 
     lane = _epoch_lane(block, sites, value["mode"], value["generation"])
     raw = render_epoch_lane(lane, sites, block["ordinal"])
     if (path != declaration.parent / "lanes" / lane.campaign_name / "intent.json"
-        or value["actuator"] != "run" or value["scientific_credit"] is not False
+        or value["actuator"] not in {"run", "parallel-formal-worker"} or value["scientific_credit"] is not False
         or value["campaign_name"] != lane.campaign_name or value["logical_lane"] != lane.logical_name
         or value["campaign_sha256"] != _sha(raw)
         or admission._read(spec.campaign_dir / f"{lane.campaign_name}.yml") != raw
@@ -752,9 +819,15 @@ def _terminal_process(spec: lanes.CaptureSpec, root: Path, intent: Path, lane: p
     if not process.is_file() and not retirement.is_file():
         raise ValueError("epoch launch is active or lacks verified actual retirement")
     if process.is_file():
-        value = lanes._verified_host_process(admission._read(process), root, admission._read(intent), lane.campaign_name)
+        intent_raw = admission._read(intent)
+        value = lanes._verified_host_process(admission._read(process), root, intent_raw, lane.campaign_name)
+        if ((value.get("actuator") == "parallel-formal-worker")
+                != (lanes._host_intent(intent_raw).get("actuator", "run") == "parallel-formal-worker")):
+            raise ValueError("epoch process actuator differs from its bound launch intent")
         if not lanes._process_matches_lane(value, spec, lane.campaign_name):
             raise ValueError("epoch process command differs from its bound physical lane")
+        if value.get("actuator") == "parallel-formal-worker":
+            return value  # The typed validator reopens actual Docker retirement and absence.
         start = lanes._validated_host_start(lanes._object(root, value["start"]), admission._read(intent), campaign_name=lane.campaign_name)
         for key in ("host", "supervisor"):
             lanes._retired_identity(start[key])
@@ -802,45 +875,63 @@ def _attempt_inventory(spec: lanes.CaptureSpec, root: Path, path: Path, lane: pl
 
 
 @_operation
+def prepare_block_lane_intent(spec: lanes.CaptureSpec, root: Path, declaration: Path, *, mode: str,
+                              generation: int = 1, predecessor_intent: Path | None = None,
+                              checked: Mapping[str, Any] | None = None, actuator: str = "run") -> Path:
+    """Claim one create-only block lane; the caller holds its capture lock."""
+    if actuator not in {"run", "parallel-formal-worker"}:
+        raise ValueError("epoch lane requires an explicit supported actuator")
+    root = lanes._regular_directory(root)
+    block, sites = verify_block(spec, root, declaration)
+    if (declaration.parent / "commit.json").exists() or (declaration.parent / "retirement.json").exists():
+        raise ValueError("committed or retired block cannot launch more captures")
+    lane = _epoch_lane(block, sites, mode, generation)
+    directory = declaration.parent / "lanes" / lane.campaign_name
+    namespace = spec.execution_root / "results" / lane.campaign_name
+    if directory.exists() or directory.is_symlink() or namespace.exists() or namespace.is_symlink():
+        raise FileExistsError("epoch physical lane namespace was previously claimed")
+    if generation == 1 and predecessor_intent is not None:
+        raise ValueError("initial epoch lane cannot consume a predecessor")
+    if generation > 1:
+        previous_lane = _epoch_lane(block, sites, mode, generation - 1)
+        expected_path = declaration.parent / "lanes" / previous_lane.campaign_name / "intent.json"
+        if predecessor_intent != expected_path or (expected_path.parent / "complete.json").exists():
+            raise ValueError("ordinary epoch retry requires its actual immediate incomplete predecessor")
+        _intent(spec, root, expected_path)
+        _incomplete_predecessor(spec, root, expected_path, previous_lane)
+    campaign = spec.campaign_dir / f"{lane.campaign_name}.yml"
+    raw = render_epoch_lane(lane, sites, block["ordinal"])
+    if generation > 1:
+        durable_create(campaign, raw)
+    elif admission._read(campaign) != raw:
+        raise ValueError("initial epoch campaign differs from its declaration")
+    if checked is None:
+        checked = check_bound_image(spec, root, declaration)
+    else:
+        _verified_check(spec, root, declaration, checked)
+    base = checked["proof"]["base_proof"]
+    directory.mkdir(parents=True)
+    intent = {"campaign_name": lane.campaign_name, "campaign_sha256": _sha(raw),
+              "logical_lane": lane.logical_name, "generation": generation, "bindings": base["bindings"],
+              "runtime_identity": _runtime_identity(base), "lineage": _reference(root, declaration),
+              "started_at": admission._now(), "actuator": actuator, "scientific_credit": False,
+              "epoch_declaration": _reference(root, declaration), "mode": mode, "image_check": checked,
+              "predecessor_intent": _reference(root, predecessor_intent) if predecessor_intent else None,
+              "predecessor_attempt": _attempt_inventory(spec, root, expected_path, previous_lane)
+              if predecessor_intent else None}
+    return _write(directory / "intent.json", lanes.INTENT_TYPE, intent)
+
+
+@_operation
 def launch_block_lane(spec: lanes.CaptureSpec, root: Path, declaration: Path, *, mode: str,
                         generation: int = 1, predecessor_intent: Path | None = None) -> Path:
     """Use the existing guarded host/DNS actuator with explicit epoch authority."""
     root = lanes._regular_directory(root)
     with lanes.capture_lock(spec.execution_root) as descriptor:
-        block, sites = verify_block(spec, root, declaration)
-        if (declaration.parent / "commit.json").exists() or (declaration.parent / "retirement.json").exists():
-            raise ValueError("committed or retired block cannot launch more captures")
-        lane = _epoch_lane(block, sites, mode, generation)
-        directory = declaration.parent / "lanes" / lane.campaign_name
-        if directory.exists() or directory.is_symlink() or (spec.execution_root / "results" / lane.campaign_name).exists():
-            raise FileExistsError("epoch physical lane namespace was previously claimed")
-        if generation == 1 and predecessor_intent is not None:
-            raise ValueError("initial epoch lane cannot consume a predecessor")
-        if generation > 1:
-            previous_lane = _epoch_lane(block, sites, mode, generation - 1)
-            expected_path = declaration.parent / "lanes" / previous_lane.campaign_name / "intent.json"
-            if predecessor_intent != expected_path or (expected_path.parent / "complete.json").exists():
-                raise ValueError("ordinary epoch retry requires its actual immediate incomplete predecessor")
-            _intent(spec, root, expected_path)
-            _incomplete_predecessor(spec, root, expected_path, previous_lane)
-        campaign = spec.campaign_dir / f"{lane.campaign_name}.yml"
-        raw = render_epoch_lane(lane, sites, block["ordinal"])
-        if generation > 1:
-            durable_create(campaign, raw)
-        elif admission._read(campaign) != raw:
-            raise ValueError("initial epoch campaign differs from its declaration")
-        checked = check_bound_image(spec, root, declaration)
-        base = checked["proof"]["base_proof"]
-        directory.mkdir(parents=True)
-        intent = {"campaign_name": lane.campaign_name, "campaign_sha256": _sha(raw),
-                  "logical_lane": lane.logical_name, "generation": generation, "bindings": base["bindings"],
-                  "runtime_identity": _runtime_identity(base), "lineage": _reference(root, declaration),
-                  "started_at": admission._now(), "actuator": "run", "scientific_credit": False,
-                  "epoch_declaration": _reference(root, declaration), "mode": mode, "image_check": checked,
-                  "predecessor_intent": _reference(root, predecessor_intent) if predecessor_intent else None,
-                  "predecessor_attempt": _attempt_inventory(spec, root, expected_path, previous_lane)
-                  if predecessor_intent else None}
-        output = _write(directory / "intent.json", lanes.INTENT_TYPE, intent)
+        output = prepare_block_lane_intent(spec, root, declaration, mode=mode, generation=generation,
+                                          predecessor_intent=predecessor_intent)
+        directory = output.parent
+        campaign = spec.campaign_dir / f"{directory.name}.yml"
         env = dict(os.environ)
         env.update(QCSD_LAB_COLLECTION_IMAGE=spec.collection_image_digest,
                    QCSD_RAPID_IMAGE_SOURCE_QCSD=str(spec.base_launcher),
@@ -849,6 +940,10 @@ def launch_block_lane(spec: lanes.CaptureSpec, root: Path, declaration: Path, *,
         env["QCSD_RAPID_EPOCH_LAUNCH_INPUT"] = json.dumps({
             "spec": spec.serializable(), "root": str(root), "intent": str(output),
             "intent_sha256": _sha(admission._read(output))}, sort_keys=True)
+        reference = verify_policy(spec, root)["image_check"]["execution"].get("capture_control_installation")
+        if reference is not None:
+            env["QCSD_RAPID_COLLECTION_COMPATIBILITY"] = reference["path"]
+            env["QCSD_RAPID_CAPTURE_CONTROL_INSTALLATION"] = reference["path"]
         command = [str(spec.host_launcher), "run", str(campaign)]
         lanes._actuate_host(spec, root, directory, command, env, descriptor)
         _clear_validation_cache()
@@ -866,6 +961,9 @@ def _deep_lane(spec: lanes.CaptureSpec, root: Path, intent_path: Path) -> dict[s
     process = _terminal_process(runtime, root, intent_path, lane)
     if process.get("returncode") is None or process.get("interruption") is not None:
         raise ValueError("interrupted epoch lane needs an unchanged-input fresh g02 retry")
+    parallel = process.get("actuator") == "parallel-formal-worker"
+    if parallel and process["returncode"] != 0:
+        raise ValueError("a failed formal worker cannot produce an epoch completion receipt")
     namespace = spec.execution_root / "results" / lane.campaign_name
     children = list(namespace.iterdir())
     if len(children) != 1 or children[0].is_symlink() or not children[0].is_dir():
@@ -886,6 +984,9 @@ def _deep_lane(spec: lanes.CaptureSpec, root: Path, intent_path: Path) -> dict[s
         workload_sha256s={key: _sha(raw) for key, raw in workloads.items()},
         qualification_set_manifest_sha256=block["qualification"]["manifest_sha256"] if lane.qualification_set else None,
         block_epoch=block["ordinal"])
+    if parallel:
+        from .rapid_formal_parallel import verify_worker_result
+        verify_worker_result(process, result)
     return {"intent": _reference(root, intent_path), "declaration": intent["epoch_declaration"],
             "mode": lane.mode, "generation": lane.generation, "campaign_name": lane.campaign_name,
             "result_relpath": result.relative_to(spec.execution_root / "results").as_posix(),
@@ -913,10 +1014,15 @@ def verify_lane(spec: lanes.CaptureSpec, root: Path, path: Path) -> dict[str, An
     checked = _deep_lane(spec, root, _child(root, value["intent"]))
     if {key: item for key, item in value.items() if key != "completed_at"} != checked:
         raise ValueError("epoch completion differs from independently reopened capture")
-    intent = lanes._host_intent(admission._read(_child(root, value["intent"])))
+    intent_raw = admission._read(_child(root, value["intent"]))
+    intent = lanes._host_intent(intent_raw)
     if ("runtime_epoch" in value) != (kind == runtime_epochs.COMPLETE_TYPE):
         raise ValueError("historical completion cannot acquire collection runtime authority")
-    process = _open(path.parent / "host-process.json", lanes.PROCESS_TYPE)
+    process = lanes._verified_host_process(admission._read(path.parent / "host-process.json"), root,
+                                           intent_raw, value["campaign_name"])
+    if process.get("actuator") == "parallel-formal-worker":
+        from .rapid_formal_parallel import require_batch_closure
+        require_batch_closure(process)
     if not _time(intent["started_at"]) <= _time(process["completed_at"]) <= _time(value["completed_at"]) <= _time(admission._now()):
         raise ValueError("epoch completion chronology is invalid")
     return value
@@ -1305,7 +1411,11 @@ def check_corpus_in_image(spec: lanes.CaptureSpec, root: Path, path: Path, *, pu
     """The operator's final corpus action runs the closure in the bound image."""
     if path.parent != root:
         raise ValueError("epoch corpus action must use its explicit evidence root")
-    command = lanes.image_check_command(spec)
+    policy = verify_policy(spec, root)
+    reference = policy["image_check"]["execution"].get("capture_control_installation")
+    command = lanes.image_check_command(spec,
+        capture_control_installation=Path(reference["path"]) if reference is not None else None,
+        inherit_environment=False)
     index = command.index("--entrypoint")
     command[index:index] = ["--volume", f"{root}:{root}:{'rw' if publish else 'ro'}"]
     command[-2:] = [CORPUS_SCRIPT, json.dumps({"spec": spec.serializable(), "root": str(root),
@@ -1333,7 +1443,9 @@ def _parser() -> argparse.ArgumentParser:
         command = commands.add_parser(name)
         command.add_argument("--spec", type=Path, required=True, help="unchanged portable final-50 operator spec")
         command.add_argument("--evidence-root", type=Path, required=True, help="separate create-only epoch evidence tree")
-        if name == "register-class":
+        if name == "initialize":
+            command.add_argument("--installation", type=Path, help="closed zero-credit capture-control capsule in this evidence root")
+        elif name == "register-class":
             command.add_argument("--candidate-id", required=True)
             for flag in ("workload", "graph", "retirement"):
                 command.add_argument(f"--{flag}", type=Path, required=True)
@@ -1367,7 +1479,7 @@ def main(argv: list[str] | None = None) -> int:
         root = lanes._regular_directory(args.evidence_root)
         path = None
         if args.command == "initialize":
-            path = initialize_study(spec, root)
+            path = initialize_study(spec, root, installation=args.installation)
         elif args.command == "verify-policy":
             verify_policy(spec, root)
         elif args.command == "register-class":

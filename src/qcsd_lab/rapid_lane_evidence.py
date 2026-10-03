@@ -279,10 +279,25 @@ IMAGE_CHECK_SCRIPT = (
 )
 
 
-def image_check_command(spec: CaptureSpec) -> list[str]:
+def image_check_command(spec: CaptureSpec, *, capture_control_installation: Path | None = None,
+                        inherit_environment: bool = True) -> list[str]:
     _check_spec(spec)
     roots = {spec.data_root, spec.runtime_source_root, spec.module_root, spec.execution_root,
              spec.source_manifest.parent, spec.client_binary.parent, spec.base_launcher.parent}
+    extra_environment = {}
+    reference = (str(capture_control_installation) if capture_control_installation is not None
+                 else os.environ.get("QCSD_RAPID_COLLECTION_COMPATIBILITY") if inherit_environment else None)
+    if reference and _load(_read(Path(reference))).get("receipt_type") == "qcsd-rapid-v5-capture-control-installation-v2":
+        from . import rapid_capture_control_installation as installation
+        capsule_path = Path(reference)
+        payload, _ = installation.validate_capsule(capsule_path, actual_image=spec.collection_image_digest)
+        installation.check_current_spec(payload, spec)
+        roots.add(Path(payload["evidence_root"]))
+        for role in (payload["base_spec"], payload["runtime_spec"]):
+            roots.update(Path(role[key]) for key in ("data_root", "runtime_source_root", "module_root", "execution_root"))
+            roots.update(Path(role[key]).parent for key in ("source_manifest", "client_binary", "base_launcher"))
+        extra_environment = {"QCSD_RAPID_COLLECTION_COMPATIBILITY": str(capsule_path),
+                             "QCSD_RAPID_CAPTURE_CONTROL_INSTALLATION": str(capsule_path)}
     command = ["docker", "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL",
                "--security-opt", "no-new-privileges", "--user", f"{os.getuid()}:{os.getgid()}",
                "--tmpfs", "/tmp:rw,nosuid,noexec,size=64m"]
@@ -294,6 +309,7 @@ def image_check_command(spec: CaptureSpec) -> list[str]:
         "QCSD_LAB_ROOT": str(spec.runtime_source_root),
         "QCSD_LAB_SOURCE_METADATA": "/usr/share/qcsd-lab/source.json",
         "QCSD_LAB_IMAGE_DIGEST": spec.collection_image_digest,
+        **extra_environment,
     }.items():
         command += ["--env", f"{key}={value}"]
     return command + ["--entrypoint", "/opt/qcsd-venv/bin/python3", spec.collection_image_digest,
@@ -396,6 +412,9 @@ def check_bound_image(spec: CaptureSpec, root: Path) -> dict[str, Any]:
     record = {"command": command, "returncode": result.returncode, "started_at": started, "completed_at": _now(),
               "stdout": _put_object(root, result.stdout.encode()), "stderr": _put_object(root, result.stderr.encode()),
               "validator_script_sha256": _sha(IMAGE_CHECK_SCRIPT.encode())}
+    reference = os.environ.get("QCSD_RAPID_COLLECTION_COMPATIBILITY")
+    if reference and _load(_read(Path(reference))).get("receipt_type") == "qcsd-rapid-v5-capture-control-installation-v2":
+        record["capture_control_installation"] = {"path": str(Path(reference).absolute()), "sha256": _sha(_read(Path(reference)))}
     durable_create(root / f"image-check-{_sha(_json(record))}.json", _json(record))
     if result.returncode != 0:
         raise ValueError("bound collection image plan check failed; raw execution output retained")
@@ -605,6 +624,9 @@ def _actuate_host(spec: CaptureSpec, root: Path, directory: Path, command: list[
 
 
 def _validated_host_start(raw: bytes, intent_raw: bytes, *, campaign_name: str) -> dict[str, Any]:
+    if _load(raw).get("receipt_type") == "qcsd-rapid-v5-parallel-worker-start":
+        from .rapid_formal_parallel import verified_worker_start
+        return verified_worker_start(raw, intent_raw, campaign_name)
     value = admission._unpack(raw, PROCESS_START_TYPE)
     if (set(value) != {"command", "execution_root", "started_at", "intent_sha256", "host", "supervisor",
                        "gate_script_sha256", "supervisor_script_sha256"}
@@ -640,6 +662,9 @@ def _validated_host_start(raw: bytes, intent_raw: bytes, *, campaign_name: str) 
 
 
 def _verified_host_process(raw: bytes, root: Path, intent_raw: bytes, campaign_name: str) -> dict[str, Any]:
+    if _load(raw).get("receipt_type") == "qcsd-rapid-v5-parallel-worker-process":
+        from .rapid_formal_parallel import verified_worker_process
+        return verified_worker_process(raw, root, intent_raw, campaign_name)
     value = admission._unpack(raw, PROCESS_TYPE)
     if (set(value) != {"command", "execution_root", "started_at", "completed_at", "returncode", "interruption", "start", "stdout", "stderr"}
         or (type(value["returncode"]) is not int and value["returncode"] is not None)
@@ -753,6 +778,9 @@ def retire_lane(spec: CaptureSpec, root: Path, intent_path: Path) -> Path:
 
 
 def _verified_retirement(raw: bytes, root: Path, intent_raw: bytes, campaign_name: str) -> dict[str, Any]:
+    if _load(raw).get("receipt_type") == "qcsd-rapid-v5-parallel-worker-retirement":
+        from .rapid_formal_parallel import verified_worker_retirement
+        return verified_worker_retirement(raw, root, intent_raw, campaign_name)
     value = admission._unpack(raw, RETIREMENT_TYPE)
     if (set(value) != {"command", "execution_root", "started_at", "observed_at", "scientific_credit", "host_start", "retired_processes", "checks"}
         or value["scientific_credit"] is not False
@@ -791,6 +819,17 @@ def _verified_retirement(raw: bytes, root: Path, intent_raw: bytes, campaign_nam
 def _lineage_payload(spec: CaptureSpec, lane: plan.Lane, checked: Mapping[str, Any], root: Path,
                      predecessor_receipt: Path | None) -> dict[str, Any]:
     proof = checked["proof"]
+    installation_reference = checked["execution"].get("capture_control_installation")
+    if installation_reference is not None:
+        from . import rapid_capture_control_installation as installation
+        if (not isinstance(installation_reference, dict) or set(installation_reference) != {"path", "sha256"}
+            or not Path(installation_reference["path"]).is_absolute()
+            or _sha(_read(Path(installation_reference["path"]))) != installation_reference["sha256"]):
+            raise ValueError("lane image check changed its capture-control installation")
+        payload, _ = installation.validate_capsule(Path(installation_reference["path"]), actual_image=spec.collection_image_digest)
+        installation.check_current_spec(payload, spec)
+        if payload["evidence_root"] != str(root) or admission._utc(checked["execution"]["started_at"]) < admission._utc(payload["published_at"]):
+            raise ValueError("lane image check predates its actual capture-control installation")
     source = proof["runtime_source"]
     predecessor_name = predecessor_sha = None
     predecessor = None
@@ -850,41 +889,63 @@ def _lineage_payload(spec: CaptureSpec, lane: plan.Lane, checked: Mapping[str, A
         "predecessor_campaign_name": predecessor_name, "predecessor_campaign_sha256": predecessor_sha,
         "predecessor_intent": _put_object(root, _read(predecessor_receipt)) if predecessor_receipt else None,
         "predecessor_attempt": predecessor_attempt, "artifacts": artifacts, "image_check": checked,
+        **({"capture_control_installation": installation_reference} if installation_reference is not None else {}),
     }
+
+
+def prepare_lane_intent(spec: CaptureSpec, evidence_root: Path, campaign_name: str,
+                        checked: Mapping[str, Any], *, predecessor_intent: Path | None = None,
+                        actuator: str = "run") -> Path:
+    """Claim the ordinary lane identity after the actual immutable-image check.
+
+    Both actuators use the same plan, lineage and failed-only predecessor rules.
+    This helper creates no process, result namespace or scientific completion.
+    Its caller holds the capture lock while claiming the create-only lane.
+    """
+    root = _regular_directory(evidence_root)
+    if actuator not in {"run", "parallel-formal-worker"}:
+        raise ValueError("unknown lane actuator")
+    directory = root / "lanes" / campaign_name
+    if directory.exists() or directory.is_symlink():
+        raise FileExistsError("rapid physical lane destination is already claimed")
+    sites = _validate_image_proof(checked["proof"], spec)
+    lane = _lane(checked["proof"], campaign_name)
+    campaign = spec.campaign_dir / f"{campaign_name}.yml"
+    if _read(campaign) != plan.render_lane_campaign(lane, sites):
+        raise ValueError("launch campaign differs from the independently verified grid")
+    namespace = spec.execution_root / "results" / lane.campaign_name
+    if namespace.exists() or namespace.is_symlink():
+        raise FileExistsError("physical campaign namespace already contains an unbound or prior attempt")
+    lineage = _lineage_payload(spec, lane, checked, root, predecessor_intent)
+    directory.mkdir(parents=True)
+    lineage_path = directory / "lineage.json"
+    _create(root, lineage_path, LINEAGE_TYPE, lineage)
+    identity = {"collection_image_digest": spec.collection_image_digest, "runtime_source": checked["proof"]["runtime_source"],
+                "client_sha256": checked["proof"]["client_sha256"], "base_launcher_sha256": lineage["base_launcher_sha256"],
+                "host_launcher_sha256": lineage["host_launcher_sha256"], "traffic_hashes": checked["proof"]["traffic_hashes"]}
+    intent = {
+        "campaign_name": campaign_name, "campaign_sha256": _sha(_read(campaign)),
+        "logical_lane": lane.logical_name, "generation": lane.generation,
+        "bindings": checked["proof"]["bindings"], "runtime_identity": identity,
+        "lineage": {"path": lineage_path.relative_to(root).as_posix(), "sha256": _sha(_read(lineage_path))},
+        "started_at": _now(), "actuator": actuator, "scientific_credit": False,
+    }
+    intent_path = directory / "intent.json"
+    _create(root, intent_path, INTENT_TYPE, intent)
+    return intent_path
 
 
 def launch_lane(spec: CaptureSpec, evidence_root: Path, campaign_name: str, *, predecessor_intent: Path | None = None) -> Path:
     """Launch exactly one verified lane, retaining every process outcome."""
     root = _regular_directory(evidence_root)
     with capture_lock(spec.execution_root) as lock_descriptor:
+        # Retain the early create-only check before the potentially costly image call.
         directory = root / "lanes" / campaign_name
         if directory.exists() or directory.is_symlink():
             raise FileExistsError("rapid physical lane destination is already claimed")
         checked = check_bound_image(spec, root)
-        sites = _validate_image_proof(checked["proof"], spec)
-        lane = _lane(checked["proof"], campaign_name)
+        intent_path = prepare_lane_intent(spec, root, campaign_name, checked, predecessor_intent=predecessor_intent)
         campaign = spec.campaign_dir / f"{campaign_name}.yml"
-        if _read(campaign) != plan.render_lane_campaign(lane, sites):
-            raise ValueError("launch campaign differs from the independently verified grid")
-        namespace = spec.execution_root / "results" / lane.campaign_name
-        if namespace.exists() or namespace.is_symlink():
-            raise FileExistsError("physical campaign namespace already contains an unbound or prior attempt")
-        lineage = _lineage_payload(spec, lane, checked, root, predecessor_intent)
-        directory.mkdir(parents=True)
-        lineage_path = directory / "lineage.json"
-        _create(root, lineage_path, LINEAGE_TYPE, lineage)
-        identity = {"collection_image_digest": spec.collection_image_digest, "runtime_source": checked["proof"]["runtime_source"],
-                    "client_sha256": checked["proof"]["client_sha256"], "base_launcher_sha256": lineage["base_launcher_sha256"],
-                    "host_launcher_sha256": lineage["host_launcher_sha256"], "traffic_hashes": checked["proof"]["traffic_hashes"]}
-        intent = {
-            "campaign_name": campaign_name, "campaign_sha256": _sha(_read(campaign)),
-            "logical_lane": lane.logical_name, "generation": lane.generation,
-            "bindings": checked["proof"]["bindings"], "runtime_identity": identity,
-            "lineage": {"path": lineage_path.relative_to(root).as_posix(), "sha256": _sha(_read(lineage_path))},
-            "started_at": _now(), "actuator": "run", "scientific_credit": False,
-        }
-        intent_path = directory / "intent.json"
-        _create(root, intent_path, INTENT_TYPE, intent)
         env = dict(os.environ)
         env.update(QCSD_LAB_COLLECTION_IMAGE=spec.collection_image_digest,
                    QCSD_RAPID_IMAGE_SOURCE_QCSD=str(spec.base_launcher),
@@ -903,6 +964,21 @@ def _intent_and_lineage(spec: CaptureSpec, root: Path, intent_path: Path) -> tup
     intent = _payload(intent_path, INTENT_TYPE)
     lineage = _payload(admission._child(root, intent["lineage"]), LINEAGE_TYPE)
     checked = lineage["image_check"]
+    installation_reference = checked["execution"].get("capture_control_installation")
+    if lineage.get("capture_control_installation") != installation_reference:
+        raise ValueError("lane lineage differs from its actual image-check installation")
+    if installation_reference is not None:
+        from . import rapid_capture_control_installation as installation
+        if (not isinstance(installation_reference, dict) or set(installation_reference) != {"path", "sha256"}
+            or not Path(installation_reference["path"]).is_absolute()
+            or _sha(_read(Path(installation_reference["path"]))) != installation_reference["sha256"]):
+            raise ValueError("retained lane capture-control installation changed")
+        payload, _ = installation.validate_capsule(Path(installation_reference["path"]), actual_image=spec.collection_image_digest)
+        installation.check_current_spec(payload, spec)
+        if (payload["evidence_root"] != str(root)
+            or not admission._utc(payload["published_at"]) <= admission._utc(checked["execution"]["started_at"])
+                <= admission._utc(intent["started_at"])):
+            raise ValueError("retained lane predates its source-bound capture-control installation")
     if (checked["execution"]["returncode"] != 0 or type(checked["execution"]["returncode"]) is not int
         or checked["execution"]["validator_script_sha256"] != _sha(IMAGE_CHECK_SCRIPT.encode())
         or _json(_load(_object(root, checked["execution"]["stdout"]))) != _json(checked["proof"])):
@@ -917,7 +993,7 @@ def _intent_and_lineage(spec: CaptureSpec, root: Path, intent_path: Path) -> tup
         "client_sha256": proof["client_sha256"], "base_launcher_sha256": proof["base_launcher_sha256"],
         "host_launcher_sha256": proof["host_launcher_sha256"], "traffic_hashes": proof["traffic_hashes"],
     }
-    if (intent.get("scientific_credit") is not False or intent.get("actuator") != "run"
+    if (intent.get("scientific_credit") is not False or intent.get("actuator") not in {"run", "parallel-formal-worker"}
         or intent["logical_lane"] != lane.logical_name or type(intent["generation"]) is not int
         or intent["generation"] != lane.generation or intent["bindings"] != checked["proof"]["bindings"]
         or intent["campaign_sha256"] != _sha(plan.render_lane_campaign(lane, sites))
@@ -1022,6 +1098,9 @@ def complete_lane(spec: CaptureSpec, root: Path, intent_path: Path) -> Path:
         qualification_set_manifest_sha256=(next(site.qualification_set_manifest_sha256 for site in sites
                                               if site.workload_id == lane.workload_ids[0]) if lane.qualification_set else None),
     )
+    if intent["actuator"] == "parallel-formal-worker":
+        from .rapid_formal_parallel import verify_worker_result
+        verify_worker_result(process, result)
     _check_spec(spec)
     payload = {
         "intent": {"path": intent_path.relative_to(root).as_posix(), "sha256": _sha(_read(intent_path))},
@@ -1041,6 +1120,9 @@ def complete_lane(spec: CaptureSpec, root: Path, intent_path: Path) -> Path:
 
 
 def _process_matches_lane(process: Mapping[str, Any], spec: CaptureSpec, campaign_name: str) -> bool:
+    if process.get("actuator") == "parallel-formal-worker":
+        return (process.get("execution_root") == str(spec.execution_root)
+                and process.get("campaign_name") == campaign_name)
     original = process.get("execution_root")
     if not isinstance(original, str) or not Path(original).is_absolute() or ".." in Path(original).parts:
         return False
@@ -1097,6 +1179,10 @@ def verify_launch_receipt(
                                                   if site.workload_id == lane.workload_ids[0]) if lane.qualification_set else None),
         )
         seal_sha, accepted, credit = checked["result_seal_sha256"], checked["accepted"], checked["scientific_credit"]
+    if intent["actuator"] == "parallel-formal-worker":
+        from .rapid_formal_parallel import verify_worker_result, require_batch_closure
+        verify_worker_result(process, result)
+        require_batch_closure(process)
     expected = {
         "campaign_name": lane.campaign_name, "campaign_sha256": intent["campaign_sha256"],
         "profile_receipt_sha256": intent["bindings"]["profile_sha256"], "cohort_receipt_sha256": intent["bindings"]["cohort_sha256"],
