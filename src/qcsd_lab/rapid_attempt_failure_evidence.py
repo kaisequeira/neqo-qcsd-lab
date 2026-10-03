@@ -42,6 +42,7 @@ _MODULE_NAMES = {
 _KEYS = _MODULE_NAMES | {"neqo-qcsd-client", "tools.rapid_acquire"}
 APPLICATION_RESPONSE_POLICY_MODULE = "qcsd_lab.application_response_policy"
 CHAFF_QUALIFICATION_MODULE = "qcsd_lab.chaff_qualification"
+CAPTURE_ACCEPTANCE_POLICY_MODULE = "qcsd_lab.capture_acceptance_policy"
 _LATER_WRAPPER = "attempt-failure.json"
 _EXCEPTION_KEYS = {"exception_type", "exception_module", "message", "frames", "cause", "context", "suppress_context"}
 _PAYLOAD_KEYS = {"policy", "execution_binding", "runtime", "implementation_hashes", "started_at",
@@ -52,28 +53,36 @@ _FACT_KEYS = (_PAYLOAD_KEYS - {"runtime", "artifacts"}) | {
 
 
 def implementation_sources(*, application_response_policy: bool = False,
-                           qualified_chaff_origin_policy: bool = False) -> dict[str, Path]:
+                           qualified_chaff_origin_policy: bool = False,
+                           buflo_incoming_credit_release_policy: bool = False) -> dict[str, Path]:
     if (type(application_response_policy) is not bool or type(qualified_chaff_origin_policy) is not bool
-        or qualified_chaff_origin_policy and not application_response_policy):
+        or type(buflo_incoming_credit_release_policy) is not bool
+        or buflo_incoming_credit_release_policy and not qualified_chaff_origin_policy
+        or (qualified_chaff_origin_policy or buflo_incoming_credit_release_policy) and not application_response_policy):
         raise ValueError("attempt policy source inventory opt-in must be boolean")
     names = (_MODULE_NAMES | ({APPLICATION_RESPONSE_POLICY_MODULE} if application_response_policy else set())
-             | ({CHAFF_QUALIFICATION_MODULE} if qualified_chaff_origin_policy else set()))
+             | ({CHAFF_QUALIFICATION_MODULE} if qualified_chaff_origin_policy else set())
+             | ({CAPTURE_ACCEPTANCE_POLICY_MODULE} if buflo_incoming_credit_release_policy else set()))
     return {**{name: Path(importlib.import_module(name).__file__) for name in sorted(names)},
             "tools.rapid_acquire": Path(__file__).parents[2] / "tools" / "rapid_acquire.py",
             "neqo-qcsd-client": Path(os.environ.get("QCSD_NEQO_CLIENT", "/usr/local/bin/neqo-qcsd-client"))}
 
 
 def implementation_hashes(*, application_response_policy: bool = False,
-                          qualified_chaff_origin_policy: bool = False) -> dict[str, str]:
+                          qualified_chaff_origin_policy: bool = False,
+                          buflo_incoming_credit_release_policy: bool = False) -> dict[str, str]:
     return {name: page._sha(page._regular(path).read_bytes()) for name, path in
             implementation_sources(application_response_policy=application_response_policy,
-                qualified_chaff_origin_policy=qualified_chaff_origin_policy).items()}
+                qualified_chaff_origin_policy=qualified_chaff_origin_policy,
+                buflo_incoming_credit_release_policy=buflo_incoming_credit_release_policy).items()}
 
 
 def _hashes(value: Any) -> dict[str, str]:
     if (not isinstance(value, Mapping) or set(value) not in (
             _KEYS, _KEYS | {APPLICATION_RESPONSE_POLICY_MODULE},
-            _KEYS | {APPLICATION_RESPONSE_POLICY_MODULE, CHAFF_QUALIFICATION_MODULE})
+            _KEYS | {APPLICATION_RESPONSE_POLICY_MODULE, CHAFF_QUALIFICATION_MODULE},
+            _KEYS | {APPLICATION_RESPONSE_POLICY_MODULE, CHAFF_QUALIFICATION_MODULE,
+                     CAPTURE_ACCEPTANCE_POLICY_MODULE})
         or any(not isinstance(item, str) or page._SHA.fullmatch(item) is None for item in value.values())):
         raise ValueError("attempt observer implementation/client bindings are invalid")
     return dict(value)
@@ -116,7 +125,8 @@ def begin_attempt_action(execution_binding: Mapping[str, Any], expected_implemen
     page._freshness(now, now, not_before_utc)
     hashes = _hashes(expected_implementation_hashes)
     if implementation_hashes(application_response_policy=APPLICATION_RESPONSE_POLICY_MODULE in hashes,
-            qualified_chaff_origin_policy=CHAFF_QUALIFICATION_MODULE in hashes) != hashes:
+            qualified_chaff_origin_policy=CHAFF_QUALIFICATION_MODULE in hashes,
+            buflo_incoming_credit_release_policy=CAPTURE_ACCEPTANCE_POLICY_MODULE in hashes) != hashes:
         raise ValueError("attempt observer source/client changed after prospective freeze")
     return page._runtime_payload(page._binding(execution_binding))
 
@@ -229,7 +239,8 @@ def retain_attempt_failure(
     if begin_attempt_action(binding, hashes, not_before_utc) != dict(runtime):
         raise ValueError("attempt runtime source/image changed during backend execution")
     sources = implementation_sources(application_response_policy=APPLICATION_RESPONSE_POLICY_MODULE in hashes,
-        qualified_chaff_origin_policy=CHAFF_QUALIFICATION_MODULE in hashes)
+        qualified_chaff_origin_policy=CHAFF_QUALIFICATION_MODULE in hashes,
+        buflo_incoming_credit_release_policy=CAPTURE_ACCEPTANCE_POLICY_MODULE in hashes)
     raw_error = _exception(error, hashes, sources)
     parts, seen = [], set()
     def retain_trace(current):

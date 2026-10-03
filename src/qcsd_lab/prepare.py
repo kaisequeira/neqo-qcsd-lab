@@ -35,6 +35,7 @@ from .application_response_policy import (
     validate_application_response_policy_evidence,
     validate_application_responses,
 )
+from .capture_acceptance_policy import validate_buflo_preparation_policy
 from .discover import DiscoveryResult, discover_page, origin
 from .discovery_evidence import (
     evidence_sha256,
@@ -754,6 +755,7 @@ def prepare_workload(
     application_response_policy: str | None = None,
     primary_document_identity_policy: str | None = None,
     qualified_chaff_origin_policy: str | None = None,
+    buflo_incoming_credit_release_policy: str | None = None,
 ) -> PreparedWorkload:
     """Discover, probe, stability-check, and freeze one replay workload.
 
@@ -765,6 +767,14 @@ def prepare_workload(
     selected_response_policy = validate_application_response_policy(application_response_policy)
     selected_primary_policy = validate_primary_document_identity_policy(primary_document_identity_policy)
     validate_qualified_chaff_origin_policy(qualified_chaff_origin_policy)
+    if buflo_incoming_credit_release_policy is not None:
+        validate_buflo_preparation_policy({
+            "buflo_incoming_credit_release_policy": buflo_incoming_credit_release_policy,
+            "application_response_policy": application_response_policy,
+            "primary_document_identity_policy": primary_document_identity_policy,
+        })
+        if require_complete_coverage is not True:
+            raise ValueError("BuFLO incoming release policy requires unchanged complete graph coverage")
     if qualified_chaff_origin_policy is not None and not require_complete_coverage:
         raise ValueError("approved-origin chaff policy requires unchanged complete graph coverage")
     if selected_primary_policy == VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY and (
@@ -1015,6 +1025,8 @@ def prepare_workload(
                if primary_document_identity_policy is not None else {}),
             **({"qualified_chaff_origin_policy": qualified_chaff_origin_policy}
                if qualified_chaff_origin_policy is not None else {}),
+            **({"buflo_incoming_credit_release_policy": buflo_incoming_credit_release_policy}
+               if buflo_incoming_credit_release_policy is not None else {}),
             **({"primary_document_identity_evidence": primary_evidence}
                if primary_evidence is not None else {}),
             "udp_payload_qualification": udp_payload_qualification,

@@ -96,7 +96,8 @@ def test_revision6_live_boundary_receives_policy_and_preserves_failed_attempt(co
 
 def _prepared_variable_workload(context, tmp_path, monkeypatch, *, negative=True, capacity=True,
                                 amended=None, source_url="https://page.test/", workload_id="variable-page",
-                                output_root=None, alter_stability=None):
+                                output_root=None, alter_stability=None, preparation_policies=None,
+                                identity_chaff_headers=False):
     amended = amended or _amended_context(context, tmp_path, revision=6)
     def vary(index, run):
         row = run["responses"][0]
@@ -123,6 +124,9 @@ def _prepared_variable_workload(context, tmp_path, monkeypatch, *, negative=True
     if capacity:
         resource = deepcopy(discovery.resources[1])
         resource.update(id=2, url=source_url.rstrip("/") + "/static.js")
+        if identity_chaff_headers:
+            resource["headers"].extend([["accept-encoding", "gzip"], ["accept-language", "en-US"]])
+            resource["headers"].sort()
         discovery.resources.append(resource)
         audit = discovery.discovery_event_audit
         events = deepcopy(audit["events"][3:6])
@@ -132,6 +136,8 @@ def _prepared_variable_workload(context, tmp_path, monkeypatch, *, negative=True
                 event["url"] = resource["url"]
             if event["kind"] == "network-request":
                 event.update(occurrence_id="request-00000002", mapping={"kind": "resource", "resource_id": 2})
+                if identity_chaff_headers:
+                    event["safe_request_headers"] = deepcopy(resource["headers"])
             elif event["kind"] == "fetch-request":
                 event.update(fetch_id="fetch-2", network_occurrence_id="request-00000002")
             else:
@@ -179,7 +185,8 @@ def _prepared_variable_workload(context, tmp_path, monkeypatch, *, negative=True
     monkeypatch.setattr(prepare, "run", retained_native)
     result = prepare.prepare_workload(workload_id, source_url, [source_url.rstrip("/"), "https://cdn.test"],
         output_root=output_root or amended.root / "workloads", stability_interval_seconds=0, require_complete_coverage=True,
-        application_response_policy=APPLICATION_POLICY, primary_document_identity_policy=PRIMARY_POLICY)
+        application_response_policy=APPLICATION_POLICY, primary_document_identity_policy=PRIMARY_POLICY,
+        **(preparation_policies or {}))
     manifest = admission._load(result.path.read_bytes())
     graph = result.path.parent / "full-graph.json"
     graph.write_bytes(admission._json(admission._full_graph(manifest)))

@@ -294,10 +294,24 @@ def validate_class_study_preparation(
     application_response_policy: str | None = None,
     primary_document_identity_policy: str | None = None,
     qualified_chaff_origin_policy: str | None = None,
+    buflo_incoming_credit_release_policy: str | None = None,
 ) -> None:
     """Require the class study's bounded complete-coverage preparation contract."""
 
     candidate_preparation = manifest.get("preparation")
+    from .capture_acceptance_policy import FIELD as buflo_policy_field, validate_buflo_preparation_policy
+    if buflo_incoming_credit_release_policy is None:
+        if isinstance(candidate_preparation, Mapping) and buflo_policy_field in candidate_preparation:
+            raise ValueError(f"class-study workload {workload_id!r} BuFLO incoming release policy differs from its authority")
+    else:
+        expected_buflo_policy = validate_buflo_preparation_policy({
+            buflo_policy_field: buflo_incoming_credit_release_policy,
+            "application_response_policy": application_response_policy,
+            "primary_document_identity_policy": primary_document_identity_policy,
+        })
+        if (not isinstance(candidate_preparation, Mapping)
+            or validate_buflo_preparation_policy(candidate_preparation) != expected_buflo_policy):
+            raise ValueError(f"class-study workload {workload_id!r} BuFLO incoming release policy differs from its authority")
     from .application_response_policy import (
         qualified_chaff_origin_policy as declared_chaff_policy,
         validate_qualified_chaff_origin_policy,
@@ -1908,6 +1922,7 @@ class AcquisitionBackend(Protocol):
         application_response_policy: str | None = None,
         primary_document_identity_policy: str | None = None,
         qualified_chaff_origin_policy: str | None = None,
+        buflo_incoming_credit_release_policy: str | None = None,
     ) -> PreparedProbe: ...
 
 
@@ -1984,7 +1999,15 @@ class ExistingAcquisitionBackend:
         application_response_policy: str | None = None,
         primary_document_identity_policy: str | None = None,
         qualified_chaff_origin_policy: str | None = None,
+        buflo_incoming_credit_release_policy: str | None = None,
     ) -> PreparedProbe:
+        if buflo_incoming_credit_release_policy is not None:
+            from .capture_acceptance_policy import validate_buflo_preparation_policy
+            validate_buflo_preparation_policy({
+                "buflo_incoming_credit_release_policy": buflo_incoming_credit_release_policy,
+                "application_response_policy": application_response_policy,
+                "primary_document_identity_policy": primary_document_identity_policy,
+            })
         if output_root.exists() or output_root.is_symlink():
             try:
                 _regular_directory(output_root)
@@ -2016,6 +2039,8 @@ class ExistingAcquisitionBackend:
             from .application_response_policy import validate_qualified_chaff_origin_policy
             validate_qualified_chaff_origin_policy(qualified_chaff_origin_policy)
             policy_kwargs["qualified_chaff_origin_policy"] = qualified_chaff_origin_policy
+        if buflo_incoming_credit_release_policy is not None:
+            policy_kwargs["buflo_incoming_credit_release_policy"] = buflo_incoming_credit_release_policy
         prepared = prepare_workload(
             workload_id,
             url,
@@ -2034,7 +2059,9 @@ class ExistingAcquisitionBackend:
         validate_class_study_preparation(manifest, workload_id=workload_id,
                                          application_response_policy=application_response_policy,
                                          primary_document_identity_policy=primary_document_identity_policy,
-                                         qualified_chaff_origin_policy=qualified_chaff_origin_policy)
+                                         qualified_chaff_origin_policy=qualified_chaff_origin_policy,
+                                         **({"buflo_incoming_credit_release_policy": buflo_incoming_credit_release_policy}
+                                            if buflo_incoming_credit_release_policy is not None else {}))
         preparation = manifest["preparation"]
         current_image = os.environ.get("QCSD_LAB_IMAGE_DIGEST", "native")
         current_source = dict(source_metadata())

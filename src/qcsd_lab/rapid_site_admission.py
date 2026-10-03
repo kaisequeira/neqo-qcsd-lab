@@ -53,6 +53,7 @@ PREPARATION_MODULES = (
 )
 APPLICATION_RESPONSE_POLICY_MODULE = "qcsd_lab.application_response_policy"
 CHAFF_QUALIFICATION_MODULE = "qcsd_lab.chaff_qualification"
+CAPTURE_ACCEPTANCE_POLICY_MODULE = "qcsd_lab.capture_acceptance_policy"
 ROOT_SCREEN_RUNTIME_POLICY = "retained-component-bound-root-runtime-v1"
 ROOT_SCREEN_MODULES = {
     "curated": {"tools.h3_curated_survey", "qcsd_lab.h3_prebaseline", "qcsd_lab.rapid_study_profile"},
@@ -61,21 +62,27 @@ ROOT_SCREEN_MODULES = {
 
 
 def preparation_implementation_sources(*, application_response_policy: bool = False,
-                                     qualified_chaff_origin_policy: bool = False) -> dict[str, Path]:
+                                     qualified_chaff_origin_policy: bool = False,
+                                     buflo_incoming_credit_release_policy: bool = False) -> dict[str, Path]:
     """Identify producer/verifier bytes independently of the reused image source."""
     if (type(application_response_policy) is not bool or type(qualified_chaff_origin_policy) is not bool
-        or qualified_chaff_origin_policy and not application_response_policy):
+        or type(buflo_incoming_credit_release_policy) is not bool
+        or buflo_incoming_credit_release_policy and not qualified_chaff_origin_policy
+        or (qualified_chaff_origin_policy or buflo_incoming_credit_release_policy) and not application_response_policy):
         raise ValueError("preparation policy source inventory opt-in must be boolean")
     names = (*PREPARATION_MODULES, *((APPLICATION_RESPONSE_POLICY_MODULE,) if application_response_policy else ()),
-             *((CHAFF_QUALIFICATION_MODULE,) if qualified_chaff_origin_policy else ()))
+             *((CHAFF_QUALIFICATION_MODULE,) if qualified_chaff_origin_policy else ()),
+             *((CAPTURE_ACCEPTANCE_POLICY_MODULE,) if buflo_incoming_credit_release_policy else ()))
     return {name: Path(importlib.import_module(name).__file__) for name in names}
 
 
 def preparation_implementation_hashes(*, application_response_policy: bool = False,
-                                    qualified_chaff_origin_policy: bool = False) -> dict[str, str]:
+                                    qualified_chaff_origin_policy: bool = False,
+                                    buflo_incoming_credit_release_policy: bool = False) -> dict[str, str]:
     return {name: _sha(_read(path)) for name, path in
             preparation_implementation_sources(application_response_policy=application_response_policy,
-                qualified_chaff_origin_policy=qualified_chaff_origin_policy).items()}
+                qualified_chaff_origin_policy=qualified_chaff_origin_policy,
+                buflo_incoming_credit_release_policy=buflo_incoming_credit_release_policy).items()}
 
 
 def _json(value: Any) -> bytes:
@@ -233,37 +240,43 @@ class AdmissionContext:
 
     @property
     def application_response_policy(self) -> str | None:
-        if self.selection_amendment_revision not in {5, 6, 7}:
+        if self.selection_amendment_revision not in {5, 6, 7, 8}:
             return None
         return _selection_amendment_payload(self.selection_amendment_bytes)["application_response_policy"]
 
     @property
     def primary_document_identity_policy(self) -> str | None:
-        if self.selection_amendment_revision not in {6, 7}:
+        if self.selection_amendment_revision not in {6, 7, 8}:
             return None
         return _selection_amendment_payload(self.selection_amendment_bytes)["primary_document_identity_policy"]
 
     @property
     def qualified_chaff_origin_policy(self) -> str | None:
-        if self.selection_amendment_revision != 7:
+        if self.selection_amendment_revision not in {7, 8}:
             return None
         return _selection_amendment_payload(self.selection_amendment_bytes)["qualified_chaff_origin_policy"]
 
     @property
+    def buflo_incoming_credit_release_policy(self) -> str | None:
+        if self.selection_amendment_revision != 8:
+            return None
+        return _selection_amendment_payload(self.selection_amendment_bytes)["buflo_incoming_credit_release_policy"]
+
+    @property
     def page_policy_not_before_utc(self) -> datetime:
-        if self.selection_amendment_revision not in {2, 3, 4, 5, 6, 7}:
+        if self.selection_amendment_revision not in {2, 3, 4, 5, 6, 7, 8}:
             raise ValueError("automated screen and typed page-policy deferral require selection amendment revision 2")
         return self.browser_policy_not_before_utc
 
     @property
     def collector_not_before_utc(self) -> datetime:
-        if self.selection_amendment_revision not in {3, 4, 5, 6, 7}:
+        if self.selection_amendment_revision not in {3, 4, 5, 6, 7, 8}:
             raise ValueError("operational collector deferral requires selection amendment revision 3")
         return self.browser_policy_not_before_utc
 
     @property
     def attempt_not_before_utc(self) -> datetime:
-        if self.selection_amendment_revision not in {4, 5, 6, 7}:
+        if self.selection_amendment_revision not in {4, 5, 6, 7, 8}:
             raise ValueError("unsuccessful live attempt deferral requires selection amendment revision 4")
         return self.browser_policy_not_before_utc
 
@@ -557,18 +570,20 @@ def load_admission_context(root: Path) -> AdmissionContext:
         _selection_amendment_payload(context.selection_amendment_bytes)
         if set(context.mounted_module_hashes[BROWSER_POLICY_GROUP]) != set(implementation_sources()):
             raise ValueError("browser policy implementation inventory changed")
-    if context.selection_amendment_revision in {3, 4, 5, 6, 7}:
+    if context.selection_amendment_revision in {3, 4, 5, 6, 7, 8}:
         from .rapid_collector_failure_evidence import implementation_sources
         if set(context.mounted_module_hashes[COLLECTOR_GROUP]) != set(implementation_sources()):
             raise ValueError("collector implementation inventory changed")
-    if context.selection_amendment_revision in {4, 5, 6, 7}:
+    if context.selection_amendment_revision in {4, 5, 6, 7, 8}:
         from .rapid_attempt_failure_evidence import implementation_sources
         if set(context.mounted_module_hashes[ATTEMPT_GROUP]) != set(implementation_sources(
             application_response_policy=context.application_response_policy is not None, qualified_chaff_origin_policy=context.qualified_chaff_origin_policy is not None,
+            buflo_incoming_credit_release_policy=context.buflo_incoming_credit_release_policy is not None,
         )):
             raise ValueError("unsuccessful attempt implementation inventory changed")
     if set(context.mounted_module_hashes["preparation"]) != set(preparation_implementation_sources(
         application_response_policy=context.application_response_policy is not None, qualified_chaff_origin_policy=context.qualified_chaff_origin_policy is not None,
+            buflo_incoming_credit_release_policy=context.buflo_incoming_credit_release_policy is not None,
     )):
         raise ValueError("preparation implementation inventory changed")
     return context
@@ -733,7 +748,8 @@ def produce_automated_site_screen(
     page = _page_facts(context, candidate_id, navigation, page_h3)
     if type(selected_page_ordinal) is not int or selected_page_ordinal != page["selected_page_ordinal"]:
         raise ValueError("automated screen ordinal differs from the independently selected page")
-    if preparation_implementation_hashes(application_response_policy=context.application_response_policy is not None, qualified_chaff_origin_policy=context.qualified_chaff_origin_policy is not None) != context.mounted_module_hashes["preparation"]:
+    if preparation_implementation_hashes(application_response_policy=context.application_response_policy is not None, qualified_chaff_origin_policy=context.qualified_chaff_origin_policy is not None,
+            buflo_incoming_credit_release_policy=context.buflo_incoming_credit_release_policy is not None) != context.mounted_module_hashes["preparation"]:
         raise ValueError("automated screen implementation changed since the prospective source freeze")
     candidate = context.candidate(candidate_id)
     if unsafe_catalogue_domain_reason(candidate["domain"]) is not None:
@@ -804,7 +820,8 @@ def begin_page_policy_action(context: AdmissionContext) -> dict[str, Any]:
     from .rapid_browser_policy_evidence import implementation_hashes
     from .rapid_page_evidence import _runtime_payload, _validate_runtime
     context.page_policy_not_before_utc
-    if (preparation_implementation_hashes(application_response_policy=context.application_response_policy is not None, qualified_chaff_origin_policy=context.qualified_chaff_origin_policy is not None) != context.mounted_module_hashes["preparation"]
+    if (preparation_implementation_hashes(application_response_policy=context.application_response_policy is not None, qualified_chaff_origin_policy=context.qualified_chaff_origin_policy is not None,
+            buflo_incoming_credit_release_policy=context.buflo_incoming_credit_release_policy is not None) != context.mounted_module_hashes["preparation"]
         or implementation_hashes() != context.mounted_module_hashes[BROWSER_POLICY_GROUP]):
         raise ValueError("typed page-policy action implementation changed since prospective freeze")
     runtime = _runtime_payload(context.execution_binding)
@@ -1495,7 +1512,8 @@ class ObservedLiveBackend:
     def prepare(self, workload_id: str, url: str, approved: Sequence[str], output_root: Path,
                 *, origin_ip_pins: Mapping[str, str], application_response_policy: str | None = None,
                 primary_document_identity_policy: str | None = None,
-                qualified_chaff_origin_policy: str | None = None) -> Any:
+                qualified_chaff_origin_policy: str | None = None,
+                buflo_incoming_credit_release_policy: str | None = None) -> Any:
         from .class_acquisition import _validated_frozen_origin_ip_pins, _regular_directory
         _regular_directory(output_root.parent)
         if output_root.exists() or output_root.is_symlink():
@@ -1516,14 +1534,23 @@ class ObservedLiveBackend:
             validate_qualified_chaff_origin_policy(qualified_chaff_origin_policy)
         if qualified_chaff_origin_policy != self.context.qualified_chaff_origin_policy:
             raise ValueError("backend qualified chaff origin policy differs from prospective context")
+        if buflo_incoming_credit_release_policy is not None:
+            from .capture_acceptance_policy import FIELD, validate_buflo_preparation_policy
+            validate_buflo_preparation_policy({FIELD: buflo_incoming_credit_release_policy,
+                "application_response_policy": application_response_policy,
+                "primary_document_identity_policy": primary_document_identity_policy})
+        if buflo_incoming_credit_release_policy != self.context.buflo_incoming_credit_release_policy:
+            raise ValueError("backend BufLO release policy differs from prospective context")
         policy_kwargs = ({"application_response_policy": application_response_policy}
                          if application_response_policy is not None else {})
         if primary_document_identity_policy is not None:
             policy_kwargs["primary_document_identity_policy"] = primary_document_identity_policy
         if qualified_chaff_origin_policy is not None:
             policy_kwargs["qualified_chaff_origin_policy"] = qualified_chaff_origin_policy
+        if buflo_incoming_credit_release_policy is not None:
+            policy_kwargs["buflo_incoming_credit_release_policy"] = buflo_incoming_credit_release_policy
         producer = (self._prepare_with_padding_capacity
-                    if self.context.selection_amendment_revision in {6, 7} else self.backend.prepare)
+                    if self.context.selection_amendment_revision in {6, 7, 8} else self.backend.prepare)
         return self._call(producer, workload_id, url, approved, output_root,
                           origin_ip_pins=origin_ip_pins, **policy_kwargs)
 
@@ -1536,7 +1563,8 @@ class ObservedLiveBackend:
         validate_class_study_preparation(manifest, workload_id=workload_id,
             application_response_policy=self.context.application_response_policy,
             primary_document_identity_policy=self.context.primary_document_identity_policy,
-            qualified_chaff_origin_policy=self.context.qualified_chaff_origin_policy)
+            qualified_chaff_origin_policy=self.context.qualified_chaff_origin_policy,
+            buflo_incoming_credit_release_policy=self.context.buflo_incoming_credit_release_policy)
         preparation = manifest["preparation"]
         if (preparation["source_url"] != url
             or preparation["lab_source"] != dict(self.context.expected_runtime_source)
@@ -1546,7 +1574,7 @@ class ObservedLiveBackend:
         if not _has_response_padding_capacity(manifest,
                 qualified_chaff_origin_policy=self.context.qualified_chaff_origin_policy):
             raise InsufficientPaddingCapacityError(_APPROVED_ORIGIN_PADDING_CAPACITY_FAILURE
-                if self.context.selection_amendment_revision == 7 else _PADDING_CAPACITY_FAILURE)
+                if self.context.selection_amendment_revision in {7, 8} else _PADDING_CAPACITY_FAILURE)
         return result
 
 
@@ -1708,14 +1736,16 @@ def verify_prepared_workload(
                            if context.application_response_policy is not None else None)
     cache_key = (_sha(raw), _sha(graph_raw), selected_page_url, _sha(_json(context.expected_runtime_source)),
                  context.application_response_policy, context.primary_document_identity_policy,
-                 context.qualified_chaff_origin_policy, policy_evidence_sha)
+                 context.qualified_chaff_origin_policy, context.buflo_incoming_credit_release_policy,
+                 policy_evidence_sha)
     if cache_key in context.proof_cache["prepared"]:
         return deepcopy(context.proof_cache["prepared"][cache_key])
     validate_manifest(manifest)
     validate_class_study_preparation(manifest, workload_id=Path(path).stem,
                                      application_response_policy=context.application_response_policy,
                                      primary_document_identity_policy=context.primary_document_identity_policy,
-                                     qualified_chaff_origin_policy=context.qualified_chaff_origin_policy)
+                                     qualified_chaff_origin_policy=context.qualified_chaff_origin_policy,
+                                     buflo_incoming_credit_release_policy=context.buflo_incoming_credit_release_policy)
     preparation = manifest["preparation"]
     if (preparation["source_url"] != selected_page_url
         or preparation["lab_source"] != dict(context.expected_runtime_source)
@@ -1724,13 +1754,13 @@ def verify_prepared_workload(
         raise ValueError("prepared workload/page/source or its complete resource graph differs")
     resources = manifest["resources"]
     primary = origin(preparation["final_url"])
-    if context.selection_amendment_revision in {6, 7}:
+    if context.selection_amendment_revision in {6, 7, 8}:
         # Variable primary HTML cannot supply an exact-identity padding body.
         # This screens potential capacity; sustained chaff qualification remains separate.
         if not _has_response_padding_capacity(manifest,
                 qualified_chaff_origin_policy=context.qualified_chaff_origin_policy):
             raise ValueError(_APPROVED_ORIGIN_PADDING_CAPACITY_FAILURE
-                if context.selection_amendment_revision == 7 else _PADDING_CAPACITY_FAILURE)
+                if context.selection_amendment_revision in {7, 8} else _PADDING_CAPACITY_FAILURE)
     count = sum(origin(resource["url"]) != primary for resource in resources)
     facts = {
         "selected_page_url": selected_page_url, "prepared_workload_sha256": _sha(raw),
@@ -1746,6 +1776,8 @@ def verify_prepared_workload(
         facts["primary_document_identity_policy"] = context.primary_document_identity_policy
     if context.qualified_chaff_origin_policy is not None:
         facts["qualified_chaff_origin_policy"] = context.qualified_chaff_origin_policy
+    if context.buflo_incoming_credit_release_policy is not None:
+        facts["buflo_incoming_credit_release_policy"] = context.buflo_incoming_credit_release_policy
     context.proof_cache["prepared"][cache_key] = facts
     return deepcopy(facts)
 
@@ -1776,7 +1808,7 @@ def prepare_site(
 ) -> Path:
     """Run the existing live full-graph preparer in one retained, retryable attempt."""
     page = _page_facts(context, candidate_id, navigation, page_h3)
-    if context.selection_amendment_revision in {2, 3, 4, 5, 6, 7}:
+    if context.selection_amendment_revision in {2, 3, 4, 5, 6, 7, 8}:
         if human_review is not None or automated_screen is None:
             raise ValueError("revision 2 preparation requires its distinct automated screen")
         screen = verify_automated_site_screen(automated_screen, context, candidate_id=candidate_id)
@@ -1794,7 +1826,8 @@ def prepare_site(
     if backend is None and dict(source_metadata()) != dict(context.expected_runtime_source):
         raise ValueError("preparation runtime is outside the frozen clean admission image")
     implementation_hashes = preparation_implementation_hashes(
-        application_response_policy=context.application_response_policy is not None, qualified_chaff_origin_policy=context.qualified_chaff_origin_policy is not None)
+        application_response_policy=context.application_response_policy is not None, qualified_chaff_origin_policy=context.qualified_chaff_origin_policy is not None,
+            buflo_incoming_credit_release_policy=context.buflo_incoming_credit_release_policy is not None)
     if implementation_hashes != context.mounted_module_hashes["preparation"]:
         raise ValueError("preparation implementation changed since the prospective source freeze")
     attempt = _new_attempt(context, candidate_id, "prepare")
@@ -1804,7 +1837,7 @@ def prepare_site(
     }
     durable_create(attempt / "inputs.json", _json(references))
     backend = backend or ExistingAcquisitionBackend()
-    if context.selection_amendment_revision in {4, 5, 6, 7}:
+    if context.selection_amendment_revision in {4, 5, 6, 7, 8}:
         backend = ObservedLiveBackend(backend, context, candidate_id, attempt,
             _attempt_action(context.candidate(candidate_id), page),
             {"navigation": navigation, "page_h3": page_h3, "automated_screen": automated_screen})
@@ -1812,7 +1845,7 @@ def prepare_site(
     action_runtime = None
     collector_runtime = None
     try:
-        if context.selection_amendment_revision in {2, 3, 4, 5, 6, 7}:
+        if context.selection_amendment_revision in {2, 3, 4, 5, 6, 7, 8}:
             action_runtime = begin_page_policy_action(context)
         if context.selection_amendment_revision == 3:
             collector_runtime = begin_operational_collector_action(context)
@@ -1827,6 +1860,8 @@ def prepare_site(
             policy_kwargs["primary_document_identity_policy"] = context.primary_document_identity_policy
         if context.qualified_chaff_origin_policy is not None:
             policy_kwargs["qualified_chaff_origin_policy"] = context.qualified_chaff_origin_policy
+        if context.buflo_incoming_credit_release_policy is not None:
+            policy_kwargs["buflo_incoming_credit_release_policy"] = context.buflo_incoming_credit_release_policy
         probe = backend.prepare(workload_id, page["url"], approved, attempt / "workloads",
                                 origin_ip_pins=discovery.origin_ip_pins, **policy_kwargs)
         manifest_path = Path(probe.prepared.path)
@@ -1835,7 +1870,8 @@ def prepare_site(
         validate_class_study_preparation(manifest, workload_id=workload_id,
                                          application_response_policy=context.application_response_policy,
                                          primary_document_identity_policy=context.primary_document_identity_policy,
-                                         qualified_chaff_origin_policy=context.qualified_chaff_origin_policy)
+                                         qualified_chaff_origin_policy=context.qualified_chaff_origin_policy,
+                                         buflo_incoming_credit_release_policy=context.buflo_incoming_credit_release_policy)
         graph_path = attempt / "full-resource-graph.json"
         durable_create(graph_path, _json(_full_graph(manifest)))
         facts = verify_prepared_workload(manifest_path, graph_path, context, selected_page_url=page["url"])
@@ -1919,7 +1955,7 @@ def _preparation_facts(path: Path, context: AdmissionContext, candidate_id: str)
         fields |= {"started_at"}
     if set(value) != fields:
         raise ValueError("preparation receipt fields changed")
-    safety_key = "automated_screen" if context.selection_amendment_revision in {2, 3, 4, 5, 6, 7} else "human_review"
+    safety_key = "automated_screen" if context.selection_amendment_revision in {2, 3, 4, 5, 6, 7, 8} else "human_review"
     if (value["candidate_id"] != candidate_id or value["provenance_sha256"] != context.provenance_sha256
         or value["scientific_credit"] is not False or _utc(value["completed_at"]) < context.not_before_utc
         or value["implementation_hashes"] != context.mounted_module_hashes["preparation"]
@@ -1933,7 +1969,7 @@ def _preparation_facts(path: Path, context: AdmissionContext, candidate_id: str)
         _child(context.root, value["inputs"][key]) for key in ("navigation", "page_h3", safety_key)
     )
     page = _page_facts(context, candidate_id, navigation, page_h3)
-    if context.selection_amendment_revision in {2, 3, 4, 5, 6, 7}:
+    if context.selection_amendment_revision in {2, 3, 4, 5, 6, 7, 8}:
         review = verify_automated_site_screen(review_path, context, candidate_id=candidate_id)
         if review["selected_page_h3_receipt_sha256"] != page["receipt_sha256"]:
             raise ValueError("prepared page automated screen differs from exact page")
@@ -2004,7 +2040,7 @@ def browser_policy_failure_facts(path: Path, context: AdmissionContext, candidat
 
 
 def _root_allows_policy_progression(context: AdmissionContext, screen: Mapping[str, Any]) -> bool:
-    if context.selection_amendment_revision not in {3, 4, 5, 6, 7}:
+    if context.selection_amendment_revision not in {3, 4, 5, 6, 7, 8}:
         return screen["outcome"] == "known-valid"
     from .rapid_selection_amendment import root_screen_allows_browser_progression
     return root_screen_allows_browser_progression(screen, revision=context.selection_amendment_revision)
@@ -2013,9 +2049,9 @@ def _root_allows_policy_progression(context: AdmissionContext, screen: Mapping[s
 def _terminal_facts(value: Mapping[str, Any], context: AdmissionContext) -> dict[str, Any]:
     fields = {"candidate_id", "provenance_sha256", "root_surveys", "human_review",
               "reviewed_url", "preparation", "defer_root", "facts", "completed_at", "scientific_credit"}
-    revision_two = context.selection_amendment_revision in {2, 3, 4, 5, 6, 7}
-    revision_three = context.selection_amendment_revision in {3, 4, 5, 6, 7}
-    revision_four = context.selection_amendment_revision in {4, 5, 6, 7}
+    revision_two = context.selection_amendment_revision in {2, 3, 4, 5, 6, 7, 8}
+    revision_three = context.selection_amendment_revision in {3, 4, 5, 6, 7, 8}
+    revision_four = context.selection_amendment_revision in {4, 5, 6, 7, 8}
     if revision_two:
         fields |= {"automated_screen"}
     valid_fields = (fields, fields | {"browser_policy_failure"}, fields | {"page_policy_failure"}) if revision_two else (
@@ -2221,11 +2257,11 @@ def produce_site_terminal(
 ) -> Path:
     if browser_policy_failure is not None and context.selection_amendment_bytes is None:
         raise ValueError("browser policy deferral requires a prospective selection amendment")
-    if (automated_screen is not None or page_policy_failure is not None) and context.selection_amendment_revision not in {2, 3, 4, 5, 6, 7}:
+    if (automated_screen is not None or page_policy_failure is not None) and context.selection_amendment_revision not in {2, 3, 4, 5, 6, 7, 8}:
         raise ValueError("automated screen and typed page-policy deferral require selection amendment revision 2")
-    if collector_failure is not None and context.selection_amendment_revision not in {3, 4, 5, 6, 7}:
+    if collector_failure is not None and context.selection_amendment_revision not in {3, 4, 5, 6, 7, 8}:
         raise ValueError("collector deferral requires selection amendment revision 3")
-    if attempt_failure is not None and context.selection_amendment_revision not in {4, 5, 6, 7}:
+    if attempt_failure is not None and context.selection_amendment_revision not in {4, 5, 6, 7, 8}:
         raise ValueError("unsuccessful attempt deferral requires selection amendment revision 4")
     if sum(path is not None for path in (browser_policy_failure, page_policy_failure, collector_failure, attempt_failure)) > 1:
         raise ValueError("terminal cannot combine separate browser, page-policy and collector failures")
@@ -2240,7 +2276,7 @@ def produce_site_terminal(
     }
     if browser_policy_failure is not None:
         value["browser_policy_failure"] = import_evidence(context.root, browser_policy_failure)
-    if context.selection_amendment_revision in {2, 3, 4, 5, 6, 7}:
+    if context.selection_amendment_revision in {2, 3, 4, 5, 6, 7, 8}:
         value["automated_screen"] = import_evidence(context.root, automated_screen) if automated_screen else None
     if page_policy_failure is not None:
         value["page_policy_failure"] = import_evidence(context.root, page_policy_failure)
@@ -2405,7 +2441,7 @@ def acquisition_status(context: AdmissionContext) -> dict[str, Any]:
         "terminal_count": len(terminals), "admitted_site_count": admitted,
         "next_candidate": next_candidate, "attempts": records,
         "pending_requirement": (("root-survey-or-navigation-exact-page-h3-automated-url-domain-screen-and-full-graph-preparation"
-                                  if context.selection_amendment_revision in {2, 3, 4, 5, 6, 7} else
+                                  if context.selection_amendment_revision in {2, 3, 4, 5, 6, 7, 8} else
                                   "root-survey-or-human-review-navigation-exact-page-h3-and-full-graph-preparation") if next_candidate else None),
         "formal_accepted_trace_count": 0, "formal_trace_target": 16_000,
         "capture_authority": "none-site-acquisition-only",

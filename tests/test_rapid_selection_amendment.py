@@ -419,7 +419,7 @@ def test_v2_rehashed_rule_or_typed_failure_contract_changes_fail(change: str):
         ))
 
 
-@pytest.mark.parametrize("revision", [0, 8, True, "2"])
+@pytest.mark.parametrize("revision", [0, 9, True, "2"])
 def test_unknown_or_loosely_typed_amendment_revision_fails(revision):
     with pytest.raises(ValueError, match="revision"):
         amendment.build_selection_amendment(
@@ -599,7 +599,7 @@ def test_v4_normal_cohort_still_requires_fifty_full_graph_sites(context_v3):
         _build(context_v3)
 
 
-@pytest.mark.parametrize("revision", [5, 6, 7])
+@pytest.mark.parametrize("revision", [5, 6, 7, 8])
 def test_v5_application_policy_cohort_keeps_50_complete_sites_and_bound_capture_grid(context_v3, tmp_path, revision):
     from qcsd_lab import rapid_capture_plan as capture
     from qcsd_lab.application_response_policy import TERMINAL_HTTP_ERROR_POLICY
@@ -614,14 +614,18 @@ def test_v5_application_policy_cohort_keeps_50_complete_sites_and_bound_capture_
             if revision >= 6:
                 row["admission"].update(primary_document_identity_policy=amendment.VARIABLE_PRIMARY_DOCUMENT_POLICY,
                     application_response_evidence_sha256="3" * 64)
-            if revision == 7:
+            if revision >= 7:
                 row["admission"]["qualified_chaff_origin_policy"] = "prepared-approved-origins-v1"
+            if revision == 8:
+                row["admission"]["buflo_incoming_credit_release_policy"] = "rapid-v5-half-period-10000us-v1"
     value = _build(context_v3)
     assert value["payload"]["application_response_policy"] == TERMINAL_HTTP_ERROR_POLICY
     if revision >= 6:
         assert value["payload"]["primary_document_identity_policy"] == amendment.VARIABLE_PRIMARY_DOCUMENT_POLICY
-    if revision == 7:
+    if revision >= 7:
         assert value["payload"]["qualified_chaff_origin_policy"] == "prepared-approved-origins-v1"
+    if revision == 8:
+        assert value["payload"]["buflo_incoming_credit_release_policy"] == "rapid-v5-half-period-10000us-v1"
     assert len(value["payload"]["selected_candidate_ids"]) == 50
     assert value["payload"]["formal_sample_target"] == 16000
     cohort_path, amendment_path = tmp_path / "cohort.json", tmp_path / "amendment.json"
@@ -633,6 +637,20 @@ def test_v5_application_policy_cohort_keeps_50_complete_sites_and_bound_capture_
         f"https://{candidate['domain']}", f"qualification-{index // 5}", f"{index // 5 + 1:064x}")
         for index, candidate in enumerate(value["payload"]["selected_candidates"]))
     assert sum(lane.sample_count for lane in capture.plan_lanes(sites, final=True, study_version=5)) == 16000
+    if revision == 8:
+        for change in ("missing-policy", "wrong-policy", "float-target"):
+            altered = copy.deepcopy(value["payload"])
+            if change == "missing-policy":
+                del altered["buflo_incoming_credit_release_policy"]
+            elif change == "wrong-policy":
+                altered["buflo_incoming_credit_release_policy"] = "relax-all-deadlines"
+            else:
+                altered["formal_sample_target"] = 16000.0
+            changed = rapid._bind(altered, amendment.AMENDED_COHORT_RECEIPT_TYPE, schema_version=5)
+            with pytest.raises(ValueError, match="deep-verified ordered selection"):
+                amendment.validate_amended_cohort_receipt(changed, PROFILE, SOURCE, CATALOGUE,
+                    selection_amendment=context_v3["amendment"], execution_binding=context_v3["binding"],
+                    deep_verify_terminal=context_v3["verify"])
     first = next(row for row in context_v3["records"].values() if row["admission"] is not None)
     first["admission"]["application_response_policy"] = "http-2xx-only-v1"
     with pytest.raises(ValueError, match="prospective contract"):
