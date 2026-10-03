@@ -187,6 +187,52 @@ def _campaigns(value: dict[str, Any]):
     return campaigns
 
 
+def _execution_parameter_context(value: dict[str, Any]):
+    """Keep source identity separate from identical execution fixture copies.
+
+    The immutable-image source check retains QCSD_LAB_ROOT. Only the existing
+    parameter fixture location guard uses the declared execution root during
+    input loading, after all four canonical file bytes match the clean source.
+    """
+    from contextlib import contextmanager
+    from . import parameters
+    import yaml
+
+    @contextmanager
+    def checked_inputs():
+        source = regular_dir(Path(value["runtime"]["runtime_source_root"]))
+        execution = regular_dir(Path(value["runtime"]["execution_root"]))
+        relative = Path("config/defense-params")
+        for filename in ("buflo-live.json", "buflo-live.json.provenance.json",
+                         "cs-buflo-ctsp-live.json", "cs-buflo-ctsp-live.json.provenance.json"):
+            if read(execution / relative / filename) != read(source / relative / filename):
+                raise ValueError("parallel execution parameter fixture differs from the clean runtime source")
+        canonical = {"buflo": "buflo-live.json", "cs_buflo": "cs-buflo-ctsp-live.json"}
+        for row in value["campaigns"]:
+            path = Path(row["path"])
+            campaign = yaml.safe_load(read(path))
+            if not isinstance(campaign, dict) or not isinstance(campaign.get("defenses"), list):
+                raise ValueError("parallel input context requires an explicit campaign defense list")
+            for defense in campaign.get("defenses", ()):
+                if isinstance(defense, dict) and "parameters" in defense:
+                    filename = canonical.get(defense.get("kind"))
+                    if (filename is None or not isinstance(defense["parameters"], str)
+                        or Path(defense["parameters"]).is_absolute()):
+                        raise ValueError("parallel campaign must select its canonical execution parameter fixture")
+                    selected = path.parent / defense["parameters"]
+                    read(selected)
+                    if selected.resolve() != execution / relative / filename:
+                        raise ValueError("parallel campaign must select its canonical execution parameter fixture")
+        previous = parameters.LAB_ROOT
+        parameters.LAB_ROOT = execution
+        try:
+            yield
+        finally:
+            parameters.LAB_ROOT = previous
+
+    return checked_inputs()
+
+
 def image_preflight(path: Path, expected_sha: str) -> dict[str, Any]:
     """Executed in the actual collection image before either worker exists."""
     from .rapid_lane_evidence import executed_image_runtime_check
@@ -206,7 +252,8 @@ def image_preflight(path: Path, expected_sha: str) -> dict[str, Any]:
     module_path = Path(value["runtime"]["runtime_source_root"]) / "src/qcsd_lab/rapid_parallel_capture.py"
     if read(Path(__file__)) != read(module_path):
         raise ValueError("parallel coordinator installed bytes differ from collection source")
-    campaigns = _campaigns(value)
+    with _execution_parameter_context(value):
+        campaigns = _campaigns(value)
     files = {}
     hosts = set()
     for campaign in campaigns:
@@ -418,7 +465,8 @@ def verify_results(path: Path, output: Path) -> dict[str, Any]:
         return formal_verify(path, output)
     verify_operator_closure(path, output, value)
     reopen_launch(path, output, value)
-    campaigns = _campaigns(value)
+    with _execution_parameter_context(value):
+        campaigns = _campaigns(value)
     intent = load(output / "batch-intent.json")
     if (intent["authority_sha256"] != sha(read(path))
         or sha(read(output / "image-preflight.json")) != intent["image_preflight_sha256"]

@@ -28,6 +28,8 @@ def sources():
     for name in control.NEW_FILES:
         old.pop(name, None)
     for name in (*control.CONTROL_DEFINITIONS, "qcsd-lab"):
+        if name in control.NEW_FILES:
+            continue
         old[name] = subprocess.check_output(["git", "show", f"{baseline}:{name}"], cwd=root)
     for current in (old, new):
         current["config/defense-params/buflo-live.json"] = b'{"fixed": true}\n'
@@ -101,6 +103,28 @@ def test_real_parallel_diff_keeps_all_eight_acquisition_groups_and_qualification
         historical.validate_compatibility(runtime(old), runtime(new, successor=True), old, new,
             {"schema_version": 1, "artifact_type": historical.REVIEW_TYPE,
              "repair_scope": "collector-lifecycle-only", "reason": "Not historical scope", "changes": {}})
+
+
+def test_prospective_execution_context_has_only_named_common_and_formal_units():
+    root = Path(__file__).resolve().parents[1]
+    names = ("src/qcsd_lab/rapid_parallel_capture.py", "src/qcsd_lab/rapid_formal_parallel.py")
+    additions = subprocess.check_output(["git", "log", "-S", "def _execution_parameter_context(",
+        "--format=%H", "--", names[0]], cwd=root).decode().splitlines()
+    baseline = f"{additions[-1]}^" if additions else "HEAD"
+    old = {name: subprocess.check_output(["git", "show", f"{baseline}:{name}"], cwd=root)
+           for name in names}
+    new = {name: (root / name).read_bytes() for name in names}
+    changes, _ = control.source_changes(old, new)
+    assert {name: row["units"] for name, row in changes.items()} == {
+        names[0]: ["_execution_parameter_context", "image_preflight", "verify_results"],
+        names[1]: ["image_preflight", "resolve_dns"]}
+    changed = dict(new)
+    # No blanket allowance for the rest of the previously installed helper.
+    changed[names[1]] = changed[names[1]].replace(
+        b"def worker_environment(value, index, *, fact=None):", b"def worker_environment(value, index, *, fact=None, bypass=False):")
+    assert changed[names[1]] != new[names[1]]
+    with pytest.raises(ValueError, match="protected code"):
+        control.source_changes(old, changed)
 
 
 @pytest.mark.parametrize("mutation", ["missing_group", "missing_module", "wrong_client", "wrong_digest"])

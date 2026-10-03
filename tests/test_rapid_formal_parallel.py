@@ -44,6 +44,13 @@ def formal_setup(ordinary_setup, monkeypatch):
     spec = replace(setup.spec, module_root=setup.spec.runtime_source_root)
     spec.host_launcher.write_bytes(spec.base_launcher.read_bytes())
     project = Path(__file__).resolve().parents[1]
+    for name in ("buflo-live.json", "buflo-live.json.provenance.json",
+                 "cs-buflo-ctsp-live.json", "cs-buflo-ctsp-live.json.provenance.json"):
+        relative = Path("config/defense-params") / name
+        for root in (spec.runtime_source_root, spec.execution_root):
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes((project / relative).read_bytes())
     for name in ("rapid_parallel_capture.py", "rapid_formal_parallel.py"):
         target = spec.runtime_source_root / "src/qcsd_lab" / name
         target.write_bytes((project / "src/qcsd_lab" / name).read_bytes())

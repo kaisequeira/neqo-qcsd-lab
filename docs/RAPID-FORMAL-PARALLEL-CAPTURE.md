@@ -123,6 +123,14 @@ The launcher resolves each worker's full origin graph independently and checks
 the actual inspected containers before releasing either worker. The first
 worker cannot write the second worker's canonical result folder.
 
+Image preflight keeps the clean Git source root separate from execution
+configuration. Before campaign loading it compares both fixed BuFLO and
+CS-BuFLO parameter files and their adjacent provenance receipts with the clean
+source, requires campaigns to select those canonical execution copies, and
+uses the execution root only for the existing parameter location guard. It
+restores that guard afterward. Installed source and client checks keep their
+original source identity; ordinary worker validation still runs under `/lab`.
+
 ## If one lane fails
 
 The launcher records that worker's actual exit and raw logs, removes only its

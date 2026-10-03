@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from qcsd_lab import rapid_parallel_capture as parallel
 from qcsd_lab.experiment import scheduler_runtime_receipt
@@ -29,6 +30,12 @@ def context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     runtime, execution, output = (tmp_path / name for name in ("runtime", "execution", "output"))
     for directory in (runtime, execution, output):
         directory.mkdir()
+    project = Path(__file__).resolve().parents[1]
+    for root in (runtime, execution):
+        (root / "config/defense-params").mkdir(parents=True)
+        for name in ("buflo-live.json", "buflo-live.json.provenance.json",
+                     "cs-buflo-ctsp-live.json", "cs-buflo-ctsp-live.json.provenance.json"):
+            (root / "config/defense-params" / name).write_bytes((project / "config/defense-params" / name).read_bytes())
     for path in (runtime / "qcsd-lab", execution / "qcsd-lab"):
         path.write_bytes(b"identical frozen launcher\n")
     client = runtime / "client"
@@ -41,7 +48,10 @@ def context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     for name in ("buflo", "cs-buflo"):
         path = execution / f"config/campaigns/{name}.yml"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(f"frozen {name} campaign\n".encode())
+        kind, parameter = (("buflo", "buflo-live.json") if name == "buflo"
+                           else ("cs_buflo", "cs-buflo-ctsp-live.json"))
+        path.write_text(yaml.safe_dump({"defenses": [{"name": name, "kind": kind,
+            "parameters": "../defense-params/" + parameter}]}))
         campaigns.append({"path": str(path), "sha256": parallel.sha(path.read_bytes())})
     inspected, workers, sidecars = _peer_inputs()
     second = copy.deepcopy(inspected[-1])
@@ -272,7 +282,7 @@ def test_retirement_rejects_cross_lane_absence_or_wrong_peer(context, failure: s
 
 @pytest.mark.parametrize("host_returncode", [0, 1])
 def test_nonzero_host_blocks_success_even_when_both_lanes_deep_pass(context, monkeypatch, host_returncode) -> None:
-    from qcsd_lab import verification
+    from qcsd_lab import verification, parameters
     from qcsd_lab.rapid_lane_evidence import HOST_GATE_SCRIPT
 
     campaigns = []
@@ -284,7 +294,11 @@ def test_nonzero_host_blocks_success_even_when_both_lanes_deep_pass(context, mon
         preflight["campaigns"][index].update(workloads={"site": parallel.sha(context.workload.read_bytes())},
                                            qualification_manifest_sha256="6" * 64)
     _write(context.output / "image-preflight.json", preflight)
-    monkeypatch.setattr(parallel, "_campaigns", lambda _value: campaigns)
+    original_parameter_root = parameters.LAB_ROOT
+    def parsed_campaigns(_value):
+        assert parameters.LAB_ROOT == Path(context.authority["runtime"]["execution_root"])
+        return campaigns
+    monkeypatch.setattr(parallel, "_campaigns", parsed_campaigns)
     _released(context)
     parallel.retire_lane(context.output, 0, _retirement(context, 0))
     second_retirement = _retirement(context, 1)
@@ -329,6 +343,7 @@ def test_nonzero_host_blocks_success_even_when_both_lanes_deep_pass(context, mon
     monkeypatch.setattr(verification, "verify_result", deep_pass)
 
     result = parallel.verify_results(context.path, context.output)
+    assert parameters.LAB_ROOT == original_parameter_root
     assert verified == list(deep_results)
     assert all(lane["valid"] and lane["accepted"] == 1 for lane in result["lanes"])
     assert result["host_returncode"] == host_returncode

@@ -44,7 +44,9 @@ CONTROL_DEFINITIONS = {
         "authority", "_runtime_authority", "image_preflight", "initialize",
         "release", "retire_lane", "verify_results", "reopen_launch", "gate",
         "retire_session", "verify_operator_closure", "launch_action", "main",
+        "_execution_parameter_context",
     }),
+    "src/qcsd_lab/rapid_formal_parallel.py": frozenset({"image_preflight", "resolve_dns"}),
     "tools/rapid_parallel_capture.py": frozenset({"launch", "main", "module-docstring"}),
     "src/qcsd_lab/rapid_class_epochs.py": frozenset({
         "prepare_block_lane_intent", "launch_block_lane", "_intent",

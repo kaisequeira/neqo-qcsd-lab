@@ -385,7 +385,7 @@ def resolve_dns(path: Path, index: int) -> dict[str, Any]:
     from .orchestrator import load_campaign
     value, facts = _audit(path)
     spec, _, _, _, _, lane, _ = facts[index]
-    with _worker_context(value, index, facts[index]):
+    with _worker_context(value, index, facts[index]), shared._execution_parameter_context(value):
         campaign = load_campaign(spec.campaign_dir / f"{lane.campaign_name}.yml")
     origins = sorted({origin for workload in campaign.workloads
                       for origin in workload.data["preparation"]["approved_origins"]})
@@ -462,7 +462,7 @@ def image_preflight(path: Path, expected_sha: str) -> dict[str, Any]:
     hosts = set()
     for index in range(2):
         worker_spec, _, intent_path, _, _, lane, sites = facts[index]
-        with _worker_context(value, index, facts[index]):
+        with _worker_context(value, index, facts[index]), shared._execution_parameter_context(value):
             campaign = load_campaign(Path(value["campaigns"][index]["path"]))
         paths = [campaign.path, intent_path, worker_spec.qualification_spec, worker_spec.plan_receipt, worker_spec.cohort]
         for workload in campaign.workloads:
