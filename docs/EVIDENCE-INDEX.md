@@ -323,6 +323,28 @@ historical v1 behavior remain unchanged. No actual Docker pair or formal
 trace was produced by these source checks. A matching installed runtime and
 parallel trial remain next; the target stays **50 × five × 64 = 16,000**.
 
+Before the matching runtime was staged, a cheap host-path review found that
+formal dispatch invoked system Python 3.10 while its lane modules require
+the project's Python 3.11 dependency. The prospective fix is private author
+`bc860f48db65e32c4043b7a94128b5228131a2eb`, integrated as Lab `a724113`.
+It chooses a verified compatible project interpreter before first formal
+dispatch and transports the operator's actual interpreter without recording
+a machine path in source. Diagnostics and serial behavior stay unchanged.
+Under `../diagnostic-rehearsals/rapid-formal-host-python-lab-checks-20261003-001/`,
+all **five committed files** match held before/after bytes. The actual focused
+operation closed 0 with **22 passing tests in 28.01 seconds**, actual process
+elapsed **34.553 seconds**, followed by shell syntax and diff checks closing
+0. Root independently reopens the committed blobs and actual raw log hashes.
+Source closure SHA-256 is
+`2411233aecbd602e624d2fc56ffb0f5401b8a9e21549b0c694fffd4e3427d818`;
+focused completion SHA-256 is
+`9fbbf0f1d7cf29dd5d40b63821d701b965abc0494f94a5a859fc9a36719314a4`.
+The only changed production units are the named shell `parallel-dispatch`
+region and `tools/rapid_parallel_capture.py::launch`. Native, the historical
+v1 helper, response qualification and all eight acquisition groups remain
+unchanged. This grants zero study credit; runtime 003 will install the
+Native readiness and formal interpreter fixes together.
+
 #### Installed V11 runtime and remaining live DATA stall
 
 The clean execution checkout uses Lab

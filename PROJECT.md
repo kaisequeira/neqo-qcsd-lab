@@ -57,7 +57,12 @@ screens. The bounded candidate run closed 0 at 03:35 Sydney, reaching its
 requested first admission. Checkpoint 000026 records ten terminal decisions
 and **Poki admitted**. The separate 22-file recoverable formal capture package
 is integrated as Lab `b7c00b76`; an actual parallel Docker trial remains
-required. This baseline acquisition does not
+required. A cheap pre-build check found that formal dispatch used the host's
+Python 3.10 despite the project's Python 3.11 dependency. Integrated Lab
+`a724113` selects a compatible project interpreter before formal dispatch;
+its **22 focused checks passed in 28 seconds**. Serial and diagnostic behavior
+remain unchanged. The next matching runtime includes both repairs.
+This baseline acquisition does not
 claim paced capture readiness. Counters are **1/50 admitted, 0/50 shakedown
 and 0/16,000 formal**.
 See the [actual next steps](docs/EVIDENCE-INDEX.md#v12-readiness-race-and-independent-baseline-acquisition).

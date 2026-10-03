@@ -29,6 +29,14 @@ zero formal traces. The separate 22-file formal recovery package is integrated
 as Lab `b7c00b76`; its [operator guide](RAPID-FORMAL-PARALLEL-CAPTURE.md)
 explains separate workers and recovery. Its actual parallel Docker trial
 remains pending. The target remains 16,000 formal traces.
+
+Before building that runtime, a cheap host-path review found that the new
+formal launcher selected system Python 3.10, while the project requires
+3.11. Integrated Lab `a724113` selects the project environment or a verified
+compatible interpreter before its first formal dispatch. All **22 focused
+interpreter/actuator checks pass in 28 seconds**. The source records no fixed
+machine path; serial and diagnostic behavior remain unchanged. The next
+runtime includes this correction and Native `44e1ca23` together.
 See the [retained evidence](EVIDENCE-INDEX.md#v12-readiness-race-and-independent-baseline-acquisition).
 
 **Latest source milestone, 4 October, 00:43 Sydney (3 October, 14:43 UTC):**
