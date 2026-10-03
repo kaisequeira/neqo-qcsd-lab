@@ -14,7 +14,38 @@ homepage credit fix, endpoint-specific final UDP drain evidence and explicit
 prospective BuFLO incoming tolerance. They require fresh affected captures;
 the previous failed attempts keep their original results.
 
-**Latest milestone, 4 October, 07:10 Sydney (3 October, 20:10 UTC):**
+**Latest milestone, 4 October, 07:35 Sydney (3 October, 20:35 UTC):**
+Published Lab `84db28df` / unchanged Native `3d994f0d` is now installed in
+runtime 007. All twelve operations, 2,388 source files and the unchanged
+1,783-file Native inventory reopen. Exact verified client reuse took
+**1.028 seconds**, with no Native rebuild. Image builds took **61.242 and
+64.969 seconds**; installed checks took **16.964 and 18.015 seconds**.
+
+Fresh ordinary preflight, capture and deep verification have closed 0 in
+**6.998, 151.466 and 6.995 seconds**, with the full 260-resource/four-origin
+page unchanged. Padding qualification closed 0 in **69.516 seconds**,
+with 120 complete responses across three connection epochs; all four defended
+preflights closed 0 in **8.845 seconds**.
+
+The fresh pair 005 closed 1 after **251.036 seconds** including setup and
+cleanup. Both workers received traffic, completed their primary documents
+and started their defenses. BuFLO reached its enqueue cutoff **2.729 ms late**;
+CS-BuFLO reached its socket **1.648 ms after the adapter deadline**. All fifty
+sealed files reopen and both exact lane resources were retired. The earlier
+bridge and startup failures did not recur, but neither recording is accepted.
+The next step is targeted timing diagnosis and a fresh affected recording.
+Successful peer continuation, failed-only recovery and paired throughput
+remain unproven. Old runtime 006 receipts retain their original source labels.
+These checks grant zero formal credit.
+
+Admission continuation 008 started at **07:33:31 Sydney** and is live at this
+inspection, with original `818deb6` / `39464c62`, immutable admission image
+and registry 000002 unchanged. Its latest immutable checkpoint is **000060**:
+**24 decisions, one admitted
+site and zero formal traces**. The target stays **50 × five × 64 = 16,000**.
+See the [installed runtime and fresh diagnostic checks](EVIDENCE-INDEX.md#v12-parallel-bridge-runtime-007).
+
+**Earlier milestone, 4 October, 07:10 Sydney (3 October, 20:10 UTC):**
 Runtime 006's fresh ordinary capture, deep check, padding qualification and
 four defended preflights passed on the unchanged 260-resource/four-origin
 page. Parallel pair 004 reached both workers' captures, but both clients

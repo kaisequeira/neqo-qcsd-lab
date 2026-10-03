@@ -9,6 +9,95 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ## Application response policy repair
 
+### V12 parallel bridge runtime 007
+
+Published Lab `84db28df5afac72d51e0a26d63c4dae8ae92985e` contains the
+focused parallel bridge and successful-retirement registration repair,
+with unchanged Native `3d994f0d557e2d27873bace0f4efd0f401660bc7`.
+The clean execution checkout is frozen separately as
+`rapid-execution-parallel-bridge-v12-20261004`. Local
+`terminal-primary-v12-runtime-20261004-007/canonical-runtime.json`, SHA
+`638181708d9b09fa3287fcf19c763fef79f4dd64193a3c87e0b26188eb44937a`,
+closed at `2026-10-03T20:17:51Z`. All twelve actual operation commands,
+starts, completions and raw logs reopen, together with all 2,388 source
+files, unchanged 1,783 Native entries, clean Git identity and pinned Gitlink.
+
+Exact verified client reuse closed 0 in 1.028 seconds; the client remains
+`8b4288335d481b36bc096891125651b85345589daa47fb7260d5aa9048b962f2`.
+No Native build was run for this runtime. Collection and preparation image
+builds closed 0 in 61.242 and 64.969 seconds; installed checks closed 0 in
+16.964 and 18.015 seconds, and actual export took 5.178 seconds.
+Immutable image identities are
+`sha256:12c94be50df0bc03772e54ab176f1bd7b9b8ede678e9f8a6202c2ede7343d144`
+and
+`sha256:f5ff689c4fe7776bdb1cbded34cb8194928e67bbb782f10dd699dcb012039206`.
+This closes installation only, not a paired capture or recovery claim.
+
+Fresh `actual-poki-007` binds plan SHA
+`10be71e69e9e9fe340549812779dcf5f43c713b05f8b8567e3a4a9e76a148886`
+and commands SHA
+`fb6b6ff4875e2f5e443dc2d3335a3feb116ee3a6c38943edb1f2b03c64ad38b6`.
+The complete 260-resource/four-origin graph and workload remain unchanged.
+Ordinary preflight closed 0 in 6.998 seconds. Ordinary capture closed 0
+at `2026-10-03T20:22:31.149802Z`, in 151.466 seconds; ordinary deep
+verification closed 0 at `2026-10-03T20:22:38.325513Z`, in 6.995 seconds.
+Its valid, complete zero-credit receipt SHA is
+`b79b00fd4e6263e9f53de1c7acb08a0da2a0b095205ad1318a3ccb0068792c6e`,
+bound to this exact canonical runtime, source and workload. Padding
+qualification closed 0 in 69.516 seconds, retaining 120 complete responses
+across three connection epochs. Manifest SHA is
+`67c3dba97ab72cb038a49ffd3ee997617528e8ba2b8b11771e4b725c572aa40d`;
+qualification completion SHA is
+`e21853d6091b7aaf8bf9dd881ee8c65e576e893ef66f89d0ad55a51311524d9c`.
+All four defended preflights then closed 0 in 8.845 seconds; completion SHA is
+`fae5df4f16c89a2ae34351edb014b674aa11681a3ce752b06130017658a592f3`.
+
+The data-only new pair staging helper at local
+`rapid-v12-paired-diagnostic-20261004-003/stage_pair.py` has SHA
+`91d8bfa56268df13af504628de704787bc6aa53fee52d49b09ce1badd4fe7a43`.
+Independent review confirms unchanged APIs, guards, parameter validation,
+workload, seeds and qualification logic; only declared source/runtime and
+namespace labels changed. It requires actual fresh prerequisite closures
+before creating pair authority. Its existence grants no capture credit.
+Old runtime 006 baseline, qualification and failed pair retain their exact
+source labels. The existing qualification validator binds the changed
+launcher hash; no absent formal installation capsule or invented runtime
+bridge is used to promote those receipts.
+
+Under `actual-poki-007/execution-root/results/parallel-poki-005`, actual
+authority SHA is
+`95b7d5c45a2dbdbe8811534827157bdbdd77551d3285384e00958bdc9974228c`;
+launch-command SHA is
+`4cd614ec92c24ba914d06ce668c15d4c882c63910eeb98c3097ba3a0b2a99cf7`.
+The outer host operation closed 1 at `2026-10-03T20:30:16.685319Z`, after
+251.036 seconds. Both workers received traffic, completed their primary
+documents and started their defenses; neither completed the whole graph.
+
+| Lane | First actual failure | Sealed retained evidence |
+| --- | --- | --- |
+| BuFLO | Before `sendmsg`, CLOCK_TAI `1791059368334915089` reached enqueue cutoff `1791059368332186152`: **2.728937 ms late**. | All 27 files reopen; seal SHA `bf2cdbed3c734a8db359bacf934ab761955f061112ae8f7a92672ce15e37502a`. |
+| CS-BuFLO | Socket handoff at monotonic `460695.897571014` reached adapter deadline `460695.895923221`: **1.647793 ms late**. | All 23 files reopen; seal SHA `b0eebaa69682629691defe44372840f2d8f8bcbe5a7181e01b45483a1fc4ff2b`. |
+
+Both attempt scheduler records remain valid. The completion verifier's
+missing accepted-sample peer proof is secondary to these failed recordings;
+deep receipt SHA is
+`a3a022689026d47595eb5361abe3884b9b5e60eebc574c086825b0b673a825dc`.
+Both workers exited 1 and each lane's exact worker, router and network were
+retired. The second retirement binds the first retirement's bytes. There
+was no successful running peer, so this establishes neither successful
+peer continuation nor failed-only recovery. The bridge and private-file
+startup failures did not recur. No timing gate or failed receipt is waived;
+both lanes grant **zero accepted and zero formal traces**.
+
+Admission continuation 008 started at `2026-10-03T20:33:31.893318Z`, on
+original `818deb6` / `39464c62`, immutable image and registry 000002. Only
+its fresh operation root and boundary stop-file path differ from closed
+continuation 007. It is live at this inspection. Latest immutable checkpoint
+000060 retains **24 terminal decisions, one
+admitted site and zero formal traces**. The scientific target remains
+**50 sites × five settings × 64 visits = 16,000 accepted formal traces**;
+paired/recovery proof, final cohort and study shakedown remain pending.
+
 ### V12 parallel bridge forwarding failure
 
 Runtime 006 remains frozen on actual Lab

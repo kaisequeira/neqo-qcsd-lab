@@ -41,7 +41,44 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Latest milestone, 4 October, 07:10 Sydney (3 October, 20:10 UTC):**
+**Latest milestone, 4 October, 07:35 Sydney (3 October, 20:35 UTC):**
+The bridge and cleanup repair is published as Lab `84db28df`, with unchanged
+Native `3d994f0d`, and installed in runtime 007. All twelve actual operations,
+the full 2,388-file source inventory and unchanged 1,783-file Native inventory
+reopen. Exact client reuse took **1.028 seconds**, without a Native rebuild;
+image builds took **61.242 and 64.969 seconds**, installed checks **16.964
+and 18.015 seconds**, and export **5.178 seconds**. The execution checkout
+remains frozen separately on that source.
+
+Fresh full-page ordinary preflight, capture and ordinary deep verification
+have closed 0 in **6.998, 151.466 and 6.995 seconds**. The complete
+260-resource/four-origin graph is unchanged; these remain zero-credit
+diagnostics. Fresh padding qualification closed 0 in **69.516 seconds**,
+with 120 complete responses across three connection epochs; all four defended
+preflights then closed 0 in **8.845 seconds**.
+
+Fresh two-worker pair 005 closed 1 at **07:30:16 Sydney**, after **251.036
+seconds** including setup and cleanup. Both workers received page traffic,
+completed their primary documents and started their defenses. BuFLO failed
+when enqueue preparation reached its cutoff **2.729 milliseconds late**;
+CS-BuFLO failed when a target datagram reached its socket **1.648 milliseconds
+after its adapter deadline**. All 27 BuFLO and 23 CS-BuFLO sealed files reopen,
+and both lanes' exact resources were retired. These are timing failures;
+the earlier bridge and private-file startup failures did not recur.
+Neither lane is accepted, and successful peer continuation and failed-only
+recovery remain unproven. Runtime 006's failed pair keeps its original
+`51896a2` source labels and receives no new credit.
+
+Admission continuation 008 started at **07:33:31 Sydney**, on unchanged
+`818deb6` / `39464c62` and registry 000002. It changes only the new operation
+root and boundary stop-file path; the original image and input hashes remain
+bound. Its process is live at this inspection.
+Checkpoint **000060** retains **24 terminal decisions, 1/50 admitted sites
+and 0/16,000 formal traces**. The target remains **50 × five × 64 = 16,000**;
+the separate study shakedown is pending. See the
+[installed bridge runtime and fresh checks](docs/EVIDENCE-INDEX.md#v12-parallel-bridge-runtime-007).
+
+**Earlier milestone, 4 October, 07:10 Sydney (3 October, 20:10 UTC):**
 The target remains **50 sites × five settings × 64 visits = 16,000 accepted
 formal traces**. Fresh runtime 006 ordinary capture, deep verification,
 padding qualification and all four defended preflights passed on the full
