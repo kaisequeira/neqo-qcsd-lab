@@ -14,6 +14,35 @@ homepage credit fix, endpoint-specific final UDP drain evidence and explicit
 prospective BuFLO incoming tolerance. They require fresh affected captures;
 the previous failed attempts keep their original results.
 
+**Latest live milestone, 4 October, 04:45 Sydney (3 October, 17:45 UTC):**
+the repaired Lab `8461848e` / Native `44e1ca23` runtime is installed. All
+twelve actual runtime operations and 2,384 source files independently reopen.
+Fresh ordinary capture, padding qualification and the four defended
+preflights pass. BuFLO also passes capture and deep verification on the full
+**260-resource, four-origin** page; its eighteen sealed files match their
+recorded hashes. The host capture took 188 seconds and deep verification
+eleven seconds. CS-BuFLO and Tamaraw also pass, retaining all 260 resources
+and four origins. FRONT fails when a chaff request encounters temporary
+HTTP/3 request-stream exhaustion; its client exits after about one second.
+That focused chaff retry repair is being prepared.
+These checks grant zero formal or study-shakedown credit.
+
+The actual parallel trial failed before either worker launched: source/runtime
+proof used the clean source checkout, while the campaign's parameter fixtures
+lived in the separate execution directory. Its 83-second failed setup is
+preserved. The narrow control correction is integrated as Lab `214b2f8`, with
+fifty passing focused checks and a passing portable history case in the main
+checkout. Its actual installation and new pair remain pending. This correction
+preserves parameter guards and permits the same Native client; the separate
+FRONT repair requires a new client artifact. Forty fallback screens closed 0
+in 246 seconds, and registry 000002 verifies 73 supplied plus forty fallback
+candidates. Admission continuation 003 resumed at 04:41:53 Sydney on the
+unchanged baseline source. Checkpoint 000041 records sixteen decisions and
+one admitted site, with `toom.de` next.
+The target is still **50 × five × 64 = 16,000 accepted formal traces**;
+counters are **1/50 sites, 0/50 study shakedown and 0/16,000 formal**.
+See the [actual runtime and setup evidence](EVIDENCE-INDEX.md#v12-installed-readiness-repair-and-parallel-setup).
+
 **Latest live milestone, 4 October, 03:39 Sydney (3 October, 16:39 UTC):**
 the fresh corrected-runtime BuFLO and CS-BuFLO recordings exposed a separate
 client readiness race: a CDN endpoint entered scheduled output before its

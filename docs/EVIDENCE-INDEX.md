@@ -345,6 +345,141 @@ v1 helper, response qualification and all eight acquisition groups remain
 unchanged. This grants zero study credit; runtime 003 will install the
 Native readiness and formal interpreter fixes together.
 
+#### V12 installed readiness repair and parallel setup
+
+The installed successor is Lab
+`8461848e1a24a8e7993f584f42fcedbff666c36e` / Native
+`44e1ca23c730c8477c9df2038500592252a1469d`, retained under
+`../diagnostic-rehearsals/terminal-primary-v12-runtime-20261003-003/`.
+All twelve actual build/check/export operations closed 0; their raw log
+hashes and all **2,384 source inventory entries** independently reopen.
+The Native release took **131.708 seconds**, collection/preparation builds
+**60.117/63.072 seconds**, and installed checks **16.351/15.025 seconds**.
+
+| Installed artifact | Exact identity |
+|---|---|
+| Canonical runtime SHA-256 | `3d0311a84bc9f2fdf406f0e99b58d102323c3c6f01154a20ee9f7f5855d29817` |
+| Collection image | `sha256:0e698c4f34d18876c63579d53b0ce3e61c52d5a9a1dae008c0e77812ee109c27` |
+| Preparation image | `sha256:4de387696838e053c00b261c1eb210028c6fc590868f682e6f98ccefdabe2e34` |
+| Installed client SHA-256 | `a3e18cb78c5fb4ca238e48e036c8aff4a7c0910cd5dd4407b76c62b9be8bf718` |
+
+Fresh zero-credit checks use
+`../diagnostic-rehearsals/rapid-v12-capture-canary-20261003-001/actual-poki-003/`.
+Plan SHA-256 is
+`2783e3e38f57e96d75ccf27b40bfa646ea11cee2718439dcfa7d4080adfa1d09`;
+commands SHA-256 is
+`ebfafc59c71ae79b11ce43886f59201451ed315be3cfae971b00f745258f3b23`.
+The complete graph remains **260 resources / four origins**. Its historical
+graph supplies diagnostic lineage only; it is not the current ten-site cohort.
+
+Fresh ordinary capture closed 0 in **150.459 seconds**, followed by deep
+verification in **7.082 seconds**. Its deep receipt SHA-256 is
+`6888c6140deb918d32f419b17a20d2ad9202e844bf37f035228fa32c97412a65`.
+Padding qualification closed 0 in **69.440 seconds**, receipt SHA-256
+`db5c400a53ea99eee3a12085134e2caa6dc4214a0621eec702e06fcf5cce3f9e`.
+All four defended preflights closed 0 in **8.369 seconds**, receipt SHA-256
+`3e2c70459c3fcb42c900f38bc4eebb59944ee731cb67c1e4db18acac73ea11e4`.
+
+BuFLO's fresh capture closed 0 at **17:22:51.831569 UTC**, after **188.105
+seconds**; its deep operation closed 0 at **17:23:03.414510 UTC**, after
+**11.407 seconds**. Ordinary deep and the additional V12 checks accept one
+complete diagnostic trace. Root independently reopened all **eighteen sealed
+files** and the experiment/receipt hashes. `buflo-deep-verification.json`
+SHA-256 is `4f36206d1ed77b06cdb21f6513eeea53ef39e64bf689506fabf4bd935487dac9`.
+CS-BuFLO's actual capture closed 0 at **17:26:06.459666 UTC**, after
+**160.876 seconds**, followed by a passing deep operation in **9.043 seconds**.
+All fifteen sealed files independently reopen; its deep receipt SHA-256 is
+`5bf255aead7d8fc648de7a9b5d0339c0dee51cb3890b9467cbb1a0ea6a95aa90`.
+Tamaraw capture closed 0 at **17:28:55.451133 UTC**, after **158.541 seconds**,
+followed by a passing deep operation in **8.576 seconds**. All thirteen sealed
+files independently reopen; its deep receipt SHA-256 is
+`dcaf36b09c308f065cf1438807ea25d285c8a1bb724f14c1632bc96e2d1aba6b`.
+Both retain the complete 260-resource, four-origin graph and zero study credit.
+
+FRONT capture closed **1** at **17:31:36.169499 UTC**, after **150.671 seconds**;
+its deep operation also closed 1. Native exits after **1.030 seconds** of
+client work with `Stream limit reached`. Retained `events.csv` reports a
+failed `RequestChaff` on endpoint 1 (`img.poki-cdn.com`), resource 14,
+request ID 5, at **701,673 microseconds**. The same endpoint's application
+requests had already blocked and resumed on stream credit several times.
+The chaff adapter propagates this temporary HTTP/3 stream-quota exhaustion as
+fatal. This is distinct from the repaired readiness race. The full failed
+attempt remains under the FRONT result's `failures/.../attempt-001/`, and
+no resources, traffic guards or accepted counters are changed to make it pass.
+A focused wait-for-credit repair is being prepared.
+
+The separate `parallel-poki-001-authority.json` has SHA-256
+`544b07b8b5b586cd4021ae925653c19be53497ae9b4fd71de0f42a625a71ff17`.
+Its actual host operation closed **1** at **17:15:02.080934 UTC**, after
+**83.444 seconds**, before `image-preflight.json`, CPU allocation or either
+worker existed. The installed preflight correctly verified the source root,
+then loaded execution-directory campaign fixtures under the source-root
+parameter guard. The retained stderr reports that reviewed parameter fixtures
+must be under the source checkout's `config/defense-params`; those fixtures
+actually live under the separate execution directory and match the source
+bytes. Stderr SHA-256 is
+`39e6ff555b7eac8befa4a762e971a2685389b4e0148ca3587f8d1ca135d5c3b2`.
+The later missing-preflight error is secondary. A scoped control repair must
+keep both the source proof and the original parameter authenticity guard;
+the failed attempt remains unchanged. No parallel capture pass is claimed.
+
+Ordered site acquisition continued independently under its original frozen
+Lab `818deb62` / Native `39464c62`. Its second host operation closed 0 at
+**17:03:37.733499 UTC**, stopping between actions on its recorded stop-file
+request. Immutable checkpoint 000040, SHA-256
+`83b0d9b067e51cfee2370f0bd557d3ab13ae895694a4d445af3a8444c3f81804`,
+records **sixteen decisions, one admitted site and zero formal traces**.
+The scientific target remains **50 × five × 64 = 16,000**; current counters
+are **1/50 admitted, 0/50 study shakedown and 0/16,000 formal**.
+
+The scoped parallel correction is private author
+`4f484eb152e474e04d91eff4e2fcd194d1def67f`, integrated as Lab `214b2f8`.
+It separates the parameter guard's execution-directory context from the
+unchanged source/runtime proof in diagnostic/formal preflight, formal DNS
+loading and host result verification. All four canonical parameter/provenance
+copies must equal the clean source bytes; canonical relative nonlinked paths
+are enforced and the guard's original root is restored on success or failure.
+The historical v1 helper, qualification primitive and all eight acquisition
+groups are unchanged. The prospective v2 named-unit declaration changes before
+formal capture; an already-installed older v2 capsule gains no automatic authority.
+
+Under `../diagnostic-rehearsals/rapid-parallel-input-context-lab-checks-20261003-001/`,
+the held real-campaign witness reopens both failed pair001 inputs without
+mutating them. Existing real parameter/provenance loaders reproduce the original
+error and pass the repaired fixture context; the still-required image gate is
+not claimed as passed by this host witness. The actual focused operation closed
+0 with **fifty passing cases in 43.60 seconds**, followed by one affected
+portable-history case after a test-only revision. All **eight committed files**
+match their final composed source closure, SHA-256
+`06573169b1f65493f21ba2f9e0ffce746f884f5f4ff5ac0efe751c768f043e5f`.
+Committed-source proof SHA-256 is
+`33342f4e64172ba79d3828ba45ecf9606e298d358f9a5aa7416cf89fdfe68eb5`.
+Root independently reopened the raw operation logs, committed blobs and
+67 protected module facts across the eight groups. After integration, the
+main-checkout history case closed 0 with **one pass in 0.56 seconds**, actual
+process elapsed **1.001 seconds**, under
+`../diagnostic-rehearsals/rapid-parallel-input-context-main-checks-20261003-001/`.
+The corrected control is not installed in runtime003; a matching image and
+fresh parallel attempt are pending. The exact Native44 reuse helper is ready
+but uninvoked; it cannot cover the separately changed Native FRONT repair.
+
+Namespace 017's fresh forty-candidate fallback survey closed 0 at
+**17:38:09.465923 UTC**, after **246.365 seconds**, with its actual operation
+under `host-operations/fallback-root-screen-first-001/`. Raw log SHA-256 is
+`34a41ef39696a94b96b7db71107a70a74b2f46b756f73cfde74b5f769768aaae`.
+The append-only registry operation closed 0 in **5.863 seconds** and independently
+verified **73 supplied / forty fallback** coverage. Registry 000002 SHA-256 is
+`42bedf1a0c7126c12d3f4119825344abf9f446fd2948a1fbc487dda19a20afd5`.
+Continuation 003 resumed on the original frozen source at **17:41:53 UTC**,
+with unchanged page budget and a fresh operation stop-file path. Its staging,
+explicit routing change and actual argv are retained under
+`host-operations/coordinator-live-launch-003/`; the old stop request is preserved.
+Checkpoint 000041 SHA-256 is
+`4531088c543c02b565a8fc96e0dc923b0fe04488200235b1044d15dcee575511`;
+it records sixteen decisions, one admission and zero formal traces, with
+`toom.de` next. These screens and engineering repairs change no accepted
+formal numerator or the **50 × five × 64 = 16,000** target.
+
 #### Installed V11 runtime and remaining live DATA stall
 
 The clean execution checkout uses Lab

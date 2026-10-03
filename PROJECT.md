@@ -41,6 +41,39 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
+**Latest live milestone, 4 October, 04:45 Sydney (3 October, 17:45 UTC):**
+Lab `8461848e` / Native `44e1ca23` is installed and independently reopened:
+all twelve runtime operations closed successfully and all 2,384 source files
+match their inventory. The new Native release took 132 seconds; the two
+derivative images took 60 and 63 seconds. A fresh undefended recording and
+deep verification passed, fresh padding qualification passed in 69 seconds,
+and all four defended preflights passed in eight seconds. **BuFLO now captures
+and deep-verifies the complete 260-resource, four-origin page**: 188 seconds
+for the host capture operation and eleven seconds for deep verification.
+All eighteen sealed result files independently reopen. CS-BuFLO and Tamaraw
+also pass capture and deep verification, with all fifteen and thirteen sealed
+files respectively reopened. FRONT fails in about one second of client work:
+an outgoing chaff request reaches its connection's HTTP/3 stream limit and
+the chaff adapter treats that temporary exhaustion as fatal. A focused repair
+is being prepared. These are separate zero-credit
+diagnostics, not formal samples or the registered ten-site shakedown.
+
+The first actual parallel trial failed during setup after 83 seconds, before
+either worker existed. Its source check correctly used the clean runtime
+checkout, but parameter validation then required execution-directory fixtures
+to live in that source checkout. The scoped control correction is integrated
+as Lab `214b2f8`: fifty focused checks pass in 44 seconds, followed by the
+portable history case passing in the main checkout. It is source-tested;
+installation and a fresh pair remain pending. The failed trial is retained.
+The control correction can reuse the unchanged Native client; the separate
+FRONT repair requires a new Native artifact. A fresh forty-candidate fallback
+screen closed 0 in 246 seconds. Verified registry 000002 covers 73 supplied
+and forty fallback candidates. Admission continuation 003 resumed on the
+unchanged baseline source at 04:41:53 Sydney. Checkpoint 000041 records sixteen
+terminal decisions, one admission and candidate `toom.de` next. Counters remain **1/50 admitted,
+0/50 study shakedown and 0/16,000 formal**, with **50 × five × 64** unchanged.
+See the [installed-runtime and parallel setup evidence](docs/EVIDENCE-INDEX.md#v12-installed-readiness-repair-and-parallel-setup).
+
 **Latest live milestone, 4 October, 03:39 Sydney (3 October, 16:39 UTC):**
 fresh corrected-runtime BuFLO and CS-BuFLO reject with Native
 `Transport error: not available`. The primary document completes in both,
