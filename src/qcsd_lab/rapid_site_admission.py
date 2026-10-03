@@ -25,7 +25,7 @@ from typing import Any, Iterator
 
 from . import rapid_study_profile as profile
 from .class_acquisition import (
-    ExistingAcquisitionBackend, _converge_origins,
+    ExistingAcquisitionBackend, TerminalProbePolicyError, _converge_origins,
     _prepared_primary_response, unsafe_catalogue_domain_reason, validate_class_study_preparation,
 )
 from .discover import origin
@@ -1396,6 +1396,11 @@ def _has_response_padding_capacity(manifest: Mapping[str, Any]) -> bool:
 
 
 _PADDING_CAPACITY_FAILURE = "revision 6 has no stable same-origin auxiliary response of at least 1200 bytes for potential padding capacity"
+_CONVERGENCE_BUDGET_FAILURES = frozenset({
+    "approved-origin discovery exceeded its finite origin cap",
+    "discovery exceeded its finite observed-origin audit cap",
+    "approved-origin discovery did not converge within its pass cap",
+})
 
 
 class ObservedLiveBackend:
@@ -1405,14 +1410,20 @@ class ObservedLiveBackend:
                  action: Mapping[str, Any], inputs: Mapping[str, Path] | None = None) -> None:
         self.backend, self.context, self.candidate_id = backend, context, candidate_id
         self.attempt, self.action, self.inputs = attempt, action, inputs
+        self.discovery_pass_count = 0
 
-    def _call(self, callback: Any, *args: Any, **kwargs: Any) -> Any:
+    def _begin(self) -> dict[str, Any]:
         from .rapid_attempt_failure_evidence import begin_attempt_action
         runtime = begin_attempt_action(self.context.execution_binding,
             self.context.mounted_module_hashes[ATTEMPT_GROUP], self.context.attempt_not_before_utc)
         from .rapid_page_evidence import _validate_runtime
         if _json(_validate_runtime(runtime, self.context.execution_binding)) != _json(self.context.expected_runtime_source):
             raise ValueError("live backend runtime differs from independent context")
+        return runtime
+
+    def _call(self, callback: Any, *args: Any, **kwargs: Any) -> Any:
+        from .rapid_attempt_failure_evidence import begin_attempt_action
+        runtime = self._begin()
         started = _now()
         try:
             result = callback(*args, **kwargs)
@@ -1432,7 +1443,27 @@ class ObservedLiveBackend:
         return self._call(self.backend.discover_navigation, domain)
 
     def discover(self, url: str, approved: Sequence[str]) -> Any:
-        return self._call(self.backend.discover, url, approved)
+        result = self._call(self.backend.discover, url, approved)
+        self.discovery_pass_count += 1
+        durable_create(self.attempt / f"discovery-pass-{self.discovery_pass_count:02d}.json", _json({
+            "source_url": url, "approved_origins": list(approved), "discovery": asdict(result),
+        }))
+        return result
+
+    def converge_origins(self, url: str) -> Any:
+        """Retain only genuine bounded-convergence failures after live discovery."""
+        runtime, started = self._begin(), _now()
+        try:
+            return _converge_origins(self, url)
+        except TerminalProbePolicyError as error:
+            if (type(error) is not TerminalProbePolicyError or str(error) not in _CONVERGENCE_BUDGET_FAILURES
+                or self.discovery_pass_count == 0 or error.__cause__ is not None or error.__context__ is not None
+                or blocking_backend_failure(error)):
+                raise
+            proof = retain_unsuccessful_attempt_failure(self.attempt / "attempt-failure.json", self.context,
+                candidate_id=self.candidate_id, error=error, action=self.action,
+                started_at=started, runtime=runtime, inputs=self.inputs)
+            raise ObservedUnsuccessfulLiveAttempt(proof) from error
 
     def prepare(self, workload_id: str, url: str, approved: Sequence[str], output_root: Path,
                 *, origin_ip_pins: Mapping[str, str], application_response_policy: str | None = None,
@@ -1741,7 +1772,9 @@ def prepare_site(
             action_runtime = begin_page_policy_action(context)
         if context.selection_amendment_revision == 3:
             collector_runtime = begin_operational_collector_action(context)
-        approved, discovery = _converge_origins(backend, page["url"])
+        approved, discovery = (backend.converge_origins(page["url"])
+                               if isinstance(backend, ObservedLiveBackend)
+                               else _converge_origins(backend, page["url"]))
         durable_create(attempt / "origin-convergence.json", _json(asdict(discovery)))
         workload_id = f"rapid-v5-{candidate_id}-{attempt.name}"
         policy_kwargs = ({"application_response_policy": context.application_response_policy}

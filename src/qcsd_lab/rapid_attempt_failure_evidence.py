@@ -1,9 +1,12 @@
-"""Retained evidence of an unsuccessful live backend call, with no site verdict.
+"""Retained evidence of an unsuccessful source-bound live operation.
 
-The caller must put only the actual backend invocation inside its observer.
-Preflight, source/schema validation and later proof verification are outside
-that boundary. This receipt proves the caught exception and available attempt
-bytes; it does not reconstruct missing browser, DOM, CDP or transport details.
+Observe actual backend calls and the three explicit convergence limits on
+approved origins, observed origins and discovery passes after real discovery.
+Save complete observed discovery passes before retaining those budget failures.
+Preflight, source/schema validation and later proof verification stay outside
+the failure-retention boundary. This receipt proves the caught exception and
+available attempt bytes, grants no site verdict, and does not reconstruct
+missing browser, DOM, CDP or transport details.
 """
 
 from __future__ import annotations
@@ -100,7 +103,7 @@ def _action(value: Any) -> dict[str, Any]:
 
 def begin_attempt_action(execution_binding: Mapping[str, Any], expected_implementation_hashes: Mapping[str, str],
                          not_before_utc: datetime) -> dict[str, Any]:
-    """Validate the frozen runtime before entering only the backend call."""
+    """Validate the frozen runtime before the source-bound live operation."""
     now = datetime.now(UTC).isoformat()
     page._freshness(now, now, not_before_utc)
     hashes = _hashes(expected_implementation_hashes)
@@ -206,7 +209,7 @@ def retain_attempt_failure(
     execution_binding: Mapping[str, Any], expected_implementation_hashes: Mapping[str, str],
     not_before_utc: datetime, attempt_root: Path,
 ) -> Path:
-    """Seal available bytes after a caught backend error; never read an old log."""
+    """Seal available bytes after a caught live operation error; never read an old log."""
     root, output = _directory(attempt_root), Path(output).absolute()
     if (output.parent != root or output.name == _LATER_WRAPPER or output.exists() or output.is_symlink()
         or (root / _LATER_WRAPPER).exists()):

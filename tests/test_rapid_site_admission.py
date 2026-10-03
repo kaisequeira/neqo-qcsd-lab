@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -1016,3 +1016,147 @@ def test_v4_typed_primary_with_validation_cause_cannot_escape_through_legacy_cat
     assert not any(amended.root.rglob("collector-failure.json"))
     assert any(amended.root.rglob("operational-error.json"))
     assert admission.acquisition_status(amended)["formal_trace_target"] == 16_000
+
+
+def test_v6_live_convergence_budgets_retain_all_pass_data_with_existing_zero_credit_schema(context, tmp_path):
+    from qcsd_lab.class_acquisition import MAX_APPROVED_ORIGINS, MAX_OBSERVED_AUDIT_ORIGINS, MAX_ORIGIN_PASSES
+    amended = _amended_context(context, tmp_path, revision=6)
+    candidate, navigation, h3, screen = _auto_page(amended, tmp_path)
+    original_context_hash = admission._sha((context.root / "provenance.json").read_bytes())
+    reasons = {
+        "approved": "approved-origin discovery exceeded its finite origin cap",
+        "audit": "discovery exceeded its finite observed-origin audit cap",
+        "passes": "approved-origin discovery did not converge within its pass cap",
+    }
+    class BudgetBackend(Backend):
+        def __init__(self, mode):
+            super().__init__(amended)
+            self.mode, self.returned = mode, []
+        def discover(self, url, approved):
+            primary = url.rstrip("/")
+            if self.mode == "approved":
+                observed = sorted({primary, *(f"https://cdn-{n:02d}.example" for n in range(MAX_APPROVED_ORIGINS))})
+                expanded = observed
+            elif self.mode == "audit":
+                observed = sorted({primary, *(f"https://telemetry-{n:03d}.example" for n in range(MAX_OBSERVED_AUDIT_ORIGINS))})
+                expanded = [primary]
+            else:
+                observed = sorted({*approved, f"https://cdn-{len(self.returned):02d}.example"})
+                expanded = observed
+            resources = [{"id": n, "url": value + "/resource", "depends_on": [0] if n else [], "headers": []}
+                         for n, value in enumerate(approved)]
+            result = DiscoveryResult(url, url, "actual-test-backend", 10000, len(observed), observed,
+                list(approved), [], resources, {value: "1.1.1.1" for value in approved}, list(expanded))
+            self.returned.append(deepcopy(result))
+            return result
+        def prepare(self, *_args, **_kwargs):
+            pytest.fail("failed convergence must stop before native preparation")
+    proofs = []
+    for mode, reason in reasons.items():
+        backend = BudgetBackend(mode)
+        proof = admission.prepare_site(amended, candidate_id=candidate["candidate_id"], navigation=navigation,
+            page_h3=h3, automated_screen=screen, backend=backend)
+        proofs.append(proof)
+        assert proof.name == "attempt-failure.json"
+        facts = admission.unsuccessful_attempt_failure_facts(proof, amended, candidate["candidate_id"])
+        assert facts["raw_failure"]["exception_type"] == "TerminalProbePolicyError"
+        assert facts["raw_failure"]["message"] == reason
+        assert facts["action"]["selected_page_ordinal"] == 0
+        assert facts["site_credit"] == facts["formal_accepted_trace_count"] == 0
+        assert facts["whole_domain_ineligible"] is False
+        passes = sorted(proof.parent.glob("discovery-pass-*.json"))
+        assert len(passes) == len(backend.returned) == (MAX_ORIGIN_PASSES if mode == "passes" else 1)
+        for path, observed in zip(passes, backend.returned):
+            assert admission._load(path.read_bytes()) == {
+                "source_url": observed.source_url, "approved_origins": observed.approved_origins,
+                "discovery": asdict(observed),
+            }
+            assert facts["attempt_inventory"][path.name]["sha256"] == admission._sha(path.read_bytes())
+        assert not (proof.parent / "operational-error.json").exists()
+        assert not (proof.parent / "preparation.json").exists()
+    status = admission.acquisition_status(amended)
+    assert [row["state"] for row in status["attempts"][candidate["candidate_id"]]] == ["failed-attempt-needs-explicit-terminal"] * 3
+    assert status["admitted_site_count"] == status["formal_accepted_trace_count"] == 0
+    assert status["formal_trace_target"] == 16_000
+    with pytest.raises(ValueError, match="revision 4"):
+        admission.produce_site_terminal(context, candidate_id=candidate["candidate_id"], attempt_failure=proofs[0])
+    assert admission._sha((context.root / "provenance.json").read_bytes()) == original_context_hash
+    old_error = tmp_path / "preserved-old-error.json"
+    old_error.write_bytes(admission._json({"exception_type": "TerminalProbePolicyError", "message": reasons["approved"], "scientific_credit": False}))
+    old_hash = admission._sha(old_error.read_bytes())
+    with pytest.raises(ValueError):
+        admission.unsuccessful_attempt_failure_facts(old_error, amended, candidate["candidate_id"])
+    assert admission._sha(old_error.read_bytes()) == old_hash
+    roots = _root_logs(amended, tmp_path)
+    terminal = admission.produce_site_terminal(amended, candidate_id=candidate["candidate_id"], root_surveys=roots,
+        attempt_failure=proofs[-1], automated_screen=screen)
+    terminal_facts = admission.verify_site_terminal(terminal, amended)
+    assert terminal_facts["outcome"] == "unsuccessful-live-attempt-screen-deferred" and terminal_facts["admission"] is None
+    saved = sorted(proofs[-1].parent.glob("discovery-pass-*.json"))[-1]
+    saved.chmod(0o644); saved.write_bytes(saved.read_bytes() + b" ")
+    with pytest.raises(ValueError, match="inventory changed"):
+        admission.verify_site_terminal(terminal, amended)
+
+
+def test_v6_convergence_unknown_malformed_and_outer_infrastructure_errors_stay_blocking(context, tmp_path, monkeypatch):
+    from qcsd_lab.class_acquisition import TerminalProbePolicyError
+    amended = _amended_context(context, tmp_path, revision=6)
+    candidate, navigation, h3, screen = _auto_page(amended, tmp_path)
+    original = admission._converge_origins
+    known = "approved-origin discovery exceeded its finite origin cap"
+    for mode in ("unknown", "malformed", "infrastructure", "no-live-pass", "validation-cause", "infrastructure-cause"):
+        class NonBudgetBackend(Backend):
+            def discover(self, url, approved):
+                result = super().discover(url, approved)
+                if mode == "malformed":
+                    result.expandable_origins = None
+                return result
+        def outside_error(backend, url):
+            if mode == "no-live-pass":
+                raise TerminalProbePolicyError(known)
+            original(backend, url)
+            if mode == "infrastructure":
+                raise OSError("actual outer persistence failure")
+            if mode in {"validation-cause", "infrastructure-cause"}:
+                try:
+                    raise (ValueError("configuration failure") if mode == "validation-cause" else OSError("storage failure"))
+                except Exception as cause:
+                    raise TerminalProbePolicyError(known) from cause
+            raise TerminalProbePolicyError(known + ": unknown variant")
+        with monkeypatch.context() as patch:
+            if mode != "malformed":
+                patch.setattr(admission, "_converge_origins", outside_error)
+            with pytest.raises((TerminalProbePolicyError, OSError)):
+                admission.prepare_site(amended, candidate_id=candidate["candidate_id"], navigation=navigation,
+                    page_h3=h3, automated_screen=screen, backend=NonBudgetBackend(amended))
+        attempt = sorted((amended.root / "attempts" / candidate["candidate_id"]).iterdir())[-1]
+        assert (attempt / "operational-error.json").exists()
+        assert not (attempt / "attempt-failure.json").exists()
+        assert not (attempt / "page-policy-failure.json").exists()
+        assert not (attempt / "preparation.json").exists()
+    status = admission.acquisition_status(amended)
+    assert all(row["state"] == "retryable-operational-error" for row in status["attempts"][candidate["candidate_id"]])
+    assert status["admitted_site_count"] == status["formal_accepted_trace_count"] == 0
+
+
+def test_observed_convergence_preserves_successful_graph_and_inner_failure_is_retained_once(context, tmp_path):
+    amended = _amended_context(context, tmp_path, revision=4)
+    candidate, navigation, h3, screen = _auto_page(amended, tmp_path)
+    backend = Backend(amended)
+    output = admission.prepare_site(amended, candidate_id=candidate["candidate_id"], navigation=navigation,
+        page_h3=h3, automated_screen=screen, backend=backend)
+    prepared = admission._unpack(output.read_bytes(), admission.PREPARATION_TYPE)
+    manifest = admission._load(admission._child(amended.root, prepared["prepared_workload"]).read_bytes())
+    expected = _prepared_manifest(f"https://{candidate['domain']}/", backend.calls[-1][1],
+        source_override=dict(amended.expected_runtime_source))
+    assert manifest == expected
+    graph = admission._load(admission._child(amended.root, prepared["full_resource_graph"]).read_bytes())
+    assert graph["resources"] == manifest["resources"] and graph["browser_request_headers"] == manifest["preparation"]["browser_request_headers"]
+    class InnerFailure(Backend):
+        def discover(self, _url, _approved):
+            raise RuntimeError("actual inner live discovery failure")
+    proof = admission.prepare_site(amended, candidate_id=candidate["candidate_id"], navigation=navigation,
+        page_h3=h3, automated_screen=screen, backend=InnerFailure(amended))
+    assert len(list(proof.parent.glob("attempt-failure.json"))) == len(list(proof.parent.glob("attempt-observation.json"))) == 1
+    assert admission.unsuccessful_attempt_failure_facts(proof, amended, candidate["candidate_id"])["raw_failure"]["message"] == "actual inner live discovery failure"
+    assert not (proof.parent / "operational-error.json").exists()

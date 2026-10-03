@@ -33,7 +33,7 @@ def backend_failure_fixture(tmp_path, monkeypatch, *, action_kind="catalogue-bou
             frozen = snapshot / name
             frozen.write_bytes(path.read_bytes())
             frozen_sources[name] = frozen
-    monkeypatch.setattr(evidence, "implementation_sources", lambda: dict(frozen_sources))
+    monkeypatch.setattr(evidence, "implementation_sources", lambda *, application_response_policy=False: dict(frozen_sources))
     barrier = datetime.now(UTC) - timedelta(seconds=1)
     hashes = evidence.implementation_hashes()
     runtime = evidence.begin_attempt_action(binding, hashes, barrier)
