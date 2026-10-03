@@ -41,6 +41,41 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
+**Latest milestone, 4 October, 05:45 Sydney (3 October, 18:45 UTC):**
+runtime 004 is installed on clean Lab `a8a42de` / Native `3d994f0d`.
+All twelve actual runtime operations and 2,385 source files independently
+reopen. The client build took 124 seconds; the two image builds took 60 and
+72 seconds. Fresh ordinary capture and deep verification pass on the complete
+260-resource, four-origin page. Padding qualification passes in 70 seconds,
+and all four defended preflights pass in nine seconds.
+
+Fresh FRONT 004 completes all 260 responses with no Native error, but Lab
+rejects one permitted congestion omission because its production clock
+precedes the controller's reduction clock by 97 microseconds. The verifier
+wrongly required those distinct clocks to be equal. The narrow correction
+passes **47 focused checks in 10.39 seconds**, preserving exact packet/event
+identity, full incoming cells and the exact one-percent omission bound.
+The recording stays failed and unsealed. The Lab correction is source-tested;
+integration, installation and a fresh capture remain required.
+
+A fresh parallel pair is staged but unlaunched. Its cheap prelaunch audit
+found that host completion still asks for an installed-image qualification
+receipt. A scoped correction runs ordinary result verification in the actual
+immutable collection image; **92 focused checks pass in 71.70 seconds**,
+including real local child execution, input mutation and invalid completion
+checks. An actual installed pair remains required. The earlier setup failure
+remains saved. These
+Lab-only corrections can reuse the unchanged, verified Native client;
+new Lab images and installed-source checks still receive their own records.
+
+Admission continuation 004 closed successfully between actions at
+**05:44:51 Sydney**, on unchanged Lab `818deb6` / Native `39464c62` and
+registry 000002. Immutable checkpoint **000052**, recorded
+at **05:43:41 Sydney**, has **22 terminal candidate decisions, one admitted
+site and zero formal traces**. Counters remain **1/50 admitted, 0/50 study
+shakedown and 0/16,000 formal**. The target remains **50 × five × 64**.
+See the [fresh runtime and clock evidence](docs/EVIDENCE-INDEX.md#v12-fresh-runtime-front-clock-and-parallel-completion).
+
 **Latest milestone, 4 October, 05:10 Sydney (3 October, 18:10 UTC):**
 Lab `8461848e` / Native `44e1ca23` is installed and independently reopened:
 all twelve runtime operations closed successfully and all 2,384 source files

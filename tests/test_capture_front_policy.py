@@ -25,7 +25,7 @@ def preparation():
         "qualified_chaff_origin_policy": "prepared-approved-origins-v1"}
 
 
-def fixture(root, omissions=1):
+def fixture(root, omissions=1, reduction_delay_us=0):
     native, rows, packets = base_fixture(root, 500)
     native.pop(policy.TAMARAW_FIELD)
     native[policy.FRONT_FIELD] = marker()
@@ -37,7 +37,7 @@ def fixture(root, omissions=1):
         row.update(satisfaction="missed", miss_reason="CongestionLimited", observed_size="")
         for key in fidelity.SCHEDULE_QCSD_FIELDS[1:-1]: row[key] = ""
         row["terminal_defense_elapsed_us"] = str(int(row["target_time_us"]) + 6000)
-        stamp = native["defense_start_monotonic_ns"] + int(row["terminal_defense_elapsed_us"]) * 1000 + 603
+        stamp = native["defense_start_monotonic_ns"] + (int(row["terminal_defense_elapsed_us"]) - reduction_delay_us) * 1000 + 603
         details = {"type": "slot_missed", "endpoint": 1, "slot": int(row["slot_id"]),
             "packet": {"timestamp_us": int(row["target_time_us"]), "direction": "outgoing", "length": 1200},
             "reason": "congestion_limited", "production_monotonic_ns": stamp, "production_sequence": index + 1}
@@ -86,6 +86,25 @@ def test_front_small_schedule_does_not_round_one_allowed_omission_up(tmp_path):
     metrics = fidelity._schedule_realization_metrics_from_path(tmp_path / "schedule.csv")
     assert metrics["scheduled_outgoing_events"] == 99
     assert not metrics["front_outgoing_omissions_within_bound"] and not eligible(native, metrics)
+
+
+def test_front_observation_production_precedes_its_later_controller_reduction(tmp_path):
+    native, rows, _, events = fixture(tmp_path, reduction_delay_us=97)
+    observation = json.loads(events[0]["details"])
+    assert (observation["production_monotonic_ns"] - native["defense_start_monotonic_ns"]) // 1000 == 5903
+    assert int(rows[0]["terminal_defense_elapsed_us"]) == 6000
+    metrics = fidelity._schedule_realization_metrics_from_path(tmp_path / "schedule.csv")
+    assert metrics["missed_events"] == metrics["front_outgoing_congestion_omissions"] == 1
+    assert metrics["front_outgoing_shaped_handoff_events"] == 99
+    assert eligible(native, metrics)
+
+
+def test_front_controller_reduction_cannot_precede_observation_production(tmp_path):
+    native, rows, packets, events = fixture(tmp_path)
+    rows[0]["terminal_defense_elapsed_us"] = "5999"
+    persist(tmp_path, native, rows, packets, events)
+    with pytest.raises(ValueError, match="native packet and clock identity"):
+        fidelity._schedule_realization_metrics_from_path(tmp_path / "schedule.csv")
 
 
 @pytest.mark.parametrize("mutation", ["pacing", "deadline", "abort", "incoming", "missing-event", "duplicate-event",

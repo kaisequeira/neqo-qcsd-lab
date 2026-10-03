@@ -523,6 +523,122 @@ def verify_results(path: Path, output: Path) -> dict[str, Any]:
             "formal_accepted_trace_count": 0, "scientific_credit": False}
 
 
+def _verification_inventory(value: dict[str, Any], path: Path, output: Path) -> dict[str, str]:
+    """Close source, qualified inputs and raw results without the verifier's own logs."""
+    runtime = value["runtime"]
+    files = {path, Path(runtime["source_manifest"]), Path(runtime["client_binary"]),
+             Path(runtime["base_launcher"]), Path(runtime["host_launcher"])}
+    source = Path(runtime["runtime_source_root"])
+    files.update((source / "src/qcsd_lab").rglob("*.py"))
+    files.add(source / "tools/rapid_parallel_capture.py")
+    for directory in (Path(runtime["execution_root"]) / "config", output):
+        for item in directory.rglob("*"):
+            relative = item.relative_to(directory)
+            if directory == output and (relative.parts[0].startswith("image-verification-")
+                                        or relative.as_posix() in {"deep-verification.json", "blocked.json"}):
+                continue
+            if item.is_symlink():
+                raise ValueError("parallel verification inputs contain a symlink")
+            if item.is_file():
+                files.add(item)
+    return {str(item): sha(read(item)) for item in sorted(files)}
+
+
+def result_verification_command(path: Path, output: Path) -> list[str]:
+    """Use the real installed verifier with all original absolute paths retained."""
+    value = authority(path)
+    if value["artifact_type"] != AUTHORITY_TYPE:
+        raise ValueError("installed diagnostic verification requires its diagnostic authority")
+    regular_dir(output)
+    if not output.is_relative_to(Path(value["runtime"]["execution_root"]) / "results"):
+        raise ValueError("parallel verification output is outside its execution results")
+    runtime = value["runtime"]
+    roots = {Path(runtime["runtime_source_root"]), Path(runtime["execution_root"]),
+             Path(runtime["source_manifest"]).parent, Path(runtime["client_binary"]).parent, path.parent}
+    command = ["docker", "run", "--rm", "--network", "none", "--read-only",
+               "--tmpfs", "/tmp:rw,nosuid,nodev,mode=1777", "--cap-drop", "ALL",
+               "--security-opt", "no-new-privileges", "--user", f"{os.getuid()}:{os.getgid()}",
+               "--label", "org.qcsd.owner=qcsd-lab", "--label", "org.qcsd.role=parallel-result-verification",
+               "--env", f"QCSD_LAB_ROOT={runtime['runtime_source_root']}",
+               "--env", f"QCSD_LAB_IMAGE_DIGEST={runtime['collection_image_digest']}",
+               "--env", "QCSD_LAB_SOURCE_METADATA=/usr/share/qcsd-lab/source.json",
+               "--env", "QCSD_PUBLIC_ORIGIN_ONLY=1", "--env", "PYTHONDONTWRITEBYTECODE=1"]
+    for root in sorted(roots):
+        regular_dir(root)
+        command.extend(["--volume", f"{root}:{root}:ro"])
+    return command + ["--entrypoint", "/opt/qcsd-venv/bin/python3", runtime["collection_image_digest"],
+                      "-I", "-B", "-m", "qcsd_lab.rapid_parallel_capture", "verify-installed",
+                      "--authority", str(path), "--output", str(output), "--sha256", sha(read(path))]
+
+
+def verify_results_in_image(path: Path, output: Path) -> dict[str, Any]:
+    """Record actual image verification; never manufacture an installed receipt on the host."""
+    value = authority(path)
+    if value["artifact_type"] != AUTHORITY_TYPE:
+        return verify_results(path, output)
+    host_source(value)
+    verify_operator_closure(path, output, value)
+    reopen_launch(path, output, value)
+    command = result_verification_command(path, output)
+    before = _verification_inventory(value, path, output)
+    index = 1
+    while (output / f"image-verification-{index:06d}").exists():
+        index += 1
+    operation = output / f"image-verification-{index:06d}"
+    operation.mkdir(mode=0o700)
+    started = now()
+    put(operation / "started.json", {"command": command, "started_at": started,
+        "authority_sha256": sha(read(path)), "input_files": before,
+        "formal_accepted_trace_count": 0, "scientific_credit": False})
+    process = None
+    invocation_error = None
+    try:
+        with (operation / "stdout.log").open("xb") as stdout, (operation / "stderr.log").open("xb") as stderr:
+            process = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
+                                     check=False)
+    except BaseException as error:
+        invocation_error = error
+    after = None
+    inventory_error = None
+    try:
+        after = _verification_inventory(value, path, output)
+    except (OSError, ValueError) as error:
+        inventory_error = error
+    put(operation / "completed.json", {"command": command, "started_at": started, "completed_at": now(),
+        "returncode": None if process is None else process.returncode,
+        "invocation_error": None if invocation_error is None else f"{type(invocation_error).__name__}: {invocation_error}",
+        "inventory_error": None if inventory_error is None else f"{type(inventory_error).__name__}: {inventory_error}",
+        "started_sha256": sha(read(operation / "started.json")),
+        "stdout_sha256": sha(read(operation / "stdout.log")), "stderr_sha256": sha(read(operation / "stderr.log")),
+        "input_files_after": after, "formal_accepted_trace_count": 0, "scientific_credit": False})
+    if invocation_error is not None:
+        raise invocation_error
+    if inventory_error is not None:
+        raise inventory_error
+    if before != after:
+        raise ValueError("parallel verification inputs changed during the actual image invocation")
+    payload = load(operation / "stdout.log")
+    runtime = value["runtime"]
+    if (not isinstance(payload, dict)
+        or set(payload) != {"schema_version", "authority_sha256", "preflight", "result"}
+        or type(payload["schema_version"]) is not int or payload["schema_version"] != 1
+        or payload["authority_sha256"] != sha(read(path))
+        or not isinstance(payload["preflight"], dict)
+        or not isinstance(payload["preflight"].get("runtime"), dict)
+        or payload["preflight"].get("authority_sha256") != payload["authority_sha256"]
+        or payload["preflight"]["runtime"].get("collection_image_digest") != runtime["collection_image_digest"]
+        or payload["preflight"]["runtime"].get("source_manifest_sha256") != sha(read(Path(runtime["source_manifest"])))
+        or payload["preflight"]["runtime"].get("client_sha256") != sha(read(Path(runtime["client_binary"])))):
+        raise ValueError("parallel installed verification returned another source, client, image or authority")
+    result = payload["result"]
+    if (not isinstance(result, dict) or type(result.get("valid")) is not bool
+        or type(result.get("formal_accepted_trace_count")) is not int
+        or result["formal_accepted_trace_count"] != 0 or result.get("scientific_credit") is not False
+        or process.returncode != (0 if result["valid"] else 1)):
+        raise ValueError("parallel installed verification result disagrees with its actual completion")
+    return result
+
+
 def reopen_launch(path: Path, output: Path, value: dict[str, Any]) -> None:
     """Bind current gate and Docker observations to the same actual launch."""
     from .process_scheduler import build_peer_host_partition
@@ -623,7 +739,7 @@ def launch_action(value: dict[str, Any]) -> str:
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("select", "initialize", "preflight", "release", "gate", "retire", "verify", "formal-inputs", "formal-dns"))
+    parser.add_argument("action", choices=("select", "initialize", "preflight", "release", "gate", "retire", "verify", "verify-installed", "formal-inputs", "formal-dns"))
     parser.add_argument("--authority", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--sha256")
@@ -649,9 +765,15 @@ def main(argv=None):
         gate(args.output, args.sha256, args.index, args.authority)
     elif args.action == "retire":
         retire_lane(args.output, args.index, load(args.actual))
+    elif args.action == "verify-installed":
+        preflight = image_preflight(args.authority, args.sha256)
+        result = verify_results(args.authority, args.output)
+        print(json.dumps({"schema_version": 1, "authority_sha256": args.sha256,
+                          "preflight": preflight, "result": result}, sort_keys=True))
+        return 0 if result["valid"] else 1
     else:
         print(json.dumps(verify_results(args.authority, args.output), sort_keys=True))
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -1956,7 +1956,10 @@ def _front_capture_metrics(schedule_path: Path, rows: list[dict[str, str]]) -> d
             or type(packet.get("timestamp_us")) is not int or packet["timestamp_us"] != _csv_uint(row, "target_time_us")
             or packet.get("direction") != "outgoing" or type(packet.get("length")) is not int or packet["length"] != 1200
             or _csv_uint(event, "monotonic_us") != production_ns // 1000
-            or (production_ns - start_ns) // 1000 != _csv_uint(row, "terminal_defense_elapsed_us")):
+            # Native preserves the observation's production clock, then records
+            # terminal_defense_elapsed_us when the controller reduces it. These
+            # are distinct instants; the reduction may follow production.
+            or (production_ns - start_ns) // 1000 > _csv_uint(row, "terminal_defense_elapsed_us")):
             raise ValueError("FRONT omission proof differs from its actual native packet and clock identity")
         matched_misses.add(slot)
         sequences.add(sequence)

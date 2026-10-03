@@ -74,7 +74,12 @@ def launch(authority_path: Path, output: Path) -> dict:
             "stdout_sha256": parallel.sha(parallel.read(output / "host.stdout")),
             "stderr_sha256": parallel.sha(parallel.read(output / "host.stderr")),
             "formal_accepted_trace_count": 0, "scientific_credit": False})
-        result = parallel.verify_results(authority_path, output)
+        # The capture child has closed. Its forwarding handler must not consume
+        # signals intended for the following installed verification process.
+        for watched, handler in previous.items():
+            signal.signal(watched, handler)
+        previous.clear()
+        result = parallel.verify_results_in_image(authority_path, output)
         parallel.put(output / "deep-verification.json", result)
         return result
     except BaseException as error:
@@ -112,7 +117,7 @@ def main(argv=None):
             result = parallel.retire_session(args.authority.absolute(), args.output.absolute())
         else:
             parallel.host_source(parallel.authority(args.authority))
-            result = parallel.verify_results(args.authority, args.output)
+            result = parallel.verify_results_in_image(args.authority, args.output)
     except (OSError, ValueError, TypeError, KeyError, RuntimeError, subprocess.SubprocessError) as error:
         print(f"parallel capture: {type(error).__name__}: {error}", file=sys.stderr)
         return 2

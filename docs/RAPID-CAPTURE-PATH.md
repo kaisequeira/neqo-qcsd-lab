@@ -14,7 +14,37 @@ homepage credit fix, endpoint-specific final UDP drain evidence and explicit
 prospective BuFLO incoming tolerance. They require fresh affected captures;
 the previous failed attempts keep their original results.
 
-**Latest milestone, 4 October, 05:10 Sydney (3 October, 18:10 UTC):**
+**Latest milestone, 4 October, 05:45 Sydney (3 October, 18:45 UTC):**
+fresh runtime 004, Lab `a8a42de` / Native `3d994f0d`, is installed and
+independently reopened: twelve actual operations, 2,385 source files and the
+actual exported client. Its fresh ordinary capture and deep check pass with
+all 260 resources and four origins. Fresh padding qualification and all four
+defended preflights also pass. FRONT completes every response without a
+Native error, then fails Lab's comparison of production and controller
+processing time: one permitted congestion omission is processed 97
+microseconds after production. The correction keeps their causal order and
+exact packet/event identity. **47 focused checks pass in 10.39 seconds**;
+a fresh installed recording remains required, and the old failure remains
+failed and unsealed.
+
+Before launching the staged second parallel pair, a cheap audit found a
+host completion path trying to read an installed-image qualification receipt.
+The scoped correction dispatches ordinary deep verification into the actual
+collection image. **92 focused source checks pass in 71.70 seconds**;
+the actual installed pair still needs to run.
+The next Lab-only refresh can reuse the unchanged verified Native client,
+with fresh image and installed-source records. No long browser/build cycle
+is required solely for these Lab corrections.
+
+Admission continuation 004 closed successfully between actions at
+**05:44:51 Sydney**, on the original `818deb6` / `39464c62` source and
+registry 000002. Immutable checkpoint **000052** at **05:43:41
+Sydney** records **22 decisions, one admitted site and zero formal traces**.
+Neither a ten-site nor a fifty-site cohort is frozen. The target remains
+**50 sites × five settings × 64 visits = 16,000 accepted formal traces**.
+See the [actual evidence and remaining checks](EVIDENCE-INDEX.md#v12-fresh-runtime-front-clock-and-parallel-completion).
+
+**Earlier milestone, 4 October, 05:10 Sydney (3 October, 18:10 UTC):**
 the repaired Lab `8461848e` / Native `44e1ca23` runtime is installed. All
 twelve actual runtime operations and 2,384 source files independently reopen.
 Fresh ordinary capture, padding qualification and the four defended

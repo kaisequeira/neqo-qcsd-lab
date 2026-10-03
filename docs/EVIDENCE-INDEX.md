@@ -9,6 +9,96 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ## Application response policy repair
 
+### V12 fresh runtime FRONT clock and parallel completion
+
+Runtime 004 is installed on Lab `a8a42de` / Native `3d994f0d`. Local
+namespace `terminal-primary-v12-runtime-20261003-004` retains its twelve
+actual operations, raw logs, complete 2,385-file inventory and actual runtime
+export. Canonical SHA is
+`2ae8b4bb8f7fc09f728d38e53e1e0d0e81bfb255c701eea18895c7f3b5f02a12`;
+installed client SHA is
+`8b4288335d481b36bc096891125651b85345589daa47fb7260d5aa9048b962f2`.
+The release build took 123.704 seconds; collection and preparation images
+took 59.654 and 71.933 seconds. Installed checks took 12.108 and 15.421
+seconds. Root and independent review reopened all twelve closures and the
+whole staged source inventory. This is installed-byte evidence, with zero
+site, shakedown or formal credit.
+
+Local `rapid-v12-capture-canary-20261003-001/actual-poki-004` preserves the
+complete original diagnostic 260-resource/four-origin workload. Fresh
+ordinary capture closed 0 in 147.964 seconds; ordinary deep verification
+closed 0 in 7.533 seconds. All nine indexed result files and the seal reopen.
+Fresh padding qualification closed 0 in 69.687 seconds; four defended
+preflights closed 0 in 8.795 seconds. This earlier diagnostic workload is
+separate from admission 017 and cannot supply its cohort or formal credit.
+
+FRONT 004 capture closed 1 in 156.391 seconds. Native reports complete,
+260/260 successful responses and no error. Lab rejected its sole outgoing
+congestion omission: production is at 1,241,288 microseconds relative to
+defence start, while controller reduction is at 1,241,385 microseconds.
+Its exact event production timestamp and packet identity match; the sole
+miss among 828 outgoing slots remains within the one-percent bound, and
+all 848 incoming cells are full. The old verifier incorrectly required
+those separately recorded clocks to be equal. The raw packets, events,
+schedule, run, PCAP, logs and failed attempt remain preserved; there is no
+result seal and no post-hoc promotion.
+
+Local `rapid-v12-front-reduction-clock-lab-checks-20261004-001` closes the
+narrow correction in [fidelity.py](../src/qcsd_lab/fidelity.py). It permits
+production to precede reduction, retaining exact event/packet identity,
+source/marker bindings, full-cell rules and the exact omission bound.
+The recorded focused operation passed **47 checks in 10.39 seconds**,
+including the retained raw recording and changed clock/packet/source
+negatives. Closure SHA is
+`232ed4fc430de025a9d522c3eb68d18fc279d061a48ffd1ad1c33d27aee19f14`.
+All seven proof files, three held source files and four failed raw inputs
+are hash-bound. Independent review found no concrete blocker. Source-test
+success does not seal the old recording; fresh installed capture proof
+remains required.
+
+Fresh `parallel-poki-002` inputs are staged but unlaunched. The prelaunch
+host check reached parameter validation successfully, then rejected because
+qualification requires its actual installed-image receipt. The correction
+in [parallel capture](../src/qcsd_lab/rapid_parallel_capture.py) dispatches
+ordinary deep verification into the immutable collection image and records
+actual invocation, input hashes, terminal status and raw logs. Local
+`parallel-image-completion-lab-checks-20261004-001` retains the actual focused
+command, unchanged source inventory and closed raw logs. **92 checks pass
+in 71.70 seconds**, with actual local child execution at the replaced Docker
+boundary, malformed/changed input and completion rejection, and restored
+signal handling. This is offline engineering evidence, not installed-image
+or capture proof. An actual new pair and recovery proof remain pending.
+No receipt is copied onto the host and no qualification guard is
+waived. The previous attempted pair and this unlaunched namespace remain
+separate.
+
+The formal completion path was also traced before installation. It reopens
+the actual installed-check receipt and verifies frozen result inputs with
+`require_current_implementation=False`; it does not request a new host
+installed-image receipt. The diagnostic correction therefore preserves that
+formal path. A fresh matched runtime needs no old-to-new control capsule;
+the existing v2 capsule projection does not yet authorize these newly added
+diagnostic control functions and must be extended explicitly before any
+future bridge across this change.
+
+Local `rapid-control-runtime-reuse-20261004-001` prospectively binds the
+existing runtime 004 client, Native `3d994f0d`, all twelve producer closures,
+complete Native source, Cargo lock and toolchain. Read-only original-runtime
+verification passes. It can reuse this unchanged binary for a Lab-only
+refresh, while actual new image operations and installed checks are retained
+separately. Reuse has not yet been invoked and no successor runtime is
+claimed installed.
+
+Admission 017 continuation 004 closed 0 between actions at
+`2026-10-03T18:44:51.148848Z`, after 541.496 seconds, on frozen Lab
+`818deb6` / Native `39464c62`, with root-log registry 000002 unchanged.
+Immutable checkpoint
+000052 at `2026-10-03T18:43:41.210502Z` binds **22 terminal decisions,
+one admitted site and zero formal traces**; raw checkpoint SHA is
+`828da1a05223aadc2d9558eac46bba243d7a82bbf6030a4f828b55b0f809dc5e`.
+The formal target remains **50 × five × 64 = 16,000**. New capture/runtime
+source identities do not relabel original admission or failed evidence.
+
 ### Successor startup and endpoint engineering checks
 
 #### V12 terminal-primary policy and Lab source checks
