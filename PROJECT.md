@@ -41,6 +41,18 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
+**Latest repair milestone, 3 October, 10:06 UTC:** Native `db93d9e` is
+published on `main` and the desktop branch. It preserves BuFLO's paired
+cadence identities when incoming startup opportunities are suppressed and
+allows the CS-BuFLO parser's single missing header byte only after matching
+actual peer-blocked evidence. The exact committed four-file source passed
+**424 core tests and 15 runner tests**; start/log/source hashes independently
+reopen. Fresh installed capture proof remains pending. Tamaraw's separately
+versioned ownership/retry and outgoing-timing repair is being authored.
+The target remains **50 sites × five settings × 64 visits = 16,000**,
+with **0/16,000 formal traces** accepted. The runtime and recordings below
+retain Lab `651a0e0` / Native `e593b7e`; they do not validate the new client.
+
 **Current successor milestone, 3 October:**
 Published Lab `651a0e0` pins published Native `e593b7e` and contains the prospective
 [revision-9 startup policy](docs/RAPID-SELECTION-V9.md) and its late-ACK

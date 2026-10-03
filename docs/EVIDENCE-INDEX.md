@@ -11,6 +11,38 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ### Successor startup and endpoint engineering checks
 
+#### Subsequent paired-cadence and blocked-parser repairs
+
+Published Native `db93d9e2bec919e154671bdb2263ba04b90280c8` is a direct
+child of `e593b7e` and modifies exactly four files. It reserves identifiers
+for genuinely suppressed BuFLO startup opportunities without inventing
+scheduled traffic. The CS-BuFLO parser may acquire its one missing header
+byte only with matching actual peer-blocked frontier evidence; stale,
+closed and completed streams retain the rejection rules.
+
+Actual immutable records are under
+`../diagnostic-rehearsals/inactive-endpoint-parser-native-checks-20261003-002/`:
+
+| Record prefix | Reopened actual result | Completion UTC |
+|---|---|---|
+| `combined-core-lib-004` | Exit 0; all 424 core tests passed. | `2026-10-03T09:55:18.330602+00:00` |
+| `combined-runner-007` | Exit 0; controller-to-kernel ACK-start cadence regression passed. | `2026-10-03T10:03:57.081363+00:00` |
+| `combined-direct-008` through `012` | All exits 0; 14 additional runner cases passed. | Last closed `2026-10-03T10:05:32.857645+00:00` |
+
+The exact four committed files match `source-005/`. Its source inventory
+SHA-256 is `8bf8d0fe747d3af51994cacaf5325c8e7ef32204392656daf66e3fce1b6a9901`;
+the sealed compiled runner SHA-256 is
+`04ae61a5af7f644a0f9da026597648dab66fcfebc7e426f09acdc6a18e12f440`.
+Every completion, start and stdout/stderr hash independently reopens.
+`combined-checks-complete.json` has SHA-256
+`baba323ead254d06d8327a74e12ea86299830916f68c713ecd9ff8c7a3d4992a`.
+Earlier failed core/runner fixtures remain preserved. Stable formatting ran;
+nightly-only options were unavailable. These are engineering checks with
+**zero scientific credit**. A new installed runtime and affected captures
+remain required; the earlier runtime below keeps its original source.
+
+#### Earlier installed startup source
+
 Published Lab `651a0e0` pins published Native
 `e593b7ee785e97059b442b0772646ae08666096d` and contains the
 [prospective revision-9 policy](RAPID-SELECTION-V9.md), declared at

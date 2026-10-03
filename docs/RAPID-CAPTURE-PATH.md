@@ -14,7 +14,15 @@ homepage credit fix, endpoint-specific final UDP drain evidence and explicit
 prospective BuFLO incoming tolerance. They require fresh affected captures;
 the previous failed attempts keep their original results.
 
-**Current successor milestone, 3 October:** published Lab
+**Latest repair milestone, 3 October, 10:06 UTC:** published Native
+`db93d9e` contains the focused BuFLO cadence-identity and CS-BuFLO parser-tail
+repairs. Its exact four committed files passed **424 core tests and 15 runner
+tests**, with independently reopened operation and source hashes. Installed
+affected capture proof remains pending. Tamaraw's prospective ownership/retry
+and timing amendment is being authored separately. These checks add no study
+trace credit and preserve the **50 × five × 64 = 16,000** target.
+
+**Earlier installed successor milestone, 3 October:** published Lab
 `651a0e0` pins published Native `e593b7e` and contains
 [revision 9](RAPID-SELECTION-V9.md), declared at
 **08:20:52 UTC**, and its late-ACK fidelity correction. Actual Native checks
