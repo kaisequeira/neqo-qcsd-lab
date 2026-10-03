@@ -41,6 +41,33 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
+**Latest milestone, 4 October, 06:04 Sydney (3 October, 19:04 UTC):**
+Lab `733bc4c` is published on main and the desktop branch. Runtime 005
+installs that clean source with unchanged Native `3d994f0d`; all twelve
+actual operations, 2,387 source files and the exported client independently
+reopen. Exact client reuse took 1.15 seconds, with no Native rebuild. The
+two fresh images took 65 and 72 seconds; installed checks took 17 seconds
+each. Frozen execution remains on `733bc4c` while documentation can advance.
+
+Fresh ordinary capture and deep verification pass with the complete
+260-resource/four-origin diagnostic page. Capture took 157 seconds and deep
+verification eight seconds; all nine sealed result files reopen. Fresh
+padding qualification passes in 71 seconds and all four defended preflights
+pass in nine seconds. **Fresh FRONT capture and deep verification now pass**:
+159 seconds for capture, ten for deep checking, all thirteen sealed files
+reopened. The actual observation is processed 103 microseconds after
+production, with one honestly retained congestion omission among 623 outgoing
+slots, within the declared one-percent bound. All 495 incoming cells are full.
+The earlier failed recording remains failed and unsealed.
+
+Fresh pair 003 is staged with the same full graph, settings and current named
+qualification; its actual two-container BuFLO/CS-BuFLO trial is running.
+Parallel speed, fidelity and recovery remain unproven until their actual
+closures verify. Admission remains paused at checkpoint 000052: **22 terminal
+decisions, 1/50 sites admitted, 0/50 study shakedown and 0/16,000 formal**.
+These one-site diagnostics do not replace the ten-site study shakedown.
+See the [runtime 005 and fresh FRONT evidence](docs/EVIDENCE-INDEX.md#v12-runtime-005-and-fresh-front).
+
 **Latest milestone, 4 October, 05:45 Sydney (3 October, 18:45 UTC):**
 runtime 004 is installed on clean Lab `a8a42de` / Native `3d994f0d`.
 All twelve actual runtime operations and 2,385 source files independently

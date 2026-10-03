@@ -14,7 +14,27 @@ homepage credit fix, endpoint-specific final UDP drain evidence and explicit
 prospective BuFLO incoming tolerance. They require fresh affected captures;
 the previous failed attempts keep their original results.
 
-**Latest milestone, 4 October, 05:45 Sydney (3 October, 18:45 UTC):**
+**Latest milestone, 4 October, 06:04 Sydney (3 October, 19:04 UTC):**
+published Lab `733bc4c` / unchanged Native `3d994f0d` has an independently
+reopened runtime 005: twelve successful operations, 2,387 source files and
+the actual exported client. Exact verified client reuse took 1.15 seconds;
+there was no Native rebuild. Fresh ordinary capture/deep verification,
+padding qualification and all four defended preflights pass. **Fresh FRONT
+capture and deep verification also pass**, preserving all 260 resources and
+four origins. All nine ordinary and thirteen FRONT sealed evidence files
+reopen. FRONT retains its one permitted congestion omission and the real
+103-microsecond production-to-processing delay. The old failure stays failed.
+
+The actual new two-container BuFLO/CS-BuFLO pair 003 is running on that
+source and qualification. Parallel/recovery proof remains required. Admission
+is paused at checkpoint 000052, with **22 decisions and one admitted site**.
+The ten-site diagnostic study and final fifty-site cohort remain unfrozen;
+formal progress is still **0/16,000**. The next fallback survey is staged
+from the original admission image, covering the next contiguous forty
+catalogue entries; it has not run. See the
+[fresh runtime and capture evidence](EVIDENCE-INDEX.md#v12-runtime-005-and-fresh-front).
+
+**Earlier milestone, 4 October, 05:45 Sydney (3 October, 18:45 UTC):**
 fresh runtime 004, Lab `a8a42de` / Native `3d994f0d`, is installed and
 independently reopened: twelve actual operations, 2,385 source files and the
 actual exported client. Its fresh ordinary capture and deep check pass with

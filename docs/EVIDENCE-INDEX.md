@@ -9,6 +9,68 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ## Application response policy repair
 
+### V12 runtime 005 and fresh FRONT
+
+Local `terminal-primary-v12-runtime-20261004-005` installs published Lab
+`733bc4ca0dcb58af1949183ce62f8a186de300c4` with unchanged Native
+`3d994f0d557e2d27873bace0f4efd0f401660bc7`. Canonical SHA is
+`9b48b20132835dedb951a415bf2d040eb974b2334dccd97ee2923dafd55cd9b8`.
+All twelve actual operation commands, starts, completions and raw logs reopen,
+as do the complete 2,387-file staged inventory and the clean execution
+checkout. All 1,783 Native entries, Cargo lock and toolchain match runtime
+004. The actual client reuse closed 0 in 1.153 seconds; its retained proof
+SHA is `235d7589c340d289b86efaee6bdf0b0981cc7d565d5cb95892350bad2266a6f1`.
+It preserves the original runtime 004 build identity separately. No new
+Native release-build records were created.
+
+Collection and preparation image builds closed 0 in 65.094 and 72.106
+seconds; their installed source/client checks closed 0 in 17.352 and 16.889
+seconds. Actual export closed 0 in 5.169 seconds. Collection image is
+`sha256:bb33fa15929258dafb0cc03baa8016bc12d8c4e9c4f489172d3ef333366ffd88`;
+preparation image is
+`sha256:22acc548b8a7e1e3bc61c1e81bdc47f32a7980acb0f55ce034dae1b8a72fcf70`.
+The exported executable client remains
+`8b4288335d481b36bc096891125651b85345589daa47fb7260d5aa9048b962f2`.
+The twelve closures, unchanged producer/client source and actual installed
+export independently verify. This is installed-byte evidence, not formal
+capture authority.
+
+Fresh `rapid-v12-capture-canary-20261003-001/actual-poki-005` preserves the
+complete earlier diagnostic 260-resource/four-origin page, distinct from
+admission 017. Ordinary capture closed 0 in 156.811 seconds and ordinary
+deep verification closed 0 in 7.908 seconds. Its receipt SHA is
+`de75d2996f2019e59ea9841d53636d5e23ab2a6ca302ea0b73bffa5037ff473c`;
+all nine sealed evidence files independently reopen. All 260 responses
+succeeded across four H3 origins; the 259 nonprimary response bytes, hashes
+and statuses match the frozen expected table. Primary response is successful
+and recorded separately. Fresh padding qualification closed 0 in 71.429
+seconds; four defended preflights closed 0 in 9.076 seconds.
+
+Fresh FRONT capture closed 0 in 158.966 seconds; deep verification closed 0
+in 10.050 seconds, at `2026-10-03T18:59:24.428559Z`. Receipt SHA is
+`78d486a2ae956fad1a996cfa46d6ca8f840fbc752ef7e3449ced9cd786f6c6e9`;
+all thirteen sealed files, exact source/image/qualification, actual commands,
+closed raw logs and full graph independently reopen. The schedule records
+623 outgoing and 495 incoming slots. One outgoing CongestionLimited miss
+is retained honestly, with exact ratio `100 <= 623`; every incoming cell is
+full. Its production time is 387,880 microseconds relative to defence start;
+controller reduction is 387,983 microseconds, a real 103-microsecond delay.
+This fresh live result verifies the causal clock correction without an
+invented tolerance. The preceding 97-microsecond failed recording remains
+failed, unsealed and unpromoted. Both new recordings grant zero site,
+study-shakedown or formal credit.
+
+Fresh pair 003 authority SHA is
+`d5c3c7dd818fe6d78831d474b4a2535abdd35f17414342379d6ba985af8188f6`.
+Its local create-only helper
+`rapid-v12-paired-diagnostic-20261004-001/stage_pair.py`, SHA
+`2bb735c406b286ba8df9cc215a24a8258d76110433d8c8950b26965aad7a18b6`,
+binds runtime 005, complete graph, seeds, limits, current qualification and
+unchanged parameter bytes. The prospective campaign derivation changes only
+names. The actual operator launch is running; no parallel or recovery pass
+is inferred from staging or passing preflights. Pair 002 remains unlaunched
+and preserved on its original source.
+
 ### V12 fresh runtime FRONT clock and parallel completion
 
 Runtime 004 is installed on Lab `a8a42de` / Native `3d994f0d`. Local
