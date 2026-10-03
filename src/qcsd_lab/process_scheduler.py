@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import json
 import os
 import resource
 import threading
+import time
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -32,6 +34,31 @@ PORTABLE_ETF_SCHEDULER_RUNTIME_V4_SOURCE = (
     "linux-cgroup-procfs-monitor-and-docker-host-prelaunch-v4"
 )
 CAPTURE_SCHEDULER_HOST_ENV = "QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_B64"
+CAPTURE_SCHEDULER_HOST_FILE_ENV = "QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_FILE"
+CAPTURE_SCHEDULER_HOST_SHA256_ENV = "QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_SHA256"
+PEER_HOST_PARTITION_CONTRACT = "qcsd-two-lane-peer-cpu-partition-v1"
+PEER_SCHEDULER_RUNTIME_SCHEMA_VERSION = 5
+PEER_SCHEDULER_RUNTIME_SOURCE = (
+    "linux-cgroup-procfs-monitor-and-docker-host-prelaunch-v5"
+)
+_PEER_HOST_SCOPE = (
+    "all running Docker containers and both declared workers at prelaunch; "
+    "exact worker identities use disjoint CPU pairs and all sidecars use the residual CPUs"
+)
+_PEER_HOST_UNAVAILABLE_SCOPE = [
+    "non-container host processes",
+    "containers or cpuset changes after the prelaunch observation",
+    "host-kernel and hypervisor scheduling of the selected logical CPUs",
+]
+_PEER_WORKER_KEYS = {"id", "name", "image_id", "client_cpu", "orchestrator_cpu"}
+_PEER_HOST_KEYS = {
+    "schema_version", "source", "peer_contract", "captured_at_unix_ns",
+    "protected_cpus", "available_cpus", "owner_label", "docker_ncpu",
+    "expected_sidecars", "declared_workers", "measured_container_id",
+    "inspected_containers", "overlapping_container_ids_by_cpu",
+    "inspected_container_set_matches_expected", "valid", "verified_scope",
+    "unavailable_scope",
+}
 CAPTURE_SCHEDULER_MONITOR_INTERVAL_US = 10_000
 
 _CGROUP_CPU_STAT_PATHS = (
@@ -92,6 +119,7 @@ _HOST_CONTAINER_V2_KEYS = {
     "protected_cpu_overlaps",
     "expected_sidecar",
 }
+_PEER_CONTAINER_KEYS = _HOST_CONTAINER_V2_KEYS | {"image_id", "state", "expected_worker"}
 _CPU_STAT_EVIDENCE_KEYS = {
     "available",
     "scope",
@@ -130,6 +158,9 @@ _TASK_MONITOR_KEYS = {
     "unexpected_client_cpu_tasks",
     "unexpected_task_receipt_overflow",
     "scan_errors",
+}
+_PEER_TASK_MONITOR_KEYS = _TASK_MONITOR_KEYS | {
+    "protected_cpus", "unexpected_pair_escape_tasks", "pair_escape_task_receipt_overflow",
 }
 
 
@@ -214,9 +245,22 @@ def scheduler_receipt_cpus(
 def capture_scheduler_launch_prefix() -> list[str]:
     """Fail closed on the container partition before elevating only the client."""
 
+    peer_file_selected = (
+        CAPTURE_SCHEDULER_HOST_FILE_ENV in os.environ
+        or CAPTURE_SCHEDULER_HOST_SHA256_ENV in os.environ
+    )
     if capture_scheduler_contract() is None:
+        if peer_file_selected:
+            raise ValueError("prospective peer partition requires the portable v4 Native scheduler contract")
         return []
     client_cpu, orchestrator_cpu = capture_scheduler_cpus()
+    if peer_file_selected:
+        host = _load_host_partition()
+        if not _host_partition_peer_valid(host):
+            raise ValueError("prospective peer host partition failed before client launch")
+        worker = next(worker for worker in host["declared_workers"] if worker["id"] == host["measured_container_id"])
+        if [client_cpu, orchestrator_cpu] != [worker["client_cpu"], worker["orchestrator_cpu"]]:
+            raise ValueError("measured worker CPU pair differs from the hash-bound peer partition")
     affinity = os.sched_getaffinity(0)
     if affinity != {orchestrator_cpu}:
         raise ValueError(
@@ -509,6 +553,210 @@ def _host_partition_v2_valid(
     )
 
 
+def _docker_id(value: Any) -> bool:
+    return bool(
+        isinstance(value, str) and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _image_id(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith("sha256:") and _docker_id(value[7:])
+
+
+def _peer_partition_workers(value: Mapping[str, Any]) -> tuple[dict[str, Mapping[str, Any]], list[int]] | None:
+    available = value.get("available_cpus")
+    workers = value.get("declared_workers")
+    if (
+        not isinstance(available, list) or len(available) < 5
+        or any(not _uint(cpu) for cpu in available)
+        or available != sorted(set(available))
+        or not isinstance(workers, list) or len(workers) != 2
+    ):
+        return None
+    by_id: dict[str, Mapping[str, Any]] = {}
+    names: set[str] = set()
+    protected: set[int] = set()
+    for worker in workers:
+        if not isinstance(worker, Mapping) or set(worker) != _PEER_WORKER_KEYS:
+            return None
+        container_id, name = worker["id"], worker["name"]
+        client, helper = worker["client_cpu"], worker["orchestrator_cpu"]
+        if (
+            not _docker_id(container_id) or container_id in by_id
+            or not isinstance(name, str) or not name or name in names
+            or not _image_id(worker["image_id"])
+            or not _uint(client) or client < 1 or not _uint(helper) or helper <= client
+            or not {client, helper}.issubset(available)
+            or protected.intersection({client, helper})
+        ):
+            return None
+        by_id[container_id] = worker
+        names.add(name)
+        protected.update((client, helper))
+    if (
+        not _docker_id(value.get("measured_container_id"))
+        or value["measured_container_id"] not in by_id or not set(available) - protected
+    ):
+        return None
+    return by_id, sorted(protected)
+
+
+def _host_partition_peer_valid(value: Any) -> bool:
+    """Accept two explicitly declared workers; do not grant arbitrary overlap authority."""
+
+    if not isinstance(value, Mapping) or set(value) != _PEER_HOST_KEYS:
+        return False
+    partition = _peer_partition_workers(value)
+    if partition is None:
+        return False
+    workers, protected = partition
+    available = value["available_cpus"]
+    residual = sorted(set(available) - set(protected))
+    expected = value.get("expected_sidecars")
+    containers = value.get("inspected_containers")
+    overlaps = value.get("overlapping_container_ids_by_cpu")
+    if (
+        value.get("schema_version") != 5
+        or value.get("source") != "docker-inspect-all-running-containers-and-declared-workers-prelaunch-v5"
+        or value.get("peer_contract") != PEER_HOST_PARTITION_CONTRACT
+        or not _uint(value.get("captured_at_unix_ns")) or value["captured_at_unix_ns"] == 0
+        or value.get("protected_cpus") != protected
+        or value.get("owner_label") != "org.qcsd.owner=qcsd-lab"
+        or not _uint(value.get("docker_ncpu")) or value["docker_ncpu"] < len(available)
+        or not isinstance(expected, Mapping)
+        or any(not isinstance(name, str) or not name or not _docker_id(cid) for name, cid in expected.items())
+        or len(set(expected.values())) != len(expected)
+        or set(expected.values()).intersection(workers)
+        or set(expected).intersection(worker["name"] for worker in workers.values())
+        or not isinstance(containers, list)
+        or not isinstance(overlaps, Mapping) or set(overlaps) != {str(cpu) for cpu in protected}
+        or value.get("inspected_container_set_matches_expected") is not True
+        or value.get("valid") is not True
+        or value.get("verified_scope") != _PEER_HOST_SCOPE
+        or value.get("unavailable_scope") != _PEER_HOST_UNAVAILABLE_SCOPE
+    ):
+        return False
+    ids: set[str] = set()
+    names: set[str] = set()
+    derived = {str(cpu): [] for cpu in protected}
+    for container in containers:
+        if not isinstance(container, Mapping) or set(container) != _PEER_CONTAINER_KEYS:
+            return False
+        cid, name = container.get("id"), container.get("name")
+        effective, configured = container.get("effective_cpus"), container.get("configured_cpuset")
+        if (
+            not _docker_id(cid) or cid in ids
+            or not isinstance(name, str) or not name or name in names
+            or not _image_id(container.get("image_id"))
+            or not isinstance(container.get("study"), str) or not isinstance(container.get("role"), str)
+            or not isinstance(configured, str) or not configured
+            or not isinstance(effective, list) or any(not _uint(cpu) for cpu in effective)
+            or effective != sorted(set(effective))
+            or not set(effective).issubset(available)
+            or container.get("state") not in {"created", "running"}
+            or container.get("expected_worker") is not (cid in workers)
+            or container.get("expected_sidecar") is not (expected.get(name) == cid)
+        ):
+            return False
+        try:
+            if sorted(_cpu_list(configured)) != effective:
+                return False
+        except ValueError:
+            return False
+        worker = workers.get(cid)
+        if worker is not None:
+            if (
+                name != worker["name"] or container["image_id"] != worker["image_id"]
+                or effective != [worker["client_cpu"], worker["orchestrator_cpu"]]
+            ):
+                return False
+        elif expected.get(name) != cid or effective != residual or container["state"] != "running":
+            return False
+        actual_overlaps = [cpu for cpu in protected if cpu in effective]
+        if container.get("protected_cpu_overlaps") != actual_overlaps:
+            return False
+        for cpu in actual_overlaps:
+            derived[str(cpu)].append(cid)
+        ids.add(cid)
+        names.add(name)
+    return bool(
+        ids == set(workers) | set(expected.values())
+        and names == {worker["name"] for worker in workers.values()} | set(expected)
+        and all(overlaps[key] == sorted(derived[key]) for key in derived)
+    )
+
+
+def build_peer_host_partition(
+    inspected: list[Mapping[str, Any]], available_cpus: list[int],
+    declared_workers: list[Mapping[str, Any]], expected_sidecars: Mapping[str, str],
+    measured_container_id: str, *, docker_ncpu: int,
+) -> dict[str, Any]:
+    """Build a prospective proof from actual Docker inspect records after create.
+
+    The caller must supply every running container and both declared workers.
+    Docker IDs and image IDs are observed identities, never guessed launch names.
+    """
+
+    value: dict[str, Any] = {
+        "schema_version": 5,
+        "source": "docker-inspect-all-running-containers-and-declared-workers-prelaunch-v5",
+        "peer_contract": PEER_HOST_PARTITION_CONTRACT,
+        "captured_at_unix_ns": time.time_ns(),
+        "available_cpus": list(available_cpus), "docker_ncpu": docker_ncpu,
+        "owner_label": "org.qcsd.owner=qcsd-lab",
+        "declared_workers": [dict(worker) for worker in declared_workers],
+        "measured_container_id": measured_container_id,
+        "expected_sidecars": dict(expected_sidecars),
+        "inspected_container_set_matches_expected": True, "valid": True,
+        "verified_scope": _PEER_HOST_SCOPE,
+        "unavailable_scope": list(_PEER_HOST_UNAVAILABLE_SCOPE),
+    }
+    partition = _peer_partition_workers(value)
+    if partition is None or not isinstance(inspected, list):
+        raise ValueError("two-worker CPU partition requires two disjoint pairs and a residual CPU pool")
+    workers, protected = partition
+    value["protected_cpus"] = protected
+    containers = []
+    for item in inspected:
+        if not isinstance(item, Mapping):
+            raise ValueError("Docker inspect record is not an object")
+        config, host, state = item.get("Config"), item.get("HostConfig"), item.get("State")
+        if not all(isinstance(part, Mapping) for part in (config, host, state)):
+            raise ValueError("Docker inspect record lacks configuration or state")
+        labels = config.get("Labels") or {}
+        if not isinstance(labels, Mapping) or labels.get("org.qcsd.owner") != "qcsd-lab":
+            raise ValueError("peer partition refuses a container without the qcsd-lab owner label")
+        status = state.get("Status")
+        if status not in {"created", "running"} or state.get("Running") is not (status == "running"):
+            raise ValueError("peer partition requires created workers or running containers")
+        configured = host.get("CpusetCpus")
+        if not isinstance(configured, str) or not configured:
+            raise ValueError("peer partition requires an explicit Docker cpuset")
+        effective = sorted(_cpu_list(configured))
+        name = item.get("Name")
+        if not isinstance(name, str):
+            raise ValueError("Docker inspect record lacks a name")
+        name = name.removeprefix("/")
+        cid = item.get("Id")
+        containers.append({
+            "id": cid, "name": name, "image_id": item.get("Image"), "state": status,
+            "study": labels.get("org.qcsd.study", ""), "role": labels.get("org.qcsd.role", ""),
+            "configured_cpuset": configured, "effective_cpus": effective,
+            "protected_cpu_overlaps": [cpu for cpu in protected if cpu in effective],
+            "expected_sidecar": expected_sidecars.get(name) == cid,
+            "expected_worker": cid in workers,
+        })
+    value["inspected_containers"] = sorted(containers, key=lambda item: (item["name"], item["id"]))
+    value["overlapping_container_ids_by_cpu"] = {
+        str(cpu): sorted(item["id"] for item in containers if cpu in item["effective_cpus"])
+        for cpu in protected
+    }
+    if not _host_partition_peer_valid(value):
+        raise ValueError("Docker peer partition identities, CPU pairs, or container inventory failed verification")
+    return value
+
+
 def _host_partition_valid(value: Any) -> bool:
     """Validate either immutable scheduler-host receipt by its explicit version."""
 
@@ -522,6 +770,8 @@ def _host_partition_valid(value: Any) -> bool:
         return _host_partition_v2_valid(value, portable=True)
     if value.get("schema_version") == 4:
         return _host_partition_v2_valid(value, sparse=True)
+    if value.get("schema_version") == 5:
+        return _host_partition_peer_valid(value)
     return False
 
 
@@ -614,7 +864,25 @@ def _unavailable_host_partition(reason: str) -> dict[str, Any]:
 
 
 def _load_host_partition() -> dict[str, Any]:
+    supplied_file = os.environ.get(CAPTURE_SCHEDULER_HOST_FILE_ENV)
+    supplied_digest = os.environ.get(CAPTURE_SCHEDULER_HOST_SHA256_ENV)
     encoded = os.environ.get(CAPTURE_SCHEDULER_HOST_ENV)
+    if supplied_file is not None or supplied_digest is not None:
+        try:
+            if encoded or not supplied_file or not _docker_id(supplied_digest):
+                raise ValueError("host partition file requires its sole, explicit SHA256 binding")
+            path = Path(supplied_file)
+            if path.is_symlink() or not path.is_file():
+                raise ValueError("host partition file is absent or a symlink")
+            raw = path.read_bytes()
+            if hashlib.sha256(raw).hexdigest() != supplied_digest:
+                raise ValueError("host partition file SHA256 changed")
+            value = json.loads(raw)
+            if capture_scheduler_contract() != PORTABLE_ETF_SCHEDULER_CONTRACT_V4 or not _host_partition_peer_valid(value):
+                raise ValueError("host partition file is not the prospective peer contract")
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+            return _unavailable_host_partition(f"invalid host partition file: {error}")
+        return dict(value)
     if not encoded:
         return _unavailable_host_partition(
             f"{CAPTURE_SCHEDULER_HOST_ENV} was not supplied by the Docker launcher"
@@ -741,6 +1009,9 @@ class CaptureSchedulerMonitor:
         self._client_cpu_tasks_max = 0
         self._expected_tasks_max = 0
         self._unexpected: dict[tuple[int, int], dict[str, Any]] = {}
+        self._pair_escapes: dict[tuple[int, int], dict[str, Any]] = {}
+        self._overflowed_pair_escapes = False
+        self._peer = self._host_partition.get("schema_version") == 5
         self._scan_errors: list[str] = []
         self._overflowed_unexpected = False
         self._stop = threading.Event()
@@ -822,6 +1093,15 @@ class CaptureSchedulerMonitor:
                     )
                     continue
                 visible += 1
+                if self._peer and not cpus.issubset({self._client_cpu, self._orchestrator_cpu}):
+                    key = (tgid, tid)
+                    if len(self._pair_escapes) < _MAX_RECORDED_TASKS:
+                        self._pair_escapes.setdefault(key, {
+                            "tgid": tgid, "tid": tid, "name": selected.get("Name", ""),
+                            "process_group_id": process_group, "allowed_cpus": sorted(cpus),
+                        })
+                    else:
+                        self._overflowed_pair_escapes = True
                 if self._client_cpu not in cpus:
                     continue
                 eligible += 1
@@ -887,6 +1167,12 @@ class CaptureSchedulerMonitor:
             "unexpected_task_receipt_overflow": self._overflowed_unexpected,
             "scan_errors": list(self._scan_errors),
         }
+        if self._peer:
+            monitor.update({
+                "protected_cpus": [self._client_cpu, self._orchestrator_cpu],
+                "unexpected_pair_escape_tasks": [self._pair_escapes[key] for key in sorted(self._pair_escapes)],
+                "pair_escape_task_receipt_overflow": self._overflowed_pair_escapes,
+            })
         portable = self._contract == PORTABLE_ETF_SCHEDULER_CONTRACT
         sparse = self._contract == PORTABLE_ETF_SCHEDULER_CONTRACT_V4
         kernel_timed = self._contract in {
@@ -894,14 +1180,25 @@ class CaptureSchedulerMonitor:
             PORTABLE_ETF_SCHEDULER_CONTRACT,
             PORTABLE_ETF_SCHEDULER_CONTRACT_V4,
         }
-        expected_partition_schema = 4 if sparse else (3 if portable else (2 if kernel_timed else 1))
+        expected_partition_schema = 5 if self._peer else (4 if sparse else (3 if portable else (2 if kernel_timed else 1)))
+        declared_workers = self._host_partition.get("declared_workers", [])
+        measured_worker = next((
+            worker for worker in (declared_workers if isinstance(declared_workers, list) else [])
+            if isinstance(worker, Mapping) and worker.get("id") == self._host_partition.get("measured_container_id")
+        ), {}) if self._peer else {}
         valid = bool(
             _host_partition_valid(self._host_partition)
             and self._host_partition.get("schema_version") == expected_partition_schema
             and (
-                not (portable or sparse)
+                not (portable or sparse) or self._peer
                 or self._host_partition.get("protected_cpus")
                 == [self._client_cpu, self._orchestrator_cpu]
+            )
+            and (
+                not self._peer or sparse
+                and [measured_worker.get("client_cpu"), measured_worker.get("orchestrator_cpu")]
+                == [self._client_cpu, self._orchestrator_cpu]
+                and not self._pair_escapes and not self._overflowed_pair_escapes
             )
             and cpu_stat["available"] is True
             and cpu_stat["nr_throttled_delta"] == 0
@@ -928,14 +1225,19 @@ class CaptureSchedulerMonitor:
                 )
             ),
         ]
+        if self._peer:
+            verified_scope[-1] = _PEER_HOST_SCOPE
+            verified_scope.append("visible task affinities stay within the declared measured worker CPU pair")
         return {
             "schema_version": (
+                PEER_SCHEDULER_RUNTIME_SCHEMA_VERSION if self._peer else
                 PORTABLE_ETF_SCHEDULER_RUNTIME_V4_SCHEMA_VERSION if sparse else
                 PORTABLE_ETF_SCHEDULER_RUNTIME_SCHEMA_VERSION if portable else
                 BUFLO_ETF_SCHEDULER_RUNTIME_SCHEMA_VERSION if kernel_timed else
                 CAPTURE_SCHEDULER_RUNTIME_SCHEMA_VERSION
             ),
             "source": (
+                PEER_SCHEDULER_RUNTIME_SOURCE if self._peer else
                 PORTABLE_ETF_SCHEDULER_RUNTIME_V4_SOURCE if sparse else
                 PORTABLE_ETF_SCHEDULER_RUNTIME_SOURCE if portable else
                 BUFLO_ETF_SCHEDULER_RUNTIME_SOURCE if kernel_timed else
@@ -1084,10 +1386,16 @@ def capture_scheduler_runtime_evidence_valid(value: Any) -> bool:
         PORTABLE_ETF_SCHEDULER_CONTRACT_V4,
     }
     host_partition = value.get("host_partition")
+    peer = isinstance(host_partition, Mapping) and host_partition.get("schema_version") == 5
+    if peer and not sparse:
+        return False
     if portable or sparse:
         if not _host_partition_valid(host_partition):
             return False
-        if sparse:
+        if peer:
+            worker = next(worker for worker in host_partition["declared_workers"] if worker["id"] == host_partition["measured_container_id"])
+            client_cpu, orchestrator_cpu = worker["client_cpu"], worker["orchestrator_cpu"]
+        elif sparse:
             client_cpu, orchestrator_cpu = host_partition["available_cpus"][-2:]
         else:
             ncpu = host_partition["docker_ncpu"]
@@ -1095,18 +1403,20 @@ def capture_scheduler_runtime_evidence_valid(value: Any) -> bool:
     else:
         client_cpu, orchestrator_cpu = CAPTURE_CLIENT_CPU, CAPTURE_ORCHESTRATOR_CPU
     expected_schema = (
+        PEER_SCHEDULER_RUNTIME_SCHEMA_VERSION if peer else
         PORTABLE_ETF_SCHEDULER_RUNTIME_V4_SCHEMA_VERSION if sparse else
         PORTABLE_ETF_SCHEDULER_RUNTIME_SCHEMA_VERSION if portable else
         BUFLO_ETF_SCHEDULER_RUNTIME_SCHEMA_VERSION if kernel_timed else
         CAPTURE_SCHEDULER_RUNTIME_SCHEMA_VERSION
     )
     expected_source = (
+        PEER_SCHEDULER_RUNTIME_SOURCE if peer else
         PORTABLE_ETF_SCHEDULER_RUNTIME_V4_SOURCE if sparse else
         PORTABLE_ETF_SCHEDULER_RUNTIME_SOURCE if portable else
         BUFLO_ETF_SCHEDULER_RUNTIME_SOURCE if kernel_timed else
         CAPTURE_SCHEDULER_RUNTIME_SOURCE
     )
-    expected_partition_schema = 4 if sparse else (3 if portable else (2 if kernel_timed else 1))
+    expected_partition_schema = 5 if peer else (4 if sparse else (3 if portable else (2 if kernel_timed else 1)))
     expected_verified_scope = [
         f"measured process-group eligibility for logical CPU {client_cpu} in the collection PID namespace",
         "collection-cgroup CPU throttling counters over the measured client interval",
@@ -1121,6 +1431,9 @@ def capture_scheduler_runtime_evidence_valid(value: Any) -> bool:
             )
         ),
     ]
+    if peer:
+        expected_verified_scope[-1] = _PEER_HOST_SCOPE
+        expected_verified_scope.append("visible task affinities stay within the declared measured worker CPU pair")
     cpu_stat = value.get("cgroup_cpu_stat")
     steal = value.get("proc_stat_steal")
     monitor = value.get("guest_task_monitor")
@@ -1145,7 +1458,7 @@ def capture_scheduler_runtime_evidence_valid(value: Any) -> bool:
         or steal.get("scope")
         != f"guest-visible aggregate for logical CPU {client_cpu}, not client-process attribution"
         or not isinstance(monitor, Mapping)
-        or set(monitor) != _TASK_MONITOR_KEYS
+        or set(monitor) != (_PEER_TASK_MONITOR_KEYS if peer else _TASK_MONITOR_KEYS)
         or monitor.get("source") != "procfs-task-affinity-sampled-v1"
         or monitor.get("scope") != "tasks visible in the collection container PID namespace"
         or monitor.get("client_cpu") != client_cpu
@@ -1162,6 +1475,11 @@ def capture_scheduler_runtime_evidence_valid(value: Any) -> bool:
         or monitor.get("unexpected_client_cpu_tasks") != []
         or monitor.get("unexpected_task_receipt_overflow") is not False
         or monitor.get("scan_errors") != []
+        or peer and (
+            monitor.get("protected_cpus") != [client_cpu, orchestrator_cpu]
+            or monitor.get("unexpected_pair_escape_tasks") != []
+            or monitor.get("pair_escape_task_receipt_overflow") is not False
+        )
         or value.get("verified_scope") != expected_verified_scope
         or value.get("unavailable_scope")
         != [

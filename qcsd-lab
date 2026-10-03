@@ -162,7 +162,7 @@ WSL_HOST_BUILD_MIN_AVAILABLE_BYTES=1
 QCSD_LAUNCH_ACTION="${1:-}"
 
 usage() {
-  echo "Usage: qcsd-lab {lifecycle-recover|build|prepare|derive-chaff-prefix-specs|qualify-chaff|qualify-response-chaff|run|resume|verify|analyze|fit|buflo-study|class-study|etf-probe|etf-veth-probe|test} [arguments...]" >&2
+  echo "Usage: qcsd-lab {lifecycle-recover|build|prepare|derive-chaff-prefix-specs|qualify-chaff|qualify-response-chaff|run|parallel-diagnostic-run|resume|verify|analyze|fit|buflo-study|class-study|etf-probe|etf-veth-probe|test} [arguments...]" >&2
 }
 
 _qcsd_trusted_git() {
@@ -5620,6 +5620,38 @@ PY
   exit 0
 fi
 
+parallel_diagnostic=0
+parallel_authority=""
+parallel_output=""
+parallel_authority_sha256=""
+parallel_python() {
+  /usr/bin/python3 -I -c 'import sys; sys.path.insert(0,sys.argv.pop(1)+"/src"); from qcsd_lab.rapid_parallel_capture import main; main()' "${ROOT}" "$@"
+}
+if [[ "${1:-}" == "parallel-diagnostic-run" ]]; then
+  if (( $# != 3 )); then
+    echo "parallel-diagnostic-run requires AUTHORITY.json and a fresh operator output root" >&2
+    exit 2
+  fi
+  parallel_authority="$(realpath -e -- "$2")"
+  parallel_output="$(realpath -e -- "$3")"
+  if [[ -L "$2" || -L "$3" || ! -f "${parallel_authority}" ||
+        ! -d "${parallel_output}" ||
+        "${parallel_output}" != "${ROOT}/results/"* ]]; then
+    echo "parallel pilot requires regular inputs and separate outputs beneath results/" >&2
+    exit 2
+  fi
+  parallel_first_campaign="$(parallel_python select --authority "${parallel_authority}" --output "${ROOT}")"
+  parallel_authority_sha256="$(sha256sum -- "${parallel_authority}")"
+  parallel_authority_sha256="${parallel_authority_sha256%% *}"
+  if [[ "${QCSD_PARALLEL_AUTHORITY_SHA256:-}" != "${parallel_authority_sha256}" ]]; then
+    echo "parallel pilot must use the operator's exact prospective authority hash" >&2
+    exit 2
+  fi
+  parallel_diagnostic=1
+  export QCSD_RAPID_DNS_RECEIPT_PATH="${parallel_output}/dns-pins.json"
+  set -- run "${parallel_first_campaign}"
+fi
+
 study_cohort_version=""
 study_cohort_version_seen=0
 study_campaign_name="${2:-}"
@@ -8964,7 +8996,7 @@ print(base64.b64encode(encoded).decode("ascii"))
 }
 
 scheduler_host_partition_b64=""
-if [[ -n "${study_capture_scheduler_contract}" ]]; then
+if [[ -n "${study_capture_scheduler_contract}" ]] && (( ! parallel_diagnostic )); then
   scheduler_host_partition_b64="$(capture_scheduler_host_partition_b64)"
 fi
 
@@ -9282,7 +9314,8 @@ if [[ "${1:-}" == "buflo-study" && "${2:-}" == "reference" ]]; then
     --volume "${reference_cohort_inputs}:/lab/artifacts/buflo-study/cohort-inputs:rw"
   )
 fi
-if [[ "${1:-}" == "run" || "${1:-}" == "resume" || "${1:-}" == "analyze" ]]; then
+if [[ "${1:-}" == "run" || "${1:-}" == "resume" || "${1:-}" == "analyze" ]] &&
+   (( ! parallel_diagnostic )); then
   container+=(--volume "${ROOT}/results:/lab/results:rw")
 fi
 if [[ "${1:-}" == "buflo-study" && "${2:-}" == "capture" ]]; then
@@ -10945,6 +10978,252 @@ test "$(cat /proc/sys/net/ipv4/ip_forward)" = 1
     done
     exit 0
   fi
+fi
+
+# Two measured workers share one authenticated guardian. All Docker mutations
+# remain in this shell; neither gate starts traffic before both proofs close.
+if (( parallel_diagnostic )); then
+  if (( ! rapid_capture )) ||
+     [[ "${rapid_capture_role}" != "diagnostic" || -n "${rapid_capture_version}" ||
+        "${study_capture_scheduler_contract}" != "qcsd-client-rr1-portable-etf-helper-v4" ]]; then
+    echo "parallel pilot accepts paired zero-credit generic rapid diagnostics" >&2
+    exit 2
+  fi
+  parallel_lock="/var/tmp/qcsd-rapid-capture-$(id -u).lock"
+  if [[ ! -e "${parallel_lock}" && ! -L "${parallel_lock}" ]]; then
+    (umask 077; set -C; : > "${parallel_lock}") || exit 1
+  fi
+  exec {parallel_lock_fd}<>"${parallel_lock}"
+  /usr/bin/python3 -I -c '
+import os,stat,sys
+fd=int(sys.argv[1]); value=os.fstat(fd); path=os.stat(sys.argv[2],follow_symlinks=False)
+if (not stat.S_ISREG(value.st_mode) or value.st_uid!=os.getuid()
+    or stat.S_IMODE(value.st_mode)!=0o600 or value.st_nlink!=1 or value.st_size!=0
+    or (value.st_dev,value.st_ino)!=(path.st_dev,path.st_ino)):
+    raise SystemExit("parallel adapter lock has unsafe identity or permissions")
+' "${parallel_lock_fd}" "${parallel_lock}"
+  flock -n "${parallel_lock_fd}" || {
+    echo "another rapid capture adapter owns this host" >&2; exit 1;
+  }
+  mapfile -t parallel_runtime_rows < <(/usr/bin/python3 -I -c '
+import json,sys
+from pathlib import Path
+r=json.load(open(sys.argv[1]))["runtime"]
+print(r["runtime_source_root"])
+roots={r[k] for k in ("runtime_source_root","module_root","execution_root")}
+roots.update(str(Path(r[k]).parent) for k in ("source_manifest","client_binary","base_launcher"))
+for root in sorted(roots): print(root)
+' "${parallel_authority}")
+  parallel_mounts=(--volume "${parallel_authority}:/parallel-authority.json:ro")
+  for parallel_mount_root in "${parallel_runtime_rows[@]:1}"; do
+    parallel_mounts+=(--volume "${parallel_mount_root}:${parallel_mount_root}:ro")
+  done
+  QCSD_DOCKER_OUTPUT_PARALLEL_PREFLIGHT=""
+  qcsd_capture_attached_docker_output QCSD_DOCKER_OUTPUT_PARALLEL_PREFLIGHT \
+    docker run --network none --read-only --cap-drop ALL \
+    --security-opt no-new-privileges \
+    --label org.qcsd.owner=qcsd-lab --label org.qcsd.role=parallel-diagnostic-preflight \
+    --user "${qcsd_invoking_uid}:${qcsd_invoking_gid}" \
+    --env "QCSD_LAB_ROOT=${parallel_runtime_rows[0]}" \
+    --env "QCSD_LAB_IMAGE_DIGEST=${image_id}" \
+    --env "QCSD_LAB_SOURCE_METADATA=/usr/share/qcsd-lab/source.json" \
+    "${parallel_mounts[@]}" --entrypoint /opt/qcsd-venv/bin/python3 \
+    "${image_id}" -I -m qcsd_lab.rapid_parallel_capture preflight \
+    --authority /parallel-authority.json --sha256 "${parallel_authority_sha256}"
+  /usr/bin/python3 -I -c '
+import json,sys
+sys.path.insert(0,sys.argv[1]+"/src")
+from pathlib import Path
+from qcsd_lab.rapid_parallel_capture import put
+put(Path(sys.argv[2])/"image-preflight.json",json.loads(sys.argv[3]))
+' "${ROOT}" "${parallel_output}" "${QCSD_DOCKER_OUTPUT_PARALLEL_PREFLIGHT}"
+  parallel_cpu_json="$(parallel_python initialize --authority "${parallel_authority}" \
+    --output "${parallel_output}" --sha256 "${parallel_authority_sha256}" \
+    --cpus "${study_capture_available_cpus_json}")"
+  mapfile -t parallel_cpu_rows < <(/usr/bin/python3 -I -c '
+import json,sys
+x=json.loads(sys.argv[1])
+print(",".join(map(str,x["sidecar_cpus"])))
+for pair in x["pairs"]:
+    print(pair[0]);print(pair[1]);print(",".join(map(str,pair)))
+' "${parallel_cpu_json}")
+  study_capture_sidecar_cpuset="${parallel_cpu_rows[0]}"
+  QCSD_DOCKER_IDS_PARALLEL_WORKERS=()
+  QCSD_DOCKER_IDS_PUBLIC_NETWORKS=()
+  QCSD_DOCKER_IDS_PUBLIC_ROUTERS=()
+  parallel_worker_ids=()
+  parallel_network_ids=()
+  parallel_router_ids=()
+  parallel_worker_names=()
+  parallel_router_names=()
+  parallel_base_container=("${container[@]}")
+  cleanup_parallel_diagnostic() {
+    local cleanup_entry_status="$1" cleanup_signal_status=0 cleanup_complete=0 cleanup_failure_status=0
+    _qcsd_begin_latched_cleanup
+    local resource_id resource_state
+    for resource_id in "${QCSD_DOCKER_IDS_PARALLEL_WORKERS[@]}" "${QCSD_DOCKER_IDS_PUBLIC_ROUTERS[@]}"; do
+      _qcsd_docker_api rm --force "${resource_id}" >/dev/null 2>&1 || cleanup_failure_status=1
+      resource_state="$(_qcsd_docker_exact_id_presence "${resource_id}")"
+      if [[ "${resource_state}" != "absent" ]]; then cleanup_failure_status=1; continue; fi
+      if [[ " ${QCSD_DOCKER_IDS_PARALLEL_WORKERS[*]} " == *" ${resource_id} "* ]]; then
+        qcsd_retire_docker_handoff run "${resource_id}" QCSD_DOCKER_IDS_PARALLEL_WORKERS || cleanup_failure_status=1
+      else
+        qcsd_retire_docker_handoff run "${resource_id}" QCSD_DOCKER_IDS_PUBLIC_ROUTERS || cleanup_failure_status=1
+      fi
+    done
+    for resource_id in "${QCSD_DOCKER_IDS_PUBLIC_NETWORKS[@]}"; do
+      _qcsd_docker_api network rm "${resource_id}" >/dev/null 2>&1 || cleanup_failure_status=1
+      [[ "$(_qcsd_docker_exact_network_presence "${resource_id}")" == "absent" ]] ||
+        { cleanup_failure_status=1; continue; }
+      qcsd_retire_docker_handoff network "${resource_id}" QCSD_DOCKER_IDS_PUBLIC_NETWORKS || cleanup_failure_status=1
+    done
+    _qcsd_finish_latched_cleanup
+  }
+  trap 'cleanup_parallel_diagnostic "$?"' EXIT
+  for parallel_index in 0 1; do
+    parallel_lane="${parallel_output}/lane-$((parallel_index + 1))"
+    kernel_tx_public_capture_root="${parallel_lane}/capture"
+    prepare_kernel_tx_capture_root "${kernel_tx_public_capture_root}" initialize
+    kernel_tx_public_capture_secret="$(/usr/bin/python3 -I -c 'import secrets;print(secrets.token_hex(32))')"
+    kernel_tx_public_client_network="qcsd-parallel-client-$$-${parallel_index}"
+    kernel_tx_public_router_name="qcsd-parallel-router-$$-${parallel_index}"
+    parallel_worker_name="qcsd-parallel-worker-$$-${parallel_index}"
+    qcsd_create_docker_network QCSD_DOCKER_IDS_PUBLIC_NETWORKS \
+      docker network create --driver bridge --internal \
+      --label org.qcsd.owner=qcsd-lab --label org.qcsd.study=parallel-diagnostic \
+      "${kernel_tx_public_client_network}" >/dev/null
+    kernel_tx_public_network_id="${QCSD_DOCKER_IDS_PUBLIC_NETWORKS[-1]}"
+    kernel_tx_public_client_subnet="$(_qcsd_docker_api network inspect --format \
+      '{{(index .IPAM.Config 0).Subnet}}' "${kernel_tx_public_network_id}")"
+    start_kernel_tx_public_router "${kernel_tx_public_router_name}" \
+      "${kernel_tx_public_network_id}" "${kernel_tx_public_client_subnet}" \
+      "${kernel_tx_public_capture_root}" "${kernel_tx_public_capture_secret}" >/dev/null
+    kernel_tx_public_router_ip="$(_qcsd_docker_api container inspect --format \
+      "{{with index .NetworkSettings.Networks \"${kernel_tx_public_client_network}\"}}{{.IPAddress}}{{end}}" \
+      "${kernel_tx_public_router_id}")"
+    [[ -n "${kernel_tx_public_router_ip}" ]] || exit 1
+    kernel_tx_public_network_b64="$(kernel_tx_public_network_receipt_base64 \
+      "${kernel_tx_public_client_network}" "${kernel_tx_public_client_subnet}" \
+      "${kernel_tx_public_router_name}" "${kernel_tx_public_router_ip}")"
+    kernel_tx_public_binding_b64="$(kernel_tx_public_observer_binding_base64 \
+      "${kernel_tx_public_client_network}" "${kernel_tx_public_network_id}" \
+      "${kernel_tx_public_router_name}" "${kernel_tx_public_router_id}" "${kernel_tx_public_router_ip}")"
+    container=("${parallel_base_container[@]}")
+    replace_container_option_value --network "${kernel_tx_public_network_id}"
+    replace_container_option_value --cpuset-cpus "${parallel_cpu_rows[3 + parallel_index * 3]}"
+    replace_container_environment QCSD_CAPTURE_CLIENT_CPU "${parallel_cpu_rows[1 + parallel_index * 3]}"
+    replace_container_environment QCSD_CAPTURE_ORCHESTRATOR_CPU "${parallel_cpu_rows[2 + parallel_index * 3]}"
+    container+=(--name "${parallel_worker_name}" \
+      --label org.qcsd.role=parallel-diagnostic-worker \
+      --volume "${parallel_lane}/results:/lab/results:rw" \
+      --volume "${parallel_lane}/gate:/parallel-gate:ro" \
+      "${parallel_mounts[@]}" \
+      --env "QCSD_CONTROLLED_ROUTER_CLIENT_IP=${kernel_tx_public_router_ip}" \
+      --env "QCSD_KERNEL_TX_PUBLIC_ROUTER_IP=${kernel_tx_public_router_ip}" \
+      --env "QCSD_KERNEL_TX_PUBLIC_CLIENT_SUBNET=${kernel_tx_public_client_subnet}" \
+      --env "QCSD_KERNEL_TX_POST_VETH_CAPTURE_ENDPOINT=${kernel_tx_public_router_ip}:19090" \
+      --env "QCSD_KERNEL_TX_POST_VETH_CAPTURE_SECRET=${kernel_tx_public_capture_secret}" \
+      --env QCSD_KERNEL_TX_POST_VETH_CAPTURE_ROOT=/kernel-tx \
+      --env "QCSD_KERNEL_TX_CONTROLLED_NETWORK_RECEIPT_B64=${kernel_tx_public_network_b64}" \
+      --env "QCSD_KERNEL_TX_CONTROLLED_OBSERVER_BINDING_B64=${kernel_tx_public_binding_b64}" \
+      --volume "${kernel_tx_public_capture_root}:/kernel-tx:ro" \
+      --entrypoint /usr/bin/tini "${image_id}" -- /bin/sh -eu -c '
+/usr/bin/taskset --pid --cpu-list "${QCSD_CAPTURE_ORCHESTRATOR_CPU:?}" 1 >/dev/null
+exec /opt/qcsd-venv/bin/python3 -I -m qcsd_lab.rapid_parallel_capture gate "$@"
+' qcsd-parallel-affinity --output /parallel-gate \
+      --authority /parallel-authority.json --sha256 "${parallel_authority_sha256}" --index "${parallel_index}")
+    /usr/bin/python3 -I -c '
+import sys
+from pathlib import Path
+sys.path.insert(0,sys.argv[1]+"/src")
+from qcsd_lab.rapid_parallel_capture import put
+put(Path(sys.argv[2])/"worker-argv.json",sys.argv[3:])
+' "${ROOT}" "${parallel_lane}" "${container[@]}"
+    qcsd_run_detached_docker QCSD_DOCKER_IDS_PARALLEL_WORKERS "${container[@]}" >/dev/null
+    parallel_worker_ids+=("${QCSD_DOCKER_IDS_PARALLEL_WORKERS[-1]}")
+    parallel_network_ids+=("${kernel_tx_public_network_id}")
+    parallel_router_ids+=("${kernel_tx_public_router_id}")
+    parallel_worker_names+=("${parallel_worker_name}")
+    parallel_router_names+=("${kernel_tx_public_router_name}")
+  done
+  parallel_all_ids="$(_qcsd_docker_api container ls --quiet --no-trunc)"
+  mapfile -t parallel_inspect_ids <<< "${parallel_all_ids}"
+  parallel_actual_inspect="$(_qcsd_docker_api container inspect "${parallel_inspect_ids[@]}")"
+  /usr/bin/python3 -I -c '
+import json,sys
+from pathlib import Path
+sys.path.insert(0,sys.argv[1]+"/src")
+from qcsd_lab.rapid_parallel_capture import put
+root=Path(sys.argv[2]); inspected=json.loads(sys.argv[3]); cpu=json.loads(sys.argv[4])
+workers=[];sidecars={};resources=[]
+for i in range(2):
+    wid,rid,nid,wname,rname=sys.argv[7+i*5:12+i*5]
+    pair=cpu["pairs"][i]
+    workers.append(dict(id=wid,name=wname,image_id=sys.argv[6],client_cpu=pair[0],orchestrator_cpu=pair[1]))
+    sidecars[rname]=rid
+    resources.append(dict(worker_id=wid,router_id=rid,network_id=nid))
+put(root/"actual-launch.json",dict(workers=workers,sidecars=sidecars,lane_resources=resources,
+    inspected_containers=inspected,available_cpus=json.loads(sys.argv[5]),docker_ncpu=int(sys.argv[-1])))
+' "${ROOT}" "${parallel_output}" "${parallel_actual_inspect}" "${parallel_cpu_json}" \
+    "${study_capture_available_cpus_json}" "${image_id}" \
+    "${parallel_worker_ids[0]}" "${parallel_router_ids[0]}" "${parallel_network_ids[0]}" \
+    "${parallel_worker_names[0]}" "${parallel_router_names[0]}" \
+    "${parallel_worker_ids[1]}" "${parallel_router_ids[1]}" "${parallel_network_ids[1]}" \
+    "${parallel_worker_names[1]}" "${parallel_router_names[1]}" "${study_capture_docker_ncpu}"
+  parallel_python release --authority "${parallel_authority}" --output "${parallel_output}" \
+    --actual "${parallel_output}/actual-launch.json"
+  parallel_retired=(0 0)
+  parallel_status=0
+  while (( ! parallel_retired[0] || ! parallel_retired[1] )); do
+    for parallel_index in 0 1; do
+      (( ! parallel_retired[parallel_index] )) || continue
+      parallel_worker_id="${parallel_worker_ids[parallel_index]}"
+      parallel_state="$(_qcsd_docker_api container inspect "${parallel_worker_id}")"
+      parallel_exit_code="$(/usr/bin/python3 -I -c '
+import json,sys
+x=json.loads(sys.argv[1])[0]
+print("running" if x["State"]["Running"] else x["State"]["ExitCode"])
+' "${parallel_state}")"
+      [[ "${parallel_exit_code}" != "running" ]] || continue
+      parallel_lane="${parallel_output}/lane-$((parallel_index+1))"
+      (set -C; _qcsd_docker_api logs "${parallel_worker_id}" \
+        >"${parallel_lane}/worker.stdout" 2>"${parallel_lane}/worker.stderr")
+      if (( ! parallel_retired[1-parallel_index] )); then
+        parallel_peer_state="$(_qcsd_docker_api container inspect "${parallel_worker_ids[1-parallel_index]}")"
+      else
+        parallel_peer_state="null"
+      fi
+      _qcsd_docker_api rm --force "${parallel_worker_id}" >/dev/null
+      [[ "$(_qcsd_docker_exact_id_presence "${parallel_worker_id}")" == "absent" ]] || exit 1
+      qcsd_retire_docker_handoff run "${parallel_worker_id}" QCSD_DOCKER_IDS_PARALLEL_WORKERS
+      _qcsd_docker_api rm --force "${parallel_router_ids[parallel_index]}" >/dev/null
+      [[ "$(_qcsd_docker_exact_id_presence "${parallel_router_ids[parallel_index]}")" == "absent" ]] || exit 1
+      qcsd_retire_docker_handoff run "${parallel_router_ids[parallel_index]}" QCSD_DOCKER_IDS_PUBLIC_ROUTERS
+      _qcsd_docker_api network rm "${parallel_network_ids[parallel_index]}" >/dev/null
+      [[ "$(_qcsd_docker_exact_network_presence "${parallel_network_ids[parallel_index]}")" == "absent" ]] || exit 1
+      qcsd_retire_docker_handoff network "${parallel_network_ids[parallel_index]}" QCSD_DOCKER_IDS_PUBLIC_NETWORKS
+      /usr/bin/python3 -I -c '
+import json,sys
+from pathlib import Path
+sys.path.insert(0,sys.argv[1]+"/src")
+from qcsd_lab.rapid_parallel_capture import put,read,sha
+root=Path(sys.argv[2]);i=int(sys.argv[3])
+actual=dict(worker_terminal=json.loads(sys.argv[4])[0],worker_exit_code=int(sys.argv[5]),
+    absent_ids=sorted(sys.argv[7:10]))
+peer=json.loads(sys.argv[6])
+if peer is None: actual["peer_retirement_sha256"]=sha(read(root/f"lane-{2-i}"/"retirement.json"))
+else: actual["peer_state"]=peer[0]
+put(root/f"lane-{i+1}"/"actual-retirement.json",actual)
+' "${ROOT}" "${parallel_output}" "${parallel_index}" "${parallel_state}" "${parallel_exit_code}" \
+        "${parallel_peer_state}" "${parallel_worker_id}" "${parallel_router_ids[parallel_index]}" "${parallel_network_ids[parallel_index]}"
+      parallel_python retire --output "${parallel_output}" --index "${parallel_index}" \
+        --actual "${parallel_lane}/actual-retirement.json"
+      parallel_retired[parallel_index]=1
+      if (( parallel_exit_code != 0 )); then parallel_status=1; fi
+    done
+    if (( ! parallel_retired[0] || ! parallel_retired[1] )); then sleep 1; fi
+  done
+  exit "${parallel_status}"
 fi
 
 # Every remaining ETF launch is a public campaign.  Give the measured client

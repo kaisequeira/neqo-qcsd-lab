@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -13,10 +15,214 @@ from qcsd_lab.process_scheduler import (
     PORTABLE_ETF_SCHEDULER_CONTRACT_V4,
     CaptureSchedulerMonitor,
     _host_partition_valid,
+    _load_host_partition,
+    build_peer_host_partition,
     capture_scheduler_launch_prefix,
     capture_scheduler_runtime_evidence_valid,
 )
 from tests.scheduler_fixtures import process_scheduler_receipt
+
+
+def _peer_inputs() -> tuple[list[dict], list[dict], dict[str, str]]:
+    workers = [
+        {"id": "a" * 64, "name": "lane-a", "image_id": "sha256:" + "d" * 64,
+         "client_cpu": 2, "orchestrator_cpu": 4},
+        {"id": "b" * 64, "name": "lane-b", "image_id": "sha256:" + "d" * 64,
+         "client_cpu": 7, "orchestrator_cpu": 9},
+    ]
+    inspected = []
+    for worker in workers:
+        inspected.append({
+            "Id": worker["id"], "Name": "/" + worker["name"], "Image": worker["image_id"],
+            "Config": {"Labels": {"org.qcsd.owner": "qcsd-lab", "org.qcsd.role": "capture"}},
+            "HostConfig": {"CpusetCpus": f'{worker["client_cpu"]},{worker["orchestrator_cpu"]}'},
+            "State": {"Status": "created", "Running": False},
+        })
+    inspected.append({
+        "Id": "c" * 64, "Name": "/sidecar", "Image": "sha256:" + "e" * 64,
+        "Config": {"Labels": {"org.qcsd.owner": "qcsd-lab", "org.qcsd.role": "server"}},
+        "HostConfig": {"CpusetCpus": "0"},
+        "State": {"Status": "running", "Running": True},
+    })
+    return inspected, workers, {"sidecar": "c" * 64}
+
+
+def _peer_host_partition(measured: int = 0) -> dict:
+    inspected, workers, sidecars = _peer_inputs()
+    return build_peer_host_partition(
+        inspected, [0, 2, 4, 7, 9], workers, sidecars,
+        workers[measured]["id"], docker_ncpu=16,
+    )
+
+
+@pytest.mark.parametrize("measured", [0, 1])
+def test_peer_partition_accepts_created_workers_and_declared_running_peer(measured: int) -> None:
+    inspected, workers, sidecars = _peer_inputs()
+    inspected[1 - measured]["State"] = {"Status": "running", "Running": True}
+    proof = build_peer_host_partition(
+        inspected, [0, 2, 4, 7, 9], workers, sidecars,
+        workers[measured]["id"], docker_ncpu=16,
+    )
+    assert _host_partition_valid(proof)
+    assert proof["overlapping_container_ids_by_cpu"]["7"] == ["b" * 64]
+    assert proof["declared_workers"] == workers
+
+
+@pytest.mark.parametrize("failure", [
+    "wrong_image", "wrong_name", "cross_pair", "undeclared_protected",
+    "undeclared_residual", "missing_peer", "wrong_sidecar_id", "sidecar_overlap",
+    "unowned", "reused_worker_id", "insufficient_cpus", "stopped_peer",
+])
+def test_peer_builder_rejects_actual_identity_inventory_or_partition_failure(failure: str) -> None:
+    inspected, workers, sidecars = _peer_inputs()
+    available = [0, 2, 4, 7, 9]
+    if failure == "wrong_image":
+        inspected[1]["Image"] = "sha256:" + "f" * 64
+    elif failure == "wrong_name":
+        inspected[1]["Name"] = "/another-lane"
+    elif failure == "cross_pair":
+        inspected[1]["HostConfig"]["CpusetCpus"] = "4,7,9"
+    elif failure.startswith("undeclared"):
+        extra = copy.deepcopy(inspected[2])
+        extra.update(Id="f" * 64, Name="/undeclared")
+        extra["HostConfig"]["CpusetCpus"] = "4" if failure.endswith("protected") else "0"
+        inspected.append(extra)
+    elif failure == "missing_peer":
+        inspected.pop(1)
+    elif failure == "wrong_sidecar_id":
+        sidecars["sidecar"] = "f" * 64
+    elif failure == "sidecar_overlap":
+        inspected[2]["HostConfig"]["CpusetCpus"] = "0,7"
+    elif failure == "unowned":
+        inspected[1]["Config"]["Labels"]["org.qcsd.owner"] = "other"
+    elif failure == "reused_worker_id":
+        workers[1]["id"] = workers[0]["id"]
+    elif failure == "insufficient_cpus":
+        available = [2, 4, 7, 9]
+    elif failure == "stopped_peer":
+        inspected[1]["State"] = {"Status": "exited", "Running": False}
+    with pytest.raises(ValueError):
+        build_peer_host_partition(
+            inspected, available, workers, sidecars, workers[0]["id"], docker_ncpu=16,
+        )
+
+
+def test_peer_host_receipt_reopens_declared_overlap_and_measured_identity() -> None:
+    proof = _peer_host_partition()
+    for field, changed in [
+        ("measured_container_id", "f" * 64),
+        ("overlapping_container_ids_by_cpu", {"2": [], "4": [], "7": [], "9": []}),
+        ("protected_cpus", [2, 4]),
+    ]:
+        altered = copy.deepcopy(proof)
+        altered[field] = changed
+        assert not _host_partition_valid(altered)
+
+
+def test_peer_host_file_is_exact_hash_bound_and_has_one_delivery_channel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proof = _peer_host_partition()
+    raw = json.dumps(proof).encode()
+    path = tmp_path / "partition.json"
+    path.write_bytes(raw)
+    monkeypatch.setenv("QCSD_CAPTURE_SCHEDULER_CONTRACT", PORTABLE_ETF_SCHEDULER_CONTRACT_V4)
+    monkeypatch.setenv("QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_FILE", str(path))
+    monkeypatch.setenv("QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_SHA256", hashlib.sha256(raw).hexdigest())
+    monkeypatch.delenv("QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_B64", raising=False)
+    assert _load_host_partition() == proof
+    path.write_bytes(raw + b"\n")
+    assert not _host_partition_valid(_load_host_partition())
+    path.write_bytes(raw)
+    monkeypatch.setenv("QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_B64", "other")
+    assert not _host_partition_valid(_load_host_partition())
+
+
+def test_peer_launch_rejects_wrong_lane_before_client_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import os
+    import resource
+
+    raw = json.dumps(_peer_host_partition()).encode()
+    path = tmp_path / "partition.json"
+    path.write_bytes(raw)
+    monkeypatch.setenv("QCSD_CAPTURE_SCHEDULER_CONTRACT", PORTABLE_ETF_SCHEDULER_CONTRACT_V4)
+    monkeypatch.setenv("QCSD_CAPTURE_CLIENT_CPU", "2")
+    monkeypatch.setenv("QCSD_CAPTURE_ORCHESTRATOR_CPU", "4")
+    monkeypatch.setenv("QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_FILE", str(path))
+    monkeypatch.setenv("QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_SHA256", hashlib.sha256(raw).hexdigest())
+    monkeypatch.delenv("QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_B64", raising=False)
+    monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: {4})
+    monkeypatch.setattr(resource, "getrlimit", lambda _which: (1, 1))
+    assert capture_scheduler_launch_prefix()[2] == "2"
+    monkeypatch.setenv("QCSD_CAPTURE_CLIENT_CPU", "7")
+    monkeypatch.setenv("QCSD_CAPTURE_ORCHESTRATOR_CPU", "9")
+    with pytest.raises(ValueError, match="hash-bound peer partition"):
+        capture_scheduler_launch_prefix()
+    monkeypatch.setenv("QCSD_CAPTURE_CLIENT_CPU", "2")
+    monkeypatch.setenv("QCSD_CAPTURE_ORCHESTRATOR_CPU", "4")
+    path.write_bytes(raw + b"\n")
+    with pytest.raises(ValueError, match="before client launch"):
+        capture_scheduler_launch_prefix()
+    monkeypatch.delenv("QCSD_CAPTURE_SCHEDULER_CONTRACT")
+    with pytest.raises(ValueError, match="v4 Native scheduler contract"):
+        capture_scheduler_launch_prefix()
+
+
+@pytest.mark.parametrize("measured", [0, 1])
+def test_peer_runtime_accepts_each_own_pair_with_unchanged_native_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, measured: int,
+) -> None:
+    proof = _peer_host_partition(measured)
+    worker = proof["declared_workers"][measured]
+    client, helper = worker["client_cpu"], worker["orchestrator_cpu"]
+    monkeypatch.setenv("QCSD_CAPTURE_SCHEDULER_CONTRACT", PORTABLE_ETF_SCHEDULER_CONTRACT_V4)
+    monkeypatch.setenv("QCSD_CAPTURE_CLIENT_CPU", str(client))
+    monkeypatch.setenv("QCSD_CAPTURE_ORCHESTRATOR_CPU", str(helper))
+    proc_root, cpu_stat = _fixture(tmp_path)
+    (proc_root / "1/task/1/status").write_text(
+        f"Name:\torchestrator\nTgid:\t1\nCpus_allowed_list:\t{helper}\n", encoding="ascii",
+    )
+    (proc_root / "stat").write_text(f"cpu{client} 1 2 3 4 5 6 7 0 0 0\n", encoding="ascii")
+    monitor = CaptureSchedulerMonitor(
+        proc_root=proc_root, cgroup_cpu_stat_paths=(cpu_stat,),
+        interval_us=1_000_000, host_partition=proof,
+    )
+    _write_task(proc_root, tgid=77, tid=77, process_group=77, cpus=str(client), name="neqo-qcsd-client")
+    _write_task(proc_root, tgid=77, tid=78, process_group=77, cpus=str(helper), name="qcsd-etf-helper")
+    monitor.process_started(77)
+    evidence = monitor.finish()
+    assert evidence["schema_version"] == 5
+    assert evidence["contract"] == PORTABLE_ETF_SCHEDULER_CONTRACT_V4
+    assert capture_scheduler_runtime_evidence_valid(evidence)
+    altered = copy.deepcopy(evidence)
+    altered["host_partition"]["measured_container_id"] = proof["declared_workers"][1 - measured]["id"]
+    assert not capture_scheduler_runtime_evidence_valid(altered)
+
+
+@pytest.mark.parametrize("escaped_cpu", [0, 7, 9])
+def test_peer_runtime_rejects_visible_helper_escape_and_prevents_false_promotion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, escaped_cpu: int,
+) -> None:
+    monkeypatch.setenv("QCSD_CAPTURE_SCHEDULER_CONTRACT", PORTABLE_ETF_SCHEDULER_CONTRACT_V4)
+    monkeypatch.setenv("QCSD_CAPTURE_CLIENT_CPU", "2")
+    monkeypatch.setenv("QCSD_CAPTURE_ORCHESTRATOR_CPU", "4")
+    proc_root, cpu_stat = _fixture(tmp_path)
+    (proc_root / "1/task/1/status").write_text("Name:\torchestrator\nTgid:\t1\nCpus_allowed_list:\t4\n", encoding="ascii")
+    (proc_root / "stat").write_text("cpu2 1 2 3 4 5 6 7 0 0 0\n", encoding="ascii")
+    monitor = CaptureSchedulerMonitor(
+        proc_root=proc_root, cgroup_cpu_stat_paths=(cpu_stat,),
+        interval_us=1_000_000, host_partition=_peer_host_partition(),
+    )
+    _write_task(proc_root, tgid=77, tid=77, process_group=77, cpus="2", name="neqo-qcsd-client")
+    _write_task(proc_root, tgid=77, tid=78, process_group=77, cpus=str(escaped_cpu), name="qcsd-etf-helper")
+    monitor.process_started(77)
+    evidence = monitor.finish()
+    assert evidence["valid"] is False
+    assert evidence["guest_task_monitor"]["unexpected_pair_escape_tasks"][0]["tid"] == 78
+    evidence["valid"] = True
+    assert not capture_scheduler_runtime_evidence_valid(evidence)
 
 
 def _host_partition() -> dict:

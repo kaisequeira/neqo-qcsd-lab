@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""Run/reopen one opt-in two-worker diagnostic; never publish formal credit."""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import signal
+import subprocess
+import sys
+from pathlib import Path
+
+from qcsd_lab import rapid_parallel_capture as parallel
+from qcsd_lab.rapid_lane_evidence import HOST_GATE_SCRIPT, _process_identity
+
+
+def launch(authority_path: Path, output: Path) -> dict:
+    parallel.read(authority_path)
+    authority_path = authority_path.resolve(strict=True)
+    value = parallel.authority(authority_path)
+    authority_digest = parallel.sha(parallel.read(authority_path))
+    parallel.host_source(value)
+    output = output.absolute()
+    execution = Path(value["runtime"]["execution_root"])
+    if (not output.is_relative_to(execution / "results") or ".." in output.parts
+        or output.exists() or output.is_symlink()):
+        raise ValueError("parallel output must be a fresh child beneath the execution results directory")
+    parallel.regular_dir(output.parent)
+    output.mkdir(mode=0o700)
+    command = [value["runtime"]["host_launcher"], "parallel-diagnostic-run", str(authority_path), str(output)]
+    parallel.put(output / "operator-intent.json", {"schema_version": 1, "command": command,
+        "authority_sha256": authority_digest, "created_at": parallel.now(),
+        "operator_implementation_sha256": parallel.sha(parallel.read(Path(__file__))),
+        "formal_accepted_trace_count": 0, "scientific_credit": False})
+    env = {key: item for key, item in os.environ.items() if not key.startswith("QCSD_")}
+    env.update(QCSD_LAB_COLLECTION_IMAGE=value["runtime"]["collection_image_digest"],
+        QCSD_RAPID_IMAGE_SOURCE_QCSD=value["runtime"]["base_launcher"],
+        QCSD_PARALLEL_AUTHORITY_SHA256=authority_digest,
+        QCSD_RAPID_DNS_RECEIPT_PATH=str(output / "dns-pins.json"), PYTHONDONTWRITEBYTECODE="1")
+    read_fd, write_fd = os.pipe()
+    child = None
+    started = parallel.now()
+    previous = {}
+    try:
+        with (output / "host.stdout").open("xb") as stdout, (output / "host.stderr").open("xb") as stderr:
+            child = subprocess.Popen([sys.executable, "-c", HOST_GATE_SCRIPT, json.dumps(command), str(read_fd)],
+                env=env, stdout=stdout, stderr=stderr, pass_fds=(read_fd,), start_new_session=True)
+            os.close(read_fd)
+            read_fd = -1
+            if parallel.sha(parallel.read(authority_path)) != authority_digest:
+                raise ValueError("parallel authority changed before the actual host gate release")
+            parallel.put(output / "host-start.json", {"schema_version": 1, "command": command,
+                "authority_sha256": authority_digest, "started_at": started,
+                "host": _process_identity(child.pid), "operator": _process_identity(os.getpid()),
+                "gate_script_sha256": parallel.sha(HOST_GATE_SCRIPT.encode())})
+            os.write(write_fd, b"G")
+            os.close(write_fd)
+            write_fd = -1
+            def forward(signum, _frame):
+                if child.poll() is None:
+                    os.killpg(child.pid, signum)
+            for watched in (signal.SIGINT, signal.SIGTERM):
+                previous[watched] = signal.signal(watched, forward)
+            returncode = child.wait()
+        parallel.put(output / "host-process.json", {"schema_version": 1, "command": command,
+            "started_at": started, "completed_at": parallel.now(), "returncode": returncode,
+            "host_start_sha256": parallel.sha(parallel.read(output / "host-start.json")),
+            "stdout_sha256": parallel.sha(parallel.read(output / "host.stdout")),
+            "stderr_sha256": parallel.sha(parallel.read(output / "host.stderr")),
+            "formal_accepted_trace_count": 0, "scientific_credit": False})
+        result = parallel.verify_results(authority_path, output)
+        parallel.put(output / "deep-verification.json", result)
+        return result
+    except BaseException as error:
+        if write_fd >= 0:
+            os.close(write_fd)
+            write_fd = -1
+        if child is not None and child.poll() is None:
+            os.killpg(child.pid, signal.SIGINT)
+            child.wait()
+        parallel.put(output / "blocked.json", {"schema_version": 1, "observed_at": parallel.now(),
+            "exception_type": type(error).__name__, "message": str(error),
+            "formal_accepted_trace_count": 0, "scientific_credit": False})
+        raise
+    finally:
+        for descriptor in (read_fd, write_fd):
+            if descriptor >= 0:
+                os.close(descriptor)
+        for watched, handler in previous.items():
+            signal.signal(watched, handler)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("action", choices=("launch", "verify", "retire-session"))
+    parser.add_argument("--authority", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args(argv)
+    try:
+        parallel.read(args.authority)
+        args.authority = args.authority.resolve(strict=True)
+        args.output = args.output.absolute()
+        if args.action == "launch":
+            result = launch(args.authority, args.output)
+        elif args.action == "retire-session":
+            result = parallel.retire_session(args.authority.absolute(), args.output.absolute())
+        else:
+            parallel.host_source(parallel.authority(args.authority))
+            result = parallel.verify_results(args.authority, args.output)
+    except (OSError, ValueError, TypeError, KeyError, RuntimeError, subprocess.SubprocessError) as error:
+        print(f"parallel diagnostic: {type(error).__name__}: {error}", file=sys.stderr)
+        return 2
+    print(json.dumps(result, sort_keys=True, indent=2))
+    return 0 if result.get("valid", True) else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
