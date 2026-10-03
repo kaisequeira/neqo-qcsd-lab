@@ -11,6 +11,8 @@ FIELD = "buflo_incoming_credit_release_policy"
 TAMARAW_FIELD = "tamaraw_capture_policy"
 TAMARAW_POLICY = "rapid-v5-tamaraw-owned-retry-outgoing-10000us-v1"
 TAMARAW_CREDIT_SEMANTICS = "explicit-physical-ownership-with-pending-retry-v1"
+FRONT_FIELD = "front_capture_policy"
+FRONT_POLICY = "rapid-v5-front-bounded-outgoing-congestion-omission-1pct-v1"
 STARTUP_POLICY = "qualified-chaff-terminal-ack-cadence-start-v1"
 STARTUP_TIME_BASIS = "native-controller-defense-elapsed-us-v1"
 _STARTUP_IDENTIFIERS = ("ready_endpoint", "ready_stream", "ready_resource_id", "ready_request_id")
@@ -26,6 +28,71 @@ def _uint(value: Any) -> bool:
 def _exact_json(left: Any, right: Any) -> bool:
     # Python equality aliases bool/int and int/float; evidence preserves their JSON types.
     return json.dumps(left, sort_keys=True, allow_nan=False) == json.dumps(right, sort_keys=True, allow_nan=False)
+
+
+def validate_front_preparation_policy(preparation: Mapping[str, Any]) -> str | None:
+    """Bind a prospective one-percent outgoing padding-omission allowance."""
+    from .application_response_policy import (
+        APPROVED_ORIGINS_CHAFF_POLICY, COMPLETED_TERMINAL_HTTP_ERRORS_POLICY,
+        VARIABLE_PRIMARY_DOCUMENT_BODY_POLICY,
+    )
+    if FRONT_FIELD not in preparation:
+        return None
+    value = preparation[FRONT_FIELD]
+    if (type(value) is not str or value != FRONT_POLICY
+        or preparation.get("primary_document_identity_policy") != VARIABLE_PRIMARY_DOCUMENT_BODY_POLICY
+        or preparation.get("application_response_policy") != COMPLETED_TERMINAL_HTTP_ERRORS_POLICY
+        or preparation.get("qualified_chaff_origin_policy") != APPROVED_ORIGINS_CHAFF_POLICY):
+        raise ValueError("FRONT capture policy requires its explicit rapid preparation contract")
+    return value
+
+
+def validate_front_capture_marker(marker: Any) -> Mapping[str, Any]:
+    expected = {
+        "schema_version": 1, "source": "bound-preparation-v1", "policy": FRONT_POLICY,
+        "outgoing_omission_reason": "CongestionLimited",
+        "outgoing_omission_ratio_numerator": 1, "outgoing_omission_ratio_denominator": 100,
+        "rounding": "exact-cross-multiplication-no-minimum-one",
+        "packet_size": 1200, "n_client_packets": 900, "n_server_packets": 1200,
+        "paper_equivalent": False, "scientific_credit": False,
+    }
+    if (not isinstance(marker, Mapping) or set(marker) != set(expected)
+        or any(type(marker[key]) is not type(value) or marker[key] != value
+               for key, value in expected.items())):
+        raise ValueError("invalid FRONT source-bound capture policy")
+    return marker
+
+
+def validate_front_capture_run(run: Mapping[str, Any]) -> Mapping[str, Any]:
+    marker = validate_front_capture_marker(run.get(FRONT_FIELD))
+    resolved = run.get("resolved_configuration")
+    defense = resolved.get("defense") if isinstance(resolved, Mapping) else None
+    expected = {"kind": "front", "n_client_packets": 900, "n_server_packets": 1200,
+                "packet_size": 1200, "peak_minimum_seconds": 0.1, "peak_maximum_seconds": 2.5}
+    if (not isinstance(defense, Mapping)
+        or any(type(defense.get(key)) is not type(value) or defense[key] != value
+               for key, value in expected.items())
+        or type(resolved.get("control_interval_us")) is not int or resolved["control_interval_us"] != 5000
+        or type(resolved.get("max_udp_payload_size")) is not int or resolved["max_udp_payload_size"] != 1200
+        or resolved.get("drop_unsatisfied_events") is not False
+        or run.get("primary_document_identity_policy") != "variable-primary-document-body-v1"
+        or run.get("application_response_policy") != "completed-terminal-http-errors-v1"):
+        raise ValueError("FRONT capture policy differs from the native rapid contract")
+    return marker
+
+
+def validate_front_source_binding(prepared: Mapping[str, Any], run: Mapping[str, Any]) -> None:
+    preparation = prepared.get("preparation")
+    declared = validate_front_preparation_policy(preparation) if isinstance(preparation, Mapping) else None
+    resolved = run.get("resolved_configuration")
+    defense = resolved.get("defense") if isinstance(resolved, Mapping) else None
+    front = isinstance(defense, Mapping) and defense.get("kind") == "front"
+    if FRONT_FIELD in run:
+        if declared is None or not front:
+            raise ValueError("native FRONT capture policy lacks matching prepared source")
+        validate_front_capture_run(run)
+    elif declared is not None and front:
+        raise ValueError("prepared FRONT capture policy lacks its native marker")
 
 
 def validate_tamaraw_preparation_policy(preparation: Mapping[str, Any]) -> str | None:

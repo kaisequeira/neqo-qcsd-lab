@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import ipaddress
+import json
 import math
 from collections import defaultdict, deque
 from collections.abc import Mapping
@@ -1850,7 +1851,159 @@ def _schedule_realization_metrics_from_path(path: Path) -> dict[str, Any]:
         "scheduled_sizes_by_direction": scheduled_sizes,
         **_incoming_credit_release_metrics(path, rows),
         **_tamaraw_capture_metrics(path, rows),
+        **_front_capture_metrics(path, rows),
     }
+
+
+def _front_capture_metrics(schedule_path: Path, rows: list[dict[str, str]]) -> dict[str, Any]:
+    """Keep raw misses; separately prove only bounded outgoing congestion omissions."""
+    from .capture_acceptance_policy import FRONT_FIELD, validate_front_capture_run
+    try:
+        run = load_json(schedule_path.with_name("run.json"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(run, Mapping) or FRONT_FIELD not in run:
+        return {}
+    marker = validate_front_capture_run(run)
+    start_ns = run.get("defense_start_monotonic_ns")
+    if type(start_ns) is not int or start_ns < 0:
+        raise ValueError("FRONT omission proof lacks its defense clock")
+    outgoing = {}
+    omissions = {}
+    for row in rows:
+        if row.get("direction") not in {"incoming", "outgoing"}:
+            raise ValueError("FRONT omission proof contains an invalid direction")
+        if row.get("direction") != "outgoing":
+            if row.get("satisfaction") != "satisfied":
+                raise ValueError("FRONT omission policy cannot waive an incoming miss")
+            continue
+        slot = _csv_uint(row, "slot_id")
+        if slot in outgoing or row.get("qcsd_outcome_schema_version") != "3" or _csv_uint(row, "size") != 1200:
+            raise ValueError("FRONT omission proof repeats or changes an outgoing cell")
+        outgoing[slot] = row
+        if row.get("satisfaction") == "missed":
+            if (row.get("miss_reason") != "CongestionLimited" or row.get("observed_size")
+                or any(row.get(key) for key in SCHEDULE_QCSD_FIELDS[1:-1])):
+                raise ValueError("FRONT omission policy permits only actual outgoing congestion misses")
+            omissions[slot] = row
+        elif row.get("satisfaction") != "satisfied":
+            raise ValueError("FRONT omission proof contains a non-exact outgoing outcome")
+    events_path = schedule_path.with_name("events.csv")
+    with events_path.open(newline="", encoding="utf-8") as source:
+        events = list(csv.DictReader(source))
+    matched_misses = set()
+    sequences = set()
+    for event in events:
+        if event.get("event") != "observation" or event.get("outcome") != "recorded":
+            continue
+        details = json.loads(event["details"])
+        if not isinstance(details, Mapping) or details.get("type") != "slot_missed":
+            continue
+        slot = details.get("slot")
+        row = omissions.get(slot) if type(slot) is int else None
+        if row is None or slot in matched_misses:
+            raise ValueError("FRONT omission proof lacks unique matching native miss observations")
+        production_ns, sequence = details.get("production_monotonic_ns"), details.get("production_sequence")
+        packet = details.get("packet")
+        if (type(production_ns) is not int or production_ns < start_ns
+            or type(sequence) is not int or sequence < 0 or sequence in sequences
+            or type(details.get("endpoint")) is not int
+            or details["endpoint"] != _csv_uint(row, "connection")
+            or _csv_uint(event, "connection") != details["endpoint"]
+            or details.get("reason") != "congestion_limited"
+            or not isinstance(packet, Mapping) or set(packet) != {"timestamp_us", "direction", "length"}
+            or type(packet.get("timestamp_us")) is not int or packet["timestamp_us"] != _csv_uint(row, "target_time_us")
+            or packet.get("direction") != "outgoing" or type(packet.get("length")) is not int or packet["length"] != 1200
+            or _csv_uint(event, "monotonic_us") != production_ns // 1000
+            or (production_ns - start_ns) // 1000 != _csv_uint(row, "terminal_defense_elapsed_us")):
+            raise ValueError("FRONT omission proof differs from its actual native packet and clock identity")
+        matched_misses.add(slot)
+        sequences.add(sequence)
+    if matched_misses != set(omissions):
+        raise ValueError("FRONT omission proof lacks its actual native miss evidence")
+    packets_path = schedule_path.with_name("packets.csv")
+    packets = _read_exact_csv(packets_path, RUNNER_PACKET_FIELDS + SCHEDULE_QCSD_FIELDS)
+    matched = set()
+    for packet in packets:
+        if packet.get("direction") != "outgoing" or not packet.get("slot_id"):
+            continue
+        slot = _csv_uint(packet, "slot_id")
+        row = outgoing.get(slot)
+        if (row is None or slot in omissions or slot in matched
+            or row.get("satisfaction") != "satisfied" or packet.get("satisfaction") != "satisfied"
+            or packet.get("connection") != row.get("connection")
+            or row.get("send_policy") != "exact" or packet.get("send_policy") != "exact"
+            or any(_csv_uint(packet, key) != 1200 for key in (
+                "observed_udp_length", "scheduled_target", "desired_udp_bytes", "observed_udp_bytes"))
+            or _csv_uint(row, "observed_size") != 1200 or _csv_uint(row, "observed_udp_bytes") != 1200):
+            raise ValueError("FRONT omission proof lacks unique actual full outgoing shaped cells")
+        matched.add(slot)
+    if not outgoing or matched != set(outgoing) - set(omissions):
+        raise ValueError("FRONT omission proof lacks actual outgoing packet handoffs")
+    return {"front_capture_policy": marker,
+            "front_outgoing_scheduled_events": len(outgoing),
+            "front_outgoing_congestion_omissions": len(omissions),
+            "front_outgoing_shaped_handoff_events": len(matched),
+            "front_outgoing_omissions_within_bound": len(omissions) * 100 <= len(outgoing),
+            "front_outgoing_congestion_omission_events_sha256": sha256_file(events_path),
+            "front_outgoing_release_packets_sha256": sha256_file(packets_path)}
+
+
+def _front_capture_activation_valid(diagnostics: Mapping[str, Any], schedule: Mapping[str, Any],
+                                    resolved: Mapping[str, Any] | None) -> bool:
+    from .capture_acceptance_policy import validate_front_capture_marker
+    try:
+        validate_front_capture_marker(schedule.get("front_capture_policy"))
+    except ValueError:
+        return False
+    count = schedule.get("scheduled_events")
+    outgoing, incoming = schedule.get("scheduled_outgoing_events"), schedule.get("scheduled_incoming_events")
+    missed = schedule.get("front_outgoing_congestion_omissions")
+    integer_fields = ("scheduled_events", "scheduled_outgoing_events", "scheduled_incoming_events",
+        "satisfied_events", "missed_events", "outgoing_size_mismatch_events", "outgoing_size_absolute_error_bytes",
+        "duplicate_terminal_slots", "invalid_terminal_rows", "invalid_typed_outcome_rows",
+        "incoming_credit_missing_events", "incoming_credit_consumption_missing_events",
+        "invalid_credit_advertisement_events", "invalid_credit_consumption_events",
+        "front_outgoing_scheduled_events", "front_outgoing_congestion_omissions", "front_outgoing_shaped_handoff_events")
+    if any(type(schedule.get(key)) is not int or schedule[key] < 0 for key in integer_fields):
+        return False
+    if (any(type(value) is not int or value < 0 for value in (count, outgoing, incoming, missed))
+        or not 1 <= outgoing <= 900 or not 1 <= incoming <= 1200 or count != incoming + outgoing
+        or missed * 100 > outgoing or schedule.get("missed_events") != missed
+        or schedule.get("satisfied_events") != count - missed
+        or schedule.get("terminal_satisfactions") != ({"satisfied": count - missed, "missed": missed} if missed else {"satisfied": count})
+        or schedule.get("front_outgoing_scheduled_events") != outgoing
+        or schedule.get("front_outgoing_shaped_handoff_events") != outgoing - missed
+        or schedule.get("front_outgoing_omissions_within_bound") is not True
+        or schedule.get("outgoing_size_mismatch_events") != 0
+        or schedule.get("outgoing_size_absolute_error_bytes") != 0
+        or schedule.get("invalid_terminal_rows") != 0
+        or schedule.get("missed_event_reasons") != ({"CongestionLimited": missed} if missed else {})
+        or not _new_schedule_terminal_contract(schedule, congestion_sensitive=False)):
+        return False
+    for key in ("front_outgoing_congestion_omission_events_sha256", "front_outgoing_release_packets_sha256"):
+        value = schedule.get(key)
+        if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
+            return False
+    sizes, targets = schedule.get("scheduled_sizes_by_direction"), schedule.get("target_times_us_by_direction")
+    if not isinstance(sizes, Mapping) or not isinstance(targets, Mapping):
+        return False
+    for direction, expected in (("outgoing", outgoing), ("incoming", incoming)):
+        if (not isinstance(sizes.get(direction), list) or len(sizes[direction]) != expected
+            or any(type(size) is not int or size != 1200 for size in sizes[direction])
+            or not isinstance(targets.get(direction), list) or len(targets[direction]) != expected
+            or any(type(target) is not int or target < 0 for target in targets[direction])):
+            return False
+    defense = resolved.get("defense") if isinstance(resolved, Mapping) else None
+    expected_defense = {"kind": "front", "n_client_packets": 900, "n_server_packets": 1200,
+                        "packet_size": 1200, "peak_minimum_seconds": 0.1, "peak_maximum_seconds": 2.5}
+    return (isinstance(defense, Mapping) and all(type(defense.get(k)) is type(v) and defense[k] == v for k, v in expected_defense.items())
+        and type(resolved.get("schema_version")) is int and resolved["schema_version"] == 2
+        and type(resolved.get("control_interval_us")) is int and resolved["control_interval_us"] == 5000
+        and resolved.get("drop_unsatisfied_events") is False
+        and type(resolved.get("max_udp_payload_size")) is int and resolved["max_udp_payload_size"] == 1200
+        and all(diagnostics.get(key) == incoming * 1200 for key in (
+            "scheduled_incoming_requested_bytes", "scheduled_incoming_advertised_bytes", "scheduled_incoming_consumed_bytes")))
 
 
 def _tamaraw_capture_metrics(schedule_path: Path, rows: list[dict[str, str]]) -> dict[str, Any]:
@@ -6597,6 +6750,12 @@ def fidelity_eligible(
     defense = _canonical_fidelity_defense(defense)
     if not sample_eligible:
         return False
+    if defense == "front" and isinstance(schedule_metrics, Mapping) and "front_capture_policy" in schedule_metrics:
+        return (_scheduled_incoming_diagnostics_match(diagnostics)
+            and _diagnostics_match_contract(defense, diagnostics)
+            and type(missed_events) is int and missed_events == schedule_metrics.get("missed_events")
+            and type(outgoing_size_mismatches) is int and outgoing_size_mismatches == 0
+            and _front_capture_activation_valid(diagnostics, schedule_metrics, resolved_configuration))
     if (
         defense in DEFENSE_ADAPTATIONS
         and defense != "undefended"

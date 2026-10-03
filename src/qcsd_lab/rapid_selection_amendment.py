@@ -32,6 +32,7 @@ AMENDED_V7_ADMISSION_POLICY = "root-and-exact-page-h3-complete-live-graph-with-a
 AMENDED_V8_ADMISSION_POLICY = "root-and-exact-page-h3-complete-live-graph-with-bound-buflo-incoming-release-policy-v8"
 AMENDED_V9_ADMISSION_POLICY = "root-and-exact-page-h3-complete-live-graph-with-bound-buflo-ack-start-policy-v9"
 AMENDED_V10_ADMISSION_POLICY = "root-and-exact-page-h3-complete-live-graph-with-bound-tamaraw-owned-retry-policy-v10"
+AMENDED_V11_ADMISSION_POLICY = "root-and-exact-page-h3-complete-live-graph-with-bound-front-congestion-omission-policy-v11"
 VARIABLE_PRIMARY_DOCUMENT_POLICY = "variable-primary-document-body-v1"
 ATTEMPT_FAILURE_DEFERRAL_POLICY = "prospective-unsuccessful-live-attempt-deferral-v4"
 ATTEMPT_FAILURE_DEFERRAL_REASON = "unsuccessful-live-attempt-screen-deferred"
@@ -61,6 +62,8 @@ FROZEN_V8_AMENDMENT_PUBLICATION_UTC = "2026-10-03T06:59:59.498734Z"
 FROZEN_V8_AMENDMENT_SHA256 = "435949a51e5ded3d5342f92cf117beb9dd0716599a61ff36ba5c0f802741fb38"
 FROZEN_V9_AMENDMENT_PUBLICATION_UTC = "2026-10-03T08:20:52Z"
 FROZEN_V9_AMENDMENT_SHA256 = "a9469ba89ddfa3cf1d36352f40e6f1b2a42eec39f114d7f9548fdfa9e03401ca"
+FROZEN_V10_AMENDMENT_PUBLICATION_UTC = "2026-10-03T10:28:08Z"
+FROZEN_V10_AMENDMENT_SHA256 = "57acfcb997307bb23a34b9d117376e50457659f3a85649cf79d575382798d119"
 AUTOMATED_SITE_SCREEN_POLICY = "frozen-public-url-and-domain-screen-v1"
 AUTOMATED_SITE_SCREEN_DECISION = "automatic-policy-pass"
 
@@ -105,13 +108,28 @@ def _utc(value: Any) -> datetime:
 def _amendment_payload(
     published_at_utc: str, parent_profile_sha256: str, *, revision: int = 1,
 ) -> dict[str, Any]:
-    if type(revision) is not int or revision not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10):
+    # Only pure parent construction shares this fresh, call-local memo. Every
+    # top-level request rechecks current constants, UTC and receipt bytes;
+    # evidence and filesystem validation are never cached here.
+    return _memoized_amendment_payload(
+        published_at_utc, parent_profile_sha256, revision=revision, _memo={},
+    )
+
+
+def _memoized_amendment_payload(
+    published_at_utc: str, parent_profile_sha256: str, *, revision: int = 1,
+    _memo: dict[tuple[str, str, int], dict[str, Any]],
+) -> dict[str, Any]:
+    if type(revision) is not int or revision not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11):
         raise ValueError("selection amendment revision is unregistered")
     published = _utc(published_at_utc)
     if published < _utc(PARENT_PROFILE_PUBLICATION_UTC) or published > datetime.now(UTC):
         raise ValueError("selection amendment publication is before its parent or in the future")
     if parent_profile_sha256 != profile.FROZEN_V5_PROFILE_SHA256:
         raise ValueError("selection amendment parent is not the frozen v5 profile")
+    key = (published_at_utc, parent_profile_sha256, revision)
+    if key in _memo:
+        return deepcopy(_memo[key])
     result = {
         "amendment_id": "crux73-tranco600-rapid-v5-selection-v1",
         "parent_profile_sha256": parent_profile_sha256,
@@ -155,7 +173,7 @@ def _amendment_payload(
         # Reconstruct the frozen v1 envelope independently. A change to its
         # declaration cannot silently become a differently interpreted parent.
         parent = profile._bind(
-            _amendment_payload(FROZEN_V1_AMENDMENT_PUBLICATION_UTC, parent_profile_sha256),
+            _memoized_amendment_payload(FROZEN_V1_AMENDMENT_PUBLICATION_UTC, parent_profile_sha256, _memo=_memo),
             SELECTION_AMENDMENT_RECEIPT_TYPE, schema_version=5,
         )
         parent_sha = profile._sha(profile._canonical_json(parent))
@@ -207,7 +225,7 @@ def _amendment_payload(
         if published < _utc(FROZEN_V2_AMENDMENT_PUBLICATION_UTC):
             raise ValueError("selection amendment v3 publication is before its v2 parent")
         parent = profile._bind(
-            _amendment_payload(FROZEN_V2_AMENDMENT_PUBLICATION_UTC, parent_profile_sha256, revision=2),
+            _memoized_amendment_payload(FROZEN_V2_AMENDMENT_PUBLICATION_UTC, parent_profile_sha256, revision=2, _memo=_memo),
             SELECTION_AMENDMENT_RECEIPT_TYPE, schema_version=5,
         )
         parent_sha = profile._sha(profile._canonical_json(parent))
@@ -272,8 +290,8 @@ def _amendment_payload(
     if revision >= 4:
         if published < _utc(FROZEN_V3_AMENDMENT_PUBLICATION_UTC):
             raise ValueError("selection amendment v4 publication is before its v3 parent")
-        parent = profile._bind(_amendment_payload(
-            FROZEN_V3_AMENDMENT_PUBLICATION_UTC, parent_profile_sha256, revision=3,
+        parent = profile._bind(_memoized_amendment_payload(
+            FROZEN_V3_AMENDMENT_PUBLICATION_UTC, parent_profile_sha256, revision=3, _memo=_memo,
         ), SELECTION_AMENDMENT_RECEIPT_TYPE, schema_version=5)
         parent_sha = profile._sha(profile._canonical_json(parent))
         if parent_sha != FROZEN_V3_AMENDMENT_SHA256:
@@ -304,8 +322,8 @@ def _amendment_payload(
         from .application_response_policy import TERMINAL_HTTP_ERROR_POLICY
         if published < _utc(FROZEN_V4_AMENDMENT_PUBLICATION_UTC):
             raise ValueError("selection amendment v5 publication is before its v4 parent")
-        parent = profile._bind(_amendment_payload(
-            FROZEN_V4_AMENDMENT_PUBLICATION_UTC, parent_profile_sha256, revision=4,
+        parent = profile._bind(_memoized_amendment_payload(
+            FROZEN_V4_AMENDMENT_PUBLICATION_UTC, parent_profile_sha256, revision=4, _memo=_memo,
         ), SELECTION_AMENDMENT_RECEIPT_TYPE, schema_version=5)
         parent_sha = profile._sha(profile._canonical_json(parent))
         if parent_sha != FROZEN_V4_AMENDMENT_SHA256:
@@ -336,8 +354,8 @@ def _amendment_payload(
     if revision >= 6:
         if published < _utc(FROZEN_V5_AMENDMENT_PUBLICATION_UTC):
             raise ValueError("selection amendment v6 publication is before its v5 parent")
-        parent = profile._bind(_amendment_payload(
-            FROZEN_V5_AMENDMENT_PUBLICATION_UTC, parent_profile_sha256, revision=5,
+        parent = profile._bind(_memoized_amendment_payload(
+            FROZEN_V5_AMENDMENT_PUBLICATION_UTC, parent_profile_sha256, revision=5, _memo=_memo,
         ), SELECTION_AMENDMENT_RECEIPT_TYPE, schema_version=5)
         parent_sha = profile._sha(profile._canonical_json(parent))
         if parent_sha != FROZEN_V5_AMENDMENT_SHA256:
@@ -366,8 +384,8 @@ def _amendment_payload(
         from .application_response_policy import APPROVED_ORIGINS_CHAFF_POLICY
         if published < _utc(FROZEN_V6_AMENDMENT_PUBLICATION_UTC):
             raise ValueError("selection amendment v7 publication is before its v6 parent")
-        parent = profile._bind(_amendment_payload(
-            FROZEN_V6_AMENDMENT_PUBLICATION_UTC, parent_profile_sha256, revision=6,
+        parent = profile._bind(_memoized_amendment_payload(
+            FROZEN_V6_AMENDMENT_PUBLICATION_UTC, parent_profile_sha256, revision=6, _memo=_memo,
         ), SELECTION_AMENDMENT_RECEIPT_TYPE, schema_version=5)
         parent_sha = profile._sha(profile._canonical_json(parent))
         if parent_sha != FROZEN_V6_AMENDMENT_SHA256:
@@ -391,12 +409,12 @@ def _amendment_payload(
         result["freshness_policy"] = {**result["freshness_policy"],
             "new_approved_origin_chaff_preparation": "started-at-or-after-published-at-utc",
             "v6_failed_attempts": "retain-v6-only-authority-no-v7-relabel-or-promotion"}
-    if revision in {8, 9, 10}:
+    if revision in {8, 9, 10, 11}:
         from .capture_acceptance_policy import POLICY as BUFLO_POLICY
         if published < _utc(FROZEN_V7_AMENDMENT_PUBLICATION_UTC):
             raise ValueError("selection amendment v8 publication is before its v7 parent")
-        parent = profile._bind(_amendment_payload(
-            FROZEN_V7_AMENDMENT_PUBLICATION_UTC, parent_profile_sha256, revision=7,
+        parent = profile._bind(_memoized_amendment_payload(
+            FROZEN_V7_AMENDMENT_PUBLICATION_UTC, parent_profile_sha256, revision=7, _memo=_memo,
         ), SELECTION_AMENDMENT_RECEIPT_TYPE, schema_version=5)
         parent_sha = profile._sha(profile._canonical_json(parent))
         if parent_sha != FROZEN_V7_AMENDMENT_SHA256:
@@ -424,12 +442,12 @@ def _amendment_payload(
         result["freshness_policy"] = {**result["freshness_policy"],
             "new_buflo_release_policy_preparation": "started-at-or-after-published-at-utc",
             "v7_failed_attempts_and_admissions": "retain-v7-only-authority-no-v8-relabel-promotion-or-post-admission-manifest-change"}
-    if revision in {9, 10}:
+    if revision in {9, 10, 11}:
         from .capture_acceptance_policy import ACK_START_POLICY
         if published < _utc(FROZEN_V8_AMENDMENT_PUBLICATION_UTC):
             raise ValueError("selection amendment v9 publication is before its v8 parent")
-        parent = profile._bind(_amendment_payload(
-            FROZEN_V8_AMENDMENT_PUBLICATION_UTC, parent_profile_sha256, revision=8,
+        parent = profile._bind(_memoized_amendment_payload(
+            FROZEN_V8_AMENDMENT_PUBLICATION_UTC, parent_profile_sha256, revision=8, _memo=_memo,
         ), SELECTION_AMENDMENT_RECEIPT_TYPE, schema_version=5)
         parent_sha = profile._sha(profile._canonical_json(parent))
         if parent_sha != FROZEN_V8_AMENDMENT_SHA256:
@@ -453,12 +471,12 @@ def _amendment_payload(
         result["freshness_policy"] = {**result["freshness_policy"],
             "new_buflo_ack_start_preparation": "started-at-or-after-published-at-utc",
             "v8_failed_attempts_and_admissions": "retain-v8-only-authority-no-v9-relabel-promotion-or-post-admission-manifest-change"}
-    if revision == 10:
+    if revision in {10, 11}:
         from .capture_acceptance_policy import TAMARAW_POLICY, TAMARAW_CREDIT_SEMANTICS
         if published < _utc(FROZEN_V9_AMENDMENT_PUBLICATION_UTC):
             raise ValueError("selection amendment v10 publication is before its v9 parent")
-        parent = profile._bind(_amendment_payload(
-            FROZEN_V9_AMENDMENT_PUBLICATION_UTC, parent_profile_sha256, revision=9,
+        parent = profile._bind(_memoized_amendment_payload(
+            FROZEN_V9_AMENDMENT_PUBLICATION_UTC, parent_profile_sha256, revision=9, _memo=_memo,
         ), SELECTION_AMENDMENT_RECEIPT_TYPE, schema_version=5)
         parent_sha = profile._sha(profile._canonical_json(parent))
         if parent_sha != FROZEN_V9_AMENDMENT_SHA256:
@@ -489,6 +507,44 @@ def _amendment_payload(
         result["freshness_policy"] = {**result["freshness_policy"],
             "new_tamaraw_capture_policy_preparation": "started-at-or-after-published-at-utc",
             "v9_failed_attempts_and_admissions": "retain-v9-only-authority-no-v10-relabel-promotion-or-post-admission-manifest-change"}
+    if revision == 11:
+        from .capture_acceptance_policy import FRONT_POLICY
+        if published < _utc(FROZEN_V10_AMENDMENT_PUBLICATION_UTC):
+            raise ValueError("selection amendment v11 publication is before its v10 parent")
+        parent = profile._bind(_memoized_amendment_payload(
+            FROZEN_V10_AMENDMENT_PUBLICATION_UTC, parent_profile_sha256, revision=10, _memo=_memo,
+        ), SELECTION_AMENDMENT_RECEIPT_TYPE, schema_version=5)
+        parent_sha = profile._sha(profile._canonical_json(parent))
+        if parent_sha != FROZEN_V10_AMENDMENT_SHA256:
+            raise ValueError("frozen v10 selection amendment declaration no longer verifies")
+        result.update({
+            "amendment_id": "crux73-tranco600-rapid-v5-selection-v11", "revision": 11,
+            "parent_selection_amendment_sha256": parent_sha,
+            "parent_admission_policy": AMENDED_V10_ADMISSION_POLICY,
+            "admission_policy": AMENDED_V11_ADMISSION_POLICY,
+            "front_capture_policy": FRONT_POLICY,
+            "front_capture_acceptance": {
+                "binding": "explicit-preparation-opt-in-before-workload-hash-and-admission-seal",
+                "native_marker": "bound-preparation-v1-exact-policy-counts-cell-and-omission-ratio",
+                "outgoing_omission_reason": "CongestionLimited",
+                "outgoing_omission_ratio_numerator": 1,
+                "outgoing_omission_ratio_denominator": 100,
+                "rounding": "exact-cross-multiplication-no-minimum-one",
+                "packet_size": 1200, "n_client_packets": 900, "n_server_packets": 1200,
+                "peak_minimum_seconds": 0.1, "peak_maximum_seconds": 2.5,
+                "incoming_physical_proof": "all-whole-cell-physical-advertisement-and-consumption-required",
+                "outgoing_physical_proof": "unique-actual-1200-byte-shaped-handoffs-or-matching-native-congestion-miss",
+                "timing": "retain-original-targets-5ms-diagnostics-and-catch-up-observations",
+                "other_modes": "unchanged-no-front-marker-or-omission-authority",
+                "full_resource_graph": "unchanged-no-resource-or-origin-pruning",
+                "capture_authority": "none-requires-separate-live-capture-readiness-and-deep-verification",
+                "paper_equivalent": False, "scientific_credit": False,
+            },
+        })
+        result["freshness_policy"] = {**result["freshness_policy"],
+            "new_front_capture_policy_preparation": "started-at-or-after-published-at-utc",
+            "v10_failed_attempts_and_admissions": "retain-v10-only-authority-no-v11-relabel-promotion-or-post-admission-manifest-change"}
+    _memo[key] = deepcopy(result)
     return result
 
 
@@ -519,6 +575,7 @@ def validate_selection_amendment(
         "crux73-tranco600-rapid-v5-selection-v8": 8,
         "crux73-tranco600-rapid-v5-selection-v9": 9,
         "crux73-tranco600-rapid-v5-selection-v10": 10,
+        "crux73-tranco600-rapid-v5-selection-v11": 11,
     }
     amendment_id = payload.get("amendment_id")
     revision = ids.get(amendment_id) if isinstance(amendment_id, str) else None
@@ -553,7 +610,7 @@ def root_screen_allows_browser_progression(root: Mapping[str, Any] | None, *, re
         return False
     identity = (root.get("outcome"), root.get("detail"))
     return identity == ("known-valid", "known-valid") or (
-        type(revision) is int and revision in {3, 4, 5, 6, 7, 8, 9, 10}
+        type(revision) is int and revision in {3, 4, 5, 6, 7, 8, 9, 10, 11}
         and identity == ("ambiguous", "response-known-invalid")
     )
 
@@ -743,7 +800,7 @@ def _unsuccessful_attempt_deferral(
         raise ValueError("unsuccessful attempt source inventory differs from its prospective application policy")
     if (CHAFF_QUALIFICATION_MODULE in failure["implementation_hashes"]) != (selection_amendment_revision(selection_amendment) >= 7):
         raise ValueError("unsuccessful attempt source inventory differs from its prospective qualified chaff origin policy")
-    if ("qcsd_lab.capture_acceptance_policy" in failure["implementation_hashes"]) != (selection_amendment_revision(selection_amendment) in {8, 9, 10}):
+    if ("qcsd_lab.capture_acceptance_policy" in failure["implementation_hashes"]) != (selection_amendment_revision(selection_amendment) in {8, 9, 10, 11}):
         raise ValueError("unsuccessful attempt source inventory differs from its prospective BufLO release policy")
     if failure["action"]["kind"] == "complete-graph-preparation":
         if page_proof is None or automated_screen is None:
@@ -784,7 +841,7 @@ def validate_amended_cohort_receipt(
         profile_receipt, source_bytes, catalogue_bytes, payload.get("generation"), digests,
         execution_binding, deep_verify_terminal, selection_amendment,
     )
-    if (payload != expected or selection_amendment_revision(selection_amendment) in {8, 9, 10}
+    if (payload != expected or selection_amendment_revision(selection_amendment) in {8, 9, 10, 11}
         and profile._canonical_json(payload) != profile._canonical_json(expected)):
         raise ValueError("amended cohort differs from deep-verified ordered selection")
     return tuple(expected["selected_candidate_ids"])
@@ -914,10 +971,12 @@ def _selection_payload(
                 admission_fields |= {"primary_document_identity_policy"}
             if revision >= 7:
                 admission_fields |= {"qualified_chaff_origin_policy"}
-            if revision in {8, 9, 10}:
+            if revision in {8, 9, 10, 11}:
                 admission_fields |= {"buflo_incoming_credit_release_policy"}
-            if revision == 10:
+            if revision in {10, 11}:
                 admission_fields |= {"tamaraw_capture_policy"}
+            if revision == 11:
+                admission_fields |= {"front_capture_policy"}
             if "triage" in facts or not isinstance(admission, Mapping) or set(admission) != admission_fields:
                 raise ValueError("v5 admitted site lacks exact page and complete graph proof")
             if revision >= 5:
@@ -936,10 +995,12 @@ def _selection_payload(
                 raise ValueError("admitted primary document identity policy differs from its prospective contract")
             if revision >= 7 and admission["qualified_chaff_origin_policy"] != amendment_payload["qualified_chaff_origin_policy"]:
                 raise ValueError("admitted qualified chaff origin policy differs from its prospective contract")
-            if revision in {8, 9, 10} and admission["buflo_incoming_credit_release_policy"] != amendment_payload["buflo_incoming_credit_release_policy"]:
+            if revision in {8, 9, 10, 11} and admission["buflo_incoming_credit_release_policy"] != amendment_payload["buflo_incoming_credit_release_policy"]:
                 raise ValueError("admitted BufLO release policy differs from its prospective contract")
-            if revision == 10 and admission["tamaraw_capture_policy"] != amendment_payload["tamaraw_capture_policy"]:
+            if revision in {10, 11} and admission["tamaraw_capture_policy"] != amendment_payload["tamaraw_capture_policy"]:
                 raise ValueError("admitted Tamaraw capture policy differs from its prospective contract")
+            if revision == 11 and admission["front_capture_policy"] != amendment_payload["front_capture_policy"]:
+                raise ValueError("admitted FRONT capture policy differs from its prospective contract")
             if profile.unsafe_catalogue_domain_reason(candidate["domain"]) is not None:
                 raise ValueError("v5 automatically unsafe site cannot be admitted")
             if screen is None or page_proof is None:
@@ -1025,9 +1086,10 @@ def _selection_payload(
         **({"application_response_policy": amendment_payload["application_response_policy"]} if revision >= 5 else {}),
         **({"primary_document_identity_policy": amendment_payload["primary_document_identity_policy"]} if revision >= 6 else {}),
         **({"qualified_chaff_origin_policy": amendment_payload["qualified_chaff_origin_policy"]} if revision >= 7 else {}),
-        **({"buflo_incoming_credit_release_policy": amendment_payload["buflo_incoming_credit_release_policy"]} if revision in {8, 9, 10} else {}),
-        **({"tamaraw_capture_policy": amendment_payload["tamaraw_capture_policy"]} if revision == 10 else {}),
+        **({"buflo_incoming_credit_release_policy": amendment_payload["buflo_incoming_credit_release_policy"]} if revision in {8, 9, 10, 11} else {}),
+        **({"tamaraw_capture_policy": amendment_payload["tamaraw_capture_policy"]} if revision in {10, 11} else {}),
         **({"automated_screen_policy_sha256": automated_screen_policy_sha256()} if revision >= 2 else {}),
+        **({"front_capture_policy": amendment_payload["front_capture_policy"]} if revision == 11 else {}),
         "terminal_decisions": decisions,
         "selected_candidate_ids": [candidate["candidate_id"] for candidate in selected],
         "selected_candidates": [

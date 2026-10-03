@@ -71,6 +71,7 @@ REPLAY_KEYS = {
 PREPARATION_KEYS = {
     "buflo_incoming_credit_release_policy",
     "tamaraw_capture_policy",
+    "front_capture_policy",
     "qualified_chaff_origin_policy",
     "application_response_policy",
     "application_response_policy_evidence",
@@ -120,6 +121,7 @@ DISCOVERY_EVIDENCE_PREPARATION_KEYS = {
 LEGACY_OPTIONAL_PREPARATION_KEYS = {
     "buflo_incoming_credit_release_policy",
     "tamaraw_capture_policy",
+    "front_capture_policy",
     "qualified_chaff_origin_policy",
     "application_response_policy",
     "application_response_policy_evidence",
@@ -688,6 +690,8 @@ def _validate_preparation(
     validate_buflo_preparation_policy(value)
     from .capture_acceptance_policy import validate_tamaraw_preparation_policy
     validate_tamaraw_preparation_policy(value)
+    from .capture_acceptance_policy import validate_front_preparation_policy
+    validate_front_preparation_policy(value)
 
 
 def _validate_coverage_admission(
