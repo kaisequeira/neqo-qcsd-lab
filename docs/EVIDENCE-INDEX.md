@@ -15,7 +15,86 @@ graph is preserved, including error responses; primary pages and padding
 resources retain successful-response requirements. Rust commit
 `1cda2d2446b53d0bdee185e81755fb5115744eb1` contains the native change.
 
-### Current preflight runtime and context 012
+### Current preflight runtime and context 013
+
+Published Lab source `80c85f5938e0fbb08b339a808bcc8289888882e3` retains native
+commit `00d14c0999bf2657cacc2581e431f39bacab7281`. The observed origin-budget
+repair passed **three new focused cases, nine guard checks and 21 receipt
+checks**, with independent review. It retains actual convergence failures
+under the unsuccessful-attempt proof; complete-site acceptance, graph and
+response requirements remain unchanged. Old context 012's generic error
+remains unsealed and gains no retrospective authority.
+
+The matching runtime is retained under
+`../diagnostic-rehearsals/preflight-runtime-20261003-003/`.
+`canonical-runtime.json` was verified at `2026-10-03T02:16:32.881055Z`, raw
+SHA-256 `ff8b90d17d47d621fcada225b432899843c56ee897b3bdc6134848d7632a9705`.
+The actual collection image is
+`sha256:014be290b369446493c2519583ec347843fd6741e55013d7173ac6ffef218e76`;
+the preparation image is
+`sha256:1fee83364f7649d2f5f4b3fadf984f559d657741661430834f3591032a274788`.
+Exported source manifest SHA-256 is
+`ffacf4992a84b5ab1f52117d1f42af510535d0121bf251a4814c2b284120e02b`.
+
+Actual collection/preparation builds exited 0 in **57.861 / 63.749 seconds**.
+Installed source/client checks exited 0 with empty stderr in **16.929 /
+13.510 seconds**. The closed build/runtime audit reopened **2,331 source
+files and all 15 recorded operations**. `client-build.json`, raw SHA-256
+`ae6a9af884ef2f9296337e1099e17ec5ee3bbee7a58778d7e7f5909f120a20d5`,
+records reuse of client
+`98d6f5552376782b4df99f74187e8a636be807bd22ed879a13c7984e94f0741f`.
+Its original native build belongs to e260; the newly installed Python source
+belongs to 80c85f5. No new native compile or live qualification is claimed.
+
+Fresh context `../diagnostic-rehearsals/rapid-v6-site-acquisition-20261003-013/`
+initialized with exit 0 at `2026-10-03T02:19:41.448608Z`, elapsed **8.182510
+seconds**. Provenance SHA-256 is
+`9dfd5fb60ca67880d1f96602fc2af2e12fa2aa0966374beb4fb37e884f772dea`.
+The separate root role retains original context 010's actual root runtime,
+survey components, verified native client and raw observation timestamps.
+The main role uses the new 80c85f5 runtime for navigation, selected-page
+probes and full preparation.
+
+Its create-only `root-log-registries/registry-000001.json`, raw SHA-256
+`6b0c8e19f5ddd685d888dcd11c11240eb30487a3218e5435c0edaa1846533baa`,
+independently reopened the original **73 curated and 40 fallback** observations.
+Registry creation exited 0 at `2026-10-03T02:19:44.407864Z`, elapsed **2.775401
+seconds**. No root was rescreened or relabeled, and freshness requirements
+remain enforced. These observations grant no admitted-site credit.
+
+The portable [host coordinator](../tools/rapid_acquisition_control.py)
+completed `actual-coordinator-plan-only-completed.json` with exit 0 at
+`2026-10-03T02:21:09.474446Z`, elapsed **2.982380 seconds**. The actual live
+batch began at `2026-10-03T02:21:50.899811Z`. Its immutable policy is under
+`host-operations/fast-batch-001/policy.json`: one selected page per candidate
+across the entire unchanged context history, at most 60 actions, stop at the
+first admission and a recorded boundary-stop path. Operator and verifier
+commits are separately supplied, currently both 80c85f5; coordinator SHA-256
+is `b95492bb658a81d409a7b2876df427fabc544a9a7cd92b8c5bd037bc62f94031`.
+
+At this documentation snapshot, immutable
+`acquisition/checkpoints/checkpoint-000016.json` was recorded at
+`2026-10-03T02:28:05.796112Z`, raw SHA-256
+`9b3b07f6c006c5de184682452ccd668469c79756379cc9fbf89b505e3a998b62`.
+It has **five sealed screening decisions, zero admitted sites and zero formal
+traces**; candidate 6, Pinterest, is next. The live batch has no completion
+record at this snapshot. Study counters remain **0/50 admitted, 0/50 shakedown
+traces and 0/16,000 formal traces**; usable-site yield remains unproven.
+
+Albumaty's one selected-page preparation returned a retained failed-operation
+proof. `host-operations/fast-batch-001/action-000007/completed.json` records
+host action exit 0 at `2026-10-03T02:24:53.255043Z`; the subsequent sealing
+action completed and the loop advanced. Its four unattempted alternative
+pages remain unassessed. This is actual one-page routing and preserved
+unsuccessful-operation evidence, with no eligibility credit.
+
+The external first-site canary recipe
+`../diagnostic-rehearsals/rapid-v6-first-site-canary-20261003-004/`
+has only had its actual runtime/context binding checked. Recipe SHA-256 is
+`48373f33ebca39e2d2acae7e20b7dce75b46bc8d8afd499bbbe091bda3278c2d`.
+It has not been staged, qualified or executed and grants no capture credit.
+
+### Preserved preflight runtime and context 012
 
 Published Lab source `74805e43ea9984ae86bb829b46afec10f09add4a` retains native
 commit `00d14c0999bf2657cacc2581e431f39bacab7281`. Its matching runtime is
@@ -88,10 +167,10 @@ is published at operator commit `e84b30ff8acdc155e4a5adbdd415686d10328053`,
 with 18 focused checks and independent review. It binds the selected operator
 bytes separately from the unchanged scientific verifier/runtime and retains a
 durable per-candidate page budget over the entire context history. It does not
-override the existing generic error. The prospective observed origin-budget
-failure fix is in progress; no repaired source context, new matching runtime,
-replacement controller launch or capture pass is claimed. Context 012 and all
-its attempted bytes remain unchanged.
+override the existing generic error. At that snapshot the observed
+origin-budget repair was still prospective. The later source/runtime/context
+013 have their distinct current scope above; no capture pass is claimed.
+Context 012 and all its attempted bytes remain unchanged.
 
 Context 011's failed staging attempt and partial overlay/runtime bytes remain
 preserved. Its freeze-spec input collided with the create-only output path.

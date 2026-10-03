@@ -20,9 +20,9 @@ identities and qualified padding responses remain exact.
 
 | Step | Action | Evidence needed to advance | Current state |
 |---:|---|---|---|
-| 1 | Freeze the candidate sources and runtime. | Exact source hashes, ordered [v5 rapid profile receipt](../config/curated-sources/crux73-tranco600-rapid-v5.profile.json), revision-6 receipt, image digests, fixed defense parameters and launcher-source hashes. | Published Lab source `74805e4` has matching collection and prepare images in runtime 002. Context 012 independently retains the original d99 root-screen runtime and uses the new 748 runtime for page work. The same 73 curated and 40 fallback root observations reopened without rescreening. Installed-runtime checks grant no lane or trace credit. |
-| 2 | Find usable pages. | Record verified decisions in frozen order. Keep the controlled root observation, separate controlled H3 pass on the exact selected page, automatic URL/domain screen, complete graph, registered response stability and live cross-origin resource. | Latest inspected 012 checkpoint: **eight sealed decisions, zero admitted sites**, at `2026-10-03T01:50:37.460971Z`; Futura is next. The private controller exited 1 on the origin-budget blocker described below. A prospective source fix is being implemented; no replacement context or coordinator launch is claimed. **0/50 final sites admitted.** |
-| 3 | Prepare and qualify the first ten sites. | Ten verified prepared workloads, with five-site response-qualification sets matching the exact workload and source bytes. | Revision-6 admission already screens for a stable, known-valid, same-origin auxiliary body of at least **1,200 bytes**. Sustained padding qualification remains separate. The first-site canary 003 recipe is ready only; it has not been staged or executed. A prepared first site will receive one-workload qualification and a five-setting diagnostic before expanding the shakedown. |
+| 1 | Freeze the candidate sources and runtime. | Exact source hashes, ordered [v5 rapid profile receipt](../config/curated-sources/crux73-tranco600-rapid-v5.profile.json), revision-6 receipt, image digests, fixed defense parameters and launcher-source hashes. | Published Lab source `80c85f5` has matching collection and prepare images in runtime 003. Fresh context 013 retains the original 010 root-screen runtime and uses the new runtime for page work. The same 73 curated and 40 fallback root observations reopened without rescreening. Installed-runtime checks grant no lane or trace credit. |
+| 2 | Find usable pages. | Record verified decisions in frozen order. Keep the controlled root observation, separate controlled H3 pass on the exact selected page, automatic URL/domain screen, complete graph, registered response stability and live cross-origin resource. | Inspected 013 checkpoint: **five sealed decisions, zero admitted sites**, at `2026-10-03T02:28:05.796112Z`; Pinterest is next. The portable host coordinator's first bounded batch is running with one selected page per candidate over the unchanged context history. No completed batch or usable-site yield is claimed. **0/50 final sites admitted.** |
+| 3 | Prepare and qualify the first ten sites. | Ten verified prepared workloads, with five-site response-qualification sets matching the exact workload and source bytes. | Revision-6 admission already screens for a stable, known-valid, same-origin auxiliary body of at least **1,200 bytes**. Sustained padding qualification remains separate. The first-site canary 004 recipe has had its actual runtime/context guards checked only; it has not been staged or executed. A prepared first site will receive one-workload qualification and a five-setting diagnostic before expanding the shakedown. |
 | 4 | Run the ten-site shakedown across all five settings. | 50 complete, individually deep-verified diagnostic traces, including both BuFLO modes, with failures preserved and repaired before formal capture. | Historical individual clean-runtime diagnostic passes exist on one workload: CS-BuFLO **1/1**, BuFLO retry 004 **1/1**, FRONT and Tamaraw accepted, and an undefended two-second-settle successor **1/1**. The earlier undefended attempt lacked 45 tail packets and remains failed. These separate passes do not supply the ten-site shakedown. **0/50 study shakedown traces accepted.** |
 | 5 | Admit 50 sites and freeze formal inputs. | A verified 50-site cohort receipt, exact workloads and qualification sets, fixed parameters, complete lane plan and launch manifest. | 50-site live yield is unproven; the 600-domain catalogue supplies further candidates under the same checks. |
 | 6 | Capture the formal grid. | Each defense lane is a separately named, frozen campaign. Deep verification must show its exact sites, setting, visit slots, source/image binding and complete result seal. | The planner and capture adapter represent 800 lanes and preserve failed attempts. Historical runtime and parent-interruption checks have their original source bindings; they do not establish a current study lane. No 50-site cohort or formal bound lane has run. **0/16,000 formal traces accepted.** |
@@ -39,7 +39,7 @@ systematically favor one setting.
 
 | Work | Planning estimate | What can change it |
 |---|---|---|
-| Root HTTP/3 screen | The existing 73 curated plus 40 fallback observations reopened for 012 in **2.647 seconds**; they were not rerun. An older 40-candidate fallback batch took about **4 minutes 10 seconds**. | Reuse requires unchanged survey components, native client, actual original runtime proof and applicable freshness barriers. Root decisions grant no site credit. |
+| Root HTTP/3 screen | The existing 73 curated plus 40 fallback observations reopened for 013 in **2.775 seconds**; they were not rerun. The earlier 012 reopening took **2.647 seconds**. An older 40-candidate fallback batch took about **4 minutes 10 seconds**. | Reuse requires unchanged survey components, native client, actual original runtime proof and applicable freshness barriers. Root decisions grant no site credit. |
 | Browser discovery, replay and 50-site admission | **Unknown.** Fresh Poki full replay/rejection proof took **120.327 seconds**; the Futura convergence diagnostic failed after **89.361 seconds**. | Live page behavior and candidate yield dominate. The default one-page operator budget limits exploration, not the successful-admission requirements. A root success is not a prepared site. |
 | First ten-site, five-setting shakedown | About **53–109 minutes of recording time** for 50 visits at older 63–131 second per-visit rates, plus site preparation, response qualification and verification. | A complete five-setting shakedown on admitted study sites has not run. Short historical-workload tests diagnose individual capture failures first. |
 | Full formal grid | About **12–25 days of serial recording time** for 16,000 visits at those older rates, before retries and verification. | Parallel speedup is unmeasured and requires a separate fidelity/throughput trial. |
@@ -60,41 +60,56 @@ changes to the source-bound container images.
 
 ## Current checks and remaining blockers
 
-The matching runtime 002 verifies the published 748 source and the unchanged
-native client. Context 012 initialized successfully and retained the same
-113 original root observations with their old runtime identity. The fresh
-Futura diagnostic passed three formerly failing interception-ledger stages,
-then reached the 30-second passive-render cap with one request active. It
-produced no final graph or admission. Poki's separate typed failure proof
-retains three complete 278-resource replays and seven unstable auxiliary
-identities; those complete downloads are not a stable admitted workload.
-Exact runtime, proof and checkpoint locations are recorded in the
-[evidence index](EVIDENCE-INDEX.md#current-preflight-runtime-and-context-012).
+The matching runtime 003 verifies published source 80c85f5 and the unchanged
+native client. Its observed origin-budget repair passed three new focused
+cases, nine guard checks, 21 receipt checks and independent review. The new
+images built in **57.861 and 63.749 seconds** and passed installed-byte checks
+in **16.929 and 13.510 seconds**, without another native compilation. Fresh
+context 013 initialized successfully and independently retained the same 113
+original root observations with their old runtime identity. Its first bounded
+host-coordinator batch is running. Exact runtime, checkpoint and policy
+locations are recorded in the
+[evidence index](EVIDENCE-INDEX.md#current-preflight-runtime-and-context-013).
 
-The actual 012 private controller stopped with exit 1 at Futura's selected
-page ordinal 2, preparation attempt 10. Browser discovery returned, but origin
-convergence then exceeded its 32-origin bound outside the observed backend
-call. The attempt retained a generic operational error, without an observed
-origin-list proof. That error remains unchanged and unsealed. A prospective
-source fix is being implemented to retain this actual failure through the
-source-bound unsuccessful-attempt route; no new main context, image or
-replacement launch exists yet. Study counters remain **0/50 admitted sites,
-0/50 shakedown traces and 0/16,000 formal traces**.
+At the inspected `2026-10-03T02:28:05.796112Z` checkpoint, the new context has
+five sealed decisions and Pinterest is next. It has not established a usable
+site or completed padding qualification. Study counters remain **0/50
+admitted sites, 0/50 shakedown traces and 0/16,000 formal traces**. Canary 004
+has only had its runtime/context guard checked, with no staging or capture.
+
+**Preserved 012 failure:** its private controller stopped with exit 1 at
+Futura's selected page ordinal 2, preparation attempt 10. Browser discovery
+returned, but origin convergence exceeded its 32-origin bound outside the
+observed backend call. The generic error has no observed origin-list proof
+and remains unchanged and unsealed. The new repair prospectively retains
+such an actual bounded failure through the source-bound unsuccessful-attempt
+route; it does not admit the old attempt. Earlier Futura convergence and Poki
+response-drift diagnostics also remain failed, with no admission or capture
+credit. Poki's failure proof retains three complete 278-request replays.
+Successful admission still requires the complete graph and registered
+response and padding requirements.
 
 ### Portable host coordinator
 
-The new [host coordinator](../tools/rapid_acquisition_control.py) provides a
-portable operator loop, committed separately as operator commit `e84b30f`.
-It has not replaced the stopped 012 controller. That context's generic error
-still blocks automatic continuation; the next launch awaits the prospective
-repair and its fresh source-bound context. Its `--help` lists explicit context, clean verifier
+The [host coordinator](../tools/rapid_acquisition_control.py) provides a
+portable operator loop, originally committed separately as `e84b30f`. Its
+first recorded plan-only check on fresh context 013 passed, and its first
+actual batch is running with at most 60 actions and a stop at one admission.
+The old 012 controller and generic error remain preserved. Its `--help` lists explicit context, clean verifier
 checkout, Docker bootstrap, root registry and create-only operator-log paths,
 each with its selected hash or source identity. The operator code and the
-scientific verifier have separate commits: `--operator-commit` binds the host
+scientific verifier have separately selected commits: `--operator-commit` binds the host
 coordinator's exact bytes; `--source-commit` binds the unchanged clean checkout
 that owns admission and the matched image. Changing the host's page-routing
 policy does not install new scientific code in that image or require an image
-rebuild.
+rebuild. The actual 013 command currently selects 80c85f5 for both identities
+and retains the exact coordinator hash and one-page policy.
+
+The actual Albumaty sequence completed one selected-page preparation,
+retained its unsuccessful-attempt proof, sealed the zero-credit decision and
+moved on. Its four alternative pages remain unassessed. This verifies the
+operator's one-page bound on that live sequence; it does not establish a
+successful full-site preparation.
 
 The default `--page-budget 1` means **one distinct selected page per candidate
 over that candidate's entire unchanged context history**. Restarting the host
@@ -122,13 +137,14 @@ controller must be fully closed before handoff. `--max-actions` and
 `--stop-at-admissions` bound each batch. Creating `--stop-file` requests a
 stop at the next action boundary, after the current action finishes.
 `--plan-only` publishes the policy and first verified plan without executing
-it. No live coordinator success or capture authority is claimed by these
-source capabilities.
+it. The recorded 013 plan-only operation passed; the live batch has no
+completion record at the inspected checkpoint. Neither grants capture
+authority.
 
 ### Historical checkpoints and response-policy rollout
 
 The following snapshots describe their original sources and dates. Their
-passing prefixes and failures grant no authority to current context 012.
+passing prefixes and failures grant no authority to current context 013.
 
 Context 007's independently reopened checkpoint had
 **11 screening decisions and zero admitted sites** at

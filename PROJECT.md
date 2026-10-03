@@ -41,40 +41,62 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Latest operational update, 3 October:** context **012** has **eight sealed
-screening decisions and no admitted site** at `2026-10-03T01:50:37.460971Z`.
-Its bounded batch stopped with exit 1 at `2026-10-03T01:50:39.831931Z`, after
-**34 minutes 32 seconds**. Futura's selected page ordinal 2, preparation
-attempt 10, exceeded the 32-origin convergence bound after browser discovery.
-The failure occurred outside the observer, leaving a generic unsealed error
-without retained origin-list proof. It is not a scientific site rejection.
-The study remains **0/50 admitted sites and 0/16,000 formal traces**.
+**Latest operational update, 3 October:** fresh context **013** has **five
+sealed screening decisions and no admitted site** at
+`2026-10-03T02:28:05.796112Z`; Pinterest is the next candidate. Its first bounded
+host-coordinator batch is running. This is site preparation, with **0/50
+admitted sites, 0/50 shakedown traces and 0/16,000 formal traces**. A complete
+usable-site graph and sustained padding qualification are still required
+before the first study capture.
 
-The portable host coordinator is published separately as `e84b30f`, with
-**18 focused checks and independent review**. It keeps one selected-page
-budget over the unchanged candidate history and does not rebuild the matched
-image for operator routing changes. The stopped 012 error still blocks it.
-A prospective source fix is in progress; no repaired context, matching new
-runtime or replacement launch is claimed. The
-[rapid runbook](docs/RAPID-CAPTURE-PATH.md#portable-host-coordinator) explains
-the separate operator and scientific-verifier roles.
+The observed origin-budget repair is published as `80c85f5`, with **three new
+focused cases, nine guard checks, 21 receipt checks and independent review**.
+It records the actual bounded convergence failure through the source-bound
+unsuccessful-attempt route, preserving zero credit and all observed discovery data. It
+does not turn the old generic 012 error into new evidence or waive successful
+admission requirements.
 
-The combined collector and separate-root-runtime fixes are published. The
-new matching images built in **59.713 and 65.533 seconds**, and their installed
-source/client checks passed. The native client is the unchanged, verified
-artifact reused from its original build. Context 012 initialized in **7.789
-seconds**. Its new registry independently reopened the **same 73 curated and
-40 fallback root observations** in **2.647 seconds**, retaining the original
-root image and timestamps. No root rescreen was needed; navigation and full
-preparation use the new runtime.
+Runtime 003's matching collection and preparation images built in **57.861
+and 63.749 seconds**. Both passed checks of their installed source and client
+bytes in **16.929 and 13.510 seconds**. The native client remains the verified
+artifact from its original build; no new native compilation was needed.
+Context 013 initialized in **8.183 seconds**. Its new registry independently
+reopened the **same 73 curated and 40 fallback root observations** in **2.775
+seconds**, retaining the original root image and timestamps. No root was
+rescreened; navigation and full preparation use the new runtime.
 
-The fresh Futura diagnostic passed the formerly failing interception-ledger
-check in three discovery rounds, then hit the passive-render time limit with
-one request still active. The whole operation failed after **89.361 seconds**
-and produced no final graph or admission. Its typed failure remains preserved.
-The first-site capture canary recipe is ready, but is not staged or executed.
-The [evidence index](docs/EVIDENCE-INDEX.md#current-preflight-runtime-and-context-012)
-records these separate scopes and exact identities.
+The [portable host coordinator](docs/RAPID-CAPTURE-PATH.md#portable-host-coordinator)
+first completed a recorded plan-only check, then started its live batch with
+one selected page per candidate over the entire unchanged context history,
+at most 60 actions and a stop after the first admission. A boundary-stop file
+can stop it after the current action finishes. Operator and scientific-source
+identities are recorded separately, even though both currently select
+`80c85f5`. No live batch completion or successful site yield is claimed by
+this checkpoint. The first-site canary 004 recipe has had its runtime/context
+guards checked, but has not been staged, qualified or run. The
+[evidence index](docs/EVIDENCE-INDEX.md#current-preflight-runtime-and-context-013)
+records the exact runtime, checkpoint and operator identities.
+
+The live Albumaty sequence completed one selected-page preparation and sealed
+its retained unsuccessful-attempt proof, then advanced to the next candidate.
+Its four alternative pages remain unassessed. This demonstrates the one-page
+routing bound in the actual loop; the failed preparation grants no admission.
+
+**Preserved context 012:** it had **eight sealed screening decisions and no
+admitted site** at `2026-10-03T01:50:37.460971Z`. Its batch stopped with exit 1
+at `2026-10-03T01:50:39.831931Z`, after **34 minutes 32 seconds**. Futura's
+selected page ordinal 2, preparation attempt 10, exceeded the 32-origin
+convergence bound after browser discovery. The failure occurred outside the
+observer, leaving a generic unsealed error without retained origin-list proof.
+That attempt remains unchanged and is not a scientific site rejection.
+
+Its runtime 002 images built in **59.713 and 65.533 seconds** and passed their
+installed-byte checks. Context 012 initialized in **7.789 seconds** and
+reopened the same 113 root observations in **2.647 seconds**. Its separate
+fresh Futura diagnostic passed three formerly failing interception-ledger
+stages, then reached the passive-render cap with one request still active.
+The whole operation failed after **89.361 seconds**, with no final graph or
+admission. These historical scopes and failed evidence remain preserved.
 
 **Preserved context 009:** it stopped at `2026-10-02T23:39:26.725449Z`, with **nine sealed
 screening decisions and no admitted site**. Poki's tenth attempt completed
