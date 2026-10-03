@@ -20,6 +20,10 @@ import sys
 
 sys.dont_write_bytecode = True
 BLOCKERS = {"retryable-operational-error", "interrupted-or-pending"}
+REGISTRY_RECORD_TYPES = {
+    6: "private-frozen-v6-primary-document-policy-ordered-root-log-registry-v6",
+    7: "private-frozen-v7-approved-origins-chaff-policy-ordered-root-log-registry-v7",
+}
 FAILURES = {
     "failed-attempt-needs-explicit-terminal": ("attempt_failure", "ATTEMPT_FAILURE_TYPE", "unsuccessful_attempt_failure_facts", "--attempt-failure"),
     "page-policy-failure-needs-explicit-terminal": ("page_policy_failure", "PAGE_POLICY_FAILURE_TYPE", "page_policy_failure_facts", "--page-policy-failure"),
@@ -109,6 +113,16 @@ def verify_runtime_source(context, checkout, commit):
         raise ValueError("clean verifier Gitlink differs from the declared Native source")
 
 
+def registry_record_type(context):
+    revision = context.selection_amendment_revision
+    if type(revision) is not int or revision not in REGISTRY_RECORD_TYPES:
+        raise ValueError("coordinator requires a frozen revision6 or revision7 admission API")
+    expected_policy = "prepared-approved-origins-v1" if revision == 7 else None
+    if context.qualified_chaff_origin_policy != expected_policy:
+        raise ValueError("coordinator qualified chaff origin policy differs from its exact revision")
+    return REGISTRY_RECORD_TYPES[revision]
+
+
 def load_registry(engine, context, path, expected, seen=()):
     """Reopen the existing registry chain; actual root decisions use official APIs."""
     path = Path(path).absolute()
@@ -119,7 +133,7 @@ def load_registry(engine, context, path, expected, seen=()):
               "selection_amendment_sha256", "previous_registry", "root_surveys",
               "scientific_credit", "docker_executed"}
     if (set(value) != fields or type(value["schema_version"]) is not int or value["schema_version"] != 1
-        or value["record_type"] != "private-frozen-v6-primary-document-policy-ordered-root-log-registry-v6"
+        or value["record_type"] != registry_record_type(context)
         or value["provenance_sha256"] != context.provenance_sha256
         or value["selection_amendment_sha256"] != context.selection_amendment_sha256
         or value["scientific_credit"] is not False or value["docker_executed"] is not False
@@ -393,6 +407,8 @@ def run_operation(engine, args, checkout, reopen, lock_path):
     engine.durable_create(output / "initial-status.json", engine._json(status))
     policy = {"schema_version": 1, "policy": "bounded-selected-pages-host-coordinator-v1", "declared_at": now(),
         "context": str(context.root), "provenance_sha256": context.provenance_sha256,
+        "selection_amendment_revision": context.selection_amendment_revision,
+        "qualified_chaff_origin_policy": context.qualified_chaff_origin_policy,
         "source_checkout": str(checkout), "source_commit": args.source_commit,
         "operator_commit": args.operator_commit, "coordinator_sha256": args.coordinator_sha256,
         "bootstrap": {"path": str(args.bootstrap.absolute()), "sha256": args.bootstrap_sha256},
@@ -458,8 +474,7 @@ def main(argv=None):
         clean_source(checkout, args.source_commit)
         checked(args.context / "provenance.json", args.context_provenance_sha256)
         context = engine.load_admission_context(args.context)
-        if context.selection_amendment_revision != 6:
-            raise ValueError("coordinator requires the frozen revision6 admission API")
+        registry_record_type(context)
         verify_runtime_source(context, checkout, args.source_commit)
         bootstrap = engine._load(checked(args.bootstrap, args.bootstrap_sha256))
         container_context, name_position = verify_bootstrap(engine, context, checkout, bootstrap)

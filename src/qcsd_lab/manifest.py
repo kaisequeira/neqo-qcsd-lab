@@ -11,8 +11,10 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .application_response_policy import (
+    APPROVED_ORIGINS_CHAFF_POLICY,
     application_response_policy,
     primary_document_identity_policy,
+    qualified_chaff_origin_policy,
     validate_application_response_policy_evidence,
     validate_primary_document_identity_evidence,
 )
@@ -67,6 +69,7 @@ REPLAY_KEYS = {
     "response_stability",
 }
 PREPARATION_KEYS = {
+    "qualified_chaff_origin_policy",
     "application_response_policy",
     "application_response_policy_evidence",
     "primary_document_identity_policy",
@@ -113,6 +116,7 @@ DISCOVERY_EVIDENCE_PREPARATION_KEYS = {
     "discovery_event_audit_sha256",
 }
 LEGACY_OPTIONAL_PREPARATION_KEYS = {
+    "qualified_chaff_origin_policy",
     "application_response_policy",
     "application_response_policy_evidence",
     "primary_document_identity_policy",
@@ -662,6 +666,11 @@ def _validate_preparation(
         response_ids.add(resource_id)
     if response_ids != resource_ids or len(response_ids) != len(responses):
         raise ValueError("manifest preparation expected response IDs must match resources")
+    chaff_origin_policy = qualified_chaff_origin_policy({"preparation": value})
+    if chaff_origin_policy == APPROVED_ORIGINS_CHAFF_POLICY and any(
+        https_origin(candidate) != candidate for candidate in value["approved_origins"]
+    ):
+        raise ValueError("approved-origin chaff policy requires canonical HTTPS origins")
     if any(key in value for key in (
         "application_response_policy", "application_response_policy_evidence",
         "primary_document_identity_policy", "primary_document_identity_evidence",

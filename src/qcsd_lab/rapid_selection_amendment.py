@@ -28,6 +28,7 @@ AMENDED_V3_SELECTION_POLICY = "first-N-automatic-public-url-screened-with-bounde
 AMENDED_V4_SELECTION_POLICY = "first-N-admitted-with-source-bound-unsuccessful-live-attempt-deferrals-v4"
 AMENDED_V5_ADMISSION_POLICY = "root-and-exact-page-h3-complete-live-graph-with-completed-terminal-http-errors-v5"
 AMENDED_V6_ADMISSION_POLICY = "root-and-exact-page-h3-complete-live-graph-with-variable-primary-document-body-v6"
+AMENDED_V7_ADMISSION_POLICY = "root-and-exact-page-h3-complete-live-graph-with-approved-origin-auxiliary-chaff-v7"
 VARIABLE_PRIMARY_DOCUMENT_POLICY = "variable-primary-document-body-v1"
 ATTEMPT_FAILURE_DEFERRAL_POLICY = "prospective-unsuccessful-live-attempt-deferral-v4"
 ATTEMPT_FAILURE_DEFERRAL_REASON = "unsuccessful-live-attempt-screen-deferred"
@@ -49,6 +50,8 @@ FROZEN_V4_AMENDMENT_PUBLICATION_UTC = "2026-10-02T18:13:34.038260Z"
 FROZEN_V4_AMENDMENT_SHA256 = "0808c27b60b229de938bd8a3ae26aca615455c3c4978130b4792041787420a28"
 FROZEN_V5_AMENDMENT_PUBLICATION_UTC = "2026-10-02T21:06:26.442961Z"
 FROZEN_V5_AMENDMENT_SHA256 = "45c0e5cbdb7b5388c72d9e23de63748d085c9f027c03c06b74b2809f06a3334f"
+FROZEN_V6_AMENDMENT_PUBLICATION_UTC = "2026-10-02T22:01:23.089910Z"
+FROZEN_V6_AMENDMENT_SHA256 = "7017fe41d41b64673abd75a7f3e0a3fc083450fff9b3264b6abd33e1ad5c7045"
 AUTOMATED_SITE_SCREEN_POLICY = "frozen-public-url-and-domain-screen-v1"
 AUTOMATED_SITE_SCREEN_DECISION = "automatic-policy-pass"
 
@@ -93,7 +96,7 @@ def _utc(value: Any) -> datetime:
 def _amendment_payload(
     published_at_utc: str, parent_profile_sha256: str, *, revision: int = 1,
 ) -> dict[str, Any]:
-    if type(revision) is not int or revision not in (1, 2, 3, 4, 5, 6):
+    if type(revision) is not int or revision not in (1, 2, 3, 4, 5, 6, 7):
         raise ValueError("selection amendment revision is unregistered")
     published = _utc(published_at_utc)
     if published < _utc(PARENT_PROFILE_PUBLICATION_UTC) or published > datetime.now(UTC):
@@ -321,7 +324,7 @@ def _amendment_payload(
         result["freshness_policy"] = {**result["freshness_policy"],
             "new_policy_preparation": "started-at-or-after-published-at-utc",
             "v4_failed_attempts": "retain-v4-only-authority-no-v5-relabel-or-promotion"}
-    if revision == 6:
+    if revision >= 6:
         if published < _utc(FROZEN_V5_AMENDMENT_PUBLICATION_UTC):
             raise ValueError("selection amendment v6 publication is before its v5 parent")
         parent = profile._bind(_amendment_payload(
@@ -350,6 +353,35 @@ def _amendment_payload(
         result["freshness_policy"] = {**result["freshness_policy"],
             "new_primary_identity_preparation": "started-at-or-after-published-at-utc",
             "v5_failed_attempts": "retain-v5-only-authority-no-v6-relabel-or-promotion"}
+    if revision == 7:
+        from .application_response_policy import APPROVED_ORIGINS_CHAFF_POLICY
+        if published < _utc(FROZEN_V6_AMENDMENT_PUBLICATION_UTC):
+            raise ValueError("selection amendment v7 publication is before its v6 parent")
+        parent = profile._bind(_amendment_payload(
+            FROZEN_V6_AMENDMENT_PUBLICATION_UTC, parent_profile_sha256, revision=6,
+        ), SELECTION_AMENDMENT_RECEIPT_TYPE, schema_version=5)
+        parent_sha = profile._sha(profile._canonical_json(parent))
+        if parent_sha != FROZEN_V6_AMENDMENT_SHA256:
+            raise ValueError("frozen v6 selection amendment declaration no longer verifies")
+        result.update({
+            "amendment_id": "crux73-tranco600-rapid-v5-selection-v7", "revision": 7,
+            "parent_selection_amendment_sha256": parent_sha,
+            "parent_admission_policy": AMENDED_V6_ADMISSION_POLICY,
+            "admission_policy": AMENDED_V7_ADMISSION_POLICY,
+            "qualified_chaff_origin_policy": APPROVED_ORIGINS_CHAFF_POLICY,
+            "qualified_chaff_origin_acceptance": {
+                "origins": "exact-preparation-approved-origins-only",
+                "resource": "known-valid-2xx-non-primary-resource-with-prepared-body-at-least-1200-bytes",
+                "primary_document": "resource-zero-excluded-from-padding",
+                "candidate_order": "prepared-body-bytes-descending-then-resource-id-then-url",
+                "identity": "separate-fresh-sustained-identity-response-qualification-required",
+                "full_resource_graph": "unchanged-no-resource-or-origin-pruning",
+                "scientific_credit": False,
+            },
+        })
+        result["freshness_policy"] = {**result["freshness_policy"],
+            "new_approved_origin_chaff_preparation": "started-at-or-after-published-at-utc",
+            "v6_failed_attempts": "retain-v6-only-authority-no-v7-relabel-or-promotion"}
     return result
 
 
@@ -376,6 +408,7 @@ def validate_selection_amendment(
         "crux73-tranco600-rapid-v5-selection-v4": 4,
         "crux73-tranco600-rapid-v5-selection-v5": 5,
         "crux73-tranco600-rapid-v5-selection-v6": 6,
+        "crux73-tranco600-rapid-v5-selection-v7": 7,
     }
     amendment_id = payload.get("amendment_id")
     revision = ids.get(amendment_id) if isinstance(amendment_id, str) else None
@@ -410,7 +443,7 @@ def root_screen_allows_browser_progression(root: Mapping[str, Any] | None, *, re
         return False
     identity = (root.get("outcome"), root.get("detail"))
     return identity == ("known-valid", "known-valid") or (
-        type(revision) is int and revision in {3, 4, 5, 6}
+        type(revision) is int and revision in {3, 4, 5, 6, 7}
         and identity == ("ambiguous", "response-known-invalid")
     )
 
@@ -594,10 +627,12 @@ def _unsuccessful_attempt_deferral(
         selection_amendment_sha256=selection_amendment_sha256(selection_amendment),
         not_before_utc=selection_amendment_not_before_utc(selection_amendment),
         selected_page_h3_proof=page_proof, automated_site_screen=automated_screen)
-    from .rapid_attempt_failure_evidence import APPLICATION_RESPONSE_POLICY_MODULE
+    from .rapid_attempt_failure_evidence import APPLICATION_RESPONSE_POLICY_MODULE, CHAFF_QUALIFICATION_MODULE
     has_policy_source = APPLICATION_RESPONSE_POLICY_MODULE in failure["implementation_hashes"]
     if has_policy_source != (selection_amendment_revision(selection_amendment) >= 5):
         raise ValueError("unsuccessful attempt source inventory differs from its prospective application policy")
+    if (CHAFF_QUALIFICATION_MODULE in failure["implementation_hashes"]) != (selection_amendment_revision(selection_amendment) == 7):
+        raise ValueError("unsuccessful attempt source inventory differs from its prospective qualified chaff origin policy")
     if failure["action"]["kind"] == "complete-graph-preparation":
         if page_proof is None or automated_screen is None:
             raise ValueError("unsuccessful preparation lacks its exact page and automatic screen")
@@ -762,8 +797,10 @@ def _selection_payload(
             if revision >= 5:
                 admission_fields |= {"application_response_policy", "terminal_http_error_resource_ids",
                                      "application_response_evidence_sha256"}
-            if revision == 6:
+            if revision >= 6:
                 admission_fields |= {"primary_document_identity_policy"}
+            if revision == 7:
+                admission_fields |= {"qualified_chaff_origin_policy"}
             if "triage" in facts or not isinstance(admission, Mapping) or set(admission) != admission_fields:
                 raise ValueError("v5 admitted site lacks exact page and complete graph proof")
             if revision >= 5:
@@ -774,12 +811,14 @@ def _selection_payload(
                     or error_ids != sorted(set(error_ids))):
                     raise ValueError("admitted application response policy differs from its prospective contract")
                 proof_sha = admission["application_response_evidence_sha256"]
-                requires_raw_proof = bool(error_ids) or revision == 6
+                requires_raw_proof = bool(error_ids) or revision >= 6
                 if (requires_raw_proof and (not isinstance(proof_sha, str) or profile._SHA_RE.fullmatch(proof_sha) is None)
                     or not requires_raw_proof and proof_sha is not None):
                     raise ValueError("admitted application response errors lack their independently reopened raw proof")
-            if revision == 6 and admission["primary_document_identity_policy"] != amendment_payload["primary_document_identity_policy"]:
+            if revision >= 6 and admission["primary_document_identity_policy"] != amendment_payload["primary_document_identity_policy"]:
                 raise ValueError("admitted primary document identity policy differs from its prospective contract")
+            if revision == 7 and admission["qualified_chaff_origin_policy"] != amendment_payload["qualified_chaff_origin_policy"]:
+                raise ValueError("admitted qualified chaff origin policy differs from its prospective contract")
             if profile.unsafe_catalogue_domain_reason(candidate["domain"]) is not None:
                 raise ValueError("v5 automatically unsafe site cannot be admitted")
             if screen is None or page_proof is None:
@@ -863,7 +902,8 @@ def _selection_payload(
         "selection_policy": amendment_payload["selection_policy"],
         "selection_amendment_sha256": selection_amendment_sha256(selection_amendment),
         **({"application_response_policy": amendment_payload["application_response_policy"]} if revision >= 5 else {}),
-        **({"primary_document_identity_policy": amendment_payload["primary_document_identity_policy"]} if revision == 6 else {}),
+        **({"primary_document_identity_policy": amendment_payload["primary_document_identity_policy"]} if revision >= 6 else {}),
+        **({"qualified_chaff_origin_policy": amendment_payload["qualified_chaff_origin_policy"]} if revision == 7 else {}),
         **({"automated_screen_policy_sha256": automated_screen_policy_sha256()} if revision >= 2 else {}),
         "terminal_decisions": decisions,
         "selected_candidate_ids": [candidate["candidate_id"] for candidate in selected],

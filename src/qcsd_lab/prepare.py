@@ -27,6 +27,7 @@ from .application_response_policy import (
     VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY,
     build_primary_document_identity_evidence,
     validate_primary_document_identity_policy,
+    validate_qualified_chaff_origin_policy,
     validate_primary_document_identity_evidence,
     validate_primary_document_response,
     terminal_http_error_resource_allowed,
@@ -752,6 +753,7 @@ def prepare_workload(
     origin_ip_pins: Mapping[str, str] | None = None,
     application_response_policy: str | None = None,
     primary_document_identity_policy: str | None = None,
+    qualified_chaff_origin_policy: str | None = None,
 ) -> PreparedWorkload:
     """Discover, probe, stability-check, and freeze one replay workload.
 
@@ -762,6 +764,9 @@ def prepare_workload(
 
     selected_response_policy = validate_application_response_policy(application_response_policy)
     selected_primary_policy = validate_primary_document_identity_policy(primary_document_identity_policy)
+    validate_qualified_chaff_origin_policy(qualified_chaff_origin_policy)
+    if qualified_chaff_origin_policy is not None and not require_complete_coverage:
+        raise ValueError("approved-origin chaff policy requires unchanged complete graph coverage")
     if selected_primary_policy == VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY and (
         selected_response_policy != COMPLETED_TERMINAL_HTTP_ERRORS_POLICY
         or require_complete_coverage is not True or stability_runs != 3
@@ -1008,6 +1013,8 @@ def prepare_workload(
                if policy_evidence is not None else {}),
             **({"primary_document_identity_policy": primary_document_identity_policy}
                if primary_document_identity_policy is not None else {}),
+            **({"qualified_chaff_origin_policy": qualified_chaff_origin_policy}
+               if qualified_chaff_origin_policy is not None else {}),
             **({"primary_document_identity_evidence": primary_evidence}
                if primary_evidence is not None else {}),
             "udp_payload_qualification": udp_payload_qualification,

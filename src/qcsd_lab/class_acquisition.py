@@ -293,10 +293,20 @@ def validate_class_study_preparation(
     manifest: dict[str, Any], *, workload_id: str,
     application_response_policy: str | None = None,
     primary_document_identity_policy: str | None = None,
+    qualified_chaff_origin_policy: str | None = None,
 ) -> None:
     """Require the class study's bounded complete-coverage preparation contract."""
 
     candidate_preparation = manifest.get("preparation")
+    from .application_response_policy import (
+        qualified_chaff_origin_policy as declared_chaff_policy,
+        validate_qualified_chaff_origin_policy,
+    )
+    if qualified_chaff_origin_policy is None:
+        if isinstance(candidate_preparation, Mapping) and "qualified_chaff_origin_policy" in candidate_preparation:
+            raise ValueError(f"class-study workload {workload_id!r} qualified chaff origin policy differs from its authority")
+    elif declared_chaff_policy(manifest) != validate_qualified_chaff_origin_policy(qualified_chaff_origin_policy):
+        raise ValueError(f"class-study workload {workload_id!r} qualified chaff origin policy differs from its authority")
     if application_response_policy is None:
         if (primary_document_identity_policy is not None
             or isinstance(candidate_preparation, Mapping) and any(key in candidate_preparation for key in (
@@ -1897,6 +1907,7 @@ class AcquisitionBackend(Protocol):
         origin_ip_pins: Mapping[str, str] | None = None,
         application_response_policy: str | None = None,
         primary_document_identity_policy: str | None = None,
+        qualified_chaff_origin_policy: str | None = None,
     ) -> PreparedProbe: ...
 
 
@@ -1972,6 +1983,7 @@ class ExistingAcquisitionBackend:
         origin_ip_pins: Mapping[str, str] | None = None,
         application_response_policy: str | None = None,
         primary_document_identity_policy: str | None = None,
+        qualified_chaff_origin_policy: str | None = None,
     ) -> PreparedProbe:
         if output_root.exists() or output_root.is_symlink():
             try:
@@ -2000,6 +2012,10 @@ class ExistingAcquisitionBackend:
                          if application_response_policy is not None else {})
         if primary_document_identity_policy is not None:
             policy_kwargs["primary_document_identity_policy"] = primary_document_identity_policy
+        if qualified_chaff_origin_policy is not None:
+            from .application_response_policy import validate_qualified_chaff_origin_policy
+            validate_qualified_chaff_origin_policy(qualified_chaff_origin_policy)
+            policy_kwargs["qualified_chaff_origin_policy"] = qualified_chaff_origin_policy
         prepared = prepare_workload(
             workload_id,
             url,
@@ -2017,7 +2033,8 @@ class ExistingAcquisitionBackend:
         manifest = load_json(prepared.path)
         validate_class_study_preparation(manifest, workload_id=workload_id,
                                          application_response_policy=application_response_policy,
-                                         primary_document_identity_policy=primary_document_identity_policy)
+                                         primary_document_identity_policy=primary_document_identity_policy,
+                                         qualified_chaff_origin_policy=qualified_chaff_origin_policy)
         preparation = manifest["preparation"]
         current_image = os.environ.get("QCSD_LAB_IMAGE_DIGEST", "native")
         current_source = dict(source_metadata())

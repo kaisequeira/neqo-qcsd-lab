@@ -94,6 +94,62 @@ has only had its actual runtime/context binding checked. Recipe SHA-256 is
 `48373f33ebca39e2d2acae7e20b7dce75b46bc8d8afd499bbbe091bda3278c2d`.
 It has not been staged, qualified or executed and grants no capture credit.
 
+### Context 013 boundary stop and CDN padding finding
+
+The later immutable 013 checkpoint `checkpoint-000057.json` is dated
+`2026-10-03T03:00:08.631791Z`, SHA-256
+`6ddeab26fc23603e73c0bd44017a9010bcb74f8e62796f8af3589e4d5f3504ca`.
+It has **23 sealed decisions, zero admissions and zero formal traces**;
+Bing is next. The host coordinator closed normally at the requested boundary
+at `2026-10-03T03:00:40.455893Z` after **2,329.973 seconds**, with 57 actions.
+Its completion-record SHA-256 is
+`1659d421fe5b0b7b428499bd5cae7c4552ddcc52823a2b27dbae370019324c1b`.
+These records remain under the original 013 namespace; it is no longer live.
+
+Poki preparation attempt 4 has failed-operation proof SHA-256
+`d34f6b5f289a08b6eb39b5c652a209f66f832d4fea74b036af51023d35394f95`.
+Its three raw Native runs each completed **260/260** resources, succeeded
+without runner errors, and negotiated HTTP/3 on all four origins. The final
+prepared manifest SHA-256 is
+`5a6ea6d4d5a2aa22721f5eb9940d4ec3de04410e31706aad81426d0e266a2d3b`.
+All non-primary response identities were stable. Only primary document 0 is
+on the main origin, while **231 stable CDN responses** are at least 1,200
+bytes. The sole rejection was revision 6's same-origin auxiliary padding
+capacity rule; downstream qualification and the installed Native client
+enforce that restriction too. Independent review reopened the proof,
+terminal and all 42 retained inventory files on frozen `80c85f5`. This grants
+zero admission or capture credit and differs from the historical 009 SDK
+drift failure.
+
+The prospective [revision 7 declaration](../config/curated-sources/crux73-tranco600-rapid-v5-selection-v7.json)
+is dated `2026-10-03T03:22:45.926573Z`, SHA-256
+`5a155267592b48fbd58f479ab38641540cb8ae7ae9fef7afd929af8d9cfc498f`.
+It permits qualified auxiliary responses on the exact prepared approved
+origins. Existing graph, body identity, source binding and sustained
+qualification obligations remain. Focused source verification passed;
+no revision-7 runtime, site admission or live capture is claimed here. Since
+Native source and client bytes change, the old 113 root observations cannot
+supply the new root-screen role; fresh short surveys are required.
+
+Native commit `e2dcd8a550b0f7b1b6f7fa8ec056960d163c1491` is published on
+`main`. Its retained source archive SHA-256 is
+`8c66c156c2a09dd5a1fbd24b53e4f3a3162fa1809edbf21c34501b8b90098e41`.
+The create-only `../diagnostic-rehearsals/approved-origin-native-checks-20261003-002/`
+ran the actual `neqo-bin` library tests: **six approved-origin, one legacy
+schema-4 binding and six legacy response-policy cases passed**. Their three
+completion-record hashes are respectively
+`8bcc129703aa47ba9235362ca986a3db9e24172526ed16f6168ca244404f3327`,
+`3c8fe9a0237f7f9a4ccff4659d4a291ba895c914202960f1c506765f3616e9f3`
+and `ab9ef77478184fa73f438860b326f1fca3a50392c4d17e6beb2a6217e7af9ab3`.
+The commands, stdout/stderr hashes and nonzero case counts independently
+reopen. Earlier check namespace 001 used the thin binary test target and ran
+**zero tests**; its successful compilation is not test-case evidence. Python
+response-only qualification and policy compatibility checks passed **73
+cases**. Nine focused revision-7 admission/plumbing cases, two existing
+backend cases and three corrected amendment/coordinator fixtures also passed.
+These checks establish engineering behavior, with zero study credit; actual
+matching images, sustained qualification and five-setting captures are next.
+
 ### Preserved preflight runtime and context 012
 
 Published Lab source `74805e43ea9984ae86bb829b46afec10f09add4a` retains native

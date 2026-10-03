@@ -41,13 +41,35 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Latest operational update, 3 October:** fresh context **013** has **five
+**Latest inspected checkpoint, 3 October:** context **013** has **23
 sealed screening decisions and no admitted site** at
-`2026-10-03T02:28:05.796112Z`; Pinterest is the next candidate. Its first bounded
-host-coordinator batch is running. This is site preparation, with **0/50
+`2026-10-03T03:00:08.631791Z`; Bing is next. Its first bounded
+host-coordinator batch stopped normally at the requested action boundary at
+`2026-10-03T03:00:40.455893Z`, after **38 minutes 50 seconds**. This is site preparation, with **0/50
 admitted sites, 0/50 shakedown traces and 0/16,000 formal traces**. A complete
 usable-site graph and sustained padding qualification are still required
 before the first study capture.
+
+Poki's current 013 attempt completed all **260 resources in each of three
+native replays**, with HTTP/3 on all four origins and stable non-primary
+responses. It was rejected solely by revision 6's requirement for a stable
+auxiliary padding body on the **main site's origin**: only its primary
+document is on that origin, while **231 stable CDN responses** exceed the
+1,200-byte threshold. The response qualifier and native client also enforce
+this restriction; removing only admission's check would defer the failure.
+This differs from the preserved 009 SDK response drift below. It remains an
+unsuccessful, zero-credit attempt. The
+[supplied-domain explanation](docs/README-CURATED-DOMAINS.md#poki-complete-downloads-rejected-by-the-padding-origin-rule)
+records the practical limitation.
+
+The prospective [selection revision 7](config/curated-sources/crux73-tranco600-rapid-v5-selection-v7.json)
+adds an explicit approved-origin auxiliary padding policy. Its source changes
+cover preparation, admission, sustained response qualification and the native
+runtime checks; absent policy retains the old origin rule. **73 focused
+Python checks, 13 native client checks and independent policy review passed.**
+The matching runtime is next. A fresh site attempt, sustained
+qualification and five-setting live canary remain required; this declaration
+does not admit the old Poki graph or establish capture readiness.
 
 The observed origin-budget repair is published as `80c85f5`, with **three new
 focused cases, nine guard checks, 21 receipt checks and independent review**.
@@ -71,8 +93,8 @@ one selected page per candidate over the entire unchanged context history,
 at most 60 actions and a stop after the first admission. A boundary-stop file
 can stop it after the current action finishes. Operator and scientific-source
 identities are recorded separately, even though both currently select
-`80c85f5`. No live batch completion or successful site yield is claimed by
-this checkpoint. The first-site canary 004 recipe has had its runtime/context
+`80c85f5`. The batch then closed normally at its requested boundary with 57
+actions and 23 sealed screening decisions, without an admission. The first-site canary 004 recipe has had its runtime/context
 guards checked, but has not been staged, qualified or run. The
 [evidence index](docs/EVIDENCE-INDEX.md#current-preflight-runtime-and-context-013)
 records the exact runtime, checkpoint and operator identities.

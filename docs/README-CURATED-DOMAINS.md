@@ -121,6 +121,30 @@ not establish that every page on these domains is permanently unusable. The
 [evidence index](EVIDENCE-INDEX.md#rapid-selection-revision-2-3-october-2026)
 records the frozen source and receipts.
 
+### Poki: complete downloads rejected by the padding origin rule
+
+The newer context **013** attempt on **3 October 2026** gives a different
+reason for excluding Poki. All **260 resources downloaded completely in each
+of three replay visits**. All four resource origins used HTTP/3, and the
+non-primary response statuses, sizes and hashes were stable. This attempt did
+not encounter the changing SDK response recorded in the earlier 009 run.
+
+It failed because the study currently needs a stable extra response of at
+least **1,200 bytes on the main website's origin** to generate padding.
+Poki places only its main page on `poki.com`; its larger extra resources are
+served by CDNs. The prepared graph contains **231 stable CDN responses** of
+the required size, but the current padding rule cannot use them. The main
+page is also excluded as a padding candidate under the study's rule allowing
+that page's body to vary.
+
+This is a limitation of the current capture design, rather than evidence
+that Poki's complete page cannot be downloaded over HTTP/3. The restriction
+is present in admission, sustained padding qualification and the native
+client. Changing only the first check would leave a later failure. Supporting
+CDN padding needs a prospective implementation and matching live checks;
+the saved attempt receives no admission or capture credit. Its exact proof
+is listed in the [current evidence record](EVIDENCE-INDEX.md#current-preflight-runtime-and-context-013).
+
 The fallback catalogue has similar operational limits. A later 40-root survey
 for fallback positions 40–79 exited normally, but the frozen verifier rejected
 the retained `outlook.com` peer-close code 11 because its existing error grammar

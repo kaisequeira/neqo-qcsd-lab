@@ -20,6 +20,8 @@ EXACT_PRIMARY_DOCUMENT_IDENTITY_POLICY = "exact-response-body-v1"
 VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY = "variable-primary-document-body-v1"
 EXACT_RESPONSE_BODY_POLICY = EXACT_PRIMARY_DOCUMENT_IDENTITY_POLICY
 VARIABLE_PRIMARY_DOCUMENT_BODY_POLICY = VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY
+PRIMARY_ORIGIN_CHAFF_POLICY = "primary-origin-v1"
+APPROVED_ORIGINS_CHAFF_POLICY = "prepared-approved-origins-v1"
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
 
@@ -59,6 +61,25 @@ def primary_document_identity_policy(manifest: Mapping[str, Any]) -> str:
     if preparation["primary_document_identity_policy"] is None:
         raise ValueError("explicit primary document identity policy cannot be null")
     return validate_primary_document_identity_policy(preparation["primary_document_identity_policy"])
+
+
+def validate_qualified_chaff_origin_policy(value: Any) -> str:
+    """Validate an opt-in argument; absence retains the historical origin rule."""
+    if value is None:
+        return PRIMARY_ORIGIN_CHAFF_POLICY
+    if not isinstance(value, str) or value != APPROVED_ORIGINS_CHAFF_POLICY:
+        raise ValueError("qualified chaff origin policy is unknown or malformed")
+    return value
+
+
+def qualified_chaff_origin_policy(manifest: Mapping[str, Any]) -> str:
+    preparation = manifest.get("preparation")
+    if not isinstance(preparation, Mapping) or "qualified_chaff_origin_policy" not in preparation:
+        return PRIMARY_ORIGIN_CHAFF_POLICY
+    value = preparation["qualified_chaff_origin_policy"]
+    if value is None:
+        raise ValueError("explicit qualified chaff origin policy cannot be null")
+    return validate_qualified_chaff_origin_policy(value)
 
 
 def terminal_http_error_resource_allowed(

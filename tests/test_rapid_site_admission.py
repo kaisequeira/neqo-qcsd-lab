@@ -434,9 +434,11 @@ def _amended_context(context, tmp_path, *, revision=1):
         modules[admission.COLLECTOR_GROUP] = collector.implementation_sources()
     if revision >= 4:
         from qcsd_lab import rapid_attempt_failure_evidence as observer
-        modules[admission.ATTEMPT_GROUP] = observer.implementation_sources(application_response_policy=revision >= 5)
+        modules[admission.ATTEMPT_GROUP] = observer.implementation_sources(application_response_policy=revision >= 5,
+            qualified_chaff_origin_policy=revision == 7)
     if revision >= 5:
-        modules["preparation"] = admission.preparation_implementation_sources(application_response_policy=True)
+        modules["preparation"] = admission.preparation_implementation_sources(application_response_policy=True,
+            qualified_chaff_origin_policy=revision == 7)
     return admission.initialize_acquisition(
         tmp_path / "amended-acquisition", profile_path=paths["profile"], source=paths["source"],
         source_receipt=paths["source_receipt"], catalogue=paths["catalogue"],
@@ -1160,3 +1162,101 @@ def test_observed_convergence_preserves_successful_graph_and_inner_failure_is_re
     assert len(list(proof.parent.glob("attempt-failure.json"))) == len(list(proof.parent.glob("attempt-observation.json"))) == 1
     assert admission.unsuccessful_attempt_failure_facts(proof, amended, candidate["candidate_id"])["raw_failure"]["message"] == "actual inner live discovery failure"
     assert not (proof.parent / "operational-error.json").exists()
+
+
+def test_v7_complete_graph_backend_receives_exact_policy_and_keeps_failure_zero_credit(context, tmp_path):
+    from qcsd_lab.application_response_policy import APPROVED_ORIGINS_CHAFF_POLICY
+    amended = _amended_context(context, tmp_path, revision=7)
+    candidate, navigation, h3, screen = _auto_page(amended, tmp_path)
+    class PolicyBackend(Backend):
+        def prepare(self, *args, **kwargs):
+            self.policy_kwargs = kwargs
+            raise RuntimeError("actual downstream preparation failure")
+    backend = PolicyBackend(amended)
+    proof = admission.prepare_site(amended, candidate_id=candidate["candidate_id"], navigation=navigation,
+        page_h3=h3, automated_screen=screen, backend=backend)
+    assert backend.policy_kwargs["qualified_chaff_origin_policy"] == APPROVED_ORIGINS_CHAFF_POLICY
+    assert backend.policy_kwargs["application_response_policy"] == amended.application_response_policy
+    assert backend.policy_kwargs["primary_document_identity_policy"] == amended.primary_document_identity_policy
+    facts = admission.unsuccessful_attempt_failure_facts(proof, amended, candidate["candidate_id"])
+    assert facts["raw_failure"]["message"] == "actual downstream preparation failure"
+    assert admission.CHAFF_QUALIFICATION_MODULE in facts["implementation_hashes"]
+    assert facts["site_credit"] == facts["formal_accepted_trace_count"] == 0
+    assert facts["whole_domain_ineligible"] is False
+    assert context.qualified_chaff_origin_policy is None
+
+
+def test_v7_capacity_uses_same_approved_cdn_candidates_as_qualification_without_pruning(tmp_path):
+    from qcsd_lab import chaff_qualification as qualification
+    from tests.test_chaff_qualification import _approved_origin_workload
+    manifest = admission._load(_approved_origin_workload(tmp_path).read_bytes())
+    original = deepcopy(manifest)
+    policy = qualification.APPROVED_ORIGINS_CHAFF_POLICY
+    candidates = qualification.response_only_candidate_resources(manifest, "capacity-test")
+    assert [resource["id"] for resource, _ in candidates] == [1]
+    assert admission._has_response_padding_capacity(manifest, qualified_chaff_origin_policy=policy)
+    assert not admission._has_response_padding_capacity(manifest)
+    assert manifest == original
+    for change in ("unapproved", "not-valid", "short-body"):
+        rejected = deepcopy(manifest)
+        if change == "unapproved":
+            rejected["preparation"]["approved_origins"].remove("https://cdn.test")
+        elif change == "not-valid":
+            rejected["resources"][1]["known_valid"] = False
+        elif change == "short-body":
+            rejected["preparation"]["expected_responses"][1]["bytes"] = 1199
+        assert not admission._has_response_padding_capacity(rejected, qualified_chaff_origin_policy=policy)
+    malformed = deepcopy(manifest)
+    malformed["preparation"]["expected_responses"][1]["status"] = 401
+    with pytest.raises(ValueError, match="prepared expected response identity is invalid"):
+        admission._has_response_padding_capacity(malformed, qualified_chaff_origin_policy=policy)
+
+
+@pytest.mark.parametrize("declared", [None, "all-origins", "primary-origin-v1"])
+def test_class_preparation_cannot_promote_missing_or_unknown_origin_policy(declared):
+    from qcsd_lab.application_response_policy import APPROVED_ORIGINS_CHAFF_POLICY
+    from qcsd_lab.class_acquisition import validate_class_study_preparation
+    manifest = _prepared_manifest("https://page.test/", ["https://cdn.example", "https://page.test"])
+    if declared is not None:
+        manifest["preparation"]["qualified_chaff_origin_policy"] = declared
+    with pytest.raises(ValueError, match="chaff origin policy"):
+        validate_class_study_preparation(manifest, workload_id="policy-test",
+                                        qualified_chaff_origin_policy=APPROVED_ORIGINS_CHAFF_POLICY)
+    manifest["preparation"]["qualified_chaff_origin_policy"] = APPROVED_ORIGINS_CHAFF_POLICY
+    validate_class_study_preparation(manifest, workload_id="policy-test",
+                                    qualified_chaff_origin_policy=APPROVED_ORIGINS_CHAFF_POLICY)
+    with pytest.raises(ValueError, match="chaff origin policy"):
+        validate_class_study_preparation(manifest, workload_id="legacy-test")
+
+
+@pytest.mark.parametrize("policy", [None, "prepared-approved-origins-v1"])
+def test_existing_acquisition_backend_forwards_only_explicit_origin_policy(tmp_path, monkeypatch, policy):
+    from qcsd_lab import class_acquisition as acquisition
+    observed = {}
+
+    def actuated_prepare(*args, **kwargs):
+        observed.update(kwargs)
+        raise RuntimeError("bounded preparation actuation stop")
+
+    monkeypatch.setattr(acquisition, "prepare_workload", actuated_prepare)
+    with pytest.raises(RuntimeError, match="bounded preparation actuation stop"):
+        ExistingAcquisitionBackend().prepare("origin-policy", "https://page.test/", ["https://page.test"],
+            tmp_path / "preparation", origin_ip_pins={"https://page.test": "1.1.1.1"},
+            qualified_chaff_origin_policy=policy)
+    assert observed["require_complete_coverage"] is True
+    assert observed["origin_ip_pins"] == {"https://page.test": "1.1.1.1"}
+    if policy is None:
+        assert "qualified_chaff_origin_policy" not in observed
+    else:
+        assert observed["qualified_chaff_origin_policy"] == policy
+
+
+@pytest.mark.parametrize("group", ["preparation", admission.ATTEMPT_GROUP])
+def test_v7_context_rejects_missing_independent_chaff_selector_source(context, tmp_path, group):
+    amended = _amended_context(context, tmp_path, revision=7)
+    provenance_path = amended.root / "provenance.json"
+    payload = admission._unpack(provenance_path.read_bytes(), admission.PROVENANCE_TYPE)
+    del payload["module_sources"][group][admission.CHAFF_QUALIFICATION_MODULE]
+    provenance_path.write_bytes(admission._json(admission._bind(admission.PROVENANCE_TYPE, payload)))
+    with pytest.raises(ValueError, match="implementation inventory changed"):
+        admission.load_admission_context(amended.root)

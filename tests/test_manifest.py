@@ -232,6 +232,23 @@ def prepared_manifest():
     }
 
 
+def test_manifest_accepts_explicit_approved_origin_chaff_policy():
+    from qcsd_lab.application_response_policy import APPROVED_ORIGINS_CHAFF_POLICY
+    value = prepared_manifest()
+    original_runtime = runtime_manifest(value)
+    value["preparation"]["qualified_chaff_origin_policy"] = APPROVED_ORIGINS_CHAFF_POLICY
+    validate_manifest(value)
+    assert runtime_manifest(value) == original_runtime
+
+
+@pytest.mark.parametrize("policy", [None, "primary-origin-v1", "unknown", [], True])
+def test_manifest_rejects_malformed_explicit_chaff_origin_policy(policy):
+    value = prepared_manifest()
+    value["preparation"]["qualified_chaff_origin_policy"] = policy
+    with pytest.raises(ValueError, match="chaff origin policy"):
+        validate_manifest(value)
+
+
 def directionally_qualified_manifest():
     value = prepared_manifest()
     receipt = value["preparation"]["udp_payload_qualification"]

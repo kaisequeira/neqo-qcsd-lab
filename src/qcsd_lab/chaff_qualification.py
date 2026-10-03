@@ -1,7 +1,7 @@
 """Immutable qualification evidence for the distinct compact chaff substrate.
 
 The application workload is never rewritten.  A qualification sidecar binds its
-exact bytes, proves one deterministically selected compact same-origin response,
+exact bytes, proves one deterministically selected compact qualified response,
 and derives the separate manifest accepted by the production chaff namespace.
 """
 
@@ -22,10 +22,12 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .application_response_policy import (
+    APPROVED_ORIGINS_CHAFF_POLICY,
     LEGACY_APPLICATION_RESPONSE_POLICY,
     VARIABLE_PRIMARY_DOCUMENT_BODY_POLICY,
     application_response_policy,
     primary_document_identity_policy,
+    qualified_chaff_origin_policy,
     validate_application_response_graph,
 )
 from .manifest import canonical_bytes, https_origin, runtime_manifest, validate_research_preparation
@@ -79,6 +81,9 @@ HEADER_PROJECTION = ("accept", "accept-encoding", "accept-language")
 SELECTION_POLICY = "qualified-largest-known-valid-same-origin-response-v2"
 RESPONSE_ONLY_V2_SELECTION_POLICY = (
     "first-stable-identity-response-from-prepared-body-descending-prefix-v1"
+)
+RESPONSE_ONLY_APPROVED_ORIGINS_SELECTION_POLICY = (
+    "first-stable-identity-response-from-approved-origin-auxiliary-prepared-body-descending-prefix-v1"
 )
 IDENTITY_COPIED_HEADERS = ("accept", "accept-language")
 IDENTITY_FORCED_HEADERS = (("accept-encoding", "identity"),)
@@ -925,8 +930,10 @@ def response_only_candidate_resources(
     """Return the frozen eligible candidate order used by response-only v2.
 
     Eligibility is intentionally decided from the immutable preparation
-    evidence, not a live probe: known-valid, primary same-origin resources with
-    at least one 1200-byte prepared body.  A candidate's separately negotiated
+    evidence, not a live probe: known-valid resources with at least one
+    1200-byte prepared body. Missing origin policy retains primary same-origin
+    selection; the explicit approved-origin policy permits auxiliary resources
+    on the frozen approved origins. A candidate's separately negotiated
     identity response is only authoritative after sustained qualification.
     """
 
@@ -940,12 +947,18 @@ def response_only_candidate_resources(
     )
     application_origin = _https_origin(application["url"])
     approved = preparation.get("approved_origins")
+    approved_origin_policy = qualified_chaff_origin_policy(manifest) == APPROVED_ORIGINS_CHAFF_POLICY
     if (
         application_origin is None
         or not isinstance(approved, list)
         or application_origin not in {_https_origin(value) for value in approved}
     ):
         raise ValueError(f"qualified workload {workload_id!r} has no approved HTTPS origin")
+    eligible_origins = {_https_origin(value) for value in approved} if approved_origin_policy else {application_origin}
+    if approved_origin_policy and (None in eligible_origins or len(eligible_origins) != len(approved)):
+        raise ValueError("approved-origin chaff policy requires unique HTTPS origins")
+    if approved_origin_policy and any(https_origin(value) != value for value in approved):
+        raise ValueError("approved-origin chaff policy requires canonical HTTPS origins")
     candidates: list[tuple[int, int, str, dict[str, Any], dict[str, Any]]] = []
     for value in resources:
         if not isinstance(value, dict):
@@ -954,9 +967,9 @@ def response_only_candidate_resources(
         response = expected.get(resource_id) if type(resource_id) is int else None
         if (
             response is None
-            or variable_primary and resource_id == 0
+            or (variable_primary or approved_origin_policy) and resource_id == 0
             or value.get("known_valid") is not True
-            or _https_origin(value.get("url")) != application_origin
+            or _https_origin(value.get("url")) not in eligible_origins
             or response["bytes"] < UDP_PAYLOAD_CEILING
         ):
             continue
@@ -972,6 +985,12 @@ def response_only_candidate_resources(
             f"qualified workload {workload_id!r} has no eligible identity-response candidate"
         )
     return [(resource, response) for _, _, _, resource, response in sorted(candidates)]
+
+
+def response_only_selection_policy(manifest: Mapping[str, Any]) -> str:
+    if qualified_chaff_origin_policy(manifest) == APPROVED_ORIGINS_CHAFF_POLICY:
+        return RESPONSE_ONLY_APPROVED_ORIGINS_SELECTION_POLICY
+    return RESPONSE_ONLY_V2_SELECTION_POLICY
 
 
 def _application_resource_batches(manifest: Mapping[str, Any]) -> list[list[int]]:
@@ -2034,7 +2053,9 @@ def _validate_response_only_sidecar_v2(
         or sidecar["artifact_type"] != RESPONSE_ONLY_SIDECAR_ARTIFACT_TYPE
         or sidecar["qualification_scope"] != RESPONSE_ONLY_QUALIFICATION_SCOPE
         or sidecar["workload_id"] != workload_id
-        or sidecar["selection_policy"] != RESPONSE_ONLY_V2_SELECTION_POLICY
+        or sidecar["selection_policy"] not in {
+            RESPONSE_ONLY_V2_SELECTION_POLICY, RESPONSE_ONLY_APPROVED_ORIGINS_SELECTION_POLICY,
+        }
         or type(sidecar["application_resource_id"]) is not int
         or sidecar["application_resource_id"] != 0
         or type(sidecar["selected_chaff_resource_id"]) is not int
@@ -2055,6 +2076,8 @@ def _validate_response_only_sidecar_v2(
     validate_research_preparation(base, workload_id=workload_id)
     application = selected_navigation_root(base, workload_id)
     candidates = response_only_candidate_resources(base, workload_id)
+    if sidecar["selection_policy"] != response_only_selection_policy(base):
+        raise ValueError("response-only chaff origin selection policy differs from prepared workload")
 
     _validate_source(sidecar["qualification_source"], sidecar["qualification_image_digest"])
     _validate_implementation_receipt(
@@ -2575,7 +2598,7 @@ def qualify_response_chaff_v2(
             "qualification_scope": RESPONSE_ONLY_QUALIFICATION_SCOPE,
             "workload_id": workload_id,
             "base_manifest": {"path": base_path.name, "sha256": base_sha},
-            "selection_policy": RESPONSE_ONLY_V2_SELECTION_POLICY,
+            "selection_policy": response_only_selection_policy(base),
             "application_resource_id": application["id"],
             "selected_chaff_resource_id": selected["id"],
             "qualified_parallel_chaff_streams": RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS,

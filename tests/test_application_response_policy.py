@@ -3,13 +3,31 @@ from copy import deepcopy
 import pytest
 
 from qcsd_lab.application_response_policy import (
+    APPROVED_ORIGINS_CHAFF_POLICY,
+    PRIMARY_ORIGIN_CHAFF_POLICY,
     COMPLETED_TERMINAL_HTTP_ERRORS_POLICY as POLICY,
     HTTP_2XX_ONLY_POLICY,
     application_response_policy,
+    qualified_chaff_origin_policy,
+    validate_qualified_chaff_origin_policy,
     validate_application_response_graph,
     validate_application_response_policy_evidence,
     validate_application_responses,
 )
+
+
+def test_qualified_chaff_origin_policy_requires_explicit_opt_in():
+    assert validate_qualified_chaff_origin_policy(None) == PRIMARY_ORIGIN_CHAFF_POLICY
+    assert qualified_chaff_origin_policy({"preparation": {}}) == PRIMARY_ORIGIN_CHAFF_POLICY
+    assert qualified_chaff_origin_policy({"preparation": {
+        "qualified_chaff_origin_policy": APPROVED_ORIGINS_CHAFF_POLICY,
+    }}) == APPROVED_ORIGINS_CHAFF_POLICY
+
+
+@pytest.mark.parametrize("value", [None, True, {}, [], "primary-origin-v1", "all-origins", ""])
+def test_prepared_chaff_origin_policy_rejects_null_and_unknown_values(value):
+    with pytest.raises(ValueError, match="chaff origin policy"):
+        qualified_chaff_origin_policy({"preparation": {"qualified_chaff_origin_policy": value}})
 
 
 def policy_workload(count=3):

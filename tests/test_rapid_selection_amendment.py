@@ -419,13 +419,33 @@ def test_v2_rehashed_rule_or_typed_failure_contract_changes_fail(change: str):
         ))
 
 
-@pytest.mark.parametrize("revision", [0, 5, True, "2"])
+@pytest.mark.parametrize("revision", [0, 8, True, "2"])
 def test_unknown_or_loosely_typed_amendment_revision_fails(revision):
     with pytest.raises(ValueError, match="revision"):
         amendment.build_selection_amendment(
             published_at_utc=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             revision=revision,
         )
+
+
+def test_v7_origin_policy_is_fixed_and_keeps_frozen_v6_parent_bytes():
+    parent = amendment.build_selection_amendment(
+        published_at_utc=amendment.FROZEN_V6_AMENDMENT_PUBLICATION_UTC, revision=6,
+    )
+    assert amendment.selection_amendment_sha256(parent) == amendment.FROZEN_V6_AMENDMENT_SHA256
+    assert "qualified_chaff_origin_policy" not in parent["payload"]
+    value = _receipt(revision=7)
+    payload = amendment.validate_selection_amendment(value)
+    assert payload["parent_selection_amendment_sha256"] == amendment.FROZEN_V6_AMENDMENT_SHA256
+    assert payload["qualified_chaff_origin_policy"] == "prepared-approved-origins-v1"
+    assert payload["primary_document_identity_policy"] == amendment.VARIABLE_PRIMARY_DOCUMENT_POLICY
+    assert payload["qualified_chaff_origin_acceptance"]["full_resource_graph"] == "unchanged-no-resource-or-origin-pruning"
+    for policy in (None, "primary-origin-v1", "all-origins"):
+        changed = copy.deepcopy(payload)
+        changed["qualified_chaff_origin_policy"] = policy
+        with pytest.raises(ValueError, match="fixed contract"):
+            amendment.validate_selection_amendment(rapid._bind(changed,
+                amendment.SELECTION_AMENDMENT_RECEIPT_TYPE, schema_version=5))
 
 
 def test_v2_cannot_predate_its_frozen_v1_parent():
@@ -579,7 +599,7 @@ def test_v4_normal_cohort_still_requires_fifty_full_graph_sites(context_v3):
         _build(context_v3)
 
 
-@pytest.mark.parametrize("revision", [5, 6])
+@pytest.mark.parametrize("revision", [5, 6, 7])
 def test_v5_application_policy_cohort_keeps_50_complete_sites_and_bound_capture_grid(context_v3, tmp_path, revision):
     from qcsd_lab import rapid_capture_plan as capture
     from qcsd_lab.application_response_policy import TERMINAL_HTTP_ERROR_POLICY
@@ -591,13 +611,17 @@ def test_v5_application_policy_cohort_keeps_50_complete_sites_and_bound_capture_
         if row["admission"] is not None:
             row["admission"].update(application_response_policy=TERMINAL_HTTP_ERROR_POLICY,
                 terminal_http_error_resource_ids=[], application_response_evidence_sha256=None)
-            if revision == 6:
+            if revision >= 6:
                 row["admission"].update(primary_document_identity_policy=amendment.VARIABLE_PRIMARY_DOCUMENT_POLICY,
                     application_response_evidence_sha256="3" * 64)
+            if revision == 7:
+                row["admission"]["qualified_chaff_origin_policy"] = "prepared-approved-origins-v1"
     value = _build(context_v3)
     assert value["payload"]["application_response_policy"] == TERMINAL_HTTP_ERROR_POLICY
-    if revision == 6:
+    if revision >= 6:
         assert value["payload"]["primary_document_identity_policy"] == amendment.VARIABLE_PRIMARY_DOCUMENT_POLICY
+    if revision == 7:
+        assert value["payload"]["qualified_chaff_origin_policy"] == "prepared-approved-origins-v1"
     assert len(value["payload"]["selected_candidate_ids"]) == 50
     assert value["payload"]["formal_sample_target"] == 16000
     cohort_path, amendment_path = tmp_path / "cohort.json", tmp_path / "amendment.json"

@@ -47,8 +47,9 @@ def test_pending_generic_and_invalid_page_history_block(events, pages):
         control.choose_step(events, pages, 1)
 
 
-def test_verified_actual_navigation_failure_routes_to_existing_zero_credit_seal(context, tmp_path, monkeypatch):
-    amended = _amended_context(context, tmp_path, revision=6)
+@pytest.mark.parametrize("revision", [6, 7])
+def test_verified_actual_navigation_failure_routes_to_existing_zero_credit_seal(context, tmp_path, monkeypatch, revision):
+    amended = _amended_context(context, tmp_path, revision=revision)
     candidate = amended.candidates[0]
     roots = _root_logs(amended, tmp_path)
     registry = {"root_surveys": {"curated": [admission.import_evidence(amended.root, p) for p in roots], "fallback": []}}
@@ -85,6 +86,23 @@ def test_bound_registry_rejects_changed_bytes_and_reordered_prior_authority(cont
     second = tmp_path / "second.json"; second.write_bytes(admission._json(successor))
     with pytest.raises(ValueError, match="reordered"):
         control.load_registry(admission, amended, second, control.digest(second.read_bytes()))
+
+
+def test_v7_registry_is_distinct_and_cannot_fall_back_to_v6(context, tmp_path):
+    amended = _amended_context(context, tmp_path, revision=7)
+    value = {"schema_version": 1, "record_type": control.REGISTRY_RECORD_TYPES[7],
+        "created_at": control.now(), "provenance_sha256": amended.provenance_sha256,
+        "selection_amendment_sha256": amended.selection_amendment_sha256, "previous_registry": None,
+        "root_surveys": {"curated": [], "fallback": []}, "scientific_credit": False, "docker_executed": False}
+    path = tmp_path / "registry-v7.json"
+    path.write_bytes(admission._json(value))
+    assert control.load_registry(admission, amended, path, control.digest(path.read_bytes())) == value
+    value["record_type"] = control.REGISTRY_RECORD_TYPES[6]
+    path.write_bytes(admission._json(value))
+    with pytest.raises(ValueError, match="frozen context"):
+        control.load_registry(admission, amended, path, control.digest(path.read_bytes()))
+    with pytest.raises(ValueError, match="exact revision"):
+        control.registry_record_type(SimpleNamespace(selection_amendment_revision=7, qualified_chaff_origin_policy=None))
 
 
 def test_actual_argv_logs_are_create_only_and_failed_child_keeps_completion(tmp_path, monkeypatch):
@@ -158,6 +176,7 @@ def operator_args(tmp_path, label="operation", budget=1):
 def test_operation_retains_budget_across_invocations_and_stops_before_actions(tmp_path, monkeypatch):
     root = tmp_path / "context"; root.mkdir()
     context = SimpleNamespace(root=root, provenance_sha256="f" * 64,
+        selection_amendment_revision=6, qualified_chaff_origin_policy=None,
         profile_bytes=admission._json({"payload": {"cohort_contracts": [{"role": "final", "class_count": 50, "formal_sample_target": 16000}]}}))
     status = {"admitted_site_count": 0, "attempts": {}}
     reopen = lambda: (context, [], "/evidence", 4, {}, status)
@@ -179,6 +198,7 @@ def test_operation_retains_budget_across_invocations_and_stops_before_actions(tm
 def test_pending_operation_keeps_blocked_record_without_claiming_completion(tmp_path):
     root = tmp_path / "context"; root.mkdir()
     context = SimpleNamespace(root=root, provenance_sha256="f" * 64,
+        selection_amendment_revision=6, qualified_chaff_origin_policy=None,
         profile_bytes=admission._json({"payload": {"cohort_contracts": [{"role": "final", "class_count": 50, "formal_sample_target": 16000}]}}))
     status = {"admitted_site_count": 0, "attempts": {"candidate": [{"state": "interrupted-or-pending"}]}}
     reopen = lambda: (context, [], "/evidence", 4, {}, status)

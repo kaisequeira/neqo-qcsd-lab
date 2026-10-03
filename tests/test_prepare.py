@@ -540,6 +540,40 @@ def test_prepare_writes_one_policy_free_frozen_workload(tmp_path, monkeypatch):
     assert not list(tmp_path.glob(".*-prepare-*"))
 
 
+def test_prepare_freezes_approved_origin_chaff_policy_with_complete_graph(tmp_path, monkeypatch):
+    from qcsd_lab.application_response_policy import APPROVED_ORIGINS_CHAFF_POLICY
+    install_fake_preparation(monkeypatch)
+    result = prepare.prepare_workload(
+        "approved-chaff-origins", "https://page.test/",
+        ["https://page.test", "https://cdn.test"],
+        output_root=tmp_path, stability_interval_seconds=0, require_complete_coverage=True,
+        qualified_chaff_origin_policy=APPROVED_ORIGINS_CHAFF_POLICY,
+    )
+    value = json.loads(result.path.read_text())
+    validate_manifest(value)
+    assert value["preparation"]["qualified_chaff_origin_policy"] == APPROVED_ORIGINS_CHAFF_POLICY
+    assert [r["id"] for r in value["resources"]] == [0, 1]
+    assert value["preparation"]["coverage_admission"]["required_origins"] == [
+        "https://cdn.test", "https://page.test",
+    ]
+    assert value["preparation"]["coverage_admission"]["required_resources"] == [
+        {"id": r["id"], "url": r["url"]} for r in value["resources"]
+    ]
+
+
+def test_prepare_approved_origin_chaff_policy_requires_complete_coverage(tmp_path, monkeypatch):
+    from qcsd_lab.application_response_policy import APPROVED_ORIGINS_CHAFF_POLICY
+    def unexpected_discovery(*args, **kwargs):
+        raise AssertionError("policy must be checked before discovery")
+    monkeypatch.setattr(prepare, "discover_page", unexpected_discovery)
+    with pytest.raises(ValueError, match="complete graph coverage"):
+        prepare.prepare_workload(
+            "incomplete-chaff-origins", "https://page.test/", ["https://page.test"],
+            output_root=tmp_path, qualified_chaff_origin_policy=APPROVED_ORIGINS_CHAFF_POLICY,
+        )
+    assert not list(tmp_path.iterdir())
+
+
 def test_prepare_complete_coverage_freezes_multi_origin_admission(tmp_path, monkeypatch):
     install_fake_preparation(monkeypatch)
 

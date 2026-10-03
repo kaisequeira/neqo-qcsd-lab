@@ -727,7 +727,7 @@ def _response_only_v2_sidecar(
         "qualification_scope": qualification.RESPONSE_ONLY_QUALIFICATION_SCOPE,
         "workload_id": workload_id,
         "base_manifest": {"path": workload_path.name, "sha256": application_sha256},
-        "selection_policy": qualification.RESPONSE_ONLY_V2_SELECTION_POLICY,
+        "selection_policy": qualification.response_only_selection_policy(manifest),
         "application_resource_id": 0,
         "selected_chaff_resource_id": selected["id"],
         "qualified_parallel_chaff_streams": 5,
@@ -1318,6 +1318,68 @@ def test_legacy_response_receipt_keeps_exact_schema_two_request_shape() -> None:
     )
     assert "request_header_mode" not in receipt
     assert all("wave_index" not in request for request in receipt["requests"])
+
+
+def _approved_origin_workload(tmp_path: Path) -> Path:
+    workload = ROOT / "config/workloads/hyper-basic-client-r1.json"
+    manifest = load_json(workload)
+    manifest["preparation"]["qualified_chaff_origin_policy"] = qualification.APPROVED_ORIGINS_CHAFF_POLICY
+    manifest["preparation"]["approved_origins"].append("https://cdn.test")
+    manifest["preparation"]["observed_origins"].append("https://cdn.test")
+    manifest["resources"][1]["url"] = "https://cdn.test/main.css"
+    path = tmp_path / workload.name
+    atomic_json(path, manifest)
+    return path
+
+
+def test_response_only_approved_origins_selects_auxiliary_cdn_and_preserves_graph(tmp_path):
+    path = _approved_origin_workload(tmp_path)
+    manifest = load_json(path)
+    original = copy.deepcopy(manifest)
+    candidates = qualification.response_only_candidate_resources(manifest, "hyper-basic-client-r1")
+    assert [r["id"] for r, _ in candidates] == [1]
+    assert candidates[0][0]["url"] == "https://cdn.test/main.css"
+    assert manifest == original
+    manifest["preparation"].pop("qualified_chaff_origin_policy")
+    assert [r["id"] for r, _ in qualification.response_only_candidate_resources(
+        manifest, "hyper-basic-client-r1",
+    )] == [0]
+
+
+@pytest.mark.parametrize("change", ["unapproved", "not-valid", "short-body"])
+def test_response_only_approved_origins_still_requires_eligible_auxiliary(tmp_path, change):
+    manifest = load_json(_approved_origin_workload(tmp_path))
+    if change == "unapproved":
+        manifest["preparation"]["approved_origins"].remove("https://cdn.test")
+    elif change == "not-valid":
+        manifest["resources"][1]["known_valid"] = False
+    else:
+        manifest["preparation"]["expected_responses"][1]["bytes"] = 1199
+    with pytest.raises(ValueError, match="no eligible identity-response candidate"):
+        qualification.response_only_candidate_resources(manifest, "hyper-basic-client-r1")
+
+
+def test_response_only_approved_origins_sidecar_reopens_cdn_and_rejects_legacy_policy(tmp_path):
+    path = _approved_origin_workload(tmp_path)
+    sidecar = _response_only_v2_sidecar(path, "hyper-basic-client-r1")
+    result = qualification.validate_response_only_sidecar(
+        sidecar, workload_id="hyper-basic-client-r1", base_manifest_path=path,
+        expected_sidecar_schema_version=qualification.RESPONSE_ONLY_SIDECAR_V2_SCHEMA_VERSION,
+        require_current_implementation=False,
+    )
+    assert result.application_resource_id == 0
+    assert result.selected_chaff_resource_id == 1
+    assert result.manifest["resources"][0]["url"] == "https://cdn.test/main.css"
+    assert len(sidecar["candidate_attempts"][0]["connection_epochs"]) == 3
+    assert all(len(epoch["receipt"]["requests"]) == 40
+               for epoch in sidecar["candidate_attempts"][0]["connection_epochs"])
+    sidecar["selection_policy"] = qualification.RESPONSE_ONLY_V2_SELECTION_POLICY
+    with pytest.raises(ValueError, match="origin selection policy differs"):
+        qualification.validate_response_only_sidecar(
+            sidecar, workload_id="hyper-basic-client-r1", base_manifest_path=path,
+            expected_sidecar_schema_version=qualification.RESPONSE_ONLY_SIDECAR_V2_SCHEMA_VERSION,
+            require_current_implementation=False,
+        )
 
 
 def test_response_only_v2_hyper_falls_back_from_root_to_css() -> None:
