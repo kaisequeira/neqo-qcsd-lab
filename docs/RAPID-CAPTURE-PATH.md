@@ -14,7 +14,29 @@ homepage credit fix, endpoint-specific final UDP drain evidence and explicit
 prospective BuFLO incoming tolerance. They require fresh affected captures;
 the previous failed attempts keep their original results.
 
-**Latest milestone, 4 October, 07:35 Sydney (3 October, 20:35 UTC):**
+**Latest milestone, 4 October, 08:07 Sydney (3 October, 21:07 UTC):**
+The formal target stays **50 × five × 64 = 16,000**. Admission is safely
+paused at checkpoint **000062**: **25 decisions, one admitted site and zero
+formal traces**. The previous continuation closed successfully without
+changing its source or inputs.
+
+The latest serial CS-BuFLO diagnostic passed full deep verification with
+all 260 resources and four origins: **163 seconds to capture and ten seconds
+to verify**. Serial BuFLO hit the same early enqueue cutoff as the parallel
+attempt. Its prospective repair is pushed as Native `45f03a48`; five focused
+Native checks passed. It permits enqueue within the existing five-millisecond
+window and retains the actual transmission deadline. Matching installation
+and a fresh BuFLO recording remain required.
+
+Cheap, single-site browser observations also reproduced two lifecycle
+mistakes. The iframe cleanup acknowledgement repair passed 74 focused cases;
+the separate CSP-before-network repair is being implemented. These checks
+grant no site or formal trace credit. The next steps are the matching runtime,
+short affected traffic and browser checks, then continued site admission.
+Parallel throughput and recovery remain unproven. See the
+[source and actual diagnostic evidence](EVIDENCE-INDEX.md#v13-bounded-enqueue-and-browser-lifecycle-repairs).
+
+**Earlier milestone, 4 October, 07:35 Sydney (3 October, 20:35 UTC):**
 Published Lab `84db28df` / unchanged Native `3d994f0d` is now installed in
 runtime 007. All twelve operations, 2,388 source files and the unchanged
 1,783-file Native inventory reopen. Exact verified client reuse took

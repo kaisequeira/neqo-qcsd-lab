@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -588,7 +589,52 @@ def _runner_receipt_v8() -> dict[str, object]:
 
     raw = _runner_receipt_v7()
     raw["schema_version"] = 8
+    raw["semantics"] = kernel_tx.KERNEL_TX_RUNNER_V8_SEMANTICS
+    return raw
+
+
+def _runner_receipt_v9() -> dict[str, object]:
+    """Opt in to bounded enqueue without extending physical realization."""
+
+    raw = _runner_receipt_v8()
+    raw["schema_version"] = 9
     raw["semantics"] = KERNEL_TX_RUNNER_SEMANTICS
+    raw["clock_mapping"]["schema_version"] = 6
+    raw["clock_mapping"]["effective_envelope_semantics"] = (
+        kernel_tx._EFFECTIVE_ENVELOPE_SEMANTICS_V6
+    )
+    for job in raw["jobs"]:
+        for item in job["items"]:
+            item["schema_version"] = 6
+    return raw
+
+
+def _runner_receipt_v9_late_enqueue() -> dict[str, object]:
+    raw = _runner_receipt_v9()
+    for index, item in enumerate(raw["jobs"][0]["items"]):
+        enqueue = _RELEASE_TAI_NS + 3_000_000 + index * 200_000
+        tx = enqueue + 100_000
+        item.update(
+            enqueue_monotonic_ns=enqueue - _MONOTONIC_TO_TAI_NS,
+            enqueue_tai_ns=enqueue,
+            enqueue_tai_lower_ns=enqueue,
+            enqueue_tai_upper_ns=enqueue,
+            tx_sched_realtime_ns=tx - 10_000 - _REALTIME_TO_TAI_NS,
+            tx_sched_tai_ns=tx - 10_000,
+            tx_sched_tai_lower_ns=tx - 10_000,
+            tx_sched_tai_upper_ns=tx - 10_000,
+            tx_software_realtime_ns=tx - _REALTIME_TO_TAI_NS,
+            tx_software_tai_ns=tx,
+            tx_software_tai_lower_ns=tx,
+            tx_software_tai_upper_ns=tx,
+            provisional_tx_software_tai_lower_ns=tx,
+            provisional_tx_software_tai_upper_ns=tx,
+            post_tx_clock_phase={
+                "monotonic": _clock_sample(tx + 1 - _MONOTONIC_TO_TAI_NS, _MONOTONIC_TO_TAI_NS),
+                "realtime": _clock_sample(tx + 1 - _REALTIME_TO_TAI_NS, _REALTIME_TO_TAI_NS),
+            },
+        )
+    raw["aggregate"]["max_tx_software_lateness_ns"] = 3_300_000
     return raw
 
 
@@ -910,6 +956,16 @@ def _runner_wakeup_v17() -> dict[str, object]:
     return value
 
 
+def _runner_wakeup_v18() -> dict[str, object]:
+    value = _runner_wakeup_v17()
+    value.update(
+        schema_version=18,
+        semantics=fidelity.RUNNER_WAKEUP_V18_SEMANTICS,
+        buflo_kernel_tx=_runner_receipt_v9(),
+    )
+    return value
+
+
 def _failed_before_arm_runner_receipt() -> dict[str, object]:
     raw = _runner_receipt()
     mapping_error = "BuFLO kernel epoch was never armed"
@@ -1190,9 +1246,12 @@ def test_public_observer_topology_receipt_is_immutable_and_image_bound() -> None
 
 def _evidence(
     runner: dict[str, object],
+    *,
+    capture_times: list[int] | None = None,
 ) -> tuple[dict[str, object], dict[str, object], list[dict[str, object]]]:
     items = runner["jobs"][0]["items"]
-    capture_times = [_RELEASE_TAI_NS + 200_000, _RELEASE_TAI_NS + 250_000]
+    if capture_times is None:
+        capture_times = [_RELEASE_TAI_NS + 200_000, _RELEASE_TAI_NS + 250_000]
     packets = [
         {
             "schema_version": 1,
@@ -2496,8 +2555,9 @@ def test_kernel_tx_schema_two_retains_large_monotonic_drift_as_exact_diagnostic(
     assert not kernel_tx_runner_receipt_valid(current)
 
 
-def test_kernel_tx_schema_eight_constants_match_the_rust_producer() -> None:
-    source = (Path(__file__).parents[1] / "neqo-qcsd/neqo-bin/src/qcsd/mod.rs").read_text(
+def test_kernel_tx_schema_nine_constants_match_the_rust_producer() -> None:
+    native_root = Path(os.environ.get("QCSD_TEST_NATIVE_SOURCE_ROOT", Path(__file__).parents[1] / "neqo-qcsd"))
+    source = (native_root / "neqo-bin/src/qcsd/mod.rs").read_text(
         encoding="utf-8"
     )
     runner_prefix = 'const BUFLO_KERNEL_TX_SEMANTICS: &str = "'
@@ -2523,13 +2583,13 @@ def test_kernel_tx_schema_eight_constants_match_the_rust_producer() -> None:
     )
     assert mapping_line.endswith('";')
     assert (
-        kernel_tx._EFFECTIVE_ENVELOPE_SEMANTICS_V5
+        kernel_tx._EFFECTIVE_ENVELOPE_SEMANTICS_V6
         == mapping_line[len(mapping_prefix) : -2]
     )
     assert "const BUFLO_KERNEL_TX_ETF_DELTA: Duration = Duration::from_millis(10);" in source
-    assert "const BUFLO_KERNEL_TX_RECEIPT_SCHEMA_VERSION: u32 = 8;" in source
-    assert "const BUFLO_KERNEL_ITEM_RECEIPT_SCHEMA_VERSION: u32 = 5;" in source
-    assert "const BUFLO_KERNEL_CLOCK_MAPPING_SCHEMA_VERSION: u32 = 5;" in source
+    assert "const BUFLO_KERNEL_TX_RECEIPT_SCHEMA_VERSION: u32 = 9;" in source
+    assert "const BUFLO_KERNEL_ITEM_RECEIPT_SCHEMA_VERSION: u32 = 6;" in source
+    assert "const BUFLO_KERNEL_CLOCK_MAPPING_SCHEMA_VERSION: u32 = 6;" in source
 
     raw = _runner_receipt()
     raw["clock_start"] = None

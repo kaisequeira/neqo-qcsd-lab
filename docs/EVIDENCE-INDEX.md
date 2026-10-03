@@ -9,6 +9,81 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ## Application response policy repair
 
+### V13 bounded enqueue and browser lifecycle repairs
+
+These observations use runtime 007, Lab `84db28df` / Native `3d994f0d`,
+and retain their exact source labels. Under local
+`rapid-v12-capture-canary-20261003-001/actual-poki-007`, serial BuFLO closed
+1 at `2026-10-03T20:42:27.070206Z`, after 162.841 seconds including setup
+and cleanup. Before `sendmsg`, CLOCK_TAI `1791060133673340613` reached
+the nominal-release cutoff `1791060133670308078`, **3.032535 ms late**.
+Its 27 sealed files reopen; seal SHA is
+`30eab245802ce46c8818ef2601717ede4e0f40bba5498fd7eb83bc849122d760`.
+It has zero accepted and formal traces.
+
+Serial CS-BuFLO closed 0 at `2026-10-03T20:46:29.236461Z`, after
+174.406 seconds including capture and deep verification. Capture took
+163.263 seconds and deep verification 9.708 seconds. Ordinary deep receipt
+`cs-buflo-deep-verification.json`, SHA
+`0653916cdacff54869ccdd329a7f217e781cf86faf71e13a44180817522b27d1`,
+is valid and complete; all fifteen authoritative files reopen. The full
+260-resource/four-origin graph is retained, with 1,748 complete outgoing
+cells and no outgoing misses. The one terminal primary partial credit has
+421 bytes consumed and 179 retired, with zero unresolved credit.
+This is **one accepted diagnostic recording and zero formal traces**.
+
+Native `45f03a48b73cacb8959eb488b4d27d33d4eb10ff` is the prospective
+bounded enqueue repair, published on main and the desktop branch. Local
+`rapid-v13-outgoing-timing-native-publication-20261004-001/published.json`
+records publication; the four actual operations under
+`rapid-v13-outgoing-timing-source-checks-20261004-001` closed 0 and passed
+five focused Native cases. The production files remain byte-identical to
+the tested precommit source. New kernel receipt schema 9, clock/item schema
+6 and wakeup schema 18 bind enqueue before the existing release-plus-five-
+millisecond deadline, causal physical transmission, and unchanged physical
+deadline enforcement. This is source evidence; it has not yet been installed
+or verified with a fresh traffic recording.
+
+The held corresponding Lab source closure is local
+`buflo-bounded-enqueue-lab-checks-20261004-003/source-closure.json`, SHA
+`de200e230f3996b9bd2334271475f7b6168c576ac6385d8ee89f4fd9f5c22a10`.
+It retains both initial failed host operations and their fixture corrections:
+99 cases passed in the first operation, the two corrected cases passed in
+the second, and its remaining stale schema expectation passed after correction
+in the third. Production source was unchanged across these operations;
+this is **102 eventually passing distinct cases, not one 102-case green run**.
+Historical kernel 8 / clock 5 / wakeup 17 meanings remain exact.
+
+Local `cdp-lifecycle-diagnostic-20261004-001` contains two actual single-
+discovery browser observations. Alibaba's outer operation closed 1 in
+23.411 seconds: the iframe detached after `Page.frameDetached(remove)`
+while only its nonpolicy `Debugger.removeBreakpoint` acknowledgement
+remained outstanding. The repair's local
+`cdp-frame-cleanup-retirement-checks-20261004-001/closure.json`, SHA
+`14202e5faeb86f507204d75612433b6c4831bf0499daeebd808bdf66866fc88d`,
+binds 74 passing host cases, held production SHA
+`4db8c63d3afef6bed939fd18e4892f530a411774297111c5d455e3e3e6dcdbe0`.
+It retires only the witnessed cleanup and permits one exact empty late ACK;
+active work, policy commands and unknown replies remain errors.
+
+Toom's separate outer operation closed 1 in 18.193 seconds: an authenticated
+iframe started a document navigation, then `Network.loadingFailed` reported
+`net::ERR_BLOCKED_BY_CSP` with the loader ID before any corresponding Fetch
+or Network occurrence. The existing unknown-terminal guard rejected it.
+A separate denied-before-network disposition is being implemented; no
+request completion or body is fabricated. Both raw journals and source
+before/after records remain preserved. These observations are diagnostic
+only, grant no site or trace credit, and do not promote old failures.
+
+Admission continuation 008 closed 0 at `2026-10-03T20:38:57.669409Z`,
+in 325.721 seconds, and stopped at the requested action boundary. Immutable
+checkpoint `000062`, SHA
+`4298457ddbc7e65bf9cd1233ed76dcbefcb43651c788fdfbca7bbf573c1c7a2e`,
+records **25 terminal decisions, one admitted site and zero formal traces**.
+Its original Lab `818deb6` / Native `39464c62`, image and registry 000002
+are unchanged. A changed-source admission run requires a fresh prospectively
+bound context; this checkpoint cannot be rebound to the new repairs.
+
 ### V12 parallel bridge runtime 007
 
 Published Lab `84db28df5afac72d51e0a26d63c4dae8ae92985e` contains the

@@ -41,7 +41,39 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Latest milestone, 4 October, 07:35 Sydney (3 October, 20:35 UTC):**
+**Latest milestone, 4 October, 08:07 Sydney (3 October, 21:07 UTC):**
+The target remains **50 sites × five settings × 64 visits = 16,000 accepted
+formal traces**. Admission is paused at checkpoint **000062**, with
+**25 terminal decisions, 1/50 admitted sites and 0/16,000 formal traces**.
+Continuation 008 closed successfully in **325.721 seconds**; its original
+source and immutable input bindings remain unchanged.
+
+Runtime 007's fresh serial CS-BuFLO recording passed ordinary deep
+verification on the complete 260-resource/four-origin diagnostic page.
+Capture took **163.263 seconds** and deep verification **9.708 seconds**.
+It is one accepted diagnostic recording with **zero formal credit**.
+Serial BuFLO failed before transmission at the same enqueue cutoff seen in
+the pair: preparation was **3.033 milliseconds after nominal release**,
+inside the existing five-millisecond physical window. This shows that the
+cutoff failure also occurs with one capture worker.
+
+The prospective repair is published as Native `45f03a48`: enqueue may use
+that existing physical window, while actual transmission must still precede
+its strict deadline and follow its enqueue evidence. Five focused Native
+cases passed. The corresponding Lab validators retain the exact historical
+receipt semantics and add explicit new schema handling; their focused host
+checks passed after the preserved fixture corrections. Installation and
+fresh affected traffic verification remain pending.
+
+Two bounded browser observations reproduced separate normal lifecycle
+races: an iframe detached while its last breakpoint cleanup acknowledgement
+was pending, and an iframe document was blocked by CSP before a network
+request existed. The first repair passed **74 focused host cases**; the
+second repair is being implemented. Neither observation admits a site.
+The old failed recordings remain failed, and successful parallel recovery
+remains unproven. See the [serial checks and focused repairs](docs/EVIDENCE-INDEX.md#v13-bounded-enqueue-and-browser-lifecycle-repairs).
+
+**Earlier milestone, 4 October, 07:35 Sydney (3 October, 20:35 UTC):**
 The bridge and cleanup repair is published as Lab `84db28df`, with unchanged
 Native `3d994f0d`, and installed in runtime 007. All twelve actual operations,
 the full 2,388-file source inventory and unchanged 1,783-file Native inventory
