@@ -5625,7 +5625,53 @@ parallel_formal=0
 parallel_authority=""
 parallel_output=""
 parallel_authority_sha256=""
+parallel_host_python=""
+parallel_select_host_python() {
+  local candidate
+  local -a candidates=("${ROOT}/.venv/bin/python")
+  if [[ -n "${QCSD_PARALLEL_HOST_PYTHON:-}" ]]; then
+    if [[ "${QCSD_PARALLEL_HOST_PYTHON}" != /* ]]; then
+      echo "formal parallel operator Python must be an absolute executable path" >&2
+      return 2
+    fi
+    candidates+=("${QCSD_PARALLEL_HOST_PYTHON}")
+  fi
+  candidates+=(python3.11 python3 python)
+  for candidate in "${candidates[@]}"; do
+    if [[ "${candidate}" != */* ]]; then
+      candidate="$(command -v "${candidate}")" || continue
+    fi
+    [[ -x "${candidate}" ]] || continue
+    # Preserve a venv's invocation path; resolving its Python symlink would
+    # select the base interpreter without the project's installed dependencies.
+    if "${candidate}" -I -B -c '
+from pathlib import Path
+import sys
+if sys.version_info < (3, 11):
+    raise SystemExit(2)
+expected = Path(sys.argv[1]) / "src/qcsd_lab/rapid_formal_parallel.py"
+if not expected.is_file():
+    raise SystemExit(2)
+sys.path.insert(0, str(expected.parent.parent))
+from qcsd_lab import rapid_formal_parallel
+if Path(rapid_formal_parallel.__file__).resolve() != expected.resolve():
+    raise SystemExit(2)
+' "${ROOT}" >/dev/null 2>&1; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+  echo "formal parallel capture requires Python >=3.11 with project dependencies; use ROOT/.venv or invoke the operator tool from the project environment" >&2
+  return 2
+}
 parallel_python() {
+  if (( parallel_formal )); then
+    if [[ -z "${parallel_host_python}" ]]; then
+      parallel_host_python="$(parallel_select_host_python)" || return 2
+    fi
+    "${parallel_host_python}" -I -B -c 'import sys; sys.path.insert(0,sys.argv.pop(1)+"/src"); from qcsd_lab.rapid_parallel_capture import main; main()' "${ROOT}" "$@"
+    return
+  fi
   /usr/bin/python3 -I -c 'import sys; sys.path.insert(0,sys.argv.pop(1)+"/src"); from qcsd_lab.rapid_parallel_capture import main; main()' "${ROOT}" "$@"
 }
 parallel_environment_rows() {
@@ -5654,6 +5700,10 @@ if [[ "${1:-}" == "parallel-diagnostic-run" || "${1:-}" == "parallel-formal-run"
     echo "parallel pilot requires regular inputs and separate outputs beneath results/" >&2
     exit 2
   fi
+  if [[ "${1}" == "parallel-formal-run" ]]; then
+    parallel_formal=1
+    parallel_host_python="$(parallel_select_host_python)" || exit 2
+  fi
   parallel_first_campaign="$(parallel_python select --authority "${parallel_authority}" --output "${ROOT}")"
   parallel_authority_sha256="$(sha256sum -- "${parallel_authority}")"
   parallel_authority_sha256="${parallel_authority_sha256%% *}"
@@ -5663,7 +5713,6 @@ if [[ "${1:-}" == "parallel-diagnostic-run" || "${1:-}" == "parallel-formal-run"
   fi
   parallel_diagnostic=1
   if [[ "${1}" == "parallel-formal-run" ]]; then
-    parallel_formal=1
     parallel_formal_first_inputs="$(parallel_python formal-inputs --authority "${parallel_authority}" --index 0)" || exit 1
     parallel_formal_environment_text="$(parallel_environment_rows "${parallel_formal_first_inputs}")" || exit 1
     while IFS=$'\t' read -r parallel_environment_key parallel_environment_b64; do

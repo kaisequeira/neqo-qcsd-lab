@@ -23,6 +23,12 @@ available CPU IDs. It rejects an unsafe pair instead of changing traffic.
 - A portable capture spec naming the source, client, traffic settings, cohort,
   qualification, workload and plan receipt. Its paths may be relative to the
   spec file; the authority records their actual resolved identities.
+- The project's Python 3.11 or newer environment with its dependencies. Run
+  the operator tools from that environment. For formal launch, the shell first
+  checks `ROOT/.venv/bin/python`, then the operator's actual interpreter, then
+  compatible Python executables on its protected system PATH. It imports the
+  bound source before worker initialization; an unsupported interpreter stops
+  immediately. Archived execution roots do not need their own virtualenv.
 
 The source implementation and focused fixture tests do not establish a live
 parallel capture pass. The first formal runtime may already include this

@@ -40,6 +40,9 @@ def launch(authority_path: Path, output: Path) -> dict:
     if value["artifact_type"] != parallel.AUTHORITY_TYPE:
         from qcsd_lab.rapid_formal_parallel import worker_environment
         env.update(worker_environment(value, 0))
+        # Archived execution roots have no venv and the launcher seals PATH.
+        # Carry the operator's actual project interpreter only for formal work.
+        env["QCSD_PARALLEL_HOST_PYTHON"] = sys.executable
     read_fd, write_fd = os.pipe()
     child = None
     started = parallel.now()

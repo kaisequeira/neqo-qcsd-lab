@@ -81,6 +81,7 @@ def test_parallel_command_uses_official_formal_dns_sink_only_when_opted_in(conte
         "parallel_diagnostic=0", "parallel_formal=0",
         "QCSD_PARALLEL_AUTHORITY_SHA256=" + shlex.quote(context.digest),
         _environment_helper(source),
+        'parallel_select_host_python() { printf "%s\\n" "/usr/bin/python3"; }',
         "parallel_python() { if [[ \"$1\" == select ]]; then printf '%s\\n' " + shlex.quote(campaign) +
         "; elif [[ \"$1\" == formal-inputs ]]; then printf '%s\\n' " + shlex.quote(inputs) + "; else return 99; fi; }",
     ])
@@ -202,6 +203,7 @@ else:
         'qcsd_retire_docker_handoff() { local -n values=$3; local value; local -a keep=(); for value in "${values[@]}"; do [[ "$value" == "$2" ]] || keep+=("$value"); done; values=("${keep[@]}"); }',
         '_qcsd_begin_latched_cleanup() { :; }', '_qcsd_finish_latched_cleanup() { exit "$cleanup_entry_status"; }',
         _environment_helper(source),
+        'parallel_select_host_python() { printf "%s\\n" "/usr/bin/python3"; }',
         source.split('replace_container_option_value() {', 1)[1].split('_qcsd_latch_cleanup_signal()', 1)[0].join(['replace_container_option_value() {', '']),
     ])
     if formal:
