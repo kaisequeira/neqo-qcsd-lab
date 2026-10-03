@@ -14,7 +14,30 @@ homepage credit fix, endpoint-specific final UDP drain evidence and explicit
 prospective BuFLO incoming tolerance. They require fresh affected captures;
 the previous failed attempts keep their original results.
 
-**Latest milestone, 4 October, 09:37 Sydney (3 October, 22:37 UTC):**
+**Latest milestone, 4 October, 10:01 Sydney (3 October, 23:01 UTC):**
+The target remains **50 × five × 64 = 16,000 accepted formal traces**.
+Admission 018 stopped cleanly between actions, preserving checkpoint
+000044: **17 completed decisions, one newly admitted site and zero formal
+traces**. Its 113 retained root screens and page evidence remain intact.
+
+The incoming-window repair is now installed in runtime 010, with complete
+source and operation checks. Its cached Native build took **138 seconds**;
+the two image builds took **60 and 64 seconds**. A short capture attempt
+stopped before traffic because the scheduler rejected a concurrently
+running admission container without the required ownership and CPU
+partition declaration. The failed attempt is preserved. Admission's
+controlled stop lets a fresh recording use the existing build: attempt 011
+passed preflight and is recording the full 260-resource/four-origin page.
+
+The browser repair passed **441 focused checks** and one real Toom
+discovery run in **27 seconds**. That run exercised the previously failing
+canceled callback and kept all 86 resources; it adds no admitted site or
+formal trace. Matching browser installation, affected defense recordings,
+the ten-site shakedown, final 50-site cohort and successful parallel
+recovery remain required. See the
+[current evidence](EVIDENCE-INDEX.md#v13-runtime-010-and-canceled-csp-proof).
+
+**Earlier milestone, 4 October, 09:37 Sydney (3 October, 22:37 UTC):**
 The target remains **50 × five × 64 = 16,000 accepted formal traces**.
 New site admission is running with all **113 retained root screens** and
 fresh page preparation under the installed browser repair. Its checkpoint

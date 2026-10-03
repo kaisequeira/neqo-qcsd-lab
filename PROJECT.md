@@ -41,7 +41,37 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Latest milestone, 4 October, 09:37 Sydney (3 October, 22:37 UTC):**
+**Latest milestone, 4 October, 10:01 Sydney (3 October, 23:01 UTC):**
+The target remains **50 sites × five settings × 64 accepted visits = 16,000
+formal traces**. Admission context 018 stopped cleanly at an action boundary;
+checkpoint **000044** records **17 terminal decisions, one newly admitted
+site and zero formal traces**. Its 113 retained root screens, source and
+page decisions are preserved.
+
+Clean Lab `a1784630` / Native `8417787c` is installed in runtime 010.
+The cached Native build took **138 seconds**, and the two thin image builds
+**60 and 64 seconds**. All twelve operations and the complete 2,390-file
+installed source inventory reopen. This installation adds no scientific
+credit. Diagnostic attempt 010 stopped before Native traffic: the host
+scheduler rejected the concurrently running admission container, which
+lacked the required ownership and CPU partition declaration. That failed
+attempt is preserved. Admission's controlled stop avoids this conflict
+without a rebuild; fresh attempt 011 passed preflight and its full-page
+baseline is running on the same installed runtime.
+
+The prospective browser cleanup and canceled-CSP repair passed **441 host
+checks**. Actual Toom overlay 008 completed discovery in **26.970 seconds**,
+retaining all 86 resources. It exercised the previously failing canceled
+callback once, with no invented HTTP response or resource-body credit.
+Independent reopening verifies the actual audit, source and runtime
+bindings and restored observers. This uninstalled diagnostic is one
+discovery pass, not site admission. Matching browser installation remains
+needed. Fresh affected defense traffic, the ten-site shakedown, final
+50-site cohort, successful parallel recovery and **0/16,000 formal traces**
+remain outstanding. See the
+[runtime and browser evidence](docs/EVIDENCE-INDEX.md#v13-runtime-010-and-canceled-csp-proof).
+
+**Earlier milestone, 4 October, 09:37 Sydney (3 October, 22:37 UTC):**
 The formal target remains **50 sites × five settings × 64 visits = 16,000
 accepted traces**. New admission context 018 is running with clean Lab
 `d071060f` / unchanged Native `39464c62`. Checkpoint **000033** records

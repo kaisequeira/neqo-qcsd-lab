@@ -930,9 +930,155 @@ def _csp_internal_finish(**changes: Any) -> dict[str, Any]:
     return event
 
 
+def _csp_canceled_successor(**changes: Any) -> dict[str, Any]:
+    # Actual overlay007 seq1061/1062: same denied loader, +9.970ms, no Network.
+    event = _srcdoc_terminal(request_id=_CSP_LOADER_ID, timestamp=468297.737573,
+                            errorText="net::ERR_ABORTED", canceled=True)
+    event.update(changes)
+    return event
+
+
 def _complete_csp_error_page(session: _FakeNonFlatSession) -> None:
     session.emit((), "Page.frameNavigated", _csp_error_page_navigation())
     session.emit((), "Network.loadingFinished", _csp_internal_finish())
+
+
+def test_pre_request_csp_actual_canceled_successor_is_retained_without_network_credit() -> None:
+    session = _FakeNonFlatSession()
+    internal: list[Mapping[str, Any]] = []
+    router, observed = _router(session, track_root_srcdoc_lifecycle=True,
+        on_internal_document_lifecycle=lambda _source, event: internal.append(dict(event)))
+    frame, loader = "5CD4D9A2007A7D3D06D2827572AF6D54", "0E7151FF27E88C76F540B96B345893D9"
+    _begin_pre_request_csp_navigation(session, frame_id=frame, loader_id=loader)
+    session.emit((), "Network.loadingFailed", _pre_request_csp_terminal(
+        requestId=loader, timestamp=468297.727603))
+    router.raise_if_failed()
+    original = json.loads(json.dumps(internal[0]))
+    session.emit((), "Network.loadingFailed", _csp_canceled_successor(requestId=loader))
+    router.raise_if_failed()
+    summary = router.srcdoc_pseudo_document_summary
+    assert validate_srcdoc_pseudo_document_summary(summary, require_terminal=True) == summary
+    assert internal == summary["diagnostics"] and internal[0] == original
+    assert summary["total"] == summary["resolved"] == 2
+    assert summary["terminal_outcome_counts"] == {"Network.loadingFailed": 2, "Network.loadingFinished": 0}
+    diagnostic = internal[1]
+    assert diagnostic["disposition"] == "browser-canceled-denied-navigation"
+    assert diagnostic["denied_terminal_event_ordinal"] == original["terminal_event_ordinal"]
+    assert diagnostic["terminal_timestamp"] == 468297.737573
+    assert diagnostic["request_id_sha256"] == diagnostic["loader_id_sha256"] == hashlib.sha256(loader.encode()).hexdigest()
+    assert diagnostic["remote_response_body_credit"] is False
+    assert diagnostic["network_request_seen"] is diagnostic["fetch_pause_seen"] is False
+    candidate = router._csp_denied_navigations[loader]
+    assert candidate.canceled_successor_seen and not candidate.internal_finish_seen
+    assert candidate.error_navigated_event_ordinal is None
+    assert not observed and not router._active_requests and not router._root_terminal_requests
+    assert not router._error_document_finishes and not router._error_document_resources
+    assert frame not in json.dumps(summary) and loader not in json.dumps(summary)
+    session.emit((), "Page.frameStoppedLoading", {"frameId": frame})
+    session.emit((), "Page.frameDetached", {"frameId": frame, "reason": "remove"})
+    _clean_shutdown(router)
+
+
+@pytest.mark.parametrize("defect", [
+    "no-denial", "wrong-request", "wrong-method", "error", "canceled", "type", "timestamp",
+    "extra-network-id", "extra-loader-id", "extra-frame-id", "source", "source-generation",
+    "target-generation", "parent", "attachment", "active", "detach", "swap", "reattach",
+    "shutdown", "abort", "navigation", "finished", "duplicate", "bound",
+])
+def test_pre_request_csp_canceled_successor_preserves_exact_identity_and_work_guards(
+    defect: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, _observed = _router(session, track_root_srcdoc_lifecycle=True)
+    _begin_pre_request_csp_navigation(session)
+    if defect != "no-denial":
+        session.emit((), "Network.loadingFailed", _pre_request_csp_terminal(timestamp=468297.727603))
+        router.raise_if_failed()
+    event = _csp_canceled_successor()
+    method, route = "Network.loadingFailed", ()
+    if defect == "wrong-request": event["requestId"] = "not-the-denied-loader"
+    if defect == "wrong-method": method = "Network.responseReceived"
+    if defect == "error": event["errorText"] = "net::ERR_FAILED"
+    if defect == "canceled": event["canceled"] = False
+    if defect == "type": event["type"] = "Script"
+    if defect == "timestamp": event["timestamp"] = 468297.727603
+    if defect == "extra-network-id": event["networkId"] = "other-request"
+    if defect == "extra-loader-id": event["loaderId"] = "other-loader"
+    if defect == "extra-frame-id": event["frameId"] = "other-frame"
+    if defect == "source":
+        route = session.attach((), session_id="other-child", target_id="other-frame", target_type="iframe", parent_frame_id=session.root_frame_id)
+    if defect == "source-generation":
+        router._csp_denied_navigations[_CSP_LOADER_ID].denied_source = replace(router.root_source, generation=1)
+    if defect == "target-generation": router._target_generations[_CSP_FRAME_ID] = 1
+    if defect == "parent": router._page_frame_parents[_CSP_FRAME_ID] = "other-parent"
+    if defect == "attachment": router._csp_attachment_ordinals[_CSP_FRAME_ID] += 1
+    if defect == "active":
+        session.emit((), "Network.requestWillBeSent", {"requestId": "other-active", "frameId": _CSP_FRAME_ID,
+            "loaderId": "other-loader", "type": "Script", "request": {"method": "GET", "url": "https://root.test/data"}})
+    if defect in {"detach", "swap", "reattach"}:
+        session.emit((), "Page.frameDetached", {"frameId": _CSP_FRAME_ID, "reason": "swap" if defect == "swap" else "remove"})
+        if defect == "reattach": _attach_srcdoc_frame(session, frame_id=_CSP_FRAME_ID)
+    if defect == "shutdown": _begin_shutdown(router)
+    if defect == "abort":
+        _browser_session, guard = _guard_for(router)
+        router.begin_abort()
+        guard.begin_abort()
+    if defect == "navigation": session.emit((), "Page.frameNavigated", _csp_error_page_navigation())
+    if defect == "finished":
+        session.emit((), "Page.frameNavigated", _csp_error_page_navigation())
+        session.emit((), "Network.loadingFinished", _csp_internal_finish(timestamp=468297.8))
+    if defect == "duplicate": session.emit((), method, event)
+    if defect == "bound": monkeypatch.setattr(cdp_targets_module, "_SRCDOC_PSEUDO_DOCUMENT_LIMIT", 1)
+    session.emit(route, method, event)
+    with pytest.raises(CdpTargetIntegrityError): router.raise_if_failed()
+    assert router._csp_canceled_total == (1 if defect == "duplicate" else 0)
+    if defect == "active": assert router._active_requests["other-active"]
+
+
+@pytest.mark.parametrize("later", ["canceled", "network", "fetch", "navigation", "finish"])
+def test_pre_request_csp_canceled_successor_keeps_consumed_loader_tombstone(later: str) -> None:
+    session = _FakeNonFlatSession()
+    router, _ = _router(session, track_root_srcdoc_lifecycle=True)
+    _begin_pre_request_csp_navigation(session)
+    session.emit((), "Network.loadingFailed", _pre_request_csp_terminal())
+    session.emit((), "Network.loadingFailed", _csp_canceled_successor())
+    router.raise_if_failed()
+    if later == "canceled": session.emit((), "Network.loadingFailed", _csp_canceled_successor())
+    elif later == "network": _complete_request(session, (), _CSP_LOADER_ID, _CSP_URL)
+    elif later == "fetch": session.emit((), "Fetch.requestPaused", {"requestId": "later-fetch", "networkId": _CSP_LOADER_ID,
+        "request": {"method": "GET", "url": _CSP_URL}})
+    elif later == "navigation": session.emit((), "Page.frameNavigated", _csp_error_page_navigation())
+    else: session.emit((), "Network.loadingFinished", _csp_internal_finish())
+    with pytest.raises(CdpTargetIntegrityError): router.raise_if_failed()
+    assert router._csp_total == router._csp_canceled_total == 1
+    assert router._csp_internal_finish_total == 0
+
+
+@pytest.mark.parametrize("defect", ["no-denial", "frame", "parent", "loader", "request", "url", "ordinal", "order", "duplicate", "timestamp", "credit", "network", "canceled", "error", "field", "outcome"])
+def test_pre_request_csp_canceled_summary_rejects_forged_credit_and_identity(defect: str) -> None:
+    session = _FakeNonFlatSession()
+    router, _ = _router(session, track_root_srcdoc_lifecycle=True)
+    _begin_pre_request_csp_navigation(session)
+    session.emit((), "Network.loadingFailed", _pre_request_csp_terminal())
+    session.emit((), "Network.loadingFailed", _csp_canceled_successor())
+    router.raise_if_failed()
+    summary = router.srcdoc_pseudo_document_summary
+    canceled = summary["diagnostics"][1]
+    if defect == "no-denial": summary["diagnostics"].pop(0)
+    if defect in {"frame", "parent", "loader", "request", "url"}:
+        key = {"frame": "frame_id_sha256", "parent": "parent_frame_id_sha256", "loader": "loader_id_sha256", "request": "request_id_sha256", "url": "url_sha256"}[defect]
+        canceled[key] = "f" * 64
+    if defect == "ordinal": canceled["denied_terminal_event_ordinal"] = 1
+    if defect == "order": canceled["terminal_event_ordinal"] = canceled["denied_terminal_event_ordinal"]
+    if defect == "duplicate": summary["diagnostics"].append(dict(canceled))
+    if defect == "timestamp": canceled["terminal_timestamp"] = summary["diagnostics"][0]["terminal_timestamp"]
+    if defect == "credit": canceled["remote_response_body_credit"] = True
+    if defect == "network": canceled["network_request_seen"] = True
+    if defect == "canceled": canceled["canceled"] = False
+    if defect == "error": canceled["error_text"] = "net::ERR_FAILED"
+    if defect == "field": canceled["frame_navigated_method"] = "Page.frameNavigated"
+    if defect == "outcome": summary["terminal_outcome_counts"]["Network.loadingFailed"] = 1
+    with pytest.raises(ValueError): validate_srcdoc_pseudo_document_summary(summary, require_terminal=True)
 
 
 def test_pre_request_csp_actual_error_page_finish_is_once_only_diagnostic() -> None:
@@ -1251,8 +1397,8 @@ def test_pre_request_csp_denial_keeps_bounds_and_later_fresh_network_work(monkey
     assert router._csp_total == len(router._csp_denied_navigations) == 1
 
 
-@pytest.mark.parametrize("fallback", [False, True])
-def test_pre_request_csp_actual_callback_roundtrips_unchanged_discovery_graph_verifier(fallback: bool) -> None:
+@pytest.mark.parametrize("successor", ["none", "fallback", "canceled"])
+def test_pre_request_csp_actual_callback_roundtrips_unchanged_discovery_graph_verifier(successor: str) -> None:
     import importlib.util
     from pathlib import Path
     from qcsd_lab.discover import _SanitizedEventProjection
@@ -1268,9 +1414,10 @@ def test_pre_request_csp_actual_callback_roundtrips_unchanged_discovery_graph_ve
                                on_internal_document_lifecycle=projection.record_internal_document)
     _begin_pre_request_csp_navigation(session)
     session.emit((), "Network.loadingFailed", _pre_request_csp_terminal())
-    if fallback: _complete_csp_error_page(session)
+    if successor == "fallback": _complete_csp_error_page(session)
+    elif successor == "canceled": session.emit((), "Network.loadingFailed", _csp_canceled_successor())
     router.raise_if_failed()
-    assert len(projection._events) == (2 if fallback else 1) and observed == []
+    assert len(projection._events) == (1 if successor == "none" else 2) and observed == []
     # Reuse the existing complete primary-resource graph fixture. The new
     # event is emitted by the real callback, not hand-built as a resource.
     audit, resources = evidence_fixture._root_resource_audit(*projection._events)
@@ -1307,8 +1454,8 @@ def test_pre_request_csp_denial_requires_original_root_failure_terminal(defect: 
     assert router._csp_total == 0
 
 
-@pytest.mark.parametrize("fallback", [False, True])
-def test_pre_request_csp_actual_callback_reopens_current_acquisition_preparation_only(fallback: bool) -> None:
+@pytest.mark.parametrize("successor", ["none", "fallback", "canceled"])
+def test_pre_request_csp_actual_callback_reopens_current_acquisition_preparation_only(successor: str) -> None:
     import importlib.util
     import sys
     from copy import deepcopy
@@ -1328,7 +1475,8 @@ def test_pre_request_csp_actual_callback_reopens_current_acquisition_preparation
                                on_internal_document_lifecycle=projection.record_internal_document)
     _begin_pre_request_csp_navigation(session)
     session.emit((), "Network.loadingFailed", _pre_request_csp_terminal())
-    if fallback: _complete_csp_error_page(session)
+    if successor == "fallback": _complete_csp_error_page(session)
+    elif successor == "canceled": session.emit((), "Network.loadingFailed", _csp_canceled_successor())
     router.raise_if_failed()
     manifest = fixture._prepared_manifest("https://example.com/", ["https://cdn.test", "https://example.com"])
     resources_before = deepcopy(manifest["resources"])
@@ -3751,7 +3899,7 @@ def test_root_frame_unconsumed_swap_tombstone_ends_at_context_disposal(
     assert router._page_frame_pending_swap_removals == set()
 
 
-@pytest.mark.parametrize("phase", ["running", "normal-shutdown"])
+@pytest.mark.parametrize("phase", ["running", "normal-shutdown", "aborting"])
 def test_root_frame_swap_remove_authority_is_one_shot(phase: str) -> None:
     session = _FakeNonFlatSession()
     router, _observed = _router(session, track_root_srcdoc_lifecycle=True)
@@ -3770,6 +3918,10 @@ def test_root_frame_swap_remove_authority_is_one_shot(phase: str) -> None:
     assert router._page_frame_pending_swap_removals == {frame_id}
     if phase == "normal-shutdown":
         _begin_shutdown(router)
+    elif phase == "aborting":
+        _browser_session, guard = _guard_for(router)
+        router.begin_abort()
+        guard.begin_abort()
     session.emit(
         (),
         "Page.frameDetached",
@@ -3823,7 +3975,7 @@ def test_root_frame_detach_tombstone_rejects_other_repeated_transitions(
         router.raise_if_failed()
 
 
-def test_root_frame_swap_remove_is_rejected_during_abort() -> None:
+def test_root_frame_swap_remove_during_abort_consumes_only_prior_authority() -> None:
     session = _FakeNonFlatSession()
     router, _observed = _router(session, track_root_srcdoc_lifecycle=True)
     frame_id = "cross-origin-frame"
@@ -3847,8 +3999,13 @@ def test_root_frame_swap_remove_is_rejected_during_abort() -> None:
         {"frameId": frame_id, "reason": "remove"},
     )
 
-    with pytest.raises(CdpTargetIntegrityError, match="detachment identity is invalid"):
-        router.raise_if_failed()
+    router.raise_if_failed()
+    assert not router._page_frame_pending_swap_removals
+    assert frame_id not in router._page_frame_parents
+    guard.finish_abort()
+    router.finish_abort()
+    with pytest.raises(CdpTargetIntegrityError):
+        router.finish()
 
 
 def test_root_frame_swap_during_shutdown_creates_no_later_remove_authority() -> None:
@@ -3932,7 +4089,8 @@ def test_root_frame_detach_tombstone_never_authorises_unknown_or_root_identity(
         router.raise_if_failed()
 
 
-def test_root_frame_reattach_clears_prior_swap_remove_authority() -> None:
+@pytest.mark.parametrize("phase", ["normal-shutdown", "aborting"])
+def test_root_frame_reattach_clears_prior_swap_remove_authority(phase: str) -> None:
     session = _FakeNonFlatSession()
     router, _observed = _router(session, track_root_srcdoc_lifecycle=True)
     frame_id = "cross-origin-frame"
@@ -3946,7 +4104,12 @@ def test_root_frame_reattach_clears_prior_swap_remove_authority() -> None:
     session.emit((), "Page.frameAttached", attachment)
     router.raise_if_failed()
 
-    _begin_shutdown(router)
+    if phase == "normal-shutdown":
+        _begin_shutdown(router)
+    else:
+        _browser_session, guard = _guard_for(router)
+        router.begin_abort()
+        guard.begin_abort()
     session.emit(
         (),
         "Page.frameDetached",
@@ -8931,19 +9094,22 @@ class _HoldIframeCleanupSession(_FakeNonFlatSession):
                 self.hold_methods.discard(method)
 
 
-def _iframe_with_pending_cleanup() -> tuple[
+def _iframe_with_pending_cleanup(
+    *,
+    target_id: str = "4DE9CC114D17CE99561215FB54AA61D9",
+    session_id: str = "149A512C7078B2445C101A6A405855E9",
+) -> tuple[
     _HoldIframeCleanupSession, RecursiveCdpTargetRouter, tuple[str, ...]
 ]:
     # Actual Alibaba journal 3393/3427--3430: cleanup issued, outer send ACK,
     # Page remove, Target detach; the inner cleanup ACK never arrived.
     session = _HoldIframeCleanupSession()
     router, _observed = _router(session, track_root_srcdoc_lifecycle=True)
-    target_id = "4DE9CC114D17CE99561215FB54AA61D9"
     session.emit((), "Page.frameAttached", {
         "frameId": target_id, "parentFrameId": session.root_frame_id,
     })
     route = session.attach(
-        (), session_id="149A512C7078B2445C101A6A405855E9", target_id=target_id,
+        (), session_id=session_id, target_id=target_id,
         target_type="iframe", parent_frame_id=session.root_frame_id,
     )
     _complete_request(session, route, "completed-child-request", "https://frame.test/data")
@@ -8959,19 +9125,32 @@ def _iframe_with_pending_cleanup() -> tuple[
     return session, router, route
 
 
-def _remove_iframe_frame(session: _FakeNonFlatSession, route: tuple[str, ...]) -> None:
+def _remove_iframe_frame(
+    session: _FakeNonFlatSession,
+    route: tuple[str, ...],
+    *,
+    after_swap: bool = False,
+) -> None:
+    if after_swap:
+        session.emit((), "Page.frameDetached", {
+            "frameId": session.route_info[route]["targetId"], "reason": "swap",
+        })
     session.emit((), "Page.frameDetached", {
         "frameId": session.route_info[route]["targetId"], "reason": "remove",
     })
 
 
 @pytest.mark.parametrize("late_ack", ["none", "detached", "destroyed"])
-def test_removed_iframe_retires_only_completed_prearm_cleanup(late_ack: str) -> None:
+@pytest.mark.parametrize("after_swap", [False, True])
+def test_removed_iframe_retires_only_completed_prearm_cleanup(
+    late_ack: str,
+    after_swap: bool,
+) -> None:
     session, router, route = _iframe_with_pending_cleanup()
     state = router._states[route]
     before = router.egress_prearm_summary
     command_id = session.held[0][1]
-    _remove_iframe_frame(session, route)
+    _remove_iframe_frame(session, route, after_swap=after_swap)
     session.detach((), session_id=route[-1])
     router.raise_if_failed()
     retired = state.iframe_retired_cleanup
@@ -8998,12 +9177,136 @@ def test_removed_iframe_retires_only_completed_prearm_cleanup(late_ack: str) -> 
     _finish(router)
 
 
+def test_swapped_iframe_cleanup_replays_installed_alibaba_event_order() -> None:
+    # Installed Alibaba journal SHA 7cef06a9...: swap3335, remove3386,
+    # Target detach3387 with only cleanup id34 pending; synthetic ACK3368
+    # had already completed.  Let the fake peer allocate its own command ID
+    # and prove that exact ID survives retirement and one late empty ACK.
+    session, router, route = _iframe_with_pending_cleanup(
+        target_id="C4C3C27B93C53803CEE60FE3CF8B88E3",
+        session_id="6D5004D2F8BAB5223E265BE65FEF9273",
+    )
+    state = router._states[route]
+    command_id = session.held[0][1]
+    before = router.egress_prearm_summary
+    session.emit((), "Page.frameDetached", {
+        "frameId": state.source.target_id, "reason": "swap",
+    })
+    router.raise_if_failed()
+    assert not state.iframe_page_remove_seen
+    assert state.source.target_id not in router._page_frame_parents
+    assert router._page_frame_pending_swap_removals == {state.source.target_id}
+    assert set(router._pending) == {(route, command_id)}
+    _remove_iframe_frame(session, route)
+    router.raise_if_failed()
+    assert state.iframe_page_remove_seen
+    assert not router._page_frame_pending_swap_removals
+    assert set(router._pending) == {(route, command_id)}
+    session.detach((), session_id=route[-1])
+    router.raise_if_failed()
+    retired = state.iframe_retired_cleanup
+    assert retired is not None and retired.command_id == command_id
+    assert retired.source == state.source and state.phase == "detached"
+    assert not router._pending and not router.active_request_identities
+    assert router.egress_prearm_summary == before
+    session.release_held("Debugger.removeBreakpoint")
+    router.raise_if_failed()
+    assert retired.late_acknowledged and not state.iframe_regular_removed
+    _clean_shutdown(router)
+
+
+def test_root_frame_swap_abort_remove_preserves_actual_passive_render_failure() -> None:
+    from qcsd_lab.acquisition_errors import PassiveRenderPolicyError
+    from qcsd_lab.discover import _abort_rejected_render
+
+    # Overlay006 journal ec463575...: swap3199, all cleanup ACKs received,
+    # passive-render timeout, begin_abort4640, remove4645, target detach4647.
+    session, router, route = _iframe_with_pending_cleanup(
+        target_id="A5685DF266EE451A8ACFF81579CB6F6A",
+        session_id="9ED57072D31ABC268AE998FB3D312EFA",
+    )
+    state = router._states[route]
+    session.release_held("Debugger.removeBreakpoint")
+    router.raise_if_failed()
+    assert state.phase == "ready" and state.iframe_regular_removed
+    session.emit((), "Page.frameDetached", {
+        "frameId": state.source.target_id, "reason": "swap",
+    })
+    router.raise_if_failed()
+    before = router.egress_prearm_summary
+    _browser_session, guard = _guard_for(router)
+    primary = PassiveRenderPolicyError(
+        "passive render did not quiesce within 30000 ms after load",
+    )
+
+    class RejectedContext:
+        closed = False
+
+        def close(self) -> None:
+            assert router._aborting and router._shutting_down
+            session.emit((), "Page.frameDetached", {
+                "frameId": state.source.target_id, "reason": "remove",
+            })
+            assert not router._page_frame_pending_swap_removals
+            assert not state.iframe_page_remove_seen
+            assert state.iframe_retired_cleanup is None
+            session.detach((), session_id=route[-1])
+            self.closed = True
+
+    context = RejectedContext()
+    with pytest.raises(PassiveRenderPolicyError) as caught:
+        try:
+            raise primary
+        except PassiveRenderPolicyError as error:
+            assert _abort_rejected_render(context, router, guard, error)
+            router.raise_if_failed()  # The real discovery finalizer does this.
+            raise
+    assert caught.value is primary and context.closed
+    assert not getattr(primary, "__notes__", [])
+    assert router._abort_finished and state.phase == "detached"
+    assert state.iframe_retired_cleanup is None
+    assert not state.iframe_page_remove_seen
+    assert router.egress_prearm_summary == before
+    with pytest.raises(CdpTargetIntegrityError):
+        router.finish()
+
+
+def test_root_frame_swap_abort_remove_grants_no_pending_cleanup_credit() -> None:
+    session, router, route = _iframe_with_pending_cleanup()
+    state = router._states[route]
+    key = (route, session.held[0][1])
+    session.emit((), "Page.frameDetached", {
+        "frameId": state.source.target_id, "reason": "swap",
+    })
+    before = router.egress_prearm_summary
+    _browser_session, guard = _guard_for(router)
+    router.begin_abort()
+    guard.begin_abort()
+    session.emit((), "Page.frameDetached", {
+        "frameId": state.source.target_id, "reason": "remove",
+    })
+    router.raise_if_failed()
+    assert not router._page_frame_pending_swap_removals
+    assert key in router._pending and not state.iframe_regular_removed
+    assert state.iframe_retired_cleanup is None and not state.iframe_page_remove_seen
+    assert router.egress_prearm_summary == before
+    guard.finish_abort()
+    router.finish_abort()
+    assert not router._pending and state.iframe_retired_cleanup is None
+    with pytest.raises(CdpTargetIntegrityError):
+        router.finish()
+
+
 @pytest.mark.parametrize("defect", [
     "no-page-removal", "swap", "reattached", "setup", "active", "descendant",
     "missing-shim", "missing-popup", "missing-barrier", "missing-resume",
     "other-command", "policy-command", "wrong-target",
 ])
-def test_iframe_cleanup_retirement_preserves_unresolved_work_and_identity(defect: str) -> None:
+@pytest.mark.parametrize("after_swap", [False, True])
+def test_iframe_cleanup_retirement_preserves_unresolved_work_and_identity(
+    defect: str,
+    after_swap: bool,
+) -> None:
     session, router, route = _iframe_with_pending_cleanup()
     state = router._states[route]
     key = (route, session.held[0][1])
@@ -9032,7 +9335,7 @@ def test_iframe_cleanup_retirement_preserves_unresolved_work_and_identity(defect
             "frameId": state.source.target_id, "reason": "swap",
         })
     elif defect != "no-page-removal":
-        _remove_iframe_frame(session, route)
+        _remove_iframe_frame(session, route, after_swap=after_swap)
     if defect == "reattached":
         session.emit((), "Page.frameAttached", {
             "frameId": state.source.target_id, "parentFrameId": session.root_frame_id,
@@ -9053,9 +9356,13 @@ def test_iframe_cleanup_retirement_preserves_unresolved_work_and_identity(defect
     "wrong-id", "boolean-id", "nonempty-result", "null-result", "error", "event",
     "extra-field", "wrong-target", "duplicate",
 ])
-def test_retired_iframe_cleanup_rejects_inexact_or_repeated_late_messages(defect: str) -> None:
+@pytest.mark.parametrize("after_swap", [False, True])
+def test_retired_iframe_cleanup_rejects_inexact_or_repeated_late_messages(
+    defect: str,
+    after_swap: bool,
+) -> None:
     session, router, route = _iframe_with_pending_cleanup()
-    _remove_iframe_frame(session, route)
+    _remove_iframe_frame(session, route, after_swap=after_swap)
     session.detach((), session_id=route[-1])
     router.raise_if_failed()
     retired = router._states[route].iframe_retired_cleanup
@@ -9084,6 +9391,222 @@ def test_retired_iframe_cleanup_rejects_inexact_or_repeated_late_messages(defect
     session.handlers["Target.receivedMessageFromTarget"](envelope)
     with pytest.raises(CdpTargetIntegrityError, match="cleanup acknowledgement|target identity"):
         router.raise_if_failed()
+
+
+_CLEANUP_NO_SESSION_MESSAGE = (
+    "CDPSession.send: Protocol error (Target.sendMessageToTarget): No session with given id"
+)
+
+
+def _iframe_cleanup_transport_race(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    after_swap: bool = True,
+    error: Exception | None = None,
+    expected_type: type[Exception] | None = _PinnedPlaywrightError,
+    defect: str | None = None,
+) -> tuple[_HoldIframeCleanupSession, RecursiveCdpTargetRouter, tuple[str, ...], dict[str, Any]]:
+    # Overlay005 journal0eb7d180...: synthetic/installation completed before
+    # cleanup send3326; swap3304/remove3359/detach3360 were dispatched before
+    # that outer send returned NoSession3366.  Delay the fake peer's binding
+    # until its real synthetic response has arrived; do not set prearm flags.
+    session = _HoldIframeCleanupSession()
+    emit_receipt = session.emit_iframe_installation_receipt
+    monkeypatch.setattr(session, "emit_iframe_installation_receipt", lambda *args, **kwargs: None)
+    router, _observed = _router(
+        session, track_root_srcdoc_lifecycle=True, root_continue_error_type=expected_type,
+    )
+    target_id = "29E2A278766D32569823C0F8898ADEB3"
+    session.emit((), "Page.frameAttached", {
+        "frameId": target_id, "parentFrameId": session.root_frame_id,
+    })
+    route = session.attach(
+        (), session_id="81D1417244CC73E26FBE85C48CAFD3C8", target_id=target_id,
+        target_type="iframe", parent_frame_id=session.root_frame_id,
+    )
+    router.raise_if_failed()
+    state = router._states[route]
+    assert state.iframe_synthetic_completed and state.iframe_debugger_resume_acknowledged
+    assert not state.iframe_installation_received and not state.iframe_regular_remove_issued
+    original_send = session.send
+    evidence: dict[str, Any] = {}
+
+    def detached_then_no_session(method: str, params=None):
+        nested = json.loads(params["message"]) if method == "Target.sendMessageToTarget" else {}
+        is_cleanup = nested.get("method") == "Debugger.removeBreakpoint" and str(
+            nested.get("params", {}).get("breakpointId", "")
+        ).startswith("conditional-")
+        if not is_cleanup:
+            return original_send(method, params)
+        if evidence:
+            # A repeated outer send must not consume the one-use absence.
+            raise _PinnedPlaywrightError(_CLEANUP_NO_SESSION_MESSAGE)
+        original_send(method, params)
+        evidence["payload"] = nested
+        evidence["egress_before"] = router.egress_prearm_summary
+        assert state.iframe_installation_received and state.iframe_synthetic_completed
+        assert set(router._pending) == {(route, nested["id"])}
+        if defect != "unretired":
+            _remove_iframe_frame(session, route, after_swap=after_swap)
+            session.detach((), session_id=route[-1])
+            router.raise_if_failed()
+            retired = state.iframe_retired_cleanup
+            assert retired is not None
+            if defect == "wrong-id": retired.command_id += 1
+            elif defect == "wrong-method": retired.method = "Runtime.evaluate"
+            elif defect == "wrong-source": retired.source = replace(state.source, target_id="other-target")
+            elif defect == "wrong-label": retired.label = "iframe:Runtime.evaluate"
+            elif defect == "wrong-breakpoint": state.iframe_regular_breakpoint_id = "another-breakpoint"
+            elif defect == "generation": router._target_generations[target_id] += 1
+            elif defect == "target-reused": router._target_routes[target_id] = ("new-session",)
+            elif defect == "session-reused": router._session_routes[route[-1]] = ("new-session",)
+            elif defect == "setup": state.setup_pending.add("Network.enable")
+            elif defect == "active": state.active_request_ids.add("still-live")
+            elif defect == "descendant":
+                child_route = (*route, "live-child")
+                child_source = replace(state.source, session_path=child_route, target_id="live-child", target_type="worker", parent_session_path=route)
+                router._states[child_route] = cdp_targets_module._TargetState(child_source, "worker", "ready")
+            elif defect == "policy":
+                router._pending[(route, nested["id"] + 1)] = cdp_targets_module._PendingCommand(
+                    "catalogue-navigation-policy:Fetch.continueRequest", None, True,
+                )
+            elif defect == "acknowledged": retired.late_acknowledged = True
+            elif defect == "shutdown": router._shutting_down = True
+            elif defect == "abort": router._aborting = True
+        raise error if error is not None else _PinnedPlaywrightError(_CLEANUP_NO_SESSION_MESSAGE)
+
+    monkeypatch.setattr(session, "send", detached_then_no_session)
+    emit_receipt(route)
+    return session, router, route, evidence
+
+
+@pytest.mark.parametrize("after_swap", [False, True])
+def test_retired_iframe_cleanup_records_outer_transport_absence_without_inner_ack(
+    monkeypatch: pytest.MonkeyPatch, after_swap: bool,
+) -> None:
+    session, router, route, evidence = _iframe_cleanup_transport_race(monkeypatch, after_swap=after_swap)
+    router.raise_if_failed()
+    state = router._states[route]
+    retired = state.iframe_retired_cleanup
+    assert retired is not None and retired.source == state.source
+    assert retired.command_id == evidence["payload"]["id"]
+    assert retired.transport_absence_observed
+    assert retired.transport_absence_fingerprint == cdp_targets_module._exception_fingerprint(
+        _PinnedPlaywrightError(_CLEANUP_NO_SESSION_MESSAGE),
+    )
+    assert state.phase == "detached" and not state.iframe_regular_removed
+    assert not retired.late_acknowledged  # No fabricated cleanup result.
+    assert not router._pending and not router.active_request_identities
+    assert len(session.held) == 1  # The inner response was never delivered.
+    assert router.egress_prearm_summary == evidence["egress_before"]
+    _clean_shutdown(router)
+
+
+def test_retired_iframe_cleanup_accepts_the_actual_playwright_error_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error_type = pytest.importorskip("playwright.sync_api").Error
+    parse_error = pytest.importorskip("playwright._impl._helper").parse_error
+    error = parse_error({"name": "Error", "message": _CLEANUP_NO_SESSION_MESSAGE, "stack": ""})
+    assert type(error) is error_type
+    # Exact observed005 fingerprint binds the server's name as well as text.
+    assert cdp_targets_module._exception_fingerprint(error) == (
+        "exception_sha256=1ce80e0692428ff82c8c2a78a0dc59018e827f0d2e17870e7efd4216eabe7251"
+    )
+    _session, router, route, _evidence = _iframe_cleanup_transport_race(
+        monkeypatch, error=error, expected_type=error_type,
+    )
+    router.raise_if_failed()
+    retired = router._states[route].iframe_retired_cleanup
+    assert retired is not None and retired.transport_absence_observed and not retired.late_acknowledged
+    _clean_shutdown(router)
+
+
+@pytest.mark.parametrize("defect", [
+    "unretired", "wrong-id", "wrong-method", "wrong-source", "wrong-label", "wrong-breakpoint",
+    "generation", "target-reused", "session-reused", "setup", "active", "descendant", "policy",
+    "acknowledged", "shutdown", "abort",
+])
+def test_retired_iframe_cleanup_transport_absence_preserves_identity_and_work_guards(
+    monkeypatch: pytest.MonkeyPatch, defect: str,
+) -> None:
+    _session, router, route, evidence = _iframe_cleanup_transport_race(monkeypatch, defect=defect)
+    with pytest.raises(CdpTargetIntegrityError, match="root CDP command Target.sendMessageToTarget failed"):
+        router.raise_if_failed()
+    retired = router._states[route].iframe_retired_cleanup
+    if retired is None:
+        assert (route, evidence["payload"]["id"]) in router._pending
+    else:
+        assert not retired.transport_absence_observed and retired.transport_absence_fingerprint is None
+
+
+@pytest.mark.parametrize("defect", ["untyped", "subclass", "message", "attribute", "name", "args", "unpinned"])
+def test_retired_iframe_cleanup_transport_absence_rejects_other_transport_errors(
+    monkeypatch: pytest.MonkeyPatch, defect: str,
+) -> None:
+    error: Exception = _PinnedPlaywrightError(_CLEANUP_NO_SESSION_MESSAGE)
+    if defect == "untyped": error = RuntimeError(_CLEANUP_NO_SESSION_MESSAGE)
+    elif defect == "subclass": error = _PinnedPlaywrightErrorSubclass(_CLEANUP_NO_SESSION_MESSAGE)
+    elif defect == "message": error = _PinnedPlaywrightError(_CLEANUP_NO_SESSION_MESSAGE + ".")
+    elif defect == "attribute": error.message = "different protocol error"
+    elif defect == "name": error.name = "TimeoutError"
+    elif defect == "args": error.args = (_CLEANUP_NO_SESSION_MESSAGE, "extra")
+    _session, router, route, _evidence = _iframe_cleanup_transport_race(
+        monkeypatch, error=error, expected_type=None if defect == "unpinned" else _PinnedPlaywrightError,
+    )
+    with pytest.raises(CdpTargetIntegrityError, match="root CDP command Target.sendMessageToTarget failed"):
+        router.raise_if_failed()
+    retired = router._states[route].iframe_retired_cleanup
+    assert retired is not None and not retired.transport_absence_observed and not retired.late_acknowledged
+
+
+def test_retired_iframe_cleanup_transport_absence_is_consumed_only_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _session, router, route, evidence = _iframe_cleanup_transport_race(monkeypatch)
+    router.raise_if_failed()
+    retired = router._states[route].iframe_retired_cleanup
+    assert retired is not None
+    fingerprint = retired.transport_absence_fingerprint
+    with pytest.raises(CdpTargetIntegrityError, match="root CDP command Target.sendMessageToTarget failed"):
+        router._send_raw(route, evidence["payload"], label=retired.label)
+    assert retired.transport_absence_observed and retired.transport_absence_fingerprint == fingerprint
+    assert not retired.late_acknowledged
+    _clean_shutdown(router)
+
+
+@pytest.mark.parametrize("defect", ["id", "boolean-id", "method", "params", "extra", "label"])
+def test_retired_iframe_cleanup_transport_absence_rejects_other_outbound_commands(
+    monkeypatch: pytest.MonkeyPatch, defect: str,
+) -> None:
+    session, router, route = _iframe_with_pending_cleanup()
+    state = router._states[route]
+    command_id = session.held[0][1]
+    _remove_iframe_frame(session, route, after_swap=True)
+    session.detach((), session_id=route[-1])
+    router.raise_if_failed()
+    retired = state.iframe_retired_cleanup
+    assert retired is not None
+    payload = {"id": command_id, "method": retired.method,
+               "params": {"breakpointId": state.iframe_regular_breakpoint_id}}
+    label = retired.label
+    if defect == "id": payload["id"] += 1
+    elif defect == "boolean-id": payload["id"] = True
+    elif defect == "method": payload["method"] = "Runtime.evaluate"
+    elif defect == "params": payload["params"] = {"breakpointId": "other"}
+    elif defect == "extra": payload["extra"] = True
+    else: label = "catalogue-navigation-policy:Fetch.continueRequest"
+
+    def no_session(method: str, params=None):
+        assert method == "Target.sendMessageToTarget"
+        raise _PinnedPlaywrightError(_CLEANUP_NO_SESSION_MESSAGE)
+
+    monkeypatch.setattr(session, "send", no_session)
+    with pytest.raises(CdpTargetIntegrityError, match="root CDP command Target.sendMessageToTarget failed"):
+        router._send_raw(route, payload, label=label)
+    assert not retired.transport_absence_observed and not retired.late_acknowledged
+    assert retired.transport_absence_fingerprint is None
+    _clean_shutdown(router)
 
 
 def test_detach_with_active_request_or_live_descendant_fails_closed() -> None:

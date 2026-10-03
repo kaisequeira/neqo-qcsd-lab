@@ -9,6 +9,74 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ## Application response policy repair
 
+### V13 runtime 010 and canceled CSP proof
+
+At **4 October, 10:01 Sydney**, admission context 018 is cleanly stopped
+at its requested action boundary. Checkpoint 000044 has SHA
+`8a85ff6b04701d65199f458409d98e21ee1807b5dbbdc663b51cc7de2b5bf2f1`
+and records **17 terminal decisions, one newly admitted site and zero
+formal traces**. The original context 017 and all 113 retained root
+screens remain separate and unchanged. The target stays **50 × five ×
+64 = 16,000 accepted formal traces**.
+
+Local `terminal-primary-v13-runtime-20261004-010` installs clean Lab
+`a17846306b510520827b852ebc421e01434eaf80` / Native
+`8417787ce0da2d83a67b0b77dd6ef6a316611741`. Canonical runtime SHA:
+`8bd3e3ad0265552048aea4a5d06bc36a0a2bb3c8ad1404456906dbaf07ad67b5`.
+All twelve actual operations, 2,390 installed source files and the
+1,783-file Native inventory reopen. Cached Native build: 137.512 seconds;
+collection/prepare image builds: 60.126/63.767 seconds. Installed client
+SHA is `867d8bc0b473b4dad308e928a8e1711c1fcb24c0d36d11d0a63c2ecac2a60a33`.
+Collection image: `sha256:17369c025c576248c9cf3c98db4426625f626262eacb8d2caf176873d8ed0c32`;
+prepare image: `sha256:ba13c13a67ae14e319e096df6c0f87f580f46eb7bb2982b24ba537d271e3249a`.
+
+Diagnostic `rapid-v12-capture-canary-20261003-001/actual-poki-010`
+passed preflight, then failed before Native traffic. The host scheduler
+refused an admission container without the `org.qcsd.owner` label; that
+bootstrap also had no CPU partition declaration. No dated capture result
+or deep verification was produced. The outer failure closed 1 in
+79.125 seconds; the original logs remain unchanged under
+`buflo-incoming-window-canary-staging-20261004-001`. This is a host
+scheduling conflict, not a new Native traffic result. The admission
+coordinator then closed 0 with reason `boundary-stop-file`.
+
+Fresh diagnostic attempt `actual-poki-011` uses the same immutable
+runtime and full 260-resource/four-origin workload. Plan SHA:
+`0869bb2c9f7590f5a15cbd662f18c3ac88c49abb2dcbf013de26c516dd30823a`;
+commands SHA: `b169c6dc2c181cba90e51b66b3736cec1841e8eb73ba34a296f79c5a3df4a5ab`.
+New staging is `buflo-incoming-window-canary-staging-20261004-002`.
+Preflight closed 0 in 8.376 seconds; baseline recording is running at
+this snapshot. Successful admission/capture concurrency and recovery
+remain unproven; adding a label alone would not satisfy the scheduler's
+expected container inventory and protected CPU checks.
+
+The held browser collector has SHA
+`78a552a29d8da28e7ed44c3de0472e241417349de318569e6d304f564d8af812`.
+Local `cdp-csp-canceled-successor-checks-20261004-001/closure.json`, SHA
+`b983018c5c269ed93e59759cb8cc814a7f96b5b676b6fa891c7eac30c2cac51f`,
+closes **441 passing host cases** with nine source/dependency bindings
+and 53 unchanged historical references. Current discovery and schema-14
+preparation consumers pass; historical schemas 7–13 still reject the new
+diagnostic disposition.
+
+Actual uninstalled `cdp-lifecycle-overlay-diagnostic-20261004-008/actual-toom-001`
+closed 0: 26.970 seconds for discovery, 35.017 seconds for the outer
+operation. It retains 86 resources, six exclusions, 92 terminal Network
+requests and 89 Fetch observations; the 276-event audit closes with no
+active requests. Journal SHA:
+`c6eb6ff2361f1fabbda1f7d52762c4799e7666270bc6652555b3e25da384865f`;
+discovery SHA:
+`596994dd7473f37e8bac28f54ffa0acf5dc36c1d4390cab1f71d944c5114211a`.
+The actual canceled-CSP successor was exercised exactly once, 36.639 ms
+after its authenticated denial. Both records retain the same five
+identity hashes; neither supplies a Network/Fetch request or remote body
+credit. The new transport-absence and abort cleanup paths were not
+exercised in this successful probe. Independent reopening verifies
+commands, source inputs, raw logs, complete runtime bindings, restored
+observers, strict render and discovery consumers. The overlay remains
+uninstalled and grants **zero site and formal credit**. Its matching
+browser installation and further site preparation remain needed.
+
 ### V13 retained-root admission and incoming-window repair
 
 At **4 October, 09:37 Sydney**, new local context

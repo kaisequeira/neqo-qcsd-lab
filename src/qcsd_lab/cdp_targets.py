@@ -110,6 +110,9 @@ _ROOT_CONTINUE_INVALID_INTERCEPTION_MESSAGE = (
 _ROOT_FAIL_INVALID_INTERCEPTION_MESSAGE = (
     "CDPSession.send: Protocol error (Fetch.failRequest): Invalid InterceptionId."
 )
+_ROOT_SEND_NO_SESSION_MESSAGE = (
+    "CDPSession.send: Protocol error (Target.sendMessageToTarget): No session with given id"
+)
 _ROOT_CONTINUE_INVALID_INTERCEPTION_POLICY_LABEL = (
     "catalogue-navigation-policy:Fetch.continueRequest"
 )
@@ -448,6 +451,23 @@ def _is_exact_root_fail_invalid_interception(
         and getattr(error, "message", None) == _ROOT_FAIL_INVALID_INTERCEPTION_MESSAGE
         and str(error) == _ROOT_FAIL_INVALID_INTERCEPTION_MESSAGE
         and error.args == (_ROOT_FAIL_INVALID_INTERCEPTION_MESSAGE,)
+    )
+
+
+def _is_exact_root_send_no_session(
+    error: BaseException | None,
+    *,
+    expected_type: type[Exception] | None,
+) -> bool:
+    """Match only the pinned Playwright error for an absent child session."""
+
+    return (
+        expected_type is not None
+        and type(error) is expected_type
+        and getattr(error, "name", None) == "Error"
+        and getattr(error, "message", None) == _ROOT_SEND_NO_SESSION_MESSAGE
+        and str(error) == _ROOT_SEND_NO_SESSION_MESSAGE
+        and error.args == (_ROOT_SEND_NO_SESSION_MESSAGE,)
     )
 
 
@@ -1265,11 +1285,18 @@ def _validate_pre_request_csp_summary(
     previous_terminal = 0
     denials: dict[str, Mapping[str, Any]] = {}
     finished_loaders: set[str] = set()
+    canceled_loaders: set[str] = set()
     for item in csp:
         if item.get("disposition") == "browser-internal-error-document-finished":
-            _validate_csp_internal_finish_diagnostic(item, denials, finished_loaders, ordinals_seen, previous_terminal)
+            _validate_csp_internal_finish_diagnostic(item, denials, finished_loaders | canceled_loaders, ordinals_seen, previous_terminal)
             finished_loaders.add(item["loader_id_sha256"])
             ordinals_seen.update((item["frame_navigated_event_ordinal"], item["terminal_event_ordinal"]))
+            previous_terminal = item["terminal_event_ordinal"]
+            continue
+        if item.get("disposition") == "browser-canceled-denied-navigation":
+            _validate_csp_canceled_diagnostic(item, denials, finished_loaders | canceled_loaders, ordinals_seen, previous_terminal)
+            canceled_loaders.add(item["loader_id_sha256"])
+            ordinals_seen.add(item["terminal_event_ordinal"])
             previous_terminal = item["terminal_event_ordinal"]
             continue
         if set(item) != fields:
@@ -1309,7 +1336,7 @@ def _validate_pre_request_csp_summary(
         loaders.add(hashes[1])
         denials[hashes[1]] = item
     # Reopen the original schema unchanged, subtracting only the explicitly
-    # validated CSP denials from its aggregate. Mixed records retain emit order.
+    # validated CSP diagnostics. Mixed records retain emit order.
     legacy = deepcopy(dict(value))
     for name in ("total", "resolved"):
         if type(legacy.get(name)) is not int or not len(csp) <= legacy[name] <= _SRCDOC_PSEUDO_DOCUMENT_LIMIT:
@@ -1319,10 +1346,11 @@ def _validate_pre_request_csp_summary(
     legacy["policy"] = SRCDOC_PSEUDO_DOCUMENT_POLICY
     legacy["diagnostics"] = [item for item in value["diagnostics"] if item not in csp]
     outcomes = legacy.get("terminal_outcome_counts")
-    if not isinstance(outcomes, Mapping) or type(outcomes.get("Network.loadingFailed")) is not int or outcomes["Network.loadingFailed"] < len(denials):
+    failed_count = len(denials) + len(canceled_loaders)
+    if not isinstance(outcomes, Mapping) or type(outcomes.get("Network.loadingFailed")) is not int or outcomes["Network.loadingFailed"] < failed_count:
         raise ValueError("pre-request CSP terminal count is invalid")
     legacy["terminal_outcome_counts"] = dict(outcomes)
-    legacy["terminal_outcome_counts"]["Network.loadingFailed"] -= len(denials)
+    legacy["terminal_outcome_counts"]["Network.loadingFailed"] -= failed_count
     if type(outcomes.get("Network.loadingFinished")) is not int or outcomes["Network.loadingFinished"] < len(finished_loaders):
         raise ValueError("pre-request CSP internal-finish count is invalid")
     legacy["terminal_outcome_counts"]["Network.loadingFinished"] -= len(finished_loaders)
@@ -1382,6 +1410,47 @@ def _validate_csp_internal_finish_diagnostic(
         raise ValueError("CSP internal-finish diagnostic evidence is inconsistent")
 
 
+def _validate_csp_canceled_diagnostic(
+    item: Mapping[str, Any], denials: Mapping[str, Mapping[str, Any]],
+    successor_loaders: set[str], ordinals_seen: set[int], previous_terminal: int,
+) -> None:
+    fields = {
+        "schema_version", "policy", "source_role", "disposition", "frame_id_sha256",
+        "parent_frame_id_sha256", "loader_id_sha256", "request_id_sha256", "url_sha256",
+        "denied_terminal_event_ordinal", "terminal_event_ordinal", "terminal_method",
+        "terminal_fields", "terminal_timestamp", "resource_type", "error_text", "canceled",
+        "network_request_seen", "fetch_pause_seen", "remote_response_body_credit",
+    }
+    if set(item) != fields:
+        raise ValueError("CSP canceled diagnostic fields are invalid")
+    exact = {
+        "schema_version": 1, "policy": _PRE_REQUEST_CSP_POLICY, "source_role": "root-page",
+        "disposition": "browser-canceled-denied-navigation", "terminal_method": "Network.loadingFailed",
+        "terminal_fields": sorted(_SRCDOC_ABORT_TERMINAL_FIELDS), "resource_type": "Document",
+        "error_text": "net::ERR_ABORTED", "canceled": True,
+        "network_request_seen": False, "fetch_pause_seen": False, "remote_response_body_credit": False,
+    }
+    if any(type(item[key]) is not type(expected) or item[key] != expected for key, expected in exact.items()):
+        raise ValueError("CSP canceled diagnostic identity is invalid")
+    loader = item["loader_id_sha256"]
+    denied = denials.get(loader) if type(loader) is str else None
+    if denied is None or loader in successor_loaders:
+        raise ValueError("CSP canceled diagnostic lacks a unique preceding denial")
+    for key in ("frame_id_sha256", "parent_frame_id_sha256", "loader_id_sha256", "request_id_sha256", "url_sha256"):
+        if item[key] != denied[key]:
+            raise ValueError("CSP canceled diagnostic differs from its denied navigation")
+    denied_ordinal, terminal_ordinal = item["denied_terminal_event_ordinal"], item["terminal_event_ordinal"]
+    if (
+        any(type(n) is not int or not 1 <= n <= _SRCDOC_EVENT_ORDINAL_LIMIT for n in (denied_ordinal, terminal_ordinal))
+        or denied_ordinal != denied["terminal_event_ordinal"]
+        or terminal_ordinal <= denied_ordinal or terminal_ordinal <= previous_terminal
+        or terminal_ordinal in ordinals_seen
+        or not _is_finite_protocol_number(item["terminal_timestamp"])
+        or item["terminal_timestamp"] <= denied["terminal_timestamp"]
+    ):
+        raise ValueError("CSP canceled diagnostic evidence is inconsistent")
+
+
 class _CdpSession(Protocol):
     def on(self, event: str, handler: Callable[[dict[str, Any]], None]) -> None: ...
 
@@ -1421,6 +1490,8 @@ class _RetiredIframeCleanup:
     label: str
     frame_detach_reason: str = "remove"
     late_acknowledged: bool = False
+    transport_absence_observed: bool = False
+    transport_absence_fingerprint: str | None = None
 
 
 @dataclass
@@ -1585,6 +1656,9 @@ class _PreRequestCspNavigation:
     failed_timestamp: int | float | None = None
     error_navigated_event_ordinal: int | None = None
     internal_finish_seen: bool = False
+    canceled_successor_seen: bool = False
+    denied_source: CdpTargetSource | None = None
+    denied_target_generation: int | None = None
 
 
 @dataclass
@@ -2528,6 +2602,7 @@ class RecursiveCdpTargetRouter:
         self._csp_event_ordinal = 0
         self._csp_total = 0
         self._csp_internal_finish_total = 0
+        self._csp_canceled_total = 0
         self._document_fetch_by_policy_identity: dict[
             tuple[CdpTargetSource, str], _DocumentFetchDecision
         ] = {}
@@ -2653,7 +2728,7 @@ class RecursiveCdpTargetRouter:
             ),
             "policy": _PRE_REQUEST_CSP_POLICY if self._csp_total else SRCDOC_PSEUDO_DOCUMENT_POLICY,
             "enabled": self._track_root_srcdoc_lifecycle,
-            "total": self._srcdoc_total + self._csp_total + self._csp_internal_finish_total,
+            "total": self._srcdoc_total + self._csp_total + self._csp_internal_finish_total + self._csp_canceled_total,
             "resolved": len(self._srcdoc_diagnostics),
             "pending": pending,
             "aborted": self._srcdoc_aborted,
@@ -2663,7 +2738,7 @@ class RecursiveCdpTargetRouter:
             "candidate_limit_saturated": self._srcdoc_candidate_limit_saturated,
             "terminal_outcome_counts": {
                 method: count + (
-                    self._csp_total if method == "Network.loadingFailed"
+                    self._csp_total + self._csp_canceled_total if method == "Network.loadingFailed"
                     else self._csp_internal_finish_total
                 )
                 for method, count in self._srcdoc_terminal_outcomes.items()
@@ -5279,7 +5354,6 @@ class RecursiveCdpTargetRouter:
             if frame_id not in self._page_frame_parents:
                 if (
                     reason == "remove"
-                    and not self._aborting
                     and frame_id in self._page_frame_pending_swap_removals
                     and frame_id in self._seen_page_frame_ids
                     and frame_id in self._srcdoc_ineligible_frame_ids
@@ -5288,10 +5362,24 @@ class RecursiveCdpTargetRouter:
                     # Chromium 143 can first retire a cross-origin iframe with
                     # reason=swap, then emit its final reason=remove either
                     # during ordinary browsing or while the browser context is
-                    # closing.  Accept that exact causal successor once; no
+                    # closing, including disposal of an already rejected
+                    # render. Accept that exact causal successor once; no
                     # unknown or reused frame gains generic absent-identity
                     # detach authority.
                     self._page_frame_pending_swap_removals.remove(frame_id)
+                    if not self._shutting_down and not self._aborting:
+                        for state in self._states.values():
+                            if (
+                                state.target_type == "iframe"
+                                and state.phase == "resuming"
+                                and state.source.target_id == frame_id
+                                and self._target_routes.get(frame_id)
+                                == state.source.session_path
+                            ):
+                                # The final remove carries the same cleanup
+                                # proof as a directly observed Page removal.
+                                # Prearm and pending-work checks remain below.
+                                state.iframe_page_remove_seen = True
                     return
                 raise CdpTargetIntegrityError("root Page frame detachment identity is invalid")
             if frame_id in self._page_frame_pending_swap_removals:
@@ -5624,7 +5712,7 @@ class RecursiveCdpTargetRouter:
             or candidate.frame_id in self._csp_ineligible_frame_ids
         ):
             raise CdpTargetIntegrityError("pre-request CSP terminal is not provably before Network")
-        if self._srcdoc_total + self._csp_total + self._csp_internal_finish_total >= _SRCDOC_PSEUDO_DOCUMENT_LIMIT:
+        if self._srcdoc_total + self._csp_total + self._csp_internal_finish_total + self._csp_canceled_total >= _SRCDOC_PSEUDO_DOCUMENT_LIMIT:
             raise CdpTargetIntegrityError("pre-request CSP receipt bound was exceeded")
         diagnostic = {
             "schema_version": 1, "policy": _PRE_REQUEST_CSP_POLICY,
@@ -5654,6 +5742,8 @@ class RecursiveCdpTargetRouter:
         self._csp_denied_navigations[request_id] = candidate
         candidate.terminal_event_ordinal = diagnostic["terminal_event_ordinal"]
         candidate.failed_timestamp = event["timestamp"]
+        candidate.denied_source = source
+        candidate.denied_target_generation = self._target_generations.get(candidate.frame_id)
         self._csp_total += 1
         self._srcdoc_diagnostics.append(diagnostic)
         if self._on_internal_document_lifecycle is not None:
@@ -5702,6 +5792,7 @@ class RecursiveCdpTargetRouter:
             or frame.get("mimeType") != "text/html"
             or candidate.error_navigated_event_ordinal is not None
             or candidate.internal_finish_seen
+            or candidate.canceled_successor_seen
             or not self._csp_denied_frame_is_current(candidate)
         ):
             raise CdpTargetIntegrityError("CSP error-page navigation lacks its exact denied-frame witness")
@@ -5721,11 +5812,12 @@ class RecursiveCdpTargetRouter:
         if (
             source != self.root_source or set(event) != _ERROR_DOCUMENT_FINISH_FIELDS
             or candidate.error_navigated_event_ordinal is None
-            or candidate.internal_finish_seen or not self._csp_denied_frame_is_current(candidate)
+            or candidate.internal_finish_seen or candidate.canceled_successor_seen
+            or not self._csp_denied_frame_is_current(candidate)
             or not _is_finite_protocol_number(timestamp)
             or candidate.failed_timestamp is None or timestamp <= candidate.failed_timestamp
             or not _is_finite_protocol_number(encoded_length) or encoded_length <= 0
-            or self._srcdoc_total + self._csp_total + self._csp_internal_finish_total >= _SRCDOC_PSEUDO_DOCUMENT_LIMIT
+            or self._srcdoc_total + self._csp_total + self._csp_internal_finish_total + self._csp_canceled_total >= _SRCDOC_PSEUDO_DOCUMENT_LIMIT
         ):
             raise CdpTargetIntegrityError("CSP internal finish lacks its exact Chrome-error navigation witness")
         diagnostic = {
@@ -5752,6 +5844,55 @@ class RecursiveCdpTargetRouter:
         }
         candidate.internal_finish_seen = True
         self._csp_internal_finish_total += 1
+        self._srcdoc_diagnostics.append(diagnostic)
+        if self._on_internal_document_lifecycle is not None:
+            self._on_internal_document_lifecycle(source, deepcopy(diagnostic))
+        return True
+
+    def _consume_csp_canceled_successor(
+        self, source: CdpTargetSource, method: str, event: Mapping[str, Any]
+    ) -> bool:
+        """Record one exact abort of an already browser-denied navigation."""
+
+        if method != "Network.loadingFailed":
+            return False
+        request_id = event.get("requestId")
+        candidate = self._csp_denied_navigations.get(request_id) if isinstance(request_id, str) else None
+        if candidate is None:
+            return False
+        timestamp = event.get("timestamp")
+        if (
+            source != self.root_source or source != candidate.denied_source
+            or self._target_generations.get(candidate.frame_id) != candidate.denied_target_generation
+            or set(event) != _SRCDOC_ABORT_TERMINAL_FIELDS
+            or event.get("type") != "Document" or event.get("canceled") is not True
+            or event.get("errorText") != "net::ERR_ABORTED"
+            or candidate.canceled_successor_seen or candidate.internal_finish_seen
+            or candidate.error_navigated_event_ordinal is not None
+            or not self._csp_denied_frame_is_current(candidate)
+            or not _is_finite_protocol_number(timestamp)
+            or candidate.failed_timestamp is None or timestamp <= candidate.failed_timestamp
+            or self._srcdoc_total + self._csp_total + self._csp_internal_finish_total + self._csp_canceled_total >= _SRCDOC_PSEUDO_DOCUMENT_LIMIT
+        ):
+            raise CdpTargetIntegrityError("CSP canceled successor lacks its exact denied-navigation witness")
+        diagnostic = {
+            "schema_version": 1, "policy": _PRE_REQUEST_CSP_POLICY,
+            "source_role": "root-page", "disposition": "browser-canceled-denied-navigation",
+            "frame_id_sha256": hashlib.sha256(candidate.frame_id.encode()).hexdigest(),
+            "parent_frame_id_sha256": hashlib.sha256(candidate.parent_frame_id.encode()).hexdigest(),
+            "loader_id_sha256": hashlib.sha256(request_id.encode()).hexdigest(),
+            "request_id_sha256": hashlib.sha256(request_id.encode()).hexdigest(),
+            "url_sha256": hashlib.sha256(candidate.url.encode()).hexdigest(),
+            "denied_terminal_event_ordinal": candidate.terminal_event_ordinal,
+            "terminal_event_ordinal": self._next_csp_event_ordinal(),
+            "terminal_method": method, "terminal_fields": sorted(event),
+            "terminal_timestamp": timestamp, "resource_type": "Document",
+            "error_text": "net::ERR_ABORTED", "canceled": True,
+            "network_request_seen": False, "fetch_pause_seen": False,
+            "remote_response_body_credit": False,
+        }
+        candidate.canceled_successor_seen = True
+        self._csp_canceled_total += 1
         self._srcdoc_diagnostics.append(diagnostic)
         if self._on_internal_document_lifecycle is not None:
             self._on_internal_document_lifecycle(source, deepcopy(diagnostic))
@@ -5971,7 +6112,7 @@ class RecursiveCdpTargetRouter:
             raise CdpTargetIntegrityError(
                 "srcdoc pseudo-Document terminal identity is not provably orphaned"
             )
-        if self._srcdoc_total + self._csp_total + self._csp_internal_finish_total >= _SRCDOC_PSEUDO_DOCUMENT_LIMIT:
+        if self._srcdoc_total + self._csp_total + self._csp_internal_finish_total + self._csp_canceled_total >= _SRCDOC_PSEUDO_DOCUMENT_LIMIT:
             self._srcdoc_candidate_limit_saturated = True
             raise CdpTargetIntegrityError(
                 "srcdoc pseudo-Document receipt bound was exceeded"
@@ -6063,6 +6204,8 @@ class RecursiveCdpTargetRouter:
                 f"request {request_id!r} ({url!r}) during {state.phase}"
             )
         if self._consume_csp_internal_finish(source, method, event):
+            return
+        if self._consume_csp_canceled_successor(source, method, event):
             return
         self._record_srcdoc_identity_history(method, event)
         if self._consume_error_document_resource_event(source, method, event):
@@ -7815,6 +7958,62 @@ class RecursiveCdpTargetRouter:
             raise CdpTargetIntegrityError("detached CDP target emitted an invalid retired cleanup acknowledgement")
         retired.late_acknowledged = True
 
+    def _record_retired_iframe_transport_absence(
+        self,
+        route: tuple[str, ...],
+        payload: Mapping[str, Any],
+        label: str,
+        error: BaseException | None,
+    ) -> bool:
+        """Retain one vanished-session result for an already retired cleanup."""
+
+        if not _is_exact_root_send_no_session(
+            error, expected_type=self._root_continue_error_type,
+        ):
+            return False
+        state = self._states.get(route)
+        retired = state.iframe_retired_cleanup if state is not None else None
+        if (
+            len(route) != 1
+            or self._shutting_down or self._aborting
+            or state is None or state.phase not in {"detached", "destroyed"}
+            or state.target_type != "iframe" or state.source.session_path != route
+            or retired is None or retired.source != state.source
+            or retired.frame_detach_reason != "remove"
+            or not state.iframe_page_remove_seen
+            or not state.iframe_regular_remove_issued or state.iframe_regular_removed
+            or retired.late_acknowledged or retired.transport_absence_observed
+            or retired.transport_absence_fingerprint is not None
+            or retired.method != "Debugger.removeBreakpoint"
+            or label != retired.label
+            or label != "iframe:Debugger.removeBreakpoint:conditional-installation"
+            or set(payload) != {"id", "method", "params"}
+            or type(payload["id"]) is not int or payload["id"] != retired.command_id
+            or payload["method"] != retired.method
+            or payload["params"] != {"breakpointId": state.iframe_regular_breakpoint_id}
+            or self._target_generations.get(state.source.target_id) != state.source.generation
+            or state.source.target_id in self._target_routes
+            or route[-1] in self._session_routes
+            or state.setup_pending or state.active_request_ids
+            or any(key[0][:len(route)] == route for key in self._pending)
+            or any(
+                child_route[:len(route)] == route and len(child_route) > len(route)
+                and child.phase not in {"destroyed", "detached"}
+                for child_route, child in self._states.items()
+            )
+            or any(
+                active.source == state.source
+                for requests in self._active_requests.values() for active in requests
+            )
+        ):
+            return False
+        assert isinstance(error, Exception)
+        retired.transport_absence_observed = True
+        retired.transport_absence_fingerprint = _exception_fingerprint(error)
+        # This records only outer transport absence. The inner ACK flag and
+        # all policy, request, prearm and resource accounting stay unchanged.
+        return True
+
     def _cancel_detached_route_commands(
         self,
         keys: list[tuple[tuple[str, ...], int]],
@@ -7951,10 +8150,16 @@ class RecursiveCdpTargetRouter:
         message = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         parent_route = route[:-1]
         if not parent_route:
-            self._root_send(
-                "Target.sendMessageToTarget",
-                {"sessionId": session_id, "message": message},
-            )
+            try:
+                self._root_send(
+                    "Target.sendMessageToTarget",
+                    {"sessionId": session_id, "message": message},
+                )
+            except CdpTargetIntegrityError as error:
+                if not self._record_retired_iframe_transport_absence(
+                    route, payload, label, error.__cause__,
+                ):
+                    raise
             return
         wrapper_id = self._allocate_command_id()
         self._pending[(parent_route, wrapper_id)] = _PendingCommand(f"transport-forward:{label}")
