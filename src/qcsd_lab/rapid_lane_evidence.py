@@ -327,6 +327,17 @@ def _payload(path: Path, kind: str) -> dict[str, Any]:
     return admission._unpack(_read(path), kind)
 
 
+def _host_intent(raw: bytes) -> dict[str, Any]:
+    """Share process evidence without changing historical launch authority."""
+    kind = _load(raw).get("receipt_type")
+    if kind == INTENT_TYPE:
+        return admission._unpack(raw, INTENT_TYPE)
+    from .rapid_runtime_epochs import INTENT_TYPE as repaired, CANARY_INTENT_TYPE
+    if kind not in {repaired, CANARY_INTENT_TYPE}:
+        raise ValueError("unknown rapid host intent")
+    return admission._unpack(raw, kind)
+
+
 def _validate_image_proof(proof: Any, spec: CaptureSpec, *, equivalent_plan: bool = False) -> tuple[plan.Site, ...]:
     _check_spec(spec)
     fields = {"schema_version", "artifact_type", "collection_image_digest", "runtime_source", "source_manifest_sha256",
@@ -518,7 +529,7 @@ def _supervise_command(value: Mapping[str, Any], lock_descriptor: int) -> int:
     if not directory.is_relative_to(root):
         raise ValueError("supervisor evidence directory escapes its root")
     intent_path = directory / "intent.json"
-    intent = _payload(intent_path, INTENT_TYPE)
+    intent = _host_intent(_read(intent_path))
     command = value["command"]
     execution_root = Path(value["execution_root"])
     if (not isinstance(command, list) or len(command) != 3 or command[:2] != [str(execution_root / "qcsd-lab"), "run"]
@@ -605,7 +616,7 @@ def _validated_host_start(raw: bytes, intent_raw: bytes, *, campaign_name: str) 
         or value["command"][:2] != [str(Path(value["execution_root"]) / "qcsd-lab"), "run"]
         or Path(value["command"][2]).stem != campaign_name):
         raise ValueError("host-start receipt does not prove the exact bound command")
-    intent = admission._unpack(intent_raw, INTENT_TYPE)
+    intent = _host_intent(intent_raw)
     if admission._utc(value["started_at"]) < admission._utc(intent["started_at"]):
         raise ValueError("actual host start predates the launch intent")
     for key, script in (("host", HOST_GATE_SCRIPT), ("supervisor", SUPERVISOR_SCRIPT)):

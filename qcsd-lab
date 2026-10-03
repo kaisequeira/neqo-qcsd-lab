@@ -7760,12 +7760,48 @@ if (( rapid_capture )); then
   # public ETF topology. The host selector above is only an early routing
   # decision; it cannot grant capture authority by trusting a filename or an
   # editable experiment name alone.
+  rapid_compatibility_args=()
+  if [[ -n "${QCSD_RAPID_COLLECTION_COMPATIBILITY:-}" ]]; then
+    rapid_compatibility_host="${QCSD_RAPID_COLLECTION_COMPATIBILITY}"
+    rapid_compatibility_rows="$(/usr/bin/python3 -I -c '
+import json
+import sys
+from pathlib import Path
+path, execution = Path(sys.argv[1]), Path(sys.argv[2])
+if (not path.is_absolute() or not path.is_relative_to(execution / "config/rapid-runtime-epochs")
+    or not path.is_file() or any(p.is_symlink() for p in (path, *path.parents))):
+    raise SystemExit("collection compatibility requires a regular capsule under this execution config")
+value = json.loads(path.read_bytes())
+if value.get("receipt_type") != "qcsd-rapid-v5-collection-runtime-launch-capsule-v1":
+    raise SystemExit("unknown collection compatibility capsule")
+payload = value["payload"]
+roots = set()
+for spec in (payload["base_spec"], payload["runtime_spec"]):
+    if spec["execution_root"] != str(execution):
+        raise SystemExit("collection capsule names another execution root")
+    roots.update(spec[key] for key in ("data_root", "runtime_source_root", "module_root", "execution_root"))
+    roots.update(str(Path(spec[key]).parent) for key in ("source_manifest", "client_binary", "base_launcher"))
+for root in sorted(roots):
+    item = Path(root)
+    if (not item.is_absolute() or ".." in item.parts or not item.is_dir()
+        or any(p.is_symlink() for p in (item, *item.parents))
+        or any(c in root for c in ("\n", "\r", "\0", ":"))):
+        raise SystemExit("collection capsule mounts require regular canonical absolute directories")
+    print(root)
+' "${rapid_compatibility_host}" "${ROOT}")" || exit 1
+    mapfile -t rapid_compatibility_mounts <<< "${rapid_compatibility_rows}"
+    rapid_compatibility_args+=(--env "QCSD_RAPID_COLLECTION_COMPATIBILITY=/lab/${rapid_compatibility_host#${ROOT}/}")
+    for rapid_compatibility_root in "${rapid_compatibility_mounts[@]}"; do
+      rapid_compatibility_args+=(--volume "${rapid_compatibility_root}:${rapid_compatibility_root}:ro")
+    done
+  fi
   qcsd_run_attached_docker docker run --network none --read-only \
     --security-opt no-new-privileges --cap-drop ALL \
     --label "org.qcsd.owner=qcsd-lab" \
     --label "org.qcsd.role=rapid-capture-preflight" \
     --user "${qcsd_invoking_uid}:${qcsd_invoking_gid}" \
     --env "QCSD_LAB_IMAGE_DIGEST=${image_id}" \
+    "${rapid_compatibility_args[@]}" \
     --volume "${ROOT}:/lab:ro" \
     --volume "${rapid_image_shell_host}:/lab/qcsd-lab:ro" --workdir /lab \
     --entrypoint /opt/qcsd-venv/bin/python3 "${image_id}" -I -c '
@@ -7858,7 +7894,7 @@ elif role != "diagnostic" or campaign.purpose != "smoke":
     raise SystemExit("rapid diagnostic campaign identity is invalid")
 ' "${1}" "${rapid_capture_target}" "${rapid_capture_name}" \
   "${rapid_capture_role}" "${rapid_capture_mode}" "${rapid_capture_version}"
-  if (( rapid_capture_epoch )); then
+  if (( rapid_capture_epoch )) || [[ -n "${QCSD_RAPID_COLLECTION_COMPATIBILITY:-}" ]]; then
     # The namespace alone grants no epoch authority. Reopen its actual bound
     # intent, full class vector and response qualifiers inside this image,
     # using the separately frozen study source and its original source bridge.
@@ -7906,6 +7942,8 @@ for root in sorted(roots):
       --env "QCSD_LAB_ROOT=${rapid_epoch_runtime_host}" \
       --env "QCSD_LAB_SOURCE_METADATA=/usr/share/qcsd-lab/source.json" \
       --env "QCSD_LAB_IMAGE_DIGEST=${image_id}" \
+      "${rapid_compatibility_args[@]}" \
+      --volume "${ROOT}:/lab:ro" \
       "${rapid_epoch_mount_args[@]}" \
       --entrypoint /opt/qcsd-venv/bin/python3 "${image_id}" -c '
 import json
@@ -7926,6 +7964,7 @@ validate_host_epoch_launch(json.loads(sys.argv[1]), expected_campaign=sys.argv[2
     --label "org.qcsd.role=rapid-dns-preflight" \
     --user "${qcsd_invoking_uid}:${qcsd_invoking_gid}" \
     --env "QCSD_LAB_IMAGE_DIGEST=${image_id}" \
+    "${rapid_compatibility_args[@]}" \
     --volume "${ROOT}:/lab:ro" \
     --volume "${rapid_image_shell_host}:/lab/qcsd-lab:ro" --workdir /lab \
     --entrypoint /opt/qcsd-venv/bin/python3 "${image_id}" -I -c '
@@ -9097,6 +9136,7 @@ container=(
 )
 if (( rapid_capture )); then
   container+=(--volume "${rapid_image_shell_host}:/lab/qcsd-lab:ro")
+  container+=("${rapid_compatibility_args[@]}")
   for rapid_pin_row in "${rapid_public_hosts[@]}"; do
     read -r rapid_pin_host rapid_pin_address <<< "${rapid_pin_row}"
     container+=(--add-host "${rapid_pin_host}=${rapid_pin_address}")

@@ -615,6 +615,9 @@ def validate_host_epoch_launch(value: Mapping[str, Any], *, expected_campaign: s
                                  actual_image: str) -> dict[str, Any]:
     """Actual read-only image preflight for the host launcher's epoch branch."""
     _check_keys(value, {"spec", "root", "intent", "intent_sha256"}, "host epoch launch inputs")
+    from . import rapid_runtime_epochs as runtime_epochs
+    if runtime_epochs._kind(Path(value["intent"])) in {runtime_epochs.INTENT_TYPE, runtime_epochs.CANARY_INTENT_TYPE}:
+        return runtime_epochs.validate_host_launch(value, expected_campaign=expected_campaign, actual_image=actual_image)
     spec = lanes.CaptureSpec(**{key: Path(item) if key in lanes.PATH_KEYS else item
                                 for key, item in value["spec"].items()})
     root, intent_path = Path(value["root"]), Path(value["intent"])
@@ -696,6 +699,9 @@ def _runtime_identity(proof: Mapping[str, Any]) -> dict[str, Any]:
 
 @_memoized
 def _intent(spec: lanes.CaptureSpec, root: Path, path: Path) -> tuple[dict[str, Any], dict[str, Any], tuple[plan.Site, ...], plan.Lane]:
+    from . import rapid_runtime_epochs as runtime_epochs
+    if runtime_epochs._kind(path) == runtime_epochs.INTENT_TYPE:
+        return runtime_epochs.validate_intent(spec, root, path)
     value = _open(path, lanes.INTENT_TYPE)
     _check_keys(value, {"campaign_name", "campaign_sha256", "logical_lane", "generation", "bindings",
                        "runtime_identity", "lineage", "started_at", "actuator", "scientific_credit",
@@ -718,6 +724,10 @@ def _intent(spec: lanes.CaptureSpec, root: Path, path: Path) -> tuple[dict[str, 
         or value["lineage"] != value["epoch_declaration"]
         or _time(value["started_at"]) < _time(value["image_check"]["execution"]["completed_at"])):
         raise ValueError("epoch intent differs from its actual installed-source/traffic check")
+    if (root / "runtime-epochs/policy.json").is_file():
+        runtime_policy = runtime_epochs.verify_policy(spec, root)
+        if _time(value["started_at"]) < _time(runtime_policy["published_at"]):
+            raise ValueError("historical formal launch predates prospective collection runtime authority")
     if lane.generation == 1:
         if value["predecessor_intent"] is not None or value["predecessor_attempt"] is not None:
             raise ValueError("initial epoch lane invents ordinary retry history")
@@ -771,7 +781,7 @@ def _incomplete_predecessor(spec: lanes.CaptureSpec, root: Path, path: Path, lan
             continue  # Retired pre-checkpoint allocation retains zero authority.
         experiment = (verify_result(result).experiment if (result / "evidence.sha256").exists()
                       else admission._load(admission._read(experiment_path)))
-        intent = _open(path, lanes.INTENT_TYPE)
+        intent = lanes._host_intent(admission._read(path))
         if (experiment["status"] not in {"running", "incomplete"}
             or experiment["name"] != lane.campaign_name
             or experiment["configuration"]["campaign_sha256"] != intent["campaign_sha256"]
@@ -851,7 +861,9 @@ def launch_block_lane(spec: lanes.CaptureSpec, root: Path, declaration: Path, *,
 @_memoized
 def _deep_lane(spec: lanes.CaptureSpec, root: Path, intent_path: Path) -> dict[str, Any]:
     intent, block, sites, lane = _intent(spec, root, intent_path)
-    process = _terminal_process(spec, root, intent_path, lane)
+    from .rapid_runtime_epochs import runtime_for_intent
+    runtime = runtime_for_intent(spec, root, intent)
+    process = _terminal_process(runtime, root, intent_path, lane)
     if process.get("returncode") is None or process.get("interruption") is not None:
         raise ValueError("interrupted epoch lane needs an unchanged-input fresh g02 retry")
     namespace = spec.execution_root / "results" / lane.campaign_name
@@ -869,7 +881,7 @@ def _deep_lane(spec: lanes.CaptureSpec, root: Path, intent_path: Path) -> dict[s
            for site in sites if site.workload_id in lane.workload_ids):
         raise ValueError("epoch workload bytes changed during actual capture")
     dns = lanes.verify_dns_receipt(admission._read(intent_path.parent / "dns.json"), lane.campaign_name, workloads)
-    checked = plan.verify_lane_result(result, lane, collection_image_digest=spec.collection_image_digest,
+    checked = plan.verify_lane_result(result, lane, collection_image_digest=runtime.collection_image_digest,
         lab_commit=intent["runtime_identity"]["runtime_source"]["lab_commit"], campaign_sha256=intent["campaign_sha256"],
         workload_sha256s={key: _sha(raw) for key, raw in workloads.items()},
         qualification_set_manifest_sha256=block["qualification"]["manifest_sha256"] if lane.qualification_set else None,
@@ -878,23 +890,32 @@ def _deep_lane(spec: lanes.CaptureSpec, root: Path, intent_path: Path) -> dict[s
             "mode": lane.mode, "generation": lane.generation, "campaign_name": lane.campaign_name,
             "result_relpath": result.relative_to(spec.execution_root / "results").as_posix(),
             "result_seal_sha256": checked["result_seal_sha256"], "dns_sha256": dns,
-            "accepted": lane.sample_count, "scientific_credit": "conditional-on-matched-block-commit"}
+            "accepted": lane.sample_count, "scientific_credit": "conditional-on-matched-block-commit",
+            **({"runtime_epoch": intent["runtime_epoch"]} if "runtime_epoch" in intent else {})}
 
 
 @_operation
 def complete_lane(spec: lanes.CaptureSpec, root: Path, intent: Path) -> Path:
     value = _deep_lane(spec, root, intent)
     value["completed_at"] = admission._now()
-    return _write(intent.parent / "complete.json", COMPLETE_TYPE, value)
+    from . import rapid_runtime_epochs as runtime_epochs
+    kind = runtime_epochs.COMPLETE_TYPE if "runtime_epoch" in value else COMPLETE_TYPE
+    return _write(intent.parent / "complete.json", kind, value)
 
 
 @_memoized
 def verify_lane(spec: lanes.CaptureSpec, root: Path, path: Path) -> dict[str, Any]:
-    value = _open(path, COMPLETE_TYPE)
+    from . import rapid_runtime_epochs as runtime_epochs
+    kind = runtime_epochs._kind(path)
+    if kind not in {COMPLETE_TYPE, runtime_epochs.COMPLETE_TYPE}:
+        raise ValueError("unknown matched-block lane completion")
+    value = _open(path, kind)
     checked = _deep_lane(spec, root, _child(root, value["intent"]))
     if {key: item for key, item in value.items() if key != "completed_at"} != checked:
         raise ValueError("epoch completion differs from independently reopened capture")
-    intent = _open(_child(root, value["intent"]), lanes.INTENT_TYPE)
+    intent = lanes._host_intent(admission._read(_child(root, value["intent"])))
+    if ("runtime_epoch" in value) != (kind == runtime_epochs.COMPLETE_TYPE):
+        raise ValueError("historical completion cannot acquire collection runtime authority")
     process = _open(path.parent / "host-process.json", lanes.PROCESS_TYPE)
     if not _time(intent["started_at"]) <= _time(process["completed_at"]) <= _time(value["completed_at"]) <= _time(admission._now()):
         raise ValueError("epoch completion chronology is invalid")
@@ -1037,7 +1058,7 @@ def retire_block(spec: lanes.CaptureSpec, root: Path, declaration: Path) -> Path
                 _, _, _, lane = _intent(spec, root, path)
                 start_path = path.parent / "host-start.json"
                 start = lanes._validated_host_start(admission._read(start_path), admission._read(path),
-                    campaign_name=_open(path, lanes.INTENT_TYPE)["campaign_name"])
+                    campaign_name=lanes._host_intent(admission._read(path))["campaign_name"])
                 attempts.append({"intent": _reference(root, path),
                     "host_start": _reference(root, start_path),
                     "retired_processes": {key: lanes._retired_identity(start[key]) for key in ("host", "supervisor")},
@@ -1090,7 +1111,7 @@ def verify_block_retirement(spec: lanes.CaptureSpec, root: Path, path: Path,
         start_raw = admission._read(path.parent / "host-start.json")
         if entry["host_start"] != _reference(root, path.parent / "host-start.json"):
             raise ValueError("block retirement substitutes actual process birth evidence")
-        start = lanes._validated_host_start(start_raw, admission._read(path), campaign_name=_open(path, lanes.INTENT_TYPE)["campaign_name"])
+        start = lanes._validated_host_start(start_raw, admission._read(path), campaign_name=lanes._host_intent(admission._read(path))["campaign_name"])
         observed = {"command": start["command"], "execution_root": start["execution_root"],
                     "started_at": start["started_at"], "observed_at": value["observed_at"],
                     "scientific_credit": False, "host_start": entry["host_start"],
@@ -1098,7 +1119,7 @@ def verify_block_retirement(spec: lanes.CaptureSpec, root: Path, path: Path,
         # No generated observation is published. The real census and Docker
         # outputs were retained by retire_block while both locks were held.
         lanes._verified_retirement(admission._json(admission._bind(lanes.RETIREMENT_TYPE, observed)),
-                                   root, admission._read(path), _open(path, lanes.INTENT_TYPE)["campaign_name"])
+                                   root, admission._read(path), lanes._host_intent(admission._read(path))["campaign_name"])
     return value
 
 
@@ -1220,10 +1241,35 @@ def corpus_manifest(spec: lanes.CaptureSpec, root: Path) -> dict[str, Any]:
         or set(counts.values()) != {plan.FINAL_BLOCKS * plan.FINAL_VISITS_PER_BLOCK}
         or sum(counts.values()) != plan.FINAL_SAMPLE_TARGET):
         raise ValueError("epoch corpus does not contain exactly 50 by five by 64 formal traces")
-    return {"schema_version": 1, "artifact_type": CORPUS_TYPE,
+    from . import rapid_runtime_epochs as runtime_epochs
+    prospective = (root / "runtime-epochs/policy.json").is_file()
+    runtime_inventory = []
+    if prospective:
+        runtime_epochs.verify_policy(spec, root)
+        directories = sorted((root / "runtime-epochs").glob("e[0-9][0-9][0-9][0-9]"))
+        if ({item.name for item in (root / "runtime-epochs").iterdir()}
+            != {"policy.json", *(item.name for item in directories)}
+            or any(item.is_symlink() or not item.is_dir() for item in directories)):
+            raise ValueError("runtime corpus contains an unregistered collection epoch")
+        if [item.name for item in directories] != [f"e{ordinal:04d}" for ordinal in range(2, len(directories) + 2)]:
+            raise ValueError("runtime corpus skips a claimed collection epoch")
+        for directory in directories:
+            activation = directory / "activation.json"
+            retirement = directory / "retirement.json"
+            if activation.is_file():
+                runtime_epochs.verify_activation(spec, root, activation)
+                runtime_inventory.append({"activation": _reference(root, activation)})
+            elif retirement.is_file():
+                runtime_epochs.verify_candidate_retirement(spec, root, retirement)
+                runtime_inventory.append({"retirement": _reference(root, retirement)})
+            else:
+                raise ValueError("runtime corpus cannot hide an unactivated or unretired collection candidate")
+    return {"schema_version": 1, "artifact_type": runtime_epochs.CORPUS_TYPE if prospective else CORPUS_TYPE,
             "policy": _reference(root, root / "policy.json"),
             "registered_class_epochs": registered,
             "blocks": [{"block": key[0], "shard": key[1], "commit": selected[key]} for key in sorted(expected)],
+            **({"collection_runtime_policy": _reference(root, root / "runtime-epochs/policy.json"),
+                "collection_runtime_epochs": runtime_inventory} if prospective else {}),
             "accepted": plan.FINAL_SAMPLE_TARGET}
 
 

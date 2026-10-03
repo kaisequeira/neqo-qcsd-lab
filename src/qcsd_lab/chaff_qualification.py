@@ -6153,11 +6153,18 @@ def _validate_implementation_receipt(value: object, *, require_current: bool) ->
     if require_current:
         if version != IMPLEMENTATION_RECEIPT_SCHEMA_VERSION:
             raise ValueError("historical qualification implementation cannot authorize changed source")
-        if dict(files) != _implementation_source_files():
-            raise ValueError("qualification source files have changed since qualification")
         current = implementation_receipt(executed_image=True)
-        if _implementation_runtime_identity(current) != _implementation_runtime_identity(receipt):
-            raise ValueError("qualification executables have changed since qualification")
+        if os.environ.get("QCSD_RAPID_COLLECTION_COMPATIBILITY"):
+            # This opt-in route reopens an actual, prospective per-lane
+            # authority and its reviewed dependency bridge. It never disables
+            # the current check or changes historical sidecar semantics.
+            from .rapid_runtime_epochs import validate_qualification_reuse
+            validate_qualification_reuse(receipt, current)
+        else:
+            if dict(files) != _implementation_source_files():
+                raise ValueError("qualification source files have changed since qualification")
+            if _implementation_runtime_identity(current) != _implementation_runtime_identity(receipt):
+                raise ValueError("qualification executables have changed since qualification")
 
 
 def _implementation_runtime_identity(receipt: Mapping[str, Any]) -> dict[str, Any]:

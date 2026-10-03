@@ -499,6 +499,7 @@ def verify_lane_result(
     workload_sha256s: Mapping[str, str],
     qualification_set_manifest_sha256: str | None = None,
     block_epoch: int | None = None,
+    collection_runtime_epoch: int | None = None,
 ) -> dict[str, Any]:
     """Deep-verify an exact lane result and reject sealed incomplete runs.
 
@@ -506,11 +507,22 @@ def verify_lane_result(
     and ensure that its launch-intent/source-overlay record is also verified.
     """
 
-    expected_name = (
-        epoch_campaign_name(lane, block_epoch) if block_epoch is not None
-        else _campaign_name(lane.role, lane.block, lane.shard, lane.mode,
-                            lane.generation, lane.study_version)
-    )
+    if collection_runtime_epoch is not None:
+        if (type(collection_runtime_epoch) is not int or not 2 <= collection_runtime_epoch <= 9999
+            or block_epoch is not None or lane.role != "diagnostic" or lane.study_version != 5
+            or lane.generation != 1 or len(lane.workload_ids) != 5 or lane.visits_per_workload != 1
+            or type(lane.block) is not int or not 1 <= lane.block <= FINAL_BLOCKS
+            or type(lane.shard) is not int or not 1 <= lane.shard <= FINAL_CLASS_COUNT // SHARD_SIZE
+            or lane.mode not in MODES or (lane.qualification_set is None) != (lane.mode == "undefended")):
+            raise ValueError("runtime canary changes its zero-credit five-site diagnostic contract")
+        expected_name = (f"rapid-curated-tranco50-v2-diagnostic-runtime-e{collection_runtime_epoch:04d}"
+                         f"-b{lane.block:02d}-s{lane.shard:02d}-{lane.mode}")
+    else:
+        expected_name = (
+            epoch_campaign_name(lane, block_epoch) if block_epoch is not None
+            else _campaign_name(lane.role, lane.block, lane.shard, lane.mode,
+                                lane.generation, lane.study_version)
+        )
     if lane.role not in {"formal", "diagnostic"} or lane.campaign_name != expected_name:
         raise ValueError("rapid lane role and campaign identity differ")
 
