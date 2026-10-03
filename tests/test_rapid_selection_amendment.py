@@ -419,7 +419,7 @@ def test_v2_rehashed_rule_or_typed_failure_contract_changes_fail(change: str):
         ))
 
 
-@pytest.mark.parametrize("revision", [0, 9, True, "2"])
+@pytest.mark.parametrize("revision", [0, 11, True, "2"])
 def test_unknown_or_loosely_typed_amendment_revision_fails(revision):
     with pytest.raises(ValueError, match="revision"):
         amendment.build_selection_amendment(
@@ -599,7 +599,7 @@ def test_v4_normal_cohort_still_requires_fifty_full_graph_sites(context_v3):
         _build(context_v3)
 
 
-@pytest.mark.parametrize("revision", [5, 6, 7, 8, 9])
+@pytest.mark.parametrize("revision", [5, 6, 7, 8, 9, 10])
 def test_v5_application_policy_cohort_keeps_50_complete_sites_and_bound_capture_grid(context_v3, tmp_path, revision):
     from qcsd_lab import rapid_capture_plan as capture
     from qcsd_lab.application_response_policy import TERMINAL_HTTP_ERROR_POLICY
@@ -616,17 +616,19 @@ def test_v5_application_policy_cohort_keeps_50_complete_sites_and_bound_capture_
                     application_response_evidence_sha256="3" * 64)
             if revision >= 7:
                 row["admission"]["qualified_chaff_origin_policy"] = "prepared-approved-origins-v1"
-            if revision in {8, 9}:
+            if revision in {8, 9, 10}:
                 row["admission"]["buflo_incoming_credit_release_policy"] = (
                     "rapid-v5-half-period-10000us-v1" if revision == 8
                     else "rapid-v5-half-period-10000us-ack-start-v2")
+            if revision == 10:
+                row["admission"]["tamaraw_capture_policy"] = "rapid-v5-tamaraw-owned-retry-outgoing-10000us-v1"
     value = _build(context_v3)
     assert value["payload"]["application_response_policy"] == TERMINAL_HTTP_ERROR_POLICY
     if revision >= 6:
         assert value["payload"]["primary_document_identity_policy"] == amendment.VARIABLE_PRIMARY_DOCUMENT_POLICY
     if revision >= 7:
         assert value["payload"]["qualified_chaff_origin_policy"] == "prepared-approved-origins-v1"
-    if revision in {8, 9}:
+    if revision in {8, 9, 10}:
         assert value["payload"]["buflo_incoming_credit_release_policy"] == (
             "rapid-v5-half-period-10000us-v1" if revision == 8
             else "rapid-v5-half-period-10000us-ack-start-v2")
@@ -641,13 +643,17 @@ def test_v5_application_policy_cohort_keeps_50_complete_sites_and_bound_capture_
         f"https://{candidate['domain']}", f"qualification-{index // 5}", f"{index // 5 + 1:064x}")
         for index, candidate in enumerate(value["payload"]["selected_candidates"]))
     assert sum(lane.sample_count for lane in capture.plan_lanes(sites, final=True, study_version=5)) == 16000
-    if revision in {8, 9}:
-        for change in ("missing-policy", "wrong-policy", "float-target"):
+    if revision in {8, 9, 10}:
+        for change in ("missing-policy", "wrong-policy", "float-target", *(("missing-tamaraw", "wrong-tamaraw") if revision == 10 else ())):
             altered = copy.deepcopy(value["payload"])
             if change == "missing-policy":
                 del altered["buflo_incoming_credit_release_policy"]
             elif change == "wrong-policy":
                 altered["buflo_incoming_credit_release_policy"] = "relax-all-deadlines"
+            elif change == "missing-tamaraw":
+                del altered["tamaraw_capture_policy"]
+            elif change == "wrong-tamaraw":
+                altered["tamaraw_capture_policy"] = "relax-all-deadlines"
             else:
                 altered["formal_sample_target"] = 16000.0
             changed = rapid._bind(altered, amendment.AMENDED_COHORT_RECEIPT_TYPE, schema_version=5)

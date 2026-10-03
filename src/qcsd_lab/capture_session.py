@@ -1935,6 +1935,11 @@ def _validate_run_binding(
 ) -> None:
     """Bind the runner receipt to every immutable launch input."""
 
+    from .capture_acceptance_policy import validate_tamaraw_source_binding
+    validate_tamaraw_source_binding(
+        load_json(application_workload_source) if application_workload_source is not None else {},
+        run_data,
+    )
     historical_candidate = historical_candidate_source is not None
     response_policy = _launch_application_response_policy(
         application_workload_source, application_response_policy

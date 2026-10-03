@@ -295,6 +295,7 @@ def validate_class_study_preparation(
     primary_document_identity_policy: str | None = None,
     qualified_chaff_origin_policy: str | None = None,
     buflo_incoming_credit_release_policy: str | None = None,
+    tamaraw_capture_policy: str | None = None,
 ) -> None:
     """Require the class study's bounded complete-coverage preparation contract."""
 
@@ -313,6 +314,20 @@ def validate_class_study_preparation(
         if (not isinstance(candidate_preparation, Mapping)
             or validate_buflo_preparation_policy(candidate_preparation) != expected_buflo_policy):
             raise ValueError(f"class-study workload {workload_id!r} BuFLO incoming release policy differs from its authority")
+    from .capture_acceptance_policy import TAMARAW_FIELD, validate_tamaraw_preparation_policy
+    if tamaraw_capture_policy is None:
+        if isinstance(candidate_preparation, Mapping) and TAMARAW_FIELD in candidate_preparation:
+            raise ValueError(f"class-study workload {workload_id!r} Tamaraw capture policy differs from its authority")
+    else:
+        expected_tamaraw = validate_tamaraw_preparation_policy({
+            TAMARAW_FIELD: tamaraw_capture_policy,
+            "application_response_policy": application_response_policy,
+            "primary_document_identity_policy": primary_document_identity_policy,
+            "qualified_chaff_origin_policy": qualified_chaff_origin_policy,
+        })
+        if (not isinstance(candidate_preparation, Mapping)
+            or validate_tamaraw_preparation_policy(candidate_preparation) != expected_tamaraw):
+            raise ValueError(f"class-study workload {workload_id!r} Tamaraw capture policy differs from its authority")
     from .application_response_policy import (
         qualified_chaff_origin_policy as declared_chaff_policy,
         validate_qualified_chaff_origin_policy,
@@ -1924,6 +1939,7 @@ class AcquisitionBackend(Protocol):
         primary_document_identity_policy: str | None = None,
         qualified_chaff_origin_policy: str | None = None,
         buflo_incoming_credit_release_policy: str | None = None,
+        tamaraw_capture_policy: str | None = None,
     ) -> PreparedProbe: ...
 
 
@@ -2001,11 +2017,20 @@ class ExistingAcquisitionBackend:
         primary_document_identity_policy: str | None = None,
         qualified_chaff_origin_policy: str | None = None,
         buflo_incoming_credit_release_policy: str | None = None,
+        tamaraw_capture_policy: str | None = None,
     ) -> PreparedProbe:
         if buflo_incoming_credit_release_policy is not None:
             from .capture_acceptance_policy import validate_buflo_preparation_policy
             validate_buflo_preparation_policy({
                 "buflo_incoming_credit_release_policy": buflo_incoming_credit_release_policy,
+                "application_response_policy": application_response_policy,
+                "primary_document_identity_policy": primary_document_identity_policy,
+                "qualified_chaff_origin_policy": qualified_chaff_origin_policy,
+            })
+        if tamaraw_capture_policy is not None:
+            from .capture_acceptance_policy import validate_tamaraw_preparation_policy
+            validate_tamaraw_preparation_policy({
+                "tamaraw_capture_policy": tamaraw_capture_policy,
                 "application_response_policy": application_response_policy,
                 "primary_document_identity_policy": primary_document_identity_policy,
                 "qualified_chaff_origin_policy": qualified_chaff_origin_policy,
@@ -2043,6 +2068,8 @@ class ExistingAcquisitionBackend:
             policy_kwargs["qualified_chaff_origin_policy"] = qualified_chaff_origin_policy
         if buflo_incoming_credit_release_policy is not None:
             policy_kwargs["buflo_incoming_credit_release_policy"] = buflo_incoming_credit_release_policy
+        if tamaraw_capture_policy is not None:
+            policy_kwargs["tamaraw_capture_policy"] = tamaraw_capture_policy
         prepared = prepare_workload(
             workload_id,
             url,
@@ -2063,7 +2090,9 @@ class ExistingAcquisitionBackend:
                                          primary_document_identity_policy=primary_document_identity_policy,
                                          qualified_chaff_origin_policy=qualified_chaff_origin_policy,
                                          **({"buflo_incoming_credit_release_policy": buflo_incoming_credit_release_policy}
-                                            if buflo_incoming_credit_release_policy is not None else {}))
+                                            if buflo_incoming_credit_release_policy is not None else {}),
+                                         **({"tamaraw_capture_policy": tamaraw_capture_policy}
+                                            if tamaraw_capture_policy is not None else {}))
         preparation = manifest["preparation"]
         current_image = os.environ.get("QCSD_LAB_IMAGE_DIGEST", "native")
         current_source = dict(source_metadata())

@@ -8,6 +8,9 @@ from typing import Any
 POLICY = "rapid-v5-half-period-10000us-v1"
 ACK_START_POLICY = "rapid-v5-half-period-10000us-ack-start-v2"
 FIELD = "buflo_incoming_credit_release_policy"
+TAMARAW_FIELD = "tamaraw_capture_policy"
+TAMARAW_POLICY = "rapid-v5-tamaraw-owned-retry-outgoing-10000us-v1"
+TAMARAW_CREDIT_SEMANTICS = "explicit-physical-ownership-with-pending-retry-v1"
 STARTUP_POLICY = "qualified-chaff-terminal-ack-cadence-start-v1"
 STARTUP_TIME_BASIS = "native-controller-defense-elapsed-us-v1"
 _STARTUP_IDENTIFIERS = ("ready_endpoint", "ready_stream", "ready_resource_id", "ready_request_id")
@@ -23,6 +26,76 @@ def _uint(value: Any) -> bool:
 def _exact_json(left: Any, right: Any) -> bool:
     # Python equality aliases bool/int and int/float; evidence preserves their JSON types.
     return json.dumps(left, sort_keys=True, allow_nan=False) == json.dumps(right, sort_keys=True, allow_nan=False)
+
+
+def validate_tamaraw_preparation_policy(preparation: Mapping[str, Any]) -> str | None:
+    """Require the prospective opt-in before immutable preparation publication."""
+    from .application_response_policy import (
+        APPROVED_ORIGINS_CHAFF_POLICY, COMPLETED_TERMINAL_HTTP_ERRORS_POLICY,
+        VARIABLE_PRIMARY_DOCUMENT_BODY_POLICY,
+    )
+    if TAMARAW_FIELD not in preparation:
+        return None
+    value = preparation[TAMARAW_FIELD]
+    if (type(value) is not str or value != TAMARAW_POLICY
+        or preparation.get("primary_document_identity_policy") != VARIABLE_PRIMARY_DOCUMENT_BODY_POLICY
+        or preparation.get("application_response_policy") != COMPLETED_TERMINAL_HTTP_ERRORS_POLICY
+        or preparation.get("qualified_chaff_origin_policy") != APPROVED_ORIGINS_CHAFF_POLICY):
+        raise ValueError("Tamaraw capture policy requires its explicit rapid preparation contract")
+    return value
+
+
+def tamaraw_outgoing_window_from_policy(marker: Any) -> int:
+    expected = {
+        "schema_version": 1, "source": "bound-preparation-v1", "policy": TAMARAW_POLICY,
+        "incoming_credit_semantics": TAMARAW_CREDIT_SEMANTICS,
+        "incoming_period_us": 5_000, "outgoing_period_us": 20_000,
+        "cell_bytes": 1_200, "padding_modulus": 100,
+        "outgoing_release_window_us": 10_000, "historical_outgoing_release_window_us": 5_000,
+        "paper_equivalent": False, "scientific_credit": False,
+    }
+    if (not isinstance(marker, Mapping) or set(marker) != set(expected)
+        or any(type(marker[key]) is not type(value) or marker[key] != value
+               for key, value in expected.items())):
+        raise ValueError("invalid Tamaraw source-bound capture policy")
+    return 10_000
+
+
+def tamaraw_outgoing_release_window(run: Mapping[str, Any]) -> int:
+    from .application_response_policy import COMPLETED_TERMINAL_HTTP_ERRORS_POLICY, VARIABLE_PRIMARY_DOCUMENT_BODY_POLICY
+    if TAMARAW_FIELD not in run:
+        return 5_000
+    window = tamaraw_outgoing_window_from_policy(run[TAMARAW_FIELD])
+    resolved = run.get("resolved_configuration")
+    parameters = resolved.get("defense") if isinstance(resolved, Mapping) else None
+    expected = {"kind": "tamaraw", "incoming_interval_us": 5_000,
+                "outgoing_interval_us": 20_000, "packet_size": 1_200, "modulo": 100}
+    if (not isinstance(parameters, Mapping)
+        or any(type(parameters.get(key)) is not type(value) or parameters[key] != value
+               for key, value in expected.items())
+        or type(resolved.get("control_interval_us")) is not int
+        or resolved["control_interval_us"] != 5_000
+        or type(resolved.get("max_udp_payload_size")) is not int
+        or resolved["max_udp_payload_size"] != 1_200
+        or resolved.get("drop_unsatisfied_events") is not False
+        or run.get("primary_document_identity_policy") != VARIABLE_PRIMARY_DOCUMENT_BODY_POLICY
+        or run.get("application_response_policy") != COMPLETED_TERMINAL_HTTP_ERRORS_POLICY):
+        raise ValueError("Tamaraw capture policy differs from the native rapid contract")
+    return window
+
+
+def validate_tamaraw_source_binding(prepared: Mapping[str, Any], run: Mapping[str, Any]) -> None:
+    preparation = prepared.get("preparation")
+    declared = validate_tamaraw_preparation_policy(preparation) if isinstance(preparation, Mapping) else None
+    resolved = run.get("resolved_configuration")
+    parameters = resolved.get("defense") if isinstance(resolved, Mapping) else None
+    tamaraw = isinstance(parameters, Mapping) and parameters.get("kind") == "tamaraw"
+    if TAMARAW_FIELD in run:
+        if declared is None or not tamaraw:
+            raise ValueError("native Tamaraw capture policy lacks matching prepared source")
+        tamaraw_outgoing_release_window(run)
+    elif declared is not None and tamaraw:
+        raise ValueError("prepared Tamaraw capture policy lacks its native marker")
 
 
 def _startup_present(run: Mapping[str, Any]) -> bool:

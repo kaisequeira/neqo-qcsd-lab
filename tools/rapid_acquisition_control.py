@@ -25,6 +25,7 @@ REGISTRY_RECORD_TYPES = {
     7: "private-frozen-v7-approved-origins-chaff-policy-ordered-root-log-registry-v7",
     8: "private-frozen-v8-bound-buflo-release-policy-ordered-root-log-registry-v8",
     9: "private-frozen-v9-buflo-ack-start-policy-ordered-root-log-registry-v9",
+    10: "private-frozen-v10-tamaraw-owned-retry-policy-ordered-root-log-registry-v10",
 }
 FAILURES = {
     "failed-attempt-needs-explicit-terminal": ("attempt_failure", "ATTEMPT_FAILURE_TYPE", "unsuccessful_attempt_failure_facts", "--attempt-failure"),
@@ -118,14 +119,16 @@ def verify_runtime_source(context, checkout, commit):
 def registry_record_type(context):
     revision = context.selection_amendment_revision
     if type(revision) is not int or revision not in REGISTRY_RECORD_TYPES:
-        raise ValueError("coordinator requires a frozen revision6, revision7, revision8 or revision9 admission API")
+        raise ValueError("coordinator requires a frozen revision6, revision7, revision8, revision9 or revision10 admission API")
     expected_policy = "prepared-approved-origins-v1" if revision >= 7 else None
     if context.qualified_chaff_origin_policy != expected_policy:
         raise ValueError("coordinator qualified chaff origin policy differs from its exact revision")
     if revision == 8 and context.buflo_incoming_credit_release_policy != "rapid-v5-half-period-10000us-v1":
         raise ValueError("coordinator BufLO release policy differs from its exact revision")
-    if revision == 9 and context.buflo_incoming_credit_release_policy != "rapid-v5-half-period-10000us-ack-start-v2":
+    if revision in {9, 10} and context.buflo_incoming_credit_release_policy != "rapid-v5-half-period-10000us-ack-start-v2":
         raise ValueError("coordinator BufLO ACK-start policy differs from its exact revision")
+    if revision == 10 and context.tamaraw_capture_policy != "rapid-v5-tamaraw-owned-retry-outgoing-10000us-v1":
+        raise ValueError("coordinator Tamaraw capture policy differs from its exact revision")
     return REGISTRY_RECORD_TYPES[revision]
 
 
@@ -416,7 +419,9 @@ def run_operation(engine, args, checkout, reopen, lock_path):
         "selection_amendment_revision": context.selection_amendment_revision,
         "qualified_chaff_origin_policy": context.qualified_chaff_origin_policy,
         **({"buflo_incoming_credit_release_policy": context.buflo_incoming_credit_release_policy}
-           if context.selection_amendment_revision in {8, 9} else {}),
+           if context.selection_amendment_revision in {8, 9, 10} else {}),
+        **({"tamaraw_capture_policy": context.tamaraw_capture_policy}
+           if context.selection_amendment_revision == 10 else {}),
         "source_checkout": str(checkout), "source_commit": args.source_commit,
         "operator_commit": args.operator_commit, "coordinator_sha256": args.coordinator_sha256,
         "bootstrap": {"path": str(args.bootstrap.absolute()), "sha256": args.bootstrap_sha256},

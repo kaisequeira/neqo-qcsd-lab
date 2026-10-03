@@ -31,6 +31,7 @@ AMENDED_V6_ADMISSION_POLICY = "root-and-exact-page-h3-complete-live-graph-with-v
 AMENDED_V7_ADMISSION_POLICY = "root-and-exact-page-h3-complete-live-graph-with-approved-origin-auxiliary-chaff-v7"
 AMENDED_V8_ADMISSION_POLICY = "root-and-exact-page-h3-complete-live-graph-with-bound-buflo-incoming-release-policy-v8"
 AMENDED_V9_ADMISSION_POLICY = "root-and-exact-page-h3-complete-live-graph-with-bound-buflo-ack-start-policy-v9"
+AMENDED_V10_ADMISSION_POLICY = "root-and-exact-page-h3-complete-live-graph-with-bound-tamaraw-owned-retry-policy-v10"
 VARIABLE_PRIMARY_DOCUMENT_POLICY = "variable-primary-document-body-v1"
 ATTEMPT_FAILURE_DEFERRAL_POLICY = "prospective-unsuccessful-live-attempt-deferral-v4"
 ATTEMPT_FAILURE_DEFERRAL_REASON = "unsuccessful-live-attempt-screen-deferred"
@@ -58,6 +59,8 @@ FROZEN_V7_AMENDMENT_PUBLICATION_UTC = "2026-10-03T03:22:45.926573Z"
 FROZEN_V7_AMENDMENT_SHA256 = "5a155267592b48fbd58f479ab38641540cb8ae7ae9fef7afd929af8d9cfc498f"
 FROZEN_V8_AMENDMENT_PUBLICATION_UTC = "2026-10-03T06:59:59.498734Z"
 FROZEN_V8_AMENDMENT_SHA256 = "435949a51e5ded3d5342f92cf117beb9dd0716599a61ff36ba5c0f802741fb38"
+FROZEN_V9_AMENDMENT_PUBLICATION_UTC = "2026-10-03T08:20:52Z"
+FROZEN_V9_AMENDMENT_SHA256 = "a9469ba89ddfa3cf1d36352f40e6f1b2a42eec39f114d7f9548fdfa9e03401ca"
 AUTOMATED_SITE_SCREEN_POLICY = "frozen-public-url-and-domain-screen-v1"
 AUTOMATED_SITE_SCREEN_DECISION = "automatic-policy-pass"
 
@@ -102,7 +105,7 @@ def _utc(value: Any) -> datetime:
 def _amendment_payload(
     published_at_utc: str, parent_profile_sha256: str, *, revision: int = 1,
 ) -> dict[str, Any]:
-    if type(revision) is not int or revision not in (1, 2, 3, 4, 5, 6, 7, 8, 9):
+    if type(revision) is not int or revision not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10):
         raise ValueError("selection amendment revision is unregistered")
     published = _utc(published_at_utc)
     if published < _utc(PARENT_PROFILE_PUBLICATION_UTC) or published > datetime.now(UTC):
@@ -388,7 +391,7 @@ def _amendment_payload(
         result["freshness_policy"] = {**result["freshness_policy"],
             "new_approved_origin_chaff_preparation": "started-at-or-after-published-at-utc",
             "v6_failed_attempts": "retain-v6-only-authority-no-v7-relabel-or-promotion"}
-    if revision in {8, 9}:
+    if revision in {8, 9, 10}:
         from .capture_acceptance_policy import POLICY as BUFLO_POLICY
         if published < _utc(FROZEN_V7_AMENDMENT_PUBLICATION_UTC):
             raise ValueError("selection amendment v8 publication is before its v7 parent")
@@ -421,7 +424,7 @@ def _amendment_payload(
         result["freshness_policy"] = {**result["freshness_policy"],
             "new_buflo_release_policy_preparation": "started-at-or-after-published-at-utc",
             "v7_failed_attempts_and_admissions": "retain-v7-only-authority-no-v8-relabel-promotion-or-post-admission-manifest-change"}
-    if revision == 9:
+    if revision in {9, 10}:
         from .capture_acceptance_policy import ACK_START_POLICY
         if published < _utc(FROZEN_V8_AMENDMENT_PUBLICATION_UTC):
             raise ValueError("selection amendment v9 publication is before its v8 parent")
@@ -450,6 +453,42 @@ def _amendment_payload(
         result["freshness_policy"] = {**result["freshness_policy"],
             "new_buflo_ack_start_preparation": "started-at-or-after-published-at-utc",
             "v8_failed_attempts_and_admissions": "retain-v8-only-authority-no-v9-relabel-promotion-or-post-admission-manifest-change"}
+    if revision == 10:
+        from .capture_acceptance_policy import TAMARAW_POLICY, TAMARAW_CREDIT_SEMANTICS
+        if published < _utc(FROZEN_V9_AMENDMENT_PUBLICATION_UTC):
+            raise ValueError("selection amendment v10 publication is before its v9 parent")
+        parent = profile._bind(_amendment_payload(
+            FROZEN_V9_AMENDMENT_PUBLICATION_UTC, parent_profile_sha256, revision=9,
+        ), SELECTION_AMENDMENT_RECEIPT_TYPE, schema_version=5)
+        parent_sha = profile._sha(profile._canonical_json(parent))
+        if parent_sha != FROZEN_V9_AMENDMENT_SHA256:
+            raise ValueError("frozen v9 selection amendment declaration no longer verifies")
+        result.update({
+            "amendment_id": "crux73-tranco600-rapid-v5-selection-v10", "revision": 10,
+            "parent_selection_amendment_sha256": parent_sha,
+            "parent_admission_policy": AMENDED_V9_ADMISSION_POLICY,
+            "admission_policy": AMENDED_V10_ADMISSION_POLICY,
+            "tamaraw_capture_policy": TAMARAW_POLICY,
+            "tamaraw_capture_acceptance": {
+                "binding": "explicit-preparation-opt-in-before-workload-hash-and-admission-seal",
+                "native_marker": "bound-preparation-v1-exact-policy-cadence-cell-modulus-and-windows",
+                "incoming_credit_semantics": TAMARAW_CREDIT_SEMANTICS,
+                "incoming_period_us": 5000, "outgoing_period_us": 20000,
+                "cell_bytes": 1200, "padding_modulus": 100,
+                "outgoing_release_window_us": 10000,
+                "historical_outgoing_release_window_us": 5000,
+                "incoming_physical_proof": "whole-cell-physical-advertisement-and-consumption-required",
+                "incoming_pending_retry": "retain-partial-owned-release-without-slotless-reclassification-or-fabricated-advertisement",
+                "outgoing_physical_proof": "unique-actual-shaped-1200-byte-udp-handoff-in-half-open-window",
+                "other_modes": "unchanged-no-tamaraw-marker-or-window-authority",
+                "full_resource_graph": "unchanged-no-resource-or-origin-pruning",
+                "capture_authority": "none-requires-separate-live-capture-readiness-and-deep-verification",
+                "paper_equivalent": False, "scientific_credit": False,
+            },
+        })
+        result["freshness_policy"] = {**result["freshness_policy"],
+            "new_tamaraw_capture_policy_preparation": "started-at-or-after-published-at-utc",
+            "v9_failed_attempts_and_admissions": "retain-v9-only-authority-no-v10-relabel-promotion-or-post-admission-manifest-change"}
     return result
 
 
@@ -479,6 +518,7 @@ def validate_selection_amendment(
         "crux73-tranco600-rapid-v5-selection-v7": 7,
         "crux73-tranco600-rapid-v5-selection-v8": 8,
         "crux73-tranco600-rapid-v5-selection-v9": 9,
+        "crux73-tranco600-rapid-v5-selection-v10": 10,
     }
     amendment_id = payload.get("amendment_id")
     revision = ids.get(amendment_id) if isinstance(amendment_id, str) else None
@@ -513,7 +553,7 @@ def root_screen_allows_browser_progression(root: Mapping[str, Any] | None, *, re
         return False
     identity = (root.get("outcome"), root.get("detail"))
     return identity == ("known-valid", "known-valid") or (
-        type(revision) is int and revision in {3, 4, 5, 6, 7, 8, 9}
+        type(revision) is int and revision in {3, 4, 5, 6, 7, 8, 9, 10}
         and identity == ("ambiguous", "response-known-invalid")
     )
 
@@ -703,7 +743,7 @@ def _unsuccessful_attempt_deferral(
         raise ValueError("unsuccessful attempt source inventory differs from its prospective application policy")
     if (CHAFF_QUALIFICATION_MODULE in failure["implementation_hashes"]) != (selection_amendment_revision(selection_amendment) >= 7):
         raise ValueError("unsuccessful attempt source inventory differs from its prospective qualified chaff origin policy")
-    if ("qcsd_lab.capture_acceptance_policy" in failure["implementation_hashes"]) != (selection_amendment_revision(selection_amendment) in {8, 9}):
+    if ("qcsd_lab.capture_acceptance_policy" in failure["implementation_hashes"]) != (selection_amendment_revision(selection_amendment) in {8, 9, 10}):
         raise ValueError("unsuccessful attempt source inventory differs from its prospective BufLO release policy")
     if failure["action"]["kind"] == "complete-graph-preparation":
         if page_proof is None or automated_screen is None:
@@ -744,7 +784,7 @@ def validate_amended_cohort_receipt(
         profile_receipt, source_bytes, catalogue_bytes, payload.get("generation"), digests,
         execution_binding, deep_verify_terminal, selection_amendment,
     )
-    if (payload != expected or selection_amendment_revision(selection_amendment) in {8, 9}
+    if (payload != expected or selection_amendment_revision(selection_amendment) in {8, 9, 10}
         and profile._canonical_json(payload) != profile._canonical_json(expected)):
         raise ValueError("amended cohort differs from deep-verified ordered selection")
     return tuple(expected["selected_candidate_ids"])
@@ -874,8 +914,10 @@ def _selection_payload(
                 admission_fields |= {"primary_document_identity_policy"}
             if revision >= 7:
                 admission_fields |= {"qualified_chaff_origin_policy"}
-            if revision in {8, 9}:
+            if revision in {8, 9, 10}:
                 admission_fields |= {"buflo_incoming_credit_release_policy"}
+            if revision == 10:
+                admission_fields |= {"tamaraw_capture_policy"}
             if "triage" in facts or not isinstance(admission, Mapping) or set(admission) != admission_fields:
                 raise ValueError("v5 admitted site lacks exact page and complete graph proof")
             if revision >= 5:
@@ -894,8 +936,10 @@ def _selection_payload(
                 raise ValueError("admitted primary document identity policy differs from its prospective contract")
             if revision >= 7 and admission["qualified_chaff_origin_policy"] != amendment_payload["qualified_chaff_origin_policy"]:
                 raise ValueError("admitted qualified chaff origin policy differs from its prospective contract")
-            if revision in {8, 9} and admission["buflo_incoming_credit_release_policy"] != amendment_payload["buflo_incoming_credit_release_policy"]:
+            if revision in {8, 9, 10} and admission["buflo_incoming_credit_release_policy"] != amendment_payload["buflo_incoming_credit_release_policy"]:
                 raise ValueError("admitted BufLO release policy differs from its prospective contract")
+            if revision == 10 and admission["tamaraw_capture_policy"] != amendment_payload["tamaraw_capture_policy"]:
+                raise ValueError("admitted Tamaraw capture policy differs from its prospective contract")
             if profile.unsafe_catalogue_domain_reason(candidate["domain"]) is not None:
                 raise ValueError("v5 automatically unsafe site cannot be admitted")
             if screen is None or page_proof is None:
@@ -981,7 +1025,8 @@ def _selection_payload(
         **({"application_response_policy": amendment_payload["application_response_policy"]} if revision >= 5 else {}),
         **({"primary_document_identity_policy": amendment_payload["primary_document_identity_policy"]} if revision >= 6 else {}),
         **({"qualified_chaff_origin_policy": amendment_payload["qualified_chaff_origin_policy"]} if revision >= 7 else {}),
-        **({"buflo_incoming_credit_release_policy": amendment_payload["buflo_incoming_credit_release_policy"]} if revision in {8, 9} else {}),
+        **({"buflo_incoming_credit_release_policy": amendment_payload["buflo_incoming_credit_release_policy"]} if revision in {8, 9, 10} else {}),
+        **({"tamaraw_capture_policy": amendment_payload["tamaraw_capture_policy"]} if revision == 10 else {}),
         **({"automated_screen_policy_sha256": automated_screen_policy_sha256()} if revision >= 2 else {}),
         "terminal_decisions": decisions,
         "selected_candidate_ids": [candidate["candidate_id"] for candidate in selected],

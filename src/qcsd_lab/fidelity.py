@@ -1849,7 +1849,92 @@ def _schedule_realization_metrics_from_path(path: Path) -> dict[str, Any]:
         "target_times_us_by_direction": target_times,
         "scheduled_sizes_by_direction": scheduled_sizes,
         **_incoming_credit_release_metrics(path, rows),
+        **_tamaraw_capture_metrics(path, rows),
     }
+
+
+def _tamaraw_capture_metrics(schedule_path: Path, rows: list[dict[str, str]]) -> dict[str, Any]:
+    """Measure actual UDP handoff; registration and parser reads supply no send proof."""
+    from .capture_acceptance_policy import TAMARAW_FIELD, tamaraw_outgoing_release_window
+    try:
+        run = load_json(schedule_path.with_name("run.json"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(run, Mapping) or TAMARAW_FIELD not in run:
+        return {}
+    window = tamaraw_outgoing_release_window(run)
+    start_ns = run.get("defense_start_monotonic_ns")
+    if type(start_ns) is not int or start_ns < 0:
+        raise ValueError("Tamaraw physical release proof lacks its defense clock")
+    packets_path = schedule_path.with_name("packets.csv")
+    packets = _read_exact_csv(packets_path, RUNNER_PACKET_FIELDS + SCHEDULE_QCSD_FIELDS)
+    scheduled = {}
+    for row in rows:
+        if row.get("direction") != "outgoing":
+            continue
+        slot = _csv_uint(row, "slot_id")
+        if slot in scheduled:
+            raise ValueError("Tamaraw physical release proof repeats an outgoing slot")
+        scheduled[slot] = row
+    matched = set()
+    violations = historical_violations = 0
+    lateness = []
+    for packet in packets:
+        if packet.get("direction") != "outgoing" or not packet.get("slot_id"):
+            continue
+        slot = _csv_uint(packet, "slot_id")
+        row = scheduled.get(slot)
+        if (row is None or slot in matched
+            or packet.get("connection") != row.get("connection")
+            or packet.get("satisfaction") != "satisfied" or row.get("satisfaction") != "satisfied"
+            or packet.get("send_policy") != "exact" or row.get("send_policy") != "exact"
+            or any(_csv_uint(packet, key) != 1_200 for key in (
+                "observed_udp_length", "scheduled_target", "desired_udp_bytes", "observed_udp_bytes"))
+            or _csv_uint(row, "size") != 1_200
+            or _csv_uint(row, "observed_size") != 1_200):
+            raise ValueError("Tamaraw physical release proof lacks unique complete shaped cells")
+        matched.add(slot)
+        release_ns = start_ns + _csv_uint(row, "target_time_us") * 1_000
+        lower_ns = _csv_uint(packet, "monotonic_us") * 1_000
+        upper_ns = lower_ns + 1_000
+        if lower_ns < release_ns or upper_ns > release_ns + window * 1_000:
+            violations += 1
+        if lower_ns < release_ns or upper_ns > release_ns + 5_000_000:
+            historical_violations += 1
+        lateness.append(max(0, (upper_ns - release_ns - 1) // 1_000))
+    if not scheduled or matched != set(scheduled):
+        raise ValueError("Tamaraw physical release proof lacks scheduled outgoing handoffs")
+    return {"tamaraw_capture_policy": run[TAMARAW_FIELD],
+            "tamaraw_outgoing_release_window_us": window,
+            "tamaraw_outgoing_release_timing_events": len(matched),
+            "tamaraw_outgoing_release_window_violations": violations,
+            "tamaraw_outgoing_release_original_5000us_violations": historical_violations,
+            "tamaraw_outgoing_release_lateness_upper_bound_us_max": max(lateness),
+            "tamaraw_outgoing_release_packets_sha256": sha256_file(packets_path)}
+
+
+def _tamaraw_capture_metrics_valid(schedule: Mapping[str, Any] | None) -> bool:
+    from .capture_acceptance_policy import tamaraw_outgoing_window_from_policy
+    if not isinstance(schedule, Mapping):
+        return False
+    try:
+        window = tamaraw_outgoing_window_from_policy(schedule.get("tamaraw_capture_policy"))
+    except ValueError:
+        return False
+    count = schedule.get("scheduled_outgoing_events")
+    measured = schedule.get("tamaraw_outgoing_release_timing_events")
+    historical = schedule.get("tamaraw_outgoing_release_original_5000us_violations")
+    maximum = schedule.get("tamaraw_outgoing_release_lateness_upper_bound_us_max")
+    digest = schedule.get("tamaraw_outgoing_release_packets_sha256")
+    return (type(count) is int and count > 0 and type(measured) is int and measured == count
+        and type(schedule.get("tamaraw_outgoing_release_window_us")) is int
+        and schedule["tamaraw_outgoing_release_window_us"] == window
+        and type(schedule.get("tamaraw_outgoing_release_window_violations")) is int
+        and schedule["tamaraw_outgoing_release_window_violations"] == 0
+        and type(historical) is int and 0 <= historical <= count
+        and type(maximum) is int and 0 <= maximum < window
+        and isinstance(digest, str) and len(digest) == 64
+        and all(value in "0123456789abcdef" for value in digest))
 
 
 def _buflo_schedule_release_window(metrics: Mapping[str, Any]) -> int:
@@ -6632,6 +6717,10 @@ def fidelity_eligible(
         )
     if defense == "cs-buflo":
         return _cs_buflo_fidelity_eligible(diagnostics, schedule_metrics)
+    if defense == "tamaraw" and isinstance(schedule_metrics, Mapping) and "tamaraw_capture_policy" in schedule_metrics:
+        return (_tamaraw_capture_metrics_valid(schedule_metrics)
+            and _new_schedule_terminal_contract(schedule_metrics, congestion_sensitive=False)
+            and _established_defense_activation_valid(defense, diagnostics, schedule_metrics, resolved_configuration))
     return True
 
 

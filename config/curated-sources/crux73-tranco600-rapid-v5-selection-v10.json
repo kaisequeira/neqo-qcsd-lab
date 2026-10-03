@@ -1,0 +1,294 @@
+{
+  "payload": {
+    "admission_policy": "root-and-exact-page-h3-complete-live-graph-with-bound-tamaraw-owned-retry-policy-v10",
+    "admitted_resource_graph": "unchanged-complete-live-resource-graph-with-cross-origin-proof",
+    "amendment_id": "crux73-tranco600-rapid-v5-selection-v10",
+    "application_response_acceptance": {
+      "allowed_errors": "complete-4xx-or-5xx-non-primary-terminal-leaves-only",
+      "chaff": "unchanged-qualified-known-valid-2xx-only",
+      "dependency_parents": "must-remain-known-valid-2xx",
+      "error_qualification": "known-valid-false-and-not-chaff",
+      "full_resource_graph": "unchanged-no-resource-or-origin-pruning",
+      "primary_document": "known-valid-complete-2xx-html-with-exact-page-proof",
+      "required_proof": "independently-reopened-original-get-and-stability-policy-evidence",
+      "response_identity": "retain-exact-status-body-bytes-hash-and-headers",
+      "stability": "three-fresh-complete-full-graph-policy-matching-replays",
+      "transport": "actual-negotiated-http3-and-complete-response-required"
+    },
+    "application_response_policy": "completed-terminal-http-errors-v1",
+    "automated_screen_policy_sha256": "cf28b92f80ee5b9da982fa7b326fdc24ca5cb0a713bbea9c8c5a5b1115a9fb3b",
+    "automated_site_screen_policy": {
+      "content_classification_claimed": false,
+      "decision": "automatic-policy-pass",
+      "domain_safety_policy": {
+        "denied_exact_domains": [
+          "deep-nudes.com",
+          "ebonyfacial.net",
+          "greenxh.live",
+          "hanime.tv",
+          "joyclub.de",
+          "mygirls.me",
+          "xvideos.tube",
+          "xnxx.com"
+        ],
+        "denied_substrings": [
+          "adult",
+          "bet",
+          "casino",
+          "escort",
+          "gambl",
+          "hentai",
+          "malware",
+          "phishing",
+          "porn",
+          "sex",
+          "xxx"
+        ],
+        "policy": "frozen-domain-safety-deny-v2"
+      },
+      "named_human_review": "not-required",
+      "policy": "frozen-public-url-and-domain-screen-v1",
+      "scientific_credit": false,
+      "selected_page_choice": "independently-rederived-navigation-ordinal-zero-through-four",
+      "selected_page_h3": "separate-passing-control-known-valid-exact-url-receipt",
+      "selected_page_url_policy": "canonical-query-free-html-https-default-port-exact-candidate-or-subdomain-v1"
+    },
+    "browser_policy_deferral": {
+      "action_kind": "catalogue-boundary-navigation",
+      "action_scope": "catalogue-root-and-optional-link-navigation",
+      "exception_type": "NonReplayableEgressPolicyError",
+      "failure_page_attribution": "unavailable",
+      "human_review": "none-at-this-navigation-screen-branch",
+      "outcome": "screen-deferred",
+      "policy": "prospective-nonreplayable-browser-navigation-deferral-v1",
+      "required_proof": "independently-reopened-exact-candidate-image-source-module-and-raw-guard-evidence",
+      "required_root_screen": "known-valid-or-completed-response-known-invalid-with-passing-controls",
+      "scientific_credit": false,
+      "scope": "candidate-navigation-screen-only-not-whole-domain-ineligibility",
+      "triage_reason": "browser-navigation-policy-deferred"
+    },
+    "browser_root_progression": {
+      "allowed_outcome_details": [
+        [
+          "known-valid",
+          "known-valid"
+        ],
+        [
+          "ambiguous",
+          "response-known-invalid"
+        ]
+      ],
+      "controls_passed": true,
+      "exact_selected_page_h3_and_complete_graph_acceptance": "unchanged-required",
+      "other_root_failures": "retain-separate-bounded-root-screen-disposition",
+      "policy": "controlled-known-valid-or-completed-response-known-invalid-ambiguity-v3",
+      "response_ambiguity": "completed-root-response-only-not-known-valid-or-site-admission"
+    },
+    "buflo_incoming_credit_release_acceptance": {
+      "active_incoming": "strict-periodic-full-cells-from-recorded-incoming-arm-time",
+      "binding": "explicit-preparation-opt-in-before-workload-hash-and-admission-seal",
+      "capture_authority": "none-requires-separate-live-capture-readiness-and-deep-verification",
+      "cell_bytes": 1200,
+      "full_resource_graph": "unchanged-no-resource-or-origin-pruning",
+      "incoming_clock": "first-cadence-grid-opportunity-after-actual-qualified-chaff-terminal-request-ack-and-full-known-cell-capacity",
+      "incoming_release_window_us": 10000,
+      "native_marker": "bound-preparation-v1-exact-v2-policy-period-cell-and-window",
+      "other_modes": "unchanged-no-buflo-marker-or-release-window-authority",
+      "outgoing_clock": "actual-shaped-request-from-tick-zero-at-unchanged-fixed-cadence",
+      "outgoing_deadline_window_us": 5000,
+      "period_us": 20000,
+      "scientific_credit": false,
+      "startup_receipt": "separate-actual-native-ack-capacity-arm-and-skipped-startup-opportunity-proof",
+      "startup_traffic": "no-preclock-unshaped-transfer-fake-capacity-fake-ack-or-missed-cell-promotion",
+      "traffic_settings": "unchanged-fixed-1200-byte-cells-at-20000-microsecond-period"
+    },
+    "buflo_incoming_credit_release_policy": "rapid-v5-half-period-10000us-ack-start-v2",
+    "candidate_order_policy": "curated-v1-sha256-order-then-frozen-tranco-catalogue-order-dedup-domain-v2",
+    "capture_authority": "none-requires-separate-live-capture-readiness",
+    "cohort_contracts": [
+      {
+        "class_count": 10,
+        "formal_sample_target": 0,
+        "generation": "launch-10",
+        "planned_visit_count": 50,
+        "role": "shakedown",
+        "study_id": "classifier-curated10-rapid-v5",
+        "visits_per_class_mode": 1
+      },
+      {
+        "class_count": 50,
+        "formal_sample_target": 16000,
+        "generation": "final-50",
+        "planned_visit_count": 16000,
+        "role": "final",
+        "study_id": "classifier-curated50-rapid-v5",
+        "visits_per_class_mode": 64
+      }
+    ],
+    "formal_modes": [
+      "undefended",
+      "front",
+      "tamaraw",
+      "buflo",
+      "cs-buflo"
+    ],
+    "freshness_policy": {
+      "new_approved_origin_chaff_preparation": "started-at-or-after-published-at-utc",
+      "new_automated_screen_and_page_policy_failure": "at-or-after-published-at-utc",
+      "new_buflo_ack_start_preparation": "started-at-or-after-published-at-utc",
+      "new_buflo_release_policy_preparation": "started-at-or-after-published-at-utc",
+      "new_operational_collector_failure": "started-at-or-after-published-at-utc",
+      "new_policy_preparation": "started-at-or-after-published-at-utc",
+      "new_primary_identity_preparation": "started-at-or-after-published-at-utc",
+      "new_tamaraw_capture_policy_preparation": "started-at-or-after-published-at-utc",
+      "new_typed_browser_policy_failure": "started-at-or-after-published-at-utc",
+      "new_unsuccessful_live_attempt": "started-at-or-after-published-at-utc",
+      "old_failed_attempts": "preserved-zero-credit-no-promotion-relabel-or-retroactive-terminal-authority",
+      "parent_profile_not_before_utc": "2026-10-02T12:58:17Z",
+      "supporting_navigation_and_exact_page_h3": "may-reopen-unchanged-parent-v5-profile-source-image-and-independent-module-bound-observations",
+      "supporting_root_observations": "may-reopen-unchanged-parent-v5-profile-source-image-and-module-bound-observations",
+      "v1_browser_failure_receipts": "retain-v1-only-authority-no-v2-relabel-or-promotion",
+      "v2_failed_attempts": "retain-v2-only-authority-no-v3-relabel-or-promotion",
+      "v3_failed_attempts": "retain-v3-only-authority-no-v4-relabel-or-promotion",
+      "v4_failed_attempts": "retain-v4-only-authority-no-v5-relabel-or-promotion",
+      "v5_failed_attempts": "retain-v5-only-authority-no-v6-relabel-or-promotion",
+      "v6_failed_attempts": "retain-v6-only-authority-no-v7-relabel-or-promotion",
+      "v7_failed_attempts_and_admissions": "retain-v7-only-authority-no-v8-relabel-promotion-or-post-admission-manifest-change",
+      "v8_failed_attempts_and_admissions": "retain-v8-only-authority-no-v9-relabel-promotion-or-post-admission-manifest-change",
+      "v9_failed_attempts_and_admissions": "retain-v9-only-authority-no-v10-relabel-promotion-or-post-admission-manifest-change"
+    },
+    "non_replayable_egress_guard": "unchanged-fail-closed-no-api-suppression-or-transport-waiver",
+    "operational_collector_deferral": {
+      "acceptance_policy": "unchanged-v2-complete-live-graph-and-cross-origin",
+      "actual_attempt_count": 1,
+      "event_parameters": "unavailable-not-reconstructed",
+      "exception_module": "qcsd_lab.cdp_targets",
+      "exception_type": "CdpTargetIntegrityError",
+      "failure_scope": "collector-limitation",
+      "formal_accepted_trace_count": 0,
+      "navigation_action": {
+        "kind": "catalogue-boundary-navigation",
+        "scope": "catalogue-root-and-optional-link-navigation",
+        "selected_page_h3_and_automated_screen": "absent-before-page-selection"
+      },
+      "new_failure_freshness": "started-at-or-after-published-at-utc",
+      "other_errors": "blocking-operational-no-terminal-authority",
+      "outcome": "operational-collector-screen-deferred",
+      "policy": "prospective-bounded-operational-collector-screen-deferral-v3",
+      "preparation_action": {
+        "kind": "complete-graph-preparation",
+        "required_proof": "exact-navigation-selected-page-h3-and-automated-screen",
+        "scope": "exact-selected-page-complete-resource-graph-preparation"
+      },
+      "proof_policy": "prospective-exact-cdp-event-collector-limitation-v1",
+      "required_failure_proof": "independently-reopened-exact-candidate-runtime-source-modules-actual-class-traceback-action-and-closed-attempt-inventory",
+      "required_root_screen": "known-valid-or-completed-response-known-invalid-with-passing-controls",
+      "retryable": true,
+      "scientific_credit": false,
+      "site_credit": 0,
+      "triage_reason": "operational-collector-screen-deferred",
+      "whole_domain_ineligible": false
+    },
+    "page_policy_deferral": {
+      "navigation_action": {
+        "exception_types": [
+          "PassiveRenderPolicyError"
+        ],
+        "failure_page_attribution": "unavailable",
+        "kind": "catalogue-boundary-navigation",
+        "scope": "catalogue-root-and-optional-link-navigation",
+        "selected_page_h3_and_automated_screen": "absent-before-page-selection"
+      },
+      "new_failure_freshness": "started-at-or-after-published-at-utc",
+      "other_errors": "operational-no-policy-screen-terminal-authority",
+      "outcome": "page-policy-screen-deferred",
+      "policy": "prospective-typed-page-policy-screen-deferral-v2",
+      "preparation_action": {
+        "exception_types": [
+          "PassiveRenderPolicyError",
+          "FullGraphH3PolicyError",
+          "ResponseStabilityPolicyError"
+        ],
+        "kind": "complete-graph-preparation",
+        "required_proof": "exact-navigation-selected-page-h3-and-automated-screen"
+      },
+      "required_failure_proof": "independently-reopened-exact-candidate-image-source-modules-and-raw-typed-stage-evidence",
+      "required_root_screen": "known-valid-or-completed-response-known-invalid-with-passing-controls",
+      "scientific_credit": false,
+      "scope": "candidate-action-screen-only-not-whole-domain-ineligibility",
+      "triage_reason": "page-policy-screen-deferred"
+    },
+    "parent_admission_policy": "root-and-exact-page-h3-complete-live-graph-with-bound-buflo-ack-start-policy-v9",
+    "parent_profile_sha256": "f7eb0228a06429cc2ae91d0f9d52577399e15b68f4915d41cb60291445542b60",
+    "parent_selection_amendment_sha256": "a9469ba89ddfa3cf1d36352f40e6f1b2a42eec39f114d7f9548fdfa9e03401ca",
+    "parent_selection_policy": "first-N-admitted-with-source-bound-unsuccessful-live-attempt-deferrals-v4",
+    "primary_document_identity_acceptance": {
+      "body_variation": "actual-complete-body-byte-count-and-sha256-may-vary",
+      "chaff": "unchanged-qualified-known-valid-2xx-exact-response-only",
+      "expected_primary_response": "retain-first-actual-native-response-status-bytes-and-sha256",
+      "other_resources": "exact-prepared-status-body-byte-count-and-sha256",
+      "required_proof": "three-fresh-complete-source-bound-full-graph-raw-replays-independently-reopened",
+      "resource": "unique-known-valid-primary-document-zero-only",
+      "scientific_scope": "fixed-public-page-resource-graph-with-variable-primary-document-body",
+      "unchanged_identity": "exact-url-prepared-2xx-status-request-headers-and-full-graph"
+    },
+    "primary_document_identity_policy": "variable-primary-document-body-v1",
+    "published_at_utc": "2026-10-03T10:28:08Z",
+    "qualified_chaff_origin_acceptance": {
+      "candidate_order": "prepared-body-bytes-descending-then-resource-id-then-url",
+      "full_resource_graph": "unchanged-no-resource-or-origin-pruning",
+      "identity": "separate-fresh-sustained-identity-response-qualification-required",
+      "origins": "exact-preparation-approved-origins-only",
+      "primary_document": "resource-zero-excluded-from-padding",
+      "resource": "known-valid-2xx-non-primary-resource-with-prepared-body-at-least-1200-bytes",
+      "scientific_credit": false
+    },
+    "qualified_chaff_origin_policy": "prepared-approved-origins-v1",
+    "revision": 10,
+    "selection_policy": "first-N-admitted-with-source-bound-unsuccessful-live-attempt-deferrals-v4",
+    "tamaraw_capture_acceptance": {
+      "binding": "explicit-preparation-opt-in-before-workload-hash-and-admission-seal",
+      "capture_authority": "none-requires-separate-live-capture-readiness-and-deep-verification",
+      "cell_bytes": 1200,
+      "full_resource_graph": "unchanged-no-resource-or-origin-pruning",
+      "historical_outgoing_release_window_us": 5000,
+      "incoming_credit_semantics": "explicit-physical-ownership-with-pending-retry-v1",
+      "incoming_pending_retry": "retain-partial-owned-release-without-slotless-reclassification-or-fabricated-advertisement",
+      "incoming_period_us": 5000,
+      "incoming_physical_proof": "whole-cell-physical-advertisement-and-consumption-required",
+      "native_marker": "bound-preparation-v1-exact-policy-cadence-cell-modulus-and-windows",
+      "other_modes": "unchanged-no-tamaraw-marker-or-window-authority",
+      "outgoing_period_us": 20000,
+      "outgoing_physical_proof": "unique-actual-shaped-1200-byte-udp-handoff-in-half-open-window",
+      "outgoing_release_window_us": 10000,
+      "padding_modulus": 100,
+      "paper_equivalent": false,
+      "scientific_credit": false
+    },
+    "tamaraw_capture_policy": "rapid-v5-tamaraw-owned-retry-outgoing-10000us-v1",
+    "unsuccessful_live_attempt_deferral": {
+      "actions": [
+        "catalogue-boundary-navigation",
+        "selected-page-h3-probe",
+        "complete-graph-preparation"
+      ],
+      "actual_attempt_count": 1,
+      "admission_policy": "unchanged-complete-live-graph-and-cross-origin-exact-page-h3",
+      "blocking_failures": "input-schema-source-runtime-configuration-preflight-post-call-verification-and-failed-controls",
+      "boundary": "actual-live-backend-call-after-independent-source-runtime-and-input-preflight",
+      "controlled_negative_page_probe": "independently-reopened-before-and-after-known-valid-controls-and-exact-page-raw-probe",
+      "failed_operation_evidence": "actual-exception-and-closed-retained-attempt-inventory-not-message-derived-site-classification",
+      "formal_accepted_trace_count": 0,
+      "outcome": "unsuccessful-live-attempt-screen-deferred",
+      "policy": "prospective-unsuccessful-live-attempt-deferral-v4",
+      "required_root_screen": "known-valid-or-completed-response-known-invalid-with-passing-controls",
+      "retryable": true,
+      "scientific_credit": false,
+      "site_credit": 0,
+      "whole_domain_ineligible": false
+    }
+  },
+  "payload_sha256": "4ad1b723245a57cf2b2cc8fb046be1db6707c151c2d266963e7c7056ad292df7",
+  "receipt_type": "qcsd-rapid-v5-selection-amendment",
+  "schema_version": 5
+}
