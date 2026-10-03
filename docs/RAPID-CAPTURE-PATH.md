@@ -14,7 +14,24 @@ homepage credit fix, endpoint-specific final UDP drain evidence and explicit
 prospective BuFLO incoming tolerance. They require fresh affected captures;
 the previous failed attempts keep their original results.
 
-**Latest milestone, 4 October, 06:24 Sydney (3 October, 19:24 UTC):**
+**Latest milestone, 4 October, 06:36 Sydney (3 October, 19:36 UTC):**
+The tested private gate credential repair is published as Lab `51896a2`
+and installed in runtime 006, with unchanged Native `3d994f0d`. All twelve
+actual operations and the full 2,388-entry source inventory reopen. Verified
+client reuse took 1.072 seconds, with no Native rebuild; image builds took
+58.014 and 69.619 seconds. Fresh paired capture and recovery remain pending.
+The successful runtime 005 ordinary/FRONT diagnostics keep their original
+source labels; installation alone grants no trace credit.
+
+Admission continuation 006 is running on its original `818deb6` / `39464c62`
+and registry 000002. Latest closed checkpoint 000056 still records
+**23 decisions, one admitted site and zero formal traces**. The unsuccessful
+new registry append remains preserved while registered candidates continue.
+The final target remains **50 × five × 64 = 16,000**, with the separate
+fifty-trace study shakedown still pending. See the
+[installed runtime evidence](EVIDENCE-INDEX.md#v12-private-gate-runtime-006).
+
+**Earlier milestone, 4 October, 06:24 Sydney (3 October, 19:24 UTC):**
 The target stays **50 × five × 64 = 16,000 accepted formal traces**, with
 3,200 per setting. Runtime 005 ordinary and FRONT diagnostics passed full
 deep verification; the separate fifty-trace study shakedown remains pending.

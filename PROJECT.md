@@ -41,7 +41,28 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Latest milestone, 4 October, 06:24 Sydney (3 October, 19:24 UTC):**
+**Latest milestone, 4 October, 06:36 Sydney (3 October, 19:36 UTC):**
+The private gate startup repair is published as Lab `51896a2`, with unchanged
+Native `3d994f0d`. Runtime 006 installs that exact clean source: all twelve
+actual operations and 2,388 source entries reopen, including the unchanged
+1,783-file Native inventory and actual client export. Client reuse took
+1.072 seconds; image builds took 58.014 and 69.619 seconds, installed checks
+16.510 and 17.974 seconds. No Native rebuild ran. The frozen execution
+checkout remains on `51896a2` while this documentation can advance.
+
+The repair has focused source and actual kernel credential evidence, but a
+fresh paired capture and independent recovery still need to run on runtime
+006. The successful runtime 005 ordinary/FRONT recordings keep their original
+source identities and diagnostic scope. The target remains **16,000 formal
+traces**, with zero accepted so far. Admission continuation 006 is running
+on unchanged `818deb6` / `39464c62` and registry 000002, which still covers
+the next candidate. Its latest closed scientific checkpoint is **000056:
+23 decisions, 1/50 sites, 0/50 shakedown, 0/16,000 formal**. The failed
+forty-screen registry append is preserved separately and does not block the
+remaining registered candidates. See the
+[runtime 006 evidence](docs/EVIDENCE-INDEX.md#v12-private-gate-runtime-006).
+
+**Earlier milestone, 4 October, 06:24 Sydney (3 October, 19:24 UTC):**
 The target remains **50 sites × five settings × 64 visits = 16,000 accepted
 formal traces**, or 3,200 per setting. Runtime 005's ordinary and FRONT
 diagnostics passed deep verification on the complete 260-resource/four-origin

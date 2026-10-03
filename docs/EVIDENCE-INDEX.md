@@ -9,6 +9,44 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ## Application response policy repair
 
+### V12 private gate runtime 006
+
+Published Lab `51896a26fb619ade949ed5137f966f2718f1c2d6` installs the
+tested private gate credential repair, with unchanged Native
+`3d994f0d557e2d27873bace0f4efd0f401660bc7`. Local
+`terminal-primary-v12-runtime-20261004-006/canonical-runtime.json`, SHA
+`de64c03b550bc186c5d59cf2d60169b06b32a818afd0b616a3168580699a5306`,
+closed at `2026-10-03T19:34:40.643386Z`. All twelve actual operation starts,
+commands, completions and raw log hashes reopen. The full 2,388-entry source
+inventory, SHA
+`328a6cb289a571ec5f1686d1a869dc1a6cdf40728ba1a19f46a642a587f2e8cc`,
+matches the staged clean source; its 1,783 Native entries match the original
+verified client producer. The exact clean execution checkout and Gitlink
+remain frozen on this source.
+
+Client reuse closed 0 in 1.072 seconds and retains proof SHA
+`1494359e3341c6cee422e4fe505bba0a0b14a9eb5faa51fd234c275f9750489a`.
+No Native release-build operation exists in this namespace. Collection and
+preparation image builds closed 0 in 58.014 and 69.619 seconds; their actual
+installed source/client checks closed 0 in 16.510 and 17.974 seconds. The
+immutable image identities are
+`sha256:63033239f5f0c90b2f8c19ab06219b363ad3b59ef95ddad9b2fc09fb6ebdfbc5`
+and
+`sha256:e422768e444cbd5c7d4c8ff5ff2a2727d3ac14bcc6709c9b4923c95f3dcc3d92`.
+Actual export closed 0 in 4.768 seconds; the executable client remains
+`8b4288335d481b36bc096891125651b85345589daa47fb7260d5aa9048b962f2`.
+Its exported source manifest SHA is
+`ddf1730cca2898dc5ea82adf73e0503193ddb7f85a992801257a8bdd3738be4e`.
+This is installed-byte evidence only. A fresh paired capture, recovery trial
+and study shakedown still need their own matching closures. Runtime 005
+successful ordinary/FRONT diagnostics retain their actual source labels.
+
+Admission continuation 006 is separately running on unchanged original
+`818deb6` / `39464c62` and registry 000002. Latest closed checkpoint 000056
+records 23 decisions, one admitted site and zero formal traces. All old
+attempts remain preserved, including the failed new registry append below.
+The target remains **50 × five × 64 = 16,000 accepted formal traces**.
+
 ### V12 parallel private gate startup failure
 
 The formal target is unchanged: **50 sites × five settings × 64 visits =
