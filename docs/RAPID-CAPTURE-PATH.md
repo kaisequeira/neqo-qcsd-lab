@@ -14,7 +14,32 @@ homepage credit fix, endpoint-specific final UDP drain evidence and explicit
 prospective BuFLO incoming tolerance. They require fresh affected captures;
 the previous failed attempts keep their original results.
 
-**Latest milestone, 4 October, 08:46 Sydney (3 October, 21:46 UTC):**
+**Latest milestone, 4 October, 09:37 Sydney (3 October, 22:37 UTC):**
+The target remains **50 × five × 64 = 16,000 accepted formal traces**.
+New site admission is running with all **113 retained root screens** and
+fresh page preparation under the installed browser repair. Its checkpoint
+000033 has **12 completed decisions, one newly admitted site and zero
+formal traces**. The previous context's one admission remains separate.
+
+The latest complete-page baseline, deep check, padding qualification and
+four defended preflights passed. BuFLO then revealed a timing bug: the code
+gave incoming credit five milliseconds although its prepared settings
+declared ten. The failed recording is preserved. The repair keeps outgoing
+transmission at five milliseconds and gives incoming credit its declared
+ten; **127 Lab tests and one producer-contract check passed**. Native
+`8417787c` is published with **12 selected compiled checks passing**.
+Matching installation and fresh traffic verification remain needed.
+
+A cheap Alibaba browser check found a further cleanup race in about ten
+seconds. Its failed evidence is preserved and the repair is being checked
+separately while site admission continues. The latest browser repair passed
+392 host cases; a subsequent Toom probe found another canceled-callback
+issue in about nine seconds. The Native incoming-window installation and
+capture check can proceed independently. The ten-site shakedown, final
+50-site cohort, successful parallel recovery and formal capture are still
+pending. See the [current evidence](EVIDENCE-INDEX.md#v13-retained-root-admission-and-incoming-window-repair).
+
+**Earlier milestone, 4 October, 08:46 Sydney (3 October, 21:46 UTC):**
 The target stays **16,000 accepted formal traces**. The new BuFLO runtime
 is installed and its short, full-page baseline recording is running.
 The cached Native build took **124 seconds**, and the two image builds

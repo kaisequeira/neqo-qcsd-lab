@@ -9,6 +9,100 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ## Application response policy repair
 
+### V13 retained-root admission and incoming-window repair
+
+At **4 October, 09:37 Sydney**, new local context
+`rapid-v12-site-acquisition-20261004-018` is running on clean Lab
+`d071060f8195426c04202318d85acb84a9c0f55d` / Native
+`39464c626cf1c39a48b74600a440b38b1eeceac2`. Its browser runtime is
+`rapid-v13-cdp-admission-runtime-20261004-001`, canonical SHA
+`1e78f661667eaf574838d1814b89834f8342805e1801dc8815f19705f19be846`.
+All twelve actual operations, the 2,369-file installed source inventory and
+the 1,783-file Native inventory reopen. Exact Native client reuse took
+1.110 seconds; collection/prepare image builds took 57.539/61.811 seconds.
+The original root-screen evidence and all original context-017 page
+decisions remain separate. New registry 000001 retains the 113 actual root
+screens; its SHA is
+`0d679e854da54e206dcb50a2fdab893c623ae1a2bb342400b4d29aa69d61bc4f`.
+Checkpoint 000033 records 12 terminal decisions, one newly admitted
+sites and zero formal traces. The target stays **50 × five × 64 = 16,000**.
+
+Local `rapid-v12-capture-canary-20261003-001/actual-poki-008` retains the
+unchanged full 260-resource/four-origin diagnostic workload. Ordinary
+capture/deep verification passed in 159.451/6.867 seconds; deep receipt SHA
+`e62b37567c2d1d5073d8567cc497bdb12d03f8c10619fe089accd7926e196811`.
+Padding qualification passed in 71.030 seconds with 120 complete responses
+across three epochs; all four defended preflights passed in 9.630 seconds.
+These are diagnostic operations with zero formal credit.
+
+The fresh BuFLO attempt failed and its 27 sealed files reopen; seal SHA
+`77037a0c9d200c272415aa69e7606d12bd71aa951f7dad7995fcf346979dde4c`.
+It completed 305 full outgoing cells without an outgoing miss, but job 304
+rejected two unresolved incoming credits after approximately 6.09 ms.
+The prepared incoming policy declared 10 ms; the controller and retry path
+still used the outgoing 5 ms deadline. The recording is not accepted.
+
+Prospective Native receipt schema 10/job schema 2 and wakeup schema 19
+separate those role deadlines. Outgoing remains 5 ms; incoming is 10 ms
+only with the bound preparation, otherwise the legacy 5 ms. The matching
+Lab closure is local
+`buflo-role-deadline-lab-checks-20261004-003/source-closure.json`, SHA
+`342c42a872e8d04891cb37e27565200de3b167a335fddfb2b803d49872efd88e`.
+It closes 127 focused passing cases and one held-producer contract check,
+preserving the initial failed check and exact historical schemas.
+Independent source review found no blocker. Native source closure under
+`buflo-incoming-window-native-checks-20261004-001` has SHA
+`206647182b577af2c3794fb415b91e94993e457b765f56f46a73cd8b56e31b3c`.
+It retains nine actual operations, both complete 1,783-file source
+inventories, binary hashes and **12 passing selected compiled cases**.
+The original constructor-fixture failure and missing-NSS-fixture-mount
+failure remain preserved. The corrected controller fixture changes only
+test code; its production prefix equals the runner-tested source exactly.
+Native `8417787ce0da2d83a67b0b77dd6ef6a316611741` is published on main and
+the desktop branch. Publication record under
+`buflo-incoming-window-native-publication-20261004-001` has SHA
+`f32ca05cae0b4bf54e9905f4392d957f0f7345e5d359e45f56708bd7ed09d73d`.
+Independent reopening verifies both source inventories, all operations,
+test results, binaries and current published source bytes. Installation
+and fresh affected capture remain pending.
+
+Local `cdp-lifecycle-installed-diagnostic-20261004-001` contains the actual
+new-runtime Toom success (21.870 seconds) and Alibaba cleanup failure.
+The prospective 13-line swap/remove state fix closed 355 host cases under
+`cdp-swap-remove-cleanup-checks-20261004-001`; closure SHA
+`8214f89aaa630b435c4f39411ca49285f02942888fda163289e0e073910d63b2`.
+The actual uninstalled probe under
+`cdp-lifecycle-overlay-diagnostic-20261004-005/actual-alibaba-001` failed
+in 9.905 seconds after authenticated frame removal and target retirement,
+when the outer cleanup send returned “No session.” Raw journal SHA
+`0eb7d180d290e41aaa8ea69517f5813b010232e85505b5c11516418b8a99f085`.
+Source/runtime were unchanged and the profiler and passive listener were
+restored. This exposed transport race is being repaired; the failure retains
+zero site and formal credit, and no inner acknowledgement is fabricated.
+
+The retired-cleanup transport repair and abort-only swap/remove repair
+close **392 host cases** under local
+`cdp-abort-swap-remove-cleanup-checks-20261004-001`; closure SHA
+`33cb3c113fde72d4f29676d899028faceb6e4a6e03e2bcf15a14e5c7f72a9424`.
+Their new transport flags are internal diagnostics; the public render
+receipt and strict acquisition consumers retain their existing shape.
+Actual Alibaba probe 006 failed after **42.964 seconds**: its real
+30-second passive-render timeout was masked by an abort cleanup error.
+It did not exercise the new transport-absence path. Raw journal SHA
+`ec46357591c8303445ea199a2dad02ef60fb24a6a94a27ecc23046ecbfc2b9d9`.
+
+Actual Toom probe 007 failed after **8.543 seconds** (outer operation
+14.651 seconds) under uninstalled collector SHA
+`e05e18a2f76c063d1b1986f49c0f2171cfb27476a8bfe19607bae0ca547fac4f`.
+It rejected a second, canceled `ERR_ABORTED` document failure **9.970 ms**
+after the same loader's authenticated before-network CSP denial. No
+internal fallback navigation witness existed at that point. Journal SHA
+`9f6c28e0174547de1dd2ea7649683c901e6f4d8cc9fdc50f240dd5abdc908d5e`.
+Runtime/source were unchanged and both observers were restored. This
+callback issue is being repaired separately; all probes retain zero site
+and formal credit. The frozen admission context and Native traffic repair
+proceed independently.
+
 ### V13 runtime 008 and CSP browser proof
 
 At **4 October, 08:46 Sydney**, Lab `ea17b3893686bc02fbc99dfc2975c39bd0c26de1`

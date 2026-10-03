@@ -41,7 +41,44 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Latest milestone, 4 October, 08:46 Sydney (3 October, 21:46 UTC):**
+**Latest milestone, 4 October, 09:37 Sydney (3 October, 22:37 UTC):**
+The formal target remains **50 sites × five settings × 64 visits = 16,000
+accepted traces**. New admission context 018 is running with clean Lab
+`d071060f` / unchanged Native `39464c62`. Checkpoint **000033** records
+**12 terminal decisions, one newly admitted site and zero formal traces**.
+Its separate installed browser runtime retains all **113 verified root
+screens**; page preparation uses the new browser code. Original context 017
+remains paused with its separate 25 decisions and one admission.
+
+Runtime 008's full 260-resource/four-origin baseline and deep check passed
+in **159.451 and 6.867 seconds**. Padding qualification and four defended
+preflights passed in **71.030 and 9.630 seconds**. Its fresh BuFLO recording
+failed after 305 complete outgoing cells with no outgoing misses: incoming
+credit was rejected around **6.09 ms** by a five-millisecond implementation
+guard despite the bound preparation declaring **10 ms**. The whole failed
+recording retains zero accepted and formal credit.
+
+The prospective repair separates the incoming deadline from the unchanged
+five-millisecond outgoing deadline. Matching Lab checks passed **127 cases
+plus one Native producer-contract check**; independent source review found
+no blocker. Native **`8417787c` is published**, with **12 selected compiled
+checks passing**. The initial constructor-fixture and missing-NSS-mount
+test failures remain preserved. Matching installation and fresh traffic
+verification are pending.
+
+Installed Toom discovery succeeded in **21.870 seconds**. Alibaba exposed
+another cleanup race; a 13-line repair passed **355 host cases**, then a
+cheap fresh probe failed in **9.905 seconds** when its already detached
+iframe's cleanup send returned “No session.” That failure is preserved and
+the narrowly scoped cleanup repair now passes **392 host cases**. A later
+Alibaba probe reached a genuine 30-second page stability timeout and an
+abort cleanup error. A new Toom probe then failed in **8.543 seconds** on
+a canceled callback following a before-network CSP denial. These browser
+repairs remain separate from the published Native incoming-window repair;
+none of the failed probes admits a site. See the
+[current admission and timing evidence](docs/EVIDENCE-INDEX.md#v13-retained-root-admission-and-incoming-window-repair).
+
+**Earlier milestone, 4 October, 08:46 Sydney (3 October, 21:46 UTC):**
 The target remains **50 × five × 64 = 16,000 accepted formal traces**.
 Original admission is paused at checkpoint **000062**, with **25 terminal
 decisions, one admitted site and zero formal traces**.

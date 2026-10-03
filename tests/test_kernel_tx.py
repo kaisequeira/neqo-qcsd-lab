@@ -598,7 +598,7 @@ def _runner_receipt_v9() -> dict[str, object]:
 
     raw = _runner_receipt_v8()
     raw["schema_version"] = 9
-    raw["semantics"] = KERNEL_TX_RUNNER_SEMANTICS
+    raw["semantics"] = kernel_tx.KERNEL_TX_RUNNER_V9_SEMANTICS
     raw["clock_mapping"]["schema_version"] = 6
     raw["clock_mapping"]["effective_envelope_semantics"] = (
         kernel_tx._EFFECTIVE_ENVELOPE_SEMANTICS_V6
@@ -2555,7 +2555,7 @@ def test_kernel_tx_schema_two_retains_large_monotonic_drift_as_exact_diagnostic(
     assert not kernel_tx_runner_receipt_valid(current)
 
 
-def test_kernel_tx_schema_nine_constants_match_the_rust_producer() -> None:
+def test_kernel_tx_schema_constants_match_the_selected_rust_producer() -> None:
     native_root = Path(os.environ.get("QCSD_TEST_NATIVE_SOURCE_ROOT", Path(__file__).parents[1] / "neqo-qcsd"))
     source = (native_root / "neqo-bin/src/qcsd/mod.rs").read_text(
         encoding="utf-8"
@@ -2565,7 +2565,9 @@ def test_kernel_tx_schema_nine_constants_match_the_rust_producer() -> None:
         line for line in source.splitlines() if line.startswith(runner_prefix)
     )
     assert runner_line.endswith('";')
-    assert KERNEL_TX_RUNNER_SEMANTICS == runner_line[len(runner_prefix) : -2]
+    modern = "const BUFLO_KERNEL_TX_RECEIPT_SCHEMA_VERSION: u32 = 10;" in source
+    expected_semantics = KERNEL_TX_RUNNER_SEMANTICS if modern else kernel_tx.KERNEL_TX_RUNNER_V9_SEMANTICS
+    assert expected_semantics == runner_line[len(runner_prefix) : -2]
     protected_prefix = (
         'const BUFLO_KERNEL_PROTECTED_SELECTION_WAIT_SEMANTICS: &str = "'
     )
@@ -2587,7 +2589,7 @@ def test_kernel_tx_schema_nine_constants_match_the_rust_producer() -> None:
         == mapping_line[len(mapping_prefix) : -2]
     )
     assert "const BUFLO_KERNEL_TX_ETF_DELTA: Duration = Duration::from_millis(10);" in source
-    assert "const BUFLO_KERNEL_TX_RECEIPT_SCHEMA_VERSION: u32 = 9;" in source
+    assert f"const BUFLO_KERNEL_TX_RECEIPT_SCHEMA_VERSION: u32 = {10 if modern else 9};" in source
     assert "const BUFLO_KERNEL_ITEM_RECEIPT_SCHEMA_VERSION: u32 = 6;" in source
     assert "const BUFLO_KERNEL_CLOCK_MAPPING_SCHEMA_VERSION: u32 = 6;" in source
 
