@@ -11,6 +11,112 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ### Successor startup and endpoint engineering checks
 
+#### Installed V11 runtime and remaining live DATA stall
+
+The clean execution checkout uses Lab
+`838da8621547609abca82e55789b54dabed48236` and Native
+`616a0cdbca6aed2a495b89d8d6eccd9fd0498516`. Actual build and installed
+proofs are in `../diagnostic-rehearsals/owned-data-opportunity-runtime-20261003-001/`.
+All twelve build/check/export operations closed 0 and their actual logs
+and start/completion hashes independently reopen. Client build took
+**115.464 seconds**, collection/preparation images **58.306/65.046 seconds**,
+and installed checks **11.832/13.210 seconds**.
+
+| Runtime artifact | Exact identity |
+|---|---|
+| Canonical runtime SHA-256 | `ce73ad103530cd8687a5109c830ae23329e39560ed3a4f8871bc5ef602e34ce8` |
+| Collection image | `sha256:edf4c4f8fff8a515ad5d09e4267db44b2ff6ca27df6f9a0766bf4786d79b0923` |
+| Preparation image | `sha256:8a08cdbcb8361bade805ea80a381e055bb38f16a8505f0e4588bfd46b29f24d5` |
+| Installed client SHA-256 | `9d1214e93e299c293b162449f63f6d25280dc8519637c747d8e3dc34b61d54f7` |
+| Source inventory SHA-256 | `6b17138d23a555922e9fcd9133cc24dda197035328a2c48af4af07b15bbdc403` |
+
+Fresh one-attempt records are in
+`../diagnostic-rehearsals/rapid-v11-capture-canary-20261003-001/actual-poki-001/`.
+Plan SHA-256 is
+`f9c1371203187f21b6bc005b3a99d3dc2005f70b5db19185605f8ede6d3ca67a`;
+commands SHA-256 is
+`86a5b7e0530ef9749b7d6cfb4ba59b3d16135ccaebc2feb9ef8d0073153b8b87`.
+Derived workload SHA-256 is
+`f6caf03869473367c97170ddeb48c568cf2a957e6c984e683de588f25e337f67`.
+It retains all **260 resources and four origins**, adding only the declared
+BuFLO, Tamaraw and FRONT preparation flags. The V7 admission is lineage,
+not current site authority.
+
+The fresh undefended capture and ordinary deep verification closed 0.
+The host capture took **147.664 seconds**, deep check **7.558 seconds**;
+Native downloads took **0.781091 seconds**. Independent review reopened
+all nine authoritative files, exact source, DNS and result seal, complete
+response IDs and the original graph. It matched **1,474/1,474 raw packets**
+(276 outgoing, 1,198 incoming), with no tail or clock step. All 260 responses
+are complete: 259 HTTP 200 responses and one eligible, registered HTTP 401
+leaf; total body size **1,038,537 bytes**, primary **58,230 bytes**.
+Fresh 120-request padding qualification closed 0 in **69.874 seconds**;
+all four defended preflights also closed 0.
+
+| Setting | Closed live result | Host capture duration |
+|---|---|---:|
+| Undefended | Accepted diagnostic trace; ordinary deep and independent raw review pass. | 147.664 s |
+| BuFLO | Failed; primary remains incomplete, then kernel slot 8192 reports mismatched target attribution. Ordinary deep rejects it. | 231.517 s |
+| CS-BuFLO | Failed; primary remains incomplete and Native's 120-second limit expires. Ordinary deep rejects it. | 266.038 s |
+| Tamaraw | Failed; primary remains incomplete and Native's 120-second limit expires. Ordinary deep rejects it. | 275.794 s |
+| FRONT | Complete 260-resource diagnostic trace; ordinary deep verification and source-bound V11 marker pass. | 153.911 s |
+
+All thirteen preflight, qualification, capture and ordinary-deep operations
+are closed. The independently reopened aggregate
+`five-setting-attempt-closure.json` has SHA-256
+`223f24f5c386eec3282af12c70838df7e60f594a71095c02ac794224527e80ee`.
+FRONT's ordinary deep verification closed 0 at **13:04:16 UTC**, after
+**7.973 seconds**, with thirteen authoritative files. These two accepted
+diagnostic modes add no site, study shakedown or formal credit.
+
+All three failed paced settings retain **457 primary body bytes** and
+259 not-started resources. BuFLO's actual primary events consume 1,015
+stream bytes, record peer blocking at limit 1,016, then extend to 1,018
+using two explicitly owned bytes. The corresponding MAX_STREAM_DATA was
+encoded in the 1,200-byte endpoint-3 packet and physically handed off:
+client ingress at **471.276460 ms**, router post-veth at **471.547564 ms**.
+No later primary DATA or blocked-at-1,018 event is recorded. Thus a missing
+local handoff does not explain this stall. Three available bytes permit a
+minimum DATA encoding; they do not establish that the remote peer will
+progress. The real Neqo peer regression remains a valid local check, but
+does not prove compatibility with this live peer.
+
+The next owned-continuation repair must address the actual coordinated
+limits: minimum-only positive-tail grant, generic sixteen-byte scheduled
+parser cap, and a thousand-byte reservation cap shared with the unowned
+metadata allowance. It is being authored prospectively to draw a bounded
+continuation from an actual due incoming cell, preserve the unowned cap
+and retain physical ownership/consumption and unused FIN retirement. No
+resource is removed and no failed recording is promoted.
+
+The BuFLO attribution error occurred **before kernel enqueue**, at tick
+4096/slot 8192. The identity guard and 1,200-byte batch checks passed. The
+old failure record omits the drained attribution/composition, so the exact
+failing predicate cannot be recovered from it. Late construction and vector
+growth are supported investigation routes, not proven causes or a rollover
+claim. Better failure retention and capacity reservation outside protected
+selection are being prepared; the exact lateness guard remains required.
+
+The full-cell continuation also needs a prospectively declared terminal
+case before live use. A complete variable-length primary may end before
+all credit from its last owned cell is consumed. Unused advertised credit
+cannot be reassigned or reported as consumed. A separate V12 policy is
+being authored to permit at most one such incoming partial cell, only for
+the bound primary stream with actual FIN, a complete nonempty 2xx body and
+exact positive consumed/retired byte conservation. Its raw retirement/miss
+remains recorded; it gains no full-cell satisfaction. Every other incoming
+cell and all outgoing rules retain their existing requirements. This is
+not yet a published rule or live pass and grants no authority to V11
+failures.
+
+Fresh acquisition inputs are staged, but not initialized, under
+`../diagnostic-rehearsals/rapid-v11-site-acquisition-20261003-015/`.
+Launch SHA-256 is
+`6a10d7d4bbd44deb6df07638c30d0ca1e100fb3ddf73a97abfecad2884ad6452`;
+eight producer inventories have counts **3/3/5/7/10/8/13/21**. Its fresh
+73 root screens have not run. Current scientific counters remain **0/50
+sites, 0/50 study shakedown traces and 0/16,000 formal traces**.
+
 #### V11 source checks and minimum DATA write repair
 
 Native `616a0cdbca6aed2a495b89d8d6eccd9fd0498516` is published on `main`

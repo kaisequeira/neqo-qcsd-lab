@@ -41,6 +41,23 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
+**Latest live milestone, 3 October, 13:14 UTC:** clean Lab `838da86` /
+Native `616a0cdb` has a matching independently reopened installed runtime;
+all twelve build/check/export operations closed 0. The fresh five-setting
+diagnostic set is closed: **undefended and FRONT pass ordinary deep
+verification; BuFLO, CS-BuFLO and Tamaraw fail**. The baseline's independent
+raw review matched all 1,474 packets and complete 260-resource/four-origin
+graph. Fresh 120-request padding qualification and all four defended
+preflights passed. All three failed paced settings retain an incomplete
+457-byte primary and 259 not-started resources. The owned two-byte extension
+was physically sent; the remaining live stall requires a systematic
+scheduled-cell continuation repair. BuFLO separately fails a pre-enqueue
+target-attribution check whose exact old predicate was not retained.
+The next repair and prospectively bounded terminal-primary partial-cell
+policy are being authored and checked in isolated source. Failed attempts
+remain failed. Scientific counters are **0/50 sites, 0/50 shakedown traces
+and 0/16,000 formal traces**. See the [actual V11 records](docs/EVIDENCE-INDEX.md#installed-v11-runtime-and-remaining-live-data-stall).
+
 **Latest source milestone, 3 October, 12:27 UTC:** Native `616a0cdb` is
 published on `main` and the desktop branch. The owned-credit repair leaves
 room for the HTTP/3 sender's minimum three-byte DATA write, with physical

@@ -14,6 +14,20 @@ homepage credit fix, endpoint-specific final UDP drain evidence and explicit
 prospective BuFLO incoming tolerance. They require fresh affected captures;
 the previous failed attempts keep their original results.
 
+**Latest live milestone, 3 October, 13:14 UTC:** the clean `838da86` /
+Native `616a0cdb` runtime and all thirteen first-site operations are closed.
+**Undefended and FRONT pass ordinary deep verification**; all 260 resources
+and four origins are retained. The baseline also passes independent raw
+review. Fresh 120-request padding qualification and four defended preflights
+pass. **BuFLO, CS-BuFLO and Tamaraw fail** with the same remaining primary
+stall; BuFLO additionally reports a pre-enqueue attribution failure.
+A larger, genuinely owned due-cell continuation and a prospective narrow
+terminal-primary partial-cell rule are being authored before further live
+capture. No unused advertised bytes are reused or counted as consumed.
+The recorded failures gain no new authority. Current study counters remain
+**0/50 sites, 0/50 shakedown traces and 0/16,000 formal traces**. See the
+[closed attempts and next repair](EVIDENCE-INDEX.md#installed-v11-runtime-and-remaining-live-data-stall).
+
 **Latest source milestone, 3 October, 12:27 UTC:** published Native
 `616a0cdb` fixes the minimum DATA opportunity and passed **457 focused
 checks**, including a real HTTP/3 peer test. The integrated
