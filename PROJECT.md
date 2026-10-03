@@ -41,6 +41,26 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
+**Latest repair milestone, 4 October, 02:00 Sydney (3 October, 16:00 UTC):**
+Native `39464c62` completes the full **260-resource/four-origin** diagnostic
+page under BuFLO, CS-BuFLO and Tamaraw. All three recordings remain failed:
+the Lab verifier incorrectly equated advertisement construction time with
+the later successful socket handoff. Native already records both clocks.
+Published Lab `818deb6` binds the exact typed handoff columns to the schedule
+and requires production ≤ handoff ≤ FIN. Its **118 focused checks passed in
+70 seconds**; all committed bytes match the tested source, and independent
+review confirms the correction. Ordinary traffic and FRONT pass their first
+V12 deep checks. The corrected Lab runtime has now closed all twelve
+installed operations successfully. Its fresh ordinary recording passed deep
+verification at 01:50 Sydney; padding qualification closed 0 in 74 seconds,
+and all four defended preflights passed. Fresh BuFLO is recording; affected
+paced passes remain unproven until their deep receipts close. The Native
+client hash is unchanged. Namespace 016 remains staged, uninitialized and
+preserved; corrected namespace 017 is staged with the matching runtime and
+has not been initialized.
+Counters remain **0/50 admitted sites, 0/50 shakedown and 0/16,000 formal**.
+See the [handoff evidence](docs/EVIDENCE-INDEX.md#v12-physical-advertisement-clock-correction).
+
 **Latest source milestone, 4 October, 00:43 Sydney (3 October, 14:43 UTC):**
 the [V12 terminal-primary rule](docs/RAPID-V12-TERMINAL-PRIMARY-CELL.md)
 is declared before live use and integrated locally as Lab `5eca1fe`.

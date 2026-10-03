@@ -114,6 +114,118 @@ and 0/16,000 formal traces**. The installed V11 runtime cannot validate the
 new V12 Native behavior; matching installed source and
 fresh short captures remain required.
 
+#### Installed V12 runtime and fresh full-page attempt
+
+The clean frozen execution checkout uses Lab
+`9f0f98485daa54375d05c720469459add2920a53` and Native
+`39464c626cf1c39a48b74600a440b38b1eeceac2`. Both are published on `main`
+and the desktop branch. Actual records are in
+`../diagnostic-rehearsals/terminal-primary-v12-runtime-20261003-001/`.
+Root independently reopened all **twelve** closed build/check/export
+operations, source/client metadata, logs, completion records and full staged
+source inventory. Client build took **118.151 seconds**, images
+**60.943/76.046 seconds**, and installed checks **11.819/14.891 seconds**.
+
+| Runtime artifact | Exact identity |
+|---|---|
+| Canonical runtime SHA-256 | `b729eb3086f2010e73b2cffb04faee6e34b36b9e484d13dcadad4917ae3c2f47` |
+| Collection image | `sha256:2181ec9e84da65811bd6a5efc0bf37100072b38db6e8b53b9fff8096e2e7ad8c` |
+| Preparation image | `sha256:9a88021040d3e1e1edf4118dbff390c40ec0f890f5551e91def0b8fc0ccd3c81` |
+| Installed client SHA-256 | `859e68294d9bf1e2baab09842bd9fe61d20f373171176f764caa22cc9d3ca083` |
+
+The full-page short-check plan is staged at
+`../diagnostic-rehearsals/rapid-v12-capture-canary-20261003-001/actual-poki-001/`.
+Plan SHA-256 is
+`bbbba478daad9aa2bbd3a393a052818860dd08a346a7e95c955132e1e9f3ced0`;
+commands SHA-256 is
+`da2eee1c7247899ae9447aef461779aa4679d898bab44f57eff927e5320f2eb0`.
+The derived workload retains **260 resources and four origins**, with only
+the four declared preparation flags added before hashing. Baseline preflight
+closed 0. The complete later operation set is recorded below: ordinary
+traffic and FRONT pass; the paced recordings fail the original Lab clock
+comparison despite completing every resource. No site admission, shakedown
+or formal sample is claimed.
+
+Fresh acquisition namespace
+`../diagnostic-rehearsals/rapid-v12-site-acquisition-20261003-016/` is staged
+but uninitialized. Its launch manifest SHA-256 is
+`a566f1410595129991d5a248aad3998b729a341b83bbf12990f5a5e1c8cd44f3`.
+All eight current source groups and final matched runtime are bound; no old
+root screen or admission is imported. No `acquisition/` child exists yet.
+
+#### V12 physical advertisement clock correction
+
+All thirteen operations of the first V12 five-setting check are closed.
+Ordinary traffic and FRONT pass ordinary deep verification. **BuFLO,
+CS-BuFLO and Tamaraw complete all 260 resources**, without Native errors,
+but their captures fail `runner-binding`: `terminal primary schedule
+advertisement differs from physical observation`. The old records remain
+failed and retain zero site, shakedown and formal credit.
+
+Native `neqo-bin/src/qcsd/trace_files.rs` records raw advertisement production
+separately from successful socket handoff. The raw observation's schema-2
+`credit_advertised_at_us` and `credit_advertisement_delay_us` already match
+the scheduled cell. BuFLO's production is **2,035,198 µs**, handoff
+**2,035,365 µs**, and actual FIN **2,041,032 µs**. Its final owned cell has
+**476 consumed / 724 retired bytes**. CS-BuFLO has **587 / 13**, and Tamaraw
+**292 / 908**. Complete responses and the whole-run credit ledgers reopen.
+
+Author commit `74275f61b66de58165884a3359ba94ca78ce7d28`, published in Main
+as `818deb62ccfd71441f80929f50b87530316ae896`, changes only
+`src/qcsd_lab/capture_acceptance_policy.py` and its focused terminal fixture.
+It binds the exact existing schema-2 handoff and delay to the schedule,
+requires production ≤ handoff ≤ FIN, and retains source, ownership, complete
+response and consumed/retired checks. It does not change the prospective
+V12 declaration, traffic settings or Native `39464c62`.
+
+Actual proof is in
+`../diagnostic-rehearsals/rapid-v12-physical-advertisement-lab-checks-20261003-001/`.
+The focused operation closed 0 at **15:27:35.888610 UTC**, passed **118 cases
+in 70.22 seconds**, and kept all **586 tracked Lab files** unchanged.
+Committed bytes independently match the held inventory. The source closure
+SHA-256 is `419d70c86b24f625c87dbea8bb86e721d843e0844b715d391f225ee07ebc268a`;
+actual stdout is `36c8e862a35471c0844ca457d47ddbc4363f78cb39197469d9b5d489a1274f72`.
+Development run 1819 preserved 50 passing cases and four fixture-writer
+errors; the corrected twelve-case subset passed before final closure.
+
+Independent read-only replay diagnoses the retained failed records without
+writing a new accepted receipt or changing their checkpoints. Fresh paced
+capture proof on the corrected Lab runtime is still required. Runtime
+successor `../diagnostic-rehearsals/terminal-primary-v12-runtime-20261003-002/`
+has closed all twelve installed build/check/export operations successfully;
+their logs, source inventory and actual exported bytes independently reopen.
+The canonical runtime SHA-256 is
+`64fd905d95d8b28feb27fabf42e6ae9515b5df55623341434a369a8af3905aa1`.
+Collection image is
+`sha256:1c206d62f19286228b1b41b0f22b70ec93cb28ea7ea22fa848d70b6541bc1458`;
+preparation image is
+`sha256:48c2f53f00522ff4ef52bc25c59a3793f9c9507bb03232305859d31eb5663f67`.
+The Native client SHA-256 remains
+`859e68294d9bf1e2baab09842bd9fe61d20f373171176f764caa22cc9d3ca083`.
+Namespace 016 remains uninitialized. Corrected acquisition namespace
+`../diagnostic-rehearsals/rapid-v12-site-acquisition-20261003-017/` is staged
+with launch manifest SHA-256
+`686399ec57e6951faedcdc8841ff4b4c192f9017d7a740b59b0a90798871e33e`.
+Its eight source groups bind the corrected source and matching runtime; it
+has not been initialized and imports no old root-screen or admission credit.
+
+Fresh short-check root is
+`../diagnostic-rehearsals/rapid-v12-capture-canary-20261003-001/actual-poki-002/`.
+Its plan SHA-256 is
+`59b7047104d96eb8dcd9d9d2efe0f600e43c528cfd6d79ab469b0e0dcb9076d2`;
+commands SHA-256 is
+`caf7f3b4259e11e38e86981365f7e55feb870153928ec445840db4c72db76c1d`.
+Baseline preflight closed 0. `undefended-deep-verification.json` completed
+valid at **15:50:15.913038 UTC**, with one accepted smoke sample, all
+260 resources/four origins retained, and zero study or formal credit.
+`qualification-complete.json` closed at **15:58:08.143236 UTC**;
+its actual operation exited 0 in **74.078 seconds**. The named manifest
+SHA-256 is `a1c50a70c3426616f3e77b83a90fb7c2dc710ec8dbddc732707e181cdf7de2eb`;
+sidecar SHA-256 is `d9ab65d54f3f221e40cc16e2e5f57d3e5c1f0bb524e0d3b08f1b81c029c581fe`.
+All four defended preflights completed valid at **15:59:02.685611 UTC**;
+their actual operation exited 0 in **11.309 seconds**. Fresh BuFLO is running.
+No affected paced pass is claimed before its fresh deep receipt closes.
+
 #### Installed V11 runtime and remaining live DATA stall
 
 The clean execution checkout uses Lab

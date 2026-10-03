@@ -32,6 +32,21 @@ site admission. Counters remain **0/50 sites, 0/50 shakedown traces and
 0/16,000 formal traces**. See the
 [exact source proof](EVIDENCE-INDEX.md#v12-terminal-primary-policy-and-lab-source-checks).
 
+**Later live diagnosis, 4 October, 02:00 Sydney (3 October, 16:00 UTC):**
+all three paced settings now complete the entire 260-resource page under
+Native `39464c62`. Their recordings failed a Lab clock comparison, not page
+completion: advertisement production and successful socket handoff are
+distinct timestamps. Published Lab `818deb6` corrects the comparison using
+the existing typed physical handoff fields; **118 focused cases pass**.
+Ordinary traffic and FRONT pass their first V12 deep checks. The corrected
+runtime has passed all twelve installed operations; its fresh ordinary
+recording also passes deep verification. Padding qualification closed 0 in
+74 seconds, and all four defended preflights passed. Fresh BuFLO is recording;
+new paced deep receipts remain required, and old failures stay failed.
+Corrected site-search namespace 017 is staged but not initialized. Site
+acquisition has not started, and the full formal target remains
+**16,000**. See the [actual diagnosis and fix](EVIDENCE-INDEX.md#v12-physical-advertisement-clock-correction).
+
 **Latest live milestone, 3 October, 13:14 UTC:** the clean `838da86` /
 Native `616a0cdb` runtime and all thirteen first-site operations are closed.
 **Undefended and FRONT pass ordinary deep verification**; all 260 resources
