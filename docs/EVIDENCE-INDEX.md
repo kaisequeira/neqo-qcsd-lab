@@ -226,6 +226,97 @@ All four defended preflights completed valid at **15:59:02.685611 UTC**;
 their actual operation exited 0 in **11.309 seconds**. Fresh BuFLO is running.
 No affected paced pass is claimed before its fresh deep receipt closes.
 
+#### V12 readiness race and independent baseline acquisition
+
+The corrected-runtime `actual-poki-002` BuFLO operation closed 1 at
+**16:02:05.188997 UTC**, after **159.910 seconds**; its deep operation also
+closed 1. The retained Native run has a complete 58,311-byte primary response,
+95 incomplete responses and 164 unstarted responses. Endpoint 0's raw
+EndpointReady is produced before its handshake completes; outgoing prearm
+slot 120 then fails `Transport error: not available`. The transport rejects
+scheduled output on a not-yet-connected endpoint. This is a separate client
+readiness race, rather than the old advertisement clock comparison.
+
+CS-BuFLO's operation closed 1 at **16:07:25.423357 UTC**, after **155.424
+seconds**; its deep operation also closed 1. Its primary completes 58,325
+bytes, with 91 incomplete and 168 unstarted responses. Its endpoint-0
+SendPacket action returns the same Native error. Both failed attempts and
+raw event/packet/schedule files remain unchanged, with zero study credit.
+The focused readiness correction was authored in isolated Native checkout
+`../diagnostic-worktrees/rapid-v12-connected-readiness-native-20261003-001/`.
+Its immutable `source-002` inventory has SHA-256
+`af843427e60071cf2409b851359cb487c96e77f9a8da81779675e53f0e800868`;
+the focused runner compilation and six direct regressions closed 0 under
+`../diagnostic-rehearsals/connected-readiness-native-checks-20261003-001/`.
+The compiler operation took **215.568 seconds**, closing at
+**16:23:06.462527 UTC**. Each direct operation ran one passing case: delayed
+peer readiness, closed/duplicate readiness, full graph, qualified chaff
+origin, legacy readiness, and activation. Root independently reopened all
+seven operation records, raw log hashes, the copied binary and all **1,783
+committed source files**. Published Native `44e1ca23c730c8477c9df2038500592252a1469d`
+matches the complete tested source snapshot. The copied test binary retains
+its truthful base-commit label and patched source inventory; it is not a
+new release client. Its SHA-256 is
+`dfeea5396cbba806739619bb3e3bc83f1e74340e45a912c8748bde88aa01bb08`.
+`checks-complete.json` SHA-256 is
+`9462aaf79389017a05d1a5342b6c26807a3b331716d2d1deabfc8eb760fba324`;
+`committed-source.json` SHA-256 is
+`4284550f4ff271f236fd22e438a94903214baf61878c29bee6fc5a98b44858e3`.
+The new source is verified; matching installed runtime and live recordings
+remain pending. These engineering tests add zero study credit.
+
+Baseline site acquisition proceeds on the independently verified ordinary
+traffic source `818deb62` / Native `39464c62`. Namespace 017's official init
+closed 0 at **16:07:00.287714 UTC**, in **10.231 seconds**. Actual command,
+start/completion records and logs are retained under its
+`host-operations/acquisition-init-001/`. Provenance SHA-256 is
+`dbc8b5ee309cd90f93e215fcf64e604ddfc4424475f7e4c6e3fea15b85294851`.
+The initial immutable `acquisition/checkpoints/checkpoint-000001.json`
+has SHA-256 `b88b250f207d113ca53dcb0625773625332c5b26ba6c8f5a1e2cf19fdc61c19b`.
+It has no terminal decisions, admissions or formal traces.
+
+The first fresh 40-domain controlled root screen closed 0 at
+**16:09:07.940273 UTC**, in **67.995 seconds**, with retained operation records
+under `host-operations/curated-root-screen-first-001/`. The second 33-domain
+screen closed 0 at **16:11:00.478391 UTC**, in **50.805 seconds**. Combined
+raw-log verification closed 0 in **4.435 seconds** and independently derived
+**73 curated / zero fallback** coverage. Private
+`root-log-registries/registry-000001.json` SHA-256 is
+`a52866aac3db9445321f8e4aa0d81590eae774fa273980164643b76034d2f34f`.
+These are controlled screens, rather than site admissions.
+
+The official coordinator's separate plan-only operation closed 0 at
+**16:12:53.649435 UTC** in **7.108 seconds**, with `stopped.json` reason
+`plan-only` and a retained first-action plan. Its live successor is running
+under `host-operations/candidate-live-001/`, bounded to 60 actions and the
+first admission. The latest immutable checkpoint at this snapshot,
+`checkpoint-000025.json`, is dated **16:33:58.471790 UTC**, SHA-256
+`ded569abdfbdcb55bcbe02ee0e2e732f28f8702274d63b329387bdb62408b8ec`.
+It has **nine screening decisions, zero admissions and zero formal traces**;
+Poki preparation is next. Study counters remain **0/50 sites, 0/50 shakedown and
+0/16,000 formal**. A new capture-runtime repair does not relabel this
+baseline acquisition's original source.
+
+The independent recoverable formal capture package is committed in isolated
+Lab authoring source `6341e1d0c4b910b207b6d6186e75b8de4104b912`.
+Evidence under `../diagnostic-rehearsals/rapid-v12-formal-parallel-lab-checks-20261003-003/`
+binds all **22 committed files** to unchanged before/after source and the
+actual focused operation: **nine passing tests in 20.95 seconds**, process
+elapsed **28.725 seconds**, return code 0. Root independently reopened every
+declared artifact and committed blob. Final source closure SHA-256 is
+`7263c3ddfb33a65eedc56bcb904a1eade9198ab854e012d1d89bdf53d29e4aa4`;
+the staged patch SHA-256 is
+`6833b18cc0bc141e2ea63978e4ab59ac4c9983cc5bff21a60d40edc581268039`.
+Earlier long installation/class/runtime checks are honestly recorded as tool
+terminal evidence in `operation-composition.json`; they do not acquire raw
+log files retrospectively. Both interrupted selections remain rejected.
+The committed-history portability regression closed 0 with **one passing
+test**, preserving the source comparison after the commit. All eight
+acquisition module groups, traffic rules, qualification dependencies and
+historical v1 behavior remain unchanged. No actual Docker pair or formal
+trace was produced by these source checks. Integration and an installed
+parallel trial remain next; the target stays **50 × five × 64 = 16,000**.
+
 #### Installed V11 runtime and remaining live DATA stall
 
 The clean execution checkout uses Lab

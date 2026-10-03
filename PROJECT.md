@@ -1,6 +1,6 @@
 # QCSD thesis project ledger
 
-Checkpoint: **4 October 2026, Australia/Sydney (AEST, UTC+10)**.
+Checkpoint: **4 October 2026, Australia/Sydney (AEDT, UTC+11)**.
 This is the current research ledger. The [history](docs/PROJECT-HISTORY.md)
 preserves the development record, the [class-study runbook](docs/CLASS-STUDY.md)
 defines continuation, and the [capture-readiness guide](docs/CAPTURE-READINESS.md)
@@ -41,7 +41,27 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Latest repair milestone, 4 October, 02:00 Sydney (3 October, 16:00 UTC):**
+**Latest live milestone, 4 October, 03:35 Sydney (3 October, 16:35 UTC):**
+fresh corrected-runtime BuFLO and CS-BuFLO reject with Native
+`Transport error: not available`. The primary document completes in both,
+but endpoint 0 is selected for scheduled output before its HTTP/3 handshake
+finishes. BuFLO fails prearm slot 120; CS-BuFLO fails its SendPacket path.
+A focused shared readiness repair passed six real-peer/runner regressions;
+Native `44e1ca23` is committed and published. All 1,783 committed source files
+match the tested snapshot. Its installed runtime and fresh live proof remain
+pending. These failed attempts retain zero credit. Baseline site acquisition on frozen `818deb6` /
+Native `39464c62` initialized successfully in 10 seconds under namespace 017;
+the first 40 supplied-domain screens completed in 68 seconds and the next
+33 in 51 seconds. Their combined raw logs independently verify all 73
+screens. Ordered candidate checks are live; checkpoint 000025 records nine
+screening decisions and no admission, with Poki preparation next. The separate
+22-file recoverable formal capture package is source-tested and ready for
+integration; an actual parallel Docker trial remains required. This baseline acquisition does not
+claim paced capture readiness. Counters remain **0/50 admitted, 0/50 shakedown
+and 0/16,000 formal**.
+See the [actual next steps](docs/EVIDENCE-INDEX.md#v12-readiness-race-and-independent-baseline-acquisition).
+
+**Latest repair milestone, 4 October, 03:00 Sydney (3 October, 16:00 UTC):**
 Native `39464c62` completes the full **260-resource/four-origin** diagnostic
 page under BuFLO, CS-BuFLO and Tamaraw. All three recordings remain failed:
 the Lab verifier incorrectly equated advertisement construction time with
