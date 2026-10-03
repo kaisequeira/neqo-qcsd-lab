@@ -59,9 +59,38 @@ def test_pcap_direction_and_frame_length_extraction(tmp_path):
     normalized = tmp_path / "trace.csv"
     write_normalized_trace(normalized, trace)
     assert normalized.read_text(encoding="utf-8").splitlines()[0] == (
-        "relative_time_ns,direction,length_bytes,signed_length_bytes"
+        "relative_time_ns,direction,length_bytes,signed_length_bytes,connection,timestamp_unix_ns"
     )
-    assert len(read_normalized_trace(normalized)) == 2
+    rows = read_normalized_trace(normalized)
+    assert len(rows) == 2
+    assert [row["connection"] for row in rows] == ["7", "7"]
+    assert rows[0]["timestamp_unix_ns"] == "1000000000"
+
+
+def test_endpoint_identity_uses_full_tuple_even_when_origins_share_an_ip(tmp_path, monkeypatch):
+    rows = (
+        '"1.000000000","46","12","172.17.0.2","","203.0.113.1","","50000","443"\n'
+        '"1.001000000","46","12","203.0.113.1","","172.17.0.2","","443","50001"\n'
+    )
+    monkeypatch.setattr(capture_module, "run", lambda *_a, **_k: SimpleNamespace(stdout=rows))
+    endpoints = [
+        {"id": identifier, "local_address": f"172.17.0.2:{port}",
+         "remote_address": "203.0.113.1:443"}
+        for identifier, port in [(7, 50000), (8, 50001)]
+    ]
+    trace = extract_trace(tmp_path / "shared-ip.pcapng", endpoints)
+    assert [(packet.direction, packet.connection) for packet in trace] == [("outgoing", 7), ("incoming", 8)]
+    path = tmp_path / "direct.csv"
+    write_normalized_trace(path, trace)
+    assert [row["connection"] for row in read_normalized_trace(path)] == ["7", "8"]
+
+
+def test_legacy_observer_trace_keeps_its_four_column_schema(tmp_path):
+    trace = [capture_module.ObserverPacket(1, 0, "outgoing", 42, 42, 0)]
+    path = tmp_path / "legacy.csv"
+    write_normalized_trace(path, trace)
+    assert path.read_text().splitlines()[0] == "relative_time_ns,direction,length_bytes,signed_length_bytes"
+    assert "connection" not in read_normalized_trace(path)[0]
 
 
 def test_direct_fragment_without_udp_ports_uses_filtered_endpoint_addresses(tmp_path, monkeypatch):

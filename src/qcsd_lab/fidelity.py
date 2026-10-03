@@ -601,6 +601,8 @@ class _DirectPacket:
     relative_time_ns: int
     direction: str
     frame_length: int
+    connection: int | None = None
+    timestamp_unix_ns: int | None = None
 
 
 @dataclass(frozen=True)
@@ -743,13 +745,31 @@ def reconcile_direct_runner_artifacts(
     overheads = _endpoint_frame_overheads(run)
     runner_packets = _read_runner_packets(runner_packets_path, overheads)
     direct_packets = _read_direct_packets(direct_trace_path)
+    boundaries = _endpoint_receive_boundaries(run, runner_packets, direct_packets)
     clock_adjustment_ns = _clock_adjustment_ns(clock_anchors)
     matches, unmatched_tail, residuals, clock_offset, clock_metrics = _reconcile_runner_packets(
         runner_packets,
         direct_packets,
         timestamp_tolerance_ns=timestamp_tolerance_ns,
         end_anchor_adjustment_ns=clock_adjustment_ns,
+        endpoint_receive_boundaries=boundaries,
     )
+    if boundaries is not None:
+        if clock_anchors is None:
+            raise ValueError("endpoint receive-tail reconciliation requires wrapper clock anchors")
+        # This checks the same sealed host-clock contract as ordinary capture
+        # acceptance. The tail predicate itself uses direct UNIX timestamps,
+        # never the fitted outgoing clock offset or its 10 ms tolerance.
+        validate_primary_capture_clock_integrity({
+            "primary": True, "timestamp_type": "host",
+            "capture_clock_anchors": clock_anchors,
+            "direct_runner_reconciliation": {
+                **clock_metrics, "direct_runner_reconciled": True,
+                "evidence_eligible": True,
+                "direct_timestamp_error_max_ns": max(map(abs, residuals), default=0),
+                "direct_timestamp_tolerance_ns": timestamp_tolerance_ns,
+            },
+        }, require_pairing_uncertainty=True, require_timestamp_type=True)
     absolute_residuals = sorted(abs(value) for value in residuals)
     return DirectRunnerReconciliation(
         metrics={
@@ -771,6 +791,53 @@ def reconcile_direct_runner_artifacts(
         limitations=RECONCILIATION_LIMITATIONS,
         evidence_eligible=len(matches) == len(runner_packets),
     )
+
+
+def _endpoint_receive_boundaries(
+    run: Mapping[str, Any], runner: list[_RunnerPacket], direct: list[_DirectPacket],
+) -> dict[int, int] | None:
+    """Open only prospective, complete native final-receive-drain receipts."""
+    endpoints = run["endpoints"]
+    identifiers = {_unsigned(endpoint["id"], "endpoint id") for endpoint in endpoints}
+    if any(packet.connection is not None and packet.connection not in identifiers for packet in direct):
+        raise ValueError("direct trace references unknown endpoint")
+    if not any("receive_lifecycle" in endpoint for endpoint in endpoints):
+        return None
+    if any(packet.connection is None or packet.timestamp_unix_ns is None for packet in direct):
+        raise ValueError("endpoint receive lifecycle requires endpoint-resolved UNIX capture rows")
+    anchor, ended = run.get("time_anchor_unix_ns"), run.get("ended_unix_ns")
+    if type(anchor) is not int or type(ended) is not int or not 0 < anchor <= ended:
+        raise ValueError("endpoint receive lifecycle has invalid runner time bounds")
+    latest: dict[int, int] = {}
+    for packet in runner:
+        latest[packet.connection] = max(latest.get(packet.connection, 0), packet.monotonic_us * 1000)
+    boundaries = {}
+    for endpoint in endpoints:
+        identifier = _unsigned(endpoint["id"], "endpoint id")
+        receipt = endpoint.get("receive_lifecycle")
+        expected = {"schema_version", "source", "time_basis", "disposition", "scientific_credit",
+                    "polling_stopped_at_elapsed_ns", "polling_stopped_at_unix_ns"}
+        if not isinstance(receipt, Mapping) or set(receipt) != expected:
+            raise ValueError("endpoint receive lifecycle fields differ")
+        if (type(receipt["schema_version"]) is not int or receipt["schema_version"] != 1
+            or receipt["source"] != "native-final-udp-receive-drain-v1"
+            or receipt["time_basis"] != "runner-process-start-elapsed-monotonic-v1"
+            or receipt["scientific_credit"] is not False):
+            raise ValueError("endpoint receive lifecycle schema or source differs")
+        elapsed, unix = receipt["polling_stopped_at_elapsed_ns"], receipt["polling_stopped_at_unix_ns"]
+        if receipt["disposition"] in {"bounded_one_batch", "error", "not_polled"}:
+            if elapsed is not None or unix is not None:
+                raise ValueError("endpoint receive lifecycle exposes an unproven drain boundary")
+            continue
+        if receipt["disposition"] != "drained_to_would_block":
+            raise ValueError("endpoint receive lifecycle has an unknown disposition")
+        if (type(elapsed) is not int or elapsed < latest.get(identifier, 0)
+            or type(unix) is not int or not anchor <= unix <= ended):
+            raise ValueError("endpoint receive lifecycle boundary is stale or outside the run")
+        boundaries[identifier] = unix
+    # Exact modes may bound ordinary input to one batch. Such runs retain
+    # strict global-tail reconciliation, never an invented local drain.
+    return boundaries if len(boundaries) == len(endpoints) else None
 
 
 def _endpoint_frame_overheads(run: Mapping[str, Any]) -> dict[int, int]:
@@ -824,6 +891,7 @@ def _read_direct_packets(path: Path) -> list[_DirectPacket]:
         raise ValueError("direct trace is empty")
     packets = []
     previous_time = -1
+    first_unix = None
     for index, row in enumerate(rows):
         relative_time = _unsigned(row.get("relative_time_ns"), "direct relative time")
         if index == 0 and relative_time != 0:
@@ -836,7 +904,16 @@ def _read_direct_packets(path: Path) -> list[_DirectPacket]:
         signed_length = _integer(row.get("signed_length_bytes"), "direct signed length")
         if signed_length != (frame_length if direction == "outgoing" else -frame_length):
             raise ValueError("direct signed length is inconsistent")
-        packets.append(_DirectPacket(index, relative_time, direction, frame_length))
+        connection = timestamp_unix = None
+        if "connection" in row:
+            connection = _unsigned(row["connection"], "direct connection")
+            timestamp_unix = _positive(row.get("timestamp_unix_ns"), "direct UNIX timestamp")
+            if first_unix is None:
+                first_unix = timestamp_unix
+            if timestamp_unix - first_unix != relative_time:
+                raise ValueError("direct UNIX and relative timestamps differ")
+        packets.append(_DirectPacket(index, relative_time, direction, frame_length,
+                                     connection, timestamp_unix))
     return packets
 
 
@@ -907,13 +984,21 @@ def _reconcile_runner_packets(
     *,
     timestamp_tolerance_ns: int,
     end_anchor_adjustment_ns: int | None,
+    endpoint_receive_boundaries: Mapping[int, int] | None = None,
 ) -> tuple[dict[int, int], list[int], list[int], int, dict[str, Any]]:
-    direct_by_signature: dict[tuple[str, int], deque[int]] = defaultdict(deque)
-    runner_by_signature: dict[tuple[str, int], list[_RunnerPacket]] = defaultdict(list)
+    direct_by_signature: dict[tuple, deque[int]] = defaultdict(deque)
+    runner_by_signature: dict[tuple, list[_RunnerPacket]] = defaultdict(list)
+    with_connections = all(packet.connection is not None for packet in direct)
     for packet in direct:
-        direct_by_signature[(packet.direction, packet.frame_length)].append(packet.index)
+        signature = (packet.direction, packet.frame_length)
+        if with_connections:
+            signature = (packet.connection, *signature)
+        direct_by_signature[signature].append(packet.index)
     for packet in runner:
-        runner_by_signature[(packet.direction, packet.expected_frame_length)].append(packet)
+        signature = (packet.direction, packet.expected_frame_length)
+        if with_connections:
+            signature = (packet.connection, *signature)
+        runner_by_signature[signature].append(packet)
 
     matches: dict[int, int] = {}
     for signature, packets in runner_by_signature.items():
@@ -932,12 +1017,25 @@ def _reconcile_runner_packets(
 
     unmatched = sorted(index for values in direct_by_signature.values() for index in values)
     last_matched = max(matches.values(), default=-1)
-    if any(index <= last_matched for index in unmatched):
+    if endpoint_receive_boundaries is None and any(index <= last_matched for index in unmatched):
         raise ValueError(
             "direct trace contains an unmatched packet before the runner-correlated capture tail"
         )
     if any(direct[index].direction != "incoming" for index in unmatched):
         raise ValueError("direct trace contains an unrecorded outgoing tail packet")
+    if endpoint_receive_boundaries is not None:
+        final_match: dict[int, int] = {}
+        for runner_index, direct_index in matches.items():
+            connection = runner[runner_index].connection
+            final_match[connection] = max(final_match.get(connection, -1), direct_index)
+            if (runner[runner_index].direction == "incoming"
+                and direct[direct_index].timestamp_unix_ns > endpoint_receive_boundaries[connection]):
+                raise ValueError("matched incoming packet is after its endpoint final drain")
+        for index in unmatched:
+            packet = direct[index]
+            if (packet.connection not in final_match or index <= final_match[packet.connection]
+                or packet.timestamp_unix_ns < endpoint_receive_boundaries[packet.connection]):
+                raise ValueError("direct trace contains an unlogged packet before its endpoint final drain")
 
     ordered_matches = sorted(
         [
@@ -1000,6 +1098,10 @@ def _reconcile_runner_packets(
             "direct_incoming_causality_slack_max_ns": max(
                 (max(0, -lag) for lag in incoming_lags), default=0
             ),
+            "direct_tail_policy": ("native-final-udp-receive-drain-v1"
+                                   if endpoint_receive_boundaries is not None else "global-last-match-v1"),
+            "direct_endpoint_receive_tail_packets": (len(unmatched)
+                                                     if endpoint_receive_boundaries is not None else 0),
         }
     )
     return matches, unmatched, residuals, clock_offset, clock_metrics
@@ -1736,6 +1838,21 @@ def _schedule_realization_metrics_from_path(path: Path) -> dict[str, Any]:
     }
 
 
+def _buflo_schedule_release_window(metrics: Mapping[str, Any]) -> int:
+    from .capture_acceptance_policy import incoming_release_window_from_policy
+    if "incoming_credit_release_policy" not in metrics:
+        if "incoming_credit_release_window_us" in metrics:
+            raise ValueError("incoming credit release window lacks its explicit policy")
+        return BUFLO_INCOMING_CREDIT_RELEASE_WINDOW_US
+    window = incoming_release_window_from_policy(metrics["incoming_credit_release_policy"])
+    original = metrics.get("incoming_credit_release_original_5000us_violations")
+    if (type(metrics.get("incoming_credit_release_window_us")) is not int
+        or metrics["incoming_credit_release_window_us"] != window
+        or type(original) is not int or original < 0):
+        raise ValueError("incoming credit release metrics differ from their policy")
+    return window
+
+
 def _incoming_credit_release_metrics(
     schedule_path: Path, rows: list[dict[str, str]]
 ) -> dict[str, Any]:
@@ -1745,7 +1862,9 @@ def _incoming_credit_release_metrics(
     prearm an incoming opportunity. Both CSV stamps are floored process-clock
     microseconds; run.json gives the defense start on that same clock in exact
     nanoseconds. Compare the full possible advertisement interval with the
-    nominal tick's half-open 5 ms window, never rounding a boundary inward.
+    nominal tick's half-open source-bound window, never rounding a boundary
+    inward. Historical receipts retain 5 ms; the explicit rapid policy permits
+    10 ms incoming credit jitter at the unchanged 20 ms interval.
     """
 
     run_path = schedule_path.with_name("run.json")
@@ -1757,8 +1876,12 @@ def _incoming_credit_release_metrics(
     if type(start_ns) is not int or start_ns < 0:
         return {}
 
+    from .capture_acceptance_policy import FIELD, buflo_incoming_release_window
+    window_us = buflo_incoming_release_window(run)
+
     timing_events = 0
     window_violations = 0
+    historical_window_violations = 0
     lateness_upper_bounds_us: list[int] = []
     for row in rows:
         if row.get("direction") != "incoming" or row.get("satisfaction") == "missed":
@@ -1768,22 +1891,30 @@ def _incoming_credit_release_metrics(
             advertised_us = _csv_uint(row, "credit_advertised_at_us")
         except (KeyError, TypeError, ValueError):
             window_violations += 1
+            historical_window_violations += 1
             continue
         timing_events += 1
         release_ns = start_ns + target_us * 1_000
         advertised_lower_ns = advertised_us * 1_000
         advertised_upper_ns = advertised_lower_ns + 1_000
-        # The upper edge is exclusive, as is the 5 ms release window.
+        # The upper edge and the selected release window are exclusive.
         if (
             advertised_lower_ns < release_ns
             or advertised_upper_ns > release_ns
-            + BUFLO_INCOMING_CREDIT_RELEASE_WINDOW_US * 1_000
+            + window_us * 1_000
         ):
             window_violations += 1
+        if (advertised_lower_ns < release_ns or advertised_upper_ns > release_ns
+            + BUFLO_INCOMING_CREDIT_RELEASE_WINDOW_US * 1_000):
+            historical_window_violations += 1
         lateness_upper_bounds_us.append(
             max(0, (advertised_upper_ns - release_ns - 1) // 1_000)
         )
     return {
+        **({"incoming_credit_release_policy": run[FIELD],
+            "incoming_credit_release_window_us": window_us,
+            "incoming_credit_release_original_5000us_violations": historical_window_violations}
+           if FIELD in run else {}),
         "incoming_credit_release_timing_events": timing_events,
         "incoming_credit_release_window_violations": window_violations,
         "incoming_credit_release_lateness_upper_bound_us_max": max(
@@ -6426,7 +6557,7 @@ def fidelity_eligible(
             ) is int
             and 0
             <= schedule_metrics["incoming_credit_release_lateness_upper_bound_us_max"]
-            < BUFLO_INCOMING_CREDIT_RELEASE_WINDOW_US
+            < _buflo_schedule_release_window(schedule_metrics)
             and diagnostics["scheduled_incoming_requested_bytes"]
             == diagnostics["buflo_scheduled_incoming_cells"] * 1_200
             and diagnostics.get("scheduled_incoming_advertised_bytes")

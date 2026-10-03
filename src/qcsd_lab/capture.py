@@ -39,6 +39,7 @@ class ObserverPacket:
     frame_len: int
     signed_frame_len: int
     udp_payload_len: int | None = None
+    connection: int | None = None
 
     @property
     def length_bytes(self) -> int:
@@ -214,12 +215,18 @@ def extract_trace(
         "udp.dstport",
     ]
     rows = list(csv.reader(run(command).stdout.splitlines()))
-    endpoint_tuples: set[tuple[str, int, str, int]] = set()
+    endpoint_tuples: dict[tuple[str, int, str, int], int] = {}
     endpoint_addresses: list[tuple[str, str]] = []
     for endpoint in endpoints:
         local_address, local_port = split_endpoint(endpoint["local_address"])
         remote_address, remote_port = split_endpoint(endpoint["remote_address"])
-        endpoint_tuples.add((local_address, local_port, remote_address, remote_port))
+        identifier = endpoint.get("id")
+        if type(identifier) is not int or identifier < 0:
+            raise ValueError("Neqo endpoint id must be a non-negative integer")
+        key = (local_address, local_port, remote_address, remote_port)
+        if key in endpoint_tuples or identifier in endpoint_tuples.values():
+            raise ValueError("Neqo endpoint tuples or ids are duplicated")
+        endpoint_tuples[key] = identifier
         endpoint_addresses.append((local_address, remote_address))
     valid_rows = [row for row in rows if len(row) >= 9 and row[0]]
     if not valid_rows:
@@ -245,6 +252,7 @@ def extract_trace(
         destination_address = row[5] or row[6]
         source_port = int(row[7]) if row[7] else None
         destination_port = int(row[8]) if row[8] else None
+        connection = None
         if source_port is not None and destination_port is not None:
             forward = (
                 source_address,
@@ -260,8 +268,10 @@ def extract_trace(
             )
             if forward in endpoint_tuples:
                 outgoing = True
+                connection = endpoint_tuples[forward]
             elif reverse in endpoint_tuples:
                 outgoing = False
+                connection = endpoint_tuples[reverse]
             else:
                 raise ValueError("direct capture contains a packet outside Neqo endpoint tuples")
         else:
@@ -291,6 +301,7 @@ def extract_trace(
                 frame_len=frame_len,
                 signed_frame_len=frame_len if outgoing else -frame_len,
                 udp_payload_len=udp_payload_len,
+                connection=connection,
             )
         )
     return trace
@@ -353,18 +364,23 @@ def write_normalized_trace(path: Path, trace: list[ObserverPacket]) -> None:
     """Write the temporary observer-only trace used for reconciliation."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
+    with_connections = bool(trace) and all(packet.connection is not None for packet in trace)
     with path.open("w", newline="", encoding="utf-8") as destination:
         writer = csv.writer(destination, lineterminator="\n")
-        writer.writerow(["relative_time_ns", "direction", "length_bytes", "signed_length_bytes"])
+        fields = ["relative_time_ns", "direction", "length_bytes", "signed_length_bytes"]
+        if with_connections:
+            fields.extend(["connection", "timestamp_unix_ns"])
+        writer.writerow(fields)
         for packet in trace:
-            writer.writerow(
-                [
+            values = [
                     packet.relative_time_ns,
                     packet.direction,
                     packet.length_bytes,
                     packet.signed_length_bytes,
                 ]
-            )
+            if with_connections:
+                values.extend([packet.connection, packet.timestamp_unix_ns])
+            writer.writerow(values)
 
 
 def read_normalized_trace(path: Path) -> list[dict[str, str]]:
@@ -377,6 +393,6 @@ def read_normalized_trace(path: Path) -> list[dict[str, str]]:
         "length_bytes",
         "signed_length_bytes",
     ]
-    if reader.fieldnames != expected:
+    if reader.fieldnames not in (expected, expected + ["connection", "timestamp_unix_ns"]):
         raise ValueError(f"invalid normalized trace columns in {path}")
     return rows

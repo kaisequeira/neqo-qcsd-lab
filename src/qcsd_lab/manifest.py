@@ -69,6 +69,7 @@ REPLAY_KEYS = {
     "response_stability",
 }
 PREPARATION_KEYS = {
+    "buflo_incoming_credit_release_policy",
     "qualified_chaff_origin_policy",
     "application_response_policy",
     "application_response_policy_evidence",
@@ -116,6 +117,7 @@ DISCOVERY_EVIDENCE_PREPARATION_KEYS = {
     "discovery_event_audit_sha256",
 }
 LEGACY_OPTIONAL_PREPARATION_KEYS = {
+    "buflo_incoming_credit_release_policy",
     "qualified_chaff_origin_policy",
     "application_response_policy",
     "application_response_policy_evidence",
@@ -680,6 +682,8 @@ def _validate_preparation(
         primary_document_identity_policy(policy_manifest)
         validate_application_response_policy_evidence(policy_manifest)
         validate_primary_document_identity_evidence(policy_manifest)
+    from .capture_acceptance_policy import validate_buflo_preparation_policy
+    validate_buflo_preparation_policy(value)
 
 
 def _validate_coverage_admission(
