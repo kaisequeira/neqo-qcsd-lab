@@ -41,12 +41,50 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Latest inspected checkpoint, 3 October:** fresh context **014** has **two
-sealed screening decisions and zero admissions** at
-`2026-10-03T03:57:49.941377Z`; Albumaty is next. Its revision-7 host coordinator
-is running, bounded to 60 actions, one selected page per candidate and a stop
-at the first admitted site. Study counters remain **0/50 admitted sites,
-0/50 shakedown traces and 0/16,000 formal traces**.
+**Latest inspected milestone, 05:20 UTC on 3 October (15:20 AEST):** context
+**014** has admitted its first site, **Poki**. Immutable checkpoint 30 records
+**ten sealed candidate decisions and one admission** at
+`2026-10-03T04:13:45.760285Z`. The bounded coordinator stopped normally at
+the first admission at `2026-10-03T04:14:02.160831Z`, after **29 actions and
+17 minutes 49 seconds**. Its initial checkpoint accounts for sequence 30.
+The full **260-resource graph across four origins** independently verifies,
+including three complete HTTP/3 replays and exact non-primary response
+identities. Study counters are **1/50 admitted sites, 0/50 shakedown traces
+and 0/16,000 formal traces**. The same-source site search resumed in batch 002
+at `2026-10-03T05:07:49.575459Z`. It is confirmed running; checkpoint 41 at
+`2026-10-03T05:19:43.414206Z` records **14 sealed decisions and one admission**.
+
+First-site canary **005** staged that fresh admitted workload and completed
+its **120-request sustained padding qualification**. Independent review
+confirmed resource 14 on `img.poki-cdn.com`, with a stable **24,064-byte**
+body. The qualification operation closed successfully in **74.211 seconds**.
+The five-setting offline preflight then failed in **11.396 seconds** because
+its invocation checked fixtures under `/runtime-src` while its campaigns and
+copied fixtures were under `/lab`. The failed operation remains saved. A
+separate create-only execution layout and corrected operator invocation
+subsequently passed all five ordinary offline preflights in **12.665 seconds**
+at `2026-10-03T04:34:08.481047Z`; independent review passed. The native
+client, images, admission and successful qualification remain unchanged,
+without a rebuild or repeat qualification. The five first-site captures are
+additional diagnostics and do not supply the separate 50-trace study
+shakedown. The first undefended capture completed in **153.645 seconds**, and
+ordinary deep verification passed at `2026-10-03T04:40:18.950376Z`.
+FRONT completed in **147.442 seconds** and passed deep verification at
+`2026-10-03T04:44:36.769802Z`. Independent raw-evidence review passed for
+both. **Two of five additional diagnostic conditions passed; Tamaraw, BuFLO
+and CS-BuFLO failed their three attempts each.** All nine failed attempts
+remain saved. A shorter primary response retires incorrectly reserved receive
+credit in Tamaraw's first two attempts and in five BuFLO/CS-BuFLO attempts.
+Tamaraw's third attempt also exposes a global packet-tail reconciliation
+limit. BuFLO's third attempt completes the full page but exceeds the current
+5 ms incoming-credit release window. Repairs are being implemented and tested
+in isolated source checkouts. New native code needs a matching cached client
+build and targeted fresh capture proof; the historical nine-hour chain is not
+a prerequisite of this rapid study. An earlier host launch stopped before
+result allocation because copied files had group write permission. Removing
+that permission on the new execution copy preserved every file's bytes and
+executable bits; the failed launch and repair records remain saved. Exact records are in the
+[evidence index](docs/EVIDENCE-INDEX.md#context-014-first-admission-and-canary-005).
 
 Published source `ffe14ab` pins native commit `e2dcd8a`. Its actual cached
 client build completed in **108.679 seconds**. Collection and preparation
@@ -91,9 +129,10 @@ adds an explicit approved-origin auxiliary padding policy. Its source changes
 cover preparation, admission, sustained response qualification and the native
 runtime checks; absent policy retains the old origin rule. **73 focused
 Python checks, 13 native client checks and independent policy review passed.**
-The matching runtime 004 now verifies. A fresh successful site attempt, sustained
-qualification and five-setting live canary remain required; this declaration
-does not admit the old Poki graph or establish capture readiness.
+The matching runtime 004 now verifies. Fresh context 014 subsequently admitted
+Poki, and its first-site sustained qualification passed. The five-setting live
+canary remains required. These fresh proofs do not admit the old Poki graph
+or establish formal capture readiness.
 
 The observed origin-budget repair is published as `80c85f5`, with **three new
 focused cases, nine guard checks, 21 receipt checks and independent review**.

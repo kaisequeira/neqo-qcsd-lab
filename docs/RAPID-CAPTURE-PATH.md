@@ -24,8 +24,8 @@ cannot supply padding; no resource or origin is removed.
 | Step | Action | Evidence needed to advance | Current state |
 |---:|---|---|---|
 | 1 | Freeze the candidate sources and runtime. | Exact source hashes, ordered [v5 rapid profile receipt](../config/curated-sources/crux73-tranco600-rapid-v5.profile.json), revision-7 receipt, image digests, fixed defense parameters and launcher-source hashes. | Published `ffe14ab`/native `e2dcd8a` has matching runtime 004. Its new cached client build took 109 seconds; both images passed installed-byte checks and independent review. Context 014 has 73 fresh, independently verified curated root screens. Installed-runtime checks grant no lane or trace credit. |
-| 2 | Find usable pages. | Record verified decisions in frozen order. Keep the controlled root observation, separate controlled H3 pass on the exact selected page, automatic URL/domain screen, complete graph, registered response stability and live cross-origin resource. | Inspected 014 checkpoint: **two sealed decisions, zero admissions**, at `2026-10-03T03:57:49.941377Z`; Albumaty is next. The one-page coordinator is running with a 60-action limit and stop after the first admission. Preserved 013 closed normally with 23 decisions and no admissions. **0/50 final sites admitted.** |
-| 3 | Prepare and qualify the first ten sites. | Ten verified prepared workloads, with five-site response-qualification sets matching the exact workload and source bytes. | Revision-7 admission screens for a stable, known-valid, approved-origin auxiliary body of at least **1,200 bytes**. Sustained padding qualification remains separate. Old canary 004 had its runtime/context guards checked only and has not been staged or executed. A fresh first site will receive 120 qualification requests and a five-setting diagnostic before expanding the shakedown. |
+| 2 | Find usable pages. | Record verified decisions in frozen order. Keep the controlled root observation, separate controlled H3 pass on the exact selected page, automatic URL/domain screen, complete graph, registered response stability and live cross-origin resource. | Context 014 first admitted Poki after **17 minutes 49 seconds**. Its full 260-resource, four-origin graph and three complete HTTP/3 replays independently verify. The same-source search resumed in batch 002 and is confirmed running. Checkpoint 41 at `2026-10-03T05:19:43.414206Z` records **14 sealed decisions and one admission**. **1/50 final sites admitted.** |
+| 3 | Prepare and qualify the first ten sites. | Ten verified prepared workloads, with five-site response-qualification sets matching the exact workload and source bytes. | First-site canary 005 passed **120 fresh padding qualification requests** in **74.211 seconds** and all five ordinary offline preflights in **12.665 seconds**. Both independently verify. At **05:20 UTC**, undefended and FRONT have passed ordinary deep verification and independent raw-evidence review: **2/5 additional diagnostic conditions passed**. Tamaraw, BuFLO and CS-BuFLO each failed three preserved attempts; targeted repairs are underway. These traces do not supply the ten-site study shakedown. |
 | 4 | Run the ten-site shakedown across all five settings. | 50 complete, individually deep-verified diagnostic traces, including both BuFLO modes, with failures preserved and repaired before formal capture. | Historical individual clean-runtime diagnostic passes exist on one workload: CS-BuFLO **1/1**, BuFLO retry 004 **1/1**, FRONT and Tamaraw accepted, and an undefended two-second-settle successor **1/1**. The earlier undefended attempt lacked 45 tail packets and remains failed. These separate passes do not supply the ten-site shakedown. **0/50 study shakedown traces accepted.** |
 | 5 | Admit 50 sites and freeze formal inputs. | A verified 50-site cohort receipt, exact workloads and qualification sets, fixed parameters, complete lane plan and launch manifest. | 50-site live yield is unproven; the 600-domain catalogue supplies further candidates under the same checks. |
 | 6 | Capture the formal grid. | Each defense lane is a separately named, frozen campaign. Deep verification must show its exact sites, setting, visit slots, source/image binding and complete result seal. | The planner and capture adapter represent 800 lanes and preserve failed attempts. Historical runtime and parent-interruption checks have their original source bindings; they do not establish a current study lane. No 50-site cohort or formal bound lane has run. **0/16,000 formal traces accepted.** |
@@ -43,7 +43,8 @@ systematically favor one setting.
 | Work | Planning estimate | What can change it |
 |---|---|---|
 | Root HTTP/3 screen | The 73 fresh curated screens for 014 took **93.244 seconds**. All 73 must verify together; fallback may wait until needed. An older 40-candidate fallback batch took about **4 minutes 10 seconds**. | Reuse requires unchanged survey components, native client, actual original runtime proof and applicable freshness barriers. Root decisions grant no site credit. |
-| Browser discovery, replay and 50-site admission | **Unknown.** Fresh Poki full replay/rejection proof took **120.327 seconds**; the Futura convergence diagnostic failed after **89.361 seconds**. | Live page behavior and candidate yield dominate. The default one-page operator budget limits exploration, not the successful-admission requirements. A root success is not a prepared site. |
+| Browser discovery, replay and 50-site admission | **Unknown.** Context 014 reached its first admitted site after **17 minutes 49 seconds**, with ten sealed candidate decisions. | One admission does not establish the yield or duration for 50 sites. Live page behavior and candidate yield dominate. The default one-page operator budget limits exploration, not the successful-admission requirements. A root success is not a prepared site. |
+| First-site padding qualification and capture check | Actual qualification took **74.211 seconds**; corrected five-setting offline preflight took **12.665 seconds**. Undefended and FRONT host operations took **153.645 and 147.442 seconds**, including setup and cleanup; their actual recording intervals were **3.434 and 7.940 seconds**. | Both independently deep-verify. The other three settings failed and need targeted fresh proof after repair. One site's intervals do not establish full-grid throughput. These additional diagnostics grant no formal or study-shakedown credit. |
 | First ten-site, five-setting shakedown | About **53–109 minutes of recording time** for 50 visits at older 63–131 second per-visit rates, plus site preparation, response qualification and verification. | A complete five-setting shakedown on admitted study sites has not run. Short historical-workload tests diagnose individual capture failures first. |
 | Full formal grid | About **12–25 days of serial recording time** for 16,000 visits at those older rates, before retries and verification. | Parallel speedup is unmeasured and requires a separate fidelity/throughput trial. |
 
@@ -73,11 +74,30 @@ requires all 73; that failed operation and both successful screen chunks are
 retained. No new software build was needed to complete the screens.
 
 The first actual coordinator plan-only check passed, then the bounded live
-batch started at `2026-10-03T03:56:13.693218Z`. Its inspected checkpoint has
-two sealed decisions and no admissions. A first eligible site, sustained
-120-request qualification and five-setting live canary still remain ahead.
-Exact runtime, source and registry identities are in the
-[evidence index](EVIDENCE-INDEX.md#current-approved-origin-runtime-and-context-014).
+batch started at `2026-10-03T03:56:13.693218Z`. It closed normally at the
+first admission at `2026-10-03T04:14:02.160831Z`. Checkpoint 30 has ten sealed
+decisions and one admitted site, Poki, with all 260 resources and four origins
+retained. The first site's actual sustained 120-request qualification passed
+and independently reopened. At the **04:34 UTC** snapshot, no first-site
+capture has run; study counters are **1/50 admitted sites, 0/50 study shakedown
+traces and 0/16,000 formal traces**.
+
+The first offline preflight failed at its fixture-directory binding:
+it expected `/runtime-src/config/defense-params` while the frozen campaigns
+and copied fixtures were under `/lab`. The closed failed operation is
+preserved. A separate create-only execution layout now places the campaigns
+and exact frozen source files under the same `/lab` root. Its corrected
+invocation passed all five ordinary installed preflight checks at
+`2026-10-03T04:34:08.481047Z`, with independent review underway. It keeps the
+original frozen recipe and plan, native client, images, admitted graph and
+successful response qualification unchanged, and has its own operation
+records. No rebuild or repeat qualification was needed. All five live
+diagnostic conditions have now been attempted. Undefended and FRONT
+independently deep-verify; the other three conditions failed. The shared
+short-primary receive-credit defect, Tamaraw packet-tail limit and BuFLO
+release-window failure are being repaired in isolated checkouts. The
+same-source site search is running in batch 002. Exact identities and failure records are in the
+[first-admission ledger](EVIDENCE-INDEX.md#context-014-first-admission-and-canary-005).
 
 The [optional parallel pilot](PARALLEL-CAPTURE-PILOT.md) has separately
 published and reviewed source. Its tests cover two derived peer partitions,
@@ -104,7 +124,7 @@ site or completed padding qualification. Study counters remain **0/50
 admitted sites, 0/50 shakedown traces and 0/16,000 formal traces**. Canary 004
 has only had its runtime/context guard checked, with no staging or capture.
 
-Poki's current attempt completed all 260 resources in each of three native
+Poki's preserved context-013 attempt completed all 260 resources in each of three native
 replays, with stable non-primary responses and HTTP/3 on all four origins.
 Revision 6 rejected it because its 231 large stable auxiliary responses are
 on CDNs, and only its primary document is on the main origin. The
@@ -113,9 +133,9 @@ records that limitation. The explicit revision-7 policy changes preparation,
 admission, response qualification and the native schema-4 identity runtime
 together. Its 73 focused Python checks and 13 actual native library tests
 passed, including legacy cases. Matching runtime checks are now complete;
-fresh successful preparation,
-sustained qualification and live captures remain pending. The old failed
-attempt stays failed and gains no credit.
+fresh successful preparation and sustained qualification subsequently passed
+in context 014 and canary 005. Live captures remain pending at the snapshot
+above. The old failed attempt stays failed and gains no credit.
 
 **Preserved 012 failure:** its private controller stopped with exit 1 at
 Futura's selected page ordinal 2, preparation attempt 10. Browser discovery

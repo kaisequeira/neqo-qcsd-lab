@@ -59,20 +59,189 @@ No root observation or failed site from context 013 was promoted.
 
 The actual one-page coordinator plan-only operation passed in **3.508
 seconds**, followed by a live batch start at `2026-10-03T03:56:13.693218Z`.
-Its immutable `checkpoint-000007.json` is dated
+The earlier immutable `checkpoint-000007.json` snapshot is dated
 `2026-10-03T03:57:49.941377Z`, SHA-256
 `ede4a4ac6349f3c69008c8e879a1a1ba2b081c82ffba2d19abc4f27fd67e9c65`.
 It has **two sealed screening decisions, zero admissions and zero formal
 traces**; Albumaty is next. The batch is bounded to 60 actions, page budget
 one over the unchanged context history, and a stop after the first admission.
-Its completion remains pending at this snapshot.
+Completion was pending at that earlier snapshot; the closed first-admission
+records are described below.
 
 The prospective first-site recipe is
 `../diagnostic-rehearsals/rapid-v7-first-site-canary-20261003-005/`, recipe
 SHA-256 `c0df17d057cbf90bef43feb83e03ab73d7a856c43557017ff4f1305b24206951`.
-Its actual runtime guard independently passes; no admitted site has been
-staged, qualified or captured. It retains 120 fresh identity requests and
-five separate capture smokes, each requiring ordinary deep verification.
+Its actual runtime guard independently passes. At that earlier snapshot,
+no admitted site had been staged, qualified or captured. It retains 120 fresh
+identity requests and five separate capture smokes, each requiring ordinary
+deep verification.
+
+### Context 014 first admission and canary 005
+
+Immutable `acquisition/checkpoints/checkpoint-000030.json` is dated
+`2026-10-03T04:13:45.760285Z`, SHA-256
+`3f4adfeac56cfc856b370eb0eb5c098f4e98f95738a30578092ee33c6af0a303`.
+It records **ten sealed candidate decisions, one admitted site and zero
+formal traces**. The coordinator closed with exit 0 at
+`2026-10-03T04:14:02.160831Z`, after **29 actions / 1,068.557 seconds**.
+The initial checkpoint accounts for checkpoint sequence 30. Its
+`actual-coordinator-batch-001-completed.json` SHA-256 is
+`9d9aa690c03df9eb9b9cdf5ee2e5f846110515475fb55371dd18e59981df59ea`.
+The closed action history and its one-page budget independently reopened.
+
+The first admission is Poki, candidate `curated-e5114f8d4f027cce4481`.
+Its preparation is attempt 4 and its admitted terminal is attempt 5.
+Workload `rapid-v5-curated-e5114f8d4f027cce4481-attempt-000004` has raw
+manifest SHA-256
+`7d616ade0d4ea89e28c59f5a54e0524c9251f0074d7761346d274dc1dae97cc2`.
+Independent review reopened its complete **260-resource / four-origin** graph,
+three complete HTTP/3 replay witnesses, exact non-primary response identities,
+application-response inventory, source bindings and admitted terminal. This
+is a fresh revision-7 admission; the failed context-013 Poki attempt remains
+unchanged.
+
+The actual canary is under
+`../diagnostic-rehearsals/rapid-v7-first-site-canary-20261003-005/actual-poki-001/`.
+Its immutable `plan.json` SHA-256 is
+`5f1efcd83316ee2cf7c54bf9e126c6c0f1e97ce23d623b556df1a76c8106e4b6`.
+Actual **120-request** padding qualification passed and independently
+reopened, selecting auxiliary resource **14** on `img.poki-cdn.com` with
+stable body **24,064 bytes**, SHA-256
+`2fedd13f2e8e249adff402ee400012ac485f75a05e52051ec23154a608dfe6fb`.
+The qualification sidecar SHA-256 is
+`62174d001cbd3444f7825213594be7b4a6f6cb067b5fb0d631666cd9c586fd52`;
+named set `rapid-v7-first-site-poki-001` has manifest SHA-256
+`a72f2c801dd08a1b8c06a21798b95cc32ad4e6173ad95402ef570f1bbd94c43c`.
+`qualification-complete.json` was published at
+`2026-10-03T04:18:31.592186Z`, SHA-256
+`62b5da8df6fd37212d89379e73ae986cbbc09af99ea8a5854d4906153537dc99`.
+The host qualification operation closed with exit 0 in **74.211 seconds**;
+`logs/actual-qualification-completed.json` SHA-256 is
+`df98fdb2269cfa913f0668670d2d58807f3ed9ed2042cf94399bc3a3ec1e007e`.
+
+The subsequent offline five-setting preflight closed with exit 1 at
+`2026-10-03T04:21:00.983156Z`, after **11.396 seconds**.
+`logs/actual-five-mode-preflight-completed.json` SHA-256 is
+`a7c18671eb80c468997054acb13d150703284c0f339f74ff7e3b91ea4243ea2f`;
+stderr SHA-256 is
+`62e7a5cd1cdf4eecc17a777e04af16934067e34aa2441e18d4153fe8e30c4251`.
+The error is `reviewed parameter fixtures must be checked in under
+/runtime-src/config/defense-params`: the invocation selected `/runtime-src`
+as its Lab root while its campaigns and copied fixtures were under `/lab`.
+The failed logs, frozen recipe and plan remain preserved.
+
+A separate create-only `capture-execution-002/` combines the exact verified
+runtime-004 source with byte-identical qualified workload/configuration files
+and fresh result/artifact destinations. The source identity gate uses
+`/runtime-src`; an isolated child then runs the ordinary installed preflight
+with `QCSD_LAB_ROOT=/lab`, matching the complete capture execution root.
+Offline preflight for all **five** one-visit smoke campaigns passed at
+`2026-10-03T04:34:08.481047Z`, in **12.665 seconds**. Independent review of
+this corrected invocation passed. The original plan, source/client,
+image, workload and named qualification identities remain unchanged, with
+no rebuild or repeated qualification.
+
+`capture-layout-v2.json` SHA-256 is
+`6887667e244948544cc99e7e2cf8344af75f75f1ff480106f5e01802be4c3ab1`;
+operator helper SHA-256 is
+`c73c916094d569cbb31d36d7316f130f849bbc948470afdb7bb58cce12501f5b`.
+The distinct `preflight-complete-v2.json` SHA-256 is
+`7b54111b7dd5f62ea44ae04fdf7cbc4f345a5bd55433b7baa4e0eec88659628c`;
+`logs/actual-five-mode-preflight-v2-completed.json` SHA-256 is
+`d7221f0065e1cd2c031715ab49c053c5ca4d26f19998fe8b3b48a730434ba64b`.
+The original failed preflight is not relabeled or replaced.
+
+No first-site capture has run at the **04:34 UTC** snapshot. Its five planned
+captures are additional diagnostics, with zero formal and study-shakedown
+credit. Study counters are **1/50 admitted sites, 0/50 shakedown traces and
+0/16,000 formal traces**.
+
+**Later first capture, 04:42 UTC snapshot:** the first host launch stopped
+before allocating a result, in **0.0815 seconds**, with `Docker signal
+supervisor is group/world writable`. Its operation records remain under
+`logs/actual-undefended-capture-v2-*`. The separately recorded permission
+repair removes group/world write bits only from 2,330 copied files in the
+new execution directory. Independent review confirmed all file bytes and
+executable bits unchanged and the original runtime/configuration files intact.
+The repair has its own `capture-layout-v2-permissions-intent.json` and
+`capture-layout-v2-permissions-complete.json` records.
+
+The actual undefended retry closed with exit 0 at
+`2026-10-03T04:39:33.015627Z`, in **153.645 seconds**. Its completion record
+`logs/actual-undefended-capture-v2-retry-001-completed.json` has SHA-256
+`439fc5e01ce0cc795aae5b6bae8840756dee05758a69bb51f7b769d729858ede`.
+The original installed recipe then ran ordinary deep verification on the
+direct result child `20261003T043846.232846Z`, producing a valid, complete
+**1/1** diagnostic receipt at `2026-10-03T04:40:18.950376Z`.
+`undefended-deep-verification.json` has SHA-256
+`a421766c3b3c02916fd6fe5370203a891cc0bcbc9c47cdf7053f301a3b9eed17`.
+The verification operation closed with exit 0 in **10.735 seconds**;
+independent capture review is underway. FRONT is running at this snapshot.
+These are additional first-site diagnostics: **1/5 passed**, with **zero
+study-shakedown and formal credit**.
+
+**Closed five-condition diagnostic and resumed search, 05:20 UTC snapshot:**
+undefended and FRONT passed ordinary deep verification and independent
+raw-evidence review. Both preserve all 260 application resources and four
+HTTP/3 origins, packet reconciliation, clocks, DNS bindings and result seals.
+FRONT's result child is `20261003T044336.875382Z`; its
+`front-deep-verification.json` SHA-256 is
+`a35d3f318cd8a4e1bb7b07984f337844976c6b2d2a007942d65f5e81cd20e6cf`.
+The actual recorded capture intervals are **3.434 seconds** for undefended
+and **7.940 seconds** for FRONT. Host durations include container setup and
+cleanup and must not be treated as pure per-trace recording duration.
+
+| Condition | Host operation closed, UTC | Elapsed seconds | Actual outcome |
+|---|---|---:|---|
+| Undefended, permission-corrected retry | `04:39:33.015627` | 153.645 | One complete, valid, independently reviewed diagnostic |
+| FRONT | `04:44:26.467035` | 147.442 | One complete, valid, independently reviewed diagnostic |
+| Tamaraw | `04:48:59.668191` | 172.582 | Three failed attempts, all preserved |
+| BuFLO | `04:53:32.506485` | 183.378 | Three failed attempts, all preserved |
+| CS-BuFLO | `04:58:38.532917` | 158.855 | Three failed attempts, all preserved |
+
+Their actual operation closures are
+`logs/actual-{front,tamaraw,buflo,cs-buflo}-capture-v2-completed.json`.
+Failures are under the corresponding
+`capture-execution-002/results/rapid-curated-tranco50-v2-diagnostic-v7-first-site-poki-001-{mode}/{timestamp}/failures/`
+roots; raw PCAPs, application bodies, native events and attempt dispositions
+remain saved. The initial permission failure allocated no capture result.
+
+The independently investigated failures are distinct:
+
+- **Variable primary body and unused receive credit:** preparation recorded
+  58,478 primary-body bytes. BuFLO attempts 1/2 and all three CS-BuFLO attempts
+  instead downloaded a complete 58,383-byte HTTP 200 primary response.
+  Native code still used the old exact size as expected response capacity.
+  Primary stream FIN retired advertised credit, marking scheduled incoming
+  slots `ReceiveCreditRetired` and aborting realization. Actual retired
+  quantities were 90/90 bytes for BuFLO and 85/82/72 bytes for CS-BuFLO;
+  framing means these are not identical to the 95-byte body difference.
+  Tamaraw attempts 1/2 completed all 260 resources with 58,379-byte primary
+  bodies but each had one retired-credit slot plus eight missing advertisement
+  timestamps and eight invalid consumption receipts. The latter receipts
+  remain separate unresolved fidelity failures.
+- **Tamaraw attempt 3 packet tail:** all 260 resources completed, but two
+  incoming 32-byte UDP datagrams had no native packet rows. One arrived after
+  its own origin's last native packet but before another origin's global last
+  packet. The current global tail check rejects it. Existing evidence has no
+  per-endpoint final receive-pass marker, so it cannot prove receive retirement
+  or establish the encrypted packet's meaning. Any prospective correction
+  needs explicit endpoint receive-lifecycle evidence and new captures.
+- **BuFLO attempt 3 release window:** the primary body matched preparation
+  and the complete page loaded. Two of 969 incoming slots exceeded the
+  current 5,000 microsecond credit-release upper-bound gate, with a maximum
+  of 6,099 microseconds. This attempt remains failed; it is not promoted by a
+  later timing-policy change.
+
+Repairs are isolated and have not been installed or proved by fresh live
+captures. The diagnostic total is **2/5 passed conditions**, with nine failed
+attempts retained, **0/50 study-shakedown traces** and **0/16,000 formal traces**.
+The same-source admission search resumed at `2026-10-03T05:07:49.575459Z`
+under `host-coordinator/batch-002/`, with create-only authority in
+`batch-002-authority.json`. Its original batch-001 closure stays unchanged.
+Live handle inspection confirmed batch 002 running; immutable checkpoint 41,
+dated `2026-10-03T05:19:43.414206Z`, records **14 terminal decisions and one
+admitted site**. Searching sites continues while repairs are authored.
 
 The optional [two-container pilot](PARALLEL-CAPTURE-PILOT.md) is separately
 published as `e2188ed`, retaining the same Native Gitlink. It is absent from
@@ -217,8 +386,10 @@ reopen. Earlier check namespace 001 used the thin binary test target and ran
 response-only qualification and policy compatibility checks passed **73
 cases**. Nine focused revision-7 admission/plumbing cases, two existing
 backend cases and three corrected amendment/coordinator fixtures also passed.
-These checks establish engineering behavior, with zero study credit; actual
-matching images, sustained qualification and five-setting captures are next.
+These checks establish engineering behavior, with zero study credit. Later
+runtime 004 and canary 005 establish matching installed images and sustained
+qualification under their separate scopes above; five-setting captures remain
+pending at the current snapshot.
 
 ### Preserved preflight runtime and context 012
 
