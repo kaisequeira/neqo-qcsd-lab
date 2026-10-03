@@ -14,6 +14,16 @@ homepage credit fix, endpoint-specific final UDP drain evidence and explicit
 prospective BuFLO incoming tolerance. They require fresh affected captures;
 the previous failed attempts keep their original results.
 
+**Latest source milestone, 3 October, 12:27 UTC:** published Native
+`616a0cdb` fixes the minimum DATA opportunity and passed **457 focused
+checks**, including a real HTTP/3 peer test. The integrated
+[V11 FRONT policy](RAPID-SELECTION-V11.md) and call-local rule calculation
+passed **155 final Lab cases**, including the 50-site capture planner and
+ordinary collection/deep verification seams. Next are matching installed
+runtime checks and fresh five-setting recordings. These source checks add
+no site or trace credit: **0/50 sites, 0/50 shakedown traces and 0/16,000
+formal traces**. See the [exact source evidence](EVIDENCE-INDEX.md#v11-source-checks-and-minimum-data-write-repair).
+
 **Latest live milestone, 3 October, 11:36 UTC:** the clean `7a46220` /
 Native `09b0307` runtime is installed and checked. The fresh complete Poki
 baseline, 120-request padding qualification and all four defended preflights

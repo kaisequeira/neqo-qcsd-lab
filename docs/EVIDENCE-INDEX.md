@@ -11,6 +11,49 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ### Successor startup and endpoint engineering checks
 
+#### V11 source checks and minimum DATA write repair
+
+Native `616a0cdbca6aed2a495b89d8d6eccd9fd0498516` is published on `main`
+and the desktop branch. Its five changed files match the held source in
+`../diagnostic-rehearsals/owned-data-opportunity-native-checks-20261003-001/source-004/`.
+The check closure `checks-complete.json` has SHA-256
+`9521c01b8288768594c723a3a1c4b7b6eabf6d234ce55507e2a544936c7685ac`;
+`committed-source.json` has SHA-256
+`f61163e527b1294350d69b0b9369e57b13a4d42a81297b4d8d8135b0d680eee0`.
+All required final operations closed 0: **432 core cases, one actual
+HTTP/3 client/server case and 24 distinct runner cases**. Failed earlier
+fixtures and the compiler producer's incomplete source-record field remain
+preserved; the separately recorded binary binding and direct runner checks
+reopen the actual source and binary. This is focused engineering proof,
+not whole-workspace CI or live capture proof.
+
+The [V11 declaration](../config/curated-sources/crux73-tranco600-rapid-v5-selection-v11.json)
+is dated **2026-10-03T12:04:59Z**, before new live observations, with SHA-256
+`aa00b6eddcb1763dfd58b9ec45329e1b66cb1d862b1b293a73e022e168267b2d`.
+Its narrow FRONT rule and unchanged five-setting target are explained in
+[the policy document](RAPID-SELECTION-V11.md).
+
+Lab author commit `b9baaf532140ec13c7234daffc09e42f8d2883d3` was integrated
+as `ca8c086`. Its exact 17 changed files match the final held inventory in
+`../diagnostic-rehearsals/rapid-v11-front-lab-checks-20261003-001/memoized-final-001/`.
+The actual operation closed **0 at 12:25:19.820060 UTC**, with **155 cases
+passed in 152.92 seconds**. Its terminal record has SHA-256
+`18d67dc08bfe6f643e819e5f629328ada2b7308b339fcacd1609cf3d4d40a2dd`;
+the source-before record has SHA-256
+`0b4789c0f1dcf05f122d1d73b1118f7d1d263301d7fe97f588efda7c8ff0309e`.
+Source-after matches exactly. The suite covers native-marker binding,
+raw physical omission evidence, ordinary collection and independent deep
+verification seams, full preparation/terminal admission, V10 compatibility,
+V11's 50-site cohort and the exact 16,000-slot planner. The earlier uncached
+operation was interrupted at 130 passing cases after 526.90 seconds; it
+does not supply a completed planner proof. Its real logs and terminal record
+remain preserved. The replacement avoids duplicate parent construction
+within each call; receipt, filesystem and current-source checks are not cached.
+
+Matching installed runtime, fresh full-graph captures, successor site
+admission and formal lanes remain unproven. The fixed target is still
+**50 × five × 64 = 16,000**, with **zero accepted formal traces**.
+
 #### Installed V10 runtime and short live checks
 
 Clean Lab `7a46220d4e46bc7c62dd87e3b371a7aefa37eefa` pins Native

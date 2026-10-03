@@ -41,6 +41,23 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
+**Latest source milestone, 3 October, 12:27 UTC:** Native `616a0cdb` is
+published on `main` and the desktop branch. The owned-credit repair leaves
+room for the HTTP/3 sender's minimum three-byte DATA write, with physical
+ownership and unused credit retirement preserved. Exact committed bytes
+passed **432 core tests, one real HTTP/3 peer test and 24 runner cases**.
+The integrated [V11 FRONT rule](docs/RAPID-SELECTION-V11.md) permits at most
+1% actual outgoing congestion omissions under its source-bound contract;
+incoming credit and the complete resource graph remain required. The final
+Lab run passed **155 focused cases**, including full preparation, terminal
+admission, old-policy compatibility and the 50-site/16,000-trace planner.
+Each rule construction now avoids duplicate frozen-parent calculations
+without caching current evidence. Matching installed runtime and fresh
+five-setting recordings remain next. Current counters are **0/50 admitted
+sites, 0/50 shakedown traces and 0/16,000 formal traces**. The failed V10
+recordings retain their original result and runtime identity. See the
+[source proof](docs/EVIDENCE-INDEX.md#v11-source-checks-and-minimum-data-write-repair).
+
 **Latest live V10 milestone, 3 October, 11:36 UTC:** clean Lab `7a46220` /
 Native `09b0307` has a matching installed runtime. Its client built in
 **116 seconds**, and all **12 build/export/check operations** closed 0.
