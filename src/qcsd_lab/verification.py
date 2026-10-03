@@ -481,7 +481,7 @@ def _validate_frozen_contract(
 def _validate_policy_application_responses(root: Path, experiment: Mapping[str, Any]) -> None:
     """Reopen prepared-source policies for accepted samples, including baseline."""
 
-    from .capture_acceptance_policy import validate_buflo_source_binding, validate_tamaraw_source_binding, validate_front_source_binding
+    from .capture_acceptance_policy import validate_buflo_source_binding, validate_tamaraw_source_binding, validate_front_source_binding, validate_terminal_primary_source_binding
 
     prepared_by_id: dict[str, dict[str, Any]] = {}
     for workload in experiment["configuration"]["workloads"]:
@@ -509,5 +509,6 @@ def _validate_policy_application_responses(root: Path, experiment: Mapping[str, 
         validate_buflo_source_binding(prepared, run, runner_directory=run_path.parent)
         validate_tamaraw_source_binding(prepared, run)
         validate_front_source_binding(prepared, run)
+        validate_terminal_primary_source_binding(prepared, run, runner_directory=run_path.parent)
         if application_response_policy(prepared) != LEGACY_APPLICATION_RESPONSE_POLICY:
             validate_application_responses(prepared, run, require_identity=True)

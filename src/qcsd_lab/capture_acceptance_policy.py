@@ -13,6 +13,10 @@ TAMARAW_POLICY = "rapid-v5-tamaraw-owned-retry-outgoing-10000us-v1"
 TAMARAW_CREDIT_SEMANTICS = "explicit-physical-ownership-with-pending-retry-v1"
 FRONT_FIELD = "front_capture_policy"
 FRONT_POLICY = "rapid-v5-front-bounded-outgoing-congestion-omission-1pct-v1"
+TERMINAL_PRIMARY_FIELD = "terminal_primary_partial_cell_policy"
+TERMINAL_PRIMARY_POLICY = "rapid-v5-one-owned-terminal-primary-partial-incoming-cell-v1"
+TERMINAL_PRIMARY_PROOF_FIELD = "terminal_primary_partial_cell"
+TERMINAL_PRIMARY_PROOF_SOURCE = "native-owned-terminal-primary-fin-v1"
 STARTUP_POLICY = "qualified-chaff-terminal-ack-cadence-start-v1"
 STARTUP_TIME_BASIS = "native-controller-defense-elapsed-us-v1"
 _STARTUP_IDENTIFIERS = ("ready_endpoint", "ready_stream", "ready_resource_id", "ready_request_id")
@@ -28,6 +32,293 @@ def _uint(value: Any) -> bool:
 def _exact_json(left: Any, right: Any) -> bool:
     # Python equality aliases bool/int and int/float; evidence preserves their JSON types.
     return json.dumps(left, sort_keys=True, allow_nan=False) == json.dumps(right, sort_keys=True, allow_nan=False)
+
+
+def validate_terminal_primary_preparation_policy(preparation: Mapping[str, Any]) -> str | None:
+    """Admit one terminal primary split only under the prospective complete graph policy."""
+    if TERMINAL_PRIMARY_FIELD not in preparation:
+        return None
+    if (type(preparation[TERMINAL_PRIMARY_FIELD]) is not str
+        or preparation[TERMINAL_PRIMARY_FIELD] != TERMINAL_PRIMARY_POLICY
+        or preparation.get("primary_document_identity_policy") != "variable-primary-document-body-v1"
+        or preparation.get("application_response_policy") != "completed-terminal-http-errors-v1"
+        or preparation.get("qualified_chaff_origin_policy") != "prepared-approved-origins-v1"):
+        raise ValueError("terminal primary partial cell policy requires its explicit rapid preparation contract")
+    return TERMINAL_PRIMARY_POLICY
+
+
+def validate_terminal_primary_capture_marker(marker: Any, *, cell_size: int) -> Mapping[str, Any]:
+    expected = {"schema_version": 1, "source": "bound-preparation-v1", "policy": TERMINAL_PRIMARY_POLICY,
+        "cell_size": cell_size, "maximum_partial_cells": 1, "primary_resource_index": 0,
+        "require_unique_stream": True, "require_fin": True, "require_nonempty_successful_primary": True,
+        "require_full_advertisement": True, "require_exact_positive_split": True,
+        "retired_credit_reassignment": False}
+    if (type(cell_size) is not int or cell_size <= 0
+        or not isinstance(marker, Mapping) or not _exact_json(marker, expected)):
+        raise ValueError("invalid source-bound terminal primary partial cell marker")
+    return marker
+
+
+def terminal_primary_capture_cell_size(run: Mapping[str, Any]) -> int:
+    resolved = run.get("resolved_configuration")
+    defense = resolved.get("defense") if isinstance(resolved, Mapping) else None
+    kind = defense.get("kind") if isinstance(defense, Mapping) else None
+    if kind == "tamaraw":
+        cell = defense.get("packet_size")
+    elif kind == "buflo":
+        release = run.get(FIELD)
+        cell = release.get("cell_bytes") if isinstance(release, Mapping) else None
+    elif kind == "cs_buflo":
+        diagnostics = run.get("defense_diagnostics")
+        cell = diagnostics.get("cs_buflo_runtime_udp_packet_size_bytes") if isinstance(diagnostics, Mapping) else None
+    else:
+        raise ValueError("terminal primary partial cell marker requires a paced capture mode")
+    if (type(cell) is not int or cell <= 0
+        or type(resolved.get("max_udp_payload_size")) is not int or cell > resolved["max_udp_payload_size"]
+        or type(resolved.get("control_interval_us")) is not int or resolved["control_interval_us"] != 5000
+        or resolved.get("drop_unsatisfied_events") is not False
+        or type(resolved.get("initial_max_stream_data")) is not int or resolved["initial_max_stream_data"] != 16
+        or type(resolved.get("max_stream_data_excess")) is not int or resolved["max_stream_data_excess"] != 1000
+        or run.get("primary_document_identity_policy") != "variable-primary-document-body-v1"
+        or run.get("application_response_policy") != "completed-terminal-http-errors-v1"):
+        raise ValueError("terminal primary partial cell policy differs from actual resolved capture parameters")
+    return cell
+
+
+def validate_terminal_primary_source_binding(prepared: Mapping[str, Any], run: Mapping[str, Any], *,
+                                            runner_directory: Path | None = None) -> None:
+    preparation = prepared.get("preparation")
+    declared = validate_terminal_primary_preparation_policy(preparation) if isinstance(preparation, Mapping) else None
+    resolved = run.get("resolved_configuration")
+    defense = resolved.get("defense") if isinstance(resolved, Mapping) else None
+    paced = isinstance(defense, Mapping) and defense.get("kind") in {"tamaraw", "buflo", "cs_buflo"}
+    if TERMINAL_PRIMARY_FIELD in run:
+        if declared is None or not paced:
+            raise ValueError("native terminal primary partial cell policy lacks matching prepared source")
+        validate_terminal_primary_capture_marker(run[TERMINAL_PRIMARY_FIELD], cell_size=terminal_primary_capture_cell_size(run))
+        if runner_directory is not None:
+            validate_terminal_primary_partial_evidence(run, runner_directory=runner_directory, prepared=prepared)
+    elif declared is not None and paced:
+        raise ValueError("prepared terminal primary partial cell policy lacks its native marker")
+    elif TERMINAL_PRIMARY_PROOF_FIELD in run:
+        raise ValueError("terminal primary partial proof lacks its source-bound capture marker")
+
+
+def validate_terminal_primary_partial_evidence(
+    run: Mapping[str, Any], *, runner_directory: Path,
+    prepared: Mapping[str, Any] | None = None,
+    schedule_rows: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    """Reopen the one FIN split without changing its raw missed-cell classification."""
+    from .util import sha256_file
+
+    if TERMINAL_PRIMARY_FIELD not in run:
+        if TERMINAL_PRIMARY_PROOF_FIELD in run:
+            raise ValueError("terminal primary partial proof lacks its source-bound capture marker")
+        return {}
+    cell = terminal_primary_capture_cell_size(run)
+    marker = validate_terminal_primary_capture_marker(run[TERMINAL_PRIMARY_FIELD], cell_size=cell)
+    if prepared is not None:
+        preparation = prepared.get("preparation")
+        if not isinstance(preparation, Mapping) or validate_terminal_primary_preparation_policy(preparation) is None:
+            raise ValueError("terminal primary partial evidence lacks prepared source")
+    events_path = _regular_child(runner_directory, "events.csv")
+    schedule_path = _regular_child(runner_directory, "schedule.csv")
+    with events_path.open(newline="", encoding="utf-8") as source:
+        events = list(csv.DictReader(source))
+    if schedule_rows is None:
+        with schedule_path.open(newline="", encoding="utf-8") as source:
+            schedule_rows = list(csv.DictReader(source))
+    partial_events = [row for row in events if row.get("event") == "terminal_primary_partial_cell"]
+    proof = run.get(TERMINAL_PRIMARY_PROOF_FIELD)
+    metrics = {TERMINAL_PRIMARY_FIELD: marker, "terminal_primary_partial_cells": 0,
+        "terminal_primary_partial_retired_bytes": 0, "terminal_primary_partial_consumed_bytes": 0,
+        "terminal_primary_partial_cell_size": cell,
+        "terminal_primary_partial_events_sha256": sha256_file(events_path),
+        "terminal_primary_partial_schedule_sha256": sha256_file(schedule_path)}
+    if proof is None:
+        if TERMINAL_PRIMARY_PROOF_FIELD in run or partial_events:
+            raise ValueError("terminal primary partial event/proof mismatch")
+        return metrics
+    keys = {"schema_version", "source", "policy", "resource_id", "endpoint", "stream", "slot",
+        "target_us", "cell_bytes", "requested_bytes", "advertised_bytes", "consumed_bytes",
+        "retired_bytes", "fin_at_us", "status", "body_bytes"}
+    integer_keys = keys - {"source", "policy"}
+    if (not isinstance(proof, Mapping) or set(proof) != keys
+        or any(not _uint(proof[key]) for key in integer_keys)
+        or proof["schema_version"] != 1 or proof["source"] != TERMINAL_PRIMARY_PROOF_SOURCE
+        or proof["policy"] != TERMINAL_PRIMARY_POLICY or proof["resource_id"] != 0
+        or proof["cell_bytes"] != cell or proof["requested_bytes"] != cell or proof["advertised_bytes"] != cell
+        or proof["consumed_bytes"] <= 0 or proof["retired_bytes"] <= 0
+        or proof["consumed_bytes"] + proof["retired_bytes"] != cell
+        or not 200 <= proof["status"] < 300 or proof["body_bytes"] <= 0):
+        raise ValueError("invalid terminal primary partial physical split")
+    if len(partial_events) != 1 or partial_events[0].get("outcome") != "partial":
+        raise ValueError("terminal primary partial requires exactly one native event")
+    try:
+        event_proof = json.loads(partial_events[0]["details"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("invalid terminal primary partial event") from error
+    if not _exact_json(event_proof, proof):
+        raise ValueError("terminal primary partial event differs from run proof")
+    responses = run.get("responses")
+    primary = [value for value in responses if isinstance(value, Mapping) and value.get("resource_id") == 0] if isinstance(responses, list) else []
+    if (run.get("completion_status") != "complete" or run.get("error") is not None or len(primary) != 1
+        or primary[0].get("complete") is not True or type(primary[0].get("status")) is not int
+        or primary[0]["status"] != proof["status"] or type(primary[0].get("bytes")) is not int
+        or primary[0]["bytes"] != proof["body_bytes"]):
+        raise ValueError("terminal primary partial lacks a complete nonempty successful primary")
+    selected = [row for row in schedule_rows if _csv_uint(row.get("slot_id")) == proof["slot"]]
+    if len(selected) != 1:
+        raise ValueError("terminal primary partial lacks a unique scheduled slot")
+    row = selected[0]
+    if (row.get("direction") != "incoming" or row.get("satisfaction") != "missed"
+        or row.get("miss_reason") != "ReceiveCreditRetired"
+        or _csv_uint(row.get("qcsd_outcome_schema_version")) != 3
+        or _csv_uint(row.get("connection")) != proof["endpoint"]
+        or _csv_uint(row.get("size")) != cell or _csv_uint(row.get("target_time_us")) != proof["target_us"]
+        or _csv_uint(row.get("terminal_defense_elapsed_us")) != proof["fin_at_us"]
+        or row.get("credit_consumed_at_us") or row.get("credit_consumption_delay_us")):
+        raise ValueError("terminal primary partial differs from its raw retired incoming slot")
+    advertised_us = _csv_uint(row.get("credit_advertised_at_us"))
+    _csv_uint(row.get("credit_advertisement_delay_us"))
+    if any(value.get("satisfaction") == "missed" and value is not row for value in schedule_rows):
+        raise ValueError("terminal primary partial does not authorize another missed cell")
+
+    # Replay real per-stream request frontiers and the cell's owned absolute ranges.
+    endpoint, stream, slot = proof["endpoint"], proof["stream"], proof["slot"]
+    requested: dict[tuple[int, int], int] = {}
+    ranges: list[tuple[int, int, int]] = []
+    observations: list[dict[str, Any]] = []
+    dispatched = []
+    opened = []
+    for index, event in enumerate(events):
+        try:
+            detail = json.loads(event.get("details", ""))
+        except (TypeError, ValueError) as error:
+            raise ValueError("invalid raw event in terminal primary proof") from error
+        if event.get("event") == "application_request" and event.get("outcome") == "started" and detail == 0 and type(detail) is int:
+            dispatched.append((index, _csv_uint(event.get("connection"))))
+        if not isinstance(detail, Mapping):
+            continue
+        kind = detail.get("type")
+        ep, st = detail.get("endpoint"), detail.get("stream")
+        if event.get("event") == "observation" and ep == endpoint and st == stream:
+            if (not _uint(detail.get("production_monotonic_ns")) or not _uint(detail.get("production_sequence"))
+                or _csv_uint(event.get("monotonic_us")) != detail["production_monotonic_ns"] // 1000):
+                raise ValueError("terminal primary raw observation lacks its production clock")
+            observations.append(dict(detail))
+            if kind == "stream_opened":
+                if detail.get("role") != "application":
+                    raise ValueError("terminal primary raw stream is not an application stream")
+                opened.append(index)
+        if event.get("event") != "action" or event.get("outcome") != "applied" or not _uint(ep) or not _uint(st):
+            continue
+        identity = (ep, st)
+        if kind == "configure_manual_receive":
+            requested[identity] = detail.get("initial_limit")
+            continue
+        if kind not in {"lease_parser_receive", "increase_receive_limit"}:
+            continue
+        limit = detail.get("absolute_limit")
+        previous = requested.get(identity)
+        if not _uint(limit) or not _uint(previous) or limit <= previous:
+            raise ValueError("terminal primary raw receive frontier is not increasing")
+        owner = detail.get("owner") if kind == "lease_parser_receive" else detail
+        if isinstance(owner, Mapping) and owner.get("slot") == slot:
+            packet = owner.get("packet")
+            increase = detail.get("increase") if kind == "lease_parser_receive" else limit - previous
+            if (identity != (endpoint, stream) or not _uint(increase) or increase != limit - previous
+                or not isinstance(packet, Mapping) or packet.get("direction") != "incoming"
+                or type(packet.get("timestamp_us")) is not int or packet["timestamp_us"] != proof["target_us"]
+                or type(packet.get("length")) is not int or packet["length"] != cell):
+                raise ValueError("terminal primary owned range differs from its scheduled cell")
+            ranges.append((previous, limit, _csv_uint(event.get("monotonic_us"))))
+        requested[identity] = limit
+    if len(dispatched) != 1 or dispatched[0][1] != endpoint or len(opened) != 1 or opened[0] <= dispatched[0][0]:
+        raise ValueError("terminal primary raw dispatch does not uniquely bind resource0 stream")
+    stream_bindings = [value for value in events if value.get("event") == "terminal_primary_stream_binding"]
+    if len(stream_bindings) != 1:
+        raise ValueError("terminal primary lacks unique actual resource0 stream binding")
+    binding_row = stream_bindings[0]
+    binding = json.loads(binding_row["details"])
+    opening = next(value for value in observations if value.get("type") == "stream_opened")
+    original_opening = {key: value for key, value in opening.items()
+                        if key not in {"production_sequence", "production_monotonic_ns"}}
+    expected_binding = {"schema_version": 1, "source": "native-dispatched-primary-resource-stream-v1",
+        "resource_id": 0, "endpoint": endpoint, "stream": stream,
+        "production_sequence": opening["production_sequence"],
+        "production_monotonic_ns": opening["production_monotonic_ns"], "observation": original_opening}
+    if (binding_row.get("outcome") != "bound" or not _exact_json(binding, expected_binding)
+        or _csv_uint(binding_row.get("connection")) != endpoint
+        or _csv_uint(binding_row.get("monotonic_us")) != opening["production_monotonic_ns"] // 1000):
+        raise ValueError("terminal primary stream binding differs from actual dispatched opening")
+    sequences = [value["production_sequence"] for value in observations]
+    if len(set(sequences)) != len(sequences) or sequences != sorted(sequences):
+        raise ValueError("terminal primary raw observation identity is duplicated")
+    fins = [value for value in observations if value.get("type") == "stream_finished"]
+    start = run.get("defense_start_monotonic_ns")
+    if (len(fins) != 1 or fins[0].get("finish") != "fin" or not _uint(start)
+        or fins[0]["production_monotonic_ns"] < start):
+        raise ValueError("terminal primary partial lacks its actual FIN clock")
+    fin_ns = fins[0]["production_monotonic_ns"]
+    reductions = [value for value in events if value.get("event") == "terminal_primary_fin_reduction"]
+    if len(reductions) != 1:
+        raise ValueError("terminal primary partial lacks a unique actual FIN reduction")
+    reduction_row = reductions[0]
+    reduction = json.loads(reduction_row["details"])
+    original_fin = {key: value for key, value in fins[0].items()
+                    if key not in {"production_sequence", "production_monotonic_ns"}}
+    expected_reduction = {"schema_version": 1, "source": "native-controller-defense-elapsed-us-v1",
+        "production_sequence": fins[0]["production_sequence"], "production_monotonic_ns": fin_ns,
+        "controller_defense_elapsed_us": proof["fin_at_us"], "observation": original_fin}
+    if (reduction_row.get("outcome") != "controller_reduced" or not _exact_json(reduction, expected_reduction)
+        or _csv_uint(reduction_row.get("connection")) != endpoint
+        or _csv_uint(reduction_row.get("monotonic_us")) != fin_ns // 1000
+        or proof["fin_at_us"] < (fin_ns - start) // 1000
+        or _csv_uint(partial_events[0].get("monotonic_us")) != fin_ns // 1000):
+        raise ValueError("terminal primary FIN production/reduction causal binding differs from terminal proof")
+    headers = [value for value in observations if value.get("type") == "response_headers"]
+    final_headers = [value for value in headers if type(value.get("status")) is int and value["status"] >= 200]
+    if (len(final_headers) != 1 or final_headers[0]["status"] != proof["status"]
+        or any(value.get("status") is not None and (type(value["status"]) is not int or value["status"] < 100)
+               for value in headers)):
+        raise ValueError("terminal primary raw headers differ from successful response")
+    if any((value.get("type") == "bytes_read" and not _uint(value.get("bytes")))
+        or (value.get("type") == "data_frame" and not _uint(value.get("data_bytes"))) for value in observations):
+        raise ValueError("terminal primary raw byte/frame extent has invalid types")
+    raw_bytes = sum(value["bytes"] for value in observations if value.get("type") == "bytes_read" and _uint(value.get("bytes")))
+    body_bytes = sum(value["data_bytes"] for value in observations if value.get("type") == "data_frame" and _uint(value.get("data_bytes")))
+    if body_bytes != proof["body_bytes"] or any(value["production_monotonic_ns"] > fin_ns for value in observations):
+        raise ValueError("terminal primary raw DATA extent differs from completed FIN response")
+    advertisements = [value for value in observations if value.get("type") == "receive_limit_advertised"]
+    if not ranges or sum(end - begin for begin, end, _ in ranges) != cell:
+        raise ValueError("terminal primary cell lacks one full quantum of owned raw ranges")
+    for begin, end, action_us in ranges:
+        if not any(_uint(value.get("absolute_limit")) and value["absolute_limit"] >= end
+            and value["production_monotonic_ns"] // 1000 >= action_us
+            and value["production_monotonic_ns"] <= fin_ns for value in advertisements):
+            raise ValueError("terminal primary owned range was not physically advertised before FIN")
+    final_end = max(end for _, end, _ in ranges)
+    if not any(value.get("absolute_limit") == final_end and value["production_monotonic_ns"] // 1000 == advertised_us for value in advertisements):
+        raise ValueError("terminal primary schedule advertisement differs from physical observation")
+    consumed = sum(max(0, min(end, raw_bytes) - begin) for begin, end, _ in ranges)
+    if consumed != proof["consumed_bytes"] or cell - consumed != proof["retired_bytes"]:
+        raise ValueError("terminal primary FIN raw ranges do not reproduce consumed/retired split")
+    diagnostics = run.get("defense_diagnostics")
+    incoming = sum(value.get("direction") == "incoming" for value in schedule_rows)
+    if (not isinstance(diagnostics, Mapping)
+        or diagnostics.get("scheduled_incoming_requested_bytes") != incoming * cell
+        or diagnostics.get("scheduled_incoming_advertised_bytes") != incoming * cell
+        or diagnostics.get("scheduled_incoming_consumed_bytes") != incoming * cell - proof["retired_bytes"]
+        or diagnostics.get("scheduled_incoming_retired_bytes") != proof["retired_bytes"]
+        or diagnostics.get("scheduled_incoming_unresolved_bytes") != 0):
+        raise ValueError("terminal primary split differs from whole-run physical credit ledger")
+    metrics.update(terminal_primary_partial_cells=1,
+        terminal_primary_partial_retired_bytes=proof["retired_bytes"],
+        terminal_primary_partial_consumed_bytes=proof["consumed_bytes"],
+        terminal_primary_partial_proof=dict(proof))
+    return metrics
 
 
 def validate_front_preparation_policy(preparation: Mapping[str, Any]) -> str | None:

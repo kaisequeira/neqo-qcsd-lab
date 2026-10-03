@@ -758,6 +758,7 @@ def prepare_workload(
     buflo_incoming_credit_release_policy: str | None = None,
     tamaraw_capture_policy: str | None = None,
     front_capture_policy: str | None = None,
+    terminal_primary_partial_cell_policy: str | None = None,
 ) -> PreparedWorkload:
     """Discover, probe, stability-check, and freeze one replay workload.
 
@@ -798,6 +799,16 @@ def prepare_workload(
         })
         if require_complete_coverage is not True:
             raise ValueError("FRONT capture policy requires unchanged complete graph coverage")
+    if terminal_primary_partial_cell_policy is not None:
+        from .capture_acceptance_policy import validate_terminal_primary_preparation_policy
+        validate_terminal_primary_preparation_policy({
+            "terminal_primary_partial_cell_policy": terminal_primary_partial_cell_policy,
+            "application_response_policy": application_response_policy,
+            "primary_document_identity_policy": primary_document_identity_policy,
+            "qualified_chaff_origin_policy": qualified_chaff_origin_policy,
+        })
+        if require_complete_coverage is not True:
+            raise ValueError("terminal primary partial cell policy requires unchanged complete graph coverage")
     if qualified_chaff_origin_policy is not None and not require_complete_coverage:
         raise ValueError("approved-origin chaff policy requires unchanged complete graph coverage")
     if selected_primary_policy == VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY and (
@@ -1054,6 +1065,8 @@ def prepare_workload(
                if tamaraw_capture_policy is not None else {}),
             **({"front_capture_policy": front_capture_policy}
                if front_capture_policy is not None else {}),
+            **({"terminal_primary_partial_cell_policy": terminal_primary_partial_cell_policy}
+               if terminal_primary_partial_cell_policy is not None else {}),
             **({"primary_document_identity_evidence": primary_evidence}
                if primary_evidence is not None else {}),
             "udp_payload_qualification": udp_payload_qualification,

@@ -1852,7 +1852,48 @@ def _schedule_realization_metrics_from_path(path: Path) -> dict[str, Any]:
         **_incoming_credit_release_metrics(path, rows),
         **_tamaraw_capture_metrics(path, rows),
         **_front_capture_metrics(path, rows),
+        **_terminal_primary_partial_metrics(path, rows),
     }
+
+
+def _terminal_primary_partial_metrics(schedule_path: Path, rows: list[dict[str, str]]) -> dict[str, Any]:
+    from .capture_acceptance_policy import validate_terminal_primary_partial_evidence
+    try:
+        run = load_json(schedule_path.with_name("run.json"))
+    except (OSError, ValueError):
+        return {}
+    return validate_terminal_primary_partial_evidence(run, runner_directory=schedule_path.parent, schedule_rows=rows)
+
+
+def _terminal_primary_partial_allowance(defense: str, schedule: Mapping[str, Any] | None) -> tuple[int, int] | None:
+    from .capture_acceptance_policy import TERMINAL_PRIMARY_FIELD, validate_terminal_primary_capture_marker
+    if not isinstance(schedule, Mapping) or TERMINAL_PRIMARY_FIELD not in schedule:
+        return (0, 0)
+    cell = {"tamaraw": 1200, "buflo": 1200, "cs-buflo": 600}.get(defense)
+    if cell is None:
+        return None
+    try:
+        validate_terminal_primary_capture_marker(schedule[TERMINAL_PRIMARY_FIELD], cell_size=cell)
+    except ValueError:
+        return None
+    count = schedule.get("terminal_primary_partial_cells")
+    retired = schedule.get("terminal_primary_partial_retired_bytes")
+    consumed = schedule.get("terminal_primary_partial_consumed_bytes")
+    if (type(count) is not int or count not in {0, 1} or type(retired) is not int or type(consumed) is not int
+        or schedule.get("terminal_primary_partial_cell_size") != cell
+        or any(not (isinstance(schedule.get(key), str) and len(schedule[key]) == 64
+            and all(char in "0123456789abcdef" for char in schedule[key])) for key in (
+            "terminal_primary_partial_events_sha256", "terminal_primary_partial_schedule_sha256"))):
+        return None
+    if count == 0:
+        return (0, 0) if retired == consumed == 0 and "terminal_primary_partial_proof" not in schedule else None
+    proof = schedule.get("terminal_primary_partial_proof")
+    if (not isinstance(proof, Mapping) or not 0 < retired < cell or not 0 < consumed < cell
+        or retired + consumed != cell or proof.get("retired_bytes") != retired
+        or proof.get("consumed_bytes") != consumed or proof.get("cell_bytes") != cell
+        or schedule.get("missed_event_reasons") != {"ReceiveCreditRetired": 1}):
+        return None
+    return count, retired
 
 
 def _front_capture_metrics(schedule_path: Path, rows: list[dict[str, str]]) -> dict[str, Any]:
@@ -3457,7 +3498,7 @@ def _diagnostics_match_contract(defense: str, diagnostics: dict[str, Any]) -> bo
     return all(_diagnostic_value_matches(contract[key], selected[key]) for key in expected)
 
 
-def _scheduled_incoming_diagnostics_match(diagnostics: dict[str, Any]) -> bool:
+def _scheduled_incoming_diagnostics_match(diagnostics: dict[str, Any], *, allowed_retired_bytes: int = 0) -> bool:
     selected = {
         key: value for key, value in diagnostics.items() if key.startswith("scheduled_incoming_")
     }
@@ -3483,9 +3524,9 @@ def _scheduled_incoming_diagnostics_match(diagnostics: dict[str, Any]) -> bool:
     unresolved = selected["scheduled_incoming_unresolved_bytes"]
     return (
         requested == consumed + retired + unresolved
-        and requested == consumed
+        and requested == consumed + allowed_retired_bytes
         and (advertised is None or requested == advertised)
-        and retired == 0
+        and retired == allowed_retired_bytes
         and unresolved == 0
     )
 
@@ -3504,6 +3545,7 @@ def _current_exact_schedule_activation(
     schedule: Mapping[str, Any] | None,
     *,
     allow_empty: bool,
+    allowed_partial_cells: int = 0,
 ) -> bool:
     """Require a complete current exact-event ledger, including a valid empty one.
 
@@ -3541,8 +3583,8 @@ def _current_exact_schedule_activation(
     if (
         (count == 0 and not allow_empty)
         or outgoing + incoming != count
-        or schedule["satisfied_events"] != count
-        or schedule["missed_events"] != 0
+        or schedule["satisfied_events"] != count - allowed_partial_cells
+        or schedule["missed_events"] != allowed_partial_cells
         or schedule["outgoing_size_mismatch_events"] != 0
         or schedule["outgoing_size_absolute_error_bytes"] != 0
         or schedule.get("terminal_slots_unique") is not True
@@ -3553,7 +3595,7 @@ def _current_exact_schedule_activation(
         or schedule["incoming_credit_consumption_missing_events"] != 0
         or schedule["invalid_credit_advertisement_events"] != 0
         or schedule["invalid_credit_consumption_events"] != 0
-        or satisfactions != ({"satisfied": count} if count else {})
+        or satisfactions != ({"satisfied": count - 1, "missed": 1} if allowed_partial_cells else ({"satisfied": count} if count else {}))
         or not isinstance(targets, Mapping)
         or set(targets) != {"outgoing", "incoming"}
         or not isinstance(sizes, Mapping)
@@ -3605,7 +3647,11 @@ def _established_defense_activation_valid(
         return False
 
     allow_empty = defense in {"traffic-morphing", "wtf-pad"}
-    if not _current_exact_schedule_activation(schedule, allow_empty=allow_empty):
+    allowance = _terminal_primary_partial_allowance(defense, schedule)
+    if allowance is None:
+        return False
+    partial, retired = allowance
+    if not _current_exact_schedule_activation(schedule, allow_empty=allow_empty, allowed_partial_cells=partial):
         return False
     assert isinstance(schedule, Mapping)
     sizes = schedule["scheduled_sizes_by_direction"]
@@ -3616,7 +3662,7 @@ def _established_defense_activation_valid(
         any(value > maximum_udp for value in (*incoming_sizes, *outgoing_sizes))
         or diagnostics.get("scheduled_incoming_requested_bytes") != sum(incoming_sizes)
         or diagnostics.get("scheduled_incoming_advertised_bytes") != sum(incoming_sizes)
-        or diagnostics.get("scheduled_incoming_consumed_bytes") != sum(incoming_sizes)
+        or diagnostics.get("scheduled_incoming_consumed_bytes") != sum(incoming_sizes) - retired
     ):
         return False
 
@@ -6750,6 +6796,10 @@ def fidelity_eligible(
     defense = _canonical_fidelity_defense(defense)
     if not sample_eligible:
         return False
+    allowance = _terminal_primary_partial_allowance(defense, schedule_metrics)
+    if allowance is None:
+        return False
+    partial, retired = allowance
     if defense == "front" and isinstance(schedule_metrics, Mapping) and "front_capture_policy" in schedule_metrics:
         return (_scheduled_incoming_diagnostics_match(diagnostics)
             and _diagnostics_match_contract(defense, diagnostics)
@@ -6761,7 +6811,7 @@ def fidelity_eligible(
         and defense != "undefended"
         and (
             type(missed_events) is not int
-            or missed_events != 0
+            or missed_events != partial
             or type(outgoing_size_mismatches) is not int
             or outgoing_size_mismatches != 0
         )
@@ -6770,7 +6820,7 @@ def fidelity_eligible(
     if (
         defense in DEFENSE_ADAPTATIONS
         and defense != "undefended"
-        and not _scheduled_incoming_diagnostics_match(diagnostics)
+        and not _scheduled_incoming_diagnostics_match(diagnostics, allowed_retired_bytes=retired)
     ):
         return False
     if not _diagnostics_match_contract(defense, diagnostics):
@@ -6832,7 +6882,6 @@ def fidelity_eligible(
             "buflo_partial_outgoing_cells",
             "buflo_suppressed_outgoing_cells",
             "buflo_missed_outgoing_cells",
-            "buflo_missed_incoming_cells",
             "buflo_outgoing_unresolved_cells",
             "buflo_incoming_unresolved_cells",
             "buflo_catch_up_outgoing_cells",
@@ -6840,6 +6889,7 @@ def fidelity_eligible(
         )
         return (
             all(diagnostics[key] == 0 for key in zero_keys)
+            and diagnostics["buflo_missed_incoming_cells"] == partial
             and diagnostics["buflo_paper_equivalent"] is False
             and diagnostics["buflo_client_only"] is True
             and diagnostics["buflo_egress_backlog_pending"] is False
@@ -6854,12 +6904,12 @@ def fidelity_eligible(
             == schedule_metrics.get("scheduled_outgoing_events")
             and diagnostics["buflo_scheduled_incoming_cells"]
             == schedule_metrics.get("scheduled_incoming_events")
-            and diagnostics["buflo_scheduled_incoming_cells"]
+            and diagnostics["buflo_scheduled_incoming_cells"] - partial
             == schedule_metrics.get("incoming_credit_advertised_events")
-            and diagnostics["buflo_scheduled_incoming_cells"]
+            and diagnostics["buflo_scheduled_incoming_cells"] - partial
             == schedule_metrics.get("incoming_credit_consumed_events")
             and schedule_metrics.get("incoming_credit_release_timing_events")
-            == diagnostics["buflo_scheduled_incoming_cells"]
+            == diagnostics["buflo_scheduled_incoming_cells"] - partial
             and schedule_metrics.get("incoming_credit_release_window_violations") == 0
             and type(
                 schedule_metrics.get("incoming_credit_release_lateness_upper_bound_us_max")
@@ -6872,10 +6922,10 @@ def fidelity_eligible(
             and diagnostics.get("scheduled_incoming_advertised_bytes")
             == diagnostics["scheduled_incoming_requested_bytes"]
             and _new_schedule_terminal_contract(schedule_metrics, congestion_sensitive=False)
-            and _buflo_schedule_matches_canonical_parameters(schedule_metrics)
+            and _buflo_schedule_matches_canonical_parameters(schedule_metrics, allowed_partial_cells=partial)
         )
     if defense == "cs-buflo":
-        return _cs_buflo_fidelity_eligible(diagnostics, schedule_metrics)
+        return _cs_buflo_fidelity_eligible(diagnostics, schedule_metrics, allowed_partial_cells=partial)
     if defense == "tamaraw" and isinstance(schedule_metrics, Mapping) and "tamaraw_capture_policy" in schedule_metrics:
         return (_tamaraw_capture_metrics_valid(schedule_metrics)
             and _new_schedule_terminal_contract(schedule_metrics, congestion_sensitive=False)
@@ -6917,7 +6967,7 @@ def _new_schedule_terminal_contract(
     return schedule.get("invalid_congestion_reason_events") == 0
 
 
-def _buflo_schedule_matches_canonical_parameters(schedule: Mapping[str, Any]) -> bool:
+def _buflo_schedule_matches_canonical_parameters(schedule: Mapping[str, Any], *, allowed_partial_cells: int = 0) -> bool:
     targets = schedule.get("target_times_us_by_direction")
     sizes = schedule.get("scheduled_sizes_by_direction")
     terminal = schedule.get("terminal_satisfactions")
@@ -6961,11 +7011,11 @@ def _buflo_schedule_matches_canonical_parameters(schedule: Mapping[str, Any]) ->
         or max(targets["outgoing"]) != max(targets["incoming"])
     ):
         return False
-    return total <= 12_000 and terminal == {"satisfied": total}
+    return total <= 12_000 and terminal == ({"satisfied": total - 1, "missed": 1} if allowed_partial_cells else {"satisfied": total})
 
 
 def _cs_buflo_fidelity_eligible(
-    diagnostics: Mapping[str, Any], schedule: Mapping[str, Any] | None
+    diagnostics: Mapping[str, Any], schedule: Mapping[str, Any] | None, *, allowed_partial_cells: int = 0
 ) -> bool:
     if not _new_schedule_terminal_contract(schedule, congestion_sensitive=True):
         return False
@@ -7001,11 +7051,10 @@ def _cs_buflo_fidelity_eligible(
         return False
     zero_keys = (
         "cs_buflo_missed_outgoing_cells",
-        "cs_buflo_missed_incoming_cells",
         "cs_buflo_outgoing_unresolved_cells",
         "cs_buflo_incoming_unresolved_cells",
     )
-    if any(diagnostics[key] != 0 for key in zero_keys):
+    if any(diagnostics[key] != 0 for key in zero_keys) or diagnostics["cs_buflo_missed_incoming_cells"] != allowed_partial_cells:
         return False
     for direction in ("outgoing", "incoming"):
         opportunities = diagnostics[f"cs_buflo_{direction}_minimum_interval_opportunities"]
@@ -7017,7 +7066,7 @@ def _cs_buflo_fidelity_eligible(
             opportunities
             == diagnostics["cs_buflo_incoming_minimum_interval_local_realized"]
             == terminal_at_minimum
-            == full_at_minimum
+            and 0 <= terminal_at_minimum - full_at_minimum <= allowed_partial_cells
         ):
             return False
     terminal = schedule.get("terminal_satisfactions")
@@ -7035,7 +7084,7 @@ def _cs_buflo_fidelity_eligible(
         != schedule.get("scheduled_outgoing_events")
         or diagnostics["cs_buflo_scheduled_incoming_cells"]
         != schedule.get("scheduled_incoming_events")
-        or diagnostics["cs_buflo_scheduled_incoming_cells"] != terminal.get("satisfied", 0)
+        or diagnostics["cs_buflo_scheduled_incoming_cells"] - allowed_partial_cells != terminal.get("satisfied", 0)
         or diagnostics["cs_buflo_incoming_local_realized_cells"]
         != diagnostics["cs_buflo_scheduled_incoming_cells"]
         or diagnostics["cs_buflo_desired_udp_bytes"]
@@ -7052,9 +7101,9 @@ def _cs_buflo_fidelity_eligible(
         != diagnostics["scheduled_incoming_requested_bytes"]
         or diagnostics["cs_buflo_realized_incoming_credit_bytes"]
         != diagnostics["scheduled_incoming_consumed_bytes"]
-        or diagnostics["cs_buflo_scheduled_incoming_cells"]
+        or diagnostics["cs_buflo_scheduled_incoming_cells"] - allowed_partial_cells
         != schedule.get("incoming_credit_advertised_events")
-        or diagnostics["cs_buflo_scheduled_incoming_cells"]
+        or diagnostics["cs_buflo_scheduled_incoming_cells"] - allowed_partial_cells
         != schedule.get("incoming_credit_consumed_events")
     ):
         return False

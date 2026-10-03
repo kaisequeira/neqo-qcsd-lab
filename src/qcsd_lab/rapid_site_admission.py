@@ -240,55 +240,61 @@ class AdmissionContext:
 
     @property
     def application_response_policy(self) -> str | None:
-        if self.selection_amendment_revision not in {5, 6, 7, 8, 9, 10, 11}:
+        if self.selection_amendment_revision not in {5, 6, 7, 8, 9, 10, 11, 12}:
             return None
         return _selection_amendment_payload(self.selection_amendment_bytes)["application_response_policy"]
 
     @property
     def primary_document_identity_policy(self) -> str | None:
-        if self.selection_amendment_revision not in {6, 7, 8, 9, 10, 11}:
+        if self.selection_amendment_revision not in {6, 7, 8, 9, 10, 11, 12}:
             return None
         return _selection_amendment_payload(self.selection_amendment_bytes)["primary_document_identity_policy"]
 
     @property
     def qualified_chaff_origin_policy(self) -> str | None:
-        if self.selection_amendment_revision not in {7, 8, 9, 10, 11}:
+        if self.selection_amendment_revision not in {7, 8, 9, 10, 11, 12}:
             return None
         return _selection_amendment_payload(self.selection_amendment_bytes)["qualified_chaff_origin_policy"]
 
     @property
     def buflo_incoming_credit_release_policy(self) -> str | None:
-        if self.selection_amendment_revision not in {8, 9, 10, 11}:
+        if self.selection_amendment_revision not in {8, 9, 10, 11, 12}:
             return None
         return _selection_amendment_payload(self.selection_amendment_bytes)["buflo_incoming_credit_release_policy"]
 
     @property
     def tamaraw_capture_policy(self) -> str | None:
-        if self.selection_amendment_revision not in {10, 11}:
+        if self.selection_amendment_revision not in {10, 11, 12}:
             return None
         return _selection_amendment_payload(self.selection_amendment_bytes)["tamaraw_capture_policy"]
 
     @property
     def front_capture_policy(self) -> str | None:
-        if self.selection_amendment_revision != 11:
+        if self.selection_amendment_revision not in {11, 12}:
             return None
         return _selection_amendment_payload(self.selection_amendment_bytes)["front_capture_policy"]
 
     @property
+    def terminal_primary_partial_cell_policy(self) -> str | None:
+        if self.selection_amendment_revision != 12:
+            return None
+        return _selection_amendment_payload(self.selection_amendment_bytes)["terminal_primary_partial_cell_policy"]
+
+    @property
     def page_policy_not_before_utc(self) -> datetime:
-        if self.selection_amendment_revision not in {2, 3, 4, 5, 6, 7, 8, 9, 10, 11}:
+        if self.selection_amendment_revision not in {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}:
             raise ValueError("automated screen and typed page-policy deferral require selection amendment revision 2")
         return self.browser_policy_not_before_utc
 
     @property
     def collector_not_before_utc(self) -> datetime:
-        if self.selection_amendment_revision not in {3, 4, 5, 6, 7, 8, 9, 10, 11}:
+        if self.selection_amendment_revision not in {3, 4, 5, 6, 7, 8, 9, 10, 11, 12}:
             raise ValueError("operational collector deferral requires selection amendment revision 3")
         return self.browser_policy_not_before_utc
 
     @property
     def attempt_not_before_utc(self) -> datetime:
-        if self.selection_amendment_revision not in {4, 5, 6, 7, 8, 9, 10, 11}:
+        if self.selection_amendment_revision not in {4, 5, 6, 7, 8, 9, 10, 11, 12}:
             raise ValueError("unsuccessful live attempt deferral requires selection amendment revision 4")
         return self.browser_policy_not_before_utc
 
@@ -582,11 +588,11 @@ def load_admission_context(root: Path) -> AdmissionContext:
         _selection_amendment_payload(context.selection_amendment_bytes)
         if set(context.mounted_module_hashes[BROWSER_POLICY_GROUP]) != set(implementation_sources()):
             raise ValueError("browser policy implementation inventory changed")
-    if context.selection_amendment_revision in {3, 4, 5, 6, 7, 8, 9, 10, 11}:
+    if context.selection_amendment_revision in {3, 4, 5, 6, 7, 8, 9, 10, 11, 12}:
         from .rapid_collector_failure_evidence import implementation_sources
         if set(context.mounted_module_hashes[COLLECTOR_GROUP]) != set(implementation_sources()):
             raise ValueError("collector implementation inventory changed")
-    if context.selection_amendment_revision in {4, 5, 6, 7, 8, 9, 10, 11}:
+    if context.selection_amendment_revision in {4, 5, 6, 7, 8, 9, 10, 11, 12}:
         from .rapid_attempt_failure_evidence import implementation_sources
         if set(context.mounted_module_hashes[ATTEMPT_GROUP]) != set(implementation_sources(
             application_response_policy=context.application_response_policy is not None, qualified_chaff_origin_policy=context.qualified_chaff_origin_policy is not None,
@@ -1527,7 +1533,8 @@ class ObservedLiveBackend:
                 qualified_chaff_origin_policy: str | None = None,
                 buflo_incoming_credit_release_policy: str | None = None,
                 tamaraw_capture_policy: str | None = None,
-                front_capture_policy: str | None = None) -> Any:
+                front_capture_policy: str | None = None,
+                terminal_primary_partial_cell_policy: str | None = None) -> Any:
         from .class_acquisition import _validated_frozen_origin_ip_pins, _regular_directory
         _regular_directory(output_root.parent)
         if output_root.exists() or output_root.is_symlink():
@@ -1574,8 +1581,18 @@ class ObservedLiveBackend:
                 "primary_document_identity_policy": primary_document_identity_policy,
                 "qualified_chaff_origin_policy": qualified_chaff_origin_policy,
             })
+        if terminal_primary_partial_cell_policy is not None:
+            from .capture_acceptance_policy import validate_terminal_primary_preparation_policy
+            validate_terminal_primary_preparation_policy({
+                "terminal_primary_partial_cell_policy": terminal_primary_partial_cell_policy,
+                "application_response_policy": application_response_policy,
+                "primary_document_identity_policy": primary_document_identity_policy,
+                "qualified_chaff_origin_policy": qualified_chaff_origin_policy,
+            })
         if front_capture_policy != self.context.front_capture_policy:
             raise ValueError("backend FRONT capture policy differs from prospective context")
+        if terminal_primary_partial_cell_policy != self.context.terminal_primary_partial_cell_policy:
+            raise ValueError("backend terminal primary partial cell policy differs from prospective context")
         policy_kwargs = ({"application_response_policy": application_response_policy}
                          if application_response_policy is not None else {})
         if primary_document_identity_policy is not None:
@@ -1588,8 +1605,10 @@ class ObservedLiveBackend:
             policy_kwargs["tamaraw_capture_policy"] = tamaraw_capture_policy
         if front_capture_policy is not None:
             policy_kwargs["front_capture_policy"] = front_capture_policy
+        if terminal_primary_partial_cell_policy is not None:
+            policy_kwargs["terminal_primary_partial_cell_policy"] = terminal_primary_partial_cell_policy
         producer = (self._prepare_with_padding_capacity
-                    if self.context.selection_amendment_revision in {6, 7, 8, 9, 10, 11} else self.backend.prepare)
+                    if self.context.selection_amendment_revision in {6, 7, 8, 9, 10, 11, 12} else self.backend.prepare)
         return self._call(producer, workload_id, url, approved, output_root,
                           origin_ip_pins=origin_ip_pins, **policy_kwargs)
 
@@ -1605,7 +1624,7 @@ class ObservedLiveBackend:
             qualified_chaff_origin_policy=self.context.qualified_chaff_origin_policy,
             buflo_incoming_credit_release_policy=self.context.buflo_incoming_credit_release_policy,
             tamaraw_capture_policy=self.context.tamaraw_capture_policy,
-            front_capture_policy=self.context.front_capture_policy)
+            front_capture_policy=self.context.front_capture_policy, terminal_primary_partial_cell_policy=self.context.terminal_primary_partial_cell_policy)
         preparation = manifest["preparation"]
         if (preparation["source_url"] != url
             or preparation["lab_source"] != dict(self.context.expected_runtime_source)
@@ -1615,7 +1634,7 @@ class ObservedLiveBackend:
         if not _has_response_padding_capacity(manifest,
                 qualified_chaff_origin_policy=self.context.qualified_chaff_origin_policy):
             raise InsufficientPaddingCapacityError(_APPROVED_ORIGIN_PADDING_CAPACITY_FAILURE
-                if self.context.selection_amendment_revision in {7, 8, 9, 10, 11} else _PADDING_CAPACITY_FAILURE)
+                if self.context.selection_amendment_revision in {7, 8, 9, 10, 11, 12} else _PADDING_CAPACITY_FAILURE)
         return result
 
 
@@ -1778,7 +1797,7 @@ def verify_prepared_workload(
     cache_key = (_sha(raw), _sha(graph_raw), selected_page_url, _sha(_json(context.expected_runtime_source)),
                  context.application_response_policy, context.primary_document_identity_policy,
                  context.qualified_chaff_origin_policy, context.buflo_incoming_credit_release_policy,
-                 context.tamaraw_capture_policy, context.front_capture_policy,
+                 context.tamaraw_capture_policy, context.front_capture_policy, context.terminal_primary_partial_cell_policy,
                  policy_evidence_sha)
     if cache_key in context.proof_cache["prepared"]:
         return deepcopy(context.proof_cache["prepared"][cache_key])
@@ -1789,7 +1808,7 @@ def verify_prepared_workload(
                                      qualified_chaff_origin_policy=context.qualified_chaff_origin_policy,
                                      buflo_incoming_credit_release_policy=context.buflo_incoming_credit_release_policy,
                                      tamaraw_capture_policy=context.tamaraw_capture_policy,
-                                     front_capture_policy=context.front_capture_policy)
+                                     front_capture_policy=context.front_capture_policy, terminal_primary_partial_cell_policy=context.terminal_primary_partial_cell_policy)
     preparation = manifest["preparation"]
     if (preparation["source_url"] != selected_page_url
         or preparation["lab_source"] != dict(context.expected_runtime_source)
@@ -1798,13 +1817,13 @@ def verify_prepared_workload(
         raise ValueError("prepared workload/page/source or its complete resource graph differs")
     resources = manifest["resources"]
     primary = origin(preparation["final_url"])
-    if context.selection_amendment_revision in {6, 7, 8, 9, 10, 11}:
+    if context.selection_amendment_revision in {6, 7, 8, 9, 10, 11, 12}:
         # Variable primary HTML cannot supply an exact-identity padding body.
         # This screens potential capacity; sustained chaff qualification remains separate.
         if not _has_response_padding_capacity(manifest,
                 qualified_chaff_origin_policy=context.qualified_chaff_origin_policy):
             raise ValueError(_APPROVED_ORIGIN_PADDING_CAPACITY_FAILURE
-                if context.selection_amendment_revision in {7, 8, 9, 10, 11} else _PADDING_CAPACITY_FAILURE)
+                if context.selection_amendment_revision in {7, 8, 9, 10, 11, 12} else _PADDING_CAPACITY_FAILURE)
     count = sum(origin(resource["url"]) != primary for resource in resources)
     facts = {
         "selected_page_url": selected_page_url, "prepared_workload_sha256": _sha(raw),
@@ -1826,6 +1845,8 @@ def verify_prepared_workload(
         facts["tamaraw_capture_policy"] = context.tamaraw_capture_policy
     if context.front_capture_policy is not None:
         facts["front_capture_policy"] = context.front_capture_policy
+    if context.terminal_primary_partial_cell_policy is not None:
+        facts["terminal_primary_partial_cell_policy"] = context.terminal_primary_partial_cell_policy
     context.proof_cache["prepared"][cache_key] = facts
     return deepcopy(facts)
 
@@ -1856,7 +1877,7 @@ def prepare_site(
 ) -> Path:
     """Run the existing live full-graph preparer in one retained, retryable attempt."""
     page = _page_facts(context, candidate_id, navigation, page_h3)
-    if context.selection_amendment_revision in {2, 3, 4, 5, 6, 7, 8, 9, 10, 11}:
+    if context.selection_amendment_revision in {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}:
         if human_review is not None or automated_screen is None:
             raise ValueError("revision 2 preparation requires its distinct automated screen")
         screen = verify_automated_site_screen(automated_screen, context, candidate_id=candidate_id)
@@ -1885,7 +1906,7 @@ def prepare_site(
     }
     durable_create(attempt / "inputs.json", _json(references))
     backend = backend or ExistingAcquisitionBackend()
-    if context.selection_amendment_revision in {4, 5, 6, 7, 8, 9, 10, 11}:
+    if context.selection_amendment_revision in {4, 5, 6, 7, 8, 9, 10, 11, 12}:
         backend = ObservedLiveBackend(backend, context, candidate_id, attempt,
             _attempt_action(context.candidate(candidate_id), page),
             {"navigation": navigation, "page_h3": page_h3, "automated_screen": automated_screen})
@@ -1893,7 +1914,7 @@ def prepare_site(
     action_runtime = None
     collector_runtime = None
     try:
-        if context.selection_amendment_revision in {2, 3, 4, 5, 6, 7, 8, 9, 10, 11}:
+        if context.selection_amendment_revision in {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}:
             action_runtime = begin_page_policy_action(context)
         if context.selection_amendment_revision == 3:
             collector_runtime = begin_operational_collector_action(context)
@@ -1914,6 +1935,8 @@ def prepare_site(
             policy_kwargs["tamaraw_capture_policy"] = context.tamaraw_capture_policy
         if context.front_capture_policy is not None:
             policy_kwargs["front_capture_policy"] = context.front_capture_policy
+        if context.terminal_primary_partial_cell_policy is not None:
+            policy_kwargs["terminal_primary_partial_cell_policy"] = context.terminal_primary_partial_cell_policy
         probe = backend.prepare(workload_id, page["url"], approved, attempt / "workloads",
                                 origin_ip_pins=discovery.origin_ip_pins, **policy_kwargs)
         manifest_path = Path(probe.prepared.path)
@@ -1925,7 +1948,7 @@ def prepare_site(
                                          qualified_chaff_origin_policy=context.qualified_chaff_origin_policy,
                                          buflo_incoming_credit_release_policy=context.buflo_incoming_credit_release_policy,
                                          tamaraw_capture_policy=context.tamaraw_capture_policy,
-                                     front_capture_policy=context.front_capture_policy)
+                                     front_capture_policy=context.front_capture_policy, terminal_primary_partial_cell_policy=context.terminal_primary_partial_cell_policy)
         graph_path = attempt / "full-resource-graph.json"
         durable_create(graph_path, _json(_full_graph(manifest)))
         facts = verify_prepared_workload(manifest_path, graph_path, context, selected_page_url=page["url"])
@@ -2009,7 +2032,7 @@ def _preparation_facts(path: Path, context: AdmissionContext, candidate_id: str)
         fields |= {"started_at"}
     if set(value) != fields:
         raise ValueError("preparation receipt fields changed")
-    safety_key = "automated_screen" if context.selection_amendment_revision in {2, 3, 4, 5, 6, 7, 8, 9, 10, 11} else "human_review"
+    safety_key = "automated_screen" if context.selection_amendment_revision in {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12} else "human_review"
     if (value["candidate_id"] != candidate_id or value["provenance_sha256"] != context.provenance_sha256
         or value["scientific_credit"] is not False or _utc(value["completed_at"]) < context.not_before_utc
         or value["implementation_hashes"] != context.mounted_module_hashes["preparation"]
@@ -2023,7 +2046,7 @@ def _preparation_facts(path: Path, context: AdmissionContext, candidate_id: str)
         _child(context.root, value["inputs"][key]) for key in ("navigation", "page_h3", safety_key)
     )
     page = _page_facts(context, candidate_id, navigation, page_h3)
-    if context.selection_amendment_revision in {2, 3, 4, 5, 6, 7, 8, 9, 10, 11}:
+    if context.selection_amendment_revision in {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}:
         review = verify_automated_site_screen(review_path, context, candidate_id=candidate_id)
         if review["selected_page_h3_receipt_sha256"] != page["receipt_sha256"]:
             raise ValueError("prepared page automated screen differs from exact page")
@@ -2094,7 +2117,7 @@ def browser_policy_failure_facts(path: Path, context: AdmissionContext, candidat
 
 
 def _root_allows_policy_progression(context: AdmissionContext, screen: Mapping[str, Any]) -> bool:
-    if context.selection_amendment_revision not in {3, 4, 5, 6, 7, 8, 9, 10, 11}:
+    if context.selection_amendment_revision not in {3, 4, 5, 6, 7, 8, 9, 10, 11, 12}:
         return screen["outcome"] == "known-valid"
     from .rapid_selection_amendment import root_screen_allows_browser_progression
     return root_screen_allows_browser_progression(screen, revision=context.selection_amendment_revision)
@@ -2103,9 +2126,9 @@ def _root_allows_policy_progression(context: AdmissionContext, screen: Mapping[s
 def _terminal_facts(value: Mapping[str, Any], context: AdmissionContext) -> dict[str, Any]:
     fields = {"candidate_id", "provenance_sha256", "root_surveys", "human_review",
               "reviewed_url", "preparation", "defer_root", "facts", "completed_at", "scientific_credit"}
-    revision_two = context.selection_amendment_revision in {2, 3, 4, 5, 6, 7, 8, 9, 10, 11}
-    revision_three = context.selection_amendment_revision in {3, 4, 5, 6, 7, 8, 9, 10, 11}
-    revision_four = context.selection_amendment_revision in {4, 5, 6, 7, 8, 9, 10, 11}
+    revision_two = context.selection_amendment_revision in {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
+    revision_three = context.selection_amendment_revision in {3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
+    revision_four = context.selection_amendment_revision in {4, 5, 6, 7, 8, 9, 10, 11, 12}
     if revision_two:
         fields |= {"automated_screen"}
     valid_fields = (fields, fields | {"browser_policy_failure"}, fields | {"page_policy_failure"}) if revision_two else (
@@ -2311,11 +2334,11 @@ def produce_site_terminal(
 ) -> Path:
     if browser_policy_failure is not None and context.selection_amendment_bytes is None:
         raise ValueError("browser policy deferral requires a prospective selection amendment")
-    if (automated_screen is not None or page_policy_failure is not None) and context.selection_amendment_revision not in {2, 3, 4, 5, 6, 7, 8, 9, 10, 11}:
+    if (automated_screen is not None or page_policy_failure is not None) and context.selection_amendment_revision not in {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}:
         raise ValueError("automated screen and typed page-policy deferral require selection amendment revision 2")
-    if collector_failure is not None and context.selection_amendment_revision not in {3, 4, 5, 6, 7, 8, 9, 10, 11}:
+    if collector_failure is not None and context.selection_amendment_revision not in {3, 4, 5, 6, 7, 8, 9, 10, 11, 12}:
         raise ValueError("collector deferral requires selection amendment revision 3")
-    if attempt_failure is not None and context.selection_amendment_revision not in {4, 5, 6, 7, 8, 9, 10, 11}:
+    if attempt_failure is not None and context.selection_amendment_revision not in {4, 5, 6, 7, 8, 9, 10, 11, 12}:
         raise ValueError("unsuccessful attempt deferral requires selection amendment revision 4")
     if sum(path is not None for path in (browser_policy_failure, page_policy_failure, collector_failure, attempt_failure)) > 1:
         raise ValueError("terminal cannot combine separate browser, page-policy and collector failures")
@@ -2330,7 +2353,7 @@ def produce_site_terminal(
     }
     if browser_policy_failure is not None:
         value["browser_policy_failure"] = import_evidence(context.root, browser_policy_failure)
-    if context.selection_amendment_revision in {2, 3, 4, 5, 6, 7, 8, 9, 10, 11}:
+    if context.selection_amendment_revision in {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}:
         value["automated_screen"] = import_evidence(context.root, automated_screen) if automated_screen else None
     if page_policy_failure is not None:
         value["page_policy_failure"] = import_evidence(context.root, page_policy_failure)
@@ -2495,7 +2518,7 @@ def acquisition_status(context: AdmissionContext) -> dict[str, Any]:
         "terminal_count": len(terminals), "admitted_site_count": admitted,
         "next_candidate": next_candidate, "attempts": records,
         "pending_requirement": (("root-survey-or-navigation-exact-page-h3-automated-url-domain-screen-and-full-graph-preparation"
-                                  if context.selection_amendment_revision in {2, 3, 4, 5, 6, 7, 8, 9, 10, 11} else
+                                  if context.selection_amendment_revision in {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12} else
                                   "root-survey-or-human-review-navigation-exact-page-h3-and-full-graph-preparation") if next_candidate else None),
         "formal_accepted_trace_count": 0, "formal_trace_target": 16_000,
         "capture_authority": "none-site-acquisition-only",

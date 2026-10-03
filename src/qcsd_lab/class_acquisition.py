@@ -297,6 +297,7 @@ def validate_class_study_preparation(
     buflo_incoming_credit_release_policy: str | None = None,
     tamaraw_capture_policy: str | None = None,
     front_capture_policy: str | None = None,
+    terminal_primary_partial_cell_policy: str | None = None,
 ) -> None:
     """Require the class study's bounded complete-coverage preparation contract."""
 
@@ -329,6 +330,7 @@ def validate_class_study_preparation(
         if (not isinstance(candidate_preparation, Mapping)
             or validate_tamaraw_preparation_policy(candidate_preparation) != expected_tamaraw):
             raise ValueError(f"class-study workload {workload_id!r} Tamaraw capture policy differs from its authority")
+    from .capture_acceptance_policy import TERMINAL_PRIMARY_FIELD, validate_terminal_primary_preparation_policy
     from .capture_acceptance_policy import FRONT_FIELD, validate_front_preparation_policy
     if front_capture_policy is None:
         if isinstance(candidate_preparation, Mapping) and FRONT_FIELD in candidate_preparation:
@@ -343,6 +345,19 @@ def validate_class_study_preparation(
         if (not isinstance(candidate_preparation, Mapping)
             or validate_front_preparation_policy(candidate_preparation) != expected_front):
             raise ValueError(f"class-study workload {workload_id!r} FRONT capture policy differs from its authority")
+    if terminal_primary_partial_cell_policy is None:
+        if isinstance(candidate_preparation, Mapping) and TERMINAL_PRIMARY_FIELD in candidate_preparation:
+            raise ValueError(f"class-study workload {workload_id!r} terminal primary partial cell policy differs from its authority")
+    else:
+        expected_terminal_primary = validate_terminal_primary_preparation_policy({
+            TERMINAL_PRIMARY_FIELD: terminal_primary_partial_cell_policy,
+            "application_response_policy": application_response_policy,
+            "primary_document_identity_policy": primary_document_identity_policy,
+            "qualified_chaff_origin_policy": qualified_chaff_origin_policy,
+        })
+        if (not isinstance(candidate_preparation, Mapping)
+            or validate_terminal_primary_preparation_policy(candidate_preparation) != expected_terminal_primary):
+            raise ValueError(f"class-study workload {workload_id!r} terminal primary partial cell policy differs from its authority")
     from .application_response_policy import (
         qualified_chaff_origin_policy as declared_chaff_policy,
         validate_qualified_chaff_origin_policy,
@@ -1956,6 +1971,7 @@ class AcquisitionBackend(Protocol):
         buflo_incoming_credit_release_policy: str | None = None,
         tamaraw_capture_policy: str | None = None,
         front_capture_policy: str | None = None,
+        terminal_primary_partial_cell_policy: str | None = None,
     ) -> PreparedProbe: ...
 
 
@@ -2035,6 +2051,7 @@ class ExistingAcquisitionBackend:
         buflo_incoming_credit_release_policy: str | None = None,
         tamaraw_capture_policy: str | None = None,
         front_capture_policy: str | None = None,
+        terminal_primary_partial_cell_policy: str | None = None,
     ) -> PreparedProbe:
         if buflo_incoming_credit_release_policy is not None:
             from .capture_acceptance_policy import validate_buflo_preparation_policy
@@ -2056,6 +2073,14 @@ class ExistingAcquisitionBackend:
             from .capture_acceptance_policy import validate_front_preparation_policy
             validate_front_preparation_policy({
                 "front_capture_policy": front_capture_policy,
+                "application_response_policy": application_response_policy,
+                "primary_document_identity_policy": primary_document_identity_policy,
+                "qualified_chaff_origin_policy": qualified_chaff_origin_policy,
+            })
+        if terminal_primary_partial_cell_policy is not None:
+            from .capture_acceptance_policy import validate_terminal_primary_preparation_policy
+            validate_terminal_primary_preparation_policy({
+                "terminal_primary_partial_cell_policy": terminal_primary_partial_cell_policy,
                 "application_response_policy": application_response_policy,
                 "primary_document_identity_policy": primary_document_identity_policy,
                 "qualified_chaff_origin_policy": qualified_chaff_origin_policy,
@@ -2097,6 +2122,8 @@ class ExistingAcquisitionBackend:
             policy_kwargs["tamaraw_capture_policy"] = tamaraw_capture_policy
         if front_capture_policy is not None:
             policy_kwargs["front_capture_policy"] = front_capture_policy
+        if terminal_primary_partial_cell_policy is not None:
+            policy_kwargs["terminal_primary_partial_cell_policy"] = terminal_primary_partial_cell_policy
         prepared = prepare_workload(
             workload_id,
             url,
@@ -2121,7 +2148,9 @@ class ExistingAcquisitionBackend:
                                          **({"tamaraw_capture_policy": tamaraw_capture_policy}
                                             if tamaraw_capture_policy is not None else {}),
                                          **({"front_capture_policy": front_capture_policy}
-                                            if front_capture_policy is not None else {}))
+                                            if front_capture_policy is not None else {}),
+                                         **({"terminal_primary_partial_cell_policy": terminal_primary_partial_cell_policy}
+                                            if terminal_primary_partial_cell_policy is not None else {}))
         preparation = manifest["preparation"]
         current_image = os.environ.get("QCSD_LAB_IMAGE_DIGEST", "native")
         current_source = dict(source_metadata())
