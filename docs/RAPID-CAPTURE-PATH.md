@@ -14,7 +14,7 @@ homepage credit fix, endpoint-specific final UDP drain evidence and explicit
 prospective BuFLO incoming tolerance. They require fresh affected captures;
 the previous failed attempts keep their original results.
 
-**Latest live milestone, 4 October, 04:45 Sydney (3 October, 17:45 UTC):**
+**Latest milestone, 4 October, 05:10 Sydney (3 October, 18:10 UTC):**
 the repaired Lab `8461848e` / Native `44e1ca23` runtime is installed. All
 twelve actual runtime operations and 2,384 source files independently reopen.
 Fresh ordinary capture, padding qualification and the four defended
@@ -24,7 +24,16 @@ recorded hashes. The host capture took 188 seconds and deep verification
 eleven seconds. CS-BuFLO and Tamaraw also pass, retaining all 260 resources
 and four origins. FRONT fails when a chaff request encounters temporary
 HTTP/3 request-stream exhaustion; its client exits after about one second.
-That focused chaff retry repair is being prepared.
+The focused chaff retry repair now passes **four real-peer/regression
+cases**, covering reserved request identity and FIFO recovery on peer credit,
+fatal handling of other errors, endpoint readiness and dependent-graph
+completion. Its recorded compilation closed 0 in **146 seconds**; three
+focused test operations also closed 0. An earlier test-fixture credit
+mismatch remains recorded and was corrected without changing production
+code or acceptance. Native `3d994f0d` is committed and published; all 1,783
+source files match the tested snapshot. Installation and a fresh FRONT
+recording remain pending; the successful four diagnostics keep their actual
+`8461848e` / `44e1ca23` runtime labels.
 These checks grant zero formal or study-shakedown credit.
 
 The actual parallel trial failed before either worker launched: source/runtime
@@ -36,9 +45,10 @@ checkout. Its actual installation and new pair remain pending. This correction
 preserves parameter guards and permits the same Native client; the separate
 FRONT repair requires a new client artifact. Forty fallback screens closed 0
 in 246 seconds, and registry 000002 verifies 73 supplied plus forty fallback
-candidates. Admission continuation 003 resumed at 04:41:53 Sydney on the
-unchanged baseline source. Checkpoint 000041 records sixteen decisions and
-one admitted site, with `toom.de` next.
+candidates. Admission continuation 003 on unchanged Lab `818deb6` / Native
+`39464c62` closed successfully between actions at **04:56:56 Sydney
+(17:56:56 UTC)** for the focused compiler/tests. Immutable checkpoint
+**000048** records **nineteen decisions, one admission and zero formal traces**.
 The target is still **50 × five × 64 = 16,000 accepted formal traces**;
 counters are **1/50 sites, 0/50 study shakedown and 0/16,000 formal**.
 See the [actual runtime and setup evidence](EVIDENCE-INDEX.md#v12-installed-readiness-repair-and-parallel-setup).

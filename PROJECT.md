@@ -41,7 +41,7 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Latest live milestone, 4 October, 04:45 Sydney (3 October, 17:45 UTC):**
+**Latest milestone, 4 October, 05:10 Sydney (3 October, 18:10 UTC):**
 Lab `8461848e` / Native `44e1ca23` is installed and independently reopened:
 all twelve runtime operations closed successfully and all 2,384 source files
 match their inventory. The new Native release took 132 seconds; the two
@@ -54,8 +54,16 @@ All eighteen sealed result files independently reopen. CS-BuFLO and Tamaraw
 also pass capture and deep verification, with all fifteen and thirteen sealed
 files respectively reopened. FRONT fails in about one second of client work:
 an outgoing chaff request reaches its connection's HTTP/3 stream limit and
-the chaff adapter treats that temporary exhaustion as fatal. A focused repair
-is being prepared. These are separate zero-credit
+the chaff adapter treats that temporary exhaustion as fatal. The focused
+repair now passes **four real-peer/regression cases**: waiting for stream
+credit while preserving chaff request identities, keeping other errors fatal,
+the existing readiness check and dependent-graph completion. Compilation
+closed 0 in **146 seconds**, followed by three passing test operations in
+about five seconds each. An earlier fixture failure is preserved; only its
+initial receive-credit setting was corrected to match the already granted
+1 MiB. Native `3d994f0d` is committed and published on main and the desktop
+branch; all 1,783 committed files match the tested snapshot. Its installation
+and a fresh FRONT recording remain pending. These are separate zero-credit
 diagnostics, not formal samples or the registered ten-site shakedown.
 
 The first actual parallel trial failed during setup after 83 seconds, before
@@ -68,9 +76,11 @@ installation and a fresh pair remain pending. The failed trial is retained.
 The control correction can reuse the unchanged Native client; the separate
 FRONT repair requires a new Native artifact. A fresh forty-candidate fallback
 screen closed 0 in 246 seconds. Verified registry 000002 covers 73 supplied
-and forty fallback candidates. Admission continuation 003 resumed on the
-unchanged baseline source at 04:41:53 Sydney. Checkpoint 000041 records sixteen
-terminal decisions, one admission and candidate `toom.de` next. Counters remain **1/50 admitted,
+and forty fallback candidates. Admission continuation 003 on unchanged
+Lab `818deb6` / Native `39464c62` closed successfully between actions at
+**04:56:56 Sydney (17:56:56 UTC)** for the focused compiler/tests.
+Immutable checkpoint **000048** records **nineteen terminal decisions,
+one admission and zero formal traces**. Counters remain **1/50 admitted,
 0/50 study shakedown and 0/16,000 formal**, with **50 × five × 64** unchanged.
 See the [installed-runtime and parallel setup evidence](docs/EVIDENCE-INDEX.md#v12-installed-readiness-repair-and-parallel-setup).
 

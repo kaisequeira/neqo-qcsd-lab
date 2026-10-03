@@ -406,7 +406,36 @@ The chaff adapter propagates this temporary HTTP/3 stream-quota exhaustion as
 fatal. This is distinct from the repaired readiness race. The full failed
 attempt remains under the FRONT result's `failures/.../attempt-001/`, and
 no resources, traffic guards or accepted counters are changed to make it pass.
-A focused wait-for-credit repair is being prepared.
+The focused wait-for-credit repair's immutable **Source 003** actual checks
+all closed 0: test compilation **146.454 seconds**, two chaff-credit/fatal-error
+cases **4.839 seconds**, one connected-readiness case **4.653 seconds**, and
+one dependent-graph completion case **4.935 seconds**. The final case closed
+at **18:10:30.841470 UTC (05:10:30 AEDT)**. The peer test preserves the exact
+reserved request identities, FIFO order, response identity and dependent
+graph; other adapter errors remain fatal. The earlier Source 002 two-case
+operation remains failed: one fixture requested 1,024 bytes after its
+unshaped connection had already granted 1 MiB. Source 003 corrects only that
+test setting to **1,048,576 bytes**; production code and assertions are unchanged.
+All four actual operation records/raw logs, the compiled test binary and
+**1,783 source entries** independently reopen under
+`../diagnostic-rehearsals/chaff-stream-credit-native-checks-20261003-001/`.
+Source inventory SHA-256 is
+`de1e8265923818e889a5b512f1e45850ea7dffed64957819f97071e530e29868`;
+test binary SHA-256 is
+`41ebb7b534ecddfb8a96e077605710ae164b5ed767da72c479cbe3b6ea754b7a`;
+`native-focused-closure-003.json` SHA-256 is
+`b5cd86047fccf7a4eabed2a296223a735ef0414cb1c926ec6998eaf5ed78366e`.
+This is four passing focused cases, not an installed release or a fresh
+FRONT recording. Native `3d994f0d557e2d27873bace0f4efd0f401660bc7` is now
+committed and published to main and the desktop branch. Independent committed
+archive verification matches all 1,783 Source 003 entries and metadata; archive
+SHA-256 is `3063bfffe812a07b52530485988fcb9ed73d2ed191ef1071ee0d0fc5a1ad7948`.
+The private committed-source closure is
+`source-003-commit-closure.json`, SHA-256
+`d458d2139aef04ba66b628a6fae9a61c62dc36d32f8eb00b199e2ce99e7f8c27`;
+Root separately verified and integrated the same committed archive.
+Installation and actual live/deep proof
+remain pending; no formal trace credit is granted.
 
 The separate `parallel-poki-001-authority.json` has SHA-256
 `544b07b8b5b586cd4021ae925653c19be53497ae9b4fd71de0f42a625a71ff17`.
@@ -479,6 +508,51 @@ Checkpoint 000041 SHA-256 is
 it records sixteen decisions, one admission and zero formal traces, with
 `toom.de` next. These screens and engineering repairs change no accepted
 formal numerator or the **50 × five × 64 = 16,000** target.
+
+Read-only reopening of namespace 017's immutable **checkpoint 000048**,
+recorded **17:56:12.580108 UTC**, verified all nineteen referenced terminal
+file hashes. Its raw SHA-256 is
+`61fc5eb5844ea1043337621c9155fdbe8d49a2372a5ece58143836f551f37e98`.
+It records **nineteen decisions, one admitted site and zero formal traces**:
+seven bounded root-probe deferrals (three TLS failures, two timeouts and two
+ambiguous peer closes), one automatic safety exclusion, ten unsuccessful
+live attempts and one admission. The ten live failures retain their original
+labels: three CDP integrity failures, three terminal policy failures, one
+non-replayable-egress failure, one recoverable Fetch-continuation failure,
+one passive-render timeout and one unsuccessful exact-page H3 probe.
+Admission continuation 003 then closed successfully between actions at
+**17:56:56.603236 UTC**, reason `boundary-stop-file`, for these focused
+compiler/tests; its original Lab `818deb6` / Native `39464c62` labels remain.
+
+Five pages passed the exact selected-page HTTP/3 and automatic URL screens;
+four then failed complete-graph preparation:
+
+| Page | Subsequent preparation outcome |
+|---|---|
+| Poki | Admitted with the complete 260-resource, four-origin graph. |
+| Alibaba | Primary 30-second passive-render timeout; a later cleanup frame-detach error became the final CDP failure label. |
+| Futura Sciences | Passive render did not quiesce within 30 seconds after load. |
+| kir2kos | Public-origin DNS guard rejected answers for `s.w.org`. |
+| toom | CDP loading-terminal event had no active request occurrence. |
+
+Alibaba's sealed exception context preserves the primary timeout. Frozen
+`cdp_targets.py:5075` identifies an absent frame-map entry, while descendant
+retirement and abort-time swap/remove handling are possible bookkeeping
+seams; the offending frame/event was not retained, so attribution remains
+unproved. Fixing cleanup alone would not turn the original timeout into a
+pass. Toom's failure at `cdp_targets.py:5793` likewise lacks the offending
+request/source/event witness. Earlier successful discovery passes cannot
+prove what happened in either failing expanded pass; no integrity guard is
+waived and the original attempts remain failed.
+
+Registry 000002's actual forty fallback screens yield **eight browser/page
+staging candidates** (one known-valid response and seven completed ambiguous
+responses), **31 bounded deferrals** (nineteen timeouts, four TLS failures and
+eight operational DNS misses), and **one safety exclusion**. All eight
+control probes passed. These actual Neqo probes use no HTTP/3-advertisement
+prefilter. Staging grants no admission credit; bounded failures do not prove
+that HTTP/3 is absent. These findings identify preparation bottlenecks but
+do not yet measure the fifty-site cohort yield or add formal trace credit.
 
 #### Installed V11 runtime and remaining live DATA stall
 
