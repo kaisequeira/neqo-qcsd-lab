@@ -41,7 +41,7 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Latest inspected milestone, 07:40 UTC on 3 October (17:40 AEST):** published
+**Latest inspected milestone, 07:55 UTC on 3 October (17:55 AEST):** published
 Lab `cacc4aa` pins Native `01ce0a7`. Its cached client build took **117.842
 seconds**; the collection and preparation images built in **60.728 and
 59.980 seconds** and passed installed-byte checks. Independent review reopened
@@ -53,7 +53,8 @@ returned **1** because router removal exceeded a hardcoded three-second API
 timeout. The failed operation remains failed. Standard lifecycle recovery
 subsequently closed **0** at `2026-10-03T07:04:45.368410+00:00`, proving the
 exact router and network absent, the scope inactive and the lifecycle base
-empty. A prospective normal-teardown repair is being authored separately.
+empty. The prospective normal-teardown source repair is now published;
+its installed live rehearsal remains pending.
 
 The fresh **120-request response qualification passed in 74.974 seconds**;
 all three defended offline preflights passed in **8.963 seconds**. The three
@@ -77,6 +78,15 @@ Targeted Native repairs and an explicit acknowledgment-based incoming startup
 policy are being authored separately. The startup policy will be bound
 prospectively; it does not reinterpret the failed first slots. No revision-8
 live site admission or current repaired-source 50-site cohort has run.
+
+The first actual focused Native successor regression passed at **07:53 UTC**
+in **73.760 seconds**, including cached compilation. It reproduces the
+recorded padding FIN and retains the exact complete incoming cell. A prior
+test-fixture type error failed in **13.381 seconds** and remains saved.
+This check covers the immutable core parser/abort snapshot only; endpoint
+activation, acknowledgment-based startup and fresh live captures remain
+unproven. The successor startup amendment is being authored as revision 9,
+without changing the **50 × five × 64 = 16,000** target.
 
 The old-source context **014** stopped normally at an action boundary at
 `2026-10-03T06:31:16.984006+00:00`. Its final inspected checkpoint **84** at

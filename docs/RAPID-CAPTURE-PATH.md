@@ -14,7 +14,7 @@ homepage credit fix, endpoint-specific final UDP drain evidence and explicit
 prospective BuFLO incoming tolerance. They require fresh affected captures;
 the previous failed attempts keep their original results.
 
-**Current execution snapshot, 07:08 UTC on 3 October:** the repaired
+**Current execution snapshot, 07:55 UTC on 3 October:** the repaired
 `cacc4aa`/Native `01ce0a7` runtime is published and independently verified.
 Its cached client build took **118 seconds**; the two image builds took
 about **one minute each**. A fresh full Poki baseline passed ordinary deep
@@ -23,9 +23,16 @@ verification and independent raw-packet review: **260 resources, four origins,
 three-second router-removal timeout expired. The original failure remains
 saved; standard lifecycle recovery subsequently proved complete removal.
 Fresh 120-request qualification passed in **75 seconds**, and the three
-defended offline checks passed in **9 seconds**. CS-BuFLO is now being tried;
-its result is pending. A prospective input-policy admission revision and
-normal router-cleanup repair are being tested in separate checkouts.
+defended offline checks passed in **9 seconds**. All three defended trials
+then finished with **nine preserved failed attempts**, diagnosed in about
+**nine minutes 22 seconds** of host running. The failures concern an origin
+connected before its dependent request, surplus parser credit, and BuFLO's
+first incoming cell before a real padding-request acknowledgment.
+The revision-8 input policy and normal router-cleanup repair are published.
+Targeted Native repairs and a prospectively bound acknowledgment-based BuFLO
+startup are being checked in separate authoring checkouts. The first focused
+Native regression reproducing the recorded padding FIN passed; it is an
+engineering check, not proof of a working live defense or a study trace.
 The old-source site search stopped normally at checkpoint 84: **31 terminal
 decisions and one admitted site**. It is not a current repaired-source cohort.
 **0/50 study shakedown traces and 0/16,000 formal traces** are accepted.
@@ -33,8 +40,11 @@ The table below retains the earlier 06:25 UTC snapshot for comparison; its
 running and pending-build statements describe that earlier time. See the
 [exact successor records](EVIDENCE-INDEX.md#repaired-runtime-and-fresh-poki-diagnostics).
 
-The prospective admission contract is [selection revision 7](../config/curated-sources/crux73-tranco600-rapid-v5-selection-v7.json)
-under the unchanged v5 profile. It preserves full multi-origin graphs, exact
+The latest published admission contract is [selection revision 8](RAPID-SELECTION-V8.md)
+under the unchanged v5 profile. No revision-8 live admission has run. A
+separate revision-9 startup amendment is being authored before new live
+calls; it has not yet supplied runtime or capture proof. The published rules
+preserve full multi-origin graphs, exact
 selected-page HTTP/3 proof and three complete replay witnesses. Complete
 4xx/5xx responses may remain only on eligible non-primary terminal leaves;
 only primary Document 0 may vary its complete body size/hash. Other resource

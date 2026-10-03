@@ -120,6 +120,30 @@ repairs. BuFLO's request/acknowledgment causality requires an explicitly
 prospective startup contract; opening a stream alone does not satisfy the
 existing acknowledgment gate.
 
+The focused Native successor checks are under
+`../diagnostic-rehearsals/inactive-endpoint-parser-native-checks-20261003-001/`.
+`core-fin-001-completed.json` records an actual **exit 101** after **13.381
+seconds**, caused by a request-ID type in the new test fixture. That failed
+snapshot and its compiler log remain saved. The corrected create-only
+snapshot `source-003/`, bound by `source-inputs-003.json`, then passed
+`exact_cell_does_not_append_parser_credit_ahead_of_recorded_chaff_fin`:
+`core-fin-002-completed.json` closed **0** at
+`2026-10-03T07:53:38.707786+00:00`, elapsed **73.760 seconds**, including its
+cached release compilation. Reopened stdout and stderr hashes match the
+completion; stdout reports **one test passed**. This regression preserves
+the actual 600-byte incoming cell while avoiding parser credit beyond the
+recorded padding FIN. Its immutable input contains the core parser/abort
+repairs only; the separate endpoint and BuFLO-startup changes are not covered
+by this pass. It supplies no site, shakedown, runtime or formal trace credit.
+The same frozen input then passed the other two new parser/abort regressions,
+three existing exact-parser cases, ten abort-filter cases and the strict
+BuFLO terminal-request-ACK case. Their actual commands and closed logs are
+`core-{tail-003,abort-004,parser-compat-005,abort-compat-006,ack-compat-007}`.
+These six successful operations cover **16 distinct tests / 17 executions**
+(the new abort case runs twice). Independently reopened log and start-record
+hashes match every completion. This is focused compatibility evidence,
+without a claim that the complete Native test suite or a live defense passed.
+
 The real baseline's six-column trace includes endpoint identifiers and Unix
 timestamps. Its recorded legacy static limitations text still says they are
 absent; that text is stale. Independent raw-PCAP replay verified the actual
