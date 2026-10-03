@@ -75,6 +75,8 @@ def partial_fixture(root, mode="tamaraw"):
     event("action",{"type":"lease_parser_receive","endpoint":3,"stream":0,"absolute_limit":16+cell,"increase":cell,
         "owner":{"slot":slot,"packet":{"timestamp_us":target,"direction":"incoming","length":cell}}},target+1004,"applied")
     observation("receive_limit_advertised",adv,absolute_limit=16+cell,slot=None)
+    events[-1].update(qcsd_outcome_schema_version="2", credit_advertised_at_us=str(adv),
+        credit_advertisement_delay_us="100")
     observation("response_headers",target+1200,status=200,frame_bytes=16+consumed-103,content_length=None)
     observation("bytes_read",target+1300,bytes=16+consumed)
     observation("data_frame",target+1400,frame_header_bytes=3,data_bytes=100)
@@ -92,8 +94,11 @@ def partial_fixture(root, mode="tamaraw"):
 def save_partial(root,native,events,rows,packets):
     if packets is not None:
         tam_save(root,native,rows,packets)
-        write_csv(root/"events.csv",("monotonic_us","connection","event","outcome","details"),events)
-    else: buflo_save(root,native,events,rows)
+    else:
+        legacy_fields={"monotonic_us","connection","event","outcome","details"}
+        buflo_save(root,native,[{k:v for k,v in event.items() if k in legacy_fields} for event in events],rows)
+    write_csv(root/"events.csv",("monotonic_us","connection","event","outcome","details",
+        "qcsd_outcome_schema_version","credit_advertised_at_us","credit_advertisement_delay_us"),events)
 
 
 @pytest.mark.parametrize("mode",["tamaraw","buflo","cs_buflo"])
@@ -117,7 +122,9 @@ def test_actual_short_fin_reopens_owned_full_advertisement_and_retired_split(tmp
 @pytest.mark.parametrize("mutation",["wrong-resource","no-fin","duplicate-partial","forged-sum","no-advertisement",
     "wrong-owner","foreign-stream","wrong-primary","wrong-cell","wrong-fin-clock","duplicate-source-sequence",
     "no-source","another-miss","fake-full-consumption","retired-reassigned",
-    "missing-fin-reduction","wrong-reduction","wrong-stream-binding","future-production"])
+    "missing-fin-reduction","wrong-reduction","wrong-stream-binding","future-production",
+    "missing-handoff","wrong-handoff","wrong-handoff-delay","wrong-handoff-schema",
+    "handoff-before-production","handoff-after-fin"])
 def test_terminal_split_cannot_promote_invalid_physical_or_primary_evidence(tmp_path,mutation):
     native,events,rows,packets=partial_fixture(tmp_path)
     proof=native[policy.TERMINAL_PRIMARY_PROOF_FIELD]
@@ -140,6 +147,21 @@ def test_terminal_split_cannot_promote_invalid_physical_or_primary_evidence(tmp_
     elif mutation=="another-miss":rows[101].update(satisfaction="missed",miss_reason="ReceiveCreditRetired",credit_consumed_at_us="",credit_consumption_delay_us="")
     elif mutation=="fake-full-consumption":rows[100].update(satisfaction="satisfied",credit_consumed_at_us="1500",credit_consumption_delay_us="500")
     elif mutation=="missing-fin-reduction":events=[event for event in events if event["event"]!="terminal_primary_fin_reduction"]
+    elif mutation in {"missing-handoff","wrong-handoff","wrong-handoff-delay","wrong-handoff-schema",
+        "handoff-before-production","handoff-after-fin"}:
+        event=next(event for event in events if isinstance(json.loads(event["details"]),dict)
+            and json.loads(event["details"]).get("type")=="receive_limit_advertised")
+        if mutation=="missing-handoff":event.pop("credit_advertised_at_us")
+        elif mutation=="wrong-handoff":event["credit_advertised_at_us"]=str(int(event["credit_advertised_at_us"])+1)
+        elif mutation=="wrong-handoff-delay":event["credit_advertisement_delay_us"]="101"
+        elif mutation=="wrong-handoff-schema":event["qcsd_outcome_schema_version"]="3"
+        else:
+            observed=next(json.loads(e["details"])["production_monotonic_ns"]//1000 for e in events
+                if isinstance(json.loads(e["details"]),dict) and json.loads(e["details"]).get("type")
+                    ==("receive_limit_advertised" if mutation=="handoff-before-production" else "stream_finished"))
+            clock=observed+(-1 if mutation=="handoff-before-production" else 1)
+            event["credit_advertised_at_us"]=str(clock)
+            rows[100]["credit_advertised_at_us"]=str(clock)
     elif mutation in {"wrong-reduction","wrong-stream-binding","future-production"}:
         event=next(event for event in events if event["event"]==("terminal_primary_stream_binding" if mutation=="wrong-stream-binding" else "terminal_primary_fin_reduction"))
         detail=json.loads(event["details"])
@@ -150,6 +172,22 @@ def test_terminal_split_cannot_promote_invalid_physical_or_primary_evidence(tmp_
     else:native["defense_diagnostics"]["scheduled_incoming_retired_bytes"]=0
     save_partial(tmp_path,native,events,rows,packets)
     with pytest.raises(ValueError):fidelity._schedule_realization_metrics_from_path(tmp_path/"schedule.csv")
+
+
+@pytest.mark.parametrize("mode",["tamaraw","buflo","cs_buflo"])
+@pytest.mark.parametrize("handoff_lag_us",[1,17,75])
+def test_advertisement_production_can_precede_actual_socket_handoff(tmp_path,mode,handoff_lag_us):
+    native,events,rows,packets=partial_fixture(tmp_path,mode)
+    event=next(event for event in events if isinstance(json.loads(event["details"]),dict)
+        and json.loads(event["details"]).get("type")=="receive_limit_advertised")
+    detail=json.loads(event["details"])
+    detail["production_monotonic_ns"]-=handoff_lag_us*1000
+    event["monotonic_us"]=str(detail["production_monotonic_ns"]//1000)
+    event["details"]=json.dumps(detail)
+    save_partial(tmp_path,native,events,rows,packets)
+    metrics=fidelity._schedule_realization_metrics_from_path(tmp_path/"schedule.csv")
+    assert metrics["terminal_primary_partial_cells"]==1
+    assert metrics["missed_events"]==1
 
 
 @pytest.mark.parametrize("key,bad",[("schema_version",True),("cell_size",1200.0),("source","unbound"),

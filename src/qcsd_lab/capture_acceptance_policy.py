@@ -190,6 +190,7 @@ def validate_terminal_primary_partial_evidence(
     requested: dict[tuple[int, int], int] = {}
     ranges: list[tuple[int, int, int]] = []
     observations: list[dict[str, Any]] = []
+    advertisement_receipts: list[tuple[dict[str, Any], Mapping[str, Any]]] = []
     dispatched = []
     opened = []
     for index, event in enumerate(events):
@@ -208,6 +209,8 @@ def validate_terminal_primary_partial_evidence(
                 or _csv_uint(event.get("monotonic_us")) != detail["production_monotonic_ns"] // 1000):
                 raise ValueError("terminal primary raw observation lacks its production clock")
             observations.append(dict(detail))
+            if kind == "receive_limit_advertised":
+                advertisement_receipts.append((dict(detail), event))
             if kind == "stream_opened":
                 if detail.get("role") != "application":
                     raise ValueError("terminal primary raw stream is not an application stream")
@@ -300,7 +303,18 @@ def validate_terminal_primary_partial_evidence(
             and value["production_monotonic_ns"] <= fin_ns for value in advertisements):
             raise ValueError("terminal primary owned range was not physically advertised before FIN")
     final_end = max(end for _, end, _ in ranges)
-    if not any(value.get("absolute_limit") == final_end and value["production_monotonic_ns"] // 1000 == advertised_us for value in advertisements):
+    # Production records when the transport constructs the advertisement.
+    # The typed observation columns retain its later physical output handoff,
+    # exactly as the pending schedule row does. Bind both clocks causally.
+    if not any(value.get("absolute_limit") == final_end
+        and receipt.get("outcome") == "recorded"
+        and _csv_uint(receipt.get("connection")) == endpoint
+        and _csv_uint(receipt.get("qcsd_outcome_schema_version")) == 2
+        and _csv_uint(receipt.get("credit_advertised_at_us")) == advertised_us
+        and _csv_uint(receipt.get("credit_advertisement_delay_us"))
+            == _csv_uint(row.get("credit_advertisement_delay_us"))
+        and value["production_monotonic_ns"] // 1000 <= advertised_us <= fin_ns // 1000
+        for value, receipt in advertisement_receipts):
         raise ValueError("terminal primary schedule advertisement differs from physical observation")
     consumed = sum(max(0, min(end, raw_bytes) - begin) for begin, end, _ in ranges)
     if consumed != proof["consumed_bytes"] or cell - consumed != proof["retired_bytes"]:
