@@ -41,10 +41,28 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Latest operational update, 3 October:** context **010** has **one sealed
-screening decision and no admitted site** at `2026-10-03T00:38:38.860792Z`.
-The first decision grants zero site or capture credit; candidate 2 is next.
+**Latest operational update, 3 October:** fresh context **012** has **two sealed
+screening decisions and no admitted site** at `2026-10-03T01:19:38.872662Z`.
+Candidate 3, Albumaty, is next in its immutable checkpoint. The first bounded
+batch is running, stopping at its first admitted site or 60 actions.
 The study remains **0/50 admitted sites and 0/16,000 formal traces**.
+
+The combined collector and separate-root-runtime fixes are published. The
+new matching images built in **59.713 and 65.533 seconds**, and their installed
+source/client checks passed. The native client is the unchanged, verified
+artifact reused from its original build. Context 012 initialized in **7.789
+seconds**. Its new registry independently reopened the **same 73 curated and
+40 fallback root observations** in **2.647 seconds**, retaining the original
+root image and timestamps. No root rescreen was needed; navigation and full
+preparation use the new runtime.
+
+The fresh Futura diagnostic passed the formerly failing interception-ledger
+check in three discovery rounds, then hit the passive-render time limit with
+one request still active. The whole operation failed after **89.361 seconds**
+and produced no final graph or admission. Its typed failure remains preserved.
+The first-site capture canary recipe is ready, but is not staged or executed.
+The [evidence index](docs/EVIDENCE-INDEX.md#current-preflight-runtime-and-context-012)
+records these separate scopes and exact identities.
 
 **Preserved context 009:** it stopped at `2026-10-02T23:39:26.725449Z`, with **nine sealed
 screening decisions and no admitted site**. Poki's tenth attempt completed
@@ -70,7 +88,7 @@ A separate fresh Futura discovery diagnostic failed after **33.977 seconds**
 at the comparison of HTTP observations with request-stage interception
 records. It did not raise the earlier passive-render timeout, but it did not
 produce a successful graph or admission. That new failure remains saved.
-The [evidence index](docs/EVIDENCE-INDEX.md#current-response-drift-runtime-and-context-010)
+The [evidence index](docs/EVIDENCE-INDEX.md#preserved-response-drift-runtime-and-context-010)
 records the source, runtime, reuse proof and failed attempts.
 
 An independent fresh Poki diagnostic then completed in **120.327 seconds**.
@@ -81,16 +99,16 @@ body variation was handled separately. The full graph remains intact, and
 the site still earns **zero eligibility or capture credit**. This confirms
 the repaired rejection path, not a successful site preparation.
 
-Two further source fixes are reviewed and ready for prospective use. The
+The two further source fixes are now published. The
 Futura collector fix records requests that Chrome blocks after a failed CORS
 preflight, retaining their observed headers and complete graph without
 inventing an interception event. **274 focused discovery checks passed**.
 The optional root runtime binding lets a new context reopen unchanged root
 screens with their original image, source and timestamps, while fresh page
 and preparation work uses the new runtime. **14 focused root-runtime cases
-and three legacy checks passed**. These are engineering results recorded with
-the combined source changes; a matching new runtime and fresh live pass remain
-outstanding at this documentation snapshot.
+and three legacy checks passed**. These engineering results do not establish
+complete-site preparation or capture. The matching runtime and bounded live
+checks now have the separate scopes described above.
 
 [selection revision 6](config/curated-sources/crux73-tranco600-rapid-v5-selection-v6.json)
 is published at `2026-10-02T22:01:23.089910Z`. Its implemented rule permits

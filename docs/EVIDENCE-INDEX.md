@@ -15,7 +15,71 @@ graph is preserved, including error responses; primary pages and padding
 resources retain successful-response requirements. Rust commit
 `1cda2d2446b53d0bdee185e81755fb5115744eb1` contains the native change.
 
-### Current response-drift runtime and context 010
+### Current preflight runtime and context 012
+
+Published Lab source `74805e43ea9984ae86bb829b46afec10f09add4a` retains native
+commit `00d14c0999bf2657cacc2581e431f39bacab7281`. Its matching runtime is
+retained under `../diagnostic-rehearsals/preflight-runtime-20261003-002/`.
+`canonical-runtime.json` was verified at `2026-10-03T01:07:41.177911Z`, raw
+SHA-256 `35f46f455917a16ee8e3f87b9662c2fe482726dc44f7477afe063dbb981b78f4`.
+The actual preparation image is
+`sha256:cbe55dd76f2da70145a5e426c0eeda0ad491bfa855d2bfcf373b5bf697c8fed5`;
+the collection image is
+`sha256:e9a10911859f5de208185266ad3b4e25943b48218facaf3960854d431579d162`.
+Exported source manifest SHA-256 is
+`da07e66beb0609fac4591e32e146b2c965b4b27fb03a906e9054a511fa874154`.
+
+Actual collection/preparation builds exited 0 in **59.713 / 65.533 seconds**.
+Their installed source/client checks exited 0 with empty stderr in
+**17.394 / 13.679 seconds**. `client-build.json` honestly records native reuse:
+client SHA-256 `98d6f5552376782b4df99f74187e8a636be807bd22ed879a13c7984e94f0741f`
+is unchanged, retaining the original e260 build and installed-proof references.
+This establishes installed runtime identity; no new native compile, live
+padding qualifier, admitted site or capture pass is claimed.
+
+The fresh Futura diagnostic is retained under
+`../diagnostic-rehearsals/fixed-preflight-diagnostic-20261003-001/run-001/`.
+All three `ledger-finish-*-after.json` rounds completed the former unmatched
+preflight reconciliation. The later convergence round raised the typed
+`PassiveRenderPolicyError`: its retained cutoff observation has one active
+request, router shutdown ready, no non-replayable egress attempts and completed
+prearms. The independently validated raw failure remains in
+`passive-render-failure.json`. `completed.json` records an unchanged 748
+runtime, exit 1 at `2026-10-03T01:10:02.047352Z`, elapsed **89.361 seconds**;
+the host completion exited 1 in **96.440 seconds**. No final discovery graph
+or site admission was produced.
+
+Fresh context `../diagnostic-rehearsals/rapid-v6-site-acquisition-20261003-012/`
+initialized with exit 0 at `2026-10-03T01:14:11.921131Z`, elapsed **7.788647
+seconds**. Provenance SHA-256 is
+`759d5d453afd0b0289615108d1749225f4a3766fae7cd2468d2353ccf585d5c3`.
+The distinct root role retains the original d99 preparation image/source,
+actual installed-byte execution, unchanged three curated and three fallback
+components, native client and observation timestamps. The main role uses the
+new 748 runtime for navigation, exact-page probes and full preparation.
+
+Its create-only `root-log-registries/registry-000001.json`, SHA-256
+`2fd6cddc57b29910d7905ab88b4801356995f1792c0cb0aeedc3ac6da80495eb`,
+independently reopened the original **73 curated and 40 fallback** observations.
+Registry creation exited 0 at `2026-10-03T01:14:14.819055Z`, elapsed **2.647194
+seconds**. No root was rescreened or relabeled; all applicable publication
+barriers remain enforced. These root facts grant no admitted-site credit.
+The latest inspected immutable `acquisition/checkpoints/checkpoint-000010.json`,
+recorded at `2026-10-03T01:19:38.872662Z`, has **two sealed screening decisions,
+zero admitted sites and zero formal traces**; candidate 3, Albumaty, is next.
+The first bounded batch is running with a one-admission stop and 60-action cap.
+
+Context 011's failed staging attempt and partial overlay/runtime bytes remain
+preserved. Its freeze-spec input collided with the create-only output path.
+Context 012 uses the independently confirmed input at
+`../diagnostic-rehearsals/source-freezes/rapid-v6-012-preflight-confirmed.json`
+and a distinct output. The correction required no runtime rebuild or root
+rescreen. The external first-site canary recipe
+`../diagnostic-rehearsals/rapid-v6-first-site-canary-20261003-003/` is ready only;
+no canary staging, qualification or capture has run. Study counters remain
+**0/50 admitted, 0/50 shakedown traces and 0/16,000 formal traces**.
+
+### Preserved response-drift runtime and context 010
 
 Published Lab source `d99d46140443e77a04c3c62c47714527f30d550a` retains native
 commit `00d14c0999bf2657cacc2581e431f39bacab7281`. The response-drift repair
@@ -117,7 +181,7 @@ historical location hints, not admission authority. No site terminal, cohort,
 qualifier, study shakedown or formal capture credit is claimed by this separate
 diagnostic; context 009's old generic failure remains unchanged.
 
-#### Reviewed next source fixes: engineering checks only
+#### Published source checks: engineering scope
 
 The prospective Futura ledger correction retains actual Network headers for
 eligible requests blocked after a failed CORS preflight and independently
@@ -125,8 +189,9 @@ verifies that exception. It does not invent a Fetch pause or remove a replay
 resource. **274 focused discovery-module checks passed**; tracked regressions
 are [discovery tests](../tests/test_discover.py) and
 [discovery evidence tests](../tests/test_discovery_evidence.py).
-The saved Futura diagnostic above remains a failure; this source fix has no
-new live discovery proof yet.
+The saved Futura diagnostic above remains a failure. The newer bounded live
+check passed three ledger stages but failed later, as recorded in the current
+runtime section; neither diagnostic produced a complete final graph.
 
 The optional separate root runtime in
 [site admission](../src/qcsd_lab/rapid_site_admission.py) and its
@@ -142,10 +207,9 @@ and a revision-6 retained-root/new-page flow. See the
 
 Read-only inspection also reopened the actual context-010 installed proof and
 all 73 curated plus 40 fallback observations through the separate root kwargs.
-It wrote no new registry or scientific evidence. The reviewed 011 external
-recipes are not staged or initialized. A matching main runtime and fresh live
-checks remain outstanding at this documentation snapshot; no image proof or
-study credit is inferred from the combined source changes and their tests.
+That read-only inspection wrote no new registry or scientific evidence.
+The later actual 012 registry and matching main runtime have their own retained
+execution records above. The combined source tests grant no study credit.
 
 ### Revision-6 publication and native stream-credit repair
 
