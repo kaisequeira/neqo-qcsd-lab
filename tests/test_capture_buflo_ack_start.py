@@ -28,10 +28,16 @@ def write_csv(path, fields, rows):
         writer.writerows(rows)
 
 
-def fixture(tmp_path, *, acknowledgments=None):
+def fixture(tmp_path, *, acknowledgments=None, ready_at_us=22_000,
+            ack_observed_at_us=21_000, final_target_us=10_000_000):
     acknowledgments = acknowledgments or [(100, 85, True, 20_000), (0, 100, False, 21_000)]
     dto = startup()
-    native = _complete_buflo_run(scheduled_outgoing=501, scheduled_incoming=499, current_runner=False)
+    dto.update(ready_at_us=ready_at_us, ack_observed_at_us=ack_observed_at_us,
+        armed_at_us=(ready_at_us // 20_000 + 1) * 20_000)
+    dto["startup_suppressed_opportunities"] = dto["armed_at_us"] // 20_000
+    outgoing = final_target_us // 20_000 + 1
+    incoming = outgoing - dto["startup_suppressed_opportunities"]
+    native = _complete_buflo_run(scheduled_outgoing=outgoing, scheduled_incoming=incoming, current_runner=False)
     native.update(primary_document_identity_policy="variable-primary-document-body-v1",
         application_response_policy="completed-terminal-http-errors-v1", defense_start_monotonic_ns=1_000_000,
         defense_parameters={"kind": "buflo"})
@@ -39,7 +45,9 @@ def fixture(tmp_path, *, acknowledgments=None):
         "policy": policy.ACK_START_POLICY, "incoming_release_window_us": 10_000,
         "period_us": 20_000, "cell_bytes": 1_200, "scientific_credit": False}
     native["resolved_configuration"]["control_interval_us"] = 5_000
-    native["defense_diagnostics"].update(_incoming_credit(499 * 1_200), buflo_incoming_startup=dto)
+    native["defense_diagnostics"].update(_incoming_credit(incoming * 1_200), buflo_incoming_startup=dto,
+        buflo_schedule_stop_latched_at_us=final_target_us,
+        buflo_terminal_subcell_latched_at_us=final_target_us + 501)
     native["buflo_summary"]["incoming_startup"] = dto
     native["chaff_responses"] = [{"resource_id": 14, "request_id": 0,
         "url": "https://cdn.test/chaff", "request_stream_bytes": 185,
@@ -59,11 +67,11 @@ def fixture(tmp_path, *, acknowledgments=None):
             "details": json.dumps({"schema_version": 1, "source": policy.STARTUP_TIME_BASIS,
                 "production_sequence": sequence, "production_monotonic_ns": production,
                 "controller_defense_elapsed_us": at, "observation": observation})})
-    events.append({"monotonic_us": "23000", "connection": "1", "event": "buflo_incoming_startup_ready",
+    events.append({"monotonic_us": str(1_000 + ready_at_us), "connection": "1", "event": "buflo_incoming_startup_ready",
         "outcome": "armed", "details": json.dumps(dto)})
     rows = []
     fields = fidelity.SCHEDULE_PREFIX_FIELDS + fidelity.SCHEDULE_QCSD_FIELDS
-    for target in range(0, 10_000_001, 20_000):
+    for target in range(0, final_target_us + 1, 20_000):
         for direction in ("outgoing", "incoming"):
             if direction == "incoming" and target < dto["armed_at_us"]:
                 continue
@@ -112,6 +120,34 @@ def test_v2_full_ack_ranges_and_fin_reopen_actual_schedule_and_fidelity_output(t
     del marker_only["buflo_incoming_startup_events_sha256"]
     assert not fidelity.fidelity_eligible("buflo", native["defense_diagnostics"], sample_eligible=True,
         missed_events=0, outgoing_size_mismatches=0, schedule_metrics=marker_only)
+
+
+def test_v2_startup_after_global_minimum_reopens_full_ack_and_preserves_active_fidelity(tmp_path):
+    native, _, _ = fixture(tmp_path, acknowledgments=[
+        (100, 85, True, 10_004_000), (0, 100, False, 10_005_000)],
+        ack_observed_at_us=10_005_000, ready_at_us=10_010_000, final_target_us=10_040_000)
+    policy.validate_buflo_source_binding(prepared_source(), native, runner_directory=tmp_path)
+    metrics = fidelity._schedule_realization_metrics_from_path(tmp_path / "schedule.csv")
+    assert metrics["buflo_incoming_startup"]["armed_at_us"] == 10_020_000
+    assert metrics["buflo_incoming_startup"]["startup_suppressed_opportunities"] == 501
+    assert metrics["scheduled_outgoing_events"] == 503
+    assert metrics["scheduled_incoming_events"] == 2
+    assert 10_000_000 in metrics["target_times_us_by_direction"]["outgoing"]
+    assert metrics["target_times_us_by_direction"]["incoming"] == [10_020_000, 10_040_000]
+    assert native["defense_diagnostics"]["scheduled_incoming_requested_bytes"] == 2_400
+    assert fidelity.fidelity_eligible("buflo", native["defense_diagnostics"], sample_eligible=True,
+        missed_events=0, outgoing_size_mismatches=0, schedule_metrics=metrics)
+    assert fidelity.new_defense_terminal_receipts_valid(native, "buflo", runner_directory=tmp_path)
+    # The V2 exception applies only after its actual first incoming tick.
+    # Default and V1 still require the global minimum in each zero-based direction.
+    before_minimum = list(range(0, 10_000_000, 20_000))
+    legacy = {"target_times_us_by_direction": {"outgoing": before_minimum, "incoming": before_minimum},
+        "scheduled_sizes_by_direction": {"outgoing": [1200] * 500, "incoming": [1200] * 500},
+        "terminal_satisfactions": {"satisfied": 1000}}
+    assert not fidelity._buflo_schedule_matches_canonical_parameters(legacy)
+    legacy.update(incoming_credit_release_policy={**native[policy.FIELD], "policy": policy.POLICY},
+        incoming_credit_release_window_us=10_000, incoming_credit_release_original_5000us_violations=0)
+    assert not fidelity._buflo_schedule_matches_canonical_parameters(legacy)
 
 
 @pytest.mark.parametrize("key,value", [("armed", False), ("armed_at_us", 22_000),

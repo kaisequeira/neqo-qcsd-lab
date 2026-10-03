@@ -6698,7 +6698,8 @@ def _buflo_schedule_matches_canonical_parameters(schedule: Mapping[str, Any]) ->
             # reach terminal state out of target order.  Canonical cadence is
             # a property of the complete target set, not terminal CSV order.
             or ordered_targets[0] != (startup["armed_at_us"] if startup is not None and direction == "incoming" else 0)
-            or 10_000_000 not in ordered_targets
+            or (10_000_000 not in ordered_targets
+                and (startup is None or direction == "outgoing" or startup["armed_at_us"] <= 10_000_000))
             or any(size != 1_200 for size in directional_sizes)
             or any(
                 current - previous != 20_000
