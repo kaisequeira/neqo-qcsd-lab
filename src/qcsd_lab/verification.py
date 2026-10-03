@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import re
 import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -23,7 +25,7 @@ from .experiment import (
     validate_durable_attempt_evidence,
     validate_resume_fingerprints,
 )
-from .util import atomic_text, load_json, sha256_file
+from .util import atomic_text, load_json, run, sha256_file
 
 
 AUTHORITATIVE_DIRECTORIES = ("inputs", "samples", "failures")
@@ -156,6 +158,7 @@ def verify_result(root: Path) -> VerifiedResult:
     _validate_frozen_contract(root, experiment, allow_historical_research_bundle=True)
     accepted = validate_accepted_samples(root, experiment)
     validate_durable_attempt_evidence(root, experiment)
+    _validate_endpoint_capture_replay(root, experiment)
     return VerifiedResult(root, experiment, checksums, accepted)
 
 
@@ -309,6 +312,152 @@ def _format_checksums(checksums: Mapping[str, str]) -> str:
     return "".join(f"{checksums[path]}  {path}\n" for path in sorted(checksums))
 
 
+_ENDPOINT_REPLAY_SCRIPT = """import json,sys
+from pathlib import Path
+source = Path(sys.argv[2])
+sys.path.insert(0, str(source))
+from qcsd_lab import verification
+root = Path(sys.argv[1])
+image = sys.argv[3]
+verifier = source / 'qcsd_lab/verification.py'
+if Path(verification.__file__).resolve() != verifier.resolve():
+    raise ValueError('endpoint replay did not import the explicitly mounted verifier')
+if verification.sha256_file(verifier) != sys.argv[4]:
+    raise ValueError('endpoint replay verifier source bytes changed')
+experiment = verification.load_experiment(root)
+if experiment.get('source', {}).get('image_digest') != image:
+    raise ValueError('endpoint replay tool image differs from sealed runtime source')
+checked = verification._replay_endpoint_captures_locally(root, experiment)
+print(json.dumps({'schema_version': 1, 'valid': True, 'tool_image_digest': image,
+                  'root': str(root), 'verifier_source': str(verifier),
+                  'verifier_sha256': sys.argv[4], 'sample_ids': checked},
+                 sort_keys=True, allow_nan=False))
+"""
+
+
+def _endpoint_capture_replay_marker(run: Any, sample: Mapping[str, Any]) -> bool:
+    endpoints = run.get("endpoints") if isinstance(run, Mapping) else None
+    native_marker = isinstance(endpoints, list) and any(
+        isinstance(endpoint, Mapping) and "receive_lifecycle" in endpoint
+        for endpoint in endpoints
+    )
+    diagnostics = sample.get("diagnostics")
+    capture = diagnostics.get("capture") if isinstance(diagnostics, Mapping) else None
+    recorded = capture.get("direct_runner_reconciliation") if isinstance(capture, Mapping) else None
+    return native_marker or isinstance(recorded, Mapping) and "direct_tail_policy" in recorded
+
+
+def _validate_endpoint_capture_replay(root: Path, experiment: Mapping[str, Any]) -> None:
+    """Replay locally or once per result in its immutable offline tool image.
+
+    The mounted current verifier supplies all replay logic. The image supplies
+    its installed Python dependencies and TShark, without gaining authority
+    for that new source. Host evidence seals and frozen-source policy checks
+    have already succeeded before this transport is considered.
+    """
+    sample_ids = [sample["sample_id"] for sample in experiment["samples"]
+                  if sample["state"] == "accepted" and _endpoint_capture_replay_marker(
+                      load_json(resolved_sample_directory(root, sample) / "neqo/run.json"), sample)]
+    if not sample_ids:
+        return
+    if shutil.which("tshark") is not None:
+        _replay_endpoint_captures_locally(root, experiment)
+        return
+    source = experiment.get("source")
+    image = source.get("image_digest") if isinstance(source, Mapping) else None
+    if not isinstance(image, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", image) is None:
+        raise ValueError("endpoint replay without host TShark requires its immutable source image digest")
+    root = root.resolve()
+    verifier = Path(__file__).resolve()
+    module_source = verifier.parent.parent
+    verifier_hash = sha256_file(verifier)
+    command = ["docker", "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL",
+               "--security-opt", "no-new-privileges", "--tmpfs", "/tmp:rw,nosuid,nodev,noexec",
+               "--volume", f"{root}:{root}:ro", "--volume", f"{module_source}:{module_source}:ro",
+               "--entrypoint", "/opt/qcsd-venv/bin/python3", image, "-I", "-B", "-c",
+               _ENDPOINT_REPLAY_SCRIPT, str(root), str(module_source), image, verifier_hash]
+    execution = run(command, cwd=root)
+    expected = {"schema_version": 1, "valid": True, "tool_image_digest": image, "root": str(root),
+                "verifier_source": str(verifier), "verifier_sha256": verifier_hash, "sample_ids": sample_ids}
+    try:
+        recorded = json.loads(execution.stdout)
+    except (TypeError, json.JSONDecodeError) as error:
+        raise ValueError("endpoint replay tool transport returned no checked JSON status") from error
+    if (execution.returncode != 0
+        or json.dumps(recorded, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        != json.dumps(expected, sort_keys=True, separators=(",", ":"), allow_nan=False)):
+        raise ValueError("endpoint replay tool transport status differs from its immutable request")
+
+
+def _replay_endpoint_captures_locally(root: Path, experiment: Mapping[str, Any]) -> list[str]:
+    """Reopen prospective endpoint receipts from immutable PCAP/Native bytes.
+
+    The accepted sample has no standalone observer CSV. Recreate that exact
+    six-column sequence outside the evidence tree, using the sealed Native
+    tuple inventory and actual PCAP timestamps. Either prospective marker
+    requires replay, so removing one cannot turn new evidence into a legacy
+    four-column receipt. Historical samples with neither marker are unchanged.
+    """
+    from .capture import extract_trace, write_normalized_trace
+    from .fidelity import (
+        reconcile_direct_runner_artifacts,
+        validate_primary_capture_clock_integrity,
+    )
+
+    checked: list[str] = []
+    for sample in experiment["samples"]:
+        if sample["state"] != "accepted":
+            continue
+        directory = resolved_sample_directory(root, sample)
+        run_path, packets_path = directory / "neqo/run.json", directory / "neqo/packets.csv"
+        run = load_json(run_path)
+        endpoints = run.get("endpoints") if isinstance(run, Mapping) else None
+        diagnostics = sample.get("diagnostics")
+        capture = diagnostics.get("capture") if isinstance(diagnostics, Mapping) else None
+        recorded = capture.get("direct_runner_reconciliation") if isinstance(capture, Mapping) else None
+        if not _endpoint_capture_replay_marker(run, sample):
+            continue
+        if (not isinstance(capture, Mapping) or not isinstance(recorded, Mapping)
+            or capture.get("capture_path") != "capture.pcapng"
+            or capture.get("primary") is not True or capture.get("valid") is not True):
+            raise ValueError("endpoint capture replay requires its accepted primary diagnostics")
+        pcap = directory / "capture.pcapng"
+        if capture.get("capture_sha256") != sha256_file(pcap):
+            raise ValueError("endpoint capture replay PCAP hash differs from diagnostics")
+        if not isinstance(endpoints, list) or not endpoints:
+            raise ValueError("endpoint capture replay requires Native endpoint tuples")
+        validate_primary_capture_clock_integrity(
+            capture, require_pairing_uncertainty=True, require_timestamp_type=True,
+            label="endpoint capture replay",
+        )
+        trace = extract_trace(pcap, endpoints)
+        if (not trace or type(capture.get("packet_count")) is not int
+            or capture["packet_count"] != len(trace)
+            or any(type(packet.connection) is not int or packet.connection < 0
+                   or type(packet.timestamp_unix_ns) is not int or packet.timestamp_unix_ns <= 0
+                   for packet in trace)):
+            raise ValueError("endpoint capture replay lacks exact six-column PCAP attribution")
+        with tempfile.TemporaryDirectory(prefix="qcsd-endpoint-replay-") as temporary:
+            trace_path = Path(temporary) / "direct.csv"
+            write_normalized_trace(trace_path, trace)
+            reconciliation = reconcile_direct_runner_artifacts(
+                run_path, packets_path, trace_path,
+                timestamp_tolerance_ns=recorded["direct_timestamp_tolerance_ns"],
+                clock_anchors=capture["capture_clock_anchors"],
+            )
+        expected = {
+            **reconciliation.metrics,
+            "evidence_eligible": reconciliation.evidence_eligible,
+            "limitations": list(reconciliation.limitations),
+        }
+        if (reconciliation.evidence_eligible is not True
+            or json.dumps(recorded, sort_keys=True, separators=(",", ":"), allow_nan=False)
+            != json.dumps(expected, sort_keys=True, separators=(",", ":"), allow_nan=False)):
+            raise ValueError("endpoint capture replay differs from recorded reconciliation metrics")
+        checked.append(sample["sample_id"])
+    return checked
+
+
 def _validate_frozen_contract(
     root: Path,
     experiment: dict[str, Any],
@@ -328,7 +477,9 @@ def _validate_frozen_contract(
 
 
 def _validate_policy_application_responses(root: Path, experiment: Mapping[str, Any]) -> None:
-    """Reopen actual responses for every accepted opt-in sample, including baseline."""
+    """Reopen prepared-source policies for accepted samples, including baseline."""
+
+    from .capture_acceptance_policy import validate_buflo_source_binding
 
     prepared_by_id: dict[str, dict[str, Any]] = {}
     for workload in experiment["configuration"]["workloads"]:
@@ -339,9 +490,8 @@ def _validate_policy_application_responses(root: Path, experiment: Mapping[str, 
         if path.is_symlink() or not path.resolve().is_relative_to(root.resolve()):
             raise ValueError("prepared application policy input escapes result")
         prepared = load_json(path)
-        if application_response_policy(prepared) == LEGACY_APPLICATION_RESPONSE_POLICY:
-            continue
-        if sha256_file(path) != workload.get("sha256"):
+        if (application_response_policy(prepared) != LEGACY_APPLICATION_RESPONSE_POLICY
+            and sha256_file(path) != workload.get("sha256")):
             raise ValueError("prepared application policy input hash differs from configuration")
         prepared_by_id[workload["id"]] = prepared
     if not prepared_by_id:
@@ -352,6 +502,8 @@ def _validate_policy_application_responses(root: Path, experiment: Mapping[str, 
         run_path = resolved_sample_directory(root, sample) / "neqo/run.json"
         if run_path.is_symlink() or not run_path.is_file():
             raise ValueError("accepted policy sample lacks a regular runner receipt")
-        validate_application_responses(
-            prepared_by_id[sample["workload_id"]], load_json(run_path), require_identity=True
-        )
+        prepared = prepared_by_id[sample["workload_id"]]
+        run = load_json(run_path)
+        validate_buflo_source_binding(prepared, run)
+        if application_response_policy(prepared) != LEGACY_APPLICATION_RESPONSE_POLICY:
+            validate_application_responses(prepared, run, require_identity=True)
