@@ -11,6 +11,71 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ### Successor startup and endpoint engineering checks
 
+#### Installed V10 runtime and short live checks
+
+Clean Lab `7a46220d4e46bc7c62dd87e3b371a7aefa37eefa` pins Native
+`09b0307afc1b7496a3e1c7c5ddeca3257f721691`. Actual runtime records are in
+`../diagnostic-rehearsals/tamaraw-owned-runtime-20261003-002/`.
+The release build closes 0 in **116.088 seconds**. All **12 actual
+build/check/export operations** and their start/log hashes independently
+reopen. The source inventory holds **2,362 entries**, SHA-256
+`1f7d3e621aa940f5751c1100abd1ee8baccf5c61c73edd5af0fa84f944f1e54a`.
+The installed client SHA-256 is
+`c56c7f1eb617b72110178c54bba311e3f77f3ddb1a40e5d0c20c8c616d43e31f`;
+canonical-runtime SHA-256 is
+`6862baa5aadf235372745943abf2635c4f39d8e526ed8ddb3472e6480b205954`.
+Collection image is
+`sha256:afd74d8b38c1c3ada9bb29a2c47da746946b9468798424d33ff0e6d4a9d2dbb9`;
+preparation image is
+`sha256:55a2878b2d1025d796f708771828f09d13a608ccfa4ef93df413d12b9410a9e7`.
+The sibling runtime directory `001` contains a closure template only;
+it is not a launched build or installed-runtime result.
+
+The actual one-attempt, five-setting Poki diagnostic is under
+`../diagnostic-rehearsals/rapid-v10-capture-canary-20261003-001/actual-poki-001/`.
+Its `plan.json` SHA-256 is
+`57bd2909c2d355a7d5ed28dbe06b6e8ee3b6e67231ccc9114a7e91e02d149ba5`;
+`commands.json` SHA-256 is
+`f1bae6278975745573ccfb6d4704a885a7849873f5f0c6ec8e74afeb7429efe4`.
+The prepared workload keeps **all 260 resources and four origins** and adds
+the two declared traffic-policy flags. Fresh qualification closes 0 after
+**120 requests / 69.674 seconds**; all four defended preflights close 0.
+
+| Setting | Actual result as inspected at 11:36 UTC | Host capture / deep seconds | Dated campaign directory |
+|---|---|---|---|
+| Undefended | Capture and ordinary deep verification pass; one diagnostic sample. | 147.286 / 7.509 | `20261003T110000.540041Z` |
+| BuFLO | Native kernel-selection deadline failure; primary incomplete at 428 body bytes, 259 resources not started. | 210.914 / 7.905 | `20261003T110816.121975Z` |
+| CS-BuFLO | Native 120-second timeout; primary incomplete at 432 body bytes, 259 resources not started. | 268.325 / 7.659 | `20261003T111316.850720Z` |
+| Tamaraw | Native 120-second timeout; primary incomplete at 458 body bytes, 259 resources not started. | 270.202 / 7.840 | `20261003T112419.156221Z` |
+| FRONT | All 260 responses complete in 8.157 native seconds; strict fidelity rejects one congestion miss. The 71 late incoming releases are diagnostic. | 153.639 / 7.926 | `20261003T113110.968251Z` |
+
+Each of the three stalled attempts' primary `events.csv` shows a real blocked frontier at
+1,016, actual consumption of 1,015 bytes, pristine next-frame parser state,
+an owned one-byte lease extending the limit to 1,017, and actual advertisement
+of that extension. No later primary progress is recorded. BuFLO's extension
+was also independently traced into a full outgoing datagram. The current
+Native [HTTP/3 sender](../neqo-qcsd/neqo-http3/src/send_message.rs) requires
+three bytes for its smallest DATA write: two header bytes and at least one
+payload byte. The two available bytes are consistent with the remote stall;
+the remote implementation's internal decision is not directly observed.
+A narrow owned extension and real client/server regression are being authored.
+
+FRONT's failed attempt retains valid scheduler, observer topology, source
+binding and complete responses. Its schedule has 1,154 incoming releases,
+71 release-window violations, maximum release lateness upper bound
+25,191 microseconds, and one missed event marked `CongestionLimited`.
+The FRONT predicate rejects the missed event; incoming timing violations and
+catch-up counts are diagnostics for this setting. This is a fidelity failure,
+not a failed download or the parser stall above. A prospective policy review
+does not change this recording's result.
+
+BuFLO's terminal timing failure is separately real: a **7.358 ms CLOCK_TAI
+sampling gap** crossed its protected-selection deadline. That event is not
+proof of malformed traffic or a parser-triggered scheduling delay. Its long
+primary stall and later scheduling miss remain separate observations.
+No failed trace is promoted. These additional diagnostics provide **zero
+site admissions, zero study shakedown credit and zero formal trace credit**.
+
 #### Prospective V10 Tamaraw source and integration checks
 
 Published Native `09b0307afc1b7496a3e1c7c5ddeca3257f721691` is a direct child

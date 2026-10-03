@@ -14,7 +14,22 @@ homepage credit fix, endpoint-specific final UDP drain evidence and explicit
 prospective BuFLO incoming tolerance. They require fresh affected captures;
 the previous failed attempts keep their original results.
 
-**Latest V10 milestone, 3 October, 10:40 UTC:** published Native `09b0307`
+**Latest live milestone, 3 October, 11:36 UTC:** the clean `7a46220` /
+Native `09b0307` runtime is installed and checked. The fresh complete Poki
+baseline, 120-request padding qualification and all four defended preflights
+pass. All four defended one-attempt diagnostics have closed and failed.
+FRONT downloads all 260 resources in 8.157 seconds but fails its strict
+zero-missed-events rule: one event is missed due to congestion. Its 71 of
+1,154 incoming releases exceeding the diagnostic 5 ms window, with a 25.191 ms
+maximum upper bound, are reported without gating FRONT acceptance. The other three
+settings' raw primary events show the same two-byte available tail
+after the owned extension. The local HTTP/3 sender requires three bytes for
+a DATA header and at least one payload byte. A narrow repair and real peer
+regression are being authored; the ordinary timing and completeness failures
+remain recorded. These short diagnostics supply no study credit. See the
+[actual runtime and attempt records](EVIDENCE-INDEX.md#installed-v10-runtime-and-short-live-checks).
+
+**Earlier V10 source milestone, 3 October, 10:40 UTC:** published Native `09b0307`
 and the integrated [revision-10 policy](RAPID-SELECTION-V10.md) preserve the
 five-setting, 16,000-trace target. Native checks passed **431 core tests and
 18 runner cases**; integrated Lab checks passed **91 cases**. Matching runtime

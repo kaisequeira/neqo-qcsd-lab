@@ -41,7 +41,26 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Latest V10 milestone, 3 October, 10:40 UTC:** published Native `09b0307`
+**Latest live V10 milestone, 3 October, 11:36 UTC:** clean Lab `7a46220` /
+Native `09b0307` has a matching installed runtime. Its client built in
+**116 seconds**, and all **12 build/export/check operations** closed 0.
+Fresh full-graph Poki ordinary traffic passes deep verification; fresh
+**120-request qualification** and all four defended preflights also pass.
+All four defended attempts have now closed and failed. FRONT downloads all
+260 resources in **8.157 seconds**, then fails strict fidelity because one
+scheduled event is missed due to congestion. Separately, **71 of 1,154**
+incoming releases exceed the diagnostic 5 ms window (maximum upper bound
+**25.191 ms**); this count is not a FRONT acceptance gate. Each stalled primary in the other
+three settings consumes 1,015 stream bytes, then receives
+an owned one-byte extension to limit 1,017. That leaves two available bytes;
+the local HTTP/3 sender requires three for its smallest DATA write. A real
+peer regression and narrow owned-credit repair are being authored. BuFLO
+also has a separately recorded late kernel-selection failure. Failed attempts
+remain failed. See the [runtime and actual attempts](docs/EVIDENCE-INDEX.md#installed-v10-runtime-and-short-live-checks).
+Current study counters remain **0/50 admitted sites, 0/50 shakedown traces
+and 0/16,000 formal traces**.
+
+**Earlier V10 source milestone, 3 October, 10:40 UTC:** published Native `09b0307`
 contains the source-bound Tamaraw owned-credit/retry policy and prospective
 10 ms outgoing allowance. The Lab integrates
 [selection revision 10](docs/RAPID-SELECTION-V10.md), declared at
