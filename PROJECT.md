@@ -41,7 +41,7 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Latest inspected milestone, 07:08 UTC on 3 October (17:08 AEST):** published
+**Latest inspected milestone, 07:40 UTC on 3 October (17:40 AEST):** published
 Lab `cacc4aa` pins Native `01ce0a7`. Its cached client build took **117.842
 seconds**; the collection and preparation images built in **60.728 and
 59.980 seconds** and passed installed-byte checks. Independent review reopened
@@ -56,12 +56,27 @@ exact router and network absent, the scope inactive and the lifecycle base
 empty. A prospective normal-teardown repair is being authored separately.
 
 The fresh **120-request response qualification passed in 74.974 seconds**;
-all three defended offline preflights passed in **8.963 seconds**. A fresh
-CS-BuFLO diagnostic has launched; its completion is unproven. Tamaraw and
-BuFLO remain next. These are additional engineering captures with **zero
-site, shakedown or formal credit**. A prospective admission revision is being
-tested to put the fixed BuFLO policy into prepared inputs before their seal;
-it has not been published or used for live admission yet.
+all three defended offline preflights passed in **8.963 seconds**. The three
+fresh defended diagnostics have now closed failed, preserving **nine attempts**.
+Their host operations took **201.588 seconds** for CS-BuFLO, **205.493** for
+Tamaraw and **154.910** for BuFLO: about **nine minutes 22 seconds** total.
+CS-BuFLO and Tamaraw reveal an idle close on an origin whose dependent request
+has not started; CS-BuFLO also reveals surplus scheduled parser allowance
+after a complete padding response. BuFLO fails its first incoming slot because
+the variable primary body supplies only a nonempty lower bound and qualified
+padding requires a real request acknowledgment, which cannot precede its
+first outgoing request. These are additional engineering captures with
+**zero site, shakedown or formal credit**.
+
+Lab **`6f3161e` is published to `main` and the desktop branch**. It includes
+the prospectively sealed [revision-8 admission policy](docs/RAPID-SELECTION-V8.md)
+and [normal router-removal repair](docs/PUBLIC-ROUTER-TEARDOWN.md); the integrated
+cleanup corpus passed **24 tests**. Running and captured checkouts retain
+`cacc4aa`, and the new launcher has not yet had an installed live rehearsal.
+Targeted Native repairs and an explicit acknowledgment-based incoming startup
+policy are being authored separately. The startup policy will be bound
+prospectively; it does not reinterpret the failed first slots. No revision-8
+live site admission or current repaired-source 50-site cohort has run.
 
 The old-source context **014** stopped normally at an action boundary at
 `2026-10-03T06:31:16.984006+00:00`. Its final inspected checkpoint **84** at

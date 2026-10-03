@@ -101,6 +101,30 @@ defended offline checks, closed **0** in **8.963 seconds**. At the 07:08 UTC
 snapshot, fresh CS-BuFLO capture has launched; completion is unproven.
 This diagnostic grants **zero admission, study-shakedown or formal credit**.
 
+The subsequent defended results are all incomplete and their deep operations
+closed **1**; none supplies an accepted diagnostic condition:
+
+| Setting | Dated result child under its diagnostic campaign | Actual host duration | Preserved findings |
+|---|---|---:|---|
+| CS-BuFLO | `20261003T070859.566123Z` | 201.588 s | Three failed attempts. Two close the still-unused auth origin; one retires surplus owned parser allowance after a complete padding response. Abort cleanup also reports inconsistent cancellation reasons. |
+| Tamaraw | `20261003T071422.391043Z` | 205.493 s | Three failed attempts. The auth origin closes at about 15.3 s while its dependency blocks its request; the primary body is still incomplete. |
+| BuFLO | `20261003T071935.031203Z` | 154.910 s | Three failed attempts. First incoming 1,200-byte slot has insufficient capacity before any qualified padding request is acknowledged. The prospective 10 ms marker is present; this failure is not an incoming release-window violation. |
+
+Exact run JSON, event/schedule/packet CSVs, captures and attempted evidence
+remain under each result's `failures/` tree. The corresponding
+`logs/{setting}-capture-*` and `logs/{setting}-deep-*` files preserve actual
+argv, closure status and hashes. The durable lifecycle base was empty after
+each defended run; the three operations are terminal. These failures changed
+the next action to targeted parser/abort bookkeeping and endpoint activation
+repairs. BuFLO's request/acknowledgment causality requires an explicitly
+prospective startup contract; opening a stream alone does not satisfy the
+existing acknowledgment gate.
+
+The real baseline's six-column trace includes endpoint identifiers and Unix
+timestamps. Its recorded legacy static limitations text still says they are
+absent; that text is stale. Independent raw-PCAP replay verified the actual
+columns and clocks. The sealed record remains unchanged.
+
 The [response policy explanation](APPLICATION-RESPONSE-POLICY.md) records the
 Poki HTTP/3 401 observation and the prospective completion rule. The complete
 graph is preserved, including error responses; primary pages and padding
