@@ -14,7 +14,7 @@ homepage credit fix, endpoint-specific final UDP drain evidence and explicit
 prospective BuFLO incoming tolerance. They require fresh affected captures;
 the previous failed attempts keep their original results.
 
-**Latest live milestone, 4 October, 03:35 Sydney (3 October, 16:35 UTC):**
+**Latest live milestone, 4 October, 03:39 Sydney (3 October, 16:39 UTC):**
 the fresh corrected-runtime BuFLO and CS-BuFLO recordings exposed a separate
 client readiness race: a CDN endpoint entered scheduled output before its
 HTTP/3 handshake finished. The shared correction passed six real-peer/runner
@@ -23,10 +23,12 @@ live proof are next. These attempts remain rejected. Site acquisition is proceed
 the verified baseline source. Namespace 017 initialized in 10 seconds;
 the first 40 supplied-domain screens completed in 68 seconds and the next
 33 in 51 seconds. All 73 raw screens independently verify. Ordered candidate
-checks are live; checkpoint 000025 has nine screening decisions, no admission
-and no formal trace; Poki preparation is next. The separate 22-file formal
-recovery package is source-tested and ready for integration. Its actual
-parallel Docker trial remains pending. The target remains 16,000 formal traces.
+checks reached the requested first admission and closed 0 at 03:35 Sydney.
+Checkpoint 000026 has ten terminal decisions and **Poki admitted**, with
+zero formal traces. The separate 22-file formal recovery package is integrated
+as Lab `b7c00b76`; its [operator guide](RAPID-FORMAL-PARALLEL-CAPTURE.md)
+explains separate workers and recovery. Its actual parallel Docker trial
+remains pending. The target remains 16,000 formal traces.
 See the [retained evidence](EVIDENCE-INDEX.md#v12-readiness-race-and-independent-baseline-acquisition).
 
 **Latest source milestone, 4 October, 00:43 Sydney (3 October, 14:43 UTC):**

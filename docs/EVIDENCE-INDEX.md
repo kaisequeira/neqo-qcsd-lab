@@ -287,18 +287,24 @@ These are controlled screens, rather than site admissions.
 
 The official coordinator's separate plan-only operation closed 0 at
 **16:12:53.649435 UTC** in **7.108 seconds**, with `stopped.json` reason
-`plan-only` and a retained first-action plan. Its live successor is running
+`plan-only` and a retained first-action plan. Its live successor ran
 under `host-operations/candidate-live-001/`, bounded to 60 actions and the
-first admission. The latest immutable checkpoint at this snapshot,
-`checkpoint-000025.json`, is dated **16:33:58.471790 UTC**, SHA-256
-`ded569abdfbdcb55bcbe02ee0e2e732f28f8702274d63b329387bdb62408b8ec`.
-It has **nine screening decisions, zero admissions and zero formal traces**;
-Poki preparation is next. Study counters remain **0/50 sites, 0/50 shakedown and
+first admission. It closed 0 at **16:35:38.454987 UTC** after **1,239.502
+seconds**, with `stopped.json` reason `requested-admissions`. Actual completion
+SHA-256 is `7d69033d62c5deecf7d266d026b8d224dc2e15d776684b64937fdb95b3f8780e`.
+The latest immutable checkpoint at this snapshot, `checkpoint-000026.json`,
+is dated **16:35:11.341874 UTC**, SHA-256
+`256e30bb1d511ee9a0c72739049cb427e548e5abc8de10e65cc1bcec515975b3`.
+It has **ten terminal decisions, one admission and zero formal traces**;
+Poki is admitted. Study counters are **1/50 sites, 0/50 shakedown and
 0/16,000 formal**. A new capture-runtime repair does not relabel this
 baseline acquisition's original source.
 
-The independent recoverable formal capture package is committed in isolated
-Lab authoring source `6341e1d0c4b910b207b6d6186e75b8de4104b912`.
+The independent recoverable formal capture package was committed in isolated
+Lab authoring source `6341e1d0c4b910b207b6d6186e75b8de4104b912` and integrated
+as Main Lab `b7c00b76e2cadf2cb2dbe4f31c2c744f31b7efca`. All 22 integrated
+committed files match the independently reopened source proof. Its
+[operator guide](RAPID-FORMAL-PARALLEL-CAPTURE.md) documents launch and recovery.
 Evidence under `../diagnostic-rehearsals/rapid-v12-formal-parallel-lab-checks-20261003-003/`
 binds all **22 committed files** to unchanged before/after source and the
 actual focused operation: **nine passing tests in 20.95 seconds**, process
@@ -314,7 +320,7 @@ The committed-history portability regression closed 0 with **one passing
 test**, preserving the source comparison after the commit. All eight
 acquisition module groups, traffic rules, qualification dependencies and
 historical v1 behavior remain unchanged. No actual Docker pair or formal
-trace was produced by these source checks. Integration and an installed
+trace was produced by these source checks. A matching installed runtime and
 parallel trial remain next; the target stays **50 × five × 64 = 16,000**.
 
 #### Installed V11 runtime and remaining live DATA stall

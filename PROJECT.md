@@ -41,7 +41,7 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Latest live milestone, 4 October, 03:35 Sydney (3 October, 16:35 UTC):**
+**Latest live milestone, 4 October, 03:39 Sydney (3 October, 16:39 UTC):**
 fresh corrected-runtime BuFLO and CS-BuFLO reject with Native
 `Transport error: not available`. The primary document completes in both,
 but endpoint 0 is selected for scheduled output before its HTTP/3 handshake
@@ -53,11 +53,12 @@ pending. These failed attempts retain zero credit. Baseline site acquisition on 
 Native `39464c62` initialized successfully in 10 seconds under namespace 017;
 the first 40 supplied-domain screens completed in 68 seconds and the next
 33 in 51 seconds. Their combined raw logs independently verify all 73
-screens. Ordered candidate checks are live; checkpoint 000025 records nine
-screening decisions and no admission, with Poki preparation next. The separate
-22-file recoverable formal capture package is source-tested and ready for
-integration; an actual parallel Docker trial remains required. This baseline acquisition does not
-claim paced capture readiness. Counters remain **0/50 admitted, 0/50 shakedown
+screens. The bounded candidate run closed 0 at 03:35 Sydney, reaching its
+requested first admission. Checkpoint 000026 records ten terminal decisions
+and **Poki admitted**. The separate 22-file recoverable formal capture package
+is integrated as Lab `b7c00b76`; an actual parallel Docker trial remains
+required. This baseline acquisition does not
+claim paced capture readiness. Counters are **1/50 admitted, 0/50 shakedown
 and 0/16,000 formal**.
 See the [actual next steps](docs/EVIDENCE-INDEX.md#v12-readiness-race-and-independent-baseline-acquisition).
 
