@@ -1136,6 +1136,7 @@ def _collect_attempt(
     try:
         _validate_run_binding(
             run_data,
+            runner_directory=run_json.parent,
             manifest=manifest,
             chaff_manifest=chaff_manifest,
             application_workload_source=application_workload_source,
@@ -1930,6 +1931,7 @@ def _validate_run_binding(
     seed: int,
     context: CaptureContext,
     historical_candidate_source: Mapping[str, Any] | None = None,
+    runner_directory: Path | None = None,
 ) -> None:
     """Bind the runner receipt to every immutable launch input."""
 
@@ -2002,6 +2004,7 @@ def _validate_run_binding(
                 defense.kind,
                 require_application_complete=True,
                 require_current_schema=not historical_candidate,
+                runner_directory=runner_directory,
             )
         )
         or not isinstance(resolved, dict)

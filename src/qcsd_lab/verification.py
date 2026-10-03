@@ -506,6 +506,6 @@ def _validate_policy_application_responses(root: Path, experiment: Mapping[str, 
             raise ValueError("accepted policy sample lacks a regular runner receipt")
         prepared = prepared_by_id[sample["workload_id"]]
         run = load_json(run_path)
-        validate_buflo_source_binding(prepared, run)
+        validate_buflo_source_binding(prepared, run, runner_directory=run_path.parent)
         if application_response_policy(prepared) != LEGACY_APPLICATION_RESPONSE_POLICY:
             validate_application_responses(prepared, run, require_identity=True)

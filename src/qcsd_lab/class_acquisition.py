@@ -308,6 +308,7 @@ def validate_class_study_preparation(
             buflo_policy_field: buflo_incoming_credit_release_policy,
             "application_response_policy": application_response_policy,
             "primary_document_identity_policy": primary_document_identity_policy,
+            "qualified_chaff_origin_policy": qualified_chaff_origin_policy,
         })
         if (not isinstance(candidate_preparation, Mapping)
             or validate_buflo_preparation_policy(candidate_preparation) != expected_buflo_policy):
@@ -2007,6 +2008,7 @@ class ExistingAcquisitionBackend:
                 "buflo_incoming_credit_release_policy": buflo_incoming_credit_release_policy,
                 "application_response_policy": application_response_policy,
                 "primary_document_identity_policy": primary_document_identity_policy,
+                "qualified_chaff_origin_policy": qualified_chaff_origin_policy,
             })
         if output_root.exists() or output_root.is_symlink():
             try:

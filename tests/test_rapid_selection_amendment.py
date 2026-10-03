@@ -599,7 +599,7 @@ def test_v4_normal_cohort_still_requires_fifty_full_graph_sites(context_v3):
         _build(context_v3)
 
 
-@pytest.mark.parametrize("revision", [5, 6, 7, 8])
+@pytest.mark.parametrize("revision", [5, 6, 7, 8, 9])
 def test_v5_application_policy_cohort_keeps_50_complete_sites_and_bound_capture_grid(context_v3, tmp_path, revision):
     from qcsd_lab import rapid_capture_plan as capture
     from qcsd_lab.application_response_policy import TERMINAL_HTTP_ERROR_POLICY
@@ -616,16 +616,20 @@ def test_v5_application_policy_cohort_keeps_50_complete_sites_and_bound_capture_
                     application_response_evidence_sha256="3" * 64)
             if revision >= 7:
                 row["admission"]["qualified_chaff_origin_policy"] = "prepared-approved-origins-v1"
-            if revision == 8:
-                row["admission"]["buflo_incoming_credit_release_policy"] = "rapid-v5-half-period-10000us-v1"
+            if revision in {8, 9}:
+                row["admission"]["buflo_incoming_credit_release_policy"] = (
+                    "rapid-v5-half-period-10000us-v1" if revision == 8
+                    else "rapid-v5-half-period-10000us-ack-start-v2")
     value = _build(context_v3)
     assert value["payload"]["application_response_policy"] == TERMINAL_HTTP_ERROR_POLICY
     if revision >= 6:
         assert value["payload"]["primary_document_identity_policy"] == amendment.VARIABLE_PRIMARY_DOCUMENT_POLICY
     if revision >= 7:
         assert value["payload"]["qualified_chaff_origin_policy"] == "prepared-approved-origins-v1"
-    if revision == 8:
-        assert value["payload"]["buflo_incoming_credit_release_policy"] == "rapid-v5-half-period-10000us-v1"
+    if revision in {8, 9}:
+        assert value["payload"]["buflo_incoming_credit_release_policy"] == (
+            "rapid-v5-half-period-10000us-v1" if revision == 8
+            else "rapid-v5-half-period-10000us-ack-start-v2")
     assert len(value["payload"]["selected_candidate_ids"]) == 50
     assert value["payload"]["formal_sample_target"] == 16000
     cohort_path, amendment_path = tmp_path / "cohort.json", tmp_path / "amendment.json"
@@ -637,7 +641,7 @@ def test_v5_application_policy_cohort_keeps_50_complete_sites_and_bound_capture_
         f"https://{candidate['domain']}", f"qualification-{index // 5}", f"{index // 5 + 1:064x}")
         for index, candidate in enumerate(value["payload"]["selected_candidates"]))
     assert sum(lane.sample_count for lane in capture.plan_lanes(sites, final=True, study_version=5)) == 16000
-    if revision == 8:
+    if revision in {8, 9}:
         for change in ("missing-policy", "wrong-policy", "float-target"):
             altered = copy.deepcopy(value["payload"])
             if change == "missing-policy":

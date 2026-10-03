@@ -415,9 +415,22 @@ def buflo_terminal_state_valid(value: Any) -> bool:
 
 
 def buflo_terminal_diagnostics_valid(
-    diagnostics: Mapping[str, Any], *, require_current: bool = False
+    diagnostics: Mapping[str, Any], *, require_current: bool = False,
+    incoming_startup: Mapping[str, Any] | None = None,
 ) -> bool:
     """Validate the version-inferred flat BuFLO terminal diagnostic contract."""
+
+    if incoming_startup is not None:
+        from .capture_acceptance_policy import validate_buflo_startup_receipt
+        try:
+            validate_buflo_startup_receipt(incoming_startup)
+            validate_buflo_startup_receipt(diagnostics.get("buflo_incoming_startup"))
+        except ValueError:
+            return False
+        if diagnostics.get("buflo_incoming_startup") != incoming_startup:
+            return False
+    elif "buflo_incoming_startup" in diagnostics:
+        return False
 
     application_key = "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch"
     parser_current = application_key in diagnostics
@@ -479,7 +492,8 @@ def buflo_terminal_diagnostics_valid(
         and 0 <= available < required
         and scheduled_incoming == diagnostics.get("buflo_scheduled_incoming_cells")
         and scheduled_outgoing == diagnostics.get("buflo_scheduled_outgoing_cells")
-        and scheduled_incoming == scheduled_outgoing
+        and scheduled_incoming + (incoming_startup["startup_suppressed_opportunities"]
+                                  if incoming_startup is not None else 0) == scheduled_outgoing
         and scheduled_outgoing > 0
         and terminal_outgoing == scheduled_outgoing
         and 0 <= terminal_incoming <= scheduled_incoming
@@ -1853,6 +1867,22 @@ def _buflo_schedule_release_window(metrics: Mapping[str, Any]) -> int:
     return window
 
 
+def _buflo_metric_startup(metrics: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    from .capture_acceptance_policy import ACK_START_POLICY, validate_buflo_startup_receipt
+    marker = metrics.get("incoming_credit_release_policy")
+    if not isinstance(marker, Mapping) or marker.get("policy") != ACK_START_POLICY:
+        if "buflo_incoming_startup" in metrics or "buflo_incoming_startup_events_sha256" in metrics:
+            raise ValueError("BuFLO startup metrics lack their V2 policy")
+        return None
+    _buflo_schedule_release_window(metrics)
+    startup = validate_buflo_startup_receipt(metrics.get("buflo_incoming_startup"))
+    digest = metrics.get("buflo_incoming_startup_events_sha256")
+    if (not isinstance(digest, str) or len(digest) != 64
+        or any(character not in "0123456789abcdef" for character in digest)):
+        raise ValueError("BuFLO startup metrics lack reopened event evidence")
+    return startup
+
+
 def _incoming_credit_release_metrics(
     schedule_path: Path, rows: list[dict[str, str]]
 ) -> dict[str, Any]:
@@ -1876,8 +1906,11 @@ def _incoming_credit_release_metrics(
     if type(start_ns) is not int or start_ns < 0:
         return {}
 
-    from .capture_acceptance_policy import FIELD, buflo_incoming_release_window
+    from .capture_acceptance_policy import ACK_START_POLICY, FIELD, buflo_incoming_release_window, validate_buflo_startup_evidence
     window_us = buflo_incoming_release_window(run)
+    startup = None
+    if FIELD in run and run[FIELD]["policy"] == ACK_START_POLICY:
+        startup = validate_buflo_startup_evidence(run, runner_directory=schedule_path.parent, schedule_rows=rows)
 
     timing_events = 0
     window_violations = 0
@@ -1911,6 +1944,9 @@ def _incoming_credit_release_metrics(
             max(0, (advertised_upper_ns - release_ns - 1) // 1_000)
         )
     return {
+        **({"buflo_incoming_startup": startup,
+            "buflo_incoming_startup_events_sha256": sha256_file(schedule_path.with_name("events.csv"))}
+           if startup is not None else {}),
         **({"incoming_credit_release_policy": run[FIELD],
             "incoming_credit_release_window_us": window_us,
             "incoming_credit_release_original_5000us_violations": historical_window_violations}
@@ -3150,6 +3186,12 @@ def _diagnostics_match_contract(defense: str, diagnostics: dict[str, Any]) -> bo
     else:
         selected = {key: value for key, value in diagnostics.items() if key.startswith("cs_buflo_")}
     expected = set(contract)
+    if defense == "buflo" and "buflo_incoming_startup" in selected:
+        from .capture_acceptance_policy import validate_buflo_startup_receipt
+        try:
+            validate_buflo_startup_receipt(selected.pop("buflo_incoming_startup"))
+        except ValueError:
+            return False
     if defense == "buflo" and (
         "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch" not in selected
     ):
@@ -3568,6 +3610,7 @@ def new_defense_terminal_receipts_valid(
     *,
     require_application_complete: bool = False,
     require_current_schema: bool = False,
+    runner_directory: Path | None = None,
 ) -> bool:
     """Validate the versioned terminal summary bound to flat Rust diagnostics.
 
@@ -3752,6 +3795,21 @@ def new_defense_terminal_receipts_valid(
         )
     if defense_kind == "buflo" and summary_schema == 4:
         expected_fields.add("terminal_schedule_stop_policy")
+    incoming_startup = None
+    from .capture_acceptance_policy import ACK_START_POLICY, FIELD, validate_buflo_startup_evidence
+    marker = run.get(FIELD)
+    if isinstance(marker, Mapping) and marker.get("policy") == ACK_START_POLICY:
+        if defense_kind != "buflo" or summary_schema != 4:
+            return False
+        try:
+            incoming_startup = validate_buflo_startup_evidence(run, runner_directory=runner_directory)
+        except (OSError, ValueError, TypeError, KeyError):
+            return False
+        expected_fields.add("incoming_startup")
+        if diagnostics.get("buflo_incoming_startup") != incoming_startup:
+            return False
+    elif "buflo_incoming_startup" in diagnostics:
+        return False
     supported_summary_schemas = {2, 3, 4}
     if (
         set(summary) != expected_fields
@@ -3794,7 +3852,8 @@ def new_defense_terminal_receipts_valid(
             and parser_current
             == ("buflo_terminal_subcell_pending_application_parser_boundaries_at_latch" in selected)
             and stop_drain_current == stop_drain_present
-            and buflo_terminal_diagnostics_valid(selected, require_current=stop_drain_current)
+            and buflo_terminal_diagnostics_valid(selected, require_current=stop_drain_current,
+                                                  incoming_startup=incoming_startup)
             and (
                 not parser_current
                 or receipt_cancellations == selected["buflo_terminal_subcell_stream_cancellations"]
@@ -6519,6 +6578,12 @@ def fidelity_eligible(
             )
         )
     if defense == "buflo":
+        try:
+            incoming_startup = _buflo_metric_startup(schedule_metrics) if isinstance(schedule_metrics, Mapping) else None
+        except ValueError:
+            return False
+        if diagnostics.get("buflo_incoming_startup") != incoming_startup:
+            return False
         zero_keys = (
             "buflo_partial_outgoing_cells",
             "buflo_suppressed_outgoing_cells",
@@ -6537,7 +6602,7 @@ def fidelity_eligible(
             and diagnostics["buflo_application_complete"] is True
             and diagnostics["buflo_minimum_duration_reached"] is True
             and diagnostics["buflo_event_guard_triggered"] is False
-            and buflo_terminal_diagnostics_valid(diagnostics)
+            and buflo_terminal_diagnostics_valid(diagnostics, incoming_startup=incoming_startup)
             and diagnostics["buflo_scheduled_outgoing_cells"]
             == diagnostics["buflo_full_outgoing_cells"]
             and isinstance(schedule_metrics, Mapping)
@@ -6610,6 +6675,10 @@ def _buflo_schedule_matches_canonical_parameters(schedule: Mapping[str, Any]) ->
     terminal = schedule.get("terminal_satisfactions")
     if not isinstance(targets, Mapping) or not isinstance(sizes, Mapping):
         return False
+    try:
+        startup = _buflo_metric_startup(schedule)
+    except ValueError:
+        return False
     total = 0
     for direction in ("outgoing", "incoming"):
         directional_targets = targets.get(direction)
@@ -6628,7 +6697,7 @@ def _buflo_schedule_matches_canonical_parameters(schedule: Mapping[str, Any]) ->
             # bottleneck, independently outstanding credits can therefore
             # reach terminal state out of target order.  Canonical cadence is
             # a property of the complete target set, not terminal CSV order.
-            or ordered_targets[0] != 0
+            or ordered_targets[0] != (startup["armed_at_us"] if startup is not None and direction == "incoming" else 0)
             or 10_000_000 not in ordered_targets
             or any(size != 1_200 for size in directional_sizes)
             or any(
@@ -6638,6 +6707,11 @@ def _buflo_schedule_matches_canonical_parameters(schedule: Mapping[str, Any]) ->
         ):
             return False
         total += len(directional_targets)
+    if startup is not None and (
+        len(targets["outgoing"]) - len(targets["incoming"]) != startup["startup_suppressed_opportunities"]
+        or max(targets["outgoing"]) != max(targets["incoming"])
+    ):
+        return False
     return total <= 12_000 and terminal == {"satisfied": total}
 
 

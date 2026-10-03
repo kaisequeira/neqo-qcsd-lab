@@ -772,6 +772,7 @@ def prepare_workload(
             "buflo_incoming_credit_release_policy": buflo_incoming_credit_release_policy,
             "application_response_policy": application_response_policy,
             "primary_document_identity_policy": primary_document_identity_policy,
+            "qualified_chaff_origin_policy": qualified_chaff_origin_policy,
         })
         if require_complete_coverage is not True:
             raise ValueError("BuFLO incoming release policy requires unchanged complete graph coverage")

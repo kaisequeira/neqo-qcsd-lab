@@ -435,10 +435,10 @@ def _amended_context(context, tmp_path, *, revision=1):
     if revision >= 4:
         from qcsd_lab import rapid_attempt_failure_evidence as observer
         modules[admission.ATTEMPT_GROUP] = observer.implementation_sources(application_response_policy=revision >= 5,
-            qualified_chaff_origin_policy=revision >= 7, buflo_incoming_credit_release_policy=revision == 8)
+            qualified_chaff_origin_policy=revision >= 7, buflo_incoming_credit_release_policy=revision in {8, 9})
     if revision >= 5:
         modules["preparation"] = admission.preparation_implementation_sources(application_response_policy=True,
-            qualified_chaff_origin_policy=revision >= 7, buflo_incoming_credit_release_policy=revision == 8)
+            qualified_chaff_origin_policy=revision >= 7, buflo_incoming_credit_release_policy=revision in {8, 9})
     return admission.initialize_acquisition(
         tmp_path / "amended-acquisition", profile_path=paths["profile"], source=paths["source"],
         source_receipt=paths["source_receipt"], catalogue=paths["catalogue"],
