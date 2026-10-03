@@ -9,6 +9,11 @@ zero formal credit**. The earlier 100-site and 20-site contracts are separate
 historical studies; their long build, browser-vector, fitting and nine-mode
 sequence does not gate this prospective five-setting study.
 
+The [targeted capture repairs](RAPID-CAPTURE-REPAIRS.md) explain the variable
+homepage credit fix, endpoint-specific final UDP drain evidence and explicit
+prospective BuFLO incoming tolerance. They require fresh affected captures;
+the previous failed attempts keep their original results.
+
 The prospective admission contract is [selection revision 7](../config/curated-sources/crux73-tranco600-rapid-v5-selection-v7.json)
 under the unchanged v5 profile. It preserves full multi-origin graphs, exact
 selected-page HTTP/3 proof and three complete replay witnesses. Complete
@@ -24,7 +29,7 @@ cannot supply padding; no resource or origin is removed.
 | Step | Action | Evidence needed to advance | Current state |
 |---:|---|---|---|
 | 1 | Freeze the candidate sources and runtime. | Exact source hashes, ordered [v5 rapid profile receipt](../config/curated-sources/crux73-tranco600-rapid-v5.profile.json), revision-7 receipt, image digests, fixed defense parameters and launcher-source hashes. | Published `ffe14ab`/native `e2dcd8a` has matching runtime 004. Its new cached client build took 109 seconds; both images passed installed-byte checks and independent review. Context 014 has 73 fresh, independently verified curated root screens. Installed-runtime checks grant no lane or trace credit. |
-| 2 | Find usable pages. | Record verified decisions in frozen order. Keep the controlled root observation, separate controlled H3 pass on the exact selected page, automatic URL/domain screen, complete graph, registered response stability and live cross-origin resource. | Context 014 first admitted Poki after **17 minutes 49 seconds**. Its full 260-resource, four-origin graph and three complete HTTP/3 replays independently verify. The same-source search resumed in batch 002 and is confirmed running. Checkpoint 41 at `2026-10-03T05:19:43.414206Z` records **14 sealed decisions and one admission**. **1/50 final sites admitted.** |
+| 2 | Find usable pages. | Record verified decisions in frozen order. Keep the controlled root observation, separate controlled H3 pass on the exact selected page, automatic URL/domain screen, complete graph, registered response stability and live cross-origin resource. | Context 014 first admitted Poki after **17 minutes 49 seconds**. Its full 260-resource, four-origin graph and three complete HTTP/3 replays independently verify. The same-source search resumed in batch 002 and is confirmed running. Checkpoint 82 at `2026-10-03T06:24:47.550559Z` records **30 sealed decisions and one admission**. **1/50 final sites admitted.** |
 | 3 | Prepare and qualify the first ten sites. | Ten verified prepared workloads, with five-site response-qualification sets matching the exact workload and source bytes. | First-site canary 005 passed **120 fresh padding qualification requests** in **74.211 seconds** and all five ordinary offline preflights in **12.665 seconds**. Both independently verify. At **05:20 UTC**, undefended and FRONT have passed ordinary deep verification and independent raw-evidence review: **2/5 additional diagnostic conditions passed**. Tamaraw, BuFLO and CS-BuFLO each failed three preserved attempts; targeted repairs are underway. These traces do not supply the ten-site study shakedown. |
 | 4 | Run the ten-site shakedown across all five settings. | 50 complete, individually deep-verified diagnostic traces, including both BuFLO modes, with failures preserved and repaired before formal capture. | Historical individual clean-runtime diagnostic passes exist on one workload: CS-BuFLO **1/1**, BuFLO retry 004 **1/1**, FRONT and Tamaraw accepted, and an undefended two-second-settle successor **1/1**. The earlier undefended attempt lacked 45 tail packets and remains failed. These separate passes do not supply the ten-site shakedown. **0/50 study shakedown traces accepted.** |
 | 5 | Admit 50 sites and freeze formal inputs. | A verified 50-site cohort receipt, exact workloads and qualification sets, fixed parameters, complete lane plan and launch manifest. | 50-site live yield is unproven; the 600-domain catalogue supplies further candidates under the same checks. |
@@ -37,6 +42,15 @@ blocks has four visits per site and five setting-specific lanes per group:
 traces. This is an evidence layout, not a claim that 800 campaigns have run.
 The settings should be interleaved across time so that network changes do not
 systematically favor one setting.
+
+**Repair milestone at 06:25 UTC:** Native `01ce0a7` and the Lab endpoint/timing
+changes are integrated in authoring source. The focused Lab suite passed 230
+cases; two tests requiring host TShark were excluded. Independent replay
+regressions passed 106 cases, and one actual offline Docker/TShark rehearsal
+reopened the endpoint-tail fixture after correcting host-user permissions.
+These checks do not replace fresh capture proof. The active admission still
+uses its original `ffe14ab`/`e2dcd8a` runtime. The next operation is the new
+cached client build and targeted first-site capture proof.
 
 ## Rough time budget
 

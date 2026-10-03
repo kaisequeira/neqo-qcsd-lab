@@ -32,7 +32,11 @@ def buflo_incoming_release_window(run: Mapping[str, Any]) -> int:
         return 5_000
     window = incoming_release_window_from_policy(run[FIELD])
     parameters = run.get("defense_parameters")
+    resolved = run.get("resolved_configuration")
+    defense = resolved.get("defense") if isinstance(resolved, Mapping) else None
+    resolved_kind = defense.get("kind") if isinstance(defense, Mapping) else None
     if (not isinstance(parameters, Mapping) or parameters.get("kind") != "buflo"
+        or resolved_kind is not None and resolved_kind != "buflo"
         or run.get("primary_document_identity_policy") != "variable-primary-document-body-v1"
         or run.get("application_response_policy") != "completed-terminal-http-errors-v1"):
         raise ValueError("BufLO incoming release policy is outside its native rapid contract")
@@ -46,7 +50,10 @@ def validate_buflo_source_binding(prepared: Mapping[str, Any], run: Mapping[str,
     policy = validate_buflo_preparation_policy(preparation)
     parameters = run.get("defense_parameters")
     kind = parameters.get("kind") if isinstance(parameters, Mapping) else None
-    if kind == "buflo" and policy is not None:
+    resolved = run.get("resolved_configuration")
+    defense = resolved.get("defense") if isinstance(resolved, Mapping) else None
+    resolved_kind = defense.get("kind") if isinstance(defense, Mapping) else None
+    if policy is not None and (kind == "buflo" or resolved_kind == "buflo"):
         if FIELD not in run:
             raise ValueError("opted-in BufLO source lacks its native acceptance receipt")
         buflo_incoming_release_window(run)

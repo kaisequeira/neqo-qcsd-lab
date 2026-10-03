@@ -41,7 +41,7 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Latest inspected milestone, 05:20 UTC on 3 October (15:20 AEST):** context
+**Latest inspected milestone, 06:25 UTC on 3 October (16:25 AEST):** context
 **014** has admitted its first site, **Poki**. Immutable checkpoint 30 records
 **ten sealed candidate decisions and one admission** at
 `2026-10-03T04:13:45.760285Z`. The bounded coordinator stopped normally at
@@ -51,8 +51,26 @@ The full **260-resource graph across four origins** independently verifies,
 including three complete HTTP/3 replays and exact non-primary response
 identities. Study counters are **1/50 admitted sites, 0/50 shakedown traces
 and 0/16,000 formal traces**. The same-source site search resumed in batch 002
-at `2026-10-03T05:07:49.575459Z`. It is confirmed running; checkpoint 41 at
-`2026-10-03T05:19:43.414206Z` records **14 sealed decisions and one admission**.
+at `2026-10-03T05:07:49.575459Z`. It is confirmed running; checkpoint 82 at
+`2026-10-03T06:24:47.550559Z` records **30 sealed decisions and one admission**.
+
+The [targeted repairs](docs/RAPID-CAPTURE-REPAIRS.md) are integrated into the
+authoring source, pinning Native `01ce0a7`. The final Native policy/primary/
+lifecycle/origin/response checks passed **21 cases**; **21 core controller and
+parser cases** passed before formatting. Focused Lab schema, capture and
+fidelity regressions passed **230 cases**, with the two host-TShark tests
+excluded because TShark is unavailable on the host. The independent replay
+regression passed **106 cases**. A real offline Docker replay with installed
+TShark reopened a six-packet synthetic fixture, including two endpoint tails,
+without changing evidence bytes. Its first permission failure remains saved;
+the host UID/GID transport fix then passed. These are engineering checks;
+the changed Native client still needs its publication build, installed-byte
+checks and fresh affected capture proof.
+
+Collector-only runtime repair epochs are published as `9ad03b0`. Their
+synthetic full-corpus fixture traversed all 800 lanes and 16,000 slots; that
+establishes manifest plumbing, not captured traffic. See the
+[repair procedure and limits](docs/RAPID-RUNTIME-REPAIR.md).
 
 First-site canary **005** staged that fresh admitted workload and completed
 its **120-request sustained padding qualification**. Independent review
@@ -77,8 +95,8 @@ remain saved. A shorter primary response retires incorrectly reserved receive
 credit in Tamaraw's first two attempts and in five BuFLO/CS-BuFLO attempts.
 Tamaraw's third attempt also exposes a global packet-tail reconciliation
 limit. BuFLO's third attempt completes the full page but exceeds the current
-5 ms incoming-credit release window. Repairs are being implemented and tested
-in isolated source checkouts. New native code needs a matching cached client
+5 ms incoming-credit release window. The prospective repairs are now authored
+and tested in isolated source checkouts. New native code needs a matching cached client
 build and targeted fresh capture proof; the historical nine-hour chain is not
 a prerequisite of this rapid study. An earlier host launch stopped before
 result allocation because copied files had group write permission. Removing

@@ -9,6 +9,43 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ## Application response policy repair
 
+### Prospective primary-credit, endpoint and timing repairs
+
+The [repair explanation](RAPID-CAPTURE-REPAIRS.md) describes the prospective
+changes. Native `01ce0a76202a0ba73ba2afac88224bef8af2e5a0` changes exactly three
+source files and is based on `e2dcd8a`. Final Native engineering records are
+under `../diagnostic-rehearsals/variable-primary-native-checks-20261003-002/`;
+`native-commit-complete.json` binds the exact source files and clean commit.
+The 21 final policy/primary/lifecycle/origin/response cases passed, and 21 core
+parser/controller cases passed before formatting. Stable formatting completed;
+nightly-only formatting options were unavailable. One direct unit replay
+initially lacked NSS's cached fixture database mount; its failure remains
+saved, and the read-only-mount successor passed on the same compiled artifact.
+The unit binary retained its precommit environment identity, so these are not
+publication-build or runtime-authority claims.
+
+The actual portable replay is under
+`../diagnostic-rehearsals/endpoint-portable-replay-20261003-002/receipt.json`.
+It records one offline container using immutable runtime-004 collection image
+`sha256:d57de823d930765a1f9855aed854de86e1f578f6b7526805dd7ec5dcde68d71c`,
+explicitly mounted current verifier source, real installed TShark and a DPKT
+six-packet fixture. Four Native matches and two endpoint receive tails were
+independently recomputed; authoritative fixture bytes and seals were unchanged.
+The first attempt under `endpoint-portable-replay-20261003-001/` failed because
+the image-default user could not read a host-owned private result. Its logs
+remain saved. The successor used the host UID/GID and passed. The receipt
+explicitly excludes scientific credit, captured-study claims and any claim
+that the newer verifier was installed in the old tool image. The final
+transport regression passed 17 cases; the preceding full replay/verification/
+application regression passed 106 cases.
+
+Lab source includes an optional prepared BuFLO incoming policy marker.
+Existing failed 5 ms attempts keep their original interpretation. Fresh
+opted-in inputs use a 10 ms incoming window, unchanged 20 ms cadence and
+1,200-byte cells, while retaining the original 5 ms violation count. The new
+client publication build and fresh actual captures remain pending at this
+source-integration milestone.
+
 The [response policy explanation](APPLICATION-RESPONSE-POLICY.md) records the
 Poki HTTP/3 401 observation and the prospective completion rule. The complete
 graph is preserved, including error responses; primary pages and padding

@@ -110,3 +110,23 @@ def test_changed_or_unbound_metric_window_cannot_change_admission():
     metrics["incoming_credit_release_window_us"] = 20000
     with pytest.raises(ValueError, match="differ from their policy"):
         _buflo_schedule_release_window(metrics)
+
+
+@pytest.mark.parametrize("parameters", [None, {}, {"kind": "tamaraw"}])
+def test_resolved_buflo_cannot_hide_missing_parameter_or_policy_receipt(parameters):
+    native = run()
+    native["resolved_configuration"] = {"defense": {"kind": "buflo"}}
+    native["defense_parameters"] = parameters
+    native.pop(FIELD)
+    with pytest.raises(ValueError, match="lacks its native"):
+        validate_buflo_source_binding(prepared(), native)
+    native[FIELD] = marker()
+    with pytest.raises(ValueError, match="native rapid contract"):
+        validate_buflo_source_binding(prepared(), native)
+
+
+def test_marker_cannot_authorize_a_conflicting_resolved_mode():
+    native = run()
+    native["resolved_configuration"] = {"defense": {"kind": "tamaraw"}}
+    with pytest.raises(ValueError, match="native rapid contract"):
+        validate_buflo_source_binding(prepared(), native)
