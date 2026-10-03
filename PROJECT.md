@@ -41,6 +41,18 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
+**Latest V10 milestone, 3 October, 10:40 UTC:** published Native `09b0307`
+contains the source-bound Tamaraw owned-credit/retry policy and prospective
+10 ms outgoing allowance. The Lab integrates
+[selection revision 10](docs/RAPID-SELECTION-V10.md), declared at
+**10:28:08 UTC** before live use. The exact Native source passed **431 core
+tests and 18 runner cases**; the integrated Lab check passed **91 cases**.
+Committed Native bytes match the tested snapshot. The final clean execution
+checkout, matching installed runtime and fresh five-setting Poki check are
+next. These engineering checks add no admitted sites or captured study
+samples. The target remains **50 × five × 64 = 16,000**, with all formal
+traces pending. Earlier runtime and failed recordings keep their identities.
+
 **Latest repair milestone, 3 October, 10:06 UTC:** Native `db93d9e` is
 published on `main` and the desktop branch. It preserves BuFLO's paired
 cadence identities when incoming startup opportunities are suppressed and

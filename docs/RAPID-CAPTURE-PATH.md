@@ -14,7 +14,14 @@ homepage credit fix, endpoint-specific final UDP drain evidence and explicit
 prospective BuFLO incoming tolerance. They require fresh affected captures;
 the previous failed attempts keep their original results.
 
-**Latest repair milestone, 3 October, 10:06 UTC:** published Native
+**Latest V10 milestone, 3 October, 10:40 UTC:** published Native `09b0307`
+and the integrated [revision-10 policy](RAPID-SELECTION-V10.md) preserve the
+five-setting, 16,000-trace target. Native checks passed **431 core tests and
+18 runner cases**; integrated Lab checks passed **91 cases**. Matching runtime
+build/installed checks and fresh full-graph five-setting capture proof are
+next. No study counters advance from these source checks.
+
+**Earlier repair milestone, 3 October, 10:06 UTC:** published Native
 `db93d9e` contains the focused BuFLO cadence-identity and CS-BuFLO parser-tail
 repairs. Its exact four committed files passed **424 core tests and 15 runner
 tests**, with independently reopened operation and source hashes. Installed
@@ -129,6 +136,29 @@ cached client build and targeted first-site capture proof.
 | First-site padding qualification and capture check | Actual qualification took **74.211 seconds**; corrected five-setting offline preflight took **12.665 seconds**. Undefended and FRONT host operations took **153.645 and 147.442 seconds**, including setup and cleanup; their actual recording intervals were **3.434 and 7.940 seconds**. | Both independently deep-verify. The other three settings failed and need targeted fresh proof after repair. One site's intervals do not establish full-grid throughput. These additional diagnostics grant no formal or study-shakedown credit. |
 | First ten-site, five-setting shakedown | About **53–109 minutes of recording time** for 50 visits at older 63–131 second per-visit rates, plus site preparation, response qualification and verification. | A complete five-setting shakedown on admitted study sites has not run. Short historical-workload tests diagnose individual capture failures first. |
 | Full formal grid | About **12–25 days of serial recording time** for 16,000 visits at those older rates, before retries and verification. | Parallel speedup is unmeasured and requires a separate fidelity/throughput trial. |
+
+### Storage measurement before scaling
+
+The five-setting Poki diagnostics were inspected at **10:18 UTC on 3 October**.
+The accepted undefended trace contains **4,383,686 bytes** of sample files;
+FRONT contains **7,146,424 bytes**. Including their campaign input copies and
+receipts, the respective result directories contain **6,566,321** and
+**10,494,590 bytes**. These are measured single-site results, not a storage
+forecast for all 50 sites.
+
+The failed CS-BuFLO and Tamaraw directories contain **79,880,680** and
+**92,254,131 bytes**. Their retained event logs and duplicate raw diagnostic
+captures are substantial; neither directory represents an accepted sample.
+The early-aborted BuFLO attempt cannot estimate a complete BuFLO trace.
+All failed evidence remains preserved.
+
+The successful multi-site shakedown must supply per-setting file sizes and
+retry overhead before setting a whole-run storage budget or increasing
+parallel workers. At the inspection, this host had **143,597,088,768 bytes**
+available in the Linux filesystem and **501,888,253,952 bytes** on D:.
+Those changing host figures are observations, not portable machine
+requirements. The earlier diagnostic result path is recorded in the
+[evidence index](EVIDENCE-INDEX.md#installed-successor-runtime-and-first-fresh-baseline).
 
 The first stop point, **one accepted zero-credit capture through the rapid
 launcher**, has passed on a historical workload. The original five-setting

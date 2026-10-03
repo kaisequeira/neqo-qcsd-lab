@@ -11,6 +11,47 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ### Successor startup and endpoint engineering checks
 
+#### Prospective V10 Tamaraw source and integration checks
+
+Published Native `09b0307afc1b7496a3e1c7c5ddeca3257f721691` is a direct child
+of `db93d9e` and modifies only the controller and runner. The Lab integrates
+[revision 10](RAPID-SELECTION-V10.md), declared at `2026-10-03T10:28:08Z`;
+its raw declaration SHA-256 is
+`57acfcb997307bb23a34b9d117376e50457659f3a85649cf79d575382798d119`.
+All earlier declaration bytes remain unchanged.
+
+Actual Native records are under
+`../diagnostic-rehearsals/tamaraw-owned-retry-native-checks-20261003-001/`.
+`core-002` passes seven new controller cases; the same sealed compiled core
+binary then passes **all 431 core tests** in `core-all-001`, closing at
+`2026-10-03T10:31:14.077962+00:00`. `runner-compile-002` closes 0 in
+**151.726 seconds**. Five direct operations on its sealed compiled binary
+pass **18 runner cases**: four new Tamaraw, three BuFLO V1, two BuFLO V2,
+three variable-primary and six approved-origin cases. Every completed
+operation's start/stdout/stderr hashes independently match saved bytes.
+
+The tested `source-003/` inventory SHA-256 is
+`8c43e4047e34005131792768c9c1ee2aa60d69764941f1038a705ab8fc41617c`;
+runner binary SHA-256 is
+`0d5938d2bd887b8fc6e1d91651fbd59dcb73bc56d81a1f03dd33a459231056d5`.
+The source/test closure SHA-256 is
+`b1d55176938fb71997f5869b4e4863a12847ec001f82e5f1c7e36ab8a8fe7cc4`;
+the committed-byte closure is
+`520dbc128e194a082e7bd25601003dcdfb498c69204ffa77137c2b4b9537e29b`.
+The prior invalid FRONT test fixture remains a failed operation; correcting
+its configuration changed no production code. Stable formatting warnings
+remain recorded, with no nightly-format claim.
+
+The integrated Lab records are under
+`../diagnostic-rehearsals/rapid-v10-lab-integration-20261003-001/`.
+`focused-integration` closes 0 at `2026-10-03T10:34:36.030440+00:00`, reporting
+**91 passed in 23.71 seconds**. Its logs and unchanged source inventory
+independently reopen. Authoring also checked complete preparation through
+three raw replay ledgers and terminal admission, legacy round trips, the
+50-site/16,000-slot planner and negative declaration/cohort mutations.
+These are source/engineering results with **zero scientific credit**.
+A clean matching runtime and fresh affected captures remain required.
+
 #### Subsequent paired-cadence and blocked-parser repairs
 
 Published Native `db93d9e2bec919e154671bdb2263ba04b90280c8` is a direct
