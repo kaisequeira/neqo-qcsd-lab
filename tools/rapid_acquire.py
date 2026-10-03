@@ -36,6 +36,12 @@ def _parser() -> argparse.ArgumentParser:
     initialize.add_argument("--not-before-utc", required=True, help="independent prospective profile publication time")
     initialize.add_argument("--selection-amendment", type=Path,
                             help="create a separate acquisition under a prospective selection amendment")
+    initialize.add_argument("--root-screen-context", type=Path,
+                            help="retain the original acquisition context's unchanged root-survey runtime only")
+    initialize.add_argument("--root-screen-runtime-proof", type=Path,
+                            help="original canonical-runtime.json with sibling actual prepare installed-verification records")
+    initialize.add_argument("--root-screen-runtime-proof-sha256",
+                            help="independently verified SHA-256 of that original installed-runtime proof")
     initialize.add_argument("--browser-policy-module", action="append", type=_module, default=[],
                             help="independent amended browser policy implementation snapshot NAME=PATH")
     initialize.add_argument("--collector-module", action="append", type=_module, default=[],
@@ -333,6 +339,9 @@ def run(args: argparse.Namespace) -> Any:
             not_before_utc=datetime.fromisoformat(args.not_before_utc.replace("Z", "+00:00")),
             module_sources=module_sources,
             selection_amendment=args.selection_amendment,
+            root_screen_context=args.root_screen_context,
+            root_screen_runtime_proof=args.root_screen_runtime_proof,
+            root_screen_runtime_proof_sha256=args.root_screen_runtime_proof_sha256,
         )
         return admission.acquisition_status(context)
     context = admission.load_admission_context(args.root)

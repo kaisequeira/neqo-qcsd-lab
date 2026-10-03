@@ -35,6 +35,33 @@ REQUEST_STAGE_OBSERVATION_POLICY = (
     "chromium-143-fetch-primary-or-failed-cors-preflight-v1"
 )
 
+
+def _valid_preflight_exception(value: Any) -> bool:
+    if value is None:
+        return True
+    if not isinstance(value, Mapping):
+        return False
+    fields = {"kind", "preflight_occurrence_id"}
+    if value.get("kind") == "resource-blocked-after-failed-cors-preflight-v1":
+        fields |= {"network_request_headers"}
+        headers = value.get("network_request_headers")
+        if not isinstance(headers, list) or any(
+            not isinstance(header, list) or len(header) != 2
+            or any(not isinstance(item, str) for item in header) for header in headers
+        ):
+            return False
+        # Local import avoids the manifest/discovery evidence module cycle.
+        from .manifest import safe_discovery_headers
+        if safe_discovery_headers(dict(headers)) != headers:
+            return False
+    elif value.get("kind") != "blocked-after-failed-cors-preflight-v1":
+        return False
+    return (
+        set(value) == fields
+        and isinstance(value.get("preflight_occurrence_id"), str)
+        and bool(value["preflight_occurrence_id"])
+    )
+
 PASSIVE_RENDER_CONTRACT: dict[str, Any] = {
     "schema_version": PASSIVE_RENDER_CONTRACT_SCHEMA_VERSION,
     "policy": "bounded-passive-render-quiescence-v5",
@@ -690,25 +717,7 @@ def verify_discovery_event_audit(
                     )
                 )
                 or type(event["response_observed"]) is not bool
-                or (
-                    event["interception_exception"] is not None
-                    and (
-                        not isinstance(event["interception_exception"], Mapping)
-                        or set(event["interception_exception"])
-                        != {"kind", "preflight_occurrence_id"}
-                        or event["interception_exception"].get("kind")
-                        != "blocked-after-failed-cors-preflight-v1"
-                        or not isinstance(
-                            event["interception_exception"].get(
-                                "preflight_occurrence_id"
-                            ),
-                            str,
-                        )
-                        or not event["interception_exception"].get(
-                            "preflight_occurrence_id"
-                        )
-                    )
-                )
+                or not _valid_preflight_exception(event["interception_exception"])
                 or (
                     event["safe_request_headers"] is not None
                     and (
@@ -1381,7 +1390,7 @@ def verify_discovery_event_audit(
         dependent_allowed = (
             (
                 occurrence["method"] == "POST"
-                and occurrence["resource_type"] == "Fetch"
+                and occurrence["resource_type"] in {"XHR", "Fetch"}
                 and occurrence["mapping"].get("reason") == "unsafe method: POST"
             )
             or (
@@ -1390,15 +1399,20 @@ def verify_discovery_event_audit(
                 and occurrence["mapping"].get("reason") == "origin not approved"
             )
         )
+        resource_dependent = (
+            occurrence["method"] == "GET"
+            and occurrence["resource_type"] in {"XHR", "Fetch"}
+            and occurrence["mapping"].get("kind") == "resource"
+        )
         if (
-            not dependent_allowed
+            not (dependent_allowed or resource_dependent)
             or _https_origin(occurrence["url"]) is None
             or occurrence["initiator_type"] != "script"
             or occurrence["initiator_request_id"] is not None
             or occurrence["redirected"]
             or occurrence["response_observed"]
             or len(actual_chain) != 1
-            or occurrence["mapping"].get("kind") != "exclusion"
+            or (not resource_dependent and occurrence["mapping"].get("kind") != "exclusion")
             or fetch_count_by_network[occurrence_id] != 0
             or not has_blocked_terminal(occurrence_id, reason="other")
             or len(candidates) != 1
@@ -1418,6 +1432,15 @@ def verify_discovery_event_audit(
             "kind": "blocked-after-failed-cors-preflight-v1",
             "preflight_occurrence_id": preflight_id,
         }
+        if resource_dependent:
+            # Resource/header/dependency mapping was independently verified
+            # above. These headers additionally must equal the projection
+            # retained from the real Network event, without inventing Fetch.
+            expected_exception = {
+                "kind": "resource-blocked-after-failed-cors-preflight-v1",
+                "preflight_occurrence_id": preflight_id,
+                "network_request_headers": occurrence["safe_request_headers"],
+            }
         if occurrence["interception_exception"] != expected_exception:
             raise ValueError("failed CORS preflight exception claim does not verify")
         derived_preflight_exceptions[occurrence_id] = preflight_id

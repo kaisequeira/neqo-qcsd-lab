@@ -15,7 +15,139 @@ graph is preserved, including error responses; primary pages and padding
 resources retain successful-response requirements. Rust commit
 `1cda2d2446b53d0bdee185e81755fb5115744eb1` contains the native change.
 
-### Current revision-6 publication and native stream-credit repair
+### Current response-drift runtime and context 010
+
+Published Lab source `d99d46140443e77a04c3c62c47714527f30d550a` retains native
+commit `00d14c0999bf2657cacc2581e431f39bacab7281`. The response-drift repair
+preserves exact auxiliary response identity and records a typed failed
+preparation only after independently validating the complete raw proof.
+It adds failure schema 3 for the registered primary-body variation rule;
+historical failure schemas 1 and 2 and strict successful admission remain
+unchanged. The collector repair closes observed internal error resources
+without requiring optional images Chrome never requested. Focused checks
+passed **365 collector cases and 27 preparation/routing cases**. Tracked
+regressions are [collector tests](../tests/test_cdp_targets.py),
+[preparation proof tests](../tests/test_prepare_primary_document_identity.py)
+and [observed admission routing](../tests/test_rapid_primary_document_admission.py).
+
+The actual matching runtime is retained under
+`../diagnostic-rehearsals/response-drift-runtime-20261003-001/`.
+`canonical-runtime.json` records installed source/client verification at
+`2026-10-03T00:12:27.881612Z`, collection image
+`sha256:37dcfe3f381a2582c9b5601b02f2a428692db173d4507254dd43a68fbae53130`
+and preparation image
+`sha256:33a3a0ab9537e0e1a4e7d5d804e981d57f27de0ad94139f88f06fe0799647263`.
+The exported source manifest SHA-256 is
+`3361ea3645d8e20d4d8080cb40407604193f565a524ea05caecd002a01e87f06`.
+Actual image builds completed in **60.701 and 61.209 seconds**; collection
+and preparation installed-byte checks exited 0 in **16.537 and 17.806
+seconds** with empty stderr. Scope is installed-runtime verification only;
+live workload qualification, site admission and capture are not established.
+
+`client-build.json` explicitly records
+`reused-native-binary-no-new-compile`, client SHA-256
+`98d6f5552376782b4df99f74187e8a636be807bd22ed879a13c7984e94f0741f`.
+It retains hashes and references to the original native build, release and
+installed-runtime records from `../diagnostic-rehearsals/primary-document-runtime-20261003-001/`
+on Lab `e260ce1b52ac0b8ebf9333923498dc46638532a0`. Native source archive,
+Cargo lock and toolchain identities are unchanged. The new Python runtime
+identity is separate from that original native build identity.
+
+Fresh acquisition context
+`../diagnostic-rehearsals/rapid-v6-site-acquisition-20261003-010/`
+uses revision 6 and the new matching preparation runtime. Its
+`actual-init-completed.json` records exit 0 at
+`2026-10-03T00:14:17.176833Z`, elapsed **7.535 seconds**. Initial provenance
+SHA-256 is `210b82fabb2c0db43029513dfb017bd6141b29f629ef2bd1efbe9df8648a59a9`.
+Its initial checkpoint records zero sealed candidates and zero admissions;
+initialization grants no qualification or capture credit.
+The later `acquisition/checkpoints/checkpoint-000002.json`, recorded at
+`2026-10-03T00:38:38.860792Z`, has **one sealed root-screen deferral, zero
+admitted sites and zero formal traces**; candidate 2, Weerplaza, is next.
+The actual 73 curated and 40 fallback root observations remain root-screen
+facts only, not eligible classes.
+
+Preserved context 009's `acquisition/checkpoints/checkpoint-000064.json`
+records **nine sealed screening decisions and zero admitted sites** at
+`2026-10-02T23:39:24.245559Z`. Its second batch exited 1 at
+`2026-10-02T23:39:26.725449Z`. The Poki failure is retained at
+`../diagnostic-rehearsals/rapid-v6-site-acquisition-20261003-009/acquisition/attempts/curated-e5114f8d4f027cce4481/attempt-000010/`.
+`operational-error.json` reports resource 199's prepared response identity
+failure. All three `workloads/*-failure-evidence/artifacts/stability-*/run.json`
+files contain **278 complete responses: 277 HTTP 200 and one HTTP 401**; the SDK body has
+**2,672, 2,713 and 2,702 bytes** and three distinct hashes. The repair does
+not relabel or promote this old generic failure.
+
+The separate fresh Futura diagnostic is retained under
+`../diagnostic-rehearsals/fixed-render-cutoff-diagnostic-20261003-001/run-001/`.
+`completed.json` ended at
+`2026-10-03T00:14:19.223404Z`, elapsed **33.977 seconds**, with unchanged
+runtime identity and exit 1. `exceptions.json` retains an actual
+`qcsd_lab.cdp_targets.CdpTargetIntegrityError`:
+`eligible HTTP observation and request-stage interception ledgers differ`.
+The parent `actual-fixed-discovery-completed.json` also records exit 1.
+Absence of the earlier passive-render error is not a successful discovery.
+Current study counters remain **0/50 admitted sites, 0/50 shakedown traces
+and 0/16,000 formal traces**; target **50 × 5 × 64** is unchanged.
+
+#### Fresh actual Poki response-drift producer proof
+
+The separate diagnostic is retained at
+`../diagnostic-rehearsals/fixed-response-drift-diagnostic-20261003-001/`.
+`actual-drift-producer-completed.json` records exit 0 with empty stderr at
+`2026-10-03T00:25:01.280103Z`, elapsed **120.3265 seconds**. This successful
+diagnostic execution produced a typed **failed preparation**, not an admitted
+workload. `run-001/diagnostic-complete.json` records the unchanged clean d99
+runtime, native client and explicit zero study counters.
+
+`run-001/actual-response-drift-proof.json` is failure schema 3, raw SHA-256
+`d86cf3fb08beb9f9250f259e43e83e83483a75af498a75baf9d93382e5a48604`.
+Independent audit reopened all **31 hash-bound raw artifacts** and the three
+complete **278-resource** native replays. Each replay has 278 complete,
+successful responses: 277 HTTP 200 and one complete HTTP 401 response under
+the registered auxiliary-leaf policy. The full graph was preserved.
+The derived unstable non-primary IDs are **199, 204, 215, 220, 221, 222 and
+227**; SDK resource 199's body lengths are **2,713 / 2,672 / 2,672 bytes**.
+Primary resource 0 is stable under its separately registered body-variation
+projection. The original three raw identities remain retained.
+
+The producer raised `ResponseStabilityPolicyError`, and its raw proof
+independently reopened. Its earlier URL/navigation references are explicitly
+historical location hints, not admission authority. No site terminal, cohort,
+qualifier, study shakedown or formal capture credit is claimed by this separate
+diagnostic; context 009's old generic failure remains unchanged.
+
+#### Reviewed next source fixes: engineering checks only
+
+The prospective Futura ledger correction retains actual Network headers for
+eligible requests blocked after a failed CORS preflight and independently
+verifies that exception. It does not invent a Fetch pause or remove a replay
+resource. **274 focused discovery-module checks passed**; tracked regressions
+are [discovery tests](../tests/test_discover.py) and
+[discovery evidence tests](../tests/test_discovery_evidence.py).
+The saved Futura diagnostic above remains a failure; this source fix has no
+new live discovery proof yet.
+
+The optional separate root runtime in
+[site admission](../src/qcsd_lab/rapid_site_admission.py) and its
+[acquisition CLI](../tools/rapid_acquire.py) independently reopens an original
+context, actual installed-runtime execution, three curated and three fallback
+component hashes, and the same native client. A fresh context keeps the old
+root observations' actual image/source/times while its new navigation, page
+and preparation bindings remain separate. All applicable publication barriers
+remain required; raw root logs are not relabeled. **14 focused root-runtime
+cases and three legacy checks passed**, including changed-component rejection
+and a revision-6 retained-root/new-page flow. See the
+[root-runtime regressions](../tests/test_rapid_root_runtime.py).
+
+Read-only inspection also reopened the actual context-010 installed proof and
+all 73 curated plus 40 fallback observations through the separate root kwargs.
+It wrote no new registry or scientific evidence. The reviewed 011 external
+recipes are not staged or initialized. A matching main runtime and fresh live
+checks remain outstanding at this documentation snapshot; no image proof or
+study credit is inferred from the combined source changes and their tests.
+
+### Revision-6 publication and native stream-credit repair
 
 The create-only [revision-6 receipt](../config/curated-sources/crux73-tranco600-rapid-v5-selection-v6.json)
 was published at `2026-10-02T22:01:23.089910Z`, raw/canonical SHA-256

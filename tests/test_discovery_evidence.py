@@ -17,7 +17,9 @@ from qcsd_lab.cdp_targets import (
     NORMAL_SHUTDOWN_DISPOSAL_SUMMARY_SCHEMA_VERSION,
     SRCDOC_PSEUDO_DOCUMENT_POLICY,
     SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
+    CdpTargetSource,
 )
+from qcsd_lab.discover import _RequestObservationLedger
 from qcsd_lab.discovery_evidence import (
     DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION,
     PASSIVE_RENDER_CONTRACT,
@@ -464,7 +466,10 @@ def _render_for(audit: dict) -> dict:
     }
 
 
-def _verify(audit: dict, resources: list[dict], exclusions: list[dict] | None = None):
+def _verify(
+    audit: dict, resources: list[dict], exclusions: list[dict] | None = None,
+    *, approved_origins: list[str] | None = None,
+):
     render = _render_for(audit)
     audit["render_observation_sha256"] = evidence_sha256(render)
     return verify_discovery_event_audit(
@@ -472,7 +477,7 @@ def _verify(audit: dict, resources: list[dict], exclusions: list[dict] | None = 
         render_observation=render,
         resources=resources,
         exclusions=exclusions or [],
-        approved_origins=["https://page.test"],
+        approved_origins=approved_origins or ["https://page.test"],
         observed_request_count=sum(
             event["kind"] == "network-request" for event in audit["events"]
         ),
@@ -518,8 +523,10 @@ def _blocked_preflight_audit(
     *,
     actual_method: str = "POST",
     actual_resource_type: str = "Fetch",
+    resource_mapped: bool = False,
+    network_request_headers: list[list[str]] | None = None,
 ) -> tuple[dict, list[dict], list[dict]]:
-    url = (
+    url = "https://static.fastcmp.com/tcfeuv2/consents.json" if resource_mapped else (
         "https://unapproved.test/api"
         if actual_method == "GET"
         else "https://page.test/api"
@@ -536,7 +543,7 @@ def _blocked_preflight_audit(
     actual = _network(
         network_id="actual-post-network",
         occurrence_id=actual_occurrence,
-        resource_id=None,
+        resource_id=1 if resource_mapped else None,
         url=url,
         method=actual_method,
         resource_type=actual_resource_type,
@@ -550,6 +557,17 @@ def _blocked_preflight_audit(
             "preflight_occurrence_id": preflight_occurrence,
         },
     )
+    if resource_mapped:
+        actual["safe_request_headers"] = deepcopy(network_request_headers)
+        actual["resolved_dependency_resource_ids"] = [0]
+        actual["dependency_evidence"] = [{
+            "kind": "document-url", "value": "https://page.test/", "resolved_resource_id": 0,
+        }]
+        actual["interception_exception"] = {
+            "kind": "resource-blocked-after-failed-cors-preflight-v1",
+            "preflight_occurrence_id": preflight_occurrence,
+            "network_request_headers": deepcopy(network_request_headers),
+        }
     preflight = _network(
         network_id="preflight-network",
         occurrence_id=preflight_occurrence,
@@ -588,6 +606,10 @@ def _blocked_preflight_audit(
         ),
     ]
     audit, resources = _root_resource_audit(*pair_events)
+    if resource_mapped:
+        resource = _resource(1, url, [0])
+        resource.update(type=actual_resource_type, headers=deepcopy(network_request_headers))
+        resources.append(resource)
     exclusions = [
         {
             "url": url,
@@ -597,6 +619,9 @@ def _blocked_preflight_audit(
         },
         {"url": url, "reason": "unsafe method: OPTIONS"},
     ]
+    if resource_mapped:
+        exclusions.pop(0)
+        preflight["mapping"]["exclusion_occurrence_id"] = 0
     return audit, resources, exclusions
 
 
@@ -620,10 +645,12 @@ def test_internal_document_lifecycle_bumps_discovery_evidence_schemas() -> None:
 
 
 @pytest.mark.parametrize("request_order", ["actual-first", "preflight-first"])
+@pytest.mark.parametrize("resource_type", ["XHR", "Fetch"])
 def test_verifier_accepts_exact_blocked_preflight_exception_in_either_request_order(
     request_order: str,
+    resource_type: str,
 ) -> None:
-    audit, resources, exclusions = _blocked_preflight_audit(request_order)
+    audit, resources, exclusions = _blocked_preflight_audit(request_order, actual_resource_type=resource_type)
 
     summary = _verify(audit, resources, exclusions)
 
@@ -639,6 +666,131 @@ def test_verifier_accepts_exact_blocked_preflight_exception_in_either_request_or
         "exclusion_occurrence_count": 2,
         "blocked_preflight_dependent_count": 1,
     }
+
+
+@pytest.mark.parametrize("request_order", ["actual-first", "preflight-first"])
+@pytest.mark.parametrize("resource_type", ["XHR", "Fetch"])
+def test_verifier_preserves_preflight_blocked_get_resource_headers_and_dependencies(
+    request_order: str,
+    resource_type: str,
+) -> None:
+    headers = [["accept", "application/json"], ["origin", "https://www.futura-sciences.com"]]
+    audit, resources, exclusions = _blocked_preflight_audit(
+        request_order, actual_method="GET", actual_resource_type=resource_type,
+        resource_mapped=True, network_request_headers=headers,
+    )
+    summary = _verify(audit, resources, exclusions, approved_origins=[
+        "https://page.test", "https://static.fastcmp.com",
+    ])
+    assert summary["resource_occurrence_count"] == 2
+    assert summary["blocked_preflight_dependent_count"] == 1
+    assert resources[1]["url"] == "https://static.fastcmp.com/tcfeuv2/consents.json"
+    assert resources[1]["headers"] == headers
+    assert resources[1]["depends_on"] == [0]
+    assert exclusions == [{"url": resources[1]["url"], "reason": "unsafe method: OPTIONS"}]
+
+
+@pytest.mark.parametrize("request_order", ["actual-first", "preflight-first"])
+@pytest.mark.parametrize("method,resource_type,resource_mapped", [
+    ("POST", "XHR", False), ("POST", "Fetch", False), ("GET", "XHR", True),
+])
+def test_real_preflight_ledger_proof_passes_independent_verifier(
+    request_order: str, method: str, resource_type: str, resource_mapped: bool,
+) -> None:
+    headers = [["accept", "application/json"]]
+    audit, resources, exclusions = _blocked_preflight_audit(
+        request_order, actual_method=method, actual_resource_type=resource_type,
+        resource_mapped=resource_mapped, network_request_headers=headers,
+    )
+    actual = next(e for e in audit["events"] if e.get("occurrence_id") == "actual-post-request")
+    expected_proof = deepcopy(actual["interception_exception"])
+    actual["interception_exception"] = None
+    source = CdpTargetSource(session_path=(), target_id=ROOT["target_id"])
+    ledger = _RequestObservationLedger(eligible=lambda method, url: url.startswith("https://"))
+    for event in audit["events"]:
+        if event["kind"] == "network-request":
+            ledger.add_network(
+                source, request_id=event["network_id"], method=event["method"], url=event["url"],
+                resource_type=event["resource_type"], initiator_type=event["initiator_type"],
+                initiator_request_id=event["initiator_request_id"],
+                occurrence_id=event["occurrence_id"], audit_event=event,
+                network_request_headers=event["safe_request_headers"],
+            )
+        elif event["kind"] == "fetch-request":
+            ledger.add_interception(source, {
+                "requestId": event["fetch_id"], "networkId": event["network_id"],
+                "frameId": event["frame_id"],
+                "request": {"method": event["method"], "url": event["url"]},
+            }, audit_event=event, policy_decision=event["policy_decision"],
+                policy_reason=event["policy_reason"])
+        elif event["kind"] == "network-terminal":
+            failure = event["failure"]
+            ledger.add_terminal(source, event["network_id"], outcome=event["outcome"], event=(
+                {"errorText": failure["error_text"], "canceled": failure["canceled"],
+                    "blockedReason": failure["blocked_reason"]} if failure else {}
+            ))
+    ledger.finish()
+    assert actual["interception_exception"] == expected_proof
+    summary = _verify(audit, resources, exclusions, approved_origins=[
+        "https://page.test", "https://static.fastcmp.com",
+    ])
+    assert summary["blocked_preflight_dependent_count"] == 1
+
+
+@pytest.mark.parametrize("mutation", [
+    "missing-header-witness", "changed-final-headers", "unsafe-header", "duplicate-header",
+    "old-exclusion-tag", "wrong-source", "wrong-causal-id", "wrong-url", "continued-preflight",
+    "dependent-response", "preflight-response", "wrong-terminal", "wrong-preflight-terminal",
+    "missing-claim", "missing-preflight-fetch", "dependency-change", "origin-unapproved",
+])
+def test_verifier_rejects_inexact_preflight_blocked_resource_authority(mutation: str) -> None:
+    headers = [["accept", "application/json"]]
+    audit, resources, exclusions = _blocked_preflight_audit(
+        "actual-first", actual_method="GET", actual_resource_type="XHR",
+        resource_mapped=True, network_request_headers=headers,
+    )
+    actual = next(e for e in audit["events"] if e.get("occurrence_id") == "actual-post-request")
+    preflight = next(e for e in audit["events"] if e.get("occurrence_id") == "preflight-request")
+    fetch = next(e for e in audit["events"] if e.get("fetch_id") == "preflight-fetch")
+    terminals = {e["network_id"]: e for e in audit["events"] if e["kind"] == "network-terminal"}
+    approved = ["https://page.test", "https://static.fastcmp.com"]
+    if mutation == "missing-header-witness":
+        actual["interception_exception"].pop("network_request_headers")
+    elif mutation == "changed-final-headers":
+        actual["safe_request_headers"] = resources[1]["headers"] = [["accept", "text/plain"]]
+    elif mutation == "unsafe-header":
+        actual["interception_exception"]["network_request_headers"] = [["authorization", "synthetic"]]
+    elif mutation == "duplicate-header":
+        actual["interception_exception"]["network_request_headers"] = headers + headers
+    elif mutation == "old-exclusion-tag":
+        actual["interception_exception"] = {"kind": "blocked-after-failed-cors-preflight-v1",
+            "preflight_occurrence_id": "preflight-request"}
+    elif mutation == "wrong-source":
+        preflight["source"] = {**ROOT, "target_id": "other-page"}
+    elif mutation == "wrong-causal-id":
+        preflight["initiator_request_id"] = "another-request"
+    elif mutation == "wrong-url":
+        preflight["url"] = fetch["url"] = exclusions[0]["url"] = "https://static.fastcmp.com/different"
+    elif mutation == "continued-preflight":
+        fetch["policy_decision"], fetch["policy_reason"] = "continue", None
+    elif mutation == "dependent-response":
+        actual["response_observed"] = True
+    elif mutation == "preflight-response":
+        preflight["response_observed"] = True
+    elif mutation == "wrong-terminal":
+        terminals["actual-post-network"]["failure"]["blocked_reason"] = "inspector"
+    elif mutation == "wrong-preflight-terminal":
+        terminals["preflight-network"]["failure"]["blocked_reason"] = "other"
+    elif mutation == "missing-claim":
+        actual["interception_exception"] = None
+    elif mutation == "missing-preflight-fetch":
+        audit["events"].remove(fetch)
+    elif mutation == "dependency-change":
+        resources[1]["depends_on"] = []
+    elif mutation == "origin-unapproved":
+        approved.pop()
+    with pytest.raises(ValueError):
+        _verify(audit, resources, exclusions, approved_origins=approved)
 
 
 @pytest.mark.parametrize("request_order", ["actual-first", "preflight-first"])

@@ -52,6 +52,11 @@ PREPARATION_MODULES = (
     "qcsd_lab.manifest", "qcsd_lab.discover", "qcsd_lab.discovery_evidence", "qcsd_lab.util",
 )
 APPLICATION_RESPONSE_POLICY_MODULE = "qcsd_lab.application_response_policy"
+ROOT_SCREEN_RUNTIME_POLICY = "retained-component-bound-root-runtime-v1"
+ROOT_SCREEN_MODULES = {
+    "curated": {"tools.h3_curated_survey", "qcsd_lab.h3_prebaseline", "qcsd_lab.rapid_study_profile"},
+    "fallback": {"tools.h3_rapid_fallback_survey", "qcsd_lab.h3_prebaseline", "qcsd_lab.rapid_study_profile"},
+}
 
 
 def preparation_implementation_sources(*, application_response_policy: bool = False) -> dict[str, Path]:
@@ -191,6 +196,16 @@ class AdmissionContext:
     mounted_module_hashes: Mapping[str, Mapping[str, str]]
     not_before_utc: datetime
     selection_amendment_bytes: bytes | None = None
+    root_screen_runtime: Mapping[str, Any] | None = None
+
+    @property
+    def root_screen_verification_kwargs(self) -> dict[str, Any]:
+        """Keep retained survey runtime authority separate from live admission."""
+        if self.root_screen_runtime is None:
+            return {"execution_binding": self.execution_binding,
+                    "expected_runtime_source": self.expected_runtime_source,
+                    "not_before_utc": self.not_before_utc}
+        return _verify_root_screen_runtime(self)
 
     @property
     def selection_amendment_sha256(self) -> str | None:
@@ -268,6 +283,9 @@ def initialize_acquisition(
     catalogue: Path, source_manifest: Path, admission_image_digest: str,
     not_before_utc: datetime, module_sources: Mapping[str, Mapping[str, Path]],
     selection_amendment: Path | None = None,
+    root_screen_context: Path | None = None,
+    root_screen_runtime_proof: Path | None = None,
+    root_screen_runtime_proof_sha256: str | None = None,
 ) -> AdmissionContext:
     """Freeze independently supplied image metadata and verifier source snapshots."""
     root = Path(root)
@@ -298,6 +316,44 @@ def initialize_acquisition(
         "admission_image_digest": admission_image_digest,
     })
     runtime = _runtime_source(source_raw_manifest, binding)
+    root_origin = None
+    optional = (root_screen_context, root_screen_runtime_proof, root_screen_runtime_proof_sha256)
+    if any(value is not None for value in optional):
+        if not all(value is not None for value in optional):
+            raise ValueError("root-screen context, actual runtime proof and its independent SHA must be supplied together")
+        root_origin = load_admission_context(root_screen_context)
+        if root_origin.root_screen_runtime is not None:
+            raise ValueError("select the original root-screen context, not a chain of reused roles")
+        if (root_origin.profile_bytes != profile_raw or root_origin.source_bytes != source_raw
+            or root_origin.source_receipt_bytes != _read(source_receipt)
+            or root_origin.catalogue_bytes != catalogue_raw
+            or root_origin.selection_amendment_bytes != (_read(selection_amendment) if selection_amendment else None)):
+            raise ValueError("retained root screen changed its profile, source, catalogue or prospective policy")
+        if any(set(module_sources[group]) != names or
+               {name: _sha(_read(path)) for name, path in module_sources[group].items()}
+               != root_origin.mounted_module_hashes[group]
+               for group, names in ROOT_SCREEN_MODULES.items()):
+            raise ValueError("retained root-screen survey components changed")
+        client_sha = _sha(_read(module_sources["page"]["neqo-qcsd-client"]))
+        if (client_sha != root_origin.mounted_module_hashes["page"]["neqo-qcsd-client"]
+            or runtime["neqo_commit"] != root_origin.expected_runtime_source["neqo_commit"]):
+            raise ValueError("retained root screen requires the same actual native client and Rust source")
+        canonical = _read(root_screen_runtime_proof)
+        if (not isinstance(root_screen_runtime_proof_sha256, str)
+            or SHA_RE.fullmatch(root_screen_runtime_proof_sha256) is None
+            or _sha(canonical) != root_screen_runtime_proof_sha256):
+            raise ValueError("root-screen installed-runtime proof differs from its independent SHA")
+        root_proof_paths = {"canonical": Path(root_screen_runtime_proof)}
+        root_proof_paths.update({key: Path(root_screen_runtime_proof).parent / name for key, name in (
+            ("started", "prepare-installed-verification-started.json"),
+            ("completed", "prepare-installed-verification-completed.json"),
+            ("stdout", "prepare-installed-verification.stdout.log"),
+            ("stderr", "prepare-installed-verification.stderr.log"),
+        )})
+        _check_root_installed_verification(
+            {key: _read(path) for key, path in root_proof_paths.items()},
+            root_origin.execution_binding, root_origin.expected_runtime_source, client_sha,
+        )
     root.mkdir(parents=True)
     input_paths = {
             "profile": profile_path, "source": source, "source_receipt": source_receipt,
@@ -310,12 +366,29 @@ def initialize_acquisition(
         group: {name: import_evidence(root, path) for name, path in sources.items()}
         for group, sources in module_sources.items()
     }
-    durable_create(root / "provenance.json", _json(_bind(PROVENANCE_TYPE, {
+    payload = {
         "profile_version": 5, "inputs": inputs, "module_sources": modules,
         "execution_binding": binding, "runtime_source": runtime,
         "not_before_utc": not_before_utc.isoformat(), "created_at": _now(),
         "scientific_credit": False,
-    })))
+    }
+    if root_origin is not None:
+        original = _unpack(_read(root_origin.root / "provenance.json"), PROVENANCE_TYPE)
+        payload["root_screen_runtime"] = {
+            "policy": ROOT_SCREEN_RUNTIME_POLICY,
+            "origin_provenance": import_evidence(root, root_origin.root / "provenance.json"),
+            "source_manifest": import_evidence(root, _child(root_origin.root, original["inputs"]["source_manifest"])),
+            "client": import_evidence(root, _child(root_origin.root, original["module_sources"]["page"]["neqo-qcsd-client"])),
+            "module_sources": {group: {name: import_evidence(root, _child(root_origin.root, ref))
+                                       for name, ref in original["module_sources"][group].items()}
+                               for group in ROOT_SCREEN_MODULES},
+            "installed_verification": {key: import_evidence(root, path) for key, path in root_proof_paths.items()},
+        }
+        if (payload["root_screen_runtime"]["origin_provenance"]["sha256"] != root_origin.provenance_sha256
+            or payload["root_screen_runtime"]["installed_verification"]["canonical"]["sha256"]
+               != root_screen_runtime_proof_sha256):
+            raise ValueError("root-screen original authority changed while retained inputs were copied")
+    durable_create(root / "provenance.json", _json(_bind(PROVENANCE_TYPE, payload)))
     context = load_admission_context(root)
     write_checkpoint(context)
     return context
@@ -336,12 +409,102 @@ def _runtime_source(raw: bytes, binding: Mapping[str, str]) -> dict[str, Any]:
     return {**value, "image_digest": binding["admission_image_digest"]}
 
 
+def _check_root_installed_verification(
+    raw: Mapping[str, bytes], binding: Mapping[str, str], runtime: Mapping[str, Any], client_sha: str,
+) -> None:
+    """Reopen actual installed-image check output and execution, not a flag alone."""
+    if set(raw) != {"canonical", "started", "completed", "stdout", "stderr"}:
+        raise ValueError("root-screen installed verification inventory changed")
+    canonical, started, completed, observed = (_load(raw[key]) for key in
+                                             ("canonical", "started", "completed", "stdout"))
+    if any(not isinstance(value, Mapping) for value in (canonical, started, completed, observed)):
+        raise ValueError("root-screen installed verification facts are malformed")
+    image = binding["admission_image_digest"]
+    command = started.get("command")
+    if (not isinstance(command, list) or len(command) != 17
+        or command[:6] != ["docker", "run", "--rm", "--network", "none", "--user"]
+        or not isinstance(command[6], str) or re.fullmatch(r"[0-9]+:[0-9]+", command[6]) is None
+        or command[7:] != ["--env", f"QCSD_LAB_IMAGE_DIGEST={image}", "--env", "QCSD_LAB_ROOT=/runtime-src",
+                           "--entrypoint", "/opt/qcsd-venv/bin/python3", image, "-I", "/recipe/verify_installed.py", "prepare"]
+        or type(completed.get("returncode")) is not int or completed["returncode"] != 0
+        or completed.get("stdout_sha256") != _sha(raw["stdout"])
+        or completed.get("stderr_sha256") != _sha(raw["stderr"]) or raw["stderr"] != b""
+        or not _utc(started["started_at"]) <= _utc(completed["completed_at"]) <= _utc(canonical["verified_at"]) <= datetime.now(UTC)):
+        raise ValueError("root-screen installed verification lacks intact actual execution")
+    observed_source = {**observed.get("source", {}), "image_digest": image}
+    if (canonical.get("installed_byte_verification_completed") is not True
+        or canonical.get("scientific_credit") is not False
+        or type(canonical.get("admitted_site_count")) is not int or canonical["admitted_site_count"] != 0
+        or type(canonical.get("formal_accepted_trace_count")) is not int or canonical["formal_accepted_trace_count"] != 0
+        or canonical.get("prepare_image_digest") != image
+        or canonical.get("exported_source_manifest_sha256") != binding["source_manifest_sha256"]
+        or canonical.get("installed_client_sha256") != client_sha
+        or canonical.get("checks", {}).get("prepare") != observed
+        or observed.get("role") != "prepare"
+        or observed.get("scope") != "installed-runtime-byte-and-source-verification-only"
+        or observed.get("image_digest") != image or observed_source != dict(runtime)
+        or observed.get("source_metadata_raw_sha256") != binding["source_manifest_sha256"]
+        or observed.get("client_sha256") != client_sha
+        or type(observed.get("site_credit")) is not int or observed["site_credit"] != 0
+        or type(observed.get("formal_accepted_trace_count")) is not int or observed["formal_accepted_trace_count"] != 0):
+        raise ValueError("root-screen installed verification changed source, image or actual client")
+
+
+def _verify_root_screen_runtime(context: AdmissionContext) -> dict[str, Any]:
+    role = context.root_screen_runtime
+    if (not isinstance(role, Mapping) or set(role) != {"policy", "origin_provenance", "source_manifest",
+        "client", "module_sources", "installed_verification"} or role["policy"] != ROOT_SCREEN_RUNTIME_POLICY):
+        raise ValueError("separate root-screen runtime fields changed")
+    original = _unpack(_read(_child(context.root, role["origin_provenance"])), PROVENANCE_TYPE)
+    if (set(original) != {"profile_version", "inputs", "module_sources", "execution_binding",
+                          "runtime_source", "not_before_utc", "created_at", "scientific_credit"}
+        or original["profile_version"] != 5 or original["scientific_credit"] is not False):
+        raise ValueError("retained root-screen origin is not the original runtime")
+    for key, raw in (("profile", context.profile_bytes), ("source", context.source_bytes),
+                     ("source_receipt", context.source_receipt_bytes), ("catalogue", context.catalogue_bytes)):
+        if original["inputs"][key]["sha256"] != _sha(raw):
+            raise ValueError("retained root screen changed its independently frozen inputs")
+    amendment = original["inputs"].get("selection_amendment")
+    if (amendment["sha256"] if amendment else None) != context.selection_amendment_sha256:
+        raise ValueError("retained root screen changed its prospective selection policy")
+    binding = profile._execution_binding(original["execution_binding"])
+    source_raw = _read(_child(context.root, role["source_manifest"]))
+    runtime = _runtime_source(source_raw, binding)
+    if (runtime != original["runtime_source"] or role["source_manifest"]["sha256"] != original["inputs"]["source_manifest"]["sha256"]
+        or runtime["neqo_commit"] != context.expected_runtime_source["neqo_commit"]):
+        raise ValueError("retained root-screen source identity changed")
+    modules = role["module_sources"]
+    if not isinstance(modules, Mapping) or set(modules) != set(ROOT_SCREEN_MODULES):
+        raise ValueError("retained root-screen implementation groups changed")
+    for group, names in ROOT_SCREEN_MODULES.items():
+        if (not isinstance(modules[group], Mapping) or set(modules[group]) != names
+            or {name: _sha(_read(_child(context.root, ref))) for name, ref in modules[group].items()}
+               != dict(context.mounted_module_hashes[group])
+            or {name: ref["sha256"] for name, ref in modules[group].items()}
+               != {name: ref["sha256"] for name, ref in original["module_sources"][group].items()}):
+            raise ValueError("retained root-screen survey components changed")
+    client_sha = _sha(_read(_child(context.root, role["client"])))
+    if (client_sha != context.mounted_module_hashes["page"]["neqo-qcsd-client"]
+        or client_sha != original["module_sources"]["page"]["neqo-qcsd-client"]["sha256"]):
+        raise ValueError("retained root screen requires the same actual native client")
+    proof = role["installed_verification"]
+    if not isinstance(proof, Mapping):
+        raise ValueError("retained root-screen installed proof is invalid")
+    _check_root_installed_verification({key: _read(_child(context.root, ref)) for key, ref in proof.items()},
+                                       binding, runtime, client_sha)
+    barrier = max(context.not_before_utc, _utc(original["not_before_utc"]))
+    if context.selection_amendment_bytes is not None:
+        barrier = max(barrier, context.browser_policy_not_before_utc)
+    return {"execution_binding": binding, "expected_runtime_source": runtime, "not_before_utc": barrier}
+
+
 def load_admission_context(root: Path) -> AdmissionContext:
     root = Path(root).resolve()
     raw = _read(root / "provenance.json")
     value = _unpack(raw, PROVENANCE_TYPE)
-    if set(value) != {"profile_version", "inputs", "module_sources", "execution_binding",
-                      "runtime_source", "not_before_utc", "created_at", "scientific_credit"}:
+    fields = {"profile_version", "inputs", "module_sources", "execution_binding",
+              "runtime_source", "not_before_utc", "created_at", "scientific_credit"}
+    if set(value) not in (fields, fields | {"root_screen_runtime"}):
         raise ValueError("acquisition provenance fields changed")
     if value["profile_version"] != 5 or value["scientific_credit"] is not False:
         raise ValueError("acquisition provenance grants unsupported authority")
@@ -372,8 +535,10 @@ def load_admission_context(root: Path) -> AdmissionContext:
     context = AdmissionContext(
         root, _sha(raw), inputs["profile"], inputs["source"], inputs["source_receipt"],
         inputs["catalogue"], binding, runtime, hashes, _utc(value["not_before_utc"]),
-        inputs.get("selection_amendment"),
+        inputs.get("selection_amendment"), value.get("root_screen_runtime"),
     )
+    if "root_screen_runtime" in value:
+        _verify_root_screen_runtime(context)
     context.candidates
     if context.selection_amendment_bytes is not None:
         from .rapid_browser_policy_evidence import implementation_sources
@@ -404,19 +569,18 @@ def verify_root_screen(
     candidate = context.candidate(candidate_id)
     paths = [_child(context.root, ref) for ref in references]
     group = "curated" if candidate["source_kind"] == "curated" else "fallback"
+    kwargs = context.root_screen_verification_kwargs
     cache_key = (
         tuple(ref["sha256"] for ref in references),
         _sha(_json(context.mounted_module_hashes[group])),
-        _sha(_json(context.expected_runtime_source)), context.not_before_utc.isoformat(),
+        _sha(_json(kwargs["execution_binding"])), _sha(_json(kwargs["expected_runtime_source"])),
+        kwargs["not_before_utc"].isoformat(),
     )
     cached = context.proof_cache["root"].get(cache_key)
     if cached is not None:
         decisions = cached
     else:
         decisions = None
-    kwargs = dict(execution_binding=context.execution_binding,
-                  expected_runtime_source=context.expected_runtime_source,
-                  not_before_utc=context.not_before_utc)
     if decisions is None and candidate["source_kind"] == "curated":
         decisions = profile.verify_v5_curated_h3_survey_logs(
             paths, context.profile_bytes, context.source_bytes, context.source_receipt_bytes,

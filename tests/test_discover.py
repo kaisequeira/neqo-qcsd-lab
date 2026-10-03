@@ -314,6 +314,9 @@ def _exercise_failed_cors_preflight_exception(
     dependent_method: str = "POST",
     dependent_resource: str = "Fetch",
     mutation: str | None = None,
+    resource_mapped: bool = False,
+    network_request_headers: list[list[str]] | None = None,
+    request_url: str = _FAILED_CORS_URL,
 ) -> tuple[dict, dict, dict]:
     """Construct the one narrowly receipted Network-without-Fetch exception."""
 
@@ -324,7 +327,7 @@ def _exercise_failed_cors_preflight_exception(
     preflight_id = "preflight-network"
     preflight_source = source
     fetch_source = source
-    preflight_url = _FAILED_CORS_URL
+    preflight_url = request_url
     preflight_resource = "Other"
     preflight_initiator = "preflight"
     preflight_cause: str | None = post_id
@@ -369,7 +372,7 @@ def _exercise_failed_cors_preflight_exception(
     elif mutation == "preflight-resource":
         preflight_resource = "Fetch"
     elif mutation == "dependent-resource":
-        post_resource = "Document" if dependent_method == "GET" else "XHR"
+        post_resource = "Document"
     elif mutation == "dependent-method":
         post_method = "HEAD"
     elif mutation == "preflight-initiator":
@@ -424,7 +427,10 @@ def _exercise_failed_cors_preflight_exception(
     preflight_audit = {
         "mapping": {"kind": "exclusion", "reason": preflight_audit_reason}
     }
-    post_audit = {"mapping": {"kind": "exclusion", "reason": post_audit_reason}}
+    post_audit = {"mapping": (
+        {"kind": "resource", "resource_id": 61} if resource_mapped else
+        {"kind": "exclusion", "reason": post_audit_reason}
+    )}
     fetch_audit: dict = {}
 
     def add_preflight(
@@ -491,20 +497,21 @@ def _exercise_failed_cors_preflight_exception(
             source,
             request_id=post_id,
             method=post_method,
-            url=_FAILED_CORS_URL,
+            url=request_url,
             resource_type=post_resource,
             initiator_type=post_initiator,
             initiator_request_id=post_cause,
             redirected=post_redirected,
             occurrence_id="post-occurrence",
             audit_event=post_audit,
+            network_request_headers=network_request_headers,
         )
         if duplicate_post:
             ledger.add_network(
                 source,
                 request_id=post_id,
                 method=post_method,
-                url=_FAILED_CORS_URL,
+                url=request_url,
                 resource_type=post_resource,
                 initiator_type=post_initiator,
                 initiator_request_id=post_cause,
@@ -564,11 +571,13 @@ def _exercise_failed_cors_preflight_exception(
 
 
 @pytest.mark.parametrize("order", ["options-first", "post-first"])
+@pytest.mark.parametrize("resource", ["XHR", "Fetch"])
 def test_failed_cors_preflight_exception_accepts_both_request_orders_and_claims_exactly(
     order: str,
+    resource: str,
 ) -> None:
     preflight_audit, fetch_audit, post_audit = _exercise_failed_cors_preflight_exception(
-        order=order
+        order=order, dependent_resource=resource,
     )
 
     assert preflight_audit == {
@@ -585,6 +594,53 @@ def test_failed_cors_preflight_exception_accepts_both_request_orders_and_claims_
             "preflight_occurrence_id": "preflight-occurrence",
         },
     }
+
+
+@pytest.mark.parametrize("order", ["options-first", "post-first"])
+@pytest.mark.parametrize("resource", ["XHR", "Fetch"])
+def test_observed_futura_failed_preflight_resource_keeps_network_header_authority(
+    order: str,
+    resource: str,
+) -> None:
+    # The URL, resource61 mapping and GET/XHR/failed-OPTIONS lifecycle reproduce
+    # the live mismatch. Headers are synthetic values testing conservation;
+    # the diagnostic ledger did not retain the live Network header projection.
+    headers = [["accept", "application/json"], ["origin", "https://www.futura-sciences.com"]]
+    _preflight, _fetch, actual = _exercise_failed_cors_preflight_exception(
+        order=order, dependent_method="GET", dependent_resource=resource,
+        resource_mapped=True, network_request_headers=headers,
+        request_url="https://static.fastcmp.com/tcfeuv2/consents.json",
+    )
+    assert actual == {
+        "mapping": {"kind": "resource", "resource_id": 61},
+        "interception_exception": {
+            "kind": "resource-blocked-after-failed-cors-preflight-v1",
+            "preflight_occurrence_id": "preflight-occurrence",
+            "network_request_headers": headers,
+        },
+    }
+
+
+def test_failed_preflight_resource_requires_real_network_header_observation() -> None:
+    with pytest.raises(DiscoveryIntegrityError, match="ledgers differ"):
+        _exercise_failed_cors_preflight_exception(
+            dependent_method="GET", dependent_resource="XHR", resource_mapped=True,
+        )
+
+
+@pytest.mark.parametrize("mutation", [
+    "missing-causal-id", "wrong-source", "wrong-url", "duplicate-preflight",
+    "duplicate-dependent", "duplicate-fetch", "dependent-resource", "dependent-redirect",
+    "dependent-response", "fetch-decision", "preflight-finished", "dependent-finished",
+    "preflight-blocked-reason", "dependent-blocked-reason", "dependent-terminal-before-preflight",
+])
+def test_failed_preflight_resource_rejects_inexact_causal_proof(mutation: str) -> None:
+    with pytest.raises(DiscoveryIntegrityError, match="ledgers differ"):
+        _exercise_failed_cors_preflight_exception(
+            order="post-first" if mutation == "dependent-terminal-before-preflight" else "options-first",
+            dependent_method="GET", dependent_resource="XHR", resource_mapped=True,
+            network_request_headers=[], mutation=mutation,
+        )
 
 
 @pytest.mark.parametrize("order", ["options-first", "post-first"])
@@ -1135,9 +1191,11 @@ def test_request_stage_admission_rejects_a_response_stage_event():
 
 
 @pytest.mark.parametrize("shutdown_case", ["none", "network-fetch", "network-only"])
+@pytest.mark.parametrize("network_header_case", ["observed", "empty", "absent"])
 def test_discover_page_installs_request_stage_policy_before_navigation(
     monkeypatch,
     shutdown_case: str,
+    network_header_case: str,
 ):
     clock_ns = [0]
     driver_validations = []
@@ -1231,6 +1289,19 @@ def test_discover_page_installs_request_stage_policy_before_navigation(
     ]
     for event in events:
         event["initiator"] = {"type": "other"}
+    repeated_request = next(event for event in events if event["requestId"] == "cdn-repeat")
+    if network_header_case == "empty":
+        repeated_request["request"]["headers"] = {}
+    elif network_header_case == "absent":
+        repeated_request["request"].pop("headers")
+    network_header_witnesses = {}
+    original_add_network = _RequestObservationLedger.add_network
+
+    def capture_network_headers(self, source, **parameters):
+        network_header_witnesses[parameters["request_id"]] = parameters["network_request_headers"]
+        return original_add_network(self, source, **parameters)
+
+    monkeypatch.setattr(_RequestObservationLedger, "add_network", capture_network_headers)
 
     class Session:
         def __init__(self) -> None:
@@ -1616,6 +1687,11 @@ def test_discover_page_installs_request_stage_policy_before_navigation(
         ["accept", "*/*"],
         ["x-qcsd-cutoff", "scientific"],
     ]
+    # Exercise the actual Network.requestWillBeSent producer callback, not only
+    # hand-built ledger entries: absence cannot fabricate an empty witness.
+    assert network_header_witnesses["cdn-repeat"] == {
+        "observed": [["accept", "*/*"]], "empty": [], "absent": None,
+    }[network_header_case]
     assert result.observed_request_count == 8
     assert result.expandable_origins == [
         "https://cdn.test",

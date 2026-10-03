@@ -41,7 +41,57 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Latest operational update, 3 October:**
+**Latest operational update, 3 October:** context **010** has **one sealed
+screening decision and no admitted site** at `2026-10-03T00:38:38.860792Z`.
+The first decision grants zero site or capture credit; candidate 2 is next.
+The study remains **0/50 admitted sites and 0/16,000 formal traces**.
+
+**Preserved context 009:** it stopped at `2026-10-02T23:39:26.725449Z`, with **nine sealed
+screening decisions and no admitted site**. Poki's tenth attempt completed
+all **278 requests** in each of three replay visits, but an auxiliary SDK
+JavaScript body changed: **2,672, 2,713 and 2,702 bytes**, with different
+hashes. A generic preparation error stopped the controller. The failed
+attempt and all three raw replays remain preserved, with zero study credit.
+
+The published repair records verified non-primary response drift as a typed
+unsuccessful preparation, preserving strict identity checks and independently
+reopenable full-graph proof. The browser collector also stops waiting for
+optional internal error-page resources that were never requested; observed
+resource ownership, ordering and completion checks remain required. **365
+collector checks and 27 preparation/routing checks passed**. These are
+engineering checks, not a live-site pass.
+
+The published repair's matching runtime is verified. Its two images built in **60.70 and
+61.21 seconds**, and both passed checks of their actual installed source and
+client bytes. The unchanged native client was reused with its original build
+proof; no new native compilation is claimed. Fresh context **010** initialized
+at `2026-10-03T00:14:17.176833Z`, in **7.535 seconds**, with zero admissions.
+A separate fresh Futura discovery diagnostic failed after **33.977 seconds**
+at the comparison of HTTP observations with request-stage interception
+records. It did not raise the earlier passive-render timeout, but it did not
+produce a successful graph or admission. That new failure remains saved.
+The [evidence index](docs/EVIDENCE-INDEX.md#current-response-drift-runtime-and-context-010)
+records the source, runtime, reuse proof and failed attempts.
+
+An independent fresh Poki diagnostic then completed in **120.327 seconds**.
+It produced and independently reopened the typed response-drift proof:
+**31 retained raw files and three complete 278-request replays**. Seven
+auxiliary resource identities changed; the primary HTML document's permitted
+body variation was handled separately. The full graph remains intact, and
+the site still earns **zero eligibility or capture credit**. This confirms
+the repaired rejection path, not a successful site preparation.
+
+Two further source fixes are reviewed and ready for prospective use. The
+Futura collector fix records requests that Chrome blocks after a failed CORS
+preflight, retaining their observed headers and complete graph without
+inventing an interception event. **274 focused discovery checks passed**.
+The optional root runtime binding lets a new context reopen unchanged root
+screens with their original image, source and timestamps, while fresh page
+and preparation work uses the new runtime. **14 focused root-runtime cases
+and three legacy checks passed**. These are engineering results recorded with
+the combined source changes; a matching new runtime and fresh live pass remain
+outstanding at this documentation snapshot.
+
 [selection revision 6](config/curated-sources/crux73-tranco600-rapid-v5-selection-v6.json)
 is published at `2026-10-02T22:01:23.089910Z`. Its implemented rule permits
 body-size and hash variation only for the complete, successful primary HTML
@@ -50,13 +100,15 @@ admission, it also requires a stable same-origin auxiliary response of at
 least **1,200 bytes** as a potential padding candidate. This early capacity
 check does not replace sustained padding qualification.
 
-The native stream-limit scheduling repair is published. **28 focused tests
+**Earlier native-only verification:** the stream-limit scheduling repair is
+published. **28 focused tests
 and strict library Clippy passed**, and its cached native-only client build
 completed in **121 seconds**. A fresh native-only live replay then completed
 all **260 requests in 6.617 seconds**: 259 HTTP 200 responses and one complete
 HTTP 401 response. The previously blocked 52 requests completed. Matching
-Python images, fresh complete-site admission and live capture proof have not
-been established for this source; the diagnostic grants no study credit.
+Python images were not established by that diagnostic; the later installed
+runtime checks above have their own scope. Fresh complete-site admission and
+live capture proof remain outstanding. The diagnostic grants no study credit.
 
 The preceding response-policy build took **111 seconds** and passed checks
 of its actual installed source and client bytes. Its fresh Poki preparation

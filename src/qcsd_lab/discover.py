@@ -110,6 +110,7 @@ class _NetworkObservation:
     terminal_sequence: int | None = None
     occurrence_id: str = ""
     audit_event: dict[str, Any] | None = None
+    network_request_headers: list[list[str]] | None = None
     fetch_matches: int = 0
     blocked_preflight_occurrence_id: str | None = None
 
@@ -163,6 +164,7 @@ class _RequestObservationLedger:
         redirected: bool = False,
         occurrence_id: str | None = None,
         audit_event: dict[str, Any] | None = None,
+        network_request_headers: list[list[str]] | None = None,
     ) -> None:
         if not self._eligible(method, url):
             return
@@ -186,6 +188,7 @@ class _RequestObservationLedger:
                 sequence=self._sequence,
                 occurrence_id=identity,
                 audit_event=audit_event,
+                network_request_headers=deepcopy(network_request_headers),
             )
         )
         self._reconcile(request_id)
@@ -336,6 +339,12 @@ class _RequestObservationLedger:
                 "kind": "blocked-after-failed-cors-preflight-v1",
                 "preflight_occurrence_id": preflight.occurrence_id,
             }
+            if network.audit_event["mapping"]["kind"] == "resource":
+                network.audit_event["interception_exception"] = {
+                    "kind": "resource-blocked-after-failed-cors-preflight-v1",
+                    "preflight_occurrence_id": preflight.occurrence_id,
+                    "network_request_headers": deepcopy(network.network_request_headers),
+                }
         if unmatched_fetches or any(
             item.blocked_preflight_occurrence_id is None for item in unmatched_networks
         ):
@@ -355,17 +364,27 @@ class _RequestObservationLedger:
     ) -> _NetworkObservation | None:
         if network.request.method == "POST":
             dependent_allowed = (
-                network.resource_type == "Fetch"
+                network.resource_type in {"XHR", "Fetch"}
                 and self._audit_exclusion_reason(network) == "unsafe method: POST"
             )
         elif network.request.method == "GET":
             # Chromium can report a script XHR/Fetch GET in Network without a
             # Fetch pause when our policy has already failed its OPTIONS
-            # preflight. Only a separately excluded, unapproved origin can
-            # use this exception; a replay resource still requires Fetch.
+            # preflight. An approved replay resource must retain its exact
+            # observed Network headers under a distinct proof; it cannot borrow
+            # the excluded-request path or claim a Fetch pause that never ran.
+            mapping = network.audit_event.get("mapping") if network.audit_event else None
+            resource_allowed = (
+                isinstance(mapping, Mapping)
+                and set(mapping) == {"kind", "resource_id"}
+                and mapping["kind"] == "resource"
+                and type(mapping["resource_id"]) is int
+                and mapping["resource_id"] >= 0
+                and network.network_request_headers is not None
+            )
             dependent_allowed = (
                 network.resource_type in {"XHR", "Fetch"}
-                and self._audit_exclusion_reason(network) == "origin not approved"
+                and (self._audit_exclusion_reason(network) == "origin not approved" or resource_allowed)
             )
         else:
             return None
@@ -1755,6 +1774,10 @@ def discover_page(
                     initiator_request_id = initiator.get("requestId")
                     redirected = event.get("redirectResponse") is not None
                     chain_key = source.request_chain_key(request_id)
+                    network_headers: dict[str, str] | None = None
+                    if reason is None and isinstance(request.get("headers"), Mapping):
+                        network_headers = {}
+                        merge_request_headers(network_headers, request["headers"])
                     observation_ledger.add_network(
                         source,
                         request_id=request_id,
@@ -1770,6 +1793,10 @@ def discover_page(
                         redirected=redirected,
                         occurrence_id=str(audit_event["occurrence_id"]),
                         audit_event=audit_event,
+                        network_request_headers=(
+                            safe_discovery_headers(network_headers)
+                            if network_headers is not None else None
+                        ),
                     )
                     occurrence = occurrence_counts.get(chain_key, 0)
                     occurrence_counts[chain_key] = occurrence + 1
