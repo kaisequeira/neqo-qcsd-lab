@@ -1,6 +1,6 @@
 # Rapid capture path: from candidates to 16,000 verified traces
 
-**Planning and implementation status, 3 October 2026 (Australia/Sydney).** This is the run order
+**Planning and implementation status, 4 October 2026 (Australia/Sydney).** This is the run order
 for the prospective [50-site study](RAPID-CLASS-STUDY.md). Its formal target is
 **50 websites × five traffic settings × 64 visits = 16,000 accepted traces**.
 The five settings are undefended, FRONT, Tamaraw, BuFLO and CS-BuFLO. The
@@ -13,6 +13,24 @@ The [targeted capture repairs](RAPID-CAPTURE-REPAIRS.md) explain the variable
 homepage credit fix, endpoint-specific final UDP drain evidence and explicit
 prospective BuFLO incoming tolerance. They require fresh affected captures;
 the previous failed attempts keep their original results.
+
+**Latest source milestone, 4 October, 00:43 Sydney (3 October, 14:43 UTC):**
+Lab `5eca1fe` locally integrates the prospectively declared
+[V12 terminal-primary rule](RAPID-V12-TERMINAL-PRIMARY-CELL.md).
+The exact fifteen committed files passed **127 focused checks in 158 seconds**,
+including the fifty-site cohort and **16,000-slot** planner. A final partial
+primary cell stays recorded as missed, with actual retired bytes; its raw FIN
+production and later controller processing are explicitly linked. Matching
+Native `39464c62` passed **442 core, three real HTTP/3 peer and 44 runner
+cases**. Its complete committed source matches the tested snapshot. The
+buffered-peer tests verified the actual exhausted-credit opportunity repair,
+whole owned cells and honest terminal retirement. Installed runtime remains
+pending. The short five-setting
+driver and fresh site-search commands are ready, but neither has run V12.
+The next sequence is matching source/runtime, short live checks, then fresh
+site admission. Counters remain **0/50 sites, 0/50 shakedown traces and
+0/16,000 formal traces**. See the
+[exact source proof](EVIDENCE-INDEX.md#v12-terminal-primary-policy-and-lab-source-checks).
 
 **Latest live milestone, 3 October, 13:14 UTC:** the clean `838da86` /
 Native `616a0cdb` runtime and all thirteen first-site operations are closed.
@@ -28,7 +46,7 @@ The recorded failures gain no new authority. Current study counters remain
 **0/50 sites, 0/50 shakedown traces and 0/16,000 formal traces**. See the
 [closed attempts and next repair](EVIDENCE-INDEX.md#installed-v11-runtime-and-remaining-live-data-stall).
 
-**Latest source milestone, 3 October, 12:27 UTC:** published Native
+**Earlier source milestone, 3 October, 12:27 UTC:** published Native
 `616a0cdb` fixes the minimum DATA opportunity and passed **457 focused
 checks**, including a real HTTP/3 peer test. The integrated
 [V11 FRONT policy](RAPID-SELECTION-V11.md) and call-local rule calculation

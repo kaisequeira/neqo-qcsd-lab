@@ -11,6 +11,109 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ### Successor startup and endpoint engineering checks
 
+#### V12 terminal-primary policy and Lab source checks
+
+The prospective [V12 policy](RAPID-V12-TERMINAL-PRIMARY-CELL.md) was
+declared at **2026-10-03T13:55:21Z**, before live use. Its tracked declaration
+`config/curated-sources/crux73-tranco600-rapid-v5-selection-v12.json`
+has SHA-256
+`067a9deac3e034c3b976fe6724d1a2d35f995152aab595945d8e009659d31b7e`.
+It inherits the exact V11 parent and retains **50 sites × five settings ×
+64 visits = 16,000 accepted formal traces**.
+
+Lab author commit `961666219454f3666c8b3ea1735f6238431f70ec` is integrated
+locally as `5eca1fedff3b29789c6cfc4b9f994bebfa1b680f`. Root independently
+reopened all fifteen committed files, the clean author checkout, unchanged
+Native Gitlink, actual command/log/terminal records and eleven prior
+declarations. The final operation ran from **14:08:26.853147 UTC** to
+**14:11:05.156682 UTC**, closed **0**, and passed **127 checks**; pytest
+reported **157.98 seconds**, with actual operation elapsed **158.323 seconds**.
+The scope includes raw FIN/ownership/split negatives, complete preparation
+and private admission, intrinsic capture and ordinary deep hooks, the final
+fifty-site cohort/planner, and affected Tamaraw, BuFLO, FRONT and CS-BuFLO guards.
+
+Actual records are in
+`../diagnostic-rehearsals/rapid-v12-terminal-primary-lab-checks-20261003-001/`:
+
+| Artifact | SHA-256 |
+|---|---|
+| `final-causal-source-closure.json` | `1992334eec65deb38058001cd3c6f09bcc776b3f197b392dc0caae5a3c9a5b54` |
+| `final-causal-source-before.json` | `11b851a8b23f08895150e9e6ea2f8a17020db96cf59f1d46694a8dc9611fa847` |
+| `final-causal-source-after.json` | `195dd8972ab1e4a2e7afdc845f3b6525c09d7e41bb480d002c675a3e7fd89f86` |
+| `final-causal-focused.log` | `b2c634c9ea8d858c0be8cae0a8ef7822822c55e3386674fb63655c395d35a864` |
+| `final-committed-source-binding.json` | `bb478817b590700207888bbc21360cd66e64b9183fd3454bfe42d54d74a02322` |
+
+The source contracts are a twelve-field policy marker, sixteen-field partial
+proof, eight-field actual resource0 stream binding and six-field FIN
+production-to-controller-processing binding. Source review corrected a
+guaranteed clock mismatch before live use: FIN production can precede its
+controller reduction. Both clocks and their original event identity remain
+recorded. Informational and trailer HEADERS are also retained while requiring
+the actual successful final response status. Raw `ReceiveCreditRetired` stays
+missed; consumed and retired bytes remain distinct.
+
+The interrupted earlier final attempt `final-focused.log` preserves **118
+passing cases**, **131.40 seconds** and exit **2**. Its source and logs are not
+promoted to the final causal source. Development failures and their short
+corrective runs remain in the same namespace.
+
+Native commit `39464c626cf1c39a48b74600a440b38b1eeceac2` is integrated.
+Root independently reopened all **1,783 committed files** against the actual
+tested `source-006` snapshot, all sixteen successful compile/test operations,
+their actual source/command/start/terminal/log hashes, and three copied test
+binary hashes. The final combined three-crate compilation closed **0** at
+**14:32:28.983 UTC** in **204.536 seconds**. Exact source passed **442 core
+cases, two new real buffered HTTP/3 peer cases, one legacy peer case and 44
+focused runner cases**. The runner scope includes kernel attribution,
+pre-arm reservation, history beyond 4,096 selections, prepared V12 policy,
+actual primary stream binding and causal FIN clocks, plus affected legacy
+source families. These are source engineering checks, not live site or
+formal trace credit.
+
+The final `committed-source.json` SHA-256 is
+`9c6a80a9a603393810eb0815b29555786ddde63a5df1f3cfd6388e64a150f591`;
+`checks-complete.json` is
+`ee7726fdd14546797daacebf363b9d8384d284aa70f4df828fa7c11896a9a57c`.
+Stable rustfmt completed successfully; unsupported nightly configuration
+warnings remain in its original stderr. This does not claim the broad
+historical CI suite was rerun.
+
+Actual Native records are in
+`../diagnostic-rehearsals/owned-cell-continuation-native-checks-20261003-001/`.
+The exact `source-006-inventory.json` SHA-256 is
+`ec0737936b9d980601c95a183324662cca8f32c571f2d6406f1b11162ce67a40`.
+`compile-all-003-binary-bindings.json` identifies the actual copied core,
+HTTP/3 and runner binaries; each direct operation has its own `-command.json`,
+`-started.json`, `-completed.json`, `-stdout.log` and `-stderr.log`.
+
+Earlier failures are retained. The first core run passed 436 cases and failed
+six fixture preconditions; initial new peer fixtures had the wrong endpoint.
+After those corrections, `peer-owned-002` exposed a real production omission:
+the old opportunity filter dropped the primary stream when both exact and
+unowned metadata allowance reached zero. The narrow V12 correction permits
+only the actually bound primary stream with a whole due owned cell and the
+strict recorded parser frontier. It leaves the lifetime 1,000-byte unowned
+budget unchanged. Both real buffered-peer cases now pass at their actual
+1,200-byte BuFLO and 600-byte CS-BuFLO sizes, including final short-read
+retirement; retired bytes never become a satisfied full cell.
+
+Fresh operational adapters are authored in
+`../diagnostic-rehearsals/rapid-v12-capture-canary-20261003-001/` and
+`../diagnostic-rehearsals/rapid-v12-acquisition-init-recipe-20261003-001/`.
+The short-check driver adds exactly four preparation flags before the
+manifest hash, keeps all 260 original resources/four origins as lineage,
+requires exact paced-mode markers and raw partial proof, and grants zero
+study credit. Independent adapter review verified the exact eight source
+groups **3/3/5/7/10/8/13/21**, official CLI/coordinator arguments, bootstrap
+mounts and current registry type. Actual source freeze, matching runtime,
+new namespace 016, initialization and fresh root screens remain pending.
+The staged V11 namespace 015 remains uninitialized and preserved.
+
+Current scientific counters are **0/50 admitted sites, 0/50 shakedown traces
+and 0/16,000 formal traces**. The installed V11 runtime cannot validate the
+new V12 Native behavior; matching installed source and
+fresh short captures remain required.
+
 #### Installed V11 runtime and remaining live DATA stall
 
 The clean execution checkout uses Lab

@@ -1,6 +1,6 @@
 # QCSD thesis project ledger
 
-Checkpoint: **3 October 2026, Australia/Sydney (AEST, UTC+10)**.
+Checkpoint: **4 October 2026, Australia/Sydney (AEST, UTC+10)**.
 This is the current research ledger. The [history](docs/PROJECT-HISTORY.md)
 preserves the development record, the [class-study runbook](docs/CLASS-STUDY.md)
 defines continuation, and the [capture-readiness guide](docs/CAPTURE-READINESS.md)
@@ -41,6 +41,27 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
+**Latest source milestone, 4 October, 00:43 Sydney (3 October, 14:43 UTC):**
+the [V12 terminal-primary rule](docs/RAPID-V12-TERMINAL-PRIMARY-CELL.md)
+is declared before live use and integrated locally as Lab `5eca1fe`.
+All fifteen committed files and eleven prior declarations independently
+reopen; the final focused Lab operation passed **127 checks in 158 seconds**.
+It retains the complete **50 × five × 64 = 16,000** grid. Raw FIN production
+and controller processing clocks are explicitly linked; a permitted final
+partial cell retains its real consumed/retired split and missed outcome.
+The matching Native `39464c62` passed **442 core cases, three real HTTP/3
+peer cases and 44 focused runner cases**. All 1,783 committed source files
+match the tested immutable snapshot. The real buffered-peer test exposed
+and verified a correction to the exhausted-credit stream filter; actual
+owned whole-cell grants now reach that stream. Final short reads retain
+their real consumed/retired split. Native is integrated; matching installed
+runtime and fresh live proof remain pending. The V11 runtime does not supply
+V12 live authority. Fresh short-check and site-search commands
+are prepared, with all eight implementation inventories independently checked.
+No V12 live acquisition or capture has started. Counters remain **0/50 sites,
+0/50 shakedown traces and 0/16,000 formal traces**. See the
+[V12 source evidence](docs/EVIDENCE-INDEX.md#v12-terminal-primary-policy-and-lab-source-checks).
+
 **Latest live milestone, 3 October, 13:14 UTC:** clean Lab `838da86` /
 Native `616a0cdb` has a matching independently reopened installed runtime;
 all twelve build/check/export operations closed 0. The fresh five-setting
@@ -58,7 +79,7 @@ policy are being authored and checked in isolated source. Failed attempts
 remain failed. Scientific counters are **0/50 sites, 0/50 shakedown traces
 and 0/16,000 formal traces**. See the [actual V11 records](docs/EVIDENCE-INDEX.md#installed-v11-runtime-and-remaining-live-data-stall).
 
-**Latest source milestone, 3 October, 12:27 UTC:** Native `616a0cdb` is
+**Earlier source milestone, 3 October, 12:27 UTC:** Native `616a0cdb` is
 published on `main` and the desktop branch. The owned-credit repair leaves
 room for the HTTP/3 sender's minimum three-byte DATA write, with physical
 ownership and unused credit retirement preserved. Exact committed bytes
