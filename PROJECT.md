@@ -41,11 +41,23 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Latest operational update, 3 October:** fresh context **012** has **two sealed
-screening decisions and no admitted site** at `2026-10-03T01:19:38.872662Z`.
-Candidate 3, Albumaty, is next in its immutable checkpoint. The first bounded
-batch is running, stopping at its first admitted site or 60 actions.
+**Latest operational update, 3 October:** context **012** has **eight sealed
+screening decisions and no admitted site** at `2026-10-03T01:50:37.460971Z`.
+Its bounded batch stopped with exit 1 at `2026-10-03T01:50:39.831931Z`, after
+**34 minutes 32 seconds**. Futura's selected page ordinal 2, preparation
+attempt 10, exceeded the 32-origin convergence bound after browser discovery.
+The failure occurred outside the observer, leaving a generic unsealed error
+without retained origin-list proof. It is not a scientific site rejection.
 The study remains **0/50 admitted sites and 0/16,000 formal traces**.
+
+The portable host coordinator is published separately as `e84b30f`, with
+**18 focused checks and independent review**. It keeps one selected-page
+budget over the unchanged candidate history and does not rebuild the matched
+image for operator routing changes. The stopped 012 error still blocks it.
+A prospective source fix is in progress; no repaired context, matching new
+runtime or replacement launch is claimed. The
+[rapid runbook](docs/RAPID-CAPTURE-PATH.md#portable-host-coordinator) explains
+the separate operator and scientific-verifier roles.
 
 The combined collector and separate-root-runtime fixes are published. The
 new matching images built in **59.713 and 65.533 seconds**, and their installed

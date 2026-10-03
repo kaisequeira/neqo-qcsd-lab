@@ -9,16 +9,23 @@ zero formal credit**. The earlier 100-site and 20-site contracts are separate
 historical studies; their long build, browser-vector, fitting and nine-mode
 sequence does not gate this prospective five-setting study.
 
+The current admission contract is [selection revision 6](../config/curated-sources/crux73-tranco600-rapid-v5-selection-v6.json)
+under the unchanged v5 profile. It preserves full multi-origin graphs, exact
+selected-page HTTP/3 proof and three complete replay witnesses. Complete
+4xx/5xx responses may remain only on eligible non-primary terminal leaves;
+only primary Document 0 may vary its complete body size/hash. Other resource
+identities and qualified padding responses remain exact.
+
 ## What happens, in order
 
 | Step | Action | Evidence needed to advance | Current state |
 |---:|---|---|---|
-| 1 | Freeze the candidate sources and runtime. | Exact source hashes, ordered [v5 rapid profile receipt](../config/curated-sources/crux73-tranco600-rapid-v5.profile.json), image digests, fixed defense parameters and launcher-source hashes. | V5 is frozen (SHA-256 `f7eb0228a06429cc2ae91d0f9d52577399e15b68f4915d41cb60291445542b60`), preserving 73 supplied candidates, 600 fallback candidates and 50 × 5 × 64. Clean matching collection and prepare images exist. **Selection revision 4 is published and context 006 initialized successfully, without an image rebuild.** Installed-runtime preflight 002 passed; it grants no lane or trace credit. |
-| 2 | Find usable pages. | Record verified decisions in frozen order. Revision 4 keeps the automatic public URL/domain screen, controlled homepage observation, separate controlled HTTP/3 pass on the exact selected page, complete browser-observed graph, stable replay and live cross-origin resource. Try each deterministic selected page at most once. | All **73 fresh v5 curated first-screen decisions** independently verify: **31 known-valid, 27 ambiguous, six peer TLS failures, two timeouts and seven automatic safety skips**. A fresh 40-candidate fallback batch adds one known-valid homepage and seven completed-response leads. Context 006's first **two 20-action batches completed normally**, with **16 candidate decisions and zero admissions**. A new **40-action** batch uses the revised page-selection helper. Its first action brought the count to **17 decisions, zero admissions**, observed at 18:46 UTC. Fresh failure inventories have been independently reopened. **0/50 final sites admitted at this update.** |
-| 3 | Prepare and qualify the first ten sites. | Ten verified prepared workloads, with five-site response-qualification sets matching the exact workload and source bytes. | The historical one-workload qualifier independently reloads through the collection-image bridge. As soon as the first study site is prepared, check locally for a main-origin response of at least **1,200 bytes**, then use one-site qualification and a five-setting diagnostic to find capture problems before the ten-site milestone. These early checks give zero study credit. |
-| 4 | Run the ten-site shakedown across all five settings. | 50 complete, individually deep-verified diagnostic traces, including both BuFLO modes, with failures preserved and repaired before formal capture. | All five settings now have individual clean-runtime diagnostic passes on one historical workload: CS-BuFLO **1/1**, BuFLO retry 004 **1/1**, FRONT and Tamaraw accepted, and a fresh undefended two-second-settle successor **1/1**. The previous undefended attempt lacked 45 tail packets and remains failed. These separate passes do not supply the ten-site shakedown. **0/50 study shakedown traces accepted.** |
+| 1 | Freeze the candidate sources and runtime. | Exact source hashes, ordered [v5 rapid profile receipt](../config/curated-sources/crux73-tranco600-rapid-v5.profile.json), revision-6 receipt, image digests, fixed defense parameters and launcher-source hashes. | Published Lab source `74805e4` has matching collection and prepare images in runtime 002. Context 012 independently retains the original d99 root-screen runtime and uses the new 748 runtime for page work. The same 73 curated and 40 fallback root observations reopened without rescreening. Installed-runtime checks grant no lane or trace credit. |
+| 2 | Find usable pages. | Record verified decisions in frozen order. Keep the controlled root observation, separate controlled H3 pass on the exact selected page, automatic URL/domain screen, complete graph, registered response stability and live cross-origin resource. | Latest inspected 012 checkpoint: **eight sealed decisions, zero admitted sites**, at `2026-10-03T01:50:37.460971Z`; Futura is next. The private controller exited 1 on the origin-budget blocker described below. A prospective source fix is being implemented; no replacement context or coordinator launch is claimed. **0/50 final sites admitted.** |
+| 3 | Prepare and qualify the first ten sites. | Ten verified prepared workloads, with five-site response-qualification sets matching the exact workload and source bytes. | Revision-6 admission already screens for a stable, known-valid, same-origin auxiliary body of at least **1,200 bytes**. Sustained padding qualification remains separate. The first-site canary 003 recipe is ready only; it has not been staged or executed. A prepared first site will receive one-workload qualification and a five-setting diagnostic before expanding the shakedown. |
+| 4 | Run the ten-site shakedown across all five settings. | 50 complete, individually deep-verified diagnostic traces, including both BuFLO modes, with failures preserved and repaired before formal capture. | Historical individual clean-runtime diagnostic passes exist on one workload: CS-BuFLO **1/1**, BuFLO retry 004 **1/1**, FRONT and Tamaraw accepted, and an undefended two-second-settle successor **1/1**. The earlier undefended attempt lacked 45 tail packets and remains failed. These separate passes do not supply the ten-site shakedown. **0/50 study shakedown traces accepted.** |
 | 5 | Admit 50 sites and freeze formal inputs. | A verified 50-site cohort receipt, exact workloads and qualification sets, fixed parameters, complete lane plan and launch manifest. | 50-site live yield is unproven; the 600-domain catalogue supplies further candidates under the same checks. |
-| 6 | Capture the formal grid. | Each defense lane is a separately named, frozen campaign. Deep verification must show its exact sites, setting, visit slots, source/image binding and complete result seal. | The planner and capture adapter represent 800 lanes, retain failed attempts and verify final manifest closure. The frozen runtime check passed. The completed supervisor passed real parent-interruption tests; retirement and successor tests also passed, with Docker actuation substituted. No v5 50-site cohort or formal bound lane has run. **0/16,000 formal traces accepted.** |
+| 6 | Capture the formal grid. | Each defense lane is a separately named, frozen campaign. Deep verification must show its exact sites, setting, visit slots, source/image binding and complete result seal. | The planner and capture adapter represent 800 lanes and preserve failed attempts. Historical runtime and parent-interruption checks have their original source bindings; they do not establish a current study lane. No 50-site cohort or formal bound lane has run. **0/16,000 formal traces accepted.** |
 | 7 | Close the evidence campaign. | One manifest enumerating all 16,000 unique accepted slots and result-seal hashes, verification output for each lane, recorded failures and restarts, and a portable source commit. | Pending capture. |
 
 The planned grid divides 50 sites into ten groups of five. Each of 16 time
@@ -32,8 +39,8 @@ systematically favor one setting.
 
 | Work | Planning estimate | What can change it |
 |---|---|---|
-| Root HTTP/3 screen | All 73 fresh supplied-site decisions are verified. A further 40-candidate clean fallback batch took about **4 minutes 10 seconds**. | Public network and control failures cause a fresh, preserved attempt. Root decisions grant no site credit. |
-| Browser discovery, replay and 50-site admission | **Unknown.** One recent direct discovery finished in 25 seconds, while other pages failed around the 30-second quiescence limit. | Live page behavior and the number of fallback candidates dominate this stage. A root success is not a prepared site. |
+| Root HTTP/3 screen | The existing 73 curated plus 40 fallback observations reopened for 012 in **2.647 seconds**; they were not rerun. An older 40-candidate fallback batch took about **4 minutes 10 seconds**. | Reuse requires unchanged survey components, native client, actual original runtime proof and applicable freshness barriers. Root decisions grant no site credit. |
+| Browser discovery, replay and 50-site admission | **Unknown.** Fresh Poki full replay/rejection proof took **120.327 seconds**; the Futura convergence diagnostic failed after **89.361 seconds**. | Live page behavior and candidate yield dominate. The default one-page operator budget limits exploration, not the successful-admission requirements. A root success is not a prepared site. |
 | First ten-site, five-setting shakedown | About **53–109 minutes of recording time** for 50 visits at older 63–131 second per-visit rates, plus site preparation, response qualification and verification. | A complete five-setting shakedown on admitted study sites has not run. Short historical-workload tests diagnose individual capture failures first. |
 | Full formal grid | About **12–25 days of serial recording time** for 16,000 visits at those older rates, before retries and verification. | Parallel speedup is unmeasured and requires a separate fidelity/throughput trial. |
 
@@ -53,7 +60,77 @@ changes to the source-bound container images.
 
 ## Current checks and remaining blockers
 
-**Latest update:** context 007's independently reopened checkpoint has
+The matching runtime 002 verifies the published 748 source and the unchanged
+native client. Context 012 initialized successfully and retained the same
+113 original root observations with their old runtime identity. The fresh
+Futura diagnostic passed three formerly failing interception-ledger stages,
+then reached the 30-second passive-render cap with one request active. It
+produced no final graph or admission. Poki's separate typed failure proof
+retains three complete 278-resource replays and seven unstable auxiliary
+identities; those complete downloads are not a stable admitted workload.
+Exact runtime, proof and checkpoint locations are recorded in the
+[evidence index](EVIDENCE-INDEX.md#current-preflight-runtime-and-context-012).
+
+The actual 012 private controller stopped with exit 1 at Futura's selected
+page ordinal 2, preparation attempt 10. Browser discovery returned, but origin
+convergence then exceeded its 32-origin bound outside the observed backend
+call. The attempt retained a generic operational error, without an observed
+origin-list proof. That error remains unchanged and unsealed. A prospective
+source fix is being implemented to retain this actual failure through the
+source-bound unsuccessful-attempt route; no new main context, image or
+replacement launch exists yet. Study counters remain **0/50 admitted sites,
+0/50 shakedown traces and 0/16,000 formal traces**.
+
+### Portable host coordinator
+
+The new [host coordinator](../tools/rapid_acquisition_control.py) provides a
+portable operator loop, committed separately as operator commit `e84b30f`.
+It has not replaced the stopped 012 controller. That context's generic error
+still blocks automatic continuation; the next launch awaits the prospective
+repair and its fresh source-bound context. Its `--help` lists explicit context, clean verifier
+checkout, Docker bootstrap, root registry and create-only operator-log paths,
+each with its selected hash or source identity. The operator code and the
+scientific verifier have separate commits: `--operator-commit` binds the host
+coordinator's exact bytes; `--source-commit` binds the unchanged clean checkout
+that owns admission and the matched image. Changing the host's page-routing
+policy does not install new scientific code in that image or require an image
+rebuild.
+
+The default `--page-budget 1` means **one distinct selected page per candidate
+over that candidate's entire unchanged context history**. Restarting the host
+loop or choosing a new operator-log directory does not reset that count.
+An already verified page sequence completes its remaining probe, screen,
+preparation and evidence decision before moving on; an interrupted intent
+still blocks rather than being retried automatically. Already observed history
+is retained even if it exceeds the new budget. Unattempted alternative ordinals remain
+**unassessed**, not failed or scientifically ineligible. Successful admission
+still requires the frozen revision-6 full-graph proof.
+
+Before acting, the coordinator reopens actual history and supporting receipts
+through the frozen admission API. A scientific policy failure requires its
+exact typed error and independently verified raw proof. An actual unsuccessful
+operation or collector limitation remains a distinct zero-credit disposition;
+it is not a scientific verdict about page content or the whole domain.
+Generic operational errors, pending work, failed controls and invalid evidence
+stop the loop for diagnosis.
+
+The first run records a durable context/page-budget binding, a hash-bound
+policy and initial status. Each action retains its plan, exact argv, start/end
+records and stdout/stderr hashes in a separate create-only operator directory.
+A context lock excludes another coordinator for that same context; the older
+controller must be fully closed before handoff. `--max-actions` and
+`--stop-at-admissions` bound each batch. Creating `--stop-file` requests a
+stop at the next action boundary, after the current action finishes.
+`--plan-only` publishes the policy and first verified plan without executing
+it. No live coordinator success or capture authority is claimed by these
+source capabilities.
+
+### Historical checkpoints and response-policy rollout
+
+The following snapshots describe their original sources and dates. Their
+passing prefixes and failures grant no authority to current context 012.
+
+Context 007's independently reopened checkpoint had
 **11 screening decisions and zero admitted sites** at
 `2026-10-02T20:53:46.146589Z`. Its second bounded batch subsequently completed
 normally at the 40-action limit on the unchanged old image/client. No further
@@ -68,8 +145,8 @@ passed **16 focused tests and strict library Clippy**. Final Python integration
 passed **142 tests**, and all **24 new admission cases** pass. The new rule is
 frozen in [selection revision 5](../config/curated-sources/crux73-tranco600-rapid-v5-selection-v5.json)
 under the unchanged v5 profile. Installed-runtime checks and actual
-complete-site/five-setting captures remain pending; an incremental cached
-build will install the change. The
+complete-site/five-setting captures were pending at that snapshot. Later
+revision-6 runtime checks have their separate current scope above. The
 [evidence index](EVIDENCE-INDEX.md#application-response-policy-repair) records
 the current proof. The target stays **50 × 5 × 64 = 16,000**; accepted study
 counters remain zero.
@@ -366,9 +443,10 @@ unchanged. Neither fitting nor a rebuild is needed for this early check.
 
 ### Page changes during a multi-day run
 
-Capture currently requires **every resource's status, byte count and body
-SHA-256 to match its prepared identity under all five settings**, including
-undefended traffic. Even a body change that keeps the same length fails the
+Revision 6 permits only primary Document 0's registered complete body variation.
+**Every other resource's status, byte count and body SHA-256 must match its
+prepared identity under all five settings**, including undefended traffic.
+An auxiliary body change that keeps the same length still fails the
 [application-response check](../src/qcsd_lab/orchestrator.py#L5286).
 Preparation's three nearby repeats test short-term stability; they do not
 establish stability over several days.
@@ -564,22 +642,27 @@ use a local test host and do not claim a public-study lane inside that image.
 
 ### Site admission and campaign planning commands
 
-`tools/rapid_acquire.py` is the prospective v5 site driver. `init` freezes the
+`tools/rapid_acquire.py` is the v5-profile site driver. `init` freezes the
 profile, source catalogue, runtime source metadata and separate implementation
-snapshots. For revision 3, bind the published receipt with `--selection-amendment`
-and its separate `--browser-policy-module` and `--collector-module` snapshots.
+snapshots. Current revision 6 binds its published receipt with
+`--selection-amendment` and all required implementation groups, including the
+browser-policy, collector, preparation and unsuccessful-attempt snapshots.
+Optional `--root-screen-context`, `--root-screen-runtime-proof` and
+`--root-screen-runtime-proof-sha256` retain a separately verified original root
+runtime only when its survey components, client and prospective input rules
+match. They do not change the main page/preparation runtime or rewrite raw logs.
 `status` reopens the
 retained attempts and identifies the next candidate in the fixed order. The
 remaining actions are:
 
 | Action | What it records |
 |---|---|
-| `navigate` | Raw browser navigation and independently rederived page choices; an amended context may retain a fresh exact typed browser, passive-render or revision-3 collector failure with zero credit |
+| `navigate` | Raw browser navigation and independently rederived page choices; the frozen amendment may retain a separately verified typed policy failure, collector limitation or actual unsuccessful operation with zero credit |
 | `probe-page` | A passing-control probe, the exact selected page's H3 result, then another control |
-| `screen-page` | Revision 2's distinct automatic public URL/domain screen, bound to the selected navigation ordinal and exact-page H3 receipt |
-| `review` | A named human's explicit decision for contexts whose frozen rules require it; revision 2 uses the automatic screen |
-| `prepare` | Full browser resource graph, complete-origin preparation and three immediate replay checks; revision 2 passes the actual `--automated-screen` receipt |
-| `seal` | A site decision independently derived from the retained evidence; only the declared exact collector failure receives the new retryable zero-credit disposition; other unexpected errors still block |
+| `screen-page` | Automatic public URL/domain screen, bound to the selected navigation ordinal and exact-page H3 receipt |
+| `review` | A named human's explicit decision for historical contexts whose frozen rules require it; revision 6 uses the automatic screen |
+| `prepare` | Complete browser resource graph, complete-origin preparation and three complete replay checks under the registered response policy; requires the actual `--automated-screen` receipt |
+| `seal` | Independently derives admission or an explicit frozen zero-credit policy/failed-operation disposition from retained proof; generic errors or missing evidence still block |
 | `cohort` | The first ten or fifty eligible sites, with all earlier candidates accounted for |
 
 Navigation, H3 probes and preparation run inside the bound prepare image with
@@ -629,7 +712,7 @@ zero-credit. Its host-local retained result is
 `diagnostic-rehearsals/clean-rapid-runtime-20261002/qualification-bridge-check-001/output.json`,
 catalogued through the [evidence index](EVIDENCE-INDEX.md).
 
-A separate **real installed-runtime preflight passed with exit 0 and empty
+A separate **historical installed-runtime preflight passed with exit 0 and empty
 stderr** at
 `diagnostic-rehearsals/rapid-v5-capture-runtime-20261003-002/output.json`.
 Its raw SHA-256 is
@@ -655,7 +738,7 @@ Mount the **complete frozen clean runtime** at `/runtime-src` and the
 separately frozen study modules at `/rapid-src`. Set
 `QCSD_LAB_ROOT=/runtime-src`, `PYTHONPATH=/rapid-src/src` and
 `QCSD_LAB_SOURCE_METADATA=/usr/share/qcsd-lab/source.json`. The clean
-collection image currently verified is
+collection image verified for that historical check is
 `sha256:fc3608b0919ee2486d2c6ad0cf03f77551972195b6800fd6c59f193a243b8ad4`.
 Use the digest recorded in the acquisition/runtime binding and preserve the
 two source identities separately. Do not mount only a partial runtime or

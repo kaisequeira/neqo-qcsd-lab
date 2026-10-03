@@ -64,10 +64,34 @@ independently reopened the original **73 curated and 40 fallback** observations.
 Registry creation exited 0 at `2026-10-03T01:14:14.819055Z`, elapsed **2.647194
 seconds**. No root was rescreened or relabeled; all applicable publication
 barriers remain enforced. These root facts grant no admitted-site credit.
-The latest inspected immutable `acquisition/checkpoints/checkpoint-000010.json`,
-recorded at `2026-10-03T01:19:38.872662Z`, has **two sealed screening decisions,
-zero admitted sites and zero formal traces**; candidate 3, Albumaty, is next.
-The first bounded batch is running with a one-admission stop and 60-action cap.
+The terminal immutable `acquisition/checkpoints/checkpoint-000048.json`,
+recorded at `2026-10-03T01:50:37.460971Z`, has **eight sealed screening decisions,
+zero admitted sites and zero formal traces**; candidate 9, Futura, remains next.
+Checkpoint SHA-256 is
+`9086dfb978682d4bf9452ec8df05e257879ab0deed7486aaf002cc4a5d3a5ba7`.
+`actual-first-candidate-batch-completed.json` records exit 1 at
+`2026-10-03T01:50:39.831931Z`, elapsed **2,071.815 seconds**, raw SHA-256
+`718879e7055e97d438c1638814028d2ee1db1ef038a10842b1cc5916f954d329`.
+
+The blocker is Futura's selected page ordinal 2, preparation attempt 10.
+Its preserved
+`acquisition/attempts/curated-152754046f6bfc677509/attempt-000010/operational-error.json`,
+SHA-256 `de69a59e927a43dcdfefdfab20e91947184799a6bb6cc5784d99aca33dd74099`,
+records `TerminalProbePolicyError`: `approved-origin discovery exceeded its
+finite origin cap`. Source diagnosis places that 32-origin convergence bound
+after backend discovery and outside the live failure observer. No observed
+origin-list proof was retained. The error is generic, retryable and unsealed;
+it supplies no scientific site-failure or admitted-site credit.
+
+The separate [portable host coordinator](../tools/rapid_acquisition_control.py)
+is published at operator commit `e84b30ff8acdc155e4a5adbdd415686d10328053`,
+with 18 focused checks and independent review. It binds the selected operator
+bytes separately from the unchanged scientific verifier/runtime and retains a
+durable per-candidate page budget over the entire context history. It does not
+override the existing generic error. The prospective observed origin-budget
+failure fix is in progress; no repaired source context, new matching runtime,
+replacement controller launch or capture pass is claimed. Context 012 and all
+its attempted bytes remain unchanged.
 
 Context 011's failed staging attempt and partial overlay/runtime bytes remain
 preserved. Its freeze-spec input collided with the create-only output path.
