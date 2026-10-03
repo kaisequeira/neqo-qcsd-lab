@@ -41,7 +41,31 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Latest inspected checkpoint, 3 October:** context **013** has **23
+**Latest inspected checkpoint, 3 October:** fresh context **014** has **two
+sealed screening decisions and zero admissions** at
+`2026-10-03T03:57:49.941377Z`; Albumaty is next. Its revision-7 host coordinator
+is running, bounded to 60 actions, one selected page per candidate and a stop
+at the first admitted site. Study counters remain **0/50 admitted sites,
+0/50 shakedown traces and 0/16,000 formal traces**.
+
+Published source `ffe14ab` pins native commit `e2dcd8a`. Its actual cached
+client build completed in **108.679 seconds**. Collection and preparation
+images built in **59.165 and 66.596 seconds**, and both passed installed-byte
+checks and independent runtime review. Context 014 initialized in **6.812
+seconds**. Its **73 fresh curated root screens** completed in **93.244
+seconds** and independently reopened; fallback screening waits until needed.
+The first partial registry check required the remaining 33 curated screens;
+that failed operation stays recorded and required no source change or rebuild.
+Matching runtime integrity is engineering evidence, with zero capture credit.
+
+The optional [two-container pilot](docs/PARALLEL-CAPTURE-PILOT.md) is published
+separately as `e2188ed`. Its reviewed source and focused tests cover peer CPU
+proof, separate result mounts, failure-specific retirement and independent
+deep reopening. It needs its own installed collection image and actual live
+trial; it is not running in the existing `ffe14ab` images and does not delay
+serial site preparation. No parallel throughput or formal credit is claimed.
+
+**Preserved context 013:** it has **23
 sealed screening decisions and no admitted site** at
 `2026-10-03T03:00:08.631791Z`; Bing is next. Its first bounded
 host-coordinator batch stopped normally at the requested action boundary at
@@ -50,7 +74,7 @@ admitted sites, 0/50 shakedown traces and 0/16,000 formal traces**. A complete
 usable-site graph and sustained padding qualification are still required
 before the first study capture.
 
-Poki's current 013 attempt completed all **260 resources in each of three
+Poki's preserved 013 attempt completed all **260 resources in each of three
 native replays**, with HTTP/3 on all four origins and stable non-primary
 responses. It was rejected solely by revision 6's requirement for a stable
 auxiliary padding body on the **main site's origin**: only its primary
@@ -67,7 +91,7 @@ adds an explicit approved-origin auxiliary padding policy. Its source changes
 cover preparation, admission, sustained response qualification and the native
 runtime checks; absent policy retains the old origin rule. **73 focused
 Python checks, 13 native client checks and independent policy review passed.**
-The matching runtime is next. A fresh site attempt, sustained
+The matching runtime 004 now verifies. A fresh successful site attempt, sustained
 qualification and five-setting live canary remain required; this declaration
 does not admit the old Poki graph or establish capture readiness.
 

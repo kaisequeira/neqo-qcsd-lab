@@ -23,8 +23,8 @@ cannot supply padding; no resource or origin is removed.
 
 | Step | Action | Evidence needed to advance | Current state |
 |---:|---|---|---|
-| 1 | Freeze the candidate sources and runtime. | Exact source hashes, ordered [v5 rapid profile receipt](../config/curated-sources/crux73-tranco600-rapid-v5.profile.json), revision-7 receipt, image digests, fixed defense parameters and launcher-source hashes. | The approved-origin change passed 73 focused Python checks, 13 native checks and independent review. Matching images and fresh root screens are next; the changed native client prevents reuse of the old root runtime. Installed-runtime checks grant no lane or trace credit. |
-| 2 | Find usable pages. | Record verified decisions in frozen order. Keep the controlled root observation, separate controlled H3 pass on the exact selected page, automatic URL/domain screen, complete graph, registered response stability and live cross-origin resource. | Preserved 013 checkpoint: **23 sealed decisions, zero admitted sites**, at `2026-10-03T03:00:08.631791Z`; Bing was next. Its bounded batch closed at the requested action boundary after 57 actions. Fresh revision-7 work will use a new context and one selected page per candidate. **0/50 final sites admitted.** |
+| 1 | Freeze the candidate sources and runtime. | Exact source hashes, ordered [v5 rapid profile receipt](../config/curated-sources/crux73-tranco600-rapid-v5.profile.json), revision-7 receipt, image digests, fixed defense parameters and launcher-source hashes. | Published `ffe14ab`/native `e2dcd8a` has matching runtime 004. Its new cached client build took 109 seconds; both images passed installed-byte checks and independent review. Context 014 has 73 fresh, independently verified curated root screens. Installed-runtime checks grant no lane or trace credit. |
+| 2 | Find usable pages. | Record verified decisions in frozen order. Keep the controlled root observation, separate controlled H3 pass on the exact selected page, automatic URL/domain screen, complete graph, registered response stability and live cross-origin resource. | Inspected 014 checkpoint: **two sealed decisions, zero admissions**, at `2026-10-03T03:57:49.941377Z`; Albumaty is next. The one-page coordinator is running with a 60-action limit and stop after the first admission. Preserved 013 closed normally with 23 decisions and no admissions. **0/50 final sites admitted.** |
 | 3 | Prepare and qualify the first ten sites. | Ten verified prepared workloads, with five-site response-qualification sets matching the exact workload and source bytes. | Revision-7 admission screens for a stable, known-valid, approved-origin auxiliary body of at least **1,200 bytes**. Sustained padding qualification remains separate. Old canary 004 had its runtime/context guards checked only and has not been staged or executed. A fresh first site will receive 120 qualification requests and a five-setting diagnostic before expanding the shakedown. |
 | 4 | Run the ten-site shakedown across all five settings. | 50 complete, individually deep-verified diagnostic traces, including both BuFLO modes, with failures preserved and repaired before formal capture. | Historical individual clean-runtime diagnostic passes exist on one workload: CS-BuFLO **1/1**, BuFLO retry 004 **1/1**, FRONT and Tamaraw accepted, and an undefended two-second-settle successor **1/1**. The earlier undefended attempt lacked 45 tail packets and remains failed. These separate passes do not supply the ten-site shakedown. **0/50 study shakedown traces accepted.** |
 | 5 | Admit 50 sites and freeze formal inputs. | A verified 50-site cohort receipt, exact workloads and qualification sets, fixed parameters, complete lane plan and launch manifest. | 50-site live yield is unproven; the 600-domain catalogue supplies further candidates under the same checks. |
@@ -42,7 +42,7 @@ systematically favor one setting.
 
 | Work | Planning estimate | What can change it |
 |---|---|---|
-| Root HTTP/3 screen | Fresh 73 curated plus 40 fallback observations took about **5.7 minutes** under the earlier runtime. A new native client needs fresh screens. The unchanged old observations reopened for 013 in **2.775 seconds**. | Reuse requires unchanged survey components, native client, actual original runtime proof and applicable freshness barriers. Root decisions grant no site credit. |
+| Root HTTP/3 screen | The 73 fresh curated screens for 014 took **93.244 seconds**. All 73 must verify together; fallback may wait until needed. An older 40-candidate fallback batch took about **4 minutes 10 seconds**. | Reuse requires unchanged survey components, native client, actual original runtime proof and applicable freshness barriers. Root decisions grant no site credit. |
 | Browser discovery, replay and 50-site admission | **Unknown.** Fresh Poki full replay/rejection proof took **120.327 seconds**; the Futura convergence diagnostic failed after **89.361 seconds**. | Live page behavior and candidate yield dominate. The default one-page operator budget limits exploration, not the successful-admission requirements. A root success is not a prepared site. |
 | First ten-site, five-setting shakedown | About **53–109 minutes of recording time** for 50 visits at older 63–131 second per-visit rates, plus site preparation, response qualification and verification. | A complete five-setting shakedown on admitted study sites has not run. Short historical-workload tests diagnose individual capture failures first. |
 | Full formal grid | About **12–25 days of serial recording time** for 16,000 visits at those older rates, before retries and verification. | Parallel speedup is unmeasured and requires a separate fidelity/throughput trial. |
@@ -62,6 +62,30 @@ plan are recorded separately from
 changes to the source-bound container images.
 
 ## Current checks and remaining blockers
+
+Runtime 004 independently reopens all 2,332 source inventory entries and 12
+completed operations, including the actual new cached native build, both
+installed image checks and exported source/client bytes. Context 014
+initialized, completed all 73 fresh curated root screens and published its
+independently verified registry with zero fallback screens. The initial
+40-only registry check failed before publication because curated verification
+requires all 73; that failed operation and both successful screen chunks are
+retained. No new software build was needed to complete the screens.
+
+The first actual coordinator plan-only check passed, then the bounded live
+batch started at `2026-10-03T03:56:13.693218Z`. Its inspected checkpoint has
+two sealed decisions and no admissions. A first eligible site, sustained
+120-request qualification and five-setting live canary still remain ahead.
+Exact runtime, source and registry identities are in the
+[evidence index](EVIDENCE-INDEX.md#current-approved-origin-runtime-and-context-014).
+
+The [optional parallel pilot](PARALLEL-CAPTURE-PILOT.md) has separately
+published and reviewed source. Its tests cover two derived peer partitions,
+one worker's failure while its peer continues, retirement and result
+reopening. An actual matching collection image and concurrent capture trial
+remain required. The current serial preparation does not wait for that pilot.
+
+### Preserved context 013 checks
 
 The preserved runtime 003 verifies published source 80c85f5 and the unchanged
 native client. Its observed origin-budget repair passed three new focused
@@ -88,7 +112,8 @@ on CDNs, and only its primary document is on the main origin. The
 records that limitation. The explicit revision-7 policy changes preparation,
 admission, response qualification and the native schema-4 identity runtime
 together. Its 73 focused Python checks and 13 actual native library tests
-passed, including legacy cases. Matching runtime checks, fresh preparation,
+passed, including legacy cases. Matching runtime checks are now complete;
+fresh successful preparation,
 sustained qualification and live captures remain pending. The old failed
 attempt stays failed and gains no credit.
 

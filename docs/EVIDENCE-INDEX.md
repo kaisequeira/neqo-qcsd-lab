@@ -15,6 +15,74 @@ graph is preserved, including error responses; primary pages and padding
 resources retain successful-response requirements. Rust commit
 `1cda2d2446b53d0bdee185e81755fb5115744eb1` contains the native change.
 
+### Current approved-origin runtime and context 014
+
+Published Lab `ffe14ab4ae87dd92c8dd86dbe7f3b90338742a85` pins Native
+`e2dcd8a550b0f7b1b6f7fa8ec056960d163c1491`. The clean independent execution
+checkout is `../rapid-execution-approved-origins-20261003/`.
+Actual runtime records are under
+`../diagnostic-rehearsals/preflight-runtime-20261003-004/`.
+The canonical runtime SHA-256 is
+`2c957885893b05c750cd2e3c7237a008c725d352c2a20e7213130b1978fdc650`;
+exported source metadata SHA-256 is
+`785b671efcbca5efaf11884280fd17b5f6bafeebe1f74b6d20988373b0c841d1`;
+installed client SHA-256 is
+`c86c99d00b3717fef0ad4be9bb4c962b3bd830765a8981d8661ace2996e9770e`.
+Collection image ID is
+`sha256:d57de823d930765a1f9855aed854de86e1f578f6b7526805dd7ec5dcde68d71c`;
+prepare image ID is
+`sha256:ae1a08d6b792b3c0a85549905c1f66fae3fd2022625a222724d7ad4113b504f6`.
+
+The actual cached release build completed in **108.679 seconds**. The two
+images built in **59.165 and 66.596 seconds** and passed installed-byte
+verification in **12.229 and 12.475 seconds**. Independent review rebuilt the
+exact clean Git archives and all **2,332 inventory entries**, then reopened
+all **12 actual commands, completions and stdout/stderr hashes**, the embedded
+Native identity, client build record and exported bytes. This is installed
+runtime integrity, not sustained response qualification or capture fidelity.
+
+Fresh acquisition is under
+`../diagnostic-rehearsals/rapid-v7-site-acquisition-20261003-014/`.
+Its 28-file independent source-freeze spec SHA-256 is
+`f2bdd071c62f6ff4fb95e3fdf06919fbc9d28b38a342fabc4fc8d0618f935eca`;
+launch manifest SHA-256 is
+`d8e1f6bf7680922cd44e227918817cb95c02d79f1b6e0bf1bd9a3c8107707bd3`;
+context provenance SHA-256 is
+`e37cad76c24846742f687370693efa60aff1383e279e387af10f87e710c70b5e`.
+Initialization completed in **6.812 seconds**. The fresh curated screen chunks
+completed in **43.213 and 50.031 seconds**. The first 40-only registry reopen
+failed before publication, requiring all 73 curated candidates; its exact
+error and closed records remain preserved. The final registry independently
+verified **73 curated / zero fallback** in **2.324 seconds**, SHA-256
+`2fa7ac2006800910045df1806e3dfe71f975da42e00035f9d098b737b74402f1`.
+No root observation or failed site from context 013 was promoted.
+
+The actual one-page coordinator plan-only operation passed in **3.508
+seconds**, followed by a live batch start at `2026-10-03T03:56:13.693218Z`.
+Its immutable `checkpoint-000007.json` is dated
+`2026-10-03T03:57:49.941377Z`, SHA-256
+`ede4a4ac6349f3c69008c8e879a1a1ba2b081c82ffba2d19abc4f27fd67e9c65`.
+It has **two sealed screening decisions, zero admissions and zero formal
+traces**; Albumaty is next. The batch is bounded to 60 actions, page budget
+one over the unchanged context history, and a stop after the first admission.
+Its completion remains pending at this snapshot.
+
+The prospective first-site recipe is
+`../diagnostic-rehearsals/rapid-v7-first-site-canary-20261003-005/`, recipe
+SHA-256 `c0df17d057cbf90bef43feb83e03ab73d7a856c43557017ff4f1305b24206951`.
+Its actual runtime guard independently passes; no admitted site has been
+staged, qualified or captured. It retains 120 fresh identity requests and
+five separate capture smokes, each requiring ordinary deep verification.
+
+The optional [two-container pilot](PARALLEL-CAPTURE-PILOT.md) is separately
+published as `e2188ed`, retaining the same Native Gitlink. It is absent from
+runtime 004's installed collection source. Focused scheduler/actuator checks,
+43 pilot cases and two additional host-returncode aggregation cases passed; an
+independent scoped review reopened the repaired launch and retirement
+bindings. Integration preserved all eight reviewed files byte for byte,
+with Python AST, shell syntax and whitespace checks passing. No actual
+parallel Docker capture, throughput result or formal credit is claimed.
+
 ### Current preflight runtime and context 013
 
 Published Lab source `80c85f5938e0fbb08b339a808bcc8289888882e3` retains native
@@ -127,7 +195,9 @@ is dated `2026-10-03T03:22:45.926573Z`, SHA-256
 It permits qualified auxiliary responses on the exact prepared approved
 origins. Existing graph, body identity, source binding and sustained
 qualification obligations remain. Focused source verification passed;
-no revision-7 runtime, site admission or live capture is claimed here. Since
+At that declaration snapshot no revision-7 runtime, site admission or live
+capture had been established. Runtime 004's later installed checks have the
+separate scope above. Since
 Native source and client bytes change, the old 113 root observations cannot
 supply the new root-screen role; fresh short surveys are required.
 
