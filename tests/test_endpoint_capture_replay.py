@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -334,6 +335,7 @@ def test_missing_host_tshark_replays_entire_result_in_one_read_only_tool_contain
     assert command[:10] == ["docker", "run", "--rm", "--network", "none", "--read-only",
                            "--cap-drop", "ALL", "--security-opt", "no-new-privileges"]
     assert command[command.index("--tmpfs") + 1] == "/tmp:rw,nosuid,nodev,noexec"
+    assert command[command.index("--user") + 1] == f"{os.getuid()}:{os.getgid()}"
     source = Path(verification.__file__).resolve().parent.parent
     mounts = [command[index + 1] for index, value in enumerate(command) if value == "--volume"]
     assert mounts == [f"{root.resolve()}:{root.resolve()}:ro", f"{source}:{source}:ro"]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import tempfile
@@ -372,7 +373,8 @@ def _validate_endpoint_capture_replay(root: Path, experiment: Mapping[str, Any])
     module_source = verifier.parent.parent
     verifier_hash = sha256_file(verifier)
     command = ["docker", "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL",
-               "--security-opt", "no-new-privileges", "--tmpfs", "/tmp:rw,nosuid,nodev,noexec",
+               "--security-opt", "no-new-privileges", "--user", f"{os.getuid()}:{os.getgid()}",
+               "--tmpfs", "/tmp:rw,nosuid,nodev,noexec",
                "--volume", f"{root}:{root}:ro", "--volume", f"{module_source}:{module_source}:ro",
                "--entrypoint", "/opt/qcsd-venv/bin/python3", image, "-I", "-B", "-c",
                _ENDPOINT_REPLAY_SCRIPT, str(root), str(module_source), image, verifier_hash]
