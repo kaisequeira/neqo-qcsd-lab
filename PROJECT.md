@@ -41,7 +41,29 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Latest milestone, 4 October, 08:07 Sydney (3 October, 21:07 UTC):**
+**Latest milestone, 4 October, 08:46 Sydney (3 October, 21:46 UTC):**
+The target remains **50 × five × 64 = 16,000 accepted formal traces**.
+Original admission is paused at checkpoint **000062**, with **25 terminal
+decisions, one admitted site and zero formal traces**.
+
+Published Lab `ea17b389` / Native `45f03a48` is installed in runtime 008.
+All twelve actual operations, 2,389 source files and the 1,783-file Native
+inventory reopen. The cached Native build took **123.972 seconds**; image
+builds took **61.848 and 66.123 seconds**. Its new full-page baseline
+recording is running; fresh affected BuFLO verification remains pending.
+
+The browser lifecycle repair passed **321 focused host cases**. A short
+actual Toom discovery using the same two uninstalled source overlays then
+succeeded in **19.848 seconds**, preserving its browser audit and all 86
+discovered resources. Authenticated CSP denial and the browser's internal
+error-page finish are recorded separately, without inventing an HTTP
+response or crediting the reported error-page bytes. This proves one
+discovery pass, not convergence, HTTP/3 eligibility or site admission.
+Publication and matching browser installation are next. The original
+admission runtime and all failed recordings remain unchanged.
+See the [installed runtime and browser proof](docs/EVIDENCE-INDEX.md#v13-runtime-008-and-csp-browser-proof).
+
+**Earlier milestone, 4 October, 08:07 Sydney (3 October, 21:07 UTC):**
 The target remains **50 sites × five settings × 64 visits = 16,000 accepted
 formal traces**. Admission is paused at checkpoint **000062**, with
 **25 terminal decisions, 1/50 admitted sites and 0/16,000 formal traces**.

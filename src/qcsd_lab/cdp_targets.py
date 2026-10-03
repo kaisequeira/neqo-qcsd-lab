@@ -60,6 +60,8 @@ SRCDOC_PSEUDO_DOCUMENT_POLICY = (
 _PREVIOUS_SRCDOC_PSEUDO_DOCUMENT_POLICY = (
     "chromium-143-root-about-srcdoc-loader-bound-orphan-abort-or-33-byte-finish-v2"
 )
+_PRE_REQUEST_CSP_SUMMARY_SCHEMA_VERSION = 4
+_PRE_REQUEST_CSP_POLICY = "chromium-143-attached-iframe-loader-bound-pre-network-csp-denial-v1"
 _BOOTSTRAP_WORKER_TYPES = ("worker", "shared_worker")
 _BOOTSTRAP_OWNER_TYPES = ("page", "iframe", "worker", "shared_worker")
 _ALLOWED_CHILD_TARGET_TYPES = frozenset({"iframe", "shared_worker", "worker"})
@@ -139,6 +141,7 @@ _ROOT_PAGE_LIFECYCLE_METHODS = frozenset(
         "Page.frameStartedNavigating",
         "Page.frameStartedLoading",
         "Page.frameStoppedLoading",
+        "Page.frameNavigated",
     }
 )
 _SRCDOC_REQUEST_FIELDS = frozenset({"frameId", "reason", "url", "disposition"})
@@ -203,6 +206,11 @@ _BLOCKED_DOCUMENT_FAILURE_FIELDS = frozenset(
 )
 _ERROR_DOCUMENT_FINISH_FIELDS = frozenset({"requestId", "timestamp", "encodedDataLength"})
 _ERROR_DOCUMENT_URL = "chrome-error://chromewebdata/"
+_CSP_ERROR_NAVIGATED_FRAME_FIELDS = frozenset({
+    "adFrameStatus", "crossOriginIsolatedContextType", "domainAndRegistry",
+    "gatedAPIFeatures", "id", "loaderId", "mimeType", "name", "parentId",
+    "secureContextType", "securityOrigin", "securityOriginDetails", "unreachableUrl", "url",
+})
 _ERROR_DOCUMENT_RESOURCE_REQUEST_FIELDS = frozenset(
     {
         "requestId",
@@ -985,8 +993,14 @@ def validate_srcdoc_pseudo_document_summary(
     terminal into a request: it proves the bracketing Page lifecycle and
     ``frameStartedNavigating.loaderId`` equality that authorised the router to
     consume it.
+
+    Schema 4 additionally records an exact attached-iframe CSP denial before
+    any Network/Fetch occurrence. Its distinct diagnostic remains a browser
+    denial and supplies no request, response or graph-coverage credit.
     """
 
+    if isinstance(value, Mapping) and value.get("schema_version") == _PRE_REQUEST_CSP_SUMMARY_SCHEMA_VERSION:
+        return _validate_pre_request_csp_summary(value, require_terminal=require_terminal)
     fields = {
         "schema_version",
         "policy",
@@ -1221,6 +1235,153 @@ def validate_srcdoc_pseudo_document_summary(
     return json.loads(json.dumps(value, sort_keys=True, separators=(",", ":")))
 
 
+def _validate_pre_request_csp_summary(
+    value: Mapping[str, Any], *, require_terminal: bool
+) -> dict[str, Any]:
+    """Extend the existing summary with actual denials, never request credit."""
+
+    if (
+        type(value.get("schema_version")) is not int
+        or value.get("policy") != _PRE_REQUEST_CSP_POLICY
+        or value.get("enabled") is not True
+        or type(value.get("diagnostics")) is not list
+    ):
+        raise ValueError("pre-request CSP summary identity is invalid")
+    csp = [item for item in value["diagnostics"] if isinstance(item, Mapping) and item.get("policy") == _PRE_REQUEST_CSP_POLICY]
+    if not csp or len(csp) > _SRCDOC_PSEUDO_DOCUMENT_LIMIT:
+        raise ValueError("pre-request CSP diagnostic inventory is invalid")
+    fields = {
+        "schema_version", "policy", "source_role", "disposition",
+        "frame_id_sha256", "parent_frame_id_sha256", "loader_id_sha256", "request_id_sha256", "url_sha256",
+        "attached_event_ordinal", "requested_event_ordinal",
+        "started_navigating_event_ordinal", "started_event_ordinal", "terminal_event_ordinal",
+        "navigation_reason", "navigation_type", "navigation_disposition", "url_kind",
+        "loader_binding", "terminal_method", "terminal_fields", "terminal_timestamp",
+        "resource_type", "error_text", "canceled", "network_request_seen", "fetch_pause_seen",
+    }
+    frames: set[str] = set()
+    loaders: set[str] = set()
+    ordinals_seen: set[int] = set()
+    previous_terminal = 0
+    denials: dict[str, Mapping[str, Any]] = {}
+    finished_loaders: set[str] = set()
+    for item in csp:
+        if item.get("disposition") == "browser-internal-error-document-finished":
+            _validate_csp_internal_finish_diagnostic(item, denials, finished_loaders, ordinals_seen, previous_terminal)
+            finished_loaders.add(item["loader_id_sha256"])
+            ordinals_seen.update((item["frame_navigated_event_ordinal"], item["terminal_event_ordinal"]))
+            previous_terminal = item["terminal_event_ordinal"]
+            continue
+        if set(item) != fields:
+            raise ValueError("pre-request CSP diagnostic fields are invalid")
+        exact = {
+            "schema_version": 1, "policy": _PRE_REQUEST_CSP_POLICY,
+            "source_role": "root-page", "disposition": "denied-before-network",
+            "navigation_reason": "initialFrameNavigation", "navigation_type": "differentDocument",
+            "navigation_disposition": "currentTab", "url_kind": "https",
+            "loader_binding": "Page.frameStartedNavigating.loaderId",
+            "terminal_method": "Network.loadingFailed", "resource_type": "Document",
+            "error_text": "net::ERR_BLOCKED_BY_CSP", "canceled": False,
+            "network_request_seen": False, "fetch_pause_seen": False,
+        }
+        if any(type(item[key]) is not type(expected) or item[key] != expected for key, expected in exact.items()):
+            raise ValueError("pre-request CSP diagnostic identity is invalid")
+        hashes = [item[key] for key in ("frame_id_sha256", "loader_id_sha256", "request_id_sha256", "url_sha256")]
+        if any(type(digest) is not str or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest) for digest in [*hashes, item["parent_frame_id_sha256"]]):
+            raise ValueError("pre-request CSP diagnostic hash is invalid")
+        ordinals = [item[key] for key in ("attached_event_ordinal", "requested_event_ordinal", "started_navigating_event_ordinal", "started_event_ordinal", "terminal_event_ordinal")]
+        if (
+            any(type(n) is not int or not 1 <= n <= _SRCDOC_EVENT_ORDINAL_LIMIT for n in ordinals)
+            or any(a >= b for a, b in zip(ordinals, ordinals[1:]))
+            or any(n in ordinals_seen for n in ordinals)
+            or ordinals[-1] <= previous_terminal
+            or hashes[1] != hashes[2] or hashes[0] == hashes[1]
+            or hashes[0] in frames or hashes[1] in loaders
+            or item["parent_frame_id_sha256"] == hashes[0]
+            or item["terminal_fields"] != sorted(_SRCDOC_ABORT_TERMINAL_FIELDS)
+            or not _is_finite_protocol_number(item["terminal_timestamp"])
+            or item["terminal_timestamp"] < 0
+        ):
+            raise ValueError("pre-request CSP diagnostic evidence is inconsistent")
+        ordinals_seen.update(ordinals)
+        previous_terminal = ordinals[-1]
+        frames.add(hashes[0])
+        loaders.add(hashes[1])
+        denials[hashes[1]] = item
+    # Reopen the original schema unchanged, subtracting only the explicitly
+    # validated CSP denials from its aggregate. Mixed records retain emit order.
+    legacy = deepcopy(dict(value))
+    for name in ("total", "resolved"):
+        if type(legacy.get(name)) is not int or not len(csp) <= legacy[name] <= _SRCDOC_PSEUDO_DOCUMENT_LIMIT:
+            raise ValueError("pre-request CSP summary counts are invalid")
+        legacy[name] -= len(csp)
+    legacy["schema_version"] = SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION
+    legacy["policy"] = SRCDOC_PSEUDO_DOCUMENT_POLICY
+    legacy["diagnostics"] = [item for item in value["diagnostics"] if item not in csp]
+    outcomes = legacy.get("terminal_outcome_counts")
+    if not isinstance(outcomes, Mapping) or type(outcomes.get("Network.loadingFailed")) is not int or outcomes["Network.loadingFailed"] < len(denials):
+        raise ValueError("pre-request CSP terminal count is invalid")
+    legacy["terminal_outcome_counts"] = dict(outcomes)
+    legacy["terminal_outcome_counts"]["Network.loadingFailed"] -= len(denials)
+    if type(outcomes.get("Network.loadingFinished")) is not int or outcomes["Network.loadingFinished"] < len(finished_loaders):
+        raise ValueError("pre-request CSP internal-finish count is invalid")
+    legacy["terminal_outcome_counts"]["Network.loadingFinished"] -= len(finished_loaders)
+    validate_srcdoc_pseudo_document_summary(legacy, require_terminal=require_terminal)
+    if any(item["frame_id_sha256"] in frames or item["loader_id_sha256"] in loaders for item in legacy["diagnostics"]):
+        raise ValueError("pre-request CSP and srcdoc identities overlap")
+    if require_terminal and (value["network_history_saturated"] or value["fetch_history_saturated"]):
+        raise ValueError("pre-request CSP identity history is not complete")
+    return json.loads(json.dumps(value, sort_keys=True, separators=(",", ":")))
+
+
+def _validate_csp_internal_finish_diagnostic(
+    item: Mapping[str, Any], denials: Mapping[str, Mapping[str, Any]],
+    finished_loaders: set[str], ordinals_seen: set[int], previous_terminal: int,
+) -> None:
+    fields = {
+        "schema_version", "policy", "source_role", "disposition", "frame_id_sha256",
+        "parent_frame_id_sha256", "loader_id_sha256", "request_id_sha256", "url_sha256",
+        "denied_terminal_event_ordinal", "frame_navigated_event_ordinal", "terminal_event_ordinal",
+        "frame_navigated_method", "frame_navigated_fields", "frame_fields", "navigation_type",
+        "error_document_url", "mime_type", "unreachable_url_matches_denied_url",
+        "terminal_method", "terminal_fields", "terminal_timestamp", "reported_encoded_data_length",
+        "encoded_data_length_use", "network_request_seen", "fetch_pause_seen", "remote_response_body_credit",
+    }
+    if set(item) != fields:
+        raise ValueError("CSP internal-finish diagnostic fields are invalid")
+    exact = {
+        "schema_version": 1, "policy": _PRE_REQUEST_CSP_POLICY, "source_role": "root-page",
+        "disposition": "browser-internal-error-document-finished",
+        "frame_navigated_method": "Page.frameNavigated", "frame_navigated_fields": ["frame", "type"],
+        "frame_fields": sorted(_CSP_ERROR_NAVIGATED_FRAME_FIELDS), "navigation_type": "Navigation",
+        "error_document_url": _ERROR_DOCUMENT_URL, "mime_type": "text/html",
+        "unreachable_url_matches_denied_url": True, "terminal_method": "Network.loadingFinished",
+        "terminal_fields": sorted(_ERROR_DOCUMENT_FINISH_FIELDS), "encoded_data_length_use": "diagnostic-only",
+        "network_request_seen": False, "fetch_pause_seen": False, "remote_response_body_credit": False,
+    }
+    if any(type(item[key]) is not type(expected) or item[key] != expected for key, expected in exact.items()):
+        raise ValueError("CSP internal-finish diagnostic identity is invalid")
+    loader = item["loader_id_sha256"]
+    denied = denials.get(loader) if type(loader) is str else None
+    if denied is None or loader in finished_loaders:
+        raise ValueError("CSP internal-finish diagnostic lacks a unique preceding denial")
+    for key in ("frame_id_sha256", "parent_frame_id_sha256", "loader_id_sha256", "request_id_sha256", "url_sha256"):
+        if item[key] != denied[key]:
+            raise ValueError("CSP internal-finish diagnostic differs from its denied navigation")
+    ordinals = [item[key] for key in ("denied_terminal_event_ordinal", "frame_navigated_event_ordinal", "terminal_event_ordinal")]
+    if (
+        any(type(n) is not int or not 1 <= n <= _SRCDOC_EVENT_ORDINAL_LIMIT for n in ordinals)
+        or ordinals[0] != denied["terminal_event_ordinal"]
+        or not ordinals[0] < ordinals[1] < ordinals[2]
+        or any(n in ordinals_seen for n in ordinals[1:]) or ordinals[2] <= previous_terminal
+        or not _is_finite_protocol_number(item["terminal_timestamp"])
+        or item["terminal_timestamp"] <= denied["terminal_timestamp"]
+        or not _is_finite_protocol_number(item["reported_encoded_data_length"])
+        or item["reported_encoded_data_length"] <= 0
+    ):
+        raise ValueError("CSP internal-finish diagnostic evidence is inconsistent")
+
+
 class _CdpSession(Protocol):
     def on(self, event: str, handler: Callable[[dict[str, Any]], None]) -> None: ...
 
@@ -1251,6 +1412,18 @@ class CdpTargetSource:
 
 
 @dataclass
+class _RetiredIframeCleanup:
+    """An issued cleanup command cancelled by its authenticated frame removal."""
+
+    source: CdpTargetSource
+    command_id: int
+    method: str
+    label: str
+    frame_detach_reason: str = "remove"
+    late_acknowledged: bool = False
+
+
+@dataclass
 class _TargetState:
     source: CdpTargetSource
     target_type: str
@@ -1272,6 +1445,8 @@ class _TargetState:
     iframe_installation_received: bool = False
     iframe_regular_remove_issued: bool = False
     iframe_regular_removed: bool = False
+    iframe_page_remove_seen: bool = False
+    iframe_retired_cleanup: _RetiredIframeCleanup | None = None
     worker_instrumentation_breakpoint_id: str | None = None
     worker_parsed_script_urls: dict[str, str] = field(default_factory=dict)
     worker_bootstrap_script_id: str | None = None
@@ -1392,6 +1567,24 @@ class _SrcdocPseudoDocument:
     terminal_canceled: bool | None = None
     terminal_encoded_data_length: int | None = None
     abort_owned: bool = False
+
+
+@dataclass
+class _PreRequestCspNavigation:
+    """An attached iframe's actual Page witnesses, before any network request."""
+
+    frame_id: str
+    parent_frame_id: str
+    url: str
+    attached_event_ordinal: int
+    requested_event_ordinal: int
+    loader_id: str | None = None
+    started_navigating_event_ordinal: int | None = None
+    started_event_ordinal: int | None = None
+    terminal_event_ordinal: int | None = None
+    failed_timestamp: int | float | None = None
+    error_navigated_event_ordinal: int | None = None
+    internal_finish_seen: bool = False
 
 
 @dataclass
@@ -2326,6 +2519,15 @@ class RecursiveCdpTargetRouter:
             method: 0 for method in _SRCDOC_TERMINAL_METHODS
         }
         self._srcdoc_diagnostics: list[dict[str, Any]] = []
+        self._csp_attachment_ordinals: dict[str, int] = {}
+        self._csp_candidates: dict[str, _PreRequestCspNavigation] = {}
+        self._csp_seen_loader_ids: set[str] = set()
+        self._csp_denied_loader_ids: set[str] = set()
+        self._csp_denied_navigations: dict[str, _PreRequestCspNavigation] = {}
+        self._csp_ineligible_frame_ids: set[str] = set()
+        self._csp_event_ordinal = 0
+        self._csp_total = 0
+        self._csp_internal_finish_total = 0
         self._document_fetch_by_policy_identity: dict[
             tuple[CdpTargetSource, str], _DocumentFetchDecision
         ] = {}
@@ -2445,10 +2647,13 @@ class RecursiveCdpTargetRouter:
             for candidate in self._srcdoc_candidates.values()
         )
         summary = {
-            "schema_version": SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION,
-            "policy": SRCDOC_PSEUDO_DOCUMENT_POLICY,
+            "schema_version": (
+                _PRE_REQUEST_CSP_SUMMARY_SCHEMA_VERSION if self._csp_total
+                else SRCDOC_PSEUDO_DOCUMENT_SUMMARY_SCHEMA_VERSION
+            ),
+            "policy": _PRE_REQUEST_CSP_POLICY if self._csp_total else SRCDOC_PSEUDO_DOCUMENT_POLICY,
             "enabled": self._track_root_srcdoc_lifecycle,
-            "total": self._srcdoc_total,
+            "total": self._srcdoc_total + self._csp_total + self._csp_internal_finish_total,
             "resolved": len(self._srcdoc_diagnostics),
             "pending": pending,
             "aborted": self._srcdoc_aborted,
@@ -2456,7 +2661,13 @@ class RecursiveCdpTargetRouter:
             "network_history_saturated": self._srcdoc_network_history_saturated,
             "fetch_history_saturated": self._srcdoc_fetch_history_saturated,
             "candidate_limit_saturated": self._srcdoc_candidate_limit_saturated,
-            "terminal_outcome_counts": dict(self._srcdoc_terminal_outcomes),
+            "terminal_outcome_counts": {
+                method: count + (
+                    self._csp_total if method == "Network.loadingFailed"
+                    else self._csp_internal_finish_total
+                )
+                for method, count in self._srcdoc_terminal_outcomes.items()
+            },
             "diagnostics": [dict(item) for item in self._srcdoc_diagnostics],
         }
         try:
@@ -5007,10 +5218,13 @@ class RecursiveCdpTargetRouter:
         method: str,
         event: Mapping[str, Any],
     ) -> None:
-        """Track only the Page lifecycle needed to prove the srcdoc anomaly."""
+        """Track exact Page evidence for srcdoc terminals and pre-network CSP."""
 
         if not self._track_root_srcdoc_lifecycle or self._root_source is None:
             raise CdpTargetIntegrityError("root Page lifecycle arrived outside its policy")
+        if method == "Page.frameNavigated":
+            self._record_csp_error_navigation(event)
+            return
         if method == "Page.frameAttached":
             if not {"frameId", "parentFrameId"}.issubset(event) or not set(event).issubset(
                 {"frameId", "parentFrameId", "stack"}
@@ -5034,6 +5248,7 @@ class RecursiveCdpTargetRouter:
                 # swaps.  Keep ordinary browsing functional but permanently
                 # disqualify that ambiguous identity from this exception.
                 self._srcdoc_ineligible_frame_ids.add(frame_id)
+                self._csp_ineligible_frame_ids.add(frame_id)
             elif len(self._seen_page_frame_ids) >= _PAGE_FRAME_IDENTITY_LIMIT:
                 raise CdpTargetIntegrityError("root Page frame identity history saturated")
             self._seen_page_frame_ids.add(frame_id)
@@ -5042,6 +5257,12 @@ class RecursiveCdpTargetRouter:
             # preceding swapped-out occurrence.
             self._page_frame_pending_swap_removals.discard(frame_id)
             self._page_frame_parents[frame_id] = parent_id
+            self._csp_candidates.pop(frame_id, None)
+            if frame_id not in self._csp_ineligible_frame_ids:
+                self._csp_attachment_ordinals[frame_id] = self._next_csp_event_ordinal()
+            for state in self._states.values():
+                if state.target_type == "iframe" and state.source.target_id == frame_id:
+                    state.iframe_page_remove_seen = False
             return
         if method == "Page.frameDetached":
             if set(event) != {"frameId", "reason"}:
@@ -5099,15 +5320,25 @@ class RecursiveCdpTargetRouter:
                     self._srcdoc_candidates.pop(candidate_id)
                 self._page_frame_parents.pop(candidate_id, None)
                 self._srcdoc_ineligible_frame_ids.add(candidate_id)
+                self._csp_candidates.pop(candidate_id, None)
+                self._csp_attachment_ordinals.pop(candidate_id, None)
+                self._csp_ineligible_frame_ids.add(candidate_id)
             if reason == "swap" and not self._shutting_down and not self._aborting:
                 # The frame identity is already part of the bounded, permanent
                 # seen-frame history, so this optional one-use set cannot grow
                 # beyond the existing frame-identity limit.
                 self._page_frame_pending_swap_removals.add(frame_id)
+            elif reason == "remove" and not self._shutting_down and not self._aborting:
+                for state in self._states.values():
+                    if state.target_type == "iframe" and state.source.target_id == frame_id:
+                        state.iframe_page_remove_seen = True
             return
         if method == "Page.frameRequestedNavigation":
             if event.get("url") != "about:srcdoc":
+                self._record_csp_page_lifecycle(method, event)
                 return
+            if isinstance(event.get("frameId"), str):
+                self._csp_candidates.pop(event["frameId"], None)
             if set(event) != _SRCDOC_REQUEST_FIELDS:
                 raise CdpTargetIntegrityError("srcdoc Page navigation request is malformed")
             frame_id = event.get("frameId")
@@ -5131,6 +5362,8 @@ class RecursiveCdpTargetRouter:
                 requested_event_ordinal=self._next_srcdoc_event_ordinal(),
                 abort_owned=self._aborting,
             )
+            return
+        if self._record_csp_page_lifecycle(method, event):
             return
         frame_id = event.get("frameId")
         candidate = (
@@ -5163,6 +5396,7 @@ class RecursiveCdpTargetRouter:
                 )
             if (
                 loader_id in self._srcdoc_seen_page_loader_ids
+                or loader_id in self._csp_seen_loader_ids
                 or loader_id in self._srcdoc_seen_network_request_ids
                 or loader_id in self._srcdoc_seen_fetch_network_ids
                 or loader_id in self._srcdoc_terminal_request_ids
@@ -5261,6 +5495,268 @@ class RecursiveCdpTargetRouter:
         if callback is not None:
             callback(self.root_source, deepcopy(diagnostic))
 
+    def _next_csp_event_ordinal(self) -> int:
+        if self._csp_event_ordinal >= _SRCDOC_EVENT_ORDINAL_LIMIT:
+            raise CdpTargetIntegrityError("pre-request CSP Page event bound was exceeded")
+        self._csp_event_ordinal += 1
+        return self._csp_event_ordinal
+
+    def _record_csp_page_lifecycle(self, method: str, event: Mapping[str, Any]) -> bool:
+        """Retain only a fresh attached iframe's exact initial HTTPS navigation."""
+
+        frame_id = event.get("frameId")
+        if not isinstance(frame_id, str) or not frame_id:
+            return False
+        if method in {"Page.frameRequestedNavigation", "Page.frameStartedNavigating", "Page.frameStartedLoading"} and any(
+            candidate.frame_id == frame_id for candidate in self._csp_denied_navigations.values()
+        ):
+            raise CdpTargetIntegrityError("Page navigation reused a denied-before-network CSP frame")
+        if method == "Page.frameRequestedNavigation":
+            if frame_id in self._csp_candidates:
+                self._csp_candidates.pop(frame_id)
+                self._csp_ineligible_frame_ids.add(frame_id)
+                return False
+            url = event.get("url")
+            try:
+                parsed = urlsplit(url) if isinstance(url, str) else None
+                https_url = bool(parsed and parsed.scheme == "https" and parsed.hostname and parsed.username is None and parsed.password is None and not parsed.fragment)
+            except ValueError:
+                https_url = False
+            if (
+                set(event) != _SRCDOC_REQUEST_FIELDS
+                or not https_url or event.get("reason") != "initialFrameNavigation"
+                or event.get("disposition") != "currentTab"
+                or frame_id == self._root_frame_id
+                or self._page_frame_parents.get(frame_id) is None
+                or frame_id not in self._csp_attachment_ordinals
+                or frame_id in self._csp_ineligible_frame_ids
+                or frame_id in self._srcdoc_candidates
+                or self._shutting_down or self._aborting
+            ):
+                return False
+            if len(self._csp_candidates) >= _SRCDOC_PSEUDO_DOCUMENT_LIMIT:
+                raise CdpTargetIntegrityError("pre-request CSP candidate bound was exceeded")
+            self._csp_candidates[frame_id] = _PreRequestCspNavigation(
+                frame_id=frame_id, parent_frame_id=self._page_frame_parents[frame_id], url=url,
+                attached_event_ordinal=self._csp_attachment_ordinals[frame_id],
+                requested_event_ordinal=self._next_csp_event_ordinal(),
+            )
+            return True
+        candidate = self._csp_candidates.get(frame_id)
+        if candidate is None:
+            return False
+        if method == "Page.frameStartedNavigating":
+            loader_id = event.get("loaderId")
+            if (
+                set(event) != _SRCDOC_STARTED_NAVIGATING_FIELDS
+                or event.get("url") != candidate.url
+                or event.get("navigationType") != "differentDocument"
+                or not isinstance(loader_id, str) or not loader_id
+                or candidate.loader_id is not None
+                or loader_id in self._csp_seen_loader_ids
+                or loader_id in self._srcdoc_seen_page_loader_ids
+                or not self._csp_loader_is_unobserved(loader_id)
+            ):
+                raise CdpTargetIntegrityError("pre-request CSP Page loader evidence is invalid")
+            if len(self._csp_seen_loader_ids) >= _PAGE_FRAME_IDENTITY_LIMIT:
+                raise CdpTargetIntegrityError("pre-request CSP Page loader history saturated")
+            self._csp_seen_loader_ids.add(loader_id)
+            candidate.loader_id = loader_id
+            candidate.started_navigating_event_ordinal = self._next_csp_event_ordinal()
+            return True
+        if method == "Page.frameStartedLoading":
+            if set(event) != {"frameId"} or candidate.loader_id is None or candidate.started_event_ordinal is not None:
+                raise CdpTargetIntegrityError("pre-request CSP Page loading evidence is invalid")
+            candidate.started_event_ordinal = self._next_csp_event_ordinal()
+            return True
+        if method == "Page.frameStoppedLoading":
+            self._csp_candidates.pop(frame_id)
+            self._csp_ineligible_frame_ids.add(frame_id)
+        return False
+
+    def _csp_loader_is_unobserved(self, loader_id: str, *, allow_denied: bool = False) -> bool:
+        return not (
+            self._srcdoc_network_history_saturated or self._srcdoc_fetch_history_saturated
+            or self._pre_shutdown_fetch_identity_saturated
+            or (not allow_denied and loader_id in self._csp_denied_loader_ids)
+            or loader_id in self._srcdoc_seen_network_request_ids
+            or loader_id in self._srcdoc_seen_fetch_network_ids
+            or loader_id in self._srcdoc_terminal_request_ids
+            or loader_id in self._seen_page_frame_ids
+            or self._active_requests.get(loader_id)
+            or any(key[1] == loader_id for key in self._root_terminal_requests)
+            or any(key[1] == loader_id for key in self._pre_shutdown_fetch_identities)
+        )
+
+    def _consume_pre_request_csp_terminal(
+        self, source: CdpTargetSource, method: str, event: Mapping[str, Any]
+    ) -> bool:
+        """Record a browser-denied navigation; synthesize no Network occurrence."""
+
+        if (
+            not self._track_root_srcdoc_lifecycle or source != self.root_source
+            or self._shutting_down or self._aborting
+            or method != "Network.loadingFailed"
+            or set(event) != _SRCDOC_ABORT_TERMINAL_FIELDS
+            or event.get("type") != "Document"
+            or event.get("errorText") != "net::ERR_BLOCKED_BY_CSP"
+            or event.get("canceled") is not False
+            or not _is_finite_protocol_number(event.get("timestamp"))
+            or event["timestamp"] < 0
+        ):
+            return False
+        request_id = event.get("requestId")
+        matches = [candidate for candidate in self._csp_candidates.values() if candidate.loader_id == request_id and candidate.started_event_ordinal is not None]
+        if len(matches) != 1:
+            return False
+        candidate = matches[0]
+        if (
+            not self._csp_loader_is_unobserved(request_id)
+            or any(
+                active.frame_id == candidate.frame_id
+                or active.source.target_id == candidate.frame_id
+                or active.source.parent_frame_id == candidate.frame_id
+                for occurrences in self._active_requests.values()
+                for active in occurrences
+            )
+            or candidate.frame_id == self._root_frame_id
+            or self._page_frame_parents.get(candidate.frame_id) is None
+            or candidate.frame_id in self._csp_ineligible_frame_ids
+        ):
+            raise CdpTargetIntegrityError("pre-request CSP terminal is not provably before Network")
+        if self._srcdoc_total + self._csp_total + self._csp_internal_finish_total >= _SRCDOC_PSEUDO_DOCUMENT_LIMIT:
+            raise CdpTargetIntegrityError("pre-request CSP receipt bound was exceeded")
+        diagnostic = {
+            "schema_version": 1, "policy": _PRE_REQUEST_CSP_POLICY,
+            "source_role": "root-page", "disposition": "denied-before-network",
+            "frame_id_sha256": hashlib.sha256(candidate.frame_id.encode()).hexdigest(),
+            "parent_frame_id_sha256": hashlib.sha256(candidate.parent_frame_id.encode()).hexdigest(),
+            "loader_id_sha256": hashlib.sha256(request_id.encode()).hexdigest(),
+            "request_id_sha256": hashlib.sha256(request_id.encode()).hexdigest(),
+            "url_sha256": hashlib.sha256(candidate.url.encode()).hexdigest(),
+            "attached_event_ordinal": candidate.attached_event_ordinal,
+            "requested_event_ordinal": candidate.requested_event_ordinal,
+            "started_navigating_event_ordinal": candidate.started_navigating_event_ordinal,
+            "started_event_ordinal": candidate.started_event_ordinal,
+            "terminal_event_ordinal": self._next_csp_event_ordinal(),
+            "navigation_reason": "initialFrameNavigation", "navigation_type": "differentDocument",
+            "navigation_disposition": "currentTab", "url_kind": "https",
+            "loader_binding": "Page.frameStartedNavigating.loaderId",
+            "terminal_method": method, "terminal_fields": sorted(event),
+            "terminal_timestamp": event["timestamp"], "resource_type": "Document",
+            "error_text": "net::ERR_BLOCKED_BY_CSP", "canceled": False,
+            "network_request_seen": False, "fetch_pause_seen": False,
+        }
+        self._csp_candidates.pop(candidate.frame_id)
+        self._csp_ineligible_frame_ids.add(candidate.frame_id)
+        self._srcdoc_ineligible_frame_ids.add(candidate.frame_id)
+        self._csp_denied_loader_ids.add(request_id)
+        self._csp_denied_navigations[request_id] = candidate
+        candidate.terminal_event_ordinal = diagnostic["terminal_event_ordinal"]
+        candidate.failed_timestamp = event["timestamp"]
+        self._csp_total += 1
+        self._srcdoc_diagnostics.append(diagnostic)
+        if self._on_internal_document_lifecycle is not None:
+            self._on_internal_document_lifecycle(source, deepcopy(diagnostic))
+        return True
+
+    def _csp_denied_frame_is_current(self, candidate: _PreRequestCspNavigation) -> bool:
+        """Keep the denied navigation bound to its original live attachment."""
+
+        return (
+            not self._shutting_down and not self._aborting
+            and candidate.frame_id != self._root_frame_id
+            and self._page_frame_parents.get(candidate.frame_id) == candidate.parent_frame_id
+            and self._csp_attachment_ordinals.get(candidate.frame_id) == candidate.attached_event_ordinal
+            and candidate.loader_id is not None
+            and self._csp_loader_is_unobserved(candidate.loader_id, allow_denied=True)
+            and not any(
+                active.frame_id == candidate.frame_id
+                or active.source.target_id == candidate.frame_id
+                or active.source.parent_frame_id == candidate.frame_id
+                for occurrences in self._active_requests.values() for active in occurrences
+            )
+        )
+
+    def _record_csp_error_navigation(self, event: Mapping[str, Any]) -> None:
+        """Authenticate the actual Chrome error page following a CSP denial."""
+
+        frame = event.get("frame")
+        if not isinstance(frame, Mapping):
+            return
+        matches = [candidate for candidate in self._csp_denied_navigations.values()
+                   if frame.get("id") == candidate.frame_id or frame.get("loaderId") == candidate.loader_id]
+        if not matches:
+            return  # Ordinary Page navigations acquire no exception authority.
+        if len(matches) != 1:
+            raise CdpTargetIntegrityError("CSP error-page navigation identity is ambiguous")
+        candidate = matches[0]
+        if (
+            set(event) != {"frame", "type"} or event.get("type") != "Navigation"
+            or set(frame) != _CSP_ERROR_NAVIGATED_FRAME_FIELDS
+            or frame.get("id") != candidate.frame_id
+            or frame.get("parentId") != candidate.parent_frame_id
+            or frame.get("loaderId") != candidate.loader_id
+            or frame.get("url") != _ERROR_DOCUMENT_URL
+            or frame.get("unreachableUrl") != candidate.url
+            or frame.get("mimeType") != "text/html"
+            or candidate.error_navigated_event_ordinal is not None
+            or candidate.internal_finish_seen
+            or not self._csp_denied_frame_is_current(candidate)
+        ):
+            raise CdpTargetIntegrityError("CSP error-page navigation lacks its exact denied-frame witness")
+        candidate.error_navigated_event_ordinal = self._next_csp_event_ordinal()
+
+    def _consume_csp_internal_finish(
+        self, source: CdpTargetSource, method: str, event: Mapping[str, Any]
+    ) -> bool:
+        """Retain one proven browser-internal finish, without remote byte credit."""
+
+        if method != "Network.loadingFinished":
+            return False
+        candidate = self._csp_denied_navigations.get(event.get("requestId")) if isinstance(event.get("requestId"), str) else None
+        if candidate is None:
+            return False
+        timestamp, encoded_length = event.get("timestamp"), event.get("encodedDataLength")
+        if (
+            source != self.root_source or set(event) != _ERROR_DOCUMENT_FINISH_FIELDS
+            or candidate.error_navigated_event_ordinal is None
+            or candidate.internal_finish_seen or not self._csp_denied_frame_is_current(candidate)
+            or not _is_finite_protocol_number(timestamp)
+            or candidate.failed_timestamp is None or timestamp <= candidate.failed_timestamp
+            or not _is_finite_protocol_number(encoded_length) or encoded_length <= 0
+            or self._srcdoc_total + self._csp_total + self._csp_internal_finish_total >= _SRCDOC_PSEUDO_DOCUMENT_LIMIT
+        ):
+            raise CdpTargetIntegrityError("CSP internal finish lacks its exact Chrome-error navigation witness")
+        diagnostic = {
+            "schema_version": 1, "policy": _PRE_REQUEST_CSP_POLICY,
+            "source_role": "root-page", "disposition": "browser-internal-error-document-finished",
+            "frame_id_sha256": hashlib.sha256(candidate.frame_id.encode()).hexdigest(),
+            "parent_frame_id_sha256": hashlib.sha256(candidate.parent_frame_id.encode()).hexdigest(),
+            "loader_id_sha256": hashlib.sha256(candidate.loader_id.encode()).hexdigest(),
+            "request_id_sha256": hashlib.sha256(candidate.loader_id.encode()).hexdigest(),
+            "url_sha256": hashlib.sha256(candidate.url.encode()).hexdigest(),
+            "denied_terminal_event_ordinal": candidate.terminal_event_ordinal,
+            "frame_navigated_event_ordinal": candidate.error_navigated_event_ordinal,
+            "terminal_event_ordinal": self._next_csp_event_ordinal(),
+            "frame_navigated_method": "Page.frameNavigated",
+            "frame_navigated_fields": ["frame", "type"],
+            "frame_fields": sorted(_CSP_ERROR_NAVIGATED_FRAME_FIELDS),
+            "navigation_type": "Navigation", "error_document_url": _ERROR_DOCUMENT_URL,
+            "mime_type": "text/html", "unreachable_url_matches_denied_url": True,
+            "terminal_method": method, "terminal_fields": sorted(event),
+            "terminal_timestamp": timestamp, "reported_encoded_data_length": encoded_length,
+            "encoded_data_length_use": "diagnostic-only",
+            "network_request_seen": False, "fetch_pause_seen": False,
+            "remote_response_body_credit": False,
+        }
+        candidate.internal_finish_seen = True
+        self._csp_internal_finish_total += 1
+        self._srcdoc_diagnostics.append(diagnostic)
+        if self._on_internal_document_lifecycle is not None:
+            self._on_internal_document_lifecycle(source, deepcopy(diagnostic))
+        return True
+
     def _page_frame_is_descendant(self, frame_id: str, ancestor_id: str) -> bool:
         parent_id = self._page_frame_parents.get(frame_id)
         visited: set[str] = set()
@@ -5280,6 +5776,17 @@ class RecursiveCdpTargetRouter:
 
         if not self._track_root_srcdoc_lifecycle:
             return
+        identities = {
+            identity for key in ("requestId", "loaderId", "networkId")
+            if isinstance(identity := event.get(key), str) and identity
+        }
+        if identities & self._csp_denied_loader_ids:
+            raise CdpTargetIntegrityError("CDP event reused a denied-before-network CSP loader")
+        if method in {"Network.requestWillBeSent", "Fetch.requestPaused"}:
+            for frame_id, candidate in tuple(self._csp_candidates.items()):
+                if event.get("frameId") == frame_id or candidate.loader_id in identities:
+                    self._csp_candidates.pop(frame_id)
+                    self._csp_ineligible_frame_ids.add(frame_id)
         document_evidence = (
             method == "Network.requestWillBeSent" and event.get("type") == "Document"
         ) or (
@@ -5354,7 +5861,7 @@ class RecursiveCdpTargetRouter:
                         >= _SRCDOC_IDENTITY_HISTORY_LIMIT
                     ):
                         self._srcdoc_network_history_saturated = True
-                        if self._srcdoc_total:
+                        if self._srcdoc_total + self._csp_total:
                             raise CdpTargetIntegrityError(
                                 "srcdoc Network identity history saturated after acceptance"
                             )
@@ -5373,7 +5880,7 @@ class RecursiveCdpTargetRouter:
                         >= _SRCDOC_IDENTITY_HISTORY_LIMIT
                     ):
                         self._srcdoc_fetch_history_saturated = True
-                        if self._srcdoc_total:
+                        if self._srcdoc_total + self._csp_total:
                             raise CdpTargetIntegrityError(
                                 "srcdoc Fetch identity history saturated after acceptance"
                             )
@@ -5456,6 +5963,7 @@ class RecursiveCdpTargetRouter:
             or request_id in self._srcdoc_seen_network_request_ids
             or request_id in self._srcdoc_seen_fetch_network_ids
             or request_id in self._srcdoc_terminal_request_ids
+            or request_id in self._csp_denied_loader_ids
             or request_id in self._seen_page_frame_ids
             or self._active_requests.get(request_id)
             or any(key[1] == request_id for key in self._root_terminal_requests)
@@ -5463,7 +5971,7 @@ class RecursiveCdpTargetRouter:
             raise CdpTargetIntegrityError(
                 "srcdoc pseudo-Document terminal identity is not provably orphaned"
             )
-        if self._srcdoc_total >= _SRCDOC_PSEUDO_DOCUMENT_LIMIT:
+        if self._srcdoc_total + self._csp_total + self._csp_internal_finish_total >= _SRCDOC_PSEUDO_DOCUMENT_LIMIT:
             self._srcdoc_candidate_limit_saturated = True
             raise CdpTargetIntegrityError(
                 "srcdoc pseudo-Document receipt bound was exceeded"
@@ -5554,6 +6062,8 @@ class RecursiveCdpTargetRouter:
                 f"CDP {source.target_type} target emitted {method} for "
                 f"request {request_id!r} ({url!r}) during {state.phase}"
             )
+        if self._consume_csp_internal_finish(source, method, event):
+            return
         self._record_srcdoc_identity_history(method, event)
         if self._consume_error_document_resource_event(source, method, event):
             return
@@ -5789,6 +6299,8 @@ class RecursiveCdpTargetRouter:
                         "CDP repeated a terminal event for a retired Document chain"
                     )
                 if self._consume_srcdoc_pseudo_document_terminal(source, method, event):
+                    return
+                if self._consume_pre_request_csp_terminal(source, method, event):
                     return
                 raise CdpTargetIntegrityError(
                     "CDP loading terminal event has no active request occurrence"
@@ -7219,7 +7731,10 @@ class RecursiveCdpTargetRouter:
             self._session_routes.pop(session_id, None)
             self._notify_target_activity(state.source, "target-detached")
             return
-        if state.phase != "ready" or state.active_request_ids or descendants or route_pending:
+        cleanup_retired = self._retire_removed_iframe_cleanup(state, descendants, route_pending)
+        if not cleanup_retired and (
+            state.phase != "ready" or state.active_request_ids or descendants or route_pending
+        ):
             raise CdpTargetIntegrityError(
                 "related CDP target detached with setup, request, descendant, or "
                 "command work pending"
@@ -7229,6 +7744,76 @@ class RecursiveCdpTargetRouter:
         self._target_routes.pop(state.source.target_id, None)
         self._session_routes.pop(session_id, None)
         self._notify_target_activity(state.source, "target-detached")
+
+    def _retire_removed_iframe_cleanup(
+        self,
+        state: _TargetState,
+        descendants: list[_TargetState],
+        route_pending: list[tuple[tuple[str, ...], int]],
+    ) -> bool:
+        """Retire only a removed, fully protected iframe's final breakpoint cleanup."""
+
+        if (
+            state.target_type != "iframe"
+            or state.phase != "resuming"
+            or not state.iframe_page_remove_seen
+            or state.iframe_retired_cleanup is not None
+            or state.setup_pending
+            or state.active_request_ids
+            or descendants
+            or any(
+                active.source == state.source
+                for requests in self._active_requests.values()
+                for active in requests
+            )
+            or not all((
+                state.iframe_initial_resume_acknowledged,
+                state.iframe_default_context_id is not None,
+                state.iframe_default_context_unique_id is not None,
+                state.iframe_synthetic_issued,
+                state.iframe_synthetic_completed,
+                state.iframe_pause_seen,
+                not state.iframe_debugger_paused,
+                state.iframe_instrumentation_removed,
+                state.iframe_debugger_resume_acknowledged,
+                state.iframe_installation_received,
+                state.iframe_regular_remove_issued,
+                not state.iframe_regular_removed,
+                state.source in self._egress_shim_receipts,
+                state.source in self._popup_guard_receipts,
+            ))
+            or len(route_pending) != 1
+            or route_pending[0][0] != state.source.session_path
+        ):
+            return False
+        key = route_pending[0]
+        pending = self._pending[key]
+        if (
+            pending.label != "iframe:Debugger.removeBreakpoint:conditional-installation"
+            or pending.policy_decision
+        ):
+            return False
+        state.iframe_retired_cleanup = _RetiredIframeCleanup(
+            state.source, key[1], "Debugger.removeBreakpoint", pending.label
+        )
+        self._pending.pop(key)
+        return True
+
+    @staticmethod
+    def _ack_retired_iframe_cleanup(state: _TargetState, payload: Mapping[str, Any]) -> None:
+        retired = state.iframe_retired_cleanup
+        if (
+            retired is None
+            or retired.source != state.source
+            or retired.late_acknowledged
+            or set(payload) != {"id", "result"}
+            or type(payload["id"]) is not int
+            or payload["id"] != retired.command_id
+            or type(payload["result"]) is not dict
+            or payload["result"] != {}
+        ):
+            raise CdpTargetIntegrityError("detached CDP target emitted an invalid retired cleanup acknowledgement")
+        retired.late_acknowledged = True
 
     def _cancel_detached_route_commands(
         self,
@@ -7260,7 +7845,7 @@ class RecursiveCdpTargetRouter:
             raise CdpTargetIntegrityError("nested CDP message envelope is malformed")
         route = (*parent_route, session_id)
         state = self._state(route)
-        if state.phase in {"destroyed", "detached"}:
+        if state.phase in {"destroyed", "detached"} and state.iframe_retired_cleanup is None:
             raise CdpTargetIntegrityError("detached CDP target emitted a protocol message")
         target_id = event.get("targetId")
         if target_id is not None and target_id != state.source.target_id:
@@ -7271,6 +7856,9 @@ class RecursiveCdpTargetRouter:
             raise CdpTargetIntegrityError("nested CDP message is not valid JSON") from error
         if not isinstance(payload, Mapping):
             raise CdpTargetIntegrityError("nested CDP message payload is not an object")
+        if state.phase in {"destroyed", "detached"}:
+            self._ack_retired_iframe_cleanup(state, payload)
+            return
         self._handle_payload(state.source, payload)
 
     def _handle_payload(self, source: CdpTargetSource, payload: Mapping[str, Any]) -> None:

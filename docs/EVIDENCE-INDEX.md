@@ -9,6 +9,56 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ## Application response policy repair
 
+### V13 runtime 008 and CSP browser proof
+
+At **4 October, 08:46 Sydney**, Lab `ea17b3893686bc02fbc99dfc2975c39bd0c26de1`
+and Native `45f03a48b73cacb8959eb488b4d27d33d4eb10ff` are installed in
+local `terminal-primary-v13-runtime-20261004-008`. Its canonical runtime
+SHA is `21467b967a225a896798c4003c656588f295d46ddc22102b04eb2a3e37fc05d9`.
+All twelve actual starts, completions and raw logs reopen, together with
+the 2,389-file source inventory and its 1,783 Native entries. Cached Native
+build: 123.972 seconds; collection/prepare image builds: 61.848/66.123
+seconds; installed checks: 12.263/20.667 seconds; export: 4.487 seconds.
+Installed client SHA is
+`558e25498c211339b5a89aa8fcbacdc0fff40cc5f77f678021afd9dd39c5993e`.
+Runtime 008 still contains the original browser collector; it does not
+contain the separate browser overlays below. Installation grants zero
+site or formal trace credit. Local `rapid-v12-capture-canary-20261003-001/actual-poki-008`
+binds the unchanged 260-resource/four-origin diagnostic page; baseline
+startup passed and its fresh ordinary recording is running at this snapshot.
+
+The final browser host proof is local
+`cdp-pre-network-csp-checks-20261004-003/closure.json`, SHA
+`8b8e01565fda0e26711517611cdd969b928f950d9a98f8890416fdd2ae39f9f7`.
+It records **321 passing cases**, unchanged production source and retained
+historical journals. Exact collector SHA:
+`5f26240262679f4c5533e95f837fd1ebd884ec76b18836ed354a86d3176cedf9`;
+current acquisition consumer SHA:
+`062e0f4b1829f141a010027a1c2bd3f960a06bca305e91e49f20d52b971288de`.
+Historical consumers retain their original schema requirements.
+
+Local `cdp-lifecycle-overlay-diagnostic-20261004-004/actual-toom-001`
+is an actual, bounded production discovery call with those two read-only,
+uninstalled source overlays over runtime 007. Its outer operation closed 0
+at `2026-10-03T21:38:11.243926Z` in **25.514 seconds**; production discovery
+took **19.848 seconds**. Its raw journal SHA is
+`3e6d2d6f32a838f6a4374d7c09d868d02ead845636f43bc1f75d741277557344`;
+discovery result SHA is
+`ca9a47f5d874049c411ed9ba3743ca1d38df8ce58742b9cc45de8e45d7ee89d7`.
+Independent reopening verifies 86 resources, six exclusions, 92 observed
+requests, seven approved and ten observed/expandable origins; the audit
+contains 276 events, 92 terminals and zero active requests after quiescence.
+
+The authenticated iframe CSP denial, exact `chrome-error://chromewebdata/`
+frame/parent/loader/unreachable-URL witness, and later finish are linked as
+two separate internal lifecycle records. The reported **182,989 bytes are
+diagnostic only**: no Network/Fetch occurrence, remote body, graph resource
+or completed HTTP response is created for that loader. Source remained
+unchanged and the passive observer and profiler were restored.
+This is **one successful discovery pass**, not a converged final graph,
+HTTP/3 eligibility, site admission or formal capture. The original failures
+and all intermediate cheap diagnostic failures retain their exact evidence.
+
 ### V13 bounded enqueue and browser lifecycle repairs
 
 These observations use runtime 007, Lab `84db28df` / Native `3d994f0d`,

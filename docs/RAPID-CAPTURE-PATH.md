@@ -14,7 +14,29 @@ homepage credit fix, endpoint-specific final UDP drain evidence and explicit
 prospective BuFLO incoming tolerance. They require fresh affected captures;
 the previous failed attempts keep their original results.
 
-**Latest milestone, 4 October, 08:07 Sydney (3 October, 21:07 UTC):**
+**Latest milestone, 4 October, 08:46 Sydney (3 October, 21:46 UTC):**
+The target stays **16,000 accepted formal traces**. The new BuFLO runtime
+is installed and its short, full-page baseline recording is running.
+The cached Native build took **124 seconds**, and the two image builds
+about **62 and 66 seconds**. Fresh BuFLO traffic verification remains
+required; this installation does not add a formal trace.
+
+The two browser lifecycle fixes passed **321 focused checks**. The real
+Toom browser probe then completed one discovery pass in **20 seconds**,
+keeping all 86 resources and recording the blocked iframe's internal
+browser fallback separately. The site still needs discovery convergence
+and actual HTTP/3 preparation before it can be admitted.
+
+Site admission can use a separate runtime from defense capture. The next
+admission context will retain the **113 already verified root screens**
+when their source groups and Native client still match exactly. It will
+prepare pages under the new browser code; the original paused context
+keeps its one admitted site and 25 decisions. That page evidence is not
+imported into a changed-source context. Neither this browser probe nor
+the diagnostic recordings count toward the final 16,000.
+See the [runtime and browser proof](EVIDENCE-INDEX.md#v13-runtime-008-and-csp-browser-proof).
+
+**Earlier milestone, 4 October, 08:07 Sydney (3 October, 21:07 UTC):**
 The formal target stays **50 × five × 64 = 16,000**. Admission is safely
 paused at checkpoint **000062**: **25 decisions, one admitted site and zero
 formal traces**. The previous continuation closed successfully without

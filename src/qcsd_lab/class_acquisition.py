@@ -75,6 +75,8 @@ from .cdp_targets import (
     _RootRequestStageFailedInterception,
     _RootRequestStageInvalidInterception,
     _RootUnpairedFetchInvalidInterception,
+    _PRE_REQUEST_CSP_POLICY,
+    _PRE_REQUEST_CSP_SUMMARY_SCHEMA_VERSION,
     validate_bootstrap_prearm_summary,
     validate_egress_prearm_summary,
     validate_normal_shutdown_disposal_summary,
@@ -1453,16 +1455,30 @@ def _validate_versioned_render_observation(
     acquisition_schema_version: int,
     allow_failure: bool = False,
 ) -> None:
+    summary = (
+        value.get("internal_document_lifecycle_summary")
+        if isinstance(value, Mapping) else None
+    )
+    if acquisition_schema_version != SCHEMA_VERSION and isinstance(summary, Mapping) and (
+        summary.get("schema_version") == _PRE_REQUEST_CSP_SUMMARY_SCHEMA_VERSION
+        or summary.get("policy") == _PRE_REQUEST_CSP_POLICY
+    ):
+        raise ValueError("acquisition render srcdoc policy differs from its historical schema")
     if acquisition_schema_version in {13, SCHEMA_VERSION}:
-        summary = (
-            value.get("internal_document_lifecycle_summary")
-            if isinstance(value, Mapping) else None
-        )
         expected_policy = (
             _SCHEMA_THIRTEEN_SRCDOC_PSEUDO_DOCUMENT_POLICY
             if acquisition_schema_version == 13 else SRCDOC_PSEUDO_DOCUMENT_POLICY
         )
-        if not isinstance(summary, Mapping) or summary.get("policy") != expected_policy:
+        current_csp_denial = (
+            acquisition_schema_version == SCHEMA_VERSION
+            and isinstance(summary, Mapping)
+            and type(summary.get("schema_version")) is int
+            and summary["schema_version"] == _PRE_REQUEST_CSP_SUMMARY_SCHEMA_VERSION
+            and summary.get("policy") == _PRE_REQUEST_CSP_POLICY
+        )
+        if not isinstance(summary, Mapping) or (
+            summary.get("policy") != expected_policy and not current_csp_denial
+        ):
             raise ValueError("acquisition render srcdoc policy differs from its schema")
     if acquisition_schema_version in {7, 8, 9, 10, 11, 12, 13, SCHEMA_VERSION}:
         validate_render_observation(value, allow_failure=allow_failure)
