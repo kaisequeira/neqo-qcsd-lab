@@ -14,7 +14,33 @@ homepage credit fix, endpoint-specific final UDP drain evidence and explicit
 prospective BuFLO incoming tolerance. They require fresh affected captures;
 the previous failed attempts keep their original results.
 
-**Latest milestone, 4 October, 06:36 Sydney (3 October, 19:36 UTC):**
+**Latest milestone, 4 October, 07:10 Sydney (3 October, 20:10 UTC):**
+Runtime 006's fresh ordinary capture, deep check, padding qualification and
+four defended preflights passed on the unchanged 260-resource/four-origin
+page. Parallel pair 004 reached both workers' captures, but both clients
+timed out before HTTP/3 negotiation or any defense clock started. The
+failed attempts keep their actual Lab `51896a2` / Native `3d994f0d` labels
+and zero formal credit. Each lane's resources were retired after both
+workers had exited; a successful running peer was not tested.
+
+The narrow private Lab repair now selects the same rapid bridge options
+as serial capture and removes each cleanup registration only after exact
+resource absence and successful ownership retirement. Shell syntax and
+**seven focused actuator tests passed**. The source review found no change
+to the exclusive observer route, qualification, complete graph or traffic
+settings. A network-only comparison closed 0 in **43.466 seconds**, observing
+no matching packet on the internal bridge and the exact sent packet on the
+ordinary bridge, with forwarding disabled in both. Publication, matching
+installation and fresh paired/recovery checks remain pending; no parallel
+throughput is established.
+
+Admission continuation 007 closed successfully at **07:05:03 Sydney**,
+in **195.477 seconds**, with its original source and registry unchanged.
+Checkpoint **000060** at **07:04:12 Sydney** records **24 decisions, one
+admitted site and zero formal traces**. The target stays **50 × five × 64
+= 16,000**. See the [failed pair and focused source checks](EVIDENCE-INDEX.md#v12-parallel-bridge-forwarding-failure).
+
+**Earlier milestone, 4 October, 06:36 Sydney (3 October, 19:36 UTC):**
 The tested private gate credential repair is published as Lab `51896a2`
 and installed in runtime 006, with unchanged Native `3d994f0d`. All twelve
 actual operations and the full 2,388-entry source inventory reopen. Verified

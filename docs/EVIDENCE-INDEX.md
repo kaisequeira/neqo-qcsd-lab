@@ -9,6 +9,103 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ## Application response policy repair
 
+### V12 parallel bridge forwarding failure
+
+Runtime 006 remains frozen on actual Lab
+`51896a26fb619ade949ed5137f966f2718f1c2d6` / Native
+`3d994f0d557e2d27873bace0f4efd0f401660bc7`. Fresh `actual-poki-006`
+ordinary preflight, capture, ordinary deep verification, padding
+qualification and four defended preflights all closed 0 in 9.755, 161.608,
+7.419, 70.431 and 9.542 seconds respectively. The complete 260-resource,
+four-origin workload is unchanged. All nine authoritative sealed files
+reopen; ordinary deep receipt SHA is
+`cfb98d6f74c7ca620f6ed9e766ea94d9ef02af99c051bb582dc4809e7106e5e9`.
+The qualifier retains 120 complete identity responses in three connection
+epochs, with the exact current source/image bindings. These are diagnostic
+checks, not formal study recordings.
+
+Under `actual-poki-006/execution-root/results/parallel-poki-004`, the actual
+operator closed 1 at `2026-10-03T19:56:57.383676Z`, after 276.445 seconds.
+Authority SHA is
+`06e6c35713a0df74cf2fcf5b20a7397d37461cb2fe2da3d7460a154fbb1c223c`;
+launch command SHA is
+`6ece8d055d203fbdd0759f77ba02ea2fe27d122e3010b97f7e37877ac836d186`.
+Both workers passed the private-file startup gate and reached capture.
+
+| Lane | Actual failed recording | Retained evidence |
+| --- | --- | --- |
+| BuFLO | Native ran 30.264 seconds; endpoint 1 (`img.poki-cdn.com`) closed with `Transport(IdleTimeout)`. No HTTP/3 negotiation, resource completion or defense epoch. | All 27 sealed files reopen; seal SHA `b3f0b9c1f196e49bb8d8d0a860f1502354e202327a358b594813568f80449e62`. The additional terminal-clock error reports use before epoch arm. |
+| CS-BuFLO | Native ran 30.258 seconds with the same endpoint idle timeout; no negotiation, completed resource or scheduled cell. The runner was not killed by a host timeout. | All 23 sealed files reopen; seal SHA `9e733e422a64a41abc941691769acc7c859a28e58ed4b869c4e678520ed299c8`. |
+
+Both attempts retain all 260 requested resources and are incomplete with
+zero accepted recordings. Their installed completion verifier also closed
+1; deep receipt SHA is
+`747d6af9d052ee2783f27fd410381e79d5462a12d33e321acd7372b37626bb7e`.
+Its missing accepted-sample scheduler record is a secondary result of the
+failed attempts; their own scheduler proof records remain retained.
+The failure does not establish that Poki is ineligible.
+
+Recorded ownership/release and retirement closures reopen. Each retirement
+binds only that lane's worker, router and network; CS-BuFLO retired at
+`19:56:14.980178Z` and BuFLO at `19:56:47.651311Z`. Both workers had already
+exited, so this does not prove successful peer continuation or failed-only
+restart. Subsequent EXIT cleanup revisited registrations that the real
+retirement helper does not remove, producing missing-handoff warnings.
+
+Source inspection found that parallel client bridges always used Docker
+`--internal`, while serial rapid capture omits it. Per-lane addresses,
+exclusive client-to-observer routes and router NAT receipts remain
+consistent. No host firewall-rule snapshot establishes the exact discarded
+packet path. Local `rapid-v12-parallel-bridge-probe-20261004-001` then
+isolated the bridge option using the unchanged runtime 006 image, fresh
+networks and a single UDP packet addressed to each router's actual MAC.
+The network-only comparison closed 0 at `2026-10-03T20:09:34.880912Z`, in
+43.466 seconds. Its `run-001/probe-completed.json` has SHA
+`20157839664cf6533c6d785e6fe76f5c16171b6471c8a9a9272f0c6d0aede653`;
+outer actual completion SHA is
+`8e65ee6729db18234dc03238bcc85e96ce06500137e694a8634e6e7ad7298435`.
+All 56 individually bounded Docker commands closed 0 with retained starts,
+completions and raw logs. Each send occurred inside its actual five-second
+observer window. The internal bridge yielded zero matching frames; the
+ordinary bridge yielded one frame byte-identical to the sent frame. Both
+router forwarding values were zero; no public traffic, Native execution or
+defense qualification occurred. This establishes the local bridge delivery
+difference, not successful paired capture on the changed source.
+
+The prospective two-file repair matches the serial rapid
+bridge predicate and unsets only a successfully retired resource's original
+registration index. Nonrapid bridge behavior, actual observer routing,
+Native, full workload and scientific acceptance remain unchanged. The
+corrected test stub records retirement and rejects duplicates, matching
+the real helper instead of silently pruning and reindexing its arrays.
+
+Local `rapid-v12-parallel-bridge-source-checks-20261004-001` retains actual
+shell syntax exit 0 and **seven passing actuator cases**. The latter closed
+0 at `2026-10-03T20:06:08.989792Z`, taking 15.922 seconds; pytest reported
+15.38 seconds. Raw stdout SHA is
+`480f84d414224a9f8c5c2ee4127d7032ef4c864c39a450f6f4c7daff677ab3e3`.
+Its immutable `tested-source.json`, SHA
+`7c09a87a1292e4532ffcb7e653ed61aaf0d385d90f083938af7ec7fab0900e7d`,
+binds the `c9a0c018` author base, unchanged Native `3d994f0d`, shell SHA
+`de1d97d89b38efa9399e9f4f75a9d12cbe9028405c5495f9f560048c9c70e2b2`
+and test SHA
+`ac93e7a2df5febfa4874dc881c05346c4027e12313ce00042b25dd30324aa66b`.
+The extracted shell tests cover formal and diagnostic rapid networks, six
+unique resource retirements, continued peer execution and preserved prior
+peer bytes. Independent read-only review found no blocker. Publication,
+matching installation and fresh paired capture remain
+pending. This is source proof only, with no compatibility or old-evidence
+promotion claim and **zero formal credit**.
+
+Admission continuation 007 separately closed 0 at
+`2026-10-03T20:05:03.293841Z`, in 195.477 seconds, on unchanged original
+`818deb6` / `39464c62` and registry 000002. Immutable checkpoint 000060,
+recorded `2026-10-03T20:04:12.154035Z`, raw SHA
+`111ed92a41ade5134869d68f6cd94f9b4fc0465e02a7acc108594e986ab4e055`,
+retains **24 terminal decisions, one admitted site and zero formal traces**;
+its next candidate is order 25, `news.google.com`. No fifty-site cohort or
+study shakedown is complete. The target remains **50 × five × 64 = 16,000**.
+
 ### V12 private gate runtime 006
 
 Published Lab `51896a26fb619ade949ed5137f966f2718f1c2d6` installs the

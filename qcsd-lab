@@ -11335,8 +11335,15 @@ for pair in x["pairs"]:
     kernel_tx_public_client_network="qcsd-parallel-client-$$-${parallel_index}"
     kernel_tx_public_router_name="qcsd-parallel-router-$$-${parallel_index}"
     parallel_worker_name="qcsd-parallel-worker-$$-${parallel_index}"
+    # Match the serial rapid topology. Docker's internal bridge rules can
+    # discard public-destination packets before they reach the observer,
+    # even when the client routes exclusively through the measured router.
+    kernel_tx_public_network_options=(--driver bridge)
+    if (( ! rapid_capture )); then
+      kernel_tx_public_network_options+=(--internal)
+    fi
     qcsd_create_docker_network QCSD_DOCKER_IDS_PUBLIC_NETWORKS \
-      docker network create --driver bridge --internal \
+      docker network create "${kernel_tx_public_network_options[@]}" \
       --label org.qcsd.owner=qcsd-lab --label org.qcsd.study=parallel-diagnostic \
       "${kernel_tx_public_client_network}" >/dev/null
     kernel_tx_public_network_id="${QCSD_DOCKER_IDS_PUBLIC_NETWORKS[-1]}"
@@ -11476,12 +11483,15 @@ print("running" if x["State"]["Running"] else x["State"]["ExitCode"])
       _qcsd_completed_topology_remove 0 rm --force "${parallel_worker_id}" >/dev/null
       [[ "$(_qcsd_docker_exact_id_presence "${parallel_worker_id}")" == "absent" ]] || exit 1
       qcsd_retire_docker_handoff run "${parallel_worker_id}" QCSD_DOCKER_IDS_PARALLEL_WORKERS
+      unset 'QCSD_DOCKER_IDS_PARALLEL_WORKERS[parallel_index]'
       _qcsd_completed_topology_remove 0 rm --force "${parallel_router_ids[parallel_index]}" >/dev/null
       [[ "$(_qcsd_docker_exact_id_presence "${parallel_router_ids[parallel_index]}")" == "absent" ]] || exit 1
       qcsd_retire_docker_handoff run "${parallel_router_ids[parallel_index]}" QCSD_DOCKER_IDS_PUBLIC_ROUTERS
+      unset 'QCSD_DOCKER_IDS_PUBLIC_ROUTERS[parallel_index]'
       _qcsd_completed_topology_remove 0 network rm "${parallel_network_ids[parallel_index]}" >/dev/null
       [[ "$(_qcsd_docker_exact_network_presence "${parallel_network_ids[parallel_index]}")" == "absent" ]] || exit 1
       qcsd_retire_docker_handoff network "${parallel_network_ids[parallel_index]}" QCSD_DOCKER_IDS_PUBLIC_NETWORKS
+      unset 'QCSD_DOCKER_IDS_PUBLIC_NETWORKS[parallel_index]'
       /usr/bin/python3 -I -c '
 import json,sys
 from pathlib import Path

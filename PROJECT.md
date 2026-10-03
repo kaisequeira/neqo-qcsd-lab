@@ -41,7 +41,35 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Latest milestone, 4 October, 06:36 Sydney (3 October, 19:36 UTC):**
+**Latest milestone, 4 October, 07:10 Sydney (3 October, 20:10 UTC):**
+The target remains **50 sites × five settings × 64 visits = 16,000 accepted
+formal traces**. Fresh runtime 006 ordinary capture, deep verification,
+padding qualification and all four defended preflights passed on the full
+260-resource/four-origin Poki page. The actual two-container pair 004 then
+failed: both workers reached capture but timed out before negotiating HTTP/3,
+completing a resource or starting a defense clock. Both failed recordings
+retain Lab `51896a2` / Native `3d994f0d`; they grant zero formal credit.
+
+The focused, uninstalled Lab repair makes rapid parallel bridge creation
+match the serial topology and removes only each successfully retired lane's
+cleanup registrations. Exact observer routing and all scientific guards
+remain intact. Shell syntax and **seven focused actuator cases** passed;
+independent source review found no blocker. An actual network-only comparison
+closed 0 in **43.466 seconds**: the internal bridge delivered zero matching
+frames to the observer; the ordinary bridge delivered the exact sent frame.
+Both routers had forwarding disabled, so no public traffic was sent. Source
+publication, a matching runtime and a fresh paired capture remain pending.
+The previous attempt proves recorded retirement after both workers exited,
+not successful peer continuation or failed-only recovery.
+
+Admission continuation 007 closed 0 at **07:05:03 Sydney**, in **195.477
+seconds**, on unchanged `818deb6` / `39464c62` and registry 000002.
+Checkpoint **000060**, recorded **07:04:12 Sydney**, retains **24 terminal
+decisions, 1/50 admitted sites and 0/16,000 formal traces**. The separate
+fifty-trace study shakedown remains pending. See the
+[pair failure and focused repair evidence](docs/EVIDENCE-INDEX.md#v12-parallel-bridge-forwarding-failure).
+
+**Earlier milestone, 4 October, 06:36 Sydney (3 October, 19:36 UTC):**
 The private gate startup repair is published as Lab `51896a2`, with unchanged
 Native `3d994f0d`. Runtime 006 installs that exact clean source: all twelve
 actual operations and 2,388 source entries reopen, including the unchanged

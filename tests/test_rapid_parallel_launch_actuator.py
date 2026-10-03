@@ -51,6 +51,12 @@ elif args[0]=='rm':
     if state.get('workers') and key==state['workers'][0]: time.sleep(3.25)
     state['events'].append('remove-'+key);containers.pop(key,None)
 elif args[:2]==['network','rm']: networks.pop(args[-1],None)
+elif args[0]=='retire':
+    kind,key,registration=args[1:]
+    retired=state.setdefault('retirements',[])
+    if any(row['id']==key for row in retired):
+        raise SystemExit('resource handoff was already retired: '+key)
+    retired.append(dict(kind=kind,id=key,registration=registration))
 elif args[0]=='presence': print('present' if args[1] in containers else 'absent')
 elif args[0]=='network-presence': print('present' if args[1] in networks else 'absent')
 else: raise SystemExit('unexpected fake Docker operation '+repr(args))
@@ -168,6 +174,7 @@ else:
         for row in rows: Path(row["result_namespace"]).mkdir(parents=True)
 ''')
     capture_calls = tmp_path / "capture-preflight-calls.log"
+    network_calls = tmp_path / "network-create-calls.log"
     completed_peer = Path(context.authority["runtime"]["execution_root"]) / "results" / "prior-completed-peer" / "complete.json"
     completed_peer.parent.mkdir(parents=True)
     completed_peer.write_bytes(b"preserved independently verified peer\n")
@@ -194,13 +201,13 @@ else:
         '_qcsd_docker_api_with_timeout() { local duration=$1; printf "%s %s\\n" "$1" "${*:2}" >>' + quoting(str(tmp_path / "removal-durations.log")) + '; shift; timeout "$duration" /usr/bin/python3 ' + quoting(str(fake)) + ' ' + quoting(str(state)) + ' ' + quoting(str(context.output)) + ' "$@"; }',
         '_qcsd_docker_exact_id_presence() { fake presence "$1"; }',
         '_qcsd_docker_exact_network_presence() { fake network-presence "$1"; }',
-        'qcsd_create_docker_network() { local -n result=$1; local name=${!#}; result+=("$(fake create-network "$name")"); }',
+        'qcsd_create_docker_network() { local -n result=$1; local name=${!#}; printf "%s\\n" "$*" >>' + quoting(str(network_calls)) + '; result+=("$(fake create-network "$name")"); }',
         'start_kernel_tx_public_router() { kernel_tx_public_router_id=$(fake create-router "$1" "$study_capture_sidecar_cpuset" "$image_id"); QCSD_DOCKER_IDS_PUBLIC_ROUTERS+=("$kernel_tx_public_router_id"); }',
         'prepare_kernel_tx_capture_root() { :; }',
         'kernel_tx_public_network_receipt_base64() { echo test-only-topology; }',
         'kernel_tx_public_observer_binding_base64() { echo test-only-observer; }',
         'qcsd_run_detached_docker() { local -n result=$1; shift; result+=("$(fake create-worker "$@" --image-id "$image_id")"); }',
-        'qcsd_retire_docker_handoff() { local -n values=$3; local value; local -a keep=(); for value in "${values[@]}"; do [[ "$value" == "$2" ]] || keep+=("$value"); done; values=("${keep[@]}"); }',
+        'qcsd_retire_docker_handoff() { fake retire "$@"; }',
         '_qcsd_begin_latched_cleanup() { :; }', '_qcsd_finish_latched_cleanup() { exit "$cleanup_entry_status"; }',
         _environment_helper(source),
         'parallel_select_host_python() { printf "%s\\n" "/usr/bin/python3"; }',
@@ -219,6 +226,12 @@ else:
     assert second["actual"]["peer_retirement_sha256"] == parallel.sha(parallel.read(context.output / "lane-1/retirement.json"))
     observed = json.loads(state.read_text())
     assert observed["containers"] == {} and observed["networks"] == {}
+    assert len(observed["retirements"]) == 6
+    assert len({row["id"] for row in observed["retirements"]}) == 6
+    created_networks = [shlex.split(row) for row in network_calls.read_text().splitlines()]
+    assert len(created_networks) == 2
+    assert all("--internal" not in row for row in created_networks)
+    assert all(row[1:6] == ["docker", "network", "create", "--driver", "bridge"] for row in created_networks)
     assert observed["events"].index("remove-" + observed["workers"][0]) < observed["events"].index("terminal-1")
     removal_calls = (tmp_path / "removal-durations.log").read_text().splitlines()
     assert len(removal_calls) == 6
