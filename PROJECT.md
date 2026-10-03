@@ -41,7 +41,49 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Latest inspected milestone, 07:55 UTC on 3 October (17:55 AEST):** published
+**Current successor milestone, 3 October:**
+Published Lab `651a0e0` pins published Native `e593b7e` and contains the prospective
+[revision-9 startup policy](docs/RAPID-SELECTION-V9.md) and its late-ACK
+fidelity correction. The declaration is dated **08:20:52 UTC**, before any
+live use. The fixed target remains **50 × five × 64 = 16,000**.
+
+The actual Native core run passed **416 tests**. The real two-resource,
+two-origin HTTP/3 regression passed with delayed endpoint activation. The
+canonical qualified-origin regression then closed **0** at
+`2026-10-03T08:50:11.631616+00:00`. The final runner compatibility scope
+passed **13 distinct cases**, all operations closed 0, finishing at
+`2026-10-03T08:54:15.939959+00:00`. These results do not establish a final
+installed runtime; the compiled snapshots retain their original identities.
+
+The integrated Lab startup suite passed **35 cases**. The later focused
+authoring run passed **63 cases in 2.60 seconds**, including incoming startup
+after the global ten-second minimum. Accepted V2 traffic still requires
+actual request-ACK range coverage, the recorded readiness barrier and complete
+active cells. The other four traffic settings and the V1/default timing rules remain unchanged.
+
+Both source commits are published on `main` and the desktop branch. The clean
+frozen execution checkout built the matching client in **113.917 seconds**.
+Both images and installed-byte checks passed; independent review reopened
+all **2,358 source entries and 12 actual operations**. The fresh full-graph
+Poki baseline passed ordinary deep verification, and its host capture closed
+0 after normal teardown. Fresh **120-request response qualification passed
+in 69.490 seconds**, and all four defended offline preflights passed in
+**8.495 seconds**. All five one-attempt diagnostics have closed: undefended
+and FRONT pass ordinary deep verification; BuFLO, CS-BuFLO and Tamaraw fail
+and remain preserved. The new ACK startup works, but a paired-slot identity
+assumption breaks its next outgoing commit. CS-BuFLO reveals a one-byte parser
+tail stall. Tamaraw completes natively but fails outgoing timing and incoming
+ownership receipts. Focused repairs are underway; current repaired-source
+defended proof remains **pending**. Current-source
+counters are **0/50 admitted sites, 0/50 study shakedown traces and
+0/16,000 formal traces**. The earlier 260-resource/four-origin graph,
+admission and failed attempts retain their original source and policy.
+Exact check records and pending identity fields are in the
+[successor evidence entry](docs/EVIDENCE-INDEX.md#successor-startup-and-endpoint-engineering-checks).
+
+### Earlier repaired-runtime snapshot
+
+**Inspected milestone, 07:55 UTC on 3 October (17:55 AEST):** published
 Lab `cacc4aa` pins Native `01ce0a7`. Its cached client build took **117.842
 seconds**; the collection and preparation images built in **60.728 and
 59.980 seconds** and passed installed-byte checks. Independent review reopened

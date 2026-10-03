@@ -14,7 +14,38 @@ homepage credit fix, endpoint-specific final UDP drain evidence and explicit
 prospective BuFLO incoming tolerance. They require fresh affected captures;
 the previous failed attempts keep their original results.
 
-**Current execution snapshot, 07:55 UTC on 3 October:** the repaired
+**Current successor milestone, 3 October:** published Lab
+`651a0e0` pins published Native `e593b7e` and contains
+[revision 9](RAPID-SELECTION-V9.md), declared at
+**08:20:52 UTC**, and its late-ACK fidelity correction. Actual Native checks
+passed **416 core tests**, the delayed two-resource/two-origin HTTP/3 graph
+case and the canonical qualified-origin case; the last closed 0 at
+**08:50:11 UTC**. The final runner scope passed **13 distinct cases**, all
+operations closed 0, finishing at **08:54:15 UTC**.
+The integrated Lab startup suite passed **35 cases**; the later focused
+authoring run passed **63 cases**, including startup after ten seconds.
+Both source commits are published on `main` and the desktop branch. The
+matching client built in **113.917 seconds**, and both images passed installed
+checks. Independent review reopened all **2,358 source entries and 12 actual
+operations**. The fresh full-graph Poki baseline passed ordinary deep
+verification and normal host cleanup. Fresh **120-request qualification
+passed in 69.490 seconds** and all four defended preflights in **8.495
+seconds**. All five one-attempt diagnostics have now closed. Undefended and
+FRONT pass ordinary deep verification; BuFLO, CS-BuFLO and Tamaraw fail and
+retain their sealed evidence. Focused repairs address the BuFLO slot-identity
+assumption, the CS-BuFLO one-byte parser stall and Tamaraw's timing/ownership
+contract. Fresh affected proof remains pending. Current-source counters are
+**0/50 admitted sites, 0/50 study shakedown traces and 0/16,000 formal traces**.
+See the [actual checks and pending identities](EVIDENCE-INDEX.md#successor-startup-and-endpoint-engineering-checks).
+
+V2 sends shaped outgoing requests from tick zero. Incoming full cells start
+on the first 20 ms grid point after an actual qualified request's terminal
+ACK and sufficient exact receive capacity. The validator reopens the ACK
+ranges, readiness event and actual schedule. Missing startup opportunities
+provide no invented rows, bytes or credit. Old rules and failed evidence keep
+their original meaning; the other four settings are unchanged.
+
+**Earlier repaired-runtime snapshot, 07:55 UTC on 3 October:** the repaired
 `cacc4aa`/Native `01ce0a7` runtime is published and independently verified.
 Its cached client build took **118 seconds**; the two image builds took
 about **one minute each**. A fresh full Poki baseline passed ordinary deep
@@ -40,7 +71,7 @@ The table below retains the earlier 06:25 UTC snapshot for comparison; its
 running and pending-build statements describe that earlier time. See the
 [exact successor records](EVIDENCE-INDEX.md#repaired-runtime-and-fresh-poki-diagnostics).
 
-The latest published admission contract is [selection revision 8](RAPID-SELECTION-V8.md)
+At that snapshot, the published admission contract was [selection revision 8](RAPID-SELECTION-V8.md)
 under the unchanged v5 profile. No revision-8 live admission has run. A
 separate revision-9 startup amendment is being authored before new live
 calls; it has not yet supplied runtime or capture proof. The published rules

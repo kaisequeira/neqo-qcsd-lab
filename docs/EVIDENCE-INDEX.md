@@ -9,6 +9,147 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ## Application response policy repair
 
+### Successor startup and endpoint engineering checks
+
+Published Lab `651a0e0` pins published Native
+`e593b7ee785e97059b442b0772646ae08666096d` and contains the
+[prospective revision-9 policy](RAPID-SELECTION-V9.md), declared at
+`2026-10-03T08:20:52Z`, and the late-ACK fidelity correction. It preserves
+the 50-site, five-setting, 64-visit target and complete resource/origin graphs.
+Old admissions and failed captures retain their original authority.
+
+Actual immutable Native records are under
+`../diagnostic-rehearsals/inactive-endpoint-parser-native-checks-20261003-001/`:
+
+| Record prefix | Reopened actual result | Completion UTC |
+|---|---|---|
+| `integrated-core-lib-020` | Exit 0; all 416 core library tests passed. | `2026-10-03T08:19:39.502183+00:00` |
+| `integrated-runner-030` | Exit 0; actual two-resource/two-origin delayed HTTP/3 graph regression passed. | `2026-10-03T08:27:27.534165+00:00` |
+| `integrated-runner-049` | Exit 0; canonical selected qualified-origin activation regression passed. | `2026-10-03T08:50:11.631616+00:00` |
+| `integrated-runner-050` through `056` | Every operation exit 0; with `049`, the final runner scope passed 13 distinct cases. | Last closed at `2026-10-03T08:54:15.939959+00:00` |
+
+Each prefix has its actual command, started/completed JSON and stdout/stderr
+logs. Their recorded start/log hashes independently match the saved bytes.
+The final `source-012/` inventory SHA-256 is
+`f8d93ff54cfc2487619cef5fa2a52f8ca6c9c123fc671f52edb7f54803da56e9`.
+Direct runner checks `050`–`056` use the sealed compiled unit binary with
+SHA-256 `8967d17121b0e7a19c1a3f74ceb4603e458fe86ab1374a74b0d27658350bda3b`.
+The compiled snapshots retain their original identities; these checks do not
+certify an installed client built from the published Native commit.
+
+`../diagnostic-rehearsals/rapid-v9-lab-integration-20261003-001/` retains
+`focused-startup-{started,completed}.json` and actual stdout/stderr logs.
+It closed 0 at `2026-10-03T08:30:07.936098+00:00`; stdout reports **35 passed
+in 1.33 seconds**. Both recorded log hashes match. The later authored focused
+run reports **63 passed in 2.60 seconds** across
+[startup/fidelity](../tests/test_capture_buflo_ack_start.py),
+[policy](../tests/test_capture_acceptance_policy.py) and two legacy BuFLO
+terminal guards in [the study tests](../tests/test_buflo_study.py). Its actual
+pytest command/output is an authoring result, with no separate immutable
+receipt claimed.
+
+| Successor identity or live proof | Current status |
+|---|---|
+| Final clean Native commit | Published `e593b7ee785e97059b442b0772646ae08666096d` on main and desktop. |
+| Final clean Lab commit and pinned Native Gitlink | Published `651a0e00c039904e90e6c792950bceaa8d91ba58` pins `e593b7e` on main and desktop. |
+| Canonical runtime, installed client and image identities | Built and independently reopened; exact identities and fresh diagnostics below. |
+| Fresh admission and affected capture receipts | Pending; **0/50 current admitted sites, 0/50 study shakedown traces, 0/16,000 formal traces**. |
+
+#### Installed successor runtime and first fresh baseline
+
+`../diagnostic-rehearsals/ack-start-runtime-20261003-001/` contains the
+actual cached client build, both image builds, installed-byte verification
+and canonical closure for Lab `651a0e0` / Native `e593b7e`. All **2,358
+source entries and 12 actual operations** independently reopen; all operations
+closed 0. The client built in **113.917 seconds**, the collection/prepare
+images in **58.110 / 65.957 seconds**, and their installed checks in
+**12.127 / 13.565 seconds**.
+
+| Installed artifact | Exact identity |
+|---|---|
+| `canonical-runtime.json` SHA-256 | `8ed72eb7a61d705259e56f538d1e3cb7e85131a5610cae403592daf1ca1bc1e4` |
+| Client SHA-256 | `443e4d34eb605212ecc70edfe87b15ba396d42c9bfb2eba4d539385d9bf37673` |
+| Collection image | `sha256:93bfba990ec3d44c67707365d2c08160a0b8687874d32d678964a0116dd64b90` |
+| Preparation image | `sha256:3bd80c42b28817604c6abb12a010fac51eb5ae1793b6125724bdcd416eea650b` |
+
+The new create-only five-setting canary lives under
+`../diagnostic-rehearsals/rapid-ack-start-capture-canary-20261003-001/actual-poki-001/`.
+Its plan SHA-256 is
+`cb32035d3daee4317e9c71015ee91958e2c3199b2391786ba7e507ff81bd069f`;
+its command inventory SHA-256 is
+`6f2e0d1b70100f70d9d053220295837cefd35d3e3398184e7ab4f04af1627bd8`.
+It preserves all **260 resources and four origins**, binds revision 9
+explicitly, and allows one attempt per setting. Old admission/preparation
+evidence supplies lineage only.
+
+The new baseline's dated child is `20261003T090659.216043Z` below campaign
+`rapid-curated-tranco50-v2-diagnostic-ack-start-poki-001-undefended`.
+Its host capture closed 0 in **147.815 seconds** at
+`2026-10-03T09:07:43.747147+00:00`; ordinary deep verification closed 0 at
+`2026-10-03T09:07:51.531385+00:00`, accepting one complete diagnostic trace.
+The new normal-teardown handling therefore has a successful installed live
+rehearsal. Independent raw review reopened all 260 complete responses across
+four HTTP/3 origins and matched all **1,484 captured frames to 1,484 Native
+packets**, with zero unmatched tails or clock steps. It reconstructed the
+exact nanosecond trace and every recorded reconciliation metric; total
+application response bytes are **1,038,470**. All input/source/image/seal and
+closed operation hashes match.
+
+Fresh response qualification closed 0 in **69.490 seconds**, retaining the
+new 120-request proof. The named set is `rapid-ack-start-poki-001`, manifest
+SHA-256 `447ba40a19376c109b58baf57a37afb616df0ac8264a9a26049e253c4a33ec78`,
+sidecar SHA-256 `f16dff1b8a53be4f7583295c780fed52fe813c57f40daf002adf144cb0b581a6`.
+All four defended offline preflights passed in **8.495 seconds**. The single
+fresh BuFLO attempt failed in native execution; its host capture closed 1 in
+**141.598 seconds** at `2026-10-03T09:15:20.914024+00:00`, and ordinary deep
+verification also closed 1. The dated result child is
+`20261003T091437.650187Z` under
+`rapid-curated-tranco50-v2-diagnostic-ack-start-poki-001-buflo`.
+
+The raw startup receipt proves the new rule operated: the actual qualified
+request ACK was reduced at **8,165 us**, readiness at **8,280 us**, and the
+incoming cadence armed for **20,000 us** with **24,048 exact eligible bytes**.
+The next outgoing commit then failed with
+`BuFLO kernel job identity diverged: job=1 tick=1 slot=1`.
+The kernel-job check still assumes a paired slot at every tick; omitting the
+initial incoming opportunity changes the later slot numbering. Subsequent
+missed-slot counters record abort cleanup, not a startup deadline failure.
+The failed attempt remains sealed and unaccepted; a focused source repair is
+underway. All five single-attempt diagnostics have now closed:
+
+| Setting | Capture / ordinary deep exit | Capture seconds | Dated result child |
+|---|---|---:|---|
+| Undefended | 0 / 0; one accepted diagnostic. | 147.815 | `20261003T090659.216043Z` |
+| FRONT | 0 / 0; one accepted diagnostic. | 146.979 | `20261003T093032.395151Z` |
+| BuFLO | 1 / 1; kernel-job identity failure above. | 141.598 | `20261003T091437.650187Z` |
+| CS-BuFLO | 1 / 1; structural parser stall followed by a real outgoing deadline miss. | 206.863 | `20261003T091936.431325Z` |
+| Tamaraw | 1 / 1; Native completed, but the trace failed ordinary fidelity. | 178.591 | `20261003T092522.038669Z` |
+
+FRONT's deep receipt closed at `2026-10-03T09:31:25.727838+00:00`.
+CS-BuFLO's primary stops at a two-byte DATA header with only one byte left
+in its advertised allowance: requested limit **1,016**, consumed **1,015**.
+The peer reports `STREAM_DATA_BLOCKED` at the actual frontier, but the new
+tail guard refuses another owned parser byte. No primary progress follows
+for 62 seconds; all 6,883 scheduled incoming actions go to padding.
+Its later outgoing slot 13,441 expires at the five-millisecond deadline;
+the two incoming `RunAborted` rows are subsequent cleanup. The prospective
+repair uses the real blocked-frontier proof to grant only **one** extra byte,
+preserving the earlier FIN-overgrant regression.
+
+Tamaraw's outgoing slots 1,325 and 4,185 expire **2 us** and **1,517 us**
+beyond the five-millisecond window. Separately, **3,801 incoming rows** acquire
+previously advertised parser-lease bytes only at consumption. Balanced
+aggregate Native credit totals do not supply truthful whole-cell physical
+advertisement receipts. The current exact-receipt verifier therefore rejects
+them. Filling a missing receipt from an earlier partial timestamp would
+invent evidence; the source contract is being audited for a prospective
+repair. All failures retain their sealed results and grant no acceptance.
+
+The Docker process list and lifecycle registry were empty after the final
+FRONT operation. Focused source repairs and verification can therefore resume
+without interrupting a live capture. These additional diagnostics grant
+**zero site, study shakedown or formal trace credit**.
+
 ### Prospective primary-credit, endpoint and timing repairs
 
 The [repair explanation](RAPID-CAPTURE-REPAIRS.md) describes the prospective
