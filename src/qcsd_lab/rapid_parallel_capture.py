@@ -15,6 +15,7 @@ import re
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -374,38 +375,80 @@ def release(path: Path, output: Path, actual: dict[str, Any]) -> None:
             "campaign": "/lab/" + str(Path(value["campaigns"][index]["path"]).relative_to(value["runtime"]["execution_root"]))})
 
 
+@contextmanager
+def _gate_read_credentials():
+    """Read private mounted inputs as their declared user, then restore setup credentials."""
+    identities = []
+    for name in ("QCSD_LAB_UID", "QCSD_LAB_GID"):
+        text = os.environ.get(name)
+        if (not isinstance(text, str) or re.fullmatch(r"0|[1-9][0-9]*", text) is None
+            or len(text) > 10 or int(text) > 0xfffffffe):
+            raise ValueError("parallel gate requires explicit canonical numeric UID and GID")
+        identities.append(int(text))
+    uid, gid = identities
+    original_uids, original_gids = os.getresuid(), os.getresgid()
+    if (original_uids[1], original_gids[1]) != (uid, gid):
+        if original_uids != (0, 0, 0):
+            raise ValueError("parallel gate credential transition requires real and saved root")
+        # libc changes these credentials across the process's threads. The
+        # pre-entrypoint gate has no background work that may share this phase.
+        if len(tuple(Path("/proc/self/task").iterdir())) != 1:
+            raise ValueError("parallel gate credential transition requires a single-threaded process")
+    try:
+        if os.getegid() != gid:
+            os.setegid(gid)
+        if os.geteuid() != uid:
+            os.seteuid(uid)
+        if (os.getresuid() != (original_uids[0], uid, original_uids[2])
+            or os.getresgid() != (original_gids[0], gid, original_gids[2])):
+            raise RuntimeError("parallel gate did not retain its real and saved credentials")
+        yield
+    finally:
+        try:
+            if os.geteuid() != original_uids[1]:
+                os.seteuid(original_uids[1])
+        finally:
+            if os.getegid() != original_gids[1]:
+                os.setegid(original_gids[1])
+        if os.getresuid() != original_uids or os.getresgid() != original_gids:
+            raise RuntimeError("parallel gate setup credentials were not restored")
+
+
 def gate(path: Path, expected_sha: str, index: int, authority_path: Path) -> None:
     """Trusted installed gate runs before collection-entrypoint, without traffic."""
-    directory = regular_dir(path)
-    if type(index) is not int or index not in (0, 1):
-        raise ValueError("parallel worker index is not one of the two declared lanes")
-    deadline = time.monotonic() + 120
-    while not (directory / "release.json").exists():
-        if time.monotonic() >= deadline:
-            raise TimeoutError("parallel launch gate was not released within 120 seconds")
-        time.sleep(.1)
-    value = load(directory / "release.json")
-    inputs = authority(authority_path)
-    campaign = "/lab/" + str(Path(inputs["campaigns"][index]["path"]).relative_to(inputs["runtime"]["execution_root"]))
-    if (sha(read(authority_path)) != expected_sha
-        or value["authority_sha256"] != expected_sha or value["campaign"] != campaign):
-        raise ValueError("parallel worker received another authority")
-    raw = read(directory / "host-partition.json")
-    if sha(raw) != value["host_partition_sha256"]:
-        raise ValueError("parallel worker host partition changed")
-    proof = json.loads(raw)
-    worker = proof["declared_workers"][index]
-    if (proof["measured_container_id"] != value["worker_id"]
-        or worker["id"] != value["worker_id"]
-        or str(worker["client_cpu"]) != os.environ.get("QCSD_CAPTURE_CLIENT_CPU")
-        or str(worker["orchestrator_cpu"]) != os.environ.get("QCSD_CAPTURE_ORCHESTRATOR_CPU")):
-        raise ValueError("parallel worker host partition names another worker")
+    with _gate_read_credentials():
+        directory = regular_dir(path)
+        if type(index) is not int or index not in (0, 1):
+            raise ValueError("parallel worker index is not one of the two declared lanes")
+        deadline = time.monotonic() + 120
+        while not (directory / "release.json").exists():
+            if time.monotonic() >= deadline:
+                raise TimeoutError("parallel launch gate was not released within 120 seconds")
+            time.sleep(.1)
+        value = load(directory / "release.json")
+        inputs = authority(authority_path)
+        campaign = "/lab/" + str(Path(inputs["campaigns"][index]["path"]).relative_to(inputs["runtime"]["execution_root"]))
+        if (sha(read(authority_path)) != expected_sha
+            or value["authority_sha256"] != expected_sha or value["campaign"] != campaign):
+            raise ValueError("parallel worker received another authority")
+        raw = read(directory / "host-partition.json")
+        if sha(raw) != value["host_partition_sha256"]:
+            raise ValueError("parallel worker host partition changed")
+        proof = json.loads(raw)
+        worker = proof["declared_workers"][index]
+        if (proof["measured_container_id"] != value["worker_id"]
+            or worker["id"] != value["worker_id"]
+            or str(worker["client_cpu"]) != os.environ.get("QCSD_CAPTURE_CLIENT_CPU")
+            or str(worker["orchestrator_cpu"]) != os.environ.get("QCSD_CAPTURE_ORCHESTRATOR_CPU")):
+            raise ValueError("parallel worker host partition names another worker")
+        environment = {}
+        if inputs["artifact_type"] != AUTHORITY_TYPE:
+            from .rapid_formal_parallel import worker_environment
+            environment = worker_environment(inputs, index)
     os.environ.pop("QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_B64", None)
     os.environ["QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_FILE"] = str(directory / "host-partition.json")
     os.environ["QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_SHA256"] = value["host_partition_sha256"]
-    if inputs["artifact_type"] != AUTHORITY_TYPE:
-        from .rapid_formal_parallel import worker_environment
-        os.environ.update(worker_environment(inputs, index))
+    os.environ.update(environment)
     os.execv("/usr/local/bin/collection-entrypoint", ["collection-entrypoint", "run", value["campaign"]])
 
 

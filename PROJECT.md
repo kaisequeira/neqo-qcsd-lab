@@ -41,7 +41,39 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Latest milestone, 4 October, 06:04 Sydney (3 October, 19:04 UTC):**
+**Latest milestone, 4 October, 06:24 Sydney (3 October, 19:24 UTC):**
+The target remains **50 sites × five settings × 64 visits = 16,000 accepted
+formal traces**, or 3,200 per setting. Runtime 005's ordinary and FRONT
+diagnostics passed deep verification on the complete 260-resource/four-origin
+page. They remain diagnostic recordings with zero formal credit.
+
+The actual two-container pair 003 failed during startup, before ownership
+handoff or traffic capture. Its worker starts as root with DAC override
+capabilities removed, while the private gate and authority belong to the
+declared lab user. A fresh network-disabled invocation of the same worker
+wrapper reproduced `PermissionError` on `release.json` in **6.759 seconds**.
+The failed pair and probe logs are preserved. An actual offline engineering
+probe of the focused credential repair passed in **8.853 seconds**, reading
+the private inputs and restoring exact IDs and all capability sets after
+both success and an intentional failure. A fresh matched runtime and paired
+trial remain required. Focused source checks passed **97 cases**, then the
+five initially blocked formal fixture cases passed after initializing the
+pinned Native checkout; the initial setup errors remain preserved. No Native
+client rebuild is needed for this Lab control change. Parallel throughput
+and recovery remain unproven.
+
+Admission continuation 005 closed successfully at **06:18:49 Sydney**, on
+unchanged `818deb6` / `39464c62` and registry 000002. Immutable checkpoint
+**000056**, recorded **06:18:01 Sydney**, has **23 terminal decisions,
+1/50 admitted sites, 0/50 study shakedown and 0/16,000 formal traces**.
+The next contiguous forty fallback screens closed successfully in **225.520
+seconds** on the original admission image. Their registry append failed
+because one operational error is unclassified; the raw screens remain
+preserved, and the original registry still covers the next candidates.
+Screens alone admit no sites. See the
+[startup diagnosis](docs/EVIDENCE-INDEX.md#v12-parallel-private-gate-startup-failure).
+
+**Earlier milestone, 4 October, 06:04 Sydney (3 October, 19:04 UTC):**
 Lab `733bc4c` is published on main and the desktop branch. Runtime 005
 installs that clean source with unchanged Native `3d994f0d`; all twelve
 actual operations, 2,387 source files and the exported client independently

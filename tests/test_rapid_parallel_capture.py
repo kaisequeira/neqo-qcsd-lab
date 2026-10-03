@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -211,6 +212,8 @@ def test_release_failure_keeps_both_traffic_gates_closed(context, failure: str) 
 @pytest.mark.parametrize("failure", [None, "wrong_lane", "partition_hash", "source_dirty", "authority_hash", "own_cpu", "index"])
 def test_gate_executes_only_the_exact_authority_lane(context, monkeypatch, failure) -> None:
     _released(context)
+    monkeypatch.setenv("QCSD_LAB_UID", str(os.geteuid()))
+    monkeypatch.setenv("QCSD_LAB_GID", str(os.getegid()))
     gate = context.output / "lane-1/gate"
     monkeypatch.setenv("QCSD_CAPTURE_CLIENT_CPU", "2")
     monkeypatch.setenv("QCSD_CAPTURE_ORCHESTRATOR_CPU", "4")

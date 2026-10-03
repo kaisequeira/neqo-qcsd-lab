@@ -14,7 +14,32 @@ homepage credit fix, endpoint-specific final UDP drain evidence and explicit
 prospective BuFLO incoming tolerance. They require fresh affected captures;
 the previous failed attempts keep their original results.
 
-**Latest milestone, 4 October, 06:04 Sydney (3 October, 19:04 UTC):**
+**Latest milestone, 4 October, 06:24 Sydney (3 October, 19:24 UTC):**
+The target stays **50 × five × 64 = 16,000 accepted formal traces**, with
+3,200 per setting. Runtime 005 ordinary and FRONT diagnostics passed full
+deep verification; the separate fifty-trace study shakedown remains pending.
+
+The actual pair 003 failed before either capture started. A network-disabled
+same-image worker probe reproduced its private gate permission failure in
+**6.759 seconds**. The narrow credential repair passed an actual offline
+engineering probe in **8.853 seconds**, restoring exact credentials and
+capabilities after both success and an intentional failure. A fresh matching
+runtime and paired flight remain required. Focused source checks passed
+97 cases, with the five initially blocked formal fixture cases passing in
+a separate run after initializing the pinned Native checkout. Preserve the
+initial errors and failed capture attempt; they contribute
+zero traces. This Lab startup change can reuse the verified unchanged Native
+client and does not require the historical long qualification chain.
+
+Admission continuation 005 is now safely paused: checkpoint **000056** at
+**06:18:01 Sydney** records **23 decisions, one admitted site and zero formal
+traces**. The next contiguous forty fallback screens closed successfully in
+**225.520 seconds** on the original admission image; their registry append
+failed on an unclassified operational error. The original registry still
+covers the next candidates. No site yield or parallel success is inferred.
+See the [actual startup failure and probe](EVIDENCE-INDEX.md#v12-parallel-private-gate-startup-failure).
+
+**Earlier milestone, 4 October, 06:04 Sydney (3 October, 19:04 UTC):**
 published Lab `733bc4c` / unchanged Native `3d994f0d` has an independently
 reopened runtime 005: twelve successful operations, 2,387 source files and
 the actual exported client. Exact verified client reuse took 1.15 seconds;

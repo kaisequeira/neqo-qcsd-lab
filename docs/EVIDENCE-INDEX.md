@@ -9,6 +9,96 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ## Application response policy repair
 
+### V12 parallel private gate startup failure
+
+The formal target is unchanged: **50 sites × five settings × 64 visits =
+16,000 accepted traces**, with 3,200 per setting. Runtime 005's successful
+ordinary and FRONT diagnostics retain their original source and zero-credit
+scope below.
+
+Actual pair 003 on Lab `733bc4c` / Native `3d994f0d` closed with operator
+exit 2 at `2026-10-03T19:05:30.294316Z`, after 150.402 seconds. Its host
+child exited 1 after a detached worker stopped before ownership handoff.
+There is no `actual-launch.json`, `batch-launch.json`, release or captured
+result. All resources were cleaned, and the failed intent, commands and
+host logs remain under `actual-poki-005/parallel-poki-003-host-operation`
+and its separate execution result directory. The subsequent missing-launch
+exception does not establish the worker's primary failure. The supervisor
+removed that stopped container before retaining its logs; its original
+traceback is unavailable.
+
+Local `rapid-v12-parallel-startup-probe-20261004-001` retains a fresh actual
+reproduction. Command SHA is
+`859136ca39dc59a68bf9f3088e415fcd77fb4128c8529f67bd4874df587131c3`;
+configuration delta SHA is
+`cf04209ead10f25a7a6df68319e2831198fdf298590197ef7a23bc9d679b00c1`.
+It preserves the immutable collection image, capabilities, CPUs, mounts,
+environment and gate. The declared differences are attached automatic
+removal, a fresh name/role, no network, and a fifteen-second bound.
+Actual completion is `2026-10-03T19:19:16.572160Z`, exit 1 in 6.759 seconds.
+Retained stderr SHA is
+`b7b1104b77d17e4d561224f7bca1e8d5bda20121118a8f90ba9622f4a536e28d`:
+Python raises `PermissionError`, errno 13, inspecting
+`/parallel-gate/release.json`. The root worker lacks DAC override
+capabilities; the gate is owned by the declared lab user with mode 0700,
+and authority is 0600. No release was synthesized and no traffic captured.
+This is a fresh engineering reproduction, not recovered stderr from pair 003.
+
+The focused prospective repair scopes private gate/authority/proof reads
+to the explicitly declared lab UID/GID and restores startup credentials
+before the privileged collection entrypoint. File permissions, exact hashes,
+release ordering and scientific checks remain intact.
+
+Local `rapid-v12-parallel-gate-credential-probe-20261004-001` retains the
+actual offline engineering exercise of held module SHA
+`c95682eda084e2abec2a91407c9b383d9268cc97381e3261c3d9689634513240`.
+Command SHA is
+`416dd54e1bea13978954d16d1e50294ee09f3df84ab5cd4b1549d20bbf9787c5`;
+held exercise script SHA is
+`8cdbe8a7a71fef513cb6dad3466cf6267118b5d242a4781e92861b9675ee5546`.
+It uses the old immutable runtime 005 image with two explicit read-only
+engineering file mounts. It does not claim that changed code is installed
+in that image. Actual completion is `2026-10-03T19:23:55.979667Z`, exit 0
+in 8.853 seconds, with empty stderr. Actual stdout SHA is
+`de8125315d2ae405b1ae5597849cbf1e5f3f2c882a57c2a36f1e046d6879af7f`.
+Both successful and intentionally failed input-validation scopes read the
+unchanged private authority, with effective declared UID/GID and real/saved
+root preserved. Each scope restores the exact original UID/GID triples and
+all five Linux capability sets. DAC capabilities remain absent, file modes
+stay 0700/0600, and no launch release or traffic is synthesized. This closes
+the kernel credential exercise only. Its append-only
+`configuration-correction.json`, SHA
+`f4b68d0fac272f2b089495728fe9c89ed978a6af29f6aa0b3d6a37cf28d7ae32`,
+corrects the original binding's erroneous assertion that the fifteen-second
+bound was unchanged: the actual replacement shell command had no timeout.
+The actual command and closed 8.853-second execution remain unchanged.
+
+Local `private-gate-credential-lab-checks-20261004-002/closure.json`, SHA
+`71eb922f9eb93268c54ef273690f7b4e5e6cc6d55e0e5c1463c701a3d4ee60fa`,
+binds the held module, two test files, actual commands/starts/completions and
+raw logs. The initial operation passed 97 cases and retained five fixture
+errors because the private Native checkout was uninitialized. After mounting
+the exact clean pinned Native checkout, only those five formal cases reran
+and passed in 45.929 seconds. The initial failed operation remains intact;
+this is not a single clean 102-case run. All 307 bound dependencies are
+unchanged across the second run; unchanged Lab dependencies match its
+`39037f4` base. Independent source review and the kernel exercise above
+verify the narrow credential change. A matched installed runtime and a new
+paired capture remain separate requirements.
+
+Admission continuation 005 independently closed 0 at
+`2026-10-03T19:18:49.540099Z` in 607.013 seconds, on its original
+`818deb6` / `39464c62` and registry 000002. Immutable checkpoint 000056,
+recorded `2026-10-03T19:18:01.375252Z`, records 23 terminal decisions,
+one admitted site and zero formal traces. Neither final cohort nor study
+shakedown is complete. The next forty fallback screens closed 0 at
+`2026-10-03T19:23:24.657589Z`, in 225.520 seconds. Registry 000003 creation
+closed 1 at `2026-10-03T19:24:52.370329Z`, in 5.032 seconds: the frozen
+classifier rejects an unclassified operational error. No registry manifest
+was published. Preserve the raw survey and failed creation records; registry
+000002 still covers the next ordered candidates. No new site acceptance is
+inferred from screens.
+
 ### V12 runtime 005 and fresh FRONT
 
 Local `terminal-primary-v12-runtime-20261004-005` installs published Lab
