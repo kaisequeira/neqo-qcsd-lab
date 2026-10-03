@@ -96,7 +96,7 @@ def test_revision6_live_boundary_receives_policy_and_preserves_failed_attempt(co
 
 def _prepared_variable_workload(context, tmp_path, monkeypatch, *, negative=True, capacity=True,
                                 amended=None, source_url="https://page.test/", workload_id="variable-page",
-                                output_root=None):
+                                output_root=None, alter_stability=None):
     amended = amended or _amended_context(context, tmp_path, revision=6)
     def vary(index, run):
         row = run["responses"][0]
@@ -106,6 +106,8 @@ def _prepared_variable_workload(context, tmp_path, monkeypatch, *, negative=True
             run["responses"][1].update(status=200)
         if capacity:
             run["responses"][2].update(bytes=1200, body_sha256="c" * 64, content_length=1200)
+        if alter_stability is not None:
+            alter_stability(index, run)
     install_negative_preparation(monkeypatch, alter_stability=vary)
     discovery = discovered()
     if source_url != discovery.source_url:
@@ -182,6 +184,81 @@ def _prepared_variable_workload(context, tmp_path, monkeypatch, *, negative=True
     graph = result.path.parent / "full-graph.json"
     graph.write_bytes(admission._json(admission._full_graph(manifest)))
     return amended, result, graph
+
+
+@pytest.mark.parametrize("malformed", [False, True])
+def test_revision6_observed_nonprimary_response_drift_advances_but_malformed_replay_blocks(
+    context, tmp_path, monkeypatch, malformed,
+):
+    amended = _amended_context(context, tmp_path, revision=6)
+    candidate, navigation, h3, screen = _auto_page(amended, tmp_path)
+    captured = {}
+
+    def drift(index, run):
+        row = run["responses"][2]
+        size = (2672, 2713, 2702)[index]
+        row.update(bytes=size, content_length=size, body_sha256=f"{index + 20:064x}")
+        if malformed and index == 1:
+            row["body_sha256"] = "invalid-runner-body-hash"
+
+    class ProducingBackend(Backend):
+        def discover(self, url, approved):
+            result = super().discover(url, approved)
+            origins = sorted([url.rstrip("/"), "https://cdn.test"])
+            result.observed_origins = result.approved_origins = result.expandable_origins = origins
+            result.origin_ip_pins = {value: "1.1.1.1" for value in origins}
+            return result
+
+        def prepare(self, workload_id, url, approved, output_root, **kwargs):
+            assert kwargs["application_response_policy"] == APPLICATION_POLICY
+            assert kwargs["primary_document_identity_policy"] == PRIMARY_POLICY
+            try:
+                return _prepared_variable_workload(context, tmp_path, monkeypatch,
+                    amended=amended, source_url=url, workload_id=workload_id, output_root=output_root,
+                    alter_stability=drift)
+            except prepare.PreparationError as error:
+                captured["error"] = error
+                captured["diagnostics"] = output_root / f"{workload_id}-failure-evidence"
+                raise
+
+    arguments = dict(candidate_id=candidate["candidate_id"], navigation=navigation,
+                     page_h3=h3, automated_screen=screen, backend=ProducingBackend(amended))
+    if malformed:
+        with pytest.raises(prepare.RecoverablePreparationError):
+            admission.prepare_site(amended, **arguments)
+        assert type(captured["error"]) is prepare.RecoverablePreparationError
+        assert not any(amended.root.rglob("attempt-failure.json"))
+        status = admission.acquisition_status(amended)
+        assert status["next_candidate"] == candidate
+        assert status["attempts"][candidate["candidate_id"]][0]["state"] == "retryable-operational-error"
+    else:
+        proof = admission.prepare_site(amended, **arguments)
+        error = captured["error"]
+        assert type(error) is prepare.ResponseStabilityPolicyError
+        assert error.capture_source == dict(amended.expected_runtime_source)
+        assert error.capture_started_at <= error.capture_completed_at
+        reopened = prepare.validate_preparation_policy_failure_evidence(error.evidence)
+        assert reopened["schema_version"] == 3
+        assert [row["id"] for row in reopened["replay_manifest"]["resources"]] == [0, 1, 2]
+        compared = prepare.response_stability_evidence(reopened["response_runs"],
+            primary_document_identity_policy=PRIMARY_POLICY,
+            manifest=reopened["primary_document_identity_manifest"])
+        assert compared["stable_resource_ids"] == [0, 1]
+        facts = admission.unsuccessful_attempt_failure_facts(proof, amended, candidate["candidate_id"])
+        assert facts["raw_failure"]["exception"]["exception_type"] == "ResponseStabilityPolicyError"
+        assert facts["scientific_credit"] is False and facts["site_credit"] == 0
+        terminal = admission.produce_site_terminal(amended, candidate_id=candidate["candidate_id"],
+            root_surveys=_root_logs(context, tmp_path), attempt_failure=proof, automated_screen=screen)
+        assert admission.verify_site_terminal(terminal, amended)["outcome"] == "unsuccessful-live-attempt-screen-deferred"
+        status = admission.acquisition_status(amended)
+        assert status["next_candidate"] == amended.candidates[1]
+        assert status["terminal_count"] == 1
+    assert status["admitted_site_count"] == status["formal_accepted_trace_count"] == 0
+    retained = captured["diagnostics"] / "artifacts"
+    run_count = 2 if malformed else 3
+    assert all((retained / f"stability-{index}/run.json").is_file() for index in range(run_count))
+    assert (retained / "stability-2/run.json").is_file() is (not malformed)
+    assert not any(amended.root.rglob("preparation.json"))
 
 
 @pytest.mark.parametrize("negative", [True, False])

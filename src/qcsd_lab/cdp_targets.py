@@ -3386,15 +3386,17 @@ class RecursiveCdpTargetRouter:
                     "CDP target finished with non-terminal srcdoc evidence"
                 ) from error
         if self._error_resource_by_request_id or any(
-            lifecycle.started and not lifecycle.complete
+            lifecycle.active is not None
             for lifecycle in self._error_document_resources.values()
         ):
             raise CdpTargetIntegrityError(
                 "CDP target finished with an unresolved Chromium error-document resource"
             )
         # A failed navigation is already terminal evidence. Chromium is not
-        # required to emit its internal error-document finish before context
-        # disposal, so any optional one-use tombstone ends at this boundary.
+        # required to emit its internal error-document finish or every pinned
+        # inline PNG before context disposal. All actually observed resources
+        # are terminal here; an unobserved suffix supplies no synthetic event.
+        # Optional one-use tombstones end at this boundary.
         self._error_document_finishes.clear()
         self._error_document_resources.clear()
         self._retired_error_resource_request_ids.clear()
@@ -3571,8 +3573,11 @@ class RecursiveCdpTargetRouter:
             or bool(self._pending_worker_sources)
             or unresolved_guarded
             or unresolved_prearms
+            # Wait for observed internal requests, not an optional future PNG.
+            # Keep the full signature sequence for order and duplicate checks.
+            or bool(self._error_resource_by_request_id)
             or any(
-                lifecycle.started and not lifecycle.complete
+                lifecycle.active is not None
                 for lifecycle in self._error_document_resources.values()
             )
         )

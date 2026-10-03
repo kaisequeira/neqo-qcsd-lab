@@ -7531,11 +7531,81 @@ def test_exact_three_error_document_resources_are_suppressed_and_complete(
             _error_resource_terminal(index),
         )
         router.raise_if_failed()
+        lifecycle = next(iter(router._error_document_resources.values()))
+        assert lifecycle.next_signature_index == index + 1
+        assert lifecycle.complete is (index == len(pinned_error_resource_urls) - 1)
+        assert router.shutdown_ready is True
 
     assert tuple(observed) == observed_before_resources
     assert router.active_request_identities == ()
     assert router.shutdown_ready is True
     _clean_shutdown(router)
+
+
+@pytest.mark.parametrize("prefix_length", (1, 2))
+def test_terminal_error_resource_prefix_allows_normal_shutdown_without_future_events(
+    pinned_error_resource_urls: tuple[str, str, str],
+    prefix_length: int,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _arm_error_document_resources(session)
+    observed_before = tuple(observed)
+    for index in range(prefix_length):
+        _emit_error_resource(session, pinned_error_resource_urls[index], index)
+    router.raise_if_failed()
+    lifecycle = next(iter(router._error_document_resources.values()))
+
+    assert lifecycle.started is True
+    assert lifecycle.complete is False
+    assert lifecycle.next_signature_index == prefix_length
+    assert lifecycle.active is None
+    assert router._error_resource_by_request_id == {}
+    assert len(router._retired_error_resource_request_ids) == prefix_length
+    assert router.active_request_identities == ()
+    assert router.shutdown_ready is True
+    _clean_shutdown(router)
+
+    assert tuple(observed) == observed_before
+    assert lifecycle.next_signature_index == prefix_length
+    assert lifecycle.complete is False
+    assert router._error_document_resources == {}
+
+
+@pytest.mark.parametrize("terminal_during_disposal", (False, True))
+def test_error_resource_started_during_disposal_requires_its_actual_terminal(
+    pinned_error_resource_urls: tuple[str, str, str],
+    terminal_during_disposal: bool,
+) -> None:
+    session = _FakeNonFlatSession()
+    router, observed = _router(session, fetch_policy=_deny_blocked_by_client)
+    _arm_error_document_resources(session)
+    observed_before = tuple(observed)
+    for index in range(2):
+        _emit_error_resource(session, pinned_error_resource_urls[index], index)
+    router.raise_if_failed()
+    assert router.shutdown_ready is True
+    _begin_shutdown(router)
+
+    session.emit(
+        (), "Network.requestWillBeSent",
+        _error_resource_request(pinned_error_resource_urls[2], 2),
+    )
+    session.emit((), "Network.requestServedFromCache", {"requestId": "error-resource-2"})
+    session.emit(
+        (), "Network.responseReceived",
+        _error_resource_response(pinned_error_resource_urls[2], 2),
+    )
+    if terminal_during_disposal:
+        session.emit((), "Network.loadingFinished", _error_resource_terminal(2))
+    router.raise_if_failed()
+
+    if terminal_during_disposal:
+        _finish(router)
+    else:
+        with pytest.raises(CdpTargetIntegrityError, match="unresolved Chromium error-document resource"):
+            _finish(router)
+    assert tuple(observed) == observed_before
 
 
 @pytest.mark.parametrize(
@@ -8118,18 +8188,38 @@ def test_error_resource_rejects_cross_source_continuation_identity(
         router.raise_if_failed()
 
 
+@pytest.mark.parametrize("finished_prefix_length", (0, 1, 2))
+@pytest.mark.parametrize("active_phase", ("awaiting-cache", "awaiting-response", "awaiting-terminal"))
 def test_started_error_resource_blocks_normal_shutdown_but_abort_cleans_it(
     pinned_error_resource_urls: tuple[str, str, str],
+    finished_prefix_length: int,
+    active_phase: str,
 ) -> None:
     session = _FakeNonFlatSession()
     router, _observed = _router(session, fetch_policy=_deny_blocked_by_client)
     _arm_error_document_resources(session)
+    for index in range(finished_prefix_length):
+        _emit_error_resource(session, pinned_error_resource_urls[index], index)
+    index = finished_prefix_length
     session.emit(
         (),
         "Network.requestWillBeSent",
-        _error_resource_request(pinned_error_resource_urls[0], 0),
+        _error_resource_request(pinned_error_resource_urls[index], index),
     )
+    if active_phase != "awaiting-cache":
+        session.emit(
+            (), "Network.requestServedFromCache", {"requestId": f"error-resource-{index}"},
+        )
+    if active_phase == "awaiting-terminal":
+        session.emit(
+            (), "Network.responseReceived",
+            _error_resource_response(pinned_error_resource_urls[index], index),
+        )
     router.raise_if_failed()
+    lifecycle = next(iter(router._error_document_resources.values()))
+    assert lifecycle.next_signature_index == finished_prefix_length
+    assert lifecycle.active is not None
+    assert lifecycle.active.phase == active_phase
 
     assert router.shutdown_ready is False
     with pytest.raises(CdpTargetIntegrityError, match="pending"):

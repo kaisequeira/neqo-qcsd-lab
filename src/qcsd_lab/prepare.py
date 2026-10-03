@@ -537,6 +537,50 @@ def _validate_successful_policy_response_runs(
         raise ValueError("response stability policy client provenance is invalid") from error
 
 
+def _variable_primary_stability_manifest(
+    manifest: Mapping[str, Any], runs: list[dict[str, Any]], *, source_url: str,
+    final_url: str, max_response_bytes: int, coverage_admission: Mapping[str, Any],
+    stability_run_sha256s: list[str],
+) -> dict[str, Any]:
+    resources = json.loads(json.dumps(manifest["resources"]))
+    _freeze_request_headers(resources, runs)
+    result = {"resources": resources, "preparation": {
+        "application_response_policy": COMPLETED_TERMINAL_HTTP_ERRORS_POLICY,
+        "primary_document_identity_policy": VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY,
+        "source_url": source_url, "final_url": final_url,
+        "max_response_bytes": max_response_bytes, "coverage_admission": coverage_admission,
+        "stability_runs": len(runs),
+        "expected_responses": [{key: response[key] for key in
+            ("resource_id", "status", "bytes", "body_sha256")}
+            for response in runs[0]["responses"]],
+    }}
+    result["preparation"]["primary_document_identity_evidence"] = build_primary_document_identity_evidence(
+        result, runs, stability_run_sha256s=stability_run_sha256s,
+    )
+    return result
+
+
+def _validate_variable_primary_stability_run(
+    manifest: Mapping[str, Any], run_data: Mapping[str, Any],
+) -> None:
+    """Validate actual delivery before comparing auxiliary body identities.
+
+    Each auxiliary body is checked against its own observed bytes and hash at
+    this preparation stage. The following all-runs comparison still requires
+    those identities to agree before any prepared workload can be published.
+    URL, status, headers, full graph and the primary HTML proof stay fixed.
+    Admission and capture continue to use the ordinary strict validator.
+    """
+    candidate = json.loads(json.dumps(manifest))
+    responses = {row["resource_id"]: row for row in run_data["responses"]}
+    for expected in candidate["preparation"]["expected_responses"]:
+        if expected["resource_id"] != 0:
+            actual = responses[expected["resource_id"]]
+            expected["bytes"] = actual["bytes"]
+            expected["body_sha256"] = actual["body_sha256"]
+    validate_application_responses(candidate, run_data)
+
+
 def validate_preparation_policy_failure_evidence(
     value: Any, *, source_url: str | None = None,
 ) -> dict[str, Any]:
@@ -548,17 +592,22 @@ def validate_preparation_policy_failure_evidence(
     fields = {"schema_version", "policy", "stage", "require_complete_coverage", "discovery",
               "resolved_probe", "replay_manifest", "response_runs", "artifacts"}
     peer_failure = isinstance(value, dict) and type(value.get("schema_version")) is int and value["schema_version"] == 2
+    variable_primary_failure = isinstance(value, dict) and type(value.get("schema_version")) is int and value["schema_version"] == 3
     if peer_failure:
         fields = fields | {"probe_failure"}
+    if variable_primary_failure:
+        fields = fields | {"primary_document_identity_manifest"}
     policies = {"full-graph-h3": FULL_GRAPH_H3_FAILURE_POLICY,
                 "response-stability": RESPONSE_STABILITY_FAILURE_POLICY}
     if (not isinstance(value, dict) or set(value) != fields or type(value["schema_version"]) is not int
-        or value["schema_version"] not in (1, 2) or not isinstance(value["stage"], str)
+        or value["schema_version"] not in (1, 2, 3) or not isinstance(value["stage"], str)
         or value["stage"] not in policies or value["policy"] != policies[value["stage"]]
         or value["require_complete_coverage"] is not True
         or not isinstance(value["discovery"], dict)
         or set(value["discovery"]) != set(DiscoveryResult.__dataclass_fields__)):
         raise ValueError("preparation policy failure fields or stage are invalid")
+    if variable_primary_failure and value["stage"] != "response-stability":
+        raise ValueError("variable primary failure requires complete response stability evidence")
     discovery = DiscoveryResult(**value["discovery"])
     if source_url is not None and discovery.source_url != source_url:
         raise ValueError("preparation policy failure is for another exact selected page")
@@ -598,8 +647,10 @@ def validate_preparation_policy_failure_evidence(
             raise ValueError("preparation policy raw probe does not prove unavailable resources")
     else:
         replay = value["replay_manifest"]
-        if canonical_bytes(replay) != canonical_bytes({"resources": probe["resources"]}) or any(
-            resource["known_valid"] is not True for resource in resolved.values()
+        if canonical_bytes(replay) != canonical_bytes({"resources": probe["resources"]}) or (
+            not variable_primary_failure and any(
+                resource["known_valid"] is not True for resource in resolved.values()
+            )
         ):
             raise ValueError("response stability policy pruned or changed its complete graph")
         _require_failure_artifact_json(artifacts, "stability-input.json", replay)
@@ -607,10 +658,29 @@ def validate_preparation_policy_failure_evidence(
         if not isinstance(runs, list) or len(runs) != DEFAULT_STABILITY_RUNS:
             raise ValueError("response stability policy lacks all required live runs")
         _validate_successful_policy_response_runs(runs, probe["resources"])
+        replay_limits = []
         with tempfile.TemporaryDirectory(prefix="qcsd-failure-packets-") as temporary:
             for index, run_data in enumerate(runs):
                 _require_failure_artifact_json(artifacts, f"stability-{index}/run.json", run_data)
-                _require_successful_failure_stage(artifacts, f"stability-{index}.log.execution.json", "run")
+                execution = _failure_child_execution(
+                    artifacts, f"stability-{index}.log.execution.json", "run", returncode=0,
+                )
+                if variable_primary_failure:
+                    command = execution["command"]
+                    position = command.index("run")
+                    args = command[position + 1:]
+                    flags = ["--application-response-policy", "--workload", "--profile", "--defense",
+                             "--seed", "--output-dir", "--max-response-bytes", "--timeout-seconds"]
+                    if (position == 0 or Path(command[position - 1]).name != "neqo-qcsd-client"
+                        or len(args) != 2 * len(flags) or args[::2] != flags
+                        or args[1] != COMPLETED_TERMINAL_HTTP_ERRORS_POLICY
+                        or Path(args[3]).name != "stability-input.json"
+                        or args[5:10:2] != [STABILITY_PROFILE, STABILITY_DEFENSE, str(STABILITY_SEED)]
+                        or Path(args[11]) != Path(args[3]).parent / f"stability-{index}"
+                        or not args[13].isdecimal() or int(args[13]) < 1
+                        or args[15] != str(execution["configured_timeout_seconds"])):
+                        raise ValueError("variable primary failure replay changed its actual child command")
+                    replay_limits.append(int(args[13]))
                 packet_name = f"stability-{index}/packets.csv"
                 if packet_name not in artifacts:
                     raise ValueError("response stability policy lacks raw packet evidence")
@@ -621,7 +691,23 @@ def validate_preparation_policy_failure_evidence(
                                           expected_ceiling=STABILITY_UDP_PAYLOAD_CEILING)
                 except PreparationError as error:
                     raise ValueError("response stability policy packet evidence is invalid") from error
-        stable = set(response_stability_evidence(runs)["stable_resource_ids"])
+        if variable_primary_failure:
+            if len(set(replay_limits)) != 1:
+                raise ValueError("variable primary failure replay changed its response limit")
+            expected_primary = _variable_primary_stability_manifest(
+                replay, runs, source_url=discovery.source_url, final_url=discovery.final_url,
+                max_response_bytes=replay_limits[0], coverage_admission=_complete_coverage_admission(discovery),
+                stability_run_sha256s=[hashlib.sha256(artifacts[f"stability-{index}/run.json"]).hexdigest()
+                                      for index in range(DEFAULT_STABILITY_RUNS)],
+            )
+            if canonical_bytes(value["primary_document_identity_manifest"]) != canonical_bytes(expected_primary):
+                raise ValueError("variable primary failure declaration differs from its actual full-graph witnesses")
+            stable = set(response_stability_evidence(
+                runs, primary_document_identity_policy=VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY,
+                manifest=expected_primary,
+            )["stable_resource_ids"])
+        else:
+            stable = set(response_stability_evidence(runs)["stable_resource_ids"])
         if not set(resolved) - stable:
             raise ValueError("response stability policy raw runs do not prove response drift")
     return json.loads(json.dumps(value, allow_nan=False))
@@ -798,13 +884,25 @@ def prepare_workload(
                     f"response stability retained operationally invalid runner evidence: {error}"
                 ) from error
             identifiers = ", ".join(map(str, sorted(unstable)))
+            failure_evidence = _preparation_failure_evidence(
+                "response-stability", discovery, probe_output, resolved, runs,
+                require_complete_coverage=require_complete_coverage,
+                artifacts=_snapshot_failure_artifacts(directory),
+            )
+            if selected_primary_policy == VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY:
+                failure_evidence.update({
+                    "schema_version": 3,
+                    "primary_document_identity_manifest": evidence["primary_document_identity_manifest"],
+                })
+                try:
+                    validate_preparation_policy_failure_evidence(failure_evidence, source_url=source_url)
+                except (KeyError, TypeError, ValueError) as invalid:
+                    raise RecoverablePreparationError(
+                        f"variable primary response drift lacks intact actual stage proof: {invalid}"
+                    ) from invalid
             error = ResponseStabilityPolicyError(
                 f"repeated Neqo fetches changed or failed for resource IDs: {identifiers}",
-                evidence=_preparation_failure_evidence(
-                    "response-stability", discovery, probe_output, resolved, runs,
-                    require_complete_coverage=require_complete_coverage,
-                    artifacts=_snapshot_failure_artifacts(directory),
-                ),
+                evidence=failure_evidence,
             )
             _stamp_policy_failure(error, capture_source, capture_started_at)
             raise error
@@ -1483,31 +1581,23 @@ def _probe_response_stability(
         runs.append(run_data)
     primary_manifest = None
     if selected_primary_policy == VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY:
-        actual_resources = json.loads(json.dumps(manifest["resources"]))
-        _freeze_request_headers(actual_resources, runs)
-        primary_manifest = {"resources": actual_resources, "preparation": {
-            "application_response_policy": application_response_policy,
-            "primary_document_identity_policy": primary_document_identity_policy,
-            "source_url": source_url, "final_url": final_url,
-            "max_response_bytes": max_response_bytes, "coverage_admission": coverage_admission,
-            "stability_runs": stability_runs,
-            "expected_responses": [{key: response[key] for key in
-                ("resource_id", "status", "bytes", "body_sha256")}
-                for response in runs[0]["responses"]],
-        }}
         try:
-            primary_manifest["preparation"]["primary_document_identity_evidence"] = build_primary_document_identity_evidence(
-                primary_manifest, runs,
+            primary_manifest = _variable_primary_stability_manifest(
+                manifest, runs, source_url=source_url, final_url=final_url,
+                max_response_bytes=max_response_bytes, coverage_admission=coverage_admission,
                 stability_run_sha256s=[sha256_file(directory / f"stability-{index}/run.json")
-                                      for index in range(stability_runs)])
-            for actual_run in runs:
-                validate_application_responses(primary_manifest, actual_run)
+                                      for index in range(stability_runs)],
+            )
+            stability = response_stability_evidence(
+                runs, primary_document_identity_policy=primary_document_identity_policy,
+                manifest=primary_manifest,
+            )
         except (KeyError, TypeError, ValueError) as error:
             raise RecoverablePreparationError(f"variable primary complete graph replay is invalid: {error}") from error
-    stability = response_stability_evidence(runs, **({
-        "primary_document_identity_policy": primary_document_identity_policy,
-        "manifest": primary_manifest,
-    } if selected_primary_policy == VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY else {}))
+        if set(resource["id"] for resource in manifest["resources"]) - set(stability["stable_resource_ids"]):
+            stability["primary_document_identity_manifest"] = primary_manifest
+    else:
+        stability = response_stability_evidence(runs)
     if selected_response_policy == COMPLETED_TERMINAL_HTTP_ERRORS_POLICY:
         # Every run must actually opt into the native semantics and retain all
         # completed graph resources. Identity changes still reach the ordinary
@@ -1734,7 +1824,7 @@ def response_stability_evidence(
             raise ValueError("variable primary response stability requires its complete prepared declaration and three runs")
         validate_primary_document_identity_evidence(manifest)
         for actual_run in runs:
-            validate_application_responses(manifest, actual_run)
+            _validate_variable_primary_stability_run(manifest, actual_run)
     signatures: list[dict[int, tuple[Any, ...]]] = []
     first_responses: dict[int, dict[str, Any]] = {}
     for run_data in runs:

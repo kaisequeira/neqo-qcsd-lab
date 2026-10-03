@@ -2,6 +2,7 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+from copy import deepcopy
 
 import pytest
 
@@ -126,17 +127,102 @@ def test_invalid_variable_primary_stops_before_another_replay_and_retains_actual
     assert not (tmp_path / "variable-page.json").exists()
 
 
-def test_variable_primary_does_not_admit_nonprimary_body_drift(tmp_path, monkeypatch):
+@pytest.mark.parametrize("negative", [False, True])
+def test_variable_primary_nonprimary_body_drift_has_reopenable_typed_failure(tmp_path, monkeypatch, negative):
     def mutate(index, row):
-        if index == 1:
-            row["body_sha256"] = "e" * 64
+        # Reproduce the observed Poki SDK response pattern: three successful
+        # complete auxiliary bodies with different lengths and identities.
+        row.update(bytes=(2672, 2713, 2702)[index], content_length=(2672, 2713, 2702)[index],
+                   body_sha256=hashlib.sha256(f"sdk-response-{index}".encode()).hexdigest())
 
-    commands = install_variable_preparation(monkeypatch, alter_other=mutate)
-    with pytest.raises(prepare.RecoverablePreparationError, match="prepared response identity"):
+    commands = install_variable_preparation(monkeypatch, negative=negative, alter_other=mutate)
+    with pytest.raises(prepare.ResponseStabilityPolicyError, match="resource IDs: 1") as raised:
         prepare_variable(tmp_path)
+    error = raised.value
+    assert type(error) is prepare.ResponseStabilityPolicyError
+    assert error.capture_source == prepare.source_metadata()
+    assert error.capture_started_at <= error.capture_completed_at
+    proof = prepare.validate_preparation_policy_failure_evidence(error.evidence, source_url="https://page.test/")
+    assert proof["schema_version"] == 3
+    assert [row["id"] for row in proof["replay_manifest"]["resources"]] == [0, 1]
+    assert proof["replay_manifest"]["resources"][1]["known_valid"] is (not negative)
+    declaration = proof["primary_document_identity_manifest"]
+    compared = prepare.response_stability_evidence(proof["response_runs"],
+        primary_document_identity_policy=PRIMARY_POLICY, manifest=declaration)
+    assert compared["stable_resource_ids"] == [0]
+    # Ordinary successful admission/capture still rejects these exact runs.
+    with pytest.raises(ValueError, match="prepared response identity"):
+        validate_application_responses(declaration, proof["response_runs"][1])
     assert len(commands) == 4
     assert (tmp_path / "variable-page-failure-evidence/artifacts/stability-2/run.json").is_file()
     assert not (tmp_path / "variable-page.json").exists()
+
+
+@pytest.mark.parametrize("change", ["hash", "url", "headers", "status", "outcome", "terminal-errors"])
+def test_variable_primary_malformed_auxiliary_replay_remains_operational(tmp_path, monkeypatch, change):
+    def mutate(index, row):
+        if index != 1:
+            return
+        if change == "hash":
+            row["body_sha256"] = "not-a-body-hash"
+        elif change == "url":
+            row["url"] = "https://different.test/app.js"
+        elif change == "headers":
+            row["request_headers"].append(["x-mutated", "request"])
+        elif change == "status":
+            row["status"] = 201
+        elif change == "outcome":
+            row["outcome"] = "endpoint_closed"
+
+    commands = install_variable_preparation(monkeypatch, alter_other=mutate)
+    if change == "terminal-errors":
+        ordinary = prepare.run
+        def actual_stage(command, **options):
+            result = ordinary(command, **options)
+            if command[1] == "run":
+                path = Path(command[command.index("--output-dir") + 1]) / "run.json"
+                value = json.loads(path.read_bytes())
+                value["terminal_evidence_render_errors"] = ["malformed terminal output"]
+                path.write_text(json.dumps(value))
+            return result
+        monkeypatch.setattr(prepare, "run", actual_stage)
+    with pytest.raises(prepare.PreparationError) as raised:
+        prepare_variable(tmp_path)
+    assert type(raised.value) is (prepare.PreparationError if change == "outcome" else prepare.RecoverablePreparationError)
+    assert not hasattr(raised.value, "capture_started_at")
+    assert not (tmp_path / "variable-page.json").exists()
+    # Malformed identities and incomplete outcomes abort at their first raw run.
+    assert len(commands) == (3 if change in {"hash", "outcome"} else 4)
+
+
+@pytest.mark.parametrize("change", ["primary-only", "missing-run", "changed-declaration", "malformed-ledger"])
+def test_variable_primary_typed_drift_proof_rejects_resealed_invalid_authority(tmp_path, monkeypatch, change):
+    def mutate(index, row):
+        row.update(bytes=2672 + index, content_length=2672 + index, body_sha256=f"{index + 10:064x}")
+    install_variable_preparation(monkeypatch, alter_other=mutate)
+    with pytest.raises(prepare.ResponseStabilityPolicyError) as raised:
+        prepare_variable(tmp_path)
+    proof = deepcopy(raised.value.evidence)
+    if change == "missing-run":
+        del proof["artifacts"]["stability-2/run.json"]
+    elif change == "changed-declaration":
+        proof["primary_document_identity_manifest"]["preparation"]["max_response_bytes"] += 1
+    else:
+        from tests.test_prepare import _replace_failure_artifact
+        if change == "primary-only":
+            original = proof["response_runs"][0]["responses"][1]
+            for run in proof["response_runs"]:
+                run["responses"][1] = deepcopy(original)
+        else:
+            proof["response_runs"][1]["responses"].pop()
+        for index, run in enumerate(proof["response_runs"]):
+            _replace_failure_artifact(proof, f"stability-{index}/run.json", json.dumps(run).encode())
+        if change == "primary-only":
+            declaration = proof["primary_document_identity_manifest"]
+            declaration["preparation"]["primary_document_identity_evidence"]["stability_run_sha256s"] = [
+                proof["artifacts"][f"stability-{index}/run.json"]["sha256"] for index in range(3)]
+    with pytest.raises(ValueError):
+        prepare.validate_preparation_policy_failure_evidence(proof)
 
 
 def test_default_primary_identity_still_rejects_primary_drift(tmp_path, monkeypatch):
