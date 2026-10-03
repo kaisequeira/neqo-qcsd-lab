@@ -8,6 +8,10 @@
 # run/build operations use their separately declared runtime envelopes.
 
 _QCSD_DOCKER_API_TIMEOUT_SECONDS=3
+# Completed public/parallel topology removal can take longer than an identity
+# query while the daemon kills a container and detaches its network. This
+# allowance is never selected for failed launches or terminal-signal cleanup.
+_QCSD_DOCKER_COMPLETED_TOPOLOGY_TIMEOUT_SECONDS=30
 # Evidence/setup `docker info` reads intentionally include client plugins.
 # They are one-shot reads outside the terminal-signal control path.
 _QCSD_DOCKER_METADATA_TIMEOUT_SECONDS=10
@@ -617,6 +621,29 @@ _qcsd_mutable_output_scalar() {
 
 _qcsd_docker_api() {
   _qcsd_docker_api_with_timeout "${_QCSD_DOCKER_API_TIMEOUT_SECONDS}" "$@"
+}
+
+_qcsd_completed_topology_remove() {
+  local completion_status="${1:-}" duration="${_QCSD_DOCKER_API_TIMEOUT_SECONDS}"
+  shift || return 2
+  # This entrypoint accepts only one exact-ID removal, never general API work.
+  if [[ ! "${completion_status}" =~ ^[0-9]{1,3}$ ]] ||
+     (( 10#${completion_status} > 255 )) || (( $# != 3 )) ||
+     [[ ! "${3:-}" =~ ^[0-9a-f]{64}$ ]] ||
+     ! { [[ "$1" == rm && "$2" == --force ]] ||
+         [[ "$1" == network && "$2" == rm ]]; }; then
+    return 2
+  fi
+  if (( 10#${completion_status} == 0 &&
+        ${_QCSD_LIFETIME_SIGNAL_STATUS:-0} == 0 )); then
+    duration="${_QCSD_DOCKER_COMPLETED_TOPOLOGY_TIMEOUT_SECONDS}"
+  fi
+  # The existing service still revalidates source and daemon identity before
+  # its one-shot mutation. Absence proof and HANDOFF retirement stay with the
+  # caller and retain their ordinary three-second API bounds. The inline fresh
+  # identity check retains the native host helper's existing ten-second bound
+  # inside the completed operation's longer total service allowance.
+  _qcsd_docker_api_with_timeout "${duration}" "$@"
 }
 
 _qcsd_docker_api_with_timeout() {

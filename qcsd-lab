@@ -10256,7 +10256,7 @@ if active:
         echo "public kernel-TX router did not reach the idle end state" >&2
         cleanup_status=1
       fi
-      if ! _qcsd_docker_api rm --force \
+      if ! _qcsd_completed_topology_remove "${cleanup_entry_status}" rm --force \
           "${kernel_tx_public_router_id}" >/dev/null; then
         echo "cannot remove public kernel-TX router ${kernel_tx_public_router_id}" >&2
         cleanup_status=1
@@ -10279,8 +10279,8 @@ if active:
       echo "public kernel-TX client network disappeared before teardown (${public_network_state})" >&2
       cleanup_status=1
     else
-      _qcsd_docker_api network rm \
-        "${kernel_tx_public_network_id}" >/dev/null 2>&1 || true
+      _qcsd_completed_topology_remove "${cleanup_entry_status}" network rm \
+        "${kernel_tx_public_network_id}" >/dev/null 2>&1 || cleanup_status=1
       public_network_state="$(_qcsd_docker_exact_network_presence \
         "${kernel_tx_public_network_id}")"
     fi
@@ -11102,7 +11102,7 @@ for pair in x["pairs"]:
     _qcsd_begin_latched_cleanup
     local resource_id resource_state
     for resource_id in "${QCSD_DOCKER_IDS_PARALLEL_WORKERS[@]}" "${QCSD_DOCKER_IDS_PUBLIC_ROUTERS[@]}"; do
-      _qcsd_docker_api rm --force "${resource_id}" >/dev/null 2>&1 || cleanup_failure_status=1
+      _qcsd_completed_topology_remove "${cleanup_entry_status}" rm --force "${resource_id}" >/dev/null 2>&1 || cleanup_failure_status=1
       resource_state="$(_qcsd_docker_exact_id_presence "${resource_id}")"
       if [[ "${resource_state}" != "absent" ]]; then cleanup_failure_status=1; continue; fi
       if [[ " ${QCSD_DOCKER_IDS_PARALLEL_WORKERS[*]} " == *" ${resource_id} "* ]]; then
@@ -11112,7 +11112,7 @@ for pair in x["pairs"]:
       fi
     done
     for resource_id in "${QCSD_DOCKER_IDS_PUBLIC_NETWORKS[@]}"; do
-      _qcsd_docker_api network rm "${resource_id}" >/dev/null 2>&1 || cleanup_failure_status=1
+      _qcsd_completed_topology_remove "${cleanup_entry_status}" network rm "${resource_id}" >/dev/null 2>&1 || cleanup_failure_status=1
       [[ "$(_qcsd_docker_exact_network_presence "${resource_id}")" == "absent" ]] ||
         { cleanup_failure_status=1; continue; }
       qcsd_retire_docker_handoff network "${resource_id}" QCSD_DOCKER_IDS_PUBLIC_NETWORKS || cleanup_failure_status=1
@@ -11233,13 +11233,13 @@ print("running" if x["State"]["Running"] else x["State"]["ExitCode"])
       else
         parallel_peer_state="null"
       fi
-      _qcsd_docker_api rm --force "${parallel_worker_id}" >/dev/null
+      _qcsd_completed_topology_remove 0 rm --force "${parallel_worker_id}" >/dev/null
       [[ "$(_qcsd_docker_exact_id_presence "${parallel_worker_id}")" == "absent" ]] || exit 1
       qcsd_retire_docker_handoff run "${parallel_worker_id}" QCSD_DOCKER_IDS_PARALLEL_WORKERS
-      _qcsd_docker_api rm --force "${parallel_router_ids[parallel_index]}" >/dev/null
+      _qcsd_completed_topology_remove 0 rm --force "${parallel_router_ids[parallel_index]}" >/dev/null
       [[ "$(_qcsd_docker_exact_id_presence "${parallel_router_ids[parallel_index]}")" == "absent" ]] || exit 1
       qcsd_retire_docker_handoff run "${parallel_router_ids[parallel_index]}" QCSD_DOCKER_IDS_PUBLIC_ROUTERS
-      _qcsd_docker_api network rm "${parallel_network_ids[parallel_index]}" >/dev/null
+      _qcsd_completed_topology_remove 0 network rm "${parallel_network_ids[parallel_index]}" >/dev/null
       [[ "$(_qcsd_docker_exact_network_presence "${parallel_network_ids[parallel_index]}")" == "absent" ]] || exit 1
       qcsd_retire_docker_handoff network "${parallel_network_ids[parallel_index]}" QCSD_DOCKER_IDS_PUBLIC_NETWORKS
       /usr/bin/python3 -I -c '

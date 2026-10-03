@@ -9,7 +9,7 @@ from qcsd_lab import rapid_parallel_capture as parallel
 
 
 FAKE_DOCKER = r'''
-import json,sys
+import json,sys,time
 from pathlib import Path
 path=Path(sys.argv[1]); output=Path(sys.argv[2]); args=sys.argv[3:]
 state=json.loads(path.read_text()); containers=state['containers']; networks=state['networks']
@@ -45,7 +45,9 @@ elif args[:2]==['container','inspect']:
         print(json.dumps([containers[k] for k in keys]))
 elif args[0]=='logs': print('test-only retained worker output')
 elif args[0]=='rm':
-    key=args[-1];state['events'].append('remove-'+key);containers.pop(key,None)
+    key=args[-1]
+    if state.get('workers') and key==state['workers'][0]: time.sleep(3.25)
+    state['events'].append('remove-'+key);containers.pop(key,None)
 elif args[:2]==['network','rm']: networks.pop(args[-1],None)
 elif args[0]=='presence': print('present' if args[1] in containers else 'absent')
 elif args[0]=='network-presence': print('present' if args[1] in networks else 'absent')
@@ -72,6 +74,7 @@ def test_real_shell_retires_failed_lane_while_peer_continues(context, tmp_path):
     quoting = shlex.quote
     prefix = "\n".join([
         "set -euo pipefail", "ROOT=" + quoting(str(project)),
+        'source "${ROOT}/tools/docker_signal_supervisor.sh"',
         "parallel_diagnostic=1", "rapid_capture=1", "rapid_capture_role=diagnostic", "rapid_capture_version=",
         "study_capture_scheduler_contract=" + quoting(parallel.NATIVE_CONTRACT),
         "parallel_authority=" + quoting(str(context.path)), "parallel_output=" + quoting(str(context.output)),
@@ -83,6 +86,8 @@ def test_real_shell_retires_failed_lane_while_peer_continues(context, tmp_path):
         "parallel_python() { /usr/bin/python3 -I -c 'import sys;sys.path.insert(0,sys.argv.pop(1)+\"/src\");from qcsd_lab.rapid_parallel_capture import main;main()' \"$ROOT\" \"$@\"; }",
         "qcsd_capture_attached_docker_output() { local -n result=$1; result=" + quoting(preflight) + "; }",
         '_qcsd_docker_api() { fake "$@"; }',
+        '_QCSD_LIFETIME_SIGNAL_STATUS=0',
+        '_qcsd_docker_api_with_timeout() { local duration=$1; printf "%s %s\\n" "$1" "${*:2}" >>' + quoting(str(tmp_path / "removal-durations.log")) + '; shift; timeout "$duration" /usr/bin/python3 ' + quoting(str(fake)) + ' ' + quoting(str(state)) + ' ' + quoting(str(context.output)) + ' "$@"; }',
         '_qcsd_docker_exact_id_presence() { fake presence "$1"; }',
         '_qcsd_docker_exact_network_presence() { fake network-presence "$1"; }',
         'qcsd_create_docker_network() { local -n result=$1; local name=${!#}; result+=("$(fake create-network "$name")"); }',
@@ -107,6 +112,9 @@ def test_real_shell_retires_failed_lane_while_peer_continues(context, tmp_path):
     observed = json.loads(state.read_text())
     assert observed["containers"] == {} and observed["networks"] == {}
     assert observed["events"].index("remove-" + observed["workers"][0]) < observed["events"].index("terminal-1")
+    removal_calls = (tmp_path / "removal-durations.log").read_text().splitlines()
+    assert len(removal_calls) == 6
+    assert all(row.startswith("30 ") for row in removal_calls)
     for index in range(2):
         gate = parallel.load(context.output / f"lane-{index+1}/gate/host-partition.json")
         assert gate["schema_version"] == 5
