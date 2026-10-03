@@ -41,7 +41,39 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Latest inspected milestone, 06:25 UTC on 3 October (16:25 AEST):** context
+**Latest inspected milestone, 07:08 UTC on 3 October (17:08 AEST):** published
+Lab `cacc4aa` pins Native `01ce0a7`. Its cached client build took **117.842
+seconds**; the collection and preparation images built in **60.728 and
+59.980 seconds** and passed installed-byte checks. Independent review reopened
+all **2,348 source inventory entries and 12 actual closed operations**.
+The fresh repaired Poki baseline has **one sealed, deep-verified diagnostic
+trace**: all **260 resources, four origins and 1,503 Native/PCAP packet
+matches**, independently reproduced from the actual PCAP. Its host operation
+returned **1** because router removal exceeded a hardcoded three-second API
+timeout. The failed operation remains failed. Standard lifecycle recovery
+subsequently closed **0** at `2026-10-03T07:04:45.368410+00:00`, proving the
+exact router and network absent, the scope inactive and the lifecycle base
+empty. A prospective normal-teardown repair is being authored separately.
+
+The fresh **120-request response qualification passed in 74.974 seconds**;
+all three defended offline preflights passed in **8.963 seconds**. A fresh
+CS-BuFLO diagnostic has launched; its completion is unproven. Tamaraw and
+BuFLO remain next. These are additional engineering captures with **zero
+site, shakedown or formal credit**. A prospective admission revision is being
+tested to put the fixed BuFLO policy into prepared inputs before their seal;
+it has not been published or used for live admission yet.
+
+The old-source context **014** stopped normally at an action boundary at
+`2026-10-03T06:31:16.984006+00:00`. Its final inspected checkpoint **84** at
+`2026-10-03T06:30:32.534773Z` retains **31 terminal candidate decisions and
+one admission**. It is historical membership evidence, not a new-source
+50-site cohort. **0/50 study shakedown traces and 0/16,000 formal traces**
+are accepted. Exact locations are in the
+[repair runtime evidence](docs/EVIDENCE-INDEX.md#repaired-runtime-and-fresh-poki-diagnostics).
+
+### Earlier source-integration snapshot
+
+**Inspected milestone, 06:25 UTC on 3 October (16:25 AEST):** context
 **014** has admitted its first site, **Poki**. Immutable checkpoint 30 records
 **ten sealed candidate decisions and one admission** at
 `2026-10-03T04:13:45.760285Z`. The bounded coordinator stopped normally at

@@ -43,8 +43,63 @@ Lab source includes an optional prepared BuFLO incoming policy marker.
 Existing failed 5 ms attempts keep their original interpretation. Fresh
 opted-in inputs use a 10 ms incoming window, unchanged 20 ms cadence and
 1,200-byte cells, while retaining the original 5 ms violation count. The new
-client publication build and fresh actual captures remain pending at this
-source-integration milestone.
+client publication build and fresh actual captures were pending at that
+earlier source-integration milestone; the successor records follow.
+
+### Repaired runtime and fresh Poki diagnostics
+
+Published Lab `cacc4aaaa260aebc170683497d39ecbbad000c54` pins Native
+`01ce0a76202a0ba73ba2afac88224bef8af2e5a0`. The clean execution checkout is
+`../rapid-execution-capture-repair-20261003/`. Runtime records are under
+`../diagnostic-rehearsals/capture-repair-runtime-20261003-001/`.
+`canonical-runtime.json` SHA-256 is
+`3fe0175d3325755aeab3e91b20581d70f666053c4d6bccfafd9de30dda25499b`.
+Installed client SHA-256 is
+`ee7c75e94e5289d527208a837223a1f0dbdc90001196e866ef612f8a4a5ca3d6`.
+Collection image ID is
+`sha256:61ab3ac5732d80a82a21c592cd52397c88ed3afb962f6ddd148ccaaaac54a32a`;
+prepare image ID is
+`sha256:29a719e7824c6a6e80c3d9a42f3a4f2ed3339d375f45251256e22b98dd91fbb3`.
+The cached release build closed successfully in **117.842 seconds**, image
+builds in **60.728 and 59.980 seconds**, and installed checks in **11.756 and
+12.628 seconds**. Independent review reopened the clean Git archives,
+2,348 source entries, all 12 closed operations, command/log hashes and
+exported installed bytes. These checks establish runtime integrity.
+
+The frozen four-setting diagnostic is under
+`../diagnostic-rehearsals/rapid-capture-repair-canary-20261003-001/actual-poki-001/`.
+Plan SHA-256 is
+`d41151121ccc59a19d31b3581dfad7e8313e1155f9f084b226e779b362dc01bc`;
+commands SHA-256 is
+`8fecccdca33b9148741fb62bf6295a84ebc2318607a393eff0364115c94b1587`.
+Its derived input retains the complete 260-resource/four-origin graph and
+changes only the declared prospective BuFLO preparation policy. Original
+admission evidence remains lineage; it is not relabelled as a new admission.
+The two execution-layout repairs preserve source bytes and executable bits;
+their failed guards, intents and completions remain saved.
+
+`undefended-deep-verification.json` closed valid with **one accepted
+diagnostic trace**, ordinary deep verification and independent raw-PCAP review.
+The dated result is
+`execution-root/results/rapid-curated-tranco50-v2-diagnostic-repair-poki-001-undefended/20261003T065022.247865Z/`.
+All 260 responses completed across four origins; all **1,503 PCAP packets
+matched Native**, with zero accepted tails or clock steps. Independent PCAP
+decoding reproduced every recorded reconciliation key. Its host operation
+in `logs/undefended-capture-retry-001-completed.json` remains **exit 1**:
+the three-second router-removal service was killed at its runtime limit.
+`router-cleanup-001-HANDOFF.before` preserves the actual ledger before
+recovery. `router-cleanup-001-complete.json` records subsequent standard
+unchanged-source lifecycle recovery, closed **0**, exact router/network
+absence, inactive scope and empty lifecycle base. Its actual command,
+journal, stdout/stderr and completion records remain under `logs/`.
+Recovery does not change the original host exit or sealed trace.
+
+`qualification-complete.json` and `logs/qualify-completed.json` bind the
+fresh **120-request qualification**, closed **0** in **74.974 seconds**.
+`defended-preflight-complete.json` and its operation logs bind the three
+defended offline checks, closed **0** in **8.963 seconds**. At the 07:08 UTC
+snapshot, fresh CS-BuFLO capture has launched; completion is unproven.
+This diagnostic grants **zero admission, study-shakedown or formal credit**.
 
 The [response policy explanation](APPLICATION-RESPONSE-POLICY.md) records the
 Poki HTTP/3 401 observation and the prospective completion rule. The complete

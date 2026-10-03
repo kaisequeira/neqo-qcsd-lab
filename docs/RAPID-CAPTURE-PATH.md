@@ -14,6 +14,25 @@ homepage credit fix, endpoint-specific final UDP drain evidence and explicit
 prospective BuFLO incoming tolerance. They require fresh affected captures;
 the previous failed attempts keep their original results.
 
+**Current execution snapshot, 07:08 UTC on 3 October:** the repaired
+`cacc4aa`/Native `01ce0a7` runtime is published and independently verified.
+Its cached client build took **118 seconds**; the two image builds took
+about **one minute each**. A fresh full Poki baseline passed ordinary deep
+verification and independent raw-packet review: **260 resources, four origins,
+1,503 matched packets**. The host command failed after capture because a
+three-second router-removal timeout expired. The original failure remains
+saved; standard lifecycle recovery subsequently proved complete removal.
+Fresh 120-request qualification passed in **75 seconds**, and the three
+defended offline checks passed in **9 seconds**. CS-BuFLO is now being tried;
+its result is pending. A prospective input-policy admission revision and
+normal router-cleanup repair are being tested in separate checkouts.
+The old-source site search stopped normally at checkpoint 84: **31 terminal
+decisions and one admitted site**. It is not a current repaired-source cohort.
+**0/50 study shakedown traces and 0/16,000 formal traces** are accepted.
+The table below retains the earlier 06:25 UTC snapshot for comparison; its
+running and pending-build statements describe that earlier time. See the
+[exact successor records](EVIDENCE-INDEX.md#repaired-runtime-and-fresh-poki-diagnostics).
+
 The prospective admission contract is [selection revision 7](../config/curated-sources/crux73-tranco600-rapid-v5-selection-v7.json)
 under the unchanged v5 profile. It preserves full multi-origin graphs, exact
 selected-page HTTP/3 proof and three complete replay witnesses. Complete
