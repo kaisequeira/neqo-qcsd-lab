@@ -290,9 +290,11 @@ def image_check_command(spec: CaptureSpec, *, capture_control_installation: Path
     _check_spec(spec)
     roots = {spec.data_root, spec.runtime_source_root, spec.module_root, spec.execution_root,
              spec.source_manifest.parent, spec.client_binary.parent, spec.base_launcher.parent}
-    if campaign_name is not None and admission._unpack(_read(spec.plan_receipt), PLAN_TYPE).get("study_version") == 6:
+    if admission._unpack(_read(spec.plan_receipt), PLAN_TYPE).get("study_version") == 6:
         from . import rapid_rolling_capture as rolling
-        roots.update(rolling.readiness_roots(spec, campaign_name))
+        roots.update(rolling.enrollment_roots(spec))
+        if campaign_name is not None:
+            roots.update(rolling.readiness_roots(spec, campaign_name))
     extra_environment = {}
     reference = (str(capture_control_installation) if capture_control_installation is not None
                  else os.environ.get("QCSD_RAPID_COLLECTION_COMPATIBILITY") if inherit_environment else None)

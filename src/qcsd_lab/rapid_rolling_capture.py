@@ -548,13 +548,84 @@ print(json.dumps({'receipt':str(receipt),'facts':e.verify_launch_receipt(receipt
 """.strip()
 
 
+def enrollment_roots(spec: lanes.CaptureSpec) -> list[Path]:
+    """Derive transport from sealed policy and enrollment metadata only.
+
+    The installed plan check still reopens every terminal and prepared graph.
+    Mount derivation does not repeat that scientific verification on the host.
+    """
+    path = spec.cohort.absolute()
+    payload = admission._unpack(lanes._read(spec.plan_receipt), lanes.PLAN_TYPE)
+    if (type(payload.get("study_version")) is not int or payload["study_version"] != 6
+        or payload.get("cohort_generation") != "rolling-50"
+        or payload.get("bindings", {}).get("cohort_sha256") != lanes._sha(lanes._read(path))):
+        raise ValueError("rolling transport changed its bound enrollment")
+    roots, seen = set(), set()
+    policy_reference = None
+    expected_ordinal = None
+    while True:
+        if path in seen:
+            raise ValueError("rolling transport enrollment contains a cycle")
+        seen.add(path)
+        batch = admission._unpack(lanes._read(path), ENROLLMENT_TYPE)
+        _keys(batch, {"policy", "ordinal", "parent", "admission_root", "admission_provenance",
+                     "decisions", "selected_candidate_ids", "first_class_index", "last_candidate_position",
+                     "declared_at", "scientific_credit"}, "rolling enrollment transport")
+        policy_path = _open_ref(batch["policy"])
+        if policy_reference is None:
+            root = policy_path.parent
+            if policy_path != root / "policy.json":
+                raise ValueError("rolling transport requires its official policy namespace")
+            policy = verify_policy(root)
+            if policy["runtime"]["data_root"] != str(spec.data_root):
+                raise ValueError("rolling transport changed its study data root")
+            policy_reference = batch["policy"]
+            roots.add(root)
+            runtime = policy["runtime"]
+            roots.update(Path(runtime[key]) for key in ("data_root", "runtime_source_root", "module_root", "execution_root"))
+            roots.update(_open_ref(policy[key]).parent for key in
+                         ("runtime_source_manifest", "client_binary", "base_launcher", "host_launcher"))
+            roots.add(lanes._regular_directory(Path(policy["initial_admission_root"])))
+        elif batch["policy"] != policy_reference:
+            raise ValueError("rolling transport parent changes its sealed policy")
+        ordinal = batch["ordinal"]
+        if (path != _batch_path(root, ordinal) or batch["scientific_credit"] is not False
+            or expected_ordinal is not None and ordinal != expected_ordinal):
+            raise ValueError("rolling transport enrollment is outside its claimed batch namespace")
+        context_root = lanes._regular_directory(Path(batch["admission_root"]))
+        if _open_ref(batch["admission_provenance"]) != context_root / "provenance.json":
+            raise ValueError("rolling transport changed its sealed admission provenance")
+        if expected_ordinal is None and context_root != spec.acquisition_root:
+            raise ValueError("rolling transport changed its current admission context")
+        context = admission.load_admission_context(context_root)
+        if _admission_identity(context) != policy["admission_identity"]:
+            raise ValueError("rolling transport admission context changed its policy inputs")
+        # Admission inputs, module Sources, retained root-role records and all
+        # attempt artifacts are closed relative references under this root.
+        roots.add(context_root)
+        if ordinal == 1:
+            if batch["parent"] is not None:
+                raise ValueError("rolling transport initial enrollment invents a parent")
+            break
+        parent = _open_ref(batch["parent"])
+        if parent != _batch_path(root, ordinal - 1):
+            raise ValueError("rolling transport skips its immediate parent enrollment")
+        path, expected_ordinal = parent, ordinal - 1
+    for root in roots:
+        lanes._regular_directory(root)
+        if any(char in str(root) for char in ("\n", "\r", "\0", ":")):
+            raise ValueError("rolling transport requires regular canonical mount roots")
+    return sorted(roots)
+
+
 def readiness_roots(spec: lanes.CaptureSpec, campaign_name: str) -> list[Path]:
     _, payload = verify_capture_plan(spec)
     proof = {"plan_payload": payload}
     lane = lanes._lane(proof, campaign_name)
     reference = require_mode_readiness(spec, lane)
     from .rapid_rolling_readiness import readiness_mount_roots
-    return readiness_mount_roots(reference, runtime={key: spec.serializable()[key] for key in lanes.RUNTIME_KEYS}, mode=lane.mode)
+    return sorted(set(enrollment_roots(spec)) | set(readiness_mount_roots(reference,
+        runtime={key: spec.serializable()[key] for key in lanes.RUNTIME_KEYS}, mode=lane.mode)))
 
 
 def lane_check_command(spec: lanes.CaptureSpec, root: Path, target: Path, *, complete: bool) -> list[str]:
