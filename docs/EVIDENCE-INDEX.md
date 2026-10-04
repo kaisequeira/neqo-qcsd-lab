@@ -11,7 +11,58 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ### Current rolling v6 checkpoint: eight accepted traces
 
-At **4 October, 14:26 Sydney AEDT (03:26 UTC)**, formal progress remains
+At **4 October, 15:20 Sydney AEDT (04:20 UTC)**, the total remains
+**8/16,000 accepted formal traces from one unique enrolled Poki site out of 50**.
+The FRONT V2 formal result is **incomplete**, with two locally accepted visits,
+two failed visits and six retained failed attempts. It adds zero formal credit.
+The complete 260-resource/four-origin graph and all failed evidence are retained.
+Its `experiment.json` under
+`diagnostic-rehearsals/rapid-v6-first-formal-poki-20261004-001/source8ad-front-001/execution-root/results/rapid-curated-tranco50-v6-formal-b01-s01-front-1200/20261004T034206.956410Z`
+has SHA `df2089ef74c4e5439b95011d1d2c77ae5cc59fd74883a57e58f021ed1a8d497d`.
+
+Prospective FRONT V3 is public as Lab `e24bf759` / Native `a57167e9` on both
+main and desktop. The Native compile closed 0 in **237.401 seconds**, followed
+by **21 focused Native checks**; matching Lab source passed **184 focused checks**.
+Source-only publication receipt
+`diagnostic-rehearsals/front-v3-source-publication-20261004-001/published.json`
+has SHA `d66b299ea8774bf54e541d81015268d7fef0ce44dd27ef873d151e2c85c49a9e`.
+Native records are in `diagnostic-rehearsals/front-v3-native-root-checks-20261004-001`;
+Lab `lab-source-closure.json` in
+`diagnostic-rehearsals/front-padding-window-v3-lab-checks-20261004-001` has SHA
+`9e4541f0987a793d1868262d609d446401e6832a69e0baf1066cf5bbb1ea4493`.
+
+V3 allows a 10ms scheduled pure-padding outgoing window and at most 10% combined
+proven congestion/deadline padding omissions, using immediate socket handoff
+timestamps. Application deadlines, incoming behavior, other modes, polling and
+source/ownership/packet/capture/clock/TXTIME/full-graph guards stay unchanged.
+Old failed receipts keep their original policy. Matched runtime inputs are
+staged with 2,409 files, including 1,783 Native files; host staging closure
+`diagnostic-rehearsals/front-v3-matched-runtime-driver-20261004-001/host-stage-closure.json`
+has SHA `177db9864c698869e5684e2919d508732da0ae2ee2eeec7cdc46edf7eecf7310`.
+Images, fresh affected 120-response qualification and actual diagnostics are
+pending at this snapshot; this is no installed-runtime claim.
+
+The external four-visit operator is
+`diagnostic-rehearsals/rapid-v6-front-v3-diagnostic-operator-20261004-001/operator.py`,
+SHA `ed1e5ccb3f32c98b177d5d6ae3361d4fbf056df96ee26c08ddacb6701f268fb1`.
+It preserves original campaign seed `23565201734190289`, including failed
+Native seeds `563137494570967046` and `9854864327455243477`, with the two
+healthy visits, one attempt each and installed ordinary deep verification.
+This is zero-credit diagnostic evidence; public readiness keeps its separate
+standard one-visit canary. No global browser or fitting rerun is required.
+
+Parallel trial 004 Source `a084` / Native `841` records are under
+`diagnostic-rehearsals/rapid-v6-first-formal-poki-20261004-001/sourcea084-parallel-004/operations`.
+Scheduling closed 0 in 15.954 seconds, plan in 149.627 seconds and preparation
+closed 0. Their completion SHAs are respectively `e162f97a4a95208e5781326ae2044fd5f0e9ac2e332dd1881130fcfc62e78eca`,
+`499e81cfdc72e5616cac9fdb15f7939bf11f54356d66ae4212f3d01e4d876368`
+and `1df58a7e34a7ffe1f66725a8fd43f0335b50e086b039bd64f242786d67d17f12`.
+Launch started at 04:17:06.898484 UTC and remains live at the snapshot;
+`launch-started.json` SHA is `4ea80070e172486f528918481bd517f18293dd476f14afdfe276e6f1e56978a7`.
+Completed two-worker capture/recovery proof and additional credit remain pending.
+The target stays **50 × five × 64 = 16,000**.
+
+**Earlier snapshot, 4 October, 14:26 Sydney AEDT (03:26 UTC):** formal progress was
 **8/16,000 accepted traces from one unique enrolled Poki site**. The two
 completed lanes below provide four ordinary and four Tamaraw visits, each
 retaining all 260 resources and four origins. Engineering checks and

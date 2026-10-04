@@ -43,7 +43,37 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Current checkpoint, 4 October, 14:26 Sydney AEDT (4 October, 03:26 UTC):**
+**Current checkpoint, 4 October, 15:20 Sydney AEDT (4 October, 04:20 UTC):**
+Formal progress remains **8/16,000 accepted traces from one unique enrolled
+site out of 50, Poki**. The FRONT V2 formal lane is incomplete: two visits
+were locally accepted and two failed, with **six retained failed attempts**.
+It adds **zero formal credit**. The full **260-resource, four-origin graph**
+and all earlier results remain intact; the target is still **50 × five × 64**.
+
+Prospective FRONT V3 source is published on main and desktop as Lab
+`e24bf759` / Native `a57167e9`. The Native compile passed in **237.401 seconds**,
+followed by **21 focused Native checks**; **184 focused Lab checks** passed.
+V3 permits a **10ms scheduled pure-padding outgoing window** and at most
+**10% combined proven congestion/deadline padding omissions**, with immediate
+low-level socket handoff timestamps. Application deadlines, incoming behavior,
+other settings, controller polling and source/packet/clock/TXTIME/full-graph
+checks remain unchanged. This prospective allowance leaves old failures failed.
+
+The matched V3 runtime inputs are frozen and staged. Images, fresh affected
+120-response qualification and diagnostics remain pending at this snapshot.
+The planned diagnostic uses the original four-visit seed sequence, including
+both failed seeds, with one attempt per visit and ordinary deep verification.
+The separate standard one-visit canary supplies public readiness; the four-visit
+diagnostic supplies engineering evidence. No global browser or fitting rerun
+is required, and these source tests add no accepted traces.
+
+Parallel trial 004 on Source `a084` / Native `841` passed scheduling in
+**15.954 seconds**, planning in **149.627 seconds**, and preparation. Its
+launch is running, with no completed two-worker capture or recovery proof
+and no additional credit yet. See the
+[current evidence](docs/EVIDENCE-INDEX.md#current-rolling-v6-checkpoint-eight-accepted-traces).
+
+**Earlier checkpoint, 4 October, 14:26 Sydney AEDT (4 October, 03:26 UTC):**
 Formal progress remains **8/16,000 accepted traces from one unique enrolled
 site, Poki**: four ordinary visits on Source 621 and four Tamaraw visits on
 Source 176. All retain the complete **260-resource, four-origin graph**.

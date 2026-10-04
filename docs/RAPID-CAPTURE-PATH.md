@@ -43,7 +43,36 @@ so a later repair can use a new runtime while completed peers retain theirs.
 First dispatch is serial. Successful simultaneous capture is a separate
 remaining operational proof.
 
-**Current checkpoint, 4 October, 14:26 Sydney AEDT (4 October, 03:26 UTC):**
+**Current checkpoint, 4 October, 15:20 Sydney AEDT (4 October, 04:20 UTC):**
+The total remains **8/16,000 accepted formal traces from one unique enrolled
+Poki site out of 50**. The FRONT V2 formal lane is incomplete: two locally
+accepted visits, two failed visits and six retained failed attempts. It adds
+zero formal credit and retains the entire **260-resource, four-origin graph**.
+
+Lab `e24bf759` / Native `a57167e9` is published on main and desktop. The
+Native compile passed in **237.401 seconds**, with **21 focused Native checks**;
+the matching policy/amendment source passed **184 focused Lab checks**.
+Prospective V3 permits a **10ms scheduled pure-padding outgoing window** and
+at most **10% combined proven congestion/deadline padding omissions**. It uses
+immediate low-level socket handoff timestamps. Application deadlines, incoming
+behavior, other modes, polling, packet ownership, capture/clock/TXTIME checks
+and complete graphs retain their existing requirements. Old failures remain
+failed under their original rules.
+
+Matched V3 runtime inputs are staged; images, a new affected named 120-response
+qualification and captures remain pending. The next diagnostic replays the
+original four-visit seed sequence, including both failed seeds, with one attempt
+each and ordinary deep verification. A separate standard one-visit canary is
+required for public readiness. These checks add no formal credit and require
+no global browser admission or defense fitting rerun.
+
+Parallel trial 004 on Source `a084` / Native `841` passed scheduling
+(**15.954 seconds**), plan (**149.627 seconds**) and preparation. Launch is
+running; completed two-worker capture/recovery proof and additional credit
+remain pending. The target stays **50 × five × 64 = 16,000**. See the
+[current evidence](EVIDENCE-INDEX.md#current-rolling-v6-checkpoint-eight-accepted-traces).
+
+**Earlier checkpoint, 4 October, 14:26 Sydney AEDT (4 October, 03:26 UTC):**
 The accepted total remains **8/16,000 from one unique enrolled Poki site**:
 four ordinary and four Tamaraw visits, each with all **260 resources and
 four origins**. New Lab `8ad01036` / Native `9a6cb0e4` is published, and
