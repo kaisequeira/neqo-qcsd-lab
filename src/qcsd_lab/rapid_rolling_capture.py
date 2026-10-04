@@ -21,6 +21,8 @@ from .chaff_qualification import RESPONSE_ONLY_QUALIFICATION_SCOPE, validate_nam
 from .discover import origin
 
 POLICY_TYPE = "qcsd-rapid-v6-rolling-formal-policy"
+STATIC_POLICY_TYPE = "qcsd-rapid-v6-supplied-static-rolling-formal-policy-v1"
+STATIC_CONTRACT = "first-fifty-ordered-complete-fixed-resource-get-admissions-v1"
 ENROLLMENT_TYPE = "qcsd-rapid-v6-immutable-enrollment-batch"
 RUNTIME_TYPE = "qcsd-rapid-v6-rolling-runtime-inputs"
 CORPUS_TYPE = "qcsd-rapid-v6-complete-rolling-corpus"
@@ -107,6 +109,9 @@ def load_runtime(path: Path) -> dict[str, str]:
 
 
 def _admission_identity(context) -> dict[str, str]:
+    from . import supplied_static_admission as static
+    if isinstance(context, static.Context):
+        return static.identity(context)
     if context.selection_amendment_revision != 12:
         raise ValueError("rolling capture requires the explicitly prepared V12 traffic policies")
     return {"profile_sha256": lanes._sha(context.profile_bytes),
@@ -116,13 +121,28 @@ def _admission_identity(context) -> dict[str, str]:
             "candidate_order_sha256": lanes._sha(admission._json(list(context.candidates)))}
 
 
-def initialize_study(acquisition_root: Path, root: Path, runtime: Mapping[str, str]) -> Path:
+def _context_for_policy(policy: Mapping[str, Any], root: Path):
+    if policy["contract"] == STATIC_CONTRACT:
+        from .supplied_static_admission import load_context
+        return load_context(root)
+    return admission.load_admission_context(root)
+
+
+def _verify_terminal(context, path: Path):
+    from . import supplied_static_admission as static
+    return static.verify_terminal(path, context) if isinstance(context, static.Context) else admission.verify_site_terminal(path, context)
+
+
+def initialize_study(acquisition_root: Path, root: Path, runtime: Mapping[str, str], *, supplied_static: bool = False) -> Path:
+    if type(supplied_static) is not bool:
+        raise ValueError("static rolling opt-in must be boolean")
     root = lanes._regular_directory(root)
     runtime = _runtime(dict(runtime))
     if any(root.iterdir()) or not root.is_relative_to(Path(runtime["data_root"])):
         raise ValueError("rolling study needs an empty directory under its explicit data root")
-    context = admission.load_admission_context(acquisition_root)
-    payload = {"contract": CONTRACT, "admission_identity": _admission_identity(context),
+    contract = STATIC_CONTRACT if supplied_static else CONTRACT
+    context = _context_for_policy({"contract": contract}, acquisition_root)
+    payload = {"contract": contract, "admission_identity": _admission_identity(context),
                "initial_admission_root": str(context.root), "runtime": runtime,
                "runtime_source_manifest": _ref(Path(runtime["source_manifest"])),
                "client_binary": _ref(Path(runtime["client_binary"])),
@@ -134,19 +154,36 @@ def initialize_study(acquisition_root: Path, root: Path, runtime: Mapping[str, s
                "visits_per_lane_workload": 4, "global_shakedown_required": False,
                "complete_membership_before_first_lane_required": False,
                "formal_accepted_trace_count": 0, "scientific_credit": False}
-    return _write(root / "policy.json", POLICY_TYPE, payload)
+    if supplied_static:
+        from .supplied_static_preparation import ROLE
+        from .supplied_static_admission import context_limits
+        payload["data_role"] = ROLE
+        payload["capture_limits"] = context_limits(context)
+    return _write(root / "policy.json", STATIC_POLICY_TYPE if supplied_static else POLICY_TYPE, payload)
 
 
 def verify_policy(root: Path) -> dict[str, Any]:
     root = lanes._regular_directory(root)
-    value = admission._unpack(lanes._read(root / "policy.json"), POLICY_TYPE)
-    _keys(value, {"contract", "admission_identity", "initial_admission_root", "runtime",
+    raw = lanes._read(root / "policy.json")
+    kind = lanes._load(raw).get("receipt_type")
+    if kind not in (POLICY_TYPE, STATIC_POLICY_TYPE):
+        raise ValueError("rolling policy has an unknown scientific data role")
+    value = admission._unpack(raw, kind)
+    fields = {"contract", "admission_identity", "initial_admission_root", "runtime",
                  "runtime_source_manifest", "client_binary", "base_launcher", "host_launcher",
                  "published_at", "class_target", "modes", "visits_per_class_mode",
                  "formal_trace_target", "maximum_batch_size", "visits_per_lane_workload",
                  "global_shakedown_required", "complete_membership_before_first_lane_required",
-                 "formal_accepted_trace_count", "scientific_credit"}, "rolling policy")
-    exact = {"contract": CONTRACT, "class_target": 50, "modes": list(plan.MODES),
+                 "formal_accepted_trace_count", "scientific_credit"}
+    contract = STATIC_CONTRACT if kind == STATIC_POLICY_TYPE else CONTRACT
+    if kind == STATIC_POLICY_TYPE:
+        from .supplied_static_preparation import ROLE
+        fields.add("data_role")
+        fields.add("capture_limits")
+        if value.get("data_role") != ROLE:
+            raise ValueError("static rolling policy changed its fixed-resource claim")
+    _keys(value, fields, "rolling policy")
+    exact = {"contract": contract, "class_target": 50, "modes": list(plan.MODES),
              "visits_per_class_mode": 64, "formal_trace_target": 16000,
              "maximum_batch_size": 5, "visits_per_lane_workload": 4,
              "global_shakedown_required": False, "complete_membership_before_first_lane_required": False,
@@ -160,9 +197,13 @@ def verify_policy(root: Path) -> dict[str, Any]:
                              ("base_launcher", "base_launcher"), ("host_launcher", "host_launcher")):
         if _open_ref(value[key]) != Path(runtime[runtime_key]):
             raise ValueError("rolling policy runtime reference was relocated or replaced")
-    initial = admission.load_admission_context(Path(value["initial_admission_root"]))
+    initial = _context_for_policy(value, Path(value["initial_admission_root"]))
     if _admission_identity(initial) != value["admission_identity"]:
         raise ValueError("rolling policy admission inputs changed")
+    if kind == STATIC_POLICY_TYPE:
+        from .supplied_static_admission import context_limits
+        if value["capture_limits"] != context_limits(initial):
+            raise ValueError("static rolling policy changed its prospectively declared capture budgets")
     return value
 
 
@@ -188,9 +229,13 @@ def _terminal_row(context, position: int, reference: Mapping[str, str]) -> tuple
     if not 1 <= position <= len(context.candidates):
         raise ValueError("rolling decision position is outside the frozen order")
     path = _open_ref(reference)
-    if not path.is_relative_to(context.root / "attempts"):
+    from . import supplied_static_admission as static
+    if isinstance(context, static.Context):
+        if path != static.terminal_path(context, position):
+            raise ValueError("rolling static terminal differs from its closed original or successor context")
+    elif not path.is_relative_to(context.root / "attempts"):
         raise ValueError("rolling terminal escapes its separately bound admission context")
-    facts = admission.verify_site_terminal(path, context)
+    facts = _verify_terminal(context, path)
     candidate = context.candidates[position - 1]
     if facts["candidate_id"] != candidate["candidate_id"]:
         raise ValueError("rolling enrollment reordered or skipped a candidate decision")
@@ -199,6 +244,9 @@ def _terminal_row(context, position: int, reference: Mapping[str, str]) -> tuple
 
 
 def _prepared_workload(context, terminal_path: Path) -> tuple[Path, dict[str, Any]]:
+    from . import supplied_static_admission as static
+    if isinstance(context, static.Context):
+        return static.prepared_workload(context, terminal_path)
     terminal = admission._unpack(lanes._read(terminal_path), admission.TERMINAL_TYPE)
     preparation = admission._unpack(lanes._read(admission._child(context.root, terminal["preparation"])), admission.PREPARATION_TYPE)
     original = admission._child(context.root, preparation["prepared_workload"])
@@ -237,7 +285,7 @@ def _verify_enrollment(path: Path, *, _verified: dict | None = None) -> tuple[di
     if (type(value["first_class_index"]) is not int or value["first_class_index"] != first_class
         or not admission._utc(earliest) <= admission._utc(value["declared_at"]) <= admission._utc(admission._now())):
         raise ValueError("rolling enrollment membership ordinal or chronology differs")
-    context = admission.load_admission_context(Path(value["admission_root"]))
+    context = _context_for_policy(policy, Path(value["admission_root"]))
     if (_admission_identity(context) != policy["admission_identity"]
         or _open_ref(value["admission_provenance"]) != context.root / "provenance.json"):
         raise ValueError("rolling enrollment changed its admission role, order or policies")
@@ -285,15 +333,17 @@ def enroll(root: Path, *, acquisition_root: Path | None = None, count: int = 1) 
         parent = _ref(existing[-1])
     if first_class + count - 1 > 50:
         raise ValueError("rolling enrollment cannot exceed fifty classes")
-    context = admission.load_admission_context(acquisition_root or Path(policy["initial_admission_root"]))
+    context = _context_for_policy(policy, acquisition_root or Path(policy["initial_admission_root"]))
     if _admission_identity(context) != policy["admission_identity"]:
         raise ValueError("rolling successor admission changed the frozen catalogue or scientific rules")
-    status = admission.acquisition_status(context)
+    from . import supplied_static_admission as static
+    status = static.acquisition_status(context) if isinstance(context, static.Context) else admission.acquisition_status(context)
     decisions, selected = [], []
     for position, reference in enumerate(status["terminal_prefix"], 1):
         if position < first_position:
             continue
-        row, facts = _terminal_row(context, position, _ref(admission._child(context.root, reference)))
+        terminal_reference = reference if isinstance(context, static.Context) else _ref(admission._child(context.root, reference))
+        row, facts = _terminal_row(context, position, terminal_reference)
         decisions.append(row)
         if facts["outcome"] == "admitted":
             selected.append(facts["candidate_id"])
@@ -325,8 +375,11 @@ def _sites_from_enrollment(batch: Mapping[str, Any], all_classes: list[dict[str,
                            enrollment: Path | None = None, runtime: Mapping[str, str] | None = None,
                            front_capture_amendment: Mapping[str, Any] | None = None, _context=None) -> tuple[plan.Site, ...]:
     classes = all_classes[-len(batch["selected_candidate_ids"]):]
+    policy = verify_policy(_open_ref(batch["policy"]).parent)
     amendment = None
     if front_capture_amendment is not None:
+        if policy["contract"] == STATIC_CONTRACT:
+            raise ValueError("static preparation already binds the current FRONT policy; a browser amendment cannot be imported")
         from .rapid_front_capture_amendment import _validate_for_enrollment
         if enrollment is None or runtime is None:
             raise ValueError("FRONT amendment requires this operation's verified enrollment and runtime")
@@ -347,9 +400,9 @@ def _sites_from_enrollment(batch: Mapping[str, Any], all_classes: list[dict[str,
     manifest, sidecars = resolve(q["manifest"]), resolve(q["sidecar_root"])
     sites = []
     for row in classes:
-        context = admission.load_admission_context(Path(row["admission_root"]))
+        context = _context_for_policy(policy, Path(row["admission_root"]))
         terminal_path = _open_ref(row["terminal"])
-        facts = admission.verify_site_terminal(terminal_path, context)
+        facts = _verify_terminal(context, terminal_path)
         original, workload = _prepared_workload(context, terminal_path)
         if amendment is None and lanes._read(workload_root / original.name) != lanes._read(original):
             raise ValueError("rolling capture pruned or changed an admitted complete workload")
@@ -403,6 +456,11 @@ def _bindings_from_enrollment(enrollment: Path, policy: Mapping[str, Any]) -> di
             "selection_amendment_sha256": policy["admission_identity"]["selection_amendment_sha256"]}
 
 
+def _render_campaign(lane: plan.Lane, sites, policy: Mapping[str, Any]) -> bytes:
+    return plan.render_lane_campaign(lane, sites, static_capture_limits=(
+        policy["capture_limits"] if policy["contract"] == STATIC_CONTRACT else None))
+
+
 def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output: Path,
                  *, readiness: Mapping[str, Any], runtime_inputs: Mapping[str, str] | None = None,
                  scheduling: Mapping[str, str] | None = None,
@@ -445,7 +503,7 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
     hashes = {}
     for lane in planned:
         path = campaigns / f"{lane.campaign_name}.yml"
-        raw = plan.render_lane_campaign(lane, sites)
+        raw = _render_campaign(lane, sites, policy)
         if path.exists():
             if lanes._read(path) != raw:
                 raise ValueError("rolling plan cannot replace an earlier campaign")
@@ -471,6 +529,9 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
             declared_at=payload["declared_at"])
     if amendment_reference is not None:
         payload["front_capture_amendment"] = amendment_reference
+    if policy["contract"] == STATIC_CONTRACT:
+        payload["data_role"] = policy["data_role"]
+        payload["capture_limits"] = policy["capture_limits"]
     return _write(output, lanes.PLAN_TYPE, payload)
 
 
@@ -514,6 +575,11 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
     fields = {"study_version", "cohort_generation", "bindings", "runtime", "runtime_artifacts", "acquisition_provenance_sha256",
                  "qualification_spec_sha256", "sites", "lanes", "planned_trace_count", "readiness",
                  "declared_at", "formal_accepted_trace_count", "scientific_credit"}
+    if policy["contract"] == STATIC_CONTRACT:
+        fields.add("data_role")
+        fields.add("capture_limits")
+        if value.get("data_role") != policy["data_role"] or value.get("capture_limits") != policy["capture_limits"]:
+            raise ValueError("static rolling plan changed its scientific data role")
     if "scheduling" in value:
         fields.add("scheduling")
     amendment_reference = None
@@ -557,7 +623,7 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
         expected = (plan.successor_lane(base, row["generation"]),)
     actual = []
     for lane in expected:
-        raw = plan.render_lane_campaign(lane, sites)
+        raw = _render_campaign(lane, sites, policy)
         if lanes._read(spec.campaign_dir / f"{lane.campaign_name}.yml") != raw:
             raise ValueError("rolling campaign changed sites, graph, visits or fixed settings")
         actual.append({**asdict(lane), "workload_ids": list(lane.workload_ids), "campaign_sha256": lanes._sha(raw)})
@@ -654,7 +720,7 @@ def publish_successor(spec: lanes.CaptureSpec, lane_name: str, generation: int, 
     if base is None or generation != base.generation + 1:
         raise ValueError("rolling recovery must name the immediate failed lane successor")
     lane = plan.successor_lane(base, generation)
-    raw = plan.render_lane_campaign(lane, sites)
+    raw = plan.render_lane_campaign(lane, sites, static_capture_limits=value.get("capture_limits"))
     admission.durable_create(spec.campaign_dir / f"{lane.campaign_name}.yml", raw)
     value = {**value, "lanes": [{**asdict(lane), "workload_ids": list(lane.workload_ids), "campaign_sha256": lanes._sha(raw)}],
              "planned_trace_count": lane.sample_count, "declared_at": admission._now()}
@@ -723,12 +789,15 @@ def enrollment_roots(spec: lanes.CaptureSpec) -> list[Path]:
             raise ValueError("rolling transport changed its sealed admission provenance")
         if expected_ordinal is None and context_root != spec.acquisition_root:
             raise ValueError("rolling transport changed its current admission context")
-        context = admission.load_admission_context(context_root)
+        context = _context_for_policy(policy, context_root)
         if _admission_identity(context) != policy["admission_identity"]:
             raise ValueError("rolling transport admission context changed its policy inputs")
         # Admission inputs, module Sources, retained root-role records and all
         # attempt artifacts are closed relative references under this root.
         roots.add(context_root)
+        from . import supplied_static_admission as static
+        if isinstance(context, static.Context):
+            roots.update(static.roots(context))
         if ordinal == 1:
             if batch["parent"] is not None:
                 raise ValueError("rolling transport initial enrollment invents a parent")
@@ -862,7 +931,7 @@ def _reopen_lane_check(reference: Any) -> tuple[lanes.CaptureSpec, Path, dict[st
 
 
 def _corpus_facts(root: Path, closures: list[Any]) -> dict[str, Any]:
-    verify_policy(root)
+    policy = verify_policy(root)
     batches = _batches(root)
     if not batches:
         raise ValueError("rolling corpus has no admitted membership")
@@ -898,9 +967,12 @@ def _corpus_facts(root: Path, closures: list[Any]) -> dict[str, Any]:
                      "accepted": result["accepted"], "result_seal_sha256": result["result_seal_sha256"]})
     if observed != expected or sum(row["accepted"] for row in rows) != 16000:
         raise ValueError("rolling corpus does not contain exactly fifty by five by sixty-four accepted traces")
-    return {"policy": _ref(root / "policy.json"), "final_enrollment": _ref(batches[-1]),
+    facts = {"policy": _ref(root / "policy.json"), "final_enrollment": _ref(batches[-1]),
                "classes": classes, "lanes": rows, "accepted": 16000, "lane_count": len(rows),
                "scientific_credit": True}
+    if policy["contract"] == STATIC_CONTRACT:
+        facts["data_role"] = policy["data_role"]
+    return facts
 
 
 def publish_corpus(root: Path, closures: list[Any], output: Path) -> dict[str, Any]:
@@ -913,7 +985,11 @@ def publish_corpus(root: Path, closures: list[Any], output: Path) -> dict[str, A
 
 def verify_corpus_manifest(root: Path, path: Path) -> dict[str, Any]:
     value = admission._unpack(lanes._read(path), CORPUS_TYPE)
-    _keys(value, {"policy", "final_enrollment", "classes", "lanes", "accepted", "lane_count", "scientific_credit", "closed_at"}, "rolling corpus")
+    fields = {"policy", "final_enrollment", "classes", "lanes", "accepted", "lane_count", "scientific_credit", "closed_at"}
+    policy = verify_policy(root)
+    if policy["contract"] == STATIC_CONTRACT:
+        fields.add("data_role")
+    _keys(value, fields, "rolling corpus")
     expected = _corpus_facts(root, [row["closure"] for row in value["lanes"]])
     if any(value[key] != item or type(value[key]) is not type(item) for key, item in expected.items()) or admission._utc(value["closed_at"]) > admission._utc(admission._now()):
         raise ValueError("rolling final manifest differs from its independently reopened exact corpus")

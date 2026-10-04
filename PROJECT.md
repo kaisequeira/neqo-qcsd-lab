@@ -20,6 +20,12 @@ ready setting. Completing all 50 admissions and a separate ten-site
 shakedown are no longer first-capture prerequisites. The final corpus still
 requires all 50 sites, all five settings and every declared accepted slot.
 
+The prospective [supplied-list role](docs/SUPPLIED-STATIC-CAPTURE.md) measures
+complete fixed multi-origin resource replays. It replaces browser rendering
+and repeated browser stability as admission prerequisites for its own cohort.
+Its formal target is also **50 × five × 64 = 16,000**. Historical browser
+recordings retain their original role and are excluded from that total.
+
 ### Historical 100-site contract
 
 That contract calls for 100 public-page classes with their complete admitted
@@ -43,7 +49,48 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Current checkpoint, 4 October, 15:20 Sydney AEDT (4 October, 04:20 UTC):**
+**Current checkpoint, 4 October, 20:10 Sydney AEDT (4 October, 09:10 UTC):**
+The new supplied-list cohort has **four admitted sites and zero formal
+recordings**. Its first ten candidate decisions are closed: four admissions,
+four operational deferrals and two input rejections. These are actual public
+GET/admission decisions, not root-screen estimates. The final target remains
+50 sites and 16,000 accepted formal recordings.
+
+Poki's first complete GET fetched all **277 resources across three origins**
+with complete, nonempty HTTP 200 responses over HTTP/3. The actual bootstrap
+and full GET took **10.741 seconds including Docker startup**, followed by an
+independent evidence reopen and admission. Its declared static graph differs
+from the historical 260-resource, four-origin browser graph; neither proof
+relabels the other. Chaff selection offers 261 non-Document candidates on
+approved auxiliary origins. Actual sustained qualification remains necessary.
+
+The static integration retains the published `6606eb25` control repair and
+unchanged Native `5f075d37`. It passed **244 focused HOST checks**. A later
+three-file verifier continuation passed **124 HOST checks**, independently
+reopening the original Poki admission and a real rejected primary redirect.
+The compatibility branch accepts only the exact recorded producer version
+and retains its original hashes. The redirect gains an operational deferral
+only; it gains no eligibility or recording credit. Review and source staging
+are complete; matching runtime installation and capture remain pending.
+
+The prospective FRONT preparation reserve passed 12 compiled Native checks
+and 234 affected Lab checks. BuFLO's next live repeat failed after about
+11 seconds of Native execution at a preparation cutoff, while roughly 3.6 ms
+remained before the existing physical deadline. A prospective reserve repair
+is authored; its matching Lab consumers passed 122 checks. These repairs are
+separate held source and are not installed by this static integration. Their
+actual affected live repeats remain necessary. Healthy settings can proceed
+without waiting for every defense, and no global browser, fitting or nine-hour
+qualification restart is required for this new role.
+
+The supplied source contains 73 entries, of which **50 pass the input-only
+candidate rules and exclusions**. That is not 50 verified usable classes;
+live failures mean additional genuine complete resource lists will be needed.
+All supplied graphs, original order labels and failed evidence are retained.
+The earlier eight accepted browser recordings remain historical evidence.
+See the [current supplied-list evidence](docs/EVIDENCE-INDEX.md#current-supplied-list-study).
+
+**Earlier checkpoint, 4 October, 15:20 Sydney AEDT (4 October, 04:20 UTC):**
 Formal progress remains **8/16,000 accepted traces from one unique enrolled
 site out of 50, Poki**. The FRONT V2 formal lane is incomplete: two visits
 were locally accepted and two failed, with **six retained failed attempts**.

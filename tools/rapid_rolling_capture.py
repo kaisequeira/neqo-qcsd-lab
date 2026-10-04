@@ -40,9 +40,10 @@ def run(args):
             original_runtime={key: old[key] for key in lanes.RUNTIME_KEYS},
             runtime={key: current[key] for key in lanes.RUNTIME_KEYS},
             current_inventory=rolling._ref(args.current_inventory), mode=args.mode)
-    if args.command == "init":
+    if args.command in {"init", "init-static"}:
         root = lanes._regular_directory(args.evidence_root)
-        path = rolling.initialize_study(args.acquisition_root, root, rolling.load_runtime(args.runtime_spec))
+        path = rolling.initialize_study(args.acquisition_root, root, rolling.load_runtime(args.runtime_spec),
+                                        supplied_static=args.command == "init-static")
         return {"policy": str(path), "formal_trace_target": 16000, "scientific_credit": False}
     if args.command == "enroll":
         path = rolling.enroll(args.evidence_root, acquisition_root=args.acquisition_root, count=args.count)
@@ -103,7 +104,7 @@ def run(args):
 def _parser():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("scheduling", "canary-equivalence", "init", "enroll", "front-amendment", "plan", "successor", "launch", "complete-lane", "verify-lane",
+    for name in ("scheduling", "canary-equivalence", "init", "init-static", "enroll", "front-amendment", "plan", "successor", "launch", "complete-lane", "verify-lane",
                  "retire-lane", "publish-manifest", "verify-manifest"):
         item = commands.add_parser(name)
         if name not in {"canary-equivalence", "scheduling", "front-amendment"}:
@@ -119,7 +120,7 @@ def _parser():
             item.add_argument("--current-inventory", type=Path, required=True)
             item.add_argument("--mode", choices=plan.MODES, required=True)
             item.add_argument("--output", type=Path, required=True)
-        elif name == "init":
+        elif name in {"init", "init-static"}:
             item.add_argument("--acquisition-root", type=Path, required=True)
             item.add_argument("--runtime-spec", type=Path, required=True)
         elif name == "enroll":

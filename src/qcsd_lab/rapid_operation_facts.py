@@ -221,6 +221,13 @@ class OperationFacts:
             path = spec.workload_root / (site["workload_id"] + ".json")
             self.watch_file(path)
             self.watch_optional_tree(path.with_name(site["workload_id"] + "-application-response-evidence"))
+            if "data_role" in plan:
+                from .supplied_static_preparation import ROLE, is_static
+                preparation = json.loads(self.watch_file(path)).get("preparation")
+                if plan["data_role"] != ROLE or not is_static(preparation):
+                    raise ValueError("operation workload changed its declared static data role")
+                for evidence_root in self._workload_evidence_trees(path):
+                    self.watch_tree(evidence_root)
         self._bindings.add(key)
 
     def bind_schedule(self, capsule) -> None:
@@ -355,7 +362,7 @@ class OperationFacts:
         names = arguments["expected_workload_ids"]
         content = self.content_key([root / (name + ".json") for name in names],
             [Path(arguments["sidecar_root"]),
-             *(root / (name + "-application-response-evidence") for name in names)],
+             *(tree for name in names for tree in self._workload_evidence_trees(root / (name + ".json")))],
             include_modes=False)
         semantic = {key: value for key, value in arguments.items()
                     if key not in {"workload_root", "sidecar_root"}}
@@ -364,3 +371,13 @@ class OperationFacts:
         if self.has(key):
             return self.get(key)
         return self.remember(key, validator(manifest, **arguments))
+
+    def _workload_evidence_trees(self, path: Path) -> list[Path]:
+        """Bind the explicitly declared preparation role's actual raw evidence."""
+        preparation = json.loads(self.watch_file(path)).get("preparation")
+        if isinstance(preparation, dict) and "data_role" in preparation:
+            from .supplied_static_preparation import is_static, preparation_roots
+            if not is_static(preparation):
+                raise ValueError("operation workload has an unknown preparation data role")
+            return preparation_roots(preparation)
+        return [path.with_name(path.stem + "-application-response-evidence")]

@@ -137,11 +137,13 @@ def validate_prepared_response_graph(manifest: Mapping[str, Any]) -> dict[str, A
             or primary.get("known_valid") is not True or not 200 <= responses[0]["status"] < 300):
             raise ValueError("application response policy requires a known-valid 2xx primary Document")
     if primary_policy == VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY:
+        from .supplied_static_preparation import COVERAGE, is_static
+        coverage_policy = COVERAGE if is_static(preparation) else "all-approved-origins-and-rendered-resources"
         coverage = preparation.get("coverage_admission")
         required = coverage.get("required_resources") if isinstance(coverage, Mapping) else None
         if (policy != COMPLETED_TERMINAL_HTTP_ERRORS_POLICY
             or not isinstance(coverage, Mapping)
-            or coverage.get("policy") != "all-approved-origins-and-rendered-resources"
+            or coverage.get("policy") != coverage_policy
             or not isinstance(required, list) or len(required) != len(resources)
             or any(not isinstance(row, Mapping) or type(row.get("id")) is not int
                    or not isinstance(row.get("url"), str) for row in required)
@@ -238,8 +240,11 @@ def validate_application_responses(
             raise ValueError(f"application resource {identifier} changed its frozen request headers")
         variable_primary = identifier == 0 and primary_policy == VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY
         if variable_primary:
+            from .supplied_static_preparation import is_static
+            primary_rows = (primary_evidence["complete_get_primary_responses"] if is_static(manifest["preparation"])
+                            else primary_evidence["stability_primary_responses"])
             validate_primary_document_response(manifest, row,
-                expected_content_type=_primary_content_type(primary_evidence["stability_primary_responses"][0]))
+                expected_content_type=_primary_content_type(primary_rows[0]))
         if require_identity and not variable_primary and (
             row["bytes"] != target["bytes"] or row["body_sha256"] != target["body_sha256"]
         ):
@@ -308,6 +313,10 @@ def build_primary_document_identity_evidence(
 
 
 def validate_primary_document_identity_evidence(manifest: Mapping[str, Any]) -> dict[str, Any] | None:
+    from .supplied_static_preparation import is_static, validate_static_preparation
+    if is_static(manifest.get("preparation")):
+        validate_static_preparation(manifest["preparation"], manifest["resources"])
+        return deepcopy(manifest["preparation"]["primary_document_identity_evidence"])
     graph = validate_prepared_response_graph(manifest)
     preparation = manifest["preparation"]
     evidence = preparation.get("primary_document_identity_evidence")
@@ -353,6 +362,10 @@ def validate_application_response_policy_evidence(
     these compact facts preserve the negative GET and hashes without embedding
     bodies, packet CSVs or the whole probe graph in every prepared workload.
     """
+    from .supplied_static_preparation import is_static, validate_static_preparation
+    if is_static(manifest.get("preparation")):
+        validate_static_preparation(manifest["preparation"], manifest["resources"])
+        return deepcopy(manifest["preparation"]["application_response_policy_evidence"])
     graph = validate_prepared_response_graph(manifest)
     preparation = manifest["preparation"]
     evidence = preparation.get("application_response_policy_evidence")

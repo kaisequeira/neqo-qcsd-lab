@@ -356,7 +356,7 @@ def _check_workload_files(sites: Sequence[Site], workload_root: Path) -> None:
         )
 
 
-def render_lane_campaign(lane: Lane, sites: Sequence[Site]) -> bytes:
+def render_lane_campaign(lane: Lane, sites: Sequence[Site], *, static_capture_limits: Mapping[str, Any] | None = None) -> bytes:
     """Render one deterministic schema-one campaign without granting authority."""
 
     if lane.role not in {"formal", "diagnostic"}:
@@ -414,6 +414,14 @@ def render_lane_campaign(lane: Lane, sites: Sequence[Site]) -> bytes:
         "defenses": [defense],
         "limits": dict(V5_CAPTURE_LIMITS if lane.study_version in {5, 6} else CAPTURE_LIMITS),
     }
+    if static_capture_limits is not None:
+        from .supplied_static_admission import capture_limits
+        if (lane.study_version != 6 or lane.role != "formal"
+            or not isinstance(static_capture_limits, Mapping)
+            or dict(static_capture_limits) != capture_limits(static_capture_limits.get("max_response_bytes"),
+                                                             static_capture_limits.get("capture_megabytes"))):
+            raise ValueError("static capture may change only its declared response/recording budgets")
+        document["limits"] = dict(static_capture_limits)
     if lane.qualification_set is not None:
         document["chaff_qualification_set"] = lane.qualification_set
     return yaml.safe_dump(document, sort_keys=False, width=100).encode("utf-8")

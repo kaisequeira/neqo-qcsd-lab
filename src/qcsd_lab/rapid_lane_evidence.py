@@ -461,6 +461,16 @@ def check_bound_image(spec: CaptureSpec, root: Path, *, campaign_name: str | Non
     return {"proof": proof, "execution": record}
 
 
+def _render_lane_campaign(spec: CaptureSpec, lane: plan.Lane, sites) -> bytes:
+    payload = _payload(spec.plan_receipt, PLAN_TYPE)
+    if "data_role" in payload:
+        from .supplied_static_preparation import ROLE
+        if payload["data_role"] != ROLE:
+            raise ValueError("lane rendering changed its declared scientific data role")
+        return plan.render_lane_campaign(lane, sites, static_capture_limits=payload["capture_limits"])
+    return plan.render_lane_campaign(lane, sites)
+
+
 def _lane(proof: Mapping[str, Any], campaign_name: str) -> plan.Lane:
     rows = proof["plan_payload"]["lanes"]
     matching = [row for row in rows if row.get("campaign_name") == campaign_name]
@@ -1128,7 +1138,7 @@ def prepare_lane_intent(spec: CaptureSpec, evidence_root: Path, campaign_name: s
             payload = _payload(spec.plan_receipt, PLAN_TYPE)
             require_schedule(payload.get("scheduling"), spec, declared_at=payload["declared_at"], started_at=checked["execution"]["started_at"], _context=_context)
     campaign = spec.campaign_dir / f"{campaign_name}.yml"
-    if _read(campaign) != plan.render_lane_campaign(lane, sites):
+    if _read(campaign) != _render_lane_campaign(spec, lane, sites):
         raise ValueError("launch campaign differs from the independently verified grid")
     namespace = spec.execution_root / "results" / lane.campaign_name
     if namespace.exists() or namespace.is_symlink():
@@ -1238,7 +1248,7 @@ def _intent_and_lineage(spec: CaptureSpec, root: Path, intent_path: Path, *, _co
             raise ValueError("rolling lane changed its sealed setting-specific readiness")
     elif "rolling_readiness" in lineage or "rolling_scheduling" in lineage:
         raise ValueError("historical lane cannot claim rolling readiness authority")
-    if _read(spec.campaign_dir / f"{lane.campaign_name}.yml") != plan.render_lane_campaign(lane, sites):
+    if _read(spec.campaign_dir / f"{lane.campaign_name}.yml") != _render_lane_campaign(spec, lane, sites):
         raise ValueError("actual campaign bytes changed after bound launch")
     proof = checked["proof"]
     expected_identity = {
@@ -1249,7 +1259,7 @@ def _intent_and_lineage(spec: CaptureSpec, root: Path, intent_path: Path, *, _co
     if (intent.get("scientific_credit") is not False or intent.get("actuator") not in {"run", "parallel-formal-worker"}
         or intent["logical_lane"] != lane.logical_name or type(intent["generation"]) is not int
         or intent["generation"] != lane.generation or intent["bindings"] != checked["proof"]["bindings"]
-        or intent["campaign_sha256"] != _sha(plan.render_lane_campaign(lane, sites))
+        or intent["campaign_sha256"] != _sha(_render_lane_campaign(spec, lane, sites))
         or _json(intent["runtime_identity"]) != _json(expected_identity)):
         raise ValueError("launch intent differs from its actual verified plan")
     expected_lineage = {
@@ -1312,7 +1322,7 @@ def _intent_and_lineage(spec: CaptureSpec, root: Path, intent_path: Path, *, _co
                 or admission._utc(original["started_at"]) > admission._utc(scheduling_capsule["published_at"])):
                 raise ValueError("rolling recovery changed its original source-bound failed predecessor")
             predecessor_identity = original["runtime_identity"]
-        if (predecessor_raw != plan.render_lane_campaign(predecessor_lane, sites)
+        if (predecessor_raw != _render_lane_campaign(spec, predecessor_lane, sites)
             or lineage["predecessor_campaign_name"] != predecessor_name
             or lineage["predecessor_campaign_sha256"] != _sha(predecessor_raw)
             or predecessor["campaign_name"] != predecessor_name

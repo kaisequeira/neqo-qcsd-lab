@@ -339,6 +339,11 @@ def validate_research_preparation(manifest: dict[str, Any], *, workload_id: str)
     if not isinstance(preparation, dict):
         raise ValueError(f"research workload {workload_id!r} {RESEARCH_PREPARATION_REQUIRED}")
 
+    if "data_role" in preparation:
+        from .supplied_static_preparation import validate_static_preparation
+        validate_static_preparation(preparation, manifest["resources"])
+        return
+
     try:
         validate_prepared_navigation_graph(
             manifest["resources"],
@@ -471,6 +476,10 @@ def _validate_preparation(
 ) -> None:
     if not isinstance(value, dict):
         raise ValueError("manifest preparation metadata must be an object")
+    if "data_role" in value:
+        from .supplied_static_preparation import validate_static_preparation
+        validate_static_preparation(value, resources)
+        return
     unknown = set(value) - PREPARATION_KEYS
     if unknown:
         raise ValueError(

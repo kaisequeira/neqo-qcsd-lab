@@ -9,9 +9,59 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ## Application response policy repair
 
+### Current supplied-list study
+
+At **4 October, 20:10 Sydney AEDT (09:10 UTC)**, the prospective fixed-resource
+cohort has **four admitted sites and 0/16,000 accepted formal recordings**.
+The original browser cohort has eight accepted recordings and remains separate.
+The [supplied-list runbook](SUPPLIED-STATIC-CAPTURE.md) describes the declared
+role, complete-GET requirement, response budgets and rolling capture path.
+All locations in this section are private parent-workspace evidence paths,
+written as code rather than links so a portable clone does not imply that
+those evidence files are shipped.
+
+The context is `diagnostic-rehearsals/supplied-static50-context-20261004-001`.
+It seals all 73 source entries and their original resource lists, declaring
+Poki first before any GET. The supplied Source SHA is
+`548e4718cbc20e70e391e36206cb0285327da4c78434039ffb616d83b98d068b`.
+Input-only checks identify 50 candidates after exclusions; actual live checks
+still determine admission. Ten candidate decisions are closed: four admitted,
+four operationally deferred and two input-ineligible.
+
+Poki's actual bootstrap/full GET and independent verification/admission are in
+`diagnostic-rehearsals/supplied-static-native5f-bootstrap-fullget-20261004-002`.
+The full GET proof SHA is
+`eeb063659063d0551e24b1379e12e3e947403b7a57bdf64bb691d186e6fac22a`.
+All 277 resources across three origins returned complete nonempty HTTP 200
+responses. Measurement used installed Lab `9c35eafb` / Native `5f075d37`,
+client `3e8e3ff3`, and collection image `d11964c4`; the external static producer
+was separately bound and was not claimed to be installed in that image.
+
+Additional actual GET and terminal operations are in
+`diagnostic-rehearsals/supplied-static-native5f-next-candidates-20261004-003`
+and `diagnostic-rehearsals/supplied-static-native5f-next-candidates-20261004-004`.
+The initial redirect deferral failure remains retained in 003. Its subsequent
+actual corrected deferral and candidate-five input decision are in
+`diagnostic-rehearsals/supplied-static-next-candidates-recovery-host-20261004-001`.
+Candidate 004's Native exit zero and HTTP 302 establish operational failure
+under the declared strict primary rule, never a successful site admission.
+
+Static/control integration's 244 HOST passes are closed in
+`diagnostic-rehearsals/supplied-static-v5-integration-host-checks-20261004-001`.
+The following three-file verifier continuation's 124 HOST passes and real
+read-only evidence reopen are closed in
+`diagnostic-rehearsals/supplied-static-proof-compatibility-host-checks-20261004-001/source-closure-final.json`,
+SHA `fc0e3de8e50f7d97e72fdea4609d9fb8f583002606f03c7e8fc9cffe2cf198cd`.
+Original GET bytes, modes and producer labels remain unchanged. Source-only
+publication/staging records are in
+`diagnostic-rehearsals/supplied-static-source-publication-20261004-001`.
+Runtime installation, sustained qualification, readiness and formal capture
+are pending at this snapshot; HOST checks and admissions add no trace credit.
+
 ### Current rolling v6 checkpoint: eight accepted traces
 
-At **4 October, 15:20 Sydney AEDT (04:20 UTC)**, the total remains
+The following is the earlier browser-role snapshot. At
+**4 October, 15:20 Sydney AEDT (04:20 UTC)**, its total remained
 **8/16,000 accepted formal traces from one unique enrolled Poki site out of 50**.
 The FRONT V2 formal result is **incomplete**, with two locally accepted visits,
 two failed visits and six retained failed attempts. It adds zero formal credit.
