@@ -43,7 +43,33 @@ so a later repair can use a new runtime while completed peers retain theirs.
 First dispatch is serial. Successful simultaneous capture is a separate
 remaining operational proof.
 
-**Latest milestone, 4 October, 11:00 Sydney (4 October, 00:00 UTC):**
+**Current checkpoint, 4 October, 13:23 Sydney AEDT (4 October, 02:23 UTC):**
+**Eight of 16,000 formal traces are accepted**, from the same enrolled Poki
+site: four ordinary visits on Source 621 and four Tamaraw visits on Source
+176. Both lanes retain all **260 resources and four origins**, with installed
+ordinary deep verification and final host closure. The Tamaraw outer launch
+closed 0 at **13:09:10.979 Sydney** in **1,002.551 seconds**. The 176 runtime
+passed twelve installation operations and reuses exact Native841/client867.
+The earlier 990 mount failure remains failed before any lane intent.
+
+Parallel scheduling and recovery code is published as Lab `7b47cb5b`, after
+**65 host checks plus five affected checks**. Its next operational proof is
+actual two-container capture and failed-only recovery. The prospective FRONT
+policy and amendment passed **96 and 44 host checks**, plus **six compiled
+Native checks**, but remain unpublished and uninstalled. A new affected
+qualification and capture must pass before FRONT earns formal credit.
+BuFLO remains held on a real **3.218 ms backward CLOCK_TAI observation**;
+the exact clock mechanism is unidentified.
+
+Browser context 019 is running fresh continuation 002, started at
+**13:19:29 Sydney**. Checkpoint 000032 at **13:23:04 Sydney** records
+**12 decisions, one Poki admission and candidate 13 next**. The previous
+001 boundary stop at **12:51:36 Sydney** is preserved. The duplicate Poki
+admission adds no second enrolled class. These engineering
+checks and admissions do not increase the accepted-trace counter. See the
+[current evidence](EVIDENCE-INDEX.md#current-rolling-v6-checkpoint-eight-accepted-traces).
+
+**Earlier milestone, 4 October, 11:00 Sydney (4 October, 00:00 UTC):**
 The eight-file implementation passed **104 focused checks** and independent
 review. It keeps all eight admission producer groups and Native841 unchanged.
 Matching installation, current one-site response qualification and first

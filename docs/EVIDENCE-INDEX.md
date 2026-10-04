@@ -9,6 +9,79 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ## Application response policy repair
 
+### Current rolling v6 checkpoint: eight accepted traces
+
+At **4 October, 13:23 Sydney AEDT (02:23 UTC)**, formal progress is
+**8/16,000** from **one enrolled Poki site**: four ordinary visits on Source
+621 and four Tamaraw visits on Source 176. All retain the complete
+260-resource/four-origin graph. Engineering tests are separate from these
+accepted traces; the target remains **50 × five × 64**.
+
+Tamaraw evidence is under
+`diagnostic-rehearsals/rapid-v6-first-formal-poki-20261004-001`.
+The lane is `rapid-curated-tranco50-v6-formal-b01-s01-tamaraw-1200`.
+Its result completed at **02:02:27.546523 UTC**, with four accepted, four
+eligible and zero failed visits. Lane `complete.json`, closed at
+**02:05:34.240840 UTC**, has SHA
+`ab89d14a84817df19d3999282336016deaf3a21017f91c38d4bffc1639f44869`.
+The result seal SHA is
+`ead2e41ecf907f0d2fa078ac9e37a5b618eec0e0ccc207c735423523f8655153`.
+The installed ordinary deep operation closed 0 at **02:06:26.172765 UTC**;
+its `actual-completed.json` SHA is
+`c7ddae5b0a6eef8c0dd06a8c3fa316cd39e6096c58beffa19776601e0c006303`.
+Final `operations/source176-launch-tamaraw-completed.json` has SHA
+`cd5ddfe0901d5a513c3f7e968c1fbaa5f37867b4127acb87c981358e5cbb6dd3`;
+it closed 0 at **02:09:10.979294 UTC** after **1,002.551 seconds**.
+
+Matching `diagnostic-rehearsals/rapid-v6-policy-transport-formal-runtime-20261004-001/canonical-runtime.json`
+has SHA `d8604551ea6e62b5d936247c2f311818dbeb6a4da1142af51e452f225f3038cd`.
+All twelve actual operations and raw log hashes reopen with return 0;
+both installed image checks bind Lab `1768858e` / Native `8417787c`.
+Exact client `867d8bc0` was reused, with no Native build. The earlier
+Source 990 policy-mount failure remains preserved before any lane intent.
+
+Parallel scheduling and recovery source is public on main and desktop as
+Lab `7b47cb5b`. Publication receipt
+`diagnostic-rehearsals/rolling-v6-parallel-main-publication-20261004-001/published.json` has SHA
+`af87339279c2abac73a37071142dcc23e1e2ad3abecd254516a5dbf244c22cec`.
+The composed source proof records **65 host checks plus five affected checks**;
+actual two-container capture and failed-only recovery remain unproved.
+
+Prospective FRONT source remains unpublished and uninstalled. The **96 host
+checks** are retained in `diagnostic-rehearsals/front-padding-policy-source-checks-20261004-002`;
+the **44 amendment checks** are in `diagnostic-rehearsals/front-rolling-amendment-source-checks-20261004-001`,
+whose `source-check-closure-v2.json` SHA is
+`c21be8a90cc3d0a253f7a5651378d3794bba0c2117733ff7e1e8a79f7194f310`.
+The **six compiled Native checks** are in `diagnostic-rehearsals/front-padding-policy-native-checks-20261004-001`;
+`closure.json` SHA is
+`ac4137f7616b18f757443cc48c82d4e0eb8a4a5b38cf1d062e4d4c5f5b818bff`.
+Its formatted snapshot has module SHA `721ad78c`; held author bytes stayed
+unchanged. These tests add no FRONT formal credit or installed-runtime claim.
+
+BuFLO's retained `diagnostic-rehearsals/buflo-retry-clock-owner-audit-20261004-001/audit.json`, SHA
+`2467682d76ef5aed393100d309e7cbd7f5f3800ee7327be3e743b2a45fc8c9f1`,
+records an actual **3,218,477 ns backward CLOCK_TAI observation** after
+94,615 reads. The exact host/VM trigger is unidentified. The separate
+post-receive timestamp repair does not change this clock sampling.
+
+Context 019's earlier 001 operation stopped at its action boundary and closed
+0 at **01:51:36.077534 UTC**. Its preserved
+`diagnostic-rehearsals/rapid-v12-site-acquisition-20261004-019/acquisition/checkpoints/checkpoint-000030.json`
+has SHA `b5fae589f18d49b24d9fcaf584f1580f2d0e51a9ba3b2fd2eb1ba10ed201848b`:
+**11 decisions, one Poki admission and candidate 12 next**. The repeated
+Poki admission does not create a second enrolled study class.
+
+Fresh continuation 002 is live, started at **02:19:29.846437 UTC**, with no
+completion receipt yet. Its actual records are in
+`diagnostic-rehearsals/rapid-v13-site019-coordinator-actual-20261004-002`;
+`resume-command-manifest.json` SHA is
+`1ead505741195e8426e8fd667b7f95d6af71ee54783d1a94d14864d87349962d`.
+It binds the original prepared manifest and previous checkpoint/stop, with
+the new absent `host-boundary-stop-002.request`. Latest checkpoint 000032,
+recorded at **02:23:04.402459 UTC**, has SHA
+`75b9d52c5bfd0686aa3037f67acf344863cc82c6f25e80a6cf1287fce5648ef7`:
+**12 decisions, one admission and candidate 13 next**.
+
 ### First rolling v6 formal lane and control performance
 
 At **4 October, 11:59:12 Sydney (00:59:12 UTC)**, the first formal lane

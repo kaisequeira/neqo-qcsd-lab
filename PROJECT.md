@@ -43,7 +43,39 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Latest milestone, 4 October, 11:59:12 Sydney (4 October, 00:59:12 UTC):**
+**Current checkpoint, 4 October, 13:23 Sydney AEDT (4 October, 02:23 UTC):**
+Formal progress is **8/16,000 accepted traces from one enrolled site, Poki**:
+four ordinary visits on Lab `62105b0b` and four Tamaraw visits on Lab
+`1768858e`. Every visit retains the full **260-resource, four-origin graph**.
+Tamaraw's result has four accepted visits and no failures; its installed
+ordinary deep check and final host launch both passed. The outer launch
+closed 0 at **13:09:10.979 Sydney**, taking **1,002.551 seconds**.
+
+The matched 176 runtime passed all twelve installation operations and both
+image checks. It reuses exact Native `8417787c` / client `867d8bc0`, with no
+Native build. The earlier 990 policy-mount failure is preserved before any
+lane intent. Parallel capture and failed-only recovery code is now public
+as Lab `7b47cb5b`, after **65 host checks plus five affected checks**. Actual
+two-container capture and recovery remain unproved.
+
+The prospective FRONT padding policy passed **96 host checks**, its
+manifest amendment passed **44 host checks**, and **six compiled Native
+checks** passed. This FRONT source remains unpublished and uninstalled;
+fresh affected qualification and capture are still needed. BuFLO remains
+held after a real **3,218,477 ns backward CLOCK_TAI observation** across
+94,615 reads. Its exact host/VM cause is unknown; the separate receive-clock
+repair does not change that clock sampling.
+
+Browser context 019 is running fresh continuation 002, started at
+**13:19:29 Sydney**. Checkpoint 000032 at **13:23:04 Sydney** records
+**12 decisions, one Poki admission and candidate 13 next**. The earlier
+001 boundary stop at **12:51:36 Sydney** remains preserved. This repeats
+the already enrolled site and does not create a second study class.
+Engineering checks add no formal traces. The
+target remains **50 × five × 64 = 16,000**. See the
+[current evidence](docs/EVIDENCE-INDEX.md#current-rolling-v6-checkpoint-eight-accepted-traces).
+
+**Earlier milestone, 4 October, 11:59:12 Sydney (4 October, 00:59:12 UTC):**
 The first rolling v6 formal lane is complete: **4/16,000 accepted formal
 samples**, all ordinary traffic from the single enrolled Poki site. Each
 visit retains all **260 resources across four origins**, bound to installed
