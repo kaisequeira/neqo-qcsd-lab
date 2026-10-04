@@ -86,6 +86,10 @@ def parser() -> argparse.ArgumentParser:
         help="publish under config/chaff-response-qualification-store/sets/SET",
     )
     response_qualification.add_argument("workload_ids", nargs=5)
+    response_qualification.add_argument(
+        "--max-response-bytes", type=int,
+        help="prospectively use each prepared resource budget (16777216 or 67108864 bytes)",
+    )
 
     commands.add_parser(
         "derive-chaff-prefix-specs",
@@ -433,13 +437,14 @@ def main(argv: list[str] | None = None) -> None:
         )
         return
     if args.command == "qualify-response-chaff":
-        from .chaff_qualification import qualify_all_response_chaff
+        from .response_budget_qualification import qualify_all_response_chaff
         from .prepare import PreparationError
 
         try:
             qualified = qualify_all_response_chaff(
                 args.workload_ids,
                 qualification_set=args.qualification_set,
+                max_response_bytes=args.max_response_bytes,
                 workload_root=Path(
                     os.environ.get("QCSD_WORKLOAD_ROOT", str(LAB_ROOT / "config/workloads"))
                 ),

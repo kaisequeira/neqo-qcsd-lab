@@ -348,7 +348,7 @@ def _deep_command(plan: Mapping[str, Any], directory: Path, plan_sha: str,
 
 def _qualification(plan: Mapping[str, Any], directory: Path, execution: Path,
                    config: Mapping[str, Any], workload: Mapping[str, Any], source: Mapping[str, Any]) -> str:
-    from .chaff_qualification import load_named_qualification_set
+    from .response_budget_qualification import load_named_qualification_set
 
     completion = _json(_read(directory / "qualification-complete.json"))
     named_path = execution / "config/chaff-response-qualification-store/sets" / plan["qualification_set"] / "_qualification-set.json"

@@ -17,7 +17,8 @@ from typing import Any, Mapping
 from . import rapid_capture_plan as plan
 from . import rapid_lane_evidence as lanes
 from . import rapid_site_admission as admission
-from .chaff_qualification import RESPONSE_ONLY_QUALIFICATION_SCOPE, validate_named_qualification_set_manifest
+from .chaff_qualification import RESPONSE_ONLY_QUALIFICATION_SCOPE
+from .response_budget_qualification import validate_named_qualification_set_manifest
 from .discover import origin
 
 POLICY_TYPE = "qcsd-rapid-v6-rolling-formal-policy"

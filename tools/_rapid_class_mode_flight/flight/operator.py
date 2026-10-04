@@ -287,14 +287,15 @@ def current_sidecar(sidecar, canonical, *, workload_id, workload_sha256):
 
 
 def reuse_input(path, bindings, canonical, workload_root):
-    from qcsd_lab.chaff_qualification import load_named_qualification_set
+    from qcsd_lab.response_budget_qualification import load_named_qualification_set, NAMED_ARTIFACT_TYPE, SIDECAR_SCHEMA_VERSION
     path = Path(path).absolute()
     named = load_named_qualification_set(path, workload_root=Path(workload_root),
         expected_workload_ids=[row["workload_id"] for row in bindings],
         expected_qualification_scope="response-only", require_current_implementation=False)
     value = json.loads(read(path))
     from qcsd_lab.chaff_qualification import RESPONSE_ONLY_SIDECAR_V2_SCHEMA_VERSION
-    if value["qualification_sidecar_schema_version"] != RESPONSE_ONLY_SIDECAR_V2_SCHEMA_VERSION:
+    expected_version = SIDECAR_SCHEMA_VERSION if value["artifact_type"] == NAMED_ARTIFACT_TYPE else RESPONSE_ONLY_SIDECAR_V2_SCHEMA_VERSION
+    if value["qualification_sidecar_schema_version"] != expected_version:
         raise ValueError("reuse requires actual response-only v2 epoch evidence")
     sidecars = {}
     for row in bindings:
@@ -754,8 +755,9 @@ def image_action(args):
             "capture_performed": False, **ZERO}))
         return
     if args.command == "qualify-image":
-        from qcsd_lab.chaff_qualification import (qualify_response_chaff_v2, publish_named_qualification_set,
-            RESPONSE_ONLY_QUALIFICATION_SCOPE, RESPONSE_ONLY_SIDECAR_V2_SCHEMA_VERSION)
+        from qcsd_lab.chaff_qualification import RESPONSE_ONLY_QUALIFICATION_SCOPE
+        from qcsd_lab.response_budget_qualification import (qualify_response_chaff_v2,
+            publish_named_qualification_set, SIDECAR_SCHEMA_VERSION)
 
         workload_ids = [row["workload_id"] for row in plan["selected_classes"]]
         if plan["reuse"] is None:
@@ -763,21 +765,24 @@ def image_action(args):
             sidecars.mkdir(parents=True, exist_ok=False)
             for workload_id in workload_ids:
                 qualify_response_chaff_v2(workload_id, qualification_root=sidecars,
-                    workload_root=execution / "config/workloads")
+                    workload_root=execution / "config/workloads",
+                    max_response_bytes=plan["capture_limits"]["max_response_bytes"])
         else:
             sidecars = execution / "config/flight-reuse"
+        schema_version = (SIDECAR_SCHEMA_VERSION if plan["reuse"] is None else
+            json.loads(read(Path(plan["reuse"]["manifest"]["path"]))) ["qualification_sidecar_schema_version"])
         store = execution / "config/chaff-response-qualification-store/sets"
         store.mkdir(parents=True, exist_ok=True)
         group = publish_named_qualification_set(workload_ids,
             qualification_set=plan["group_qualification_set"],
             qualification_scope=RESPONSE_ONLY_QUALIFICATION_SCOPE,
             workload_root=execution / "config/workloads", sidecar_root=sidecars, publication_root=store,
-            qualification_sidecar_schema_version=RESPONSE_ONLY_SIDECAR_V2_SCHEMA_VERSION)
+            qualification_sidecar_schema_version=schema_version)
         named = publish_named_qualification_set([plan["workload_id"]],
             qualification_set=plan["qualification_set"],
             qualification_scope=RESPONSE_ONLY_QUALIFICATION_SCOPE,
             workload_root=execution / "config/workloads", sidecar_root=sidecars, publication_root=store,
-            qualification_sidecar_schema_version=RESPONSE_ONLY_SIDECAR_V2_SCHEMA_VERSION)
+            qualification_sidecar_schema_version=schema_version)
         create(output / "qualification-complete.json", encode({"completed_at": now(),
             "plan_sha256": args.plan_sha256, "workload_id": plan["workload_id"],
             "workload_sha256": plan["workload_sha256"],

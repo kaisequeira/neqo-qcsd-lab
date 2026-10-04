@@ -1366,9 +1366,10 @@ def _load_qualified_chaff_inputs(
     from .chaff_qualification import (
         NAMED_QUALIFICATION_PREFIX_DIRECTORY,
         NAMED_QUALIFICATION_SET_MANIFEST,
-        load_named_qualification_set,
         load_qualified_chaff,
-        load_response_qualified_chaff,
+    )
+    from .response_budget_qualification import (
+        load_named_qualification_set, load_response_qualified_chaff, sidecar_schema,
     )
 
     if frozen_inputs is not None:
@@ -1492,7 +1493,7 @@ def _load_qualified_chaff_inputs(
                 sidecar_path,
                 workload_id=workload.id,
                 base_manifest_path=workload.path,
-                expected_sidecar_schema_version=expected_sidecar_schema_version,
+                expected_sidecar_schema_version=sidecar_schema(sidecar_path, expected_sidecar_schema_version),
                 require_current_implementation=frozen_inputs is None,
             )
         else:
@@ -4287,8 +4288,8 @@ def _materialize_inputs(
         if workload.chaff_qualification_path is not None:
             from .chaff_qualification import (
                 load_qualified_chaff,
-                load_response_qualified_chaff,
             )
+            from .response_budget_qualification import load_response_qualified_chaff, sidecar_schema
 
             sidecar_destination = chaff_qualifications_dir / f"{workload.id}.json"
             shutil.copy2(workload.chaff_qualification_path, sidecar_destination)
@@ -4306,9 +4307,8 @@ def _materialize_inputs(
                     sidecar_destination,
                     workload_id=workload.id,
                     base_manifest_path=destination,
-                    expected_sidecar_schema_version=_response_only_sidecar_schema_for_manifest(
-                        workload.chaff_manifest_data
-                    ),
+                    expected_sidecar_schema_version=sidecar_schema(sidecar_destination,
+                        _response_only_sidecar_schema_for_manifest(workload.chaff_manifest_data)),
                 )
             elif workload.chaff_qualification_scope == FULL_CHAFF_SCOPE:
                 if workload.chaff_prefix_spec_path is None:
@@ -4360,7 +4360,7 @@ def _materialize_inputs(
             )
         runtime_workloads.append(runtime)
     if qualification_set_manifest_destination is not None:
-        from .chaff_qualification import load_named_qualification_set
+        from .response_budget_qualification import load_named_qualification_set
 
         load_named_qualification_set(
             qualification_set_manifest_destination,
