@@ -34,7 +34,7 @@ def _set_item_times(item, *, enqueue_offset_ns: int, tx_offset_ns: int) -> None:
 
 def _raw(window_ns: int = 10_000_000):
     raw = fixtures._runner_receipt_v9_late_enqueue()
-    raw.update(schema_version=10, semantics=kernel_tx.KERNEL_TX_RUNNER_SEMANTICS,
+    raw.update(schema_version=10, semantics=kernel_tx.KERNEL_TX_RUNNER_V10_SEMANTICS,
                incoming_credit_release_window_ns=window_ns)
     for job in raw["jobs"]:
         job.update(schema_version=2,

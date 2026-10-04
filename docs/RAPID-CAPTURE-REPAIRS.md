@@ -6,6 +6,63 @@ five-condition diagnostic on Poki. The original failed attempts remain failed;
 new source needs new captures. See the [capture path](RAPID-CAPTURE-PATH.md) and
 [evidence index](EVIDENCE-INDEX.md) for the recorded operations.
 
+## Latest prospective repairs: 4 October 2026
+
+The combined Native source is `5f075d37`. Its offline build and **45 focused
+compiled tests passed**: 31 FRONT and 14 BuFLO cases. The matching Lab source,
+including the parallel startup repair, passed **117 focused host checks**.
+These are source checks. Matching installation and successful live repeats
+are still required, and they add no formal recordings by themselves.
+
+### FRONT: act on a due packet and retain its actual incoming evidence
+
+One full-page diagnostic reached a padding socket 119 microseconds after
+its deadline. The packet had been built with about 14 microseconds left.
+After handling action input, the V3 runner now immediately processes one
+due, fixed, outgoing padding packet through the existing socket path.
+Its actual socket timestamp still decides whether it met the deadline.
+
+Another visit completed the page but two incoming cells lacked their
+recorded delivery times. The repair retains exact consumed stream ranges
+before the controller removes a completed stream. It reconciles them with
+the original successful physical receives; it cannot substitute a later
+observation or use missing, overlapping or future ranges as delivery proof.
+The declared V3 10 ms outgoing padding window and 10% omission limit stay
+the same. Repeat both failing seeds on the complete page before admission
+to a new formal FRONT lane.
+
+### BuFLO: permit preparation while the actual release is still ahead
+
+The latest live attempt entered preparation 3.7 ms after the nominal
+selection time, but 1.3 ms before the actual send release. The entry rule
+rejected it. All 242 packets previously sent in that attempt had physical
+timestamps within their required windows; the incomplete attempt remains
+failed and earns no formal credit.
+
+The new preparation rule permits immediate entry between selection and
+release, recording its real lateness, one initial clock read and zero active
+wait. It still rejects entry at or after release. Fresh dispatch and staging
+checks must remain before release, and clock regression remains fatal.
+Outgoing physical deadlines stay at 5 ms and the explicit incoming tolerance
+stays at 10 ms. This is a declared client-only adaptation with a potentially
+shorter preparation wait; describe that choice in the thesis.
+
+New receipts use raw kernel schema 11, wakeup schema 20 and protected-wait
+schema 2. Historical schema 10/19/1 receipts retain their original checks.
+The earlier 3.218 ms backward-clock failure remains preserved and unresolved;
+this preparation repair does not establish or change its cause.
+
+### Parallel startup: announce the guardian handshake before long checks
+
+The protected child previously repeated costly scientific checks before
+announcing READY to a guardian that waited only 30 seconds. The new ordering
+authenticates the sealed lifecycle inputs, completes the guardian handshake,
+then performs the full scientific checks before worker launch. The original
+READY and recovery deadlines remain unchanged. The control-only Source0e
+runtime passed all twelve installation operations, reusing its original
+verified Native841 client. Actual simultaneous capture and failed-worker
+recovery remain to be demonstrated.
+
 ## What failed and what changed
 
 | Problem observed | Repair | What must still be checked live |
@@ -64,14 +121,18 @@ their original interpretation.
    Reopen the previous admission under its original context for lineage; do
    not present its receipts as current-runtime admission.
 3. Qualify the padding response against the new exact workload and runtime.
-4. Capture one baseline and the failing settings on the complete graph. Stop
-   and diagnose a failing condition immediately, retaining every attempt.
-5. Deep-verify and independently reopen the fresh results. Only then proceed
-   to the ten-site, five-condition study shakedown.
+4. Repeat the affected settings on the complete graph. Reuse an unaffected
+   setting only through the declared dependency checks. Diagnose each failing
+   condition immediately and retain every attempt.
+5. Deep-verify the fresh results and publish readiness separately for each
+   passing setting. Start its next rolling formal lane while other settings
+   and site screening continue under their own recorded inputs.
 
 Focused unit and regression tests establish engineering behavior. Installed
 byte checks, synthetic 16,000-slot fixtures and additional diagnostic captures
-do not count toward the study's **50 shakedown or 16,000 formal traces**.
+do not count toward the study's **16,000 formal traces**. The active rolling
+v6 route does not require all 50 sites or a ten-site shakedown before the next
+ready setting starts capture.
 
 ## Source
 

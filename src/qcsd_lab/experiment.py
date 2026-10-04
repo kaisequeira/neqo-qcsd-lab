@@ -630,11 +630,11 @@ def validate_accepted_scheduler_runtime_receipt(
     runner_schema = wakeups.get("schema_version") if isinstance(wakeups, Mapping) else None
     if (
         _buflo_study_experiment(experiment)
-        and runner_schema not in {10, 15, 16, 17, 18, 19}
+        and runner_schema not in {10, 15, 16, 17, 18, 19, 20}
         and not _historical_buflo_v36_experiment(experiment)
     ):
         raise ValueError(
-            "current BuFLO-study sample requires runner-wakeup schema 10/15/16/17/18/19 or an exact "
+            "current BuFLO-study sample requires runner-wakeup schema 10/15/16/17/18/19/20 or an exact "
             "pinned v36 experiment ledger"
         )
     configuration = experiment.get("configuration")
@@ -654,22 +654,22 @@ def validate_accepted_scheduler_runtime_receipt(
     ):
         raise ValueError("accepted sample has invalid terminal evidence rendering state")
     if current_class_role and runtime_kind == "buflo":
-        if runner_schema not in {17, 18, 19}:
+        if runner_schema not in {17, 18, 19, 20}:
             raise ValueError(
-                "current class-study BuFLO sample requires runner-wakeup schema 17/18/19 "
+                "current class-study BuFLO sample requires runner-wakeup schema 17/18/19/20 "
                 "with kernel-TX evidence"
             )
     elif current_buflo_role and runtime_kind == "buflo":
-        if runner_schema not in {15, 16, 17, 18, 19}:
+        if runner_schema not in {15, 16, 17, 18, 19, 20}:
             raise ValueError(
-                "BuFLO-study sample requires runner-wakeup schema 15/16/17/18/19 "
+                "BuFLO-study sample requires runner-wakeup schema 15/16/17/18/19/20 "
                 "with kernel-TX evidence"
             )
     elif (current_buflo_role or current_class_role) and runtime_kind == "cs_buflo":
         if runner_schema != 10:
             raise ValueError("current CS-BuFLO sample requires runner-wakeup schema 10")
-    elif current_class_role and runner_schema not in {10, 17, 18, 19}:
-        raise ValueError("current class-study sample requires runner-wakeup schema 10/17/18/19")
+    elif current_class_role and runner_schema not in {10, 17, 18, 19, 20}:
+        raise ValueError("current class-study sample requires runner-wakeup schema 10/17/18/19/20")
     required = scheduler_runtime_receipt_required(run, experiment)
     if not required:
         if retained is not None:
@@ -847,6 +847,7 @@ def validate_accepted_kernel_tx_evidence(
         17,
         18,
         19,
+        20,
     }
     retained, target = _kernel_tx_sidecar_reference(root, sample)
     if not required:

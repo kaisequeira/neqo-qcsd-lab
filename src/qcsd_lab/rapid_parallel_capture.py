@@ -164,6 +164,60 @@ def host_source(value: dict[str, Any]) -> None:
         raise ValueError("parallel host verifier package differs from the clean collection source")
 
 
+def lifecycle_inputs(path: Path, execution_root: Path, expected_sha: str) -> None:
+    """Bound read-only runtime linkage before the short guardian handshake.
+
+    This is not scientific lane admission. The authenticated child must still
+    run the full authority and worker-input validators after lifecycle recovery
+    and before image preflight or worker birth. No result is cached or inherited.
+    Recovery uses only the guardian's independently authenticated ownership
+    ledger, never resource paths nominated by this authority.
+    """
+    raw = read(path)
+    if re.fullmatch(r"[0-9a-f]{64}", expected_sha) is None or sha(raw) != expected_sha:
+        raise ValueError("parallel lifecycle authority hash changed")
+    value = json.loads(raw)
+    keys = {"schema_version", "artifact_type", "runtime", "campaigns", "capture_spec",
+            "lane_specs", "evidence_root", "lane_intents", "installation"}
+    if (not isinstance(value, dict) or set(value) != keys
+        or type(value["schema_version"]) is not int or value["schema_version"] != 1
+        or value["artifact_type"] != "qcsd-two-worker-formal-lane-authority"
+        or not isinstance(value["lane_specs"], list) or len(value["lane_specs"]) != 2
+        or not isinstance(value["lane_intents"], list) or len(value["lane_intents"]) != 2
+        or value["capture_spec"] != value["lane_specs"][0]):
+        raise ValueError("parallel lifecycle authority fields differ")
+
+    def reference(row):
+        if (not isinstance(row, dict) or set(row) != {"path", "sha256"}
+            or not isinstance(row["path"], str) or not Path(row["path"]).is_absolute()
+            or ".." in Path(row["path"]).parts
+            or any(c in row["path"] for c in ("\n", "\r", "\0", ":"))
+            or re.fullmatch(r"[0-9a-f]{64}", str(row["sha256"])) is None
+            or sha(read(Path(row["path"]))) != row["sha256"]):
+            raise ValueError("parallel lifecycle sealed reference changed")
+        return Path(row["path"])
+
+    _runtime_authority(value, execution_root=execution_root)
+    from .rapid_lane_evidence import load_capture_spec
+    root = regular_dir(Path(value["evidence_root"]))
+    for spec_row, intent_row in zip(value["lane_specs"], value["lane_intents"], strict=True):
+        spec = load_capture_spec(reference(spec_row)).serializable()
+        if any(spec.get(key) != item for key, item in value["runtime"].items()):
+            raise ValueError("parallel lifecycle worker specification changed runtime")
+        intent = reference(intent_row)
+        if intent.name != "intent.json" or not intent.is_relative_to(root):
+            raise ValueError("parallel lifecycle intent escapes its evidence root")
+    host_source(value)
+
+
+def formal_entry_inputs(path: Path) -> dict[str, Any]:
+    """One fresh scientific pass for campaign selection and first-worker inputs."""
+    from . import rapid_formal_parallel as formal
+    audited = formal._audit(path)
+    host_source(audited[0])
+    return formal.worker_inputs(path, 0, _audited=audited)
+
+
 def _campaigns(value: dict[str, Any]):
     from .orchestrator import load_campaign
     campaigns = [load_campaign(Path(row["path"])) for row in value["campaigns"]]
@@ -784,7 +838,7 @@ def launch_action(value: dict[str, Any]) -> str:
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("select", "initialize", "preflight", "prepare-release", "release", "gate", "retire", "verify", "verify-installed", "formal-inputs", "formal-dns"))
+    parser.add_argument("action", choices=("select", "lifecycle-inputs", "formal-entry-inputs", "initialize", "preflight", "prepare-release", "release", "gate", "retire", "verify", "verify-installed", "formal-inputs", "formal-dns"))
     parser.add_argument("--authority", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--sha256")
@@ -793,7 +847,11 @@ def main(argv=None):
     parser.add_argument("--cpus")
     parser.add_argument("--index", type=int)
     args = parser.parse_args(argv)
-    if args.action in {"formal-inputs", "formal-dns"}:
+    if args.action == "lifecycle-inputs":
+        lifecycle_inputs(args.authority, args.output, args.sha256)
+    elif args.action == "formal-entry-inputs":
+        print(json.dumps(formal_entry_inputs(args.authority), sort_keys=True))
+    elif args.action in {"formal-inputs", "formal-dns"}:
         from .rapid_formal_parallel import worker_inputs, resolve_dns
         if args.action == "formal-inputs" and args.prepared_sha256 is not None:
             from .rapid_formal_parallel import prepared_worker_inputs

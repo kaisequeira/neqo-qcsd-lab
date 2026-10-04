@@ -26,8 +26,10 @@ from .util import durable_create
 
 CAPSULE_TYPE = "qcsd-rapid-v6-prospective-parallel-scheduling"
 CONTRACT_V1 = "rolling-v6-unchanged-qualification-parallel-scheduling-v1"
-CONTRACT = "rolling-v6-pre-birth-release-parallel-scheduling-v2"
+CONTRACT_V2 = "rolling-v6-pre-birth-release-parallel-scheduling-v2"
+CONTRACT = "rolling-v6-lifecycle-first-parallel-scheduling-v3"
 V1_HELPER_SHA256 = "d4efd16eb61a7458d77ee0a4d218323fc2e15c5016a1f4e0888d22b5c63c8605"
+V2_HELPER_SHA256 = "1880eb36f622cb2ea17c5363cae9d90243189387d598eca70febb776b75120d8"
 MODULE_FILE = "src/qcsd_lab/rapid_rolling_schedule.py"
 ENVIRONMENT = "QCSD_RAPID_COLLECTION_COMPATIBILITY"
 V1_CONTROL_DEFINITIONS = {
@@ -45,18 +47,24 @@ V1_CONTROL_DEFINITIONS = {
     "tools/rapid_rolling_capture.py": frozenset({"run", "_parser"}),
     "tools/rapid_formal_parallel.py": frozenset({"main"}),
 }
-CONTROL_DEFINITIONS = {**V1_CONTROL_DEFINITIONS,
+V2_CONTROL_DEFINITIONS = {**V1_CONTROL_DEFINITIONS,
     "src/qcsd_lab/rapid_formal_parallel.py": V1_CONTROL_DEFINITIONS["src/qcsd_lab/rapid_formal_parallel.py"] | {
         "_worker_context", "_worker_inputs_actual", "_release_fence", "_check_release_fence",
         "prepare_release", "prepared_worker_inputs", "release"},
     "src/qcsd_lab/rapid_parallel_capture.py": frozenset({"release", "main"}),
     "tools/rapid_parallel_capture.py": frozenset({"_host_authority", "launch", "main"}),
 }
+CONTROL_DEFINITIONS = {**V2_CONTROL_DEFINITIONS,
+    "src/qcsd_lab/rapid_parallel_capture.py": V2_CONTROL_DEFINITIONS["src/qcsd_lab/rapid_parallel_capture.py"] | {
+        "lifecycle_inputs", "formal_entry_inputs"},
+}
 NEW_FILES = frozenset({MODULE_FILE, "tests/test_rapid_rolling_schedule.py",
                        "tests/test_rapid_rolling_schedule_source.py",
                        "tests/test_rapid_rolling_parallel.py", "tests/test_rapid_rolling_policy_mounts.py"})
 V2_NEW_FILES = NEW_FILES | {"tests/test_rapid_parallel_operator_import.py",
     "tests/test_rapid_parallel_release_preparation.py", "tests/test_rapid_parallel_control_factoring.py"}
+V3_NEW_FILES = V2_NEW_FILES | {"tests/test_rapid_parallel_guardian_entry.py",
+    "tests/test_rapid_parallel_lifecycle_inputs.py", "tests/test_rapid_parallel_guardian_projection.py"}
 DOCUMENTS = frozenset({"PROJECT.md", "docs/RAPID-CAPTURE-PATH.md", "docs/EVIDENCE-INDEX.md",
                        "docs/CAPTURE-READINESS.md", "docs/CLASS-STUDY.md"})
 CONTROL_TESTS = frozenset({"tests/test_rapid_rolling_capture.py"})
@@ -100,7 +108,9 @@ def _shell_projection(raw: bytes) -> tuple[bytes, dict[str, str]]:
 
 
 def _python_projection(path: str, raw: bytes, *, contract=CONTRACT) -> tuple[bytes, dict[str, str]]:
-    permitted = (V1_CONTROL_DEFINITIONS if contract == CONTRACT_V1 else CONTROL_DEFINITIONS).get(path)
+    definitions = (V1_CONTROL_DEFINITIONS if contract == CONTRACT_V1
+                   else V2_CONTROL_DEFINITIONS if contract == CONTRACT_V2 else CONTROL_DEFINITIONS)
+    permitted = definitions.get(path)
     if permitted is None:
         raise ValueError(f"scheduling changes protected source: {path}")
     tree = ast.parse(raw, filename=path)
@@ -113,7 +123,7 @@ def _python_projection(path: str, raw: bytes, *, contract=CONTRACT) -> tuple[byt
             if node.name in units:
                 raise ValueError("scheduling duplicates a named control definition")
             units[node.name] = evidence._sha(ast.dump(node, include_attributes=False).encode())
-        elif (contract == CONTRACT and path == "tools/rapid_parallel_capture.py"
+        elif (contract in {CONTRACT_V2, CONTRACT} and path == "tools/rapid_parallel_capture.py"
               and ast.dump(node, include_attributes=False) in bootstrap_nodes):
             found_bootstrap.append(ast.dump(node, include_attributes=False))
         else:
@@ -131,12 +141,42 @@ def _python_projection(path: str, raw: bytes, *, contract=CONTRACT) -> tuple[byt
     return ast.dump(ast.Module(body=retained, type_ignores=[]), include_attributes=False).encode(), units
 
 
+def _guardian_diagnostic_projection(raw: bytes) -> tuple[bytes, dict[str, str]]:
+    """Permit only the literal diagnostic in the existing READY timeout branch."""
+    tree = ast.parse(raw)
+    matches = []
+    for function in tree.body:
+        if not isinstance(function, ast.FunctionDef) or function.name != "_wait_for_child":
+            continue
+        for node in ast.walk(function):
+            if (isinstance(node, ast.If)
+                and ast.dump(node.test, include_attributes=False) == ast.dump(
+                    ast.parse("now >= ready_deadline and not ready", mode="eval").body,
+                    include_attributes=False)):
+                matches.append(node)
+    if len(matches) != 1:
+        raise ValueError("scheduling guardian lacks its unique original READY timeout boundary")
+    branch = matches[0]
+    diagnostic = ast.parse('print("qcsd-lab Docker lifecycle guardian: initial READY handshake timed out before admission", file=sys.stderr)').body[0]
+    expected = ast.dump(diagnostic, include_attributes=False)
+    matches = [node for node in ast.walk(tree) if isinstance(node, ast.Expr)
+               and ast.dump(node, include_attributes=False) == expected]
+    units = {}
+    if matches:
+        if len(matches) != 1 or not branch.body or branch.body[0] is not matches[0]:
+            raise ValueError("scheduling guardian READY diagnostic is duplicated or moved")
+        branch.body.pop(0)
+        units["ready-timeout-diagnostic"] = evidence._sha(expected.encode())
+    return ast.dump(tree, include_attributes=False).encode(), units
+
+
 def source_changes(old: Mapping[str, bytes], new: Mapping[str, bytes], *, client_sha256: str,
                    contract=CONTRACT) -> dict[str, Any]:
     """Derive exact named control edits and unchanged scientific dependencies."""
-    if contract not in {CONTRACT_V1, CONTRACT}:
+    if contract not in {CONTRACT_V1, CONTRACT_V2, CONTRACT}:
         raise ValueError("scheduling source projection has an unknown contract")
-    allowed_new = NEW_FILES if contract == CONTRACT_V1 else V2_NEW_FILES
+    allowed_new = (NEW_FILES if contract == CONTRACT_V1 else V2_NEW_FILES
+                   if contract == CONTRACT_V2 else V3_NEW_FILES)
     before, after = historical._source_inventory(old), historical._source_inventory(new)
     if set(before) - set(after) or not (set(after) - set(before)) <= allowed_new | DOCUMENTS:
         raise ValueError("scheduling added an unregistered source or removed retained source")
@@ -148,18 +188,26 @@ def source_changes(old: Mapping[str, bytes], new: Mapping[str, bytes], *, client
             units, projection = ["nonexecuting-evidence-description"], None
         elif path == MODULE_FILE and path not in before:
             if ((contract == CONTRACT and new[path] != evidence._read(Path(__file__).absolute()))
-                or (contract == CONTRACT_V1 and evidence._sha(new[path]) != V1_HELPER_SHA256)):
+                or (contract == CONTRACT_V1 and evidence._sha(new[path]) != V1_HELPER_SHA256)
+                or (contract == CONTRACT_V2 and evidence._sha(new[path]) != V2_HELPER_SHA256)):
                 raise ValueError("scheduling helper differs from the executing reviewed helper")
             ast.parse(new[path], filename=path)
             units, projection = ["new-scheduling-authority"], None
-        elif (path == MODULE_FILE and contract == CONTRACT
+        elif (path == MODULE_FILE and contract == CONTRACT_V2
               and before[path] == V1_HELPER_SHA256
-              and new[path] == evidence._read(Path(__file__).absolute())):
+              and evidence._sha(new[path]) == V2_HELPER_SHA256):
             # This exact source-bound validator revision declares the new
             # named control units. It grants no scientific dependency edit.
             units, projection = ["scheduling-v2-pre-birth-release-authority"], None
+        elif (path == MODULE_FILE and contract == CONTRACT
+              and before[path] in {V1_HELPER_SHA256, V2_HELPER_SHA256}
+              and new[path] == evidence._read(Path(__file__).absolute())):
+            units, projection = ["scheduling-v3-lifecycle-first-authority"], None
         else:
-            project = _shell_projection if path == "qcsd-lab" else lambda raw: _python_projection(path, raw, contract=contract)
+            project = (_shell_projection if path == "qcsd-lab"
+                       else _guardian_diagnostic_projection if contract == CONTRACT
+                       and path == "tools/docker_lifecycle_lock_guardian.py"
+                       else lambda raw: _python_projection(path, raw, contract=contract))
             protected_old, old_units = project(old[path])
             protected_new, new_units = project(new[path])
             if protected_old != protected_new:
@@ -503,7 +551,8 @@ def _derive(base: lanes.CaptureSpec, runtime: Mapping[str, str], qualifier: Path
         raise ValueError("scheduling changed Native source or the exact installed client")
     helper = new_sources.get(MODULE_FILE)
     if ((contract == CONTRACT and helper != evidence._read(Path(__file__).absolute()))
-        or (contract == CONTRACT_V1 and (helper is None or evidence._sha(helper) != V1_HELPER_SHA256))):
+        or (contract == CONTRACT_V1 and (helper is None or evidence._sha(helper) != V1_HELPER_SHA256))
+        or (contract == CONTRACT_V2 and (helper is None or evidence._sha(helper) != V2_HELPER_SHA256))):
         raise ValueError("new installed runtime lacks this exact scheduling validator")
     comparison = source_changes(old_sources, new_sources, client_sha256=old["installed_client_sha256"], contract=contract)
     build_dependencies = []
@@ -559,7 +608,7 @@ def validate_schedule(reference: Mapping[str, str], *, runtime: Mapping[str, str
     _, raw = evidence._reference(reference)
     value = evidence._json(raw)
     if (set(value) != CAPSULE_KEYS or type(value["schema_version"]) is not int or value["schema_version"] != 1
-        or value["artifact_type"] != CAPSULE_TYPE or value["contract"] not in {CONTRACT_V1, CONTRACT} or value["limits"] != LIMITS
+        or value["artifact_type"] != CAPSULE_TYPE or value["contract"] not in {CONTRACT_V1, CONTRACT_V2, CONTRACT} or value["limits"] != LIMITS
         or type(value["formal_accepted_trace_count"]) is not int or value["formal_accepted_trace_count"] != 0
         or value["scientific_credit"] is not False or not isinstance(value["reason"], str) or not value["reason"].strip()):
         raise ValueError("prospective scheduling capsule has an invalid exact contract")

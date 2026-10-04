@@ -5703,8 +5703,42 @@ if [[ "${1:-}" == "parallel-diagnostic-run" || "${1:-}" == "parallel-formal-run"
   if [[ "${1}" == "parallel-formal-run" ]]; then
     parallel_formal=1
     parallel_host_python="$(parallel_select_host_python)" || exit 2
+    parallel_authority_sha256="$(sha256sum -- "${parallel_authority}")"
+    parallel_authority_sha256="${parallel_authority_sha256%% *}"
+    if [[ "${QCSD_PARALLEL_AUTHORITY_SHA256:-}" != "${parallel_authority_sha256}" ]]; then
+      echo "parallel formal lifecycle runtime binding: authority hash differs" >&2
+      exit 2
+    fi
+    if ! parallel_python lifecycle-inputs --authority "${parallel_authority}" \
+        --output "${ROOT}" --sha256 "${parallel_authority_sha256}"; then
+      echo "parallel formal lifecycle runtime binding failed before admission" >&2
+      exit 1
+    fi
+    # READY and final recovery admission authenticate the held launcher and
+    # lifecycle ownership independently of scientific lane reconstruction.
+    # Finish both short handshake phases before the full, potentially lengthy
+    # scientific checks. The outer exec preserves the original public argv.
+    echo "parallel formal lifecycle: entering authenticated runtime recovery" >&2
+    require_docker
+    qcsd_deferred_generic_docker=0
+    if ! parallel_python lifecycle-inputs --authority "${parallel_authority}" \
+        --output "${ROOT}" --sha256 "${parallel_authority_sha256}"; then
+      echo "parallel formal lifecycle runtime binding changed while awaiting admission" >&2
+      exit 1
+    fi
+    echo "parallel formal lifecycle: recovery complete; validating scientific inputs" >&2
   fi
-  parallel_first_campaign="$(parallel_python select --authority "${parallel_authority}" --output "${ROOT}")"
+  if (( parallel_formal )); then
+    if ! parallel_formal_first_inputs="$(parallel_python formal-entry-inputs --authority "${parallel_authority}")"; then
+      echo "parallel formal worker input validation failed before image preflight or worker birth" >&2
+      exit 1
+    fi
+    parallel_first_campaign="$(/usr/bin/python3 -I -c 'import json,sys; print(json.loads(sys.argv[1])["campaign_path"])' \
+      "${parallel_formal_first_inputs}")" || exit 1
+  elif ! parallel_first_campaign="$(parallel_python select --authority "${parallel_authority}" --output "${ROOT}")"; then
+    echo "parallel campaign selection failed before image preflight or worker birth" >&2
+    exit 1
+  fi
   parallel_authority_sha256="$(sha256sum -- "${parallel_authority}")"
   parallel_authority_sha256="${parallel_authority_sha256%% *}"
   if [[ "${QCSD_PARALLEL_AUTHORITY_SHA256:-}" != "${parallel_authority_sha256}" ]]; then
@@ -5713,7 +5747,6 @@ if [[ "${1:-}" == "parallel-diagnostic-run" || "${1:-}" == "parallel-formal-run"
   fi
   parallel_diagnostic=1
   if [[ "${1}" == "parallel-formal-run" ]]; then
-    parallel_formal_first_inputs="$(parallel_python formal-inputs --authority "${parallel_authority}" --index 0)" || exit 1
     parallel_formal_environment_text="$(parallel_environment_rows "${parallel_formal_first_inputs}")" || exit 1
     while IFS=$'\t' read -r parallel_environment_key parallel_environment_b64; do
       [[ -n "${parallel_environment_key}" ]] || continue

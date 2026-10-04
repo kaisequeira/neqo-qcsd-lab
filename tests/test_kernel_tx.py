@@ -2565,8 +2565,15 @@ def test_kernel_tx_schema_constants_match_the_selected_rust_producer() -> None:
         line for line in source.splitlines() if line.startswith(runner_prefix)
     )
     assert runner_line.endswith('";')
-    modern = "const BUFLO_KERNEL_TX_RECEIPT_SCHEMA_VERSION: u32 = 10;" in source
-    expected_semantics = KERNEL_TX_RUNNER_SEMANTICS if modern else kernel_tx.KERNEL_TX_RUNNER_V9_SEMANTICS
+    selected = [version for version in (9, 10, 11)
+                if f"const BUFLO_KERNEL_TX_RECEIPT_SCHEMA_VERSION: u32 = {version};" in source]
+    assert len(selected) == 1
+    version = selected[0]
+    expected_semantics = {
+        9: kernel_tx.KERNEL_TX_RUNNER_V9_SEMANTICS,
+        10: kernel_tx.KERNEL_TX_RUNNER_V10_SEMANTICS,
+        11: KERNEL_TX_RUNNER_SEMANTICS,
+    }[version]
     assert expected_semantics == runner_line[len(runner_prefix) : -2]
     protected_prefix = (
         'const BUFLO_KERNEL_PROTECTED_SELECTION_WAIT_SEMANTICS: &str = "'
@@ -2576,9 +2583,15 @@ def test_kernel_tx_schema_constants_match_the_selected_rust_producer() -> None:
     )
     assert protected_line.endswith('";')
     assert (
-        kernel_tx.KERNEL_TX_PROTECTED_SELECTION_WAIT_SEMANTICS
+        (kernel_tx.KERNEL_TX_PROTECTED_SELECTION_WAIT_V2_SEMANTICS if version == 11
+         else kernel_tx.KERNEL_TX_PROTECTED_SELECTION_WAIT_SEMANTICS)
         == protected_line[len(protected_prefix) : -2]
     )
+    prebuild_prefix = 'const BUFLO_KERNEL_PREBUILD_SELECTION_SEMANTICS: &str = "'
+    prebuild_line = next(line for line in source.splitlines() if line.startswith(prebuild_prefix))
+    assert prebuild_line.endswith('";')
+    assert (kernel_tx.KERNEL_TX_PROTECTED_PREBUILD_SELECTION_V2_SEMANTICS if version == 11
+            else kernel_tx.KERNEL_TX_PROTECTED_PREBUILD_SELECTION_SEMANTICS) == prebuild_line[len(prebuild_prefix):-2]
     mapping_prefix = 'const BUFLO_KERNEL_CLOCK_MAPPING_SEMANTICS: &str = "'
     mapping_line = next(
         line for line in source.splitlines() if line.startswith(mapping_prefix)
@@ -2589,7 +2602,7 @@ def test_kernel_tx_schema_constants_match_the_selected_rust_producer() -> None:
         == mapping_line[len(mapping_prefix) : -2]
     )
     assert "const BUFLO_KERNEL_TX_ETF_DELTA: Duration = Duration::from_millis(10);" in source
-    assert f"const BUFLO_KERNEL_TX_RECEIPT_SCHEMA_VERSION: u32 = {10 if modern else 9};" in source
+    assert f"const BUFLO_KERNEL_TX_RECEIPT_SCHEMA_VERSION: u32 = {version};" in source
     assert "const BUFLO_KERNEL_ITEM_RECEIPT_SCHEMA_VERSION: u32 = 6;" in source
     assert "const BUFLO_KERNEL_CLOCK_MAPPING_SCHEMA_VERSION: u32 = 6;" in source
 

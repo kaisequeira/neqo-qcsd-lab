@@ -13,6 +13,7 @@
 **/__pycache__/
 **/target/
 **/corpus/
+/tests/fixtures/rapid_parallel_scheduling_v2.json.zlib.b85.txt
 *.pcap
 *.pcapng
 *.qlog

@@ -4828,6 +4828,7 @@ def _wait_for_child(
                     failure_deadline = now + FAILURE_CLEANUP_SECONDS
                     _kill_child_group(child.pid, signal.SIGKILL)
             if now >= ready_deadline and not ready:
+                print("qcsd-lab Docker lifecycle guardian: initial READY handshake timed out before admission", file=sys.stderr)
                 failed = True
                 if failure_deadline is None:
                     failure_deadline = now + FAILURE_CLEANUP_SECONDS
