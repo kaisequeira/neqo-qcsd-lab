@@ -28,10 +28,13 @@ CAPSULE_TYPE = "qcsd-rapid-v6-prospective-parallel-scheduling"
 CONTRACT_V1 = "rolling-v6-unchanged-qualification-parallel-scheduling-v1"
 CONTRACT_V2 = "rolling-v6-pre-birth-release-parallel-scheduling-v2"
 CONTRACT_V3 = "rolling-v6-lifecycle-first-parallel-scheduling-v3"
-CONTRACT = "rolling-v6-observed-prebirth-retirement-parallel-scheduling-v4"
+CONTRACT_V4 = "rolling-v6-observed-prebirth-retirement-parallel-scheduling-v4"
+CONTRACT = "rolling-v6-operation-local-verification-facts-parallel-scheduling-v5"
 V1_HELPER_SHA256 = "d4efd16eb61a7458d77ee0a4d218323fc2e15c5016a1f4e0888d22b5c63c8605"
 V2_HELPER_SHA256 = "1880eb36f622cb2ea17c5363cae9d90243189387d598eca70febb776b75120d8"
 V3_HELPER_SHA256 = "2f962c2332731d14e24503c6d68bd08c5c2bda8578671bde2b81354b9dc36f6b"
+V4_HELPER_SHA256 = "18afc767c2c08066b4f547b19af414ef00373456bbd97964c50bbcf769e8f6b0"
+FACTS_FILE = "src/qcsd_lab/rapid_operation_facts.py"
 MODULE_FILE = "src/qcsd_lab/rapid_rolling_schedule.py"
 ENVIRONMENT = "QCSD_RAPID_COLLECTION_COMPATIBILITY"
 V1_CONTROL_DEFINITIONS = {
@@ -60,10 +63,22 @@ V3_CONTROL_DEFINITIONS = {**V2_CONTROL_DEFINITIONS,
     "src/qcsd_lab/rapid_parallel_capture.py": V2_CONTROL_DEFINITIONS["src/qcsd_lab/rapid_parallel_capture.py"] | {
         "lifecycle_inputs", "formal_entry_inputs"},
 }
-CONTROL_DEFINITIONS = {**V3_CONTROL_DEFINITIONS,
+V4_CONTROL_DEFINITIONS = {**V3_CONTROL_DEFINITIONS,
     "src/qcsd_lab/rapid_lane_evidence.py": V3_CONTROL_DEFINITIONS["src/qcsd_lab/rapid_lane_evidence.py"] | {
         "retire_lane", "_verified_retirement", "_prebirth_batch_proof", "_verified_retirement_checks",
         "_retire_prebirth_lane", "_verified_prebirth_retirement"},
+}
+CONTROL_DEFINITIONS = {**V4_CONTROL_DEFINITIONS,
+    "src/qcsd_lab/rapid_rolling_readiness.py": frozenset({"readiness_mount_roots"}),
+    "src/qcsd_lab/rapid_lane_evidence.py": V4_CONTROL_DEFINITIONS["src/qcsd_lab/rapid_lane_evidence.py"] | {
+        "_validate_image_proof", "check_bound_image", "executed_image_plan_check"},
+    "src/qcsd_lab/rapid_rolling_capture.py": V4_CONTROL_DEFINITIONS["src/qcsd_lab/rapid_rolling_capture.py"] | {
+        "image_plan_check"},
+    "src/qcsd_lab/rapid_formal_parallel.py": V4_CONTROL_DEFINITIONS["src/qcsd_lab/rapid_formal_parallel.py"] | {
+        "authority", "_context", "initialize", "_preflight", "_reopen_intent"},
+    "src/qcsd_lab/rapid_parallel_capture.py": V4_CONTROL_DEFINITIONS["src/qcsd_lab/rapid_parallel_capture.py"] | {
+        "authority", "image_preflight", "initialize", "gate", "_require_result_birth",
+        "verify_results", "verify_results_in_image"},
 }
 NEW_FILES = frozenset({MODULE_FILE, "tests/test_rapid_rolling_schedule.py",
                        "tests/test_rapid_rolling_schedule_source.py",
@@ -74,8 +89,12 @@ V3_NEW_FILES = V2_NEW_FILES | {"tests/test_rapid_parallel_guardian_entry.py",
     "tests/test_rapid_parallel_lifecycle_inputs.py", "tests/test_rapid_parallel_guardian_projection.py"}
 V4_NEW_FILES = V3_NEW_FILES | {"tests/test_rapid_prebirth_retirement.py",
     "tests/fixtures/rapid_parallel_scheduling_v2.json.zlib.b85.txt"}
+V5_NEW_FILES = V4_NEW_FILES | {FACTS_FILE, "tests/test_rapid_operation_facts.py",
+    "tests/fixtures/rapid_rolling_schedule_v4.py.zlib.b85.txt", "tests/test_rapid_parallel_json_transport.py",
+    "tests/test_rapid_parallel_fail_first.py"}
 DOCUMENTS = frozenset({"PROJECT.md", "docs/RAPID-CAPTURE-PATH.md", "docs/EVIDENCE-INDEX.md",
                        "docs/CAPTURE-READINESS.md", "docs/CLASS-STUDY.md"})
+V5_DOCUMENTS = DOCUMENTS | {"docs/RAPID-CAPTURE-REPAIRS.md"}
 CONTROL_TESTS = frozenset({"tests/test_rapid_rolling_capture.py"})
 LIMITS = {"final_sites": 50, "settings": 5, "visits_per_site_setting": 64,
           "visits_per_lane_workload": 4, "maximum_sites_per_batch": 5,
@@ -119,7 +138,8 @@ def _shell_projection(raw: bytes) -> tuple[bytes, dict[str, str]]:
 def _python_projection(path: str, raw: bytes, *, contract=CONTRACT) -> tuple[bytes, dict[str, str]]:
     definitions = (V1_CONTROL_DEFINITIONS if contract == CONTRACT_V1
                    else V2_CONTROL_DEFINITIONS if contract == CONTRACT_V2
-                   else V3_CONTROL_DEFINITIONS if contract == CONTRACT_V3 else CONTROL_DEFINITIONS)
+                   else V3_CONTROL_DEFINITIONS if contract == CONTRACT_V3
+                   else V4_CONTROL_DEFINITIONS if contract == CONTRACT_V4 else CONTROL_DEFINITIONS)
     permitted = definitions.get(path)
     if permitted is None:
         raise ValueError(f"scheduling changes protected source: {path}")
@@ -133,7 +153,7 @@ def _python_projection(path: str, raw: bytes, *, contract=CONTRACT) -> tuple[byt
             if node.name in units:
                 raise ValueError("scheduling duplicates a named control definition")
             units[node.name] = evidence._sha(ast.dump(node, include_attributes=False).encode())
-        elif (contract in {CONTRACT_V2, CONTRACT_V3, CONTRACT} and path == "tools/rapid_parallel_capture.py"
+        elif (contract in {CONTRACT_V2, CONTRACT_V3, CONTRACT_V4, CONTRACT} and path == "tools/rapid_parallel_capture.py"
               and ast.dump(node, include_attributes=False) in bootstrap_nodes):
             found_bootstrap.append(ast.dump(node, include_attributes=False))
         else:
@@ -183,27 +203,35 @@ def _guardian_diagnostic_projection(raw: bytes) -> tuple[bytes, dict[str, str]]:
 def source_changes(old: Mapping[str, bytes], new: Mapping[str, bytes], *, client_sha256: str,
                    contract=CONTRACT) -> dict[str, Any]:
     """Derive exact named control edits and unchanged scientific dependencies."""
-    if contract not in {CONTRACT_V1, CONTRACT_V2, CONTRACT_V3, CONTRACT}:
+    if contract not in {CONTRACT_V1, CONTRACT_V2, CONTRACT_V3, CONTRACT_V4, CONTRACT}:
         raise ValueError("scheduling source projection has an unknown contract")
     allowed_new = (NEW_FILES if contract == CONTRACT_V1 else V2_NEW_FILES
-                   if contract == CONTRACT_V2 else V3_NEW_FILES if contract == CONTRACT_V3 else V4_NEW_FILES)
+                   if contract == CONTRACT_V2 else V3_NEW_FILES if contract == CONTRACT_V3
+                   else V4_NEW_FILES if contract == CONTRACT_V4 else V5_NEW_FILES)
     before, after = historical._source_inventory(old), historical._source_inventory(new)
-    if set(before) - set(after) or not (set(after) - set(before)) <= allowed_new | DOCUMENTS:
+    allowed_documents = V5_DOCUMENTS if contract == CONTRACT else DOCUMENTS
+    if set(before) - set(after) or not (set(after) - set(before)) <= allowed_new | allowed_documents:
         raise ValueError("scheduling added an unregistered source or removed retained source")
     changes, projections = {}, {}
     for path in sorted(after):
         if before.get(path) == after[path]:
             continue
-        if path in DOCUMENTS or path in CONTROL_TESTS or path in allowed_new - {MODULE_FILE}:
+        if path in allowed_documents or path in CONTROL_TESTS or path in allowed_new - {MODULE_FILE, FACTS_FILE}:
             units, projection = ["nonexecuting-evidence-description"], None
         elif path == MODULE_FILE and path not in before:
             if ((contract == CONTRACT and new[path] != evidence._read(Path(__file__).absolute()))
                 or (contract == CONTRACT_V1 and evidence._sha(new[path]) != V1_HELPER_SHA256)
                 or (contract == CONTRACT_V2 and evidence._sha(new[path]) != V2_HELPER_SHA256)
-                or (contract == CONTRACT_V3 and evidence._sha(new[path]) != V3_HELPER_SHA256)):
+                or (contract == CONTRACT_V3 and evidence._sha(new[path]) != V3_HELPER_SHA256)
+                or (contract == CONTRACT_V4 and evidence._sha(new[path]) != V4_HELPER_SHA256)):
                 raise ValueError("scheduling helper differs from the executing reviewed helper")
             ast.parse(new[path], filename=path)
             units, projection = ["new-scheduling-authority"], None
+        elif path == FACTS_FILE and path not in before and contract == CONTRACT:
+            if new[path] != evidence._read(Path(__file__).absolute().parent / "rapid_operation_facts.py"):
+                raise ValueError("operation facts differ from the executing reviewed implementation")
+            ast.parse(new[path], filename=path)
+            units, projection = ["operation-local-raw-dependency-facts"], None
         elif (path == MODULE_FILE and contract == CONTRACT_V2
               and before[path] == V1_HELPER_SHA256
               and evidence._sha(new[path]) == V2_HELPER_SHA256):
@@ -214,13 +242,17 @@ def source_changes(old: Mapping[str, bytes], new: Mapping[str, bytes], *, client
               and before[path] in {V1_HELPER_SHA256, V2_HELPER_SHA256}
               and evidence._sha(new[path]) == V3_HELPER_SHA256):
             units, projection = ["scheduling-v3-lifecycle-first-authority"], None
-        elif (path == MODULE_FILE and contract == CONTRACT
+        elif (path == MODULE_FILE and contract == CONTRACT_V4
               and before[path] in {V1_HELPER_SHA256, V2_HELPER_SHA256, V3_HELPER_SHA256}
-              and new[path] == evidence._read(Path(__file__).absolute())):
+              and evidence._sha(new[path]) == V4_HELPER_SHA256):
             units, projection = ["scheduling-v4-observed-prebirth-retirement-authority"], None
+        elif (path == MODULE_FILE and contract == CONTRACT
+              and before[path] in {V1_HELPER_SHA256, V2_HELPER_SHA256, V3_HELPER_SHA256, V4_HELPER_SHA256}
+              and new[path] == evidence._read(Path(__file__).absolute())):
+            units, projection = ["scheduling-v5-operation-local-verification-facts-authority"], None
         else:
             project = (_shell_projection if path == "qcsd-lab"
-                       else _guardian_diagnostic_projection if contract in {CONTRACT_V3, CONTRACT}
+                       else _guardian_diagnostic_projection if contract in {CONTRACT_V3, CONTRACT_V4, CONTRACT}
                        and path == "tools/docker_lifecycle_lock_guardian.py"
                        else lambda raw: _python_projection(path, raw, contract=contract))
             protected_old, old_units = project(old[path])
@@ -486,7 +518,7 @@ def reopen_runtime(reference: Mapping[str, str], runtime: Mapping[str, str], *, 
     return value, sources
 
 
-def _qualified_inputs(cohort: Path, qualifier: Path, workload_root: Path, expected_sites: list[dict]) -> dict:
+def _qualified_inputs(cohort: Path, qualifier: Path, workload_root: Path, expected_sites: list[dict], *, _context=None) -> dict:
     spec = evidence._json(evidence._read(qualifier))
     if set(spec) != {"schema_version", "qualification_sets"} or type(spec["schema_version"]) is not int or spec["schema_version"] != 1:
         raise ValueError("scheduling qualification spec differs")
@@ -506,7 +538,18 @@ def _qualified_inputs(cohort: Path, qualifier: Path, workload_root: Path, expect
     ids = [site["workload_id"] for site in expected_sites]
     if not 1 <= len(ids) <= 5 or len(set(ids)) != len(ids):
         raise ValueError("scheduling batch must retain one to five unique sites")
-    qualification.validate_named_qualification_set_manifest(evidence._json(evidence._read(manifest)),
+    key = None
+    if _context is not None:
+        import json
+        key = ("qualified-inputs", json.dumps(expected_sites, sort_keys=True), _context.content_key(
+            [cohort, qualifier, manifest, *(workload_root / (name + ".json") for name in ids)],
+            [sidecars, *(workload_root / (name + "-application-response-evidence") for name in ids)],
+            include_modes=False))
+        if _context.has(key):
+            return _context.get(key)
+    validator = (qualification.validate_named_qualification_set_manifest if _context is None else
+        lambda value, **kwargs: _context.validate_named_qualification(value, qualification.validate_named_qualification_set_manifest, **kwargs))
+    validator(evidence._json(evidence._read(manifest)),
         workload_root=workload_root, sidecar_root=sidecars, prefix_spec_root=None,
         expected_qualification_set=item["qualification_set"], expected_workload_ids=ids,
         expected_qualification_scope="response-only", require_current_implementation=False)
@@ -522,11 +565,12 @@ def _qualified_inputs(cohort: Path, qualifier: Path, workload_root: Path, expect
             raise ValueError("scheduling needs the unchanged full 120-response qualification schema")
         implementations[name] = sidecar["implementation_receipt"]["sha256"]
         sources[name] = {"source": sidecar["qualification_source"], "image": sidecar["qualification_image_digest"]}
-    return {"enrollment_sha256": evidence._sha(evidence._read(cohort)),
+    result = {"enrollment_sha256": evidence._sha(evidence._read(cohort)),
             "qualification_spec_sha256": evidence._sha(evidence._read(qualifier)),
             "named_set": item["qualification_set"], "named_manifest_sha256": evidence._sha(evidence._read(manifest)),
             "qualification_files": evidence._inventory(sidecars), "workloads": workloads,
             "implementation_sha256": implementations, "qualification_sources": sources}
+    return _context.remember(key, result) if _context is not None else result
 
 
 def _spec(value: Mapping[str, str]) -> lanes.CaptureSpec:
@@ -534,7 +578,7 @@ def _spec(value: Mapping[str, str]) -> lanes.CaptureSpec:
 
 
 def _derive(base: lanes.CaptureSpec, runtime: Mapping[str, str], qualifier: Path,
-            original: Mapping[str, str], current: Mapping[str, str], *, contract=CONTRACT) -> dict:
+            original: Mapping[str, str], current: Mapping[str, str], *, contract=CONTRACT, _context=None) -> dict:
     lanes._check_spec(base)
     runtime = rolling._runtime(runtime)
     if runtime["data_root"] != str(base.data_root):
@@ -568,7 +612,8 @@ def _derive(base: lanes.CaptureSpec, runtime: Mapping[str, str], qualifier: Path
     if ((contract == CONTRACT and helper != evidence._read(Path(__file__).absolute()))
         or (contract == CONTRACT_V1 and (helper is None or evidence._sha(helper) != V1_HELPER_SHA256))
         or (contract == CONTRACT_V2 and (helper is None or evidence._sha(helper) != V2_HELPER_SHA256))
-        or (contract == CONTRACT_V3 and (helper is None or evidence._sha(helper) != V3_HELPER_SHA256))):
+        or (contract == CONTRACT_V3 and (helper is None or evidence._sha(helper) != V3_HELPER_SHA256))
+        or (contract == CONTRACT_V4 and (helper is None or evidence._sha(helper) != V4_HELPER_SHA256))):
         raise ValueError("new installed runtime lacks this exact scheduling validator")
     comparison = source_changes(old_sources, new_sources, client_sha256=old["installed_client_sha256"], contract=contract)
     build_dependencies = []
@@ -580,8 +625,8 @@ def _derive(base: lanes.CaptureSpec, runtime: Mapping[str, str], qualifier: Path
     if build_dependencies[0] != build_dependencies[1]:
         raise ValueError("scheduling changed installed image bases, producer or Native build dependencies")
     comparison["runtime_build_dependencies"] = build_dependencies[0]
-    before = _qualified_inputs(base.cohort, base.qualification_spec, base.workload_root, plan["sites"])
-    after = _qualified_inputs(base.cohort, qualifier, Path(runtime["workload_root"]), plan["sites"])
+    before = _qualified_inputs(base.cohort, base.qualification_spec, base.workload_root, plan["sites"], _context=_context)
+    after = _qualified_inputs(base.cohort, qualifier, Path(runtime["workload_root"]), plan["sites"], _context=_context)
     old_source = {**old["source"], "image_digest": old["collection_image_digest"]}
     if (before != after or set(before["implementation_sha256"].values()) != {
             old["checks"]["collection"]["qualification_implementation_sha256"]}
@@ -620,11 +665,11 @@ def publish_schedule(base_spec: lanes.CaptureSpec, runtime: Mapping[str, str], q
 
 
 def validate_schedule(reference: Mapping[str, str], *, runtime: Mapping[str, str] | None = None,
-                      before: str | None = None) -> dict:
+                      before: str | None = None, _context=None) -> dict:
     _, raw = evidence._reference(reference)
     value = evidence._json(raw)
     if (set(value) != CAPSULE_KEYS or type(value["schema_version"]) is not int or value["schema_version"] != 1
-        or value["artifact_type"] != CAPSULE_TYPE or value["contract"] not in {CONTRACT_V1, CONTRACT_V2, CONTRACT_V3, CONTRACT} or value["limits"] != LIMITS
+        or value["artifact_type"] != CAPSULE_TYPE or value["contract"] not in {CONTRACT_V1, CONTRACT_V2, CONTRACT_V3, CONTRACT_V4, CONTRACT} or value["limits"] != LIMITS
         or type(value["formal_accepted_trace_count"]) is not int or value["formal_accepted_trace_count"] != 0
         or value["scientific_credit"] is not False or not isinstance(value["reason"], str) or not value["reason"].strip()):
         raise ValueError("prospective scheduling capsule has an invalid exact contract")
@@ -635,8 +680,18 @@ def validate_schedule(reference: Mapping[str, str], *, runtime: Mapping[str, str
     qualifier, _ = evidence._reference(value["qualification_spec"])
     if runtime is not None and dict(runtime) != value["runtime"]:
         raise ValueError("scheduling capsule belongs to a different runtime")
-    derived = _derive(_spec(value["base_spec"]), value["runtime"], qualifier,
-                      value["original_canonical"], value["current_canonical"], contract=value["contract"])
+    key = ("schedule-derive", evidence._sha(raw))
+    if _context is not None:
+        _context._reference(reference)
+        _context.bind_schedule(value)
+    if _context is not None and _context.has(key):
+        derived = _context.get(key)
+    else:
+        derived = _derive(_spec(value["base_spec"]), value["runtime"], qualifier,
+                          value["original_canonical"], value["current_canonical"],
+                          contract=value["contract"], _context=_context)
+        if _context is not None:
+            _context.remember(key, derived)
     if any(value[key] != derived[key] for key in derived):
         raise ValueError("scheduling source projections or retained qualified bytes changed")
     for ref in (value["original_canonical"], value["current_canonical"]):
@@ -647,9 +702,9 @@ def validate_schedule(reference: Mapping[str, str], *, runtime: Mapping[str, str
 
 
 def validate_qualification_reuse(old_impl: Mapping, current_impl: Mapping, reference: Mapping[str, str],
-                                *, actual_image: str, before: str | None = None) -> None:
+                                *, actual_image: str, before: str | None = None, _context=None) -> None:
     """Typed installed hook: no ambient or source-only qualification exemption."""
-    capsule = validate_schedule(reference, before=before)
+    capsule = validate_schedule(reference, before=before, _context=_context)
     if actual_image != capsule["runtime"]["collection_image_digest"]:
         raise ValueError("scheduling qualification hook is executing another image")
     for receipt, key in ((old_impl, "original_canonical"), (current_impl, "current_canonical")):
@@ -672,10 +727,10 @@ def validate_qualification_reuse(old_impl: Mapping, current_impl: Mapping, refer
 
 
 def require_schedule(reference: Mapping[str, str], spec: lanes.CaptureSpec, *, declared_at: str,
-                     started_at: str | None = None) -> dict:
+                     started_at: str | None = None, _context=None) -> dict:
     """Plan/intent hook; failed-only retry proof stays with the ordinary lane API."""
     runtime = {key: str(getattr(spec, key)) for key in rolling.RUNTIME_FIELDS}
-    capsule = validate_schedule(reference, runtime=runtime, before=declared_at)
+    capsule = validate_schedule(reference, runtime=runtime, before=declared_at, _context=_context)
     base = _spec(capsule["base_spec"])
     if (spec.cohort != base.cohort or spec.acquisition_root != base.acquisition_root
         or rolling._ref(spec.qualification_spec) != capsule["qualification_spec"]):
@@ -686,20 +741,22 @@ def require_schedule(reference: Mapping[str, str], spec: lanes.CaptureSpec, *, d
 
 
 def validate_ready_canary(reference: Mapping[str, Any], schedule_reference: Mapping[str, str], *,
-                          mode: str, before: str) -> dict:
+                          mode: str, before: str, _context=None) -> dict:
     """Reopen the original passed setting without attributing it to new code."""
-    capsule = validate_schedule(schedule_reference, before=before)
+    capsule = validate_schedule(schedule_reference, before=before, _context=_context)
     base = _spec(capsule["base_spec"])
     plan = lanes._payload(base.plan_receipt, lanes.PLAN_TYPE)
     if mode not in plan["readiness"] or plan["readiness"][mode] != reference:
         raise ValueError("scheduling canary is not the original setting's bound prerequisite")
-    return evidence.validate_canary(reference,
-        runtime={key: str(getattr(base, key)) for key in lanes.RUNTIME_KEYS}, mode=mode)
+    runtime = {key: str(getattr(base, key)) for key in lanes.RUNTIME_KEYS}
+    if _context is not None:
+        return _context.validate_canary(reference, runtime, mode, evidence.validate_canary)
+    return evidence.validate_canary(reference, runtime=runtime, mode=mode)
 
 
-def mount_roots(reference: Mapping[str, str]) -> list[Path]:
+def mount_roots(reference: Mapping[str, str], *, _context=None) -> list[Path]:
     """Derive read-only transport from the fully reopened capsule and runtimes."""
-    capsule = validate_schedule(reference)
+    capsule = validate_schedule(reference, _context=_context)
     roots = {Path(reference["path"]).parent}
     for role in (capsule["base_spec"], capsule["runtime"]):
         roots.update(Path(role[key]) for key in ("data_root", "runtime_source_root", "module_root", "execution_root"))

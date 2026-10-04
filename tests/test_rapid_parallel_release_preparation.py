@@ -204,7 +204,7 @@ def release_context(tmp_path, monkeypatch):
         calls.append("image-proof")
         assert _value == value and _output == output
         return shared.reopen_preflight(output, authority_sha256)
-    def readiness_roots(_spec, _campaign):
+    def readiness_roots(_spec, _campaign, *, _context=None):
         calls.append("readiness")
         assert _spec == spec and _campaign in {lane.campaign_name for lane in selected}
         return [data, canary, source]

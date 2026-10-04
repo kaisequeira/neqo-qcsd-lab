@@ -5675,9 +5675,9 @@ parallel_python() {
   /usr/bin/python3 -I -c 'import sys; sys.path.insert(0,sys.argv.pop(1)+"/src"); from qcsd_lab.rapid_parallel_capture import main; main()' "${ROOT}" "$@"
 }
 parallel_environment_rows() {
-  /usr/bin/python3 -I -c '
+  builtin printf '%s' "$1" | /usr/bin/python3 -I -c '
 import base64,json,sys
-environment=json.loads(sys.argv[1]).get("environment",{})
+environment=json.load(sys.stdin).get("environment",{})
 if (not isinstance(environment,dict) or set(environment)-{
     "QCSD_RAPID_EPOCH_LAUNCH_INPUT","QCSD_RAPID_ROLLING_LAUNCH_INPUT","QCSD_RAPID_COLLECTION_COMPATIBILITY",
     "QCSD_RAPID_CAPTURE_CONTROL_INSTALLATION"}
@@ -5685,7 +5685,7 @@ if (not isinstance(environment,dict) or set(environment)-{
     raise ValueError("formal worker environment contains an undeclared control input")
 for key,value in sorted(environment.items()):
     print(key+"\t"+base64.b64encode(value.encode()).decode())
-' "$1"
+'
 }
 if [[ "${1:-}" == "parallel-diagnostic-run" || "${1:-}" == "parallel-formal-run" ]]; then
   if (( $# != 3 )); then
@@ -5733,8 +5733,7 @@ if [[ "${1:-}" == "parallel-diagnostic-run" || "${1:-}" == "parallel-formal-run"
       echo "parallel formal worker input validation failed before image preflight or worker birth" >&2
       exit 1
     fi
-    parallel_first_campaign="$(/usr/bin/python3 -I -c 'import json,sys; print(json.loads(sys.argv[1])["campaign_path"])' \
-      "${parallel_formal_first_inputs}")" || exit 1
+    parallel_first_campaign="$(builtin printf '%s' "${parallel_formal_first_inputs}" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin)["campaign_path"])')" || exit 1
   elif ! parallel_first_campaign="$(parallel_python select --authority "${parallel_authority}" --output "${ROOT}")"; then
     echo "parallel campaign selection failed before image preflight or worker birth" >&2
     exit 1
@@ -5750,11 +5749,10 @@ if [[ "${1:-}" == "parallel-diagnostic-run" || "${1:-}" == "parallel-formal-run"
     parallel_formal_environment_text="$(parallel_environment_rows "${parallel_formal_first_inputs}")" || exit 1
     while IFS=$'\t' read -r parallel_environment_key parallel_environment_b64; do
       [[ -n "${parallel_environment_key}" ]] || continue
-      parallel_environment_value="$(/usr/bin/python3 -I -c 'import base64,sys; print(base64.b64decode(sys.argv[1],validate=True).decode(),end="")' "${parallel_environment_b64}")" || exit 1
+      parallel_environment_value="$(builtin printf '%s' "${parallel_environment_b64}" | /usr/bin/python3 -I -c 'import base64,sys; print(base64.b64decode(sys.stdin.buffer.read(),validate=True).decode(),end="")')" || exit 1
       export "${parallel_environment_key}=${parallel_environment_value}"
     done <<< "${parallel_formal_environment_text}"
-    parallel_formal_dns_path="$(/usr/bin/python3 -I -c 'import json,sys; print(json.loads(sys.argv[1])["dns_path"])' \
-      "${parallel_formal_first_inputs}")" || exit 1
+    parallel_formal_dns_path="$(builtin printf '%s' "${parallel_formal_first_inputs}" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin)["dns_path"])')" || exit 1
     export QCSD_RAPID_DNS_RECEIPT_PATH="${parallel_formal_dns_path}"
   else
     export QCSD_RAPID_DNS_RECEIPT_PATH="${parallel_output}/dns-pins.json"
@@ -11298,8 +11296,7 @@ for root in sorted(roots): print(root)
     parallel_mounted_roots["${parallel_mount_root}"]=1
   done
   if (( parallel_formal )); then
-    parallel_formal_mount_text="$(/usr/bin/python3 -I -c 'import json,sys; print("\n".join(json.loads(sys.argv[1])["mount_roots"]))' \
-      "${parallel_formal_first_inputs}")" || exit 1
+    parallel_formal_mount_text="$(builtin printf '%s' "${parallel_formal_first_inputs}" | /usr/bin/python3 -I -c 'import json,sys; print("\n".join(json.load(sys.stdin)["mount_roots"]))')" || exit 1
     mapfile -t parallel_formal_mount_rows <<< "${parallel_formal_mount_text}"
     for parallel_mount_root in "${parallel_formal_mount_rows[@]}"; do
       [[ -n "${parallel_mount_root}" ]] || continue
@@ -11320,13 +11317,13 @@ for root in sorted(roots): print(root)
     "${parallel_mounts[@]}" --entrypoint /opt/qcsd-venv/bin/python3 \
     "${image_id}" -I -m qcsd_lab.rapid_parallel_capture preflight \
     --authority /parallel-authority.json --sha256 "${parallel_authority_sha256}"
-  /usr/bin/python3 -I -c '
+  builtin printf '%s' "${QCSD_DOCKER_OUTPUT_PARALLEL_PREFLIGHT}" | /usr/bin/python3 -I -c '
 import json,sys
 sys.path.insert(0,sys.argv[1]+"/src")
 from pathlib import Path
 from qcsd_lab.rapid_parallel_capture import put
-put(Path(sys.argv[2])/"image-preflight.json",json.loads(sys.argv[3]))
-' "${ROOT}" "${parallel_output}" "${QCSD_DOCKER_OUTPUT_PARALLEL_PREFLIGHT}"
+put(Path(sys.argv[2])/"image-preflight.json",json.load(sys.stdin))
+' "${ROOT}" "${parallel_output}"
   if (( parallel_formal )); then
     parallel_formal_second_inputs="$(parallel_python formal-inputs --authority "${parallel_authority}" --index 1)" || exit 1
     QCSD_DOCKER_OUTPUT_PARALLEL_DNS=""
@@ -11341,12 +11338,13 @@ put(Path(sys.argv[2])/"image-preflight.json",json.loads(sys.argv[3]))
       "${parallel_mounts[@]}" --entrypoint /opt/qcsd-venv/bin/python3 \
       "${image_id}" -I -m qcsd_lab.rapid_parallel_capture formal-dns \
       --authority /parallel-authority.json --index 1
-    /usr/bin/python3 -I -c '
+    builtin printf '%s\0%s' "${parallel_formal_second_inputs}" "${QCSD_DOCKER_OUTPUT_PARALLEL_DNS}" | /usr/bin/python3 -I -c '
 import ipaddress,json,re,sys
 from pathlib import Path
 sys.path.insert(0,sys.argv[1]+"/src")
 from qcsd_lab.util import durable_create
-inputs=json.loads(sys.argv[2]); raw=sys.argv[3]+"\n"
+inputs_raw,dns_raw=sys.stdin.buffer.read().split(b"\0")
+inputs=json.loads(inputs_raw); raw=dns_raw.decode()+"\n"
 def unique_pairs(rows):
     result={}
     for key,item in rows:
@@ -11368,18 +11366,18 @@ for row in value["hosts"]:
         raise ValueError("formal DNS row requires an ordered public IPv4 pin")
     previous=host
 durable_create(Path(inputs["dns_path"]),raw.encode())
-' "${ROOT}" "${parallel_formal_second_inputs}" "${QCSD_DOCKER_OUTPUT_PARALLEL_DNS}"
+' "${ROOT}"
   fi
   parallel_cpu_json="$(parallel_python initialize --authority "${parallel_authority}" \
     --output "${parallel_output}" --sha256 "${parallel_authority_sha256}" \
     --cpus "${study_capture_available_cpus_json}")"
-  mapfile -t parallel_cpu_rows < <(/usr/bin/python3 -I -c '
+  mapfile -t parallel_cpu_rows < <(builtin printf '%s' "${parallel_cpu_json}" | /usr/bin/python3 -I -c '
 import json,sys
-x=json.loads(sys.argv[1])
+x=json.load(sys.stdin)
 print(",".join(map(str,x["sidecar_cpus"])))
 for pair in x["pairs"]:
     print(pair[0]);print(pair[1]);print(",".join(map(str,pair)))
-' "${parallel_cpu_json}")
+')
   study_capture_sidecar_cpuset="${parallel_cpu_rows[0]}"
   parallel_prepared_sha256=""
   if (( parallel_formal )) && [[ "${rapid_capture_version}" == "v6" ]]; then
@@ -11471,17 +11469,17 @@ for pair in x["pairs"]:
       parallel_formal_environment_text="$(parallel_environment_rows "${parallel_formal_worker_inputs}")" || exit 1
       while IFS=$'\t' read -r parallel_environment_key parallel_environment_b64; do
         [[ -n "${parallel_environment_key}" ]] || continue
-        parallel_environment_value="$(/usr/bin/python3 -I -c 'import base64,sys; print(base64.b64decode(sys.argv[1],validate=True).decode(),end="")' "${parallel_environment_b64}")" || exit 1
+        parallel_environment_value="$(builtin printf '%s' "${parallel_environment_b64}" | /usr/bin/python3 -I -c 'import base64,sys; print(base64.b64decode(sys.stdin.buffer.read(),validate=True).decode(),end="")')" || exit 1
         replace_container_environment "${parallel_environment_key}" "${parallel_environment_value}"
       done <<< "${parallel_formal_environment_text}"
-      parallel_formal_worker_rows_text="$(/usr/bin/python3 -I -c '
+      parallel_formal_worker_rows_text="$(builtin printf '%s' "${parallel_formal_worker_inputs}" | /usr/bin/python3 -I -c '
 import json,sys
 from pathlib import Path
-inputs=json.loads(sys.argv[1]); dns=json.loads(Path(inputs["dns_path"]).read_bytes())
+inputs=json.load(sys.stdin); dns=json.loads(Path(inputs["dns_path"]).read_bytes())
 if dns["campaign"]!=inputs["campaign_name"]: raise ValueError("formal worker DNS belongs to another lane")
 print(inputs["campaign_name"]); print(inputs["result_namespace"])
 for host,address in dns["hosts"]: print(host+"="+address)
-' "${parallel_formal_worker_inputs}")" || exit 1
+')" || exit 1
       mapfile -t parallel_formal_worker_rows <<< "${parallel_formal_worker_rows_text}"
       parallel_formal_container=()
       for (( parallel_arg_index=0; parallel_arg_index<${#container[@]}; parallel_arg_index++ )); do
@@ -11535,23 +11533,22 @@ put(Path(sys.argv[2])/"worker-argv.json",sys.argv[3:])
   parallel_all_ids="$(_qcsd_docker_api container ls --quiet --no-trunc)"
   mapfile -t parallel_inspect_ids <<< "${parallel_all_ids}"
   parallel_actual_inspect="$(_qcsd_docker_api container inspect "${parallel_inspect_ids[@]}")"
-  /usr/bin/python3 -I -c '
+  builtin printf '%s\0%s\0%s' "${parallel_actual_inspect}" "${parallel_cpu_json}" "${study_capture_available_cpus_json}" | /usr/bin/python3 -I -c '
 import json,sys
 from pathlib import Path
 sys.path.insert(0,sys.argv[1]+"/src")
 from qcsd_lab.rapid_parallel_capture import put
-root=Path(sys.argv[2]); inspected=json.loads(sys.argv[3]); cpu=json.loads(sys.argv[4])
+root=Path(sys.argv[2]); inspected,cpu,available=(json.loads(raw) for raw in sys.stdin.buffer.read().split(b"\0"))
 workers=[];sidecars={};resources=[]
 for i in range(2):
-    wid,rid,nid,wname,rname=sys.argv[7+i*5:12+i*5]
+    wid,rid,nid,wname,rname=sys.argv[4+i*5:9+i*5]
     pair=cpu["pairs"][i]
-    workers.append(dict(id=wid,name=wname,image_id=sys.argv[6],client_cpu=pair[0],orchestrator_cpu=pair[1]))
+    workers.append(dict(id=wid,name=wname,image_id=sys.argv[3],client_cpu=pair[0],orchestrator_cpu=pair[1]))
     sidecars[rname]=rid
     resources.append(dict(worker_id=wid,router_id=rid,network_id=nid))
 put(root/"actual-launch.json",dict(workers=workers,sidecars=sidecars,lane_resources=resources,
-    inspected_containers=inspected,available_cpus=json.loads(sys.argv[5]),docker_ncpu=int(sys.argv[-1])))
-' "${ROOT}" "${parallel_output}" "${parallel_actual_inspect}" "${parallel_cpu_json}" \
-    "${study_capture_available_cpus_json}" "${image_id}" \
+    inspected_containers=inspected,available_cpus=available,docker_ncpu=int(sys.argv[-1])))
+' "${ROOT}" "${parallel_output}" "${image_id}" \
     "${parallel_worker_ids[0]}" "${parallel_router_ids[0]}" "${parallel_network_ids[0]}" \
     "${parallel_worker_names[0]}" "${parallel_router_names[0]}" \
     "${parallel_worker_ids[1]}" "${parallel_router_ids[1]}" "${parallel_network_ids[1]}" \
@@ -11569,11 +11566,11 @@ put(root/"actual-launch.json",dict(workers=workers,sidecars=sidecars,lane_resour
       (( ! parallel_retired[parallel_index] )) || continue
       parallel_worker_id="${parallel_worker_ids[parallel_index]}"
       parallel_state="$(_qcsd_docker_api container inspect "${parallel_worker_id}")"
-      parallel_exit_code="$(/usr/bin/python3 -I -c '
+      parallel_exit_code="$(builtin printf '%s' "${parallel_state}" | /usr/bin/python3 -I -c '
 import json,sys
-x=json.loads(sys.argv[1])[0]
+x=json.load(sys.stdin)[0]
 print("running" if x["State"]["Running"] else x["State"]["ExitCode"])
-' "${parallel_state}")"
+')"
       [[ "${parallel_exit_code}" != "running" ]] || continue
       parallel_lane="${parallel_output}/lane-$((parallel_index+1))"
       (set -C; _qcsd_docker_api logs "${parallel_worker_id}" \
@@ -11595,20 +11592,20 @@ print("running" if x["State"]["Running"] else x["State"]["ExitCode"])
       [[ "$(_qcsd_docker_exact_network_presence "${parallel_network_ids[parallel_index]}")" == "absent" ]] || exit 1
       qcsd_retire_docker_handoff network "${parallel_network_ids[parallel_index]}" QCSD_DOCKER_IDS_PUBLIC_NETWORKS
       unset 'QCSD_DOCKER_IDS_PUBLIC_NETWORKS[parallel_index]'
-      /usr/bin/python3 -I -c '
+      builtin printf '%s\0%s' "${parallel_state}" "${parallel_peer_state}" | /usr/bin/python3 -I -c '
 import json,sys
 from pathlib import Path
 sys.path.insert(0,sys.argv[1]+"/src")
 from qcsd_lab.rapid_parallel_capture import put,read,sha
 root=Path(sys.argv[2]);i=int(sys.argv[3])
-actual=dict(worker_terminal=json.loads(sys.argv[4])[0],worker_exit_code=int(sys.argv[5]),
-    absent_ids=sorted(sys.argv[7:10]))
-peer=json.loads(sys.argv[6])
+terminal,peer=(json.loads(raw) for raw in sys.stdin.buffer.read().split(b"\0"))
+actual=dict(worker_terminal=terminal[0],worker_exit_code=int(sys.argv[4]),
+    absent_ids=sorted(sys.argv[5:8]))
 if peer is None: actual["peer_retirement_sha256"]=sha(read(root/f"lane-{2-i}"/"retirement.json"))
 else: actual["peer_state"]=peer[0]
 put(root/f"lane-{i+1}"/"actual-retirement.json",actual)
-' "${ROOT}" "${parallel_output}" "${parallel_index}" "${parallel_state}" "${parallel_exit_code}" \
-        "${parallel_peer_state}" "${parallel_worker_id}" "${parallel_router_ids[parallel_index]}" "${parallel_network_ids[parallel_index]}"
+' "${ROOT}" "${parallel_output}" "${parallel_index}" "${parallel_exit_code}" \
+        "${parallel_worker_id}" "${parallel_router_ids[parallel_index]}" "${parallel_network_ids[parallel_index]}"
       parallel_python retire --output "${parallel_output}" --index "${parallel_index}" \
         --actual "${parallel_lane}/actual-retirement.json"
       parallel_retired[parallel_index]=1

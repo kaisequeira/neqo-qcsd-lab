@@ -67,20 +67,20 @@ def parallel_setup(rolling_setup, monkeypatch, tmp_path):
     _write(capsule, {"fixture": "closed scheduling primitive"})
     reference = rolling._ref(capsule)
     state = {"base_spec": None}
-    def validate(reference_value, *, runtime=None, before=None):
+    def validate(reference_value, *, runtime=None, before=None, _context=None):
         assert formal._reference(reference_value) == capsule
         if runtime is not None:
             assert runtime == fixture.runtime
         return {"base_spec": state["base_spec"], "runtime": fixture.runtime,
                 "qualification_spec": rolling._ref(fixture.base.spec.qualification_spec)}
-    def require(reference_value, spec, *, declared_at, started_at=None):
+    def require(reference_value, spec, *, declared_at, started_at=None, _context=None):
         value = validate(reference_value, runtime={key: spec.serializable()[key] for key in rolling.RUNTIME_FIELDS})
         assert lanes.admission._utc(declared_at) <= lanes.admission._utc(lanes.admission._now())
         if started_at is not None:
             assert lanes.admission._utc(declared_at) <= lanes.admission._utc(started_at)
         assert spec.cohort == Path(value["base_spec"]["cohort"])
         return value
-    def canary(reference_value, schedule_reference, *, mode, before=None):
+    def canary(reference_value, schedule_reference, *, mode, before=None, _context=None):
         validate(schedule_reference)
         assert reference_value == {"retained-canary": mode}
         return readiness.validate_canary(reference_value,
@@ -88,7 +88,7 @@ def parallel_setup(rolling_setup, monkeypatch, tmp_path):
     monkeypatch.setattr(schedule, "validate_schedule", validate)
     monkeypatch.setattr(schedule, "require_schedule", require)
     monkeypatch.setattr(schedule, "validate_ready_canary", canary)
-    monkeypatch.setattr(schedule, "mount_roots", lambda reference_value: [formal._reference(reference_value).parent])
+    monkeypatch.setattr(schedule, "mount_roots", lambda reference_value, **kwargs: [formal._reference(reference_value).parent])
     installed = dict(fixture.base.implementation["source_files"])
     for name in ("rapid_parallel_capture.py", "rapid_formal_parallel.py", "rapid_rolling_capture.py"):
         key = "src/qcsd_lab/" + name
@@ -113,6 +113,7 @@ def parallel_setup(rolling_setup, monkeypatch, tmp_path):
                 exec(compile(command[-2], "<actual-installed-validator-fixture>", "exec"), {})
             return subprocess.CompletedProcess(command, 0, stdout.getvalue(), "actual fixture image output\n")
         except (OSError, ValueError, KeyError, TypeError, RuntimeError) as error:
+            print(f"installed-validator fixture: {type(error).__name__}: {error}", file=sys.stderr)
             return subprocess.CompletedProcess(command, 1, stdout.getvalue(), f"{type(error).__name__}: {error}\n")
         finally:
             sys.argv = argv

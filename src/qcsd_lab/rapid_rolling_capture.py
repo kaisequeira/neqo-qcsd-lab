@@ -323,7 +323,7 @@ def _sites(enrollment: Path, qualifier_spec: Path, workload_root: Path, *, requi
 def _sites_from_enrollment(batch: Mapping[str, Any], all_classes: list[dict[str, Any]],
                            qualifier_spec: Path, workload_root: Path, *, require_current: bool,
                            enrollment: Path | None = None, runtime: Mapping[str, str] | None = None,
-                           front_capture_amendment: Mapping[str, Any] | None = None) -> tuple[plan.Site, ...]:
+                           front_capture_amendment: Mapping[str, Any] | None = None, _context=None) -> tuple[plan.Site, ...]:
     classes = all_classes[-len(batch["selected_candidate_ids"]):]
     amendment = None
     if front_capture_amendment is not None:
@@ -358,7 +358,9 @@ def _sites_from_enrollment(batch: Mapping[str, Any], all_classes: list[dict[str,
                             if item["candidate_id"] == row["candidate_id"]))
         sites.append(plan.Site(row["candidate_id"], original.stem, digest,
                                origin(workload["preparation"]["final_url"]), q["qualification_set"], lanes._sha(lanes._read(manifest))))
-    validate_named_qualification_set_manifest(lanes._load(lanes._read(manifest)), workload_root=workload_root,
+    validator = (validate_named_qualification_set_manifest if _context is None else
+        lambda value, **kwargs: _context.validate_named_qualification(value, validate_named_qualification_set_manifest, **kwargs))
+    validator(lanes._load(lanes._read(manifest)), workload_root=workload_root,
         sidecar_root=sidecars, prefix_spec_root=None, expected_qualification_set=q["qualification_set"],
         expected_workload_ids=[site.workload_id for site in sites], expected_qualification_scope=RESPONSE_ONLY_QUALIFICATION_SCOPE,
         require_current_implementation=require_current)
@@ -495,9 +497,14 @@ def _capture_spec_from_enrollment(root: Path, enrollment: Path, qualification_sp
     return lanes.CaptureSpec(**{key: Path(item) if key in lanes.PATH_KEYS else item for key, item in inputs.items()})
 
 
-def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = False) -> tuple[tuple[plan.Site, ...], dict[str, Any]]:
+def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = False, _context=None) -> tuple[tuple[plan.Site, ...], dict[str, Any]]:
     # These facts live only inside this verification call. Public entry points
     # independently reopen enrollment; no prior operation supplies authority.
+    key = ("capture-plan", json.dumps(spec.serializable(), sort_keys=True), require_current)
+    if _context is not None:
+        _context.bind_capture(spec)
+        if _context.has(key):
+            return _context.get(key)
     batch, classes, policy = _verify_enrollment(spec.cohort)
     root = _open_ref(batch["policy"]).parent
     expected_spec = _capture_spec_from_enrollment(root, spec.cohort, spec.qualification_spec, spec.plan_receipt, batch, policy)
@@ -523,7 +530,7 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
     _keys(value, fields, "rolling plan")
     sites = _sites_from_enrollment(batch, classes, spec.qualification_spec, spec.workload_root,
                require_current=require_current, enrollment=spec.cohort, runtime=spec.serializable(),
-               front_capture_amendment=amendment_reference)
+               front_capture_amendment=amendment_reference, _context=_context)
     if (value["study_version"] != 6 or type(value["study_version"]) is not int
         or value["cohort_generation"] != "rolling-50" or value["bindings"] != _bindings_from_enrollment(spec.cohort, policy)
         or value["sites"] != [asdict(site) for site in sites]
@@ -536,7 +543,7 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
         raise ValueError("rolling plan changed its immutable scientific bindings")
     if "scheduling" in value:
         from .rapid_rolling_schedule import require_schedule
-        require_schedule(value["scheduling"], spec, declared_at=value["declared_at"])
+        require_schedule(value["scheduling"], spec, declared_at=value["declared_at"], _context=_context)
     expected = plan.plan_lanes(sites, final=True, study_version=6, rolling_batch=batch["ordinal"])
     rows = value["lanes"]
     if not isinstance(rows, list) or not rows:
@@ -556,11 +563,11 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
         actual.append({**asdict(lane), "workload_ids": list(lane.workload_ids), "campaign_sha256": lanes._sha(raw)})
     if rows != actual or value["planned_trace_count"] != sum(lane.sample_count for lane in expected):
         raise ValueError("rolling plan omitted, repeated or invented visit lanes")
-    return sites, value
+    return _context.remember(key, (sites, value)) if _context is not None else (sites, value)
 
 
-def require_mode_readiness(spec: lanes.CaptureSpec, lane: plan.Lane, *, before: str | None = None) -> dict[str, Any]:
-    _, payload = verify_capture_plan(spec)
+def require_mode_readiness(spec: lanes.CaptureSpec, lane: plan.Lane, *, before: str | None = None, _context=None) -> dict[str, Any]:
+    _, payload = verify_capture_plan(spec, _context=_context)
     if lane.study_version != 6 or lane.role != "formal":
         raise ValueError("rolling readiness cannot authorize a historical or diagnostic lane")
     if lane.mode not in payload["readiness"]:
@@ -568,9 +575,9 @@ def require_mode_readiness(spec: lanes.CaptureSpec, lane: plan.Lane, *, before: 
     from .rapid_rolling_readiness import validate_canary
     if "scheduling" in payload:
         from . import rapid_rolling_schedule as schedule
-        schedule.require_schedule(payload["scheduling"], spec, declared_at=payload["declared_at"], started_at=before)
+        schedule.require_schedule(payload["scheduling"], spec, declared_at=payload["declared_at"], started_at=before, _context=_context)
         facts = schedule.validate_ready_canary(payload["readiness"][lane.mode], payload["scheduling"],
-            mode=lane.mode, before=payload["declared_at"])
+            mode=lane.mode, before=payload["declared_at"], _context=_context)
         if (facts.get("client_sha256") != lanes._sha(lanes._read(spec.client_binary))
             or facts.get("traffic_hashes") != {key: digest for key, (_, digest) in lanes.TRAFFIC_FILES.items()}):
             raise ValueError("scheduled setting changed its original client or fixed traffic")
@@ -595,8 +602,8 @@ def require_mode_readiness(spec: lanes.CaptureSpec, lane: plan.Lane, *, before: 
     return payload["readiness"][lane.mode]
 
 
-def image_plan_check(spec: lanes.CaptureSpec, runtime: Mapping[str, Any]) -> dict[str, Any]:
-    sites, payload = verify_capture_plan(spec, require_current=True)
+def image_plan_check(spec: lanes.CaptureSpec, runtime: Mapping[str, Any], *, _context=None) -> dict[str, Any]:
+    sites, payload = verify_capture_plan(spec, require_current=True, _context=_context)
     # This new authority must be the actual installed producer, not a host
     # supplied replacement for the collection image's implementation.
     relative = "src/qcsd_lab/rapid_rolling_capture.py"
@@ -737,18 +744,18 @@ def enrollment_roots(spec: lanes.CaptureSpec) -> list[Path]:
     return sorted(roots)
 
 
-def readiness_roots(spec: lanes.CaptureSpec, campaign_name: str) -> list[Path]:
-    _, payload = verify_capture_plan(spec)
+def readiness_roots(spec: lanes.CaptureSpec, campaign_name: str, *, _context=None) -> list[Path]:
+    _, payload = verify_capture_plan(spec, _context=_context)
     proof = {"plan_payload": payload}
     lane = lanes._lane(proof, campaign_name)
-    reference = require_mode_readiness(spec, lane)
+    reference = require_mode_readiness(spec, lane, _context=_context)
     from .rapid_rolling_readiness import readiness_mount_roots
     if "scheduling" in payload:
         from . import rapid_rolling_schedule as schedule
-        capsule = schedule.require_schedule(payload["scheduling"], spec, declared_at=payload["declared_at"])
-        roots = set(enrollment_roots(spec)) | set(schedule.mount_roots(payload["scheduling"]))
+        capsule = schedule.require_schedule(payload["scheduling"], spec, declared_at=payload["declared_at"], _context=_context)
+        roots = set(enrollment_roots(spec)) | set(schedule.mount_roots(payload["scheduling"], _context=_context))
         roots.update(readiness_mount_roots(reference,
-            runtime={key: capsule["base_spec"][key] for key in lanes.RUNTIME_KEYS}, mode=lane.mode))
+            runtime={key: capsule["base_spec"][key] for key in lanes.RUNTIME_KEYS}, mode=lane.mode, _context=_context))
         return sorted(roots)
     return sorted(set(enrollment_roots(spec)) | set(readiness_mount_roots(reference,
         runtime={key: spec.serializable()[key] for key in lanes.RUNTIME_KEYS}, mode=lane.mode)))

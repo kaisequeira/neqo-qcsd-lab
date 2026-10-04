@@ -523,14 +523,17 @@ def validate_canary(reference: Mapping[str, Any], *, runtime: Mapping[str, str],
 
 
 def readiness_mount_roots(reference: Mapping[str, Any], *, runtime: Mapping[str, str],
-                          mode: str) -> list[Path]:
+                          mode: str, _context=None) -> list[Path]:
     """Derive the read-only transport for a reopened canary, without executing it.
 
     These roots let the actual installed validator reopen the same historical
     records and source roles. They grant no writable evidence namespace and
     come only from the closed reference and its authenticated runtime inputs.
     """
-    validate_canary(reference, runtime=runtime, mode=mode)
+    if _context is None:
+        validate_canary(reference, runtime=runtime, mode=mode)
+    else:
+        _context.validate_canary(reference, runtime, mode, validate_canary)
     plan_path, plan_raw = _reference(reference["plan"])
     plan = _json(plan_raw)
     roots = {plan_path.parent, _path(plan["clean_runtime_root"], directory=True),

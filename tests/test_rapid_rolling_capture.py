@@ -73,7 +73,8 @@ def rolling_setup(setup, monkeypatch):
     context = SimpleNamespace(root=spec.acquisition_root, profile_bytes=b"profile", source_bytes=b"catalogue source",
         catalogue_bytes=b"full catalogue", selection_amendment_revision=12, selection_amendment_sha256="d"*64,
         candidates=[{"candidate_id": f"candidate-{index}"} for index in range(55)])
-    (context.root / "provenance.json").write_bytes(b"retained original admission source\n")
+    (context.root / "provenance.json").write_bytes(admission._json(
+        {"engineering_fixture": "retained original admission source"}))
     terminals = []
     for index in range(55):
         directory = context.root / "attempts" / f"candidate-{index}" / "attempt-000001"
@@ -85,6 +86,10 @@ def rolling_setup(setup, monkeypatch):
         workload = directory / f"site-{index}.json"
         workload.write_bytes(admission._json(graph))
         (spec.workload_root / workload.name).write_bytes(workload.read_bytes())
+        application = spec.workload_root / (workload.stem + "-application-response-evidence")
+        application.mkdir()
+        (application / "fixture.json").write_bytes(admission._json(
+            {"engineering_fixture": "named qualification primitive substituted below"}))
         preparation = directory / "preparation.json"
         preparation.write_bytes(admission._json(admission._bind(admission.PREPARATION_TYPE,
             {"prepared_workload": admission.evidence_reference(context.root, workload)})))

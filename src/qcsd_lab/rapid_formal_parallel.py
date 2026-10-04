@@ -39,12 +39,19 @@ def _reference(row: Any) -> Path:
     return Path(row["path"])
 
 
-def authority(path: Path, *, execution_root: Path | None = None) -> dict[str, Any]:
-    return _audit(path, execution_root=execution_root)[0]
+def authority(path: Path, *, execution_root: Path | None = None, _context=None) -> dict[str, Any]:
+    return _audit(path, execution_root=execution_root, _context=_context)[0]
 
 
-def _audit(path: Path, *, execution_root: Path | None = None):
+def _audit(path: Path, *, execution_root: Path | None = None, _context=None):
     """One fresh read pass; its local facts are never cached across actions."""
+    from .rapid_operation_facts import OperationFacts
+    owned = _context is None
+    _context = OperationFacts() if owned else _context
+    raw = _context.watch_file(path)
+    key = ("formal-audit", str(path.absolute()), shared.sha(raw), str(execution_root))
+    if _context.has(key):
+        return _context.get(key)
     value = shared.load(path)
     if (not isinstance(value, dict) or set(value) != {"schema_version", "artifact_type", "runtime",
             "campaigns", "capture_spec", "lane_specs", "evidence_root", "lane_intents", "installation"}
@@ -57,6 +64,7 @@ def _audit(path: Path, *, execution_root: Path | None = None):
     shared._runtime_authority(value, execution_root=execution_root)
     spec = ordinary.load_capture_spec(_reference(value["capture_spec"]))
     root = shared.regular_dir(Path(value["evidence_root"]))
+    _context._references(value, root)
     capsule = None
     if value["installation"] is not None:
         from . import rapid_capture_control_installation as installation
@@ -76,7 +84,7 @@ def _audit(path: Path, *, execution_root: Path | None = None):
         intent_path = _reference(reference)
         if not intent_path.is_relative_to(root) or intent_path.name != "intent.json":
             raise ValueError("formal worker intent escapes its official evidence root")
-        fact = _lane(value, index)
+        fact = _lane(value, index, _facts=_context)
         _, _, _, intent, lineage, lane, sites = fact
         if capsule is not None and ordinary.admission._utc(intent["started_at"]) < ordinary.admission._utc(capsule["published_at"]):
             raise ValueError("formal intent predates prospective capture-control installation")
@@ -99,7 +107,7 @@ def _audit(path: Path, *, execution_root: Path | None = None):
                 or lane.sample_count != 4 * len(lane.workload_ids) or "scheduling" not in stored_plan):
                 raise ValueError("rolling parallel worker lacks its prospective four-visit scheduling plan")
             scheduling.require_schedule(stored_plan["scheduling"], worker_spec,
-                declared_at=stored_plan["declared_at"], started_at=intent["started_at"])
+                declared_at=stored_plan["declared_at"], started_at=intent["started_at"], _context=_context)
         elif (lane.study_version != 5 or lane.sample_count != 20 or len(sites) != 50
               or generation != "final-50"):
             raise ValueError("formal parallel worker is not an exact official 20-slot final-50 lane")
@@ -113,18 +121,23 @@ def _audit(path: Path, *, execution_root: Path | None = None):
         raise ValueError("formal parallel workers cannot duplicate a logical lane")
     if len({fact[5].study_version for fact in facts}) != 1:
         raise ValueError("formal parallel workers cannot mix study contracts")
-    return value, facts
+    if owned:
+        _context.check()
+    return _context.remember(key, (value, facts))
 
 
-def _context(value: dict[str, Any], index: int = 0):
+def _context(value: dict[str, Any], index: int = 0, *, _facts=None):
     spec = ordinary.load_capture_spec(_reference(value["lane_specs"][index]))
     root = shared.regular_dir(Path(value["evidence_root"]))
+    if _facts is not None:
+        _facts._references(value["lane_specs"][index], root)
+        _facts.bind_capture(spec)
     return spec, root
 
 
-def _lane(value: dict[str, Any], index: int):
+def _lane(value: dict[str, Any], index: int, *, _facts=None):
     _index(index)
-    spec, root = _context(value, index)
+    spec, root = _context(value, index, _facts=_facts)
     path = _reference(value["lane_intents"][index])
     raw = ordinary._load(ordinary._read(path))
     if isinstance(raw.get("payload"), dict) and "epoch_declaration" in raw["payload"]:
@@ -133,7 +146,7 @@ def _lane(value: dict[str, Any], index: int):
     else:
         if path.parent.parent != root / "lanes":
             raise ValueError("ordinary formal intent escapes its official lane namespace")
-        intent, lineage, lane, sites = ordinary._intent_and_lineage(spec, root, path)
+        intent, lineage, lane, sites = ordinary._intent_and_lineage(spec, root, path, _context=_facts)
     return spec, root, path, intent, lineage, lane, sites
 
 
@@ -147,8 +160,11 @@ def _effective_runtime(fact):
 
 def prepare_batch(spec_path: Path, evidence_root: Path, campaigns: list[str], output: Path,
                   predecessors: list[Path | None] | None = None, *, second_spec: Path | None = None,
-                  installation: Path | None = None) -> Path:
+                  installation: Path | None = None, _context=None) -> Path:
     """Claim two ordinary intents after one actual image check; launch no worker."""
+    from .rapid_operation_facts import OperationFacts
+    _context = OperationFacts() if _context is None else _context
+    _context.begin_action()
     spec = ordinary.load_capture_spec(spec_path)
     spec_paths = [spec_path, second_spec if second_spec is not None else spec_path]
     specs = [spec, ordinary.load_capture_spec(spec_paths[1])]
@@ -165,10 +181,14 @@ def prepare_batch(spec_path: Path, evidence_root: Path, campaigns: list[str], ou
     if len(predecessors) != 2 or output.exists() or output.is_symlink():
         raise ValueError("formal authority is create-only and needs two predecessor positions")
     installed = _installation_reference(installation, specs, root)
+    for item, worker_spec in zip(spec_paths, specs, strict=True):
+        _context.watch_file(item)
+        _context.bind_capture(worker_spec)
     with ordinary.capture_lock(spec.execution_root), _installation_context(installed):
-        checks = [ordinary.check_bound_image(spec, root)]
-        checks.append(checks[0] if specs[1] == spec else ordinary.check_bound_image(specs[1], root))
-        sites = [ordinary._validate_image_proof(check["proof"], worker_spec)
+        _context.check()
+        checks = [ordinary.check_bound_image(spec, root, _context=_context)]
+        checks.append(checks[0] if specs[1] == spec else ordinary.check_bound_image(specs[1], root, _context=_context))
+        sites = [ordinary._validate_image_proof(check["proof"], worker_spec, _context=_context)
                  for worker_spec, check in zip(specs, checks, strict=True)]
         lanes = [ordinary._lane(check["proof"], name) for check, name in zip(checks, campaigns, strict=True)]
         if len({lane.study_version for lane in lanes}) != 1 or len({lane.logical_name for lane in lanes}) != 2:
@@ -183,7 +203,7 @@ def prepare_batch(spec_path: Path, evidence_root: Path, campaigns: list[str], ou
                     or lane.visits_per_workload != 4 or len(lane.workload_ids) != len(rows)
                     or lane.sample_count != 4 * len(lane.workload_ids) or "scheduling" not in payload):
                     raise ValueError("rolling parallel preparation requires a prospective scheduling plan")
-                scheduling.require_schedule(payload["scheduling"], worker_spec, declared_at=payload["declared_at"])
+                scheduling.require_schedule(payload["scheduling"], worker_spec, declared_at=payload["declared_at"], _context=_context)
             elif (lane.study_version != 5 or check["proof"]["cohort_generation"] != "final-50"
                   or len(rows) != 50 or lane.sample_count != 20):
                 raise ValueError("formal parallel preparation requires two official final-50 lanes")
@@ -194,9 +214,10 @@ def prepare_batch(spec_path: Path, evidence_root: Path, campaigns: list[str], ou
         for worker_spec, check, lane, predecessor in zip(specs, checks, lanes, predecessors, strict=True):
             if (root / "lanes" / lane.campaign_name).exists() or (spec.execution_root / "results" / lane.campaign_name).exists():
                 raise FileExistsError("formal physical lane is already claimed")
-            lineages.append(ordinary._lineage_payload(worker_spec, lane, check, root, predecessor))
+            lineages.append(ordinary._lineage_payload(worker_spec, lane, check, root, predecessor, _context=_context))
+        _context.check()
         intents = [ordinary.prepare_lane_intent(worker_spec, root, name, check,
-                    predecessor_intent=predecessor, actuator=ACTUATOR, _prepared_lineage=lineage)
+                    predecessor_intent=predecessor, actuator=ACTUATOR, _prepared_lineage=lineage, _context=_context)
                    for worker_spec, check, name, predecessor, lineage
                    in zip(specs, checks, campaigns, predecessors, lineages, strict=True)]
         spec_references = [{"path": str(item.absolute()), "sha256": shared.sha(shared.read(item))} for item in spec_paths]
@@ -207,19 +228,20 @@ def prepare_batch(spec_path: Path, evidence_root: Path, campaigns: list[str], ou
             "capture_spec": spec_references[0], "lane_specs": spec_references,
             "evidence_root": str(root), "installation": installed,
             "lane_intents": [{"path": str(path), "sha256": shared.sha(shared.read(path))} for path in intents]})
-        authority(output)
+        authority(output, _context=_context)
+        _context.check()
     return output
 
 
-def worker_inputs(path: Path, index: int, *, _audited=None) -> dict[str, Any]:
-    value, facts = _audit(path) if _audited is None else _audited
+def worker_inputs(path: Path, index: int, *, _audited=None, _context=None) -> dict[str, Any]:
+    value, facts = _audit(path, _context=_context) if _audited is None else _audited
     _index(index)
     spec, root, intent_path, intent, _, lane, _ = facts[index]
     roots = {spec.data_root, root, *(Path(row["path"]).parent for row in value["lane_specs"])}
     readiness_roots = None
     if lane.study_version == 6:
         from . import rapid_rolling_capture as rolling
-        readiness_roots = rolling.readiness_roots(spec, lane.campaign_name)
+        readiness_roots = rolling.readiness_roots(spec, lane.campaign_name, _context=_context)
         roots.update(readiness_roots)
     if value["installation"] is not None:
         from . import rapid_capture_control_installation as installation
@@ -233,11 +255,11 @@ def worker_inputs(path: Path, index: int, *, _audited=None) -> dict[str, Any]:
             "result_namespace": str(spec.execution_root / "results" / lane.campaign_name),
             "dns_path": str(intent_path.parent / "dns.json"),
             "mount_roots": sorted(str(shared.regular_dir(item)) for item in roots),
-            "environment": worker_environment(value, index, fact=facts[index], _readiness_roots=readiness_roots)}
+            "environment": worker_environment(value, index, fact=facts[index], _readiness_roots=readiness_roots, _context=_context)}
 
 
-def worker_environment(value, index, *, fact=None, _readiness_roots=None):
-    fact = fact if fact is not None else _lane(value, index)
+def worker_environment(value, index, *, fact=None, _readiness_roots=None, _context=None):
+    fact = fact if fact is not None else _lane(value, index, _facts=_context)
     spec, root, intent_path, intent, _, lane, _ = fact
     environment = {}
     if lane.study_version == 6:
@@ -247,7 +269,7 @@ def worker_environment(value, index, *, fact=None, _readiness_roots=None):
         environment["QCSD_RAPID_ROLLING_LAUNCH_INPUT"] = json.dumps({"spec": spec.serializable(),
             "root": str(root), "intent": str(intent_path), "intent_sha256": shared.sha(shared.read(intent_path)),
             "readiness_mount_roots": [str(path) for path in (
-                rolling.readiness_roots(spec, lane.campaign_name)
+                rolling.readiness_roots(spec, lane.campaign_name, _context=_context)
                 if _readiness_roots is None else _readiness_roots)]}, sort_keys=True)
     if value["installation"] is not None:
         installation_path = str(_reference(value["installation"]))
@@ -445,20 +467,23 @@ def resolve_dns(path: Path, index: int) -> dict[str, Any]:
             "hosts": [[host, hosts[host]] for host in sorted(hosts)]}
 
 
-def image_preflight(path: Path, expected_sha: str) -> dict[str, Any]:
+def image_preflight(path: Path, expected_sha: str, *, _context=None) -> dict[str, Any]:
     from .runtime_provenance import validate_runtime_receipt
     from .orchestrator import load_campaign
     if shared.sha(shared.read(path)) != expected_sha:
         raise ValueError("formal authority changed before image preflight")
-    value, facts = _audit(path)
-    environments = [worker_environment(value, index, fact=facts[index]) for index in range(2)]
+    from .rapid_operation_facts import OperationFacts
+    _context = OperationFacts() if _context is None else _context
+    _context.begin_action()
+    value, facts = _audit(path, _context=_context)
+    environments = [worker_environment(value, index, fact=facts[index], _context=_context) for index in range(2)]
     spec = _effective_runtime(facts[0])
     proofs = []
     epoch_proofs = []
     runtime_proofs = []
     for index in range(2):
         worker_spec, root, intent_path, intent, block, lane, _ = facts[index]
-        with _worker_context(value, index, facts[index], _environment=environments[index]):
+        with _context.scope(), _worker_context(value, index, facts[index], _environment=environments[index]):
             if "runtime_epoch" in intent:
                 from . import rapid_runtime_epochs as epochs
                 from . import rapid_class_epochs as classes
@@ -483,11 +508,11 @@ def image_preflight(path: Path, expected_sha: str) -> dict[str, Any]:
             else:
                 proof = (proofs[0] if index == 1 and worker_spec == facts[0][0]
                          and "epoch_declaration" not in facts[0][3]
-                         else ordinary.executed_image_plan_check(worker_spec.serializable()))
+                         else ordinary.executed_image_plan_check(worker_spec.serializable(), _context=_context))
                 epoch_proof = None
                 from .rapid_runtime_epochs import _runtime_projection
                 runtime_proof = _runtime_projection(proof)
-        ordinary._validate_image_proof(proof, worker_spec)
+        ordinary._validate_image_proof(proof, worker_spec, _context=_context)
         proofs.append(proof)
         epoch_proofs.append(epoch_proof)
         runtime_proofs.append(runtime_proof)
@@ -506,7 +531,7 @@ def image_preflight(path: Path, expected_sha: str) -> dict[str, Any]:
     hosts = set()
     for index in range(2):
         worker_spec, _, intent_path, _, _, lane, sites = facts[index]
-        with _worker_context(value, index, facts[index], _environment=environments[index]), shared._execution_parameter_context(value):
+        with _context.scope(), _worker_context(value, index, facts[index], _environment=environments[index]), shared._execution_parameter_context(value):
             campaign = load_campaign(Path(value["campaigns"][index]["path"]))
         paths = [campaign.path, intent_path, worker_spec.qualification_spec, worker_spec.plan_receipt, worker_spec.cohort]
         for workload in campaign.workloads:
@@ -519,13 +544,14 @@ def image_preflight(path: Path, expected_sha: str) -> dict[str, Any]:
         files.update({str(item): shared.sha(shared.read(item)) for item in paths})
         campaigns.append({"name": lane.campaign_name, "mode": lane.mode,
                           "workloads": {name: shared.sha(raw) for name, raw in _workloads(spec, lane, sites).items()}})
+    _context.check()
     return {"authority_sha256": expected_sha, "runtime": runtime_proofs[0], "worker_plan_proofs": proofs,
             "worker_epoch_proofs": epoch_proofs, "worker_runtime_proofs": runtime_proofs, "python_runtime_receipt": installed,
             "input_files": files, "campaigns": campaigns, "approved_hostnames": sorted(hosts),
             "formal_accepted_trace_count": 0, "scientific_credit": False}
 
 
-def _preflight(value, output, expected_sha, *, facts=None):
+def _preflight(value, output, expected_sha, *, facts=None, _context=None):
     proof = shared.reopen_preflight(output, expected_sha)
     if (len(proof["worker_plan_proofs"]) != 2 or len(proof["worker_epoch_proofs"]) != 2
         or len(proof["worker_runtime_proofs"]) != 2
@@ -533,7 +559,7 @@ def _preflight(value, output, expected_sha, *, facts=None):
         raise ValueError("formal per-worker image plan proofs differ")
     for index in range(2):
         spec, root, _, intent, _, _, _ = facts[index] if facts is not None else _lane(value, index)
-        ordinary._validate_image_proof(proof["worker_plan_proofs"][index], spec)
+        ordinary._validate_image_proof(proof["worker_plan_proofs"][index], spec, _context=_context)
         if "runtime_epoch" in intent:
             from . import rapid_class_epochs as classes
             from . import rapid_runtime_epochs as epochs
@@ -575,18 +601,22 @@ def _dns_bindings(value, *, facts=None):
     return rows
 
 
-def initialize(path: Path, output: Path, expected_sha: str, available: list[int]) -> dict[str, Any]:
-    value, facts = _audit(path)
+def initialize(path: Path, output: Path, expected_sha: str, available: list[int], *, _context=None) -> dict[str, Any]:
+    from .rapid_operation_facts import OperationFacts
+    _context = OperationFacts() if _context is None else _context
+    _context.begin_action()
+    value, facts = _audit(path, _context=_context)
     if shared.sha(shared.read(path)) != expected_sha:
         raise ValueError("formal authority changed before initialization")
     output = shared.regular_dir(output)
-    preflight = _preflight(value, output, expected_sha, facts=facts)
+    preflight = _preflight(value, output, expected_sha, facts=facts, _context=_context)
     dns = _dns_bindings(value, facts=facts)
     cpu = shared.select_pairs(available)
     # Validate both destinations before allocating either canonical namespace.
     namespaces = [fact[0].execution_root / "results" / fact[5].campaign_name for fact in facts]
     if any(namespace.exists() or namespace.is_symlink() for namespace in namespaces):
         raise FileExistsError("formal worker namespace is already claimed")
+    _context.check()
     for index, namespace in enumerate(namespaces):
         lane = output / f"lane-{index+1}"
         lane.mkdir()
@@ -600,14 +630,14 @@ def initialize(path: Path, output: Path, expected_sha: str, available: list[int]
     return cpu
 
 
-def _reopen_intent(path, output, value, *, facts=None):
+def _reopen_intent(path, output, value, *, facts=None, _context=None):
     intent = shared.load(output / "batch-intent.json")
     if (intent["authority_sha256"] != shared.sha(shared.read(path)) or intent["authority"] != value
         or intent["authority_path"] != str(path.absolute())
         or intent["image_preflight_sha256"] != shared.sha(shared.read(output / "image-preflight.json"))
         or intent["dns_pins"] != _dns_bindings(value, facts=facts)):
         raise ValueError("formal batch input or independent DNS binding changed")
-    _preflight(value, output, intent["authority_sha256"], facts=facts)
+    _preflight(value, output, intent["authority_sha256"], facts=facts, _context=_context)
     return intent
 
 
@@ -640,7 +670,7 @@ def _operator_start(path, output, value):
     return start, command
 
 
-def _worker_inputs_actual(value, output, index, actual, *, fact=None, _environment=None):
+def _worker_inputs_actual(value, output, index, actual, *, fact=None, _environment=None, _context=None):
     """Reopen the inspected mount and DNS isolation, not just claimed argv."""
     spec, _, intent_path, _, _, lane, _ = fact if fact is not None else _lane(value, index)
     worker = actual["workers"][index]
@@ -669,7 +699,7 @@ def _worker_inputs_actual(value, output, index, actual, *, fact=None, _environme
             if key in environment:
                 raise ValueError("formal actual worker environment repeats a key")
             environment[key] = item
-    expected_environment = (worker_environment(value, index, fact=fact)
+    expected_environment = (worker_environment(value, index, fact=fact, _context=_context)
                             if _environment is None else _environment)
     if any(environment.get(key) != item for key, item in expected_environment.items()):
         raise ValueError("formal actual worker environment belongs to another official intent")
@@ -712,6 +742,11 @@ def _release_fence(path, value, facts, preflight):
 
     def references(item, root):
         if isinstance(item, dict):
+            if item.get("artifact_type") == "qcsd-chaff-qualification-implementation":
+                # These executable paths name the image namespace. The
+                # authenticated host source/client roles are fenced below;
+                # actual installed executables were checked in preflight.
+                return
             if set(item) == {"path", "sha256"}:
                 target = Path(item["path"])
                 target = target if target.is_absolute() else root / target
@@ -863,17 +898,20 @@ def _check_release_fence(fence, path, value, facts, preflight):
 
 def prepare_release(path: Path, output: Path) -> str:
     """Close expensive immutable checks before either worker/router is born."""
-    value, facts = _audit(path)
+    from .rapid_operation_facts import OperationFacts
+    context = OperationFacts()
+    value, facts = _audit(path, _context=context)
     if any(fact[5].study_version != 6 for fact in facts):
         raise ValueError("pre-birth release factoring is only the prospective rolling contract")
-    intent = _reopen_intent(path, output, value, facts=facts)
+    intent = _reopen_intent(path, output, value, facts=facts, _context=context)
     _operator_start(path, output, value)
     if any((output / name).exists() for name in ("actual-launch.json", "batch-launch.json", "release-prepared.json")):
         raise FileExistsError("pre-birth release preparation must precede actual worker launch")
-    inputs = [worker_inputs(path, index, _audited=(value, facts)) for index in range(2)]
+    inputs = [worker_inputs(path, index, _audited=(value, facts), _context=context) for index in range(2)]
     environments = [item["environment"] for item in inputs]
     preflight = shared.reopen_preflight(output, intent["authority_sha256"])
     fence = _release_fence(path, value, facts, preflight)
+    context.check()
     return shared.put(output / "release-prepared.json", {"schema_version": 1,
         "artifact_type": "qcsd-formal-pre-birth-release-v1", "prepared_at": shared.now(),
         "authority_sha256": shared.sha(shared.read(path)), "authority": value,
@@ -901,6 +939,8 @@ def prepared_worker_inputs(path: Path, output: Path, index: int, prepared_sha256
 
 
 def release(path: Path, output: Path, actual: dict[str, Any], *, prepared_sha256=None) -> None:
+    from .rapid_operation_facts import OperationFacts
+    context = OperationFacts()
     prepared_path = output / "release-prepared.json"
     environments = None
     if prepared_path.exists():
@@ -951,12 +991,13 @@ def release(path: Path, output: Path, actual: dict[str, Any], *, prepared_sha256
             raise ValueError("formal release digest lacks its actual pre-birth preparation")
         # Historical v5 and callers without the new pre-birth transport retain
         # their complete fresh validation; they acquire no cached authority.
-        value, facts = _audit(path)
-        intent = _reopen_intent(path, output, value, facts=facts)
+        value, facts = _audit(path, _context=context)
+        intent = _reopen_intent(path, output, value, facts=facts, _context=context)
     partitions = _partitions(value, intent, actual)
     start, command = _operator_start(path, output, value)
     argv_hashes = [_worker_inputs_actual(value, output, index, actual, fact=facts[index],
-        _environment=environments[index] if environments is not None else None) for index in range(2)]
+        _environment=environments[index] if environments is not None else None, _context=context) for index in range(2)]
+    context.check()
     shared.put(output / "batch-launch.json", {"schema_version": 1, "started_at": shared.now(),
         "authority_sha256": intent["authority_sha256"], "actual": actual,
         "host_start_sha256": shared.sha(shared.read(output / "host-start.json")),

@@ -617,7 +617,7 @@ def test_named_control_file_does_not_exempt_imports_or_constants(source_bytes, a
 
 def test_unlisted_validator_in_a_control_file_stays_protected(source_bytes):
     new = dict(source_bytes)
-    node = definition(new[LANES], "_validate_image_proof")
+    node = definition(new[LANES], "_validated_host_start")
     node.body.insert(0, body("return ()")[0])
     new[LANES] = replace_definition(new[LANES], node.name, node)
     with pytest.raises(ValueError):

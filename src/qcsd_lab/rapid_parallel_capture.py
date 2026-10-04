@@ -71,12 +71,12 @@ def regular_dir(path: Path) -> Path:
     return path
 
 
-def authority(path: Path, *, execution_root: Path | None = None) -> dict[str, Any]:
+def authority(path: Path, *, execution_root: Path | None = None, _context=None) -> dict[str, Any]:
     """Reopen immutable inputs without allocating outputs or using Docker."""
     value = load(path)
     if isinstance(value, dict) and value.get("artifact_type") == "qcsd-two-worker-formal-lane-authority":
         from .rapid_formal_parallel import authority as formal_authority
-        return formal_authority(path, execution_root=execution_root)
+        return formal_authority(path, execution_root=execution_root, _context=_context)
     if (not isinstance(value, dict)
         or set(value) != {"schema_version", "artifact_type", "runtime", "campaigns"}
         or type(value["schema_version"]) is not int or value["schema_version"] != 1
@@ -213,9 +213,13 @@ def lifecycle_inputs(path: Path, execution_root: Path, expected_sha: str) -> Non
 def formal_entry_inputs(path: Path) -> dict[str, Any]:
     """One fresh scientific pass for campaign selection and first-worker inputs."""
     from . import rapid_formal_parallel as formal
-    audited = formal._audit(path)
+    from .rapid_operation_facts import OperationFacts
+    context = OperationFacts()
+    audited = formal._audit(path, _context=context)
     host_source(audited[0])
-    return formal.worker_inputs(path, 0, _audited=audited)
+    result = formal.worker_inputs(path, 0, _audited=audited, _context=context)
+    context.check()
+    return result
 
 
 def _campaigns(value: dict[str, Any]):
@@ -294,10 +298,11 @@ def image_preflight(path: Path, expected_sha: str) -> dict[str, Any]:
     from .runtime_provenance import validate_runtime_receipt
     if sha(read(path)) != expected_sha:
         raise ValueError("parallel authority changed before image preflight")
-    value = authority(path)
+    value = load(path)
     if value["artifact_type"] != AUTHORITY_TYPE:
         from .rapid_formal_parallel import image_preflight as formal_preflight
         return formal_preflight(path, expected_sha)
+    value = authority(path)
     proof = executed_image_runtime_check(value["runtime"])
     installed = validate_runtime_receipt(required_schema_version=2)
     source_root = Path(value["runtime"]["runtime_source_root"])
@@ -362,10 +367,11 @@ def select_pairs(available: list[int]) -> dict[str, Any]:
 
 
 def initialize(path: Path, output: Path, expected_sha: str, available: list[int]) -> dict[str, Any]:
-    value = authority(path)
+    value = load(path)
     if value["artifact_type"] != AUTHORITY_TYPE:
         from .rapid_formal_parallel import initialize as formal_initialize
         return formal_initialize(path, output, expected_sha, available)
+    value = authority(path)
     if sha(read(path)) != expected_sha:
         raise ValueError("parallel authority changed before launch")
     output = regular_dir(output)
@@ -482,7 +488,13 @@ def gate(path: Path, expected_sha: str, index: int, authority_path: Path) -> Non
                 raise TimeoutError("parallel launch gate was not released within 120 seconds")
             time.sleep(.1)
         value = load(directory / "release.json")
-        inputs = authority(authority_path)
+        from .rapid_operation_facts import OperationFacts
+        context = OperationFacts()
+        if load(authority_path).get("artifact_type") != AUTHORITY_TYPE:
+            from . import rapid_formal_parallel as formal
+            inputs, facts = formal._audit(authority_path, _context=context)
+        else:
+            inputs, facts = authority(authority_path), None
         campaign = "/lab/" + str(Path(inputs["campaigns"][index]["path"]).relative_to(inputs["runtime"]["execution_root"]))
         if (sha(read(authority_path)) != expected_sha
             or value["authority_sha256"] != expected_sha or value["campaign"] != campaign):
@@ -500,7 +512,8 @@ def gate(path: Path, expected_sha: str, index: int, authority_path: Path) -> Non
         environment = {}
         if inputs["artifact_type"] != AUTHORITY_TYPE:
             from .rapid_formal_parallel import worker_environment
-            environment = worker_environment(inputs, index)
+            environment = worker_environment(inputs, index, fact=facts[index], _context=context)
+        context.check()
     os.environ.pop("QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_B64", None)
     os.environ["QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_FILE"] = str(directory / "host-partition.json")
     os.environ["QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_SHA256"] = value["host_partition_sha256"]
@@ -556,12 +569,24 @@ def _worker_identity(observed: dict[str, Any], expected: dict[str, Any]) -> None
         raise ValueError("parallel retirement changed a declared worker identity or CPU pair")
 
 
+def _require_result_birth(output: Path) -> None:
+    """Reject a pre-birth failure before reconstructing scientific authority."""
+    regular_dir(output)
+    for name in ("image-preflight.json", "batch-intent.json", "actual-launch.json", "batch-launch.json"):
+        try:
+            read(output / name)
+        except (OSError, ValueError) as error:
+            raise ValueError("parallel result verification lacks durable preflight or worker birth: " + name) from error
+
+
 def verify_results(path: Path, output: Path) -> dict[str, Any]:
     from .verification import verify_result
-    value = authority(path)
+    _require_result_birth(output)
+    value = load(path)
     if value["artifact_type"] != AUTHORITY_TYPE:
         from .rapid_formal_parallel import verify_results as formal_verify
         return formal_verify(path, output)
+    value = authority(path)
     verify_operator_closure(path, output, value)
     reopen_launch(path, output, value)
     with _execution_parameter_context(value):
@@ -672,9 +697,11 @@ def result_verification_command(path: Path, output: Path) -> list[str]:
 
 def verify_results_in_image(path: Path, output: Path) -> dict[str, Any]:
     """Record actual image verification; never manufacture an installed receipt on the host."""
-    value = authority(path)
+    _require_result_birth(output)
+    value = load(path)
     if value["artifact_type"] != AUTHORITY_TYPE:
         return verify_results(path, output)
+    value = authority(path)
     host_source(value)
     verify_operator_closure(path, output, value)
     reopen_launch(path, output, value)

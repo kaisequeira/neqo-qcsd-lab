@@ -111,7 +111,7 @@ def test_operation_local_readiness_roots_are_not_persistent(tmp_path, monkeypatc
     spec = SimpleNamespace(plan_receipt=plan, serializable=lambda: {"same": "spec"})
     fact = (spec, tmp_path, intent, {}, {}, SimpleNamespace(study_version=6, campaign_name="lane"), ())
     calls = []
-    monkeypatch.setattr(rolling, "readiness_roots", lambda *args: calls.append(1) or [tmp_path])
+    monkeypatch.setattr(rolling, "readiness_roots", lambda *args, **kwargs: calls.append(1) or [tmp_path])
     first = formal.worker_environment({"installation": None}, 0, fact=fact)
     local = formal.worker_environment({"installation": None}, 0, fact=fact, _readiness_roots=[tmp_path])
     second = formal.worker_environment({"installation": None}, 0, fact=fact)

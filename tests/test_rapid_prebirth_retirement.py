@@ -256,13 +256,26 @@ def write(path, value):
     return path
 
 
+def retained_launcher():
+    """A failed historical batch keeps its reviewed launcher after new edits."""
+    raw = (ROOT / "tests/fixtures/rapid_parallel_scheduling_v2.json.zlib.b85.txt").read_bytes()
+    assert lanes._sha(raw) == "86fdebfa267f3b5a861992bae3d4776da18148b7ac04fb1592dd392a9fcb3aaf"
+    value = json.loads(raw)
+    assert value["source_commit"] == "65794a16dc59615cfa46b5fbb4e2d9a13f97640a"
+    item = value["files"]["qcsd-lab"]
+    source = zlib.decompress(base64.b85decode(item["encoded_source"]))
+    assert len(source) == item["uncompressed_bytes"]
+    assert lanes._sha(source) == item["sha256"] == "42489d4b66b004787c6a827084f311d6916c21f810ffd9373b2627df76a36d39"
+    return source
+
+
 @pytest.fixture
 def closed_batch(tmp_path, monkeypatch):
     data = tmp_path / "data"
     root, execution, source = data / "evidence", data / "execution", data / "source"
     for path in (root, execution / "results", source):
         path.mkdir(parents=True)
-    source_raw = (ROOT / "qcsd-lab").read_bytes()
+    source_raw = retained_launcher()
     host = write(execution / "qcsd-lab", source_raw)
     base = write(source / "qcsd-lab", source_raw)
     operator_source = write(source / "tools/rapid_parallel_capture.py", (ROOT / "tools/rapid_parallel_capture.py").read_bytes())
@@ -534,7 +547,7 @@ def test_published_source_contracts_keep_exact_original_interpretation(source_by
             validator.source_changes(old, new, client_sha256="a" * 64, contract=contract)
 
 
-def test_v4_authorizes_only_actual_retirement_controls_and_preserves_science(source_bytes):
+def test_current_contract_authorizes_actual_retirement_controls_and_preserves_science(source_bytes):
     paths = {"src/qcsd_lab/rapid_lane_evidence.py", "tools/rapid_rolling_capture.py", schedule.MODULE_FILE}
     old = dict(source_bytes)
     old[schedule.MODULE_FILE] = HISTORICAL_V3
@@ -549,7 +562,7 @@ def test_v4_authorizes_only_actual_retirement_controls_and_preserves_science(sou
     new = {**old, **{path: (ROOT / path).read_bytes() for path in paths}}
     actual = schedule.source_changes(old, new, client_sha256="a" * 64)
     assert set(actual["changed_sources"]) == paths
-    assert actual["changed_sources"][schedule.MODULE_FILE]["units"] == ["scheduling-v4-observed-prebirth-retirement-authority"]
+    assert actual["changed_sources"][schedule.MODULE_FILE]["units"] == ["scheduling-v5-operation-local-verification-facts-authority"]
     unchanged = schedule.source_changes(old, old, client_sha256="a" * 64)
     for key in ("dependency_groups", "acquisition_source_groups", "qualification_dependencies"):
         assert actual[key] == unchanged[key]

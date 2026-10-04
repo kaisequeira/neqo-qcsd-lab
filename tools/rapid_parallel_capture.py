@@ -17,7 +17,7 @@ from qcsd_lab import rapid_parallel_capture as parallel
 from qcsd_lab.rapid_lane_evidence import HOST_GATE_SCRIPT, _process_identity
 
 
-def _host_authority(path: Path) -> dict:
+def _host_authority(path: Path, *, _context=None) -> dict:
     """Reject another checkout before reopening the scientific authority."""
     value = parallel.load(path)
     if (not isinstance(value, dict) or type(value.get("schema_version")) is not int
@@ -26,16 +26,18 @@ def _host_authority(path: Path) -> dict:
         raise ValueError("parallel operator authority type or schema differs")
     parallel._runtime_authority(value)
     parallel.host_source(value)
-    value = parallel.authority(path)
+    value = parallel.authority(path, _context=_context)
     # Full reopening may be lengthy. Preserve the original boundary check.
     parallel.host_source(value)
     return value
 
 
 def launch(authority_path: Path, output: Path) -> dict:
+    from qcsd_lab.rapid_operation_facts import OperationFacts
+    context = OperationFacts()
     parallel.read(authority_path)
     authority_path = authority_path.resolve(strict=True)
-    value = _host_authority(authority_path)
+    value = _host_authority(authority_path, _context=context)
     authority_digest = parallel.sha(parallel.read(authority_path))
     output = output.absolute()
     execution = Path(value["runtime"]["execution_root"])
@@ -43,6 +45,7 @@ def launch(authority_path: Path, output: Path) -> dict:
         or output.exists() or output.is_symlink()):
         raise ValueError("parallel output must be a fresh child beneath the execution results directory")
     parallel.regular_dir(output.parent)
+    context.check()
     output.mkdir(mode=0o700)
     command = [value["runtime"]["host_launcher"], parallel.launch_action(value), str(authority_path), str(output)]
     parallel.put(output / "operator-intent.json", {"schema_version": 1, "command": command,
@@ -55,8 +58,9 @@ def launch(authority_path: Path, output: Path) -> dict:
         QCSD_PARALLEL_AUTHORITY_SHA256=authority_digest,
         QCSD_RAPID_DNS_RECEIPT_PATH=str(output / "dns-pins.json"), PYTHONDONTWRITEBYTECODE="1")
     if value["artifact_type"] != parallel.AUTHORITY_TYPE:
-        from qcsd_lab.rapid_formal_parallel import worker_environment
-        env.update(worker_environment(value, 0))
+        from qcsd_lab.rapid_formal_parallel import _audit, worker_environment
+        _, facts = _audit(authority_path, _context=context)
+        env.update(worker_environment(value, 0, fact=facts[0], _context=context))
         # Archived execution roots have no venv and the launcher seals PATH.
         # Carry the operator's actual project interpreter only for formal work.
         env["QCSD_PARALLEL_HOST_PYTHON"] = sys.executable
@@ -72,6 +76,7 @@ def launch(authority_path: Path, output: Path) -> dict:
             read_fd = -1
             if parallel.sha(parallel.read(authority_path)) != authority_digest:
                 raise ValueError("parallel authority changed before the actual host gate release")
+            context.check()
             parallel.put(output / "host-start.json", {"schema_version": 1, "command": command,
                 "authority_sha256": authority_digest, "started_at": started,
                 "host": _process_identity(child.pid), "operator": _process_identity(os.getpid()),
@@ -133,6 +138,7 @@ def main(argv=None):
         elif args.action == "retire-session":
             result = parallel.retire_session(args.authority.absolute(), args.output.absolute())
         else:
+            parallel._require_result_birth(args.output)
             _host_authority(args.authority)
             result = parallel.verify_results_in_image(args.authority, args.output)
     except (OSError, ValueError, TypeError, KeyError, RuntimeError, subprocess.SubprocessError) as error:

@@ -245,7 +245,7 @@ def executed_image_runtime_check(value: Mapping[str, str]) -> dict[str, Any]:
     }
 
 
-def executed_image_plan_check(value: Mapping[str, str]) -> dict[str, Any]:
+def executed_image_plan_check(value: Mapping[str, str], *, _context=None) -> dict[str, Any]:
     """Run inside the bound collection image; no caller can supply a pass flag."""
     spec = CaptureSpec(**{key: Path(item) if key in PATH_KEYS else item for key, item in value.items()})
     _check_spec(spec)
@@ -253,7 +253,12 @@ def executed_image_plan_check(value: Mapping[str, str]) -> dict[str, Any]:
     stored_plan = admission._unpack(_read(spec.plan_receipt), PLAN_TYPE)
     if stored_plan.get("study_version") == 6:
         from . import rapid_rolling_capture as rolling
-        return rolling.image_plan_check(spec, runtime)
+        from .rapid_operation_facts import OperationFacts
+        context = OperationFacts() if _context is None else _context
+        with context.scope():
+            result = rolling.image_plan_check(spec, runtime, _context=context)
+        context.check()
+        return result
     module = _plan_module(spec.module_root)
     result = module.run(_plan_args(spec))
     if (result.get("valid") is not True or type(result.get("formal_accepted_trace_count")) is not int
@@ -286,7 +291,7 @@ IMAGE_CHECK_SCRIPT = (
 
 
 def image_check_command(spec: CaptureSpec, *, capture_control_installation: Path | None = None,
-                        inherit_environment: bool = True, campaign_name: str | None = None) -> list[str]:
+                        inherit_environment: bool = True, campaign_name: str | None = None, _context=None) -> list[str]:
     _check_spec(spec)
     roots = {spec.data_root, spec.runtime_source_root, spec.module_root, spec.execution_root,
              spec.source_manifest.parent, spec.client_binary.parent, spec.base_launcher.parent}
@@ -294,13 +299,13 @@ def image_check_command(spec: CaptureSpec, *, capture_control_installation: Path
         from . import rapid_rolling_capture as rolling
         roots.update(rolling.enrollment_roots(spec))
         if campaign_name is not None:
-            roots.update(rolling.readiness_roots(spec, campaign_name))
+            roots.update(rolling.readiness_roots(spec, campaign_name, _context=_context))
     extra_environment = {}
     plan_payload = admission._unpack(_read(spec.plan_receipt), PLAN_TYPE)
     if "scheduling" in plan_payload:
         from . import rapid_rolling_schedule as schedule
-        schedule.require_schedule(plan_payload["scheduling"], spec, declared_at=plan_payload["declared_at"])
-        roots.update(schedule.mount_roots(plan_payload["scheduling"]))
+        schedule.require_schedule(plan_payload["scheduling"], spec, declared_at=plan_payload["declared_at"], _context=_context)
+        roots.update(schedule.mount_roots(plan_payload["scheduling"], _context=_context))
         extra_environment["QCSD_RAPID_COLLECTION_COMPATIBILITY"] = plan_payload["scheduling"]["path"]
     reference = (str(capture_control_installation) if capture_control_installation is not None
                  else os.environ.get("QCSD_RAPID_COLLECTION_COMPATIBILITY") if inherit_environment else None)
@@ -373,8 +378,13 @@ def _host_intent(raw: bytes) -> dict[str, Any]:
     return admission._unpack(raw, kind)
 
 
-def _validate_image_proof(proof: Any, spec: CaptureSpec, *, equivalent_plan: bool = False) -> tuple[plan.Site, ...]:
+def _validate_image_proof(proof: Any, spec: CaptureSpec, *, equivalent_plan: bool = False, _context=None) -> tuple[plan.Site, ...]:
     _check_spec(spec)
+    key = ("image-proof", _sha(_json(proof)), _sha(_json(spec.serializable())), equivalent_plan)
+    if _context is not None:
+        _context.bind_capture(spec)
+        if _context.has(key):
+            return _context.get(key)
     fields = {"schema_version", "artifact_type", "collection_image_digest", "runtime_source", "source_manifest_sha256",
               "client_sha256", "base_launcher_sha256", "host_launcher_sha256", "qualification_implementation",
               "overlay_source_hashes", "traffic_hashes", "plan_receipt_sha256", "plan_payload", "bindings",
@@ -420,19 +430,21 @@ def _validate_image_proof(proof: Any, spec: CaptureSpec, *, equivalent_plan: boo
     sites = tuple(plan.Site(**row) for row in proof["sites"])
     if proof["cohort_generation"] == "rolling-50":
         from . import rapid_rolling_capture as rolling
-        actual_sites, _ = rolling.verify_capture_plan(spec)
+        actual_sites, _ = rolling.verify_capture_plan(spec, _context=_context)
         if sites != actual_sites:
             raise ValueError("rolling image proof differs from its immutable enrolled batch")
         plan._check_sites(sites, final=True, study_version=6)
     else:
         plan._check_sites(sites, final=proof["cohort_generation"] == "final-50")
     plan._check_workload_files(sites, spec.workload_root)
-    return sites
+    return _context.remember(key, sites) if _context is not None else sites
 
 
-def check_bound_image(spec: CaptureSpec, root: Path, *, campaign_name: str | None = None) -> dict[str, Any]:
+def check_bound_image(spec: CaptureSpec, root: Path, *, campaign_name: str | None = None, _context=None) -> dict[str, Any]:
     """Execute and retain the actual isolated image validator before actuation."""
-    command = image_check_command(spec, campaign_name=campaign_name)
+    command = image_check_command(spec, campaign_name=campaign_name, _context=_context)
+    if _context is not None:
+        _context.check()
     started = _now()
     result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, timeout=300)
     record = {"command": command, "returncode": result.returncode, "started_at": started, "completed_at": _now(),
@@ -445,7 +457,7 @@ def check_bound_image(spec: CaptureSpec, root: Path, *, campaign_name: str | Non
     if result.returncode != 0:
         raise ValueError("bound collection image plan check failed; raw execution output retained")
     proof = _load(result.stdout.encode())
-    _validate_image_proof(proof, spec)
+    _validate_image_proof(proof, spec, _context=_context)
     return {"proof": proof, "execution": record}
 
 
@@ -993,17 +1005,17 @@ def _verified_retirement(raw: bytes, root: Path, intent_raw: bytes, campaign_nam
 
 
 def _lineage_payload(spec: CaptureSpec, lane: plan.Lane, checked: Mapping[str, Any], root: Path,
-                     predecessor_receipt: Path | None) -> dict[str, Any]:
+                     predecessor_receipt: Path | None, *, _context=None) -> dict[str, Any]:
     proof = checked["proof"]
     rolling_readiness = {}
     scheduling_capsule = None
     if lane.study_version == 6:
         from . import rapid_rolling_capture as rolling
-        rolling_readiness = {"rolling_readiness": rolling.require_mode_readiness(spec, lane, before=checked["execution"]["started_at"])}
+        rolling_readiness = {"rolling_readiness": rolling.require_mode_readiness(spec, lane, before=checked["execution"]["started_at"], _context=_context)}
         payload = _payload(spec.plan_receipt, PLAN_TYPE)
         if "scheduling" in payload:
             from .rapid_rolling_schedule import require_schedule
-            scheduling_capsule = require_schedule(payload["scheduling"], spec, declared_at=payload["declared_at"], started_at=checked["execution"]["started_at"])
+            scheduling_capsule = require_schedule(payload["scheduling"], spec, declared_at=payload["declared_at"], started_at=checked["execution"]["started_at"], _context=_context)
             rolling_readiness["rolling_scheduling"] = payload["scheduling"]
     installation_reference = checked["execution"].get("capture_control_installation")
     if installation_reference is not None:
@@ -1095,7 +1107,7 @@ def _lineage_payload(spec: CaptureSpec, lane: plan.Lane, checked: Mapping[str, A
 
 def prepare_lane_intent(spec: CaptureSpec, evidence_root: Path, campaign_name: str,
                         checked: Mapping[str, Any], *, predecessor_intent: Path | None = None,
-                        actuator: str = "run", _prepared_lineage: Mapping[str, Any] | None = None) -> Path:
+                        actuator: str = "run", _prepared_lineage: Mapping[str, Any] | None = None, _context=None) -> Path:
     """Claim the ordinary lane identity after the actual immutable-image check.
 
     Both actuators use the same plan, lineage and failed-only predecessor rules.
@@ -1108,26 +1120,28 @@ def prepare_lane_intent(spec: CaptureSpec, evidence_root: Path, campaign_name: s
     directory = root / "lanes" / campaign_name
     if directory.exists() or directory.is_symlink():
         raise FileExistsError("rapid physical lane destination is already claimed")
-    sites = _validate_image_proof(checked["proof"], spec)
+    sites = _validate_image_proof(checked["proof"], spec, _context=_context)
     lane = _lane(checked["proof"], campaign_name)
     if lane.study_version == 6:
         if actuator != "run":
             from .rapid_rolling_schedule import require_schedule
             payload = _payload(spec.plan_receipt, PLAN_TYPE)
-            require_schedule(payload.get("scheduling"), spec, declared_at=payload["declared_at"], started_at=checked["execution"]["started_at"])
+            require_schedule(payload.get("scheduling"), spec, declared_at=payload["declared_at"], started_at=checked["execution"]["started_at"], _context=_context)
     campaign = spec.campaign_dir / f"{campaign_name}.yml"
     if _read(campaign) != plan.render_lane_campaign(lane, sites):
         raise ValueError("launch campaign differs from the independently verified grid")
     namespace = spec.execution_root / "results" / lane.campaign_name
     if namespace.exists() or namespace.is_symlink():
         raise FileExistsError("physical campaign namespace already contains an unbound or prior attempt")
-    lineage = (_lineage_payload(spec, lane, checked, root, predecessor_intent)
+    lineage = (_lineage_payload(spec, lane, checked, root, predecessor_intent, _context=_context)
                if _prepared_lineage is None else dict(_prepared_lineage))
     if (_prepared_lineage is not None and (actuator != "parallel-formal-worker"
         or lineage.get("image_check") != checked
         or lineage.get("predecessor_intent") != (
             _put_object(root, _read(predecessor_intent)) if predecessor_intent else None))):
         raise ValueError("parallel prepared lineage differs from its checked image or immediate predecessor")
+    if _context is not None:
+        _context.check()
     directory.mkdir(parents=True)
     lineage_path = directory / "lineage.json"
     _create(root, lineage_path, LINEAGE_TYPE, lineage)
@@ -1184,7 +1198,7 @@ def launch_lane(spec: CaptureSpec, evidence_root: Path, campaign_name: str, *, p
         return completed
 
 
-def _intent_and_lineage(spec: CaptureSpec, root: Path, intent_path: Path) -> tuple[dict[str, Any], dict[str, Any], plan.Lane, tuple[plan.Site, ...]]:
+def _intent_and_lineage(spec: CaptureSpec, root: Path, intent_path: Path, *, _context=None) -> tuple[dict[str, Any], dict[str, Any], plan.Lane, tuple[plan.Site, ...]]:
     intent = _payload(intent_path, INTENT_TYPE)
     lineage = _payload(admission._child(root, intent["lineage"]), LINEAGE_TYPE)
     checked = lineage["image_check"]
@@ -1207,7 +1221,7 @@ def _intent_and_lineage(spec: CaptureSpec, root: Path, intent_path: Path) -> tup
         or checked["execution"]["validator_script_sha256"] != _sha(IMAGE_CHECK_SCRIPT.encode())
         or _json(_load(_object(root, checked["execution"]["stdout"]))) != _json(checked["proof"])):
         raise ValueError("retained actual image-check execution does not prove its facts")
-    sites = _validate_image_proof(checked["proof"], spec, equivalent_plan=True)
+    sites = _validate_image_proof(checked["proof"], spec, equivalent_plan=True, _context=_context)
     lane = _lane(checked["proof"], intent["campaign_name"])
     scheduling_capsule = None
     if lane.study_version == 6:
@@ -1218,9 +1232,9 @@ def _intent_and_lineage(spec: CaptureSpec, root: Path, intent_path: Path) -> tup
             raise ValueError("rolling lane changed its sealed scheduling authority")
         if reference is not None:
             from .rapid_rolling_schedule import require_schedule
-            scheduling_capsule = require_schedule(reference, spec, declared_at=payload["declared_at"], started_at=checked["execution"]["started_at"])
+            scheduling_capsule = require_schedule(reference, spec, declared_at=payload["declared_at"], started_at=checked["execution"]["started_at"], _context=_context)
         if (intent.get("actuator") != "run" and (intent.get("actuator") != "parallel-formal-worker" or reference is None)
-            or lineage.get("rolling_readiness") != rolling.require_mode_readiness(spec, lane, before=checked["execution"]["started_at"])):
+            or lineage.get("rolling_readiness") != rolling.require_mode_readiness(spec, lane, before=checked["execution"]["started_at"], _context=_context)):
             raise ValueError("rolling lane changed its sealed setting-specific readiness")
     elif "rolling_readiness" in lineage or "rolling_scheduling" in lineage:
         raise ValueError("historical lane cannot claim rolling readiness authority")

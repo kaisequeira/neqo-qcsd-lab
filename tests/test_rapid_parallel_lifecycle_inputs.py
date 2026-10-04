@@ -155,10 +155,16 @@ def test_changed_runtime_or_sealed_reference_is_rejected_before_lifecycle(contex
 
 def test_formal_entry_keeps_one_actual_audit_for_selection_and_worker_inputs(monkeypatch):
     calls, audited = [], ({"runtime": "fixture"}, ["first", "second"])
-    monkeypatch.setattr(formal, "_audit", lambda path: calls.append("audit") or audited)
+    contexts = []
+    def audit(path, *, _context=None):
+        contexts.append(_context)
+        calls.append("audit")
+        return audited
+    monkeypatch.setattr(formal, "_audit", audit)
     monkeypatch.setattr(parallel, "host_source", lambda value: calls.append("source"))
-    def inputs(path, index, *, _audited=None):
+    def inputs(path, index, *, _audited=None, _context=None):
         assert _audited is audited and index == 0
+        assert _context is contexts[0] and _context is not None
         calls.append("worker")
         return {"campaign_path": "same original full-graph campaign"}
     monkeypatch.setattr(formal, "worker_inputs", inputs)
@@ -167,7 +173,7 @@ def test_formal_entry_keeps_one_actual_audit_for_selection_and_worker_inputs(mon
 
 
 def test_scientific_failure_still_aborts_formal_entry(monkeypatch):
-    def reject(path):
+    def reject(path, *, _context=None):
         raise ValueError("original full scientific validator rejected the lane")
     monkeypatch.setattr(formal, "_audit", reject)
     with pytest.raises(ValueError, match="full scientific validator"):
