@@ -14,6 +14,7 @@ TAMARAW_CREDIT_SEMANTICS = "explicit-physical-ownership-with-pending-retry-v1"
 FRONT_FIELD = "front_capture_policy"
 FRONT_POLICY = "rapid-v5-front-bounded-outgoing-congestion-omission-1pct-v1"
 FRONT_PADDING_POLICY = "rapid-v5-front-bounded-outgoing-padding-omission-1pct-v2"
+FRONT_WINDOW_POLICY = "rapid-v5-front-bounded-outgoing-padding-omission-10pct-window-10000us-v3"
 TERMINAL_PRIMARY_FIELD = "terminal_primary_partial_cell_policy"
 TERMINAL_PRIMARY_POLICY = "rapid-v5-one-owned-terminal-primary-partial-incoming-cell-v1"
 TERMINAL_PRIMARY_PROOF_FIELD = "terminal_primary_partial_cell"
@@ -337,7 +338,7 @@ def validate_terminal_primary_partial_evidence(
 
 
 def validate_front_preparation_policy(preparation: Mapping[str, Any]) -> str | None:
-    """Bind a prospective one-percent outgoing padding-omission allowance."""
+    """Bind an explicitly versioned outgoing padding-omission allowance."""
     from .application_response_policy import (
         APPROVED_ORIGINS_CHAFF_POLICY, COMPLETED_TERMINAL_HTTP_ERRORS_POLICY,
         VARIABLE_PRIMARY_DOCUMENT_BODY_POLICY,
@@ -345,7 +346,7 @@ def validate_front_preparation_policy(preparation: Mapping[str, Any]) -> str | N
     if FRONT_FIELD not in preparation:
         return None
     value = preparation[FRONT_FIELD]
-    if (type(value) is not str or value not in {FRONT_POLICY, FRONT_PADDING_POLICY}
+    if (type(value) is not str or value not in {FRONT_POLICY, FRONT_PADDING_POLICY, FRONT_WINDOW_POLICY}
         or preparation.get("primary_document_identity_policy") != VARIABLE_PRIMARY_DOCUMENT_BODY_POLICY
         or preparation.get("application_response_policy") != COMPLETED_TERMINAL_HTTP_ERRORS_POLICY
         or preparation.get("qualified_chaff_origin_policy") != APPROVED_ORIGINS_CHAFF_POLICY):
@@ -362,11 +363,15 @@ def validate_front_capture_marker(marker: Any) -> Mapping[str, Any]:
         "packet_size": 1200, "n_client_packets": 900, "n_server_packets": 1200,
         "paper_equivalent": False, "scientific_credit": False,
     }
-    if isinstance(marker, Mapping) and marker.get("policy") == FRONT_PADDING_POLICY:
+    if isinstance(marker, Mapping) and marker.get("policy") in (FRONT_PADDING_POLICY, FRONT_WINDOW_POLICY):
         expected.update(schema_version=2, policy=FRONT_PADDING_POLICY)
         del expected["outgoing_omission_reason"]
         expected["outgoing_omission_reasons"] = ["CongestionLimited", "DeadlineExpired"]
         expected["require_pure_padding"] = True
+        if marker["policy"] == FRONT_WINDOW_POLICY:
+            expected.update(schema_version=3, policy=FRONT_WINDOW_POLICY,
+                outgoing_omission_ratio_denominator=10, outgoing_release_window_us=10000,
+                historical_outgoing_release_window_us=5000)
     if (not isinstance(marker, Mapping) or set(marker) != set(expected)
         or any(type(marker[key]) is not type(value) or marker[key] != value
                for key, value in expected.items())):

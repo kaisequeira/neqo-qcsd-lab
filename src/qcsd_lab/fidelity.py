@@ -1903,7 +1903,7 @@ def _terminal_primary_partial_allowance(defense: str, schedule: Mapping[str, Any
 
 def _front_capture_metrics(schedule_path: Path, rows: list[dict[str, str]]) -> dict[str, Any]:
     """Keep raw misses; prove the exact prospective outgoing omission policy."""
-    from .capture_acceptance_policy import FRONT_FIELD, FRONT_PADDING_POLICY, validate_front_capture_run
+    from .capture_acceptance_policy import FRONT_FIELD, FRONT_PADDING_POLICY, FRONT_WINDOW_POLICY, validate_front_capture_run
     try:
         run = load_json(schedule_path.with_name("run.json"))
     except (OSError, ValueError):
@@ -1911,7 +1911,8 @@ def _front_capture_metrics(schedule_path: Path, rows: list[dict[str, str]]) -> d
     if not isinstance(run, Mapping) or FRONT_FIELD not in run:
         return {}
     marker = validate_front_capture_run(run)
-    padding_policy = marker["policy"] == FRONT_PADDING_POLICY
+    padding_policy = marker["policy"] in {FRONT_PADDING_POLICY, FRONT_WINDOW_POLICY}
+    outgoing_window_us = marker.get("outgoing_release_window_us", 5000)
     allowed_reasons = {"CongestionLimited", "DeadlineExpired"} if padding_policy else {"CongestionLimited"}
     start_ns = run.get("defense_start_monotonic_ns")
     if type(start_ns) is not int or start_ns < 0:
@@ -1966,8 +1967,8 @@ def _front_capture_metrics(schedule_path: Path, rows: list[dict[str, str]]) -> d
                 or type(release) is not int or type(deadline) is not int
                 or not 0 <= release < deadline <= 2**64 - 1
                 # Native rounds the release upward and deadline downward.
-                # This is its unchanged 5000-us half-open padding window.
-                or deadline - release not in {4999, 5000}):
+                # V1/V2 retain 5000 us; the V3 prepared source declares 10000.
+                or deadline - release not in {outgoing_window_us - 1, outgoing_window_us}):
                 raise ValueError("FRONT omission lacks a unique applied pure-padding opportunity")
             action_us = _csv_uint(event, "monotonic_us")
             if action_us < start_ns // 1000:
@@ -2040,7 +2041,8 @@ def _front_capture_metrics(schedule_path: Path, rows: list[dict[str, str]]) -> d
             "front_outgoing_scheduled_events": len(outgoing),
             "front_outgoing_congestion_omissions": sum(row["miss_reason"] == "CongestionLimited" for row in omissions.values()),
             "front_outgoing_shaped_handoff_events": len(matched),
-            "front_outgoing_omissions_within_bound": len(omissions) * 100 <= len(outgoing),
+            "front_outgoing_omissions_within_bound": len(omissions) * marker["outgoing_omission_ratio_denominator"]
+                <= len(outgoing) * marker["outgoing_omission_ratio_numerator"],
             "front_outgoing_congestion_omission_events_sha256": sha256_file(events_path),
             "front_outgoing_release_packets_sha256": sha256_file(packets_path)}
     if padding_policy:
@@ -2052,14 +2054,14 @@ def _front_capture_metrics(schedule_path: Path, rows: list[dict[str, str]]) -> d
 
 def _front_capture_activation_valid(diagnostics: Mapping[str, Any], schedule: Mapping[str, Any],
                                     resolved: Mapping[str, Any] | None) -> bool:
-    from .capture_acceptance_policy import FRONT_PADDING_POLICY, validate_front_capture_marker
+    from .capture_acceptance_policy import FRONT_PADDING_POLICY, FRONT_WINDOW_POLICY, validate_front_capture_marker
     try:
         marker = validate_front_capture_marker(schedule.get("front_capture_policy"))
     except ValueError:
         return False
     count = schedule.get("scheduled_events")
     outgoing, incoming = schedule.get("scheduled_outgoing_events"), schedule.get("scheduled_incoming_events")
-    padding_policy = marker["policy"] == FRONT_PADDING_POLICY
+    padding_policy = marker["policy"] in {FRONT_PADDING_POLICY, FRONT_WINDOW_POLICY}
     missed = schedule.get("front_outgoing_padding_omissions" if padding_policy else "front_outgoing_congestion_omissions")
     integer_fields = ("scheduled_events", "scheduled_outgoing_events", "scheduled_incoming_events",
         "satisfied_events", "missed_events", "outgoing_size_mismatch_events", "outgoing_size_absolute_error_bytes",
@@ -2078,7 +2080,8 @@ def _front_capture_activation_valid(diagnostics: Mapping[str, Any], schedule: Ma
         reasons = {key: value for key, value in (("CongestionLimited", congestion), ("DeadlineExpired", expired)) if value}
     if (any(type(value) is not int or value < 0 for value in (count, outgoing, incoming, missed))
         or not 1 <= outgoing <= 900 or not 1 <= incoming <= 1200 or count != incoming + outgoing
-        or missed * 100 > outgoing or schedule.get("missed_events") != missed
+        or missed * marker["outgoing_omission_ratio_denominator"] > outgoing * marker["outgoing_omission_ratio_numerator"]
+        or schedule.get("missed_events") != missed
         or schedule.get("satisfied_events") != count - missed
         or schedule.get("terminal_satisfactions") != ({"satisfied": count - missed, "missed": missed} if missed else {"satisfied": count})
         or schedule.get("front_outgoing_scheduled_events") != outgoing

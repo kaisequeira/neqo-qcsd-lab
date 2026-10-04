@@ -51,7 +51,8 @@ def run(args):
                 "enrolled_sites": len(classes), "scientific_credit": False}
     if args.command == "front-amendment":
         from qcsd_lab.rapid_front_capture_amendment import publish_amendment
-        path = publish_amendment(args.enrollment, rolling.load_runtime(args.runtime_spec), args.output)
+        path = publish_amendment(args.enrollment, rolling.load_runtime(args.runtime_spec), args.output,
+                                 capture_policy=args.capture_policy)
         return {"front_capture_amendment": rolling._ref(path), "scientific_credit": False}
     if args.command == "plan":
         readiness = lanes._load(lanes._read(args.readiness)) if args.readiness else {}
@@ -132,9 +133,11 @@ def _parser():
             item.add_argument("--output", type=Path, required=True)
             item.add_argument("--spec-output", type=Path, required=True)
         elif name == "front-amendment":
+            from qcsd_lab.rapid_front_capture_amendment import CAPTURE_POLICY, WINDOW_CAPTURE_POLICY
             item.add_argument("--enrollment", type=Path, required=True)
             item.add_argument("--runtime-spec", type=Path, required=True)
             item.add_argument("--output", type=Path, required=True)
+            item.add_argument("--capture-policy", choices=(CAPTURE_POLICY, WINDOW_CAPTURE_POLICY), default=CAPTURE_POLICY)
         elif name in {"publish-manifest", "verify-manifest"}:
             item.add_argument("--lane-closures" if name == "publish-manifest" else "--manifest", type=Path, required=True)
             if name == "publish-manifest":

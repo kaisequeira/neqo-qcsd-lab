@@ -218,7 +218,8 @@ def test_source_graph_parameters_and_mode_stay_bound(tmp_path):
         policy.validate_front_source_binding({"preparation": preparation()}, current)
 
 
-def test_production_collection_group_and_deep_reopen_exact_v2_source(tmp_path):
+@pytest.mark.parametrize("version", [2, 3])
+def test_production_collection_group_and_deep_reopen_exact_source(tmp_path, version):
     from qcsd_lab import capture_session, orchestrator, verification
     from qcsd_lab.util import atomic_json
     from tests.test_campaign import _runtime_chaff_fixture
@@ -227,9 +228,15 @@ def test_production_collection_group_and_deep_reopen_exact_v2_source(tmp_path):
 
     directory = tmp_path / "samples/front"
     neqo = directory / "neqo"; neqo.mkdir(parents=True)
-    native, rows, packets, events = fixture(neqo)
+    if version == 3:
+        from tests.test_capture_front_window_policy import fixture as capture_fixture
+    else:
+        capture_fixture = fixture
+    native, rows, packets, events = capture_fixture(neqo)
     prepared, responses = variable_workload()
     prepared["preparation"].update(preparation())
+    if version == 3:
+        prepared["preparation"][policy.FRONT_FIELD] = policy.FRONT_WINDOW_POLICY
     source, runtime = tmp_path / "inputs/page.json", tmp_path / "inputs/page-runtime.json"
     atomic_json(source, prepared); atomic_json(runtime, {"resources": prepared["resources"]})
     chaff, receipt = _runtime_chaff_fixture(tmp_path)

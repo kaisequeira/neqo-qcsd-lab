@@ -27,7 +27,7 @@ from tools import rapid_rolling_capture as cli
 
 
 @pytest.fixture
-def amended(rolling_setup, monkeypatch):
+def amended(rolling_setup, monkeypatch, request):
     f = rolling_setup
     terminal_path = admission._child(f.context.root, f.terminals[0])
     terminal = admission._unpack(terminal_path.read_bytes(), admission.TERMINAL_TYPE)
@@ -59,7 +59,8 @@ def amended(rolling_setup, monkeypatch):
     workloads.mkdir(parents=True); campaigns.mkdir()
     runtime = {**f.runtime, "workload_root": str(workloads), "campaign_dir": str(campaigns)}
     declaration = f.root / "front-amendment.json"
-    front.publish_amendment(enrollment, runtime, declaration)
+    front.publish_amendment(enrollment, runtime, declaration,
+                            capture_policy=getattr(request, "param", front.CAPTURE_POLICY))
     target = workloads / original.name
     qualifier_root = config / "chaff-response-qualification-store/sets/front-new"
     qualifier_root.mkdir(parents=True)

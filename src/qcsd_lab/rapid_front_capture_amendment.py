@@ -19,6 +19,9 @@ RECEIPT_TYPE = "qcsd-rapid-v6-front-capture-policy-amendment-v1"
 CONTRACT = "front-only-literal-replacement-with-unchanged-enrolled-application-v1"
 ORIGINAL_POLICY = "rapid-v5-front-bounded-outgoing-congestion-omission-1pct-v1"
 CAPTURE_POLICY = "rapid-v5-front-bounded-outgoing-padding-omission-1pct-v2"
+WINDOW_CAPTURE_POLICY = "rapid-v5-front-bounded-outgoing-padding-omission-10pct-window-10000us-v3"
+WINDOW_RECEIPT_TYPE = "qcsd-rapid-v6-front-capture-policy-amendment-v2"
+WINDOW_CONTRACT = "front-only-10000us-padding-window-10pct-literal-replacement-with-unchanged-enrolled-application-v2"
 FIELD = "front_capture_policy"
 FIELDS = {"contract", "mode", "preparation_field", "original_policy", "capture_policy",
           "enrollment", "admission_provenance", "runtime_source_manifest", "client_binary",
@@ -29,6 +32,15 @@ WORKLOAD_FIELDS = {"candidate_id", "workload_id", "original_manifest", "capture_
 EXACT = {"contract": CONTRACT, "mode": "front", "preparation_field": FIELD,
          "original_policy": ORIGINAL_POLICY, "capture_policy": CAPTURE_POLICY,
          "formal_accepted_trace_count": 0, "scientific_credit": False}
+
+
+def _contract(capture_policy: str) -> tuple[str, dict[str, Any]]:
+    if capture_policy == CAPTURE_POLICY:
+        return RECEIPT_TYPE, EXACT
+    if capture_policy == WINDOW_CAPTURE_POLICY:
+        return WINDOW_RECEIPT_TYPE, {**EXACT, "contract": WINDOW_CONTRACT,
+                                     "capture_policy": WINDOW_CAPTURE_POLICY}
+    raise ValueError("FRONT amendment requires an explicit supported capture policy")
 
 
 def _directory(manifest: Path) -> Path:
@@ -51,7 +63,8 @@ def _inventory(directory: Path) -> dict[str, dict[str, Any]]:
     return result
 
 
-def _derived(raw: bytes) -> tuple[bytes, str]:
+def _derived(raw: bytes, capture_policy: str = CAPTURE_POLICY) -> tuple[bytes, str]:
+    _contract(capture_policy)
     original = lanes._load(raw)
     if (not isinstance(original, dict) or not isinstance(original.get("preparation"), dict)
         or original["preparation"].get(FIELD) != ORIGINAL_POLICY
@@ -60,7 +73,7 @@ def _derived(raw: bytes) -> tuple[bytes, str]:
     token = ('"' + ORIGINAL_POLICY + '"').encode()
     if raw.count(token) != 1:
         raise ValueError("FRONT amendment requires one unique quoted original policy literal")
-    changed = raw.replace(token, ('"' + CAPTURE_POLICY + '"').encode(), 1)
+    changed = raw.replace(token, ('"' + capture_policy + '"').encode(), 1)
     derived = lanes._load(changed)
     derived["preparation"][FIELD] = ORIGINAL_POLICY
     if derived != original:
@@ -68,7 +81,8 @@ def _derived(raw: bytes) -> tuple[bytes, str]:
     return changed, lanes._sha(lanes._json(original["resources"]))
 
 
-def _rows(classes: list[dict[str, Any]], workload_root: Path) -> list[dict[str, Any]]:
+def _rows(classes: list[dict[str, Any]], workload_root: Path,
+          capture_policy: str = CAPTURE_POLICY) -> list[dict[str, Any]]:
     from . import rapid_rolling_capture as rolling
     rows = []
     for row in classes:
@@ -77,7 +91,7 @@ def _rows(classes: list[dict[str, Any]], workload_root: Path) -> list[dict[str, 
         facts = admission.verify_site_terminal(terminal, context)
         original, _ = rolling._prepared_workload(context, terminal)
         raw = lanes._read(original)
-        derived, graph_sha = _derived(raw)
+        derived, graph_sha = _derived(raw, capture_policy)
         target = workload_root / original.name
         if (facts["candidate_id"] != row["candidate_id"]
             or facts["admission"]["prepared_workload_sha256"] != lanes._sha(raw)
@@ -99,9 +113,14 @@ def _validate_for_enrollment(path: Path, enrollment: Path, runtime: Mapping[str,
     policy_root = rolling._open_ref(batch["policy"]).parent
     if not path.is_relative_to(policy_root) or ".." in path.parts:
         raise ValueError("FRONT amendment must remain inside its original study evidence root")
-    value = admission._unpack(lanes._read(path), RECEIPT_TYPE)
+    raw = lanes._read(path)
+    wrapper = lanes._load(raw)
+    receipt_type = wrapper.get("receipt_type") if isinstance(wrapper, Mapping) else None
+    capture_policy = WINDOW_CAPTURE_POLICY if receipt_type == WINDOW_RECEIPT_TYPE else CAPTURE_POLICY
+    expected_type, exact = _contract(capture_policy)
+    value = admission._unpack(raw, expected_type)
     rolling._keys(value, FIELDS, "FRONT amendment")
-    if any(type(value[key]) is not type(expected) or value[key] != expected for key, expected in EXACT.items()):
+    if any(type(value[key]) is not type(expected) or value[key] != expected for key, expected in exact.items()):
         raise ValueError("FRONT amendment changes its closed prospective contract")
     original_policy = admission._unpack(lanes._read(policy_root / "policy.json"), rolling.POLICY_TYPE)
     if runtime["data_root"] != original_policy["runtime"]["data_root"]:
@@ -117,7 +136,7 @@ def _validate_for_enrollment(path: Path, enrollment: Path, runtime: Mapping[str,
     if not admission._utc(batch["declared_at"]) <= admission._utc(value["published_at"]) <= admission._utc(admission._now()):
         raise ValueError("FRONT amendment publication is outside its prospective enrollment")
     selected = classes[-len(batch["selected_candidate_ids"]):]
-    expected_rows = _rows(selected, Path(runtime["workload_root"]))
+    expected_rows = _rows(selected, Path(runtime["workload_root"]), capture_policy)
     if not isinstance(value["workloads"], list) or len(value["workloads"]) != len(expected_rows):
         raise ValueError("FRONT amendment omitted or added an enrolled workload")
     for row, expected in zip(value["workloads"], expected_rows, strict=True):
@@ -132,8 +151,8 @@ def _validate_for_enrollment(path: Path, enrollment: Path, runtime: Mapping[str,
             raise ValueError("FRONT amendment changed its original graph, evidence or manifest bindings")
         original = rolling._open_ref(row["original_manifest"])
         target = rolling._open_ref(row["capture_manifest"])
-        if lanes._read(target) != _derived(lanes._read(original))[0]:
-            raise ValueError("FRONT amendment permits only the exact quoted V1-to-V2 policy replacement")
+        if lanes._read(target) != _derived(lanes._read(original), capture_policy)[0]:
+            raise ValueError("FRONT amendment permits only its exact quoted original-to-capture policy replacement")
         if _inventory(_directory(target)) != expected["application_evidence_files"]:
             raise ValueError("FRONT amendment changed copied application evidence bytes or executable bits")
     return value
@@ -146,9 +165,11 @@ def validate_amendment(path: Path, *, enrollment: Path, runtime: Mapping[str, st
     return _validate_for_enrollment(path, enrollment, runtime, batch, classes)
 
 
-def publish_amendment(enrollment: Path, runtime: Mapping[str, str], output: Path) -> Path:
+def publish_amendment(enrollment: Path, runtime: Mapping[str, str], output: Path, *,
+                      capture_policy: str = CAPTURE_POLICY) -> Path:
     """Create fresh capture inputs and declare them before qualification/capture."""
     from . import rapid_rolling_capture as rolling
+    receipt_type, exact = _contract(capture_policy)
     runtime = rolling._runtime(dict(runtime))
     batch, classes, policy = rolling._verify_enrollment(enrollment)
     output = Path(output).absolute()
@@ -157,7 +178,7 @@ def publish_amendment(enrollment: Path, runtime: Mapping[str, str], output: Path
         or not output.is_relative_to(policy_root) or ".." in output.parts or output.exists() or output.is_symlink()):
         raise ValueError("FRONT amendment requires a fresh declaration in the original study root")
     selected = classes[-len(batch["selected_candidate_ids"]):]
-    rows = _rows(selected, Path(runtime["workload_root"]))
+    rows = _rows(selected, Path(runtime["workload_root"]), capture_policy)
     # Validate every destination and original byte before creating any input.
     copies = []
     for row in rows:
@@ -165,7 +186,7 @@ def publish_amendment(enrollment: Path, runtime: Mapping[str, str], output: Path
         target = Path(row["capture_manifest"]["path"])
         if any(p.exists() or p.is_symlink() for p in (target, _directory(target))):
             raise ValueError("FRONT amendment never overwrites an earlier capture workload")
-        raw = _derived(lanes._read(original))[0]
+        raw = _derived(lanes._read(original), capture_policy)[0]
         files = [(relative, lanes._read(_directory(original) / relative),
                   stat.S_IMODE((_directory(original) / relative).stat().st_mode))
                  for relative in row["application_evidence_files"]]
@@ -178,13 +199,13 @@ def publish_amendment(enrollment: Path, runtime: Mapping[str, str], output: Path
             copied.parent.mkdir(parents=True, exist_ok=True)
             admission.durable_create(copied, file_raw)
             os.chmod(copied, permissions)
-    payload = {**EXACT, "enrollment": rolling._ref(enrollment),
+    payload = {**exact, "enrollment": rolling._ref(enrollment),
                "admission_provenance": rolling._ref(Path(batch["admission_root"]) / "provenance.json"),
                "runtime_source_manifest": rolling._ref(Path(runtime["source_manifest"])),
                "client_binary": rolling._ref(Path(runtime["client_binary"])),
                "collection_image_digest": runtime["collection_image_digest"],
                "workloads": rows, "published_at": admission._now()}
-    rolling._write(output, RECEIPT_TYPE, payload)
+    rolling._write(output, receipt_type, payload)
     _validate_for_enrollment(output, enrollment, runtime, batch, classes)
     return output
 
