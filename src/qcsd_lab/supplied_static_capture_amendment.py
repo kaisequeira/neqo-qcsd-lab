@@ -47,7 +47,9 @@ ROW_FIELDS = {"candidate_id", "workload_id", "original_terminal", "original_mani
 
 
 def is_amended(value: Any) -> bool:
-    return isinstance(value, Mapping) and value.get("data_role") in {ROLE, DURATION_ROLE}
+    from .static_budget_capture_amendment import is_amended as is_budget_amended
+    from .whole_graph_capture_amendment import is_amended as is_whole_amended
+    return isinstance(value, Mapping) and value.get("data_role") in {ROLE, DURATION_ROLE} or is_whole_amended(value) or is_budget_amended(value)
 
 
 def policies(*, front_policy: str | None = None, buflo_policy: str | None = None) -> dict[str, str]:
@@ -135,6 +137,12 @@ def _derived(original: Mapping[str, Any], declaration_ref: Mapping[str, str], se
 
 
 def _declaration(path: Path, *, enrollment: Path | None = None, runtime: Mapping[str, str] | None = None):
+    from . import static_budget_capture_amendment as budget_amendment
+    if lanes._load(lanes._read(path)).get("receipt_type") == budget_amendment.DECLARATION_TYPE:
+        return budget_amendment._declaration(path, enrollment=enrollment, runtime=runtime)
+    from . import whole_graph_capture_amendment as whole
+    if lanes._load(lanes._read(path)).get("receipt_type") == whole.DECLARATION_TYPE:
+        return whole._declaration(path, enrollment=enrollment, runtime=runtime)
     from . import rapid_rolling_capture as rolling
     value = receipts._unpack(lanes._read(path), DECLARATION_TYPE)
     fields = set(DECLARATION_FIELDS)
@@ -182,6 +190,12 @@ def _declaration(path: Path, *, enrollment: Path | None = None, runtime: Mapping
 
 
 def _closed(path: Path, *, enrollment: Path | None = None, runtime: Mapping[str, str] | None = None):
+    from . import static_budget_capture_amendment as budget_amendment
+    if lanes._load(lanes._read(path)).get("receipt_type") == budget_amendment.RECEIPT_TYPE:
+        return budget_amendment.validate_amendment(path, enrollment=enrollment, runtime=runtime)
+    from . import whole_graph_capture_amendment as whole
+    if lanes._load(lanes._read(path)).get("receipt_type") == whole.RECEIPT_TYPE:
+        return whole.validate_amendment(path, enrollment=enrollment, runtime=runtime)
     from . import rapid_rolling_capture as rolling
     value = receipts._unpack(lanes._read(path), RECEIPT_TYPE)
     rolling._keys(value, RECEIPT_FIELDS, "static capture amendment")
@@ -213,6 +227,18 @@ def publish_amendment(enrollment: Path, runtime: Mapping[str, str], output: Path
                       front_policy: str | None = None, buflo_policy: str | None = None,
                       buflo_duration_policy: str | None = None) -> Path:
     from . import rapid_rolling_capture as rolling
+    from . import whole_graph_supplement as whole
+    batch, _, policy = rolling._verify_enrollment(enrollment)
+    from . import supplied_static_budget_successor as budget
+    from . import static_budget_capture as budget_capture
+    if isinstance(rolling._context_for_policy(policy, Path(batch["admission_root"])), (budget.Context, budget_capture.Context)):
+        from .static_budget_capture_amendment import publish_amendment as publish_budget_amendment
+        return publish_budget_amendment(enrollment, runtime, output, front_policy=front_policy,
+            buflo_policy=buflo_policy, buflo_duration_policy=buflo_duration_policy)
+    if isinstance(rolling._context_for_policy(policy, Path(batch["admission_root"])), whole.Context):
+        from .whole_graph_capture_amendment import publish_amendment as publish_whole_amendment
+        return publish_whole_amendment(enrollment, runtime, output, front_policy=front_policy,
+            buflo_policy=buflo_policy, buflo_duration_policy=buflo_duration_policy)
     selected = policies(front_policy=front_policy, buflo_policy=buflo_policy)
     duration_policy = traffic.policy(buflo_duration_policy)
     if duration_policy and _modes(selected) != ["buflo"]:
@@ -255,10 +281,22 @@ def publish_amendment(enrollment: Path, runtime: Mapping[str, str], output: Path
 
 
 def validate_amendment(path: Path, *, enrollment: Path, runtime: Mapping[str, str]):
+    from . import static_budget_capture_amendment as budget_amendment
+    if lanes._load(lanes._read(path)).get("receipt_type") == budget_amendment.RECEIPT_TYPE:
+        return budget_amendment.validate_amendment(path, enrollment=enrollment, runtime=runtime)
+    from . import whole_graph_capture_amendment as whole
+    if lanes._load(lanes._read(path)).get("receipt_type") == whole.RECEIPT_TYPE:
+        return whole.validate_amendment(path, enrollment=enrollment, runtime=runtime)
     return _closed(path.absolute(), enrollment=enrollment, runtime=runtime)
 
 
 def validate_preparation(value: Mapping[str, Any], resources: list[dict[str, Any]]):
+    from . import static_budget_capture_amendment as budget_amendment
+    if budget_amendment.is_amended(value):
+        return budget_amendment.validate_preparation(value, resources)
+    from . import whole_graph_capture_amendment as whole
+    if whole.is_amended(value):
+        return whole.validate_preparation(value, resources)
     if not is_amended(value):
         raise ValueError("static capture amendment data role is absent")
     declaration_path = preparation.open_reference(value.get(FIELD))
@@ -275,6 +313,12 @@ def validate_preparation(value: Mapping[str, Any], resources: list[dict[str, Any
 
 
 def preparation_roots(value: Mapping[str, Any]) -> list[Path]:
+    from . import static_budget_capture_amendment as budget_amendment
+    if budget_amendment.is_amended(value):
+        return budget_amendment.preparation_roots(value)
+    from . import whole_graph_capture_amendment as whole
+    if whole.is_amended(value):
+        return whole.preparation_roots(value)
     from . import rapid_rolling_capture as rolling
     from .static_evidence_transport import _path
     declaration_path = preparation.open_reference(value[FIELD])

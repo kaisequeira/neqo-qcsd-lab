@@ -620,6 +620,14 @@ def _equivalence(reference: Mapping[str, Any], *, original_runtime: Mapping[str,
     experiment = _json(_read(result_root / "experiment.json"))
     manifest = _json(_read(_child(result_root,
         experiment["configuration"]["workloads"][0]["manifest"]), plan["workload_sha256"]))
+    from .whole_graph_supplement import is_whole
+    from .whole_graph_capture_amendment import is_amended as is_whole_amended
+    from .supplied_static_budget_successor import is_budget
+    from .static_budget_capture_amendment import is_amended as is_budget_amended
+    if is_budget(manifest.get("preparation")) or is_budget_amended(manifest.get("preparation")):
+        raise ValueError("response-budget canary Source reuse requires a separately registered prospective projection")
+    if is_whole(manifest.get("preparation")) or is_whole_amended(manifest.get("preparation")):
+        raise ValueError("whole graph canary Source reuse requires its separately registered prospective projection")
     from .supplied_static_capture_amendment import is_amended
     amended_static = is_amended(manifest.get("preparation"))
     if amended_static != ("static_capture_amendment" in plan):

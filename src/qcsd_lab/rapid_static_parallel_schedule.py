@@ -68,6 +68,20 @@ def terminal_inputs(enrollment: Path, *, _context=None) -> tuple[set[Path], set[
     """
     from . import supplied_static_admission as static
     from . import supplied_static_preparation as prep
+    from . import whole_graph_supplement as whole
+    batch, _, policy = rolling._verify_enrollment(enrollment)
+    from . import supplied_static_budget_successor as budget
+    from . import static_budget_capture as budget_capture
+    if isinstance(rolling._context_for_policy(policy, Path(batch["admission_root"])), (budget.Context, budget_capture.Context)):
+        files, trees = budget_capture.terminal_inputs(enrollment)
+        if _context is not None:
+            for path in files:
+                _context.watch_file(path)
+            for path in trees:
+                _context.watch_tree(path)
+        return files, trees
+    if isinstance(rolling._context_for_policy(policy, Path(batch["admission_root"])), whole.Context):
+        return whole.terminal_inputs(enrollment, _context=_context)
     rolling._verify_enrollment(enrollment)
     files, trees, seen, terminals = set(), set(), set(), {}
     path = enrollment
@@ -155,7 +169,8 @@ def _qualified_inputs(base: lanes.CaptureSpec, qualifier: Path, sites: list[dict
         from .supplied_static_graph import canonical_bytes, digest
         workloads[name] = {"workload_sha256": evidence._sha(raw), "application_evidence": None,
             "resource_records_sha256": digest(canonical_bytes(workload["resources"])),
-            "original_get_proof": workload["preparation"]["static_get_evidence"]["proof"]}
+            "original_get_proof": (workload["preparation"]["whole_graph_get_evidence"]["proof"]
+                if "whole_graph_get_evidence" in workload["preparation"] else workload["preparation"]["static_get_evidence"]["proof"])}
         sidecar = evidence._json(evidence._read(sidecars / (name + ".json")))
         if (type(sidecar.get("schema_version")) is not int
             or sidecar["schema_version"] != qualification.RESPONSE_ONLY_SIDECAR_V2_SCHEMA_VERSION):
@@ -187,6 +202,9 @@ def _derive(base: lanes.CaptureSpec, runtime: Mapping[str, str], qualifier: Path
         raise ValueError("static scheduling requires a current serial single-setting four-visit base plan")
     mode = next(iter(plan["readiness"]))
     reference = plan["static_capture_amendment"]
+    from . import static_budget_capture_amendment as budget_amendment
+    if lanes._load(lanes._read(rolling._open_ref(reference))).get("receipt_type") == budget_amendment.RECEIPT_TYPE:
+        raise ValueError("response-budget parallel scheduling requires a separately registered typed capsule")
     closed = amendment.validate_amendment(rolling._open_ref(reference), enrollment=base.cohort, runtime=runtime)
     if mode not in closed["modes"]:
         raise ValueError("static scheduling setting is outside its exact amendment")
@@ -200,6 +218,9 @@ def _derive(base: lanes.CaptureSpec, runtime: Mapping[str, str], qualifier: Path
     # the historical three traffic files. This does not relabel the original
     # amendment's eleven/ nineteen producer declarations.
     authority = [*amendment.authority_files(budget.POLICY).values(), *CONTROL_FILES]
+    from . import whole_graph_capture_amendment as whole_amendment
+    if lanes._load(lanes._read(rolling._open_ref(reference))).get("receipt_type") == whole_amendment.RECEIPT_TYPE:
+        authority.extend(whole_amendment.ADAPTER_FILES.values())
     controls = {}
     for relative in authority:
         raw = (lanes._read(Path(import_module("qcsd_lab." + Path(relative).stem).__file__))

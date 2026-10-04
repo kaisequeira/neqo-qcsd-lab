@@ -818,7 +818,11 @@ def _release_fence(path, value, facts, preflight):
             while True:
                 batch = ordinary.admission._unpack(file(batch_path), rolling.ENROLLMENT_TYPE)
                 policy_path = rolling._open_ref(batch["policy"])
-                policy = ordinary.admission._unpack(file(policy_path), rolling.POLICY_TYPE)
+                policy_raw = file(policy_path)
+                policy_type = ordinary._load(policy_raw).get("receipt_type")
+                if policy_type not in {rolling.POLICY_TYPE, rolling.STATIC_POLICY_TYPE}:
+                    raise ValueError("formal release fence has an unknown policy role")
+                policy = ordinary.admission._unpack(policy_raw, policy_type)
                 references(policy, policy_path.parent)
                 initial = Path(policy["initial_admission_root"])
                 references(shared.load(initial / "provenance.json"), initial)
@@ -828,16 +832,25 @@ def _release_fence(path, value, facts, preflight):
                 file(context_root / "provenance.json")
                 references(batch, context_root)
                 from . import supplied_static_admission as static
-                static_context = (static.load_context(context_root)
+                static_context = (rolling._context_for_policy(policy, context_root)
                                   if policy.get("contract") == rolling.STATIC_CONTRACT else None)
+                from . import whole_graph_supplement as whole
+                from . import supplied_static_budget_successor as budget
+                from . import static_budget_capture as budget_capture
+                budget_context = isinstance(static_context, (budget.Context, budget_capture.Context))
                 for decision in batch["decisions"]:
                     terminal = rolling._open_ref(decision["terminal"])
                     # Only the enrolled ordered decisions, never the whole
                     # active acquisition/archive tree or its checkpoints.
                     tree(terminal.parent)
-                    terminal_type = static.TERMINAL_TYPE if isinstance(static_context, static.Context) else ordinary.admission.TERMINAL_TYPE
+                    terminal_type = (ordinary._load(file(terminal)).get("receipt_type") if isinstance(static_context, whole.Context) or budget_context
+                        else static.TERMINAL_TYPE if isinstance(static_context, static.Context) else ordinary.admission.TERMINAL_TYPE)
+                    if budget_context and terminal_type not in {budget.TERMINAL_TYPE, whole.TERMINAL_TYPE, static.TERMINAL_TYPE}:
+                        raise ValueError("formal release fence has an unknown response-budget terminal role")
+                    if isinstance(static_context, whole.Context) and terminal_type not in {whole.TERMINAL_TYPE, static.TERMINAL_TYPE}:
+                        raise ValueError("formal release fence has an unknown mixed static terminal role")
                     references(ordinary.admission._unpack(file(terminal), terminal_type), context_root)
-                if isinstance(static_context, static.Context):
+                if isinstance(static_context, (static.Context, whole.Context)) or budget_context:
                     from .rapid_static_parallel_schedule import terminal_inputs
                     static_files, static_trees = terminal_inputs(batch_path)
                     for item in static_files:
@@ -854,7 +867,7 @@ def _release_fence(path, value, facts, preflight):
                 tree(target) if name == "sidecar_root" else file(target)
             for site in sites:
                 file(spec.workload_root / f"{site.workload_id}.json", site.workload_sha256)
-                if not isinstance(static_context, static.Context):
+                if not isinstance(static_context, (static.Context, whole.Context, budget.Context, budget_capture.Context)):
                     tree(spec.workload_root / f"{site.workload_id}-application-response-evidence")
             payload = ordinary._payload(spec.plan_receipt, ordinary.PLAN_TYPE)
             capsule = shared.load(_reference(payload["scheduling"]))

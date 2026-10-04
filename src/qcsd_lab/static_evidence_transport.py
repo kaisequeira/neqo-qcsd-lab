@@ -41,6 +41,25 @@ def manifest_roots(manifest: Mapping[str, Any]) -> list[Path]:
     declared = manifest.get("preparation")
     if not isinstance(declared, Mapping) or "data_role" not in declared:
         return []
+    from . import supplied_static_budget_successor as budget
+    from . import static_budget_capture as budget_capture
+    from . import static_budget_capture_amendment as budget_amendment
+    if budget.is_budget(declared) or budget_amendment.is_amended(declared):
+        validator = budget.validate_preparation if budget.is_budget(declared) else budget_amendment.validate_preparation
+        validator(declared, manifest["resources"])
+        selected = budget_capture.preparation_roots if budget.is_budget(declared) else budget_amendment.preparation_roots
+        roots = {_path(Path(root), directory=True) for root in selected(declared)}
+        return sorted(root for root in roots if not any(root != parent and root.is_relative_to(parent) for parent in roots))
+    from . import whole_graph_supplement as whole
+    from . import whole_graph_capture_amendment as whole_amendment
+    if whole_amendment.is_amended(declared):
+        whole_amendment.validate_preparation(declared, manifest["resources"])
+        roots = {_path(Path(root), directory=True) for root in whole_amendment.preparation_roots(declared)}
+        return sorted(root for root in roots if not any(root != parent and root.is_relative_to(parent) for parent in roots))
+    if whole.is_whole(declared):
+        whole.validate_preparation(declared, manifest["resources"])
+        roots = {_path(Path(root), directory=True) for root in whole.preparation_roots(declared)}
+        return sorted(root for root in roots if not any(root != parent and root.is_relative_to(parent) for parent in roots))
     if amendment.is_amended(declared):
         proof = amendment.validate_preparation(declared, manifest["resources"])
         roots = set(amendment.preparation_roots(declared))
@@ -54,10 +73,22 @@ def manifest_roots(manifest: Mapping[str, Any]) -> list[Path]:
     if context_path != context.root / "provenance.json":
         raise ValueError("static GET context is outside its official namespace")
     roots.add(context.root)
-    # Successors preserve original immutable context declarations. Bind every
-    # ancestor using the existing public context validator, without admitting
-    # unrelated later candidates or deriving arbitrary terminal-prefix mounts.
-    while context.provenance["parent_context"] is not None:
+    # The selected preparation reopens the sealed inherited decision prefix,
+    # including complete GETs and operational deferrals outside the context.
+    # Derive only those authenticated roots, never later active attempts.
+    while True:
+        for reference in context.provenance["inherited_terminals"]:
+            terminal = preparation.open_reference(reference)
+            admission.verify_terminal(terminal, context)
+            record = admission.receipts._unpack(_path(terminal).read_bytes(), admission.TERMINAL_TYPE)
+            roots.add(_path(terminal.parent, directory=True))
+            if record["get_evidence_root"] is not None:
+                roots.add(_path(Path(record["get_evidence_root"]), directory=True))
+            if record["namespace"] is not None:
+                roots.update(_path(preparation.open_reference(record["namespace"][key]).parent, directory=True)
+                             for key in ("outer_started", "outer_completed", "outer_stdout", "outer_stderr"))
+        if context.provenance["parent_context"] is None:
+            break
         path = preparation.open_reference(context.provenance["parent_context"])
         context = admission.load_context(_path(path.parent, directory=True))
         if path != context.root / "provenance.json":

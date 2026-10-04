@@ -139,7 +139,11 @@ def validate_prepared_response_graph(manifest: Mapping[str, Any]) -> dict[str, A
     if primary_policy == VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY:
         from .supplied_static_preparation import COVERAGE, is_static
         from .supplied_static_capture_amendment import is_amended
-        coverage_policy = COVERAGE if is_static(preparation) or is_amended(preparation) else "all-approved-origins-and-rendered-resources"
+        from .supplied_static_budget_successor import is_budget
+        coverage_policy = COVERAGE if is_static(preparation) or is_amended(preparation) or is_budget(preparation) else "all-approved-origins-and-rendered-resources"
+        from .whole_graph_supplement import is_whole, COVERAGE as WHOLE_COVERAGE
+        if is_whole(preparation) or is_amended(preparation) and "whole_graph_get_evidence" in preparation:
+            coverage_policy = WHOLE_COVERAGE
         coverage = preparation.get("coverage_admission")
         required = coverage.get("required_resources") if isinstance(coverage, Mapping) else None
         if (policy != COMPLETED_TERMINAL_HTTP_ERRORS_POLICY
@@ -243,7 +247,9 @@ def validate_application_responses(
         if variable_primary:
             from .supplied_static_preparation import is_static
             from .supplied_static_capture_amendment import is_amended
-            primary_rows = (primary_evidence["complete_get_primary_responses"] if is_static(manifest["preparation"]) or is_amended(manifest["preparation"])
+            from .whole_graph_supplement import is_whole
+            from .supplied_static_budget_successor import is_budget
+            primary_rows = (primary_evidence["complete_get_primary_responses"] if is_static(manifest["preparation"]) or is_amended(manifest["preparation"]) or is_whole(manifest["preparation"]) or is_budget(manifest["preparation"])
                             else primary_evidence["stability_primary_responses"])
             validate_primary_document_response(manifest, row,
                 expected_content_type=_primary_content_type(primary_rows[0]))
@@ -315,6 +321,10 @@ def build_primary_document_identity_evidence(
 
 
 def validate_primary_document_identity_evidence(manifest: Mapping[str, Any]) -> dict[str, Any] | None:
+    from .supplied_static_budget_successor import is_budget, validate_preparation as validate_budget_preparation
+    if is_budget(manifest.get("preparation")):
+        validate_budget_preparation(manifest["preparation"], manifest["resources"])
+        return deepcopy(manifest["preparation"]["primary_document_identity_evidence"])
     from .supplied_static_capture_amendment import is_amended, validate_preparation
     if is_amended(manifest.get("preparation")):
         validate_preparation(manifest["preparation"], manifest["resources"])
@@ -322,6 +332,10 @@ def validate_primary_document_identity_evidence(manifest: Mapping[str, Any]) -> 
     from .supplied_static_preparation import is_static, validate_static_preparation
     if is_static(manifest.get("preparation")):
         validate_static_preparation(manifest["preparation"], manifest["resources"])
+        return deepcopy(manifest["preparation"]["primary_document_identity_evidence"])
+    from .whole_graph_supplement import is_whole, validate_preparation as validate_whole_preparation
+    if is_whole(manifest.get("preparation")):
+        validate_whole_preparation(manifest["preparation"], manifest["resources"])
         return deepcopy(manifest["preparation"]["primary_document_identity_evidence"])
     graph = validate_prepared_response_graph(manifest)
     preparation = manifest["preparation"]
@@ -368,6 +382,10 @@ def validate_application_response_policy_evidence(
     these compact facts preserve the negative GET and hashes without embedding
     bodies, packet CSVs or the whole probe graph in every prepared workload.
     """
+    from .supplied_static_budget_successor import is_budget, validate_preparation as validate_budget_preparation
+    if is_budget(manifest.get("preparation")):
+        validate_budget_preparation(manifest["preparation"], manifest["resources"])
+        return deepcopy(manifest["preparation"]["application_response_policy_evidence"])
     from .supplied_static_capture_amendment import is_amended, validate_preparation
     if is_amended(manifest.get("preparation")):
         validate_preparation(manifest["preparation"], manifest["resources"])
@@ -375,6 +393,10 @@ def validate_application_response_policy_evidence(
     from .supplied_static_preparation import is_static, validate_static_preparation
     if is_static(manifest.get("preparation")):
         validate_static_preparation(manifest["preparation"], manifest["resources"])
+        return deepcopy(manifest["preparation"]["application_response_policy_evidence"])
+    from .whole_graph_supplement import is_whole, validate_preparation as validate_whole_preparation
+    if is_whole(manifest.get("preparation")):
+        validate_whole_preparation(manifest["preparation"], manifest["resources"])
         return deepcopy(manifest["preparation"]["application_response_policy_evidence"])
     graph = validate_prepared_response_graph(manifest)
     preparation = manifest["preparation"]

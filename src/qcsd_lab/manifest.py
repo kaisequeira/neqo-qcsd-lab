@@ -345,6 +345,14 @@ def validate_research_preparation(manifest: dict[str, Any], *, workload_id: str)
     if is_amended(preparation):
         validate_preparation(preparation, manifest["resources"])
         return
+    from .supplied_static_budget_successor import is_budget, validate_preparation as validate_budget_preparation
+    if is_budget(preparation):
+        validate_budget_preparation(preparation, manifest["resources"])
+        return
+    from .whole_graph_supplement import is_whole, validate_preparation as validate_whole_preparation
+    if is_whole(preparation):
+        validate_whole_preparation(preparation, manifest["resources"])
+        return
     if "data_role" in preparation:
         from .supplied_static_preparation import validate_static_preparation
         validate_static_preparation(preparation, manifest["resources"])
@@ -485,6 +493,14 @@ def _validate_preparation(
     from .supplied_static_capture_amendment import is_amended, validate_preparation
     if is_amended(value):
         validate_preparation(value, resources)
+        return
+    from .supplied_static_budget_successor import is_budget, validate_preparation as validate_budget_preparation
+    if is_budget(value):
+        validate_budget_preparation(value, resources)
+        return
+    from .whole_graph_supplement import is_whole, validate_preparation as validate_whole_preparation
+    if is_whole(value):
+        validate_whole_preparation(value, resources)
         return
     if "data_role" in value:
         from .supplied_static_preparation import validate_static_preparation

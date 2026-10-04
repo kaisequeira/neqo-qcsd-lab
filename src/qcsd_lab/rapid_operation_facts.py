@@ -225,8 +225,10 @@ class OperationFacts:
             if "data_role" in plan:
                 from .supplied_static_preparation import ROLE, is_static
                 from .supplied_static_capture_amendment import is_amended
+                from .whole_graph_supplement import is_whole
+                from .supplied_static_budget_successor import is_budget
                 preparation = json.loads(self.watch_file(path)).get("preparation")
-                if plan["data_role"] != ROLE or not (is_static(preparation) or is_amended(preparation)):
+                if plan["data_role"] != ROLE or not (is_static(preparation) or is_amended(preparation) or is_whole(preparation) or is_budget(preparation)):
                     raise ValueError("operation workload changed its declared static data role")
                 for evidence_root in self._workload_evidence_trees(path):
                     self.watch_tree(evidence_root)
@@ -391,6 +393,21 @@ class OperationFacts:
             from .supplied_static_preparation import is_static, preparation_roots
             from . import supplied_static_capture_amendment as amendment
             from .supplied_static_capture_amendment import is_amended
+            from .whole_graph_supplement import is_whole, preparation_inputs as whole_inputs
+            from .whole_graph_capture_amendment import is_amended as is_whole_amended, preparation_inputs as amended_whole_inputs
+            from .supplied_static_budget_successor import is_budget
+            from .static_budget_capture import preparation_inputs as budget_inputs
+            from .static_budget_capture_amendment import is_amended as is_budget_amended, preparation_inputs as amended_budget_inputs
+            if is_budget(preparation) or is_budget_amended(preparation):
+                files, trees = (budget_inputs if is_budget(preparation) else amended_budget_inputs)(preparation)
+                for dependency in files:
+                    self.watch_file(dependency)
+                return sorted(trees)
+            if is_whole(preparation) or is_whole_amended(preparation):
+                files, trees = (whole_inputs if is_whole(preparation) else amended_whole_inputs)(preparation)
+                for dependency in files:
+                    self.watch_file(dependency)
+                return sorted(trees)
             if is_amended(preparation):
                 key = ("amended-immutable-inputs-v3", hashlib.sha256(raw).hexdigest())
                 if self.has(key):

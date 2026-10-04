@@ -109,7 +109,14 @@ def load_runtime(path: Path) -> dict[str, str]:
 
 
 def _admission_identity(context) -> dict[str, str]:
+    from . import static_budget_capture as budget_capture
+    from . import supplied_static_budget_successor as budget
+    if isinstance(context, (budget.Context, budget_capture.Context)):
+        return budget_capture.identity(context)
     from . import supplied_static_admission as static
+    from . import whole_graph_supplement as whole
+    if isinstance(context, whole.Context):
+        return whole.identity(context)
     if isinstance(context, static.Context):
         return static.identity(context)
     if context.selection_amendment_revision != 12:
@@ -123,14 +130,40 @@ def _admission_identity(context) -> dict[str, str]:
 
 def _context_for_policy(policy: Mapping[str, Any], root: Path):
     if policy["contract"] == STATIC_CONTRACT:
+        from . import static_budget_capture as budget_capture
+        from . import supplied_static_budget_successor as budget
+        if budget_capture.is_context(root):
+            return budget_capture.load_context(root)
+        if budget.is_context(root):
+            return budget.load_context(root)
+        from . import whole_graph_supplement as whole
+        if whole.is_context(root):
+            return whole.load_context(root)
         from .supplied_static_admission import load_context
         return load_context(root)
     return admission.load_admission_context(root)
 
 
 def _verify_terminal(context, path: Path):
+    from . import static_budget_capture as budget_capture
+    from . import supplied_static_budget_successor as budget
+    if isinstance(context, (budget.Context, budget_capture.Context)):
+        return budget_capture.verify_terminal(path, context)
     from . import supplied_static_admission as static
+    from . import whole_graph_supplement as whole
+    if isinstance(context, whole.Context):
+        return whole.verify_terminal(path, context)
     return static.verify_terminal(path, context) if isinstance(context, static.Context) else admission.verify_site_terminal(path, context)
+
+
+def _static_context_limits(context):
+    from . import static_budget_capture as budget_capture
+    from . import supplied_static_budget_successor as budget
+    if isinstance(context, (budget.Context, budget_capture.Context)):
+        return budget_capture.context_limits(context)
+    from . import whole_graph_supplement as whole
+    from .supplied_static_admission import context_limits
+    return whole.context_limits(context) if isinstance(context, whole.Context) else context_limits(context)
 
 
 def initialize_study(acquisition_root: Path, root: Path, runtime: Mapping[str, str], *, supplied_static: bool = False) -> Path:
@@ -156,9 +189,8 @@ def initialize_study(acquisition_root: Path, root: Path, runtime: Mapping[str, s
                "formal_accepted_trace_count": 0, "scientific_credit": False}
     if supplied_static:
         from .supplied_static_preparation import ROLE
-        from .supplied_static_admission import context_limits
         payload["data_role"] = ROLE
-        payload["capture_limits"] = context_limits(context)
+        payload["capture_limits"] = _static_context_limits(context)
     return _write(root / "policy.json", STATIC_POLICY_TYPE if supplied_static else POLICY_TYPE, payload)
 
 
@@ -201,8 +233,7 @@ def verify_policy(root: Path) -> dict[str, Any]:
     if _admission_identity(initial) != value["admission_identity"]:
         raise ValueError("rolling policy admission inputs changed")
     if kind == STATIC_POLICY_TYPE:
-        from .supplied_static_admission import context_limits
-        if value["capture_limits"] != context_limits(initial):
+        if value["capture_limits"] != _static_context_limits(initial):
             raise ValueError("static rolling policy changed its prospectively declared capture budgets")
     return value
 
@@ -229,8 +260,17 @@ def _terminal_row(context, position: int, reference: Mapping[str, str]) -> tuple
     if not 1 <= position <= len(context.candidates):
         raise ValueError("rolling decision position is outside the frozen order")
     path = _open_ref(reference)
+    from . import static_budget_capture as budget_capture
+    from . import supplied_static_budget_successor as budget
     from . import supplied_static_admission as static
-    if isinstance(context, static.Context):
+    from . import whole_graph_supplement as whole
+    if isinstance(context, (budget.Context, budget_capture.Context)):
+        if path != budget_capture.terminal_path(context, position):
+            raise ValueError("rolling budget terminal differs from its immutable declared context")
+    elif isinstance(context, whole.Context):
+        if path != whole.terminal_path(context, position):
+            raise ValueError("rolling whole graph terminal differs from its original or appended immutable context")
+    elif isinstance(context, static.Context):
         if path != static.terminal_path(context, position):
             raise ValueError("rolling static terminal differs from its closed original or successor context")
     elif not path.is_relative_to(context.root / "attempts"):
@@ -244,7 +284,14 @@ def _terminal_row(context, position: int, reference: Mapping[str, str]) -> tuple
 
 
 def _prepared_workload(context, terminal_path: Path) -> tuple[Path, dict[str, Any]]:
+    from . import static_budget_capture as budget_capture
+    from . import supplied_static_budget_successor as budget
+    if isinstance(context, (budget.Context, budget_capture.Context)):
+        return budget_capture.prepared_workload(context, terminal_path)
     from . import supplied_static_admission as static
+    from . import whole_graph_supplement as whole
+    if isinstance(context, whole.Context):
+        return whole.prepared_workload(context, terminal_path)
     if isinstance(context, static.Context):
         return static.prepared_workload(context, terminal_path)
     terminal = admission._unpack(lanes._read(terminal_path), admission.TERMINAL_TYPE)
@@ -316,6 +363,7 @@ def _verify_enrollment(path: Path, *, _verified: dict | None = None) -> tuple[di
         raise ValueError("rolling enrollment repeats an earlier class's primary origin")
     if len({row["workload_id"] for row in classes}) != len(classes):
         raise ValueError("rolling enrollment repeats an earlier class's workload identity")
+    _effective_capture_limits(value, classes, policy)
     if _verified is not None:
         _verified[path.absolute()] = (lanes._sha(raw), value, classes)
     return value, classes, policy
@@ -337,12 +385,17 @@ def enroll(root: Path, *, acquisition_root: Path | None = None, count: int = 1) 
     if _admission_identity(context) != policy["admission_identity"]:
         raise ValueError("rolling successor admission changed the frozen catalogue or scientific rules")
     from . import supplied_static_admission as static
-    status = static.acquisition_status(context) if isinstance(context, static.Context) else admission.acquisition_status(context)
+    from . import whole_graph_supplement as whole
+    from . import static_budget_capture as budget_capture
+    from . import supplied_static_budget_successor as budget
+    status = (budget_capture.acquisition_status(context) if isinstance(context, (budget.Context, budget_capture.Context))
+              else whole.acquisition_status(context) if isinstance(context, whole.Context)
+              else static.acquisition_status(context) if isinstance(context, static.Context) else admission.acquisition_status(context))
     decisions, selected = [], []
     for position, reference in enumerate(status["terminal_prefix"], 1):
         if position < first_position:
             continue
-        terminal_reference = reference if isinstance(context, static.Context) else _ref(admission._child(context.root, reference))
+        terminal_reference = reference if isinstance(context, (static.Context, whole.Context, budget.Context, budget_capture.Context)) else _ref(admission._child(context.root, reference))
         row, facts = _terminal_row(context, position, terminal_reference)
         decisions.append(row)
         if facts["outcome"] == "admitted":
@@ -351,6 +404,10 @@ def enroll(root: Path, *, acquisition_root: Path | None = None, count: int = 1) 
             break
     if len(selected) != count:
         raise ValueError("not enough new independently admitted sites for this rolling batch")
+    if isinstance(context, (budget.Context, budget_capture.Context)):
+        manifests = [_prepared_workload(context, _open_ref(row["terminal"]))[1]
+                     for row in decisions if row["outcome"] == "admitted"]
+        budget_capture.selected_capture_limits(manifests, policy["capture_limits"])
     output = _batch_path(root, ordinal)
     payload = {"policy": _ref(root / "policy.json"), "ordinal": ordinal, "parent": parent,
                "admission_root": str(context.root), "admission_provenance": _ref(context.root / "provenance.json"),
@@ -466,9 +523,26 @@ def _bindings_from_enrollment(enrollment: Path, policy: Mapping[str, Any]) -> di
             "selection_amendment_sha256": policy["admission_identity"]["selection_amendment_sha256"]}
 
 
-def _render_campaign(lane: plan.Lane, sites, policy: Mapping[str, Any], *, buflo_duration_policy: str | None = None) -> bytes:
+def _effective_capture_limits(batch, classes, policy):
+    """Reopen per-class budgets without changing the original study policy."""
+    if policy["contract"] != STATIC_CONTRACT:
+        return None
+    from . import static_budget_capture as budget_capture
+    from . import supplied_static_budget_successor as budget
+    root = Path(batch["admission_root"])
+    if lanes._load(lanes._read(root / "provenance.json")).get("receipt_type") not in {budget.CONTEXT_TYPE, budget_capture.CONTEXT_TYPE}:
+        return policy["capture_limits"]
+    context = _context_for_policy(policy, root)
+    selected = classes[batch["first_class_index"] - 1:]
+    manifests = [_prepared_workload(context, _open_ref(row["terminal"]))[1] for row in selected]
+    return budget_capture.selected_capture_limits(manifests, policy["capture_limits"])
+
+
+def _render_campaign(lane: plan.Lane, sites, policy: Mapping[str, Any], *, buflo_duration_policy: str | None = None,
+                     capture_limits: Mapping[str, int] | None = None) -> bytes:
     return plan.render_lane_campaign(lane, sites, static_capture_limits=(
-        policy["capture_limits"] if policy["contract"] == STATIC_CONTRACT else None),
+        (capture_limits if capture_limits is not None else policy["capture_limits"])
+        if policy["contract"] == STATIC_CONTRACT else None),
         buflo_duration_policy=buflo_duration_policy)
 
 
@@ -533,6 +607,7 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
         _context._enrollment(enrollment)
     policy = verify_policy(root)
     batch, classes = verify_enrollment(enrollment)
+    effective_limits = _effective_capture_limits(batch, classes, policy)
     runtime = _runtime(dict(runtime_inputs)) if runtime_inputs is not None else policy["runtime"]
     if runtime["data_root"] != policy["runtime"]["data_root"]:
         raise ValueError("a rolling runtime successor must retain its declared study data root")
@@ -608,7 +683,7 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
         _context.check()
     for lane in planned:
         path = campaigns / f"{lane.campaign_name}.yml"
-        raw = _render_campaign(lane, sites, policy, buflo_duration_policy=duration_policy)
+        raw = _render_campaign(lane, sites, policy, buflo_duration_policy=duration_policy, capture_limits=effective_limits)
         if path.exists():
             if lanes._read(path) != raw:
                 raise ValueError("rolling plan cannot replace an earlier campaign")
@@ -642,7 +717,7 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
             payload[FIELD] = duration_policy
     if policy["contract"] == STATIC_CONTRACT:
         payload["data_role"] = policy["data_role"]
-        payload["capture_limits"] = policy["capture_limits"]
+        payload["capture_limits"] = effective_limits
     if _context is not None:
         _context.check()
     return _write(output, lanes.PLAN_TYPE, payload)
@@ -699,7 +774,7 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
     if policy["contract"] == STATIC_CONTRACT:
         fields.add("data_role")
         fields.add("capture_limits")
-        if value.get("data_role") != policy["data_role"] or value.get("capture_limits") != policy["capture_limits"]:
+        if value.get("data_role") != policy["data_role"] or value.get("capture_limits") != _effective_capture_limits(batch, classes, policy):
             raise ValueError("static rolling plan changed its scientific data role")
     if "scheduling" in value:
         fields.add("scheduling")
@@ -766,7 +841,8 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
         expected = (plan.successor_lane(base, row["generation"]),)
     actual = []
     for lane in expected:
-        raw = _render_campaign(lane, sites, policy, buflo_duration_policy=value.get("buflo_duration_policy"))
+        raw = _render_campaign(lane, sites, policy, buflo_duration_policy=value.get("buflo_duration_policy"),
+                               capture_limits=value.get("capture_limits"))
         if lanes._read(spec.campaign_dir / f"{lane.campaign_name}.yml") != raw:
             raise ValueError("rolling campaign changed sites, graph, visits or fixed settings")
         actual.append({**asdict(lane), "workload_ids": list(lane.workload_ids), "campaign_sha256": lanes._sha(raw)})
@@ -990,6 +1066,13 @@ def enrollment_roots(spec: lanes.CaptureSpec) -> list[Path]:
         # attempt artifacts are closed relative references under this root.
         roots.add(context_root)
         from . import supplied_static_admission as static
+        from . import whole_graph_supplement as whole
+        from . import supplied_static_budget_successor as budget
+        from . import static_budget_capture as budget_capture
+        if isinstance(context, (budget.Context, budget_capture.Context)):
+            roots.update(budget_capture.roots(context))
+        if isinstance(context, whole.Context):
+            roots.update(whole.roots(context))
         if isinstance(context, static.Context):
             roots.update(static.roots(context))
         if ordinal == 1:
