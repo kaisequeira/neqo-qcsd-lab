@@ -1,5 +1,11 @@
 # Evidence required to begin class-study capture
 
+> **Active prospective workflow:** Follow the [50-site rolling v6 capture
+> path](RAPID-CAPTURE-PATH.md), with a final target of **50 sites × five
+> settings × 64 visits = 16,000 accepted formal recordings**. The sections
+> below describe the historical 100-site study and retain their original
+> authority for that contract.
+
 Status: 2 October 2026, Australia/Sydney. This is an evidence map and
 decision record for the extended class study. The executable rules are the
 checked-in [study contract](../config/class-study/v1/study.json), the validators

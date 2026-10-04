@@ -1,5 +1,11 @@
 # Extended-class study: acquisition and continuation
 
+> **Active prospective workflow:** Follow the [50-site rolling v6 capture
+> path](RAPID-CAPTURE-PATH.md), with a final target of **50 sites × five
+> settings × 64 visits = 16,000 accepted formal recordings**. The sections
+> below describe the historical 100-site study and retain their original
+> authority for that contract.
+
 Current protocol summary: 2 October 2026, Australia/Sydney. The
 [project ledger](../PROJECT.md) records progress; this document records the
 next work and its purpose. The checked-in

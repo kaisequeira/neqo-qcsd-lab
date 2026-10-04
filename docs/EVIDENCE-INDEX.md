@@ -11,61 +11,94 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ### Rolling v6 source and independent browser runtime
 
-At **4 October, 11:00 Sydney**, formal progress is **0/16,000** and
-context018 retains its original **17 decisions and one admitted site**.
-Rolling v6 removes the global50-site and ten-site shakedown first-launch
-barriers. Enrollment is append-only in batches of1–5; each setting needs its
-own ready evidence, and final closure still requires every50×5×64 slot.
+At **4 October, 11:18 Sydney**, formal progress is **0/16,000** and
+context 018 retains its original **17 decisions and one admitted site**.
+Rolling v6 removes the global 50-site and ten-site shakedown first-launch
+barriers. Enrollment is append-only in batches of 1–5; each setting needs its
+own ready evidence, and final closure still requires every **50 × 5 × 64** slot.
 
 Local `rapid-v6-rolling-formal-lab-checks-20261004-002/source-closure.json`
 has SHA `a2092634ec4c7de4926d0917cff90c29bfe2ef0dab851538de0f3aa92e0261c3`.
-The actual operation passed104 checks in314.533seconds; XML, command,
+The actual operation passed 104 checks in 314.533 seconds; XML, command,
 started/completed records, raw logs and before/after Source are retained.
 Final review SHA `6835af0842187ac7ebc60dc496d39e4b905219bbd12ae4ba2116f30b0e65a1df`
-reopens all eight held paths, eight unchanged admission groups/24files and
-clean Native841. The initial fixture failure/interruption remains failed
-under the referenced001 closure. These host checks do not claim installed
-v6 execution or formal capture.
+reopens all eight held paths, eight unchanged admission groups/24 files and
+clean Native 841. The initial fixture failure/interruption remains failed
+under the referenced 001 closure. These host checks grant no formal credit.
+
+Local `rapid-v6-first-formal-runtime-20261004-001/canonical-runtime.json`
+has SHA `522ea41e9d6948836458a931f6f482709c25c00a4138511b20be4529a1efd86e`.
+It installs clean Lab `62105b0b0d05d1a7572724aaf5b076253ef6caa2` / Native
+`8417787ce0da2d83a67b0b77dd6ef6a316611741`. All twelve actual operations,
+raw logs and 2,395 source files reopen. Exact existing client reuse took
+1.013 seconds; collection/prepare thin image builds took 65.658/78.175
+seconds. No Native build ran. Installed client SHA remains
+`867d8bc0b473b4dad308e928a8e1711c1fcb24c0d36d11d0a63c2ecac2a60a33`.
+
+Local `rapid-v6-first-formal-poki-20261004-001/stage.json` has SHA
+`8c435d003ff625c9e63447a312093febc04ec265c3a18044db957f7de3618440`;
+its `commands.json` has SHA
+`92734f69fb6882aa914c00bca4a45a84afe73a812245cebd32d50514e2c03e50`.
+Actual three mode-specific equivalence operations, readiness binding,
+initialization and enrollment all closed 0. The first batch retains the
+original context-018 Poki admission and its full 260-resource/four-origin
+workload; all 13 copied application-response evidence files match.
+Enrollment closed at 00:15:22 UTC in 58.673 seconds. The fresh installed
+singleton response qualifier closed 0 at 00:17:11 UTC in 71.351 seconds.
+It uses the existing public qualification APIs with the unchanged
+120-response policy and current-implementation checks. Its actual
+`qualification-complete.json` binds named manifest SHA
+`a9496855610d6739358db30fa32c7efc5e6bdae8e95a2dce16dc8fb3863cc941`.
+Capture planning is in progress; no formal lane has started or gained
+credit at this snapshot.
 
 Actual `actual-poki-011` ordinary, Tamaraw and CS-BuFLO recordings passed
-the ordinary installed deep verifier on runtime010. Tamaraw receipt SHA:
+the ordinary installed deep verifier on runtime 010. Tamaraw receipt SHA:
 `e4d1876b51e8df8bae7b226fbe4d14d56a717ca437a2df13b7fece0feffe145c`;
 CS-BuFLO receipt SHA:
 `041eac248ab1526c546fb58cac348b0a6baf93d87d771a74f0fa6a9b7cb787b3`.
-All13/15 respective seal members, four actual capture/deep operations,
-original full260-resource/four-origin graph, source/client/image and named
+All 13/15 respective seal members, four actual capture/deep operations,
+original full 260-resource/four-origin graph, source/client/image and named
 qualification bindings independently reopen. Each remains diagnostic.
 
-BuFLO's original011 failure includes one real ETF `TXTIME Missed` drop
-despite enqueue4.733ms before target. Its original27-file seal remains
+BuFLO's original 011 failure includes one real ETF `TXTIME Missed` drop
+despite enqueue 4.733 ms before target. Its original 27-file seal remains
 `486868968051131c753d28898476e7e69ef08ff6b273635411af9cec84b4f54a`.
-A create-only same-source retry is running under
+A create-only same-source retry failed after 164.717 seconds under
 `rapid-v12-buflo-same-source-retry-20261004-001/run-001`; intent SHA
 `61f334b64deef64267de4e2cda44eeded574cd72dae5b4b99abc8cb589550aa3`.
 It changes only the operation/DNS namespace, preserves the campaign/seed
 and qualified inputs, and gives the old failed dated result no new credit.
+Local `buflo-retry-clock-owner-audit-20261004-001/audit.json`, SHA
+`2467682d76ef5aed393100d309e7cbd7f5f3800ee7327be3e743b2a45fc8c9f1`,
+reopens the retry's 27-file seal and corroborates a 3.218 ms backward TAI
+change using independent TAI/MONOTONIC clock pairs. Before the strict guard
+aborted, there were no TXTIME drops, failed transmitted items or outgoing
+release-window violations; 69 of 260 resources had completed. The retry
+has zero accepted and formal credit. The exact host clock-change trigger
+is unidentified.
 
-FRONT011's full graph completed, but the record failed a stale post-receive
-timestamp and one genuine pure-padding `DeadlineExpired` omission among438
-opportunities. Its original21-file seal remains
+FRONT 011's full graph completed, but the record failed a stale post-receive
+timestamp and one genuine pure-padding `DeadlineExpired` omission among 438
+opportunities. Its original 21-file seal remains
 `78c3710dbe1905e85d7b9012ac837bb6c06691c7a1981ea00bf648f88f421d53`.
 Native `af58431a24af87e5d1e99e4fc23ef6548543f0bf` fixes the timestamp only.
 Three compiled checks passed; proof closure SHA
 `08d044defdc313f917fa64cb10a30560ae82853c47475a8d81376dcfef06b180`.
-The publication record reopens seven actual operations and all1783 source
-entries. This repair is not installed in runtime010; the padding failure
+The publication record reopens seven actual operations and all 1,783 source
+entries. This repair is not installed in runtime 010; the padding failure
 is unchanged.
 
 Local `rapid-v13-cdp-canceled-admission-runtime-20261004-001` installs
-Lab `2af3389d3d8797a285f27f8f6059b410c4466087` / Native394, with browser
-source78a552a2. Canonical SHA:
+Lab `2af3389d3d8797a285f27f8f6059b410c4466087` / Native 394, with browser
+source `78a552a2`. Canonical SHA:
 `e1b8f2ec1c9679ee0ee2b646a3c030a7ef07d8bf206db6918d04f15af9d96027`.
-All twelve operations and2369 source entries, including1783 Native entries,
-reopen. Exact client reuse took1.162seconds; image builds59.903/68.351seconds.
-No Native build ran. Context019 is initialized with113 retained root screens;
+All twelve operations and 2,369 source entries, including 1,783 Native entries,
+reopen. Exact client reuse took 1.162 seconds; image builds 59.903/68.351 seconds.
+No Native build ran. Context 019 is initialized with 113 retained root screens;
 registry SHA `c4af6a8fcff8fcbb9e3af0e8cc5d351976993dadceadab09688451c7fc9e7472`.
 Its coordinator has not started. Source and terminal roles remain separate
-from018, with fresh preparation required for newly enrolled019 sites.
+from 018, with fresh preparation required for newly enrolled 019 sites.
 
 ### V13 runtime 010 and canceled CSP proof
 

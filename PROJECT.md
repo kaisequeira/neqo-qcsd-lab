@@ -43,18 +43,31 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Latest milestone, 4 October, 11:00 Sydney (4 October, 00:00 UTC):**
+**Latest milestone, 4 October, 11:18 Sydney (4 October, 00:18 UTC):**
 Rolling v6 passed **104 focused host checks**, including actual retained
 admission/readiness evidence, first serial dispatch, failed-only recovery
 and exact 16,000-slot final accounting. Independent review found no concrete
 blocker. The eight admission producer groups and Native `8417787c` remain
-unchanged. Matching thin installation and the first actual formal lane are
-still required; **formal progress remains 0/16,000**.
+unchanged. Matching Lab `62105b0b` / Native `8417787c` is now installed:
+all twelve runtime operations and all 2,395 source files reopen. The exact
+existing Native client was reused in **1.013 seconds**; thin image builds
+took **65.658 and 78.175 seconds**, with no Native build.
+
+The three setting-specific source-equivalence capsules, readiness binding,
+study initialization and first-site enrollment all completed successfully.
+Poki retains its original context-018 admission and complete resource graph.
+Its fresh one-site padding-response qualification passed in the matching
+installed image in **71.351 seconds**. The capture plan is being prepared;
+the first actual formal lane is still required, and **formal progress
+remains 0/16,000**.
 
 Runtime 010's full 260-resource/four-origin ordinary, Tamaraw and CS-BuFLO
-diagnostics passed capture and deep verification. BuFLO had a real kernel
-packet drop; a fresh same-source retry is running with its original campaign,
-seed and response qualification. FRONT completed the page but failed a
+diagnostics passed capture and deep verification. BuFLO's original recording
+had a real kernel packet drop. Its same-source retry failed after **164.717
+seconds** on a corroborated **3.218 ms backward TAI clock change**. It had
+no transmit-time drop or outgoing-window violation before aborting with
+69 of 260 resources complete; zero recordings were accepted. The exact
+host trigger remains unidentified. FRONT completed the page but failed a
 receive-clock check and a padding deadline. The receive-clock repair is
 published as Native `af58431a`, with three compiled checks passing; it is
 not installed in runtime 010 and its separate padding failure remains failed.
