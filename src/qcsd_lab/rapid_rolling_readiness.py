@@ -322,9 +322,14 @@ def _deep_command(plan: Mapping[str, Any], directory: Path, plan_sha: str,
     _read(helper, plan["helper_sha256"])
     image = plan["canonical_runtime"]["collection_image_digest"]
     static_mounts = []
-    original = _json(_read(directory / "lineage/original-manifest.json", plan["original_workload_sha256"]))
-    from .static_evidence_transport import manifest_roots
-    for root in manifest_roots(original):
+    if "static_capture_amendment" in plan:
+        from .static_evidence_transport import amended_canary_roots
+        roots = amended_canary_roots(plan, directory)
+    else:
+        original = _json(_read(directory / "lineage/original-manifest.json", plan["original_workload_sha256"]))
+        from .static_evidence_transport import manifest_roots
+        roots = manifest_roots(original)
+    for root in roots:
         static_mounts.extend(["--volume", f"{root}:{root}:ro"])
     return ["docker", "run", "--rm", "--name", f'qcsd-v12-{plan["name"]}-verify-image',
             "--network", "none", "--user", user, "--security-opt", "no-new-privileges",
@@ -560,9 +565,13 @@ def readiness_mount_roots(reference: Mapping[str, Any], *, runtime: Mapping[str,
     plan = _json(plan_raw)
     roots = {plan_path.parent, _path(plan["clean_runtime_root"], directory=True),
              _path(plan["execution_root"], directory=True)}
-    from .static_evidence_transport import manifest_roots
-    original = _json(_read(plan_path.parent / "lineage/original-manifest.json", plan["original_workload_sha256"]))
-    roots.update(manifest_roots(original))
+    if "static_capture_amendment" in plan:
+        from .static_evidence_transport import amended_canary_roots
+        roots.update(amended_canary_roots(plan, plan_path.parent))
+    else:
+        from .static_evidence_transport import manifest_roots
+        original = _json(_read(plan_path.parent / "lineage/original-manifest.json", plan["original_workload_sha256"]))
+        roots.update(manifest_roots(original))
     runtimes = [runtime]
     if reference["schema_version"] == 2:
         capsule_path, capsule_raw = _reference(reference["source_equivalence"])

@@ -68,6 +68,44 @@ def manifest_roots(manifest: Mapping[str, Any]) -> list[Path]:
                   if not any(root != parent and root.is_relative_to(parent) for parent in roots))
 
 
+def amended_canary_roots(plan: Mapping[str, Any], directory: Path) -> list[Path]:
+    """Authenticate the derived workload before transporting amendment inputs.
+
+    The lineage file remains the immutable original GET preparation. Only an
+    explicit closed amendment may add its Source/client/declaration roots.
+    """
+    from . import supplied_static_capture_amendment as amendment
+    from . import supplied_static_preparation as preparation
+    from . import supplied_static_graph as graph
+
+    original_path = _path(directory / "lineage/original-manifest.json")
+    original = _json(original_path)
+    if graph.digest(original_path.read_bytes()) != plan.get("original_workload_sha256"):
+        raise ValueError("amended canary changed its original lineage manifest")
+    execution = _path(Path(plan["execution_root"]), directory=True)
+    relative = Path(plan["workload_relative"])
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError("amended canary workload is outside its execution root")
+    target = _path(execution / relative)
+    manifest = _json(target)
+    if (graph.digest(target.read_bytes()) != plan.get("workload_sha256")
+        or manifest.get("resources") != original.get("resources")
+        or not amendment.is_amended(manifest.get("preparation"))
+        or manifest["preparation"]["data_role"] != plan.get("data_role")):
+        raise ValueError("amended canary changed its declared complete derived graph")
+    receipt_path = preparation.open_reference(plan.get("static_capture_amendment"))
+    closed = amendment._closed(receipt_path)
+    matching = [row for row in closed["workloads"]
+                if preparation.open_reference(row["capture_manifest"]) == target]
+    if (len(matching) != 1 or matching[0]["capture_manifest"]["sha256"] != plan["workload_sha256"]
+        or preparation.open_reference(matching[0]["original_manifest"]).read_bytes() != original_path.read_bytes()
+        or closed["declaration"] != manifest["preparation"][amendment.FIELD]
+        or Path(closed["runtime"]["execution_root"]) != execution
+        or closed["runtime"]["runtime_source_root"] != plan.get("clean_runtime_root")):
+        raise ValueError("amended canary changed its closed declaration or runtime")
+    return manifest_roots(manifest)
+
+
 def campaign_roots(root: Path, action: str, target: Path) -> list[Path]:
     """Read the bound run/resume workload paths before installed preflight.
 
