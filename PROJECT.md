@@ -49,7 +49,44 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Current checkpoint, 4 October, 20:42 Sydney AEDT (4 October, 09:42 UTC):**
+**Current checkpoint, 4 October, 21:20 Sydney AEDT (4 October, 10:20 UTC):**
+Formal capture has begun for the supplied-list study: **4/16,000 accepted
+recordings**, from the first four ordinary-traffic visits to one enrolled site,
+Poki. All four passed capture, installed ordinary deep verification, lane
+closure and independent evidence inspection; none failed. Each retains the
+complete **277-resource graph across three origins**. The eight historical
+browser recordings remain separate and are excluded from this count.
+
+The supplied-list prefix still has **20 closed candidate decisions: five
+admitted, seven operational deferrals and eight input-ineligible**. One of
+those five admitted sites is enrolled. Final completion still requires
+**50 sites × five settings × 64 visits = 16,000 accepted recordings**.
+Admission establishes complete ordinary HTTP/3 GET eligibility, not automatic
+viability under every defense.
+
+The executing source remains clean **Lab `0730fa6f` / Native `5f075d37`**.
+Its matching runtime passed all 12 installation/export operations, reusing
+the verified Native client without compilation. Current named 120-response
+qualification passed in **75.9 seconds**, followed by public readiness and
+the **29-second** formal plan. The first formal launch and verification
+closed successfully in **468.675 seconds**. That is about **30.7 accepted
+recordings per hour for this one four-visit ordinary lane only**; it is not
+a sustained rate, another setting's rate or a full-study ETA.
+
+More ordinary lanes can proceed without waiting for all 50 sites, all five
+settings, fitting, browser rendering or the historical long qualification.
+Other settings need their own current complete-graph readiness. The separate
+static FRONT/BuFLO policy adapter passed **116 HOST checks**, with one optional
+retained-evidence skip, and independent source review. Matching BuFLO
+200-second support passed **50 HOST checks** and source review. Its five Native
+framework checks passed, but the focused runner compile failed after **38.146
+seconds** on typed manifest access in the new settings-reading code. A narrow
+fix is underway in a separate copy; the failure remains preserved. These
+future changes are not installed or live-proved by the ordinary lane and need
+no nine-hour whole-suite restart. They leave its original source and accepted
+evidence intact. See the [current evidence locations](docs/EVIDENCE-INDEX.md#current-supplied-list-study).
+
+**Earlier checkpoint, 4 October, 20:42 Sydney AEDT (4 October, 09:42 UTC):**
 The supplied-list cohort has **five admitted sites and 0/16,000 accepted formal
 recordings**. Its first 20 candidate decisions are closed: five admissions,
 seven operational deferrals and eight input rejections. Each admission retains

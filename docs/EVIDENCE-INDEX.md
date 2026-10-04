@@ -11,6 +11,66 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ### Current supplied-list study
 
+At **4 October, 21:20 Sydney AEDT (10:20 UTC)**, formal capture has begun:
+**4/16,000 accepted recordings**, all ordinary traffic from one enrolled Poki
+site. Five sites are admitted from the sealed first 20 decisions: five admitted,
+seven operationally deferred and eight input-ineligible. The eight historical
+browser recordings remain separate. The final static target is unchanged:
+**50 sites × five settings × 64 visits**.
+
+The first formal lane retained all **277 resources across three origins**.
+All four visits passed, with zero failed visits. Installed ordinary deep
+verification, lane closure and independent evidence inspection passed. The
+actual public launch closed 0 in **468.675 seconds**, an observed **30.7
+accepted recordings/hour for this one ordinary four-visit lane only**.
+This is not a sustained throughput estimate or a whole-study ETA.
+
+Execution remains on **Lab `0730fa6f` / Native `5f075d37`**, collection image
+`15cb564e`, with all 12 matching installation/export operations closed 0 and
+the existing client reused without compilation. Runtime records are in
+`diagnostic-rehearsals/rapid-v6-supplied-static-native5f-runtime-20261004-002`;
+canonical SHA is `7dbcca9d3ea5e0873c21eeb1fbf986e6a97e454c85542252ae3948524522fe51`.
+The [rolling runbook](RAPID-CAPTURE-PATH.md) permits ready settings to continue
+without waiting for all 50 admissions or all settings' canaries.
+
+Current qualification, readiness, plan and lane evidence are in
+`diagnostic-rehearsals/supplied-static-first-site-native5f-20261004-001`.
+The named 120-response qualification passed in **75.9 seconds**, public
+planning in **29 seconds**. The accepted lane is
+`evidence/lanes/rapid-curated-tranco50-v6-formal-b01-s01-undefended-1200/complete.json`,
+SHA `453c57db6cd1430a0cc7dfda85f7f947f8796bf0dead450019444032d7477bc3`.
+Its installed-deep/lane closure SHA is
+`fc3ffe1c5b703641b5c59e41048a8e22bede2a3e07be4b20d23cf8d8fc6f60f1`.
+Root's actual launch and independent counter records are in
+`diagnostic-rehearsals/supplied-static-first-formal-root-actual-20261004-001`.
+`scientific-progress-000001.json`, SHA
+`50b35a0e2a0c02b36b390185d88c5c389804d9428e1353e5432eccf7fef7c6c9`,
+records the four distinct accepted slots and excludes the historical eight.
+
+Future static FRONT/BuFLO policy integration remains separate. Its 24-path
+composition passed **116 HOST checks**, with one optional retained-evidence
+skip, and independent review; closure
+`diagnostic-rehearsals/static-capture-transport-composition-host-checks-20261004-001/source-closure-final.json`
+has SHA `c14fdd5fd56eec1a1c230a7d0fd2bf96396497171e735b8d86ef32f89d8f4ded`.
+The ten original admission/GET producer files and all original GET evidence
+remain unchanged. Separate BuFLO 200-second Lab support passed **50 HOST checks**;
+closure `diagnostic-rehearsals/buflo-duration200-lab-host-checks-20261004-002/source-closure-final.json`
+has SHA `e42154daf63877363e4e12b6de183e0b3fdef765745e972630aa02368dcbfee2`.
+Native records are in
+`diagnostic-rehearsals/rapid-v6-front-v4-buflo-v12-duration200-native-root-checks-20261004-001/operations`.
+The five framework checks passed. The runner compile then closed **101 after
+38.146 seconds**, before the FRONT V4/BuFLO V12 test filters, with two `E0599`
+errors: the typed `ResourceManifest` has no `pointer` method for the new
+preparation-policy lookups. Actual failure closed at **10:16:18 UTC**;
+`duration200-runner.stderr.log` has SHA
+`32f59c483bc38fa7851670a7c40124219ce5df35d9aad4047e20ec47cbe96ee0`.
+A narrow fix is underway in a separate copy. The failed compile is retained;
+no final compiled, installed or live pass is claimed. The original ordinary
+lane remains valid without a whole-suite restart. Future integration, matching
+installation and affected-setting qualification/canaries remain necessary.
+
+#### Earlier pre-capture checkpoint
+
 At **4 October, 20:42 Sydney AEDT (09:42 UTC)**, the prospective fixed-resource
 cohort has **five admitted sites and 0/16,000 accepted formal recordings**.
 The original browser cohort has eight accepted recordings and remains separate.
