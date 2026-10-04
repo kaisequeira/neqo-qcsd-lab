@@ -61,7 +61,15 @@ def run(args):
             return rolling.publish_corpus(args.evidence_root, references, args.output)
         return rolling.verify_corpus_manifest(args.evidence_root, args.manifest)
     spec = lanes.load_capture_spec(args.spec)
-    rolling.verify_capture_plan(spec)
+    if args.command == "launch":
+        payload = lanes._payload(spec.plan_receipt, lanes.PLAN_TYPE)
+        if (type(payload.get("study_version")) is not int or payload["study_version"] != 6
+            or payload.get("cohort_generation") != "rolling-50"):
+            raise ValueError("rolling launch requires its prospective version-six plan")
+        # launch_lane independently verifies the full plan in the actual bound
+        # image and reopens that proof before publishing the lane intent.
+    else:
+        rolling.verify_capture_plan(spec)
     root = lanes._regular_directory(args.evidence_root)
     if args.command == "successor":
         path = rolling.publish_successor(spec, args.lane, args.generation, args.output)

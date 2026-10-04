@@ -206,6 +206,11 @@ def _prepared_workload(context, terminal_path: Path) -> tuple[Path, dict[str, An
 
 
 def verify_enrollment(path: Path, *, _verified: dict | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    batch, classes, _ = _verify_enrollment(path, _verified=_verified)
+    return batch, classes
+
+
+def _verify_enrollment(path: Path, *, _verified: dict | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
     raw = lanes._read(path)
     value = admission._unpack(raw, ENROLLMENT_TYPE)
     _keys(value, {"policy", "ordinal", "parent", "admission_root", "admission_provenance",
@@ -225,7 +230,7 @@ def verify_enrollment(path: Path, *, _verified: dict | None = None) -> tuple[dic
     else:
         if _open_ref(value["parent"]) != _batch_path(root, value["ordinal"] - 1):
             raise ValueError("rolling enrollment skips or replaces its parent")
-        parent, previous = verify_enrollment(_open_ref(value["parent"]), _verified=_verified)
+        parent, previous, _ = _verify_enrollment(_open_ref(value["parent"]), _verified=_verified)
         first_position = parent["last_candidate_position"] + 1
         first_class = parent["first_class_index"] + len(parent["selected_candidate_ids"])
         earliest = parent["declared_at"]
@@ -265,7 +270,7 @@ def verify_enrollment(path: Path, *, _verified: dict | None = None) -> tuple[dic
         raise ValueError("rolling enrollment repeats an earlier class's workload identity")
     if _verified is not None:
         _verified[path.absolute()] = (lanes._sha(raw), value, classes)
-    return value, classes
+    return value, classes, policy
 
 
 def enroll(root: Path, *, acquisition_root: Path | None = None, count: int = 1) -> Path:
@@ -309,6 +314,11 @@ def enroll(root: Path, *, acquisition_root: Path | None = None, count: int = 1) 
 
 def _sites(enrollment: Path, qualifier_spec: Path, workload_root: Path, *, require_current: bool = False) -> tuple[plan.Site, ...]:
     batch, all_classes = verify_enrollment(enrollment)
+    return _sites_from_enrollment(batch, all_classes, qualifier_spec, workload_root, require_current=require_current)
+
+
+def _sites_from_enrollment(batch: Mapping[str, Any], all_classes: list[dict[str, Any]],
+                           qualifier_spec: Path, workload_root: Path, *, require_current: bool) -> tuple[plan.Site, ...]:
     classes = all_classes[-len(batch["selected_candidate_ids"]):]
     spec = lanes._load(lanes._read(qualifier_spec))
     _keys(spec, {"schema_version", "qualification_sets"}, "rolling qualifiers")
@@ -342,8 +352,11 @@ def _sites(enrollment: Path, qualifier_spec: Path, workload_root: Path, *, requi
 
 
 def _bindings(enrollment: Path) -> dict[str, str]:
-    batch, _ = verify_enrollment(enrollment)
-    policy = verify_policy(_open_ref(batch["policy"]).parent)
+    _, _, policy = _verify_enrollment(enrollment)
+    return _bindings_from_enrollment(enrollment, policy)
+
+
+def _bindings_from_enrollment(enrollment: Path, policy: Mapping[str, Any]) -> dict[str, str]:
     return {"profile_sha256": policy["admission_identity"]["profile_sha256"],
             "cohort_sha256": lanes._sha(lanes._read(enrollment)), "study_version": "v6",
             "selection_amendment_sha256": policy["admission_identity"]["selection_amendment_sha256"]}
@@ -389,6 +402,12 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
 
 def capture_spec(root: Path, enrollment: Path, qualification_spec: Path, plan_receipt: Path) -> lanes.CaptureSpec:
     policy = verify_policy(root)
+    batch, _ = verify_enrollment(enrollment)
+    return _capture_spec_from_enrollment(root, enrollment, qualification_spec, plan_receipt, batch, policy)
+
+
+def _capture_spec_from_enrollment(root: Path, enrollment: Path, qualification_spec: Path, plan_receipt: Path,
+                                  batch: Mapping[str, Any], policy: Mapping[str, Any]) -> lanes.CaptureSpec:
     payload = admission._unpack(lanes._read(plan_receipt), lanes.PLAN_TYPE)
     value = _runtime(payload["runtime"])
     if value["data_root"] != policy["runtime"]["data_root"]:
@@ -397,7 +416,6 @@ def capture_spec(root: Path, enrollment: Path, qualification_spec: Path, plan_re
     for key, reference in payload["runtime_artifacts"].items():
         if _open_ref(reference) != Path(value[key]):
             raise ValueError("rolling plan runtime artifact changed")
-    batch, _ = verify_enrollment(enrollment)
     if _open_ref(batch["policy"]) != root / "policy.json":
         raise ValueError("rolling capture spec belongs to another study")
     inputs = {**value, "acquisition_root": batch["admission_root"], "cohort": str(enrollment.absolute()),
@@ -406,18 +424,20 @@ def capture_spec(root: Path, enrollment: Path, qualification_spec: Path, plan_re
 
 
 def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = False) -> tuple[tuple[plan.Site, ...], dict[str, Any]]:
-    batch, _ = verify_enrollment(spec.cohort)
+    # These facts live only inside this verification call. Public entry points
+    # independently reopen enrollment; no prior operation supplies authority.
+    batch, classes, policy = _verify_enrollment(spec.cohort)
     root = _open_ref(batch["policy"]).parent
-    expected_spec = capture_spec(root, spec.cohort, spec.qualification_spec, spec.plan_receipt)
+    expected_spec = _capture_spec_from_enrollment(root, spec.cohort, spec.qualification_spec, spec.plan_receipt, batch, policy)
     if spec != expected_spec:
         raise ValueError("rolling spec changed frozen runtime, admission or input locations")
-    sites = _sites(spec.cohort, spec.qualification_spec, spec.workload_root, require_current=require_current)
+    sites = _sites_from_enrollment(batch, classes, spec.qualification_spec, spec.workload_root, require_current=require_current)
     value = admission._unpack(lanes._read(spec.plan_receipt), lanes.PLAN_TYPE)
     _keys(value, {"study_version", "cohort_generation", "bindings", "runtime", "runtime_artifacts", "acquisition_provenance_sha256",
                  "qualification_spec_sha256", "sites", "lanes", "planned_trace_count", "readiness",
                  "declared_at", "formal_accepted_trace_count", "scientific_credit"}, "rolling plan")
     if (value["study_version"] != 6 or type(value["study_version"]) is not int
-        or value["cohort_generation"] != "rolling-50" or value["bindings"] != _bindings(spec.cohort)
+        or value["cohort_generation"] != "rolling-50" or value["bindings"] != _bindings_from_enrollment(spec.cohort, policy)
         or value["sites"] != [asdict(site) for site in sites]
         or value["qualification_spec_sha256"] != lanes._sha(lanes._read(spec.qualification_spec))
         or value["acquisition_provenance_sha256"] != lanes._sha(lanes._read(spec.acquisition_root / "provenance.json"))

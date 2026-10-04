@@ -835,6 +835,10 @@ def _verified_retirement(raw: bytes, root: Path, intent_raw: bytes, campaign_nam
 def _lineage_payload(spec: CaptureSpec, lane: plan.Lane, checked: Mapping[str, Any], root: Path,
                      predecessor_receipt: Path | None) -> dict[str, Any]:
     proof = checked["proof"]
+    rolling_readiness = {}
+    if lane.study_version == 6:
+        from . import rapid_rolling_capture as rolling
+        rolling_readiness = {"rolling_readiness": rolling.require_mode_readiness(spec, lane, before=checked["execution"]["started_at"])}
     installation_reference = checked["execution"].get("capture_control_installation")
     if installation_reference is not None:
         from . import rapid_capture_control_installation as installation
@@ -895,10 +899,6 @@ def _lineage_payload(spec: CaptureSpec, lane: plan.Lane, checked: Mapping[str, A
         }.items()
     }
     artifacts.update({key: _put_object(root, _read(spec.execution_root / relative)) for key, (relative, _) in TRAFFIC_FILES.items()})
-    rolling_readiness = {}
-    if lane.study_version == 6:
-        from . import rapid_rolling_capture as rolling
-        rolling_readiness = {"rolling_readiness": rolling.require_mode_readiness(spec, lane, before=checked["execution"]["started_at"])}
     return {
         "execution_generation": spec.execution_generation, "profile_receipt_sha256": bindings["profile_sha256"],
         "cohort_receipt_sha256": bindings["cohort_sha256"],
@@ -932,10 +932,8 @@ def prepare_lane_intent(spec: CaptureSpec, evidence_root: Path, campaign_name: s
     sites = _validate_image_proof(checked["proof"], spec)
     lane = _lane(checked["proof"], campaign_name)
     if lane.study_version == 6:
-        from . import rapid_rolling_capture as rolling
         if actuator != "run":
             raise ValueError("rolling first capture currently requires the serial actuator")
-        rolling.require_mode_readiness(spec, lane)
     campaign = spec.campaign_dir / f"{campaign_name}.yml"
     if _read(campaign) != plan.render_lane_campaign(lane, sites):
         raise ValueError("launch campaign differs from the independently verified grid")

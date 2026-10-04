@@ -13,6 +13,7 @@ import json
 import os
 import subprocess
 import sys
+from collections import Counter
 from dataclasses import asdict, replace
 from datetime import timedelta
 from pathlib import Path
@@ -293,6 +294,146 @@ def test_later_failure_of_one_setting_does_not_gate_the_already_proved_peer(roll
     with pytest.raises(ValueError, match="affected Buflo"):
         lanes.prepare_lane_intent(spec, fixture.root, buflo, checked)
     assert not (fixture.root / "lanes" / buflo).exists()
+
+
+def test_intent_checks_readiness_once_at_image_start_and_closure_reopens_it(rolling_setup, monkeypatch):
+    spec, _ = _planned(rolling_setup, modes=("front",))
+    proof = _proof(rolling_setup, spec)
+    checked = {"proof": proof, "execution": {"returncode": 0, "started_at": admission._now(),
+        "validator_script_sha256": lanes._sha(lanes.IMAGE_CHECK_SCRIPT.encode()),
+        "stdout": lanes._put_object(rolling_setup.root, lanes._json(proof))}}
+    name = next(row["campaign_name"] for row in proof["plan_payload"]["lanes"] if row["mode"] == "front")
+    primitive = rolling.require_mode_readiness
+    calls = []
+    def current_readiness(actual_spec, lane, *, before=None):
+        calls.append((actual_spec, lane.campaign_name, before))
+        return primitive(actual_spec, lane, before=before)
+    monkeypatch.setattr(rolling, "require_mode_readiness", current_readiness)
+    intent = lanes.prepare_lane_intent(spec, rolling_setup.root, name, checked)
+    assert calls == [(spec, name, checked["execution"]["started_at"])]
+    def changed_canary(*args, **kwargs):
+        raise ValueError("retained canary changed before closure")
+    monkeypatch.setattr(readiness, "validate_canary", changed_canary)
+    with pytest.raises(ValueError, match="changed before closure"):
+        lanes._intent_and_lineage(spec, rolling_setup.root, intent)
+    assert calls == [(spec, name, checked["execution"]["started_at"])] * 2
+
+
+def test_failed_readiness_publishes_neither_artifacts_nor_intent(rolling_setup, monkeypatch):
+    spec, _ = _planned(rolling_setup, modes=("front",))
+    proof = _proof(rolling_setup, spec)
+    checked = {"proof": proof, "execution": {"returncode": 0, "started_at": admission._now()}}
+    name = next(row["campaign_name"] for row in proof["plan_payload"]["lanes"] if row["mode"] == "front")
+    writes = []
+    primitive = lanes._put_object
+    def put(root, raw):
+        writes.append(raw)
+        return primitive(root, raw)
+    monkeypatch.setattr(lanes, "_put_object", put)
+    def unavailable(*args, **kwargs):
+        raise ValueError("current full canary unavailable")
+    monkeypatch.setattr(readiness, "validate_canary", unavailable)
+    with pytest.raises(ValueError, match="canary unavailable"):
+        lanes.prepare_lane_intent(spec, rolling_setup.root, name, checked)
+    assert writes == []
+    assert not (rolling_setup.root / "lanes" / name).exists()
+
+
+def test_plan_reopens_each_enrollment_once_and_public_wrappers_stay_fresh(rolling_setup, monkeypatch):
+    first = rolling.enroll(rolling_setup.root)
+    rolling_setup.status["terminal_prefix"] = rolling_setup.terminals[:2]
+    second = rolling.enroll(rolling_setup.root)
+    output = rolling_setup.root / "second-plan.json"
+    rolling.publish_plan(rolling_setup.root, second, rolling_setup.base.spec.qualification_spec, output, readiness={})
+    spec = rolling.capture_spec(rolling_setup.root, second, rolling_setup.base.spec.qualification_spec, output)
+    primitive = rolling._verify_enrollment
+    calls = Counter()
+    def verify(path, **kwargs):
+        calls[Path(path)] += 1
+        return primitive(path, **kwargs)
+    monkeypatch.setattr(rolling, "_verify_enrollment", verify)
+    sites, payload = rolling.verify_capture_plan(spec)
+    assert calls == Counter({first: 1, second: 1})
+    for independent in (
+        lambda: rolling._sites(second, spec.qualification_spec, spec.workload_root),
+        lambda: rolling._bindings(second),
+        lambda: rolling.capture_spec(rolling_setup.root, second, spec.qualification_spec, output),
+    ):
+        calls.clear()
+        result = independent()
+        assert calls == Counter({first: 1, second: 1})
+        assert result in (sites, payload["bindings"], spec)
+
+
+@pytest.mark.parametrize("changed", ["prefix", "workload", "qualifier", "plan", "runtime"])
+def test_factored_plan_rejects_changed_inputs_on_each_new_call(rolling_setup, changed):
+    spec, _ = _planned(rolling_setup)
+    rolling.verify_capture_plan(spec)
+    if changed == "prefix":
+        path = admission._child(rolling_setup.context.root, rolling_setup.terminals[0])
+        value = admission._unpack(path.read_bytes(), admission.TERMINAL_TYPE)
+        value["facts"]["candidate_id"] = "replaced-original-candidate"
+        path.write_bytes(admission._json(admission._bind(admission.TERMINAL_TYPE, value)))
+    elif changed == "workload":
+        path = spec.workload_root / "site-0.json"
+        value = lanes._load(path.read_bytes())
+        value["resources"].pop()
+        path.write_bytes(lanes._json(value))
+    elif changed == "qualifier":
+        value = lanes._load(spec.qualification_spec.read_bytes())
+        path = Path(value["qualification_sets"][0]["manifest"])
+        path.write_bytes(lanes._json({"changed": "qualified content"}))
+    elif changed == "plan":
+        value = admission._unpack(spec.plan_receipt.read_bytes(), lanes.PLAN_TYPE)
+        value["lanes"][0]["visits_per_workload"] += 1
+        spec.plan_receipt.write_bytes(admission._json(admission._bind(lanes.PLAN_TYPE, value)))
+    else:
+        spec = replace(spec, collection_image_digest="sha256:" + "e" * 64)
+    with pytest.raises(ValueError):
+        rolling.verify_capture_plan(spec)
+
+
+@pytest.mark.parametrize("version,generation", [(5, "final-50"), (True, "rolling-50"), (6.0, "rolling-50"), (6, "final-50")])
+def test_rolling_cli_launch_rejects_nonrolling_role_before_actuation(rolling_setup, monkeypatch, version, generation):
+    spec, _ = _planned(rolling_setup)
+    value = admission._unpack(spec.plan_receipt.read_bytes(), lanes.PLAN_TYPE)
+    value.update(study_version=version, cohort_generation=generation)
+    spec.plan_receipt.write_bytes(admission._json(admission._bind(lanes.PLAN_TYPE, value)))
+    path = rolling_setup.root / "operator-spec.json"
+    rolling._write_spec(path, spec)
+    calls = []
+    monkeypatch.setattr(lanes, "launch_lane", lambda *args, **kwargs: calls.append(args))
+    args = cli._parser().parse_args(["launch", "--spec", str(path), "--evidence-root", str(rolling_setup.root),
+                                   "--lane", value["lanes"][0]["campaign_name"]])
+    with pytest.raises(ValueError, match="version-six"):
+        cli.run(args)
+    assert calls == []
+
+
+def test_rolling_cli_launch_defers_full_check_to_mandatory_launch_boundary(rolling_setup, monkeypatch):
+    spec, _ = _planned(rolling_setup)
+    proof = _proof(rolling_setup, spec)
+    name = proof["plan_payload"]["lanes"][0]["campaign_name"]
+    path = rolling_setup.root / "operator-spec.json"
+    rolling._write_spec(path, spec)
+    changed = spec.workload_root / "site-0.json"
+    value = lanes._load(changed.read_bytes())
+    value["resources"].pop()
+    changed.write_bytes(lanes._json(value))
+    calls = []
+    primitive = lanes.launch_lane
+    def launch(*args, **kwargs):
+        calls.append("launch-boundary")
+        return primitive(*args, **kwargs)
+    monkeypatch.setattr(lanes, "launch_lane", launch)
+    def no_docker(*args, **kwargs):
+        pytest.fail("changed graph must fail before Docker or capture")
+    monkeypatch.setattr(lanes.subprocess, "run", no_docker)
+    args = cli._parser().parse_args(["launch", "--spec", str(path), "--evidence-root", str(rolling_setup.root), "--lane", name])
+    with pytest.raises(ValueError, match="pruned or changed"):
+        cli.run(args)
+    assert calls == ["launch-boundary"]
+    assert not (rolling_setup.root / "lanes" / name).exists()
 
 
 def test_source_equivalence_must_precede_plan_and_actual_lane_claim(rolling_setup, monkeypatch):
