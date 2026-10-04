@@ -18,6 +18,11 @@ from tools import rapid_rolling_capture as cli
 from tests.test_supplied_static_get import actual_contract_fixture, write
 from tests.test_supplied_static_preparation import fixed_graph
 from tests.test_supplied_static_capture_amendment import original, publish, qualifier_and_canary
+from tests.test_rapid_lane_evidence import setup
+from tests.test_rapid_rolling_capture import rolling_setup, _planned
+from tests.test_rapid_operation_facts import scheduled
+
+_OPERATION_READINESS_MOUNTS = evidence.readiness_mount_roots
 
 WORKSPACE = Path(__file__).resolve().parents[3]
 ACTUAL = WORKSPACE / "diagnostic-rehearsals/rapid-v6-static-parallel-nativec24-runtime-20261005-001"
@@ -129,7 +134,7 @@ def projected_sources(actual):
 
 def test_actual_full_source_projection_allows_only_named_inspector_units(projected_sources):
     old, current, client = projected_sources
-    result = inspector.source_changes(old, current, client_sha256=client)
+    result = inspector.source_changes(old, current, client_sha256=client, _dependency_closure=True)
     assert inspector.MODULE_FILE in result["changed_sources"]
     assert len(result["native_source_hashes"]) == 1783
     assert len(result["acquisition_source_groups"]) == 8
@@ -143,7 +148,25 @@ def test_projected_current_source_cannot_change_measurement_qualification_get_or
     changed = dict(current)
     changed[path] += b"\n# prospectively altered protected Source\n"
     with pytest.raises(ValueError, match="protected Source"):
-        inspector.source_changes(old, changed, client_sha256=client)
+        inspector.source_changes(old, changed, client_sha256=client, _dependency_closure=True)
+
+
+def test_input_closure_projection_is_prospective_and_names_only_two_extra_methods(projected_sources):
+    old, current, client = projected_sources
+    with pytest.raises(ValueError, match="outside named control"):
+        inspector.source_changes(old, current, client_sha256=client)
+    result = inspector.source_changes(old, current, client_sha256=client, _dependency_closure=True)
+    path = "src/qcsd_lab/rapid_operation_facts.py"
+    assert result["contract"] == inspector.DEPENDENCY_CONTRACT
+    assert result["changed_sources"][path]["units"] == ["OperationFacts._workload_evidence_trees", "OperationFacts.bind_canary", "OperationFacts.bind_schedule"]
+    assert inspector.DEPENDENCY_CONTROL_DEFINITIONS[path] - inspector.CONTROL_DEFINITIONS[path] == {
+        "OperationFacts._workload_evidence_trees", "OperationFacts.bind_canary"}
+    changed = dict(current)
+    changed[path] = current[path].replace(b"self._facts.clear()", b"self._facts.clear(); self._trees.clear()", 1)
+    with pytest.raises(ValueError, match="outside named control"):
+        inspector.source_changes(old, changed, client_sha256=client, _dependency_closure=True)
+    with pytest.raises(ValueError, match="explicitly typed"):
+        inspector.source_changes(old, current, client_sha256=client, _dependency_closure=1)
 
 
 def test_original_nonexecutable_cannot_supply_derived_executable_fact(actual, tmp_path):
@@ -183,6 +206,9 @@ def test_inspector_schema2_requires_exact_type_and_contract():
     assert inspector.is_inspected(value)
     for change in ({"schema_version": True}, {"schema_version": 1}, {"contract": "legacy"}):
         assert not inspector.is_inspected({**value, **change})
+    assert inspector.is_inspected({**value, "schema_version": 3, "contract": inspector.DEPENDENCY_CONTRACT})
+    assert not inspector.is_inspected({**value, "schema_version": 3})
+    assert not inspector.is_inspected({**value, "contract": inspector.DEPENDENCY_CONTRACT})
 
 
 def test_public_inspector_command_has_explicit_both_actual_runtime_roles():
@@ -461,7 +487,7 @@ def hook_case(actual, projected_sources, tmp_path, monkeypatch):
     new_sources = dict(current_sources)
     new_sources["qcsd-lab"] = old_sources["qcsd-lab"].replace(inspector.ROUTING_OLD, inspector.ROUTING_NEW)
     assert new_sources["qcsd-lab"] != old_sources["qcsd-lab"]
-    comparison = inspector.source_changes(old_sources, new_sources, client_sha256=client)
+    comparison = inspector.source_changes(old_sources, new_sources, client_sha256=client, _dependency_closure=True)
     receipts, references = [], []
     for name, sources, source in (("measurement", old_sources, actual[1]["source"]),
         ("control", new_sources, {**actual[1]["source"], "lab_commit": "e" * 40})):
@@ -576,3 +602,539 @@ def test_composed_original_static_helper_uses_authenticated_parser_and_binds_mod
     with pytest.raises(ParserReached):
         module._derive(base, runtime, qualifier, reference, reference)
     assert calls == [(reference, runtime, True)]
+
+
+@pytest.fixture
+def operation_context_case(rolling_setup, scheduled, monkeypatch):
+    """Real plan/mount/raw-dependency code with offline scientific primitives.
+
+    Admission, named-response qualification and canary success use the existing
+    tiny HOST fixtures. No installed image, physical trace or throughput pass
+    is asserted by this context propagation test.
+    """
+    from types import SimpleNamespace
+    from collections import Counter
+    from qcsd_lab import rapid_lane_evidence as lanes
+    from qcsd_lab import rapid_operation_facts as operations
+    spec, _ = _planned(rolling_setup)
+    canary = {**scheduled.canary, "schema_version": 1}
+    lineage = Path(canary["plan"]["path"]).parent / "lineage"
+    lineage.mkdir()
+    write(lineage / "original-manifest.json", {"resources": ["whole offline graph"]})
+    canary_plan_path = Path(canary["plan"]["path"])
+    canary_plan = load(canary_plan_path)
+    canary_plan["original_workload_sha256"] = rolling._ref(lineage / "original-manifest.json")["sha256"]
+    write(canary_plan_path, canary_plan)
+    canary["plan"] = rolling._ref(canary_plan_path)
+    payload = lanes._payload(spec.plan_receipt, lanes.PLAN_TYPE)
+    payload["readiness"] = {"undefended": canary}
+    spec.plan_receipt.write_bytes(lanes._json(lanes.admission._bind(lanes.PLAN_TYPE, payload)))
+    lane = next(row for row in payload["lanes"] if row["mode"] == "undefended")
+    lane = lanes._lane({"plan_payload": payload}, lane["campaign_name"])
+    counts = Counter()
+    verify_enrollment = rolling._verify_enrollment
+    named = rolling.validate_named_qualification_set_manifest
+    verified_canary = evidence.validate_canary
+    observed_contexts = []
+    def enrolled(*args, **kwargs):
+        counts["enrollment"] += 1
+        return verify_enrollment(*args, **kwargs)
+    def qualified(*args, **kwargs):
+        counts["qualification"] += 1
+        observed_contexts.append(operations.current_context())
+        return named(*args, **kwargs)
+    def ready(*args, **kwargs):
+        counts["canary"] += 1
+        return verified_canary(*args, **kwargs)
+    monkeypatch.setattr(rolling, "_verify_enrollment", enrolled)
+    monkeypatch.setattr(rolling, "validate_named_qualification_set_manifest", qualified)
+    monkeypatch.setattr(evidence, "validate_canary", ready)
+    monkeypatch.setattr(evidence, "readiness_mount_roots", _OPERATION_READINESS_MOUNTS)
+    return SimpleNamespace(spec=spec, lane=lane, counts=counts, contexts=observed_contexts,
+                           dependencies=scheduled, root=rolling_setup.base.root)
+
+
+def test_operation_context_plan_and_qualification_are_once_and_hook_is_scoped(operation_context_case):
+    from qcsd_lab import rapid_operation_facts as operations
+    case = operation_context_case
+    context = operations.OperationFacts()
+    first = rolling.verify_capture_plan(case.spec, _context=context)
+    assert operations.current_context() is None
+    with context.scope():
+        assert rolling.verify_capture_plan(case.spec) == first
+        assert rolling.verify_capture_plan(case.spec, _context=context) == first
+    context.check()
+    assert case.counts == {"enrollment": 1, "qualification": 1}
+    assert case.contexts == [context]
+    # Current installed qualification is a distinct semantic check.
+    rolling.verify_capture_plan(case.spec, require_current=True, _context=context)
+    assert case.counts == {"enrollment": 2, "qualification": 2}
+    assert case.contexts == [context, context]
+    assert operations.current_context() is None
+
+
+def test_operation_context_serial_canary_and_real_mount_tail_share_facts(operation_context_case):
+    from qcsd_lab import rapid_operation_facts as operations
+    case = operation_context_case
+    context = operations.OperationFacts()
+    first = rolling.readiness_roots(case.spec, case.lane.campaign_name, _context=context)
+    with context.scope():
+        assert rolling.require_mode_readiness(case.spec, case.lane)
+        assert rolling.readiness_roots(case.spec, case.lane.campaign_name) == first
+    context.check()
+    assert case.counts == {"enrollment": 1, "qualification": 1, "canary": 1}
+    assert case.dependencies.canary_source in first
+    assert case.dependencies.canary_execution in first
+    assert operations.current_context() is None
+
+
+def test_operation_context_new_actions_and_outside_calls_revalidate(operation_context_case):
+    from qcsd_lab import rapid_operation_facts as operations
+    case = operation_context_case
+    for _ in range(2):
+        context = operations.OperationFacts()
+        rolling.verify_capture_plan(case.spec, _context=context)
+        rolling.verify_capture_plan(case.spec, _context=context)
+        context.check()
+    assert case.counts["enrollment"] == 2
+    context.begin_action()
+    rolling.verify_capture_plan(case.spec, _context=context)
+    rolling.verify_capture_plan(case.spec)
+    rolling.verify_capture_plan(case.spec)
+    assert case.counts["enrollment"] == case.counts["qualification"] == 5
+
+
+@pytest.mark.parametrize("mutation", ["body", "file-mode", "file-member", "directory-mode"])
+def test_operation_context_cached_canary_rejects_raw_change_after_wait(operation_context_case, mutation):
+    from qcsd_lab import rapid_operation_facts as operations
+    case = operation_context_case
+    context = operations.OperationFacts()
+    rolling.readiness_roots(case.spec, case.lane.campaign_name, _context=context)
+    source = case.dependencies.canary_source
+    target = source / "src/measurement.py"
+    if mutation == "body":
+        target.write_bytes(target.read_bytes() + b"changed after ownership wait\n")
+    elif mutation == "file-mode":
+        target.chmod(target.stat().st_mode ^ 0o040)
+    elif mutation == "file-member":
+        (source / "unexpected-member").write_bytes(b"new member\n")
+    else:
+        (source / "src").chmod((source / "src").stat().st_mode ^ 0o010)
+    with pytest.raises(ValueError, match="changed"):
+        context.check()
+    assert case.counts["canary"] == 1
+
+
+def test_operation_context_nested_scope_and_exception_restore_parent(operation_context_case, monkeypatch):
+    from qcsd_lab import rapid_operation_facts as operations
+    parent, child = operations.OperationFacts(), operations.OperationFacts()
+    case = operation_context_case
+    def failed(*args, **kwargs):
+        assert operations.current_context() is child
+        raise ValueError("retained synthetic qualification exception")
+    monkeypatch.setattr(rolling, "_verify_enrollment", failed)
+    with parent.scope():
+        with pytest.raises(ValueError, match="synthetic qualification exception"):
+            rolling.verify_capture_plan(case.spec, _context=child)
+        assert operations.current_context() is parent
+    assert operations.current_context() is None
+
+
+@pytest.mark.parametrize("command", ["complete-lane", "verify-lane"])
+def test_operation_context_cli_owns_fresh_action_and_image_fences(operation_context_case, monkeypatch, command):
+    from types import SimpleNamespace
+    from qcsd_lab import rapid_lane_evidence as lanes
+    from qcsd_lab import rapid_operation_facts as operations
+    case = operation_context_case
+    spec_path = case.root / "context-spec.json"
+    rolling._write_spec(spec_path, case.spec)
+    target = case.root / "lanes" / case.lane.campaign_name / ("intent.json" if command == "complete-lane" else "complete.json")
+    args = SimpleNamespace(command=command, spec=spec_path, evidence_root=case.root,
+                           intent=target, receipt=target)
+    seen = []
+    def image_boundary(spec, root, target, *, complete):
+        context = operations.current_context()
+        assert context is not None and complete is (command == "complete-lane")
+        seen.append(context)
+        # These unchanged callees normally start more complete reopen chains.
+        rolling.verify_capture_plan(spec)
+        rolling.readiness_roots(spec, case.lane.campaign_name)
+        context.check()
+        return {"engineering_fixture": "no Docker or installed-image claim"}
+    monkeypatch.setattr(rolling, "check_lane_in_image", image_boundary)
+    parent = operations.OperationFacts()
+    with parent.scope():
+        for _ in range(2):
+            assert cli.run(args)["engineering_fixture"]
+            assert operations.current_context() is parent
+    assert seen[0] is not seen[1] and parent not in seen
+    assert case.counts == {"enrollment": 2, "qualification": 2, "canary": 2}
+    assert operations.current_context() is None
+
+
+def test_operation_context_cli_closing_fence_rejects_changed_raw_dependencies(operation_context_case, monkeypatch):
+    from types import SimpleNamespace
+    from qcsd_lab import rapid_operation_facts as operations
+    case = operation_context_case
+    spec_path = case.root / "context-spec.json"
+    rolling._write_spec(spec_path, case.spec)
+    target = case.root / "lanes" / case.lane.campaign_name / "complete.json"
+    args = SimpleNamespace(command="verify-lane", spec=spec_path, evidence_root=case.root, receipt=target)
+    def boundary(*args, **kwargs):
+        assert operations.current_context() is not None
+        case.dependencies.canary_recipe.write_bytes(b"changed external deep helper\n")
+        return {"engineering_fixture": True}
+    monkeypatch.setattr(rolling, "check_lane_in_image", boundary)
+    with pytest.raises(ValueError, match="changed"):
+        cli.run(args)
+    assert operations.current_context() is None
+
+
+@pytest.fixture
+def canary_under_execution_parent(request):
+    return getattr(request, "param", False)
+
+
+@pytest.fixture
+def plan_operation_case(control_case, tmp_path, monkeypatch, canary_under_execution_parent):
+    """Real public planner/Inspector/raw closure; synthetic image and science primitives.
+
+    The original GET, preparation, amendment, enrollment, execution-copy and
+    Inspector derivation remain real. Closed-image, Native named-response and
+    successful scientific canary boundaries are the existing HOST fixtures.
+    """
+    from collections import Counter
+    from types import SimpleNamespace
+    from qcsd_lab import rapid_lane_evidence as lanes
+    from qcsd_lab import rapid_operation_facts as operations
+    a, base, current, refs, canary, facts, _, _, sources, qualifier, execution_copy = control_case
+    closed = base.execution_root.parent if canary_under_execution_parent else tmp_path / "immutable-canary-input"
+    closed.mkdir(exist_ok=canary_under_execution_parent)
+    result = base.execution_root / "results" / "fixture-canary" / "fixture-result"
+    result.mkdir(parents=True)
+    write(result / "experiment.json", {"engineering_fixture": "no physical or deep success claim"})
+    write(closed / "plan.json", {"static_capture_amendment": rolling._ref(a.output),
+        "execution_root": str(base.execution_root), "clean_runtime_root": str(base.runtime_source_root),
+        "campaigns": [], "workload_id": a.target.stem, "qualification_set": "amended"})
+    write(closed / "source-inventory.json", {})
+    write(closed / "deep-receipt.json", {"root": "/lab/results/fixture-canary/fixture-result"})
+    canary = {"plan": rolling._ref(closed / "plan.json"),
+        "deep_receipt": rolling._ref(closed / "deep-receipt.json")}
+    for phase in ("capture", "deep"):
+        write(closed / (phase + "-started.json"), {"started_at": "2026-10-04T00:01:20Z", "command": []})
+        write(closed / (phase + "-completed.json"), {"completed_at": "2026-10-04T00:01:30Z"})
+        (closed / (phase + ".stdout.log")).write_bytes(b"synthetic HOST canary primitive\n")
+        (closed / (phase + ".stderr.log")).write_bytes(b"")
+        canary[phase] = {key: rolling._ref(closed / (phase + suffix)) for key, suffix in
+            (("started", "-started.json"), ("completed", "-completed.json"),
+             ("stdout", ".stdout.log"), ("stderr", ".stderr.log"))}
+    payload = lanes._payload(base.plan_receipt, lanes.PLAN_TYPE)
+    payload["readiness"] = {"front": canary}
+    base.plan_receipt.write_bytes(lanes._json(lanes.admission._bind(lanes.PLAN_TYPE, payload)))
+    capsule = inspector.publish_schedule(base, current, qualifier, refs[0], refs[1],
+        a.study / "plan-context-inspector.json", execution_copy=execution_copy,
+        reason="HOST context fixture; no installed or physical authority claim")
+    runtime_path = a.study / "plan-context-runtime.json"
+    write(runtime_path, {"schema_version": 1, "artifact_type": rolling.RUNTIME_TYPE, "inputs": current})
+    readiness_path = a.study / "plan-context-readiness.json"
+    write(readiness_path, {"front": canary})
+    counts, contexts = Counter(), []
+    derive, named, ready = inspector._derive, qualification.validate_named_qualification_set_manifest, evidence.validate_canary
+    def derived(*args, **kwargs):
+        counts["derive"] += 1
+        contexts.append(operations.current_context())
+        return derive(*args, **kwargs)
+    def qualified(*args, **kwargs):
+        counts["qualification"] += 1
+        return named(*args, **kwargs)
+    def passed(*args, **kwargs):
+        counts["canary"] += 1
+        return ready(*args, **kwargs)
+    monkeypatch.setattr(inspector, "_derive", derived)
+    monkeypatch.setattr(qualification, "validate_named_qualification_set_manifest", qualified)
+    monkeypatch.setattr(rolling, "validate_named_qualification_set_manifest", qualified)
+    monkeypatch.setattr(evidence, "validate_canary", passed)
+    def args(name):
+        return cli._parser().parse_args(["plan", "--evidence-root", str(a.study),
+            "--enrollment", str(a.enrollment), "--qualification-spec", str(qualifier),
+            "--runtime-spec", str(runtime_path), "--readiness", str(readiness_path),
+            "--scheduling", capsule["path"], "--static-capture-amendment", str(a.output),
+            "--output", str(a.study / (name + "-plan.json")),
+            "--spec-output", str(a.study / (name + "-spec.json"))])
+    return SimpleNamespace(a=a, base=base, current=current, qualifier=qualifier,
+        counts=counts, contexts=contexts, args=args, closed=closed, sources=sources)
+
+
+def test_plan_operation_public_scheduled_cli_derives_and_qualifies_once_per_action(plan_operation_case):
+    from qcsd_lab import rapid_operation_facts as operations
+    case = plan_operation_case
+    parent = operations.OperationFacts()
+    with parent.scope():
+        for name in ("first", "second"):
+            result = cli.run(case.args(name))
+            assert result["planned_traces"] == 320 and result["ready_settings"] == ["front"]
+            assert operations.current_context() is parent
+    assert case.counts == {"derive": 2, "qualification": 2, "canary": 2}
+    assert case.contexts[0] is not case.contexts[1] and parent not in case.contexts
+    assert operations.current_context() is None
+
+
+@pytest.mark.parametrize("mutation", ["body", "file-mode", "file-member", "directory-mode"])
+def test_plan_operation_raw_change_before_publication_rejects(plan_operation_case, monkeypatch, mutation):
+    from qcsd_lab import rapid_operation_facts as operations
+    case = plan_operation_case
+    original = rolling._render_campaign
+    changed = False
+    def changed_after_validation(*args, **kwargs):
+        nonlocal changed
+        raw = original(*args, **kwargs)
+        if not changed and case.counts["canary"] == 1:
+            assert operations.current_context() is not None
+            target = case.closed / "capture.stdout.log"
+            if mutation == "body":
+                target.write_bytes(b"changed after asynchronous ownership boundary\n")
+            elif mutation == "file-mode":
+                target.chmod(target.stat().st_mode ^ 0o040)
+            elif mutation == "file-member":
+                (case.base.execution_root / "results/fixture-canary/fixture-result/unexpected-member").write_bytes(b"not a declared dependency\n")
+            else:
+                result = case.base.execution_root / "results/fixture-canary/fixture-result"
+                result.chmod(result.stat().st_mode ^ 0o010)
+            changed = True
+        return raw
+    monkeypatch.setattr(rolling, "_render_campaign", changed_after_validation)
+    args = case.args("changed")
+    with pytest.raises(ValueError, match="changed"):
+        cli.run(args)
+    assert changed
+    assert not args.output.exists() and not args.spec_output.exists()
+    assert case.counts == {"derive": 1, "qualification": 1, "canary": 1}
+    assert operations.current_context() is None
+
+
+@pytest.fixture
+def amended_prepare_case(plan_operation_case, monkeypatch, tmp_path):
+    """Real prepare/image/lineage writers; only the Docker/image boundary is synthetic.
+
+    The isolated actuator executes the actual image-plan validator in this HOST
+    process. No real installed-image or network success is asserted. Its source,
+    implementation receipt, graph, plan and raw input guards execute unchanged.
+    """
+    import json
+    import subprocess
+    from types import SimpleNamespace
+    from qcsd_lab import rapid_lane_evidence as lanes
+    from qcsd_lab import util
+    case = plan_operation_case
+    args = case.args("prepare-input")
+    cli.run(args)
+    spec = lanes.load_capture_spec(args.spec_output)
+    root = Path(case.current["runtime_source_root"])
+    for relative in qualification.IMPLEMENTATION_FILES:
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(case.sources[1][relative])
+    metadata = load(spec.source_manifest)
+    source = {**metadata, "image_digest": spec.collection_image_digest}
+    files = {relative: lanes._sha((root / relative).read_bytes())
+             for relative in qualification.IMPLEMENTATION_FILES}
+    implementation = {"schema_version": qualification.IMPLEMENTATION_RECEIPT_SCHEMA_VERSION,
+        "artifact_type": "qcsd-chaff-qualification-implementation",
+        "domain": qualification.IMPLEMENTATION_RECEIPT_DOMAIN, "source": metadata, "source_files": files,
+        "installed_modules": {relative: {"path": "/installed/" + relative, "sha256": files[relative]}
+                              for relative in qualification.IMPLEMENTATION_PYTHON_FILES},
+        "installed_entrypoint": {"path": "/installed/qcsd-lab", "sha256": files["qcsd-lab"]},
+        "neqo_qcsd_client": {"path": "/installed/client", "sha256": lanes._sha(spec.client_binary.read_bytes())}}
+    implementation["sha256"] = qualification._implementation_aggregate(implementation)
+    qualification._validate_implementation_receipt(implementation, require_current=False)
+    monkeypatch.setattr(qualification, "_qualification_execution_context", lambda: (implementation, source, spec.collection_image_digest))
+    monkeypatch.setattr(qualification, "_bound_neqo_client", lambda value: (spec.client_binary, lanes._sha(spec.client_binary.read_bytes())))
+    monkeypatch.setattr(util, "source_metadata", lambda: source)
+    monkeypatch.setenv("QCSD_LAB_ROOT", str(root))
+    monkeypatch.setenv("QCSD_LAB_IMAGE_DIGEST", spec.collection_image_digest)
+    monkeypatch.setenv("QCSD_LAB_SOURCE_METADATA", "/usr/share/qcsd-lab/source.json")
+    monkeypatch.delenv("QCSD_RAPID_COLLECTION_COMPATIBILITY", raising=False)
+    lock_parent = tmp_path / "private-ownership-locks"
+    lock_parent.mkdir(mode=0o700)
+    monkeypatch.setattr(lanes, "CAPTURE_LOCK_PARENT", lock_parent)
+    calls = []
+    def image(command, **kwargs):
+        assert command[:2] == ["docker", "run"] and command[command.index("--network") + 1] == "none"
+        calls.append(command)
+        proof = lanes.executed_image_plan_check(json.loads(command[-1]))
+        return subprocess.CompletedProcess(command, 0, json.dumps(proof), "synthetic isolated image actuator\n")
+    monkeypatch.setattr(lanes.subprocess, "run", image)
+    payload = lanes._payload(spec.plan_receipt, lanes.PLAN_TYPE)
+    campaigns = [row["campaign_name"] for row in payload["lanes"] if row["mode"] == "front"][:2]
+    case.counts.clear()
+    return SimpleNamespace(case=case, spec=spec, spec_path=args.spec_output, campaigns=campaigns,
+        root=case.a.study, output=case.a.study / "prospective-batch-authority.json", calls=calls)
+
+
+def test_prepare_outputs_beside_declaration_are_not_immutable_input_members(amended_prepare_case):
+    from qcsd_lab import rapid_formal_parallel as formal
+    from qcsd_lab import supplied_static_capture_amendment as amendment
+    case = amended_prepare_case
+    assert not case.output.exists() and not (case.root / "objects").exists()
+    assert formal.prepare_batch(case.spec_path, case.root, case.campaigns, case.output) == case.output
+    authority = load(case.output)
+    assert len(case.calls) == 1 and len(authority["lane_intents"]) == 2
+    assert list(case.root.glob("image-check-*.json")) and list((case.root / "objects").iterdir())
+    assert case.root == Path(load(case.case.a.target)["preparation"][amendment.FIELD]["path"]).parent
+    for row in authority["lane_intents"]:
+        intent = Path(row["path"])
+        assert intent.is_file() and not (intent.parent / "host-start.json").exists()
+    assert not any((case.spec.execution_root / "results" / name).exists() for name in case.campaigns)
+
+
+@pytest.mark.parametrize("mutation", ["body", "file-mode", "member", "directory-mode"])
+def test_prepare_changed_underlying_raw_inputs_reject_before_claim(amended_prepare_case, monkeypatch, mutation):
+    from qcsd_lab import rapid_formal_parallel as formal
+    from qcsd_lab import rapid_lane_evidence as lanes
+    case = amended_prepare_case
+    original = lanes._lineage_payload
+    changed = False
+    def after_real_output(*args, **kwargs):
+        nonlocal changed
+        result = original(*args, **kwargs)
+        if not changed:
+            raw = case.case.a.get_root / "native.stdout.log"
+            if mutation == "body": raw.write_bytes(b"changed authentic raw GET log\n")
+            elif mutation == "file-mode": raw.chmod(raw.stat().st_mode ^ 0o040)
+            elif mutation == "member": (raw.parent / "undeclared-raw-member").write_bytes(b"extra\n")
+            else: raw.parent.chmod(raw.parent.stat().st_mode ^ 0o010)
+            changed = True
+        return result
+    monkeypatch.setattr(lanes, "_lineage_payload", after_real_output)
+    with pytest.raises(ValueError):
+        formal.prepare_batch(case.spec_path, case.root, case.campaigns, case.output)
+    assert changed and len(case.calls) == 1
+    assert list(case.root.glob("image-check-*.json")) and list((case.root / "objects").iterdir())
+    assert not case.output.exists() and not (case.root / "lanes").exists()
+
+
+@pytest.fixture
+def same_parent_parallel_case(amended_prepare_case, monkeypatch):
+    """Actual authority and public launch writers; synthetic host/image boundaries."""
+    from qcsd_lab import rapid_formal_parallel as formal
+    from qcsd_lab import rapid_parallel_capture as parallel
+    from qcsd_lab import rapid_operation_facts as operations
+    from tools import rapid_parallel_capture as launcher
+    import os
+    case = amended_prepare_case
+    assert case.case.closed == case.case.base.execution_root.parent
+    formal.prepare_batch(case.spec_path, case.root, case.campaigns, case.output)
+    assert case.case.closed in case.spec.execution_root.parents
+    # The fixture's clean Git/installed image and host process boundaries are
+    # explicit substitutes. Authority, dependency and pre-release checks are
+    # actual production code; no process, Docker or deep success is asserted.
+    monkeypatch.setattr(parallel, "host_source", lambda value: (
+        value["runtime"] == {key: case.spec.serializable()[key] for key in parallel.RUNTIME_KEYS}
+        or (_ for _ in ()).throw(AssertionError("another declared fixture runtime"))))
+    gates, children = [], []
+    original_write = os.write
+    def release(descriptor, value):
+        gates.append(value)
+        return original_write(descriptor, value)
+    monkeypatch.setattr(launcher.os, "write", release)
+    monkeypatch.setattr(launcher, "_process_identity", lambda pid: {"engineering_fixture_pid": pid})
+    monkeypatch.setattr(launcher.os, "killpg", lambda *args: None)
+    class Child:
+        pid = 424242
+        def __init__(self, descriptor):
+            self.reader = os.dup(descriptor)
+            self.done = False
+        def poll(self): return 0 if self.done else None
+        def wait(self):
+            if not self.done: os.close(self.reader)
+            self.done = True
+            return 0
+    def spawn(command, **kwargs):
+        assert command[2] == launcher.HOST_GATE_SCRIPT and len(kwargs["pass_fds"]) == 1
+        child = Child(kwargs["pass_fds"][0])
+        children.append(child)
+        return child
+    monkeypatch.setattr(launcher.subprocess, "Popen", spawn)
+    monkeypatch.setattr(parallel, "verify_results_in_image", lambda *args: {
+        "valid": True, "engineering_fixture": True, "formal_accepted_trace_count": 0, "scientific_credit": False})
+    case.batch_output = case.spec.execution_root / "results" / "fresh-parallel-host-fixture"
+    case.batch_output.parent.mkdir(exist_ok=True)
+    case.gates, case.children, case.launcher = gates, children, launcher
+    case.original_result = case.case.base.execution_root / "results/fixture-canary/fixture-result"
+    return case
+
+
+@pytest.mark.parametrize("canary_under_execution_parent", [True], indirect=True)
+def test_real_parallel_launch_accepts_its_outputs_beneath_canary_plan_parent(same_parent_parallel_case):
+    case = same_parent_parallel_case
+    before = {path: (path.read_bytes(), path.stat().st_mode) for path in case.original_result.rglob("*") if path.is_file()}
+    result = case.launcher.launch(case.output, case.batch_output)
+    assert result["engineering_fixture"] is True and case.gates == [b"G"]
+    assert (case.batch_output / "operator-intent.json").is_file()
+    assert (case.batch_output / "host-start.json").is_file()
+    assert (case.batch_output / "host-process.json").is_file()
+    assert not (case.batch_output / "blocked.json").exists()
+    assert {path: (path.read_bytes(), path.stat().st_mode) for path in before} == before
+    assert not any((case.spec.execution_root / "results" / name).exists() for name in case.campaigns)
+
+
+@pytest.mark.parametrize("canary_under_execution_parent", [True], indirect=True)
+def test_real_initialize_accepts_image_preflight_outputs_beneath_canary_plan_parent(same_parent_parallel_case):
+    from urllib.parse import urlsplit
+    from qcsd_lab import rapid_formal_parallel as formal
+    from qcsd_lab import rapid_parallel_capture as parallel
+    from qcsd_lab import rapid_lane_evidence as lanes
+    from qcsd_lab import rapid_operation_facts as operations
+    from qcsd_lab.rapid_runtime_epochs import _runtime_projection
+    case = same_parent_parallel_case
+    authority = load(case.output)
+    hosts = sorted({urlsplit(origin).hostname for origin in load(case.case.a.target)["preparation"]["approved_origins"]})
+    for row, campaign in zip(authority["lane_intents"], case.campaigns, strict=True):
+        # Explicit synthetic DNS actuator; actual receipt validation runs below.
+        write(Path(row["path"]).parent / "dns.json", {"schema_version": 1,
+            "campaign": campaign, "hosts": [[host, "1.1.1.1"] for host in hosts]})
+    context = operations.OperationFacts()
+    formal._audit(case.output, _context=context)
+    proof = lanes.executed_image_plan_check(case.spec.serializable(), _context=context)
+    runtime = _runtime_projection(proof)
+    digest = parallel.sha(case.output.read_bytes())
+    case.batch_output.mkdir(mode=0o700)
+    parallel.put(case.batch_output / "image-preflight.json", {"authority_sha256": digest,
+        "worker_plan_proofs": [proof, proof], "worker_epoch_proofs": [None, None],
+        "worker_runtime_proofs": [runtime, runtime], "runtime": runtime,
+        "input_files": {str(case.spec_path): parallel.sha(case.spec_path.read_bytes())},
+        "engineering_fixture": True, "formal_accepted_trace_count": 0, "scientific_credit": False})
+    result = formal.initialize(case.output, case.batch_output, digest, [0, 2, 4, 7, 9], _context=context)
+    assert result == {"pairs": [[2, 4], [7, 9]], "sidecar_cpus": [0]}
+    assert (case.batch_output / "batch-intent.json").is_file()
+    assert all((case.batch_output / f"lane-{index}" / "gate").is_dir() for index in (1, 2))
+    assert all((case.spec.execution_root / "results" / name).is_dir() for name in case.campaigns)
+    assert case.children == [] and case.gates == []
+
+
+@pytest.mark.parametrize("canary_under_execution_parent", [True], indirect=True)
+@pytest.mark.parametrize("mutation", ["plan-body", "raw-mode", "result-member", "result-directory-mode"])
+def test_real_parallel_launch_changed_canary_rejects_before_host_release(same_parent_parallel_case, monkeypatch, mutation):
+    case = same_parent_parallel_case
+    spawn = case.launcher.subprocess.Popen
+    def changed_at_gate(*args, **kwargs):
+        child = spawn(*args, **kwargs)
+        if mutation == "plan-body":
+            target = case.case.closed / "plan.json"
+            target.write_bytes(target.read_bytes() + b"changed after host output creation\n")
+        elif mutation == "raw-mode":
+            target = case.case.closed / "capture.stdout.log"
+            target.chmod(target.stat().st_mode ^ 0o040)
+        elif mutation == "result-member":
+            (case.original_result / "unexpected-raw-member").write_bytes(b"not declared\n")
+        else:
+            case.original_result.chmod(case.original_result.stat().st_mode ^ 0o010)
+        return child
+    monkeypatch.setattr(case.launcher.subprocess, "Popen", changed_at_gate)
+    with pytest.raises(ValueError, match="changed"):
+        case.launcher.launch(case.output, case.batch_output)
+    assert case.gates == [] and all(child.done for child in case.children)
+    assert (case.batch_output / "operator-intent.json").is_file() and (case.batch_output / "blocked.json").is_file()
+    assert not (case.batch_output / "host-start.json").exists()
+    assert not (case.batch_output / "host-process.json").exists()
+    assert not any((case.spec.execution_root / "results" / name).exists() for name in case.campaigns)

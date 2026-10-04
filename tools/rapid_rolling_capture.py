@@ -25,7 +25,14 @@ def _spec(path, spec):
     return str(path)
 
 
-def run(args):
+def run(args, *, _context=None):
+    if args.command in {"plan", "complete-lane", "verify-lane"} and _context is None:
+        from qcsd_lab.rapid_operation_facts import OperationFacts
+        context = OperationFacts()
+        with context.scope():
+            result = run(args, _context=context)
+            context.check()
+            return result
     if args.command == "static-inspector-scheduling":
         from qcsd_lab.rapid_runtime_inspector import publish_schedule
         return {"scheduling": publish_schedule(lanes.load_capture_spec(args.spec),
@@ -88,9 +95,10 @@ def run(args):
                                     args.output, readiness=readiness, runtime_inputs=runtime,
                                     scheduling=rolling._ref(args.scheduling) if args.scheduling else None,
                                     front_capture_amendment=args.front_capture_amendment,
-                                    static_capture_amendment=getattr(args, "static_capture_amendment", None))
+                                    static_capture_amendment=getattr(args, "static_capture_amendment", None),
+                                    _context=_context)
         spec = rolling.capture_spec(args.evidence_root, args.enrollment, args.qualification_spec, path)
-        _, plan = rolling.verify_capture_plan(spec)
+        _, plan = rolling.verify_capture_plan(spec, _context=_context)
         return {"plan": str(path), "spec": _spec(args.spec_output, spec),
                 "planned_traces": plan["planned_trace_count"], "ready_settings": sorted(readiness),
                 "scientific_credit": False}
@@ -124,7 +132,13 @@ def run(args):
             batch_authority=args.batch_authority, batch_output=args.batch_output,
             public_started=args.public_started, public_completed=args.public_completed)), "scientific_credit": False}
     if args.command == "complete-lane":
+        if _context is not None:
+            rolling.readiness_roots(spec, args.intent.parent.name, _context=_context)
+            _context.check()
         return rolling.check_lane_in_image(spec, root, args.intent, complete=True)
+    if _context is not None:
+        rolling.readiness_roots(spec, args.receipt.parent.name, _context=_context)
+        _context.check()
     return rolling.check_lane_in_image(spec, root, args.receipt, complete=False)
 
 

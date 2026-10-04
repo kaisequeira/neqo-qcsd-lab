@@ -520,15 +520,25 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
                  *, readiness: Mapping[str, Any], runtime_inputs: Mapping[str, str] | None = None,
                  scheduling: Mapping[str, str] | None = None,
                  front_capture_amendment: Path | None = None,
-                 static_capture_amendment: Path | None = None) -> Path:
+                 static_capture_amendment: Path | None = None, _context=None) -> Path:
+    from .rapid_operation_facts import current_context
+    _context = current_context() if _context is None else _context
+    if _context is not None and current_context() is not _context:
+        with _context.scope():
+            return publish_plan(root, enrollment, qualification_spec, output,
+                readiness=readiness, runtime_inputs=runtime_inputs, scheduling=scheduling,
+                front_capture_amendment=front_capture_amendment,
+                static_capture_amendment=static_capture_amendment, _context=_context)
+    if _context is not None:
+        _context._enrollment(enrollment)
     policy = verify_policy(root)
-    batch, _ = verify_enrollment(enrollment)
+    batch, classes = verify_enrollment(enrollment)
     runtime = _runtime(dict(runtime_inputs)) if runtime_inputs is not None else policy["runtime"]
     if runtime["data_root"] != policy["runtime"]["data_root"]:
         raise ValueError("a rolling runtime successor must retain its declared study data root")
     if _open_ref(batch["policy"]) != root / "policy.json" or not set(readiness) <= set(plan.MODES):
         raise ValueError("rolling plan changed its policy or supplied unknown readiness")
-    measurement_runtime = _static_measurement_runtime(scheduling, runtime)
+    measurement_runtime = _static_measurement_runtime(scheduling, runtime, _context=_context)
     amendment_reference, amendment = None, None
     static_reference, static_amendment = None, None
     if front_capture_amendment is not None and static_capture_amendment is not None:
@@ -551,7 +561,7 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
     schedule_spec = None
     if scheduling is not None:
         from . import rapid_rolling_schedule as schedule
-        capsule = schedule.validate_schedule(scheduling, runtime=runtime)
+        capsule = schedule.validate_schedule(scheduling, runtime=runtime, _context=_context)
         from . import rapid_original_static_parallel_schedule as original_static
         if capsule.get("artifact_type") == original_static.CAPSULE_TYPE:
             if (policy["contract"] != STATIC_CONTRACT or static_reference is not None
@@ -571,9 +581,13 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
             raise ValueError("rolling scheduled plan changes enrollment or qualified inputs")
     for mode, reference in readiness.items():
         if scheduling is None:
-            facts = validate_canary(reference, runtime={key: runtime[key] for key in lanes.RUNTIME_KEYS}, mode=mode)
+            canary_runtime = {key: runtime[key] for key in lanes.RUNTIME_KEYS}
+            facts = (validate_canary(reference, runtime=canary_runtime, mode=mode)
+                     if _context is None else
+                     _context.validate_canary(reference, canary_runtime, mode, validate_canary))
         else:
-            facts = schedule.validate_ready_canary(reference, scheduling, mode=mode, before=admission._now())
+            facts = schedule.validate_ready_canary(reference, scheduling, mode=mode,
+                before=admission._now(), _context=_context)
         if amendment is not None:
             from .rapid_front_capture_amendment import require_canary
             require_canary(reference, facts, amendment_reference, amendment)
@@ -584,10 +598,14 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
     workloads, campaigns = Path(runtime["workload_root"]), Path(runtime["campaign_dir"])
     from .rapid_capture_traffic import FIELD
     duration_policy = static_amendment.get(FIELD) if static_amendment is not None else None
-    sites = _sites(enrollment, qualification_spec, workloads, runtime=measurement_runtime,
-                   front_capture_amendment=amendment_reference, static_capture_amendment=static_reference)
+    sites = _sites_from_enrollment(batch, classes, qualification_spec, workloads, require_current=False,
+                   enrollment=enrollment, runtime=measurement_runtime,
+                   front_capture_amendment=amendment_reference,
+                   static_capture_amendment=static_reference, _context=_context)
     planned = plan.plan_lanes(sites, final=True, study_version=6, rolling_batch=batch["ordinal"])
     hashes = {}
+    if _context is not None:
+        _context.check()
     for lane in planned:
         path = campaigns / f"{lane.campaign_name}.yml"
         raw = _render_campaign(lane, sites, policy, buflo_duration_policy=duration_policy)
@@ -596,6 +614,8 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
                 raise ValueError("rolling plan cannot replace an earlier campaign")
         else:
             admission.durable_create(path, raw)
+        if _context is not None:
+            _context.watch_file(path)
         hashes[lane.campaign_name] = lanes._sha(raw)
     payload = {"study_version": 6, "cohort_generation": "rolling-50", "bindings": _bindings(enrollment),
                "runtime": runtime, "runtime_artifacts": {key: _ref(Path(runtime[key]))
@@ -613,7 +633,7 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
             key: Path(item) if key in lanes.PATH_KEYS else item for key, item in {
                 **runtime, "acquisition_root": batch["admission_root"], "cohort": str(enrollment.absolute()),
                 "qualification_spec": str(qualification_spec.absolute()), "plan_receipt": str(output.absolute())}.items()}),
-            declared_at=payload["declared_at"])
+            declared_at=payload["declared_at"], _context=_context)
     if amendment_reference is not None:
         payload["front_capture_amendment"] = amendment_reference
     if static_reference is not None:
@@ -623,6 +643,8 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
     if policy["contract"] == STATIC_CONTRACT:
         payload["data_role"] = policy["data_role"]
         payload["capture_limits"] = policy["capture_limits"]
+    if _context is not None:
+        _context.check()
     return _write(output, lanes.PLAN_TYPE, payload)
 
 
@@ -650,6 +672,13 @@ def _capture_spec_from_enrollment(root: Path, enrollment: Path, qualification_sp
 
 
 def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = False, _context=None) -> tuple[tuple[plan.Site, ...], dict[str, Any]]:
+    from .rapid_operation_facts import current_context
+    _context = current_context() if _context is None else _context
+    if _context is not None and current_context() is not _context:
+        # Installed qualification hooks retain their public signature. Expose
+        # only this caller's live action, then restore any outer scope.
+        with _context.scope():
+            return verify_capture_plan(spec, require_current=require_current, _context=_context)
     # These facts live only inside this verification call. Public entry points
     # independently reopen enrollment; no prior operation supplies authority.
     key = ("capture-plan", json.dumps(spec.serializable(), sort_keys=True), require_current)
@@ -747,6 +776,11 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
 
 
 def require_mode_readiness(spec: lanes.CaptureSpec, lane: plan.Lane, *, before: str | None = None, _context=None) -> dict[str, Any]:
+    from .rapid_operation_facts import current_context
+    _context = current_context() if _context is None else _context
+    if _context is not None and current_context() is not _context:
+        with _context.scope():
+            return require_mode_readiness(spec, lane, before=before, _context=_context)
     _, payload = verify_capture_plan(spec, _context=_context)
     if lane.study_version != 6 or lane.role != "formal":
         raise ValueError("rolling readiness cannot authorize a historical or diagnostic lane")
@@ -775,7 +809,10 @@ def require_mode_readiness(spec: lanes.CaptureSpec, lane: plan.Lane, *, before: 
                 raise ValueError("static scheduled readiness changed its exact current Source")
     else:
         from .rapid_capture_traffic import plan_files
-        facts = validate_canary(payload["readiness"][lane.mode], runtime={key: spec.serializable()[key] for key in lanes.RUNTIME_KEYS}, mode=lane.mode)
+        runtime = {key: spec.serializable()[key] for key in lanes.RUNTIME_KEYS}
+        facts = (validate_canary(payload["readiness"][lane.mode], runtime=runtime, mode=lane.mode)
+                 if _context is None else _context.validate_canary(
+                     payload["readiness"][lane.mode], runtime, lane.mode, validate_canary))
         expected_source = {**lanes._load(lanes._read(spec.source_manifest)), "image_digest": spec.collection_image_digest}
         if (facts.get("authority_source") != expected_source or facts.get("client_sha256") != lanes._sha(lanes._read(spec.client_binary))
             or facts.get("traffic_hashes") != {key: digest for key, (_, digest) in plan_files(payload).items()}):
@@ -954,6 +991,11 @@ def enrollment_roots(spec: lanes.CaptureSpec) -> list[Path]:
 
 
 def readiness_roots(spec: lanes.CaptureSpec, campaign_name: str, *, _context=None) -> list[Path]:
+    from .rapid_operation_facts import current_context
+    _context = current_context() if _context is None else _context
+    if _context is not None and current_context() is not _context:
+        with _context.scope():
+            return readiness_roots(spec, campaign_name, _context=_context)
     _, payload = verify_capture_plan(spec, _context=_context)
     proof = {"plan_payload": payload}
     lane = lanes._lane(proof, campaign_name)
@@ -976,7 +1018,7 @@ def readiness_roots(spec: lanes.CaptureSpec, campaign_name: str, *, _context=Non
             runtime={key: capsule["base_spec"][key] for key in lanes.RUNTIME_KEYS}, mode=lane.mode, _context=_context))
         return sorted(roots)
     return sorted(roots | set(readiness_mount_roots(reference,
-        runtime={key: spec.serializable()[key] for key in lanes.RUNTIME_KEYS}, mode=lane.mode)))
+        runtime={key: spec.serializable()[key] for key in lanes.RUNTIME_KEYS}, mode=lane.mode, _context=_context)))
 
 
 def lane_check_command(spec: lanes.CaptureSpec, root: Path, target: Path, *, complete: bool) -> list[str]:

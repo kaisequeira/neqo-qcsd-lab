@@ -288,7 +288,9 @@ class OperationFacts:
     def bind_canary(self, reference, runtime=None) -> None:
         from .rapid_capture_traffic import canary_files
         plan = self._reference(reference["plan"])
-        self.watch_tree(plan.parent)
+        # A canary transport parent can also contain the execution's future
+        # parallel outputs. Its exact plan, inventory and raw operation refs
+        # are immutable files; the completed result is the closed raw tree.
         self._references(reference, plan.parent)
         for name in ("deep_receipt", "source_equivalence"):
             if name in reference:
@@ -382,12 +384,42 @@ class OperationFacts:
 
     def _workload_evidence_trees(self, path: Path) -> list[Path]:
         """Bind the explicitly declared preparation role's actual raw evidence."""
-        preparation = json.loads(self.watch_file(path)).get("preparation")
+        raw = self.watch_file(path)
+        manifest = json.loads(raw)
+        preparation = manifest.get("preparation")
         if isinstance(preparation, dict) and "data_role" in preparation:
             from .supplied_static_preparation import is_static, preparation_roots
-            from .supplied_static_capture_amendment import is_amended, preparation_roots as amendment_roots
+            from . import supplied_static_capture_amendment as amendment
+            from .supplied_static_capture_amendment import is_amended
             if is_amended(preparation):
-                return amendment_roots(preparation)
+                key = ("amended-immutable-inputs-v3", hashlib.sha256(raw).hexdigest())
+                if self.has(key):
+                    return self.get(key)
+                # Docker mount parents also contain later capture outputs.
+                # Bind the authenticated immutable input closure, not the
+                # transport parent's mutable image-check/objects membership.
+                declaration_path = self._reference(preparation[amendment.FIELD])
+                amendment.validate_preparation(preparation, manifest["resources"])
+                declaration = amendment._declaration(declaration_path)
+                self._references(declaration, declaration_path.parent)
+                receipt_path = Path(declaration["receipt_path"])
+                self._references(json.loads(self.watch_file(receipt_path)), receipt_path.parent)
+                enrollment = self._reference(declaration["enrollment"])
+                self._enrollment(enrollment)
+                from . import rapid_rolling_capture as rolling
+                from . import rapid_static_parallel_schedule as scheduling
+                from .rapid_capture_traffic import FIELD, files
+                _, _, policy = rolling._verify_enrollment(enrollment)
+                for runtime, selected_traffic in ((declaration["runtime"], declaration.get(FIELD)),
+                                                  (policy["runtime"], None)):
+                    for name in ("runtime_source_root", "module_root"):
+                        self.watch_tree(Path(runtime[name]), ignore_git=True)
+                    for name in ("source_manifest", "client_binary", "base_launcher", "host_launcher"):
+                        self.watch_file(Path(runtime[name]))
+                    for relative, _ in files(selected_traffic).values():
+                        self.watch_file(Path(runtime["execution_root"]) / relative)
+                _, trees = scheduling.terminal_inputs(enrollment, _context=self)
+                return self.remember(key, sorted(trees))
             if not is_static(preparation):
                 raise ValueError("operation workload has an unknown preparation data role")
             return preparation_roots(preparation)
