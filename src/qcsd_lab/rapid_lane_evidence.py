@@ -945,7 +945,7 @@ def _lineage_payload(spec: CaptureSpec, lane: plan.Lane, checked: Mapping[str, A
 
 def prepare_lane_intent(spec: CaptureSpec, evidence_root: Path, campaign_name: str,
                         checked: Mapping[str, Any], *, predecessor_intent: Path | None = None,
-                        actuator: str = "run") -> Path:
+                        actuator: str = "run", _prepared_lineage: Mapping[str, Any] | None = None) -> Path:
     """Claim the ordinary lane identity after the actual immutable-image check.
 
     Both actuators use the same plan, lineage and failed-only predecessor rules.
@@ -971,7 +971,13 @@ def prepare_lane_intent(spec: CaptureSpec, evidence_root: Path, campaign_name: s
     namespace = spec.execution_root / "results" / lane.campaign_name
     if namespace.exists() or namespace.is_symlink():
         raise FileExistsError("physical campaign namespace already contains an unbound or prior attempt")
-    lineage = _lineage_payload(spec, lane, checked, root, predecessor_intent)
+    lineage = (_lineage_payload(spec, lane, checked, root, predecessor_intent)
+               if _prepared_lineage is None else dict(_prepared_lineage))
+    if (_prepared_lineage is not None and (actuator != "parallel-formal-worker"
+        or lineage.get("image_check") != checked
+        or lineage.get("predecessor_intent") != (
+            _put_object(root, _read(predecessor_intent)) if predecessor_intent else None))):
+        raise ValueError("parallel prepared lineage differs from its checked image or immediate predecessor")
     directory.mkdir(parents=True)
     lineage_path = directory / "lineage.json"
     _create(root, lineage_path, LINEAGE_TYPE, lineage)

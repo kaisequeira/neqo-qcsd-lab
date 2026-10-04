@@ -11348,6 +11348,14 @@ for pair in x["pairs"]:
     print(pair[0]);print(pair[1]);print(",".join(map(str,pair)))
 ' "${parallel_cpu_json}")
   study_capture_sidecar_cpuset="${parallel_cpu_rows[0]}"
+  parallel_prepared_sha256=""
+  if (( parallel_formal )) && [[ "${rapid_capture_version}" == "v6" ]]; then
+    # Close immutable Source, plan, qualification and canary work before any
+    # router or worker is born. Release still rehashes these inputs and checks
+    # actual Docker identities, mounts, DNS and peer CPU partitions.
+    parallel_prepared_sha256="$(parallel_python prepare-release --authority "${parallel_authority}" --output "${parallel_output}")" || exit 1
+    [[ "${parallel_prepared_sha256}" =~ ^[0-9a-f]{64}$ ]] || exit 1
+  fi
   QCSD_DOCKER_IDS_PARALLEL_WORKERS=()
   QCSD_DOCKER_IDS_PUBLIC_NETWORKS=()
   QCSD_DOCKER_IDS_PUBLIC_ROUTERS=()
@@ -11421,7 +11429,12 @@ for pair in x["pairs"]:
     replace_container_environment QCSD_CAPTURE_CLIENT_CPU "${parallel_cpu_rows[1 + parallel_index * 3]}"
     replace_container_environment QCSD_CAPTURE_ORCHESTRATOR_CPU "${parallel_cpu_rows[2 + parallel_index * 3]}"
     if (( parallel_formal )); then
-      parallel_formal_worker_inputs="$(parallel_python formal-inputs --authority "${parallel_authority}" --index "${parallel_index}")" || exit 1
+      parallel_prepared_arguments=()
+      if [[ -n "${parallel_prepared_sha256}" ]]; then
+        parallel_prepared_arguments=(--output "${parallel_output}" --prepared-sha256 "${parallel_prepared_sha256}")
+        container+=(--label "org.qcsd.release-preparation-sha256=${parallel_prepared_sha256}")
+      fi
+      parallel_formal_worker_inputs="$(parallel_python formal-inputs --authority "${parallel_authority}" --index "${parallel_index}" "${parallel_prepared_arguments[@]}")" || exit 1
       parallel_formal_environment_text="$(parallel_environment_rows "${parallel_formal_worker_inputs}")" || exit 1
       while IFS=$'\t' read -r parallel_environment_key parallel_environment_b64; do
         [[ -n "${parallel_environment_key}" ]] || continue
@@ -11510,8 +11523,12 @@ put(root/"actual-launch.json",dict(workers=workers,sidecars=sidecars,lane_resour
     "${parallel_worker_names[0]}" "${parallel_router_names[0]}" \
     "${parallel_worker_ids[1]}" "${parallel_router_ids[1]}" "${parallel_network_ids[1]}" \
     "${parallel_worker_names[1]}" "${parallel_router_names[1]}" "${study_capture_docker_ncpu}"
+  parallel_release_arguments=()
+  if [[ -n "${parallel_prepared_sha256}" ]]; then
+    parallel_release_arguments=(--prepared-sha256 "${parallel_prepared_sha256}")
+  fi
   parallel_python release --authority "${parallel_authority}" --output "${parallel_output}" \
-    --actual "${parallel_output}/actual-launch.json"
+    --actual "${parallel_output}/actual-launch.json" "${parallel_release_arguments[@]}"
   parallel_retired=(0 0)
   parallel_status=0
   while (( ! parallel_retired[0] || ! parallel_retired[1] )); do
