@@ -504,6 +504,18 @@ def _static_canary_facts(facts: Mapping[str, Any], amendment: Mapping[str, Any])
     return {**facts, "full_graph": {**historical, "resource_records_sha256": compact_sha}}
 
 
+def _static_measurement_runtime(scheduling, runtime, *, _context=None):
+    """Select a measurement role only through the closed inspector authority."""
+    if scheduling is not None:
+        from . import rapid_runtime_inspector as inspector
+        value = lanes._load(lanes._read(_open_ref(scheduling)))
+        if inspector.is_inspected(value):
+            value = inspector.validate_schedule(scheduling, runtime={key: str(runtime[key]) for key in RUNTIME_FIELDS},
+                                                _context=_context)
+            return {key: value["base_spec"][key] for key in RUNTIME_FIELDS}
+    return runtime
+
+
 def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output: Path,
                  *, readiness: Mapping[str, Any], runtime_inputs: Mapping[str, str] | None = None,
                  scheduling: Mapping[str, str] | None = None,
@@ -516,6 +528,7 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
         raise ValueError("a rolling runtime successor must retain its declared study data root")
     if _open_ref(batch["policy"]) != root / "policy.json" or not set(readiness) <= set(plan.MODES):
         raise ValueError("rolling plan changed its policy or supplied unknown readiness")
+    measurement_runtime = _static_measurement_runtime(scheduling, runtime)
     amendment_reference, amendment = None, None
     static_reference, static_amendment = None, None
     if front_capture_amendment is not None and static_capture_amendment is not None:
@@ -531,7 +544,7 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
         if policy["contract"] != STATIC_CONTRACT:
             raise ValueError("static capture amendment requires its static preparation authority")
         static_reference = _ref(static_capture_amendment)
-        static_amendment = validate_amendment(static_capture_amendment, enrollment=enrollment, runtime=runtime)
+        static_amendment = validate_amendment(static_capture_amendment, enrollment=enrollment, runtime=measurement_runtime)
         if not readiness or not set(readiness) <= set(static_amendment["modes"]):
             raise ValueError("static plan requires only its independently ready amended settings")
     from .rapid_rolling_readiness import validate_canary
@@ -539,6 +552,11 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
     if scheduling is not None:
         from . import rapid_rolling_schedule as schedule
         capsule = schedule.validate_schedule(scheduling, runtime=runtime)
+        from . import rapid_original_static_parallel_schedule as original_static
+        if capsule.get("artifact_type") == original_static.CAPSULE_TYPE:
+            if (policy["contract"] != STATIC_CONTRACT or static_reference is not None
+                or amendment_reference is not None or set(readiness) != {capsule["mode"]}):
+                raise ValueError("original static scheduling requires only its unchanged independently ready setting")
         from . import rapid_static_parallel_schedule as static_schedule
         if capsule.get("artifact_type") == static_schedule.CAPSULE_TYPE and static_reference is None:
             raise ValueError("current static scheduling requires its explicit static amendment")
@@ -566,7 +584,7 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
     workloads, campaigns = Path(runtime["workload_root"]), Path(runtime["campaign_dir"])
     from .rapid_capture_traffic import FIELD
     duration_policy = static_amendment.get(FIELD) if static_amendment is not None else None
-    sites = _sites(enrollment, qualification_spec, workloads, runtime=runtime,
+    sites = _sites(enrollment, qualification_spec, workloads, runtime=measurement_runtime,
                    front_capture_amendment=amendment_reference, static_capture_amendment=static_reference)
     planned = plan.plan_lanes(sites, final=True, study_version=6, rolling_batch=batch["ordinal"])
     hashes = {}
@@ -645,6 +663,7 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
     if spec != expected_spec:
         raise ValueError("rolling spec changed frozen runtime, admission or input locations")
     value = admission._unpack(lanes._read(spec.plan_receipt), lanes.PLAN_TYPE)
+    measurement_runtime = _static_measurement_runtime(value.get("scheduling"), spec.serializable(), _context=_context)
     fields = {"study_version", "cohort_generation", "bindings", "runtime", "runtime_artifacts", "acquisition_provenance_sha256",
                  "qualification_spec_sha256", "sites", "lanes", "planned_trace_count", "readiness",
                  "declared_at", "formal_accepted_trace_count", "scientific_credit"}
@@ -655,6 +674,9 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
             raise ValueError("static rolling plan changed its scientific data role")
     if "scheduling" in value:
         fields.add("scheduling")
+        from . import rapid_original_static_parallel_schedule as original_static
+        if original_static.is_static(value["scheduling"]):
+            original_static.require_plan(value, _context=_context)
     amendment_reference, static_reference = None, None
     if "front_capture_amendment" in value:
         fields.add("front_capture_amendment")
@@ -675,7 +697,7 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
         if "scheduling" in value:
             from . import rapid_static_parallel_schedule as static_schedule
             static_schedule.require_plan(value, _context=_context)
-        amendment = validate_amendment(_open_ref(static_reference), enrollment=spec.cohort, runtime=spec.serializable())
+        amendment = validate_amendment(_open_ref(static_reference), enrollment=spec.cohort, runtime=measurement_runtime)
         if (not isinstance(value.get("readiness"), dict) or not value["readiness"]
             or not set(value["readiness"]) <= set(amendment["modes"])
             or admission._utc(amendment["published_at"]) > admission._utc(value["declared_at"])):
@@ -687,7 +709,7 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
             raise ValueError("static plan changed its prospective BuFLO duration traffic contract")
     _keys(value, fields, "rolling plan")
     sites = _sites_from_enrollment(batch, classes, spec.qualification_spec, spec.workload_root,
-               require_current=require_current, enrollment=spec.cohort, runtime=spec.serializable(),
+               require_current=require_current, enrollment=spec.cohort, runtime=measurement_runtime,
                front_capture_amendment=amendment_reference, static_capture_amendment=static_reference, _context=_context)
     if (value["study_version"] != 6 or type(value["study_version"]) is not int
         or value["cohort_generation"] != "rolling-50" or value["bindings"] != _bindings_from_enrollment(spec.cohort, policy)
@@ -737,14 +759,18 @@ def require_mode_readiness(spec: lanes.CaptureSpec, lane: plan.Lane, *, before: 
         facts = schedule.validate_ready_canary(payload["readiness"][lane.mode], payload["scheduling"],
             mode=lane.mode, before=payload["declared_at"], _context=_context)
         from . import rapid_static_parallel_schedule as static_schedule
+        from . import rapid_original_static_parallel_schedule as original_static
         from .rapid_capture_traffic import plan_files
-        current_static = static_schedule.is_static(payload["scheduling"])
+        current_static = (static_schedule.is_static(payload["scheduling"])
+                          or original_static.is_static(payload["scheduling"]))
         expected_traffic = plan_files(payload) if current_static else lanes.TRAFFIC_FILES
         if (facts.get("client_sha256") != lanes._sha(lanes._read(spec.client_binary))
             or facts.get("traffic_hashes") != {key: digest for key, (_, digest) in expected_traffic.items()}):
             raise ValueError("scheduled setting changed its original client or fixed traffic")
         if current_static:
-            expected_source = {**lanes._load(lanes._read(spec.source_manifest)), "image_digest": spec.collection_image_digest}
+            measurement_runtime = _static_measurement_runtime(payload["scheduling"], spec.serializable(), _context=_context)
+            expected_source = {**lanes._load(lanes._read(Path(measurement_runtime["source_manifest"]))),
+                               "image_digest": measurement_runtime["collection_image_digest"]}
             if facts.get("authority_source") != expected_source:
                 raise ValueError("static scheduled readiness changed its exact current Source")
     else:
@@ -765,7 +791,8 @@ def require_mode_readiness(spec: lanes.CaptureSpec, lane: plan.Lane, *, before: 
     if "static_capture_amendment" in payload:
         from .supplied_static_capture_amendment import require_canary, validate_amendment
         reference = payload["static_capture_amendment"]
-        amendment = validate_amendment(_open_ref(reference), enrollment=spec.cohort, runtime=spec.serializable())
+        amendment = validate_amendment(_open_ref(reference), enrollment=spec.cohort,
+                     runtime=_static_measurement_runtime(payload.get("scheduling"), spec.serializable(), _context=_context))
         require_canary(payload["readiness"][lane.mode], _static_canary_facts(facts, amendment),
                        reference, amendment, mode=lane.mode)
         if before is not None and admission._utc(amendment["published_at"]) > admission._utc(before):
@@ -936,7 +963,8 @@ def readiness_roots(spec: lanes.CaptureSpec, campaign_name: str, *, _context=Non
     if "static_capture_amendment" in payload:
         from .supplied_static_capture_amendment import validate_amendment, preparation_roots
         amendment = validate_amendment(_open_ref(payload["static_capture_amendment"]),
-                                      enrollment=spec.cohort, runtime=spec.serializable())
+                     enrollment=spec.cohort,
+                     runtime=_static_measurement_runtime(payload.get("scheduling"), spec.serializable(), _context=_context))
         for row in amendment["workloads"]:
             value = lanes._load(lanes._read(_open_ref(row["capture_manifest"])))
             roots.update(preparation_roots(value["preparation"]))

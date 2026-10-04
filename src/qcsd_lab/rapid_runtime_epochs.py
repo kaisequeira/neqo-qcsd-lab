@@ -637,6 +637,15 @@ def validate_qualification_reuse(old_receipt, current_receipt) -> None:
     reference = os.environ.get(COMPATIBILITY_ENV)
     if reference:
         value = admission._load(admission._read(Path(reference)))
+        from . import rapid_original_static_parallel_schedule as original_static
+        if value.get("artifact_type") == original_static.CAPSULE_TYPE:
+            if _CURRENT_BRIDGE.get() is not None or os.environ.get("QCSD_RAPID_CAPTURE_CONTROL_INSTALLATION"):
+                raise ValueError("original static scheduling cannot claim historical installation or runtime repair")
+            from .rapid_operation_facts import current_context
+            original_static.validate_current_qualification(old_receipt, current_receipt,
+                {"path": str(Path(reference).absolute()), "sha256": admission._sha(admission._read(Path(reference)))},
+                actual_image=os.environ.get("QCSD_LAB_IMAGE_DIGEST"), _context=current_context())
+            return
         from . import rapid_static_parallel_schedule as static_schedule
         if value.get("artifact_type") == static_schedule.CAPSULE_TYPE:
             if _CURRENT_BRIDGE.get() is not None or os.environ.get("QCSD_RAPID_CAPTURE_CONTROL_INSTALLATION"):

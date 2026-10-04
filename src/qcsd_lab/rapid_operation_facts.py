@@ -278,7 +278,8 @@ class OperationFacts:
             path = Path(capsule["runtime"]["workload_root"]) / (site["workload_id"] + ".json")
             self.watch_file(path)
             from .rapid_static_parallel_schedule import CAPSULE_TYPE as STATIC_CAPSULE_TYPE
-            if capsule.get("artifact_type") == STATIC_CAPSULE_TYPE:
+            from .rapid_original_static_parallel_schedule import CAPSULE_TYPE as ORIGINAL_STATIC_CAPSULE_TYPE
+            if capsule.get("artifact_type") in {STATIC_CAPSULE_TYPE, ORIGINAL_STATIC_CAPSULE_TYPE}:
                 self._references(json.loads(self.watch_file(path)), path.parent)
             else:
                 self.watch_tree(path.with_name(site["workload_id"] + "-application-response-evidence"))

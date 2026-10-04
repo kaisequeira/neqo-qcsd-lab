@@ -865,7 +865,8 @@ def _release_fence(path, value, facts, preflight):
             for site in sites:
                 if isinstance(static_context, static.Context):
                     from .rapid_static_parallel_schedule import CAPSULE_TYPE as STATIC_CAPSULE_TYPE
-                    if (capsule.get("artifact_type") != STATIC_CAPSULE_TYPE
+                    from .rapid_original_static_parallel_schedule import CAPSULE_TYPE as ORIGINAL_STATIC_CAPSULE_TYPE
+                    if (capsule.get("artifact_type") not in {STATIC_CAPSULE_TYPE, ORIGINAL_STATIC_CAPSULE_TYPE}
                         or capsule["qualified_inputs"]["workloads"][site.workload_id]["application_evidence"] is not None):
                         raise ValueError("static release fence requires its authenticated inline GET capsule")
                 else:

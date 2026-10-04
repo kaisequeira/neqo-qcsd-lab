@@ -11,6 +11,54 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ### Current supplied-list study
 
+At **5 October, around 02:45 Sydney AEDT (4 October, 15:45 UTC)** the formal
+counter is **12/16,000**, from eight ordinary visits and four FRONT visits at
+one enrolled site. Ten sites have passed ordinary resource admission across
+35 decisions; eleven are operationally deferred and fourteen input-ineligible.
+This is not evidence that all ten work under every setting.
+
+The formal counter is sealed in
+`diagnostic-rehearsals/supplied-static-front-first-formal-root-actual-20261005-001/scientific-progress-000003.json`,
+SHA `20140f9e7f71358d6ae92ef6ba61e534f3348ba2f37dc539b12cba5c68d2ea1a`.
+The first formal FRONT launch and separate installed final verification each
+closed 0; the four complete-site visits are accepted with no failed visits.
+Its actual closure is `formal-lane-closed.json` in that same Root directory,
+SHA `40a72513b1e67d5e77caa2f3b20f945285a87df78a621f2fa9152ffc302f9b25`.
+The campaign took **255.663 seconds**, full launch **2,295.666 seconds**, and
+separate final verification **751.202 seconds**. Every one of the 277 resources
+and all three origins are retained. Old browser recordings remain excluded.
+
+Candidate 35's fresh complete-resource retry passed GET, proof verification,
+admission and terminal verification; the original DNS failure is retained.
+Actual records are in
+`diagnostic-rehearsals/supplied-static-q35-retry-root-actual-20261005-001`.
+Its admission adds no formal recording.
+
+The prospective inspector's held Source package is
+`diagnostic-rehearsals/static-inspector-control-host-checks-20261005-002/source-closure-final.json`,
+SHA `1a09ce67433b7f14ab02c6aa2bb4d889700a5a315a01476094da16240964be96`.
+The held original-static three-mode package has closure
+`diagnostic-rehearsals/original-static-three-modes-host-checks-20261005-004/source-closure-final.json`,
+SHA `fd3d412b8fdb1e8a18f0f6663fab5db018d26921b1684c8b4109f5469e37c508`.
+Their Root composition records are in
+`diagnostic-rehearsals/static-inspector-control-source-publication-20261005-001`.
+The first three-way patch application failed before producing merge conflicts;
+its actual logs are retained. Direct application of the held patch and explicit
+CLI composition follow under new operation names. A matching installation and
+actual two-worker capture/recovery demonstration remain required.
+
+Five bounded supplementary discovery attempts are retained in
+`diagnostic-rehearsals/whole-graph-supplement-discovery-root-actual-20261005-001`.
+They produced **zero graph inputs, admissions or formal recordings**. Candidates
+one and two stopped at navigation with `ERR_BLOCKED_BY_CLIENT`; the external
+operator omitted the production navigation-and-origin-seeding step. Candidates
+three and five failed primary DNS resolution while the control domain resolved;
+candidate four attempted nonreplayable network egress. The two navigation
+failures remain operational defects and are not site exclusions. The old 87-entry
+input prefix and every supplied resource list remain unchanged.
+
+#### Earlier checkpoint at 00:13
+
 At **5 October, 00:13 Sydney AEDT (4 October, 13:13 UTC)** the authoritative formal counter
 remains **8/16,000** at one enrolled site. The next ordinary GET batch closed
 five decisions with two admissions, one operational deferral and two input

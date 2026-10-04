@@ -371,8 +371,10 @@ def _producer_command(root: Path, name: str, canonical: Mapping, inputs: Mapping
     raise ValueError("scheduling runtime operation is unknown")
 
 
-def reopen_runtime(reference: Mapping[str, str], runtime: Mapping[str, str], *, _seen: frozenset[str] = frozenset()) -> tuple[dict, dict[str, bytes]]:
+def reopen_runtime(reference: Mapping[str, str], runtime: Mapping[str, str], *, _seen: frozenset[str] = frozenset(), _inspector: bool = False) -> tuple[dict, dict[str, bytes]]:
     """Reopen all twelve actual runtime operations, installed checks and export."""
+    if type(_inspector) is not bool:
+        raise ValueError("runtime inspector selection must be explicitly typed")
     path, raw = evidence._reference(reference)
     if str(path) in _seen:
         raise ValueError("scheduling runtime provenance contains a cycle")
@@ -436,7 +438,7 @@ def reopen_runtime(reference: Mapping[str, str], runtime: Mapping[str, str], *, 
             "base_launcher": str(original_root / "qcsd-lab"), "host_launcher": str(original_root / "qcsd-lab"),
             "source_manifest": original["source_manifest"], "client_binary": original["client_binary"],
             "collection_image_digest": original["collection_image_digest"]}
-        original, _ = reopen_runtime(value["original_canonical"], original_runtime, _seen=_seen)
+        original, _ = reopen_runtime(value["original_canonical"], original_runtime, _seen=_seen, _inspector=_inspector)
         original_inventory = evidence._json(evidence._read(original_path.parent / "source-inventory.json", original["source_inventory_sha256"]))
         original_native = {name: record for name, record in original_inventory.items() if name.startswith("neqo-qcsd/")}
         current_native = {name: record for name, record in inventory.items() if name.startswith("neqo-qcsd/")}
@@ -450,6 +452,9 @@ def reopen_runtime(reference: Mapping[str, str], runtime: Mapping[str, str], *, 
             "original_source_inventory": rolling._ref(original_path.parent / "source-inventory.json"),
             "target_build_inputs": rolling._ref(root / "build-inputs.json"),
             "target_source_inventory": inventory_ref}
+        if _inspector:
+            from .rapid_runtime_inspector import schema1_reuse_facts
+            schema1_reuse_facts(reuse, value, original, original_path, current_native, original_native)
         if (reuse.get("artifact_type") != "qcsd-exact-existing-native-client-reuse" or reuse.get("source") != source
             or reuse.get("scientific_credit") is not False or reuse.get("runtime_qualification") != "not-executed"
             or reuse.get("client_sha256") != value["installed_client_sha256"]
@@ -461,8 +466,8 @@ def reopen_runtime(reference: Mapping[str, str], runtime: Mapping[str, str], *, 
             or any(reuse.get(key) != inputs[key] or inputs[key] != original_inputs[key]
                    for key in ("toolchain_image", "cargo_lock_sha256", "rust_archive_sha256"))
             or reuse.get("original_actual_operation_completions") != original["actual_operation_completions"]
-            or reuse.get("original_client_executable") is not True
-            or type(reuse.get("native_source_file_count")) is not int or reuse["native_source_file_count"] != len(current_native)
+            or not _inspector and (reuse.get("original_client_executable") is not True
+                or type(reuse.get("native_source_file_count")) is not int or reuse["native_source_file_count"] != len(current_native))
             or client_record.get("client_reuse_proof") != value["client_reuse_proof"]
             or client_record.get("client_reuse_completion") != evidence._json(evidence._read(root / "client-reuse-completed.json"))):
             raise ValueError("scheduling exact-client reuse differs from its actual original Native build")
@@ -502,7 +507,7 @@ def reopen_runtime(reference: Mapping[str, str], runtime: Mapping[str, str], *, 
     if action == "verified-exact-existing-client-reuse":
         started = evidence._json(evidence._read(root / "client-reuse-started.json"))
         completed = evidence._json(evidence._read(root / "client-reuse-completed.json"))
-        if not evidence._timestamp(started["started_at"]) <= evidence._timestamp(reuse["copied_at"]) <= evidence._timestamp(completed["completed_at"]):
+        if (not _inspector or "copied_at" in reuse) and not evidence._timestamp(started["started_at"]) <= evidence._timestamp(reuse["copied_at"]) <= evidence._timestamp(completed["completed_at"]):
             raise ValueError("scheduling copied client predates or follows its actual reuse operation")
     for role in ("collection", "prepare"):
         proof = evidence._json(evidence._read(root / (role + "-installed-verification.stdout.log")))
@@ -668,6 +673,9 @@ def validate_schedule(reference: Mapping[str, str], *, runtime: Mapping[str, str
                       before: str | None = None, _context=None) -> dict:
     _, raw = evidence._reference(reference)
     value = evidence._json(raw)
+    from . import rapid_original_static_parallel_schedule as original_static
+    if isinstance(value, dict) and value.get("artifact_type") == original_static.CAPSULE_TYPE:
+        return original_static.validate_schedule(reference, runtime=runtime, before=before, _context=_context)
     from . import rapid_static_parallel_schedule as static
     if isinstance(value, dict) and value.get("artifact_type") == static.CAPSULE_TYPE:
         return static.validate_schedule(reference, runtime=runtime, before=before, _context=_context)
@@ -708,6 +716,11 @@ def validate_qualification_reuse(old_impl: Mapping, current_impl: Mapping, refer
                                 *, actual_image: str, before: str | None = None, _context=None) -> None:
     """Typed installed hook: no ambient or source-only qualification exemption."""
     capsule = validate_schedule(reference, before=before, _context=_context)
+    from . import rapid_original_static_parallel_schedule as original_static
+    if capsule["artifact_type"] == original_static.CAPSULE_TYPE:
+        original_static.validate_current_qualification(old_impl, current_impl, reference,
+            actual_image=actual_image, before=before, _context=_context)
+        return
     from . import rapid_static_parallel_schedule as static
     if capsule["artifact_type"] == static.CAPSULE_TYPE:
         static.validate_current_qualification(old_impl, current_impl, reference,
@@ -765,6 +778,9 @@ def validate_ready_canary(reference: Mapping[str, Any], schedule_reference: Mapp
 def mount_roots(reference: Mapping[str, str], *, _context=None) -> list[Path]:
     """Derive read-only transport from the fully reopened capsule and runtimes."""
     capsule = validate_schedule(reference, _context=_context)
+    from . import rapid_original_static_parallel_schedule as original_static
+    if capsule["artifact_type"] == original_static.CAPSULE_TYPE:
+        return original_static.mount_roots(reference, _context=_context)
     from . import rapid_static_parallel_schedule as static
     if capsule["artifact_type"] == static.CAPSULE_TYPE:
         return static.mount_roots(reference, _context=_context)

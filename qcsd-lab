@@ -7905,7 +7905,9 @@ for path in campaign_roots(root, sys.argv[2], Path(sys.argv[3])):
     rapid_compatibility_host="${QCSD_RAPID_COLLECTION_COMPATIBILITY}"
     rapid_scheduling_kind="$(/usr/bin/python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get("artifact_type",""))' \
       "${rapid_compatibility_host}")" || exit 1
-    if [[ "${rapid_scheduling_kind}" == "qcsd-rapid-v6-prospective-parallel-scheduling" ]]; then
+    if [[ "${rapid_scheduling_kind}" == "qcsd-rapid-v6-prospective-parallel-scheduling" ||
+          "${rapid_scheduling_kind}" == "qcsd-rapid-v6-current-static-parallel-scheduling" ||
+          "${rapid_scheduling_kind}" == "qcsd-rapid-v6-current-original-static-parallel-scheduling" ]]; then
       rapid_scheduling_python="${parallel_host_python:-}"
       if [[ -z "${rapid_scheduling_python}" ]]; then
         rapid_scheduling_python="$(parallel_select_host_python)" || exit 1

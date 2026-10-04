@@ -1,6 +1,6 @@
 # QCSD thesis project ledger
 
-Checkpoint: **4 October 2026, Australia/Sydney (AEDT, UTC+11)**.
+Checkpoint: **5 October 2026, Australia/Sydney (AEDT, UTC+11)**.
 This is the current research ledger. The [history](docs/PROJECT-HISTORY.md)
 preserves the development record, the [class-study runbook](docs/CLASS-STUDY.md)
 defines continuation, and the [capture-readiness guide](docs/CAPTURE-READINESS.md)
@@ -49,7 +49,42 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Current checkpoint, 5 October, 00:13 Sydney AEDT (4 October, 13:13 UTC):**
+**Current checkpoint, 5 October, around 02:45 Sydney AEDT (4 October, 15:45 UTC):**
+Formal capture has begun: **12/16,000 accepted and independently verified
+recordings**, comprising eight ordinary visits and four FRONT visits at one
+enrolled Poki site. The complete 277-resource graph across three origins is
+retained. Ordinary resource checking has closed **35 decisions: ten admissions,
+eleven operational deferrals and fourteen input exclusions**. Candidate 35's
+fresh retry passed; its earlier DNS failure remains retained. These admissions
+do not establish compatibility under every setting. The final target remains
+**50 sites × five settings × 64 visits**.
+
+The first formal FRONT batch passed capture, installed deep verification and
+separate final lane verification on Lab `2b990d93` / Native `c24da2af`. The
+four-visit campaign took **255.663 seconds**; its complete launch took
+**2,295.666 seconds**, followed by **751.202 seconds** for the separate final
+verification. This is measured evidence-checking overhead around a successful
+capture, rather than an estimate of final corpus throughput.
+
+The prospective control inspector binds the original measurement runtime and
+its passed canary/qualification separately from the current installed control
+runtime. It supports a fresh execution folder with exact input copies and
+actual recorded copy operations. It preserves complete graphs, traffic settings,
+the verified Native client and historical evidence. The additional current
+original-static scheduling route covers ordinary traffic, Tamaraw and CS-BuFLO;
+each still requires its own current complete-site canary and qualification.
+The new controls require focused combined checks, independent Source review,
+publication and a matching installation before use. An actual two-container
+capture and failed-lane-only restart demonstration remains outstanding.
+
+Five bounded supplementary discovery attempts closed without producing an
+admissible graph. Two exposed a missing navigation step in the discovery
+operator, two failed primary DNS resolution and one attempted nonreplayable
+network egress. The navigation failures are operational defects, not scientific
+site rejections. Retained attempts add no admissions or formal recordings.
+See the [current evidence locations](docs/EVIDENCE-INDEX.md#current-supplied-list-study).
+
+**Earlier checkpoint, 5 October, 00:13 Sydney AEDT (4 October, 13:13 UTC):**
 The accepted formal counter remains **8/16,000**, from the original two
 ordinary four-visit lanes at one enrolled Poki site. Ordinary resource checking
 has now closed **34 decisions: nine admissions, eleven operational deferrals
