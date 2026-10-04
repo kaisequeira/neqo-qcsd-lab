@@ -40,7 +40,7 @@ def run(args, *, _context=None):
             rolling._ref(args.original_canonical), rolling._ref(args.current_canonical),
             args.output, execution_copy={key: rolling._ref(getattr(args, "copy_" + key))
                 for key in ("started", "completed", "stdout", "stderr")},
-            reason=args.reason), "scientific_credit": False}
+            reason=args.reason, host_preflight_context=args.host_preflight_context), "scientific_credit": False}
     if args.command == "original-static-scheduling":
         from qcsd_lab.rapid_original_static_parallel_schedule import publish_schedule
         return {"scheduling": publish_schedule(lanes.load_capture_spec(args.spec),
@@ -155,6 +155,7 @@ def _parser():
                 item.add_argument("--" + flag, type=Path, required=True)
             item.add_argument("--reason", required=True)
             if name == "static-inspector-scheduling":
+                item.add_argument("--host-preflight-context", action="store_true")
                 for flag in ("started", "completed", "stdout", "stderr"):
                     item.add_argument("--copy-" + flag, type=Path, required=True)
         elif name == "canary-equivalence":

@@ -671,6 +671,17 @@ def publish_schedule(base_spec: lanes.CaptureSpec, runtime: Mapping[str, str], q
 
 def validate_schedule(reference: Mapping[str, str], *, runtime: Mapping[str, str] | None = None,
                       before: str | None = None, _context=None) -> dict:
+    from .rapid_operation_facts import OperationFacts, current_context
+    _context = current_context() if _context is None else _context
+    if _context is None:
+        context = OperationFacts()
+        with context.scope():
+            result = validate_schedule(reference, runtime=runtime, before=before, _context=context)
+            context.check()
+            return result
+    if current_context() is not _context:
+        with _context.scope():
+            return validate_schedule(reference, runtime=runtime, before=before, _context=_context)
     _, raw = evidence._reference(reference)
     value = evidence._json(raw)
     from . import rapid_original_static_parallel_schedule as original_static
@@ -777,6 +788,17 @@ def validate_ready_canary(reference: Mapping[str, Any], schedule_reference: Mapp
 
 def mount_roots(reference: Mapping[str, str], *, _context=None) -> list[Path]:
     """Derive read-only transport from the fully reopened capsule and runtimes."""
+    from .rapid_operation_facts import OperationFacts, current_context
+    _context = current_context() if _context is None else _context
+    if _context is None:
+        context = OperationFacts()
+        with context.scope():
+            roots = mount_roots(reference, _context=context)
+            context.check()
+            return roots
+    if current_context() is not _context:
+        with _context.scope():
+            return mount_roots(reference, _context=_context)
     capsule = validate_schedule(reference, _context=_context)
     from . import rapid_original_static_parallel_schedule as original_static
     if capsule["artifact_type"] == original_static.CAPSULE_TYPE:

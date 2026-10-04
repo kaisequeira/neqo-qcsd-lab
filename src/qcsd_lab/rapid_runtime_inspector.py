@@ -25,6 +25,7 @@ from .util import durable_create
 
 CONTRACT = "rolling-v6-static-measurement-and-installed-control-inspector-v2"
 DEPENDENCY_CONTRACT = "rolling-v6-static-measurement-and-installed-control-inspector-v3"
+HOST_PREFLIGHT_CONTRACT = "rolling-v6-static-measurement-and-installed-control-inspector-v4"
 MODULE_FILE = "src/qcsd_lab/rapid_runtime_inspector.py"
 REUSE_SCHEMA1_KEYS = frozenset({"schema_version", "artifact_type", "native_artifact_action", "source",
     "original_native_build_source", "client_sha256", "original_canonical", "original_build_inputs",
@@ -102,7 +103,8 @@ def schema1_reuse_facts(reuse: Mapping, canonical: Mapping, original: Mapping,
 def is_inspected(value: Any) -> bool:
     return (isinstance(value, Mapping) and type(value.get("schema_version")) is int
             and ((value["schema_version"] == 2 and value.get("contract") == CONTRACT)
-                 or (value["schema_version"] == 3 and value.get("contract") == DEPENDENCY_CONTRACT))
+                 or (value["schema_version"] == 3 and value.get("contract") == DEPENDENCY_CONTRACT)
+                 or (value["schema_version"] == 4 and value.get("contract") == HOST_PREFLIGHT_CONTRACT))
             and value.get("artifact_type") == "qcsd-rapid-v6-current-static-parallel-scheduling")
 
 
@@ -121,6 +123,9 @@ CONTROL_DEFINITIONS = {
 DEPENDENCY_CONTROL_DEFINITIONS = {**CONTROL_DEFINITIONS,
     "src/qcsd_lab/rapid_operation_facts.py": frozenset({"OperationFacts.bind_schedule",
         "OperationFacts._workload_evidence_trees", "OperationFacts.bind_canary"})}
+HOST_PREFLIGHT_CONTROL_DEFINITIONS = {**DEPENDENCY_CONTROL_DEFINITIONS,
+    "src/qcsd_lab/rapid_rolling_capture.py": DEPENDENCY_CONTROL_DEFINITIONS["src/qcsd_lab/rapid_rolling_capture.py"] | {
+        "validate_host_launch"}}
 NEW_FILES = frozenset({MODULE_FILE, "src/qcsd_lab/rapid_original_static_parallel_schedule.py",
     "tests/test_rapid_runtime_inspector.py", "tests/test_rapid_original_static_parallel_schedule.py",
     "tests/test_rapid_static_shell_dispatch.py", "docs/ORIGINAL-STATIC-THREE-MODES.md"})
@@ -132,11 +137,14 @@ ROUTING_NEW = (b'    if [[ "${rapid_scheduling_kind}" == "qcsd-rapid-v6-prospect
     b'          "${rapid_scheduling_kind}" == "qcsd-rapid-v6-current-original-static-parallel-scheduling" ]]; then\n')
 
 
-def _python_projection(path: str, raw: bytes, *, _dependency_closure=False) -> tuple[str, dict[str, str]]:
-    if type(_dependency_closure) is not bool:
+def _python_projection(path: str, raw: bytes, *, _dependency_closure=False, _host_preflight_context=False) -> tuple[str, dict[str, str]]:
+    if type(_dependency_closure) is not bool or type(_host_preflight_context) is not bool:
         raise ValueError("inspector input closure projection must be explicitly typed")
+    if _host_preflight_context and not _dependency_closure:
+        raise ValueError("host preflight control requires the prospective input closure contract")
     tree = ast.parse(raw, filename=path)
-    permitted = (DEPENDENCY_CONTROL_DEFINITIONS if _dependency_closure else CONTROL_DEFINITIONS)[path]
+    permitted = (HOST_PREFLIGHT_CONTROL_DEFINITIONS if _host_preflight_context else
+                 DEPENDENCY_CONTROL_DEFINITIONS if _dependency_closure else CONTROL_DEFINITIONS)[path]
     units = {}
     retained = []
     for node in tree.body:
@@ -169,10 +177,12 @@ def _routing_projection(raw: bytes) -> bytes:
 
 
 def source_changes(old: Mapping[str, bytes], new: Mapping[str, bytes], *, client_sha256: str,
-                   duration_policy: str | None = None, _dependency_closure=False) -> dict:
+                   duration_policy: str | None = None, _dependency_closure=False, _host_preflight_context=False) -> dict:
     """Closed named control projection, with all other Source protected."""
-    if type(_dependency_closure) is not bool:
+    if type(_dependency_closure) is not bool or type(_host_preflight_context) is not bool:
         raise ValueError("inspector input closure projection must be explicitly typed")
+    if _host_preflight_context and not _dependency_closure:
+        raise ValueError("host preflight control requires the prospective input closure contract")
     from . import rapid_capture_control_compatibility as acquisition
     from . import supplied_static_capture_amendment as amendment
     from . import rapid_capture_traffic as traffic
@@ -195,8 +205,10 @@ def source_changes(old: Mapping[str, bytes], new: Mapping[str, bytes], *, client
                 raise ValueError("inspector changed launcher bytes outside the exact static routing predicate")
             units = ["exact-static-artifact-routing"]
         elif path in CONTROL_DEFINITIONS:
-            before, old_units = _python_projection(path, old[path], _dependency_closure=_dependency_closure)
-            after, new_units = _python_projection(path, new[path], _dependency_closure=_dependency_closure)
+            before, old_units = _python_projection(path, old[path], _dependency_closure=_dependency_closure,
+                _host_preflight_context=_host_preflight_context)
+            after, new_units = _python_projection(path, new[path], _dependency_closure=_dependency_closure,
+                _host_preflight_context=_host_preflight_context)
             if before != after:
                 raise ValueError("inspector changed Source outside named control definitions: " + path)
             units = sorted(name for name in old_units.keys() | new_units.keys()
@@ -234,7 +246,7 @@ def source_changes(old: Mapping[str, bytes], new: Mapping[str, bytes], *, client
         ("src/" if name.startswith("qcsd_lab.") else "") + name.replace(".", "/") + ".py"]
         for name in names} for group, names in expected.items()}
     acquisition_groups = acquisition._acquisition_groups(groups, hashes, current_hashes, client_sha256)
-    return {"contract": DEPENDENCY_CONTRACT if _dependency_closure else CONTRACT,
+    return {"contract": HOST_PREFLIGHT_CONTRACT if _host_preflight_context else DEPENDENCY_CONTRACT if _dependency_closure else CONTRACT,
             "changed_sources": changes, "protected_sources": protected,
             "native_source_hashes": old_native, "traffic_hashes": traffic_hashes,
             "acquisition_source_groups": acquisition_groups,
@@ -374,7 +386,7 @@ def _execution_inputs(base: lanes.CaptureSpec, runtime: Mapping[str, str], quali
 
 def _derive(base: lanes.CaptureSpec, runtime: Mapping[str, str], qualifier: Path,
             original: Mapping[str, str], current: Mapping[str, str], execution_copy: Mapping,
-            *, _context=None, _dependency_closure=False) -> dict:
+            *, _context=None, _dependency_closure=False, _host_preflight_context=False) -> dict:
     from . import rapid_static_parallel_schedule as static
     from . import rapid_rolling_capture as rolling
     from . import rapid_capture_traffic as traffic
@@ -408,7 +420,8 @@ def _derive(base: lanes.CaptureSpec, runtime: Mapping[str, str], qualifier: Path
         raise ValueError("inspector changed the original Native or actual installed client")
     selected = traffic.declared(plan)
     comparison = source_changes(old_sources, new_sources, client_sha256=old["installed_client_sha256"],
-                                duration_policy=selected, _dependency_closure=_dependency_closure)
+                                duration_policy=selected, _dependency_closure=_dependency_closure,
+                                _host_preflight_context=_host_preflight_context)
     inventories, build_dependencies = [], []
     for ref, canonical in ((original, old), (current, new)):
         root = Path(ref["path"]).parent
@@ -455,8 +468,10 @@ def _derive(base: lanes.CaptureSpec, runtime: Mapping[str, str], qualifier: Path
 
 def publish_schedule(base_spec: lanes.CaptureSpec, runtime: Mapping[str, str], qualification_spec: Path,
                      original_canonical: Mapping[str, str], current_canonical: Mapping[str, str],
-                     output: Path, *, execution_copy: Mapping, reason: str) -> dict[str, str]:
+                     output: Path, *, execution_copy: Mapping, reason: str, host_preflight_context=False) -> dict[str, str]:
     from . import rapid_static_parallel_schedule as static
+    if type(host_preflight_context) is not bool:
+        raise ValueError("host preflight control selection must be explicitly typed")
     if not isinstance(reason, str) or not reason.strip():
         raise ValueError("inspector requires an explicit prospective control scope")
     output = Path(output)
@@ -469,14 +484,15 @@ def publish_schedule(base_spec: lanes.CaptureSpec, runtime: Mapping[str, str], q
     if any(output.is_relative_to(Path(ref["path"]).parent) for ref in (original_canonical, current_canonical)):
         raise ValueError("inspector output overlaps an immutable runtime closure")
     derived = _derive(base_spec, runtime, qualification_spec, original_canonical, current_canonical,
-        execution_copy, _dependency_closure=True)
+        execution_copy, _dependency_closure=True, _host_preflight_context=host_preflight_context)
     now = datetime.now(UTC).isoformat()
     if any(evidence._timestamp(evidence._json(evidence._reference(ref)[1])["verified_at"]) > evidence._timestamp(now)
            for ref in (original_canonical, current_canonical)):
         raise ValueError("inspector publication precedes an actual runtime closure")
     if evidence._timestamp(evidence._json(evidence._reference(execution_copy["completed"])[1])["completed_at"]) >= evidence._timestamp(now):
         raise ValueError("inspector publication must follow actual completed input copying")
-    payload = {"schema_version": 3, "artifact_type": static.CAPSULE_TYPE, "contract": DEPENDENCY_CONTRACT,
+    payload = {"schema_version": 4 if host_preflight_context else 3, "artifact_type": static.CAPSULE_TYPE,
+        "contract": HOST_PREFLIGHT_CONTRACT if host_preflight_context else DEPENDENCY_CONTRACT,
         "base_spec": base_spec.serializable(), "runtime": dict(runtime),
         "qualification_spec": {"path": str(qualification_spec), "sha256": evidence._sha(evidence._read(qualification_spec))},
         "original_canonical": dict(original_canonical), "current_canonical": dict(current_canonical),
@@ -508,7 +524,8 @@ def validate_schedule(reference: Mapping[str, str], *, runtime: Mapping[str, str
         derived = _derive(legacy._spec(value["base_spec"]), value["runtime"],
             evidence._reference(value["qualification_spec"])[0], value["original_canonical"],
             value["current_canonical"], value["execution_copy"], _context=_context,
-            _dependency_closure=value["schema_version"] == 3)
+            _dependency_closure=value["schema_version"] in {3, 4},
+            _host_preflight_context=value["schema_version"] == 4)
         if _context is not None:
             _context.remember(key, derived)
     if any(value[name] != item for name, item in derived.items()):

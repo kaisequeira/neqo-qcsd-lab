@@ -796,7 +796,12 @@ def canary_under_execution_parent(request):
 
 
 @pytest.fixture
-def plan_operation_case(control_case, tmp_path, monkeypatch, canary_under_execution_parent):
+def host_preflight_control_scope(request):
+    return getattr(request, "param", False)
+
+
+@pytest.fixture
+def plan_operation_case(control_case, tmp_path, monkeypatch, canary_under_execution_parent, host_preflight_control_scope):
     """Real public planner/Inspector/raw closure; synthetic image and science primitives.
 
     The original GET, preparation, amendment, enrollment, execution-copy and
@@ -833,7 +838,8 @@ def plan_operation_case(control_case, tmp_path, monkeypatch, canary_under_execut
     base.plan_receipt.write_bytes(lanes._json(lanes.admission._bind(lanes.PLAN_TYPE, payload)))
     capsule = inspector.publish_schedule(base, current, qualifier, refs[0], refs[1],
         a.study / "plan-context-inspector.json", execution_copy=execution_copy,
-        reason="HOST context fixture; no installed or physical authority claim")
+        reason="HOST context fixture; no installed or physical authority claim",
+        host_preflight_context=host_preflight_control_scope)
     runtime_path = a.study / "plan-context-runtime.json"
     write(runtime_path, {"schema_version": 1, "artifact_type": rolling.RUNTIME_TYPE, "inputs": current})
     readiness_path = a.study / "plan-context-readiness.json"
@@ -985,6 +991,318 @@ def test_prepare_outputs_beside_declaration_are_not_immutable_input_members(amen
         intent = Path(row["path"])
         assert intent.is_file() and not (intent.parent / "host-start.json").exists()
     assert not any((case.spec.execution_root / "results" / name).exists() for name in case.campaigns)
+
+
+@pytest.mark.parametrize("action", ["validate", "mount"])
+def test_default_scheduling_context_owns_one_derivation_and_restores_scope(plan_operation_case, action):
+    from qcsd_lab import rapid_operation_facts as operations
+    case = plan_operation_case
+    reference = rolling._ref(case.a.study / "plan-context-inspector.json")
+    call = schedule.validate_schedule if action == "validate" else schedule.mount_roots
+    for index in range(2):
+        result = call(reference)
+        assert result
+        assert case.counts == {"derive": index + 1, "qualification": index + 1, "canary": index + 1}
+        assert operations.current_context() is None
+    assert case.contexts[0] is not case.contexts[1]
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_default_scheduling_context_reuses_existing_owner_without_replacing_it(plan_operation_case, explicit):
+    from qcsd_lab import rapid_operation_facts as operations
+    case = plan_operation_case
+    reference = rolling._ref(case.a.study / "plan-context-inspector.json")
+    parent, owner = operations.OperationFacts(), operations.OperationFacts()
+    with parent.scope():
+        if explicit:
+            assert schedule.validate_schedule(reference, _context=owner)
+            assert schedule.mount_roots(reference, _context=owner)
+            assert operations.current_context() is parent
+        else:
+            with owner.scope():
+                assert schedule.validate_schedule(reference)
+                assert schedule.mount_roots(reference)
+                assert operations.current_context() is owner
+        owner.check()
+        assert operations.current_context() is parent
+    assert case.counts == {"derive": 1, "qualification": 1, "canary": 1}
+    assert case.contexts == [owner]
+    assert operations.current_context() is None
+
+
+@pytest.mark.parametrize("action", ["validate", "mount"])
+@pytest.mark.parametrize("mutation", ["raw-body", "raw-mode", "result-member", "source-body"])
+def test_default_scheduling_context_checks_raw_and_source_before_return(plan_operation_case, monkeypatch, action, mutation):
+    from qcsd_lab import rapid_operation_facts as operations
+    case = plan_operation_case
+    derive = inspector._derive
+    def changed_after_derive(*args, **kwargs):
+        result = derive(*args, **kwargs)
+        target = case.closed / "capture.stdout.log"
+        if mutation == "raw-body": target.write_bytes(b"changed after semantic validation\n")
+        elif mutation == "raw-mode": target.chmod(target.stat().st_mode ^ 0o040)
+        elif mutation == "result-member":
+            (case.base.execution_root / "results/fixture-canary/fixture-result/new-member").write_bytes(b"unbound\n")
+        else:
+            target = Path(case.current["runtime_source_root"]) / "qcsd-lab"
+            target.write_bytes(target.read_bytes() + b"# changed protected Source\n")
+        return result
+    monkeypatch.setattr(inspector, "_derive", changed_after_derive)
+    call = schedule.validate_schedule if action == "validate" else schedule.mount_roots
+    with pytest.raises(ValueError, match="changed"):
+        call(rolling._ref(case.a.study / "plan-context-inspector.json"))
+    assert case.counts == {"derive": 1, "qualification": 1, "canary": 1}
+    assert operations.current_context() is None
+
+
+def test_default_scheduling_context_actual_capsule_with_frozen_authority_modules():
+    """Candidate control entry only; real frozen validators retain Source authority.
+
+    No candidate runtime installation is asserted. This alias loads the two
+    candidate control units with the genuine frozen current authority package.
+    The full actual derive/120/canary bodies run, unmocked, with closed raw fences.
+    """
+    import os
+    import subprocess
+    import sys
+    capsule = os.environ.get("QCSD_CONTEXT_TEST_CAPSULE")
+    source = os.environ.get("QCSD_CONTEXT_TEST_SOURCE")
+    if not capsule or not source:
+        pytest.skip("Provide a genuine closed capsule and its frozen matching Source for HOST engineering validation")
+    candidate = Path(schedule.__file__).absolute()
+    script = '''
+import ast,importlib.util,json,sys,time
+from pathlib import Path
+source,candidate,capsule=map(Path,sys.argv[1:])
+sys.path[:0]=[str(source/"src"),str(source)]
+from qcsd_lab import rapid_rolling_schedule as original
+from qcsd_lab import rapid_runtime_inspector as inspector
+from qcsd_lab import rapid_rolling_capture as rolling
+from qcsd_lab import rapid_rolling_readiness as readiness
+from qcsd_lab import chaff_qualification as qualification
+from qcsd_lab import rapid_operation_facts as operations
+def protected(path):
+    tree=ast.parse(path.read_bytes())
+    tree.body=[n for n in tree.body if not isinstance(n,ast.FunctionDef) or n.name not in {"validate_schedule","mount_roots"}]
+    return ast.dump(tree,include_attributes=False)
+assert protected(candidate)==protected(Path(original.__file__))
+spec=importlib.util.spec_from_file_location("qcsd_lab.candidate_default_scope",candidate)
+control=importlib.util.module_from_spec(spec);spec.loader.exec_module(control)
+counts={"derive":0,"qualification":0,"canary":0}
+for module,name,key in [(inspector,"_derive","derive"),(qualification,"validate_named_qualification_set_manifest","qualification"),(readiness,"validate_canary","canary")]:
+    actual=getattr(module,name)
+    def observed(*args,_actual=actual,_key=key,**kwargs):
+        counts[_key]+=1
+        return _actual(*args,**kwargs)
+    setattr(module,name,observed)
+# The planner retains a direct alias to this same real qualification body.
+# Observe both call paths without replacing either scientific implementation.
+rolling.validate_named_qualification_set_manifest=qualification.validate_named_qualification_set_manifest
+reference=rolling._ref(capsule);start=time.monotonic()
+roots=control.mount_roots(reference)
+# The unchanged protected canary body independently reloads its named120 set.
+# Keep that scientific validation; the plan/copy checks share the other body.
+assert counts=={"derive":1,"qualification":2,"canary":1},counts
+assert operations.current_context() is None
+assert roots and all(root.is_absolute() and root.is_dir() for root in roots)
+print(json.dumps({"engineering_control_only":True,"frozen_scientific_validators_unmocked":True,"counts":counts,"mount_count":len(roots),"elapsed_seconds":time.monotonic()-start,"physical_actions_performed":False,"installed_candidate_claim":False},sort_keys=True))
+'''
+    result = subprocess.run([sys.executable, "-I", "-B", "-c", script, source, candidate, capsule],
+                            text=True, capture_output=True, check=False)
+    assert result.returncode == 0, result.stderr
+    print(result.stdout.strip())
+
+
+@pytest.fixture
+def host_preflight_context_case(operation_context_case, monkeypatch):
+    """Real owning preflight/plan/readiness; image and lineage boundaries synthetic.
+
+    These fixtures assert no installed image or physical admission. The actual
+    runtime/body provenance is separately reopened by the strict projection.
+    """
+    from types import SimpleNamespace
+    from qcsd_lab import rapid_lane_evidence as lanes
+    from qcsd_lab import rapid_operation_facts as operations
+    case = operation_context_case
+    root = case.root / "host-admission-inputs"
+    root.mkdir()
+    proof, lineage, intent = (root / name for name in ("image-proof.json", "lineage.json", "intent.json"))
+    write(proof, {"engineering_fixture": "closed synthetic image boundary"})
+    lineage_value = {"image_check": {"proof": lanes.admission.evidence_reference(root, proof)}}
+    lineage.write_bytes(lanes._json(lanes.admission._bind(lanes.LINEAGE_TYPE, lineage_value)))
+    intent_value = {"actuator": "run", "lineage": lanes.admission.evidence_reference(root, lineage)}
+    intent.write_bytes(lanes._json(lanes.admission._bind(lanes.INTENT_TYPE, intent_value)))
+    seen = []
+    def image(value, *, _context=None):
+        assert _context is operations.current_context() and _context is not None
+        seen.append(_context)
+        assert value == case.spec.serializable()
+        return rolling.verify_capture_plan(case.spec, _context=_context)
+    def retained(spec, received_root, path, *, _context=None):
+        assert spec == case.spec and received_root == root and path == intent
+        assert _context is operations.current_context() and _context is not None
+        rolling.verify_capture_plan(spec, _context=_context)
+        return intent_value, lineage_value, case.lane, None
+    monkeypatch.setattr(lanes, "executed_image_plan_check", image)
+    monkeypatch.setattr(lanes, "_intent_and_lineage", retained)
+    value = {"spec": case.spec.serializable(), "root": str(root), "intent": str(intent),
+        "intent_sha256": rolling._ref(intent)["sha256"],
+        "readiness_mount_roots": [str(path) for path in rolling.readiness_roots(case.spec, case.lane.campaign_name)]}
+    case.counts.clear(); case.contexts.clear()
+    return SimpleNamespace(case=case, value=value, seen=seen, root=root, intent=intent, lineage=lineage, proof=proof)
+
+
+def test_host_preflight_fresh_owner_threads_all_plan_and_readiness_work(host_preflight_context_case):
+    from qcsd_lab import rapid_operation_facts as operations
+    value = host_preflight_context_case
+    for index in range(2):
+        assert rolling.validate_host_launch(value.value, expected_campaign=value.case.lane.campaign_name,
+            actual_image=value.case.spec.collection_image_digest) is None
+        assert value.case.counts == {"enrollment": index + 1, "qualification": index + 1, "canary": index + 1}
+        assert operations.current_context() is None
+    assert value.seen[0] is not value.seen[1]
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_host_preflight_preserves_existing_owner_and_nested_parent(host_preflight_context_case, explicit):
+    from qcsd_lab import rapid_operation_facts as operations
+    value = host_preflight_context_case
+    parent, owner = operations.OperationFacts(), operations.OperationFacts()
+    with parent.scope():
+        if explicit:
+            rolling.validate_host_launch(value.value, expected_campaign=value.case.lane.campaign_name,
+                actual_image=value.case.spec.collection_image_digest, _context=owner)
+        else:
+            with owner.scope():
+                rolling.validate_host_launch(value.value, expected_campaign=value.case.lane.campaign_name,
+                    actual_image=value.case.spec.collection_image_digest)
+        assert operations.current_context() is parent
+        owner.check()
+    assert value.seen == [owner] and operations.current_context() is None
+
+
+@pytest.mark.parametrize("mutation", ["intent", "lineage", "image-proof", "canary-raw", "file-mode", "raw-member"])
+def test_host_preflight_closing_fence_rejects_mutation_before_admission(host_preflight_context_case, monkeypatch, mutation):
+    from qcsd_lab import rapid_operation_facts as operations
+    value = host_preflight_context_case
+    ready = rolling.require_mode_readiness
+    changed_once = False
+    def changed(*args, **kwargs):
+        nonlocal changed_once
+        result = ready(*args, **kwargs)
+        if changed_once:
+            return result
+        changed_once = True
+        paths = {"intent": value.intent, "lineage": value.lineage, "image-proof": value.proof,
+                 "canary-raw": value.case.dependencies.canary_recipe}
+        if mutation in paths:
+            target = paths[mutation]
+            target.write_bytes(target.read_bytes() + b"changed after actual read\n")
+        elif mutation == "file-mode":
+            value.lineage.chmod(value.lineage.stat().st_mode ^ 0o040)
+        else:
+            (value.case.dependencies.canary_source / "new-raw-member").write_bytes(b"unbound\n")
+        return result
+    monkeypatch.setattr(rolling, "require_mode_readiness", changed)
+    with pytest.raises(ValueError, match="changed"):
+        rolling.validate_host_launch(value.value, expected_campaign=value.case.lane.campaign_name,
+            actual_image=value.case.spec.collection_image_digest)
+    assert operations.current_context() is None
+
+
+def test_host_preflight_schema4_projects_only_the_new_named_control(projected_sources):
+    old, current, client = projected_sources
+    with pytest.raises(ValueError, match="outside named control"):
+        inspector.source_changes(old, current, client_sha256=client, _dependency_closure=True)
+    result = inspector.source_changes(old, current, client_sha256=client,
+        _dependency_closure=True, _host_preflight_context=True)
+    assert result["contract"] == inspector.HOST_PREFLIGHT_CONTRACT
+    path = "src/qcsd_lab/rapid_rolling_capture.py"
+    assert inspector.HOST_PREFLIGHT_CONTROL_DEFINITIONS[path] - inspector.DEPENDENCY_CONTROL_DEFINITIONS[path] == {"validate_host_launch"}
+    assert "validate_host_launch" in result["changed_sources"][path]["units"]
+    for malformed in (1, "yes", None):
+        with pytest.raises(ValueError, match="explicitly typed"):
+            inspector.source_changes(old, current, client_sha256=client,
+                _dependency_closure=True, _host_preflight_context=malformed)
+    with pytest.raises(ValueError, match="requires"):
+        inspector.source_changes(old, current, client_sha256=client, _host_preflight_context=True)
+    changed = dict(current)
+    changed[path] = changed[path].replace(b"def publish_successor(", b"def changed_unprojected_successor(", 1)
+    with pytest.raises(ValueError, match="outside named control"):
+        inspector.source_changes(old, changed, client_sha256=client,
+            _dependency_closure=True, _host_preflight_context=True)
+
+
+def test_host_preflight_schema4_headers_and_public_opt_in_are_exact():
+    value = {"schema_version": 4, "contract": inspector.HOST_PREFLIGHT_CONTRACT,
+        "artifact_type": "qcsd-rapid-v6-current-static-parallel-scheduling"}
+    assert inspector.is_inspected(value)
+    for version, contract in ((True, inspector.HOST_PREFLIGHT_CONTRACT), (3, inspector.HOST_PREFLIGHT_CONTRACT),
+        (4, inspector.DEPENDENCY_CONTRACT), (2, inspector.HOST_PREFLIGHT_CONTRACT)):
+        assert not inspector.is_inspected({**value, "schema_version": version, "contract": contract})
+    base = ["static-inspector-scheduling", "--spec", "/spec", "--runtime-spec", "/runtime",
+        "--qualification-spec", "/qual", "--original-canonical", "/measure", "--current-canonical", "/control",
+        "--output", "/prospective", "--reason", "unchanged actual physics", "--copy-started", "/started",
+        "--copy-completed", "/completed", "--copy-stdout", "/stdout", "--copy-stderr", "/stderr"]
+    assert cli._parser().parse_args(base).host_preflight_context is False
+    assert cli._parser().parse_args([*base, "--host-preflight-context"]).host_preflight_context is True
+
+
+def test_host_preflight_actual_current_intent_uses_hash_bound_relative_lineage():
+    """Cheap current CASE004 metadata only; no actor or full science replay."""
+    from qcsd_lab import rapid_lane_evidence as lanes
+    case = WORKSPACE / "diagnostic-rehearsals/static-inspector-front-parallel-case-20261005-004"
+    if not (case / "plan.json").is_file():
+        pytest.skip("actual immutable current pair plan is outside this portable checkout")
+    plan = load(case / "plan.json")
+    root = Path(plan["study_root"])
+    intent_path = root / "lanes" / plan["lanes"][0] / "intent.json"
+    intent = lanes._payload(intent_path, lanes.INTENT_TYPE)
+    assert isinstance(intent["lineage"], dict) and set(intent["lineage"]) == {"path", "sha256"}
+    assert not Path(intent["lineage"]["path"]).is_absolute()
+    lineage = lanes.admission._child(root, intent["lineage"])
+    value = lanes._payload(lineage, lanes.LINEAGE_TYPE)
+    assert {"execution", "proof"} <= set(value["image_check"])
+    assert rolling._ref(lineage)["sha256"] == intent["lineage"]["sha256"]
+
+
+@pytest.mark.parametrize("host_preflight_control_scope", [True], indirect=True)
+def test_host_preflight_schema4_public_plan_and_current_image_hook(plan_operation_case):
+    """Real public planner/projection and hook, synthetic future image receipts."""
+    from qcsd_lab import rapid_operation_facts as operations
+    from qcsd_lab import rapid_static_parallel_schedule as static
+    case = plan_operation_case
+    result = cli.run(case.args("host-scope"))
+    assert result["planned_traces"] == 320 and result["ready_settings"] == ["front"]
+    reference = rolling._ref(case.a.study / "plan-context-inspector.json")
+    capsule = load(Path(reference["path"]))
+    assert capsule["schema_version"] == 4 and capsule["contract"] == inspector.HOST_PREFLIGHT_CONTRACT
+    assert case.counts == {"derive": 1, "qualification": 1, "canary": 1}
+    receipts = []
+    for index, name in enumerate(("original_canonical", "current_canonical")):
+        canonical = load(Path(capsule[name]["path"]))
+        receipts.append({"schema_version": qualification.IMPLEMENTATION_RECEIPT_SCHEMA_VERSION,
+            "sha256": canonical["checks"]["collection"]["qualification_implementation_sha256"],
+            "source": canonical["source"], "neqo_qcsd_client": {"sha256": canonical["installed_client_sha256"]},
+            "installed_entrypoint": "exact synthetic installed boundary", "installed_modules": {},
+            "source_files": {path: evidence._sha(case.sources[index][path])
+                for path in qualification.IMPLEMENTATION_FILES}})
+    # Physical implementation authentication is the named synthetic boundary;
+    # actual original/current Source/image/31-file hook binding stays real.
+    # No claim that these fixture envelopes came from an installed image.
+    original_validator = qualification._validate_implementation_receipt
+    try:
+        qualification._validate_implementation_receipt = lambda *args, **kwargs: None
+        context = operations.OperationFacts()
+        with context.scope():
+            inspector.validate_qualification(*receipts, reference,
+                actual_image=case.current["collection_image_digest"], _context=context)
+            context.check()
+        with pytest.raises(ValueError, match="another control image"):
+            inspector.validate_qualification(*receipts, reference, actual_image="sha256:" + "f" * 64)
+    finally:
+        qualification._validate_implementation_receipt = original_validator
+    assert operations.current_context() is None
 
 
 @pytest.mark.parametrize("mutation", ["body", "file-mode", "member", "directory-mode"])

@@ -868,25 +868,42 @@ def image_plan_check(spec: lanes.CaptureSpec, runtime: Mapping[str, Any], *, _co
             "cohort_generation": "rolling-50", "acquisition_provenance_sha256": payload["acquisition_provenance_sha256"]}
 
 
-def validate_host_launch(value: Any, *, expected_campaign: str, actual_image: str) -> None:
+def validate_host_launch(value: Any, *, expected_campaign: str, actual_image: str, _context=None) -> None:
+    from .rapid_operation_facts import OperationFacts, current_context
+    _context = current_context() if _context is None else _context
+    if _context is None:
+        context = OperationFacts()
+        with context.scope():
+            validate_host_launch(value, expected_campaign=expected_campaign, actual_image=actual_image, _context=context)
+            context.check()
+            return
+    if current_context() is not _context:
+        with _context.scope():
+            return validate_host_launch(value, expected_campaign=expected_campaign, actual_image=actual_image, _context=_context)
     _keys(value, {"spec", "root", "intent", "intent_sha256", "readiness_mount_roots"}, "rolling host launch")
     spec = lanes.CaptureSpec(**{key: Path(item) if key in lanes.PATH_KEYS else item for key, item in value["spec"].items()})
     root, path = Path(value["root"]), Path(value["intent"])
     if (spec.collection_image_digest != actual_image or not root.is_relative_to(spec.data_root)
-        or lanes._sha(lanes._read(path)) != value["intent_sha256"]):
+        or lanes._sha(_context.watch_file(path)) != value["intent_sha256"]):
         raise ValueError("rolling host launch changed its actual image, root or intent")
-    lanes.executed_image_plan_check(spec.serializable())
-    intent, _, lane, _ = lanes._intent_and_lineage(spec, root, path)
+    lanes.executed_image_plan_check(spec.serializable(), _context=_context)
+    provisional = lanes._payload(path, lanes.INTENT_TYPE)
+    _context.watch_file(lanes.admission._child(root, provisional["lineage"]))
+    intent, lineage, lane, _ = lanes._intent_and_lineage(spec, root, path, _context=_context)
+    # Current admission files are immutable inputs too. Their exact refs can
+    # coexist with later host/worker outputs in the same transport parent.
+    _context._references(intent, root)
+    _context._references(lineage, root)
     if (lane.study_version != 6 or lane.campaign_name != expected_campaign
         or intent["actuator"] not in {"run", "parallel-formal-worker"}):
         raise ValueError("rolling host launch requires its exact formal lane")
     if intent["actuator"] == "parallel-formal-worker":
         from .rapid_rolling_schedule import require_schedule
         payload = lanes._payload(spec.plan_receipt, lanes.PLAN_TYPE)
-        require_schedule(payload.get("scheduling"), spec, declared_at=payload["declared_at"], started_at=intent["started_at"])
-    if value["readiness_mount_roots"] != [str(path) for path in readiness_roots(spec, expected_campaign)]:
+        require_schedule(payload.get("scheduling"), spec, declared_at=payload["declared_at"], started_at=intent["started_at"], _context=_context)
+    if value["readiness_mount_roots"] != [str(path) for path in readiness_roots(spec, expected_campaign, _context=_context)]:
         raise ValueError("rolling host launch changed its derived read-only canary mounts")
-    require_mode_readiness(spec, lane)
+    require_mode_readiness(spec, lane, _context=_context)
 
 
 def publish_successor(spec: lanes.CaptureSpec, lane_name: str, generation: int, output: Path) -> Path:
