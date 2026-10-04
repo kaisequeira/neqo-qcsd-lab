@@ -10,16 +10,33 @@ import subprocess
 import sys
 from pathlib import Path
 
+_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_ROOT / "src"))
+
 from qcsd_lab import rapid_parallel_capture as parallel
 from qcsd_lab.rapid_lane_evidence import HOST_GATE_SCRIPT, _process_identity
+
+
+def _host_authority(path: Path) -> dict:
+    """Reject another checkout before reopening the scientific authority."""
+    value = parallel.load(path)
+    if (not isinstance(value, dict) or type(value.get("schema_version")) is not int
+        or value["schema_version"] != 1 or value.get("artifact_type") not in {
+            parallel.AUTHORITY_TYPE, "qcsd-two-worker-formal-lane-authority"}):
+        raise ValueError("parallel operator authority type or schema differs")
+    parallel._runtime_authority(value)
+    parallel.host_source(value)
+    value = parallel.authority(path)
+    # Full reopening may be lengthy. Preserve the original boundary check.
+    parallel.host_source(value)
+    return value
 
 
 def launch(authority_path: Path, output: Path) -> dict:
     parallel.read(authority_path)
     authority_path = authority_path.resolve(strict=True)
-    value = parallel.authority(authority_path)
+    value = _host_authority(authority_path)
     authority_digest = parallel.sha(parallel.read(authority_path))
-    parallel.host_source(value)
     output = output.absolute()
     execution = Path(value["runtime"]["execution_root"])
     if (not output.is_relative_to(execution / "results") or ".." in output.parts
@@ -116,7 +133,7 @@ def main(argv=None):
         elif args.action == "retire-session":
             result = parallel.retire_session(args.authority.absolute(), args.output.absolute())
         else:
-            parallel.host_source(parallel.authority(args.authority))
+            _host_authority(args.authority)
             result = parallel.verify_results_in_image(args.authority, args.output)
     except (OSError, ValueError, TypeError, KeyError, RuntimeError, subprocess.SubprocessError) as error:
         print(f"parallel capture: {type(error).__name__}: {error}", file=sys.stderr)

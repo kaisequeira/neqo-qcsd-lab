@@ -339,13 +339,15 @@ def initialize(path: Path, output: Path, expected_sha: str, available: list[int]
     return cpu
 
 
-def release(path: Path, output: Path, actual: dict[str, Any]) -> None:
+def release(path: Path, output: Path, actual: dict[str, Any], *, prepared_sha256=None) -> None:
     """Close exact actual Docker identities before making either gate visible."""
     from .process_scheduler import build_peer_host_partition
-    value = authority(path)
+    value = authority(path) if prepared_sha256 is None else load(path)
     if value["artifact_type"] != AUTHORITY_TYPE:
         from .rapid_formal_parallel import release as formal_release
-        return formal_release(path, output, actual)
+        return formal_release(path, output, actual, prepared_sha256=prepared_sha256)
+    if prepared_sha256 is not None:
+        raise ValueError("diagnostic authority cannot use formal release preparation")
     intent = load(output / "batch-intent.json")
     if intent["authority_sha256"] != sha(read(path)):
         raise ValueError("parallel authority changed before gate release")
@@ -782,16 +784,21 @@ def launch_action(value: dict[str, Any]) -> str:
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("select", "initialize", "preflight", "release", "gate", "retire", "verify", "verify-installed", "formal-inputs", "formal-dns"))
+    parser.add_argument("action", choices=("select", "initialize", "preflight", "prepare-release", "release", "gate", "retire", "verify", "verify-installed", "formal-inputs", "formal-dns"))
     parser.add_argument("--authority", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--sha256")
+    parser.add_argument("--prepared-sha256")
     parser.add_argument("--actual", type=Path)
     parser.add_argument("--cpus")
     parser.add_argument("--index", type=int)
     args = parser.parse_args(argv)
     if args.action in {"formal-inputs", "formal-dns"}:
         from .rapid_formal_parallel import worker_inputs, resolve_dns
+        if args.action == "formal-inputs" and args.prepared_sha256 is not None:
+            from .rapid_formal_parallel import prepared_worker_inputs
+            print(json.dumps(prepared_worker_inputs(args.authority, args.output, args.index, args.prepared_sha256), sort_keys=True))
+            return
         function = worker_inputs if args.action == "formal-inputs" else resolve_dns
         print(json.dumps(function(args.authority, args.index), sort_keys=True))
     elif args.action == "select":
@@ -803,7 +810,10 @@ def main(argv=None):
     elif args.action == "preflight":
         print(json.dumps(image_preflight(args.authority, args.sha256), sort_keys=True))
     elif args.action == "release":
-        release(args.authority, args.output, load(args.actual))
+        release(args.authority, args.output, load(args.actual), prepared_sha256=args.prepared_sha256)
+    elif args.action == "prepare-release":
+        from .rapid_formal_parallel import prepare_release
+        print(prepare_release(args.authority, args.output))
     elif args.action == "gate":
         gate(args.output, args.sha256, args.index, args.authority)
     elif args.action == "retire":

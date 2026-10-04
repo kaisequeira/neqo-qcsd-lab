@@ -190,13 +190,15 @@ def prepare_batch(spec_path: Path, evidence_root: Path, campaigns: list[str], ou
             if lane.role != "formal":
                 raise ValueError("formal parallel preparation cannot claim diagnostic lanes")
         # Validate both create-only claims and predecessor histories before writing either.
+        lineages = []
         for worker_spec, check, lane, predecessor in zip(specs, checks, lanes, predecessors, strict=True):
             if (root / "lanes" / lane.campaign_name).exists() or (spec.execution_root / "results" / lane.campaign_name).exists():
                 raise FileExistsError("formal physical lane is already claimed")
-            ordinary._lineage_payload(worker_spec, lane, check, root, predecessor)
+            lineages.append(ordinary._lineage_payload(worker_spec, lane, check, root, predecessor))
         intents = [ordinary.prepare_lane_intent(worker_spec, root, name, check,
-                    predecessor_intent=predecessor, actuator=ACTUATOR)
-                   for worker_spec, check, name, predecessor in zip(specs, checks, campaigns, predecessors, strict=True)]
+                    predecessor_intent=predecessor, actuator=ACTUATOR, _prepared_lineage=lineage)
+                   for worker_spec, check, name, predecessor, lineage
+                   in zip(specs, checks, campaigns, predecessors, lineages, strict=True)]
         spec_references = [{"path": str(item.absolute()), "sha256": shared.sha(shared.read(item))} for item in spec_paths]
         shared.put(output, {"schema_version": 1, "artifact_type": AUTHORITY_TYPE,
             "runtime": {key: spec.serializable()[key] for key in shared.RUNTIME_KEYS},
@@ -209,14 +211,16 @@ def prepare_batch(spec_path: Path, evidence_root: Path, campaigns: list[str], ou
     return output
 
 
-def worker_inputs(path: Path, index: int) -> dict[str, Any]:
-    value, facts = _audit(path)
+def worker_inputs(path: Path, index: int, *, _audited=None) -> dict[str, Any]:
+    value, facts = _audit(path) if _audited is None else _audited
     _index(index)
     spec, root, intent_path, intent, _, lane, _ = facts[index]
     roots = {spec.data_root, root, *(Path(row["path"]).parent for row in value["lane_specs"])}
+    readiness_roots = None
     if lane.study_version == 6:
         from . import rapid_rolling_capture as rolling
-        roots.update(rolling.readiness_roots(spec, lane.campaign_name))
+        readiness_roots = rolling.readiness_roots(spec, lane.campaign_name)
+        roots.update(readiness_roots)
     if value["installation"] is not None:
         from . import rapid_capture_control_installation as installation
         payload, _ = installation.validate_capsule(_reference(value["installation"]), actual_image=spec.collection_image_digest)
@@ -229,10 +233,10 @@ def worker_inputs(path: Path, index: int) -> dict[str, Any]:
             "result_namespace": str(spec.execution_root / "results" / lane.campaign_name),
             "dns_path": str(intent_path.parent / "dns.json"),
             "mount_roots": sorted(str(shared.regular_dir(item)) for item in roots),
-            "environment": worker_environment(value, index, fact=facts[index])}
+            "environment": worker_environment(value, index, fact=facts[index], _readiness_roots=readiness_roots)}
 
 
-def worker_environment(value, index, *, fact=None):
+def worker_environment(value, index, *, fact=None, _readiness_roots=None):
     fact = fact if fact is not None else _lane(value, index)
     spec, root, intent_path, intent, _, lane, _ = fact
     environment = {}
@@ -242,7 +246,9 @@ def worker_environment(value, index, *, fact=None):
         environment["QCSD_RAPID_COLLECTION_COMPATIBILITY"] = str(_reference(payload["scheduling"]))
         environment["QCSD_RAPID_ROLLING_LAUNCH_INPUT"] = json.dumps({"spec": spec.serializable(),
             "root": str(root), "intent": str(intent_path), "intent_sha256": shared.sha(shared.read(intent_path)),
-            "readiness_mount_roots": [str(path) for path in rolling.readiness_roots(spec, lane.campaign_name)]}, sort_keys=True)
+            "readiness_mount_roots": [str(path) for path in (
+                rolling.readiness_roots(spec, lane.campaign_name)
+                if _readiness_roots is None else _readiness_roots)]}, sort_keys=True)
     if value["installation"] is not None:
         installation_path = str(_reference(value["installation"]))
         environment["QCSD_RAPID_CAPTURE_CONTROL_INSTALLATION"] = installation_path
@@ -397,8 +403,8 @@ def _registered_claim(spec, root, request):
 
 
 @contextmanager
-def _worker_context(value, index, fact):
-    environment = worker_environment(value, index, fact=fact)
+def _worker_context(value, index, fact, *, _environment=None):
+    environment = worker_environment(value, index, fact=fact) if _environment is None else _environment
     saved = {key: os.environ.get(key) for key in environment}
     os.environ.update(environment)
     try:
@@ -445,13 +451,14 @@ def image_preflight(path: Path, expected_sha: str) -> dict[str, Any]:
     if shared.sha(shared.read(path)) != expected_sha:
         raise ValueError("formal authority changed before image preflight")
     value, facts = _audit(path)
+    environments = [worker_environment(value, index, fact=facts[index]) for index in range(2)]
     spec = _effective_runtime(facts[0])
     proofs = []
     epoch_proofs = []
     runtime_proofs = []
     for index in range(2):
         worker_spec, root, intent_path, intent, block, lane, _ = facts[index]
-        with _worker_context(value, index, facts[index]):
+        with _worker_context(value, index, facts[index], _environment=environments[index]):
             if "runtime_epoch" in intent:
                 from . import rapid_runtime_epochs as epochs
                 from . import rapid_class_epochs as classes
@@ -499,7 +506,7 @@ def image_preflight(path: Path, expected_sha: str) -> dict[str, Any]:
     hosts = set()
     for index in range(2):
         worker_spec, _, intent_path, _, _, lane, sites = facts[index]
-        with _worker_context(value, index, facts[index]), shared._execution_parameter_context(value):
+        with _worker_context(value, index, facts[index], _environment=environments[index]), shared._execution_parameter_context(value):
             campaign = load_campaign(Path(value["campaigns"][index]["path"]))
         paths = [campaign.path, intent_path, worker_spec.qualification_spec, worker_spec.plan_receipt, worker_spec.cohort]
         for workload in campaign.workloads:
@@ -633,7 +640,7 @@ def _operator_start(path, output, value):
     return start, command
 
 
-def _worker_inputs_actual(value, output, index, actual, *, fact=None):
+def _worker_inputs_actual(value, output, index, actual, *, fact=None, _environment=None):
     """Reopen the inspected mount and DNS isolation, not just claimed argv."""
     spec, _, intent_path, _, _, lane, _ = fact if fact is not None else _lane(value, index)
     worker = actual["workers"][index]
@@ -662,7 +669,8 @@ def _worker_inputs_actual(value, output, index, actual, *, fact=None):
             if key in environment:
                 raise ValueError("formal actual worker environment repeats a key")
             environment[key] = item
-    expected_environment = worker_environment(value, index, fact=fact)
+    expected_environment = (worker_environment(value, index, fact=fact)
+                            if _environment is None else _environment)
     if any(environment.get(key) != item for key, item in expected_environment.items()):
         raise ValueError("formal actual worker environment belongs to another official intent")
     argv = shared.load(output / f"lane-{index+1}" / "worker-argv.json")
@@ -671,12 +679,284 @@ def _worker_inputs_actual(value, output, index, actual, *, fact=None):
     return shared.sha(shared.read(output / f"lane-{index+1}" / "worker-argv.json"))
 
 
-def release(path: Path, output: Path, actual: dict[str, Any]) -> None:
+def _release_fence(path, value, facts, preflight):
+    """Finite immutable inputs checked before birth, excluding live results.
+
+    This hashes bytes and membership, not scientific summaries. The full
+    validators run before it is minted and still run in each installed worker
+    and ordinary deep verifier. No frame survives a public operation.
+    """
+    from . import rapid_rolling_readiness as evidence
+    from . import rapid_rolling_capture as rolling
+    files, trees, documents, runtimes = {}, {}, set(), set()
+
+    def file(item, expected=None):
+        item = Path(item).absolute()
+        raw = shared.read(item)
+        if expected is not None and shared.sha(raw) != expected:
+            raise ValueError("formal release input changed before its byte fence was minted")
+        files[str(item)] = {"sha256": shared.sha(raw), "executable": bool(item.stat().st_mode & 0o111)}
+        return raw
+
+    def tree(item, expected=None):
+        item = shared.regular_dir(Path(item))
+        if str(item) in trees:
+            if expected is not None and trees[str(item)] != expected:
+                raise ValueError("formal release source tree differs from its closed inventory")
+            return
+        inventory = evidence._inventory(item)
+        if expected is not None and inventory != expected:
+            raise ValueError("formal release source tree differs from its closed inventory")
+        trees[str(item)] = inventory
+        files.update({str(item / name): record for name, record in inventory.items()})
+
+    def references(item, root):
+        if isinstance(item, dict):
+            if set(item) == {"path", "sha256"}:
+                target = Path(item["path"])
+                target = target if target.is_absolute() else root / target
+                raw = file(target, item["sha256"])
+                # Follow only authenticated lab receipt containers, never a
+                # webpage's JSON body or arbitrary absolute-path strings.
+                if str(target) not in documents:
+                    documents.add(str(target))
+                    try:
+                        document = ordinary._load(raw)
+                    except (ValueError, UnicodeError, TypeError):
+                        document = None
+                    if (isinstance(document, dict)
+                        and isinstance(document.get("receipt_type"), str)
+                        and document["receipt_type"].startswith("qcsd-")):
+                        references(document, root)
+            else:
+                for child in item.values():
+                    references(child, root)
+        elif isinstance(item, list):
+            for child in item:
+                references(child, root)
+
+    def runtime(reference, role):
+        canonical_path = _reference(reference)
+        if str(canonical_path) in runtimes:
+            return
+        runtimes.add(str(canonical_path))
+        canonical = shared.load(canonical_path)
+        directory = canonical_path.parent
+        # Canonical runtime roots are closed. Record their shallow recipe,
+        # command, status and raw-log inventory, plus both source copies.
+        names = sorted(item.name for item in directory.iterdir() if item.is_file())
+        trees[str(directory)] = {"shallow_files": names}
+        for name in names:
+            file(directory / name)
+        for name, record in canonical["actual_operation_completions"].items():
+            file(directory / (name + "-started.json"), record["started_record_sha256"])
+            completed = ordinary._load(file(directory / (name + "-completed.json"), record["record_sha256"]))
+            file(directory / (name + ".stdout.log"), completed["stdout_sha256"])
+            file(directory / (name + ".stderr.log"), completed["stderr_sha256"])
+        inventory = shared.load(directory / "source-inventory.json")
+        file(directory / "source-inventory.json", canonical["source_inventory_sha256"])
+        tree(Path(role["runtime_source_root"]), inventory)
+        tree(directory / "image-context/source", inventory)
+        references(canonical, directory)
+        previous = canonical.get("original_canonical")
+        if previous is not None:
+            original_root = _reference(previous).parent / "image-context/source"
+            original_role = {"runtime_source_root": str(original_root)}
+            runtime(previous, original_role)
+
+    file(path)
+    references(value, Path(value["evidence_root"]))
+    for name in preflight["input_files"]:
+        file(name)
+    seen_specs, seen_canaries = set(), set()
+    for spec, root, intent_path, _, _, lane, sites in facts:
+        for name in ("source_manifest", "client_binary", "base_launcher", "host_launcher",
+                     "qualification_spec", "plan_receipt", "cohort"):
+            file(getattr(spec, name))
+        file(intent_path)
+        file(intent_path.parent / "lineage.json")
+        file(intent_path.parent / "dns.json")
+        key = shared.sha(ordinary._json(spec.serializable()))
+        if key not in seen_specs:
+            seen_specs.add(key)
+            batch_path = spec.cohort
+            while True:
+                batch = ordinary.admission._unpack(file(batch_path), rolling.ENROLLMENT_TYPE)
+                policy_path = rolling._open_ref(batch["policy"])
+                policy = ordinary.admission._unpack(file(policy_path), rolling.POLICY_TYPE)
+                references(policy, policy_path.parent)
+                initial = Path(policy["initial_admission_root"])
+                references(shared.load(initial / "provenance.json"), initial)
+                file(initial / "provenance.json")
+                context_root = Path(batch["admission_root"])
+                references(shared.load(context_root / "provenance.json"), context_root)
+                file(context_root / "provenance.json")
+                references(batch, context_root)
+                for decision in batch["decisions"]:
+                    terminal = rolling._open_ref(decision["terminal"])
+                    # Only the enrolled ordered decisions, never the whole
+                    # active acquisition/archive tree or its checkpoints.
+                    tree(terminal.parent)
+                    references(ordinary.admission._unpack(file(terminal), ordinary.admission.TERMINAL_TYPE), context_root)
+                if batch["parent"] is None:
+                    break
+                batch_path = rolling._open_ref(batch["parent"])
+            qualifier = shared.load(spec.qualification_spec)["qualification_sets"][0]
+            for name in ("manifest", "sidecar_root"):
+                target = Path(qualifier[name])
+                target = target if target.is_absolute() else spec.qualification_spec.parent / target
+                tree(target) if name == "sidecar_root" else file(target)
+            for site in sites:
+                file(spec.workload_root / f"{site.workload_id}.json", site.workload_sha256)
+                tree(spec.workload_root / f"{site.workload_id}-application-response-evidence")
+            payload = ordinary._payload(spec.plan_receipt, ordinary.PLAN_TYPE)
+            capsule = shared.load(_reference(payload["scheduling"]))
+            file(payload["scheduling"]["path"])
+            sidecars = Path(qualifier["sidecar_root"])
+            sidecars = sidecars if sidecars.is_absolute() else spec.qualification_spec.parent / sidecars
+            tree(sidecars, capsule["qualified_inputs"]["qualification_files"])
+            for site in sites:
+                tree(spec.workload_root / f"{site.workload_id}-application-response-evidence",
+                     capsule["qualified_inputs"]["workloads"][site.workload_id]["application_evidence"])
+            runtime(capsule["original_canonical"], capsule["base_spec"])
+            runtime(capsule["current_canonical"], capsule["runtime"])
+        payload = ordinary._payload(spec.plan_receipt, ordinary.PLAN_TYPE)
+        reference = payload["readiness"][lane.mode]
+        marker = shared.sha(ordinary._json(reference))
+        if marker not in seen_canaries:
+            seen_canaries.add(marker)
+            references(reference, spec.data_root)
+            canary = shared.load(_reference(reference["plan"]))
+            inventory_path = Path(reference["plan"]["path"]).parent / "source-inventory.json"
+            inventory = shared.load(inventory_path)
+            file(inventory_path, canary["canonical_runtime"]["source_inventory_sha256"])
+            tree(Path(canary["clean_runtime_root"]), inventory)
+            for name, record in inventory.items():
+                file(Path(canary["execution_root"]) / name, record["sha256"])
+                if files[str(Path(canary["execution_root"]) / name)]["executable"] is not record["executable"]:
+                    raise ValueError("formal release canary source executable mode changed")
+            deep = shared.load(_reference(reference["deep_receipt"]))
+            result = Path(canary["execution_root"]) / "results" / Path(deep["root"]).relative_to("/lab/results")
+            from .verification import _read_checksums, authoritative_files
+            file(result / "evidence.sha256", deep["evidence_index_sha256"])
+            checksums = _read_checksums(result, result / "evidence.sha256")
+            sealed = authoritative_files(result)
+            if set(sealed) != set(checksums):
+                raise ValueError("formal release canary seal changed membership")
+            for name, item in sealed.items():
+                file(item, checksums[name])
+            tree(result)
+            if reference.get("source_equivalence") is not None:
+                equivalence = shared.load(_reference(reference["source_equivalence"]))
+                references(equivalence, spec.data_root)
+    return {"files": files, "trees": trees}
+
+
+def _check_release_fence(fence, path, value, facts, preflight):
+    if not isinstance(fence, dict) or set(fence) != {"files", "trees"}:
+        raise ValueError("prepared release lacks its exact immutable input fence")
+    # Derive membership again from the sealed, source-checked authority. A
+    # forged frame cannot omit a changed child or substitute arbitrary paths.
+    if _release_fence(path, value, facts, preflight) != fence:
+        raise ValueError("formal input bytes or inventory changed after pre-birth validation")
+
+
+def prepare_release(path: Path, output: Path) -> str:
+    """Close expensive immutable checks before either worker/router is born."""
     value, facts = _audit(path)
+    if any(fact[5].study_version != 6 for fact in facts):
+        raise ValueError("pre-birth release factoring is only the prospective rolling contract")
     intent = _reopen_intent(path, output, value, facts=facts)
+    _operator_start(path, output, value)
+    if any((output / name).exists() for name in ("actual-launch.json", "batch-launch.json", "release-prepared.json")):
+        raise FileExistsError("pre-birth release preparation must precede actual worker launch")
+    inputs = [worker_inputs(path, index, _audited=(value, facts)) for index in range(2)]
+    environments = [item["environment"] for item in inputs]
+    preflight = shared.reopen_preflight(output, intent["authority_sha256"])
+    fence = _release_fence(path, value, facts, preflight)
+    return shared.put(output / "release-prepared.json", {"schema_version": 1,
+        "artifact_type": "qcsd-formal-pre-birth-release-v1", "prepared_at": shared.now(),
+        "authority_sha256": shared.sha(shared.read(path)), "authority": value,
+        "batch_intent_sha256": shared.sha(shared.read(output / "batch-intent.json")),
+        "facts": [[spec.serializable(), str(root), str(intent_path), intent, lineage, asdict(lane),
+                   [asdict(site) for site in sites]] for spec, root, intent_path, intent, lineage, lane, sites in facts],
+        "environments": environments, "worker_inputs": inputs, "input_fence": fence,
+        "formal_accepted_trace_count": 0, "scientific_credit": False})
+
+
+def prepared_worker_inputs(path: Path, output: Path, index: int, prepared_sha256: str) -> dict[str, Any]:
+    """Carry already checked transport through the same host operation."""
+    _index(index)
+    raw = shared.read(output / "release-prepared.json")
+    if shared.sha(raw) != prepared_sha256:
+        raise ValueError("formal prepared release differs from its pre-birth digest")
+    frame = shared.load(output / "release-prepared.json")
+    if (frame["authority_sha256"] != shared.sha(shared.read(path))
+        or frame["authority"] != shared.load(path)
+        or frame["batch_intent_sha256"] != shared.sha(shared.read(output / "batch-intent.json"))
+        or len(frame["worker_inputs"]) != 2
+        or frame["worker_inputs"][index]["environment"] != frame["environments"][index]):
+        raise ValueError("formal prepared worker transport changed")
+    return frame["worker_inputs"][index]
+
+
+def release(path: Path, output: Path, actual: dict[str, Any], *, prepared_sha256=None) -> None:
+    prepared_path = output / "release-prepared.json"
+    environments = None
+    if prepared_path.exists():
+        if shared.sha(shared.read(prepared_path)) != prepared_sha256:
+            raise ValueError("formal prepared release differs from its pre-birth digest")
+        frame = shared.load(prepared_path)
+        if (set(frame) != {"schema_version", "artifact_type", "prepared_at", "authority_sha256", "authority",
+                "batch_intent_sha256", "facts", "environments", "worker_inputs", "input_fence", "formal_accepted_trace_count", "scientific_credit"}
+            or type(frame["schema_version"]) is not int or frame["schema_version"] != 1
+            or frame["artifact_type"] != "qcsd-formal-pre-birth-release-v1"
+            or frame["formal_accepted_trace_count"] != 0 or type(frame["formal_accepted_trace_count"]) is not int
+            or frame["scientific_credit"] is not False or frame["authority_sha256"] != shared.sha(shared.read(path))
+            or frame["authority"] != shared.load(path)
+            or frame["batch_intent_sha256"] != shared.sha(shared.read(output / "batch-intent.json"))
+            or len(frame["facts"]) != 2 or len(frame["environments"]) != 2
+            or len(frame["worker_inputs"]) != 2
+            or any(row["environment"] != frame["environments"][index]
+                   for index, row in enumerate(frame["worker_inputs"]))):
+            raise ValueError("formal release changed its pre-birth checked facts")
+        value = frame["authority"]
+        facts = [(ordinary.CaptureSpec(**{key: Path(item) if key in ordinary.PATH_KEYS else item
+                   for key, item in row[0].items()}), Path(row[1]), Path(row[2]), row[3], row[4],
+                   ordinary.plan.Lane(**{**row[5], "workload_ids": tuple(row[5]["workload_ids"])}),
+                   tuple(ordinary.plan.Site(**site) for site in row[6])) for row in frame["facts"]]
+        environments = frame["environments"]
+        intent = shared.load(output / "batch-intent.json")
+        if not ordinary.admission._utc(intent["created_at"]) <= ordinary.admission._utc(frame["prepared_at"]) <= ordinary.admission._utc(shared.now()):
+            raise ValueError("formal release preparation has invalid chronology")
+        for index, fact in enumerate(facts):
+            spec, root, intent_path, lane_intent, lineage, lane, sites = fact
+            if (spec != ordinary.load_capture_spec(_reference(value["lane_specs"][index]))
+                or root != Path(value["evidence_root"])
+                or intent_path != _reference(value["lane_intents"][index])
+                or lane_intent != ordinary._payload(intent_path, ordinary.INTENT_TYPE)
+                or lineage != ordinary._payload(ordinary.admission._child(root, lane_intent["lineage"]), ordinary.LINEAGE_TYPE)
+                or lane != ordinary._lane(lineage["image_check"]["proof"], lane_intent["campaign_name"])
+                or sites != tuple(ordinary.plan.Site(**row) for row in lineage["image_check"]["proof"]["sites"])):
+                raise ValueError("formal prepared facts differ from their exact sealed official intents")
+        preflight = shared.reopen_preflight(output, frame["authority_sha256"])
+        _check_release_fence(frame["input_fence"], path, value, facts, preflight)
+        for worker in actual["workers"]:
+            observed = next(item for item in actual["inspected_containers"] if item["Id"] == worker["id"])
+            if (ordinary.admission._utc(observed["Created"]) < ordinary.admission._utc(frame["prepared_at"])
+                or observed["Config"].get("Labels", {}).get("org.qcsd.release-preparation-sha256") != prepared_sha256):
+                raise ValueError("formal worker was born before immutable release preparation")
+    else:
+        if prepared_sha256 is not None:
+            raise ValueError("formal release digest lacks its actual pre-birth preparation")
+        # Historical v5 and callers without the new pre-birth transport retain
+        # their complete fresh validation; they acquire no cached authority.
+        value, facts = _audit(path)
+        intent = _reopen_intent(path, output, value, facts=facts)
     partitions = _partitions(value, intent, actual)
     start, command = _operator_start(path, output, value)
-    argv_hashes = [_worker_inputs_actual(value, output, index, actual, fact=facts[index]) for index in range(2)]
+    argv_hashes = [_worker_inputs_actual(value, output, index, actual, fact=facts[index],
+        _environment=environments[index] if environments is not None else None) for index in range(2)]
     shared.put(output / "batch-launch.json", {"schema_version": 1, "started_at": shared.now(),
         "authority_sha256": intent["authority_sha256"], "actual": actual,
         "host_start_sha256": shared.sha(shared.read(output / "host-start.json")),
