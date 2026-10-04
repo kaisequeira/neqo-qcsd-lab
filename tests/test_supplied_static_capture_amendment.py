@@ -163,7 +163,9 @@ def qualifier_and_canary(a):
         "client_sha256": graph.digest(Path(a.runtime["client_binary"]).read_bytes()),
         "traffic_hashes": {key: digest for key, (_, digest) in lanes.TRAFFIC_FILES.items()},
         "workload_sha256": graph.digest(a.target.read_bytes()),
-        "full_graph": {"resource_records_sha256": graph.digest(graph.canonical_bytes(a.manifest["resources"]))}}
+        "full_graph": {"resource_count": len(a.manifest["resources"]),
+            "resource_records_sha256": graph.digest(readiness._encoded(a.manifest["resources"])),
+            "origins": sorted({rolling.origin(row["url"]).rstrip("/") for row in a.manifest["resources"]})}}
     a.monkeypatch.setattr(rolling, "validate_named_qualification_set_manifest", lambda *args, **kwargs: None)
     a.monkeypatch.setattr(readiness, "validate_canary", lambda *args, **kwargs: facts)
     a.monkeypatch.setattr(readiness, "readiness_mount_roots", lambda *args, **kwargs: [a.study])

@@ -686,12 +686,36 @@ _qcsd_completed_topology_remove() {
   # caller and retain their ordinary three-second API bounds. The inline fresh
   # identity check retains the native host helper's existing ten-second bound
   # inside the completed operation's longer total service allowance.
+  local _qcsd_api_phase=cleanup-router
+  [[ "$1" != network ]] || _qcsd_api_phase=cleanup-network
   _qcsd_docker_api_with_timeout "${duration}" "$@"
 }
 
 _qcsd_docker_api_with_timeout() {
   local duration="$1"
   shift
+  # Classify only fixed API verbs while the original argv is still present.
+  # This shell-local context never changes or reaches the supervised command.
+  local _qcsd_api_action=other api_first="${1:-}" api_second="${2:-}"
+  case "${api_first}" in
+    --context|--host) api_first="${3:-}"; api_second="${4:-}" ;;
+  esac
+  case "${api_first}:${api_second}" in
+    network:create) _qcsd_api_action=network-create ;;
+    network:connect) _qcsd_api_action=network-connect ;;
+    network:inspect) _qcsd_api_action=network-inspect ;;
+    network:ls) _qcsd_api_action=network-list ;;
+    network:rm) _qcsd_api_action=network-remove ;;
+    container:inspect|inspect:*) _qcsd_api_action=container-inspect ;;
+    image:inspect) _qcsd_api_action=image-inspect ;;
+    create:*) _qcsd_api_action=container-create ;;
+    start:*) _qcsd_api_action=container-start ;;
+    exec:*) _qcsd_api_action=container-exec ;;
+    rm:*) _qcsd_api_action=container-remove ;;
+    wait:*) _qcsd_api_action=container-wait ;;
+    logs:*) _qcsd_api_action=container-logs ;;
+    context:inspect) _qcsd_api_action=context-inspect ;;
+  esac
   if ! _qcsd_revalidate_helper_source_identity; then
     echo "Docker API supervisor source identity changed" >&2
     return 125
@@ -1549,6 +1573,20 @@ _qcsd_docker_api_service_with_timeout() {
     api_status=0
   else
     api_status=$?
+  fi
+  if (( api_status != 0 )); then
+    local diagnostic_phase=unspecified diagnostic_action=other diagnostic_bound=unreported
+    (( ${#duration} > 10 )) || diagnostic_bound="${duration}"
+    case "${_qcsd_api_phase:-}" in
+      network-birth|network-subnet|router-birth|router-uplink|router-configure|router-access|router-ip|observer-receipt|cpu-partition|client-birth|cleanup-inspect|cleanup-router|cleanup-network)
+        diagnostic_phase="${_qcsd_api_phase}" ;;
+    esac
+    case "${_qcsd_api_action:-}" in
+      network-create|network-connect|network-inspect|network-list|network-remove|container-inspect|image-inspect|container-create|container-start|container-exec|container-remove|container-wait|container-logs|context-inspect)
+        diagnostic_action="${_qcsd_api_action}" ;;
+    esac
+    printf 'qcsd-api-failure phase=%s action=%s status=%d bound_s=%s\n' \
+      "${diagnostic_phase}" "${diagnostic_action}" "${api_status}" "${diagnostic_bound}" >&2 || :
   fi
   return "${api_status}"
 }

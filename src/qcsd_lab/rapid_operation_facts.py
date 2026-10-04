@@ -277,7 +277,11 @@ class OperationFacts:
         for site in json.loads(self.watch_file(base.plan_receipt))["payload"]["sites"]:
             path = Path(capsule["runtime"]["workload_root"]) / (site["workload_id"] + ".json")
             self.watch_file(path)
-            self.watch_tree(path.with_name(site["workload_id"] + "-application-response-evidence"))
+            from .rapid_static_parallel_schedule import CAPSULE_TYPE as STATIC_CAPSULE_TYPE
+            if capsule.get("artifact_type") == STATIC_CAPSULE_TYPE:
+                self._references(json.loads(self.watch_file(path)), path.parent)
+            else:
+                self.watch_tree(path.with_name(site["workload_id"] + "-application-response-evidence"))
         self._bindings.add(key)
 
     def bind_canary(self, reference, runtime=None) -> None:

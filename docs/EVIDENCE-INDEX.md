@@ -11,6 +11,73 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ### Current supplied-list study
 
+At **5 October, 00:13 Sydney AEDT (4 October, 13:13 UTC)** the authoritative formal counter
+remains **8/16,000** at one enrolled site. The next ordinary GET batch closed
+five decisions with two admissions, one operational deferral and two input
+exclusions. Its actual Root closure is
+`diagnostic-rehearsals/supplied-static-next008-root-actual-20261004-001/batch-actual-closed.json`;
+physical batch closure SHA is
+`600999363406e97ed38b6d1923feb390cdd9b59febac65094166589672006d6d`.
+
+The following partial batch has closed positions 31–34: one admission and
+three input exclusions. There are **34 sealed decisions: nine admissions,
+eleven operational deferrals and fourteen input exclusions**. Candidate 35
+failed with temporary DNS resolution error `EAI_AGAIN` before the Native client
+started. Its GET, verification and deferral commands exited 2; the absent
+Native start/completion files correctly prevented a deferral receipt. There
+is no terminal for candidate 35 and no complete batch009 closure. Retained
+Root records are in
+`diagnostic-rehearsals/supplied-static-next009-root-actual-20261004-001`;
+the full graph and partial attempt stay unchanged for a fresh retry.
+
+Diagnostic paths here are relative to the parent workspace and describe local
+retained evidence, rather than files shipped in a clone.
+
+Lab `b8483c75` / Native `c24da2af` passed all 12 actual installation/export
+operations without another Native compilation. Closure is
+`static-enrollment-transport-runtime-root-actual-20261004-001/root-runtime-closed.json`;
+canonical SHA is
+`2c55f55bbc49aecb0477f410e8854ee65f104181461a5278379630c590f8d7e3`.
+The verified client remains
+`fdb8bdab61bf9a4e728ee3826139de6230ee7aa00c4ec0349240ce6414992525`.
+
+The fresh complete-site FRONT attempt is retained in
+`diagnostic-rehearsals/supplied-static-poki-frontv4-nativec24-20261004-002`.
+Installed preamble, qualification, preflight, capture and installed deep
+verification each closed 0. Its `front-deep-verification.json` proves the
+complete 277-resource graph across three origins; `readiness.json` has SHA
+`44f351c7795f12ed912a119f73e9359221c8e56ba229b8b65358defe7ad4ceb9`.
+Capture elapsed **395.639 seconds**, deep verification **74.452 seconds**.
+The practice sample contributes no formal credit. Formal planning failed 2
+after **43.303 seconds**, with retained `logs/plan-*` records: readiness uses
+indented JSON for its resource-record hash and the static amendment uses
+compact JSON. The actual amendment/workload/resources match. A prospective
+host-side format repair passed 21 focused checks and reopened the actual
+retained canary successfully. Its closure is
+`diagnostic-rehearsals/static-canary-graph-planner-host-checks-20261004-002/source-closure-final.json`,
+SHA `e709c507b514639be9cdc383fd54b966cc7a7006c4434a9f1209f9aeda2e252d`.
+It preserves the original producer authority and stored evidence. The composed
+planner/parallel controls passed **60 affected checks** in **269.89 seconds**,
+recorded in
+`diagnostic-rehearsals/static-parallel-controls-source-publication-20261004-001/affected-composition-checks-002-completed.json`.
+The earlier Root import-directory collection failure is retained. This is
+HOST composition proof, rather than a new installed-runtime or formal capture.
+
+The reviewed static parallel/diagnostics Source007 closure is
+`diagnostic-rehearsals/rapid-static-parallel-controls-host-checks-20261004-002/source-closure-final.json`,
+SHA `8188c8273bd3fe1a58b8bfa63528a1b126f23fe5535e3685610227621a1cbfa5`.
+It binds 13 changed paths, 2,462 source files/modes and unchanged 1,783 Native
+files. Actual results are two positives (exit 0), thirteen passing cases plus
+two retained fixture failures (exit 1), and 28 final passing cases (exit 0).
+Together they cover 43 distinct passes and 48 negative variants, including
+current structural named120 dispatch and failed-only g02/peer preservation.
+The four-path API diagnostics package has closure SHA
+`b7dc3511eb091ce07a0cdb8ae694c8a8ee583d1ae917def3456d0a5f2ddb9264`
+and 26 focused HOST passes. These are HOST control proofs; matching installation
+and actual parallel worker/recovery proof remain required.
+
+#### Earlier checkpoint at 23:02
+
 At **4 October, 23:02 Sydney AEDT (12:02 UTC)** the authoritative counter is
 still **8/16,000 accepted recordings**, from two original ordinary four-visit
 lanes at one enrolled site. Ordinary resource checking has closed 25 candidate

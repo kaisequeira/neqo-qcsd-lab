@@ -668,6 +668,9 @@ def validate_schedule(reference: Mapping[str, str], *, runtime: Mapping[str, str
                       before: str | None = None, _context=None) -> dict:
     _, raw = evidence._reference(reference)
     value = evidence._json(raw)
+    from . import rapid_static_parallel_schedule as static
+    if isinstance(value, dict) and value.get("artifact_type") == static.CAPSULE_TYPE:
+        return static.validate_schedule(reference, runtime=runtime, before=before, _context=_context)
     if (set(value) != CAPSULE_KEYS or type(value["schema_version"]) is not int or value["schema_version"] != 1
         or value["artifact_type"] != CAPSULE_TYPE or value["contract"] not in {CONTRACT_V1, CONTRACT_V2, CONTRACT_V3, CONTRACT_V4, CONTRACT} or value["limits"] != LIMITS
         or type(value["formal_accepted_trace_count"]) is not int or value["formal_accepted_trace_count"] != 0
@@ -705,6 +708,11 @@ def validate_qualification_reuse(old_impl: Mapping, current_impl: Mapping, refer
                                 *, actual_image: str, before: str | None = None, _context=None) -> None:
     """Typed installed hook: no ambient or source-only qualification exemption."""
     capsule = validate_schedule(reference, before=before, _context=_context)
+    from . import rapid_static_parallel_schedule as static
+    if capsule["artifact_type"] == static.CAPSULE_TYPE:
+        static.validate_current_qualification(old_impl, current_impl, reference,
+            actual_image=actual_image, before=before, _context=_context)
+        return
     if actual_image != capsule["runtime"]["collection_image_digest"]:
         raise ValueError("scheduling qualification hook is executing another image")
     for receipt, key in ((old_impl, "original_canonical"), (current_impl, "current_canonical")):
@@ -757,6 +765,9 @@ def validate_ready_canary(reference: Mapping[str, Any], schedule_reference: Mapp
 def mount_roots(reference: Mapping[str, str], *, _context=None) -> list[Path]:
     """Derive read-only transport from the fully reopened capsule and runtimes."""
     capsule = validate_schedule(reference, _context=_context)
+    from . import rapid_static_parallel_schedule as static
+    if capsule["artifact_type"] == static.CAPSULE_TYPE:
+        return static.mount_roots(reference, _context=_context)
     roots = {Path(reference["path"]).parent}
     for role in (capsule["base_spec"], capsule["runtime"]):
         roots.update(Path(role[key]) for key in ("data_root", "runtime_source_root", "module_root", "execution_root"))

@@ -49,7 +49,44 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Current checkpoint, 4 October, 23:02 Sydney AEDT (4 October, 12:02 UTC):**
+**Current checkpoint, 5 October, 00:13 Sydney AEDT (4 October, 13:13 UTC):**
+The accepted formal counter remains **8/16,000**, from the original two
+ordinary four-visit lanes at one enrolled Poki site. Ordinary resource checking
+has now closed **34 decisions: nine admissions, eleven operational deferrals
+and fourteen input exclusions**. Candidate 35 failed DNS resolution before the
+Native client started and remains unresolved, with its partial attempt retained.
+These admissions do not establish five-setting
+viability. The final target remains **50 sites × five settings × 64 visits**.
+
+The matching Lab `b8483c75` / Native `c24da2af` installation passed all 12
+actual installation/export operations using the verified client, with no new
+Native compilation. Its fresh FRONT attempt passed the installed complete-site
+check, response qualification, preflight, complete-site capture, independent
+installed deep verification and readiness. The capture retained every one of
+Poki's **277 resources across three origins**; it reported one accepted practice
+sample and zero failures. Capture took **395.639 seconds**, and independent
+deep verification took **74.452 seconds**. The practice sample adds no formal
+credit.
+
+Formal planning then stopped in **43.303 seconds** at a resource-hash comparison:
+the canary and amendment hash the same complete resource records using different
+JSON formatting. The amendment reference and derived workload match. The
+successful run remains retained. The narrow host-control repair passed 21
+focused checks and reopened that actual canary successfully without changing
+stored evidence or its original producer. The composed planner and parallel
+controls then passed **60 affected checks in 269.89 seconds**. An earlier Root
+test invocation used the wrong import directory; its collection error is
+retained separately. This publication installs no runtime by itself.
+
+The current static parallel controls and concise Docker API failure diagnostics
+have passed independent source review. Their focused records compose **43
+distinct passing HOST cases**, including 48 rejection variants and failed-only
+recovery/peer preservation. Earlier fixture failures remain retained; this is
+not one all-pass suite. Native's 1,783 files and modes remain unchanged.
+These controls still need their matching installation and an actual two-worker
+capture/recovery demonstration. See the [evidence locations](docs/EVIDENCE-INDEX.md#current-supplied-list-study).
+
+**Earlier checkpoint, 4 October, 23:02 Sydney AEDT (4 October, 12:02 UTC):**
 There are **8/16,000 accepted formal recordings**, all independently verified
 ordinary visits to one enrolled Poki site. Complete ordinary resource fetching
 has admitted **six sites from 25 candidate decisions**; ten candidates were

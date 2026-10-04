@@ -28,8 +28,13 @@ def declared(payload: Mapping[str, Any]) -> str | None:
     value = policy(payload[FIELD])
     if (value is None or payload.get("study_version") != 6
         or type(payload.get("study_version")) is not int
-        or "static_capture_amendment" not in payload or "scheduling" in payload):
-        raise ValueError("BuFLO200 traffic requires its separate prospective serial static amendment")
+        or "static_capture_amendment" not in payload):
+        raise ValueError("BuFLO200 traffic requires its separate prospective static amendment")
+    if "scheduling" in payload:
+        from . import rapid_static_parallel_schedule as static
+        if not static.is_static(payload["scheduling"]):
+            raise ValueError("BuFLO200 traffic cannot use a historical scheduling capsule")
+        static.require_plan(payload)
     return value
 
 

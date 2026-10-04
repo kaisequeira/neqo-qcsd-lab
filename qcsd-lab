@@ -9874,6 +9874,7 @@ prepare_kernel_tx_capture_root() {
 }
 
 verify_kernel_tx_router_capture_access() {
+  local _qcsd_api_phase=router-access
   local router_id="$1"
   local group_add_json=""
   group_add_json="$(_qcsd_docker_api container inspect \
@@ -9961,6 +9962,7 @@ if os.listdir(root):
 }
 
 start_buflo_controlled_router() {
+  local _qcsd_api_phase=router-birth
   local router_name="$1"
   local client_network_id="$2"
   local server_network_id="$3"
@@ -9987,8 +9989,10 @@ start_buflo_controlled_router() {
     "${image_id}" -m qcsd_lab.kernel_capture_router
   local -n result_ref="${result_name}"
   result_ref="${QCSD_DOCKER_IDS_SIDECARS[-1]}"
+  _qcsd_api_phase=router-uplink
   _qcsd_docker_api network connect --gw-priority -1 \
     "${server_network_id}" "${result_ref}"
+  _qcsd_api_phase=router-configure
   _qcsd_docker_api exec "${result_ref}" /bin/sh -eu -c '
 ethtool -K eth0 gro off gso off tso off tx-udp-segmentation off
 ethtool -K eth1 gro off gso off tso off tx-udp-segmentation off
@@ -9998,6 +10002,7 @@ ethtool -K eth1 gro off gso off tso off tx-udp-segmentation off
 }
 
 configure_buflo_router() {
+  local _qcsd_api_phase=router-configure
   local router_id="$1"
   local profile="$2"
   _qcsd_docker_api exec "${router_id}" /bin/sh -eu -c '
@@ -10346,6 +10351,7 @@ print(base64.b64encode(encoded).decode("ascii"))
 }
 
 start_kernel_tx_public_router() {
+  local _qcsd_api_phase=router-birth
   local router_name="$1"
   local client_network_id="$2"
   local client_subnet="$3"
@@ -10375,8 +10381,10 @@ start_kernel_tx_public_router() {
     "${image_id}" -m qcsd_lab.kernel_capture_router
   kernel_tx_public_router_id="${QCSD_DOCKER_IDS_PUBLIC_ROUTERS[-1]}"
   kernel_tx_public_router_created=1
+  _qcsd_api_phase=router-uplink
   _qcsd_docker_api network connect --gw-priority 1 \
     bridge "${kernel_tx_public_router_id}"
+  _qcsd_api_phase=router-configure
   _qcsd_docker_api exec "${kernel_tx_public_router_id}" /bin/sh -eu -c '
 client_subnet="$1"
 ethtool -K eth0 gro off gso off tso off tx-udp-segmentation off
@@ -10467,6 +10475,7 @@ _qcsd_finish_latched_cleanup() {
 }
 
 cleanup_kernel_tx_public_topology() {
+  local _qcsd_api_phase=cleanup-inspect
   local cleanup_entry_status="$1"
   local cleanup_signal_status=0 cleanup_complete=0 cleanup_failure_status=0
   _qcsd_begin_latched_cleanup
@@ -11677,12 +11686,14 @@ if [[ "${study_capture_scheduler_contract}" == \
   if (( ! rapid_capture )); then
     kernel_tx_public_network_options+=(--internal)
   fi
+  _qcsd_api_phase=network-birth
   qcsd_create_docker_network QCSD_DOCKER_IDS_PUBLIC_NETWORKS \
     docker network create "${kernel_tx_public_network_options[@]}" \
     --label "org.qcsd.owner=qcsd-lab" \
     --label "org.qcsd.study=kernel-tx-public-observer" \
     "${kernel_tx_public_client_network}" >/dev/null
   kernel_tx_public_network_id="${QCSD_DOCKER_IDS_PUBLIC_NETWORKS[-1]}"
+  _qcsd_api_phase=network-subnet
   kernel_tx_public_client_subnet="$(_qcsd_docker_api network inspect --format \
     '{{(index .IPAM.Config 0).Subnet}}' "${kernel_tx_public_network_id}")"
   kernel_tx_public_client_subnet="$(python3 -I -c '
@@ -11700,6 +11711,7 @@ print(network)
     "${kernel_tx_public_capture_root}" \
     "${kernel_tx_public_capture_secret}" >/dev/null
   kernel_tx_public_topology_started=1
+  _qcsd_api_phase=router-ip
   kernel_tx_public_router_ip="$(_qcsd_docker_api container inspect --format \
     "{{with index .NetworkSettings.Networks \"${kernel_tx_public_client_network}\"}}{{.IPAddress}}{{end}}" \
     "${kernel_tx_public_router_id}")"
@@ -11707,11 +11719,13 @@ print(network)
     echo "public kernel-TX router did not receive a client-side IPv4 address" >&2
     exit 1
   fi
+  _qcsd_api_phase=router-configure
   _qcsd_docker_api exec "${kernel_tx_public_router_id}" /bin/sh -eu -c '
 ip -4 -o address show dev eth0 | grep -F " $1/" >/dev/null
 test "$(cat /proc/sys/net/ipv4/ip_forward)" = 1
 iptables -t nat -C POSTROUTING -s "$2" -o eth1 -j MASQUERADE
 ' sh "${kernel_tx_public_router_ip}" "${kernel_tx_public_client_subnet}"
+  _qcsd_api_phase=observer-receipt
   kernel_tx_public_network_b64="$(kernel_tx_public_network_receipt_base64 \
     "${kernel_tx_public_client_network}" \
     "${kernel_tx_public_client_subnet}" \
@@ -11723,6 +11737,7 @@ iptables -t nat -C POSTROUTING -s "$2" -o eth1 -j MASQUERADE
     "${kernel_tx_public_router_name}" \
     "${kernel_tx_public_router_id}" \
     "${kernel_tx_public_router_ip}")"
+  _qcsd_api_phase=cpu-partition
   scheduler_host_partition_b64="$(capture_scheduler_host_partition_b64 \
     "${kernel_tx_public_router_name}" "${kernel_tx_public_router_id}")"
   replace_container_option_value --network "${kernel_tx_public_network_id}"
@@ -11740,6 +11755,7 @@ iptables -t nat -C POSTROUTING -s "$2" -o eth1 -j MASQUERADE
     --env "QCSD_KERNEL_TX_CONTROLLED_OBSERVER_BINDING_B64=${kernel_tx_public_binding_b64}"
     --volume "${kernel_tx_public_capture_root}:/kernel-tx:ro"
   )
+  _qcsd_api_phase=client-birth
   set +e
   if [[ "${1:-}" == "class-study" ]]; then
     qcsd_run_attached_docker "${container[@]}" "${image_id}" \

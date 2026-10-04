@@ -26,6 +26,12 @@ def _spec(path, spec):
 
 
 def run(args):
+    if args.command == "static-scheduling":
+        from qcsd_lab.rapid_static_parallel_schedule import publish_schedule
+        return {"scheduling": publish_schedule(lanes.load_capture_spec(args.spec),
+            rolling.load_runtime(args.runtime_spec), args.qualification_spec,
+            rolling._ref(args.original_canonical), rolling._ref(args.current_canonical),
+            args.output, reason=args.reason), "scientific_credit": False}
     if args.command == "scheduling":
         from qcsd_lab.rapid_rolling_schedule import publish_schedule
         return {"scheduling": publish_schedule(lanes.load_capture_spec(args.spec),
@@ -111,12 +117,12 @@ def run(args):
 def _parser():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("scheduling", "canary-equivalence", "init", "init-static", "enroll", "front-amendment", "static-amendment", "plan", "successor", "launch", "complete-lane", "verify-lane",
+    for name in ("scheduling", "static-scheduling", "canary-equivalence", "init", "init-static", "enroll", "front-amendment", "static-amendment", "plan", "successor", "launch", "complete-lane", "verify-lane",
                  "retire-lane", "publish-manifest", "verify-manifest"):
         item = commands.add_parser(name)
-        if name not in {"canary-equivalence", "scheduling", "front-amendment", "static-amendment"}:
+        if name not in {"canary-equivalence", "scheduling", "static-scheduling", "front-amendment", "static-amendment"}:
             item.add_argument("--evidence-root", type=Path, required=True)
-        if name == "scheduling":
+        if name in {"scheduling", "static-scheduling"}:
             for flag in ("spec", "runtime-spec", "qualification-spec", "original-canonical", "current-canonical", "output"):
                 item.add_argument("--" + flag, type=Path, required=True)
             item.add_argument("--reason", required=True)

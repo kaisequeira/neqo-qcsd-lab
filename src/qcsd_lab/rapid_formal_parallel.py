@@ -827,12 +827,23 @@ def _release_fence(path, value, facts, preflight):
                 references(shared.load(context_root / "provenance.json"), context_root)
                 file(context_root / "provenance.json")
                 references(batch, context_root)
+                from . import supplied_static_admission as static
+                static_context = (static.load_context(context_root)
+                                  if policy.get("contract") == rolling.STATIC_CONTRACT else None)
                 for decision in batch["decisions"]:
                     terminal = rolling._open_ref(decision["terminal"])
                     # Only the enrolled ordered decisions, never the whole
                     # active acquisition/archive tree or its checkpoints.
                     tree(terminal.parent)
-                    references(ordinary.admission._unpack(file(terminal), ordinary.admission.TERMINAL_TYPE), context_root)
+                    terminal_type = static.TERMINAL_TYPE if isinstance(static_context, static.Context) else ordinary.admission.TERMINAL_TYPE
+                    references(ordinary.admission._unpack(file(terminal), terminal_type), context_root)
+                if isinstance(static_context, static.Context):
+                    from .rapid_static_parallel_schedule import terminal_inputs
+                    static_files, static_trees = terminal_inputs(batch_path)
+                    for item in static_files:
+                        file(item)
+                    for item in static_trees:
+                        tree(item)
                 if batch["parent"] is None:
                     break
                 batch_path = rolling._open_ref(batch["parent"])
@@ -843,7 +854,8 @@ def _release_fence(path, value, facts, preflight):
                 tree(target) if name == "sidecar_root" else file(target)
             for site in sites:
                 file(spec.workload_root / f"{site.workload_id}.json", site.workload_sha256)
-                tree(spec.workload_root / f"{site.workload_id}-application-response-evidence")
+                if not isinstance(static_context, static.Context):
+                    tree(spec.workload_root / f"{site.workload_id}-application-response-evidence")
             payload = ordinary._payload(spec.plan_receipt, ordinary.PLAN_TYPE)
             capsule = shared.load(_reference(payload["scheduling"]))
             file(payload["scheduling"]["path"])
@@ -851,8 +863,14 @@ def _release_fence(path, value, facts, preflight):
             sidecars = sidecars if sidecars.is_absolute() else spec.qualification_spec.parent / sidecars
             tree(sidecars, capsule["qualified_inputs"]["qualification_files"])
             for site in sites:
-                tree(spec.workload_root / f"{site.workload_id}-application-response-evidence",
-                     capsule["qualified_inputs"]["workloads"][site.workload_id]["application_evidence"])
+                if isinstance(static_context, static.Context):
+                    from .rapid_static_parallel_schedule import CAPSULE_TYPE as STATIC_CAPSULE_TYPE
+                    if (capsule.get("artifact_type") != STATIC_CAPSULE_TYPE
+                        or capsule["qualified_inputs"]["workloads"][site.workload_id]["application_evidence"] is not None):
+                        raise ValueError("static release fence requires its authenticated inline GET capsule")
+                else:
+                    tree(spec.workload_root / f"{site.workload_id}-application-response-evidence",
+                         capsule["qualified_inputs"]["workloads"][site.workload_id]["application_evidence"])
             runtime(capsule["original_canonical"], capsule["base_spec"])
             runtime(capsule["current_canonical"], capsule["runtime"])
         payload = ordinary._payload(spec.plan_receipt, ordinary.PLAN_TYPE)

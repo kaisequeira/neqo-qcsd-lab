@@ -1,0 +1,52 @@
+{
+  "base_lab_commit": "b8483c7507250112cd6655b1541ee7e872ac8eb1",
+  "functions": {
+    "_qcsd_completed_topology_remove": {
+      "sha256": "ab9ff45dbce1f71b5446fec5daa2ab8093e3a0bf18aeee9b6f05b399ee4b5d17",
+      "source": "_qcsd_completed_topology_remove() {\n  local completion_status=\"${1:-}\" duration=\"${_QCSD_DOCKER_API_TIMEOUT_SECONDS}\"\n  shift || return 2\n  # This entrypoint accepts only one exact-ID removal, never general API work.\n  if [[ ! \"${completion_status}\" =~ ^[0-9]{1,3}$ ]] ||\n     (( 10#${completion_status} > 255 )) || (( $# != 3 )) ||\n     [[ ! \"${3:-}\" =~ ^[0-9a-f]{64}$ ]] ||\n     ! { [[ \"$1\" == rm && \"$2\" == --force ]] ||\n         [[ \"$1\" == network && \"$2\" == rm ]]; }; then\n    return 2\n  fi\n  if (( 10#${completion_status} == 0 &&\n        ${_QCSD_LIFETIME_SIGNAL_STATUS:-0} == 0 )); then\n    duration=\"${_QCSD_DOCKER_COMPLETED_TOPOLOGY_TIMEOUT_SECONDS}\"\n  fi\n  # The existing service still revalidates source and daemon identity before\n  # its one-shot mutation. Absence proof and HANDOFF retirement stay with the\n  # caller and retain their ordinary three-second API bounds. The inline fresh\n  # identity check retains the native host helper's existing ten-second bound\n  # inside the completed operation's longer total service allowance.\n  _qcsd_docker_api_with_timeout \"${duration}\" \"$@\"\n}\n"
+    },
+    "_qcsd_docker_api": {
+      "sha256": "697fb3edb31472c1b7afa9b86b6799c32076f7052f158aa8c8cafb230fc3cdc4",
+      "source": "_qcsd_docker_api() {\n  _qcsd_docker_api_with_timeout \"${_QCSD_DOCKER_API_TIMEOUT_SECONDS}\" \"$@\"\n}\n"
+    },
+    "_qcsd_docker_api_raw_with_timeout": {
+      "sha256": "8b730bdfffde4f026263aa6098e73ad713b4760ffb8d499d618542119dff8483",
+      "source": "_qcsd_docker_api_raw_with_timeout() {\n  local duration=\"$1\"\n  shift\n  if [[ \"$-\" == *m* ]]; then\n    echo \"Docker API supervisor rejects shell monitor mode\" >&2\n    return 2\n  fi\n  local -a docker_arguments=(\"$@\")\n  if [[ -n \"${_QCSD_DOCKER_PINNED_HOST:-}\" &&\n        \"${1:-}\" != \"context\" ]]; then\n    if ! _qcsd_valid_pinned_docker_host \\\n         \"${_QCSD_DOCKER_PINNED_HOST}\"; then\n      return 125\n    fi\n    if [[ \"${1:-}\" == \"--context\" ]]; then\n      if (( $# < 3 )) ||\n         [[ \"$2\" != \"${_QCSD_DOCKER_PINNED_CONTEXT:-}\" ]]; then\n        return 125\n      fi\n      shift 2\n    fi\n    docker_arguments=(--host \"${_QCSD_DOCKER_PINNED_HOST}\" \"$@\")\n  fi\n  if [[ \"${docker_arguments[0]:-}\" == \"--host\" ]]; then\n    _qcsd_docker_api_service_with_timeout \"${duration}\" env \\\n      -u DOCKER_CONTEXT -u DOCKER_HOST -u DOCKER_TLS_VERIFY \\\n      -u DOCKER_CERT_PATH docker \"${docker_arguments[@]}\"\n  else\n    _qcsd_docker_api_service_with_timeout \\\n      \"${duration}\" docker \"${docker_arguments[@]}\"\n  fi\n}\n"
+    },
+    "_qcsd_docker_api_service_with_timeout": {
+      "sha256": "ea9fdec690c7034f0674103e76f290547288e4ded920c4ead20f131f050fc26d",
+      "source": "_qcsd_docker_api_service_with_timeout() {\n  local duration=\"$1\"\n  shift\n  if [[ \"$-\" == *m* ]]; then\n    echo \"Docker API supervisor rejects shell monitor mode\" >&2\n    return 2\n  fi\n  if [[ ! \"${duration}\" =~ ^[1-9][0-9]*$ ]] ||\n     (( $# == 0 )) || ! _qcsd_require_user_cgroup_manager; then\n    echo \"Docker API supervisor requires a positive timeout and user-systemd cgroup v2\" >&2\n    return 125\n  fi\n  local token unit base_meta api_status\n  token=\"$(_qcsd_supervisor_token)\"\n  unit=\"qcsd-docker-api-${token}.service\"\n  if [[ ! \"${unit}\" =~ ^qcsd-docker-api-[0-9a-f]{32}[.]service$ ]] ||\n     ! _qcsd_query_user_scope \"${unit}\" ||\n     [[ \"${_qcsd_scope_state}\" != \"absent\" ]]; then\n    echo \"Docker API supervisor cannot reserve a unique user-systemd service\" >&2\n    return 125\n  fi\n\n  base_meta=\"$(stat -Lc '%d:%i' -- \"${_qcsd_lifecycle_base}\")\" || return 125\n  if _qcsd_retirement_native_op hold-api-service \\\n      \"${_qcsd_lifecycle_base}\" \"${EUID}\" \"${base_meta%%:*}\" \\\n      \"${base_meta##*:}\" \"${unit}\" \"${duration}\" \\\n      \"${_QCSD_LIFECYCLE_QCSD_PID}\" \"${_QCSD_LIFECYCLE_QCSD_START}\" \\\n      \"${_QCSD_LIFECYCLE_QCSD_PID}\" \"${_QCSD_LIFECYCLE_QCSD_PID}\" \\\n      \"${_QCSD_LIFECYCLE_NATIVE_SHA256}\" -- \"$@\"; then\n    api_status=0\n  else\n    api_status=$?\n  fi\n  return \"${api_status}\"\n}\n"
+    },
+    "_qcsd_docker_api_with_timeout": {
+      "sha256": "7d906163e9cb6894213a1a8896cf0bd92d3e54ee0eeed3559b36c32c86c2d970",
+      "source": "_qcsd_docker_api_with_timeout() {\n  local duration=\"$1\"\n  shift\n  if ! _qcsd_revalidate_helper_source_identity; then\n    echo \"Docker API supervisor source identity changed\" >&2\n    return 125\n  fi\n  if [[ \"$-\" == *m* ]]; then\n    echo \"Docker API supervisor rejects shell monitor mode\" >&2\n    return 2\n  fi\n  if [[ -n \"${_QCSD_DOCKER_PINNED_HOST:-}\" &&\n        \"${1:-}\" != \"context\" ]]; then\n    _qcsd_pinned_docker_api_with_timeout \"${duration}\" \"$@\"\n  else\n    _qcsd_docker_api_raw_with_timeout \"${duration}\" \"$@\"\n  fi\n}\n"
+    },
+    "_qcsd_pinned_docker_api_with_timeout": {
+      "sha256": "78856596af8db31d936676707fcdca8e44f4071d137eb52ae6e0ae1bee84da0a",
+      "source": "_qcsd_pinned_docker_api_with_timeout() {\n  local duration=\"$1\"\n  shift\n  if ! _qcsd_valid_pinned_docker_host \\\n       \"${_QCSD_DOCKER_PINNED_HOST:-}\" ||\n     [[ ! \"${_QCSD_DOCKER_PINNED_SERVER_ID:-}\" =~ ^[A-Za-z0-9_.:-]+$ ]]; then\n    return 125\n  fi\n  if [[ \"${1:-}\" == \"--context\" ]]; then\n    if (( $# < 3 )) || [[ \"$2\" != \"${_QCSD_DOCKER_PINNED_CONTEXT:-}\" ]]; then\n      return 125\n    fi\n    shift 2\n  fi\n  # Fresh daemon equality and the original one-shot Docker operation remain\n  # inside the same leased service. No identity is cached across requests.\n  _qcsd_docker_api_service_with_timeout \"${duration}\" \\\n    qcsd-native-docker-exec \"${_QCSD_DOCKER_PINNED_HOST}\" \\\n    \"${_QCSD_DOCKER_PINNED_SERVER_ID}\" -- \"$@\"\n}\n"
+    },
+    "_qcsd_valid_pinned_docker_host": {
+      "sha256": "85fc3775339b5d7539e47e5d81b74546f27de058aac7984d8caa0ab1eb34412a",
+      "source": "_qcsd_valid_pinned_docker_host() {\n  local host=\"$1\"\n  local socket_path\n  if [[ \"${host}\" == \"npipe:////./pipe/dockerDesktopLinuxEngine\" ]]; then\n    return 0\n  fi\n  [[ \"${host}\" =~ ^unix:///[A-Za-z0-9_./-]+$ ]] || return 1\n  socket_path=\"${host#unix://}\"\n  [[ \"${socket_path}\" == /* && \"${socket_path}\" != \"/\" &&\n      \"${socket_path}\" != *\"//\"* && \"${socket_path}\" != *\"/../\"* &&\n      \"${socket_path}\" != */.. && \"${socket_path}\" != *\"/./\"* &&\n      \"${socket_path}\" != */. ]]\n}\n"
+    }
+  },
+  "qcsd_units": {
+    "cleanup_kernel_tx_public_topology": "6cb9f9dbbe8914a75be80b0f6308734bfc0673604d1447b34ab276e8ca5c3227",
+    "configure_buflo_router": "fd53412281f57aa5bf101e48ac334d52645d0c5f2649d3f307cdb3c8768c6c98",
+    "public-launch": "564a9ffb9167f88a3d3711761a2b64e1b6014b1f8620fe240a003897ebf19804",
+    "start_buflo_controlled_router": "d0fd2a6df65abb9727d9903076cdc7864a6a777353962bdd47f9ee945600f534",
+    "start_kernel_tx_public_router": "1928cdfb98e5f561522e6a5598a37d29094395127d6a293561e11fe8696fd639",
+    "verify_kernel_tx_router_capture_access": "42644038138d55b62a958001a4eb8e92682fcdb4d32712f351e1614604ade384"
+  },
+  "schema_version": 1,
+  "source_blobs": {
+    "qcsd-lab": {
+      "git_blob_sha1": "2a8b10cd89f98980539bf43bf1425e6de6a9e2c8",
+      "sha256": "973820dba34d14abcbc532ebb2406f8fce8ba557a6a3b4c409b7e41e6a1dfe54"
+    },
+    "tools/docker_signal_supervisor.sh": {
+      "git_blob_sha1": "5620b00094a24b06d0af1a998d58869dc9ca08dd",
+      "sha256": "b1deef11f370ac12939ceb58fe0d6c5c6fee0065029e1ac4d12d523d5338eff0"
+    }
+  }
+}
