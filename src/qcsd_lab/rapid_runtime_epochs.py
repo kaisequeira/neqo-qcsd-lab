@@ -634,6 +634,17 @@ def validate_capsule(path: Path, *, actual_image: str | None = None) -> tuple[di
 
 def validate_qualification_reuse(old_receipt, current_receipt) -> None:
     """Opt-in current check; no false/historical-validation pass flag is used."""
+    reference = os.environ.get(COMPATIBILITY_ENV)
+    if reference:
+        value = admission._load(admission._read(Path(reference)))
+        from . import rapid_rolling_schedule as schedule
+        if value.get("artifact_type") == schedule.CAPSULE_TYPE:
+            if _CURRENT_BRIDGE.get() is not None or os.environ.get("QCSD_RAPID_CAPTURE_CONTROL_INSTALLATION"):
+                raise ValueError("rolling scheduling cannot claim historical installation or runtime repair authority")
+            schedule.validate_qualification_reuse(old_receipt, current_receipt,
+                {"path": str(Path(reference).absolute()), "sha256": admission._sha(admission._read(Path(reference)))},
+                actual_image=os.environ.get("QCSD_LAB_IMAGE_DIGEST"))
+            return
     bridge = _CURRENT_BRIDGE.get()
     if bridge is None:
         reference = os.environ.get(COMPATIBILITY_ENV)

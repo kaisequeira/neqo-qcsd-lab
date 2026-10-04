@@ -26,6 +26,12 @@ def _spec(path, spec):
 
 
 def run(args):
+    if args.command == "scheduling":
+        from qcsd_lab.rapid_rolling_schedule import publish_schedule
+        return {"scheduling": publish_schedule(lanes.load_capture_spec(args.spec),
+            rolling.load_runtime(args.runtime_spec), args.qualification_spec,
+            rolling._ref(args.original_canonical), rolling._ref(args.current_canonical),
+            args.output, reason=args.reason), "scientific_credit": False}
     if args.command == "canary-equivalence":
         from qcsd_lab.rapid_rolling_readiness import publish_source_equivalence
         old, current = rolling.load_runtime(args.original_runtime_spec), rolling.load_runtime(args.runtime_spec)
@@ -47,7 +53,8 @@ def run(args):
         readiness = lanes._load(lanes._read(args.readiness)) if args.readiness else {}
         runtime = rolling.load_runtime(args.runtime_spec) if args.runtime_spec else None
         path = rolling.publish_plan(args.evidence_root, args.enrollment, args.qualification_spec,
-                                    args.output, readiness=readiness, runtime_inputs=runtime)
+                                    args.output, readiness=readiness, runtime_inputs=runtime,
+                                    scheduling=rolling._ref(args.scheduling) if args.scheduling else None)
         spec = rolling.capture_spec(args.evidence_root, args.enrollment, args.qualification_spec, path)
         _, plan = rolling.verify_capture_plan(spec)
         return {"plan": str(path), "spec": _spec(args.spec_output, spec),
@@ -88,12 +95,16 @@ def run(args):
 def _parser():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("canary-equivalence", "init", "enroll", "plan", "successor", "launch", "complete-lane", "verify-lane",
+    for name in ("scheduling", "canary-equivalence", "init", "enroll", "plan", "successor", "launch", "complete-lane", "verify-lane",
                  "retire-lane", "publish-manifest", "verify-manifest"):
         item = commands.add_parser(name)
-        if name != "canary-equivalence":
+        if name not in {"canary-equivalence", "scheduling"}:
             item.add_argument("--evidence-root", type=Path, required=True)
-        if name == "canary-equivalence":
+        if name == "scheduling":
+            for flag in ("spec", "runtime-spec", "qualification-spec", "original-canonical", "current-canonical", "output"):
+                item.add_argument("--" + flag, type=Path, required=True)
+            item.add_argument("--reason", required=True)
+        elif name == "canary-equivalence":
             item.add_argument("--canary", type=Path, required=True)
             item.add_argument("--original-runtime-spec", type=Path, required=True)
             item.add_argument("--runtime-spec", type=Path, required=True)
@@ -111,6 +122,7 @@ def _parser():
             item.add_argument("--qualification-spec", type=Path, required=True)
             item.add_argument("--runtime-spec", type=Path)
             item.add_argument("--readiness", type=Path)
+            item.add_argument("--scheduling", type=Path)
             item.add_argument("--output", type=Path, required=True)
             item.add_argument("--spec-output", type=Path, required=True)
         elif name in {"publish-manifest", "verify-manifest"}:

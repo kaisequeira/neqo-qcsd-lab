@@ -296,9 +296,17 @@ def image_check_command(spec: CaptureSpec, *, capture_control_installation: Path
         if campaign_name is not None:
             roots.update(rolling.readiness_roots(spec, campaign_name))
     extra_environment = {}
+    plan_payload = admission._unpack(_read(spec.plan_receipt), PLAN_TYPE)
+    if "scheduling" in plan_payload:
+        from . import rapid_rolling_schedule as schedule
+        schedule.require_schedule(plan_payload["scheduling"], spec, declared_at=plan_payload["declared_at"])
+        roots.update(schedule.mount_roots(plan_payload["scheduling"]))
+        extra_environment["QCSD_RAPID_COLLECTION_COMPATIBILITY"] = plan_payload["scheduling"]["path"]
     reference = (str(capture_control_installation) if capture_control_installation is not None
                  else os.environ.get("QCSD_RAPID_COLLECTION_COMPATIBILITY") if inherit_environment else None)
     if reference and _load(_read(Path(reference))).get("receipt_type") == "qcsd-rapid-v5-capture-control-installation-v2":
+        if "scheduling" in plan_payload:
+            raise ValueError("a rolling schedule cannot also claim a historical installation")
         from . import rapid_capture_control_installation as installation
         capsule_path = Path(reference)
         payload, _ = installation.validate_capsule(capsule_path, actual_image=spec.collection_image_digest)
@@ -838,9 +846,15 @@ def _lineage_payload(spec: CaptureSpec, lane: plan.Lane, checked: Mapping[str, A
                      predecessor_receipt: Path | None) -> dict[str, Any]:
     proof = checked["proof"]
     rolling_readiness = {}
+    scheduling_capsule = None
     if lane.study_version == 6:
         from . import rapid_rolling_capture as rolling
         rolling_readiness = {"rolling_readiness": rolling.require_mode_readiness(spec, lane, before=checked["execution"]["started_at"])}
+        payload = _payload(spec.plan_receipt, PLAN_TYPE)
+        if "scheduling" in payload:
+            from .rapid_rolling_schedule import require_schedule
+            scheduling_capsule = require_schedule(payload["scheduling"], spec, declared_at=payload["declared_at"], started_at=checked["execution"]["started_at"])
+            rolling_readiness["rolling_scheduling"] = payload["scheduling"]
     installation_reference = checked["execution"].get("capture_control_installation")
     if installation_reference is not None:
         from . import rapid_capture_control_installation as installation
@@ -856,6 +870,7 @@ def _lineage_payload(spec: CaptureSpec, lane: plan.Lane, checked: Mapping[str, A
     predecessor_name = predecessor_sha = None
     predecessor = None
     predecessor_attempt = None
+    predecessor_spec = spec
     if lane.generation > 1:
         if predecessor_receipt is None:
             raise ValueError("fresh recovery generation requires actual immediate predecessor evidence")
@@ -866,12 +881,24 @@ def _lineage_payload(spec: CaptureSpec, lane: plan.Lane, checked: Mapping[str, A
         predecessor_path = spec.campaign_dir / f"{predecessor_name}.yml"
         predecessor_sha = _sha(_read(predecessor_path))
         if (predecessor["campaign_name"] != predecessor_name or predecessor["campaign_sha256"] != predecessor_sha
-            or predecessor["bindings"] != proof["bindings"] or predecessor["runtime_identity"] != {
-                "collection_image_digest": spec.collection_image_digest, "runtime_source": source,
-                "client_sha256": proof["client_sha256"], "base_launcher_sha256": proof["base_launcher_sha256"],
-                "host_launcher_sha256": proof["host_launcher_sha256"], "traffic_hashes": proof["traffic_hashes"],
-            }):
+            or predecessor["bindings"] != proof["bindings"]):
             raise ValueError("source-changing recovery is unsupported without independently verified targeted proof")
+        expected_runtime = {"collection_image_digest": spec.collection_image_digest, "runtime_source": source,
+            "client_sha256": proof["client_sha256"], "base_launcher_sha256": proof["base_launcher_sha256"],
+            "host_launcher_sha256": proof["host_launcher_sha256"], "traffic_hashes": proof["traffic_hashes"]}
+        if predecessor["runtime_identity"] != expected_runtime:
+            if scheduling_capsule is None:
+                raise ValueError("source-changing recovery is unsupported without independently verified targeted proof")
+            from .rapid_rolling_schedule import _spec
+            predecessor_spec = _spec(scheduling_capsule["base_spec"])
+            # The capsule permits only unchanged capture physics. Keep the
+            # original attempt on its own runtime and process paths.
+            original, _, original_lane, _ = _intent_and_lineage(predecessor_spec, root, predecessor_receipt)
+            if (predecessor_receipt != root / "lanes" / predecessor_name / "intent.json"
+                or original != predecessor or original_lane.logical_name != lane.logical_name
+                or original_lane.generation != lane.generation - 1
+                or admission._utc(original["started_at"]) > admission._utc(scheduling_capsule["published_at"])):
+                raise ValueError("rolling recovery changed its original source-bound failed predecessor")
         process_path = predecessor_receipt.parent / "host-process.json"
         retirement_path = predecessor_receipt.parent / "retirement.json"
         if not process_path.is_file() and not retirement_path.is_file():
@@ -887,8 +914,8 @@ def _lineage_payload(spec: CaptureSpec, lane: plan.Lane, checked: Mapping[str, A
             "inventory": {path.relative_to(predecessor_receipt.parent).as_posix(): _put_object(root, _read(path))
                           for path in sorted(predecessor_receipt.parent.rglob("*")) if path.is_file()},
             "result_inventory": {
-                path.relative_to(spec.execution_root / "results" / predecessor_name).as_posix(): _put_object(root, _read(path))
-                for path in sorted((spec.execution_root / "results" / predecessor_name).rglob("*")) if path.is_file()
+                path.relative_to(predecessor_spec.execution_root / "results" / predecessor_name).as_posix(): _put_object(root, _read(path))
+                for path in sorted((predecessor_spec.execution_root / "results" / predecessor_name).rglob("*")) if path.is_file()
             },
         }
     bindings = proof["bindings"]
@@ -935,7 +962,9 @@ def prepare_lane_intent(spec: CaptureSpec, evidence_root: Path, campaign_name: s
     lane = _lane(checked["proof"], campaign_name)
     if lane.study_version == 6:
         if actuator != "run":
-            raise ValueError("rolling first capture currently requires the serial actuator")
+            from .rapid_rolling_schedule import require_schedule
+            payload = _payload(spec.plan_receipt, PLAN_TYPE)
+            require_schedule(payload.get("scheduling"), spec, declared_at=payload["declared_at"], started_at=checked["execution"]["started_at"])
     campaign = spec.campaign_dir / f"{campaign_name}.yml"
     if _read(campaign) != plan.render_lane_campaign(lane, sites):
         raise ValueError("launch campaign differs from the independently verified grid")
@@ -980,6 +1009,9 @@ def launch_lane(spec: CaptureSpec, evidence_root: Path, campaign_name: str, *, p
         lane = _lane(checked["proof"], campaign_name)
         if lane.study_version == 6:
             from . import rapid_rolling_capture as rolling
+            payload = _payload(spec.plan_receipt, PLAN_TYPE)
+            if "scheduling" in payload:
+                env["QCSD_RAPID_COLLECTION_COMPATIBILITY"] = payload["scheduling"]["path"]
             env["QCSD_RAPID_ROLLING_LAUNCH_INPUT"] = _json({"spec": spec.serializable(), "root": str(root),
                 "intent": str(intent_path), "intent_sha256": _sha(_read(intent_path)),
                 "readiness_mount_roots": [str(path) for path in rolling.readiness_roots(spec, campaign_name)]}).decode()
@@ -1021,11 +1053,20 @@ def _intent_and_lineage(spec: CaptureSpec, root: Path, intent_path: Path) -> tup
         raise ValueError("retained actual image-check execution does not prove its facts")
     sites = _validate_image_proof(checked["proof"], spec, equivalent_plan=True)
     lane = _lane(checked["proof"], intent["campaign_name"])
+    scheduling_capsule = None
     if lane.study_version == 6:
         from . import rapid_rolling_capture as rolling
-        if intent.get("actuator") != "run" or lineage.get("rolling_readiness") != rolling.require_mode_readiness(spec, lane, before=checked["execution"]["started_at"]):
+        payload = _payload(spec.plan_receipt, PLAN_TYPE)
+        reference = payload.get("scheduling")
+        if lineage.get("rolling_scheduling") != reference:
+            raise ValueError("rolling lane changed its sealed scheduling authority")
+        if reference is not None:
+            from .rapid_rolling_schedule import require_schedule
+            scheduling_capsule = require_schedule(reference, spec, declared_at=payload["declared_at"], started_at=checked["execution"]["started_at"])
+        if (intent.get("actuator") != "run" and (intent.get("actuator") != "parallel-formal-worker" or reference is None)
+            or lineage.get("rolling_readiness") != rolling.require_mode_readiness(spec, lane, before=checked["execution"]["started_at"])):
             raise ValueError("rolling lane changed its sealed setting-specific readiness")
-    elif "rolling_readiness" in lineage:
+    elif "rolling_readiness" in lineage or "rolling_scheduling" in lineage:
         raise ValueError("historical lane cannot claim rolling readiness authority")
     if _read(spec.campaign_dir / f"{lane.campaign_name}.yml") != plan.render_lane_campaign(lane, sites):
         raise ValueError("actual campaign bytes changed after bound launch")
@@ -1083,12 +1124,30 @@ def _intent_and_lineage(spec: CaptureSpec, root: Path, intent_path: Path) -> tup
         ) if lane.generation > 2 else plan.Lane(lane.role, lane.block, lane.shard, lane.mode,
                                               lane.logical_name, lane.workload_ids, lane.visits_per_workload,
                                               lane.qualification_set, 1, lane.study_version)
+        predecessor_spec = spec
+        predecessor_identity = expected_identity
+        if _json(predecessor["runtime_identity"]) != _json(expected_identity):
+            if scheduling_capsule is None:
+                raise ValueError("recovery generation changes prior identity or skips its immediate predecessor")
+            from .rapid_rolling_schedule import _spec
+            predecessor_spec = _spec(scheduling_capsule["base_spec"])
+            original_path = root / "lanes" / predecessor_name / "intent.json"
+            if (original_path.parent / "complete.json").exists():
+                raise ValueError("a completed lane cannot be selectively recaptured under this recovery policy")
+            if _read(original_path) != _object(root, lineage["predecessor_intent"]):
+                raise ValueError("rolling recovery replaced its original source-bound predecessor intent")
+            original, _, original_lane, _ = _intent_and_lineage(predecessor_spec, root, original_path)
+            if (original != predecessor or original_lane.logical_name != lane.logical_name
+                or original_lane.generation != lane.generation - 1
+                or admission._utc(original["started_at"]) > admission._utc(scheduling_capsule["published_at"])):
+                raise ValueError("rolling recovery changed its original source-bound failed predecessor")
+            predecessor_identity = original["runtime_identity"]
         if (predecessor_raw != plan.render_lane_campaign(predecessor_lane, sites)
             or lineage["predecessor_campaign_name"] != predecessor_name
             or lineage["predecessor_campaign_sha256"] != _sha(predecessor_raw)
             or predecessor["campaign_name"] != predecessor_name
             or predecessor["campaign_sha256"] != _sha(predecessor_raw)
-            or _json(predecessor["runtime_identity"]) != _json(expected_identity)
+            or _json(predecessor["runtime_identity"]) != _json(predecessor_identity)
             or predecessor["bindings"] != intent["bindings"]):
             raise ValueError("recovery generation changes prior identity or skips its immediate predecessor")
         previous = lineage["predecessor_attempt"]
@@ -1098,12 +1157,12 @@ def _intent_and_lineage(spec: CaptureSpec, root: Path, intent_path: Path) -> tup
             _object(root, reference)
         for reference in previous["result_inventory"].values():
             _object(root, reference)
-        if process is not None and not _process_matches_lane(process, spec, predecessor_name):
+        if process is not None and not _process_matches_lane(process, predecessor_spec, predecessor_name):
             raise ValueError("recovery predecessor lacks an actual bound host attempt")
         if previous["retirement"] is not None:
             retirement = _verified_retirement(_object(root, previous["retirement"]), root,
                                              _object(root, lineage["predecessor_intent"]), predecessor_name)
-            if not _process_matches_lane(retirement, spec, predecessor_name):
+            if not _process_matches_lane(retirement, predecessor_spec, predecessor_name):
                 raise ValueError("retirement observation belongs to another original host command")
         elif process is None:
             raise ValueError("recovery predecessor has neither terminal process nor observed retirement")

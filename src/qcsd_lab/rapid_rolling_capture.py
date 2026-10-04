@@ -363,7 +363,8 @@ def _bindings_from_enrollment(enrollment: Path, policy: Mapping[str, Any]) -> di
 
 
 def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output: Path,
-                 *, readiness: Mapping[str, Any], runtime_inputs: Mapping[str, str] | None = None) -> Path:
+                 *, readiness: Mapping[str, Any], runtime_inputs: Mapping[str, str] | None = None,
+                 scheduling: Mapping[str, str] | None = None) -> Path:
     policy = verify_policy(root)
     batch, _ = verify_enrollment(enrollment)
     runtime = _runtime(dict(runtime_inputs)) if runtime_inputs is not None else policy["runtime"]
@@ -372,8 +373,19 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
     if _open_ref(batch["policy"]) != root / "policy.json" or not set(readiness) <= set(plan.MODES):
         raise ValueError("rolling plan changed its policy or supplied unknown readiness")
     from .rapid_rolling_readiness import validate_canary
+    schedule_spec = None
+    if scheduling is not None:
+        from . import rapid_rolling_schedule as schedule
+        capsule = schedule.validate_schedule(scheduling, runtime=runtime)
+        schedule_spec = schedule._spec(capsule["base_spec"])
+        if (schedule_spec.cohort != enrollment.absolute() or schedule_spec.acquisition_root != Path(batch["admission_root"])
+            or _ref(qualification_spec) != capsule["qualification_spec"]):
+            raise ValueError("rolling scheduled plan changes enrollment or qualified inputs")
     for mode, reference in readiness.items():
-        validate_canary(reference, runtime={key: runtime[key] for key in lanes.RUNTIME_KEYS}, mode=mode)
+        if scheduling is None:
+            validate_canary(reference, runtime={key: runtime[key] for key in lanes.RUNTIME_KEYS}, mode=mode)
+        else:
+            schedule.validate_ready_canary(reference, scheduling, mode=mode, before=admission._now())
     workloads, campaigns = Path(runtime["workload_root"]), Path(runtime["campaign_dir"])
     sites = _sites(enrollment, qualification_spec, workloads)
     planned = plan.plan_lanes(sites, final=True, study_version=6, rolling_batch=batch["ordinal"])
@@ -397,6 +409,13 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
                "planned_trace_count": sum(lane.sample_count for lane in planned),
                "readiness": dict(readiness), "declared_at": admission._now(),
                "formal_accepted_trace_count": 0, "scientific_credit": False}
+    if scheduling is not None:
+        payload["scheduling"] = dict(scheduling)
+        schedule.require_schedule(scheduling, lanes.CaptureSpec(**{
+            key: Path(item) if key in lanes.PATH_KEYS else item for key, item in {
+                **runtime, "acquisition_root": batch["admission_root"], "cohort": str(enrollment.absolute()),
+                "qualification_spec": str(qualification_spec.absolute()), "plan_receipt": str(output.absolute())}.items()}),
+            declared_at=payload["declared_at"])
     return _write(output, lanes.PLAN_TYPE, payload)
 
 
@@ -435,7 +454,8 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
     value = admission._unpack(lanes._read(spec.plan_receipt), lanes.PLAN_TYPE)
     _keys(value, {"study_version", "cohort_generation", "bindings", "runtime", "runtime_artifacts", "acquisition_provenance_sha256",
                  "qualification_spec_sha256", "sites", "lanes", "planned_trace_count", "readiness",
-                 "declared_at", "formal_accepted_trace_count", "scientific_credit"}, "rolling plan")
+                 "declared_at", "formal_accepted_trace_count", "scientific_credit"}
+          | ({"scheduling"} if "scheduling" in value else set()), "rolling plan")
     if (value["study_version"] != 6 or type(value["study_version"]) is not int
         or value["cohort_generation"] != "rolling-50" or value["bindings"] != _bindings_from_enrollment(spec.cohort, policy)
         or value["sites"] != [asdict(site) for site in sites]
@@ -446,6 +466,9 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
         or not set(value["readiness"]) <= set(plan.MODES)
         or not admission._utc(batch["declared_at"]) <= admission._utc(value["declared_at"]) <= admission._utc(admission._now())):
         raise ValueError("rolling plan changed its immutable scientific bindings")
+    if "scheduling" in value:
+        from .rapid_rolling_schedule import require_schedule
+        require_schedule(value["scheduling"], spec, declared_at=value["declared_at"])
     expected = plan.plan_lanes(sites, final=True, study_version=6, rolling_batch=batch["ordinal"])
     rows = value["lanes"]
     if not isinstance(rows, list) or not rows:
@@ -475,6 +498,15 @@ def require_mode_readiness(spec: lanes.CaptureSpec, lane: plan.Lane, *, before: 
     if lane.mode not in payload["readiness"]:
         raise ValueError(f"rolling {lane.mode} lacks its own successful current full canary")
     from .rapid_rolling_readiness import validate_canary
+    if "scheduling" in payload:
+        from . import rapid_rolling_schedule as schedule
+        schedule.require_schedule(payload["scheduling"], spec, declared_at=payload["declared_at"], started_at=before)
+        facts = schedule.validate_ready_canary(payload["readiness"][lane.mode], payload["scheduling"],
+            mode=lane.mode, before=payload["declared_at"])
+        if (facts.get("client_sha256") != lanes._sha(lanes._read(spec.client_binary))
+            or facts.get("traffic_hashes") != {key: digest for key, (_, digest) in lanes.TRAFFIC_FILES.items()}):
+            raise ValueError("scheduled setting changed its original client or fixed traffic")
+        return payload["readiness"][lane.mode]
     facts = validate_canary(payload["readiness"][lane.mode], runtime={key: spec.serializable()[key] for key in lanes.RUNTIME_KEYS}, mode=lane.mode)
     expected_source = {**lanes._load(lanes._read(spec.source_manifest)), "image_digest": spec.collection_image_digest}
     if (facts.get("authority_source") != expected_source or facts.get("client_sha256") != lanes._sha(lanes._read(spec.client_binary))
@@ -514,8 +546,13 @@ def validate_host_launch(value: Any, *, expected_campaign: str, actual_image: st
         raise ValueError("rolling host launch changed its actual image, root or intent")
     lanes.executed_image_plan_check(spec.serializable())
     intent, _, lane, _ = lanes._intent_and_lineage(spec, root, path)
-    if lane.study_version != 6 or intent["actuator"] != "run" or lane.campaign_name != expected_campaign:
-        raise ValueError("rolling host launch requires its exact serial formal lane")
+    if (lane.study_version != 6 or lane.campaign_name != expected_campaign
+        or intent["actuator"] not in {"run", "parallel-formal-worker"}):
+        raise ValueError("rolling host launch requires its exact formal lane")
+    if intent["actuator"] == "parallel-formal-worker":
+        from .rapid_rolling_schedule import require_schedule
+        payload = lanes._payload(spec.plan_receipt, lanes.PLAN_TYPE)
+        require_schedule(payload.get("scheduling"), spec, declared_at=payload["declared_at"], started_at=intent["started_at"])
     if value["readiness_mount_roots"] != [str(path) for path in readiness_roots(spec, expected_campaign)]:
         raise ValueError("rolling host launch changed its derived read-only canary mounts")
     require_mode_readiness(spec, lane)
@@ -624,6 +661,13 @@ def readiness_roots(spec: lanes.CaptureSpec, campaign_name: str) -> list[Path]:
     lane = lanes._lane(proof, campaign_name)
     reference = require_mode_readiness(spec, lane)
     from .rapid_rolling_readiness import readiness_mount_roots
+    if "scheduling" in payload:
+        from . import rapid_rolling_schedule as schedule
+        capsule = schedule.require_schedule(payload["scheduling"], spec, declared_at=payload["declared_at"])
+        roots = set(enrollment_roots(spec)) | set(schedule.mount_roots(payload["scheduling"]))
+        roots.update(readiness_mount_roots(reference,
+            runtime={key: capsule["base_spec"][key] for key in lanes.RUNTIME_KEYS}, mode=lane.mode))
+        return sorted(roots)
     return sorted(set(enrollment_roots(spec)) | set(readiness_mount_roots(reference,
         runtime={key: spec.serializable()[key] for key in lanes.RUNTIME_KEYS}, mode=lane.mode)))
 
@@ -709,8 +753,12 @@ def _reopen_lane_check(reference: Any) -> tuple[lanes.CaptureSpec, Path, dict[st
     if target != (receipt.parent / "intent.json" if value["complete"] else receipt):
         raise ValueError("rolling lane closure verified another target")
     intent, _, lane, sites = lanes._intent_and_lineage(spec, root, receipt.parent / "intent.json")
-    if lane.study_version != 6 or lane.role != "formal" or intent["actuator"] != "run":
-        raise ValueError("rolling final closure cannot promote diagnostic or parallel evidence")
+    if lane.study_version != 6 or lane.role != "formal" or intent["actuator"] not in {"run", "parallel-formal-worker"}:
+        raise ValueError("rolling final closure cannot promote diagnostic evidence")
+    if intent["actuator"] == "parallel-formal-worker":
+        from .rapid_rolling_schedule import require_schedule
+        payload = lanes._payload(spec.plan_receipt, lanes.PLAN_TYPE)
+        require_schedule(payload.get("scheduling"), spec, declared_at=payload["declared_at"], started_at=intent["started_at"])
     result = Path(value["facts"]["result_root"])
     from .verification import _read_checksums, authoritative_files
     files, checksums = authoritative_files(result), _read_checksums(result, result / "evidence.sha256")

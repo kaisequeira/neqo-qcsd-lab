@@ -7852,6 +7852,27 @@ if (( rapid_capture )); then
   rapid_compatibility_runtime_epoch=0
   if [[ -n "${QCSD_RAPID_COLLECTION_COMPATIBILITY:-}" ]]; then
     rapid_compatibility_host="${QCSD_RAPID_COLLECTION_COMPATIBILITY}"
+    rapid_scheduling_kind="$(/usr/bin/python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get("artifact_type",""))' \
+      "${rapid_compatibility_host}")" || exit 1
+    if [[ "${rapid_scheduling_kind}" == "qcsd-rapid-v6-prospective-parallel-scheduling" ]]; then
+      rapid_scheduling_python="${parallel_host_python:-}"
+      if [[ -z "${rapid_scheduling_python}" ]]; then
+        rapid_scheduling_python="$(parallel_select_host_python)" || exit 1
+      fi
+      rapid_compatibility_rows="$("${rapid_scheduling_python}" -I -B -c '
+import json,sys
+from pathlib import Path
+path=Path(sys.argv[1]); value=json.loads(path.read_bytes())
+sys.path.insert(0,value["runtime"]["module_root"]+"/src")
+from qcsd_lab import rapid_rolling_schedule as s
+from qcsd_lab.rapid_rolling_capture import _ref
+capsule=s.validate_schedule(_ref(path))
+if capsule["runtime"]["execution_root"]!=sys.argv[2] or capsule["runtime"]["collection_image_digest"]!=sys.argv[3]:
+    raise SystemExit("rolling schedule names another execution root or installed image")
+print("rolling-scheduling"); print(path); print("-")
+for root in s.mount_roots(_ref(path)): print(root)
+' "${rapid_compatibility_host}" "${ROOT}" "${image_id}")" || exit 1
+    else
     rapid_compatibility_rows="$(/usr/bin/python3 -I -c '
 import json
 import sys
@@ -7915,6 +7936,7 @@ for root in sorted(roots):
         raise SystemExit("collection capsule mounts require regular canonical absolute directories")
     print(root)
 ' "${rapid_compatibility_host}" "${ROOT}" "${image_id}" "${QCSD_RAPID_CAPTURE_CONTROL_INSTALLATION:-}")" || exit 1
+    fi
     mapfile -t rapid_compatibility_mounts <<< "${rapid_compatibility_rows}"
     rapid_compatibility_kind="${rapid_compatibility_mounts[0]}"
     rapid_compatibility_container="${rapid_compatibility_mounts[1]}"
@@ -7927,6 +7949,10 @@ for root in sorted(roots):
     done
     if [[ "${rapid_compatibility_kind}" == "runtime-epoch" ]]; then
       rapid_compatibility_runtime_epoch=1
+    elif [[ "${rapid_compatibility_kind}" == "rolling-scheduling" ]]; then
+      # The normal installed v6 plan check below reopens this typed scheduling
+      # capsule. It supplies neither a failed epoch nor installation history.
+      :
     else
       qcsd_run_attached_docker docker run --network none --read-only \
         --security-opt no-new-privileges --cap-drop ALL \
@@ -11195,9 +11221,10 @@ fi
 if (( parallel_diagnostic )); then
   if (( parallel_formal )); then
     if (( ! rapid_capture )) ||
-       [[ "${rapid_capture_role}" != "formal" || "${rapid_capture_version}" != "v5" ||
+       [[ "${rapid_capture_role}" != "formal" ||
+          ( "${rapid_capture_version}" != "v5" && "${rapid_capture_version}" != "v6" ) ||
           "${study_capture_scheduler_contract}" != "qcsd-client-rr1-portable-etf-helper-v4" ]]; then
-      echo "parallel formal capture requires official rapid v5 formal lanes" >&2
+      echo "parallel formal capture requires official rapid v5 or prospective rolling v6 formal lanes" >&2
       exit 2
     fi
   elif (( ! rapid_capture )) ||

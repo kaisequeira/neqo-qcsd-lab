@@ -16,7 +16,7 @@ from qcsd_lab import rapid_formal_parallel as formal
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=(__doc__ + "\nRolling v6 lanes require a prospectively bound scheduling capsule in each plan."))
     parser.add_argument("--spec", type=Path, required=True)
     parser.add_argument("--spec-2", type=Path, help="second lane spec; only plan receipt may differ for a g02 successor")
     parser.add_argument("--evidence-root", type=Path, required=True)

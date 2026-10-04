@@ -89,9 +89,21 @@ def _audit(path: Path, *, execution_root: Path | None = None):
             generation = stored_plan["cohort_generation"]
         else:
             generation = lineage["image_check"]["proof"]["cohort_generation"]
-        if (intent["actuator"] != ACTUATOR or lane.role != "formal" or lane.study_version != 5
-            or lane.sample_count != 20 or len(sites) != 50
-            or generation != "final-50"
+        if lane.study_version == 6:
+            from . import rapid_rolling_schedule as scheduling
+            if registered or capsule is not None:
+                raise ValueError("rolling parallel workers cannot claim registered epochs or historical installation")
+            stored_plan = lineage["image_check"]["proof"]["plan_payload"]
+            if (generation != "rolling-50" or not 1 <= len(sites) <= 5
+                or lane.visits_per_workload != 4 or len(lane.workload_ids) != len(sites)
+                or lane.sample_count != 4 * len(lane.workload_ids) or "scheduling" not in stored_plan):
+                raise ValueError("rolling parallel worker lacks its prospective four-visit scheduling plan")
+            scheduling.require_schedule(stored_plan["scheduling"], worker_spec,
+                declared_at=stored_plan["declared_at"], started_at=intent["started_at"])
+        elif (lane.study_version != 5 or lane.sample_count != 20 or len(sites) != 50
+              or generation != "final-50"):
+            raise ValueError("formal parallel worker is not an exact official 20-slot final-50 lane")
+        if (intent["actuator"] != ACTUATOR or lane.role != "formal"
             or Path(value["campaigns"][index]["path"]) != spec.campaign_dir / f"{lane.campaign_name}.yml"
             or value["campaigns"][index]["sha256"] != intent["campaign_sha256"]):
             raise ValueError("formal parallel worker is not an exact official 20-slot final-50 lane")
@@ -99,6 +111,8 @@ def _audit(path: Path, *, execution_root: Path | None = None):
         facts.append(fact)
     if len(set(logical)) != 2:
         raise ValueError("formal parallel workers cannot duplicate a logical lane")
+    if len({fact[5].study_version for fact in facts}) != 1:
+        raise ValueError("formal parallel workers cannot mix study contracts")
     return value, facts
 
 
@@ -157,11 +171,24 @@ def prepare_batch(spec_path: Path, evidence_root: Path, campaigns: list[str], ou
         sites = [ordinary._validate_image_proof(check["proof"], worker_spec)
                  for worker_spec, check in zip(specs, checks, strict=True)]
         lanes = [ordinary._lane(check["proof"], name) for check, name in zip(checks, campaigns, strict=True)]
-        if (any(check["proof"]["cohort_generation"] != "final-50" for check in checks)
-            or any(len(rows) != 50 for rows in sites)
-            or any(lane.role != "formal" or lane.study_version != 5 or lane.sample_count != 20 for lane in lanes)
-            or len({lane.logical_name for lane in lanes}) != 2):
-            raise ValueError("formal parallel preparation requires two official final-50 lanes")
+        if len({lane.study_version for lane in lanes}) != 1 or len({lane.logical_name for lane in lanes}) != 2:
+            raise ValueError("formal parallel preparation requires two distinct lanes under one study contract")
+        for worker_spec, check, rows, lane in zip(specs, checks, sites, lanes, strict=True):
+            if lane.study_version == 6:
+                from . import rapid_rolling_schedule as scheduling
+                if installed is not None:
+                    raise ValueError("rolling scheduling cannot claim historical installation")
+                payload = check["proof"]["plan_payload"]
+                if (check["proof"]["cohort_generation"] != "rolling-50" or not 1 <= len(rows) <= 5
+                    or lane.visits_per_workload != 4 or len(lane.workload_ids) != len(rows)
+                    or lane.sample_count != 4 * len(lane.workload_ids) or "scheduling" not in payload):
+                    raise ValueError("rolling parallel preparation requires a prospective scheduling plan")
+                scheduling.require_schedule(payload["scheduling"], worker_spec, declared_at=payload["declared_at"])
+            elif (lane.study_version != 5 or check["proof"]["cohort_generation"] != "final-50"
+                  or len(rows) != 50 or lane.sample_count != 20):
+                raise ValueError("formal parallel preparation requires two official final-50 lanes")
+            if lane.role != "formal":
+                raise ValueError("formal parallel preparation cannot claim diagnostic lanes")
         # Validate both create-only claims and predecessor histories before writing either.
         for worker_spec, check, lane, predecessor in zip(specs, checks, lanes, predecessors, strict=True):
             if (root / "lanes" / lane.campaign_name).exists() or (spec.execution_root / "results" / lane.campaign_name).exists():
@@ -187,6 +214,9 @@ def worker_inputs(path: Path, index: int) -> dict[str, Any]:
     _index(index)
     spec, root, intent_path, intent, _, lane, _ = facts[index]
     roots = {spec.data_root, root, *(Path(row["path"]).parent for row in value["lane_specs"])}
+    if lane.study_version == 6:
+        from . import rapid_rolling_capture as rolling
+        roots.update(rolling.readiness_roots(spec, lane.campaign_name))
     if value["installation"] is not None:
         from . import rapid_capture_control_installation as installation
         payload, _ = installation.validate_capsule(_reference(value["installation"]), actual_image=spec.collection_image_digest)
@@ -206,6 +236,13 @@ def worker_environment(value, index, *, fact=None):
     fact = fact if fact is not None else _lane(value, index)
     spec, root, intent_path, intent, _, lane, _ = fact
     environment = {}
+    if lane.study_version == 6:
+        from . import rapid_rolling_capture as rolling
+        payload = ordinary._payload(spec.plan_receipt, ordinary.PLAN_TYPE)
+        environment["QCSD_RAPID_COLLECTION_COMPATIBILITY"] = str(_reference(payload["scheduling"]))
+        environment["QCSD_RAPID_ROLLING_LAUNCH_INPUT"] = json.dumps({"spec": spec.serializable(),
+            "root": str(root), "intent": str(intent_path), "intent_sha256": shared.sha(shared.read(intent_path)),
+            "readiness_mount_roots": [str(path) for path in rolling.readiness_roots(spec, lane.campaign_name)]}, sort_keys=True)
     if value["installation"] is not None:
         installation_path = str(_reference(value["installation"]))
         environment["QCSD_RAPID_CAPTURE_CONTROL_INSTALLATION"] = installation_path
@@ -803,6 +840,10 @@ def retire_lane(output: Path, index: int, actual: dict[str, Any]) -> None:
         "start": ordinary._put_object(root, start_raw), "retirement": retirement,
         "stdout": ordinary._put_object(root, shared.read(output / f"lane-{index+1}" / "worker.stdout")),
         "stderr": ordinary._put_object(root, shared.read(output / f"lane-{index+1}" / "worker.stderr"))})
+    if lane.study_version == 6:
+        # The installed deep operation starts only after the batch host and both
+        # real workers have retired. A peer may still be collecting here.
+        return
     # Deep failure is retained per lane and never aborts the unaffected worker.
     try:
         if "epoch_declaration" in intent:
@@ -828,7 +869,25 @@ def verify_results(path: Path, output: Path) -> dict[str, Any]:
                     root, shared.read(intent_path), lane.campaign_name)
         row = {"campaign": lane.campaign_name, "valid": False, "accepted": 0, "actual_exit_code": process["returncode"]}
         try:
-            if "epoch_declaration" in intent:
+            if lane.study_version == 6:
+                from . import rapid_rolling_capture as rolling
+                if type(process["returncode"]) is not int or process["returncode"] != 0:
+                    raise ValueError("rolling worker did not complete successfully; terminal evidence retained")
+                checked_path = output / f"lane-{index+1}" / "installed-deep.json"
+                if checked_path.exists():
+                    reference = shared.load(checked_path)
+                else:
+                    receipt = intent_path.parent / "complete.json"
+                    checked = rolling.check_lane_in_image(spec, root,
+                        receipt if receipt.exists() else intent_path, complete=not receipt.exists())
+                    reference = checked["closure"]
+                    shared.put(checked_path, reference)
+                checked_spec, receipt, reopened, checked_lane, checked_sites = rolling._reopen_lane_check(reference)
+                if (checked_spec != spec or receipt != intent_path.parent / "complete.json"
+                    or checked_lane != lane or checked_sites != facts[index][6]):
+                    raise ValueError("installed rolling deep closure belongs to another formal worker")
+                row["installed_deep"] = reference
+            elif "epoch_declaration" in intent:
                 from . import rapid_class_epochs as classes
                 reopened = classes.verify_lane(spec, root, intent_path.parent / "complete.json")
             else:
@@ -842,5 +901,6 @@ def verify_results(path: Path, output: Path) -> dict[str, Any]:
     return {"schema_version": 1, "lanes": rows, "valid": all(row["valid"] for row in rows),
             "host_returncode": shared.load(output / "host-process.json")["returncode"],
             "formal_accepted_trace_count": sum(row["accepted"] for row in rows
-                if row.get("scientific_credit") == "formal-only-if-bound-to-final-50-plan"),
+                if row.get("scientific_credit") in {"formal-only-if-bound-to-final-50-plan",
+                    "formal-only-if-bound-to-rolling-enrollment"}),
             "scientific_credit": "per-lane; registered blocks require their matched commit"}
