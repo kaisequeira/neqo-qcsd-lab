@@ -50,7 +50,7 @@ IMAGE_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 IDENTIFIER_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 CORPUS_TYPE = "qcsd-rapid-v4-formal-corpus-manifest"
 V5_CORPUS_TYPE = "qcsd-rapid-v5-formal-corpus-manifest"
-STUDY_VERSIONS = (4, 5)
+STUDY_VERSIONS = (4, 5, 6)
 CAPTURE_LIMITS = {
     "timeout_seconds": 120,
     "max_response_bytes": 1_048_576,
@@ -170,10 +170,13 @@ def epoch_campaign_name(lane: Lane, epoch: int) -> str:
     ) + f"-e{epoch:04d}"
 
 
-def _check_sites(sites: Sequence[Site], *, final: bool) -> tuple[Site, ...]:
+def _check_sites(sites: Sequence[Site], *, final: bool, study_version: int = 5) -> tuple[Site, ...]:
     selected = tuple(sites)
     expected = FINAL_CLASS_COUNT if final else 10
-    if len(selected) != expected:
+    rolling = study_version == 6
+    if rolling and (not final or not 1 <= len(selected) <= SHARD_SIZE):
+        raise ValueError("rolling formal batches require one to five sites")
+    if not rolling and len(selected) != expected:
         raise ValueError(f"rapid {'final' if final else 'shakedown'} plan needs {expected} sites")
     if any(not isinstance(site, Site) for site in selected):
         raise ValueError("rapid plan site identity is invalid")
@@ -221,23 +224,28 @@ def _check_sites(sites: Sequence[Site], *, final: bool) -> tuple[Site, ...]:
             raise ValueError("one five-site shard must share one qualification set")
         if len({site.qualification_set_manifest_sha256 for site in shard}) != 1:
             raise ValueError("one five-site shard must share one qualification manifest")
-        if len({site.primary_origin for site in shard}) != SHARD_SIZE:
+        if len({site.primary_origin for site in shard}) != (len(shard) if rolling else SHARD_SIZE):
             raise ValueError("one qualification shard needs five distinct primary origins")
     return selected
 
 
 def plan_lanes(
-    sites: Sequence[Site], *, final: bool, study_version: int = 4
+    sites: Sequence[Site], *, final: bool, study_version: int = 4, rolling_batch: int | None = None
 ) -> tuple[Lane, ...]:
     """Plan 50 diagnostic or 16,000 formal slots with per-defence recovery."""
 
-    selected = _check_sites(sites, final=final)
+    selected = _check_sites(sites, final=final, study_version=study_version)
     if type(study_version) is not int or study_version not in STUDY_VERSIONS:
         raise ValueError("rapid lane study version is unregistered")
-    if study_version == 5 and any(
+    if study_version in {5, 6} and any(
         site.qualification_set_manifest_sha256 is None for site in selected
     ):
         raise ValueError("rapid v5 sites require qualification manifest digests")
+    if study_version == 6:
+        if type(rolling_batch) is not int or not 1 <= rolling_batch <= FINAL_CLASS_COUNT:
+            raise ValueError("rolling plan needs its immutable enrollment batch ordinal")
+    elif rolling_batch is not None:
+        raise ValueError("historical plans cannot carry rolling enrollment")
     blocks = FINAL_BLOCKS if final else 1
     visits = FINAL_VISITS_PER_BLOCK if final else 1
     role = "formal" if final else "diagnostic"
@@ -245,7 +253,7 @@ def plan_lanes(
     for block in range(1, blocks + 1):
         for offset in range(0, len(selected), SHARD_SIZE):
             shard = selected[offset:offset + SHARD_SIZE]
-            shard_number = offset // SHARD_SIZE + 1
+            shard_number = rolling_batch if study_version == 6 else offset // SHARD_SIZE + 1
             for mode in MODES:
                 lanes.append(Lane(
                     role=role,
@@ -262,7 +270,7 @@ def plan_lanes(
                     ),
                     study_version=study_version,
                 ))
-    expected = FINAL_SAMPLE_TARGET if final else 50
+    expected = len(selected) * len(MODES) * 64 if study_version == 6 else FINAL_SAMPLE_TARGET if final else 50
     if sum(lane.sample_count for lane in lanes) != expected:
         raise AssertionError("rapid lane sample arithmetic changed")
     return tuple(lanes)
@@ -285,6 +293,8 @@ def _check_bindings(bindings: FrozenBindings) -> None:
         raise ValueError("rapid plan needs frozen profile and cohort bindings")
     if type(bindings.study_version) is not int or bindings.study_version not in STUDY_VERSIONS:
         raise ValueError("rapid plan study version is unregistered")
+    if bindings.study_version == 6:
+        raise ValueError("rolling v6 authority uses its immutable enrollment policy, not a historical final cohort")
     if bindings.study_version == 5 and bindings.profile_sha256 != FROZEN_V5_PROFILE_SHA256:
         raise ValueError("rapid v5 profile differs from the frozen receipt")
     amended = bindings.selection_amendment_receipt is not None
@@ -351,8 +361,8 @@ def render_lane_campaign(lane: Lane, sites: Sequence[Site]) -> bytes:
 
     if lane.role not in {"formal", "diagnostic"}:
         raise ValueError("rapid lane role is unregistered")
-    selected = _check_sites(sites, final=lane.role == "formal")
-    if lane.study_version == 5 and any(
+    selected = _check_sites(sites, final=lane.role == "formal", study_version=lane.study_version)
+    if lane.study_version in {5, 6} and any(
         site.qualification_set_manifest_sha256 is None for site in selected
     ):
         raise ValueError("rapid v5 sites require qualification manifest digests")
@@ -361,10 +371,10 @@ def render_lane_campaign(lane: Lane, sites: Sequence[Site]) -> bytes:
         or type(lane.block) is not int
         or not 1 <= lane.block <= (FINAL_BLOCKS if lane.role == "formal" else 1)
         or type(lane.shard) is not int
-        or not 1 <= lane.shard <= len(selected) // SHARD_SIZE
+        or not 1 <= lane.shard <= (FINAL_CLASS_COUNT if lane.study_version == 6 else len(selected) // SHARD_SIZE)
     ):
         raise ValueError("rapid lane is outside the registered grid")
-    shard = selected[(lane.shard - 1) * SHARD_SIZE:lane.shard * SHARD_SIZE]
+    shard = selected if lane.study_version == 6 else selected[(lane.shard - 1) * SHARD_SIZE:lane.shard * SHARD_SIZE]
     expected = Lane(
         role=lane.role,
         block=lane.block,
@@ -402,7 +412,7 @@ def render_lane_campaign(lane: Lane, sites: Sequence[Site]) -> bytes:
         "workloads": {item: lane.visits_per_workload for item in lane.workload_ids},
         "request_policies": ["as-defined"],
         "defenses": [defense],
-        "limits": dict(V5_CAPTURE_LIMITS if lane.study_version == 5 else CAPTURE_LIMITS),
+        "limits": dict(V5_CAPTURE_LIMITS if lane.study_version in {5, 6} else CAPTURE_LIMITS),
     }
     if lane.qualification_set is not None:
         document["chaff_qualification_set"] = lane.qualification_set
@@ -542,7 +552,7 @@ def verify_lane_result(
         or SHA256_RE.fullmatch(qualification_set_manifest_sha256) is None
     ):
         raise ValueError("rapid lane qualification manifest binding is invalid")
-    if lane.study_version == 5 and lane.qualification_set is not None and (
+    if lane.study_version in {5, 6} and lane.qualification_set is not None and (
         qualification_set_manifest_sha256 is None
     ):
         raise ValueError("rapid v5 defended lane needs a qualification manifest digest")
@@ -635,6 +645,7 @@ def verify_lane_result(
         "result_seal_sha256": _sha(seal.read_bytes()),
         "scientific_credit": (
             "none-diagnostic" if lane.role == "diagnostic"
+            else "formal-only-if-bound-to-rolling-enrollment" if lane.study_version == 6
             else "formal-only-if-bound-to-final-50-plan"
         ),
     }

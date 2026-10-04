@@ -146,7 +146,7 @@ def load_capture_spec(path: Path) -> CaptureSpec:
     value = _load(_read(path))
     if (not isinstance(value, dict) or set(value) != {"schema_version", "artifact_type", "inputs"}
         or type(value["schema_version"]) is not int or value["schema_version"] != 1
-        or value["artifact_type"] != SPEC_TYPE or not isinstance(value["inputs"], dict)
+        or value["artifact_type"] not in {SPEC_TYPE, "qcsd-rapid-v6-rolling-capture-spec"} or not isinstance(value["inputs"], dict)
         or set(value["inputs"]) != PATH_KEYS | {"collection_image_digest", "execution_generation"}):
         raise ValueError("rapid capture spec schema is invalid")
     inputs = dict(value["inputs"])
@@ -158,6 +158,8 @@ def load_capture_spec(path: Path) -> CaptureSpec:
         inputs[key] = target.absolute() if target.is_absolute() else (path.absolute().parent / target).absolute()
     result = CaptureSpec(**inputs)
     _check_spec(result)
+    if value["artifact_type"] == "qcsd-rapid-v6-rolling-capture-spec" and _load(_read(result.cohort)).get("receipt_type") != "qcsd-rapid-v6-immutable-enrollment-batch":
+        raise ValueError("rolling capture spec requires its prospective enrollment authority")
     return result
 
 
@@ -248,6 +250,10 @@ def executed_image_plan_check(value: Mapping[str, str]) -> dict[str, Any]:
     spec = CaptureSpec(**{key: Path(item) if key in PATH_KEYS else item for key, item in value.items()})
     _check_spec(spec)
     runtime = executed_image_runtime_check({key: value[key] for key in RUNTIME_KEYS})
+    stored_plan = admission._unpack(_read(spec.plan_receipt), PLAN_TYPE)
+    if stored_plan.get("study_version") == 6:
+        from . import rapid_rolling_capture as rolling
+        return rolling.image_plan_check(spec, runtime)
     module = _plan_module(spec.module_root)
     result = module.run(_plan_args(spec))
     if (result.get("valid") is not True or type(result.get("formal_accepted_trace_count")) is not int
@@ -280,10 +286,13 @@ IMAGE_CHECK_SCRIPT = (
 
 
 def image_check_command(spec: CaptureSpec, *, capture_control_installation: Path | None = None,
-                        inherit_environment: bool = True) -> list[str]:
+                        inherit_environment: bool = True, campaign_name: str | None = None) -> list[str]:
     _check_spec(spec)
     roots = {spec.data_root, spec.runtime_source_root, spec.module_root, spec.execution_root,
              spec.source_manifest.parent, spec.client_binary.parent, spec.base_launcher.parent}
+    if campaign_name is not None and admission._unpack(_read(spec.plan_receipt), PLAN_TYPE).get("study_version") == 6:
+        from . import rapid_rolling_capture as rolling
+        roots.update(rolling.readiness_roots(spec, campaign_name))
     extra_environment = {}
     reference = (str(capture_control_installation) if capture_control_installation is not None
                  else os.environ.get("QCSD_RAPID_COLLECTION_COMPATIBILITY") if inherit_environment else None)
@@ -399,14 +408,21 @@ def _validate_image_proof(proof: Any, spec: CaptureSpec, *, equivalent_plan: boo
         or proof["cohort_generation"] != stored_plan["cohort_generation"]):
         raise ValueError("executed image proof differs from the retained exact plan")
     sites = tuple(plan.Site(**row) for row in proof["sites"])
-    plan._check_sites(sites, final=proof["cohort_generation"] == "final-50")
+    if proof["cohort_generation"] == "rolling-50":
+        from . import rapid_rolling_capture as rolling
+        actual_sites, _ = rolling.verify_capture_plan(spec)
+        if sites != actual_sites:
+            raise ValueError("rolling image proof differs from its immutable enrolled batch")
+        plan._check_sites(sites, final=True, study_version=6)
+    else:
+        plan._check_sites(sites, final=proof["cohort_generation"] == "final-50")
     plan._check_workload_files(sites, spec.workload_root)
     return sites
 
 
-def check_bound_image(spec: CaptureSpec, root: Path) -> dict[str, Any]:
+def check_bound_image(spec: CaptureSpec, root: Path, *, campaign_name: str | None = None) -> dict[str, Any]:
     """Execute and retain the actual isolated image validator before actuation."""
-    command = image_check_command(spec)
+    command = image_check_command(spec, campaign_name=campaign_name)
     started = _now()
     result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, timeout=300)
     record = {"command": command, "returncode": result.returncode, "started_at": started, "completed_at": _now(),
@@ -840,7 +856,7 @@ def _lineage_payload(spec: CaptureSpec, lane: plan.Lane, checked: Mapping[str, A
         if (predecessor_receipt.parent / "complete.json").exists():
             raise ValueError("a completed lane cannot be selectively recaptured under this recovery policy")
         predecessor = _payload(predecessor_receipt, INTENT_TYPE)
-        predecessor_name = plan._campaign_name(lane.role, lane.block, lane.shard, lane.mode, lane.generation - 1, 5)
+        predecessor_name = plan._campaign_name(lane.role, lane.block, lane.shard, lane.mode, lane.generation - 1, lane.study_version)
         predecessor_path = spec.campaign_dir / f"{predecessor_name}.yml"
         predecessor_sha = _sha(_read(predecessor_path))
         if (predecessor["campaign_name"] != predecessor_name or predecessor["campaign_sha256"] != predecessor_sha
@@ -879,6 +895,10 @@ def _lineage_payload(spec: CaptureSpec, lane: plan.Lane, checked: Mapping[str, A
         }.items()
     }
     artifacts.update({key: _put_object(root, _read(spec.execution_root / relative)) for key, (relative, _) in TRAFFIC_FILES.items()})
+    rolling_readiness = {}
+    if lane.study_version == 6:
+        from . import rapid_rolling_capture as rolling
+        rolling_readiness = {"rolling_readiness": rolling.require_mode_readiness(spec, lane, before=checked["execution"]["started_at"])}
     return {
         "execution_generation": spec.execution_generation, "profile_receipt_sha256": bindings["profile_sha256"],
         "cohort_receipt_sha256": bindings["cohort_sha256"],
@@ -890,6 +910,7 @@ def _lineage_payload(spec: CaptureSpec, lane: plan.Lane, checked: Mapping[str, A
         "predecessor_intent": _put_object(root, _read(predecessor_receipt)) if predecessor_receipt else None,
         "predecessor_attempt": predecessor_attempt, "artifacts": artifacts, "image_check": checked,
         **({"capture_control_installation": installation_reference} if installation_reference is not None else {}),
+        **rolling_readiness,
     }
 
 
@@ -910,6 +931,11 @@ def prepare_lane_intent(spec: CaptureSpec, evidence_root: Path, campaign_name: s
         raise FileExistsError("rapid physical lane destination is already claimed")
     sites = _validate_image_proof(checked["proof"], spec)
     lane = _lane(checked["proof"], campaign_name)
+    if lane.study_version == 6:
+        from . import rapid_rolling_capture as rolling
+        if actuator != "run":
+            raise ValueError("rolling first capture currently requires the serial actuator")
+        rolling.require_mode_readiness(spec, lane)
     campaign = spec.campaign_dir / f"{campaign_name}.yml"
     if _read(campaign) != plan.render_lane_campaign(lane, sites):
         raise ValueError("launch campaign differs from the independently verified grid")
@@ -943,7 +969,7 @@ def launch_lane(spec: CaptureSpec, evidence_root: Path, campaign_name: str, *, p
         directory = root / "lanes" / campaign_name
         if directory.exists() or directory.is_symlink():
             raise FileExistsError("rapid physical lane destination is already claimed")
-        checked = check_bound_image(spec, root)
+        checked = check_bound_image(spec, root, campaign_name=campaign_name)
         intent_path = prepare_lane_intent(spec, root, campaign_name, checked, predecessor_intent=predecessor_intent)
         campaign = spec.campaign_dir / f"{campaign_name}.yml"
         env = dict(os.environ)
@@ -951,10 +977,20 @@ def launch_lane(spec: CaptureSpec, evidence_root: Path, campaign_name: str, *, p
                    QCSD_RAPID_IMAGE_SOURCE_QCSD=str(spec.base_launcher),
                    QCSD_RAPID_V5_PROFILE_PATH=str(_study_profile(spec.execution_root)),
                    QCSD_RAPID_DNS_RECEIPT_PATH=str(directory / "dns.json"))
+        lane = _lane(checked["proof"], campaign_name)
+        if lane.study_version == 6:
+            from . import rapid_rolling_capture as rolling
+            env["QCSD_RAPID_ROLLING_LAUNCH_INPUT"] = _json({"spec": spec.serializable(), "root": str(root),
+                "intent": str(intent_path), "intent_sha256": _sha(_read(intent_path)),
+                "readiness_mount_roots": [str(path) for path in rolling.readiness_roots(spec, campaign_name)]}).decode()
         command = [str(spec.host_launcher), "run", str(campaign)]
         _actuate_host(spec, root, directory, command, env, lock_descriptor)
         returncode = _payload(directory / "host-process.json", PROCESS_TYPE)["returncode"]
-        completed = complete_lane(spec, root, intent_path)
+        if lane.study_version == 6:
+            from . import rapid_rolling_capture as rolling
+            completed = Path(rolling.check_lane_in_image(spec, root, intent_path, complete=True)["receipt"])
+        else:
+            completed = complete_lane(spec, root, intent_path)
         if returncode != 0:
             raise RuntimeError(f"deep-verified lane receipt retained at {completed}; host exit {returncode} needs lifecycle diagnosis")
         return completed
@@ -985,6 +1021,12 @@ def _intent_and_lineage(spec: CaptureSpec, root: Path, intent_path: Path) -> tup
         raise ValueError("retained actual image-check execution does not prove its facts")
     sites = _validate_image_proof(checked["proof"], spec, equivalent_plan=True)
     lane = _lane(checked["proof"], intent["campaign_name"])
+    if lane.study_version == 6:
+        from . import rapid_rolling_capture as rolling
+        if intent.get("actuator") != "run" or lineage.get("rolling_readiness") != rolling.require_mode_readiness(spec, lane, before=checked["execution"]["started_at"]):
+            raise ValueError("rolling lane changed its sealed setting-specific readiness")
+    elif "rolling_readiness" in lineage:
+        raise ValueError("historical lane cannot claim rolling readiness authority")
     if _read(spec.campaign_dir / f"{lane.campaign_name}.yml") != plan.render_lane_campaign(lane, sites):
         raise ValueError("actual campaign bytes changed after bound launch")
     proof = checked["proof"]
@@ -1031,16 +1073,16 @@ def _intent_and_lineage(spec: CaptureSpec, root: Path, intent_path: Path) -> tup
         if any(lineage.get(key) is not None for key in ("predecessor_campaign_name", "predecessor_campaign_sha256", "predecessor_intent", "predecessor_attempt")):
             raise ValueError("initial generation claims predecessor history")
     else:
-        predecessor_name = plan._campaign_name(lane.role, lane.block, lane.shard, lane.mode, lane.generation - 1, 5)
+        predecessor_name = plan._campaign_name(lane.role, lane.block, lane.shard, lane.mode, lane.generation - 1, lane.study_version)
         predecessor = admission._unpack(_object(root, lineage["predecessor_intent"]), INTENT_TYPE)
         predecessor_raw = _read(spec.campaign_dir / f"{predecessor_name}.yml")
         predecessor_lane = plan.successor_lane(
             plan.Lane(lane.role, lane.block, lane.shard, lane.mode,
                       lane.logical_name, lane.workload_ids, lane.visits_per_workload,
-                      lane.qualification_set, 1, 5), lane.generation - 1,
+                      lane.qualification_set, 1, lane.study_version), lane.generation - 1,
         ) if lane.generation > 2 else plan.Lane(lane.role, lane.block, lane.shard, lane.mode,
                                               lane.logical_name, lane.workload_ids, lane.visits_per_workload,
-                                              lane.qualification_set, 1, 5)
+                                              lane.qualification_set, 1, lane.study_version)
         if (predecessor_raw != plan.render_lane_campaign(predecessor_lane, sites)
             or lineage["predecessor_campaign_name"] != predecessor_name
             or lineage["predecessor_campaign_sha256"] != _sha(predecessor_raw)
@@ -1170,7 +1212,9 @@ def verify_launch_receipt(
     if _manifest_already_deep_verified:
         seal_sha = _sha(_read(result / "evidence.sha256"))
         accepted = lane.sample_count
-        credit = "none-diagnostic" if lane.role == "diagnostic" else "formal-only-if-bound-to-final-50-plan"
+        credit = ("none-diagnostic" if lane.role == "diagnostic" else
+                  "formal-only-if-bound-to-rolling-enrollment" if lane.study_version == 6 else
+                  "formal-only-if-bound-to-final-50-plan")
     else:
         checked = plan.verify_lane_result(
             result, lane, collection_image_digest=spec.collection_image_digest, lab_commit=lineage["lab_commit"],

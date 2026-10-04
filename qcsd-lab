@@ -5679,7 +5679,7 @@ parallel_environment_rows() {
 import base64,json,sys
 environment=json.loads(sys.argv[1]).get("environment",{})
 if (not isinstance(environment,dict) or set(environment)-{
-    "QCSD_RAPID_EPOCH_LAUNCH_INPUT","QCSD_RAPID_COLLECTION_COMPATIBILITY",
+    "QCSD_RAPID_EPOCH_LAUNCH_INPUT","QCSD_RAPID_ROLLING_LAUNCH_INPUT","QCSD_RAPID_COLLECTION_COMPATIBILITY",
     "QCSD_RAPID_CAPTURE_CONTROL_INSTALLATION"}
     or any(not isinstance(value,str) or "\0" in value for value in environment.values())):
     raise ValueError("formal worker environment contains an undeclared control input")
@@ -5892,6 +5892,7 @@ rapid_v2_diagnostic_pattern='^rapid-curated-tranco50-v2-diagnostic-[a-z0-9]+(-[a
 rapid_v5_diagnostic_pattern='^rapid-curated-tranco50-v5-diagnostic-b(01)-s(0[12])-(undefended|front|tamaraw|buflo|cs-buflo)-1200(-g(0[2-9]|[1-9][0-9]))?$'
 rapid_v4_formal_pattern='^rapid-curated-tranco50-v4-formal-b(0[1-9]|1[0-6])-s(0[1-9]|10)-(undefended|front|tamaraw|buflo|cs-buflo)-1200(-g(0[2-9]|[1-9][0-9]))?$'
 rapid_v5_formal_pattern='^rapid-curated-tranco50-v5-formal-b(0[1-9]|1[0-6])-s(0[1-9]|10)-(undefended|front|tamaraw|buflo|cs-buflo)-1200(-g(0[2-9]|[1-9][0-9]))?$'
+rapid_v6_formal_pattern='^rapid-curated-tranco50-v6-formal-b(0[1-9]|1[0-6])-s(0[1-9]|[1-4][0-9]|50)-(undefended|front|tamaraw|buflo|cs-buflo)-1200(-g(0[2-9]|[1-9][0-9]))?$'
 rapid_v5_epoch_pattern='^rapid-curated-tranco50-v5-formal-b(0[1-9]|1[0-6])-s(0[1-9]|10)-(undefended|front|tamaraw|buflo|cs-buflo)-1200(-g(0[2-9]|[1-9][0-9]))?-e[0-9]{4}$'
 rapid_capture_epoch=0
 if [[ "${1:-}" == "run" &&
@@ -5899,6 +5900,7 @@ if [[ "${1:-}" == "run" &&
         "${study_campaign_name%.yml}" =~ ${rapid_v5_diagnostic_pattern} ||
         "${study_campaign_name%.yml}" =~ ${rapid_v4_formal_pattern} ||
         "${study_campaign_name%.yml}" =~ ${rapid_v5_formal_pattern} ||
+        "${study_campaign_name%.yml}" =~ ${rapid_v6_formal_pattern} ||
         "${study_campaign_name%.yml}" =~ ${rapid_v5_epoch_pattern} ) &&
       "${study_campaign_name}" == *.yml ]]; then
   if (( $# != 2 )); then
@@ -5920,6 +5922,14 @@ if [[ "${1:-}" == "run" &&
     rapid_capture_role="formal"
     rapid_capture_mode="${BASH_REMATCH[3]}"
     rapid_capture_version="v5"
+  elif [[ "${rapid_capture_name}" =~ ${rapid_v6_formal_pattern} ]]; then
+    rapid_capture_role="formal"
+    rapid_capture_mode="${BASH_REMATCH[3]}"
+    rapid_capture_version="v6"
+    if [[ -z "${QCSD_RAPID_ROLLING_LAUNCH_INPUT:-}" ]]; then
+      echo "rolling capture requires explicit hash-bound enrollment and lane authority" >&2
+      exit 1
+    fi
   elif [[ "${rapid_capture_name}" =~ ${rapid_v5_epoch_pattern} ]]; then
     rapid_capture_role="formal"
     rapid_capture_mode="${BASH_REMATCH[3]}"
@@ -5944,6 +5954,7 @@ elif [[ "${1:-}" == "resume" &&
           "${study_resume_name:-}" =~ ${rapid_v5_diagnostic_pattern} ||
           "${study_resume_name:-}" =~ ${rapid_v4_formal_pattern} ||
           "${study_resume_name:-}" =~ ${rapid_v5_formal_pattern} ||
+          "${study_resume_name:-}" =~ ${rapid_v6_formal_pattern} ||
           "${study_resume_name:-}" =~ ${rapid_v5_epoch_pattern} ) ]]; then
   if (( $# != 2 )); then
     echo "rapid capture resume requires exactly one result root" >&2
@@ -5955,7 +5966,7 @@ elif [[ "${1:-}" == "resume" &&
     exit 1
   fi
   rapid_capture_name="${study_resume_name}"
-  if [[ "${rapid_capture_name}" =~ ${rapid_v5_epoch_pattern} ]]; then
+  if [[ "${rapid_capture_name}" =~ ${rapid_v5_epoch_pattern} || "${rapid_capture_name}" =~ ${rapid_v6_formal_pattern} ]]; then
     echo "rapid epoch capture requires a fresh declared lane; generic resume is disabled" >&2
     exit 2
   fi
@@ -7818,7 +7829,7 @@ if (( rapid_capture )); then
       exit 1
     fi
     echo "rapid v4 formal profile SHA-256: ${rapid_v4_profile_sha256}" >&2
-  elif [[ "${rapid_capture_version}" == "v5" ]]; then
+  elif [[ "${rapid_capture_version}" == "v5" || "${rapid_capture_version}" == "v6" ]]; then
     rapid_v5_profile_host="${QCSD_RAPID_V5_PROFILE_PATH:-${ROOT}/config/curated-sources/crux73-tranco600-rapid-v5.profile.json}"
     if [[ -L "${rapid_v5_profile_host}" || ! -f "${rapid_v5_profile_host}" ]]; then
       echo "rapid v5 capture requires the frozen profile receipt" >&2
@@ -7981,7 +7992,7 @@ else:
 if campaign.name != expected_name or campaign.schema_version != 1:
     raise SystemExit("rapid capture frozen campaign identity is invalid")
 if role == "formal":
-    if study_version not in {"v4", "v5"} or not campaign.name.startswith(
+    if study_version not in {"v4", "v5", "v6"} or not campaign.name.startswith(
         f"rapid-curated-tranco50-{study_version}-formal-"
     ):
         raise SystemExit("rapid formal lane has another study version")
@@ -7989,7 +8000,7 @@ if role == "formal":
         campaign.purpose != "evaluation"
         or campaign.profile != "research-1200"
         or campaign.request_policies != ("as-defined",)
-        or len(campaign.workloads) != 5
+        or (not 1 <= len(campaign.workloads) <= 5 if study_version == "v6" else len(campaign.workloads) != 5)
         or any(workload.visits != 4 for workload in campaign.workloads)
         or len(campaign.defenses) != 1
         or campaign.defenses[0].name != expected_mode
@@ -7998,7 +8009,7 @@ if role == "formal":
         if study_version == "v4":
             raise SystemExit("rapid v4 formal lane differs from the frozen five-site plan")
         raise SystemExit("rapid v5 formal lane differs from the frozen five-site plan")
-    if study_version == "v5" and expected_mode != "undefended":
+    if study_version in {"v5", "v6"} and expected_mode != "undefended":
         qualification_digests = {
             workload.qualification_set_manifest_sha256
             for workload in campaign.workloads
@@ -8038,11 +8049,14 @@ elif role != "diagnostic" or campaign.purpose != "smoke":
     raise SystemExit("rapid diagnostic campaign identity is invalid")
 ' "${1}" "${rapid_capture_target}" "${rapid_capture_name}" \
   "${rapid_capture_role}" "${rapid_capture_mode}" "${rapid_capture_version}"
-  if (( rapid_capture_epoch || rapid_compatibility_runtime_epoch )); then
+  if (( rapid_capture_epoch || rapid_compatibility_runtime_epoch )) || [[ "${rapid_capture_version}" == "v6" ]]; then
     # The namespace alone grants no epoch authority. Reopen its actual bound
     # intent, full class vector and response qualifiers inside this image,
     # using the separately frozen study source and its original source bridge.
     rapid_epoch_input="${QCSD_RAPID_EPOCH_LAUNCH_INPUT:-}"
+    if [[ "${rapid_capture_version}" == "v6" ]]; then
+      rapid_epoch_input="${QCSD_RAPID_ROLLING_LAUNCH_INPUT:-}"
+    fi
     if [[ -z "${rapid_epoch_input}" ]]; then
       echo "rapid epoch capture requires explicit hash-bound block launch authority" >&2
       exit 1
@@ -8053,11 +8067,19 @@ import sys
 from pathlib import Path
 
 value = json.loads(sys.argv[1])
-if not isinstance(value, dict) or set(value) != {"spec", "root", "intent", "intent_sha256"}:
+expected_fields = {"spec", "root", "intent", "intent_sha256"}
+if sys.argv[2] == "v6":
+    expected_fields.add("readiness_mount_roots")
+if not isinstance(value, dict) or set(value) != expected_fields:
     raise SystemExit("rapid epoch launch authority fields differ")
 spec = value["spec"]
 roots = {spec[key] for key in ("data_root", "runtime_source_root", "module_root", "execution_root")}
 roots.update(str(Path(spec[key]).parent) for key in ("source_manifest", "client_binary", "base_launcher"))
+if sys.argv[2] == "v6":
+    extra = value["readiness_mount_roots"]
+    if not isinstance(extra, list) or any(not isinstance(item, str) for item in extra):
+        raise SystemExit("rolling canary mounts require a sealed list of regular roots")
+    roots.update(extra)
 for root in roots:
     path = Path(root)
     if (not path.is_absolute() or ".." in path.parts or not path.is_dir()
@@ -8068,7 +8090,7 @@ print(spec["module_root"])
 print(spec["runtime_source_root"])
 for root in sorted(roots):
     print(root)
-' "${rapid_epoch_input}")" || exit 1
+' "${rapid_epoch_input}" "${rapid_capture_version}")" || exit 1
     mapfile -t rapid_epoch_rows <<< "${rapid_epoch_roots}"
     rapid_epoch_module_host="${rapid_epoch_rows[0]}"
     rapid_epoch_runtime_host="${rapid_epoch_rows[1]}"
@@ -8092,9 +8114,13 @@ for root in sorted(roots):
       --entrypoint /opt/qcsd-venv/bin/python3 "${image_id}" -c '
 import json
 import sys
-from qcsd_lab.rapid_class_epochs import validate_host_epoch_launch
-validate_host_epoch_launch(json.loads(sys.argv[1]), expected_campaign=sys.argv[2], actual_image=sys.argv[3])
-' "${rapid_epoch_input}" "${rapid_capture_name}" "${image_id}"
+if sys.argv[4] == "v6":
+    from qcsd_lab.rapid_rolling_capture import validate_host_launch
+    validate_host_launch(json.loads(sys.argv[1]), expected_campaign=sys.argv[2], actual_image=sys.argv[3])
+else:
+    from qcsd_lab.rapid_class_epochs import validate_host_epoch_launch
+    validate_host_epoch_launch(json.loads(sys.argv[1]), expected_campaign=sys.argv[2], actual_image=sys.argv[3])
+' "${rapid_epoch_input}" "${rapid_capture_name}" "${image_id}" "${rapid_capture_version}"
   fi
   # Docker's isolated client bridge cannot forward public DNS through its
   # embedded resolver. Resolve every approved origin on a disposable ordinary

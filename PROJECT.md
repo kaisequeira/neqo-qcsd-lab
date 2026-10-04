@@ -13,10 +13,12 @@ estimate breakdown](docs/README.md) gives the planning arithmetic. The
 The registered 100-site contract below remains the baseline for historical
 evidence. The 20-site proposal was an attempt to keep the same 16,000-sample
 total with fewer sites, but its launch sequence has been superseded. The
-current [rapid 50-class proposal](docs/RAPID-CLASS-STUDY.md) fixes five
-settings and aims for **50 × 5 × 64 = 16,000 accepted formal samples** after a
-separate 50-visit, zero-credit ten-site shakedown. Its live site yield and
-formal capture authority remain unproven.
+current [rapid capture path](docs/RAPID-CAPTURE-PATH.md) fixes five settings
+and aims for **50 × 5 × 64 = 16,000 accepted formal samples**. Prospective
+rolling v6 lets one to five eligible sites begin under each independently
+ready setting. Completing all 50 admissions and a separate ten-site
+shakedown are no longer first-capture prerequisites. The final corpus still
+requires all 50 sites, all five settings and every declared accepted slot.
 
 ### Historical 100-site contract
 
@@ -41,7 +43,30 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Latest milestone, 4 October, 10:01 Sydney (3 October, 23:01 UTC):**
+**Latest milestone, 4 October, 11:00 Sydney (4 October, 00:00 UTC):**
+Rolling v6 passed **104 focused host checks**, including actual retained
+admission/readiness evidence, first serial dispatch, failed-only recovery
+and exact 16,000-slot final accounting. Independent review found no concrete
+blocker. The eight admission producer groups and Native `8417787c` remain
+unchanged. Matching thin installation and the first actual formal lane are
+still required; **formal progress remains 0/16,000**.
+
+Runtime 010's full 260-resource/four-origin ordinary, Tamaraw and CS-BuFLO
+diagnostics passed capture and deep verification. BuFLO had a real kernel
+packet drop; a fresh same-source retry is running with its original campaign,
+seed and response qualification. FRONT completed the page but failed a
+receive-clock check and a padding deadline. The receive-clock repair is
+published as Native `af58431a`, with three compiled checks passing; it is
+not installed in runtime 010 and its separate padding failure remains failed.
+
+The latest browser repair is now installed independently as Lab `2af3389d`
+/ Native `39464c62`, with all twelve runtime operations reopening and no
+Native build. Fresh context 019 is initialized with all 113 retained root
+screens; its coordinator has not started. Context 018 remains paused at
+17 decisions and one admitted site. These contexts retain their own source
+and page labels. See the [rolling source and runtime evidence](docs/EVIDENCE-INDEX.md#rolling-v6-source-and-independent-browser-runtime).
+
+**Earlier milestone, 4 October, 10:01 Sydney (3 October, 23:01 UTC):**
 The target remains **50 sites × five settings × 64 accepted visits = 16,000
 formal traces**. Admission context 018 stopped cleanly at an action boundary;
 checkpoint **000044** records **17 terminal decisions, one newly admitted

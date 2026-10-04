@@ -3,9 +3,12 @@
 **Planning and implementation status, 4 October 2026 (Australia/Sydney).** This is the run order
 for the prospective [50-site study](RAPID-CLASS-STUDY.md). Its formal target is
 **50 websites × five traffic settings × 64 visits = 16,000 accepted traces**.
-The five settings are undefended, FRONT, Tamaraw, BuFLO and CS-BuFLO. The
-ten-site, one-visit-per-setting shakedown produces **50 diagnostic traces with
-zero formal credit**. The earlier 100-site and 20-site contracts are separate
+The five settings are undefended, FRONT, Tamaraw, BuFLO and CS-BuFLO.
+Prospective **rolling v6** starts eligible sites in batches of one to five,
+under each independently ready setting. It removes the global all-50-sites
+and ten-site shakedown requirements before the first formal recording.
+Diagnostic and failed recordings retain zero formal credit. The earlier
+100-site, 20-site and strict v5 launch contracts are separate
 historical studies; their long build, browser-vector, fitting and nine-mode
 sequence does not gate this prospective five-setting study.
 
@@ -14,7 +17,53 @@ homepage credit fix, endpoint-specific final UDP drain evidence and explicit
 prospective BuFLO incoming tolerance. They require fresh affected captures;
 the previous failed attempts keep their original results.
 
-**Latest milestone, 4 October, 10:01 Sydney (3 October, 23:01 UTC):**
+## Active rolling v6 route
+
+1. Verify the next eligible site's complete multi-origin graph and freeze
+   its place in the recorded candidate order. Later batches append sites;
+   they do not replace earlier selections or relabel old page evidence.
+2. Install the matched capture runtime. Reuse an earlier setting canary only
+   through an explicit source-equivalence record proving the same Native
+   client and measurement, acceptance, qualification and traffic dependencies.
+3. Run current response-padding qualification for the enrolled batch's exact
+   workloads. No defense fitting is required for these five fixed settings.
+4. Plan 16 blocks of four visits per site and setting. A singleton batch
+   reserves 80 lanes and 320 eventual traces; only the requested ready
+   setting needs a passing canary before its lane starts.
+5. Launch and deep-check each lane. A failed lane gets a new recorded
+   generation for its missing visits, preserving accepted visits and peers.
+6. Add more eligible sites in batches of up to five. Publish the final manifest
+   only after every **50 × five × 64** slot is independently complete.
+
+The public entry point is `tools/rapid_rolling_capture.py`; its commands are
+`canary-equivalence`, `init`, `enroll`, `plan`, `launch`, `complete-lane`,
+`verify-lane`, `retire-lane`, `successor`, `publish-manifest` and
+`verify-manifest`. Runtime and readiness references remain explicit per plan,
+so a later repair can use a new runtime while completed peers retain theirs.
+First dispatch is serial. Successful simultaneous capture is a separate
+remaining operational proof.
+
+**Latest milestone, 4 October, 11:00 Sydney (4 October, 00:00 UTC):**
+The eight-file implementation passed **104 focused checks** and independent
+review. It keeps all eight admission producer groups and Native841 unchanged.
+Matching installation, current one-site response qualification and first
+formal capture remain pending: **0/16,000 formal traces**.
+
+The current runtime passed full-page ordinary, Tamaraw and CS-BuFLO
+diagnostics. BuFLO's fresh same-source retry is running without repeating
+baseline or response qualification. FRONT retains its separate clock and
+padding failures; the clock correction is source-published and tested, not
+installed. The updated browser runtime is installed separately without a
+Native build, and context019 is initialized with the retained113 root screens.
+See the [actual evidence](EVIDENCE-INDEX.md#rolling-v6-source-and-independent-browser-runtime).
+
+## Earlier engineering checkpoints
+
+The dated checkpoints below retain their original launch rules and results.
+Their ten-site and all-50-before-capture prerequisites belong to the earlier
+v5 route; the active rolling v6 sequence above supersedes those prerequisites.
+
+**Earlier milestone, 4 October, 10:01 Sydney (3 October, 23:01 UTC):**
 The target remains **50 × five × 64 = 16,000 accepted formal traces**.
 Admission 018 stopped cleanly between actions, preserving checkpoint
 000044: **17 completed decisions, one newly admitted site and zero formal
@@ -476,7 +525,7 @@ an auxiliary padding resource on any of the workload's exact approved origins,
 including CDNs, after separate sustained response qualification. Resource 0
 cannot supply padding; no resource or origin is removed.
 
-## What happens, in order
+## Historical v5 run order
 
 | Step | Action | Evidence needed to advance | Current state |
 |---:|---|---|---|
@@ -504,7 +553,7 @@ These checks do not replace fresh capture proof. The active admission still
 uses its original `ffe14ab`/`e2dcd8a` runtime. The next operation is the new
 cached client build and targeted first-site capture proof.
 
-## Rough time budget
+## Earlier v5 time budget
 
 | Work | Planning estimate | What can change it |
 |---|---|---|
