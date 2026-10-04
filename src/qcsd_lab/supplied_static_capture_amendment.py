@@ -275,6 +275,7 @@ def validate_preparation(value: Mapping[str, Any], resources: list[dict[str, Any
 
 
 def preparation_roots(value: Mapping[str, Any]) -> list[Path]:
+    from . import rapid_rolling_capture as rolling
     from .static_evidence_transport import _path
     declaration_path = preparation.open_reference(value[FIELD])
     declaration = _declaration(declaration_path)
@@ -295,6 +296,57 @@ def preparation_roots(value: Mapping[str, Any]) -> list[Path]:
                  for reference in declaration["runtime_artifacts"].values())
     roots.update(_path(preparation.open_reference(reference)).parent
                  for reference in declaration.get("traffic_artifacts", {}).values())
+    # The declaration authenticates the original enrollment, whose policy
+    # verifier also reopens its own, separately frozen runtime. Transport those
+    # original authorities at their actual names without mounting data_root.
+    enrollment = rolling._open_ref(declaration["enrollment"])
+    batch = receipts._unpack(lanes._read(enrollment), rolling.ENROLLMENT_TYPE)
+    policy_path = rolling._open_ref(batch["policy"])
+    policy = rolling.verify_policy(policy_path.parent)
+    roots.add(policy_path.parent)
+    original_runtime = policy["runtime"]
+    roots.update(_path(Path(original_runtime[key]), directory=True) for key in
+                 ("runtime_source_root", "module_root", "execution_root"))
+    roots.update(_path(rolling._open_ref(policy[key])).parent for key in
+                 ("runtime_source_manifest", "client_binary", "base_launcher", "host_launcher"))
+    # Only the declaration's verified enrollment and inherited context prefixes
+    # are dependencies. Later mutable acquisition decisions are not mounts.
+    contexts = {_path(Path(policy["initial_admission_root"]), directory=True)}
+    terminals = {}
+    while True:
+        contexts.add(rolling._open_ref(batch["admission_provenance"]).parent)
+        for decision in batch["decisions"]:
+            terminal = rolling._open_ref(decision["terminal"])
+            terminals[terminal] = decision["terminal"]
+        if batch["parent"] is None:
+            break
+        batch = receipts._unpack(lanes._read(rolling._open_ref(batch["parent"])), rolling.ENROLLMENT_TYPE)
+    pending, seen = list(contexts), set()
+    while pending:
+        context_root = pending.pop()
+        if context_root in seen:
+            continue
+        seen.add(context_root)
+        roots.add(_path(context_root, directory=True))
+        context = receipts._unpack(lanes._read(context_root / "provenance.json"), admission.PROVENANCE_TYPE)
+        for reference in context["inherited_terminals"]:
+            terminals[rolling._open_ref(reference)] = reference
+        if context["parent_context"] is not None:
+            pending.append(rolling._open_ref(context["parent_context"]).parent)
+    for reference in terminals.values():
+        terminal_path = rolling._open_ref(reference)
+        terminal = receipts._unpack(lanes._read(terminal_path), admission.TERMINAL_TYPE)
+        roots.add(terminal_path.parent)
+        if terminal["outcome"] == "admitted":
+            original_path = rolling._open_ref(terminal["prepared_workload"])
+            original = lanes._load(lanes._read(original_path))
+            roots.add(original_path.parent)
+            roots.update(preparation.preparation_roots(original["preparation"]))
+        elif terminal["outcome"] == "operational-deferred":
+            roots.add(_path(Path(terminal["get_evidence_root"]), directory=True))
+            if terminal["namespace"] is not None:
+                roots.update(_path(rolling._open_ref(terminal["namespace"][key])).parent for key in
+                             ("outer_started", "outer_completed", "outer_stdout", "outer_stderr"))
     return sorted(_path(Path(root), directory=True) for root in roots)
 
 

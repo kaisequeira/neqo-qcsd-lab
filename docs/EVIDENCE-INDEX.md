@@ -11,6 +11,51 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ### Current supplied-list study
 
+At **4 October, 23:02 Sydney AEDT (12:02 UTC)** the authoritative counter is
+still **8/16,000 accepted recordings**, from two original ordinary four-visit
+lanes at one enrolled site. Ordinary resource checking has closed 25 candidate
+decisions: six admitted, ten operationally deferred and nine input-ineligible.
+Final completion still requires 50 sites and all five settings.
+
+Diagnostic paths in this subsection are relative to the parent workspace.
+They describe retained local evidence and are not files shipped in a clone.
+
+The Lab `10e43906` / Native `c24da2af` runtime closed all 12 actual installation
+and export operations. Its closure is
+`diagnostic-rehearsals/static-amended-transport-nativec24-runtime-root-actual-20261004-001/root-runtime-closed.json`;
+canonical SHA is
+`ff9aed3b4b857106d060cbb89d75fa9355112caf4ab8d72c285c781ad88a3511`.
+Installed client SHA is
+`fdb8bdab61bf9a4e728ee3826139de6230ee7aa00c4ec0349240ce6414992525`.
+The installation reused that client and ran no Native compilation.
+
+The first installed FRONT preamble failed in **6.794 seconds** before
+qualification or capture. Raw records are in
+`diagnostic-rehearsals/supplied-static-poki-frontv4-nativec24-20261004-001/logs`
+and `diagnostic-rehearsals/static-amended-front-root-actual-20261004-001`.
+The failure names the absent original policy runtime launcher. Its transitive
+mount repair passed nine focused tests plus one sealed-prefix test; closure
+`diagnostic-rehearsals/amended-enrollment-transport-host-checks-20261004-002/source-closure-final.json`
+has SHA `4abdb81c613a03e6128d4e059865f721dd38966b5076d18f7a399ba0cc1daadc`.
+The actual HOST audit reopened all 74 observed original input files and
+proved matching public campaign/deep mount lists with nine specific roots.
+The earlier audit-wrapper failure remains preserved. These are HOST transport
+checks, not installed qualification or capture proof for the new Source.
+
+The third ordinary batch is retained in
+`diagnostic-rehearsals/supplied-static-ordinary-b03-root-actual-20261004-001`.
+Its public launch exited 2 after **427.901 seconds**. Router birth succeeded,
+but no capture result was produced; the later router-removal message does not
+identify the first failed setup operation. This batch adds no formal credit.
+
+The latest five ordinary GET checks are retained in
+`diagnostic-rehearsals/supplied-static-next007-root-actual-20261004-001/batch-actual-closed.json`
+and the append-only 87-candidate context. They added one admission, three
+operational deferrals and one input exclusion. Fourteen appended graphs remain
+unassessed. No current defended or parallel success is claimed here.
+
+#### Earlier checkpoint at 22:06
+
 At **4 October, 22:06 Sydney AEDT (11:06 UTC)**, the supplied-list study has
 **8/16,000 accepted formal recordings**, from two completed ordinary four-visit
 lanes at one enrolled Poki site. Both retain all 277 resources across three

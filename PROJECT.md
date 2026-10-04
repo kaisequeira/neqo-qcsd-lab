@@ -49,7 +49,34 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Current checkpoint, 4 October, 22:06 Sydney AEDT (4 October, 11:06 UTC):**
+**Current checkpoint, 4 October, 23:02 Sydney AEDT (4 October, 12:02 UTC):**
+There are **8/16,000 accepted formal recordings**, all independently verified
+ordinary visits to one enrolled Poki site. Complete ordinary resource fetching
+has admitted **six sites from 25 candidate decisions**; ten candidates were
+operationally deferred and nine excluded by the input rules. Admission does
+not establish usability under all five settings. The final target remains
+**50 sites × five settings × 64 visits**.
+
+The repaired Native client is published as `c24da2af`. Its 26 distinct compiled
+checks passed, and the matching Lab `10e43906` runtime passed all 12 actual
+installation/export operations. The client was reused for that Lab-only
+installation. Its first installed FRONT check exposed a missing original-study
+evidence mount in **6.794 seconds**, before qualification or capture.
+
+This update repairs the authenticated mount derivation. Ten focused HOST
+checks and independent review passed; the actual failed setup's 74 observed
+input files are covered by nine specific read-only roots. A matching thin Lab
+installation and fresh per-setting amendment, qualification and complete-site
+canary are the next steps. No Native compilation is required for this change.
+
+The third ordinary batch stopped after router startup, before creating a
+capture result. Its public launch exited 2 after **427.901 seconds**; the
+original setup failure is not identified by the retained cleanup message.
+It contributes no recordings. All attempted records are retained. Parallel
+capture and isolated recovery remain unproved; their focused HOST work is
+separate from the short defended launch path.
+
+**Earlier checkpoint, 4 October, 22:06 Sydney AEDT (4 October, 11:06 UTC):**
 The supplied-list study has **8/16,000 accepted formal recordings**, across
 two completed four-visit ordinary-traffic lanes at Poki. Both lanes passed
 installed deep verification and independent reopening. All visits retain the
