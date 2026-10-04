@@ -142,6 +142,14 @@ defect or an already excluded primary. Neither manufactures an HTTP/3 failure.
 
 After a matching thin Lab image includes the new prepared-role validators:
 
+The ordinary launcher derives read-only mounts for the original GET evidence
+and its declared context at their recorded absolute paths. It authenticates
+the proof before deriving those mounts, and carries them through installed
+preflight, DNS, collection and deep verification. The retained GET producer,
+prepared workload and original measurement labels are unchanged. A matching
+thin Lab successor can reuse the verified Native client when its Native Source
+and dependencies are unchanged; its installed Lab bytes are checked separately.
+
 1. Use `tools/rapid_rolling_capture.py init-static` with the static context and
    actual capture runtime JSON. The default `init` remains the browser contract.
 2. Use ordinary rolling `enroll`, copying the exact admitted workload into the

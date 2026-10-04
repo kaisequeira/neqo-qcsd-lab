@@ -307,6 +307,11 @@ def _deep_command(plan: Mapping[str, Any], directory: Path, plan_sha: str,
     _read(recipe, plan["recipe_sha256"])
     _read(helper, plan["helper_sha256"])
     image = plan["canonical_runtime"]["collection_image_digest"]
+    static_mounts = []
+    original = _json(_read(directory / "lineage/original-manifest.json", plan["original_workload_sha256"]))
+    from .static_evidence_transport import manifest_roots
+    for root in manifest_roots(original):
+        static_mounts.extend(["--volume", f"{root}:{root}:ro"])
     return ["docker", "run", "--rm", "--name", f'qcsd-v12-{plan["name"]}-verify-image',
             "--network", "none", "--user", user, "--security-opt", "no-new-privileges",
             "--cap-drop", "ALL", "--env", f"QCSD_LAB_IMAGE_DIGEST={image}",
@@ -316,6 +321,7 @@ def _deep_command(plan: Mapping[str, Any], directory: Path, plan_sha: str,
             "--volume", f'{plan["clean_runtime_root"]}:/runtime-src:ro',
             "--volume", f'{plan["execution_root"]}:/lab:ro', "--volume",
             f"{directory}:/diagnostic:rw", "--volume", recipe_mount, "--volume", helper_mount,
+            *static_mounts,
             "--workdir", "/lab", "--entrypoint", "/opt/qcsd-venv/bin/python3", image,
             "-I", "-B", "/recipe.py", "verify-image", "--plan", "/diagnostic/plan.json",
             "--plan-sha256", plan_sha, "--mode", mode, "--result", declared_root]
@@ -538,6 +544,9 @@ def readiness_mount_roots(reference: Mapping[str, Any], *, runtime: Mapping[str,
     plan = _json(plan_raw)
     roots = {plan_path.parent, _path(plan["clean_runtime_root"], directory=True),
              _path(plan["execution_root"], directory=True)}
+    from .static_evidence_transport import manifest_roots
+    original = _json(_read(plan_path.parent / "lineage/original-manifest.json", plan["original_workload_sha256"]))
+    roots.update(manifest_roots(original))
     runtimes = [runtime]
     if reference["schema_version"] == 2:
         capsule_path, capsule_raw = _reference(reference["source_equivalence"])

@@ -11,8 +11,8 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ### Current supplied-list study
 
-At **4 October, 20:10 Sydney AEDT (09:10 UTC)**, the prospective fixed-resource
-cohort has **four admitted sites and 0/16,000 accepted formal recordings**.
+At **4 October, 20:42 Sydney AEDT (09:42 UTC)**, the prospective fixed-resource
+cohort has **five admitted sites and 0/16,000 accepted formal recordings**.
 The original browser cohort has eight accepted recordings and remains separate.
 The [supplied-list runbook](SUPPLIED-STATIC-CAPTURE.md) describes the declared
 role, complete-GET requirement, response budgets and rolling capture path.
@@ -25,8 +25,8 @@ It seals all 73 source entries and their original resource lists, declaring
 Poki first before any GET. The supplied Source SHA is
 `548e4718cbc20e70e391e36206cb0285327da4c78434039ffb616d83b98d068b`.
 Input-only checks identify 50 candidates after exclusions; actual live checks
-still determine admission. Ten candidate decisions are closed: four admitted,
-four operationally deferred and two input-ineligible.
+still determine admission. Twenty candidate decisions are closed: five admitted,
+seven operationally deferred and eight input-ineligible.
 
 Poki's actual bootstrap/full GET and independent verification/admission are in
 `diagnostic-rehearsals/supplied-static-native5f-bootstrap-fullget-20261004-002`.
@@ -37,9 +37,9 @@ responses. Measurement used installed Lab `9c35eafb` / Native `5f075d37`,
 client `3e8e3ff3`, and collection image `d11964c4`; the external static producer
 was separately bound and was not claimed to be installed in that image.
 
-Additional actual GET and terminal operations are in
+Additional actual GET and terminal operations are in the numbered namespaces
 `diagnostic-rehearsals/supplied-static-native5f-next-candidates-20261004-003`
-and `diagnostic-rehearsals/supplied-static-native5f-next-candidates-20261004-004`.
+through `diagnostic-rehearsals/supplied-static-native5f-next-candidates-20261004-006`.
 The initial redirect deferral failure remains retained in 003. Its subsequent
 actual corrected deferral and candidate-five input decision are in
 `diagnostic-rehearsals/supplied-static-next-candidates-recovery-host-20261004-001`.
@@ -55,8 +55,24 @@ SHA `fc0e3de8e50f7d97e72fdea4609d9fb8f583002606f03c7e8fc9cffe2cf198cd`.
 Original GET bytes, modes and producer labels remain unchanged. Source-only
 publication/staging records are in
 `diagnostic-rehearsals/supplied-static-source-publication-20261004-001`.
-Runtime installation, sustained qualification, readiness and formal capture
-are pending at this snapshot; HOST checks and admissions add no trace credit.
+The actual installed Lab `8907808f` / Native `5f075d37` runtime is in
+`diagnostic-rehearsals/rapid-v6-supplied-static-native5f-runtime-20261004-001`.
+Canonical SHA is
+`a16b15282de3f8524b710ea6e3fa04a6e87f93652fc6c7c5e571d64691084dba`.
+All twelve actual operations passed; the verified Native client was reused
+without recompilation. Root's outer closure is in
+`diagnostic-rehearsals/supplied-static-native5f-runtime-actual-20261004-001/root-runtime-closed.json`.
+
+The narrow static evidence transport repair is closed in
+`diagnostic-rehearsals/supplied-static-evidence-transport-host-checks-20261004-002/source-closure-final.json`,
+SHA `42f42e837fb06aa34b04410ea626095d05366cc8c62b9e2abfd6fb3f41b21c98`.
+It passed 27 HOST checks and shell syntax validation, reopened the retained
+Poki proof and passed independent review. It changes launcher/readiness
+transport, preserving the original complete GET producer and raw evidence.
+Root's reviewed source staging is in
+`diagnostic-rehearsals/supplied-static-evidence-transport-source-publication-20261004-001`.
+Its successor runtime, actual capture, sustained qualification and readiness
+remain pending at this snapshot. HOST checks and admissions add no trace credit.
 
 ### Current rolling v6 checkpoint: eight accepted traces
 

@@ -7838,6 +7838,26 @@ else
 fi
 image_id="$(_qcsd_docker_api image inspect --format '{{.Id}}' "${image}")"
 if (( rapid_capture )); then
+  # A fixed-resource preparation retains absolute references to its original
+  # complete GET and prospective context. Authenticate those records on the
+  # host before installed preflight, then transport only derived read-only
+  # roots. Browser preparations produce an empty argument array.
+  rapid_static_evidence_args=()
+  rapid_static_python="$(parallel_select_host_python)" || exit 1
+  rapid_static_rows="$("${rapid_static_python}" -I -B -c '
+import sys
+from pathlib import Path
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root / "src"))
+from qcsd_lab.static_evidence_transport import campaign_roots
+for path in campaign_roots(root, sys.argv[2], Path(sys.argv[3])):
+    print(path)
+' "${ROOT}" "${1}" "${ROOT}${rapid_capture_target#/lab}")" || exit 1
+  if [[ -n "${rapid_static_rows}" ]]; then
+    while IFS= read -r rapid_static_root; do
+      rapid_static_evidence_args+=(--volume "${rapid_static_root}:${rapid_static_root}:ro")
+    done <<< "${rapid_static_rows}"
+  fi
   rapid_image_shell_host="${QCSD_RAPID_IMAGE_SOURCE_QCSD:-}"
   if [[ -z "${rapid_image_shell_host}" || -L "${rapid_image_shell_host}" ||
         ! -f "${rapid_image_shell_host}" ]]; then
@@ -8013,6 +8033,7 @@ executed_image_plan_check(runtime)
     --label "org.qcsd.role=rapid-capture-preflight" \
     --user "${qcsd_invoking_uid}:${qcsd_invoking_gid}" \
     --env "QCSD_LAB_IMAGE_DIGEST=${image_id}" \
+    "${rapid_static_evidence_args[@]}" \
     "${rapid_compatibility_args[@]}" \
     --volume "${ROOT}:/lab:ro" \
     --volume "${rapid_image_shell_host}:/lab/qcsd-lab:ro" --workdir /lab \
@@ -8191,6 +8212,7 @@ else:
     --label "org.qcsd.role=rapid-dns-preflight" \
     --user "${qcsd_invoking_uid}:${qcsd_invoking_gid}" \
     --env "QCSD_LAB_IMAGE_DIGEST=${image_id}" \
+    "${rapid_static_evidence_args[@]}" \
     "${rapid_compatibility_args[@]}" \
     --volume "${ROOT}:/lab:ro" \
     --volume "${rapid_image_shell_host}:/lab/qcsd-lab:ro" --workdir /lab \
@@ -9363,6 +9385,7 @@ container=(
 )
 if (( rapid_capture )); then
   container+=(--volume "${rapid_image_shell_host}:/lab/qcsd-lab:ro")
+  container+=("${rapid_static_evidence_args[@]}")
   container+=("${rapid_compatibility_args[@]}")
   for rapid_pin_row in "${rapid_public_hosts[@]}"; do
     read -r rapid_pin_host rapid_pin_address <<< "${rapid_pin_row}"

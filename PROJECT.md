@@ -49,7 +49,41 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Current checkpoint, 4 October, 20:10 Sydney AEDT (4 October, 09:10 UTC):**
+**Current checkpoint, 4 October, 20:42 Sydney AEDT (4 October, 09:42 UTC):**
+The supplied-list cohort has **five admitted sites and 0/16,000 accepted formal
+recordings**. Its first 20 candidate decisions are closed: five admissions,
+seven operational deferrals and eight input rejections. Each admission retains
+the complete supplied graph. It establishes ordinary HTTP/3 GET eligibility;
+qualification and full-graph defense viability still require actual evidence.
+The eight historical browser recordings remain separate.
+
+Lab `8907808f` / unchanged Native `5f075d37` is published on Main and the
+desktop branch. Its actual matching runtime passed all 12 installation and
+export operations, reusing the verified client without recompilation. The
+collection and preparation image builds took about 77 and 98 seconds.
+
+A cheap launch inspection found missing read-only transport for the original
+static GET and context evidence. This narrow Lab repair passed **27 focused
+HOST checks**, shell syntax validation, an actual retained Poki proof reopen
+and independent review. It derives authenticated same-absolute mounts for
+preflight, DNS, collection and deep verification; it leaves the original GET
+producer and evidence unchanged. This source includes that repair. Its matched
+runtime installation and first live capture remain pending at this snapshot.
+
+The next live milestone is one ordinary-traffic canary and its ordinary deep
+verification, followed by current named qualification, requested-setting
+readiness and the first registered serial batch. This can begin with one site;
+all 50 sites, all five settings, fitting and the long browser qualification are
+not first-capture prerequisites for this prospective role.
+
+Two admitted graphs cannot fit the old BuFLO budget even before overhead.
+A separate prospective fixed 10,000-cell, 20 ms, 200-second budget and the
+FRONT/BuFLO preparation repairs are held source. They do not become installed
+or physically validated through this Lab transport repair. Their focused
+compilation, matched traffic settings and live repeats remain necessary.
+See the [current evidence locations](docs/EVIDENCE-INDEX.md#current-supplied-list-study).
+
+**Earlier checkpoint, 4 October, 20:10 Sydney AEDT (4 October, 09:10 UTC):**
 The new supplied-list cohort has **four admitted sites and zero formal
 recordings**. Its first ten candidate decisions are closed: four admissions,
 four operational deferrals and two input rejections. These are actual public
