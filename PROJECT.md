@@ -43,7 +43,38 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Current checkpoint, 4 October, 13:23 Sydney AEDT (4 October, 02:23 UTC):**
+**Current checkpoint, 4 October, 14:26 Sydney AEDT (4 October, 03:26 UTC):**
+Formal progress remains **8/16,000 accepted traces from one unique enrolled
+site, Poki**: four ordinary visits on Source 621 and four Tamaraw visits on
+Source 176. All retain the complete **260-resource, four-origin graph**.
+The target remains **50 sites × five settings × 64 accepted visits = 16,000**.
+
+Lab `8ad01036` / Native `9a6cb0e4` is published on main and desktop, and its
+matched FRONT runtime is installed. All twelve runtime operations passed;
+canonical receipt `4374ebc6` binds the new client `aa244fbe`. FRONT staging
+closed 0 in **14.487 seconds**. The prospective amendment, exact plan binding,
+fresh **120-response qualification** and FRONT preflight have also closed 0.
+The full-graph FRONT canary and ordinary deep verification have passed,
+with one accepted diagnostic visit and no failures. Capture took
+**174.251 seconds**, deep verification **8.303 seconds**, and the final
+host operation closed 0 at **14:25:24 Sydney**. FRONT readiness, formal
+planning and its first four-visit formal lane remain pending; this canary
+adds no formal credit. Only the affected FRONT qualification was
+repeated; browser admission, defense fitting and healthy lanes were retained.
+
+Parallel trial 003 passed scheduling, planning and preparation, then its
+launch exited 2 **before either container started**: the host found a foreign
+editable Python package instead of the clean collection source. Both lane
+intents remain preserved. A control fix is private; actual two-container
+capture, gate passage and failed-only recovery remain unproved.
+
+Browser context 019 continuation 002 stopped at its action boundary and
+closed 0 at **13:30:12 Sydney**. Checkpoint 000036 records **14 decisions,
+one duplicate Poki admission and candidate 15 next**. That admission adds no
+second unique study site. Installation, qualification and source tests add
+no accepted traces. See the [current evidence](docs/EVIDENCE-INDEX.md#current-rolling-v6-checkpoint-eight-accepted-traces).
+
+**Earlier checkpoint, 4 October, 13:23 Sydney AEDT (4 October, 02:23 UTC):**
 Formal progress is **8/16,000 accepted traces from one enrolled site, Poki**:
 four ordinary visits on Lab `62105b0b` and four Tamaraw visits on Lab
 `1768858e`. Every visit retains the full **260-resource, four-origin graph**.

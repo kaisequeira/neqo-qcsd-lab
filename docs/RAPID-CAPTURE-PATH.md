@@ -43,7 +43,32 @@ so a later repair can use a new runtime while completed peers retain theirs.
 First dispatch is serial. Successful simultaneous capture is a separate
 remaining operational proof.
 
-**Current checkpoint, 4 October, 13:23 Sydney AEDT (4 October, 02:23 UTC):**
+**Current checkpoint, 4 October, 14:26 Sydney AEDT (4 October, 03:26 UTC):**
+The accepted total remains **8/16,000 from one unique enrolled Poki site**:
+four ordinary and four Tamaraw visits, each with all **260 resources and
+four origins**. New Lab `8ad01036` / Native `9a6cb0e4` is published, and
+its matched FRONT runtime passed all twelve installation operations,
+binding canonical receipt `4374ebc6` and client `aa244fbe`.
+
+FRONT staging, its prospective manifest amendment, exact plan binding,
+fresh affected **120-response qualification** and preflight have closed 0.
+The full-graph FRONT canary and ordinary deep verification have also passed:
+one accepted diagnostic visit, zero failures, capture **174.251 seconds**
+and deep verification **8.303 seconds**. The final host operation closed 0
+at **14:25:24 Sydney**. Readiness publication, formal planning and the first
+four-visit FRONT lane remain pending. This diagnostic adds no formal credit.
+The path keeps the original admission and enrollment, repeats only affected
+qualification, and requires no global browser admission or defense fitting rerun.
+
+Parallel trial 003 passed scheduling, plan and prepare, but launch returned
+2 before containers because the host verifier resolved a foreign editable
+package. Both intents are retained. A private control fix still needs actual
+two-container, gate and failed-only recovery proof. Browser context 019/002
+has stopped cleanly: checkpoint 000036 records **14 decisions, one duplicate
+Poki admission and candidate 15 next**. No new unique enrolled site or formal
+trace was added. See the [current evidence](EVIDENCE-INDEX.md#current-rolling-v6-checkpoint-eight-accepted-traces).
+
+**Earlier checkpoint, 4 October, 13:23 Sydney AEDT (4 October, 02:23 UTC):**
 **Eight of 16,000 formal traces are accepted**, from the same enrolled Poki
 site: four ordinary visits on Source 621 and four Tamaraw visits on Source
 176. Both lanes retain all **260 resources and four origins**, with installed

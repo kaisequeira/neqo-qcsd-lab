@@ -11,7 +11,63 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ### Current rolling v6 checkpoint: eight accepted traces
 
-At **4 October, 13:23 Sydney AEDT (02:23 UTC)**, formal progress is
+At **4 October, 14:26 Sydney AEDT (03:26 UTC)**, formal progress remains
+**8/16,000 accepted traces from one unique enrolled Poki site**. The two
+completed lanes below provide four ordinary and four Tamaraw visits, each
+retaining all 260 resources and four origins. Engineering checks and
+qualification recordings add no formal credit.
+
+Matched FRONT source is public as Lab `8ad01036` / Native `9a6cb0e4`.
+`diagnostic-rehearsals/front-merged-lab-publication-20261004-001/published.json`
+has SHA `e43ebaa1961b9f3f7af345434d807c39823b14d18310bca628d18fb923526f3d`;
+both remote branches match. Installed
+`diagnostic-rehearsals/rapid-v6-front-v2-formal-runtime-20261004-001/canonical-runtime.json`
+has SHA `4374ebc657f01df893558c6494992bf61a482fb8456664c54a17c1be7b58ba27`.
+All twelve actual runtime operations closed 0, binding new client
+`aa244fbec2736f871e7a8dd9f3600eeebe375e64a7ee506642595fb602ab8c2d`.
+
+FRONT activation records are in
+`diagnostic-rehearsals/front-v2-activation-actual-20261004-001`.
+Staging closed 0 at **03:18:38.792460 UTC** in **14.487 seconds**;
+`stage-completed.json` SHA is
+`b86e21c0f0b49c396303c1e302ca5f22d18aafdd1e1fdf28693da97dcbd46b2d`.
+The public amendment and binding closed 0 at **03:19:34.998126** and
+**03:19:55.064838 UTC**. Under
+`diagnostic-rehearsals/rapid-v6-first-formal-poki-20261004-001`,
+`source8ad-front-001/amendment.json` has SHA
+`44cfa773801da515442a132cf843c128026049b4a60d1b48a14ce1c1c41d1244`,
+and `plan.json` has SHA
+`e17c798cf2cf478890ed67753d484f7a618af0c71cb1c46ce4ee8ad13b1d2703`.
+Fresh affected 120-response qualification closed 0 at **03:21:19.307648 UTC**,
+followed by FRONT preflight at **03:21:29.125122 UTC**. The qualification
+receipt SHA is `cb1f2c8ceae4d1d870203514058f721e4ed35b2237860a50ccff9a94d2f5b40e`.
+The full-graph FRONT canary completed with **one accepted, one eligible and
+zero failed diagnostic visits**. Capture closed 0 in **174.251 seconds**;
+ordinary deep verification closed 0 in **8.303 seconds**. Final
+`operator-front-completed.json` closed 0 at **03:25:24.300127 UTC**, after
+**184.798 seconds**, with SHA
+`36b39a237df0ca34f463f2adec7e5a027f0a3c85eb01961f95df8afb0927e98f`.
+Readiness publication, formal planning and the first four-visit FRONT lane
+remain pending; the canary adds no formal credit. No browser admission or
+fitting rerun was required, and healthy lanes keep their original bindings.
+
+`source7b47-parallel-003/operations` retains successful scheduling, plan and
+prepare operations. `launch-completed.json` has SHA
+`8f9513cf1c6e8e6af8ec385b5d8c1d6247fa9d4150b7ab927ae6036887ed0284`:
+return 2 at **03:00:19.951395 UTC**, before containers, because the host
+verifier package differed from the clean collection source. Both CS-BuFLO
+and Tamaraw lane intents remain preserved. The control correction is private;
+actual two-container capture, gate passage and failed-only recovery are unproved.
+
+Browser continuation 019/002 closed 0 at **02:30:12.453825 UTC**;
+`diagnostic-rehearsals/rapid-v13-site019-coordinator-actual-20261004-002/coordinator-actual-completed.json`
+has SHA `93232832e7b99a5781aaf26a6f81cdc5b7db581e4f6bb5213995de86193afcdd`.
+Acquisition checkpoint 000036, recorded at **02:29:36.093598 UTC**, has SHA
+`61e2ce09346c4ec6a0ab7224bc4153890039234b3b3568c66b717de1edf0a0a2`:
+**14 decisions, one duplicate Poki admission and candidate 15 next**.
+This adds no second unique enrolled site. The target remains **50 × five × 64**.
+
+**Earlier snapshot, 4 October, 13:23 Sydney AEDT (02:23 UTC):** formal progress was
 **8/16,000** from **one enrolled Poki site**: four ordinary visits on Source
 621 and four Tamaraw visits on Source 176. All retain the complete
 260-resource/four-origin graph. Engineering tests are separate from these
