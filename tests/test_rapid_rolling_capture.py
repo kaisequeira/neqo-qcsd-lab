@@ -504,7 +504,7 @@ def test_real_failed_only_generation_preserves_completed_peer_and_reopens_origin
     rolling.publish_successor(spec, front, 2, peer_plan)
     peer_spec = replace(spec, plan_receipt=peer_plan)
     peer_proof = _proof(rolling_setup, peer_spec)
-    peer_checked = {"proof": peer_proof, "execution": {"returncode": 0}}
+    peer_checked = {"proof": peer_proof, "execution": {"returncode": 0, "started_at": admission._now()}}
     with pytest.raises(ValueError, match="completed lane"):
         lanes.prepare_lane_intent(peer_spec, rolling_setup.root, front+"-g02", peer_checked, predecessor_intent=peer)
 

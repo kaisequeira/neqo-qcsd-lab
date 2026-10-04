@@ -776,7 +776,168 @@ def _retirement_docker_absence(root: Path) -> list[dict[str, Any]]:
     return executions
 
 
-def retire_lane(spec: CaptureSpec, root: Path, intent_path: Path) -> Path:
+def _prebirth_batch_proof(spec, root, intent_path, authority_path, output, public_started, public_completed):
+    """Reopen one failed official batch before its mandatory durable preflight.
+
+    The launcher hashes identify reviewed Source with a durable preflight and
+    batch initialization before every measured worker birth. An exit status or
+    a missing worker start by itself never supplies this authority.
+    """
+    from . import rapid_formal_parallel as formal
+    from . import rapid_parallel_capture as parallel
+    authority_path = authority_path.absolute()
+    output = _regular_directory(output)
+    value, facts = formal._audit(authority_path)
+    matches = [index for index, fact in enumerate(facts)
+               if fact[0] == spec and fact[1] == root and fact[2] == intent_path]
+    if len(matches) != 1 or not output.is_relative_to(spec.execution_root / "results"):
+        raise ValueError("prebirth retirement does not bind one exact official batch lane")
+    index = matches[0]
+    _, _, _, intent, _, lane, _ = facts[index]
+    if (lane.study_version != 6 or lane.role != "formal" or lane.generation != 1
+        or intent["actuator"] != "parallel-formal-worker"):
+        raise ValueError("prebirth retirement is only an unstarted rolling formal initial generation")
+    source = _read(spec.host_launcher)
+    # These complete historical launchers retain write-once image-preflight
+    # and batch initialization before any worker creation. Do not
+    # infer this order from an arbitrary launcher containing matching strings.
+    reviewed = {
+        "0c1d2ed0364b9159e9acf8d1c45eb4fec2b661ec65d4165e88d5eb03c6466900",
+        "42489d4b66b004787c6a827084f311d6916c21f810ffd9373b2627df76a36d39",
+        "fe6a857e07b0a1376de788c8d15f933a90a6518a3811de843227e5700add5043",
+    }
+    if (_sha(source) not in reviewed or _sha(source) != intent["runtime_identity"]["host_launcher_sha256"]
+        or _sha(_read(spec.base_launcher)) != intent["runtime_identity"]["base_launcher_sha256"]):
+        raise ValueError("prebirth retirement lacks reviewed original Source before worker birth")
+    expected = {"operator-intent.json", "host-start.json", "host-process.json",
+                "host.stdout", "host.stderr", "blocked.json"}
+    if {path.name for path in output.iterdir()} != expected:
+        raise ValueError("prebirth batch has progressed beyond the absent durable preflight boundary")
+    for fact in facts:
+        worker_spec, _, worker_intent, _, _, worker_lane, _ = fact
+        names = {path.name for path in worker_intent.parent.iterdir()}
+        if "retirement.json" in names:
+            previous = _payload(worker_intent.parent / "retirement.json", "qcsd-rapid-v6-observed-prebirth-lane-retirement")
+            retained = previous["proof"]
+            if (previous["scientific_credit"] is not False or retained["batch_root"] != str(output)
+                or retained["campaign_name"] != worker_lane.campaign_name
+                or retained["authority"] != {"path": str(authority_path), "sha256": _sha(_read(authority_path))}
+                or _object(root, retained["intent"]) != _read(worker_intent)):
+                raise ValueError("peer prebirth retirement belongs to another original batch")
+            names.remove("retirement.json")
+        if (names != {"intent.json", "lineage.json"}
+            or (worker_spec.execution_root / "results" / worker_lane.campaign_name).exists()
+            or (worker_spec.execution_root / "results" / worker_lane.campaign_name).is_symlink()):
+            raise ValueError("prebirth batch retains worker birth, result or completion evidence")
+    parallel.verify_operator_closure(authority_path, output, value)
+    start = parallel.load(output / "host-start.json")
+    process = parallel.load(output / "host-process.json")
+    operator = parallel.load(output / "operator-intent.json")
+    blocked = parallel.load(output / "blocked.json")
+    if (process["returncode"] == 0 or process.get("scientific_credit") is not False
+        or any(type(row.get("formal_accepted_trace_count")) is not int
+               or row["formal_accepted_trace_count"] != 0 for row in (process, operator, blocked))
+        or operator.get("scientific_credit") is not False or blocked.get("scientific_credit") is not False
+        or operator["operator_implementation_sha256"] != _sha(_read(spec.module_root / "tools/rapid_parallel_capture.py"))
+        or admission._utc(operator["created_at"]) < admission._utc(intent["started_at"])
+        or admission._utc(start["started_at"]) < admission._utc(operator["created_at"])
+        or admission._utc(blocked["observed_at"]) < admission._utc(process["completed_at"])):
+        raise ValueError("prebirth batch lacks exact closed failed zero-credit operator evidence")
+    public_started, public_completed = public_started.absolute(), public_completed.absolute()
+    if (public_started.parent != public_completed.parent
+        or not public_completed.name.endswith("-completed.json")
+        or public_started.name != public_completed.name.removesuffix("-completed.json") + "-started.json"):
+        raise ValueError("prebirth public closure paths do not identify one recorded invocation")
+    prefix = public_completed.name.removesuffix("-completed.json")
+    public_paths = {"started": public_started, "completed": public_completed,
+                    "stdout": public_completed.parent / (prefix + ".stdout.log"),
+                    "stderr": public_completed.parent / (prefix + ".stderr.log")}
+    before, after = _load(_read(public_started)), _load(_read(public_completed))
+    argv = before.get("command")
+    if isinstance(argv, list) and argv[:2] == ["env", "PYTHONDONTWRITEBYTECODE=1"]:
+        argv = argv[2:]
+    if (not isinstance(argv, list) or len(argv) != 9 or not Path(argv[0]).is_absolute()
+        or argv[1:] != ["-I", "-B", str(spec.module_root / "tools/rapid_parallel_capture.py"),
+                           "launch", "--authority", str(authority_path), "--output", str(output)]
+        or type(after.get("returncode")) is not int or after["returncode"] == 0
+        or admission._utc(before["started_at"]) > admission._utc(start["started_at"])
+        or admission._utc(after["completed_at"]) < admission._utc(process["completed_at"])
+        or admission._utc(after["completed_at"]) > admission._utc(_now())
+        or any(after.get(key + "_sha256") != _sha(_read(public_paths[key])) for key in ("stdout", "stderr"))):
+        raise ValueError("prebirth retirement lacks the actual closed public batch invocation")
+    return {"authority": {"path": str(authority_path), "sha256": _sha(_read(authority_path))},
+            "spec": spec.serializable(), "intent": _put_object(root, _read(intent_path)),
+            "campaign_name": lane.campaign_name, "execution_root": str(spec.execution_root),
+            "batch_root": str(output), "worker_index": index, "source_before_worker_birth": _put_object(root, source),
+            "batch_inventory": {name: _put_object(root, _read(output / name)) for name in sorted(expected)},
+            "public_execution": {key: {"path": str(path), "object": _put_object(root, _read(path))}
+                                 for key, path in public_paths.items()}}
+
+
+def _verified_retirement_checks(checks, root, uid):
+    """Reopen the retained actual lifecycle census without new live queries."""
+    if (set(checks) != {"lifecycle_lock", "guardian_processes", "guardian_sockets", "lifecycle_entries", "docker_executions"}
+        or checks["guardian_processes"] != [] or checks["lifecycle_entries"] != [] or len(checks["docker_executions"]) != 2):
+        raise ValueError("retirement does not retain quiescent actual lifecycle observations")
+    lock = checks["lifecycle_lock"]
+    if (set(lock) != {"path", "device", "inode", "uid", "mode", "links", "size"}
+        or lock["path"] != str(LIFECYCLE_LOCK_PARENT / f"qcsd-docker-lifecycle-{uid}.lock")
+        or any(type(lock[key]) is not int for key in ("device", "inode", "uid", "mode", "links", "size"))
+        or lock["uid"] != uid or lock["mode"] != 0o600 or lock["links"] != 1 or lock["size"] != 0):
+        raise ValueError("retirement lacks the actual private lifecycle lock identity")
+    if f"@qcsd-docker-lifecycle-guardian-{uid}".encode() in _object(root, checks["guardian_sockets"]):
+        raise ValueError("retirement retained a live guardian socket")
+    for execution, operation in zip(checks["docker_executions"], (("ps", "--all", "--quiet"), ("network", "ls", "--quiet")), strict=True):
+        command = execution["command"]
+        if (type(execution["returncode"]) is not int or execution["returncode"] != 0 or len(command) != 10
+            or command[:5] != ["/usr/bin/docker", "--host", "unix:///var/run/docker.sock", "--config", command[4]]
+            or command[5:] != [*operation, "--filter", "label=org.qcsd.owner=qcsd-lab"]
+            or _object(root, execution["stdout"]).strip()):
+            raise ValueError("retirement does not prove actual empty owned Docker inventories")
+        _object(root, execution["stderr"])
+
+
+def _retire_prebirth_lane(spec, root, intent_path, authority_path, output, public_started, public_completed):
+    proof = _prebirth_batch_proof(spec, root, intent_path, authority_path, output, public_started, public_completed)
+    start = _load(_object(root, proof["batch_inventory"]["host-start.json"]))
+    retired = {key: _retired_identity(start[key]) for key in ("host", "operator")}
+    with capture_lock(spec.execution_root, lifecycle=True) as descriptor:
+        checks = _retirement_quiescence(root, descriptor)
+        if (proof != _prebirth_batch_proof(spec, root, intent_path, authority_path, output, public_started, public_completed)
+            or retired != {key: _retired_identity(start[key]) for key in retired}):
+            raise ValueError("prebirth batch or process census changed during locked retirement")
+        _verified_retirement_checks(checks, root, start["host"]["uid"])
+        payload = {"proof": proof, "observed_at": _now(), "retired_batch_processes": retired,
+                   "checks": checks, "scientific_credit": False}
+        path = intent_path.parent / "retirement.json"
+        _create(root, path, "qcsd-rapid-v6-observed-prebirth-lane-retirement", payload)
+    return path
+
+
+def _verified_prebirth_retirement(raw, root, intent_raw, campaign_name):
+    value = admission._unpack(raw, "qcsd-rapid-v6-observed-prebirth-lane-retirement")
+    if (set(value) != {"proof", "observed_at", "retired_batch_processes", "checks", "scientific_credit"}
+        or value["scientific_credit"] is not False or set(value["retired_batch_processes"]) != {"host", "operator"}
+        or any(item not in {"absent", "pid-reused", "different-boot", "zombie"}
+               for item in value["retired_batch_processes"].values())):
+        raise ValueError("prebirth retirement fields or actual process dispositions differ")
+    proof = value["proof"]
+    spec = CaptureSpec(**{key: Path(item) if key in PATH_KEYS else item for key, item in proof["spec"].items()})
+    intent_path = root / "lanes" / campaign_name / "intent.json"
+    public = proof["public_execution"]
+    expected = _prebirth_batch_proof(spec, root, intent_path, Path(proof["authority"]["path"]),
+                                    Path(proof["batch_root"]), Path(public["started"]["path"]), Path(public["completed"]["path"]))
+    if (proof != expected or _object(root, proof["intent"]) != intent_raw or proof["campaign_name"] != campaign_name
+        or admission._utc(value["observed_at"]) < admission._utc(_load(_object(root, public["completed"]["object"]))["completed_at"])):
+        raise ValueError("prebirth retirement changed its exact original failed batch proof")
+    start = _load(_object(root, proof["batch_inventory"]["host-start.json"]))
+    _verified_retirement_checks(value["checks"], root, start["host"]["uid"])
+    return {**value, "execution_root": proof["execution_root"], "campaign_name": campaign_name,
+            "actuator": "parallel-formal-worker"}
+
+
+def retire_lane(spec: CaptureSpec, root: Path, intent_path: Path, *, batch_authority=None,
+                batch_output=None, public_started=None, public_completed=None) -> Path:
     """Observe a lost supervisor attempt as retired, granting no completion."""
     root = _regular_directory(root)
     with capture_lock(spec.execution_root):
@@ -786,7 +947,14 @@ def retire_lane(spec: CaptureSpec, root: Path, intent_path: Path) -> Path:
             raise ValueError("attempt already has actual terminal process evidence; retain it and use a fresh successor if incomplete")
         start_path = directory / "host-start.json"
         if not start_path.is_file():
+            references = (batch_authority, batch_output, public_started, public_completed)
+            if any(path is not None for path in references):
+                if any(path is None for path in references):
+                    raise ValueError("prebirth retirement requires all exact batch and public closure references")
+                return _retire_prebirth_lane(spec, root, intent_path, *references)
             raise ValueError("no durable host-start proof; quarantine this physical lane and inspect the pre-exec window; it cannot be retired by declaration")
+        if any(path is not None for path in (batch_authority, batch_output, public_started, public_completed)):
+            raise ValueError("a born worker cannot use prebirth retirement")
         start_raw = _read(start_path)
         start = _validated_host_start(start_raw, _read(intent_path), campaign_name=lane.campaign_name)
         retired = {key: _retired_identity(start[key]) for key in ("host", "supervisor")}
@@ -804,6 +972,8 @@ def retire_lane(spec: CaptureSpec, root: Path, intent_path: Path) -> Path:
 
 
 def _verified_retirement(raw: bytes, root: Path, intent_raw: bytes, campaign_name: str) -> dict[str, Any]:
+    if _load(raw).get("receipt_type") == "qcsd-rapid-v6-observed-prebirth-lane-retirement":
+        return _verified_prebirth_retirement(raw, root, intent_raw, campaign_name)
     if _load(raw).get("receipt_type") == "qcsd-rapid-v5-parallel-worker-retirement":
         from .rapid_formal_parallel import verified_worker_retirement
         return verified_worker_retirement(raw, root, intent_raw, campaign_name)
@@ -818,27 +988,7 @@ def _verified_retirement(raw: bytes, root: Path, intent_raw: bytes, campaign_nam
         raise ValueError("retirement differs from its actual original process start")
     if admission._utc(value["observed_at"]) < admission._utc(start["started_at"]):
         raise ValueError("retirement observation predates the actual start")
-    checks = value["checks"]
-    if (set(checks) != {"lifecycle_lock", "guardian_processes", "guardian_sockets", "lifecycle_entries", "docker_executions"}
-        or checks["guardian_processes"] != [] or checks["lifecycle_entries"] != [] or len(checks["docker_executions"]) != 2):
-        raise ValueError("retirement does not retain quiescent actual lifecycle observations")
-    uid = start["host"]["uid"]
-    lock = checks["lifecycle_lock"]
-    if (set(lock) != {"path", "device", "inode", "uid", "mode", "links", "size"}
-        or lock["path"] != str(LIFECYCLE_LOCK_PARENT / f"qcsd-docker-lifecycle-{uid}.lock")
-        or any(type(lock[key]) is not int for key in ("device", "inode", "uid", "mode", "links", "size"))
-        or lock["uid"] != uid or lock["mode"] != 0o600 or lock["links"] != 1 or lock["size"] != 0):
-        raise ValueError("retirement lacks the actual private lifecycle lock identity")
-    if f"@qcsd-docker-lifecycle-guardian-{uid}".encode() in _object(root, checks["guardian_sockets"]):
-        raise ValueError("retirement retained a live guardian socket")
-    for execution, operation in zip(checks["docker_executions"], (("ps", "--all", "--quiet"), ("network", "ls", "--quiet")), strict=True):
-        command = execution["command"]
-        if (type(execution["returncode"]) is not int or execution["returncode"] != 0 or len(command) != 10
-            or command[:5] != ["/usr/bin/docker", "--host", "unix:///var/run/docker.sock", "--config", command[4]]
-            or command[5:] != [*operation, "--filter", "label=org.qcsd.owner=qcsd-lab"]
-            or _object(root, execution["stdout"]).strip()):
-            raise ValueError("retirement does not prove actual empty owned Docker inventories")
-        _object(root, execution["stderr"])
+    _verified_retirement_checks(value["checks"], root, start["host"]["uid"])
     return value
 
 

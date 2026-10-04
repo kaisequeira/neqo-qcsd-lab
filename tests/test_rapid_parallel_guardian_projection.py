@@ -82,7 +82,7 @@ def test_four_actual_control_edits_preserve_complete_native_science_and_eight_ac
     actual, unchanged = check(before, after), check(before, before)
     assert set(actual["changed_sources"]) == CHANGED
     assert actual["changed_sources"][GUARDIAN]["units"] == ["ready-timeout-diagnostic"]
-    assert actual["changed_sources"][HELPER]["units"] == ["scheduling-v3-lifecycle-first-authority"]
+    assert actual["changed_sources"][HELPER]["units"] == ["scheduling-v4-observed-prebirth-retirement-authority"]
     assert {"lifecycle_inputs", "formal_entry_inputs", "main"} == set(actual["changed_sources"][PARALLEL]["units"])
     assert len(actual["dependency_groups"]["native"]) > 1700
     assert len(actual["acquisition_source_groups"]) == 8

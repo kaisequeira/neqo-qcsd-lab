@@ -134,6 +134,35 @@ do not count toward the study's **16,000 formal traces**. The active rolling
 v6 route does not require all 50 sites or a ten-site shakedown before the next
 ready setting starts capture.
 
+## Recovery when no capture worker was created
+
+Some parallel attempts stopped during host startup after claiming lane names,
+before creating a capture worker. Their lane directories contain an intent
+and lineage, but no worker start record. They need a distinct retirement
+record before the existing generation-two recovery can use those sample
+slots. A host exit code alone does not prove that no worker ran.
+
+The prospective V4 control contract supports this case through the public
+`retire-lane` command, with `--batch-authority`, `--batch-output`,
+`--public-started` and `--public-completed`. It verifies the exact original
+failed batch, its actual invocation and retained logs, and the reviewed
+launcher whose durable preflight precedes worker creation. It rejects a batch
+with preflight, worker, result or completion evidence. Under the existing
+locks it also requires fresh absence of the original host processes, guardian
+sockets, lifecycle ownership and owned Docker containers and networks.
+
+This retirement grants **zero scientific credit**. It preserves the failed
+attempt and allows only the existing successor mechanism to retry its slots.
+Historical V1–V3 contracts and the final 50 × five × 64 accounting retain
+their previous interpretation. The change passed **101 focused and affected
+host checks** on the current Native5f source and independent review. Actual
+retirement of a failed batch remains a separate operation after live capture
+and lifecycle cleanup finish.
+
+- [Retirement implementation](../src/qcsd_lab/rapid_lane_evidence.py)
+- [Public rolling command](../tools/rapid_rolling_capture.py)
+- [Preflight absence and recovery regressions](../tests/test_rapid_prebirth_retirement.py)
+
 ## Source
 
 - [Capture policy validation](../src/qcsd_lab/capture_acceptance_policy.py)

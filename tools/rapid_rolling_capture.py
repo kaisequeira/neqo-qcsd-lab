@@ -92,7 +92,9 @@ def run(args):
         receipt = lanes.launch_lane(spec, root, args.lane, predecessor_intent=args.predecessor_intent)
         return {"receipt": str(receipt), "scientific_credit": "formal-only-if-bound-to-rolling-enrollment"}
     if args.command == "retire-lane":
-        return {"receipt": str(lanes.retire_lane(spec, root, args.intent)), "scientific_credit": False}
+        return {"receipt": str(lanes.retire_lane(spec, root, args.intent,
+            batch_authority=args.batch_authority, batch_output=args.batch_output,
+            public_started=args.public_started, public_completed=args.public_completed)), "scientific_credit": False}
     if args.command == "complete-lane":
         return rolling.check_lane_in_image(spec, root, args.intent, complete=True)
     return rolling.check_lane_in_image(spec, root, args.receipt, complete=False)
@@ -154,6 +156,9 @@ def _parser():
                     item.add_argument("--spec-output", type=Path, required=True)
             else:
                 item.add_argument("--receipt" if name == "verify-lane" else "--intent", type=Path, required=True)
+                if name == "retire-lane":
+                    for flag in ("batch-authority", "batch-output", "public-started", "public-completed"):
+                        item.add_argument("--" + flag, type=Path)
     return parser
 
 
