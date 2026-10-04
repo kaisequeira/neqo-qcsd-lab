@@ -312,14 +312,25 @@ def enroll(root: Path, *, acquisition_root: Path | None = None, count: int = 1) 
     return output
 
 
-def _sites(enrollment: Path, qualifier_spec: Path, workload_root: Path, *, require_current: bool = False) -> tuple[plan.Site, ...]:
+def _sites(enrollment: Path, qualifier_spec: Path, workload_root: Path, *, require_current: bool = False,
+           front_capture_amendment: Mapping[str, Any] | None = None,
+           runtime: Mapping[str, str] | None = None) -> tuple[plan.Site, ...]:
     batch, all_classes = verify_enrollment(enrollment)
-    return _sites_from_enrollment(batch, all_classes, qualifier_spec, workload_root, require_current=require_current)
+    return _sites_from_enrollment(batch, all_classes, qualifier_spec, workload_root, require_current=require_current,
+                                 enrollment=enrollment, runtime=runtime, front_capture_amendment=front_capture_amendment)
 
 
 def _sites_from_enrollment(batch: Mapping[str, Any], all_classes: list[dict[str, Any]],
-                           qualifier_spec: Path, workload_root: Path, *, require_current: bool) -> tuple[plan.Site, ...]:
+                           qualifier_spec: Path, workload_root: Path, *, require_current: bool,
+                           enrollment: Path | None = None, runtime: Mapping[str, str] | None = None,
+                           front_capture_amendment: Mapping[str, Any] | None = None) -> tuple[plan.Site, ...]:
     classes = all_classes[-len(batch["selected_candidate_ids"]):]
+    amendment = None
+    if front_capture_amendment is not None:
+        from .rapid_front_capture_amendment import _validate_for_enrollment
+        if enrollment is None or runtime is None:
+            raise ValueError("FRONT amendment requires this operation's verified enrollment and runtime")
+        amendment = _validate_for_enrollment(_open_ref(front_capture_amendment), enrollment, runtime, batch, all_classes)
     spec = lanes._load(lanes._read(qualifier_spec))
     _keys(spec, {"schema_version", "qualification_sets"}, "rolling qualifiers")
     if type(spec["schema_version"]) is not int or spec["schema_version"] != 1 or not isinstance(spec["qualification_sets"], list) or len(spec["qualification_sets"]) != 1:
@@ -340,14 +351,42 @@ def _sites_from_enrollment(batch: Mapping[str, Any], all_classes: list[dict[str,
         terminal_path = _open_ref(row["terminal"])
         facts = admission.verify_site_terminal(terminal_path, context)
         original, workload = _prepared_workload(context, terminal_path)
-        if lanes._read(workload_root / original.name) != lanes._read(original):
+        if amendment is None and lanes._read(workload_root / original.name) != lanes._read(original):
             raise ValueError("rolling capture pruned or changed an admitted complete workload")
-        sites.append(plan.Site(row["candidate_id"], original.stem, facts["admission"]["prepared_workload_sha256"],
+        digest = (facts["admission"]["prepared_workload_sha256"] if amendment is None
+                  else next(item["capture_manifest"]["sha256"] for item in amendment["workloads"]
+                            if item["candidate_id"] == row["candidate_id"]))
+        sites.append(plan.Site(row["candidate_id"], original.stem, digest,
                                origin(workload["preparation"]["final_url"]), q["qualification_set"], lanes._sha(lanes._read(manifest))))
     validate_named_qualification_set_manifest(lanes._load(lanes._read(manifest)), workload_root=workload_root,
         sidecar_root=sidecars, prefix_spec_root=None, expected_qualification_set=q["qualification_set"],
         expected_workload_ids=[site.workload_id for site in sites], expected_qualification_scope=RESPONSE_ONLY_QUALIFICATION_SCOPE,
         require_current_implementation=require_current)
+    if amendment is not None:
+        expected_source = {**lanes._load(lanes._read(Path(runtime["source_manifest"]))),
+                           "image_digest": runtime["collection_image_digest"]}
+        from datetime import UTC, datetime
+        published = admission._utc(amendment["published_at"]) - datetime(1970, 1, 1, tzinfo=UTC)
+        published_ns = (published.days * 86400 + published.seconds) * 1_000_000_000 + published.microseconds * 1000
+        for site in sites:
+            sidecar = lanes._load(lanes._read(sidecars / (site.workload_id + ".json")))
+            if (sidecar.get("qualification_source") != expected_source
+                or sidecar.get("qualification_image_digest") != runtime["collection_image_digest"]
+                or sidecar.get("implementation_receipt", {}).get("neqo_qcsd_client", {}).get("sha256")
+                   != lanes._sha(lanes._read(Path(runtime["client_binary"])))):
+                raise ValueError("FRONT amendment requires fresh qualification from its bound capture runtime")
+            attempts = sidecar.get("candidate_attempts")
+            if not isinstance(attempts, list) or not attempts:
+                raise ValueError("FRONT amendment requires actual prospective response qualification epochs")
+            for attempt in attempts:
+                epochs = attempt.get("connection_epochs") if isinstance(attempt, dict) else None
+                if not isinstance(epochs, list) or not epochs:
+                    raise ValueError("FRONT amendment requires actual prospective response qualification epochs")
+                for epoch in epochs:
+                    receipt = epoch.get("receipt") if isinstance(epoch, dict) else None
+                    started = receipt.get("started_unix_ns") if isinstance(receipt, dict) else None
+                    if type(started) is not int or started < published_ns:
+                        raise ValueError("FRONT qualification began before its prospective amendment")
     return plan._check_sites(sites, final=True, study_version=6)
 
 
@@ -364,7 +403,8 @@ def _bindings_from_enrollment(enrollment: Path, policy: Mapping[str, Any]) -> di
 
 def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output: Path,
                  *, readiness: Mapping[str, Any], runtime_inputs: Mapping[str, str] | None = None,
-                 scheduling: Mapping[str, str] | None = None) -> Path:
+                 scheduling: Mapping[str, str] | None = None,
+                 front_capture_amendment: Path | None = None) -> Path:
     policy = verify_policy(root)
     batch, _ = verify_enrollment(enrollment)
     runtime = _runtime(dict(runtime_inputs)) if runtime_inputs is not None else policy["runtime"]
@@ -372,6 +412,13 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
         raise ValueError("a rolling runtime successor must retain its declared study data root")
     if _open_ref(batch["policy"]) != root / "policy.json" or not set(readiness) <= set(plan.MODES):
         raise ValueError("rolling plan changed its policy or supplied unknown readiness")
+    amendment_reference, amendment = None, None
+    if front_capture_amendment is not None:
+        from .rapid_front_capture_amendment import validate_amendment
+        if set(readiness) != {"front"}:
+            raise ValueError("FRONT amendment authorizes only a freshly ready FRONT setting")
+        amendment_reference = _ref(front_capture_amendment)
+        amendment = validate_amendment(front_capture_amendment, enrollment=enrollment, runtime=runtime)
     from .rapid_rolling_readiness import validate_canary
     schedule_spec = None
     if scheduling is not None:
@@ -383,11 +430,15 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
             raise ValueError("rolling scheduled plan changes enrollment or qualified inputs")
     for mode, reference in readiness.items():
         if scheduling is None:
-            validate_canary(reference, runtime={key: runtime[key] for key in lanes.RUNTIME_KEYS}, mode=mode)
+            facts = validate_canary(reference, runtime={key: runtime[key] for key in lanes.RUNTIME_KEYS}, mode=mode)
         else:
-            schedule.validate_ready_canary(reference, scheduling, mode=mode, before=admission._now())
+            facts = schedule.validate_ready_canary(reference, scheduling, mode=mode, before=admission._now())
+        if amendment is not None:
+            from .rapid_front_capture_amendment import require_canary
+            require_canary(reference, facts, amendment_reference, amendment)
     workloads, campaigns = Path(runtime["workload_root"]), Path(runtime["campaign_dir"])
-    sites = _sites(enrollment, qualification_spec, workloads)
+    sites = _sites(enrollment, qualification_spec, workloads, runtime=runtime,
+                   front_capture_amendment=amendment_reference)
     planned = plan.plan_lanes(sites, final=True, study_version=6, rolling_batch=batch["ordinal"])
     hashes = {}
     for lane in planned:
@@ -416,6 +467,8 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
                 **runtime, "acquisition_root": batch["admission_root"], "cohort": str(enrollment.absolute()),
                 "qualification_spec": str(qualification_spec.absolute()), "plan_receipt": str(output.absolute())}.items()}),
             declared_at=payload["declared_at"])
+    if amendment_reference is not None:
+        payload["front_capture_amendment"] = amendment_reference
     return _write(output, lanes.PLAN_TYPE, payload)
 
 
@@ -450,12 +503,27 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
     expected_spec = _capture_spec_from_enrollment(root, spec.cohort, spec.qualification_spec, spec.plan_receipt, batch, policy)
     if spec != expected_spec:
         raise ValueError("rolling spec changed frozen runtime, admission or input locations")
-    sites = _sites_from_enrollment(batch, classes, spec.qualification_spec, spec.workload_root, require_current=require_current)
     value = admission._unpack(lanes._read(spec.plan_receipt), lanes.PLAN_TYPE)
-    _keys(value, {"study_version", "cohort_generation", "bindings", "runtime", "runtime_artifacts", "acquisition_provenance_sha256",
+    fields = {"study_version", "cohort_generation", "bindings", "runtime", "runtime_artifacts", "acquisition_provenance_sha256",
                  "qualification_spec_sha256", "sites", "lanes", "planned_trace_count", "readiness",
                  "declared_at", "formal_accepted_trace_count", "scientific_credit"}
-          | ({"scheduling"} if "scheduling" in value else set()), "rolling plan")
+    if "scheduling" in value:
+        fields.add("scheduling")
+    amendment_reference = None
+    if "front_capture_amendment" in value:
+        fields.add("front_capture_amendment")
+        amendment_reference = value["front_capture_amendment"]
+        _open_ref(amendment_reference)  # Explicit null is not the absent-policy branch.
+        from .rapid_front_capture_amendment import _validate_for_enrollment
+        amendment = _validate_for_enrollment(_open_ref(amendment_reference), spec.cohort,
+                     spec.serializable(), batch, classes)
+        if (not isinstance(value.get("readiness"), dict) or set(value["readiness"]) != {"front"}
+            or admission._utc(amendment["published_at"]) > admission._utc(value["declared_at"])):
+            raise ValueError("FRONT plan changed its prospective publication or mode authority")
+    _keys(value, fields, "rolling plan")
+    sites = _sites_from_enrollment(batch, classes, spec.qualification_spec, spec.workload_root,
+               require_current=require_current, enrollment=spec.cohort, runtime=spec.serializable(),
+               front_capture_amendment=amendment_reference)
     if (value["study_version"] != 6 or type(value["study_version"]) is not int
         or value["cohort_generation"] != "rolling-50" or value["bindings"] != _bindings_from_enrollment(spec.cohort, policy)
         or value["sites"] != [asdict(site) for site in sites]
@@ -506,12 +574,20 @@ def require_mode_readiness(spec: lanes.CaptureSpec, lane: plan.Lane, *, before: 
         if (facts.get("client_sha256") != lanes._sha(lanes._read(spec.client_binary))
             or facts.get("traffic_hashes") != {key: digest for key, (_, digest) in lanes.TRAFFIC_FILES.items()}):
             raise ValueError("scheduled setting changed its original client or fixed traffic")
-        return payload["readiness"][lane.mode]
-    facts = validate_canary(payload["readiness"][lane.mode], runtime={key: spec.serializable()[key] for key in lanes.RUNTIME_KEYS}, mode=lane.mode)
-    expected_source = {**lanes._load(lanes._read(spec.source_manifest)), "image_digest": spec.collection_image_digest}
-    if (facts.get("authority_source") != expected_source or facts.get("client_sha256") != lanes._sha(lanes._read(spec.client_binary))
-        or facts.get("traffic_hashes") != {key: digest for key, (_, digest) in lanes.TRAFFIC_FILES.items()}):
-        raise ValueError("rolling setting readiness differs from the independently checked installed Source, client or traffic")
+    else:
+        facts = validate_canary(payload["readiness"][lane.mode], runtime={key: spec.serializable()[key] for key in lanes.RUNTIME_KEYS}, mode=lane.mode)
+        expected_source = {**lanes._load(lanes._read(spec.source_manifest)), "image_digest": spec.collection_image_digest}
+        if (facts.get("authority_source") != expected_source or facts.get("client_sha256") != lanes._sha(lanes._read(spec.client_binary))
+            or facts.get("traffic_hashes") != {key: digest for key, (_, digest) in lanes.TRAFFIC_FILES.items()}):
+            raise ValueError("rolling setting readiness differs from the independently checked installed Source, client or traffic")
+    if "front_capture_amendment" in payload:
+        from .rapid_front_capture_amendment import require_canary, validate_amendment
+        reference = payload["front_capture_amendment"]
+        amendment = validate_amendment(_open_ref(reference), enrollment=spec.cohort,
+                     runtime={key: spec.serializable()[key] for key in RUNTIME_FIELDS})
+        require_canary(payload["readiness"][lane.mode], facts, reference, amendment)
+        if before is not None and admission._utc(amendment["published_at"]) > admission._utc(before):
+            raise ValueError("FRONT amendment was not published before its actual launch")
     publication = facts.get("source_equivalence_published_at")
     if publication is not None and (admission._utc(publication) > admission._utc(payload["declared_at"])
                                   or before is not None and admission._utc(publication) > admission._utc(before)):
@@ -527,6 +603,12 @@ def image_plan_check(spec: lanes.CaptureSpec, runtime: Mapping[str, Any]) -> dic
     own = lanes._read(Path(__file__))
     if own != lanes._read(spec.runtime_source_root / relative) or own != lanes._read(spec.module_root / relative):
         raise ValueError("rolling authority differs from the installed and frozen source")
+    if "front_capture_amendment" in payload:
+        from . import rapid_front_capture_amendment
+        relative = "src/qcsd_lab/rapid_front_capture_amendment.py"
+        own = lanes._read(Path(rapid_front_capture_amendment.__file__))
+        if own != lanes._read(spec.runtime_source_root / relative) or own != lanes._read(spec.module_root / relative):
+            raise ValueError("FRONT amendment authority differs from the installed and frozen source")
     modules = {path.relative_to(spec.module_root).as_posix(): lanes._sha(lanes._read(path))
                for base in (spec.module_root / "src/qcsd_lab", spec.module_root / "tools") for path in sorted(base.glob("*.py"))}
     return {"schema_version": 1, "artifact_type": lanes.IMAGE_PROOF_TYPE,
