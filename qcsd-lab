@@ -1452,18 +1452,18 @@ _qcsd_admission_remove_recovered_root() {
     rm -f -- "${supervisor_root}/container.cid" \
       "${supervisor_root}/run.status" "${supervisor_root}/stdout" \
       "${supervisor_root}/wait.pipe" || return 1
-    sync -f "${supervisor_root}" || return 1
+    _qcsd_fsync_path directory "${supervisor_root}" || return 1
   fi
   if [[ -e "${supervisor_root}/SUPERVISION" ]]; then
     rm -f -- "${supervisor_root}/SUPERVISION" || return 1
-    sync -f "${supervisor_root}" || return 1
+    _qcsd_fsync_path directory "${supervisor_root}" || return 1
   fi
   if [[ -e "${supervisor_root}/RECOVERY" ]]; then
     rm -f -- "${supervisor_root}/RECOVERY" || return 1
-    sync -f "${supervisor_root}" || return 1
+    _qcsd_fsync_path directory "${supervisor_root}" || return 1
   fi
   rmdir -- "${supervisor_root}" || return 1
-  sync -f /tmp
+  _qcsd_fsync_path directory /tmp
 }
 
 _qcsd_admission_root_manifest_sha256() {
@@ -1678,8 +1678,8 @@ reconcile_legacy_stale_docker_supervisors() {
     command -v od >/dev/null 2>&1 &&
     command -v realpath >/dev/null 2>&1 &&
     command -v stat >/dev/null 2>&1 &&
-    command -v sync >/dev/null 2>&1 || {
-    echo "qcsd-lab Docker admission requires grep, od, realpath, stat, and sync" >&2
+    [[ -x /usr/bin/python3 ]] || {
+    echo "qcsd-lab Docker admission requires grep, od, realpath, stat, and Python" >&2
     return 1
   }
   _qcsd_secure_tmp_root || {

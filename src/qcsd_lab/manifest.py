@@ -69,6 +69,7 @@ REPLAY_KEYS = {
     "response_stability",
 }
 PREPARATION_KEYS = {
+    "buflo_kernel_preparation_policy",
     "buflo_incoming_credit_release_policy",
     "tamaraw_capture_policy",
     "front_capture_policy",
@@ -120,6 +121,7 @@ DISCOVERY_EVIDENCE_PREPARATION_KEYS = {
     "discovery_event_audit_sha256",
 }
 LEGACY_OPTIONAL_PREPARATION_KEYS = {
+    "buflo_kernel_preparation_policy",
     "buflo_incoming_credit_release_policy",
     "tamaraw_capture_policy",
     "front_capture_policy",
@@ -339,6 +341,10 @@ def validate_research_preparation(manifest: dict[str, Any], *, workload_id: str)
     if not isinstance(preparation, dict):
         raise ValueError(f"research workload {workload_id!r} {RESEARCH_PREPARATION_REQUIRED}")
 
+    from .supplied_static_capture_amendment import is_amended, validate_preparation
+    if is_amended(preparation):
+        validate_preparation(preparation, manifest["resources"])
+        return
     if "data_role" in preparation:
         from .supplied_static_preparation import validate_static_preparation
         validate_static_preparation(preparation, manifest["resources"])
@@ -476,6 +482,10 @@ def _validate_preparation(
 ) -> None:
     if not isinstance(value, dict):
         raise ValueError("manifest preparation metadata must be an object")
+    from .supplied_static_capture_amendment import is_amended, validate_preparation
+    if is_amended(value):
+        validate_preparation(value, resources)
+        return
     if "data_role" in value:
         from .supplied_static_preparation import validate_static_preparation
         validate_static_preparation(value, resources)
@@ -699,6 +709,8 @@ def _validate_preparation(
         validate_primary_document_identity_evidence(policy_manifest)
     from .capture_acceptance_policy import validate_buflo_preparation_policy
     validate_buflo_preparation_policy(value)
+    from .capture_acceptance_policy import validate_buflo_kernel_preparation_policy
+    validate_buflo_kernel_preparation_policy(value)
     from .capture_acceptance_policy import validate_tamaraw_preparation_policy
     validate_tamaraw_preparation_policy(value)
     from .capture_acceptance_policy import validate_front_preparation_policy

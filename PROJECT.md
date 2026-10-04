@@ -49,7 +49,42 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Current checkpoint, 4 October, 21:20 Sydney AEDT (4 October, 10:20 UTC):**
+**Current checkpoint, 4 October, 22:06 Sydney AEDT (4 October, 11:06 UTC):**
+The supplied-list study has **8/16,000 accepted formal recordings**, across
+two completed four-visit ordinary-traffic lanes at Poki. Both lanes passed
+installed deep verification and independent reopening. All visits retain the
+complete **277-resource graph across three origins**. There is one enrolled
+site and five complete ordinary-GET admissions; the final target remains
+**50 sites × five settings × 64 visits**. Historical browser traces are
+excluded. See the [evidence locations](docs/EVIDENCE-INDEX.md#current-supplied-list-study).
+
+The existing lanes retain their clean **Lab `0730fa6f` / Native `5f075d37`**
+runtime and original acceptance rules. The second public launch closed 0 in
+**526.491 seconds**. These small batches establish a working capture path;
+they do not establish sustained throughput or a full-study completion date.
+
+The prospective FRONT V4, BuFLO V12 and fixed 200-second BuFLO changes now
+pass **26 distinct compiled checks** and independent source review. Earlier
+compile and fixture failures remain preserved. The combined Lab integration
+has **seven passing interaction checks** and successfully reopens both
+existing lanes. Its reviewed 40-path composition retains the original GET
+producers and historical traffic authority. It also replaces relevant
+filesystem-wide lifecycle flushes with guarded file/directory durability
+barriers. Physical performance improvement is still unproved.
+
+This publication supplies the reviewed source; the new release client,
+matched installation and fresh affected-setting qualification/full-graph
+canaries remain necessary. See the [static amendment instructions](docs/SUPPLIED-STATIC-CAPTURE-AMENDMENTS.md)
+and [fixed BuFLO budget](docs/BUFLO-DURATION200.md). Existing accepted lanes
+retain their original source and require no whole-suite restart.
+
+An append-only successor context contains **87 candidates**, preserving all
+73 original entries, their order and the 20 original decisions. Fourteen
+additional complete resource graphs are candidates for fresh GET checks;
+they add no admissions or formal trace credit by themselves. Ordinary GET
+eligibility still does not establish viability under every defense.
+
+**Earlier checkpoint, 4 October, 21:20 Sydney AEDT (4 October, 10:20 UTC):**
 Formal capture has begun for the supplied-list study: **4/16,000 accepted
 recordings**, from the first four ordinary-traffic visits to one enrolled site,
 Poki. All four passed capture, installed ordinary deep verification, lane

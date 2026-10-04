@@ -364,19 +364,24 @@ def enroll(root: Path, *, acquisition_root: Path | None = None, count: int = 1) 
 
 def _sites(enrollment: Path, qualifier_spec: Path, workload_root: Path, *, require_current: bool = False,
            front_capture_amendment: Mapping[str, Any] | None = None,
+           static_capture_amendment: Mapping[str, Any] | None = None,
            runtime: Mapping[str, str] | None = None) -> tuple[plan.Site, ...]:
     batch, all_classes = verify_enrollment(enrollment)
     return _sites_from_enrollment(batch, all_classes, qualifier_spec, workload_root, require_current=require_current,
-                                 enrollment=enrollment, runtime=runtime, front_capture_amendment=front_capture_amendment)
+                                 enrollment=enrollment, runtime=runtime, front_capture_amendment=front_capture_amendment,
+                                 static_capture_amendment=static_capture_amendment)
 
 
 def _sites_from_enrollment(batch: Mapping[str, Any], all_classes: list[dict[str, Any]],
                            qualifier_spec: Path, workload_root: Path, *, require_current: bool,
                            enrollment: Path | None = None, runtime: Mapping[str, str] | None = None,
-                           front_capture_amendment: Mapping[str, Any] | None = None, _context=None) -> tuple[plan.Site, ...]:
+                           front_capture_amendment: Mapping[str, Any] | None = None,
+                           static_capture_amendment: Mapping[str, Any] | None = None, _context=None) -> tuple[plan.Site, ...]:
     classes = all_classes[-len(batch["selected_candidate_ids"]):]
     policy = verify_policy(_open_ref(batch["policy"]).parent)
     amendment = None
+    if front_capture_amendment is not None and static_capture_amendment is not None:
+        raise ValueError("browser and static capture amendments have separate authority")
     if front_capture_amendment is not None:
         if policy["contract"] == STATIC_CONTRACT:
             raise ValueError("static preparation already binds the current FRONT policy; a browser amendment cannot be imported")
@@ -384,6 +389,11 @@ def _sites_from_enrollment(batch: Mapping[str, Any], all_classes: list[dict[str,
         if enrollment is None or runtime is None:
             raise ValueError("FRONT amendment requires this operation's verified enrollment and runtime")
         amendment = _validate_for_enrollment(_open_ref(front_capture_amendment), enrollment, runtime, batch, all_classes)
+    if static_capture_amendment is not None:
+        from .supplied_static_capture_amendment import validate_amendment
+        if policy["contract"] != STATIC_CONTRACT or enrollment is None or runtime is None:
+            raise ValueError("static capture amendment requires its original static enrollment and current runtime")
+        amendment = validate_amendment(_open_ref(static_capture_amendment), enrollment=enrollment, runtime=runtime)
     spec = lanes._load(lanes._read(qualifier_spec))
     _keys(spec, {"schema_version", "qualification_sets"}, "rolling qualifiers")
     if type(spec["schema_version"]) is not int or spec["schema_version"] != 1 or not isinstance(spec["qualification_sets"], list) or len(spec["qualification_sets"]) != 1:
@@ -429,19 +439,19 @@ def _sites_from_enrollment(batch: Mapping[str, Any], all_classes: list[dict[str,
                 or sidecar.get("qualification_image_digest") != runtime["collection_image_digest"]
                 or sidecar.get("implementation_receipt", {}).get("neqo_qcsd_client", {}).get("sha256")
                    != lanes._sha(lanes._read(Path(runtime["client_binary"])))):
-                raise ValueError("FRONT amendment requires fresh qualification from its bound capture runtime")
+                raise ValueError("capture amendment requires fresh qualification from its bound capture runtime")
             attempts = sidecar.get("candidate_attempts")
             if not isinstance(attempts, list) or not attempts:
-                raise ValueError("FRONT amendment requires actual prospective response qualification epochs")
+                raise ValueError("capture amendment requires actual prospective response qualification epochs")
             for attempt in attempts:
                 epochs = attempt.get("connection_epochs") if isinstance(attempt, dict) else None
                 if not isinstance(epochs, list) or not epochs:
-                    raise ValueError("FRONT amendment requires actual prospective response qualification epochs")
+                    raise ValueError("capture amendment requires actual prospective response qualification epochs")
                 for epoch in epochs:
                     receipt = epoch.get("receipt") if isinstance(epoch, dict) else None
                     started = receipt.get("started_unix_ns") if isinstance(receipt, dict) else None
                     if type(started) is not int or started < published_ns:
-                        raise ValueError("FRONT qualification began before its prospective amendment")
+                        raise ValueError("response qualification began before its prospective capture amendment")
     return plan._check_sites(sites, final=True, study_version=6)
 
 
@@ -456,15 +466,17 @@ def _bindings_from_enrollment(enrollment: Path, policy: Mapping[str, Any]) -> di
             "selection_amendment_sha256": policy["admission_identity"]["selection_amendment_sha256"]}
 
 
-def _render_campaign(lane: plan.Lane, sites, policy: Mapping[str, Any]) -> bytes:
+def _render_campaign(lane: plan.Lane, sites, policy: Mapping[str, Any], *, buflo_duration_policy: str | None = None) -> bytes:
     return plan.render_lane_campaign(lane, sites, static_capture_limits=(
-        policy["capture_limits"] if policy["contract"] == STATIC_CONTRACT else None))
+        policy["capture_limits"] if policy["contract"] == STATIC_CONTRACT else None),
+        buflo_duration_policy=buflo_duration_policy)
 
 
 def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output: Path,
                  *, readiness: Mapping[str, Any], runtime_inputs: Mapping[str, str] | None = None,
                  scheduling: Mapping[str, str] | None = None,
-                 front_capture_amendment: Path | None = None) -> Path:
+                 front_capture_amendment: Path | None = None,
+                 static_capture_amendment: Path | None = None) -> Path:
     policy = verify_policy(root)
     batch, _ = verify_enrollment(enrollment)
     runtime = _runtime(dict(runtime_inputs)) if runtime_inputs is not None else policy["runtime"]
@@ -473,12 +485,23 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
     if _open_ref(batch["policy"]) != root / "policy.json" or not set(readiness) <= set(plan.MODES):
         raise ValueError("rolling plan changed its policy or supplied unknown readiness")
     amendment_reference, amendment = None, None
+    static_reference, static_amendment = None, None
+    if front_capture_amendment is not None and static_capture_amendment is not None:
+        raise ValueError("browser and static capture amendments cannot share a plan")
     if front_capture_amendment is not None:
         from .rapid_front_capture_amendment import validate_amendment
         if set(readiness) != {"front"}:
             raise ValueError("FRONT amendment authorizes only a freshly ready FRONT setting")
         amendment_reference = _ref(front_capture_amendment)
         amendment = validate_amendment(front_capture_amendment, enrollment=enrollment, runtime=runtime)
+    if static_capture_amendment is not None:
+        from .supplied_static_capture_amendment import validate_amendment
+        if policy["contract"] != STATIC_CONTRACT or scheduling is not None:
+            raise ValueError("static capture amendment is a serial static preparation authority")
+        static_reference = _ref(static_capture_amendment)
+        static_amendment = validate_amendment(static_capture_amendment, enrollment=enrollment, runtime=runtime)
+        if not readiness or not set(readiness) <= set(static_amendment["modes"]):
+            raise ValueError("static plan requires only its independently ready amended settings")
     from .rapid_rolling_readiness import validate_canary
     schedule_spec = None
     if scheduling is not None:
@@ -496,14 +519,19 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
         if amendment is not None:
             from .rapid_front_capture_amendment import require_canary
             require_canary(reference, facts, amendment_reference, amendment)
+        if static_amendment is not None:
+            from .supplied_static_capture_amendment import require_canary
+            require_canary(reference, facts, static_reference, static_amendment, mode=mode)
     workloads, campaigns = Path(runtime["workload_root"]), Path(runtime["campaign_dir"])
+    from .rapid_capture_traffic import FIELD
+    duration_policy = static_amendment.get(FIELD) if static_amendment is not None else None
     sites = _sites(enrollment, qualification_spec, workloads, runtime=runtime,
-                   front_capture_amendment=amendment_reference)
+                   front_capture_amendment=amendment_reference, static_capture_amendment=static_reference)
     planned = plan.plan_lanes(sites, final=True, study_version=6, rolling_batch=batch["ordinal"])
     hashes = {}
     for lane in planned:
         path = campaigns / f"{lane.campaign_name}.yml"
-        raw = _render_campaign(lane, sites, policy)
+        raw = _render_campaign(lane, sites, policy, buflo_duration_policy=duration_policy)
         if path.exists():
             if lanes._read(path) != raw:
                 raise ValueError("rolling plan cannot replace an earlier campaign")
@@ -529,6 +557,10 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
             declared_at=payload["declared_at"])
     if amendment_reference is not None:
         payload["front_capture_amendment"] = amendment_reference
+    if static_reference is not None:
+        payload["static_capture_amendment"] = static_reference
+        if duration_policy is not None:
+            payload[FIELD] = duration_policy
     if policy["contract"] == STATIC_CONTRACT:
         payload["data_role"] = policy["data_role"]
         payload["capture_limits"] = policy["capture_limits"]
@@ -582,7 +614,7 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
             raise ValueError("static rolling plan changed its scientific data role")
     if "scheduling" in value:
         fields.add("scheduling")
-    amendment_reference = None
+    amendment_reference, static_reference = None, None
     if "front_capture_amendment" in value:
         fields.add("front_capture_amendment")
         amendment_reference = value["front_capture_amendment"]
@@ -593,10 +625,26 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
         if (not isinstance(value.get("readiness"), dict) or set(value["readiness"]) != {"front"}
             or admission._utc(amendment["published_at"]) > admission._utc(value["declared_at"])):
             raise ValueError("FRONT plan changed its prospective publication or mode authority")
+    if "static_capture_amendment" in value:
+        from .supplied_static_capture_amendment import validate_amendment
+        fields.add("static_capture_amendment")
+        static_reference = value["static_capture_amendment"]
+        if policy["contract"] != STATIC_CONTRACT or amendment_reference is not None or "scheduling" in value:
+            raise ValueError("static capture amendment has separate serial authority")
+        amendment = validate_amendment(_open_ref(static_reference), enrollment=spec.cohort, runtime=spec.serializable())
+        if (not isinstance(value.get("readiness"), dict) or not value["readiness"]
+            or not set(value["readiness"]) <= set(amendment["modes"])
+            or admission._utc(amendment["published_at"]) > admission._utc(value["declared_at"])):
+            raise ValueError("static plan changed its prospective publication or per-setting authority")
+        from .rapid_capture_traffic import FIELD, declared
+        if FIELD in value:
+            fields.add(FIELD)
+        if value.get(FIELD) != amendment.get(FIELD) or (FIELD in value and declared(value) is None):
+            raise ValueError("static plan changed its prospective BuFLO duration traffic contract")
     _keys(value, fields, "rolling plan")
     sites = _sites_from_enrollment(batch, classes, spec.qualification_spec, spec.workload_root,
                require_current=require_current, enrollment=spec.cohort, runtime=spec.serializable(),
-               front_capture_amendment=amendment_reference, _context=_context)
+               front_capture_amendment=amendment_reference, static_capture_amendment=static_reference, _context=_context)
     if (value["study_version"] != 6 or type(value["study_version"]) is not int
         or value["cohort_generation"] != "rolling-50" or value["bindings"] != _bindings_from_enrollment(spec.cohort, policy)
         or value["sites"] != [asdict(site) for site in sites]
@@ -623,7 +671,7 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
         expected = (plan.successor_lane(base, row["generation"]),)
     actual = []
     for lane in expected:
-        raw = _render_campaign(lane, sites, policy)
+        raw = _render_campaign(lane, sites, policy, buflo_duration_policy=value.get("buflo_duration_policy"))
         if lanes._read(spec.campaign_dir / f"{lane.campaign_name}.yml") != raw:
             raise ValueError("rolling campaign changed sites, graph, visits or fixed settings")
         actual.append({**asdict(lane), "workload_ids": list(lane.workload_ids), "campaign_sha256": lanes._sha(raw)})
@@ -648,10 +696,11 @@ def require_mode_readiness(spec: lanes.CaptureSpec, lane: plan.Lane, *, before: 
             or facts.get("traffic_hashes") != {key: digest for key, (_, digest) in lanes.TRAFFIC_FILES.items()}):
             raise ValueError("scheduled setting changed its original client or fixed traffic")
     else:
+        from .rapid_capture_traffic import plan_files
         facts = validate_canary(payload["readiness"][lane.mode], runtime={key: spec.serializable()[key] for key in lanes.RUNTIME_KEYS}, mode=lane.mode)
         expected_source = {**lanes._load(lanes._read(spec.source_manifest)), "image_digest": spec.collection_image_digest}
         if (facts.get("authority_source") != expected_source or facts.get("client_sha256") != lanes._sha(lanes._read(spec.client_binary))
-            or facts.get("traffic_hashes") != {key: digest for key, (_, digest) in lanes.TRAFFIC_FILES.items()}):
+            or facts.get("traffic_hashes") != {key: digest for key, (_, digest) in plan_files(payload).items()}):
             raise ValueError("rolling setting readiness differs from the independently checked installed Source, client or traffic")
     if "front_capture_amendment" in payload:
         from .rapid_front_capture_amendment import require_canary, validate_amendment
@@ -661,6 +710,13 @@ def require_mode_readiness(spec: lanes.CaptureSpec, lane: plan.Lane, *, before: 
         require_canary(payload["readiness"][lane.mode], facts, reference, amendment)
         if before is not None and admission._utc(amendment["published_at"]) > admission._utc(before):
             raise ValueError("FRONT amendment was not published before its actual launch")
+    if "static_capture_amendment" in payload:
+        from .supplied_static_capture_amendment import require_canary, validate_amendment
+        reference = payload["static_capture_amendment"]
+        amendment = validate_amendment(_open_ref(reference), enrollment=spec.cohort, runtime=spec.serializable())
+        require_canary(payload["readiness"][lane.mode], facts, reference, amendment, mode=lane.mode)
+        if before is not None and admission._utc(amendment["published_at"]) > admission._utc(before):
+            raise ValueError("static capture amendment was not published before its actual launch")
     publication = facts.get("source_equivalence_published_at")
     if publication is not None and (admission._utc(publication) > admission._utc(payload["declared_at"])
                                   or before is not None and admission._utc(publication) > admission._utc(before)):
@@ -682,6 +738,9 @@ def image_plan_check(spec: lanes.CaptureSpec, runtime: Mapping[str, Any], *, _co
         own = lanes._read(Path(rapid_front_capture_amendment.__file__))
         if own != lanes._read(spec.runtime_source_root / relative) or own != lanes._read(spec.module_root / relative):
             raise ValueError("FRONT amendment authority differs from the installed and frozen source")
+    if "static_capture_amendment" in payload:
+        from .supplied_static_capture_amendment import _sources
+        _sources(spec.serializable(), duration_policy=payload.get("buflo_duration_policy"))
     modules = {path.relative_to(spec.module_root).as_posix(): lanes._sha(lanes._read(path))
                for base in (spec.module_root / "src/qcsd_lab", spec.module_root / "tools") for path in sorted(base.glob("*.py"))}
     return {"schema_version": 1, "artifact_type": lanes.IMAGE_PROOF_TYPE,
@@ -720,7 +779,8 @@ def publish_successor(spec: lanes.CaptureSpec, lane_name: str, generation: int, 
     if base is None or generation != base.generation + 1:
         raise ValueError("rolling recovery must name the immediate failed lane successor")
     lane = plan.successor_lane(base, generation)
-    raw = plan.render_lane_campaign(lane, sites, static_capture_limits=value.get("capture_limits"))
+    raw = plan.render_lane_campaign(lane, sites, static_capture_limits=value.get("capture_limits"),
+                                    buflo_duration_policy=value.get("buflo_duration_policy"))
     admission.durable_create(spec.campaign_dir / f"{lane.campaign_name}.yml", raw)
     value = {**value, "lanes": [{**asdict(lane), "workload_ids": list(lane.workload_ids), "campaign_sha256": lanes._sha(raw)}],
              "planned_trace_count": lane.sample_count, "declared_at": admission._now()}
@@ -819,14 +879,22 @@ def readiness_roots(spec: lanes.CaptureSpec, campaign_name: str, *, _context=Non
     lane = lanes._lane(proof, campaign_name)
     reference = require_mode_readiness(spec, lane, _context=_context)
     from .rapid_rolling_readiness import readiness_mount_roots
+    roots = set(enrollment_roots(spec))
+    if "static_capture_amendment" in payload:
+        from .supplied_static_capture_amendment import validate_amendment, preparation_roots
+        amendment = validate_amendment(_open_ref(payload["static_capture_amendment"]),
+                                      enrollment=spec.cohort, runtime=spec.serializable())
+        for row in amendment["workloads"]:
+            value = lanes._load(lanes._read(_open_ref(row["capture_manifest"])))
+            roots.update(preparation_roots(value["preparation"]))
     if "scheduling" in payload:
         from . import rapid_rolling_schedule as schedule
         capsule = schedule.require_schedule(payload["scheduling"], spec, declared_at=payload["declared_at"], _context=_context)
-        roots = set(enrollment_roots(spec)) | set(schedule.mount_roots(payload["scheduling"], _context=_context))
+        roots.update(schedule.mount_roots(payload["scheduling"], _context=_context))
         roots.update(readiness_mount_roots(reference,
             runtime={key: capsule["base_spec"][key] for key in lanes.RUNTIME_KEYS}, mode=lane.mode, _context=_context))
         return sorted(roots)
-    return sorted(set(enrollment_roots(spec)) | set(readiness_mount_roots(reference,
+    return sorted(roots | set(readiness_mount_roots(reference,
         runtime={key: spec.serializable()[key] for key in lanes.RUNTIME_KEYS}, mode=lane.mode)))
 
 

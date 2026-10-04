@@ -185,7 +185,8 @@ def _check_spec(spec: CaptureSpec) -> None:
         raise ValueError("image base launcher differs from the full clean runtime source")
     _study_profile(spec.execution_root)
     _qualification_layout(spec)
-    for _, (relative, digest) in TRAFFIC_FILES.items():
+    from .rapid_capture_traffic import spec_files
+    for _, (relative, digest) in spec_files(spec).items():
         if _sha(_read(spec.execution_root / relative)) != digest:
             raise ValueError("rapid capture changes a prospectively fixed traffic file")
 
@@ -250,6 +251,9 @@ def executed_image_plan_check(value: Mapping[str, str], *, _context=None) -> dic
     spec = CaptureSpec(**{key: Path(item) if key in PATH_KEYS else item for key, item in value.items()})
     _check_spec(spec)
     runtime = executed_image_runtime_check({key: value[key] for key in RUNTIME_KEYS})
+    from .rapid_capture_traffic import spec_files
+    runtime["traffic_hashes"] = {key: _sha(_read(spec.execution_root / relative))
+                                 for key, (relative, _) in spec_files(spec).items()}
     stored_plan = admission._unpack(_read(spec.plan_receipt), PLAN_TYPE)
     if stored_plan.get("study_version") == 6:
         from . import rapid_rolling_capture as rolling
@@ -395,6 +399,7 @@ def _validate_image_proof(proof: Any, spec: CaptureSpec, *, equivalent_plan: boo
         raise ValueError("executed image proof is malformed or has another image")
     from .chaff_qualification import _validate_implementation_receipt, _validate_source
     source = proof["runtime_source"]
+    from .rapid_capture_traffic import spec_files
     _validate_source(source, spec.collection_image_digest)
     implementation = proof["qualification_implementation"]
     _validate_implementation_receipt(implementation, require_current=False)
@@ -406,7 +411,7 @@ def _validate_image_proof(proof: Any, spec: CaptureSpec, *, equivalent_plan: boo
         or proof["base_launcher_sha256"] != _sha(_read(spec.base_launcher))
         or implementation["source_files"]["qcsd-lab"] != proof["base_launcher_sha256"]
         or proof["host_launcher_sha256"] != _sha(_read(spec.host_launcher))
-        or proof["traffic_hashes"] != {key: digest for key, (_, digest) in TRAFFIC_FILES.items()}):
+        or proof["traffic_hashes"] != {key: digest for key, (_, digest) in spec_files(spec).items()}):
         raise ValueError("executed image proof source, executable or traffic identities differ")
     for relative, digest in implementation["source_files"].items():
         if _sha(_read(spec.runtime_source_root / relative)) != digest:
@@ -467,7 +472,8 @@ def _render_lane_campaign(spec: CaptureSpec, lane: plan.Lane, sites) -> bytes:
         from .supplied_static_preparation import ROLE
         if payload["data_role"] != ROLE:
             raise ValueError("lane rendering changed its declared scientific data role")
-        return plan.render_lane_campaign(lane, sites, static_capture_limits=payload["capture_limits"])
+        return plan.render_lane_campaign(lane, sites, static_capture_limits=payload["capture_limits"],
+                                         buflo_duration_policy=payload.get("buflo_duration_policy"))
     return plan.render_lane_campaign(lane, sites)
 
 
@@ -1099,7 +1105,9 @@ def _lineage_payload(spec: CaptureSpec, lane: plan.Lane, checked: Mapping[str, A
             "study_profile": _study_profile(spec.execution_root),
         }.items()
     }
-    artifacts.update({key: _put_object(root, _read(spec.execution_root / relative)) for key, (relative, _) in TRAFFIC_FILES.items()})
+    from .rapid_capture_traffic import spec_files
+    artifacts.update({key: _put_object(root, _read(spec.execution_root / relative))
+                      for key, (relative, _) in spec_files(spec).items()})
     return {
         "execution_generation": spec.execution_generation, "profile_receipt_sha256": bindings["profile_sha256"],
         "cohort_receipt_sha256": bindings["cohort_sha256"],
@@ -1275,7 +1283,8 @@ def _intent_and_lineage(spec: CaptureSpec, root: Path, intent_path: Path, *, _co
     }
     if any(_json(lineage.get(key)) != _json(value) for key, value in expected_lineage.items()):
         raise ValueError("lineage fields differ from independently reopened image and study identities")
-    if set(lineage["artifacts"]) != set(TRAFFIC_FILES) | {"source_manifest", "client_binary", "base_launcher", "host_launcher", "plan_receipt", "cohort", "study_profile"}:
+    from .rapid_capture_traffic import spec_files
+    if set(lineage["artifacts"]) != set(spec_files(spec)) | {"source_manifest", "client_binary", "base_launcher", "host_launcher", "plan_receipt", "cohort", "study_profile"}:
         raise ValueError("lineage artifact inventory is incomplete or enlarged")
     artifact_hashes = {
         "source_manifest": proof["source_manifest_sha256"], "client_binary": proof["client_sha256"],

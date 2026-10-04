@@ -22,6 +22,9 @@ CAPTURE_POLICY = "rapid-v5-front-bounded-outgoing-padding-omission-1pct-v2"
 WINDOW_CAPTURE_POLICY = "rapid-v5-front-bounded-outgoing-padding-omission-10pct-window-10000us-v3"
 WINDOW_RECEIPT_TYPE = "qcsd-rapid-v6-front-capture-policy-amendment-v2"
 WINDOW_CONTRACT = "front-only-10000us-padding-window-10pct-literal-replacement-with-unchanged-enrolled-application-v2"
+RESERVE_CAPTURE_POLICY = "rapid-v5-front-bounded-outgoing-padding-omission-10pct-window-10000us-reserve-1000us-v4"
+RESERVE_RECEIPT_TYPE = "qcsd-rapid-v6-front-capture-policy-amendment-v3"
+RESERVE_CONTRACT = "front-only-9000us-construction-10000us-socket-1000us-reserve-unchanged-enrolled-application-v3"
 FIELD = "front_capture_policy"
 FIELDS = {"contract", "mode", "preparation_field", "original_policy", "capture_policy",
           "enrollment", "admission_provenance", "runtime_source_manifest", "client_binary",
@@ -40,6 +43,10 @@ def _contract(capture_policy: str) -> tuple[str, dict[str, Any]]:
     if capture_policy == WINDOW_CAPTURE_POLICY:
         return WINDOW_RECEIPT_TYPE, {**EXACT, "contract": WINDOW_CONTRACT,
                                      "capture_policy": WINDOW_CAPTURE_POLICY}
+    if capture_policy == RESERVE_CAPTURE_POLICY:
+        return RESERVE_RECEIPT_TYPE, {**EXACT, "contract": RESERVE_CONTRACT,
+            "capture_policy": RESERVE_CAPTURE_POLICY, "construction_window_us": 9000,
+            "socket_window_us": 10000, "preparation_reserve_us": 1000}
     raise ValueError("FRONT amendment requires an explicit supported capture policy")
 
 
@@ -116,10 +123,11 @@ def _validate_for_enrollment(path: Path, enrollment: Path, runtime: Mapping[str,
     raw = lanes._read(path)
     wrapper = lanes._load(raw)
     receipt_type = wrapper.get("receipt_type") if isinstance(wrapper, Mapping) else None
-    capture_policy = WINDOW_CAPTURE_POLICY if receipt_type == WINDOW_RECEIPT_TYPE else CAPTURE_POLICY
+    capture_policy = (RESERVE_CAPTURE_POLICY if receipt_type == RESERVE_RECEIPT_TYPE
+                      else WINDOW_CAPTURE_POLICY if receipt_type == WINDOW_RECEIPT_TYPE else CAPTURE_POLICY)
     expected_type, exact = _contract(capture_policy)
     value = admission._unpack(raw, expected_type)
-    rolling._keys(value, FIELDS, "FRONT amendment")
+    rolling._keys(value, FIELDS | set(exact), "FRONT amendment")
     if any(type(value[key]) is not type(expected) or value[key] != expected for key, expected in exact.items()):
         raise ValueError("FRONT amendment changes its closed prospective contract")
     original_policy = admission._unpack(lanes._read(policy_root / "policy.json"), rolling.POLICY_TYPE)

@@ -1,5 +1,6 @@
 """Source-bound prospective capture policies; historical defaults stay strict."""
 import csv
+from copy import deepcopy
 import json
 from collections.abc import Mapping
 from pathlib import Path
@@ -8,6 +9,8 @@ from typing import Any
 POLICY = "rapid-v5-half-period-10000us-v1"
 ACK_START_POLICY = "rapid-v5-half-period-10000us-ack-start-v2"
 FIELD = "buflo_incoming_credit_release_policy"
+BUFLO_KERNEL_PREPARATION_FIELD = "buflo_kernel_preparation_policy"
+BUFLO_KERNEL_PREPARATION_POLICY = "rapid-v6-buflo-kernel-preparation-cutoff-release-plus-4000us-reserve-1000us-v1"
 TAMARAW_FIELD = "tamaraw_capture_policy"
 TAMARAW_POLICY = "rapid-v5-tamaraw-owned-retry-outgoing-10000us-v1"
 TAMARAW_CREDIT_SEMANTICS = "explicit-physical-ownership-with-pending-retry-v1"
@@ -15,6 +18,7 @@ FRONT_FIELD = "front_capture_policy"
 FRONT_POLICY = "rapid-v5-front-bounded-outgoing-congestion-omission-1pct-v1"
 FRONT_PADDING_POLICY = "rapid-v5-front-bounded-outgoing-padding-omission-1pct-v2"
 FRONT_WINDOW_POLICY = "rapid-v5-front-bounded-outgoing-padding-omission-10pct-window-10000us-v3"
+FRONT_RESERVE_POLICY = "rapid-v5-front-bounded-outgoing-padding-omission-10pct-window-10000us-reserve-1000us-v4"
 TERMINAL_PRIMARY_FIELD = "terminal_primary_partial_cell_policy"
 TERMINAL_PRIMARY_POLICY = "rapid-v5-one-owned-terminal-primary-partial-incoming-cell-v1"
 TERMINAL_PRIMARY_PROOF_FIELD = "terminal_primary_partial_cell"
@@ -25,6 +29,72 @@ _STARTUP_IDENTIFIERS = ("ready_endpoint", "ready_stream", "ready_resource_id", "
 _STARTUP_NULLABLE = (*_STARTUP_IDENTIFIERS, "armed_at_us", "ready_at_us",
                      "request_stream_final_size", "ack_observed_at_us", "eligible_exact_capacity_bytes")
 _U64_MAX = 2**64 - 1
+
+
+def validate_buflo_kernel_preparation_policy(preparation: Mapping[str, Any]) -> str | None:
+    """Opt into preparation reserve without changing physical traffic deadlines."""
+    if BUFLO_KERNEL_PREPARATION_FIELD not in preparation:
+        return None
+    if (type(preparation[BUFLO_KERNEL_PREPARATION_FIELD]) is not str
+        or preparation[BUFLO_KERNEL_PREPARATION_FIELD] != BUFLO_KERNEL_PREPARATION_POLICY
+        or preparation.get(FIELD) != ACK_START_POLICY
+        or validate_buflo_preparation_policy(preparation) != ACK_START_POLICY):
+        raise ValueError("BuFLO kernel preparation reserve requires the explicit ACK-start rapid contract")
+    return BUFLO_KERNEL_PREPARATION_POLICY
+
+
+def apply_buflo_kernel_preparation_policy(manifest: Mapping[str, Any], *, policy: str) -> dict[str, Any]:
+    """Derive a fresh opt-in before hashing and qualification; never rewrite evidence."""
+    if type(policy) is not str or policy != BUFLO_KERNEL_PREPARATION_POLICY:
+        raise ValueError("BuFLO kernel preparation requires an explicit supported policy")
+    preparation = manifest.get("preparation")
+    if (not isinstance(preparation, Mapping) or BUFLO_KERNEL_PREPARATION_FIELD in preparation
+        or not isinstance(manifest.get("resources"), list) or not manifest["resources"]):
+        raise ValueError("BuFLO kernel preparation requires a fresh complete prepared graph")
+    result = deepcopy(dict(manifest))
+    result["preparation"] = deepcopy(dict(preparation))
+    result["preparation"][BUFLO_KERNEL_PREPARATION_FIELD] = policy
+    validate_buflo_kernel_preparation_policy(result["preparation"])
+    from .manifest import validate_manifest
+    validate_manifest(result)
+    return result
+
+
+def validate_buflo_kernel_preparation_marker(marker: Any) -> Mapping[str, Any]:
+    expected = {"schema_version": 1, "source": "bound-preparation-v1",
+        "policy": BUFLO_KERNEL_PREPARATION_POLICY, "period_us": 20_000,
+        "cell_bytes": 1_200, "nominal_selection_lead_us": 5_000,
+        "rolling_preparation_after_release_us": 4_000, "outgoing_physical_window_us": 5_000,
+        "preparation_reserve_us": 1_000, "tick_zero_before_release": True,
+        "allow_omissions": False, "paper_equivalent": False, "scientific_credit": False}
+    if not isinstance(marker, Mapping) or not _exact_json(marker, expected):
+        raise ValueError("invalid source-bound BuFLO kernel preparation reserve marker")
+    return marker
+
+
+def validate_buflo_kernel_preparation_source_binding(prepared: Mapping[str, Any], run: Mapping[str, Any]) -> None:
+    preparation = prepared.get("preparation", {})
+    declared = validate_buflo_kernel_preparation_policy(preparation) if isinstance(preparation, Mapping) else None
+    resolved = run.get("resolved_configuration")
+    defense = resolved.get("defense") if isinstance(resolved, Mapping) else None
+    buflo = isinstance(defense, Mapping) and defense.get("kind") == "buflo"
+    wakeups = run.get("runner_wakeup_metrics")
+    raw = wakeups.get("buflo_kernel_tx") if isinstance(wakeups, Mapping) else None
+    new_raw = isinstance(raw, Mapping) and raw.get("schema_version") == 12
+    if BUFLO_KERNEL_PREPARATION_FIELD in run:
+        if declared is None or not buflo:
+            raise ValueError("native BuFLO preparation reserve lacks matching prepared source")
+        marker = validate_buflo_kernel_preparation_marker(run[BUFLO_KERNEL_PREPARATION_FIELD])
+        incoming = run.get(FIELD)
+        if (not new_raw or type(wakeups.get("schema_version")) is not int or wakeups["schema_version"] != 21
+            or not _exact_json(raw.get("preparation_policy"), marker)
+            or not isinstance(incoming, Mapping) or incoming.get("policy") != ACK_START_POLICY
+            or buflo_incoming_release_window(run) != 10_000):
+            raise ValueError("BuFLO reserve run marker differs from its opted-in raw kernel receipt")
+    elif declared is not None and buflo:
+        raise ValueError("prepared BuFLO kernel reserve lacks its native marker")
+    elif new_raw or isinstance(wakeups, Mapping) and wakeups.get("schema_version") == 21:
+        raise ValueError("new BuFLO kernel reserve receipt lacks its prepared and native markers")
 
 
 def _uint(value: Any) -> bool:
@@ -346,7 +416,7 @@ def validate_front_preparation_policy(preparation: Mapping[str, Any]) -> str | N
     if FRONT_FIELD not in preparation:
         return None
     value = preparation[FRONT_FIELD]
-    if (type(value) is not str or value not in {FRONT_POLICY, FRONT_PADDING_POLICY, FRONT_WINDOW_POLICY}
+    if (type(value) is not str or value not in {FRONT_POLICY, FRONT_PADDING_POLICY, FRONT_WINDOW_POLICY, FRONT_RESERVE_POLICY}
         or preparation.get("primary_document_identity_policy") != VARIABLE_PRIMARY_DOCUMENT_BODY_POLICY
         or preparation.get("application_response_policy") != COMPLETED_TERMINAL_HTTP_ERRORS_POLICY
         or preparation.get("qualified_chaff_origin_policy") != APPROVED_ORIGINS_CHAFF_POLICY):
@@ -363,15 +433,19 @@ def validate_front_capture_marker(marker: Any) -> Mapping[str, Any]:
         "packet_size": 1200, "n_client_packets": 900, "n_server_packets": 1200,
         "paper_equivalent": False, "scientific_credit": False,
     }
-    if isinstance(marker, Mapping) and marker.get("policy") in (FRONT_PADDING_POLICY, FRONT_WINDOW_POLICY):
+    if isinstance(marker, Mapping) and marker.get("policy") in (FRONT_PADDING_POLICY, FRONT_WINDOW_POLICY, FRONT_RESERVE_POLICY):
         expected.update(schema_version=2, policy=FRONT_PADDING_POLICY)
         del expected["outgoing_omission_reason"]
         expected["outgoing_omission_reasons"] = ["CongestionLimited", "DeadlineExpired"]
         expected["require_pure_padding"] = True
-        if marker["policy"] == FRONT_WINDOW_POLICY:
+        if marker["policy"] in (FRONT_WINDOW_POLICY, FRONT_RESERVE_POLICY):
             expected.update(schema_version=3, policy=FRONT_WINDOW_POLICY,
                 outgoing_omission_ratio_denominator=10, outgoing_release_window_us=10000,
                 historical_outgoing_release_window_us=5000)
+            if marker["policy"] == FRONT_RESERVE_POLICY:
+                expected.update(schema_version=4, policy=FRONT_RESERVE_POLICY,
+                    outgoing_construction_window_us=9000, outgoing_preparation_reserve_us=1000,
+                    expired_construction_target="not-built-not-sent")
     if (not isinstance(marker, Mapping) or set(marker) != set(expected)
         or any(type(marker[key]) is not type(value) or marker[key] != value
                for key, value in expected.items())):
@@ -591,6 +665,7 @@ def validate_buflo_source_binding(prepared: Mapping[str, Any], run: Mapping[str,
         raise ValueError("native BufLO incoming release policy lacks matching prepared source opt-in")
     elif _startup_present(run):
         raise ValueError("native BuFLO incoming startup lacks matching prepared V2 opt-in")
+    validate_buflo_kernel_preparation_source_binding(prepared, run)
 
 
 def _csv_uint(value: Any) -> int:

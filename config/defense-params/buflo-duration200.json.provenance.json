@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "artifact_type": "qcsd-buflo-study-parameters",
+  "status": "candidate-validation-required",
+  "production_ready": false,
+  "implementation_status": "candidate",
+  "implementation_scope": "client_only_quic",
+  "study_id": "buflo-csbuflo-qcsd-v1",
+  "defense_kind": "buflo",
+  "qcsd_profile": "research-1200",
+  "udp_payload_ceiling": 1200,
+  "paper_variant": "QCSD-BuFLO-udp1200-rho20-tau10",
+  "paper_equivalent": false,
+  "duration_budget_policy": "rapid-v6-fixed-200s-duration-budget-v1",
+  "parameter_semantics": "qcsd-udp1200-adaptation-with-explicit-fixed-200-second-event-budget-and-versioned-terminal-subcell-policy",
+  "terminal_translation_version": 2,
+  "paper_termination_semantics": "minimum-duration-then-continue-only-while-real-data-remains",
+  "live_terminal_semantics": "inclusive-tau-drain-whole-reviewed-chaff-cells-then-client-local-http3-cancel-unallocatable-subcell-tail",
+  "terminal_subcell_policy": "drain_whole_cells_then_client_local_http3_cancel_unallocatable_reviewed_chaff_tail",
+  "terminal_subcell_observer_effect": "typed_stop_sending_and_reset_stream_defense_control_may_follow_the_last_exact_cell",
+  "terminal_parser_safety": "latch-requires-zero-live-parser-lease-bytes-and-zero-pending-application-parser-boundaries;pending-reviewed-chaff-parser-boundaries-are-counted-and-cancelled-with-their-streams",
+  "translation_classification": "expected-client-only-qcsd-adaptation-difference",
+  "expected_difference": "typed-http3-defense-control-may-follow-the-last-exact-buflo-cell",
+  "reference_artifact": "config/reference/buflo-csbuflo/buflo-ieee-sp-2012-v1.json",
+  "reference_receipt": "config/reference/buflo-csbuflo/buflo-ieee-sp-2012-v1.receipt.json",
+  "parameter_file": {
+    "path": "buflo-duration200.json",
+    "sha256": "1c6043157fe9548d426682ab36af33a6da21ba7bbdecc5eb808bee7996691242"
+  },
+  "validation_requirements": [
+    "reference-oracle-comparison",
+    "deterministic-unit-and-property-tests",
+    "docker-netem-controlled-capture",
+    "public-smoke-and-rehearsal",
+    "formal-paired-capture",
+    "client-correctness-and-fidelity",
+    "paper-overhead-comparison"
+  ]
+}

@@ -11,6 +11,46 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ### Current supplied-list study
 
+At **4 October, 22:06 Sydney AEDT (11:06 UTC)**, the supplied-list study has
+**8/16,000 accepted formal recordings**, from two completed ordinary four-visit
+lanes at one enrolled Poki site. Both retain all 277 resources across three
+origins, their original Lab `0730fa6f` / Native `5f075d37` runtime and installed
+deep verification. Five ordinary-GET admissions remain distinct from final
+five-setting viability. Historical browser traces are excluded.
+
+The authoritative reopened counter is
+`diagnostic-rehearsals/supplied-static-first-formal-root-actual-20261004-001/scientific-progress-000002.json`,
+SHA `7622c5aae4c0e0c5bcde37b9194ea68204ba72d865394f221637a8df255fdabf`.
+It binds eight unique class/setting/visit slots and both installed-deep/lane
+closures. The second actual public launch is retained in
+`diagnostic-rehearsals/supplied-static-second-formal-root-actual-20261004-001`;
+it closed 0 in **526.491 seconds**. These observations are not a full-study ETA.
+
+The reviewed new Native source passed **26 distinct compiled checks** across
+five actual operations, all exit 0. Its closure is
+`diagnostic-rehearsals/rapid-v6-front-v4-buflo-v12-duration200-native-root-checks-20261004-006/native-checks-closed.json`,
+SHA `98298a461a54ca8d6923d95435e287e261a74f2c54056a828958d9812a492cf1`.
+Original compile/test failures in attempts 001–003 remain preserved. This
+proves focused compilation, not a release client, installation or live canary.
+
+The Lab's reviewed 40-path static/BuFLO-duration/scoped-fsync composition is
+`diagnostic-rehearsals/static-buflo-duration200-fsync-composition-host-checks-20261004-002/source-closure-final.json`,
+SHA `a31d6906f1fcd5fd907cc282ba809ae2c053d763ed2fb4a0d4aefc0dbca3ae80`.
+Seven interaction checks passed and both original four-visit lanes reopened
+successfully. The original GET producers and historical traffic authority
+are unchanged. New source publication and matching installation precede fresh
+affected-setting qualification/canaries; no new scientific credit comes from
+these HOST checks. Real throughput improvement remains unmeasured.
+
+The append-only 87-candidate context is
+`diagnostic-rehearsals/supplied-static87-context-20261004-002`, with actual
+initialization in `diagnostic-rehearsals/supplied-static87-context-root-actual-20261004-002`.
+It retains the original 73 candidates, 20 decisions and measurement identity.
+Fourteen appended resource graphs are unassessed; context initialization
+adds zero GET admissions and zero formal traces.
+
+#### Earlier first-capture checkpoint
+
 At **4 October, 21:20 Sydney AEDT (10:20 UTC)**, formal capture has begun:
 **4/16,000 accepted recordings**, all ordinary traffic from one enrolled Poki
 site. Five sites are admitted from the sealed first 20 decisions: five admitted,

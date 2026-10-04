@@ -36,18 +36,24 @@ def manifest_roots(manifest: Mapping[str, Any]) -> list[Path]:
     """Return no new mounts for browser data; authenticate every static root."""
     from . import supplied_static_admission as admission
     from . import supplied_static_preparation as preparation
+    from . import supplied_static_capture_amendment as amendment
 
     declared = manifest.get("preparation")
     if not isinstance(declared, Mapping) or "data_role" not in declared:
         return []
-    if not preparation.is_static(declared):
+    if amendment.is_amended(declared):
+        proof = amendment.validate_preparation(declared, manifest["resources"])
+        roots = set(amendment.preparation_roots(declared))
+    elif preparation.is_static(declared):
+        proof = preparation.validate_static_preparation(declared, manifest["resources"])
+        roots = set(preparation.preparation_roots(declared))
+    else:
         raise ValueError("static transport encountered an unknown preparation role")
-    proof = preparation.validate_static_preparation(declared, manifest["resources"])
     context_path = preparation.open_reference(proof["context"])
     context = admission.load_context(_path(context_path.parent, directory=True))
     if context_path != context.root / "provenance.json":
         raise ValueError("static GET context is outside its official namespace")
-    roots = set(preparation.preparation_roots(declared)) | {context.root}
+    roots.add(context.root)
     # Successors preserve original immutable context declarations. Bind every
     # ancestor using the existing public context validator, without admitting
     # unrelated later candidates or deriving arbitrary terminal-prefix mounts.

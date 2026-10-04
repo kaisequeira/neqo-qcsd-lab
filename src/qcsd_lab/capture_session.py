@@ -54,6 +54,7 @@ from .fidelity import (
     _runner_wakeup_v18_valid,
     _runner_wakeup_v19_valid,
     _runner_wakeup_v20_valid,
+    _runner_wakeup_v21_valid,
     new_defense_terminal_receipts_valid,
     reconcile_direct_runner_artifacts,
     terminal_evidence_render_receipt_valid,
@@ -1717,7 +1718,7 @@ def _process_scheduler_bound_to_run_valid(
         }
         and defense_kind == "buflo"
         and isinstance(wakeups, Mapping)
-        and wakeups.get("schema_version") in {11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
+        and wakeups.get("schema_version") in {11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21}
         and _runner_wakeup_metrics_valid(wakeups)
         and kernel_tx_runner_receipt_success_valid(raw)
         and kernel_tx_incoming_window_bound_to_run_valid(run)
@@ -1820,6 +1821,8 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
     schema_version = value.get("schema_version")
     if type(schema_version) is not int:
         return False
+    if schema_version == 21:
+        return _runner_wakeup_v21_valid(value)
     if schema_version == 20:
         return _runner_wakeup_v20_valid(value)
     if schema_version == 19:

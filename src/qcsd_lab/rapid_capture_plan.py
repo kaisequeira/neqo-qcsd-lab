@@ -356,7 +356,8 @@ def _check_workload_files(sites: Sequence[Site], workload_root: Path) -> None:
         )
 
 
-def render_lane_campaign(lane: Lane, sites: Sequence[Site], *, static_capture_limits: Mapping[str, Any] | None = None) -> bytes:
+def render_lane_campaign(lane: Lane, sites: Sequence[Site], *, static_capture_limits: Mapping[str, Any] | None = None,
+                         buflo_duration_policy: str | None = None) -> bytes:
     """Render one deterministic schema-one campaign without granting authority."""
 
     if lane.role not in {"formal", "diagnostic"}:
@@ -422,6 +423,14 @@ def render_lane_campaign(lane: Lane, sites: Sequence[Site], *, static_capture_li
                                                              static_capture_limits.get("capture_megabytes"))):
             raise ValueError("static capture may change only its declared response/recording budgets")
         document["limits"] = dict(static_capture_limits)
+    if buflo_duration_policy is not None:
+        from .buflo_duration_budget import POLICY, PARAMETER_PATH, capture_limits
+        if (type(buflo_duration_policy) is not str or buflo_duration_policy != POLICY
+            or lane.study_version != 6 or lane.role != "formal" or static_capture_limits is None):
+            raise ValueError("BuFLO200 campaign requires its prospective static formal contract")
+        if lane.mode == "buflo":
+            document["defenses"][0]["parameters"] = "../defense-params/" + Path(PARAMETER_PATH).name
+        document["limits"] = capture_limits(lane.mode, document["limits"], policy=buflo_duration_policy)
     if lane.qualification_set is not None:
         document["chaff_qualification_set"] = lane.qualification_set
     return yaml.safe_dump(document, sort_keys=False, width=100).encode("utf-8")

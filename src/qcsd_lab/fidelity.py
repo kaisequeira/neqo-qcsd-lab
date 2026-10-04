@@ -17,6 +17,9 @@ from .kernel_tx import (
     KERNEL_TX_HISTORICAL_RUNNER_SEMANTICS,
     KERNEL_TX_PROTECTED_SELECTION_WAIT_SEMANTICS,
     KERNEL_TX_PROTECTED_SELECTION_WAIT_V2_SEMANTICS,
+    KERNEL_TX_RESERVE_SELECTION_WAIT_SEMANTICS,
+    KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION,
+    KERNEL_TX_RESERVE_TX_SEMANTICS,
     KERNEL_TX_RUNNER_V10_SCHEMA_VERSION,
     KERNEL_TX_RUNNER_V10_SEMANTICS,
     KERNEL_TX_RUNNER_V8_SCHEMA_VERSION,
@@ -1858,10 +1861,37 @@ def _schedule_realization_metrics_from_path(path: Path) -> dict[str, Any]:
         "target_times_us_by_direction": target_times,
         "scheduled_sizes_by_direction": scheduled_sizes,
         **_incoming_credit_release_metrics(path, rows),
+        **_buflo_duration_budget_metrics(path),
         **_tamaraw_capture_metrics(path, rows),
         **_front_capture_metrics(path, rows),
         **_terminal_primary_partial_metrics(path, rows),
     }
+
+
+def _buflo_duration_budget_metrics(schedule_path: Path) -> dict[str, Any]:
+    """Join the optional budget to frozen parameter bytes, never infer it from counts."""
+    artifact = schedule_path.with_name("defense-parameters.json")
+    parsed = load_json(artifact) if artifact.is_file() else None
+    opted_in = isinstance(parsed, Mapping) and parsed.get("duration_budget_policy") is not None
+    run_path = schedule_path.with_name("run.json")
+    if not run_path.is_file():
+        if opted_in:
+            raise ValueError("fixed BuFLO duration parameters have no actual Native run receipt")
+        return {}
+    run = load_json(run_path)
+    parameter = run.get("defense_parameters") if isinstance(run, Mapping) else None
+    if not isinstance(parameter, Mapping):
+        if opted_in:
+            raise ValueError("fixed BuFLO duration parameters have no actual Native parameter receipt")
+        return {}
+    from .buflo_duration_budget import RUN_FIELD, validate_native_receipt
+    if RUN_FIELD not in parameter:
+        if opted_in:
+            raise ValueError("fixed BuFLO duration parameters have no actual Native budget receipt")
+        return {}
+    if not artifact.is_file() or artifact.is_symlink():
+        raise ValueError("Native BuFLO duration receipt has no frozen regular parameter artifact")
+    return validate_native_receipt(run, artifact.read_bytes())
 
 
 def _terminal_primary_partial_metrics(schedule_path: Path, rows: list[dict[str, str]]) -> dict[str, Any]:
@@ -1906,7 +1936,7 @@ def _terminal_primary_partial_allowance(defense: str, schedule: Mapping[str, Any
 
 def _front_capture_metrics(schedule_path: Path, rows: list[dict[str, str]]) -> dict[str, Any]:
     """Keep raw misses; prove the exact prospective outgoing omission policy."""
-    from .capture_acceptance_policy import FRONT_FIELD, FRONT_PADDING_POLICY, FRONT_WINDOW_POLICY, validate_front_capture_run
+    from .capture_acceptance_policy import FRONT_FIELD, FRONT_PADDING_POLICY, FRONT_WINDOW_POLICY, FRONT_RESERVE_POLICY, validate_front_capture_run
     try:
         run = load_json(schedule_path.with_name("run.json"))
     except (OSError, ValueError):
@@ -1914,7 +1944,8 @@ def _front_capture_metrics(schedule_path: Path, rows: list[dict[str, str]]) -> d
     if not isinstance(run, Mapping) or FRONT_FIELD not in run:
         return {}
     marker = validate_front_capture_run(run)
-    padding_policy = marker["policy"] in {FRONT_PADDING_POLICY, FRONT_WINDOW_POLICY}
+    padding_policy = marker["policy"] in {FRONT_PADDING_POLICY, FRONT_WINDOW_POLICY, FRONT_RESERVE_POLICY}
+    reserve_policy = marker["policy"] == FRONT_RESERVE_POLICY
     outgoing_window_us = marker.get("outgoing_release_window_us", 5000)
     allowed_reasons = {"CongestionLimited", "DeadlineExpired"} if padding_policy else {"CongestionLimited"}
     start_ns = run.get("defense_start_monotonic_ns")
@@ -1944,7 +1975,13 @@ def _front_capture_metrics(schedule_path: Path, rows: list[dict[str, str]]) -> d
     with events_path.open(newline="", encoding="utf-8") as source:
         events = list(csv.DictReader(source))
     padding_actions = {}
-    if padding_policy:
+    reserve_windows, preexpired = {}, set()
+    if reserve_policy:
+        from .front_preparation_evidence import validate_windows
+        reserve_windows, preexpired = validate_windows(run, outgoing, omissions, events)
+        padding_actions = {slot: (window["action_us"], window["action"]["deadline_after_us"])
+                           for slot, window in reserve_windows.items() if slot in omissions}
+    if padding_policy and not reserve_policy:
         for event in events:
             if event.get("event") != "action" or event.get("outcome") != "applied":
                 continue
@@ -1989,7 +2026,7 @@ def _front_capture_metrics(schedule_path: Path, rows: list[dict[str, str]]) -> d
             continue
         slot = details.get("slot")
         row = omissions.get(slot) if type(slot) is int else None
-        if row is None or slot in matched_misses:
+        if row is None or slot in matched_misses or slot in preexpired:
             raise ValueError("FRONT omission proof lacks unique matching native miss observations")
         production_ns, sequence = details.get("production_monotonic_ns"), details.get("production_sequence")
         packet = details.get("packet")
@@ -2012,14 +2049,17 @@ def _front_capture_metrics(schedule_path: Path, rows: list[dict[str, str]]) -> d
         if padding_policy:
             action_us, deadline_after_us = padding_actions[slot]
             if (production_ns // 1000 < action_us
-                or (row["miss_reason"] == "DeadlineExpired"
+                or (not reserve_policy and row["miss_reason"] == "DeadlineExpired"
                     # The CSV action time is floored: prove expiry beyond the
                     # entire possible action/deadline interval in nanoseconds.
                     and production_ns < (action_us + deadline_after_us + 1) * 1000)):
                 raise ValueError("FRONT padding miss precedes its applied action or expiry deadline")
+            if (reserve_policy and row["miss_reason"] == "DeadlineExpired"
+                and production_ns < reserve_windows[slot]["construction_deadline_ns"]):
+                raise ValueError("FRONT V4 padding miss precedes its recorded construction deadline")
         matched_misses.add(slot)
         sequences.add(sequence)
-    if matched_misses != set(omissions):
+    if matched_misses | preexpired != set(omissions):
         raise ValueError("FRONT omission proof lacks its actual native miss evidence")
     packets_path = schedule_path.with_name("packets.csv")
     packets = _read_exact_csv(packets_path, RUNNER_PACKET_FIELDS + SCHEDULE_QCSD_FIELDS)
@@ -2040,6 +2080,9 @@ def _front_capture_metrics(schedule_path: Path, rows: list[dict[str, str]]) -> d
         matched.add(slot)
     if not outgoing or matched != set(outgoing) - set(omissions):
         raise ValueError("FRONT omission proof lacks actual outgoing packet handoffs")
+    if reserve_policy:
+        from .front_preparation_evidence import validate_physical_handoffs
+        validate_physical_handoffs(run, reserve_windows, omissions, events, packets)
     metrics = {"front_capture_policy": marker,
             "front_outgoing_scheduled_events": len(outgoing),
             "front_outgoing_congestion_omissions": sum(row["miss_reason"] == "CongestionLimited" for row in omissions.values()),
@@ -2052,19 +2095,25 @@ def _front_capture_metrics(schedule_path: Path, rows: list[dict[str, str]]) -> d
         metrics.update(front_outgoing_padding_omissions=len(omissions),
             front_outgoing_deadline_omissions=sum(row["miss_reason"] == "DeadlineExpired" for row in omissions.values()),
             front_outgoing_padding_action_events_sha256=sha256_file(events_path))
+    if reserve_policy:
+        metrics.update(front_outgoing_pre_registration_omissions=len(preexpired),
+            front_outgoing_preparation_window_events=len(reserve_windows),
+            front_outgoing_preparation_failure_events=0,
+            front_outgoing_physical_window_violations=0,
+            front_preparation_window_events_sha256=sha256_file(events_path))
     return metrics
 
 
 def _front_capture_activation_valid(diagnostics: Mapping[str, Any], schedule: Mapping[str, Any],
                                     resolved: Mapping[str, Any] | None) -> bool:
-    from .capture_acceptance_policy import FRONT_PADDING_POLICY, FRONT_WINDOW_POLICY, validate_front_capture_marker
+    from .capture_acceptance_policy import FRONT_PADDING_POLICY, FRONT_WINDOW_POLICY, FRONT_RESERVE_POLICY, validate_front_capture_marker
     try:
         marker = validate_front_capture_marker(schedule.get("front_capture_policy"))
     except ValueError:
         return False
     count = schedule.get("scheduled_events")
     outgoing, incoming = schedule.get("scheduled_outgoing_events"), schedule.get("scheduled_incoming_events")
-    padding_policy = marker["policy"] in {FRONT_PADDING_POLICY, FRONT_WINDOW_POLICY}
+    padding_policy = marker["policy"] in {FRONT_PADDING_POLICY, FRONT_WINDOW_POLICY, FRONT_RESERVE_POLICY}
     missed = schedule.get("front_outgoing_padding_omissions" if padding_policy else "front_outgoing_congestion_omissions")
     integer_fields = ("scheduled_events", "scheduled_outgoing_events", "scheduled_incoming_events",
         "satisfied_events", "missed_events", "outgoing_size_mismatch_events", "outgoing_size_absolute_error_bytes",
@@ -2099,6 +2148,17 @@ def _front_capture_activation_valid(diagnostics: Mapping[str, Any], schedule: Ma
     hashes = ("front_outgoing_congestion_omission_events_sha256", "front_outgoing_release_packets_sha256")
     if padding_policy:
         hashes += ("front_outgoing_padding_action_events_sha256",)
+    if marker["policy"] == FRONT_RESERVE_POLICY:
+        before_registration = schedule.get("front_outgoing_pre_registration_omissions")
+        if (type(before_registration) is not int or not 0 <= before_registration <= schedule["front_outgoing_deadline_omissions"]
+            or type(schedule.get("front_outgoing_preparation_window_events")) is not int
+            or schedule["front_outgoing_preparation_window_events"] != outgoing
+            or type(schedule.get("front_outgoing_preparation_failure_events")) is not int
+            or schedule["front_outgoing_preparation_failure_events"] != 0
+            or type(schedule.get("front_outgoing_physical_window_violations")) is not int
+            or schedule["front_outgoing_physical_window_violations"] != 0):
+            return False
+        hashes += ("front_preparation_window_events_sha256",)
     for key in hashes:
         value = schedule.get(key)
         if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
@@ -3059,6 +3119,14 @@ RUNNER_WAKEUP_V20_SEMANTICS = (
     "post_veth_and_qdisc_end_state_are_separate_lab_evidence=true"
 )
 RUNNER_WAKEUP_V11_REQUIRED_KEYS = RUNNER_WAKEUP_V10_REQUIRED_KEYS | {"buflo_kernel_tx"}
+RUNNER_WAKEUP_V21_SEMANTICS = (
+    f"{RUNNER_WAKEUP_V10_SEMANTICS}; "
+    "runner_schema21_retains_schema20_layout_for_non_kernel_metrics_and_requires_opted_in_kernel_schema12=true; "
+    "buflo_legacy_exact_release_guard_metrics_are_zero_with_kernel_tx=true; "
+    f"buflo_kernel_tx_raw_semantics={KERNEL_TX_RESERVE_TX_SEMANTICS}; "
+    f"buflo_kernel_protected_selection_wait_semantics={KERNEL_TX_RESERVE_SELECTION_WAIT_SEMANTICS}; "
+    "post_veth_and_qdisc_end_state_are_separate_lab_evidence=true"
+)
 RUNNER_WAKEUP_V12_REQUIRED_KEYS = RUNNER_WAKEUP_V11_REQUIRED_KEYS
 RUNNER_WAKEUP_V13_REQUIRED_KEYS = RUNNER_WAKEUP_V12_REQUIRED_KEYS
 RUNNER_WAKEUP_V14_REQUIRED_KEYS = RUNNER_WAKEUP_V13_REQUIRED_KEYS
@@ -3068,6 +3136,7 @@ RUNNER_WAKEUP_V17_REQUIRED_KEYS = RUNNER_WAKEUP_V16_REQUIRED_KEYS
 RUNNER_WAKEUP_V18_REQUIRED_KEYS = RUNNER_WAKEUP_V17_REQUIRED_KEYS
 RUNNER_WAKEUP_V19_REQUIRED_KEYS = RUNNER_WAKEUP_V18_REQUIRED_KEYS
 RUNNER_WAKEUP_V20_REQUIRED_KEYS = RUNNER_WAKEUP_V19_REQUIRED_KEYS
+RUNNER_WAKEUP_V21_REQUIRED_KEYS = RUNNER_WAKEUP_V20_REQUIRED_KEYS
 
 
 def _runner_wakeup_v10_checked_u64_sum(*values: int) -> int | None:
@@ -4039,18 +4108,18 @@ def new_defense_terminal_receipts_valid(
     ):
         return False
     wakeup_metrics = run["runner_wakeup_metrics"]
-    current_runner_schemas = {17, 18, 19, 20} if defense_kind == "buflo" else {10}
+    current_runner_schemas = {17, 18, 19, 20, 21} if defense_kind == "buflo" else {10}
     if require_current_schema and wakeup_metrics["schema_version"] not in current_runner_schemas:
         return False
     if (
-        wakeup_metrics["schema_version"] in {11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
+        wakeup_metrics["schema_version"] in {11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21}
         and defense_kind != "buflo"
         and wakeup_metrics["buflo_kernel_tx"] is not None
     ):
         return False
     if (
         wakeup_metrics["schema_version"]
-        in {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
+        in {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21}
         and defense_kind != "buflo"
         and any(
             wakeup_metrics[key]
@@ -4066,7 +4135,7 @@ def new_defense_terminal_receipts_valid(
         return False
     if (
         wakeup_metrics["schema_version"]
-        in {5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
+        in {5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21}
         and defense_kind != "buflo"
         and any(
             wakeup_metrics[key]
@@ -4080,7 +4149,7 @@ def new_defense_terminal_receipts_valid(
         return False
     if (
         wakeup_metrics["schema_version"]
-        in {4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
+        in {4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21}
         and defense_kind != "cs_buflo"
         and any(
             wakeup_metrics[key]
@@ -4135,7 +4204,7 @@ def new_defense_terminal_receipts_valid(
         ):
             return False
     if (
-        wakeup_metrics["schema_version"] in {11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
+        wakeup_metrics["schema_version"] in {11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21}
         and defense_kind == "buflo"
     ):
         scheduled_outgoing = diagnostics.get("buflo_scheduled_outgoing_cells")
@@ -6825,6 +6894,25 @@ def _runner_wakeup_v20_valid(value: Any) -> bool:
     )
 
 
+def _runner_wakeup_v21_valid(value: Any) -> bool:
+    """Validate opted-in preparation reserve with unchanged physical evidence."""
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != RUNNER_WAKEUP_V21_REQUIRED_KEYS
+        or type(value.get("schema_version")) is not int or value["schema_version"] != 21
+        or value.get("semantics") != RUNNER_WAKEUP_V21_SEMANTICS
+        or not _runner_wakeup_v10_valid(_runner_wakeup_v11_project_schema_ten(value))
+    ):
+        return False
+    kernel_tx = value.get("buflo_kernel_tx")
+    return bool(
+        isinstance(kernel_tx, Mapping)
+        and kernel_tx.get("schema_version") == KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION == 12
+        and kernel_tx_runner_receipt_valid(kernel_tx)
+        and _runner_wakeup_v11_legacy_buflo_metrics_neutral(value)
+    )
+
+
 def _runner_wakeup_v7_valid(value: Any) -> bool:
     """Validate historical schema-seven exact-release timing evidence."""
 
@@ -6860,6 +6948,8 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
     schema_version = value.get("schema_version")
     if type(schema_version) is not int:
         return False
+    if schema_version == 21:
+        return _runner_wakeup_v21_valid(value)
     if schema_version == 20:
         return _runner_wakeup_v20_valid(value)
     if schema_version == 19:
@@ -7150,12 +7240,19 @@ def _buflo_schedule_matches_canonical_parameters(schedule: Mapping[str, Any], *,
         return False
     try:
         startup = _buflo_metric_startup(schedule)
+        from .buflo_duration_budget import schedule_bounds
+        maximum_events, duration_budget_us = schedule_bounds(schedule)
     except ValueError:
         return False
     total = 0
     for direction in ("outgoing", "incoming"):
         directional_targets = targets.get(direction)
         directional_sizes = sizes.get(direction)
+        if "buflo_duration_budget" in schedule and isinstance(directional_targets, list) and any(
+            type(target) is not int or target < 0 or target >= duration_budget_us
+            for target in directional_targets
+        ):
+            return False
         ordered_targets = (
             sorted(directional_targets) if isinstance(directional_targets, list) else []
         )
@@ -7164,7 +7261,7 @@ def _buflo_schedule_matches_canonical_parameters(schedule: Mapping[str, Any], *,
             or not isinstance(directional_sizes, list)
             or not directional_targets
             or len(directional_targets) != len(directional_sizes)
-            or len(directional_targets) > 6_000
+            or len(directional_targets) > maximum_events
             # Incoming opportunities are serialized when their advertised
             # credit is consumed, not when the target was scheduled.  Under a
             # bottleneck, independently outstanding credits can therefore
@@ -7186,7 +7283,7 @@ def _buflo_schedule_matches_canonical_parameters(schedule: Mapping[str, Any], *,
         or max(targets["outgoing"]) != max(targets["incoming"])
     ):
         return False
-    return total <= 12_000 and terminal == ({"satisfied": total - 1, "missed": 1} if allowed_partial_cells else {"satisfied": total})
+    return total <= maximum_events * 2 and terminal == ({"satisfied": total - 1, "missed": 1} if allowed_partial_cells else {"satisfied": total})
 
 
 def _cs_buflo_fidelity_eligible(

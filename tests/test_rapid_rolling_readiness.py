@@ -403,6 +403,32 @@ def test_equivalence_detects_unlisted_actual_native_before_group_comparison(equi
         eqcheck(equivalent)
 
 
+@pytest.mark.parametrize("name", ["supplied_static_capture_amendment", "front_preparation_evidence", "static_evidence_transport"])
+def test_amended_equivalence_adds_new_helpers_without_reinterpreting_old_groups(equivalent, name):
+    from qcsd_lab.supplied_static_capture_amendment import SOURCE_FILES
+    old_root = Path(equivalent.canary.runtime["runtime_source_root"])
+    new_root = equivalent.current_root
+    for root in (old_root, new_root):
+        for relative in SOURCE_FILES.values():
+            if not (root / relative).exists():
+                write(root / relative, (PROJECT / relative).read_bytes())
+    old_inventory, new_inventory = readiness._inventory(old_root), readiness._inventory(new_root)
+    historical, shell = readiness._groups(old_root, old_inventory)
+    amended, amended_shell = readiness._groups(old_root, old_inventory, amended_static=True)
+    assert amended_shell == shell
+    assert {key: value for key, value in amended.items() if key != "static-capture-amendment-v1"} == historical
+    assert set(amended["static-capture-amendment-v1"]) == set(SOURCE_FILES.values())
+    current, _ = readiness._groups(new_root, new_inventory, amended_static=True)
+    assert current == amended
+    changed = new_root / SOURCE_FILES[name]
+    write(changed, changed.read_bytes() + b"\n# changed prospective amended verifier\n")
+    current, _ = readiness._groups(new_root, readiness._inventory(new_root), amended_static=True)
+    assert current["static-capture-amendment-v1"] != amended["static-capture-amendment-v1"]
+    # In particular these extra modules do not alter any historical group.
+    historical_current, _ = readiness._groups(new_root, readiness._inventory(new_root))
+    assert historical_current == historical
+
+
 def test_equivalence_binds_actual_client_not_only_native_source(equivalent):
     Path(equivalent.runtime["client_binary"]).write_bytes(b"different installed binary\n")
     with pytest.raises(ValueError, match="client"):

@@ -889,7 +889,7 @@ _qcsd_lifecycle_root_created_hook() {
 _qcsd_begin_lifecycle_root_creation() {
   local root_name="${1:?}" metadata
   mkdir -m 700 -- "${_qcsd_lifecycle_base}/${root_name}" || return 1
-  sync -f "${_qcsd_lifecycle_base}" || return 1
+  _qcsd_fsync_path directory "${_qcsd_lifecycle_base}" || return 1
   metadata="$(stat -Lc '%d:%i' -- "${_qcsd_lifecycle_base}/${root_name}")" || return 1
   _QCSD_CREATION_ROOT_DEVICE="${metadata%%:*}"
   _QCSD_CREATION_ROOT_INODE="${metadata##*:}"
@@ -907,7 +907,7 @@ _qcsd_cancel_lifecycle_root_creation() {
     rm -f -- "${entry}" || return 1
   done
   rmdir -- "${_qcsd_lifecycle_root}" || return 1
-  sync -f "${_qcsd_lifecycle_base}" || return 1
+  _qcsd_fsync_path directory "${_qcsd_lifecycle_base}" || return 1
   unset _QCSD_CREATION_HOLDER_PID _QCSD_CREATION_ROOT_DEVICE
   unset _QCSD_CREATION_ROOT_INODE
 }
@@ -935,7 +935,7 @@ _qcsd_lifecycle_remove_root() {
   done
   [[ "$(stat -Lc '%d:%i' -- "${root}")" == "${root_identity}" ]] || return 1
   rmdir -- "${root}" || return 1
-  sync -f "${_qcsd_lifecycle_base}" || return 1
+  _qcsd_fsync_path directory "${_qcsd_lifecycle_base}" || return 1
 }
 # Unit tests retain the former direct transient-unit boundary so fake Docker
 # remains observable through the fixture environment. Production's leased

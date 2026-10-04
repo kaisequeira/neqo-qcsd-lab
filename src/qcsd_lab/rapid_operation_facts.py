@@ -190,7 +190,8 @@ class OperationFacts:
                 self._references(child, root, seen)
 
     def bind_capture(self, spec) -> None:
-        from .rapid_lane_evidence import TRAFFIC_FILES, STUDY_PROFILE_FILE
+        from .rapid_lane_evidence import STUDY_PROFILE_FILE
+        from .rapid_capture_traffic import plan_files
         key = ("capture", json.dumps(spec.serializable(), sort_keys=True))
         if key in self._bindings:
             return
@@ -202,7 +203,7 @@ class OperationFacts:
         self.watch_file(spec.execution_root / STUDY_PROFILE_FILE)
         plan = json.loads(self.watch_file(spec.plan_receipt)).get("payload", {})
         self._references(plan, spec.data_root)
-        for relative, _ in TRAFFIC_FILES.values():
+        for relative, _ in plan_files(plan).values():
             self.watch_file(spec.execution_root / relative)
         if plan.get("study_version") == 6:
             for lane in plan.get("lanes", []):
@@ -223,8 +224,9 @@ class OperationFacts:
             self.watch_optional_tree(path.with_name(site["workload_id"] + "-application-response-evidence"))
             if "data_role" in plan:
                 from .supplied_static_preparation import ROLE, is_static
+                from .supplied_static_capture_amendment import is_amended
                 preparation = json.loads(self.watch_file(path)).get("preparation")
-                if plan["data_role"] != ROLE or not is_static(preparation):
+                if plan["data_role"] != ROLE or not (is_static(preparation) or is_amended(preparation)):
                     raise ValueError("operation workload changed its declared static data role")
                 for evidence_root in self._workload_evidence_trees(path):
                     self.watch_tree(evidence_root)
@@ -279,7 +281,7 @@ class OperationFacts:
         self._bindings.add(key)
 
     def bind_canary(self, reference, runtime=None) -> None:
-        from .rapid_lane_evidence import TRAFFIC_FILES
+        from .rapid_capture_traffic import canary_files
         plan = self._reference(reference["plan"])
         self.watch_tree(plan.parent)
         self._references(reference, plan.parent)
@@ -290,6 +292,7 @@ class OperationFacts:
             for value in reference[operation].values():
                 self._reference(value)
         canary = json.loads(self.watch_file(plan))
+        selected_traffic = canary_files(canary)
         execution = Path(canary["execution_root"])
         for campaign in canary.get("campaigns", []):
             self.watch_file(execution / campaign["campaign_relative"])
@@ -314,7 +317,7 @@ class OperationFacts:
                 self.watch_tree(Path(runtime[name]), ignore_git=True)
             for name in ("source_manifest", "client_binary", "base_launcher", "host_launcher"):
                 self.watch_file(Path(runtime[name]))
-            for relative, _ in TRAFFIC_FILES.values():
+            for relative, _ in selected_traffic.values():
                 self.watch_file(Path(runtime["execution_root"]) / relative)
                 self.watch_file(execution / relative)
         inventory = json.loads(self.watch_file(plan.parent / "source-inventory.json"))
@@ -332,7 +335,7 @@ class OperationFacts:
                     self.watch_tree(Path(role[name]), ignore_git=True)
                 for name in ("source_manifest", "client_binary", "base_launcher", "host_launcher"):
                     self.watch_file(Path(role[name]))
-                for relative, _ in TRAFFIC_FILES.values():
+                for relative, _ in selected_traffic.values():
                     self.watch_file(Path(role["execution_root"]) / relative)
 
     def content_key(self, files=(), trees=(), *, include_modes=True):
@@ -377,6 +380,9 @@ class OperationFacts:
         preparation = json.loads(self.watch_file(path)).get("preparation")
         if isinstance(preparation, dict) and "data_role" in preparation:
             from .supplied_static_preparation import is_static, preparation_roots
+            from .supplied_static_capture_amendment import is_amended, preparation_roots as amendment_roots
+            if is_amended(preparation):
+                return amendment_roots(preparation)
             if not is_static(preparation):
                 raise ValueError("operation workload has an unknown preparation data role")
             return preparation_roots(preparation)

@@ -164,20 +164,34 @@ def _bound_inventory(reference: Any, root: Path) -> dict[str, dict[str, Any]]:
     return value
 
 
-def _groups(root: Path, inventory: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
+def _groups(root: Path, inventory: Mapping[str, Any], *, amended_static: bool = False,
+            duration_policy: str | None = None) -> tuple[dict[str, Any], dict[str, str]]:
     groups = {}
     for group, names in DEPENDENCY_FILES.items():
         relatives = {"src/qcsd_lab/" + name + ".py" for name in names}
         if group == "measurement":
             relatives.update(STATIC_MEASUREMENT_FILES)
         groups[group] = {relative: inventory[relative] for relative in sorted(relatives)}
+    if amended_static:
+        # This prospective role binds the new adapter and FRONT V4 verifier.
+        # Historical dependency groups keep their exact interpretation.
+        from .supplied_static_capture_amendment import SOURCE_FILES
+        groups["static-capture-amendment-v1"] = {
+            relative: inventory[relative] for relative in sorted(SOURCE_FILES.values())}
+        if duration_policy is not None:
+            from .supplied_static_capture_amendment import DURATION_SOURCE_FILES
+            groups["static-buflo-duration200-v1"] = {
+                relative: inventory[relative] for relative in sorted(DURATION_SOURCE_FILES.values())}
+    elif duration_policy is not None:
+        raise ValueError("BuFLO200 equivalence requires its static amendment authority")
     protected, shell_units = _shell_projection(_read(root / "qcsd-lab"))
     groups["measurement"]["qcsd-lab:protected-measurement"] = {
         "sha256": _sha(protected), "executable": inventory["qcsd-lab"]["executable"]}
     for name, digest in _prepare_units(_read(root / "src/qcsd_lab/prepare.py")).items():
         groups["chaff"]["src/qcsd_lab/prepare.py:" + name] = {"sha256": digest,
             "executable": inventory["src/qcsd_lab/prepare.py"]["executable"]}
-    groups["traffic"] = {relative: inventory[relative] for relative, _ in TRAFFIC_FILES.values()}
+    from .rapid_capture_traffic import files
+    groups["traffic"] = {relative: inventory[relative] for relative, _ in files(duration_policy).values()}
     groups["native"] = {relative: value for relative, value in inventory.items() if relative.startswith("neqo-qcsd/")}
     if not groups["native"]:
         raise ValueError("equivalence requires the entire nonempty Native source inventory")
@@ -392,11 +406,13 @@ def _validate_canary(reference: Mapping[str, Any], *, runtime: Mapping[str, str]
     execution = _path(plan["execution_root"], directory=True)
     current_execution = _path(runtime["execution_root"], directory=True)
     clean = _path(plan["clean_runtime_root"], directory=True)
+    from .rapid_capture_traffic import canary_files
+    selected_traffic = canary_files(plan, mode)
     traffic = {key: _sha(_read(_child(current_execution, relative)))
-               for key, (relative, _) in TRAFFIC_FILES.items()}
-    if traffic != plan["traffic_hashes"] or traffic != {key: digest for key, (_, digest) in TRAFFIC_FILES.items()}:
+               for key, (relative, _) in selected_traffic.items()}
+    if traffic != plan["traffic_hashes"] or traffic != {key: digest for key, (_, digest) in selected_traffic.items()}:
         raise ValueError("canary changes the fixed traffic settings")
-    for key, (relative, _) in TRAFFIC_FILES.items():
+    for key, (relative, _) in selected_traffic.items():
         _read(_child(execution, relative), traffic[key])
     inventory = _json(_read(directory / "source-inventory.json", canonical["source_inventory_sha256"]))
     if not inventory or "qcsd-lab" not in inventory:
@@ -591,8 +607,30 @@ def _equivalence(reference: Mapping[str, Any], *, original_runtime: Mapping[str,
     current_root = _path(runtime["runtime_source_root"], directory=True)
     old_inventory = _bound_inventory(original_inventory, original_root)
     new_inventory = _bound_inventory(current_inventory, current_root)
-    old_groups, old_shell = _groups(original_root, old_inventory)
-    new_groups, new_shell = _groups(current_root, new_inventory)
+    result_root = _path(original_result["result_root"], directory=True)
+    experiment = _json(_read(result_root / "experiment.json"))
+    manifest = _json(_read(_child(result_root,
+        experiment["configuration"]["workloads"][0]["manifest"]), plan["workload_sha256"]))
+    from .supplied_static_capture_amendment import is_amended
+    amended_static = is_amended(manifest.get("preparation"))
+    if amended_static != ("static_capture_amendment" in plan):
+        raise ValueError("canary equivalence changed its explicit static amendment authority")
+    if amended_static:
+        from .supplied_static_capture_amendment import _closed
+        amendment_path, _ = _reference(plan["static_capture_amendment"])
+        amendment = _closed(amendment_path)
+        if ({key: amendment["runtime"][key] for key in RUNTIME_KEYS} != original_runtime
+            or sum(row["capture_manifest"]["sha256"] == plan["workload_sha256"]
+                   for row in amendment["workloads"]) != 1):
+            raise ValueError("canary equivalence changed its original amended runtime or workload")
+    from .rapid_capture_traffic import FIELD, canary_policy, files
+    duration_policy = canary_policy(plan)
+    if amended_static and amendment.get(FIELD) != duration_policy:
+        raise ValueError("canary equivalence changed its explicit BuFLO duration policy")
+    old_groups, old_shell = _groups(original_root, old_inventory, amended_static=amended_static,
+                                   duration_policy=duration_policy)
+    new_groups, new_shell = _groups(current_root, new_inventory, amended_static=amended_static,
+                                   duration_policy=duration_policy)
     if old_groups != new_groups:
         differing = sorted(name for name in old_groups if old_groups[name] != new_groups[name])
         raise ValueError("canary equivalence changes protected dependencies: " + ", ".join(differing))
@@ -604,7 +642,7 @@ def _equivalence(reference: Mapping[str, Any], *, original_runtime: Mapping[str,
         raise ValueError("canary equivalence changes the exact installed client or Native commit")
     current_execution = _path(runtime["execution_root"], directory=True)
     traffic = {key: _sha(_read(_child(current_execution, relative)))
-               for key, (relative, _) in TRAFFIC_FILES.items()}
+               for key, (relative, _) in files(duration_policy).items()}
     if traffic != original_result["traffic_hashes"]:
         raise ValueError("canary equivalence changes the current traffic settings")
     return {"schema_version": 1, "artifact_type": EQUIVALENCE_TYPE,

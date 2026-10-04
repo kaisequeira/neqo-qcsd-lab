@@ -66,6 +66,48 @@ readonly _QCSD_DOCKER_V57_PREDECESSOR_SHA256 \
   _QCSD_DOCKER_V57_PREDECESSOR_COMMIT \
   _QCSD_DOCKER_V57_CHECKOUT_COMMIT _QCSD_DOCKER_V57_HELPER_PATH
 
+# Flush the exact lifecycle file or changed directory. GNU sync -f flushes
+# its entire containing filesystem, coupling a small receipt to unrelated
+# writes. Callers retain their path, ownership, mode and publication guards.
+# Keep this helper self-contained: child launchers receive its exact function
+# definition from this already authenticated supervisor Source.
+_qcsd_fsync_path() {
+  /usr/bin/python3 -I -B -c '
+import os
+import stat
+import sys
+
+def identity(value):
+    return value.st_dev, value.st_ino, stat.S_IFMT(value.st_mode)
+
+descriptor = None
+try:
+    if len(sys.argv) != 3 or sys.argv[1] not in {"file", "directory"}:
+        raise ValueError("expected a file or directory durability target")
+    kind, path = sys.argv[1:]
+    before = os.lstat(path)
+    expected_type = stat.S_IFREG if kind == "file" else stat.S_IFDIR
+    if stat.S_IFMT(before.st_mode) != expected_type:
+        raise ValueError("durability target has another type")
+    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
+    if kind == "directory":
+        flags |= os.O_DIRECTORY
+    descriptor = os.open(path, flags)
+    opened = os.fstat(descriptor)
+    if identity(opened) != identity(before):
+        raise ValueError("durability target changed before opening")
+    os.fsync(descriptor)
+    if identity(os.lstat(path)) != identity(opened):
+        raise ValueError("durability target changed during its barrier")
+except (OSError, ValueError) as error:
+    print("scoped lifecycle fsync failed: " + type(error).__name__, file=sys.stderr)
+    sys.exit(1)
+finally:
+    if descriptor is not None:
+        os.close(descriptor)
+' "$@"
+}
+
 _qcsd_require_user_cgroup_manager() {
   command -v systemd-run >/dev/null 2>&1 &&
     command -v systemctl >/dev/null 2>&1 &&
@@ -206,7 +248,8 @@ _qcsd_secure_lifecycle_base() {
     if ! (umask 077 && mkdir -m 700 -- "${_qcsd_lifecycle_base}"); then
       [[ -d "${_qcsd_lifecycle_base}" ]] || return 1
     fi
-    sync -f /var/tmp || return 1
+    _qcsd_fsync_path directory "${_qcsd_lifecycle_base}" || return 1
+    _qcsd_fsync_path directory /var/tmp || return 1
   fi
   [[ ! -L "${_qcsd_lifecycle_base}" &&
       -d "${_qcsd_lifecycle_base}" ]] || return 1
@@ -300,7 +343,7 @@ _qcsd_create_lifecycle_root() {
     _qcsd_cancel_lifecycle_root_creation || true
     return 1
   fi
-  sync -f "${_qcsd_lifecycle_base}" || {
+  _qcsd_fsync_path directory "${_qcsd_lifecycle_base}" || {
     _qcsd_cancel_lifecycle_root_creation || true; return 1;
   }
   _qcsd_lifecycle_root_created_hook "${_qcsd_lifecycle_root}" || {
@@ -577,14 +620,14 @@ _qcsd_publish_supervision_file() {
   _qcsd_lifecycle_parse_record "${staged_path}" staged_values staged_order || return 1
   _qcsd_lifecycle_validate_record \
     "${root}" "${root_kind}" "${record_name}" staged_values || return 1
-  sync -f "${staged_path}" || return 1
+  _qcsd_fsync_path file "${staged_path}" || return 1
   mv -f -- "${staged_path}" "${published_path}" || return 1
   _QCSD_PUBLISH_REPLACED=1
   _qcsd_secure_supervision_file "${published_path}" || return 1
   _qcsd_lifecycle_parse_record "${published_path}" staged_values staged_order || return 1
   _qcsd_lifecycle_validate_record \
     "${root}" "${root_kind}" "${record_name}" staged_values || return 1
-  sync -f "${published_path%/*}"
+  _qcsd_fsync_path directory "${published_path%/*}"
 }
 
 _qcsd_revalidate_release_record() {
@@ -1631,7 +1674,7 @@ qcsd_create_docker_network() {
      ! command -v readlink >/dev/null 2>&1 ||
      ! command -v sha256sum >/dev/null 2>&1 ||
      ! command -v stat >/dev/null 2>&1 ||
-     ! command -v sync >/dev/null 2>&1 ||
+     [[ ! -x /usr/bin/python3 ]] ||
      ! command -v mkfifo >/dev/null 2>&1; then
     echo "Docker network supervisor host primitives are unavailable" >&2
     return 1
@@ -1978,7 +2021,7 @@ qcsd_create_docker_network() {
     rm -f -- "${supervision_next}" "${recovery_next}" "${handoff_next}" \
       "${supervisor_root}/SUPERVISION" "${supervisor_root}/RECOVERY"
     if [[ ! -f "${supervisor_root}/HANDOFF" ]] ||
-       ! sync -f "${supervisor_root}"; then
+       ! _qcsd_fsync_path directory "${supervisor_root}"; then
       echo "Docker network handoff ledger is not durable" >&2
       cleanup_failure=1
     fi
@@ -2047,7 +2090,7 @@ _qcsd_run_docker_supervised() {
      ! command -v readlink >/dev/null 2>&1 ||
      ! command -v sha256sum >/dev/null 2>&1 ||
      ! command -v stat >/dev/null 2>&1 ||
-     ! command -v sync >/dev/null 2>&1 ||
+     [[ ! -x /usr/bin/python3 ]] ||
      ! _qcsd_require_user_cgroup_manager; then
     echo "Docker supervisor host primitives are unavailable" >&2
     return 1
@@ -2389,7 +2432,7 @@ exec docker --host "${host}" "$@"
     systemd-run --user --scope --collect --quiet
     "${systemd_scope_expansion_option[@]}"
     --unit="${run_scope_unit}" --property=KillMode=control-group
-    --property=TimeoutStopSec=10s -- /bin/bash -c '
+    --property=TimeoutStopSec=10s -- /bin/bash -c "$(declare -f _qcsd_fsync_path)"'
 status_path=$1
 shift
 "$@"
@@ -2400,14 +2443,14 @@ umask 077
 staged=${status_path}.next
 printf "%s\n" "${status}" >"${staged}" || exit 125
 chmod 600 -- "${staged}" || exit 125
-sync -f "${staged}" || exit 125
+_qcsd_fsync_path file "${staged}" || exit 125
 mv -f -- "${staged}" "${status_path}" || exit 125
-sync -f "${status_path%/*}" || exit 125
+_qcsd_fsync_path directory "${status_path%/*}" || exit 125
 exit "${status}"
 ' qcsd-docker-run-status "${run_status_path}" "${docker_exec_command[@]}"
   )
   if [[ -n "${output_capture_path}" ]]; then
-    setsid /bin/bash -c '
+    setsid /bin/bash -c "$(declare -f _qcsd_fsync_path)"'
 birth_path=$1
 birth_fd=$2
 root=$3
@@ -2440,8 +2483,8 @@ staged=${birth_path}.next
   printf "launcher_session=%s\n" "${session}"
   printf "launcher_process_group=%s\n" "${process_group}"
 } >"${staged}" || exit 125
-chmod 600 -- "${staged}" && sync -f "${staged}" &&
-  mv -f -- "${staged}" "${birth_path}" && sync -f "${root}" || exit 125
+chmod 600 -- "${staged}" && _qcsd_fsync_path file "${staged}" &&
+  mv -f -- "${staged}" "${birth_path}" && _qcsd_fsync_path directory "${root}" || exit 125
 eval "exec ${birth_fd}>&-"
 kill -STOP "${BASHPID}" || exit 125
 exec "$@"
@@ -2450,7 +2493,7 @@ exec "$@"
       "${token}" run \
       "${run_exec_command[@]}" >"${output_capture_path}" &
   else
-    setsid /bin/bash -c '
+    setsid /bin/bash -c "$(declare -f _qcsd_fsync_path)"'
 birth_path=$1
 birth_fd=$2
 root=$3
@@ -2483,8 +2526,8 @@ staged=${birth_path}.next
   printf "launcher_session=%s\n" "${session}"
   printf "launcher_process_group=%s\n" "${process_group}"
 } >"${staged}" || exit 125
-chmod 600 -- "${staged}" && sync -f "${staged}" &&
-  mv -f -- "${staged}" "${birth_path}" && sync -f "${root}" || exit 125
+chmod 600 -- "${staged}" && _qcsd_fsync_path file "${staged}" &&
+  mv -f -- "${staged}" "${birth_path}" && _qcsd_fsync_path directory "${root}" || exit 125
 eval "exec ${birth_fd}>&-"
 kill -STOP "${BASHPID}" || exit 125
 exec "$@"
@@ -2597,7 +2640,7 @@ exec "$@"
       supervisor_failure=1
       internal_abort=1
     }
-    sync -f "${supervisor_root}" || {
+    _qcsd_fsync_path directory "${supervisor_root}" || {
       supervisor_failure=1
       internal_abort=1
     }
@@ -3381,7 +3424,7 @@ exec "$@"
       "${supervision_next}" "${recovery_next}" "${handoff_next}" \
       "${supervisor_root}/SUPERVISION" "${supervisor_root}/RECOVERY"
     if [[ ! -f "${supervisor_root}/HANDOFF" ]] ||
-       ! sync -f "${supervisor_root}"; then
+       ! _qcsd_fsync_path directory "${supervisor_root}"; then
       echo "Docker container handoff ledger is not durable" >&2
       supervisor_failure=1
     fi
@@ -3441,7 +3484,7 @@ qcsd_run_docker_build() {
      ! command -v readlink >/dev/null 2>&1 ||
      ! command -v sha256sum >/dev/null 2>&1 ||
      ! command -v stat >/dev/null 2>&1 ||
-     ! command -v sync >/dev/null 2>&1 ||
+     [[ ! -x /usr/bin/python3 ]] ||
      ! command -v mkfifo >/dev/null 2>&1; then
     echo "Docker build supervisor host primitives are unavailable" >&2
     return 1
@@ -3688,7 +3731,7 @@ exec docker --host "${host}" "$@"
     systemd-run --user --scope --collect --quiet
     "${systemd_scope_expansion_option[@]}"
     --unit="${build_scope_unit}" --property=KillMode=control-group
-    --property=TimeoutStopSec=10s -- /bin/bash -c '
+    --property=TimeoutStopSec=10s -- /bin/bash -c "$(declare -f _qcsd_fsync_path)"'
 status_path=$1
 shift
 "$@"
@@ -3699,13 +3742,13 @@ umask 077
 staged=${status_path}.next
 printf "%s\n" "${status}" >"${staged}" || exit 125
 chmod 600 -- "${staged}" || exit 125
-sync -f "${staged}" || exit 125
+_qcsd_fsync_path file "${staged}" || exit 125
 mv -f -- "${staged}" "${status_path}" || exit 125
-sync -f "${status_path%/*}" || exit 125
+_qcsd_fsync_path directory "${status_path%/*}" || exit 125
 exit "${status}"
 ' qcsd-docker-build-status "${build_status_path}" "${docker_exec_command[@]}"
   )
-  setsid /bin/bash -c '
+  setsid /bin/bash -c "$(declare -f _qcsd_fsync_path)"'
 birth_path=$1
 birth_fd=$2
 root=$3
@@ -3738,8 +3781,8 @@ staged=${birth_path}.next
   printf "launcher_session=%s\n" "${session}"
   printf "launcher_process_group=%s\n" "${process_group}"
 } >"${staged}" || exit 125
-chmod 600 -- "${staged}" && sync -f "${staged}" &&
-  mv -f -- "${staged}" "${birth_path}" && sync -f "${root}" || exit 125
+chmod 600 -- "${staged}" && _qcsd_fsync_path file "${staged}" &&
+  mv -f -- "${staged}" "${birth_path}" && _qcsd_fsync_path directory "${root}" || exit 125
 eval "exec ${birth_fd}>&-"
 kill -STOP "${BASHPID}" || exit 125
 exec "$@"
@@ -3836,7 +3879,7 @@ exec "$@"
       supervisor_failure=1
       internal_abort=1
     }
-    sync -f "${supervisor_root}" || {
+    _qcsd_fsync_path directory "${supervisor_root}" || {
       supervisor_failure=1
       internal_abort=1
     }

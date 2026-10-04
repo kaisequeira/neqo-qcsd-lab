@@ -55,13 +55,20 @@ def run(args):
         path = publish_amendment(args.enrollment, rolling.load_runtime(args.runtime_spec), args.output,
                                  capture_policy=args.capture_policy)
         return {"front_capture_amendment": rolling._ref(path), "scientific_credit": False}
+    if args.command == "static-amendment":
+        from qcsd_lab.supplied_static_capture_amendment import publish_amendment
+        path = publish_amendment(args.enrollment, rolling.load_runtime(args.runtime_spec), args.output,
+                                 front_policy=args.front_policy, buflo_policy=args.buflo_policy,
+                                 buflo_duration_policy=args.buflo_duration_policy)
+        return {"static_capture_amendment": rolling._ref(path), "scientific_credit": False}
     if args.command == "plan":
         readiness = lanes._load(lanes._read(args.readiness)) if args.readiness else {}
         runtime = rolling.load_runtime(args.runtime_spec) if args.runtime_spec else None
         path = rolling.publish_plan(args.evidence_root, args.enrollment, args.qualification_spec,
                                     args.output, readiness=readiness, runtime_inputs=runtime,
                                     scheduling=rolling._ref(args.scheduling) if args.scheduling else None,
-                                    front_capture_amendment=args.front_capture_amendment)
+                                    front_capture_amendment=args.front_capture_amendment,
+                                    static_capture_amendment=getattr(args, "static_capture_amendment", None))
         spec = rolling.capture_spec(args.evidence_root, args.enrollment, args.qualification_spec, path)
         _, plan = rolling.verify_capture_plan(spec)
         return {"plan": str(path), "spec": _spec(args.spec_output, spec),
@@ -104,10 +111,10 @@ def run(args):
 def _parser():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("scheduling", "canary-equivalence", "init", "init-static", "enroll", "front-amendment", "plan", "successor", "launch", "complete-lane", "verify-lane",
+    for name in ("scheduling", "canary-equivalence", "init", "init-static", "enroll", "front-amendment", "static-amendment", "plan", "successor", "launch", "complete-lane", "verify-lane",
                  "retire-lane", "publish-manifest", "verify-manifest"):
         item = commands.add_parser(name)
-        if name not in {"canary-equivalence", "scheduling", "front-amendment"}:
+        if name not in {"canary-equivalence", "scheduling", "front-amendment", "static-amendment"}:
             item.add_argument("--evidence-root", type=Path, required=True)
         if name == "scheduling":
             for flag in ("spec", "runtime-spec", "qualification-spec", "original-canonical", "current-canonical", "output"):
@@ -131,16 +138,26 @@ def _parser():
             item.add_argument("--qualification-spec", type=Path, required=True)
             item.add_argument("--runtime-spec", type=Path)
             item.add_argument("--front-capture-amendment", type=Path)
+            item.add_argument("--static-capture-amendment", type=Path)
             item.add_argument("--readiness", type=Path)
             item.add_argument("--scheduling", type=Path)
             item.add_argument("--output", type=Path, required=True)
             item.add_argument("--spec-output", type=Path, required=True)
         elif name == "front-amendment":
-            from qcsd_lab.rapid_front_capture_amendment import CAPTURE_POLICY, WINDOW_CAPTURE_POLICY
+            from qcsd_lab.rapid_front_capture_amendment import CAPTURE_POLICY, WINDOW_CAPTURE_POLICY, RESERVE_CAPTURE_POLICY
             item.add_argument("--enrollment", type=Path, required=True)
             item.add_argument("--runtime-spec", type=Path, required=True)
             item.add_argument("--output", type=Path, required=True)
-            item.add_argument("--capture-policy", choices=(CAPTURE_POLICY, WINDOW_CAPTURE_POLICY), default=CAPTURE_POLICY)
+            item.add_argument("--capture-policy", choices=(CAPTURE_POLICY, WINDOW_CAPTURE_POLICY, RESERVE_CAPTURE_POLICY), default=CAPTURE_POLICY)
+        elif name == "static-amendment":
+            from qcsd_lab.capture_acceptance_policy import FRONT_RESERVE_POLICY, BUFLO_KERNEL_PREPARATION_POLICY
+            item.add_argument("--enrollment", type=Path, required=True)
+            item.add_argument("--runtime-spec", type=Path, required=True)
+            item.add_argument("--output", type=Path, required=True)
+            item.add_argument("--front-policy", choices=(FRONT_RESERVE_POLICY,))
+            item.add_argument("--buflo-policy", choices=(BUFLO_KERNEL_PREPARATION_POLICY,))
+            from qcsd_lab.buflo_duration_budget import POLICY
+            item.add_argument("--buflo-duration-policy", choices=(POLICY,))
         elif name in {"publish-manifest", "verify-manifest"}:
             item.add_argument("--lane-closures" if name == "publish-manifest" else "--manifest", type=Path, required=True)
             if name == "publish-manifest":

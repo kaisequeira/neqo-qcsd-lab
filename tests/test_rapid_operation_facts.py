@@ -605,11 +605,35 @@ def frozen_v4(tmp_path_factory):
     return source, module
 
 
+@pytest.fixture(scope="module")
+def historical_qualification_sources():
+    # Scheduling parity describes the pre-amendment qualification science.
+    # The prospective static role legitimately reaches new adapter authority;
+    # it cannot become the science baseline of a historical V1--V4 test.
+    raw = (ROOT / "tests/fixtures/rapid_pre_static_qualification_v1.sources.zlib.b85.txt").read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == "a6b60df738fc2c33770a5623b5ae5e45c40abbb195fd34d5dace632ea3b85186"
+    value = json.loads(raw)
+    assert value["source_commit"] == "0730fa6fd4ba383dbc08bfaf58a5306a893112b9"
+    assert value["schema_version"] == 1 and value["artifact_type"] == "qcsd-immutable-source-fixture"
+    expected = {"src/qcsd_lab/manifest.py": (50626, "91a18c74815a0e1ebf1765fecc8829f9aeaad0ecc26e6cb283de01c89202aee2"),
+        "src/qcsd_lab/application_response_policy.py": (28435, "f8f0cf9d93ed2a60e03a03f4f478f33f3c129f022c484baf0bf3c86bd2a71992")}
+    assert set(value["sources"]) == set(expected)
+    result = {}
+    for path, (size, digest) in expected.items():
+        record = value["sources"][path]
+        assert record["encoding"] == "zlib-base85"
+        source = zlib.decompress(base64.b85decode(record["encoded_source"]))
+        assert len(source) == record["uncompressed_bytes"] == size
+        assert hashlib.sha256(source).hexdigest() == record["sha256"] == digest
+        result[path] = source
+    return result
+
+
 @pytest.mark.parametrize("contract", [schedule.CONTRACT_V1, schedule.CONTRACT_V2,
     schedule.CONTRACT_V3, schedule.CONTRACT_V4])
-def test_portable_v4_helper_preserves_all_historical_projection_results(source_bytes, frozen_v4, contract):
+def test_portable_v4_helper_preserves_all_historical_projection_results(source_bytes, frozen_v4, historical_qualification_sources, contract):
     source, retained = frozen_v4
-    before = {**source_bytes, schedule.MODULE_FILE: source}
+    before = {**source_bytes, schedule.MODULE_FILE: source, **historical_qualification_sources}
     path = "src/qcsd_lab/rapid_formal_parallel.py"
     tree = ast.parse(before[path])
     function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_audit")
@@ -620,9 +644,9 @@ def test_portable_v4_helper_preserves_all_historical_projection_results(source_b
 
 
 @pytest.mark.parametrize("edit", ["facts", "readiness", "gate"])
-def test_v4_cannot_authorize_new_operation_facts_readiness_or_gate_edits(source_bytes, frozen_v4, edit):
+def test_v4_cannot_authorize_new_operation_facts_readiness_or_gate_edits(source_bytes, frozen_v4, historical_qualification_sources, edit):
     source, _ = frozen_v4
-    before = {**source_bytes, schedule.MODULE_FILE: source}
+    before = {**source_bytes, schedule.MODULE_FILE: source, **historical_qualification_sources}
     before.pop(schedule.FACTS_FILE, None)
     if edit == "facts":
         after = {**before, schedule.FACTS_FILE: (ROOT / schedule.FACTS_FILE).read_bytes()}

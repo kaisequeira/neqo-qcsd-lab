@@ -666,6 +666,9 @@ def _validate_buflo_study_parameter_artifact(
         if receipt_kind == "buflo"
         else set()
     )
+    duration_policy = parameter.get("duration_budget_policy") if receipt_kind == "buflo" else None
+    if duration_policy is not None:
+        expected_receipt_keys |= {"duration_budget_policy"}
     _require_exact_keys(receipt, expected_receipt_keys, "BuFLO study provenance")
     if type(receipt_schema) is not int or not (
         receipt_kind == "cs_buflo"
@@ -760,6 +763,11 @@ def _validate_buflo_study_parameter_artifact(
             "qcsd-udp1200-adaptation-with-120-second-event-guard-and-versioned-"
             "terminal-subcell-policy"
         )
+        if duration_policy is not None:
+            from .buflo_duration_budget import POLICY, PARAMETER_SEMANTICS
+            if receipt.get("duration_budget_policy") != POLICY:
+                raise ValueError("BuFLO duration provenance differs from its explicit fixed policy")
+            expected_semantics = PARAMETER_SEMANTICS
     else:
         _validate_cs_buflo(parameter, int(ceiling), receipt_path)
         common_invalid = (
@@ -855,12 +863,16 @@ def _validate_buflo_study_parameter_artifact(
     ):
         raise ValueError(f"BuFLO study paper-variant binding is invalid: {receipt_path}")
 
+    input_policy = BUFLO_STUDY_PARAMETER_INPUT_POLICY
+    if duration_policy is not None:
+        from .buflo_duration_budget import INPUT_POLICY
+        input_policy = INPUT_POLICY
     return ParameterArtifact(
         path=parameter_path,
         sha256=parameter_sha256,
         provenance_path=receipt_path,
         provenance_sha256=sha256_file(receipt_path),
-        input_policy=BUFLO_STUDY_PARAMETER_INPUT_POLICY,
+        input_policy=input_policy,
     )
 
 
@@ -1496,6 +1508,15 @@ def validate_run_parameter_binding(
         or (expected_path is not None and parameter.get("path") != str(expected_path))
     ):
         raise ValueError("sample defense parameter run binding mismatch")
+    if (kind == "buflo" and expected_path is not None
+        and ("buflo_duration_budget" in parameter or expected_path.is_file())):
+        raw = expected_path.read_bytes()
+        parsed = _mapping(load_json(expected_path), "bound BuFLO duration parameters")
+        if "buflo_duration_budget" in parameter or parsed.get("duration_budget_policy") is not None:
+            from .buflo_duration_budget import validate_native_receipt
+            validate_native_receipt(run_data, raw, expected_path=str(expected_path))
+    elif isinstance(parameter, Mapping) and "buflo_duration_budget" in parameter:
+        raise ValueError("Native BuFLO duration receipt lacks its actual parameter-byte binding")
     if expected_workload_id is None:
         return
     resolved = run_data.get("resolved_configuration")
@@ -1545,6 +1566,13 @@ def _validate_runtime_shape(
 
 
 def _validate_buflo(parameter: Mapping[str, Any], ceiling: int, receipt_path: Path) -> None:
+    if parameter.get("duration_budget_policy") is not None:
+        from .buflo_duration_budget import validate_parameters
+        validate_parameters(parameter, ceiling=ceiling)
+        return
+    if "duration_budget_policy" in parameter:
+        # Native None keeps the old bound; it never selects the 200-second policy.
+        parameter = {key: value for key, value in parameter.items() if key != "duration_budget_policy"}
     fields = {
         "schema_version",
         "interval_us",
