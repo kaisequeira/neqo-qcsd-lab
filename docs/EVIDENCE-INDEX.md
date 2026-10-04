@@ -9,6 +9,72 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ## Application response policy repair
 
+### First rolling v6 formal lane and control performance
+
+At **4 October, 11:59:12 Sydney (00:59:12 UTC)**, the first formal lane
+has completed capture, installed ordinary deep verification and final host
+closure. Formal progress is **4/16,000**, from **one enrolled Poki site**
+under ordinary traffic. The goal remains **50 × five × 64**; Tamaraw and
+CS-BuFLO are next, with new runtime readiness binding and planning still
+required before launch. BuFLO and FRONT are held, and actual simultaneous
+capture remains unverified. Context 019 has 113 retained candidate root
+screens and an initialized but unstarted coordinator; eligible yield is
+unknown.
+
+Retained workspace evidence is under
+`diagnostic-rehearsals/rapid-v6-first-formal-poki-20261004-001`.
+The exact lane is `rapid-curated-tranco50-v6-formal-b01-s01-undefended-1200`.
+It binds Lab `62105b0b0d05d1a7572724aaf5b076253ef6caa2`, Native
+`8417787ce0da2d83a67b0b77dd6ef6a316611741` and collection image
+`sha256:6ea5ecd8099a4b377019601f05b896108eb1972d61c777555bbd238dffc351fd`.
+Every visit retains all 260 resources and four origins. Four sample checks
+passed in 30.550 seconds of collection. Actual capture host return 0 closed
+at 00:39:32 UTC; installed ordinary deep return 0 closed at 00:47:54 UTC.
+Final `operations/launch-undefended-completed.json` has SHA
+`7b71a2ebaf74a7a4cbb9e19a934b16ae825de2b9baf65ab456450e6d0b29d85d`;
+it closed 0 at 00:54:51.642212 UTC after 2,097.672611 seconds overall.
+The collection interval and full outer duration measure different work.
+
+The result seal SHA is
+`a06efc8ea338027c13dd3e35fad7a9d6d17545677a4a4f35358cea9e317a2b5a`;
+lane `complete.json` SHA is
+`0b13ac3cac0eeb3af0d84347f52a30085516bb8fde961129354e8179e1f59e7f`;
+installed deep closure SHA is
+`004bcb5cdd4a8e9c4fe6cd12594a6e1e562bdbe8a002ce8fdffe8902943d8d79`.
+Independent `diagnostic-rehearsals/rapid-v6-first-formal-readonly-audit-20261004-001/audit.json`,
+SHA `3ee83756308c2514f77bb5aab69e62ae3ca46d261f58e0613d78ecd2f2417d73`,
+checked all 24 sealed files, four distinct complete visit slots, retained
+enrollment/lineage, runtime identities and actual operation logs without a
+mismatch. That audit preceded final outer closure; the completed host
+record above supplies the final closure.
+
+Published performance source is Lab
+`990b4bd5aa50b0db4a7e1416575acfddeb39bd33`, with Native unchanged.
+Its focused proof preserves 18 initial passes and two fixture failures,
+then two corrected-fixture passes. Actual new-source host plan reopening
+closed 0 at 00:45:40 UTC in 21.169 seconds; retained
+`diagnostic-rehearsals/rolling-validation-factoring-real-plan-20261004-001/closed.json`
+has SHA `febb005d0fd005e2bcfc83fcd1e1ccf4b1ff90cd9eb86f3391e79ec92f31ce6b`.
+It reads the original 621 plan/enrollment with 990 host code. This is a
+plan-check measurement and grants no scientific credit; whole-startup and
+whole-launch performance gains have not been measured.
+
+Matching 990/841 installation closed 0 at **00:59:12.314792 UTC**.
+Retained `diagnostic-rehearsals/rapid-v6-factored-formal-runtime-20261004-001/canonical-runtime.json`
+has SHA `bfb0e1412632a30d9e65a02db07008239900da98cf91e42c51e756d87193bbd1`.
+All twelve actual start/completion records and raw log hashes independently
+reopen with return 0. Collection image:
+`sha256:6ad2fbb9463ad4ca772d16440902827ef9ae7f27cd7adf8d05558cf9f5401ec4`;
+prepare image:
+`sha256:7d32aba357e9c04dcde7f7dbc477ae1968bd17de4073ea41d278ba5de4807ed3`.
+Source inventory SHA is
+`aff1d44cb92f914568a41d61868af1eb4f3a2465f300506d121d4df95a352e2e`.
+It reuses the exact Native 841 client, SHA
+`867d8bc0b473b4dad308e928a8e1711c1fcb24c0d36d11d0a63c2ecac2a60a33`,
+without a Native build. Installation grants no formal credit. The first
+four samples retain their original 621 source and image; no new readiness
+binding, plan or Tamaraw/CS-BuFLO formal launch has completed at this snapshot.
+
 ### Rolling v6 source and independent browser runtime
 
 At **4 October, 11:18 Sydney**, formal progress is **0/16,000** and

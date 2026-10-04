@@ -43,7 +43,38 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Latest milestone, 4 October, 11:18 Sydney (4 October, 00:18 UTC):**
+**Latest milestone, 4 October, 11:59:12 Sydney (4 October, 00:59:12 UTC):**
+The first rolling v6 formal lane is complete: **4/16,000 accepted formal
+samples**, all ordinary traffic from the single enrolled Poki site. Each
+visit retains all **260 resources across four origins**, bound to installed
+Lab `62105b0b` / Native `8417787c` and collection image `6ea5ecd8`.
+Collection took **30.550 seconds**; the capture host closed 0 at 11:39:32,
+the installed ordinary deep check closed 0 at 11:47:54, and the final outer
+launch closed 0 at 11:54:51. The complete outer operation took
+**2,097.673 seconds (about 35 minutes)**. Independent inspection checked all
+24 sealed result files, enrollment/lineage, runtime bindings and operation
+logs without a mismatch. See the [first formal lane evidence](docs/EVIDENCE-INDEX.md#first-rolling-v6-formal-lane-and-control-performance).
+
+Published Lab `990b4bd5` / unchanged Native `8417787c` reduces repeated
+plan checks. Its focused checks retain **18 initial passes and two failed
+fixtures, followed by two passes on the corrected fixtures**. An actual
+host reopen of the retained plan with this new source passed in
+**21.169 seconds**. This measures a plan check; a whole-startup or
+whole-launch speedup has not been measured. Matching 990/841 thin image
+installation closed 0 at **11:59:12 Sydney**: all twelve actual operations
+and raw log hashes independently reopen. It reuses the exact Native client
+`867d8bc0` without a Native build. The completed four formal samples remain
+bound to runtime 621; the new installation adds no formal credit.
+
+The goal remains **50 sites × five settings × 64 accepted samples = 16,000**.
+Only **one site and one ordinary-traffic formal lane** have completed;
+Tamaraw and CS-BuFLO are next; new runtime readiness binding and planning
+remain required before launch. BuFLO and FRONT remain held, and actual
+simultaneous capture remains unverified. Browser context 019 is
+initialized with 113 retained candidate root screens; its coordinator has
+not started and its eligible-site yield is unknown.
+
+**Earlier milestone, 4 October, 11:18 Sydney (4 October, 00:18 UTC):**
 Rolling v6 passed **104 focused host checks**, including actual retained
 admission/readiness evidence, first serial dispatch, failed-only recovery
 and exact 16,000-slot final accounting. Independent review found no concrete
