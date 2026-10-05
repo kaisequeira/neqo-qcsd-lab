@@ -664,6 +664,10 @@ def _equivalence(reference: Mapping[str, Any], *, original_runtime: Mapping[str,
         experiment["configuration"]["workloads"][0]["manifest"]), plan["workload_sha256"]))
     from .rapid_selected_capture_input import is_selected
     from .selected_capture_amendment import is_amended as is_selected_amended
+    from .rapid_selected_budget_input import is_selected as is_selected_budget
+    from .per_class_selected_capture_amendment import is_amended as is_per_class_amended
+    if is_selected_budget(manifest.get("preparation")) or is_per_class_amended(manifest.get("preparation")):
+        raise ValueError("per-class selected canary requires its actual current qualification/readiness Source")
     if is_selected(manifest.get("preparation")) or is_selected_amended(manifest.get("preparation")):
         raise ValueError("selected-input canary requires fresh qualification and readiness under its own Source")
     from .whole_graph_supplement import is_whole

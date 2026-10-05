@@ -76,6 +76,15 @@ def _json(value: Any) -> bytes:
     return admission._json(value)
 
 
+def plan_payload(raw: bytes) -> dict[str, Any]:
+    """Reopen only the historical plan or the explicit remaining-slot plan."""
+    value = _load(raw)
+    from .rapid_slot_chunks import PLAN_TYPE as CHUNK_PLAN_TYPE
+    if isinstance(value, dict) and value.get("receipt_type") == CHUNK_PLAN_TYPE:
+        return admission._unpack(raw, CHUNK_PLAN_TYPE)
+    return admission._unpack(raw, PLAN_TYPE)
+
+
 def _regular_directory(path: Path) -> Path:
     path = Path(path).absolute()
     if not path.is_dir() or any(part.is_symlink() for part in (path, *path.parents)):
@@ -159,7 +168,8 @@ def load_capture_spec(path: Path) -> CaptureSpec:
     result = CaptureSpec(**inputs)
     _check_spec(result)
     from .rapid_additive_static_enrollment import ENROLLMENT_TYPE as SELECTED_ENROLLMENT_TYPE
-    if value["artifact_type"] == "qcsd-rapid-v6-rolling-capture-spec" and _load(_read(result.cohort)).get("receipt_type") not in {"qcsd-rapid-v6-immutable-enrollment-batch", SELECTED_ENROLLMENT_TYPE}:
+    from .rapid_per_class_selected_enrollment import ENROLLMENT_TYPE as PER_CLASS_ENROLLMENT_TYPE
+    if value["artifact_type"] == "qcsd-rapid-v6-rolling-capture-spec" and _load(_read(result.cohort)).get("receipt_type") not in {"qcsd-rapid-v6-immutable-enrollment-batch", SELECTED_ENROLLMENT_TYPE, PER_CLASS_ENROLLMENT_TYPE}:
         raise ValueError("rolling capture spec requires its prospective enrollment authority")
     return result
 
@@ -255,7 +265,7 @@ def executed_image_plan_check(value: Mapping[str, str], *, _context=None) -> dic
     from .rapid_capture_traffic import spec_files
     runtime["traffic_hashes"] = {key: _sha(_read(spec.execution_root / relative))
                                  for key, (relative, _) in spec_files(spec).items()}
-    stored_plan = admission._unpack(_read(spec.plan_receipt), PLAN_TYPE)
+    stored_plan = plan_payload(_read(spec.plan_receipt))
     if stored_plan.get("study_version") == 6:
         from . import rapid_rolling_capture as rolling
         from .rapid_operation_facts import OperationFacts
@@ -283,7 +293,7 @@ def executed_image_plan_check(value: Mapping[str, str], *, _context=None) -> dic
                                        "qualification_implementation", "traffic_hashes")},
         "overlay_source_hashes": module_hashes,
         "plan_receipt_sha256": _sha(_read(spec.plan_receipt)),
-        "plan_payload": admission._unpack(_read(spec.plan_receipt), PLAN_TYPE),
+        "plan_payload": plan_payload(_read(spec.plan_receipt)),
         "bindings": bindings.digests(), "sites": [asdict(site) for site in sites],
         "cohort_generation": generation, "acquisition_provenance_sha256": context.provenance_sha256,
     }
@@ -300,22 +310,22 @@ def image_check_command(spec: CaptureSpec, *, capture_control_installation: Path
     _check_spec(spec)
     roots = {spec.data_root, spec.runtime_source_root, spec.module_root, spec.execution_root,
              spec.source_manifest.parent, spec.client_binary.parent, spec.base_launcher.parent}
-    if admission._unpack(_read(spec.plan_receipt), PLAN_TYPE).get("study_version") == 6:
+    if plan_payload(_read(spec.plan_receipt)).get("study_version") == 6:
         from . import rapid_rolling_capture as rolling
         roots.update(rolling.enrollment_roots(spec))
         if campaign_name is not None:
             roots.update(rolling.readiness_roots(spec, campaign_name, _context=_context))
     extra_environment = {}
-    plan_payload = admission._unpack(_read(spec.plan_receipt), PLAN_TYPE)
-    if "scheduling" in plan_payload:
+    stored_payload = plan_payload(_read(spec.plan_receipt))
+    if "scheduling" in stored_payload:
         from . import rapid_rolling_schedule as schedule
-        schedule.require_schedule(plan_payload["scheduling"], spec, declared_at=plan_payload["declared_at"], _context=_context)
-        roots.update(schedule.mount_roots(plan_payload["scheduling"], _context=_context))
-        extra_environment["QCSD_RAPID_COLLECTION_COMPATIBILITY"] = plan_payload["scheduling"]["path"]
+        schedule.require_schedule(stored_payload["scheduling"], spec, declared_at=stored_payload["declared_at"], _context=_context)
+        roots.update(schedule.mount_roots(stored_payload["scheduling"], _context=_context))
+        extra_environment["QCSD_RAPID_COLLECTION_COMPATIBILITY"] = stored_payload["scheduling"]["path"]
     reference = (str(capture_control_installation) if capture_control_installation is not None
                  else os.environ.get("QCSD_RAPID_COLLECTION_COMPATIBILITY") if inherit_environment else None)
     if reference and _load(_read(Path(reference))).get("receipt_type") == "qcsd-rapid-v5-capture-control-installation-v2":
-        if "scheduling" in plan_payload:
+        if "scheduling" in stored_payload:
             raise ValueError("a rolling schedule cannot also claim a historical installation")
         from . import rapid_capture_control_installation as installation
         capsule_path = Path(reference)
@@ -369,7 +379,7 @@ def _create(root: Path, path: Path, kind: str, payload: Mapping[str, Any]) -> No
 
 
 def _payload(path: Path, kind: str) -> dict[str, Any]:
-    return admission._unpack(_read(path), kind)
+    return plan_payload(_read(path)) if kind == PLAN_TYPE else admission._unpack(_read(path), kind)
 
 
 def _host_intent(raw: bytes) -> dict[str, Any]:
@@ -423,7 +433,7 @@ def _validate_image_proof(proof: Any, spec: CaptureSpec, *, equivalent_plan: boo
                     for path in sorted((spec.module_root / "tools").glob("*.py"))})
     if proof["overlay_source_hashes"] != modules:
         raise ValueError("external study source changed after image plan validation")
-    stored_plan = admission._unpack(_read(spec.plan_receipt), PLAN_TYPE)
+    stored_plan = plan_payload(_read(spec.plan_receipt))
     if ((not equivalent_plan and (_json(proof["plan_payload"]) != _json(stored_plan)
                                   or proof["plan_receipt_sha256"] != _sha(_read(spec.plan_receipt))))
         or _json(proof["bindings"]) != _json(stored_plan["bindings"])
@@ -469,10 +479,22 @@ def check_bound_image(spec: CaptureSpec, root: Path, *, campaign_name: str | Non
 
 def _render_lane_campaign(spec: CaptureSpec, lane: plan.Lane, sites) -> bytes:
     payload = _payload(spec.plan_receipt, PLAN_TYPE)
+    from .rapid_slot_chunks import ChunkLane, render
+    if isinstance(lane, ChunkLane):
+        return render(lane, sites, static_capture_limits=payload.get("capture_limits"),
+                      buflo_duration_policy=payload.get("buflo_duration_policy"),
+                      application_body_identity_policy=payload.get("application_body_identity_policy"),
+                      qualification_delivery_compatibility=payload.get("qualification_delivery_compatibility"))
     if "data_role" in payload:
         from .supplied_static_preparation import ROLE
         from .rapid_selected_capture_input import ROLE as SELECTED_ROLE
-        if payload["data_role"] == SELECTED_ROLE:
+        from . import rapid_per_class_selected_enrollment as per_class
+        if payload["data_role"] == per_class.ROLE:
+            batch, classes, policy = per_class.verify_enrollment(spec.cohort)
+            if (payload["bindings"]["cohort_sha256"] != _sha(_read(spec.cohort))
+                    or payload["capture_limits"] != per_class.select_classes(batch, classes, policy)[1]):
+                raise ValueError("per-class lane changed its authenticated membership or class limits")
+        elif payload["data_role"] == SELECTED_ROLE:
             from . import rapid_additive_static_enrollment as additive
             batch, _, policy = additive.verify_enrollment(spec.cohort)
             if (policy["contract"] != additive.CONTRACT
@@ -494,6 +516,9 @@ def _lane(proof: Mapping[str, Any], campaign_name: str) -> plan.Lane:
     if len(matching) != 1:
         raise ValueError("requested lane is absent or repeated in the independently verified plan")
     row = matching[0]
+    if "lane_layout" in row:
+        from .rapid_slot_chunks import checked_lane
+        return checked_lane({key: value for key, value in row.items() if key != "campaign_sha256"})
     return plan.Lane(**{key: tuple(value) if key == "workload_ids" else value
                         for key, value in row.items() if key != "campaign_sha256"})
 
@@ -1066,7 +1091,9 @@ def _lineage_payload(spec: CaptureSpec, lane: plan.Lane, checked: Mapping[str, A
         if (predecessor_receipt.parent / "complete.json").exists():
             raise ValueError("a completed lane cannot be selectively recaptured under this recovery policy")
         predecessor = _payload(predecessor_receipt, INTENT_TYPE)
-        predecessor_name = plan._campaign_name(lane.role, lane.block, lane.shard, lane.mode, lane.generation - 1, lane.study_version)
+        from .rapid_slot_chunks import ChunkLane, name as chunk_name
+        predecessor_name = (chunk_name(lane, lane.generation - 1) if isinstance(lane, ChunkLane) else
+            plan._campaign_name(lane.role, lane.block, lane.shard, lane.mode, lane.generation - 1, lane.study_version))
         predecessor_path = spec.campaign_dir / f"{predecessor_name}.yml"
         predecessor_sha = _sha(_read(predecessor_path))
         if (predecessor["campaign_name"] != predecessor_name or predecessor["campaign_sha256"] != predecessor_sha
@@ -1333,20 +1360,26 @@ def _intent_and_lineage(spec: CaptureSpec, root: Path, intent_path: Path, *, _co
         raw = _object(root, reference)
         if _sha(raw) != artifact_hashes[key]:
             raise ValueError("retained lineage artifact differs from the actual image/plan proof")
-        if key == "plan_receipt" and _json(admission._unpack(raw, PLAN_TYPE)) != _json(proof["plan_payload"]):
+        if key == "plan_receipt" and _json(plan_payload(raw)) != _json(proof["plan_payload"]):
             raise ValueError("retained plan receipt differs from the actual executed verifier output")
     if lane.generation == 1:
         if any(lineage.get(key) is not None for key in ("predecessor_campaign_name", "predecessor_campaign_sha256", "predecessor_intent", "predecessor_attempt")):
             raise ValueError("initial generation claims predecessor history")
     else:
-        predecessor_name = plan._campaign_name(lane.role, lane.block, lane.shard, lane.mode, lane.generation - 1, lane.study_version)
+        from .rapid_slot_chunks import ChunkLane, name as chunk_name
+        predecessor_name = (chunk_name(lane, lane.generation - 1) if isinstance(lane, ChunkLane) else
+            plan._campaign_name(lane.role, lane.block, lane.shard, lane.mode, lane.generation - 1, lane.study_version))
         predecessor = admission._unpack(_object(root, lineage["predecessor_intent"]), INTENT_TYPE)
         predecessor_raw = _read(spec.campaign_dir / f"{predecessor_name}.yml")
-        predecessor_lane = plan.successor_lane(
+        if isinstance(lane, ChunkLane):
+            from dataclasses import replace
+            predecessor_lane = replace(lane, generation=lane.generation - 1, campaign_name=predecessor_name)
+        else:
+            predecessor_lane = plan.successor_lane(
             plan.Lane(lane.role, lane.block, lane.shard, lane.mode,
                       lane.logical_name, lane.workload_ids, lane.visits_per_workload,
                       lane.qualification_set, 1, lane.study_version), lane.generation - 1,
-        ) if lane.generation > 2 else plan.Lane(lane.role, lane.block, lane.shard, lane.mode,
+            ) if lane.generation > 2 else plan.Lane(lane.role, lane.block, lane.shard, lane.mode,
                                               lane.logical_name, lane.workload_ids, lane.visits_per_workload,
                                               lane.qualification_set, 1, lane.study_version)
         predecessor_spec = spec

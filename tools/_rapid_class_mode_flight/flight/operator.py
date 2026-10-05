@@ -161,6 +161,9 @@ def checked_runtime(args):
 
 def typed_original(manifest):
     """Reopen a new role without changing any original GET authority."""
+    from qcsd_lab import rapid_selected_budget_input as selected_budget
+    if selected_budget.is_selected(manifest.get("preparation")):
+        return selected_budget.validate_preparation(manifest["preparation"], manifest["resources"])
     from qcsd_lab import rapid_selected_capture_input as selected
     if selected.is_selected(manifest.get("preparation")):
         return selected.validate_preparation(manifest["preparation"], manifest["resources"])
@@ -206,6 +209,18 @@ def typed_selected_inputs(batch, policy, rows, contexts):
 
 def typed_manifest_limits(manifest):
     """Use only dependencies already authenticated by public manifest roots."""
+    from qcsd_lab import rapid_selected_budget_input as selected_budget
+    if selected_budget.is_selected(manifest.get("preparation")):
+        selected_budget.validate_preparation(manifest["preparation"], manifest["resources"])
+        value, _, _ = selected_budget.validate_input(selected_budget.plain.reopen(
+            manifest["preparation"][selected_budget.FIELD]["receipt"]))
+        return dict(value["capture_limits"])
+    from qcsd_lab import per_class_selected_capture_amendment as per_class_amendment
+    if per_class_amendment.is_amended(manifest.get("preparation")):
+        per_class_amendment.validate_preparation(manifest["preparation"], manifest["resources"])
+        declaration = per_class_amendment._declaration(per_class_amendment.rolling._open_ref(
+            manifest["preparation"][per_class_amendment.old.FIELD]))
+        return dict(declaration["capture_limits"])
     from qcsd_lab import rapid_selected_capture_input as selected
     from qcsd_lab import selected_capture_amendment as selected_amendment
     if selected_amendment.is_amended(manifest.get("preparation")):
@@ -241,6 +256,25 @@ def typed_canary_limits(manifests, policy, mode, selected_policy):
     limits = [typed_manifest_limits(manifest) for manifest in manifests]
     if not limits or any(value != limits[0] for value in limits[1:]):
         raise ValueError("typed flight requires homogeneous authenticated class budgets")
+    from qcsd_lab import rapid_per_class_selected_input as per_class_input
+    from qcsd_lab import per_class_selected_capture_amendment as per_class_amendment
+    from qcsd_lab import rapid_per_class_selected_enrollment as per_class
+    if all(per_class_amendment.is_amended(manifest.get("preparation")) for manifest in manifests):
+        declarations = [per_class_amendment._declaration(per_class_amendment.rolling._open_ref(
+            manifest["preparation"][per_class_amendment.old.FIELD])) for manifest in manifests]
+        if (mode not in AMENDED_MODES or any(row["modes"] != [mode] for row in declarations)
+                or any(row.get("buflo_duration_policy") != selected_policy for row in declarations)):
+            raise ValueError("per-class amended canary changed its fixed setting")
+        declared = limits[0]
+        if policy is not None and policy["contract"] != per_class.CONTRACT:
+            raise ValueError("per-class canary imported another policy authority")
+        return duration.capture_limits(mode, {**declared, "max_attempts": 1}, policy=selected_policy)
+    if all(per_class_input.is_selected(manifest.get("preparation")) for manifest in manifests) and (
+            policy is not None and policy["contract"] == per_class.CONTRACT
+            or any(per_class_input.budget.is_selected(manifest.get("preparation")) for manifest in manifests)):
+        if mode not in {"undefended", "tamaraw", "cs-buflo"} or selected_policy is not None:
+            raise ValueError("per-class FRONT/BuFLO require their explicit typed amendment")
+        return duration.capture_limits(mode, {**limits[0], "max_attempts": 1}, policy=selected_policy)
     from qcsd_lab.rapid_selected_capture_input import is_selected
     from qcsd_lab import selected_capture_amendment as selected_amendment
     if all(selected_amendment.is_amended(manifest.get("preparation")) for manifest in manifests):
@@ -273,6 +307,10 @@ def selected_inputs(enrollment, study, *, prospective_amendment=False):
     from qcsd_lab import supplied_static_preparation as preparation
     batch, all_classes, policy = rolling._verify_enrollment(Path(enrollment).absolute())
     from qcsd_lab import rapid_additive_static_enrollment as additive
+    from qcsd_lab import rapid_per_class_selected_enrollment as per_class
+    if policy["contract"] == per_class.CONTRACT:
+        return additive_selected_inputs(enrollment, study, batch, all_classes, policy,
+            prospective_amendment=prospective_amendment)
     if policy["contract"] == additive.CONTRACT:
         return additive_selected_inputs(enrollment, study, batch, all_classes, policy,
                                         prospective_amendment=prospective_amendment)
@@ -313,6 +351,10 @@ def additive_selected_inputs(enrollment, study, batch, all_classes, policy, *, p
     """Select only this new batch's direct receipts without acquisition history."""
     from qcsd_lab import rapid_rolling_capture as rolling
     from qcsd_lab import rapid_selected_capture_input as selected
+    from qcsd_lab import rapid_per_class_selected_enrollment as per_class
+    per_class_policy = policy["contract"] == per_class.CONTRACT
+    if per_class_policy:
+        from qcsd_lab import rapid_per_class_selected_input as selected
     count = len(batch["selected_candidate_ids"])
     if not 1 <= count <= 5 or rolling._open_ref(batch["policy"]).parent != Path(study).absolute():
         raise ValueError("selected flight belongs to another prospective study or class count")
@@ -320,6 +362,8 @@ def additive_selected_inputs(enrollment, study, batch, all_classes, policy, *, p
     bindings, manifests, roots = [], [], set()
     if prospective_amendment:
         from qcsd_lab import selected_capture_amendment as selected_amendment
+        if per_class_policy:
+            from qcsd_lab import per_class_selected_capture_amendment as selected_amendment
         files, trees = selected_amendment.metadata_inputs(Path(enrollment).absolute(), batch, all_classes, policy)
         roots.update(trees | {path.parent for path in files})
         roots.add(Path(policy["runtime"]["execution_root"]))
@@ -341,7 +385,8 @@ def additive_selected_inputs(enrollment, study, batch, all_classes, policy, *, p
             roots.update(static_roots(manifest))
     if [row["candidate_id"] for row in bindings] != batch["selected_candidate_ids"]:
         raise ValueError("selected flight reorders its append-only class membership")
-    return batch, policy, bindings, manifests, sorted(roots), {**policy["capture_limits"], "max_attempts": 1}
+    limits = per_class.select_classes(batch, all_classes, policy)[1] if per_class_policy else policy["capture_limits"]
+    return batch, policy, bindings, manifests, sorted(roots), {**limits, "max_attempts": 1}
 
 
 def current_sidecar(sidecar, canonical, *, workload_id, workload_sha256,

@@ -200,6 +200,9 @@ def verify_policy(root: Path) -> dict[str, Any]:
     raw = lanes._read(root / "policy.json")
     kind = lanes._load(raw).get("receipt_type")
     from . import rapid_additive_static_enrollment as additive
+    from . import rapid_per_class_selected_enrollment as per_class
+    if kind == per_class.POLICY_TYPE:
+        return per_class.verify_policy(root)
     if kind == additive.POLICY_TYPE:
         return additive.verify_policy(root)
     if kind not in (POLICY_TYPE, STATIC_POLICY_TYPE):
@@ -250,6 +253,9 @@ def _batch_path(root: Path, ordinal: int) -> Path:
 
 def _batches(root: Path) -> list[Path]:
     from . import rapid_additive_static_enrollment as additive
+    from . import rapid_per_class_selected_enrollment as per_class
+    if per_class.policy_kind(root):
+        return per_class._batches(root, per_class.verify_policy(root))
     if additive.policy_kind(root):
         return additive._batches(root, additive.verify_policy(root))
     directory = root / "batches"
@@ -327,6 +333,16 @@ def _verify_enrollment(path: Path, *, _verified: dict | None = None) -> tuple[di
         facts_context.watch_file(Path(__file__))
     ancestry = {}
     from . import rapid_additive_static_enrollment as additive
+    from . import rapid_per_class_selected_enrollment as per_class
+    if lanes._load(raw).get("receipt_type") == per_class.ENROLLMENT_TYPE:
+        value, classes, policy = per_class.verify_enrollment(path)
+        result = (value, classes, policy)
+        ancestry[path.absolute()] = (lanes._sha(raw), value, classes)
+        if _verified is not None:
+            _verified.update(ancestry)
+        if facts_context is not None:
+            facts_context.remember(key, (result, ancestry))
+        return result
     if lanes._load(raw).get("receipt_type") == additive.ENROLLMENT_TYPE:
         value, classes, policy = additive.verify_enrollment(path)
         if _verified is not None:
@@ -491,7 +507,8 @@ def _sites_from_enrollment(batch: Mapping[str, Any], all_classes: list[dict[str,
     classes = all_classes[-len(batch["selected_candidate_ids"]):]
     policy = verify_policy(_open_ref(batch["policy"]).parent)
     from . import rapid_additive_static_enrollment as additive
-    selected_policy = policy["contract"] == additive.CONTRACT
+    from .rapid_per_class_selected_enrollment import CONTRACT as PER_CLASS_CONTRACT
+    selected_policy = policy["contract"] in {additive.CONTRACT, PER_CLASS_CONTRACT}
     amendment = None
     if front_capture_amendment is not None and static_capture_amendment is not None:
         raise ValueError("browser and static capture amendments have separate authority")
@@ -511,6 +528,8 @@ def _sites_from_enrollment(batch: Mapping[str, Any], all_classes: list[dict[str,
         amendment = validate_amendment(_open_ref(static_capture_amendment), enrollment=enrollment, runtime=runtime)
         if selected_policy:
             from . import selected_capture_amendment as selected_amendment
+            if policy["contract"] == PER_CLASS_CONTRACT:
+                from . import per_class_selected_capture_amendment as selected_amendment
             if amendment["contract"] != selected_amendment.CONTRACT:
                 raise ValueError("selected inputs cannot import a historical static capture amendment")
     spec = lanes._load(lanes._read(qualifier_spec))
@@ -531,6 +550,8 @@ def _sites_from_enrollment(batch: Mapping[str, Any], all_classes: list[dict[str,
     for row in classes:
         if selected_policy:
             from . import rapid_selected_capture_input as selected
+            if policy["contract"] == PER_CLASS_CONTRACT:
+                from . import rapid_per_class_selected_input as selected
             original = selected.reopen(row["prepared_workload"] if amendment is None else
                 next(item["current_selected_manifest"] for item in amendment["workloads"]
                      if item["candidate_id"] == row["candidate_id"]))
@@ -606,6 +627,9 @@ def _bindings_from_enrollment(enrollment: Path, policy: Mapping[str, Any]) -> di
 def _effective_capture_limits(batch, classes, policy):
     """Reopen per-class budgets without changing the original study policy."""
     from . import rapid_additive_static_enrollment as additive
+    from . import rapid_per_class_selected_enrollment as per_class
+    if policy["contract"] == per_class.CONTRACT:
+        return per_class.select_classes(batch, classes, policy)[1]
     if policy["contract"] == additive.CONTRACT:
         return dict(policy["capture_limits"])
     if policy["contract"] != STATIC_CONTRACT:
@@ -626,9 +650,10 @@ def _render_campaign(lane: plan.Lane, sites, policy: Mapping[str, Any], *, buflo
                      application_body_identity_policy: str | None = None,
                      qualification_delivery_compatibility: Mapping[str, str] | None = None) -> bytes:
     from .rapid_additive_static_enrollment import CONTRACT as ADDITIVE_CONTRACT
+    from .rapid_per_class_selected_enrollment import CONTRACT as PER_CLASS_CONTRACT
     return plan.render_lane_campaign(lane, sites, static_capture_limits=(
         (capture_limits if capture_limits is not None else policy["capture_limits"])
-        if policy["contract"] in {STATIC_CONTRACT, ADDITIVE_CONTRACT} else None),
+        if policy["contract"] in {STATIC_CONTRACT, ADDITIVE_CONTRACT, PER_CLASS_CONTRACT} else None),
         buflo_duration_policy=buflo_duration_policy,
         application_body_identity_policy=application_body_identity_policy,
         qualification_delivery_compatibility=qualification_delivery_compatibility)
@@ -705,7 +730,11 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
     policy = verify_policy(root)
     batch, classes = verify_enrollment(enrollment)
     from .rapid_additive_static_enrollment import CONTRACT as ADDITIVE_CONTRACT
-    selected_policy = policy["contract"] == ADDITIVE_CONTRACT
+    from .rapid_per_class_selected_enrollment import CONTRACT as PER_CLASS_CONTRACT
+    per_class_policy = policy["contract"] == PER_CLASS_CONTRACT
+    selected_policy = policy["contract"] in {ADDITIVE_CONTRACT, PER_CLASS_CONTRACT}
+    if per_class_policy and scheduling is not None:
+        raise ValueError("per-class selected budget capture has only its prospective serial authority")
     if selected_policy and front_capture_amendment is not None:
         raise ValueError("selected-input enrollment requires its own fixed setting authority")
     if selected_policy and scheduling is not None:
@@ -743,6 +772,8 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
         static_amendment = validate_amendment(static_capture_amendment, enrollment=enrollment, runtime=measurement_runtime)
         if selected_policy:
             from . import selected_capture_amendment as selected_amendment
+            if policy["contract"] == PER_CLASS_CONTRACT:
+                from . import per_class_selected_capture_amendment as selected_amendment
             if static_amendment["contract"] != selected_amendment.CONTRACT:
                 raise ValueError("selected plan requires its own prospective fixed capture policy declaration")
         if not readiness or not set(readiness) <= set(static_amendment["modes"]):
@@ -872,7 +903,7 @@ def capture_spec(root: Path, enrollment: Path, qualification_spec: Path, plan_re
 
 def _capture_spec_from_enrollment(root: Path, enrollment: Path, qualification_spec: Path, plan_receipt: Path,
                                   batch: Mapping[str, Any], policy: Mapping[str, Any]) -> lanes.CaptureSpec:
-    payload = admission._unpack(lanes._read(plan_receipt), lanes.PLAN_TYPE)
+    payload = lanes.plan_payload(lanes._read(plan_receipt))
     value = _runtime(payload["runtime"])
     if value["data_root"] != policy["runtime"]["data_root"]:
         raise ValueError("rolling capture runtime changed its declared data root")
@@ -902,9 +933,14 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
         _context.bind_capture(spec)
         if _context.has(key):
             return _context.get(key)
+    from . import rapid_slot_chunks as chunks
+    if chunks.is_plan(spec.plan_receipt):
+        result = chunks.verify_plan(spec, require_current=require_current, _context=_context)
+        return _context.remember(key, result) if _context is not None else result
     batch, classes, policy = _verify_enrollment(spec.cohort)
     from .rapid_additive_static_enrollment import CONTRACT as ADDITIVE_CONTRACT
-    selected_policy = policy["contract"] == ADDITIVE_CONTRACT
+    from .rapid_per_class_selected_enrollment import CONTRACT as PER_CLASS_CONTRACT
+    selected_policy = policy["contract"] in {ADDITIVE_CONTRACT, PER_CLASS_CONTRACT}
     root = _open_ref(batch["policy"]).parent
     expected_spec = _capture_spec_from_enrollment(root, spec.cohort, spec.qualification_spec, spec.plan_receipt, batch, policy)
     if spec != expected_spec:
@@ -928,6 +964,8 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
         if value.get("data_role") != policy["data_role"] or value.get("capture_limits") != _effective_capture_limits(batch, classes, policy):
             raise ValueError("static rolling plan changed its scientific data role")
     if "scheduling" in value:
+        if policy["contract"] == PER_CLASS_CONTRACT:
+            raise ValueError("per-class selected budget capture has only its prospective serial authority")
         fields.add("scheduling")
         from . import rapid_rolling_schedule as schedule
         from .rapid_static_parallel_schedule import require_delivery_binding
@@ -970,6 +1008,8 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
         amendment = validate_amendment(_open_ref(static_reference), enrollment=spec.cohort, runtime=measurement_runtime)
         if selected_policy:
             from . import selected_capture_amendment as selected_amendment
+            if policy["contract"] == PER_CLASS_CONTRACT:
+                from . import per_class_selected_capture_amendment as selected_amendment
             if amendment["contract"] != selected_amendment.CONTRACT:
                 raise ValueError("selected plan cannot import historical static capture authority")
         if (not isinstance(value.get("readiness"), dict) or not value["readiness"]
@@ -1110,6 +1150,12 @@ def image_plan_check(spec: lanes.CaptureSpec, runtime: Mapping[str, Any], *, _co
     own = lanes._read(Path(__file__))
     if own != lanes._read(spec.runtime_source_root / relative) or own != lanes._read(spec.module_root / relative):
         raise ValueError("rolling authority differs from the installed and frozen source")
+    if "slot_chunk_policy" in payload:
+        from . import rapid_slot_chunks
+        relative = "src/qcsd_lab/rapid_slot_chunks.py"
+        own = lanes._read(Path(rapid_slot_chunks.__file__))
+        if own != lanes._read(spec.runtime_source_root / relative) or own != lanes._read(spec.module_root / relative):
+            raise ValueError("slot chunk authority differs from the installed and frozen Source")
     if "front_capture_amendment" in payload:
         from . import rapid_front_capture_amendment
         relative = "src/qcsd_lab/rapid_front_capture_amendment.py"
@@ -1168,6 +1214,9 @@ def validate_host_launch(value: Any, *, expected_campaign: str, actual_image: st
 
 
 def publish_successor(spec: lanes.CaptureSpec, lane_name: str, generation: int, output: Path) -> Path:
+    from . import rapid_slot_chunks as chunks
+    if chunks.is_plan(spec.plan_receipt):
+        return chunks.publish_successor(spec, lane_name, generation, output)
     sites, value = verify_capture_plan(spec)
     base = next((plan.Lane(**{key: tuple(item) if key == "workload_ids" else item for key, item in row.items()
                               if key != "campaign_sha256"}) for row in value["lanes"] if row["campaign_name"] == lane_name), None)
@@ -1203,7 +1252,17 @@ def enrollment_roots(spec: lanes.CaptureSpec) -> list[Path]:
     The installed plan check still reopens every terminal and prepared graph.
     Mount derivation does not repeat that scientific verification on the host.
     """
+    from . import rapid_slot_chunks as chunks
+    if chunks.is_plan(spec.plan_receipt):
+        return sorted(chunks.roots(spec))
     from . import rapid_additive_static_enrollment as additive
+    from . import rapid_per_class_selected_enrollment as per_class
+    if per_class.enrollment_kind(spec.cohort):
+        payload = admission._unpack(lanes._read(spec.plan_receipt), lanes.PLAN_TYPE)
+        if "static_capture_amendment" in payload:
+            from . import per_class_selected_capture_amendment
+            return per_class_selected_capture_amendment.enrollment_roots(spec)
+        return per_class.enrollment_roots(spec)
     if additive.enrollment_kind(spec.cohort):
         payload = admission._unpack(lanes._read(spec.plan_receipt), lanes.PLAN_TYPE)
         if "static_capture_amendment" in payload:
@@ -1448,8 +1507,9 @@ def _corpus_facts(root: Path, closures: list[Any]) -> dict[str, Any]:
         ids = {site.workload_id: site.candidate_id for site in sites}
         for workload in lane.workload_ids:
             index = class_index[ids[workload]]
-            for visit in range(4):
-                slot = index, lane.mode, (lane.block - 1) * 4 + visit
+            from .rapid_slot_chunks import logical_slot
+            for visit in range(lane.visits_per_workload):
+                slot = index, lane.mode, logical_slot(lane, visit)
                 if slot not in expected or slot in observed:
                     raise ValueError("rolling corpus repeats or invents a formal class/setting/visit slot")
                 observed.add(slot)

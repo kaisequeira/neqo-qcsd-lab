@@ -50,7 +50,8 @@ def is_amended(value: Any) -> bool:
     from .static_budget_capture_amendment import is_amended as is_budget_amended
     from .whole_graph_capture_amendment import is_amended as is_whole_amended
     from .selected_capture_amendment import is_amended as is_selected_amended
-    return isinstance(value, Mapping) and value.get("data_role") in {ROLE, DURATION_ROLE} or is_whole_amended(value) or is_budget_amended(value) or is_selected_amended(value)
+    from .per_class_selected_capture_amendment import is_amended as is_per_class_amended
+    return isinstance(value, Mapping) and value.get("data_role") in {ROLE, DURATION_ROLE} or is_whole_amended(value) or is_budget_amended(value) or is_selected_amended(value) or is_per_class_amended(value)
 
 
 def policies(*, front_policy: str | None = None, buflo_policy: str | None = None) -> dict[str, str]:
@@ -138,6 +139,9 @@ def _derived(original: Mapping[str, Any], declaration_ref: Mapping[str, str], se
 
 
 def _declaration(path: Path, *, enrollment: Path | None = None, runtime: Mapping[str, str] | None = None):
+    from . import per_class_selected_capture_amendment as per_class
+    if lanes._load(lanes._read(path)).get("receipt_type") == per_class.DECLARATION_TYPE:
+        return per_class._declaration(path, enrollment=enrollment, runtime=runtime)
     from . import selected_capture_amendment as selected
     if lanes._load(lanes._read(path)).get("receipt_type") == selected.DECLARATION_TYPE:
         return selected._declaration(path, enrollment=enrollment, runtime=runtime)
@@ -194,6 +198,9 @@ def _declaration(path: Path, *, enrollment: Path | None = None, runtime: Mapping
 
 
 def _closed(path: Path, *, enrollment: Path | None = None, runtime: Mapping[str, str] | None = None):
+    from . import per_class_selected_capture_amendment as per_class
+    if per_class.is_receipt(path):
+        return per_class.validate_amendment(path, enrollment=enrollment, runtime=runtime)
     from . import selected_capture_amendment as selected
     if selected.is_receipt(path):
         return selected.validate_amendment(path, enrollment=enrollment, runtime=runtime)
@@ -236,6 +243,11 @@ def publish_amendment(enrollment: Path, runtime: Mapping[str, str], output: Path
     from . import rapid_rolling_capture as rolling
     from . import whole_graph_supplement as whole
     batch, _, policy = rolling._verify_enrollment(enrollment)
+    from .rapid_per_class_selected_enrollment import CONTRACT as PER_CLASS_CONTRACT
+    if policy["contract"] == PER_CLASS_CONTRACT:
+        from .per_class_selected_capture_amendment import publish_amendment as publish_per_class
+        return publish_per_class(enrollment, runtime, output, front_policy=front_policy,
+            buflo_policy=buflo_policy, buflo_duration_policy=buflo_duration_policy)
     from .rapid_additive_static_enrollment import CONTRACT as ADDITIVE_CONTRACT
     if policy["contract"] == ADDITIVE_CONTRACT:
         from .selected_capture_amendment import publish_amendment as publish_selected_amendment
@@ -293,6 +305,9 @@ def publish_amendment(enrollment: Path, runtime: Mapping[str, str], output: Path
 
 
 def validate_amendment(path: Path, *, enrollment: Path, runtime: Mapping[str, str]):
+    from . import per_class_selected_capture_amendment as per_class
+    if per_class.is_receipt(path):
+        return per_class.validate_amendment(path, enrollment=enrollment, runtime=runtime)
     from . import selected_capture_amendment as selected
     if selected.is_receipt(path):
         return selected.validate_amendment(path, enrollment=enrollment, runtime=runtime)
@@ -306,6 +321,9 @@ def validate_amendment(path: Path, *, enrollment: Path, runtime: Mapping[str, st
 
 
 def validate_preparation(value: Mapping[str, Any], resources: list[dict[str, Any]]):
+    from . import per_class_selected_capture_amendment as per_class
+    if per_class.is_amended(value):
+        return per_class.validate_preparation(value, resources)
     from . import selected_capture_amendment as selected
     if selected.is_amended(value):
         return selected.validate_preparation(value, resources)
@@ -331,6 +349,9 @@ def validate_preparation(value: Mapping[str, Any], resources: list[dict[str, Any
 
 
 def preparation_roots(value: Mapping[str, Any]) -> list[Path]:
+    from . import per_class_selected_capture_amendment as per_class
+    if per_class.is_amended(value):
+        return per_class.preparation_roots(value)
     from . import selected_capture_amendment as selected
     if selected.is_amended(value):
         return selected.preparation_roots(value)

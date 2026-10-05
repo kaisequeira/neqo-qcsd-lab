@@ -45,6 +45,15 @@ def manifest_roots(manifest: Mapping[str, Any]) -> list[Path]:
     if selected.is_selected(declared):
         roots = {_path(Path(root), directory=True) for root in selected.preparation_roots(declared, manifest["resources"])}
         return sorted(root for root in roots if not any(root != parent and root.is_relative_to(parent) for parent in roots))
+    from . import rapid_selected_budget_input as selected_budget
+    if selected_budget.is_selected(declared):
+        roots = {_path(Path(root), directory=True) for root in selected_budget.preparation_roots(declared, manifest["resources"])}
+        return sorted(root for root in roots if not any(root != parent and root.is_relative_to(parent) for parent in roots))
+    from . import per_class_selected_capture_amendment as per_class_amendment
+    if per_class_amendment.is_amended(declared):
+        per_class_amendment.validate_preparation(declared, manifest["resources"])
+        roots = {_path(Path(root), directory=True) for root in per_class_amendment.preparation_roots(declared)}
+        return sorted(root for root in roots if not any(root != parent and root.is_relative_to(parent) for parent in roots))
     from . import selected_capture_amendment as selected_amendment
     if selected_amendment.is_amended(declared):
         selected_amendment.validate_preparation(declared, manifest["resources"])

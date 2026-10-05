@@ -12,7 +12,7 @@ import hashlib
 import json
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit
@@ -148,6 +148,9 @@ def _campaign_name(
 
 def successor_lane(lane: Lane, generation: int) -> Lane:
     """Name a new create-only campaign for one repaired logical lane."""
+    from .rapid_slot_chunks import ChunkLane, successor
+    if isinstance(lane, ChunkLane):
+        return successor(lane, generation)
 
     if type(generation) is not int or generation <= lane.generation:
         raise ValueError("rapid successor generation must advance")
@@ -364,6 +367,12 @@ def render_lane_campaign(lane: Lane, sites: Sequence[Site], *, static_capture_li
 
     if lane.role not in {"formal", "diagnostic"}:
         raise ValueError("rapid lane role is unregistered")
+    from .rapid_slot_chunks import ChunkLane, render
+    if isinstance(lane, ChunkLane):
+        return render(lane, sites, static_capture_limits=static_capture_limits,
+            buflo_duration_policy=buflo_duration_policy,
+            application_body_identity_policy=application_body_identity_policy,
+            qualification_delivery_compatibility=qualification_delivery_compatibility)
     selected = _check_sites(sites, final=lane.role == "formal", study_version=lane.study_version)
     if lane.study_version in {5, 6} and any(
         site.qualification_set_manifest_sha256 is None for site in selected
@@ -556,11 +565,18 @@ def verify_lane_result(
         expected_name = (f"rapid-curated-tranco50-v2-diagnostic-runtime-e{collection_runtime_epoch:04d}"
                          f"-b{lane.block:02d}-s{lane.shard:02d}-{lane.mode}")
     else:
-        expected_name = (
+        from .rapid_slot_chunks import ChunkLane, checked_lane, name
+        if isinstance(lane, ChunkLane):
+            checked_lane(asdict(lane))
+            if block_epoch is not None:
+                raise ValueError("slot chunks cannot claim historical epoch naming")
+            expected_name = name(lane, lane.generation)
+        else:
+            expected_name = (
             epoch_campaign_name(lane, block_epoch) if block_epoch is not None
             else _campaign_name(lane.role, lane.block, lane.shard, lane.mode,
                                 lane.generation, lane.study_version)
-        )
+            )
     if lane.role not in {"formal", "diagnostic"} or lane.campaign_name != expected_name:
         raise ValueError("rapid lane role and campaign identity differ")
 

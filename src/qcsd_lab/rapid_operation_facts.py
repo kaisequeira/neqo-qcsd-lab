@@ -140,6 +140,19 @@ class OperationFacts:
             raise ValueError("operation enrollment dependency contains a cycle")
         seen.add(path)
         from . import rapid_additive_static_enrollment as additive
+        from . import rapid_per_class_selected_enrollment as per_class
+        raw = self.watch_file(path)
+        if json.loads(raw).get("receipt_type") == per_class.ENROLLMENT_TYPE:
+            key = ("per-class-enrollment-dependencies", str(path), hashlib.sha256(raw).hexdigest())
+            if key in self._bindings:
+                return
+            for module in (per_class, per_class.old, per_class.plain, *per_class.selected_budget._modules()):
+                self.watch_file(Path(module.__file__))
+            self.watch_file(Path(__file__))
+            for dependency in per_class.membership_inputs(path):
+                self.watch_file(dependency)
+            self._bindings.add(key)
+            return
         if json.loads(self.watch_file(path)).get("receipt_type") == additive.ENROLLMENT_TYPE:
             for dependency in additive.membership_inputs(path):
                 self.watch_file(dependency)
@@ -208,6 +221,10 @@ class OperationFacts:
         self.watch_file(spec.execution_root / STUDY_PROFILE_FILE)
         plan = json.loads(self.watch_file(spec.plan_receipt)).get("payload", {})
         self._references(plan, spec.data_root)
+        if "slot_chunk_policy" in plan:
+            from .rapid_slot_chunks import input_files
+            for path in input_files(plan):
+                self.watch_file(path)
         for relative, _ in plan_files(plan).values():
             self.watch_file(spec.execution_root / relative)
         if plan.get("study_version") == 6:
@@ -234,8 +251,14 @@ class OperationFacts:
                 from .supplied_static_budget_successor import is_budget
                 from . import rapid_selected_capture_input as selected
                 from . import selected_capture_amendment as selected_amendment
+                from . import rapid_per_class_selected_enrollment as per_class
+                from . import rapid_per_class_selected_input as per_class_input
+                from . import per_class_selected_capture_amendment as per_class_amendment
                 preparation = json.loads(self.watch_file(path)).get("preparation")
-                if plan["data_role"] == selected.ROLE:
+                if plan["data_role"] == per_class.ROLE:
+                    if not (per_class_input.is_selected(preparation) or per_class_amendment.is_amended(preparation)):
+                        raise ValueError("operation workload changed its declared per-class selected role")
+                elif plan["data_role"] == selected.ROLE:
                     if not (selected.is_selected(preparation) or selected_amendment.is_amended(preparation)):
                         raise ValueError("operation workload changed its declared selected data role")
                 elif plan["data_role"] != ROLE or not (is_static(preparation) or is_amended(preparation) or is_whole(preparation) or is_budget(preparation)):
@@ -409,6 +432,18 @@ class OperationFacts:
         manifest = json.loads(raw)
         preparation = manifest.get("preparation")
         if isinstance(preparation, dict) and "data_role" in preparation:
+            from . import rapid_selected_budget_input as selected_budget
+            if selected_budget.is_selected(preparation):
+                files, trees = selected_budget.preparation_inputs(preparation, manifest["resources"])
+                for dependency in files:
+                    self.watch_file(dependency)
+                return sorted(trees)
+            from . import per_class_selected_capture_amendment as per_class_amendment
+            if per_class_amendment.is_amended(preparation):
+                files, trees = per_class_amendment.preparation_inputs(preparation)
+                for dependency in files:
+                    self.watch_file(dependency)
+                return sorted(trees)
             from . import rapid_selected_capture_input as selected
             if selected.is_selected(preparation):
                 files, trees = selected.preparation_inputs(preparation, manifest["resources"])

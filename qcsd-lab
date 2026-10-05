@@ -5924,6 +5924,7 @@ rapid_v5_diagnostic_pattern='^rapid-curated-tranco50-v5-diagnostic-b(01)-s(0[12]
 rapid_v4_formal_pattern='^rapid-curated-tranco50-v4-formal-b(0[1-9]|1[0-6])-s(0[1-9]|10)-(undefended|front|tamaraw|buflo|cs-buflo)-1200(-g(0[2-9]|[1-9][0-9]))?$'
 rapid_v5_formal_pattern='^rapid-curated-tranco50-v5-formal-b(0[1-9]|1[0-6])-s(0[1-9]|10)-(undefended|front|tamaraw|buflo|cs-buflo)-1200(-g(0[2-9]|[1-9][0-9]))?$'
 rapid_v6_formal_pattern='^rapid-curated-tranco50-v6-formal-b(0[1-9]|1[0-6])-s(0[1-9]|[1-4][0-9]|50)-(undefended|front|tamaraw|buflo|cs-buflo)-1200(-g(0[2-9]|[1-9][0-9]))?$'
+rapid_slot_chunk_pattern='^rapid-selected50-slot-v1-p([0-9a-f]{16})-s(0[1-9]|[1-4][0-9]|50)-(undefended|front|tamaraw|buflo|cs-buflo)-v([0-5][0-9]|6[0-3])-n(0[1-9]|1[0-6])-c(0[1-9]|[1-5][0-9]|6[0-4])(-g(0[2-9]|[1-9][0-9]))?$'
 rapid_v5_epoch_pattern='^rapid-curated-tranco50-v5-formal-b(0[1-9]|1[0-6])-s(0[1-9]|10)-(undefended|front|tamaraw|buflo|cs-buflo)-1200(-g(0[2-9]|[1-9][0-9]))?-e[0-9]{4}$'
 rapid_capture_epoch=0
 if [[ "${1:-}" == "run" &&
@@ -5932,6 +5933,7 @@ if [[ "${1:-}" == "run" &&
         "${study_campaign_name%.yml}" =~ ${rapid_v4_formal_pattern} ||
         "${study_campaign_name%.yml}" =~ ${rapid_v5_formal_pattern} ||
         "${study_campaign_name%.yml}" =~ ${rapid_v6_formal_pattern} ||
+        "${study_campaign_name%.yml}" =~ ${rapid_slot_chunk_pattern} ||
         "${study_campaign_name%.yml}" =~ ${rapid_v5_epoch_pattern} ) &&
       "${study_campaign_name}" == *.yml ]]; then
   if (( $# != 2 )); then
@@ -5959,6 +5961,14 @@ if [[ "${1:-}" == "run" &&
     rapid_capture_version="v6"
     if [[ -z "${QCSD_RAPID_ROLLING_LAUNCH_INPUT:-}" ]]; then
       echo "rolling capture requires explicit hash-bound enrollment and lane authority" >&2
+      exit 1
+    fi
+  elif [[ "${rapid_capture_name}" =~ ${rapid_slot_chunk_pattern} ]]; then
+    rapid_capture_role="formal"
+    rapid_capture_mode="${BASH_REMATCH[3]}"
+    rapid_capture_version="v6"
+    if [[ -z "${QCSD_RAPID_ROLLING_LAUNCH_INPUT:-}" ]]; then
+      echo "slot chunks require explicit hash-bound rolling policy and lane authority" >&2
       exit 1
     fi
   elif [[ "${rapid_capture_name}" =~ ${rapid_v5_epoch_pattern} ]]; then
@@ -8073,23 +8083,29 @@ else:
 if campaign.name != expected_name or campaign.schema_version != 1:
     raise SystemExit("rapid capture frozen campaign identity is invalid")
 if role == "formal":
-    if study_version not in {"v4", "v5", "v6"} or not campaign.name.startswith(
-        f"rapid-curated-tranco50-{study_version}-formal-"
-    ):
-        raise SystemExit("rapid formal lane has another study version")
-    if (
-        campaign.purpose != "evaluation"
-        or campaign.profile != "research-1200"
-        or campaign.request_policies != ("as-defined",)
-        or (not 1 <= len(campaign.workloads) <= 5 if study_version == "v6" else len(campaign.workloads) != 5)
-        or any(workload.visits != 4 for workload in campaign.workloads)
-        or len(campaign.defenses) != 1
-        or campaign.defenses[0].name != expected_mode
-        or (campaign.chaff_qualification_set is None) == (expected_mode != "undefended")
-    ):
-        if study_version == "v4":
-            raise SystemExit("rapid v4 formal lane differs from the frozen five-site plan")
-        raise SystemExit("rapid v5 formal lane differs from the frozen five-site plan")
+    if campaign.name.startswith("rapid-selected50-slot-v1-"):
+        if action != "run" or study_version != "v6":
+            raise SystemExit("slot chunks require a fresh rolling launch")
+        from qcsd_lab.rapid_slot_chunks import validate_launcher_campaign
+        validate_launcher_campaign(campaign, expected_mode)
+    else:
+        if study_version not in {"v4", "v5", "v6"} or not campaign.name.startswith(
+            f"rapid-curated-tranco50-{study_version}-formal-"
+        ):
+            raise SystemExit("rapid formal lane has another study version")
+        if (
+            campaign.purpose != "evaluation"
+            or campaign.profile != "research-1200"
+            or campaign.request_policies != ("as-defined",)
+            or (not 1 <= len(campaign.workloads) <= 5 if study_version == "v6" else len(campaign.workloads) != 5)
+            or any(workload.visits != 4 for workload in campaign.workloads)
+            or len(campaign.defenses) != 1
+            or campaign.defenses[0].name != expected_mode
+            or (campaign.chaff_qualification_set is None) == (expected_mode != "undefended")
+        ):
+            if study_version == "v4":
+                raise SystemExit("rapid v4 formal lane differs from the frozen five-site plan")
+            raise SystemExit("rapid v5 formal lane differs from the frozen five-site plan")
     if study_version in {"v5", "v6"} and expected_mode != "undefended":
         qualification_digests = {
             workload.qualification_set_manifest_sha256

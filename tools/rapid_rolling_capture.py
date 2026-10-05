@@ -26,13 +26,26 @@ def _spec(path, spec):
 
 
 def run(args, *, _context=None):
-    if args.command in {"plan", "launch", "complete-lane", "verify-lane"} and _context is None:
+    if args.command in {"plan", "chunk-policy", "chunk-plan", "launch", "complete-lane", "verify-lane"} and _context is None:
         from qcsd_lab.rapid_operation_facts import OperationFacts
         context = OperationFacts()
         with context.scope():
             result = run(args, _context=context)
             context.check()
             return result
+    if args.command == "chunk-policy":
+        from qcsd_lab.rapid_slot_chunks import publish_policy
+        path = publish_policy(lanes.load_capture_spec(args.spec), rolling._ref(args.prior_progress), args.output,
+                              modes=args.mode, maximum_visits=args.maximum_visits)
+        return {"slot_chunk_policy": rolling._ref(path), "scientific_credit": False}
+    if args.command == "chunk-plan":
+        from qcsd_lab.rapid_slot_chunks import publish_plan
+        base = lanes.load_capture_spec(args.spec)
+        path = publish_plan(base, rolling._ref(args.slot_chunk_policy), args.output, _context=_context)
+        spec = replace(base, plan_receipt=path)
+        _, value = rolling.verify_capture_plan(spec, _context=_context)
+        return {"plan": str(path), "spec": _spec(args.spec_output, spec),
+                "planned_traces": value["planned_trace_count"], "scientific_credit": False}
     if args.command == "static-inspector-scheduling":
         from qcsd_lab.rapid_runtime_inspector import publish_schedule
         return {"scheduling": publish_schedule(lanes.load_capture_spec(args.spec),
@@ -171,12 +184,20 @@ def run(args, *, _context=None):
 def _parser():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("scheduling", "static-scheduling", "original-static-scheduling", "selected-scheduling", "static-inspector-scheduling", "canary-equivalence", "canary-control-bridge", "qualification-control-authority", "init", "init-static", "enroll", "front-amendment", "static-amendment", "plan", "successor", "launch", "complete-lane", "verify-lane",
+    for name in ("scheduling", "static-scheduling", "original-static-scheduling", "selected-scheduling", "static-inspector-scheduling", "canary-equivalence", "canary-control-bridge", "qualification-control-authority", "init", "init-static", "enroll", "front-amendment", "static-amendment", "plan", "chunk-policy", "chunk-plan", "successor", "launch", "complete-lane", "verify-lane",
                  "retire-lane", "publish-manifest", "verify-manifest"):
         item = commands.add_parser(name)
-        if name not in {"canary-equivalence", "canary-control-bridge", "qualification-control-authority", "scheduling", "static-scheduling", "original-static-scheduling", "selected-scheduling", "static-inspector-scheduling", "front-amendment", "static-amendment"}:
+        if name not in {"chunk-policy", "chunk-plan", "canary-equivalence", "canary-control-bridge", "qualification-control-authority", "scheduling", "static-scheduling", "original-static-scheduling", "selected-scheduling", "static-inspector-scheduling", "front-amendment", "static-amendment"}:
             item.add_argument("--evidence-root", type=Path, required=True)
-        if name in {"scheduling", "static-scheduling", "original-static-scheduling", "selected-scheduling", "static-inspector-scheduling"}:
+        if name == "chunk-policy":
+            for flag in ("spec", "prior-progress", "output"):
+                item.add_argument("--" + flag, type=Path, required=True)
+            item.add_argument("--mode", choices=plan.MODES, action="append", required=True)
+            item.add_argument("--maximum-visits", type=int, choices=range(1, 17), default=16)
+        elif name == "chunk-plan":
+            for flag in ("spec", "slot-chunk-policy", "output", "spec-output"):
+                item.add_argument("--" + flag, type=Path, required=True)
+        elif name in {"scheduling", "static-scheduling", "original-static-scheduling", "selected-scheduling", "static-inspector-scheduling"}:
             for flag in ("spec", "runtime-spec", "qualification-spec", "original-canonical", "current-canonical", "output"):
                 item.add_argument("--" + flag, type=Path, required=True)
             item.add_argument("--reason", required=True)
