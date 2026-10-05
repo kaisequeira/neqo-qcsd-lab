@@ -26,6 +26,7 @@ from qcsd_lab import application_response_policy as app
 from qcsd_lab.rapid_operation_facts import OperationFacts
 from tests.test_rapid_ordinary_parallel import current
 from tests.test_rapid_rolling_capture import _sites
+from tests.test_rapid_fixed_condition_target import duration_setting
 
 
 @pytest.fixture
@@ -94,6 +95,75 @@ def case(current, monkeypatch):
     case = SimpleNamespace(current=current, inputs=inputs, inputs_ref=target.reference(input_path),
         canonical_ref=target.reference(Path(current.canonical_ref['path'])), result=result, source=source)
     return case
+
+
+@pytest.fixture
+def duration_case(case, monkeypatch):
+    current = case.current; base = current.payload
+    current.sites = tuple(rolling.plan.Site(site.candidate_id, site.workload_id, site.workload_sha256,
+        site.primary_origin, 'controlled-buflo-named120', 'f'*64) for site in current.sites)
+    base[target.traffic.FIELD] = target.duration.POLICY
+    # Original admission/amendment proof is the same explicit HOST boundary as
+    # the inherited fixture; the declared policy and renderer run unchanged.
+    base['static_capture_amendment'] = {'path': 'controlled-original-amendment', 'sha256': 'f'*64}
+    for row in base['lanes']: row.update(mode='buflo', qualification_set='controlled-buflo-named120')
+    current.canary['schema_version'] = 1
+    configuration, run = duration_setting()
+    run['application_response_policy'] = case.inputs['inputs']['condition']['identity']['application_response_policy']
+    run['primary_document_identity_policy'] = case.inputs['inputs']['condition']['identity']['primary_document_identity_policy']
+    configuration['limits'] = {**target.duration.capture_limits('buflo', base['capture_limits'],
+        policy=target.duration.POLICY), 'max_attempts': 1}
+    (case.result/'accepted/sample/neqo/run.json').write_bytes(target._json(run))
+    (case.result/'experiment.json').write_bytes(target._json({'configuration': configuration,
+        'samples': [{'path': 'accepted/sample', 'state': 'accepted', 'defense': 'buflo'}]}))
+    condition = target.condition_identity(configuration, run, 'buflo')
+    case.inputs['mode'] = 'buflo'
+    case.inputs['inputs']['condition'] = {'identity': condition, 'identity_sha256': target._digest(condition)}
+    case.inputs['inputs']['capture_limits'] = target.duration.capture_limits('buflo', base['capture_limits'],
+        policy=target.duration.POLICY)
+    current.facts['traffic_hashes'] = target.traffic.expected(target.duration.POLICY)
+    monkeypatch.setattr(chunks, '_base', lambda spec: (current.sites, base))
+    return case
+
+
+def test_fixed_buflo200_chunk_condition_and_policy_derive_only_capture_duration(duration_case):
+    case = duration_case; base = case.current.payload; original = deepcopy(base['capture_limits'])
+    reference, identity = chunks._condition(case.current.spec, case.current.sites, base, 'buflo')
+    assert reference == case.current.canary and identity == case.inputs['inputs']['condition']['identity']
+    p = policy(case); value, sites, kept = chunks.validate_policy(target.reference(p))
+    assert value['capture_limits'] == {**original, 'timeout_seconds': 240, 'capture_seconds': 300}
+    assert value['capture_limits']['max_attempts'] == 3 and kept['capture_limits'] == original
+    lane = chunks.planned_lanes(value, target.reference(p), sites, shard=3)[0]
+    rendered = yaml.safe_load(geometry.render(lane, sites, **geometry._render_options(base)))
+    assert rendered['limits'] == value['capture_limits'] and rendered['workloads'] == {s.workload_id: 16 for s in sites}
+    assert case.inputs['inputs']['classes'][0]['capture_limits'] == original
+
+
+@pytest.mark.parametrize('field', list(target.duration.capture_limits('buflo',
+    {'timeout_seconds': 120, 'capture_seconds': 180}, policy=target.duration.POLICY)) +
+    ['max_attempts', 'max_response_bytes', 'capture_megabytes', 'settle_seconds', 'per_origin_cooldown_seconds'])
+def test_fixed_buflo200_chunk_refuses_each_changed_formal_cap(field, duration_case):
+    case = duration_case; case.inputs['inputs']['capture_limits'][field] += 1
+    output = case.current.root/'refused-duration-policy.json'
+    with pytest.raises(ValueError, match='caps'):
+        chunks.publish_policy(case.current.spec, case.inputs_ref, case.canonical_ref, output)
+    assert not output.exists()
+
+
+@pytest.mark.parametrize('change', ['practice-retries', 'practice-timeout', 'practice-response', 'undeclared-policy'])
+def test_fixed_buflo200_chunk_condition_refuses_changed_practice_or_missing_plan_policy(change, duration_case):
+    case = duration_case; base = case.current.payload
+    if change == 'undeclared-policy':
+        del base[target.traffic.FIELD]
+        case.current.facts['traffic_hashes'] = target.traffic.expected()
+    else:
+        path = case.result/'experiment.json'; value = json.loads(path.read_bytes())
+        field = {'practice-retries': 'max_attempts', 'practice-timeout': 'timeout_seconds',
+            'practice-response': 'max_response_bytes'}[change]
+        value['configuration']['limits'][field] += 1
+        path.write_bytes(target._json(value))
+    with pytest.raises(ValueError, match='exact practice caps'):
+        chunks._condition(case.current.spec, case.current.sites, base, 'buflo')
 
 
 def policy(case, suffix='one'):

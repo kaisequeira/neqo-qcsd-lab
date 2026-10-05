@@ -396,7 +396,7 @@ def additive_selected_inputs(enrollment, study, batch, all_classes, policy, *, p
     if [row["candidate_id"] for row in bindings] != batch["selected_candidate_ids"]:
         raise ValueError("selected flight reorders its append-only class membership")
     limits = per_class.select_classes(batch, all_classes, policy)[1] if per_class_policy else policy["capture_limits"]
-    return batch, policy, bindings, manifests, sorted(roots), {**limits, "max_attempts": 1}
+    return batch, policy, bindings, manifests, [str(root) for root in sorted(roots)], {**limits, "max_attempts": 1}
 
 
 def current_sidecar(sidecar, canonical, *, workload_id, workload_sha256,

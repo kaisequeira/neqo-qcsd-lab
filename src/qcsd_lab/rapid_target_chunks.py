@@ -27,7 +27,8 @@ PLAN_TYPE = 'qcsd-current-fixed-condition-target-slot-chunk-plan-v1'
 CONTRACT = 'declared-fixed-condition-progress-current-qualified-full-graph-chunks-v1'
 FIELD = 'target_chunk_policy'
 CONTROL_MODULES = ('rapid_target_chunks', 'rapid_slot_chunks', 'rapid_fixed_condition_target',
-    'rapid_lane_evidence', 'rapid_rolling_capture', 'rapid_rolling_readiness', 'rapid_operation_facts')
+    'rapid_lane_evidence', 'rapid_rolling_capture', 'rapid_rolling_readiness', 'rapid_operation_facts',
+    'buflo_duration_budget', 'rapid_capture_traffic')
 POLICY_KEYS = {'contract', 'lane_layout', 'base_spec', 'base_four_visit_plan', 'target_chunk_inputs',
     'current_canonical', 'target_id', 'condition_sha256', 'classes', 'capture_limits', 'mode',
     'remaining_slots', 'ranges', 'maximum_visits', 'current_canary', 'runtime', 'native_head', 'client_sha256',
@@ -96,6 +97,11 @@ def _condition(spec, sites, base, mode):
     run = lanes._load(_read(run_path))
     configuration = experiment['configuration']
     identity = target.condition_identity(configuration, run, mode)
+    limits = target._capture_limits(mode, base['capture_limits'], identity)
+    if limits != base['capture_limits']:
+        if (target.traffic.declared(base) != target.duration.POLICY
+                or not target._typed_equal(configuration.get('limits'), {**limits, 'max_attempts': 1})):
+            raise ValueError('target BuFLO200 canary requires its declared duration and exact practice caps')
     if application_body_identity_policy(configuration) != application_body_identity_policy(base):
         raise ValueError('target canary and planned body policy differ')
     individual = facts.get('ordinary_individual_primary_authority') if carried else None
@@ -127,7 +133,8 @@ def _derive(spec, inputs_ref, canonical_ref):
     value = target.read_chunk_inputs(inputs_ref)
     inputs, mode = value['inputs'], value['mode']
     if (not inputs['ranges'] or not 1 <= len(inputs['classes']) <= 5
-            or inputs['capture_limits'] != base.get('capture_limits')):
+            or not target._typed_equal(inputs['capture_limits'], target._capture_limits(
+                mode, base.get('capture_limits'), inputs['condition']['identity']))):
         raise ValueError('target chunks require remaining slots and exact homogeneous full-graph caps')
     expected = [(row['candidate_id'], row['workload_id']) for row in inputs['classes']]
     if expected != [(site.candidate_id, site.workload_id) for site in sites]:

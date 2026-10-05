@@ -35,6 +35,12 @@ def _host_authority(path: Path, *, _context=None) -> dict:
 def launch(authority_path: Path, output: Path) -> dict:
     from qcsd_lab.rapid_operation_facts import OperationFacts
     context = OperationFacts()
+    with context.scope():
+        return _launch(authority_path, output, _context=context)
+
+
+def _launch(authority_path: Path, output: Path, *, _context) -> dict:
+    context = _context
     parallel.read(authority_path)
     authority_path = authority_path.resolve(strict=True)
     value = _host_authority(authority_path, _context=context)
@@ -102,6 +108,7 @@ def launch(authority_path: Path, output: Path) -> dict:
             signal.signal(watched, handler)
         previous.clear()
         result = parallel.verify_results_in_image(authority_path, output)
+        context.check()
         parallel.put(output / "deep-verification.json", result)
         return result
     except BaseException as error:
@@ -138,9 +145,13 @@ def main(argv=None):
         elif args.action == "retire-session":
             result = parallel.retire_session(args.authority.absolute(), args.output.absolute())
         else:
-            parallel._require_result_birth(args.output)
-            _host_authority(args.authority)
-            result = parallel.verify_results_in_image(args.authority, args.output)
+            from qcsd_lab.rapid_operation_facts import OperationFacts
+            context = OperationFacts()
+            with context.scope():
+                parallel._require_result_birth(args.output)
+                _host_authority(args.authority, _context=context)
+                result = parallel.verify_results_in_image(args.authority, args.output)
+                context.check()
     except (OSError, ValueError, TypeError, KeyError, RuntimeError, subprocess.SubprocessError) as error:
         print(f"parallel capture: {type(error).__name__}: {error}", file=sys.stderr)
         return 2

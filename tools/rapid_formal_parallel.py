@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 from qcsd_lab import rapid_formal_parallel as formal
+from qcsd_lab.rapid_operation_facts import OperationFacts
 
 
 def main(argv=None):
@@ -36,9 +37,11 @@ def main(argv=None):
         if args.lane is not None:
             if args.declaration_1 is not None or args.declaration_2 is not None or args.mode_1 is not None or args.mode_2 is not None:
                 raise ValueError("choose ordinary lane names or registered block requests")
-            path = formal.prepare_batch(args.spec, args.evidence_root, args.lane, args.output,
-                                        [args.predecessor_1, args.predecessor_2], second_spec=args.spec_2,
-                                        installation=args.installation)
+            context = OperationFacts()
+            with context.scope():
+                path = formal.prepare_batch(args.spec, args.evidence_root, args.lane, args.output,
+                                            [args.predecessor_1, args.predecessor_2], second_spec=args.spec_2,
+                                            installation=args.installation, _context=context)
         else:
             if any(value is None for value in (args.declaration_1, args.declaration_2, args.mode_1, args.mode_2)):
                 raise ValueError("registered preparation needs a declaration and defense for each worker")

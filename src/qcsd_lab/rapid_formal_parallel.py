@@ -479,11 +479,11 @@ def _workloads(spec, lane, sites):
             for site in sites if site.workload_id in lane.workload_ids}
 
 
-def resolve_dns(path: Path, index: int) -> dict[str, Any]:
+def resolve_dns(path: Path, index: int, *, _context=None) -> dict[str, Any]:
     """Executed in the immutable collection image for this worker's full graph."""
     from .class_acquisition import public_origin_ip_pins
     from .orchestrator import load_campaign
-    value, facts = _audit(path)
+    value, facts = _audit(path, _context=_context)
     spec, _, _, _, _, lane, _ = facts[index]
     with _worker_context(value, index, facts[index]), shared._execution_parameter_context(value):
         campaign = load_campaign(spec.campaign_dir / f"{lane.campaign_name}.yml")
@@ -1034,10 +1034,10 @@ def _check_release_fence(fence, path, value, facts, preflight):
         raise ValueError("formal input bytes or inventory changed after pre-birth validation")
 
 
-def prepare_release(path: Path, output: Path) -> str:
+def prepare_release(path: Path, output: Path, *, _context=None) -> str:
     """Close expensive immutable checks before either worker/router is born."""
     from .rapid_operation_facts import OperationFacts
-    context = OperationFacts()
+    context = OperationFacts() if _context is None else _context
     value, facts = _audit(path, _context=context)
     if any(fact[5].study_version != 6 for fact in facts):
         raise ValueError("pre-birth release factoring is only the prospective rolling contract")

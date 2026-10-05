@@ -47,6 +47,27 @@ def setting(mode):
     return configuration,run
 
 
+def duration_setting():
+    """Use the checked-in parameter bytes and the genuine typed Native policy."""
+    configuration, run = setting('buflo')
+    root = Path(__file__).resolve().parents[1]
+    path = root / target.duration.PARAMETER_PATH
+    raw = path.read_bytes()
+    assert raw == target.duration.parameter_bytes()
+    provenance = Path(str(path) + '.provenance.json')
+    assert hashlib.sha256(provenance.read_bytes()).hexdigest() == target.traffic.PROVENANCE_SHA256
+    configuration['defenses'][0].update(parameters=str(path),
+        parameters_sha256=target.duration.PARAMETER_SHA256, provenance=str(provenance),
+        provenance_sha256=target.traffic.PROVENANCE_SHA256)
+    run['method'] = 'buflo'
+    run['resolved_configuration']['defense'] = {'kind': 'buflo', 'parameters': str(path)}
+    run['defense_parameters'] = {'kind': 'buflo', 'path': str(path),
+        'sha256': target.duration.PARAMETER_SHA256, 'implementation_scope': 'client_only_quic',
+        'paper_equivalent': False, target.duration.RUN_FIELD: dict(target.duration.RECEIPT)}
+    target.duration.validate_native_receipt(run, raw, expected_path=str(path))
+    return configuration, run
+
+
 @pytest.fixture
 def case(tmp_path,monkeypatch):
     conditions={}
@@ -81,6 +102,17 @@ def case(tmp_path,monkeypatch):
     return declarations
 
 
+@pytest.fixture
+def duration_case(case):
+    configuration, run = duration_setting()
+    case.conditions['buflo'] = target.describe_condition(write(case.root/'duration-configuration.json', configuration),
+        write(case.root/'duration-run.json', run), 'buflo', case.root/'duration-condition.json')
+    case.target = target.publish_target(namespace='prospective-fixed-duration-example', enrollment=case.enrollment,
+        conditions=case.conditions, native_head=NATIVE, client_sha256=CLIENT, history=[case.history],
+        output=case.root/'duration-target.json')
+    return case
+
+
 def audit_rows(case,mode,slots,*,row_change=None,partial=False):
     identity=target.condition_identity(*setting(mode),mode)
     rows=[]
@@ -106,6 +138,61 @@ def proof(case,monkeypatch,mode,slots,**kwargs):
     # Original installed/deep acceptance is an explicit controlled boundary.
     monkeypatch.setattr(target,'validate_audit',lambda r: json.loads(target._open(r).read_bytes()))
     return ref
+
+
+def duration_proof(case, monkeypatch, change=None):
+    def row_change(row):
+        row['condition'] = target.condition_identity(*duration_setting(), 'buflo')
+        row['capture_limits'] = target.duration.capture_limits('buflo', case.rows[0]['capture_limits'],
+            policy=target.duration.POLICY)
+        if change is not None: change(row)
+    return proof(case, monkeypatch, 'buflo', [4], row_change=row_change)
+
+
+def test_fixed_buflo200_intake_and_chunk_inputs_keep_original_caps_and_source_labels(duration_case, monkeypatch):
+    case = duration_case; original = deepcopy(case.rows[0]['capture_limits'])
+    initial = target.initialize_progress(target=case.target, proofs=[], output=case.root/'duration-initial.json')
+    updated = target.append_progress(progress=initial, proofs=[duration_proof(case, monkeypatch)],
+        output=case.root/'duration-next.json')
+    value = target.validate_progress(updated); row = value['accepted_rows'][0]
+    assert row['capture_limits'] == {**original, 'timeout_seconds': 240, 'capture_seconds': 300}
+    assert row['measurement_source']['lab_commit'] == 'a'*40 and row['logical_visit'] == 4
+    assert value['classes'][0]['capture_limits'] == original == case.rows[0]['capture_limits']
+    inputs = target.chunk_inputs(updated, [1], 'buflo')
+    assert inputs['capture_limits'] == row['capture_limits'] and inputs['capture_limits']['max_attempts'] == 3
+    assert inputs['classes'][0]['capture_limits'] == original and 4 not in inputs['remaining_slots']
+    path = target.publish_chunk_inputs(updated, [1], 'buflo', output=case.root/'duration-input.json')
+    assert target.read_chunk_inputs(path)['inputs'] == inputs
+
+
+@pytest.mark.parametrize('field', list(capture_limits(16*1024*1024,64)))
+def test_fixed_buflo200_intake_refuses_each_changed_formal_cap(field, duration_case, monkeypatch):
+    case = duration_case
+    initial = target.initialize_progress(target=case.target, proofs=[], output=case.root/'duration-initial.json')
+    def change(row): row['capture_limits'][field] += 1
+    p = duration_proof(case, monkeypatch, change)
+    output = case.root/'duration-refused.json'
+    with pytest.raises(ValueError, match='caps'):
+        target.append_progress(progress=initial, proofs=[p], output=output)
+    assert not output.exists()
+
+
+@pytest.mark.parametrize('change', ['parameter', 'provenance', 'scope', 'receipt', 'missing-receipt', 'resolved'])
+def test_fixed_buflo200_caps_require_the_exact_declared_policy(change):
+    condition = target.condition_identity(*duration_setting(), 'buflo')
+    if change == 'parameter': condition['defense']['parameters_sha256'] = '0'*64
+    elif change == 'provenance': condition['defense']['provenance_sha256'] = '0'*64
+    elif change == 'scope': condition['defense_parameters']['implementation_scope'] = 'bilateral'
+    elif change == 'receipt': condition['defense_parameters'][target.duration.RUN_FIELD]['max_events'] = 9999
+    elif change == 'missing-receipt': del condition['defense_parameters'][target.duration.RUN_FIELD]
+    else: condition['resolved_configuration']['defense']['parameters']['sha256'] = '0'*64
+    with pytest.raises(ValueError): target._capture_limits('buflo', capture_limits(16*1024*1024,64), condition)
+
+
+@pytest.mark.parametrize('mode', target.MODES)
+def test_all_existing_fixed_conditions_keep_exact_original_caps(mode):
+    original = capture_limits(16*1024*1024,64)
+    assert target._capture_limits(mode, original, target.condition_identity(*setting(mode), mode)) == original
 
 
 def test_initial_history_is_separate_tam_is_zero_and_available_prefix_can_plan(case):

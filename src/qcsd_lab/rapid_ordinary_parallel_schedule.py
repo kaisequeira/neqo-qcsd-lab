@@ -128,6 +128,24 @@ def input_dependencies(base, sites, *, _context=None):
             own_files, own_trees = selected.preparation_inputs(preparation, manifest["resources"])
         else:
             own_files, own_trees = facade.preparation_inputs(preparation, manifest["resources"])
+        input_module = facade.module_for_preparation(preparation)
+        payload = receipts._unpack(_read(facade.reopen(facade.receipt_ref(preparation))), input_module.RECEIPT_TYPE)
+        bound_files = selected._bound_validator_files(payload)
+        modules = selected._direct_modules() if input_module is selected else input_module._modules()
+        # Runtime imports may live in the execution copy or installed package.
+        # Keep original receipt refs; publish declared paths for additional imports.
+        for module in modules:
+            imported = Path(module.__file__).absolute()
+            if imported not in own_files:
+                continue
+            declared = base.module_root / "src" / Path(*module.__name__.split(".")).with_suffix(".py")
+            if _read(imported) != _read(declared):
+                raise ValueError("ordinary selected validator differs from its declared runtime Source")
+            if context is not None:
+                context.watch_file(imported)
+            if imported != declared and imported not in bound_files:
+                own_files.discard(imported)
+            own_files.add(declared)
         files.update(own_files); trees.update(own_trees)
     if "slot_chunk_policy" in lanes.plan_payload(_read(base.plan_receipt)):
         files.update(chunks.input_files(lanes.plan_payload(_read(base.plan_receipt))))

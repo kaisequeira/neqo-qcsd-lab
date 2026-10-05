@@ -19,6 +19,32 @@ setting is a distinct condition and cannot inherit the old thirty-two traces.
 The target remains fifty sites, five fixed conditions and sixty-four visits
 per site and condition: 16,000 independently verified formal traces.
 
+The updated cohort has sixteen enrolled sites and twenty-seven ordinary
+resource admissions. Classes 12–16 were appended in enrollment batch `b0004`;
+the host-local closure is
+`../diagnostic-rehearsals/selected-additive-classes012-016-v27-root-actual-20261006-001/enrollment-actual-closed.json`.
+It binds the actual public enrollment operation and the complete previously
+prepared inputs; it adds no formal trace. The enrollment SHA is
+`997af2b52f5525ed61484fee7661bd0cf1312cc35aa3a73a0e3b0bddd79afc84`.
+
+The first two-worker ordinary preparation closed successfully, but both
+subsequent launch attempts stopped before worker containers and site requests.
+The actual execution-copy comparison is retained under
+`../diagnostic-rehearsals/ordinary-schedule-execution-root-diff-host-root-actual-20261006-001/`.
+Only the supporting file-location list differed: eight additional imported
+validator paths. Workload graphs, limits, canary results and traffic settings
+matched. A prospective repair retains original bound references and checks
+the bytes and closing state of the actual imports while using declared Source
+paths for additional references. It covers plain and larger-budget inputs.
+
+The combined startup Source checks are retained under
+`../diagnostic-rehearsals/rapid-v28-startup-integration-root-checks-20261006-001/source-checks-closed.json`.
+All 123 focused cases passed, with no errors, failures or skipped cases, and
+the Source and bound inputs remained unchanged during those checks. This is
+HOST software evidence; it is not a runtime installation, parallel capture,
+recovery or revised-target credit receipt. These local evidence files are
+retained separately and are not included in every repository clone.
+
 The latest batch's Root closure is the host-local sibling path
 `../diagnostic-rehearsals/ordinary-b03-current-runtime-serial-root-actual-20261006-001/independently-verified-batch-closed.json`,
 SHA `1aca09fad12067ae257140cd93a7172188d44a6d059684427d41dadd406451b3`.
@@ -50,18 +76,22 @@ The original 71-resource/two-origin GET and public verification remain unchanged
 owned HOST accounting has its own source label. This adds one ordinary admission
 and no formal trace, bringing ordinary admissions to twenty-one at that point.
 Positions 60, 61 and 63 then passed; position 65 subsequently passed and ordinary
-admissions are now twenty-five
-and enrollment is still eleven classes. Actual operation records are in
+admissions were twenty-five at that checkpoint. Actual operation records are in
 `../diagnostic-rehearsals/supplied-static-budget64-q060-root-actual-20261006-001/operations/`,
 with corresponding `q061`, `q062` and `q063` sibling roots. Each retains its
 original GET, separate verification and owned HOST accounting. Candidate 62
 is operationally deferred: the primary HTTP/3 response finished with HTTP 302,
 but its strict successful-page contract remained partial and the full graph
 was not requested. Its original failure is retained; it adds no site or trace.
-The ordered ledger now closes 65 of 87 supplied decisions: 25 admitted,
+The ordered ledger then closed 65 of 87 supplied decisions: 25 admitted,
 20 input ineligible and 20 operationally deferred. Position 64 closed input
 ineligible. Position 66 retained a secondary HTTP 302 in its full GET and its
-separate HOST accounting is pending; no terminal decision is counted for 66.
+separate HOST accounting subsequently closed its operational deferral.
+Position 67 was input ineligible and positions 68 and 69 were admitted,
+bringing that terminal prefix to 69 of 87 decisions. Position 70 subsequently
+closed its operational deferral and position 71 was input ineligible. The
+latest prefix is 71 of 87 decisions: 27 admitted, 22 input ineligible and
+22 operationally deferred.
 
 The new HOST plan for positions 64–68 is
 `../diagnostic-rehearsals/supplied-static-budget64-accounting-b40-064-068-plan-20261006-004/plan.json`,

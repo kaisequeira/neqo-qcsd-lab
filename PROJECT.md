@@ -69,22 +69,42 @@ then selection of a Python environment without dependencies. The first has a
 reviewed narrow repair; the second used the launcher's supported explicit Python
 setting, with no change to the plan or traffic settings.
 
-There are **eleven enrolled classes** and **twenty-five ordinary-resource
-admissions**. Candidate 59's complete 71-resource, two-origin graph passed its
+There are now **sixteen enrolled classes** and **twenty-seven ordinary-resource
+admissions**. The five-site enrollment append for classes 12–16 closed
+successfully using the complete prepared resource lists. Candidate 59's complete 71-resource, two-origin graph passed its
 actual GET, public verification and separately recorded owned HOST accounting
 in **13.9, 1.1 and 40.9 seconds**. Positions 60, 61 and 63 subsequently passed
 their full GET, separate verification and public accounting. Position 62 is
 deferred: its primary HTTP/3 response completed with HTTP 302, so it did not
 establish the required successful final page and full resource graph.
-The supplied-list ledger has closed 65 of 87 decisions: 25 admitted, 20 input
-ineligible and 20 operationally deferred. Position 64 was input ineligible and
+The supplied-list ledger has closed 71 of 87 decisions: 27 admitted, 22 input
+ineligible and 22 operationally deferred. Position 64 was input ineligible and
 position 65 was admitted. Position 66's full GET retained one secondary HTTP
-302; its separate HOST accounting is pending, so it is not a terminal decision.
+302; its separate HOST deferral accounting has closed. Position 67 was input
+ineligible, and positions 68 and 69 passed admission.
 The plan for positions 64–68
 prepared successfully in 37.3 seconds, without resource requests or trace credit.
 An ordinary admission does not establish compatibility with all five settings.
 Even a fully passing remaining supplied-list tail cannot fill all fifty places;
 supplementary complete multi-origin sites are required.
+
+The published combined release `e84e1f07` and its v27 installation passed all
+twelve runtime checks using the existing `c24da2af` compiled client. Cached
+image packaging took 190 seconds. The first two-worker ordinary batch passed
+preparation in 39 minutes 6 seconds, then stopped before worker containers or
+site requests because supporting validator files acquired additional path
+references when copied into the execution directory. Direct inspection of
+the actual execution copy isolated that difference in 51 seconds; the graphs,
+traffic settings, limits and practice results matched.
+
+Prospective repairs cover those plain and larger-budget validator paths,
+FRONT path serialization, shared host-launch checks, and BuFLO200's distinct
+capture time budget while retaining its original admission limits. The
+combined focused checks closed 123 passing cases. The coordinator repair
+also passed 61 focused cases and shares checks within each pre-worker action. The
+first successful parallel capture and recovery demonstration remain pending;
+these Source checks add no formal traces. The existing compiled client is
+reusable for the Python changes.
 
 The ordinary two-worker controls are published on Main and the desktop branch
 as Lab **`9e5dd93e`**, with unchanged Native **`c24da2af`**. Twenty-two focused

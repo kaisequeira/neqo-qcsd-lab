@@ -21,6 +21,8 @@ from . import rapid_partial_progress as membership
 from . import rapid_slot_chunks as chunks
 from . import tamaraw_fixed_configuration as tam
 from . import rapid_per_class_selected_enrollment as budgets
+from . import buflo_duration_budget as duration
+from . import rapid_capture_traffic as traffic
 from .rapid_operation_facts import OperationFacts, current_context
 
 TARGET_TYPE = 'qcsd-prospective-fifty-site-five-fixed-condition-target-v1'
@@ -140,6 +142,7 @@ def _sources():
         'membership':Path(membership.__file__), 'chunks':Path(chunks.__file__), 'tamaraw':Path(tam.__file__),
         'facts':Path(facts.__file__), 'acceptance':Path(acceptance.__file__), 'application':Path(application.__file__),
         'budgets':Path(budgets.__file__),
+        'duration':Path(duration.__file__), 'traffic':Path(traffic.__file__),
         'overlay':Path(overlay.__file__),
     }.items()}
 
@@ -219,6 +222,31 @@ def _typed_equal(left, right):
     if isinstance(left, list):
         return len(left)==len(right) and all(_typed_equal(a,b) for a,b in zip(left,right))
     return left == right
+
+
+def _capture_limits(mode, original, condition):
+    """Retain admission caps; derive only the declared exact BuFLO200 setting."""
+    limits = budgets.valid_limits(original)
+    if mode not in MODES or condition.get('mode') != mode:
+        raise ValueError('fixed target caps require their own declared mode')
+    defense = condition['defense']; parameter = condition['defense_parameters']
+    selected = None
+    if mode == 'buflo' and (defense.get('parameters_sha256') == duration.PARAMETER_SHA256
+            or isinstance(parameter, dict) and duration.RUN_FIELD in parameter):
+        resolved = condition['resolved_configuration']
+        if (defense.get('kind') != 'buflo'
+                or defense.get('parameters_sha256') != duration.PARAMETER_SHA256
+                or defense.get('provenance_sha256') != traffic.PROVENANCE_SHA256
+                or not isinstance(parameter, dict) or parameter.get('kind') != 'buflo'
+                or parameter.get('sha256') != duration.PARAMETER_SHA256
+                or parameter.get('implementation_scope') != 'client_only_quic'
+                or parameter.get('paper_equivalent') is not False
+                or not isinstance(resolved, dict) or resolved.get('defense', {}).get('kind') != 'buflo'
+                or not _typed_equal(resolved['defense'].get('parameters'), {'sha256': duration.PARAMETER_SHA256})):
+            raise ValueError('fixed target duration caps lack the exact BuFLO200 parameter/provenance identity')
+        duration.validate_receipt(parameter.get(duration.RUN_FIELD))
+        selected = duration.POLICY
+    return duration.capture_limits(mode, limits, policy=selected)
 
 
 def _membership(enrollment):
@@ -695,7 +723,8 @@ def _select(target, proofs, *, initial):
                 raise ValueError('initial target may carry only exactly matched ordinary/FRONT; Tamaraw starts empty')
             if (member is None or row['workload_id']!=member['workload_id']
                     or row['original_graph_sha256']!=member['original_graph_sha256']
-                    or row['capture_limits']!=member['capture_limits']
+                    or not _typed_equal(row['capture_limits'], _capture_limits(
+                        mode, member['capture_limits'], target['conditions'][mode]['identity']))
                     or row['client_sha256']!=target['target_identity']['client_sha256']
                     or row['measurement_source']['neqo_commit']!=target['target_identity']['native_head']
                     or row['measurement_source']['neqo_pinned_commit']!=target['target_identity']['native_head']
@@ -802,7 +831,8 @@ def chunk_inputs(progress, classes, mode, *, maximum=16):
         raise ValueError('one fixed target flight requires homogeneous per-class caps')
     accepted=set(range(SLOTS))-set(vectors[0]);target=validate_target(value['target'])
     return {'target':value['target'],'progress':progress,'target_id':value['target_id'],'condition':target['conditions'][mode],
-        'classes':selected,'capture_limits':selected[0]['capture_limits'],'remaining_slots':vectors[0],
+        'classes':selected,'capture_limits':_capture_limits(mode, selected[0]['capture_limits'],
+            target['conditions'][mode]['identity']),'remaining_slots':vectors[0],
         'ranges':[{'slot_start':start,'slot_count':count} for start,count in chunks.ranges(accepted,maximum=maximum)],
         'old_capsule_or_chunk_authority_inferred':False}
 

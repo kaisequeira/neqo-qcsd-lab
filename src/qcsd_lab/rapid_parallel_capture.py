@@ -210,11 +210,11 @@ def lifecycle_inputs(path: Path, execution_root: Path, expected_sha: str) -> Non
     host_source(value)
 
 
-def formal_entry_inputs(path: Path) -> dict[str, Any]:
+def formal_entry_inputs(path: Path, *, _context=None) -> dict[str, Any]:
     """One fresh scientific pass for campaign selection and first-worker inputs."""
     from . import rapid_formal_parallel as formal
     from .rapid_operation_facts import OperationFacts
-    context = OperationFacts()
+    context = OperationFacts() if _context is None else _context
     audited = formal._audit(path, _context=context)
     host_source(audited[0])
     result = formal.worker_inputs(path, 0, _audited=audited, _context=context)
@@ -292,7 +292,7 @@ def _execution_parameter_context(value: dict[str, Any]):
     return checked_inputs()
 
 
-def image_preflight(path: Path, expected_sha: str) -> dict[str, Any]:
+def image_preflight(path: Path, expected_sha: str, *, _context=None) -> dict[str, Any]:
     """Executed in the actual collection image before either worker exists."""
     from .rapid_lane_evidence import executed_image_runtime_check
     from .runtime_provenance import validate_runtime_receipt
@@ -301,7 +301,7 @@ def image_preflight(path: Path, expected_sha: str) -> dict[str, Any]:
     value = load(path)
     if value["artifact_type"] != AUTHORITY_TYPE:
         from .rapid_formal_parallel import image_preflight as formal_preflight
-        return formal_preflight(path, expected_sha)
+        return formal_preflight(path, expected_sha, _context=_context)
     value = authority(path)
     proof = executed_image_runtime_check(value["runtime"])
     installed = validate_runtime_receipt(required_schema_version=2)
@@ -366,11 +366,11 @@ def select_pairs(available: list[int]) -> dict[str, Any]:
     return {"pairs": [available[-4:-2], available[-2:]], "sidecar_cpus": available[:-4]}
 
 
-def initialize(path: Path, output: Path, expected_sha: str, available: list[int]) -> dict[str, Any]:
+def initialize(path: Path, output: Path, expected_sha: str, available: list[int], *, _context=None) -> dict[str, Any]:
     value = load(path)
     if value["artifact_type"] != AUTHORITY_TYPE:
         from .rapid_formal_parallel import initialize as formal_initialize
-        return formal_initialize(path, output, expected_sha, available)
+        return formal_initialize(path, output, expected_sha, available, _context=_context)
     value = authority(path)
     if sha(read(path)) != expected_sha:
         raise ValueError("parallel authority changed before launch")
@@ -874,10 +874,23 @@ def main(argv=None):
     parser.add_argument("--cpus")
     parser.add_argument("--index", type=int)
     args = parser.parse_args(argv)
+    if args.action in {"formal-entry-inputs", "formal-inputs", "formal-dns",
+                       "preflight", "initialize", "prepare-release"}:
+        from .rapid_operation_facts import OperationFacts
+        context = OperationFacts()
+        with context.scope():
+            try:
+                return _dispatch(args, _context=context)
+            finally:
+                context.check()
+    return _dispatch(args)
+
+
+def _dispatch(args, *, _context=None):
     if args.action == "lifecycle-inputs":
         lifecycle_inputs(args.authority, args.output, args.sha256)
     elif args.action == "formal-entry-inputs":
-        print(json.dumps(formal_entry_inputs(args.authority), sort_keys=True))
+        print(json.dumps(formal_entry_inputs(args.authority, _context=_context), sort_keys=True))
     elif args.action in {"formal-inputs", "formal-dns"}:
         from .rapid_formal_parallel import worker_inputs, resolve_dns
         if args.action == "formal-inputs" and args.prepared_sha256 is not None:
@@ -885,20 +898,20 @@ def main(argv=None):
             print(json.dumps(prepared_worker_inputs(args.authority, args.output, args.index, args.prepared_sha256), sort_keys=True))
             return
         function = worker_inputs if args.action == "formal-inputs" else resolve_dns
-        print(json.dumps(function(args.authority, args.index), sort_keys=True))
+        print(json.dumps(function(args.authority, args.index, _context=_context), sort_keys=True))
     elif args.action == "select":
         value = authority(args.authority, execution_root=args.output)
         host_source(value)
         print(value["campaigns"][0]["path"])
     elif args.action == "initialize":
-        print(json.dumps(initialize(args.authority, args.output, args.sha256, json.loads(args.cpus))))
+        print(json.dumps(initialize(args.authority, args.output, args.sha256, json.loads(args.cpus), _context=_context)))
     elif args.action == "preflight":
-        print(json.dumps(image_preflight(args.authority, args.sha256), sort_keys=True))
+        print(json.dumps(image_preflight(args.authority, args.sha256, _context=_context), sort_keys=True))
     elif args.action == "release":
         release(args.authority, args.output, load(args.actual), prepared_sha256=args.prepared_sha256)
     elif args.action == "prepare-release":
         from .rapid_formal_parallel import prepare_release
-        print(prepare_release(args.authority, args.output))
+        print(prepare_release(args.authority, args.output, _context=_context))
     elif args.action == "gate":
         gate(args.output, args.sha256, args.index, args.authority)
     elif args.action == "retire":
