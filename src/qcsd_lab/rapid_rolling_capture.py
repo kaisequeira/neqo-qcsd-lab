@@ -1175,7 +1175,10 @@ def image_plan_check(spec: lanes.CaptureSpec, runtime: Mapping[str, Any], *, _co
     relative = "src/qcsd_lab/rapid_rolling_capture.py"
     own = lanes._read(Path(__file__))
     if own != lanes._read(spec.runtime_source_root / relative) or own != lanes._read(spec.module_root / relative):
-        raise ValueError("rolling authority differs from the installed and frozen source")
+        from .rapid_ordinary_transport_control import FIELD as transport_field, validate_image_authority
+        if transport_field not in lanes._load(lanes._read(spec.qualification_spec)):
+            raise ValueError("rolling authority differs from the installed and frozen source")
+        validate_image_authority(spec, payload, runtime, own)
     if "slot_chunk_policy" in payload:
         from . import rapid_slot_chunks
         relative = "src/qcsd_lab/rapid_slot_chunks.py"

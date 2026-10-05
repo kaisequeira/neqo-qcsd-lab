@@ -162,3 +162,74 @@ def test_unmarked_old_current_control_default_still_refuses(tmp_path, monkeypatc
     with pytest.raises(ValueError, match="actual installed and frozen"):
         ordinary.validate_inputs(path, enrollment=spec.cohort,
             runtime={key: spec.serializable()[key] for key in rolling.RUNTIME_FIELDS}, require_current=True)
+
+
+def image_runtime(spec):
+    """Actual retained image labels; no HOST claim of installed execution."""
+    from qcsd_lab.rapid_capture_traffic import spec_files
+    return {"collection_image_digest": spec.collection_image_digest,
+        "runtime_source": {**json.loads(spec.source_manifest.read_bytes()), "image_digest": spec.collection_image_digest},
+        **{label: lanes._sha(getattr(spec, key).read_bytes()) for key, label in (
+            ("source_manifest", "source_manifest_sha256"), ("client_binary", "client_sha256"),
+            ("base_launcher", "base_launcher_sha256"), ("host_launcher", "host_launcher_sha256"))},
+        "qualification_implementation": {"controlled": "installed runtime proof boundary only"},
+        "traffic_hashes": {key: digest for key, (_, digest) in spec_files(spec).items()}}
+
+
+def test_actual_image_plan_function_and_public_owner_return_full_proof(tmp_path, monkeypatch):
+    spec, _, _, _, _ = fixture(tmp_path, monkeypatch)
+    runtime = image_runtime(spec)
+    assert (ROOT / "src/qcsd_lab/rapid_rolling_capture.py").read_bytes() != (
+        spec.runtime_source_root / "src/qcsd_lab/rapid_rolling_capture.py").read_bytes()
+    with OperationFacts().scope() as context:
+        proof = rolling.image_plan_check(spec, runtime, _context=context)
+        assert len(proof["sites"]) == 5
+        assert proof["plan_payload"] == lanes.plan_payload(spec.plan_receipt.read_bytes())
+        assert proof["plan_receipt_sha256"] == lanes._sha(spec.plan_receipt.read_bytes())
+        assert proof["runtime_source"] == runtime["runtime_source"]
+        assert proof["overlay_source_hashes"]["src/qcsd_lab/rapid_rolling_capture.py"] == lanes._sha(
+            (ROOT / "src/qcsd_lab/rapid_rolling_capture.py").read_bytes())
+        context.check()
+    # Run the actual public installed-plan dispatch and its closing owner;
+    # only the no-Docker installed runtime preflight is a controlled boundary.
+    monkeypatch.setattr(lanes, "executed_image_runtime_check", lambda value: runtime)
+    assert lanes.executed_image_plan_check(spec.serializable())["plan_payload"] == proof["plan_payload"]
+
+
+@pytest.mark.parametrize("field", ["collection_image_digest", "runtime_source", "client_sha256"])
+def test_image_authority_refuses_changed_actual_runtime(tmp_path, monkeypatch, field):
+    spec, _, _, _, _ = fixture(tmp_path, monkeypatch)
+    runtime = image_runtime(spec)
+    runtime[field] = {} if field == "runtime_source" else "altered actual runtime label"
+    with pytest.raises(ValueError, match="actual image, Source, client"):
+        rolling.image_plan_check(spec, runtime)
+
+
+def test_image_authority_unmarked_default_still_refuses(tmp_path, monkeypatch):
+    spec, _, _, _, _ = fixture(tmp_path, monkeypatch)
+    _, payload = rolling.verify_capture_plan(spec, require_current=True)
+    path = tmp_path / "unmarked.json"
+    value = json.loads(spec.qualification_spec.read_bytes())
+    del value[control.FIELD]
+    write(path, value)
+    unmarked = replace(spec, qualification_spec=path)
+    # Reach the precise second predicate without replacing its implementation.
+    # Generic unmarked ordinary validation remains separately refused above.
+    monkeypatch.setattr(rolling, "verify_capture_plan", lambda *args, **kwargs: ((), payload))
+    with pytest.raises(ValueError, match="rolling authority differs"):
+        rolling.image_plan_check(unmarked, image_runtime(spec))
+
+
+def test_image_projection_rejects_residual_acceptance_change(tmp_path):
+    source = (ROOT / "src/qcsd_lab/rapid_rolling_capture.py").read_bytes()
+    altered = source.replace(b'"cohort_generation": "rolling-50"', b'"cohort_generation": "forged-50"', 1)
+    old = json.loads(actual_paths()[0].read_bytes())
+    original = (Path(old["clean_runtime_root"]) / "src/qcsd_lab/rapid_rolling_capture.py").read_bytes()
+    projected = control._image_projection(altered)
+    with pytest.raises(ValueError, match="residual controls or acceptance"):
+        control._boundary_projection(original, projected, "enrollment_roots", '''from . import rapid_undefended_capture as ordinary
+stored = lanes.plan_payload(lanes._read(spec.plan_receipt))
+if ordinary.FIELD in stored:
+    from . import rapid_ordinary_transport_control as transport
+    return transport.enrollment_roots(spec, stored)
+''')

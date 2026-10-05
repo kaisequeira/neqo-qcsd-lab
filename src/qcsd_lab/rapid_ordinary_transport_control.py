@@ -76,7 +76,7 @@ def _boundary_projection(original, current, name, inserted):
 
 def check_projection(runtime_root, module_root):
     original, current = Path(runtime_root) / "src/qcsd_lab", Path(module_root) / "src/qcsd_lab"
-    _boundary_projection(_read(original / "rapid_rolling_capture.py"), _read(current / "rapid_rolling_capture.py"),
+    _boundary_projection(_read(original / "rapid_rolling_capture.py"), _image_projection(_read(current / "rapid_rolling_capture.py")),
         "enrollment_roots", '''from . import rapid_undefended_capture as ordinary
 stored = lanes.plan_payload(lanes._read(spec.plan_receipt))
 if ordinary.FIELD in stored:
@@ -92,6 +92,50 @@ if ordinary.FIELD in stored:
     for name in ("rapid_capture_plan.py", "rapid_lane_evidence.py"):
         if _read(original / name) != _read(current / name):
             raise ValueError("ordinary transport changes protected planning or actuation Source")
+
+
+def _image_projection(raw):
+    """Normalize only the exact typed installed-authority conditional."""
+    tree = ast.parse(raw)
+    units = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "image_plan_check"]
+    if len(units) != 1:
+        raise ValueError("ordinary image authority named unit is missing or duplicated")
+    expected = ast.parse('''from .rapid_ordinary_transport_control import FIELD as transport_field, validate_image_authority
+if transport_field not in lanes._load(lanes._read(spec.qualification_spec)):
+    raise ValueError("rolling authority differs from the installed and frozen source")
+validate_image_authority(spec, payload, runtime, own)
+''').body
+    predicate = ast.parse('if own != lanes._read(spec.runtime_source_root / relative) or own != lanes._read(spec.module_root / relative):\n    pass').body[0].test
+    found = [node for node in units[0].body if isinstance(node, ast.If)
+             and ast.dump(node.test, include_attributes=False) == ast.dump(predicate, include_attributes=False)]
+    if (len(found) != 1 or found[0].orelse or ast.dump(ast.Module(body=found[0].body, type_ignores=[]), include_attributes=False)
+        != ast.dump(ast.Module(body=expected, type_ignores=[]), include_attributes=False)):
+        raise ValueError("ordinary image authority differs from its exact closed dispatch")
+    found[0].body = ast.parse('raise ValueError("rolling authority differs from the installed and frozen source")').body
+    return ast.unparse(tree).encode()
+
+
+@_owned
+def validate_image_authority(spec, payload, runtime, own):
+    """Allow the closed transport reader while retaining the measured image."""
+    inputs = lanes._load(_read(spec.qualification_spec))
+    control = inputs.get(FIELD)
+    declared_runtime = {key: spec.serializable()[key] for key in rolling.RUNTIME_FIELDS}
+    validate_control(control, declared_runtime)
+    sites = validate_inputs(spec.qualification_spec, enrollment=spec.cohort,
+        runtime=declared_runtime, require_current=True)
+    ordinary.require_plan(payload)
+    ordinary.check_layout(spec, inputs)
+    if (payload.get("runtime") != declared_runtime or payload.get("sites") != [asdict(site) for site in sites]
+        or own != _read(Path(__file__).parent / "rapid_rolling_capture.py")
+        or own != _read(spec.module_root / "src/qcsd_lab/rapid_rolling_capture.py")
+        or runtime.get("collection_image_digest") != spec.collection_image_digest
+        or runtime.get("runtime_source") != {**lanes._load(_read(spec.source_manifest)), "image_digest": spec.collection_image_digest}
+        or any(runtime.get(label) != lanes._sha(_read(getattr(spec, key))) for key, label in (
+            ("source_manifest", "source_manifest_sha256"), ("client_binary", "client_sha256"),
+            ("base_launcher", "base_launcher_sha256"), ("host_launcher", "host_launcher_sha256")))):
+        raise ValueError("ordinary installed authority changed its actual image, Source, client or full plan")
+    current_context().check()
 
 
 @_owned

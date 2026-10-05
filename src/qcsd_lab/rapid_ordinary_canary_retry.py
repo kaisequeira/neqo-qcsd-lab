@@ -24,7 +24,7 @@ ADDED_FILES = {"src/qcsd_lab/rapid_ordinary_canary_retry.py", "tools/rapid_ordin
 CHANGED_UNITS = {"src/qcsd_lab/rapid_rolling_readiness.py": {
     "_deep_command", "_validate_canary", "validate_canary", "readiness_mount_roots"},
     "tools/_rapid_class_mode_flight/flight/operator.py": {"image_argv"},
-    "src/qcsd_lab/rapid_rolling_capture.py": {"enrollment_roots"},
+    "src/qcsd_lab/rapid_rolling_capture.py": {"enrollment_roots", "image_plan_check"},
     "src/qcsd_lab/rapid_undefended_capture.py": {"validate_inputs"}}
 
 
