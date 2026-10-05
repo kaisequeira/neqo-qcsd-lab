@@ -318,6 +318,10 @@ def publish_inputs(enrollment: Path, runtime: Mapping[str, str], output: Path, *
 
 def validate_inputs(path: Path, *, enrollment: Path, runtime: Mapping[str, str], require_current=False):
     value = lanes._load(_read(path))
+    if "ordinary_transport_control" in value:
+        from .rapid_ordinary_transport_control import validate_inputs as validate_transport_inputs
+        return validate_transport_inputs(path, enrollment=enrollment, runtime=runtime,
+                                         require_current=require_current)
     expected, sites = _derive(enrollment, runtime, renewal=value.get("renewal"))
     if value != expected or type(value.get("schema_version")) is not int or type(value.get("formal_accepted_trace_count")) is not int:
         raise ValueError("ordinary-only input changed its exact enrollment, full graphs, caps, runtime or Source")

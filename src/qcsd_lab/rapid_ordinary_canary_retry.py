@@ -16,12 +16,16 @@ from .util import durable_create
 
 TYPE = "qcsd-ordinary-original-image-canary-deep-transport-retry-v1"
 KEYS = old.REFERENCE_KEYS | {"artifact_type", "failed_deep", "transport_declaration", "reader_sources"}
-FILES = ("rapid_ordinary_canary_retry.py", "rapid_rolling_readiness.py")
+FILES = ("rapid_ordinary_canary_retry.py", "rapid_rolling_readiness.py", "rapid_ordinary_transport_control.py")
 ADDED_FILES = {"src/qcsd_lab/rapid_ordinary_canary_retry.py", "tools/rapid_ordinary_canary_retry.py",
-    "tests/test_rapid_ordinary_canary_retry.py", "docs/ORDINARY-CANARY-TRANSPORT-RETRY.md"}
+    "tests/test_rapid_ordinary_canary_retry.py", "docs/ORDINARY-CANARY-TRANSPORT-RETRY.md",
+    "src/qcsd_lab/rapid_ordinary_transport_control.py", "tools/rapid_ordinary_transport_control.py",
+    "tests/test_rapid_ordinary_transport_control.py", "docs/ORDINARY-FORMAL-TRANSPORT.md"}
 CHANGED_UNITS = {"src/qcsd_lab/rapid_rolling_readiness.py": {
     "_deep_command", "_validate_canary", "validate_canary", "readiness_mount_roots"},
-    "tools/_rapid_class_mode_flight/flight/operator.py": {"image_argv"}}
+    "tools/_rapid_class_mode_flight/flight/operator.py": {"image_argv"},
+    "src/qcsd_lab/rapid_rolling_capture.py": {"enrollment_roots"},
+    "src/qcsd_lab/rapid_undefended_capture.py": {"validate_inputs"}}
 
 
 def _open(ref):
@@ -73,6 +77,8 @@ def validate_overlay(runtime, plan, directory):
             if _residual(old._read(root / relative), CHANGED_UNITS[relative]) != _residual(
                     old._read(Path(plan["clean_runtime_root"]) / relative, record["sha256"]), CHANGED_UNITS[relative]):
                 raise ValueError("ordinary overlay changed residual original control units")
+    from .rapid_ordinary_transport_control import check_projection
+    check_projection(plan["clean_runtime_root"], root)
     if context is not None:
         context.remember(key, True)
 
@@ -119,7 +125,11 @@ def group_roots(plan, directory):
             context.watch_tree(old._path(root, directory=True))
     renewal, _ = _open(plan["ordinary_renewal"])
     enrollment, _ = _open(plan["enrollment"])
-    _, _, bindings, manifests, _, _ = ordinary.flight_inputs(renewal, enrollment, Path(plan["study_root"]))
+    if old._json(old._read(renewal)).get("control_sources") != ordinary._sources():
+        from .rapid_ordinary_transport_control import original_group
+        bindings, manifests = original_group(plan, directory)
+    else:
+        _, _, bindings, manifests, _, _ = ordinary.flight_inputs(renewal, enrollment, Path(plan["study_root"]))
     expected = sorted({str(root) for manifest in manifests for root in manifest_roots(manifest)})
     declared = plan.get("group_preparation_roots")
     if (declared != expected or not bindings or len(bindings) != len(plan.get("selected_classes", []))

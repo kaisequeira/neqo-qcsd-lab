@@ -1278,6 +1278,11 @@ def enrollment_roots(spec: lanes.CaptureSpec) -> list[Path]:
     The installed plan check still reopens every terminal and prepared graph.
     Mount derivation does not repeat that scientific verification on the host.
     """
+    from . import rapid_undefended_capture as ordinary
+    stored = lanes.plan_payload(lanes._read(spec.plan_receipt))
+    if ordinary.FIELD in stored:
+        from . import rapid_ordinary_transport_control as transport
+        return transport.enrollment_roots(spec, stored)
     from . import rapid_slot_chunks as chunks
     if chunks.is_plan(spec.plan_receipt):
         return sorted(chunks.roots(spec))
