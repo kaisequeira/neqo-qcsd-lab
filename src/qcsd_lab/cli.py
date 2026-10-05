@@ -505,16 +505,24 @@ def main(argv: list[str] | None = None) -> None:
         )
         return
     if args.command == "run":
+        from .rapid_operation_facts import OperationFacts, current_context
+
         results = Path(os.environ.get("QCSD_RESULTS_ROOT", str(LAB_ROOT / "results")))
-        try:
-            root = run_campaign(args.campaign.resolve(), results.resolve())
-        except CampaignIncomplete as error:
-            print(error, file=sys.stderr)
-            print(error.root)
-            raise SystemExit(1) from None
-        except (OSError, ValueError) as error:
-            _fail(error)
-        print(root)
+        context = current_context()
+        if context is None:
+            context = OperationFacts()
+        with context.scope():
+            try:
+                context.watch_file(args.campaign.resolve())
+                root = run_campaign(args.campaign.resolve(), results.resolve())
+                context.check()
+            except CampaignIncomplete as error:
+                print(error, file=sys.stderr)
+                print(error.root)
+                raise SystemExit(1) from None
+            except (OSError, ValueError) as error:
+                _fail(error)
+            print(root)
         return
     if args.command == "resume":
         try:

@@ -11,6 +11,7 @@ from contextvars import ContextVar
 from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
+import ast
 import os
 
 from . import qualification_delivery_compatibility as old
@@ -54,6 +55,43 @@ def normalize_orchestrator_imports(raw):
     return raw
 
 
+def _collection_control_project(relative, raw, *, qualification=False):
+    """Extract only collection ownership; every other branch/unit is retained."""
+    tree = ast.parse(raw, filename=relative)
+    units = {}
+    if relative == "src/qcsd_lab/cli.py":
+        mains = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main"]
+        if len(mains) != 1:
+            raise ValueError("collection control needs one exact CLI main")
+        expected = ast.dump(ast.parse('args.command == "run"', mode="eval").body, include_attributes=False)
+        branches = [node for node in mains[0].body if isinstance(node, ast.If)
+                    and ast.dump(node.test, include_attributes=False) == expected]
+        if len(branches) != 1 or branches[0].orelse:
+            raise ValueError("collection control needs one exact direct CLI RUN branch")
+        branch = branches[0]
+        units["main.run"] = evidence._sha(ast.dump(ast.Module(body=branch.body, type_ignores=[]), include_attributes=False).encode())
+        branch.body = [ast.Pass()]
+    elif relative == "src/qcsd_lab/orchestrator.py":
+        selected = {"run_campaign", "_run_loaded_campaign"}
+        retained = []
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name in selected:
+                if node.name in units:
+                    raise ValueError("collection control duplicates a named orchestration unit")
+                units[node.name] = evidence._sha(ast.dump(node, include_attributes=False).encode())
+            else:
+                retained.append(node)
+        if set(units) != selected:
+            raise ValueError("collection control lacks the exact orchestration units")
+        tree.body = retained
+    else:
+        raise ValueError("collection control cannot project another Source module")
+    if qualification:
+        protected, existing = old._project(relative, ast.unparse(tree).encode())
+        return protected, {**existing, **units}
+    return ast.dump(tree, include_attributes=False).encode(), units
+
+
 def _source_comparison(before, after):
     protected = set(old.legacy.IMPLEMENTATION_FILES) | old.EXTRA_PROTECTED
     protected.update(name for name in before if name.startswith(("neqo-qcsd/", "config/")))
@@ -74,12 +112,17 @@ def _source_comparison(before, after):
             retained = a.replace(SELECTED_ENUM_LINE, b"")
             old_units, new_units = {}, {}
         else:
-            if name not in old.CONSUMER_FUNCTIONS:
+            collection_control = name in {"src/qcsd_lab/cli.py", "src/qcsd_lab/orchestrator.py"}
+            if name not in old.CONSUMER_FUNCTIONS and not collection_control:
                 raise ValueError("control authority changed an original qualification primitive")
             if name == "src/qcsd_lab/orchestrator.py":
                 a, b = normalize_orchestrator_imports(a), normalize_orchestrator_imports(b)
-            retained, old_units = old._project(name, a)
-            current, new_units = old._project(name, b)
+            if collection_control:
+                retained, old_units = _collection_control_project(name, a, qualification=True)
+                current, new_units = _collection_control_project(name, b, qualification=True)
+            else:
+                retained, old_units = old._project(name, a)
+                current, new_units = old._project(name, b)
             if retained != current:
                 raise ValueError("control authority changed unnamed qualification implementation")
         changes[name] = {"before_sha256": evidence._sha(before[name]), "after_sha256": evidence._sha(after[name]),

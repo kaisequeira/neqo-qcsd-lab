@@ -3398,20 +3398,34 @@ def _require_class_study_public_origin_policy(campaign_or_name: Campaign | objec
 
 
 def run_campaign(path: Path, results_root: Path = Path("/lab/results")) -> Path:
-    campaign = load_campaign(path)
-    _require_class_study_coordinator_capture_authority(campaign)
-    if _is_class_study_campaign(campaign):
-        results_root = _canonical_class_study_results_root(results_root)
-    lock_held = (
-        campaign.name.startswith("buflo-study-v1-")
-        and os.environ.get("QCSD_BUFLO_CAPTURE_LOCK_HELD") == "1"
-    ) or (
-        _is_class_study_campaign(campaign) and os.environ.get("QCSD_CLASS_CAPTURE_LOCK_HELD") == "1"
-    )
-    if _has_durable_attempt_budget(campaign) and not lock_held:
-        with _study_capture_lock(results_root):
-            return _run_loaded_campaign(campaign, results_root)
-    return _run_loaded_campaign(campaign, results_root)
+    from .rapid_operation_facts import OperationFacts, current_context
+
+    context = current_context()
+    owned = context is None
+    if owned:
+        context = OperationFacts()
+    with context.scope():
+        context.watch_file(path)
+        campaign = load_campaign(path)
+        _require_class_study_coordinator_capture_authority(campaign)
+        if _is_class_study_campaign(campaign):
+            results_root = _canonical_class_study_results_root(results_root)
+        lock_held = (
+            campaign.name.startswith("buflo-study-v1-")
+            and os.environ.get("QCSD_BUFLO_CAPTURE_LOCK_HELD") == "1"
+        ) or (
+            _is_class_study_campaign(campaign) and os.environ.get("QCSD_CLASS_CAPTURE_LOCK_HELD") == "1"
+        )
+        if _has_durable_attempt_budget(campaign) and not lock_held:
+            with _study_capture_lock(results_root):
+                context.check()
+                root = _run_loaded_campaign(campaign, results_root)
+        else:
+            context.check()
+            root = _run_loaded_campaign(campaign, results_root)
+        if owned:
+            context.check()
+        return root
 
 
 def _class_study_launch_key(campaign: Campaign) -> str:
@@ -4175,6 +4189,11 @@ def _run_loaded_campaign(campaign: Campaign, results_root: Path) -> Path:
             output.flush()
             os.fsync(output.fileno())
     runtime_campaign, configuration = _materialize_inputs(root, campaign, source)
+    from .rapid_operation_facts import current_context
+
+    context = current_context()
+    if context is not None:
+        context.watch_tree(root / "inputs")
     if class_launch is not None:
         configuration["class_study_launch_sha256"] = _validate_class_study_launch(
             root,
@@ -4191,6 +4210,8 @@ def _run_loaded_campaign(campaign: Campaign, results_root: Path) -> Path:
         samples=samples,
         started_at=started.isoformat(),
     )
+    if context is not None:
+        context.check()
     return _execute(root, runtime_campaign, experiment)
 
 

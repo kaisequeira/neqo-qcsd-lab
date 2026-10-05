@@ -38,11 +38,19 @@ def _groups(root, inventory):
         raise ValueError("control bridge selected predicate moved outside its exact registered dispatch")
     protected = shell.replace(SELECTED_ENUM_LINE, b"")
     groups["measurement"]["qcsd-lab:protected-measurement"]["sha256"] = ready._sha(protected)
-    if "src/qcsd_lab/orchestrator.py" in groups["measurement"]:
-        orchestrator = control.normalize_orchestrator_imports(ready._read(root / "src/qcsd_lab/orchestrator.py"))
-        groups["measurement"]["src/qcsd_lab/orchestrator.py"]["sha256"] = ready._sha(orchestrator)
+    collection_units = {}
+    for relative in ("src/qcsd_lab/cli.py", "src/qcsd_lab/orchestrator.py"):
+        raw = ready._read(root / relative)
+        if relative.endswith("/orchestrator.py"):
+            raw = control.normalize_orchestrator_imports(raw)
+        protected, named = control._collection_control_project(relative, raw)
+        collection_units[relative] = named
+        for entries in groups.values():
+            if relative in entries:
+                entries[relative] = {**entries[relative], "sha256": ready._sha(protected)}
     return groups, {"historical_control_units": units, "selected_predicate_count": count,
-                   "selected_predicate_sha256": ready._sha(SELECTED_ENUM_LINE)}
+                   "selected_predicate_sha256": ready._sha(SELECTED_ENUM_LINE),
+                   "collection_control_units": collection_units}
 
 
 def _derive(*, original_canary, original_runtime, current_runtime, current_inventory, current_witness, mode):

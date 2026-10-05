@@ -211,6 +211,10 @@ def validate_prepared_response_graph(manifest: Mapping[str, Any]) -> dict[str, A
         if is_selected(preparation):
             validate_selected_preparation(preparation, resources)
             coverage_policy = WHOLE_COVERAGE if "whole_graph_get_evidence" in preparation else COVERAGE
+        from . import rapid_selected_budget_input as selected_budget
+        if selected_budget.is_selected(preparation):
+            selected_budget.validate_preparation(preparation, resources)
+            coverage_policy = COVERAGE
         coverage = preparation.get("coverage_admission")
         required = coverage.get("required_resources") if isinstance(coverage, Mapping) else None
         if (policy != COMPLETED_TERMINAL_HTTP_ERRORS_POLICY
