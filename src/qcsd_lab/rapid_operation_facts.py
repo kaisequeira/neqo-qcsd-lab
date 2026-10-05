@@ -268,6 +268,10 @@ class OperationFacts:
         self._bindings.add(key)
 
     def bind_schedule(self, capsule) -> None:
+        from . import rapid_ordinary_parallel_schedule as ordinary_parallel
+        if capsule.get("artifact_type") == ordinary_parallel.CAPSULE_TYPE:
+            ordinary_parallel.bind_dependencies(capsule, self)
+            return
         from .rapid_lane_evidence import CaptureSpec, PATH_KEYS, TRAFFIC_FILES, STUDY_PROFILE_FILE
         key = ("schedule", json.dumps(capsule, sort_keys=True))
         if key in self._bindings:

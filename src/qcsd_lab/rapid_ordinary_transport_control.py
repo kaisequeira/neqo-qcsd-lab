@@ -239,14 +239,17 @@ def enrollment_roots(spec, payload):
     if [asdict(site) for site in sites] != payload["sites"]:
         raise ValueError("ordinary transport changes current complete graph order")
     inputs = lanes._load(_read(spec.qualification_spec))
-    validate_control(inputs[FIELD], inputs["runtime"])
+    if FIELD in inputs:
+        validate_control(inputs[FIELD], inputs["runtime"])
     renewal = rolling._open_ref(inputs["renewal"])
     batch, policy, bindings, manifests, roots, _ = ordinary.flight_inputs(renewal, spec.cohort,
         rolling._open_ref(rolling._verify_enrollment(spec.cohort)[0]["policy"]).parent)
     if ([row["workload_id"] for row in bindings] != [site.workload_id for site in sites]
         or Path(batch["admission_root"]) != spec.acquisition_root):
         raise ValueError("ordinary transport changes immutable admission membership")
-    result = set(map(Path, roots)) | {renewal.parent, _open(inputs[FIELD])[0].parent}
+    result = set(map(Path, roots)) | {renewal.parent}
+    if FIELD in inputs:
+        result.add(_open(inputs[FIELD])[0].parent)
     result.update(Path(getattr(spec, key)) for key in ("runtime_source_root", "module_root", "execution_root"))
     result.update(Path(getattr(spec, key)).parent for key in ("source_manifest", "client_binary", "base_launcher", "host_launcher"))
     for site in sites:

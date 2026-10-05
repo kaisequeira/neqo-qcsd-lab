@@ -949,6 +949,9 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
         _context.bind_capture(spec)
         if _context.has(key):
             return _context.get(key)
+    from . import rapid_ordinary_parallel_schedule as ordinary_parallel
+    if ordinary_parallel.is_plan(spec.plan_receipt):
+        return ordinary_parallel.verify_plan(spec, require_current=require_current, _context=_context)
     from . import rapid_slot_chunks as chunks
     if chunks.is_plan(spec.plan_receipt):
         result = chunks.verify_plan(spec, require_current=require_current, _context=_context)
@@ -1116,6 +1119,8 @@ def require_mode_readiness(spec: lanes.CaptureSpec, lane: plan.Lane, *, before: 
         current_static = (static_schedule.is_static(payload["scheduling"])
                           or original_static.is_static(payload["scheduling"])
                           or selected_schedule.is_selected(payload["scheduling"]))
+        from . import rapid_ordinary_parallel_schedule as ordinary_parallel
+        current_static = current_static or ordinary_parallel.is_schedule(payload["scheduling"])
         expected_traffic = plan_files(payload) if current_static else lanes.TRAFFIC_FILES
         if (facts.get("client_sha256") != lanes._sha(lanes._read(spec.client_binary))
             or facts.get("traffic_hashes") != {key: digest for key, (_, digest) in expected_traffic.items()}):
@@ -1243,6 +1248,9 @@ def validate_host_launch(value: Any, *, expected_campaign: str, actual_image: st
 
 
 def publish_successor(spec: lanes.CaptureSpec, lane_name: str, generation: int, output: Path) -> Path:
+    from . import rapid_ordinary_parallel_schedule as ordinary_parallel
+    if ordinary_parallel.is_plan(spec.plan_receipt):
+        return ordinary_parallel.publish_successor(spec, lane_name, generation, output)
     from . import rapid_slot_chunks as chunks
     if chunks.is_plan(spec.plan_receipt):
         return chunks.publish_successor(spec, lane_name, generation, output)
@@ -1281,6 +1289,9 @@ def enrollment_roots(spec: lanes.CaptureSpec) -> list[Path]:
     The installed plan check still reopens every terminal and prepared graph.
     Mount derivation does not repeat that scientific verification on the host.
     """
+    from . import rapid_ordinary_parallel_schedule as ordinary_parallel
+    if ordinary_parallel.is_plan(spec.plan_receipt):
+        return sorted(ordinary_parallel.roots(spec))
     from . import rapid_undefended_capture as ordinary
     stored = lanes.plan_payload(lanes._read(spec.plan_receipt))
     if ordinary.FIELD in stored:

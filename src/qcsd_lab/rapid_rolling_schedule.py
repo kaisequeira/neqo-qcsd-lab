@@ -684,6 +684,9 @@ def validate_schedule(reference: Mapping[str, str], *, runtime: Mapping[str, str
             return validate_schedule(reference, runtime=runtime, before=before, _context=_context)
     _, raw = evidence._reference(reference)
     value = evidence._json(raw)
+    from . import rapid_ordinary_parallel_schedule as ordinary_parallel
+    if isinstance(value, dict) and value.get("artifact_type") == ordinary_parallel.CAPSULE_TYPE:
+        return ordinary_parallel.validate_schedule(reference, runtime=runtime, before=before, _context=_context)
     from . import rapid_selected_parallel_schedule as selected_schedule
     if isinstance(value, dict) and value.get("artifact_type") == selected_schedule.CAPSULE_TYPE:
         return selected_schedule.validate_schedule(reference, runtime=runtime, before=before, _context=_context)
@@ -730,6 +733,11 @@ def validate_qualification_reuse(old_impl: Mapping, current_impl: Mapping, refer
                                 *, actual_image: str, before: str | None = None, _context=None) -> None:
     """Typed installed hook: no ambient or source-only qualification exemption."""
     capsule = validate_schedule(reference, before=before, _context=_context)
+    from . import rapid_ordinary_parallel_schedule as ordinary_parallel
+    if capsule["artifact_type"] == ordinary_parallel.CAPSULE_TYPE:
+        ordinary_parallel.validate_current_implementation(old_impl, current_impl, reference,
+            actual_image=actual_image, before=before, _context=_context)
+        return
     from . import rapid_selected_parallel_schedule as selected_schedule
     if capsule["artifact_type"] == selected_schedule.CAPSULE_TYPE:
         selected_schedule.validate_current_qualification(old_impl, current_impl, reference,
@@ -785,6 +793,14 @@ def validate_ready_canary(reference: Mapping[str, Any], schedule_reference: Mapp
     """Reopen the original passed setting without attributing it to new code."""
     capsule = validate_schedule(schedule_reference, before=before, _context=_context)
     base = _spec(capsule["base_spec"])
+    from . import rapid_ordinary_parallel_schedule as ordinary_parallel
+    if capsule["artifact_type"] == ordinary_parallel.CAPSULE_TYPE:
+        plan = lanes.plan_payload(lanes._read(base.plan_receipt))
+        if mode != "undefended" or plan["readiness"].get(mode) != reference or capsule["canary"] != reference:
+            raise ValueError("ordinary scheduling changed its current successful group canary")
+        runtime = {key: str(getattr(base, key)) for key in lanes.RUNTIME_KEYS}
+        return (evidence.validate_canary(reference, runtime=runtime, mode=mode) if _context is None else
+            _context.validate_canary(reference, runtime, mode, evidence.validate_canary))
     plan = lanes._payload(base.plan_receipt, lanes.PLAN_TYPE)
     if mode not in plan["readiness"] or plan["readiness"][mode] != reference:
         raise ValueError("scheduling canary is not the original setting's bound prerequisite")
@@ -808,6 +824,9 @@ def mount_roots(reference: Mapping[str, str], *, _context=None) -> list[Path]:
         with _context.scope():
             return mount_roots(reference, _context=_context)
     capsule = validate_schedule(reference, _context=_context)
+    from . import rapid_ordinary_parallel_schedule as ordinary_parallel
+    if capsule["artifact_type"] == ordinary_parallel.CAPSULE_TYPE:
+        return ordinary_parallel.mount_roots(reference, _context=_context)
     from . import rapid_selected_parallel_schedule as selected_schedule
     if capsule["artifact_type"] == selected_schedule.CAPSULE_TYPE:
         return selected_schedule.mount_roots(reference, _context=_context)

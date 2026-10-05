@@ -79,6 +79,9 @@ def _json(value: Any) -> bytes:
 def plan_payload(raw: bytes) -> dict[str, Any]:
     """Reopen only the historical plan or the explicit remaining-slot plan."""
     value = _load(raw)
+    from .rapid_ordinary_parallel_schedule import PLAN_TYPE as ORDINARY_PARALLEL_PLAN_TYPE
+    if isinstance(value, dict) and value.get("receipt_type") == ORDINARY_PARALLEL_PLAN_TYPE:
+        return admission._unpack(raw, ORDINARY_PARALLEL_PLAN_TYPE)
     from .rapid_slot_chunks import PLAN_TYPE as CHUNK_PLAN_TYPE
     if isinstance(value, dict) and value.get("receipt_type") == CHUNK_PLAN_TYPE:
         return admission._unpack(raw, CHUNK_PLAN_TYPE)
@@ -103,6 +106,10 @@ def _qualification_layout(spec: CaptureSpec) -> None:
     value = _load(_read(spec.qualification_spec))
     from . import rapid_undefended_capture as ordinary
     if ordinary.is_inputs(value):
+        from . import rapid_ordinary_parallel_schedule as ordinary_parallel
+        if ordinary_parallel.is_plan(spec.plan_receipt):
+            ordinary_parallel.check_layout(spec, value)
+            return
         ordinary.check_layout(spec, value)
         return
     if (not isinstance(value, dict) or set(value) != {"schema_version", "qualification_sets"}
@@ -450,7 +457,11 @@ def _validate_image_proof(proof: Any, spec: CaptureSpec, *, equivalent_plan: boo
     from . import rapid_undefended_capture as ordinary
     site_type = ordinary.OrdinarySite if ordinary.FIELD in stored_plan else plan.Site
     if site_type is ordinary.OrdinarySite:
-        ordinary.require_plan(stored_plan)
+        from . import rapid_ordinary_parallel_schedule as ordinary_parallel
+        if ordinary_parallel.is_payload(stored_plan):
+            ordinary_parallel.require_plan(stored_plan, _context=_context)
+        else:
+            ordinary.require_plan(stored_plan)
     sites = tuple(site_type(**row) for row in proof["sites"])
     if proof["cohort_generation"] == "rolling-50":
         from . import rapid_rolling_capture as rolling
@@ -1257,6 +1268,7 @@ def launch_lane(spec: CaptureSpec, evidence_root: Path, campaign_name: str, *, p
         context._references(intent, root)
         campaign = spec.campaign_dir / f"{campaign_name}.yml"
         env = dict(os.environ)
+        env.setdefault("QCSD_PARALLEL_HOST_PYTHON", sys.executable)
         env.update(QCSD_LAB_COLLECTION_IMAGE=spec.collection_image_digest,
                    QCSD_RAPID_IMAGE_SOURCE_QCSD=str(spec.base_launcher),
                    QCSD_RAPID_V5_PROFILE_PATH=str(_study_profile(spec.execution_root)),

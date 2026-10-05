@@ -1141,6 +1141,9 @@ def readiness(args):
             reference[operation] = {key: ref(output / "logs" / (mode + "-" + operation + suffix))
                 for key, suffix in (("started", "-started.json"), ("completed", "-completed.json"),
                                     ("stdout", ".stdout.log"), ("stderr", ".stderr.log"))}
+        if "ordinary_renewal" in plan:
+            from qcsd_lab.rapid_ordinary_group_canary import reference as group_reference
+            reference = group_reference(reference)
         validate_canary(reference, runtime={key: runtime[key] for key in RUNTIME_KEYS}, mode=mode)
         references[mode] = reference
     destination = args.output.absolute() if args.output is not None else output / "readiness.json"

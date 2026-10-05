@@ -336,7 +336,10 @@ def _deep_command(plan: Mapping[str, Any], directory: Path, plan_sha: str,
                        body_policy=application_body_identity_policy(plan))))
     for root in roots:
         static_mounts.extend(["--volume", f"{root}:{root}:ro"])
-    if ordinary_transport is not None:
+    if ordinary_transport == "current-group":
+        from .rapid_ordinary_group_canary import transport_mounts
+        static_mounts = transport_mounts(plan, directory)
+    elif ordinary_transport is not None:
         from .rapid_ordinary_canary_retry import transport_mounts
         static_mounts = transport_mounts(plan, directory, static_mounts, complete=ordinary_transport == "group")
     return ["docker", "run", "--rm", "--name", f'qcsd-v12-{plan["name"]}-verify-image',
@@ -578,6 +581,9 @@ def validate_canary(reference: Mapping[str, Any], *, runtime: Mapping[str, str],
     ``source`` always retains the original actual canary source and image.
     """
     try:
+        if isinstance(reference, Mapping) and reference.get("schema_version") == 5:
+            from .rapid_ordinary_group_canary import validate
+            return validate(reference, runtime=runtime, mode=mode)
         if isinstance(reference, Mapping) and reference.get("schema_version") == 4:
             from .rapid_ordinary_canary_retry import validate
             return validate(reference, runtime=runtime, mode=mode)
@@ -601,6 +607,9 @@ def readiness_mount_roots(reference: Mapping[str, Any], *, runtime: Mapping[str,
     records and source roles. They grant no writable evidence namespace and
     come only from the closed reference and its authenticated runtime inputs.
     """
+    if isinstance(reference, Mapping) and reference.get("schema_version") == 5:
+        from .rapid_ordinary_group_canary import roots
+        return roots(reference, runtime=runtime, mode=mode)
     if isinstance(reference, Mapping) and reference.get("schema_version") == 4:
         from .rapid_ordinary_canary_retry import roots
         return roots(reference, runtime=runtime, mode=mode)

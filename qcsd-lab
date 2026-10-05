@@ -7918,6 +7918,7 @@ for path in campaign_roots(root, sys.argv[2], Path(sys.argv[3])):
     if [[ "${rapid_scheduling_kind}" == "qcsd-rapid-v6-prospective-parallel-scheduling" ||
           "${rapid_scheduling_kind}" == "qcsd-rapid-v6-current-static-parallel-scheduling" ||
           "${rapid_scheduling_kind}" == "qcsd-rapid-v6-current-selected-parallel-scheduling" ||
+          "${rapid_scheduling_kind}" == "qcsd-rapid-v6-current-ordinary-parallel-scheduling-v1" ||
           "${rapid_scheduling_kind}" == "qcsd-rapid-v6-current-original-static-parallel-scheduling" ]]; then
       rapid_scheduling_python="${parallel_host_python:-}"
       if [[ -z "${rapid_scheduling_python}" ]]; then
