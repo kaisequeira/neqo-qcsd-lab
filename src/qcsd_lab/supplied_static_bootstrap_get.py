@@ -5,6 +5,9 @@ an actual successful strict 2xx GET; no browser or body-content claim is made.
 """
 from __future__ import annotations
 
+import ast
+from contextlib import contextmanager
+import contextvars
 from copy import deepcopy
 from datetime import UTC, datetime
 import os
@@ -22,6 +25,9 @@ from . import supplied_static_graph as graph
 PROOF_TYPE = "supplied-static-primary-bootstrapped-complete-native-get-evidence-v2"
 STRICT_POLICY = "http-2xx-only-v1"
 PRODUCER_ROLE = "external-declared-primary-then-complete-static-get-authority-v2"
+
+HOST_ACCOUNTING_TYPE = "qcsd-host-accounting-bootstrap-observation-authority-v1"
+_HOST_ACCOUNTING = contextvars.ContextVar("qcsd_host_accounting_bootstrap_sources", default=None)
 
 # One known verifier transition, identified by the original immutable producer
 # package d738828f825ffde67e73522cc7dc23ebf4535d278c9cc9ce6e48afdd47b3f111.
@@ -51,8 +57,112 @@ def producer_sources() -> dict[str, str]:
     return {**get.producer_sources(), **{name: graph.digest(get._read(path)) for name, path in modules.items()}}
 
 
+def _host_accounting_read(context, reference):
+    if not isinstance(reference, dict) or set(reference) != {"path", "sha256", "mode"}:
+        raise ValueError("HOST accounting authority requires exact file references")
+    path = Path(reference["path"])
+    if not path.is_absolute() or ".." in path.parts:
+        raise ValueError("HOST accounting authority path differs")
+    raw = context.watch_file(path)
+    if (graph.digest(raw) != reference["sha256"]
+            or path.stat().st_mode & 0o7777 != reference["mode"]):
+        raise ValueError("HOST accounting authority file bytes or mode differ")
+    return raw
+
+
+def _host_accounting_projection(raw, *, current):
+    tree = ast.parse(raw)
+    if current:
+        imports = {ast.dump(ast.parse(text).body[0], include_attributes=False) for text in (
+            "import ast", "from contextlib import contextmanager", "import contextvars")}
+        helpers = {"_host_accounting_read", "_host_accounting_projection", "host_accounting_scope"}
+        retained = []
+        for node in tree.body:
+            if ast.dump(node, include_attributes=False) in imports:
+                continue
+            if isinstance(node, ast.FunctionDef) and node.name in helpers:
+                continue
+            if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and node.targets[0].id in {"HOST_ACCOUNTING_TYPE", "_HOST_ACCOUNTING"}):
+                continue
+            if isinstance(node, ast.FunctionDef) and node.name == "_recognized_producer_sources":
+                additions = ast.parse("bound = _HOST_ACCOUNTING.get()\nif bound is not None and recorded in bound:\n    return True").body
+                if [ast.dump(item, include_attributes=False) for item in node.body[1:3]] != [ast.dump(item, include_attributes=False) for item in additions]:
+                    raise ValueError("HOST accounting bootstrap dispatcher differs")
+                node.body[1:3] = []
+            retained.append(node)
+        tree.body = retained
+    return ast.dump(tree, include_attributes=False)
+
+
+@contextmanager
+def host_accounting_scope(context, authority_path, authority_sha256):
+    """Permit the reviewed observation delta only in an explicitly bound HOST action."""
+    from . import rapid_admission_operation_facts as observed
+    owner = observed._ACTIVE.get()
+    if owner is None or owner.context is not context:
+        raise ValueError("bootstrap accounting authority requires its owned action")
+    path = Path(authority_path)
+    if not path.is_absolute() or ".." in path.parts:
+        raise ValueError("HOST accounting typed authority path differs")
+    raw = context.watch_file(path)
+    if graph.digest(raw) != authority_sha256:
+        raise ValueError("HOST accounting typed authority changed")
+    value = get._load(raw)
+    get._exact(value, {"artifact_type", "schema_version", "action_type", "source_root", "source_inventory",
+        "original_inventory", "parent_memo_closure", "parent_memo_review"}, "HOST accounting typed authority")
+    root = Path(__file__).absolute().parents[2]
+    if (value["artifact_type"] != HOST_ACCOUNTING_TYPE or type(value["schema_version"]) is not int
+            or value["schema_version"] != 1 or value["action_type"] != observed.ACTION_TYPE
+            or value["source_root"] != str(root)
+            or value["original_inventory"]["sha256"] != "e20951f884196b5ec1eed6f6634462c980976e3dfbc626fd50a25f18b8c9a809"
+            or value["parent_memo_closure"]["sha256"] != "38a70dab5d6bac6ddc2de0c0b25abec646dc19cbf9bc62afc1c48aacc2c90b4b"
+            or value["parent_memo_review"]["sha256"] != "0980d1f5ccf69c884078c96c81e1b727342647c1531e9e600c0ee6b1279eeb7e"):
+        raise ValueError("HOST accounting scope or original authority differs")
+    original = get._load(_host_accounting_read(context, value["original_inventory"]))["current"]
+    inventory = get._load(_host_accounting_read(context, value["source_inventory"]))["files"]
+    parent = get._load(_host_accounting_read(context, value["parent_memo_closure"]))
+    _host_accounting_read(context, value["parent_memo_review"])
+    for relative, expected in inventory.items():
+        if Path(relative).is_absolute() or ".." in Path(relative).parts:
+            raise ValueError("HOST accounting inventory path escapes")
+        if context._files.get(root / relative) != expected:
+            raise ValueError("HOST accounting full current Source was not authenticated")
+    admission = "src/qcsd_lab/supplied_static_admission.py"
+    if (original[admission]["sha256"] != "f33350761098c2b39811b45dd12e9fa3608483cf0de8d5761f68ab0a3d4985fc"
+            or parent["changed_paths"][admission]["sha256"] != "d57f7cbbc69f0eaca3295902cd85b7fda00d3c2244f24f0b47bd763f294275c0"
+            or inventory[admission]["sha256"] != parent["changed_paths"][admission]["sha256"]
+            or inventory[admission]["mode"] != parent["changed_paths"][admission]["mode"]):
+        raise ValueError("HOST accounting admission exceeds reviewed observation hooks")
+    bootstrap = original["src/qcsd_lab/supplied_static_bootstrap_get.py"]
+    old_raw = _host_accounting_read(context, {**bootstrap, "mode": int(bootstrap["mode"], 8)})
+    current_raw = context.watch_file(Path(__file__).absolute())
+    if _host_accounting_projection(current_raw, current=True) != _host_accounting_projection(old_raw, current=False):
+        raise ValueError("HOST accounting changes an original bootstrap acceptance body")
+    sources = producer_sources()
+    historical = {}
+    for name, digest in sources.items():
+        relative = "src/" + name.replace(".", "/") + ".py"
+        old = original[relative]["sha256"]
+        if name not in {"qcsd_lab.supplied_static_admission", "qcsd_lab.supplied_static_bootstrap_get"} and digest != old:
+            raise ValueError("HOST accounting changes an original GET producer")
+        historical[name] = old
+    core = "src/qcsd_lab/supplied_static_budget_successor.py"
+    if inventory[core]["sha256"] != "a297fd337517ddffc30fc6e08b5961e2556f9311cbe5f7837baa0209bcf298d1":
+        raise ValueError("HOST accounting changed Core002")
+    token = _HOST_ACCOUNTING.set((historical, dict(RETAINED_PRODUCER_SOURCES)))
+    try:
+        yield
+    finally:
+        _HOST_ACCOUNTING.reset(token)
+
+
 def _recognized_producer_sources(recorded: Any) -> bool:
     current = producer_sources()
+    bound = _HOST_ACCOUNTING.get()
+    if bound is not None and recorded in bound:
+        return True
     if recorded == current:
         return True
     # Only the two named verifier modules change in this version. A changed

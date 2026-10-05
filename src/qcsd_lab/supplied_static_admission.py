@@ -46,6 +46,8 @@ def _read_json(path: Path) -> Any:
 
 
 def _write(path: Path, kind: str, payload: dict[str, Any]) -> Path:
+    from .rapid_admission_operation_facts import before_publication
+    before_publication()
     path.parent.mkdir(parents=True, exist_ok=True)
     receipts.durable_create(path, receipts._json(receipts._bind(kind, payload)))
     return path
@@ -115,6 +117,11 @@ def initialize_context(root: Path, source: Path, *, source_sha256: str,
 
 
 def load_context(root: Path, *, _seen: frozenset[Path] = frozenset()) -> Context:
+    from .rapid_admission_operation_facts import load_context as observed_load
+    return observed_load(root, _seen, _load_context_uncached)
+
+
+def _load_context_uncached(root: Path, *, _seen: frozenset[Path] = frozenset()) -> Context:
     root = root.absolute()
     if root in _seen:
         raise ValueError("static context successor contains a cycle")
@@ -256,6 +263,8 @@ def admit(context: Context, position: int, get_root: Path, *, policies: dict[str
         raise ValueError("static GET began before this prospective static acquisition declaration")
     row = context.candidates[position - 1]
     directory = terminal_path(context, position).parent
+    from .rapid_admission_operation_facts import before_publication
+    before_publication()
     directory.mkdir(parents=True, exist_ok=True)
     workload = directory / (row["candidate_id"] + ".json")
     get._json(workload, manifest)
@@ -291,6 +300,11 @@ def record_get_deferral(context: Context, position: int, get_root: Path, *, name
 
 
 def verify_terminal(path: Path, context: Context) -> dict[str, Any]:
+    from .rapid_admission_operation_facts import verify_terminal as observed_verify
+    return observed_verify(path, context, _verify_terminal_uncached)
+
+
+def _verify_terminal_uncached(path: Path, context: Context) -> dict[str, Any]:
     value = receipts._unpack(get._read(path), TERMINAL_TYPE)
     get._exact(value, {"data_role", "context", "position", "candidate_id", "domain", "outcome", "reason",
                        "source_position",
