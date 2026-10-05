@@ -667,8 +667,16 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
     batch, classes = verify_enrollment(enrollment)
     from .rapid_additive_static_enrollment import CONTRACT as ADDITIVE_CONTRACT
     selected_policy = policy["contract"] == ADDITIVE_CONTRACT
-    if selected_policy and (scheduling is not None or front_capture_amendment is not None):
-        raise ValueError("selected-input enrollment has only its prospectively verified serial setting authority")
+    if selected_policy and front_capture_amendment is not None:
+        raise ValueError("selected-input enrollment requires its own fixed setting authority")
+    if selected_policy and scheduling is not None:
+        from . import rapid_selected_parallel_schedule as selected_schedule
+        try:
+            selected_capsule = selected_schedule.is_selected(scheduling)
+        except (KeyError, TypeError, ValueError, OSError):
+            selected_capsule = False
+        if not selected_capsule:
+            raise ValueError("selected-input enrollment has only its prospectively verified serial setting authority without a selected capsule")
     if selected_policy and static_capture_amendment is None and not set(readiness) <= {"undefended", "tamaraw", "cs-buflo"}:
         raise ValueError("selected FRONT and BuFLO require a prospective fixed capture policy declaration")
     effective_limits = _effective_capture_limits(batch, classes, policy)
@@ -705,6 +713,14 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
     if scheduling is not None:
         from . import rapid_rolling_schedule as schedule
         capsule = schedule.validate_schedule(scheduling, runtime=runtime, _context=_context)
+        from . import rapid_selected_parallel_schedule as selected_schedule
+        if selected_policy:
+            if (capsule["artifact_type"] != selected_schedule.CAPSULE_TYPE
+                or set(readiness) != {capsule["mode"]}
+                or capsule["static_capture_amendment"] != static_reference):
+                raise ValueError("selected enrollment requires its current same-mode selected capsule")
+        elif capsule["artifact_type"] == selected_schedule.CAPSULE_TYPE:
+            raise ValueError("selected scheduling cannot replace another enrollment authority")
         from .rapid_static_parallel_schedule import require_delivery_binding
         require_delivery_binding({"application_body_identity_policy": body_policy,
             **({"qualification_delivery_compatibility": qualification_delivery_compatibility}
@@ -718,7 +734,8 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
         if capsule.get("artifact_type") == static_schedule.CAPSULE_TYPE and static_reference is None:
             raise ValueError("current static scheduling requires its explicit static amendment")
         if static_reference is not None:
-            if (capsule["artifact_type"] != static_schedule.CAPSULE_TYPE
+            expected_type = selected_schedule.CAPSULE_TYPE if selected_policy else static_schedule.CAPSULE_TYPE
+            if (capsule["artifact_type"] != expected_type
                 or capsule["static_capture_amendment"] != static_reference
                 or set(readiness) != {capsule["mode"]}):
                 raise ValueError("static amendment requires its current same-setting scheduling capsule")
@@ -878,6 +895,13 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
         from . import rapid_original_static_parallel_schedule as original_static
         if original_static.is_static(value["scheduling"]):
             original_static.require_plan(value, _context=_context)
+        from . import rapid_selected_parallel_schedule as selected_schedule
+        if selected_policy:
+            if not selected_schedule.is_selected(value["scheduling"]):
+                raise ValueError("selected plan requires its current typed selected scheduling capsule")
+            selected_schedule.require_plan(value, _context=_context)
+        elif selected_schedule.is_selected(value["scheduling"]):
+            raise ValueError("selected scheduling changed its additive enrollment policy")
     amendment_reference, static_reference = None, None
     if "front_capture_amendment" in value:
         fields.add("front_capture_amendment")
@@ -896,8 +920,12 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
         if policy["contract"] != STATIC_CONTRACT and not selected_policy or amendment_reference is not None:
             raise ValueError("static capture amendment has separate static authority")
         if "scheduling" in value:
-            from . import rapid_static_parallel_schedule as static_schedule
-            static_schedule.require_plan(value, _context=_context)
+            if selected_policy:
+                from . import rapid_selected_parallel_schedule as selected_schedule
+                selected_schedule.require_plan(value, _context=_context)
+            else:
+                from . import rapid_static_parallel_schedule as static_schedule
+                static_schedule.require_plan(value, _context=_context)
         amendment = validate_amendment(_open_ref(static_reference), enrollment=spec.cohort, runtime=measurement_runtime)
         if selected_policy:
             from . import selected_capture_amendment as selected_amendment
@@ -913,7 +941,7 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
         if value.get(FIELD) != amendment.get(FIELD) or (FIELD in value and declared(value) is None):
             raise ValueError("static plan changed its prospective BuFLO duration traffic contract")
     _keys(value, fields, "rolling plan")
-    if selected_policy and ("scheduling" in value or amendment_reference is not None
+    if selected_policy and (amendment_reference is not None
         or static_reference is None and not set(value["readiness"]) <= {"undefended", "tamaraw", "cs-buflo"}):
         raise ValueError("selected plan requires its own independently verified serial mode authority")
     sites = _sites_from_enrollment(batch, classes, spec.qualification_spec, spec.workload_root,
@@ -977,9 +1005,11 @@ def require_mode_readiness(spec: lanes.CaptureSpec, lane: plan.Lane, *, before: 
             mode=lane.mode, before=payload["declared_at"], _context=_context)
         from . import rapid_static_parallel_schedule as static_schedule
         from . import rapid_original_static_parallel_schedule as original_static
+        from . import rapid_selected_parallel_schedule as selected_schedule
         from .rapid_capture_traffic import plan_files
         current_static = (static_schedule.is_static(payload["scheduling"])
-                          or original_static.is_static(payload["scheduling"]))
+                          or original_static.is_static(payload["scheduling"])
+                          or selected_schedule.is_selected(payload["scheduling"]))
         expected_traffic = plan_files(payload) if current_static else lanes.TRAFFIC_FILES
         if (facts.get("client_sha256") != lanes._sha(lanes._read(spec.client_binary))
             or facts.get("traffic_hashes") != {key: digest for key, (_, digest) in expected_traffic.items()}):

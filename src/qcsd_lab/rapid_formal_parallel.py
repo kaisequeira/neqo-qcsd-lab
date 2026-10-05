@@ -814,52 +814,66 @@ def _release_fence(path, value, facts, preflight):
         key = shared.sha(ordinary._json(spec.serializable()))
         if key not in seen_specs:
             seen_specs.add(key)
-            batch_path = spec.cohort
-            while True:
-                batch = ordinary.admission._unpack(file(batch_path), rolling.ENROLLMENT_TYPE)
-                policy_path = rolling._open_ref(batch["policy"])
-                policy_raw = file(policy_path)
-                policy_type = ordinary._load(policy_raw).get("receipt_type")
-                if policy_type not in {rolling.POLICY_TYPE, rolling.STATIC_POLICY_TYPE}:
-                    raise ValueError("formal release fence has an unknown policy role")
-                policy = ordinary.admission._unpack(policy_raw, policy_type)
-                references(policy, policy_path.parent)
-                initial = Path(policy["initial_admission_root"])
-                references(shared.load(initial / "provenance.json"), initial)
-                file(initial / "provenance.json")
-                context_root = Path(batch["admission_root"])
-                references(shared.load(context_root / "provenance.json"), context_root)
-                file(context_root / "provenance.json")
-                references(batch, context_root)
-                from . import supplied_static_admission as static
-                static_context = (rolling._context_for_policy(policy, context_root)
-                                  if policy.get("contract") == rolling.STATIC_CONTRACT else None)
-                from . import whole_graph_supplement as whole
-                from . import supplied_static_budget_successor as budget
-                from . import static_budget_capture as budget_capture
-                budget_context = isinstance(static_context, (budget.Context, budget_capture.Context))
-                for decision in batch["decisions"]:
-                    terminal = rolling._open_ref(decision["terminal"])
-                    # Only the enrolled ordered decisions, never the whole
-                    # active acquisition/archive tree or its checkpoints.
-                    tree(terminal.parent)
-                    terminal_type = (ordinary._load(file(terminal)).get("receipt_type") if isinstance(static_context, whole.Context) or budget_context
-                        else static.TERMINAL_TYPE if isinstance(static_context, static.Context) else ordinary.admission.TERMINAL_TYPE)
-                    if budget_context and terminal_type not in {budget.TERMINAL_TYPE, whole.TERMINAL_TYPE, static.TERMINAL_TYPE}:
-                        raise ValueError("formal release fence has an unknown response-budget terminal role")
-                    if isinstance(static_context, whole.Context) and terminal_type not in {whole.TERMINAL_TYPE, static.TERMINAL_TYPE}:
-                        raise ValueError("formal release fence has an unknown mixed static terminal role")
-                    references(ordinary.admission._unpack(file(terminal), terminal_type), context_root)
-                if isinstance(static_context, (static.Context, whole.Context)) or budget_context:
-                    from .rapid_static_parallel_schedule import terminal_inputs
-                    static_files, static_trees = terminal_inputs(batch_path)
-                    for item in static_files:
-                        file(item)
-                    for item in static_trees:
-                        tree(item)
-                if batch["parent"] is None:
-                    break
-                batch_path = rolling._open_ref(batch["parent"])
+            from . import rapid_selected_capture_input as selected
+            selected_context = ordinary._payload(spec.plan_receipt, ordinary.PLAN_TYPE).get("data_role") == selected.ROLE
+            if selected_context:
+                from . import rapid_selected_parallel_schedule as selected_schedule
+                payload = ordinary._payload(spec.plan_receipt, ordinary.PLAN_TYPE)
+                capsule = selected_schedule.require_plan(payload)
+                selected_files, selected_trees = selected_schedule.input_dependencies(
+                    spec.cohort, spec.workload_root, payload["sites"])
+                for item in selected_files:
+                    file(item)
+                for item in selected_trees:
+                    tree(item)
+                static_context = None
+            else:
+                batch_path = spec.cohort
+                while True:
+                    batch = ordinary.admission._unpack(file(batch_path), rolling.ENROLLMENT_TYPE)
+                    policy_path = rolling._open_ref(batch["policy"])
+                    policy_raw = file(policy_path)
+                    policy_type = ordinary._load(policy_raw).get("receipt_type")
+                    if policy_type not in {rolling.POLICY_TYPE, rolling.STATIC_POLICY_TYPE}:
+                        raise ValueError("formal release fence has an unknown policy role")
+                    policy = ordinary.admission._unpack(policy_raw, policy_type)
+                    references(policy, policy_path.parent)
+                    initial = Path(policy["initial_admission_root"])
+                    references(shared.load(initial / "provenance.json"), initial)
+                    file(initial / "provenance.json")
+                    context_root = Path(batch["admission_root"])
+                    references(shared.load(context_root / "provenance.json"), context_root)
+                    file(context_root / "provenance.json")
+                    references(batch, context_root)
+                    from . import supplied_static_admission as static
+                    static_context = (rolling._context_for_policy(policy, context_root)
+                                      if policy.get("contract") == rolling.STATIC_CONTRACT else None)
+                    from . import whole_graph_supplement as whole
+                    from . import supplied_static_budget_successor as budget
+                    from . import static_budget_capture as budget_capture
+                    budget_context = isinstance(static_context, (budget.Context, budget_capture.Context))
+                    for decision in batch["decisions"]:
+                        terminal = rolling._open_ref(decision["terminal"])
+                        # Only the enrolled ordered decisions, never the whole
+                        # active acquisition/archive tree or its checkpoints.
+                        tree(terminal.parent)
+                        terminal_type = (ordinary._load(file(terminal)).get("receipt_type") if isinstance(static_context, whole.Context) or budget_context
+                            else static.TERMINAL_TYPE if isinstance(static_context, static.Context) else ordinary.admission.TERMINAL_TYPE)
+                        if budget_context and terminal_type not in {budget.TERMINAL_TYPE, whole.TERMINAL_TYPE, static.TERMINAL_TYPE}:
+                            raise ValueError("formal release fence has an unknown response-budget terminal role")
+                        if isinstance(static_context, whole.Context) and terminal_type not in {whole.TERMINAL_TYPE, static.TERMINAL_TYPE}:
+                            raise ValueError("formal release fence has an unknown mixed static terminal role")
+                        references(ordinary.admission._unpack(file(terminal), terminal_type), context_root)
+                    if isinstance(static_context, (static.Context, whole.Context)) or budget_context:
+                        from .rapid_static_parallel_schedule import terminal_inputs
+                        static_files, static_trees = terminal_inputs(batch_path)
+                        for item in static_files:
+                            file(item)
+                        for item in static_trees:
+                            tree(item)
+                    if batch["parent"] is None:
+                        break
+                    batch_path = rolling._open_ref(batch["parent"])
             qualifier = shared.load(spec.qualification_spec)["qualification_sets"][0]
             for name in ("manifest", "sidecar_root"):
                 target = Path(qualifier[name])
@@ -867,7 +881,7 @@ def _release_fence(path, value, facts, preflight):
                 tree(target) if name == "sidecar_root" else file(target)
             for site in sites:
                 file(spec.workload_root / f"{site.workload_id}.json", site.workload_sha256)
-                if not isinstance(static_context, (static.Context, whole.Context, budget.Context, budget_capture.Context)):
+                if not selected_context and not isinstance(static_context, (static.Context, whole.Context, budget.Context, budget_capture.Context)):
                     tree(spec.workload_root / f"{site.workload_id}-application-response-evidence")
             payload = ordinary._payload(spec.plan_receipt, ordinary.PLAN_TYPE)
             capsule = shared.load(_reference(payload["scheduling"]))
@@ -876,7 +890,12 @@ def _release_fence(path, value, facts, preflight):
             sidecars = sidecars if sidecars.is_absolute() else spec.qualification_spec.parent / sidecars
             tree(sidecars, capsule["qualified_inputs"]["qualification_files"])
             for site in sites:
-                if isinstance(static_context, static.Context):
+                if selected_context:
+                    from . import rapid_selected_parallel_schedule as selected_schedule
+                    if (capsule.get("artifact_type") != selected_schedule.CAPSULE_TYPE
+                        or capsule["qualified_inputs"]["workloads"][site.workload_id]["workload_sha256"] != site.workload_sha256):
+                        raise ValueError("selected release fence requires its exact inline raw GET capsule")
+                elif isinstance(static_context, static.Context):
                     from .rapid_static_parallel_schedule import CAPSULE_TYPE as STATIC_CAPSULE_TYPE
                     from .rapid_original_static_parallel_schedule import CAPSULE_TYPE as ORIGINAL_STATIC_CAPSULE_TYPE
                     if (capsule.get("artifact_type") not in {STATIC_CAPSULE_TYPE, ORIGINAL_STATIC_CAPSULE_TYPE}

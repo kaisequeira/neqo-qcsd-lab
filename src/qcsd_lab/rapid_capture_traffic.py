@@ -32,9 +32,13 @@ def declared(payload: Mapping[str, Any]) -> str | None:
         raise ValueError("BuFLO200 traffic requires its separate prospective static amendment")
     if "scheduling" in payload:
         from . import rapid_static_parallel_schedule as static
-        if not static.is_static(payload["scheduling"]):
+        from . import rapid_selected_parallel_schedule as selected
+        if selected.is_selected(payload["scheduling"]):
+            selected.require_plan(payload)
+        elif static.is_static(payload["scheduling"]):
+            static.require_plan(payload)
+        else:
             raise ValueError("BuFLO200 traffic cannot use a historical scheduling capsule")
-        static.require_plan(payload)
     return value
 
 

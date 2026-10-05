@@ -684,6 +684,9 @@ def validate_schedule(reference: Mapping[str, str], *, runtime: Mapping[str, str
             return validate_schedule(reference, runtime=runtime, before=before, _context=_context)
     _, raw = evidence._reference(reference)
     value = evidence._json(raw)
+    from . import rapid_selected_parallel_schedule as selected_schedule
+    if isinstance(value, dict) and value.get("artifact_type") == selected_schedule.CAPSULE_TYPE:
+        return selected_schedule.validate_schedule(reference, runtime=runtime, before=before, _context=_context)
     from . import rapid_original_static_parallel_schedule as original_static
     if isinstance(value, dict) and value.get("artifact_type") == original_static.CAPSULE_TYPE:
         return original_static.validate_schedule(reference, runtime=runtime, before=before, _context=_context)
@@ -727,6 +730,11 @@ def validate_qualification_reuse(old_impl: Mapping, current_impl: Mapping, refer
                                 *, actual_image: str, before: str | None = None, _context=None) -> None:
     """Typed installed hook: no ambient or source-only qualification exemption."""
     capsule = validate_schedule(reference, before=before, _context=_context)
+    from . import rapid_selected_parallel_schedule as selected_schedule
+    if capsule["artifact_type"] == selected_schedule.CAPSULE_TYPE:
+        selected_schedule.validate_current_qualification(old_impl, current_impl, reference,
+            actual_image=actual_image, before=before, _context=_context)
+        return
     from . import rapid_original_static_parallel_schedule as original_static
     if capsule["artifact_type"] == original_static.CAPSULE_TYPE:
         original_static.validate_current_qualification(old_impl, current_impl, reference,
@@ -800,6 +808,9 @@ def mount_roots(reference: Mapping[str, str], *, _context=None) -> list[Path]:
         with _context.scope():
             return mount_roots(reference, _context=_context)
     capsule = validate_schedule(reference, _context=_context)
+    from . import rapid_selected_parallel_schedule as selected_schedule
+    if capsule["artifact_type"] == selected_schedule.CAPSULE_TYPE:
+        return selected_schedule.mount_roots(reference, _context=_context)
     from . import rapid_original_static_parallel_schedule as original_static
     if capsule["artifact_type"] == original_static.CAPSULE_TYPE:
         return original_static.mount_roots(reference, _context=_context)

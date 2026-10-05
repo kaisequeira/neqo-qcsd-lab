@@ -291,7 +291,12 @@ class OperationFacts:
             self.watch_file(path)
             from .rapid_static_parallel_schedule import CAPSULE_TYPE as STATIC_CAPSULE_TYPE
             from .rapid_original_static_parallel_schedule import CAPSULE_TYPE as ORIGINAL_STATIC_CAPSULE_TYPE
-            if capsule.get("artifact_type") in {STATIC_CAPSULE_TYPE, ORIGINAL_STATIC_CAPSULE_TYPE}:
+            from . import rapid_selected_parallel_schedule as selected_schedule
+            if capsule.get("artifact_type") == selected_schedule.CAPSULE_TYPE:
+                plan = json.loads(self.watch_file(base.plan_receipt))["payload"]
+                selected_schedule.input_dependencies(base.cohort,
+                    Path(capsule["runtime"]["workload_root"]), plan["sites"], _context=self)
+            elif capsule.get("artifact_type") in {STATIC_CAPSULE_TYPE, ORIGINAL_STATIC_CAPSULE_TYPE}:
                 self._references(json.loads(self.watch_file(path)), path.parent)
             else:
                 self.watch_tree(path.with_name(site["workload_id"] + "-application-response-evidence"))
