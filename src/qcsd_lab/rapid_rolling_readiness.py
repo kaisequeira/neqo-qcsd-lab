@@ -305,7 +305,7 @@ def _clean_source(value: Any) -> dict[str, Any]:
 
 
 def _deep_command(plan: Mapping[str, Any], directory: Path, plan_sha: str,
-                  mode: str, declared_root: str, command: list[str]) -> list[str]:
+                  mode: str, declared_root: str, command: list[str], *, ordinary_transport: str | None = None) -> list[str]:
     # The retained recipe uses the operator's UID, not the verifier's current UID.
     try:
         user = command[command.index("--user") + 1]
@@ -336,6 +336,9 @@ def _deep_command(plan: Mapping[str, Any], directory: Path, plan_sha: str,
                        body_policy=application_body_identity_policy(plan))))
     for root in roots:
         static_mounts.extend(["--volume", f"{root}:{root}:ro"])
+    if ordinary_transport is not None:
+        from .rapid_ordinary_canary_retry import transport_mounts
+        static_mounts = transport_mounts(plan, directory, static_mounts, complete=ordinary_transport == "group")
     return ["docker", "run", "--rm", "--name", f'qcsd-v12-{plan["name"]}-verify-image',
             "--network", "none", "--user", user, "--security-opt", "no-new-privileges",
             "--cap-drop", "ALL", "--env", f"QCSD_LAB_IMAGE_DIGEST={image}",
@@ -386,7 +389,8 @@ def _qualification(plan: Mapping[str, Any], directory: Path, execution: Path,
     return named.manifest_sha256
 
 
-def _validate_canary(reference: Mapping[str, Any], *, runtime: Mapping[str, str], mode: str) -> dict[str, Any]:
+def _validate_canary(reference: Mapping[str, Any], *, runtime: Mapping[str, str], mode: str,
+                     _transport_recovery=None) -> dict[str, Any]:
     """Reopen one recorded complete canary for an exact collection runtime.
 
     ``reference`` has schema_version=1, plan/deep_receipt file references and
@@ -535,13 +539,16 @@ def _validate_canary(reference: Mapping[str, Any], *, runtime: Mapping[str, str]
         if defenses[0].get("parameters_sha256") != traffic[key]:
             raise ValueError("canary capture changed the defended parameter receipt")
     capture = _operation(reference["capture"], directory, mode + "-capture")
-    deep = _operation(reference["deep"], directory, mode + "-deep")
+    deep = (_operation(reference["deep"], directory, mode + "-deep")
+            if _transport_recovery is None else _transport_recovery)
     expected_capture = ["env", f"QCSD_LAB_COLLECTION_IMAGE={image}",
         f"QCSD_RAPID_IMAGE_SOURCE_QCSD={clean / 'qcsd-lab'}",
         f"QCSD_RAPID_DNS_RECEIPT_PATH={directory / 'dns-receipts' / (mode + '.json')}",
         str(execution / "qcsd-lab"), "run", str(campaign_path)]
+    expected_deep = (_deep_command(plan, directory, _sha(plan_raw), mode, str(declared), deep["command"])
+                     if _transport_recovery is None else _transport_recovery["expected_command"])
     if (capture["command"] != campaign["run_argv"] or capture["command"] != expected_capture
-        or deep["command"] != _deep_command(plan, directory, _sha(plan_raw), mode, str(declared), deep["command"])
+        or deep["command"] != expected_deep
         or deep["start"] < capture["end"]
         or not deep["start"] <= _timestamp(receipt.get("completed_at")) <= deep["end"]):
         raise ValueError("canary actual capture/deep commands or causal completion order differ")
@@ -571,6 +578,9 @@ def validate_canary(reference: Mapping[str, Any], *, runtime: Mapping[str, str],
     ``source`` always retains the original actual canary source and image.
     """
     try:
+        if isinstance(reference, Mapping) and reference.get("schema_version") == 4:
+            from .rapid_ordinary_canary_retry import validate
+            return validate(reference, runtime=runtime, mode=mode)
         if isinstance(reference, Mapping) and reference.get("schema_version") == 3:
             from .rapid_canary_control_bridge import validate
             return validate(reference, runtime=runtime, mode=mode)
@@ -591,6 +601,9 @@ def readiness_mount_roots(reference: Mapping[str, Any], *, runtime: Mapping[str,
     records and source roles. They grant no writable evidence namespace and
     come only from the closed reference and its authenticated runtime inputs.
     """
+    if isinstance(reference, Mapping) and reference.get("schema_version") == 4:
+        from .rapid_ordinary_canary_retry import roots
+        return roots(reference, runtime=runtime, mode=mode)
     if isinstance(reference, Mapping) and reference.get("schema_version") == 3:
         from .rapid_canary_control_bridge import roots
         return roots(reference, runtime=runtime, mode=mode)

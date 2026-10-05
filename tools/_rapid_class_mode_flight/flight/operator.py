@@ -809,6 +809,13 @@ def image_argv(plan, output, action, *extra):
         if any(char in renewal_path for char in ("\n", "\r", "\0", ":")):
             raise ValueError("ordinary renewal requires a canonical read-only file mount")
         argv += ["--volume", f"{renewal_path}:{renewal_path}:ro"]
+        if action == "verify-image":
+            roots = plan["group_preparation_roots"]
+            original_recipe = Path(plan["clean_runtime_root"]) / "tools/_rapid_class_mode_flight/flight/operator.py"
+            if digest(read(original_recipe)) != plan["recipe_sha256"]:
+                raise ValueError("ordinary verifier must retain its exact original recipe bytes")
+            index = argv.index(f"{Path(__file__).absolute()}:/recipe.py:ro")
+            argv[index] = f"{original_recipe}:/recipe.py:ro"
     if "qualification_delivery_compatibility" in plan:
         from qcsd_lab.application_response_policy import application_body_identity_policy
         from qcsd_lab.qualification_control_authority import roots as witness_roots
