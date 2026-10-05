@@ -190,7 +190,7 @@ def test_public_cli_and_portable_handler_pass_only_validated_cap(tmp_path, monke
     output = tmp_path / "output"; output.mkdir()
     execution = tmp_path / "execution"; execution.mkdir()
     plan = {"campaigns": [{"mode": "tamaraw"}], "selected_classes": [{"workload_id": "site-0"}],
-        "capture_limits": {"max_response_bytes": LARGE}, "reuse": None,
+        "capture_limits": {"max_response_bytes": LARGE, "timeout_seconds": 120}, "reuse": None,
         "group_qualification_set": "group-test", "qualification_set": "singleton-test",
         "workload_id": "site-0", "workload_sha256": "0" * 64}
     monkeypatch.setattr(module, "checked_plan", lambda args, image=False: (plan, output, execution))
@@ -204,6 +204,7 @@ def test_public_cli_and_portable_handler_pass_only_validated_cap(tmp_path, monke
     monkeypatch.setattr(budget, "publish_named_qualification_set", publish)
     module.image_action(SimpleNamespace(command="qualify-image", plan_sha256="2" * 64))
     assert calls[-1]["max_response_bytes"] == LARGE
+    assert calls[-1]["timeout_seconds"] == 120
 
 
 @pytest.mark.parametrize("mutation", ["numeric-alias-with-old-digest", "wrong-digest"])

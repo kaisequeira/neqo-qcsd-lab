@@ -161,6 +161,9 @@ def checked_runtime(args):
 
 def typed_original(manifest):
     """Reopen a new role without changing any original GET authority."""
+    from qcsd_lab import rapid_selected_capture_input as selected
+    if selected.is_selected(manifest.get("preparation")):
+        return selected.validate_preparation(manifest["preparation"], manifest["resources"])
     from qcsd_lab import supplied_static_budget_successor as budget
     from qcsd_lab import whole_graph_supplement as whole
     declared = manifest["preparation"]
@@ -203,6 +206,11 @@ def typed_selected_inputs(batch, policy, rows, contexts):
 
 def typed_manifest_limits(manifest):
     """Use only dependencies already authenticated by public manifest roots."""
+    from qcsd_lab import rapid_selected_capture_input as selected
+    if selected.is_selected(manifest.get("preparation")):
+        selected.validate_preparation(manifest["preparation"], manifest["resources"])
+        value, _, _ = selected.validate_input(selected.reopen(manifest["preparation"]["selected_input_evidence"]["receipt"]))
+        return dict(value["capture_limits"])
     from qcsd_lab import supplied_static_budget_successor as budget
     from qcsd_lab import whole_graph_supplement as whole
     from qcsd_lab import supplied_static_preparation as preparation
@@ -227,8 +235,16 @@ def typed_canary_limits(manifests, policy, mode, selected_policy):
     limits = [typed_manifest_limits(manifest) for manifest in manifests]
     if not limits or any(value != limits[0] for value in limits[1:]):
         raise ValueError("typed flight requires homogeneous authenticated class budgets")
-    declared = capture.selected_capture_limits(manifests,
-        limits[0] if policy is None else policy["capture_limits"])
+    from qcsd_lab.rapid_selected_capture_input import is_selected
+    if all(is_selected(manifest.get("preparation")) for manifest in manifests):
+        if mode not in {"undefended", "tamaraw", "cs-buflo"} or selected_policy is not None:
+            raise ValueError("selected FRONT and BuFLO need their separate prospective fixed policy authority")
+        declared = limits[0]
+        if policy is not None and declared != policy["capture_limits"]:
+            raise ValueError("selected graph limits differ from its prospective enrollment policy")
+    else:
+        declared = capture.selected_capture_limits(manifests,
+            limits[0] if policy is None else policy["capture_limits"])
     if declared != limits[0]:
         raise ValueError("enrolled policy differs from the authenticated original class budgets")
     return duration.capture_limits(mode, {**declared, "max_attempts": 1}, policy=selected_policy)
@@ -240,6 +256,9 @@ def selected_inputs(enrollment, study):
     from qcsd_lab import supplied_static_admission as static
     from qcsd_lab import supplied_static_preparation as preparation
     batch, all_classes, policy = rolling._verify_enrollment(Path(enrollment).absolute())
+    from qcsd_lab import rapid_additive_static_enrollment as additive
+    if policy["contract"] == additive.CONTRACT:
+        return additive_selected_inputs(enrollment, study, batch, all_classes, policy)
     count = len(batch["selected_candidate_ids"])
     if (not 1 <= count <= 5 or policy["contract"] != rolling.STATIC_CONTRACT
         or rolling._open_ref(batch["policy"]).parent != Path(study).absolute()):
@@ -271,6 +290,32 @@ def selected_inputs(enrollment, study):
     if any(value != limits[0] for value in limits[1:]):
         raise ValueError("one flight requires identical declared physical limits")
     return batch, policy, bindings, manifests, sorted(roots), limits[0]
+
+
+def additive_selected_inputs(enrollment, study, batch, all_classes, policy):
+    """Select only this new batch's direct receipts without acquisition history."""
+    from qcsd_lab import rapid_rolling_capture as rolling
+    from qcsd_lab import rapid_selected_capture_input as selected
+    count = len(batch["selected_candidate_ids"])
+    if not 1 <= count <= 5 or rolling._open_ref(batch["policy"]).parent != Path(study).absolute():
+        raise ValueError("selected flight belongs to another prospective study or class count")
+    rows = all_classes[-count:]
+    bindings, manifests, roots = [], [], set()
+    for row in rows:
+        original = selected.reopen(row["prepared_workload"])
+        manifest = json.loads(read(original))
+        selected.validate_preparation(manifest["preparation"], manifest["resources"])
+        if original.stem != row["workload_id"]:
+            raise ValueError("selected flight changed its immutable class/workload mapping")
+        bindings.append({"candidate_id": row["candidate_id"], "class_index": row["class_index"],
+            "admission_root": row["admission_root"], "terminal": ref(rolling._open_ref(row["terminal"])),
+            "original_workload": ref(original), "workload_id": row["workload_id"],
+            "full_graph": graph(manifest), "selection_sha256": policy["admission_identity"]["profile_sha256"]})
+        manifests.append(manifest)
+        roots.update(static_roots(manifest))
+    if [row["candidate_id"] for row in bindings] != batch["selected_candidate_ids"]:
+        raise ValueError("selected flight reorders its append-only class membership")
+    return batch, policy, bindings, manifests, sorted(roots), {**policy["capture_limits"], "max_attempts": 1}
 
 
 def current_sidecar(sidecar, canonical, *, workload_id, workload_sha256):
@@ -592,6 +637,13 @@ def image_argv(plan, output, action, *extra):
         "--volume", f'{plan["execution_root"]}:/lab:' + ("rw" if action == "qualify-image" else "ro"),
         "--volume", f"{output}:/diagnostic:rw", "--volume", f"{Path(__file__).absolute()}:/recipe.py:ro",
         "--volume", f'{plan["helper_path"]}:/helpers.py:ro']
+    if action == "qualify-image" and plan["reuse"] is not None:
+        reuse_manifest = plan["reuse"]["manifest"]
+        checked(reuse_manifest)
+        reuse_path = str(Path(reuse_manifest["path"]).absolute())
+        if any(char in reuse_path for char in ("\n", "\r", "\0", ":")):
+            raise ValueError("reuse manifest requires a canonical same-absolute RO file mount")
+        argv += ["--volume", f"{reuse_path}:{reuse_path}:ro"]
     roots = plan["static_preparation_roots"] if action == "verify-image" else plan["group_preparation_roots"]
     for root in roots:
         argv += ["--volume", f"{root}:{root}:ro"]
@@ -766,6 +818,7 @@ def image_action(args):
             for workload_id in workload_ids:
                 qualify_response_chaff_v2(workload_id, qualification_root=sidecars,
                     workload_root=execution / "config/workloads",
+                    timeout_seconds=plan["capture_limits"]["timeout_seconds"],
                     max_response_bytes=plan["capture_limits"]["max_response_bytes"])
         else:
             sidecars = execution / "config/flight-reuse"

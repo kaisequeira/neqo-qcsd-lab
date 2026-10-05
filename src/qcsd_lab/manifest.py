@@ -341,6 +341,10 @@ def validate_research_preparation(manifest: dict[str, Any], *, workload_id: str)
     if not isinstance(preparation, dict):
         raise ValueError(f"research workload {workload_id!r} {RESEARCH_PREPARATION_REQUIRED}")
 
+    from .rapid_selected_capture_input import is_selected, validate_preparation as validate_selected_preparation
+    if is_selected(preparation):
+        validate_selected_preparation(preparation, manifest["resources"])
+        return
     from .supplied_static_capture_amendment import is_amended, validate_preparation
     if is_amended(preparation):
         validate_preparation(preparation, manifest["resources"])
@@ -490,6 +494,10 @@ def _validate_preparation(
 ) -> None:
     if not isinstance(value, dict):
         raise ValueError("manifest preparation metadata must be an object")
+    from .rapid_selected_capture_input import is_selected, validate_preparation as validate_selected_preparation
+    if is_selected(value):
+        validate_selected_preparation(value, resources)
+        return
     from .supplied_static_capture_amendment import is_amended, validate_preparation
     if is_amended(value):
         validate_preparation(value, resources)

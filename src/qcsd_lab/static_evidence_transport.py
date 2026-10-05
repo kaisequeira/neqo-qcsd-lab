@@ -41,6 +41,10 @@ def manifest_roots(manifest: Mapping[str, Any]) -> list[Path]:
     declared = manifest.get("preparation")
     if not isinstance(declared, Mapping) or "data_role" not in declared:
         return []
+    from . import rapid_selected_capture_input as selected
+    if selected.is_selected(declared):
+        roots = {_path(Path(root), directory=True) for root in selected.preparation_roots(declared, manifest["resources"])}
+        return sorted(root for root in roots if not any(root != parent and root.is_relative_to(parent) for parent in roots))
     from . import supplied_static_budget_successor as budget
     from . import static_budget_capture as budget_capture
     from . import static_budget_capture_amendment as budget_amendment

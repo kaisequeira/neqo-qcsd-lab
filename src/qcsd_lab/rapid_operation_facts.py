@@ -139,6 +139,11 @@ class OperationFacts:
         if path in seen:
             raise ValueError("operation enrollment dependency contains a cycle")
         seen.add(path)
+        from . import rapid_additive_static_enrollment as additive
+        if json.loads(self.watch_file(path)).get("receipt_type") == additive.ENROLLMENT_TYPE:
+            for dependency in additive.membership_inputs(path):
+                self.watch_file(dependency)
+            return
         value = json.loads(self.watch_file(path)).get("payload", {})
         admission_root = Path(value["admission_root"])
         self._references(value, admission_root)
@@ -390,6 +395,12 @@ class OperationFacts:
         manifest = json.loads(raw)
         preparation = manifest.get("preparation")
         if isinstance(preparation, dict) and "data_role" in preparation:
+            from . import rapid_selected_capture_input as selected
+            if selected.is_selected(preparation):
+                files, trees = selected.preparation_inputs(preparation, manifest["resources"])
+                for dependency in files:
+                    self.watch_file(dependency)
+                return sorted(trees)
             from .supplied_static_preparation import is_static, preparation_roots
             from . import supplied_static_capture_amendment as amendment
             from .supplied_static_capture_amendment import is_amended

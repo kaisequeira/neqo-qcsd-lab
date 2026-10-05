@@ -158,7 +158,8 @@ def load_capture_spec(path: Path) -> CaptureSpec:
         inputs[key] = target.absolute() if target.is_absolute() else (path.absolute().parent / target).absolute()
     result = CaptureSpec(**inputs)
     _check_spec(result)
-    if value["artifact_type"] == "qcsd-rapid-v6-rolling-capture-spec" and _load(_read(result.cohort)).get("receipt_type") != "qcsd-rapid-v6-immutable-enrollment-batch":
+    from .rapid_additive_static_enrollment import ENROLLMENT_TYPE as SELECTED_ENROLLMENT_TYPE
+    if value["artifact_type"] == "qcsd-rapid-v6-rolling-capture-spec" and _load(_read(result.cohort)).get("receipt_type") not in {"qcsd-rapid-v6-immutable-enrollment-batch", SELECTED_ENROLLMENT_TYPE}:
         raise ValueError("rolling capture spec requires its prospective enrollment authority")
     return result
 
@@ -470,7 +471,15 @@ def _render_lane_campaign(spec: CaptureSpec, lane: plan.Lane, sites) -> bytes:
     payload = _payload(spec.plan_receipt, PLAN_TYPE)
     if "data_role" in payload:
         from .supplied_static_preparation import ROLE
-        if payload["data_role"] != ROLE:
+        from .rapid_selected_capture_input import ROLE as SELECTED_ROLE
+        if payload["data_role"] == SELECTED_ROLE:
+            from . import rapid_additive_static_enrollment as additive
+            batch, _, policy = additive.verify_enrollment(spec.cohort)
+            if (policy["contract"] != additive.CONTRACT
+                    or payload["bindings"]["cohort_sha256"] != _sha(_read(spec.cohort))
+                    or payload["capture_limits"] != policy["capture_limits"]):
+                raise ValueError("selected lane campaign changes its authenticated membership or fixed limits")
+        elif payload["data_role"] != ROLE:
             raise ValueError("lane rendering changed its declared scientific data role")
         return plan.render_lane_campaign(lane, sites, static_capture_limits=payload["capture_limits"],
                                          buflo_duration_policy=payload.get("buflo_duration_policy"))

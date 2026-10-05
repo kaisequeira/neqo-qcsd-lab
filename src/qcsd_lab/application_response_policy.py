@@ -144,6 +144,10 @@ def validate_prepared_response_graph(manifest: Mapping[str, Any]) -> dict[str, A
         from .whole_graph_supplement import is_whole, COVERAGE as WHOLE_COVERAGE
         if is_whole(preparation) or is_amended(preparation) and "whole_graph_get_evidence" in preparation:
             coverage_policy = WHOLE_COVERAGE
+        from .rapid_selected_capture_input import is_selected, validate_preparation as validate_selected_preparation
+        if is_selected(preparation):
+            validate_selected_preparation(preparation, resources)
+            coverage_policy = WHOLE_COVERAGE if "whole_graph_get_evidence" in preparation else COVERAGE
         coverage = preparation.get("coverage_admission")
         required = coverage.get("required_resources") if isinstance(coverage, Mapping) else None
         if (policy != COMPLETED_TERMINAL_HTTP_ERRORS_POLICY
@@ -249,7 +253,8 @@ def validate_application_responses(
             from .supplied_static_capture_amendment import is_amended
             from .whole_graph_supplement import is_whole
             from .supplied_static_budget_successor import is_budget
-            primary_rows = (primary_evidence["complete_get_primary_responses"] if is_static(manifest["preparation"]) or is_amended(manifest["preparation"]) or is_whole(manifest["preparation"]) or is_budget(manifest["preparation"])
+            from .rapid_selected_capture_input import is_selected
+            primary_rows = (primary_evidence["complete_get_primary_responses"] if is_static(manifest["preparation"]) or is_amended(manifest["preparation"]) or is_whole(manifest["preparation"]) or is_budget(manifest["preparation"]) or is_selected(manifest["preparation"])
                             else primary_evidence["stability_primary_responses"])
             validate_primary_document_response(manifest, row,
                 expected_content_type=_primary_content_type(primary_rows[0]))
@@ -321,6 +326,10 @@ def build_primary_document_identity_evidence(
 
 
 def validate_primary_document_identity_evidence(manifest: Mapping[str, Any]) -> dict[str, Any] | None:
+    from .rapid_selected_capture_input import is_selected, validate_preparation as validate_selected_preparation
+    if is_selected(manifest.get("preparation")):
+        validate_selected_preparation(manifest["preparation"], manifest["resources"])
+        return deepcopy(manifest["preparation"]["primary_document_identity_evidence"])
     from .supplied_static_budget_successor import is_budget, validate_preparation as validate_budget_preparation
     if is_budget(manifest.get("preparation")):
         validate_budget_preparation(manifest["preparation"], manifest["resources"])
@@ -382,6 +391,10 @@ def validate_application_response_policy_evidence(
     these compact facts preserve the negative GET and hashes without embedding
     bodies, packet CSVs or the whole probe graph in every prepared workload.
     """
+    from .rapid_selected_capture_input import is_selected, validate_preparation as validate_selected_preparation
+    if is_selected(manifest.get("preparation")):
+        validate_selected_preparation(manifest["preparation"], manifest["resources"])
+        return deepcopy(manifest["preparation"]["application_response_policy_evidence"])
     from .supplied_static_budget_successor import is_budget, validate_preparation as validate_budget_preparation
     if is_budget(manifest.get("preparation")):
         validate_budget_preparation(manifest["preparation"], manifest["resources"])
