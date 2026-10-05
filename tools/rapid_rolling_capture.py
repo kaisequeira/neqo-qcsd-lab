@@ -73,6 +73,22 @@ def run(args, *, _context=None):
             original_runtime={key: old[key] for key in lanes.RUNTIME_KEYS},
             runtime={key: current[key] for key in lanes.RUNTIME_KEYS},
             current_inventory=rolling._ref(args.current_inventory), mode=args.mode)
+    if args.command == "canary-control-bridge":
+        from qcsd_lab.rapid_canary_control_bridge import declare
+        old, current = rolling.load_runtime(args.original_runtime_spec), rolling.load_runtime(args.runtime_spec)
+        return declare(args.output, original_canary=lanes._load(lanes._read(args.canary)),
+            original_runtime={key: old[key] for key in lanes.RUNTIME_KEYS},
+            current_runtime={key: current[key] for key in lanes.RUNTIME_KEYS},
+            current_inventory=rolling._ref(args.current_inventory),
+            current_witness=rolling._ref(args.qualification_delivery_compatibility), mode=args.mode)
+    if args.command == "qualification-control-authority":
+        from qcsd_lab.qualification_control_authority import declare, RUNTIME_KEYS
+        current = rolling.load_runtime(args.runtime_spec)
+        return {"witness": declare(args.output,
+            original_witness=rolling._ref(args.original_witness),
+            consumer={"canonical": rolling._ref(args.current_canonical),
+                      "runtime": {key: current[key] for key in RUNTIME_KEYS}},
+            body_policy=args.application_body_identity_policy), "scientific_credit": False}
     if args.command in {"init", "init-static"}:
         root = lanes._regular_directory(args.evidence_root)
         path = rolling.initialize_study(args.acquisition_root, root, rolling.load_runtime(args.runtime_spec),
@@ -155,10 +171,10 @@ def run(args, *, _context=None):
 def _parser():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("scheduling", "static-scheduling", "original-static-scheduling", "selected-scheduling", "static-inspector-scheduling", "canary-equivalence", "init", "init-static", "enroll", "front-amendment", "static-amendment", "plan", "successor", "launch", "complete-lane", "verify-lane",
+    for name in ("scheduling", "static-scheduling", "original-static-scheduling", "selected-scheduling", "static-inspector-scheduling", "canary-equivalence", "canary-control-bridge", "qualification-control-authority", "init", "init-static", "enroll", "front-amendment", "static-amendment", "plan", "successor", "launch", "complete-lane", "verify-lane",
                  "retire-lane", "publish-manifest", "verify-manifest"):
         item = commands.add_parser(name)
-        if name not in {"canary-equivalence", "scheduling", "static-scheduling", "original-static-scheduling", "selected-scheduling", "static-inspector-scheduling", "front-amendment", "static-amendment"}:
+        if name not in {"canary-equivalence", "canary-control-bridge", "qualification-control-authority", "scheduling", "static-scheduling", "original-static-scheduling", "selected-scheduling", "static-inspector-scheduling", "front-amendment", "static-amendment"}:
             item.add_argument("--evidence-root", type=Path, required=True)
         if name in {"scheduling", "static-scheduling", "original-static-scheduling", "selected-scheduling", "static-inspector-scheduling"}:
             for flag in ("spec", "runtime-spec", "qualification-spec", "original-canonical", "current-canonical", "output"):
@@ -168,13 +184,20 @@ def _parser():
                 item.add_argument("--host-preflight-context", action="store_true")
                 for flag in ("started", "completed", "stdout", "stderr"):
                     item.add_argument("--copy-" + flag, type=Path, required=True)
-        elif name == "canary-equivalence":
+        elif name == "qualification-control-authority":
+            for flag in ("original-witness", "runtime-spec", "current-canonical", "output"):
+                item.add_argument("--" + flag, type=Path, required=True)
+            from qcsd_lab.application_response_policy import COMPLETE_APPLICATION_DELIVERY_POLICY
+            item.add_argument("--application-body-identity-policy", choices=(COMPLETE_APPLICATION_DELIVERY_POLICY,), required=True)
+        elif name in {"canary-equivalence", "canary-control-bridge"}:
             item.add_argument("--canary", type=Path, required=True)
             item.add_argument("--original-runtime-spec", type=Path, required=True)
             item.add_argument("--runtime-spec", type=Path, required=True)
             item.add_argument("--current-inventory", type=Path, required=True)
-            item.add_argument("--mode", choices=plan.MODES, required=True)
+            item.add_argument("--mode", choices=("tamaraw",) if name == "canary-control-bridge" else plan.MODES, required=True)
             item.add_argument("--output", type=Path, required=True)
+            if name == "canary-control-bridge":
+                item.add_argument("--qualification-delivery-compatibility", type=Path, required=True)
         elif name in {"init", "init-static"}:
             item.add_argument("--acquisition-root", type=Path, required=True)
             item.add_argument("--runtime-spec", type=Path, required=True)

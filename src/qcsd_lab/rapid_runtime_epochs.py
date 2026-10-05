@@ -637,6 +637,14 @@ def validate_qualification_reuse(old_receipt, current_receipt) -> None:
     reference = os.environ.get(COMPATIBILITY_ENV)
     if reference:
         value = admission._load(admission._read(Path(reference)))
+        from . import qualification_control_authority as control
+        if value.get("artifact_type") == control.TYPE:
+            if _CURRENT_BRIDGE.get() is not None or os.environ.get("QCSD_RAPID_CAPTURE_CONTROL_INSTALLATION"):
+                raise ValueError("control qualification cannot claim a historical runtime installation bridge")
+            control.validate_current_implementation(old_receipt, current_receipt,
+                {"path": str(Path(reference).absolute()), "sha256": admission._sha(admission._read(Path(reference)))},
+                actual_image=os.environ.get("QCSD_LAB_IMAGE_DIGEST"))
+            return
         from . import qualification_delivery_compatibility as delivery
         if value.get("artifact_type") == delivery.TYPE:
             if _CURRENT_BRIDGE.get() is not None or os.environ.get("QCSD_RAPID_CAPTURE_CONTROL_INSTALLATION"):

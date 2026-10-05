@@ -431,7 +431,7 @@ def render_lane_campaign(lane: Lane, sites: Sequence[Site], *, static_capture_li
             raise ValueError("application body policy requires its prospective full-graph formal setting")
         document["application_body_identity_policy"] = validate_application_body_identity_policy(application_body_identity_policy)
     if qualification_delivery_compatibility is not None:
-        from .qualification_delivery_compatibility import validate
+        from .qualification_control_authority import validate
         validate(qualification_delivery_compatibility, body_policy=application_body_identity_policy)
         document["qualification_delivery_compatibility"] = dict(qualification_delivery_compatibility)
     if buflo_duration_policy is not None:

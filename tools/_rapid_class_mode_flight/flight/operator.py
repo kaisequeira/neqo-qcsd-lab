@@ -348,7 +348,7 @@ def current_sidecar(sidecar, canonical, *, workload_id, workload_sha256,
                     delivery_compatibility=None, body_policy=None):
     """Exact current evidence, or explicit qualification-only producer/consumer reuse."""
     if delivery_compatibility is not None:
-        from qcsd_lab.qualification_delivery_compatibility import validate_sidecar
+        from qcsd_lab.qualification_control_authority import validate_sidecar
         validate_sidecar(sidecar, canonical, workload_id=workload_id, workload_sha256=workload_sha256,
             reference=delivery_compatibility, body_policy=body_policy)
         return
@@ -413,7 +413,7 @@ def checked_setup(args):
     if "qualification_delivery_compatibility" in setup and witness is None:
         raise ValueError("explicit setup qualification delivery witness cannot be null")
     if witness is not None:
-        from qcsd_lab.qualification_delivery_compatibility import validate
+        from qcsd_lab.qualification_control_authority import validate
         validate(witness, body_policy=body_policy, canonical=canonical)
         if read(output / "qualification-delivery-compatibility.json") != checked(witness):
             raise ValueError("staged qualification delivery witness changed")
@@ -461,7 +461,7 @@ def stage(args):
     witness_path = getattr(args, "qualification_delivery_compatibility", None)
     witness = None if witness_path is None else ref(witness_path)
     if witness is not None:
-        from qcsd_lab.qualification_delivery_compatibility import validate
+        from qcsd_lab.qualification_control_authority import validate
         validate(witness, body_policy=body_policy, canonical=canonical)
     from qcsd_lab import rapid_rolling_capture as rolling
     from qcsd_lab import capture_acceptance_policy as capture
@@ -721,7 +721,7 @@ def image_argv(plan, output, action, *extra):
     roots = plan["static_preparation_roots"] if action == "verify-image" else plan["group_preparation_roots"]
     if "qualification_delivery_compatibility" in plan:
         from qcsd_lab.application_response_policy import application_body_identity_policy
-        from qcsd_lab.qualification_delivery_compatibility import roots as witness_roots
+        from qcsd_lab.qualification_control_authority import roots as witness_roots
         roots = sorted(set(roots) | {str(path) for path in witness_roots(plan["qualification_delivery_compatibility"],
                        body_policy=application_body_identity_policy(plan))})
     for root in roots:
@@ -774,7 +774,7 @@ def checked_plan(args, *, image=False):
     if "qualification_delivery_compatibility" in plan and witness is None:
         raise ValueError("explicit canary qualification delivery witness cannot be null")
     if witness is not None:
-        from qcsd_lab.qualification_delivery_compatibility import validate
+        from qcsd_lab.qualification_control_authority import validate
         validate(witness, body_policy=body_policy, canonical=canonical)
         if read(output / "qualification-delivery-compatibility.json") != checked(witness):
             raise ValueError("canary qualification delivery witness changed")
@@ -909,7 +909,7 @@ def image_action(args):
     if args.command == "qualify-image":
         from qcsd_lab.chaff_qualification import RESPONSE_ONLY_QUALIFICATION_SCOPE
         from qcsd_lab.response_budget_qualification import qualify_response_chaff_v2, SIDECAR_SCHEMA_VERSION
-        from qcsd_lab.qualification_delivery_compatibility import publish_named_qualification_set
+        from qcsd_lab.qualification_control_authority import publish_named_qualification_set
         from qcsd_lab.application_response_policy import application_body_identity_policy
         delivery = {"delivery_compatibility": plan.get("qualification_delivery_compatibility"),
                     "body_policy": application_body_identity_policy(plan)}

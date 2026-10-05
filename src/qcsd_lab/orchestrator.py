@@ -571,7 +571,7 @@ def _load_campaign(
     if "qualification_delivery_compatibility" in value:
         if delivery_compatibility is None:
             raise ValueError("explicit qualification delivery compatibility cannot be null")
-        from .qualification_delivery_compatibility import validate as validate_delivery_compatibility
+        from .qualification_control_authority import validate as validate_delivery_compatibility
         validate_delivery_compatibility(delivery_compatibility, body_policy=body_policy)
         if frozen_inputs is not None:
             from .rapid_rolling_readiness import _reference
@@ -1405,7 +1405,7 @@ def _load_qualified_chaff_inputs(
     from .response_budget_qualification import (
         sidecar_schema,
     )
-    from .qualification_delivery_compatibility import load_named_qualification_set, load_response_qualified_chaff
+    from .qualification_control_authority import load_named_qualification_set, load_response_qualified_chaff
 
     if frozen_inputs is not None:
         qualification_scope = _frozen_chaff_qualification_scope(
@@ -4333,7 +4333,7 @@ def _materialize_inputs(
                 load_qualified_chaff,
             )
             from .response_budget_qualification import sidecar_schema
-            from .qualification_delivery_compatibility import load_response_qualified_chaff
+            from .qualification_control_authority import load_response_qualified_chaff
 
             sidecar_destination = chaff_qualifications_dir / f"{workload.id}.json"
             shutil.copy2(workload.chaff_qualification_path, sidecar_destination)
@@ -4406,7 +4406,7 @@ def _materialize_inputs(
             )
         runtime_workloads.append(runtime)
     if qualification_set_manifest_destination is not None:
-        from .qualification_delivery_compatibility import load_named_qualification_set
+        from .qualification_control_authority import load_named_qualification_set
 
         load_named_qualification_set(
             qualification_set_manifest_destination,

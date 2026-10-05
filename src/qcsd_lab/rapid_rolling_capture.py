@@ -557,7 +557,7 @@ def _sites_from_enrollment(batch: Mapping[str, Any], all_classes: list[dict[str,
             expected_workload_ids=[site.workload_id for site in sites], expected_qualification_scope=RESPONSE_ONLY_QUALIFICATION_SCOPE,
             require_current_implementation=require_current)
     else:
-        from .qualification_delivery_compatibility import load_named_qualification_set
+        from .qualification_control_authority import load_named_qualification_set
         load_named_qualification_set(manifest, delivery_compatibility=delivery_compatibility,
             body_policy=body_policy, workload_root=workload_root, sidecar_root=sidecars,
             expected_qualification_set=q["qualification_set"], prefix_spec_root=None,
@@ -688,7 +688,7 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
     from .application_response_policy import validate_application_body_identity_policy, application_body_identity_policy as declared_body_policy, COMPLETE_APPLICATION_DELIVERY_POLICY
     body_policy = validate_application_body_identity_policy(application_body_identity_policy)
     if qualification_delivery_compatibility is not None:
-        from .qualification_delivery_compatibility import validate
+        from .qualification_control_authority import validate
         validate(qualification_delivery_compatibility, body_policy=body_policy)
     from .rapid_operation_facts import current_context
     _context = current_context() if _context is None else _context
@@ -783,6 +783,8 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
             or _ref(qualification_spec) != capsule["qualification_spec"]):
             raise ValueError("rolling scheduled plan changes enrollment or qualified inputs")
     for mode, reference in readiness.items():
+        if scheduling is not None and reference.get("schema_version") == 3:
+            raise ValueError("canary control witness bridge authorizes only serial original-static capture")
         if scheduling is None:
             canary_runtime = {key: runtime[key] for key in lanes.RUNTIME_KEYS}
             facts = (validate_canary(reference, runtime=canary_runtime, mode=mode)
@@ -796,7 +798,7 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
             require_canary(reference, facts, amendment_reference, amendment)
         if declared_body_policy(facts) != body_policy:
             raise ValueError("rolling plan differs from its canary's declared application body policy")
-        if facts.get("qualification_delivery_compatibility") != qualification_delivery_compatibility:
+        if facts.get("control_authority_witness", facts.get("qualification_delivery_compatibility")) != qualification_delivery_compatibility:
             raise ValueError("rolling plan differs from its canary's qualification delivery witness")
         if static_amendment is not None:
             from .supplied_static_capture_amendment import require_canary
@@ -918,7 +920,7 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
         fields.add("application_body_identity_policy")
     if "qualification_delivery_compatibility" in value:
         fields.add("qualification_delivery_compatibility")
-        from .qualification_delivery_compatibility import validate
+        from .qualification_control_authority import validate
         validate(value["qualification_delivery_compatibility"], body_policy=body_policy)
     if policy["contract"] == STATIC_CONTRACT or selected_policy:
         fields.add("data_role")
@@ -1036,6 +1038,8 @@ def require_mode_readiness(spec: lanes.CaptureSpec, lane: plan.Lane, *, before: 
         raise ValueError("rolling readiness cannot authorize a historical or diagnostic lane")
     if lane.mode not in payload["readiness"]:
         raise ValueError(f"rolling {lane.mode} lacks its own successful current full canary")
+    if "scheduling" in payload and payload["readiness"][lane.mode].get("schema_version") == 3:
+        raise ValueError("canary control witness bridge cannot replace parallel setting authority")
     from .rapid_rolling_readiness import validate_canary
     if "scheduling" in payload:
         from . import rapid_rolling_schedule as schedule
@@ -1086,11 +1090,11 @@ def require_mode_readiness(spec: lanes.CaptureSpec, lane: plan.Lane, *, before: 
                        reference, amendment, mode=lane.mode)
         if before is not None and admission._utc(amendment["published_at"]) > admission._utc(before):
             raise ValueError("static capture amendment was not published before its actual launch")
-    publication = facts.get("source_equivalence_published_at")
+    publication = facts.get("control_bridge_published_at", facts.get("source_equivalence_published_at"))
     from .application_response_policy import application_body_identity_policy
     if application_body_identity_policy(facts) != application_body_identity_policy(payload):
         raise ValueError("formal readiness changed its declared application body policy")
-    if facts.get("qualification_delivery_compatibility") != payload.get("qualification_delivery_compatibility"):
+    if facts.get("control_authority_witness", facts.get("qualification_delivery_compatibility")) != payload.get("qualification_delivery_compatibility"):
         raise ValueError("formal readiness changed its declared qualification delivery witness")
     if publication is not None and (admission._utc(publication) > admission._utc(payload["declared_at"])
                                   or before is not None and admission._utc(publication) > admission._utc(before)):

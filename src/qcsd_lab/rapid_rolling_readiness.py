@@ -331,7 +331,7 @@ def _deep_command(plan: Mapping[str, Any], directory: Path, plan_sha: str,
         roots = manifest_roots(original)
     if "qualification_delivery_compatibility" in plan:
         from .application_response_policy import application_body_identity_policy
-        from .qualification_delivery_compatibility import roots as witness_roots
+        from .qualification_control_authority import roots as witness_roots
         roots = sorted(set(roots) | set(witness_roots(plan["qualification_delivery_compatibility"],
                        body_policy=application_body_identity_policy(plan))))
     for root in roots:
@@ -365,7 +365,7 @@ def _qualification(plan: Mapping[str, Any], directory: Path, execution: Path,
         expected_workload_ids=[plan["workload_id"]], require_current_implementation=False)
     sidecar_path = named_path.parent / (plan["workload_id"] + ".json")
     sidecar = _json(_read(sidecar_path, completion.get("sidecar_sha256")))
-    from .qualification_delivery_compatibility import FIELD, POLICY_FIELD, validate_sidecar
+    from .qualification_control_authority import FIELD, POLICY_FIELD, validate_sidecar
     compatibility = plan.get(FIELD)
     if compatibility is not None:
         if (config.get(POLICY_FIELD) != plan.get(POLICY_FIELD)
@@ -571,6 +571,9 @@ def validate_canary(reference: Mapping[str, Any], *, runtime: Mapping[str, str],
     ``source`` always retains the original actual canary source and image.
     """
     try:
+        if isinstance(reference, Mapping) and reference.get("schema_version") == 3:
+            from .rapid_canary_control_bridge import validate
+            return validate(reference, runtime=runtime, mode=mode)
         if isinstance(reference, Mapping) and reference.get("schema_version") == 2:
             return _validate_equivalent(reference, runtime=runtime, mode=mode)
         result = _validate_canary(reference, runtime=runtime, mode=mode)
@@ -588,6 +591,9 @@ def readiness_mount_roots(reference: Mapping[str, Any], *, runtime: Mapping[str,
     records and source roles. They grant no writable evidence namespace and
     come only from the closed reference and its authenticated runtime inputs.
     """
+    if isinstance(reference, Mapping) and reference.get("schema_version") == 3:
+        from .rapid_canary_control_bridge import roots
+        return roots(reference, runtime=runtime, mode=mode)
     if _context is None:
         validate_canary(reference, runtime=runtime, mode=mode)
     else:
@@ -605,7 +611,7 @@ def readiness_mount_roots(reference: Mapping[str, Any], *, runtime: Mapping[str,
         roots.update(manifest_roots(original))
     if "qualification_delivery_compatibility" in plan:
         from .application_response_policy import application_body_identity_policy
-        from .qualification_delivery_compatibility import roots as witness_roots
+        from .qualification_control_authority import roots as witness_roots
         roots.update(witness_roots(plan["qualification_delivery_compatibility"],
                                   body_policy=application_body_identity_policy(plan)))
     runtimes = [runtime]

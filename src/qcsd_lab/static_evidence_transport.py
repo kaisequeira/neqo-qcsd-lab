@@ -192,7 +192,7 @@ def campaign_roots(root: Path, action: str, target: Path) -> list[Path]:
         roots.update(manifest_roots(_json(path)))
     if isinstance(configuration, Mapping) and "qualification_delivery_compatibility" in configuration:
         from .application_response_policy import application_body_identity_policy
-        from .qualification_delivery_compatibility import roots as witness_roots
+        from .qualification_control_authority import roots as witness_roots
         roots.update(witness_roots(configuration["qualification_delivery_compatibility"],
                                   body_policy=application_body_identity_policy(configuration)))
     return sorted(roots)
