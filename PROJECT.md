@@ -49,7 +49,42 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Current checkpoint, 5 October, around 02:45 Sydney AEDT (4 October, 15:45 UTC):**
+**Current checkpoint, 5 October 2026:** **36/16,000 formal recordings** have
+closed independent verification: eight ordinary, four FRONT and twenty-four Tamaraw.
+They retain their original class, visit, Source and runtime labels. The retained
+initial admission ledger has nineteen admitted sites; admission alone does not
+establish readiness under all five settings.
+
+The next selected-input batch has actually enrolled **eleven of fifty classes**,
+preserving the six existing identities and appending classes 7–11 from original
+positions 26, 27, 31, 35 and 36. Their complete graphs contain 70, 13, 62, 143
+and 77 resources. The original complete GETs, pending reservations and verified
+36-slot anchor are retained. Enrollment adds no formal recording.
+
+The clean published Lab `2ad55d8e` / Native `c24da2af` v13 installation closed
+all twelve actual installation/export operations using the unchanged verified
+client. Its explicit qualification producer-to-consumer witness passed in
+**59.6 seconds**. The fresh five-site Tamaraw flight staged and finalized in
+about **457 and 635 seconds**. Its installed preamble then failed at an absent
+authenticated witness dependency after 21.54 seconds inside Docker (460.97
+seconds for the recorded outer action). No qualification, preflight or capture
+ran. The failed flight is retained with zero formal credit; the next Source
+must carry complete witness transport and an early installed input check.
+An independent offline installed check then passed on the unchanged v13 image
+in **63.1 seconds** after adding the two authenticated missing runtime recipe
+references as read-only transport. This confirms the startup repair; it adds no
+qualification or recording credit.
+
+The prospective selected FRONT/BuFLO amendment and complete-delivery parallel
+controls are being composed and checked in a separate Source epoch. They keep
+whole resource graphs and fixed traffic profiles. The selected-input parallel
+route remains explicitly unsupported pending its own typed extension. The
+combined Source and portable action cache have no new installed/runtime or
+physical-capture claim. Current frozen flights continue on their actual Source.
+The final target remains **50 classes × five settings × 64 = 16,000**. See the
+[evidence locations](docs/EVIDENCE-INDEX.md#current-supplied-list-study).
+
+**Earlier checkpoint, 5 October, around 02:45 Sydney AEDT (4 October, 15:45 UTC):**
 Formal capture has begun: **12/16,000 accepted and independently verified
 recordings**, comprising eight ordinary visits and four FRONT visits at one
 enrolled Poki site. The complete 277-resource graph across three origins is

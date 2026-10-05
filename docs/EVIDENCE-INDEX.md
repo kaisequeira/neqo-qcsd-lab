@@ -11,6 +11,81 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ### Current supplied-list study
 
+The **5 October 2026** formal anchor is **36/16,000**: eight ordinary, four
+FRONT and twenty-four Tamaraw recordings. Its immutable record is
+`diagnostic-rehearsals/supplied-static-tamaraw-formal-b08-root-actual-20261005-001/scientific-progress-000009.json`,
+SHA `eb409d9f05347840804bcb0a26882e1a8825f4c7ff8909536b88a6f8321dbc48`.
+All sample identities and original measurement labels remain unchanged.
+The latest four Tamaraw visits closed launch and independent verification with
+exit 0 in 550.818 and 122.873 seconds respectively.
+
+Actual selected-input enrollment now retains six classes and appends five,
+giving **eleven enrolled classes of fifty**, with no added trace credit. The
+Root records are in
+`diagnostic-rehearsals/selected-additive-classes007-011-root-actual-20261005-001`.
+The final `enroll-closed.json` SHA is
+`35273a797ea88da47bc32fffddc25baac3addf6cbbc8e8cea86bc0faddc490a6`;
+`study/batches/b0003/enrollment.json` SHA is
+`dda9b26ef07833e99832b3f51b205f1a5588528f21739160b9828f572eb8955b`.
+The independent membership summary is in
+`diagnostic-rehearsals/selected-additive-classes007-011-enrollment-readonly-review-20261005-001/enrollment-summary.json`,
+SHA `0f60d4dbaa5c8f98c18cb8c8cd429f2b0a678548105004f0c72a4d98bcb34e66`;
+its review SHA is `0b1b1ecedca6ca697af125b38506f2cd2f8d648f42977237f88015ec13d3f1d2`.
+The retained original admission count is nineteen. Classes 7–11 keep every
+70/13/62/143/77 resource row from positions 26/27/31/35/36 and their complete
+raw GET evidence. Remaining reservations are unassessed by the new ledger.
+
+Actual Lab `2ad55d8e` / Native `c24da2af` v13 runtime evidence is in
+`diagnostic-rehearsals/rapid-v13-delivery-witness-entrypoint-fix-nativec24-runtime-20261005-001`
+and `diagnostic-rehearsals/delivery-witness-entrypoint-fix-v13-runtime-root-actual-20261005-001`.
+The canonical SHA is
+`61b5f6ea30dd7d200414d17ae2c182245c03ce989c9b972c565f022d93140256`.
+All twelve installation/export operations closed 0 with no Native compilation.
+The fresh five-site complete-delivery Tamaraw flight records are in
+`diagnostic-rehearsals/supplied-static-b0002-tamaraw-complete-delivery-root-actual-20261005-002`:
+the current witness passed in 59.6 seconds and staging/finalization passed in
+about 457/635 seconds. The installed preamble failed at an absent authenticated
+witness dependency (inner Docker 21.54 seconds, outer action 460.97 seconds).
+The actual failure/raw records remain retained. Qualification, preflight and
+capture did not run, and no new five-site formal credit is asserted.
+The independent startup diagnosis is in
+`diagnostic-rehearsals/delivery-witness-v13-runtime-input-check-root-actual-20261005-001/input-check-actual-closed.json`,
+SHA `5ef80c17aed94a9b02e70577085a114bb59598814270016b8028da0906694dcb`.
+HOST root validation and the network-none, read-only installed witness check
+closed 0 in 58.652 and 63.073 seconds. All five workloads reopened on the
+unchanged v13 consumer after adding only the authenticated external reuse-recipe
+parent as read-only transport. Actor absence was confirmed before and after.
+This is startup diagnosis evidence, with no new qualification or trace credit.
+
+The held selected FRONT/BuFLO Source closure is
+`diagnostic-rehearsals/selected-fixed-policy-host-checks-20261005-003/source-closure-final.json`,
+SHA `20745d262f7103a12c24aae86381447afb43cab200f3fb558f6434f45b78b54f`.
+The held original/static complete-delivery parallel closure is
+`diagnostic-rehearsals/complete-delivery-parallel-source-closure-20261005-001/source-closure-final.json`,
+SHA `b4d89e6da6ec9fa2ed09e3b313a9843407ab610ddcc42c5112b957f72713de4c`.
+Their current integration and portable action-cache checks are HOST engineering
+evidence; publication, installation and actual capture on that combined Source
+remain separate actions. Selected-ledger parallel capture is still refused.
+
+The portable `tools/rapid_delivery_input_check.py` closes HOST witness/raw
+bindings and emits an exact offline, read-only installed check command. Root
+records and executes that argv **immediately after the new witness closes and
+before flight staging/finalization**. It reopens the installed consumer's full
+witness/runtime/group dependency chain without sending requests. The command
+emitter itself starts no Docker process and adds no scientific credit. Example:
+
+```bash
+python3 -I -B tools/rapid_delivery_input_check.py --witness /absolute/path/to/new-witness.json --witness-sha256 FULL_SHA256 --name fresh-delivery-input-check
+```
+
+Preserve the actual emitted-command start/completion/raw records. Require exit
+0 before staging; this does not replace per-setting preflight, full-site canary,
+deep verification or formal receipt checks. An old producer's qualified group
+retains its original labels; a changed consumer requires its actual matching
+installation and freshly closed witness.
+
+#### Earlier checkpoint at 02:45
+
 At **5 October, around 02:45 Sydney AEDT (4 October, 15:45 UTC)** the formal
 counter is **12/16,000**, from eight ordinary visits and four FRONT visits at
 one enrolled site. Ten sites have passed ordinary resource admission across

@@ -25,6 +25,7 @@ from .util import durable_create
 
 CAPSULE_TYPE = "qcsd-rapid-v6-current-original-static-parallel-scheduling"
 CONTRACT = "rolling-v6-current-original-static-same-setting-parallel-scheduling-v1"
+DELIVERY_CONTRACT = "rolling-v6-current-original-static-complete-delivery-parallel-scheduling-v2"
 MODES = frozenset({"undefended", "tamaraw", "cs-buflo"})
 CONTROL_FILES = (*amended.CONTROL_FILES,
     "src/qcsd_lab/rapid_runtime_inspector.py",
@@ -39,9 +40,11 @@ KEYS = {"schema_version", "artifact_type", "contract", "base_spec", "runtime",
 
 
 def _header(value: Any, *, before: str | None = None) -> None:
-    if (not isinstance(value, dict) or set(value) != KEYS
-        or type(value["schema_version"]) is not int or value["schema_version"] != 1
-        or value["artifact_type"] != CAPSULE_TYPE or value["contract"] != CONTRACT
+    delivery = amended.delivery_fields(value) if isinstance(value, dict) else {}
+    if (not isinstance(value, dict) or set(value) != KEYS | set(delivery)
+        or type(value["schema_version"]) is not int or value["schema_version"] != (2 if delivery else 1)
+        or value["artifact_type"] != CAPSULE_TYPE
+        or value["contract"] != (DELIVERY_CONTRACT if delivery else CONTRACT)
         or value["limits"] != legacy.LIMITS or value["data_role"] != preparation.ROLE
         or type(value["formal_accepted_trace_count"]) is not int or value["formal_accepted_trace_count"] != 0
         or value["scientific_credit"] is not False
@@ -58,7 +61,7 @@ def is_static(reference: Mapping[str, str]) -> bool:
     return evidence._json(evidence._reference(reference)[1]).get("artifact_type") == CAPSULE_TYPE
 
 
-def _qualified_inputs(base: lanes.CaptureSpec, qualifier: Path, sites: list[dict], *, _context=None) -> dict:
+def _qualified_inputs(base: lanes.CaptureSpec, qualifier: Path, sites: list[dict], *, _context=None, _delivery=None) -> dict:
     spec = evidence._json(evidence._read(qualifier))
     if (set(spec) != {"schema_version", "qualification_sets"}
         or type(spec["schema_version"]) is not int or spec["schema_version"] != 1
@@ -78,12 +81,22 @@ def _qualified_inputs(base: lanes.CaptureSpec, qualifier: Path, sites: list[dict
     ids = [site["workload_id"] for site in sites]
     if not 1 <= len(ids) <= legacy.LIMITS["maximum_sites_per_batch"] or len(set(ids)) != len(ids):
         raise ValueError("original static scheduling needs one to five complete unique site graphs")
-    validator = (qualification.validate_named_qualification_set_manifest if _context is None else
-        lambda value, **kwargs: _context.validate_named_qualification(value,
-            qualification.validate_named_qualification_set_manifest, **kwargs))
-    validator(evidence._json(evidence._read(manifest)), workload_root=base.workload_root,
-        sidecar_root=sidecars, prefix_spec_root=None, expected_qualification_set=row["qualification_set"],
-        expected_workload_ids=ids, expected_qualification_scope="response-only", require_current_implementation=False)
+    selected_qualification = qualification
+    if _delivery:
+        from . import response_budget_qualification as selected_qualification
+        from .qualification_delivery_compatibility import load_named_qualification_set
+        load_named_qualification_set(manifest,
+            delivery_compatibility=_delivery.get("qualification_delivery_compatibility"),
+            body_policy=_delivery["application_body_identity_policy"], workload_root=base.workload_root,
+            sidecar_root=sidecars, prefix_spec_root=None, expected_qualification_set=row["qualification_set"],
+            expected_workload_ids=ids, expected_qualification_scope="response-only", require_current_implementation=False)
+    else:
+        validator = (qualification.validate_named_qualification_set_manifest if _context is None else
+            lambda value, **kwargs: _context.validate_named_qualification(value,
+                qualification.validate_named_qualification_set_manifest, **kwargs))
+        validator(evidence._json(evidence._read(manifest)), workload_root=base.workload_root,
+            sidecar_root=sidecars, prefix_spec_root=None, expected_qualification_set=row["qualification_set"],
+            expected_workload_ids=ids, expected_qualification_scope="response-only", require_current_implementation=False)
     workloads, implementations, sources = {}, {}, {}
     for site in sites:
         name = site["workload_id"]
@@ -97,10 +110,13 @@ def _qualified_inputs(base: lanes.CaptureSpec, qualifier: Path, sites: list[dict
             "original_get_proof": workload["preparation"]["static_get_evidence"]["proof"]}
         sidecar = evidence._json(evidence._read(sidecars / (name + ".json")))
         if (type(sidecar.get("schema_version")) is not int
-            or sidecar["schema_version"] != qualification.RESPONSE_ONLY_SIDECAR_V2_SCHEMA_VERSION):
+            or sidecar["schema_version"] != (selected_qualification.SIDECAR_SCHEMA_VERSION if _delivery
+                else qualification.RESPONSE_ONLY_SIDECAR_V2_SCHEMA_VERSION)):
             raise ValueError("original static scheduling requires the complete current 120-response schema")
         implementations[name] = sidecar["implementation_receipt"]["sha256"]
         sources[name] = {"source": sidecar["qualification_source"], "image": sidecar["qualification_image_digest"]}
+        if _delivery:
+            workloads[name]["qualification_sidecar"] = rolling._ref(sidecars / (name + ".json"))
     return {"enrollment_sha256": evidence._sha(evidence._read(base.cohort)),
         "qualification_spec_sha256": evidence._sha(evidence._read(qualifier)), "named_set": row["qualification_set"],
         "named_manifest_sha256": evidence._sha(evidence._read(manifest)),
@@ -117,6 +133,7 @@ def _derive(base: lanes.CaptureSpec, runtime: Mapping[str, str], qualifier: Path
         or rolling._ref(qualifier) != rolling._ref(base.qualification_spec)):
         raise ValueError("original static scheduling requires one exact current canonical, runtime and qualifier")
     sites, plan = rolling.verify_capture_plan(base, require_current=False, _context=_context)
+    delivery = amended.delivery_fields(plan)
     if (any(name in plan for name in ("scheduling", "front_capture_amendment", "static_capture_amendment", "buflo_duration_policy"))
         or plan.get("data_role") != preparation.ROLE or plan.get("study_version") != 6
         or plan.get("cohort_generation") != "rolling-50" or len(plan["readiness"]) != 1
@@ -132,7 +149,7 @@ def _derive(base: lanes.CaptureSpec, runtime: Mapping[str, str], qualifier: Path
         or canonical["source"]["neqo_commit"] != canonical["source"]["neqo_pinned_commit"]):
         raise ValueError("original static scheduling changed its clean pinned Native Source")
     controls = {}
-    for relative in CONTROL_FILES:
+    for relative in (*CONTROL_FILES, *(amended.DELIVERY_CONTROL_FILES if delivery else ())):
         raw = (lanes._read(Path(import_module("qcsd_lab." + Path(relative).stem).__file__))
                if relative.startswith("src/qcsd_lab/") else
                lanes._read(Path(runtime["runtime_source_root"]) / relative))
@@ -142,11 +159,22 @@ def _derive(base: lanes.CaptureSpec, runtime: Mapping[str, str], qualifier: Path
     for name in ("runtime_source_root", "module_root", "execution_root"):
         for relative, digest in lanes.TRAFFIC_FILES.values():
             evidence._read(Path(runtime[name]) / relative, digest)
-    qualified = _qualified_inputs(base, qualifier, plan["sites"], _context=_context)
+    qualified = _qualified_inputs(base, qualifier, plan["sites"], _context=_context, _delivery=delivery)
     source = {**canonical["source"], "image_digest": canonical["collection_image_digest"]}
-    if (set(qualified["implementation_sha256"].values()) != {
-            canonical["checks"]["collection"]["qualification_implementation_sha256"]}
-        or any(row != {"source": source, "image": canonical["collection_image_digest"]}
+    implementation = canonical["checks"]["collection"]["qualification_implementation_sha256"]
+    if "qualification_delivery_compatibility" in delivery:
+        from .qualification_delivery_compatibility import validate, validate_sidecar
+        witness = delivery["qualification_delivery_compatibility"]
+        value, producer, _ = validate(witness,
+            body_policy=delivery["application_body_identity_policy"], canonical=canonical)
+        source, implementation = {**value["producer_source"], "image_digest": value["producer_image"]}, producer["sha256"]
+        for site in sites:
+            validate_sidecar(evidence._json(evidence._reference(
+                qualified["workloads"][site.workload_id]["qualification_sidecar"])[1]), canonical,
+                workload_id=site.workload_id, workload_sha256=site.workload_sha256,
+                reference=witness, body_policy=delivery["application_body_identity_policy"])
+    if (set(qualified["implementation_sha256"].values()) != {implementation}
+        or any(row != {"source": source, "image": source["image_digest"]}
                for row in qualified["qualification_sources"].values())):
         raise ValueError("original static scheduling requires fresh current named 120-response qualification")
     row = next(row for row in plan["lanes"] if row["mode"] == mode)
@@ -170,7 +198,7 @@ def _derive(base: lanes.CaptureSpec, runtime: Mapping[str, str], qualifier: Path
     amended.terminal_inputs(base.cohort, _context=_context)
     return {"qualified_inputs": qualified, "control_sources": controls,
             "data_role": preparation.ROLE, "mode": mode,
-            "traffic_hashes": {key: digest for key, (_, digest) in lanes.TRAFFIC_FILES.items()}}
+            "traffic_hashes": {key: digest for key, (_, digest) in lanes.TRAFFIC_FILES.items()}, **delivery}
 
 
 def publish_schedule(base_spec: lanes.CaptureSpec, runtime: Mapping[str, str], qualification_spec: Path,
@@ -190,7 +218,9 @@ def publish_schedule(base_spec: lanes.CaptureSpec, runtime: Mapping[str, str], q
     canonical = evidence._json(evidence._reference(current_canonical)[1])
     if evidence._timestamp(canonical["verified_at"]) > evidence._timestamp(now):
         raise ValueError("original static scheduling predates actual current runtime closure")
-    payload = {"schema_version": 1, "artifact_type": CAPSULE_TYPE, "contract": CONTRACT,
+    delivery = amended.delivery_fields(derived)
+    payload = {"schema_version": 2 if delivery else 1, "artifact_type": CAPSULE_TYPE,
+        "contract": DELIVERY_CONTRACT if delivery else CONTRACT,
         "base_spec": base_spec.serializable(), "runtime": dict(runtime),
         "qualification_spec": rolling._ref(qualification_spec), "original_canonical": dict(original_canonical),
         "current_canonical": dict(current_canonical), **derived, "reason": reason.strip(), "published_at": now,
@@ -218,7 +248,7 @@ def validate_schedule(reference: Mapping[str, str], *, runtime: Mapping[str, str
                           value["original_canonical"], value["current_canonical"], _context=_context)
         if _context is not None:
             _context.remember(key, derived)
-    if any(value[name] != item for name, item in derived.items()):
+    if any(value.get(name) != item for name, item in derived.items()):
         raise ValueError("original static scheduling changed its current Source, traffic, graph or qualification")
     canonical = evidence._json(evidence._reference(value["current_canonical"])[1])
     if evidence._timestamp(canonical["verified_at"]) > evidence._timestamp(value["published_at"]):
@@ -229,6 +259,7 @@ def validate_schedule(reference: Mapping[str, str], *, runtime: Mapping[str, str
 def require_plan(payload: Mapping[str, Any], *, _context=None) -> dict:
     value = validate_schedule(payload["scheduling"], runtime=payload["runtime"],
                               before=payload["declared_at"], _context=_context)
+    amended.require_delivery_binding(payload, value)
     base_plan = lanes._payload(legacy._spec(value["base_spec"]).plan_receipt, lanes.PLAN_TYPE)
     if (payload.get("data_role") != preparation.ROLE
         or any(name in payload for name in ("front_capture_amendment", "static_capture_amendment", "buflo_duration_policy"))
@@ -241,6 +272,8 @@ def require_plan(payload: Mapping[str, Any], *, _context=None) -> dict:
 def validate_current_qualification(old_impl: Mapping, current_impl: Mapping, reference: Mapping[str, str],
                                    *, actual_image: str, before: str | None = None, _context=None) -> None:
     value = validate_schedule(reference, before=before, _context=_context)
+    if amended.delivery_qualification_hook(value, old_impl, current_impl, actual_image=actual_image):
+        return
     if actual_image != value["runtime"]["collection_image_digest"] or dict(old_impl) != dict(current_impl):
         raise ValueError("original static scheduling permits only exact equal current qualification receipts")
     qualification._validate_implementation_receipt(current_impl, require_current=False)
@@ -261,6 +294,11 @@ def mount_roots(reference: Mapping[str, str], *, _context=None) -> list[Path]:
     files, trees = amended.terminal_inputs(base.cohort, _context=_context)
     roots = {Path(reference["path"]).parent, *trees, *(path.parent for path in files)}
     roots.update(rolling.enrollment_roots(base))
+    delivery = amended.delivery_fields(value)
+    if "qualification_delivery_compatibility" in delivery:
+        from .qualification_delivery_compatibility import roots as delivery_roots
+        roots.update(delivery_roots(delivery["qualification_delivery_compatibility"],
+            body_policy=delivery["application_body_identity_policy"]))
     for role in (base.serializable(), value["runtime"]):
         roots.update(Path(role[key]) for key in ("runtime_source_root", "module_root", "execution_root"))
         roots.update(Path(role[key]).parent for key in ("source_manifest", "client_binary", "base_launcher", "host_launcher"))

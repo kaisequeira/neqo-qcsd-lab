@@ -657,7 +657,8 @@ def _equivalence(reference: Mapping[str, Any], *, original_runtime: Mapping[str,
     manifest = _json(_read(_child(result_root,
         experiment["configuration"]["workloads"][0]["manifest"]), plan["workload_sha256"]))
     from .rapid_selected_capture_input import is_selected
-    if is_selected(manifest.get("preparation")):
+    from .selected_capture_amendment import is_amended as is_selected_amended
+    if is_selected(manifest.get("preparation")) or is_selected_amended(manifest.get("preparation")):
         raise ValueError("selected-input canary requires fresh qualification and readiness under its own Source")
     from .whole_graph_supplement import is_whole
     from .whole_graph_capture_amendment import is_amended as is_whole_amended

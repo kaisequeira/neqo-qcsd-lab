@@ -49,7 +49,8 @@ ROW_FIELDS = {"candidate_id", "workload_id", "original_terminal", "original_mani
 def is_amended(value: Any) -> bool:
     from .static_budget_capture_amendment import is_amended as is_budget_amended
     from .whole_graph_capture_amendment import is_amended as is_whole_amended
-    return isinstance(value, Mapping) and value.get("data_role") in {ROLE, DURATION_ROLE} or is_whole_amended(value) or is_budget_amended(value)
+    from .selected_capture_amendment import is_amended as is_selected_amended
+    return isinstance(value, Mapping) and value.get("data_role") in {ROLE, DURATION_ROLE} or is_whole_amended(value) or is_budget_amended(value) or is_selected_amended(value)
 
 
 def policies(*, front_policy: str | None = None, buflo_policy: str | None = None) -> dict[str, str]:
@@ -137,6 +138,9 @@ def _derived(original: Mapping[str, Any], declaration_ref: Mapping[str, str], se
 
 
 def _declaration(path: Path, *, enrollment: Path | None = None, runtime: Mapping[str, str] | None = None):
+    from . import selected_capture_amendment as selected
+    if lanes._load(lanes._read(path)).get("receipt_type") == selected.DECLARATION_TYPE:
+        return selected._declaration(path, enrollment=enrollment, runtime=runtime)
     from . import static_budget_capture_amendment as budget_amendment
     if lanes._load(lanes._read(path)).get("receipt_type") == budget_amendment.DECLARATION_TYPE:
         return budget_amendment._declaration(path, enrollment=enrollment, runtime=runtime)
@@ -190,6 +194,9 @@ def _declaration(path: Path, *, enrollment: Path | None = None, runtime: Mapping
 
 
 def _closed(path: Path, *, enrollment: Path | None = None, runtime: Mapping[str, str] | None = None):
+    from . import selected_capture_amendment as selected
+    if selected.is_receipt(path):
+        return selected.validate_amendment(path, enrollment=enrollment, runtime=runtime)
     from . import static_budget_capture_amendment as budget_amendment
     if lanes._load(lanes._read(path)).get("receipt_type") == budget_amendment.RECEIPT_TYPE:
         return budget_amendment.validate_amendment(path, enrollment=enrollment, runtime=runtime)
@@ -229,6 +236,11 @@ def publish_amendment(enrollment: Path, runtime: Mapping[str, str], output: Path
     from . import rapid_rolling_capture as rolling
     from . import whole_graph_supplement as whole
     batch, _, policy = rolling._verify_enrollment(enrollment)
+    from .rapid_additive_static_enrollment import CONTRACT as ADDITIVE_CONTRACT
+    if policy["contract"] == ADDITIVE_CONTRACT:
+        from .selected_capture_amendment import publish_amendment as publish_selected_amendment
+        return publish_selected_amendment(enrollment, runtime, output, front_policy=front_policy,
+            buflo_policy=buflo_policy, buflo_duration_policy=buflo_duration_policy)
     from . import supplied_static_budget_successor as budget
     from . import static_budget_capture as budget_capture
     if isinstance(rolling._context_for_policy(policy, Path(batch["admission_root"])), (budget.Context, budget_capture.Context)):
@@ -281,6 +293,9 @@ def publish_amendment(enrollment: Path, runtime: Mapping[str, str], output: Path
 
 
 def validate_amendment(path: Path, *, enrollment: Path, runtime: Mapping[str, str]):
+    from . import selected_capture_amendment as selected
+    if selected.is_receipt(path):
+        return selected.validate_amendment(path, enrollment=enrollment, runtime=runtime)
     from . import static_budget_capture_amendment as budget_amendment
     if lanes._load(lanes._read(path)).get("receipt_type") == budget_amendment.RECEIPT_TYPE:
         return budget_amendment.validate_amendment(path, enrollment=enrollment, runtime=runtime)
@@ -291,6 +306,9 @@ def validate_amendment(path: Path, *, enrollment: Path, runtime: Mapping[str, st
 
 
 def validate_preparation(value: Mapping[str, Any], resources: list[dict[str, Any]]):
+    from . import selected_capture_amendment as selected
+    if selected.is_amended(value):
+        return selected.validate_preparation(value, resources)
     from . import static_budget_capture_amendment as budget_amendment
     if budget_amendment.is_amended(value):
         return budget_amendment.validate_preparation(value, resources)
@@ -313,6 +331,9 @@ def validate_preparation(value: Mapping[str, Any], resources: list[dict[str, Any
 
 
 def preparation_roots(value: Mapping[str, Any]) -> list[Path]:
+    from . import selected_capture_amendment as selected
+    if selected.is_amended(value):
+        return selected.preparation_roots(value)
     from . import static_budget_capture_amendment as budget_amendment
     if budget_amendment.is_amended(value):
         return budget_amendment.preparation_roots(value)

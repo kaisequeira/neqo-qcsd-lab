@@ -207,6 +207,12 @@ def typed_selected_inputs(batch, policy, rows, contexts):
 def typed_manifest_limits(manifest):
     """Use only dependencies already authenticated by public manifest roots."""
     from qcsd_lab import rapid_selected_capture_input as selected
+    from qcsd_lab import selected_capture_amendment as selected_amendment
+    if selected_amendment.is_amended(manifest.get("preparation")):
+        selected_amendment.validate_preparation(manifest["preparation"], manifest["resources"])
+        declaration = selected_amendment._declaration(selected_amendment.rolling._open_ref(
+            manifest["preparation"][selected_amendment.old.FIELD]))
+        return dict(declaration["capture_limits"])
     if selected.is_selected(manifest.get("preparation")):
         selected.validate_preparation(manifest["preparation"], manifest["resources"])
         value, _, _ = selected.validate_input(selected.reopen(manifest["preparation"]["selected_input_evidence"]["receipt"]))
@@ -236,7 +242,17 @@ def typed_canary_limits(manifests, policy, mode, selected_policy):
     if not limits or any(value != limits[0] for value in limits[1:]):
         raise ValueError("typed flight requires homogeneous authenticated class budgets")
     from qcsd_lab.rapid_selected_capture_input import is_selected
-    if all(is_selected(manifest.get("preparation")) for manifest in manifests):
+    from qcsd_lab import selected_capture_amendment as selected_amendment
+    if all(selected_amendment.is_amended(manifest.get("preparation")) for manifest in manifests):
+        declarations = [selected_amendment._declaration(selected_amendment.rolling._open_ref(
+            manifest["preparation"][selected_amendment.old.FIELD])) for manifest in manifests]
+        if (mode not in AMENDED_MODES or any(row["modes"] != [mode] for row in declarations)
+            or any(row.get("buflo_duration_policy") != selected_policy for row in declarations)):
+            raise ValueError("selected canary requires its exact prospective fixed setting")
+        declared = limits[0]
+        if policy is not None and declared != policy["capture_limits"]:
+            raise ValueError("selected amended graph limits differ from its enrollment")
+    elif all(is_selected(manifest.get("preparation")) for manifest in manifests):
         if mode not in {"undefended", "tamaraw", "cs-buflo"} or selected_policy is not None:
             raise ValueError("selected FRONT and BuFLO need their separate prospective fixed policy authority")
         declared = limits[0]
@@ -250,7 +266,7 @@ def typed_canary_limits(manifests, policy, mode, selected_policy):
     return duration.capture_limits(mode, {**declared, "max_attempts": 1}, policy=selected_policy)
 
 
-def selected_inputs(enrollment, study):
+def selected_inputs(enrollment, study, *, prospective_amendment=False):
     """Authenticate the current declared batch, preserving each original graph."""
     from qcsd_lab import rapid_rolling_capture as rolling
     from qcsd_lab import supplied_static_admission as static
@@ -258,7 +274,8 @@ def selected_inputs(enrollment, study):
     batch, all_classes, policy = rolling._verify_enrollment(Path(enrollment).absolute())
     from qcsd_lab import rapid_additive_static_enrollment as additive
     if policy["contract"] == additive.CONTRACT:
-        return additive_selected_inputs(enrollment, study, batch, all_classes, policy)
+        return additive_selected_inputs(enrollment, study, batch, all_classes, policy,
+                                        prospective_amendment=prospective_amendment)
     count = len(batch["selected_candidate_ids"])
     if (not 1 <= count <= 5 or policy["contract"] != rolling.STATIC_CONTRACT
         or rolling._open_ref(batch["policy"]).parent != Path(study).absolute()):
@@ -292,7 +309,7 @@ def selected_inputs(enrollment, study):
     return batch, policy, bindings, manifests, sorted(roots), limits[0]
 
 
-def additive_selected_inputs(enrollment, study, batch, all_classes, policy):
+def additive_selected_inputs(enrollment, study, batch, all_classes, policy, *, prospective_amendment=False):
     """Select only this new batch's direct receipts without acquisition history."""
     from qcsd_lab import rapid_rolling_capture as rolling
     from qcsd_lab import rapid_selected_capture_input as selected
@@ -301,10 +318,18 @@ def additive_selected_inputs(enrollment, study, batch, all_classes, policy):
         raise ValueError("selected flight belongs to another prospective study or class count")
     rows = all_classes[-count:]
     bindings, manifests, roots = [], [], set()
+    if prospective_amendment:
+        from qcsd_lab import selected_capture_amendment as selected_amendment
+        files, trees = selected_amendment.metadata_inputs(Path(enrollment).absolute(), batch, all_classes, policy)
+        roots.update(trees | {path.parent for path in files})
+        roots.add(Path(policy["runtime"]["execution_root"]))
     for row in rows:
         original = selected.reopen(row["prepared_workload"])
         manifest = json.loads(read(original))
-        selected.validate_preparation(manifest["preparation"], manifest["resources"])
+        if prospective_amendment:
+            selected_amendment._original(row)
+        else:
+            selected.validate_preparation(manifest["preparation"], manifest["resources"])
         if original.stem != row["workload_id"]:
             raise ValueError("selected flight changed its immutable class/workload mapping")
         bindings.append({"candidate_id": row["candidate_id"], "class_index": row["class_index"],
@@ -312,7 +337,8 @@ def additive_selected_inputs(enrollment, study, batch, all_classes, policy):
             "original_workload": ref(original), "workload_id": row["workload_id"],
             "full_graph": graph(manifest), "selection_sha256": policy["admission_identity"]["profile_sha256"]})
         manifests.append(manifest)
-        roots.update(static_roots(manifest))
+        if not prospective_amendment:
+            roots.update(static_roots(manifest))
     if [row["candidate_id"] for row in bindings] != batch["selected_candidate_ids"]:
         raise ValueError("selected flight reorders its append-only class membership")
     return batch, policy, bindings, manifests, sorted(roots), {**policy["capture_limits"], "max_attempts": 1}
@@ -395,7 +421,7 @@ def checked_setup(args):
     runtime = rolling.load_runtime(Path(setup["runtime_spec"]["path"]))
     checked(setup["runtime_spec"])
     _, policy, bindings, manifests, roots, limits = selected_inputs(
-        setup["enrollment"]["path"], setup["study_root"])
+        setup["enrollment"]["path"], setup["study_root"], prospective_amendment=setup["mode"] in AMENDED_MODES)
     checked(setup["enrollment"])
     if (bindings != setup["selected_classes"] or roots != setup["original_roots"]
         or limits != setup["original_limits"] or runtime["data_root"] != policy["runtime"]["data_root"]):
@@ -441,7 +467,8 @@ def stage(args):
     from qcsd_lab import capture_acceptance_policy as capture
     from qcsd_lab.buflo_duration_budget import POLICY
     enrollment = args.enrollment.absolute()
-    _, policy, bindings, manifests, roots, limits = selected_inputs(enrollment, args.study_root)
+    _, policy, bindings, manifests, roots, limits = selected_inputs(enrollment, args.study_root,
+                                                                prospective_amendment=args.mode in AMENDED_MODES)
     output, study = args.output.absolute(), args.study_root.absolute()
     data = Path(policy["runtime"]["data_root"])
     protected = [clean, args.runtime_build_root.absolute(), study, HERE,
@@ -789,7 +816,8 @@ def checked_plan(args, *, image=False):
         raise ValueError("enrollment lineage changed")
     if not image:
         checked(plan["enrollment"])
-        _, checked_policy, expected, originals, _, _ = selected_inputs(plan["enrollment"]["path"], plan["study_root"])
+        _, checked_policy, expected, originals, _, _ = selected_inputs(plan["enrollment"]["path"], plan["study_root"],
+                                                                     prospective_amendment=amended)
         recorded = [{key: value for key, value in row.items() if key != "capture_manifest"} for row in plan["selected_classes"]]
         if expected != recorded:
             raise ValueError("selected original classes changed")
@@ -813,7 +841,9 @@ def checked_plan(args, *, image=False):
             if len(matching) != 1 or matching[0]["capture_manifest"] != row["capture_manifest"]:
                 raise ValueError("group amendment derived manifest binding changed")
         local_manifests.append(local)
-    if authority is None and any(local["preparation"]["data_role"] != preparation.ROLE for local in local_manifests):
+    from qcsd_lab import selected_capture_amendment as selected_amendment
+    if (authority is None and any(local["preparation"]["data_role"] != preparation.ROLE for local in local_manifests)
+        or authority is not None and authority["contract"] == selected_amendment.CONTRACT):
         expected_limits = typed_canary_limits(local_manifests, None if image else checked_policy, mode, selected_policy)
         if plan["capture_limits"] != expected_limits or campaign["limits"] != expected_limits:
             raise ValueError("typed canary changed its authenticated response or recording limits")
@@ -1114,7 +1144,15 @@ def main():
                 item.add_argument("--result", type=Path, required=True)
     args = parser.parse_args()
     dispatch = {"stage": stage, "amend": amend, "finalize": finalize, "readiness": readiness, "run": run}
-    result = dispatch.get(args.command, image_action)(args)
+    from qcsd_lab.rapid_operation_facts import OperationFacts, current_context
+    context = current_context()
+    owned = context is None
+    if owned:
+        context = OperationFacts()
+    with context.scope():
+        result = dispatch.get(args.command, image_action)(args)
+        if owned:
+            context.check()
     if result is not None:
         print(json.dumps(result, sort_keys=True))
 

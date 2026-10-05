@@ -332,8 +332,18 @@ def _raw_dependencies(reference, value):
         for name in ("source_manifest", "client_binary", "base_launcher", "host_launcher"):
             files.add(Path(role["runtime"][name]))
         runtime_record = evidence._json(raw)
-        seen = set()
-        while runtime_record.get("original_canonical") is not None:
+        seen = {canonical_path}
+        while True:
+            # Runtime reopening authenticates these explicit external producer
+            # refs as well as files under its own canonical namespace. Retain
+            # them before memo reuse; roots() derives their same-absolute RO
+            # parents without mounting an unrelated workspace ancestor.
+            for name in ("client_reuse_proof", "client_reuse_recipe",
+                         "original_native_build_record", "closure_recipe"):
+                if name in runtime_record:
+                    files.add(evidence._reference(runtime_record[name])[0])
+            if runtime_record.get("original_canonical") is None:
+                break
             parent, parent_raw = evidence._reference(runtime_record["original_canonical"])
             if parent in seen:
                 raise ValueError("delivery qualification runtime raw dependency contains a cycle")

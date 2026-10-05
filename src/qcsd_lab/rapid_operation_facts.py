@@ -232,8 +232,13 @@ class OperationFacts:
                 from .supplied_static_capture_amendment import is_amended
                 from .whole_graph_supplement import is_whole
                 from .supplied_static_budget_successor import is_budget
+                from . import rapid_selected_capture_input as selected
+                from . import selected_capture_amendment as selected_amendment
                 preparation = json.loads(self.watch_file(path)).get("preparation")
-                if plan["data_role"] != ROLE or not (is_static(preparation) or is_amended(preparation) or is_whole(preparation) or is_budget(preparation)):
+                if plan["data_role"] == selected.ROLE:
+                    if not (selected.is_selected(preparation) or selected_amendment.is_amended(preparation)):
+                        raise ValueError("operation workload changed its declared selected data role")
+                elif plan["data_role"] != ROLE or not (is_static(preparation) or is_amended(preparation) or is_whole(preparation) or is_budget(preparation)):
                     raise ValueError("operation workload changed its declared static data role")
                 for evidence_root in self._workload_evidence_trees(path):
                     self.watch_tree(evidence_root)
@@ -398,6 +403,12 @@ class OperationFacts:
             from . import rapid_selected_capture_input as selected
             if selected.is_selected(preparation):
                 files, trees = selected.preparation_inputs(preparation, manifest["resources"])
+                for dependency in files:
+                    self.watch_file(dependency)
+                return sorted(trees)
+            from . import selected_capture_amendment as selected_amendment
+            if selected_amendment.is_amended(preparation):
+                files, trees = selected_amendment.preparation_inputs(preparation)
                 for dependency in files:
                     self.watch_file(dependency)
                 return sorted(trees)
