@@ -23,6 +23,69 @@ VARIABLE_PRIMARY_DOCUMENT_BODY_POLICY = VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLIC
 PRIMARY_ORIGIN_CHAFF_POLICY = "primary-origin-v1"
 APPROVED_ORIGINS_CHAFF_POLICY = "prepared-approved-origins-v1"
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+APPLICATION_BODY_IDENTITY_FIELD = "application_body_identity_policy"
+EXACT_APPLICATION_BODY_IDENTITY_POLICY = "exact-prepared-application-body-v1"
+COMPLETE_APPLICATION_DELIVERY_POLICY = "complete-current-application-delivery-v1"
+
+
+def validate_application_body_identity_policy(value: Any) -> str:
+    """A closed prospective capture policy; absence keeps exact body checks."""
+    if value is None:
+        return EXACT_APPLICATION_BODY_IDENTITY_POLICY
+    if not isinstance(value, str) or value not in {
+        EXACT_APPLICATION_BODY_IDENTITY_POLICY, COMPLETE_APPLICATION_DELIVERY_POLICY,
+    }:
+        raise ValueError("application body identity policy is unknown or malformed")
+    return value
+
+
+def application_body_identity_policy(configuration: Mapping[str, Any]) -> str:
+    if APPLICATION_BODY_IDENTITY_FIELD not in configuration:
+        return EXACT_APPLICATION_BODY_IDENTITY_POLICY
+    value = configuration[APPLICATION_BODY_IDENTITY_FIELD]
+    if value is None:
+        raise ValueError("explicit application body identity policy cannot be null")
+    return validate_application_body_identity_policy(value)
+
+
+def _observed_content_encoding(row: Mapping[str, Any]) -> str:
+    headers = row.get("response_headers")
+    if (not isinstance(headers, list) or any(not isinstance(pair, list) or len(pair) != 2
+        or any(not isinstance(item, str) for item in pair) for pair in headers)):
+        raise ValueError("complete application delivery lacks observed response headers")
+    values = [value.strip() for name, value in headers if name.lower() == "content-encoding"]
+    if any(not value for value in values):
+        raise ValueError("complete application delivery has an empty observed encoding")
+    lengths = [value.strip() for name, value in headers if name.lower() == "content-length"]
+    if any(re.fullmatch(r"[0-9]+", value) is None or int(value) != row["bytes"]
+           or row.get("content_length") != int(value) for value in lengths):
+        raise ValueError("complete application delivery changed its observed Content-Length facts")
+    return ",".join(values) if values else "identity"
+
+
+def _complete_delivery_endpoints(manifest: Mapping[str, Any], run: Mapping[str, Any]) -> None:
+    from .manifest import https_origin
+    expected = {https_origin(row["url"]) for row in manifest["resources"]}
+    if None in expected:
+        raise ValueError("complete application delivery has an invalid prepared HTTPS origin")
+    endpoints = run.get("endpoints")
+    if not isinstance(endpoints, list) or len(endpoints) != len(expected):
+        raise ValueError("complete application delivery lacks its exact endpoint set")
+    identities, origins = set(), set()
+    for row in endpoints:
+        if (not isinstance(row, Mapping) or type(row.get("id")) is not int
+            or row["id"] < 0 or row["id"] in identities or row.get("negotiated_protocol") != "h3"
+            or not isinstance(row.get("origin"), str)):
+            raise ValueError("complete application delivery changed its unique HTTP3 endpoints")
+        parts = urlsplit(row["origin"])
+        origin = https_origin(row["origin"])
+        if (origin not in expected or origin in origins or parts.path not in {"", "/"}
+            or parts.query or parts.fragment):
+            raise ValueError("complete application delivery changed its prepared endpoint origins")
+        identities.add(row["id"])
+        origins.add(origin)
+    if origins != expected:
+        raise ValueError("complete application delivery omits a prepared HTTP3 origin")
 
 
 def validate_application_response_policy(value: Any) -> str:
@@ -211,9 +274,18 @@ def validate_primary_document_response(
 
 def validate_application_responses(
     manifest: Mapping[str, Any], run: Mapping[str, Any], *, require_identity: bool = True,
+    body_identity_policy: str | None = None,
 ) -> dict[str, Any]:
     """Reopen exact delivery without normalizing raw status or runner outcomes."""
     graph = validate_prepared_response_graph(manifest)
+    body_policy = validate_application_body_identity_policy(body_identity_policy)
+    complete_delivery = body_policy == COMPLETE_APPLICATION_DELIVERY_POLICY
+    cap = manifest["preparation"].get("max_response_bytes")
+    if complete_delivery and (type(cap) is not int or cap <= 0
+        or type(run.get("max_response_bytes")) is not int or run["max_response_bytes"] != cap):
+        raise ValueError("complete application delivery changed its declared observed response cap")
+    if complete_delivery:
+        _complete_delivery_endpoints(manifest, run)
     policy = graph["policy"]
     primary_policy = primary_document_identity_policy(manifest)
     primary_evidence = (validate_primary_document_identity_evidence(manifest)
@@ -232,6 +304,7 @@ def validate_application_responses(
         raise ValueError("application runner has no response ledger")
     seen = set()
     signatures = []
+    observed = []
     for row in rows:
         if (not isinstance(row, Mapping) or type(row.get("resource_id")) is not int
             or row["resource_id"] in seen or row["resource_id"] not in resources):
@@ -244,10 +317,12 @@ def validate_application_responses(
             or row["bytes"] < 0 or not isinstance(row.get("body_sha256"), str)
             or SHA256.fullmatch(row["body_sha256"]) is None):
             raise ValueError(f"application resource {identifier} was not delivered under its exact declared status")
-        if (primary_policy == VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY
+        if ((complete_delivery or primary_policy == VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY)
             and row.get("request_headers") != resources[identifier]["headers"]):
             raise ValueError(f"application resource {identifier} changed its frozen request headers")
         variable_primary = identifier == 0 and primary_policy == VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY
+        if complete_delivery and identifier == 0 and not variable_primary:
+            validate_primary_document_response(manifest, row)
         if variable_primary:
             from .supplied_static_preparation import is_static
             from .supplied_static_capture_amendment import is_amended
@@ -258,7 +333,17 @@ def validate_application_responses(
                             else primary_evidence["stability_primary_responses"])
             validate_primary_document_response(manifest, row,
                 expected_content_type=_primary_content_type(primary_rows[0]))
-        if require_identity and not variable_primary and (
+        if complete_delivery:
+            if (row["bytes"] > cap or (target["bytes"] > 0 and row["bytes"] == 0)
+                or (row["bytes"] > 0 and row["body_sha256"] == hashlib.sha256(b"").hexdigest())
+                or (row["bytes"] == 0 and row["body_sha256"] != hashlib.sha256(b"").hexdigest())):
+                raise ValueError(f"application resource {identifier} violates its complete nonempty body bound")
+            length = row.get("content_length")
+            if length is not None and (type(length) is not int or length < 0 or length != row["bytes"]):
+                raise ValueError(f"application resource {identifier} did not retain its declared complete body")
+            observed.append({"resource_id": identifier, "status": row["status"], "bytes": row["bytes"],
+                "body_sha256": row["body_sha256"], "content_encoding": _observed_content_encoding(row)})
+        if require_identity and not complete_delivery and not variable_primary and (
             row["bytes"] != target["bytes"] or row["body_sha256"] != target["body_sha256"]
         ):
             raise ValueError(f"application resource {identifier} differs from prepared response identity")
@@ -270,15 +355,33 @@ def validate_application_responses(
         signatures.append((identifier, row["status"], row["bytes"], row["body_sha256"], row["outcome"]))
     if seen != set(resources):
         raise ValueError("application response ledger omits a full-graph resource")
-    return {**graph, "response_signature": sorted(signatures)}
+    result = {**graph, "response_signature": sorted(signatures)}
+    if complete_delivery:
+        result.update(application_body_identity_policy=body_policy,
+            observed_responses=sorted(observed, key=lambda row: row["resource_id"]),
+            content_equality_across_visits_claimed=False)
+    return result
 
 
 def application_response_identity_signature(
     manifest: Mapping[str, Any], signature: list[tuple[Any, ...]] | None,
+    *, body_identity_policy: str | None = None,
 ) -> list[tuple[Any, ...]] | None:
     """Project comparison only, after the caller validates actual raw delivery."""
+    body_policy = validate_application_body_identity_policy(body_identity_policy)
     if signature is None:
         return None
+    if body_policy == COMPLETE_APPLICATION_DELIVERY_POLICY:
+        graph = validate_prepared_response_graph(manifest)
+        expected = {row["resource_id"]: row for row in manifest["preparation"]["expected_responses"]}
+        if (not isinstance(signature, list) or len(signature) != len(graph["resource_ids"])
+            or any(not isinstance(row, (tuple, list)) or len(row) != 5 or type(row[0]) is not int
+                   or row[0] not in expected or row[1] != expected[row[0]]["status"]
+                   or row[4] != "succeeded" for row in signature)
+            or {row[0] for row in signature} != set(graph["resource_ids"])):
+            raise ValueError("complete delivery comparison changed its full graph or declared statuses")
+        return [(identifier, status, body_policy, body_policy, outcome)
+                for identifier, status, _size, _digest, outcome in signature]
     if primary_document_identity_policy(manifest) != VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY:
         return deepcopy(signature)
     validate_primary_document_identity_evidence(manifest)

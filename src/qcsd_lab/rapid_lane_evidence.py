@@ -482,7 +482,9 @@ def _render_lane_campaign(spec: CaptureSpec, lane: plan.Lane, sites) -> bytes:
         elif payload["data_role"] != ROLE:
             raise ValueError("lane rendering changed its declared scientific data role")
         return plan.render_lane_campaign(lane, sites, static_capture_limits=payload["capture_limits"],
-                                         buflo_duration_policy=payload.get("buflo_duration_policy"))
+                                         buflo_duration_policy=payload.get("buflo_duration_policy"),
+                                         application_body_identity_policy=payload.get("application_body_identity_policy"),
+                                         qualification_delivery_compatibility=payload.get("qualification_delivery_compatibility"))
     return plan.render_lane_campaign(lane, sites)
 
 

@@ -151,6 +151,7 @@ def campaign_roots(root: Path, action: str, target: Path) -> list[Path]:
     from .orchestrator import _campaign_config_root, _trusted_regular_input
     root = _path(root, directory=True)
     paths = []
+    configuration = None
     if action == "run":
         import yaml
         target = _path(target)
@@ -158,6 +159,7 @@ def campaign_roots(root: Path, action: str, target: Path) -> list[Path]:
             raise ValueError("run transport campaign must be inside the Lab root")
         config = _campaign_config_root(target, frozen_inputs=None)
         campaign = yaml.safe_load(target.read_bytes())
+        configuration = campaign
         workloads = campaign.get("workloads") if isinstance(campaign, dict) else None
         if not isinstance(workloads, dict) or not workloads:
             raise ValueError("static run transport lacks its declared workload mapping")
@@ -171,6 +173,7 @@ def campaign_roots(root: Path, action: str, target: Path) -> list[Path]:
         if not target.is_relative_to(root / "results"):
             raise ValueError("static resume transport requires the official result directory")
         experiment = _json(target / "experiment.json")
+        configuration = experiment["configuration"]
         for row in experiment["configuration"]["workloads"]:
             relative = row["manifest"]
             if (not isinstance(relative, str) or Path(relative).is_absolute()
@@ -182,4 +185,9 @@ def campaign_roots(root: Path, action: str, target: Path) -> list[Path]:
     roots = set()
     for path in paths:
         roots.update(manifest_roots(_json(path)))
+    if isinstance(configuration, Mapping) and "qualification_delivery_compatibility" in configuration:
+        from .application_response_policy import application_body_identity_policy
+        from .qualification_delivery_compatibility import roots as witness_roots
+        roots.update(witness_roots(configuration["qualification_delivery_compatibility"],
+                                  body_policy=application_body_identity_policy(configuration)))
     return sorted(roots)

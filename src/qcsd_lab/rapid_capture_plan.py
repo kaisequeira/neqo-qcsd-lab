@@ -357,7 +357,9 @@ def _check_workload_files(sites: Sequence[Site], workload_root: Path) -> None:
 
 
 def render_lane_campaign(lane: Lane, sites: Sequence[Site], *, static_capture_limits: Mapping[str, Any] | None = None,
-                         buflo_duration_policy: str | None = None) -> bytes:
+                         buflo_duration_policy: str | None = None,
+                         application_body_identity_policy: str | None = None,
+                         qualification_delivery_compatibility: Mapping[str, str] | None = None) -> bytes:
     """Render one deterministic schema-one campaign without granting authority."""
 
     if lane.role not in {"formal", "diagnostic"}:
@@ -423,6 +425,15 @@ def render_lane_campaign(lane: Lane, sites: Sequence[Site], *, static_capture_li
                                                              static_capture_limits.get("capture_megabytes"))):
             raise ValueError("static capture may change only its declared response/recording budgets")
         document["limits"] = dict(static_capture_limits)
+    if application_body_identity_policy is not None:
+        from .application_response_policy import validate_application_body_identity_policy
+        if lane.study_version != 6 or lane.role != "formal" or static_capture_limits is None:
+            raise ValueError("application body policy requires its prospective full-graph formal setting")
+        document["application_body_identity_policy"] = validate_application_body_identity_policy(application_body_identity_policy)
+    if qualification_delivery_compatibility is not None:
+        from .qualification_delivery_compatibility import validate
+        validate(qualification_delivery_compatibility, body_policy=application_body_identity_policy)
+        document["qualification_delivery_compatibility"] = dict(qualification_delivery_compatibility)
     if buflo_duration_policy is not None:
         from .buflo_duration_budget import POLICY, PARAMETER_PATH, capture_limits
         if (type(buflo_duration_policy) is not str or buflo_duration_policy != POLICY

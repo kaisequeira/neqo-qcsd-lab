@@ -446,7 +446,9 @@ def _sites_from_enrollment(batch: Mapping[str, Any], all_classes: list[dict[str,
                            qualifier_spec: Path, workload_root: Path, *, require_current: bool,
                            enrollment: Path | None = None, runtime: Mapping[str, str] | None = None,
                            front_capture_amendment: Mapping[str, Any] | None = None,
-                           static_capture_amendment: Mapping[str, Any] | None = None, _context=None) -> tuple[plan.Site, ...]:
+                           static_capture_amendment: Mapping[str, Any] | None = None,
+                           delivery_compatibility: Mapping[str, str] | None = None,
+                           body_policy: str | None = None, _context=None) -> tuple[plan.Site, ...]:
     classes = all_classes[-len(batch["selected_candidate_ids"]):]
     policy = verify_policy(_open_ref(batch["policy"]).parent)
     from . import rapid_additive_static_enrollment as additive
@@ -506,10 +508,19 @@ def _sites_from_enrollment(batch: Mapping[str, Any], all_classes: list[dict[str,
                                origin(workload["preparation"]["final_url"]), q["qualification_set"], lanes._sha(lanes._read(manifest))))
     validator = (validate_named_qualification_set_manifest if _context is None else
         lambda value, **kwargs: _context.validate_named_qualification(value, validate_named_qualification_set_manifest, **kwargs))
-    validator(lanes._load(lanes._read(manifest)), workload_root=workload_root,
-        sidecar_root=sidecars, prefix_spec_root=None, expected_qualification_set=q["qualification_set"],
-        expected_workload_ids=[site.workload_id for site in sites], expected_qualification_scope=RESPONSE_ONLY_QUALIFICATION_SCOPE,
-        require_current_implementation=require_current)
+    if delivery_compatibility is None:
+        validator(lanes._load(lanes._read(manifest)), workload_root=workload_root,
+            sidecar_root=sidecars, prefix_spec_root=None, expected_qualification_set=q["qualification_set"],
+            expected_workload_ids=[site.workload_id for site in sites], expected_qualification_scope=RESPONSE_ONLY_QUALIFICATION_SCOPE,
+            require_current_implementation=require_current)
+    else:
+        from .qualification_delivery_compatibility import load_named_qualification_set
+        load_named_qualification_set(manifest, delivery_compatibility=delivery_compatibility,
+            body_policy=body_policy, workload_root=workload_root, sidecar_root=sidecars,
+            expected_qualification_set=q["qualification_set"], prefix_spec_root=None,
+            expected_workload_ids=[site.workload_id for site in sites],
+            expected_qualification_scope=RESPONSE_ONLY_QUALIFICATION_SCOPE,
+            require_current_implementation=require_current)
     if amendment is not None or selected_policy:
         expected_source = {**lanes._load(lanes._read(Path(runtime["source_manifest"]))),
                            "image_digest": runtime["collection_image_digest"]}
@@ -568,12 +579,16 @@ def _effective_capture_limits(batch, classes, policy):
 
 
 def _render_campaign(lane: plan.Lane, sites, policy: Mapping[str, Any], *, buflo_duration_policy: str | None = None,
-                     capture_limits: Mapping[str, int] | None = None) -> bytes:
+                     capture_limits: Mapping[str, int] | None = None,
+                     application_body_identity_policy: str | None = None,
+                     qualification_delivery_compatibility: Mapping[str, str] | None = None) -> bytes:
     from .rapid_additive_static_enrollment import CONTRACT as ADDITIVE_CONTRACT
     return plan.render_lane_campaign(lane, sites, static_capture_limits=(
         (capture_limits if capture_limits is not None else policy["capture_limits"])
         if policy["contract"] in {STATIC_CONTRACT, ADDITIVE_CONTRACT} else None),
-        buflo_duration_policy=buflo_duration_policy)
+        buflo_duration_policy=buflo_duration_policy,
+        application_body_identity_policy=application_body_identity_policy,
+        qualification_delivery_compatibility=qualification_delivery_compatibility)
 
 
 def _static_canary_facts(facts: Mapping[str, Any], amendment: Mapping[str, Any]) -> dict[str, Any]:
@@ -624,7 +639,16 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
                  *, readiness: Mapping[str, Any], runtime_inputs: Mapping[str, str] | None = None,
                  scheduling: Mapping[str, str] | None = None,
                  front_capture_amendment: Path | None = None,
-                 static_capture_amendment: Path | None = None, _context=None) -> Path:
+                 static_capture_amendment: Path | None = None,
+                 application_body_identity_policy: str | None = None,
+                 qualification_delivery_compatibility: Mapping[str, str] | None = None, _context=None) -> Path:
+    from .application_response_policy import validate_application_body_identity_policy, application_body_identity_policy as declared_body_policy, COMPLETE_APPLICATION_DELIVERY_POLICY
+    body_policy = validate_application_body_identity_policy(application_body_identity_policy)
+    if qualification_delivery_compatibility is not None:
+        from .qualification_delivery_compatibility import validate
+        validate(qualification_delivery_compatibility, body_policy=body_policy)
+    if body_policy == COMPLETE_APPLICATION_DELIVERY_POLICY and scheduling is not None:
+        raise ValueError("complete application delivery requires its own prospective parallel policy authority")
     from .rapid_operation_facts import current_context
     _context = current_context() if _context is None else _context
     if _context is not None and current_context() is not _context:
@@ -632,7 +656,9 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
             return publish_plan(root, enrollment, qualification_spec, output,
                 readiness=readiness, runtime_inputs=runtime_inputs, scheduling=scheduling,
                 front_capture_amendment=front_capture_amendment,
-                static_capture_amendment=static_capture_amendment, _context=_context)
+                static_capture_amendment=static_capture_amendment,
+                application_body_identity_policy=application_body_identity_policy,
+                qualification_delivery_compatibility=qualification_delivery_compatibility, _context=_context)
     if _context is not None:
         _context._enrollment(enrollment)
     policy = verify_policy(root)
@@ -702,6 +728,10 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
         if amendment is not None:
             from .rapid_front_capture_amendment import require_canary
             require_canary(reference, facts, amendment_reference, amendment)
+        if declared_body_policy(facts) != body_policy:
+            raise ValueError("rolling plan differs from its canary's declared application body policy")
+        if facts.get("qualification_delivery_compatibility") != qualification_delivery_compatibility:
+            raise ValueError("rolling plan differs from its canary's qualification delivery witness")
         if static_amendment is not None:
             from .supplied_static_capture_amendment import require_canary
             require_canary(reference, _static_canary_facts(facts, static_amendment),
@@ -712,14 +742,17 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
     sites = _sites_from_enrollment(batch, classes, qualification_spec, workloads, require_current=False,
                    enrollment=enrollment, runtime=measurement_runtime,
                    front_capture_amendment=amendment_reference,
-                   static_capture_amendment=static_reference, _context=_context)
+                   static_capture_amendment=static_reference,
+                   delivery_compatibility=qualification_delivery_compatibility, body_policy=body_policy, _context=_context)
     planned = plan.plan_lanes(sites, final=True, study_version=6, rolling_batch=batch["ordinal"])
     hashes = {}
     if _context is not None:
         _context.check()
     for lane in planned:
         path = campaigns / f"{lane.campaign_name}.yml"
-        raw = _render_campaign(lane, sites, policy, buflo_duration_policy=duration_policy, capture_limits=effective_limits)
+        raw = _render_campaign(lane, sites, policy, buflo_duration_policy=duration_policy, capture_limits=effective_limits,
+                               application_body_identity_policy=application_body_identity_policy,
+                               qualification_delivery_compatibility=qualification_delivery_compatibility)
         if path.exists():
             if lanes._read(path) != raw:
                 raise ValueError("rolling plan cannot replace an earlier campaign")
@@ -745,6 +778,10 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
                 **runtime, "acquisition_root": batch["admission_root"], "cohort": str(enrollment.absolute()),
                 "qualification_spec": str(qualification_spec.absolute()), "plan_receipt": str(output.absolute())}.items()}),
             declared_at=payload["declared_at"], _context=_context)
+    if application_body_identity_policy is not None:
+        payload["application_body_identity_policy"] = body_policy
+    if qualification_delivery_compatibility is not None:
+        payload["qualification_delivery_compatibility"] = dict(qualification_delivery_compatibility)
     if amendment_reference is not None:
         payload["front_capture_amendment"] = amendment_reference
     if static_reference is not None:
@@ -809,6 +846,16 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
     fields = {"study_version", "cohort_generation", "bindings", "runtime", "runtime_artifacts", "acquisition_provenance_sha256",
                  "qualification_spec_sha256", "sites", "lanes", "planned_trace_count", "readiness",
                  "declared_at", "formal_accepted_trace_count", "scientific_credit"}
+    from .application_response_policy import application_body_identity_policy, COMPLETE_APPLICATION_DELIVERY_POLICY
+    body_policy = application_body_identity_policy(value)
+    if "application_body_identity_policy" in value:
+        fields.add("application_body_identity_policy")
+    if "qualification_delivery_compatibility" in value:
+        fields.add("qualification_delivery_compatibility")
+        from .qualification_delivery_compatibility import validate
+        validate(value["qualification_delivery_compatibility"], body_policy=body_policy)
+    if body_policy == COMPLETE_APPLICATION_DELIVERY_POLICY and "scheduling" in value:
+        raise ValueError("complete-delivery plan cannot reuse an earlier parallel policy authority")
     if policy["contract"] == STATIC_CONTRACT or selected_policy:
         fields.add("data_role")
         fields.add("capture_limits")
@@ -854,7 +901,8 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
         raise ValueError("selected plan requires its own independently verified serial mode authority")
     sites = _sites_from_enrollment(batch, classes, spec.qualification_spec, spec.workload_root,
                require_current=require_current, enrollment=spec.cohort, runtime=measurement_runtime,
-               front_capture_amendment=amendment_reference, static_capture_amendment=static_reference, _context=_context)
+               front_capture_amendment=amendment_reference, static_capture_amendment=static_reference,
+               delivery_compatibility=value.get("qualification_delivery_compatibility"), body_policy=body_policy, _context=_context)
     if (value["study_version"] != 6 or type(value["study_version"]) is not int
         or value["cohort_generation"] != "rolling-50" or value["bindings"] != _bindings_from_enrollment(spec.cohort, policy)
         or value["sites"] != [asdict(site) for site in sites]
@@ -882,7 +930,9 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
     actual = []
     for lane in expected:
         raw = _render_campaign(lane, sites, policy, buflo_duration_policy=value.get("buflo_duration_policy"),
-                               capture_limits=value.get("capture_limits"))
+                               capture_limits=value.get("capture_limits"),
+                               application_body_identity_policy=value.get("application_body_identity_policy"),
+                               qualification_delivery_compatibility=value.get("qualification_delivery_compatibility"))
         if lanes._read(spec.campaign_dir / f"{lane.campaign_name}.yml") != raw:
             raise ValueError("rolling campaign changed sites, graph, visits or fixed settings")
         actual.append({**asdict(lane), "workload_ids": list(lane.workload_ids), "campaign_sha256": lanes._sha(raw)})
@@ -951,6 +1001,11 @@ def require_mode_readiness(spec: lanes.CaptureSpec, lane: plan.Lane, *, before: 
         if before is not None and admission._utc(amendment["published_at"]) > admission._utc(before):
             raise ValueError("static capture amendment was not published before its actual launch")
     publication = facts.get("source_equivalence_published_at")
+    from .application_response_policy import application_body_identity_policy
+    if application_body_identity_policy(facts) != application_body_identity_policy(payload):
+        raise ValueError("formal readiness changed its declared application body policy")
+    if facts.get("qualification_delivery_compatibility") != payload.get("qualification_delivery_compatibility"):
+        raise ValueError("formal readiness changed its declared qualification delivery witness")
     if publication is not None and (admission._utc(publication) > admission._utc(payload["declared_at"])
                                   or before is not None and admission._utc(publication) > admission._utc(before)):
         raise ValueError("rolling canary Source equivalence was not prospectively published before its plan and launch")
@@ -1030,7 +1085,9 @@ def publish_successor(spec: lanes.CaptureSpec, lane_name: str, generation: int, 
         raise ValueError("rolling recovery must name the immediate failed lane successor")
     lane = plan.successor_lane(base, generation)
     raw = plan.render_lane_campaign(lane, sites, static_capture_limits=value.get("capture_limits"),
-                                    buflo_duration_policy=value.get("buflo_duration_policy"))
+                                    buflo_duration_policy=value.get("buflo_duration_policy"),
+                                    application_body_identity_policy=value.get("application_body_identity_policy"),
+                                    qualification_delivery_compatibility=value.get("qualification_delivery_compatibility"))
     admission.durable_create(spec.campaign_dir / f"{lane.campaign_name}.yml", raw)
     value = {**value, "lanes": [{**asdict(lane), "workload_ids": list(lane.workload_ids), "campaign_sha256": lanes._sha(raw)}],
              "planned_trace_count": lane.sample_count, "declared_at": admission._now()}

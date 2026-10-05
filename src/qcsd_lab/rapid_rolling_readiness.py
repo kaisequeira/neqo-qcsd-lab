@@ -329,6 +329,11 @@ def _deep_command(plan: Mapping[str, Any], directory: Path, plan_sha: str,
         original = _json(_read(directory / "lineage/original-manifest.json", plan["original_workload_sha256"]))
         from .static_evidence_transport import manifest_roots
         roots = manifest_roots(original)
+    if "qualification_delivery_compatibility" in plan:
+        from .application_response_policy import application_body_identity_policy
+        from .qualification_delivery_compatibility import roots as witness_roots
+        roots = sorted(set(roots) | set(witness_roots(plan["qualification_delivery_compatibility"],
+                       body_policy=application_body_identity_policy(plan))))
     for root in roots:
         static_mounts.extend(["--volume", f"{root}:{root}:ro"])
     return ["docker", "run", "--rm", "--name", f'qcsd-v12-{plan["name"]}-verify-image',
@@ -360,10 +365,20 @@ def _qualification(plan: Mapping[str, Any], directory: Path, execution: Path,
         expected_workload_ids=[plan["workload_id"]], require_current_implementation=False)
     sidecar_path = named_path.parent / (plan["workload_id"] + ".json")
     sidecar = _json(_read(sidecar_path, completion.get("sidecar_sha256")))
-    if (sidecar.get("qualification_source") != source
+    from .qualification_delivery_compatibility import FIELD, POLICY_FIELD, validate_sidecar
+    compatibility = plan.get(FIELD)
+    if compatibility is not None:
+        if (config.get(POLICY_FIELD) != plan.get(POLICY_FIELD)
+            or not isinstance(config.get(FIELD), Mapping)
+            or config[FIELD].get("sha256") != compatibility.get("sha256")):
+            raise ValueError("canary qualification compatibility differs from its explicit captured policy")
+        validate_sidecar(sidecar, plan["canonical_runtime"], workload_id=plan["workload_id"],
+            workload_sha256=plan["workload_sha256"], reference=compatibility,
+            body_policy=plan.get(POLICY_FIELD))
+    if ((compatibility is None and (sidecar.get("qualification_source") != source
         or sidecar.get("qualification_image_digest") != source["image_digest"]
         or sidecar.get("implementation_receipt", {}).get("sha256")
-        != plan["canonical_runtime"]["checks"]["collection"]["qualification_implementation_sha256"]
+        != plan["canonical_runtime"]["checks"]["collection"]["qualification_implementation_sha256"]))
         or config.get("chaff_qualification_set") != plan["qualification_set"]
         or config.get("chaff_qualification_set_manifest_sha256") != named.manifest_sha256
         or workload.get("chaff_qualification_sha256") != completion["sidecar_sha256"]):
@@ -461,6 +476,17 @@ def _validate_canary(reference: Mapping[str, Any], *, runtime: Mapping[str, str]
     _read(result / "evidence.sha256", receipt["evidence_index_sha256"])
     experiment = _json(_read(result / "experiment.json", receipt["experiment_sha256"]))
     config, summary = experiment["configuration"], experiment["summary"]
+    from .application_response_policy import application_body_identity_policy
+    body_policy = application_body_identity_policy(plan)
+    if (application_body_identity_policy(config) != body_policy
+        or application_body_identity_policy(receipt) != body_policy):
+        raise ValueError("canary plan, actual configuration and deep receipt changed application body policy")
+    if (config.get("qualification_delivery_compatibility") != plan.get("qualification_delivery_compatibility")
+        or receipt.get("qualification_delivery_compatibility") != plan.get("qualification_delivery_compatibility")):
+        raise ValueError("canary plan, configuration and deep receipt changed qualification delivery witness")
+    from .application_response_policy import COMPLETE_APPLICATION_DELIVERY_POLICY
+    if body_policy == COMPLETE_APPLICATION_DELIVERY_POLICY and receipt.get("content_equality_across_visits_claimed") is not False:
+        raise ValueError("complete delivery deep receipt falsely claims cross-visit content equality")
     actual_source = {**source, "image_digest": image}
     workloads, defenses, samples = config["workloads"], config["defenses"], experiment["samples"]
     if (experiment.get("status") != "complete" or experiment.get("name") != campaign["name"]
@@ -492,8 +518,8 @@ def _validate_canary(reference: Mapping[str, Any], *, runtime: Mapping[str, str]
         or graph != plan["full_graph"] or receipt.get("full_graph") != graph):
         raise ValueError("canary did not retain its whole frozen resource and origin graph")
     run = _json(_read(_child(result, samples[0]["path"] + "/neqo/run.json")))
-    response = validate_application_responses(manifest, run)
-    identity = application_response_identity_signature(manifest, response["response_signature"])
+    response = validate_application_responses(manifest, run, body_identity_policy=body_policy)
+    identity = application_response_identity_signature(manifest, response["response_signature"], body_identity_policy=body_policy)
     if (receipt.get("response_identity_sha256") != _sha(_encoded(identity))
         or sorted(str(row["origin"]).rstrip("/") for row in run["endpoints"]) != origins):
         raise ValueError("canary changed its actual complete response identity or endpoints")
@@ -519,13 +545,18 @@ def _validate_canary(reference: Mapping[str, Any], *, runtime: Mapping[str, str]
         or deep["start"] < capture["end"]
         or not deep["start"] <= _timestamp(receipt.get("completed_at")) <= deep["end"]):
         raise ValueError("canary actual capture/deep commands or causal completion order differ")
-    return {"schema_version": 1, "mode": mode, "source": actual_source, "client_sha256": client_sha,
+    facts = {"schema_version": 1, "mode": mode, "source": actual_source, "client_sha256": client_sha,
             "traffic_hashes": traffic, "canary_plan_sha256": _sha(plan_raw),
             "deep_receipt_sha256": _sha(receipt_raw), "canonical_runtime_sha256": _sha(canonical_raw),
             "result_root": str(result), "result_seal_sha256": receipt["evidence_index_sha256"],
             "full_graph": graph, "workload_sha256": plan["workload_sha256"],
             "qualification_manifest_sha256": qualification_sha, "recorded_image_deep_reopened": True,
             "fresh_deep_verification_performed": False, **ZERO}
+    if "application_body_identity_policy" in plan:
+        facts["application_body_identity_policy"] = body_policy
+    if "qualification_delivery_compatibility" in plan:
+        facts["qualification_delivery_compatibility"] = plan["qualification_delivery_compatibility"]
+    return facts
 
 
 def validate_canary(reference: Mapping[str, Any], *, runtime: Mapping[str, str], mode: str) -> dict[str, Any]:
@@ -572,6 +603,11 @@ def readiness_mount_roots(reference: Mapping[str, Any], *, runtime: Mapping[str,
         from .static_evidence_transport import manifest_roots
         original = _json(_read(plan_path.parent / "lineage/original-manifest.json", plan["original_workload_sha256"]))
         roots.update(manifest_roots(original))
+    if "qualification_delivery_compatibility" in plan:
+        from .application_response_policy import application_body_identity_policy
+        from .qualification_delivery_compatibility import roots as witness_roots
+        roots.update(witness_roots(plan["qualification_delivery_compatibility"],
+                                  body_policy=application_body_identity_policy(plan)))
     runtimes = [runtime]
     if reference["schema_version"] == 2:
         capsule_path, capsule_raw = _reference(reference["source_equivalence"])

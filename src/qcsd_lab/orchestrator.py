@@ -142,6 +142,8 @@ CLASS_STUDY_READINESS_ENV = "QCSD_CLASS_READINESS_ATTESTATION"
 CLASS_STUDY_HISTORICAL_PRE_ENV = "QCSD_CLASS_HISTORICAL_PRE_SNAPSHOT"
 REQUEST_POLICIES = {"as-defined", "half-duplex"}
 LEGACY_CAMPAIGN_KEYS = {
+    "application_body_identity_policy",
+    "qualification_delivery_compatibility",
     "schema",
     "name",
     "purpose",
@@ -227,6 +229,7 @@ class Workload:
     chaff_manifest_data: dict[str, Any] | None = None
     qualification_set_manifest_path: Path | None = None
     qualification_set_manifest_sha256: str | None = None
+    application_body_identity_policy: str | None = None
 
 
 @dataclass(frozen=True)
@@ -257,6 +260,8 @@ class Campaign:
     class_study_successor_path: Path | None = None
     class_study_successor_sha256: str | None = None
     class_study_launch_namespace: str | None = None
+    application_body_identity_policy: str | None = None
+    qualification_delivery_compatibility: Mapping[str, str] | None = None
 
     @property
     def udp_payload_ceiling(self) -> int:
@@ -560,6 +565,18 @@ def _load_campaign(
     except yaml.YAMLError as error:
         raise ValueError(f"campaign YAML is invalid: {error}") from error
     value = _object(source, "campaign")
+    from .application_response_policy import application_body_identity_policy
+    body_policy = application_body_identity_policy(value)
+    delivery_compatibility = value.get("qualification_delivery_compatibility")
+    if "qualification_delivery_compatibility" in value:
+        if delivery_compatibility is None:
+            raise ValueError("explicit qualification delivery compatibility cannot be null")
+        from .qualification_delivery_compatibility import validate as validate_delivery_compatibility
+        validate_delivery_compatibility(delivery_compatibility, body_policy=body_policy)
+        if frozen_inputs is not None:
+            from .rapid_rolling_readiness import _reference
+            if (frozen_inputs / "qualification-delivery-compatibility.json").read_bytes() != _reference(delivery_compatibility)[1]:
+                raise ValueError("frozen qualification delivery compatibility changed")
     schema_version = value.get("schema")
     if type(schema_version) is not int or schema_version not in SUPPORTED_SCHEMA_VERSIONS:
         choices = ", ".join(str(item) for item in sorted(SUPPORTED_SCHEMA_VERSIONS))
@@ -789,6 +806,8 @@ def _load_campaign(
             frozen_inputs=frozen_inputs,
             qualification_scope=qualification_scope,
             qualification_set=qualification_set,
+            delivery_compatibility=delivery_compatibility,
+            body_policy=body_policy,
             config_root=config_root,
             workload_root=admitted_workload_root,
             qualification_set_root_override=(
@@ -828,6 +847,17 @@ def _load_campaign(
             label="fresh schema-two class-study campaign",
             profile=profile20,
         )
+    from .application_response_policy import application_body_identity_policy, COMPLETE_APPLICATION_DELIVERY_POLICY, validate_prepared_response_graph
+    body_policy = application_body_identity_policy(value)
+    if body_policy == COMPLETE_APPLICATION_DELIVERY_POLICY:
+        if purpose == "fitting":
+            raise ValueError("complete application delivery is a prospective capture policy")
+        for workload in workloads:
+            validate_research_preparation(workload.data, workload_id=workload.id)
+            validate_prepared_response_graph(workload.data)
+            if type(workload.data["preparation"].get("max_response_bytes")) is not int:
+                raise ValueError("complete application delivery requires a prepared observed response cap")
+        workloads = tuple(replace(workload, application_body_identity_policy=body_policy) for workload in workloads)
     campaign = Campaign(
         path=path,
         source_bytes=source_bytes,
@@ -839,6 +869,8 @@ def _load_campaign(
         request_policies=tuple(policies),
         defenses=defenses,
         limits=limits,
+        application_body_identity_policy=(body_policy if "application_body_identity_policy" in value else None),
+        qualification_delivery_compatibility=delivery_compatibility,
         chaff_qualification_set=qualification_set,
         defense_order_scheme=defense_order_scheme,
         defense_order_block=defense_order_block,
@@ -1360,6 +1392,8 @@ def _load_qualified_chaff_inputs(
     config_root: Path | None = None,
     workload_root: Path | None = None,
     qualification_set_root_override: Path | None = None,
+    delivery_compatibility: Mapping[str, str] | None = None,
+    body_policy: str | None = None,
 ) -> tuple[Workload, ...]:
     """Bind the selected immutable sidecar contract and derived manifest."""
 
@@ -1369,8 +1403,9 @@ def _load_qualified_chaff_inputs(
         load_qualified_chaff,
     )
     from .response_budget_qualification import (
-        load_named_qualification_set, load_response_qualified_chaff, sidecar_schema,
+        sidecar_schema,
     )
+    from .qualification_delivery_compatibility import load_named_qualification_set, load_response_qualified_chaff
 
     if frozen_inputs is not None:
         qualification_scope = _frozen_chaff_qualification_scope(
@@ -1447,6 +1482,7 @@ def _load_qualified_chaff_inputs(
     if candidate_set_manifest.exists() or candidate_set_manifest.is_symlink():
         named = load_named_qualification_set(
             candidate_set_manifest,
+            delivery_compatibility=delivery_compatibility, body_policy=body_policy,
             workload_root=workload_root or config_root / "workloads",
             sidecar_root=qualification_root,
             prefix_spec_root=prefix_root,
@@ -1491,6 +1527,7 @@ def _load_qualified_chaff_inputs(
             )
             receipt = load_response_qualified_chaff(
                 sidecar_path,
+                delivery_compatibility=delivery_compatibility, body_policy=body_policy,
                 workload_id=workload.id,
                 base_manifest_path=workload.path,
                 expected_sidecar_schema_version=sidecar_schema(sidecar_path, expected_sidecar_schema_version),
@@ -4195,6 +4232,12 @@ def _materialize_inputs(
     frozen_campaign.write_bytes(campaign.source_bytes)
     if frozen_campaign.read_bytes() != campaign.source_bytes:
         raise ValueError("campaign changed during input materialization")
+    if campaign.qualification_delivery_compatibility is not None:
+        from .rapid_rolling_readiness import _reference
+        witness = _reference(campaign.qualification_delivery_compatibility)[1]
+        (inputs / "qualification-delivery-compatibility.json").write_bytes(witness)
+        if sha256_file(inputs / "qualification-delivery-compatibility.json") != campaign.qualification_delivery_compatibility["sha256"]:
+            raise ValueError("qualification delivery compatibility changed during materialization")
     atomic_json(inputs / "source.json", source)
     _materialize_class_study_authority(inputs, campaign)
     class_study_successor_destination: Path | None = None
@@ -4289,7 +4332,8 @@ def _materialize_inputs(
             from .chaff_qualification import (
                 load_qualified_chaff,
             )
-            from .response_budget_qualification import load_response_qualified_chaff, sidecar_schema
+            from .response_budget_qualification import sidecar_schema
+            from .qualification_delivery_compatibility import load_response_qualified_chaff
 
             sidecar_destination = chaff_qualifications_dir / f"{workload.id}.json"
             shutil.copy2(workload.chaff_qualification_path, sidecar_destination)
@@ -4305,6 +4349,8 @@ def _materialize_inputs(
                     )
                 qualified = load_response_qualified_chaff(
                     sidecar_destination,
+                    delivery_compatibility=campaign.qualification_delivery_compatibility,
+                    body_policy=campaign.application_body_identity_policy,
                     workload_id=workload.id,
                     base_manifest_path=destination,
                     expected_sidecar_schema_version=sidecar_schema(sidecar_destination,
@@ -4360,10 +4406,12 @@ def _materialize_inputs(
             )
         runtime_workloads.append(runtime)
     if qualification_set_manifest_destination is not None:
-        from .response_budget_qualification import load_named_qualification_set
+        from .qualification_delivery_compatibility import load_named_qualification_set
 
         load_named_qualification_set(
             qualification_set_manifest_destination,
+            delivery_compatibility=campaign.qualification_delivery_compatibility,
+            body_policy=campaign.application_body_identity_policy,
             workload_root=workloads_dir,
             sidecar_root=chaff_qualifications_dir,
             prefix_spec_root=(
@@ -5302,8 +5350,14 @@ def _prepared_response_identity_failure(
 ) -> dict[str, Any] | None:
     """Reject prepared-response drift before an attempt becomes immutable evidence."""
 
+    from .application_response_policy import validate_application_body_identity_policy, COMPLETE_APPLICATION_DELIVERY_POLICY
+    body_policy = validate_application_body_identity_policy(getattr(workload, "application_body_identity_policy", None))
+    complete_delivery = body_policy == COMPLETE_APPLICATION_DELIVERY_POLICY
     expected = _prepared_response_signature(workload.data)
     if expected is None:
+        if complete_delivery:
+            return {"stage": "fidelity", "type": "PreparedResponseIdentityFailure",
+                    "message": "complete application delivery lacks its prepared full graph", "details": []}
         return None
     observed = response_signature(attempt)
     expected_comparison, observed_comparison = expected, observed
@@ -5311,11 +5365,11 @@ def _prepared_response_identity_failure(
     variable_primary = (
         primary_document_identity_policy(workload.data) == VARIABLE_PRIMARY_DOCUMENT_BODY_POLICY
     )
-    if variable_primary:
+    if variable_primary or complete_delivery:
         try:
-            expected_comparison = application_response_identity_signature(workload.data, expected)
-            observed_comparison = application_response_identity_signature(workload.data, observed)
-            validate_application_responses(workload.data, load_json(attempt / "neqo/run.json"))
+            validate_application_responses(workload.data, load_json(attempt / "neqo/run.json"), body_identity_policy=body_policy)
+            expected_comparison = application_response_identity_signature(workload.data, expected, body_identity_policy=body_policy)
+            observed_comparison = application_response_identity_signature(workload.data, observed, body_identity_policy=body_policy)
         except (OSError, TypeError, ValueError) as error:
             policy_error = str(error)
     if policy_error is None and observed_comparison == expected_comparison:
@@ -5607,11 +5661,13 @@ def _compare_group(
         if baseline
         else None
     )
+    from .application_response_policy import application_body_identity_policy, COMPLETE_APPLICATION_DELIVERY_POLICY
+    body_policy = application_body_identity_policy(experiment["configuration"])
     prepared_signature = _prepared_response_signature(workload.data)
-    prepared_comparison = application_response_identity_signature(workload.data, prepared_signature)
+    prepared_comparison = application_response_identity_signature(workload.data, prepared_signature, body_identity_policy=body_policy)
     baseline_comparison = (
         _policy_response_comparison(workload.data, resolved_sample_directory(root, baseline, require_directory=True),
-                                    baseline_signature)
+                                    baseline_signature, body_identity_policy=body_policy)
         if baseline else None
     )
     reference = prepared_comparison if prepared_comparison is not None else baseline_comparison
@@ -5621,7 +5677,7 @@ def _compare_group(
         validate_accepted_kernel_tx_evidence(root, sample)
         sample_path = resolved_sample_directory(root, sample, require_directory=True)
         signature = response_signature(sample_path)
-        comparison = _policy_response_comparison(workload.data, sample_path, signature)
+        comparison = _policy_response_comparison(workload.data, sample_path, signature, body_identity_policy=body_policy)
         response_match = comparison is not None and (reference is None or comparison == reference)
         diagnostics = sample["diagnostics"]
         if (root / "inputs/study-environment.json").is_file():
@@ -5664,16 +5720,23 @@ def _compare_group(
             fidelity_eligible=eligible,
         )
         sample["eligible"] = eligible
+        if body_policy == COMPLETE_APPLICATION_DELIVERY_POLICY:
+            diagnostics.update(application_body_identity_policy=body_policy,
+                               content_equality_across_visits_claimed=False)
 
 
 def _policy_response_comparison(
     manifest: Mapping[str, Any], sample_path: Path, signature: list[tuple[Any, ...]] | None,
+    *, body_identity_policy: str | None = None,
 ) -> list[tuple[Any, ...]] | None:
     """Validate actual delivery before applying the prospective body comparison."""
-    if primary_document_identity_policy(manifest) == VARIABLE_PRIMARY_DOCUMENT_BODY_POLICY:
+    from .application_response_policy import validate_application_body_identity_policy, COMPLETE_APPLICATION_DELIVERY_POLICY
+    body_policy = validate_application_body_identity_policy(body_identity_policy)
+    if (primary_document_identity_policy(manifest) == VARIABLE_PRIMARY_DOCUMENT_BODY_POLICY
+        or body_policy == COMPLETE_APPLICATION_DELIVERY_POLICY):
         try:
-            validate_application_responses(manifest, load_json(sample_path / "neqo/run.json"))
-            return application_response_identity_signature(manifest, signature)
+            validate_application_responses(manifest, load_json(sample_path / "neqo/run.json"), body_identity_policy=body_policy)
+            return application_response_identity_signature(manifest, signature, body_identity_policy=body_policy)
         except (OSError, TypeError, ValueError):
             return None
     return signature
@@ -6186,6 +6249,10 @@ def _frozen_configuration(
         "defenses": defense_records,
         "limits": campaign.limits.as_dict(),
     }
+    if campaign.application_body_identity_policy is not None:
+        configuration["application_body_identity_policy"] = campaign.application_body_identity_policy
+    if campaign.qualification_delivery_compatibility is not None:
+        configuration["qualification_delivery_compatibility"] = dict(campaign.qualification_delivery_compatibility)
     if campaign.chaff_qualification_set is not None:
         configuration["chaff_qualification_set"] = campaign.chaff_qualification_set
         set_hashes = {

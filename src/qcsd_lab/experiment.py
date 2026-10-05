@@ -158,6 +158,8 @@ _CONFIGURATION_KEYS = {
     "limits",
 }
 _OPTIONAL_CONFIGURATION_KEYS = {
+    "application_body_identity_policy",
+    "qualification_delivery_compatibility",
     "chaff_qualification_set",
     "defense_order",
     "study_environment_sha256",
@@ -1080,6 +1082,18 @@ def _validate_configuration(value: object) -> None:
         raise ValueError("experiment configuration schema is invalid")
     if not _is_digest(value["campaign_sha256"]):
         raise ValueError("configuration campaign_sha256 is invalid")
+    if "application_body_identity_policy" in value:
+        from .application_response_policy import application_body_identity_policy
+
+        application_body_identity_policy(value)
+    if "qualification_delivery_compatibility" in value:
+        from .application_response_policy import application_body_identity_policy, COMPLETE_APPLICATION_DELIVERY_POLICY
+        witness = value["qualification_delivery_compatibility"]
+        if (application_body_identity_policy(value) != COMPLETE_APPLICATION_DELIVERY_POLICY
+            or not isinstance(witness, Mapping) or set(witness) != {"path", "sha256"}
+            or not isinstance(witness["path"], str) or not Path(witness["path"]).is_absolute()
+            or not _is_digest(witness["sha256"])):
+            raise ValueError("configuration qualification delivery compatibility is invalid")
     if not isinstance(value["profile"], str) or not value["profile"]:
         raise ValueError("configuration profile is invalid")
     if not isinstance(value["request_policies"], list) or not all(

@@ -482,23 +482,32 @@ def _validate_policy_application_responses(root: Path, experiment: Mapping[str, 
     """Reopen prepared-source policies for accepted samples, including baseline."""
 
     from .capture_acceptance_policy import validate_buflo_source_binding, validate_tamaraw_source_binding, validate_front_source_binding, validate_terminal_primary_source_binding
+    from .application_response_policy import application_body_identity_policy, COMPLETE_APPLICATION_DELIVERY_POLICY
+    body_policy = application_body_identity_policy(experiment["configuration"])
+    complete_delivery = body_policy == COMPLETE_APPLICATION_DELIVERY_POLICY
 
     prepared_by_id: dict[str, dict[str, Any]] = {}
     for workload in experiment["configuration"]["workloads"]:
         relative = workload.get("manifest")
         if relative is None:
+            if complete_delivery:
+                raise ValueError("complete application delivery lacks a bound prepared workload")
             continue
         path = root / relative
         if path.is_symlink() or not path.resolve().is_relative_to(root.resolve()):
             raise ValueError("prepared application policy input escapes result")
         prepared = load_json(path)
-        if (application_response_policy(prepared) != LEGACY_APPLICATION_RESPONSE_POLICY
+        if ((complete_delivery or application_response_policy(prepared) != LEGACY_APPLICATION_RESPONSE_POLICY)
             and sha256_file(path) != workload.get("sha256")):
             raise ValueError("prepared application policy input hash differs from configuration")
         prepared_by_id[workload["id"]] = prepared
     if not prepared_by_id:
+        if complete_delivery:
+            raise ValueError("complete application delivery lacks its prepared complete graph")
         return
     for sample in experiment["samples"]:
+        if complete_delivery and sample["state"] == "accepted" and sample["workload_id"] not in prepared_by_id:
+            raise ValueError("complete application delivery sample lacks its exact configured workload")
         if sample["state"] != "accepted" or sample["workload_id"] not in prepared_by_id:
             continue
         run_path = resolved_sample_directory(root, sample) / "neqo/run.json"
@@ -510,5 +519,5 @@ def _validate_policy_application_responses(root: Path, experiment: Mapping[str, 
         validate_tamaraw_source_binding(prepared, run)
         validate_front_source_binding(prepared, run)
         validate_terminal_primary_source_binding(prepared, run, runner_directory=run_path.parent)
-        if application_response_policy(prepared) != LEGACY_APPLICATION_RESPONSE_POLICY:
-            validate_application_responses(prepared, run, require_identity=True)
+        if complete_delivery or application_response_policy(prepared) != LEGACY_APPLICATION_RESPONSE_POLICY:
+            validate_application_responses(prepared, run, require_identity=True, body_identity_policy=body_policy)

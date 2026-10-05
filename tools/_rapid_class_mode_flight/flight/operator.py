@@ -318,8 +318,14 @@ def additive_selected_inputs(enrollment, study, batch, all_classes, policy):
     return batch, policy, bindings, manifests, sorted(roots), {**policy["capture_limits"], "max_attempts": 1}
 
 
-def current_sidecar(sidecar, canonical, *, workload_id, workload_sha256):
-    """Equal current authority only: no historical runtime/Source projection."""
+def current_sidecar(sidecar, canonical, *, workload_id, workload_sha256,
+                    delivery_compatibility=None, body_policy=None):
+    """Exact current evidence, or explicit qualification-only producer/consumer reuse."""
+    if delivery_compatibility is not None:
+        from qcsd_lab.qualification_delivery_compatibility import validate_sidecar
+        validate_sidecar(sidecar, canonical, workload_id=workload_id, workload_sha256=workload_sha256,
+            reference=delivery_compatibility, body_policy=body_policy)
+        return
     expected_source = {**canonical["source"], "image_digest": canonical["collection_image_digest"]}
     receipt = sidecar.get("implementation_receipt", {})
     if (sidecar.get("workload_id") != workload_id
@@ -331,7 +337,7 @@ def current_sidecar(sidecar, canonical, *, workload_id, workload_sha256):
         raise ValueError("response evidence changed current Source/image/client/implementation/workload")
 
 
-def reuse_input(path, bindings, canonical, workload_root):
+def reuse_input(path, bindings, canonical, workload_root, *, delivery_compatibility=None, body_policy=None):
     from qcsd_lab.response_budget_qualification import load_named_qualification_set, NAMED_ARTIFACT_TYPE, SIDECAR_SCHEMA_VERSION
     path = Path(path).absolute()
     named = load_named_qualification_set(path, workload_root=Path(workload_root),
@@ -346,7 +352,8 @@ def reuse_input(path, bindings, canonical, workload_root):
     for row in bindings:
         sidecar_path = path.parent / (row["workload_id"] + ".json")
         current_sidecar(json.loads(read(sidecar_path)), canonical,
-            workload_id=row["workload_id"], workload_sha256=row["original_workload"]["sha256"])
+            workload_id=row["workload_id"], workload_sha256=row["original_workload"]["sha256"],
+            delivery_compatibility=delivery_compatibility, body_policy=body_policy)
         sidecars[row["workload_id"]] = ref(sidecar_path)
     return {"manifest": ref(path), "manifest_sha256": named.manifest_sha256, "sidecars": sidecars}
 
@@ -374,6 +381,16 @@ def checked_setup(args):
         or read(output / "canonical-runtime.json") != checked(canonical_ref)):
         raise ValueError("setup actual runtime changed")
     host_imports(clean)
+    from qcsd_lab.application_response_policy import application_body_identity_policy
+    body_policy = application_body_identity_policy(setup)
+    witness = setup.get("qualification_delivery_compatibility")
+    if "qualification_delivery_compatibility" in setup and witness is None:
+        raise ValueError("explicit setup qualification delivery witness cannot be null")
+    if witness is not None:
+        from qcsd_lab.qualification_delivery_compatibility import validate
+        validate(witness, body_policy=body_policy, canonical=canonical)
+        if read(output / "qualification-delivery-compatibility.json") != checked(witness):
+            raise ValueError("staged qualification delivery witness changed")
     from qcsd_lab import rapid_rolling_capture as rolling
     runtime = rolling.load_runtime(Path(setup["runtime_spec"]["path"]))
     checked(setup["runtime_spec"])
@@ -396,7 +413,8 @@ def checked_setup(args):
     checked(setup["amendment_commands"])
     if setup["reuse"] is not None:
         expected = reuse_input(setup["reuse"]["manifest"]["path"], bindings, canonical,
-                               Path(setup["execution_root"]) / "config/workloads")
+                               Path(setup["execution_root"]) / "config/workloads",
+                               delivery_compatibility=witness, body_policy=body_policy)
         if expected != setup["reuse"]:
             raise ValueError("reuse input changed after declaration")
         for workload_id, record in setup["reuse"]["sidecars"].items():
@@ -411,6 +429,14 @@ def stage(args):
         raise ValueError("safe lowercase name and unsigned 64-bit seed required")
     canonical_ref, canonical, clean = checked_runtime(args)
     host_imports(clean)
+    from qcsd_lab.application_response_policy import validate_application_body_identity_policy
+    requested_body_policy = getattr(args, "application_body_identity_policy", None)
+    body_policy = validate_application_body_identity_policy(requested_body_policy)
+    witness_path = getattr(args, "qualification_delivery_compatibility", None)
+    witness = None if witness_path is None else ref(witness_path)
+    if witness is not None:
+        from qcsd_lab.qualification_delivery_compatibility import validate
+        validate(witness, body_policy=body_policy, canonical=canonical)
     from qcsd_lab import rapid_rolling_capture as rolling
     from qcsd_lab import capture_acceptance_policy as capture
     from qcsd_lab.buflo_duration_budget import POLICY
@@ -435,6 +461,8 @@ def stage(args):
         if any(path.exists() or path.is_symlink() for path in (amendment, declaration)):
             raise ValueError("prospective amendment names are create-only")
     output.mkdir(parents=True, mode=0o700)
+    if witness is not None:
+        create(output / "qualification-delivery-compatibility.json", checked(witness))
     execution = output / "execution-root"
     shutil.copytree(args.runtime_build_root / "image-context/source", execution)
     for path in execution.rglob("*"):
@@ -478,7 +506,8 @@ def stage(args):
     create(output / "amendment-commands.json", encode({"amend": command}))
     reuse = None
     if reuse_manifest is not None:
-        reuse = reuse_input(reuse_manifest, bindings, canonical, execution / "config/workloads")
+        reuse = reuse_input(reuse_manifest, bindings, canonical, execution / "config/workloads",
+                            delivery_compatibility=witness, body_policy=body_policy)
         for workload_id, record in reuse["sidecars"].items():
             create(execution / "config/flight-reuse" / (workload_id + ".json"), checked(record))
     setup = {"schema_version": 1, "purpose": "prospective-full-static-1-to-5-setting-flight-setup", **ZERO,
@@ -492,6 +521,10 @@ def stage(args):
         "selected_classes": bindings, "original_roots": roots, "original_limits": limits,
         "amendment_path": None if amendment is None else str(amendment), "reuse": reuse,
         "amendment_commands": ref(output / "amendment-commands.json")}
+    if requested_body_policy is not None:
+        setup["application_body_identity_policy"] = body_policy
+    if witness is not None:
+        setup["qualification_delivery_compatibility"] = witness
     create(output / "setup.json", encode(setup))
     return {"setup": ref(output / "setup.json"), "commands": ref(output / "amendment-commands.json"),
             "class_count": len(bindings), "physical_actions_performed": False, **ZERO}
@@ -563,6 +596,12 @@ def finalize(args):
         "request_policies": ["as-defined"], "defenses": [defense], "limits": limits}
     if mode != "undefended":
         campaign["chaff_qualification_set"] = qualification_set
+    from qcsd_lab.application_response_policy import application_body_identity_policy
+    body_policy = application_body_identity_policy(setup)
+    if "application_body_identity_policy" in setup:
+        campaign["application_body_identity_policy"] = body_policy
+    if "qualification_delivery_compatibility" in setup:
+        campaign["qualification_delivery_compatibility"] = setup["qualification_delivery_compatibility"]
     import yaml
     execution = Path(setup["execution_root"])
     relative = "config/campaigns/" + name + ".yml"
@@ -598,6 +637,10 @@ def finalize(args):
         "static_preparation_roots": static_roots(manifest), "group_preparation_roots": group_roots(manifests),
         "capture_limits": limits, "campaigns": campaigns, "reuse": setup["reuse"],
         "study_root": setup["study_root"], "enrollment": setup["enrollment"]}
+    if "application_body_identity_policy" in setup:
+        plan["application_body_identity_policy"] = body_policy
+    if "qualification_delivery_compatibility" in setup:
+        plan["qualification_delivery_compatibility"] = setup["qualification_delivery_compatibility"]
     if authority is not None:
         plan["static_capture_amendment"] = ref(Path(setup["amendment_path"]))
     if selected_policy is not None:
@@ -614,6 +657,10 @@ def finalize(args):
         "--output", str(output / "plans/g01.json"), "--spec-output", str(output / "plans/g01-spec.json")]
     if authority is not None:
         commands["plan"] += ["--static-capture-amendment", setup["amendment_path"]]
+    if "application_body_identity_policy" in setup:
+        commands["plan"] += ["--application-body-identity-policy", body_policy]
+    if "qualification_delivery_compatibility" in setup:
+        commands["plan"] += ["--qualification-delivery-compatibility", setup["qualification_delivery_compatibility"]["path"]]
     create(output / "commands.json", encode(commands))
     staged = {"recipe": ref(__file__), "setup": ref(output / "setup.json"), "plan": ref(output / "plan.json"),
         "runtime_spec": ref(output / "runtime-spec.json"), "qualification_spec": ref(qspec),
@@ -645,6 +692,11 @@ def image_argv(plan, output, action, *extra):
             raise ValueError("reuse manifest requires a canonical same-absolute RO file mount")
         argv += ["--volume", f"{reuse_path}:{reuse_path}:ro"]
     roots = plan["static_preparation_roots"] if action == "verify-image" else plan["group_preparation_roots"]
+    if "qualification_delivery_compatibility" in plan:
+        from qcsd_lab.application_response_policy import application_body_identity_policy
+        from qcsd_lab.qualification_delivery_compatibility import roots as witness_roots
+        roots = sorted(set(roots) | {str(path) for path in witness_roots(plan["qualification_delivery_compatibility"],
+                       body_policy=application_body_identity_policy(plan))})
     for root in roots:
         argv += ["--volume", f"{root}:{root}:ro"]
     return argv + ["--workdir", "/lab", "--entrypoint", "/opt/qcsd-venv/bin/python3",
@@ -689,6 +741,23 @@ def checked_plan(args, *, image=False):
     manifest = json.loads(manifest_raw)
     [campaign] = plan["campaigns"]
     mode = campaign["mode"]
+    from qcsd_lab.application_response_policy import application_body_identity_policy
+    body_policy = application_body_identity_policy(plan)
+    witness = plan.get("qualification_delivery_compatibility")
+    if "qualification_delivery_compatibility" in plan and witness is None:
+        raise ValueError("explicit canary qualification delivery witness cannot be null")
+    if witness is not None:
+        from qcsd_lab.qualification_delivery_compatibility import validate
+        validate(witness, body_policy=body_policy, canonical=canonical)
+        if read(output / "qualification-delivery-compatibility.json") != checked(witness):
+            raise ValueError("canary qualification delivery witness changed")
+    if "application_body_identity_policy" in plan:
+        import yaml
+        campaign_raw = read(execution / campaign["campaign_relative"])
+        if (digest(campaign_raw) != campaign["campaign_sha256"]
+            or application_body_identity_policy(yaml.safe_load(campaign_raw)) != body_policy
+            or yaml.safe_load(campaign_raw).get("qualification_delivery_compatibility") != witness):
+            raise ValueError("canary campaign changed its prospectively declared application body policy")
     if mode not in MODES:
         raise ValueError("unknown flight setting")
     amended = "static_capture_amendment" in plan
@@ -762,7 +831,8 @@ def checked_plan(args, *, image=False):
             if digest(raw_reuse) != record["sha256"]:
                 raise ValueError("copied reused sidecar changed")
             current_sidecar(json.loads(raw_reuse), canonical, workload_id=row["workload_id"],
-                            workload_sha256=row["capture_manifest"]["sha256"])
+                            workload_sha256=row["capture_manifest"]["sha256"],
+                            delivery_compatibility=witness, body_policy=body_policy)
     if digest(read("/helpers.py" if image else plan["helper_path"])) != FIRST_HELPER_SHA:
         raise ValueError("immutable HOST/runtime helper changed")
     if image:
@@ -808,8 +878,11 @@ def image_action(args):
         return
     if args.command == "qualify-image":
         from qcsd_lab.chaff_qualification import RESPONSE_ONLY_QUALIFICATION_SCOPE
-        from qcsd_lab.response_budget_qualification import (qualify_response_chaff_v2,
-            publish_named_qualification_set, SIDECAR_SCHEMA_VERSION)
+        from qcsd_lab.response_budget_qualification import qualify_response_chaff_v2, SIDECAR_SCHEMA_VERSION
+        from qcsd_lab.qualification_delivery_compatibility import publish_named_qualification_set
+        from qcsd_lab.application_response_policy import application_body_identity_policy
+        delivery = {"delivery_compatibility": plan.get("qualification_delivery_compatibility"),
+                    "body_policy": application_body_identity_policy(plan)}
 
         workload_ids = [row["workload_id"] for row in plan["selected_classes"]]
         if plan["reuse"] is None:
@@ -827,11 +900,13 @@ def image_action(args):
         store = execution / "config/chaff-response-qualification-store/sets"
         store.mkdir(parents=True, exist_ok=True)
         group = publish_named_qualification_set(workload_ids,
+            **delivery,
             qualification_set=plan["group_qualification_set"],
             qualification_scope=RESPONSE_ONLY_QUALIFICATION_SCOPE,
             workload_root=execution / "config/workloads", sidecar_root=sidecars, publication_root=store,
             qualification_sidecar_schema_version=schema_version)
         named = publish_named_qualification_set([plan["workload_id"]],
+            **delivery,
             qualification_set=plan["qualification_set"],
             qualification_scope=RESPONSE_ONLY_QUALIFICATION_SCOPE,
             workload_root=execution / "config/workloads", sidecar_root=sidecars, publication_root=store,
@@ -887,20 +962,32 @@ def image_action(args):
     run = json.loads(read(result_root / sample["path"] / "neqo/run.json"))
     if run["seed"] != campaign["sample_seed"] or graph(manifest) != plan["full_graph"]:
         raise ValueError("amended Native seed or whole graph changed")
-    response = validate_application_responses(manifest, run)
+    from qcsd_lab.application_response_policy import application_body_identity_policy
+    body_policy = application_body_identity_policy(plan)
+    if application_body_identity_policy(config) != body_policy:
+        raise ValueError("actual canary configuration differs from its declared application body policy")
+    if config.get("qualification_delivery_compatibility") != plan.get("qualification_delivery_compatibility"):
+        raise ValueError("actual canary changed its declared qualification delivery witness")
+    response = validate_application_responses(manifest, run, body_identity_policy=body_policy)
     validate_terminal_primary_source_binding(manifest, run, runner_directory=result_root / sample["path"] / "neqo")
     if sorted(str(row["origin"]).rstrip("/") for row in run["endpoints"]) != plan["full_graph"]["origins"]:
         raise ValueError("Native omitted a supplied origin")
-    identity = application_response_identity_signature(manifest, response["response_signature"])
+    identity = application_response_identity_signature(manifest, response["response_signature"], body_identity_policy=body_policy)
     dns_sha = verify_dns_receipt(read(output / "dns-receipts" / (mode + ".json")), campaign["name"],
         {plan["workload_id"]: read(result_root / workload["manifest"])})
-    create(output / (mode + "-deep-verification.json"), encode({**verified.as_dict(), **ZERO,
+    deep_receipt = {**verified.as_dict(), **ZERO,
         "completed_at": now(), "mode": mode, "source": plan["canonical_runtime"]["source"],
         "plan_sha256": args.plan_sha256, "canonical_runtime_sha256": plan["canonical_runtime_sha256"],
         "selection_sha256": plan["selection_sha256"], "workload_sha256": plan["workload_sha256"],
         "experiment_sha256": digest(read(result_root / "experiment.json")),
         "evidence_index_sha256": digest(read(result_root / "evidence.sha256")), "dns_receipt_sha256": dns_sha,
-        "response_identity_sha256": digest(encode(identity)), "full_graph": plan["full_graph"]}))
+        "response_identity_sha256": digest(encode(identity)), "full_graph": plan["full_graph"]}
+    if "application_body_identity_policy" in plan:
+        deep_receipt["application_body_identity_policy"] = body_policy
+        deep_receipt["content_equality_across_visits_claimed"] = False
+    if "qualification_delivery_compatibility" in plan:
+        deep_receipt["qualification_delivery_compatibility"] = plan["qualification_delivery_compatibility"]
+    create(output / (mode + "-deep-verification.json"), encode(deep_receipt))
 
 
 def readiness(args):
@@ -1003,6 +1090,10 @@ def main():
     item.add_argument("--mode", choices=MODES, required=True)
     item.add_argument("--reuse-qualification", type=Path,
                       help="exact current original-group named response-only v2 manifest")
+    item.add_argument("--application-body-identity-policy", choices=("exact-prepared-application-body-v1", "complete-current-application-delivery-v1"),
+                      help="prospectively verify complete current delivery without claiming frozen body equality")
+    item.add_argument("--qualification-delivery-compatibility", type=Path,
+                      help="authenticated original response-producer/current complete-delivery consumer witness")
     for name in ("amend", "finalize"):
         item = commands.add_parser(name)
         item.add_argument("--setup", type=Path, required=True)
