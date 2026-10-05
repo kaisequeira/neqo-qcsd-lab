@@ -177,7 +177,6 @@ def _consumer_implementation(original, canonical, sources):
     result["source_files"] = {name: evidence._sha(sources[name]) for name in original["source_files"]}
     for name, record in result["installed_modules"].items():
         record["sha256"] = result["source_files"][name]
-    result["installed_entrypoint"]["sha256"] = result["source_files"]["qcsd-lab"]
     result["sha256"] = legacy._implementation_aggregate(result)
     _implementation(result, canonical, sources)
     return result
