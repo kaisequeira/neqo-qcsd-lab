@@ -26,7 +26,7 @@ def _spec(path, spec):
 
 
 def run(args, *, _context=None):
-    if args.command in {"plan", "complete-lane", "verify-lane"} and _context is None:
+    if args.command in {"plan", "launch", "complete-lane", "verify-lane"} and _context is None:
         from qcsd_lab.rapid_operation_facts import OperationFacts
         context = OperationFacts()
         with context.scope():
@@ -134,7 +134,8 @@ def run(args, *, _context=None):
         return {"plan": str(path), "spec": _spec(args.spec_output, replace(spec, plan_receipt=path)),
                 "scientific_credit": False}
     if args.command == "launch":
-        receipt = lanes.launch_lane(spec, root, args.lane, predecessor_intent=args.predecessor_intent)
+        receipt = lanes.launch_lane(spec, root, args.lane, predecessor_intent=args.predecessor_intent,
+                                    _context=_context)
         return {"receipt": str(receipt), "scientific_credit": "formal-only-if-bound-to-rolling-enrollment"}
     if args.command == "retire-lane":
         return {"receipt": str(lanes.retire_lane(spec, root, args.intent,

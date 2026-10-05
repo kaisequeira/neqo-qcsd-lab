@@ -1189,16 +1189,37 @@ def prepare_lane_intent(spec: CaptureSpec, evidence_root: Path, campaign_name: s
     return intent_path
 
 
-def launch_lane(spec: CaptureSpec, evidence_root: Path, campaign_name: str, *, predecessor_intent: Path | None = None) -> Path:
+def launch_lane(spec: CaptureSpec, evidence_root: Path, campaign_name: str, *, predecessor_intent: Path | None = None,
+                _context=None) -> Path:
     """Launch exactly one verified lane, retaining every process outcome."""
+    from .rapid_operation_facts import OperationFacts, current_context
+    context = current_context() if _context is None else _context
+    if context is None:
+        context = OperationFacts()
+        with context.scope():
+            result = launch_lane(spec, evidence_root, campaign_name,
+                                 predecessor_intent=predecessor_intent, _context=context)
+            context.check()
+            return result
+    if current_context() is not context:
+        with context.scope():
+            return launch_lane(spec, evidence_root, campaign_name,
+                               predecessor_intent=predecessor_intent, _context=context)
     root = _regular_directory(evidence_root)
     with capture_lock(spec.execution_root) as lock_descriptor:
         # Retain the early create-only check before the potentially costly image call.
         directory = root / "lanes" / campaign_name
         if directory.exists() or directory.is_symlink():
             raise FileExistsError("rapid physical lane destination is already claimed")
-        checked = check_bound_image(spec, root, campaign_name=campaign_name)
-        intent_path = prepare_lane_intent(spec, root, campaign_name, checked, predecessor_intent=predecessor_intent)
+        # Recheck borrowed observations after waiting for the ownership lock.
+        context.check()
+        checked = check_bound_image(spec, root, campaign_name=campaign_name, _context=context)
+        intent_path = prepare_lane_intent(spec, root, campaign_name, checked,
+                                         predecessor_intent=predecessor_intent, _context=context)
+        # These newly durable files are immutable inputs to this actuation;
+        # their parents remain writable operator/result namespaces.
+        intent = _load(context.watch_file(intent_path))
+        context._references(intent, root)
         campaign = spec.campaign_dir / f"{campaign_name}.yml"
         env = dict(os.environ)
         env.update(QCSD_LAB_COLLECTION_IMAGE=spec.collection_image_digest,
@@ -1213,17 +1234,21 @@ def launch_lane(spec: CaptureSpec, evidence_root: Path, campaign_name: str, *, p
                 env["QCSD_RAPID_COLLECTION_COMPATIBILITY"] = payload["scheduling"]["path"]
             env["QCSD_RAPID_ROLLING_LAUNCH_INPUT"] = _json({"spec": spec.serializable(), "root": str(root),
                 "intent": str(intent_path), "intent_sha256": _sha(_read(intent_path)),
-                "readiness_mount_roots": [str(path) for path in rolling.readiness_roots(spec, campaign_name)]}).decode()
+                "readiness_mount_roots": [str(path) for path in rolling.readiness_roots(spec, campaign_name,
+                                                                                         _context=context)]}).decode()
         command = [str(spec.host_launcher), "run", str(campaign)]
+        context.check()
         _actuate_host(spec, root, directory, command, env, lock_descriptor)
         returncode = _payload(directory / "host-process.json", PROCESS_TYPE)["returncode"]
         if lane.study_version == 6:
             from . import rapid_rolling_capture as rolling
-            completed = Path(rolling.check_lane_in_image(spec, root, intent_path, complete=True)["receipt"])
+            completed = Path(rolling.check_lane_in_image(spec, root, intent_path, complete=True,
+                                                       _context=context)["receipt"])
         else:
             completed = complete_lane(spec, root, intent_path)
         if returncode != 0:
             raise RuntimeError(f"deep-verified lane receipt retained at {completed}; host exit {returncode} needs lifecycle diagnosis")
+        context.check()
         return completed
 
 

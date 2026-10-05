@@ -313,13 +313,29 @@ def verify_enrollment(path: Path, *, _verified: dict | None = None) -> tuple[dic
 
 
 def _verify_enrollment(path: Path, *, _verified: dict | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
-    raw = lanes._read(path)
+    from .rapid_operation_facts import current_context
+    facts_context = current_context()
+    raw = lanes._read(path) if facts_context is None else facts_context.watch_file(path)
+    key = ("rolling-enrollment", str(path.absolute()), lanes._sha(raw))
+    if facts_context is not None:
+        if facts_context.has(key):
+            result, ancestry = facts_context.get(key)
+            if _verified is not None:
+                _verified.update(ancestry)
+            return result
+        facts_context._enrollment(path)
+        facts_context.watch_file(Path(__file__))
+    ancestry = {}
     from . import rapid_additive_static_enrollment as additive
     if lanes._load(raw).get("receipt_type") == additive.ENROLLMENT_TYPE:
         value, classes, policy = additive.verify_enrollment(path)
         if _verified is not None:
             _verified[path.absolute()] = (lanes._sha(raw), value, classes)
-        return value, classes, policy
+        result = (value, classes, policy)
+        ancestry[path.absolute()] = (lanes._sha(raw), value, classes)
+        if facts_context is not None:
+            facts_context.remember(key, (result, ancestry))
+        return result
     value = admission._unpack(raw, ENROLLMENT_TYPE)
     _keys(value, {"policy", "ordinal", "parent", "admission_root", "admission_provenance",
                  "decisions", "selected_candidate_ids", "first_class_index", "last_candidate_position",
@@ -338,7 +354,8 @@ def _verify_enrollment(path: Path, *, _verified: dict | None = None) -> tuple[di
     else:
         if _open_ref(value["parent"]) != _batch_path(root, value["ordinal"] - 1):
             raise ValueError("rolling enrollment skips or replaces its parent")
-        parent, previous, _ = _verify_enrollment(_open_ref(value["parent"]), _verified=_verified)
+        parent, previous, _ = _verify_enrollment(_open_ref(value["parent"]),
+            _verified=ancestry if facts_context is not None else _verified)
         first_position = parent["last_candidate_position"] + 1
         first_class = parent["first_class_index"] + len(parent["selected_candidate_ids"])
         earliest = parent["declared_at"]
@@ -357,8 +374,26 @@ def _verify_enrollment(path: Path, *, _verified: dict | None = None) -> tuple[di
         expected, facts = _terminal_row(context, first_position + offset, row["terminal"])
         if row != expected:
             raise ValueError("rolling decision differs from its reopened original evidence")
+        if facts_context is not None:
+            terminal_path, seen_terminals = _open_ref(row["terminal"]), set()
+            while True:
+                if terminal_path in seen_terminals:
+                    raise ValueError("rolling terminal raw dependency lineage contains a cycle")
+                seen_terminals.add(terminal_path)
+                terminal = lanes._load(facts_context.watch_file(terminal_path))["payload"]
+                retained_get = terminal.get("get_evidence_root")
+                if retained_get is not None:
+                    facts_context.watch_tree(Path(retained_get))
+                if terminal.get("original_terminal") is None:
+                    break
+                terminal_path = _open_ref(terminal["original_terminal"])
         if facts["outcome"] == "admitted":
             workload_path, workload = _prepared_workload(context, _open_ref(row["terminal"]))
+            if facts_context is not None:
+                facts_context.watch_file(workload_path)
+                if isinstance(workload.get("preparation"), Mapping) and "data_role" in workload["preparation"]:
+                    for evidence_root in facts_context._workload_evidence_trees(workload_path):
+                        facts_context.watch_tree(evidence_root)
             selected.append({"candidate_id": facts["candidate_id"], "terminal": row["terminal"],
                              "admission_root": str(context.root), "class_index": first_class + len(selected),
                              "primary_origin": origin(workload["preparation"]["final_url"]),
@@ -377,9 +412,13 @@ def _verify_enrollment(path: Path, *, _verified: dict | None = None) -> tuple[di
     if len({row["workload_id"] for row in classes}) != len(classes):
         raise ValueError("rolling enrollment repeats an earlier class's workload identity")
     _effective_capture_limits(value, classes, policy)
+    ancestry[path.absolute()] = (lanes._sha(raw), value, classes)
     if _verified is not None:
-        _verified[path.absolute()] = (lanes._sha(raw), value, classes)
-    return value, classes, policy
+        _verified.update(ancestry)
+    result = (value, classes, policy)
+    if facts_context is not None:
+        facts_context.remember(key, (result, ancestry))
+    return result
 
 
 def enroll(root: Path, *, acquisition_root: Path | None = None, count: int = 1) -> Path:
@@ -1272,8 +1311,9 @@ def readiness_roots(spec: lanes.CaptureSpec, campaign_name: str, *, _context=Non
         runtime={key: spec.serializable()[key] for key in lanes.RUNTIME_KEYS}, mode=lane.mode, _context=_context)))
 
 
-def lane_check_command(spec: lanes.CaptureSpec, root: Path, target: Path, *, complete: bool) -> list[str]:
-    command = lanes.image_check_command(spec, inherit_environment=False, campaign_name=target.parent.name)
+def lane_check_command(spec: lanes.CaptureSpec, root: Path, target: Path, *, complete: bool, _context=None) -> list[str]:
+    command = lanes.image_check_command(spec, inherit_environment=False, campaign_name=target.parent.name,
+                                       _context=_context)
     index = command.index("--entrypoint")
     mount = f"{root}:{root}:{'rw' if complete else 'ro'}"
     matches = [position + 1 for position, item in enumerate(command[:index])
@@ -1287,14 +1327,16 @@ def lane_check_command(spec: lanes.CaptureSpec, root: Path, target: Path, *, com
     return command
 
 
-def check_lane_in_image(spec: lanes.CaptureSpec, root: Path, target: Path, *, complete: bool) -> dict[str, Any]:
+def check_lane_in_image(spec: lanes.CaptureSpec, root: Path, target: Path, *, complete: bool, _context=None) -> dict[str, Any]:
     """Run the unchanged ordinary deep verifier in the actual bound image."""
-    verify_capture_plan(spec)
+    verify_capture_plan(spec, _context=_context)
     root = lanes._regular_directory(root)
     target = target.absolute()
     if not target.is_relative_to(root / "lanes"):
         raise ValueError("rolling lane deep target escapes its declared evidence root")
-    command = lane_check_command(spec, root, target, complete=complete)
+    command = lane_check_command(spec, root, target, complete=complete, _context=_context)
+    if _context is not None:
+        _context.check()
     start = {"command": command, "started_at": admission._now()}
     directory = root / "lane-checks" / lanes._sha(admission._json(start))
     directory.mkdir(parents=True)
@@ -1325,6 +1367,8 @@ def check_lane_in_image(spec: lanes.CaptureSpec, root: Path, target: Path, *, co
                "facts": value["facts"]}
     closure = _write(directory / "closure.json", LANE_CHECK_TYPE, payload)
     _reopen_lane_check(_ref(closure))
+    if _context is not None:
+        _context.check()
     return {"closure": _ref(closure), "receipt": value["receipt"], **value["facts"]}
 
 
