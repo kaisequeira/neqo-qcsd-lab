@@ -77,8 +77,14 @@ def _json(value: Any) -> bytes:
 
 
 def plan_payload(raw: bytes) -> dict[str, Any]:
+    from .rapid_target_parallel_schedule import PLAN_TYPE as TARGET_PARALLEL_PLAN_TYPE
+    if _load(raw).get("receipt_type") == TARGET_PARALLEL_PLAN_TYPE:
+        return admission._unpack(raw, TARGET_PARALLEL_PLAN_TYPE)
     """Reopen only the historical plan or the explicit remaining-slot plan."""
     value = _load(raw)
+    from .rapid_target_chunks import PLAN_TYPE as TARGET_CHUNK_PLAN_TYPE
+    if isinstance(value, dict) and value.get("receipt_type") == TARGET_CHUNK_PLAN_TYPE:
+        return admission._unpack(raw, TARGET_CHUNK_PLAN_TYPE)
     from .rapid_ordinary_parallel_schedule import PLAN_TYPE as ORDINARY_PARALLEL_PLAN_TYPE
     if isinstance(value, dict) and value.get("receipt_type") == ORDINARY_PARALLEL_PLAN_TYPE:
         return admission._unpack(raw, ORDINARY_PARALLEL_PLAN_TYPE)
@@ -106,6 +112,10 @@ def _qualification_layout(spec: CaptureSpec) -> None:
     value = _load(_read(spec.qualification_spec))
     from . import rapid_undefended_capture as ordinary
     if ordinary.is_inputs(value):
+        from . import rapid_target_parallel_schedule as target_workers
+        if target_workers.is_plan(spec.plan_receipt):
+            target_workers.check_layout(spec, value)
+            return
         from . import rapid_ordinary_parallel_schedule as ordinary_parallel
         if ordinary_parallel.is_plan(spec.plan_receipt):
             ordinary_parallel.check_layout(spec, value)
@@ -457,8 +467,11 @@ def _validate_image_proof(proof: Any, spec: CaptureSpec, *, equivalent_plan: boo
     from . import rapid_undefended_capture as ordinary
     site_type = ordinary.OrdinarySite if ordinary.FIELD in stored_plan else plan.Site
     if site_type is ordinary.OrdinarySite:
+        from . import rapid_target_parallel_schedule as target_workers
         from . import rapid_ordinary_parallel_schedule as ordinary_parallel
-        if ordinary_parallel.is_payload(stored_plan):
+        if target_workers.is_payload(stored_plan):
+            target_workers.require_plan(stored_plan, _context=_context)
+        elif ordinary_parallel.is_payload(stored_plan):
             ordinary_parallel.require_plan(stored_plan, _context=_context)
         else:
             ordinary.require_plan(stored_plan)
@@ -503,7 +516,8 @@ def _render_lane_campaign(spec: CaptureSpec, lane: plan.Lane, sites) -> bytes:
         return render(lane, sites, static_capture_limits=payload.get("capture_limits"),
                       buflo_duration_policy=payload.get("buflo_duration_policy"),
                       application_body_identity_policy=payload.get("application_body_identity_policy"),
-                      qualification_delivery_compatibility=payload.get("qualification_delivery_compatibility"))
+                      qualification_delivery_compatibility=payload.get("qualification_delivery_compatibility"),
+                      tamaraw_configuration_policy=payload.get("tamaraw_configuration_policy") if lane.mode == "tamaraw" else None)
     if "data_role" in payload:
         from .supplied_static_preparation import ROLE
         from .rapid_selected_capture_input import ROLE as SELECTED_ROLE
@@ -525,7 +539,8 @@ def _render_lane_campaign(spec: CaptureSpec, lane: plan.Lane, sites) -> bytes:
         return plan.render_lane_campaign(lane, sites, static_capture_limits=payload["capture_limits"],
                                          buflo_duration_policy=payload.get("buflo_duration_policy"),
                                          application_body_identity_policy=payload.get("application_body_identity_policy"),
-                                         qualification_delivery_compatibility=payload.get("qualification_delivery_compatibility"))
+                                         qualification_delivery_compatibility=payload.get("qualification_delivery_compatibility"),
+                                         tamaraw_configuration_policy=payload.get("tamaraw_configuration_policy") if lane.mode == "tamaraw" else None)
     return plan.render_lane_campaign(lane, sites)
 
 

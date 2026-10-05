@@ -119,6 +119,23 @@ class OperationFacts:
                 raise ValueError("operation dependency tree bytes, mode or membership changed")
         if any(path.exists() or path.is_symlink() for path in self._absent):
             raise ValueError("operation dependency acquired previously absent membership")
+        if getattr(self, "_directories", None):
+            from .rapid_epoch_corpus import _directory
+            if any(_directory(path) != observation for path, observation in self._directories.items()):
+                raise ValueError("operation shallow directory membership or mode changed")
+
+    def watch_directory(self, path: Path, *, expected=None) -> None:
+        """Fence observed immediate membership while file bytes remain separate."""
+        from .rapid_epoch_corpus import _directory
+        path = Path(path).absolute()
+        observation = _directory(path)
+        if expected is not None and observation != expected:
+            raise ValueError("operation original shallow directory changed")
+        stored = getattr(self, "_directories", {})
+        if path in stored and stored[path] != observation:
+            raise ValueError("operation shallow directory was redefined")
+        stored[path] = observation
+        self._directories = stored
 
     def watch_optional_tree(self, path: Path) -> None:
         path = Path(path).absolute()
@@ -225,6 +242,10 @@ class OperationFacts:
             from .rapid_slot_chunks import input_files
             for path in input_files(plan):
                 self.watch_file(path)
+        if "target_chunk_policy" in plan:
+            from .rapid_target_chunks import input_files
+            for path in input_files(plan):
+                self.watch_file(path)
         for relative, _ in plan_files(plan).values():
             self.watch_file(spec.execution_root / relative)
         if plan.get("study_version") == 6:
@@ -268,6 +289,10 @@ class OperationFacts:
         self._bindings.add(key)
 
     def bind_schedule(self, capsule) -> None:
+        from . import rapid_target_parallel_schedule as target_workers
+        if capsule.get("artifact_type") == target_workers.CAPSULE_TYPE:
+            target_workers.bind_dependencies(capsule, self)
+            return
         from . import rapid_ordinary_parallel_schedule as ordinary_parallel
         if capsule.get("artifact_type") == ordinary_parallel.CAPSULE_TYPE:
             ordinary_parallel.bind_dependencies(capsule, self)
@@ -330,6 +355,9 @@ class OperationFacts:
         self._bindings.add(key)
 
     def bind_canary(self, reference, runtime=None) -> None:
+        if reference.get("schema_version") == 6:
+            from .rapid_ordinary_canary_carry import bind_dependencies
+            return bind_dependencies(reference, runtime, self)
         key = ("canary", json.dumps({"reference": reference, "runtime": runtime}, sort_keys=True))
         if key in self._bindings:
             return

@@ -1562,11 +1562,11 @@ def _positive(value: Any, label: str) -> int:
     return parsed
 
 
-def _schedule_realization_metrics(sample: Path) -> dict[str, Any]:
-    return _schedule_realization_metrics_from_path(sample / "neqo/schedule.csv")
+def _schedule_realization_metrics(sample: Path, *, tamaraw_configuration_policy: str | None = None) -> dict[str, Any]:
+    return _schedule_realization_metrics_from_path(sample / "neqo/schedule.csv", tamaraw_configuration_policy=tamaraw_configuration_policy)
 
 
-def _schedule_realization_metrics_from_path(path: Path) -> dict[str, Any]:
+def _schedule_realization_metrics_from_path(path: Path, *, tamaraw_configuration_policy: str | None = None) -> dict[str, Any]:
     if not path.is_file():
         return {}
     with path.open(newline="", encoding="utf-8") as source:
@@ -1864,7 +1864,7 @@ def _schedule_realization_metrics_from_path(path: Path) -> dict[str, Any]:
         **_buflo_duration_budget_metrics(path),
         **_tamaraw_capture_metrics(path, rows),
         **_front_capture_metrics(path, rows),
-        **_terminal_primary_partial_metrics(path, rows),
+        **_terminal_primary_partial_metrics(path, rows, tamaraw_configuration_policy=tamaraw_configuration_policy),
     }
 
 
@@ -1894,13 +1894,15 @@ def _buflo_duration_budget_metrics(schedule_path: Path) -> dict[str, Any]:
     return validate_native_receipt(run, artifact.read_bytes())
 
 
-def _terminal_primary_partial_metrics(schedule_path: Path, rows: list[dict[str, str]]) -> dict[str, Any]:
+def _terminal_primary_partial_metrics(schedule_path: Path, rows: list[dict[str, str]], *,
+                                      tamaraw_configuration_policy: str | None = None) -> dict[str, Any]:
     from .capture_acceptance_policy import validate_terminal_primary_partial_evidence
     try:
         run = load_json(schedule_path.with_name("run.json"))
     except (OSError, ValueError):
         return {}
-    return validate_terminal_primary_partial_evidence(run, runner_directory=schedule_path.parent, schedule_rows=rows)
+    return validate_terminal_primary_partial_evidence(run, runner_directory=schedule_path.parent, schedule_rows=rows,
+        tamaraw_configuration_policy=tamaraw_configuration_policy)
 
 
 def _terminal_primary_partial_allowance(defense: str, schedule: Mapping[str, Any] | None) -> tuple[int, int] | None:

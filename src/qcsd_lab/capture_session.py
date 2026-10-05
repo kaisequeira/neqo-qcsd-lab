@@ -1963,6 +1963,7 @@ def _validate_run_binding(
     validate_terminal_primary_source_binding(
         load_json(application_workload_source) if application_workload_source is not None else {},
         run_data, runner_directory=runner_directory,
+        tamaraw_configuration_policy=getattr(context, "tamaraw_configuration_policy", None),
     )
     historical_candidate = historical_candidate_source is not None
     response_policy = _launch_application_response_policy(
@@ -2412,7 +2413,20 @@ def _client_command(
     elif chaff_manifest is not None or application_workload_source is not None:
         raise ValueError("baseline run forbids qualified chaff inputs")
     runner_kind = RUNNER_KIND_BY_KIND.get(defense.kind, defense.kind)
-    command += ["--profile", context.qcsd_profile, "--defense", runner_kind]
+    from .tamaraw_fixed_configuration import validate_policy, validate_configuration
+    fixed_tamaraw = validate_policy(getattr(context, "tamaraw_configuration_policy", None))
+    configuration_path = getattr(context, "tamaraw_configuration_path", None)
+    if fixed_tamaraw is not None:
+        if (defense.kind != "tamaraw" or defense.baseline or context.qcsd_profile != "research-1200"
+            or configuration_path is None or defense.parameters_path is not None or defense.schedule_path is not None):
+            raise ValueError("fixed Tamaraw launch lacks its exact frozen configuration")
+        from .tamaraw_fixed_configuration import validate_prepared
+        validate_prepared(load_json(application_workload_source))
+        command += ["--config", str(validate_configuration(configuration_path))]
+    else:
+        if configuration_path is not None:
+            raise ValueError("Native configuration requires an explicit fixed Tamaraw policy")
+        command += ["--profile", context.qcsd_profile, "--defense", runner_kind]
     if defense.kind == "static":
         command += [
             "--schedule",

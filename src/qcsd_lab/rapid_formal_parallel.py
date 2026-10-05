@@ -102,8 +102,13 @@ def _audit(path: Path, *, execution_root: Path | None = None, _context=None):
             if registered or capsule is not None:
                 raise ValueError("rolling parallel workers cannot claim registered epochs or historical installation")
             stored_plan = lineage["image_check"]["proof"]["plan_payload"]
+            from . import rapid_target_parallel_schedule as target_workers
             from . import rapid_ordinary_parallel_schedule as ordinary_parallel
-            if ordinary_parallel.is_payload(stored_plan):
+            if target_workers.is_payload(stored_plan):
+                if generation != "rolling-50" or not 1 <= len(sites) <= 5:
+                    raise ValueError("target parallel changed its rolling full-graph cohort scope")
+                target_workers.require_worker(stored_plan, lane, sites, worker_spec)
+            elif ordinary_parallel.is_payload(stored_plan):
                 if generation != "rolling-50" or not 1 <= len(sites) <= 5:
                     raise ValueError("ordinary parallel changed rolling cohort scope")
                 ordinary_parallel.require_worker(stored_plan, lane, sites, worker_spec)
@@ -129,6 +134,9 @@ def _audit(path: Path, *, execution_root: Path | None = None, _context=None):
         raise ValueError("formal parallel workers cannot mix study contracts")
     from . import rapid_ordinary_parallel_schedule as ordinary_parallel
     if all(fact[5].study_version == 6 for fact in facts):
+        from . import rapid_target_parallel_schedule as target_workers
+        target_workers.require_disjoint([(fact[0], fact[4]["image_check"]["proof"]["plan_payload"], fact[5], fact[6])
+            for fact in facts])
         ordinary_parallel.require_disjoint([(fact[0], fact[4]["image_check"]["proof"]["plan_payload"], fact[5], fact[6])
             for fact in facts])
     if owned:
@@ -209,8 +217,13 @@ def prepare_batch(spec_path: Path, evidence_root: Path, campaigns: list[str], ou
                 if installed is not None:
                     raise ValueError("rolling scheduling cannot claim historical installation")
                 payload = check["proof"]["plan_payload"]
+                from . import rapid_target_parallel_schedule as target_workers
                 from . import rapid_ordinary_parallel_schedule as ordinary_parallel
-                if ordinary_parallel.is_payload(payload):
+                if target_workers.is_payload(payload):
+                    if check["proof"]["cohort_generation"] != "rolling-50" or not 1 <= len(rows) <= 5:
+                        raise ValueError("target parallel changed its rolling full-graph cohort scope")
+                    target_workers.require_worker(payload, lane, rows, worker_spec)
+                elif ordinary_parallel.is_payload(payload):
                     if check["proof"]["cohort_generation"] != "rolling-50" or not 1 <= len(rows) <= 5:
                         raise ValueError("ordinary parallel changed rolling cohort scope")
                     ordinary_parallel.require_worker(payload, lane, rows, worker_spec)
@@ -226,6 +239,9 @@ def prepare_batch(spec_path: Path, evidence_root: Path, campaigns: list[str], ou
             if lane.role != "formal":
                 raise ValueError("formal parallel preparation cannot claim diagnostic lanes")
         from . import rapid_ordinary_parallel_schedule as ordinary_parallel
+        from . import rapid_target_parallel_schedule as target_workers
+        target_workers.require_disjoint([(worker_spec, check["proof"]["plan_payload"], lane, rows)
+            for worker_spec, check, lane, rows in zip(specs, checks, lanes, sites, strict=True)])
         ordinary_parallel.require_disjoint([(worker_spec, check["proof"]["plan_payload"], lane, rows)
             for worker_spec, check, lane, rows in zip(specs, checks, lanes, sites, strict=True)])
         # Validate both create-only claims and predecessor histories before writing either.
@@ -739,7 +755,9 @@ def _release_fence(path, value, facts, preflight):
     from . import rapid_rolling_capture as rolling
     from . import rapid_ordinary_parallel_schedule as ordinary_parallel
     import stat as permissions
-    full_modes = any(ordinary_parallel.is_payload(fact[4]["image_check"]["proof"]["plan_payload"]) for fact in facts)
+    from . import rapid_target_parallel_schedule as target_workers
+    full_modes = any(ordinary_parallel.is_payload(fact[4]["image_check"]["proof"]["plan_payload"])
+        or target_workers.is_payload(fact[4]["image_check"]["proof"]["plan_payload"]) for fact in facts)
     files, trees, documents, runtimes = {}, {}, set(), set()
 
     def file(item, expected=None):
@@ -857,7 +875,20 @@ def _release_fence(path, value, facts, preflight):
             payload = ordinary._payload(spec.plan_receipt, ordinary.PLAN_TYPE)
             from . import rapid_ordinary_parallel_schedule as ordinary_parallel
             selected_context = payload.get("data_role") == selected.ROLE
-            if ordinary_parallel.is_payload(payload):
+            if target_workers.is_payload(payload):
+                capsule = target_workers.require_plan(payload)
+                base = target_workers._spec(capsule["base_spec"])
+                own_files, own_trees = target_workers.input_dependencies(base, sites)
+                references(capsule, Path(payload["scheduling"]["path"]).parent)
+                for item in own_files:
+                    file(item)
+                for item in own_trees:
+                    tree(item)
+                for site in sites:
+                    file(spec.workload_root / f"{site.workload_id}.json", site.workload_sha256)
+                runtime(capsule["current_canonical"], capsule["runtime"])
+                static_context = None
+            elif ordinary_parallel.is_payload(payload):
                 capsule = ordinary_parallel.require_plan(payload)
                 base = ordinary_parallel._spec(capsule["base_spec"])
                 own_files, own_trees = ordinary_parallel.input_dependencies(base, sites)
@@ -928,7 +959,7 @@ def _release_fence(path, value, facts, preflight):
                     if batch["parent"] is None:
                         break
                     batch_path = rolling._open_ref(batch["parent"])
-            if not ordinary_parallel.is_payload(payload):
+            if not (ordinary_parallel.is_payload(payload) or target_workers.is_payload(payload)):
                 qualifier = shared.load(spec.qualification_spec)["qualification_sets"][0]
                 for name in ("manifest", "sidecar_root"):
                     target = Path(qualifier[name])
@@ -941,7 +972,7 @@ def _release_fence(path, value, facts, preflight):
             payload = ordinary._payload(spec.plan_receipt, ordinary.PLAN_TYPE)
             capsule = shared.load(_reference(payload["scheduling"]))
             file(payload["scheduling"]["path"])
-            if not ordinary_parallel.is_payload(payload):
+            if not (ordinary_parallel.is_payload(payload) or target_workers.is_payload(payload)):
                 sidecars = Path(qualifier["sidecar_root"])
                 sidecars = sidecars if sidecars.is_absolute() else spec.qualification_spec.parent / sidecars
                 tree(sidecars, capsule["qualified_inputs"]["qualification_files"])
@@ -1068,12 +1099,16 @@ def release(path: Path, output: Path, actual: dict[str, Any], *, prepared_sha256
                    for index, row in enumerate(frame["worker_inputs"]))):
             raise ValueError("formal release changed its pre-birth checked facts")
         value = frame["authority"]
+        from . import rapid_target_parallel_schedule as target_workers
         from . import rapid_ordinary_parallel_schedule as ordinary_parallel
         facts = [(ordinary.CaptureSpec(**{key: Path(item) if key in ordinary.PATH_KEYS else item
                    for key, item in row[0].items()}), Path(row[1]), Path(row[2]), row[3], row[4],
-                   (ordinary_parallel.prepared_lane(row[5]) if ordinary_parallel.is_payload(row[4]["image_check"]["proof"]["plan_payload"])
+                   (target_workers.prepared_lane(row[5]) if target_workers.is_payload(row[4]["image_check"]["proof"]["plan_payload"])
+                    else ordinary_parallel.prepared_lane(row[5]) if ordinary_parallel.is_payload(row[4]["image_check"]["proof"]["plan_payload"])
                     else ordinary.plan.Lane(**{**row[5], "workload_ids": tuple(row[5]["workload_ids"])})),
-                   ordinary_parallel.prepared_sites(row[4]["image_check"]["proof"]["plan_payload"], row[6])) for row in frame["facts"]]
+                   (target_workers.prepared_sites(row[4]["image_check"]["proof"]["plan_payload"], row[6])
+                    if target_workers.is_payload(row[4]["image_check"]["proof"]["plan_payload"])
+                    else ordinary_parallel.prepared_sites(row[4]["image_check"]["proof"]["plan_payload"], row[6]))) for row in frame["facts"]]
         environments = frame["environments"]
         intent = shared.load(output / "batch-intent.json")
         if not ordinary.admission._utc(intent["created_at"]) <= ordinary.admission._utc(frame["prepared_at"]) <= ordinary.admission._utc(shared.now()):
@@ -1086,7 +1121,9 @@ def release(path: Path, output: Path, actual: dict[str, Any], *, prepared_sha256
                 or lane_intent != ordinary._payload(intent_path, ordinary.INTENT_TYPE)
                 or lineage != ordinary._payload(ordinary.admission._child(root, lane_intent["lineage"]), ordinary.LINEAGE_TYPE)
                 or lane != ordinary._lane(lineage["image_check"]["proof"], lane_intent["campaign_name"])
-                or sites != ordinary_parallel.prepared_sites(lineage["image_check"]["proof"]["plan_payload"], lineage["image_check"]["proof"]["sites"])):
+                or sites != (target_workers.prepared_sites(lineage["image_check"]["proof"]["plan_payload"], lineage["image_check"]["proof"]["sites"])
+                    if target_workers.is_payload(lineage["image_check"]["proof"]["plan_payload"])
+                    else ordinary_parallel.prepared_sites(lineage["image_check"]["proof"]["plan_payload"], lineage["image_check"]["proof"]["sites"]))):
                 raise ValueError("formal prepared facts differ from their exact sealed official intents")
         preflight = shared.reopen_preflight(output, frame["authority_sha256"])
         _check_release_fence(frame["input_fence"], path, value, facts, preflight)

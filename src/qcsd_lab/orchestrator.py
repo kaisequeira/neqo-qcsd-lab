@@ -142,6 +142,7 @@ CLASS_STUDY_READINESS_ENV = "QCSD_CLASS_READINESS_ATTESTATION"
 CLASS_STUDY_HISTORICAL_PRE_ENV = "QCSD_CLASS_HISTORICAL_PRE_SNAPSHOT"
 REQUEST_POLICIES = {"as-defined", "half-duplex"}
 LEGACY_CAMPAIGN_KEYS = {
+    "tamaraw_configuration_policy",
     "application_body_identity_policy",
     "qualification_delivery_compatibility",
     "schema",
@@ -262,6 +263,8 @@ class Campaign:
     class_study_launch_namespace: str | None = None
     application_body_identity_policy: str | None = None
     qualification_delivery_compatibility: Mapping[str, str] | None = None
+    tamaraw_configuration_policy: str | None = None
+    tamaraw_configuration_path: Path | None = None
 
     @property
     def udp_payload_ceiling(self) -> int:
@@ -274,6 +277,8 @@ class _RunContext:
     request_policy: str
     limits: capture_engine.Limits
     udp_payload_ceiling: int
+    tamaraw_configuration_policy: str | None = None
+    tamaraw_configuration_path: Path | None = None
 
 
 def _slug(value: str) -> str:
@@ -567,6 +572,8 @@ def _load_campaign(
     value = _object(source, "campaign")
     from .application_response_policy import application_body_identity_policy
     body_policy = application_body_identity_policy(value)
+    from .tamaraw_fixed_configuration import policy as fixed_tamaraw_policy
+    tamaraw_configuration_policy = fixed_tamaraw_policy(value)
     delivery_compatibility = value.get("qualification_delivery_compatibility")
     if "qualification_delivery_compatibility" in value:
         if delivery_compatibility is None:
@@ -824,6 +831,12 @@ def _load_campaign(
                     "schema-two defended campaigns require a manifest-bound qualification set"
                 )
     _validate_loaded_qualification_bindings(defenses, workloads)
+    from .tamaraw_fixed_configuration import validate_campaign as validate_fixed_tamaraw_campaign, validate_configuration, INPUT as TAMARAW_CONFIG_INPUT
+    validate_fixed_tamaraw_campaign(selected_policy=tamaraw_configuration_policy, profile=profile,
+        defenses=defenses, body_policy=body_policy, qualification_compatibility=delivery_compatibility)
+    tamaraw_configuration_path = None
+    if tamaraw_configuration_policy is not None and frozen_inputs is not None:
+        tamaraw_configuration_path = validate_configuration(frozen_inputs / TAMARAW_CONFIG_INPUT)
     if any(_uses_schema_six_walkie_talkie(defense) for defense in defenses):
         if not all(workload.chaff_manifest_data is not None for workload in workloads):
             raise ValueError("schema-six Walkie-Talkie requires qualified chaff for every workload")
@@ -858,6 +871,10 @@ def _load_campaign(
             if type(workload.data["preparation"].get("max_response_bytes")) is not int:
                 raise ValueError("complete application delivery requires a prepared observed response cap")
         workloads = tuple(replace(workload, application_body_identity_policy=body_policy) for workload in workloads)
+    if tamaraw_configuration_policy is not None:
+        from .tamaraw_fixed_configuration import validate_prepared as validate_fixed_tamaraw_prepared
+        for workload in workloads:
+            validate_fixed_tamaraw_prepared(workload.data)
     campaign = Campaign(
         path=path,
         source_bytes=source_bytes,
@@ -871,6 +888,8 @@ def _load_campaign(
         limits=limits,
         application_body_identity_policy=(body_policy if "application_body_identity_policy" in value else None),
         qualification_delivery_compatibility=delivery_compatibility,
+        tamaraw_configuration_policy=tamaraw_configuration_policy,
+        tamaraw_configuration_path=tamaraw_configuration_path,
         chaff_qualification_set=qualification_set,
         defense_order_scheme=defense_order_scheme,
         defense_order_block=defense_order_block,
@@ -4253,6 +4272,12 @@ def _materialize_inputs(
     frozen_campaign.write_bytes(campaign.source_bytes)
     if frozen_campaign.read_bytes() != campaign.source_bytes:
         raise ValueError("campaign changed during input materialization")
+    tamaraw_configuration_path = None
+    if campaign.tamaraw_configuration_policy is not None:
+        from .tamaraw_fixed_configuration import INPUT, configuration_bytes, validate_configuration
+        tamaraw_configuration_path = inputs / INPUT
+        tamaraw_configuration_path.write_bytes(configuration_bytes())
+        validate_configuration(tamaraw_configuration_path)
     if campaign.qualification_delivery_compatibility is not None:
         from .rapid_rolling_readiness import _reference
         witness = _reference(campaign.qualification_delivery_compatibility)[1]
@@ -4580,6 +4605,7 @@ def _materialize_inputs(
         path=inputs / "campaign.yml",
         workloads=tuple(runtime_workloads),
         defenses=tuple(runtime_defenses),
+        tamaraw_configuration_path=tamaraw_configuration_path,
         class_study_cohort_path=class_study_cohort_destination,
         class_study_cohort_sha256=(
             sha256_file(class_study_cohort_destination)
@@ -4918,6 +4944,8 @@ def _execute(root: Path, campaign: Campaign, experiment: dict[str, Any]) -> Path
                             sample["request_policy"],
                             campaign.limits,
                             campaign.udp_payload_ceiling,
+                            campaign.tamaraw_configuration_policy,
+                            campaign.tamaraw_configuration_path,
                         )
                         # Preserve the established collector seam for campaigns
                         # without qualified inputs.  Current defended campaigns
@@ -4968,7 +4996,8 @@ def _execute(root: Path, campaign: Campaign, experiment: dict[str, Any]) -> Path
                     atomic_json(attempt / "failure.json", result["failure"])
                 capture_engine._mark_origin_completed(runtime_workload, origin_last_run)
                 if result.get("success") is True:
-                    fidelity_failure = _intrinsic_fidelity_failure(sample, result, attempt)
+                    fidelity_failure = _intrinsic_fidelity_failure(sample, result, attempt,
+                        tamaraw_configuration_policy=campaign.tamaraw_configuration_policy)
                     if fidelity_failure is None:
                         fidelity_failure = _prepared_response_identity_failure(workload, attempt)
                     if fidelity_failure is None:
@@ -5303,6 +5332,7 @@ def _intrinsic_fidelity_failure(
     sample: dict[str, Any],
     result: dict[str, Any],
     attempt: Path,
+    *, tamaraw_configuration_policy: str | None = None,
 ) -> dict[str, Any] | None:
     """Reject a collected defense realization before it becomes immutable evidence."""
 
@@ -5322,7 +5352,7 @@ def _intrinsic_fidelity_failure(
             "details": [{"error": str(error)}],
         }
 
-    schedule = _schedule_realization_metrics(attempt)
+    schedule = _schedule_realization_metrics(attempt, tamaraw_configuration_policy=tamaraw_configuration_policy)
     try:
         run = load_json(attempt / "neqo/run.json")
     except (OSError, ValueError):
@@ -5708,7 +5738,9 @@ def _compare_group(
             )
         capture_valid = diagnostics.get("capture", {}).get("valid") is True
         operational = diagnostics.get("operationally_valid") is True
-        schedule = _schedule_realization_metrics(sample_path)
+        from .tamaraw_fixed_configuration import policy as fixed_tamaraw_policy
+        schedule = _schedule_realization_metrics(sample_path,
+            tamaraw_configuration_policy=fixed_tamaraw_policy(experiment["configuration"]))
         defense_metrics = diagnostics.get("defense")
         if not isinstance(defense_metrics, dict):
             defense_metrics = {}
@@ -5986,7 +6018,8 @@ def _recover_completed_attempt(
         if not isinstance(result, dict) or type(result.get("success")) is not bool:
             raise ValueError("running attempt has an invalid terminal receipt")
         if result["success"] is True:
-            fidelity_failure = _intrinsic_fidelity_failure(sample, result, attempt)
+            fidelity_failure = _intrinsic_fidelity_failure(sample, result, attempt,
+                tamaraw_configuration_policy=campaign.tamaraw_configuration_policy)
             if fidelity_failure is None:
                 workload = next(
                     item for item in campaign.workloads if item.id == sample["workload_id"]
@@ -6272,6 +6305,14 @@ def _frozen_configuration(
     }
     if campaign.application_body_identity_policy is not None:
         configuration["application_body_identity_policy"] = campaign.application_body_identity_policy
+    if campaign.tamaraw_configuration_policy is not None:
+        from .tamaraw_fixed_configuration import validate_configuration, configuration_sha256
+        if campaign.tamaraw_configuration_path is None:
+            raise ValueError("fixed Tamaraw campaign lacks its frozen configuration")
+        path = validate_configuration(campaign.tamaraw_configuration_path)
+        configuration.update(tamaraw_configuration_policy=campaign.tamaraw_configuration_policy,
+            tamaraw_configuration=path.relative_to(root).as_posix(),
+            tamaraw_configuration_sha256=configuration_sha256())
     if campaign.qualification_delivery_compatibility is not None:
         configuration["qualification_delivery_compatibility"] = dict(campaign.qualification_delivery_compatibility)
     if campaign.chaff_qualification_set is not None:

@@ -654,7 +654,8 @@ def _effective_capture_limits(batch, classes, policy):
 def _render_campaign(lane: plan.Lane, sites, policy: Mapping[str, Any], *, buflo_duration_policy: str | None = None,
                      capture_limits: Mapping[str, int] | None = None,
                      application_body_identity_policy: str | None = None,
-                     qualification_delivery_compatibility: Mapping[str, str] | None = None) -> bytes:
+                     qualification_delivery_compatibility: Mapping[str, str] | None = None,
+                     tamaraw_configuration_policy: str | None = None) -> bytes:
     from .rapid_additive_static_enrollment import CONTRACT as ADDITIVE_CONTRACT
     from .rapid_per_class_selected_enrollment import CONTRACT as PER_CLASS_CONTRACT
     return plan.render_lane_campaign(lane, sites, static_capture_limits=(
@@ -662,7 +663,8 @@ def _render_campaign(lane: plan.Lane, sites, policy: Mapping[str, Any], *, buflo
         if policy["contract"] in {STATIC_CONTRACT, ADDITIVE_CONTRACT, PER_CLASS_CONTRACT} else None),
         buflo_duration_policy=buflo_duration_policy,
         application_body_identity_policy=application_body_identity_policy,
-        qualification_delivery_compatibility=qualification_delivery_compatibility)
+        qualification_delivery_compatibility=qualification_delivery_compatibility,
+        tamaraw_configuration_policy=tamaraw_configuration_policy if lane.mode == "tamaraw" else None)
 
 
 def _static_canary_facts(facts: Mapping[str, Any], amendment: Mapping[str, Any]) -> dict[str, Any]:
@@ -715,9 +717,16 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
                  front_capture_amendment: Path | None = None,
                  static_capture_amendment: Path | None = None,
                  application_body_identity_policy: str | None = None,
-                 qualification_delivery_compatibility: Mapping[str, str] | None = None, _context=None) -> Path:
+                 qualification_delivery_compatibility: Mapping[str, str] | None = None,
+                 tamaraw_configuration_policy: str | None = None, _context=None) -> Path:
     from .application_response_policy import validate_application_body_identity_policy, application_body_identity_policy as declared_body_policy, COMPLETE_APPLICATION_DELIVERY_POLICY
     body_policy = validate_application_body_identity_policy(application_body_identity_policy)
+    from .tamaraw_fixed_configuration import validate_policy as validate_fixed_tamaraw_policy
+    fixed_tamaraw = validate_fixed_tamaraw_policy(tamaraw_configuration_policy)
+    if fixed_tamaraw is not None and (set(readiness) != {"tamaraw"} or scheduling is not None
+            or front_capture_amendment is not None or static_capture_amendment is not None
+            or qualification_delivery_compatibility is not None or body_policy != COMPLETE_APPLICATION_DELIVERY_POLICY):
+        raise ValueError("fixed Tamaraw plan requires its own current serial complete-graph canary")
     if qualification_delivery_compatibility is not None:
         from .qualification_control_authority import validate
         validate(qualification_delivery_compatibility, body_policy=body_policy)
@@ -730,7 +739,8 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
                 front_capture_amendment=front_capture_amendment,
                 static_capture_amendment=static_capture_amendment,
                 application_body_identity_policy=application_body_identity_policy,
-                qualification_delivery_compatibility=qualification_delivery_compatibility, _context=_context)
+                qualification_delivery_compatibility=qualification_delivery_compatibility,
+                tamaraw_configuration_policy=tamaraw_configuration_policy, _context=_context)
     if _context is not None:
         _context._enrollment(enrollment)
     policy = verify_policy(root)
@@ -840,6 +850,10 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
             require_canary(reference, facts, amendment_reference, amendment)
         if declared_body_policy(facts) != body_policy:
             raise ValueError("rolling plan differs from its canary's declared application body policy")
+        from .tamaraw_fixed_configuration import policy as fixed_tamaraw_policy, configuration_sha256
+        if (fixed_tamaraw_policy(facts) != fixed_tamaraw
+            or fixed_tamaraw is not None and facts.get("tamaraw_configuration_sha256") != configuration_sha256()):
+            raise ValueError("rolling plan differs from its canary's fixed Tamaraw condition")
         if facts.get("control_authority_witness", facts.get("qualification_delivery_compatibility")) != qualification_delivery_compatibility:
             raise ValueError("rolling plan differs from its canary's qualification delivery witness")
         if static_amendment is not None:
@@ -864,7 +878,8 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
         path = campaigns / f"{lane.campaign_name}.yml"
         raw = _render_campaign(lane, sites, policy, buflo_duration_policy=duration_policy, capture_limits=effective_limits,
                                application_body_identity_policy=application_body_identity_policy,
-                               qualification_delivery_compatibility=qualification_delivery_compatibility)
+                               qualification_delivery_compatibility=qualification_delivery_compatibility,
+                               tamaraw_configuration_policy=fixed_tamaraw)
         if path.exists():
             if lanes._read(path) != raw:
                 raise ValueError("rolling plan cannot replace an earlier campaign")
@@ -895,6 +910,8 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
             declared_at=payload["declared_at"], _context=_context)
     if application_body_identity_policy is not None:
         payload["application_body_identity_policy"] = body_policy
+    if fixed_tamaraw is not None:
+        payload["tamaraw_configuration_policy"] = fixed_tamaraw
     if qualification_delivery_compatibility is not None:
         payload["qualification_delivery_compatibility"] = dict(qualification_delivery_compatibility)
     if amendment_reference is not None:
@@ -949,6 +966,13 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
         _context.bind_capture(spec)
         if _context.has(key):
             return _context.get(key)
+    from . import rapid_target_parallel_schedule as target_workers
+    if target_workers.is_plan(spec.plan_receipt):
+        return target_workers.verify_plan(spec, require_current=require_current, _context=_context)
+    from . import rapid_target_chunks as target_chunks
+    if target_chunks.is_plan(spec.plan_receipt):
+        result = target_chunks.verify_plan(spec, require_current=require_current, _context=_context)
+        return _context.remember(key, result) if _context is not None else result
     from . import rapid_ordinary_parallel_schedule as ordinary_parallel
     if ordinary_parallel.is_plan(spec.plan_receipt):
         return ordinary_parallel.verify_plan(spec, require_current=require_current, _context=_context)
@@ -971,6 +995,14 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
                  "declared_at", "formal_accepted_trace_count", "scientific_credit"}
     from .application_response_policy import application_body_identity_policy, COMPLETE_APPLICATION_DELIVERY_POLICY
     body_policy = application_body_identity_policy(value)
+    from .tamaraw_fixed_configuration import policy as fixed_tamaraw_policy
+    fixed_tamaraw = fixed_tamaraw_policy(value)
+    if fixed_tamaraw is not None:
+        fields.add("tamaraw_configuration_policy")
+        if (set(value["readiness"]) != {"tamaraw"} or "scheduling" in value
+            or any(key in value for key in ("static_capture_amendment", "front_capture_amendment", "qualification_delivery_compatibility"))
+            or body_policy != COMPLETE_APPLICATION_DELIVERY_POLICY):
+            raise ValueError("fixed Tamaraw plan changed its serial condition authority")
     from . import rapid_undefended_capture as ordinary
     ordinary_inputs = ordinary.is_inputs(lanes._load(lanes._read(spec.qualification_spec)))
     if ordinary_inputs != (ordinary.FIELD in value):
@@ -1084,7 +1116,8 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
         raw = _render_campaign(lane, sites, policy, buflo_duration_policy=value.get("buflo_duration_policy"),
                                capture_limits=value.get("capture_limits"),
                                application_body_identity_policy=value.get("application_body_identity_policy"),
-                               qualification_delivery_compatibility=value.get("qualification_delivery_compatibility"))
+                               qualification_delivery_compatibility=value.get("qualification_delivery_compatibility"),
+                               tamaraw_configuration_policy=fixed_tamaraw)
         if lanes._read(spec.campaign_dir / f"{lane.campaign_name}.yml") != raw:
             raise ValueError("rolling campaign changed sites, graph, visits or fixed settings")
         actual.append({**asdict(lane), "workload_ids": list(lane.workload_ids), "campaign_sha256": lanes._sha(raw)})
@@ -1120,7 +1153,8 @@ def require_mode_readiness(spec: lanes.CaptureSpec, lane: plan.Lane, *, before: 
                           or original_static.is_static(payload["scheduling"])
                           or selected_schedule.is_selected(payload["scheduling"]))
         from . import rapid_ordinary_parallel_schedule as ordinary_parallel
-        current_static = current_static or ordinary_parallel.is_schedule(payload["scheduling"])
+        from . import rapid_target_parallel_schedule as target_workers
+        current_static = current_static or ordinary_parallel.is_schedule(payload["scheduling"]) or target_workers.is_schedule(payload["scheduling"])
         expected_traffic = plan_files(payload) if current_static else lanes.TRAFFIC_FILES
         if (facts.get("client_sha256") != lanes._sha(lanes._read(spec.client_binary))
             or facts.get("traffic_hashes") != {key: digest for key, (_, digest) in expected_traffic.items()}):
@@ -1161,10 +1195,17 @@ def require_mode_readiness(spec: lanes.CaptureSpec, lane: plan.Lane, *, before: 
     from . import rapid_undefended_capture as ordinary
     if ordinary.FIELD in payload:
         ordinary.require_canary(facts, sites)
+    if payload["readiness"][lane.mode].get("schema_version") == 6:
+        from .rapid_ordinary_canary_carry import require_current_plan
+        require_current_plan(facts, spec, payload, sites)
     publication = facts.get("control_bridge_published_at", facts.get("source_equivalence_published_at"))
     from .application_response_policy import application_body_identity_policy
     if application_body_identity_policy(facts) != application_body_identity_policy(payload):
         raise ValueError("formal readiness changed its declared application body policy")
+    from .tamaraw_fixed_configuration import policy as fixed_tamaraw_policy, configuration_sha256
+    if (fixed_tamaraw_policy(facts) != fixed_tamaraw_policy(payload)
+        or fixed_tamaraw_policy(payload) is not None and facts.get("tamaraw_configuration_sha256") != configuration_sha256()):
+        raise ValueError("formal readiness changed its fixed Tamaraw condition")
     if facts.get("control_authority_witness", facts.get("qualification_delivery_compatibility")) != payload.get("qualification_delivery_compatibility"):
         raise ValueError("formal readiness changed its declared qualification delivery witness")
     if publication is not None and (admission._utc(publication) > admission._utc(payload["declared_at"])
@@ -1190,6 +1231,12 @@ def image_plan_check(spec: lanes.CaptureSpec, runtime: Mapping[str, Any], *, _co
         own = lanes._read(Path(rapid_slot_chunks.__file__))
         if own != lanes._read(spec.runtime_source_root / relative) or own != lanes._read(spec.module_root / relative):
             raise ValueError("slot chunk authority differs from the installed and frozen Source")
+    if "target_chunk_policy" in payload:
+        from . import rapid_target_chunks
+        relative = "src/qcsd_lab/rapid_target_chunks.py"
+        own = lanes._read(Path(rapid_target_chunks.__file__))
+        if own != lanes._read(spec.runtime_source_root / relative) or own != lanes._read(spec.module_root / relative):
+            raise ValueError("target chunk authority differs from the installed and frozen Source")
     if "front_capture_amendment" in payload:
         from . import rapid_front_capture_amendment
         relative = "src/qcsd_lab/rapid_front_capture_amendment.py"
@@ -1248,6 +1295,12 @@ def validate_host_launch(value: Any, *, expected_campaign: str, actual_image: st
 
 
 def publish_successor(spec: lanes.CaptureSpec, lane_name: str, generation: int, output: Path) -> Path:
+    from . import rapid_target_parallel_schedule as target_workers
+    if target_workers.is_plan(spec.plan_receipt):
+        return target_workers.publish_successor(spec, lane_name, generation, output)
+    from . import rapid_target_chunks as target_chunks
+    if target_chunks.is_plan(spec.plan_receipt):
+        return target_chunks.publish_successor(spec, lane_name, generation, output)
     from . import rapid_ordinary_parallel_schedule as ordinary_parallel
     if ordinary_parallel.is_plan(spec.plan_receipt):
         return ordinary_parallel.publish_successor(spec, lane_name, generation, output)
@@ -1263,7 +1316,8 @@ def publish_successor(spec: lanes.CaptureSpec, lane_name: str, generation: int, 
     raw = plan.render_lane_campaign(lane, sites, static_capture_limits=value.get("capture_limits"),
                                     buflo_duration_policy=value.get("buflo_duration_policy"),
                                     application_body_identity_policy=value.get("application_body_identity_policy"),
-                                    qualification_delivery_compatibility=value.get("qualification_delivery_compatibility"))
+                                    qualification_delivery_compatibility=value.get("qualification_delivery_compatibility"),
+                                    tamaraw_configuration_policy=value.get("tamaraw_configuration_policy") if lane.mode == "tamaraw" else None)
     admission.durable_create(spec.campaign_dir / f"{lane.campaign_name}.yml", raw)
     value = {**value, "lanes": [{**asdict(lane), "workload_ids": list(lane.workload_ids), "campaign_sha256": lanes._sha(raw)}],
              "planned_trace_count": lane.sample_count, "declared_at": admission._now()}
@@ -1289,6 +1343,12 @@ def enrollment_roots(spec: lanes.CaptureSpec) -> list[Path]:
     The installed plan check still reopens every terminal and prepared graph.
     Mount derivation does not repeat that scientific verification on the host.
     """
+    from . import rapid_target_parallel_schedule as target_workers
+    if target_workers.is_plan(spec.plan_receipt):
+        return sorted(target_workers.roots(spec))
+    from . import rapid_target_chunks as target_chunks
+    if target_chunks.is_plan(spec.plan_receipt):
+        return sorted(target_chunks.roots(spec))
     from . import rapid_ordinary_parallel_schedule as ordinary_parallel
     if ordinary_parallel.is_plan(spec.plan_receipt):
         return sorted(ordinary_parallel.roots(spec))

@@ -484,6 +484,10 @@ def _validate_policy_application_responses(root: Path, experiment: Mapping[str, 
     from .capture_acceptance_policy import validate_buflo_source_binding, validate_tamaraw_source_binding, validate_front_source_binding, validate_terminal_primary_source_binding
     from .application_response_policy import application_body_identity_policy, COMPLETE_APPLICATION_DELIVERY_POLICY
     body_policy = application_body_identity_policy(experiment["configuration"])
+    from .tamaraw_fixed_configuration import policy as fixed_tamaraw_policy, validate_configuration
+    tamaraw_configuration_policy = fixed_tamaraw_policy(experiment["configuration"])
+    if tamaraw_configuration_policy is not None:
+        validate_configuration(root / experiment["configuration"]["tamaraw_configuration"])
     complete_delivery = body_policy == COMPLETE_APPLICATION_DELIVERY_POLICY
 
     prepared_by_id: dict[str, dict[str, Any]] = {}
@@ -518,6 +522,7 @@ def _validate_policy_application_responses(root: Path, experiment: Mapping[str, 
         validate_buflo_source_binding(prepared, run, runner_directory=run_path.parent)
         validate_tamaraw_source_binding(prepared, run)
         validate_front_source_binding(prepared, run)
-        validate_terminal_primary_source_binding(prepared, run, runner_directory=run_path.parent)
+        validate_terminal_primary_source_binding(prepared, run, runner_directory=run_path.parent,
+            tamaraw_configuration_policy=tamaraw_configuration_policy)
         if complete_delivery or application_response_policy(prepared) != LEGACY_APPLICATION_RESPONSE_POLICY:
             validate_application_responses(prepared, run, require_identity=True, body_identity_policy=body_policy)

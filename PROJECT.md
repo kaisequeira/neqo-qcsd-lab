@@ -49,7 +49,86 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Current checkpoint, 6 October 2026:** **44/16,000 formal recordings** have
+**Current checkpoint, 6 October 2026:** **84 formal recordings** have closed
+independent deep verification across their recorded conditions: forty-eight
+ordinary, four FRONT and thirty-two Tamaraw. This is not yet the final revised
+study's accepted counter. Its prospective Tamaraw setting changes the condition;
+the old thirty-two recordings remain auditable history and cannot be relabelled
+as that setting. Intake of exact matching ordinary and FRONT recordings into the
+revised fixed-condition manifest is still pending. The target remains
+**50 sites × five settings × 64 visits = 16,000**.
+
+The new ordinary batch completed **twenty accepted and twenty eligible traces,
+with zero failures**, across enrolled classes 7–11. Its full launch and automatic
+deep check passed in **957.3 seconds**; a separate independent image verification
+then passed in **210.4 seconds**. It used the verified Native client and the
+existing `b40cb6cf` collection runtime, with authenticated `eb55d01a` host planning
+code recorded separately. No client compilation or image rebuild was needed.
+Two preceding startup failures are retained: the installed-image planning guard,
+then selection of a Python environment without dependencies. The first has a
+reviewed narrow repair; the second used the launcher's supported explicit Python
+setting, with no change to the plan or traffic settings.
+
+There are **eleven enrolled classes** and **twenty-five ordinary-resource
+admissions**. Candidate 59's complete 71-resource, two-origin graph passed its
+actual GET, public verification and separately recorded owned HOST accounting
+in **13.9, 1.1 and 40.9 seconds**. Positions 60, 61 and 63 subsequently passed
+their full GET, separate verification and public accounting. Position 62 is
+deferred: its primary HTTP/3 response completed with HTTP 302, so it did not
+establish the required successful final page and full resource graph.
+The supplied-list ledger has closed 65 of 87 decisions: 25 admitted, 20 input
+ineligible and 20 operationally deferred. Position 64 was input ineligible and
+position 65 was admitted. Position 66's full GET retained one secondary HTTP
+302; its separate HOST accounting is pending, so it is not a terminal decision.
+The plan for positions 64–68
+prepared successfully in 37.3 seconds, without resource requests or trace credit.
+An ordinary admission does not establish compatibility with all five settings.
+Even a fully passing remaining supplied-list tail cannot fill all fifty places;
+supplementary complete multi-origin sites are required.
+
+The ordinary two-worker controls are published on Main and the desktop branch
+as Lab **`9e5dd93e`**, with unchanged Native **`c24da2af`**. Twenty-two focused
+HOST checks and independent source review passed. Its matching runtime has now
+closed all twelve installation/export checks: client reuse took 7.2 seconds,
+image assembly and verification 210.9 seconds, and final closure 9.9 seconds.
+The fresh ordinary practice and independent deep verification have passed.
+It requested its first 70-resource graph; all five full graphs were authenticated
+and transported, with no claim that the practice visited all five. A subsequent
+current-runtime formal batch independently verified twenty ordinary traces
+across all five classes 7–11 at logical visits 16–19. The physical two-worker
+and recovery demonstration remains outstanding. Workers have disjoint visit slots; a terminal failed worker does
+not discard its independently verified successful peer. Runtime installation
+can reuse the already verified Native binary.
+
+The fresh ordinary practice setup caught a renewal-directory conflict in 8.2
+seconds before any site requests. Its corrected isolated directory layout has
+passed focused checks and independent review; actual renewal, staging and
+finalization passed in 10.0, 9.7 and 11.1 seconds. The complete practice/readiness
+chain subsequently passed. This layout correction keeps the verified
+image, client and traffic settings; it requires no Native compilation.
+
+The prospective combined Source includes the reviewed V7 and reusable V8
+supplemental adapters, fixed-condition target, serial chunks of one to sixteen
+visits, and target-aware disjoint two-worker/recovery controls. Its explicit
+ordinary control carry preserves the old Source/image/practice labels and binds
+the fresh current authority separately. Native's reported exact primary label
+and Lab's variable manifest policy remain separate authenticated facts, supported
+by the original twenty-trace verification across all five graphs. Publication,
+matching runtime installation and actual target intake remain separate steps;
+HOST checks add no formal traces. Native and original GET producer bytes remain
+unchanged.
+
+The single-visit Tamaraw diagnostic with initial receive allowance 8,192
+completed all seventy resources at the previously failing class 3. That is
+diagnostic evidence, not a formal trace or a pass for every site. Adopting this
+setting requires its own prospectively fixed condition, matching runtime and
+short mode-specific qualification/canary. The earlier Tamaraw traces keep their
+original settings. Evidence identities and retained failures are listed in the
+[evidence index](docs/EVIDENCE-INDEX.md#current-supplied-list-study).
+
+### Earlier forty-four-recording checkpoint
+
+**Earlier checkpoint, 6 October 2026:** **44 formal recordings** had
 closed independent verification: eight ordinary, four FRONT and thirty-two Tamaraw.
 They retain their original class, visit, Source and runtime labels. The ordinary
 resource admission ledger has twenty admitted sites; admission alone does not

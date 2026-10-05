@@ -653,6 +653,15 @@ def validate_qualification_reuse(old_receipt, current_receipt) -> None:
                 {"path": str(Path(reference).absolute()), "sha256": admission._sha(admission._read(Path(reference)))},
                 actual_image=os.environ.get("QCSD_LAB_IMAGE_DIGEST"))
             return
+        from . import rapid_target_parallel_schedule as target_workers
+        if value.get("artifact_type") == target_workers.CAPSULE_TYPE:
+            if _CURRENT_BRIDGE.get() is not None or os.environ.get("QCSD_RAPID_CAPTURE_CONTROL_INSTALLATION"):
+                raise ValueError("target scheduling cannot claim a historical runtime installation")
+            from .rapid_operation_facts import current_context
+            target_workers.validate_current_implementation(old_receipt, current_receipt,
+                {"path": str(Path(reference).absolute()), "sha256": admission._sha(admission._read(Path(reference)))},
+                actual_image=os.environ.get("QCSD_LAB_IMAGE_DIGEST"), _context=current_context())
+            return
         from . import rapid_selected_parallel_schedule as selected_schedule
         from . import rapid_ordinary_parallel_schedule as ordinary_parallel
         if value.get("artifact_type") == ordinary_parallel.CAPSULE_TYPE:

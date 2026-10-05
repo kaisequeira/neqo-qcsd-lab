@@ -488,6 +488,14 @@ def _validate_canary(reference: Mapping[str, Any], *, runtime: Mapping[str, str]
     if (application_body_identity_policy(config) != body_policy
         or application_body_identity_policy(receipt) != body_policy):
         raise ValueError("canary plan, actual configuration and deep receipt changed application body policy")
+    from .tamaraw_fixed_configuration import policy as fixed_tamaraw_policy, configuration_sha256
+    fixed_tamaraw = fixed_tamaraw_policy(plan)
+    if (fixed_tamaraw_policy(config) != fixed_tamaraw or fixed_tamaraw_policy(receipt) != fixed_tamaraw
+        or fixed_tamaraw is not None and (mode != "tamaraw" or plan.get("reuse") is not None
+             or "qualification_delivery_compatibility" in plan
+             or config.get("tamaraw_configuration_sha256") != configuration_sha256()
+             or receipt.get("tamaraw_configuration_sha256") != configuration_sha256())):
+        raise ValueError("canary plan, configuration and deep receipt changed the fixed Tamaraw condition")
     if (config.get("qualification_delivery_compatibility") != plan.get("qualification_delivery_compatibility")
         or receipt.get("qualification_delivery_compatibility") != plan.get("qualification_delivery_compatibility")):
         raise ValueError("canary plan, configuration and deep receipt changed qualification delivery witness")
@@ -564,6 +572,9 @@ def _validate_canary(reference: Mapping[str, Any], *, runtime: Mapping[str, str]
             "fresh_deep_verification_performed": False, **ZERO}
     if "application_body_identity_policy" in plan:
         facts["application_body_identity_policy"] = body_policy
+    if fixed_tamaraw is not None:
+        facts.update(tamaraw_configuration_policy=fixed_tamaraw,
+                     tamaraw_configuration_sha256=configuration_sha256())
     if "qualification_delivery_compatibility" in plan:
         facts["qualification_delivery_compatibility"] = plan["qualification_delivery_compatibility"]
     return facts
@@ -581,6 +592,9 @@ def validate_canary(reference: Mapping[str, Any], *, runtime: Mapping[str, str],
     ``source`` always retains the original actual canary source and image.
     """
     try:
+        if isinstance(reference, Mapping) and reference.get("schema_version") == 6:
+            from .rapid_ordinary_canary_carry import validate
+            return validate(reference, runtime=runtime, mode=mode)
         if isinstance(reference, Mapping) and reference.get("schema_version") == 5:
             from .rapid_ordinary_group_canary import validate
             return validate(reference, runtime=runtime, mode=mode)
@@ -607,6 +621,9 @@ def readiness_mount_roots(reference: Mapping[str, Any], *, runtime: Mapping[str,
     records and source roles. They grant no writable evidence namespace and
     come only from the closed reference and its authenticated runtime inputs.
     """
+    if isinstance(reference, Mapping) and reference.get("schema_version") == 6:
+        from .rapid_ordinary_canary_carry import roots
+        return roots(reference, runtime=runtime, mode=mode)
     if isinstance(reference, Mapping) and reference.get("schema_version") == 5:
         from .rapid_ordinary_group_canary import roots
         return roots(reference, runtime=runtime, mode=mode)

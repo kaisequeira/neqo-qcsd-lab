@@ -368,7 +368,8 @@ def _check_workload_files(sites: Sequence[Site], workload_root: Path) -> None:
 def render_lane_campaign(lane: Lane, sites: Sequence[Site], *, static_capture_limits: Mapping[str, Any] | None = None,
                          buflo_duration_policy: str | None = None,
                          application_body_identity_policy: str | None = None,
-                         qualification_delivery_compatibility: Mapping[str, str] | None = None) -> bytes:
+                         qualification_delivery_compatibility: Mapping[str, str] | None = None,
+                         tamaraw_configuration_policy: str | None = None) -> bytes:
     """Render one deterministic schema-one campaign without granting authority."""
 
     if lane.role not in {"formal", "diagnostic"}:
@@ -378,7 +379,8 @@ def render_lane_campaign(lane: Lane, sites: Sequence[Site], *, static_capture_li
         return render(lane, sites, static_capture_limits=static_capture_limits,
             buflo_duration_policy=buflo_duration_policy,
             application_body_identity_policy=application_body_identity_policy,
-            qualification_delivery_compatibility=qualification_delivery_compatibility)
+            qualification_delivery_compatibility=qualification_delivery_compatibility,
+            tamaraw_configuration_policy=tamaraw_configuration_policy)
     from .rapid_undefended_capture import OrdinarySite
     ordinary_only = any(isinstance(site, OrdinarySite) for site in sites)
     if ordinary_only and (lane.mode != "undefended" or lane.qualification_set is not None
@@ -454,6 +456,14 @@ def render_lane_campaign(lane: Lane, sites: Sequence[Site], *, static_capture_li
         from .qualification_control_authority import validate
         validate(qualification_delivery_compatibility, body_policy=application_body_identity_policy)
         document["qualification_delivery_compatibility"] = dict(qualification_delivery_compatibility)
+    if tamaraw_configuration_policy is not None:
+        from .tamaraw_fixed_configuration import validate_policy, FIELD
+        from .application_response_policy import COMPLETE_APPLICATION_DELIVERY_POLICY
+        if (lane.mode != "tamaraw" or lane.study_version != 6 or lane.role != "formal"
+            or static_capture_limits is None or qualification_delivery_compatibility is not None
+            or application_body_identity_policy != COMPLETE_APPLICATION_DELIVERY_POLICY):
+            raise ValueError("fixed Tamaraw configuration requires its own complete-graph serial setting")
+        document[FIELD] = validate_policy(tamaraw_configuration_policy)
     if buflo_duration_policy is not None:
         from .buflo_duration_budget import POLICY, PARAMETER_PATH, capture_limits
         if (type(buflo_duration_policy) is not str or buflo_duration_policy != POLICY

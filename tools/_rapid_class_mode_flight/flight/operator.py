@@ -464,6 +464,12 @@ def checked_setup(args):
     host_imports(clean)
     from qcsd_lab.application_response_policy import application_body_identity_policy
     body_policy = application_body_identity_policy(setup)
+    from qcsd_lab.tamaraw_fixed_configuration import policy as fixed_tamaraw_policy
+    fixed_tamaraw = fixed_tamaraw_policy(setup)
+    if fixed_tamaraw is not None and (setup["mode"] != "tamaraw" or setup["reuse"] is not None
+            or setup.get("qualification_delivery_compatibility") is not None
+            or body_policy != "complete-current-application-delivery-v1"):
+        raise ValueError("fixed Tamaraw setup changed its current single-setting condition")
     witness = setup.get("qualification_delivery_compatibility")
     if "qualification_delivery_compatibility" in setup and witness is None:
         raise ValueError("explicit setup qualification delivery witness cannot be null")
@@ -517,6 +523,13 @@ def stage(args):
     from qcsd_lab.application_response_policy import validate_application_body_identity_policy
     requested_body_policy = getattr(args, "application_body_identity_policy", None)
     body_policy = validate_application_body_identity_policy(requested_body_policy)
+    from qcsd_lab.tamaraw_fixed_configuration import validate_policy as validate_fixed_tamaraw_policy
+    fixed_tamaraw = validate_fixed_tamaraw_policy(getattr(args, "tamaraw_configuration_policy", None))
+    if fixed_tamaraw is not None and (args.mode != "tamaraw"
+            or body_policy != "complete-current-application-delivery-v1"
+            or getattr(args, "qualification_delivery_compatibility", None) is not None
+            or getattr(args, "reuse_qualification", None) is not None):
+        raise ValueError("fixed Tamaraw flight requires its own fresh current response qualification")
     witness_path = getattr(args, "qualification_delivery_compatibility", None)
     witness = None if witness_path is None else ref(witness_path)
     if witness is not None:
@@ -614,6 +627,8 @@ def stage(args):
         "amendment_commands": ref(output / "amendment-commands.json")}
     if requested_body_policy is not None:
         setup["application_body_identity_policy"] = body_policy
+    if fixed_tamaraw is not None:
+        setup["tamaraw_configuration_policy"] = fixed_tamaraw
     if witness is not None:
         setup["qualification_delivery_compatibility"] = witness
     if renewal is not None:
@@ -693,6 +708,12 @@ def finalize(args):
     body_policy = application_body_identity_policy(setup)
     if "application_body_identity_policy" in setup:
         campaign["application_body_identity_policy"] = body_policy
+    from qcsd_lab.tamaraw_fixed_configuration import policy as fixed_tamaraw_policy
+    fixed_tamaraw = fixed_tamaraw_policy(setup)
+    if fixed_tamaraw is not None:
+        if mode != "tamaraw" or setup["reuse"] is not None or "qualification_delivery_compatibility" in setup:
+            raise ValueError("fixed Tamaraw setup changed its prospective current condition")
+        campaign["tamaraw_configuration_policy"] = fixed_tamaraw
     if "qualification_delivery_compatibility" in setup:
         campaign["qualification_delivery_compatibility"] = setup["qualification_delivery_compatibility"]
     import yaml
@@ -732,6 +753,8 @@ def finalize(args):
         "study_root": setup["study_root"], "enrollment": setup["enrollment"]}
     if "application_body_identity_policy" in setup:
         plan["application_body_identity_policy"] = body_policy
+    if fixed_tamaraw is not None:
+        plan["tamaraw_configuration_policy"] = fixed_tamaraw
     if "qualification_delivery_compatibility" in setup:
         plan["qualification_delivery_compatibility"] = setup["qualification_delivery_compatibility"]
     if authority is not None:
@@ -755,6 +778,8 @@ def finalize(args):
         commands["plan"] += ["--static-capture-amendment", setup["amendment_path"]]
     if "application_body_identity_policy" in setup:
         commands["plan"] += ["--application-body-identity-policy", body_policy]
+    if fixed_tamaraw is not None:
+        commands["plan"] += ["--tamaraw-configuration-policy", fixed_tamaraw]
     if "qualification_delivery_compatibility" in setup:
         commands["plan"] += ["--qualification-delivery-compatibility", setup["qualification_delivery_compatibility"]["path"]]
     if "ordinary_renewal" in setup:
@@ -867,6 +892,15 @@ def checked_plan(args, *, image=False):
     mode = campaign["mode"]
     from qcsd_lab.application_response_policy import application_body_identity_policy
     body_policy = application_body_identity_policy(plan)
+    from qcsd_lab.tamaraw_fixed_configuration import policy as fixed_tamaraw_policy
+    fixed_tamaraw = fixed_tamaraw_policy(plan)
+    if fixed_tamaraw is not None:
+        import yaml
+        configured = yaml.safe_load(read(execution / campaign["campaign_relative"]))
+        if (mode != "tamaraw" or plan["reuse"] is not None or "qualification_delivery_compatibility" in plan
+            or fixed_tamaraw_policy(configured) != fixed_tamaraw
+            or body_policy != "complete-current-application-delivery-v1"):
+            raise ValueError("canary plan changed its fixed Tamaraw condition")
     witness = plan.get("qualification_delivery_compatibility")
     if "qualification_delivery_compatibility" in plan and witness is None:
         raise ValueError("explicit canary qualification delivery witness cannot be null")
@@ -1105,7 +1139,12 @@ def image_action(args):
     if config.get("qualification_delivery_compatibility") != plan.get("qualification_delivery_compatibility"):
         raise ValueError("actual canary changed its declared qualification delivery witness")
     response = validate_application_responses(manifest, run, body_identity_policy=body_policy)
-    validate_terminal_primary_source_binding(manifest, run, runner_directory=result_root / sample["path"] / "neqo")
+    from qcsd_lab.tamaraw_fixed_configuration import policy as fixed_tamaraw_policy, configuration_sha256
+    fixed_tamaraw = fixed_tamaraw_policy(plan)
+    if fixed_tamaraw_policy(config) != fixed_tamaraw:
+        raise ValueError("actual canary changed its fixed Tamaraw condition")
+    validate_terminal_primary_source_binding(manifest, run, runner_directory=result_root / sample["path"] / "neqo",
+        tamaraw_configuration_policy=fixed_tamaraw)
     if sorted(str(row["origin"]).rstrip("/") for row in run["endpoints"]) != plan["full_graph"]["origins"]:
         raise ValueError("Native omitted a supplied origin")
     identity = application_response_identity_signature(manifest, response["response_signature"], body_identity_policy=body_policy)
@@ -1121,6 +1160,9 @@ def image_action(args):
     if "application_body_identity_policy" in plan:
         deep_receipt["application_body_identity_policy"] = body_policy
         deep_receipt["content_equality_across_visits_claimed"] = False
+    if fixed_tamaraw is not None:
+        deep_receipt.update(tamaraw_configuration_policy=fixed_tamaraw,
+                            tamaraw_configuration_sha256=configuration_sha256())
     if "qualification_delivery_compatibility" in plan:
         deep_receipt["qualification_delivery_compatibility"] = plan["qualification_delivery_compatibility"]
     create(output / (mode + "-deep-verification.json"), encode(deep_receipt))
@@ -1246,6 +1288,8 @@ def main():
                       help="prospectively verify complete current delivery without claiming frozen body equality")
     item.add_argument("--qualification-delivery-compatibility", type=Path,
                       help="authenticated original response-producer/current complete-delivery consumer witness")
+    item.add_argument("--tamaraw-configuration-policy", choices=("rapid-tamaraw-initial8192-owned-bootstrap-v1",),
+                      help="prospective fixed 8192-byte initial credit on all controlled TAM request streams")
     for name in ("amend", "finalize"):
         item = commands.add_parser(name)
         item.add_argument("--setup", type=Path, required=True)

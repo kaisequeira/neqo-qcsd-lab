@@ -146,6 +146,7 @@ def run(args, *, _context=None):
                                     front_capture_amendment=args.front_capture_amendment,
                                     static_capture_amendment=getattr(args, "static_capture_amendment", None),
                                     application_body_identity_policy=getattr(args, "application_body_identity_policy", None),
+                                    tamaraw_configuration_policy=getattr(args, "tamaraw_configuration_policy", None),
                                     qualification_delivery_compatibility=(rolling._ref(args.qualification_delivery_compatibility)
                                         if getattr(args, "qualification_delivery_compatibility", None) is not None else None),
                                     _context=_context)
@@ -253,6 +254,8 @@ def _parser():
             from qcsd_lab.application_response_policy import EXACT_APPLICATION_BODY_IDENTITY_POLICY, COMPLETE_APPLICATION_DELIVERY_POLICY
             item.add_argument("--application-body-identity-policy", choices=(EXACT_APPLICATION_BODY_IDENTITY_POLICY, COMPLETE_APPLICATION_DELIVERY_POLICY))
             item.add_argument("--qualification-delivery-compatibility", type=Path)
+            from qcsd_lab.tamaraw_fixed_configuration import POLICY as TAMARAW_CONFIGURATION_POLICY
+            item.add_argument("--tamaraw-configuration-policy", choices=(TAMARAW_CONFIGURATION_POLICY,))
             item.add_argument("--output", type=Path, required=True)
             item.add_argument("--spec-output", type=Path, required=True)
         elif name == "front-amendment":

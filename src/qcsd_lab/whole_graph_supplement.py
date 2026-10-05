@@ -94,6 +94,19 @@ def _plan_rows(plans: list[dict[str, Any]], prefix: static.Context) -> tuple[dic
             # This is a prospective input attempt at an existing reserved slot,
             # not another catalogue selection or a replacement of old evidence.
             continue
+        if plan["artifact_type"] == inputs.CONTINUATION_PLAN_TYPE:
+            binding = plan["reservation_continuation"]
+            original = inputs.load_plan(inputs.reopen(binding["refs"]["original_plan"]))
+            if (original not in plans[:plans.index(plan)] or original["schema_version"] != 4
+                    or plan["previous_plans"] != [binding["refs"]["original_plan"]]
+                    or plan["reserved_candidates"] != [row["catalogue_candidate"] for row in rows]
+                    or binding["original_candidate_indices"] != [2, 3, 4, 5]
+                    or binding["original_failed_candidate"] != original["candidates"][0]
+                    or plan["candidates"] != original["candidates"][1:]):
+                raise ValueError("supplement continuation changes its original pending reservations or queue slots")
+            # A new control attempt occupies its old reservation. No original
+            # failure becomes a fabricated terminal and no candidate is added.
+            continue
         # Previous declaration reservations are outcomes-independent. Every
         # reserved identity must appear in this exact preceding queue tail.
         if plan["reserved_candidates"] != [row["catalogue_candidate"] for row in rows]:

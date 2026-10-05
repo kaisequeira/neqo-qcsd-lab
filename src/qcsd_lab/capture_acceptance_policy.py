@@ -131,7 +131,10 @@ def validate_terminal_primary_capture_marker(marker: Any, *, cell_size: int) -> 
     return marker
 
 
-def terminal_primary_capture_cell_size(run: Mapping[str, Any]) -> int:
+def terminal_primary_capture_cell_size(run: Mapping[str, Any], *, tamaraw_configuration_policy: str | None = None) -> int:
+    from .tamaraw_fixed_configuration import validate_policy, validate_run
+    fixed_tamaraw = validate_policy(tamaraw_configuration_policy)
+    validate_run(run, selected_policy=fixed_tamaraw)
     resolved = run.get("resolved_configuration")
     defense = resolved.get("defense") if isinstance(resolved, Mapping) else None
     kind = defense.get("kind") if isinstance(defense, Mapping) else None
@@ -149,7 +152,7 @@ def terminal_primary_capture_cell_size(run: Mapping[str, Any]) -> int:
         or type(resolved.get("max_udp_payload_size")) is not int or cell > resolved["max_udp_payload_size"]
         or type(resolved.get("control_interval_us")) is not int or resolved["control_interval_us"] != 5000
         or resolved.get("drop_unsatisfied_events") is not False
-        or type(resolved.get("initial_max_stream_data")) is not int or resolved["initial_max_stream_data"] != 16
+        or type(resolved.get("initial_max_stream_data")) is not int or resolved["initial_max_stream_data"] != (8192 if fixed_tamaraw is not None else 16)
         or type(resolved.get("max_stream_data_excess")) is not int or resolved["max_stream_data_excess"] != 1000
         or run.get("primary_document_identity_policy") != "variable-primary-document-body-v1"
         or run.get("application_response_policy") != "completed-terminal-http-errors-v1"):
@@ -158,7 +161,10 @@ def terminal_primary_capture_cell_size(run: Mapping[str, Any]) -> int:
 
 
 def validate_terminal_primary_source_binding(prepared: Mapping[str, Any], run: Mapping[str, Any], *,
-                                            runner_directory: Path | None = None) -> None:
+                                            runner_directory: Path | None = None,
+                                            tamaraw_configuration_policy: str | None = None) -> None:
+    from .tamaraw_fixed_configuration import validate_run
+    validate_run(run, selected_policy=tamaraw_configuration_policy)
     preparation = prepared.get("preparation")
     declared = validate_terminal_primary_preparation_policy(preparation) if isinstance(preparation, Mapping) else None
     resolved = run.get("resolved_configuration")
@@ -167,9 +173,10 @@ def validate_terminal_primary_source_binding(prepared: Mapping[str, Any], run: M
     if TERMINAL_PRIMARY_FIELD in run:
         if declared is None or not paced:
             raise ValueError("native terminal primary partial cell policy lacks matching prepared source")
-        validate_terminal_primary_capture_marker(run[TERMINAL_PRIMARY_FIELD], cell_size=terminal_primary_capture_cell_size(run))
+        validate_terminal_primary_capture_marker(run[TERMINAL_PRIMARY_FIELD], cell_size=terminal_primary_capture_cell_size(run, tamaraw_configuration_policy=tamaraw_configuration_policy))
         if runner_directory is not None:
-            validate_terminal_primary_partial_evidence(run, runner_directory=runner_directory, prepared=prepared)
+            validate_terminal_primary_partial_evidence(run, runner_directory=runner_directory, prepared=prepared,
+                tamaraw_configuration_policy=tamaraw_configuration_policy)
     elif declared is not None and paced:
         raise ValueError("prepared terminal primary partial cell policy lacks its native marker")
     elif TERMINAL_PRIMARY_PROOF_FIELD in run:
@@ -179,6 +186,7 @@ def validate_terminal_primary_source_binding(prepared: Mapping[str, Any], run: M
 def validate_terminal_primary_partial_evidence(
     run: Mapping[str, Any], *, runner_directory: Path,
     prepared: Mapping[str, Any] | None = None,
+    tamaraw_configuration_policy: str | None = None,
     schedule_rows: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Reopen the one FIN split without changing its raw missed-cell classification."""
@@ -188,7 +196,7 @@ def validate_terminal_primary_partial_evidence(
         if TERMINAL_PRIMARY_PROOF_FIELD in run:
             raise ValueError("terminal primary partial proof lacks its source-bound capture marker")
         return {}
-    cell = terminal_primary_capture_cell_size(run)
+    cell = terminal_primary_capture_cell_size(run, tamaraw_configuration_policy=tamaraw_configuration_policy)
     marker = validate_terminal_primary_capture_marker(run[TERMINAL_PRIMARY_FIELD], cell_size=cell)
     if prepared is not None:
         preparation = prepared.get("preparation")

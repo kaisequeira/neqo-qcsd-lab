@@ -317,6 +317,9 @@ def publish_policy(base_spec: lanes.CaptureSpec, prior: Mapping[str, str], outpu
                    maximum_visits: int = MAX_VISITS) -> Path:
     base_spec = _base_spec(base_spec.serializable())
     _, base = rolling.verify_capture_plan(base_spec)
+    from .tamaraw_fixed_configuration import policy as fixed_tamaraw_policy
+    if fixed_tamaraw_policy(base) is not None:
+        raise ValueError("fixed Tamaraw chunks require a distinct condition target map; historical TAM slots cannot be carried")
     enrollment_path = base_spec.cohort
     batch, classes, policy = rolling._verify_enrollment(enrollment_path)
     value, accepted, prior_files = prior_progress(prior, classes)
@@ -354,6 +357,9 @@ def validate_policy(reference: Mapping[str, str]) -> tuple[dict, dict, list[dict
         "runtime", "published_at", "scientific_credit", "formal_accepted_trace_count", "base_spec", "base_four_visit_plan"}, "slot chunk policy")
     base_spec = _base_spec(value["base_spec"])
     _, base = rolling.verify_capture_plan(base_spec)
+    from .tamaraw_fixed_configuration import policy as fixed_tamaraw_policy
+    if fixed_tamaraw_policy(base) is not None:
+        raise ValueError("fixed Tamaraw chunks require a distinct condition target map; historical TAM slots cannot be carried")
     enrollment_path = rolling._open_ref(value["enrollment"])
     batch, classes, policy = rolling._verify_enrollment(enrollment_path)
     prior, accepted, _ = prior_progress(value["prior_progress"], classes)
@@ -413,6 +419,8 @@ def planned_lanes(sites: Sequence[legacy.Site], classes: Sequence[dict], policy:
 
 def render(lane: ChunkLane, sites: Sequence[legacy.Site], **options) -> bytes:
     checked_lane(asdict(lane))
+    if lane.mode != "tamaraw" and "tamaraw_configuration_policy" in options:
+        options = {**options, "tamaraw_configuration_policy": None}
     selected = tuple(site for workload in lane.workload_ids for site in sites if site.workload_id == workload)
     if len(selected) != len(lane.workload_ids):
         raise ValueError("chunk campaign changed its complete selected workload graph")
@@ -434,6 +442,7 @@ def _render_options(value: Mapping[str, Any]) -> dict[str, Any]:
     return {"static_capture_limits": value.get("capture_limits"),
             "buflo_duration_policy": value.get("buflo_duration_policy"),
             "application_body_identity_policy": value.get("application_body_identity_policy"),
+            "tamaraw_configuration_policy": value.get("tamaraw_configuration_policy"),
             "qualification_delivery_compatibility": value.get("qualification_delivery_compatibility")}
 
 

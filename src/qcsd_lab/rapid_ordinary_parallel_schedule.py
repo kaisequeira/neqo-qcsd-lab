@@ -116,7 +116,9 @@ def input_dependencies(base, sites, *, _context=None):
         value = lanes._load(_read(path))
         for row in value["rows"]:
             for name in ("current_input", "current_manifest"):
-                files.add(rolling._open_ref(row[name]))
+                if context is not None:
+                    context.watch_file(Path(row[name]["path"]))
+                files.add(facade.reopen(row[name]))
     for site in sites:
         path = base.workload_root / (site.workload_id + ".json")
         files.add(path)
@@ -159,7 +161,9 @@ def _derive(base, runtime, canonical_ref):
     lane = lanes._lane({"plan_payload": value}, value["lanes"][0]["campaign_name"])
     canary = rolling.require_mode_readiness(base, lane, _context=context)
     from . import rapid_ordinary_group_canary as group_canary
-    if canary.get("schema_version") != 5 or canary.get("artifact_type") != group_canary.TYPE:
+    from . import rapid_ordinary_canary_carry as carry
+    if ((canary.get("schema_version"), canary.get("artifact_type")) not in
+            ((5, group_canary.TYPE), (6, carry.TYPE))):
         raise ValueError("ordinary scheduling needs its own successful current full-group canary")
     from .rapid_rolling_readiness import validate_canary
     facts = (validate_canary(canary, runtime={key: runtime[key] for key in lanes.RUNTIME_KEYS}, mode="undefended")

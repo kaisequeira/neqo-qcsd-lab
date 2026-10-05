@@ -11,7 +11,125 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ### Current supplied-list study
 
-The **6 October 2026** formal anchor is **44/16,000**: eight ordinary, four
+The latest **6 October 2026** independently verified batch adds **twenty
+ordinary traces**, bringing the total across recorded conditions to **84**:
+forty-eight ordinary, four FRONT and thirty-two historical Tamaraw. This is
+not a final revised-target manifest counter. The proposed Tamaraw receive
+setting is a distinct condition and cannot inherit the old thirty-two traces.
+The target remains fifty sites, five fixed conditions and sixty-four visits
+per site and condition: 16,000 independently verified formal traces.
+
+The latest batch's Root closure is the host-local sibling path
+`../diagnostic-rehearsals/ordinary-b03-current-runtime-serial-root-actual-20261006-001/independently-verified-batch-closed.json`,
+SHA `1aca09fad12067ae257140cd93a7172188d44a6d059684427d41dadd406451b3`.
+It binds twenty accepted and eligible ordinary traces across classes 7–11 at
+logical visits 16–19, the exact original completed lane and independent deep
+proof. Both module and installed Source remain `9e5dd93e`, with Native `c24da2af`
+and collection image `81e612f2`. Original launch and separate verification closed
+0 in 923.478 and 222.875 seconds. This evidence remains under its recorded
+condition until the distinct fixed-target audit/progress intake closes.
+
+The preceding twenty-trace batch's Root closure is
+`../diagnostic-rehearsals/ordinary-b03-host-python-recovery-root-actual-20261006-001/independently-verified-batch-closed.json`,
+SHA `7b6c61a20f23684854370b65e877da4f4204ce58685a4a403c280186b9bfc48b`.
+It binds the twenty eligible collector results, original plan, completed lane
+and actual independent image proof. The latter is
+`../diagnostic-rehearsals/ordinary-b03-formal-root-actual-20261006-004/lane-checks/7ab8ffb464aad90043e180a02833a410e184e2f0a84718ad4cf58669b7b3cafb/closure.json`,
+SHA `7b73eb006438c30e288051d9ee86b6b857d1a4d5962fb40ffd09752310813241`.
+Its module/control source is `eb55d01a`; the actual collection runtime remains
+`b40cb6cf`, image `sha256:111cfc1a38c709e0912f61aeb517df1992139894376390c78cae0ad43803dd1a`,
+with unchanged Native `c24da2af`. The launch closed 0 in 957.282 seconds and
+separate verification closed 0 in 210.386 seconds. Revised-target intake is
+still pending; these separately recorded identities are not an assertion that
+the newer control code was installed in the old image.
+
+Candidate 59's new ordinary admission is recorded in
+`../diagnostic-rehearsals/supplied-static-budget64-q059-root-actual-20261006-001/get-admission-actual-closed.json`,
+SHA `d7bc3c98e69f6f9d63c8febdc59ad2af61f46f7a10b7de428e84d606e312ff41`.
+The original 71-resource/two-origin GET and public verification remain unchanged;
+owned HOST accounting has its own source label. This adds one ordinary admission
+and no formal trace, bringing ordinary admissions to twenty-one at that point.
+Positions 60, 61 and 63 then passed; position 65 subsequently passed and ordinary
+admissions are now twenty-five
+and enrollment is still eleven classes. Actual operation records are in
+`../diagnostic-rehearsals/supplied-static-budget64-q060-root-actual-20261006-001/operations/`,
+with corresponding `q061`, `q062` and `q063` sibling roots. Each retains its
+original GET, separate verification and owned HOST accounting. Candidate 62
+is operationally deferred: the primary HTTP/3 response finished with HTTP 302,
+but its strict successful-page contract remained partial and the full graph
+was not requested. Its original failure is retained; it adds no site or trace.
+The ordered ledger now closes 65 of 87 supplied decisions: 25 admitted,
+20 input ineligible and 20 operationally deferred. Position 64 closed input
+ineligible. Position 66 retained a secondary HTTP 302 in its full GET and its
+separate HOST accounting is pending; no terminal decision is counted for 66.
+
+The new HOST plan for positions 64–68 is
+`../diagnostic-rehearsals/supplied-static-budget64-accounting-b40-064-068-plan-20261006-004/plan.json`,
+SHA `785a3f67c1fc67078ad382ff89bc537e5d8be0d89d5fff1f41ac3808c106e637`.
+Its actual preparation completion is in the corresponding
+`supplied-static-budget64-accounting-b40-064-068-root-actual-20261006-004/operations/`
+root and closed 0 in 37.283 seconds. It is a distinct owned HOST ordered-plan
+type, not a relabelled original GET plan. It makes no actual GET or admission claim.
+
+Ordinary parallel Source `9e5dd93e` was published to Main and the desktop branch
+and integrated into the shared checkout without changing the preserved user
+campaign. The Root source publication is
+`../ordinary-parallel-source-publication-root-20261006-001/publication-actual-closed.json`,
+SHA `9a354c7c5fb245bdf7a9a252f0f9eb40fe22a15943320b7cadb6886f34679c05`.
+It binds the twenty-two-case Source closure
+`../diagnostic-rehearsals/ordinary-parallel-host-checks-20261006-004/source-closure-final.json`,
+SHA `dd8815ddc44af27bfb72cefebb3eca937e11edd147d584a58c9e2b067b023873`,
+and independent review
+`../diagnostic-rehearsals/ordinary-parallel-readonly-review-20261006-001/review.json`,
+SHA `aab092ac6bfab0b51d1618370f1445a44d6ac3fd3ea42b6511426d292b2df22e`.
+This source-publication receipt adds no runtime installation or physical
+parallel/recovery claim. The subsequent actual matching runtime did close all
+twelve installation/export operations without Native compilation. Its Root
+closure is
+`../diagnostic-rehearsals/ordinary-parallel-v26-runtime-root-actual-20261006-001/root-runtime-closed.json`,
+SHA `c833b11a76cacf1e41b58731f2f1d5f43ea1e025a5239e1307c8d60d7d38dada`.
+The actual canonical is
+`../diagnostic-rehearsals/rapid-v26-ordinary-parallel-nativec24-runtime-20261006-001/canonical-runtime.json`,
+SHA `ca2084e6fa183d8edc46fc720d845376352294fce4b8838decf86e8783f0d3be`,
+with collection image
+`sha256:81e612f2db2dd3c89416c67cb6659405a5d822b0b2e775b3920d732a759c031b`.
+Client reuse, image assembly/checks and final closure passed in 7.162, 210.902
+and 9.949 seconds respectively. This is installed-byte evidence; current
+canary subsequently passed as recorded below. Physical parallel capture and
+worker recovery remain unproved.
+
+The first fresh ordinary canary stage stopped in 8.185 seconds before requests,
+with its failure preserved under
+`../diagnostic-rehearsals/ordinary-parallel-b03-canary-root-actual-20261006-001/`.
+The renewal's parent was an ancestor of the proposed flight output, which the
+existing stage correctly refused. The isolated-directory successor is bound by
+`../diagnostic-rehearsals/ordinary-parallel-root-canary-handoff-authoring-20261006-002/source-closure-final.json`,
+SHA `aa24333708e3b0671574102811dfe565985ed691c2de16461e44b54d72840819`,
+and independent review
+`../diagnostic-rehearsals/ordinary-parallel-canary-handoff-readonly-review-20261006-002/review.json`,
+SHA `82bae5e039bce82ec04f9b92f70fd955508ac43994852d6db304b2805a864848`.
+Root's actual retry is
+`../diagnostic-rehearsals/ordinary-parallel-b03-canary-root-actual-20261006-002/`;
+renewal, staging and finalization closed 0 in 10.026, 9.723 and 11.123 seconds.
+The original complete canary/readiness chain subsequently closed under
+`../diagnostic-rehearsals/ordinary-parallel-b03-canary-root-actual-20261006-002/canary-and-plan-actual-closed.json`,
+SHA `4faf108fe55883b44651197f61389b749753b86ba82d8018a536752764d40a4b`.
+The schema5 readiness is in
+`../diagnostic-rehearsals/rapid-curated-tranco50-v7-b03-ordinary-parallel-nativec24-002/readiness.json`,
+SHA `5dc08696f69166888803ed335037d811dbd893047089996bac36335ed32408f1`.
+Its one zero-credit practice sample requested only the first 70-resource graph;
+all five complete graphs were authenticated and transported. The latest formal
+twenty-trace batch above independently verified actual traces across all five.
+The prospective schema6 ordinary control carry retains these original measured
+Source/image and Native exact primary labels while separately binding current
+authority and the authenticated Lab variable manifest policy. The supporting
+twenty-trace metadata is not a new deep proof or scientific counter join.
+A physical parallel pass still requires its own final evidence. No Source or runtime
+rebuild was required for the directory correction.
+
+#### Earlier forty-four-recording anchor
+
+The preceding **6 October 2026** formal anchor is **44**: eight ordinary, four
 FRONT and thirty-two Tamaraw recordings. Its immutable record is
 `../diagnostic-rehearsals/partial-progress-b0002-root-actual-20261005-002/scientific-progress-joined.json`,
 SHA `48349e04604b4a666e4a9b95deb38d08fd4d94c89b4e58d87ae979902449d35e`.
@@ -38,7 +156,7 @@ The independent membership summary is in
 `diagnostic-rehearsals/selected-additive-classes007-011-enrollment-readonly-review-20261005-001/enrollment-summary.json`,
 SHA `0f60d4dbaa5c8f98c18cb8c8cd429f2b0a678548105004f0c72a4d98bcb34e66`;
 its review SHA is `0b1b1ecedca6ca697af125b38506f2cd2f8d648f42977237f88015ec13d3f1d2`.
-The ordinary resource admission count is twenty. Classes 7–11 keep every
+At that checkpoint, the ordinary resource admission count was twenty. Classes 7–11 keep every
 70/13/62/143/77 resource row from positions 26/27/31/35/36 and their complete
 raw GET evidence. Remaining reservations are unassessed by the new ledger.
 

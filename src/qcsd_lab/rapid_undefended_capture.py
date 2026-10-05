@@ -357,6 +357,15 @@ def require_plan(value: Mapping[str, Any]) -> None:
 
 
 def require_canary(facts, sites) -> None:
+    if facts.get("ordinary_canary_carry") is not None:
+        from .rapid_ordinary_canary_carry import TYPE
+        if (facts["ordinary_canary_carry"] != TYPE or not sites or facts.get("mode") != "undefended"
+                or facts.get("authority_workload_sha256") != sites[0].workload_sha256
+                or facts.get("ordinary_carry_sites") != [{"candidate_id": site.candidate_id,
+                    "workload_id": site.workload_id, "workload_sha256": site.workload_sha256} for site in sites]
+                or facts.get("recorded_image_deep_reopened") is not True):
+            raise ValueError("ordinary carry differs from its authenticated current full-site authority")
+        return
     if (not sites or facts.get("mode") != "undefended"
             or facts.get("workload_sha256") != sites[0].workload_sha256
             or facts.get("recorded_image_deep_reopened") is not True):

@@ -158,6 +158,9 @@ _CONFIGURATION_KEYS = {
     "limits",
 }
 _OPTIONAL_CONFIGURATION_KEYS = {
+    "tamaraw_configuration_policy",
+    "tamaraw_configuration",
+    "tamaraw_configuration_sha256",
     "application_body_identity_policy",
     "qualification_delivery_compatibility",
     "chaff_qualification_set",
@@ -1104,6 +1107,19 @@ def _validate_configuration(value: object) -> None:
         raise ValueError("configuration workloads are invalid")
     if not isinstance(value["defenses"], list) or not value["defenses"]:
         raise ValueError("configuration defenses are invalid")
+    fixed_tamaraw_fields = {"tamaraw_configuration_policy", "tamaraw_configuration", "tamaraw_configuration_sha256"}
+    if set(value) & fixed_tamaraw_fields:
+        from .tamaraw_fixed_configuration import policy as fixed_tamaraw_policy, INPUT, configuration_sha256
+        from .application_response_policy import application_body_identity_policy, COMPLETE_APPLICATION_DELIVERY_POLICY
+        if (not fixed_tamaraw_fields <= set(value) or fixed_tamaraw_policy(value) is None
+            or value["tamaraw_configuration"] != "inputs/" + INPUT
+            or value["tamaraw_configuration_sha256"] != configuration_sha256()
+            or value["profile"] != "research-1200"
+            or len(value["defenses"]) != 1 or value["defenses"][0].get("kind") != "tamaraw"
+            or value["defenses"][0].get("baseline") is not False
+            or application_body_identity_policy(value) != COMPLETE_APPLICATION_DELIVERY_POLICY
+            or "qualification_delivery_compatibility" in value):
+            raise ValueError("configuration fixed Tamaraw condition is not fully bound")
     if not isinstance(value["limits"], Mapping):
         raise ValueError("configuration limits are invalid")
     if "chaff_qualification_set" in value and (

@@ -1,0 +1,2402 @@
+from __future__ import annotations
+
+import ipaddress
+import time
+from collections.abc import Hashable, Mapping
+from copy import deepcopy
+from dataclasses import dataclass, field
+from typing import Any, Callable, Sequence
+from urllib.parse import urlsplit
+
+from .acquisition_errors import (
+    PassiveRenderPolicyError,
+    RecoverableAcquisitionError,
+    TerminalAcquisitionPolicyError,
+)
+from .browser_egress import (
+    NonReplayableEgressGuard,
+    install_context_egress_guards,
+    launch_production_browser,
+)
+from .cdp_targets import (
+    CDP_TARGET_INSTRUMENTATION_POLICY,
+    BrowserSharedWorkerGuard,
+    CdpTargetIntegrityError,
+    CdpTargetSource,
+    RecursiveCdpTargetRouter,
+    validate_normal_shutdown_disposal_summary,
+)
+from ._external_discovery_v6_evidence import (
+    DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION,
+    PASSIVE_RENDER_CONTRACT,
+    PASSIVE_RENDER_CONTRACT_SHA256,
+    REQUEST_STAGE_OBSERVATION_POLICY,
+    RENDER_OBSERVATION_SCHEMA_VERSION,
+    evidence_sha256,
+    passive_render_contract,
+    validate_render_observation,
+    verify_discovery_event_audit,
+)
+from .manifest import https_origin, safe_discovery_headers
+from .playwright_driver import playwright_driver_session, validate_default_playwright_driver_once
+
+# Historical manifests expose this scalar.  New evidence binds the complete
+# passive-render contract; the scalar remains its minimum post-load duration.
+SETTLE_MS = int(PASSIVE_RENDER_CONTRACT["minimum_after_load_ms"])
+_POST_CUTOFF_EXTRA_INFO_LIMIT = 4_096
+
+
+# One integrity taxonomy covers both target instrumentation and the request
+# ledger.  Callers must never retry either class of incomplete observation into
+# an ordinary class rejection.
+DiscoveryIntegrityError = CdpTargetIntegrityError
+
+
+@dataclass
+class DiscoveredRequest:
+    url: str
+    resource_type: str
+    headers: dict[str, str]
+    initiator_urls: set[str] = field(default_factory=set)
+    # These fields are discovery-only.  The frozen runtime identity remains the
+    # existing resource ID plus its dependency IDs, so no Rust manifest change
+    # is needed to retain repeated occurrences or redirect predecessors.
+    dependency_indices: set[int] = field(default_factory=set)
+    redirect_from_index: int | None = None
+    request_instance_id: tuple[tuple[str, ...], str, int, str, int] | None = None
+    dependency_scope: str = "legacy"
+
+
+@dataclass
+class _ExtraInfoOccurrence:
+    """One CDP request occurrence awaiting an optional wire-header event."""
+
+    request: DiscoveredRequest | None
+    expects_extra_info: bool | None = None
+    extra_info_applied: bool = False
+
+
+@dataclass
+class _ExtraInfoChain:
+    """FIFO association state for one potentially redirect-reused request ID."""
+
+    occurrences: list[_ExtraInfoOccurrence] = field(default_factory=list)
+    pending_headers: list[dict[str, str]] = field(default_factory=list)
+    next_occurrence: int = 0
+    terminal_failed: bool | None = None
+
+
+@dataclass(frozen=True)
+class _ObservedGet:
+    method: str
+    url: str
+
+
+@dataclass
+class _NetworkObservation:
+    source: CdpTargetSource
+    network_id: str
+    request: _ObservedGet
+    resource_type: str = "Other"
+    initiator_type: str = ""
+    initiator_request_id: str | None = None
+    redirected: bool = False
+    response_observed: bool = False
+    matched: bool = False
+    terminal: bool = False
+    terminal_outcome: str | None = None
+    terminal_failure: dict[str, Any] | None = None
+    sequence: int = 0
+    terminal_sequence: int | None = None
+    occurrence_id: str = ""
+    audit_event: dict[str, Any] | None = None
+    network_request_headers: list[list[str]] | None = None
+    fetch_matches: int = 0
+    blocked_preflight_occurrence_id: str | None = None
+
+
+@dataclass
+class _FetchObservation:
+    source: CdpTargetSource
+    fetch_id: str
+    network_id: str
+    request: _ObservedGet
+    redirected_request_id: str | None
+    frame_id: str | None
+    policy_decision: str | None = None
+    policy_reason: str | None = None
+    matched: bool = False
+    matched_occurrence_id: str | None = None
+    sequence: int = 0
+    redirect_consumed: bool = False
+    audit_event: dict[str, Any] | None = None
+
+
+class _RequestObservationLedger:
+    """Reconcile every eligible Network occurrence with request-stage Fetch.
+
+    Fetch and Network use different interception IDs, but Fetch supplies the
+    Network request ID in ``networkId``.  Retaining positional ledgers per
+    source/request chain proves that a replay occurrence was both observed and
+    subjected to the request-stage policy, including redirect-ID reuse.
+    """
+
+    def __init__(self, *, eligible: Callable[[str, str], bool] | None = None) -> None:
+        self._network: dict[str, list[_NetworkObservation]] = {}
+        self._intercepted: dict[str, list[_FetchObservation]] = {}
+        self._fetches: list[_FetchObservation] = []
+        self._fetch_identities: set[tuple[tuple[str, ...], str, int, str]] = set()
+        self._sequence = 0
+        self._eligible = eligible or (
+            lambda method, url: method == "GET" and origin(url) is not None
+        )
+
+    def add_network(
+        self,
+        source: CdpTargetSource,
+        *,
+        request_id: str,
+        method: str,
+        url: str,
+        resource_type: str = "Other",
+        initiator_type: str = "",
+        initiator_request_id: str | None = None,
+        redirected: bool = False,
+        occurrence_id: str | None = None,
+        audit_event: dict[str, Any] | None = None,
+        network_request_headers: list[list[str]] | None = None,
+    ) -> None:
+        if not self._eligible(method, url):
+            return
+        if any(
+            item.source == source and item.terminal for item in self._network.get(request_id, ())
+        ):
+            raise DiscoveryIntegrityError("Chromium reused a terminated Network request identity")
+        self._sequence += 1
+        identity = occurrence_id or (
+            f"unsealed-{len(self._network.get(request_id, ())):06d}-{request_id}"
+        )
+        self._network.setdefault(request_id, []).append(
+            _NetworkObservation(
+                source,
+                request_id,
+                _ObservedGet(method, url),
+                resource_type=resource_type,
+                initiator_type=initiator_type,
+                initiator_request_id=initiator_request_id,
+                redirected=redirected,
+                sequence=self._sequence,
+                occurrence_id=identity,
+                audit_event=audit_event,
+                network_request_headers=deepcopy(network_request_headers),
+            )
+        )
+        self._reconcile(request_id)
+
+    def add_interception(
+        self,
+        source: CdpTargetSource,
+        event: Mapping[str, Any],
+        *,
+        audit_event: dict[str, Any] | None = None,
+        policy_decision: str | None = None,
+        policy_reason: str | None = None,
+    ) -> None:
+        request = event.get("request", {})
+        if not isinstance(request, Mapping):
+            raise DiscoveryIntegrityError("Chromium request interception payload is malformed")
+        method = str(request.get("method", ""))
+        url = str(request.get("url", ""))
+        if not self._eligible(method, url):
+            return
+        network_id = event.get("networkId")
+        if not isinstance(network_id, str) or not network_id:
+            raise DiscoveryIntegrityError(
+                "eligible HTTPS GET interception omitted its Network request ID"
+            )
+        redirected = event.get("redirectedRequestId")
+        if redirected is not None and (not isinstance(redirected, str) or not redirected):
+            raise DiscoveryIntegrityError("Chromium interception redirect identity is malformed")
+        fetch_id = event.get("requestId")
+        if not isinstance(fetch_id, str) or not fetch_id:
+            raise DiscoveryIntegrityError("Chromium interception identity is malformed")
+        identity = (*source.request_chain_key(fetch_id)[:-1], fetch_id)
+        if identity in self._fetch_identities:
+            raise DiscoveryIntegrityError("Chromium reused a Fetch interception identity")
+        if redirected == fetch_id:
+            raise DiscoveryIntegrityError("Chromium Fetch redirect identity forms a loop")
+        predecessor: _FetchObservation | None = None
+        if isinstance(redirected, str):
+            compatible = [
+                item
+                for item in self._fetches
+                if item.network_id == network_id
+                and self._fetch_sources_compatible(item.source, source, _frame_id(event))
+            ]
+            if not compatible or compatible[-1].fetch_id != redirected:
+                raise DiscoveryIntegrityError(
+                    "Chromium Fetch redirect does not name its immediate predecessor"
+                )
+            matching = [item for item in compatible if item.fetch_id == redirected]
+            if len(matching) != 1 or matching[0].redirect_consumed:
+                raise DiscoveryIntegrityError("Chromium Fetch redirect predecessor is ambiguous")
+            predecessor = matching[0]
+            if any(
+                network.matched
+                and network.terminal
+                and network.request == predecessor.request
+                and self._sources_compatible(
+                    network.source, predecessor.source, predecessor.frame_id
+                )
+                for network in self._network.get(network_id, ())
+            ):
+                raise DiscoveryIntegrityError(
+                    "Chromium Fetch redirect follows a terminated request chain"
+                )
+        self._sequence += 1
+        observation = _FetchObservation(
+            source,
+            fetch_id,
+            network_id,
+            _ObservedGet(method, url),
+            redirected if isinstance(redirected, str) else None,
+            _frame_id(event),
+            policy_decision=policy_decision,
+            policy_reason=policy_reason,
+            sequence=self._sequence,
+            audit_event=audit_event,
+        )
+        self._intercepted.setdefault(network_id, []).append(observation)
+        self._fetches.append(observation)
+        self._fetch_identities.add(identity)
+        if predecessor is not None:
+            predecessor.redirect_consumed = True
+        self._reconcile(network_id)
+
+    def add_response(self, source: CdpTargetSource, request_id: str) -> None:
+        candidates = [
+            item
+            for item in self._network.get(request_id, ())
+            if item.source == source and not item.terminal
+        ]
+        if not candidates:
+            return
+        candidates[-1].response_observed = True
+
+    def add_terminal(
+        self,
+        source: CdpTargetSource,
+        request_id: str,
+        *,
+        outcome: str = "finished",
+        event: Mapping[str, Any] | None = None,
+    ) -> tuple[str, ...]:
+        self._sequence += 1
+        candidates = [
+            item
+            for item in self._network.get(request_id, ())
+            if item.source == source and not item.terminal
+        ]
+        if not candidates:
+            return ()
+        terminal_failure = _terminal_failure_evidence(outcome, event or {})
+        # One loading terminal closes a complete redirect chain.
+        for item in candidates:
+            item.terminal = True
+            item.terminal_outcome = outcome
+            item.terminal_failure = deepcopy(terminal_failure)
+            item.terminal_sequence = self._sequence
+        return tuple(item.occurrence_id for item in candidates)
+
+    def finish(self) -> None:
+        for request_id in set(self._network) | set(self._intercepted):
+            self._reconcile(request_id)
+            self._reconcile_internal_restarts(request_id)
+        unmatched_networks = [
+            item for values in self._network.values() for item in values if not item.matched
+        ]
+        unmatched_fetches = [
+            item
+            for values in self._intercepted.values()
+            for item in values
+            if not item.matched
+        ]
+        used_preflights: set[str] = set()
+        for network in unmatched_networks:
+            preflight = self._blocked_after_failed_cors_preflight(
+                network,
+                used_preflights=used_preflights,
+            )
+            if preflight is None:
+                continue
+            network.blocked_preflight_occurrence_id = preflight.occurrence_id
+            used_preflights.add(preflight.occurrence_id)
+            if network.audit_event is None:
+                raise DiscoveryIntegrityError(
+                    "blocked CORS-preflight dependent omitted its audit occurrence"
+                )
+            network.audit_event["interception_exception"] = {
+                "kind": "blocked-after-failed-cors-preflight-v1",
+                "preflight_occurrence_id": preflight.occurrence_id,
+            }
+            if network.audit_event["mapping"]["kind"] == "resource":
+                network.audit_event["interception_exception"] = {
+                    "kind": "resource-blocked-after-failed-cors-preflight-v1",
+                    "preflight_occurrence_id": preflight.occurrence_id,
+                    "network_request_headers": deepcopy(network.network_request_headers),
+                }
+        if unmatched_fetches or any(
+            item.blocked_preflight_occurrence_id is None for item in unmatched_networks
+        ):
+            raise DiscoveryIntegrityError(
+                "eligible HTTP observation and request-stage interception ledgers differ"
+            )
+        if any(not item.terminal for values in self._network.values() for item in values):
+            raise DiscoveryIntegrityError(
+                "eligible HTTPS GET observation omitted its loading terminal event"
+            )
+
+    def _blocked_after_failed_cors_preflight(
+        self,
+        network: _NetworkObservation,
+        *,
+        used_preflights: set[str],
+    ) -> _NetworkObservation | None:
+        if network.request.method == "POST":
+            dependent_allowed = (
+                network.resource_type in {"XHR", "Fetch"}
+                and self._audit_exclusion_reason(network) == "unsafe method: POST"
+            )
+        elif network.request.method == "GET":
+            # Chromium can report a script XHR/Fetch GET in Network without a
+            # Fetch pause when our policy has already failed its OPTIONS
+            # preflight. An approved replay resource must retain its exact
+            # observed Network headers under a distinct proof; it cannot borrow
+            # the excluded-request path or claim a Fetch pause that never ran.
+            mapping = network.audit_event.get("mapping") if network.audit_event else None
+            resource_allowed = (
+                isinstance(mapping, Mapping)
+                and set(mapping) == {"kind", "resource_id"}
+                and mapping["kind"] == "resource"
+                and type(mapping["resource_id"]) is int
+                and mapping["resource_id"] >= 0
+                and network.network_request_headers is not None
+            )
+            dependent_allowed = (
+                network.resource_type in {"XHR", "Fetch"}
+                and (self._audit_exclusion_reason(network) == "origin not approved" or resource_allowed)
+            )
+        else:
+            return None
+        if (
+            not dependent_allowed
+            or origin(network.request.url) is None
+            or network.initiator_type != "script"
+            or network.initiator_request_id is not None
+            or network.redirected
+            or network.response_observed
+            or not self._has_terminal_signature(network, blocked_reason="other")
+            or len(
+                [
+                    item
+                    for item in self._network.get(network.network_id, ())
+                    if item.source == network.source
+                ]
+            )
+            != 1
+        ):
+            return None
+        candidates = [
+            candidate
+            for values in self._network.values()
+            for candidate in values
+            if candidate is not network
+            and candidate.source == network.source
+            and candidate.request == _ObservedGet("OPTIONS", network.request.url)
+            and candidate.resource_type == "Other"
+            and candidate.initiator_type == "preflight"
+            and candidate.initiator_request_id == network.network_id
+            and candidate.network_id != network.network_id
+            and not candidate.redirected
+            and not candidate.response_observed
+            and candidate.matched
+            and candidate.fetch_matches == 1
+            and candidate.occurrence_id not in used_preflights
+            and len(
+                [
+                    item
+                    for item in self._network.get(candidate.network_id, ())
+                    if item.source == candidate.source
+                ]
+            )
+            == 1
+            and self._has_terminal_signature(candidate, blocked_reason="inspector")
+            and self._audit_exclusion_reason(candidate) == "unsafe method: OPTIONS"
+        ]
+        if len(candidates) != 1:
+            return None
+        [preflight] = candidates
+        matching_fetches = [
+            fetch
+            for fetch in self._fetches
+            if fetch.matched_occurrence_id == preflight.occurrence_id
+        ]
+        if (
+            len(matching_fetches) != 1
+            or matching_fetches[0].policy_decision != "fail"
+            or matching_fetches[0].policy_reason != "unsafe method: OPTIONS"
+            or matching_fetches[0].redirected_request_id is not None
+            or preflight.terminal_sequence is None
+            or network.terminal_sequence is None
+            or matching_fetches[0].sequence >= preflight.terminal_sequence
+            or matching_fetches[0].sequence >= network.terminal_sequence
+        ):
+            return None
+        return preflight
+
+    @staticmethod
+    def _audit_exclusion_reason(network: _NetworkObservation) -> str | None:
+        mapping = network.audit_event.get("mapping") if network.audit_event else None
+        if not isinstance(mapping, Mapping) or mapping.get("kind") != "exclusion":
+            return None
+        reason = mapping.get("reason")
+        return reason if isinstance(reason, str) else None
+
+    @staticmethod
+    def _has_terminal_signature(
+        network: _NetworkObservation,
+        *,
+        blocked_reason: str,
+    ) -> bool:
+        return (
+            network.terminal
+            and network.terminal_outcome == "failed"
+            and network.terminal_failure
+            == {
+                "error_text": "net::ERR_BLOCKED_BY_CLIENT",
+                "canceled": False,
+                "blocked_reason": blocked_reason,
+                "cors_error_status_present": False,
+            }
+        )
+
+    def _reconcile_internal_restarts(self, request_id: str) -> None:
+        networks = self._network.get(request_id, [])
+        for fetch in (item for item in self._intercepted.get(request_id, []) if not item.matched):
+            if fetch.redirected_request_id is not None:
+                continue
+            candidates = [
+                network
+                for network in networks
+                if network.matched
+                and network.sequence < fetch.sequence
+                and (
+                    network.terminal_sequence is None or fetch.sequence < network.terminal_sequence
+                )
+                and network.request == fetch.request
+                and self._sources_compatible(network.source, fetch.source, fetch.frame_id)
+            ]
+            sources = {candidate.source for candidate in candidates}
+            if len(sources) > 1:
+                raise DiscoveryIntegrityError("Chromium internal request restart is ambiguous")
+            if candidates:
+                network = candidates[-1]
+                fetch.matched = True
+                self._bind_audit_match(network, fetch)
+
+    def _reconcile(self, request_id: str) -> None:
+        networks = self._network.get(request_id, [])
+        fetches = self._intercepted.get(request_id, [])
+        progress = True
+        while progress:
+            progress = False
+            for fetch in (item for item in fetches if not item.matched):
+                candidates = [
+                    network
+                    for network in networks
+                    if not network.matched
+                    and network.request == fetch.request
+                    and self._sources_compatible(
+                        network.source,
+                        fetch.source,
+                        fetch.frame_id,
+                    )
+                ]
+                # Redirect loops legitimately repeat method/URL under one
+                # source and request ID. Their occurrence order is FIFO. A
+                # collision across sources has no protocol ordering proof.
+                source_keys = {candidate.source for candidate in candidates}
+                if len(source_keys) > 1:
+                    raise DiscoveryIntegrityError(
+                        "Chromium Network/Fetch request occurrence is ambiguous"
+                    )
+                if candidates:
+                    network = candidates[0]
+                    network.matched = True
+                    fetch.matched = True
+                    self._bind_audit_match(network, fetch)
+                    progress = True
+
+    @staticmethod
+    def _bind_audit_match(network: _NetworkObservation, fetch: _FetchObservation) -> None:
+        fetch.matched_occurrence_id = network.occurrence_id
+        if fetch.audit_event is not None:
+            fetch.audit_event["network_occurrence_id"] = network.occurrence_id
+            fetch.audit_event["relationship"] = (
+                "primary" if network.fetch_matches == 0 else "internal-restart"
+            )
+        network.fetch_matches += 1
+
+    @staticmethod
+    def _fetch_sources_compatible(
+        previous: CdpTargetSource,
+        current: CdpTargetSource,
+        frame_id: str | None,
+    ) -> bool:
+        if previous == current:
+            return True
+        # A detached target can later reappear with the same target ID while
+        # raw Fetch and Network IDs are reused.  That new target generation is
+        # never the redirect successor of an interception from the old one.
+        if previous.target_id == current.target_id and previous.generation != current.generation:
+            return False
+        if previous.target_type not in {"page", "iframe"} or current.target_type not in {
+            "page",
+            "iframe",
+        }:
+            return False
+        return (
+            previous.session_path == current.parent_session_path
+            or current.session_path == previous.parent_session_path
+            or (frame_id is not None and frame_id in {previous.target_id, current.target_id})
+        )
+
+    @staticmethod
+    def _sources_compatible(
+        network: CdpTargetSource,
+        fetch: CdpTargetSource,
+        frame_id: str | None,
+    ) -> bool:
+        if network == fetch:
+            return True
+        if network.target_type in {"page", "iframe"} and fetch.target_type in {
+            "page",
+            "iframe",
+        }:
+            return _RequestObservationLedger._fetch_sources_compatible(network, fetch, frame_id)
+        if network.target_type not in {"worker", "shared_worker"}:
+            return False
+        if fetch.target_type not in {"page", "iframe"}:
+            return False
+        return network.parent_session_path == fetch.session_path or (
+            frame_id is not None
+            and network.parent_frame_id is not None
+            and network.parent_frame_id == frame_id
+        )
+
+
+def _frame_id(event: Mapping[str, Any]) -> str | None:
+    value = event.get("frameId")
+    return value if isinstance(value, str) and value else None
+
+
+def _terminal_failure_evidence(
+    outcome: str,
+    event: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    if outcome == "finished":
+        return None
+    if outcome != "failed":
+        raise DiscoveryIntegrityError("network terminal outcome is unsupported")
+    error_text = event.get("errorText")
+    canceled = event.get("canceled")
+    blocked_reason = event.get("blockedReason")
+    cors_error_status = event.get("corsErrorStatus")
+    error_text_present = "errorText" in event
+    if error_text_present and (not isinstance(error_text, str) or not error_text):
+        raise DiscoveryIntegrityError("Chromium loading failure error text is malformed")
+    if canceled is not None and type(canceled) is not bool:
+        raise DiscoveryIntegrityError("Chromium loading failure cancellation flag is malformed")
+    if blocked_reason is not None and (
+        not isinstance(blocked_reason, str) or not blocked_reason
+    ):
+        raise DiscoveryIntegrityError("Chromium loading failure blocked reason is malformed")
+    if cors_error_status is not None and not isinstance(cors_error_status, Mapping):
+        raise DiscoveryIntegrityError("Chromium loading failure CORS status is malformed")
+    return {
+        "error_text": error_text,
+        "canceled": canceled,
+        "blocked_reason": blocked_reason,
+        "cors_error_status_present": cors_error_status is not None,
+        **({"error_text_present": False} if not error_text_present else {}),
+    }
+
+
+def _source_evidence(source: CdpTargetSource) -> dict[str, Any]:
+    return {
+        "session_path": list(source.session_path),
+        "target_id": source.target_id,
+        "target_type": source.target_type,
+        "generation": source.generation,
+        "parent_session_path": (
+            list(source.parent_session_path) if source.parent_session_path is not None else None
+        ),
+        "parent_frame_id": source.parent_frame_id,
+    }
+
+
+def _active_request_identity(source: CdpTargetSource, request_id: str) -> str:
+    route = "/".join(source.session_path) if source.session_path else "root"
+    return f"{route}|{source.target_id}|{source.generation}|{request_id}"
+
+
+class _SanitizedEventProjection:
+    """Append-only, secret-minimised evidence for the bounded browser pass."""
+
+    def __init__(self, *, clock_ns: Callable[[], int] | None = None) -> None:
+        self._clock_ns = clock_ns or time.monotonic_ns
+        self._origin_ns = self._clock_ns()
+        self._events: list[dict[str, Any]] = []
+        self._network_occurrences = 0
+        self._exclusion_occurrences = 0
+        self._chain_occurrences: dict[tuple[tuple[str, ...], str, int, str], int] = {}
+        self._previous_chain_occurrence: dict[tuple[tuple[str, ...], str, int, str], str] = {}
+        self._active_chain_occurrences: dict[tuple[tuple[str, ...], str, int, str], list[str]] = {}
+        self._network_events_by_occurrence: dict[str, dict[str, Any]] = {}
+        self._last_relevant_event_ms = 0
+        self._frozen = False
+
+    @property
+    def frozen(self) -> bool:
+        return self._frozen
+
+    @property
+    def last_relevant_event_ms(self) -> int:
+        return self._last_relevant_event_ms
+
+    def now_ms(self) -> int:
+        return max(0, (self._clock_ns() - self._origin_ns) // 1_000_000)
+
+    def freeze(self) -> None:
+        self._frozen = True
+
+    def _append(
+        self, source: CdpTargetSource, kind: str, fields: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        event = {
+            "sequence": len(self._events) + 1,
+            "monotonic_ms": self.now_ms(),
+            "kind": kind,
+            "source": _source_evidence(source),
+            **dict(fields),
+        }
+        if self._frozen:
+            # Context disposal happens after the scientific cutoff.  Its
+            # synthetic cancellations remain live integrity input but are not
+            # misrepresented as observations inside the render window.
+            return event
+        self._events.append(event)
+        self._last_relevant_event_ms = event["monotonic_ms"]
+        return event
+
+    def record_target(self, source: CdpTargetSource, target_event: str) -> None:
+        self._append(
+            source,
+            "target-activity",
+            {"target_event": target_event},
+        )
+
+    def record_internal_document(
+        self,
+        source: CdpTargetSource,
+        diagnostic: Mapping[str, Any],
+    ) -> None:
+        """Record one sanitised loader-bound ``srcdoc`` lifecycle completion."""
+
+        self._append(
+            source,
+            "browser-internal-document",
+            {"diagnostic": deepcopy(dict(diagnostic))},
+        )
+
+    def record_network(self, source: CdpTargetSource, event: Mapping[str, Any]) -> dict[str, Any]:
+        if self._frozen:
+            raise DiscoveryIntegrityError(
+                "post-cutoff Network occurrence reached the scientific audit"
+            )
+        request = event.get("request", {})
+        if not isinstance(request, Mapping):
+            raise DiscoveryIntegrityError("Chromium network request payload is malformed")
+        initiator = event.get("initiator", {})
+        if not isinstance(initiator, Mapping):
+            raise DiscoveryIntegrityError("Chromium request initiator payload is malformed")
+        initiator_request_id = initiator.get("requestId")
+        if initiator_request_id is not None and (
+            not isinstance(initiator_request_id, str) or not initiator_request_id
+        ):
+            raise DiscoveryIntegrityError(
+                "Chromium request initiator identity is malformed"
+            )
+        request_id = str(event.get("requestId", ""))
+        chain = (*source.request_chain_key(request_id)[:3], request_id)
+        occurrence_index = self._chain_occurrences.get(chain, 0)
+        self._chain_occurrences[chain] = occurrence_index + 1
+        occurrence_id = f"request-{self._network_occurrences:08d}"
+        self._network_occurrences += 1
+        redirected = event.get("redirectResponse") is not None
+        predecessor = self._previous_chain_occurrence.get(chain)
+        self._previous_chain_occurrence[chain] = occurrence_id
+        self._active_chain_occurrences.setdefault(chain, []).append(occurrence_id)
+        if redirected and predecessor is not None:
+            predecessor_event = self._network_events_by_occurrence.get(predecessor)
+            if predecessor_event is None:
+                raise DiscoveryIntegrityError(
+                    "Chromium redirect predecessor is absent from the audit"
+                )
+            predecessor_event["response_observed"] = True
+        audit_event = self._append(
+            source,
+            "network-request",
+            {
+                "network_id": request_id,
+                "occurrence_id": occurrence_id,
+                "occurrence_index": occurrence_index,
+                "method": str(request.get("method", "")),
+                "url": str(request.get("url", "")),
+                "frame_id": _frame_id(event),
+                "resource_type": str(event.get("type", "Other")),
+                "initiator_type": str(initiator.get("type", "")),
+                "initiator_request_id": initiator_request_id,
+                "safe_request_headers": None,
+                "interception_required": _network_interception_required(
+                    str(request.get("url", ""))
+                ),
+                "redirected": redirected,
+                "redirect_from_occurrence_id": predecessor if redirected else None,
+                "mapping": None,
+                "response_observed": False,
+                "interception_exception": None,
+                "dependency_evidence": [],
+                "resolved_dependency_resource_ids": [],
+            },
+        )
+        self._network_events_by_occurrence[occurrence_id] = audit_event
+        return audit_event
+
+    def record_response(self, source: CdpTargetSource, event: Mapping[str, Any]) -> None:
+        if self._frozen:
+            raise DiscoveryIntegrityError(
+                "post-cutoff Network response reached the scientific audit"
+            )
+        request_id = str(event.get("requestId", ""))
+        if not request_id:
+            raise DiscoveryIntegrityError(
+                "Chromium network response omitted its request identifier"
+            )
+        chain = (*source.request_chain_key(request_id)[:3], request_id)
+        occurrences = self._active_chain_occurrences.get(chain, [])
+        if not occurrences:
+            raise DiscoveryIntegrityError(
+                "Chromium network response has no active request occurrence"
+            )
+        occurrence = self._network_events_by_occurrence.get(occurrences[-1])
+        if occurrence is None or occurrence["response_observed"] is True:
+            raise DiscoveryIntegrityError(
+                "Chromium network response occurrence is missing or duplicated"
+            )
+        occurrence["response_observed"] = True
+
+    def exclusion_mapping(self, reason: str) -> dict[str, Any]:
+        result = {
+            "kind": "exclusion",
+            "exclusion_occurrence_id": self._exclusion_occurrences,
+            "reason": reason,
+        }
+        self._exclusion_occurrences += 1
+        return result
+
+    def record_fetch(
+        self,
+        source: CdpTargetSource,
+        event: Mapping[str, Any],
+        *,
+        decision: str,
+        reason: str | None,
+    ) -> dict[str, Any]:
+        if self._frozen:
+            raise DiscoveryIntegrityError(
+                "post-cutoff Fetch occurrence reached the scientific audit"
+            )
+        request = event.get("request", {})
+        if not isinstance(request, Mapping):
+            raise DiscoveryIntegrityError("Chromium request interception payload is malformed")
+        redirected = event.get("redirectedRequestId")
+        return self._append(
+            source,
+            "fetch-request",
+            {
+                "fetch_id": str(event.get("requestId", "")),
+                "network_id": str(event.get("networkId", "")),
+                "redirected_fetch_id": redirected if isinstance(redirected, str) else None,
+                "network_occurrence_id": None,
+                "method": str(request.get("method", "")),
+                "url": str(request.get("url", "")),
+                "frame_id": _frame_id(event),
+                "policy_decision": decision,
+                "policy_reason": reason,
+                "relationship": None,
+            },
+        )
+
+    def record_terminal(
+        self,
+        source: CdpTargetSource,
+        event: Mapping[str, Any],
+        *,
+        outcome: str,
+        occurrence_ids: Sequence[str],
+    ) -> None:
+        if self._frozen:
+            raise DiscoveryIntegrityError(
+                "post-cutoff terminal reached the scientific audit"
+            )
+        request_id = str(event.get("requestId", ""))
+        chain = (*source.request_chain_key(request_id)[:3], request_id)
+        all_occurrences = self._active_chain_occurrences.pop(chain, [])
+        if not self._frozen and not all_occurrences:
+            raise DiscoveryIntegrityError("terminal audit event has no active Network occurrence")
+        if not set(occurrence_ids).issubset(all_occurrences):
+            raise DiscoveryIntegrityError(
+                "terminal audit event disagrees with Network/Fetch reconciliation"
+            )
+        self._append(
+            source,
+            "network-terminal",
+            {
+                "network_id": request_id,
+                "outcome": outcome,
+                "failure": _terminal_failure_evidence(outcome, event),
+                "network_occurrence_ids": all_occurrences,
+            },
+        )
+
+    def build(
+        self,
+        *,
+        instrumentation_policy: str,
+        render_observation: Mapping[str, Any],
+        resources: Sequence[Mapping[str, Any]],
+        exclusions: Sequence[Mapping[str, Any]],
+        approved_origins: Sequence[str],
+        observed_origins: Sequence[str],
+        observed_request_count: int,
+        normal_shutdown_disposal_summary: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        if not self._frozen:
+            raise DiscoveryIntegrityError("discovery event audit was not frozen at cutoff")
+        counts: dict[str, int] = {
+            "target-activity": 0,
+            "browser-internal-document": 0,
+            "network-request": 0,
+            "fetch-request": 0,
+            "network-terminal": 0,
+        }
+        resource_count = 0
+        exclusion_count = 0
+        resource_by_id = {resource["id"]: resource for resource in resources}
+        for event in self._events:
+            counts[event["kind"]] += 1
+            if event["kind"] == "network-request":
+                mapping = event["mapping"]
+                if isinstance(mapping, Mapping) and mapping.get("kind") == "resource":
+                    resource = resource_by_id.get(mapping.get("resource_id"))
+                    if not isinstance(resource, Mapping):
+                        raise DiscoveryIntegrityError(
+                            "resource-mapped audit event has no derived resource"
+                        )
+                    event["safe_request_headers"] = deepcopy(resource.get("headers", []))
+                    resource_count += 1
+                elif isinstance(mapping, Mapping) and mapping.get("kind") == "exclusion":
+                    exclusion_count += 1
+        audit = {
+            "schema_version": DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION,
+            "instrumentation_policy": instrumentation_policy,
+            "request_stage_observation_policy": REQUEST_STAGE_OBSERVATION_POLICY,
+            "passive_render_contract_sha256": PASSIVE_RENDER_CONTRACT_SHA256,
+            "render_observation_sha256": evidence_sha256(render_observation),
+            "normal_shutdown_disposal_summary": deepcopy(
+                dict(normal_shutdown_disposal_summary)
+            ),
+            "events": self._events,
+            "summary": {
+                "event_count": len(self._events),
+                "target_event_count": counts["target-activity"],
+                "browser_internal_document_count": counts[
+                    "browser-internal-document"
+                ],
+                "network_request_count": counts["network-request"],
+                "fetch_request_count": counts["fetch-request"],
+                "fetch_internal_restart_count": sum(
+                    event.get("relationship") == "internal-restart"
+                    for event in self._events
+                    if event["kind"] == "fetch-request"
+                ),
+                "terminal_event_count": counts["network-terminal"],
+                "resource_occurrence_count": resource_count,
+                "exclusion_occurrence_count": exclusion_count,
+                "blocked_preflight_dependent_count": sum(
+                    event.get("interception_exception") is not None
+                    for event in self._events
+                    if event["kind"] == "network-request"
+                ),
+            },
+        }
+        verify_discovery_event_audit(
+            audit,
+            render_observation=render_observation,
+            resources=resources,
+            exclusions=exclusions,
+            approved_origins=approved_origins,
+            observed_request_count=observed_request_count,
+            expected_observed_origins=observed_origins,
+        )
+        return audit
+
+
+def _render_observation(
+    audit: _SanitizedEventProjection,
+    router: RecursiveCdpTargetRouter,
+    egress_guard: NonReplayableEgressGuard,
+    *,
+    navigation_started_ms: int,
+    load_event_ms: int,
+    cutoff_reason: str,
+    browser_context_service_worker_count: int,
+) -> dict[str, Any]:
+    cutoff_ms = audit.now_ms()
+    active = sorted(
+        _active_request_identity(source, request_id)
+        for source, request_id in router.active_request_identities
+    )
+    last = audit.last_relevant_event_ms
+    minimum_boundary = load_event_ms + int(PASSIVE_RENDER_CONTRACT["minimum_after_load_ms"])
+    return {
+        "schema_version": RENDER_OBSERVATION_SCHEMA_VERSION,
+        "clock": "monotonic-relative-ms",
+        "navigation_started_ms": navigation_started_ms,
+        "load_event_ms": load_event_ms,
+        "last_relevant_event_ms": last,
+        "quiet_started_ms": max(minimum_boundary, last),
+        "cutoff_ms": cutoff_ms,
+        "active_request_ids": active,
+        "active_request_count": len(active),
+        "router_shutdown_ready": router.shutdown_ready,
+        "bootstrap_prearm_summary": router.bootstrap_prearm_summary,
+        "egress_prearm_summary": router.egress_prearm_summary,
+        "internal_document_lifecycle_summary": (
+            router.srcdoc_pseudo_document_summary
+        ),
+        "non_replayable_egress_summary": egress_guard.success_summary(),
+        "browser_context_service_worker_count": browser_context_service_worker_count,
+        "cutoff_reason": cutoff_reason,
+    }
+
+
+def _wait_for_passive_render(
+    page: Any,
+    router: RecursiveCdpTargetRouter,
+    audit: _SanitizedEventProjection,
+    egress_guard: NonReplayableEgressGuard,
+    context: Any,
+    *,
+    navigation_started_ms: int,
+    load_event_ms: int,
+) -> dict[str, Any]:
+    """Wait for the preregistered minimum plus network/target quiescence."""
+
+    minimum = int(PASSIVE_RENDER_CONTRACT["minimum_after_load_ms"])
+    quiet_window = int(PASSIVE_RENDER_CONTRACT["quiet_window_ms"])
+    hard_cap = int(PASSIVE_RENDER_CONTRACT["hard_cap_after_load_ms"])
+    poll = int(PASSIVE_RENDER_CONTRACT["poll_interval_ms"])
+    while True:
+        egress_guard.raise_if_failed()
+        router.raise_if_failed()
+        now = audit.now_ms()
+        last = audit.last_relevant_event_ms
+        quiet_started = max(load_event_ms + minimum, last)
+        active = router.active_request_identities
+        if now - load_event_ms >= hard_cap:
+            result = _render_observation(
+                audit,
+                router,
+                egress_guard,
+                navigation_started_ms=navigation_started_ms,
+                load_event_ms=load_event_ms,
+                cutoff_reason="hard-cap-non-quiescent",
+                browser_context_service_worker_count=len(context.service_workers),
+            )
+            validate_render_observation(result, allow_failure=True)
+            raise PassiveRenderPolicyError(
+                "passive render did not quiesce within 30000 ms after load",
+                evidence={
+                    "passive_render_contract": passive_render_contract(),
+                    "passive_render_contract_sha256": PASSIVE_RENDER_CONTRACT_SHA256,
+                    "render_observation": result,
+                    "render_observation_sha256": evidence_sha256(result),
+                },
+            )
+        if not active and router.shutdown_ready and now - quiet_started >= quiet_window:
+            result = _render_observation(
+                audit,
+                router,
+                egress_guard,
+                navigation_started_ms=navigation_started_ms,
+                load_event_ms=load_event_ms,
+                cutoff_reason="quiescent",
+                browser_context_service_worker_count=len(context.service_workers),
+            )
+            validate_render_observation(result)
+            return result
+        next_boundary = min(
+            load_event_ms + hard_cap,
+            quiet_started + quiet_window,
+        )
+        wait_ms = max(1, min(poll, next_boundary - now))
+        page.wait_for_timeout(wait_ms)
+        egress_guard.raise_if_failed()
+
+
+def _wait_for_navigation_load(
+    page: Any,
+    router: RecursiveCdpTargetRouter,
+    load_seen: Sequence[bool],
+    egress_guard: NonReplayableEgressGuard,
+    *,
+    deadline: float,
+) -> None:
+    """Wait for the genuine page load while surfacing CDP failure immediately."""
+
+    poll = int(PASSIVE_RENDER_CONTRACT["poll_interval_ms"])
+    while time.monotonic() < deadline:
+        egress_guard.raise_if_failed()
+        router.raise_if_failed()
+        if load_seen[0]:
+            return
+        remaining_ms = max(1, round((deadline - time.monotonic()) * 1_000))
+        page.wait_for_timeout(min(poll, remaining_ms))
+        egress_guard.raise_if_failed()
+    egress_guard.raise_if_failed()
+    router.raise_if_failed()
+    raise RecoverableAcquisitionError(
+        "Playwright discovery did not reach the genuine page load event"
+    )
+
+
+def _abort_rejected_render(
+    context: Any,
+    router: RecursiveCdpTargetRouter,
+    browser_guard: BrowserSharedWorkerGuard,
+    primary: BaseException,
+    *,
+    cleanup_label: str = "rejected-render",
+) -> bool:
+    """Dispose a failed, potentially unready target graph without masking it."""
+
+    cleanup_errors: list[tuple[str, BaseException]] = []
+    router_started = False
+    guard_started = False
+    context_disposed = False
+    guard_finished = False
+    router_finished = False
+    try:
+        router.begin_abort()
+        router_started = True
+    except BaseException as error:  # noqa: BLE001 - preserve the primary failure
+        cleanup_errors.append(("router-begin-abort", error))
+    if router_started:
+        try:
+            browser_guard.begin_abort()
+            guard_started = True
+        except BaseException as error:  # noqa: BLE001 - preserve the primary failure
+            cleanup_errors.append(("guard-begin-abort", error))
+    try:
+        context.close()
+        context_disposed = True
+    except BaseException as error:  # noqa: BLE001 - browser.close remains the outer fallback
+        cleanup_errors.append(("context-dispose", error))
+    if guard_started and context_disposed:
+        try:
+            browser_guard.finish_abort()
+            guard_finished = True
+        except BaseException as error:  # noqa: BLE001 - preserve the primary failure
+            cleanup_errors.append(("guard-finish-abort", error))
+    if router_started and guard_finished:
+        try:
+            router.finish_abort()
+            router_finished = True
+        except BaseException as error:  # noqa: BLE001 - preserve the primary failure
+            cleanup_errors.append(("router-finish-abort", error))
+    for step, error in cleanup_errors:
+        primary.add_note(f"{cleanup_label} cleanup {step} failed with {type(error).__name__}")
+    return router_finished and not cleanup_errors
+
+
+def _dispose_failed_context(
+    context: Any,
+    primary: BaseException,
+    *,
+    cleanup_label: str,
+) -> None:
+    """Dispose a context created before the complete target graph was available."""
+
+    try:
+        context.close()
+    except BaseException as error:  # noqa: BLE001 - preserve the primary failure
+        primary.add_note(
+            f"{cleanup_label} cleanup context-dispose failed with {type(error).__name__}"
+        )
+
+
+def _finish_render_shutdown(
+    context: Any,
+    router: RecursiveCdpTargetRouter,
+    browser_guard: BrowserSharedWorkerGuard,
+    *,
+    cleanup_label: str,
+    primary: BaseException | None = None,
+) -> bool:
+    """Finish declared normal shutdown while always attempting context disposal."""
+
+    cleanup_errors: list[tuple[str, BaseException]] = []
+    guard_started = False
+    context_disposed = False
+    guard_finished = False
+    try:
+        browser_guard.begin_shutdown()
+        guard_started = True
+    except BaseException as error:  # noqa: BLE001 - context disposal remains mandatory
+        cleanup_errors.append(("guard-begin-shutdown", error))
+    try:
+        context.close()
+        context_disposed = True
+    except BaseException as error:  # noqa: BLE001 - browser.close remains the outer fallback
+        cleanup_errors.append(("context-dispose", error))
+    if guard_started and context_disposed:
+        try:
+            browser_guard.finish()
+            guard_finished = True
+        except BaseException as error:  # noqa: BLE001 - preserve the first shutdown failure
+            cleanup_errors.append(("guard-finish", error))
+    if guard_finished:
+        try:
+            router.finish()
+        except BaseException as error:  # noqa: BLE001 - preserve the first shutdown failure
+            cleanup_errors.append(("router-finish", error))
+    if not cleanup_errors:
+        return True
+    if primary is None:
+        _step, primary = cleanup_errors.pop(0)
+        for step, error in cleanup_errors:
+            primary.add_note(
+                f"{cleanup_label} cleanup {step} failed with {type(error).__name__}"
+            )
+        raise primary
+    for step, error in cleanup_errors:
+        primary.add_note(f"{cleanup_label} cleanup {step} failed with {type(error).__name__}")
+    return False
+
+
+@dataclass(frozen=True)
+class _DependencyOccurrence:
+    source: CdpTargetSource
+    scope: str
+    url: str
+    resource_id: int
+
+
+def _stack_frame_urls(value: Any) -> list[str]:
+    """Return every URL in a CDP StackTrace, including recursively present parents."""
+
+    if value is None:
+        return []
+    if not isinstance(value, Mapping):
+        raise DiscoveryIntegrityError("Chromium initiator stack is malformed")
+    frames = value.get("callFrames", [])
+    if not isinstance(frames, list):
+        raise DiscoveryIntegrityError("Chromium initiator stack frames are malformed")
+    result: list[str] = []
+    for frame in frames:
+        if not isinstance(frame, Mapping):
+            raise DiscoveryIntegrityError("Chromium initiator stack frame is malformed")
+        frame_url = frame.get("url")
+        if frame_url is not None and not isinstance(frame_url, str):
+            raise DiscoveryIntegrityError("Chromium initiator stack URL is malformed")
+        if frame_url:
+            result.append(frame_url)
+    parent = value.get("parent")
+    if parent is not None:
+        result.extend(_stack_frame_urls(parent))
+    return result
+
+
+def _network_interception_required(url: str) -> bool:
+    try:
+        return urlsplit(url).scheme.lower() in {"http", "https"}
+    except (TypeError, ValueError):
+        return False
+
+
+def _resolve_dependency_url(
+    occurrences: Sequence[_DependencyOccurrence],
+    *,
+    source: CdpTargetSource,
+    scope: str,
+    url: str,
+) -> int | None:
+    candidates: list[tuple[int, _DependencyOccurrence]] = []
+    for candidate in occurrences:
+        if candidate.url != url:
+            continue
+        if candidate.scope == scope:
+            rank = 0
+        elif candidate.source == source:
+            rank = 1
+        elif source.parent_frame_id is not None and candidate.scope == source.parent_frame_id:
+            rank = 2
+        elif (
+            candidate.source.parent_frame_id is not None
+            and candidate.source.parent_frame_id == scope
+        ):
+            rank = 2
+        elif (
+            candidate.source.session_path == source.parent_session_path
+            or source.session_path == candidate.source.parent_session_path
+        ):
+            rank = 3
+        else:
+            continue
+        candidates.append((rank, candidate))
+    if not candidates:
+        return None
+    best_rank = min(rank for rank, _candidate in candidates)
+    best = [candidate for rank, candidate in candidates if rank == best_rank]
+    scopes = {(candidate.source, candidate.scope) for candidate in best}
+    # The persisted resource graph defines a URL dependency scope by the
+    # Chromium frame scope, not by the transient CDP target session that
+    # reported it.  Page and worker/OOPIF sessions can therefore legitimately
+    # report preceding occurrences in the same exact frame scope.  This is the
+    # same latest-preceding (scope, URL) rule used by ``build_resources``.
+    # Same-source, parent-frame, and parent-session fallbacks do not have that
+    # identity proof.  Multiple equally ranked fallback identities therefore
+    # remain explicitly unresolved: choosing one would manufacture a
+    # cross-frame dependency from a URL-only Chromium hint.  The sanitized
+    # audit records that outcome as a nullable resolved_resource_id for
+    # independent reconstruction.
+    if best_rank != 0 and len(scopes) > 1:
+        return None
+    return max(best, key=lambda candidate: candidate.resource_id).resource_id
+
+
+class _RequestExtraInfoAssociator:
+    """Match CDP ExtraInfo events to request occurrences without ID aliasing.
+
+    Chromium deliberately reuses ``Network.RequestId`` across a redirect chain.
+    The two request events may also arrive in either order.  Association is
+    therefore positional: redirect/response metadata says which occurrences
+    have ExtraInfo, and ExtraInfo itself is consumed in occurrence order.
+    """
+
+    def __init__(self) -> None:
+        self._chains: dict[Hashable, _ExtraInfoChain] = {}
+
+    def add_request(
+        self,
+        request_id: Hashable,
+        request: DiscoveredRequest | None,
+        *,
+        redirected: bool,
+        redirect_has_extra_info: object = None,
+    ) -> None:
+        if request_id is None or request_id == "":
+            raise DiscoveryIntegrityError("Chromium network event omitted its request identifier")
+        chain = self._chains.setdefault(request_id, _ExtraInfoChain())
+        if redirected:
+            if not chain.occurrences:
+                raise DiscoveryIntegrityError("Chromium redirect event has no observed predecessor")
+            if type(redirect_has_extra_info) is not bool:
+                raise DiscoveryIntegrityError(
+                    "Chromium redirect event omitted a boolean ExtraInfo flag"
+                )
+            self._set_expectation(
+                request_id,
+                chain,
+                len(chain.occurrences) - 1,
+                redirect_has_extra_info,
+            )
+        elif chain.occurrences:
+            raise DiscoveryIntegrityError(
+                "Chromium reused a request identifier outside a redirect chain"
+            )
+        elif redirect_has_extra_info is not None:
+            raise DiscoveryIntegrityError(
+                "Chromium supplied redirect ExtraInfo metadata without a redirect"
+            )
+        chain.occurrences.append(_ExtraInfoOccurrence(request=request))
+        self._sync(chain)
+
+    def add_response(self, request_id: Hashable, has_extra_info: object) -> None:
+        if request_id is None or request_id == "":
+            raise DiscoveryIntegrityError("Chromium response event omitted its request identifier")
+        if type(has_extra_info) is not bool:
+            raise DiscoveryIntegrityError(
+                "Chromium response event omitted a boolean ExtraInfo flag"
+            )
+        chain = self._chains.get(request_id)
+        if chain is None or not chain.occurrences:
+            raise DiscoveryIntegrityError("Chromium response event has no observed request")
+        self._set_expectation(
+            request_id,
+            chain,
+            len(chain.occurrences) - 1,
+            has_extra_info,
+        )
+
+    def add_extra_info(self, request_id: Hashable, headers: object) -> None:
+        if request_id is None or request_id == "":
+            raise DiscoveryIntegrityError("Chromium ExtraInfo event omitted its request identifier")
+        if not isinstance(headers, Mapping):
+            raise DiscoveryIntegrityError("Chromium ExtraInfo event supplied malformed headers")
+        normalized: dict[str, str] = {}
+        merge_request_headers(normalized, headers)
+        chain = self._chains.setdefault(request_id, _ExtraInfoChain())
+        chain.pending_headers.append(normalized)
+        self._sync(chain)
+
+    def add_terminal(self, request_id: Hashable, *, failed: bool) -> None:
+        """Bind the one chain-terminal event to its observed final occurrence."""
+
+        chain = self._chains.get(request_id)
+        if chain is None or not chain.occurrences:
+            raise DiscoveryIntegrityError(
+                "Chromium loading terminal event has no observed request chain"
+            )
+        if chain.terminal_failed is not None:
+            raise DiscoveryIntegrityError(
+                "Chromium request chain supplied duplicate loading terminal events"
+            )
+        chain.terminal_failed = failed
+
+    def finish(self) -> None:
+        """Reject missing or surplus events instead of silently misassociating them."""
+
+        for request_id, chain in self._chains.items():
+            self._sync(chain)
+            if chain.occurrences and chain.terminal_failed is None:
+                raise DiscoveryIntegrityError(
+                    "Chromium request chain omitted its loading terminal event for "
+                    "one request occurrence"
+                )
+            # A failed request can omit responseReceived and therefore its
+            # hasExtraInfo flag. If exactly one final occurrence and one FIFO
+            # header remain, their association is nevertheless unambiguous.
+            if (
+                chain.terminal_failed is True
+                and len(chain.pending_headers) == 1
+                and chain.next_occurrence == len(chain.occurrences) - 1
+                and chain.occurrences[chain.next_occurrence].expects_extra_info is None
+            ):
+                chain.occurrences[chain.next_occurrence].expects_extra_info = True
+                self._sync(chain)
+            if chain.pending_headers:
+                raise DiscoveryIntegrityError(
+                    "Chromium ExtraInfo event could not be associated with a request occurrence"
+                )
+            if any(
+                occurrence.expects_extra_info is True and not occurrence.extra_info_applied
+                for occurrence in chain.occurrences
+            ):
+                raise DiscoveryIntegrityError(
+                    "Chromium declared but did not deliver request ExtraInfo for "
+                    "one request occurrence"
+                )
+            if (
+                chain.occurrences
+                and chain.terminal_failed is False
+                and chain.occurrences[-1].expects_extra_info is None
+            ):
+                raise DiscoveryIntegrityError(
+                    "successful Chromium request omitted response ExtraInfo metadata for "
+                    "one request occurrence"
+                )
+
+    @staticmethod
+    def _set_expectation(
+        request_id: Hashable,
+        chain: _ExtraInfoChain,
+        occurrence_index: int,
+        has_extra_info: bool,
+    ) -> None:
+        occurrence = chain.occurrences[occurrence_index]
+        if occurrence.expects_extra_info is not None:
+            raise DiscoveryIntegrityError(
+                "Chromium supplied duplicate ExtraInfo presence metadata for one request occurrence"
+            )
+        occurrence.expects_extra_info = has_extra_info
+        _RequestExtraInfoAssociator._sync(chain)
+
+    @staticmethod
+    def _sync(chain: _ExtraInfoChain) -> None:
+        while chain.next_occurrence < len(chain.occurrences):
+            occurrence = chain.occurrences[chain.next_occurrence]
+            if occurrence.expects_extra_info is None:
+                return
+            if occurrence.expects_extra_info:
+                if not chain.pending_headers:
+                    return
+                headers = chain.pending_headers.pop(0)
+                if occurrence.request is not None:
+                    # ExtraInfo contains Chromium's final wire request headers,
+                    # so it deliberately wins over requestWillBeSent.
+                    merge_request_headers(occurrence.request.headers, headers)
+                occurrence.extra_info_applied = True
+            chain.next_occurrence += 1
+
+
+@dataclass(frozen=True)
+class _StagedCutoffExtraInfo:
+    chain_key: tuple[tuple[str, ...], str, int, str]
+    headers: dict[str, Any]
+
+
+class _DiscoveryCutoffBoundary:
+    """Keep context-disposal traffic outside the scientific request graph.
+
+    The router remains authoritative for Network/Fetch/terminal disposal
+    reconciliation and consumes every disposal-owned callback.  Only delayed
+    ExtraInfo that the router cannot classify may reach this boundary; it is
+    applied solely when its exact source/request chain existed at cutoff.
+    """
+
+    def __init__(self) -> None:
+        self._scientific_chains: frozenset[
+            tuple[tuple[str, ...], str, int, str]
+        ] | None = None
+        self._staged_extra_info: list[_StagedCutoffExtraInfo] = []
+        self._finished = False
+
+    def begin(
+        self,
+        scientific_chains: Mapping[
+            tuple[tuple[str, ...], str, int, str], object
+        ],
+    ) -> None:
+        if self._scientific_chains is not None or self._finished:
+            raise DiscoveryIntegrityError("discovery cutoff boundary began more than once")
+        snapshot = frozenset(scientific_chains)
+        if not snapshot:
+            raise DiscoveryIntegrityError("discovery cutoff omitted its scientific chains")
+        self._scientific_chains = snapshot
+
+    @staticmethod
+    def _chain_key(
+        source: CdpTargetSource,
+        event: Mapping[str, Any],
+    ) -> tuple[tuple[str, ...], str, int, str]:
+        request_id = event.get("requestId")
+        if not isinstance(request_id, str) or not request_id:
+            raise DiscoveryIntegrityError(
+                "post-cutoff Network event omitted its request identifier"
+            )
+        return source.request_chain_key(request_id)
+
+    def route(
+        self,
+        source: CdpTargetSource,
+        method: str,
+        event: Mapping[str, Any],
+    ) -> bool:
+        """Return true after consuming one post-cutoff protocol callback."""
+
+        scientific = self._scientific_chains
+        if scientific is None:
+            return False
+        if self._finished:
+            raise DiscoveryIntegrityError(
+                "CDP event arrived after the discovery cutoff boundary finished"
+            )
+        if method == "Network.requestWillBeSentExtraInfo":
+            if len(self._staged_extra_info) >= _POST_CUTOFF_EXTRA_INFO_LIMIT:
+                raise DiscoveryIntegrityError(
+                    "post-cutoff ExtraInfo staging bound was exceeded"
+                )
+            headers = event.get("headers")
+            if not isinstance(headers, Mapping):
+                raise DiscoveryIntegrityError(
+                    "post-cutoff ExtraInfo event supplied malformed headers"
+                )
+            self._staged_extra_info.append(
+                _StagedCutoffExtraInfo(
+                    self._chain_key(source, event),
+                    deepcopy(dict(headers)),
+                )
+            )
+            return True
+        raise DiscoveryIntegrityError(
+            f"post-cutoff protocol event escaped router quarantine: {method}"
+        )
+
+    def finish(
+        self,
+        extra_info: _RequestExtraInfoAssociator,
+        disposal_summary: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        if self._scientific_chains is None or self._finished:
+            raise DiscoveryIntegrityError(
+                "discovery cutoff boundary did not reach one live terminal state"
+            )
+        try:
+            validated = validate_normal_shutdown_disposal_summary(
+                disposal_summary,
+                require_terminal=True,
+            )
+        except ValueError as error:
+            raise DiscoveryIntegrityError(
+                "normal-shutdown disposal summary did not verify"
+            ) from error
+        for staged in self._staged_extra_info:
+            if staged.chain_key not in self._scientific_chains:
+                raise DiscoveryIntegrityError(
+                    "post-cutoff ExtraInfo ownership is not an exact scientific chain"
+                )
+        for staged in self._staged_extra_info:
+            extra_info.add_extra_info(staged.chain_key, staged.headers)
+        self._finished = True
+        return validated
+
+
+@dataclass
+class DiscoveryResult:
+    """Browser request graph and the evidence needed to audit its preparation."""
+
+    source_url: str
+    final_url: str
+    chromium_version: str
+    settle_ms: int
+    observed_request_count: int
+    observed_origins: list[str]
+    approved_origins: list[str]
+    exclusions: list[dict[str, str]]
+    resources: list[dict[str, Any]]
+    origin_ip_pins: dict[str, str] = field(default_factory=dict)
+    # Production supplies the exact HTTPS-GET-only set that an iterative
+    # caller may promote into the next approved-origin pass.  ``None`` records
+    # an absent ledger; class-study convergence rejects that absence.
+    expandable_origins: list[str] | None = None
+    instrumentation_policy: str = CDP_TARGET_INSTRUMENTATION_POLICY
+    passive_render_contract: dict[str, Any] | None = None
+    passive_render_contract_sha256: str | None = None
+    render_observation: dict[str, Any] | None = None
+    render_observation_sha256: str | None = None
+    discovery_event_audit: dict[str, Any] | None = None
+    discovery_event_audit_sha256: str | None = None
+
+
+@dataclass
+class _RequestAdmission:
+    """Record and enforce the discovery request policy before network I/O."""
+
+    approved_origins: set[str]
+    observed_request_count: int = 0
+    observed_origins: set[str] = field(default_factory=set)
+    expandable_origins: set[str] = field(default_factory=set)
+    exclusions: dict[tuple[str, str], dict[str, str]] = field(default_factory=dict)
+
+    def exclude(self, url: str, reason: str) -> None:
+        self.exclusions[(url, reason)] = {"url": url, "reason": reason}
+
+    def command(self, event: Mapping[str, Any]) -> tuple[str, dict[str, str]]:
+        """Return the exact request-stage decision and record its audit evidence."""
+
+        if "responseStatusCode" in event or "responseErrorReason" in event:
+            raise DiscoveryIntegrityError(
+                "Chromium Fetch interception unexpectedly occurred at response stage"
+            )
+        request_id = str(event.get("requestId", ""))
+        if not request_id:
+            raise DiscoveryIntegrityError(
+                "Chromium request interception omitted its request identifier"
+            )
+        request = event.get("request", {})
+        if not isinstance(request, Mapping):
+            raise DiscoveryIntegrityError("Chromium request interception payload is malformed")
+        url = str(request.get("url", ""))
+        method = str(request.get("method", ""))
+        reason = exclusion_reason(method, url, self.approved_origins)
+        if reason:
+            # Record before failing so an interception error cannot erase the
+            # audit reason for a request that was denied network admission.
+            self.exclude(url, reason)
+            return (
+                "Fetch.failRequest",
+                {"requestId": request_id, "errorReason": "BlockedByClient"},
+            )
+        return "Fetch.continueRequest", {"requestId": request_id}
+
+    def observe_network(self, method: str, url: str) -> None:
+        """Count one actual Network occurrence independently of Fetch restarts."""
+
+        self.observed_request_count += 1
+        request_origin = origin(url)
+        if request_origin:
+            self.observed_origins.add(request_origin)
+            if method == "GET":
+                self.expandable_origins.add(request_origin)
+
+    def enforce(self, session: Any, event: Mapping[str, Any]) -> None:
+        """Continue an approved HTTPS GET or fail it while still request-stage paused."""
+
+        method, params = self.command(event)
+        session.send(method, params)
+
+
+def origin(url: str) -> str | None:
+    return https_origin(url)
+
+
+def discover_page(
+    url: str,
+    *,
+    allow_origins: list[str],
+    timeout_ms: int,
+    origin_ip_pins: Mapping[str, str] | None = None,
+) -> DiscoveryResult:
+    """Discover one page graph while retaining only explicitly approved origins."""
+
+    if origin(url) is None:
+        raise ValueError(f"source URL is not absolute HTTPS: {url}")
+    if timeout_ms < 1:
+        raise ValueError("discovery timeout must be positive")
+    approved = sorted({_normalize_origin(value) for value in allow_origins})
+    if not approved:
+        raise ValueError("workload preparation requires at least one approved origin")
+    pins = _validate_origin_ip_pins(approved, origin_ip_pins)
+    try:
+        from playwright.sync_api import Error as PlaywrightError
+        from playwright.sync_api import sync_playwright
+    except ImportError as error:
+        raise RuntimeError("discovery requires the discovery Docker image") from error
+
+    admission = _RequestAdmission(set(approved))
+    validate_default_playwright_driver_once()
+    discovered: list[DiscoveredRequest] = []
+    final_url = url
+    router: RecursiveCdpTargetRouter | None = None
+    egress_guard: NonReplayableEgressGuard | None = None
+    render_observation: dict[str, Any] | None = None
+    normal_shutdown_disposal_summary: dict[str, Any] | None = None
+    audit = _SanitizedEventProjection()
+    try:
+        with playwright_driver_session(sync_playwright, exclusive=True) as playwright:
+            browser, _browser_egress_projection = launch_production_browser(
+                playwright,
+                approved_origins=approved,
+                origin_ip_pins=pins,
+            )
+            context: Any | None = None
+            browser_guard: BrowserSharedWorkerGuard | None = None
+            normal_shutdown_started = False
+            normal_shutdown_cleanup_started = False
+            failure_cleanup_attempted = False
+            primary_error: BaseException | None = None
+            try:
+                chromium_version = browser.version
+                # Fetch interception does not see frame-owned requests already handled
+                # by a service worker. Blocking registration makes request-stage
+                # interception the only path from this context to the network.
+                context = browser.new_context(
+                    ignore_https_errors=False,
+                    service_workers="block",
+                    viewport={
+                        "width": PASSIVE_RENDER_CONTRACT["viewport"]["width"],
+                        "height": PASSIVE_RENDER_CONTRACT["viewport"]["height"],
+                    },
+                    device_scale_factor=PASSIVE_RENDER_CONTRACT["viewport"]["deviceScaleFactor"],
+                )
+                egress_guard = NonReplayableEgressGuard()
+                # Playwright's context WebSocket route is registered before the
+                # first page exists. Page/frame WebSockets use this pre-I/O
+                # boundary; paused-target shims cover worker constructors.
+                install_context_egress_guards(context, egress_guard)
+                page = context.new_page()
+                egress_guard.bind_root_page(page)
+                session = context.new_cdp_session(page)
+                browser_session = browser.new_browser_cdp_session()
+                request_indices: dict[tuple[tuple[str, ...], str, str], int] = {}
+                occurrence_counts: dict[tuple[tuple[str, ...], str, str], int] = {}
+                latest_url_indices: dict[tuple[str, str], int] = {}
+                latest_request_indices: dict[str, list[tuple[CdpTargetSource, str, int]]] = {}
+                dependency_occurrences: list[_DependencyOccurrence] = []
+                extra_info = _RequestExtraInfoAssociator()
+                cutoff_boundary = _DiscoveryCutoffBoundary()
+                observation_ledger = _RequestObservationLedger(
+                    eligible=lambda _method, candidate_url: _network_interception_required(
+                        candidate_url
+                    )
+                )
+
+                def request_seen(
+                    source: CdpTargetSource,
+                    event: Mapping[str, Any],
+                    audit_event: dict[str, Any],
+                ) -> None:
+                    request = event.get("request", {})
+                    if not isinstance(request, Mapping):
+                        raise DiscoveryIntegrityError(
+                            "Chromium network request payload is malformed"
+                        )
+                    request_url = str(request.get("url", ""))
+                    method = str(request.get("method", ""))
+                    reason = exclusion_reason(method, request_url, admission.approved_origins)
+                    admission.observe_network(method, request_url)
+                    request_id = str(event.get("requestId", ""))
+                    if not request_id:
+                        raise DiscoveryIntegrityError(
+                            "Chromium network event omitted its request identifier"
+                        )
+                    initiator = event.get("initiator", {})
+                    if not isinstance(initiator, Mapping):
+                        raise DiscoveryIntegrityError(
+                            "Chromium request initiator payload is malformed"
+                        )
+                    initiator_type = initiator.get("type")
+                    if not isinstance(initiator_type, str) or not initiator_type:
+                        raise DiscoveryIntegrityError(
+                            "Chromium request initiator type is malformed"
+                        )
+                    initiator_request_id = initiator.get("requestId")
+                    redirected = event.get("redirectResponse") is not None
+                    chain_key = source.request_chain_key(request_id)
+                    network_headers: dict[str, str] | None = None
+                    if reason is None and isinstance(request.get("headers"), Mapping):
+                        network_headers = {}
+                        merge_request_headers(network_headers, request["headers"])
+                    observation_ledger.add_network(
+                        source,
+                        request_id=request_id,
+                        method=method,
+                        url=request_url,
+                        resource_type=str(event.get("type", "Other")),
+                        initiator_type=initiator_type,
+                        initiator_request_id=(
+                            initiator_request_id
+                            if isinstance(initiator_request_id, str)
+                            else None
+                        ),
+                        redirected=redirected,
+                        occurrence_id=str(audit_event["occurrence_id"]),
+                        audit_event=audit_event,
+                        network_request_headers=(
+                            safe_discovery_headers(network_headers)
+                            if network_headers is not None else None
+                        ),
+                    )
+                    occurrence = occurrence_counts.get(chain_key, 0)
+                    occurrence_counts[chain_key] = occurrence + 1
+                    redirect_has_extra_info = (
+                        event.get("redirectHasExtraInfo") if redirected else None
+                    )
+                    if redirected and type(redirect_has_extra_info) is not bool:
+                        raise DiscoveryIntegrityError(
+                            "Chromium redirect event omitted a boolean ExtraInfo flag"
+                        )
+                    if reason:
+                        # Network.requestWillBeSent can precede Fetch.requestPaused.
+                        # Keep this defensive record, while Fetch remains the only
+                        # callback that decides whether bytes may leave Chromium.
+                        admission.exclude(request_url, reason)
+                        if redirected:
+                            predecessor_occurrence_id = audit_event[
+                                "redirect_from_occurrence_id"
+                            ]
+                            if not isinstance(predecessor_occurrence_id, str):
+                                raise DiscoveryIntegrityError(
+                                    "Chromium redirect event has no observed predecessor"
+                                )
+                            predecessor_resource_id = request_indices.get(chain_key)
+                            audit_event["dependency_evidence"] = [
+                                {
+                                    "kind": "redirect",
+                                    "value": predecessor_occurrence_id,
+                                    "resolved_resource_id": predecessor_resource_id,
+                                }
+                            ]
+                            if predecessor_resource_id is not None:
+                                audit_event["resolved_dependency_resource_ids"] = [
+                                    predecessor_resource_id
+                                ]
+                        # Retain this occurrence in the ExtraInfo FIFO even though
+                        # it cannot become a replay resource. Otherwise a later
+                        # event sharing its redirect-chain ID could shift headers.
+                        extra_info.add_request(
+                            chain_key,
+                            None,
+                            redirected=redirected,
+                            redirect_has_extra_info=redirect_has_extra_info,
+                        )
+                        audit_event["mapping"] = audit.exclusion_mapping(reason)
+                        request_indices.pop(chain_key, None)
+                        return
+                    frame_id = _frame_id(event)
+                    scope = frame_id or source.parent_frame_id or source.target_id
+                    initiator = event.get("initiator", {})
+                    if not isinstance(initiator, Mapping):
+                        raise DiscoveryIntegrityError(
+                            "Chromium request initiator payload is malformed"
+                        )
+                    raw_dependency_urls: list[tuple[str, str]] = []
+                    document_url = event.get("documentURL")
+                    if document_url:
+                        raw_dependency_urls.append(("document-url", str(document_url)))
+                    initiator_url = initiator.get("url")
+                    if initiator_url:
+                        raw_dependency_urls.append(("initiator-url", str(initiator_url)))
+                    raw_dependency_urls.extend(
+                        ("stack-call-frame", stack_url)
+                        for stack_url in _stack_frame_urls(initiator.get("stack"))
+                    )
+                    initiators = {value for _kind, value in raw_dependency_urls}
+                    redirect_from = request_indices.get(chain_key)
+                    if redirected and redirect_from is None:
+                        raise DiscoveryIntegrityError(
+                            "Chromium redirect event has no observed predecessor"
+                        )
+                    dependencies: set[int] = set()
+                    dependency_evidence: list[dict[str, Any]] = []
+                    for dependency_kind, dependency_url in raw_dependency_urls:
+                        resolved = _resolve_dependency_url(
+                            dependency_occurrences,
+                            source=source,
+                            scope=scope,
+                            url=dependency_url,
+                        )
+                        dependency_evidence.append(
+                            {
+                                "kind": dependency_kind,
+                                "value": dependency_url,
+                                "resolved_resource_id": resolved,
+                            }
+                        )
+                        if resolved is not None:
+                            dependencies.add(resolved)
+                    initiator_request_id = initiator.get("requestId")
+                    if isinstance(initiator_request_id, str) and initiator_request_id:
+                        candidates = [
+                            (candidate_source, candidate_scope, index)
+                            for candidate_source, candidate_scope, index in (
+                                latest_request_indices.get(initiator_request_id, ())
+                            )
+                            if candidate_scope == scope
+                            and (
+                                candidate_source == source
+                                or candidate_source.parent_session_path == source.session_path
+                                or source.parent_session_path == candidate_source.session_path
+                            )
+                        ]
+                        scopes = {
+                            (candidate_source, candidate_scope)
+                            for candidate_source, candidate_scope, _index in candidates
+                        }
+                        if len(scopes) > 1:
+                            raise DiscoveryIntegrityError(
+                                "Chromium initiator request dependency is ambiguous"
+                            )
+                        resolved_request = (
+                            max(candidates, key=lambda candidate: candidate[2])[2]
+                            if candidates
+                            else None
+                        )
+                        dependency_evidence.append(
+                            {
+                                "kind": "initiator-request-id",
+                                "value": initiator_request_id,
+                                "resolved_resource_id": resolved_request,
+                            }
+                        )
+                        if resolved_request is not None:
+                            dependencies.add(resolved_request)
+                    if redirected:
+                        assert redirect_from is not None
+                        dependencies.add(redirect_from)
+                        dependency_evidence.append(
+                            {
+                                "kind": "redirect",
+                                "value": str(audit_event["redirect_from_occurrence_id"]),
+                                "resolved_resource_id": redirect_from,
+                            }
+                        )
+                    entry = DiscoveredRequest(
+                        url=request_url,
+                        resource_type=str(event.get("type", "Other")),
+                        headers={},
+                        initiator_urls=initiators,
+                        dependency_indices=dependencies,
+                        redirect_from_index=redirect_from if redirected else None,
+                        request_instance_id=(
+                            source.session_path,
+                            source.target_id,
+                            source.generation,
+                            request_id,
+                            occurrence,
+                        ),
+                        dependency_scope=scope,
+                    )
+                    merge_request_headers(entry.headers, request.get("headers", {}))
+                    extra_info.add_request(
+                        chain_key,
+                        entry,
+                        redirected=redirected,
+                        redirect_has_extra_info=redirect_has_extra_info,
+                    )
+                    discovered.append(entry)
+                    request_index = len(discovered) - 1
+                    audit_event["mapping"] = {
+                        "kind": "resource",
+                        "resource_id": request_index,
+                    }
+                    audit_event["dependency_evidence"] = dependency_evidence
+                    audit_event["resolved_dependency_resource_ids"] = sorted(dependencies)
+                    request_indices[chain_key] = request_index
+                    latest_url_indices[(scope, request_url)] = request_index
+                    dependency_occurrences.append(
+                        _DependencyOccurrence(source, scope, request_url, request_index)
+                    )
+                    latest_request_indices.setdefault(request_id, []).append(
+                        (source, scope, request_index)
+                    )
+
+                def extra_headers_seen(source: CdpTargetSource, event: Mapping[str, Any]) -> None:
+                    request_id = str(event.get("requestId", ""))
+                    extra_info.add_extra_info(
+                        source.request_chain_key(request_id), event.get("headers")
+                    )
+
+                def response_seen(source: CdpTargetSource, event: Mapping[str, Any]) -> None:
+                    response = event.get("response")
+                    if not isinstance(response, Mapping):
+                        raise DiscoveryIntegrityError(
+                            "Chromium network response payload is malformed"
+                        )
+                    if any(
+                        response.get(flag) is True
+                        for flag in ("fromDiskCache", "fromPrefetchCache", "fromServiceWorker")
+                    ):
+                        raise DiscoveryIntegrityError(
+                            "Chromium response bypassed the fresh network policy"
+                        )
+                    request_id = str(event.get("requestId", ""))
+                    audit.record_response(source, event)
+                    observation_ledger.add_response(source, request_id)
+                    extra_info.add_response(
+                        source.request_chain_key(request_id), event.get("hasExtraInfo")
+                    )
+
+                def protocol_event(
+                    source: CdpTargetSource,
+                    method: str,
+                    event: Mapping[str, Any],
+                ) -> None:
+                    if cutoff_boundary.route(source, method, event):
+                        return
+                    if method == "Network.requestWillBeSent":
+                        audit_event = audit.record_network(source, event)
+                        request_seen(source, event, audit_event)
+                    elif method == "Network.requestWillBeSentExtraInfo":
+                        extra_headers_seen(source, event)
+                    elif method == "Network.responseReceived":
+                        response_seen(source, event)
+                    elif method in {"Network.loadingFinished", "Network.loadingFailed"}:
+                        request_id = str(event.get("requestId", ""))
+                        outcome = "failed" if method == "Network.loadingFailed" else "finished"
+                        closed = observation_ledger.add_terminal(
+                            source,
+                            request_id,
+                            outcome=outcome,
+                            event=event,
+                        )
+                        audit.record_terminal(
+                            source,
+                            event,
+                            outcome=outcome,
+                            occurrence_ids=closed,
+                        )
+                        extra_info.add_terminal(
+                            source.request_chain_key(request_id),
+                            failed=method == "Network.loadingFailed",
+                        )
+                    elif method == "Fetch.requestPaused":
+                        command, params = admission.command(event)
+                        intercepted_request = event.get("request", {})
+                        if not isinstance(intercepted_request, Mapping):
+                            raise DiscoveryIntegrityError(
+                                "Chromium request interception payload is malformed"
+                            )
+                        intercepted_url = str(intercepted_request.get("url", ""))
+                        reason = exclusion_reason(
+                            str(intercepted_request.get("method", "")),
+                            intercepted_url,
+                            admission.approved_origins,
+                        )
+                        if _network_interception_required(intercepted_url):
+                            audit_event = audit.record_fetch(
+                                source,
+                                event,
+                                decision=(
+                                    "continue" if command == "Fetch.continueRequest" else "fail"
+                                ),
+                                reason=reason,
+                            )
+                            observation_ledger.add_interception(
+                                source,
+                                event,
+                                audit_event=audit_event,
+                                policy_decision=(
+                                    "continue"
+                                    if command == "Fetch.continueRequest"
+                                    else "fail"
+                                ),
+                                policy_reason=reason,
+                            )
+                        assert router is not None
+                        router.send(
+                            source,
+                            command,
+                            params,
+                            label=f"request-stage-policy:{command}",
+                        )
+
+                router = RecursiveCdpTargetRouter(
+                    session,
+                    on_event=protocol_event,
+                    track_root_srcdoc_lifecycle=True,
+                    on_internal_document_lifecycle=audit.record_internal_document,
+                    on_target_activity=audit.record_target,
+                    on_non_replayable_egress=lambda source, api, mechanism, request_url: (
+                        egress_guard.record(
+                            source=source,
+                            api=api,
+                            mechanism=mechanism,
+                            url=request_url,
+                        )
+                    ),
+                )
+                router.start()
+                browser_guard = BrowserSharedWorkerGuard(browser_session, router)
+                browser_guard.start()
+                try:
+                    navigation_started_ms = audit.now_ms()
+                    navigation_deadline = time.monotonic() + timeout_ms / 1_000
+                    load_seen = [False]
+                    page.on("load", lambda: load_seen.__setitem__(0, True))
+                    page.goto(url, wait_until="commit", timeout=timeout_ms)
+                    egress_guard.raise_if_failed()
+                    _wait_for_navigation_load(
+                        page,
+                        router,
+                        load_seen,
+                        egress_guard,
+                        deadline=navigation_deadline,
+                    )
+                    load_event_ms = audit.now_ms()
+                    render_observation = _wait_for_passive_render(
+                        page,
+                        router,
+                        audit,
+                        egress_guard,
+                        context,
+                        navigation_started_ms=navigation_started_ms,
+                        load_event_ms=load_event_ms,
+                    )
+                    egress_guard.raise_if_failed()
+                    # Quiescence is established from the router's live active set,
+                    # before shutdown can synthesize any cancellation terminal.
+                    if router.active_request_identities or not router.shutdown_ready:
+                        raise DiscoveryIntegrityError(
+                            "passive render accepted before recursive target shutdown readiness"
+                    )
+                    final_url = page.url
+                    # Reconcile the scientific request-stage proof while the
+                    # audit projection is still mutable.  No request remains
+                    # active at this point, and the cutoff below quarantines
+                    # every context-disposal event separately.
+                    observation_ledger.finish()
+                    cutoff_boundary.begin(occurrence_counts)
+                    audit.freeze()
+                    router.begin_shutdown()
+                    normal_shutdown_started = True
+                    normal_shutdown_cleanup_started = True
+                    _finish_render_shutdown(
+                        context,
+                        router,
+                        browser_guard,
+                        cleanup_label="browser-discovery",
+                    )
+                    normal_shutdown_disposal_summary = cutoff_boundary.finish(
+                        extra_info,
+                        router.normal_shutdown_disposal_summary,
+                    )
+                    extra_info.finish()
+                    _validate_request_instance_ledger(discovered)
+                except BaseException as error:
+                    primary_error = error
+                    failure_cleanup_attempted = True
+                    if not normal_shutdown_started:
+                        _abort_rejected_render(context, router, browser_guard, error)
+                    elif not normal_shutdown_cleanup_started:
+                        _finish_render_shutdown(
+                            context,
+                            router,
+                            browser_guard,
+                            cleanup_label="browser-discovery",
+                            primary=error,
+                        )
+                    if isinstance(error, TerminalAcquisitionPolicyError):
+                        audit.freeze()
+                    raise
+            except BaseException as error:
+                if not failure_cleanup_attempted:
+                    primary_error = error
+                    if not normal_shutdown_started:
+                        if context is not None and router is not None and browser_guard is not None:
+                            _abort_rejected_render(context, router, browser_guard, error)
+                        elif context is not None:
+                            _dispose_failed_context(
+                                context,
+                                error,
+                                cleanup_label="browser-discovery",
+                            )
+                    elif (
+                        not normal_shutdown_cleanup_started
+                        and context is not None
+                        and router is not None
+                        and browser_guard is not None
+                    ):
+                        _finish_render_shutdown(
+                            context,
+                            router,
+                            browser_guard,
+                            cleanup_label="browser-discovery",
+                            primary=error,
+                        )
+                    if isinstance(error, TerminalAcquisitionPolicyError):
+                        audit.freeze()
+                    failure_cleanup_attempted = True
+                raise
+            finally:
+                try:
+                    browser.close()
+                except BaseException as error:
+                    if primary_error is None:
+                        raise
+                    primary_error.add_note(
+                        "browser-discovery cleanup browser-close failed with "
+                        f"{type(error).__name__}"
+                    )
+                finally:
+                    if egress_guard is not None:
+                        # A retained egress violation is scientific policy
+                        # evidence, not a mechanical cleanup failure.  It must
+                        # remain higher priority than a coincident browser
+                        # exception.
+                        egress_guard.raise_if_failed()
+                    if router is not None:
+                        # Likewise, protocol-integrity failures stay fatal;
+                        # only errors raised by the ordered abort operations
+                        # themselves are attached as cleanup notes above.
+                        router.raise_if_failed()
+    except PlaywrightError as error:
+        if isinstance(error, DiscoveryIntegrityError):
+            raise
+        raise RecoverableAcquisitionError(f"Playwright discovery failed: {error}") from error
+
+    if egress_guard is None or render_observation is None:
+        raise DiscoveryIntegrityError("browser discovery omitted its egress evidence")
+    if normal_shutdown_disposal_summary is None:
+        raise DiscoveryIntegrityError(
+            "browser discovery omitted its normal-shutdown disposal evidence"
+        )
+    if (
+        egress_guard.success_summary()
+        != render_observation["non_replayable_egress_summary"]
+    ):
+        raise DiscoveryIntegrityError("browser egress evidence changed during disposal")
+    if origin(final_url) not in approved:
+        raise ValueError("the final page origin was not explicitly approved")
+    resources = build_resources(discovered)
+    if not resources:
+        raise ValueError("browser discovery left no approved HTTPS GET resources")
+    if render_observation is None:
+        raise DiscoveryIntegrityError("browser discovery omitted its render observation")
+    event_audit = audit.build(
+        instrumentation_policy=CDP_TARGET_INSTRUMENTATION_POLICY,
+        render_observation=render_observation,
+        resources=resources,
+        exclusions=sorted(
+            admission.exclusions.values(), key=lambda item: (item["url"], item["reason"])
+        ),
+        approved_origins=approved,
+        observed_origins=sorted(admission.observed_origins),
+        observed_request_count=admission.observed_request_count,
+        normal_shutdown_disposal_summary=normal_shutdown_disposal_summary,
+    )
+    contract = passive_render_contract()
+    return DiscoveryResult(
+        source_url=url,
+        final_url=final_url,
+        chromium_version=chromium_version,
+        settle_ms=SETTLE_MS,
+        observed_request_count=admission.observed_request_count,
+        observed_origins=sorted(admission.observed_origins),
+        approved_origins=approved,
+        exclusions=sorted(
+            admission.exclusions.values(), key=lambda item: (item["url"], item["reason"])
+        ),
+        resources=resources,
+        origin_ip_pins=pins,
+        expandable_origins=sorted(admission.expandable_origins),
+        instrumentation_policy=CDP_TARGET_INSTRUMENTATION_POLICY,
+        passive_render_contract=contract,
+        passive_render_contract_sha256=PASSIVE_RENDER_CONTRACT_SHA256,
+        render_observation=render_observation,
+        render_observation_sha256=evidence_sha256(render_observation),
+        discovery_event_audit=event_audit,
+        discovery_event_audit_sha256=evidence_sha256(event_audit),
+    )
+
+
+def exclusion_reason(method: str, url: str, approved: set[str]) -> str | None:
+    if method != "GET":
+        return f"unsafe method: {method or 'unknown'}"
+    request_origin = origin(url)
+    if request_origin is None:
+        return "not an absolute HTTPS request"
+    if request_origin not in approved:
+        return "origin not approved"
+    return None
+
+
+def merge_request_headers(target: dict[str, str], headers: dict[str, Any]) -> None:
+    """Merge HTTP headers case-insensitively, with the new observation winning."""
+
+    for raw_name, raw_value in headers.items():
+        target[str(raw_name).lower()] = str(raw_value)
+
+
+def build_resources(ordered: list[DiscoveredRequest]) -> list[dict[str, Any]]:
+    """Project every observed request occurrence into one runtime resource.
+
+    URLs are deliberately not deduplicated.  Resource IDs are deterministic
+    observation-order instance identities; each URL initiator resolves to its
+    latest preceding occurrence, while an observed redirect always depends on
+    the immediately preceding occurrence carrying the same Chromium request ID.
+    """
+
+    preceding_by_url: dict[tuple[str, str], int] = {}
+    resources = []
+    for resource_id, request in enumerate(ordered):
+        dependencies = set(request.dependency_indices)
+        dependencies.update(
+            preceding_by_url[(request.dependency_scope, initiator)]
+            for initiator in request.initiator_urls
+            if (request.dependency_scope, initiator) in preceding_by_url
+        )
+        if request.redirect_from_index is not None:
+            dependencies.add(request.redirect_from_index)
+        if any(type(value) is not int or not 0 <= value < resource_id for value in dependencies):
+            raise ValueError("discovered request dependency is not a preceding instance")
+        resources.append(
+            {
+                "id": resource_id,
+                "url": request.url,
+                "type": request.resource_type,
+                "content_length": None,
+                "data_length": 0,
+                "chaff_priority": False,
+                "known_valid": False,
+                "depends_on": sorted(dependencies),
+                "headers": safe_discovery_headers(request.headers),
+            }
+        )
+        preceding_by_url[(request.dependency_scope, request.url)] = resource_id
+    return resources
+
+
+def _validate_request_instance_ledger(ordered: list[DiscoveredRequest]) -> None:
+    """Require one well-formed, globally unique browser identity per retained request."""
+
+    identities: set[tuple[tuple[str, ...], str, int, str, int]] = set()
+    for request in ordered:
+        identity = request.request_instance_id
+        if (
+            not isinstance(identity, tuple)
+            or len(identity) != 5
+            or not isinstance(identity[0], tuple)
+            or any(not isinstance(value, str) or not value for value in identity[0])
+            or not isinstance(identity[1], str)
+            or not identity[1]
+            or type(identity[2]) is not int
+            or identity[2] < 0
+            or not isinstance(identity[3], str)
+            or not identity[3]
+            or type(identity[4]) is not int
+            or identity[4] < 0
+            or identity in identities
+        ):
+            raise DiscoveryIntegrityError(
+                "Chromium request-instance ledger is malformed or collision-prone"
+            )
+        identities.add(identity)
+
+
+def _normalize_origin(value: str) -> str:
+    normalized = origin(value)
+    if normalized is None:
+        raise ValueError(f"approved origin is not absolute HTTPS: {value}")
+    parts = urlsplit(value)
+    if parts.path not in {"", "/"} or parts.query or parts.fragment:
+        raise ValueError(f"approved origin must not contain a path: {value}")
+    return normalized
+
+
+def _validate_origin_ip_pins(approved: list[str], pins: Mapping[str, str] | None) -> dict[str, str]:
+    if pins is None:
+        raise ValueError("discovery requires exact origin IP pins")
+    if not isinstance(pins, Mapping) or set(pins) != set(approved):
+        raise ValueError("origin IP pins must cover the approved origin set exactly")
+    result: dict[str, str] = {}
+    for approved_origin in approved:
+        raw = pins[approved_origin]
+        if not isinstance(raw, str):
+            raise ValueError("origin IP pin must be a string")
+        try:
+            address = ipaddress.ip_address(raw)
+        except ValueError as error:
+            raise ValueError("origin IP pin is not a canonical address") from error
+        if address.compressed != raw:
+            raise ValueError("origin IP pin must use canonical text")
+        result[approved_origin] = raw
+    _pins_by_hostname(result)
+    return result
+
+
+def _pins_by_hostname(pins: Mapping[str, str]) -> dict[str, str]:
+    """Collapse origin pins to Chromium's hostname-wide resolver semantics."""
+
+    result: dict[str, str] = {}
+    for approved_origin, address in sorted(pins.items()):
+        hostname = urlsplit(approved_origin).hostname
+        if hostname is None:
+            raise ValueError("origin IP pin has no hostname")
+        previous = result.setdefault(hostname, address)
+        if previous != address:
+            raise ValueError("origin IP pins conflict for a shared hostname")
+    return result

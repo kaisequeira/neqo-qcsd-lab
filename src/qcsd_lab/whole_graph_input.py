@@ -42,6 +42,34 @@ CATALOGUE_PRODUCERS = {
 VERSIONS = {PLAN_TYPE: (1, CONTRACT, INPUT_TYPE, PRODUCERS),
             SEEDED_PLAN_TYPE: (2, SEEDED_CONTRACT, SEEDED_INPUT_TYPE, SEEDED_PRODUCERS),
             CATALOGUE_PLAN_TYPE: (3, CATALOGUE_CONTRACT, CATALOGUE_INPUT_TYPE, CATALOGUE_PRODUCERS)}
+EXTERNAL_CONTROL_VERSIONS = {
+    4: {"graph_input.py": "e80e00ec650d4c7bea9124b166b722475ac834545ce8c40665dc7299d84182e6"},
+    5: {"graph_input.py": "008a8441e9d15390ba4a611e2e63984f3696783a6869f6e92acee275685a9bd6"},
+    6: {"graph_input.py": "25beea47d87a703f3d92b72c412743f1286cf1270ac4b34cce506cf5c1f21c1d"},
+    8: {"graph_input.py": "ca61994bff27939e04cd4f17a00800afe43e73757a8dd206b2e2f09336cb30d9"},
+}
+for _version, _sources in EXTERNAL_CONTROL_VERSIONS.items():
+    VERSIONS[f"qcsd-external-navigation-seeded-whole-graph-catalogue-plan-v{_version}"] = (
+        _version, f"catalogue-homepage-navigation-seeded-complete-occurrence-graph-input-only-v{_version}",
+        f"qcsd-external-browser-whole-graph-input-v{_version}",
+        {**_sources, "operator.py": CATALOGUE_PRODUCERS["operator.py"]})
+CONTINUATION_PLAN_TYPE = "qcsd-external-navigation-seeded-reservation-continuation-plan-v7"
+VERSIONS[CONTINUATION_PLAN_TYPE] = (7,
+    "retained-v4-reservations-with-owned-canceled-root-control-input-only-v7",
+    "qcsd-external-browser-whole-graph-input-v7", {
+        "graph_input.py": "786a7af83ceb1edbeba21ede1f6e614fce29c8ef08969214e5060383d1d373a1",
+        "operator.py": "85abef7ca2faf0c477eedbe7fcb12e7f2d8445d4e48d7232acf023c3d8c7cf1b"})
+CONTROL_SOURCES = {
+    5: ("explicit-absent-loadingFailed-errorText-with-owned-terminal-v1", {
+        "discovery_evidence_control.py": "cede18fe878b4e8fb94ed0d86ee7fbd3f59951259a19a8b3e798ee60fdee1551",
+        "discovery_control.py": "fcfa614ea8fb9ab6a5c9985eced9be51986671fe1737a5062832468b6ba6a71e"}),
+    6: ("explicit-terminal-diagnostic-and-owned-canceled-root-continuation-v1", {
+        "discovery_evidence_control.py": "cede18fe878b4e8fb94ed0d86ee7fbd3f59951259a19a8b3e798ee60fdee1551",
+        "discovery_control.py": "f556ecab3288a287058098c0d8998a3227eba75b02c8b4143420649bf6278d2b",
+        "navigation_control.py": "e6bf22f1b89e742586af8715dcddc0c6009a02678d2c89bbe8f4909f870a286d"}),
+}
+CONTROL_SOURCES[7] = CONTROL_SOURCES[6]
+CONTROL_SOURCES[8] = CONTROL_SOURCES[6]
 ZERO = {"scientific_credit": False, "site_credit": 0, "formal_accepted_trace_count": 0}
 RESOURCE_KEYS = {"id", "url", "type", "content_length", "data_length", "chaff_priority",
                  "known_valid", "depends_on", "headers"}
@@ -88,7 +116,24 @@ def _producer(plan: dict[str, Any]) -> Path:
             or paths["operator.py"].parent != paths["graph_input.py"].parent
             or any(paths[name].name != name for name in PRODUCERS)):
         raise ValueError("whole graph input has an unrecognized discovery producer")
+    if version[0] >= 5:
+        _external_control(plan, paths["operator.py"].parent)
     return paths["operator.py"]
+
+
+def _external_control(plan: dict[str, Any], parent: Path) -> None:
+    """External control files retain their own labels, separate from the image."""
+    policy, sources = CONTROL_SOURCES[plan["schema_version"]]
+    value = get._exact(plan.get("discovery_control"),
+        {"policy", "sources", "installed_image_source_changed", "module_loading"}, "external discovery control")
+    refs = get._exact(value["sources"], set(sources), "external discovery control Sources")
+    if (value["policy"] != policy or value["installed_image_source_changed"] is not False
+            or value["module_loading"] != "explicit-separate-modules-no-installed-module-replacement"):
+        raise ValueError("external discovery control changes its separate producer role")
+    for name, digest in sources.items():
+        if (reopen(refs[name]) != parent / name or refs[name]["sha256"] != digest
+                or refs[name]["mode"] != "0644"):
+            raise ValueError("external discovery control bytes, mode or location changed")
 
 
 def _verify_external(operator: Path, action: str, flag: str, path: Path) -> None:
@@ -158,6 +203,8 @@ def load_failure(path: Path) -> dict[str, Any]:
     """An operational discovery failure is an accounted attempt, never eligibility."""
     value = get._load(get._read(path))
     plan = load_plan(reopen(value["plan"]))
+    if plan["schema_version"] >= 4:
+        return _controlled_failure(path, value, plan)
     seeded = plan["artifact_type"] in {SEEDED_PLAN_TYPE, CATALOGUE_PLAN_TYPE}
     fields = {"schema_version", "plan", "candidate", "completed_at", "elapsed_ns",
         "error_type", "message", "traceback", "completed_passes", "outcome", *ZERO}
@@ -200,6 +247,53 @@ def load_failure(path: Path) -> dict[str, Any]:
     return value
 
 
+def _controlled_failure(path: Path, value: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
+    """Reopen new operational failures without altering historical schemas."""
+    fields = {"schema_version", "plan", "candidate", "completed_at", "elapsed_ns", "error_type",
+        "message", "traceback", "completed_passes", "completed_navigation", "failure_stage", "outcome", *ZERO}
+    version = plan["schema_version"]
+    if version >= 5:
+        fields.update({"exception_evidence", "exception_evidence_sha256"})
+    get._exact(value, fields, "controlled discovery failure")
+    if (path.name != "failed.json" or type(value["schema_version"]) is not int or value["schema_version"] != 1
+            or not zero(value) or value["outcome"] != "operational-discovery-failure-no-admission"
+            or type(value["elapsed_ns"]) is not int or value["elapsed_ns"] <= 0
+            or any(not isinstance(value[key], str) for key in ("error_type", "message", "traceback"))
+            or value["failure_stage"] not in {"navigation", "complete-occurrence-convergence"}):
+        raise ValueError("controlled discovery failure changes its operational-only role")
+    if version >= 5:
+        if (value["exception_evidence"] is not None and not isinstance(value["exception_evidence"], dict)
+                or value["exception_evidence_sha256"] != discovery_digest(value["exception_evidence"])):
+            raise ValueError("controlled discovery exception evidence changed")
+    started = get._exact(get._load(get._read(path.with_name("started.json"))),
+        {"schema_version", "plan", "candidate", "runtime", "started_at", *ZERO}, "controlled discovery start")
+    source = get._read(path.with_name("image-source-metadata.json"))
+    runtime = {"image_digest": plan["browser_image"], "source_metadata": get._load(source),
+        "installed_metadata_sha256": graph.digest(source),
+        "execution_role": f"actual-browser-image-navigation-seeded-graph-input-only-v{version}"}
+    if version >= 5:
+        runtime["external_discovery_control"] = plan["discovery_control"]
+    if (type(started["schema_version"]) is not int or started["schema_version"] != 1
+            or started["plan"] != value["plan"] or started["candidate"] != value["candidate"]
+            or value["candidate"] not in plan["candidates"] or started["runtime"] != runtime or not zero(started)
+            or get._load(source) != get._load(get._read(reopen(plan["source_metadata"])))
+            or not get._time(plan["declared_at"]) <= get._time(started["started_at"]) <= get._time(value["completed_at"])):
+        raise ValueError("controlled failed attempt changes declaration, runtime or chronology")
+    if not isinstance(value["completed_passes"], list) or len(value["completed_passes"]) > plan["max_origin_passes"]:
+        raise ValueError("controlled failed attempt exceeds its pass bound")
+    records = [(entry, {"started", "result", "completed"}) for entry in value["completed_passes"]]
+    if value["completed_navigation"] is not None:
+        records.append((value["completed_navigation"],
+            {"started", "result", "completed", "control"} if version >= 6 else {"started", "result", "completed"}))
+    for entry, keys in records:
+        get._exact(entry, keys, "controlled failed attempt raw records")
+        if any(reopen(ref).parent != path.absolute().parent for ref in entry.values()):
+            raise ValueError("controlled failed attempt raw records escape their original namespace")
+    if path.with_name("whole-graph-input.json").exists():
+        raise ValueError("successful discovery cannot become an operational failure")
+    return value
+
+
 def plan_files(path: Path) -> tuple[list[Path], list[Path]]:
     """Complete authenticated declaration dependencies, including retry failures."""
     load_plan(path)
@@ -219,6 +313,9 @@ def plan_files(path: Path) -> tuple[list[Path], list[Path]]:
         _producer(declaration)
         for entry in declaration["producer_sources"].values():
             ref(entry)
+        if declaration["schema_version"] >= 5:
+            for entry in declaration["discovery_control"]["sources"].values():
+                ref(entry)
         ref(declaration["catalogue"])
         ref(declaration["source_metadata"])
         for key in ("context", "source_list", "profile", "candidate_order"):
@@ -245,12 +342,14 @@ def plan_files(path: Path) -> tuple[list[Path], list[Path]]:
                     ref(entry)
                 for entry in attempt["actual_operation"].values():
                     ref(entry)
-        if declaration["artifact_type"] == CATALOGUE_PLAN_TYPE:
+        if declaration["schema_version"] >= 3:
             from .supplied_static_preparation import open_reference
 
             def history_refs(value):
                 if isinstance(value, dict):
-                    if set(value) == {"path", "sha256"}:
+                    if set(value) == {"path", "sha256", "mode"}:
+                        ref(value)
+                    elif set(value) == {"path", "sha256"}:
                         files.add(open_reference(value))
                     else:
                         for item in value.values():
@@ -265,6 +364,11 @@ def plan_files(path: Path) -> tuple[list[Path], list[Path]]:
             # next catalogue identity. Existing v1/v2 traversal is unchanged.
             history_refs(declaration["history_batches"])
             history_refs(declaration["history"])
+            if declaration["schema_version"] == 7:
+                history_refs(declaration["reservation_continuation"])
+                sources.add(Path(declaration["reservation_continuation"]["retained_root"]))
+            if declaration["schema_version"] == 8:
+                history_refs(declaration["reservation_retirements"])
             for batch in declaration["history"]:
                 for attempt in batch["attempts"]:
                     root = Path(attempt["root"])
@@ -294,7 +398,7 @@ def input_files(path: Path) -> tuple[list[Path], list[Path]]:
     for pass_record in value["passes"]:
         for entry in pass_record.values():
             ref(entry)
-    if value["artifact_type"] in {SEEDED_INPUT_TYPE, CATALOGUE_INPUT_TYPE}:
+    if value["schema_version"] >= 2:
         for entry in value["navigation"].values():
             ref(entry)
     files.add(path.with_name("image-source-metadata.json").absolute())
