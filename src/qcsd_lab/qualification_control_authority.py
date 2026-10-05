@@ -91,8 +91,25 @@ def _source_comparison(before, after):
         "unchanged_producer_files": {x: evidence._sha(before[x]) for x in sorted(protected) if x not in changes}}
 
 
+def _original(original_witness):
+    """Reopen the unchanged original validator once in the owning action.
+
+    Its first call registers the complete raw closure. The owner must reopen
+    every registered byte, mode and tree membership before effects or success.
+    Neither a new action nor another raw reference inherits this result.
+    """
+    context = current_context()
+    if context is None:
+        return old.validate(original_witness, body_policy=POLICY)
+    path, _ = evidence._reference(original_witness)
+    context.watch_file(path)
+    key = (TYPE, "original-validator", original_witness["path"], original_witness["sha256"])
+    if context.has(key):return context.get(key)
+    return context.remember(key, old.validate(original_witness, body_policy=POLICY))
+
+
 def _derive(original_witness, consumer):
-    original, implementation, _ = old.validate(original_witness, body_policy=POLICY)
+    original, implementation, _ = _original(original_witness)
     producer, sources = old._runtime(original["producer"])
     current, current_sources = old._runtime(consumer)
     if (producer["installed_client_sha256"] != current["installed_client_sha256"]
@@ -108,11 +125,15 @@ def _derive(original_witness, consumer):
 
 
 def _bind(context, reference, value):
-    old._bind(context, reference, value)
-    context.watch_file(evidence._reference(value["original_witness"])[0])
-    original, _, _ = old.validate(value["original_witness"], body_policy=POLICY)
-    old._bind(context, value["original_witness"], original)
+    # Include the whole role document: declaration seeds and completed typed
+    # artifacts can share a reference while selecting different consumers.
+    key = (TYPE, "raw-binding", evidence._sha(evidence._encoded({"reference": reference, "value": value})))
+    context.watch_file(evidence._reference(reference)[0])
     context.watch_file(Path(__file__))
+    if context.has(key):return context.get(key)
+    old._bind(context, reference, value)
+    original, _, _ = _original(value["original_witness"])
+    return context.remember(key, original)
 
 
 def declare(output, *, original_witness, consumer, body_policy):
@@ -130,7 +151,7 @@ def declare(output, *, original_witness, consumer, body_policy):
         value = {"schema_version": 1, "artifact_type": TYPE, "contract": CONTRACT,
             "original_witness": original_witness, "consumer": consumer, POLICY_FIELD: POLICY,
             "published_at": datetime.now(UTC).isoformat(), **facts, **old.ZERO}
-        original = old.validate(original_witness, body_policy=POLICY)[0]
+        original = _original(original_witness)[0]
         canonical = evidence._json(evidence._reference(consumer["canonical"])[1])
         if (evidence._timestamp(original["published_at"]) >= evidence._timestamp(value["published_at"])
             or evidence._timestamp(canonical["verified_at"]) >= evidence._timestamp(value["published_at"])):
@@ -166,12 +187,11 @@ def validate(reference, *, body_policy, canonical=None, actual_image=None):
         with context.scope():
             result = validate(reference, body_policy=body_policy, canonical=canonical, actual_image=actual_image)
             context.check();return result
-    _bind(context, reference, value)
+    old_value = _bind(context, reference, value)
     key = (TYPE, reference["path"], reference["sha256"])
     facts, original, current = context.get(key) if context.has(key) else context.remember(key, _derive(value["original_witness"], value["consumer"]))
     if any(value[name] != facts[name] for name in FACTS):raise ValueError("control authority changed its recomputed original/current facts")
     published = evidence._timestamp(value["published_at"])
-    old_value = old.validate(value["original_witness"], body_policy=POLICY)[0]
     actual = evidence._json(evidence._reference(value["consumer"]["canonical"])[1])
     if (published > datetime.now(UTC) or evidence._timestamp(old_value["published_at"]) >= published
         or evidence._timestamp(actual["verified_at"]) >= published):
@@ -183,11 +203,23 @@ def validate(reference, *, body_policy, canonical=None, actual_image=None):
 
 def roots(reference, *, body_policy):
     if not is_authority(reference):return old.roots(reference, body_policy=body_policy)
+    context = current_context()
+    if context is None:
+        context = OperationFacts()
+        with context.scope():
+            result = roots(reference, body_policy=body_policy)
+            context.check();return result
     value, _, _ = validate(reference, body_policy=body_policy)
+    key = (TYPE, "transport-roots", reference["path"], reference["sha256"], body_policy)
+    if context.has(key):return context.get(key)
     files, trees = old._raw_dependencies(reference, value)
     selected = {Path(p).absolute() for p in trees} | {Path(p).absolute().parent for p in files}
-    selected.update(old.roots(value["original_witness"], body_policy=body_policy))
-    return sorted(p for p in selected if not any(p != root and p.is_relative_to(root) for root in selected))
+    original = _original(value["original_witness"])[0]
+    original_files, original_trees = old._raw_dependencies(value["original_witness"], original)
+    selected.update(Path(p).absolute() for p in original_trees)
+    selected.update(Path(p).absolute().parent for p in original_files)
+    result = sorted(p for p in selected if not any(p != root and p.is_relative_to(root) for root in selected))
+    return context.remember(key, result)
 
 
 def validate_sidecar(sidecar, canonical, *, workload_id, workload_sha256, reference, body_policy):

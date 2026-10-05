@@ -184,7 +184,9 @@ def validate(reference, *, runtime, mode):
             context.check()
             return result
     context.watch_file(path)
-    facts = _derive(**{key: value[key] for key in ("original_canary", "original_runtime", "current_runtime",
+    key = (TYPE, "validated-bridge", ready._encoded(reference), ready._encoded(runtime), mode)
+    if context.has(key):return context.get(key)
+    facts = _derive(**{name: value[name] for name in ("original_canary", "original_runtime", "current_runtime",
         "current_inventory", "current_witness", "mode")})
     if any(value[key] != fact for key, fact in facts.items()):
         raise ValueError("control bridge differs from freshly reopened measurement and consumer facts")
@@ -195,20 +197,30 @@ def validate(reference, *, runtime, mode):
         if ready._timestamp(witness_value["published_at"]) >= ready._timestamp(value["published_at"]):
             raise ValueError("control bridge predates its actual qualification witness")
     original = facts["measurement_facts"]
-    return {**original, "authority_source": facts["current_source"],
+    result = {**original, "authority_source": facts["current_source"],
             "control_authority_witness": value["current_witness"], FIELD: reference[FIELD],
             "control_bridge_published_at": value["published_at"]}
+    return context.remember(key, result)
 
 
 def roots(reference, *, runtime, mode):
+    context = current_context()
+    if context is None:
+        context = OperationFacts()
+        with context.scope():
+            result = roots(reference, runtime=runtime, mode=mode)
+            context.check();return result
     validate(reference, runtime=runtime, mode=mode)
+    memo_key = (TYPE, "transport-roots", ready._encoded(reference), ready._encoded(runtime), mode)
+    if context.has(memo_key):return context.get(memo_key)
     path, raw = ready._reference(reference[FIELD]); value = ready._json(raw)
-    roots = set(ready.readiness_mount_roots(value["original_canary"], runtime=value["original_runtime"], mode=mode))
-    roots.update(control.roots(value["current_witness"], body_policy=delivery.POLICY))
-    roots.add(path.parent)
-    roots.add(ready._reference(value["current_inventory"])[0].parent)
+    selected = set(ready.readiness_mount_roots(value["original_canary"], runtime=value["original_runtime"], mode=mode,
+                                             _context=context))
+    selected.update(control.roots(value["current_witness"], body_policy=delivery.POLICY))
+    selected.add(path.parent)
+    selected.add(ready._reference(value["current_inventory"])[0].parent)
     for key in ("runtime_source_root", "module_root", "execution_root"):
-        roots.add(ready._path(runtime[key], directory=True))
+        selected.add(ready._path(runtime[key], directory=True))
     for key in ("source_manifest", "client_binary", "base_launcher", "host_launcher"):
-        roots.add(ready._path(runtime[key]).parent)
-    return sorted(roots)
+        selected.add(ready._path(runtime[key]).parent)
+    return context.remember(memo_key, sorted(selected))

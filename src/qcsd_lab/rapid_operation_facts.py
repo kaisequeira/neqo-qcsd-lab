@@ -303,6 +303,9 @@ class OperationFacts:
         self._bindings.add(key)
 
     def bind_canary(self, reference, runtime=None) -> None:
+        key = ("canary", json.dumps({"reference": reference, "runtime": runtime}, sort_keys=True))
+        if key in self._bindings:
+            return
         from .rapid_capture_traffic import canary_files
         plan = self._reference(reference["plan"])
         # A canary transport parent can also contain the execution's future
@@ -361,6 +364,7 @@ class OperationFacts:
                     self.watch_file(Path(role[name]))
                 for relative, _ in selected_traffic.values():
                     self.watch_file(Path(role["execution_root"]) / relative)
+        self._bindings.add(key)
 
     def content_key(self, files=(), trees=(), *, include_modes=True):
         values = []
