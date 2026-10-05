@@ -7,6 +7,8 @@ once. Each original lane is reopened once by its own Source interpreter.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from contextvars import ContextVar
+from functools import wraps
 import hashlib
 import json
 import os
@@ -23,6 +25,9 @@ SOURCE_TYPE = "qcsd-original-epoch-corpus-reader-source-v1"
 AUDIT_TYPE = "qcsd-read-only-original-epoch-corpus-audit-v1"
 CORPUS_TYPE = "qcsd-complete-fifty-site-five-setting-sixty-four-slot-epoch-corpus-v1"
 CONTRACT = "original-validators-source-labels-and-exact-16000-logical-slots-v1"
+PARTIAL_AUDIT_TYPE = "qcsd-read-only-original-epoch-corpus-with-verified-partial-traces-audit-v1"
+PARTIAL_CORPUS_TYPE = "qcsd-complete-fifty-site-five-setting-sixty-four-slot-partial-epoch-corpus-v1"
+PARTIAL_CONTRACT = "original-accepted-deep-verified-individual-slots-incomplete-aggregates-preserved-v1"
 MODES = ("undefended", "front", "tamaraw", "buflo", "cs-buflo")
 TARGET = 16000
 # The declared study retains these already accepted traces. A future study
@@ -30,6 +35,7 @@ TARGET = 16000
 RETAINED_PROGRESS_SHA256 = "eb409d9f05347840804bcb0a26882e1a8825f4c7ff8909536b88a6f8321dbc48"
 SHA = re.compile(r"[0-9a-f]{64}\Z")
 HEAD = re.compile(r"[0-9a-f]{40}\Z")
+_PARTIAL_OBSERVATIONS = ContextVar("qcsd_partial_corpus_observations", default=None)
 
 
 def _json(value: Any) -> bytes:
@@ -265,12 +271,24 @@ def graph_identity(path):
     rows=value['resources']
     # Encoding does not reorder, collapse repeated requests or project headers.
     return hashlib.sha256(json.dumps({'resources':rows,'primary_resource_id':value.get('primary_resource_id',preparation.get('primary_resource_id')),'final_url':preparation['final_url'],'approved_origins':preparation.get('approved_origins')},sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
+def original_reference(ref):
+    # Authenticate the complete mode-bearing object before the unchanged
+    # original API receives its historical two-field reference shape.
+    if isinstance(ref,dict) and set(ref)=={'path','sha256','mode'}:
+        if (not isinstance(ref['path'],str) or not Path(ref['path']).is_absolute()
+            or '..' in Path(ref['path']).parts or type(ref['mode']) is not int or not 0<=ref['mode']<=0o7777):
+            raise ValueError('epoch original reference mode or path schema differs')
+        record(ref['path'])
+        if watched.get(ref['path'])!=ref:
+            raise ValueError('epoch original reference bytes or mode changed')
+        return rolling._open_ref({key:ref[key] for key in ('path','sha256')})
+    return rolling._open_ref(ref)
 def class_rows(path):
     batch,classes,policy=rolling._verify_enrollment(Path(path))
     result=[]
     for row in classes:
         if 'prepared_workload' in row:
-            original=rolling._open_ref(row['prepared_workload'])
+            original=original_reference(row['prepared_workload'])
         else:
             # An additive seed keeps its original static row shape. Resolve
             # its already authenticated direct input, including through a
@@ -289,9 +307,9 @@ def class_rows(path):
                     break
                 if 'seed_policy' not in original_policy:
                     context=rolling._context_for_policy(original_policy,Path(row['admission_root']))
-                    original,_=rolling._prepared_workload(context,rolling._open_ref(row['terminal']))
+                    original,_=rolling._prepared_workload(context,original_reference(row['terminal']))
                     break
-                seed=rolling._open_ref(original_policy['seed_policy'])
+                seed=original_reference(original_policy['seed_policy'])
                 if str(seed) in seen: raise ValueError('epoch membership has cyclic seed policy ancestry')
                 seen.add(str(seed))
                 raw=seed.read_bytes(); envelope=json.loads(raw)
@@ -447,6 +465,67 @@ def coverage(classes: list[dict], lane_reports: list[dict], *, require_complete=
         raise ValueError("final corpus has holes; exactly fifty by five by sixty-four is required")
     return {"accepted": totals, "complete": complete, "missing_slots": len(expected - observed),
             "class_count": len(classes), "lane_count": len(lane_reports), "scientific_credit": complete}
+
+
+def partial_coverage(classes: list[dict], lane_reports: list[dict], partial_rows: list[dict],
+                     *, require_complete=True) -> dict:
+    """Combine individual proof rows without converting failed lanes to passes.
+
+    Public audit/publication accepts these rows only through the authenticated
+    partial-progress validator. This reducer grants no standalone receipt.
+    """
+    known = _classes(classes, final=require_complete)
+    original = coverage(classes, lane_reports, require_complete=False)
+    expected = {(row["class_index"], mode, visit) for row in classes for mode in MODES for visit in range(64)}
+    observed = {(sample["class_index"], sample["mode"], sample["visit"])
+                for lane in lane_reports for sample in lane["samples"]}
+    samples = {(lane["facts"]["result_root"], sample["sample_id"])
+               for lane in lane_reports for sample in lane["samples"]}
+    complete_results = {lane["facts"]["result_root"] for lane in lane_reports}
+    partial_results = set()
+    for row in partial_rows:
+        cls = known.get(row.get("candidate_id"))
+        block, local, logical = (row.get(key) for key in ("registered_block", "actual_local_visit", "logical_visit"))
+        if (cls is None or type(row.get("class_index")) is not int or row["class_index"] != cls["class_index"]
+                or row.get("workload_id") != cls["workload_id"]
+                or row.get("original_graph_sha256") != cls["original_graph_sha256"]
+                or row.get("mode") not in MODES
+                or type(block) is not int or not 1 <= block <= 16
+                or type(local) is not int or not 0 <= local < 4
+                or type(logical) is not int or logical != (block - 1) * 4 + local
+                or row.get("original_state") != "accepted"
+                or row.get("individual_trace_authority") != "original-collector-accepted-and-original-deep-verified-v1"
+                or row.get("aggregate_status") != "incomplete" or row.get("lane_pass_claim") is not False
+                or type(row.get("aggregate_formal_credit")) is not int or row["aggregate_formal_credit"] != 0
+                or type(row.get("host_returncode")) is not int or row["host_returncode"] != 1):
+            raise ValueError("partial corpus changes original accepted trace or incomplete aggregate authority")
+        caps = row.get("capture_limits")
+        if (not isinstance(caps, dict) or any(type(caps.get(key)) is not int or caps[key] != cls["capture_limits"][key]
+                for key in ("max_response_bytes", "capture_megabytes"))):
+            raise ValueError("partial corpus changes a class's declared response/recording budgets")
+        result, sample_id = row.get("result_root"), row.get("sample_id")
+        artifacts, receipt = row.get("artifacts"), row.get("partial_receipt")
+        if (not isinstance(result, str) or not Path(result).is_absolute()
+                or not isinstance(sample_id, str) or not sample_id
+                or not isinstance(artifacts, dict) or not artifacts
+                or not isinstance(receipt, dict) or set(receipt) not in ({"path", "sha256"}, {"path", "sha256", "mode"})
+                or not isinstance(receipt.get("path"), str) or not Path(receipt["path"]).is_absolute()
+                or not isinstance(receipt.get("sha256"), str) or SHA.fullmatch(receipt["sha256"]) is None
+                or result in complete_results):
+            raise ValueError("partial corpus lost original raw artifacts or mixes incomplete and complete lane labels")
+        slot = row["class_index"], row["mode"], logical
+        sample_key = result, sample_id
+        if slot not in expected or slot in observed or sample_key in samples:
+            raise ValueError("partial corpus duplicates or invents a logical/sample slot across epochs")
+        observed.add(slot); samples.add(sample_key); partial_results.add(result)
+    total = original["accepted"] + len(partial_rows)
+    complete = len(classes) == 50 and observed == expected and total == TARGET
+    if require_complete and not complete:
+        raise ValueError("partial corpus has holes; exactly fifty by five by sixty-four is required")
+    return {"accepted": total, "complete": complete, "missing_slots": len(expected - observed),
+            "class_count": len(classes), "complete_lane_count": len(lane_reports),
+            "incomplete_lane_count": len(partial_results), "accepted_individual_partial_traces": len(partial_rows),
+            "scientific_credit": complete, "incomplete_aggregate_labels_preserved": True}
 
 
 def _prior(progress_refs: list[dict], reports: list[dict], classes: list[dict]) -> list[dict]:
@@ -627,7 +706,7 @@ def _operation_request(started: dict, source_ref: dict, sources: dict, membershi
     return request
 
 
-def publish(audit_ref: dict, output: Path) -> dict:
+def _reopen_audit(audit_ref: dict, *, require_complete=True) -> tuple[dict, dict]:
     value = _document(audit_ref, AUDIT_TYPE)
     fields = {"contract", "final_enrollment", "membership_source", "epoch_sources", "closures", "prior_progress",
               "classes", "lanes", "operations", "read_dependencies", "directory_dependencies", "facts",
@@ -647,7 +726,7 @@ def publish(audit_ref: dict, output: Path) -> dict:
     for ref in value["directory_dependencies"]:
         if _directory(Path(ref["path"])) != ref:
             raise ValueError("final epoch audit raw directory membership changed")
-    facts = coverage(value["classes"], value["lanes"])
+    facts = coverage(value["classes"], value["lanes"], require_complete=require_complete)
     # Reopen original operation raw outputs and require exact audit report rows.
     original_lanes, original_classes = [], None
     expected_dependencies = [reference(reopen(ref)) for ref in [value["final_enrollment"], value["membership_source"], *value["epoch_sources"], *value["closures"]]]
@@ -689,6 +768,212 @@ def publish(audit_ref: dict, output: Path) -> dict:
     expected_dependencies.extend(_prior(value["prior_progress"], original_lanes, original_classes))
     _close_original_dependencies(expected_dependencies, expected_directories,
                                  value["read_dependencies"], value["directory_dependencies"])
+    return value, facts
+
+
+def publish(audit_ref: dict, output: Path) -> dict:
+    value, facts = _reopen_audit(audit_ref)
     return _write(output, CORPUS_TYPE, {"contract": CONTRACT, "audit": audit_ref, "classes": value["classes"],
                    "lanes": value["lanes"], **facts, "measurement_equivalence_claimed": False,
                    "closed_at": datetime.now(timezone.utc).isoformat()})
+
+
+def _partial_owned(function):
+    """One fresh or borrowed owner for the new typed route only."""
+    @wraps(function)
+    def run(*args, **kwargs):
+        from .rapid_operation_facts import OperationFacts, current_context
+        context = current_context()
+        if context is None:
+            context = OperationFacts(); context.begin_action()
+        token = _PARTIAL_OBSERVATIONS.set({"files": {}, "directories": {}, "context": context})
+        try:
+            with context.scope():
+                _partial_reference(Path(__file__).absolute())
+                value = function(*args, **kwargs)
+                _partial_close()
+                return value
+        finally:
+            _PARTIAL_OBSERVATIONS.reset(token)
+    return run
+
+
+def _partial_reference(value: Path | dict) -> dict:
+    """Observe each dependency once; the owner freshly closes every byte."""
+    expected = value if isinstance(value, dict) else None
+    if expected is not None:
+        if (set(expected) not in ({"path", "sha256"}, {"path", "sha256", "mode"})
+                or not isinstance(expected.get("sha256"), str) or SHA.fullmatch(expected["sha256"]) is None
+                or "mode" in expected and (type(expected["mode"]) is not int or not 0 <= expected["mode"] <= 0o7777)):
+            raise ValueError("partial corpus dependency reference schema differs")
+    path = _path(expected["path"] if expected is not None else value)
+    state = _PARTIAL_OBSERVATIONS.get()
+    if state is None:
+        actual = reference(path)
+    elif str(path) in state["files"]:
+        actual = state["files"][str(path)]
+    else:
+        before = path.lstat()
+        raw = state["context"].watch_file(path)
+        after = path.lstat()
+        fields = lambda item: (item.st_dev, item.st_ino, item.st_mode, item.st_size, item.st_mtime_ns, item.st_ctime_ns)
+        if fields(before) != fields(after):
+            raise ValueError("partial corpus dependency changed while observed")
+        actual = {"path": str(path), "sha256": hashlib.sha256(raw).hexdigest(), "mode": stat.S_IMODE(before.st_mode)}
+        state["files"][str(path)] = actual
+    if expected is not None and any(actual[key] != item for key, item in expected.items()):
+        raise ValueError("partial corpus dependency bytes or mode changed")
+    return dict(actual)
+
+
+def _partial_directory(value: dict) -> dict:
+    path = _path(value["path"], directory=True)
+    state = _PARTIAL_OBSERVATIONS.get()
+    current = None if state is None else state["directories"].get(str(path))
+    if current is None:
+        current = _directory(path)
+        if state is not None:
+            state["directories"][str(path)] = current
+    if current != value:
+        raise ValueError("partial corpus changed original raw directory membership")
+    return current
+
+
+def _partial_close() -> None:
+    from . import rapid_partial_progress as progress
+    state = _PARTIAL_OBSERVATIONS.get()
+    if state is None:
+        raise ValueError("partial corpus publication lacks its owning operation")
+    for value in state["directories"].values():
+        if _directory(Path(value["path"])) != value:
+            raise ValueError("partial corpus raw directory membership changed before publication")
+    progress.close_operation(state["context"])
+
+
+def _partial_inputs(progress_refs: list[dict]) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
+    """Use the explicit typed join; no current reader reinterprets an old lane."""
+    from . import rapid_partial_progress as progress
+    from . import rapid_partial_lane as partial
+    if (not progress_refs or len({(ref["path"], ref["sha256"]) for ref in progress_refs}) != len(progress_refs)):
+        raise ValueError("partial corpus requires unique typed partial-progress references")
+    state = _PARTIAL_OBSERVATIONS.get()
+    if state is None:
+        raise ValueError("partial corpus inputs require an owning operation")
+    executing = [_partial_reference(Path(progress.__file__).absolute()), _partial_reference(Path(partial.__file__).absolute())]
+    rows, values, files, directories = [], [], list(executing), {}
+    receipts = {}
+    for ref in progress_refs:
+        files.append(_partial_reference(ref))
+        value, dependencies = progress.read_inputs(ref)
+        accepted = value.get("individual_slots") if isinstance(value, dict) else None
+        if (not isinstance(value, dict) or not isinstance(accepted, list) or not accepted
+                or any(not isinstance(row, dict) for row in accepted)
+                or not isinstance(dependencies, set) or any(not isinstance(path, Path) for path in dependencies)):
+            raise ValueError("partial corpus received another typed progress API")
+        values.append(value)
+        for row in accepted:
+            receipt = row.get("partial_receipt")
+            if not isinstance(receipt, dict):
+                raise ValueError("partial corpus omitted an original partial receipt")
+            actual = _partial_reference(receipt)
+            if actual["path"] in receipts and receipts[actual["path"]] != actual:
+                raise ValueError("partial corpus replaced a partial receipt across joins")
+            receipts[actual["path"]] = actual
+        rows.extend(accepted)
+        observed = progress.observed_inputs(dependencies, state["context"])
+        if {item["path"] for item in observed} != {str(path) for path in dependencies}:
+            raise ValueError("partial corpus omitted an authenticated input observation")
+        for item in observed:
+            path = str(_path(item["path"]))
+            if path in state["files"] and state["files"][path] != item:
+                raise ValueError("partial corpus changed an authenticated dependency observation")
+            state["files"][path] = dict(item)
+        files.extend(observed)
+        for item in value["directory_dependencies"]:
+            if item["path"] in directories and directories[item["path"]] != item:
+                raise ValueError("partial corpus changed original raw directory observations")
+            directories[item["path"]] = _partial_directory(item)
+    files.extend(receipts.values())
+    unique = {}
+    for ref in files:
+        actual = _partial_reference(ref)
+        if actual["path"] in unique and unique[actual["path"]] != actual:
+            raise ValueError("partial corpus changed a recorded read dependency")
+        unique[actual["path"]] = actual
+    return rows, values, list(unique.values()), list(directories.values())
+
+
+def _combined_dependencies(base: dict, base_ref: dict, files: list[dict], directories: list[dict]) -> tuple[list[dict], list[dict]]:
+    unique, members = {}, {}
+    for ref in [base_ref, *base["read_dependencies"], *files]:
+        actual = _partial_reference(ref)
+        if actual["path"] in unique and unique[actual["path"]] != actual:
+            raise ValueError("partial corpus changed raw bytes or modes across proof epochs")
+        unique[actual["path"]] = actual
+    for ref in [*base["directory_dependencies"], *directories]:
+        if ref["path"] in members and members[ref["path"]] != ref:
+            raise ValueError("partial corpus changed original raw membership across proof epochs")
+        members[ref["path"]] = _partial_directory(ref)
+    return list(unique.values()), list(members.values())
+
+
+@_partial_owned
+def audit_with_partials(final_enrollment: dict, membership_source: dict, epoch_sources: list[dict],
+                        closures: list[dict], prior_progress: list[dict], partial_progress: list[dict],
+                        output_root: Path) -> dict:
+    """Keep SCI36/original complete lanes and genuine partial proofs separate."""
+    if not partial_progress:
+        raise ValueError("partial corpus audit needs an explicit partial-progress authority")
+    if not any(ref.get("sha256") == RETAINED_PROGRESS_SHA256 for ref in prior_progress):
+        raise ValueError("partial corpus audit must retain the exact declared SCI36 progress anchor")
+    reader = reference(Path(__file__).absolute())
+    root = output_root.absolute()
+    if root.exists() or root.is_symlink() or any(p.is_symlink() for p in root.parents):
+        raise ValueError("partial corpus audit namespace is already claimed or linked")
+    _path(root.parent, directory=True)
+    root.mkdir(mode=0o700); _sync_directory(root.parent)
+    base_ref = audit(final_enrollment, membership_source, epoch_sources, closures, prior_progress, root / "complete-lanes")
+    base, _ = _reopen_audit(base_ref, require_complete=False)
+    rows, values, files, directories = _partial_inputs(partial_progress)
+    facts = partial_coverage(base["classes"], base["lanes"], rows, require_complete=False)
+    files, directories = _combined_dependencies(base, base_ref, files, directories)
+    if reader != reference(Path(__file__).absolute()):
+        raise ValueError("partial corpus executing Source changed before publication")
+    payload = {"contract": PARTIAL_CONTRACT, "complete_audit": base_ref, "partial_progress": partial_progress,
+        "partial_progress_values": values, "accepted_partial_rows": rows, "read_dependencies": files,
+        "directory_dependencies": directories, "facts": facts, "reader_source": reader,
+        "scientific_credit": False, "measurement_equivalence_claimed": False,
+        "closed_at": datetime.now(timezone.utc).isoformat()}
+    _partial_close()
+    return _write(root / "audit.json", PARTIAL_AUDIT_TYPE, payload)
+
+
+@_partial_owned
+def publish_with_partials(audit_ref: dict, output: Path) -> dict:
+    _partial_reference(audit_ref)
+    value = _document(audit_ref, PARTIAL_AUDIT_TYPE)
+    fields = {"contract", "complete_audit", "partial_progress", "partial_progress_values", "accepted_partial_rows",
+        "read_dependencies", "directory_dependencies", "facts", "reader_source", "scientific_credit",
+        "measurement_equivalence_claimed", "closed_at"}
+    if (set(value) != fields or value["contract"] != PARTIAL_CONTRACT or value["scientific_credit"] is not False
+            or value["measurement_equivalence_claimed"] is not False
+            or value["reader_source"] != reference(Path(__file__).absolute())):
+        raise ValueError("partial corpus publication needs this exact closed typed audit")
+    base, _ = _reopen_audit(value["complete_audit"], require_complete=False)
+    rows, progress_values, files, directories = _partial_inputs(value["partial_progress"])
+    if rows != value["accepted_partial_rows"] or progress_values != value["partial_progress_values"]:
+        raise ValueError("partial corpus substituted original independently verified partial output")
+    audit_facts = partial_coverage(base["classes"], base["lanes"], rows, require_complete=False)
+    if audit_facts != value["facts"]:
+        raise ValueError("partial corpus changed its original accepted-slot arithmetic")
+    facts = partial_coverage(base["classes"], base["lanes"], rows)
+    files, directories = _combined_dependencies(base, value["complete_audit"], files, directories)
+    if files != value["read_dependencies"] or directories != value["directory_dependencies"]:
+        raise ValueError("partial corpus omitted or substituted its original raw dependency closure")
+    if value["reader_source"] != reference(Path(__file__).absolute()):
+        raise ValueError("partial corpus executing Source changed before final publication")
+    _partial_close()
+    return _write(output, PARTIAL_CORPUS_TYPE, {"contract": PARTIAL_CONTRACT, "audit": audit_ref,
+        "classes": base["classes"], "complete_lanes": base["lanes"], "partial_progress": value["partial_progress"],
+        "accepted_partial_rows": rows, **facts, "measurement_equivalence_claimed": False,
+        "closed_at": datetime.now(timezone.utc).isoformat()})

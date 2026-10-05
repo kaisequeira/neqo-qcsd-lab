@@ -73,7 +73,8 @@ def _owned_action(function):
             context.begin_action()
         with context.scope():
             result = function(*args, **kwargs)
-            context.check()
+            from .rapid_partial_progress import close_operation
+            close_operation(context)
             return result
     return run
 
@@ -180,7 +181,15 @@ def _registered_slots(lane, accepted: int, progress_type: str) -> range:
 
 
 def prior_progress(reference: Mapping[str, str], classes: list[dict]) -> tuple[dict, set[tuple[int, str, int]], set[Path]]:
-    path = rolling._open_ref(reference)
+    from . import rapid_partial_progress as partial
+    candidate_path = partial._open(reference)
+    if lanes._load(_raw(candidate_path)).get("artifact_type") == partial.TYPE:
+        value, files = partial.read_inputs(reference, classes=classes)
+        slots = {(r["class_index"], r["mode"], r["visit"]) for r in value["accepted_formal_slots"]}
+        return value, slots, files
+    # The new boundary already authenticates an optional permission mode;
+    # the unchanged historical helper receives only its exact two-key schema.
+    path = rolling._open_ref({key: reference[key] for key in ("path", "sha256")})
     value = lanes._load(_raw(path))
     enrollment._progress(value, classes)
     if (value.get("artifact_type") not in {"root-reopened-rolling-static-scientific-progress", PROGRESS_TYPE}
@@ -329,7 +338,8 @@ def publish_policy(base_spec: lanes.CaptureSpec, prior: Mapping[str, str], outpu
         "formal_trace_target": FINAL_TARGET, "implementation_sources": sources(), "runtime": runtime,
         "published_at": receipts._now(), "scientific_credit": False, "formal_accepted_trace_count": 0}
     output = _publication_path(output, rolling._open_ref(batch["policy"]).parent)
-    current_context().check()
+    from .rapid_partial_progress import close_operation
+    close_operation(current_context())
     path = rolling._write(output, POLICY_TYPE, payload)
     validate_policy(rolling._ref(path))
     return path
@@ -470,6 +480,8 @@ def publish_plan(base_spec: lanes.CaptureSpec, policy_reference: Mapping[str, st
             _context.watch_file(path)
         _context.watch_file(rolling._open_ref(policy_reference))
         _context.check()
+    from .rapid_partial_progress import close_operation
+    close_operation()
     rows = []
     for lane in planned:
         raw = render(lane, sites, **_render_options(base))
@@ -485,6 +497,8 @@ def publish_plan(base_spec: lanes.CaptureSpec, policy_reference: Mapping[str, st
              "previous_chunk_plan": None}
     if _context is not None:
         _context.check()
+    from .rapid_partial_progress import close_operation
+    close_operation()
     return rolling._write(output, PLAN_TYPE, value)
 
 
@@ -562,13 +576,16 @@ def publish_successor(spec: lanes.CaptureSpec, lane_name: str, generation: int, 
     base = checked_lane({key: item for key, item in matching[0].items() if key != "campaign_sha256"})
     lane = successor(base, generation)
     raw = render(lane, sites, **_render_options(value))
-    context.check()
+    from .rapid_partial_progress import close_operation
+    close_operation(context)
     campaign = spec.campaign_dir / (lane.campaign_name + ".yml")
     receipts.durable_create(campaign, raw)
     context.watch_file(campaign)
     value = {**value, "lanes": [_row(lane, raw)], "planned_trace_count": lane.sample_count,
              "declared_at": receipts._now(), "previous_chunk_plan": rolling._ref(spec.plan_receipt)}
     context.check()
+    from .rapid_partial_progress import close_operation
+    close_operation()
     return rolling._write(output, PLAN_TYPE, value)
 
 

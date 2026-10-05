@@ -101,6 +101,10 @@ def _study_profile(execution_root: Path) -> Path:
 
 def _qualification_layout(spec: CaptureSpec) -> None:
     value = _load(_read(spec.qualification_spec))
+    from . import rapid_undefended_capture as ordinary
+    if ordinary.is_inputs(value):
+        ordinary.check_layout(spec, value)
+        return
     if (not isinstance(value, dict) or set(value) != {"schema_version", "qualification_sets"}
         or type(value["schema_version"]) is not int or value["schema_version"] != 1
         or not isinstance(value["qualification_sets"], list) or not value["qualification_sets"]):
@@ -443,7 +447,11 @@ def _validate_image_proof(proof: Any, spec: CaptureSpec, *, equivalent_plan: boo
         or proof["acquisition_provenance_sha256"] != stored_plan["acquisition_provenance_sha256"]
         or proof["cohort_generation"] != stored_plan["cohort_generation"]):
         raise ValueError("executed image proof differs from the retained exact plan")
-    sites = tuple(plan.Site(**row) for row in proof["sites"])
+    from . import rapid_undefended_capture as ordinary
+    site_type = ordinary.OrdinarySite if ordinary.FIELD in stored_plan else plan.Site
+    if site_type is ordinary.OrdinarySite:
+        ordinary.require_plan(stored_plan)
+    sites = tuple(site_type(**row) for row in proof["sites"])
     if proof["cohort_generation"] == "rolling-50":
         from . import rapid_rolling_capture as rolling
         actual_sites, _ = rolling.verify_capture_plan(spec, _context=_context)
@@ -1267,14 +1275,14 @@ def launch_lane(spec: CaptureSpec, evidence_root: Path, campaign_name: str, *, p
         context.check()
         _actuate_host(spec, root, directory, command, env, lock_descriptor)
         returncode = _payload(directory / "host-process.json", PROCESS_TYPE)["returncode"]
+        if returncode != 0:
+            raise RuntimeError(f"host exit {returncode}; lane intent, process and results retained at {directory}")
         if lane.study_version == 6:
             from . import rapid_rolling_capture as rolling
             completed = Path(rolling.check_lane_in_image(spec, root, intent_path, complete=True,
                                                        _context=context)["receipt"])
         else:
             completed = complete_lane(spec, root, intent_path)
-        if returncode != 0:
-            raise RuntimeError(f"deep-verified lane receipt retained at {completed}; host exit {returncode} needs lifecycle diagnosis")
         context.check()
         return completed
 

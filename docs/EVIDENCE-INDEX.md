@@ -11,8 +11,15 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ### Current supplied-list study
 
-The **5 October 2026** formal anchor is **36/16,000**: eight ordinary, four
-FRONT and twenty-four Tamaraw recordings. Its immutable record is
+The **6 October 2026** formal anchor is **44/16,000**: eight ordinary, four
+FRONT and thirty-two Tamaraw recordings. Its immutable record is
+`../diagnostic-rehearsals/partial-progress-b0002-root-actual-20261005-002/scientific-progress-joined.json`,
+SHA `48349e04604b4a666e4a9b95deb38d08fd4d94c89b4e58d87ae979902449d35e`.
+The actual join closed 0 in 181.204 seconds; its completion SHA is
+`05b4caf138ee010ce007a5307f99444acdea56aa2759711aafb772fae3725236`.
+It retains the original 36 verified slots and adds eight individually verified
+recordings from the incomplete batch, with no aggregate lane pass claim.
+The preceding 36-slot immutable record remains
 `diagnostic-rehearsals/supplied-static-tamaraw-formal-b08-root-actual-20261005-001/scientific-progress-000009.json`,
 SHA `eb409d9f05347840804bcb0a26882e1a8825f4c7ff8909536b88a6f8321dbc48`.
 All sample identities and original measurement labels remain unchanged.
@@ -31,9 +38,56 @@ The independent membership summary is in
 `diagnostic-rehearsals/selected-additive-classes007-011-enrollment-readonly-review-20261005-001/enrollment-summary.json`,
 SHA `0f60d4dbaa5c8f98c18cb8c8cd429f2b0a678548105004f0c72a4d98bcb34e66`;
 its review SHA is `0b1b1ecedca6ca697af125b38506f2cd2f8d648f42977237f88015ec13d3f1d2`.
-The retained original admission count is nineteen. Classes 7–11 keep every
+The ordinary resource admission count is twenty. Classes 7–11 keep every
 70/13/62/143/77 resource row from positions 26/27/31/35/36 and their complete
 raw GET evidence. Remaining reservations are unassessed by the new ledger.
+
+The finished twenty-slot Tamaraw batch retains **eight collector successes and
+twelve failures** under its original Lab `86cd8c78` / Native `c24da2af` image.
+Its sealed result is in the host-local sibling path
+`../diagnostic-rehearsals/supplied-static-b0002-tamaraw-canary-control-root-actual-20261005-001/execution-root/results/rapid-curated-tranco50-v6-formal-b02-s02-tamaraw-1200/20261005T101631.126790Z/`.
+The separate accepted-subset declaration is
+`../diagnostic-rehearsals/partial-lane-b0002-root-actual-20261005-002/individual-traces.json`,
+SHA `908315da105545136cdcec40d2705e844525bc11a4cc18588d6a690a526add30`.
+Its original deep operation, outer declaration and separate verification all
+closed 0. The actual progress-counter join above credits these eight while
+preserving the incomplete aggregate. The incomplete aggregate
+and all failed attempts retain their original states. The actual proof closure is
+`../diagnostic-rehearsals/partial-lane-b0002-root-actual-20261005-002/proof-actual-closed.json`,
+SHA `37bc1235def092a509a14ec229ecb1712cd0c25d8d203e665d6908d9aa7f36d1`.
+
+The actual class-3 ordinary comparison completed all seventy resources over
+HTTP/3 with the unchanged original client and address pins in 2.2587 seconds.
+Its diagnostic summary is
+`../diagnostic-rehearsals/class003-c24-ordinary-comparison-root-actual-20261005-003/output/diagnostic-summary.json`,
+SHA `7a8d641d3ac1eae276838ddad331851245ddd2758a5220f7e26da89c5881dcc2`.
+This diagnostic has zero formal credit. Its later visit and separate network
+do not establish causal equivalence to the defended failure.
+
+The single-visit Tamaraw diagnostic reproduced the failed main response using
+the same original client, complete graph and address pins. Its summary is
+`../diagnostic-rehearsals/class003-c24-tamaraw-keylog-root-actual-20261005-003/output/diagnostic-summary.json`,
+SHA `9dc73109ed50a7b3ca6fd7c90d60f18cabc5281ee8c4934a9ef6941d1f0f6d46`.
+The diagnostic container closed 0 in 138.204 seconds, recording Native exit 1,
+zero main-response bytes and sixteen complete cover responses. Private traffic
+keys were generated and the owned packet recorder stopped successfully.
+The subsequent offline numeric decoder closed 0 in 19.281 seconds. Its facts are
+`../diagnostic-rehearsals/class003-c24-tamaraw-offline-quic-decoder-root-actual-20261005-002/output/numeric-quic-facts.json`,
+SHA `64deb3630ef5e662d873a481ed9db8942b02fdbcb98d8da5c9cfca914c553ec6`.
+It records a server stream-blocked limit of 16, then outgoing main-stream receive
+credit of 1,000, with no incoming main-stream data frames in that capture.
+A causal fix or new formal setting is not established; this adds zero formal
+credit. Failed recorder and decoder attempts remain retained in their original
+destinations.
+
+The combined control changes are published as Lab `176b6e03` with unchanged
+Native `c24da2af`. Their source publication closure is
+`../collection-owner-partial-source-publication-root-20261005-003/publication-actual-closed.json`,
+SHA `1cbb2e3af54ef605e757c034481d211e799f11bd62ed1a6f3cd445e872a673f7`.
+This proves source publication, not a new runtime installation, faster installed
+startup or actual two-worker recovery.
+
+#### Earlier v13 repair
 
 Actual Lab `2ad55d8e` / Native `c24da2af` v13 runtime evidence is in
 `diagnostic-rehearsals/rapid-v13-delivery-witness-entrypoint-fix-nativec24-runtime-20261005-001`

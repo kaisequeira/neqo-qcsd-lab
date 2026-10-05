@@ -174,6 +174,9 @@ def epoch_campaign_name(lane: Lane, epoch: int) -> str:
 
 
 def _check_sites(sites: Sequence[Site], *, final: bool, study_version: int = 5) -> tuple[Site, ...]:
+    from .rapid_undefended_capture import OrdinarySite, check_sites
+    if any(isinstance(site, OrdinarySite) for site in sites):
+        return check_sites(sites, final=final, study_version=study_version)
     selected = tuple(sites)
     expected = FINAL_CLASS_COUNT if final else 10
     rolling = study_version == 6
@@ -237,6 +240,9 @@ def plan_lanes(
 ) -> tuple[Lane, ...]:
     """Plan 50 diagnostic or 16,000 formal slots with per-defence recovery."""
 
+    from .rapid_undefended_capture import OrdinarySite, plan_lanes as ordinary_lanes
+    if any(isinstance(site, OrdinarySite) for site in sites):
+        return ordinary_lanes(sites, final=final, study_version=study_version, rolling_batch=rolling_batch)
     selected = _check_sites(sites, final=final, study_version=study_version)
     if type(study_version) is not int or study_version not in STUDY_VERSIONS:
         raise ValueError("rapid lane study version is unregistered")
@@ -373,8 +379,13 @@ def render_lane_campaign(lane: Lane, sites: Sequence[Site], *, static_capture_li
             buflo_duration_policy=buflo_duration_policy,
             application_body_identity_policy=application_body_identity_policy,
             qualification_delivery_compatibility=qualification_delivery_compatibility)
+    from .rapid_undefended_capture import OrdinarySite
+    ordinary_only = any(isinstance(site, OrdinarySite) for site in sites)
+    if ordinary_only and (lane.mode != "undefended" or lane.qualification_set is not None
+            or qualification_delivery_compatibility is not None or buflo_duration_policy is not None):
+        raise ValueError("ordinary-only sites cannot authorize padding or amended settings")
     selected = _check_sites(sites, final=lane.role == "formal", study_version=lane.study_version)
-    if lane.study_version in {5, 6} and any(
+    if not ordinary_only and lane.study_version in {5, 6} and any(
         site.qualification_set_manifest_sha256 is None for site in selected
     ):
         raise ValueError("rapid v5 sites require qualification manifest digests")

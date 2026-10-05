@@ -261,6 +261,40 @@ def test_isolated_prepared_manifest_reference_digest_is_required(released_source
         corpus._run_epoch({"root": str(root)}, path, [], tmp_path / "substituted-prepared")
 
 
+@pytest.mark.parametrize("case", ["authenticated-600", "mode-drift", "digest-drift", "unknown-key"])
+def test_isolated_mode_reference_authenticates_before_legacy_projection(released_source, tmp_path, case):
+    """Original verifier is strict two-key; the owned reader binds all three.
+
+    This fixture exercises the real isolated program and read observer, while
+    its enrollment validator represents the authenticated historical boundary.
+    The separate retained-input operation uses the actual eleven-class source.
+    """
+    root, _, _ = released_source
+    path, manifest = enrollment_fixture(tmp_path)
+    manifest.chmod(0o600)
+    value = json.loads(path.read_bytes())
+    bound = corpus.reference(manifest)
+    if case == "mode-drift":
+        bound["mode"] = 0o644
+    elif case == "digest-drift":
+        bound["sha256"] = "f" * 64
+    elif case == "unknown-key":
+        bound["unregistered"] = True
+    value["classes"][0]["prepared_workload"] = bound
+    path.write_text(json.dumps(value))
+    operation = tmp_path / "mode-bearing-original-reference"
+    if case != "authenticated-600":
+        with pytest.raises(ValueError, match="raw operation"):
+            corpus._run_epoch({"root": str(root)}, path, [], operation)
+        assert json.loads((operation / "completed.json").read_bytes())["returncode"] != 0
+        return
+    result = corpus._run_epoch({"root": str(root)}, path, [], operation)
+    assert result["report"]["read_only"] is True
+    assert bound in result["report"]["read_dependencies"]
+    assert result["report"]["membership"][0]["prepared_workload"] == bound
+    assert result["report"]["lanes"] == []
+
+
 def test_public_audit_retains_zero_credit_and_final_publish_refuses_incomplete_fixture(released_source, tmp_path):
     root, head, native = released_source
     path, manifest = enrollment_fixture(tmp_path)
@@ -370,3 +404,316 @@ def test_isolated_lane_reader_keeps_original_two_key_reference_abi(released_sour
         corpus._run_epoch({"root": str(root)}, None, [corpus.reference(closure)], operation)
     assert "original two-key reference authenticated" in (operation / "stderr.log").read_text()
     # The fixture ends before any lane/admission/capture claim is possible.
+
+
+def partial_fixture(row, local, *, result="/synthetic-original-incomplete-b02"):
+    """Mapping fixture only: original deep/host proof is not supplied here."""
+    return {"candidate_id": row["candidate_id"], "class_index": row["class_index"],
+        "workload_id": row["workload_id"], "original_graph_sha256": row["original_graph_sha256"],
+        "mode": "tamaraw", "logical_visit": 4 + local, "actual_local_visit": local, "registered_block": 2,
+        "sample_id": f"original-class{row['class_index']}-local{local}", "result_root": result,
+        "original_state": "accepted", "individual_trace_authority": "original-collector-accepted-and-original-deep-verified-v1",
+        "aggregate_status": "incomplete", "lane_pass_claim": False, "aggregate_formal_credit": 0,
+        "host_returncode": 1, "capture_limits": dict(row["capture_limits"]),
+        "artifacts": {"original-raw": "a" * 64},
+        "partial_receipt": {"path": "/synthetic-partial.json", "sha256": "b" * 64},
+        "measurement_source": {"lab_commit": "86cd8c78cf16447e6add3d10ffa02f6167505276",
+            "neqo_commit": "c24da2afeec2944a67c48b38eba957dcd543728d", "image_digest": "sha256:" + "c" * 64}}
+
+
+def test_partial_individual_slots_complete_exact_16000_without_lane_promotion():
+    values = classes()
+    complete = [lane(row, mode, start, 4, legacy=True) for row in values for mode in corpus.MODES
+                for start in range(0, 64, 4) if not (row["class_index"] in {2, 5} and mode == "tamaraw" and start == 4)]
+    partial_rows = [partial_fixture(values[index - 1], local) for index in (2, 5) for local in range(4)]
+    facts = corpus.partial_coverage(values, complete, partial_rows)
+    assert facts["accepted"] == 16000 and facts["scientific_credit"] is True
+    assert facts["accepted_individual_partial_traces"] == 8 and facts["incomplete_lane_count"] == 1
+    assert all(row["aggregate_status"] == "incomplete" and row["lane_pass_claim"] is False
+               and row["host_returncode"] == 1 for row in partial_rows)
+    # Synthetic arithmetic is not a published corpus or an actual deep proof.
+    with pytest.raises(ValueError, match="holes"):
+        corpus.partial_coverage(values, complete, partial_rows[:-1])
+    with pytest.raises(ValueError, match="duplicates"):
+        corpus.partial_coverage(values, complete, partial_rows + [copy.deepcopy(partial_rows[0])])
+
+
+@pytest.mark.parametrize("key,value", [
+    ("aggregate_status", "complete"), ("lane_pass_claim", True), ("aggregate_formal_credit", 8),
+    ("host_returncode", 0), ("host_returncode", True), ("original_state", "failed"),
+    ("individual_trace_authority", "collector-only"), ("logical_visit", 0), ("actual_local_visit", True),
+    ("registered_block", 3), ("candidate_id", "another"), ("class_index", True),
+    ("original_graph_sha256", "d" * 64),
+])
+def test_partial_corpus_refuses_promoted_failed_or_moved_epoch_slots(key, value):
+    values = classes(2)
+    row = partial_fixture(values[1], 0)
+    row[key] = value
+    with pytest.raises(ValueError):
+        corpus.partial_coverage(values, [], [row], require_complete=False)
+
+
+def test_partial_corpus_rejects_recollected_slot_and_changed_caps_or_raw_identity():
+    values = classes(2)
+    good = partial_fixture(values[1], 0)
+    full = lane(values[1], "tamaraw", 4, 4, legacy=True)
+    with pytest.raises(ValueError, match="duplicates"):
+        corpus.partial_coverage(values, [full], [good], require_complete=False)
+    for update in ({"capture_limits": {"max_response_bytes": 67108864, "capture_megabytes": 256}},
+                   {"artifacts": {}}, {"sample_id": ""}, {"partial_receipt": {"path": "/missing", "sha256": "wrong"}}):
+        changed = copy.deepcopy(good); changed.update(update)
+        with pytest.raises(ValueError):
+            corpus.partial_coverage(values, [], [changed], require_complete=False)
+    changed = copy.deepcopy(good); changed["result_root"] = full["facts"]["result_root"]
+    with pytest.raises(ValueError, match="mixes incomplete"):
+        corpus.partial_coverage(values, [full], [changed], require_complete=False)
+
+
+def partial_publication_fixture(tmp_path, monkeypatch):
+    """Control only the original proof boundaries; exercise publication itself.
+
+    The fixture supplies no original deep evidence and confers no actual corpus
+    credit. Its complete-lane reports and typed progress proof are synthetic.
+    Raw dependency closure, typed envelopes and final slot arithmetic are real.
+    """
+    values = classes()
+    complete = [lane(row, mode, start, 4, legacy=True) for row in values for mode in corpus.MODES
+                for start in range(0, 64, 4) if not (row["class_index"] in {2, 5} and mode == "tamaraw" and start == 4)]
+    rows = [partial_fixture(values[index - 1], local) for index in (2, 5) for local in range(4)]
+    raw = tmp_path / "original-raw"; raw.mkdir()
+    dependency = raw / "retained-deep-output.json"
+    dependency.write_text("synthetic original read dependency\n")
+    files, directories = [corpus.reference(dependency)], [corpus._directory(raw)]
+    base_ref = corpus._write(tmp_path / "complete-audit.json", corpus.AUDIT_TYPE, {"controlled_original_proof": True})
+    progress_ref = corpus._write(tmp_path / "partial-progress.json", "controlled-typed-progress-boundary", {})
+    base = {"classes": values, "lanes": complete, "read_dependencies": files,
+            "directory_dependencies": directories}
+    progress_value = {"individual_slots": rows, "aggregate_status": "incomplete", "lane_pass_claim": False}
+
+    def original_proof(ref, *, require_complete=True):
+        assert ref == base_ref and require_complete is False
+        corpus.reopen(ref)
+        return copy.deepcopy(base), corpus.coverage(values, complete, require_complete=False)
+
+    def partial_proof(refs):
+        assert refs == [progress_ref]
+        corpus.reopen(progress_ref)
+        return copy.deepcopy(rows), [copy.deepcopy(progress_value)], list(files), list(directories)
+
+    monkeypatch.setattr(corpus, "_reopen_audit", original_proof)
+    monkeypatch.setattr(corpus, "_partial_inputs", partial_proof)
+    expected_files, expected_directories = corpus._combined_dependencies(base, base_ref, files, directories)
+    payload = {"contract": corpus.PARTIAL_CONTRACT, "complete_audit": base_ref,
+        "partial_progress": [progress_ref], "partial_progress_values": [progress_value],
+        "accepted_partial_rows": rows, "read_dependencies": expected_files,
+        "directory_dependencies": expected_directories,
+        "facts": corpus.partial_coverage(values, complete, rows, require_complete=False),
+        "reader_source": corpus.reference(Path(corpus.__file__)), "scientific_credit": False,
+        "measurement_equivalence_claimed": False, "closed_at": "2026-01-01T00:00:00+00:00"}
+    audit_ref = corpus._write(tmp_path / "partial-audit.json", corpus.PARTIAL_AUDIT_TYPE, payload)
+    return audit_ref, payload, base, rows, dependency
+
+
+def test_partial_publication_keeps_complete_and_incomplete_lane_authorities_separate(tmp_path, monkeypatch):
+    ref, _, base, rows, _ = partial_publication_fixture(tmp_path, monkeypatch)
+    output = tmp_path / "final-synthetic-corpus.json"
+    result = corpus.publish_with_partials(ref, output)
+    value = corpus._document(result, corpus.PARTIAL_CORPUS_TYPE)
+    assert value["accepted"] == 16000 and value["missing_slots"] == 0
+    assert value["complete_lanes"] == base["lanes"] and value["accepted_partial_rows"] == rows
+    assert "lanes" not in value and value["incomplete_aggregate_labels_preserved"] is True
+    assert all(row["aggregate_status"] == "incomplete" and row["host_returncode"] == 1
+               and row["lane_pass_claim"] is False for row in value["accepted_partial_rows"])
+    # This is a synthetic control artifact, not actual scientific evidence.
+
+
+@pytest.mark.parametrize("mutation", ["bytes", "mode", "membership"])
+def test_partial_publication_final_raw_fence_refuses_mutation_before_write(tmp_path, monkeypatch, mutation):
+    ref, _, _, _, raw = partial_publication_fixture(tmp_path, monkeypatch)
+    original = corpus._combined_dependencies
+
+    def changed_after_observation(*args):
+        value = original(*args)
+        if mutation == "bytes":
+            raw.write_text("changed original raw bytes\n")
+        elif mutation == "mode":
+            raw.chmod(0o600)
+        else:
+            (raw.parent / "new-unsealed-member.json").write_text("{}")
+        return value
+
+    monkeypatch.setattr(corpus, "_combined_dependencies", changed_after_observation)
+    output = tmp_path / "must-remain-absent.json"
+    with pytest.raises(ValueError, match="changed"):
+        corpus.publish_with_partials(ref, output)
+    assert not output.exists()
+
+
+def test_partial_publication_refuses_holes_substituted_output_and_default_type(tmp_path, monkeypatch):
+    ref, payload, base, rows, _ = partial_publication_fixture(tmp_path, monkeypatch)
+    with pytest.raises(ValueError, match="schema"):
+        corpus._document(ref, corpus.AUDIT_TYPE)
+    changed = copy.deepcopy(payload)
+    changed["accepted_partial_rows"][0]["host_returncode"] = 0
+    altered = corpus._write(tmp_path / "substituted-audit.json", corpus.PARTIAL_AUDIT_TYPE, changed)
+    with pytest.raises(ValueError, match="substituted"):
+        corpus.publish_with_partials(altered, tmp_path / "no-promotion.json")
+    # A genuine typed join can still have holes; it must not produce a final
+    # 16K manifest merely because its individual eight traces were verified.
+    missing_rows = rows[:-1]
+    missing_value = copy.deepcopy(payload["partial_progress_values"])
+    missing_value[0]["individual_slots"] = missing_rows
+    monkeypatch.setattr(corpus, "_partial_inputs", lambda _: (missing_rows, missing_value,
+        base["read_dependencies"], base["directory_dependencies"]))
+    changed = copy.deepcopy(payload)
+    changed.update(accepted_partial_rows=missing_rows, partial_progress_values=missing_value,
+                   facts=corpus.partial_coverage(base["classes"], base["lanes"], missing_rows, require_complete=False))
+    altered = corpus._write(tmp_path / "holes-audit.json", corpus.PARTIAL_AUDIT_TYPE, changed)
+    with pytest.raises(ValueError, match="holes"):
+        corpus.publish_with_partials(altered, tmp_path / "no-holes.json")
+    assert not (tmp_path / "no-promotion.json").exists() and not (tmp_path / "no-holes.json").exists()
+
+
+def test_old_public_publish_rejects_the_new_partial_audit_type(tmp_path):
+    # Type refusal happens before any original Source or evidence proof. A
+    # partial audit cannot accidentally enter the historical all-lanes route.
+    ref = corpus._write(tmp_path / "new-type.json", corpus.PARTIAL_AUDIT_TYPE, {})
+    with pytest.raises(ValueError, match="schema"):
+        corpus.publish(ref, tmp_path / "must-remain-absent.json")
+    assert not (tmp_path / "must-remain-absent.json").exists()
+
+
+def test_public_partial_cli_requires_explicit_join_and_preserves_old_dispatch(tmp_path, monkeypatch, capsys):
+    from tools import rapid_epoch_corpus as cli
+    paths = {name: tmp_path / (name + ".json") for name in ("enrollment", "source", "lane", "prior", "join", "audit")}
+    for path in paths.values(): path.write_text("synthetic CLI boundary only\n")
+    calls = []
+    monkeypatch.setattr(corpus, "audit_with_partials", lambda *args: calls.append(("partial", args)) or {"control": True})
+    monkeypatch.setattr(corpus, "audit", lambda *args: calls.append(("old", args)) or {"control": True})
+    shared = ["--final-enrollment", str(paths["enrollment"]), "--membership-source", str(paths["source"]),
+              "--lane-closure", str(paths["lane"]), "--prior-progress", str(paths["prior"]),
+              "--output-root", str(tmp_path / "unclaimed-output")]
+    with pytest.raises(SystemExit) as error:
+        cli.main(["audit-partial", *shared])
+    assert error.value.code == 2 and not calls
+    assert cli.main(["audit-partial", *shared, "--partial-progress", str(paths["join"])]) == 0
+    assert calls[-1][0] == "partial" and calls[-1][1][-2] == [corpus.reference(paths["join"])]
+    assert cli.main(["audit", *shared]) == 0 and calls[-1][0] == "old"
+    with pytest.raises(SystemExit) as error:
+        cli.main(["audit", *shared, "--partial-progress", str(paths["join"])])
+    assert error.value.code == 2 and len(calls) == 2
+    assert not (tmp_path / "unclaimed-output").exists()
+    capsys.readouterr()
+
+
+# This fixture executes the separately bound progress reader over controlled
+# original Source/runtime/deep reports. It creates no genuine trace credit.
+from tests.test_rapid_partial_progress import fixture as retained_partial_join
+
+
+def partial_api_coupling(tmp_path, monkeypatch, retained_partial_join):
+    from qcsd_lab import rapid_partial_progress as progress
+    from qcsd_lab import rapid_partial_lane as original
+    from qcsd_lab.rapid_operation_facts import OperationFacts
+    ref = progress.publish(prior_progress=retained_partial_join["prior"],
+        enrollment=retained_partial_join["enrollment"], partials=[retained_partial_join["portion"]],
+        output=retained_partial_join["output"])
+    membership = []
+    for member in retained_partial_join["classes"]:
+        membership.append({**member, "canonical_sites": [f"class{member['class_index']}.invalid"],
+            "original_graph_sha256": member.get("original_graph_sha256", "1" * 64),
+            "capture_limits": member.get("capture_limits", {"max_response_bytes": 16777216, "capture_megabytes": 64})})
+    base = {"classes": membership, "lanes": [], "read_dependencies": [], "directory_dependencies": []}
+
+    def base_audit(enrollment, source, epochs, closures, prior, root):
+        root.mkdir()
+        return corpus._write(root / "audit.json", corpus.AUDIT_TYPE, {"controlled_original_complete_audit": True})
+
+    def base_proof(ref, *, require_complete=True):
+        corpus.reopen(ref)
+        assert require_complete is False
+        return copy.deepcopy(base), corpus.coverage(membership, [], require_complete=False)
+
+    monkeypatch.setattr(corpus, "audit", base_audit)
+    monkeypatch.setattr(corpus, "_reopen_audit", base_proof)
+    monkeypatch.setattr(original, "_run_original", lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("consuming partial evidence must not rerun the original deep validator")))
+    derive, observed, watch = progress._derive, progress.observed_inputs, OperationFacts.watch_file
+    counts = {"derive": 0, "watched_after_snapshot": None, "watched": 0}
+    dependency = Path(retained_partial_join["fresh"]["stdout.log"]["path"])
+
+    def counted_derive(*args, **kwargs):
+        counts["derive"] += 1
+        return derive(*args, **kwargs)
+
+    def counted_watch(self, path):
+        if Path(path).absolute() == dependency: counts["watched"] += 1
+        return watch(self, path)
+
+    def counted_observed(*args, **kwargs):
+        value = observed(*args, **kwargs)
+        counts["watched_after_snapshot"] = counts["watched"]
+        return value
+
+    monkeypatch.setattr(progress, "_derive", counted_derive)
+    monkeypatch.setattr(progress, "observed_inputs", counted_observed)
+    monkeypatch.setattr(OperationFacts, "watch_file", counted_watch)
+    arguments = (retained_partial_join["enrollment"], retained_partial_join["portion"]["receipt"], [], [],
+        [{"path": retained_partial_join["prior"]["path"], "sha256": corpus.RETAINED_PROGRESS_SHA256}], [ref])
+    return arguments, ref, counts, dependency
+
+
+def test_public_partial_audit_uses_one_original_proof_and_authenticated_snapshots(
+        tmp_path, monkeypatch, retained_partial_join):
+    from qcsd_lab import rapid_partial_progress as progress
+    arguments, joined, counts, _ = partial_api_coupling(tmp_path, monkeypatch, retained_partial_join)
+    root = tmp_path / "corpus-audit"
+    ref = corpus.audit_with_partials(*arguments, root)
+    value = corpus._document(ref, corpus.PARTIAL_AUDIT_TYPE)
+    assert counts["derive"] == 1
+    assert counts["watched"] == counts["watched_after_snapshot"]
+    assert value["facts"]["accepted_individual_partial_traces"] == 4
+    assert value["scientific_credit"] is False and value["measurement_equivalence_claimed"] is False
+    assert value["partial_progress"] == [joined]
+    rows = value["accepted_partial_rows"]
+    assert [row["logical_visit"] for row in rows] == [4, 5, 6, 7]
+    assert all(row["host_returncode"] == 1 and row["aggregate_status"] == "incomplete"
+        and row["capture_limits"]["max_attempts"] == 3 for row in rows)
+    dependencies = {ref["path"] for ref in value["read_dependencies"]}
+    assert Path(retained_partial_join["fresh"]["stdout.log"]["path"]).as_posix() in dependencies
+    assert Path(retained_partial_join["portion"]["verify"]["completed"]["path"]).as_posix() in dependencies
+    # The fixture's enrollment/release/original proof is controlled, not a real
+    # SCI36 join. The genuine public deep operations are not repeated here.
+
+
+@pytest.mark.parametrize("mutation", ["bytes", "mode", "membership"])
+def test_partial_api_final_fence_rejects_changes_after_authenticated_snapshot(
+        tmp_path, monkeypatch, retained_partial_join, mutation):
+    arguments, _, _, dependency = partial_api_coupling(tmp_path, monkeypatch, retained_partial_join)
+    combine = corpus._combined_dependencies
+
+    def changed(*args):
+        value = combine(*args)
+        if mutation == "bytes": dependency.write_text("substituted sealed deep output\n")
+        elif mutation == "mode": dependency.chmod(0o644 if dependency.stat().st_mode & 0o777 == 0o600 else 0o600)
+        else:
+            directory = Path(retained_partial_join["report"]["directory_dependencies"][0]["path"])
+            (directory / "unsealed-new-entry").write_text("must refuse")
+        return value
+
+    monkeypatch.setattr(corpus, "_combined_dependencies", changed)
+    root = tmp_path / "refused-corpus-audit"
+    with pytest.raises(ValueError, match="changed|membership"):
+        corpus.audit_with_partials(*arguments, root)
+    assert not (root / "audit.json").exists()
+
+
+def test_partial_api_missing_independent_verification_refuses_before_publication(
+        tmp_path, monkeypatch, retained_partial_join):
+    from qcsd_lab import rapid_partial_progress as progress
+    retained_partial_join["portion"]["verify"].pop("completed")
+    with pytest.raises(ValueError):
+        progress.publish(prior_progress=retained_partial_join["prior"],
+            enrollment=retained_partial_join["enrollment"], partials=[retained_partial_join["portion"]],
+            output=retained_partial_join["output"])
+    assert not retained_partial_join["output"].exists()

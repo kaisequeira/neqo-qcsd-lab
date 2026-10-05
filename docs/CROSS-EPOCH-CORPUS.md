@@ -73,3 +73,59 @@ The last supplied checkpoint for development is SCI36 and eleven enrolled classe
 There is no final corpus or new installed/physical capture claim in this package.
 See [CLASS-STUDY.md](CLASS-STUDY.md) for the study's existing evidence roles.
 The prospective chunk launcher remains a separately held Source package.
+
+## Individually verified traces from incomplete lanes
+
+The separate `audit-partial` and `publish-partial` commands use new artifact
+types. The original `audit` and `publish` commands retain their strict complete
+lane contract. A failed lane is never converted into a successful lane.
+
+Supply a typed partial-progress join only after its actual original partial
+declaration and independent public verification have both closed successfully.
+The join retains the original incomplete aggregate, host exit 1, full planned
+matrix, failures and attempts. Its individual rows identify only original
+collector-accepted traces that the unchanged original installed deep verifier
+accepted. The original Source, image, client, complete graph, caps, policy,
+sample and raw artifacts remain bound.
+
+```sh
+python tools/rapid_epoch_corpus.py audit-partial \
+  --final-enrollment FINAL_AUTHENTICATED_ENROLLMENT.json \
+  --membership-source MEMBERSHIP_SOURCE_BINDING.json \
+  --epoch-source ORIGINAL_SOURCE_BINDING.json \
+  --lane-closure ORIGINAL_SUCCESSFUL_INSTALLED_DEEP_CLOSURE.json \
+  --prior-progress ORIGINAL_SCI36_PROGRESS.json \
+  --partial-progress ORIGINAL_DEEP_VERIFIED_PARTIAL_PROGRESS.json \
+  --output-root UNUSED_PARTIAL_CORPUS_AUDIT_ROOT
+
+python tools/rapid_epoch_corpus.py publish-partial \
+  --audit UNUSED_PARTIAL_CORPUS_AUDIT_ROOT/audit.json \
+  --output UNUSED_FINAL_PARTIAL_CORPUS_MANIFEST.json
+```
+
+Repeat the Source, complete lane and partial-progress arguments as needed. The
+existing SCI36 anchor and its original completed lanes are still mandatory.
+Each partial receipt and both of its original operations remain separate from
+those lanes. The reader closes recorded file bytes, modes and listed raw
+membership before publication, and rejects a changed join or accepted subset.
+One owning operation consumes the join's authenticated file observations once;
+it does not repeatedly hash each file to reconstruct the same snapshot. It
+freshly checks file bytes/modes and the original shallow directory membership
+before writing and before returning success. Original deep validators are not
+executed again when consuming the join.
+
+The first partial route registers the genuine original V17 four-visit lane
+reader. Its local mapping is `(block − 1) × 4 + local_visit`. Partial traces from
+future one-to-sixteen-visit chunk lanes need their own explicitly registered
+original reader and layout before this route can accept them. Current complete
+chunk lanes retain their existing explicit offset route; no partial chunk is
+silently interpreted as a four-visit block or required to become a complete
+aggregate.
+
+Combined publication still requires exactly fifty distinct classes, five
+settings and sixty-four unique logical slots per class and setting. Duplicate
+slots or raw samples across complete and incomplete epochs, a moved local visit,
+changed graph or per-class cap, collector-only traces and promoted failures
+refuse. The final manifest can contain accepted individual traces while their
+original lane aggregate remains incomplete. An incomplete audit grants no new
+scientific credit; the mapping fixtures supply no original deep proof.

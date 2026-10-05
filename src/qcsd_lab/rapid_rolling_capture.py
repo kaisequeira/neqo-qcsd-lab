@@ -504,6 +504,12 @@ def _sites_from_enrollment(batch: Mapping[str, Any], all_classes: list[dict[str,
                            static_capture_amendment: Mapping[str, Any] | None = None,
                            delivery_compatibility: Mapping[str, str] | None = None,
                            body_policy: str | None = None, _context=None) -> tuple[plan.Site, ...]:
+    from . import rapid_undefended_capture as ordinary
+    if ordinary.is_inputs(lanes._load(lanes._read(qualifier_spec))):
+        return ordinary.sites_from_enrollment(batch, all_classes, qualifier_spec, workload_root,
+            require_current=require_current, enrollment=enrollment, runtime=runtime,
+            front_capture_amendment=front_capture_amendment, static_capture_amendment=static_capture_amendment,
+            delivery_compatibility=delivery_compatibility)
     classes = all_classes[-len(batch["selected_candidate_ids"]):]
     policy = verify_policy(_open_ref(batch["policy"]).parent)
     from . import rapid_additive_static_enrollment as additive
@@ -753,6 +759,11 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
         raise ValueError("a rolling runtime successor must retain its declared study data root")
     if _open_ref(batch["policy"]) != root / "policy.json" or not set(readiness) <= set(plan.MODES):
         raise ValueError("rolling plan changed its policy or supplied unknown readiness")
+    from . import rapid_undefended_capture as ordinary
+    ordinary_only = ordinary.is_inputs(lanes._load(lanes._read(qualification_spec)))
+    if ordinary_only and (set(readiness) != {"undefended"} or any(item is not None for item in
+            (scheduling, front_capture_amendment, static_capture_amendment, qualification_delivery_compatibility))):
+        raise ValueError("ordinary-only inputs require their own serial ordinary readiness")
     measurement_runtime = _static_measurement_runtime(scheduling, runtime, _context=_context)
     amendment_reference, amendment = None, None
     static_reference, static_amendment = None, None
@@ -843,6 +854,8 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
                    front_capture_amendment=amendment_reference,
                    static_capture_amendment=static_reference,
                    delivery_compatibility=qualification_delivery_compatibility, body_policy=body_policy, _context=_context)
+    if ordinary_only:
+        ordinary.require_canary(facts, sites)
     planned = plan.plan_lanes(sites, final=True, study_version=6, rolling_batch=batch["ordinal"])
     hashes = {}
     if _context is not None:
@@ -870,6 +883,9 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
                "planned_trace_count": sum(lane.sample_count for lane in planned),
                "readiness": dict(readiness), "declared_at": admission._now(),
                "formal_accepted_trace_count": 0, "scientific_credit": False}
+    if ordinary_only:
+        payload[ordinary.FIELD] = ordinary.CONTRACT
+        ordinary.require_plan(payload)
     if scheduling is not None:
         payload["scheduling"] = dict(scheduling)
         schedule.require_schedule(scheduling, lanes.CaptureSpec(**{
@@ -952,6 +968,13 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
                  "declared_at", "formal_accepted_trace_count", "scientific_credit"}
     from .application_response_policy import application_body_identity_policy, COMPLETE_APPLICATION_DELIVERY_POLICY
     body_policy = application_body_identity_policy(value)
+    from . import rapid_undefended_capture as ordinary
+    ordinary_inputs = ordinary.is_inputs(lanes._load(lanes._read(spec.qualification_spec)))
+    if ordinary_inputs != (ordinary.FIELD in value):
+        raise ValueError("ordinary-only plan and input authority must be declared together")
+    if ordinary_inputs:
+        fields.add(ordinary.FIELD)
+        ordinary.require_plan(value)
     if "application_body_identity_policy" in value:
         fields.add("application_body_identity_policy")
     if "qualification_delivery_compatibility" in value:
@@ -1073,7 +1096,7 @@ def require_mode_readiness(spec: lanes.CaptureSpec, lane: plan.Lane, *, before: 
     if _context is not None and current_context() is not _context:
         with _context.scope():
             return require_mode_readiness(spec, lane, before=before, _context=_context)
-    _, payload = verify_capture_plan(spec, _context=_context)
+    sites, payload = verify_capture_plan(spec, _context=_context)
     if lane.study_version != 6 or lane.role != "formal":
         raise ValueError("rolling readiness cannot authorize a historical or diagnostic lane")
     if lane.mode not in payload["readiness"]:
@@ -1130,6 +1153,9 @@ def require_mode_readiness(spec: lanes.CaptureSpec, lane: plan.Lane, *, before: 
                        reference, amendment, mode=lane.mode)
         if before is not None and admission._utc(amendment["published_at"]) > admission._utc(before):
             raise ValueError("static capture amendment was not published before its actual launch")
+    from . import rapid_undefended_capture as ordinary
+    if ordinary.FIELD in payload:
+        ordinary.require_canary(facts, sites)
     publication = facts.get("control_bridge_published_at", facts.get("source_equivalence_published_at"))
     from .application_response_policy import application_body_identity_policy
     if application_body_identity_policy(facts) != application_body_identity_policy(payload):

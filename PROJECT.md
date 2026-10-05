@@ -1,6 +1,6 @@
 # QCSD thesis project ledger
 
-Checkpoint: **5 October 2026, Australia/Sydney (AEDT, UTC+11)**.
+Checkpoint: **6 October 2026, Australia/Sydney (AEDT, UTC+11)**.
 This is the current research ledger. The [history](docs/PROJECT-HISTORY.md)
 preserves the development record, the [class-study runbook](docs/CLASS-STUDY.md)
 defines continuation, and the [capture-readiness guide](docs/CAPTURE-READINESS.md)
@@ -49,10 +49,10 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-**Current checkpoint, 5 October 2026:** **36/16,000 formal recordings** have
-closed independent verification: eight ordinary, four FRONT and twenty-four Tamaraw.
-They retain their original class, visit, Source and runtime labels. The retained
-initial admission ledger has nineteen admitted sites; admission alone does not
+**Current checkpoint, 6 October 2026:** **44/16,000 formal recordings** have
+closed independent verification: eight ordinary, four FRONT and thirty-two Tamaraw.
+They retain their original class, visit, Source and runtime labels. The ordinary
+resource admission ledger has twenty admitted sites; admission alone does not
 establish readiness under all five settings.
 
 The next selected-input batch has actually enrolled **eleven of fifty classes**,
@@ -60,6 +60,32 @@ preserving the six existing identities and appending classes 7–11 from origina
 positions 26, 27, 31, 35 and 36. Their complete graphs contain 70, 13, 62, 143
 and 77 resources. The original complete GETs, pending reservations and verified
 36-slot anchor are retained. Enrollment adds no formal recording.
+
+The latest twenty-slot Tamaraw batch finished **incomplete: eight collector
+successes and twelve failures**. Classes 2 and 5 supplied four successful
+visits each; all four visits failed for classes 3, 4 and 6. Its separate
+accepted-subset declaration and independent verification both passed the
+original deep checks. The actual progress-counter join passed in **181.2 seconds**,
+retaining the original 36 slots and adding these eight independently verified
+slots. All original failures and the failed aggregate are retained; the join
+claims no successful aggregate lane.
+
+An actual ordinary-traffic comparison on class 3 completed its unchanged
+70-resource graph over HTTP/3 in **2.26 seconds**, including a successful
+main-page response. Its later visit and different network setup narrow the
+availability diagnosis without proving a client defect. The defended attempt
+advertised initial receive allowance but recorded no main-response raw reads;
+the transport receive path remains under investigation.
+
+The combined collection-owner, larger-batch and incomplete-lane reader changes
+are published as Lab `176b6e03`, with unchanged Native `c24da2af`. They passed
+focused checks and independent review but have not been installed together.
+The latest physical capture retained Lab `86cd8c78` and its original runtime.
+Actual two-worker capture, interruption recovery and full compatibility across
+the final 50-site cohort remain outstanding. New control-only installation can
+reuse the verified Native binary; it does not require Native compilation.
+
+### Earlier repair checkpoint
 
 The clean published Lab `2ad55d8e` / Native `c24da2af` v13 installation closed
 all twelve actual installation/export operations using the unchanged verified

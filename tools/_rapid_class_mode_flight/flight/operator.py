@@ -300,11 +300,21 @@ def typed_canary_limits(manifests, policy, mode, selected_policy):
     return duration.capture_limits(mode, {**declared, "max_attempts": 1}, policy=selected_policy)
 
 
-def selected_inputs(enrollment, study, *, prospective_amendment=False):
+def selected_inputs(enrollment, study, *, prospective_amendment=False, ordinary_renewal=None):
     """Authenticate the current declared batch, preserving each original graph."""
     from qcsd_lab import rapid_rolling_capture as rolling
     from qcsd_lab import supplied_static_admission as static
     from qcsd_lab import supplied_static_preparation as preparation
+    if ordinary_renewal is not None:
+        if prospective_amendment:
+            raise ValueError("ordinary renewal cannot authorize amended modes")
+        from qcsd_lab import rapid_undefended_capture as ordinary
+        checked(ordinary_renewal)
+        result = ordinary.flight_inputs(Path(ordinary_renewal["path"]), Path(enrollment).absolute(), Path(study))
+        batch, policy, bindings, manifests, roots, limits = result
+        for row, manifest in zip(bindings, manifests):
+            row["full_graph"] = graph(manifest)
+        return batch, policy, bindings, manifests, roots, limits
     batch, all_classes, policy = rolling._verify_enrollment(Path(enrollment).absolute())
     from qcsd_lab import rapid_additive_static_enrollment as additive
     from qcsd_lab import rapid_per_class_selected_enrollment as per_class
@@ -462,11 +472,15 @@ def checked_setup(args):
         validate(witness, body_policy=body_policy, canonical=canonical)
         if read(output / "qualification-delivery-compatibility.json") != checked(witness):
             raise ValueError("staged qualification delivery witness changed")
+    if "ordinary_renewal" in setup and (setup["mode"] != "undefended" or setup["reuse"] is not None
+            or witness is not None):
+        raise ValueError("ordinary renewal setup requires only its unqualified ordinary setting")
     from qcsd_lab import rapid_rolling_capture as rolling
     runtime = rolling.load_runtime(Path(setup["runtime_spec"]["path"]))
     checked(setup["runtime_spec"])
     _, policy, bindings, manifests, roots, limits = selected_inputs(
-        setup["enrollment"]["path"], setup["study_root"], prospective_amendment=setup["mode"] in AMENDED_MODES)
+        setup["enrollment"]["path"], setup["study_root"], prospective_amendment=setup["mode"] in AMENDED_MODES,
+        ordinary_renewal=setup.get("ordinary_renewal"))
     checked(setup["enrollment"])
     if (bindings != setup["selected_classes"] or roots != setup["original_roots"]
         or limits != setup["original_limits"] or runtime["data_root"] != policy["runtime"]["data_root"]):
@@ -512,8 +526,13 @@ def stage(args):
     from qcsd_lab import capture_acceptance_policy as capture
     from qcsd_lab.buflo_duration_budget import POLICY
     enrollment = args.enrollment.absolute()
+    renewal_path = getattr(args, "ordinary_renewal", None)
+    renewal = None if renewal_path is None else ref(renewal_path)
+    if renewal is not None and (args.mode != "undefended" or witness is not None
+            or getattr(args, "reuse_qualification", None) is not None):
+        raise ValueError("ordinary renewal requires only its unqualified undefended setting")
     _, policy, bindings, manifests, roots, limits = selected_inputs(enrollment, args.study_root,
-                                                                prospective_amendment=args.mode in AMENDED_MODES)
+        prospective_amendment=args.mode in AMENDED_MODES, ordinary_renewal=renewal)
     output, study = args.output.absolute(), args.study_root.absolute()
     data = Path(policy["runtime"]["data_root"])
     protected = [clean, args.runtime_build_root.absolute(), study, HERE,
@@ -597,6 +616,8 @@ def stage(args):
         setup["application_body_identity_policy"] = body_policy
     if witness is not None:
         setup["qualification_delivery_compatibility"] = witness
+    if renewal is not None:
+        setup["ordinary_renewal"] = renewal
     create(output / "setup.json", encode(setup))
     return {"setup": ref(output / "setup.json"), "commands": ref(output / "amendment-commands.json"),
             "class_count": len(bindings), "physical_actions_performed": False, **ZERO}
@@ -717,12 +738,15 @@ def finalize(args):
         plan["static_capture_amendment"] = ref(Path(setup["amendment_path"]))
     if selected_policy is not None:
         plan[traffic.FIELD] = selected_policy
+    if "ordinary_renewal" in setup:
+        plan["ordinary_renewal"] = setup["ordinary_renewal"]
     create(output / "plan.json", encode(plan))
     prefix = [setup["host_python"], "-I", "-B", "-c", PUBLIC_CLI_BOOTSTRAP,
               str(clean / "src"), str(clean / "tools/rapid_rolling_capture.py")]
     commands = {"preamble": image_argv(plan, output, "preamble-image"),
-                "qualify": image_argv(plan, output, "qualify-image"),
                 "preflight": image_argv(plan, output, "preflight-image", "--mode", mode)}
+    if "ordinary_renewal" not in setup:
+        commands["qualify"] = image_argv(plan, output, "qualify-image")
     commands["plan"] = prefix + ["plan", "--evidence-root", setup["study_root"],
         "--enrollment", setup["enrollment"]["path"], "--qualification-spec", str(qspec),
         "--readiness", str(output / "readiness.json"), "--runtime-spec", str(output / "runtime-spec.json"),
@@ -733,6 +757,19 @@ def finalize(args):
         commands["plan"] += ["--application-body-identity-policy", body_policy]
     if "qualification_delivery_compatibility" in setup:
         commands["plan"] += ["--qualification-delivery-compatibility", setup["qualification_delivery_compatibility"]["path"]]
+    if "ordinary_renewal" in setup:
+        ordinary_prefix = [setup["host_python"], "-I", "-B", "-c", PUBLIC_CLI_BOOTSTRAP,
+            str(clean / "src"), str(clean / "tools/rapid_undefended_capture.py")]
+        ordinary_input = output / "ordinary-input.json"
+        commands["inputs"] = ordinary_prefix + ["inputs", "--enrollment", setup["enrollment"]["path"],
+            "--runtime-spec", str(output / "runtime-spec.json"), "--ordinary-renewal", setup["ordinary_renewal"]["path"],
+            "--output", str(ordinary_input)]
+        commands["plan"] = ordinary_prefix + ["plan", "--enrollment", setup["enrollment"]["path"],
+            "--runtime-spec", str(output / "runtime-spec.json"), "--ordinary-input", str(ordinary_input),
+            "--ordinary-readiness", str(output / "readiness.json"), "--output", str(output / "plans/g01.json"),
+            "--spec-output", str(output / "plans/g01-spec.json")]
+        if "application_body_identity_policy" in setup:
+            commands["plan"] += ["--application-body-identity-policy", body_policy]
     create(output / "commands.json", encode(commands))
     staged = {"recipe": ref(__file__), "setup": ref(output / "setup.json"), "plan": ref(output / "plan.json"),
         "runtime_spec": ref(output / "runtime-spec.json"), "qualification_spec": ref(qspec),
@@ -764,6 +801,14 @@ def image_argv(plan, output, action, *extra):
             raise ValueError("reuse manifest requires a canonical same-absolute RO file mount")
         argv += ["--volume", f"{reuse_path}:{reuse_path}:ro"]
     roots = plan["static_preparation_roots"] if action == "verify-image" else plan["group_preparation_roots"]
+    if "ordinary_renewal" in plan:
+        if plan["campaigns"][0]["mode"] != "undefended" or plan["reuse"] is not None or action == "qualify-image":
+            raise ValueError("ordinary renewal has no padding qualification operation")
+        checked(plan["ordinary_renewal"])
+        renewal_path = str(Path(plan["ordinary_renewal"]["path"]).absolute())
+        if any(char in renewal_path for char in ("\n", "\r", "\0", ":")):
+            raise ValueError("ordinary renewal requires a canonical read-only file mount")
+        argv += ["--volume", f"{renewal_path}:{renewal_path}:ro"]
     if "qualification_delivery_compatibility" in plan:
         from qcsd_lab.application_response_policy import application_body_identity_policy
         from qcsd_lab.qualification_control_authority import roots as witness_roots
@@ -832,6 +877,13 @@ def checked_plan(args, *, image=False):
             raise ValueError("canary campaign changed its prospectively declared application body policy")
     if mode not in MODES:
         raise ValueError("unknown flight setting")
+    if "ordinary_renewal" in plan:
+        if mode != "undefended" or plan["reuse"] is not None or witness is not None:
+            raise ValueError("ordinary renewal cannot authorize another setting or reused padding")
+        checked(plan["ordinary_renewal"])
+        if not image:
+            from qcsd_lab.rapid_undefended_capture import validate_renewal
+            validate_renewal(Path(plan["ordinary_renewal"]["path"]), Path(plan["enrollment"]["path"]))
     amended = "static_capture_amendment" in plan
     if amended != (mode in AMENDED_MODES) or not 1 <= len(plan["selected_classes"]) <= 5:
         raise ValueError("wrong setting amendment or class count")
@@ -862,7 +914,7 @@ def checked_plan(args, *, image=False):
     if not image:
         checked(plan["enrollment"])
         _, checked_policy, expected, originals, _, _ = selected_inputs(plan["enrollment"]["path"], plan["study_root"],
-                                                                     prospective_amendment=amended)
+                                                                     prospective_amendment=amended, ordinary_renewal=plan.get("ordinary_renewal"))
         recorded = [{key: value for key, value in row.items() if key != "capture_manifest"} for row in plan["selected_classes"]]
         if expected != recorded:
             raise ValueError("selected original classes changed")
@@ -927,6 +979,8 @@ def checked_plan(args, *, image=False):
 
 def image_action(args):
     plan, output, execution = checked_plan(args, image=True)
+    if "ordinary_renewal" in plan and args.command == "qualify-image":
+        raise ValueError("ordinary renewal has no padding qualification operation")
     if args.command == "preamble-image":
         from qcsd_lab.manifest import validate_manifest, validate_research_preparation
         from qcsd_lab import capture_acceptance_policy as capture
@@ -1110,14 +1164,26 @@ def run(args):
     recorder = module(RECORDER, RECORDER_SHA, "amended_first_site_recorder")
     [campaign] = plan["campaigns"]
     mode = campaign["mode"]
+    ordinary = "ordinary_renewal" in plan
+    if ordinary and args.step == "qualify":
+        raise ValueError("ordinary renewal has no padding qualification operation")
+    if args.step == "inputs" and not ordinary:
+        raise ValueError("ordinary input action requires the explicit ordinary renewal contract")
     if args.step == "qualify":
         require_operation(output, "preamble", commands["preamble"])
         if json.loads(read(output / "preamble-complete.json"))["plan_sha256"] != args.plan_sha256:
             raise ValueError("actual installed preamble belongs to another plan")
     if args.step == "preflight":
-        require_operation(output, "qualify", commands["qualify"])
+        if ordinary:
+            require_operation(output, "preamble", commands["preamble"])
+            if json.loads(read(output / "preamble-complete.json"))["plan_sha256"] != args.plan_sha256:
+                raise ValueError("actual installed preamble belongs to another plan")
+        else:
+            require_operation(output, "qualify", commands["qualify"])
     if args.step == "plan":
         checked(ref(output / "readiness.json"))
+        if ordinary:
+            require_operation(output, "inputs", commands["inputs"])
     if args.step in {"capture", "deep"}:
         require_operation(output, "preflight", commands["preflight"])
         receipt = json.loads(read(output / (mode + "-preflight-complete.json")))
@@ -1163,6 +1229,7 @@ def main():
     item.add_argument("--name", required=True)
     item.add_argument("--campaign-seed", type=int, required=True)
     item.add_argument("--mode", choices=MODES, required=True)
+    item.add_argument("--ordinary-renewal", type=Path)
     item.add_argument("--reuse-qualification", type=Path,
                       help="exact current original-group named response-only v2 manifest")
     item.add_argument("--application-body-identity-policy", choices=("exact-prepared-application-body-v1", "complete-current-application-delivery-v1"),
@@ -1181,7 +1248,7 @@ def main():
             item.add_argument("--modes", nargs="+", choices=MODES, required=True)
             item.add_argument("--output", type=Path)
         elif name == "run":
-            item.add_argument("--step", choices=("preamble", "qualify", "preflight", "capture", "deep", "plan"),
+            item.add_argument("--step", choices=("preamble", "qualify", "preflight", "capture", "deep", "inputs", "plan"),
                               required=True)
         else:
             item.add_argument("--mode", choices=MODES, required=name == "verify-image")
