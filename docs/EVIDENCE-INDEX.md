@@ -7,11 +7,89 @@ not present in every clone. The [project ledger](../PROJECT.md),
 [runbook](CLASS-STUDY.md), [history](PROJECT-HISTORY.md) and
 [historical source map](HISTORY-SOURCE-MAP.md) are tracked and portable.
 
+## Fixed five target and current runtime, 6 October 2026
+
+The accepted fixed-target counter is **40/16,000 ordinary traces across 31
+enrolled classes**. The latest membership extension closed 0 under
+`../diagnostic-rehearsals/fixed-target-enrollment31-root-actual-20261006-001/extension-actual-closed.json`
+(SHA-256 `32fef6c74a2412c081b69fe5fe97f26e693368766443d78bbfdd51f61279aa2b`).
+Its target and retained forty-row progress have SHA-256
+`86786c8e3218dfc33f4719bba0be0b6bb31378679848296532051e472ff04478`
+and `1ec29d54716f991a71804b5781275dda5bc256a9d35c17e1de84301f390e584a`.
+The target identity remains `694d6ede9643a192442917e3319de2d04344d89c4f1d41873014f9bfa49da34d`.
+
+All ten v31 ordinary practice and planning operations closed 0. The physical
+practice capture and independent deep verification are retained at
+`../diagnostic-rehearsals/ordinary-current-v31-canary-root-actual-20261006-001/operations/deep-completed.json`
+(SHA-256 `9cd9863d5dea3e54a1ecc4887c18be2d6c6e3adf76743964957da7e18a70815e`).
+The first fresh two-worker formal route passed its policy, plan and capsule
+checks, then began formal preparation. It has no verified worker or formal
+target credit at this checkpoint. Lab `10e79fa8` published selected-class
+subgroup Source; its bounded [two-peer HOST review](ENROLLED-SUBGROUP-FLIGHTS.md#two-peers-from-one-enrollment-batch)
+is retained at `../diagnostic-rehearsals/enrolled-subgroup-two-peer-fixed-target-readonly-review-20261007-001/review.json`
+(SHA-256 `0754755dee89cb7a603a03c1335d40cb6e0c3aa1c1dc0c2557726299c20da423`).
+The Source publication closed under
+`../diagnostic-rehearsals/enrolled-subgroup-source-publication-root-actual-20261006-001/publication-actual-closed.json`
+(SHA-256 `384e2b0ee1641919629bdb2c965f8be1c688b14fa6aff5784669c4234a4ea6ae`).
+The peer check claimed no installed runtime, physical capture or target credit.
+
+At the preceding 26-class checkpoint, original-source audit and append of the second twenty
+ordinary traces closed 0 under
+`../diagnostic-rehearsals/fixed-target-overlay-ordinary20-root-actual-20261006-001/intake-actual-closed.json`
+(SHA-256 `91565bdb60c981b9234524e851dde25c213eeb3ef4c45d1a77e7d88b080ab9ab`).
+Its progress file has SHA-256
+`fbadf99ed31446e4dbc4822a3bcb1c41636f77c9c9183d541c0d6c1de631a121`.
+That membership extension closed 0 under
+`../diagnostic-rehearsals/fixed-target-enrollment26-root-actual-20261006-001/extension-actual-closed.json`
+(SHA-256 `196b2b5a33d4473cc708441bc84798bc8e4713fddc56bae562c6b65658a5c28f`).
+Its 26-class target and retained forty-row progress have respective SHA-256
+`1c9b3a192f36b8c99594869caaaf31c03a4ce36877a567ef3bd8923bb13b8725`
+and `6953eb3f472428392b82a8e92c496c80b2dde53233ae831470ce7ad3a0dd11cd`.
+The target identity remains `694d6ede9643a192442917e3319de2d04344d89c4f1d41873014f9bfa49da34d`.
+These are target receipts, not new packet captures.
+
+Frozen capture Source `411037cb` / Native `c24da2af` attempted the first
+Tamaraw8192 two-site complete-graph response qualification. Its original
+58- and 66-resource graphs remained intact. The first graph qualified; the
+second stopped after 20 of 40 responses at its original 120-second timeout.
+The actual qualification completed with exit 1 in 241.035 seconds at
+`../diagnostic-rehearsals/tam8192-small-b0005-c411-root-actual-20261006-001/operations/qualify-completed.json`
+(SHA-256 `db21c668559413d40428d191dfc5c526ef8ffbfb7f2e51aca98302f6a95b6c5b`).
+No Tamaraw8192 canary or formal recording passed.
+
+The separate existing five-site Tamaraw8192 batch retained all five complete
+graphs (70, 13, 62, 143 and 77 resources). Staging, finalization and preamble closed 0; response qualification
+closed 1 in 430.146 seconds when no frozen response-only candidate for its
+second site passed sustained identity checks. Its original completion is
+`../diagnostic-rehearsals/tam8192-known-b0003-c411-root-actual-20261006-001/operations/qualify-completed.json`
+(SHA-256 `ca7199db15e62009b286beaff7789142fb9d33768b7f7966ee7e6d9642418238`).
+It adds no practice or formal credit.
+
+The actual v30 launch-input failure is retained under
+`../diagnostic-rehearsals/ordinary-b03-v30-two-workers-root-actual-20261006-003/operations/ordinary-first-two-worker-launch-completed.json`
+(SHA-256 `442dbeb541f4bba0a8a7645176c7ce34cde809dc4895aa5845e5fc7873556505`).
+That launch closed 2 before durable preflight or worker birth. The v29
+installed-path failure is a separate earlier record. The launch-input fix
+passed seven focused HOST checks, recorded
+under `../diagnostic-rehearsals/parallel-worker-launch-input-host-checks-20261006-001/source-closure-final.json`
+(SHA-256 `ee819be07c65987386a0f48917186b6c330ce15b22de4fce83dfd04534c755f7`).
+Its Lab `491dca55` publication to Main and desktop is retained at
+`../diagnostic-rehearsals/parallel-worker-launch-input-publication-root-actual-20261006-001/publication-actual-closed.json`
+(SHA-256 `60cc8032c7661a8d73329e08c617f095c63f763a4e209630061e2763ce63a321`).
+The matching v31 runtime closed all twelve installation and export operations:
+`../diagnostic-rehearsals/rapid-v31-parallel-worker-launch-input-runtime-root-actual-20261006-001/root-runtime-closed.json`
+(SHA-256 `eac6d287d68960f1d55be4299fdeb82823229e80212744711f3fc7bcaf3db1ea`).
+Its canonical runtime SHA-256 is
+`d93084c8560295b2bccccbd8a10b9c9128594413af9b05755cddd85892e8d8f1`,
+with unchanged Native `c24da2af`; no Native compilation ran. The installed
+closure expressly reports no physical parallel proof and zero new formal credit.
+The [capture path](RAPID-CAPTURE-PATH.md) states the current next gates.
+
 ## Application response policy repair
 
-### Current supplied-list study
+### Earlier supplied-list and v29 checkpoint
 
-The latest v29 actual launch is retained under
+The earlier v29 actual launch is retained under
 `../diagnostic-rehearsals/ordinary-b03-v29-two-workers-root-actual-20261006-001/operations/`.
 Preparation closed 0 in 312.3 seconds; both early lifecycle operations closed 0.
 The launch closed 2 in 841.5 seconds, before durable installed preflight or
@@ -33,7 +111,7 @@ not successful formal parallel capture. The next-five class and five-condition
 Native-value handoffs are HOST preparation only; they grant no new enrollment,
 mode eligibility or formal credit until the corresponding public operations close.
 
-The latest **6 October 2026** independently verified batch adds **twenty
+An earlier **6 October 2026** independently verified batch added **twenty
 ordinary traces**, bringing the total across recorded conditions to **84**:
 forty-eight ordinary, four FRONT and thirty-two historical Tamaraw. This is
 not a final revised-target manifest counter. The proposed Tamaraw receive
@@ -41,8 +119,9 @@ setting is a distinct condition and cannot inherit the old thirty-two traces.
 The target remains fifty sites, five fixed conditions and sixty-four visits
 per site and condition: 16,000 independently verified formal traces.
 
-The updated cohort has sixteen enrolled sites and thirty-one ordinary
-resource admissions. Classes 12–16 were appended in enrollment batch `b0004`;
+At that earlier checkpoint the cohort had sixteen enrolled sites and
+thirty-one ordinary resource admissions. Classes 12–16 were appended in
+enrollment batch `b0004`;
 the host-local closure is
 `../diagnostic-rehearsals/selected-additive-classes012-016-v27-root-actual-20261006-001/enrollment-actual-closed.json`.
 It binds the actual public enrollment operation and the complete previously

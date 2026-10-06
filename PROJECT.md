@@ -49,53 +49,58 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-### Latest launch checkpoint: 6 October, 12:13 Sydney AEDT
+### Latest verified checkpoint: 6 October, 15:13 Sydney AEDT
 
-Release `5ececc1d` passed 70 focused Source checks, all 12 matching installed
-runtime checks, and all ten ordinary practice/planning steps. The verified
-Native client remains `c24da2af`; cached image packaging took 3 minutes 12
-seconds without Native compilation.
+The fixed five-condition target now has **31 enrolled classes** and **40/16,000
+accepted formal traces**, all ordinary. Its latest enrollment extension closed
+successfully, preserving the same target identity and all forty accepted rows.
+The target still requires 50 complete classes, five conditions and 64 accepted
+visits per class and condition. Earlier FRONT V3 and Tamaraw32 traces remain
+historical and add no credit to this fixed target.
 
-The next actual two-worker batch passed preparation in 312.3 seconds. Its
-Source and execution-copy lifecycle checks both passed in about 0.6 seconds,
-and the guardian completed authenticated recovery. The installed preflight
-then failed before worker creation: importing the fixed-target scheduler tried
-to open `tools/rapid_target_chunks.py` under Python's installed package parent.
-The public launch closed 2 after 841.5 seconds. It produced no worker recordings;
-the six-file failed batch and both original operation records remain preserved.
-Actual lifecycle cleanup subsequently passed in 5.32 seconds. Cleanup does not
-constitute a scientific lane retirement or add capture credit.
+The declared conditions are ordinary, FRONT reserve V4, Tamaraw with initial
+stream credit 8192, fixed-duration-200 BuFLO with ACK-start and kernel-preparation
+policies, and canonical client-only CTSP CS-BuFLO. The first complete-graph
+Tamaraw8192 two-site flight reached response qualification on the frozen `411037cb`
+capture Source: its 58-resource graph qualified, while the 66-resource graph
+stopped after 20 of 40 responses at the original 120-second timeout. The
+qualification operation closed 1 after 241 seconds. No canary or Tamaraw8192
+formal capture passed. A fresh existing five-site batch then passed staging,
+finalization and preamble on the same frozen Source. Its first 70-resource site
+passed current response qualification, but the second site's frozen response-only
+candidates did not pass sustained Native identity qualification. The five-site
+qualification closed 1 at 14:49 AEDT; no practice or formal capture followed.
 
-Repairs are being authored separately for installed Source-path handling,
-the known current launcher in pre-worker retirement, and the finite dependency
-inventory reader. A cheap later-path review also found that BuFLO's duration
-validator expected `method=buflo`, although real Native receipts report HTTP
-`GET`. Its correction preserves the resolved BuFLO mode, complete controller
-values and parameter provenance checks. These changes need their final focused
-Source gate and matching installed checks before the next actual launch.
+The two-worker launch-input fix passed seven focused HOST controls and was
+published as Lab `491dca55` on Main and the desktop branch. Its matching v31
+runtime closed all 12 installation and export operations with unchanged Native
+`c24da2af` and no Native recompilation. All ten current v31 ordinary practice
+and planning operations subsequently closed 0, including physical practice
+capture and independent deep verification. The fresh two-worker formal route
+has passed its current policy, plan and capsule checks; formal preparation is
+running. No worker recording or recovery is yet claimed. The v30 launch-input
+failure remains preserved with zero capture credit. The earlier v29
+installed-path failure and its lifecycle cleanup are separate preserved records.
 
-Screening has closed 78 of 87 supplied candidates: 31 ordinary resource
-admissions, 23 input-ineligible candidates and 24 operational deferrals.
-Sixteen sites are enrolled. The next five complete admitted graphs are prepared
-for enrollment; this preparation does not prove compatibility with all settings.
-
-The prospective five-condition target uses ordinary traffic, FRONT reserve V4,
-Tamaraw with initial stream credit 8192, fixed-duration-200 BuFLO with its
-ACK-start and kernel-preparation policies, and canonical client-only CTSP
-CS-BuFLO. Full Native-value templates for all five passed their Source readers;
-they are prospective declarations, not measurements or eligibility receipts.
-The four old FRONT V3 and thirty-two old Tamaraw recordings remain historical.
-Exact matching ordinary intake and the new target declaration remain pending.
+A separate HOST review found that two classes from one enrolled batch can use
+distinct flight execution and physical lane evidence roots while retaining
+their original complete graphs and caps. Its two-peer check passed with zero
+physical capture or target credit. The subgroup Source is published as Lab
+`10e79fa8`; its matching installed runtime and physical flights remain pending.
+Future closed subgroup lanes can enter the
+fixed target through its direct audit and append route after a fresh matching
+Source binding; the older rolling corpus reader rejects their repeated textual
+lane name.
 
 ### Earlier recorded checkpoints
 
-**Current checkpoint, 6 October 2026:** **84 formal recordings** have closed
+**Earlier checkpoint, 6 October 2026:** **84 formal recordings** had closed
 independent deep verification across their recorded conditions: forty-eight
 ordinary, four FRONT and thirty-two Tamaraw. This is not yet the final revised
 study's accepted counter. Its prospective Tamaraw setting changes the condition;
 the old thirty-two recordings remain auditable history and cannot be relabelled
-as that setting. Intake of exact matching ordinary recordings into the
-revised fixed-condition manifest is still pending. The target remains
+as that setting. At this earlier checkpoint, intake of exact matching ordinary
+recordings into the revised fixed-condition manifest was pending. The target remains
 **50 sites × five settings × 64 visits = 16,000**.
 
 The new ordinary batch completed **twenty accepted and twenty eligible traces,
@@ -109,9 +114,10 @@ then selection of a Python environment without dependencies. The first has a
 reviewed narrow repair; the second used the launcher's supported explicit Python
 setting, with no change to the plan or traffic settings.
 
-There are now **sixteen enrolled classes** and **thirty ordinary-resource
-admissions**. The five-site enrollment append for classes 12–16 closed
-successfully using the complete prepared resource lists. Candidate 59's complete 71-resource, two-origin graph passed its
+At that earlier checkpoint there were **sixteen enrolled classes** and **thirty
+ordinary-resource admissions**. The five-site enrollment append for classes
+12–16 closed successfully using the complete prepared resource lists.
+Candidate 59's complete 71-resource, two-origin graph passed its
 actual GET, public verification and separately recorded owned HOST accounting
 in **13.9, 1.1 and 40.9 seconds**. Positions 60, 61 and 63 subsequently passed
 their full GET, separate verification and public accounting. Position 62 is

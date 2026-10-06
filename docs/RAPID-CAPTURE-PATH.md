@@ -1,6 +1,6 @@
 # Rapid capture path: from candidates to 16,000 verified traces
 
-**Planning and implementation status, 4 October 2026 (Australia/Sydney).** This is the run order
+**Planning and implementation status, 6 October 2026 (Australia/Sydney).** This is the run order
 for the prospective [50-site study](RAPID-CLASS-STUDY.md). Its formal target is
 **50 websites × five traffic settings × 64 visits = 16,000 accepted traces**.
 The five settings are undefended, FRONT, Tamaraw, BuFLO and CS-BuFLO.
@@ -12,12 +12,34 @@ Diagnostic and failed recordings retain zero formal credit. The earlier
 historical studies; their long build, browser-vector, fitting and nine-mode
 sequence does not gate this prospective five-setting study.
 
+**Latest verified checkpoint, 6 October, 15:13 Sydney AEDT:** The fixed-condition
+target has **31 enrolled classes and 40/16,000 accepted formal traces**, all ordinary. Its
+latest membership extension preserved the same target identity and all forty accepted
+rows. The current conditions are ordinary, FRONT reserve V4, Tamaraw with
+initial stream credit 8192, duration-200 BuFLO and canonical CTSP CS-BuFLO.
+Old FRONT V3 and Tamaraw32 captures remain outside this target. The first
+complete-graph Tamaraw8192 two-site flight stopped during response qualification on
+its second graph after 20 of 40 responses at the original 120-second timeout.
+The subsequent existing five-site batch passed staging and preamble, then
+qualification closed 1 when no frozen response-only candidate for its second
+site passed sustained identity checks. Neither attempt adds Tamaraw canary or
+formal credit. The parallel launch-input fix is installed in matching v31
+images, and all ten current ordinary practice/planning steps passed, including
+practice capture and independent deep verification. Its fresh formal two-worker
+route has passed policy, plan and capsule checks while formal preparation is
+running; actual worker recordings and recovery remain to be proved. Lab
+`10e79fa8` published selected-class subgroup flights. Their separate-root HOST
+review passed without packet capture or target credit; use the [peer operating
+sequence](ENROLLED-SUBGROUP-FLIGHTS.md#two-peers-from-one-enrollment-batch)
+before a physical class 17 or 18 recovery. See the [current evidence
+bindings](EVIDENCE-INDEX.md#fixed-five-target-and-current-runtime-6-october-2026).
+
 The [targeted capture repairs](RAPID-CAPTURE-REPAIRS.md) explain the variable
 homepage credit fix, endpoint-specific final UDP drain evidence and explicit
 prospective BuFLO incoming tolerance. They require fresh affected captures;
 the previous failed attempts keep their original results.
 
-## Active rolling v6 route
+## Rolling v6 route
 
 1. Verify the next eligible site's complete multi-origin graph and freeze
    its place in the recorded candidate order. Later batches append sites;
@@ -43,9 +65,9 @@ so a later repair can use a new runtime while completed peers retain theirs.
 First dispatch is serial. Successful simultaneous capture is a separate
 remaining operational proof.
 
-**Current checkpoint, 4 October, 15:20 Sydney AEDT (4 October, 04:20 UTC):**
-The total remains **8/16,000 accepted formal traces from one unique enrolled
-Poki site out of 50**. The FRONT V2 formal lane is incomplete: two locally
+**Historical checkpoint, 4 October, 15:20 Sydney AEDT (4 October, 04:20 UTC):**
+At that point the rolling-v6 ledger held **8/16,000 accepted formal traces
+from one unique enrolled Poki site out of 50**. The FRONT V2 formal lane is incomplete: two locally
 accepted visits, two failed visits and six retained failed attempts. It adds
 zero formal credit and retains the entire **260-resource, four-origin graph**.
 

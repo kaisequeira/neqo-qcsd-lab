@@ -18,9 +18,10 @@ transported. Selecting a peer grants no new admission or trace credit.
 
 ## Root operating sequence
 
-Use a freshly published matching Source/runtime containing this feature. The
-c24 compiled client can be reused by the existing cached packaging route;
-these HOST checks claim no installed runtime or physical qualification.
+Lab `10e79fa8` publishes this feature. Use a matching installed Source/runtime
+for each new flight. The c24 compiled client can be reused by the existing
+cached packaging route; the HOST checks claim no installed runtime or physical
+qualification.
 
 For the original b0005 class 17, create a fresh flight namespace and append
 `--class-indices 17` to the existing public `tools/rapid_class_mode_flight.py
@@ -36,6 +37,23 @@ public rolling-plan command includes the same `--class-indices 17` selection.
 It refuses a canary or named qualification group for different workloads.
 Run and independently verify a fresh claimed formal lane using that plan.
 
+### Two peers from one enrollment batch
+
+Give each selected peer a distinct `stage --name` and fresh `--output` beneath
+the declared data root. Each stage then receives its own execution root and
+campaign directory. The emitted `plan --evidence-root` still points to the
+shared original study root because that root owns the enrollment policy. For
+physical `launch`, `complete-lane` and `verify-lane`, pass a separate fresh
+`--evidence-root` for each peer. The same textual b0005 lane name can then be
+used in both roots without claiming either peer's files or result namespace.
+
+The two-peer HOST check exercised both plans, original lane-intent writers,
+public launch parsing and deep-check command construction in separate roots.
+It used controlled qualification, canary and installed-runtime boundaries;
+it produced no captured lane or accepted trace. Actual formal credit still
+requires each peer's own current qualification, canary, physical result and
+successful independent deep closure.
+
 Keep the original two-site qualification failure and its passing sidecar as
 history. A fresh single-site proof must close before this new flight proceeds.
 Class 18 remains enrolled with its original full 66-resource graph; class 17
@@ -47,6 +65,16 @@ the final 50 × 5 × 64 target.
 
 The target reader's 13 relevant modules are byte and mode unchanged by this
 feature. A read-only metadata check authenticated the original target26 and
-progress40 artifacts, their producer/reader roles and both b0005 graph records.
-That check replayed no raw/deep proof and granted no trace credit. Historical
-TAM32 remains separate from the fixed TAM8192 target numerator.
+progress40 artifacts, their producer/reader roles and both b0005 graph records;
+the later target31 extension retained those forty accepted rows. That check
+replayed no raw/deep proof and granted no trace credit.
+
+After genuine peer closures, bind the newly published measurement Source to a
+fresh module-overlay source registration against the unchanged trusted installed
+runtime. Feed the resulting original closure references to the fixed target's
+public `audit-complete`, then `append-progress`, and eventually `publish-final`.
+That reader selects by registered class, condition and logical visit, with
+separate physical sample identities. Do not use the older rolling
+`publish-manifest` or epoch corpus route to aggregate the two peers: those
+readers refuse their repeated textual lane name. Historical TAM32 remains
+separate from the fixed TAM8192 target numerator.

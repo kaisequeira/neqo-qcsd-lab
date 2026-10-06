@@ -8,6 +8,32 @@ new source needs new captures. See the [capture path](RAPID-CAPTURE-PATH.md) and
 
 ## Current Python repairs: 6 October 2026
 
+### Parallel worker launch input
+
+The formal parallel launcher now passes each authenticated worker's exact
+launch input to its container. The previous startup path could leave that
+binding empty, so the v30 two-worker attempt failed before any worker recording.
+Seven focused HOST checks cover both worker bindings, the original refusal,
+duplicate and missing bindings, and the serial path. Lab `491dca55` is published
+and its matched v31 runtime passed all twelve installed operations with unchanged
+Native `c24da2af`. All ten current v31 ordinary practice and planning steps
+subsequently passed, including physical practice capture and independent deep
+verification. The fresh formal two-worker route has passed policy, plan and
+capsule checks; formal preparation is running. No actual simultaneous
+recording or worker recovery has passed. The failed v30 launch retains zero
+credit; the earlier v29 installed-path failure has its own separate record.
+
+### Independent enrolled peers
+
+Lab `10e79fa8` publishes selected-class serial flights. A separate HOST
+check proved that two peers from one batch can have distinct execution and
+physical lane evidence roots while sharing the original study policy root.
+The older rolling corpus route refuses their repeated textual lane name;
+actual closed lanes must enter the fixed target through its direct audit and
+append route with a fresh matching measurement Source binding. The check
+produced no physical lane, closure or formal target credit. See the [peer
+operating sequence](ENROLLED-SUBGROUP-FLIGHTS.md#two-peers-from-one-enrollment-batch).
+
 ### Fixed-target intake: equivalent seconds values
 
 The [fixed-target reader](../src/qcsd_lab/rapid_fixed_condition_target.py)
@@ -22,15 +48,14 @@ The two original 20-trace ordinary lanes have `settle_seconds=2.0` and
 Nineteen focused HOST controls and a metadata-only check of those original
 40 traces cover this correction; neither grants new scientific credit.
 
-The original Source411 target and initial progress contain zero target credit.
-After publishing the external reader, use its public `target` and
-`initialize-progress` commands with the same namespace, five condition refs,
-21-class enrollment, Native head and client identity. This produces the same
-target identity in fresh receipts. Preserve the original zero-credit receipts;
-declare the fresh target before the first TAM8192 formal intent. The running
-Source411 capture and its installed image remain unchanged, with the external
-reader identity recorded separately. Historical TAM32 remains excluded from
-the TAM8192 target.
+The original Source411 target and initial progress contained zero target credit.
+The external numeric reader published a fresh target with the same identity,
+then authenticated and appended the second original twenty-trace ordinary
+batch. The fixed target now counts **40/16,000 accepted ordinary traces**.
+Its later 31-class membership extension retained every accepted row and the
+same identity. Source411 capture bytes and its installed image remained frozen;
+the external reader identity is recorded separately. Historical TAM32 remains
+excluded from the TAM8192 target.
 
 ### Installed package paths and Native receipt shape
 
@@ -48,7 +73,8 @@ A cheap review of the later BuFLO path caught another defect before a long run:
 method field to contain the defense name. Actual Native receipts use HTTP `GET`;
 the defense is separately bound by the resolved configuration and parameter
 provenance. The corrected validator and fixtures preserve those checks.
-The failed v29 batch remains failed and adds no formal recordings.
+The failed v29 batch remains failed and adds no formal recordings. Its repair
+was included in the later Source411 capture runtime.
 
 The newly planned FRONT setting is reserve V4: a 10,000 microsecond release
 window, 9,000 microsecond construction window and 1,000 microsecond preparation
@@ -77,9 +103,10 @@ They cannot borrow ordinary-only qualification or another defense's practice.
 The combined changes passed **68 focused HOST checks**, with no failures,
 errors or skipped cases. The verified `c24da2af` Native client remains unchanged;
 these repairs require cached Python packaging rather than client compilation.
-Actual installed repeats, successful two-worker capture and independent deep
-verification are still pending. Keep the failed v28 batch and its exact Source
-unchanged. Use a fresh batch for the next actual attempt.
+The subsequent Source411 runtime passed its installed checks; successful
+two-worker capture and independent deep verification remain pending. Keep the
+failed v28 batch and its exact Source unchanged. Use a fresh batch for the
+next actual attempt.
 
 For a fresh Tamaraw or CS-BuFLO selected-class flight, the public staging option
 is `--renew-selected-inputs`. Tamaraw also requires its existing explicit
