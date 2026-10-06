@@ -300,7 +300,38 @@ def typed_canary_limits(manifests, policy, mode, selected_policy):
     return duration.capture_limits(mode, {**declared, "max_attempts": 1}, policy=selected_policy)
 
 
-def selected_inputs(enrollment, study, *, prospective_amendment=False, ordinary_renewal=None,
+def selected_inputs(enrollment, study, *, class_indices=None, enrolled_subgroup=None, **kwargs):
+    from qcsd_lab import rapid_enrolled_subgroup as subgroup
+    from qcsd_lab import rapid_rolling_capture as rolling
+    if class_indices is None and enrolled_subgroup is None:
+        return _selected_inputs(enrollment, study, **kwargs)
+    if kwargs.get("ordinary_renewal") is not None:
+        raise ValueError("subgroup selection requires its own qualified flight, not ordinary-only renewal")
+    batch, classes, _ = rolling._verify_enrollment(Path(enrollment).absolute())
+    if enrolled_subgroup is None:
+        enrolled_subgroup = subgroup.declare(Path(enrollment).absolute(), batch, classes, class_indices)
+    rows = subgroup.validate(enrolled_subgroup, Path(enrollment).absolute(), batch, classes)
+    if class_indices is not None and list(class_indices) != enrolled_subgroup["class_indices"]:
+        raise ValueError("subgroup command and retained authority differ")
+    batch, policy, bindings, manifests, roots, limits = _selected_inputs(enrollment, study, **kwargs)
+    from qcsd_lab import selected_capture_amendment as metadata
+    from qcsd_lab import rapid_additive_static_enrollment as additive
+    from qcsd_lab import rapid_per_class_selected_enrollment as per_class
+    if policy["contract"] == per_class.CONTRACT:
+        from qcsd_lab import per_class_selected_capture_amendment as metadata
+    elif policy["contract"] != additive.CONTRACT:
+        raise ValueError("subgroup flight currently requires its selected-input enrollment authority")
+    files, trees = metadata.metadata_inputs(Path(enrollment).absolute(), batch, classes, policy)
+    roots = sorted(set(roots) | {str(path.parent) for path in files} | {str(path) for path in trees})
+    chosen = {row["candidate_id"] for row in rows}
+    pairs = [(binding, manifest) for binding, manifest in zip(bindings, manifests)
+             if binding["candidate_id"] in chosen]
+    if [binding["candidate_id"] for binding, _ in pairs] != [row["candidate_id"] for row in rows]:
+        raise ValueError("subgroup full manifests differ from authenticated class identities")
+    return batch, policy, [binding for binding, _ in pairs], [manifest for _, manifest in pairs], roots, limits
+
+
+def _selected_inputs(enrollment, study, *, prospective_amendment=False, ordinary_renewal=None,
                     selected_input_renewal=None, runtime=None, mode=None, tamaraw_configuration_policy=None):
     """Authenticate the current declared batch, preserving each original graph."""
     from qcsd_lab import rapid_rolling_capture as rolling
@@ -502,7 +533,8 @@ def checked_setup(args):
     _, policy, bindings, manifests, roots, limits = selected_inputs(
         setup["enrollment"]["path"], setup["study_root"], prospective_amendment=setup["mode"] in AMENDED_MODES,
         ordinary_renewal=setup.get("ordinary_renewal"), selected_input_renewal=setup.get("selected_input_renewal"),
-        runtime=runtime, mode=setup["mode"], tamaraw_configuration_policy=setup.get("tamaraw_configuration_policy"))
+        runtime=runtime, mode=setup["mode"], tamaraw_configuration_policy=setup.get("tamaraw_configuration_policy"),
+        enrolled_subgroup=setup.get("enrolled_subgroup"))
     checked(setup["enrollment"])
     if (bindings != setup["selected_classes"] or roots != setup["original_roots"]
         or limits != setup["original_limits"] or runtime["data_root"] != policy["runtime"]["data_root"]):
@@ -568,7 +600,8 @@ def stage(args):
             or getattr(args, "reuse_qualification", None) is not None):
         raise ValueError("ordinary renewal requires only its unqualified undefended setting")
     _, policy, bindings, manifests, roots, limits = selected_inputs(enrollment, args.study_root,
-        prospective_amendment=args.mode in AMENDED_MODES or renew_selected, ordinary_renewal=renewal)
+        prospective_amendment=args.mode in AMENDED_MODES or renew_selected, ordinary_renewal=renewal,
+        class_indices=getattr(args, "class_indices", None))
     output, study = args.output.absolute(), args.study_root.absolute()
     data = Path(policy["runtime"]["data_root"])
     protected = [clean, args.runtime_build_root.absolute(), study, HERE,
@@ -629,7 +662,7 @@ def stage(args):
         defended_renewal = ref(renewed_path)
         _, policy, bindings, manifests, roots, limits = selected_inputs(enrollment, study,
             selected_input_renewal=defended_renewal, runtime=runtime, mode=args.mode,
-            tamaraw_configuration_policy=fixed_tamaraw)
+            tamaraw_configuration_policy=fixed_tamaraw, class_indices=getattr(args, "class_indices", None))
         for row in bindings:
             create(output / "lineage/originals" / (row["workload_id"] + ".json"), checked(row["original_workload"]))
         create(output / "lineage/original-manifest.json", checked(bindings[0]["original_workload"]))
@@ -662,6 +695,10 @@ def stage(args):
         "selected_classes": bindings, "original_roots": roots, "original_limits": limits,
         "amendment_path": None if amendment is None else str(amendment), "reuse": reuse,
         "amendment_commands": ref(output / "amendment-commands.json")}
+    if getattr(args, "class_indices", None) is not None:
+        from qcsd_lab import rapid_enrolled_subgroup as subgroup
+        batch, classes, _ = rolling._verify_enrollment(enrollment)
+        setup[subgroup.FIELD] = subgroup.declare(enrollment, batch, classes, args.class_indices)
     if requested_body_policy is not None:
         setup["application_body_identity_policy"] = body_policy
     if fixed_tamaraw is not None:
@@ -704,10 +741,11 @@ def finalize(args):
         amendment = Path(setup["amendment_path"])
         authority = adapter.validate_amendment(amendment,
             enrollment=Path(setup["enrollment"]["path"]), runtime=runtime)
-        if authority["modes"] != [mode] or len(authority["workloads"]) != len(bindings):
+        if authority["modes"] != [mode] or ("enrolled_subgroup" not in setup and len(authority["workloads"]) != len(bindings)):
             raise ValueError("public amendment must authorize this exact group and setting")
         by_candidate = {row["candidate_id"]: row for row in authority["workloads"]}
-        if set(by_candidate) != {row["candidate_id"] for row in bindings}:
+        if (not {row["candidate_id"] for row in bindings} <= set(by_candidate)
+            or "enrolled_subgroup" not in setup and set(by_candidate) != {row["candidate_id"] for row in bindings}):
             raise ValueError("amendment class identities changed")
     for binding, original in zip(bindings, originals):
         copied = Path(runtime["workload_root"]) / (binding["workload_id"] + ".json")
@@ -790,6 +828,8 @@ def finalize(args):
         "static_preparation_roots": static_roots(manifest), "group_preparation_roots": group_roots(manifests),
         "capture_limits": limits, "campaigns": campaigns, "reuse": setup["reuse"],
         "study_root": setup["study_root"], "enrollment": setup["enrollment"]}
+    if "enrolled_subgroup" in setup:
+        plan["enrolled_subgroup"] = setup["enrolled_subgroup"]
     if "application_body_identity_policy" in setup:
         plan["application_body_identity_policy"] = body_policy
     if fixed_tamaraw is not None:
@@ -815,6 +855,8 @@ def finalize(args):
         "--enrollment", setup["enrollment"]["path"], "--qualification-spec", str(qspec),
         "--readiness", str(output / "readiness.json"), "--runtime-spec", str(output / "runtime-spec.json"),
         "--output", str(output / "plans/g01.json"), "--spec-output", str(output / "plans/g01-spec.json")]
+    if "enrolled_subgroup" in setup:
+        commands["plan"] += ["--class-indices", *map(str, setup["enrolled_subgroup"]["class_indices"])]
     if authority is not None:
         commands["plan"] += ["--static-capture-amendment", setup["amendment_path"]]
     if "application_body_identity_policy" in setup:
@@ -1015,10 +1057,19 @@ def checked_plan(args, *, image=False):
         _, checked_policy, expected, originals, _, _ = selected_inputs(plan["enrollment"]["path"], plan["study_root"],
             prospective_amendment=amended, ordinary_renewal=plan.get("ordinary_renewal"),
             selected_input_renewal=plan.get("selected_input_renewal"), runtime=runtime, mode=mode,
-            tamaraw_configuration_policy=plan.get("tamaraw_configuration_policy"))
+            tamaraw_configuration_policy=plan.get("tamaraw_configuration_policy"),
+            enrolled_subgroup=plan.get("enrolled_subgroup"))
         recorded = [{key: value for key, value in row.items() if key != "capture_manifest"} for row in plan["selected_classes"]]
         if expected != recorded:
             raise ValueError("selected original classes changed")
+    if "enrolled_subgroup" in plan:
+        from qcsd_lab import rapid_enrolled_subgroup as subgroup
+        from qcsd_lab import rapid_rolling_capture as rolling
+        batch, classes, _ = rolling._verify_enrollment(Path(plan["enrollment"]["path"]))
+        rows = subgroup.validate(plan[subgroup.FIELD], Path(plan["enrollment"]["path"]), batch, classes)
+        if [(row["class_index"], row["candidate_id"], row["workload_id"]) for row in rows] != [
+                (row["class_index"], row["candidate_id"], row["workload_id"]) for row in plan["selected_classes"]]:
+            raise ValueError("subgroup image plan changed its exact class identities")
     local_manifests = []
     for row in plan["selected_classes"]:
         path = execution / "config/workloads" / (row["workload_id"] + ".json")
@@ -1341,6 +1392,8 @@ def main():
     item.add_argument("--name", required=True)
     item.add_argument("--campaign-seed", type=int, required=True)
     item.add_argument("--mode", choices=MODES, required=True)
+    item.add_argument("--class-indices", type=int, nargs="+",
+                      help="ordered current-batch subgroup with fresh qualification and canary")
     item.add_argument("--ordinary-renewal", type=Path)
     item.add_argument("--renew-selected-inputs", action="store_true",
                       help="revalidate the same retained full selected GET for fresh TAM8192 or CS-BuFLO qualification")

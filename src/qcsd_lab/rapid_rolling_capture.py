@@ -504,16 +504,21 @@ def _sites_from_enrollment(batch: Mapping[str, Any], all_classes: list[dict[str,
                            static_capture_amendment: Mapping[str, Any] | None = None,
                            delivery_compatibility: Mapping[str, str] | None = None,
                            body_policy: str | None = None, selected_input_renewal=None,
-                           _context=None) -> tuple[plan.Site, ...]:
+                           enrolled_subgroup=None, _context=None) -> tuple[plan.Site, ...]:
     from . import rapid_undefended_capture as ordinary
     if ordinary.is_inputs(lanes._load(lanes._read(qualifier_spec))):
-        if selected_input_renewal is not None:
-            raise ValueError("defended selected renewal cannot authorize ordinary-only inputs")
+        if selected_input_renewal is not None or enrolled_subgroup is not None:
+            raise ValueError("defended selected renewal or subgroup cannot authorize ordinary-only inputs")
         return ordinary.sites_from_enrollment(batch, all_classes, qualifier_spec, workload_root,
             require_current=require_current, enrollment=enrollment, runtime=runtime,
             front_capture_amendment=front_capture_amendment, static_capture_amendment=static_capture_amendment,
             delivery_compatibility=delivery_compatibility)
     classes = all_classes[-len(batch["selected_candidate_ids"]):]
+    if enrolled_subgroup is not None:
+        from . import rapid_enrolled_subgroup as subgroup
+        if enrollment is None:
+            raise ValueError("subgroup requires its original enrollment reference")
+        classes = subgroup.validate(enrolled_subgroup, enrollment, batch, all_classes)
     policy = verify_policy(_open_ref(batch["policy"]).parent)
     from . import rapid_additive_static_enrollment as additive
     from .rapid_per_class_selected_enrollment import CONTRACT as PER_CLASS_CONTRACT
@@ -735,7 +740,7 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
                  application_body_identity_policy: str | None = None,
                  qualification_delivery_compatibility: Mapping[str, str] | None = None,
                  tamaraw_configuration_policy: str | None = None,
-                 selected_input_renewal: Path | None = None, _context=None) -> Path:
+                 selected_input_renewal: Path | None = None, class_indices=None, _context=None) -> Path:
     from .application_response_policy import validate_application_body_identity_policy, application_body_identity_policy as declared_body_policy, COMPLETE_APPLICATION_DELIVERY_POLICY
     body_policy = validate_application_body_identity_policy(application_body_identity_policy)
     from .tamaraw_fixed_configuration import validate_policy as validate_fixed_tamaraw_policy
@@ -758,11 +763,17 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
                 application_body_identity_policy=application_body_identity_policy,
                 qualification_delivery_compatibility=qualification_delivery_compatibility,
                 tamaraw_configuration_policy=tamaraw_configuration_policy,
-                selected_input_renewal=selected_input_renewal, _context=_context)
+                selected_input_renewal=selected_input_renewal, class_indices=class_indices, _context=_context)
     if _context is not None:
         _context._enrollment(enrollment)
     policy = verify_policy(root)
     batch, classes = verify_enrollment(enrollment)
+    subgroup_value = None
+    if class_indices is not None:
+        from . import rapid_enrolled_subgroup as subgroup
+        if scheduling is not None:
+            raise ValueError("subgroup selection requires its prospective serial plan authority")
+        subgroup_value = subgroup.declare(enrollment, batch, classes, class_indices)
     from .rapid_additive_static_enrollment import CONTRACT as ADDITIVE_CONTRACT
     from .rapid_per_class_selected_enrollment import CONTRACT as PER_CLASS_CONTRACT
     per_class_policy = policy["contract"] == PER_CLASS_CONTRACT
@@ -789,7 +800,7 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
         raise ValueError("rolling plan changed its policy or supplied unknown readiness")
     from . import rapid_undefended_capture as ordinary
     ordinary_only = ordinary.is_inputs(lanes._load(lanes._read(qualification_spec)))
-    if ordinary_only and (set(readiness) != {"undefended"} or any(item is not None for item in
+    if ordinary_only and (subgroup_value is not None or set(readiness) != {"undefended"} or any(item is not None for item in
             (scheduling, front_capture_amendment, static_capture_amendment, qualification_delivery_compatibility))):
         raise ValueError("ordinary-only inputs require their own serial ordinary readiness")
     measurement_runtime = _static_measurement_runtime(scheduling, runtime, _context=_context)
@@ -863,6 +874,8 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
             or _ref(qualification_spec) != capsule["qualification_spec"]):
             raise ValueError("rolling scheduled plan changes enrollment or qualified inputs")
     for mode, reference in readiness.items():
+        if subgroup_value is not None:
+            subgroup.require_canary(reference, subgroup_value)
         if scheduling is not None and reference.get("schema_version") == 3:
             raise ValueError("canary control witness bridge authorizes only serial original-static capture")
         if scheduling is None:
@@ -898,7 +911,7 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
                    front_capture_amendment=amendment_reference,
                    static_capture_amendment=static_reference,
                    delivery_compatibility=qualification_delivery_compatibility, body_policy=body_policy,
-                   selected_input_renewal=selected_reference, _context=_context)
+                   selected_input_renewal=selected_reference, enrolled_subgroup=subgroup_value, _context=_context)
     if ordinary_only:
         ordinary.require_canary(facts, sites)
     planned = plan.plan_lanes(sites, final=True, study_version=6, rolling_batch=batch["ordinal"])
@@ -929,6 +942,8 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
                "planned_trace_count": sum(lane.sample_count for lane in planned),
                "readiness": dict(readiness), "declared_at": admission._now(),
                "formal_accepted_trace_count": 0, "scientific_credit": False}
+    if subgroup_value is not None:
+        payload[subgroup.FIELD] = subgroup_value
     if ordinary_only:
         payload[ordinary.FIELD] = ordinary.CONTRACT
         ordinary.require_plan(payload)
@@ -1028,6 +1043,15 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
                  "declared_at", "formal_accepted_trace_count", "scientific_credit"}
     from .application_response_policy import application_body_identity_policy, COMPLETE_APPLICATION_DELIVERY_POLICY
     body_policy = application_body_identity_policy(value)
+    from . import rapid_enrolled_subgroup as subgroup
+    subgroup_value = value.get(subgroup.FIELD)
+    if subgroup.FIELD in value:
+        fields.add(subgroup.FIELD)
+        subgroup.validate(subgroup_value, spec.cohort, batch, classes)
+        if "scheduling" in value:
+            raise ValueError("subgroup has only its prospective serial plan authority")
+        for reference in value["readiness"].values():
+            subgroup.require_canary(reference, subgroup_value)
     from .tamaraw_fixed_configuration import policy as fixed_tamaraw_policy
     fixed_tamaraw = fixed_tamaraw_policy(value)
     selected_reference = value.get("selected_input_renewal")
@@ -1133,7 +1157,7 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
                require_current=require_current, enrollment=spec.cohort, runtime=measurement_runtime,
                front_capture_amendment=amendment_reference, static_capture_amendment=static_reference,
                delivery_compatibility=value.get("qualification_delivery_compatibility"), body_policy=body_policy,
-               selected_input_renewal=selected_reference, _context=_context)
+               selected_input_renewal=selected_reference, enrolled_subgroup=subgroup_value, _context=_context)
     if (value["study_version"] != 6 or type(value["study_version"]) is not int
         or value["cohort_generation"] != "rolling-50" or value["bindings"] != _bindings_from_enrollment(spec.cohort, policy)
         or value["sites"] != [asdict(site) for site in sites]
