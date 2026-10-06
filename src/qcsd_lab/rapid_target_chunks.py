@@ -118,7 +118,10 @@ def _condition(spec, sites, base, mode):
     lane = lanes._lane({'plan_payload': base}, matching[0]['campaign_name'])
     reference = rolling.require_mode_readiness(spec, lane, _context=current_context())
     from . import rapid_ordinary_canary_carry as carry
+    from . import rapid_ordinary_group_canary as group
     carried = reference.get('schema_version') == 6 and reference.get('artifact_type') == carry.TYPE and mode == 'undefended'
+    current_group = (reference.get('schema_version') == 5
+        and reference.get('artifact_type') == group.TYPE and mode == 'undefended')
     if (reference.get('schema_version') not in (1, 5) and not carried
             or mode != 'undefended' and reference.get('schema_version') != 1):
         raise ValueError('target chunks cannot inherit a historical canary or control bridge')
@@ -128,7 +131,10 @@ def _condition(spec, sites, base, mode):
              else context.validate_canary(reference, runtime, mode, readiness.validate_canary))
     expected_source = {**lanes._load(_read(spec.source_manifest)), 'image_digest': spec.collection_image_digest}
     from .rapid_capture_traffic import plan_files
-    from .application_response_policy import application_body_identity_policy, application_response_policy, primary_document_identity_policy
+    from .application_response_policy import (application_body_identity_policy, application_response_policy,
+        primary_document_identity_policy, validate_prepared_response_graph,
+        COMPLETE_APPLICATION_DELIVERY_POLICY, COMPLETED_TERMINAL_HTTP_ERRORS_POLICY,
+        EXACT_PRIMARY_DOCUMENT_IDENTITY_POLICY, VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY)
     if ((not carried and facts.get('source') != expected_source) or facts.get('authority_source') != expected_source
             or facts.get('client_sha256') != lanes._sha(_read(spec.client_binary))
             or facts.get('traffic_hashes') != {key: digest for key, (_, digest) in plan_files(base).items()}
@@ -161,7 +167,8 @@ def _condition(spec, sites, base, mode):
             raise ValueError('target ordinary Native label lacks its distinct authenticated individual Lab authority')
     for index, site in enumerate(sites):
         path = spec.workload_root / (site.workload_id + '.json')
-        manifest = lanes._load(_read(path))
+        manifest_raw = _read(path)
+        manifest = lanes._load(manifest_raw)
         primary = identity['primary_document_identity_policy']
         if individual is not None:
             authority = individual['individual_manifests'][index]
@@ -169,6 +176,17 @@ def _condition(spec, sites, base, mode):
                     or carry.reference(path) != authority['authority_manifest']):
                 raise ValueError('target ordinary individual authority changes full ordered current manifest identity')
             primary = authority['lab_primary_policy']
+        elif current_group and primary_document_identity_policy(manifest) == VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY:
+            # A fresh current ordinary group proves complete delivery. Its
+            # Native label remains exact; the individual Lab policy is explicit.
+            if (facts.get('ordinary_successful_group_canary') != group.TYPE
+                    or primary != EXACT_PRIMARY_DOCUMENT_IDENTITY_POLICY
+                    or identity['application_response_policy'] != COMPLETED_TERMINAL_HTTP_ERRORS_POLICY
+                    or application_body_identity_policy(base) != COMPLETE_APPLICATION_DELIVERY_POLICY
+                    or lanes._sha(manifest_raw) != site.workload_sha256):
+                raise ValueError('target ordinary current group lacks its exact Native/body/full manifest authority')
+            validate_prepared_response_graph(manifest)
+            primary = VARIABLE_PRIMARY_DOCUMENT_IDENTITY_POLICY
         if (application_response_policy(manifest) != identity['application_response_policy']
                 or primary_document_identity_policy(manifest) != primary):
             raise ValueError('target cohort changes its full response/status or primary acceptance condition')

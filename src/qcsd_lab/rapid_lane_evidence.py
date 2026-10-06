@@ -77,6 +77,9 @@ def _json(value: Any) -> bytes:
 
 
 def plan_payload(raw: bytes) -> dict[str, Any]:
+    from .rapid_epoch_target_parallel_schedule import PLAN_TYPE as EPOCH_TARGET_PARALLEL_PLAN_TYPE
+    if _load(raw).get("receipt_type") == EPOCH_TARGET_PARALLEL_PLAN_TYPE:
+        return admission._unpack(raw, EPOCH_TARGET_PARALLEL_PLAN_TYPE)
     from .rapid_target_parallel_schedule import PLAN_TYPE as TARGET_PARALLEL_PLAN_TYPE
     if _load(raw).get("receipt_type") == TARGET_PARALLEL_PLAN_TYPE:
         return admission._unpack(raw, TARGET_PARALLEL_PLAN_TYPE)
@@ -115,6 +118,10 @@ def _qualification_layout(spec: CaptureSpec) -> None:
     value = _load(_read(spec.qualification_spec))
     from . import rapid_undefended_capture as ordinary
     if ordinary.is_inputs(value):
+        from . import rapid_epoch_target_parallel_schedule as epoch_workers
+        if epoch_workers.is_plan(spec.plan_receipt):
+            epoch_workers.check_layout(spec, value)
+            return
         from . import rapid_target_parallel_schedule as target_workers
         if target_workers.is_plan(spec.plan_receipt):
             target_workers.check_layout(spec, value)
@@ -470,9 +477,12 @@ def _validate_image_proof(proof: Any, spec: CaptureSpec, *, equivalent_plan: boo
     from . import rapid_undefended_capture as ordinary
     site_type = ordinary.OrdinarySite if ordinary.FIELD in stored_plan else plan.Site
     if site_type is ordinary.OrdinarySite:
+        from . import rapid_epoch_target_parallel_schedule as epoch_workers
         from . import rapid_target_parallel_schedule as target_workers
         from . import rapid_ordinary_parallel_schedule as ordinary_parallel
-        if target_workers.is_payload(stored_plan):
+        if epoch_workers.is_payload(stored_plan):
+            epoch_workers.require_plan(stored_plan, _context=_context)
+        elif target_workers.is_payload(stored_plan):
             target_workers.require_plan(stored_plan, _context=_context)
         elif ordinary_parallel.is_payload(stored_plan):
             ordinary_parallel.require_plan(stored_plan, _context=_context)

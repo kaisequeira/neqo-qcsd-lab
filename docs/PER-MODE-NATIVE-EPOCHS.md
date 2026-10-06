@@ -13,8 +13,8 @@ Each mode has an explicit finite ordered list of Native/client epochs. The
 prospective lists retain the original c24 epochs for ordinary, FRONT reserve
 V4, TAM8192 and BuFLO200, then append the repaired 818d Native/client pair
 for each of those modes. Canonical CTSP CS-BuFLO begins with that repaired
-pair; its earlier attempts supply no original formal rows. These lists are a
-declaration plan, not current epoch receipts or capture authorization. A new
+pair; its earlier attempts supply no original formal rows. Declaring these lists
+alone grants no capture authorization. A new
 installed consumer and a genuine current-mode canary are required for each
 mode before formal capture under the repaired pair. Original valid TAM4
 remain scientific credit with their original measurement labels. Historical
@@ -74,6 +74,75 @@ policy before a physical intent, then uses the original serial launch and indepe
 path. The original v1 chunk reader and parallel capsules do not accept these
 new receipts. This consumer requires its own clean matching installed runtime;
 the earlier Source36 runtime does not contain it and grants no epoch capture.
+
+## Current ordinary group planning
+
+The prospective ordinary branch in the
+[chunk planner](../src/qcsd_lab/rapid_target_chunks.py) accepts an explicitly
+validated schema-5 [current group canary](../src/qcsd_lab/rapid_ordinary_group_canary.py).
+Its measured Native primary label remains `exact-response-body-v1`, with the
+unchanged fixed condition hash `503a3e65…`. Each current Lab manifest may
+explicitly declare `variable-primary-document-body-v1` while retaining its
+exact bound bytes, complete prepared resource/origin graph, completed-terminal
+response policy and complete current application delivery. Source, client,
+traffic and capture caps remain authenticated. The historical carried20
+authority and original deep/fixed-target audit rules remain unchanged.
+
+This is a planning rule with zero trace credit. It cannot promote a failed
+policy or reuse a Source37 canary as current authority for changed Source.
+The new clean installed release needs its own fresh ordinary group canary;
+formal credit still requires genuine capture, original independent deep proof
+and the unchanged fixed-target audit. Its 25 focused HOST cases and the
+parallel adapter's separate 27-case gate are engineering evidence, not a
+combined physical proof or accepted corpus rows.
+
+## Two independent epoch workers
+
+The distinct [epoch parallel tool](../tools/rapid_epoch_target_parallel.py) wraps
+an authenticated serial epoch plan. Both workers select the same declared
+mode, epoch, current runtime and unchanged fixed condition. Each worker has
+one through sixteen visits over complete admitted graphs and their original
+caps; their logical `(class, mode, slot)` sets must be disjoint. The original
+[parallel capsule reader](../src/qcsd_lab/rapid_target_parallel_schedule.py)
+retains its own strict types. A new clean installed release containing this
+adapter and its own genuine current-mode canary are required before launch.
+
+For an existing serial epoch specification, use fresh output paths and exact
+SHA256 values for every public input:
+
+```sh
+python tools/rapid_epoch_target_parallel.py capsule \
+  --spec serial.json --spec-sha256 SERIAL_SHA \
+  --canonical canonical-runtime.json --canonical-sha256 CANONICAL_SHA \
+  --output epoch-workers.json
+python tools/rapid_epoch_target_parallel.py plan \
+  --spec serial.json --spec-sha256 SERIAL_SHA \
+  --capsule epoch-workers.json --capsule-sha256 CAPSULE_SHA \
+  --output epoch-parallel-plan.json --spec-output epoch-parallel-spec.json
+python tools/rapid_epoch_target_parallel.py check \
+  --spec epoch-parallel-spec.json --spec-sha256 PARALLEL_SPEC_SHA
+```
+
+Then use the existing [formal preparation tool](../tools/rapid_formal_parallel.py)
+with `--spec epoch-parallel-spec.json`, exactly two `--lane` names, a fresh
+`--evidence-root` and `--output`. The existing
+[parallel capture tool](../tools/rapid_parallel_capture.py) supplies `launch`,
+`verify` and `retire-session` against that authority. Its original installed
+control, intent, full-graph capture, independent deep proof and publication
+gates still apply. HOST planning and wrapper checks add no accepted traces.
+
+If one lane fails, retain its raw failure, actual session retirement and
+checkpoint. Keep the successful peer's evidence immutable. Generate only the
+failed lane's immediate successor with `successor --spec ... --spec-sha256 ...
+--lane FAILED_LANE --generation NEXT --output FRESH_PLAN --spec-output
+FRESH_SPEC`. It preserves that lane's logical slots and original offset
+recovery. Formal preparation accepts the successor through `--spec-2` and the
+matching `--predecessor-1` or `--predecessor-2`; it cannot reset a successful
+peer, switch epochs, drop failed evidence or grant replacement credit.
+
+The 27 focused HOST cases cover this adapter and its strict dispatch/recovery
+rules. Real two-worker epoch capture and recovery remain **UNPROVED** until
+the original physical operations and independent deep acceptance succeed.
 
 Final publication requires 50 original class identities, five unchanged fixed
 conditions, all 64 slots per class/mode, no duplicates or holes, and the retained

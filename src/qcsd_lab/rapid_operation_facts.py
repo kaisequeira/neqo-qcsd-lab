@@ -289,6 +289,10 @@ class OperationFacts:
         self._bindings.add(key)
 
     def bind_schedule(self, capsule) -> None:
+        from . import rapid_epoch_target_parallel_schedule as epoch_workers
+        if capsule.get("artifact_type") == epoch_workers.CAPSULE_TYPE:
+            epoch_workers.bind_dependencies(capsule, self)
+            return
         from . import rapid_target_parallel_schedule as target_workers
         if capsule.get("artifact_type") == target_workers.CAPSULE_TYPE:
             target_workers.bind_dependencies(capsule, self)

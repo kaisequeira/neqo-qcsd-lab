@@ -7,7 +7,64 @@ not present in every clone. The [project ledger](../PROJECT.md),
 [runbook](CLASS-STUDY.md), [history](PROJECT-HISTORY.md) and
 [historical source map](HISTORY-SOURCE-MAP.md) are tracked and portable.
 
-## Fixed five target: current snapshot, 6 October 2026, 21:13 Sydney AEDT
+## Fixed five target: current snapshot, 6 October 2026, 23:06 Sydney AEDT
+
+The retained official target remains **35 enrolled classes and 48/16,000
+accepted traces**. The target/progress references in the earlier checkpoint
+below remain the same; no current canary or HOST check adds a formal row.
+
+Source37 `ecd8f471ebe2b58572b033ec26eacffc949df838`, unchanged Native
+`818d89398a5b0bc725e424b648d878185d18125d` and client `2c9f170e…` have an actual
+matching runtime closure at
+`../diagnostic-rehearsals/rapid-v37-epoch-consumer-current-docs-native818-runtime-root-actual-20261007-001/root-runtime-closed.json`
+(SHA-256 `a8f2468e32cc8b238a3ef86ec1a4c4c2cc3a13a5a1bf0ce3520f2a21514a4810`).
+
+Class 17's FRONT reserve V4 default120 complete 58-resource/two-origin canary
+passed qualification, practice, independent deep, fixed-condition comparison
+and readiness. Its flight is
+`../diagnostic-rehearsals/frontv4-class017-b0005-v37-default120-flight-20261007-001/`:
+`front-deep-verification.json` has SHA-256
+`474f5b2dabf41cbd1eb4f61a02ee21ab7fbeee7f7862ac2226fbd9be12e496c3`,
+and `readiness.json` has SHA-256
+`6e44f214124244a63d9d26b6829efab644a21a73ece600baf2b1bb780f37abd4`.
+The actual fixed-condition check against `e8129215…` and readiness completed 0
+under
+`../diagnostic-rehearsals/selected-class017-front-v37-default120-canary-root-actual-20261007-001/operations/`:
+`check-actual-fixed-condition-after-deep-completed.json`
+(`9269ca0197d4e9e375bfe32651ce438ad5763ed15bc36c3d65721b20d07a82da`)
+and `readiness-completed.json`
+(`4e0b4be6762a37ca5492f351196590329d3674075275d0a04161063d0cb1ae7a`).
+
+The Source37 current ordinary group practice and independent deep also closed 0
+on the complete class-17 graph. Its flight is
+`../diagnostic-rehearsals/ordinary-b0005-v37-current-whole-flight-20261007-002/`:
+`undefended-deep-verification.json` has SHA-256
+`fc30b730ffdf372564ce5b1e41ad6b9150edf96aa22a794deb5216e030f0a631`,
+and schema-5 `readiness.json` has SHA-256
+`4e0350663ebb2aba6a9fa3d37d894034d6b6725a18a0193e83fa85f5ce593861`.
+The subsequent public ordinary policy failed with no formal credit at
+`../diagnostic-rehearsals/ordinary-b0005-native818-v37-epoch-first16-root-actual-20261007-001/operations/epoch_policy-completed.json`
+(SHA-256 `82d243663c29fa853f089d30618546f7dbb58c577547d8dd4610879be29e24d9`).
+Its retained diagnosis identifies the variable Lab primary versus exact Native
+primary planning mismatch. The prospective branch preserves Native condition
+`503a3e65…`; it does not modify original deep acceptance or fixed-target audit.
+
+The prospective parallel adapter's separate 27-case gate is
+`../diagnostic-rehearsals/rapid-epoch-parallel-native818-host-checks-20261007-002/host-test-gate.json`
+(SHA-256 `7704974dbb12a74669c7dc90f04cca8dcb136ac7a1598b7ee92747dca647e2ea`).
+The ordinary branch's separate 25-case gate is
+`../diagnostic-rehearsals/rapid-current-ordinary-primary-epoch-parallel-host-checks-20261007-001/host-test-gate.json`
+(SHA-256 `b923aaf9268d3d0b7b801c7587784f7982158f0507fc1d263bcad2b0ff3907a7`),
+with independent source review at
+`../diagnostic-rehearsals/rapid-current-ordinary-primary-independent-review-20261007-001/review.json`
+(SHA-256 `3d7692c8aab6a7286314692bf6abe6705e99fd87f9668e05a89e34d0ce9b22c2`).
+The combined successor is still unpublished/uninstalled at this checkpoint;
+its exact code paths retain their own recorded gate bindings. Fresh canaries on
+its actual installed Source remain required. Real epoch parallel capture and
+per-failed-lane recovery are **UNPROVED**. Live FRONT planning and BuFLO practice
+have no completed result or new credit in this snapshot.
+
+## Fixed five target: earlier snapshot, 6 October 2026, 21:13 Sydney AEDT
 
 The official target has **35 enrolled classes** and **48/16,000 accepted
 formal traces**: forty ordinary, four Tamaraw8192 and four FRONT reserve V4.

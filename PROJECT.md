@@ -1,6 +1,6 @@
 # QCSD thesis project ledger
 
-Checkpoint: **6 October 2026, 21:13 Australia/Sydney (AEDT, UTC+11)**.
+Checkpoint: **6 October 2026, 23:06 Australia/Sydney (AEDT, UTC+11)**.
 This is the current research ledger. The [history](docs/PROJECT-HISTORY.md)
 preserves the development record, the [class-study runbook](docs/CLASS-STUDY.md)
 defines continuation, and the [capture-readiness guide](docs/CAPTURE-READINESS.md)
@@ -49,7 +49,35 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-### Latest verified checkpoint: 6 October, 21:13 Sydney AEDT
+### Latest verified checkpoint: 6 October, 23:06 Sydney AEDT
+
+The official target remains **35 enrolled classes** and **48/16,000 accepted
+formal traces**: forty ordinary, four Tamaraw8192 and four FRONT reserve V4.
+The original rows and all five fixed conditions remain unchanged.
+
+Published Source37 `ecd8f471` has a matching installed runtime with unchanged
+Native `818d8939` and client `2c9f170e…`. Class 17's FRONT reserve V4 default120
+canary passed qualification, complete 58-resource/two-origin practice,
+independent deep verification, the original fixed-condition comparison
+(`e8129215…`) and readiness. Its ordinary current group practice and independent
+deep verification also passed on that full graph. These canaries add no formal
+rows. Subsequent FRONT planning and BuFLO practice work were still in progress
+at this checkpoint; their live attempts are not counted as completed results.
+
+The Source37 ordinary remaining-slot policy attempt failed because its planner
+required the variable Lab manifest primary policy to equal Native's measured
+exact primary label. The failed policy and its diagnosis remain retained with
+zero credit. A prospective narrow planning branch preserves the exact Native
+condition `503a3e65…`, complete graphs, response policy and original deep/fixed
+audits while authenticating each variable Lab manifest separately. Its 25
+focused HOST cases passed. The prospective two-worker epoch adapter separately
+passed 27 focused HOST cases; physical parallel capture and failed-lane recovery
+remain **UNPROVED**. The combined candidate is not yet published or installed
+and needs fresh current canaries on its matching release. See the
+[epoch continuation notes](docs/PER-MODE-NATIVE-EPOCHS.md) and
+[exact evidence bindings](docs/EVIDENCE-INDEX.md).
+
+### Earlier verified checkpoint: 6 October, 21:13 Sydney AEDT
 
 The fixed five-condition target has **35 enrolled classes** and **48/16,000
 accepted formal traces**: forty ordinary, four class-17 Tamaraw8192, and four

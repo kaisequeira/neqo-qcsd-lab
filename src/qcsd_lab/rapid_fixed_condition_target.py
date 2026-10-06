@@ -169,7 +169,8 @@ _READER_COMPATIBILITY_HELPERS = {
     'target': ('_reader_code_projection', '_compatible_code_ref',
                '_planning_source_projection', '_membership_code_path',
                '_compatible_selected_membership_code', '_epoch_dispatch_source_projection',
-               '_epoch_dynamic_source_projection'),
+               '_epoch_dynamic_source_projection', '_parallel_facts_source_projection',
+               '_parallel_schedule_source_projection'),
     'dynamic': ('_compatible_reader_sources',),
 }
 
@@ -229,11 +230,15 @@ def _compatible_code_ref(role, producer, current):
     enhanced_target = (role == 'target' and producer['sha256'] in {
                        '3d75eee530f282fe81373b3fa584603360e1f216dbe559fc368ed1aadd5e6cad',
                        '9ec1c86f9d6e310f0f510e821a586d6a23d96222813d495fc3ef22d14e638571',
-                       '2644a9156562a2b8b377f9ee019325ce2cda04a4dfc0770bdbb89013fcede14c'})
+                       '2644a9156562a2b8b377f9ee019325ce2cda04a4dfc0770bdbb89013fcede14c',
+                       '8a263b9d3f2bfac765170edaf05eee6bff77e3523ea8cd635f1f831b37ab1676'})
     epoch_dynamic = (role == 'dynamic' and producer['sha256'] in {
         '17d9b19159a521e7c18cea732ba8ed44dff6044a18442807a716e793586cb3a3',
-        'e5c49b345c0e5acb1af442dbaae7d2caabfcdcf09892239d5ebb78f5d03a318a'}
-        and current['sha256'] == '1e917253a51a0468cea929526d5c73e65e5a0220868f48447b0bd7b8648edbdd')
+        'e5c49b345c0e5acb1af442dbaae7d2caabfcdcf09892239d5ebb78f5d03a318a',
+        '1e917253a51a0468cea929526d5c73e65e5a0220868f48447b0bd7b8648edbdd'}
+        and current['sha256'] in {
+            '1e917253a51a0468cea929526d5c73e65e5a0220868f48447b0bd7b8648edbdd',
+            '9339d219b5b0e97b23ec9f1ea78cd7378ec9b81d5018f64a14eace5928d6cbcd'})
     try:
         if epoch_dynamic:
             old = _epoch_dynamic_source_projection(Path(producer['path']).read_bytes())
@@ -256,7 +261,8 @@ def _epoch_dynamic_source_projection(raw):
     if digest not in {
             '17d9b19159a521e7c18cea732ba8ed44dff6044a18442807a716e793586cb3a3',
             'e5c49b345c0e5acb1af442dbaae7d2caabfcdcf09892239d5ebb78f5d03a318a',
-            '1e917253a51a0468cea929526d5c73e65e5a0220868f48447b0bd7b8648edbdd'}:
+            '1e917253a51a0468cea929526d5c73e65e5a0220868f48447b0bd7b8648edbdd',
+            '9339d219b5b0e97b23ec9f1ea78cd7378ec9b81d5018f64a14eace5928d6cbcd'}:
         raise ValueError('dynamic epoch binding is outside the exact Source pair')
     tree = ast.parse(raw)
     found = 0
@@ -303,16 +309,18 @@ def _planning_source_projection(raw):
 
 
 def _epoch_dispatch_source_projection(raw):
-    """Normalize only the exact old/new serial epoch dispatch pair for membership."""
+    """Normalize only exact published/held epoch dispatch bytes for membership."""
     import ast
     digest = hashlib.sha256(raw).hexdigest()
     if digest not in {
             'b2d6be3fbc3ab2060bdfa683d372def0122669daa251b31c2000a759c4e4f610',
             '23e64994de9127aad06e952dae996d7e7b24fd5d44e5c5877eb658d845d64e9b',
-            'a7a2302f4e835dcfe37b15278d624890065794673f7ee2182b18a9fd61e196e4'}:
+            'a7a2302f4e835dcfe37b15278d624890065794673f7ee2182b18a9fd61e196e4',
+            'c133974ffb1895d77b3fc88fd5888c9de28ed9e9b280ec2b9d576aa07b6c9702'}:
         raise ValueError('rolling epoch dispatch is outside the exact published Source pair')
     tree = ast.parse(raw)
-    names = {'image_plan_check', 'validate_host_launch', 'publish_successor', 'enrollment_roots'}
+    names = {'image_plan_check', 'validate_host_launch', 'publish_successor', 'enrollment_roots',
+             'require_mode_readiness'}
     found = set()
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name in names:
@@ -320,6 +328,43 @@ def _epoch_dispatch_source_projection(raw):
             found.add(node.name); node.body = [ast.Pass()]
     if found != names: raise ValueError('rolling epoch dispatch definition set is incomplete')
     return _planning_source_projection(ast.unparse(tree).encode())
+
+
+def _parallel_facts_source_projection(raw):
+    """Retain every Facts unit except one exact typed schedule dispatch pair."""
+    import ast
+    if hashlib.sha256(raw).hexdigest() not in {
+            'ffd0ce58b57a2a94cd974573e79064fc4c69d62f99b586d5449b1424bc86973d',
+            'e667bfab9ef36467211c3d4a9227da0db55264bc262295751b281e0a2f156fe4'}:
+        raise ValueError('operation Facts dispatch is outside the exact old/new Source pair')
+    tree = ast.parse(raw); found = 0
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == 'OperationFacts':
+            for method in node.body:
+                if isinstance(method, ast.FunctionDef) and method.name == 'bind_schedule':
+                    found += 1; method.body = [ast.Pass()]
+    if found != 1:
+        raise ValueError('operation Facts schedule definition is absent or duplicated')
+    return ast.dump(tree, include_attributes=False).encode()
+
+
+def _parallel_schedule_source_projection(raw):
+    """Retain every scheduling unit except the exact typed adapter dispatches."""
+    import ast
+    if hashlib.sha256(raw).hexdigest() not in {
+            '2137c31db996a12e7269dae82b008982281d118304fe984feb44c5eefdf01d77',
+            '15b423aa04fe942fc08b3b61e26973b1cd3473363184e5660c1f02c27b4b5ddb'}:
+        raise ValueError('scheduling reader dispatch is outside the exact old/new Source pair')
+    tree = ast.parse(raw); found = set()
+    names = {'validate_schedule', 'validate_qualification_reuse', 'validate_ready_canary', 'mount_roots'}
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name in names:
+            if node.name in found:
+                raise ValueError('scheduling adapter dispatch definition is duplicated')
+            found.add(node.name); node.body = [ast.Pass()]
+    if found != names:
+        raise ValueError('scheduling adapter dispatch definition set is incomplete')
+    return ast.dump(tree, include_attributes=False).encode()
 
 
 def _membership_code_path(path, target_source):
@@ -401,6 +446,12 @@ def _compatible_sources(producer):
         _open(producer[name]); _open(expected)
         if name in _LEGACY_READER_UNITS:
             _compatible_code_ref(name, producer[name], expected)
+        elif name == 'facts':
+            if (producer[name]['mode'] != expected['mode'] or
+                    producer[name]['sha256'] != expected['sha256'] and
+                    _parallel_facts_source_projection(Path(producer[name]['path']).read_bytes()) !=
+                    _parallel_facts_source_projection(Path(expected['path']).read_bytes())):
+                raise ValueError('fixed target operation Facts changed protected code or full modes')
         elif name == 'budgets':
             _compatible_selected_membership_code(
                 'src/qcsd_lab/rapid_per_class_selected_enrollment.py',
@@ -435,13 +486,26 @@ def _compatible_membership(producer, current, producer_sources):
         pair = (before['sha256'], after['sha256'])
         epoch_predecessors = {
             'b2d6be3fbc3ab2060bdfa683d372def0122669daa251b31c2000a759c4e4f610',
-            '23e64994de9127aad06e952dae996d7e7b24fd5d44e5c5877eb658d845d64e9b'}
+            '23e64994de9127aad06e952dae996d7e7b24fd5d44e5c5877eb658d845d64e9b',
+            'a7a2302f4e835dcfe37b15278d624890065794673f7ee2182b18a9fd61e196e4'}
         project = (_epoch_dispatch_source_projection if pair[0] in epoch_predecessors and
-                   pair[1] == 'a7a2302f4e835dcfe37b15278d624890065794673f7ee2182b18a9fd61e196e4'
+                   pair[1] in {'a7a2302f4e835dcfe37b15278d624890065794673f7ee2182b18a9fd61e196e4',
+                               'c133974ffb1895d77b3fc88fd5888c9de28ed9e9b280ec2b9d576aa07b6c9702'}
                    else _planning_source_projection)
         if (before['mode'] != after['mode']
                 or project(Path(before['path']).read_bytes())
                 != project(Path(after['path']).read_bytes())):
+            return False
+    facts = 'src/qcsd_lab/rapid_operation_facts.py'
+    if facts in old_code or facts in new_code:
+        if facts not in old_code or facts not in new_code:
+            return False
+        before, after = old_code[facts], new_code[facts]
+        _open(before); _open(after)
+        if (before['mode'] != after['mode'] or
+                before['sha256'] != after['sha256'] and
+                _parallel_facts_source_projection(Path(before['path']).read_bytes()) !=
+                _parallel_facts_source_projection(Path(after['path']).read_bytes())):
             return False
     def normalized(value, source):
         result = json.loads(_json(value))
@@ -451,6 +515,8 @@ def _compatible_membership(producer, current, producer_sources):
                 row['path'] = 'identical-bound-code/' + relative
                 if relative == rolling and rolling in old_code and rolling in new_code:
                     row['sha256'] = old_code[rolling]['sha256']
+                elif relative == facts and facts in old_code and facts in new_code:
+                    row['sha256'] = old_code[facts]['sha256']
                 elif relative == 'src/qcsd_lab/rapid_fixed_condition_target.py':
                     row['sha256'] = producer_sources['target']['sha256']
                 elif relative in selected_roles:

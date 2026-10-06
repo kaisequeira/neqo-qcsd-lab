@@ -1014,6 +1014,9 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
         _context.bind_capture(spec)
         if _context.has(key):
             return _context.get(key)
+    from . import rapid_epoch_target_parallel_schedule as epoch_workers
+    if epoch_workers.is_plan(spec.plan_receipt):
+        return epoch_workers.verify_plan(spec, require_current=require_current, _context=_context)
     from . import rapid_target_parallel_schedule as target_workers
     if target_workers.is_plan(spec.plan_receipt):
         return target_workers.verify_plan(spec, require_current=require_current, _context=_context)
@@ -1229,7 +1232,10 @@ def require_mode_readiness(spec: lanes.CaptureSpec, lane: plan.Lane, *, before: 
                           or selected_schedule.is_selected(payload["scheduling"]))
         from . import rapid_ordinary_parallel_schedule as ordinary_parallel
         from . import rapid_target_parallel_schedule as target_workers
-        current_static = current_static or ordinary_parallel.is_schedule(payload["scheduling"]) or target_workers.is_schedule(payload["scheduling"])
+        from . import rapid_epoch_target_parallel_schedule as epoch_workers
+        current_static = (current_static or ordinary_parallel.is_schedule(payload["scheduling"])
+                          or target_workers.is_schedule(payload["scheduling"])
+                          or epoch_workers.is_schedule(payload["scheduling"]))
         expected_traffic = plan_files(payload) if current_static else lanes.TRAFFIC_FILES
         if (facts.get("client_sha256") != lanes._sha(lanes._read(spec.client_binary))
             or facts.get("traffic_hashes") != {key: digest for key, (_, digest) in expected_traffic.items()}):
@@ -1381,6 +1387,9 @@ def validate_host_launch(value: Any, *, expected_campaign: str, actual_image: st
 
 
 def publish_successor(spec: lanes.CaptureSpec, lane_name: str, generation: int, output: Path) -> Path:
+    from . import rapid_epoch_target_parallel_schedule as epoch_workers
+    if epoch_workers.is_plan(spec.plan_receipt):
+        return epoch_workers.publish_successor(spec, lane_name, generation, output)
     from . import rapid_target_parallel_schedule as target_workers
     if target_workers.is_plan(spec.plan_receipt):
         return target_workers.publish_successor(spec, lane_name, generation, output)
@@ -1432,6 +1441,9 @@ def enrollment_roots(spec: lanes.CaptureSpec) -> list[Path]:
     The installed plan check still reopens every terminal and prepared graph.
     Mount derivation does not repeat that scientific verification on the host.
     """
+    from . import rapid_epoch_target_parallel_schedule as epoch_workers
+    if epoch_workers.is_plan(spec.plan_receipt):
+        return sorted(epoch_workers.roots(spec))
     from . import rapid_target_parallel_schedule as target_workers
     if target_workers.is_plan(spec.plan_receipt):
         return sorted(target_workers.roots(spec))

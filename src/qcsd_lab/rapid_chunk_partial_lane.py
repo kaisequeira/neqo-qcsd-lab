@@ -261,6 +261,12 @@ def _compatible_reader_sources(producer):
             raise ValueError('chunk partial original reader locations are inconsistent')
         if name == __name__:
             target._compatible_code_ref('dynamic', ref, expected)
+        elif name == 'qcsd_lab.rapid_rolling_schedule':
+            if (reference(ref['path']) != ref or reference(expected['path']) != expected
+                    or ref['mode'] != expected['mode'] or ref['sha256'] != expected['sha256'] and
+                    target._parallel_schedule_source_projection(Path(ref['path']).read_bytes()) !=
+                    target._parallel_schedule_source_projection(Path(expected['path']).read_bytes())):
+                raise ValueError('chunk partial scheduling reader changed protected code or full modes')
         elif (reference(ref['path']) != ref or reference(expected['path']) != expected
                 or any(ref[key] != expected[key] for key in ('sha256', 'mode'))):
             raise ValueError('chunk partial original/current reader code bytes or full modes changed')
@@ -410,6 +416,9 @@ def _measurement_binding(report, source):
     if (payload.get('lane_layout') != CHUNK_LAYOUT
             or payload != report['lineage']['image_check']['proof']['plan_payload']):
         raise ValueError('chunk partial plan differs from original executed chunk authority')
+    from . import rapid_epoch_target_parallel_schedule as epoch_workers
+    if epoch_workers.is_payload(payload):
+        return epoch_workers.require_partial_binding(report)
     if 'target_chunk_policy' in payload:
         from .rapid_target_chunks import require_partial_binding
         return require_partial_binding(report)
