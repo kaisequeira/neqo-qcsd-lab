@@ -27,7 +27,7 @@ CONTRACT = 'declared-fixed-condition-progress-current-qualified-full-graph-chunk
 FIELD = 'target_chunk_policy'
 CONTROL_MODULES = ('rapid_target_chunks', 'rapid_slot_chunks', 'rapid_fixed_condition_target',
     'rapid_lane_evidence', 'rapid_rolling_capture', 'rapid_rolling_readiness', 'rapid_operation_facts',
-    'buflo_duration_budget', 'rapid_capture_traffic')
+    'buflo_duration_budget', 'rapid_capture_traffic', 'rapid_action_local_source_facts')
 CONTROL_FILENAMES = tuple('src/qcsd_lab/' + name + '.py' for name in CONTROL_MODULES) + (
     'tools/rapid_target_chunks.py',)
 POLICY_KEYS = {'contract', 'lane_layout', 'base_spec', 'base_four_visit_plan', 'target_chunk_inputs',
@@ -52,11 +52,12 @@ def _executing_source_path(relative, runtime):
             rapid_target_parallel_schedule, rapid_ordinary_parallel_schedule,
             rapid_undefended_capture, rapid_capture_plan, rapid_rolling_schedule,
             rapid_formal_parallel, rapid_runtime_epochs, rapid_ordinary_group_canary,
-            rapid_ordinary_transport_control)
+            rapid_ordinary_transport_control, rapid_action_local_source_facts)
         modules = {module.__name__.rsplit('.', 1)[-1]: module for module in (
             rapid_target_chunks, rapid_slot_chunks, rapid_fixed_condition_target,
             rapid_lane_evidence, rapid_rolling_capture, rapid_rolling_readiness,
             rapid_operation_facts, buflo_duration_budget, rapid_capture_traffic,
+            rapid_action_local_source_facts,
             rapid_target_parallel_schedule, rapid_ordinary_parallel_schedule,
             rapid_undefended_capture, rapid_capture_plan, rapid_rolling_schedule,
             rapid_formal_parallel, rapid_runtime_epochs, rapid_ordinary_group_canary,

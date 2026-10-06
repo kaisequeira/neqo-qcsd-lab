@@ -941,6 +941,8 @@ def _collect_attempt(
         text=True,
     )
     capture_active_through_settle = False
+    clock_start: dict[str, int] | None = None
+    capture_clock_error: BaseException | None = None
     try:
         _wait_for_capture_start(process, capture_log)
         if kernel_tx_required:
@@ -1012,6 +1014,14 @@ def _collect_attempt(
         except subprocess.TimeoutExpired:
             process.terminate()
             process.wait(timeout=5)
+        # Include the full settle tail, then close the primary capture's clock
+        # envelope before unrelated router and qdisc cleanup can delay it.
+        if clock_start is not None:
+            try:
+                capture_clock_anchors = _capture_clock_anchors_after_stop(clock_start, process)
+            except BaseException as error:
+                # Preserve cleanup even when the end clock sample fails.
+                capture_clock_error = error
         handle.close()
         cleanup_errors: list[str] = []
         if router_capture_started and router_capture_client is not None:
@@ -1040,9 +1050,8 @@ def _collect_attempt(
         if cleanup_errors:
             raise RuntimeError("; ".join(cleanup_errors))
 
-    # The authoritative interval includes the settle tail and closes only once
-    # dumpcap can no longer add a packet to the retained capture.
-    capture_clock_anchors = _capture_clock_anchors_after_stop(clock_start, process)
+    if capture_clock_error is not None:
+        raise capture_clock_error
 
     router_capture_path: Path | None = None
     if kernel_tx_required:

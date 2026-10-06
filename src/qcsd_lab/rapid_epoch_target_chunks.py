@@ -17,6 +17,7 @@ from . import rapid_rolling_readiness as readiness
 from . import rapid_rolling_schedule as runtime_reader
 from . import rapid_site_admission as receipts
 from .rapid_operation_facts import current_context
+from . import rapid_action_local_source_facts as source_facts
 
 POLICY_TYPE = 'qcsd-per-mode-native-epoch-target-slot-chunk-policy-v1'
 PLAN_TYPE = 'qcsd-per-mode-native-epoch-target-slot-chunk-plan-v1'
@@ -314,6 +315,7 @@ def publish_successor(spec, lane_name, generation, output):
         'previous_epoch_target_chunk_plan': target.reference(spec.plan_receipt)})
 
 
+@source_facts.selection
 def input_files(value):
     policy_path = target._open(value[FIELD]); policy = receipts._unpack(_read(policy_path), POLICY_TYPE)
     inputs_path = target._open(policy['target_chunk_inputs'])

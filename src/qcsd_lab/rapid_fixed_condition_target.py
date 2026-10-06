@@ -25,6 +25,7 @@ from . import rapid_per_class_selected_enrollment as budgets
 from . import buflo_duration_budget as duration
 from . import rapid_capture_traffic as traffic
 from .rapid_operation_facts import OperationFacts, current_context
+from . import rapid_action_local_source_facts as source_facts
 
 TARGET_TYPE = 'qcsd-prospective-fifty-site-five-fixed-condition-target-v1'
 PROGRESS_TYPE = 'qcsd-original-verified-fixed-condition-slot-progress-v1'
@@ -173,6 +174,7 @@ _READER_COMPATIBILITY_HELPERS = {
                '_parallel_schedule_source_projection'),
     'dynamic': ('_compatible_reader_sources',),
 }
+_ACTION_LOCAL_SOURCE_FACTS_SHA256 = '34586599ad4eeeb1f765eb5ff7ca0d36559be2ef0a7d7521eff0fc7a681e4c0c'
 
 
 def _reader_code_projection(raw, role, *, legacy=False):
@@ -187,6 +189,36 @@ def _reader_code_projection(raw, role, *, legacy=False):
     tree = ast.parse(raw)
     retained = []; seen = set()
     for node in tree.body:
+        if (role == 'target' and isinstance(node, ast.ImportFrom) and node.level == 1
+                and node.module is None and len(node.names) == 1
+                and node.names[0].name == 'rapid_action_local_source_facts'
+                and node.names[0].asname == 'source_facts'):
+            if legacy: raise ValueError('retained reader added an action-local memo')
+            continue
+        if (role == 'target' and isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id == '_ACTION_LOCAL_SOURCE_FACTS_SHA256'):
+            if (legacy or not isinstance(node.value, ast.Constant)
+                    or node.value.value != '34586599ad4eeeb1f765eb5ff7ca0d36559be2ef0a7d7521eff0fc7a681e4c0c'):
+                raise ValueError('action-local memo helper is outside the reviewed Source')
+            continue
+        if role == 'target' and isinstance(node, ast.FunctionDef):
+            memo_units = {
+                '_measurement_source': ('source', '82934e22e357e815313f2869f78611a8f28fd4468693a6301803308d6cdae127'),
+                'input_files': ('selection', 'b3a511bde750b11f4a50164c246a87465c9132ac30c106bb4cb523dee043f464'),
+                'roots': ('selection', 'e778874d2029fb77845ec30ed0053251ae448a0bc7aecfe1ae6b134d6160ae2c'),
+                'directory_dependencies': ('selection', '6358e66ae5b125a12655fec6b9d3df02455974dcd286076dd6cf1827f448d481'),
+            }
+            memo = [d for d in node.decorator_list if isinstance(d, ast.Attribute)
+                    and isinstance(d.value, ast.Name) and d.value.id == 'source_facts']
+            if memo:
+                if (legacy or node.name not in memo_units or len(memo) != 1
+                        or memo[0].attr != memo_units[node.name][0]):
+                    raise ValueError('reader memo decorates an unreviewed authority unit')
+                node.decorator_list.remove(memo[0])
+                shape = hashlib.sha256(ast.dump(node, include_attributes=False).encode()).hexdigest()
+                if shape != memo_units[node.name][1]:
+                    raise ValueError('reader memo changes original validation or dependency selection')
         if isinstance(node, ast.FunctionDef) and node.name in _LEGACY_READER_UNITS[role]:
             if node.name in seen:
                 raise ValueError('reader compatibility guard is duplicated')
@@ -231,7 +263,8 @@ def _compatible_code_ref(role, producer, current):
                        '3d75eee530f282fe81373b3fa584603360e1f216dbe559fc368ed1aadd5e6cad',
                        '9ec1c86f9d6e310f0f510e821a586d6a23d96222813d495fc3ef22d14e638571',
                        '2644a9156562a2b8b377f9ee019325ce2cda04a4dfc0770bdbb89013fcede14c',
-                       '8a263b9d3f2bfac765170edaf05eee6bff77e3523ea8cd635f1f831b37ab1676'})
+                       '8a263b9d3f2bfac765170edaf05eee6bff77e3523ea8cd635f1f831b37ab1676',
+                       '5efeb8f9bdce65d4eb43e781e6388ac84a83453378812d456dc40862bd955b36'})
     epoch_dynamic = (role == 'dynamic' and producer['sha256'] in {
         '17d9b19159a521e7c18cea732ba8ed44dff6044a18442807a716e793586cb3a3',
         'e5c49b345c0e5acb1af442dbaae7d2caabfcdcf09892239d5ebb78f5d03a318a',
@@ -834,6 +867,7 @@ def validate_target(ref, _seen=None):
     return value
 
 
+@source_facts.source
 def _measurement_source(source_binding):
     from . import rapid_target_overlay_source as overlay
     raw=json.loads(_open(source_binding).read_bytes())
@@ -1237,6 +1271,7 @@ def publish_final(progress, output):
 
 
 @_owned
+@source_facts.selection
 def input_files(progress):
     value=validate_progress(progress);files={reference(Path(__file__))['path']:reference(Path(__file__))}
     def add(ref): files[ref['path']]=ref;_open(ref)
@@ -1267,6 +1302,7 @@ def input_files(progress):
 
 
 @_owned
+@source_facts.selection
 def roots(progress):
     # Exact authenticated files can be mounted as files. Preserve immutable
     # directory membership roots separately; never broaden to a workspace.
@@ -1291,6 +1327,7 @@ def roots(progress):
 
 
 @_owned
+@source_facts.selection
 def directory_dependencies(progress):
     value=validate_progress(progress);directories={}
     def target_trees(target_ref):
