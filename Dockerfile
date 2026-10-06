@@ -554,6 +554,7 @@ COPY --from=source-metadata /python-runtime-source-files.json \
     /tmp/python-runtime-source-files.json
 RUN uv lock --check && \
     uv sync --frozen --no-dev --no-editable && \
+    python3 -c 'import qcsd_lab; from pathlib import Path; [path.chmod(0o644) for path in Path(qcsd_lab.__file__).parent.rglob("*.py") if path.is_file() and not path.is_symlink() and not path.stat().st_mode & 0o111]' && \
     install -m 0755 /opt/qcsd-venv/bin/qcsd-lab-internal /usr/local/bin/qcsd-lab-internal && \
     install -m 0755 tools/build_class_catalogue.py \
       /usr/local/bin/qcsd-build-class-catalogue && \
@@ -573,6 +574,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rm -rf /var/lib/apt/lists/*
 RUN uv lock --check && \
     uv sync --frozen --no-dev --no-editable --extra test --extra evaluation && \
+    python3 -c 'import qcsd_lab; from pathlib import Path; [path.chmod(0o644) for path in Path(qcsd_lab.__file__).parent.rglob("*.py") if path.is_file() and not path.is_symlink() and not path.stat().st_mode & 0o111]' && \
     python3 -c 'import sklearn; assert sklearn.__version__ == "1.9.0"' && \
     python3 -m qcsd_lab.runtime_provenance verify
 COPY --from=neqo-builder /out/bin/ /usr/local/bin/
@@ -763,6 +765,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends openssl && \
 RUN uv lock --check && \
     uv sync --frozen --no-dev --no-editable \
       --extra test --extra evaluation --extra discovery && \
+    python3 -c 'import qcsd_lab; from pathlib import Path; [path.chmod(0o644) for path in Path(qcsd_lab.__file__).parent.rglob("*.py") if path.is_file() and not path.is_symlink() and not path.stat().st_mode & 0o111]' && \
     python3 -c 'import playwright.sync_api' && \
     python3 -m playwright install-deps chromium && \
     rm -rf /var/lib/apt/lists/* && \

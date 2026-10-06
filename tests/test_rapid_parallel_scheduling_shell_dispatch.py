@@ -45,18 +45,55 @@ def _run_branch(capsule: Path, execution: Path, image: str) -> subprocess.Comple
                           capture_output=True, timeout=20, check=False)
 
 
-def _fake_installed_reader(root: Path) -> Path:
+def _fake_installed_reader(root: Path, *, drift=None, phase="mount") -> Path:
     """Control only the scientific reader; execute the real shell and Python bridge."""
     module_root = root / "module"
     package = module_root / "src/qcsd_lab"
     package.mkdir(parents=True)
     (package / "__init__.py").write_text("")
+    # The action scope and its raw-byte/full-mode/membership fences are real.
+    # Only scientific schedule derivation is controlled, granting no authority.
+    (package / "rapid_operation_facts.py").write_bytes(
+        (ROOT / "src/qcsd_lab/rapid_operation_facts.py").read_bytes())
+    dependency = root / "immutable"
+    dependency.mkdir()
+    (dependency / "control.py").write_bytes(b"unchanged bound reader\n")
+    (dependency / "control.py").chmod(0o644)
     (package / "rapid_rolling_capture.py").write_text(
-        "def _ref(path): return {'path': str(path), 'sha256': 'controlled'}\n")
+        "import hashlib\n"
+        "def _ref(path): return {'path': str(path), "
+        "'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}\n")
     (package / "rapid_rolling_schedule.py").write_text(
         "import json\nfrom pathlib import Path\n"
-        "def validate_schedule(ref): return json.loads(Path(ref['path']).read_bytes())\n"
-        "def mount_roots(ref): return [Path(__file__).resolve().parents[2]]\n")
+        "from .rapid_operation_facts import current_context\n"
+        f"DEPENDENCY = Path({str(dependency)!r})\n"
+        f"EVENTS = Path({str(root / 'reader-events.jsonl')!r})\n"
+        f"DRIFT = {drift!r}\nPHASE = {phase!r}\n"
+        "def event(kind, context, ref, **values):\n"
+        "    with EVENTS.open('a') as handle:\n"
+        "        handle.write(json.dumps(dict(kind=kind, context=id(context), ref=ref, **values))+'\\n')\n"
+        "def mutate(ref):\n"
+        "    control = DEPENDENCY/'control.py'\n"
+        "    if DRIFT == 'bytes': control.write_bytes(b'changed bound reader\\n')\n"
+        "    elif DRIFT == 'full-mode': control.chmod(0o664)\n"
+        "    elif DRIFT == 'directory-mode': DEPENDENCY.chmod(DEPENDENCY.stat().st_mode ^ 0o020)\n"
+        "    elif DRIFT == 'tree-membership': (DEPENDENCY/'new-empty-directory').mkdir()\n"
+        "    elif DRIFT == 'capsule-bytes':\n"
+        "        path = Path(ref['path']); path.write_bytes(path.read_bytes()+b' ')\n"
+        "def validate_schedule(ref, *, _context=None):\n"
+        "    assert _context is not None and _context is current_context()\n"
+        "    raw = _context.watch_file(Path(ref['path']))\n"
+        "    _context.watch_file(DEPENDENCY/'control.py'); _context.watch_tree(DEPENDENCY)\n"
+        "    key = ('controlled-schedule', ref['path'], ref['sha256'])\n"
+        "    hit = _context.has(key); event('validate', _context, ref, hit=hit)\n"
+        "    if not hit: _context.remember(key, json.loads(raw))\n"
+        "    if PHASE == 'validate' and not hit: mutate(ref)\n"
+        "    return _context.get(key)\n"
+        "def mount_roots(ref, *, _context=None):\n"
+        "    assert _context is not None and _context is current_context()\n"
+        "    event('mount', _context, ref); validate_schedule(ref, _context=_context)\n"
+        "    if PHASE == 'mount': mutate(ref)\n"
+        "    return [Path(__file__).resolve().parents[2]]\n")
     return module_root
 
 
@@ -88,6 +125,45 @@ def test_flat_transport_rejects_changed_runtime_before_mounts(tmp_path: Path, ch
     assert result.returncode != 0
     assert "another execution root or installed image" in result.stderr
     assert not result.stdout
+    events = [json.loads(line) for line in (tmp_path / "reader-events.jsonl").read_text().splitlines()]
+    assert [event["kind"] for event in events] == ["validate"]
+
+
+def test_flat_transport_reuses_one_action_context_and_one_cold_validation(tmp_path: Path):
+    module_root = _fake_installed_reader(tmp_path)
+    execution = tmp_path / "execution"
+    execution.mkdir()
+    capsule = tmp_path / "capsule.json"
+    capsule.write_text(json.dumps({"artifact_type": FLAT_FAMILIES[-3], "runtime": {
+        "module_root": str(module_root), "execution_root": str(execution),
+        "collection_image_digest": "sha256:controlled-image"}}))
+    result = _run_branch(capsule, execution, "sha256:controlled-image")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["rolling-scheduling", str(capsule), "-", str(module_root)]
+    events = [json.loads(line) for line in (tmp_path / "reader-events.jsonl").read_text().splitlines()]
+    assert [event["kind"] for event in events] == ["validate", "mount", "validate"]
+    assert len({event["context"] for event in events}) == 1
+    assert all(event["ref"] == events[0]["ref"] for event in events)
+    assert [event["hit"] for event in events if event["kind"] == "validate"] == [False, True]
+
+
+@pytest.mark.parametrize("phase", ("validate", "mount"))
+@pytest.mark.parametrize("drift", ("bytes", "full-mode", "directory-mode", "tree-membership", "capsule-bytes"))
+def test_flat_transport_closes_both_dependency_fences_before_emitting_rows(tmp_path: Path, phase: str, drift: str):
+    module_root = _fake_installed_reader(tmp_path, drift=drift, phase=phase)
+    execution = tmp_path / "execution"
+    execution.mkdir()
+    capsule = tmp_path / "capsule.json"
+    capsule.write_text(json.dumps({"artifact_type": FLAT_FAMILIES[-3], "runtime": {
+        "module_root": str(module_root), "execution_root": str(execution),
+        "collection_image_digest": "sha256:controlled-image"}}))
+    result = _run_branch(capsule, execution, "sha256:controlled-image")
+    assert result.returncode != 0
+    assert "operation dependency" in result.stderr
+    assert not result.stdout
+    events = [json.loads(line) for line in (tmp_path / "reader-events.jsonl").read_text().splitlines()]
+    assert [event["kind"] for event in events] == (["validate"] if phase == "validate" else
+                                                  ["validate", "mount", "validate"])
 
 
 def test_existing_enveloped_installation_still_uses_legacy_transport(tmp_path: Path):

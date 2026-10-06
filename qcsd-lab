@@ -7933,11 +7933,18 @@ path=Path(sys.argv[1]); value=json.loads(path.read_bytes())
 sys.path.insert(0,value["runtime"]["module_root"]+"/src")
 from qcsd_lab import rapid_rolling_schedule as s
 from qcsd_lab.rapid_rolling_capture import _ref
-capsule=s.validate_schedule(_ref(path))
-if capsule["runtime"]["execution_root"]!=sys.argv[2] or capsule["runtime"]["collection_image_digest"]!=sys.argv[3]:
-    raise SystemExit("rolling schedule names another execution root or installed image")
+from qcsd_lab.rapid_operation_facts import OperationFacts
+context=OperationFacts()
+with context.scope():
+    reference=_ref(path)
+    capsule=s.validate_schedule(reference,_context=context)
+    if capsule["runtime"]["execution_root"]!=sys.argv[2] or capsule["runtime"]["collection_image_digest"]!=sys.argv[3]:
+        raise SystemExit("rolling schedule names another execution root or installed image")
+    context.check()
+    roots=s.mount_roots(reference,_context=context)
+    context.check()
 print("rolling-scheduling"); print(path); print("-")
-for root in s.mount_roots(_ref(path)): print(root)
+for root in roots: print(root)
 ' "${rapid_compatibility_host}" "${ROOT}" "${image_id}")" || exit 1
     else
     rapid_compatibility_rows="$(/usr/bin/python3 -I -c '
