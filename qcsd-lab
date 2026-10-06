@@ -9407,6 +9407,15 @@ if (( rapid_capture )); then
   container+=(--volume "${rapid_image_shell_host}:/lab/qcsd-lab:ro")
   container+=("${rapid_static_evidence_args[@]}")
   container+=("${rapid_compatibility_args[@]}")
+  if (( parallel_formal )); then
+    # The worker loop replaces this authenticated first-lane binding with
+    # each lane's own input; retain its exact-one environment guard.
+    if [[ "${rapid_capture_version}" == "v6" ]]; then
+      container+=(--env "QCSD_RAPID_ROLLING_LAUNCH_INPUT=${QCSD_RAPID_ROLLING_LAUNCH_INPUT:?}")
+    else
+      container+=(--env "QCSD_RAPID_EPOCH_LAUNCH_INPUT=${QCSD_RAPID_EPOCH_LAUNCH_INPUT:?}")
+    fi
+  fi
   for rapid_pin_row in "${rapid_public_hosts[@]}"; do
     read -r rapid_pin_host rapid_pin_address <<< "${rapid_pin_row}"
     container+=(--add-host "${rapid_pin_host}=${rapid_pin_address}")
