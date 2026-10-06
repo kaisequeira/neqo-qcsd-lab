@@ -507,6 +507,8 @@ def checked_setup(args):
     host_imports(clean)
     from qcsd_lab.application_response_policy import application_body_identity_policy
     body_policy = application_body_identity_policy(setup)
+    from qcsd_lab import rapid_ael_fifteen_qualification as ael
+    ael.validate_scope(setup, setup["mode"])
     from qcsd_lab.tamaraw_fixed_configuration import policy as fixed_tamaraw_policy
     fixed_tamaraw = fixed_tamaraw_policy(setup)
     if fixed_tamaraw is not None and (setup["mode"] != "tamaraw" or setup["reuse"] is not None
@@ -571,6 +573,11 @@ def stage(args):
     from qcsd_lab.application_response_policy import validate_application_body_identity_policy
     requested_body_policy = getattr(args, "application_body_identity_policy", None)
     body_policy = validate_application_body_identity_policy(requested_body_policy)
+    from qcsd_lab import rapid_ael_fifteen_qualification as ael
+    response_policy = ael.validate_scope({ael.FIELD: args.response_qualification_policy,
+        "reuse": getattr(args, "reuse_qualification", None),
+        "qualification_delivery_compatibility": getattr(args, "qualification_delivery_compatibility", None),
+        **({"ordinary_renewal": True} if getattr(args, "ordinary_renewal", None) is not None else {})}, args.mode) if getattr(args, "response_qualification_policy", None) is not None else None
     from qcsd_lab.tamaraw_fixed_configuration import validate_policy as validate_fixed_tamaraw_policy
     fixed_tamaraw = validate_fixed_tamaraw_policy(getattr(args, "tamaraw_configuration_policy", None))
     if fixed_tamaraw is not None and (args.mode != "tamaraw"
@@ -701,6 +708,8 @@ def stage(args):
         setup[subgroup.FIELD] = subgroup.declare(enrollment, batch, classes, args.class_indices)
     if requested_body_policy is not None:
         setup["application_body_identity_policy"] = body_policy
+    if response_policy is not None:
+        setup[ael.FIELD] = response_policy
     if fixed_tamaraw is not None:
         setup["tamaraw_configuration_policy"] = fixed_tamaraw
     if witness is not None:
@@ -762,6 +771,11 @@ def finalize(args):
             raise ValueError("flight must preserve all occurrences, dependencies, headers and origins")
         manifests.append(manifest)
         current.append({**binding, "capture_manifest": ref(copied)})
+    from qcsd_lab import rapid_ael_fifteen_qualification as ael
+    response_policy = ael.validate_scope(setup, mode)
+    if response_policy is not None:
+        for row, current_manifest in zip(current, manifests):
+            ael.selection(current_manifest, row["workload_id"])
     selected_policy = None if authority is None else authority.get(traffic.FIELD)
     limits = budget.capture_limits(mode, setup["original_limits"], policy=selected_policy)
     if (mode == "buflo" and selected_policy != budget.POLICY
@@ -832,6 +846,8 @@ def finalize(args):
         plan["enrolled_subgroup"] = setup["enrolled_subgroup"]
     if "application_body_identity_policy" in setup:
         plan["application_body_identity_policy"] = body_policy
+    if response_policy is not None:
+        plan[ael.FIELD] = response_policy
     if fixed_tamaraw is not None:
         plan["tamaraw_configuration_policy"] = fixed_tamaraw
     if "qualification_delivery_compatibility" in setup:
@@ -1010,6 +1026,8 @@ def checked_plan(args, *, image=False):
             raise ValueError("canary campaign changed its prospectively declared application body policy")
     if mode not in MODES:
         raise ValueError("unknown flight setting")
+    from qcsd_lab import rapid_ael_fifteen_qualification as ael
+    response_policy = ael.validate_scope(plan, mode)
     if "ordinary_renewal" in plan:
         if mode != "undefended" or plan["reuse"] is not None or witness is not None:
             raise ValueError("ordinary renewal cannot authorize another setting or reused padding")
@@ -1090,6 +1108,9 @@ def checked_plan(args, *, image=False):
             if len(matching) != 1 or matching[0]["capture_manifest"] != row["capture_manifest"]:
                 raise ValueError("group amendment derived manifest binding changed")
         local_manifests.append(local)
+    if response_policy is not None:
+        for row, current_manifest in zip(plan["selected_classes"], local_manifests):
+            ael.selection(current_manifest, row["workload_id"])
     from qcsd_lab import selected_capture_amendment as selected_amendment
     if (authority is None and any(local["preparation"]["data_role"] != preparation.ROLE for local in local_manifests)
         or authority is not None and authority["contract"] == selected_amendment.CONTRACT):
@@ -1166,18 +1187,27 @@ def image_action(args):
                     "body_policy": application_body_identity_policy(plan)}
 
         workload_ids = [row["workload_id"] for row in plan["selected_classes"]]
+        from qcsd_lab import rapid_ael_fifteen_qualification as ael
+        response_policy = ael.validate_scope(plan, plan["campaigns"][0]["mode"]) if ael.FIELD in plan else None
         if plan["reuse"] is None:
             sidecars = execution / "config/static-response-sidecars" / plan["group_qualification_set"]
             sidecars.mkdir(parents=True, exist_ok=False)
             for workload_id in workload_ids:
-                qualify_response_chaff_v2(workload_id, qualification_root=sidecars,
-                    workload_root=execution / "config/workloads",
-                    timeout_seconds=plan["capture_limits"]["timeout_seconds"],
-                    max_response_bytes=plan["capture_limits"]["max_response_bytes"])
+                if response_policy is not None:
+                    ael.qualify(workload_id, qualification_root=sidecars,
+                        workload_root=execution / "config/workloads",
+                        timeout_seconds=plan["capture_limits"]["timeout_seconds"])
+                else:
+                    qualify_response_chaff_v2(workload_id, qualification_root=sidecars,
+                        workload_root=execution / "config/workloads",
+                        timeout_seconds=plan["capture_limits"]["timeout_seconds"],
+                        max_response_bytes=plan["capture_limits"]["max_response_bytes"])
         else:
             sidecars = execution / "config/flight-reuse"
         schema_version = (SIDECAR_SCHEMA_VERSION if plan["reuse"] is None else
             json.loads(read(Path(plan["reuse"]["manifest"]["path"]))) ["qualification_sidecar_schema_version"])
+        if response_policy is not None:
+            schema_version = ael.original.RESPONSE_ONLY_SIDECAR_SCHEMA_VERSION
         store = execution / "config/chaff-response-qualification-store/sets"
         store.mkdir(parents=True, exist_ok=True)
         group = publish_named_qualification_set(workload_ids,
@@ -1192,13 +1222,17 @@ def image_action(args):
             qualification_scope=RESPONSE_ONLY_QUALIFICATION_SCOPE,
             workload_root=execution / "config/workloads", sidecar_root=sidecars, publication_root=store,
             qualification_sidecar_schema_version=schema_version)
+        if response_policy is not None:
+            ael.publish_prerequisite(group, workload_root=execution / "config/workloads")
+            ael.publish_prerequisite(named, workload_root=execution / "config/workloads")
         create(output / "qualification-complete.json", encode({"completed_at": now(),
             "plan_sha256": args.plan_sha256, "workload_id": plan["workload_id"],
             "workload_sha256": plan["workload_sha256"],
             "sidecar_sha256": digest(read(sidecars / (plan["workload_id"] + ".json"))),
             "named_manifest_sha256": named.manifest_sha256, "qualification_set": named.qualification_set,
             "group_manifest_sha256": group.manifest_sha256, "group_qualification_set": group.qualification_set,
-            "workload_ids": workload_ids, "reused_same_current_evidence": plan["reuse"] is not None, **ZERO}))
+            "workload_ids": workload_ids, "reused_same_current_evidence": plan["reuse"] is not None,
+            **({"response_qualification_prerequisite": ael.record()} if response_policy is not None else {}), **ZERO}))
         return
     from qcsd_lab.orchestrator import preflight_campaign
     selected = plan["campaigns"] if args.mode is None else [c for c in plan["campaigns"] if c["mode"] == args.mode]
@@ -1405,6 +1439,8 @@ def main():
                       help="authenticated original response-producer/current complete-delivery consumer witness")
     item.add_argument("--tamaraw-configuration-policy", choices=("rapid-tamaraw-initial8192-owned-bootstrap-v1",),
                       help="prospective fixed 8192-byte initial credit on all controlled TAM request streams")
+    item.add_argument("--response-qualification-policy", choices=("ael-equals-identity-three-by-five-stable-wire-response-v1",),
+                      help="fresh fifteen-completion schema3 AEL prerequisite with exact identity header projection")
     for name in ("amend", "finalize"):
         item = commands.add_parser(name)
         item.add_argument("--setup", type=Path, required=True)

@@ -1544,6 +1544,12 @@ def _load_qualified_chaff_inputs(
                 if manifest_path is None
                 else _response_only_sidecar_schema_for_manifest(load_json(manifest_path))
             )
+            if set_manifest_path is not None:
+                from . import rapid_ael_fifteen_qualification as ael
+                expected_sidecar_schema_version = ael.selected_schema(set_manifest_path,
+                    workload_root=workload_root or config_root / "workloads",
+                    sidecar_root=qualification_root, historical_schema=expected_sidecar_schema_version,
+                    require_current=frozen_inputs is None)
             receipt = load_response_qualified_chaff(
                 sidecar_path,
                 delivery_compatibility=delivery_compatibility, body_policy=body_policy,
@@ -4366,6 +4372,9 @@ def _materialize_inputs(
         }
         if expected_set_hashes != {sha256_file(qualification_set_manifest_destination)}:
             raise ValueError("named qualification-set manifest changed during materialization")
+        from . import rapid_ael_fifteen_qualification as ael
+        ael.freeze_prerequisite(qualification_set_manifest_source, chaff_qualifications_dir,
+            workload_root=campaign.workloads[0].path.parent)
     runtime_workloads: list[Workload] = []
     for workload in campaign.workloads:
         destination = workloads_dir / f"{workload.id}.json"

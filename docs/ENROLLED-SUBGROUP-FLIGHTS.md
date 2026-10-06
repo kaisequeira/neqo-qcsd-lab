@@ -31,8 +31,10 @@ retain `--renew-selected-inputs`; it reopens the unchanged retained GET proof.
 No physical GET or new enrollment is required.
 
 Run the emitted finalize, preamble, qualification, preflight, canary capture,
-deep and readiness steps in their existing order. Qualification still requires
-the complete 120-response identity proof for the selected workload. The emitted
+deep and readiness steps in their existing order. By default, qualification requires
+the complete 120-response identity proof for the selected workload. The explicit
+[fifteen-completion AEL prerequisite](AEL-FIFTEEN-QUALIFICATION.md) has its own
+fresh Native proof and exact identity-header requirement. The emitted
 public rolling-plan command includes the same `--class-indices 17` selection.
 It refuses a canary or named qualification group for different workloads.
 Run and independently verify a fresh claimed formal lane using that plan.
@@ -69,9 +71,13 @@ progress40 artifacts, their producer/reader roles and both b0005 graph records;
 the later target31 extension retained those forty accepted rows. That check
 replayed no raw/deep proof and granted no trace credit.
 
-After genuine peer closures, bind the newly published measurement Source to a
-fresh module-overlay source registration against the unchanged trusted installed
-runtime. Feed the resulting original closure references to the fixed target's
+After genuine peer closures with matching clean module and installed measurement
+Source, use the public `tools/rapid_chunk_partial_lane.py bind-source` command
+with that actual Source and canonical runtime. A separate module-overlay
+registration is needed only for a genuinely different module/runtime pair
+supported by its explicit publication and reader contract; an arbitrary current
+publication closure cannot substitute for that contract. Feed the original
+closure references and matching Source registration to the fixed target's
 public `audit-complete`, then `append-progress`, and eventually `publish-final`.
 That reader selects by registered class, condition and logical visit, with
 separate physical sample identities. Do not use the older rolling
