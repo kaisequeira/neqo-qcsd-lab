@@ -50,7 +50,9 @@ def _policy_sources(value):
     legacy = {**current,
         selected_budget.__name__: selected_budget.LEGACY_SELECTED_SOURCE_SHA256,
         __name__: '512e140944a953707b2ac9326fdb2dd6928ac8a763b519174a46534de4f3b07f'}
-    if value not in (current, legacy):
+    v3 = {**current, selected_budget.__name__: selected_budget.V3_SELECTED_SOURCE_SHA256,
+          __name__: '048c0766e3a68d198547f26f4516d4337665c58163c1b6fc1ee1870b9808dc52'}
+    if value not in (current, legacy, v3):
         raise ValueError('per-class policy changed its historical or current reader Source')
     return True
 

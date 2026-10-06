@@ -33,6 +33,7 @@ FIELD = "selected_budget_input_evidence"
 FIELDS = plain.FIELDS | {"budget_terminal", "underlying_manifest", "budget_context"}
 ORIGINAL_CORE_INVENTORY_SHA256 = "e20951f884196b5ec1eed6f6634462c980976e3dfbc626fd50a25f18b8c9a809"
 LEGACY_SELECTED_SOURCE_SHA256 = "d4bbea3459cccf36217fa9897fbef4a51f73b3690151ef8aec883344e84145ca"
+V3_SELECTED_SOURCE_SHA256 = "9e13ebe6eb79f066b2d96e9fc1cb90056584d4ba02f203ec8d8b42da95c57cf7"
 V3_HOST_INVENTORY_SHA256 = "e6a77370e1ae219e97cf4147c239a29e46cf56df519ce9a0781ea97779c271ff"
 V3_HOST_AUTHORITY_SHA256 = "54263b4d1da96c4b22ee7be5401cd51d2e6336c78f69673b2661d2f28abb91c3"
 V3_ADMISSION_SOURCE_SHA256 = "f3ebf10f0d75944c18c73699efeb4f6d6f637e3dd87f8f84b4e20695706fab35"
@@ -82,6 +83,24 @@ _AUDIT_PROGRAM_V3 = _AUDIT_PROGRAM.replace(
     'if typed.REASON!="actual-complete-native-get-preparation-no-successful-secondary":'
     'raise ValueError("v3 typed deferral Source changed")\n'
     'from qcsd_lab import supplied_static_budget_successor as b')
+
+# Retain both historical programs byte for byte. The successor binds the
+# reviewed full HOST Source and accounting authority before any prefix reopen.
+# Its action closes fresh observations before the process returns success.
+_AUDIT_PROGRAM_V3_SCOPED = (
+    _AUDIT_PROGRAM_V3.split('context=b.load_context', 1)[0] + r'''
+import importlib.util
+from qcsd_lab import rapid_admission_operation_facts as observed
+from qcsd_lab import supplied_static_bootstrap_get as bootstrap
+spec=importlib.util.spec_from_file_location("selected_budget_host_accounting",root/"tools/rapid_static_accounting.py")
+tool=importlib.util.module_from_spec(spec);spec.loader.exec_module(tool)
+with observed.action() as action:
+    files=tool.bind_source(action,Path(sys.argv[4]),sys.argv[5])
+    with bootstrap.host_accounting_scope(action,Path(sys.argv[6]),sys.argv[7]):
+''' + '\n'.join('        ' + line for line in (
+        'context=b.load_context' + _AUDIT_PROGRAM_V3.split('context=b.load_context', 1)[1]).splitlines()) + r'''
+    if set(files)!=tool._names():raise ValueError("selected v3 audit HOST Source membership changed")
+''')
 
 
 def _v3_inventory(source_root: Path, inventory: Mapping[str, Any], authority: Mapping[str, Any], *, full: bool) -> dict:
@@ -192,10 +211,13 @@ def audit_budget(output: Path, *, source_root: Path, source_inventory: Mapping[s
     source_root = source_root.absolute()
     auditor = (_inventory if host_authority is None else
                lambda root, inventory, *, full: _v3_inventory(root, inventory, host_authority, full=full))
-    program = _AUDIT_PROGRAM if host_authority is None else _AUDIT_PROGRAM_V3
+    program = _AUDIT_PROGRAM if host_authority is None else _AUDIT_PROGRAM_V3_SCOPED
     before_inventory = auditor(source_root, source_inventory, full=True)
     command = [sys.executable, "-I", "-B", "-c", program,
                str(source_root), str(context.absolute()), str(terminal.absolute())]
+    if host_authority is not None:
+        command.extend([source_inventory['path'], source_inventory['sha256'],
+                        host_authority['path'], host_authority['sha256']])
     output = output.absolute()
     get.util.require_disjoint_path(output, [source_root, context, terminal], label="budget selection audit")
     output.mkdir(mode=0o700, parents=False, exist_ok=False)
@@ -234,7 +256,11 @@ def audit_budget(output: Path, *, source_root: Path, source_inventory: Mapping[s
 def read_audit(path: Path) -> dict:
     value = receipts._unpack(get._read(path), AUDIT_TYPE)
     v3 = 'host_authority' in value
-    program = _AUDIT_PROGRAM_V3 if v3 else _AUDIT_PROGRAM
+    programs = (_AUDIT_PROGRAM_V3, _AUDIT_PROGRAM_V3_SCOPED) if v3 else (_AUDIT_PROGRAM,)
+    program = next((item for item in programs if graph.digest(item.encode()) == value.get('program_sha256')), None)
+    if program is None:
+        raise ValueError('budget audit program is outside the retained or scoped authority')
+    scoped = program == _AUDIT_PROGRAM_V3_SCOPED
     fields = {"contract", "source_root", "source_inventory", "program_sha256", "result", "started",
         "completed", "stdout", "stderr", "published_at", "scientific_credit"}
     get._exact(value, fields | ({'host_authority'} if v3 else set()), "budget selection audit")
@@ -246,11 +272,13 @@ def read_audit(path: Path) -> dict:
         "scientific_credit"}, "budget audited class")
     if (value["contract"] != CONTRACT or value["scientific_credit"] is not False or row["scientific_credit"] is not False
             or value["program_sha256"] != graph.digest(program.encode())
-            or not isinstance(started.get("command"), list) or len(started["command"]) != 8
+            or not isinstance(started.get("command"), list) or len(started["command"]) != (12 if scoped else 8)
             or not Path(started["command"][0]).is_absolute()
             or started["command"][1:6] != ["-I", "-B", "-c", program, value["source_root"]]
             or started["command"][6] != str(Path(started["context"]["path"]).parent)
             or started["command"][7] != started["terminal"]["path"]
+            or (scoped and started['command'][8:] != [value['source_inventory']['path'], value['source_inventory']['sha256'],
+                                                       value['host_authority']['path'], value['host_authority']['sha256']])
             or started.get("schema_version") != 1 or type(started["schema_version"]) is not int
             or completed.get("schema_version") != 1 or type(completed["schema_version"]) is not int
             or started["source_inventory"] != value["source_inventory"]
@@ -326,11 +354,16 @@ def _validate_input_uncached(path: Path) -> tuple[dict, dict, dict]:
     value, _ = input_metadata(plain.reference(path))
     expected = direct_sources()
     legacy = {**expected, __name__: LEGACY_SELECTED_SOURCE_SHA256}
-    if value['direct_validator_sources'] not in (expected, legacy):
+    v3 = {**expected, __name__: V3_SELECTED_SOURCE_SHA256}
+    if value['direct_validator_sources'] not in (expected, legacy, v3):
         raise ValueError('selected budget direct verifier Source changed')
     if (value['direct_validator_sources'] == legacy
             and 'host_authority' in read_audit(plain.reopen(value['selection_audit']))):
         raise ValueError('v3 typed audit cannot claim the historical selected verifier')
+    if (value['direct_validator_sources'] == v3
+            and read_audit(plain.reopen(value['selection_audit']))['program_sha256'] ==
+                graph.digest(_AUDIT_PROGRAM_V3_SCOPED.encode())):
+        raise ValueError('scoped v3 audit cannot claim the earlier unscoped selected verifier')
     plain._bound_validator_files(value)
     manifest = get._load(get._read(plain.reopen(value["original_manifest"])))
     underlying = _underlying(value, manifest)

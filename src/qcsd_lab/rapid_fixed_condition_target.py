@@ -69,7 +69,9 @@ def _owned(function):
         try:
             with context.scope():
                 answer = function(*args, **kwargs)
-                _check_action()
+                # Nested readers share the same action. Its owner closes every
+                # observation once; _write still closes before publication.
+                if token is not None: _check_action()
                 return answer
         finally:
             if token is not None:_OBSERVATIONS.reset(token)
@@ -156,6 +158,7 @@ _LEGACY_READER_UNITS = {
         "_source": "0900a7ee99e9c5ef2518875531caaa5bedfcd89ba51d27c2260261a606413da4"
     },
     "target": {
+        "_owned": "c417f8b78f43a6641e00213a5e8a1904c39bfa34348ee7135144949b9b9fed86",
         "_compatible_membership": "79b50dbbd6a04dfc54d11ed9b9f5b3577770e6f1fca078c6132c1f0b53920806",
         "_compatible_sources": "57bbe929e751a1219414f3021a4a830974d9ddf8cc0cbad08f7019da7b46b1de",
         "roots": "ded0e25f7074be581b7258c910661b510dbd0f063f8509253d85b32a4751377c"
@@ -186,8 +189,13 @@ def _reader_code_projection(raw, role, *, legacy=False):
             if node.name in seen:
                 raise ValueError('reader compatibility guard is duplicated')
             seen.add(node.name)
-            if legacy and hashlib.sha256(ast.dump(node, include_attributes=False).encode()).hexdigest() != _LEGACY_READER_UNITS[role][node.name]:
+            shape = hashlib.sha256(ast.dump(node, include_attributes=False).encode()).hexdigest()
+            if legacy and shape != _LEGACY_READER_UNITS[role][node.name]:
                 raise ValueError('retained reader compatibility guard is not the original shape')
+            if role == 'target' and node.name == '_owned' and shape not in (
+                    _LEGACY_READER_UNITS['target']['_owned'],
+                    '4e2825b98c6221ea6c4f66da8e7503ec6eb12d3da7319764334144c41ac5b45b'):
+                raise ValueError('fixed target action boundary is outside the exact old/new shapes')
             continue
         if isinstance(node, ast.FunctionDef) and node.name in _READER_COMPATIBILITY_HELPERS[role]:
             if legacy:
@@ -217,8 +225,9 @@ def _compatible_code_ref(role, producer, current):
     # Source34 is itself an authenticated compatibility reader. Its complete
     # published file hash selects that known shape; older producers still
     # require the original guard AST fingerprints above.
-    enhanced_target = (role == 'target' and producer['sha256'] ==
-                       '3d75eee530f282fe81373b3fa584603360e1f216dbe559fc368ed1aadd5e6cad')
+    enhanced_target = (role == 'target' and producer['sha256'] in {
+                       '3d75eee530f282fe81373b3fa584603360e1f216dbe559fc368ed1aadd5e6cad',
+                       '9ec1c86f9d6e310f0f510e821a586d6a23d96222813d495fc3ef22d14e638571'})
     try:
         old = _reader_code_projection(Path(producer['path']).read_bytes(), role,
                                       legacy=not enhanced_target)
@@ -277,28 +286,34 @@ def _membership_code_path(path, target_source):
 
 
 def _compatible_selected_membership_code(relative, before, after):
-    """Bind exactly the two reviewed dual readers, retaining all other AST units."""
+    """Bind the finite reviewed selected readers, retaining all other AST units."""
     import ast
     roles = {
         'src/qcsd_lab/rapid_selected_budget_input.py': (
             'd4bbea3459cccf36217fa9897fbef4a51f73b3690151ef8aec883344e84145ca',
             '9e13ebe6eb79f066b2d96e9fc1cb90056584d4ba02f203ec8d8b42da95c57cf7',
+            '6283ef9cafac972d9df8696c1c4d0249c920db855f7a83fc8fcd8fce434d079d',
             {'_v3_inventory', 'audit_budget', 'read_audit', '_validate_input_uncached', '_input_dependencies'},
             {'LEGACY_SELECTED_SOURCE_SHA256', 'V3_HOST_INVENTORY_SHA256', 'V3_HOST_AUTHORITY_SHA256',
-             'V3_ADMISSION_SOURCE_SHA256', 'V3_DEFERRAL_SOURCE_SHA256', '_AUDIT_PROGRAM_V3'}),
+             'V3_ADMISSION_SOURCE_SHA256', 'V3_DEFERRAL_SOURCE_SHA256', '_AUDIT_PROGRAM_V3'},
+            {'V3_SELECTED_SOURCE_SHA256', '_AUDIT_PROGRAM_V3_SCOPED'}),
         'src/qcsd_lab/rapid_per_class_selected_enrollment.py': (
             '512e140944a953707b2ac9326fdb2dd6928ac8a763b519174a46534de4f3b07f',
             '048c0766e3a68d198547f26f4516d4337665c58163c1b6fc1ee1870b9808dc52',
-            {'_policy_sources', 'verify_policy', 'membership_inputs'}, set()),
+            'd1860179aa08a911400eadc82cef3acb99b591f20656919cbe95268eeef64056',
+            {'_policy_sources', 'verify_policy', 'membership_inputs'}, set(), set()),
     }
-    old_sha, new_sha, changing, additions = roles[relative]
+    old_sha, v3_sha, scoped_sha, changing, v3_additions, scoped_additions = roles[relative]
+    additions = v3_additions | scoped_additions
     _open(before); _open(after)
     if before['sha256'] == after['sha256'] and before['mode'] == after['mode']:
         return True
-    if (before['mode'] != after['mode'] or before['sha256'] != old_sha
-            or after['sha256'] != new_sha):
+    if (before['mode'] != after['mode'] or (before['sha256'], after['sha256']) not in
+            {(old_sha, v3_sha), (old_sha, scoped_sha), (v3_sha, scoped_sha)}):
         raise ValueError('selected budget reader is outside the exact reviewed old/new Source pair')
-    def projection(raw, *, old):
+    def projection(raw, *, stage):
+        old = stage == old_sha
+        expected_additions = set() if old else v3_additions | (scoped_additions if stage == scoped_sha else set())
         tree = ast.parse(raw); retained = []; removed = set(); extra = set()
         for node in tree.body:
             if isinstance(node, ast.FunctionDef) and node.name in changing:
@@ -316,11 +331,12 @@ def _compatible_selected_membership_code(relative, before, after):
             retained.append(node)
         required = changing - ({'_v3_inventory'} if old and relative.endswith('rapid_selected_budget_input.py') else
                                {'_policy_sources'} if old and relative.endswith('rapid_per_class_selected_enrollment.py') else set())
-        if removed != required or (not old and extra != additions):
+        if removed != required or extra != expected_additions:
             raise ValueError('selected reader changed-unit projection is incomplete')
         tree.body = retained
         return ast.dump(tree, include_attributes=False)
-    if projection(Path(before['path']).read_bytes(), old=True) != projection(Path(after['path']).read_bytes(), old=False):
+    if projection(Path(before['path']).read_bytes(), stage=before['sha256']) != projection(
+            Path(after['path']).read_bytes(), stage=after['sha256']):
         raise ValueError('selected budget reader changes protected admission or graph code')
 
 
