@@ -47,21 +47,13 @@ def _sources():
 def _policy_sources(value):
     """Keep the exact historical ledger policy while adding a typed audit reader."""
     current = _sources()
-    if value != current:
-        from . import rapid_fixed_condition_target as fixed
-        fixed._acquisition_reader_sources()
-        historical = [{**current,
-            plain.__name__: 'ef14e839e0c1ab1b1540a9b8c024f0e8545c1a3cf5478deec30a500134aff337',
-            selected_budget.__name__: budget_sha, __name__: policy_sha}
-            for budget_sha, policy_sha in (
-                ('d4bbea3459cccf36217fa9897fbef4a51f73b3690151ef8aec883344e84145ca',
-                 '512e140944a953707b2ac9326fdb2dd6928ac8a763b519174a46534de4f3b07f'),
-                ('9e13ebe6eb79f066b2d96e9fc1cb90056584d4ba02f203ec8d8b42da95c57cf7',
-                 '048c0766e3a68d198547f26f4516d4337665c58163c1b6fc1ee1870b9808dc52'),
-                ('6283ef9cafac972d9df8696c1c4d0249c920db855f7a83fc8fcd8fce434d079d',
-                 'd1860179aa08a911400eadc82cef3acb99b591f20656919cbe95268eeef64056'))]
-        if value not in historical:
-            raise ValueError('per-class policy changed its historical or current reader Source')
+    legacy = {**current,
+        selected_budget.__name__: selected_budget.LEGACY_SELECTED_SOURCE_SHA256,
+        __name__: '512e140944a953707b2ac9326fdb2dd6928ac8a763b519174a46534de4f3b07f'}
+    v3 = {**current, selected_budget.__name__: selected_budget.V3_SELECTED_SOURCE_SHA256,
+          __name__: '048c0766e3a68d198547f26f4516d4337665c58163c1b6fc1ee1870b9808dc52'}
+    if value not in (current, legacy, v3):
+        raise ValueError('per-class policy changed its historical or current reader Source')
     return True
 
 

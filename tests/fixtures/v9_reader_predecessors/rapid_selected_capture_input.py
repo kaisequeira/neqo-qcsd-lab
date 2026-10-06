@@ -66,48 +66,6 @@ def direct_sources() -> dict[str, str]:
     return {module.__name__: graph.digest(get._read(Path(module.__file__))) for module in _direct_modules()}
 
 
-def _compatible_direct_validator_sources(value: Mapping[str, Any], expected: Mapping[str, str]) -> bool:
-    """Recognize complete historical dictionaries without relabeling a receipt."""
-    recorded = value["direct_validator_sources"]
-    if recorded == expected:
-        return True
-    from . import rapid_fixed_condition_target as fixed
-    fixed._acquisition_reader_sources()
-    plain_name = __name__
-    whole_name = whole.__name__
-    budget_name = "qcsd_lab.rapid_selected_budget_input"
-    historical = []
-    for whole_sha in (
-            '726c0d6215830730f3938b69545f3b4acc8c727dda3b4528a34732701f8d9f07',
-            'a12ba1de531fd37a4e6ab8abbc8497911ea51d4d45e54d452e3afc927058db66'):
-        if (whole_sha == '726c0d6215830730f3938b69545f3b4acc8c727dda3b4528a34732701f8d9f07'
-                and expected['qcsd_lab.application_response_policy'] !=
-                    '8d85075852b94e7c8969fc17f141fed45b65c23bf6493fe607ca43b6a902d27e'):
-            continue
-        base = {**expected,
-            plain_name: 'ef14e839e0c1ab1b1540a9b8c024f0e8545c1a3cf5478deec30a500134aff337',
-            whole_name: whole_sha}
-        if budget_name not in expected:
-            historical.append(base)
-        elif whole_sha == 'a12ba1de531fd37a4e6ab8abbc8497911ea51d4d45e54d452e3afc927058db66':
-            historical.extend({**base, budget_name: sha} for sha in (
-                'd4bbea3459cccf36217fa9897fbef4a51f73b3690151ef8aec883344e84145ca',
-                '9e13ebe6eb79f066b2d96e9fc1cb90056584d4ba02f203ec8d8b42da95c57cf7',
-                '6283ef9cafac972d9df8696c1c4d0249c920db855f7a83fc8fcd8fce434d079d'))
-    if recorded not in historical:
-        return False
-    modules = {module.__name__: module for module in _direct_modules()}
-    if budget_name in expected:
-        from . import rapid_selected_budget_input as selected_budget
-        modules[budget_name] = selected_budget
-    for name in (plain_name, whole_name, budget_name):
-        if name in expected and recorded[name] != expected[name]:
-            fixed._compatible_acquisition_code(
-                'src/qcsd_lab/' + name.rsplit('.', 1)[1] + '.py',
-                value['direct_validator_files'][name], reference(Path(modules[name].__file__)))
-    return True
-
-
 def _bound_validator_files(value: Mapping[str, Any]) -> set[Path]:
     """Stable Source snapshot references; installed import paths may differ."""
     references = get._exact(value["direct_validator_files"], set(value["direct_validator_sources"]), "selected verifier files")
@@ -241,7 +199,7 @@ def validate_input(path: Path) -> tuple[dict, dict, dict]:
     get._exact(value, FIELDS, "selected complete graph input")
     if (value["contract"] != CONTRACT or value["scientific_credit"] is not False
             or type(value["formal_accepted_trace_count"]) is not int or value["formal_accepted_trace_count"] != 0
-            or not _compatible_direct_validator_sources(value, direct_sources())
+            or value["direct_validator_sources"] != direct_sources()
             or not get._time(value["declared_at"]) <= get._time(receipts._now())):
         raise ValueError("selected input changes its direct verifier or zero-credit contract")
     _bound_validator_files(value)

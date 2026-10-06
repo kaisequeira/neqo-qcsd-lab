@@ -171,8 +171,7 @@ _READER_COMPATIBILITY_HELPERS = {
                '_planning_source_projection', '_membership_code_path',
                '_compatible_selected_membership_code', '_epoch_dispatch_source_projection',
                '_epoch_dynamic_source_projection', '_parallel_facts_source_projection',
-               '_parallel_schedule_source_projection', '_acquisition_reader_sources',
-               '_compatible_acquisition_code'),
+               '_parallel_schedule_source_projection'),
     'dynamic': ('_compatible_reader_sources',),
 }
 _ACTION_LOCAL_SOURCE_FACTS_SHA256 = '34586599ad4eeeb1f765eb5ff7ca0d36559be2ef0a7d7521eff0fc7a681e4c0c'
@@ -265,8 +264,7 @@ def _compatible_code_ref(role, producer, current):
                        '9ec1c86f9d6e310f0f510e821a586d6a23d96222813d495fc3ef22d14e638571',
                        '2644a9156562a2b8b377f9ee019325ce2cda04a4dfc0770bdbb89013fcede14c',
                        '8a263b9d3f2bfac765170edaf05eee6bff77e3523ea8cd635f1f831b37ab1676',
-                       '5efeb8f9bdce65d4eb43e781e6388ac84a83453378812d456dc40862bd955b36',
-                       '26b41cd9cff02e7dde8b9dbda902fa69d370fe5b242dd075f41c5db39c356b26'})
+                       '5efeb8f9bdce65d4eb43e781e6388ac84a83453378812d456dc40862bd955b36'})
     epoch_dynamic = (role == 'dynamic' and producer['sha256'] in {
         '17d9b19159a521e7c18cea732ba8ed44dff6044a18442807a716e793586cb3a3',
         'e5c49b345c0e5acb1af442dbaae7d2caabfcdcf09892239d5ebb78f5d03a318a',
@@ -413,121 +411,9 @@ def _membership_code_path(path, target_source):
     return None
 
 
-def _acquisition_reader_sources():
-    """Authenticate this one prospective reader set before historical reuse."""
-    sources = {
-        'rapid_selected_capture_input.py': 'f12460f830c4f4ba7a2d5c5600be59c7fd9800ee0d974692b24bba84ed356308',
-        'rapid_selected_budget_input.py': '3f03bae31b667535adab316fea98cc34f19bf9292bc1b041f428eb3a02dee3cb',
-        'rapid_per_class_selected_enrollment.py': '3436b935a6f0e2124bd64195bffadfeec7870f3824c76726d7f5e3c7bc8a5fad',
-        'whole_graph_input.py': 'a95019161d069fda019de74768a13283a4a37d89fc6cddab0b2ddd0b52540245',
-        'whole_graph_supplement.py': '80bd66d3d710f5f14cf4827b43245d96af75e8ec0994418bed480e3c2a348357',
-    }
-    _open(reference(Path(__file__)))
-    result = {}
-    for name, sha in sources.items():
-        item = reference(Path(__file__).parent / name)
-        _open(item)
-        if item['sha256'] != sha or item['mode'] != 0o644:
-            raise ValueError('historical acquisition reader is outside the exact prospective Source set')
-        result['src/qcsd_lab/' + name] = item
-    return result
-
-
-def _compatible_acquisition_code(relative, before, after):
-    """Compare finite reader identities and retain every unmodified AST unit."""
-    import ast
-    current = _acquisition_reader_sources()
-    if relative not in current:
-        raise ValueError('acquisition reader role is outside the closed set')
-    _open(before); _open(after)
-    if (after['sha256'] != current[relative]['sha256'] or
-            before['mode'] != 0o644 or after['mode'] != 0o644):
-        raise ValueError('acquisition compatibility changes the reviewed reader or full mode')
-    if before['sha256'] == after['sha256']:
-        return True
-    roles = {
-        'src/qcsd_lab/rapid_selected_capture_input.py': (
-            {'ef14e839e0c1ab1b1540a9b8c024f0e8545c1a3cf5478deec30a500134aff337'},
-            {'validate_input'}, {'_compatible_direct_validator_sources'}, set()),
-        'src/qcsd_lab/rapid_selected_budget_input.py': (
-            {'d4bbea3459cccf36217fa9897fbef4a51f73b3690151ef8aec883344e84145ca',
-             '9e13ebe6eb79f066b2d96e9fc1cb90056584d4ba02f203ec8d8b42da95c57cf7',
-             '6283ef9cafac972d9df8696c1c4d0249c920db855f7a83fc8fcd8fce434d079d'},
-            {'_v3_inventory', 'audit_budget', 'read_audit', '_validate_input_uncached', '_input_dependencies'}, set(),
-            {'LEGACY_SELECTED_SOURCE_SHA256', 'V3_HOST_INVENTORY_SHA256', 'V3_HOST_AUTHORITY_SHA256',
-             'V3_ADMISSION_SOURCE_SHA256', 'V3_DEFERRAL_SOURCE_SHA256', '_AUDIT_PROGRAM_V3',
-             'V3_SELECTED_SOURCE_SHA256', '_AUDIT_PROGRAM_V3_SCOPED'}),
-        'src/qcsd_lab/rapid_per_class_selected_enrollment.py': (
-            {'512e140944a953707b2ac9326fdb2dd6928ac8a763b519174a46534de4f3b07f',
-             '048c0766e3a68d198547f26f4516d4337665c58163c1b6fc1ee1870b9808dc52',
-             'd1860179aa08a911400eadc82cef3acb99b591f20656919cbe95268eeef64056'},
-            {'_policy_sources', 'verify_policy', 'membership_inputs'}, set(), set()),
-        'src/qcsd_lab/whole_graph_supplement.py': (
-            {'726c0d6215830730f3938b69545f3b4acc8c727dda3b4528a34732701f8d9f07',
-             'a12ba1de531fd37a4e6ab8abbc8497911ea51d4d45e54d452e3afc927058db66'},
-            {'_plan_rows', '_declaration'},
-            {'_recognized_producer_sources', '_input_rejection', 'record_input_rejection'}, set()),
-    }
-    if relative not in roles or before['sha256'] not in roles[relative][0]:
-        raise ValueError('acquisition reader is outside the exact historical/current Source pairs')
-    _, changing, additions, declarations = roles[relative]
-    def projection(raw, *, successor):
-        tree = ast.parse(raw); retained = []; removed = set(); added = set()
-        for node in tree.body:
-            if (successor and relative.endswith('whole_graph_supplement.py')
-                    and isinstance(node, ast.FunctionDef) and node.name == 'verify_terminal'):
-                branches = [item for item in node.body if isinstance(item, ast.If)
-                    and ast.dump(item.test, include_attributes=False) == ast.dump(
-                        ast.parse("value['outcome'] == 'input-ineligible'", mode='eval').body,
-                        include_attributes=False)]
-                if (len(branches) != 1 or hashlib.sha256(ast.dump(branches[0],
-                        include_attributes=False).encode()).hexdigest() !=
-                        'c3838a3202bac8848404ce49e6c0bd4ea6b7cef8b8e5f2505d48dac842c56e84'):
-                    raise ValueError('whole terminal rejection is outside the exact new branch')
-                node.body.remove(branches[0])
-                outcomes = [item for item in ast.walk(node) if isinstance(item, ast.Compare)
-                    and len(item.ops) == 1 and isinstance(item.ops[0], ast.NotIn)
-                    and ast.dump(item.left, include_attributes=False) == ast.dump(
-                        ast.parse("value['outcome']", mode='eval').body, include_attributes=False)]
-                if (len(outcomes) != 1 or len(outcomes[0].comparators) != 1
-                        or ast.dump(outcomes[0].comparators[0], include_attributes=False) != ast.dump(
-                            ast.parse("{'admitted', 'operational-deferred', 'input-ineligible'}", mode='eval').body,
-                            include_attributes=False)):
-                    raise ValueError('whole terminal rejection changes original outcome guards')
-                outcomes[0].comparators[0].elts.pop()
-            if isinstance(node, ast.FunctionDef) and node.name in changing | additions:
-                if node.name in removed:
-                    raise ValueError('acquisition reader duplicates a reviewed changed unit')
-                removed.add(node.name)
-                if node.name in additions: added.add(node.name)
-                continue
-            if isinstance(node, (ast.Assign, ast.AnnAssign)):
-                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-                if any(isinstance(target, ast.Name) and target.id in declarations for target in targets):
-                    continue
-            retained.append(node)
-        required = set(changing)
-        if before['sha256'] == 'd4bbea3459cccf36217fa9897fbef4a51f73b3690151ef8aec883344e84145ca' and not successor:
-            required.remove('_v3_inventory')
-        if before['sha256'] == '512e140944a953707b2ac9326fdb2dd6928ac8a763b519174a46534de4f3b07f' and not successor:
-            required.remove('_policy_sources')
-        if removed != required | (additions if successor else set()) or added != (additions if successor else set()):
-            raise ValueError('acquisition reader changed-unit projection is incomplete')
-        tree.body = retained
-        return ast.dump(tree, include_attributes=False)
-    if projection(Path(before['path']).read_bytes(), successor=False) != projection(
-            Path(after['path']).read_bytes(), successor=True):
-        raise ValueError('acquisition reader changes protected graph, proof or admission code')
-    return True
-
-
 def _compatible_selected_membership_code(relative, before, after):
     """Bind the finite reviewed selected readers, retaining all other AST units."""
     import ast
-    if (relative in ('src/qcsd_lab/rapid_selected_capture_input.py',
-                     'src/qcsd_lab/whole_graph_supplement.py') or
-            after['sha256'] == _acquisition_reader_sources().get(relative, {}).get('sha256')):
-        return _compatible_acquisition_code(relative, before, after)
     roles = {
         'src/qcsd_lab/rapid_selected_budget_input.py': (
             'd4bbea3459cccf36217fa9897fbef4a51f73b3690151ef8aec883344e84145ca',
@@ -619,9 +505,7 @@ def _compatible_membership(producer, current, producer_sources):
     old_code = code_refs(producer, producer_sources['target'])
     new_code = code_refs(current, executing['target'])
     selected_roles = ('src/qcsd_lab/rapid_selected_budget_input.py',
-                      'src/qcsd_lab/rapid_per_class_selected_enrollment.py',
-                      'src/qcsd_lab/rapid_selected_capture_input.py',
-                      'src/qcsd_lab/whole_graph_supplement.py')
+                      'src/qcsd_lab/rapid_per_class_selected_enrollment.py')
     for relative in selected_roles:
         if relative not in old_code and relative not in new_code:
             continue

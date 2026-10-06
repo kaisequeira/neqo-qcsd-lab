@@ -353,12 +353,14 @@ def _underlying(value: dict, manifest: dict) -> dict:
 def _validate_input_uncached(path: Path) -> tuple[dict, dict, dict]:
     value, _ = input_metadata(plain.reference(path))
     expected = direct_sources()
-    if not plain._compatible_direct_validator_sources(value, expected):
+    legacy = {**expected, __name__: LEGACY_SELECTED_SOURCE_SHA256}
+    v3 = {**expected, __name__: V3_SELECTED_SOURCE_SHA256}
+    if value['direct_validator_sources'] not in (expected, legacy, v3):
         raise ValueError('selected budget direct verifier Source changed')
-    if (value['direct_validator_sources'][__name__] == LEGACY_SELECTED_SOURCE_SHA256
+    if (value['direct_validator_sources'] == legacy
             and 'host_authority' in read_audit(plain.reopen(value['selection_audit']))):
         raise ValueError('v3 typed audit cannot claim the historical selected verifier')
-    if (value['direct_validator_sources'][__name__] == V3_SELECTED_SOURCE_SHA256
+    if (value['direct_validator_sources'] == v3
             and read_audit(plain.reopen(value['selection_audit']))['program_sha256'] ==
                 graph.digest(_AUDIT_PROGRAM_V3_SCOPED.encode())):
         raise ValueError('scoped v3 audit cannot claim the earlier unscoped selected verifier')

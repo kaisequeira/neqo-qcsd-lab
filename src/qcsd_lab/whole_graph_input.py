@@ -70,6 +70,19 @@ CONTROL_SOURCES = {
 }
 CONTROL_SOURCES[7] = CONTROL_SOURCES[6]
 CONTROL_SOURCES[8] = CONTROL_SOURCES[6]
+V9_PLAN_TYPE = "qcsd-external-navigation-seeded-whole-graph-catalogue-plan-v9"
+V9_CONTINUATION_PLAN_TYPE = "qcsd-external-navigation-seeded-born-interruption-continuation-plan-v9"
+V9_INPUT_TYPE = "qcsd-external-browser-whole-graph-input-v9"
+V9_CONTRACT = "catalogue-homepage-navigation-seeded-complete-occurrence-graph-input-only-v9"
+# These exact prospective reader pins are finalized together with the separately
+# reviewed external producer. Historical V1--V8 identities remain unchanged.
+V9_PRODUCERS = {"graph_input.py": "dc9715e4cbd4e2e924a5d01e4af2f57a0610000f25cd846bb6451b1a5b6552bc",
+                "operator.py": "1468754336f6f375a2340eb1dd5f0c52e8fcd98b6043a8c01170300fb02689f8"}
+V9_ACTION_SOURCES = {"action_facts.py": "53ceffa3487f9f7877e77f5ba9389f1786c68e633c8561f16f8e09c071f8c309",
+                    "controller.py": "6a8957030c5c1ac2ddb40e5b38e9bd3bd4f48069ec7405fe86f46289395fcdaf"}
+for _type in (V9_PLAN_TYPE, V9_CONTINUATION_PLAN_TYPE):
+    VERSIONS[_type] = (9, V9_CONTRACT, V9_INPUT_TYPE, V9_PRODUCERS)
+CONTROL_SOURCES[9] = CONTROL_SOURCES[6]
 ZERO = {"scientific_credit": False, "site_credit": 0, "formal_accepted_trace_count": 0}
 RESOURCE_KEYS = {"id", "url", "type", "content_length", "data_length", "chaff_priority",
                  "known_valid", "depends_on", "headers"}
@@ -117,7 +130,18 @@ def _producer(plan: dict[str, Any]) -> Path:
             or any(paths[name].name != name for name in PRODUCERS)):
         raise ValueError("whole graph input has an unrecognized discovery producer")
     if version[0] >= 5:
-        _external_control(plan, paths["operator.py"].parent)
+        parent = paths["operator.py"].parent
+        if version[0] == 9:
+            refs = get._exact(plan.get("action_local_sources"), set(V9_ACTION_SOURCES), "V9 action readers")
+            for name, digest in V9_ACTION_SOURCES.items():
+                if (reopen(refs[name]) != parent / name or refs[name]["sha256"] != digest
+                        or refs[name]["mode"] != "0644"):
+                    raise ValueError("V9 action reader bytes, mode or location changed")
+            original = get._load(get._read(reopen(plan["original_plan"])))
+            if original.get("schema_version") != 8:
+                raise ValueError("V9 retained interruption has another original producer")
+            parent = _producer(original).parent
+        _external_control(plan, parent)
     return paths["operator.py"]
 
 
@@ -136,12 +160,12 @@ def _external_control(plan: dict[str, Any], parent: Path) -> None:
             raise ValueError("external discovery control bytes, mode or location changed")
 
 
-def _verify_external(operator: Path, action: str, flag: str, path: Path) -> None:
+def _verify_external(operator: Path, action: str, flag: str, path: Path, *, timeout: int = 60) -> None:
     # Resolve the running Python portably. Captured producer output may contain
     # resource data; neither it nor exception text is emitted by this API.
     env = {k: v for k, v in os.environ.items() if not k.startswith("QCSD_") and k != "PYTHONPATH"}
     result = subprocess.run([sys.executable, "-I", "-B", str(operator), action, flag, str(path)],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, timeout=60, check=False)
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, timeout=timeout, check=False)
     if result.returncode != 0:
         raise ValueError("independent whole graph discovery reopening failed")
 
@@ -151,7 +175,7 @@ def load_plan(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict) or value.get("artifact_type") not in VERSIONS or not zero(value):
         raise ValueError("whole graph discovery declaration has another role")
     operator = _producer(value)
-    _verify_external(operator, "check", "--plan", path.absolute())
+    _verify_external(operator, "check", "--plan", path.absolute(), **({"timeout": 240} if value["schema_version"] == 9 else {}))
     return value
 
 
@@ -195,7 +219,7 @@ def load_input(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     operator = _producer(plan)
     if VERSIONS[plan["artifact_type"]] != version:
         raise ValueError("whole graph input crosses discovery producer versions")
-    _verify_external(operator, "verify-input", "--input", path.absolute())
+    _verify_external(operator, "verify-input", "--input", path.absolute(), **({"timeout": 240} if version[0] == 9 else {}))
     return value, project(value, get._load(get._read(reopen(value["native_manifest"]))))
 
 
@@ -329,6 +353,36 @@ def plan_files(path: Path) -> tuple[list[Path], list[Path]]:
             # The independent verifier authenticates this complete inventory;
             # bind those exact files as well for transport/release fences.
             files.add(source_path)
+        if declaration["schema_version"] == 9:
+            # The independent V9 verifier reconstructs the born interruption,
+            # exact old raw tree and every completed ordered successor batch.
+            # Bind those same raw files/trees for downstream release fences.
+            for entry in declaration["action_local_sources"].values():
+                ref(entry)
+            plan(declaration["original_plan"])
+            retained = get._load(get._read(ref(declaration["retained_interruption"])))
+            def retained_refs(value):
+                if isinstance(value, dict):
+                    if set(value) == {"path", "sha256", "mode"}:
+                        ref(value)
+                    else:
+                        for item in value.values():
+                            retained_refs(item)
+                elif isinstance(value, list):
+                    for item in value:
+                        retained_refs(item)
+            retained_refs(retained)
+            sources.add(Path(retained["original_root"]))
+            if declaration["previous_plan"] is not None:
+                plan(declaration["previous_plan"])
+                batch = ref(declaration["previous_batch"])
+                sources.add(batch.parent)
+                for item in sorted(batch.parent.rglob("*")):
+                    if item.is_symlink():
+                        raise ValueError("V9 batch has a linked raw member")
+                    if item.is_file():
+                        files.add(item)
+            return
         for previous in declaration["previous_plans"]:
             plan(previous)
         if declaration["artifact_type"] == SEEDED_PLAN_TYPE:

@@ -67,26 +67,6 @@ def producer_sources() -> dict[str, str]:
         "qcsd_lab.manifest": manifest, "qcsd_lab.application_response_policy": application_response_policy}.items()}}
 
 
-def _recognized_producer_sources(value: Any) -> bool:
-    """Keep whole-GET declarations bound to their finite original reader pair."""
-    expected = producer_sources()
-    if value == expected:
-        return True
-    from . import rapid_fixed_condition_target as fixed
-    fixed._acquisition_reader_sources()
-    return value in [{**expected,
-        'qcsd_lab.whole_graph_input': input_sha,
-        'qcsd_lab.whole_graph_supplement': supplement_sha}
-        for input_sha, supplement_sha in (
-            ('8de0879f1ec1708ec43c061c41ada4d8315dd74865edbd7134045c9fa0b9b940',
-             '726c0d6215830730f3938b69545f3b4acc8c727dda3b4528a34732701f8d9f07'),
-            ('4b999d64aa59c7ebc91a2d65f29e091752920891d41539f9f079c99bc7dde583',
-             'a12ba1de531fd37a4e6ab8abbc8497911ea51d4d45e54d452e3afc927058db66'))
-        if (supplement_sha != '726c0d6215830730f3938b69545f3b4acc8c727dda3b4528a34732701f8d9f07'
-            or expected['qcsd_lab.application_response_policy'] ==
-                '8d85075852b94e7c8969fc17f141fed45b65c23bf6493fe607ca43b6a902d27e')]
-
-
 @dataclass(frozen=True)
 class Context:
     root: Path
@@ -126,18 +106,6 @@ def _plan_rows(plans: list[dict[str, Any]], prefix: static.Context) -> tuple[dic
                 raise ValueError("supplement continuation changes its original pending reservations or queue slots")
             # A new control attempt occupies its old reservation. No original
             # failure becomes a fabricated terminal and no candidate is added.
-            continue
-        if plan["artifact_type"] == inputs.V9_CONTINUATION_PLAN_TYPE:
-            original = inputs.load_plan(inputs.reopen(plan["original_plan"]))
-            if (original not in plans[:plans.index(plan)] or original["schema_version"] != 8
-                    or plan["previous_plan"] is not None or plan["previous_batch"] is not None
-                    or plan["reserved_candidates"] != [row["catalogue_candidate"] for row in rows]
-                    or plan["original_candidate_indices"] != [2, 3, 4, 5]
-                    or plan["local_candidate_indices"] != [1, 2, 3, 4]
-                    or plan["candidates"] != original["candidates"][1:]):
-                raise ValueError("V9 continuation changes original V8 pending reservations or queue slots")
-            # The original31 failure remains accounted; original32 is retained
-            # as an interruption. New actual attempts reuse only slots32--35.
             continue
         # Previous declaration reservations are outcomes-independent. Every
         # reserved identity must appear in this exact preceding queue tail.
@@ -350,7 +318,7 @@ def _declaration(root: Path, context: Context, position: int) -> tuple[dict, dic
             or type(declaration["position"]) is not int or declaration["position"] != position
             or declaration["candidate_id"] != row["candidate_id"] or declaration["domain"] != row["domain"]
             or declaration["graph_input"] != ref or declaration["discovery_runtime"] != input_value["runtime"]
-            or declaration["runtime_binding"] != expected or not _recognized_producer_sources(declaration["producer_sources"])
+            or declaration["runtime_binding"] != expected or declaration["producer_sources"] != producer_sources()
             or declaration["neutral_input_sha256"] != graph.digest(graph.canonical_bytes(neutral))
             or get._load(get._read(root / "neutral-input.json")) != neutral
             or declaration["bootstrap_input_sha256"] != graph.digest(graph.canonical_bytes(primary))
@@ -623,50 +591,6 @@ def record_deferral(context: Context, position: int, *, get_root: Path | None = 
     return path
 
 
-def _input_rejection(context: Context, position: int) -> dict:
-    """A complete graph can fail only this study's declared two-origin entry rule."""
-    row, ref, value, neutral = _candidate_input(context, position)
-    if value.get("all_occurrences_and_edges_retained") is not True:
-        raise ValueError("study input rejection requires an authenticated complete occurrence graph")
-    profile_path = original.open_reference(context.original.provenance["profile"])
-    profile = get._load(get._read(profile_path))
-    if (type(profile.get("class_target")) is not int or profile["class_target"] != 50
-            or type(profile.get("formal_trace_target")) is not int or profile["formal_trace_target"] != 16000
-            or type(profile.get("minimum_origins")) is not int or profile["minimum_origins"] != 2):
-        raise ValueError("complete-input rejection requires the declared rapid50 two-origin profile")
-    origins = sorted({get._origin(resource["url"]) for resource in neutral["resources"]})
-    if not origins or len(origins) >= profile["minimum_origins"]:
-        raise ValueError("complete graph does not fail the declared origin-count entry rule")
-    plan = inputs.load_plan(inputs.reopen(value["plan"]))
-    return {"policy": "rapid50-complete-input-minimum-two-resource-origins-v1",
-        "profile": inputs.reference(profile_path), "graph_input": ref,
-        "candidate_id": row["candidate_id"], "position": position,
-        "producer_sources": plan["producer_sources"], "discovery_control": plan.get("discovery_control"),
-        "discovery_runtime": value["runtime"], "resource_graph_sha256": value["resource_graph_sha256"],
-        "resource_count": len(neutral["resources"]), "actual_resource_origins": origins,
-        "actual_resource_origin_count": len(origins), "minimum_origins": 2,
-        "all_occurrences_and_edges_retained": True, "http3_assessment": "unassessed",
-        "site_universally_invalid_claimed": False, **inputs.ZERO}
-
-
-def record_input_rejection(context: Context, position: int) -> Path:
-    if position <= max(len(context.original.candidates), len(context.provenance["inherited_terminals"])):
-        raise ValueError("input rejection cannot replace an original or inherited decision")
-    target = terminal_path(context, position)
-    if target.exists() or target.is_symlink():
-        raise ValueError("input rejection cannot replace an already accounted decision")
-    evidence = _input_rejection(context, position)
-    row = context.candidates[position - 1]
-    payload = {"data_role": ROLE, "context": original.reference(context.root / "provenance.json"),
-        "position": position, "candidate_id": row["candidate_id"], "domain": row["domain"],
-        "outcome": "input-ineligible", "prepared_workload": None, "get_evidence_root": None,
-        "namespace": None, "failure": {"kind": "complete-graph-study-origin-entry-rule", "evidence": evidence},
-        "declared_at": static.receipts._now(), "scientific_credit": False, "formal_accepted_trace_count": 0}
-    path = static._write(target, TERMINAL_TYPE, payload)
-    verify_terminal(path, context)
-    return path
-
-
 def verify_terminal(path: Path, context: Context) -> dict:
     value = _terminal_payload(context, path)
     position = value["position"]
@@ -685,19 +609,10 @@ def verify_terminal(path: Path, context: Context) -> dict:
             or value["candidate_id"] != row["candidate_id"] or value["domain"] != row["domain"]
             or value["scientific_credit"] is not False or type(value["formal_accepted_trace_count"]) is not int or value["formal_accepted_trace_count"] != 0
             or not static.receipts._utc(context.provenance["declared_at"]) <= static.receipts._utc(value["declared_at"]) <= static.receipts._utc(static.receipts._now())
-            or value["outcome"] not in {"admitted", "operational-deferred", "input-ineligible"}):
+            or value["outcome"] not in {"admitted", "operational-deferred"}):
         raise ValueError("whole graph terminal changed its prospective role, order, outcome or chronology")
     facts = {"candidate_id": row["candidate_id"], "domain": row["domain"], "outcome": value["outcome"], "data_role": ROLE,
         "source_position": row["source_position"], "admission": None}
-    if value["outcome"] == "input-ineligible":
-        if (value["prepared_workload"] is not None or value["get_evidence_root"] is not None
-                or value["namespace"] is not None
-                or value["failure"] != {"kind": "complete-graph-study-origin-entry-rule", "evidence": _input_rejection(context, position)}):
-            raise ValueError("study input rejection changed complete graph, profile, exact count or no-GET role")
-        graph_input = inputs.load_input(inputs.reopen(value["failure"]["evidence"]["graph_input"]))[0]
-        if get._time(graph_input["completed_at"]) > get._time(value["declared_at"]):
-            raise ValueError("input rejection predates complete discovery")
-        return facts
     if value["outcome"] == "operational-deferred":
         failure = get._exact(value["failure"], {"kind", "evidence"}, "whole graph terminal failure")
         if value["prepared_workload"] is not None:

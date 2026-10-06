@@ -36,6 +36,8 @@ def run(args):
         return {"valid": True, "resource_count": proof["resource_count"]}
     if args.command == "admit":
         path = whole.admit(context, args.position, args.get_root, namespace=namespace)
+    elif args.command == "record-input-rejection":
+        path = whole.record_input_rejection(context, args.position)
     elif args.command == "defer":
         path = whole.record_deferral(context, args.position, get_root=args.get_root, namespace=namespace)
     elif args.command == "status":
@@ -57,12 +59,14 @@ def parser():
     init.add_argument("--graph-input", type=Path, action="append", default=[])
     init.add_argument("--failed-discovery", type=Path, action="append", default=[])
     init.add_argument("--parent-context", type=Path)
-    for name in ("execute-get", "verify-get", "admit", "defer", "namespace", "verify-terminal", "status"):
+    for name in ("execute-get", "verify-get", "admit", "defer", "namespace", "verify-terminal", "status", "record-input-rejection"):
         command = commands.add_parser(name)
         command.add_argument("--context", type=Path, required=True)
         if name in ("execute-get", "verify-get", "admit", "defer"):
             command.add_argument("--position", type=int, required=True)
             command.add_argument("--get-root", type=Path, required=name != "defer")
+        if name == "record-input-rejection":
+            command.add_argument("--position", type=int, required=True)
         if name in ("verify-get", "admit", "defer"):
             command.add_argument("--namespace", type=Path)
         if name == "verify-terminal":

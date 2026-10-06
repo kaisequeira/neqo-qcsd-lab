@@ -1,0 +1,12 @@
+{
+  "qcsd_lab.application_response_policy": "817e48d727bcb5b056f37582c8c469af7070deabbd367571c2ea05b9f36ac49a",
+  "qcsd_lab.rapid_additive_static_enrollment": "5404821bf1bf087493d60076d33c5769748052f6301c352dccc6dae61e630670",
+  "qcsd_lab.rapid_selected_budget_input": "6283ef9cafac972d9df8696c1c4d0249c920db855f7a83fc8fcd8fce434d079d",
+  "qcsd_lab.rapid_selected_capture_input": "ef14e839e0c1ab1b1540a9b8c024f0e8545c1a3cf5478deec30a500134aff337",
+  "qcsd_lab.supplied_static_bootstrap_get": "4a53baeb9f66220b6108ea304f54dd834fc447a4cc43f58a358de018b421f692",
+  "qcsd_lab.supplied_static_budget_successor": "a297fd337517ddffc30fc6e08b5961e2556f9311cbe5f7837baa0209bcf298d1",
+  "qcsd_lab.supplied_static_get": "ce20fe5b5d60f7b268b7eb659ab56e98048d5934bc9cb3b456e2ef99c330d322",
+  "qcsd_lab.supplied_static_graph": "87370d25d526a22cac7519a721aed0db19b72fa5957a353301782779409d4efa",
+  "qcsd_lab.supplied_static_preparation": "087ebcea7cf8c793a82cbf40bcb0e77fb1555ba50b648c02af85e52c76641f44",
+  "qcsd_lab.whole_graph_supplement": "a12ba1de531fd37a4e6ab8abbc8497911ea51d4d45e54d452e3afc927058db66"
+}
