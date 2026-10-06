@@ -195,6 +195,81 @@ def test_all_existing_fixed_conditions_keep_exact_original_caps(mode):
     assert target._capture_limits(mode, original, target.condition_identity(*setting(mode), mode)) == original
 
 
+@pytest.mark.parametrize('mode', ['undefended', 'tamaraw'])
+def test_target_intake_accepts_equivalent_seconds_without_rewriting_original_rows(mode, case, monkeypatch):
+    initial = target.initialize_progress(target=case.target, proofs=[], output=case.root/'numeric-initial.json')
+    def change(row):
+        row['capture_limits'] = {**row['capture_limits'],
+            'settle_seconds': 2.0, 'per_origin_cooldown_seconds': 0.0}
+    original = proof(case, monkeypatch, mode, [4], row_change=change)
+    updated = target.append_progress(progress=initial, proofs=[original], output=case.root/'numeric-next.json')
+    value = target.validate_progress(updated)
+    row = value['accepted_rows'][0]
+    declaration = target.validate_target(case.target)
+    assert value['target_id'] == declaration['target_id']
+    assert value['target_accepted_count'] == 1 and row['logical_visit'] == 4
+    assert type(row['capture_limits']['settle_seconds']) is float
+    assert type(row['capture_limits']['per_origin_cooldown_seconds']) is float
+    assert row['capture_limits'] == json.loads(Path(original['path']).read_bytes())['rows'][0]['capture_limits']
+    assert type(value['classes'][0]['capture_limits']['settle_seconds']) is int
+    assert row['condition'] == declaration['conditions'][mode]['identity']
+    assert row['client_sha256'] == declaration['target_identity']['client_sha256']
+    assert row['measurement_source']['neqo_commit'] == NATIVE
+    assert target.chunk_inputs(updated, [1], mode)['capture_limits'] == case.rows[0]['capture_limits']
+
+
+@pytest.mark.parametrize('field,value', [
+    ('settle_seconds', 2.1), ('per_origin_cooldown_seconds', 0.1),
+    ('settle_seconds', True), ('per_origin_cooldown_seconds', False),
+    ('settle_seconds', '2'), ('capture_megabytes', 64.0),
+    ('max_response_bytes', 16777216.0), ('max_attempts', 3.0),
+])
+def test_target_intake_refuses_changed_seconds_and_noninteger_caps(field, value, case, monkeypatch):
+    initial = target.initialize_progress(target=case.target, proofs=[], output=case.root/'refusal-initial.json')
+    def change(row): row['capture_limits'] = {**row['capture_limits'], field: value}
+    original = proof(case, monkeypatch, 'undefended', [4], row_change=change)
+    output = case.root/'refused-numeric-progress.json'
+    with pytest.raises(ValueError, match='caps'):
+        target.append_progress(progress=initial, proofs=[original], output=output)
+    assert not output.exists()
+
+
+@pytest.mark.parametrize('field', ['capture_seconds', 'timeout_seconds', 'settle_seconds',
+                                  'per_origin_cooldown_seconds'])
+def test_capture_limits_seconds_are_finite_numeric_values(field):
+    expected = capture_limits(16*1024*1024,64)
+    actual = {**expected, field: float(expected[field])}
+    assert target._capture_limits_equal(actual, expected)
+    assert target._capture_limits_equal(expected, actual)
+    for invalid in [True, False, '2', None, float('nan'), float('inf'), -float('inf')]:
+        assert not target._capture_limits_equal({**expected, field: invalid}, expected)
+        assert not target._capture_limits_equal(expected, {**expected, field: invalid})
+
+
+@pytest.mark.parametrize('field', ['capture_megabytes', 'max_response_bytes', 'max_attempts'])
+def test_capture_limits_counts_remain_exact_integers(field):
+    expected = capture_limits(16*1024*1024,64)
+    for invalid in [float(expected[field]), True, False, str(expected[field]), None]:
+        assert not target._capture_limits_equal({**expected, field: invalid}, expected)
+        assert not target._capture_limits_equal(expected, {**expected, field: invalid})
+
+
+def test_capture_limits_comparison_keeps_closed_fields_and_condition_types():
+    expected = capture_limits(16*1024*1024,64)
+    assert not target._capture_limits_equal({**expected, 'unknown': 0}, expected)
+    assert not target._capture_limits_equal({k: v for k, v in expected.items() if k != 'settle_seconds'}, expected)
+    assert not target._typed_equal({'initial_max_stream_data': 8192.0}, {'initial_max_stream_data': 8192})
+
+
+def test_numeric_repair_does_not_waive_original_reader_source_authority(tmp_path):
+    producer = deepcopy(target._sources())
+    changed = tmp_path/'original-target-reader.py'
+    changed.write_bytes(Path(target.__file__).read_bytes() + b'\n# distinct retained reader\n')
+    producer['target'] = target.reference(changed)
+    with pytest.raises(ValueError, match='producer/reader'):
+        target._compatible_sources(producer)
+
+
 def test_initial_history_is_separate_tam_is_zero_and_available_prefix_can_plan(case):
     progress=target.initialize_progress(target=case.target,proofs=[],output=case.root/'progress.json')
     value=target.validate_progress(progress)

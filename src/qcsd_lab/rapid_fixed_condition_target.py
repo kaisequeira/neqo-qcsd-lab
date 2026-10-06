@@ -11,6 +11,7 @@ from contextvars import ContextVar
 from functools import wraps
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 import sys
@@ -222,6 +223,23 @@ def _typed_equal(left, right):
     if isinstance(left, list):
         return len(left)==len(right) and all(_typed_equal(a,b) for a,b in zip(left,right))
     return left == right
+
+
+def _capture_limits_equal(actual, expected):
+    """Compare finite seconds by value and keep byte/count caps exact integers."""
+    seconds = {'capture_seconds', 'timeout_seconds', 'settle_seconds',
+               'per_origin_cooldown_seconds'}
+    counts = {'capture_megabytes', 'max_response_bytes', 'max_attempts'}
+    if (type(actual) is not dict or type(expected) is not dict
+            or set(actual) != seconds | counts or set(expected) != seconds | counts):
+        return False
+    for field in seconds:
+        if (type(actual[field]) not in (int, float) or type(expected[field]) not in (int, float)
+                or not math.isfinite(actual[field]) or not math.isfinite(expected[field])
+                or actual[field] != expected[field]):
+            return False
+    return all(type(actual[field]) is int and type(expected[field]) is int
+               and actual[field] == expected[field] for field in counts)
 
 
 def _capture_limits(mode, original, condition):
@@ -723,7 +741,7 @@ def _select(target, proofs, *, initial):
                 raise ValueError('initial target may carry only exactly matched ordinary/FRONT; Tamaraw starts empty')
             if (member is None or row['workload_id']!=member['workload_id']
                     or row['original_graph_sha256']!=member['original_graph_sha256']
-                    or not _typed_equal(row['capture_limits'], _capture_limits(
+                    or not _capture_limits_equal(row['capture_limits'], _capture_limits(
                         mode, member['capture_limits'], target['conditions'][mode]['identity']))
                     or row['client_sha256']!=target['target_identity']['client_sha256']
                     or row['measurement_source']['neqo_commit']!=target['target_identity']['native_head']

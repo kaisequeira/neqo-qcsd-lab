@@ -8,6 +8,30 @@ new source needs new captures. See the [capture path](RAPID-CAPTURE-PATH.md) and
 
 ## Current Python repairs: 6 October 2026
 
+### Fixed-target intake: equivalent seconds values
+
+The [fixed-target reader](../src/qcsd_lab/rapid_fixed_condition_target.py)
+compares the four seconds fields by finite numeric value: `2` and `2.0`, or
+`0` and `0.0`, describe the same limits. It retains the original observed rows
+and their number formats. Byte/count caps remain exact integers; booleans,
+strings, nonfinite numbers and changed values are refused. Other condition
+and producer/reader Source comparisons remain exact.
+
+The two original 20-trace ordinary lanes have `settle_seconds=2.0` and
+`per_origin_cooldown_seconds=0.0`, while admission records use integers.
+Nineteen focused HOST controls and a metadata-only check of those original
+40 traces cover this correction; neither grants new scientific credit.
+
+The original Source411 target and initial progress contain zero target credit.
+After publishing the external reader, use its public `target` and
+`initialize-progress` commands with the same namespace, five condition refs,
+21-class enrollment, Native head and client identity. This produces the same
+target identity in fresh receipts. Preserve the original zero-credit receipts;
+declare the fresh target before the first TAM8192 formal intent. The running
+Source411 capture and its installed image remain unchanged, with the external
+reader identity recorded separately. Historical TAM32 remains excluded from
+the TAM8192 target.
+
 ### Installed package paths and Native receipt shape
 
 The fresh v29 canary passed all ten steps and the next two-worker preparation
