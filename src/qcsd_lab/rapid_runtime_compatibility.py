@@ -181,6 +181,132 @@ def _eager(tree: ast.Module) -> list[ast.AST]:
     return nodes
 
 
+def _name_bindings(node: ast.AST, name: str) -> int:
+    """Count even conditional/shadowed bindings; ambiguity stays a refusal."""
+    return sum(
+        isinstance(item, ast.Name) and item.id == name and isinstance(item.ctx, (ast.Store, ast.Del))
+        or isinstance(item, ast.arg) and item.arg == name
+        or isinstance(item, ast.alias) and (item.asname or item.name.split(".")[0]) == name
+        or isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and item.name == name
+        for item in ast.walk(node)
+    )
+
+
+def _finite_import_names(tree: ast.Module, function: ast.AST, expression: ast.AST,
+                         trail: frozenset[str] = frozenset()) -> tuple[bool, frozenset[str]]:
+    """Evaluate only closed string collections, without executing Source."""
+    if isinstance(expression, ast.Constant) and isinstance(expression.value, str):
+        return False, frozenset({expression.value})
+    if isinstance(expression, (ast.Set, ast.Tuple, ast.List)):
+        names: frozenset[str] = frozenset()
+        for item in expression.elts:
+            starred = isinstance(item, ast.Starred)
+            collection, values = _finite_import_names(tree, function, item.value if starred else item, trail)
+            if collection != starred:
+                raise ValueError("qualification import collection contains a non-string or invalid unpacking")
+            names |= values
+        return True, names
+    if isinstance(expression, ast.BinOp) and isinstance(expression.op, ast.BitOr):
+        left, first = _finite_import_names(tree, function, expression.left, trail)
+        right, second = _finite_import_names(tree, function, expression.right, trail)
+        if left and right:
+            return True, first | second
+    if isinstance(expression, ast.IfExp):
+        # Both branches are dependencies, regardless of the run's opt-in flags.
+        left, first = _finite_import_names(tree, function, expression.body, trail)
+        right, second = _finite_import_names(tree, function, expression.orelse, trail)
+        if left == right:
+            return left, first | second
+    if (isinstance(expression, ast.Call) and isinstance(expression.func, ast.Name)
+        and expression.func.id == "set" and not expression.args and not expression.keywords
+        and not _name_bindings(tree, "set")):
+        return True, frozenset()
+    if isinstance(expression, ast.Name) and expression.id not in trail:
+        name = expression.id
+        local = _name_bindings(function, name)
+        scope = function if local else tree
+        assignments = [item for item in scope.body if isinstance(item, ast.Assign)
+                       and len(item.targets) == 1 and isinstance(item.targets[0], ast.Name)
+                       and item.targets[0].id == name]
+        if _name_bindings(scope, name) == 1 and len(assignments) == 1:
+            # A literal collection must not be modified or escape by alias.
+            for item in ast.walk(scope):
+                if (isinstance(item, ast.Attribute) and isinstance(item.value, ast.Name)
+                    and item.value.id == name
+                    or isinstance(item, ast.Subscript) and isinstance(item.value, ast.Name)
+                    and item.value.id == name and isinstance(item.ctx, (ast.Store, ast.Del))
+                    or isinstance(item, ast.Global) and name in item.names
+                    or isinstance(item, ast.Assign) and isinstance(item.value, ast.Name)
+                    and item.value.id == name):
+                    raise ValueError("qualification import names may be rebound or mutated")
+            result = _finite_import_names(tree, function, assignments[0].value, trail | {name})
+            if result[0]:
+                parents = {child: parent for parent in ast.walk(scope) for child in ast.iter_child_nodes(parent)}
+                for item in ast.walk(scope):
+                    if not (isinstance(item, ast.Name) and item.id == name and isinstance(item.ctx, ast.Load)):
+                        continue
+                    parent = parents.get(item)
+                    if (isinstance(parent, ast.BinOp) and isinstance(parent.op, ast.BitOr)
+                        or isinstance(parent, ast.Starred)
+                        or isinstance(parent, ast.comprehension) and parent.iter is item
+                        or isinstance(parent, ast.Compare)
+                        or isinstance(parent, ast.Call) and isinstance(parent.func, ast.Name)
+                        and parent.func.id in {"set", "sorted"} and len(parent.args) == 1
+                        and parent.args[0] is item and not parent.keywords
+                        and not _name_bindings(tree, parent.func.id)):
+                        continue
+                    raise ValueError("qualification import collection escapes its closed enumeration")
+            return result
+    raise ValueError("qualification import names are not a closed finite collection")
+
+
+def _dynamic_import_dependencies(module: str, symbol: str | None, tree: ast.Module,
+                                 function: ast.AST | None, call: ast.Call) -> set[str] | None:
+    """Resolve two closed inventory idioms; all other dynamic calls still fail."""
+    dynamic = ((isinstance(call.func, ast.Name) and call.func.id in {"__import__", "exec", "eval"})
+               or isinstance(call.func, ast.Attribute) and call.func.attr == "import_module")
+    if not dynamic:
+        return None
+    if (isinstance(call.func, ast.Name) and call.func.id == "__import__"
+        and len(call.args) == 1 and isinstance(call.args[0], ast.Name) and call.args[0].id == "__name__"
+        and len(call.keywords) == 1 and call.keywords[0].arg == "fromlist"
+        and isinstance(call.keywords[0].value, ast.List)
+        and len(call.keywords[0].value.elts) == 1
+        and isinstance(call.keywords[0].value.elts[0], ast.Constant)
+        and call.keywords[0].value.elts[0].value == "_"
+        and not _name_bindings(tree, "__import__") and not _name_bindings(tree, "__name__")):
+        return {module}
+    inventories = {("rapid_attempt_failure_evidence", "implementation_sources"),
+                   ("rapid_site_admission", "preparation_implementation_sources")}
+    if (function is not None and (module, symbol) in inventories
+        and isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name)
+        and call.func.value.id == "importlib" and call.func.attr == "import_module"
+        and len(call.args) == 1 and isinstance(call.args[0], ast.Name) and not call.keywords
+        and _name_bindings(tree, "importlib") == 1
+        and any(isinstance(item, ast.Import) and any(alias.name == "importlib" and alias.asname is None
+                                                   for alias in item.names) for item in tree.body)):
+        comprehensions = [item for item in ast.walk(function)
+                          if isinstance(item, (ast.DictComp, ast.ListComp, ast.SetComp, ast.GeneratorExp))
+                          and call in ast.walk(item)]
+        if len(comprehensions) == 1:
+            generators = comprehensions[0].generators
+            if (len(generators) == 1 and isinstance(generators[0].target, ast.Name)
+                and generators[0].target.id == call.args[0].id and not generators[0].ifs
+                and not generators[0].is_async and _name_bindings(function, call.args[0].id) == 1):
+                expression = generators[0].iter
+                if (isinstance(expression, ast.Call) and isinstance(expression.func, ast.Name)
+                    and expression.func.id == "sorted" and len(expression.args) == 1
+                    and not expression.keywords and not _name_bindings(tree, "sorted")):
+                    expression = expression.args[0]
+                try:
+                    collection, names = _finite_import_names(tree, function, expression)
+                except ValueError as error:
+                    raise ValueError("qualification execution has an unresolved dynamic dependency") from error
+                if collection and names and all(re.fullmatch(r"qcsd_lab\.[A-Za-z_]\w*", name) for name in names):
+                    return {name.split(".")[1] for name in names}
+    raise ValueError("qualification execution has an unresolved dynamic dependency")
+
+
 def qualification_dependencies(source_bytes: Mapping[str, bytes]) -> dict[str, Any]:
     """Bind eager imports and response-v2 reachable package functions.
 
@@ -209,10 +335,13 @@ def qualification_dependencies(source_bytes: Mapping[str, bytes]) -> dict[str, A
         loaded.add(name)
         nodes = _eager(trees[name])
         for node in nodes:
-            if (isinstance(node, ast.Call)
-                and ((isinstance(node.func, ast.Name) and node.func.id in {"__import__", "exec", "eval"})
-                     or (isinstance(node.func, ast.Attribute) and node.func.attr == "import_module"))):
-                raise ValueError("qualification import has an unresolved dynamic dependency")
+            if isinstance(node, ast.Call):
+                try:
+                    dependencies = _dynamic_import_dependencies(name, None, trees[name], None, node)
+                except ValueError as error:
+                    raise ValueError("qualification import has an unresolved dynamic dependency") from error
+                for dependency in sorted(dependencies or ()):
+                    load(dependency)
         aliases = _imports(nodes)
         for dependency, _symbol in aliases.values():
             load(dependency)
@@ -252,10 +381,10 @@ def qualification_dependencies(source_bytes: Mapping[str, bytes]) -> dict[str, A
         for dependency, _symbol in _imports(nodes).values():
             load(dependency)
         for node in nodes:
-            if (isinstance(node, ast.Call)
-                and ((isinstance(node.func, ast.Name) and node.func.id in {"__import__", "exec", "eval"})
-                     or (isinstance(node.func, ast.Attribute) and node.func.attr == "import_module"))):
-                raise ValueError("qualification execution has an unresolved dynamic dependency")
+            if isinstance(node, ast.Call):
+                dependencies = _dynamic_import_dependencies(name, symbol, trees[name], target, node)
+                for dependency in sorted(dependencies or ()):
+                    load(dependency)
             if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
                 if node.id in definitions:
                     pending.append((name, node.id))

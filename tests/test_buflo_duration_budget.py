@@ -16,7 +16,13 @@ OLD = ROOT / "config/defense-params/buflo-live.json"
 
 
 def _run(raw: bytes, *, path: str = "/lab/config/defense-params/buflo-duration200.json"):
-    return {"method": "buflo", "resolved_configuration": {
+    return {"method": "GET", "resolved_configuration": {
+        "schema_version": 2, "control_interval_us": 5_000,
+        "initial_max_stream_data": 16, "automatic_receive_window": 1_048_576,
+        "max_chaff_streams": 5, "low_watermark": 1_000_000,
+        "use_empty_resources": False, "max_stream_data_excess": 1_000,
+        "max_udp_payload_size": 1_200, "drop_unsatisfied_events": False,
+        "keep_alive_lead_time_us": 100_000, "tail_wait_us": 0,
         "defense": {"kind": "buflo", "parameters": path}},
         "defense_parameters": {"kind": "buflo", "path": path,
             "sha256": hashlib.sha256(raw).hexdigest(), "implementation_scope": "client_only_quic",
@@ -90,7 +96,15 @@ def test_new_raw_marker_joins_same_hashed_parameter_bytes():
         budget.validate_native_receipt(run, OLD.read_bytes())
 
 
-@pytest.mark.parametrize("mutation", ["missing", "null", "bool", "counter", "budget", "hash", "path", "method", "kind", "scope", "extra"])
+@pytest.mark.parametrize("wrong_method", ["POST", "buflo"])
+def test_budget_receipt_requires_native_http_get(wrong_method):
+    raw = NEW.read_bytes(); run = _run(raw)
+    run["method"] = wrong_method
+    with pytest.raises(ValueError):
+        budget.validate_native_receipt(run, raw)
+
+
+@pytest.mark.parametrize("mutation", ["missing", "null", "bool", "counter", "budget", "hash", "path", "method", "defense_kind", "kind", "scope", "extra"])
 def test_new_raw_marker_mutations_reject(mutation):
     raw = NEW.read_bytes(); run = _run(raw); marker = run["defense_parameters"][budget.RUN_FIELD]
     if mutation == "missing": del run["defense_parameters"][budget.RUN_FIELD]
@@ -100,7 +114,8 @@ def test_new_raw_marker_mutations_reject(mutation):
     elif mutation == "budget": marker["duration_budget_us"] = 120_000_000
     elif mutation == "hash": run["defense_parameters"]["sha256"] = "0" * 64
     elif mutation == "path": run["resolved_configuration"]["defense"]["parameters"] = "/other/parameters.json"
-    elif mutation == "method": run["method"] = "cs-buflo"
+    elif mutation == "method": run["method"] = "POST"
+    elif mutation == "defense_kind": run["resolved_configuration"]["defense"]["kind"] = "cs_buflo"
     elif mutation == "kind": run["defense_parameters"]["kind"] = "cs_buflo"
     elif mutation == "scope": run["defense_parameters"]["implementation_scope"] = "bilateral"
     else: marker["omissions_allowed"] = True

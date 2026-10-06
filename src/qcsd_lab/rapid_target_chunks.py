@@ -7,7 +7,6 @@ declaration and its readers retain their owned immutable Source epoch.
 from __future__ import annotations
 
 from dataclasses import asdict, replace
-from importlib import import_module
 import json
 from pathlib import Path
 from typing import Mapping
@@ -29,6 +28,8 @@ FIELD = 'target_chunk_policy'
 CONTROL_MODULES = ('rapid_target_chunks', 'rapid_slot_chunks', 'rapid_fixed_condition_target',
     'rapid_lane_evidence', 'rapid_rolling_capture', 'rapid_rolling_readiness', 'rapid_operation_facts',
     'buflo_duration_budget', 'rapid_capture_traffic')
+CONTROL_FILENAMES = tuple('src/qcsd_lab/' + name + '.py' for name in CONTROL_MODULES) + (
+    'tools/rapid_target_chunks.py',)
 POLICY_KEYS = {'contract', 'lane_layout', 'base_spec', 'base_four_visit_plan', 'target_chunk_inputs',
     'current_canonical', 'target_id', 'condition_sha256', 'classes', 'capture_limits', 'mode',
     'remaining_slots', 'ranges', 'maximum_visits', 'current_canary', 'runtime', 'native_head', 'client_sha256',
@@ -41,12 +42,58 @@ def _read(path):
     return lanes._read(Path(path)) if context is None else context.watch_file(Path(path))
 
 
-def sources():
-    values = {'src/qcsd_lab/' + name + '.py': target.reference(
-        Path(import_module('qcsd_lab.' + name).__file__)) for name in CONTROL_MODULES}
-    values['tools/rapid_target_chunks.py'] = target.reference(
-        Path(__file__).parents[2] / 'tools/rapid_target_chunks.py')
-    return values
+def _executing_source_path(relative, runtime):
+    """Python executes from its package; CLI files use the declared Source mount."""
+    path = Path(relative)
+    if path.parts[:2] == ('src', 'qcsd_lab') and len(path.parts) == 3 and path.suffix == '.py':
+        from . import (rapid_target_chunks, rapid_slot_chunks, rapid_fixed_condition_target,
+            rapid_lane_evidence, rapid_rolling_capture, rapid_rolling_readiness,
+            rapid_operation_facts, buflo_duration_budget, rapid_capture_traffic,
+            rapid_target_parallel_schedule, rapid_ordinary_parallel_schedule,
+            rapid_undefended_capture, rapid_capture_plan, rapid_rolling_schedule,
+            rapid_formal_parallel, rapid_runtime_epochs, rapid_ordinary_group_canary,
+            rapid_ordinary_transport_control)
+        modules = {module.__name__.rsplit('.', 1)[-1]: module for module in (
+            rapid_target_chunks, rapid_slot_chunks, rapid_fixed_condition_target,
+            rapid_lane_evidence, rapid_rolling_capture, rapid_rolling_readiness,
+            rapid_operation_facts, buflo_duration_budget, rapid_capture_traffic,
+            rapid_target_parallel_schedule, rapid_ordinary_parallel_schedule,
+            rapid_undefended_capture, rapid_capture_plan, rapid_rolling_schedule,
+            rapid_formal_parallel, rapid_runtime_epochs, rapid_ordinary_group_canary,
+            rapid_ordinary_transport_control)}
+        if path.stem not in modules:
+            raise ValueError('target control Source module is outside the closed installed set')
+        return Path(modules[path.stem].__file__)
+    return lanes._regular_directory(Path(runtime['module_root'])) / relative
+
+
+def sources(runtime=None):
+    """Keep authority refs at mounted Source paths in HOST and installed readers."""
+    if runtime is None:
+        package = Path(__file__).absolute().parent
+        if package.name != 'qcsd_lab' or package.parent.name != 'src':
+            raise ValueError('installed target controls require their explicitly bound runtime')
+        runtime = {'module_root': str(package.parent.parent)}
+    root = lanes._regular_directory(Path(runtime['module_root']))
+    return {relative: target.reference(root / relative) for relative in CONTROL_FILENAMES}
+
+
+def _checked_sources(runtime, source_files, filenames):
+    """Authenticate executing bytes and both explicit clean Source mounts."""
+    module_root = lanes._regular_directory(Path(runtime['module_root']))
+    runtime_root = lanes._regular_directory(Path(runtime['runtime_source_root']))
+    controls = {}
+    for relative in filenames:
+        path = module_root / relative
+        ref = target.reference(path)
+        executing = target.reference(_executing_source_path(relative, runtime))
+        installed = target.reference(runtime_root / relative)
+        if (source_files.get(relative) != _read(path)
+                or any(observed[name] != ref[name] for observed in (executing, installed)
+                       for name in ('sha256', 'mode'))):
+            raise ValueError('target executing/installed/frozen relevant control Source differs')
+        controls[relative] = ref
+    return controls
 
 
 def is_plan(path):
@@ -147,13 +194,7 @@ def _derive(spec, inputs_ref, canonical_ref):
     canonical, source_files = runtime_reader.reopen_runtime(
         {key: canonical_ref[key] for key in ('path', 'sha256')}, runtime, _inspector=True)
     target._open(canonical_ref)
-    for relative, ref in sources().items():
-        path = Path(ref['path'])
-        if (source_files.get(relative) != _read(path)
-                or _read(spec.module_root / relative) != _read(path)
-                or any((root / relative).stat().st_mode & 0o7777 != ref['mode']
-                       for root in (spec.runtime_source_root, spec.module_root))):
-            raise ValueError('target chunk executing/installed/frozen relevant control Source differs')
+    controls = _checked_sources(runtime, source_files, CONTROL_FILENAMES)
     declaration = target.validate_target(inputs['target'])
     identity = declaration['target_identity']
     if (canonical['source']['neqo_commit'] != identity['native_head']
@@ -172,7 +213,7 @@ def _derive(spec, inputs_ref, canonical_ref):
         'capture_limits': inputs['capture_limits'], 'mode': mode, 'remaining_slots': inputs['remaining_slots'],
         'ranges': inputs['ranges'], 'maximum_visits': value['maximum'], 'current_canary': canary, 'runtime': runtime,
         'native_head': identity['native_head'], 'client_sha256': identity['client_sha256'],
-        'control_sources': sources(), 'original_deep_program_sha256': lanes._sha(target.epoch._PROGRAM.encode()),
+        'control_sources': controls, 'original_deep_program_sha256': lanes._sha(target.epoch._PROGRAM.encode()),
         'scientific_credit': False, 'formal_accepted_trace_count': 0,
         'historical_progress_authority_inferred': False}, sites, base
 

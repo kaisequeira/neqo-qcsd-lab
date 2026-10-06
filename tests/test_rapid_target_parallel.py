@@ -32,6 +32,67 @@ def pair(case, monkeypatch):
     for relative in workers.CONTROL_FILES:
         path = source / relative; path.parent.mkdir(parents=True, exist_ok=True)
         original = root / relative; path.write_bytes(original.read_bytes()); path.chmod(original.stat().st_mode & 0o7777)
+    # The original GET/admission semantic boundary remains controlled. Supply
+    # its genuine prepared-input receipt shape so the current dependency reader
+    # authenticates full-mode refs, retained validator Source and raw trees.
+    from qcsd_lab import rapid_selected_capture_input as selected
+    from qcsd_lab import rapid_undefended_capture as ordinary
+    support = case.current.root / 'controlled-original-selected-inputs'
+    validators = {}
+    for module in selected._direct_modules():
+        original = Path(module.__file__)
+        relative = Path('src') / Path(*module.__name__.split('.')).with_suffix('.py')
+        for path in (source / relative, support / relative):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(original.read_bytes()); path.chmod(original.stat().st_mode & 0o7777)
+        validators[module.__name__] = selected.reference(support / relative)
+    for row in case.current.classes:
+        path = selected.reopen(row['prepared_workload'])
+        manifest = json.loads(path.read_bytes())
+        original = support / 'original-manifests' / path.name
+        original.parent.mkdir(parents=True, exist_ok=True); original.write_bytes(lanes._json(manifest))
+        proof = case.current.raw_root / row['workload_id'] / 'full-get-proof.json'
+        proof.parent.mkdir(); proof.write_bytes(lanes._json({'controlled_original_GET_boundary': True}))
+        audit = support / (row['workload_id'] + '-audit.json')
+        audit.write_bytes(lanes._json({'controlled_original_admission_boundary': True}))
+        receipt = support / (row['workload_id'] + '-input.json')
+        payload = {'engineering_fixture': 'original GET semantics controlled; no scientific authority',
+            'original_manifest': selected.reference(original), 'proof': selected.reference(proof),
+            'selection_audit': selected.reference(audit), 'raw_root': str(case.current.raw_root),
+            'direct_validator_files': validators,
+            'direct_validator_sources': {name: ref['sha256'] for name, ref in validators.items()},
+            'scientific_credit': False, 'formal_accepted_trace_count': 0}
+        receipt.write_bytes(lanes._json(rolling.admission._bind(selected.RECEIPT_TYPE, payload)))
+        manifest['preparation']['selected_input_evidence'] = {'schema_version': 1,
+            'record_type': selected.RECEIPT_TYPE, 'receipt': selected.reference(receipt)}
+        raw = lanes._json(manifest); path.write_bytes(raw)
+        (case.current.spec.workload_root / path.name).write_bytes(raw)
+        row['prepared_workload'] = selected.reference(path)
+    def selected_dependencies(preparation, resources):
+        receipt = selected.reopen(preparation['selected_input_evidence']['receipt'])
+        payload = rolling.admission._unpack(receipt.read_bytes(), selected.RECEIPT_TYPE)
+        original = selected.reopen(payload['original_manifest'])
+        manifest = json.loads(original.read_bytes())
+        assert resources == manifest['resources']
+        assert preparation == {**manifest['preparation'],
+            'selected_input_evidence': preparation['selected_input_evidence']}
+        return ({receipt, original, selected.reopen(payload['proof']),
+            selected.reopen(payload['selection_audit']), case.current.canary_file,
+            *selected._bound_validator_files(payload),
+            *(Path(module.__file__).absolute() for module in selected._direct_modules())},
+            {case.current.raw_root})
+    monkeypatch.setattr(selected, 'preparation_inputs', selected_dependencies)
+    case.current.facts['workload_sha256'] = case.current.classes[0]['prepared_workload']['sha256']
+    batch, _, _ = rolling._verify_enrollment(case.current.spec.cohort)
+    policy_root = Path(batch['policy']['path']).parent
+    inputs = ordinary.publish_inputs(case.current.spec.cohort, case.current.runtime,
+        case.current.root / 'target-current-input.json')
+    serial = rolling.publish_plan(policy_root, case.current.spec.cohort, inputs,
+        case.current.root / 'target-current-serial-plan.json', readiness={'undefended': case.current.canary},
+        runtime_inputs=case.current.runtime,
+        application_body_identity_policy=case.current.payload.get('application_body_identity_policy'))
+    case.current.spec = rolling.capture_spec(policy_root, case.current.spec.cohort, inputs, serial)
+    case.current.sites, case.current.payload = rolling.verify_capture_plan(case.current.spec, require_current=True)
     monkeypatch.setattr(runtime, 'reopen_runtime', lambda ref, actual, **kw: (
         case.current.canonical, {relative: (source / relative).read_bytes() for relative in workers.CONTROL_FILES}))
     base, policy = planned(case)

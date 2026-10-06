@@ -258,7 +258,7 @@ def _membership(enrollment):
         collector.watch_file(Path(__file__))
         collector.watch_file(Path(membership.__file__))
         collector._enrollment(_open(enrollment))
-        rows=membership._class_rows(_open(enrollment))
+        rows=membership._class_rows(enrollment)
         collector.check()
     dependencies={'files':[{'path':str(path),**observation} for path,observation in sorted(collector._files.items())],
         'trees':[{'path':str(path),'ignore_git':ignore_git,'members':members}

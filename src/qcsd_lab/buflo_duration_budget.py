@@ -99,7 +99,9 @@ def validate_native_receipt(run: Mapping[str, Any], raw: bytes, *,
     resolved = run.get("resolved_configuration")
     defense = resolved.get("defense") if isinstance(resolved, Mapping) else None
     digest = hashlib.sha256(raw).hexdigest()
-    if (run.get("method") != "buflo" or not isinstance(parameter, Mapping)
+    # Native `method` is the HTTP request method; the selected defense lives in
+    # resolved_configuration.defense and the parameter provenance below.
+    if (run.get("method") != "GET" or not isinstance(parameter, Mapping)
         or parameter.get("kind") != "buflo" or parameter.get("sha256") != digest
         or not isinstance(parameter.get("path"), str) or not parameter["path"]
         or parameter.get("implementation_scope") != "client_only_quic"

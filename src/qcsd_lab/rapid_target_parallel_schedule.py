@@ -18,7 +18,7 @@ PLAN_TYPE = 'qcsd-current-fixed-condition-target-parallel-plan-v1'
 CONTRACT = 'current-target-same-mode-disjoint-one-through-sixteen-slot-workers-v1'
 FIELD = 'target_parallel_contract'
 BASE_FIELD = 'target_parallel_base_spec'
-CONTROL_FILES = tuple(sorted(set(old_workers.CONTROL_FILES) | set(chunks.sources()) | {
+CONTROL_FILES = tuple(sorted(set(old_workers.CONTROL_FILES) | set(chunks.CONTROL_FILENAMES) | {
     'src/qcsd_lab/rapid_target_parallel_schedule.py', 'tools/rapid_target_parallel.py'}))
 CAPSULE_KEYS = {'schema_version', 'artifact_type', 'contract', 'base_spec', 'runtime',
     'qualification_spec', 'original_canonical', 'current_canonical', 'target_policy',
@@ -89,16 +89,8 @@ def _derive(base, runtime, canonical_ref):
             or target.reference(rolling._open_ref(canonical_ref)) != policy['current_canonical']):
         raise ValueError('target scheduling changed mode or actual current canonical')
     canonical, blobs = schedule.reopen_runtime(canonical_ref, runtime, _inspector=True)
-    controls = {}
-    for relative in CONTROL_FILES:
-        own = Path(__file__).resolve().parents[2] / relative
-        ref = target.reference(own)
-        runtime_path, module_path = Path(runtime['runtime_source_root']) / relative, Path(runtime['module_root']) / relative
-        if (blobs.get(relative) != _read(own) or target.reference(runtime_path)['sha256'] != ref['sha256']
-                or target.reference(module_path)['sha256'] != ref['sha256']
-                or any(target.reference(path)['mode'] != ref['mode'] for path in (runtime_path, module_path))):
-            raise ValueError('target scheduling executing/installed/current control Source differs')
-        controls[relative] = {'sha256': ref['sha256'], 'mode': ref['mode']}
+    controls = {relative: {'sha256': ref['sha256'], 'mode': ref['mode']}
+        for relative, ref in chunks._checked_sources(runtime, blobs, CONTROL_FILES).items()}
     input_dependencies(base, sites, _context=current_context())
     return {'target_policy': payload[chunks.FIELD], 'target_id': policy['target_id'],
         'condition_sha256': policy['condition_sha256'], 'mode': policy['mode'],

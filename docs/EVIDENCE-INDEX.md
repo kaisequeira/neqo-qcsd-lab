@@ -11,6 +11,28 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ### Current supplied-list study
 
+The latest v29 actual launch is retained under
+`../diagnostic-rehearsals/ordinary-b03-v29-two-workers-root-actual-20261006-001/operations/`.
+Preparation closed 0 in 312.3 seconds; both early lifecycle operations closed 0.
+The launch closed 2 in 841.5 seconds, before durable installed preflight or
+worker birth. Its original execution batch contains only operator intent,
+host start/process, stdout/stderr and the blocked result. The installed traceback
+identifies an incorrect package-relative lookup for
+[the target chunk tool](../tools/rapid_target_chunks.py), reached while importing
+[the target worker reader](../src/qcsd_lab/rapid_target_parallel_schedule.py).
+It is not a successful parallel recording or a recoverable scientific lane.
+Actual lifecycle recovery is retained separately under
+`../diagnostic-rehearsals/ordinary-b03-v29-two-workers-root-retirement-20261006-001/operations/`;
+it closed 0 in 5.32 seconds and grants no scientific retirement or trace credit.
+
+The v29 installation and practice closures remain separate evidence under
+`../diagnostic-rehearsals/rapid-v29-lifecycle-and-renewal-runtime-root-actual-20261006-001/`
+and `../diagnostic-rehearsals/ordinary-current-v29-canary-root-actual-20261006-001/`.
+They prove their recorded 12 installation and ten practice/planning operations,
+not successful formal parallel capture. The next-five class and five-condition
+Native-value handoffs are HOST preparation only; they grant no new enrollment,
+mode eligibility or formal credit until the corresponding public operations close.
+
 The latest **6 October 2026** independently verified batch adds **twenty
 ordinary traces**, bringing the total across recorded conditions to **84**:
 forty-eight ordinary, four FRONT and thirty-two historical Tamaraw. This is
@@ -19,7 +41,7 @@ setting is a distinct condition and cannot inherit the old thirty-two traces.
 The target remains fifty sites, five fixed conditions and sixty-four visits
 per site and condition: 16,000 independently verified formal traces.
 
-The updated cohort has sixteen enrolled sites and thirty ordinary
+The updated cohort has sixteen enrolled sites and thirty-one ordinary
 resource admissions. Classes 12–16 were appended in enrollment batch `b0004`;
 the host-local closure is
 `../diagnostic-rehearsals/selected-additive-classes012-016-v27-root-actual-20261006-001/enrollment-actual-closed.json`.

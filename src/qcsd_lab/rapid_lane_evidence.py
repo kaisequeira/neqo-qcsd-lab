@@ -896,13 +896,16 @@ def _prebirth_batch_proof(spec, root, intent_path, authority_path, output, publi
         or intent["actuator"] != "parallel-formal-worker"):
         raise ValueError("prebirth retirement is only an unstarted rolling formal initial generation")
     source = _read(spec.host_launcher)
-    # These complete historical launchers retain write-once image-preflight
-    # and batch initialization before any worker creation. Do not
+    # These complete reviewed launchers retain write-once image-preflight
+    # and batch initialization before any network, router or worker creation.
+    # The 35d443 launcher also closes formal release preparation before that
+    # first creation loop. Do not
     # infer this order from an arbitrary launcher containing matching strings.
     reviewed = {
         "0c1d2ed0364b9159e9acf8d1c45eb4fec2b661ec65d4165e88d5eb03c6466900",
         "42489d4b66b004787c6a827084f311d6916c21f810ffd9373b2627df76a36d39",
         "fe6a857e07b0a1376de788c8d15f933a90a6518a3811de843227e5700add5043",
+        "35d443b9f092bf8c55137ca7730723c8f542a9b7899889c5e649d90a658885dd",
     }
     if (_sha(source) not in reviewed or _sha(source) != intent["runtime_identity"]["host_launcher_sha256"]
         or _sha(_read(spec.base_launcher)) != intent["runtime_identity"]["base_launcher_sha256"]):

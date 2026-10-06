@@ -8,6 +8,33 @@ new source needs new captures. See the [capture path](RAPID-CAPTURE-PATH.md) and
 
 ## Current Python repairs: 6 October 2026
 
+### Installed package paths and Native receipt shape
+
+The fresh v29 canary passed all ten steps and the next two-worker preparation
+passed in 5 minutes 12 seconds. The guardian's authenticated startup also
+completed. Installed preflight then failed before worker birth because the
+target scheduler hashed CLI sources during import and inferred their locations
+from the installed package parent. CLI files live in the explicitly bound
+Source checkout. The repair must keep import-time declarations independent of
+filesystem layout, while checking actual imported Python bytes and the exact
+CLI files from the declared runtime Source during authority validation.
+
+A cheap review of the later BuFLO path caught another defect before a long run:
+[its duration validator](../src/qcsd_lab/buflo_duration_budget.py) expected the
+method field to contain the defense name. Actual Native receipts use HTTP `GET`;
+the defense is separately bound by the resolved configuration and parameter
+provenance. The corrected validator and fixtures preserve those checks.
+The failed v29 batch remains failed and adds no formal recordings.
+
+The newly planned FRONT setting is reserve V4: a 10,000 microsecond release
+window, 9,000 microsecond construction window and 1,000 microsecond preparation
+reserve, with its declared 10% bound on pure outgoing padding omissions. The
+four historical V3 recordings cannot count under V4. Tamaraw8192 and BuFLO200
+also require their exact prospective settings; complete resource graphs and
+original per-class budgets remain bound throughout.
+
+### Earlier guardian and selected-input repairs
+
 The v28 parallel batch passed preparation in 5 minutes 11 seconds, then failed
 before either worker started. Its guardian's 30-second READY check indirectly
 called the complete capture-spec parser, which repeats scientific evidence
@@ -193,6 +220,37 @@ and lifecycle cleanup finish.
 - [Retirement implementation](../src/qcsd_lab/rapid_lane_evidence.py)
 - [Public rolling command](../tools/rapid_rolling_capture.py)
 - [Preflight absence and recovery regressions](../tests/test_rapid_prebirth_retirement.py)
+
+### Reviewed current launcher and verifier limits
+
+The current complete `qcsd-lab` launcher has SHA-256
+`35d443b9f092bf8c55137ca7730723c8f542a9b7899889c5e649d90a658885dd`.
+Its formal parallel entry validates the full authority, executes the offline
+image preflight and durably writes `image-preflight.json`. Initialization
+reopens that preflight before allocating either lane's result namespace and
+writing `batch-intent.json`. It then closes release preparation before the
+first Docker network, router or capture worker is created. The retirement
+validator explicitly reviews these complete bytes; matching text in an
+arbitrary launcher cannot authorize recovery. The Python operator has its own
+original implementation hash and exact recorded nine-argument invocation.
+
+Adding this reviewed launcher does not relax the required failed public
+invocation, absent preflight and workers, retained zero-credit records, or
+fresh locked process, guardian, ownership and Docker census. Existing failed
+batches contain no separately authenticated protocol declaration that could
+replace the complete launcher review retrospectively.
+
+The ordinary input layout first authenticates its declared `control_sources`
+against the actual imported modules. The existing ordinary parallel contract
+also compares each imported control module with its original installed and
+frozen Source, including `rapid_lane_evidence.py`. A changed verifier imported
+into that contract is therefore rejected before lane retirement, even if the
+historical execution checkout is untouched. This whitelist repair alone does not authorize using
+a changed external verifier for an existing ordinary batch. Historical Source,
+plans and image proofs must remain unchanged; an external recovery observer
+would need its own explicit binding while retaining the original scientific
+validators. This change supplies no such additional authority and requires
+no physical requalification on its own.
 
 ## Source
 

@@ -59,7 +59,7 @@ def duration_setting():
     configuration['defenses'][0].update(parameters=str(path),
         parameters_sha256=target.duration.PARAMETER_SHA256, provenance=str(provenance),
         provenance_sha256=target.traffic.PROVENANCE_SHA256)
-    run['method'] = 'buflo'
+    run['method'] = 'GET'
     run['resolved_configuration']['defense'] = {'kind': 'buflo', 'parameters': str(path)}
     run['defense_parameters'] = {'kind': 'buflo', 'path': str(path),
         'sha256': target.duration.PARAMETER_SHA256, 'implementation_scope': 'client_only_quic',

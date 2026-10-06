@@ -29,6 +29,7 @@ from qcsd_lab import rapid_parallel_capture as parallel
 from qcsd_lab import rapid_rolling_capture as rolling
 from qcsd_lab import rapid_rolling_schedule as schedule
 from tools import rapid_rolling_capture as cli
+from tests.test_rapid_ordinary_parallel import current as ordinary_current
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -270,12 +271,18 @@ def retained_launcher():
 
 
 @pytest.fixture
-def closed_batch(tmp_path, monkeypatch):
+def closed_batch(tmp_path, monkeypatch, request):
     data = tmp_path / "data"
     root, execution, source = data / "evidence", data / "execution", data / "source"
     for path in (root, execution / "results", source):
         path.mkdir(parents=True)
     source_raw = retained_launcher()
+    launcher = getattr(request, "param", "historical")
+    if launcher in {"current", "unreviewed-current"}:
+        source_raw = (ROOT / "qcsd-lab").read_bytes()
+        assert lanes._sha(source_raw) == "35d443b9f092bf8c55137ca7730723c8f542a9b7899889c5e649d90a658885dd"
+        if launcher == "unreviewed-current":
+            source_raw += b"\n# Unreviewed whole-launcher change.\n"
     host = write(execution / "qcsd-lab", source_raw)
     base = write(source / "qcsd-lab", source_raw)
     operator_source = write(source / "tools/rapid_parallel_capture.py", (ROOT / "tools/rapid_parallel_capture.py").read_bytes())
@@ -405,8 +412,11 @@ def retire(context, index=0):
         public_started=context.public_started, public_completed=context.public_completed)
 
 
+@pytest.mark.parametrize("closed_batch", ["historical", "current"], indirect=True)
 def test_closed_prebirth_retirement_preserves_actual_failure_and_supports_exact_g02(closed_batch):
     c = closed_batch
+    argv = parallel.load(c.public_started)["command"]
+    assert len(argv) == 9 and argv[1:4] == ["-I", "-B", str(c.spec.module_root / "tools/rapid_parallel_capture.py")]
     before = {path.name: path.read_bytes() for path in c.output.iterdir()}
     intents = [fact[2].read_bytes() for fact in c.facts]
     paths = [retire(c, index) for index in range(2)]
@@ -434,6 +444,61 @@ def test_closed_prebirth_retirement_preserves_actual_failure_and_supports_exact_
         lanes._lineage_payload(c.spec, skipped, checked, c.root, c.facts[0][2])
 
 
+@pytest.mark.parametrize("closed_batch", ["unreviewed-current"], indirect=True)
+def test_prebirth_retirement_rejects_unreviewed_launcher_even_with_rebound_original_identities(closed_batch):
+    c = closed_batch
+    # Both original launcher refs and every intent already bind the changed
+    # bytes. This rejects an unreviewed order, rather than a stale hash alone.
+    assert c.spec.host_launcher.read_bytes() == c.spec.base_launcher.read_bytes()
+    for fact in c.facts:
+        assert fact[3]["runtime_identity"]["host_launcher_sha256"] == lanes._sha(c.spec.host_launcher.read_bytes())
+    with pytest.raises(ValueError, match="reviewed original Source before worker birth"):
+        retire(c)
+    assert not any((fact[2].parent / "retirement.json").exists() for fact in c.facts)
+
+
+@pytest.mark.parametrize("closed_batch", ["current"], indirect=True)
+@pytest.mark.parametrize("mutation", ["bootstrap", "wrong-tool", "extra-argument", "missing-isolation"])
+def test_current_launcher_retirement_requires_original_direct_nine_argv(closed_batch, mutation):
+    c = closed_batch
+    public = parallel.load(c.public_started)
+    argv = public["command"]
+    if mutation == "bootstrap":
+        argv[1:4] = ["-c", "import runpy; runpy.run_path('rapid_parallel_capture.py')"]
+    elif mutation == "wrong-tool":
+        argv[3] = str(c.spec.module_root / "tools/another_launcher.py")
+    elif mutation == "extra-argument":
+        argv.append("--unreviewed")
+    else:
+        argv.remove("-B")
+    write(c.public_started, public)
+    with pytest.raises(ValueError, match="actual closed public batch invocation"):
+        retire(c)
+    assert not any((fact[2].parent / "retirement.json").exists() for fact in c.facts)
+
+
+def test_changed_external_retirement_verifier_cannot_enter_original_ordinary_contract(ordinary_current, monkeypatch):
+    from qcsd_lab import rapid_undefended_capture as ordinary
+    c = ordinary_current
+    lanes._check_spec(c.spec)
+    original_controls = ordinary._sources()
+    relative = "src/qcsd_lab/rapid_lane_evidence.py"
+    original = Path(c.runtime["module_root"]) / relative
+    original_raw = original.read_bytes()
+    assert original_raw == Path(lanes.__file__).read_bytes()
+    observer = write(c.root / "separate-observer" / relative,
+                     original_raw + b"\n# Separately changed retirement verifier.\n")
+    # Model a separately loaded observer's actual source path. The scientific
+    # runtime, plan and original installed/frozen control bytes stay intact.
+    monkeypatch.setattr(lanes, "__file__", str(observer))
+    assert ordinary._sources() != original_controls
+    with pytest.raises(ValueError, match="ordinary-only input layout differs from its exact current plan"):
+        lanes._check_spec(c.spec)
+    assert original.read_bytes() == original_raw
+    assert c.spec.runtime_source_root == Path(c.runtime["runtime_source_root"])
+
+
+@pytest.mark.parametrize("closed_batch", ["historical", "current"], indirect=True)
 @pytest.mark.parametrize("mutation", ["preflight", "batch-intent", "release", "actual-launch", "worker-start",
     "result", "completion", "successful-host", "missing-terminal", "raw-log", "public-log", "public-success",
     "public-command", "unreviewed-source", "authority", "live-host", "partial-references", "boolean-count"])
@@ -536,8 +601,25 @@ def test_published_source_contracts_keep_exact_original_interpretation(source_by
     node = next(item for item in tree.body if isinstance(item, ast.FunctionDef) and item.name == "_lineage_payload")
     node.body.insert(0, ast.parse("historical_control_only_probe = True").body[0])
     new[target] = ast.unparse(tree).encode()
-    expected = historical.source_changes(old, new, client_sha256="a" * 64, contract=contract)
-    assert schedule.source_changes(old, new, client_sha256="a" * 64, contract=contract) == expected
+    # Current inventories reach this whole module through their immutable
+    # metadata dependencies. Named scheduling permission does not waive the
+    # narrower qualification projection; the retained helper must still refuse.
+    errors = []
+    for validator in (historical, schedule):
+        with pytest.raises(ValueError) as caught:
+            validator.source_changes(old, new, client_sha256="a" * 64, contract=contract)
+        errors.append(str(caught.value))
+    assert errors == ["scheduling changed the response-only qualification primitive"] * 2
+    # A genuine named HOST CLI control change preserves every package Source
+    # byte and receives the same comparison from both original readers.
+    cli_path = "tools/rapid_rolling_capture.py"
+    cli_tree = ast.parse(old[cli_path])
+    cli_parser = next(item for item in cli_tree.body if isinstance(item, ast.FunctionDef) and item.name == "_parser")
+    cli_parser.body.insert(0, ast.parse("source_control_only_probe = True").body[0])
+    qualified_same = {**old, cli_path: ast.unparse(cli_tree).encode()}
+    expected = historical.source_changes(old, qualified_same, client_sha256="a" * 64, contract=contract)
+    assert expected["changed_sources"][cli_path]["units"] == ["_parser"]
+    assert schedule.source_changes(old, qualified_same, client_sha256="a" * 64, contract=contract) == expected
     protected = ast.parse(old[target])
     node = next(item for item in protected.body if isinstance(item, ast.FunctionDef) and item.name == "retire_lane")
     node.body.insert(0, ast.parse("new_prebirth_probe = True").body[0])
@@ -547,7 +629,7 @@ def test_published_source_contracts_keep_exact_original_interpretation(source_by
             validator.source_changes(old, new, client_sha256="a" * 64, contract=contract)
 
 
-def test_current_contract_authorizes_actual_retirement_controls_and_preserves_science(source_bytes):
+def test_current_contract_refuses_retirement_primitive_changes_and_accepts_unchanged_science_controls(source_bytes):
     paths = {"src/qcsd_lab/rapid_lane_evidence.py", "tools/rapid_rolling_capture.py", schedule.MODULE_FILE}
     old = dict(source_bytes)
     old[schedule.MODULE_FILE] = HISTORICAL_V3
@@ -560,16 +642,28 @@ def test_current_contract_authorizes_actual_retirement_controls_and_preserves_sc
         tree.body.extend(ast.parse(raw).body[0] for raw in controls.values())
         old[path] = ast.unparse(tree).encode()
     new = {**old, **{path: (ROOT / path).read_bytes() for path in paths}}
-    actual = schedule.source_changes(old, new, client_sha256="a" * 64)
-    assert set(actual["changed_sources"]) == paths
-    assert actual["changed_sources"][schedule.MODULE_FILE]["units"] == ["scheduling-v5-operation-local-verification-facts-authority"]
-    unchanged = schedule.source_changes(old, old, client_sha256="a" * 64)
+    with pytest.raises(ValueError) as caught:
+        schedule.source_changes(old, new, client_sha256="a" * 64)
+    assert str(caught.value) == "scheduling changed the response-only qualification primitive"
+    # Fresh-Source retirement is exercised separately by the production API
+    # cases. Cross-Source reuse above remains blocked. This positive control
+    # retains the identical package/metadata bodies, including retirement.
+    protected_same = dict(source_bytes)
+    cli_path = "tools/rapid_rolling_capture.py"
+    cli_tree = ast.parse(protected_same[cli_path])
+    cli_parser = next(item for item in cli_tree.body if isinstance(item, ast.FunctionDef) and item.name == "_parser")
+    cli_parser.body.insert(0, ast.parse("source_control_only_probe = True").body[0])
+    qualified_same = {**protected_same, cli_path: ast.unparse(cli_tree).encode()}
+    actual = schedule.source_changes(protected_same, qualified_same, client_sha256="a" * 64)
+    assert set(actual["changed_sources"]) == {cli_path}
+    assert actual["changed_sources"][cli_path]["units"] == ["_parser"]
+    unchanged = schedule.source_changes(protected_same, protected_same, client_sha256="a" * 64)
     for key in ("dependency_groups", "acquisition_source_groups", "qualification_dependencies"):
         assert actual[key] == unchanged[key]
     fixture = "tests/fixtures/rapid_parallel_scheduling_v2.json.zlib.b85.txt"
     fixture_bytes = (ROOT / fixture).read_bytes()
-    with_fixture = schedule.source_changes(old, {**new, fixture: fixture_bytes}, client_sha256="a" * 64)
-    assert set(with_fixture["changed_sources"]) == paths | {fixture}
+    with_fixture = schedule.source_changes(protected_same, {**qualified_same, fixture: fixture_bytes}, client_sha256="a" * 64)
+    assert set(with_fixture["changed_sources"]) == {cli_path, fixture}
     assert with_fixture["changed_sources"][fixture]["units"] == ["nonexecuting-evidence-description"]
     for key in ("dependency_groups", "acquisition_source_groups", "qualification_dependencies"):
         assert with_fixture[key] == unchanged[key]
@@ -578,4 +672,5 @@ def test_current_contract_authorizes_actual_retirement_controls_and_preserves_sc
             schedule.source_changes(old, {**old, fixture: fixture_bytes}, client_sha256="a" * 64, contract=contract)
     for path in ("src/qcsd_lab/fidelity.py", "src/qcsd_lab/chaff_qualification.py", "neqo-qcsd/neqo-bin/src/qcsd/mod.rs"):
         with pytest.raises(ValueError):
-            schedule.source_changes(old, {**new, path: new[path] + b"\nUNREVIEWED = True\n"}, client_sha256="a" * 64)
+            schedule.source_changes(protected_same, {**qualified_same, path: protected_same[path] + b"\nUNREVIEWED = True\n"},
+                                    client_sha256="a" * 64)
