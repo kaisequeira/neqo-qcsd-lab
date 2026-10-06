@@ -10,6 +10,20 @@ the earlier claim of **58 unique classes** from a documented rule: the file has
 73 distinct site names, 63 with at least one listed resource, and 57 with a
 listed resource and no automatic safety flag.
 
+**Current supplied-static study snapshot (6 October 2026, 21:13 Sydney):**
+The later [supplied-list capture role](SUPPLIED-STATIC-CAPTURE.md) admits a
+site only after a bounded live HTTP/3 GET and verification of its complete
+selected multi-origin resource graph. A homepage result or one successful
+resource does not substitute for that graph. In the ordered q084–q087 batch,
+`notion` had a primary idle timeout, while the primary resource returned HTTP
+403 for each of `r10.net` and `tapbit`. Those attempts were recorded as
+operational deferrals, not permanent judgments about the domains. The `temu`
+attempt passed its full 29-resource, four-origin GET and selected-input
+preparation, then enrolled as class 35. Enrollment retained all 48 accepted
+traces and added no formal credit. The screen and browser observations below
+are dated historical
+admission routes; their counts do not change this current target counter.
+
 On **2 October 2026**, each supplied site's homepage received a short HTTP/3
 screen using the same Neqo client intended for collection. Working control
 sites passed before and after each batch. This was a quick diagnostic, **not

@@ -10,9 +10,13 @@ qualification, practice, or original deep acceptance rule.
 ## Preserve original credit
 
 Each mode has an explicit finite ordered list of Native/client epochs. The
-current intended initial lists are ordinary, FRONT and BuFLO with their original
-c24 client; TAM8192 with original c24 followed by the repaired Native/client;
-and canonical CTSP CS-BuFLO with the repaired pair only. Original valid TAM4
+prospective lists retain the original c24 epochs for ordinary, FRONT reserve
+V4, TAM8192 and BuFLO200, then append the repaired 818d Native/client pair
+for each of those modes. Canonical CTSP CS-BuFLO begins with that repaired
+pair; its earlier attempts supply no original formal rows. These lists are a
+declaration plan, not current epoch receipts or capture authorization. A new
+installed consumer and a genuine current-mode canary are required for each
+mode before formal capture under the repaired pair. Original valid TAM4
 remain scientific credit with their original measurement labels. Historical
 TAM16 recordings do not acquire TAM8192 credit. Original CS rows are retained
 as history and cannot enter the repaired CS numerator.
@@ -57,10 +61,19 @@ mode. Existing targets and progress remain immutable and separately readable.
 
 `chunk-inputs` requires an explicit `--epoch-index`. Its remaining slots combine
 all valid epochs of the selected mode: repaired TAM must skip original TAM0–3.
-The output has a distinct planning-only type. Existing v1 target chunks and
-parallel capsules do not automatically accept it. A future explicit consumer
-must bind that type, current full graphs, caps, runtime, qualified group and
-canary; using the repaired v1 target's empty TAM vector would duplicate credit.
+The output has a distinct planning-only type. The prospective
+[serial epoch chunk tool](../tools/rapid_epoch_target_chunks.py) consumes that
+type through separate policy and plan receipts. It reopens joined remaining
+slots, the selected Native/client and its declared clean Source binding,
+current full graphs and caps, the qualified cohort, condition and canary. A
+later clean Lab/image release may use that Native/client epoch while retaining
+the declaration binding's labels and obtaining its own current-mode canary.
+The tool keeps the original bounded 16-visit chunk geometry and excludes old
+TAM slots 0–3 from repaired TAM planning. It checks the epoch declaration and
+policy before a physical intent, then uses the original serial launch and independent deep
+path. The original v1 chunk reader and parallel capsules do not accept these
+new receipts. This consumer requires its own clean matching installed runtime;
+the earlier Source36 runtime does not contain it and grants no epoch capture.
 
 Final publication requires 50 original class identities, five unchanged fixed
 conditions, all 64 slots per class/mode, no duplicates or holes, and the retained

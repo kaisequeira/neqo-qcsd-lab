@@ -1,6 +1,6 @@
 # QCSD thesis project ledger
 
-Checkpoint: **6 October 2026, Australia/Sydney (AEDT, UTC+11)**.
+Checkpoint: **6 October 2026, 21:13 Australia/Sydney (AEDT, UTC+11)**.
 This is the current research ledger. The [history](docs/PROJECT-HISTORY.md)
 preserves the development record, the [class-study runbook](docs/CLASS-STUDY.md)
 defines continuation, and the [capture-readiness guide](docs/CAPTURE-READINESS.md)
@@ -49,54 +49,54 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-### Latest verified checkpoint: 6 October, 17:09 Sydney AEDT
+### Latest verified checkpoint: 6 October, 21:13 Sydney AEDT
 
-The fixed five-condition target has **31 enrolled classes** and **44/16,000
-accepted formal traces**: forty ordinary and four Tamaraw8192 visits from
-class 17. That four-visit lane passed independent deep verification. Its
-original-source audit and target progress append closed 0, preserving the
-target identity and the prior forty accepted rows. The target still requires
-50 complete classes, five conditions and 64 accepted visits per class and
-condition. Earlier FRONT V3 and Tamaraw32 traces remain historical and add
-no credit to this fixed target.
+The fixed five-condition target has **35 enrolled classes** and **48/16,000
+accepted formal traces**: forty ordinary, four class-17 Tamaraw8192, and four
+class-17 FRONT reserve V4. Both four-visit lanes passed independent deep
+verification and fixed-target intake. The target retains its original identity
+and requires 50 complete classes, five conditions and 64 accepted visits per
+class and condition. Earlier FRONT V3 and Tamaraw32 traces remain historical
+and add no credit to this target. The current progress and receipt bindings
+are in the [evidence index](docs/EVIDENCE-INDEX.md).
 
-The declared conditions are ordinary, FRONT reserve V4, Tamaraw with initial
+The five declared settings are ordinary, FRONT reserve V4, Tamaraw with initial
 stream credit 8192, fixed-duration-200 BuFLO with ACK-start and
-kernel-preparation policies, and canonical client-only CTSP CS-BuFLO. The
-published Source `16e61c55` has a matching v33 runtime: all twelve installation
-and export operations closed 0 after a cached 209.46-second image build,
-reusing Native `c24da2af` without recompilation. The earlier `411037cb`
-Tamaraw8192 two-site and five-site qualifications remain failed history; they
-contributed no trace credit.
+kernel-preparation policies, and canonical client-only CTSP CS-BuFLO. Lab
+Source `46121119` and Native `818d8939` were published together. The matching
+v36 runtime closed all twelve installation and export operations. Class 17's
+repaired Tamaraw8192 and canonical CS-BuFLO each passed qualification, a
+single-visit practice capture, independent deep verification and readiness
+over its complete 58-resource, two-origin graph. These practice runs add no
+formal traces. An actual installed Source binding for the repaired Native and
+client has also closed; no prospective epoch declaration or repaired formal
+capture follows from that binding alone. The repair cannot relabel earlier
+captures from the old client.
 
-The v31 ordinary practice and planning route closed all ten operations,
-including physical practice and independent deep verification. Its fresh
-two-worker formal attempt subsequently stopped at the 120-second parallel
-release gate. The failed pair and actual lifecycle recovery are retained with
-zero formal credit. A private release-fence repair passed 45 focused HOST
-tests; it is not installed or physical proof. The earlier v30 launch-input
-and v29 installed-path failures remain separate records.
+The current FRONT remaining-visit chunk-inputs operation passed, but its
+first installed-image policy attempt stopped because the original operation
+records name a UV Python interpreter outside the mounted tree. The read-only
+mount successor passed policy; its plan is still pending at this checkpoint.
+It has not added any FRONT formal credit. The earlier ordinary two-worker launch
+failure and canonical CS-BuFLO practice failure remain zero-credit history.
 
-The first class-17 FRONT reserve V4 attempt stopped in the preamble because
-the installed-image imported module path changed the authenticated transport
-root list. A private narrow repair passed four focused HOST tests, with no
-new FRONT practice or formal credit. Class-17 canonical CS-BuFLO response
-qualification closed 0 in 105.825 seconds, but its practice capture closed 1
-in 195.272 seconds: Native stopped after 13.285 seconds with
-`StrictClientDefenseExecutionFailure` from a non-congestion realization.
-Diagnosis is ongoing; this attempt adds no CS-BuFLO credit.
+A later HOST-only review of the unchanged Source34 chunk transport found that
+its mount list includes authenticated regular files where the capture-image
+launcher requires directories. That path cannot launch the remaining FRONT
+visits as written. The prospective epoch consumer normalizes those mount
+roots, but needs its own published, matching installation and a fresh FRONT
+canary before it can be used. The retained four FRONT traces and all earlier
+proof remain unchanged; this review added no capture credit.
 
-Supplemental positions 88 and 106 were operationally deferred after primary
-idle timeouts; neither earned site credit. Supplied-list candidate 80 passed
-its complete 170-resource GET, separate verification and owned HOST admission
-accounting. It is eligible for ordinary enrollment, but the fixed target still
-has only 31 enrolled classes. A separate HOST review
-showed that two classes from one enrolled batch can use distinct flight
-execution and physical evidence roots while retaining their original graphs
-and caps. The subgroup Source was published as Lab `10e79fa8`; later Source33
-and its matching runtime supported the class-17 Tamaraw lane above. The
-[peer operating sequence](docs/ENROLLED-SUBGROUP-FLIGHTS.md#two-peers-from-one-enrollment-batch)
-continues to govern separate flights and direct fixed-target intake.
+Supplied-list candidate 87 (`temu`) passed a complete 29-resource,
+four-origin GET, admission accounting, selected-input preparation and
+enrollment as class 35. This increased the class count from 34 to 35 while
+preserving all 48 accepted traces; it granted no new trace credit. Candidate
+84 (`notion`)
+had a primary idle timeout; 85 (`r10.net`) and 86 (`tapbit`) received HTTP 403
+on their primary resource. Their bounded attempts were operationally deferred,
+with no site or formal trace credit. The [curated-domains explanation](docs/README-CURATED-DOMAINS.md)
+distinguishes these observations from a general domain verdict.
 
 ### Earlier recorded checkpoints
 

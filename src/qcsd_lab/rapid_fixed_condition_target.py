@@ -168,7 +168,8 @@ _READER_COMPATIBILITY_HELPERS = {
     'overlay': ('_compatible_overlay_sources',),
     'target': ('_reader_code_projection', '_compatible_code_ref',
                '_planning_source_projection', '_membership_code_path',
-               '_compatible_selected_membership_code'),
+               '_compatible_selected_membership_code', '_epoch_dispatch_source_projection',
+               '_epoch_dynamic_source_projection'),
     'dynamic': ('_compatible_reader_sources',),
 }
 
@@ -227,16 +228,43 @@ def _compatible_code_ref(role, producer, current):
     # require the original guard AST fingerprints above.
     enhanced_target = (role == 'target' and producer['sha256'] in {
                        '3d75eee530f282fe81373b3fa584603360e1f216dbe559fc368ed1aadd5e6cad',
-                       '9ec1c86f9d6e310f0f510e821a586d6a23d96222813d495fc3ef22d14e638571'})
+                       '9ec1c86f9d6e310f0f510e821a586d6a23d96222813d495fc3ef22d14e638571',
+                       '2644a9156562a2b8b377f9ee019325ce2cda04a4dfc0770bdbb89013fcede14c'})
+    epoch_dynamic = (role == 'dynamic' and producer['sha256'] in {
+        '17d9b19159a521e7c18cea732ba8ed44dff6044a18442807a716e793586cb3a3',
+        'e5c49b345c0e5acb1af442dbaae7d2caabfcdcf09892239d5ebb78f5d03a318a'}
+        and current['sha256'] == '1e917253a51a0468cea929526d5c73e65e5a0220868f48447b0bd7b8648edbdd')
     try:
-        old = _reader_code_projection(Path(producer['path']).read_bytes(), role,
-                                      legacy=not enhanced_target)
-        new = _reader_code_projection(Path(current['path']).read_bytes(), role)
+        if epoch_dynamic:
+            old = _epoch_dynamic_source_projection(Path(producer['path']).read_bytes())
+            new = _epoch_dynamic_source_projection(Path(current['path']).read_bytes())
+        else:
+            old = _reader_code_projection(Path(producer['path']).read_bytes(), role,
+                                          legacy=not enhanced_target)
+            new = _reader_code_projection(Path(current['path']).read_bytes(), role)
     except (ValueError, SyntaxError) as error:
         raise ValueError('fixed target relevant producer/reader code changed') from error
     if old != new:
         raise ValueError('fixed target relevant producer/reader code changes protected scientific code')
     return True
+
+
+def _epoch_dynamic_source_projection(raw):
+    """Retain every other dynamic reader unit for one exact partial-binding pair."""
+    import ast
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest not in {
+            '17d9b19159a521e7c18cea732ba8ed44dff6044a18442807a716e793586cb3a3',
+            'e5c49b345c0e5acb1af442dbaae7d2caabfcdcf09892239d5ebb78f5d03a318a',
+            '1e917253a51a0468cea929526d5c73e65e5a0220868f48447b0bd7b8648edbdd'}:
+        raise ValueError('dynamic epoch binding is outside the exact Source pair')
+    tree = ast.parse(raw)
+    found = 0
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == '_measurement_binding':
+            found += 1; node.body = [ast.Pass()]
+    if found != 1: raise ValueError('dynamic epoch binding definition is absent or duplicated')
+    return _reader_code_projection(ast.unparse(tree).encode(), 'dynamic')
 
 
 def _planning_source_projection(raw):
@@ -272,6 +300,26 @@ def _planning_source_projection(raw):
     value = ast.dump(tree, include_attributes=False).encode()
     if context is not None: context.remember(key, value)
     return value
+
+
+def _epoch_dispatch_source_projection(raw):
+    """Normalize only the exact old/new serial epoch dispatch pair for membership."""
+    import ast
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest not in {
+            'b2d6be3fbc3ab2060bdfa683d372def0122669daa251b31c2000a759c4e4f610',
+            '23e64994de9127aad06e952dae996d7e7b24fd5d44e5c5877eb658d845d64e9b',
+            'a7a2302f4e835dcfe37b15278d624890065794673f7ee2182b18a9fd61e196e4'}:
+        raise ValueError('rolling epoch dispatch is outside the exact published Source pair')
+    tree = ast.parse(raw)
+    names = {'image_plan_check', 'validate_host_launch', 'publish_successor', 'enrollment_roots'}
+    found = set()
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name in names:
+            if node.name in found: raise ValueError('rolling epoch dispatch definition is duplicated')
+            found.add(node.name); node.body = [ast.Pass()]
+    if found != names: raise ValueError('rolling epoch dispatch definition set is incomplete')
+    return _planning_source_projection(ast.unparse(tree).encode())
 
 
 def _membership_code_path(path, target_source):
@@ -384,9 +432,16 @@ def _compatible_membership(producer, current, producer_sources):
     if rolling in old_code and rolling in new_code:
         before, after = old_code[rolling], new_code[rolling]
         _open(before); _open(after)
+        pair = (before['sha256'], after['sha256'])
+        epoch_predecessors = {
+            'b2d6be3fbc3ab2060bdfa683d372def0122669daa251b31c2000a759c4e4f610',
+            '23e64994de9127aad06e952dae996d7e7b24fd5d44e5c5877eb658d845d64e9b'}
+        project = (_epoch_dispatch_source_projection if pair[0] in epoch_predecessors and
+                   pair[1] == 'a7a2302f4e835dcfe37b15278d624890065794673f7ee2182b18a9fd61e196e4'
+                   else _planning_source_projection)
         if (before['mode'] != after['mode']
-                or _planning_source_projection(Path(before['path']).read_bytes())
-                != _planning_source_projection(Path(after['path']).read_bytes())):
+                or project(Path(before['path']).read_bytes())
+                != project(Path(after['path']).read_bytes())):
             return False
     def normalized(value, source):
         result = json.loads(_json(value))

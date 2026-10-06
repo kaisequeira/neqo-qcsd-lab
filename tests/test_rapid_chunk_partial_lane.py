@@ -219,6 +219,16 @@ def test_dynamic_binding_uses_actual_git_heads_and_recorded_isolated_runtime_not
     root, canonical, runtime = installed_fixture(tmp_path)
     # Controlled trusted runtime consumer; the actual current consumer is tested as a refusal below.
     monkeypatch.setattr(reader, '_consumer_root', lambda: root)
+    authenticated_readers = reader._reader_sources()
+    original_compatible = reader._compatible_reader_sources
+    def controlled_compatible(observed):
+        if observed != authenticated_readers:
+            raise ValueError('controlled reader set changed')
+        original_compatible(observed)
+        return str(root)
+    # The synthetic installed release is the recorded consumer root in this
+    # fixture; retain the real reader-byte check before mapping that root.
+    monkeypatch.setattr(reader, '_compatible_reader_sources', controlled_compatible)
     binding = reader.bind_source(root=root, canonical=canonical, runtime=runtime, audit_root=tmp_path / 'runtime-audit', output=tmp_path / 'binding.json')
     source = reader._source(binding)
     assert source['lab_head'] not in original.ORIGINAL_RELEASES

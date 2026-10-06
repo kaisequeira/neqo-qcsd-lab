@@ -85,6 +85,9 @@ def plan_payload(raw: bytes) -> dict[str, Any]:
     from .rapid_target_chunks import PLAN_TYPE as TARGET_CHUNK_PLAN_TYPE
     if isinstance(value, dict) and value.get("receipt_type") == TARGET_CHUNK_PLAN_TYPE:
         return admission._unpack(raw, TARGET_CHUNK_PLAN_TYPE)
+    from .rapid_epoch_target_chunks import PLAN_TYPE as EPOCH_TARGET_CHUNK_PLAN_TYPE
+    if isinstance(value, dict) and value.get("receipt_type") == EPOCH_TARGET_CHUNK_PLAN_TYPE:
+        return admission._unpack(raw, EPOCH_TARGET_CHUNK_PLAN_TYPE)
     from .rapid_ordinary_parallel_schedule import PLAN_TYPE as ORDINARY_PARALLEL_PLAN_TYPE
     if isinstance(value, dict) and value.get("receipt_type") == ORDINARY_PARALLEL_PLAN_TYPE:
         return admission._unpack(raw, ORDINARY_PARALLEL_PLAN_TYPE)

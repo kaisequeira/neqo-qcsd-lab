@@ -413,6 +413,9 @@ def _measurement_binding(report, source):
     if 'target_chunk_policy' in payload:
         from .rapid_target_chunks import require_partial_binding
         return require_partial_binding(report)
+    if 'epoch_target_chunk_policy' in payload:
+        from .rapid_epoch_target_chunks import require_partial_binding
+        return require_partial_binding(report)
     policy_ref = payload.get('slot_chunk_policy')
     if not isinstance(policy_ref, dict) or set(policy_ref) != {'path', 'sha256'}:
         raise ValueError('chunk partial slot policy has another schema')

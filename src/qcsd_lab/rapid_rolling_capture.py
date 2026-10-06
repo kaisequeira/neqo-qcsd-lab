@@ -1021,6 +1021,10 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
     if target_chunks.is_plan(spec.plan_receipt):
         result = target_chunks.verify_plan(spec, require_current=require_current, _context=_context)
         return _context.remember(key, result) if _context is not None else result
+    from . import rapid_epoch_target_chunks as epoch_chunks
+    if epoch_chunks.is_plan(spec.plan_receipt):
+        result = epoch_chunks.verify_plan(spec, require_current=require_current, _context=_context)
+        return _context.remember(key, result) if _context is not None else result
     from . import rapid_ordinary_parallel_schedule as ordinary_parallel
     if ordinary_parallel.is_plan(spec.plan_receipt):
         return ordinary_parallel.verify_plan(spec, require_current=require_current, _context=_context)
@@ -1308,6 +1312,13 @@ def image_plan_check(spec: lanes.CaptureSpec, runtime: Mapping[str, Any], *, _co
         own = lanes._read(Path(rapid_target_chunks.__file__))
         if own != lanes._read(spec.runtime_source_root / relative) or own != lanes._read(spec.module_root / relative):
             raise ValueError("target chunk authority differs from the installed and frozen Source")
+    if "epoch_target_chunk_policy" in payload:
+        from . import rapid_epoch_target_chunks, rapid_per_mode_native_target
+        for module in (rapid_epoch_target_chunks, rapid_per_mode_native_target):
+            relative = "src/qcsd_lab/" + module.__name__.rsplit(".", 1)[-1] + ".py"
+            own = lanes._read(Path(module.__file__))
+            if own != lanes._read(spec.runtime_source_root / relative) or own != lanes._read(spec.module_root / relative):
+                raise ValueError("epoch chunk authority differs from the installed and frozen Source")
     if "front_capture_amendment" in payload:
         from . import rapid_front_capture_amendment
         relative = "src/qcsd_lab/rapid_front_capture_amendment.py"
@@ -1356,6 +1367,10 @@ def validate_host_launch(value: Any, *, expected_campaign: str, actual_image: st
     if (lane.study_version != 6 or lane.campaign_name != expected_campaign
         or intent["actuator"] not in {"run", "parallel-formal-worker"}):
         raise ValueError("rolling host launch requires its exact formal lane")
+    payload = lanes.plan_payload(lanes._read(spec.plan_receipt))
+    if "epoch_target_chunk_policy" in payload:
+        from .rapid_epoch_target_chunks import require_intent
+        require_intent(payload["epoch_target_chunk_policy"], intent["started_at"])
     if intent["actuator"] == "parallel-formal-worker":
         from .rapid_rolling_schedule import require_schedule
         payload = lanes._payload(spec.plan_receipt, lanes.PLAN_TYPE)
@@ -1372,6 +1387,9 @@ def publish_successor(spec: lanes.CaptureSpec, lane_name: str, generation: int, 
     from . import rapid_target_chunks as target_chunks
     if target_chunks.is_plan(spec.plan_receipt):
         return target_chunks.publish_successor(spec, lane_name, generation, output)
+    from . import rapid_epoch_target_chunks as epoch_chunks
+    if epoch_chunks.is_plan(spec.plan_receipt):
+        return epoch_chunks.publish_successor(spec, lane_name, generation, output)
     from . import rapid_ordinary_parallel_schedule as ordinary_parallel
     if ordinary_parallel.is_plan(spec.plan_receipt):
         return ordinary_parallel.publish_successor(spec, lane_name, generation, output)
@@ -1420,6 +1438,9 @@ def enrollment_roots(spec: lanes.CaptureSpec) -> list[Path]:
     from . import rapid_target_chunks as target_chunks
     if target_chunks.is_plan(spec.plan_receipt):
         return sorted(target_chunks.roots(spec))
+    from . import rapid_epoch_target_chunks as epoch_chunks
+    if epoch_chunks.is_plan(spec.plan_receipt):
+        return sorted(epoch_chunks.roots(spec))
     from . import rapid_ordinary_parallel_schedule as ordinary_parallel
     if ordinary_parallel.is_plan(spec.plan_receipt):
         return sorted(ordinary_parallel.roots(spec))

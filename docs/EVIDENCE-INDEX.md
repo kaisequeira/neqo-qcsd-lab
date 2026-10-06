@@ -7,7 +7,117 @@ not present in every clone. The [project ledger](../PROJECT.md),
 [runbook](CLASS-STUDY.md), [history](PROJECT-HISTORY.md) and
 [historical source map](HISTORY-SOURCE-MAP.md) are tracked and portable.
 
-## Fixed five target and current runtime, 6 October 2026
+## Fixed five target: current snapshot, 6 October 2026, 21:13 Sydney AEDT
+
+The official target has **35 enrolled classes** and **48/16,000 accepted
+formal traces**: forty ordinary, four Tamaraw8192 and four FRONT reserve V4.
+Candidate 87's complete 29-resource, four-origin graph became class 35 with
+zero new trace credit. The original target identity remains
+`694d6ede9643a192442917e3319de2d04344d89c4f1d41873014f9bfa49da34d`.
+The current 35-class target and original 48-row progress are
+`../diagnostic-rehearsals/q087-class35-target48-root-actual-20261007-001/target.json`
+(SHA-256 `2a5ad11cca690c1f8aaf0f99133c6064de161313a1f1c3c68aad113aff3fdc5a`)
+and sibling `progress35-with-original48.json`
+(SHA-256 `aada50f2035c587f5c1f3c848f89589ad8c0b605080b7dc46c040af62b728312`).
+The enrollment and target extension closed at sibling
+`enrollment-target35-actual-closed.json`
+(SHA-256 `40f111b54e0757d0d158f5d9720ada16654d1281db4f5cd8a36aa93efdcdb3c9`).
+
+The published Lab `46121119d16bf307a42249bbd9cca7e85092ccfa` and Native
+`818d89398a5b0bc725e424b648d878185d18125d` now have a matching v36
+runtime with all twelve operations closed 0. Its closure is
+`../diagnostic-rehearsals/rapid-v36-cs-tam-repaired-native-runtime-root-actual-20261007-001/runtime-actual-closed.json`
+(SHA-256 `383f35c3d651e8b66ab945157a7c541b9b037f33c7ad610b4c2260df377975a5`);
+the canonical runtime and installed client have SHA-256
+`05286c0e289a22467c0bc7f9c3de77b41b40503a40f5813012806578808197ad`
+and `2c9f170e1e087d116a66571e2637e605967352501131ba9a4ef0052d19321dac`.
+The actual repaired-pair installed Source binding closed at
+`../diagnostic-rehearsals/source36-installed-epoch-binding-root-actual-20261007-001/runtime-source.json`
+(SHA-256 `3332cbc387aa10ac7580d23ea6f25e0be88b7ebbd21bd75498fb0587ab10141e`).
+It grants no epoch declaration or capture credit.
+
+Class 17's repaired Tamaraw8192 and canonical CS-BuFLO canaries each passed
+qualification, one practice capture, independent deep verification and
+readiness over the complete 58-resource, two-origin graph. The four actual
+operation completions for Tamaraw are under
+`../diagnostic-rehearsals/selected-class017-tamaraw-v36-repair-canary-root-actual-20261007-001/operations/`:
+`qualify-completed.json` (SHA-256 `8e030ad72bfdf65286f2e28f8a5c7a0cd3e7a5b7217be5786c46561b76a1af49`),
+`capture-completed.json` (`c2b7be31b1d11a32dc1bfe6c36e1a0166bf91798cd1787978a5e3aa452eeb3c5`),
+`deep-completed.json` (`be56980855b95cdef99ebc3356b34e520ec47ee9dfc178658336794cc1adc47e`),
+and `readiness-completed.json` (`43866734ab467d0c2f647c8d6fcf4374ffc1d347e375484e31a93f821e7f560e`).
+The corresponding CS-BuFLO completions are under
+`../diagnostic-rehearsals/selected-class017-cs-buflo-v36-repair-canary-root-actual-20261007-001/operations/`:
+`qualify-completed.json` (`7bcae2792f04711f306c5c020212b1b384125c2b6a2be02bc1f9497fef5bbacc`),
+`capture-completed.json` (`06af3e9f26b13d7120db6073a945a6ca2d7ea12ebbdb25bc64d34a2e21f551f5`),
+`deep-completed.json` (`6913224891d28df4c3d132861f20ffad5715281632bd25237d008ecafb07e307`),
+and `readiness-completed.json` (`6fb5515d7cd6bb528ad900111378f60bd96b8c5287052ab62a6eff2957d6ad66`).
+These are practice and readiness, not formal accepted rows.
+
+The FRONT remaining-visit UV-mounted successor passed policy at
+`../diagnostic-rehearsals/frontv4-class017-v34-installed-target-chunks-uv-python-root-actual-20261007-001/operations/policy-completed.json`
+(SHA-256 `65e38bbef4d985c236820e838999952cfeefdc3376d4f46fac7efe04b80a3feb`).
+Its plan was still running at this snapshot; no further FRONT formal trace
+was added.
+
+A later HOST-only Source34 directory-transport review at
+`../diagnostic-rehearsals/source34-target-chunk-directory-transport-independent-review-20261007-001/review.json`
+(SHA-256 `a6d2ddcf7638e5ce4edbb8e4f8a457c6a7a14da24e93228088f12f1eab3828e5`)
+confirmed that the original chunk roots include authenticated regular files,
+while the image launcher requires directory mounts. Its direct guard refused
+before Docker; no old FRONT remaining-visit launch or credit follows from the
+policy receipt. The prospective epoch consumer uses directory parents and
+requires a future matching installation and new current-mode canary.
+
+## Earlier fixed five snapshot, 6 October 2026, 20:25 Sydney AEDT
+
+The official fixed-target progress has **34 enrolled classes** and **48/16,000
+accepted traces**: forty ordinary, four Tamaraw8192 and four FRONT reserve V4.
+Its target identity remains
+`694d6ede9643a192442917e3319de2d04344d89c4f1d41873014f9bfa49da34d`.
+The progress at that checkpoint was
+`../diagnostic-rehearsals/fixed-target-frontv4-class017-v34-intake-root-actual-20261007-001/progress-with-front-v4-four.json`
+(SHA-256 `8e202e48eaff13fa7e4962c78af97ee272cbd71d6e204b791651b62a8009971c`);
+the 34-class target is
+`../diagnostic-rehearsals/fixed-target-enrollment34-root-actual-20261007-001/target.json`
+(SHA-256 `7c2c7f244a391de560dfb0a5ed77c4a690b4bca8ed7dc76c8abb081204e79514`).
+Class 17's first four FRONT V4 visits have a closed formal lane at
+`../diagnostic-rehearsals/frontv4-class017-b0005-v34-formal-root-actual-20261007-001/lanes/rapid-curated-tranco50-v6-formal-b01-s05-front-1200/complete.json`
+(SHA-256 `b4628110fc6acc22cf3acd9194bb586b82c978fbadb1903a696786797e2c6bbf`)
+and independent deep completion at
+`../diagnostic-rehearsals/frontv4-class017-b0005-v34-flight-20261007-001/logs/front-deep-completed.json`
+(SHA-256 `8544afc0696cab84bb4f9c20ad392a0d25e5bcba5f95520817de2a11146e4ebf`).
+
+Lab Source `46121119d16bf307a42249bbd9cca7e85092ccfa` and Native
+`818d89398a5b0bc725e424b648d878185d18125d` were published at
+`../diagnostic-rehearsals/rapid-epochs-action-boundary-scoped-reader-lab-publication-root-actual-20261007-001/publication-actual-closed.json`
+(SHA-256 `414f94874d40c8119fe40b1da8a07bddd8b01394eb5c728d5dba2fbe13636263`).
+The combined HOST closure is
+`../diagnostic-rehearsals/rapid-epoch-action-boundary-selected-scope-lab-composition-root-actual-20261007-001/source-closure-final.json`
+(SHA-256 `2637c2e3fcf4dc668d0468d7661512e2be87aa7f523820302008479eb8db2427`);
+the fourteen focused Native SDK passes are recorded at
+`../diagnostic-rehearsals/tamaraw-final-drain-cached-sdk-root-actual-20261007-002/focused-tests-actual-closed.json`
+(SHA-256 `ee0ee721b0d29dc2a57dea007f1fb51e8dd5c145e5f306e468dd1d735820bf22`).
+The cached v36 runtime build was still live at this snapshot, so this publication
+does not establish an installed runtime or a new physical capture.
+
+Supplied candidate 87 passed its complete 29-resource, four-origin GET and
+admission accounting, then selected-input preparation at
+`../diagnostic-rehearsals/per-class-admitted-supplied-tail-q087-v36-root-actual-20261007-001/preparation-actual-closed.json`
+(SHA-256 `b781bcbed0f19c8d53e4e3aedb2d72cdf335bfc39ca337459ba4f24a4f0a0bdc`).
+It has no enrollment or formal credit at this snapshot. Candidates 84–86
+closed as operational deferrals with no site credit; their account receipts
+are under `../diagnostic-rehearsals/supplied-static-budget64-q084-v3-root-actual-20261007-001/operations/`,
+and corresponding `q085` and `q086` directories.
+
+The FRONT remaining-visit chunk-inputs passed, but the following policy
+operation failed when its authenticated historical operation referenced a UV
+Python interpreter absent from the installed image's mounts. A held read-only
+mount successor is at
+`../diagnostic-rehearsals/frontv4-class017-v34-installed-target-chunks-uv-python-root-handoff-20261007-001/handoff-closed.json`
+(SHA-256 `7e2e5a7bd28cc55be31feb2323b91fe1df9a512c186f5da9c58d224b989f5432`).
+It had not run at this checkpoint; no further FRONT credit follows from it.
+
+## Earlier fixed five checkpoint and runtime, 6 October 2026
 
 At **17:09 Sydney AEDT**, the accepted fixed-target counter is **44/16,000
 traces across 31 enrolled classes**: forty ordinary plus class 17's four
