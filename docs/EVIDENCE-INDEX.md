@@ -7,7 +7,51 @@ not present in every clone. The [project ledger](../PROJECT.md),
 [runbook](CLASS-STUDY.md), [history](PROJECT-HISTORY.md) and
 [historical source map](HISTORY-SOURCE-MAP.md) are tracked and portable.
 
-## Fixed five target: current Source45 snapshot, 7 October 2026
+## Fixed five target: current Source46 snapshot, 7 October 2026
+
+The official target remains **35 enrolled classes and 56/16,000 accepted
+formal rows**: 48 ordinary, four Tamaraw8192, four FRONT reserve V4 and zero
+BuFLO or CS-BuFLO. The unchanged joined progress SHA-256 is
+`75047b8e07e7efffe9821b62050d31f53a0e7300082ddc35d9025ca66d656f85`.
+Source45's failed two-worker launch added no row and did not prove physical
+parallel capture or recovery.
+
+Source46 publication SHA-256
+`a6b306d346bb69a6916521acad0c5f9c1636e62933da9d528928409863e95e71`
+binds Lab `9251ae4a5d4b636e6f2dd0955800a01a7e7f95c7`, unchanged Native
+`818d89398a5b0bc725e424b648d878185d18125d`, 26 passing focused cases
+and independent review. Matching cached runtime closure SHA-256
+`011ff72b0eabcf486c57722d4a6042772c44956779d70f3db87b9119a20a8279`
+records twelve passed installation/export operations with the existing client
+and no Rust rebuild. The new Lab archive records `tar.umask=0022`; the prior
+cached archive's `tar.umask=0002` and `cp -a` had carried `0664` module modes
+into Source45. The actual installed-image diagnostic SHA-256
+`895ea95542381d089a9920196bcaebc24a7394f973a1e6e324b4e5d6d602f49c`
+reopened 154 installed Python modules at `0644` with exact bytes and passed
+six historical reader guards plus 13 original source roles. The actual
+installed Source46 fixed8 read closure SHA-256
+`c31c18df3d59e7ab4e8ccbf78349e7268b63ac21fb6854fdef0298264e4b610f`
+passed on the original eight rows, complete 58- and 66-resource graphs and
+remaining ordinary visit ranges 4–19, 20–35, 36–51 and 52–63. It did not
+replay the full joined56 or add credit. Source46 ordinary practice then passed
+all eleven public steps. Its capture operation (SHA-256
+`8f5245df2108e9ff4e3203741f7a54db39ea90c7d388b57192dcfc0ff1d1d87e`)
+returned zero in 172.520 seconds over class 17's complete 58-resource,
+two-origin graph. Independent deep verification returned zero in 23.273
+seconds; the fixed-condition check also passed. Flight readiness SHA-256
+`10ba658bdb37bf2241f02c2c8a30f43c8bf81b12b8c146fb71efc92c49b4c603`
+retains class 18's complete 66-resource, two-origin graph as cohort metadata;
+class 18 had no separate practice capture. Readiness returned zero. This
+practice has zero formal credit; the first 64-row physical pair and failed-lane
+recovery remain unproved.
+
+For current source roles, see the [fixed target reader](../src/qcsd_lab/rapid_fixed_condition_target.py),
+[parallel planner](../src/qcsd_lab/rapid_target_parallel_schedule.py),
+[supplemental queue](../src/qcsd_lab/rapid_supplemental_cohort.py) and
+[operator path](RAPID-CAPTURE-PATH.md). Private operation directories are
+identified by receipt role and digest so a clone need not contain them.
+
+## Fixed five target: earlier Source45 snapshot, 7 October 2026
 
 The official fixed target has **35 enrolled classes and 56/16,000 accepted
 formal rows**: 48 ordinary, four Tamaraw8192, four FRONT reserve V4, and zero
@@ -46,7 +90,9 @@ returned 1. The installed-reader probe (stdout SHA-256
 showed the six correct reader SHA-256 values with installed mode `0664` rather
 than required HOST `0644`. The historical acquisition-reader guard refused
 before image preflight, worker birth or capture. The original twelve runtime
-checks had not covered this mode predicate. Two-worker physical capture and
+checks had not covered this mode predicate. The cached Lab archive's
+`tar.umask=0002`, preserved by `cp -a`, caused these modes; pip installation
+did not. Two-worker physical capture and
 failed-lane recovery remain unproved; no formal capture or 64-row append is
 claimed. A separate wrapper speed change passed 21 focused checks and review
 but remains uninstalled and does not repair this failure.

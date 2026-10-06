@@ -49,7 +49,36 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-### Latest verified checkpoint: 7 October, Source45
+### Latest verified checkpoint: 7 October, Source46
+
+The fixed target still has **35 enrolled classes and 56/16,000 accepted
+formal traces**: 48 ordinary, four Tamaraw8192 and four FRONT reserve V4.
+BuFLO and CS-BuFLO have no accepted rows. The target remains 50 eligible
+multi-origin sites, all five settings and 64 independently verified visits
+per site and setting. The Source45 first two-worker launch stopped before
+image preflight or worker birth, so it added no trace and proved no physical
+parallel capture or failed-lane recovery.
+
+Lab Source `9251ae4a` is published with unchanged Native `818d8939` and client
+`2c9f170e…`. Its matching cached runtime passed all twelve installation and
+export operations in about 203 seconds without a Rust rebuild. The failed
+Source45 installation carried `0664` Python module modes from a cached Lab
+archive created with `tar.umask=0002`; `cp -a` preserved those modes. The new
+local Lab archive records `tar.umask=0022`, and package normalization made all
+154 installed Python modules `0644` without changing their bytes. The actual
+installed diagnostic passed six historical acquisition-reader guards and 13
+original source roles. A separate installed Source46 read of the original
+eight ordinary rows passed with both complete 58- and 66-resource graphs and
+the remaining ranges 4–19, 20–35, 36–51 and 52–63 unchanged. These are
+source and planning proofs, not formal captures. The new ordinary practice
+canary then passed all eleven steps, including capture of class 17's complete
+58-resource, two-origin page, independent deep verification, the fixed-condition
+check and readiness. Class 18's complete 66-resource, two-origin graph remains
+bound in the cohort input and readiness; it was not separately captured in
+practice. The canary adds no formal row. The [evidence index](docs/EVIDENCE-INDEX.md)
+records the publication, runtime and read receipts.
+
+### Earlier verified checkpoint: 7 October, Source45
 
 The fixed five-condition target has **35 enrolled classes and 56/16,000
 accepted formal traces**: 48 ordinary, four Tamaraw8192 and four FRONT reserve
@@ -71,12 +100,14 @@ worker intents, each for 32 possible rows. The public launch then failed after
 about 43 minutes, before image preflight, worker birth or capture. The
 installed acquisition-reader guard found the six expected SHA-256 values but
 mode `0664` where the recorded HOST readers require `0644`; the twelve earlier
-installation checks had not covered this mode predicate. The **64 possible
+installation checks had not covered this mode predicate. The cached Lab
+archive's `tar.umask=0002`, carried through `cp -a`, caused these modes; pip
+installation was not the cause. The **64 possible
 new rows** were not captured or accepted. Two-worker physical capture and
 failed-lane recovery remain unproved, leaving the official count at 56. A
 separate wrapper speed change passed 21 focused checks and review, but is
-uninstalled and does not fix this permission failure. Corrected Python
-packaging or reader handling remains prospective; no Rust rebuild is needed.
+uninstalled at this historical checkpoint and does not fix this permission
+failure. Source46 subsequently corrected packaging without a Rust rebuild.
 
 The new [supplemental cohort reader](src/qcsd_lab/rapid_supplemental_cohort.py)
 can attach one to five original catalogue reservations to the genuine selected

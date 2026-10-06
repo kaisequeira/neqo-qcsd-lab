@@ -13,6 +13,26 @@ historical studies; their long build, browser-vector, fitting and nine-mode
 sequence does not gate this prospective five-setting study.
 
 **Current verified checkpoint, 7 October:** The fixed five-condition target
+still has **35 enrolled sites and 56/16,000 accepted formal traces**: 48
+ordinary, four Tamaraw8192 and four FRONT reserve V4. Source46 `9251ae4a`
+is published with unchanged Native `818d8939` and client `2c9f170e…`. Its
+matching cached runtime passed all twelve installation/export operations
+without a Rust rebuild. Source45's failed installed reader modes came from a
+Lab archive made with `tar.umask=0002`, preserved by `cp -a`. The Source46
+Lab archive records `tar.umask=0022`; an actual installed diagnostic passed
+with 154 Python modules at `0644`, six historical reader guards and 13
+original source roles. The installed Source46 reader also reopened the
+original eight ordinary rows and complete 58- and 66-resource graphs, with
+remaining visits 4–19, 20–35, 36–51 and 52–63 on each site. Its new ordinary
+practice canary passed all eleven public steps, including capture and deep
+verification of class 17's complete 58-resource, two-origin page and the
+fixed-condition check. Class 18's complete 66-resource, two-origin graph is
+bound as cohort/readiness metadata and had no separate practice capture.
+The canary adds no formal trace; two-worker physical capture and
+failed-lane recovery remain unproved. The [evidence index](EVIDENCE-INDEX.md#fixed-five-target-current-source46-snapshot-7-october-2026)
+lists the actual receipt digests.
+
+**Earlier verified Source45 checkpoint, 7 October:** The fixed five-condition target
 has **35 enrolled sites and 56/16,000 accepted formal traces**: 48 ordinary,
 four Tamaraw8192 and four FRONT reserve V4. Source45 `6879602e` and Native
 `818d8939` have a matching installed runtime; all twelve installation
@@ -27,11 +47,13 @@ check and recorded two worker intents for 32 possible rows each. The public
 launch failed after about 43 minutes, before image preflight, worker birth or
 capture. Six acquisition readers had matching SHA-256 values but installed
 mode `0664` rather than required HOST `0644`; the earlier twelve runtime
-checks had not covered this mode predicate. None of the **64 possible rows**
+checks had not covered this mode predicate. The cached Lab archive's
+`tar.umask=0002`, carried through `cp -a`, caused the mode mismatch; pip
+installation did not. None of the **64 possible rows**
 was captured or accepted. Two-worker physical capture and failed-lane recovery
 remain unproved. A reviewed 21-check wrapper speed change is uninstalled and
 does not fix this permission failure.
-The [evidence index](EVIDENCE-INDEX.md#fixed-five-target-current-source45-snapshot-7-october-2026)
+The [evidence index](EVIDENCE-INDEX.md#fixed-five-target-earlier-source45-snapshot-7-october-2026)
 gives the actual receipt digests.
 
 For additional sites, [declare a supplemental
