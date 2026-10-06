@@ -7,7 +7,57 @@ not present in every clone. The [project ledger](../PROJECT.md),
 [runbook](CLASS-STUDY.md), [history](PROJECT-HISTORY.md) and
 [historical source map](HISTORY-SOURCE-MAP.md) are tracked and portable.
 
-## Fixed five target: current snapshot, 6 October 2026, 23:06 Sydney AEDT
+## Fixed five target: current Source45 snapshot, 7 October 2026
+
+The official fixed target has **35 enrolled classes and 56/16,000 accepted
+formal rows**: 48 ordinary, four Tamaraw8192, four FRONT reserve V4, and zero
+BuFLO or CS-BuFLO. The 56-row joined progress receipt has SHA-256
+`75047b8e07e7efffe9821b62050d31f53a0e7300082ddc35d9025ca66d656f85`.
+It retains the original older rows, condition identities, site graphs and
+Native epoch labels. The final target remains 50 sites × five settings × 64
+visits; 64 planned ordinary rows are conditional, not yet accepted.
+
+The Source45 publication receipt has SHA-256
+`c85cb2ceee0374df0c5451567c2a39502c5844faaa9baf768e55ef4b9bf641b1`.
+It binds Lab `6879602ea99279c01a7bc6e9c30e00e343a7abad`, unchanged Native
+`818d89398a5b0bc725e424b648d878185d18125d`, the 43 distinct focused
+HOST checks and the independent source review. The matching installed-runtime
+closure has SHA-256
+`fbe2796bf53fb1b2f4c5a6119ae3bc256cd8eaee978394cca0561b77f0de3fe9`:
+all twelve installation/export operations passed using the existing client,
+with no Rust rebuild. The fresh ordinary practice readiness receipt has SHA-256
+`77dc88551a0a46457ce61246624529178c52cffb46dace71aa751eddd8e8fccf`.
+Its actual capture and independent deep verification covered class 17's
+complete 58-resource, two-origin page. The complete 66-resource, two-origin
+class 18 graph is retained in cohort input and readiness metadata; class 18
+had no practice capture. The fixed-condition check passed. Practice adds zero
+formal credit. All seven public first-pair formal planning steps passed for
+visits 4–19 and 20–35 on each site. The original prepare receipt (SHA-256
+`67336b92538cdcf7f27567ab84848a00f53aa01211c6780f612d521d9dd8a551`)
+returned zero after the required installed-image check. Its two-lane authority
+receipt (SHA-256
+`5f48380c030245bdd943ee38c5618330132b295b32b4d4d8716d238fea0e5a2a`)
+records two intents of 32 possible rows each. The public launch receipt
+(SHA-256 `a91db1cdef5d0d586ab86da13142548f1594b9601ac00ae7f9621487bf627007`)
+returned 2 after 2,583.675 seconds; its host-process receipt (SHA-256
+`06a715f13f33d20273e3e5c1efff47d4cafb9571925de9f1c0f2a6c077a800be`)
+returned 1. The installed-reader probe (stdout SHA-256
+`9e1ff0357170eb0c0787c71596f567f2ba32b335b2f41f7974d8b15ca8a659e9`)
+showed the six correct reader SHA-256 values with installed mode `0664` rather
+than required HOST `0644`. The historical acquisition-reader guard refused
+before image preflight, worker birth or capture. The original twelve runtime
+checks had not covered this mode predicate. Two-worker physical capture and
+failed-lane recovery remain unproved; no formal capture or 64-row append is
+claimed. A separate wrapper speed change passed 21 focused checks and review
+but remains uninstalled and does not repair this failure.
+
+For current source roles, see the [fixed target reader](../src/qcsd_lab/rapid_fixed_condition_target.py),
+[parallel planner](../src/qcsd_lab/rapid_target_parallel_schedule.py),
+[supplemental queue](../src/qcsd_lab/rapid_supplemental_cohort.py) and
+[operator path](RAPID-CAPTURE-PATH.md). Private operation directories are
+identified above by receipt role and digest so a clone need not contain them.
+
+## Fixed five target: earlier snapshot, 6 October 2026, 23:06 Sydney AEDT
 
 The retained official target remains **35 enrolled classes and 48/16,000
 accepted traces**. The target/progress references in the earlier checkpoint

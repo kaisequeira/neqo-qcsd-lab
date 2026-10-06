@@ -1,6 +1,6 @@
 # Rapid capture path: from candidates to 16,000 verified traces
 
-**Planning and implementation status, 6 October 2026 (Australia/Sydney).** This is the run order
+**Planning and implementation status, 7 October 2026 (Australia/Sydney).** This is the run order
 for the prospective [50-site study](RAPID-CLASS-STUDY.md). Its formal target is
 **50 websites × five traffic settings × 64 visits = 16,000 accepted traces**.
 The five settings are undefended, FRONT, Tamaraw, BuFLO and CS-BuFLO.
@@ -12,7 +12,52 @@ Diagnostic and failed recordings retain zero formal credit. The earlier
 historical studies; their long build, browser-vector, fitting and nine-mode
 sequence does not gate this prospective five-setting study.
 
-**Latest verified checkpoint, 6 October, 17:09 Sydney AEDT:** The fixed-condition
+**Current verified checkpoint, 7 October:** The fixed five-condition target
+has **35 enrolled sites and 56/16,000 accepted formal traces**: 48 ordinary,
+four Tamaraw8192 and four FRONT reserve V4. Source45 `6879602e` and Native
+`818d8939` have a matching installed runtime; all twelve installation
+operations passed with the existing client and no Rust rebuild. Fresh ordinary
+practice passed capture and independent deep verification on class 17's full
+58-resource, two-origin page, followed by the fixed-condition comparison and
+readiness. Class 18's full 66-resource, two-origin graph remains in cohort
+input and readiness metadata; class 18 had no practice capture.
+All seven public first-pair planning steps passed for disjoint visits 4–19 and
+20–35 on each site. The original formal prepare passed its installed-image
+check and recorded two worker intents for 32 possible rows each. The public
+launch failed after about 43 minutes, before image preflight, worker birth or
+capture. Six acquisition readers had matching SHA-256 values but installed
+mode `0664` rather than required HOST `0644`; the earlier twelve runtime
+checks had not covered this mode predicate. None of the **64 possible rows**
+was captured or accepted. Two-worker physical capture and failed-lane recovery
+remain unproved. A reviewed 21-check wrapper speed change is uninstalled and
+does not fix this permission failure.
+The [evidence index](EVIDENCE-INDEX.md#fixed-five-target-current-source45-snapshot-7-october-2026)
+gives the actual receipt digests.
+
+For additional sites, [declare a supplemental
+queue](../tools/rapid_supplemental_cohort.py) of one to five original
+catalogue reservations against the genuine selected ledger. Keep each ID and
+position, the complete graph with every resource and origin, or its actual
+typed discovery failure. A complete graph needs at least two resource origins
+before full GET; one-origin graphs receive study input rejection with HTTP/3
+unassessed. The queue uses a five-field declared runtime binding that must
+match the **installed** Lab source, image, source manifest, Native commit and
+client. The [GET/admission tool](../tools/rapid_whole_graph_supplement.py)
+keeps ordered decisions; it does not replay unrelated original-87 acquisition
+histories or give site credit before actual admission and enrollment.
+
+For a ready setting, use the [fixed-target slot planner](../tools/rapid_fixed_condition_target.py)
+and [parallel scheduler](../tools/rapid_target_parallel.py) with its current
+full-graph canary, exact fixed condition, original caps, current runtime and
+genuine progress. Each setting's readiness is independent. The original
+[formal operator](../tools/rapid_formal_parallel.py)
+checks the installed image before intent, then each lane needs independent
+verification. After batch completion and container retirement, a verified
+complete peer can be retained. Retry a failed parallel chunk in full in a
+fresh generation; incomplete-worker traces remain raw and unpromoted.
+Physical two-worker recovery remains unproved.
+
+**Earlier verified checkpoint, 6 October, 17:09 Sydney AEDT:** The fixed-condition
 target has **31 enrolled classes and 44/16,000 accepted formal traces**: forty
 ordinary and four class-17 Tamaraw8192 visits. The four-visit lane passed
 independent deep verification, and its original-source audit and progress

@@ -1,6 +1,6 @@
 # QCSD thesis project ledger
 
-Checkpoint: **6 October 2026, 23:06 Australia/Sydney (AEDT, UTC+11)**.
+Checkpoint: **7 October 2026, Australia/Sydney (AEDT, UTC+11)**.
 This is the current research ledger. The [history](docs/PROJECT-HISTORY.md)
 preserves the development record, the [class-study runbook](docs/CLASS-STUDY.md)
 defines continuation, and the [capture-readiness guide](docs/CAPTURE-READINESS.md)
@@ -49,7 +49,47 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-### Latest verified checkpoint: 6 October, 23:06 Sydney AEDT
+### Latest verified checkpoint: 7 October, Source45
+
+The fixed five-condition target has **35 enrolled classes and 56/16,000
+accepted formal traces**: 48 ordinary, four Tamaraw8192 and four FRONT reserve
+V4. BuFLO and CS-BuFLO have no accepted rows. The target still requires 50
+eligible multi-origin sites, all five fixed settings and 64 independently
+verified visits per site and setting. Practice and failed attempts add no
+formal credit.
+
+Published Lab Source `6879602e` retains Native `818d8939` and the existing
+client `2c9f170e…`. Its matching runtime passed all twelve installation and
+export operations without a Rust rebuild. A fresh ordinary practice passed
+all eleven public steps. Its actual capture and independent deep verification
+covered class 17's complete 58-resource, two-origin page. The complete
+66-resource, two-origin class 18 graph remains bound in the cohort input and
+readiness metadata; class 18 had no practice capture. All seven public formal
+planning steps passed for two disjoint 16-visit ranges on each site. The
+original formal prepare then passed its installed-image check and created two
+worker intents, each for 32 possible rows. The public launch then failed after
+about 43 minutes, before image preflight, worker birth or capture. The
+installed acquisition-reader guard found the six expected SHA-256 values but
+mode `0664` where the recorded HOST readers require `0644`; the twelve earlier
+installation checks had not covered this mode predicate. The **64 possible
+new rows** were not captured or accepted. Two-worker physical capture and
+failed-lane recovery remain unproved, leaving the official count at 56. A
+separate wrapper speed change passed 21 focused checks and review, but is
+uninstalled and does not fix this permission failure. Corrected Python
+packaging or reader handling remains prospective; no Rust rebuild is needed.
+
+The new [supplemental cohort reader](src/qcsd_lab/rapid_supplemental_cohort.py)
+can attach one to five original catalogue reservations to the genuine selected
+ledger. It preserves candidate IDs, order and complete resource graphs, and
+requires a declared runtime to match the installed source, image and client
+before GET. A graph with fewer than two resource origins cannot enter this
+multi-origin study. Browser discovery and GET remain separate evidence roles;
+the new queue adds no site or trace credit by declaration alone. The
+[rapid capture path](docs/RAPID-CAPTURE-PATH.md) describes the operator order,
+and the [evidence index](docs/EVIDENCE-INDEX.md) records the current receipt
+types and digests without requiring a private workspace layout.
+
+### Earlier verified checkpoint: 6 October, 23:06 Sydney AEDT
 
 The official target remains **35 enrolled classes** and **48/16,000 accepted
 formal traces**: forty ordinary, four Tamaraw8192 and four FRONT reserve V4.
