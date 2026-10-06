@@ -51,13 +51,20 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ### Latest verified checkpoint: 7 October, Source46
 
-The fixed target still has **35 enrolled classes and 56/16,000 accepted
-formal traces**: 48 ordinary, four Tamaraw8192 and four FRONT reserve V4.
-BuFLO and CS-BuFLO have no accepted rows. The target remains 50 eligible
-multi-origin sites, all five settings and 64 independently verified visits
-per site and setting. The Source45 first two-worker launch stopped before
-image preflight or worker birth, so it added no trace and proved no physical
-parallel capture or failed-lane recovery.
+**35 classes are enrolled.** The current repaired fixed target `166b20f3…`
+has **8/16,000 accepted formal traces**, all ordinary. The broader joined
+multi-epoch target `b80b979d…` has **56 accepted rows**: 48 older rows plus
+those same eight. Its combined setting totals are 48 ordinary (40 older and
+eight current), four Tamaraw8192 and four FRONT reserve V4; BuFLO and
+CS-BuFLO have none. The eight rows are counted in both views, not added to
+make 64. The final goal remains 50 eligible multi-origin sites, all five
+settings and 64 independently verified visits per site and setting. The
+Source45 first two-worker launch stopped before image preflight or worker
+birth, so it added no row or physical parallel/recovery proof.
+Ubuntu and Docker are already on drive D with about 400 GiB free there; the
+Ubuntu guest filesystem itself has about 66 GB available. Small batches can
+proceed, but guest capacity must be expanded at a quiet WSL boundary before
+bulk capture. No resize has been performed.
 
 Lab Source `9251ae4a` is published with unchanged Native `818d8939` and client
 `2c9f170e…`. Its matching cached runtime passed all twelve installation and

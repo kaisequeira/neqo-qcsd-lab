@@ -12,9 +12,17 @@ Diagnostic and failed recordings retain zero formal credit. The earlier
 historical studies; their long build, browser-vector, fitting and nine-mode
 sequence does not gate this prospective five-setting study.
 
-**Current verified checkpoint, 7 October:** The fixed five-condition target
-still has **35 enrolled sites and 56/16,000 accepted formal traces**: 48
-ordinary, four Tamaraw8192 and four FRONT reserve V4. Source46 `9251ae4a`
+**Current verified checkpoint, 7 October:** **35 sites are enrolled.** The
+current repaired fixed target `166b20f3…` has **8/16,000 accepted formal
+traces**, all ordinary. The broader joined multi-epoch target `b80b979d…`
+has **56 accepted rows**: 48 older plus those same eight. Its combined
+setting totals are 48 ordinary (40 older and eight current), four Tamaraw8192
+and four FRONT reserve V4. No BuFLO or CS-BuFLO formal rows are accepted.
+The two counts describe overlapping evidence; they do not sum to 64.
+Ubuntu and Docker are already on drive D, but the Ubuntu guest filesystem has
+about 66 GB available; plan a quiet-boundary capacity expansion before bulk
+capture. No resize has been performed.
+Source46 `9251ae4a`
 is published with unchanged Native `818d8939` and client `2c9f170e…`. Its
 matching cached runtime passed all twelve installation/export operations
 without a Rust rebuild. Source45's failed installed reader modes came from a

@@ -9,12 +9,25 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ## Fixed five target: current Source46 snapshot, 7 October 2026
 
-The official target remains **35 enrolled classes and 56/16,000 accepted
-formal rows**: 48 ordinary, four Tamaraw8192, four FRONT reserve V4 and zero
-BuFLO or CS-BuFLO. The unchanged joined progress SHA-256 is
+**35 classes are enrolled.** The current repaired fixed target ID
+`166b20f3aed136ea8442b0412855857cb9dd0bf71d390e3308df1e5d1cdd3c53`
+has **8/16,000 accepted formal rows**, all ordinary; its progress receipt
+SHA-256 is
+`f326b86d7b5179aa5f78f6f979cbbb812d53d93f27b492af37f9d9ec1cdba2bc`.
+The broader joined multi-epoch target ID
+`b80b979dc9925aa540f63017d9c92ab797e321bee774fe7e6b7d8c605c8dcc77`
+has **56 accepted rows**: 48 older rows plus the same eight current rows.
+Its joined progress SHA-256 is
 `75047b8e07e7efffe9821b62050d31f53a0e7300082ddc35d9025ca66d656f85`.
-Source45's failed two-worker launch added no row and did not prove physical
-parallel capture or recovery.
+Those 56 comprise 48 ordinary in total (40 older and eight current), four
+Tamaraw8192 and four FRONT reserve V4, with zero BuFLO or CS-BuFLO. The
+eight are shared by both views, not additional rows. Source45's failed
+two-worker launch added no row or physical parallel/recovery proof.
+Read-only host-volume and guest-filesystem operations closed zero with receipt
+SHA-256 values `8956ccce4a2da918048ac736160453e866fda79bed1225e1aae80dba555dd5be`
+and `5194d619b3560e81226c58c5e2356e6c25d0faedc3bc24f3075e92e844ce4f2c`.
+Ubuntu and Docker are already on D with about 400 GiB free, while the guest
+filesystem has about 66 GB available. No resize or capture credit followed.
 
 Source46 publication SHA-256
 `a6b306d346bb69a6916521acad0c5f9c1636e62933da9d528928409863e95e71`
