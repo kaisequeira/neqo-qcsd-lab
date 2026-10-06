@@ -172,7 +172,8 @@ _READER_COMPATIBILITY_HELPERS = {
                '_compatible_selected_membership_code', '_epoch_dispatch_source_projection',
                '_epoch_dynamic_source_projection', '_parallel_facts_source_projection',
                '_parallel_schedule_source_projection', '_acquisition_reader_sources',
-               '_compatible_acquisition_code'),
+               '_compatible_acquisition_code', '_cohort_acquisition_source_projection',
+               '_membership_additive_reader_roles'),
     'dynamic': ('_compatible_reader_sources',),
 }
 _ACTION_LOCAL_SOURCE_FACTS_SHA256 = '34586599ad4eeeb1f765eb5ff7ca0d36559be2ef0a7d7521eff0fc7a681e4c0c'
@@ -266,7 +267,8 @@ def _compatible_code_ref(role, producer, current):
                        '2644a9156562a2b8b377f9ee019325ce2cda04a4dfc0770bdbb89013fcede14c',
                        '8a263b9d3f2bfac765170edaf05eee6bff77e3523ea8cd635f1f831b37ab1676',
                        '5efeb8f9bdce65d4eb43e781e6388ac84a83453378812d456dc40862bd955b36',
-                       '26b41cd9cff02e7dde8b9dbda902fa69d370fe5b242dd075f41c5db39c356b26'})
+                       '26b41cd9cff02e7dde8b9dbda902fa69d370fe5b242dd075f41c5db39c356b26',
+                       '784ceb0f5e5a8cbde41eafdee4bb209781ba2df352cd72a0fbab8f24eacc46cf'})
     epoch_dynamic = (role == 'dynamic' and producer['sha256'] in {
         '17d9b19159a521e7c18cea732ba8ed44dff6044a18442807a716e793586cb3a3',
         'e5c49b345c0e5acb1af442dbaae7d2caabfcdcf09892239d5ebb78f5d03a318a',
@@ -416,11 +418,12 @@ def _membership_code_path(path, target_source):
 def _acquisition_reader_sources():
     """Authenticate this one prospective reader set before historical reuse."""
     sources = {
-        'rapid_selected_capture_input.py': 'f12460f830c4f4ba7a2d5c5600be59c7fd9800ee0d974692b24bba84ed356308',
+        'rapid_selected_capture_input.py': 'ba8caa645d219a52eb1e177285bb7e9f9198a1b59c46fdb37692f95206230442',
         'rapid_selected_budget_input.py': '3f03bae31b667535adab316fea98cc34f19bf9292bc1b041f428eb3a02dee3cb',
-        'rapid_per_class_selected_enrollment.py': '3436b935a6f0e2124bd64195bffadfeec7870f3824c76726d7f5e3c7bc8a5fad',
+        'rapid_per_class_selected_enrollment.py': '410616cb3f2847a9cfa48b62229bd4f65f72b2e2f4857f8c50c981fb7dcb46a5',
         'whole_graph_input.py': 'a95019161d069fda019de74768a13283a4a37d89fc6cddab0b2ddd0b52540245',
-        'whole_graph_supplement.py': '80bd66d3d710f5f14cf4827b43245d96af75e8ec0994418bed480e3c2a348357',
+        'whole_graph_supplement.py': '72a3e7030356955033fefab3703abe895c4fdb264910ea9c4d40ca398f175052',
+        'rapid_supplemental_cohort.py': '12eec36c6bcd6ab27790f8f6d77ca724d775f108d0bb08f41214b61310a092be',
     }
     _open(reference(Path(__file__)))
     result = {}
@@ -431,6 +434,57 @@ def _acquisition_reader_sources():
             raise ValueError('historical acquisition reader is outside the exact prospective Source set')
         result['src/qcsd_lab/' + name] = item
     return result
+
+
+def _cohort_acquisition_source_projection(raw, relative):
+    """Remove only the exact prospective dispatch statements, retaining old bodies."""
+    import ast
+    import_sha = 'f2a706dd23b2283470da2476cf29e830c18e1433543e5b72f09e1106c356aaaa'
+    order_sha = '2051f49616452fcfdc2829e49f13928271d068877a5dc1e9bc4867cd07fd17a0'
+    if relative == 'src/qcsd_lab/whole_graph_supplement.py':
+        expected_sha = '72a3e7030356955033fefab3703abe895c4fdb264910ea9c4d40ca398f175052'
+        hooks = {
+            'load_context': ((0, import_sha), (1, '06b7c22232f3786dd56d2e1e93c034061ac244cabc0ed10147deacffa5ec6a77')),
+            'is_context': ((0, import_sha), (1, '0a81ca9efc243020b02578740d82f06c7d8317af09a4f42f63a752cd939219a6')),
+            'identity': ((0, '814cefc603c9a3e346826d2959668ff59c548fa5dd527ef1beea4d7c1b58efa3'),),
+            'execute_get': ((1, '04fed5e8421f404c2355d33212b785890a862b10d15aef26bfaa89d42d08c490'),),
+            'admit': ((0, order_sha),), 'record_deferral': ((0, order_sha),),
+            'record_input_rejection': ((0, order_sha),), 'verify_terminal': ((3, order_sha),),
+            'sealed_context_roots': ((1, '981972b92997f13eaa841369a07358001b12e5fd5477178e5811e5573a58d994'),),
+        }
+        helper_sha = '20d5a338047f73eca19a71c2214b81b9e990db0b32d6e8e55ae60cc242209bb4'
+    elif relative == 'src/qcsd_lab/rapid_per_class_selected_enrollment.py':
+        expected_sha = '410616cb3f2847a9cfa48b62229bd4f65f72b2e2f4857f8c50c981fb7dcb46a5'
+        hooks = {'_context_metadata': ((0, import_sha),
+            (1, 'f940f1b783f9f1e09d0487902cb6719a17ac97b7369435fe16a4f6343ff9c3f0'))}
+        helper_sha = None
+    else:
+        return raw
+    if hashlib.sha256(raw).hexdigest() != expected_sha:
+        raise ValueError('cohort dispatch is outside the exact prospective Source')
+    tree = ast.parse(raw); seen = set(); retained = []; helpers = 0
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == '_cohort':
+            helpers += 1
+            if (helper_sha is None or helpers != 1 or
+                    hashlib.sha256(ast.dump(node, include_attributes=False).encode()).hexdigest() != helper_sha):
+                raise ValueError('cohort dispatch helper changed its exact type guard')
+            continue
+        if isinstance(node, ast.FunctionDef) and node.name in hooks:
+            if node.name in seen:
+                raise ValueError('cohort dispatch repeats a protected definition')
+            seen.add(node.name)
+            for index, sha in hooks[node.name]:
+                if (index >= len(node.body) or
+                        hashlib.sha256(ast.dump(node.body[index], include_attributes=False).encode()).hexdigest() != sha):
+                    raise ValueError('cohort dispatch changes the exact prospective branch')
+            indices = {index for index, _ in hooks[node.name]}
+            node.body = [item for index, item in enumerate(node.body) if index not in indices]
+        retained.append(node)
+    if seen != set(hooks) or helpers != (1 if helper_sha is not None else 0):
+        raise ValueError('cohort dispatch definition set is incomplete')
+    tree.body = retained
+    return ast.unparse(tree).encode()
 
 
 def _compatible_acquisition_code(relative, before, after):
@@ -447,7 +501,8 @@ def _compatible_acquisition_code(relative, before, after):
         return True
     roles = {
         'src/qcsd_lab/rapid_selected_capture_input.py': (
-            {'ef14e839e0c1ab1b1540a9b8c024f0e8545c1a3cf5478deec30a500134aff337'},
+            {'ef14e839e0c1ab1b1540a9b8c024f0e8545c1a3cf5478deec30a500134aff337',
+             'f12460f830c4f4ba7a2d5c5600be59c7fd9800ee0d974692b24bba84ed356308'},
             {'validate_input'}, {'_compatible_direct_validator_sources'}, set()),
         'src/qcsd_lab/rapid_selected_budget_input.py': (
             {'d4bbea3459cccf36217fa9897fbef4a51f73b3690151ef8aec883344e84145ca',
@@ -460,21 +515,28 @@ def _compatible_acquisition_code(relative, before, after):
         'src/qcsd_lab/rapid_per_class_selected_enrollment.py': (
             {'512e140944a953707b2ac9326fdb2dd6928ac8a763b519174a46534de4f3b07f',
              '048c0766e3a68d198547f26f4516d4337665c58163c1b6fc1ee1870b9808dc52',
-             'd1860179aa08a911400eadc82cef3acb99b591f20656919cbe95268eeef64056'},
+             'd1860179aa08a911400eadc82cef3acb99b591f20656919cbe95268eeef64056',
+             '3436b935a6f0e2124bd64195bffadfeec7870f3824c76726d7f5e3c7bc8a5fad'},
             {'_policy_sources', 'verify_policy', 'membership_inputs'}, set(), set()),
         'src/qcsd_lab/whole_graph_supplement.py': (
             {'726c0d6215830730f3938b69545f3b4acc8c727dda3b4528a34732701f8d9f07',
-             'a12ba1de531fd37a4e6ab8abbc8497911ea51d4d45e54d452e3afc927058db66'},
+             'a12ba1de531fd37a4e6ab8abbc8497911ea51d4d45e54d452e3afc927058db66',
+             '80bd66d3d710f5f14cf4827b43245d96af75e8ec0994418bed480e3c2a348357'},
             {'_plan_rows', '_declaration'},
             {'_recognized_producer_sources', '_input_rejection', 'record_input_rejection'}, set()),
     }
     if relative not in roles or before['sha256'] not in roles[relative][0]:
         raise ValueError('acquisition reader is outside the exact historical/current Source pairs')
     _, changing, additions, declarations = roles[relative]
+    source44 = before['sha256'] in {
+        'f12460f830c4f4ba7a2d5c5600be59c7fd9800ee0d974692b24bba84ed356308',
+        '3436b935a6f0e2124bd64195bffadfeec7870f3824c76726d7f5e3c7bc8a5fad',
+        '80bd66d3d710f5f14cf4827b43245d96af75e8ec0994418bed480e3c2a348357'}
     def projection(raw, *, successor):
-        tree = ast.parse(raw); retained = []; removed = set(); added = set()
+        tree = ast.parse(_cohort_acquisition_source_projection(raw, relative) if successor else raw)
+        retained = []; removed = set(); added = set()
         for node in tree.body:
-            if (successor and relative.endswith('whole_graph_supplement.py')
+            if (successor and not source44 and relative.endswith('whole_graph_supplement.py')
                     and isinstance(node, ast.FunctionDef) and node.name == 'verify_terminal'):
                 branches = [item for item in node.body if isinstance(item, ast.If)
                     and ast.dump(item.test, include_attributes=False) == ast.dump(
@@ -511,7 +573,8 @@ def _compatible_acquisition_code(relative, before, after):
             required.remove('_v3_inventory')
         if before['sha256'] == '512e140944a953707b2ac9326fdb2dd6928ac8a763b519174a46534de4f3b07f' and not successor:
             required.remove('_policy_sources')
-        if removed != required | (additions if successor else set()) or added != (additions if successor else set()):
+        expected_additions = additions if successor or source44 else set()
+        if removed != required | expected_additions or added != expected_additions:
             raise ValueError('acquisition reader changed-unit projection is incomplete')
         tree.body = retained
         return ast.dump(tree, include_attributes=False)
@@ -608,6 +671,21 @@ def _compatible_sources(producer):
     return True
 
 
+def _membership_additive_reader_roles(old_code, new_code):
+    """Authenticate the two added readers before comparing an older read set."""
+    additions = set(new_code) - set(old_code)
+    allowed = {'src/qcsd_lab/whole_graph_input.py',
+               'src/qcsd_lab/rapid_supplemental_cohort.py'}
+    if not additions <= allowed:
+        return None
+    readers = _acquisition_reader_sources()
+    for relative in additions:
+        _open(new_code[relative])
+        if not _typed_equal(new_code[relative], readers[relative]):
+            raise ValueError('membership added reader differs from its exact current Source')
+    return additions
+
+
 def _compatible_membership(producer, current, producer_sources):
     """Reopen all original data; compare only membership-relevant code roles."""
     _compatible_sources(producer_sources)
@@ -618,6 +696,13 @@ def _compatible_membership(producer, current, producer_sources):
                 if _membership_code_path(Path(row['path']), source) is not None}
     old_code = code_refs(producer, producer_sources['target'])
     new_code = code_refs(current, executing['target'])
+    added_readers = _membership_additive_reader_roles(old_code, new_code)
+    if added_readers is None:
+        return False
+    for relative in added_readers:
+        if sum(_membership_code_path(Path(row['path']), executing['target']) == relative
+               for row in current['files']) != 1:
+            raise ValueError('membership repeats an added current reader')
     selected_roles = ('src/qcsd_lab/rapid_selected_budget_input.py',
                       'src/qcsd_lab/rapid_per_class_selected_enrollment.py',
                       'src/qcsd_lab/rapid_selected_capture_input.py',
@@ -656,8 +741,11 @@ def _compatible_membership(producer, current, producer_sources):
                 _parallel_facts_source_projection(Path(before['path']).read_bytes()) !=
                 _parallel_facts_source_projection(Path(after['path']).read_bytes())):
             return False
-    def normalized(value, source):
+    def normalized(value, source, *, successor=False):
         result = json.loads(_json(value))
+        if successor:
+            result['files'] = [row for row in result['files']
+                if _membership_code_path(Path(row['path']), source) not in added_readers]
         for row in result['files']:
             relative = _membership_code_path(Path(row['path']), source)
             if relative is not None:
@@ -673,7 +761,8 @@ def _compatible_membership(producer, current, producer_sources):
         result['files'].sort(key=lambda row: row['path'])
         result['trees'].sort(key=lambda row: (row['path'], row['ignore_git']))
         return result
-    return _typed_equal(normalized(producer, producer_sources['target']), normalized(current, executing['target']))
+    return _typed_equal(normalized(producer, producer_sources['target']),
+                        normalized(current, executing['target'], successor=True))
 
 
 def _close(files, directories=()):

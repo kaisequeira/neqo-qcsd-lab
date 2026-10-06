@@ -60,6 +60,10 @@ def _policy_sources(value):
                  '048c0766e3a68d198547f26f4516d4337665c58163c1b6fc1ee1870b9808dc52'),
                 ('6283ef9cafac972d9df8696c1c4d0249c920db855f7a83fc8fcd8fce434d079d',
                  'd1860179aa08a911400eadc82cef3acb99b591f20656919cbe95268eeef64056'))]
+        historical.append({**current,
+            plain.__name__: 'f12460f830c4f4ba7a2d5c5600be59c7fd9800ee0d974692b24bba84ed356308',
+            selected_budget.__name__: '3f03bae31b667535adab316fea98cc34f19bf9292bc1b041f428eb3a02dee3cb',
+            __name__: '3436b935a6f0e2124bd64195bffadfeec7870f3824c76726d7f5e3c7bc8a5fad'})
         if value not in historical:
             raise ValueError('per-class policy changed its historical or current reader Source')
     return True
@@ -156,6 +160,9 @@ def _old_policy(policy):
 
 
 def _context_metadata(policy: dict, path: Path, *, _files: set[Path] | None = None) -> dict:
+    from . import rapid_supplemental_cohort as cohort
+    if cohort.is_context(path.parent):
+        return cohort.metadata(policy, path, _files)
     raw = lanes._load(lanes._read(path))
     previous = _old_policy(policy)
     if raw.get("receipt_type") != budget.CONTEXT_TYPE:

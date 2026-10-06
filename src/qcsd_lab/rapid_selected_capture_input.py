@@ -94,6 +94,12 @@ def _compatible_direct_validator_sources(value: Mapping[str, Any], expected: Map
                 'd4bbea3459cccf36217fa9897fbef4a51f73b3690151ef8aec883344e84145ca',
                 '9e13ebe6eb79f066b2d96e9fc1cb90056584d4ba02f203ec8d8b42da95c57cf7',
                 '6283ef9cafac972d9df8696c1c4d0249c920db855f7a83fc8fcd8fce434d079d'))
+    source44 = {**expected,
+        plain_name: 'f12460f830c4f4ba7a2d5c5600be59c7fd9800ee0d974692b24bba84ed356308',
+        whole_name: '80bd66d3d710f5f14cf4827b43245d96af75e8ec0994418bed480e3c2a348357'}
+    if budget_name in expected:
+        source44[budget_name] = '3f03bae31b667535adab316fea98cc34f19bf9292bc1b041f428eb3a02dee3cb'
+    historical.append(source44)
     if recorded not in historical:
         return False
     modules = {module.__name__: module for module in _direct_modules()}

@@ -83,7 +83,8 @@ def main(argv=None):
         print(json.dumps({'operation':args.action,'status':'closed','result':result},sort_keys=True))
         return 0
     except (OSError,ValueError,KeyError,TypeError,subprocess.SubprocessError) as error:
-        print(json.dumps({'operation':args.action,'status':'refused','error_type':type(error).__name__},sort_keys=True))
+        print(json.dumps({'operation':args.action,'status':'refused','error_type':type(error).__name__,
+            'error_message':str(error)},sort_keys=True))
         return 1
 
 

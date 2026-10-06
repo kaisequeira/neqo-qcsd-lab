@@ -95,6 +95,11 @@ class Context:
     candidates: tuple[dict[str, Any], ...]
 
 
+def _cohort(context: Context):
+    from . import rapid_supplemental_cohort as cohort
+    return cohort if isinstance(context.original, cohort.CohortAnchor) else None
+
+
 def _plan_rows(plans: list[dict[str, Any]], prefix: static.Context) -> tuple[dict[str, Any], ...]:
     rows, seen = [], {row["candidate_id"] for row in prefix.candidates}
     domains = {row["domain"] for row in prefix.candidates}
@@ -214,6 +219,9 @@ def initialize_context(root: Path, *, original_context: Path, plans: list[Path],
 
 
 def load_context(root: Path, *, _seen: frozenset[Path] = frozenset()) -> Context:
+    from . import rapid_supplemental_cohort as cohort
+    if cohort.is_context(root):
+        return cohort.load_context(root)
     root = root.absolute()
     if root in _seen:
         raise ValueError("supplement context lineage contains a cycle")
@@ -275,10 +283,15 @@ def load_context(root: Path, *, _seen: frozenset[Path] = frozenset()) -> Context
 
 
 def is_context(root: Path) -> bool:
+    from . import rapid_supplemental_cohort as cohort
+    if cohort.is_context(root):
+        return True
     return get._load(get._read(root / "provenance.json")).get("receipt_type") == CONTEXT_TYPE
 
 
 def identity(context: Context) -> dict[str, str]:
+    if _cohort(context):
+        return dict(context.original.provenance["admission_identity"])
     return static.identity(context.original)
 
 
@@ -450,6 +463,8 @@ def failure_proof(root: Path, *, context: Context, position: int, namespace: Any
 
 def execute_get(context_root: Path, position: int, root: Path) -> dict:
     context = load_context(context_root)
+    if _cohort(context):
+        _cohort(context).require_get(context, position)
     terminal = terminal_path(context, position)
     if terminal.exists() or terminal.is_symlink():
         raise ValueError("whole graph GET cannot repeat an already accounted decision")
@@ -574,6 +589,8 @@ def _terminal_payload(context: Context, path: Path) -> dict:
 
 
 def admit(context: Context, position: int, get_root: Path, *, namespace: Any = None) -> Path:
+    if _cohort(context):
+        _cohort(context).require_order(context, position)
     if position <= max(len(context.original.candidates), len(context.provenance["inherited_terminals"])):
         raise ValueError("supplement cannot replace an original or inherited decision")
     workload = build_preparation(get_root, context=context, position=position, namespace=namespace)
@@ -592,6 +609,8 @@ def admit(context: Context, position: int, get_root: Path, *, namespace: Any = N
 
 
 def record_deferral(context: Context, position: int, *, get_root: Path | None = None, namespace: Any = None) -> Path:
+    if _cohort(context):
+        _cohort(context).require_order(context, position)
     if position <= max(len(context.original.candidates), len(context.provenance["inherited_terminals"])):
         raise ValueError("supplement cannot replace an original or inherited decision")
     row = context.candidates[position - 1]
@@ -650,6 +669,8 @@ def _input_rejection(context: Context, position: int) -> dict:
 
 
 def record_input_rejection(context: Context, position: int) -> Path:
+    if _cohort(context):
+        _cohort(context).require_order(context, position)
     if position <= max(len(context.original.candidates), len(context.provenance["inherited_terminals"])):
         raise ValueError("input rejection cannot replace an original or inherited decision")
     target = terminal_path(context, position)
@@ -671,6 +692,8 @@ def verify_terminal(path: Path, context: Context) -> dict:
     value = _terminal_payload(context, path)
     position = value["position"]
     expected = terminal_path(context, position)
+    if _cohort(context):
+        _cohort(context).require_order(context, position)
     if path.absolute() != expected:
         raise ValueError("supplement terminal differs from its immutable queue namespace")
     if position <= len(context.original.candidates):
@@ -771,6 +794,8 @@ def acquisition_status(context: Context) -> dict:
 
 def sealed_context_roots(context: Context) -> set[Path]:
     """Transport only immutable declared/inherited inputs, including failures."""
+    if _cohort(context):
+        return _cohort(context).roots(context)
     values, seen = set(), set()
 
     def visit(current):
