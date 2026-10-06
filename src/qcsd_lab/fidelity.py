@@ -2301,6 +2301,78 @@ def _buflo_metric_startup(metrics: Mapping[str, Any]) -> Mapping[str, Any] | Non
     return startup
 
 
+def _buflo_kernel_credit_release_intervals(
+    run: Mapping[str, Any], rows: list[dict[str, str]]
+) -> dict[int, tuple[int, int, int]] | None:
+    """Join each modern incoming slot to all its validated physical carriers.
+
+    CSV advertisement stamps retain their process MONOTONIC diagnostics.
+    Modern kernel receipts bound each physical TX directly in TAI; a single
+    initial MONOTONIC offset cannot replace those retained per-item brackets.
+    This does not replace the independent post-veth evidence promotion gate.
+    """
+    from .kernel_tx import (
+        KERNEL_TX_RUNNER_V10_SCHEMA_VERSION, KERNEL_TX_RUNNER_SCHEMA_VERSION,
+        KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION,
+        kernel_tx_incoming_window_bound_to_run_valid,
+        kernel_tx_runner_receipt_success_valid,
+    )
+
+    wakeups = run.get("runner_wakeup_metrics")
+    raw = wakeups.get("buflo_kernel_tx") if isinstance(wakeups, Mapping) else None
+    if raw is None or (isinstance(raw, Mapping) and type(raw.get("schema_version")) is int
+                       and 1 <= raw["schema_version"] <= 9):
+        return None
+    if (not isinstance(raw, Mapping)
+        or type(raw.get("schema_version")) is not int
+        or raw["schema_version"] not in {
+            KERNEL_TX_RUNNER_V10_SCHEMA_VERSION, KERNEL_TX_RUNNER_SCHEMA_VERSION,
+            KERNEL_TX_RESERVE_RUNNER_SCHEMA_VERSION,
+        }
+        or not kernel_tx_runner_receipt_success_valid(raw)
+        or not kernel_tx_incoming_window_bound_to_run_valid(run)):
+        raise ValueError("BuFLO incoming release lacks valid bound modern kernel evidence")
+
+    carriers: dict[int, tuple[Mapping[str, Any], list[Mapping[str, Any]], set[int]]] = {}
+    for job in raw["jobs"]:
+        items = {item["item_id"]: item for item in job["items"]}
+        for identity in job["credit_identities"]:
+            item = (job["items"][0] if identity["resolution"] == "coalesced-in-main-finalized"
+                    else items[identity["carrier_item_id"]])
+            slot = identity["slot"]
+            if slot not in carriers:
+                carriers[slot] = (job, [], set())
+            carriers[slot][1].append(item)
+            carriers[slot][2].add(identity["endpoint_index"])
+
+    intervals: dict[int, tuple[int, int, int]] = {}
+    for row in rows:
+        if row.get("direction") != "incoming":
+            continue
+        slot = _csv_uint(row, "slot_id")
+        if slot in intervals or slot not in carriers:
+            raise ValueError("BuFLO incoming slot lacks unique kernel carrier coverage")
+        job, items, owners = carriers[slot]
+        target_ns = _csv_uint(row, "target_time_us") * 1_000
+        if target_ns != job["release_tai_ns"] - raw["defense_start_tai_ns"]:
+            raise ValueError("BuFLO incoming target differs from its kernel release")
+        connection = row.get("connection")
+        if ((connection and owners != {_csv_uint(row, "connection")})
+            or (not connection and len(owners) <= 1)):
+            raise ValueError("BuFLO incoming owner differs from its kernel carriers")
+        advertised = _csv_uint(row, "credit_advertised_at_us")
+        action = _csv_uint(row, "action_time_us")
+        if (advertised < action
+            or _csv_uint(row, "credit_advertisement_delay_us") != advertised - action):
+            raise ValueError("BuFLO incoming advertisement has inconsistent CSV stamps")
+        intervals[slot] = (job["release_tai_ns"],
+            min(item["tx_software_tai_lower_ns"] for item in items),
+            max(item["tx_software_tai_upper_ns"] for item in items))
+    if set(intervals) != set(carriers):
+        raise ValueError("BuFLO kernel credit identity lacks its incoming schedule slot")
+    return intervals
+
+
 def _incoming_credit_release_metrics(
     schedule_path: Path, rows: list[dict[str, str]]
 ) -> dict[str, Any]:
@@ -2309,10 +2381,11 @@ def _incoming_credit_release_metrics(
     The raw CSV delay starts at action registration, which may intentionally
     prearm an incoming opportunity. Both CSV stamps are floored process-clock
     microseconds; run.json gives the defense start on that same clock in exact
-    nanoseconds. Compare the full possible advertisement interval with the
+    nanoseconds. Legacy receipts compare the full possible advertisement interval with the
     nominal tick's half-open source-bound window, never rounding a boundary
     inward. Historical receipts retain 5 ms; the explicit rapid policy permits
-    10 ms incoming credit jitter at the unchanged 20 ms interval.
+    10 ms incoming credit jitter at the unchanged 20 ms interval. Validated
+    modern kernel receipts use the joined physical TAI intervals instead.
     """
 
     run_path = schedule_path.with_name("run.json")
@@ -2329,6 +2402,7 @@ def _incoming_credit_release_metrics(
     startup = None
     if FIELD in run and run[FIELD]["policy"] == ACK_START_POLICY:
         startup = validate_buflo_startup_evidence(run, runner_directory=schedule_path.parent, schedule_rows=rows)
+    kernel_intervals = _buflo_kernel_credit_release_intervals(run, rows)
 
     timing_events = 0
     window_violations = 0
@@ -2345,23 +2419,27 @@ def _incoming_credit_release_metrics(
             historical_window_violations += 1
             continue
         timing_events += 1
-        release_ns = start_ns + target_us * 1_000
-        advertised_lower_ns = advertised_us * 1_000
-        advertised_upper_ns = advertised_lower_ns + 1_000
-        # The upper edge and the selected release window are exclusive.
-        if (
-            advertised_lower_ns < release_ns
-            or advertised_upper_ns > release_ns
-            + window_us * 1_000
-        ):
-            window_violations += 1
-        if (advertised_lower_ns < release_ns or advertised_upper_ns > release_ns
-            + BUFLO_INCOMING_CREDIT_RELEASE_WINDOW_US * 1_000):
-            historical_window_violations += 1
-        lateness_upper_bounds_us.append(
-            max(0, (advertised_upper_ns - release_ns - 1) // 1_000)
-        )
+        if kernel_intervals is not None:
+            release_ns, lower_ns, upper_ns = kernel_intervals[_csv_uint(row, "slot_id")]
+            # Kernel TAI bounds are inclusive; the deadline remains exclusive.
+            window_violations += int(lower_ns < release_ns or upper_ns >= release_ns + window_us * 1_000)
+            historical_window_violations += int(lower_ns < release_ns or upper_ns >= release_ns
+                + BUFLO_INCOMING_CREDIT_RELEASE_WINDOW_US * 1_000)
+            lateness_upper_bounds_us.append(max(0, (upper_ns - release_ns) // 1_000))
+        else:
+            release_ns = start_ns + target_us * 1_000
+            advertised_lower_ns = advertised_us * 1_000
+            advertised_upper_ns = advertised_lower_ns + 1_000
+            # The CSV upper edge and the selected release window are exclusive.
+            if (advertised_lower_ns < release_ns or advertised_upper_ns > release_ns + window_us * 1_000):
+                window_violations += 1
+            if (advertised_lower_ns < release_ns or advertised_upper_ns > release_ns
+                + BUFLO_INCOMING_CREDIT_RELEASE_WINDOW_US * 1_000):
+                historical_window_violations += 1
+            lateness_upper_bounds_us.append(max(0, (advertised_upper_ns - release_ns - 1) // 1_000))
     return {
+        **({"incoming_credit_release_time_basis": "validated-kernel-physical-CLOCK_TAI-v1"}
+           if kernel_intervals is not None else {}),
         **({"buflo_incoming_startup": startup,
             "buflo_incoming_startup_events_sha256": sha256_file(schedule_path.with_name("events.csv"))}
            if startup is not None else {}),

@@ -55,10 +55,12 @@ from .experiment import (
     validate_planned_sample_identity,
 )
 from .fidelity import (
-    BUFLO_INCOMING_CREDIT_RELEASE_WINDOW_US,
+    _buflo_kernel_credit_release_intervals,
+    _buflo_schedule_release_window,
     _runner_csv_u64,
     _runner_wakeup_metrics_valid,
     _schedule_realization_metrics,
+    _terminal_primary_partial_allowance,
     fidelity_eligible,
     terminal_evidence_render_receipt_valid,
     validate_primary_capture_clock_integrity,
@@ -5258,11 +5260,18 @@ def _buflo_incoming_credit_delay_failure(
     observed_max = schedule.get("incoming_credit_release_lateness_upper_bound_us_max")
     violation_count = schedule.get("incoming_credit_release_window_violations")
     timing_events = schedule.get("incoming_credit_release_timing_events")
+    try:
+        window_us = _buflo_schedule_release_window(schedule)
+    except ValueError:
+        window_us = None
+    partial = _terminal_primary_partial_allowance("buflo", schedule)
+    scheduled = schedule.get("scheduled_incoming_events")
+    expected = scheduled - partial[0] if type(scheduled) is int and partial is not None else None
     if (
         type(observed_max) is int
-        and observed_max < BUFLO_INCOMING_CREDIT_RELEASE_WINDOW_US
+        and window_us is not None and 0 <= observed_max < window_us
         and violation_count == 0
-        and timing_events == schedule.get("scheduled_incoming_events")
+        and type(timing_events) is int and timing_events == expected
     ):
         return None
 
@@ -5278,6 +5287,13 @@ def _buflo_incoming_credit_delay_failure(
     except (OSError, UnicodeError, ValueError, csv.Error):
         start_ns = None
         rows = []
+        run = {}
+    kernel_intervals = None
+    evidence_error = None
+    try:
+        kernel_intervals = _buflo_kernel_credit_release_intervals(run, rows)
+    except (KeyError, TypeError, ValueError) as error:
+        evidence_error = str(error)
     for row in rows:
         if row.get("direction") != "incoming" or row.get("satisfaction") == "missed":
             continue
@@ -5297,13 +5313,24 @@ def _buflo_incoming_credit_delay_failure(
             target_us = _runner_csv_u64(row["target_time_us"], label="target_time_us")
             violation = {
                 "slot_id": _runner_csv_u64(row["slot_id"], label="slot_id"),
-                "connection": _runner_csv_u64(row["connection"], label="connection"),
                 "target_time_us": target_us,
                 "action_time_us": action_time_us,
                 "credit_advertised_at_us": advertised_at_us,
                 "credit_advertisement_delay_us": delay_us,
             }
+            if row.get("connection"):
+                violation["connection"] = _runner_csv_u64(row["connection"], label="connection")
         except (KeyError, TypeError, ValueError):
+            continue
+        if evidence_error is not None:
+            continue
+        if kernel_intervals is not None:
+            release_ns, lower_ns, upper_ns = kernel_intervals[violation["slot_id"]]
+            violation.update(nominal_release_tai_ns=release_ns,
+                physical_tx_tai_lower_ns=lower_ns, physical_tx_tai_upper_ns=upper_ns,
+                release_lateness_upper_bound_us=max(0, (upper_ns - release_ns) // 1_000))
+            if window_us is None or lower_ns < release_ns or upper_ns >= release_ns + window_us * 1_000:
+                violations.append(violation)
             continue
         if start_ns is None or advertised_at_us - action_time_us != delay_us:
             violations.append(violation)
@@ -5317,21 +5344,22 @@ def _buflo_incoming_credit_delay_failure(
         )
         if (
             advertised_lower_ns < release_ns
-            or advertised_upper_ns > release_ns
-            + BUFLO_INCOMING_CREDIT_RELEASE_WINDOW_US * 1_000
+            or window_us is None or advertised_upper_ns > release_ns + window_us * 1_000
         ):
             violations.append(violation)
 
     return {
         "name": "buflo_incoming_credit_release_window",
         "predicate": (
-            "incoming_credit_release_lateness_upper_bound_us_max "
-            f"< {BUFLO_INCOMING_CREDIT_RELEASE_WINDOW_US}"
+            "complete nonpartial incoming timing coverage; no early handoff; "
+            f"incoming_credit_release_lateness_upper_bound_us_max < {window_us}"
         ),
-        "limit_us": BUFLO_INCOMING_CREDIT_RELEASE_WINDOW_US,
+        "limit_us": window_us,
+        "time_basis": "validated-kernel-physical-CLOCK_TAI-v1" if kernel_intervals is not None else "process-CLOCK_MONOTONIC",
+        **({"kernel_evidence_error": evidence_error} if evidence_error is not None else {}),
         "observed_max_us": observed_max,
         "timing_events": timing_events,
-        "expected_events": schedule.get("scheduled_incoming_events"),
+        "expected_events": expected,
         "window_violations": violation_count,
         "violating_slots": violations,
     }
