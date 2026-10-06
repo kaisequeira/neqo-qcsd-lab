@@ -12,26 +12,29 @@ Diagnostic and failed recordings retain zero formal credit. The earlier
 historical studies; their long build, browser-vector, fitting and nine-mode
 sequence does not gate this prospective five-setting study.
 
-**Latest verified checkpoint, 6 October, 15:13 Sydney AEDT:** The fixed-condition
-target has **31 enrolled classes and 40/16,000 accepted formal traces**, all ordinary. Its
-latest membership extension preserved the same target identity and all forty accepted
-rows. The current conditions are ordinary, FRONT reserve V4, Tamaraw with
-initial stream credit 8192, duration-200 BuFLO and canonical CTSP CS-BuFLO.
-Old FRONT V3 and Tamaraw32 captures remain outside this target. The first
-complete-graph Tamaraw8192 two-site flight stopped during response qualification on
-its second graph after 20 of 40 responses at the original 120-second timeout.
-The subsequent existing five-site batch passed staging and preamble, then
-qualification closed 1 when no frozen response-only candidate for its second
-site passed sustained identity checks. Neither attempt adds Tamaraw canary or
-formal credit. The parallel launch-input fix is installed in matching v31
-images, and all ten current ordinary practice/planning steps passed, including
-practice capture and independent deep verification. Its fresh formal two-worker
-route has passed policy, plan and capsule checks while formal preparation is
-running; actual worker recordings and recovery remain to be proved. Lab
-`10e79fa8` published selected-class subgroup flights. Their separate-root HOST
-review passed without packet capture or target credit; use the [peer operating
+**Latest verified checkpoint, 6 October, 17:09 Sydney AEDT:** The fixed-condition
+target has **31 enrolled classes and 44/16,000 accepted formal traces**: forty
+ordinary and four class-17 Tamaraw8192 visits. The four-visit lane passed
+independent deep verification, and its original-source audit and progress
+append closed 0. The target identity and original complete graphs remain
+unchanged. The current conditions are ordinary, FRONT reserve V4, Tamaraw
+with initial stream credit 8192, duration-200 BuFLO and canonical CTSP
+CS-BuFLO. Old FRONT V3 and Tamaraw32 captures remain outside this target.
+
+Source33's matching v33 runtime closed twelve installation and export
+operations without recompiling Native. The earlier v31 two-worker formal
+attempt stopped at the 120-second release gate; a private fence fix passed
+45 HOST tests but still needs publication, installation and physical proof.
+Class-17 FRONT stopped in the preamble on an installed-image imported-path
+transport mismatch; its private repair passed four HOST tests. Class-17
+CS-BuFLO passed response qualification but its practice capture failed on a
+non-congestion Native defense realization. Neither failure adds formal credit.
+Supplemental positions 88 and 106 were deferred after primary idle timeouts.
+Supplied-list candidate 80 passed its complete 170-resource GET, verification
+and ordinary admission accounting, but is not yet enrolled in the fixed target.
+Use the [peer operating
 sequence](ENROLLED-SUBGROUP-FLIGHTS.md#two-peers-from-one-enrollment-batch)
-before a physical class 17 or 18 recovery. See the [current evidence
+for separate class flights. See the [current evidence
 bindings](EVIDENCE-INDEX.md#fixed-five-target-and-current-runtime-6-october-2026).
 
 The [targeted capture repairs](RAPID-CAPTURE-REPAIRS.md) explain the variable

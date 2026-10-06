@@ -1028,10 +1028,75 @@ def _release_fence(path, value, facts, preflight):
 def _check_release_fence(fence, path, value, facts, preflight):
     if not isinstance(fence, dict) or set(fence) != {"files", "trees"}:
         raise ValueError("prepared release lacks its exact immutable input fence")
-    # Derive membership again from the sealed, source-checked authority. A
-    # forged frame cannot omit a changed child or substitute arbitrary paths.
-    if _release_fence(path, value, facts, preflight) != fence:
-        raise ValueError("formal input bytes or inventory changed after pre-birth validation")
+    # release() authenticates the complete frame against the independently
+    # carried pre-birth digest before reaching this check. Close that finite
+    # observation without rerunning scientific validators after worker birth.
+    import stat as permissions
+    files, trees = fence["files"], fence["trees"]
+    if not isinstance(files, dict) or not isinstance(trees, dict):
+        raise ValueError("prepared release input bytes or inventory changed")
+
+    required = {str(Path(path).absolute()), *preflight["input_files"]}
+    required.update(row["path"] for row in (*value["lane_specs"], *value["lane_intents"]))
+    for spec, _, intent_path, _, _, _, _ in facts:
+        required.update(str(getattr(spec, name).absolute()) for name in (
+            "source_manifest", "client_binary", "base_launcher", "host_launcher",
+            "qualification_spec", "plan_receipt", "cohort"))
+        required.update(str(item.absolute()) for item in (
+            intent_path, intent_path.parent / "lineage.json", intent_path.parent / "dns.json"))
+    if not required <= files.keys():
+        raise ValueError("prepared release input bytes or inventory changed")
+
+    for name, inventory in trees.items():
+        root = shared.regular_dir(Path(name))
+        if not isinstance(inventory, dict):
+            raise ValueError("prepared release input bytes or inventory changed")
+        if "shallow_files" in inventory:
+            if (set(inventory) not in ({"shallow_files"}, {"shallow_files", "mode"})
+                or sorted(item.name for item in root.iterdir() if item.is_file()) != inventory["shallow_files"]
+                or any(str(root / item) not in files for item in inventory["shallow_files"])
+                or ("mode" in inventory and permissions.S_IMODE(root.stat().st_mode) != inventory["mode"])):
+                raise ValueError("prepared release input bytes or inventory changed")
+            continue
+        full_modes = "files" in inventory
+        if full_modes and set(inventory) != {"files", "directories"}:
+            raise ValueError("prepared release input bytes or inventory changed")
+        expected = inventory["files"] if full_modes else inventory
+        if not isinstance(expected, dict):
+            raise ValueError("prepared release input bytes or inventory changed")
+        observed = set()
+        directories = {".": permissions.S_IMODE(root.stat().st_mode)}
+        for item in root.rglob("*"):
+            relative = item.relative_to(root)
+            if ".git" in relative.parts:
+                continue
+            if item.is_symlink():
+                raise ValueError("prepared release input bytes or inventory changed")
+            if item.is_file():
+                observed.add(relative.as_posix())
+            elif item.is_dir():
+                directories[relative.as_posix()] = permissions.S_IMODE(item.stat().st_mode)
+            else:
+                raise ValueError("prepared release input bytes or inventory changed")
+        if (observed != expected.keys()
+            or (full_modes and directories != inventory["directories"])
+            or any(files.get(str(root / relative)) != record for relative, record in expected.items())):
+            raise ValueError("prepared release input bytes or inventory changed")
+
+    # A tree's members also appear in files. Hash each unique file once even
+    # when source/raw trees overlap, preserving all recorded bytes and modes.
+    for name, expected in files.items():
+        item = Path(name)
+        if (not item.is_absolute() or ".." in item.parts or not isinstance(expected, dict)
+            or set(expected) not in ({"sha256", "executable"}, {"sha256", "executable", "mode"})):
+            raise ValueError("prepared release input bytes or inventory changed")
+        raw = shared.read(item)
+        mode = item.stat().st_mode
+        observed = {"sha256": shared.sha(raw), "executable": bool(mode & 0o111)}
+        if "mode" in expected:
+            observed["mode"] = permissions.S_IMODE(mode)
+        if observed != expected:
+            raise ValueError("prepared release input bytes or inventory changed")
 
 
 def prepare_release(path: Path, output: Path, *, _context=None) -> str:

@@ -106,10 +106,25 @@ def _module_directories(root):
     return directories
 
 
-def _derive(module_release, publication, runtime_binding):
+def _compatible_overlay_sources(producer):
+    current = _sources()
+    target._keys(producer, set(current), 'retained overlay reader Source roles')
+    roles = {'overlay': 'overlay', 'target': 'target', 'dynamic_runtime_reader': 'dynamic'}
+    for name, expected in current.items():
+        if name in roles:
+            target._compatible_code_ref(roles[name], producer[name], expected)
+        else:
+            target._open(producer[name]); target._open(expected)
+            if any(producer[name][key] != expected[key] for key in ('sha256', 'mode')):
+                raise ValueError('overlay original scientific reader code changed')
+    return producer
+
+
+def _derive(module_release, publication, runtime_binding, *, producer_sources=None):
     # Only the executing trusted runtime reader decides installation validity.
     # The proposed measurement module is never imported for that decision.
     runtime = dynamic._source(runtime_binding)
+    sources = _sources() if producer_sources is None else _compatible_overlay_sources(producer_sources)
     if current_context() is not None:
         for relative in ('src', 'tools'):
             current_context().watch_tree(Path(module_release['root']) / relative)
@@ -131,13 +146,13 @@ def _derive(module_release, publication, runtime_binding):
     runtime_dependencies = dynamic._input_closure(runtime, runtime_binding,
         {'read_dependencies': [], 'directory_dependencies': []}, {})
     dependencies = target._dependency_union(runtime_dependencies,
-        {'read_dependencies': [*release['files'].values(), *publication_dependencies, *_sources().values()],
+        {'read_dependencies': [*release['files'].values(), *publication_dependencies, *sources.values()],
          'directory_dependencies': _module_directories(release['root'])})
     return runtime, {'contract': CONTRACT, 'module_release': release,
         'module_publication': publication, 'publication_dependencies': publication_dependencies,
         'runtime_source_binding': runtime_binding,
         'runtime_identity': runtime['binding']['runtime_identity'],
-        'module_overlay_hashes': hashes, 'sources': _sources(),
+        'module_overlay_hashes': hashes, 'sources': sources,
         'module_installed_claim': False, 'scientific_credit': False, **dependencies}
 
 
@@ -166,7 +181,8 @@ def _source(reference):
         'runtime_source_binding', 'runtime_identity', 'module_overlay_hashes', 'sources',
         'module_installed_claim', 'scientific_credit', 'read_dependencies', 'directory_dependencies',
         'published_at'}, 'separate overlay/runtime registration')
-    runtime, derived = _derive(value['module_release'], value['module_publication'], value['runtime_source_binding'])
+    runtime, derived = _derive(value['module_release'], value['module_publication'], value['runtime_source_binding'],
+        producer_sources=value['sources'])
     if (not target._typed_equal(derived, {k: v for k, v in value.items() if k != 'published_at'})
             or not target._time(runtime['binding']['published_at']) <= target._time(value['published_at']) <= datetime.now(timezone.utc)):
         raise ValueError('overlay registration differs from original runtime or reviewed module authority')

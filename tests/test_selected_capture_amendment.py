@@ -11,6 +11,7 @@ import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 import sys
+from tempfile import TemporaryDirectory
 
 import pytest
 
@@ -220,3 +221,25 @@ def test_old_unamended_and_parallel_selected_modes_stay_refused(additive_case, m
     with pytest.raises(ValueError, match="serial setting authority"):
         rolling.publish_plan(additive_case["new_study"], additive_case["new_enrollment"], qualifier,
             additive_case["new_study"] / "parallel-plan.json", readiness={"tamaraw": {}}, scheduling={})
+
+
+def test_amended_transport_roots_do_not_depend_on_installed_import_path(additive_case, monkeypatch):
+    _, _, authority = publish(additive_case, monkeypatch, "front")
+    manifest = load(Path(authority["workloads"][0]["capture_manifest"]["path"]))
+    host_roots = transport.manifest_roots(manifest)
+    selected_input = selected.reopen(manifest["preparation"]["selected_input_evidence"]["receipt"])
+    bound = selected._bound_validator_files(load(selected_input)["payload"])
+    assert all(any(path.is_relative_to(root) for root in host_roots) for path in bound)
+
+    with TemporaryDirectory(prefix="qcsd-selected-installed-", dir="/var/tmp") as directory:
+        installed = Path(directory) / "qcsd_lab" / "rapid_selected_capture_input.py"
+        installed.parent.mkdir()
+        assert not any(installed.is_relative_to(root) for root in host_roots)
+        original = Path(selected.__file__).read_bytes()
+        installed.write_bytes(original)
+        monkeypatch.setattr(selected, "__file__", str(installed))
+        assert transport.manifest_roots(manifest) == host_roots
+
+        installed.write_bytes(original + b"\n# changed installed validator\n")
+        with pytest.raises(ValueError):
+            transport.manifest_roots(manifest)

@@ -328,8 +328,18 @@ def preparation_inputs(value: Mapping[str, Any]) -> tuple[set[Path], set[Path]]:
 
 def preparation_roots(value: Mapping[str, Any]) -> list[Path]:
     files, trees = preparation_inputs(value)
-    roots = set(trees) | {path.parent for path in files}
     declaration = _declaration(rolling._open_ref(value[old.FIELD]))
+    # Current imported modules are watched by preparation_inputs, but their
+    # HOST and installed-image paths differ. Transport only the stable bound
+    # validator files from each authentic selected-input receipt.
+    imported = {Path(module.__file__).absolute() for module in selected._direct_modules()}
+    bound = set()
+    for row in declaration["workloads"]:
+        receipt = selected.reopen(row["current_selected_input"])
+        payload = old.receipts._unpack(lanes._read(receipt), selected.RECEIPT_TYPE)
+        bound.update(selected._bound_validator_files(payload))
+    files.difference_update(imported - bound)
+    roots = set(trees) | {path.parent for path in files}
     _, _, policy = rolling._verify_enrollment(rolling._open_ref(declaration["enrollment"]))
     roots.add(Path(policy["runtime"]["execution_root"]))
     return sorted(root for root in roots if not any(root != parent and root.is_relative_to(parent) for parent in roots))

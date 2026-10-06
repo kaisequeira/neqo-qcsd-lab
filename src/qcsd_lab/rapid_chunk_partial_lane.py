@@ -245,7 +245,29 @@ def _runtime_request(release, canonical, runtime, audit):
             'runtime': runtime, 'scratch_root': str(Path(audit) / 'scratch')}
 
 
-def _runtime_operation(release, canonical, runtime, operation):
+def _compatible_reader_sources(producer):
+    """Authenticate original reader locations without changing their identity."""
+    from . import rapid_fixed_condition_target as target
+    current = _reader_sources()
+    if not isinstance(producer, dict) or set(producer) != set(current):
+        raise ValueError('chunk partial reader unit set changed')
+    package = Path(producer[__name__]['path']).parent
+    if package.name != 'qcsd_lab' or package.parent.name != 'src':
+        raise ValueError('chunk partial original reader lacks its explicit Source package')
+    for name, expected in current.items():
+        ref = producer[name]
+        if (set(ref) != {'path', 'sha256', 'mode'}
+                or Path(ref['path']) != package / (name.rsplit('.', 1)[-1] + '.py')):
+            raise ValueError('chunk partial original reader locations are inconsistent')
+        if name == __name__:
+            target._compatible_code_ref('dynamic', ref, expected)
+        elif (reference(ref['path']) != ref or reference(expected['path']) != expected
+                or any(ref[key] != expected[key] for key in ('sha256', 'mode'))):
+            raise ValueError('chunk partial original/current reader code bytes or full modes changed')
+    return str(package.parent.parent)
+
+
+def _runtime_operation(release, canonical, runtime, operation, *, reader_sources=None):
     if set(operation) != {'started.json', 'completed.json', 'stdout.log', 'stderr.log'}:
         raise ValueError('chunk partial runtime operation lacks its four records')
     paths = {name: reopen(ref) for name, ref in operation.items()}
@@ -253,11 +275,20 @@ def _runtime_operation(release, canonical, runtime, operation):
         raise ValueError('chunk partial runtime operation records moved')
     started = json.loads(paths['started.json'].read_bytes())
     completed = json.loads(paths['completed.json'].read_bytes())
+    readers = _reader_sources() if reader_sources is None else reader_sources
+    expected_request = _runtime_request(release, canonical, runtime, paths['started.json'].parent)
+    expected_request['source_root'] = _compatible_reader_sources(readers)
+    command = started.get('command')
+    interpreter = started.get('interpreter')
+    if (not isinstance(command, list) or len(command) != 5 or not isinstance(command[0], str)
+            or not Path(command[0]).is_absolute() or not isinstance(interpreter, dict)
+            or set(interpreter) != {'path', 'sha256', 'mode'}
+            or reference(Path(command[0]).resolve(strict=True)) != interpreter):
+        raise ValueError('chunk partial original runtime interpreter changed')
     if (set(started) != {'command', 'request', 'reader_sources', 'interpreter', 'started_at'}
-            or started['command'] != [sys.executable, '-I', '-B', '-c', _RUNTIME_PROGRAM]
-            or started['request'] != _runtime_request(release, canonical, runtime, paths['started.json'].parent)
-            or started['reader_sources'] != _reader_sources()
-            or started['interpreter'] != reference(Path(sys.executable).resolve())
+            or started['command'] != [command[0], '-I', '-B', '-c', _RUNTIME_PROGRAM]
+            or started['request'] != expected_request
+            or started['reader_sources'] != readers
             or set(completed) != {'returncode', 'completed_at', 'stdout_sha256', 'stderr_sha256'}
             or type(completed['returncode']) is not int or completed['returncode'] != 0
             or any(completed[k + '_sha256'] != operation[k + '.log']['sha256'] for k in ('stdout', 'stderr'))
@@ -339,9 +370,10 @@ def _source(ref):
     release = value['release']
     if (set(release) != {'root', 'lab_head', 'native_head', 'files'}
             or release_snapshot(release['root'], release['lab_head'], release['native_head']) != release
-            or value['reader_sources'] != _reader_sources()):
+            or not _compatible_reader_sources(value['reader_sources'])):
         raise ValueError('chunk partial original or executing Source changed')
-    report, completed = _runtime_operation(release, value['canonical'], value['runtime'], value['runtime_operation'])
+    report, completed = _runtime_operation(release, value['canonical'], value['runtime'], value['runtime_operation'],
+        reader_sources=value['reader_sources'])
     if (value['runtime_identity'] != {key: report[key] for key in ('source', 'collection_image_digest', 'client_sha256')}
             or value['read_dependencies'] != report['read_dependencies']
             or value['directory_dependencies'] != report['directory_dependencies']

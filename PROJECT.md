@@ -49,48 +49,54 @@ Existing-defence validation does not establish compatibility on new classes.
 
 ## Current milestone
 
-### Latest verified checkpoint: 6 October, 15:13 Sydney AEDT
+### Latest verified checkpoint: 6 October, 17:09 Sydney AEDT
 
-The fixed five-condition target now has **31 enrolled classes** and **40/16,000
-accepted formal traces**, all ordinary. Its latest enrollment extension closed
-successfully, preserving the same target identity and all forty accepted rows.
-The target still requires 50 complete classes, five conditions and 64 accepted
-visits per class and condition. Earlier FRONT V3 and Tamaraw32 traces remain
-historical and add no credit to this fixed target.
+The fixed five-condition target has **31 enrolled classes** and **44/16,000
+accepted formal traces**: forty ordinary and four Tamaraw8192 visits from
+class 17. That four-visit lane passed independent deep verification. Its
+original-source audit and target progress append closed 0, preserving the
+target identity and the prior forty accepted rows. The target still requires
+50 complete classes, five conditions and 64 accepted visits per class and
+condition. Earlier FRONT V3 and Tamaraw32 traces remain historical and add
+no credit to this fixed target.
 
 The declared conditions are ordinary, FRONT reserve V4, Tamaraw with initial
-stream credit 8192, fixed-duration-200 BuFLO with ACK-start and kernel-preparation
-policies, and canonical client-only CTSP CS-BuFLO. The first complete-graph
-Tamaraw8192 two-site flight reached response qualification on the frozen `411037cb`
-capture Source: its 58-resource graph qualified, while the 66-resource graph
-stopped after 20 of 40 responses at the original 120-second timeout. The
-qualification operation closed 1 after 241 seconds. No canary or Tamaraw8192
-formal capture passed. A fresh existing five-site batch then passed staging,
-finalization and preamble on the same frozen Source. Its first 70-resource site
-passed current response qualification, but the second site's frozen response-only
-candidates did not pass sustained Native identity qualification. The five-site
-qualification closed 1 at 14:49 AEDT; no practice or formal capture followed.
+stream credit 8192, fixed-duration-200 BuFLO with ACK-start and
+kernel-preparation policies, and canonical client-only CTSP CS-BuFLO. The
+published Source `16e61c55` has a matching v33 runtime: all twelve installation
+and export operations closed 0 after a cached 209.46-second image build,
+reusing Native `c24da2af` without recompilation. The earlier `411037cb`
+Tamaraw8192 two-site and five-site qualifications remain failed history; they
+contributed no trace credit.
 
-The two-worker launch-input fix passed seven focused HOST controls and was
-published as Lab `491dca55` on Main and the desktop branch. Its matching v31
-runtime closed all 12 installation and export operations with unchanged Native
-`c24da2af` and no Native recompilation. All ten current v31 ordinary practice
-and planning operations subsequently closed 0, including physical practice
-capture and independent deep verification. The fresh two-worker formal route
-has passed its current policy, plan and capsule checks; formal preparation is
-running. No worker recording or recovery is yet claimed. The v30 launch-input
-failure remains preserved with zero capture credit. The earlier v29
-installed-path failure and its lifecycle cleanup are separate preserved records.
+The v31 ordinary practice and planning route closed all ten operations,
+including physical practice and independent deep verification. Its fresh
+two-worker formal attempt subsequently stopped at the 120-second parallel
+release gate. The failed pair and actual lifecycle recovery are retained with
+zero formal credit. A private release-fence repair passed 45 focused HOST
+tests; it is not installed or physical proof. The earlier v30 launch-input
+and v29 installed-path failures remain separate records.
 
-A separate HOST review found that two classes from one enrolled batch can use
-distinct flight execution and physical lane evidence roots while retaining
-their original complete graphs and caps. Its two-peer check passed with zero
-physical capture or target credit. The subgroup Source is published as Lab
-`10e79fa8`; its matching installed runtime and physical flights remain pending.
-Future closed subgroup lanes can enter the
-fixed target through its direct audit and append route after a fresh matching
-Source binding; the older rolling corpus reader rejects their repeated textual
-lane name.
+The first class-17 FRONT reserve V4 attempt stopped in the preamble because
+the installed-image imported module path changed the authenticated transport
+root list. A private narrow repair passed four focused HOST tests, with no
+new FRONT practice or formal credit. Class-17 canonical CS-BuFLO response
+qualification closed 0 in 105.825 seconds, but its practice capture closed 1
+in 195.272 seconds: Native stopped after 13.285 seconds with
+`StrictClientDefenseExecutionFailure` from a non-congestion realization.
+Diagnosis is ongoing; this attempt adds no CS-BuFLO credit.
+
+Supplemental positions 88 and 106 were operationally deferred after primary
+idle timeouts; neither earned site credit. Supplied-list candidate 80 passed
+its complete 170-resource GET, separate verification and owned HOST admission
+accounting. It is eligible for ordinary enrollment, but the fixed target still
+has only 31 enrolled classes. A separate HOST review
+showed that two classes from one enrolled batch can use distinct flight
+execution and physical evidence roots while retaining their original graphs
+and caps. The subgroup Source was published as Lab `10e79fa8`; later Source33
+and its matching runtime supported the class-17 Tamaraw lane above. The
+[peer operating sequence](docs/ENROLLED-SUBGROUP-FLIGHTS.md#two-peers-from-one-enrollment-batch)
+continues to govern separate flights and direct fixed-target intake.
 
 ### Earlier recorded checkpoints
 

@@ -9,8 +9,75 @@ not present in every clone. The [project ledger](../PROJECT.md),
 
 ## Fixed five target and current runtime, 6 October 2026
 
-The accepted fixed-target counter is **40/16,000 ordinary traces across 31
-enrolled classes**. The latest membership extension closed 0 under
+At **17:09 Sydney AEDT**, the accepted fixed-target counter is **44/16,000
+traces across 31 enrolled classes**: forty ordinary plus class 17's four
+Tamaraw8192 visits. The original-source audit and append closed 0; the current
+progress is `../diagnostic-rehearsals/fixed-target-tam8192-class017-v33-stable-git-intake-root-actual-20261007-001/progress-with-tam8192-four.json`
+(SHA-256 `e73f37d4ff4043c84083bc660237b0376786cfdd0227325150b5f30f355e4836`).
+The target identity remains `694d6ede9643a192442917e3319de2d04344d89c4f1d41873014f9bfa49da34d`.
+The four-visit physical capture and independent deep verification closed 0 at
+`../diagnostic-rehearsals/tam8192-class017-b0005-v33-flight-20261007-001/logs/tamaraw-capture-completed.json`
+(SHA-256 `189e9df2eea0a4abc6800da087a5dfa2f4614e3999aa04ff64e76de9e00f12bd`)
+and its sibling `tamaraw-deep-completed.json`
+(SHA-256 `d861057a58abd90d311a62415c810c395ffff1ac822dfae618613e5192a194a9`).
+
+Source `16e61c55` has a matching v33 runtime with all twelve installation and
+export operations closed 0, a cached 209.46-second image build and unchanged
+Native `c24da2af`. Its closure is
+`../diagnostic-rehearsals/rapid-v33-ael-fifteen-runtime-root-actual-20261007-001/root-runtime-closed.json`
+(SHA-256 `f5bce7d24009a7a637d17f6c8847bba54c6f17a4e363785bd0b64d6d7a8a5495`).
+The v31 two-worker formal launch stopped at the 120-second release gate; its
+original launch completion is
+`../diagnostic-rehearsals/ordinary-b03-v31-two-workers-root-actual-20261006-001/operations/ordinary-first-two-worker-launch-completed.json`
+(SHA-256 `cca1a47f242f8eb392a35ee063610a2803d13d64518ac0f0ef173b79e3011fd5`).
+Actual lifecycle recovery closed 0 separately, without formal credit. The
+private release-fence repair passed 45 focused HOST tests under
+`../diagnostic-rehearsals/parallel-prepared-release-fence-host-checks-20261007-001/source-closure-final.json`
+(SHA-256 `348db9b06828dd75db3027c8ecf44099ba256d154ee3dc651dabcaa655688bb5`);
+it is not installed or a physical parallel proof.
+
+The first class-17 FRONT reserve V4 preamble stopped on an installed-image
+imported-path transport-root mismatch, retained at
+`../diagnostic-rehearsals/frontv4-class017-b0005-v33-flight-20261007-001/logs/preamble-completed.json`
+(SHA-256 `616a013bd121c7b96105f9dda10e30e8824221de11bd3acc7135233fbc639818`).
+Its private path-projection fix passed four focused HOST tests. Both private
+fixes were also combined in an independent author checkout: 17 affected tests
+passed, all 13 target-bound Source hashes remained exact, and no installed or
+physical result was claimed. The union record is
+`../diagnostic-rehearsals/source33-front-parallel-union-host-checks-20261007-001/source-closure-final.json`
+(SHA-256 `9d12aa123f6c3178babb4b43437665319225fee5df405c78f37d5ccd4780daef`).
+
+Class-17 canonical CS-BuFLO response qualification closed 0 in 105.825 seconds,
+but practice capture closed 1 in 195.272 seconds after Native reported
+`StrictClientDefenseExecutionFailure` at 13.285 seconds from a non-congestion
+realization. The retained completions are
+`../diagnostic-rehearsals/csbufloctsp-class017-b0005-v33-flight-20261007-001/logs/qualify-completed.json`
+(SHA-256 `f3d6c5c04a96a8fa58e452b2d4e2b88e419198874dfbf45eec1066e05ca51013`)
+and sibling `cs-buflo-capture-completed.json`
+(SHA-256 `3e3613397c6ad3dfee4eb3119ed8f0db4f4f5a7095b85c4feadb82e88c693e47`).
+No CS-BuFLO formal credit follows. Supplemental position 88's primary GET
+timed out while idle after 31.666 seconds; its operational deferral closed 0
+in 52.833 seconds with no site credit at
+`../diagnostic-rehearsals/supplemental-two-graphs-current411-root-actual-20261006-001/operations/p088-defer-after-actual-failure-completed.json`
+(SHA-256 `1b45d9ba88de8abf5370adbaf66b39da6487acf83342224811799e62ebb56414`).
+Position 106's primary HTTP/3 GET likewise stopped at `IdleTimeout` after
+30.312 seconds. The outer GET closed 1 in 151.424 seconds and public deferral
+closed 0 in 101.147 seconds, with no site credit; its records are
+`../diagnostic-rehearsals/supplemental-two-graphs-current411-root-actual-20261006-001/operations/p106-execute-get-completed.json`
+(SHA-256 `11c5c4b1b21b5132b72617511a41b3a6cf007643b98ec3dba2e35bb3e9f2a249`)
+and sibling `p106-defer-after-actual-failure-completed.json`
+(SHA-256 `3f535b0ea1704d998135e748d9c6da199237fb2ba3a6b9aacc8c950bb10a2cf1`).
+Supplied-list candidate 80 passed its full 170-resource GET in 14.957 seconds,
+separate verification in 1.548 seconds and owned HOST admission accounting in
+77.056 seconds. Its three completions are under
+`../diagnostic-rehearsals/supplied-static-budget64-q080-root-actual-20261006-001/operations/`:
+`execute_get-completed.json` (SHA-256 `2be3fb4f98a4ff4c51e4d96ca65228a1ba2caee5d68f3d2544cf66b8bffa28c4`),
+`verify_get-completed.json` (SHA-256 `9ecbc0dc2935a5ae255dce57e3be9ca1a6048ee8f4557d3d4c61a8ae2b98ba42`)
+and `owned_host_account-completed.json` (SHA-256 `cb9c4ef188c40131f6b514c38cdbd38e5489eb9051fa81a4c8389ee37066a722`).
+This adds an ordinary admission, not fixed-target enrollment or formal credit.
+
+At the preceding forty-trace checkpoint, all accepted traces were ordinary
+across the same 31 enrolled classes. The latest membership extension closed 0 under
 `../diagnostic-rehearsals/fixed-target-enrollment31-root-actual-20261006-001/extension-actual-closed.json`
 (SHA-256 `32fef6c74a2412c081b69fe5fe97f26e693368766443d78bbfdd51f61279aa2b`).
 Its target and retained forty-row progress have SHA-256
@@ -22,9 +89,9 @@ All ten v31 ordinary practice and planning operations closed 0. The physical
 practice capture and independent deep verification are retained at
 `../diagnostic-rehearsals/ordinary-current-v31-canary-root-actual-20261006-001/operations/deep-completed.json`
 (SHA-256 `9cd9863d5dea3e54a1ecc4887c18be2d6c6e3adf76743964957da7e18a70815e`).
-The first fresh two-worker formal route passed its policy, plan and capsule
-checks, then began formal preparation. It has no verified worker or formal
-target credit at this checkpoint. Lab `10e79fa8` published selected-class
+At that earlier checkpoint, the first fresh two-worker formal route had
+passed policy, plan and capsule checks and begun formal preparation. It had
+no verified worker or formal target credit then. Lab `10e79fa8` published selected-class
 subgroup Source; its bounded [two-peer HOST review](ENROLLED-SUBGROUP-FLIGHTS.md#two-peers-from-one-enrollment-batch)
 is retained at `../diagnostic-rehearsals/enrolled-subgroup-two-peer-fixed-target-readonly-review-20261007-001/review.json`
 (SHA-256 `0754755dee89cb7a603a03c1335d40cb6e0c3aa1c1dc0c2557726299c20da423`).

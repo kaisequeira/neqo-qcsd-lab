@@ -148,6 +148,122 @@ def _sources():
     }.items()}
 
 
+
+_LEGACY_READER_UNITS = {
+    "overlay": {"_derive":"e7031bf8ea172089a7cccc7470c2a00748bc01722addf57287481ecf1cf1028f","_source":"61fc23613473c2e8f53e6cb0a98aa11eee7424ed186d1e5a465908cbcfb3d4b4"},
+    "dynamic": {
+        "_runtime_operation": "ec75e4ed975b8a8dd57843dccac57796f08edd482c113dea45b03693b80c6a3a",
+        "_source": "0900a7ee99e9c5ef2518875531caaa5bedfcd89ba51d27c2260261a606413da4"
+    },
+    "target": {
+        "_compatible_membership": "79b50dbbd6a04dfc54d11ed9b9f5b3577770e6f1fca078c6132c1f0b53920806",
+        "_compatible_sources": "57bbe929e751a1219414f3021a4a830974d9ddf8cc0cbad08f7019da7b46b1de",
+        "roots": "ded0e25f7074be581b7258c910661b510dbd0f063f8509253d85b32a4751377c"
+    }
+}
+_READER_COMPATIBILITY_HELPERS = {
+    'overlay': ('_compatible_overlay_sources',),
+    'target': ('_reader_code_projection', '_compatible_code_ref',
+               '_planning_source_projection', '_membership_code_path'),
+    'dynamic': ('_compatible_reader_sources',),
+}
+
+
+def _reader_code_projection(raw, role, *, legacy=False):
+    """Keep every scientific unit; only closed compatibility guards may differ."""
+    import ast
+    if role not in _LEGACY_READER_UNITS:
+        raise ValueError('reader compatibility role is outside the closed set')
+    context = current_context()
+    key = ('fixed-target-reader-fingerprint', role, legacy, hashlib.sha256(raw).hexdigest())
+    if context is not None and context.has(key):
+        return context.get(key)
+    tree = ast.parse(raw)
+    retained = []; seen = set()
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name in _LEGACY_READER_UNITS[role]:
+            if node.name in seen:
+                raise ValueError('reader compatibility guard is duplicated')
+            seen.add(node.name)
+            if legacy and hashlib.sha256(ast.dump(node, include_attributes=False).encode()).hexdigest() != _LEGACY_READER_UNITS[role][node.name]:
+                raise ValueError('retained reader compatibility guard is not the original shape')
+            continue
+        if isinstance(node, ast.FunctionDef) and node.name in _READER_COMPATIBILITY_HELPERS[role]:
+            if legacy:
+                raise ValueError('retained reader added a compatibility helper')
+            continue
+        if (role == 'target' and isinstance(node, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id in
+                        ('_LEGACY_READER_UNITS', '_READER_COMPATIBILITY_HELPERS') for t in node.targets)):
+            if legacy:
+                raise ValueError('retained reader added a compatibility declaration')
+            continue
+        retained.append(node)
+    if seen != set(_LEGACY_READER_UNITS[role]):
+        raise ValueError('reader compatibility guard set is incomplete')
+    tree.body = retained
+    value = ast.dump(tree, include_attributes=False).encode()
+    if context is not None: context.remember(key, value)
+    return value
+
+
+def _compatible_code_ref(role, producer, current):
+    _open(producer); _open(current)
+    if producer['mode'] != current['mode']:
+        raise ValueError('reader compatibility changes a full file mode')
+    if producer['sha256'] == current['sha256']:
+        return True
+    old = _reader_code_projection(Path(producer['path']).read_bytes(), role, legacy=True)
+    new = _reader_code_projection(Path(current['path']).read_bytes(), role)
+    if old != new:
+        raise ValueError('reader compatibility changes protected scientific code')
+    return True
+
+
+def _planning_source_projection(raw):
+    """Planning bodies are not enrollment/admission validators."""
+    import ast
+    context = current_context()
+    key = ('fixed-target-membership-planning-fingerprint', hashlib.sha256(raw).hexdigest())
+    if context is not None and context.has(key):
+        return context.get(key)
+    tree = ast.parse(raw); seen = set()
+    optional = {'_sites_from_enrollment': 'enrolled_subgroup', 'publish_plan': 'class_indices',
+                'verify_capture_plan': None}
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef) or node.name not in optional:
+            continue
+        if node.name in seen:
+            raise ValueError('membership planner definition is duplicated')
+        seen.add(node.name)
+        name = optional[node.name]
+        if name is not None:
+            pairs = list(zip(node.args.kwonlyargs, node.args.kw_defaults))
+            for argument, default in pairs:
+                if argument.arg == name:
+                    if (argument.annotation is not None or not isinstance(default, ast.Constant)
+                            or default.value is not None):
+                        raise ValueError('membership planner adds an executing default or annotation')
+            pairs = [(arg, default) for arg, default in pairs if arg.arg != name]
+            node.args.kwonlyargs = [arg for arg, _ in pairs]
+            node.args.kw_defaults = [default for _, default in pairs]
+        node.body = [ast.Pass()]
+    if seen != set(optional):
+        raise ValueError('membership planner definition set is incomplete')
+    value = ast.dump(tree, include_attributes=False).encode()
+    if context is not None: context.remember(key, value)
+    return value
+
+
+def _membership_code_path(path, target_source):
+    package = Path(target_source['path']).parent
+    if path.parent == package and path.suffix == '.py':
+        return 'src/qcsd_lab/' + path.name
+    if package.parent.name == 'src':
+        root = package.parent.parent
+        if path.is_relative_to(root / 'tools') and path.suffix == '.py':
+            return path.relative_to(root).as_posix()
+    return None
 def _compatible_sources(producer):
     """Authenticate retained authority and identical relevant executing code.
 
@@ -159,30 +275,45 @@ def _compatible_sources(producer):
     _keys(producer, set(current), 'fixed target producer/reader Source units')
     for name, expected in current.items():
         _open(producer[name]); _open(expected)
-        if any(producer[name][key] != expected[key] for key in ('sha256', 'mode')):
+        if name in _LEGACY_READER_UNITS:
+            _compatible_code_ref(name, producer[name], expected)
+        elif any(producer[name][key] != expected[key] for key in ('sha256', 'mode')):
             raise ValueError('fixed target relevant producer/reader code bytes or modes differ')
     return True
 
 
 def _compatible_membership(producer, current, producer_sources):
-    """Only equivalent code locations can differ in the membership read set."""
+    """Reopen all original data; compare only membership-relevant code roles."""
     _compatible_sources(producer_sources)
     _membership_close(producer)
-    old_root = Path(producer_sources['target']['path']).parents[2]
-    new_root = Path(__file__).resolve().parents[2]
-    def normalized(value, root):
+    executing = _sources()
+    def code_refs(value, source):
+        return {_membership_code_path(Path(row['path']), source): row for row in value['files']
+                if _membership_code_path(Path(row['path']), source) is not None}
+    old_code = code_refs(producer, producer_sources['target'])
+    new_code = code_refs(current, executing['target'])
+    rolling = 'src/qcsd_lab/rapid_rolling_capture.py'
+    if rolling in old_code and rolling in new_code:
+        before, after = old_code[rolling], new_code[rolling]
+        _open(before); _open(after)
+        if (before['mode'] != after['mode']
+                or _planning_source_projection(Path(before['path']).read_bytes())
+                != _planning_source_projection(Path(after['path']).read_bytes())):
+            return False
+    def normalized(value, source):
         result = json.loads(_json(value))
         for row in result['files']:
-            path = Path(row['path'])
-            if path.is_relative_to(root):
-                relative = path.relative_to(root)
-                if (relative.suffix == '.py' and (relative.is_relative_to('src/qcsd_lab')
-                        or relative.is_relative_to('tools'))):
-                    row['path'] = 'identical-bound-code/' + relative.as_posix()
+            relative = _membership_code_path(Path(row['path']), source)
+            if relative is not None:
+                row['path'] = 'identical-bound-code/' + relative
+                if relative == rolling and rolling in old_code and rolling in new_code:
+                    row['sha256'] = old_code[rolling]['sha256']
+                elif relative == 'src/qcsd_lab/rapid_fixed_condition_target.py':
+                    row['sha256'] = producer_sources['target']['sha256']
         result['files'].sort(key=lambda row: row['path'])
         result['trees'].sort(key=lambda row: (row['path'], row['ignore_git']))
         return result
-    return _typed_equal(normalized(producer, old_root), normalized(current, new_root))
+    return _typed_equal(normalized(producer, producer_sources['target']), normalized(current, executing['target']))
 
 
 def _close(files, directories=()):
@@ -930,6 +1061,21 @@ def roots(progress):
     # directory membership roots separately; never broaden to a workspace.
     value=validate_progress(progress);paths={Path(ref['path']) for ref in input_files(progress)}
     for row in directory_dependencies(progress):paths.add(Path(row['path']))
+    # Original HOST interpreter aliases remain original in installed readers.
+    from .rapid_ordinary_canary_carry import _interpreter_dependency_roots
+    aliases=set()
+    for proof in value['proofs']:
+        audit=validate_audit(proof)
+        if audit['kind']=='complete':
+            interpreter=audit['operation']['interpreter']
+            aliases.update(_interpreter_dependency_roots(interpreter['command'],interpreter['binary']))
+        source=_measurement_source(audit['source_binding'])
+        start=json.loads(_open(source['binding']['runtime_operation']['started.json']).read_bytes())
+        aliases.update(_interpreter_dependency_roots(start['command'][0],start['interpreter']))
+    retained=[p for p in aliases if not any(p!=other and p.is_relative_to(other) for other in aliases)]
+    for path in retained:
+        epoch._path(path,directory=True)
+    paths.update(retained)
     return tuple(sorted(paths,key=str))
 
 
