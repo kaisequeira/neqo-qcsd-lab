@@ -6,7 +6,38 @@ five-condition diagnostic on Poki. The original failed attempts remain failed;
 new source needs new captures. See the [capture path](RAPID-CAPTURE-PATH.md) and
 [evidence index](EVIDENCE-INDEX.md) for the recorded operations.
 
-## Latest prospective repairs: 4 October 2026
+## Current Python repairs: 6 October 2026
+
+The v28 parallel batch passed preparation in 5 minutes 11 seconds, then failed
+before either worker started. Its guardian's 30-second READY check indirectly
+called the complete capture-spec parser, which repeats scientific evidence
+checks. The new early parser checks only the sealed schema, paths and runtime
+identities. Full graph, scheduling, qualification and lane checks remain after
+the handshake and before worker creation. The two actual worker bindings parsed
+in 0.45 seconds; this small host check grants no capture authority.
+
+Two further Python changes prepare the other declared conditions. BuFLO's
+fixed-target two-worker plan now selects its explicit duration-200 traffic files
+through the same validated target authority as the serial plan. Tamaraw and
+CS-BuFLO can revalidate a retained complete selected GET for a fresh current
+flight, preserving every original resource, admission terminal and capture cap.
+They cannot borrow ordinary-only qualification or another defense's practice.
+
+The combined changes passed **68 focused HOST checks**, with no failures,
+errors or skipped cases. The verified `c24da2af` Native client remains unchanged;
+these repairs require cached Python packaging rather than client compilation.
+Actual installed repeats, successful two-worker capture and independent deep
+verification are still pending. Keep the failed v28 batch and its exact Source
+unchanged. Use a fresh batch for the next actual attempt.
+
+For a fresh Tamaraw or CS-BuFLO selected-class flight, the public staging option
+is `--renew-selected-inputs`. Tamaraw also requires its existing explicit
+`--tamaraw-configuration-policy`; this option cannot authorize another mode.
+Finalization binds `selected_input_renewal` into the practice plan and its
+`--selected-input-renewal` reference into formal planning. Qualification, full
+practice capture and independent verification remain condition-specific.
+
+## Earlier prospective repairs: 4 October 2026
 
 The combined Native source is `5f075d37`. Its offline build and **45 focused
 compiled tests passed**: 31 FRONT and 14 BuFLO cases. The matching Lab source,

@@ -300,11 +300,23 @@ def typed_canary_limits(manifests, policy, mode, selected_policy):
     return duration.capture_limits(mode, {**declared, "max_attempts": 1}, policy=selected_policy)
 
 
-def selected_inputs(enrollment, study, *, prospective_amendment=False, ordinary_renewal=None):
+def selected_inputs(enrollment, study, *, prospective_amendment=False, ordinary_renewal=None,
+                    selected_input_renewal=None, runtime=None, mode=None, tamaraw_configuration_policy=None):
     """Authenticate the current declared batch, preserving each original graph."""
     from qcsd_lab import rapid_rolling_capture as rolling
     from qcsd_lab import supplied_static_admission as static
     from qcsd_lab import supplied_static_preparation as preparation
+    if selected_input_renewal is not None:
+        if ordinary_renewal is not None or prospective_amendment:
+            raise ValueError("defended selected renewal has its own mode authority")
+        from qcsd_lab import rapid_selected_input_renewal as renewed
+        checked(selected_input_renewal)
+        result = renewed.flight_inputs(Path(selected_input_renewal["path"]), Path(enrollment).absolute(),
+            Path(study), runtime=runtime, mode=mode, tamaraw_configuration_policy=tamaraw_configuration_policy)
+        batch, policy, bindings, manifests, roots, limits = result
+        for row, manifest in zip(bindings, manifests):
+            row["full_graph"] = graph(manifest)
+        return batch, policy, bindings, manifests, roots, limits
     if ordinary_renewal is not None:
         if prospective_amendment:
             raise ValueError("ordinary renewal cannot authorize amended modes")
@@ -481,12 +493,16 @@ def checked_setup(args):
     if "ordinary_renewal" in setup and (setup["mode"] != "undefended" or setup["reuse"] is not None
             or witness is not None):
         raise ValueError("ordinary renewal setup requires only its unqualified ordinary setting")
+    if "selected_input_renewal" in setup and (setup["reuse"] is not None or witness is not None
+            or "ordinary_renewal" in setup or body_policy != "complete-current-application-delivery-v1"):
+        raise ValueError("defended selected renewal requires its own fresh current qualification")
     from qcsd_lab import rapid_rolling_capture as rolling
     runtime = rolling.load_runtime(Path(setup["runtime_spec"]["path"]))
     checked(setup["runtime_spec"])
     _, policy, bindings, manifests, roots, limits = selected_inputs(
         setup["enrollment"]["path"], setup["study_root"], prospective_amendment=setup["mode"] in AMENDED_MODES,
-        ordinary_renewal=setup.get("ordinary_renewal"))
+        ordinary_renewal=setup.get("ordinary_renewal"), selected_input_renewal=setup.get("selected_input_renewal"),
+        runtime=runtime, mode=setup["mode"], tamaraw_configuration_policy=setup.get("tamaraw_configuration_policy"))
     checked(setup["enrollment"])
     if (bindings != setup["selected_classes"] or roots != setup["original_roots"]
         or limits != setup["original_limits"] or runtime["data_root"] != policy["runtime"]["data_root"]):
@@ -541,11 +557,18 @@ def stage(args):
     enrollment = args.enrollment.absolute()
     renewal_path = getattr(args, "ordinary_renewal", None)
     renewal = None if renewal_path is None else ref(renewal_path)
+    renew_selected = getattr(args, "renew_selected_inputs", False)
+    if renew_selected:
+        from qcsd_lab.rapid_selected_input_renewal import _condition
+        _condition(args.mode, fixed_tamaraw)
+        if (renewal is not None or witness is not None or getattr(args, "reuse_qualification", None) is not None
+                or body_policy != "complete-current-application-delivery-v1"):
+            raise ValueError("defended selected renewal needs fresh qualification and complete current delivery")
     if renewal is not None and (args.mode != "undefended" or witness is not None
             or getattr(args, "reuse_qualification", None) is not None):
         raise ValueError("ordinary renewal requires only its unqualified undefended setting")
     _, policy, bindings, manifests, roots, limits = selected_inputs(enrollment, args.study_root,
-        prospective_amendment=args.mode in AMENDED_MODES, ordinary_renewal=renewal)
+        prospective_amendment=args.mode in AMENDED_MODES or renew_selected, ordinary_renewal=renewal)
     output, study = args.output.absolute(), args.study_root.absolute()
     data = Path(policy["runtime"]["data_root"])
     protected = [clean, args.runtime_build_root.absolute(), study, HERE,
@@ -577,10 +600,11 @@ def stage(args):
         target = execution / "config/workloads" / (row["workload_id"] + ".json")
         if target.exists() or target.is_symlink():
             raise ValueError("export already contains an enrolled flight workload")
-        create(output / "lineage/originals" / target.name, original)
-        if amendment is None:
+        create(output / ("lineage/admission-originals" if renew_selected else "lineage/originals") / target.name, original)
+        if amendment is None and not renew_selected:
             create(target, original)
-    create(output / "lineage/original-manifest.json", checked(bindings[0]["original_workload"]))
+    if not renew_selected:
+        create(output / "lineage/original-manifest.json", checked(bindings[0]["original_workload"]))
     create(output / "lineage/original-enrollment.json", read(enrollment))
     for name in ("logs", "dns-receipts", "plans"):
         (output / name).mkdir(mode=0o700)
@@ -596,6 +620,19 @@ def stage(args):
     runtime_path = output / "runtime-spec.json"
     create(runtime_path, encode({"schema_version": 1, "artifact_type": rolling.RUNTIME_TYPE, "inputs": runtime}))
     rolling.load_runtime(runtime_path)
+    defended_renewal = None
+    if renew_selected:
+        from qcsd_lab import rapid_selected_input_renewal as renewed
+        renewed_path = output / "current-selected-inputs.json"
+        renewed.publish(enrollment, runtime, renewed_path, mode=args.mode,
+                        tamaraw_configuration_policy=fixed_tamaraw)
+        defended_renewal = ref(renewed_path)
+        _, policy, bindings, manifests, roots, limits = selected_inputs(enrollment, study,
+            selected_input_renewal=defended_renewal, runtime=runtime, mode=args.mode,
+            tamaraw_configuration_policy=fixed_tamaraw)
+        for row in bindings:
+            create(output / "lineage/originals" / (row["workload_id"] + ".json"), checked(row["original_workload"]))
+        create(output / "lineage/original-manifest.json", checked(bindings[0]["original_workload"]))
     prefix = [str(args.python.absolute()), "-I", "-B", "-c", PUBLIC_CLI_BOOTSTRAP,
               str(clean / "src"), str(clean / "tools/rapid_rolling_capture.py")]
     command = None
@@ -633,6 +670,8 @@ def stage(args):
         setup["qualification_delivery_compatibility"] = witness
     if renewal is not None:
         setup["ordinary_renewal"] = renewal
+    if defended_renewal is not None:
+        setup["selected_input_renewal"] = defended_renewal
     create(output / "setup.json", encode(setup))
     return {"setup": ref(output / "setup.json"), "commands": ref(output / "amendment-commands.json"),
             "class_count": len(bindings), "physical_actions_performed": False, **ZERO}
@@ -763,6 +802,8 @@ def finalize(args):
         plan[traffic.FIELD] = selected_policy
     if "ordinary_renewal" in setup:
         plan["ordinary_renewal"] = setup["ordinary_renewal"]
+    if "selected_input_renewal" in setup:
+        plan["selected_input_renewal"] = setup["selected_input_renewal"]
     create(output / "plan.json", encode(plan))
     prefix = [setup["host_python"], "-I", "-B", "-c", PUBLIC_CLI_BOOTSTRAP,
               str(clean / "src"), str(clean / "tools/rapid_rolling_capture.py")]
@@ -780,6 +821,8 @@ def finalize(args):
         commands["plan"] += ["--application-body-identity-policy", body_policy]
     if fixed_tamaraw is not None:
         commands["plan"] += ["--tamaraw-configuration-policy", fixed_tamaraw]
+    if "selected_input_renewal" in setup:
+        commands["plan"] += ["--selected-input-renewal", setup["selected_input_renewal"]["path"]]
     if "qualification_delivery_compatibility" in setup:
         commands["plan"] += ["--qualification-delivery-compatibility", setup["qualification_delivery_compatibility"]["path"]]
     if "ordinary_renewal" in setup:
@@ -826,6 +869,13 @@ def image_argv(plan, output, action, *extra):
             raise ValueError("reuse manifest requires a canonical same-absolute RO file mount")
         argv += ["--volume", f"{reuse_path}:{reuse_path}:ro"]
     roots = plan["static_preparation_roots"] if action == "verify-image" else plan["group_preparation_roots"]
+    if "selected_input_renewal" in plan:
+        from qcsd_lab import rapid_selected_input_renewal as renewed
+        runtime = json.loads(read(output / "runtime-spec.json"))["inputs"]
+        renewed_roots = renewed.flight_inputs(Path(plan[renewed.FIELD]["path"]), Path(plan["enrollment"]["path"]),
+            Path(plan["study_root"]), runtime=runtime, mode=plan["campaigns"][0]["mode"],
+            tamaraw_configuration_policy=plan.get("tamaraw_configuration_policy"))[4]
+        roots = sorted(set(roots) | set(renewed_roots))
     if "ordinary_renewal" in plan:
         if plan["campaigns"][0]["mode"] != "undefended" or plan["reuse"] is not None or action == "qualify-image":
             raise ValueError("ordinary renewal has no padding qualification operation")
@@ -930,6 +980,14 @@ def checked_plan(args, *, image=False):
         raise ValueError("wrong setting amendment or class count")
     selected_policy = traffic.canary_policy(plan, mode)
     runtime = json.loads(read(output / "runtime-spec.json"))["inputs"]
+    if "selected_input_renewal" in plan:
+        from qcsd_lab import rapid_selected_input_renewal as renewed
+        if (amended or "ordinary_renewal" in plan or plan["reuse"] is not None or witness is not None
+                or body_policy != "complete-current-application-delivery-v1"):
+            raise ValueError("defended renewed canary cannot import another setting or reused qualification")
+        renewed.validate(renewed.rolling._open_ref(plan[renewed.FIELD]),
+            enrollment=Path(plan["enrollment"]["path"]), runtime=runtime, mode=mode,
+            tamaraw_configuration_policy=plan.get("tamaraw_configuration_policy"))
     authority = None
     if amended:
         authority = adapter._closed(Path(plan["static_capture_amendment"]["path"]))
@@ -955,7 +1013,9 @@ def checked_plan(args, *, image=False):
     if not image:
         checked(plan["enrollment"])
         _, checked_policy, expected, originals, _, _ = selected_inputs(plan["enrollment"]["path"], plan["study_root"],
-                                                                     prospective_amendment=amended, ordinary_renewal=plan.get("ordinary_renewal"))
+            prospective_amendment=amended, ordinary_renewal=plan.get("ordinary_renewal"),
+            selected_input_renewal=plan.get("selected_input_renewal"), runtime=runtime, mode=mode,
+            tamaraw_configuration_policy=plan.get("tamaraw_configuration_policy"))
         recorded = [{key: value for key, value in row.items() if key != "capture_manifest"} for row in plan["selected_classes"]]
         if expected != recorded:
             raise ValueError("selected original classes changed")
@@ -1282,6 +1342,8 @@ def main():
     item.add_argument("--campaign-seed", type=int, required=True)
     item.add_argument("--mode", choices=MODES, required=True)
     item.add_argument("--ordinary-renewal", type=Path)
+    item.add_argument("--renew-selected-inputs", action="store_true",
+                      help="revalidate the same retained full selected GET for fresh TAM8192 or CS-BuFLO qualification")
     item.add_argument("--reuse-qualification", type=Path,
                       help="exact current original-group named response-only v2 manifest")
     item.add_argument("--application-body-identity-policy", choices=("exact-prepared-application-body-v1", "complete-current-application-delivery-v1"),

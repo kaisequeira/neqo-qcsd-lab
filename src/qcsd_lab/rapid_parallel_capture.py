@@ -164,6 +164,35 @@ def host_source(value: dict[str, Any]) -> None:
         raise ValueError("parallel host verifier package differs from the clean collection source")
 
 
+def _lifecycle_spec_inputs(path: Path) -> dict[str, str]:
+    """Resolve sealed spec identities without scientific or layout admission.
+
+    ``load_capture_spec`` additionally reconstructs scheduling and qualification
+    authority. That work belongs after the guardian's short READY handshake.
+    """
+    from .rapid_lane_evidence import PATH_KEYS, SPEC_TYPE, plan
+    value = load(path)
+    if (not isinstance(value, dict) or set(value) != {"schema_version", "artifact_type", "inputs"}
+        or type(value.get("schema_version")) is not int or value["schema_version"] != 1
+        or value.get("artifact_type") not in {SPEC_TYPE, "qcsd-rapid-v6-rolling-capture-spec"}
+        or not isinstance(value.get("inputs"), dict)
+        or set(value["inputs"]) != PATH_KEYS | {"collection_image_digest", "execution_generation"}):
+        raise ValueError("parallel lifecycle capture spec schema differs")
+    inputs = dict(value["inputs"])
+    if (not isinstance(inputs["collection_image_digest"], str)
+        or plan.IMAGE_RE.fullmatch(inputs["collection_image_digest"]) is None
+        or not isinstance(inputs["execution_generation"], str)
+        or plan.IDENTIFIER_RE.fullmatch(inputs["execution_generation"]) is None):
+        raise ValueError("parallel lifecycle capture spec identity differs")
+    for key in PATH_KEYS:
+        reference = inputs[key]
+        if not isinstance(reference, str) or not reference:
+            raise ValueError("parallel lifecycle capture spec path differs")
+        target = Path(reference)
+        inputs[key] = str(target.absolute() if target.is_absolute() else (path.absolute().parent / target).absolute())
+    return inputs
+
+
 def lifecycle_inputs(path: Path, execution_root: Path, expected_sha: str) -> None:
     """Bound read-only runtime linkage before the short guardian handshake.
 
@@ -198,10 +227,9 @@ def lifecycle_inputs(path: Path, execution_root: Path, expected_sha: str) -> Non
         return Path(row["path"])
 
     _runtime_authority(value, execution_root=execution_root)
-    from .rapid_lane_evidence import load_capture_spec
     root = regular_dir(Path(value["evidence_root"]))
     for spec_row, intent_row in zip(value["lane_specs"], value["lane_intents"], strict=True):
-        spec = load_capture_spec(reference(spec_row)).serializable()
+        spec = _lifecycle_spec_inputs(reference(spec_row))
         if any(spec.get(key) != item for key, item in value["runtime"].items()):
             raise ValueError("parallel lifecycle worker specification changed runtime")
         intent = reference(intent_row)

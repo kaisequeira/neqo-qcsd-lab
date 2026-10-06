@@ -147,6 +147,7 @@ def run(args, *, _context=None):
                                     static_capture_amendment=getattr(args, "static_capture_amendment", None),
                                     application_body_identity_policy=getattr(args, "application_body_identity_policy", None),
                                     tamaraw_configuration_policy=getattr(args, "tamaraw_configuration_policy", None),
+                                    selected_input_renewal=getattr(args, "selected_input_renewal", None),
                                     qualification_delivery_compatibility=(rolling._ref(args.qualification_delivery_compatibility)
                                         if getattr(args, "qualification_delivery_compatibility", None) is not None else None),
                                     _context=_context)
@@ -249,6 +250,7 @@ def _parser():
             item.add_argument("--runtime-spec", type=Path)
             item.add_argument("--front-capture-amendment", type=Path)
             item.add_argument("--static-capture-amendment", type=Path)
+            item.add_argument("--selected-input-renewal", type=Path)
             item.add_argument("--readiness", type=Path)
             item.add_argument("--scheduling", type=Path)
             from qcsd_lab.application_response_policy import EXACT_APPLICATION_BODY_IDENTITY_POLICY, COMPLETE_APPLICATION_DELIVERY_POLICY

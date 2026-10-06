@@ -69,7 +69,7 @@ then selection of a Python environment without dependencies. The first has a
 reviewed narrow repair; the second used the launcher's supported explicit Python
 setting, with no change to the plan or traffic settings.
 
-There are now **sixteen enrolled classes** and **twenty-seven ordinary-resource
+There are now **sixteen enrolled classes** and **thirty ordinary-resource
 admissions**. The five-site enrollment append for classes 12–16 closed
 successfully using the complete prepared resource lists. Candidate 59's complete 71-resource, two-origin graph passed its
 actual GET, public verification and separately recorded owned HOST accounting
@@ -77,8 +77,11 @@ in **13.9, 1.1 and 40.9 seconds**. Positions 60, 61 and 63 subsequently passed
 their full GET, separate verification and public accounting. Position 62 is
 deferred: its primary HTTP/3 response completed with HTTP 302, so it did not
 establish the required successful final page and full resource graph.
-The supplied-list ledger has closed 71 of 87 decisions: 27 admitted, 22 input
-ineligible and 22 operationally deferred. Position 64 was input ineligible and
+The supplied-list ledger has closed 76 of 87 decisions: 30 admitted, 23 input
+ineligible and 23 operationally deferred. Positions 74, 75 and 76 passed their
+complete retained resource requests, separate verification and public accounting.
+This is ordinary-resource eligibility, not five-condition compatibility or formal
+trace credit. Position 64 was input ineligible and
 position 65 was admitted. Position 66's full GET retained one secondary HTTP
 302; its separate HOST deferral accounting has closed. Position 67 was input
 ineligible, and positions 68 and 69 passed admission.
@@ -87,6 +90,26 @@ prepared successfully in 37.3 seconds, without resource requests or trace credit
 An ordinary admission does not establish compatibility with all five settings.
 Even a fully passing remaining supplied-list tail cannot fill all fifty places;
 supplementary complete multi-origin sites are required.
+
+The current installed v28 ordinary canary passed all ten steps, including fresh
+practice and independent deep verification. The next two-worker preparation
+passed in **311.3 seconds**, down from the earlier 39 minutes. Its actual launch
+then failed in **359.3 seconds** before any worker or resource request: the
+guardian's 30-second READY check called the full scientific spec parser.
+The failed batch, worker intents and original Source remain retained. Actual
+lifecycle cleanup passed in 5.15 seconds; it grants no per-worker retirement or
+capture credit.
+
+The reviewed repair authenticates the sealed schema, paths and runtime identities
+before READY, then retains full scientific admission before worker creation.
+Parsing both actual worker bindings took **0.45 seconds**. The combined repairs
+for startup, BuFLO target-worker traffic selection, and fresh selected-input
+renewal for Tamaraw/CS-BuFLO passed **68 focused HOST cases**. The renewal rechecks
+the complete original GET without issuing another request or changing enrollment;
+each defense still needs its own current qualification and practice proof.
+These Python changes reuse the verified `c24da2af` client. Matching installed
+packaging, the first successful parallel batch and independent verification
+remain pending. See [the repair notes](docs/RAPID-CAPTURE-REPAIRS.md).
 
 The published combined release `e84e1f07` and its v27 installation passed all
 twelve runtime checks using the existing `c24da2af` compiled client. Cached

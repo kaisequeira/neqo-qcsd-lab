@@ -503,9 +503,12 @@ def _sites_from_enrollment(batch: Mapping[str, Any], all_classes: list[dict[str,
                            front_capture_amendment: Mapping[str, Any] | None = None,
                            static_capture_amendment: Mapping[str, Any] | None = None,
                            delivery_compatibility: Mapping[str, str] | None = None,
-                           body_policy: str | None = None, _context=None) -> tuple[plan.Site, ...]:
+                           body_policy: str | None = None, selected_input_renewal=None,
+                           _context=None) -> tuple[plan.Site, ...]:
     from . import rapid_undefended_capture as ordinary
     if ordinary.is_inputs(lanes._load(lanes._read(qualifier_spec))):
+        if selected_input_renewal is not None:
+            raise ValueError("defended selected renewal cannot authorize ordinary-only inputs")
         return ordinary.sites_from_enrollment(batch, all_classes, qualifier_spec, workload_root,
             require_current=require_current, enrollment=enrollment, runtime=runtime,
             front_capture_amendment=front_capture_amendment, static_capture_amendment=static_capture_amendment,
@@ -516,6 +519,17 @@ def _sites_from_enrollment(batch: Mapping[str, Any], all_classes: list[dict[str,
     from .rapid_per_class_selected_enrollment import CONTRACT as PER_CLASS_CONTRACT
     selected_policy = policy["contract"] in {additive.CONTRACT, PER_CLASS_CONTRACT}
     amendment = None
+    renewal = None
+    if selected_input_renewal is not None:
+        from . import rapid_selected_input_renewal as renewed
+        if (not selected_policy or enrollment is None or runtime is None
+                or front_capture_amendment is not None or static_capture_amendment is not None
+                or delivery_compatibility is not None):
+            raise ValueError("defended selected renewal requires its separate enrolled current runtime")
+        renewal_path = _open_ref(selected_input_renewal)
+        declared = lanes._load(lanes._read(renewal_path))
+        renewal = renewed.validate(renewal_path, enrollment=enrollment, runtime=runtime,
+            mode=declared["mode"], tamaraw_configuration_policy=declared["tamaraw_configuration_policy"])[0]
     if front_capture_amendment is not None and static_capture_amendment is not None:
         raise ValueError("browser and static capture amendments have separate authority")
     if front_capture_amendment is not None:
@@ -558,7 +572,8 @@ def _sites_from_enrollment(batch: Mapping[str, Any], all_classes: list[dict[str,
             from . import rapid_selected_capture_input as selected
             if policy["contract"] == PER_CLASS_CONTRACT:
                 from . import rapid_per_class_selected_input as selected
-            original = selected.reopen(row["prepared_workload"] if amendment is None else
+            original = selected.reopen(renewal["renewals"][row["candidate_id"]]["manifest"] if renewal is not None else
+                row["prepared_workload"] if amendment is None else
                 next(item["current_selected_manifest"] for item in amendment["workloads"]
                      if item["candidate_id"] == row["candidate_id"]))
             workload = lanes._load(lanes._read(original))
@@ -595,7 +610,8 @@ def _sites_from_enrollment(batch: Mapping[str, Any], all_classes: list[dict[str,
         expected_source = {**lanes._load(lanes._read(Path(runtime["source_manifest"]))),
                            "image_digest": runtime["collection_image_digest"]}
         from datetime import UTC, datetime
-        published = admission._utc(amendment["published_at"] if amendment is not None else policy["published_at"]) - datetime(1970, 1, 1, tzinfo=UTC)
+        published = admission._utc(renewal["published_at"] if renewal is not None else
+            amendment["published_at"] if amendment is not None else policy["published_at"]) - datetime(1970, 1, 1, tzinfo=UTC)
         published_ns = (published.days * 86400 + published.seconds) * 1_000_000_000 + published.microseconds * 1000
         for site in sites:
             sidecar = lanes._load(lanes._read(sidecars / (site.workload_id + ".json")))
@@ -718,7 +734,8 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
                  static_capture_amendment: Path | None = None,
                  application_body_identity_policy: str | None = None,
                  qualification_delivery_compatibility: Mapping[str, str] | None = None,
-                 tamaraw_configuration_policy: str | None = None, _context=None) -> Path:
+                 tamaraw_configuration_policy: str | None = None,
+                 selected_input_renewal: Path | None = None, _context=None) -> Path:
     from .application_response_policy import validate_application_body_identity_policy, application_body_identity_policy as declared_body_policy, COMPLETE_APPLICATION_DELIVERY_POLICY
     body_policy = validate_application_body_identity_policy(application_body_identity_policy)
     from .tamaraw_fixed_configuration import validate_policy as validate_fixed_tamaraw_policy
@@ -740,7 +757,8 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
                 static_capture_amendment=static_capture_amendment,
                 application_body_identity_policy=application_body_identity_policy,
                 qualification_delivery_compatibility=qualification_delivery_compatibility,
-                tamaraw_configuration_policy=tamaraw_configuration_policy, _context=_context)
+                tamaraw_configuration_policy=tamaraw_configuration_policy,
+                selected_input_renewal=selected_input_renewal, _context=_context)
     if _context is not None:
         _context._enrollment(enrollment)
     policy = verify_policy(root)
@@ -775,6 +793,16 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
             (scheduling, front_capture_amendment, static_capture_amendment, qualification_delivery_compatibility))):
         raise ValueError("ordinary-only inputs require their own serial ordinary readiness")
     measurement_runtime = _static_measurement_runtime(scheduling, runtime, _context=_context)
+    selected_reference = None
+    if selected_input_renewal is not None:
+        from . import rapid_selected_input_renewal as renewed
+        if (ordinary_only or len(readiness) != 1 or scheduling is not None
+                or front_capture_amendment is not None or static_capture_amendment is not None
+                or qualification_delivery_compatibility is not None or body_policy != COMPLETE_APPLICATION_DELIVERY_POLICY):
+            raise ValueError("defended selected renewal requires one fresh qualified serial condition")
+        selected_reference = _ref(selected_input_renewal)
+        renewed.validate(selected_input_renewal, enrollment=enrollment, runtime=measurement_runtime,
+            mode=next(iter(readiness)), tamaraw_configuration_policy=fixed_tamaraw)
     amendment_reference, amendment = None, None
     static_reference, static_amendment = None, None
     if front_capture_amendment is not None and static_capture_amendment is not None:
@@ -860,6 +888,8 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
             from .supplied_static_capture_amendment import require_canary
             require_canary(reference, _static_canary_facts(facts, static_amendment),
                            static_reference, static_amendment, mode=mode)
+        if selected_reference is not None:
+            renewed.require_canary(reference, selected_input_renewal, mode=mode)
     workloads, campaigns = Path(runtime["workload_root"]), Path(runtime["campaign_dir"])
     from .rapid_capture_traffic import FIELD
     duration_policy = static_amendment.get(FIELD) if static_amendment is not None else None
@@ -867,7 +897,8 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
                    enrollment=enrollment, runtime=measurement_runtime,
                    front_capture_amendment=amendment_reference,
                    static_capture_amendment=static_reference,
-                   delivery_compatibility=qualification_delivery_compatibility, body_policy=body_policy, _context=_context)
+                   delivery_compatibility=qualification_delivery_compatibility, body_policy=body_policy,
+                   selected_input_renewal=selected_reference, _context=_context)
     if ordinary_only:
         ordinary.require_canary(facts, sites)
     planned = plan.plan_lanes(sites, final=True, study_version=6, rolling_batch=batch["ordinal"])
@@ -912,6 +943,8 @@ def publish_plan(root: Path, enrollment: Path, qualification_spec: Path, output:
         payload["application_body_identity_policy"] = body_policy
     if fixed_tamaraw is not None:
         payload["tamaraw_configuration_policy"] = fixed_tamaraw
+    if selected_reference is not None:
+        payload["selected_input_renewal"] = selected_reference
     if qualification_delivery_compatibility is not None:
         payload["qualification_delivery_compatibility"] = dict(qualification_delivery_compatibility)
     if amendment_reference is not None:
@@ -997,6 +1030,19 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
     body_policy = application_body_identity_policy(value)
     from .tamaraw_fixed_configuration import policy as fixed_tamaraw_policy
     fixed_tamaraw = fixed_tamaraw_policy(value)
+    selected_reference = value.get("selected_input_renewal")
+    if selected_reference is not None:
+        from . import rapid_selected_input_renewal as renewed
+        fields.add(renewed.FIELD)
+        if (len(value["readiness"]) != 1 or "scheduling" in value
+                or any(key in value for key in ("static_capture_amendment", "front_capture_amendment", "qualification_delivery_compatibility"))
+                or body_policy != COMPLETE_APPLICATION_DELIVERY_POLICY):
+            raise ValueError("defended renewed plan changed its separate serial condition")
+        renewal_path = _open_ref(selected_reference)
+        renewed.validate(renewal_path, enrollment=spec.cohort, runtime=measurement_runtime,
+            mode=next(iter(value["readiness"])), tamaraw_configuration_policy=fixed_tamaraw)
+        for mode, reference in value["readiness"].items():
+            renewed.require_canary(reference, renewal_path, mode=mode)
     if fixed_tamaraw is not None:
         fields.add("tamaraw_configuration_policy")
         if (set(value["readiness"]) != {"tamaraw"} or "scheduling" in value
@@ -1086,7 +1132,8 @@ def verify_capture_plan(spec: lanes.CaptureSpec, *, require_current: bool = Fals
     sites = _sites_from_enrollment(batch, classes, spec.qualification_spec, spec.workload_root,
                require_current=require_current, enrollment=spec.cohort, runtime=measurement_runtime,
                front_capture_amendment=amendment_reference, static_capture_amendment=static_reference,
-               delivery_compatibility=value.get("qualification_delivery_compatibility"), body_policy=body_policy, _context=_context)
+               delivery_compatibility=value.get("qualification_delivery_compatibility"), body_policy=body_policy,
+               selected_input_renewal=selected_reference, _context=_context)
     if (value["study_version"] != 6 or type(value["study_version"]) is not int
         or value["cohort_generation"] != "rolling-50" or value["bindings"] != _bindings_from_enrollment(spec.cohort, policy)
         or value["sites"] != [asdict(site) for site in sites]
@@ -1362,6 +1409,10 @@ def enrollment_roots(spec: lanes.CaptureSpec) -> list[Path]:
         return sorted(chunks.roots(spec))
     from . import rapid_additive_static_enrollment as additive
     from . import rapid_per_class_selected_enrollment as per_class
+    payload = admission._unpack(lanes._read(spec.plan_receipt), lanes.PLAN_TYPE)
+    if "selected_input_renewal" in payload:
+        from .rapid_selected_input_renewal import enrollment_roots as renewed_roots
+        return sorted(renewed_roots(spec))
     if per_class.enrollment_kind(spec.cohort):
         payload = admission._unpack(lanes._read(spec.plan_receipt), lanes.PLAN_TYPE)
         if "static_capture_amendment" in payload:

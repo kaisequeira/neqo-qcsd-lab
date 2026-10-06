@@ -334,6 +334,9 @@ def _deep_command(plan: Mapping[str, Any], directory: Path, plan_sha: str,
         from .qualification_control_authority import roots as witness_roots
         roots = sorted(set(roots) | set(witness_roots(plan["qualification_delivery_compatibility"],
                        body_policy=application_body_identity_policy(plan))))
+    if "selected_input_renewal" in plan:
+        from .rapid_selected_input_renewal import plan_roots
+        roots = sorted(set(roots) | set(plan_roots(plan, directory)))
     for root in roots:
         static_mounts.extend(["--volume", f"{root}:{root}:ro"])
     if ordinary_transport == "current-group":
@@ -653,6 +656,9 @@ def readiness_mount_roots(reference: Mapping[str, Any], *, runtime: Mapping[str,
         from .qualification_control_authority import roots as witness_roots
         roots.update(witness_roots(plan["qualification_delivery_compatibility"],
                                   body_policy=application_body_identity_policy(plan)))
+    if "selected_input_renewal" in plan:
+        from .rapid_selected_input_renewal import plan_roots
+        roots.update(plan_roots(plan, plan_path.parent))
     runtimes = [runtime]
     if reference["schema_version"] == 2:
         capsule_path, capsule_raw = _reference(reference["source_equivalence"])

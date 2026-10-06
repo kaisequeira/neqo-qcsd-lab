@@ -19,7 +19,7 @@ setting is a distinct condition and cannot inherit the old thirty-two traces.
 The target remains fifty sites, five fixed conditions and sixty-four visits
 per site and condition: 16,000 independently verified formal traces.
 
-The updated cohort has sixteen enrolled sites and twenty-seven ordinary
+The updated cohort has sixteen enrolled sites and thirty ordinary
 resource admissions. Classes 12–16 were appended in enrollment batch `b0004`;
 the host-local closure is
 `../diagnostic-rehearsals/selected-additive-classes012-016-v27-root-actual-20261006-001/enrollment-actual-closed.json`.
@@ -90,8 +90,30 @@ separate HOST accounting subsequently closed its operational deferral.
 Position 67 was input ineligible and positions 68 and 69 were admitted,
 bringing that terminal prefix to 69 of 87 decisions. Position 70 subsequently
 closed its operational deferral and position 71 was input ineligible. The
-latest prefix is 71 of 87 decisions: 27 admitted, 22 input ineligible and
-22 operationally deferred.
+prefix at that point was 71 of 87 decisions: 27 admitted, 22 input ineligible
+and 22 operationally deferred. Positions 72 and 73 then closed input ineligibility
+and operational deferral, respectively. Positions 74–76 passed their original
+complete GET, independent verification and owned HOST accounting. The current
+closed prefix is **76 of 87: 30 admitted, 23 input ineligible and 23 deferred**.
+Their original records are in the corresponding host-local
+`../diagnostic-rehearsals/supplied-static-budget64-q074-root-actual-20261006-001/operations/`
+and `q075`/`q076` siblings. These add ordinary eligibility and no formal traces.
+
+The actual v28 two-worker startup failure is preserved under
+`../diagnostic-rehearsals/ordinary-b03-v28-two-workers-root-actual-20261006-001/operations/`.
+Preparation passed in 311.318 seconds, but launch returned 2 in 359.320 seconds;
+the host launcher returned 125 after the guardian READY timeout. No worker birth,
+container or traffic receipt exists for that batch. The lifecycle cleanup record
+is in `ordinary-b03-v28-two-workers-root-retirement-20261006-001/operations/`;
+its 0/5.155-second result is global lifecycle cleanup, not lane retirement.
+
+The combined prospective repair checks are retained under
+`../diagnostic-rehearsals/rapid-v29-lifecycle-and-renewal-root-checks-20261006-001/source-checks-closed.json`.
+All 68 focused HOST cases passed with unchanged Source and Native, zero physical
+operations and zero formal credit. They exercise the real early spec parser,
+BuFLO target-worker authorities, and complete retained selected-GET renewal for
+fresh Tamaraw/CS-BuFLO flights. Actual installation and parallel capture remain
+separate required evidence. Local records are not shipped in every clone.
 
 The new HOST plan for positions 64–68 is
 `../diagnostic-rehearsals/supplied-static-budget64-accounting-b40-064-068-plan-20261006-004/plan.json`,

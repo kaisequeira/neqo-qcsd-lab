@@ -33,10 +33,13 @@ def declared(payload: Mapping[str, Any]) -> str | None:
     if "scheduling" in payload:
         from . import rapid_static_parallel_schedule as static
         from . import rapid_selected_parallel_schedule as selected
+        from . import rapid_target_parallel_schedule as target
         if selected.is_selected(payload["scheduling"]):
             selected.require_plan(payload)
         elif static.is_static(payload["scheduling"]):
             static.require_plan(payload)
+        elif target.is_schedule(payload["scheduling"]):
+            target.require_plan(payload)
         else:
             raise ValueError("BuFLO200 traffic cannot use a historical scheduling capsule")
     return value
