@@ -164,7 +164,8 @@ _LEGACY_READER_UNITS = {
 _READER_COMPATIBILITY_HELPERS = {
     'overlay': ('_compatible_overlay_sources',),
     'target': ('_reader_code_projection', '_compatible_code_ref',
-               '_planning_source_projection', '_membership_code_path'),
+               '_planning_source_projection', '_membership_code_path',
+               '_compatible_selected_membership_code'),
     'dynamic': ('_compatible_reader_sources',),
 }
 
@@ -213,10 +214,19 @@ def _compatible_code_ref(role, producer, current):
         raise ValueError('reader compatibility changes a full file mode')
     if producer['sha256'] == current['sha256']:
         return True
-    old = _reader_code_projection(Path(producer['path']).read_bytes(), role, legacy=True)
-    new = _reader_code_projection(Path(current['path']).read_bytes(), role)
+    # Source34 is itself an authenticated compatibility reader. Its complete
+    # published file hash selects that known shape; older producers still
+    # require the original guard AST fingerprints above.
+    enhanced_target = (role == 'target' and producer['sha256'] ==
+                       '3d75eee530f282fe81373b3fa584603360e1f216dbe559fc368ed1aadd5e6cad')
+    try:
+        old = _reader_code_projection(Path(producer['path']).read_bytes(), role,
+                                      legacy=not enhanced_target)
+        new = _reader_code_projection(Path(current['path']).read_bytes(), role)
+    except (ValueError, SyntaxError) as error:
+        raise ValueError('fixed target relevant producer/reader code changed') from error
     if old != new:
-        raise ValueError('reader compatibility changes protected scientific code')
+        raise ValueError('fixed target relevant producer/reader code changes protected scientific code')
     return True
 
 
@@ -264,6 +274,56 @@ def _membership_code_path(path, target_source):
         if path.is_relative_to(root / 'tools') and path.suffix == '.py':
             return path.relative_to(root).as_posix()
     return None
+
+
+def _compatible_selected_membership_code(relative, before, after):
+    """Bind exactly the two reviewed dual readers, retaining all other AST units."""
+    import ast
+    roles = {
+        'src/qcsd_lab/rapid_selected_budget_input.py': (
+            'd4bbea3459cccf36217fa9897fbef4a51f73b3690151ef8aec883344e84145ca',
+            '9e13ebe6eb79f066b2d96e9fc1cb90056584d4ba02f203ec8d8b42da95c57cf7',
+            {'_v3_inventory', 'audit_budget', 'read_audit', '_validate_input_uncached', '_input_dependencies'},
+            {'LEGACY_SELECTED_SOURCE_SHA256', 'V3_HOST_INVENTORY_SHA256', 'V3_HOST_AUTHORITY_SHA256',
+             'V3_ADMISSION_SOURCE_SHA256', 'V3_DEFERRAL_SOURCE_SHA256', '_AUDIT_PROGRAM_V3'}),
+        'src/qcsd_lab/rapid_per_class_selected_enrollment.py': (
+            '512e140944a953707b2ac9326fdb2dd6928ac8a763b519174a46534de4f3b07f',
+            '048c0766e3a68d198547f26f4516d4337665c58163c1b6fc1ee1870b9808dc52',
+            {'_policy_sources', 'verify_policy', 'membership_inputs'}, set()),
+    }
+    old_sha, new_sha, changing, additions = roles[relative]
+    _open(before); _open(after)
+    if before['sha256'] == after['sha256'] and before['mode'] == after['mode']:
+        return True
+    if (before['mode'] != after['mode'] or before['sha256'] != old_sha
+            or after['sha256'] != new_sha):
+        raise ValueError('selected budget reader is outside the exact reviewed old/new Source pair')
+    def projection(raw, *, old):
+        tree = ast.parse(raw); retained = []; removed = set(); extra = set()
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name in changing:
+                if node.name in removed:
+                    raise ValueError('selected budget reader duplicates a changed unit')
+                removed.add(node.name)
+                continue
+            if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                found = {target.id for target in targets if isinstance(target, ast.Name) and target.id in additions}
+                if found:
+                    if old or found & extra or len(found) != 1:
+                        raise ValueError('historical selected reader contains a v3-only declaration')
+                    extra.update(found); continue
+            retained.append(node)
+        required = changing - ({'_v3_inventory'} if old and relative.endswith('rapid_selected_budget_input.py') else
+                               {'_policy_sources'} if old and relative.endswith('rapid_per_class_selected_enrollment.py') else set())
+        if removed != required or (not old and extra != additions):
+            raise ValueError('selected reader changed-unit projection is incomplete')
+        tree.body = retained
+        return ast.dump(tree, include_attributes=False)
+    if projection(Path(before['path']).read_bytes(), old=True) != projection(Path(after['path']).read_bytes(), old=False):
+        raise ValueError('selected budget reader changes protected admission or graph code')
+
+
 def _compatible_sources(producer):
     """Authenticate retained authority and identical relevant executing code.
 
@@ -277,6 +337,10 @@ def _compatible_sources(producer):
         _open(producer[name]); _open(expected)
         if name in _LEGACY_READER_UNITS:
             _compatible_code_ref(name, producer[name], expected)
+        elif name == 'budgets':
+            _compatible_selected_membership_code(
+                'src/qcsd_lab/rapid_per_class_selected_enrollment.py',
+                producer[name], expected)
         elif any(producer[name][key] != expected[key] for key in ('sha256', 'mode')):
             raise ValueError('fixed target relevant producer/reader code bytes or modes differ')
     return True
@@ -292,6 +356,14 @@ def _compatible_membership(producer, current, producer_sources):
                 if _membership_code_path(Path(row['path']), source) is not None}
     old_code = code_refs(producer, producer_sources['target'])
     new_code = code_refs(current, executing['target'])
+    selected_roles = ('src/qcsd_lab/rapid_selected_budget_input.py',
+                      'src/qcsd_lab/rapid_per_class_selected_enrollment.py')
+    for relative in selected_roles:
+        if relative not in old_code and relative not in new_code:
+            continue
+        if relative not in old_code or relative not in new_code:
+            return False
+        _compatible_selected_membership_code(relative, old_code[relative], new_code[relative])
     rolling = 'src/qcsd_lab/rapid_rolling_capture.py'
     if rolling in old_code and rolling in new_code:
         before, after = old_code[rolling], new_code[rolling]
@@ -310,6 +382,8 @@ def _compatible_membership(producer, current, producer_sources):
                     row['sha256'] = old_code[rolling]['sha256']
                 elif relative == 'src/qcsd_lab/rapid_fixed_condition_target.py':
                     row['sha256'] = producer_sources['target']['sha256']
+                elif relative in selected_roles:
+                    row['sha256'] = old_code[relative]['sha256']
         result['files'].sort(key=lambda row: row['path'])
         result['trees'].sort(key=lambda row: (row['path'], row['ignore_git']))
         return result

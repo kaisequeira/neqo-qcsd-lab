@@ -44,6 +44,17 @@ def _sources():
         (old, plain, selected_budget, __import__(__name__, fromlist=["_"]))}
 
 
+def _policy_sources(value):
+    """Keep the exact historical ledger policy while adding a typed audit reader."""
+    current = _sources()
+    legacy = {**current,
+        selected_budget.__name__: selected_budget.LEGACY_SELECTED_SOURCE_SHA256,
+        __name__: '512e140944a953707b2ac9326fdb2dd6928ac8a763b519174a46534de4f3b07f'}
+    if value not in (current, legacy):
+        raise ValueError('per-class policy changed its historical or current reader Source')
+    return True
+
+
 def valid_limits(value: Any) -> dict:
     expected = [budget.static.capture_limits(16 * 1024 * 1024, 64),
                 budget.static.capture_limits(budget.RESPONSE_BYTES, budget.RECORDING_MEGABYTES)]
@@ -106,13 +117,14 @@ def verify_policy(root: Path) -> dict:
     root = lanes._regular_directory(root)
     value = receipts._unpack(lanes._read(root / "policy.json"), POLICY_TYPE)
     rolling._keys(value, POLICY_FIELDS, "per-class selected policy")
-    exact = {"contract": CONTRACT, "data_role": ROLE, "implementation_sources": _sources(),
+    exact = {"contract": CONTRACT, "data_role": ROLE,
         "canonical_site_rule": old.SITE_RULE, "selection_rule": old.SELECTION_RULE, "class_target": 50,
         "modes": list(rolling.plan.MODES), "visits_per_class_mode": 64, "formal_trace_target": 16000,
         "maximum_batch_size": 5, "visits_per_lane_workload": 4, "global_shakedown_required": False,
         "complete_membership_before_first_lane_required": False, "scientific_credit": False, "formal_accepted_trace_count": 0}
     if any(type(value[key]) is not type(expected) or value[key] != expected for key, expected in exact.items()):
         raise ValueError("per-class policy changes its prospective contract or executing Source")
+    _policy_sources(value['implementation_sources'])
     batch, classes, policy = _seed(rolling._open_ref(value["seed_enrollment"]))
     if (value["seed_policy"] != batch["policy"] or value["seed_classes"] != classes
             or type(value["seed_batch_ordinal"]) is not int or value["seed_batch_ordinal"] != batch["ordinal"]
@@ -325,7 +337,9 @@ def membership_inputs(path: Path) -> set[Path]:
         else:
             audit = selected_budget.read_audit(audit_path)
             files.add(audit_path)
-            files.update(plain.reopen(audit[key]) for key in ("started", "completed", "stdout", "stderr", "source_inventory"))
+            files.update(plain.reopen(audit[key]) for key in
+                ("started", "completed", "stdout", "stderr", "source_inventory") +
+                (("host_authority",) if "host_authority" in audit else ()))
     return files
 
 

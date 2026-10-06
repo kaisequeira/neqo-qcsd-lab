@@ -19,6 +19,7 @@ def main():
     audit = sub.add_parser("audit-budget")
     for name in ("output", "source-root", "source-inventory", "context", "terminal"):
         audit.add_argument("--" + name, type=Path, required=True)
+    audit.add_argument("--host-authority", type=Path)
     publish = sub.add_parser("publish-input")
     publish.add_argument("--audit", type=Path, required=True)
     publish.add_argument("--candidate-id", required=True)
@@ -39,7 +40,8 @@ def main():
     with context.scope():
         if args.command == "audit-budget":
             result = selected.audit_budget(args.output, source_root=args.source_root,
-                source_inventory=plain.reference(args.source_inventory), context=args.context, terminal=args.terminal)
+                source_inventory=plain.reference(args.source_inventory), context=args.context, terminal=args.terminal,
+                host_authority=None if args.host_authority is None else plain.reference(args.host_authority))
         elif args.command == "publish-input":
             result = selected.publish_input(args.output, audit=args.audit, candidate_id=args.candidate_id)
         elif args.command == "prepare-input":

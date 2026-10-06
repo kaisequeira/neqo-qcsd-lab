@@ -32,6 +32,11 @@ CONTRACT = "selected-budget-own-complete-bootstrap-get-with-original-authority-a
 FIELD = "selected_budget_input_evidence"
 FIELDS = plain.FIELDS | {"budget_terminal", "underlying_manifest", "budget_context"}
 ORIGINAL_CORE_INVENTORY_SHA256 = "e20951f884196b5ec1eed6f6634462c980976e3dfbc626fd50a25f18b8c9a809"
+LEGACY_SELECTED_SOURCE_SHA256 = "d4bbea3459cccf36217fa9897fbef4a51f73b3690151ef8aec883344e84145ca"
+V3_HOST_INVENTORY_SHA256 = "e6a77370e1ae219e97cf4147c239a29e46cf56df519ce9a0781ea97779c271ff"
+V3_HOST_AUTHORITY_SHA256 = "54263b4d1da96c4b22ee7be5401cd51d2e6336c78f69673b2661d2f28abb91c3"
+V3_ADMISSION_SOURCE_SHA256 = "f3ebf10f0d75944c18c73699efeb4f6d6f637e3dd87f8f84b4e20695706fab35"
+V3_DEFERRAL_SOURCE_SHA256 = "4ba46dbe73cf6ada368b41fb0bafaec03a3db62ddaf30de6b2225e7f4802d283"
 
 
 def is_selected(value: Any) -> bool:
@@ -66,6 +71,80 @@ print(json.dumps({"candidate":candidate,"manifest":p.reference(path),"terminal":
  "context":p.reference(context.root/"provenance.json"),"capture_limits":manifest["preparation"][b.FIELD]["capture_limits"],
  "facts":facts,"scientific_credit":False},sort_keys=True))
 '''
+
+# The historical subprocess program above remains literal and unchanged for
+# every existing selection audit.  This successor changes only its Source
+# authority: the v3 HOST reader can authenticate q083's typed zero-credit
+# preparation deferral before reading a later actually admitted terminal.
+_AUDIT_PROGRAM_V3 = _AUDIT_PROGRAM.replace(
+    'from qcsd_lab import supplied_static_budget_successor as b',
+    'from qcsd_lab import supplied_static_completed_get_deferral as typed\n'
+    'if typed.REASON!="actual-complete-native-get-preparation-no-successful-secondary":'
+    'raise ValueError("v3 typed deferral Source changed")\n'
+    'from qcsd_lab import supplied_static_budget_successor as b')
+
+
+def _v3_inventory(source_root: Path, inventory: Mapping[str, Any], authority: Mapping[str, Any], *, full: bool) -> dict:
+    """Reopen the independently closed v3 HOST reader without replacing Core002."""
+    path = plain.reopen(inventory)
+    authority_path = plain.reopen(authority)
+    if inventory['sha256'] != V3_HOST_INVENTORY_SHA256 or authority['sha256'] != V3_HOST_AUTHORITY_SHA256:
+        raise ValueError('selected v3 audit requires the reviewed typed HOST inventory and authority')
+    value = get._load(get._read(path))
+    record = get._load(get._read(authority_path))
+    source_root = source_root.absolute()
+    files = value.get('files')
+    if (not isinstance(files, dict) or len(files) != 2656
+            or value.get('source_root') != str(source_root)
+            or record.get('artifact_type') != 'qcsd-host-accounting-complete-get-preparation-deferral-authority-v3'
+            or record.get('schema_version') != 3 or record.get('source_root') != str(source_root)
+            or record.get('source_inventory') != dict(inventory)
+            or record.get('original_inventory', {}).get('sha256') != ORIGINAL_CORE_INVENTORY_SHA256
+            or record.get('preparation_deferral_policy') !=
+                'host-authenticated-original-complete-get-zero-successful-nonempty-secondary-no-credit-v1'):
+        raise ValueError('selected v3 audit lost its complete original and typed HOST authority')
+    exact = {
+        'supplied_static_admission.py': V3_ADMISSION_SOURCE_SHA256,
+        'supplied_static_completed_get_deferral.py': V3_DEFERRAL_SOURCE_SHA256,
+        'supplied_static_budget_successor.py': graph.digest(get._read(Path(budget.__file__))),
+        'supplied_static_preparation.py': graph.digest(get._read(Path(original.__file__))),
+        'supplied_static_get.py': graph.digest(get._read(Path(get.__file__))),
+        'supplied_static_graph.py': graph.digest(get._read(Path(graph.__file__))),
+    }
+    for name, expected in exact.items():
+        relative = 'src/qcsd_lab/' + name
+        ref = files.get(relative)
+        if (not isinstance(ref, dict) or ref.get('sha256') != expected
+                or ref.get('mode') != 0o644 or full and graph.digest(get._read(source_root / relative)) != expected):
+            raise ValueError('selected v3 audit changed an original or typed admission validator')
+    for key, expected in (('preparation_deferral_source', V3_DEFERRAL_SOURCE_SHA256),):
+        member = record.get(key)
+        if (not isinstance(member, dict) or member.get('sha256') != expected
+                or member.get('path') != str(source_root / 'src/qcsd_lab/supplied_static_completed_get_deferral.py')
+                or full and plain.reopen(member) != source_root / 'src/qcsd_lab/supplied_static_completed_get_deferral.py'):
+            raise ValueError('selected v3 typed source is not the authenticated authority file')
+    if full:
+        source_root = lanes._regular_directory(source_root)
+        members = set()
+        for prefix in ('', 'neqo-qcsd/'):
+            directory = source_root / prefix
+            for arguments in (('ls-files', '-z'), ('ls-files', '--others', '--exclude-standard', '-z')):
+                result = subprocess.run(['git', '-C', str(directory), *arguments], check=True, capture_output=True)
+                members.update(prefix + name.decode() for name in result.stdout.split(b'\0')
+                               if name and name != b'neqo-qcsd')
+        if members != set(files):
+            raise ValueError('selected v3 audit full HOST Source membership changed')
+        for relative, item in files.items():
+            member = Path(relative)
+            if (member.is_absolute() or '..' in member.parts or not isinstance(item, dict)
+                    or set(item) != {'sha256', 'mode'}):
+                raise ValueError('selected v3 inventory member escapes its checkout')
+            candidate = source_root / member
+            if (candidate.is_symlink() or not candidate.is_file()
+                    or graph.digest(get._read(candidate)) != item['sha256']
+                    or candidate.stat().st_mode & 0o7777 != item['mode']):
+                raise ValueError('selected v3 audit full HOST Source bytes or mode changed')
+    return value
 
 
 def _inventory(source_root: Path, inventory: Mapping[str, Any], *, full: bool) -> dict:
@@ -108,11 +187,14 @@ def _inventory(source_root: Path, inventory: Mapping[str, Any], *, full: bool) -
 
 
 def audit_budget(output: Path, *, source_root: Path, source_inventory: Mapping[str, Any],
-                 context: Path, terminal: Path) -> Path:
+                 context: Path, terminal: Path, host_authority: Mapping[str, Any] | None = None) -> Path:
     """Create an immutable original-authority operation, granting zero credit."""
     source_root = source_root.absolute()
-    before_inventory = _inventory(source_root, source_inventory, full=True)
-    command = [sys.executable, "-I", "-B", "-c", _AUDIT_PROGRAM,
+    auditor = (_inventory if host_authority is None else
+               lambda root, inventory, *, full: _v3_inventory(root, inventory, host_authority, full=full))
+    program = _AUDIT_PROGRAM if host_authority is None else _AUDIT_PROGRAM_V3
+    before_inventory = auditor(source_root, source_inventory, full=True)
+    command = [sys.executable, "-I", "-B", "-c", program,
                str(source_root), str(context.absolute()), str(terminal.absolute())]
     output = output.absolute()
     get.util.require_disjoint_path(output, [source_root, context, terminal], label="budget selection audit")
@@ -120,6 +202,8 @@ def audit_budget(output: Path, *, source_root: Path, source_inventory: Mapping[s
     started = {"schema_version": 1, "command": command, "started_at": receipts._now(),
         "source_inventory": dict(source_inventory), "context": plain.reference(context / "provenance.json"),
         "terminal": plain.reference(terminal)}
+    if host_authority is not None:
+        started['host_authority'] = dict(host_authority)
     receipts.durable_create(output / "audit-started.json", graph.canonical_bytes(started))
     before = time.monotonic()
     result = subprocess.run(command, check=False, capture_output=True)
@@ -132,13 +216,15 @@ def audit_budget(output: Path, *, source_root: Path, source_inventory: Mapping[s
     receipts.durable_create(output / "audit-completed.json", graph.canonical_bytes(completed))
     if result.returncode != 0:
         raise ValueError("original budget authority audit failed; raw attempts remain")
-    if _inventory(source_root, source_inventory, full=True) != before_inventory:
+    if auditor(source_root, source_inventory, full=True) != before_inventory:
         raise ValueError("original budget audit Source changed during its operation")
     payload = {"contract": CONTRACT, "source_root": str(source_root), "source_inventory": dict(source_inventory),
-        "program_sha256": graph.digest(_AUDIT_PROGRAM.encode()), "result": get._load(result.stdout),
+        "program_sha256": graph.digest(program.encode()), "result": get._load(result.stdout),
         "started": plain.reference(output / "audit-started.json"), "completed": plain.reference(output / "audit-completed.json"),
         "stdout": plain.reference(output / "audit.stdout.log"), "stderr": plain.reference(output / "audit.stderr.log"),
         "published_at": receipts._now(), "scientific_credit": False}
+    if host_authority is not None:
+        payload['host_authority'] = dict(host_authority)
     path = output / "selection-audit.json"
     receipts.durable_create(path, graph.canonical_bytes(receipts._bind(AUDIT_TYPE, payload)))
     read_audit(path)
@@ -147,8 +233,11 @@ def audit_budget(output: Path, *, source_root: Path, source_inventory: Mapping[s
 
 def read_audit(path: Path) -> dict:
     value = receipts._unpack(get._read(path), AUDIT_TYPE)
-    get._exact(value, {"contract", "source_root", "source_inventory", "program_sha256", "result", "started",
-        "completed", "stdout", "stderr", "published_at", "scientific_credit"}, "budget selection audit")
+    v3 = 'host_authority' in value
+    program = _AUDIT_PROGRAM_V3 if v3 else _AUDIT_PROGRAM
+    fields = {"contract", "source_root", "source_inventory", "program_sha256", "result", "started",
+        "completed", "stdout", "stderr", "published_at", "scientific_credit"}
+    get._exact(value, fields | ({'host_authority'} if v3 else set()), "budget selection audit")
     started = get._load(get._read(plain.reopen(value["started"])))
     completed = get._load(get._read(plain.reopen(value["completed"])))
     stdout = get._read(plain.reopen(value["stdout"]))
@@ -156,15 +245,17 @@ def read_audit(path: Path) -> dict:
     row = get._exact(value["result"], {"candidate", "manifest", "terminal", "context", "capture_limits", "facts",
         "scientific_credit"}, "budget audited class")
     if (value["contract"] != CONTRACT or value["scientific_credit"] is not False or row["scientific_credit"] is not False
-            or value["program_sha256"] != graph.digest(_AUDIT_PROGRAM.encode())
+            or value["program_sha256"] != graph.digest(program.encode())
             or not isinstance(started.get("command"), list) or len(started["command"]) != 8
             or not Path(started["command"][0]).is_absolute()
-            or started["command"][1:6] != ["-I", "-B", "-c", _AUDIT_PROGRAM, value["source_root"]]
+            or started["command"][1:6] != ["-I", "-B", "-c", program, value["source_root"]]
             or started["command"][6] != str(Path(started["context"]["path"]).parent)
             or started["command"][7] != started["terminal"]["path"]
             or started.get("schema_version") != 1 or type(started["schema_version"]) is not int
             or completed.get("schema_version") != 1 or type(completed["schema_version"]) is not int
             or started["source_inventory"] != value["source_inventory"]
+            or (v3 and started.get('host_authority') != value['host_authority'])
+            or (not v3 and 'host_authority' in started)
             or completed["started"] != value["started"] or completed["stdout"] != value["stdout"]
             or completed["stderr"] != value["stderr"] or type(completed["returncode"]) is not int or completed["returncode"] != 0
             or type(completed["elapsed_seconds"]) not in (int, float) or not math.isfinite(completed["elapsed_seconds"])
@@ -177,7 +268,10 @@ def read_audit(path: Path) -> dict:
         raise ValueError("budget audit changes its command, original Source, complete admission, caps or raw closure")
     # The completed operation binds the full original inventory; per-trace
     # membership reads retain that artifact without replaying its Source tree.
-    _inventory(Path(value["source_root"]), value["source_inventory"], full=False)
+    if v3:
+        _v3_inventory(Path(value['source_root']), value['source_inventory'], value['host_authority'], full=False)
+    else:
+        _inventory(Path(value["source_root"]), value["source_inventory"], full=False)
     for key in ("context", "terminal"):
         plain.reopen(started[key])
     for key in ("manifest", "context", "terminal"):
@@ -230,8 +324,13 @@ def _underlying(value: dict, manifest: dict) -> dict:
 
 def _validate_input_uncached(path: Path) -> tuple[dict, dict, dict]:
     value, _ = input_metadata(plain.reference(path))
-    if value["direct_validator_sources"] != direct_sources():
-        raise ValueError("selected budget direct verifier Source changed")
+    expected = direct_sources()
+    legacy = {**expected, __name__: LEGACY_SELECTED_SOURCE_SHA256}
+    if value['direct_validator_sources'] not in (expected, legacy):
+        raise ValueError('selected budget direct verifier Source changed')
+    if (value['direct_validator_sources'] == legacy
+            and 'host_authority' in read_audit(plain.reopen(value['selection_audit']))):
+        raise ValueError('v3 typed audit cannot claim the historical selected verifier')
     plain._bound_validator_files(value)
     manifest = get._load(get._read(plain.reopen(value["original_manifest"])))
     underlying = _underlying(value, manifest)
@@ -271,7 +370,8 @@ def _input_dependencies(path: Path, context) -> tuple[set[Path], set[Path]]:
     files.update(Path(module.__file__).absolute() for module in _modules())
     audit_path = follow(value["selection_audit"])
     audit = receipts._unpack(context.watch_file(audit_path), AUDIT_TYPE)
-    for name in ("started", "completed", "stdout", "stderr", "source_inventory"):
+    for name in ("started", "completed", "stdout", "stderr", "source_inventory") + (
+            ("host_authority",) if "host_authority" in audit else ()):
         follow(audit[name])
     started = get._load(context.watch_file(Path(audit["started"]["path"])))
     for name in ("context", "terminal"):
