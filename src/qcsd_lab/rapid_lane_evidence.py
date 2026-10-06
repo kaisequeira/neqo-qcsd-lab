@@ -291,6 +291,13 @@ def executed_image_runtime_check(value: Mapping[str, str]) -> dict[str, Any]:
 def executed_image_plan_check(value: Mapping[str, str], *, _context=None) -> dict[str, Any]:
     """Run inside the bound collection image; no caller can supply a pass flag."""
     spec = CaptureSpec(**{key: Path(item) if key in PATH_KEYS else item for key, item in value.items()})
+    if plan_payload(_read(spec.plan_receipt)).get("study_version") == 6:
+        from .rapid_operation_facts import OperationFacts, current_context
+        context = _context or current_context() or OperationFacts()
+        if current_context() is not context:
+            with context.scope():
+                return executed_image_plan_check(value, _context=context)
+        _context = context
     _check_spec(spec)
     runtime = executed_image_runtime_check({key: value[key] for key in RUNTIME_KEYS})
     from .rapid_capture_traffic import spec_files

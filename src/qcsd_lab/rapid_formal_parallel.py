@@ -191,9 +191,12 @@ def prepare_batch(spec_path: Path, evidence_root: Path, campaigns: list[str], ou
     from .rapid_operation_facts import OperationFacts
     _context = OperationFacts() if _context is None else _context
     _context.begin_action()
+    _context.watch_file(spec_path)
     spec = ordinary.load_capture_spec(spec_path)
     spec_paths = [spec_path, second_spec if second_spec is not None else spec_path]
-    specs = [spec, ordinary.load_capture_spec(spec_paths[1])]
+    _context.watch_file(spec_paths[1])
+    specs = [spec, spec if spec_paths[1].absolute() == spec_path.absolute()
+             else ordinary.load_capture_spec(spec_paths[1])]
     root = shared.regular_dir(evidence_root)
     if (spec.module_root != spec.runtime_source_root
         or ordinary._read(spec.host_launcher) != ordinary._read(spec.base_launcher)):

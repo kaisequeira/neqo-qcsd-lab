@@ -42,13 +42,40 @@ def is_schedule(reference):
     return lanes._load(_read(rolling._open_ref(reference))).get('artifact_type') == CAPSULE_TYPE
 
 
+def _facts_key(role, identity, base, context):
+    """Keys authenticate current readers; original action fences close inputs."""
+    runtime = {key: base.serializable()[key] for key in rolling.RUNTIME_FIELDS}
+    readers = {}
+    for relative in CONTROL_FILES:
+        for path in {base.module_root / relative, base.runtime_source_root / relative,
+                     chunks._executing_source_path(relative, runtime)}:
+            raw = context.watch_file(path)
+            readers[str(path)] = {'sha256': lanes._sha(raw), 'mode': path.stat().st_mode & 0o7777}
+    raw = context.watch_file(base.plan_receipt)
+    return ('target-parallel-action-facts', role, target._digest(identity),
+            target._digest(readers), str(base.plan_receipt), lanes._sha(raw),
+            base.plan_receipt.stat().st_mode & 0o7777)
+
+
 def _base(spec):
     if not chunks.is_plan(spec.plan_receipt):
         raise ValueError('target scheduling needs its exact unscheduled target chunk plan')
-    return chunks.verify_plan(spec, require_current=True, _context=current_context())
+    context = current_context()
+    key = _facts_key('serial-plan', spec.serializable(), spec, context) if context is not None else None
+    if key is not None and context.has(key): return context.get(key)
+    result = chunks.verify_plan(spec, require_current=True, _context=context)
+    if key is None: return result
+    context.remember(key, result)
+    return context.get(key)
 
 
 def input_dependencies(base, sites, *, _context=None):
+    context = _context or current_context()
+    if context is not None and current_context() is not context:
+        with context.scope(): return input_dependencies(base, sites, _context=context)
+    key = (_facts_key('input-dependencies', [base.serializable(), [asdict(site) for site in sites]],
+                      base, context) if context is not None else None)
+    if key is not None and context.has(key): return context.get(key)
     files, trees = old_workers.input_dependencies(base, sites, _context=_context)
     _, payload = _base(base)
     files.update(chunks.input_files(payload))
@@ -57,15 +84,21 @@ def input_dependencies(base, sites, *, _context=None):
         for name in ('manifest', 'sidecar_root'):
             path = Path(row[name]); path = path if path.is_absolute() else base.qualification_spec.parent / path
             files.add(path) if name == 'manifest' else trees.add(path)
-    context = _context or current_context()
     if context is not None:
         for path in files: context.watch_file(path)
         for path in trees: context.watch_tree(path)
+        context.remember(key, (files, trees))
+        return context.get(key)
     return files, trees
 
 
 def bind_dependencies(value, context):
-    base = _spec(value['base_spec']); context.bind_capture(base)
+    if current_context() is not context:
+        with context.scope(): return bind_dependencies(value, context)
+    base = _spec(value['base_spec'])
+    key = _facts_key('dependency-binding', value, base, context)
+    if context.has(key): return
+    context.bind_capture(base)
     sites, _ = _base(base)
     input_dependencies(base, sites, _context=context)
     pending, seen = [value['current_canonical']], set()
@@ -77,6 +110,7 @@ def bind_dependencies(value, context):
         for name in ('client_reuse_recipe', 'client_reuse_proof', 'original_native_build_record', 'closure_recipe'):
             if name in canonical: context.watch_file(rolling._open_ref(canonical[name]))
         if canonical.get('original_canonical') is not None: pending.append(canonical['original_canonical'])
+    context.remember(key, True)
 
 
 def _derive(base, runtime, canonical_ref):
@@ -164,11 +198,20 @@ def verify_plan(spec, *, require_current=False, _context=None):
 
 def require_plan(value, *, _context=None):
     if not is_payload(value): raise ValueError('target worker typed policy missing')
+    context = _context or current_context()
+    if context is not None and current_context() is not context:
+        with context.scope(): return require_plan(value, _context=context)
+    base = _spec(value[BASE_FIELD])
+    key = _facts_key('parallel-plan', value, base, context) if context is not None else None
+    if key is not None and context.has(key): return context.get(key)
     capsule = validate_schedule(value['scheduling'], runtime=value['runtime'], before=value['declared_at'], _context=_context)
-    base = _spec(value[BASE_FIELD]); _, old = _base(base)
+    _, old = _base(base)
     rolling._keys(value, set(old) | EXTRA_KEYS, 'target parallel payload')
     if capsule['base_spec'] != base.serializable() or any(value[key] != item for key, item in old.items() if key != 'declared_at'):
         raise ValueError('target worker payload changed its full serial authority')
+    if key is not None:
+        context.remember(key, capsule)
+        return context.get(key)
     return capsule
 
 
