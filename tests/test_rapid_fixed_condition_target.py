@@ -11,6 +11,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 from types import SimpleNamespace
 
@@ -448,9 +449,25 @@ def original_report_fixture(case,monkeypatch):
     """Only installation and original physics are synthetic, explicitly."""
     root=case.root/'measurement-source';root.mkdir()
     client=root/'client';client.write_bytes(b'controlled client')
+    # Give the controlled installation boundary a real, closed paired release.
+    # Its Native Gitlink retains the same exact original c24 identity as the
+    # fixture target; no candidate checkout or retained receipt is mutated.
+    native=root/'neqo-qcsd'
+    source_native=Path(target.__file__).resolve().parents[2]/'neqo-qcsd'
+    subprocess.run(['git','clone','--quiet','--no-hardlinks',str(source_native),str(native)],check=True)
+    subprocess.run(['git','-C',str(native),'checkout','--quiet','--detach',NATIVE],check=True)
+    (root/'src').mkdir();(root/'tools').mkdir()
+    subprocess.run(['git','init','--quiet',str(root)],check=True)
+    subprocess.run(['git','-C',str(root),'add','client'],check=True)
+    subprocess.run(['git','-C',str(root),'update-index','--add','--cacheinfo',
+        f'160000,{NATIVE},neqo-qcsd'],check=True)
+    subprocess.run(['git','-C',str(root),'-c','user.name=fixture','-c','user.email=fixture@example.test',
+        '-c','commit.gpgsign=false','commit','--quiet','-m','controlled paired release'],check=True)
+    lab_head=subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD']).decode().strip()
+    release=target.dynamic.release_snapshot(root,lab_head,NATIVE)
     source_ref=write(case.root/'installed-source-binding.json',{'controlled':'actual installed runtime boundary'})
-    source={'root':str(root),'files':{'client':target.reference(client)},
-        'binding':{'runtime_identity':{'source':{'lab_commit':'a'*40,'neqo_commit':NATIVE,'neqo_pinned_commit':NATIVE},
+    source={**release,
+        'binding':{'release':release,'runtime_identity':{'source':{'lab_commit':lab_head,'neqo_commit':NATIVE,'neqo_pinned_commit':NATIVE},
             'collection_image_digest':'sha256:'+'a'*64,'client_sha256':CLIENT},
             'read_dependencies':[],'directory_dependencies':[],'reader_sources':{},'runtime_operation':{},'canonical':source_ref}}
     result=case.root/'original-result';result.mkdir()

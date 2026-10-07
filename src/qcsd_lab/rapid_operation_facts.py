@@ -150,7 +150,7 @@ class OperationFacts:
             raise ValueError("operation dependency reference changed")
         return path
 
-    def _enrollment(self, path: Path, seen=None) -> None:
+    def _enrollment(self, path: Path, seen=None):
         seen = set() if seen is None else seen
         path = Path(path).absolute()
         if path in seen:
@@ -161,15 +161,20 @@ class OperationFacts:
         raw = self.watch_file(path)
         if json.loads(raw).get("receipt_type") == per_class.ENROLLMENT_TYPE:
             key = ("per-class-enrollment-dependencies", str(path), hashlib.sha256(raw).hexdigest())
+            verified_key = ("per-class-enrollment-bound-proof", str(path), hashlib.sha256(raw).hexdigest())
             if key in self._bindings:
-                return
+                return self.get(verified_key)
             for module in (per_class, per_class.old, per_class.plain, *per_class.selected_budget._modules()):
                 self.watch_file(Path(module.__file__))
             self.watch_file(Path(__file__))
-            for dependency in per_class.membership_inputs(path):
+            # The dependency selector already performed the genuine proof.
+            # Carry that value only after all of its files are watched here.
+            dependencies, verified = per_class.membership_inputs(path, _return_verified=True)
+            for dependency in dependencies:
                 self.watch_file(dependency)
+            self.remember(verified_key, verified)
             self._bindings.add(key)
-            return
+            return verified
         if json.loads(self.watch_file(path)).get("receipt_type") == additive.ENROLLMENT_TYPE:
             for dependency in additive.membership_inputs(path):
                 self.watch_file(dependency)

@@ -2638,7 +2638,7 @@ def test_launcher_selects_prepare_image_only_for_pinned_cdp_test() -> None:
     launcher_path = Path(__file__).parents[1] / "qcsd-lab"
     launcher = launcher_path.read_text(encoding="utf-8")
     selection = launcher.split('case "${1:-}" in', 1)[1].split(
-        "if ! _qcsd_docker_api image inspect", 1
+        "_qcsd_require_image_present() {", 1
     )[0]
     assert 'test) image="${COLLECTION_IMAGE}"' in selection
     assert '"${2:-}" == "pinned-cdp"' in selection

@@ -7658,8 +7658,66 @@ if [[ "${1:-}" == "class-study" &&
   image="${PREPARE_IMAGE}"
 fi
 
-if ! _qcsd_docker_api image inspect "${image}" >/dev/null 2>&1; then
-  echo "Missing image ${image}; run: ./qcsd-lab build" >&2
+_qcsd_require_image_present() {
+  local requested="$1" observed="" inspect_status=0 inspect_timeout=0
+  local attempt missing_line missing_line_alt api_failure_line
+  unset _QCSD_INSPECTED_IMAGE_ID
+  for attempt in 1 2; do
+    inspect_timeout="${_QCSD_DOCKER_METADATA_TIMEOUT_SECONDS}"
+    (( attempt == 1 )) || inspect_timeout=30
+    if observed="$(_qcsd_docker_api_with_timeout "${inspect_timeout}" \
+        image inspect --format '{{.Id}}' "${requested}" 2>&1)"; then
+      inspect_status=0
+    else
+      inspect_status=$?
+    fi
+    if (( inspect_status == 0 )) &&
+       [[ "${observed}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+      if [[ "${requested}" == sha256:* && "${observed}" != "${requested}" ]]; then
+        echo "qcsd-lab image inspection returned a different immutable ID for ${requested}: ${observed}" >&2
+        return 1
+      fi
+      _QCSD_INSPECTED_IMAGE_ID="${observed}"
+      return 0
+    fi
+    # The native service reports the Docker error followed by its own bounded
+    # API diagnostic. Only that exact Docker not-found response proves absence.
+    missing_line="Error: No such image: ${requested}"
+    missing_line_alt="Error response from daemon: No such image: ${requested}"
+    api_failure_line="qcsd-api-failure phase=unspecified action=image-inspect status=1 bound_s=${inspect_timeout}"
+    (( inspect_timeout <= 10 )) || api_failure_line="qcsd-api-failure phase=unspecified action=image-inspect status=1 bound_s=unreported"
+    if (( inspect_status == 1 )) &&
+       { [[ "${observed}" == "${missing_line}" ||
+            "${observed}" == "${missing_line}"$'\n'"${api_failure_line}" ]] ||
+         [[ "${observed}" == "${missing_line_alt}" ||
+            "${observed}" == "${missing_line_alt}"$'\n'"${api_failure_line}" ]]; }; then
+      echo "Missing image ${requested}; run: ./qcsd-lab build" >&2
+      return 1
+    fi
+    # The supervisor always appends this one line on nonzero status. An exact
+    # wrapper-only line carries no Docker result; keep it in the retry record.
+    # Any additional text, including pinned daemon identity failure, is final.
+    api_failure_line="qcsd-api-failure phase=unspecified action=image-inspect status=${inspect_status} bound_s=${inspect_timeout}"
+    (( inspect_timeout <= 10 )) || api_failure_line="qcsd-api-failure phase=unspecified action=image-inspect status=${inspect_status} bound_s=unreported"
+    if [[ -n "${observed}" && "${observed}" != "${api_failure_line}" ]] ||
+       [[ "${inspect_status}" != 0 && "${inspect_status}" != 1 &&
+          "${inspect_status}" != 124 && "${inspect_status}" != 137 ]]; then
+      printf 'qcsd-lab image inspection failed at the %ss Docker API boundary (status %s)%s\n' \
+        "${inspect_timeout}" "${inspect_status}" "${observed:+: ${observed}}" >&2
+      return 1
+    fi
+    if (( attempt == 1 )); then
+      printf 'qcsd-lab image inspection returned no result at the %ss Docker API boundary (status %s); retrying once with a 30s bound%s\n' \
+        "${inspect_timeout}" "${inspect_status}" "${observed:+: ${observed}}" >&2
+    else
+      printf 'qcsd-lab image inspection returned no result at the %ss Docker API boundary (status %s)%s\n' \
+        "${inspect_timeout}" "${inspect_status}" "${observed:+: ${observed}}" >&2
+      return 1
+    fi
+  done
+}
+
+if ! _qcsd_require_image_present "${image}"; then
   exit 1
 fi
 if [[ "${1:-}" == "buflo-study" && "${2:-}" == "reference" ]]; then
@@ -7673,8 +7731,7 @@ fi
 if [[ "${1:-}" == "buflo-study" && "${2:-}" == "qualify" &&
       "${QCSD_BUFLO_QUALIFY_VERIFY_ONLY:-0}" != "1" &&
       "${QCSD_BUFLO_QUALIFY_CONTROLLED_ONLY:-0}" != "1" ]]; then
-  if ! _qcsd_docker_api image inspect "${PREPARE_IMAGE}" >/dev/null 2>&1; then
-    echo "Missing image ${PREPARE_IMAGE}; run: ./qcsd-lab build" >&2
+  if ! _qcsd_require_image_present "${PREPARE_IMAGE}"; then
     exit 1
   fi
   qualification_expect=""
@@ -7846,7 +7903,11 @@ elif [[ "${1:-}" == "derive-chaff-prefix-specs" ||
 else
   mkdir -p "${ROOT}/results" "${ROOT}/artifacts" "${ROOT}/config/workloads"
 fi
-image_id="$(_qcsd_docker_api image inspect --format '{{.Id}}' "${image}")"
+if ! _qcsd_require_image_present "${image}"; then
+  exit 1
+fi
+image_id="${_QCSD_INSPECTED_IMAGE_ID}"
+unset _QCSD_INSPECTED_IMAGE_ID
 if (( rapid_capture )); then
   # A fixed-resource preparation retains absolute references to its original
   # complete GET and prospective context. Authenticate those records on the

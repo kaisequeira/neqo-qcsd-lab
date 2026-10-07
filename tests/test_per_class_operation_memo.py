@@ -19,7 +19,7 @@ from qcsd_lab import rapid_per_class_selected_enrollment as ledger
 from qcsd_lab import rapid_rolling_capture as rolling
 from qcsd_lab import rapid_selected_budget_input as selected
 from qcsd_lab import rapid_site_admission as receipts
-from tests.test_per_class_selected_budget import actual_q53_input, genuine_seed, fixture_enrollment, write
+from tests.test_per_class_selected_budget import SEED, actual_q53_input, genuine_seed, fixture_enrollment, write
 
 
 def prepared(actual_q53_input):
@@ -82,9 +82,9 @@ def test_actual_q53_public_loader_caps_and_ancestry_reuse_with_fresh_actions(
         with owner.scope():
             batch, classes, policy = rolling._verify_enrollment(enrollment)
             first = counts["membership"]
-            # One metadata dependency-selection pass and one genuine initial
-            # membership proof; repeated public readers perform neither again.
-            assert first == 2 * (action + 1)
+            # The dependency selector's genuine proof is carried through the
+            # same action; repeated public readers perform no second proof.
+            assert first == action + 1
             for _ in range(3):
                 loaded = lanes.load_capture_spec(spec_path)
                 verified = {}
@@ -198,7 +198,7 @@ def test_metadata_only_enrollment_binds_all_executing_audit_modules_before_effec
     output = actual_q53_input[3] / "no-metadata-effect.json"
     with owner.scope():
         original = ledger.verify_enrollment(enrollment)
-        assert counts["membership"] == 2
+        assert counts["membership"] == 1
         for module in (selected.budget, selected.original, selected.get, selected.graph):
             path = Path(module.__file__).absolute()
             assert path in owner._files
@@ -218,4 +218,37 @@ def test_metadata_only_enrollment_binds_all_executing_audit_modules_before_effec
                     path.chmod(old_mode)
                     path.write_bytes(old_bytes)
                 owner.check()
-        assert counts["membership"] == 2
+        assert counts["membership"] == 1
+
+
+def test_enrollment_first_proof_cannot_outlive_changed_receipt(actual_q53_input, genuine_seed, monkeypatch):
+    enrollment, _, _, _ = fixture_enrollment(actual_q53_input, genuine_seed, monkeypatch)
+    original = ledger._verify_enrollment_uncached
+    mode = enrollment.stat().st_mode & 0o7777
+    owner = facts.OperationFacts()
+
+    def change_after_proof(path):
+        result = original(path)
+        if Path(path).absolute() == enrollment.absolute():
+            enrollment.chmod(mode ^ 0o200)
+        return result
+
+    monkeypatch.setattr(ledger, "_verify_enrollment_uncached", change_after_proof)
+    try:
+        with owner.scope(), pytest.raises(ValueError, match="operation dependency changed during validation"):
+            ledger.verify_enrollment(enrollment)
+        assert not any(key[0] in ("per-class-enrollment", "per-class-enrollment-bound-proof")
+                       for key in owner._facts)
+    finally:
+        enrollment.chmod(mode)
+    owner.check()
+
+
+def test_old_seed_cannot_be_memoized_as_per_class_in_or_out_of_action(genuine_seed):
+    with pytest.raises(ValueError):
+        ledger.verify_enrollment(SEED)
+    owner = facts.OperationFacts()
+    with owner.scope(), pytest.raises(ValueError):
+        ledger.verify_enrollment(SEED)
+    assert not any(key[0] in ("per-class-enrollment", "per-class-enrollment-bound-proof")
+                   for key in owner._facts)

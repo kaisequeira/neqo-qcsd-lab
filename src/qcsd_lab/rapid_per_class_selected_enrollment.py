@@ -64,6 +64,8 @@ def _policy_sources(value):
             plain.__name__: 'f12460f830c4f4ba7a2d5c5600be59c7fd9800ee0d974692b24bba84ed356308',
             selected_budget.__name__: '3f03bae31b667535adab316fea98cc34f19bf9292bc1b041f428eb3a02dee3cb',
             __name__: '3436b935a6f0e2124bd64195bffadfeec7870f3824c76726d7f5e3c7bc8a5fad'})
+        historical.append({**current,
+            __name__: '410616cb3f2847a9cfa48b62229bd4f65f72b2e2f4857f8c50c981fb7dcb46a5'})
         if value not in historical:
             raise ValueError('per-class policy changed its historical or current reader Source')
     return True
@@ -270,8 +272,12 @@ def verify_enrollment(path: Path) -> tuple[dict, list[dict], dict]:
     key = ("per-class-enrollment", str(path.absolute()), lanes._sha(raw))
     if context.has(key):
         return context.get(key)
-    context._enrollment(path)
-    result = _verify_enrollment_uncached(path)
+    result = context._enrollment(path)
+    if result is None:
+        # Keep the original wrong-receipt refusal. A legacy enrollment may
+        # bind dependencies, but it cannot become a per-class proof.
+        _verify_enrollment_uncached(path)
+        raise ValueError("per-class enrollment has no action-bound proof")
     context.check()
     return context.remember(key, result)
 
@@ -330,7 +336,7 @@ def enroll(root: Path, *, acquisition_root: Path, inputs: Mapping[str, Any], pre
     return output
 
 
-def membership_inputs(path: Path) -> set[Path]:
+def membership_inputs(path: Path, *, _return_verified: bool = False) -> set[Path] | tuple[set[Path], tuple[dict, list[dict], dict]]:
     # Dependency selection precedes the action memo's first proof. Calling
     # the public wrapper here would recursively request its own binding.
     batch, classes, policy = _verify_enrollment_uncached(path)
@@ -357,7 +363,7 @@ def membership_inputs(path: Path) -> set[Path]:
             files.update(plain.reopen(audit[key]) for key in
                 ("started", "completed", "stdout", "stderr", "source_inventory") +
                 (("host_authority",) if "host_authority" in audit else ()))
-    return files
+    return (files, (batch, classes, policy)) if _return_verified else files
 
 
 def preparation_inputs(value: Mapping[str, Any], resources: list[dict]) -> tuple[set[Path], set[Path]]:

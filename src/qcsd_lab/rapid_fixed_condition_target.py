@@ -269,7 +269,8 @@ def _compatible_code_ref(role, producer, current):
                        '5efeb8f9bdce65d4eb43e781e6388ac84a83453378812d456dc40862bd955b36',
                        '26b41cd9cff02e7dde8b9dbda902fa69d370fe5b242dd075f41c5db39c356b26',
                        '784ceb0f5e5a8cbde41eafdee4bb209781ba2df352cd72a0fbab8f24eacc46cf',
-                       '38b58853b7788608ad7601f927a4a924d7257641f1e373d3c288dd228b93b705'})
+                       '38b58853b7788608ad7601f927a4a924d7257641f1e373d3c288dd228b93b705',
+                       '49ed0ab36f1b9cb1c01375814c57a35a9f186f19020dcf86d5553d5404369b03'})
     epoch_dynamic = (role == 'dynamic' and producer['sha256'] in {
         '17d9b19159a521e7c18cea732ba8ed44dff6044a18442807a716e793586cb3a3',
         'e5c49b345c0e5acb1af442dbaae7d2caabfcdcf09892239d5ebb78f5d03a318a',
@@ -369,20 +370,27 @@ def _epoch_dispatch_source_projection(raw):
 
 
 def _parallel_facts_source_projection(raw):
-    """Retain every Facts unit except one exact typed schedule dispatch pair."""
+    """Retain every Facts unit except exact reviewed action-local dispatches."""
     import ast
     if hashlib.sha256(raw).hexdigest() not in {
             'ffd0ce58b57a2a94cd974573e79064fc4c69d62f99b586d5449b1424bc86973d',
-            'e667bfab9ef36467211c3d4a9227da0db55264bc262295751b281e0a2f156fe4'}:
+            'e667bfab9ef36467211c3d4a9227da0db55264bc262295751b281e0a2f156fe4',
+            '304a383d7c7cb17cc6dfb4c366e7cb195f9369bd262fdb57dc99a9c64fdce3d6'}:
         raise ValueError('operation Facts dispatch is outside the exact old/new Source pair')
-    tree = ast.parse(raw); found = 0
+    tree = ast.parse(raw); found = set()
     for node in tree.body:
         if isinstance(node, ast.ClassDef) and node.name == 'OperationFacts':
             for method in node.body:
-                if isinstance(method, ast.FunctionDef) and method.name == 'bind_schedule':
-                    found += 1; method.body = [ast.Pass()]
-    if found != 1:
-        raise ValueError('operation Facts schedule definition is absent or duplicated')
+                if isinstance(method, ast.FunctionDef) and method.name in {'bind_schedule', '_enrollment'}:
+                    if method.name in found:
+                        raise ValueError('operation Facts reviewed dispatch is duplicated')
+                    found.add(method.name); method.body = [ast.Pass()]
+                    if method.name == '_enrollment':
+                        # The reused per-class proof is returned at runtime;
+                        # this annotation alone carries no scientific guard.
+                        method.returns = None
+    if found != {'bind_schedule', '_enrollment'}:
+        raise ValueError('operation Facts reviewed dispatch is absent or duplicated')
     return ast.dump(tree, include_attributes=False).encode()
 
 
@@ -421,7 +429,7 @@ def _acquisition_reader_sources():
     sources = {
         'rapid_selected_capture_input.py': 'ba8caa645d219a52eb1e177285bb7e9f9198a1b59c46fdb37692f95206230442',
         'rapid_selected_budget_input.py': '3f03bae31b667535adab316fea98cc34f19bf9292bc1b041f428eb3a02dee3cb',
-        'rapid_per_class_selected_enrollment.py': '410616cb3f2847a9cfa48b62229bd4f65f72b2e2f4857f8c50c981fb7dcb46a5',
+        'rapid_per_class_selected_enrollment.py': '4f7f3a6fd67f077165496b92d62e9b81f1e0168d01ad3f11607b144a6124bee0',
         'whole_graph_input.py': '455aa51a397f025d4a6b0145c5a963d6455c0af51159b03535c69b506150d47b',
         'whole_graph_supplement.py': '164ab24211a5fa535ee838b9b50862c1c3f5b64fd240c755d8ba4fae6a1869b7',
         'rapid_supplemental_cohort.py': '12eec36c6bcd6ab27790f8f6d77ca724d775f108d0bb08f41214b61310a092be',
@@ -455,15 +463,17 @@ def _cohort_acquisition_source_projection(raw, relative):
         }
         helper_sha = '20d5a338047f73eca19a71c2214b81b9e990db0b32d6e8e55ae60cc242209bb4'
     elif relative == 'src/qcsd_lab/rapid_per_class_selected_enrollment.py':
-        expected_sha = '410616cb3f2847a9cfa48b62229bd4f65f72b2e2f4857f8c50c981fb7dcb46a5'
+        expected_sha = '4f7f3a6fd67f077165496b92d62e9b81f1e0168d01ad3f11607b144a6124bee0'
         hooks = {'_context_metadata': ((0, import_sha),
             (1, 'f940f1b783f9f1e09d0487902cb6719a17ac97b7369435fe16a4f6343ff9c3f0'))}
         helper_sha = None
     else:
         return raw
     digest = hashlib.sha256(raw).hexdigest()
-    if digest != expected_sha and not (relative == 'src/qcsd_lab/whole_graph_supplement.py'
-            and digest == '72a3e7030356955033fefab3703abe895c4fdb264910ea9c4d40ca398f175052'):
+    if (digest != expected_sha and not (relative == 'src/qcsd_lab/whole_graph_supplement.py'
+            and digest == '72a3e7030356955033fefab3703abe895c4fdb264910ea9c4d40ca398f175052')
+            and not (relative == 'src/qcsd_lab/rapid_per_class_selected_enrollment.py'
+            and digest == '410616cb3f2847a9cfa48b62229bd4f65f72b2e2f4857f8c50c981fb7dcb46a5')):
         raise ValueError('cohort dispatch is outside the exact prospective Source')
     tree = ast.parse(raw); seen = set(); retained = []; helpers = 0
     for node in tree.body:
@@ -519,8 +529,9 @@ def _compatible_acquisition_code(relative, before, after):
             {'512e140944a953707b2ac9326fdb2dd6928ac8a763b519174a46534de4f3b07f',
              '048c0766e3a68d198547f26f4516d4337665c58163c1b6fc1ee1870b9808dc52',
              'd1860179aa08a911400eadc82cef3acb99b591f20656919cbe95268eeef64056',
-             '3436b935a6f0e2124bd64195bffadfeec7870f3824c76726d7f5e3c7bc8a5fad'},
-            {'_policy_sources', 'verify_policy', 'membership_inputs'}, set(), set()),
+             '3436b935a6f0e2124bd64195bffadfeec7870f3824c76726d7f5e3c7bc8a5fad',
+             '410616cb3f2847a9cfa48b62229bd4f65f72b2e2f4857f8c50c981fb7dcb46a5'},
+            {'_policy_sources', 'verify_policy', 'membership_inputs', 'verify_enrollment'}, set(), set()),
         'src/qcsd_lab/whole_graph_supplement.py': (
             {'726c0d6215830730f3938b69545f3b4acc8c727dda3b4528a34732701f8d9f07',
              'a12ba1de531fd37a4e6ab8abbc8497911ea51d4d45e54d452e3afc927058db66',
@@ -539,7 +550,9 @@ def _compatible_acquisition_code(relative, before, after):
         '72a3e7030356955033fefab3703abe895c4fdb264910ea9c4d40ca398f175052'}
     def projection(raw, *, successor):
         strip_cohort = successor or (relative == 'src/qcsd_lab/whole_graph_supplement.py'
-            and before['sha256'] == '72a3e7030356955033fefab3703abe895c4fdb264910ea9c4d40ca398f175052')
+            and before['sha256'] == '72a3e7030356955033fefab3703abe895c4fdb264910ea9c4d40ca398f175052') or (
+            relative == 'src/qcsd_lab/rapid_per_class_selected_enrollment.py'
+            and before['sha256'] == '410616cb3f2847a9cfa48b62229bd4f65f72b2e2f4857f8c50c981fb7dcb46a5')
         tree = ast.parse(_cohort_acquisition_source_projection(raw, relative) if strip_cohort else raw)
         retained = []; removed = set(); added = set()
         for node in tree.body:
