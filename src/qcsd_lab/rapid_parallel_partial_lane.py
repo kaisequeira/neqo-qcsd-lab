@@ -274,7 +274,7 @@ def _accepted_subset(report):
             or intent["actuator"] != "parallel-formal-worker" or e["status"] != "incomplete" or summary["passed"] is not False
             or e["name"] != lane["campaign_name"] or e["purpose"] != "evaluation"
             or config["campaign_sha256"] != intent["campaign_sha256"] or config["profile"] != "research-1200"
-            or config["request_policies"] != ["as-defined"] or config["chaff_qualification_set"] != lane["qualification_set"]
+            or config["request_policies"] != ["as-defined"] or config.get("chaff_qualification_set") != lane["qualification_set"]
             or source["lab_dirty"] is not False or source["lab_commit"] != lineage["lab_commit"]
             or source["image_digest"] != spec["collection_image_digest"]):
         raise ValueError("partial lane changes original incomplete formal contract")

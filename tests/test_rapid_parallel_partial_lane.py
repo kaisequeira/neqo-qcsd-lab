@@ -55,6 +55,60 @@ def test_parallel_role_refuses_promotions_or_lost_peer_authority(change):
     with pytest.raises(ValueError):
         reader.accepted_subset(value)
 
+
+def saved_current_config_report():
+    """Authentic current configuration over synthetic partial/peer records."""
+    path=Path(__file__).parent/'fixtures/rapid_parallel_partial_current_undefended_configuration.json'
+    fixture=json.loads(path.read_bytes())
+    assert fixture['source_raw_report_sha256']=='04e8a87b400a58f0b4ef95be93c00dde27e43b67ac470c1ffa10a3112822ac6e'
+    config=fixture['configuration']
+    assert set(config)=={'application_body_identity_policy','campaign_sha256','defenses',
+        'limits','profile','request_policies','workloads'}
+    value=peer_report()
+    old_ids=value['lane']['workload_ids']
+    rows=config['workloads']
+    names={old:row['id'] for old,row in zip(old_ids,rows,strict=True)}
+    value['lane']['workload_ids']=[row['id'] for row in rows]
+    value['experiment']['configuration']=config
+    value['intent']['campaign_sha256']=config['campaign_sha256']
+    for site,row in zip(value['sites'],rows,strict=True):
+        site.update(workload_id=row['id'],workload_sha256=row['sha256'],
+            qualification_set=None,qualification_set_manifest_sha256=None)
+    for sample in value['experiment']['samples']:
+        sample['workload_id']=names[sample['workload_id']]
+    return value
+
+
+def test_saved_current_undefended_configuration_omits_chaff_fields_and_stays_exact():
+    value=saved_current_config_report();before=deepcopy(value)
+    facts=reader.accepted_subset(value)
+    assert value==before and facts['configuration']==before['experiment']['configuration']
+    assert 'chaff_qualification_set' not in facts['configuration']
+    assert 'chaff_qualification_set_manifest_sha256' not in facts['configuration']
+    assert facts['accepted_count']==1 and len(facts['remaining_samples'])==4
+    assert facts['aggregate_status']=='incomplete' and facts['aggregate_formal_credit']==0
+    assert facts['lane_pass_claim'] is False
+
+
+def test_current_undefended_configuration_refuses_a_qualified_set():
+    value=saved_current_config_report()
+    value['experiment']['configuration']['chaff_qualification_set']='unbound-qualified-set'
+    with pytest.raises(ValueError,match='partial lane changes original incomplete formal contract'):
+        reader.accepted_subset(value)
+
+
+@pytest.mark.parametrize('change',['missing-set','null-set','wrong-set','wrong-manifest'])
+def test_defended_configuration_still_requires_exact_set_and_full_manifest(change):
+    value=report(1,0,1,'front')
+    value['intent']['actuator']=reader.ACTUATOR
+    config=value['experiment']['configuration']
+    if change=='missing-set':del config['chaff_qualification_set']
+    elif change=='null-set':config['chaff_qualification_set']=None
+    elif change=='wrong-set':config['chaff_qualification_set']='other-qualified-set'
+    else:config['chaff_qualification_set_manifest_sha256']='f'*64
+    with pytest.raises(ValueError):
+        reader._accepted_subset(value)
+
 def predecessor_bytes():
     path=Path(__file__).parent/"fixtures/rapid_fixed_condition_target_source58.py.zlib.b85.txt"
     raw=zlib.decompress(base64.b85decode(path.read_bytes().strip()))
