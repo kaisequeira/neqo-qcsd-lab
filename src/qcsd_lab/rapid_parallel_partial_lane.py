@@ -364,6 +364,81 @@ def _request(source,inputs):
         "collection_image_digest":source["binding"]["runtime_identity"]["collection_image_digest"],
         "endpoint_verifier":source["files"]["src/qcsd_lab/verification.py"]}
 
+def _direct_quick_binding(report, source):
+    """Bind the real direct-quick plan/profile through unchanged stock guards.
+
+    The profile is this lane's actual slot policy. No legacy chunk plan or
+    policy is synthesized, and the original report and release stay exact.
+    """
+    from dataclasses import asdict
+    from . import rapid_lane_evidence as lanes
+    from . import rapid_quick_profile as quick
+    from . import rapid_rolling_capture as rolling
+    from . import rapid_rolling_schedule as schedule
+    from . import rapid_slot_chunks as geometry
+
+    # These are the original measurement join's complete common identity and
+    # runtime-copy predicates, retained before the new plan-specific branch.
+    identity = source['binding']['runtime_identity']
+    spec, intent = report['spec'], report['intent']
+    if (report['experiment']['source'] != {**identity['source'], 'image_digest': identity['collection_image_digest']}
+            or spec['module_root'] != source['root']
+            or spec['collection_image_digest'] != identity['collection_image_digest']
+            or intent['runtime_identity']['runtime_source'] != identity['source']
+            or intent['runtime_identity']['collection_image_digest'] != identity['collection_image_digest']
+            or intent['runtime_identity']['client_sha256'] != identity['client_sha256']):
+        raise ValueError('chunk partial measurement Source or image differs from its actual installed release')
+    runtime = source['binding']['runtime']
+    for key in ('source_manifest', 'client_binary', 'base_launcher', 'host_launcher'):
+        a, b = reference(spec[key]), reference(runtime[key])
+        if any(a[field] != b[field] for field in ('sha256', 'mode')):
+            raise ValueError('chunk partial measurement runtime copy bytes or mode changed')
+    for module in (lanes, quick, rolling, schedule, geometry):
+        relative = 'src/qcsd_lab/' + module.__name__.rsplit('.', 1)[-1] + '.py'
+        retained = source['files'][relative]
+        current = reference(Path(module.__file__).absolute())
+        reopen(retained)
+        if any(retained[key] != current[key] for key in ('sha256', 'mode')):
+            raise ValueError('parallel partial changed a retained direct-quick guard')
+
+    lane = geometry.checked_lane(report['lane'])
+    plan = reference(spec['plan_receipt'])
+    payload = lanes.plan_payload(reopen(plan).read_bytes())
+    proof = report['lineage']['image_check']['proof']
+    if (not quick.is_plan(reopen(plan)) or not quick.is_payload(payload)
+            or payload != proof['plan_payload'] or plan['sha256'] != proof['plan_receipt_sha256']):
+        raise ValueError('parallel partial direct-quick plan differs from original executed authority')
+    policy_ref = payload['scheduling']
+    if not isinstance(policy_ref, dict) or set(policy_ref) != {'path', 'sha256'}:
+        raise ValueError('parallel partial direct-quick profile has another schema')
+    policy = reference(policy_ref['path'])
+    if policy['sha256'] != policy_ref['sha256'] or policy['sha256'] != lane.slot_policy_sha256:
+        raise ValueError('parallel partial lane changed its authenticated direct-quick profile')
+    for ref in (plan, policy):
+        if ref not in report['read_dependencies']:
+            raise ValueError('parallel partial original proof did not observe its quick plan and profile bytes')
+    typed_spec = schedule._spec(spec)
+    sites, checked = rolling.verify_capture_plan(typed_spec, require_current=True)
+    if checked != payload or [asdict(site) for site in sites] != report['sites']:
+        raise ValueError('parallel partial direct-quick plan or full site graphs changed')
+    schedule.require_schedule(policy_ref, typed_spec, declared_at=payload['declared_at'],
+        started_at=intent['started_at'])
+    if rolling.require_mode_readiness(typed_spec, lane, before=intent['started_at']) != policy_ref:
+        raise ValueError('parallel partial direct-quick worker changed its mode authority')
+    # require_mode_readiness invokes the unchanged quick.require_worker, which
+    # rechecks exact lane membership, complete sites, rendered settings and all
+    # current runtime material. The policy reference keeps its actual type.
+    reopen(plan); reopen(policy)
+    return {**report, 'chunk_bindings': {'plan': plan, 'policy': policy}}
+
+
+def _bound_measurement_report(report, source):
+    from . import rapid_quick_profile as quick
+    if quick.is_plan(Path(report['spec']['plan_receipt'])):
+        return _direct_quick_binding(report, source)
+    return measurement._measurement_binding(report, source)
+
+
 def _measurement_binding(report, source):
     """Join unadorned installed export metadata to the authenticated capture image.
 
@@ -378,7 +453,7 @@ def _measurement_binding(report, source):
     exported = identity["source"]
     captured = report["intent"]["runtime_identity"]["runtime_source"]
     if captured == exported:
-        return measurement._measurement_binding(report, source)
+        return _bound_measurement_report(report, source)
     image = identity["collection_image_digest"]
     expected = {**exported, "image_digest":image}
     if ("image_digest" not in exported or exported["image_digest"] is not None
@@ -386,7 +461,7 @@ def _measurement_binding(report, source):
         raise ValueError("parallel partial installed-export/capture image identity join differs")
     projected = {**source, "binding":{**source["binding"], "runtime_identity":{
         **identity, "source":expected}}}
-    joined = measurement._measurement_binding(report, projected)
+    joined = _bound_measurement_report(report, projected)
     return {**joined, "image_metadata_join":{
         "contract":"unadorned-installed-export-to-authenticated-capture-image-metadata-v1",
         "installed_export_source":dict(exported), "captured_source":dict(captured),

@@ -13,6 +13,7 @@ from qcsd_lab import rapid_parallel_partial_lane as reader
 from qcsd_lab import rapid_chunk_partial_lane as serial
 from qcsd_lab import rapid_fixed_condition_target as target
 from tests.test_rapid_chunk_partial_lane import report, chunk_original
+from tests.test_rapid_quick_profile import direct
 
 def peer_report():
     value=report(1,0,1,"undefended")
@@ -283,3 +284,133 @@ def test_export_capture_image_join_refuses_all_other_identity_and_original_runti
         raw["spec"]["client_binary"]=str(copy)
     with pytest.raises(ValueError):
         reader._measurement_binding(raw,source)
+
+
+@pytest.fixture
+def quick_join(direct, tmp_path):
+    """Real stock quick guards over a synthetic material profile; no deep proof."""
+    from dataclasses import asdict, replace
+    from datetime import datetime, timezone
+    from qcsd_lab import rapid_lane_evidence as lanes
+    from qcsd_lab import rapid_quick_profile as quick
+    from qcsd_lab import rapid_rolling_capture as rolling
+    from qcsd_lab import rapid_rolling_schedule as schedule
+    from qcsd_lab import rapid_slot_chunks as geometry
+    from tests.test_rapid_quick_profile import write
+
+    metadata = {**direct.capsule['source'], 'image_digest':None}
+    write(direct.spec.source_manifest, metadata)
+    canonical = json.loads(direct.canonical.read_bytes())
+    canonical.update(source=metadata,
+        exported_source_manifest_sha256=lanes._sha(direct.spec.source_manifest.read_bytes()))
+    write(direct.canonical, canonical)
+    direct.capsule.update(source=metadata, current_canonical=rolling._ref(direct.canonical),
+        original_canonical=rolling._ref(direct.canonical))
+    direct.capsule['material_files'] = [rolling._ref(path) for path in direct.material]
+    write(direct.path, direct.capsule)
+    profile = rolling._ref(direct.path)
+    path = quick.publish_plan(direct.spec, profile, tmp_path/'quick-plan.json', slot_start=4, slot_count=2)
+    spec = replace(direct.spec, plan_receipt=path)
+    payload = lanes.plan_payload(path.read_bytes())
+    lane = lanes._lane({'plan_payload':payload}, payload['lanes'][0]['campaign_name'])
+    captured = {**metadata, 'image_digest':spec.collection_image_digest}
+    source = {'root':str(spec.module_root), 'files':{
+        'src/qcsd_lab/' + module.__name__.rsplit('.', 1)[-1] + '.py':reader.reference(Path(module.__file__).absolute())
+        for module in (lanes, quick, rolling, schedule, geometry)},
+        'binding':{'runtime_identity':{'source':metadata,
+            'collection_image_digest':spec.collection_image_digest,
+            'client_sha256':lanes._sha(spec.client_binary.read_bytes())},
+            'runtime':{key:spec.serializable()[key] for key in serial.RUNTIME_KEYS},
+            'canonical':rolling._ref(direct.canonical)}}
+    raw = peer_report()
+    raw.update(spec=spec.serializable(), lane=asdict(lane), sites=payload['sites'])
+    raw['experiment']['source'] = captured
+    raw['intent'].update(runtime_identity={'runtime_source':captured,
+        'collection_image_digest':spec.collection_image_digest,
+        'client_sha256':source['binding']['runtime_identity']['client_sha256']},
+        started_at=datetime.now(timezone.utc).isoformat())
+    raw['lineage']['image_check'] = {'proof':{'plan_payload':payload,
+        'plan_receipt_sha256':reader.reference(path)['sha256']}}
+    raw['read_dependencies'] = [reader.reference(path), reader.reference(direct.path)]
+    return source, raw, direct
+
+
+def test_direct_quick_join_keeps_real_plan_profile_and_original_report(quick_join):
+    from qcsd_lab import rapid_quick_profile as quick
+    source, raw, direct = quick_join
+    before_source, before_raw = deepcopy(source), deepcopy(raw)
+    joined = reader._measurement_binding(raw, source)
+    assert source == before_source and raw == before_raw
+    assert joined['chunk_bindings'] == {'plan':reader.reference(raw['spec']['plan_receipt']),
+        'policy':reader.reference(direct.path)}
+    assert json.loads(direct.path.read_bytes())['artifact_type'] == quick.CAPSULE_TYPE
+    payload = raw['lineage']['image_check']['proof']['plan_payload']
+    assert 'lane_layout' not in payload and 'slot_chunk_policy' not in payload
+    assert joined['image_metadata_join']['captured_source'] == raw['experiment']['source']
+    assert joined['image_metadata_join']['original_report_rewritten'] is False
+    projected = {**source, 'binding':{**source['binding'], 'runtime_identity':{
+        **source['binding']['runtime_identity'], 'source':raw['experiment']['source']}}}
+    with pytest.raises(ValueError, match='chunk partial plan differs from original executed chunk authority'):
+        serial._measurement_binding(raw, projected)
+
+
+@pytest.mark.parametrize('change', ['executed-payload','executed-plan-sha','profile-sha','profile-ref-sha','lane-policy',
+    'missing-plan','missing-profile','plan-mode','profile-mode','lane-mode','site-graph',
+    'module-root','runtime-source-root','intent-image','intent-client','experiment-image',
+    'runtime-copy-mode','runtime-copy-bytes','current-material-bytes','current-material-mode',
+    'retained-guard','retained-guard-mode','intent-before-plan'])
+def test_direct_quick_join_preserves_plan_profile_full_modes_and_current_runtime_guards(quick_join, tmp_path, monkeypatch, change):
+    from dataclasses import asdict, replace
+    from qcsd_lab import rapid_slot_chunks as geometry
+    source, raw, direct = quick_join
+    if change == 'executed-payload':
+        raw['lineage']['image_check']['proof']['plan_payload']['planned_trace_count'] += 1
+    elif change == 'executed-plan-sha':
+        raw['lineage']['image_check']['proof']['plan_receipt_sha256'] = 'f'*64
+    elif change == 'profile-sha':
+        raw['lineage']['image_check']['proof']['plan_payload']['scheduling']['sha256'] = 'f'*64
+    elif change == 'profile-ref-sha':
+        from qcsd_lab import rapid_lane_evidence as lanes
+        from qcsd_lab import rapid_quick_profile as quick
+        from tests.test_rapid_quick_profile import write
+        payload = raw['lineage']['image_check']['proof']['plan_payload']
+        payload['scheduling']['sha256'] = 'f'*64
+        path = Path(raw['spec']['plan_receipt'])
+        write(path, lanes.admission._bind(quick.PLAN_TYPE, payload))
+        changed = reader.reference(path)
+        raw['lineage']['image_check']['proof']['plan_receipt_sha256'] = changed['sha256']
+        raw['read_dependencies'][0] = changed
+    elif change == 'lane-policy':
+        lane = replace(geometry.checked_lane(raw['lane']), slot_policy_sha256='f'*64)
+        raw['lane'] = asdict(replace(lane, campaign_name=geometry.name(lane, lane.generation)))
+    elif change in ('missing-plan','missing-profile'):
+        raw['read_dependencies'].pop(0 if change == 'missing-plan' else 1)
+    elif change in ('plan-mode','profile-mode'):
+        path = Path(raw['spec']['plan_receipt'] if change == 'plan-mode' else direct.path)
+        path.chmod(0o644 if reader.reference(path)['mode'] == 0o600 else 0o600)
+    elif change == 'lane-mode':
+        lane = replace(geometry.checked_lane(raw['lane']), mode='front', qualification_set='other')
+        raw['lane'] = asdict(replace(lane, campaign_name=geometry.name(lane, lane.generation)))
+    elif change == 'site-graph':raw['sites'][0]['workload_sha256'] = 'f'*64
+    elif change == 'module-root':raw['spec']['module_root'] = str(tmp_path/'other-module')
+    elif change == 'runtime-source-root':raw['spec']['runtime_source_root'] = str(tmp_path/'other-runtime')
+    elif change == 'intent-image':raw['intent']['runtime_identity']['collection_image_digest'] = 'sha256:'+'f'*64
+    elif change == 'intent-client':raw['intent']['runtime_identity']['client_sha256'] = 'f'*64
+    elif change == 'experiment-image':raw['experiment']['source']['image_digest'] = 'sha256:'+'f'*64
+    elif change in ('runtime-copy-mode','runtime-copy-bytes'):
+        copy = tmp_path/'other-client'
+        copy.write_bytes(direct.spec.client_binary.read_bytes() if change == 'runtime-copy-mode' else b'changed client')
+        copy.chmod(0o600 if change == 'runtime-copy-mode' else 0o644)
+        raw['spec']['client_binary'] = str(copy)
+    elif change == 'current-material-bytes':direct.manifest.write_bytes(direct.manifest.read_bytes()+b'\nchanged')
+    elif change == 'current-material-mode':direct.manifest.chmod(0o600)
+    elif change == 'retained-guard':source['files']['src/qcsd_lab/rapid_quick_profile.py']['sha256'] = 'f'*64
+    elif change == 'retained-guard-mode':
+        from qcsd_lab import rapid_quick_profile as quick
+        copy = tmp_path/'quick-guard.py'
+        copy.write_bytes(Path(quick.__file__).read_bytes())
+        copy.chmod(0o600 if reader.reference(quick.__file__)['mode'] != 0o600 else 0o644)
+        monkeypatch.setattr(quick, '__file__', str(copy))
+    else:raw['intent']['started_at'] = '1999-01-01T00:00:00Z'
+    with pytest.raises(ValueError):
+        reader._measurement_binding(raw, source)
