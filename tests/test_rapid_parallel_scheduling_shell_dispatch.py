@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shlex
 import subprocess
@@ -37,12 +38,113 @@ def _run_branch(capsule: Path, execution: Path, image: str) -> subprocess.Comple
         "parallel_host_python=" + shlex.quote(sys.executable),
         "ROOT=" + shlex.quote(str(execution)),
         "image_id=" + shlex.quote(image),
+        "parallel_authority=" + shlex.quote(str(capsule)),
+        "parallel_output=" + shlex.quote(str(execution / "results/controlled-legacy-flight")),
         "QCSD_RAPID_CAPTURE_CONTROL_INSTALLATION=",
         _actual_branch(),
         'printf "%s\\n" "$rapid_compatibility_rows"',
     ))
     return subprocess.run(["/bin/bash", "-c", script], text=True,
                           capture_output=True, timeout=20, check=False)
+
+
+def _fast_mount_case(tmp_path: Path):
+    """A private issuer frame for the real shell branch, without Docker."""
+    module_root = tmp_path / "module"
+    (module_root / "src/qcsd_lab").mkdir(parents=True)
+    # A regression to the complete Python certificate reader would import this.
+    (module_root / "src/qcsd_lab/rapid_formal_parallel.py").write_text(
+        "raise AssertionError('mount transport repeated the full reader')\n")
+    execution = tmp_path / "execution"
+    output = execution / "results/flight"
+    output.mkdir(parents=True)
+    image = "sha256:" + "1" * 64
+    source_manifest = tmp_path / "source-manifest.json"
+    source_manifest.write_bytes(b'{"bound":"source"}\n')
+    authority = tmp_path / "parallel-authority.json"
+    value = {"runtime": {"source_manifest": str(source_manifest),
+                         "collection_image_digest": image}}
+    authority.write_text(json.dumps(value, sort_keys=True))
+    schedule = tmp_path / "schedule.json"
+    schedule.write_text(json.dumps({"artifact_type": FLAT_FAMILIES[4], "runtime": {
+        "module_root": str(module_root), "execution_root": str(execution),
+        "collection_image_digest": image}}, sort_keys=True))
+    mount = tmp_path / "sealed-mount"
+    mount.mkdir()
+    certificate = output / "fast-launch-certificate.json"
+    frame = {"schema_version": 2, "artifact_type": "qcsd-formal-fast-launch-certificate-v2",
+             "authority_path": str(authority),
+             "authority_sha256": hashlib.sha256(authority.read_bytes()).hexdigest(),
+             "authority": value, "output_root": str(output),
+             "source_manifest_sha256": hashlib.sha256(source_manifest.read_bytes()).hexdigest(),
+             "collection_image_digest": image, "formal_accepted_trace_count": 0,
+             "scientific_credit": False,
+             "schedule": {"path": str(schedule),
+                          "sha256": hashlib.sha256(schedule.read_bytes()).hexdigest()},
+             "schedule_mount_roots": [str(mount)]}
+    certificate.write_text(json.dumps(frame, sort_keys=True))
+    certificate.chmod(0o600)
+    return {"module_root": module_root, "execution": execution, "output": output,
+            "image": image, "source_manifest": source_manifest, "authority": authority,
+            "schedule": schedule, "mount": mount, "certificate": certificate}
+
+
+def _run_fast_mount(case, *, image=None, output=None, digest=None):
+    certificate = case["certificate"]
+    digest = digest or hashlib.sha256(certificate.read_bytes()).hexdigest()
+    script = "\n".join((
+        "set -euo pipefail",
+        "rapid_compatibility_host=" + shlex.quote(str(case["schedule"])),
+        "parallel_host_python=" + shlex.quote(sys.executable),
+        "ROOT=" + shlex.quote(str(case["execution"])),
+        "image_id=" + shlex.quote(image or case["image"]),
+        "parallel_authority=" + shlex.quote(str(case["authority"])),
+        "parallel_output=" + shlex.quote(str(output or case["output"])),
+        "QCSD_RAPID_CAPTURE_CONTROL_INSTALLATION=",
+        "export QCSD_RAPID_FAST_CERTIFICATE_PATH=" + shlex.quote(str(certificate)),
+        "export QCSD_RAPID_FAST_CERTIFICATE_SHA256=" + shlex.quote(digest),
+        _actual_branch(),
+        'printf "%s\\n" "$rapid_compatibility_rows"',
+    ))
+    return subprocess.run(["/bin/bash", "-c", script], text=True,
+                          capture_output=True, timeout=20, check=False)
+
+
+def test_issued_fast_mount_transport_uses_bound_roots_without_full_reader(tmp_path: Path):
+    case = _fast_mount_case(tmp_path)
+    result = _run_fast_mount(case)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["rolling-scheduling", str(case["schedule"]),
+                                          "-", str(case["mount"])]
+
+
+@pytest.mark.parametrize("change", ("digest", "certificate-mode", "authority-bytes",
+    "schedule-bytes", "source-manifest-bytes", "image", "flight", "mount-symlink"))
+def test_fast_mount_transport_refuses_changed_issuer_inputs(tmp_path: Path, change: str):
+    case = _fast_mount_case(tmp_path)
+    kwargs = {}
+    if change == "digest":
+        kwargs["digest"] = "0" * 64
+    elif change == "certificate-mode":
+        case["certificate"].chmod(0o640)
+    elif change == "authority-bytes":
+        case["authority"].write_bytes(case["authority"].read_bytes() + b"\n")
+    elif change == "schedule-bytes":
+        case["schedule"].write_bytes(case["schedule"].read_bytes() + b"\n")
+    elif change == "source-manifest-bytes":
+        case["source_manifest"].write_bytes(case["source_manifest"].read_bytes() + b"\n")
+    elif change == "image":
+        kwargs["image"] = "sha256:" + "2" * 64
+    elif change == "flight":
+        other = case["execution"] / "results/other-flight"
+        other.mkdir()
+        kwargs["output"] = other
+    else:
+        case["mount"].rmdir()
+        case["mount"].symlink_to(case["module_root"], target_is_directory=True)
+    result = _run_fast_mount(case, **kwargs)
+    assert result.returncode != 0
+    assert not result.stdout
 
 
 def _fake_installed_reader(root: Path, *, drift=None, phase="mount") -> Path:

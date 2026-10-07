@@ -5750,6 +5750,18 @@ print(value.get("fast_launch_certificate_sha256", "-"))
       export QCSD_RAPID_FAST_CERTIFICATE_SHA256="${parallel_fast_certificate_rows[1]}"
       parallel_fast_container_env=(--env "QCSD_RAPID_FAST_CERTIFICATE_PATH=${QCSD_RAPID_FAST_CERTIFICATE_PATH}"
         --env "QCSD_RAPID_FAST_CERTIFICATE_SHA256=${QCSD_RAPID_FAST_CERTIFICATE_SHA256}")
+      # Refuse a lost or partial issuer result before the costly image and
+      # scientific preflights. The same pair is carried into both worker argv.
+      if [[ ! -f "${QCSD_RAPID_FAST_CERTIFICATE_PATH}" ||
+            -L "${QCSD_RAPID_FAST_CERTIFICATE_PATH}" ]]; then
+        echo "parallel formal fast certificate disappeared before preflight" >&2
+        exit 1
+      fi
+      parallel_fast_certificate_actual="$(sha256sum -- "${QCSD_RAPID_FAST_CERTIFICATE_PATH}")" || exit 1
+      if [[ "${parallel_fast_certificate_actual%% *}" != "${QCSD_RAPID_FAST_CERTIFICATE_SHA256}" ]]; then
+        echo "parallel formal fast certificate changed before preflight" >&2
+        exit 1
+      fi
     fi
   elif ! parallel_first_campaign="$(parallel_python select --authority "${parallel_authority}" --output "${ROOT}")"; then
     echo "parallel campaign selection failed before image preflight or worker birth" >&2
@@ -8005,14 +8017,56 @@ for path in campaign_roots(root, sys.argv[2], Path(sys.argv[3])):
         rapid_scheduling_python="$(parallel_select_host_python)" || exit 1
       fi
       rapid_compatibility_rows="$("${rapid_scheduling_python}" -I -B -c '
-import json,os,sys
+import hashlib,json,os,re,stat,sys
 from pathlib import Path
 path=Path(sys.argv[1]); value=json.loads(path.read_bytes())
 sys.path.insert(0,value["runtime"]["module_root"]+"/src")
 if os.environ.get("QCSD_RAPID_FAST_CERTIFICATE_SHA256"):
-    from qcsd_lab.rapid_formal_parallel import certified_mount_roots
-    schedule,roots=certified_mount_roots(Path(sys.argv[4]),Path(sys.argv[5]),
-        os.environ["QCSD_RAPID_FAST_CERTIFICATE_SHA256"],sys.argv[3])
+    # formal-entry-inputs already closed the full byte/mode/tree fence.
+    # Transport its recorded mount list without immediately rehashing it.
+    # Installed preflight, release, worker gates and final deep still reopen it.
+    digest=os.environ["QCSD_RAPID_FAST_CERTIFICATE_SHA256"]
+    cert=Path(os.environ["QCSD_RAPID_FAST_CERTIFICATE_PATH"])
+    output=Path(sys.argv[5]); authority=Path(sys.argv[4])
+    if (re.fullmatch(r"[0-9a-f]{64}",digest) is None
+        or cert!=output/"fast-launch-certificate.json"
+        or any(item.is_symlink() for item in (cert,*cert.parents))):
+        raise SystemExit("fast launch mount transport lost its issuer-held certificate")
+    identity=cert.stat(follow_symlinks=False)
+    if (not stat.S_ISREG(identity.st_mode) or stat.S_IMODE(identity.st_mode)!=0o600
+        or identity.st_uid!=os.geteuid() or identity.st_nlink!=1):
+        raise SystemExit("fast launch mount transport lost its private certificate identity")
+    raw=cert.read_bytes()
+    if hashlib.sha256(raw).hexdigest()!=digest:
+        raise SystemExit("fast launch mount transport certificate digest changed")
+    frame=json.loads(raw); authority_raw=authority.read_bytes()
+    schedule_ref=frame.get("schedule")
+    if (frame.get("artifact_type")!="qcsd-formal-fast-launch-certificate-v2"
+        or type(frame.get("schema_version")) is not int or frame["schema_version"]!=2
+        or frame.get("output_root")!=str(output)
+        or frame.get("authority_path")!=str(authority)
+        or frame.get("authority_sha256")!=hashlib.sha256(authority_raw).hexdigest()
+        or frame.get("authority")!=json.loads(authority_raw)
+        or frame.get("source_manifest_sha256")!=hashlib.sha256(
+            Path(frame["authority"]["runtime"]["source_manifest"]).read_bytes()).hexdigest()
+        or frame.get("collection_image_digest")!=sys.argv[3]
+        or frame.get("formal_accepted_trace_count")!=0
+        or frame.get("scientific_credit") is not False
+        or not isinstance(schedule_ref,dict) or set(schedule_ref)!={"path","sha256"}
+        or schedule_ref["path"]!=str(path)
+        or schedule_ref["sha256"]!=hashlib.sha256(path.read_bytes()).hexdigest()):
+        raise SystemExit("fast launch mount transport differs from its current authority or schedule")
+    roots=frame.get("schedule_mount_roots")
+    if (not isinstance(roots,list) or not all(isinstance(item,str) for item in roots)
+        or roots!=sorted(set(roots))):
+        raise SystemExit("fast launch mount transport has another root list")
+    for root in roots:
+        item=Path(root)
+        if (not item.is_absolute() or ".." in item.parts
+            or any(part.is_symlink() for part in (item,*item.parents))
+            or not stat.S_ISDIR(item.stat(follow_symlinks=False).st_mode)):
+            raise SystemExit("fast launch mount transport has an unsafe directory")
+    schedule=schedule_ref["path"]
     if schedule!=str(path) or value["runtime"]["execution_root"]!=sys.argv[2]:
         raise SystemExit("fast launch schedule names another current flight")
     print("rolling-scheduling"); print(path); print("-")
@@ -9520,6 +9574,9 @@ if (( rapid_capture )); then
     else
       container+=(--env "QCSD_RAPID_EPOCH_LAUNCH_INPUT=${QCSD_RAPID_EPOCH_LAUNCH_INPUT:?}")
     fi
+    # Build the base worker argv from the issuer-held pair before it is copied
+    # for either lane. Later exact-one replacement checks must find both keys.
+    container+=("${parallel_fast_container_env[@]}")
   fi
   for rapid_pin_row in "${rapid_public_hosts[@]}"; do
     read -r rapid_pin_host rapid_pin_address <<< "${rapid_pin_row}"
