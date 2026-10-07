@@ -345,7 +345,8 @@ def accepted_subset(report):
             or binding["partition"] not in report["read_dependencies"]):
         raise ValueError("parallel partial accepted subset lost actual peer/terminal authority")
     return {**facts,"actuator":ACTUATOR,"parallel_binding":binding,
-        "global_session_retirement_pass_claim":False}
+        "global_session_retirement_pass_claim":False,
+        **({"image_metadata_join":report["image_metadata_join"]} if "image_metadata_join" in report else {})}
 
 def _request(source,inputs):
     if set(inputs)!={"source_binding","reader_binding","spec","evidence_root","intent","result",
@@ -362,6 +363,39 @@ def _request(source,inputs):
         "root_offline_endpoint_replay":inputs["root_offline_endpoint_replay"],
         "collection_image_digest":source["binding"]["runtime_identity"]["collection_image_digest"],
         "endpoint_verifier":source["files"]["src/qcsd_lab/verification.py"]}
+
+def _measurement_binding(report, source):
+    """Join unadorned installed export metadata to the authenticated capture image.
+
+    The immutable source binding and full original report remain untouched.
+    Only a separate, explicitly recorded in-memory identity projection is
+    passed to the unchanged original measurement join. Every original root,
+    image, client, source, runtime-copy and chunk-authority guard still runs.
+    """
+    if "image_metadata_join" in report:
+        raise ValueError("parallel partial raw original report contains an unregistered image join")
+    identity = source["binding"]["runtime_identity"]
+    exported = identity["source"]
+    captured = report["intent"]["runtime_identity"]["runtime_source"]
+    if captured == exported:
+        return measurement._measurement_binding(report, source)
+    image = identity["collection_image_digest"]
+    expected = {**exported, "image_digest":image}
+    if ("image_digest" not in exported or exported["image_digest"] is not None
+            or captured != expected or report["experiment"]["source"] != expected):
+        raise ValueError("parallel partial installed-export/capture image identity join differs")
+    projected = {**source, "binding":{**source["binding"], "runtime_identity":{
+        **identity, "source":expected}}}
+    joined = measurement._measurement_binding(report, projected)
+    return {**joined, "image_metadata_join":{
+        "contract":"unadorned-installed-export-to-authenticated-capture-image-metadata-v1",
+        "installed_export_source":dict(exported), "captured_source":dict(captured),
+        "collection_image_digest":image,
+        "canonical":source["binding"]["canonical"],
+        "source_manifest":reference(source["binding"]["runtime"]["source_manifest"]),
+        "projection_scope":"in-memory-installed-source-identity-image-field-only",
+        "original_report_rewritten":False, "source_binding_rewritten":False}}
+
 
 def _recorded_operation(source,inputs,operation):
     if set(operation)!={"started.json","completed.json","stdout.log","stderr.log"}:
@@ -386,7 +420,7 @@ def _recorded_operation(source,inputs,operation):
     if report["result_root"]!=inputs["result"]["path"] or report["result_seal"]!=inputs["result"]["seal"]:
         raise ValueError("parallel partial deep operation opened another result")
     _close_dependencies(report)
-    return measurement._measurement_binding(report,source),completed
+    return _measurement_binding(report,source),completed
 
 def _run_original(source,inputs,audit_root):
     audit=Path(audit_root).absolute();_path(audit.parent,directory=True)
@@ -496,4 +530,3 @@ def target_operation(operation):
         {"read_dependencies":[operation["receipt"]],"directory_dependencies":[]})
     source["binding_reference"]=value["inputs"]["source_binding"]
     return source,second,second_facts,dependencies,end["completed_at"]
-

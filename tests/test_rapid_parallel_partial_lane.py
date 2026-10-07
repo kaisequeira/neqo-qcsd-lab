@@ -224,3 +224,62 @@ def test_reader_source_rejects_changed_bytes_membership_native_and_permission_ro
     with pytest.raises(ValueError,match="prospective reader"):
         reader.reader_source_snapshot(root,lab_head,native_head)
 
+
+def image_join_fixture(tmp_path):
+    """Real original chunk join with controlled export/capture image roles."""
+    source,inputs=chunk_original(tmp_path)
+    raw=json.loads((Path(source["root"])/"src/qcsd_lab/report.json").read_bytes())
+    identity=source["binding"]["runtime_identity"]
+    identity["source"]={**identity["source"],"image_digest":None}
+    raw["intent"]["runtime_identity"]["runtime_source"]={
+        **raw["intent"]["runtime_identity"]["runtime_source"],
+        "image_digest":identity["collection_image_digest"]}
+    raw["read_dependencies"] = [
+        reader.reference(raw["spec"]["plan_receipt"]),
+        reader.reference(tmp_path/"chunk-policy.json")]
+    return source,raw
+
+
+def test_export_capture_image_join_keeps_original_guards_report_and_source_bytes(tmp_path):
+    source,raw=image_join_fixture(tmp_path)
+    before_source,before_raw=deepcopy(source),deepcopy(raw)
+    with pytest.raises(ValueError,match="chunk partial measurement Source or image differs"):
+        serial._measurement_binding(raw,source)
+    joined=reader._measurement_binding(raw,source)
+    assert source==before_source and raw==before_raw
+    assert joined["chunk_bindings"]["plan"]==reader.reference(raw["spec"]["plan_receipt"])
+    assert joined["image_metadata_join"]["installed_export_source"]["image_digest"] is None
+    assert joined["image_metadata_join"]["captured_source"]==raw["experiment"]["source"]
+    assert joined["image_metadata_join"]["projection_scope"]=="in-memory-installed-source-identity-image-field-only"
+    assert joined["image_metadata_join"]["original_report_rewritten"] is False
+    assert joined["image_metadata_join"]["source_binding_rewritten"] is False
+    # The original function and unchanged original inputs continue to refuse.
+    with pytest.raises(ValueError,match="chunk partial measurement Source or image differs"):
+        serial._measurement_binding(raw,source)
+
+
+@pytest.mark.parametrize("change",["captured-image","export-image","native","dirty","extra-source-field",
+    "intent-client","intent-image","spec-image","spec-module","experiment-image","missing-export-image",
+    "runtime-copy-mode","runtime-copy-bytes"])
+def test_export_capture_image_join_refuses_all_other_identity_and_original_runtime_changes(tmp_path,change):
+    source,raw=image_join_fixture(tmp_path)
+    wrong="sha256:"+"f"*64
+    if change=="captured-image":raw["intent"]["runtime_identity"]["runtime_source"]["image_digest"]=wrong
+    elif change=="export-image":source["binding"]["runtime_identity"]["source"]["image_digest"]=wrong
+    elif change=="native":raw["intent"]["runtime_identity"]["runtime_source"]["neqo_commit"]="f"*40
+    elif change=="dirty":raw["intent"]["runtime_identity"]["runtime_source"]["lab_dirty"]=True
+    elif change=="extra-source-field":raw["intent"]["runtime_identity"]["runtime_source"]["unbound"]=True
+    elif change=="intent-client":raw["intent"]["runtime_identity"]["client_sha256"]="f"*64
+    elif change=="intent-image":raw["intent"]["runtime_identity"]["collection_image_digest"]=wrong
+    elif change=="spec-image":raw["spec"]["collection_image_digest"]=wrong
+    elif change=="spec-module":raw["spec"]["module_root"]=str(tmp_path/"unbound-module-root")
+    elif change=="experiment-image":raw["experiment"]["source"]["image_digest"]=wrong
+    elif change=="missing-export-image":del source["binding"]["runtime_identity"]["source"]["image_digest"]
+    else:
+        copy=tmp_path/"unbound-client-copy"
+        copy.write_bytes(Path(source["binding"]["runtime"]["client_binary"]).read_bytes()
+            if change=="runtime-copy-mode" else b"wrong client bytes")
+        copy.chmod(0o700 if change=="runtime-copy-mode" else 0o755)
+        raw["spec"]["client_binary"]=str(copy)
+    with pytest.raises(ValueError):
+        reader._measurement_binding(raw,source)
