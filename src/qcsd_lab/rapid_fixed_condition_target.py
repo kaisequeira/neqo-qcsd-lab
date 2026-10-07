@@ -171,6 +171,7 @@ _READER_COMPATIBILITY_HELPERS = {
                '_planning_source_projection', '_membership_code_path',
                '_compatible_selected_membership_code', '_epoch_dispatch_source_projection',
                '_epoch_dynamic_source_projection', '_parallel_facts_source_projection',
+               '_portable_dynamic_source_projection',
                '_parallel_schedule_source_projection', '_acquisition_reader_sources',
                '_v11_input_reader_source_projection',
                '_compatible_acquisition_code', '_cohort_acquisition_source_projection',
@@ -279,8 +280,17 @@ def _compatible_code_ref(role, producer, current):
         and current['sha256'] in {
             '1e917253a51a0468cea929526d5c73e65e5a0220868f48447b0bd7b8648edbdd',
             '9339d219b5b0e97b23ec9f1ea78cd7378ec9b81d5018f64a14eace5928d6cbcd'})
+    portable_dynamic = (role == 'dynamic' and producer['sha256'] in {
+        '17d9b19159a521e7c18cea732ba8ed44dff6044a18442807a716e793586cb3a3',
+        'e5c49b345c0e5acb1af442dbaae7d2caabfcdcf09892239d5ebb78f5d03a318a',
+        '1e917253a51a0468cea929526d5c73e65e5a0220868f48447b0bd7b8648edbdd',
+        '9339d219b5b0e97b23ec9f1ea78cd7378ec9b81d5018f64a14eace5928d6cbcd'}
+        and current['sha256'] == 'dce570b9ba7d1ac1ce35431e8a83ba0a93a0daaa4acbe8c0ee61e99e2e27c567')
     try:
-        if epoch_dynamic:
+        if portable_dynamic:
+            old = _epoch_dynamic_source_projection(Path(producer['path']).read_bytes())
+            new = _portable_dynamic_source_projection(Path(current['path']).read_bytes())
+        elif epoch_dynamic:
             old = _epoch_dynamic_source_projection(Path(producer['path']).read_bytes())
             new = _epoch_dynamic_source_projection(Path(current['path']).read_bytes())
         else:
@@ -310,6 +320,42 @@ def _epoch_dynamic_source_projection(raw):
         if isinstance(node, ast.FunctionDef) and node.name == '_measurement_binding':
             found += 1; node.body = [ast.Pass()]
     if found != 1: raise ValueError('dynamic epoch binding definition is absent or duplicated')
+    return _reader_code_projection(ast.unparse(tree).encode(), 'dynamic')
+
+
+def _portable_dynamic_source_projection(raw):
+    """Remove only the exact reviewed v2 transport layer from a pinned reader."""
+    import ast
+    if hashlib.sha256(raw).hexdigest() != 'dce570b9ba7d1ac1ce35431e8a83ba0a93a0daaa4acbe8c0ee61e99e2e27c567':
+        raise ValueError('portable dynamic reader is outside its exact reviewed Source')
+    new_units = {'portable_release_snapshot', '_portable_installed_release', '_portable_runtime_roles',
+                 '_run_portable_runtime', 'bind_portable_source', '_portable_source'}
+    retained = []; found = set(); source_count = 0; binding_count = 0
+    expected_dispatch = ast.parse("if json.loads(reopen(ref).read_bytes()).get('artifact_type') == SOURCE_V2_TYPE:\n    return _portable_source(ref)").body[0]
+    for node in ast.parse(raw).body:
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1 and
+                isinstance(node.targets[0], ast.Name) and node.targets[0].id == 'SOURCE_V2_TYPE'):
+            if ('SOURCE_V2_TYPE' in found or not isinstance(node.value, ast.Constant) or
+                    node.value.value != 'qcsd-chunk-partial-lane-portable-installed-release-source-v2'):
+                raise ValueError('portable dynamic Source type changed')
+            found.add('SOURCE_V2_TYPE'); continue
+        if isinstance(node, ast.FunctionDef) and node.name in new_units:
+            if node.name in found: raise ValueError('portable dynamic binding helper duplicated')
+            found.add(node.name); continue
+        if isinstance(node, ast.FunctionDef) and node.name == '_source':
+            source_count += 1
+            if (not node.body or ast.dump(node.body[0], include_attributes=False) !=
+                    ast.dump(expected_dispatch, include_attributes=False)):
+                raise ValueError('portable dynamic dispatch changes its v1 reader')
+            node.body = node.body[1:]
+            if hashlib.sha256(ast.dump(node, include_attributes=False).encode()).hexdigest() != 'ed88e86c6bb197d1822cc215a55c433aa0058e39173aed0b766d13920bd8f475':
+                raise ValueError('portable dynamic v1 Source reader changed')
+        if isinstance(node, ast.FunctionDef) and node.name == '_measurement_binding':
+            binding_count += 1; node.body = [ast.Pass()]
+        retained.append(node)
+    if found != new_units | {'SOURCE_V2_TYPE'} or source_count != 1 or binding_count != 1:
+        raise ValueError('portable dynamic binding units are incomplete')
+    tree = ast.Module(body=retained, type_ignores=[])
     return _reader_code_projection(ast.unparse(tree).encode(), 'dynamic')
 
 

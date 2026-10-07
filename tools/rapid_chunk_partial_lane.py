@@ -19,6 +19,11 @@ def main(argv=None):
         source.add_argument('--' + name, type=Path, required=True)
     for name in ('canonical-sha256', 'runtime-sha256'):
         source.add_argument('--' + name, required=True)
+    portable = actions.add_parser('bind-source-v2')
+    for name in ('source-root', 'canonical', 'runtime', 'audit-root', 'output'):
+        portable.add_argument('--' + name, type=Path, required=True)
+    for name in ('canonical-sha256', 'runtime-sha256'):
+        portable.add_argument('--' + name, required=True)
     declare = actions.add_parser('declare')
     for name in ('source-binding', 'spec', 'evidence-root', 'intent', 'result', 'audit-root', 'output'):
         declare.add_argument('--' + name, type=Path, required=True)
@@ -27,11 +32,12 @@ def main(argv=None):
         verify.add_argument('--' + name, type=Path, required=True)
     args = p.parse_args(argv)
     try:
-        if args.action == 'bind-source':
+        if args.action in ('bind-source', 'bind-source-v2'):
             canonical, runtime = reader.reference(args.canonical.absolute()), reader.reference(args.runtime.absolute())
             if canonical['sha256'] != args.canonical_sha256 or runtime['sha256'] != args.runtime_sha256:
                 raise ValueError('chunk partial installed input digest differs')
-            result = reader.bind_source(root=args.source_root.absolute(), canonical=canonical,
+            binder = reader.bind_source if args.action == 'bind-source' else reader.bind_portable_source
+            result = binder(root=args.source_root.absolute(), canonical=canonical,
                 runtime=json.loads(reader.reopen(runtime).read_bytes()), audit_root=args.audit_root.absolute(),
                 output=args.output.absolute())
             if reader.reference(args.runtime.absolute()) != runtime:
@@ -47,7 +53,8 @@ def main(argv=None):
         print(json.dumps({'operation': args.action, 'status': 'closed', 'result': result}, sort_keys=True))
         return 0
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
-        print(json.dumps({'operation': args.action, 'status': 'refused', 'error_type': type(error).__name__}, sort_keys=True))
+        print(json.dumps({'operation': args.action, 'status': 'refused',
+            'error_type': type(error).__name__, 'error': str(error)}, sort_keys=True))
         return 1
 
 

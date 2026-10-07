@@ -241,6 +241,14 @@ def test_dynamic_binding_uses_actual_git_heads_and_recorded_isolated_runtime_not
 def test_dynamic_binding_closes_git_runtime_operation_and_mode_membership(tmp_path, monkeypatch, case):
     root, canonical, runtime = installed_fixture(tmp_path)
     monkeypatch.setattr(reader, '_consumer_root', lambda: root)
+    authenticated_readers = reader._reader_sources()
+    original_compatible = reader._compatible_reader_sources
+    def controlled_compatible(observed):
+        if observed != authenticated_readers:
+            raise ValueError('controlled reader set changed')
+        original_compatible(observed)
+        return str(root)
+    monkeypatch.setattr(reader, '_compatible_reader_sources', controlled_compatible)
     binding = reader.bind_source(root=root, canonical=canonical, runtime=runtime, audit_root=tmp_path / 'runtime-audit', output=tmp_path / 'binding.json')
     payload = reader._document(binding, reader.SOURCE_TYPE)
     if case == 'source-bytes': (root / 'qcsd-lab').write_text('changed')

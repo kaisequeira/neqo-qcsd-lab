@@ -21,6 +21,7 @@ from .rapid_partial_lane import (_path, reference, reopen, encoded, _write,
 from .util import durable_create
 
 SOURCE_TYPE = "qcsd-chunk-partial-lane-installed-release-source-v1"
+SOURCE_V2_TYPE = "qcsd-chunk-partial-lane-portable-installed-release-source-v2"
 TYPE = "qcsd-original-deep-verified-individual-traces-from-incomplete-chunk-v1"
 CONTRACT = "released-original-accepted-chunk-traces-incomplete-aggregate-no-lane-pass-v1"
 LAYOUT = "remaining-slot-chunk-v1"
@@ -81,6 +82,65 @@ def release_snapshot(root, lab_head, native_head):
             if "__pycache__" not in p.parts and p.relative_to(root).as_posix() not in files:
                 raise ValueError("original verifier acquired an unbound importable file")
     return {"root": str(root), "lab_head": lab_head, "native_head": native_head, "files": files}
+
+
+def portable_release_snapshot(root, lab_head, native_head, installed_root):
+    """Bind Git bytes and both exact, separately observed permission roles."""
+    root = _path(root, directory=True)
+    installed_root = _path(installed_root, directory=True)
+    if any(not isinstance(x, str) or HEAD.fullmatch(x) is None for x in (lab_head, native_head)):
+        raise ValueError('portable Source requires exact release heads')
+    files = {}; installed_files = {}; mode_pairs = {}
+    for checkout, prefix, head in ((root, '', lab_head), (root / 'neqo-qcsd', 'neqo-qcsd/', native_head)):
+        if _git(checkout, 'rev-parse', 'HEAD').decode().strip() != head:
+            raise ValueError('portable Source release moved')
+        tree = {}; index = {}; rows = []
+        for row in _git(checkout, 'ls-tree', '-r', '-z', 'HEAD').split(b'\0'):
+            if row:
+                meta, name = row.split(b'\t'); mode, _, blob = meta.decode().split()
+                tree[name.decode()] = (mode, blob)
+        for row in _git(checkout, 'ls-files', '-s', '-z').split(b'\0'):
+            if not row: continue
+            meta, raw_name = row.split(b'\t'); mode, blob, stage = meta.decode().split(); name = raw_name.decode()
+            if stage != '0' or Path(name).is_absolute() or '..' in Path(name).parts:
+                raise ValueError('portable Source has conflicted or escaping membership')
+            index[name] = (mode, blob)
+            if mode == '160000':
+                if prefix or name != 'neqo-qcsd' or blob != native_head:
+                    raise ValueError('portable Native Gitlink changed')
+                continue
+            if mode not in {'100644', '100755'} or tree.get(name) != (mode, blob):
+                raise ValueError('portable Source index differs from release')
+            rows.append((name, mode, blob))
+        if tree != index:
+            raise ValueError('portable Source membership differs from release')
+        raw = _git(checkout, 'cat-file', '--batch', input=''.join(x[2] + '\n' for x in rows).encode()); offset = 0
+        for name, mode, blob in rows:
+            end = raw.index(b'\n', offset); actual, kind, size = raw[offset:end].decode().split()
+            body = raw[end + 1:end + 1 + int(size)]; offset = end + int(size) + 2
+            ref = reference(checkout / name)
+            allowed = {0o600, 0o644} if mode == '100644' else {0o755}
+            if (actual != blob or kind != 'blob' or ref['sha256'] != hashlib.sha256(body).hexdigest()
+                    or ref['mode'] not in allowed):
+                raise ValueError('portable Source bytes or observed mode differ from its Git release')
+            relative = prefix + name
+            installed = reference(installed_root / relative)
+            installed_allowed = {0o644, 0o664} if mode == '100644' else {0o755, 0o775}
+            if (installed['sha256'] != ref['sha256'] or installed['mode'] not in installed_allowed):
+                raise ValueError('portable installed Source bytes or executable-class mode differ from Git')
+            files[relative] = ref
+            installed_files[relative] = installed
+            mode_pairs[relative] = {'git_mode': mode, 'observed_mode': ref['mode'],
+                                    'installed_mode': installed['mode']}
+        if offset != len(raw): raise ValueError('portable Source Git stream has trailing data')
+    if not any(p.startswith('neqo-qcsd/') for p in files):
+        raise ValueError('portable Source requires its full Native release')
+    for directory in (root / 'src', root / 'tools'):
+        for p in directory.rglob('*.py'):
+            if '__pycache__' not in p.parts and p.relative_to(root).as_posix() not in files:
+                raise ValueError('portable Source acquired an unbound importable file')
+    return {'root': str(root), 'lab_head': lab_head, 'native_head': native_head,
+            'files': files, 'installed_files': installed_files, 'mode_pairs': mode_pairs}
 
 def accepted_subset(report):
     """Join a genuine original deep result to its entire originally planned lane."""
@@ -348,6 +408,98 @@ def _run_runtime(release, canonical, runtime, audit_root):
     return report, operation
 
 
+def _portable_installed_release(release):
+    """Compare image files with Git modes while retaining measured full modes."""
+    if (not isinstance(release, dict)
+            or set(release) != {'root', 'lab_head', 'native_head', 'files', 'installed_files', 'mode_pairs'}
+            or not isinstance(release['files'], dict) or not isinstance(release['installed_files'], dict)
+            or not isinstance(release['mode_pairs'], dict)
+            or set(release['files']) != set(release['mode_pairs'])
+            or set(release['files']) != set(release['installed_files'])):
+        raise ValueError('portable Source permission contract has another schema')
+    installed = {}
+    for name, ref in release['files'].items():
+        pair = release['mode_pairs'][name]
+        installed_ref = release['installed_files'][name]
+        if (not isinstance(pair, dict)
+                or set(pair) != {'git_mode', 'observed_mode', 'installed_mode'}
+                or not isinstance(ref, dict) or set(ref) != {'path', 'sha256', 'mode'}
+                or not isinstance(installed_ref, dict) or set(installed_ref) != {'path', 'sha256', 'mode'}
+                or pair['observed_mode'] != ref['mode']
+                or pair['installed_mode'] != installed_ref['mode']
+                or installed_ref['sha256'] != ref['sha256']):
+            raise ValueError('portable Source permission pair changed')
+        git_mode = pair['git_mode']
+        if (git_mode == '100644' and (ref['mode'] not in (0o600, 0o644)
+                or installed_ref['mode'] not in (0o644, 0o664))
+                or git_mode == '100755' and (ref['mode'] != 0o755
+                or installed_ref['mode'] not in (0o755, 0o775))
+                or git_mode not in ('100644', '100755')):
+            raise ValueError('portable Source has an unauthorized permission pair')
+        installed[name] = installed_ref
+    return {**release, 'files': installed}
+
+
+def _portable_runtime_roles(canonical, runtime):
+    """Keep the installed permission role on the actual frozen image context."""
+    installed_root = reopen(canonical).parent / 'image-context' / 'source'
+    if (not isinstance(runtime, dict) or set(runtime) != RUNTIME_KEYS
+            or _path(runtime['runtime_source_root'], directory=True) != _path(installed_root, directory=True)
+            or _path(runtime['module_root'], directory=True) != installed_root):
+        raise ValueError('portable installation Source must be its actual image context')
+
+
+def _run_portable_runtime(release, canonical, runtime, audit_root):
+    _portable_runtime_roles(canonical, runtime)
+    audit = Path(audit_root).absolute(); _path(audit.parent, directory=True)
+    protected = [Path(release['root']), _consumer_root(), Path(canonical['path']).parent,
+                 Path(runtime['runtime_source_root']), Path(runtime['source_manifest']).parent]
+    if any(audit.is_relative_to(p) or p.is_relative_to(audit) for p in protected):
+        raise ValueError('portable installation audit must be disjoint and fresh')
+    request = _runtime_request(release, canonical, runtime, audit)
+    audit.mkdir(mode=0o755, exist_ok=False); (audit / 'scratch').mkdir(mode=0o700, exist_ok=False)
+    command = [sys.executable, '-I', '-B', '-c', _RUNTIME_PROGRAM]
+    started = {'command': command, 'request': request, 'reader_sources': _reader_sources(),
+               'interpreter': reference(Path(sys.executable).resolve()), 'started_at': datetime.now(timezone.utc).isoformat()}
+    durable_create(audit / 'started.json', encoded(started))
+    env = {k: v for k, v in os.environ.items() if k != 'PYTHONPATH' and not k.startswith(('QCSD_', 'GIT_', 'PYTHON'))}
+    env['GIT_OPTIONAL_LOCKS'] = '0'
+    result = subprocess.run(command, input=encoded(request), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            env=env, check=False)
+    durable_create(audit / 'stdout.log', result.stdout); durable_create(audit / 'stderr.log', result.stderr)
+    completed = {'returncode': result.returncode, 'completed_at': datetime.now(timezone.utc).isoformat(),
+                 'stdout_sha256': hashlib.sha256(result.stdout).hexdigest(), 'stderr_sha256': hashlib.sha256(result.stderr).hexdigest()}
+    durable_create(audit / 'completed.json', encoded(completed))
+    if result.returncode != 0:
+        raise ValueError('portable installed runtime reopening refused; raw installation audit retained')
+    operation = {name: reference(audit / name) for name in ('started.json', 'completed.json', 'stdout.log', 'stderr.log')}
+    report, _ = _runtime_operation(_portable_installed_release(release), canonical, runtime, operation)
+    return report, operation
+
+
+def bind_portable_source(*, root, canonical, runtime, audit_root, output):
+    """Bind separate measured and installed file modes under one clean Git pair."""
+    raw = json.loads(reopen(canonical).read_bytes())
+    metadata = raw.get('source', {})
+    _portable_runtime_roles(canonical, runtime)
+    release = portable_release_snapshot(root, metadata.get('lab_commit'), metadata.get('neqo_commit'),
+        runtime['runtime_source_root'])
+    readers = _reader_sources()
+    report, operation = _run_portable_runtime(release, canonical, runtime, audit_root)
+    target = Path(output).absolute()
+    if any(target.is_relative_to(p) for p in (Path(release['root']), Path(audit_root), Path(canonical['path']).parent)):
+        raise ValueError('portable Source binding must be outside original authority')
+    if portable_release_snapshot(root, release['lab_head'], release['native_head'],
+            runtime['runtime_source_root']) != release or _reader_sources() != readers:
+        raise ValueError('portable release or executing reader changed before binding')
+    _close_dependencies(report)
+    return _write(target, SOURCE_V2_TYPE, {'release': release, 'canonical': canonical, 'runtime': runtime,
+        'runtime_identity': {key: report[key] for key in ('source', 'collection_image_digest', 'client_sha256')},
+        'runtime_operation': operation, 'read_dependencies': report['read_dependencies'],
+        'directory_dependencies': report['directory_dependencies'], 'reader_sources': readers,
+        'published_at': datetime.now(timezone.utc).isoformat()})
+
+
 def bind_source(*, root, canonical, runtime, audit_root, output):
     """Bind an actual installed clean release; no release-head allowlist cycle."""
     raw = json.loads(reopen(canonical).read_bytes())
@@ -369,6 +521,8 @@ def bind_source(*, root, canonical, runtime, audit_root, output):
 
 
 def _source(ref):
+    if json.loads(reopen(ref).read_bytes()).get('artifact_type') == SOURCE_V2_TYPE:
+        return _portable_source(ref)
     value = _document(ref, SOURCE_TYPE)
     if set(value) != {'release', 'canonical', 'runtime', 'runtime_identity', 'runtime_operation',
                      'read_dependencies', 'directory_dependencies', 'reader_sources', 'published_at'}:
@@ -385,6 +539,30 @@ def _source(ref):
             or value['directory_dependencies'] != report['directory_dependencies']
             or not _timestamp(completed['completed_at']) <= _timestamp(value['published_at']) <= datetime.now(timezone.utc)):
         raise ValueError('chunk partial Source binding differs from its actual installation proof')
+    _close_dependencies(value)
+    return {**release, 'binding': value}
+
+
+def _portable_source(ref):
+    value = _document(ref, SOURCE_V2_TYPE)
+    if set(value) != {'release', 'canonical', 'runtime', 'runtime_identity', 'runtime_operation',
+                      'read_dependencies', 'directory_dependencies', 'reader_sources', 'published_at'}:
+        raise ValueError('portable Source binding has another schema')
+    release = value['release']
+    _portable_runtime_roles(value['canonical'], value['runtime'])
+    if (not isinstance(release, dict)
+            or set(release) != {'root', 'lab_head', 'native_head', 'files', 'installed_files', 'mode_pairs'}
+            or portable_release_snapshot(release['root'], release['lab_head'], release['native_head'],
+                value['runtime']['runtime_source_root']) != release
+            or not _compatible_reader_sources(value['reader_sources'])):
+        raise ValueError('portable original or executing Source changed')
+    report, completed = _runtime_operation(_portable_installed_release(release), value['canonical'],
+        value['runtime'], value['runtime_operation'], reader_sources=value['reader_sources'])
+    if (value['runtime_identity'] != {key: report[key] for key in ('source', 'collection_image_digest', 'client_sha256')}
+            or value['read_dependencies'] != report['read_dependencies']
+            or value['directory_dependencies'] != report['directory_dependencies']
+            or not _timestamp(completed['completed_at']) <= _timestamp(value['published_at']) <= datetime.now(timezone.utc)):
+        raise ValueError('portable Source binding differs from its actual installation proof')
     _close_dependencies(value)
     return {**release, 'binding': value}
 
