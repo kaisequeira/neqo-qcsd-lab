@@ -77,6 +77,29 @@ The external producer and reader identities remain separate from the
 installed browser and Native client identities. Reuse does not claim that
 new external code was installed in an older image.
 
+## Reading historical evidence correctly
+
+Older evidence sometimes stores file permissions as an integer: `420` means
+the same full permission mode as octal `0644`. The historical dependency
+reader converts that representation when building a new transport inventory,
+then checks the exact file bytes and full permissions. New V13 references
+still require their original octal-text schema. Original evidence is retained
+unchanged; different permission bits or malformed values are refused.
+
+An old source observation records which bytes were present during an earlier
+test. Its observed authoring path can contain a later version today. The
+reader binds the original V8 closure's explicitly declared before/after
+observations as historical raw documents; it does not treat their nested
+observed paths as current file dependencies. Current producer files, retained
+source snapshots and actual operation records remain separately authenticated.
+Unbound lookalikes and ambiguous roles are refused.
+
+The [historical fence controls](../tests/test_v13_historical_dependency_fence.py)
+exercise these distinctions, byte and permission mutations, symlinks and raw
+batch membership. A complete read of the real predecessor dependency tree
+can expose these failures before any browser starts, without replaying old
+qualification commands. This reader repair needs no Native or browser rebuild.
+
 ## Portable source bindings and capture recovery
 
 Portable V2 source bindings retain both the measured Git checkout permissions

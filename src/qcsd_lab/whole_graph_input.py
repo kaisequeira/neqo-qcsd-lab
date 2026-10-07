@@ -121,7 +121,7 @@ V13_PLAN_TYPE = "qcsd-external-canonical-homepage-whole-graph-catalogue-plan-v13
 V13_INPUT_TYPE = "qcsd-external-browser-whole-graph-input-v13"
 V13_CONTRACT = "prospectively-resolved-canonical-homepage-complete-occurrence-graph-input-only-v13"
 # One tracked producer supports consecutive prospective canonical-homepage batches.
-V13_PRODUCERS = {"graph_input.py": "d12b4278665f5b26a5c927e572254b7dcd8bbd4294811ba57a56c91b05e28ac1",
+V13_PRODUCERS = {"graph_input.py": "236ab7ee22009bbb9ecd0a519c322307243847fb6be8ada7ad6692cd84e4dcf8",
                  "operator.py": "5b7f8032fa7329679667b7b83f0904aa8019677ef904995eff94bd2bbca7a5f6",
                  "canonical_homepage.py": "1683d3bd3ef71a1de62f209ad01c4c860cd57102a0f5fb53890d6e4f81d7314a"}
 VERSIONS[V13_PLAN_TYPE] = (13, V13_CONTRACT, V13_INPUT_TYPE, V13_PRODUCERS)

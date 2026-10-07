@@ -39,26 +39,35 @@ def reader_sources():
 
 
 def _recognized_reader_sources(value: dict) -> bool:
-    """Reopen the one retained Source62 cohort reader family without new credit."""
+    """Reopen finite retained Source62/Source63 cohort reader families without new credit."""
     current = reader_sources()
     if value == current:
         return True
-    retained = {
+    retained_families = ({
         "qcsd_lab.whole_graph_input": "5f66a4965c382ba9254f0c5fbb7fd797e592f3b818d52d904db2daacf69f47f5",
         "qcsd_lab.whole_graph_supplement": "164ab24211a5fa535ee838b9b50862c1c3f5b64fd240c755d8ba4fae6a1869b7",
         "qcsd_lab.rapid_per_class_selected_enrollment": "4f7f3a6fd67f077165496b92d62e9b81f1e0168d01ad3f11607b144a6124bee0",
         "qcsd_lab.rapid_supplemental_cohort": "12eec36c6bcd6ab27790f8f6d77ca724d775f108d0bb08f41214b61310a092be",
-    }
-    if not isinstance(value, dict) or set(value) != set(retained):
+    }, {
+        "qcsd_lab.whole_graph_input": "5681d5124c8d36e5f3e415373ea2cb73f60efd374494de851ccbbd959b60d6aa",
+        "qcsd_lab.whole_graph_supplement": "293365724af2b6cd13d8be4060e7d3bc8c9e65533d37c59a7e41ee021178704b",
+        "qcsd_lab.rapid_per_class_selected_enrollment": "4f7f3a6fd67f077165496b92d62e9b81f1e0168d01ad3f11607b144a6124bee0",
+        "qcsd_lab.rapid_supplemental_cohort": "39383c717f267bcb27c5d5a7585cbef3a9138f7845ccedf04033014519b2a029",
+    })
+    if not isinstance(value, dict) or set(value) != set(retained_families[0]):
         return False
     paths = {}
-    for name, digest in retained.items():
+    for name in value:
         ref = value[name]
         paths[name] = inputs.reopen(ref)
-        if (ref["sha256"] != digest or ref["mode"] != "0644"
+        if (ref["mode"] != "0644"
                 or paths[name].name != name.rsplit(".", 1)[1] + ".py"):
             return False
     if len({path.parent for path in paths.values()}) != 1:
+        return False
+    retained = next((family for family in retained_families
+        if all(value[name]["sha256"] == digest for name, digest in family.items())), None)
+    if retained is None:
         return False
     from . import rapid_fixed_condition_target as fixed
     for name, path in paths.items():

@@ -281,7 +281,8 @@ def _compatible_code_ref(role, producer, current):
                        'd485db59ab1e976382e0e544522ea0f15aa638bbe7ca16b62373b5089528de00',
                        '1537b2bc43ca527ed8b1c33fcca14e82b3fb468881cc193bad81a012a5815005',
                        'aef299755e14c577e366fffa8df0f281f5f10bdef0937abb6fea52e51dd4ae90',
-                       '80783154a4c0097fa8729b69c3ea5dd6ca8f617dd655ce286c7e929874ba8f45'})
+                       '80783154a4c0097fa8729b69c3ea5dd6ca8f617dd655ce286c7e929874ba8f45',
+                       'e57126d7a6e179a82f6f997dd8935a543fbf3378718466ad0eb5033b4811890a'})
     epoch_dynamic = (role == 'dynamic' and producer['sha256'] in {
         '17d9b19159a521e7c18cea732ba8ed44dff6044a18442807a716e793586cb3a3',
         'e5c49b345c0e5acb1af442dbaae7d2caabfcdcf09892239d5ebb78f5d03a318a',
@@ -721,9 +722,9 @@ def _acquisition_reader_sources():
         'rapid_selected_capture_input.py': 'ba8caa645d219a52eb1e177285bb7e9f9198a1b59c46fdb37692f95206230442',
         'rapid_selected_budget_input.py': '3f03bae31b667535adab316fea98cc34f19bf9292bc1b041f428eb3a02dee3cb',
         'rapid_per_class_selected_enrollment.py': '4f7f3a6fd67f077165496b92d62e9b81f1e0168d01ad3f11607b144a6124bee0',
-        'whole_graph_input.py': '5681d5124c8d36e5f3e415373ea2cb73f60efd374494de851ccbbd959b60d6aa',
-        'whole_graph_supplement.py': '293365724af2b6cd13d8be4060e7d3bc8c9e65533d37c59a7e41ee021178704b',
-        'rapid_supplemental_cohort.py': '39383c717f267bcb27c5d5a7585cbef3a9138f7845ccedf04033014519b2a029',
+        'whole_graph_input.py': '7dd9513e8eaf9adddb16c42c201af1aa1fbab045b25c6189ec2d4ccf53c4463c',
+        'whole_graph_supplement.py': '4c5065dc90214fcc3d128776e33c780f8228916255c692dde8390b855262bec0',
+        'rapid_supplemental_cohort.py': 'c80f566a5b477ed4011f437b740edf49c9ba9496b1e073f3828e76f6b686630d',
     }
     _open(reference(Path(__file__)))
     result = {}
@@ -738,7 +739,8 @@ def _acquisition_reader_sources():
 
 def _v13_input_reader_source_projection(raw):
     """Restore every Source62 byte after finite prospective V13 registration."""
-    if hashlib.sha256(raw).hexdigest() != '5681d5124c8d36e5f3e415373ea2cb73f60efd374494de851ccbbd959b60d6aa':
+    if hashlib.sha256(raw).hexdigest() not in ('5681d5124c8d36e5f3e415373ea2cb73f60efd374494de851ccbbd959b60d6aa',
+            '7dd9513e8eaf9adddb16c42c201af1aa1fbab045b25c6189ec2d4ccf53c4463c'):
         raise ValueError('V13 discovery reader is outside its exact reviewed Source')
     start, end = b'V13_PLAN_TYPE = ', b'ZERO = '
     if raw.count(start) != 1 or raw.count(end) != 1:
@@ -773,7 +775,8 @@ def _v13_input_reader_source_projection(raw):
 
 def _v13_cohort_reader_source_projection(raw):
     """Restore exact Source62 bytes after its finite cohort reader recognition."""
-    if hashlib.sha256(raw).hexdigest() != '39383c717f267bcb27c5d5a7585cbef3a9138f7845ccedf04033014519b2a029':
+    if hashlib.sha256(raw).hexdigest() not in ('39383c717f267bcb27c5d5a7585cbef3a9138f7845ccedf04033014519b2a029',
+            'c80f566a5b477ed4011f437b740edf49c9ba9496b1e073f3828e76f6b686630d'):
         raise ValueError('V13 cohort reader is outside its exact reviewed Source')
     start, end = b'def _recognized_reader_sources(', b'def is_context('
     if raw.count(start) != 1 or raw.count(end) != 1:
@@ -791,15 +794,20 @@ def _v13_cohort_reader_source_projection(raw):
 
 def _v13_supplement_reader_source_projection(raw):
     """Recover exact Source62 bytes after adding its retained GET context pair."""
-    if hashlib.sha256(raw).hexdigest() != '293365724af2b6cd13d8be4060e7d3bc8c9e65533d37c59a7e41ee021178704b':
+    if hashlib.sha256(raw).hexdigest() not in ('293365724af2b6cd13d8be4060e7d3bc8c9e65533d37c59a7e41ee021178704b',
+            '4c5065dc90214fcc3d128776e33c780f8228916255c692dde8390b855262bec0'):
         raise ValueError('V13 supplement reader is outside its exact reviewed Source')
-    addition = (
+    additions = (
         b"            ('5f66a4965c382ba9254f0c5fbb7fd797e592f3b818d52d904db2daacf69f47f5',\n"
-        b"             '164ab24211a5fa535ee838b9b50862c1c3f5b64fd240c755d8ba4fae6a1869b7'),\n"
+        b"             '164ab24211a5fa535ee838b9b50862c1c3f5b64fd240c755d8ba4fae6a1869b7'),\n",
+        b"            ('5681d5124c8d36e5f3e415373ea2cb73f60efd374494de851ccbbd959b60d6aa',\n"
+        b"             '293365724af2b6cd13d8be4060e7d3bc8c9e65533d37c59a7e41ee021178704b'),\n",
     )
-    if raw.count(addition) != 1:
-        raise ValueError('Source62 GET reader pair is not unique')
-    projected = raw.replace(addition, b'', 1)
+    projected = raw
+    for addition in additions:
+        if projected.count(addition) > 1:
+            raise ValueError('retained whole-GET reader pair is not unique')
+        projected = projected.replace(addition, b'', 1)
     if hashlib.sha256(projected).hexdigest() != '164ab24211a5fa535ee838b9b50862c1c3f5b64fd240c755d8ba4fae6a1869b7':
         raise ValueError('V13 supplement reader changes protected GET or graph bytes')
     return projected
@@ -807,7 +815,8 @@ def _v13_supplement_reader_source_projection(raw):
 
 def _v12_input_reader_source_projection(raw):
     """Recover every exact V11 reader byte after finite V12 registration."""
-    if hashlib.sha256(raw).hexdigest() == '5681d5124c8d36e5f3e415373ea2cb73f60efd374494de851ccbbd959b60d6aa':
+    if hashlib.sha256(raw).hexdigest() in ('5681d5124c8d36e5f3e415373ea2cb73f60efd374494de851ccbbd959b60d6aa',
+            '7dd9513e8eaf9adddb16c42c201af1aa1fbab045b25c6189ec2d4ccf53c4463c'):
         raw = _v13_input_reader_source_projection(raw)
     if hashlib.sha256(raw).hexdigest() != '5f66a4965c382ba9254f0c5fbb7fd797e592f3b818d52d904db2daacf69f47f5':
         raise ValueError('V12 discovery reader is outside its exact reviewed Source')
@@ -833,6 +842,7 @@ def _v11_input_reader_source_projection(raw):
     """Restore exact Source53 bytes after reviewed V11/V12 registration."""
     if hashlib.sha256(raw).hexdigest() in (
             '5681d5124c8d36e5f3e415373ea2cb73f60efd374494de851ccbbd959b60d6aa',
+            '7dd9513e8eaf9adddb16c42c201af1aa1fbab045b25c6189ec2d4ccf53c4463c',
             '5f66a4965c382ba9254f0c5fbb7fd797e592f3b818d52d904db2daacf69f47f5'):
         raw = _v12_input_reader_source_projection(raw)
     if hashlib.sha256(raw).hexdigest() != '7477a9735dd949cc894bf3a457c69638851615c64ca0f4c5723bf439f98b33bf':
@@ -862,6 +872,16 @@ def _v11_input_reader_source_projection(raw):
 def _cohort_acquisition_source_projection(raw, relative):
     """Remove only the exact prospective dispatch statements, retaining old bodies."""
     import ast
+    if (relative == 'src/qcsd_lab/whole_graph_supplement.py'
+            and hashlib.sha256(raw).hexdigest() ==
+                '4c5065dc90214fcc3d128776e33c780f8228916255c692dde8390b855262bec0'):
+        addition = (
+            b"            ('5681d5124c8d36e5f3e415373ea2cb73f60efd374494de851ccbbd959b60d6aa',\n"
+            b"             '293365724af2b6cd13d8be4060e7d3bc8c9e65533d37c59a7e41ee021178704b'),\n"
+        )
+        if raw.count(addition) != 1:
+            raise ValueError('retained Source63 GET reader pair is not unique')
+        raw = raw.replace(addition, b'', 1)
     import_sha = 'f2a706dd23b2283470da2476cf29e830c18e1433543e5b72f09e1106c356aaaa'
     order_sha = '2051f49616452fcfdc2829e49f13928271d068877a5dc1e9bc4867cd07fd17a0'
     if relative == 'src/qcsd_lab/whole_graph_supplement.py':
@@ -927,18 +947,29 @@ def _compatible_acquisition_code(relative, before, after):
     if before['sha256'] == after['sha256']:
         return True
     if (relative == 'src/qcsd_lab/rapid_supplemental_cohort.py'
-            and before['sha256'] == '12eec36c6bcd6ab27790f8f6d77ca724d775f108d0bb08f41214b61310a092be'):
-        if _v13_cohort_reader_source_projection(Path(after['path']).read_bytes()) != Path(before['path']).read_bytes():
+            and before['sha256'] in ('12eec36c6bcd6ab27790f8f6d77ca724d775f108d0bb08f41214b61310a092be',
+                '39383c717f267bcb27c5d5a7585cbef3a9138f7845ccedf04033014519b2a029')):
+        old_raw = Path(before['path']).read_bytes()
+        if before['sha256'] == '39383c717f267bcb27c5d5a7585cbef3a9138f7845ccedf04033014519b2a029':
+            old_raw = _v13_cohort_reader_source_projection(old_raw)
+        if _v13_cohort_reader_source_projection(Path(after['path']).read_bytes()) != old_raw:
             raise ValueError('V13 cohort reader changes protected Source62 admission or graph bytes')
         return True
     if (relative == 'src/qcsd_lab/whole_graph_supplement.py'
-            and before['sha256'] == '164ab24211a5fa535ee838b9b50862c1c3f5b64fd240c755d8ba4fae6a1869b7'):
-        if _v13_supplement_reader_source_projection(Path(after['path']).read_bytes()) != Path(before['path']).read_bytes():
+            and before['sha256'] in ('164ab24211a5fa535ee838b9b50862c1c3f5b64fd240c755d8ba4fae6a1869b7',
+                '293365724af2b6cd13d8be4060e7d3bc8c9e65533d37c59a7e41ee021178704b')):
+        old_raw = Path(before['path']).read_bytes()
+        if before['sha256'] == '293365724af2b6cd13d8be4060e7d3bc8c9e65533d37c59a7e41ee021178704b':
+            old_raw = _v13_supplement_reader_source_projection(old_raw)
+        if _v13_supplement_reader_source_projection(Path(after['path']).read_bytes()) != old_raw:
             raise ValueError('V13 supplement reader changes protected Source62 GET or graph bytes')
         return True
     if relative == 'src/qcsd_lab/whole_graph_input.py':
         old_raw, new_raw = Path(before['path']).read_bytes(), Path(after['path']).read_bytes()
-        if before['sha256'] == '5f66a4965c382ba9254f0c5fbb7fd797e592f3b818d52d904db2daacf69f47f5':
+        if before['sha256'] == '5681d5124c8d36e5f3e415373ea2cb73f60efd374494de851ccbbd959b60d6aa':
+            old_raw = _v13_input_reader_source_projection(old_raw)
+            projected = _v13_input_reader_source_projection(new_raw)
+        elif before['sha256'] == '5f66a4965c382ba9254f0c5fbb7fd797e592f3b818d52d904db2daacf69f47f5':
             projected = _v13_input_reader_source_projection(new_raw)
         elif before['sha256'] == '7477a9735dd949cc894bf3a457c69638851615c64ca0f4c5723bf439f98b33bf':
             projected = _v12_input_reader_source_projection(new_raw)

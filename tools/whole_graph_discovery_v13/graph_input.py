@@ -355,27 +355,116 @@ def verify_tree(value, *, excluded=()):
 def dependency_fence(plan):
     """Close transitive immutable references, including original failed trees."""
     files, directories, seen = {}, {}, set()
-    def walk(value):
+    roles = {}
+
+    def historical_reference(value):
+        require(isinstance(value, dict) and set(value) == {'path', 'sha256', 'mode'},
+                'historical dependency reference fields changed')
+        if type(value['mode']) is int:
+            require(0 <= value['mode'] <= 0o7777,
+                    'historical reference full mode exceeds permission bits')
+            return {**value, 'mode': f"{value['mode']:04o}"}
+        return value
+
+    def v8_observations(value, origin):
+        # These files record past observations at an authoring path. The V8
+        # closure names them as raw evidence, separately from immutable source
+        # files and retained source-snapshot copies. Do not turn past observed
+        # paths into a requirement on today's final producer or test bytes.
+        require(set(value) == {'actual_v7_plan', 'actual_v7_terminal_batch', 'artifact_type', 'contract',
+                'controls', 'distinct_passing_cases', 'effects_executed', 'formal_accepted_trace_count',
+                'generic_count_bounds', 'input_type', 'latest_cases', 'original_browser_source_and_image_unchanged',
+                'plan_type', 'production_pair', 'raw_operations', 'read_only_refs', 'runtime_role', 'schema_version',
+                'scientific_credit', 'scope', 'source_comparison', 'source_files', 'source_inventory', 'source_root'}
+                and origin is not None and origin.name == 'source-closure-final.json'
+                and type(value.get('schema_version')) is int and value['schema_version'] == 1
+                and value.get('contract') == 'catalogue-homepage-navigation-seeded-complete-occurrence-graph-input-only-v8'
+                and value.get('plan_type') == 'qcsd-external-navigation-seeded-whole-graph-catalogue-plan-v8'
+                and value.get('input_type') == 'qcsd-external-browser-whole-graph-input-v8'
+                and value.get('scientific_credit') is False and value.get('effects_executed') is False
+                and type(value.get('formal_accepted_trace_count')) is int and value['formal_accepted_trace_count'] == 0
+                and isinstance(value.get('read_only_refs'), list) and isinstance(value.get('raw_operations'), list)
+                and isinstance(value.get('source_files'), dict), 'V8 raw observation role lacks its genuine closure schema')
+        source = regular_directory(value['source_root'])
+        names = {'README.md', 'graph_input.py', 'operator.py', 'discovery_control.py',
+                 'discovery_evidence_control.py', 'navigation_control.py', 'test_v8.py'}
+        require(set(value['source_files']) == names, 'V8 observation Source membership changed')
+        roots, gates = set(), set()
+        for operation_value in value['raw_operations']:
+            require(isinstance(operation_value, dict) and set(operation_value) == {'completion', 'files', 'gate', 'name'}
+                    and type(operation_value['gate']) is int and operation_value['gate'] > 0
+                    and operation_value['gate'] not in gates and isinstance(operation_value['files'], list)
+                    and len(operation_value['files']) == 4, 'V8 observation raw operation role changed')
+            paths = [reopen(historical_reference(ref)) for ref in operation_value['files']]
+            parents = {path.parent for path in paths}
+            require(len(set(paths)) == 4 and len(parents) == 1 and not (parents & roots),
+                    'V8 observation gate namespace is ambiguous')
+            roots.update(parents); gates.add(operation_value['gate'])
+        require(roots, 'V8 observation closure has no actual gate roots')
+        observations = {}
+        for raw_ref in value['read_only_refs']:
+            ref = historical_reference(raw_ref); path = reopen(ref)
+            if path.name not in ('source-before.json', 'source-after.json'):
+                continue
+            require(path.parent in roots and path not in observations
+                    and not path.is_relative_to(source) and not source.is_relative_to(path.parent)
+                    and path != origin, 'V8 observation pointer has an ambiguous or cyclic role')
+            observation = load(path)
+            require(isinstance(observation, dict) and set(observation) == names,
+                    'V8 source observation has another schema')
+            for name, row in observation.items():
+                require(isinstance(row, dict) and set(row) == {'path', 'sha256', 'mode'}
+                        and row['path'] == str(source / name) and isinstance(row['sha256'], str)
+                        and re.fullmatch('[0-9a-f]{64}', row['sha256'])
+                        and type(row['mode']) is int and 0 <= row['mode'] <= 0o7777,
+                        'V8 source observation changes its original path, SHA or full-mode label')
+            observations[path] = ref
+        require(set(observations) == {root / name for root in roots for name in ('source-before.json', 'source-after.json')},
+                'V8 observation gate lacks its exact before/after raw documents')
+        for root in roots:
+            require(load(root / 'source-before.json') == load(root / 'source-after.json'),
+                    'V8 source observations differ within the original held gate')
+        return observations
+
+    def walk(value, *, historical=False, origin=None, observation=False):
         if isinstance(value, dict):
+            if value.get('artifact_type') == 'qcsd-external-v8-generic-supplement-catalogue-source-closure-v1':
+                require(historical and not observation, 'V8 observation role must come from an authenticated historical document')
+                leaves = v8_observations(value, origin)
+                for key, child in value.items():
+                    if key == 'read_only_refs':
+                        for ref in child:
+                            path = reopen(historical_reference(ref))
+                            walk(ref, historical=True, observation=path in leaves)
+                    else:
+                        walk(child, historical=historical)
+                require(len(files) <= 20000 and len(seen) <= 2000, 'declaration exceeds finite dependency transport')
+                return
             if set(value) == {'path', 'sha256', 'mode'}:
-                path = reopen(value); files[str(path)] = value
-                if path.suffix == '.json' and path not in seen:
-                    seen.add(path); walk(load(path))
+                ref = historical_reference(value) if historical else value
+                path = reopen(ref); role = 'v8-source-observation' if observation else 'immutable-dependency'
+                require(path not in roles or roles[path] == role, 'historical dependency has ambiguous raw observation authority')
+                roles[path] = role; files[str(path)] = ref
+                if not observation and path.suffix == '.json' and path not in seen:
+                    seen.add(path); walk(load(path), historical=True, origin=path)
             elif set(value) == {'path', 'sha256'} and isinstance(value['path'], str):
                 path = Path(value['path']).absolute(); ref = reference(path)
                 require(ref['sha256'] == value['sha256'], 'historical raw reference changed')
+                require(path not in roles or roles[path] == 'immutable-dependency',
+                        'historical raw dependency has ambiguous observation authority')
+                roles[path] = 'immutable-dependency'
                 files[str(path)] = ref
                 if path.suffix == '.json' and path not in seen:
-                    seen.add(path); walk(load(path))
+                    seen.add(path); walk(load(path), historical=True, origin=path)
             if set(value) == {'root', 'lab_commit', 'gitlinks', 'files'}:
                 verify_snapshot(value)
                 for name in value['files']:
                     ref = reference(Path(value['root']) / name); files[ref['path']] = ref
             for child in value.values():
-                walk(child)
+                walk(child, historical=historical)
         elif isinstance(value, list):
             for child in value:
-                walk(child)
+                walk(child, historical=historical)
         require(len(files) <= 20000 and len(seen) <= 2000, 'declaration exceeds finite dependency transport')
     walk(plan)
     # A predecessor batch's full Root-recorded raw inventory is authority, even

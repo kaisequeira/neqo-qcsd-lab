@@ -78,6 +78,8 @@ def _recognized_producer_sources(value: Any) -> bool:
         'qcsd_lab.whole_graph_input': input_sha,
         'qcsd_lab.whole_graph_supplement': supplement_sha}
         for input_sha, supplement_sha in (
+            ('5681d5124c8d36e5f3e415373ea2cb73f60efd374494de851ccbbd959b60d6aa',
+             '293365724af2b6cd13d8be4060e7d3bc8c9e65533d37c59a7e41ee021178704b'),
             ('5f66a4965c382ba9254f0c5fbb7fd797e592f3b818d52d904db2daacf69f47f5',
              '164ab24211a5fa535ee838b9b50862c1c3f5b64fd240c755d8ba4fae6a1869b7'),
             ('8de0879f1ec1708ec43c061c41ada4d8315dd74865edbd7134045c9fa0b9b940',
