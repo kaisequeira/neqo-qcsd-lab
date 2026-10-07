@@ -9,6 +9,7 @@ requires fifty sites, five settings and exactly sixty-four visits per setting.
 from __future__ import annotations
 
 import json
+import secrets
 import subprocess
 from dataclasses import asdict
 from pathlib import Path
@@ -1431,7 +1432,10 @@ spec=e.CaptureSpec(**{k:Path(v) if k in e.PATH_KEYS else v for k,v in value['spe
 e.executed_image_plan_check(spec.serializable())
 root,target=Path(value['root']),Path(value['target'])
 receipt=e.complete_lane(spec,root,target) if value['complete'] else target
-print(json.dumps({'receipt':str(receipt),'facts':e.verify_launch_receipt(receipt,spec=spec,evidence_root=root)},sort_keys=True,allow_nan=False))
+# Completion just deep-verified this result; the host reopens its sealed bytes.
+print(json.dumps({'receipt':str(receipt),'facts':e.verify_launch_receipt(
+    receipt,spec=spec,evidence_root=root,_manifest_already_deep_verified=value['complete'])},
+    sort_keys=True,allow_nan=False))
 """.strip()
 
 
@@ -1587,7 +1591,8 @@ def readiness_roots(spec: lanes.CaptureSpec, campaign_name: str, *, _context=Non
         runtime={key: spec.serializable()[key] for key in lanes.RUNTIME_KEYS}, mode=lane.mode, _context=_context)))
 
 
-def lane_check_command(spec: lanes.CaptureSpec, root: Path, target: Path, *, complete: bool, _context=None) -> list[str]:
+def lane_check_command(spec: lanes.CaptureSpec, root: Path, target: Path, *, complete: bool,
+                       operation_token: str | None = None, _context=None) -> list[str]:
     command = lanes.image_check_command(spec, inherit_environment=False, campaign_name=target.parent.name,
                                        _context=_context)
     index = command.index("--entrypoint")
@@ -1598,6 +1603,17 @@ def lane_check_command(spec: lanes.CaptureSpec, root: Path, target: Path, *, com
         command[matches[0]] = mount
     else:
         command[index:index] = ["--volume", mount]
+    if operation_token is not None:
+        if (type(operation_token) is not str or len(operation_token) != 32
+            or any(char not in "0123456789abcdef" for char in operation_token)):
+            raise ValueError("installed lane check operation token is invalid")
+        command[command.index("--entrypoint"):command.index("--entrypoint")] = [
+            "--name", "qcsd-rapid-lane-check-" + operation_token,
+            "--label", "org.qcsd.owner=qcsd-lab",
+            "--label", "org.qcsd.role=rolling-installed-lane-check",
+            "--label", "org.qcsd.operation=" + operation_token,
+            "--cidfile", str(root / "lane-checks" / operation_token / "container.id"),
+        ]
     command[-2:] = [LANE_CHECK_SCRIPT, json.dumps({"spec": spec.serializable(), "root": str(root),
         "target": str(target), "complete": complete}, sort_keys=True)]
     return command
@@ -1605,24 +1621,86 @@ def lane_check_command(spec: lanes.CaptureSpec, root: Path, target: Path, *, com
 
 def check_lane_in_image(spec: lanes.CaptureSpec, root: Path, target: Path, *, complete: bool, _context=None) -> dict[str, Any]:
     """Run the unchanged ordinary deep verifier in the actual bound image."""
-    verify_capture_plan(spec, _context=_context)
+    _, plan_payload = verify_capture_plan(spec, _context=_context)
     root = lanes._regular_directory(root)
     target = target.absolute()
     if not target.is_relative_to(root / "lanes"):
         raise ValueError("rolling lane deep target escapes its declared evidence root")
-    command = lane_check_command(spec, root, target, complete=complete, _context=_context)
+    lane = lanes._lane({"plan_payload": plan_payload}, target.parent.name)
+    # One installed plan/source allowance plus one frozen capture timeout per trace.
+    timeout_seconds = 300 + lane.sample_count * plan.V5_CAPTURE_LIMITS["timeout_seconds"]
+    operation_token = secrets.token_hex(16)
+    command = lane_check_command(spec, root, target, complete=complete,
+                                 operation_token=operation_token, _context=_context)
     if _context is not None:
         _context.check()
-    start = {"command": command, "started_at": admission._now()}
-    directory = root / "lane-checks" / lanes._sha(admission._json(start))
-    directory.mkdir(parents=True)
+    parent = root / "lane-checks"
+    parent.mkdir(exist_ok=True)
+    lanes._regular_directory(parent)
+    directory = parent / operation_token
+    directory.mkdir(mode=0o700)
+    start = {"command": command, "started_at": admission._now(),
+             "operation_token": operation_token, "timeout_seconds": timeout_seconds}
     start_path = directory / "actual-started.json"
     admission.durable_create(start_path, admission._json(start))
     error = None
     try:
         result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                check=False, timeout=600)
+                                check=False, timeout=timeout_seconds)
         status, stdout, stderr = result.returncode, result.stdout.encode(), result.stderr.encode()
+    except subprocess.TimeoutExpired as failure:
+        status = None
+        stdout, stderr = getattr(failure, "stdout", None) or b"", getattr(failure, "stderr", None) or b""
+        stdout = stdout.encode() if isinstance(stdout, str) else stdout
+        stderr = stderr.encode() if isinstance(stderr, str) else stderr
+        cidfile = directory / "container.id"
+        name = "qcsd-rapid-lane-check-" + operation_token
+        cleanup = {"status": "not-inspected", "cidfile": str(cidfile), "container_name": name,
+                   "inspect": None, "remove": None}
+        try:
+            container_id = None
+            if cidfile.exists() or cidfile.is_symlink():
+                raw_id = lanes._read(cidfile).decode("ascii")
+                container_id = raw_id.removesuffix("\n")
+                if (raw_id not in {container_id, container_id + "\n"} or len(container_id) != 64
+                    or any(char not in "0123456789abcdef" for char in container_id)):
+                    raise ValueError("owned lane check cidfile is malformed")
+            def recorded_docker(command):
+                completed = subprocess.run(command, text=True, stdout=subprocess.PIPE,
+                                           stderr=subprocess.PIPE, check=False, timeout=30)
+                output = completed.stdout.encode() if isinstance(completed.stdout, str) else completed.stdout or b""
+                errors = completed.stderr.encode() if isinstance(completed.stderr, str) else completed.stderr or b""
+                record = {"command": command, "returncode": completed.returncode,
+                          "stdout": lanes._put_object(root, output), "stderr": lanes._put_object(root, errors)}
+                return completed, output, record
+            inspect_command = ["docker", "container", "inspect", container_id or name]
+            inspected, inspect_output, cleanup["inspect"] = recorded_docker(inspect_command)
+            if inspected.returncode != 0:
+                cleanup["status"] = "inspect-failed"
+            else:
+                values = json.loads(inspect_output)
+                if not isinstance(values, list) or len(values) != 1 or not isinstance(values[0], dict):
+                    raise ValueError("owned lane check inspect returned no unique container")
+                observed = values[0]
+                actual_id = observed.get("Id")
+                config = observed.get("Config")
+                labels = config.get("Labels") if isinstance(config, dict) else None
+                if (not isinstance(actual_id, str) or len(actual_id) != 64
+                    or any(char not in "0123456789abcdef" for char in actual_id)
+                    or container_id is not None and actual_id != container_id
+                    or observed.get("Name") != "/" + name or not isinstance(labels, dict)
+                    or labels.get("org.qcsd.owner") != "qcsd-lab"
+                    or labels.get("org.qcsd.role") != "rolling-installed-lane-check"
+                    or labels.get("org.qcsd.operation") != operation_token
+                    or config.get("Image") != spec.collection_image_digest):
+                    cleanup["status"] = "identity-mismatch"
+                else:
+                    removed, _, cleanup["remove"] = recorded_docker(["docker", "rm", "-f", actual_id])
+                    cleanup["status"] = "removed" if removed.returncode == 0 else "remove-failed"
+        except (OSError, subprocess.SubprocessError, ValueError, TypeError, KeyError) as cleanup_error:
+            cleanup["status"] = "cleanup-error"
+            cleanup["error"] = {"type": type(cleanup_error).__name__, "message": str(cleanup_error)}
+        error = {"type": type(failure).__name__, "message": str(failure), "cleanup": cleanup}
     except (OSError, subprocess.SubprocessError) as failure:
         status = None
         stdout, stderr = getattr(failure, "stdout", None) or b"", getattr(failure, "stderr", None) or b""
@@ -1631,6 +1709,7 @@ def check_lane_in_image(spec: lanes.CaptureSpec, root: Path, target: Path, *, co
         error = {"type": type(failure).__name__, "message": str(failure)}
     end = {"command": command, "started_at": start["started_at"], "completed_at": admission._now(),
            "returncode": status, "invocation_error": error,
+           "operation_token": operation_token, "timeout_seconds": timeout_seconds,
            "stdout": lanes._put_object(root, stdout), "stderr": lanes._put_object(root, stderr)}
     end_path = directory / "actual-completed.json"
     admission.durable_create(end_path, admission._json(end))
@@ -1656,12 +1735,30 @@ def _reopen_lane_check(reference: Any) -> tuple[lanes.CaptureSpec, Path, dict[st
         raise ValueError("rolling deep closure action is invalid")
     spec = lanes.CaptureSpec(**{key: Path(item) if key in lanes.PATH_KEYS else item for key, item in value["spec"].items()})
     root, target = lanes._regular_directory(Path(value["root"])), Path(value["target"])
-    verify_capture_plan(spec)
-    start = lanes._load(lanes._read(_open_ref(value["started"])))
-    end = lanes._load(lanes._read(_open_ref(value["completed"])))
-    command = lane_check_command(spec, root, target, complete=value["complete"])
-    if (set(start) != {"command", "started_at"} or set(end) != {"command", "started_at", "completed_at", "returncode", "invocation_error", "stdout", "stderr"}
-        or start["command"] != command or end["command"] != command or end["started_at"] != start["started_at"]
+    _, plan_payload = verify_capture_plan(spec)
+    started_path, completed_path = _open_ref(value["started"]), _open_ref(value["completed"])
+    start = lanes._load(lanes._read(started_path))
+    end = lanes._load(lanes._read(completed_path))
+    legacy_start = {"command", "started_at"}
+    legacy_end = {"command", "started_at", "completed_at", "returncode", "invocation_error", "stdout", "stderr"}
+    if set(start) == legacy_start and set(end) == legacy_end:
+        command = lane_check_command(spec, root, target, complete=value["complete"])
+    elif set(start) == legacy_start | {"operation_token", "timeout_seconds"} and set(end) == legacy_end | {"operation_token", "timeout_seconds"}:
+        token = start["operation_token"]
+        lane = lanes._lane({"plan_payload": plan_payload}, target.parent.name)
+        deadline = 300 + lane.sample_count * plan.V5_CAPTURE_LIMITS["timeout_seconds"]
+        if (type(token) is not str or len(token) != 32 or any(char not in "0123456789abcdef" for char in token)
+            or path.parent != root / "lane-checks" / token
+            or started_path != path.parent / "actual-started.json"
+            or completed_path != path.parent / "actual-completed.json"
+            or type(start["timeout_seconds"]) is not int or start["timeout_seconds"] != deadline
+            or end["operation_token"] != token or type(end["timeout_seconds"]) is not int
+            or end["timeout_seconds"] != deadline):
+            raise ValueError("rolling lane closure changed its owned actor or operational deadline")
+        command = lane_check_command(spec, root, target, complete=value["complete"], operation_token=token)
+    else:
+        raise ValueError("rolling lane closure has an unsupported actual operation record")
+    if (start["command"] != command or end["command"] != command or end["started_at"] != start["started_at"]
         or type(end["returncode"]) is not int or end["returncode"] != 0 or end["invocation_error"] is not None
         or not admission._utc(start["started_at"]) <= admission._utc(end["completed_at"]) <= admission._utc(admission._now())):
         raise ValueError("rolling lane closure lacks its actual successful installed deep execution")

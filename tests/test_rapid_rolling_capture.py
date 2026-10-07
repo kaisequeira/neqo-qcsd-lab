@@ -248,6 +248,13 @@ def test_actual_installed_deep_command_keeps_all_inputs_source_and_private_write
     assert f"{rolling_setup.root}:{rolling_setup.root}:rw" in command
     assert f"{spec.runtime_source_root}:{spec.runtime_source_root}:ro" in command
     assert "e.executed_image_plan_check" in command[-2] and "e.verify_launch_receipt" in command[-2]
+    token = "1" * 32
+    owned = rolling.lane_check_command(spec, rolling_setup.root, target, complete=True, operation_token=token)
+    assert owned[owned.index("--name") + 1] == "qcsd-rapid-lane-check-" + token
+    assert [owned[index + 1] for index, item in enumerate(owned) if item == "--label"] == [
+        "org.qcsd.owner=qcsd-lab", "org.qcsd.role=rolling-installed-lane-check",
+        "org.qcsd.operation=" + token]
+    assert owned[owned.index("--cidfile") + 1] == str(rolling_setup.root / "lane-checks" / token / "container.id")
 
 
 def _proof(fixture, spec):
@@ -583,6 +590,80 @@ def test_failed_actual_image_deep_record_preserves_command_logs_and_gives_no_com
     assert not list((rolling_setup.root / "lane-checks").glob("*/closure.json"))
 
 
+@pytest.mark.parametrize("case,expected_status,removed", [
+    ("cidfile", "removed", True),
+    ("name-fallback", "removed", True),
+    ("wrong-owner", "identity-mismatch", False),
+    ("wrong-id", "identity-mismatch", False),
+    ("invalid-cidfile", "cleanup-error", False),
+    ("inspect-timeout", "cleanup-error", False),
+    ("remove-failed", "remove-failed", True),
+])
+def test_timed_out_installed_deep_records_budget_and_cleans_only_exact_owned_actor(
+        rolling_setup, monkeypatch, case, expected_status, removed):
+    spec, _ = _planned(rolling_setup)
+    _, payload = rolling.verify_capture_plan(spec)
+    lane = lanes._lane({"plan_payload": payload}, payload["lanes"][0]["campaign_name"])
+    intent = rolling_setup.root / "lanes" / lane.campaign_name / "intent.json"
+    intent.parent.mkdir(parents=True)
+    intent.write_bytes(b"unexecuted timeout target")
+    container_id = "a" * 64
+    commands = []
+    def timed_out(command, **kwargs):
+        commands.append(command)
+        if command[:2] == ["docker", "run"]:
+            assert kwargs["timeout"] == 300 + lane.sample_count * plan.V5_CAPTURE_LIMITS["timeout_seconds"]
+            assert kwargs["timeout"] > 600
+            cidfile = Path(command[command.index("--cidfile") + 1])
+            assert cidfile.parent.is_dir()
+            if case != "name-fallback":
+                cidfile.write_text("invalid\n" if case == "invalid-cidfile" else container_id + "\n")
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"], output=b"partial deep output",
+                                            stderr=b"timed out deep verifier")
+        if command[:3] == ["docker", "container", "inspect"]:
+            if case == "inspect-timeout":
+                raise subprocess.TimeoutExpired(command, kwargs["timeout"], output=b"inspect partial", stderr=b"inspect timeout")
+            token = next(item.split("=", 1)[1] for item in commands[0] if item.startswith("org.qcsd.operation="))
+            name = "qcsd-rapid-lane-check-" + token
+            assert command[-1] == (name if case == "name-fallback" else container_id)
+            observed = {"Id": "b" * 64 if case == "wrong-id" else container_id, "Name": "/" + name,
+                        "Config": {"Image": spec.collection_image_digest, "Labels": {
+                            "org.qcsd.owner": "different-owner" if case == "wrong-owner" else "qcsd-lab",
+                            "org.qcsd.role": "rolling-installed-lane-check",
+                            "org.qcsd.operation": token}}}
+            return subprocess.CompletedProcess(command, 0, json.dumps([observed]), "")
+        if command[:3] == ["docker", "rm", "-f"]:
+            assert command[-1] == container_id
+            return subprocess.CompletedProcess(command, 1 if case == "remove-failed" else 0,
+                                               "", "remove failed" if case == "remove-failed" else "")
+        raise AssertionError("unexpected Docker action")
+    monkeypatch.setattr(rolling.subprocess, "run", timed_out)
+    with pytest.raises(ValueError, match="raw records retained"):
+        rolling.check_lane_in_image(spec, rolling_setup.root, intent, complete=True)
+    records = list((rolling_setup.root / "lane-checks").glob("*/actual-completed.json"))
+    assert len(records) == 1
+    end = lanes._load(records[0].read_bytes())
+    start = lanes._load((records[0].parent / "actual-started.json").read_bytes())
+    assert start["operation_token"] == end["operation_token"]
+    assert start["timeout_seconds"] == end["timeout_seconds"] == 300 + lane.sample_count * plan.V5_CAPTURE_LIMITS["timeout_seconds"]
+    assert end["returncode"] is None and end["invocation_error"]["type"] == "TimeoutExpired"
+    cleanup = end["invocation_error"]["cleanup"]
+    assert cleanup["status"] == expected_status
+    if cleanup["inspect"] is not None:
+        assert cleanup["inspect"]["command"][:3] == ["docker", "container", "inspect"]
+        assert lanes._object(rolling_setup.root, cleanup["inspect"]["stdout"])
+    if case == "inspect-timeout":
+        assert cleanup["error"]["type"] == "TimeoutExpired" and cleanup["remove"] is None
+    if case == "remove-failed":
+        assert cleanup["remove"]["returncode"] == 1
+        assert lanes._object(rolling_setup.root, cleanup["remove"]["stderr"]) == b"remove failed"
+    assert lanes._object(rolling_setup.root, end["stdout"]) == b"partial deep output"
+    assert lanes._object(rolling_setup.root, end["stderr"]) == b"timed out deep verifier"
+    assert bool([command for command in commands if command[:3] == ["docker", "rm", "-f"]]) == removed
+    assert not (intent.parent / "complete.json").exists()
+    assert not list((rolling_setup.root / "lane-checks").glob("*/closure.json"))
+
+
 def test_actual_completion_script_then_host_reopen_seals_exact_lane_and_rejects_changed_raw_output(rolling_setup, monkeypatch):
     fixture = rolling_setup
     spec, _ = _planned(fixture)
@@ -603,7 +684,9 @@ def test_actual_completion_script_then_host_reopen_seals_exact_lane_and_rejects_
     for name in ("inputs", "samples", "failures"):
         (result / name).mkdir()
     (result / "evidence.sha256").write_text(f"{lanes._sha((result/'experiment.json').read_bytes())}  experiment.json\n")
+    deep_calls = []
     def measured_result(path, lane, **kwargs):
+        deep_calls.append(path)
         return {"accepted": lane.sample_count, "result_seal_sha256": lanes._sha((path/"evidence.sha256").read_bytes()),
                 "scientific_credit": "formal-only-if-bound-to-rolling-enrollment"}
     monkeypatch.setattr(plan, "verify_lane_result", measured_result)
@@ -618,7 +701,32 @@ def test_actual_completion_script_then_host_reopen_seals_exact_lane_and_rejects_
     monkeypatch.setattr(rolling.subprocess, "run", installed)
     closed = rolling.check_lane_in_image(spec, fixture.root, intent, complete=True)
     assert closed["accepted"] == 4 and Path(closed["receipt"]).is_file()
+    assert deep_calls == [result]
     assert rolling._reopen_lane_check(closed["closure"])[3].mode == "undefended"
+    rechecked = rolling.check_lane_in_image(spec, fixture.root, Path(closed["receipt"]), complete=False)
+    assert deep_calls == [result, result]
+    original = admission._unpack(Path(rechecked["closure"]["path"]).read_bytes(), rolling.LANE_CHECK_TYPE)
+    legacy = fixture.root / "lane-checks" / "legacy-complete-false"
+    legacy.mkdir()
+    old_command = rolling.lane_check_command(spec, fixture.root, Path(closed["receipt"]), complete=False)
+    started = lanes._load(rolling._open_ref(original["started"]).read_bytes())
+    completed = lanes._load(rolling._open_ref(original["completed"]).read_bytes())
+    for record in (started, completed):
+        record["command"] = old_command
+        record.pop("operation_token")
+        record.pop("timeout_seconds")
+    admission.durable_create(legacy / "actual-started.json", admission._json(started))
+    admission.durable_create(legacy / "actual-completed.json", admission._json(completed))
+    old_closure = {**original, "started": rolling._ref(legacy / "actual-started.json"),
+                   "completed": rolling._ref(legacy / "actual-completed.json")}
+    legacy_closure = rolling._write(legacy / "closure.json", rolling.LANE_CHECK_TYPE, old_closure)
+    assert rolling._reopen_lane_check(rolling._ref(legacy_closure))[2]["accepted"] == 4
+    experiment = result / "experiment.json"
+    original_experiment = experiment.read_bytes()
+    experiment.write_bytes(original_experiment + b"\n")
+    with pytest.raises(ValueError, match="rolling result bytes differ from the actual deep-verified seal"):
+        rolling._reopen_lane_check(closed["closure"])
+    experiment.write_bytes(original_experiment)
     closure = Path(closed["closure"]["path"])
     value = admission._unpack(closure.read_bytes(), rolling.LANE_CHECK_TYPE)
     actual = lanes._load(rolling._open_ref(value["completed"]).read_bytes())

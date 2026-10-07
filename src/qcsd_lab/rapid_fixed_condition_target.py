@@ -351,12 +351,92 @@ def _epoch_dispatch_source_projection(raw):
     """Normalize only exact published/held epoch dispatch bytes for membership."""
     import ast
     digest = hashlib.sha256(raw).hexdigest()
+    source52 = 'c133974ffb1895d77b3fc88fd5888c9de28ed9e9b280ec2b9d576aa07b6c9702'
+    source53 = '2101877af8bfdaea5a3a4ad38317adc5a2289d013dab5f5c8c77a8fc2c46c739'
+    owned_check = 'b6f8db16953987f60a3c7ea0003fdad187dd41343b875233e3abacb5f2e4fe14'
     if digest not in {
             'b2d6be3fbc3ab2060bdfa683d372def0122669daa251b31c2000a759c4e4f610',
             '23e64994de9127aad06e952dae996d7e7b24fd5d44e5c5877eb658d845d64e9b',
             'a7a2302f4e835dcfe37b15278d624890065794673f7ee2182b18a9fd61e196e4',
-            'c133974ffb1895d77b3fc88fd5888c9de28ed9e9b280ec2b9d576aa07b6c9702'}:
+            source52, source53, owned_check}:
         raise ValueError('rolling epoch dispatch is outside the exact published Source pair')
+    if digest == owned_check:
+        def restore_once(changed, predecessor):
+            nonlocal raw
+            if raw.count(changed) != 1:
+                raise ValueError('rolling owned check change is outside the reviewed bytes')
+            raw = raw.replace(changed, predecessor, 1)
+        def restore_span(first, following, expected_sha, predecessor):
+            nonlocal raw
+            if raw.count(first) != 1:
+                raise ValueError('rolling owned check changed-unit start is absent or duplicated')
+            begin = raw.index(first)
+            end = raw.find(following, begin)
+            if end < 0 or hashlib.sha256(raw[begin:end]).hexdigest() != expected_sha:
+                raise ValueError('rolling owned check changed-unit bytes differ')
+            raw = raw[:begin] + predecessor + raw[end:]
+        restore_once(b'import json\nimport secrets\nimport subprocess\n', b'import json\nimport subprocess\n')
+        restore_once(
+            b'def lane_check_command(spec: lanes.CaptureSpec, root: Path, target: Path, *, complete: bool,\n'
+            b'                       operation_token: str | None = None, _context=None) -> list[str]:\n',
+            b'def lane_check_command(spec: lanes.CaptureSpec, root: Path, target: Path, *, complete: bool, _context=None) -> list[str]:\n')
+        restore_span(
+            b'    if operation_token is not None:\n', b'    command[-2:] = [LANE_CHECK_SCRIPT',
+            'a26cda839884f649d51024d33c11893ca6efebd7a65543c4dada4e79f65eef0e', b'')
+        restore_once(
+            b'    """Run the unchanged ordinary deep verifier in the actual bound image."""\n'
+            b'    _, plan_payload = verify_capture_plan(spec, _context=_context)\n',
+            b'    """Run the unchanged ordinary deep verifier in the actual bound image."""\n'
+            b'    verify_capture_plan(spec, _context=_context)\n')
+        restore_span(
+            b'    lane = lanes._lane({"plan_payload": plan_payload}, target.parent.name)\n'
+            b'    # One installed plan/source allowance plus one frozen capture timeout per trace.\n',
+            b'    if _context is not None:\n',
+            '83a113e6e392ba6fb2d3d6a5a276b1476d912fdecee4e1d0bc11764da06e1a07',
+            b'    command = lane_check_command(spec, root, target, complete=complete, _context=_context)\n')
+        restore_span(
+            b'    parent = root / "lane-checks"\n', b'    start_path = directory / "actual-started.json"\n',
+            '67b4667c7cc77b7e85cc78ca754e315cea47af7556004339368304b5c1011372',
+            b'    start = {"command": command, "started_at": admission._now()}\n'
+            b'    directory = root / "lane-checks" / lanes._sha(admission._json(start))\n'
+            b'    directory.mkdir(parents=True)\n')
+        restore_once(b'                                check=False, timeout=timeout_seconds)\n',
+                     b'                                check=False, timeout=600)\n')
+        restore_span(
+            b'    except subprocess.TimeoutExpired as failure:\n',
+            b'    except (OSError, subprocess.SubprocessError) as failure:\n',
+            '06e27c63afdae1235d355aa12a2c0117f8dd35ac119da5a9b6d080bb657c9000', b'')
+        restore_once(b'           "operation_token": operation_token, "timeout_seconds": timeout_seconds,\n', b'')
+        restore_span(
+            b'    _, plan_payload = verify_capture_plan(spec)\n'
+            b'    started_path, completed_path = _open_ref(value["started"]), _open_ref(value["completed"])\n',
+            b'        or type(end["returncode"]) is not int or end["returncode"] != 0 or end["invocation_error"] is not None\n',
+            '1e7459fd1317ad2847ddd3c9d55337af572c632d8ead6bf648ec91f7de3e352f',
+            b'    verify_capture_plan(spec)\n'
+            b'    start = lanes._load(lanes._read(_open_ref(value["started"])))\n'
+            b'    end = lanes._load(lanes._read(_open_ref(value["completed"])))\n'
+            b'    command = lane_check_command(spec, root, target, complete=value["complete"])\n'
+            b'    if (set(start) != {"command", "started_at"} or set(end) != {"command", "started_at", "completed_at", "returncode", "invocation_error", "stdout", "stderr"}\n'
+            b'        or start["command"] != command or end["command"] != command or end["started_at"] != start["started_at"]\n')
+        if hashlib.sha256(raw).hexdigest() != source53:
+            raise ValueError('rolling owned check changes bytes outside reviewed operational units')
+        digest = source53
+    if digest == source53:
+        reviewed = (
+            b'# Completion just deep-verified this result; the host reopens its sealed bytes.\n'
+            b"print(json.dumps({'receipt':str(receipt),'facts':e.verify_launch_receipt(\n"
+            b"    receipt,spec=spec,evidence_root=root,_manifest_already_deep_verified=value['complete'])},\n"
+            b'    sort_keys=True,allow_nan=False))'
+        )
+        predecessor = (
+            b"print(json.dumps({'receipt':str(receipt),'facts':e.verify_launch_receipt("
+            b'receipt,spec=spec,evidence_root=root)},sort_keys=True,allow_nan=False))'
+        )
+        if raw.count(reviewed) != 1:
+            raise ValueError('rolling installed deep change is outside the exact reviewed script')
+        raw = raw.replace(reviewed, predecessor, 1)
+        if hashlib.sha256(raw).hexdigest() != source52:
+            raise ValueError('rolling installed deep change alters other Source bytes')
     tree = ast.parse(raw)
     names = {'image_plan_check', 'validate_host_launch', 'publish_successor', 'enrollment_roots',
              'require_mode_readiness'}
@@ -742,9 +822,18 @@ def _compatible_membership(producer, current, producer_sources):
             'b2d6be3fbc3ab2060bdfa683d372def0122669daa251b31c2000a759c4e4f610',
             '23e64994de9127aad06e952dae996d7e7b24fd5d44e5c5877eb658d845d64e9b',
             'a7a2302f4e835dcfe37b15278d624890065794673f7ee2182b18a9fd61e196e4'}
-        project = (_epoch_dispatch_source_projection if pair[0] in epoch_predecessors and
-                   pair[1] in {'a7a2302f4e835dcfe37b15278d624890065794673f7ee2182b18a9fd61e196e4',
-                               'c133974ffb1895d77b3fc88fd5888c9de28ed9e9b280ec2b9d576aa07b6c9702'}
+        epoch_successors = {
+            'a7a2302f4e835dcfe37b15278d624890065794673f7ee2182b18a9fd61e196e4',
+            'c133974ffb1895d77b3fc88fd5888c9de28ed9e9b280ec2b9d576aa07b6c9702',
+            '2101877af8bfdaea5a3a4ad38317adc5a2289d013dab5f5c8c77a8fc2c46c739',
+            'b6f8db16953987f60a3c7ea0003fdad187dd41343b875233e3abacb5f2e4fe14'}
+        exact_deep_successor = (
+            pair[0] in {'c133974ffb1895d77b3fc88fd5888c9de28ed9e9b280ec2b9d576aa07b6c9702',
+                        '2101877af8bfdaea5a3a4ad38317adc5a2289d013dab5f5c8c77a8fc2c46c739'}
+            and pair[1] in {'2101877af8bfdaea5a3a4ad38317adc5a2289d013dab5f5c8c77a8fc2c46c739',
+                            'b6f8db16953987f60a3c7ea0003fdad187dd41343b875233e3abacb5f2e4fe14'})
+        project = (_epoch_dispatch_source_projection if
+                   (pair[0] in epoch_predecessors and pair[1] in epoch_successors) or exact_deep_successor
                    else _planning_source_projection)
         if (before['mode'] != after['mode']
                 or project(Path(before['path']).read_bytes())
