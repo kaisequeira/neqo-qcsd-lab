@@ -129,7 +129,7 @@ def parallel_fixture(tmp_path,monkeypatch,effect=None):
     inputs.update(source_binding=reader.reference(binding),reader_binding=reader.reference(reader_binding),
         root_offline_endpoint_replay=False)
     monkeypatch.setattr(serial,"_source",lambda ref:source)
-    monkeypatch.setattr(reader,"_reader",lambda ref:{"release":{"files":{}}})
+    monkeypatch.setattr(reader,"_reader",lambda ref:{"reader_source":{"files":{}}})
     return source,inputs,batch,raw
 
 def test_actual_isolated_new_parallel_program_and_fresh_verify_keep_original_capture_bytes(tmp_path,monkeypatch):
@@ -153,3 +153,74 @@ def test_new_parallel_program_preserves_original_read_only_effect_fence(tmp_path
         reader._run_original(source,inputs,tmp_path/"proof")
     assert json.loads((tmp_path/"proof/completed.json").read_bytes())["returncode"]!=0
     assert not (Path(inputs["result"]["path"])/"forbidden.txt").exists()
+
+
+def reader_git_fixture(tmp_path):
+    """Real paired Git fixture with the private full mode from actual H005."""
+    from tests.test_rapid_chunk_partial_lane import git
+    root=tmp_path/"reader-git";root.mkdir()
+    native=root/"neqo-qcsd";native.mkdir()
+    (native/"Cargo.lock").write_text("controlled Native bytes\n")
+    git(native,"init");git(native,"add","Cargo.lock")
+    git(native,"-c","user.name=fixture","-c","user.email=fixture@example.invalid",
+        "commit","-m","controlled Native")
+    native_head=git(native,"rev-parse","HEAD")
+    for name in reader._READER_MODULE_ROLES:
+        path=root/name;path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_text("# controlled registered role: "+name+"\n")
+    private=root/"config/curated-sources/private.json";private.parent.mkdir(parents=True)
+    private.write_text('{"controlled":true}\n');private.chmod(0o600)
+    executable=root/"qcsd-lab";executable.write_text("#!/bin/sh\nexit 0\n");executable.chmod(0o755)
+    git(root,"init");git(root,"add","src","tools","config","qcsd-lab")
+    git(root,"update-index","--add","--cacheinfo","160000,"+native_head+",neqo-qcsd")
+    git(root,"-c","user.name=fixture","-c","user.email=fixture@example.invalid",
+        "commit","-m","controlled prospective reader")
+    return root,git(root,"rev-parse","HEAD"),native_head,private
+
+
+def test_reader_source_separates_stock_real_git_mode_refusal_and_exact_reader_modes(tmp_path,monkeypatch):
+    root,lab_head,native_head,private=reader_git_fixture(tmp_path)
+    with pytest.raises(ValueError,match="original verifier Source bytes or mode differ from release"):
+        serial.release_snapshot(root,lab_head,native_head)
+    # The old function genuinely refused the real paired Git checkout above.
+    # The new snapshot must authenticate its own contract without calling it.
+    def forbidden(*args,**kwargs):
+        raise AssertionError("prospective reader called the measurement release snapshot")
+    monkeypatch.setattr(serial,"release_snapshot",forbidden)
+    snapshot=reader.reader_source_snapshot(root,lab_head,native_head)
+    assert snapshot["contract"]==reader.READER_SOURCE_CONTRACT
+    assert snapshot["files"]["config/curated-sources/private.json"]==reader.reference(private)
+    assert snapshot["mode_pairs"]["config/curated-sources/private.json"]=={
+        "git_mode":"100644","observed_full_mode":0o600}
+    assert snapshot["mode_pairs"]["qcsd-lab"]=={
+        "git_mode":"100755","observed_full_mode":0o755}
+    assert set(snapshot["files"])==set(snapshot["mode_pairs"])
+    assert snapshot["module_roles"]=={name:{"role":role,"reference":snapshot["files"][name]}
+        for name,role in reader._READER_MODULE_ROLES.items()}
+    private.chmod(0o644)
+    # Both permission classes are legal initially, but the published exact
+    # full-mode dependency and complete snapshot cannot reopen as the old one.
+    with pytest.raises(ValueError,match="bytes or mode changed"):
+        reader.reopen(snapshot["files"]["config/curated-sources/private.json"])
+    assert reader.reader_source_snapshot(root,lab_head,native_head)!=snapshot
+
+
+@pytest.mark.parametrize("change",["bytes","untracked-import","missing-role","native-head","unsafe-mode","exec-class"])
+def test_reader_source_rejects_changed_bytes_membership_native_and_permission_roles(tmp_path,change):
+    from tests.test_rapid_chunk_partial_lane import git
+    root,lab_head,native_head,private=reader_git_fixture(tmp_path)
+    if change=="bytes":private.write_text('{"controlled":false}\n')
+    elif change=="untracked-import":
+        (root/"src/qcsd_lab/unbound.py").write_text("# unbound\n")
+    elif change=="missing-role":
+        relative="tools/rapid_parallel_partial_lane.py"
+        git(root,"rm",relative)
+        git(root,"-c","user.name=fixture","-c","user.email=fixture@example.invalid",
+            "commit","-m","remove required role")
+        lab_head=git(root,"rev-parse","HEAD")
+    elif change=="native-head":native_head="0"*40
+    elif change=="unsafe-mode":private.chmod(0o666)
+    else:(root/"qcsd-lab").chmod(0o600)
+    with pytest.raises(ValueError,match="prospective reader"):
+        reader.reader_source_snapshot(root,lab_head,native_head)
+

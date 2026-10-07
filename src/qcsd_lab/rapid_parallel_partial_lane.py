@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -22,7 +23,16 @@ from .util import durable_create
 TYPE = "qcsd-original-deep-verified-individual-traces-from-incomplete-parallel-chunk-v1"
 CONTRACT = "actual-parallel-worker-original-accepted-traces-incomplete-aggregate-v1"
 LAYOUT = "actual-parallel-workers-remaining-slot-chunk-v1"
-READER_SOURCE_TYPE = "qcsd-prospective-parallel-partial-read-only-source-v1"
+READER_SOURCE_TYPE = "qcsd-prospective-parallel-partial-read-only-source-v2"
+READER_SOURCE_CONTRACT = "full-paired-git-prospective-reader-exact-observed-modes-v1"
+_READER_HEAD = re.compile(r"[0-9a-f]{40}\Z")
+_READER_MODULE_ROLES = {
+    "src/qcsd_lab/rapid_parallel_partial_lane.py": "prospective-parallel-partial-reader",
+    "src/qcsd_lab/rapid_partial_lane.py": "unchanged-original-full-deep-proof-program",
+    "src/qcsd_lab/rapid_chunk_partial_lane.py": "unchanged-measurement-source-authenticator",
+    "src/qcsd_lab/rapid_fixed_condition_target.py": "prospective-fixed-target-dispatch-adapter",
+    "tools/rapid_parallel_partial_lane.py": "prospective-reader-public-entrypoint",
+}
 ACTUATOR = "parallel-formal-worker"
 
 # These two anchored adaptations define a NEW proof program. They do not
@@ -132,27 +142,121 @@ def _reader_sources():
     return {module.__name__: reference(Path(module.__file__).absolute())
             for module in (sys.modules[__name__], original, measurement)}
 
+def reader_source_snapshot(root, lab_head, native_head):
+    """Authenticate this independent reader's complete paired Git bytes and modes.
+
+    Git records an executable class, not full permissions. Private 0600 files
+    remain private and bind their exact observed full mode. This is a new reader
+    contract; it neither calls nor changes measurement.release_snapshot.
+    """
+    root = _path(root, directory=True)
+    if any(not isinstance(x, str) or _READER_HEAD.fullmatch(x) is None
+            for x in (lab_head, native_head)):
+        raise ValueError("prospective reader Source requires exact paired Git heads")
+    files = {}; mode_pairs = {}
+    for checkout, prefix, head in ((root, "", lab_head),
+            (root / "neqo-qcsd", "neqo-qcsd/", native_head)):
+        if original._git(checkout, "rev-parse", "HEAD").decode().strip() != head:
+            raise ValueError("prospective reader Source head moved")
+        if original._git(checkout, "status", "--porcelain=v1", "--untracked-files=all"):
+            raise ValueError("prospective reader Source is not a clean complete Git checkout")
+        tree = {}; index = {}; rows = []
+        for row in original._git(checkout, "ls-tree", "-r", "-z", "HEAD").split(b"\0"):
+            if not row: continue
+            meta, raw_name = row.split(b"\t"); mode, kind, blob = meta.decode().split()
+            name = raw_name.decode()
+            if (not name or Path(name).is_absolute() or ".." in Path(name).parts
+                    or any(c in name for c in "\0\r\n") or name in tree
+                    or kind != ("commit" if mode == "160000" else "blob")):
+                raise ValueError("prospective reader Source has invalid tree membership")
+            tree[name] = (mode, blob)
+        for row in original._git(checkout, "ls-files", "-s", "-z").split(b"\0"):
+            if not row: continue
+            meta, raw_name = row.split(b"\t"); mode, blob, stage = meta.decode().split()
+            name = raw_name.decode()
+            if (stage != "0" or not name or Path(name).is_absolute() or ".." in Path(name).parts
+                    or any(c in name for c in "\0\r\n") or name in index):
+                raise ValueError("prospective reader Source has conflicted or invalid index membership")
+            index[name] = (mode, blob)
+            if mode == "160000":
+                if prefix or name != "neqo-qcsd" or blob != native_head:
+                    raise ValueError("prospective reader Native Gitlink differs")
+                continue
+            if mode not in {"100644", "100755"} or tree.get(name) != (mode, blob):
+                raise ValueError("prospective reader Source index differs from its committed tree")
+            rows.append((name, mode, blob))
+        if tree != index or (not prefix and tree.get("neqo-qcsd") != ("160000", native_head)):
+            raise ValueError("prospective reader complete Source membership or Native Gitlink differs")
+        raw = original._git(checkout, "cat-file", "--batch",
+            input="".join(blob + "\n" for _, _, blob in rows).encode())
+        offset = 0
+        for name, mode, blob in rows:
+            end = raw.index(b"\n", offset)
+            actual, kind, size = raw[offset:end].decode().split(); size = int(size)
+            body = raw[end + 1:end + 1 + size]
+            if (size < 0 or len(body) != size or raw[end + 1 + size:end + 2 + size] != b"\n"):
+                raise ValueError("prospective reader Git blob stream is incomplete")
+            offset = end + size + 2
+            value = reference(checkout / name)
+            allowed = {0o600, 0o644} if mode == "100644" else {0o755}
+            if (actual != blob or kind != "blob" or value["sha256"] != hashlib.sha256(body).hexdigest()
+                    or value["mode"] not in allowed):
+                raise ValueError("prospective reader Source bytes or observed full mode differ: " + prefix + name)
+            relative = prefix + name
+            files[relative] = value
+            mode_pairs[relative] = {"git_mode":mode, "observed_full_mode":value["mode"]}
+        if offset != len(raw):
+            raise ValueError("prospective reader Git blob stream has trailing data")
+        if (original._git(checkout, "rev-parse", "HEAD").decode().strip() != head
+                or original._git(checkout, "status", "--porcelain=v1", "--untracked-files=all")):
+            raise ValueError("prospective reader Source changed during its snapshot")
+    if not any(name.startswith("neqo-qcsd/") for name in files):
+        raise ValueError("prospective reader Source lacks its full Native checkout")
+    for directory in (root / "src", root / "tools"):
+        for path in directory.rglob("*.py"):
+            if "__pycache__" not in path.parts and path.relative_to(root).as_posix() not in files:
+                raise ValueError("prospective reader acquired an unbound importable file")
+    if not set(_READER_MODULE_ROLES) <= set(files):
+        raise ValueError("prospective reader Source lacks a registered module role")
+    roles = {name:{"role":role, "reference":files[name]}
+        for name, role in _READER_MODULE_ROLES.items()}
+    return {"contract":READER_SOURCE_CONTRACT, "root":str(root),
+        "lab_head":lab_head, "native_head":native_head, "files":files,
+        "mode_pairs":mode_pairs, "module_roles":roles}
+
+
+def _reader_module_closure(snapshot):
+    root = Path(snapshot["root"])
+    sources = _reader_sources()
+    for value in sources.values():
+        path = Path(value["path"])
+        if not path.is_relative_to(root) or snapshot["files"].get(path.relative_to(root).as_posix()) != value:
+            raise ValueError("prospective reader loaded an unbound module outside its own Source")
+    return sources
+
+
 def bind_reader(*, root, lab_head, native_head, output):
     root = _path(root, directory=True)
     if root != Path(__file__).absolute().parents[2]:
         raise ValueError("parallel partial consumer must bind its actual executing checkout")
-    release = measurement.release_snapshot(root, lab_head, native_head)
+    snapshot = reader_source_snapshot(root, lab_head, native_head)
+    sources = _reader_module_closure(snapshot)
     target = Path(output).absolute()
     if target.is_relative_to(root):
         raise ValueError("parallel partial reader binding must remain outside the reader Source")
-    return _write(target, READER_SOURCE_TYPE, {"release":release,
-        "reader_sources":_reader_sources(), "role":"prospective-read-only-verifier-not-measurement-runtime-v1",
+    return _write(target, READER_SOURCE_TYPE, {"reader_source":snapshot,
+        "reader_sources":sources, "role":"prospective-read-only-verifier-not-measurement-runtime-v1",
         "published_at":datetime.now(timezone.utc).isoformat()})
 
 def _reader(binding):
     value = _document(binding, READER_SOURCE_TYPE)
-    if set(value) != {"release","reader_sources","role","published_at"}:
+    if set(value) != {"reader_source","reader_sources","role","published_at"}:
         raise ValueError("parallel partial reader Source binding schema differs")
-    release=value["release"]
+    snapshot=value["reader_source"]
     if (value["role"]!="prospective-read-only-verifier-not-measurement-runtime-v1"
-            or value["reader_sources"]!=_reader_sources()
-            or Path(release["root"])!=Path(__file__).absolute().parents[2]
-            or measurement.release_snapshot(release["root"],release["lab_head"],release["native_head"])!=release):
+            or value["reader_sources"]!=_reader_module_closure(snapshot)
+            or Path(snapshot["root"])!=Path(__file__).absolute().parents[2]
+            or reader_source_snapshot(snapshot["root"],snapshot["lab_head"],snapshot["native_head"])!=snapshot):
         raise ValueError("parallel partial executing reader differs from its frozen full Git Source")
     if not _timestamp(value["published_at"])<=datetime.now(timezone.utc):
         raise ValueError("parallel partial reader Source publication chronology differs")
@@ -313,7 +417,7 @@ def _input_closure(source,inputs,report,operation):
     closure=measurement._input_closure(source,inputs["source_binding"],report,operation)
     reader=_reader(inputs["reader_binding"])
     files={ref["path"]:ref for ref in closure["read_dependencies"]}
-    for ref in [inputs["reader_binding"],*_reader_sources().values(),*reader["release"]["files"].values()]:
+    for ref in [inputs["reader_binding"],*_reader_sources().values(),*reader["reader_source"]["files"].values()]:
         if ref["path"] in files and files[ref["path"]]!=ref:
             raise ValueError("parallel partial reader dependency alias disagrees")
         files[ref["path"]]=ref
@@ -392,3 +496,4 @@ def target_operation(operation):
         {"read_dependencies":[operation["receipt"]],"directory_dependencies":[]})
     source["binding_reference"]=value["inputs"]["source_binding"]
     return source,second,second_facts,dependencies,end["completed_at"]
+
