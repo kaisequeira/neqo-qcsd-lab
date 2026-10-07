@@ -40,7 +40,8 @@ def body(source, name):
     return source[start:end]
 
 def harness(tmp_path, args, *, code=125, pinned=False, current=True,
-            phase="router-uplink", caller="direct", stderr_closed=False, child_signal=False, duration="3"):
+            phase="router-uplink", caller="direct", stderr_closed=False, child_signal=False,
+            duration="3", router_budget="30"):
     fixture = tmp_path / "lifecycle"
     fixture.mkdir(exist_ok=True)
     capture = tmp_path / ("current-argv" if current else "baseline-argv")
@@ -72,10 +73,13 @@ _qcsd_retirement_native_op() {
     preamble += "_qcsd_lifecycle_base=" + shlex.quote(str(fixture)) + "\n"
     preamble += "CAPTURE_ARGV=" + shlex.quote(str(capture)) + "\n"
     preamble += "_qcsd_api_phase=" + shlex.quote(phase) + "\n"
+    preamble += "_QCSD_DOCKER_ROUTER_CONFIG_TIMEOUT_SECONDS=" + shlex.quote(router_budget) + "\n"
     preamble += "_qcsd_api_action=" + shlex.quote(SENTINEL + "\ninjected action") + "\n"
     if pinned:
         preamble += "_QCSD_DOCKER_PINNED_HOST=unix:///fixture/docker.sock\n_QCSD_DOCKER_PINNED_SERVER_ID=fixture-daemon\n_QCSD_DOCKER_PINNED_CONTEXT=default\n"
     script = preamble + "\n".join(body(source, name) for name in FUNCTIONS) + "\n"
+    if current:
+        script += body(source, "_qcsd_docker_router_config") + "\n"
     command = "_qcsd_docker_api " + shlex.join(args)
     if caller == "conditional":
         script += f"if {command}; then printf 'caller-success\\n'; else status=$?; printf 'caught=%d\\n' \"$status\"; fi\n"
@@ -169,6 +173,53 @@ def test_launcher_contains_only_shell_local_literal_phase_annotations():
         assert hashlib.sha256(unit.encode()).hexdigest() == expected
     assert "export _qcsd_api_phase" not in current
     assert "trap '.*ERR" not in current
+
+
+def test_router_configuration_has_its_own_bounded_one_shot_service(tmp_path):
+    assert '_QCSD_DOCKER_ROUTER_CONFIG_TIMEOUT_SECONDS="${QCSD_DOCKER_ROUTER_CONFIG_TIMEOUT_SECONDS:-30}"' in HELPER.read_text()
+    assert (ROOT / "qcsd-lab").read_text().count("_qcsd_api_phase=router-configure") == 4
+    args = ["exec", "a" * 64, "/bin/sh", "-eu", "-c", "true"]
+    for budget in ("10", "30", "120"):
+        result, argv = harness(tmp_path, args, code=37, phase="router-configure", router_budget=budget)
+        assert result.returncode == 37
+        assert result.stdout == b"original API stdout\n"
+        assert argv[6] == budget.encode()
+        assert argv[-len(args):] == [value.encode() for value in args]
+        assert result.stderr == (
+            f"qcsd-api-failure phase=router-configure action=container-exec "
+            f"status=37 bound_s={budget} "
+            f"unit=qcsd-docker-api-{'0' * 32}.service\n"
+        ).encode()
+
+
+@pytest.mark.parametrize("phase,args", [
+    ("router-access", ["exec", "a" * 64, "/bin/sh", "-c", "true"]),
+    ("router-configure", ["exec", "a" * 64, "/usr/bin/python3", "-c", "pass"]),
+    ("router-configure", ["container", "inspect", "a" * 64]),
+])
+def test_router_budget_does_not_expand_other_api_work(tmp_path, phase, args):
+    result, argv = harness(tmp_path, args, code=0, phase=phase, router_budget="120")
+    assert result.returncode == 0
+    assert result.stdout == b"original API stdout\n"
+    assert argv[6] == b"3"
+
+
+@pytest.mark.parametrize("budget", ["9", "121", "0", "030", "-1", "3s", "1000"])
+def test_invalid_router_budget_refuses_before_docker_service(tmp_path, budget):
+    args = ["exec", "a" * 64, "/bin/sh", "-c", "true"]
+    result, argv = harness(tmp_path, args, code=0, phase="router-configure", router_budget=budget)
+    assert result.returncode == 2
+    assert result.stdout == b""
+    assert argv == []
+    assert result.stderr == b"Docker router configuration requires a 10 to 120 second budget and an exact-ID exec command\n"
+
+
+def test_router_configuration_refuses_an_unowned_short_id_before_service(tmp_path):
+    result, argv = harness(tmp_path, ["exec", "short-id", "/bin/sh", "-c", "true"],
+                           code=0, phase="router-configure")
+    assert result.returncode == 2
+    assert argv == [] and result.stdout == b""
+    assert result.stderr == b"Docker router configuration requires a 10 to 120 second budget and an exact-ID exec command\n"
 
 
 def test_pathological_private_duration_is_not_changed_or_printed_unbounded(tmp_path):

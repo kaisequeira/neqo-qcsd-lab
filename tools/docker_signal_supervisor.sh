@@ -8,6 +8,10 @@
 # run/build operations use their separately declared runtime envelopes.
 
 _QCSD_DOCKER_API_TIMEOUT_SECONDS=3
+# Router setup can include ethtool, routing and firewall changes inside one
+# authenticated Docker exec. Give only that setup phase a separate finite
+# allowance; all other API calls and failed-launch cleanup retain three seconds.
+_QCSD_DOCKER_ROUTER_CONFIG_TIMEOUT_SECONDS="${QCSD_DOCKER_ROUTER_CONFIG_TIMEOUT_SECONDS:-30}"
 # Completed public/parallel topology removal can take longer than an identity
 # query while the daemon kills a container and detaches its network. This
 # allowance is never selected for failed launches or terminal-signal cleanup.
@@ -663,7 +667,26 @@ _qcsd_mutable_output_scalar() {
 }
 
 _qcsd_docker_api() {
-  _qcsd_docker_api_with_timeout "${_QCSD_DOCKER_API_TIMEOUT_SECONDS}" "$@"
+  if [[ "${_qcsd_api_phase:-}" == router-configure &&
+        "${1:-}" == exec && "${3:-}" == /bin/sh ]]; then
+    _qcsd_docker_router_config "$@"
+  else
+    _qcsd_docker_api_with_timeout "${_QCSD_DOCKER_API_TIMEOUT_SECONDS}" "$@"
+  fi
+}
+
+_qcsd_docker_router_config() {
+  local duration="${_QCSD_DOCKER_ROUTER_CONFIG_TIMEOUT_SECONDS}"
+  if [[ ! "${duration}" =~ ^[1-9][0-9]{0,2}$ ]] ||
+     (( 10#${duration} < 10 || 10#${duration} > 120 )) ||
+     [[ "${1:-}" != exec || ! "${2:-}" =~ ^[0-9a-f]{64}$ ||
+        "${3:-}" != /bin/sh ]] ||
+     (( $# < 4 )); then
+    echo "Docker router configuration requires a 10 to 120 second budget and an exact-ID exec command" >&2
+    return 2
+  fi
+  local _qcsd_api_phase=router-configure
+  _qcsd_docker_api_with_timeout "${duration}" "$@"
 }
 
 _qcsd_completed_topology_remove() {
@@ -1585,8 +1608,14 @@ _qcsd_docker_api_service_with_timeout() {
       network-create|network-connect|network-inspect|network-list|network-remove|container-inspect|image-inspect|container-create|container-start|container-exec|container-remove|container-wait|container-logs|context-inspect)
         diagnostic_action="${_qcsd_api_action}" ;;
     esac
-    printf 'qcsd-api-failure phase=%s action=%s status=%d bound_s=%s\n' \
-      "${diagnostic_phase}" "${diagnostic_action}" "${api_status}" "${diagnostic_bound}" >&2 || :
+    if [[ "${diagnostic_phase}" == router-configure ]]; then
+      printf 'qcsd-api-failure phase=%s action=%s status=%d bound_s=%s unit=%s\n' \
+        "${diagnostic_phase}" "${diagnostic_action}" "${api_status}" \
+        "${diagnostic_bound}" "${unit}" >&2 || :
+    else
+      printf 'qcsd-api-failure phase=%s action=%s status=%d bound_s=%s\n' \
+        "${diagnostic_phase}" "${diagnostic_action}" "${api_status}" "${diagnostic_bound}" >&2 || :
+    fi
   fi
   return "${api_status}"
 }
